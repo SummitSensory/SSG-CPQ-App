@@ -1,0 +1,816 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum Role {
+  SYSTEM_ADMIN
+  EXECUTIVE
+  SALES_REP
+  SALES_MANAGER
+  DESIGNER
+  ESTIMATOR
+  OPERATIONS
+  ACCOUNTING
+  PROJECT_MANAGER
+  INSTALLER
+  READ_ONLY
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String?
+  passwordHash String
+  role         Role      @default(READ_ONLY)
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  sessions     Session[]
+}
+
+model Session {
+  id               String    @id @default(cuid())
+  userId           String
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshTokenHash String    @unique
+  userAgent        String?
+  ip               String?
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  createdAt        DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model AuditLog {
+  id           String   @id @default(cuid())
+  actorId      String
+  action       String
+  targetUserId String?
+  entity       String?
+  entityId     String?
+  details      Json?
+  createdAt    DateTime @default(now())
+
+  @@index([targetUserId])
+  @@index([action])
+  @@index([entity, entityId])
+}
+
+// ---------------- CRM ----------------
+
+enum CustomerType {
+  HEALTHCARE_SYSTEM
+  HOSPITAL
+  PRIVATE_PRACTICE
+  SCHOOL
+  UNIVERSITY
+  GOVERNMENT
+  NONPROFIT
+  OTHER
+}
+
+enum OpportunityStage {
+  PROSPECT
+  QUALIFICATION
+  NEEDS_ANALYSIS
+  PROPOSAL
+  NEGOTIATION
+  CLOSED_WON
+  CLOSED_LOST
+}
+
+enum FundingStatus {
+  UNFUNDED
+  BUDGETED
+  GRANT_PENDING
+  GRANT_AWARDED
+  APPROVED
+  SELF_FUNDED
+}
+
+enum TherapyDiscipline {
+  PHYSICAL
+  OCCUPATIONAL
+  SPEECH
+  ABA
+  SENSORY_INTEGRATION
+  RECREATIONAL
+  AQUATIC
+  PSYCHOLOGICAL
+}
+
+enum PatientPopulation {
+  PEDIATRIC
+  ADOLESCENT
+  ADULT
+  GERIATRIC
+  SPECIAL_NEEDS
+  VETERANS
+}
+
+enum AddressType {
+  BILLING
+  SHIPPING
+}
+
+enum FloorType {
+  CARPET
+  VINYL
+  TILE
+  CONCRETE
+  HARDWOOD
+  RUBBER
+  OTHER
+}
+
+enum WallConstruction {
+  DRYWALL
+  CONCRETE_BLOCK
+  BRICK
+  PLASTER
+  GLASS
+  MODULAR
+  OTHER
+}
+
+enum AttachmentCategory {
+  PHOTOGRAPH
+  FLOOR_PLAN
+  MEASUREMENT_DOC
+  OTHER
+}
+
+model Organization {
+  id             String         @id @default(cuid())
+  name           String
+  normalizedName String
+  customerType   CustomerType   @default(OTHER)
+  taxExempt      Boolean        @default(false)
+  taxExemptId    String?
+  notes          String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  contacts       Contact[]
+  addresses      Address[]
+  facilities     Facility[]
+  opportunities  Opportunity[]
+  attachments    Attachment[]
+
+  @@unique([normalizedName])
+  @@index([customerType])
+}
+
+model Contact {
+  id               String        @id @default(cuid())
+  organizationId   String
+  organization     Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  firstName        String
+  lastName         String
+  email            String?
+  phone            String?
+  title            String?
+  isDecisionMaker  Boolean       @default(false)
+  notes            String?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  stakeholderOf    OpportunityStakeholder[]
+
+  @@index([organizationId])
+  @@index([email])
+}
+
+model Address {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  type           AddressType
+  line1          String
+  line2          String?
+  city           String
+  region         String
+  postalCode     String
+  country        String       @default("US")
+
+  @@index([organizationId])
+}
+
+model Facility {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  notes          String?
+  rooms          Room[]
+
+  @@index([organizationId])
+}
+
+model Room {
+  id                       String            @id @default(cuid())
+  facilityId               String
+  facility                 Facility          @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  name                     String
+  // All dimensions in whole inches (integers) — never floats.
+  lengthIn                 Int?
+  widthIn                  Int?
+  ceilingHeightIn          Int?
+  doorWidthIn              Int?
+  doorHeightIn             Int?
+  floorType                FloorType?
+  wallConstruction         WallConstruction?
+  hasLoadingDock           Boolean           @default(false)
+  liftgateRequired         Boolean           @default(false)
+  deliveryRestrictions     String?
+  installationRestrictions String?
+  notes                    String?
+
+  @@index([facilityId])
+}
+
+model Opportunity {
+  id                 String              @id @default(cuid())
+  organizationId     String
+  organization       Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name               String
+  stage              OpportunityStage    @default(PROSPECT)
+  fundingStatus      FundingStatus       @default(UNFUNDED)
+  therapyDisciplines TherapyDiscipline[]
+  patientPopulations PatientPopulation[]
+  // Budget as integer minor units + currency — never floating point.
+  budgetAmountMinor  BigInt?
+  budgetCurrency     String?
+  desiredTimeline    String?
+  notes              String?
+  // monday.com two-way sync state
+  mondayItemId       String?             @unique
+  mondaySyncHash     String?
+  mondaySyncedAt     DateTime?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  stakeholders       OpportunityStakeholder[]
+  attachments        Attachment[]
+
+  @@index([organizationId])
+  @@index([stage])
+  @@index([fundingStatus])
+}
+
+// Decision-makers / stakeholders linked to an opportunity.
+model OpportunityStakeholder {
+  id            String      @id @default(cuid())
+  opportunityId String
+  opportunity   Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  contactId     String
+  contact       Contact     @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  role          String?
+  isPrimary     Boolean     @default(false)
+
+  @@unique([opportunityId, contactId])
+  @@index([opportunityId])
+}
+
+model Attachment {
+  id             String             @id @default(cuid())
+  organizationId String?
+  organization   Organization?      @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  opportunityId  String?
+  opportunity    Opportunity?       @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
+  category       AttachmentCategory @default(OTHER)
+  fileName       String
+  contentType    String
+  sizeBytes      Int
+  storageKey     String             @unique
+  uploadedById   String
+  createdAt      DateTime           @default(now())
+
+  @@index([opportunityId])
+  @@index([organizationId])
+}
+
+enum SyncDirection {
+  OUTBOUND
+  INBOUND
+}
+
+// Append-only log of integration sync events (idempotency + audit).
+model IntegrationSyncLog {
+  id            String        @id @default(cuid())
+  provider      String        @default("monday")
+  direction     SyncDirection
+  entity        String
+  entityId      String?
+  externalId    String?
+  eventId       String?       @unique
+  status        String
+  error         String?
+  createdAt     DateTime      @default(now())
+
+  @@index([entity, entityId])
+}
+
+// ---------------- Product Catalog ----------------
+// NOTE: catalog data is DB-managed via the admin API — no price fields here
+// (pricing is a separate future milestone) and no deployment needed to edit it.
+
+enum ProductKind {
+  PRODUCT
+  VARIANT
+  COMPONENT
+  BUNDLE
+  ACCESSORY
+  SERVICE
+}
+
+enum ProductStatus {
+  DRAFT
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+enum RelationType {
+  VARIANT_OF
+  COMPONENT_OF
+  BUNDLE_ITEM
+  ACCESSORY_OF
+}
+
+model ProductCategory {
+  id        String            @id @default(cuid())
+  name      String
+  slug      String            @unique
+  parentId  String?
+  parent    ProductCategory?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children  ProductCategory[] @relation("CategoryTree")
+  sortOrder Int               @default(0)
+  isActive  Boolean           @default(true)
+  families  ProductFamily[]
+  products  Product[]
+}
+
+model ProductFamily {
+  id          String          @id @default(cuid())
+  categoryId  String
+  category    ProductCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  name        String
+  slug        String
+  description String?
+  products    Product[]
+
+  @@unique([categoryId, slug])
+  @@index([categoryId])
+}
+
+model Product {
+  id                  String              @id @default(cuid())
+  sku                 String              @unique
+  name                String
+  kind                ProductKind         @default(PRODUCT)
+  status              ProductStatus       @default(DRAFT)
+  version             Int                 @default(1)
+
+  categoryId          String
+  category            ProductCategory     @relation(fields: [categoryId], references: [id])
+  familyId            String?
+  family              ProductFamily?      @relation(fields: [familyId], references: [id], onDelete: SetNull)
+
+  proposalDescription String?
+  internalDescription String?
+
+  // Dimensions in whole inches, weight in whole ounces — integers, never floats.
+  lengthIn            Int?
+  widthIn             Int?
+  heightIn            Int?
+  weightOz            Int?
+  capacity            String?
+
+  activeFrom          DateTime?
+  activeTo            DateTime?
+  adminNotes          String?
+
+  createdById         String
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  images              ProductImage[]
+  documents           TechnicalDocument[]
+  versions            ProductVersion[]
+  statusHistory       ProductStatusHistory[]
+  parentRelations     ProductRelation[]   @relation("RelationParent")
+  childRelations      ProductRelation[]   @relation("RelationChild")
+
+  @@index([categoryId])
+  @@index([familyId])
+  @@index([status])
+  @@index([kind])
+}
+
+model ProductRelation {
+  id        String       @id @default(cuid())
+  parentId  String
+  parent    Product      @relation("RelationParent", fields: [parentId], references: [id], onDelete: Cascade)
+  childId   String
+  child     Product      @relation("RelationChild", fields: [childId], references: [id], onDelete: Restrict)
+  type      RelationType
+  quantity  Int          @default(1)
+  sortOrder Int          @default(0)
+
+  @@unique([parentId, childId, type])
+  @@index([childId])
+}
+
+model ProductImage {
+  id          String   @id @default(cuid())
+  productId   String
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  storageKey  String   @unique
+  fileName    String
+  contentType String
+  sizeBytes   Int
+  sortOrder   Int      @default(0)
+  isPrimary   Boolean  @default(false)
+
+  @@index([productId])
+}
+
+model TechnicalDocument {
+  id          String   @id @default(cuid())
+  productId   String
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  storageKey  String   @unique
+  fileName    String
+  contentType String
+  sizeBytes   Int
+  title       String?
+
+  @@index([productId])
+}
+
+// Full snapshot of a product at each revision (version history).
+model ProductVersion {
+  id          String   @id @default(cuid())
+  productId   String
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  version     Int
+  snapshot    Json
+  changeNote  String?
+  changedById String
+  createdAt   DateTime @default(now())
+
+  @@unique([productId, version])
+  @@index([productId])
+}
+
+model ProductStatusHistory {
+  id          String        @id @default(cuid())
+  productId   String
+  product     Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
+  fromStatus  ProductStatus?
+  toStatus    ProductStatus
+  reason      String?
+  changedById String
+  createdAt   DateTime      @default(now())
+
+  @@index([productId])
+}
+
+// ---------------- Configuration Rules Engine ----------------
+// Rules are structured, versioned, auditable DATA — never hard-coded in the UI.
+
+enum RuleType {
+  REQUIRES
+  EXCLUDES
+  COMPATIBLE_WITH
+  INCOMPATIBLE_WITH
+  MIN_QUANTITY
+  MAX_QUANTITY
+  MIN_ROOM_DIMENSIONS
+  MIN_CEILING_HEIGHT
+  CLEARANCE
+  STRUCTURAL
+  INSTALLATION
+  FREIGHT
+  AUTO_INCLUDE_COMPONENT
+  AUTO_CALCULATED_COMPONENT
+  SUGGESTED_ACCESSORY
+  SUGGESTED_UPGRADE
+  APPROVAL_REQUIRED
+  MISSING_INFORMATION
+}
+
+enum RuleOutcome {
+  ALLOW
+  BLOCK
+  WARN
+  REQUIRE_APPROVAL
+  AUTO_ADD
+  RECOMMEND
+  REQUEST_INFORMATION
+}
+
+enum RuleStatus {
+  DRAFT
+  ACTIVE
+  RETIRED
+}
+
+model Rule {
+  id             String        @id @default(cuid())
+  key            String        @unique
+  type           RuleType
+  outcome        RuleOutcome
+  status         RuleStatus    @default(DRAFT)
+  currentVersion Int           @default(1)
+  description    String?
+  createdById    String
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  versions       RuleVersion[]
+
+  @@index([status])
+  @@index([type])
+}
+
+// Immutable snapshot of a rule at each revision.
+model RuleVersion {
+  id           String   @id @default(cuid())
+  ruleId       String
+  rule         Rule     @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  version      Int
+  definition   Json
+  changeNote   String?
+  changedById  String
+  approvedById String?
+  createdAt    DateTime @default(now())
+
+  @@unique([ruleId, version])
+  @@index([ruleId])
+}
+
+// Immutable record of an evaluation — preserves the exact ruleset a proposal used.
+model RuleEvaluationSnapshot {
+  id            String   @id @default(cuid())
+  subjectRef    String?
+  engineVersion String
+  rulesUsed     Json
+  findings      Json
+  blocked       Boolean  @default(false)
+  createdById   String
+  createdAt     DateTime @default(now())
+
+  @@index([subjectRef])
+}
+
+// ---------------- Pricing Engine ----------------
+// All money stored as integer minor units (BigInt) — decimal-safe, never floats.
+
+enum PriceListStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+model PriceList {
+  id             String           @id @default(cuid())
+  name           String
+  currency       String
+  status         PriceListStatus  @default(DRAFT)
+  effectiveDate  DateTime
+  expirationDate DateTime?
+  createdById    String
+  createdAt      DateTime         @default(now())
+  entries        PriceListEntry[]
+
+  @@index([status])
+  @@index([effectiveDate])
+}
+
+model PriceListEntry {
+  id           String    @id @default(cuid())
+  priceListId  String
+  priceList    PriceList @relation(fields: [priceListId], references: [id], onDelete: Cascade)
+  productId    String
+  minQuantity  Int       @default(1)
+  unitPrice    BigInt
+  createdAt    DateTime  @default(now())
+
+  @@unique([priceListId, productId, minQuantity])
+  @@index([productId])
+}
+
+model CustomerPrice {
+  id             String    @id @default(cuid())
+  organizationId String
+  productId      String
+  unitPrice      BigInt
+  currency       String
+  effectiveDate  DateTime
+  expirationDate DateTime?
+
+  @@index([organizationId, productId])
+}
+
+model PromotionalPrice {
+  id             String    @id @default(cuid())
+  productId      String
+  unitPrice      BigInt
+  currency       String
+  code           String?
+  effectiveDate  DateTime
+  expirationDate DateTime?
+
+  @@index([productId])
+}
+
+model ProductCost {
+  id            String   @id @default(cuid())
+  productId     String
+  unitCost      BigInt
+  currency      String
+  effectiveDate DateTime
+  createdById   String
+  createdAt     DateTime @default(now())
+
+  @@index([productId, effectiveDate])
+}
+
+// Immutable snapshot of a computed price for a proposal (preserve historical pricing).
+model PriceSnapshot {
+  id             String   @id @default(cuid())
+  subjectRef     String?
+  currency       String
+  engineVersion  String
+  ruleSnapshotId String?
+  input          Json
+  breakdown      Json
+  grandTotal     BigInt
+  incomplete     Boolean  @default(false)
+  createdById    String
+  createdAt      DateTime @default(now())
+
+  @@index([subjectRef])
+}
+
+// Every manual override — logged with who, why, and before/after.
+model PriceOverrideLog {
+  id            String   @id @default(cuid())
+  subjectRef    String?
+  field         String
+  previousValue String?
+  newValue      String
+  reason        String
+  authorizedById String
+  createdAt     DateTime @default(now())
+
+  @@index([subjectRef])
+}
+
+// ---------------- Proposal Builder ----------------
+
+enum ProposalStatus {
+  DRAFT
+  INTERNAL_REVIEW
+  RELEASED
+  ACCEPTED
+  REJECTED
+  EXPIRED
+}
+
+model Proposal {
+  id             String            @id @default(cuid())
+  number         String            @unique
+  organizationId String
+  title          String
+  currentVersion Int               @default(1)
+  createdById    String
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  versions       ProposalVersion[]
+
+  @@index([organizationId])
+}
+
+// A version is the unit of immutability: once RELEASED it is frozen.
+model ProposalVersion {
+  id              String                @id @default(cuid())
+  proposalId      String
+  proposal        Proposal              @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  version         Int
+  status          ProposalStatus        @default(DRAFT)
+  sections        Json
+  items           Json
+  priceSnapshotId String?
+  ruleSnapshotId  String?
+  expirationDate  DateTime?
+  releasedAt      DateTime?
+  releasedById    String?
+  frozen          Boolean               @default(false)
+  createdById     String
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  statusHistory   ProposalStatusEvent[]
+
+  @@unique([proposalId, version])
+  @@index([proposalId])
+  @@index([status])
+}
+
+model ProposalStatusEvent {
+  id          String          @id @default(cuid())
+  versionId   String
+  version     ProposalVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  fromStatus  ProposalStatus?
+  toStatus    ProposalStatus
+  note        String?
+  changedById String
+  createdAt   DateTime        @default(now())
+
+  @@index([versionId])
+}
+
+// ---------------- Internal Approval Workflow ----------------
+
+enum ApprovalType {
+  DISCOUNT
+  MARGIN_EXCEPTION
+  CUSTOM_PRICING
+  CUSTOM_PRODUCT
+  PRODUCT_RULE_OVERRIDE
+  FREIGHT_EXCEPTION
+  INSTALLATION_EXCEPTION
+  LEGAL_EXCEPTION
+  PAYMENT_TERM_EXCEPTION
+  PROPOSAL_RELEASE
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  REVISION_REQUESTED
+  ESCALATED
+  EXPIRED
+  CANCELLED
+}
+
+model ApprovalRequest {
+  id              String          @id @default(cuid())
+  type            ApprovalType
+  status          ApprovalStatus  @default(PENDING)
+  subjectRef      String?
+  proposalId      String?
+  proposalVersion Int?
+  requesterId     String
+  approverId      String?
+  reason          String
+  supportingInfo  Json?
+  originalValue   String?
+  requestedValue  String
+  decision        ApprovalStatus?
+  decisionNotes   String?
+  decidedAt       DateTime?
+  escalatedToId   String?
+  expiresAt       DateTime
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  events          ApprovalEvent[]
+
+  @@index([status])
+  @@index([type])
+  @@index([requesterId])
+  @@index([approverId])
+  @@index([proposalId, proposalVersion])
+}
+
+model ApprovalEvent {
+  id        String          @id @default(cuid())
+  requestId String
+  request   ApprovalRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  action    String
+  actorId   String
+  notes     String?
+  createdAt DateTime        @default(now())
+
+  @@index([requestId])
+}
+
+model ApprovalDelegation {
+  id          String        @id @default(cuid())
+  fromUserId  String
+  toUserId    String
+  type        ApprovalType?
+  startsAt    DateTime      @default(now())
+  endsAt      DateTime?
+  createdById String
+  createdAt   DateTime      @default(now())
+
+  @@index([toUserId])
+  @@index([fromUserId])
+}

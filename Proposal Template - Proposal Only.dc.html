@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600;6..72,700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  doc-page:not(:defined) { visibility: hidden; }
+  * { box-sizing: border-box; }
+  a { color: #2b5f57; }
+  a:hover { color: #1c4039; }
+  .p-h1 { font-family: 'Newsreader', serif; font-weight: 600; }
+  .p-body { font-family: 'IBM Plex Sans', system-ui, sans-serif; }
+</style>
+</helmet>
+<x-import component-from-global-scope="doc-page" from="./doc-page.js" size="letter" margin="0.75in" hint-size="100%,100%">
+  <div slot="header" style="display:flex;justify-content:space-between;align-items:center;font-family:'IBM Plex Sans',sans-serif;font-size:10px;color:#8a8f85;padding-bottom:6px;border-bottom:1px solid #e7e8e3;">
+    <span>{{ number }}</span>
+    <span>{{ statusLabel }} · v{{ version }}</span>
+  </div>
+  <div slot="footer" style="display:flex;justify-content:space-between;font-family:'IBM Plex Sans',sans-serif;font-size:9.5px;color:#a3a89e;padding-top:6px;border-top:1px solid #eef0ea;">
+    <span>Confidential — valid until {{ expiration }}</span>
+    <span>Summit Sensory</span>
+  </div>
+
+  <div class="p-body" style="color:#20241f;line-height:1.55;">
+    <!-- Cover -->
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:24px;margin-bottom:6px;">
+      <div style="padding-top:14px;">
+        <div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#8a8f85;margin-bottom:10px;">Proposal</div>
+        <h1 class="p-h1" style="font-size:34px;line-height:1.1;margin:0 0 8px;">{{ title }}</h1>
+        <div style="color:#5c6157;font-size:14px;">Prepared for {{ customerName }}</div>
+      </div>
+      <span style="flex:0 0 auto;padding:6px 12px;border-radius:999px;font-size:11px;font-weight:600;background:{{ statusBg }};color:{{ statusFg }};white-space:nowrap;">{{ statusLabel }}</span>
+    </div>
+
+    <hr style="border:none;border-top:1px solid #e7e8e3;margin:22px 0;">
+
+    <sc-for list="{{ sections }}" as="sec" hint-placeholder-count="6">
+      <section style="margin-bottom:26px;break-inside:avoid;">
+        <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px;">
+          <span style="font-size:11px;font-weight:600;color:#2b5f57;min-width:22px;">{{ sec.num }}</span>
+          <h2 class="p-h1" style="font-size:18px;font-weight:600;margin:0;">{{ sec.title }}</h2>
+        </div>
+        <div style="padding-left:32px;">
+          <sc-if value="{{ sec.isText }}" hint-placeholder-val="{{ true }}">
+            <p style="margin:0;color:#3a3f36;font-size:13.5px;">{{ sec.body }}</p>
+          </sc-if>
+          <sc-if value="{{ sec.isPricing }}" hint-placeholder-val="{{ false }}">
+            <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+              <thead>
+                <tr style="text-align:left;color:#8a8f85;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;">
+                  <th style="padding:6px 8px;border-bottom:1px solid #e7e8e3;">Item</th>
+                  <th style="padding:6px 8px;border-bottom:1px solid #e7e8e3;text-align:center;">Qty</th>
+                  <th style="padding:6px 8px;border-bottom:1px solid #e7e8e3;text-align:right;">Unit</th>
+                  <th style="padding:6px 8px;border-bottom:1px solid #e7e8e3;text-align:right;">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                <sc-for list="{{ pricingRows }}" as="row" hint-placeholder-count="4">
+                  <tr>
+                    <td style="padding:7px 8px;border-bottom:1px solid #f2f3ef;">{{ row.name }}</td>
+                    <td style="padding:7px 8px;border-bottom:1px solid #f2f3ef;text-align:center;">{{ row.qty }}</td>
+                    <td style="padding:7px 8px;border-bottom:1px solid #f2f3ef;text-align:right;">{{ row.unit }}</td>
+                    <td style="padding:7px 8px;border-bottom:1px solid #f2f3ef;text-align:right;">{{ row.amount }}</td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+            <div style="display:flex;justify-content:flex-end;margin-top:10px;">
+              <div style="min-width:240px;">
+                <sc-for list="{{ totals }}" as="t" hint-placeholder-count="4">
+                  <div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;color:{{ t.color }};font-weight:{{ t.weight }};">
+                    <span>{{ t.label }}</span><span>{{ t.value }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+            <p style="margin:10px 0 0;font-size:11px;color:#9a4a2f;">{{ unconfirmedNote }}</p>
+          </sc-if>
+          <sc-if value="{{ sec.isItems }}" hint-placeholder-val="{{ false }}">
+            <ul style="margin:0;padding-left:18px;color:#3a3f36;font-size:13px;">
+              <sc-for list="{{ sec.items }}" as="it" hint-placeholder-count="3">
+                <li style="margin-bottom:3px;">{{ it }}</li>
+              </sc-for>
+            </ul>
+          </sc-if>
+          <sc-if value="{{ sec.isSignature }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;gap:40px;margin-top:14px;">
+              <sc-for list="{{ signatures }}" as="sig" hint-placeholder-count="2">
+                <div style="flex:1;">
+                  <div style="border-bottom:1.5px solid #20241f;height:34px;"></div>
+                  <div style="font-size:11px;color:#8a8f85;margin-top:5px;">{{ sig.label }}</div>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+        </div>
+      </section>
+    </sc-for>
+  </div>
+</x-import>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;$preview&quot;: { &quot;width&quot;: 850, &quot;height&quot;: 1100 },
+  &quot;showSummary&quot;:   { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true,  &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Include sections&quot; },
+  &quot;showGoals&quot;:     { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: false, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Include sections&quot; },
+  &quot;showConfiguration&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Include sections&quot; },
+  &quot;showIncludedItems&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Include sections&quot; },
+  &quot;showOptionalItems&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: false, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Include sections&quot; },
+  &quot;showPricing&quot;:   { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true,  &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Include sections&quot; },
+  &quot;showTimeline&quot;:  { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true,  &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Include sections&quot; },
+  &quot;showWarranty&quot;:  { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: false, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Include sections&quot; },
+  &quot;showTerms&quot;:     { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: false, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Include sections&quot; },
+  &quot;showSignature&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true,  &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Include sections&quot; },
+  &quot;custom1Title&quot;: { &quot;editor&quot;: &quot;text&quot;, &quot;default&quot;: &quot;&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Custom section 1&quot; },
+  &quot;custom1Body&quot;:  { &quot;editor&quot;: &quot;text&quot;, &quot;default&quot;: &quot;&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Custom section 1&quot; },
+  &quot;custom2Title&quot;: { &quot;editor&quot;: &quot;text&quot;, &quot;default&quot;: &quot;&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Custom section 2&quot; },
+  &quot;custom2Body&quot;:  { &quot;editor&quot;: &quot;text&quot;, &quot;default&quot;: &quot;&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Custom section 2&quot; },
+  &quot;custom3Title&quot;: { &quot;editor&quot;: &quot;text&quot;, &quot;default&quot;: &quot;&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Custom section 3&quot; },
+  &quot;custom3Body&quot;:  { &quot;editor&quot;: &quot;text&quot;, &quot;default&quot;: &quot;&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Custom section 3&quot; }
+}">
+class Component extends DCLogic {
+  renderVals() {
+    const money = (s) => s;
+    const p = this.props ?? {};
+    const on = (key, dflt) => (p[key] === undefined ? dflt : p[key] === true || p[key] === 'true');
+
+    // Full catalogue of standard sections. `default` sets whether it ships in
+    // the "Proposal Only" template; every one is toggleable from Tweaks.
+    const catalogue = [
+      { key: 'showSummary', default: true, def: { type: 'EXECUTIVE_SUMMARY', title: 'Executive Summary', body: 'Cedar Valley Children\u2019s Hospital is expanding its pediatric rehabilitation program. This proposal outlines a sensory gym configuration designed around the facility\u2019s occupational and physical therapy goals for pediatric and special-needs populations.' } },
+      { key: 'showGoals', default: false, def: { type: 'PROJECT_GOALS', title: 'Project Goals', body: 'Establish a multi-disciplinary therapy environment supporting occupational, physical and sensory-integration therapy within the Rehabilitation Pavilion.' } },
+      { key: 'showConfiguration', default: true, def: { type: 'RECOMMENDED_CONFIGURATION', title: 'Recommended Configuration', body: 'A ceiling-mounted swing system, modular climbing set, and sensory-integration package, with mounting hardware auto-included per unit and calculated anchor components per structural rule set.' } },
+      { key: 'showIncludedItems', default: true, def: { type: 'INCLUDED_ITEMS', title: 'Included Items', items: ['Ceiling-mounted swing system (qty 2)', 'Mounting hardware kits', 'Sensory-integration package', 'Delivery to loading dock'] } },
+      { key: 'showOptionalItems', default: false, def: { type: 'OPTIONAL_ITEMS', title: 'Optional Items', items: ['Weighted therapy set upgrade', 'Additional crash mat'] } },
+      { key: 'showPricing', default: true, def: { type: 'PRICING_TABLE', title: 'Pricing', pricing: true } },
+      { key: 'showTimeline', default: true, def: { type: 'ESTIMATED_TIMELINE', title: 'Estimated Timeline', body: 'Approximately 6\u20138 weeks from acceptance to installation, subject to freight and structural confirmation.' } },
+      { key: 'showWarranty', default: false, def: { type: 'WARRANTY', title: 'Warranty', body: 'Manufacturer limited warranty applies per product line. Installation workmanship warranted for 12 months from completion.' } },
+      { key: 'showTerms', default: false, def: { type: 'TERMS_AND_CONDITIONS', title: 'Terms & Conditions', body: 'Deposit due on acceptance; progress payment at delivery; final payment on installation completion. Prices held until the expiration date shown below.' } },
+    ];
+
+    const secDefs = catalogue.filter((c) => on(c.key, c.default)).map((c) => c.def);
+
+    // Custom sections to add down the road — fill a title + body to include one.
+    for (let i = 1; i <= 3; i++) {
+      const title = (p['custom' + i + 'Title'] ?? '').trim ? (p['custom' + i + 'Title'] ?? '').trim() : '';
+      const body = p['custom' + i + 'Body'] ?? '';
+      if (title) secDefs.push({ type: 'CUSTOM', title, body });
+    }
+
+    // Signature section always closes the proposal (toggleable but on by default).
+    if (on('showSignature', true)) secDefs.push({ type: 'SIGNATURES', title: 'Acceptance & Signature', signature: true });
+
+    const sections = secDefs.map((s, i) => ({
+      num: String(i + 1).padStart(2, '0'),
+      title: s.title,
+      body: s.body ?? '',
+      items: s.items ?? [],
+      isText: Boolean(s.body),
+      isPricing: Boolean(s.pricing),
+      isItems: Boolean(s.items),
+      isSignature: Boolean(s.signature),
+    }));
+
+    return {
+      number: 'P-2026-000042',
+      version: 3,
+      title: 'Pediatric Sensory Gym — Rehabilitation Pavilion',
+      customerName: 'Cedar Valley Children\u2019s Hospital',
+      statusLabel: 'Released',
+      statusBg: '#eef2ec', statusFg: '#3c6b4e',
+      expiration: 'Aug 31, 2026',
+      sections,
+      pricingRows: [
+        { name: 'Ceiling-mounted swing system', qty: 2, unit: '$6,250.00', amount: '$12,500.00' },
+        { name: 'Sensory-integration package', qty: 1, unit: '$8,400.00', amount: '$8,400.00' },
+        { name: 'Modular climbing set', qty: 1, unit: '$5,100.00', amount: '$5,100.00' },
+        { name: 'Mounting hardware (auto-included)', qty: 4, unit: '$180.00', amount: '$720.00' },
+      ],
+      totals: [
+        { label: 'Subtotal', value: '$26,720.00', color: '#3a3f36', weight: 400 },
+        { label: 'Freight (est., unconfirmed)', value: '$1,850.00', color: '#9a4a2f', weight: 400 },
+        { label: 'Installation', value: '$3,200.00', color: '#3a3f36', weight: 400 },
+        { label: 'Tax (exempt)', value: '$0.00', color: '#3a3f36', weight: 400 },
+        { label: 'Total', value: '$31,770.00', color: '#20241f', weight: 600 },
+      ],
+      unconfirmedNote: 'Freight is an unconfirmed estimate and may be revised upon final logistics review.',
+      signatures: [
+        { label: 'Customer signature / date' },
+        { label: 'Summit Sensory authorized representative / date' },
+      ],
+    };
+  }
+}
+</script>
+</body>
+</html>
