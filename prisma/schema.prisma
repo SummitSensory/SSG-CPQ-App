@@ -735,6 +735,39 @@ model ProposalStatusEvent {
   @@index([versionId])
 }
 
+// A reusable proposal starting point: default groups, note lines, standard
+// descriptions and ordering, saved as a JSON document the builder loads.
+model ProposalTemplate {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  data        Json
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([name])
+}
+
+// Pricing/SKU master — the single editable source the Adventure engine and the
+// builder product picker both read from. Fed by seed, Excel/CSV import, the
+// in-app editor, and (later) live cloud sync.
+model Sku {
+  id             String   @id @default(cuid())
+  part           String   @unique
+  description    String
+  unitPriceMinor Int      @default(0)
+  weightLbs      Float    @default(0)
+  category       String   @default("OTHER")
+  proposalGroup  String?
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([category])
+  @@index([active])
+}
+
 // ---------------- Internal Approval Workflow ----------------
 
 enum ApprovalType {
@@ -813,4 +846,333 @@ model ApprovalDelegation {
 
   @@index([toUserId])
   @@index([fromUserId])
+}
+
+// ---------------- monday.com External Links ----------------
+
+enum SyncState {
+  LINKED
+  PENDING
+  ERROR
+  CONFLICT
+}
+
+model ExternalLink {
+  id             String    @id @default(cuid())
+  provider       String    @default("monday")
+  entity         String
+  entityId       String
+  externalId     String
+  boardId        String?
+  lastSyncedHash String?
+  lastSyncedAt   DateTime?
+  state          SyncState @default(LINKED)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([provider, entity, entityId])
+  @@unique([provider, externalId])
+  @@index([entity, entityId])
+}
+
+// ---------------- QuickBooks Online Integration ----------------
+// Financial integration. Every live transaction is authorized by a user,
+// deduplicated by an idempotency key, and preserves the accepted proposal
+// totals verbatim. Credentials NEVER live in source — OAuth tokens are stored
+// encrypted here; client id/secret come from env only.
+
+enum QboEnvironment {
+  SANDBOX
+  PRODUCTION
+}
+
+// OAuth 2.0 connection to a QuickBooks company (realm). Tokens are AES-256-GCM
+// encrypted at rest (key from env). One connection per realm per environment.
+model QboConnection {
+  id                    String         @id @default(cuid())
+  realmId               String
+  environment           QboEnvironment
+  accessTokenEnc        String
+  refreshTokenEnc       String
+  accessTokenExpiresAt  DateTime
+  refreshTokenExpiresAt DateTime
+  connectedById         String
+  isActive              Boolean        @default(true)
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+
+  @@unique([realmId, environment])
+  @@index([environment])
+}
+
+// CPQ entity <-> QuickBooks object id map (Customer, Item). Scoped by
+// environment so sandbox ids never collide with production ids. The unique
+// constraints are the duplicate-prevention backbone for find-or-create.
+model QboEntityLink {
+  id             String         @id @default(cuid())
+  environment    QboEnvironment
+  entity         String
+  entityId       String
+  qboId          String
+  qboSyncToken   String?
+  lastSyncedHash String?
+  lastSyncedAt   DateTime?
+  state          SyncState      @default(LINKED)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@unique([environment, entity, entityId])
+  @@unique([environment, entity, qboId])
+  @@index([entity, entityId])
+}
+
+enum QboTxnType {
+  ESTIMATE
+  DEPOSIT_INVOICE
+  PROGRESS_INVOICE
+  FINAL_INVOICE
+}
+
+// State machine: DRAFT (prepared, totals frozen) -> PENDING_AUTHORIZATION ->
+// AUTHORIZED (explicit user sign-off) -> CREATED (exists in QBO). FAILED is
+// retryable (same idempotency key). VOIDED for manual reversal records.
+enum QboTxnStatus {
+  DRAFT
+  PENDING_AUTHORIZATION
+  AUTHORIZED
+  CREATED
+  FAILED
+  VOIDED
+}
+
+// One row per intended financial transaction. The idempotencyKey is unique and
+// is also passed to QuickBooks as the request id, so a retry NEVER creates a
+// second document in either system. totalsSnapshot freezes the accepted
+// proposal totals so they can never be silently altered.
+model QboTransaction {
+  id                String         @id @default(cuid())
+  type              QboTxnType
+  environment       QboEnvironment
+  status            QboTxnStatus   @default(DRAFT)
+
+  proposalId        String
+  proposalVersionId String
+  proposalVersion   Int
+
+  // Frozen copy of the accepted proposal totals (never floats — minor units).
+  currency          String
+  proposalTotalMinor BigInt
+  amountMinor       BigInt
+  totalsSnapshot    Json
+
+  idempotencyKey    String         @unique
+  customerQboId     String?
+  qboId             String?
+  qboDocNumber      String?
+  qboSyncToken      String?
+
+  initiatedById     String
+  authorizedById    String?
+  authorizedAt      DateTime?
+  error             String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  @@index([proposalId, proposalVersion])
+  @@index([status])
+  @@index([type])
+  @@index([environment])
+}
+
+// ---------------- Accepted Order & Operational Handoff ----------------
+// When a proposal version is ACCEPTED it is locked into an immutable operational
+// order. The order references the EXACT accepted version + price snapshot and
+// carries a frozen content snapshot, so later proposal edits (only possible via
+// a new version) can never silently alter what was sold. Everything downstream
+// (procurement, production, shipping, install, training, tasks) hangs off it.
+
+enum HandoffStatus {
+  NEW
+  IN_PROGRESS
+  BLOCKED
+  READY
+  COMPLETE
+  CANCELLED
+}
+
+enum CustomerApprovalMethod {
+  SIGNATURE
+  COUNTERSIGNED_PROPOSAL
+  PURCHASE_ORDER
+  EMAIL
+  VERBAL
+  PORTAL
+}
+
+enum RequirementCategory {
+  PRODUCTION
+  CUSTOM_PRODUCT
+  SHIPPING
+  INSTALLATION
+  TRAINING
+  CUSTOMER_RESPONSIBILITY
+  FACILITY_ACCESS
+  REQUIRED_DOCUMENT
+}
+
+enum RequirementStatus {
+  OPEN
+  IN_PROGRESS
+  BLOCKED
+  COMPLETE
+  WAIVED
+}
+
+enum HandoffTaskStatus {
+  TODO
+  IN_PROGRESS
+  BLOCKED
+  DONE
+  CANCELLED
+}
+
+model AcceptedOrder {
+  id                String        @id @default(cuid())
+  number            String        @unique
+  organizationId    String
+  opportunityId     String?
+
+  // Exact accepted proposal reference — the immutability anchor.
+  proposalId        String
+  proposalVersionId String        @unique
+  acceptedVersion   Int
+  priceSnapshotId   String
+  ruleSnapshotId    String?
+
+  currency          String
+  grandTotalMinor   BigInt
+  depositRequired   Boolean       @default(false)
+  depositDueMinor   BigInt        @default(0)
+
+  // Frozen copy of the accepted content + an integrity hash for drift detection.
+  contentSnapshot   Json
+  integrityHash     String
+
+  status            HandoffStatus @default(NEW)
+  locked            Boolean       @default(true)
+
+  // Integration cross-references (documented in QBO/monday milestones).
+  qboEstimateTxnId  String?
+  mondayProjectId   String?
+
+  acceptedById      String
+  acceptedAt        DateTime      @default(now())
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  customerApproval  CustomerApproval?
+  requirements      HandoffRequirement[]
+  procurement       ProcurementLine[]
+  tasks             HandoffTask[]
+  events            OrderEvent[]
+
+  @@index([organizationId])
+  @@index([status])
+  @@index([proposalId])
+}
+
+// The customer's acceptance of record — who approved, how, and when.
+model CustomerApproval {
+  id             String                 @id @default(cuid())
+  orderId        String                 @unique
+  order          AcceptedOrder          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  method         CustomerApprovalMethod
+  approverName   String
+  approverTitle  String?
+  approverEmail  String?
+  poNumber       String?
+  documentRef    String?
+  ipAddress      String?
+  approvedAt     DateTime
+  notes          String?
+  recordedById   String
+  createdAt      DateTime               @default(now())
+}
+
+// Line-itemized procurement list, referencing the frozen accepted products.
+model ProcurementLine {
+  id           String        @id @default(cuid())
+  orderId      String
+  order        AcceptedOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId    String?
+  sku          String?
+  name         String
+  quantity     Int
+  vendor       String?
+  poNumber     String?
+  sourced      Boolean       @default(false)
+  targetDate   DateTime?
+  notes        String?
+  isException  Boolean       @default(false)
+  exceptionReason String?
+
+  @@index([orderId])
+}
+
+// Operational requirements by category (production, shipping, install, etc.).
+model HandoffRequirement {
+  id              String              @id @default(cuid())
+  orderId         String
+  order           AcceptedOrder       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  category        RequirementCategory
+  title           String
+  detail          Json?
+  status          RequirementStatus   @default(OPEN)
+  targetDate      DateTime?
+  isException     Boolean             @default(false)
+  exceptionReason String?
+  createdById     String
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  @@index([orderId])
+  @@index([category])
+  @@index([status])
+}
+
+// Internal task assignment with owner + target date.
+model HandoffTask {
+  id              String            @id @default(cuid())
+  orderId         String
+  order           AcceptedOrder     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  title           String
+  description     String?
+  category        RequirementCategory?
+  assigneeId      String?
+  assigneeRole    Role?
+  dueDate         DateTime?
+  status          HandoffTaskStatus @default(TODO)
+  isException     Boolean           @default(false)
+  exceptionReason String?
+  createdById     String
+  completedAt     DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@index([orderId])
+  @@index([assigneeId])
+  @@index([status])
+}
+
+// Append-only, order-scoped audit timeline (complements the global AuditLog).
+model OrderEvent {
+  id        String        @id @default(cuid())
+  orderId   String
+  order     AcceptedOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  action    String
+  actorId   String
+  detail    Json?
+  createdAt DateTime      @default(now())
+
+  @@index([orderId])
 }

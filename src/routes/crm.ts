@@ -45,6 +45,16 @@ export function registerCrmRoutes(app: FastifyInstance): void {
     return findDuplicateOrganizations(org.name, id);
   });
 
+  app.get('/crm/organizations/:id', read, async (req) => {
+    const { id } = req.params as { id: string };
+    const org = await prisma.organization.findUnique({
+      where: { id },
+      include: { addresses: true, contacts: true },
+    });
+    if (!org) throw new NotFoundError();
+    return org;
+  });
+
   app.post('/crm/organizations', write, async (req, reply) => {
     const parsed = OrganizationInput.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(parsed.error.message);

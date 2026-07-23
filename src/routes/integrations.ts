@@ -3,7 +3,9 @@ import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import { isMondayConfigured } from '../config/env.js';
 import { verifyMondayWebhook } from '../integrations/monday/webhook.js';
-import { applyInboundChange } from '../integrations/monday/sync.js';
+import { applyInboundChange, retrySync } from '../integrations/monday/sync.js';
+import { reconcile } from '../integrations/monday/reconcile.js';
+import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 
 export function registerIntegrationRoutes(app: FastifyInstance): void {
@@ -14,6 +16,27 @@ export function registerIntegrationRoutes(app: FastifyInstance): void {
     mode: 'two-way',
     entity: 'deal',
   }));
+
+  const manage = { preHandler: requirePermission(Permission.INTEGRATIONS_MANAGE) };
+
+  // Per-entity link + recent sync-log state.
+  app.get('/integrations/monday/links', manage, async () =>
+    prisma.externalLink.findMany({ where: { provider: 'monday' }, orderBy: { updatedAt: 'desc' }, take: 200 }),
+  );
+  app.get('/integrations/monday/logs', manage, async () =>
+    prisma.integrationSyncLog.findMany({ where: { provider: 'monday' }, orderBy: { createdAt: 'desc' }, take: 200 }),
+  );
+
+  // Reconciliation report — drift, errored links, recent failures.
+  app.get('/integrations/monday/reconcile', manage, async () => reconcile());
+
+  // Manual retry of a failed sync attempt.
+  app.post('/integrations/monday/retry/:logId', manage, async (req, reply) => {
+    const { logId } = req.params as { logId: string };
+    const result = await retrySync(logId);
+    if (result === 'notfound') return reply.status(404).send({ error: 'NOT_FOUND' });
+    return { result };
+  });
 
   // Inbound webhook. Public endpoint, but authenticated by monday's signed JWT.
   app.post('/integrations/monday/webhook', async (req, reply) => {

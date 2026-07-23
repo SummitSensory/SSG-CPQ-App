@@ -12,8 +12,8 @@ describe('import validation & duplicate prevention', () => {
   });
   it('flags in-batch duplicate SKUs', () => {
     const res = validateImportBatch([
-      { sku: 'DUP-001', name: 'A', categoryId: 'c1' },
-      { sku: 'DUP-001', name: 'B', categoryId: 'c1' },
+      { sku: 'DUP-001', name: 'Widget A', categoryId: 'c1' },
+      { sku: 'DUP-001', name: 'Widget B', categoryId: 'c1' },
     ]);
     expect(res.valid).toBe(false);
     expect(res.issues.some((i) => i.field === 'sku')).toBe(true);

@@ -22,7 +22,7 @@
 </helmet>
 <x-import component-from-global-scope="doc-page" from="./doc-page.js" size="letter" margin="0.75in" hint-size="100%,100%">
   <div slot="header" style="display:flex;justify-content:space-between;align-items:center;font-family:'IBM Plex Sans',sans-serif;font-size:10px;color:#8a8f85;padding-bottom:6px;border-bottom:1px solid #e7e8e3;">
-    <span>{{ number }}</span>
+    <span style="display:inline-flex;align-items:center;gap:6px;"><img src="uploads/Favicon%20-%20Summit-Logo-500.500.png" alt="Summit Sensory Gym" style="height:16px;width:auto;"/>{{ number }}</span>
     <span>{{ statusLabel }} · v{{ version }}</span>
   </div>
   <div slot="footer" style="display:flex;justify-content:space-between;font-family:'IBM Plex Sans',sans-serif;font-size:9.5px;color:#a3a89e;padding-top:6px;border-top:1px solid #eef0ea;">
@@ -34,6 +34,7 @@
     <!-- Cover -->
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:24px;margin-bottom:6px;">
       <div style="padding-top:14px;">
+        <img src="uploads/Favicon%20-%20Summit-Logo-500.500.png" alt="Summit Sensory Gym" style="height:60px;width:auto;display:block;margin-bottom:14px;"/>
         <div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#8a8f85;margin-bottom:10px;">Proposal</div>
         <h1 class="p-h1" style="font-size:34px;line-height:1.1;margin:0 0 8px;">{{ title }}</h1>
         <div style="color:#5c6157;font-size:14px;">Prepared for {{ customerName }}</div>

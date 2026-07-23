@@ -21,12 +21,12 @@ jobs:
           --health-interval=10s --health-timeout=5s --health-retries=5
     env:
       DATABASE_URL: postgresql://app:app@localhost:5432/app?schema=public
+      DIRECT_URL: postgresql://app:app@localhost:5432/app?schema=public
       JWT_ACCESS_SECRET: ci-access-secret-xxxxxxxx
       JWT_REFRESH_SECRET: ci-refresh-secret-xxxxxxx
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with: { version: 9 }
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile

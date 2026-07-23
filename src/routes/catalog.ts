@@ -37,6 +37,15 @@ export function registerCatalogRoutes(app: FastifyInstance): void {
   });
 
   // ----- Products -----
+  app.get('/catalog/categories', read, async () =>
+    prisma.productCategory.findMany({ orderBy: { sortOrder: 'asc' } }),
+  );
+
+  app.get('/catalog/families', read, async (req) => {
+    const { categoryId } = req.query as { categoryId?: string };
+    return prisma.productFamily.findMany({ where: categoryId ? { categoryId } : {}, orderBy: { name: 'asc' } });
+  });
+
   app.get('/catalog/products', read, async (req) => {
     const p = ListQuery.parse(req.query);
     const f = req.query as { status?: string; kind?: string; categoryId?: string };

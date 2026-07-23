@@ -23,7 +23,11 @@ export const FamilyInput = z.object({
   description: z.string().max(2000).optional(),
 });
 
-export const ProductInput = z.object({
+const activeRangeOk = (v) => !v.activeFrom || !v.activeTo || v.activeTo >= v.activeFrom;
+const activeRangeMsg = { message: 'activeTo must be on or after activeFrom', path: ['activeTo'] };
+
+// Base object (a ZodObject) so .partial()/.omit() stay available for ProductUpdate.
+export const ProductShape = z.object({
   sku: SKU,
   name: z.string().trim().min(2).max(200),
   kind: KindEnum.default('PRODUCT'),
@@ -39,9 +43,8 @@ export const ProductInput = z.object({
   activeFrom: z.coerce.date().optional(),
   activeTo: z.coerce.date().optional(),
   adminNotes: z.string().max(5000).optional(),
-}).refine((v) => !v.activeFrom || !v.activeTo || v.activeTo >= v.activeFrom, {
-  message: 'activeTo must be on or after activeFrom',
-  path: ['activeTo'],
 });
 
-export const ProductUpdate = ProductInput.partial().omit({ sku: true });
+export const ProductInput = ProductShape.refine(activeRangeOk, activeRangeMsg);
+
+export const ProductUpdate = ProductShape.partial().omit({ sku: true }).refine(activeRangeOk, activeRangeMsg);
