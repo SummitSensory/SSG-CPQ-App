@@ -38,12 +38,7 @@ const EnvSchema = z
       .transform((v) => v === 'true'),
   })
   .superRefine((v, ctx) => {
-    // In production the monday integration must be fully configured — no silent no-op.
-    if (v.NODE_ENV === 'production') {
-      for (const key of ['MONDAY_API_TOKEN', 'MONDAY_SIGNING_SECRET', 'MONDAY_DEALS_BOARD_ID'] as const) {
-        if (!v[key]) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [key], message: 'required in production' });
-      }
-    }
+    // monday.com integration is optional; when unset the app runs without it.
     // If any QBO credential is present, the whole set (plus enc key) is required
     // — a half-configured financial integration must never start.
     const qboKeys = ['QBO_CLIENT_ID', 'QBO_CLIENT_SECRET', 'QBO_REDIRECT_URI', 'QBO_TOKEN_ENC_KEY'] as const;
