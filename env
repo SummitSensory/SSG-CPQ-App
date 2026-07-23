@@ -6,8 +6,8 @@
 #   DATABASE_URL  = the POOLED string   (host contains "-pooler")
 #   DIRECT_URL    = the UNPOOLED string (Neon calls it DATABASE_URL_UNPOOLED; no "-pooler")
 
-DATABASE_URL=postgresql://neondb_owner:npg_kp4QjS8YOJRK@ep-billowing-recipe-aw6rcf5g-pooler.c-12.us-east-1.aws.neon.tech/neondb?channel_binding=require&sslmode=require
-DIRECT_URL=postgresql://neondb_owner:npg_kp4QjS8YOJRK@ep-billowing-recipe-aw6rcf5g.c-12.us-east-1.aws.neon.tech/neondb?sslmode=require
+DATABASE_URL="postgresql://neondb_owner:npg_kp4QjS8YOJRK@ep-billowing-recipe-aw6rcf5g-pooler.c-12.us-east-1.aws.neon.tech/neondb?channel_binding=require&sslmode=require"
+DIRECT_URL="postgresql://neondb_owner:npg_kp4QjS8YOJRK@ep-billowing-recipe-aw6rcf5g.c-12.us-east-1.aws.neon.tech/neondb?sslmode=require"
 
 # Auth secrets — already filled in (must match what you set in Vercel).
 JWT_ACCESS_SECRET="k9Xm2pQvR7tW4nB8sL3jH6yF1dG5aZ0cE9uP2iO7rT4wN8xM3qV6bY1lK5hD2fS"
