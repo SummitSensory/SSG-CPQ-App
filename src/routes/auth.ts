@@ -3,7 +3,13 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { verifyPassword } from '../auth/password.js';
 import { signAccessToken } from '../auth/tokens.js';
-import { createSession, rotateSession, revokeSession, resolveSession, revokeAllForUser } from '../auth/session.js';
+import {
+  createSession,
+  rotateSession,
+  revokeSession,
+  resolveSession,
+  revokeAllForUser,
+} from '../auth/session.js';
 import { hashPassword } from '../auth/password.js';
 import { UnauthorizedError, ValidationError } from '../lib/errors.js';
 import { requireAuth } from '../plugins/authz.js';
