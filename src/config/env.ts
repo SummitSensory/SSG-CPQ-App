@@ -34,6 +34,13 @@ const EnvSchema = z
     // admin promotes from Settings → Users.
     ENTRA_DEFAULT_ROLE: z.string().min(1).default('READ_ONLY'),
 
+    // Transactional email (Resend). Optional: without a key, invites are
+    // logged instead of sent.
+    RESEND_API_KEY: z.string().min(1).optional(),
+    // Must be an address on a domain verified in Resend.
+    INVITE_FROM_EMAIL: z.string().email().default('no-reply@summitsensory.com'),
+    INVITE_FROM_NAME: z.string().min(1).default('Summit Sensory CPQ'),
+
     // QuickBooks Online integration. Client credentials come from env ONLY —
     // never source. OAuth tokens are encrypted with QBO_TOKEN_ENC_KEY.
     QBO_CLIENT_ID: z.string().min(1).optional(),
@@ -55,36 +62,16 @@ const EnvSchema = z
     // monday.com integration is optional; when unset the app runs without it.
     // If any QBO credential is present, the whole set (plus enc key) is required
     // — a half-configured financial integration must never start.
-    const qboKeys = [
-      'QBO_CLIENT_ID',
-      'QBO_CLIENT_SECRET',
-      'QBO_REDIRECT_URI',
-      'QBO_TOKEN_ENC_KEY',
-    ] as const;
+    const qboKeys = ['QBO_CLIENT_ID', 'QBO_CLIENT_SECRET', 'QBO_REDIRECT_URI', 'QBO_TOKEN_ENC_KEY'] as const;
     if (qboKeys.some((k) => v[k])) {
       for (const key of qboKeys) {
-        if (!v[key])
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: [key],
-            message: 'required when QuickBooks is configured',
-          });
+        if (!v[key]) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [key], message: 'required when QuickBooks is configured' });
       }
     }
-    const entraKeys = [
-      'ENTRA_TENANT_ID',
-      'ENTRA_CLIENT_ID',
-      'ENTRA_CLIENT_SECRET',
-      'ENTRA_REDIRECT_URI',
-    ] as const;
+    const entraKeys = ['ENTRA_TENANT_ID', 'ENTRA_CLIENT_ID', 'ENTRA_CLIENT_SECRET', 'ENTRA_REDIRECT_URI'] as const;
     if (entraKeys.some((k) => v[k])) {
       for (const key of entraKeys) {
-        if (!v[key])
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: [key],
-            message: 'required when Entra SSO is configured',
-          });
+        if (!v[key]) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [key], message: 'required when Entra SSO is configured' });
       }
     }
   });
@@ -94,9 +81,7 @@ export type Env = z.infer<typeof EnvSchema>;
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   const parsed = EnvSchema.safeParse(source);
   if (!parsed.success) {
-    const issues = parsed.error.issues
-      .map((i) => `  - ${i.path.join('.')}: ${i.message}`)
-      .join('\n');
+    const issues = parsed.error.issues.map((i) => `  - ${i.path.join('.')}: ${i.message}`).join('\n');
     throw new Error(`Invalid environment variables:\n${issues}`);
   }
   return parsed.data;
@@ -111,9 +96,7 @@ export function isMondayConfigured(e: Env = env): boolean {
 
 /** True only when every Entra SSO setting is present. */
 export function isEntraConfigured(e: Env = env): boolean {
-  return Boolean(
-    e.ENTRA_TENANT_ID && e.ENTRA_CLIENT_ID && e.ENTRA_CLIENT_SECRET && e.ENTRA_REDIRECT_URI,
-  );
+  return Boolean(e.ENTRA_TENANT_ID && e.ENTRA_CLIENT_ID && e.ENTRA_CLIENT_SECRET && e.ENTRA_REDIRECT_URI);
 }
 
 /** Lower-cased list of email domains permitted to sign in via Entra. */
@@ -125,9 +108,7 @@ export function entraAllowedDomains(e: Env = env): string[] {
 
 /** True only when every QuickBooks credential + token encryption key is present. */
 export function isQuickbooksConfigured(e: Env = env): boolean {
-  return Boolean(
-    e.QBO_CLIENT_ID && e.QBO_CLIENT_SECRET && e.QBO_REDIRECT_URI && e.QBO_TOKEN_ENC_KEY,
-  );
+  return Boolean(e.QBO_CLIENT_ID && e.QBO_CLIENT_SECRET && e.QBO_REDIRECT_URI && e.QBO_TOKEN_ENC_KEY);
 }
 
 /** The QuickBooks environment this deployment targets, as the DB enum value. */
