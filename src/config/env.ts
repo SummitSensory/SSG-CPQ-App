@@ -20,6 +20,20 @@ const EnvSchema = z
     MONDAY_SIGNING_SECRET: z.string().min(1).optional(),
     MONDAY_DEALS_BOARD_ID: z.string().min(1).optional(),
 
+    // Microsoft Entra ID (Azure AD) single sign-on. Optional: when unset the
+    // app runs with email + password only.
+    ENTRA_TENANT_ID: z.string().min(1).optional(),
+    ENTRA_CLIENT_ID: z.string().min(1).optional(),
+    ENTRA_CLIENT_SECRET: z.string().min(1).optional(),
+    ENTRA_REDIRECT_URI: z.string().url().optional(),
+    // Only these email domains may sign in via Entra. Comma-separated.
+    // Without this, anyone who can authenticate against the tenant is
+    // auto-provisioned an account.
+    ENTRA_ALLOWED_DOMAINS: z.string().min(1).default('summitsensory.com'),
+    // Role granted to a first-time SSO user. Least privilege by default; an
+    // admin promotes from Settings → Users.
+    ENTRA_DEFAULT_ROLE: z.string().min(1).default('READ_ONLY'),
+
     // QuickBooks Online integration. Client credentials come from env ONLY —
     // never source. OAuth tokens are encrypted with QBO_TOKEN_ENC_KEY.
     QBO_CLIENT_ID: z.string().min(1).optional(),
@@ -57,6 +71,22 @@ const EnvSchema = z
           });
       }
     }
+    const entraKeys = [
+      'ENTRA_TENANT_ID',
+      'ENTRA_CLIENT_ID',
+      'ENTRA_CLIENT_SECRET',
+      'ENTRA_REDIRECT_URI',
+    ] as const;
+    if (entraKeys.some((k) => v[k])) {
+      for (const key of entraKeys) {
+        if (!v[key])
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [key],
+            message: 'required when Entra SSO is configured',
+          });
+      }
+    }
   });
 
 export type Env = z.infer<typeof EnvSchema>;
@@ -77,6 +107,20 @@ export const env: Env = loadEnv();
 /** True only when every monday credential is present. */
 export function isMondayConfigured(e: Env = env): boolean {
   return Boolean(e.MONDAY_API_TOKEN && e.MONDAY_SIGNING_SECRET && e.MONDAY_DEALS_BOARD_ID);
+}
+
+/** True only when every Entra SSO setting is present. */
+export function isEntraConfigured(e: Env = env): boolean {
+  return Boolean(
+    e.ENTRA_TENANT_ID && e.ENTRA_CLIENT_ID && e.ENTRA_CLIENT_SECRET && e.ENTRA_REDIRECT_URI,
+  );
+}
+
+/** Lower-cased list of email domains permitted to sign in via Entra. */
+export function entraAllowedDomains(e: Env = env): string[] {
+  return e.ENTRA_ALLOWED_DOMAINS.split(',')
+    .map((d) => d.trim().toLowerCase().replace(/^@/, ''))
+    .filter(Boolean);
 }
 
 /** True only when every QuickBooks credential + token encryption key is present. */

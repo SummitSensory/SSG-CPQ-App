@@ -100,6 +100,12 @@
       '<div class="field"><label for="email">Email</label><input id="email" type="email" autocomplete="username" required></div>' +
       '<div class="field"><label for="password">Password</label><input id="password" type="password" autocomplete="current-password" required></div>' +
       '<button class="btn" type="submit" id="submitBtn">Sign in</button>' +
+      '<div id="ssoBlock" class="hidden">' +
+      '<div style="display:flex;align-items:center;gap:10px;margin:18px 0 14px;color:#a0a49a;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;">' +
+      '<span style="flex:1;height:1px;background:#e7e8e3;"></span>or<span style="flex:1;height:1px;background:#e7e8e3;"></span>' +
+      '</div>' +
+      '<button type="button" class="link-btn" id="ssoBtn" style="text-align:center;padding:11px 16px;font-size:14px;">Sign in with Microsoft</button>' +
+      '</div>' +
       '<div class="hint">Summit Sensory Group · Configure-Price-Quote</div>' +
       '</form></div>';
     document.getElementById('loginForm').addEventListener('submit', async function (e) {
@@ -129,6 +135,21 @@
         renderLogin('Could not reach the server. Is it running?');
       }
     });
+    // Reveal the Microsoft button only where SSO is actually configured.
+    api('/auth/sso/status', { noAuth: true })
+      .then(function (r) {
+        return r.ok ? r.json() : null;
+      })
+      .then(function (d) {
+        if (!d || !d.enabled) return;
+        var block = document.getElementById('ssoBlock');
+        if (!block) return;
+        block.classList.remove('hidden');
+        document.getElementById('ssoBtn').addEventListener('click', function () {
+          location.href = '/auth/sso/start';
+        });
+      })
+      .catch(function () {});
   }
 
   function brandHtml() {

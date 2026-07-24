@@ -4,6 +4,7 @@ import { logger } from './lib/logger.js';
 import { registerErrorHandler } from './plugins/error-handler.js';
 import { registerHealthRoutes } from './routes/health.js';
 import { registerAuthRoutes } from './routes/auth.js';
+import { registerSsoRoutes } from './routes/sso.js';
 import { registerAdminRoutes } from './routes/admin.js';
 import { registerProtectedRoutes } from './routes/protected.js';
 import { registerCrmRoutes } from './routes/crm.js';
@@ -21,7 +22,10 @@ import { registerOrderRoutes } from './routes/orders.js';
 import { registerWebRoutes } from './routes/web.js';
 
 export function buildApp(): FastifyInstance {
-  const app: FastifyInstance = Fastify({ loggerInstance: logger }) as unknown as FastifyInstance;
+  // Fastify infers pino's concrete Logger from `loggerInstance`, which is not
+  // structurally assignable to the FastifyBaseLogger the register* helpers
+  // expect. The instance is identical at runtime — this pins the public type.
+  const app = Fastify({ loggerInstance: logger }) as unknown as FastifyInstance;
   app.register(helmet, {
     contentSecurityPolicy: {
       directives: {
@@ -37,6 +41,7 @@ export function buildApp(): FastifyInstance {
   registerErrorHandler(app);
   registerHealthRoutes(app);
   registerAuthRoutes(app);
+  registerSsoRoutes(app);
   registerAdminRoutes(app);
   registerProtectedRoutes(app);
   registerCrmRoutes(app);
