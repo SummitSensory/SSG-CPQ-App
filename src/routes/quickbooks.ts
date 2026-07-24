@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { SignJWT, jwtVerify } from 'jose';
 import type { FastifyInstance } from 'fastify';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
@@ -37,6 +38,41 @@ async function activeRealmId(): Promise<string | null> {
   return conn?.realmId ?? null;
 }
 
+// Intuit redirects the BROWSER back to us with no Authorization header, so the
+// callback cannot sit behind requirePermission. Instead the `state` nonce is a
+// short-lived signed token naming the admin who started the flow: it doubles as
+// CSRF protection and as the identity the token exchange is recorded against.
+const stateKey = new TextEncoder().encode(env.JWT_ACCESS_SECRET);
+const STATE_TTL = 900;
+
+async function signState(userId: string): Promise<string> {
+  return new SignJWT({ uid: userId })
+    .setProtectedHeader({ alg: 'HS256' })
+    .setJti(randomUUID())
+    .setIssuedAt()
+    .setExpirationTime(Math.floor(Date.now() / 1000) + STATE_TTL)
+    .sign(stateKey);
+}
+
+async function readState(state: string): Promise<string | null> {
+  try {
+    const { payload } = await jwtVerify(state, stateKey);
+    return String(payload.uid);
+  } catch {
+    return null;
+  }
+}
+
+function resultPage(title: string, detail: string, ok: boolean): string {
+  const safe = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${safe(title)}</title></head>
+<body style="font-family:system-ui;max-width:520px;margin:80px auto;padding:0 24px;color:#20241f;">
+<h1 style="font-size:20px;color:${ok ? '#3f9d78' : '#c2452f'};">${safe(title)}</h1>
+<p style="color:#82877d;line-height:1.6;">${safe(detail)}</p>
+<p><a href="/" style="color:#3d4a55;">Back to the workspace</a></p>
+</body></html>`;
+}
+
 export function registerQuickbooksRoutes(app: FastifyInstance): void {
   const manage = { preHandler: requirePermission(Permission.QBO_MANAGE) };
   const transact = { preHandler: requirePermission(Permission.QBO_TRANSACT) };
@@ -52,19 +88,62 @@ export function registerQuickbooksRoutes(app: FastifyInstance): void {
     }),
   }));
 
-  // Begin OAuth: returns the Intuit consent URL. `state` is a CSRF nonce the
-  // caller should persist and re-check on callback.
-  app.get('/integrations/quickbooks/connect', manage, async () => {
-    const state = randomUUID();
+  // Begin OAuth: returns the Intuit consent URL. `state` is a signed nonce that
+  // the callback verifies — the caller just follows the URL.
+  app.get('/integrations/quickbooks/connect', manage, async (req, reply) => {
+    if (!isQuickbooksConfigured()) return reply.status(409).send({ error: 'NOT_CONFIGURED' });
+    const state = await signState(req.user!.sub);
     return { url: authorizeUrl(state), state };
   });
 
-  // OAuth redirect target. Exchanges the code for encrypted tokens.
-  app.get('/integrations/quickbooks/callback', manage, async (req, reply) => {
-    const q = req.query as { code?: string; realmId?: string; state?: string };
-    if (!q.code || !q.realmId) return reply.status(400).send({ error: 'MISSING_CODE_OR_REALM' });
-    await exchangeCode(q.code, q.realmId, req.user!.sub);
-    return { connected: true, realmId: q.realmId, environment: qboEnvironment() };
+  // OAuth redirect target. Public by necessity (see signState above); the state
+  // token is what authenticates it.
+  app.get('/integrations/quickbooks/callback', async (req, reply) => {
+    const q = req.query as {
+      code?: string;
+      realmId?: string;
+      state?: string;
+      error?: string;
+      error_description?: string;
+    };
+    reply.type('text/html; charset=utf-8');
+
+    if (q.error)
+      return reply
+        .status(400)
+        .send(resultPage('Connection cancelled', q.error_description ?? q.error, false));
+    if (!q.code || !q.realmId || !q.state) {
+      return reply
+        .status(400)
+        .send(resultPage('Connection failed', 'QuickBooks sent an incomplete response.', false));
+    }
+
+    const userId = await readState(q.state);
+    if (!userId) {
+      return reply
+        .status(401)
+        .send(
+          resultPage(
+            'Connection failed',
+            'That connection request expired. Start again from Administration → Integrations.',
+            false,
+          ),
+        );
+    }
+
+    try {
+      await exchangeCode(q.code, q.realmId, userId);
+      return reply.send(
+        resultPage(
+          'QuickBooks connected',
+          `Connected to company ${q.realmId} in the ${qboEnvironment().toLowerCase()} environment.`,
+          true,
+        ),
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'The token exchange failed.';
+      return reply.status(502).send(resultPage('Connection failed', message, false));
+    }
   });
 
   app.post('/integrations/quickbooks/disconnect/:realmId', manage, async (req) => {

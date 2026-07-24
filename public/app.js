@@ -164,6 +164,12 @@
     { id: 'proposals', label: 'Proposals', ready: true, roles: '*' },
     { id: 'orders', label: 'Orders & Handoff', ready: true, roles: '*' },
     { id: 'admin', label: 'Administration', ready: true, roles: ['SYSTEM_ADMIN'] },
+    {
+      id: 'integrations',
+      label: 'Integrations',
+      ready: true,
+      roles: ['SYSTEM_ADMIN', 'EXECUTIVE', 'ACCOUNTING'],
+    },
   ];
   var CRM_WRITE_ROLES = [
     'SYSTEM_ADMIN',
@@ -277,6 +283,7 @@
       else if (id === 'proposals') renderProposals(user);
       else if (id === 'orders') renderOrders(user);
       else if (id === 'admin') renderAdmin(user);
+      else if (id === 'integrations') renderIntegrations(user);
       else renderSoon(item.label);
     });
     document.getElementById('logoutBtn').addEventListener('click', logout);
@@ -3671,6 +3678,78 @@
       },
       'Change password',
     );
+  }
+
+  /* --- Integrations --- */
+  async function renderIntegrations(user) {
+    var view = document.getElementById('view');
+    view.innerHTML = '<div class="muted" style="padding:24px;">Loading…</div>';
+
+    var r = await authed('/integrations/quickbooks/status');
+    if (!r.ok) {
+      view.innerHTML =
+        '<div class="err">Could not read integration status (' + r.status + ').</div>';
+      return;
+    }
+    var s = await r.json();
+    var connected = (s.connections || 0) > 0;
+    var envLabel = titleCase(s.environment || 'sandbox');
+
+    view.innerHTML =
+      '<div class="card" style="margin-bottom:16px;">' +
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;">' +
+      '<div>' +
+      '<div class="k">Accounting</div>' +
+      '<h2 style="font-size:19px;margin:2px 0 6px;">QuickBooks Online</h2>' +
+      '<div style="font-size:13.5px;color:#82877d;">' +
+      (s.configured
+        ? connected
+          ? '<span class="dot ok"></span>Connected to the ' +
+            esc(envLabel.toLowerCase()) +
+            ' company.'
+          : '<span class="dot wait"></span>Credentials set, not yet connected.'
+        : '<span class="dot bad"></span>Not configured — the QBO environment variables are missing.') +
+      '</div>' +
+      '</div>' +
+      '<div style="text-align:right;">' +
+      '<span class="chip">' +
+      esc(envLabel) +
+      '</span>' +
+      (s.productionWritesEnabled
+        ? '<div style="margin-top:8px;font-size:12.5px;color:#c2452f;font-weight:600;">Live financial writes ENABLED</div>'
+        : '<div style="margin-top:8px;font-size:12.5px;color:#82877d;">Live writes disabled</div>') +
+      '</div>' +
+      '</div>' +
+      (s.configured
+        ? '<div style="margin-top:18px;"><button class="btn" id="qboConnect" style="width:auto;padding:10px 18px;">' +
+          (connected ? 'Reconnect to QuickBooks' : 'Connect to QuickBooks') +
+          '</button></div>'
+        : '') +
+      '</div>' +
+      '<div class="placeholder"><h3>What connecting does</h3><p>Sends you to Intuit to approve access, then stores an encrypted token. ' +
+      'In the ' +
+      esc(envLabel.toLowerCase()) +
+      ' environment nothing touches your real books.</p></div>';
+
+    var btn = document.getElementById('qboConnect');
+    if (btn) {
+      btn.addEventListener('click', async function () {
+        btn.disabled = true;
+        btn.textContent = 'Opening Intuit…';
+        var c = await authed('/integrations/quickbooks/connect');
+        if (!c.ok) {
+          btn.disabled = false;
+          btn.textContent = 'Connect to QuickBooks';
+          view.insertAdjacentHTML(
+            'afterbegin',
+            '<div class="err">Could not start the connection (' + c.status + ').</div>',
+          );
+          return;
+        }
+        var d = await c.json();
+        location.href = d.url;
+      });
+    }
   }
 
   async function logout() {
