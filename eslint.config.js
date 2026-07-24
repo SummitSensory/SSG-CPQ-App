@@ -12,6 +12,12 @@ export default [
       ...tseslint.configs.recommended.rules,
       "@typescript-eslint/no-explicit-any": "error",
       "@typescript-eslint/ban-ts-comment": "error",
+      // Underscore prefix = deliberately unused (Fastify handlers must accept
+      // (req, reply) even when they ignore one).
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        { argsIgnorePattern: "^_", varsIgnorePattern: "^_", caughtErrorsIgnorePattern: "^_" }
+      ],
       "no-console": "warn"
     }
   },
