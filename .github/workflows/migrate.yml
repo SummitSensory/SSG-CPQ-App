@@ -1,0 +1,47 @@
+name: Migrate production database
+
+# Runs prisma migrate deploy against production AFTER code lands on main.
+# Deliberately NOT in vercel.json's buildCommand: that would let any preview
+# build migrate whatever DATABASE_URL it inherits, and a failed migration would
+# take the whole deploy down with it. Here a bad migration fails this job alone.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'prisma/migrations/**'
+      - 'prisma/schema.prisma'
+      - '.github/workflows/migrate.yml'
+  workflow_dispatch: {}
+
+concurrency:
+  group: migrate-production
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Show pending migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: pnpm prisma migrate status || true
+
+      - name: Apply migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: pnpm prisma migrate deploy
