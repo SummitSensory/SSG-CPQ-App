@@ -7,7 +7,9 @@ export default defineConfig({
   webServer: process.env.E2E_BASE_URL
     ? undefined
     : {
-        command: 'pnpm dev',
+        // CI has no .env file — its secrets arrive as real environment
+        // variables, so use the variant that doesn't try to read one.
+        command: process.env.CI ? 'pnpm dev:ci' : 'pnpm dev',
         url: 'http://localhost:3000/health',
         reuseExistingServer: true,
         timeout: 30_000,
