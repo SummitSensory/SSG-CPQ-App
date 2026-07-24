@@ -4,7 +4,13 @@ export interface ReconcileReport {
   generatedAt: string;
   drifted: Array<{ entity: string; entityId: string; externalId: string }>;
   errored: Array<{ entity: string; entityId: string; state: string }>;
-  recentFailures: Array<{ id: string; entity: string; status: string; error: string | null; createdAt: string }>;
+  recentFailures: Array<{
+    id: string;
+    entity: string;
+    status: string;
+    error: string | null;
+    createdAt: string;
+  }>;
   counts: { links: number; drifted: number; errored: number; recentFailures: number };
 }
 
@@ -28,12 +34,23 @@ export async function reconcile(): Promise<ReconcileReport> {
     take: 50,
   });
   const recentFailures = failures.map((f) => ({
-    id: f.id, entity: f.entity, status: f.status, error: f.error, createdAt: f.createdAt.toISOString(),
+    id: f.id,
+    entity: f.entity,
+    status: f.status,
+    error: f.error,
+    createdAt: f.createdAt.toISOString(),
   }));
 
   return {
     generatedAt: new Date().toISOString(),
-    drifted, errored, recentFailures,
-    counts: { links: links.length, drifted: drifted.length, errored: errored.length, recentFailures: recentFailures.length },
+    drifted,
+    errored,
+    recentFailures,
+    counts: {
+      links: links.length,
+      drifted: drifted.length,
+      errored: errored.length,
+      recentFailures: recentFailures.length,
+    },
   };
 }

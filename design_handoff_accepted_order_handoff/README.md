@@ -1,6 +1,7 @@
 # Handoff: Accepted Proposal & Operational Handoff Milestone
 
 ## Purpose of this package
+
 This is an **implementation spec for Claude Code**, not a UI design bundle. It describes a
 backend milestone to add to the existing proposal/CRM codebase (the one already carrying
 Milestones 1–11: auth/roles, catalog, proposals with versions + price snapshots, QuickBooks
@@ -14,6 +15,7 @@ note the deviation.
 ---
 
 ## Goal
+
 When a proposal is **accepted**, create an immutable **AcceptedOrder** that pins the exact accepted
 proposal version and price snapshot, and generate a complete operational handoff record (approvals,
 deposit, procurement, requirements across every category, internal tasks, documents) plus a full
@@ -26,10 +28,12 @@ integrity hash; drift is detectable, never absorbed.
 ---
 
 ## Data model (Prisma)
+
 Add these models in a new migration `0012_accepted_orders`. Names are guidance; align types/enums
 with existing schema conventions (cuid ids, `createdAt/updatedAt`, soft-delete pattern if used).
 
 ### AcceptedOrder (the lock)
+
 - `id`
 - `proposalId` → Proposal
 - `proposalVersionId` → the EXACT accepted ProposalVersion (immutable ref)
@@ -46,23 +50,27 @@ with existing schema conventions (cuid ids, `createdAt/updatedAt`, soft-delete p
   `handoffTasks[]`, `documents[]`, `events[]`
 
 ### CustomerApproval
+
 - `id`, `acceptedOrderId` (unique — one per order)
 - `approvedAt`, `authorizedByName`, `authorizedByTitle`, `authorizationMethod`
   (enum: `SIGNATURE | EMAIL | VERBAL | PORTAL`), `notes`
 
 ### DepositRequirement
+
 - `id`, `acceptedOrderId` (unique)
 - `amountCents` Int, `currency`, `percentOfTotal` Decimal?
 - `dueDate`, `status` enum `INVOICED | PAID | WAIVED | PENDING`
 - `qboInvoiceId` String? (linked when deposit invoice raised in QBO)
 
 ### ProcurementLine
+
 - `id`, `acceptedOrderId`
 - `catalogItemId`, `description`, `quantity`, `unit`
 - `vendor` String?, `estimatedCostCents` Int?, `status` enum `TO_ORDER | ORDERED | RECEIVED | BACKORDERED`
 - Seeded from the accepted proposal's **INCLUDED** catalog line items only.
 
 ### HandoffRequirement
+
 - `id`, `acceptedOrderId`
 - `category` enum `HandoffCategory`:
   `PRODUCTION | CUSTOM_PRODUCT | SHIPPING | INSTALLATION | TRAINING | CUSTOMER_RESPONSIBILITY | FACILITY_ACCESS`
@@ -70,11 +78,13 @@ with existing schema conventions (cuid ids, `createdAt/updatedAt`, soft-delete p
 - One or more rows per category; seed defaults per category (see "Seeding" below).
 
 ### HandoffDocument
+
 - `id`, `acceptedOrderId`
 - `name`, `docType` enum `CONTRACT | PERMIT | SPEC | DRAWING | WARRANTY | SIGNOFF | OTHER`
 - `required` Boolean, `status` enum `MISSING | REQUESTED | RECEIVED`, `fileRef` String?
 
 ### HandoffTask (internal work)
+
 - `id`, `acceptedOrderId`
 - `title`, `description`, `assigneeUserId` String?, `role` String? (target role if unassigned)
 - `targetDate` DateTime?, `status` enum `TODO | DOING | DONE | BLOCKED`
@@ -82,6 +92,7 @@ with existing schema conventions (cuid ids, `createdAt/updatedAt`, soft-delete p
 - `mondayItemId` String? (linked when pushed to monday board)
 
 ### OrderEvent (append-only audit)
+
 - `id`, `acceptedOrderId`
 - `type` String (e.g. `ORDER_LOCKED`, `APPROVAL_RECORDED`, `DEPOSIT_INVOICED`, `QBO_ESTIMATE_CREATED`,
   `MONDAY_PROJECT_CREATED`, `REQUIREMENT_UPDATED`, `TASK_UPDATED`, `STATUS_CHANGED`, `INTEGRITY_VERIFIED`,
@@ -92,6 +103,7 @@ with existing schema conventions (cuid ids, `createdAt/updatedAt`, soft-delete p
 ---
 
 ## Lock & integrity (`src/handoff/lock.ts`)
+
 - `buildContentSnapshot(version, priceSnapshot)` → canonical object of the accepted content.
 - `canonicalize(obj)` → deterministic JSON (sorted keys, normalized numbers) for hashing.
 - `computeIntegrityHash({proposalVersionId, priceSnapshotId, contentSnapshot})` → SHA-256 hex.
@@ -103,7 +115,9 @@ with existing schema conventions (cuid ids, `createdAt/updatedAt`, soft-delete p
 ---
 
 ## Service (`src/handoff/service.ts`)
+
 `lockAcceptedOrder({ proposalVersionId, actorUserId, approval })` runs in **one Prisma transaction**:
+
 1. Load the ProposalVersion + its PriceSnapshot; assert version is the latest accepted-eligible one.
 2. Reject if an AcceptedOrder already exists for this proposal (idempotency guard).
 3. Build content snapshot + integrity hash; create AcceptedOrder (`status: ACCEPTED`).
@@ -114,13 +128,14 @@ with existing schema conventions (cuid ids, `createdAt/updatedAt`, soft-delete p
 8. Seed HandoffDocument rows (contract + category-driven docs).
 9. Seed HandoffTask rows (internal kickoff tasks with target dates + role targets).
 10. Append `ORDER_LOCKED` + `APPROVAL_RECORDED` OrderEvents.
-All-or-nothing: if any step fails, nothing is persisted.
+    All-or-nothing: if any step fails, nothing is persisted.
 
 **Post-transaction integration side effects** (DECIDED, see below): after commit, call QBO estimate
 creation (M10) and monday project create/update (M11) with bounded retry; store returned ids; emit
 success/failure events; never throw out of the request; idempotent + re-runnable via retry endpoint.
 
 ### Seeding defaults per category
+
 - PRODUCTION: build/assembly requirement per custom or made-to-order line.
 - CUSTOM_PRODUCT: one requirement per custom line (specs, approval drawing).
 - SHIPPING: freight method, delivery window, receiving contact.
@@ -132,6 +147,7 @@ success/failure events; never throw out of the request; idempotent + re-runnable
 ---
 
 ## Routes (`src/routes/orders.ts`)
+
 Reuse existing authz middleware. New permissions: `orders:read`, `orders:manage`, `handoff:manage`
 (grant to Ops, PM, Sales-Manager, Exec, Accounting, Installer per existing role→perm map).
 
@@ -152,6 +168,7 @@ Reuse existing authz middleware. New permissions: `orders:read`, `orders:manage`
 ---
 
 ## Two decisions (DECIDED — implement as stated)
+
 1. **Integration wiring — WIRE IT.** After the lock transaction commits, call the Milestone 10 QBO
    estimate creation and the Milestone 11 monday project creation as **post-transaction side
    effects**, store the returned `qboEstimateId` / `mondayProjectId` on the AcceptedOrder, and emit
@@ -173,6 +190,7 @@ Reuse existing authz middleware. New permissions: `orders:read`, `orders:manage`
 ---
 
 ## Tests to write
+
 - `tests/unit/handoff-lock.test.ts` — snapshot determinism, hash stability, drift detection when a
   new proposal version is created after lock.
 - `tests/integration/handoff-service.test.ts` — full lock transaction seeds all sub-records; rollback
@@ -183,6 +201,7 @@ Reuse existing authz middleware. New permissions: `orders:read`, `orders:manage`
   events emitted); `retry-integrations` fills nulls and is idempotent when ids already set.
 
 ## Acceptance criteria
+
 - Accepting locks an immutable order pinned to exact version + price snapshot.
 - Editing the proposal afterward (new version) does not change the accepted order; `verify` flags drift.
 - All handoff categories, tasks (with target dates + exception flags), procurement, documents, deposit,
@@ -191,6 +210,7 @@ Reuse existing authz middleware. New permissions: `orders:read`, `orders:manage`
 - `pnpm check && pnpm test` pass.
 
 ## Deploy checklist (post-implementation)
+
 1. Run `0012_accepted_orders` migration.
 2. Vercel + Postgres secrets: `DATABASE_URL`, `DIRECT_URL`, QBO + monday env vars, QBO token
    encryption key.

@@ -20,7 +20,8 @@ function diffItems(a: ProposalItem[], b: ProposalItem[]): VersionDiffEntry[] {
   for (const [ref, bi] of bMap) {
     const ai = aMap.get(ref);
     if (!ai) out.push({ path: `item:${ref}`, kind: 'added', after: bi });
-    else if (JSON.stringify(ai) !== JSON.stringify(bi)) out.push({ path: `item:${ref}`, kind: 'changed', before: ai, after: bi });
+    else if (JSON.stringify(ai) !== JSON.stringify(bi))
+      out.push({ path: `item:${ref}`, kind: 'changed', before: ai, after: bi });
   }
   for (const [ref, ai] of aMap) {
     if (!bMap.has(ref)) out.push({ path: `item:${ref}`, kind: 'removed', before: ai });
@@ -35,7 +36,8 @@ function diffSections(a: ProposalSection[], b: ProposalSection[]): VersionDiffEn
   for (const [id, bs] of bMap) {
     const as = aMap.get(id);
     if (!as) out.push({ path: `section:${id}`, kind: 'added', after: bs });
-    else if (JSON.stringify(as) !== JSON.stringify(bs)) out.push({ path: `section:${id}`, kind: 'changed', before: as, after: bs });
+    else if (JSON.stringify(as) !== JSON.stringify(bs))
+      out.push({ path: `section:${id}`, kind: 'changed', before: as, after: bs });
   }
   for (const [id, as] of aMap) {
     if (!bMap.has(id)) out.push({ path: `section:${id}`, kind: 'removed', before: as });
@@ -54,10 +56,24 @@ export interface VersionSnapshot {
 export function compareVersions(a: VersionSnapshot, b: VersionSnapshot): VersionComparison {
   const meta: VersionDiffEntry[] = [];
   if ((a.priceSnapshotId ?? null) !== (b.priceSnapshotId ?? null)) {
-    meta.push({ path: 'priceSnapshotId', kind: 'changed', before: a.priceSnapshotId ?? null, after: b.priceSnapshotId ?? null });
+    meta.push({
+      path: 'priceSnapshotId',
+      kind: 'changed',
+      before: a.priceSnapshotId ?? null,
+      after: b.priceSnapshotId ?? null,
+    });
   }
   if ((a.expirationDate ?? null) !== (b.expirationDate ?? null)) {
-    meta.push({ path: 'expirationDate', kind: 'changed', before: a.expirationDate ?? null, after: b.expirationDate ?? null });
+    meta.push({
+      path: 'expirationDate',
+      kind: 'changed',
+      before: a.expirationDate ?? null,
+      after: b.expirationDate ?? null,
+    });
   }
-  return { sections: diffSections(a.sections, b.sections), items: diffItems(a.items, b.items), meta };
+  return {
+    sections: diffSections(a.sections, b.sections),
+    items: diffItems(a.items, b.items),
+    meta,
+  };
 }

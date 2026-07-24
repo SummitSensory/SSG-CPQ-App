@@ -6,7 +6,11 @@ import { findLink, upsertLink, markLinkState } from './links.js';
 
 const ENTITY = 'Customer';
 
-interface QboCustomer { Id: string; SyncToken: string; DisplayName: string }
+interface QboCustomer {
+  Id: string;
+  SyncToken: string;
+  DisplayName: string;
+}
 
 /** Escape a QuickBooks query string literal. */
 function esc(s: string): string {
@@ -41,8 +45,26 @@ export async function findOrCreateCustomer(
   const src: CustomerSource = {
     displayName: org.name,
     email: org.contacts[0]?.email ?? null,
-    billing: billing ? { line1: billing.line1, line2: billing.line2, city: billing.city, region: billing.region, postalCode: billing.postalCode, country: billing.country } : null,
-    shipping: shipping ? { line1: shipping.line1, line2: shipping.line2, city: shipping.city, region: shipping.region, postalCode: shipping.postalCode, country: shipping.country } : null,
+    billing: billing
+      ? {
+          line1: billing.line1,
+          line2: billing.line2,
+          city: billing.city,
+          region: billing.region,
+          postalCode: billing.postalCode,
+          country: billing.country,
+        }
+      : null,
+    shipping: shipping
+      ? {
+          line1: shipping.line1,
+          line2: shipping.line2,
+          city: shipping.city,
+          region: shipping.region,
+          postalCode: shipping.postalCode,
+          country: shipping.country,
+        }
+      : null,
   };
 
   try {
@@ -55,14 +77,36 @@ export async function findOrCreateCustomer(
     const match = found.Customer?.[0];
     if (match) {
       await upsertLink(ref, match.Id, { syncToken: match.SyncToken });
-      await log('OUTBOUND', ENTITY, organizationId, match.Id, 'ok', userId, 'adopted existing customer');
+      await log(
+        'OUTBOUND',
+        ENTITY,
+        organizationId,
+        match.Id,
+        'ok',
+        userId,
+        'adopted existing customer',
+      );
       return { qboId: match.Id, created: false };
     }
 
     // (3) create.
-    const res = await create<{ Customer: QboCustomer }>(realmId, 'customer', toQboCustomer(src), `cust:${organizationId}`, fetchImpl);
+    const res = await create<{ Customer: QboCustomer }>(
+      realmId,
+      'customer',
+      toQboCustomer(src),
+      `cust:${organizationId}`,
+      fetchImpl,
+    );
     await upsertLink(ref, res.Customer.Id, { syncToken: res.Customer.SyncToken });
-    await log('OUTBOUND', ENTITY, organizationId, res.Customer.Id, 'ok', userId, 'created customer');
+    await log(
+      'OUTBOUND',
+      ENTITY,
+      organizationId,
+      res.Customer.Id,
+      'ok',
+      userId,
+      'created customer',
+    );
     return { qboId: res.Customer.Id, created: true };
   } catch (err) {
     logger.error({ err, organizationId }, 'QuickBooks customer sync failed');
@@ -72,8 +116,24 @@ export async function findOrCreateCustomer(
   }
 }
 
-async function log(direction: 'OUTBOUND' | 'INBOUND', entity: string, entityId: string | null, externalId: string | null, status: string, userId: string, note: string) {
+async function log(
+  direction: 'OUTBOUND' | 'INBOUND',
+  entity: string,
+  entityId: string | null,
+  externalId: string | null,
+  status: string,
+  _userId: string,
+  note: string,
+) {
   await prisma.integrationSyncLog.create({
-    data: { provider: 'quickbooks', direction, entity, entityId, externalId, status, error: status === 'ok' ? null : note },
+    data: {
+      provider: 'quickbooks',
+      direction,
+      entity,
+      entityId,
+      externalId,
+      status,
+      error: status === 'ok' ? null : note,
+    },
   });
 }

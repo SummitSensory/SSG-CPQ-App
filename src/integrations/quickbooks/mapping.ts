@@ -18,8 +18,22 @@ export function minorToQboAmount(minor: bigint): number {
 export interface CustomerSource {
   displayName: string;
   email?: string | null;
-  billing?: { line1: string; line2?: string | null; city: string; region: string; postalCode: string; country: string } | null;
-  shipping?: { line1: string; line2?: string | null; city: string; region: string; postalCode: string; country: string } | null;
+  billing?: {
+    line1: string;
+    line2?: string | null;
+    city: string;
+    region: string;
+    postalCode: string;
+    country: string;
+  } | null;
+  shipping?: {
+    line1: string;
+    line2?: string | null;
+    city: string;
+    region: string;
+    postalCode: string;
+    country: string;
+  } | null;
 }
 
 /** Build a QuickBooks Customer create body from CPQ organization data. */
@@ -28,16 +42,22 @@ export function toQboCustomer(src: CustomerSource): Record<string, unknown> {
   if (src.email) body.PrimaryEmailAddr = { Address: src.email };
   if (src.billing) {
     body.BillAddr = {
-      Line1: src.billing.line1, Line2: src.billing.line2 ?? undefined,
-      City: src.billing.city, CountrySubDivisionCode: src.billing.region,
-      PostalCode: src.billing.postalCode, Country: src.billing.country,
+      Line1: src.billing.line1,
+      Line2: src.billing.line2 ?? undefined,
+      City: src.billing.city,
+      CountrySubDivisionCode: src.billing.region,
+      PostalCode: src.billing.postalCode,
+      Country: src.billing.country,
     };
   }
   if (src.shipping) {
     body.ShipAddr = {
-      Line1: src.shipping.line1, Line2: src.shipping.line2 ?? undefined,
-      City: src.shipping.city, CountrySubDivisionCode: src.shipping.region,
-      PostalCode: src.shipping.postalCode, Country: src.shipping.country,
+      Line1: src.shipping.line1,
+      Line2: src.shipping.line2 ?? undefined,
+      City: src.shipping.city,
+      CountrySubDivisionCode: src.shipping.region,
+      PostalCode: src.shipping.postalCode,
+      Country: src.shipping.country,
     };
   }
   return body;

@@ -15,11 +15,22 @@ describe('catalog validation', () => {
     expect(Slug.safeParse('sensory-swings').success).toBe(true);
   });
   it('rejects activeTo before activeFrom', () => {
-    const r = ProductInput.safeParse({ sku: 'ABC-123', name: 'Swing', categoryId: 'c1', activeFrom: '2026-05-01', activeTo: '2026-01-01' });
+    const r = ProductInput.safeParse({
+      sku: 'ABC-123',
+      name: 'Swing',
+      categoryId: 'c1',
+      activeFrom: '2026-05-01',
+      activeTo: '2026-01-01',
+    });
     expect(r.success).toBe(false);
   });
   it('rejects negative weight', () => {
-    const r = ProductInput.safeParse({ sku: 'ABC-123', name: 'Swing', categoryId: 'c1', weightOz: -1 });
+    const r = ProductInput.safeParse({
+      sku: 'ABC-123',
+      name: 'Swing',
+      categoryId: 'c1',
+      weightOz: -1,
+    });
     expect(r.success).toBe(false);
   });
 });

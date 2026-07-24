@@ -19,7 +19,13 @@ function envValue(): QboEnvironment {
 
 export async function findLink(ref: QboLinkRef) {
   return prisma.qboEntityLink.findUnique({
-    where: { environment_entity_entityId: { environment: envValue(), entity: ref.entity, entityId: ref.entityId } },
+    where: {
+      environment_entity_entityId: {
+        environment: envValue(),
+        entity: ref.entity,
+        entityId: ref.entityId,
+      },
+    },
   });
 }
 
@@ -44,9 +50,14 @@ export async function upsertLink(
   }
   await prisma.qboEntityLink.create({
     data: {
-      environment: envValue(), entity: ref.entity, entityId: ref.entityId, qboId,
-      qboSyncToken: opts.syncToken ?? null, lastSyncedHash: opts.hash ?? null,
-      lastSyncedAt: new Date(), state: opts.state ?? 'LINKED',
+      environment: envValue(),
+      entity: ref.entity,
+      entityId: ref.entityId,
+      qboId,
+      qboSyncToken: opts.syncToken ?? null,
+      lastSyncedHash: opts.hash ?? null,
+      lastSyncedAt: new Date(),
+      state: opts.state ?? 'LINKED',
     },
   });
   return { created: true };

@@ -5,7 +5,13 @@ import { requireAuth } from '../plugins/authz.js';
 import { ValidationError } from '../lib/errors.js';
 import { APPROVAL_TYPES } from '../approvals/policy.js';
 import {
-  createRequest, approve, reject, requestRevision, escalate, queueFor, createDelegation,
+  createRequest,
+  approve,
+  reject,
+  requestRevision,
+  escalate,
+  queueFor,
+  createDelegation,
 } from '../approvals/service.js';
 
 const CreateSchema = z.object({
@@ -34,18 +40,29 @@ export function registerApprovalRoutes(app: FastifyInstance): void {
 
   // My requests (as requester).
   app.get('/approvals/mine', auth, async (req) =>
-    prisma.approvalRequest.findMany({ where: { requesterId: req.user!.sub }, orderBy: { createdAt: 'desc' } }),
+    prisma.approvalRequest.findMany({
+      where: { requesterId: req.user!.sub },
+      orderBy: { createdAt: 'desc' },
+    }),
   );
 
   // Approval queue — only requests this user may act on.
-  app.get('/approvals/queue', auth, async (req) => queueFor({ userId: req.user!.sub, role: req.user!.role }));
+  app.get('/approvals/queue', auth, async (req) =>
+    queueFor({ userId: req.user!.sub, role: req.user!.role }),
+  );
 
   app.get('/approvals/:id', auth, async (req) => {
     const { id } = req.params as { id: string };
-    return prisma.approvalRequest.findUnique({ where: { id }, include: { events: { orderBy: { createdAt: 'asc' } } } });
+    return prisma.approvalRequest.findUnique({
+      where: { id },
+      include: { events: { orderBy: { createdAt: 'asc' } } },
+    });
   });
 
-  const ctx = (req: { user?: { sub: string; role: string } }) => ({ userId: req.user!.sub, role: req.user!.role as never });
+  const ctx = (req: { user?: { sub: string; role: string } }) => ({
+    userId: req.user!.sub,
+    role: req.user!.role as never,
+  });
   const notes = (req: { body?: unknown }) => (req.body as { notes?: string })?.notes;
 
   app.post('/approvals/:id/approve', auth, async (req) => {
@@ -73,8 +90,17 @@ export function registerApprovalRoutes(app: FastifyInstance): void {
   app.post('/approvals/delegations', auth, async (req, reply) => {
     const body = req.body as { toUserId?: string; type?: string; endsAt?: string };
     if (!body.toUserId) throw new ValidationError('toUserId is required');
-    const type = body.type && (APPROVAL_TYPES as readonly string[]).includes(body.type) ? (body.type as never) : null;
-    const result = await createDelegation(req.user!.sub, body.toUserId, type, body.endsAt ? new Date(body.endsAt) : null, req.user!.sub);
+    const type =
+      body.type && (APPROVAL_TYPES as readonly string[]).includes(body.type)
+        ? (body.type as never)
+        : null;
+    const result = await createDelegation(
+      req.user!.sub,
+      body.toUserId,
+      type,
+      body.endsAt ? new Date(body.endsAt) : null,
+      req.user!.sub,
+    );
     return reply.status(201).send(result);
   });
 }

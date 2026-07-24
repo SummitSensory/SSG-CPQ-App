@@ -6,6 +6,7 @@ Otherwise **NO-GO**. Do not describe the application as release-ready while any 
 remains open.)
 
 ## Exit-criteria checklist
+
 - [ ] 100% of UAT cases executed (26/26).
 - [ ] ≥95% pass rate on the final cycle.
 - [ ] Zero open Critical defects.
@@ -15,24 +16,28 @@ remains open.)
 - [ ] Pre-release security/quality RELEASE_BLOCKERS = CLEARED.
 
 ## Defect summary (from DEFECT_REGISTER.md)
+
 | Severity | Open | Fixed/Closed | Deferred |
-|---|---|---|---|
-| Critical | 0 | 0 | 0 |
-| High | 0 | 0 | 0 |
-| Medium | 0 | 0 | 0 |
-| Low | 0 | 0 | 0 |
+| -------- | ---- | ------------ | -------- |
+| Critical | 0    | 0            | 0        |
+| High     | 0    | 0            | 0        |
+| Medium   | 0    | 0            | 0        |
+| Low      | 0    | 0            | 0        |
 
 ## Results summary (from UAT_RESULTS.md)
+
 - Cases executed: 0 / 26
 - Passed: 0 · Failed: 0 · Blocked: 0
 - Final pass %: 0%
 
 ## Recommendation
+
 _To be written after final cycle._ State GO or NO-GO, the basis (criteria met/unmet), any deferred
 items with signoff, and outstanding risks. If NO-GO, list exactly what must close to reach GO.
 
 ## Sign-off
-| Role | Name | Decision | Date |
-|---|---|---|---|
-| UAT Coordinator | | | |
-| Product Owner | | | |
+
+| Role            | Name | Decision | Date |
+| --------------- | ---- | -------- | ---- |
+| UAT Coordinator |      |          |      |
+| Product Owner   |      |          |      |

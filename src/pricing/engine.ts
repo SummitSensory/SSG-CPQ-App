@@ -1,6 +1,4 @@
-import {
-  applyRate, sum, formatMinor, type RoundingPolicy, DEFAULT_ROUNDING,
-} from './decimal.js';
+import { applyRate, sum, formatMinor, type RoundingPolicy, DEFAULT_ROUNDING } from './decimal.js';
 
 export const PRICING_ENGINE_VERSION = '1.0.0';
 
@@ -27,14 +25,25 @@ export interface FeeInput {
 export interface PricingInput {
   currency: string;
   lines: PricingLineInput[];
-  orderDiscounts?: Array<{ amount?: bigint; bps?: number; reason: string; authorizedById?: string; authorizedRole?: string }>;
+  orderDiscounts?: Array<{
+    amount?: bigint;
+    bps?: number;
+    reason: string;
+    authorizedById?: string;
+    authorizedRole?: string;
+  }>;
   fees?: {
     freight?: FeeInput;
     installation?: FeeInput;
     travel?: FeeInput;
     perDiem?: FeeInput;
     mileage?: { miles: number; ratePerMile: MoneyOrMissing; confirmed: boolean; taxable?: boolean };
-    other?: Array<{ label: string; amount: MoneyOrMissing; confirmed?: boolean; taxable?: boolean }>;
+    other?: Array<{
+      label: string;
+      amount: MoneyOrMissing;
+      confirmed?: boolean;
+      taxable?: boolean;
+    }>;
     creditCardBps?: number;
   };
   tax?: { rateBps: number; exempt: boolean; exemptionRef?: string };
@@ -68,7 +77,10 @@ export interface PricingBreakdown {
   subtotal: bigint;
   orderDiscount: bigint;
   goodsNet: bigint;
-  fees: Record<string, { amount: bigint; confirmed: boolean; unconfirmed: boolean; explanation: string }>;
+  fees: Record<
+    string,
+    { amount: bigint; confirmed: boolean; unconfirmed: boolean; explanation: string }
+  >;
   feesTotal: bigint;
   taxableBase: bigint;
   tax: bigint;
@@ -106,7 +118,11 @@ export function computePricing(input: PricingInput): PricingBreakdown {
 
     if (l.unitPrice === null) {
       missing.push('unitPrice');
-      findings.push({ code: 'MISSING_VALUE', field: `line:${l.ref}.unitPrice`, message: `Unit price for ${l.ref} is not resolved.` });
+      findings.push({
+        code: 'MISSING_VALUE',
+        field: `line:${l.ref}.unitPrice`,
+        message: `Unit price for ${l.ref} is not resolved.`,
+      });
       incomplete = true;
     } else {
       extended = l.unitPrice * qty;
@@ -128,12 +144,28 @@ export function computePricing(input: PricingInput): PricingBreakdown {
       }
     }
 
-    const priceStr = extended === null ? '(price unresolved)' : `${l.quantity} × unit = ${formatMinor(extended, cur)}`;
-    const explanation = `[${l.priceSource}] ${priceStr}` +
-      (discount > 0n ? `, less ${l.lineDiscountBps} bps discount ${formatMinor(discount, cur)}` : '') +
+    const priceStr =
+      extended === null
+        ? '(price unresolved)'
+        : `${l.quantity} × unit = ${formatMinor(extended, cur)}`;
+    const explanation =
+      `[${l.priceSource}] ${priceStr}` +
+      (discount > 0n
+        ? `, less ${l.lineDiscountBps} bps discount ${formatMinor(discount, cur)}`
+        : '') +
       (net !== null ? ` → net ${formatMinor(net, cur)}` : '');
 
-    return { ref: l.ref, extendedPrice: extended, discount, net, cost, margin, marginBps, explanation, missing };
+    return {
+      ref: l.ref,
+      extendedPrice: extended,
+      discount,
+      net,
+      cost,
+      margin,
+      marginBps,
+      explanation,
+      missing,
+    };
   });
 
   const subtotal = sum(lines.map((l) => l.net ?? 0n));
@@ -141,10 +173,17 @@ export function computePricing(input: PricingInput): PricingBreakdown {
   // ----- Order-level discounts -----
   let orderDiscount = 0n;
   for (const d of input.orderDiscounts ?? []) {
-    if (!d.reason) findings.push({ code: 'CONFIG_ERROR', field: 'orderDiscount.reason', message: 'Discount requires a reason.' });
+    if (!d.reason)
+      findings.push({
+        code: 'CONFIG_ERROR',
+        field: 'orderDiscount.reason',
+        message: 'Discount requires a reason.',
+      });
     const amt = d.amount ?? (d.bps ? applyRate(subtotal, d.bps, R.orderDiscount) : 0n);
     orderDiscount += amt;
-    explanations.push(`Order discount (${d.reason}): ${formatMinor(amt, cur)}${d.authorizedById ? ` [authorized by ${d.authorizedById}]` : ''}`);
+    explanations.push(
+      `Order discount (${d.reason}): ${formatMinor(amt, cur)}${d.authorizedById ? ` [authorized by ${d.authorizedById}]` : ''}`,
+    );
   }
 
   // Discount authority: total discount vs authorized ceiling.
@@ -152,7 +191,11 @@ export function computePricing(input: PricingInput): PricingBreakdown {
   if (authorityBps !== undefined && subtotal > 0n) {
     const effBps = Number((orderDiscount * 10000n) / subtotal);
     if (effBps > authorityBps) {
-      findings.push({ code: 'REQUIRE_APPROVAL', field: 'orderDiscount', message: `Discount ${effBps} bps exceeds authority ${authorityBps} bps — approval required.` });
+      findings.push({
+        code: 'REQUIRE_APPROVAL',
+        field: 'orderDiscount',
+        message: `Discount ${effBps} bps exceeds authority ${authorityBps} bps — approval required.`,
+      });
     }
   }
 
@@ -163,15 +206,29 @@ export function computePricing(input: PricingInput): PricingBreakdown {
   const taxableFeeAmounts: bigint[] = [];
   const allFeeAmounts: bigint[] = [];
 
-  const addFee = (key: string, fee: FeeInput | undefined, defaultTaxable: boolean, flagUnconfirmed: boolean) => {
+  const addFee = (
+    key: string,
+    fee: FeeInput | undefined,
+    defaultTaxable: boolean,
+    flagUnconfirmed: boolean,
+  ) => {
     if (!fee) return;
     if (fee.amount === null) {
-      findings.push({ code: 'MISSING_VALUE', field: `fee.${key}`, message: `${key} amount is not provided.` });
+      findings.push({
+        code: 'MISSING_VALUE',
+        field: `fee.${key}`,
+        message: `${key} amount is not provided.`,
+      });
       incomplete = true;
       return;
     }
     const unconfirmed = flagUnconfirmed && !fee.confirmed;
-    if (unconfirmed) findings.push({ code: 'UNCONFIRMED', field: `fee.${key}`, message: `${key} is an UNCONFIRMED estimate.` });
+    if (unconfirmed)
+      findings.push({
+        code: 'UNCONFIRMED',
+        field: `fee.${key}`,
+        message: `${key} is an UNCONFIRMED estimate.`,
+      });
     feesOut[key] = {
       amount: fee.amount,
       confirmed: fee.confirmed,
@@ -183,30 +240,48 @@ export function computePricing(input: PricingInput): PricingBreakdown {
   };
 
   const f = input.fees ?? {};
-  addFee('freight', f.freight, true, true);        // freight & installation flagged if unconfirmed
+  addFee('freight', f.freight, true, true); // freight & installation flagged if unconfirmed
   addFee('installation', f.installation, true, true);
   addFee('travel', f.travel, false, false);
   addFee('perDiem', f.perDiem, false, false);
   if (f.mileage) {
     if (f.mileage.ratePerMile === null) {
-      findings.push({ code: 'MISSING_VALUE', field: 'fee.mileage', message: 'Mileage rate not provided.' });
+      findings.push({
+        code: 'MISSING_VALUE',
+        field: 'fee.mileage',
+        message: 'Mileage rate not provided.',
+      });
       incomplete = true;
     } else {
       const amt = f.mileage.ratePerMile * BigInt(f.mileage.miles);
       const unconfirmed = !f.mileage.confirmed;
-      feesOut.mileage = { amount: amt, confirmed: f.mileage.confirmed, unconfirmed, explanation: `mileage: ${f.mileage.miles} mi × rate = ${formatMinor(amt, cur)}` };
+      feesOut.mileage = {
+        amount: amt,
+        confirmed: f.mileage.confirmed,
+        unconfirmed,
+        explanation: `mileage: ${f.mileage.miles} mi × rate = ${formatMinor(amt, cur)}`,
+      };
       allFeeAmounts.push(amt);
       if (f.mileage.taxable) taxableFeeAmounts.push(amt);
     }
   }
   for (const o of f.other ?? []) {
     if (o.amount === null) {
-      findings.push({ code: 'MISSING_VALUE', field: `fee.other:${o.label}`, message: `${o.label} amount not provided.` });
+      findings.push({
+        code: 'MISSING_VALUE',
+        field: `fee.other:${o.label}`,
+        message: `${o.label} amount not provided.`,
+      });
       incomplete = true;
       continue;
     }
     const unconfirmed = o.confirmed === false;
-    feesOut[`other:${o.label}`] = { amount: o.amount, confirmed: o.confirmed ?? true, unconfirmed, explanation: `${o.label}: ${formatMinor(o.amount, cur)}` };
+    feesOut[`other:${o.label}`] = {
+      amount: o.amount,
+      confirmed: o.confirmed ?? true,
+      unconfirmed,
+      explanation: `${o.label}: ${formatMinor(o.amount, cur)}`,
+    };
     allFeeAmounts.push(o.amount);
     if (o.taxable) taxableFeeAmounts.push(o.amount);
   }
@@ -217,18 +292,30 @@ export function computePricing(input: PricingInput): PricingBreakdown {
   let tax = 0n;
   if (input.tax) {
     if (input.tax.exempt) {
-      if (!input.tax.exemptionRef) findings.push({ code: 'TAX_EXEMPT_NO_REF', field: 'tax', message: 'Tax-exempt claimed without an exemption reference.' });
-      explanations.push(`Tax exempt${input.tax.exemptionRef ? ` (ref ${input.tax.exemptionRef})` : ''}: ${formatMinor(0n, cur)}`);
+      if (!input.tax.exemptionRef)
+        findings.push({
+          code: 'TAX_EXEMPT_NO_REF',
+          field: 'tax',
+          message: 'Tax-exempt claimed without an exemption reference.',
+        });
+      explanations.push(
+        `Tax exempt${input.tax.exemptionRef ? ` (ref ${input.tax.exemptionRef})` : ''}: ${formatMinor(0n, cur)}`,
+      );
     } else {
       tax = applyRate(taxableBase, input.tax.rateBps, R.tax);
-      explanations.push(`Tax ${input.tax.rateBps} bps on ${formatMinor(taxableBase, cur)} = ${formatMinor(tax, cur)}`);
+      explanations.push(
+        `Tax ${input.tax.rateBps} bps on ${formatMinor(taxableBase, cur)} = ${formatMinor(tax, cur)}`,
+      );
     }
   }
 
   // ----- Credit-card fee (on goods + fees + tax) -----
   const preCc = goodsNet + feesTotal + tax;
   const creditCardFee = f.creditCardBps ? applyRate(preCc, f.creditCardBps, R.ccFee) : 0n;
-  if (creditCardFee > 0n) explanations.push(`Credit-card fee ${f.creditCardBps} bps on ${formatMinor(preCc, cur)} = ${formatMinor(creditCardFee, cur)}`);
+  if (creditCardFee > 0n)
+    explanations.push(
+      `Credit-card fee ${f.creditCardBps} bps on ${formatMinor(preCc, cur)} = ${formatMinor(creditCardFee, cur)}`,
+    );
 
   const grandTotal = preCc + creditCardFee;
 
@@ -241,15 +328,27 @@ export function computePricing(input: PricingInput): PricingBreakdown {
     totalCost = sum(lines.map((l) => l.cost ?? 0n));
     totalMargin = goodsNet - totalCost;
     marginBps = goodsNet > 0n ? Number((totalMargin * 10000n) / goodsNet) : null;
-    if (input.thresholds?.minMarginBps !== undefined && marginBps !== null && marginBps < input.thresholds.minMarginBps) {
-      findings.push({ code: 'REQUIRE_APPROVAL', field: 'margin', message: `Margin ${marginBps} bps below threshold ${input.thresholds.minMarginBps} bps — approval required.` });
+    if (
+      input.thresholds?.minMarginBps !== undefined &&
+      marginBps !== null &&
+      marginBps < input.thresholds.minMarginBps
+    ) {
+      findings.push({
+        code: 'REQUIRE_APPROVAL',
+        field: 'margin',
+        message: `Margin ${marginBps} bps below threshold ${input.thresholds.minMarginBps} bps — approval required.`,
+      });
     }
   }
 
   // ----- Payment schedule (final absorbs rounding residual) -----
   const pay = input.payment ?? { depositBps: 0, progressBps: 0, finalBps: 10000 };
   if (pay.depositBps + pay.progressBps + pay.finalBps !== 10000) {
-    findings.push({ code: 'CONFIG_ERROR', field: 'payment', message: 'Payment schedule bps must sum to 10000.' });
+    findings.push({
+      code: 'CONFIG_ERROR',
+      field: 'payment',
+      message: 'Payment schedule bps must sum to 10000.',
+    });
   }
   const deposit = applyRate(grandTotal, pay.depositBps, R.payment);
   const progress = applyRate(grandTotal, pay.progressBps, R.payment);

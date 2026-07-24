@@ -1,8 +1,17 @@
 import { describe, it, expect } from 'vitest';
-import { resolveVisibleSections, reorderSections, type ProposalSection } from '../../src/proposals/sections.js';
+import {
+  resolveVisibleSections,
+  reorderSections,
+  type ProposalSection,
+} from '../../src/proposals/sections.js';
 
 const s = (id: string, order: number, over: Partial<ProposalSection> = {}): ProposalSection => ({
-  id, type: 'EXECUTIVE_SUMMARY', title: id, order, enabled: true, ...over,
+  id,
+  type: 'EXECUTIVE_SUMMARY',
+  title: id,
+  order,
+  enabled: true,
+  ...over,
 });
 
 describe('proposal sections — layout, reorder, conditional', () => {
@@ -24,7 +33,11 @@ describe('proposal sections — layout, reorder, conditional', () => {
 
   it('reorders sections by explicit id order and renumbers', () => {
     const out = reorderSections([s('a', 0), s('b', 1), s('c', 2)], ['c', 'a', 'b']);
-    expect(out.map((x) => [x.id, x.order])).toEqual([['c', 0], ['a', 1], ['b', 2]]);
+    expect(out.map((x) => [x.id, x.order])).toEqual([
+      ['c', 0],
+      ['a', 1],
+      ['b', 2],
+    ]);
   });
 
   it('appends sections missing from the order list', () => {

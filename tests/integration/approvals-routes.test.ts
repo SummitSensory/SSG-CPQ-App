@@ -26,7 +26,11 @@ async function makeApp(): Promise<FastifyInstance> {
 describe('approval routes — permission boundaries', () => {
   it('rejects unauthenticated create with 401', async () => {
     const app = await makeApp();
-    const res = await app.inject({ method: 'POST', url: '/approvals', payload: { type: 'DISCOUNT', reason: 'x', requestedValue: '10' } });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/approvals',
+      payload: { type: 'DISCOUNT', reason: 'x', requestedValue: '10' },
+    });
     expect(res.statusCode).toBe(401);
     await app.close();
   });
@@ -41,7 +45,8 @@ describe('approval routes — permission boundaries', () => {
   it('validates the request body (400 on missing reason)', async () => {
     const app = await makeApp();
     const res = await app.inject({
-      method: 'POST', url: '/approvals',
+      method: 'POST',
+      url: '/approvals',
       headers: { authorization: 'Bearer ' + (await tokenFor('SALES_REP')) },
       payload: { type: 'DISCOUNT', requestedValue: '10' },
     });
@@ -52,7 +57,8 @@ describe('approval routes — permission boundaries', () => {
   it('requires notes to request a revision (400)', async () => {
     const app = await makeApp();
     const res = await app.inject({
-      method: 'POST', url: '/approvals/some-id/request-revision',
+      method: 'POST',
+      url: '/approvals/some-id/request-revision',
       headers: { authorization: 'Bearer ' + (await tokenFor('SALES_MANAGER')) },
       payload: {},
     });
@@ -63,7 +69,8 @@ describe('approval routes — permission boundaries', () => {
   it('requires toUserId to escalate (400)', async () => {
     const app = await makeApp();
     const res = await app.inject({
-      method: 'POST', url: '/approvals/some-id/escalate',
+      method: 'POST',
+      url: '/approvals/some-id/escalate',
       headers: { authorization: 'Bearer ' + (await tokenFor('SALES_MANAGER')) },
       payload: {},
     });

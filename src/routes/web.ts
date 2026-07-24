@@ -17,6 +17,10 @@ function file(name: string): string {
 }
 
 export function registerWebRoutes(app: FastifyInstance): void {
-  app.get('/', async (_req, reply) => reply.type('text/html; charset=utf-8').send(file('index.html')));
-  app.get('/app.js', async (_req, reply) => reply.type('text/javascript; charset=utf-8').send(file('app.js')));
+  app.get('/', async (_req, reply) =>
+    reply.type('text/html; charset=utf-8').send(file('index.html')),
+  );
+  app.get('/app.js', async (_req, reply) =>
+    reply.type('text/javascript; charset=utf-8').send(file('app.js')),
+  );
 }

@@ -19,7 +19,10 @@ export interface Notifier {
 
 class LogNotifier implements Notifier {
   async send(n: ApprovalNotification): Promise<void> {
-    logger.info({ event: n.event, requestId: n.requestId, recipients: n.recipientIds }, `notify: ${n.message}`);
+    logger.info(
+      { event: n.event, requestId: n.requestId, recipients: n.recipientIds },
+      `notify: ${n.message}`,
+    );
   }
 }
 

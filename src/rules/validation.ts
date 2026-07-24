@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import { RULE_TYPES, RULE_OUTCOMES, type RuleType } from './types.js';
 
-const nonNegInt = z.number().int().nonnegative();
 const posInt = z.number().int().positive();
 const productId = z.string().min(1);
 
@@ -26,7 +25,11 @@ const PARAM_SCHEMAS: Record<RuleType, z.ZodTypeAny> = {
   INSTALLATION: z.object({ factKey: z.string().min(1), expected: z.unknown().optional() }),
   FREIGHT: z.object({ factKey: z.string().min(1), expected: z.unknown().optional() }),
   AUTO_INCLUDE_COMPONENT: z.object({ componentProductId: productId, perUnit: posInt.optional() }),
-  AUTO_CALCULATED_COMPONENT: z.object({ componentProductId: productId, ratioNum: posInt, ratioDen: posInt }),
+  AUTO_CALCULATED_COMPONENT: z.object({
+    componentProductId: productId,
+    ratioNum: posInt,
+    ratioDen: posInt,
+  }),
   SUGGESTED_ACCESSORY: z.object({ productId }),
   SUGGESTED_UPGRADE: z.object({ productId }),
   APPROVAL_REQUIRED: z.object({}).passthrough(),
@@ -56,7 +59,10 @@ const ALLOWED_OUTCOMES: Record<RuleType, string[]> = {
 };
 
 export const RuleDefinitionInput = z.object({
-  key: z.string().trim().regex(/^[a-z0-9]+(?:[-.][a-z0-9]+)*$/, 'key: lowercase, hyphen/dot separated'),
+  key: z
+    .string()
+    .trim()
+    .regex(/^[a-z0-9]+(?:[-.][a-z0-9]+)*$/, 'key: lowercase, hyphen/dot separated'),
   type: z.enum(RULE_TYPES),
   outcome: z.enum(RULE_OUTCOMES),
   target: Target.default({}),
@@ -77,7 +83,10 @@ export function validateRuleDefinition(input: RuleDefinitionInput): RuleValidati
   const errors: RuleValidationError[] = [];
 
   if (!ALLOWED_OUTCOMES[input.type].includes(input.outcome)) {
-    errors.push({ field: 'outcome', message: `outcome ${input.outcome} is not allowed for ${input.type}` });
+    errors.push({
+      field: 'outcome',
+      message: `outcome ${input.outcome} is not allowed for ${input.type}`,
+    });
   }
 
   const paramResult = PARAM_SCHEMAS[input.type].safeParse(input.params);

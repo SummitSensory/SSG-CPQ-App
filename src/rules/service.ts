@@ -7,7 +7,10 @@ import { validateRuleDefinition, type RuleDefinitionInput } from './validation.j
 import type { RuleDef, Configuration, EvalResult } from './types.js';
 
 /** Convert a persisted Rule + its current version into an engine RuleDef. */
-function toRuleDef(rule: { id: string; type: string; outcome: string; currentVersion: number }, definition: Record<string, unknown>): RuleDef {
+function toRuleDef(
+  rule: { id: string; type: string; outcome: string; currentVersion: number },
+  definition: Record<string, unknown>,
+): RuleDef {
   return {
     id: rule.id,
     version: rule.currentVersion,
@@ -25,25 +28,47 @@ export async function getActiveRuleDefs(): Promise<RuleDef[]> {
   const rules = await prisma.rule.findMany({ where: { status: 'ACTIVE' } });
   const defs: RuleDef[] = [];
   for (const r of rules) {
-    const v = await prisma.ruleVersion.findUnique({ where: { ruleId_version: { ruleId: r.id, version: r.currentVersion } } });
+    const v = await prisma.ruleVersion.findUnique({
+      where: { ruleId_version: { ruleId: r.id, version: r.currentVersion } },
+    });
     if (v) defs.push(toRuleDef(r, v.definition as Record<string, unknown>));
   }
   return defs;
 }
 
-export async function createRule(input: RuleDefinitionInput, userId: string): Promise<{ id: string }> {
+export async function createRule(
+  input: RuleDefinitionInput,
+  userId: string,
+): Promise<{ id: string }> {
   const errors = validateRuleDefinition(input);
-  if (errors.length) throw new ValidationError('Invalid rule: ' + errors.map((e) => `${e.field}: ${e.message}`).join('; '));
+  if (errors.length)
+    throw new ValidationError(
+      'Invalid rule: ' + errors.map((e) => `${e.field}: ${e.message}`).join('; '),
+    );
 
   const existing = await prisma.rule.findUnique({ where: { key: input.key } });
   if (existing) throw new ConflictError('Rule key already exists');
 
   const rule = await prisma.$transaction(async (tx) => {
     const created = await tx.rule.create({
-      data: { key: input.key, type: input.type, outcome: input.outcome, status: 'DRAFT', currentVersion: 1, description: input.description ?? null, createdById: userId },
+      data: {
+        key: input.key,
+        type: input.type,
+        outcome: input.outcome,
+        status: 'DRAFT',
+        currentVersion: 1,
+        description: input.description ?? null,
+        createdById: userId,
+      },
     });
     await tx.ruleVersion.create({
-      data: { ruleId: created.id, version: 1, definition: input as object, changedById: userId, changeNote: 'created' },
+      data: {
+        ruleId: created.id,
+        version: 1,
+        definition: input as object,
+        changedById: userId,
+        changeNote: 'created',
+      },
     });
     return created;
   });
@@ -52,18 +77,43 @@ export async function createRule(input: RuleDefinitionInput, userId: string): Pr
 }
 
 /** Add a new immutable version to an existing rule (does not auto-activate). */
-export async function addRuleVersion(ruleId: string, input: RuleDefinitionInput, userId: string, note?: string): Promise<number> {
+export async function addRuleVersion(
+  ruleId: string,
+  input: RuleDefinitionInput,
+  userId: string,
+  note?: string,
+): Promise<number> {
   const errors = validateRuleDefinition(input);
-  if (errors.length) throw new ValidationError('Invalid rule: ' + errors.map((e) => `${e.field}: ${e.message}`).join('; '));
+  if (errors.length)
+    throw new ValidationError(
+      'Invalid rule: ' + errors.map((e) => `${e.field}: ${e.message}`).join('; '),
+    );
   const rule = await prisma.rule.findUnique({ where: { id: ruleId } });
   if (!rule) throw new NotFoundError('Rule not found');
 
   const nextVersion = rule.currentVersion + 1;
   await prisma.$transaction([
-    prisma.ruleVersion.create({ data: { ruleId, version: nextVersion, definition: input as object, changedById: userId, changeNote: note ?? null } }),
-    prisma.rule.update({ where: { id: ruleId }, data: { currentVersion: nextVersion, outcome: input.outcome, type: input.type } }),
+    prisma.ruleVersion.create({
+      data: {
+        ruleId,
+        version: nextVersion,
+        definition: input as object,
+        changedById: userId,
+        changeNote: note ?? null,
+      },
+    }),
+    prisma.rule.update({
+      where: { id: ruleId },
+      data: { currentVersion: nextVersion, outcome: input.outcome, type: input.type },
+    }),
   ]);
-  await recordAudit({ actorId: userId, action: 'rules.version', entity: 'Rule', entityId: ruleId, details: { version: nextVersion } });
+  await recordAudit({
+    actorId: userId,
+    action: 'rules.version',
+    entity: 'Rule',
+    entityId: ruleId,
+    details: { version: nextVersion },
+  });
   return nextVersion;
 }
 
@@ -76,9 +126,14 @@ export async function activateRule(ruleId: string, approverId: string): Promise<
   if (!rule) throw new NotFoundError('Rule not found');
 
   const activeDefs = await getActiveRuleDefs();
-  const thisVersion = await prisma.ruleVersion.findUnique({ where: { ruleId_version: { ruleId, version: rule.currentVersion } } });
+  const thisVersion = await prisma.ruleVersion.findUnique({
+    where: { ruleId_version: { ruleId, version: rule.currentVersion } },
+  });
   if (!thisVersion) throw new NotFoundError('Rule version not found');
-  const prospective = [...activeDefs.filter((d) => d.id !== ruleId), toRuleDef(rule, thisVersion.definition as Record<string, unknown>)];
+  const prospective = [
+    ...activeDefs.filter((d) => d.id !== ruleId),
+    toRuleDef(rule, thisVersion.definition as Record<string, unknown>),
+  ];
 
   try {
     assertNoCycles(prospective);
@@ -88,9 +143,18 @@ export async function activateRule(ruleId: string, approverId: string): Promise<
 
   await prisma.$transaction([
     prisma.rule.update({ where: { id: ruleId }, data: { status: 'ACTIVE' } }),
-    prisma.ruleVersion.update({ where: { ruleId_version: { ruleId, version: rule.currentVersion } }, data: { approvedById: approverId } }),
+    prisma.ruleVersion.update({
+      where: { ruleId_version: { ruleId, version: rule.currentVersion } },
+      data: { approvedById: approverId },
+    }),
   ]);
-  await recordAudit({ actorId: approverId, action: 'rules.activate', entity: 'Rule', entityId: ruleId, details: { version: rule.currentVersion } });
+  await recordAudit({
+    actorId: approverId,
+    action: 'rules.activate',
+    entity: 'Rule',
+    entityId: ruleId,
+    details: { version: rule.currentVersion },
+  });
 }
 
 export async function retireRule(ruleId: string, userId: string): Promise<void> {
@@ -105,7 +169,11 @@ export async function retireRule(ruleId: string, userId: string): Promise<void> 
  * true, an immutable snapshot records the exact rule versions used — so a
  * proposal's configuration remains reproducible even after rules change.
  */
-export async function evaluate(config: Configuration, userId: string, opts: { persist?: boolean; subjectRef?: string } = {}): Promise<EvalResult & { engineVersion: string; snapshotId?: string }> {
+export async function evaluate(
+  config: Configuration,
+  userId: string,
+  opts: { persist?: boolean; subjectRef?: string } = {},
+): Promise<EvalResult & { engineVersion: string; snapshotId?: string }> {
   const defs = await getActiveRuleDefs();
   const result = evaluateConfiguration(defs, config);
 

@@ -17,12 +17,22 @@ export function canTransition(from: ProductStatus, to: ProductStatus): boolean {
 /** Serializable snapshot of a product for version history. */
 export function buildSnapshot(p: Product): Record<string, unknown> {
   return {
-    sku: p.sku, name: p.name, kind: p.kind, status: p.status,
-    categoryId: p.categoryId, familyId: p.familyId,
-    proposalDescription: p.proposalDescription, internalDescription: p.internalDescription,
-    lengthIn: p.lengthIn, widthIn: p.widthIn, heightIn: p.heightIn,
-    weightOz: p.weightOz, capacity: p.capacity,
-    activeFrom: p.activeFrom, activeTo: p.activeTo, adminNotes: p.adminNotes,
+    sku: p.sku,
+    name: p.name,
+    kind: p.kind,
+    status: p.status,
+    categoryId: p.categoryId,
+    familyId: p.familyId,
+    proposalDescription: p.proposalDescription,
+    internalDescription: p.internalDescription,
+    lengthIn: p.lengthIn,
+    widthIn: p.widthIn,
+    heightIn: p.heightIn,
+    weightOz: p.weightOz,
+    capacity: p.capacity,
+    activeFrom: p.activeFrom,
+    activeTo: p.activeTo,
+    adminNotes: p.adminNotes,
     version: p.version,
   };
 }
@@ -47,7 +57,13 @@ export async function updateProduct(
     if (!current) throw new ValidationError('Product not found');
     // Snapshot the CURRENT state before mutating (version history).
     await tx.productVersion.create({
-      data: { productId: id, version: current.version, snapshot: buildSnapshot(current) as object, changedById: userId, changeNote: note ?? null },
+      data: {
+        productId: id,
+        version: current.version,
+        snapshot: buildSnapshot(current) as object,
+        changedById: userId,
+        changeNote: note ?? null,
+      },
     });
     return tx.product.update({ where: { id }, data: { ...data, version: current.version + 1 } });
   });
@@ -67,7 +83,13 @@ export async function changeStatus(
       throw new ConflictError(`Illegal status transition ${current.status} -> ${to}`);
     }
     await tx.productStatusHistory.create({
-      data: { productId: id, fromStatus: current.status, toStatus: to, reason: reason ?? null, changedById: userId },
+      data: {
+        productId: id,
+        fromStatus: current.status,
+        toStatus: to,
+        reason: reason ?? null,
+        changedById: userId,
+      },
     });
     // Safe deactivation: stamp activeTo when leaving ACTIVE.
     const extra = to === 'INACTIVE' || to === 'ARCHIVED' ? { activeTo: new Date() } : {};
@@ -79,7 +101,9 @@ export async function changeStatus(
 /** Throw if the product cannot be hard-deleted; the caller should archive instead. */
 export async function assertDeletable(id: string): Promise<void> {
   const [everActive, referencedCount] = await Promise.all([
-    prisma.productStatusHistory.count({ where: { productId: id, toStatus: 'ACTIVE' } }).then((n) => n > 0),
+    prisma.productStatusHistory
+      .count({ where: { productId: id, toStatus: 'ACTIVE' } })
+      .then((n) => n > 0),
     prisma.productRelation.count({ where: { childId: id } }),
   ]);
   if (!canHardDelete(everActive, referencedCount)) {

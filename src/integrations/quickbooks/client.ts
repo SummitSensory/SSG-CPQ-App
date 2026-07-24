@@ -71,8 +71,18 @@ async function request<T>(
 }
 
 /** Read-only query (find-or-create lookups). Uses the SQL-like QBO query API. */
-export async function query<T>(realmId: string, sql: string, fetchImpl: typeof fetch = fetch): Promise<T> {
-  const data = await request<{ QueryResponse: T }>(realmId, 'GET', 'query', { query: { query: sql } }, fetchImpl);
+export async function query<T>(
+  realmId: string,
+  sql: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<T> {
+  const data = await request<{ QueryResponse: T }>(
+    realmId,
+    'GET',
+    'query',
+    { query: { query: sql } },
+    fetchImpl,
+  );
   return data.QueryResponse;
 }
 

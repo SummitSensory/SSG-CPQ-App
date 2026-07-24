@@ -8,20 +8,32 @@ import { authorizeUrl, exchangeCode, disconnect } from '../integrations/quickboo
 import { findOrCreateCustomer } from '../integrations/quickbooks/customers.js';
 import { syncItem } from '../integrations/quickbooks/items.js';
 import {
-  prepareTransaction, authorizeTransaction, executeTransaction, retryTransaction, listTransactions,
+  prepareTransaction,
+  authorizeTransaction,
+  executeTransaction,
+  retryTransaction,
+  listTransactions,
 } from '../integrations/quickbooks/transactions.js';
 import { reconcile } from '../integrations/quickbooks/reconcile.js';
 import type { QboEnvironment, QboTxnType } from '@prisma/client';
 
 /** QboTransaction rows carry BigInt columns — serialize to strings for JSON. */
 function serializeTxn(t: {
-  proposalTotalMinor: bigint; amountMinor: bigint; [k: string]: unknown;
+  proposalTotalMinor: bigint;
+  amountMinor: bigint;
+  [k: string]: unknown;
 }): Record<string, unknown> {
-  return { ...t, proposalTotalMinor: t.proposalTotalMinor.toString(), amountMinor: t.amountMinor.toString() };
+  return {
+    ...t,
+    proposalTotalMinor: t.proposalTotalMinor.toString(),
+    amountMinor: t.amountMinor.toString(),
+  };
 }
 
 async function activeRealmId(): Promise<string | null> {
-  const conn = await prisma.qboConnection.findFirst({ where: { environment: qboEnvironment() as QboEnvironment, isActive: true } });
+  const conn = await prisma.qboConnection.findFirst({
+    where: { environment: qboEnvironment() as QboEnvironment, isActive: true },
+  });
   return conn?.realmId ?? null;
 }
 
@@ -35,7 +47,9 @@ export function registerQuickbooksRoutes(app: FastifyInstance): void {
     configured: isQuickbooksConfigured(),
     environment: qboEnvironment(),
     productionWritesEnabled: env.QBO_PRODUCTION_WRITE_ENABLED,
-    connections: await prisma.qboConnection.count({ where: { environment: qboEnvironment() as QboEnvironment, isActive: true } }),
+    connections: await prisma.qboConnection.count({
+      where: { environment: qboEnvironment() as QboEnvironment, isActive: true },
+    }),
   }));
 
   // Begin OAuth: returns the Intuit consent URL. `state` is a CSRF nonce the
@@ -60,12 +74,16 @@ export function registerQuickbooksRoutes(app: FastifyInstance): void {
   });
 
   // --- Master-data sync (manage) ---
-  app.post('/integrations/quickbooks/customers/:organizationId/sync', manage, async (req, reply) => {
-    const realmId = await activeRealmId();
-    if (!realmId) return reply.status(409).send({ error: 'NOT_CONNECTED' });
-    const { organizationId } = req.params as { organizationId: string };
-    return findOrCreateCustomer(organizationId, realmId, req.user!.sub);
-  });
+  app.post(
+    '/integrations/quickbooks/customers/:organizationId/sync',
+    manage,
+    async (req, reply) => {
+      const realmId = await activeRealmId();
+      if (!realmId) return reply.status(409).send({ error: 'NOT_CONNECTED' });
+      const { organizationId } = req.params as { organizationId: string };
+      return findOrCreateCustomer(organizationId, realmId, req.user!.sub);
+    },
+  );
 
   app.post('/integrations/quickbooks/items/:productId/sync', manage, async (req, reply) => {
     const realmId = await activeRealmId();
@@ -83,17 +101,31 @@ export function registerQuickbooksRoutes(app: FastifyInstance): void {
     return rows.map(serializeTxn);
   });
 
-  app.get('/integrations/quickbooks/reconcile', manage, async () => reconcile(env.QBO_PRODUCTION_WRITE_ENABLED));
+  app.get('/integrations/quickbooks/reconcile', manage, async () =>
+    reconcile(env.QBO_PRODUCTION_WRITE_ENABLED),
+  );
 
-  const TXN_TYPES: QboTxnType[] = ['ESTIMATE', 'DEPOSIT_INVOICE', 'PROGRESS_INVOICE', 'FINAL_INVOICE'];
+  const TXN_TYPES: QboTxnType[] = [
+    'ESTIMATE',
+    'DEPOSIT_INVOICE',
+    'PROGRESS_INVOICE',
+    'FINAL_INVOICE',
+  ];
 
   // Prepare: freeze totals + idempotency key. Does NOT touch QuickBooks.
   app.post('/integrations/quickbooks/transactions/prepare', transact, async (req, reply) => {
-    const b = (req.body ?? {}) as { proposalVersionId?: string; type?: QboTxnType; sequence?: number };
+    const b = (req.body ?? {}) as {
+      proposalVersionId?: string;
+      type?: QboTxnType;
+      sequence?: number;
+    };
     if (!b.proposalVersionId || !b.type || !TXN_TYPES.includes(b.type)) {
       return reply.status(400).send({ error: 'INVALID_INPUT' });
     }
-    const txn = await prepareTransaction({ proposalVersionId: b.proposalVersionId, type: b.type, sequence: b.sequence }, req.user!.sub);
+    const txn = await prepareTransaction(
+      { proposalVersionId: b.proposalVersionId, type: b.type, sequence: b.sequence },
+      req.user!.sub,
+    );
     return serializeTxn(txn);
   });
 

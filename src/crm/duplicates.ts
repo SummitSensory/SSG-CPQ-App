@@ -48,5 +48,9 @@ export async function findDuplicateContact(
     select: { id: true, firstName: true, lastName: true },
     take: 5,
   });
-  return matches.map((m) => ({ id: m.id, name: m.firstName + ' ' + m.lastName, reason: 'email match' }));
+  return matches.map((m) => ({
+    id: m.id,
+    name: m.firstName + ' ' + m.lastName,
+    reason: 'email match',
+  }));
 }

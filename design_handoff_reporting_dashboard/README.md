@@ -1,6 +1,7 @@
 # Handoff: Reporting & Dashboard Milestone
 
 ## Purpose of this package
+
 This is an **implementation spec for Claude Code**, not a UI design bundle. It defines the next
 milestone on the existing proposal/CRM codebase (Milestones 1–12: auth/roles, catalog, proposals
 with versions + price snapshots, QBO integration, monday.com integration, and the accepted-order /
@@ -14,6 +15,7 @@ deviation.
 ---
 
 ## Goal
+
 Provide **role-appropriate reporting and dashboards** across the whole lifecycle — opportunities →
 proposals → accepted orders → integrations → margin/finance. Every metric is precisely defined in a
 **metric dictionary**, protected against double counting, filterable by date, exportable where
@@ -23,6 +25,7 @@ which money stage (estimated / proposed / accepted / invoiced / collected) it re
 ---
 
 ## Design principles (apply to every report)
+
 1. **Single source of truth per metric.** Each metric is computed by exactly one function in
    `src/reporting/metrics/`, referenced by both the API and the tests. No inline SQL duplicated
    across routes.
@@ -41,14 +44,15 @@ which money stage (estimated / proposed / accepted / invoiced / collected) it re
 ---
 
 ## Role → report access matrix
+
 Reuse existing role/permission map. Add permissions:
 `reports:read` (base dashboards, no cost/margin), `reports:financials` (cost, margin, discount,
 deposit, collected amounts), `reports:export`.
 
-| Report group | reports:read | reports:financials | notes |
-|---|---|---|---|
-| Opportunities, pipeline, proposal value (proposed), win rate, age, expiration, follow-up, product mix, customer type, sales rep, project stage, accepted orders, integration sync/failures, freight/install estimates, approval turnaround, revision frequency | ✅ | ✅ | non-cost operational metrics |
-| Discounts, gross margin, margin exceptions, deposits, invoiced amount, collected amount | ❌ | ✅ | cost/margin restricted |
+| Report group                                                                                                                                                                                                                                                   | reports:read | reports:financials | notes                        |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ | ------------------ | ---------------------------- |
+| Opportunities, pipeline, proposal value (proposed), win rate, age, expiration, follow-up, product mix, customer type, sales rep, project stage, accepted orders, integration sync/failures, freight/install estimates, approval turnaround, revision frequency | ✅           | ✅                 | non-cost operational metrics |
+| Discounts, gross margin, margin exceptions, deposits, invoiced amount, collected amount                                                                                                                                                                        | ❌           | ✅                 | cost/margin restricted       |
 
 Grants (align with existing role names): Sales Rep → `reports:read` (own records + team where
 allowed); Sales Manager / Ops / PM → `reports:read`; Accounting / Exec / Sales Manager →
@@ -59,6 +63,7 @@ query layer, not just the route.
 ---
 
 ## Metric dictionary
+
 Implement as a typed registry `src/reporting/dictionary.ts` — one entry per metric, and generate
 `docs/METRIC-DICTIONARY.md` from it so definition and code never drift. Each entry:
 `{ key, label, group, grain, stage?, permission, definition, formula, doubleCountGuard, drilldown }`.
@@ -80,7 +85,7 @@ Definitions (authoritative):
 - **followUp.status** — distribution of follow-up state (due / overdue / scheduled / none) for open
   proposals. Overdue = `nextFollowUpAt < now`.
 - **discounts** — stage: PROPOSED (and a separate ACCEPTED cut). Discount = `listTotal −
-  proposedTotal` per latest version; report total discount, avg discount %, count of discounted
+proposedTotal` per latest version; report total discount, avg discount %, count of discounted
   proposals. `reports:financials`.
 - **grossMargin** — stage-aware. `margin = revenue − cost` where revenue and cost both come from the
   SAME snapshot; report at PROPOSED (latest version) and ACCEPTED (accepted order snapshot) as
@@ -113,6 +118,7 @@ Definitions (authoritative):
 ---
 
 ## Double-counting guards (enforce + test)
+
 - **Latest-version-only** for all proposal-level metrics: join to the max(versionNumber) per proposal;
   never aggregate across historical versions.
 - **One order per proposal**: accepted-order metrics key on AcceptedOrder.id; a proposal with an
@@ -127,6 +133,7 @@ Definitions (authoritative):
 ---
 
 ## API (`src/routes/reports.ts`)
+
 Reuse authz middleware; enforce `reports:read` / `reports:financials` / `reports:export` per matrix
 and row-level owner scoping.
 
@@ -147,6 +154,7 @@ in the dictionary and apply consistently.
 ---
 
 ## Data freshness
+
 - `dataAsOf` = query timestamp on every response.
 - QBO/monday freshness read from the existing sync bookkeeping (last successful sync row / event).
   Surface `lastSyncedAt`, `syncStatus` (`ok | stale | failing`), and `ageMinutes`. Mark `stale` past
@@ -155,6 +163,7 @@ in the dictionary and apply consistently.
 ---
 
 ## Tests (key calculations must be covered)
+
 - `tests/unit/metrics-winrate.test.ts` — numerator/denominator, excludes open/expired-undecided.
 - `tests/unit/metrics-margin.test.ts` — revenue & cost from same snapshot; PROPOSED vs ACCEPTED
   series separate; margin % math; threshold → exceptions.
@@ -170,6 +179,7 @@ in the dictionary and apply consistently.
   total for each metric.
 
 ## Acceptance criteria
+
 - Every metric above is defined in the dictionary and computed by a single shared function.
 - Cost/margin/discount/deposit reports are inaccessible without `reports:financials`; export gated by
   `reports:export`.

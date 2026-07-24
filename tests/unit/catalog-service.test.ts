@@ -9,8 +9,8 @@ describe('catalog status & delete policy', () => {
     expect(canTransition('DRAFT', 'INACTIVE')).toBe(false);
   });
   it('protects ever-active or referenced products from hard delete', () => {
-    expect(canHardDelete(false, 0)).toBe(true);   // draft, unreferenced
-    expect(canHardDelete(true, 0)).toBe(false);   // was active -> archive only
-    expect(canHardDelete(false, 2)).toBe(false);  // referenced by bundles/components
+    expect(canHardDelete(false, 0)).toBe(true); // draft, unreferenced
+    expect(canHardDelete(true, 0)).toBe(false); // was active -> archive only
+    expect(canHardDelete(false, 2)).toBe(false); // referenced by bundles/components
   });
 });

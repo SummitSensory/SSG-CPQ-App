@@ -38,7 +38,11 @@ describe('rules admin authorization', () => {
 
   it('blocks unauthenticated evaluation with 401', async () => {
     const app = await makeApp();
-    const res = await app.inject({ method: 'POST', url: '/rules/evaluate', payload: { lines: [{ productId: 'A', quantity: 1 }] } });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/rules/evaluate',
+      payload: { lines: [{ productId: 'A', quantity: 1 }] },
+    });
     expect(res.statusCode).toBe(401);
     await app.close();
   });

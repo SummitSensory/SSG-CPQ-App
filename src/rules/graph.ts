@@ -28,12 +28,17 @@ export function findCycle(edges: Array<[string, string]>): string[] | null {
     if (!adj.has(a)) adj.set(a, []);
     adj.get(a)!.push(b);
   }
-  const WHITE = 0, GRAY = 1, BLACK = 2;
+  const WHITE = 0,
+    GRAY = 1,
+    BLACK = 2;
   const color = new Map<string, number>();
   const stack: string[] = [];
 
   const nodes = new Set<string>();
-  for (const [a, b] of edges) { nodes.add(a); nodes.add(b); }
+  for (const [a, b] of edges) {
+    nodes.add(a);
+    nodes.add(b);
+  }
 
   function dfs(node: string): string[] | null {
     color.set(node, GRAY);

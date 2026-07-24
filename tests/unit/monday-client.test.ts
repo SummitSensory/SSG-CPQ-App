@@ -5,12 +5,14 @@ beforeAll(() => {
 });
 
 /** Build a fake fetch that returns a queued sequence of responses. */
-function fakeFetch(responses: Array<{ status?: number; headers?: Record<string, string>; body?: unknown }>) {
+function fakeFetch(
+  responses: Array<{ status?: number; headers?: Record<string, string>; body?: unknown }>,
+) {
   let i = 0;
   const calls = { count: 0 };
   const fn = async () => {
     calls.count++;
-    const r = responses[Math.min(i, responses.length - 1)];
+    const r = responses[Math.min(i, responses.length - 1)]!;
     i++;
     return {
       ok: (r.status ?? 200) >= 200 && (r.status ?? 200) < 300,
@@ -46,7 +48,9 @@ describe('monday client rate-limit handling', () => {
 
   it('throws GraphQL errors without retrying', async () => {
     const { mondayQuery } = await import('../../src/integrations/monday/client.js');
-    const { fn, calls } = fakeFetch([{ status: 200, body: { errors: [{ message: 'bad column' }] } }]);
+    const { fn, calls } = fakeFetch([
+      { status: 200, body: { errors: [{ message: 'bad column' }] } },
+    ]);
     await expect(mondayQuery('query {}', {}, fn)).rejects.toThrow(/bad column/);
     expect(calls.count).toBe(1);
   });

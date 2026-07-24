@@ -1,12 +1,22 @@
 import { describe, it, expect } from 'vitest';
 import {
-  buildContentSnapshot, computeIntegrityHash, depositFromSnapshot,
-  defaultRequirements, defaultTasks, procurementFromItems,
-  type AcceptedVersionLike, type PriceSnapshotLike,
+  buildContentSnapshot,
+  computeIntegrityHash,
+  depositFromSnapshot,
+  defaultRequirements,
+  defaultTasks,
+  procurementFromItems,
+  type AcceptedVersionLike,
+  type PriceSnapshotLike,
 } from '../../src/handoff/lock.js';
 
 const version: AcceptedVersionLike = {
-  id: 'v1', version: 2, proposalId: 'p1', status: 'ACCEPTED', frozen: true, priceSnapshotId: 'ps1',
+  id: 'v1',
+  version: 2,
+  proposalId: 'p1',
+  status: 'ACCEPTED',
+  frozen: true,
+  priceSnapshotId: 'ps1',
   sections: [{ id: 's1', type: 'PRICING_TABLE', enabled: true }],
   items: [
     { ref: 'l1', productId: 'prod1', name: 'Therapy Swing', quantity: 2, kind: 'INCLUDED' },
@@ -14,7 +24,9 @@ const version: AcceptedVersionLike = {
   ],
 };
 const snap: PriceSnapshotLike = {
-  id: 'ps1', currency: 'USD', grandTotal: 100000n,
+  id: 'ps1',
+  currency: 'USD',
+  grandTotal: 100000n,
   breakdown: { payment: { deposit: 30000, progress: 0, final: 70000 } },
 };
 
@@ -41,15 +53,28 @@ describe('accepted-order lock helpers', () => {
 
   it('changes the integrity hash if the accepted content or total changes (drift detection)', () => {
     const base = computeIntegrityHash(buildContentSnapshot(version, snap));
-    const changedTotal = computeIntegrityHash(buildContentSnapshot(version, { ...snap, grandTotal: 120000n }));
-    const changedItems = computeIntegrityHash(buildContentSnapshot({ ...version, items: [] }, snap));
+    const changedTotal = computeIntegrityHash(
+      buildContentSnapshot(version, { ...snap, grandTotal: 120000n }),
+    );
+    const changedItems = computeIntegrityHash(
+      buildContentSnapshot({ ...version, items: [] }, snap),
+    );
     expect(changedTotal).not.toBe(base);
     expect(changedItems).not.toBe(base);
   });
 
   it('seeds a requirement for every operational category', () => {
     const cats = defaultRequirements().map((r) => r.category);
-    for (const c of ['PRODUCTION', 'CUSTOM_PRODUCT', 'SHIPPING', 'INSTALLATION', 'TRAINING', 'CUSTOMER_RESPONSIBILITY', 'FACILITY_ACCESS', 'REQUIRED_DOCUMENT']) {
+    for (const c of [
+      'PRODUCTION',
+      'CUSTOM_PRODUCT',
+      'SHIPPING',
+      'INSTALLATION',
+      'TRAINING',
+      'CUSTOMER_RESPONSIBILITY',
+      'FACILITY_ACCESS',
+      'REQUIRED_DOCUMENT',
+    ]) {
       expect(cats).toContain(c);
     }
   });

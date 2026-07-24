@@ -7,7 +7,7 @@ const app = buildApp();
 let ready: Promise<void> | undefined;
 
 export default async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  ready ??= app.ready().then(() => undefined);
+  ready ??= Promise.resolve(app.ready()).then(() => undefined);
   await ready;
   app.server.emit('request', req, res);
 }

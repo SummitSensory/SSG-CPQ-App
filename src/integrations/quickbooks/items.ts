@@ -7,7 +7,11 @@ import { findLink, upsertLink, markLinkState } from './links.js';
 
 const ENTITY = 'Item';
 
-interface QboItem { Id: string; SyncToken: string; Name: string }
+interface QboItem {
+  Id: string;
+  SyncToken: string;
+  Name: string;
+}
 
 function esc(s: string): string {
   return s.replace(/'/g, "\\'");
@@ -27,22 +31,28 @@ export async function syncItem(
   productId: string,
   realmId: string,
   incomeAccountRef: string,
-  userId: string,
+  _userId: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ qboId: string; created: boolean; skipped: boolean }> {
   const product = await prisma.product.findUnique({ where: { id: productId } });
   if (!product) throw new Error(`Product ${productId} not found`);
-  if (product.status !== 'ACTIVE') throw new Error(`Product ${product.sku} is not ACTIVE — refusing to sync`);
+  if (product.status !== 'ACTIVE')
+    throw new Error(`Product ${product.sku} is not ACTIVE — refusing to sync`);
 
   const ref = { entity: ENTITY, entityId: productId };
   const hash = itemHash(product.name, product.sku, product.proposalDescription);
   const existing = await findLink(ref);
-  if (existing && existing.lastSyncedHash === hash) return { qboId: existing.qboId, created: false, skipped: true };
+  if (existing && existing.lastSyncedHash === hash)
+    return { qboId: existing.qboId, created: false, skipped: true };
 
   try {
     if (!existing) {
       // Adopt an existing QuickBooks item with the same name if present.
-      const found = await query<{ Item?: QboItem[] }>(realmId, `select Id, SyncToken, Name from Item where Name = '${esc(product.name)}'`, fetchImpl);
+      const found = await query<{ Item?: QboItem[] }>(
+        realmId,
+        `select Id, SyncToken, Name from Item where Name = '${esc(product.name)}'`,
+        fetchImpl,
+      );
       const match = found.Item?.[0];
       if (match) {
         await upsertLink(ref, match.Id, { syncToken: match.SyncToken, hash });
@@ -51,8 +61,22 @@ export async function syncItem(
       }
     }
 
-    const body = toQboItem({ name: product.name, sku: product.sku, kind: product.kind, description: product.proposalDescription }, incomeAccountRef);
-    const res = await create<{ Item: QboItem }>(realmId, 'item', body, `item:${productId}`, fetchImpl);
+    const body = toQboItem(
+      {
+        name: product.name,
+        sku: product.sku,
+        kind: product.kind,
+        description: product.proposalDescription,
+      },
+      incomeAccountRef,
+    );
+    const res = await create<{ Item: QboItem }>(
+      realmId,
+      'item',
+      body,
+      `item:${productId}`,
+      fetchImpl,
+    );
     await upsertLink(ref, res.Item.Id, { syncToken: res.Item.SyncToken, hash });
     await log(productId, res.Item.Id, 'ok', existing ? 'updated item link' : 'created item');
     return { qboId: res.Item.Id, created: !existing, skipped: false };
@@ -66,6 +90,14 @@ export async function syncItem(
 
 async function log(entityId: string, externalId: string | null, status: string, note: string) {
   await prisma.integrationSyncLog.create({
-    data: { provider: 'quickbooks', direction: 'OUTBOUND', entity: ENTITY, entityId, externalId, status, error: status === 'ok' ? null : note },
+    data: {
+      provider: 'quickbooks',
+      direction: 'OUTBOUND',
+      entity: ENTITY,
+      entityId,
+      externalId,
+      status,
+      error: status === 'ok' ? null : note,
+    },
   });
 }

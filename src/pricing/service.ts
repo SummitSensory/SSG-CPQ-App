@@ -1,7 +1,12 @@
 import { prisma } from '../lib/prisma.js';
 import { ValidationError } from '../lib/errors.js';
 import { recordAudit } from '../lib/audit.js';
-import { computePricing, PRICING_ENGINE_VERSION, type PricingInput, type PricingBreakdown } from './engine.js';
+import {
+  computePricing,
+  PRICING_ENGINE_VERSION,
+  type PricingInput,
+  type PricingBreakdown,
+} from './engine.js';
 
 export { PRICING_ENGINE_VERSION };
 
@@ -16,17 +21,30 @@ export async function resolveUnitPrice(
   opts: { organizationId?: string; quantity?: number; at?: Date },
 ): Promise<{ unitPrice: bigint | null; source: string }> {
   const at = opts.at ?? new Date();
-  const activeWindow = { effectiveDate: { lte: at }, OR: [{ expirationDate: null }, { expirationDate: { gte: at } }] };
+  const activeWindow = {
+    effectiveDate: { lte: at },
+    OR: [{ expirationDate: null }, { expirationDate: { gte: at } }],
+  };
 
   if (opts.organizationId) {
-    const cp = await prisma.customerPrice.findFirst({ where: { organizationId: opts.organizationId, productId, ...activeWindow } });
+    const cp = await prisma.customerPrice.findFirst({
+      where: { organizationId: opts.organizationId, productId, ...activeWindow },
+    });
     if (cp) return { unitPrice: cp.unitPrice, source: 'customer' };
   }
   const promo = await prisma.promotionalPrice.findFirst({ where: { productId, ...activeWindow } });
   if (promo) return { unitPrice: promo.unitPrice, source: 'promotional' };
 
   const entry = await prisma.priceListEntry.findFirst({
-    where: { productId, minQuantity: { lte: opts.quantity ?? 1 }, priceList: { status: 'ACTIVE', effectiveDate: { lte: at }, OR: [{ expirationDate: null }, { expirationDate: { gte: at } }] } },
+    where: {
+      productId,
+      minQuantity: { lte: opts.quantity ?? 1 },
+      priceList: {
+        status: 'ACTIVE',
+        effectiveDate: { lte: at },
+        OR: [{ expirationDate: null }, { expirationDate: { gte: at } }],
+      },
+    },
     orderBy: { minQuantity: 'desc' },
   });
   if (entry) return { unitPrice: entry.unitPrice, source: 'price-list' };
@@ -34,8 +52,14 @@ export async function resolveUnitPrice(
   return { unitPrice: null, source: 'unresolved' };
 }
 
-export async function resolveUnitCost(productId: string, at: Date = new Date()): Promise<bigint | null> {
-  const cost = await prisma.productCost.findFirst({ where: { productId, effectiveDate: { lte: at } }, orderBy: { effectiveDate: 'desc' } });
+export async function resolveUnitCost(
+  productId: string,
+  at: Date = new Date(),
+): Promise<bigint | null> {
+  const cost = await prisma.productCost.findFirst({
+    where: { productId, effectiveDate: { lte: at } },
+    orderBy: { effectiveDate: 'desc' },
+  });
   return cost ? cost.unitCost : null;
 }
 
@@ -57,8 +81,12 @@ export async function snapshotQuote(
       currency: input.currency,
       engineVersion: PRICING_ENGINE_VERSION,
       ruleSnapshotId: opts.ruleSnapshotId ?? null,
-      input: JSON.parse(JSON.stringify(input, (_k, v) => (typeof v === 'bigint' ? v.toString() : v))),
-      breakdown: JSON.parse(JSON.stringify(breakdown, (_k, v) => (typeof v === 'bigint' ? v.toString() : v))),
+      input: JSON.parse(
+        JSON.stringify(input, (_k, v) => (typeof v === 'bigint' ? v.toString() : v)),
+      ),
+      breakdown: JSON.parse(
+        JSON.stringify(breakdown, (_k, v) => (typeof v === 'bigint' ? v.toString() : v)),
+      ),
       grandTotal: breakdown.grandTotal,
       incomplete: breakdown.incomplete,
       createdById: userId,
@@ -88,5 +116,10 @@ export async function logOverride(params: {
       authorizedById: params.authorizedById,
     },
   });
-  await recordAudit({ actorId: params.authorizedById, action: 'pricing.override', entity: 'PriceOverrideLog', details: { field: params.field } });
+  await recordAudit({
+    actorId: params.authorizedById,
+    action: 'pricing.override',
+    entity: 'PriceOverrideLog',
+    details: { field: params.field },
+  });
 }

@@ -21,7 +21,7 @@ import { registerOrderRoutes } from './routes/orders.js';
 import { registerWebRoutes } from './routes/web.js';
 
 export function buildApp(): FastifyInstance {
-  const app = Fastify({ loggerInstance: logger });
+  const app: FastifyInstance = Fastify({ loggerInstance: logger }) as unknown as FastifyInstance;
   app.register(helmet, {
     contentSecurityPolicy: {
       directives: {

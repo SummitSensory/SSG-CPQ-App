@@ -9,9 +9,13 @@ describe('rbac matrix', () => {
   });
 
   it('read-only user may read, but is denied every protected permission', () => {
-    const readOnlyAllowed = new Set([
-      Permission.CRM_READ, Permission.CATALOG_READ, Permission.RULES_READ,
-      Permission.PRICING_READ, Permission.PROPOSAL_READ, Permission.ORDERS_READ,
+    const readOnlyAllowed = new Set<Permission>([
+      Permission.CRM_READ,
+      Permission.CATALOG_READ,
+      Permission.RULES_READ,
+      Permission.PRICING_READ,
+      Permission.PROPOSAL_READ,
+      Permission.ORDERS_READ,
     ]);
     for (const perm of Object.values(Permission)) {
       expect(can('READ_ONLY', perm)).toBe(readOnlyAllowed.has(perm));

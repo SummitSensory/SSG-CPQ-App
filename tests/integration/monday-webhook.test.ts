@@ -22,7 +22,11 @@ async function makeApp(): Promise<FastifyInstance> {
 describe('monday webhook', () => {
   it('echoes the challenge handshake', async () => {
     const app = await makeApp();
-    const res = await app.inject({ method: 'POST', url: '/integrations/monday/webhook', payload: { challenge: 'abc123' } });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/integrations/monday/webhook',
+      payload: { challenge: 'abc123' },
+    });
     expect(res.json()).toEqual({ challenge: 'abc123' });
     await app.close();
   });

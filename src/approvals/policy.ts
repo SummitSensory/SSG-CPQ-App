@@ -6,9 +6,16 @@ import { Permission } from '../authz/permissions.js';
  * and separation-of-duties are enforced separately in the service.
  */
 export const APPROVAL_TYPES = [
-  'DISCOUNT', 'MARGIN_EXCEPTION', 'CUSTOM_PRICING', 'CUSTOM_PRODUCT',
-  'PRODUCT_RULE_OVERRIDE', 'FREIGHT_EXCEPTION', 'INSTALLATION_EXCEPTION',
-  'LEGAL_EXCEPTION', 'PAYMENT_TERM_EXCEPTION', 'PROPOSAL_RELEASE',
+  'DISCOUNT',
+  'MARGIN_EXCEPTION',
+  'CUSTOM_PRICING',
+  'CUSTOM_PRODUCT',
+  'PRODUCT_RULE_OVERRIDE',
+  'FREIGHT_EXCEPTION',
+  'INSTALLATION_EXCEPTION',
+  'LEGAL_EXCEPTION',
+  'PAYMENT_TERM_EXCEPTION',
+  'PROPOSAL_RELEASE',
 ] as const;
 export type ApprovalTypeName = (typeof APPROVAL_TYPES)[number];
 
@@ -31,8 +38,12 @@ export const APPROVER_PERMISSION: Record<ApprovalTypeName, string> = {
  * hold the approver permission (strict separation of duties).
  */
 export const SELF_APPROVAL_PROHIBITED: Set<ApprovalTypeName> = new Set([
-  'DISCOUNT', 'MARGIN_EXCEPTION', 'CUSTOM_PRICING', 'LEGAL_EXCEPTION',
-  'PAYMENT_TERM_EXCEPTION', 'PROPOSAL_RELEASE',
+  'DISCOUNT',
+  'MARGIN_EXCEPTION',
+  'CUSTOM_PRICING',
+  'LEGAL_EXCEPTION',
+  'PAYMENT_TERM_EXCEPTION',
+  'PROPOSAL_RELEASE',
 ]);
 
 /** Default time-to-decision (hours) before an open request auto-expires. */

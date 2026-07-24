@@ -1,10 +1,25 @@
 /** The catalogue of modular proposal sections. Order and inclusion are data. */
 export const SECTION_TYPES = [
-  'CUSTOMER_INFO', 'FACILITY_INFO', 'PROJECT_GOALS', 'EXECUTIVE_SUMMARY',
-  'RECOMMENDED_CONFIGURATION', 'PRODUCT_DESCRIPTIONS', 'PRODUCT_IMAGES', 'DESIGN_RENDERINGS',
-  'INCLUDED_ITEMS', 'OPTIONAL_ITEMS', 'ALTERNATE_ITEMS', 'PRICING_TABLE',
-  'PAYMENT_SCHEDULE', 'ASSUMPTIONS', 'CUSTOMER_RESPONSIBILITIES', 'EXCLUSIONS',
-  'ESTIMATED_TIMELINE', 'WARRANTY', 'TERMS_AND_CONDITIONS', 'SIGNATURES',
+  'CUSTOMER_INFO',
+  'FACILITY_INFO',
+  'PROJECT_GOALS',
+  'EXECUTIVE_SUMMARY',
+  'RECOMMENDED_CONFIGURATION',
+  'PRODUCT_DESCRIPTIONS',
+  'PRODUCT_IMAGES',
+  'DESIGN_RENDERINGS',
+  'INCLUDED_ITEMS',
+  'OPTIONAL_ITEMS',
+  'ALTERNATE_ITEMS',
+  'PRICING_TABLE',
+  'PAYMENT_SCHEDULE',
+  'ASSUMPTIONS',
+  'CUSTOMER_RESPONSIBILITIES',
+  'EXCLUSIONS',
+  'ESTIMATED_TIMELINE',
+  'WARRANTY',
+  'TERMS_AND_CONDITIONS',
+  'SIGNATURES',
 ] as const;
 export type SectionType = (typeof SECTION_TYPES)[number];
 
@@ -34,7 +49,10 @@ export interface EvalFacts {
 }
 
 /** Resolve which sections render: enabled AND (no condition OR condition met). */
-export function resolveVisibleSections(sections: ProposalSection[], facts: EvalFacts = {}): ProposalSection[] {
+export function resolveVisibleSections(
+  sections: ProposalSection[],
+  facts: EvalFacts = {},
+): ProposalSection[] {
   return sections
     .filter((s) => s.enabled)
     .filter((s) => !s.condition || facts[s.condition.field] === s.condition.equals)
@@ -43,7 +61,10 @@ export function resolveVisibleSections(sections: ProposalSection[], facts: EvalF
 }
 
 /** Reorder sections by an explicit id order; unknown ids dropped, missing ones appended. */
-export function reorderSections(sections: ProposalSection[], orderedIds: string[]): ProposalSection[] {
+export function reorderSections(
+  sections: ProposalSection[],
+  orderedIds: string[],
+): ProposalSection[] {
   const byId = new Map(sections.map((s) => [s.id, s]));
   const out: ProposalSection[] = [];
   orderedIds.forEach((id, i) => {

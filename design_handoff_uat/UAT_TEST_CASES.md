@@ -11,6 +11,7 @@ acct1, exec1).
 ---
 
 ### UAT-01 — Create a new customer
+
 - **Preconditions:** logged in; org "Acme Therapy" does not exist.
 - **User role:** Sales Rep.
 - **Input data:** org name "Acme Therapy", type "New", primary contact name/email/phone, billing +
@@ -20,6 +21,7 @@ acct1, exec1).
   the rep's customer list; audit entry recorded; no duplicate created.
 
 ### UAT-02 — Create an opportunity
+
 - **Preconditions:** "Acme Therapy" exists.
 - **User role:** Sales Rep.
 - **Input data:** opportunity name, stage "Discovery", estimated value, primary contact.
@@ -28,15 +30,17 @@ acct1, exec1).
   editable only by owner/managers.
 
 ### UAT-03 — Record facility information
+
 - **Preconditions:** opportunity exists.
 - **User role:** Sales Rep.
 - **Input data:** facility dimensions, ceiling height, floor type, access constraints, power/network,
   dock/hours.
 - **Steps:** 1) Opportunity → Facility. 2) Enter details. 3) Save.
 - **Expected result:** facility record saved against the opportunity; used later to seed installation
-  + facility-access handoff requirements; persists across sessions.
+  - facility-access handoff requirements; persists across sessions.
 
 ### UAT-04 — Configure each major product family
+
 - **Preconditions:** catalog + configuration rules seeded.
 - **User role:** Sales Rep.
 - **Input data:** one representative configuration per major product family (run the case once per
@@ -47,6 +51,7 @@ acct1, exec1).
   correctly; line appears with correct base price; invalid option combos are prevented (see UAT-05/06).
 
 ### UAT-05 — Trigger required-product rule
+
 - **Preconditions:** a product with a required-companion rule exists.
 - **User role:** Sales Rep.
 - **Input data:** the primary product without its required companion.
@@ -55,6 +60,7 @@ acct1, exec1).
   explains the requirement; proposal cannot be completed missing a required item.
 
 ### UAT-06 — Trigger incompatible-product rule
+
 - **Preconditions:** two products with an incompatibility rule exist.
 - **User role:** Sales Rep.
 - **Input data:** both incompatible products on one proposal.
@@ -63,6 +69,7 @@ acct1, exec1).
   no invalid configuration is persisted.
 
 ### UAT-07 — Calculate prices
+
 - **Preconditions:** valid configured proposal; active price list.
 - **User role:** Sales Rep.
 - **Input data:** configured lines with quantities.
@@ -71,6 +78,7 @@ acct1, exec1).
   correct to the cent; rounding per policy; a price snapshot is created for the version.
 
 ### UAT-08 — Apply an authorized discount
+
 - **Preconditions:** rep discount authority = up to allowed threshold.
 - **User role:** Sales Rep.
 - **Input data:** discount within the rep's authorized limit.
@@ -79,6 +87,7 @@ acct1, exec1).
   approval required; margin recalculated (visible only to financial roles).
 
 ### UAT-08b — Request an unauthorized discount
+
 - **Preconditions:** rep discount authority is below the requested amount.
 - **User role:** Sales Rep (then Sales Manager for approval).
 - **Input data:** discount exceeding the rep's limit.
@@ -87,6 +96,7 @@ acct1, exec1).
   cannot self-approve; approval/denial recorded; unauthorized discount never silently applied.
 
 ### UAT-09 — Calculate installation
+
 - **Preconditions:** facility info recorded; installation rules seeded.
 - **User role:** Sales Rep.
 - **Input data:** installation-relevant config + site data.
@@ -95,6 +105,7 @@ acct1, exec1).
   merged into product revenue; feeds installation handoff requirement.
 
 ### UAT-10 — Calculate travel
+
 - **Preconditions:** site address recorded; travel rules seeded.
 - **User role:** Sales Rep.
 - **Input data:** site distance/zone.
@@ -103,6 +114,7 @@ acct1, exec1).
   site; excluded from margin/revenue.
 
 ### UAT-11 — Calculate freight
+
 - **Preconditions:** shippable items on proposal; freight rules seeded.
 - **User role:** Sales Rep.
 - **Input data:** items with weight/dimensions + destination.
@@ -111,6 +123,7 @@ acct1, exec1).
   requirement; excluded from revenue/margin.
 
 ### UAT-12 — Apply tax exemption
+
 - **Preconditions:** customer flagged tax-exempt with a valid exemption reference.
 - **User role:** Sales Rep.
 - **Input data:** exemption certificate reference.
@@ -119,6 +132,7 @@ acct1, exec1).
   reference stored; non-exempt customers still taxed.
 
 ### UAT-13 — Create a payment schedule
+
 - **Preconditions:** priced proposal.
 - **User role:** Sales Rep / Accounting.
 - **Input data:** deposit % + milestone terms.
@@ -127,6 +141,7 @@ acct1, exec1).
   distinct from remainder; deposit feeds the deposit requirement at acceptance.
 
 ### UAT-14 — Create a proposal
+
 - **Preconditions:** configured + priced lines.
 - **User role:** Sales Rep.
 - **Input data:** proposal name, terms, expiration date.
@@ -135,6 +150,7 @@ acct1, exec1).
   (lines, discounts, tax, totals, terms); expiration set.
 
 ### UAT-15 — Revise a proposal
+
 - **Preconditions:** proposal v1 exists.
 - **User role:** Sales Rep.
 - **Input data:** a changed quantity or added line.
@@ -143,6 +159,7 @@ acct1, exec1).
   reflects new totals; version history shows both.
 
 ### UAT-16 — Compare versions
+
 - **Preconditions:** v1 and v2 exist.
 - **User role:** Sales Rep / Sales Manager.
 - **Input data:** none.
@@ -151,6 +168,7 @@ acct1, exec1).
   version's snapshot; no recomputation of historical values.
 
 ### UAT-17 — Approve a proposal
+
 - **Preconditions:** proposal needing internal approval (e.g. over-limit discount from UAT-08b).
 - **User role:** Sales Manager.
 - **Input data:** approval decision + note.
@@ -159,6 +177,7 @@ acct1, exec1).
   rep cannot approve own; state advances.
 
 ### UAT-18 — Customer acceptance
+
 - **Preconditions:** approved proposal version.
 - **User role:** Sales Rep / Ops.
 - **Input data:** customer authorization (name, title, method).
@@ -167,6 +186,7 @@ acct1, exec1).
   step (`POST /orders/from-version/:versionId`); does not itself alter pricing.
 
 ### UAT-19 — QuickBooks estimate creation
+
 - **Preconditions:** accepted order locked; QBO sandbox connected.
 - **User role:** Ops / Accounting.
 - **Input data:** the locked order.
@@ -175,6 +195,7 @@ acct1, exec1).
   `QBO_ESTIMATE_CREATED` event logged; re-running does not duplicate the estimate (idempotent).
 
 ### UAT-20 — Deposit invoice creation
+
 - **Preconditions:** accepted order with a deposit requirement; QBO connected.
 - **User role:** Accounting.
 - **Input data:** deposit amount from the schedule.
@@ -183,6 +204,7 @@ acct1, exec1).
   deposit status = INVOICED (distinct from COLLECTED); no duplicate on re-run.
 
 ### UAT-21 — Monday.com handoff
+
 - **Preconditions:** accepted order; monday test board connected.
 - **User role:** Ops / PM.
 - **Input data:** the locked order + seeded handoff tasks.
@@ -191,6 +213,7 @@ acct1, exec1).
   tasks; `mondayProjectId` stored; `MONDAY_PROJECT_CREATED` event logged; no duplicate project.
 
 ### UAT-22 — Integration failure handling
+
 - **Preconditions:** ability to simulate QBO/monday outage (invalid token / forced error in UAT).
 - **User role:** Ops.
 - **Input data:** order lock while an integration is down.
@@ -200,6 +223,7 @@ acct1, exec1).
   no crash/rollback of the order; retry succeeds afterward and fills the id; still idempotent.
 
 ### UAT-23 — Duplicate prevention
+
 - **Preconditions:** an accepted order already exists for a proposal; an already-imported source file.
 - **User role:** Ops / Accounting.
 - **Input data:** repeat the accept/lock; re-upload same import file; re-run integrations.
@@ -209,6 +233,7 @@ acct1, exec1).
   duplicate external records; import dedupes by source hash/key; clear messaging in each case.
 
 ### UAT-24 — Permission restrictions
+
 - **Preconditions:** users seeded for each role.
 - **User role:** run as Sales Rep, Installer, Accounting, Exec (matrix).
 - **Input data:** attempts to access cost/margin/discount/deposit reports, other reps' records,
@@ -219,6 +244,7 @@ acct1, exec1).
   return 403 (not just hidden in UI).
 
 ### UAT-25 — Mobile use
+
 - **Preconditions:** UAT build on a phone-sized viewport / real device.
 - **User role:** Sales Rep.
 - **Input data:** a representative flow (view opportunity, view proposal, record facility note).
@@ -229,6 +255,7 @@ acct1, exec1).
 ---
 
 ## Execution block template (copy per case into UAT_RESULTS.md)
+
 ```
 Test ID:
 Cycle / Date / Tester:

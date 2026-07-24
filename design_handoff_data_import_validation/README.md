@@ -1,6 +1,7 @@
 # Handoff: Data Import & Historical Validation Milestone
 
 ## Purpose of this package
+
 This is an **implementation spec for Claude Code**, not a UI design bundle. It defines the data-import
 and historical-validation process for the existing proposal/CRM codebase (Milestones 1–13: auth/roles,
 catalog, proposals with versions + price snapshots, QBO integration, monday.com integration,
@@ -13,6 +14,7 @@ If any assumption conflicts with the real repo, prefer the repo's conventions an
 ---
 
 ## Goal
+
 Import (or validate-only) legacy data into the new system safely and idempotently, preserving source
 identifiers and external IDs, with per-row validation, error reporting, duplicate prevention, batch +
 source-file tracking, rollback where practical, and a strict rule that **historical proposal totals
@@ -20,6 +22,7 @@ are never altered**. Separately, use anonymized historical proposals to **valida
 engine** and produce a reconciliation report.
 
 Two distinct pipelines share one framework:
+
 1. **Import pipeline** — writes new records for reference/master data and historical documents.
 2. **Validation/reconciliation pipeline** — replays historical proposals through the current pricing
    engine WITHOUT mutating them, comparing stored vs recomputed totals.
@@ -27,6 +30,7 @@ Two distinct pipelines share one framework:
 ---
 
 ## Core principles
+
 1. **Everything is a batch.** No ad-hoc writes. Every import runs under an `ImportBatch` with a stored
    reference to the `ImportSource` (the uploaded file + checksum).
 2. **Validate before write.** Two-phase: (a) parse + validate ALL rows, (b) commit only if the batch
@@ -45,14 +49,17 @@ Two distinct pipelines share one framework:
 ---
 
 ## Data model (Prisma) — new migration `0014_data_import`
+
 ### ImportSource
+
 - `id`, `filename`, `contentHash` (SHA-256 of file bytes, unique-per-entity guard),
   `sizeBytes`, `mimeType`, `uploadedByUserId`, `uploadedAt`, `storageRef` (where the raw file lives).
 
 ### ImportBatch
+
 - `id`, `importSourceId`, `entityType` enum
   (`ORGANIZATION | CONTACT | PRODUCT | PRODUCT_VARIANT | PRICE_LIST | PRODUCT_COST | OPPORTUNITY |
-  PROPOSAL | ACCEPTED_PROPOSAL`),
+PROPOSAL | ACCEPTED_PROPOSAL`),
 - `mode` enum `IMPORT | VALIDATE_ONLY`,
 - `policy` enum `FAIL_ON_ANY_ERROR | COMMIT_VALID_SKIP_INVALID`,
 - `status` enum `PENDING | VALIDATING | VALIDATED | COMMITTING | COMMITTED | FAILED | ROLLED_BACK`,
@@ -60,6 +67,7 @@ Two distinct pipelines share one framework:
 - `startedAt, finishedAt, createdByUserId`.
 
 ### ImportRow
+
 - `id`, `importBatchId`, `rowNumber`, `sourceKey` (natural key from the file),
 - `rawData` Json (verbatim source row — audit + reprocessing),
 - `normalizedData` Json?,
@@ -68,23 +76,26 @@ Two distinct pipelines share one framework:
 - `errors` Json (array of `{field, code, message}`).
 
 ### ImportError (denormalized for the error report; or derive from ImportRow.errors)
+
 - Prefer a `GET` that projects `ImportRow` rows with `status = INVALID`; keep errors on the row so
   reprocessing a fixed file is straightforward.
 
 ### ReconciliationRun / ReconciliationLine (validation pipeline)
+
 - `ReconciliationRun`: `id`, `importBatchId?`, `sourceLabel`, `createdAt`, `createdByUserId`,
   `status` enum `DRAFT | UNDER_REVIEW | APPROVED | REJECTED`, count rollups.
 - `ReconciliationLine`: `id`, `reconciliationRunId`, `proposalRef` (source/imported proposal id),
   `historicalTotalCents`, `recalculatedTotalCents`, `differenceCents`,
   `differenceReason` enum
   (`MATCH | ROUNDING | PRICE_LIST_CHANGE | COST_CHANGE | DISCOUNT_RULE_CHANGE | MISSING_ITEM |
-  TAX_RULE_CHANGE | DATA_ENTRY | UNKNOWN`),
+TAX_RULE_CHANGE | DATA_ENTRY | UNKNOWN`),
   `reasonNotes` String?, `approvalStatus` enum `PENDING | APPROVED | REJECTED | WAIVED`,
   `reviewedByUserId?`, `reviewedAt?`.
 
 ---
 
 ## Per-entity import rules
+
 For each entity define: source key (dedupe), required fields, validators, external-ID handling.
 
 - **Organizations** — key: `sourceOrgId` or normalized name+domain. Validate name present, unique key.
@@ -118,6 +129,7 @@ different record, that is an INVALID row (reported), not an overwrite.
 ---
 
 ## Import engine (`src/import/`)
+
 - `parse/<entity>.ts` — file → raw rows (support CSV; keep the parser pluggable for XLSX/JSON).
 - `validate/<entity>.ts` — pure per-row validators returning `errors[]`. Cross-row checks
   (uniqueness, overlaps, referential resolution) run after per-row parse.
@@ -131,6 +143,7 @@ different record, that is an INVALID row (reported), not an overwrite.
   from stored `rawData` after validator fixes.
 
 ## Rollback
+
 - `rollbackBatch(batchId)` — for reference-data entities, delete/restore records inserted/updated by
   that batch (use ImportRow.targetRecordId + a pre-image where UPDATE occurred; store pre-image in
   ImportRow for updated rows). Mark batch `ROLLED_BACK`. Historical proposals/accepted proposals:
@@ -138,6 +151,7 @@ different record, that is an INVALID row (reported), not an overwrite.
   the blockers (never partial-delete silently).
 
 ## Error report
+
 - `GET /import/batches/:id/errors` — every INVALID row with `rowNumber`, `sourceKey`, per-field
   `{field, code, message}`, and the raw values. Also downloadable as CSV. The report is produced for
   EVERY batch, even fully-successful ones (empty list), so "no errors" is explicit, not assumed.
@@ -145,6 +159,7 @@ different record, that is an INVALID row (reported), not an overwrite.
 ---
 
 ## Pricing-engine validation & reconciliation
+
 Goal: confirm the current pricing engine reproduces historical totals, using **anonymized** historical
 proposals.
 
@@ -163,6 +178,7 @@ proposals.
    notes; run rolls up to APPROVED when all non-match lines are resolved.
 
 ### Reconciliation report (required output)
+
 `GET /reconciliation/:runId/report` (and CSV export) with columns:
 **Proposal | Historical total | Newly calculated total | Difference | Reason for difference |
 Approval status** — plus run-level summary (count matched, count within tolerance, count differing,
@@ -171,6 +187,7 @@ $ variance, % approved). This is the deliverable that proves pricing-engine corr
 ---
 
 ## API (`src/routes/import.ts`, `src/routes/reconciliation.ts`)
+
 Permissions: `import:manage` (upload/commit/rollback), `import:read` (view batches/errors),
 `import:reconcile` (review reconciliation). Cost/price imports additionally require the financial
 permission from the reporting milestone (`reports:financials`-equivalent).
@@ -189,6 +206,7 @@ permission from the reporting milestone (`reports:financials`-equivalent).
 ---
 
 ## Tests
+
 - `tests/unit/import-validation.test.ts` — each entity validator: required fields, formats,
   referential resolution, external-ID collision → INVALID (not overwrite).
 - `tests/unit/import-dedupe.test.ts` — same source hash refused/reprocessed; source-key upsert
@@ -206,6 +224,7 @@ permission from the reporting milestone (`reports:financials`-equivalent).
   approval workflow transitions.
 
 ## Acceptance criteria
+
 - Every listed entity imports or validates with per-row validation and a persistent error report.
 - No duplicate imports; safe reprocessing; source ids + external monday/QBO ids preserved.
 - Batches + source files recorded; rollback works where practical (blockers reported otherwise).

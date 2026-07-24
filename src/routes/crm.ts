@@ -5,10 +5,17 @@ import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import { ValidationError, NotFoundError } from '../lib/errors.js';
 import {
-  OrganizationInput, ContactInput, AddressInput, RoomInput, OpportunityInput, AttachmentInput,
+  OrganizationInput,
+  ContactInput,
+  AddressInput,
+  RoomInput,
+  OpportunityInput,
+  AttachmentInput,
 } from '../crm/validation.js';
 import {
-  normalizeOrgName, findDuplicateOrganizations, findDuplicateContact,
+  normalizeOrgName,
+  findDuplicateOrganizations,
+  findDuplicateContact,
 } from '../crm/duplicates.js';
 import { ListQuery, buildOrderBy, paginate } from '../crm/query.js';
 import { pushOpportunity } from '../integrations/monday/sync.js';
@@ -24,9 +31,7 @@ export function registerCrmRoutes(app: FastifyInstance): void {
   // ---- Organizations ----
   app.get('/crm/organizations', read, async (req) => {
     const p = ListQuery.parse(req.query);
-    const where = p.q
-      ? { OR: [{ name: { contains: p.q, mode: 'insensitive' as const } }] }
-      : {};
+    const where = p.q ? { OR: [{ name: { contains: p.q, mode: 'insensitive' as const } }] } : {};
     const [items, total] = await Promise.all([
       prisma.organization.findMany({
         where,
@@ -61,12 +66,20 @@ export function registerCrmRoutes(app: FastifyInstance): void {
     const normalized = normalizeOrgName(parsed.data.name);
     const dupes = await findDuplicateOrganizations(parsed.data.name);
     if (dupes.length && (req.query as { force?: string }).force !== 'true') {
-      return reply.status(409).send({ error: 'DUPLICATE', message: 'Possible duplicate organization', duplicates: dupes });
+      return reply.status(409).send({
+        error: 'DUPLICATE',
+        message: 'Possible duplicate organization',
+        duplicates: dupes,
+      });
     }
     const org = await prisma.organization.create({
       data: { ...parsed.data, normalizedName: normalized },
     });
-    await recordAudit({ actorId: req.user!.sub, action: 'crm.org.create', details: { entity: 'Organization', id: org.id } });
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'crm.org.create',
+      details: { entity: 'Organization', id: org.id },
+    });
     return reply.status(201).send(org);
   });
 
@@ -77,10 +90,16 @@ export function registerCrmRoutes(app: FastifyInstance): void {
     const email = parsed.data.email?.toLowerCase();
     const dupes = await findDuplicateContact(parsed.data.organizationId, email);
     if (dupes.length && (req.query as { force?: string }).force !== 'true') {
-      return reply.status(409).send({ error: 'DUPLICATE', message: 'Contact already exists', duplicates: dupes });
+      return reply
+        .status(409)
+        .send({ error: 'DUPLICATE', message: 'Contact already exists', duplicates: dupes });
     }
     const contact = await prisma.contact.create({ data: { ...parsed.data, email: email ?? null } });
-    await recordAudit({ actorId: req.user!.sub, action: 'crm.contact.create', details: { id: contact.id } });
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'crm.contact.create',
+      details: { id: contact.id },
+    });
     return reply.status(201).send(contact);
   });
 
@@ -119,7 +138,10 @@ export function registerCrmRoutes(app: FastifyInstance): void {
       prisma.opportunity.count({ where }),
     ]);
     // Serialize BigInt budget to string for JSON.
-    const items = rows.map((r) => ({ ...r, budgetAmountMinor: r.budgetAmountMinor?.toString() ?? null }));
+    const items = rows.map((r) => ({
+      ...r,
+      budgetAmountMinor: r.budgetAmountMinor?.toString() ?? null,
+    }));
     return { items, total, page: p.page, pageSize: p.pageSize };
   });
 
@@ -135,10 +157,16 @@ export function registerCrmRoutes(app: FastifyInstance): void {
     const opp = await prisma.opportunity.create({
       data: { ...rest, budgetAmountMinor, budgetCurrency: budgetCurrency ?? null },
     });
-    await recordAudit({ actorId: req.user!.sub, action: 'crm.opportunity.create', details: { id: opp.id, stage: opp.stage } });
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'crm.opportunity.create',
+      details: { id: opp.id, stage: opp.stage },
+    });
     // Outbound two-way sync to monday (no-op if not configured; never blocks the response).
     void pushOpportunity(opp.id);
-    return reply.status(201).send({ ...opp, budgetAmountMinor: opp.budgetAmountMinor?.toString() ?? null });
+    return reply
+      .status(201)
+      .send({ ...opp, budgetAmountMinor: opp.budgetAmountMinor?.toString() ?? null });
   });
 
   // ---- Attachments: photos / floor plans / measurement docs ----
@@ -159,7 +187,11 @@ export function registerCrmRoutes(app: FastifyInstance): void {
         uploadedById: req.user!.sub,
       },
     });
-    await recordAudit({ actorId: req.user!.sub, action: 'crm.attachment.create', details: { id: attachment.id, category: attachment.category } });
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'crm.attachment.create',
+      details: { id: attachment.id, category: attachment.category },
+    });
     return reply.status(201).send(attachment);
   });
 }

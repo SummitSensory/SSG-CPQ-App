@@ -3,13 +3,13 @@ import { divRound, applyRate, parseMinor, formatMinor } from '../../src/pricing/
 
 describe('decimal rounding — defined at every level', () => {
   it('HALF_UP rounds .5 away from zero', () => {
-    expect(divRound(5n, 2n, 'HALF_UP')).toBe(3n);   // 2.5 -> 3
+    expect(divRound(5n, 2n, 'HALF_UP')).toBe(3n); // 2.5 -> 3
     expect(divRound(-5n, 2n, 'HALF_UP')).toBe(-3n);
     expect(divRound(4n, 2n, 'HALF_UP')).toBe(2n);
   });
   it('HALF_EVEN rounds .5 to nearest even', () => {
-    expect(divRound(5n, 2n, 'HALF_EVEN')).toBe(2n);  // 2.5 -> 2
-    expect(divRound(7n, 2n, 'HALF_EVEN')).toBe(4n);  // 3.5 -> 4
+    expect(divRound(5n, 2n, 'HALF_EVEN')).toBe(2n); // 2.5 -> 2
+    expect(divRound(7n, 2n, 'HALF_EVEN')).toBe(4n); // 3.5 -> 4
   });
   it('DOWN truncates toward zero, UP away', () => {
     expect(divRound(9n, 4n, 'DOWN')).toBe(2n);

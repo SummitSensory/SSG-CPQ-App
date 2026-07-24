@@ -20,7 +20,9 @@ export function registerAdminRoutes(app: FastifyInstance): void {
   const guard = { preHandler: requirePermission(Permission.USERS_MANAGE) };
 
   app.get('/admin/users', guard, async () =>
-    prisma.user.findMany({ select: { id: true, email: true, name: true, role: true, isActive: true } }),
+    prisma.user.findMany({
+      select: { id: true, email: true, name: true, role: true, isActive: true },
+    }),
   );
 
   app.post('/admin/users', guard, async (req, reply) => {

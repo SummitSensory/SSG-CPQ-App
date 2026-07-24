@@ -27,21 +27,32 @@ async function tokenFor(role: string): Promise<string> {
 describe('monday integration routes', () => {
   it('echoes the webhook challenge handshake', async () => {
     const app = await makeApp();
-    const res = await app.inject({ method: 'POST', url: '/integrations/monday/webhook', payload: { challenge: 'xyz' } });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/integrations/monday/webhook',
+      payload: { challenge: 'xyz' },
+    });
     expect(res.json()).toEqual({ challenge: 'xyz' });
     await app.close();
   });
 
   it('rejects an unsigned webhook event with 401', async () => {
     const app = await makeApp();
-    const res = await app.inject({ method: 'POST', url: '/integrations/monday/webhook', payload: { event: { pulseId: 1, columnId: 'status' } } });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/integrations/monday/webhook',
+      payload: { event: { pulseId: 1, columnId: 'status' } },
+    });
     expect(res.statusCode).toBe(401);
     await app.close();
   });
 
   it('accepts a validly signed webhook (verifier unit)', async () => {
     const { SignJWT } = await import('jose');
-    const token = await new SignJWT({ ok: true }).setProtectedHeader({ alg: 'HS256' }).setIssuedAt().setExpirationTime('5m')
+    const token = await new SignJWT({ ok: true })
+      .setProtectedHeader({ alg: 'HS256' })
+      .setIssuedAt()
+      .setExpirationTime('5m')
       .sign(new TextEncoder().encode(process.env.MONDAY_SIGNING_SECRET));
     const { verifyMondayWebhook } = await import('../../src/integrations/monday/webhook.js');
     expect(await verifyMondayWebhook('Bearer ' + token)).toBe(true);
@@ -53,7 +64,8 @@ describe('monday integration routes', () => {
     const noauth = await app.inject({ method: 'GET', url: '/integrations/monday/reconcile' });
     expect(noauth.statusCode).toBe(401);
     const forbidden = await app.inject({
-      method: 'GET', url: '/integrations/monday/reconcile',
+      method: 'GET',
+      url: '/integrations/monday/reconcile',
       headers: { authorization: 'Bearer ' + (await tokenFor('SALES_REP')) },
     });
     expect(forbidden.statusCode).toBe(403);

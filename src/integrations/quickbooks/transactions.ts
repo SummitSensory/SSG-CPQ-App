@@ -2,7 +2,13 @@ import { createHash } from 'node:crypto';
 import { prisma } from '../../lib/prisma.js';
 import { logger } from '../../lib/logger.js';
 import { recordAudit } from '../../lib/audit.js';
-import { AppError, ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../../lib/errors.js';
+import {
+  AppError,
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+  ValidationError,
+} from '../../lib/errors.js';
 import { env, qboEnvironment } from '../../config/env.js';
 import { create } from './client.js';
 import { findOrCreateCustomer } from './customers.js';
@@ -47,7 +53,8 @@ interface AcceptedTotals {
 async function loadAcceptedTotals(proposalVersionId: string): Promise<AcceptedTotals> {
   const version = await prisma.proposalVersion.findUnique({ where: { id: proposalVersionId } });
   if (!version) throw new NotFoundError('Proposal version not found');
-  if (version.status !== 'ACCEPTED') throw new ConflictError('Only an ACCEPTED proposal version may be sent to QuickBooks');
+  if (version.status !== 'ACCEPTED')
+    throw new ConflictError('Only an ACCEPTED proposal version may be sent to QuickBooks');
   if (!version.priceSnapshotId) throw new ConflictError('Accepted version has no price snapshot');
 
   const snap = await prisma.priceSnapshot.findUnique({ where: { id: version.priceSnapshotId } });
@@ -55,7 +62,13 @@ async function loadAcceptedTotals(proposalVersionId: string): Promise<AcceptedTo
   const b = snap.breakdown as Record<string, unknown>;
   const payment = (b.payment ?? {}) as Record<string, unknown>;
 
-  const items = (version.items as unknown as Array<{ ref: string; productId: string; name: string; quantity: number }>) ?? [];
+  const items =
+    (version.items as unknown as Array<{
+      ref: string;
+      productId: string;
+      name: string;
+      quantity: number;
+    }>) ?? [];
   const byRef = new Map(items.map((i) => [i.ref, i]));
   const breakdownLines = (b.lines as Array<{ ref: string; net: unknown }>) ?? [];
 
@@ -94,21 +107,39 @@ async function loadAcceptedTotals(proposalVersionId: string): Promise<AcceptedTo
 
 function amountForType(type: QboTxnType, t: AcceptedTotals): bigint {
   switch (type) {
-    case 'ESTIMATE': return t.grandTotalMinor;
-    case 'DEPOSIT_INVOICE': return t.deposit;
-    case 'PROGRESS_INVOICE': return t.progress;
-    case 'FINAL_INVOICE': return t.final;
+    case 'ESTIMATE':
+      return t.grandTotalMinor;
+    case 'DEPOSIT_INVOICE':
+      return t.deposit;
+    case 'PROGRESS_INVOICE':
+      return t.progress;
+    case 'FINAL_INVOICE':
+      return t.final;
   }
 }
 
-function idempotencyKey(environment: QboEnvironment, type: QboTxnType, proposalVersionId: string, seq: number): string {
+function idempotencyKey(
+  environment: QboEnvironment,
+  type: QboTxnType,
+  proposalVersionId: string,
+  seq: number,
+): string {
   return `qbo:${environment}:${type}:${proposalVersionId}:${seq}`;
 }
 
 /** Stable hash of the frozen totals — lets execute detect any drift. */
 function totalsHash(t: AcceptedTotals): string {
   return createHash('sha256')
-    .update(JSON.stringify({ g: t.grandTotalMinor.toString(), d: t.deposit.toString(), p: t.progress.toString(), f: t.final.toString(), c: t.currency, s: t.priceSnapshotId }))
+    .update(
+      JSON.stringify({
+        g: t.grandTotalMinor.toString(),
+        d: t.deposit.toString(),
+        p: t.progress.toString(),
+        f: t.final.toString(),
+        c: t.currency,
+        s: t.priceSnapshotId,
+      }),
+    )
     .digest('hex');
 }
 
@@ -134,9 +165,13 @@ export async function prepareTransaction(input: PrepareInput, userId: string) {
   const totals = await loadAcceptedTotals(input.proposalVersionId);
   const amount = amountForType(input.type, totals);
   if (amount <= 0n && input.type !== 'ESTIMATE') {
-    throw new ValidationError(`${TXN_LABEL[input.type]} amount is zero in the accepted payment schedule`);
+    throw new ValidationError(
+      `${TXN_LABEL[input.type]} amount is zero in the accepted payment schedule`,
+    );
   }
-  const version = await prisma.proposalVersion.findUniqueOrThrow({ where: { id: input.proposalVersionId } });
+  const version = await prisma.proposalVersion.findUniqueOrThrow({
+    where: { id: input.proposalVersionId },
+  });
 
   const txn = await prisma.qboTransaction.create({
     data: {
@@ -163,7 +198,13 @@ export async function prepareTransaction(input: PrepareInput, userId: string) {
       initiatedById: userId,
     },
   });
-  await recordAudit({ actorId: userId, action: 'qbo.txn.prepare', entity: 'QboTransaction', entityId: txn.id, details: { type: input.type, environment, amountMinor: amount.toString() } });
+  await recordAudit({
+    actorId: userId,
+    action: 'qbo.txn.prepare',
+    entity: 'QboTransaction',
+    entityId: txn.id,
+    details: { type: input.type, environment, amountMinor: amount.toString() },
+  });
   return txn;
 }
 
@@ -171,12 +212,19 @@ export async function prepareTransaction(input: PrepareInput, userId: string) {
 export async function authorizeTransaction(txnId: string, userId: string) {
   const txn = await prisma.qboTransaction.findUnique({ where: { id: txnId } });
   if (!txn) throw new NotFoundError('Transaction not found');
-  if (txn.status !== 'PENDING_AUTHORIZATION') throw new ConflictError(`Cannot authorize a ${txn.status} transaction`);
+  if (txn.status !== 'PENDING_AUTHORIZATION')
+    throw new ConflictError(`Cannot authorize a ${txn.status} transaction`);
   const updated = await prisma.qboTransaction.update({
     where: { id: txnId },
     data: { status: 'AUTHORIZED', authorizedById: userId, authorizedAt: new Date() },
   });
-  await recordAudit({ actorId: userId, action: 'qbo.txn.authorize', entity: 'QboTransaction', entityId: txnId, details: { type: txn.type, environment: txn.environment } });
+  await recordAudit({
+    actorId: userId,
+    action: 'qbo.txn.authorize',
+    entity: 'QboTransaction',
+    entityId: txnId,
+    details: { type: txn.type, environment: txn.environment },
+  });
   return updated;
 }
 
@@ -192,30 +240,49 @@ async function activeRealmId(environment: QboEnvironment): Promise<string> {
  * QuickBooks using the idempotency key as the QBO requestid. Already-CREATED
  * transactions short-circuit (never double-create).
  */
-export async function executeTransaction(txnId: string, userId: string, fetchImpl: typeof fetch = fetch) {
+export async function executeTransaction(
+  txnId: string,
+  userId: string,
+  fetchImpl: typeof fetch = fetch,
+) {
   const txn = await prisma.qboTransaction.findUnique({ where: { id: txnId } });
   if (!txn) throw new NotFoundError('Transaction not found');
   if (txn.status === 'CREATED') return txn; // idempotent: already exists in QuickBooks
-  if (txn.status !== 'AUTHORIZED') throw new ForbiddenError('Transaction must be explicitly AUTHORIZED before it is created in QuickBooks');
+  if (txn.status !== 'AUTHORIZED')
+    throw new ForbiddenError(
+      'Transaction must be explicitly AUTHORIZED before it is created in QuickBooks',
+    );
 
   // Hard production safety gate.
   if (txn.environment === 'PRODUCTION' && !env.QBO_PRODUCTION_WRITE_ENABLED) {
-    throw new ForbiddenError('Production QuickBooks writes are disabled. Complete and authorize the production test plan, then set QBO_PRODUCTION_WRITE_ENABLED=true.');
+    throw new ForbiddenError(
+      'Production QuickBooks writes are disabled. Complete and authorize the production test plan, then set QBO_PRODUCTION_WRITE_ENABLED=true.',
+    );
   }
 
   // Re-verify accepted totals are unchanged since prepare — never silently alter.
   const totals = await loadAcceptedTotals(txn.proposalVersionId);
   const frozen = txn.totalsSnapshot as { hash: string };
   if (totalsHash(totals) !== frozen.hash || amountForType(txn.type, totals) !== txn.amountMinor) {
-    throw new ConflictError('Accepted proposal totals changed since this transaction was prepared — refusing to create. Re-prepare from the current accepted version.');
+    throw new ConflictError(
+      'Accepted proposal totals changed since this transaction was prepared — refusing to create. Re-prepare from the current accepted version.',
+    );
   }
 
   const realmId = await activeRealmId(txn.environment);
 
   try {
     // Ensure the customer exists (find-or-create is itself duplicate-safe).
-    const version = await prisma.proposalVersion.findUniqueOrThrow({ where: { id: txn.proposalVersionId }, include: { proposal: true } });
-    const { qboId: customerQboId } = await findOrCreateCustomer(version.proposal.organizationId, realmId, userId, fetchImpl);
+    const version = await prisma.proposalVersion.findUniqueOrThrow({
+      where: { id: txn.proposalVersionId },
+      include: { proposal: true },
+    });
+    const { qboId: customerQboId } = await findOrCreateCustomer(
+      version.proposal.organizationId,
+      realmId,
+      userId,
+      fetchImpl,
+    );
 
     const memo = `Per accepted proposal ${version.proposal.number} v${txn.proposalVersion}`;
     let resource: string;
@@ -223,43 +290,86 @@ export async function executeTransaction(txnId: string, userId: string, fetchImp
     if (txn.type === 'ESTIMATE') {
       resource = 'estimate';
       body = buildEstimateBody({
-        customerQboId, currency: totals.currency, memo,
-        lines: totals.lines, fees: totals.fees,
-        orderDiscountMinor: totals.orderDiscountMinor, taxMinor: totals.taxMinor,
+        customerQboId,
+        currency: totals.currency,
+        memo,
+        lines: totals.lines,
+        fees: totals.fees,
+        orderDiscountMinor: totals.orderDiscountMinor,
+        taxMinor: totals.taxMinor,
         expectedTotalMinor: totals.grandTotalMinor,
       });
     } else {
       resource = 'invoice';
       body = buildInvoiceBody({
-        customerQboId, currency: totals.currency, amountMinor: txn.amountMinor,
-        description: `${TXN_LABEL[txn.type]} — ${memo}`, memo,
+        customerQboId,
+        currency: totals.currency,
+        amountMinor: txn.amountMinor,
+        description: `${TXN_LABEL[txn.type]} — ${memo}`,
+        memo,
       });
     }
 
     // requestid = idempotencyKey: QuickBooks returns the original on any retry.
-    const created = await create<Record<string, { Id: string; SyncToken: string; DocNumber?: string }>>(
-      realmId, resource, body, txn.idempotencyKey, fetchImpl,
-    );
+    const created = await create<
+      Record<string, { Id: string; SyncToken: string; DocNumber?: string }>
+    >(realmId, resource, body, txn.idempotencyKey, fetchImpl);
     const obj = created[txn.type === 'ESTIMATE' ? 'Estimate' : 'Invoice'];
+    if (!obj) throw new Error(`QuickBooks response missing ${resource} object`);
 
     const updated = await prisma.$transaction(async (tx) => {
       const u = await tx.qboTransaction.update({
         where: { id: txnId },
-        data: { status: 'CREATED', qboId: obj.Id, qboSyncToken: obj.SyncToken, qboDocNumber: obj.DocNumber ?? null, customerQboId, error: null },
+        data: {
+          status: 'CREATED',
+          qboId: obj.Id,
+          qboSyncToken: obj.SyncToken,
+          qboDocNumber: obj.DocNumber ?? null,
+          customerQboId,
+          error: null,
+        },
       });
       await tx.integrationSyncLog.create({
-        data: { provider: 'quickbooks', direction: 'OUTBOUND', entity: txn.type, entityId: txnId, externalId: obj.Id, status: 'ok' },
+        data: {
+          provider: 'quickbooks',
+          direction: 'OUTBOUND',
+          entity: txn.type,
+          entityId: txnId,
+          externalId: obj.Id,
+          status: 'ok',
+        },
       });
       return u;
     });
-    await recordAudit({ actorId: userId, action: 'qbo.txn.create', entity: 'QboTransaction', entityId: txnId, details: { type: txn.type, environment: txn.environment, qboId: obj.Id, docNumber: obj.DocNumber } });
+    await recordAudit({
+      actorId: userId,
+      action: 'qbo.txn.create',
+      entity: 'QboTransaction',
+      entityId: txnId,
+      details: {
+        type: txn.type,
+        environment: txn.environment,
+        qboId: obj.Id,
+        docNumber: obj.DocNumber,
+      },
+    });
     logger.info({ txnId, qboId: obj.Id, type: txn.type }, 'QuickBooks transaction created');
     return updated;
   } catch (err) {
     const message = err instanceof AppError ? err.message : String(err);
-    await prisma.qboTransaction.update({ where: { id: txnId }, data: { status: 'FAILED', error: message } });
+    await prisma.qboTransaction.update({
+      where: { id: txnId },
+      data: { status: 'FAILED', error: message },
+    });
     await prisma.integrationSyncLog.create({
-      data: { provider: 'quickbooks', direction: 'OUTBOUND', entity: txn.type, entityId: txnId, status: 'error', error: message },
+      data: {
+        provider: 'quickbooks',
+        direction: 'OUTBOUND',
+        entity: txn.type,
+        entityId: txnId,
+        status: 'error',
+        error: message,
+      },
     });
     logger.error({ err, txnId }, 'QuickBooks transaction failed');
     if (err instanceof AppError) throw err;
@@ -272,13 +382,23 @@ export async function executeTransaction(txnId: string, userId: string, fetchImp
  * idempotency key, so if QuickBooks actually created the document on the failed
  * attempt it is returned (not duplicated).
  */
-export async function retryTransaction(txnId: string, userId: string, fetchImpl: typeof fetch = fetch) {
+export async function retryTransaction(
+  txnId: string,
+  userId: string,
+  fetchImpl: typeof fetch = fetch,
+) {
   const txn = await prisma.qboTransaction.findUnique({ where: { id: txnId } });
   if (!txn) throw new NotFoundError('Transaction not found');
-  if (txn.status !== 'FAILED') throw new ConflictError(`Only FAILED transactions can be retried (status is ${txn.status})`);
+  if (txn.status !== 'FAILED')
+    throw new ConflictError(`Only FAILED transactions can be retried (status is ${txn.status})`);
   // Return to AUTHORIZED so execute's guard passes; authorization already granted.
   await prisma.qboTransaction.update({ where: { id: txnId }, data: { status: 'AUTHORIZED' } });
-  await recordAudit({ actorId: userId, action: 'qbo.txn.retry', entity: 'QboTransaction', entityId: txnId });
+  await recordAudit({
+    actorId: userId,
+    action: 'qbo.txn.retry',
+    entity: 'QboTransaction',
+    entityId: txnId,
+  });
   return executeTransaction(txnId, userId, fetchImpl);
 }
 
@@ -289,7 +409,10 @@ export interface TxnFilter {
 
 export async function listTransactions(filter: TxnFilter = {}) {
   return prisma.qboTransaction.findMany({
-    where: { ...(filter.status ? { status: filter.status } : {}), ...(filter.proposalId ? { proposalId: filter.proposalId } : {}) },
+    where: {
+      ...(filter.status ? { status: filter.status } : {}),
+      ...(filter.proposalId ? { proposalId: filter.proposalId } : {}),
+    },
     orderBy: { createdAt: 'desc' },
     take: 200,
   });

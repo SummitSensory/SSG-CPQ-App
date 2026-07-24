@@ -51,7 +51,9 @@ export function registerProposalTemplateRoutes(app: FastifyInstance): void {
       where: { id },
       data: {
         ...(parsed.data.name ? { name: parsed.data.name } : {}),
-        ...(parsed.data.description !== undefined ? { description: parsed.data.description ?? null } : {}),
+        ...(parsed.data.description !== undefined
+          ? { description: parsed.data.description ?? null }
+          : {}),
         ...(parsed.data.data ? { data: parsed.data.data as object } : {}),
       },
     });
@@ -59,7 +61,9 @@ export function registerProposalTemplateRoutes(app: FastifyInstance): void {
 
   app.delete('/proposal-templates/:id', write, async (req, reply) => {
     const { id } = req.params as { id: string };
-    await prisma.proposalTemplate.delete({ where: { id } }).catch(() => { throw new NotFoundError('Template not found'); });
+    await prisma.proposalTemplate.delete({ where: { id } }).catch(() => {
+      throw new NotFoundError('Template not found');
+    });
     return reply.status(204).send();
   });
 }

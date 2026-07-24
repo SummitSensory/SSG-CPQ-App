@@ -2,11 +2,24 @@ import { z } from 'zod';
 
 const nonNegInt = z.number().int().nonnegative();
 
-export const KindEnum = z.enum(['PRODUCT','VARIANT','COMPONENT','BUNDLE','ACCESSORY','SERVICE']);
-export const StatusEnum = z.enum(['DRAFT','ACTIVE','INACTIVE','ARCHIVED']);
+export const KindEnum = z.enum([
+  'PRODUCT',
+  'VARIANT',
+  'COMPONENT',
+  'BUNDLE',
+  'ACCESSORY',
+  'SERVICE',
+]);
+export const StatusEnum = z.enum(['DRAFT', 'ACTIVE', 'INACTIVE', 'ARCHIVED']);
 
-export const SKU = z.string().trim().regex(/^[A-Z0-9][A-Z0-9-]{2,39}$/, 'SKU: 3-40 chars, A-Z 0-9 and hyphen');
-export const Slug = z.string().trim().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'slug: lowercase alphanumeric + hyphen');
+export const SKU = z
+  .string()
+  .trim()
+  .regex(/^[A-Z0-9][A-Z0-9-]{2,39}$/, 'SKU: 3-40 chars, A-Z 0-9 and hyphen');
+export const Slug = z
+  .string()
+  .trim()
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'slug: lowercase alphanumeric + hyphen');
 
 export const CategoryInput = z.object({
   name: z.string().trim().min(2).max(120),
@@ -23,7 +36,10 @@ export const FamilyInput = z.object({
   description: z.string().max(2000).optional(),
 });
 
-const activeRangeOk = (v) => !v.activeFrom || !v.activeTo || v.activeTo >= v.activeFrom;
+const activeRangeOk = (v: {
+  activeFrom?: Date | undefined;
+  activeTo?: Date | undefined;
+}): boolean => !v.activeFrom || !v.activeTo || v.activeTo >= v.activeFrom;
 const activeRangeMsg = { message: 'activeTo must be on or after activeFrom', path: ['activeTo'] };
 
 // Base object (a ZodObject) so .partial()/.omit() stay available for ProductUpdate.
@@ -47,4 +63,6 @@ export const ProductShape = z.object({
 
 export const ProductInput = ProductShape.refine(activeRangeOk, activeRangeMsg);
 
-export const ProductUpdate = ProductShape.partial().omit({ sku: true }).refine(activeRangeOk, activeRangeMsg);
+export const ProductUpdate = ProductShape.partial()
+  .omit({ sku: true })
+  .refine(activeRangeOk, activeRangeMsg);

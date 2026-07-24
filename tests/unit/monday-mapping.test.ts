@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { toColumnValues, STAGE_TO_STATUS, STATUS_TO_STAGE, COLUMN } from '../../src/integrations/monday/mapping.js';
+import {
+  toColumnValues,
+  STAGE_TO_STATUS,
+  STATUS_TO_STAGE,
+  COLUMN,
+} from '../../src/integrations/monday/mapping.js';
 import { syncHash } from '../../src/integrations/monday/sync.js';
 
 describe('monday mapping', () => {
@@ -9,13 +14,25 @@ describe('monday mapping', () => {
     }
   });
   it('formats budget from integer minor units without float math', () => {
-    const cols = toColumnValues({ name: 'X', stage: 'PROPOSAL', fundingStatus: 'BUDGETED', budgetAmountMinor: 5000000n, budgetCurrency: 'USD' });
+    const cols = toColumnValues({
+      name: 'X',
+      stage: 'PROPOSAL',
+      fundingStatus: 'BUDGETED',
+      budgetAmountMinor: 5000000n,
+      budgetCurrency: 'USD',
+    });
     expect(cols[COLUMN.budget]).toBe('50000.00');
   });
 });
 
 describe('two-way sync loop guard', () => {
-  const base = { name: 'X', stage: 'PROSPECT' as const, fundingStatus: 'UNFUNDED', budgetAmountMinor: null, budgetCurrency: null };
+  const base = {
+    name: 'X',
+    stage: 'PROSPECT' as const,
+    fundingStatus: 'UNFUNDED',
+    budgetAmountMinor: null,
+    budgetCurrency: null,
+  };
   it('same state produces same hash (suppresses echo)', () => {
     expect(syncHash(base)).toBe(syncHash({ ...base }));
   });

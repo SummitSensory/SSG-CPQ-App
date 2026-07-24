@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { canTransition, becomesFrozen, isFrozenStatus, formatProposalNumber } from '../../src/proposals/status.js';
+import {
+  canTransition,
+  becomesFrozen,
+  isFrozenStatus,
+  formatProposalNumber,
+} from '../../src/proposals/status.js';
 
 describe('proposal status lifecycle & immutability', () => {
   it('allows the intended forward transitions', () => {

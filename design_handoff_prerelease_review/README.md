@@ -1,6 +1,7 @@
 # Handoff: Pre-Release Security & Quality Review — Summit Sensory Gym CPQ
 
 ## Purpose of this package
+
 This is an **instruction spec for Claude Code**, not a UI design bundle. It directs a comprehensive
 pre-release security and quality review of the Summit Sensory Gym CPQ application (Milestones 1–14:
 auth/roles, catalog + configuration rules, proposals with versions + price snapshots + PDF, QBO
@@ -15,6 +16,7 @@ message, or summary. State the release status as **BLOCKED** until blockers are 
 ---
 
 ## How to run the review (method)
+
 1. **Map the codebase first.** Enumerate routes, middleware, Prisma models, background jobs,
    integration clients (QBO/monday), webhook handlers, PDF generation, import pipeline, and the React
    frontend. Produce an inventory before judging.
@@ -36,6 +38,7 @@ message, or summary. State the release status as **BLOCKED** until blockers are 
 ---
 
 ## Security review scope → what to check for each
+
 Write findings into `SECURITY_REVIEW.md`, grouped by area. For each area, the minimum checks:
 
 - **Authentication** — password/credential handling, hashing (argon2/bcrypt, cost), token issuance +
@@ -94,6 +97,7 @@ Write findings into `SECURITY_REVIEW.md`, grouped by area. For each area, the mi
   minimize PII in analytics/logs.
 
 ## Quality review scope → `QUALITY_REVIEW.md`
+
 - **Pricing accuracy** — engine matches the metric dictionary + reconciliation results; rounding
   rules consistent (cents, half-up documented); price-list/cost effective-date selection correct.
 - **Configuration-rule accuracy** — product configuration/compatibility rules enforce valid combos;
@@ -117,13 +121,14 @@ Write findings into `SECURITY_REVIEW.md`, grouped by area. For each area, the mi
 ---
 
 ## Required deliverables (exact filenames, at repo root or `/docs`)
+
 1. **SECURITY_REVIEW.md** — full narrative by area above; each area: what was checked, findings with
    severity + file/line + evidence, and status (open/fixed). Include the codebase inventory and the
    `pnpm audit` summary.
 2. **QUALITY_REVIEW.md** — same structure for the quality areas, with test evidence for pricing/
    version/PDF/integration accuracy and axe/perf results.
 3. **VULNERABILITY_REGISTER.md** — table, one row per finding: `ID | Title | Category | Severity |
-   CVSS-ish | Location | Status (Open/Fixed/Risk-Accepted) | Fixed-in (commit/PR) | Regression test`.
+CVSS-ish | Location | Status (Open/Fixed/Risk-Accepted) | Fixed-in (commit/PR) | Regression test`.
    Stable IDs (e.g. SSG-SEC-001). This is the single source of truth for counts.
 4. **REMEDIATION_PLAN.md** — every non-fixed finding with owner, recommended fix, effort estimate,
    priority, and target milestone; grouped Critical→Low; Critical/High marked as already fixed link to
@@ -139,7 +144,9 @@ Cross-link the docs by finding ID so counts reconcile across all five.
 ---
 
 ## Fix-now workflow (Critical + High)
+
 For each Critical/High:
+
 1. Write a failing regression test capturing the vuln/defect.
 2. Implement the fix using the repo's existing patterns.
 3. Confirm the test passes and `pnpm check && pnpm test` are green.
@@ -148,6 +155,7 @@ For each Critical/High:
 5. Only mark a blocker fully closed after a clean full-suite run.
 
 ## Acceptance criteria
+
 - All 23 security areas and 9 quality areas reviewed with evidence-based findings.
 - All five documents produced, internally consistent, and cross-linked by finding ID.
 - Every Critical and High finding is fixed with a regression test, or explicitly risk-accepted by the

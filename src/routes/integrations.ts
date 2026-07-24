@@ -10,21 +10,33 @@ import { logger } from '../lib/logger.js';
 
 export function registerIntegrationRoutes(app: FastifyInstance): void {
   // Settings visibility is gated by integrations:manage (server-side).
-  app.get('/integrations/monday/status', { preHandler: requirePermission(Permission.INTEGRATIONS_MANAGE) }, async () => ({
-    provider: 'monday',
-    configured: isMondayConfigured(),
-    mode: 'two-way',
-    entity: 'deal',
-  }));
+  app.get(
+    '/integrations/monday/status',
+    { preHandler: requirePermission(Permission.INTEGRATIONS_MANAGE) },
+    async () => ({
+      provider: 'monday',
+      configured: isMondayConfigured(),
+      mode: 'two-way',
+      entity: 'deal',
+    }),
+  );
 
   const manage = { preHandler: requirePermission(Permission.INTEGRATIONS_MANAGE) };
 
   // Per-entity link + recent sync-log state.
   app.get('/integrations/monday/links', manage, async () =>
-    prisma.externalLink.findMany({ where: { provider: 'monday' }, orderBy: { updatedAt: 'desc' }, take: 200 }),
+    prisma.externalLink.findMany({
+      where: { provider: 'monday' },
+      orderBy: { updatedAt: 'desc' },
+      take: 200,
+    }),
   );
   app.get('/integrations/monday/logs', manage, async () =>
-    prisma.integrationSyncLog.findMany({ where: { provider: 'monday' }, orderBy: { createdAt: 'desc' }, take: 200 }),
+    prisma.integrationSyncLog.findMany({
+      where: { provider: 'monday' },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+    }),
   );
 
   // Reconciliation report — drift, errored links, recent failures.
@@ -51,10 +63,14 @@ export function registerIntegrationRoutes(app: FastifyInstance): void {
 
     const ev = body?.event ?? {};
     const result = await applyInboundChange({
-      eventId: String((ev as { triggerUuid?: string }).triggerUuid ?? `${ev.pulseId}-${ev.columnId}-${Date.now()}`),
+      eventId: String(
+        (ev as { triggerUuid?: string }).triggerUuid ??
+          `${ev.pulseId}-${ev.columnId}-${Date.now()}`,
+      ),
       itemId: String((ev as { pulseId?: unknown }).pulseId ?? ''),
       columnId: (ev as { columnId?: string }).columnId,
-      newStatusLabel: ((ev as { value?: { label?: { text?: string } } }).value?.label?.text) ?? undefined,
+      newStatusLabel:
+        (ev as { value?: { label?: { text?: string } } }).value?.label?.text ?? undefined,
     });
     logger.info({ result }, 'monday webhook processed');
     return reply.send({ ok: true, result });

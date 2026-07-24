@@ -1,22 +1,26 @@
 # Milestone 10 — monday.com Integration (full)
 
 ## Status
+
 Scaffold authored, extending Milestone 4. **Not executed** here. Apply migration `0010_external_links`; run `pnpm check` and `pnpm test`. **Use a sandbox board first** — see the manual test procedure in `docs/MONDAY-INTEGRATION.md`.
 
 ## Deliverables
+
 - **Mapping + source-of-truth documentation:** `docs/MONDAY-INTEGRATION.md` (entity map, per-field source of truth, conflict handling, reliability controls, 10-step sandbox manual test procedure).
 
 ## Files
-| Concern | File |
-|---|---|
-| External IDs / links | `src/integrations/monday/links.ts`, `ExternalLink` model (migration `0010`) |
-| Source of truth + approved conflict rules | `src/integrations/monday/conflict.ts` |
-| Rate-limit-aware client | `src/integrations/monday/client.ts` |
-| Sync engine (idempotent, conflict-safe, retry) | `src/integrations/monday/sync.ts` |
-| Reconciliation report | `src/integrations/monday/reconcile.ts` |
-| Routes (status, links, logs, reconcile, retry, webhook) | `src/routes/integrations.ts` |
+
+| Concern                                                 | File                                                                        |
+| ------------------------------------------------------- | --------------------------------------------------------------------------- |
+| External IDs / links                                    | `src/integrations/monday/links.ts`, `ExternalLink` model (migration `0010`) |
+| Source of truth + approved conflict rules               | `src/integrations/monday/conflict.ts`                                       |
+| Rate-limit-aware client                                 | `src/integrations/monday/client.ts`                                         |
+| Sync engine (idempotent, conflict-safe, retry)          | `src/integrations/monday/sync.ts`                                           |
+| Reconciliation report                                   | `src/integrations/monday/reconcile.ts`                                      |
+| Routes (status, links, logs, reconcile, retry, webhook) | `src/routes/integrations.ts`                                                |
 
 ## Requirement compliance
+
 - **Store external IDs** — `ExternalLink(provider, entity, entityId, externalId, boardId)`.
 - **Prevent duplicates** — unique `(provider, entity, entityId)` and `(provider, externalId)`; create is skipped when a link exists.
 - **Idempotency** — inbound deduped by unique `eventId`; outbound guarded by the link + `lastSyncedHash` (no write when unchanged).
@@ -30,6 +34,7 @@ Scaffold authored, extending Milestone 4. **Not executed** here. Apply migration
 - **Document source of truth per field** — table in `docs/MONDAY-INTEGRATION.md` + machine-readable `FIELD_SOURCE_OF_TRUTH`.
 
 ## Tests
+
 - `tests/unit/monday-conflict.test.ts` — CPQ fields refuse inbound; stage & project status allowed; unknown refused; source-of-truth lookups.
 - `tests/unit/monday-client.test.ts` — 429 retry-then-succeed (mock fetch), complexity-code retry, GraphQL error no-retry, backoff growth/cap/Retry-After.
 - `tests/integration/monday-integration.test.ts` — webhook challenge, unsigned 401, signature verify, manage-permission gating on reconcile.
@@ -37,6 +42,7 @@ Scaffold authored, extending Milestone 4. **Not executed** here. Apply migration
 - **Manual procedure:** `docs/MONDAY-INTEGRATION.md` §5 (sandbox board, 10 steps).
 
 ## Not tested / out of scope
+
 - Live monday API calls (need a real sandbox token + board) — client is exercised via mock fetch; run the manual procedure against the sandbox.
 - DB-backed link upsert/dedup and the reconciliation query need a test DB — pure conflict/rate-limit logic is fully unit-covered.
 - Entities beyond Opportunity (Organization, Contact, Proposal, Order, Project) are mapped and documented; their push/pull adapters reuse `links.ts` + `conflict.ts` and are wired per board as those boards are provisioned.

@@ -32,7 +32,11 @@ export function validateImportBatch(rows: unknown[]): ImportResult {
     }
     const sku = parsed.data.sku;
     if (seenSku.has(sku)) {
-      issues.push({ row, field: 'sku', message: `duplicate SKU in batch (also row ${seenSku.get(sku)})` });
+      issues.push({
+        row,
+        field: 'sku',
+        message: `duplicate SKU in batch (also row ${seenSku.get(sku)})`,
+      });
       return;
     }
     seenSku.set(sku, row);

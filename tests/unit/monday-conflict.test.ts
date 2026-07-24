@@ -3,7 +3,15 @@ import { decideInbound, sourceOfTruth } from '../../src/integrations/monday/conf
 
 describe('monday conflict rules & source of truth', () => {
   it('refuses inbound writes to CPQ-authoritative fields', () => {
-    for (const field of ['opportunity.amount', 'opportunity.owner', 'opportunity.closeDate', 'contact.email', 'shipping', 'installation', 'files']) {
+    for (const field of [
+      'opportunity.amount',
+      'opportunity.owner',
+      'opportunity.closeDate',
+      'contact.email',
+      'shipping',
+      'installation',
+      'files',
+    ]) {
       const d = decideInbound(field);
       expect(d.allowed, field).toBe(false);
     }

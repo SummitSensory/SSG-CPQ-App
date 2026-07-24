@@ -32,14 +32,24 @@ describe('order & handoff route authorization', () => {
 
   it('forbids READ_ONLY from locking an order', async () => {
     const app = await makeApp();
-    const res = await app.inject({ method: 'POST', url: '/orders/from-version/v1', headers: { authorization: 'Bearer ' + (await tokenFor('READ_ONLY')) }, payload: {} });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/orders/from-version/v1',
+      headers: { authorization: 'Bearer ' + (await tokenFor('READ_ONLY')) },
+      payload: {},
+    });
     expect(res.statusCode).toBe(403);
     await app.close();
   });
 
   it('forbids SALES_REP from managing handoff records', async () => {
     const app = await makeApp();
-    const res = await app.inject({ method: 'POST', url: '/orders/o1/tasks', headers: { authorization: 'Bearer ' + (await tokenFor('SALES_REP')) }, payload: { title: 'x' } });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/orders/o1/tasks',
+      headers: { authorization: 'Bearer ' + (await tokenFor('SALES_REP')) },
+      payload: { title: 'x' },
+    });
     expect(res.statusCode).toBe(403);
     await app.close();
   });
@@ -47,7 +57,12 @@ describe('order & handoff route authorization', () => {
   it('lets ORDERS_READ roles reach the list (past authorization)', async () => {
     const app = await makeApp();
     // INSTALLER has orders:read; unauth would be 401, forbidden 403 — neither.
-    const res = await app.inject({ method: 'POST', url: '/orders/from-version/v1', headers: { authorization: 'Bearer ' + (await tokenFor('SALES_MANAGER')) }, payload: {} });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/orders/from-version/v1',
+      headers: { authorization: 'Bearer ' + (await tokenFor('SALES_MANAGER')) },
+      payload: {},
+    });
     // ORDERS_MANAGE granted → passes RBAC, fails body validation (400).
     expect(res.statusCode).toBe(400);
     await app.close();

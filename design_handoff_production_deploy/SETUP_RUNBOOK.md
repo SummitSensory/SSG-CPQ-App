@@ -11,7 +11,9 @@ Postgres). Do local first — you'll be testing within an hour without touching 
 ---
 
 ## PHASE 0 — Prerequisites [YOU]
+
 Install and sign in once:
+
 - Node.js LTS + `pnpm` (`npm i -g pnpm`)
 - Git, and GitHub CLI: `gh auth login`
 - Vercel CLI: `npm i -g vercel` then `vercel login`
@@ -24,7 +26,9 @@ Install and sign in once:
 ---
 
 ## PHASE 1 — Get the code into GitHub [CLAUDE CODE]
+
 If the repo isn't on GitHub yet, tell Claude Code:
+
 > "Initialize git if needed, create a private GitHub repo named `summit-cpq` under my account, commit
 > all current code, and push to `main`. Confirm the remote URL."
 
@@ -38,16 +42,20 @@ Under the hood it runs roughly: `git init` → `git add -A` → `git commit` →
 ## PHASE 2 — Run it locally so you can test TODAY
 
 ### 2a. Local database [YOU or CLAUDE CODE]
+
 Easiest: create a free Postgres (Neon/Supabase/Vercel Postgres) and copy its connection string.
 (Or run Postgres in Docker if you prefer local-only.)
 
 ### 2b. Environment file [CLAUDE CODE, values from YOU]
+
 Ask Claude Code:
+
 > "Create `.env` from `.env.example`. List every variable the app requires and tell me which ones I
 > must supply values for. Fill in the ones you safely can (generate secrets); leave integration
 > credentials as clearly-marked placeholders."
 
 You'll need to paste real values for at least:
+
 - `DATABASE_URL` and `DIRECT_URL` — your Postgres strings
 - session/auth secret(s) — Claude Code can generate these
 - `QBO_CLIENT_ID`, `QBO_CLIENT_SECRET`, `QBO_ENVIRONMENT=sandbox`, QBO token encryption key
@@ -58,6 +66,7 @@ It's fine to start with **sandbox/placeholder** integration values — you can t
 live QBO/monday calls without them.
 
 ### 2c. Install, migrate, seed, run [CLAUDE CODE]
+
 > "Run `pnpm install`, apply Prisma migrations to my dev database, seed a starter admin user and the
 > reference catalog if a seed script exists, then start the dev server. Tell me the local URL and the
 > admin login."
@@ -70,16 +79,19 @@ opportunity → proposal → generate a PDF. If that works, the app is genuinely
 ## PHASE 3 — Wire the real integrations (sandbox first) [YOU + CLAUDE CODE]
 
 ### 3a. QuickBooks (Intuit Developer) [YOU]
+
 1. Create an app at developer.intuit.com → get **Client ID / Client Secret** (Development keys).
 2. Add the redirect/callback URL Claude Code gives you (local first, prod later).
 3. Connect a **sandbox company**.
-Paste the client id/secret into `.env`; keep `QBO_ENVIRONMENT=sandbox`.
+   Paste the client id/secret into `.env`; keep `QBO_ENVIRONMENT=sandbox`.
 
 ### 3b. monday.com [YOU]
+
 1. monday.com → Admin/Developers → **API token**.
 2. Identify the target board (or let the app create one). Paste the token into `.env`.
 
 ### 3c. Verify integrations [CLAUDE CODE]
+
 > "Run the integration verification: confirm the QuickBooks OAuth connect + token refresh + a
 > read-only company-info call succeed WITHOUT creating any live estimate or invoice, and confirm a
 > monday.com test item can be created on the sandbox board and then cleaned up. Report results."
@@ -92,22 +104,27 @@ financial records.
 ## PHASE 4 — Production on Vercel [CLAUDE CODE drives, YOU approve]
 
 ### 4a. Production database [YOU or CLAUDE CODE]
+
 Create a **separate** production Postgres (do not reuse dev). Copy its `DATABASE_URL` / `DIRECT_URL`.
 
 ### 4b. Link project + push env vars [CLAUDE CODE]
+
 > "Run `vercel link` to connect this repo to a new Vercel project `summit-cpq`. Then push each
 > required env var to the Vercel **Production** environment with `vercel env add` — I'll paste the
 > secret values when prompted. Use production integration credentials and `QBO_ENVIRONMENT=production`
 > only when I confirm I'm ready; otherwise keep sandbox."
 
 ### 4c. Migrate the production DB [CLAUDE CODE]
+
 > "Take a backup snapshot of the production database first and record its id. Then apply Prisma
 > migrations to production using `DIRECT_URL`. Confirm the schema version."
 
 ### 4d. Deploy [CLAUDE CODE]
+
 > "Deploy to production with `vercel --prod`. Give me the deployment URL."
 
 ### 4e. Domain + SSL [YOU + CLAUDE CODE]
+
 Add your custom domain in Vercel and update DNS as instructed; Vercel issues TLS automatically. Update
 the QBO/OAuth callback URLs to the production domain.
 
@@ -116,7 +133,9 @@ the QBO/OAuth callback URLs to the production domain.
 ---
 
 ## PHASE 5 — Production verification gate (do NOT declare success until all pass) [CLAUDE CODE]
+
 Hand Claude Code the `design_handoff_production_deploy` runbook and say:
+
 > "Execute Part C verification, steps 1–10, against production. Record evidence for each and write
 > `PRODUCTION_RELEASE_REPORT.md`. Verify QuickBooks connection read-only — do not create live
 > transactions. Stop and tell me if any step fails."
@@ -131,6 +150,7 @@ only when Phase 5 passes with recorded evidence and no open release blockers.
 ---
 
 ## What only YOU can do (Claude cannot do these for you)
+
 - Create/sign into Intuit, monday.com, Vercel, and the database host accounts.
 - Approve billing and grant OAuth authorizations.
 - Point your DNS at Vercel.

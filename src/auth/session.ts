@@ -28,7 +28,9 @@ export async function createSession(userId: string, ctx: SessionContext = {}): P
 }
 
 /** Validate a refresh token against a live (unexpired, unrevoked) session. */
-export async function resolveSession(refreshToken: string): Promise<{ userId: string; id: string }> {
+export async function resolveSession(
+  refreshToken: string,
+): Promise<{ userId: string; id: string }> {
   const session = await prisma.session.findUnique({
     where: { refreshTokenHash: hashToken(refreshToken) },
   });
@@ -39,7 +41,10 @@ export async function resolveSession(refreshToken: string): Promise<{ userId: st
 }
 
 /** Rotate: revoke the old session and issue a new refresh token. */
-export async function rotateSession(refreshToken: string, ctx: SessionContext = {}): Promise<string> {
+export async function rotateSession(
+  refreshToken: string,
+  ctx: SessionContext = {},
+): Promise<string> {
   const current = await resolveSession(refreshToken);
   await prisma.session.update({ where: { id: current.id }, data: { revokedAt: new Date() } });
   return createSession(current.userId, ctx);
@@ -47,7 +52,10 @@ export async function rotateSession(refreshToken: string, ctx: SessionContext = 
 
 export async function revokeSession(refreshToken: string): Promise<void> {
   await prisma.session
-    .update({ where: { refreshTokenHash: hashToken(refreshToken) }, data: { revokedAt: new Date() } })
+    .update({
+      where: { refreshTokenHash: hashToken(refreshToken) },
+      data: { revokedAt: new Date() },
+    })
     .catch(() => undefined);
 }
 

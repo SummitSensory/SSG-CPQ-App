@@ -7,14 +7,14 @@ and automated tests. Use a **sandbox/test board** before production (set
 
 ## 1. Entity mapping (CPQ ⇄ monday.com)
 
-| CPQ entity | monday.com object | Link direction | Notes |
-|---|---|---|---|
-| Organization | Item on **Accounts** board | CPQ → monday (create/update) | CPQ authoritative |
-| Contact | Subitem/Item on **Contacts** board, linked to Account | CPQ → monday | CPQ authoritative |
-| Opportunity | Item on **Deals** board | **Two-way** | stage/owner two-way; amounts CPQ-authoritative |
-| Proposal | Update/column on the Deal item (proposal number + status + link) | CPQ → monday | CPQ authoritative |
-| Accepted order | Item on **Orders** board (created when proposal ACCEPTED) | CPQ → monday | CPQ authoritative |
-| Project | Item on **Projects** board (created from accepted order) | monday → CPQ for delivery status | monday authoritative for project execution status only |
+| CPQ entity     | monday.com object                                                | Link direction                   | Notes                                                  |
+| -------------- | ---------------------------------------------------------------- | -------------------------------- | ------------------------------------------------------ |
+| Organization   | Item on **Accounts** board                                       | CPQ → monday (create/update)     | CPQ authoritative                                      |
+| Contact        | Subitem/Item on **Contacts** board, linked to Account            | CPQ → monday                     | CPQ authoritative                                      |
+| Opportunity    | Item on **Deals** board                                          | **Two-way**                      | stage/owner two-way; amounts CPQ-authoritative         |
+| Proposal       | Update/column on the Deal item (proposal number + status + link) | CPQ → monday                     | CPQ authoritative                                      |
+| Accepted order | Item on **Orders** board (created when proposal ACCEPTED)        | CPQ → monday                     | CPQ authoritative                                      |
+| Project        | Item on **Projects** board (created from accepted order)         | monday → CPQ for delivery status | monday authoritative for project execution status only |
 
 Every link is stored in the `ExternalLink` table (CPQ entity ↔ monday item id),
 so a CPQ record never depends on name matching.
@@ -25,23 +25,24 @@ so a CPQ record never depends on name matching.
 **never overwrites an authoritative CPQ value** unless an approved conflict rule
 in `conflict.ts` explicitly allows it.
 
-| Field | CPQ location | monday column | Source of truth | Sync |
-|---|---|---|---|---|
-| Status (deal stage) | Opportunity.stage | Deals: `status` | **Shared** (approved rule: monday may advance stage) | two-way |
-| Status (project) | — | Projects: `status` | **monday** | monday → CPQ |
-| Owner | Opportunity owner | Deals: `person` | **CPQ** | CPQ → monday |
-| Dates (expected close) | Opportunity.desiredTimeline / dates | Deals: `date` | **CPQ** | CPQ → monday |
-| Amount (budget/total) | Opportunity.budget / PriceSnapshot total | Deals: `numbers` | **CPQ** (financials never overwritten) | CPQ → monday |
-| Installation info | Room/Opportunity install fields | Deals/Orders: text cols | **CPQ** | CPQ → monday |
-| Shipping info | Address (SHIPPING), freight/liftgate | Orders: text cols | **CPQ** | CPQ → monday |
-| Files (proposal PDF, floor plans) | Attachment / proposal export | monday item files column | **CPQ** | CPQ → monday (upload) |
-| Contact name/email/phone | Contact | Contacts columns | **CPQ** | CPQ → monday |
+| Field                             | CPQ location                             | monday column            | Source of truth                                      | Sync                  |
+| --------------------------------- | ---------------------------------------- | ------------------------ | ---------------------------------------------------- | --------------------- |
+| Status (deal stage)               | Opportunity.stage                        | Deals: `status`          | **Shared** (approved rule: monday may advance stage) | two-way               |
+| Status (project)                  | —                                        | Projects: `status`       | **monday**                                           | monday → CPQ          |
+| Owner                             | Opportunity owner                        | Deals: `person`          | **CPQ**                                              | CPQ → monday          |
+| Dates (expected close)            | Opportunity.desiredTimeline / dates      | Deals: `date`            | **CPQ**                                              | CPQ → monday          |
+| Amount (budget/total)             | Opportunity.budget / PriceSnapshot total | Deals: `numbers`         | **CPQ** (financials never overwritten)               | CPQ → monday          |
+| Installation info                 | Room/Opportunity install fields          | Deals/Orders: text cols  | **CPQ**                                              | CPQ → monday          |
+| Shipping info                     | Address (SHIPPING), freight/liftgate     | Orders: text cols        | **CPQ**                                              | CPQ → monday          |
+| Files (proposal PDF, floor plans) | Attachment / proposal export             | monday item files column | **CPQ**                                              | CPQ → monday (upload) |
+| Contact name/email/phone          | Contact                                  | Contacts columns         | **CPQ**                                              | CPQ → monday          |
 
 Rule of thumb: **all financial and contractual values are CPQ-authoritative and
-are never written back from monday.** Only deal *stage* is shared, and only via
+are never written back from monday.** Only deal _stage_ is shared, and only via
 the approved conflict rule.
 
 ## 3. Conflict handling
+
 - Each synced record stores a `syncHash` of the last-synced field set.
 - **Outbound**: push only when the local hash changed (suppresses echo loops).
 - **Inbound**: an incoming change is applied only if (a) the field's source of
@@ -50,6 +51,7 @@ the approved conflict rule.
   logged** to `IntegrationSyncLog` as a `conflict` — never silently applied.
 
 ## 4. Reliability controls
+
 - **External IDs**: `ExternalLink(entity, entityId, provider, externalId, boardId)`.
 - **Duplicate prevention**: unique `(provider, entity, entityId)` and unique
   `(provider, externalId)`; create is skipped if a link already exists.
@@ -64,6 +66,7 @@ the approved conflict rule.
   local hash differs from last-synced, orphaned links, and recent failures.
 
 ## 5. Manual test procedure (sandbox board)
+
 1. Create a monday **sandbox** board named "Deals (sandbox)"; copy its id and
    column ids into env + `mapping.ts`.
 2. Set `MONDAY_API_TOKEN`, `MONDAY_SIGNING_SECRET`, `MONDAY_DEALS_BOARD_ID`

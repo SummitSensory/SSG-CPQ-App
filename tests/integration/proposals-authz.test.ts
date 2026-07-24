@@ -35,7 +35,11 @@ describe('proposal permissions', () => {
     const app = await makeApp();
     const auth = { authorization: 'Bearer ' + (await tokenFor('SALES_REP')) };
     // SALES_REP has proposal:write but not proposal:release.
-    const rel = await app.inject({ method: 'POST', url: '/proposals/versions/v1/release', headers: auth });
+    const rel = await app.inject({
+      method: 'POST',
+      url: '/proposals/versions/v1/release',
+      headers: auth,
+    });
     expect(rel.statusCode).toBe(403);
     await app.close();
   });
@@ -44,7 +48,11 @@ describe('proposal permissions', () => {
     const app = await makeApp();
     const auth = { authorization: 'Bearer ' + (await tokenFor('SALES_MANAGER')) };
     // Passes authz; fails later (no such version) — proves the gate allowed it.
-    const res = await app.inject({ method: 'POST', url: '/proposals/versions/nonexistent/release', headers: auth });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/proposals/versions/nonexistent/release',
+      headers: auth,
+    });
     expect(res.statusCode).not.toBe(403);
     expect(res.statusCode).not.toBe(401);
     await app.close();
@@ -53,7 +61,8 @@ describe('proposal permissions', () => {
   it('blocks a READ_ONLY user from creating a proposal (403)', async () => {
     const app = await makeApp();
     const res = await app.inject({
-      method: 'POST', url: '/proposals',
+      method: 'POST',
+      url: '/proposals',
       headers: { authorization: 'Bearer ' + (await tokenFor('READ_ONLY')) },
       payload: { organizationId: 'o1', title: 'Test', sections: [], items: [] },
     });

@@ -11,13 +11,17 @@ export interface LinkRef {
 /** Find the monday external id for a CPQ entity, if linked. */
 export async function findLink(ref: LinkRef) {
   return prisma.externalLink.findUnique({
-    where: { provider_entity_entityId: { provider: PROVIDER, entity: ref.entity, entityId: ref.entityId } },
+    where: {
+      provider_entity_entityId: { provider: PROVIDER, entity: ref.entity, entityId: ref.entityId },
+    },
   });
 }
 
 /** Find the CPQ entity for a monday external id, if linked. */
 export async function findByExternalId(externalId: string) {
-  return prisma.externalLink.findUnique({ where: { provider_externalId: { provider: PROVIDER, externalId } } });
+  return prisma.externalLink.findUnique({
+    where: { provider_externalId: { provider: PROVIDER, externalId } },
+  });
 }
 
 /**
@@ -45,9 +49,14 @@ export async function upsertLink(
   }
   await prisma.externalLink.create({
     data: {
-      provider: PROVIDER, entity: ref.entity, entityId: ref.entityId, externalId,
-      boardId: opts.boardId ?? null, lastSyncedHash: opts.hash ?? null,
-      lastSyncedAt: new Date(), state: opts.state ?? 'LINKED',
+      provider: PROVIDER,
+      entity: ref.entity,
+      entityId: ref.entityId,
+      externalId,
+      boardId: opts.boardId ?? null,
+      lastSyncedHash: opts.hash ?? null,
+      lastSyncedAt: new Date(),
+      state: opts.state ?? 'LINKED',
     },
   });
   return { created: true };

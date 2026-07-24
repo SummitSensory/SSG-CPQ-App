@@ -37,7 +37,11 @@ export async function mondayQuery<T>(
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const res = await fetchImpl(API_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: env.MONDAY_API_TOKEN, 'API-Version': '2024-01' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: env.MONDAY_API_TOKEN,
+        'API-Version': '2024-01',
+      },
       body: JSON.stringify({ query, variables }),
     });
 
@@ -60,7 +64,8 @@ export async function mondayQuery<T>(
       lastErr = new Error(`monday ${code}`);
       continue;
     }
-    if (body.errors?.length) throw new Error('monday API error: ' + body.errors.map((e) => e.message).join('; '));
+    if (body.errors?.length)
+      throw new Error('monday API error: ' + body.errors.map((e) => e.message).join('; '));
     if (!body.data) throw new Error('monday API returned no data');
     return body.data;
   }
@@ -69,7 +74,11 @@ export async function mondayQuery<T>(
 
 export { backoff };
 
-export async function createItem(boardId: string, name: string, columnValues: Record<string, unknown>): Promise<string> {
+export async function createItem(
+  boardId: string,
+  name: string,
+  columnValues: Record<string, unknown>,
+): Promise<string> {
   const data = await mondayQuery<{ create_item: { id: string } }>(
     `mutation ($board: ID!, $name: String!, $cols: JSON!) {
        create_item (board_id: $board, item_name: $name, column_values: $cols) { id }
@@ -79,7 +88,12 @@ export async function createItem(boardId: string, name: string, columnValues: Re
   return data.create_item.id;
 }
 
-export async function updateItem(boardId: string, itemId: string, name: string, columnValues: Record<string, unknown>): Promise<void> {
+export async function updateItem(
+  boardId: string,
+  itemId: string,
+  name: string,
+  columnValues: Record<string, unknown>,
+): Promise<void> {
   await mondayQuery(
     `mutation ($board: ID!, $item: ID!, $cols: JSON!) {
        change_multiple_column_values (board_id: $board, item_id: $item, column_values: $cols) { id }

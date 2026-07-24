@@ -15,9 +15,9 @@ export const FIELD_SOURCE_OF_TRUTH: Record<string, SourceOfTruth> = {
   'project.status': 'MONDAY',
   'contact.email': 'CPQ',
   'contact.phone': 'CPQ',
-  'installation': 'CPQ',
-  'shipping': 'CPQ',
-  'files': 'CPQ',
+  installation: 'CPQ',
+  shipping: 'CPQ',
+  files: 'CPQ',
 };
 
 /**
@@ -32,13 +32,20 @@ export interface ConflictRule {
 }
 
 export const APPROVED_CONFLICT_RULES: ConflictRule[] = [
-  { field: 'opportunity.stage', allowInbound: true, note: 'Sales may advance the deal stage in monday; mirrored to CPQ.' },
-  { field: 'project.status', allowInbound: true, note: 'Delivery/project status is owned by the monday Projects board.' },
+  {
+    field: 'opportunity.stage',
+    allowInbound: true,
+    note: 'Sales may advance the deal stage in monday; mirrored to CPQ.',
+  },
+  {
+    field: 'project.status',
+    allowInbound: true,
+    note: 'Delivery/project status is owned by the monday Projects board.',
+  },
 ];
 
 export type InboundDecision =
-  | { allowed: true; rule: ConflictRule }
-  | { allowed: false; reason: string };
+  { allowed: true; rule: ConflictRule } | { allowed: false; reason: string };
 
 /**
  * Decide whether an inbound change to `field` may be applied. Pure and
@@ -47,9 +54,17 @@ export type InboundDecision =
 export function decideInbound(field: string): InboundDecision {
   const sot = FIELD_SOURCE_OF_TRUTH[field];
   if (sot === undefined) return { allowed: false, reason: `unknown field "${field}" — not synced` };
-  if (sot === 'CPQ') return { allowed: false, reason: `field "${field}" is CPQ-authoritative; inbound write refused` };
+  if (sot === 'CPQ')
+    return {
+      allowed: false,
+      reason: `field "${field}" is CPQ-authoritative; inbound write refused`,
+    };
   const rule = APPROVED_CONFLICT_RULES.find((r) => r.field === field && r.allowInbound);
-  if (!rule) return { allowed: false, reason: `no approved conflict rule permits inbound write to "${field}"` };
+  if (!rule)
+    return {
+      allowed: false,
+      reason: `no approved conflict rule permits inbound write to "${field}"`,
+    };
   return { allowed: true, rule };
 }
 

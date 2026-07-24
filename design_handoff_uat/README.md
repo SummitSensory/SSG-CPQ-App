@@ -1,12 +1,14 @@
 # UAT Coordination — Summit Sensory Gym CPQ
 
 ## Purpose
+
 This folder is the coordination package for **formal User Acceptance Testing** of the Summit Sensory
 Gym CPQ application (Milestones 1–15). It is authored to be driven by a coordinator (Claude Cowork)
 who runs testers through the cases, records results, and routes verified coding defects to Claude Code
 **one bounded defect-resolution prompt at a time**.
 
 Deliverables in this folder:
+
 - `UAT_PLAN.md` — scope, roles, environment, entry/exit criteria, schedule, defect + release process.
 - `UAT_TEST_CASES.md` — all 26 scenarios as formal cases with the required fields.
 - `UAT_RESULTS.md` — execution log (actual result / pass-fail / evidence per case per cycle).
@@ -14,6 +16,7 @@ Deliverables in this folder:
 - `RELEASE_RECOMMENDATION.md` — the gate; go / no-go tied to exit criteria and open defects.
 
 ## Coordination workflow (Claude Cowork)
+
 1. Confirm the UAT environment is seeded and healthy (see UAT_PLAN entry criteria).
 2. Assign each case to a tester with the correct role. Testers execute steps, fill **Actual result**,
    **Pass/Fail**, and attach **Evidence**.

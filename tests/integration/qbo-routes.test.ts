@@ -33,7 +33,11 @@ describe('QuickBooks routes authorization', () => {
 
   it('forbids sales reps from managing the integration', async () => {
     const app = await makeApp();
-    const res = await app.inject({ method: 'GET', url: '/integrations/quickbooks/status', headers: { authorization: 'Bearer ' + (await tokenFor('SALES_REP')) } });
+    const res = await app.inject({
+      method: 'GET',
+      url: '/integrations/quickbooks/status',
+      headers: { authorization: 'Bearer ' + (await tokenFor('SALES_REP')) },
+    });
     expect(res.statusCode).toBe(403);
     await app.close();
   });
@@ -42,7 +46,8 @@ describe('QuickBooks routes authorization', () => {
     const app = await makeApp();
     // A read-only accounting-less role cannot prepare a financial transaction.
     const res = await app.inject({
-      method: 'POST', url: '/integrations/quickbooks/transactions/prepare',
+      method: 'POST',
+      url: '/integrations/quickbooks/transactions/prepare',
       headers: { authorization: 'Bearer ' + (await tokenFor('SALES_MANAGER')) },
       payload: { proposalVersionId: 'v1', type: 'DEPOSIT_INVOICE' },
     });
@@ -53,7 +58,8 @@ describe('QuickBooks routes authorization', () => {
   it('allows ACCOUNTING to reach the transact handler (past authorization)', async () => {
     const app = await makeApp();
     const res = await app.inject({
-      method: 'POST', url: '/integrations/quickbooks/transactions/prepare',
+      method: 'POST',
+      url: '/integrations/quickbooks/transactions/prepare',
       headers: { authorization: 'Bearer ' + (await tokenFor('ACCOUNTING')) },
       payload: {},
     });

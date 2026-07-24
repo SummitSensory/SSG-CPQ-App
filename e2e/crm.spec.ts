@@ -18,11 +18,19 @@ test.describe('crm opportunity lifecycle', () => {
 
     const opp = await request.post('/crm/opportunities', {
       headers: auth,
-      data: { organizationId: orgId, name: 'Sensory Gym', stage: 'QUALIFICATION', budgetAmount: '50000.00', budgetCurrency: 'USD' },
+      data: {
+        organizationId: orgId,
+        name: 'Sensory Gym',
+        stage: 'QUALIFICATION',
+        budgetAmount: '50000.00',
+        budgetCurrency: 'USD',
+      },
     });
     expect(opp.status()).toBe(201);
 
-    const list = await request.get('/crm/opportunities?stage=QUALIFICATION&sort=name&dir=asc', { headers: auth });
+    const list = await request.get('/crm/opportunities?stage=QUALIFICATION&sort=name&dir=asc', {
+      headers: auth,
+    });
     expect(list.ok()).toBeTruthy();
     expect((await list.json()).total).toBeGreaterThan(0);
   });

@@ -5,25 +5,44 @@ import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import { ValidationError } from '../lib/errors.js';
 import {
-  createProposal, updateVersionContent, createNewVersion, changeStatus, compareProposalVersions,
+  createProposal,
+  updateVersionContent,
+  createNewVersion,
+  changeStatus,
+  compareProposalVersions,
 } from '../proposals/service.js';
-import { resolveVisibleSections, reorderSections, type ProposalSection } from '../proposals/sections.js';
+import {
+  resolveVisibleSections,
+  reorderSections,
+  SECTION_TYPES,
+  type ProposalSection,
+} from '../proposals/sections.js';
 
 const SectionSchema = z.object({
-  id: z.string(), type: z.string(), title: z.string(), order: z.number().int(),
+  id: z.string(),
+  type: z.enum(SECTION_TYPES),
+  title: z.string(),
+  order: z.number().int(),
   enabled: z.boolean(),
   condition: z.object({ field: z.string(), equals: z.unknown() }).optional(),
-  body: z.string().optional(), data: z.record(z.unknown()).optional(),
+  body: z.string().optional(),
+  data: z.record(z.unknown()).optional(),
 });
 const ItemSchema = z.object({
-  ref: z.string(), productId: z.string(), name: z.string(),
+  ref: z.string(),
+  productId: z.string(),
+  name: z.string(),
   kind: z.enum(['INCLUDED', 'OPTIONAL', 'ALTERNATE']),
-  quantity: z.number().int().positive(), alternateForRef: z.string().optional(),
+  quantity: z.number().int().positive(),
+  alternateForRef: z.string().optional(),
 });
 const CreateSchema = z.object({
-  organizationId: z.string().min(1), title: z.string().min(2),
-  sections: z.array(SectionSchema), items: z.array(ItemSchema),
-  priceSnapshotId: z.string().optional(), ruleSnapshotId: z.string().optional(),
+  organizationId: z.string().min(1),
+  title: z.string().min(2),
+  sections: z.array(SectionSchema),
+  items: z.array(ItemSchema),
+  priceSnapshotId: z.string().optional(),
+  ruleSnapshotId: z.string().optional(),
   expirationDate: z.coerce.date().optional(),
 });
 
@@ -34,20 +53,30 @@ export function registerProposalRoutes(app: FastifyInstance): void {
   const release = { preHandler: requirePermission(Permission.PROPOSAL_RELEASE) };
 
   app.get('/proposals', read, async () =>
-    prisma.proposal.findMany({ orderBy: { updatedAt: 'desc' }, include: { versions: { orderBy: { version: 'desc' }, take: 1 } } }),
+    prisma.proposal.findMany({
+      orderBy: { updatedAt: 'desc' },
+      include: { versions: { orderBy: { version: 'desc' }, take: 1 } },
+    }),
   );
 
   app.post('/proposals', write, async (req, reply) => {
     const parsed = CreateSchema.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(parsed.error.message);
     const { expirationDate, ...rest } = parsed.data;
-    const result = await createProposal({ ...rest, expirationDate: expirationDate ?? null }, req.user!.sub);
+    const sections = rest.sections as unknown as ProposalSection[];
+    const result = await createProposal(
+      { ...rest, sections, expirationDate: expirationDate ?? null },
+      req.user!.sub,
+    );
     return reply.status(201).send(result);
   });
 
   app.get('/proposals/:id', read, async (req) => {
     const { id } = req.params as { id: string };
-    return prisma.proposal.findUnique({ where: { id }, include: { versions: { orderBy: { version: 'asc' } } } });
+    return prisma.proposal.findUnique({
+      where: { id },
+      include: { versions: { orderBy: { version: 'asc' } } },
+    });
   });
 
   // Preview: returns visible sections resolved for the given facts (conditional + reordered).
@@ -57,19 +86,33 @@ export function registerProposalRoutes(app: FastifyInstance): void {
     const v = await prisma.proposalVersion.findUnique({ where: { id: versionId } });
     if (!v) throw new ValidationError('Version not found');
     const sections = v.sections as unknown as ProposalSection[];
-    return { visibleSections: resolveVisibleSections(sections, facts), status: v.status, frozen: v.frozen };
+    return {
+      visibleSections: resolveVisibleSections(sections, facts),
+      status: v.status,
+      frozen: v.frozen,
+    };
   });
 
   app.patch('/proposals/versions/:versionId', write, async (req) => {
     const { versionId } = req.params as { versionId: string };
-    const body = req.body as { sections?: ProposalSection[]; items?: unknown[]; orderedSectionIds?: string[]; expirationDate?: string };
+    const body = req.body as {
+      sections?: ProposalSection[];
+      items?: unknown[];
+      orderedSectionIds?: string[];
+      expirationDate?: string;
+    };
     let sections = body.sections;
-    if (body.orderedSectionIds && sections) sections = reorderSections(sections, body.orderedSectionIds);
-    await updateVersionContent(versionId, {
-      ...(sections ? { sections } : {}),
-      ...(body.items ? { items: body.items as never } : {}),
-      ...(body.expirationDate ? { expirationDate: new Date(body.expirationDate) } : {}),
-    }, req.user!.sub);
+    if (body.orderedSectionIds && sections)
+      sections = reorderSections(sections, body.orderedSectionIds);
+    await updateVersionContent(
+      versionId,
+      {
+        ...(sections ? { sections } : {}),
+        ...(body.items ? { items: body.items as never } : {}),
+        ...(body.expirationDate ? { expirationDate: new Date(body.expirationDate) } : {}),
+      },
+      req.user!.sub,
+    );
     return { ok: true };
   });
 
@@ -90,7 +133,12 @@ export function registerProposalRoutes(app: FastifyInstance): void {
   // Status transitions, permission-gated by target.
   app.post('/proposals/versions/:versionId/submit-review', write, async (req) => {
     const { versionId } = req.params as { versionId: string };
-    await changeStatus(versionId, 'INTERNAL_REVIEW', req.user!.sub, (req.body as { note?: string })?.note);
+    await changeStatus(
+      versionId,
+      'INTERNAL_REVIEW',
+      req.user!.sub,
+      (req.body as { note?: string })?.note,
+    );
     return { status: 'INTERNAL_REVIEW' };
   });
   app.post('/proposals/versions/:versionId/return-draft', review, async (req) => {

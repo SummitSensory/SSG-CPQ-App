@@ -1,38 +1,42 @@
 # Milestone 11 — QuickBooks Online Integration (financial)
 
 ## Status
+
 Scaffold authored behind an authorization + environment gate. **No transaction
 has been created in any QuickBooks company.** Apply migration `0011_quickbooks`;
 run `pnpm check` and `pnpm test`. **Use an Intuit sandbox company first** — see
 the full sandbox test plan in `docs/QUICKBOOKS-INTEGRATION.md`. Production writes
-stay blocked until `QBO_PRODUCTION_WRITE_ENABLED=true` is set *after* the
+stay blocked until `QBO_PRODUCTION_WRITE_ENABLED=true` is set _after_ the
 production test plan is authorized.
 
 ## Deliverables
+
 - **Field-mapping documentation + source-of-truth matrix + sandbox test plan + reconciliation report doc:** `docs/QUICKBOOKS-INTEGRATION.md`.
 - **Duplicate-prevention tests:** `tests/unit/qbo-duplicate-prevention.test.ts`.
 - **Failure-recovery tests:** `tests/integration/qbo-failure-recovery.test.ts`.
 - **Supporting tests:** `qbo-mapping`, `qbo-source-of-truth`, `qbo-crypto`, `qbo-routes`.
 
 ## Files
-| Concern | File |
-|---|---|
-| Schema (connection, links, transactions) | `prisma/schema.prisma`, migration `0011_quickbooks` |
-| OAuth 2.0 + token rotation | `src/integrations/quickbooks/oauth.ts` |
-| Token encryption at rest (AES-256-GCM) | `src/integrations/quickbooks/crypto.ts` |
-| REST client (retry/backoff + `requestid` idempotency) | `src/integrations/quickbooks/client.ts` |
-| Source-of-truth registry | `src/integrations/quickbooks/source-of-truth.ts` |
-| Field mapping + money conversion | `src/integrations/quickbooks/mapping.ts` |
-| External-id links (duplicate prevention) | `src/integrations/quickbooks/links.ts` |
-| Find-or-create customer | `src/integrations/quickbooks/customers.ts` |
-| Approved product/service sync | `src/integrations/quickbooks/items.ts` |
-| Estimate / invoice body builders | `src/integrations/quickbooks/estimates.ts`, `invoices.ts` |
-| Transaction safety core (prepare/authorize/execute/retry) | `src/integrations/quickbooks/transactions.ts` |
-| Reconciliation report | `src/integrations/quickbooks/reconcile.ts` |
-| Routes | `src/routes/quickbooks.ts` |
-| Env + permissions | `src/config/env.ts`, `src/authz/permissions.ts` |
+
+| Concern                                                   | File                                                      |
+| --------------------------------------------------------- | --------------------------------------------------------- |
+| Schema (connection, links, transactions)                  | `prisma/schema.prisma`, migration `0011_quickbooks`       |
+| OAuth 2.0 + token rotation                                | `src/integrations/quickbooks/oauth.ts`                    |
+| Token encryption at rest (AES-256-GCM)                    | `src/integrations/quickbooks/crypto.ts`                   |
+| REST client (retry/backoff + `requestid` idempotency)     | `src/integrations/quickbooks/client.ts`                   |
+| Source-of-truth registry                                  | `src/integrations/quickbooks/source-of-truth.ts`          |
+| Field mapping + money conversion                          | `src/integrations/quickbooks/mapping.ts`                  |
+| External-id links (duplicate prevention)                  | `src/integrations/quickbooks/links.ts`                    |
+| Find-or-create customer                                   | `src/integrations/quickbooks/customers.ts`                |
+| Approved product/service sync                             | `src/integrations/quickbooks/items.ts`                    |
+| Estimate / invoice body builders                          | `src/integrations/quickbooks/estimates.ts`, `invoices.ts` |
+| Transaction safety core (prepare/authorize/execute/retry) | `src/integrations/quickbooks/transactions.ts`             |
+| Reconciliation report                                     | `src/integrations/quickbooks/reconcile.ts`                |
+| Routes                                                    | `src/routes/quickbooks.ts`                                |
+| Env + permissions                                         | `src/config/env.ts`, `src/authz/permissions.ts`           |
 
 ## Requirement compliance
+
 - **Find/create customers** — `findOrCreateCustomer` (link → name lookup → create); duplicate-safe.
 - **Estimates / deposit / progress / final invoices** — `QboTxnType` + `prepare/authorize/execute` per type.
 - **Sync products/services where approved** — `syncItem` refuses non-`ACTIVE` products; hash-skips unchanged.
@@ -52,6 +56,7 @@ production test plan is authorized.
 - **No production test until authorized** — `QBO_PRODUCTION_WRITE_ENABLED` gate.
 
 ## Follow-ups (need real values / access)
+
 1. Intuit developer app: client id/secret, redirect URI → set `QBO_*` env in the deployment (not source).
 2. Generate `QBO_TOKEN_ENC_KEY` (`openssl rand -hex 32`) as a deployment secret.
 3. QuickBooks income account ref(s) for item sync — confirm with Accounting.

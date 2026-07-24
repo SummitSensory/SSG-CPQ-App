@@ -64,8 +64,12 @@ describe('server-side route authorization', () => {
       expect(res.statusCode, 'admin ' + c.url).toBe(200);
     }
     const mgr = { authorization: 'Bearer ' + (await tokenFor('SALES_MANAGER')) };
-    expect((await app.inject({ method: 'GET', url: '/internal/costs', headers: mgr })).statusCode).toBe(200);
-    expect((await app.inject({ method: 'GET', url: '/internal/integrations', headers: mgr })).statusCode).toBe(403);
+    expect(
+      (await app.inject({ method: 'GET', url: '/internal/costs', headers: mgr })).statusCode,
+    ).toBe(200);
+    expect(
+      (await app.inject({ method: 'GET', url: '/internal/integrations', headers: mgr })).statusCode,
+    ).toBe(403);
     await app.close();
   });
 

@@ -12,8 +12,11 @@ const ENTITY = 'Opportunity';
 /** Stable hash of the synced fields — used to suppress echo loops. */
 export function syncHash(opp: SyncableOpportunity): string {
   const payload = JSON.stringify({
-    name: opp.name, stage: opp.stage, fundingStatus: opp.fundingStatus,
-    budget: opp.budgetAmountMinor?.toString() ?? null, currency: opp.budgetCurrency,
+    name: opp.name,
+    stage: opp.stage,
+    fundingStatus: opp.fundingStatus,
+    budget: opp.budgetAmountMinor?.toString() ?? null,
+    currency: opp.budgetCurrency,
   });
   return createHash('sha256').update(payload).digest('hex');
 }
@@ -43,7 +46,13 @@ export async function pushOpportunity(opportunityId: string): Promise<void> {
     logger.error({ err, opportunityId }, 'monday push failed');
     await markLinkState(ref, 'ERROR');
     await prisma.integrationSyncLog.create({
-      data: { direction: 'OUTBOUND', entity: ENTITY, entityId: opp.id, status: 'error', error: String(err) },
+      data: {
+        direction: 'OUTBOUND',
+        entity: ENTITY,
+        entityId: opp.id,
+        status: 'error',
+        error: String(err),
+      },
     });
   }
 }
@@ -52,7 +61,7 @@ export interface MondayChange {
   eventId: string;
   itemId: string;
   columnId?: string;
-  field?: string;           // logical field name, e.g. 'opportunity.stage'
+  field?: string; // logical field name, e.g. 'opportunity.stage'
   newStatusLabel?: string;
 }
 
@@ -60,10 +69,18 @@ export interface MondayChange {
  * Apply an inbound monday change. Idempotent (unique eventId) and conflict-safe:
  * a change to a CPQ-authoritative field is refused and logged, never applied.
  */
-export async function applyInboundChange(change: MondayChange): Promise<'applied' | 'duplicate' | 'ignored' | 'conflict'> {
+export async function applyInboundChange(
+  change: MondayChange,
+): Promise<'applied' | 'duplicate' | 'ignored' | 'conflict'> {
   try {
     await prisma.integrationSyncLog.create({
-      data: { direction: 'INBOUND', entity: ENTITY, externalId: change.itemId, eventId: change.eventId, status: 'received' },
+      data: {
+        direction: 'INBOUND',
+        entity: ENTITY,
+        externalId: change.itemId,
+        eventId: change.eventId,
+        status: 'received',
+      },
     });
   } catch {
     return 'duplicate'; // eventId already processed
@@ -77,22 +94,42 @@ export async function applyInboundChange(change: MondayChange): Promise<'applied
   if (!decision.allowed) {
     await markLinkState({ entity: link.entity, entityId: link.entityId }, 'CONFLICT');
     await prisma.integrationSyncLog.create({
-      data: { direction: 'INBOUND', entity: ENTITY, entityId: link.entityId, externalId: change.itemId, status: 'conflict', error: decision.reason },
+      data: {
+        direction: 'INBOUND',
+        entity: ENTITY,
+        entityId: link.entityId,
+        externalId: change.itemId,
+        status: 'conflict',
+        error: decision.reason,
+      },
     });
     logger.warn({ field, reason: decision.reason }, 'inbound monday change refused (conflict)');
     return 'conflict';
   }
 
   const data: Record<string, unknown> = {};
-  if (field === 'opportunity.stage' && change.newStatusLabel && STATUS_TO_STAGE[change.newStatusLabel]) {
+  if (
+    field === 'opportunity.stage' &&
+    change.newStatusLabel &&
+    STATUS_TO_STAGE[change.newStatusLabel]
+  ) {
     data.stage = STATUS_TO_STAGE[change.newStatusLabel];
   }
   if (Object.keys(data).length === 0) return 'ignored';
 
   const updated = await prisma.opportunity.update({ where: { id: link.entityId }, data });
-  await upsertLink({ entity: ENTITY, entityId: link.entityId }, change.itemId, { hash: syncHash(updated), state: 'LINKED' });
+  await upsertLink({ entity: ENTITY, entityId: link.entityId }, change.itemId, {
+    hash: syncHash(updated),
+    state: 'LINKED',
+  });
   await prisma.integrationSyncLog.create({
-    data: { direction: 'INBOUND', entity: ENTITY, entityId: link.entityId, externalId: change.itemId, status: 'ok' },
+    data: {
+      direction: 'INBOUND',
+      entity: ENTITY,
+      entityId: link.entityId,
+      externalId: change.itemId,
+      status: 'ok',
+    },
   });
   return 'applied';
 }

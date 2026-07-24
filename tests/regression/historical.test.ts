@@ -26,7 +26,9 @@ function reviveBigints(obj: unknown): unknown {
   );
 }
 
-const files = existsSync(fixturesDir) ? readdirSync(fixturesDir).filter((f) => f.endsWith('.json')) : [];
+const files = existsSync(fixturesDir)
+  ? readdirSync(fixturesDir).filter((f) => f.endsWith('.json'))
+  : [];
 
 describe('historical proposal regression', () => {
   if (files.length === 0) {
@@ -40,8 +42,10 @@ describe('historical proposal regression', () => {
       const r = computePricing(input);
       expect(r.grandTotal.toString()).toBe(fixture.expected.grandTotal);
       if (fixture.expected.tax !== undefined) expect(r.tax.toString()).toBe(fixture.expected.tax);
-      if (fixture.expected.goodsNet !== undefined) expect(r.goodsNet.toString()).toBe(fixture.expected.goodsNet);
-      if (fixture.expected.marginBps !== undefined) expect(r.marginBps).toBe(fixture.expected.marginBps);
+      if (fixture.expected.goodsNet !== undefined)
+        expect(r.goodsNet.toString()).toBe(fixture.expected.goodsNet);
+      if (fixture.expected.marginBps !== undefined)
+        expect(r.marginBps).toBe(fixture.expected.marginBps);
     });
   }
 });

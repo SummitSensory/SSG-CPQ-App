@@ -13,7 +13,8 @@ beforeAll(() => {
 
 describe('QuickBooks token encryption', () => {
   it('round-trips a token through encrypt/decrypt', async () => {
-    const { encryptToken, decryptToken } = await import('../../src/integrations/quickbooks/crypto.js');
+    const { encryptToken, decryptToken } =
+      await import('../../src/integrations/quickbooks/crypto.js');
     const secret = 'refresh-token-abc.def.ghi';
     const enc = encryptToken(secret);
     expect(enc).not.toContain(secret);
@@ -26,10 +27,11 @@ describe('QuickBooks token encryption', () => {
   });
 
   it('rejects a tampered ciphertext (auth tag)', async () => {
-    const { encryptToken, decryptToken } = await import('../../src/integrations/quickbooks/crypto.js');
+    const { encryptToken, decryptToken } =
+      await import('../../src/integrations/quickbooks/crypto.js');
     const enc = encryptToken('secret');
     const buf = Buffer.from(enc, 'base64');
-    buf[buf.length - 1] ^= 0xff; // flip a tag bit
+    buf[buf.length - 1] = (buf[buf.length - 1] ?? 0) ^ 0xff; // flip a tag bit
     expect(() => decryptToken(buf.toString('base64'))).toThrow();
   });
 });

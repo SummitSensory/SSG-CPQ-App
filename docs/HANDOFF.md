@@ -24,23 +24,23 @@ recomputes the hash from the referenced version + snapshot and reports any drift
 
 ## 2. What the order carries
 
-| Requirement | Where |
-|---|---|
-| Accepted proposal lock | `AcceptedOrder` (frozen snapshot + `locked`, `integrityHash`) |
-| Customer approval record | `CustomerApproval` (method, approver, PO#, signed-at, document ref) |
-| Deposit requirement | `AcceptedOrder.depositRequired` + `depositDueMinor` (from frozen schedule) |
-| QuickBooks action | Seeded task "Create QuickBooks deposit invoice" + `qboEstimateTxnId` link |
-| monday.com project create/update | Seeded task + `mondayProjectId` link |
-| Procurement list | `ProcurementLine[]` (from accepted INCLUDED items) |
-| Production / custom-product / shipping / installation / training requirements | `HandoffRequirement[]` by `RequirementCategory` |
-| Customer responsibilities | `HandoffRequirement(category=CUSTOMER_RESPONSIBILITY)` |
-| Facility access information | `HandoffRequirement(category=FACILITY_ACCESS)` |
-| Required documents | `HandoffRequirement(category=REQUIRED_DOCUMENT)` |
-| Internal task assignment | `HandoffTask` (assigneeId / assigneeRole) |
-| Target dates | `targetDate` (requirements/procurement), `dueDate` (tasks) |
-| Exception flags | `isException` + `exceptionReason` on requirement / task / procurement |
-| Complete audit history | `OrderEvent[]` (order-scoped timeline) + global `AuditLog` |
-| Handoff-status reporting | `GET /orders/:id/status` |
+| Requirement                                                                   | Where                                                                      |
+| ----------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Accepted proposal lock                                                        | `AcceptedOrder` (frozen snapshot + `locked`, `integrityHash`)              |
+| Customer approval record                                                      | `CustomerApproval` (method, approver, PO#, signed-at, document ref)        |
+| Deposit requirement                                                           | `AcceptedOrder.depositRequired` + `depositDueMinor` (from frozen schedule) |
+| QuickBooks action                                                             | Seeded task "Create QuickBooks deposit invoice" + `qboEstimateTxnId` link  |
+| monday.com project create/update                                              | Seeded task + `mondayProjectId` link                                       |
+| Procurement list                                                              | `ProcurementLine[]` (from accepted INCLUDED items)                         |
+| Production / custom-product / shipping / installation / training requirements | `HandoffRequirement[]` by `RequirementCategory`                            |
+| Customer responsibilities                                                     | `HandoffRequirement(category=CUSTOMER_RESPONSIBILITY)`                     |
+| Facility access information                                                   | `HandoffRequirement(category=FACILITY_ACCESS)`                             |
+| Required documents                                                            | `HandoffRequirement(category=REQUIRED_DOCUMENT)`                           |
+| Internal task assignment                                                      | `HandoffTask` (assigneeId / assigneeRole)                                  |
+| Target dates                                                                  | `targetDate` (requirements/procurement), `dueDate` (tasks)                 |
+| Exception flags                                                               | `isException` + `exceptionReason` on requirement / task / procurement      |
+| Complete audit history                                                        | `OrderEvent[]` (order-scoped timeline) + global `AuditLog`                 |
+| Handoff-status reporting                                                      | `GET /orders/:id/status`                                                   |
 
 Operational sub-records are **mutable** (that is the point of the handoff); the
 **financial snapshot is not** — there is no API that edits the order total,
@@ -64,12 +64,12 @@ links, the open **exception** list, and the live **integrity** check. Overall
 
 ## 5. Endpoints
 
-| Method | Path | Permission |
-|---|---|---|
-| POST | `/orders/from-version/:versionId` | `orders:manage` |
-| GET | `/orders`, `/orders/:id` | `orders:read` |
-| GET | `/orders/:id/status`, `/audit`, `/verify` | `orders:read` |
+| Method     | Path                                                   | Permission       |
+| ---------- | ------------------------------------------------------ | ---------------- |
+| POST       | `/orders/from-version/:versionId`                      | `orders:manage`  |
+| GET        | `/orders`, `/orders/:id`                               | `orders:read`    |
+| GET        | `/orders/:id/status`, `/audit`, `/verify`              | `orders:read`    |
 | POST/PATCH | `/orders/:id/requirements`, `/orders/requirements/:id` | `handoff:manage` |
-| POST/PATCH | `/orders/:id/tasks`, `/orders/tasks/:id` | `handoff:manage` |
-| POST | `/orders/:id/procurement` | `handoff:manage` |
-| POST | `/orders/:id/integrations` | `orders:manage` |
+| POST/PATCH | `/orders/:id/tasks`, `/orders/tasks/:id`               | `handoff:manage` |
+| POST       | `/orders/:id/procurement`                              | `handoff:manage` |
+| POST       | `/orders/:id/integrations`                             | `orders:manage`  |

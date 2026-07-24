@@ -4,26 +4,40 @@ import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import { ValidationError } from '../lib/errors.js';
 import { RuleDefinitionInput } from '../rules/validation.js';
-import { createRule, addRuleVersion, activateRule, retireRule, evaluate } from '../rules/service.js';
+import {
+  createRule,
+  addRuleVersion,
+  activateRule,
+  retireRule,
+  evaluate,
+} from '../rules/service.js';
 import { z } from 'zod';
 
 const ConfigSchema = z.object({
-  lines: z.array(z.object({
-    productId: z.string().min(1),
-    categoryId: z.string().optional(),
-    kind: z.string().optional(),
-    quantity: z.number().int().positive(),
-  })).min(1),
-  context: z.object({
-    room: z.object({
-      lengthIn: z.number().int().optional(),
-      widthIn: z.number().int().optional(),
-      ceilingHeightIn: z.number().int().optional(),
-      clearanceIn: z.number().int().optional(),
-    }).optional(),
-    facts: z.record(z.unknown()).optional(),
-    provided: z.array(z.string()).optional(),
-  }).optional(),
+  lines: z
+    .array(
+      z.object({
+        productId: z.string().min(1),
+        categoryId: z.string().optional(),
+        kind: z.string().optional(),
+        quantity: z.number().int().positive(),
+      }),
+    )
+    .min(1),
+  context: z
+    .object({
+      room: z
+        .object({
+          lengthIn: z.number().int().optional(),
+          widthIn: z.number().int().optional(),
+          ceilingHeightIn: z.number().int().optional(),
+          clearanceIn: z.number().int().optional(),
+        })
+        .optional(),
+      facts: z.record(z.unknown()).optional(),
+      provided: z.array(z.string()).optional(),
+    })
+    .optional(),
   persist: z.boolean().default(false),
   subjectRef: z.string().optional(),
 });
@@ -42,7 +56,10 @@ export function registerRuleRoutes(app: FastifyInstance): void {
 
   // ----- Admin: rule management (approved changes) -----
   app.get('/rules', manage, async () =>
-    prisma.rule.findMany({ orderBy: { updatedAt: 'desc' }, include: { versions: { orderBy: { version: 'desc' }, take: 1 } } }),
+    prisma.rule.findMany({
+      orderBy: { updatedAt: 'desc' },
+      include: { versions: { orderBy: { version: 'desc' }, take: 1 } },
+    }),
   );
 
   app.post('/rules', manage, async (req, reply) => {
@@ -56,7 +73,12 @@ export function registerRuleRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const parsed = RuleDefinitionInput.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(parsed.error.message);
-    const version = await addRuleVersion(id, parsed.data, req.user!.sub, (req.body as { note?: string }).note);
+    const version = await addRuleVersion(
+      id,
+      parsed.data,
+      req.user!.sub,
+      (req.body as { note?: string }).note,
+    );
     return { id, version };
   });
 
@@ -76,6 +98,9 @@ export function registerRuleRoutes(app: FastifyInstance): void {
   // Historical evaluation snapshots are read-only (protect historical configs).
   app.get('/rules/snapshots/:ref', read, async (req) => {
     const { ref } = req.params as { ref: string };
-    return prisma.ruleEvaluationSnapshot.findMany({ where: { subjectRef: ref }, orderBy: { createdAt: 'desc' } });
+    return prisma.ruleEvaluationSnapshot.findMany({
+      where: { subjectRef: ref },
+      orderBy: { createdAt: 'desc' },
+    });
   });
 }

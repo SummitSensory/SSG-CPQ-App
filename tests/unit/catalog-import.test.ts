@@ -21,6 +21,6 @@ describe('import validation & duplicate prevention', () => {
   it('reports required-field errors with row numbers', () => {
     const res = validateImportBatch([{ name: 'No sku or category' }]);
     expect(res.valid).toBe(false);
-    expect(res.issues[0].row).toBe(1);
+    expect(res.issues[0]!.row).toBe(1);
   });
 });

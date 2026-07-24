@@ -22,7 +22,8 @@ interface TokenResponse {
 
 /** Build the consent URL the user is redirected to. `state` is a CSRF nonce. */
 export function authorizeUrl(state: string): string {
-  if (!env.QBO_CLIENT_ID || !env.QBO_REDIRECT_URI) throw new Error('QuickBooks OAuth not configured');
+  if (!env.QBO_CLIENT_ID || !env.QBO_REDIRECT_URI)
+    throw new Error('QuickBooks OAuth not configured');
   const p = new URLSearchParams({
     client_id: env.QBO_CLIENT_ID,
     response_type: 'code',
@@ -37,7 +38,10 @@ function basicAuth(): string {
   return Buffer.from(`${env.QBO_CLIENT_ID}:${env.QBO_CLIENT_SECRET}`).toString('base64');
 }
 
-async function tokenRequest(body: URLSearchParams, fetchImpl: typeof fetch): Promise<TokenResponse> {
+async function tokenRequest(
+  body: URLSearchParams,
+  fetchImpl: typeof fetch,
+): Promise<TokenResponse> {
   const res = await fetchImpl(TOKEN_URL, {
     method: 'POST',
     headers: {
@@ -76,7 +80,11 @@ export async function exchangeCode(
   fetchImpl: typeof fetch = fetch,
 ): Promise<void> {
   const t = await tokenRequest(
-    new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: env.QBO_REDIRECT_URI! }),
+    new URLSearchParams({
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: env.QBO_REDIRECT_URI!,
+    }),
     fetchImpl,
   );
   await persist(realmId, connectedById, t);
@@ -87,16 +95,25 @@ export async function exchangeCode(
  * Return a valid access token for the realm, refreshing (and rotating the
  * refresh token) if it is expired or within 60s of expiring.
  */
-export async function getAccessToken(realmId: string, fetchImpl: typeof fetch = fetch): Promise<string> {
+export async function getAccessToken(
+  realmId: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<string> {
   const environment = qboEnvironment();
-  const conn = await prisma.qboConnection.findUnique({ where: { realmId_environment: { realmId, environment } } });
-  if (!conn || !conn.isActive) throw new Error(`No active QuickBooks connection for realm ${realmId}`);
+  const conn = await prisma.qboConnection.findUnique({
+    where: { realmId_environment: { realmId, environment } },
+  });
+  if (!conn || !conn.isActive)
+    throw new Error(`No active QuickBooks connection for realm ${realmId}`);
 
   if (conn.accessTokenExpiresAt.getTime() - Date.now() > 60_000) {
     return decryptToken(conn.accessTokenEnc);
   }
   const t = await tokenRequest(
-    new URLSearchParams({ grant_type: 'refresh_token', refresh_token: decryptToken(conn.refreshTokenEnc) }),
+    new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: decryptToken(conn.refreshTokenEnc),
+    }),
     fetchImpl,
   );
   await persist(realmId, conn.connectedById, t);
@@ -106,7 +123,9 @@ export async function getAccessToken(realmId: string, fetchImpl: typeof fetch = 
 /** Disconnect: revoke the refresh token at Intuit and deactivate the connection. */
 export async function disconnect(realmId: string, fetchImpl: typeof fetch = fetch): Promise<void> {
   const environment = qboEnvironment();
-  const conn = await prisma.qboConnection.findUnique({ where: { realmId_environment: { realmId, environment } } });
+  const conn = await prisma.qboConnection.findUnique({
+    where: { realmId_environment: { realmId, environment } },
+  });
   if (!conn) return;
   try {
     await fetchImpl(REVOKE_URL, {
