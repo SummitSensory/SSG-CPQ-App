@@ -359,13 +359,13 @@ export async function importCrmFromMonday(options: ImportOptions = {}): Promise<
 
   logger.info({ dryRun, limit, organizationsOnly }, 'monday CRM import starting');
 
-  let orgItems = await fetchAllItems(ORGANIZATIONS_BOARD_ID);
-  if (limit) orgItems = orgItems.slice(0, limit);
+  // The limit is pushed down into the fetch: paging the whole 2,860-item board
+  // and slicing afterwards overruns the serverless function timeout.
+  const orgItems = await fetchAllItems(ORGANIZATIONS_BOARD_ID, 100, limit);
   const orgIdByMondayId = await importOrganizations(orgItems, counts, warnings, dryRun);
 
   if (!organizationsOnly) {
-    let contactItems = await fetchAllItems(CONTACTS_BOARD_ID);
-    if (limit) contactItems = contactItems.slice(0, limit);
+    const contactItems = await fetchAllItems(CONTACTS_BOARD_ID, 100, limit);
     await importContacts(contactItems, orgIdByMondayId, counts, warnings, dryRun);
   }
 

@@ -129,9 +129,16 @@ export interface MondayItem {
  * Every item on a board, following the cursor. monday caps page size at 500;
  * the client already backs off on rate limits and complexity errors.
  */
-export async function fetchAllItems(boardId: string, pageSize = 100): Promise<MondayItem[]> {
+export async function fetchAllItems(
+  boardId: string,
+  pageSize = 100,
+  /** Stop paging once this many items are in hand — keeps a limited run inside
+   *  the serverless function timeout instead of downloading the whole board. */
+  max?: number,
+): Promise<MondayItem[]> {
   const out: MondayItem[] = [];
   let cursor: string | null = null;
+  const pageLimit = max ? Math.min(pageSize, max) : pageSize;
 
   do {
     const data: {
@@ -154,7 +161,7 @@ export async function fetchAllItems(boardId: string, pageSize = 100): Promise<Mo
            }
          }
        }`,
-      { board: [boardId], limit: pageSize, cursor },
+      { board: [boardId], limit: pageLimit, cursor },
     );
 
     const page = data.boards[0]?.items_page;
@@ -169,6 +176,7 @@ export async function fetchAllItems(boardId: string, pageSize = 100): Promise<Mo
       }
       out.push({ id: item.id, name: item.name, text, raw });
     }
+    if (max && out.length >= max) return out.slice(0, max);
     cursor = page.cursor;
   } while (cursor);
 
