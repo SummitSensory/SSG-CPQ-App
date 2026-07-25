@@ -11,7 +11,7 @@ import {
   importDealsMatching,
   importDealById,
 } from '../integrations/monday/crmImport.js';
-import { searchItemsByName } from '../integrations/monday/discovery.js';
+import { searchItemsByName, fetchItemById } from '../integrations/monday/discovery.js';
 import { DEALS_BOARD_ID, DEAL_COL, clean, firstLabel } from '../integrations/monday/crmMapping.js';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
@@ -169,6 +169,24 @@ export function registerIntegrationRoutes(app: FastifyInstance): void {
     } catch (err) {
       logger.error({ err, itemId }, 'monday deal import failed');
       return reply.status(502).send({ error: 'MONDAY_IMPORT_FAILED', detail: String(err) });
+    }
+  });
+
+  // Every populated column on one item — for tracking down where a value lives.
+  app.get('/integrations/monday/item/:itemId', manage, async (req, reply) => {
+    if (!env.MONDAY_API_TOKEN) return reply.status(400).send({ error: 'MONDAY_TOKEN_MISSING' });
+    const { itemId } = req.params as { itemId: string };
+    const { all } = req.query as { all?: string };
+    try {
+      const item = await fetchItemById(itemId);
+      if (!item) return reply.status(404).send({ error: 'NOT_FOUND' });
+      const cols = Object.keys(item.text)
+        .map((id) => ({ id, text: item.text[id] || null, value: item.raw[id] }))
+        .filter((c) => (all === 'true' ? true : c.text || c.value));
+      return { id: item.id, name: item.name, columns: cols };
+    } catch (err) {
+      logger.error({ err, itemId }, 'monday item fetch failed');
+      return reply.status(502).send({ error: 'MONDAY_QUERY_FAILED', detail: String(err) });
     }
   });
 

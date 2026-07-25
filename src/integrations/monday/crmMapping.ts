@@ -56,8 +56,8 @@ export const DEAL_COL = {
   zip: 'text__1',
   /** status — country */
   country: 'status47__1',
-  /** mirror — Project ID */
-  projectId: 'mirror1__1',
+  /** item id column — Project ID */
+  projectId: 'pulse_id_mm5kc9f8',
   /** status — Deal Phase */
   stage: 'deal_stage',
   /** numbers — Deal Value $ */
@@ -326,7 +326,7 @@ export function splitName(fullName: string, firstNameCol: string): { first: stri
   return { first: parts[0]!, last: parts.slice(1).join(' ') };
 }
 
-/** The Project ID column is a mirror; its text is the id. */
+/** Project ID column (pulse_id_mm5kc9f8). */
 export function parseProjectId(text: string | undefined | null): string | null {
   return clean(text);
 }

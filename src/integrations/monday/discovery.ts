@@ -177,7 +177,7 @@ export async function searchItemsByName(
   return (data.boards[0]?.items_page.items ?? []).map(toItem);
 }
 
-/** A single item by id. */
+/** A single item by id, with the raw column payload kept for inspection. */
 export async function fetchItemById(itemId: string): Promise<MondayItem | null> {
   const data = await mondayQuery<{ items: Array<Parameters<typeof toItem>[0]> }>(
     `query ($ids: [ID!]) { items (ids: $ids) { ${ITEM_FIELDS} } }`,
