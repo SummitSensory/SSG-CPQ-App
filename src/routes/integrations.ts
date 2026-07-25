@@ -12,7 +12,7 @@ import {
   importDealById,
 } from '../integrations/monday/crmImport.js';
 import { searchItemsByName } from '../integrations/monday/discovery.js';
-import { DEALS_BOARD_ID, DEAL_COL, clean } from '../integrations/monday/crmMapping.js';
+import { DEALS_BOARD_ID, DEAL_COL, clean, firstLabel } from '../integrations/monday/crmMapping.js';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 
@@ -132,7 +132,7 @@ export function registerIntegrationRoutes(app: FastifyInstance): void {
       return items.map((it) => ({
         itemId: it.id,
         name: it.name,
-        industry: clean(it.text[DEAL_COL.industry]),
+        industry: firstLabel(it.text[DEAL_COL.industry]),
         contact: clean(it.text[DEAL_COL.contactName]),
         email: clean(it.text[DEAL_COL.contactEmail]),
         city: clean(it.text[DEAL_COL.cityText]) ?? clean(it.text[DEAL_COL.city]),

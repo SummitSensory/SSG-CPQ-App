@@ -148,15 +148,28 @@ export const INDUSTRY_TO_CUSTOMER_TYPE: Record<string, CustomerType> = {
   '-': 'OTHER',
 };
 
+/**
+ * Mirror columns return every mirrored value comma-joined, so "ABA Practice"
+ * can arrive as "ABA Practice, ABA Practice". Take the first distinct label.
+ */
+export function firstLabel(label: string | undefined | null): string | null {
+  const parts = (label ?? '')
+    .split(',')
+    .map((p) => p.trim())
+    .filter((p) => p && p !== '-');
+  return parts[0] ?? null;
+}
+
 export function toCustomerType(label: string | undefined | null): CustomerType {
-  if (!label) return 'OTHER';
-  return INDUSTRY_TO_CUSTOMER_TYPE[label.trim()] ?? 'OTHER';
+  const first = firstLabel(label);
+  if (!first) return 'OTHER';
+  return INDUSTRY_TO_CUSTOMER_TYPE[first] ?? 'OTHER';
 }
 
 /** True when a label is present but not in the table — worth reporting. */
 export function isUnmappedIndustry(label: string | undefined | null): boolean {
-  const t = (label ?? '').trim();
-  return !!t && t !== '-' && !(t in INDUSTRY_TO_CUSTOMER_TYPE);
+  const t = firstLabel(label);
+  return !!t && !(t in INDUSTRY_TO_CUSTOMER_TYPE);
 }
 
 /**

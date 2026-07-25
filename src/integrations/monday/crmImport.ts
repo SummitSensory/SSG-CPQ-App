@@ -10,6 +10,7 @@ import {
   ORG_COL,
   CONTACT_COL,
   clean,
+  firstLabel,
   toCustomerType,
   isUnmappedIndustry,
   toStage,
@@ -217,7 +218,7 @@ async function importDeals(
       continue;
     }
 
-    const industry = clean(item.text[DEAL_COL.industry]);
+    const industry = firstLabel(item.text[DEAL_COL.industry]);
     if (isUnmappedIndustry(industry)) unmapped.add(industry!);
     const customerType = toCustomerType(industry);
     const stage = toStage(item.text[DEAL_COL.stage]);
