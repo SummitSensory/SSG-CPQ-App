@@ -6,6 +6,7 @@ import { verifyMondayWebhook } from '../integrations/monday/webhook.js';
 import { applyInboundChange, retrySync } from '../integrations/monday/sync.js';
 import { reconcile } from '../integrations/monday/reconcile.js';
 import { listBoards, describeBoard } from '../integrations/monday/discovery.js';
+import { importCrmFromMonday } from '../integrations/monday/crmImport.js';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 
@@ -81,6 +82,26 @@ export function registerIntegrationRoutes(app: FastifyInstance): void {
     const result = await retrySync(logId);
     if (result === 'notfound') return reply.status(404).send({ error: 'NOT_FOUND' });
     return { result };
+  });
+
+  // ----- CRM import (monday -> CPQ, inbound only) -----
+  // Defaults to a dry run: pass ?apply=true to actually write. Idempotent —
+  // re-running updates linked records rather than duplicating them.
+
+  app.post('/integrations/monday/import/crm', manage, async (req, reply) => {
+    if (!env.MONDAY_API_TOKEN) return reply.status(400).send({ error: 'MONDAY_TOKEN_MISSING' });
+    const q = req.query as { apply?: string; limit?: string; organizationsOnly?: string };
+    const limit = q.limit ? Math.max(1, Number(q.limit) || 0) : undefined;
+    try {
+      return await importCrmFromMonday({
+        dryRun: q.apply !== 'true',
+        ...(limit ? { limit } : {}),
+        organizationsOnly: q.organizationsOnly === 'true',
+      });
+    } catch (err) {
+      logger.error({ err }, 'monday CRM import failed');
+      return reply.status(502).send({ error: 'MONDAY_IMPORT_FAILED', detail: String(err) });
+    }
   });
 
   // Inbound webhook. Public endpoint, but authenticated by monday's signed JWT.
