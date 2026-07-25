@@ -705,6 +705,19 @@
     var orgName = '', orgShipTo = '';
     try { var rd = await authed('/crm/organizations/' + proposal.organizationId); if (rd.ok) { var org = await rd.json(); orgName = org.name || ''; orgShipTo = formatOrgShipTo(org); } } catch (e) {}
     if (!orgName) { try { var ro = await authed('/crm/organizations?pageSize=100'); if (ro.ok) { var found = ((await ro.json()).items || []).filter(function (o) { return o.id === proposal.organizationId; })[0]; orgName = found ? found.name : ''; } } catch (e2) {} }
+    // Project ID rides along on the imported opportunity's notes.
+    var importedProjectId = '';
+    try {
+      var rp = await authed('/crm/opportunities?pageSize=100' + (orgName ? '&q=' + encodeURIComponent(orgName) : ''));
+      if (rp.ok) {
+        var opps = ((await rp.json()).items || []).filter(function (o) { return o.organizationId === proposal.organizationId; });
+        for (var oi = 0; oi < opps.length && !importedProjectId; oi++) {
+          var mm = /Project ID:\s*(\S+)/.exec(opps[oi].notes || '');
+          if (mm) importedProjectId = mm[1];
+        }
+      }
+    } catch (e) {}
+
     var meta = {};
     var secs = version.sections || [];
     var metaSec = Array.isArray(secs) ? secs.filter(function (s) { return s && s.id === 'meta'; })[0] : null;
@@ -716,7 +729,7 @@
     pb = {
       proposalId: proposal.id, versionId: version.id, user: user, orgName: orgName,
       title: proposal.title || '', number: proposal.number || '',
-      meta: { shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', showTitle: meta.showTitle !== false, projectId: meta.projectId || '', showProjectId: meta.showProjectId !== false, proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7) },
+      meta: { shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7) },
       lines: lines,
     };
     renderBuilder();
