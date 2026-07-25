@@ -90,13 +90,19 @@ export function registerIntegrationRoutes(app: FastifyInstance): void {
 
   app.post('/integrations/monday/import/crm', manage, async (req, reply) => {
     if (!env.MONDAY_API_TOKEN) return reply.status(400).send({ error: 'MONDAY_TOKEN_MISSING' });
-    const q = req.query as { apply?: string; limit?: string; organizationsOnly?: string };
+    const q = req.query as {
+      apply?: string;
+      limit?: string;
+      organizationsOnly?: string;
+      source?: string;
+    };
     const limit = q.limit ? Math.max(1, Number(q.limit) || 0) : undefined;
     try {
       return await importCrmFromMonday({
         dryRun: q.apply !== 'true',
         ...(limit ? { limit } : {}),
         organizationsOnly: q.organizationsOnly === 'true',
+        source: q.source === 'orgs' ? 'orgs' : 'deals',
       });
     } catch (err) {
       logger.error({ err }, 'monday CRM import failed');

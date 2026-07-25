@@ -1,34 +1,45 @@
 /**
  * Mapping from the monday CRM boards to CPQ entities.
  *
- * The Organizations column ids below are the ones listed in
- * "Monday Column Mapping.xlsx" — that sheet is the source of truth for which
- * columns get pulled. Column ids are per-board and opaque: renaming a column
- * in monday keeps the id, but DELETING and re-adding a column changes it and
- * this file must be updated.
+ * Column ids are per-board and opaque, so these were read off the live boards
+ * via /integrations/monday/boards/:id rather than assumed. Renaming a column
+ * in monday keeps its id; DELETING and re-adding one changes it and this file
+ * must be updated.
  *
- *   Organizations  board 6527740311  (~2,860 items)
- *   Contacts       board 6527740281  (~2,800 items)
+ *   Deal Tracking  board 6527740233  (~2,334 items)  <- the mapping sheet
+ *   Organizations  board 6527740311  (~2,862 items)
+ *   Contacts       board 6527740281  (~2,798 items)
+ *
+ * "Monday Column Mapping.xlsx" describes the DEAL TRACKING board: Industry,
+ * Full Name / Email / Direct Phone, the split address columns, Country and
+ * Project ID all live there, on the deal row. That board is therefore the
+ * primary import source — each row carries its own customer, address and
+ * primary contact, so nothing depends on the Contacts board's account links.
  */
 
-import type { CustomerType } from '@prisma/client';
+import type { CustomerType, OpportunityStage } from '@prisma/client';
 
+export const DEALS_BOARD_ID = '6527740233';
 export const ORGANIZATIONS_BOARD_ID = '6527740311';
 export const CONTACTS_BOARD_ID = '6527740281';
 
-/** Columns pulled from the Organizations board (per Monday Column Mapping.xlsx). */
-export const ORG_COL = {
-  /** lookup — see INDUSTRY_TO_CUSTOMER_TYPE */
+/** Deal Tracking columns — the ids listed in Monday Column Mapping.xlsx. */
+export const DEAL_COL = {
+  /** mirror (from Organizations) — see INDUSTRY_TO_CUSTOMER_TYPE */
   industry: 'lookup3__1',
-  /** text — full name of the primary contact, mirrored onto the org row */
-  primaryContactName: 'text9__1',
-  /** email — primary contact email address */
-  primaryContactEmail: 'email_1__1',
-  /** phone — primary contact direct phone number */
-  primaryContactPhone: 'phone__1',
-  /** location — full location address (Google Places blob); fallback only */
+  /** status — Type of Customer, a cross-check on industry */
+  customerTypeLabel: 'status5__1',
+  /** text — primary contact full name */
+  contactName: 'text9__1',
+  /** text — primary contact job title */
+  contactTitle: 'text_mkpnvbkn',
+  /** email */
+  contactEmail: 'email_1__1',
+  /** phone — direct phone number */
+  contactPhone: 'phone__1',
+  /** location — full location address (Places blob); fallback only */
   location: 'location__1',
-  /** formula — street address line 1 */
+  /** formula — street address */
   street1: 'formula_mkpsy1b6',
   /** text — unit / suite */
   unit: 'text_mm1zssfw',
@@ -42,18 +53,39 @@ export const ORG_COL = {
   country: 'status47__1',
   /** mirror — Project ID */
   projectId: 'mirror1__1',
+  /** status — Deal Phase */
+  stage: 'deal_stage',
+  /** numbers — Deal Value $ */
+  value: 'deal_value',
+  /** numbers — Grand Total */
+  grandTotal: 'numbers1__1',
+  /** text — website address */
+  website: 'text_mkvy62bg',
+  /** long_text — Customer - Project Summary */
+  summary: 'long_text__1',
+  /** board_relation -> Contacts */
+  orgContacts: 'deal_contact',
+} as const;
 
-  // Not on the mapping sheet, but present on the board and useful when set.
-  // Missing columns simply read as undefined and are ignored.
+/** Organizations board columns (used by the legacy ?source=orgs path). */
+export const ORG_COL = {
   /** link — company website */
   website: 'company_domain',
+  /** status */
+  industry: 'industry__1',
   /** long_text */
   description: 'company_description',
+  /** location */
+  location: 'location__1',
+  /** text */
+  zip: 'text__1',
+  /** text — free-text address, usually empty */
+  address: 'address_mkn89b4p',
   /** board_relation -> Contacts */
   contacts: 'account_contact',
 } as const;
 
-/** Columns on the Contacts board (used only when the Contacts pass runs). */
+/** Contacts board columns. */
 export const CONTACT_COL = {
   /** text — given name; the item name holds the full name */
   firstName: 'text_mkpnm9ns',
@@ -75,7 +107,7 @@ export const CONTACT_COL = {
  * The Industry column has accumulated 26 labels over time, including
  * duplicates and typos ("Hospital"/"Hosptial", "Non-Profit"/"Non Profit").
  * All of them are mapped; anything unrecognized falls back to OTHER rather
- * than failing the import.
+ * than failing the import, and is reported in the dry run's warnings.
  */
 export const INDUSTRY_TO_CUSTOMER_TYPE: Record<string, CustomerType> = {
   'ABA Practice': 'PRIVATE_PRACTICE',
@@ -86,11 +118,15 @@ export const INDUSTRY_TO_CUSTOMER_TYPE: Record<string, CustomerType> = {
   'Rehab Facility': 'PRIVATE_PRACTICE',
   Hospital: 'HOSPITAL',
   Hosptial: 'HOSPITAL',
+  'Healthcare System': 'HEALTHCARE_SYSTEM',
   'K-12 School': 'SCHOOL',
+  School: 'SCHOOL',
   Childcare: 'SCHOOL',
   'University/Colllege': 'UNIVERSITY',
   'University / College': 'UNIVERSITY',
+  University: 'UNIVERSITY',
   'City / County': 'GOVERNMENT',
+  Government: 'GOVERNMENT',
   'Non-Profit': 'NONPROFIT',
   'Non Profit': 'NONPROFIT',
   'Community Center': 'NONPROFIT',
@@ -108,6 +144,29 @@ export const INDUSTRY_TO_CUSTOMER_TYPE: Record<string, CustomerType> = {
 export function toCustomerType(label: string | undefined | null): CustomerType {
   if (!label) return 'OTHER';
   return INDUSTRY_TO_CUSTOMER_TYPE[label.trim()] ?? 'OTHER';
+}
+
+/** True when a label is present but not in the table — worth reporting. */
+export function isUnmappedIndustry(label: string | undefined | null): boolean {
+  const t = (label ?? '').trim();
+  return !!t && t !== '-' && !(t in INDUSTRY_TO_CUSTOMER_TYPE);
+}
+
+/**
+ * Deal Phase is a free-form status column that changes as the sales process
+ * changes, so it is matched on keywords rather than an exact label list.
+ */
+export function toStage(label: string | undefined | null): OpportunityStage {
+  const t = (label ?? '').trim().toLowerCase();
+  if (!t) return 'PROSPECT';
+  if (t.includes('won') || t.includes('closed won') || t.includes('order')) return 'CLOSED_WON';
+  if (t.includes('lost') || t.includes('dead') || t.includes('no ')) return 'CLOSED_LOST';
+  if (t.includes('negotiat')) return 'NEGOTIATION';
+  if (t.includes('proposal') || t.includes('quote') || t.includes('estimate')) return 'PROPOSAL';
+  if (t.includes('discovery') || t.includes('consult') || t.includes('needs') || t.includes('design'))
+    return 'NEEDS_ANALYSIS';
+  if (t.includes('qualif') || t.includes('contact') || t.includes('follow')) return 'QUALIFICATION';
+  return 'PROSPECT';
 }
 
 /** Contact Type labels that mean "this person decides". */
@@ -152,7 +211,6 @@ export function parseLocation(rawValue: string | null | undefined): ParsedLocati
   const line1 = street ? [number, street].filter(Boolean).join(' ') : null;
   const city = v.city?.long_name ?? null;
 
-  // "…, Venus, TX, USA" -> region is the second-from-last comma part.
   const parts = v.address.split(',').map((p) => p.trim());
   const region = parts.length >= 3 ? (parts[parts.length - 2] ?? null) : null;
 
@@ -166,13 +224,13 @@ export function parseLocation(rawValue: string | null | undefined): ParsedLocati
   };
 }
 
-const clean = (v: string | undefined | null): string | null => {
+export const clean = (v: string | undefined | null): string | null => {
   const t = (v ?? '').trim();
   return t && t !== '-' ? t : null;
 };
 
 /**
- * Address for an organization. The mapping sheet gives street / unit / city /
+ * Address for a deal row. The mapping sheet gives street / unit / city /
  * state / zip / country as their own columns, so those win; the location blob
  * is only a fallback for rows where the discrete columns are empty.
  */
@@ -180,12 +238,12 @@ export function buildAddress(
   text: Record<string, string | undefined>,
   rawLocation: string | null | undefined,
 ): ParsedLocation | null {
-  const line1 = clean(text[ORG_COL.street1]);
-  const line2 = clean(text[ORG_COL.unit]);
-  const city = clean(text[ORG_COL.city]);
-  const region = clean(text[ORG_COL.state]);
-  const postalCode = clean(text[ORG_COL.zip]);
-  const country = clean(text[ORG_COL.country]) ?? 'US';
+  const line1 = clean(text[DEAL_COL.street1]);
+  const line2 = clean(text[DEAL_COL.unit]);
+  const city = clean(text[DEAL_COL.city]);
+  const region = clean(text[DEAL_COL.state]);
+  const postalCode = clean(text[DEAL_COL.zip]);
+  const country = clean(text[DEAL_COL.country]) ?? 'US';
 
   if (line1 || city || postalCode) {
     return { line1, line2, city, region, postalCode, country };
@@ -225,6 +283,15 @@ export function parseLinkedIds(rawValue: string | null | undefined): string[] {
   } catch {
     return [];
   }
+}
+
+/** "$12,345.67" / "12345" -> 1234567 minor units. Null when not a number. */
+export function parseMoneyMinor(text: string | undefined | null): bigint | null {
+  const t = (text ?? '').replace(/[$,\s]/g, '').trim();
+  if (!t) return null;
+  const n = Number(t);
+  if (!Number.isFinite(n) || n === 0) return null;
+  return BigInt(Math.round(n * 100));
 }
 
 /**

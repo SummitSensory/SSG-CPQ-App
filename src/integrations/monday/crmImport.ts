@@ -3,54 +3,63 @@ import { logger } from '../../lib/logger.js';
 import { normalizeOrgName } from '../../crm/duplicates.js';
 import { fetchAllItems, type MondayItem } from './discovery.js';
 import {
+  DEALS_BOARD_ID,
   ORGANIZATIONS_BOARD_ID,
   CONTACTS_BOARD_ID,
+  DEAL_COL,
   ORG_COL,
   CONTACT_COL,
+  clean,
   toCustomerType,
+  isUnmappedIndustry,
+  toStage,
   isDecisionMaker,
   buildAddress,
+  parseLocation,
   parseEmail,
   parseLinkedIds,
+  parseMoneyMinor,
   parseProjectId,
   splitName,
 } from './crmMapping.js';
 
 /**
- * Import organizations and contacts FROM monday INTO the CPQ.
+ * Import CRM data FROM monday INTO the CPQ.
  *
  * monday is the system of record for who the customer is; the CPQ is the
- * system of record for what was quoted. So this import is inbound-only and
- * never writes back.
+ * system of record for what was quoted. This import is inbound-only and never
+ * writes back.
  *
- * The columns pulled are the ones listed in "Monday Column Mapping.xlsx":
- * industry, primary-contact name/email/phone, the split address columns,
- * country, and Project ID — all read off the Organizations row. The primary
- * contact therefore does NOT depend on the Contacts board's account link,
- * which is empty on many rows.
+ * Default source is the **Deal Tracking** board, which is what
+ * "Monday Column Mapping.xlsx" describes: each deal row carries its own
+ * customer, industry, address, primary contact and Project ID. One row becomes
+ * an Organization (adopted if it already exists) + Address + primary Contact +
+ * Opportunity. Nothing depends on the Contacts board's account links, which
+ * are empty on most rows.
  *
- * Idempotent: every imported record is linked by ExternalLink
- * (provider 'monday', entity 'Organization' | 'Contact', externalId = monday
- * item id), so a second run updates in place instead of duplicating. An
- * organization that already exists in the CPQ under the same normalized name
- * is adopted rather than duplicated.
+ * `source: 'orgs'` runs the older Organizations + Contacts board path instead.
  *
+ * Idempotent: opportunities are keyed on Opportunity.mondayItemId, orgs are
+ * matched on normalized name, contacts on email (then name) within the org.
  * Dry-run mode reports exactly what would change and writes nothing.
  */
 
 const PROVIDER = 'monday';
 
+export type ImportSource = 'deals' | 'orgs';
+
 export interface ImportOptions {
   dryRun?: boolean;
-  /** Cap items processed per board — for a first look at a large board. */
+  /** Cap items processed per board — pushed down into the monday paging. */
   limit?: number;
-  /** Skip the Contacts board entirely. */
+  /** Skip the Contacts board entirely (orgs source only). */
   organizationsOnly?: boolean;
+  source?: ImportSource;
 }
 
 export interface ImportCounts {
+  deals: { seen: number; created: number; updated: number; skipped: number };
   organizations: { seen: number; created: number; updated: number; adopted: number; skipped: number };
-  /** Primary contacts read off the Organizations row (mapping sheet columns). */
   primaryContacts: { created: number; updated: number; skipped: number };
   contacts: { seen: number; created: number; updated: number; skipped: number; unlinked: number };
   addresses: { created: number };
@@ -58,13 +67,22 @@ export interface ImportCounts {
 }
 
 export interface ImportResult extends ImportCounts {
+  source: ImportSource;
   dryRun: boolean;
   durationMs: number;
   warnings: string[];
+  /** Distribution of the values the mapping produced, for eyeballing a dry run. */
+  samples: {
+    customerTypes: Record<string, number>;
+    stages: Record<string, number>;
+    unmappedIndustryLabels: string[];
+    firstRows: Array<Record<string, string | null>>;
+  };
 }
 
 function emptyCounts(): ImportCounts {
   return {
+    deals: { seen: 0, created: 0, updated: 0, skipped: 0 },
     organizations: { seen: 0, created: 0, updated: 0, adopted: 0, skipped: 0 },
     primaryContacts: { created: 0, updated: 0, skipped: 0 },
     contacts: { seen: 0, created: 0, updated: 0, skipped: 0, unlinked: 0 },
@@ -73,10 +91,9 @@ function emptyCounts(): ImportCounts {
   };
 }
 
-const trim = (v: string | undefined | null): string | null => {
-  const t = (v ?? '').trim();
-  return t && t !== '-' ? t : null;
-};
+function tally(bag: Record<string, number>, key: string) {
+  bag[key] = (bag[key] ?? 0) + 1;
+}
 
 async function linkFor(entity: string, externalId: string) {
   return prisma.externalLink.findFirst({ where: { provider: PROVIDER, entity, externalId } });
@@ -98,37 +115,19 @@ async function saveLink(entity: string, entityId: string, externalId: string, bo
   });
 }
 
-/** Project ID has no column on Organization, so it is carried in notes. */
-function buildNotes(item: MondayItem, projectId: string | null): string | null {
-  const website = trim(item.text[ORG_COL.website]);
-  const description = trim(item.text[ORG_COL.description]);
-  return (
-    [
-      description,
-      website ? `Website: ${website}` : null,
-      projectId ? `Project ID: ${projectId}` : null,
-    ]
-      .filter(Boolean)
-      .join('\n') || null
-  );
-}
-
 async function writeAddressIfMissing(
-  item: MondayItem,
+  addr: ReturnType<typeof buildAddress>,
   organizationId: string,
   orgName: string,
   counts: ImportCounts,
   dryRun: boolean,
 ): Promise<void> {
-  const addr = buildAddress(item.text, item.raw[ORG_COL.location]);
   if (!addr || !(addr.line1 || addr.city)) return;
-
-  if (dryRun) {
+  if (dryRun || organizationId.startsWith('dry-')) {
     counts.addresses.created += 1;
     return;
   }
-  const existing = await prisma.address.count({ where: { organizationId } });
-  if (existing > 0) return;
+  if ((await prisma.address.count({ where: { organizationId } })) > 0) return;
 
   await prisma.address.create({
     data: {
@@ -145,23 +144,17 @@ async function writeAddressIfMissing(
   counts.addresses.created += 1;
 }
 
-/**
- * The primary contact comes off the Organizations row (Full Name / Email /
- * Direct phone number), so it exists even when the Contacts board's account
- * link is empty. Matched on email first, then on name within the org.
- */
+/** Primary contact off the deal row: Full Name / Title / Email / Direct Phone. */
 async function upsertPrimaryContact(
   item: MondayItem,
   organizationId: string,
   counts: ImportCounts,
   dryRun: boolean,
 ): Promise<void> {
-  const fullName = trim(item.text[ORG_COL.primaryContactName]);
-  const email = parseEmail(
-    item.raw[ORG_COL.primaryContactEmail],
-    item.text[ORG_COL.primaryContactEmail] ?? '',
-  );
-  const phone = trim(item.text[ORG_COL.primaryContactPhone]);
+  const fullName = clean(item.text[DEAL_COL.contactName]);
+  const email = parseEmail(item.raw[DEAL_COL.contactEmail], item.text[DEAL_COL.contactEmail] ?? '');
+  const phone = clean(item.text[DEAL_COL.contactPhone]);
+  const title = clean(item.text[DEAL_COL.contactTitle]);
 
   if (!fullName && !email) {
     counts.primaryContacts.skipped += 1;
@@ -169,14 +162,7 @@ async function upsertPrimaryContact(
   }
 
   const { first, last } = splitName(fullName ?? email ?? '', '');
-  const data = {
-    firstName: first,
-    lastName: last,
-    email,
-    phone,
-    title: null as string | null,
-    isDecisionMaker: true,
-  };
+  const data = { firstName: first, lastName: last, email, phone, title, isDecisionMaker: true };
 
   if (dryRun || organizationId.startsWith('dry-')) {
     counts.primaryContacts.created += 1;
@@ -184,9 +170,7 @@ async function upsertPrimaryContact(
   }
 
   const existing = await prisma.contact.findFirst({
-    where: email
-      ? { organizationId, email }
-      : { organizationId, firstName: first, lastName: last },
+    where: email ? { organizationId, email } : { organizationId, firstName: first, lastName: last },
     select: { id: true },
   });
 
@@ -195,10 +179,147 @@ async function upsertPrimaryContact(
     counts.primaryContacts.updated += 1;
     return;
   }
-
   await prisma.contact.create({ data: { ...data, organizationId } });
   counts.primaryContacts.created += 1;
 }
+
+async function importDeals(
+  items: MondayItem[],
+  counts: ImportCounts,
+  warnings: string[],
+  samples: ImportResult['samples'],
+  dryRun: boolean,
+): Promise<void> {
+  const unmapped = new Set<string>();
+
+  for (const item of items) {
+    counts.deals.seen += 1;
+    const dealName = item.name.trim();
+    if (!dealName) {
+      counts.deals.skipped += 1;
+      warnings.push(`Deal ${item.id}: blank name — skipped`);
+      continue;
+    }
+
+    const industry = clean(item.text[DEAL_COL.industry]);
+    if (isUnmappedIndustry(industry)) unmapped.add(industry!);
+    const customerType = toCustomerType(industry);
+    const stage = toStage(item.text[DEAL_COL.stage]);
+    const projectId = parseProjectId(item.text[DEAL_COL.projectId]);
+    if (projectId) counts.projectIds.present += 1;
+    tally(samples.customerTypes, customerType);
+    tally(samples.stages, stage);
+
+    // ---- Organization (deal name is the customer name on this board) ----
+    counts.organizations.seen += 1;
+    const normalizedName = normalizeOrgName(dealName);
+    const website = clean(item.text[DEAL_COL.website]);
+    const orgNotes = [website ? `Website: ${website}` : null].filter(Boolean).join('\n') || null;
+
+    let organizationId: string;
+    const twin = normalizedName
+      ? await prisma.organization.findFirst({ where: { normalizedName }, select: { id: true } })
+      : null;
+
+    if (twin) {
+      if (!dryRun) {
+        await prisma.organization.update({
+          where: { id: twin.id },
+          data: { customerType, ...(orgNotes ? { notes: orgNotes } : {}) },
+        });
+      }
+      organizationId = twin.id;
+      counts.organizations.adopted += 1;
+    } else if (dryRun) {
+      organizationId = `dry-${item.id}`;
+      counts.organizations.created += 1;
+    } else {
+      const org = await prisma.organization.create({
+        data: { name: dealName, normalizedName, customerType, notes: orgNotes },
+        select: { id: true },
+      });
+      organizationId = org.id;
+      counts.organizations.created += 1;
+    }
+
+    await writeAddressIfMissing(
+      buildAddress(item.text, item.raw[DEAL_COL.location]),
+      organizationId,
+      dealName,
+      counts,
+      dryRun,
+    );
+    await upsertPrimaryContact(item, organizationId, counts, dryRun);
+
+    // ---- Opportunity (one per deal row, keyed on the monday item id) ----
+    const summary = clean(item.text[DEAL_COL.summary]);
+    const oppNotes =
+      [projectId ? `Project ID: ${projectId}` : null, summary].filter(Boolean).join('\n') || null;
+    const budgetAmountMinor =
+      parseMoneyMinor(item.text[DEAL_COL.grandTotal]) ?? parseMoneyMinor(item.text[DEAL_COL.value]);
+
+    if (samples.firstRows.length < 5) {
+      samples.firstRows.push({
+        deal: dealName,
+        industry,
+        customerType,
+        stage,
+        projectId,
+        contact: clean(item.text[DEAL_COL.contactName]),
+        email: parseEmail(item.raw[DEAL_COL.contactEmail], item.text[DEAL_COL.contactEmail] ?? ''),
+        city: clean(item.text[DEAL_COL.city]),
+        state: clean(item.text[DEAL_COL.state]),
+        zip: clean(item.text[DEAL_COL.zip]),
+      });
+    }
+
+    if (dryRun) {
+      const exists = await prisma.opportunity.findUnique({
+        where: { mondayItemId: item.id },
+        select: { id: true },
+      });
+      if (exists) counts.deals.updated += 1;
+      else counts.deals.created += 1;
+      continue;
+    }
+
+    const oppData = {
+      name: dealName,
+      stage,
+      notes: oppNotes,
+      budgetAmountMinor,
+      budgetCurrency: budgetAmountMinor ? 'USD' : null,
+      mondaySyncedAt: new Date(),
+    };
+
+    const existingOpp = await prisma.opportunity.findUnique({
+      where: { mondayItemId: item.id },
+      select: { id: true },
+    });
+
+    if (existingOpp) {
+      await prisma.opportunity.update({ where: { id: existingOpp.id }, data: oppData });
+      counts.deals.updated += 1;
+    } else {
+      const opp = await prisma.opportunity.create({
+        data: { ...oppData, organizationId, mondayItemId: item.id },
+        select: { id: true },
+      });
+      await saveLink('Opportunity', opp.id, item.id, DEALS_BOARD_ID);
+      counts.deals.created += 1;
+    }
+  }
+
+  samples.unmappedIndustryLabels = [...unmapped];
+  if (unmapped.size) {
+    warnings.push(
+      `${unmapped.size} industry label(s) are not in the mapping table and fell back to OTHER: ` +
+        [...unmapped].join(', '),
+    );
+  }
+}
+
+// ----- Legacy path: Organizations + Contacts boards -----
 
 async function importOrganizations(
   items: MondayItem[],
@@ -206,7 +327,6 @@ async function importOrganizations(
   warnings: string[],
   dryRun: boolean,
 ): Promise<Map<string, string>> {
-  // monday item id -> CPQ organization id
   const idMap = new Map<string, string>();
 
   for (const item of items) {
@@ -219,9 +339,10 @@ async function importOrganizations(
     }
 
     const customerType = toCustomerType(item.text[ORG_COL.industry]);
-    const projectId = parseProjectId(item.text[ORG_COL.projectId]);
-    if (projectId) counts.projectIds.present += 1;
-    const notes = buildNotes(item, projectId);
+    const website = clean(item.text[ORG_COL.website]);
+    const description = clean(item.text[ORG_COL.description]);
+    const notes =
+      [description, website ? `Website: ${website}` : null].filter(Boolean).join('\n') || null;
 
     const existingLink = await linkFor('Organization', item.id);
     if (existingLink) {
@@ -234,12 +355,9 @@ async function importOrganizations(
       }
       idMap.set(item.id, existingLink.entityId);
       counts.organizations.updated += 1;
-      await writeAddressIfMissing(item, existingLink.entityId, name, counts, dryRun);
-      await upsertPrimaryContact(item, existingLink.entityId, counts, dryRun);
       continue;
     }
 
-    // Not linked yet — adopt a same-name organization rather than duplicate it.
     const normalizedName = normalizeOrgName(name);
     const twin = normalizedName
       ? await prisma.organization.findFirst({ where: { normalizedName }, select: { id: true } })
@@ -247,24 +365,17 @@ async function importOrganizations(
 
     if (twin) {
       if (!dryRun) {
-        await prisma.organization.update({
-          where: { id: twin.id },
-          data: { customerType, notes },
-        });
+        await prisma.organization.update({ where: { id: twin.id }, data: { customerType, notes } });
         await saveLink('Organization', twin.id, item.id, ORGANIZATIONS_BOARD_ID);
       }
       idMap.set(item.id, twin.id);
       counts.organizations.adopted += 1;
-      await writeAddressIfMissing(item, twin.id, name, counts, dryRun);
-      await upsertPrimaryContact(item, twin.id, counts, dryRun);
       continue;
     }
 
     if (dryRun) {
       counts.organizations.created += 1;
       idMap.set(item.id, `dry-${item.id}`);
-      await writeAddressIfMissing(item, `dry-${item.id}`, name, counts, dryRun);
-      await upsertPrimaryContact(item, `dry-${item.id}`, counts, dryRun);
       continue;
     }
 
@@ -276,8 +387,22 @@ async function importOrganizations(
     idMap.set(item.id, org.id);
     counts.organizations.created += 1;
 
-    await writeAddressIfMissing(item, org.id, name, counts, dryRun);
-    await upsertPrimaryContact(item, org.id, counts, dryRun);
+    const loc = parseLocation(item.raw[ORG_COL.location]);
+    const zip = clean(item.text[ORG_COL.zip]);
+    if (loc && (loc.line1 || loc.city)) {
+      await prisma.address.create({
+        data: {
+          organizationId: org.id,
+          type: 'SHIPPING',
+          line1: loc.line1 ?? loc.city ?? name,
+          city: loc.city ?? '',
+          region: loc.region ?? '',
+          postalCode: zip ?? '',
+          country: loc.country,
+        },
+      });
+      counts.addresses.created += 1;
+    }
   }
 
   return idMap;
@@ -287,7 +412,6 @@ async function importContacts(
   items: MondayItem[],
   orgIdByMondayId: Map<string, string>,
   counts: ImportCounts,
-  warnings: string[],
   dryRun: boolean,
 ): Promise<void> {
   for (const item of items) {
@@ -297,34 +421,20 @@ async function importContacts(
     const mondayOrgId = accountIds[0];
     const organizationId = mondayOrgId ? orgIdByMondayId.get(mondayOrgId) : undefined;
 
-    // A contact with no account has nowhere to live — Contact.organizationId is
-    // required. Counted, not silently dropped.
-    if (!organizationId || organizationId.startsWith('dry-')) {
-      if (!organizationId) {
-        counts.contacts.unlinked += 1;
-        continue;
-      }
-      if (dryRun) {
-        counts.contacts.created += 1;
-        continue;
-      }
+    if (!organizationId) {
+      counts.contacts.unlinked += 1;
+      continue;
     }
 
     const { first, last } = splitName(item.name, item.text[CONTACT_COL.firstName] ?? '');
-    const email = parseEmail(item.raw[CONTACT_COL.email], item.text[CONTACT_COL.email] ?? '');
-    const phone = item.text[CONTACT_COL.phone]?.trim() || null;
-    const title = item.text[CONTACT_COL.title]?.trim() || null;
-    const contactType = item.text[CONTACT_COL.contactType];
-    const notes = item.text[CONTACT_COL.comments]?.trim() || null;
-
     const data = {
       firstName: first,
       lastName: last,
-      email,
-      phone,
-      title,
-      isDecisionMaker: isDecisionMaker(contactType),
-      notes,
+      email: parseEmail(item.raw[CONTACT_COL.email], item.text[CONTACT_COL.email] ?? ''),
+      phone: clean(item.text[CONTACT_COL.phone]),
+      title: clean(item.text[CONTACT_COL.title]),
+      isDecisionMaker: isDecisionMaker(item.text[CONTACT_COL.contactType]),
+      notes: clean(item.text[CONTACT_COL.comments]),
     };
 
     const existingLink = await linkFor('Contact', item.id);
@@ -337,51 +447,56 @@ async function importContacts(
       continue;
     }
 
-    if (dryRun) {
+    if (dryRun || organizationId.startsWith('dry-')) {
       counts.contacts.created += 1;
       continue;
     }
 
-    const contact = await prisma.contact.create({
-      data: { ...data, organizationId: organizationId! },
-      select: { id: true },
-    });
+    const contact = await prisma.contact.create({ data: { ...data, organizationId } });
     await saveLink('Contact', contact.id, item.id, CONTACTS_BOARD_ID);
     counts.contacts.created += 1;
   }
 }
 
 export async function importCrmFromMonday(options: ImportOptions = {}): Promise<ImportResult> {
-  const { dryRun = true, limit, organizationsOnly = false } = options;
+  const { dryRun = true, limit, organizationsOnly = false, source = 'deals' } = options;
   const started = Date.now();
   const counts = emptyCounts();
   const warnings: string[] = [];
+  const samples: ImportResult['samples'] = {
+    customerTypes: {},
+    stages: {},
+    unmappedIndustryLabels: [],
+    firstRows: [],
+  };
 
-  logger.info({ dryRun, limit, organizationsOnly }, 'monday CRM import starting');
+  logger.info({ dryRun, limit, source }, 'monday CRM import starting');
 
-  // The limit is pushed down into the fetch: paging the whole 2,860-item board
-  // and slicing afterwards overruns the serverless function timeout.
-  const orgItems = await fetchAllItems(ORGANIZATIONS_BOARD_ID, 100, limit);
-  const orgIdByMondayId = await importOrganizations(orgItems, counts, warnings, dryRun);
-
-  if (!organizationsOnly) {
-    const contactItems = await fetchAllItems(CONTACTS_BOARD_ID, 100, limit);
-    await importContacts(contactItems, orgIdByMondayId, counts, warnings, dryRun);
-  }
-
-  if (counts.contacts.unlinked > 0) {
-    warnings.push(
-      `${counts.contacts.unlinked} contact(s) on the Contacts board have no linked account and were ` +
-        `skipped — a contact requires an organization in the CPQ. Their organization's primary ` +
-        `contact still imported from the Organizations row.`,
-    );
+  if (source === 'deals') {
+    const dealItems = await fetchAllItems(DEALS_BOARD_ID, 100, limit);
+    await importDeals(dealItems, counts, warnings, samples, dryRun);
+  } else {
+    const orgItems = await fetchAllItems(ORGANIZATIONS_BOARD_ID, 100, limit);
+    const orgIdByMondayId = await importOrganizations(orgItems, counts, warnings, dryRun);
+    if (!organizationsOnly) {
+      const contactItems = await fetchAllItems(CONTACTS_BOARD_ID, 100, limit);
+      await importContacts(contactItems, orgIdByMondayId, counts, dryRun);
+    }
+    if (counts.contacts.unlinked > 0) {
+      warnings.push(
+        `${counts.contacts.unlinked} contact(s) have no linked account in monday and were skipped — ` +
+          `a contact requires an organization in the CPQ.`,
+      );
+    }
   }
 
   const result: ImportResult = {
     ...counts,
+    source,
     dryRun,
     durationMs: Date.now() - started,
     warnings,
+    samples,
   };
 
   if (!dryRun) {
