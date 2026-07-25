@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
-import { isMondayConfigured } from '../config/env.js';
+import { isMondayConfigured, env } from '../config/env.js';
 import { verifyMondayWebhook } from '../integrations/monday/webhook.js';
 import { applyInboundChange, retrySync } from '../integrations/monday/sync.js';
 import { reconcile } from '../integrations/monday/reconcile.js';
@@ -47,14 +47,23 @@ export function registerIntegrationRoutes(app: FastifyInstance): void {
   // monday column ids are per-board and opaque, so an import mapping has to be
   // written against the real board. These endpoints expose what is actually
   // there; nothing is written to either system.
+  //
+  // Gated on the API token ALONE, not isMondayConfigured(): discovery is how
+  // you find the board id, so requiring MONDAY_DEALS_BOARD_ID here would be
+  // circular.
 
   app.get('/integrations/monday/boards', manage, async (_req, reply) => {
-    if (!isMondayConfigured()) return reply.status(400).send({ error: 'MONDAY_NOT_CONFIGURED' });
-    return listBoards();
+    if (!env.MONDAY_API_TOKEN) return reply.status(400).send({ error: 'MONDAY_TOKEN_MISSING' });
+    try {
+      return await listBoards();
+    } catch (err) {
+      logger.error({ err }, 'monday board list failed');
+      return reply.status(502).send({ error: 'MONDAY_QUERY_FAILED', detail: String(err) });
+    }
   });
 
   app.get('/integrations/monday/boards/:boardId', manage, async (req, reply) => {
-    if (!isMondayConfigured()) return reply.status(400).send({ error: 'MONDAY_NOT_CONFIGURED' });
+    if (!env.MONDAY_API_TOKEN) return reply.status(400).send({ error: 'MONDAY_TOKEN_MISSING' });
     const { boardId } = req.params as { boardId: string };
     const { sample } = req.query as { sample?: string };
     const size = Math.min(Math.max(Number(sample) || 3, 1), 10);
