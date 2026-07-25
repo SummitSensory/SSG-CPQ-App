@@ -148,7 +148,14 @@ export async function fetchAllItems(
           items: Array<{
             id: string;
             name: string;
-            column_values: Array<{ id: string; text: string | null; value: string | null }>;
+            column_values: Array<{
+              id: string;
+              text: string | null;
+              value: string | null;
+              /** mirror / formula / board_relation columns expose their rendered
+               *  value here; their `text` is always null. */
+              display_value?: string | null;
+            }>;
           }>;
         };
       }>;
@@ -157,7 +164,18 @@ export async function fetchAllItems(
          boards (ids: $board) {
            items_page (limit: $limit, cursor: $cursor) {
              cursor
-             items { id name column_values { id text value } }
+             items {
+               id
+               name
+               column_values {
+                 id
+                 text
+                 value
+                 ... on MirrorValue { display_value }
+                 ... on FormulaValue { display_value }
+                 ... on BoardRelationValue { display_value }
+               }
+             }
            }
          }
        }`,
@@ -171,7 +189,7 @@ export async function fetchAllItems(
       const text: Record<string, string> = {};
       const raw: Record<string, string | null> = {};
       for (const cv of item.column_values) {
-        text[cv.id] = cv.text ?? '';
+        text[cv.id] = cv.text || cv.display_value || '';
         raw[cv.id] = cv.value;
       }
       out.push({ id: item.id, name: item.name, text, raw });
