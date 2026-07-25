@@ -342,43 +342,44 @@ enum RelationType {
   ACCESSORY_OF
 }
 
-// A top-level product line (e.g. "Adventure Series"). Categories hang off a
-// line and double as its 4-tier structure: header rows and product rows.
+// A named catalog line (Adventure Series, etc). Every tier node belongs to one.
 model ProductLine {
   id          String            @id @default(cuid())
-  name        String            @unique
+  name        String
   slug        String            @unique
   description String?
   sortOrder   Int               @default(0)
   isActive    Boolean           @default(true)
+  categories  ProductCategory[]
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
-  categories  ProductCategory[]
-  products    Product[]
 }
 
+// Tier nodes of a product line. Tier 1 is always a header; tiers 2-4 are
+// either headers (productId null) or product placements (productId set).
 model ProductCategory {
-  id        String            @id @default(cuid())
-  name      String
-  slug      String            @unique
-  parentId  String?
-  parent    ProductCategory?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
-  children  ProductCategory[] @relation("CategoryTree")
-  sortOrder Int               @default(0)
-  isActive  Boolean           @default(true)
-  families  ProductFamily[]
-  products  Product[]
+  id            String            @id @default(cuid())
+  name          String
+  slug          String            @unique
+  parentId      String?
+  parent        ProductCategory?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children      ProductCategory[] @relation("CategoryTree")
+  sortOrder     Int               @default(0)
+  isActive      Boolean           @default(true)
+  families      ProductFamily[]
+  products      Product[]
 
-  // Tier-tree fields: a category node is a HEADER when productId is null, or
-  // a PRODUCT line when it points at one. Tier 1 is always a header.
   productLineId String?
-  productLine   ProductLine? @relation(fields: [productLineId], references: [id], onDelete: Cascade)
-  tierLevel     Int          @default(1)
+  productLine   ProductLine?      @relation(fields: [productLineId], references: [id], onDelete: SetNull)
+  // 1-4. Tier 1 must be a header; a node with productId set must be tier 2+.
+  tierLevel     Int               @default(1)
+  // Set when this node places a product rather than opening a sub-section.
   productId     String?
-  product       Product?     @relation("CategoryTierProduct", fields: [productId], references: [id], onDelete: SetNull)
+  product       Product?          @relation("TierPlacement", fields: [productId], references: [id], onDelete: SetNull)
 
   @@index([productLineId, tierLevel])
-  @@index([parentId, sortOrder])
+  @@index([parentId])
+  @@index([productId])
 }
 
 model ProductFamily {
@@ -407,32 +408,25 @@ model Product {
   familyId            String?
   family              ProductFamily?      @relation(fields: [familyId], references: [id], onDelete: SetNull)
 
-  productLineId       String?
-  productLine         ProductLine?        @relation(fields: [productLineId], references: [id], onDelete: SetNull)
-  defaultQuantity     Int                 @default(1)
-  badge               String?
-
   proposalDescription String?
   internalDescription String?
 
-  // Legacy whole-inch dimensions, superseded by the decimal columns below.
-  // Kept (not dropped) so no historical data is lost.
-  lengthInLegacy      Int?
-  widthInLegacy       Int?
-  heightInLegacy      Int?
+  // Quantity pre-filled when this product is added to a proposal.
+  defaultQuantity     Int                 @default(1)
+  // Short free-text flag rendered next to the product (e.g. "NEW", "CUSTOM").
+  badge               String?
 
-  // Dimensions in inches (fractional, e.g. 4.875), weight in whole ounces.
-  lengthIn            Decimal?            @db.Decimal(8, 3)
-  widthIn             Decimal?            @db.Decimal(8, 3)
-  heightIn            Decimal?            @db.Decimal(8, 3)
-  thicknessIn         Decimal?            @db.Decimal(8, 3)
-  // Verbatim override for shapes the L/W/H/T formula can't express (e.g.
-  // five-value U-profile mats). When set, this is printed as-is.
-  dimensionsOverride  String?
-  showDimensions      Boolean             @default(false)
-
+  // Dimensions in whole inches, weight in whole ounces — integers, never floats.
+  lengthIn            Int?
+  widthIn             Int?
+  heightIn            Int?
+  thicknessIn         Int?
   weightOz            Int?
   capacity            String?
+  // Free-text dimension line for products the four axes can't express
+  // (U-profile mats, radii). Wins over the axis fields when set.
+  dimensionsOverride  String?
+  showDimensions      Boolean             @default(true)
 
   activeFrom          DateTime?
   activeTo            DateTime?
@@ -449,25 +443,55 @@ model Product {
   parentRelations     ProductRelation[]   @relation("RelationParent")
   childRelations      ProductRelation[]   @relation("RelationChild")
   notes               ProductNote[]
-  tierNodes           ProductCategory[]   @relation("CategoryTierProduct")
+  sourcing            ProductSourcing[]
+  tierPlacements      ProductCategory[]   @relation("TierPlacement")
 
   @@index([categoryId])
   @@index([familyId])
   @@index([status])
   @@index([kind])
-  @@index([productLineId])
 }
 
-// The asterisked lines that print beneath a product on the proposal, e.g.
-// "*OPTIONAL ADD-ON: Enhances Versatility".
+// Asterisked lines printed beneath a product on the proposal.
 model ProductNote {
-  id        String  @id @default(cuid())
+  id        String   @id @default(cuid())
   productId String
-  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
-  text      String
-  sortOrder Int     @default(0)
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  body      String
+  sortOrder Int      @default(0)
+  // Print on the customer-facing proposal (false = internal only).
+  isPublic  Boolean  @default(true)
 
   @@index([productId])
+}
+
+// Who physically makes or supplies a product. BOM groups by this, not category.
+model Manufacturer {
+  id        String            @id @default(cuid())
+  name      String            @unique
+  code      String?           @unique
+  contact   String?
+  notes     String?
+  isActive  Boolean           @default(true)
+  sourcing  ProductSourcing[]
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+}
+
+model ProductSourcing {
+  id             String       @id @default(cuid())
+  productId      String
+  product        Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  manufacturerId String
+  manufacturer   Manufacturer @relation(fields: [manufacturerId], references: [id], onDelete: Restrict)
+  vendorPartNo   String?
+  leadTimeDays   Int?
+  minOrderQty    Int?
+  isPrimary      Boolean      @default(true)
+  notes          String?
+
+  @@unique([productId, manufacturerId])
+  @@index([manufacturerId])
 }
 
 model ProductRelation {
