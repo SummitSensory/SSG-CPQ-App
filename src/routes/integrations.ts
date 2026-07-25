@@ -5,6 +5,7 @@ import { isMondayConfigured } from '../config/env.js';
 import { verifyMondayWebhook } from '../integrations/monday/webhook.js';
 import { applyInboundChange, retrySync } from '../integrations/monday/sync.js';
 import { reconcile } from '../integrations/monday/reconcile.js';
+import { listBoards, describeBoard } from '../integrations/monday/discovery.js';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 
@@ -41,6 +42,29 @@ export function registerIntegrationRoutes(app: FastifyInstance): void {
 
   // Reconciliation report — drift, errored links, recent failures.
   app.get('/integrations/monday/reconcile', manage, async () => reconcile());
+
+  // ----- Board discovery (read-only) -----
+  // monday column ids are per-board and opaque, so an import mapping has to be
+  // written against the real board. These endpoints expose what is actually
+  // there; nothing is written to either system.
+
+  app.get('/integrations/monday/boards', manage, async (_req, reply) => {
+    if (!isMondayConfigured()) return reply.status(400).send({ error: 'MONDAY_NOT_CONFIGURED' });
+    return listBoards();
+  });
+
+  app.get('/integrations/monday/boards/:boardId', manage, async (req, reply) => {
+    if (!isMondayConfigured()) return reply.status(400).send({ error: 'MONDAY_NOT_CONFIGURED' });
+    const { boardId } = req.params as { boardId: string };
+    const { sample } = req.query as { sample?: string };
+    const size = Math.min(Math.max(Number(sample) || 3, 1), 10);
+    try {
+      return await describeBoard(boardId, size);
+    } catch (err) {
+      logger.error({ err, boardId }, 'monday board describe failed');
+      return reply.status(502).send({ error: 'MONDAY_QUERY_FAILED', detail: String(err) });
+    }
+  });
 
   // Manual retry of a failed sync attempt.
   app.post('/integrations/monday/retry/:logId', manage, async (req, reply) => {
