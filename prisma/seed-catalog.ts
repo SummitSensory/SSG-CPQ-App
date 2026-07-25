@@ -8,8 +8,8 @@
  *   pnpm db:seed:catalog            # apply
  *   pnpm db:seed:catalog --dry-run  # validate and report only
  *
- * Costs are append-only: a new unit cost for a SKU is inserted as a new
- * effective-dated row; an identical (sku, effectiveDate, unitCost) is skipped.
+ * Costs are effective-dated: an identical (product, date, cost) is skipped, a
+ * changed cost on the same date updates, a new date appends — history survives.
  */
 import { PrismaClient } from '@prisma/client';
 import seedJson from './seed-catalog.json' with { type: 'json' };
@@ -19,7 +19,15 @@ const prisma = new PrismaClient();
 const DRY_RUN = process.argv.includes('--dry-run');
 const SEED_USER_EMAIL = process.env.SEED_ADMIN_EMAIL ?? 'admin@summitsensory.com';
 
-async function main() {
+const slugify = (s: string): string =>
+  s
+    .toLowerCase()
+    .replace(/[™®]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
+
+async function main(): Promise<void> {
   const { data, report } = loadCatalogSeed(seedJson);
 
   console.log('\nCatalog workbook import');
@@ -36,7 +44,7 @@ async function main() {
     return;
   }
 
-  // Warnings are grouped: 40+ "no cost on record" lines help nobody.
+  // Warnings are grouped — 40 "no cost on record" lines help nobody.
   if (warnings.length) {
     const byMessage = new Map<string, string[]>();
     for (const w of warnings) {
@@ -56,42 +64,72 @@ async function main() {
     return;
   }
 
-  const seedUser = await prisma.user.findUnique({ where: { email: SEED_USER_EMAIL }, select: { id: true } });
-  if (!seedUser) throw new Error(`Seed user ${SEED_USER_EMAIL} not found — run the base seed first.`);
+  const seedUser = await prisma.user.findUnique({
+    where: { email: SEED_USER_EMAIL },
+    select: { id: true },
+  });
+  if (!seedUser) throw new Error(`Seed user ${SEED_USER_EMAIL} not found — run pnpm db:seed first.`);
 
-  const lineIdBySlug = new Map<string, string>();
+  // ----- Product lines -----
   const lineIdByName = new Map<string, string>();
   for (const l of data.productLines) {
     const row = await prisma.productLine.upsert({
       where: { slug: l.slug },
-      update: { name: l.name, description: l.description ?? null, sortOrder: l.sortOrder, isActive: l.isActive },
-      create: { name: l.name, slug: l.slug, description: l.description ?? null, sortOrder: l.sortOrder, isActive: l.isActive },
+      update: {
+        name: l.name,
+        description: l.description ?? null,
+        sortOrder: l.sortOrder,
+        isActive: l.isActive,
+      },
+      create: {
+        name: l.name,
+        slug: l.slug,
+        description: l.description ?? null,
+        sortOrder: l.sortOrder,
+        isActive: l.isActive,
+      },
       select: { id: true },
     });
-    lineIdBySlug.set(l.slug, row.id);
     lineIdByName.set(l.name, row.id);
   }
 
+  // ----- Manufacturers -----
   const manIdByName = new Map<string, string>();
   for (const m of data.manufacturers) {
+    const payload = {
+      slug: m.code ?? slugify(m.name),
+      isThirdParty: m.isThirdParty,
+      defaultLeadTimeDays: m.defaultLeadTimeDays ?? null,
+      contactName: m.contact ?? null,
+      notes: m.notes ?? null,
+      isActive: m.isActive,
+    };
     const row = await prisma.manufacturer.upsert({
       where: { name: m.name },
-      update: { code: m.code ?? null, contact: m.contact ?? null, notes: m.notes ?? null, isActive: m.isActive },
-      create: { name: m.name, code: m.code ?? null, contact: m.contact ?? null, notes: m.notes ?? null, isActive: m.isActive },
+      update: payload,
+      create: { name: m.name, ...payload },
       select: { id: true },
     });
     manIdByName.set(m.name, row.id);
   }
 
-  // Products need a category FK. Tier placements supply the real one below;
-  // until then every product hangs off a per-line "Unfiled" bucket.
+  // ----- Products -----
+  // Product.categoryId is required, so every product first lands in a per-line
+  // "Unfiled" bucket; the tier pass below repoints it at its real section.
   const unfiledByLine = new Map<string, string>();
-  for (const [name, lineId] of lineIdByName) {
-    const slug = `unfiled-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+  for (const [name, productLineId] of lineIdByName) {
+    const slug = `unfiled-${slugify(name)}`;
     const cat = await prisma.productCategory.upsert({
       where: { slug },
       update: {},
-      create: { name: `Unfiled — ${name}`, slug, productLineId: lineId, tierLevel: 1, sortOrder: 9999, isActive: false },
+      create: {
+        name: `Unfiled — ${name}`,
+        slug,
+        productLineId,
+        tierLevel: 1,
+        sortOrder: 9999,
+        isActive: false,
+      },
       select: { id: true },
     });
     unfiledByLine.set(name, cat.id);
@@ -99,47 +137,40 @@ async function main() {
 
   const productIdBySku = new Map<string, string>();
   for (const p of data.products) {
+    const shared = {
+      name: p.name,
+      productLineId: lineIdByName.get(p.productLine) ?? null,
+      defaultQuantity: p.defaultQuantity,
+      badge: p.badge ?? null,
+      lengthIn: p.lengthIn ?? null,
+      widthIn: p.widthIn ?? null,
+      heightIn: p.heightIn ?? null,
+      thicknessIn: p.thicknessIn ?? null,
+      dimensionsOverride: p.dimensionsOverride ?? null,
+      showDimensions: p.showDimensions,
+      weightOz: p.weightOz ?? null,
+    };
     const row = await prisma.product.upsert({
       where: { sku: p.sku },
-      update: {
-        name: p.name,
-        defaultQuantity: p.defaultQuantity,
-        badge: p.badge ?? null,
-        lengthIn: p.lengthIn ?? null,
-        widthIn: p.widthIn ?? null,
-        heightIn: p.heightIn ?? null,
-        thicknessIn: p.thicknessIn ?? null,
-        weightOz: p.weightOz ?? null,
-        showDimensions: p.showDimensions,
-        dimensionsOverride: p.dimensionsOverride ?? null,
-      },
+      update: shared,
       create: {
         sku: p.sku,
-        name: p.name,
         status: 'ACTIVE',
         categoryId: unfiledByLine.get(p.productLine)!,
-        defaultQuantity: p.defaultQuantity,
-        badge: p.badge ?? null,
-        lengthIn: p.lengthIn ?? null,
-        widthIn: p.widthIn ?? null,
-        heightIn: p.heightIn ?? null,
-        thicknessIn: p.thicknessIn ?? null,
-        weightOz: p.weightOz ?? null,
-        showDimensions: p.showDimensions,
-        dimensionsOverride: p.dimensionsOverride ?? null,
         createdById: seedUser.id,
+        ...shared,
       },
       select: { id: true },
     });
     productIdBySku.set(p.sku, row.id);
   }
 
-  // Tier nodes, parents first.
+  // ----- Tier tree (parents first, so parentId always resolves) -----
   const tierIdBySlug = new Map<string, string>();
   for (const t of tiersInInsertOrder(data.tiers)) {
     const payload = {
       name: t.name,
-      productLineId: lineIdByName.get(t.productLine)!,
+      productLineId: lineIdByName.get(t.productLine) ?? null,
       tierLevel: t.tierLevel,
       parentId: t.parentSlug ? (tierIdBySlug.get(t.parentSlug) ?? null) : null,
       productId: t.sku ? (productIdBySku.get(t.sku) ?? null) : null,
@@ -155,32 +186,37 @@ async function main() {
     tierIdBySlug.set(t.slug, row.id);
   }
 
-  // Point each product's categoryId at its (deepest) tier placement.
+  // Point each product's categoryId at the section it sits in.
   for (const t of data.tiers) {
-    if (!t.sku) continue;
-    const parentId = t.parentSlug ? tierIdBySlug.get(t.parentSlug) : undefined;
-    if (!parentId) continue;
-    await prisma.product.update({ where: { sku: t.sku }, data: { categoryId: parentId } });
+    if (!t.sku || !t.parentSlug) continue;
+    const categoryId = tierIdBySlug.get(t.parentSlug);
+    if (!categoryId) continue;
+    await prisma.product.update({ where: { sku: t.sku }, data: { categoryId } });
   }
 
-  // Notes are replace-on-import: the workbook is authoritative.
+  // ----- Notes (replace-on-import: the workbook is authoritative) -----
   for (const sku of new Set(data.notes.map((n) => n.sku))) {
     await prisma.productNote.deleteMany({ where: { productId: productIdBySku.get(sku)! } });
   }
   for (const n of data.notes) {
     await prisma.productNote.create({
-      data: { productId: productIdBySku.get(n.sku)!, body: n.body, sortOrder: n.sortOrder, isPublic: n.isPublic },
+      data: { productId: productIdBySku.get(n.sku)!, text: n.text, sortOrder: n.sortOrder },
     });
   }
 
+  // ----- Costs (effective-dated) -----
   let costsInserted = 0;
   for (const c of data.costs) {
     const productId = productIdBySku.get(c.sku)!;
     const effectiveDate = new Date(`${c.effectiveDate}T00:00:00.000Z`);
     const existing = await prisma.productCost.findFirst({ where: { productId, effectiveDate } });
     if (existing) {
-      if (existing.unitCost === BigInt(c.unitCostMinor)) continue;
-      await prisma.productCost.update({ where: { id: existing.id }, data: { unitCost: BigInt(c.unitCostMinor) } });
+      if (existing.unitCost !== BigInt(c.unitCostMinor)) {
+        await prisma.productCost.update({
+          where: { id: existing.id },
+          data: { unitCost: BigInt(c.unitCostMinor) },
+        });
+      }
       continue;
     }
     await prisma.productCost.create({
@@ -195,6 +231,7 @@ async function main() {
     costsInserted += 1;
   }
 
+  // ----- Sourcing -----
   for (const s of data.sourcing) {
     const productId = productIdBySku.get(s.sku)!;
     const manufacturerId = manIdByName.get(s.manufacturer)!;
@@ -216,7 +253,7 @@ async function main() {
 }
 
 main()
-  .catch((e) => {
+  .catch((e: unknown) => {
     console.error(e);
     process.exitCode = 1;
   })

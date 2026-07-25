@@ -8396,39 +8396,33 @@
   "notes": [
     {
       "sku": "P-2124",
-      "body": "*OPTIONAL ADD-ON: Enhances Versatility",
-      "sortOrder": 10,
-      "isPublic": true
+      "text": "*OPTIONAL ADD-ON: Enhances Versatility",
+      "sortOrder": 10
     },
     {
       "sku": "6820H-LDD",
-      "body": "*OPTIONAL QUICK SHIFT ADD-ON: Recommended for Enhanced Use",
-      "sortOrder": 10,
-      "isPublic": true
+      "text": "*OPTIONAL QUICK SHIFT ADD-ON: Recommended for Enhanced Use",
+      "sortOrder": 10
     },
     {
       "sku": "6820H-LDD",
-      "body": "*Double Swivel Functionality: 180 Degree Swing & 360 Degree Rotation",
-      "sortOrder": 20,
-      "isPublic": true
+      "text": "*Double Swivel Functionality: 180 Degree Swing & 360 Degree Rotation",
+      "sortOrder": 20
     },
     {
       "sku": "B0C4Y8XSNB",
-      "body": "*Swivel Functionality: 180 Degree Swing",
-      "sortOrder": 10,
-      "isPublic": true
+      "text": "*Swivel Functionality: 180 Degree Swing",
+      "sortOrder": 10
     },
     {
       "sku": "SSUSP72",
-      "body": "*Please allow 8-10 weeks for manufacturing & delivery of all mat systems",
-      "sortOrder": 10,
-      "isPublic": true
+      "text": "*Please allow 8-10 weeks for manufacturing & delivery of all mat systems",
+      "sortOrder": 10
     },
     {
       "sku": "SSUSP72",
-      "body": "*All column wraps & floor padding colors will be determined after proposal is signed",
-      "sortOrder": 20,
-      "isPublic": true
+      "text": "*All column wraps & floor padding colors will be determined after proposal is signed",
+      "sortOrder": 20
     }
   ],
   "costs": [

@@ -1,18 +1,16 @@
 import { z } from 'zod';
-import { Slug } from './validation.js';
 
 /**
  * Catalog workbook importer.
  *
  * Consumes the normalized JSON produced from "Summit Product Workbook v3"
- * (see prisma/seed-catalog.json) and validates it as a whole before anything
+ * (prisma/seed-catalog.json) and validates it as a whole before anything
  * touches the database. The workbook — not the app — is the authoring surface,
- * so the import is idempotent: re-running it upserts by natural key
- * (product line slug, manufacturer name, product SKU, tier slug) rather than
- * creating duplicates.
+ * so the import is idempotent: re-running it upserts by natural key (product
+ * line slug, manufacturer name, product SKU, category slug).
  *
- * Money is stored in integer minor units. Weight is whole ounces. No floats
- * ever reach the database.
+ * Money is integer minor units. Dimensions are decimal inches, matching the
+ * Decimal(8,3) columns. Weight is whole ounces.
  */
 
 export interface ImportIssue {
@@ -24,10 +22,11 @@ export interface ImportIssue {
 
 const money = z.number().int().nonnegative();
 const optInt = z.number().int().nonnegative().nullable().optional();
+const optDecimal = z.number().nonnegative().nullable().optional();
 
 export const SeedProductLine = z.object({
   name: z.string().trim().min(2),
-  slug: Slug,
+  slug: z.string().trim().min(2),
   description: z.string().nullable().optional(),
   sortOrder: z.number().int().default(0),
   isActive: z.boolean().default(true),
@@ -50,11 +49,11 @@ export const SeedProduct = z.object({
   defaultQuantity: z.number().int().min(1).default(1),
   unitPriceMinor: money.nullable(),
   badge: z.string().trim().nullable().optional(),
-  lengthIn: optInt,
-  widthIn: optInt,
-  heightIn: optInt,
-  thicknessIn: optInt,
-  showDimensions: z.boolean().default(true),
+  lengthIn: optDecimal,
+  widthIn: optDecimal,
+  heightIn: optDecimal,
+  thicknessIn: optDecimal,
+  showDimensions: z.boolean().default(false),
   dimensionsOverride: z.string().trim().nullable().optional(),
   weightOz: optInt,
 });
@@ -71,9 +70,8 @@ export const SeedTier = z.object({
 
 export const SeedNote = z.object({
   sku: z.string().trim().min(1),
-  body: z.string().trim().min(1),
+  text: z.string().trim().min(1),
   sortOrder: z.number().int().default(0),
-  isPublic: z.boolean().default(true),
 });
 
 export const SeedCost = z.object({
@@ -118,14 +116,13 @@ export interface ValidationReport {
 }
 
 /**
- * Cross-sheet referential integrity. Shape errors are caught by CatalogSeed;
- * this catches the things zod can't see across arrays.
+ * Cross-sheet referential integrity — the things zod can't see across arrays.
  */
 export function validateCatalogSeed(data: CatalogSeedData): ValidationReport {
   const issues: ImportIssue[] = [];
-  const err = (sheet: string, key: string, message: string) =>
+  const err = (sheet: string, key: string, message: string): number =>
     issues.push({ sheet, key, message, severity: 'error' });
-  const warn = (sheet: string, key: string, message: string) =>
+  const warn = (sheet: string, key: string, message: string): number =>
     issues.push({ sheet, key, message, severity: 'warning' });
 
   const lineNames = new Set(data.productLines.map((l) => l.name));
