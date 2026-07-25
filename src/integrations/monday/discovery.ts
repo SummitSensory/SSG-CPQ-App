@@ -125,13 +125,75 @@ export interface MondayItem {
   raw: Record<string, string | null>;
 }
 
+const ITEM_FIELDS = `
+  id
+  name
+  column_values {
+    id
+    text
+    value
+    ... on MirrorValue { display_value }
+    ... on FormulaValue { display_value }
+    ... on BoardRelationValue { display_value }
+  }
+`;
+
+function toItem(item: {
+  id: string;
+  name: string;
+  column_values: Array<{ id: string; text: string | null; value: string | null; display_value?: string | null }>;
+}): MondayItem {
+  const text: Record<string, string> = {};
+  const raw: Record<string, string | null> = {};
+  for (const cv of item.column_values) {
+    text[cv.id] = cv.text || cv.display_value || '';
+    raw[cv.id] = cv.value;
+  }
+  return { id: item.id, name: item.name, text, raw };
+}
+
+/**
+ * Items whose NAME contains a term. This is how a single customer is pulled on
+ * demand at proposal time — one query, no board walk.
+ */
+export async function searchItemsByName(
+  boardId: string,
+  term: string,
+  limit = 25,
+): Promise<MondayItem[]> {
+  const data = await mondayQuery<{
+    boards: Array<{ items_page: { items: Array<Parameters<typeof toItem>[0]> } }>;
+  }>(
+    `query ($board: [ID!], $limit: Int!, $term: CompareValue!) {
+       boards (ids: $board) {
+         items_page (
+           limit: $limit,
+           query_params: { rules: [{ column_id: "name", compare_value: $term, operator: contains_text }] }
+         ) { items { ${ITEM_FIELDS} } }
+       }
+     }`,
+    { board: [boardId], limit, term: [term] },
+  );
+  return (data.boards[0]?.items_page.items ?? []).map(toItem);
+}
+
+/** A single item by id. */
+export async function fetchItemById(itemId: string): Promise<MondayItem | null> {
+  const data = await mondayQuery<{ items: Array<Parameters<typeof toItem>[0]> }>(
+    `query ($ids: [ID!]) { items (ids: $ids) { ${ITEM_FIELDS} } }`,
+    { ids: [itemId] },
+  );
+  const item = data.items?.[0];
+  return item ? toItem(item) : null;
+}
+
 /**
  * Every item on a board, following the cursor. monday caps page size at 500;
  * the client already backs off on rate limits and complexity errors.
  */
 export async function fetchAllItems(
   boardId: string,
-  pageSize = 100,
+  pageSize = 250,
   /** Stop paging once this many items are in hand — keeps a limited run inside
    *  the serverless function timeout instead of downloading the whole board. */
   max?: number,

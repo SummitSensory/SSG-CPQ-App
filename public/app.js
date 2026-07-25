@@ -184,6 +184,7 @@
       '<div style="display:flex;gap:5px;background:#eef0ea;padding:4px;border-radius:10px;width:max-content;margin-bottom:18px;">' + tab('orgs', 'Organizations') + tab('opps', 'Opportunities') + '</div>' +
       '<div style="display:flex;gap:10px;align-items:center;margin-bottom:16px;">' +
         '<input id="crmSearch" placeholder="Search ' + (crm.tab === 'orgs' ? 'organizations' : 'opportunities') + '…" value="' + esc(crm.q) + '" style="flex:1;max-width:340px;padding:10px 13px;border:1px solid #dcded7;border-radius:10px;font-size:14px;background:#fff;outline:none;">' +
+        (writable ? '<button class="link-btn" id="crmMonday" style="width:auto;padding:10px 16px;">Find in monday</button>' : '') +
         (writable ? '<button class="btn" id="crmNew" style="width:auto;padding:10px 17px;">' + newLabel + '</button>' : '') +
       '</div>' +
       '<div id="crmList"><div class="muted" style="padding:24px;">Loading…</div></div>';
@@ -194,7 +195,55 @@
     var search = document.getElementById('crmSearch');
     var t; search.addEventListener('input', function () { clearTimeout(t); t = setTimeout(function () { crm.q = search.value.trim(); crm.page = 1; loadCrm(); }, 300); });
     if (writable) document.getElementById('crmNew').addEventListener('click', function () { crm.tab === 'orgs' ? openOrgForm() : openOppForm(); });
+    if (writable) document.getElementById('crmMonday').addEventListener('click', function () { openMondayLookup(user); });
     loadCrm();
+  }
+
+  /* --- monday customer lookup: pull one customer on demand --- */
+  function openMondayLookup(user) {
+    openModal('Find a customer in monday',
+      '<div class="field"><label for="mSearch">Customer name</label>' +
+        '<input id="mSearch" style="' + IN + '" placeholder="e.g. Soar Autism Center" value="' + esc(crm.q || '') + '" autocomplete="off"></div>' +
+      '<div id="mResults" class="muted" style="font-size:13px;padding:6px 0;">Type a name and press Search.</div>',
+      async function (close, showErr) { await run(); var s = document.getElementById('mSave'); if (s) { s.disabled = false; s.textContent = 'Search'; } },
+      'Search');
+
+    var input = document.getElementById('mSearch');
+    var box = document.getElementById('mResults');
+    input.focus();
+
+    async function run() {
+      var q = input.value.trim();
+      if (q.length < 2) { box.innerHTML = '<span class="muted">Type at least 2 characters.</span>'; return; }
+      box.innerHTML = '<span class="muted">Searching monday…</span>';
+      try {
+        var r = await authed('/integrations/monday/search?q=' + encodeURIComponent(q));
+        if (!r.ok) { box.innerHTML = '<div class="err">Search failed (' + r.status + ').</div>'; return; }
+        var rows = await r.json();
+        if (!rows.length) { box.innerHTML = '<span class="muted">No matches in monday for “' + esc(q) + '”.</span>'; return; }
+        box.innerHTML = rows.map(function (x) {
+          var where = [x.city, x.state].filter(Boolean).join(', ');
+          return '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid #f2f3ef;">' +
+            '<div><div style="font-weight:600;font-size:13.5px;">' + esc(x.name) + '</div>' +
+            '<div class="muted" style="font-size:12px;">' + [x.industry, where, x.contact, x.projectId ? 'Project ' + x.projectId : ''].filter(Boolean).map(esc).join(' · ') + '</div></div>' +
+            '<button class="link-btn mImp" data-id="' + esc(x.itemId) + '" style="width:auto;padding:6px 12px;white-space:nowrap;">Import</button>' +
+          '</div>';
+        }).join('');
+        box.querySelectorAll('.mImp').forEach(function (b) {
+          b.addEventListener('click', async function () {
+            b.disabled = true; b.textContent = 'Importing…';
+            try {
+              var ir = await authed('/integrations/monday/import/deal/' + b.getAttribute('data-id'), { method: 'POST' });
+              var res = await ir.json();
+              if (!ir.ok) { b.textContent = 'Failed'; return; }
+              b.textContent = res.deals.created ? 'Imported' : 'Updated';
+              crm.q = ''; crm.page = 1; loadCrm();
+            } catch (e) { b.textContent = 'Failed'; }
+          });
+        });
+      } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
+    }
+
   }
 
   async function loadCrm() {

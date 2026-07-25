@@ -1,7 +1,7 @@
 import { prisma } from '../../lib/prisma.js';
 import { logger } from '../../lib/logger.js';
 import { normalizeOrgName } from '../../crm/duplicates.js';
-import { fetchAllItems, type MondayItem } from './discovery.js';
+import { fetchAllItems, searchItemsByName, fetchItemById, type MondayItem } from './discovery.js';
 import {
   DEALS_BOARD_ID,
   ORGANIZATIONS_BOARD_ID,
@@ -480,12 +480,81 @@ async function importContacts(
   }
 }
 
+/**
+ * Pull ONE customer on demand — search Deal Tracking by name and import the
+ * matches. This is the path to use at proposal time; the full board walk is
+ * only for the initial backfill.
+ */
+export async function importDealsMatching(
+  term: string,
+  opts: { dryRun?: boolean; limit?: number } = {},
+): Promise<ImportResult> {
+  const { dryRun = false, limit = 25 } = opts;
+  const started = Date.now();
+  const counts = emptyCounts();
+  const warnings: string[] = [];
+  const samples: ImportResult['samples'] = {
+    customerTypes: {},
+    stages: {},
+    stageLabels: {},
+    unmappedIndustryLabels: [],
+    firstRows: [],
+  };
+
+  const items = await searchItemsByName(DEALS_BOARD_ID, term, limit);
+  if (!items.length) warnings.push(`No Deal Tracking rows match "${term}".`);
+  const processed = await importDeals(items, counts, warnings, samples, dryRun, Date.now() + 25_000);
+
+  return {
+    ...counts,
+    source: 'deals',
+    offset: 0,
+    nextOffset: processed,
+    complete: true,
+    dryRun,
+    durationMs: Date.now() - started,
+    warnings,
+    samples,
+  };
+}
+
+/** Import a single Deal Tracking row by its monday item id. */
+export async function importDealById(itemId: string, dryRun = false): Promise<ImportResult> {
+  const started = Date.now();
+  const counts = emptyCounts();
+  const warnings: string[] = [];
+  const samples: ImportResult['samples'] = {
+    customerTypes: {},
+    stages: {},
+    stageLabels: {},
+    unmappedIndustryLabels: [],
+    firstRows: [],
+  };
+  const item = await fetchItemById(itemId);
+  if (!item) {
+    warnings.push(`monday item ${itemId} not found.`);
+  } else {
+    await importDeals([item], counts, warnings, samples, dryRun, Date.now() + 25_000);
+  }
+  return {
+    ...counts,
+    source: 'deals',
+    offset: 0,
+    nextOffset: 0,
+    complete: true,
+    dryRun,
+    durationMs: Date.now() - started,
+    warnings,
+    samples,
+  };
+}
+
 export async function importCrmFromMonday(options: ImportOptions = {}): Promise<ImportResult> {
   const {
     dryRun = true,
     limit,
     offset = 0,
-    budgetMs = 45_000,
+    budgetMs = 20_000,
     organizationsOnly = false,
     source = 'deals',
   } = options;
@@ -507,22 +576,24 @@ export async function importCrmFromMonday(options: ImportOptions = {}): Promise<
   logger.info({ dryRun, limit, offset, source }, 'monday CRM import starting');
 
   if (source === 'deals') {
-    const fetched = await fetchAllItems(DEALS_BOARD_ID, 100, limit ? offset + limit : undefined);
+    // Never fetch the whole board in one invocation: monday paging alone can
+    // outrun the function timeout. Default to a chunk and let the caller loop.
+    const chunk = limit ?? 200;
+    const fetched = await fetchAllItems(DEALS_BOARD_ID, 250, offset + chunk);
     const dealItems = offset ? fetched.slice(offset) : fetched;
     processed = await importDeals(dealItems, counts, warnings, samples, dryRun, deadline);
-    remaining = Math.max(0, dealItems.length - processed);
+    // More rows are left if this chunk filled up, or if the budget cut it short.
+    remaining =
+      Math.max(0, dealItems.length - processed) + (dealItems.length === chunk ? 1 : 0);
     if (remaining > 0) {
-      warnings.push(
-        `Stopped after ${processed} row(s) to stay inside the function timeout — ` +
-          `re-run with ?offset=${offset + processed} to continue.`,
-      );
+      warnings.push(`Chunk done — re-run with ?offset=${offset + processed} to continue.`);
     }
   } else {
-    const orgItems = (await fetchAllItems(ORGANIZATIONS_BOARD_ID, 100, limit ? offset + limit : undefined)).slice(offset);
+    const orgItems = (await fetchAllItems(ORGANIZATIONS_BOARD_ID, 250, offset + (limit ?? 200))).slice(offset);
     processed = orgItems.length;
     const orgIdByMondayId = await importOrganizations(orgItems, counts, warnings, dryRun);
     if (!organizationsOnly) {
-      const contactItems = await fetchAllItems(CONTACTS_BOARD_ID, 100, limit);
+      const contactItems = await fetchAllItems(CONTACTS_BOARD_ID, 250, limit);
       await importContacts(contactItems, orgIdByMondayId, counts, dryRun);
     }
     if (counts.contacts.unlinked > 0) {

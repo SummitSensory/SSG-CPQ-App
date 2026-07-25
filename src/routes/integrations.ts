@@ -6,7 +6,13 @@ import { verifyMondayWebhook } from '../integrations/monday/webhook.js';
 import { applyInboundChange, retrySync } from '../integrations/monday/sync.js';
 import { reconcile } from '../integrations/monday/reconcile.js';
 import { listBoards, describeBoard } from '../integrations/monday/discovery.js';
-import { importCrmFromMonday } from '../integrations/monday/crmImport.js';
+import {
+  importCrmFromMonday,
+  importDealsMatching,
+  importDealById,
+} from '../integrations/monday/crmImport.js';
+import { searchItemsByName } from '../integrations/monday/discovery.js';
+import { DEALS_BOARD_ID, DEAL_COL, clean } from '../integrations/monday/crmMapping.js';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 
@@ -111,6 +117,57 @@ export function registerIntegrationRoutes(app: FastifyInstance): void {
       });
     } catch (err) {
       logger.error({ err }, 'monday CRM import failed');
+      return reply.status(502).send({ error: 'MONDAY_IMPORT_FAILED', detail: String(err) });
+    }
+  });
+
+  // ----- On-demand customer lookup (the proposal-time path) -----
+  // Search Deal Tracking by name; one query, no board walk.
+  app.get('/integrations/monday/search', manage, async (req, reply) => {
+    if (!env.MONDAY_API_TOKEN) return reply.status(400).send({ error: 'MONDAY_TOKEN_MISSING' });
+    const { q } = req.query as { q?: string };
+    if (!q || q.trim().length < 2) return reply.status(400).send({ error: 'QUERY_TOO_SHORT' });
+    try {
+      const items = await searchItemsByName(DEALS_BOARD_ID, q.trim(), 25);
+      return items.map((it) => ({
+        itemId: it.id,
+        name: it.name,
+        industry: clean(it.text[DEAL_COL.industry]),
+        contact: clean(it.text[DEAL_COL.contactName]),
+        email: clean(it.text[DEAL_COL.contactEmail]),
+        city: clean(it.text[DEAL_COL.cityText]) ?? clean(it.text[DEAL_COL.city]),
+        state: clean(it.text[DEAL_COL.state]),
+        projectId: clean(it.text[DEAL_COL.projectId]),
+        stage: clean(it.text[DEAL_COL.stage]),
+      }));
+    } catch (err) {
+      logger.error({ err }, 'monday search failed');
+      return reply.status(502).send({ error: 'MONDAY_QUERY_FAILED', detail: String(err) });
+    }
+  });
+
+  // Import every match for a search term (writes unless ?apply=false).
+  app.post('/integrations/monday/import/search', manage, async (req, reply) => {
+    if (!env.MONDAY_API_TOKEN) return reply.status(400).send({ error: 'MONDAY_TOKEN_MISSING' });
+    const { q, apply } = req.query as { q?: string; apply?: string };
+    if (!q || q.trim().length < 2) return reply.status(400).send({ error: 'QUERY_TOO_SHORT' });
+    try {
+      return await importDealsMatching(q.trim(), { dryRun: apply === 'false' });
+    } catch (err) {
+      logger.error({ err }, 'monday search import failed');
+      return reply.status(502).send({ error: 'MONDAY_IMPORT_FAILED', detail: String(err) });
+    }
+  });
+
+  // Import one deal row by monday item id.
+  app.post('/integrations/monday/import/deal/:itemId', manage, async (req, reply) => {
+    if (!env.MONDAY_API_TOKEN) return reply.status(400).send({ error: 'MONDAY_TOKEN_MISSING' });
+    const { itemId } = req.params as { itemId: string };
+    const { apply } = req.query as { apply?: string };
+    try {
+      return await importDealById(itemId, apply === 'false');
+    } catch (err) {
+      logger.error({ err, itemId }, 'monday deal import failed');
       return reply.status(502).send({ error: 'MONDAY_IMPORT_FAILED', detail: String(err) });
     }
   });
