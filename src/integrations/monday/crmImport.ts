@@ -52,6 +52,11 @@ export interface ImportOptions {
   dryRun?: boolean;
   /** Cap items processed per board — pushed down into the monday paging. */
   limit?: number;
+  /** Skip this many items first, so a big board can be walked in chunks that
+   *  each finish inside the serverless function timeout. */
+  offset?: number;
+  /** Stop after this many ms and report nextOffset instead of timing out. */
+  budgetMs?: number;
   /** Skip the Contacts board entirely (orgs source only). */
   organizationsOnly?: boolean;
   source?: ImportSource;
@@ -68,6 +73,11 @@ export interface ImportCounts {
 
 export interface ImportResult extends ImportCounts {
   source: ImportSource;
+  offset: number;
+  /** Feed this back as ?offset= to continue where this run stopped. */
+  nextOffset: number;
+  /** False when the run stopped early on its time budget. */
+  complete: boolean;
   dryRun: boolean;
   durationMs: number;
   warnings: string[];
@@ -75,6 +85,8 @@ export interface ImportResult extends ImportCounts {
   samples: {
     customerTypes: Record<string, number>;
     stages: Record<string, number>;
+    /** Raw Deal Phase labels seen, so mis-bucketed ones are visible at a glance. */
+    stageLabels: Record<string, number>;
     unmappedIndustryLabels: string[];
     firstRows: Array<Record<string, string | null>>;
   };
@@ -189,10 +201,14 @@ async function importDeals(
   warnings: string[],
   samples: ImportResult['samples'],
   dryRun: boolean,
-): Promise<void> {
+  deadline: number,
+): Promise<number> {
   const unmapped = new Set<string>();
+  let processed = 0;
 
   for (const item of items) {
+    if (Date.now() > deadline) break;
+    processed += 1;
     counts.deals.seen += 1;
     const dealName = item.name.trim();
     if (!dealName) {
@@ -209,6 +225,7 @@ async function importDeals(
     if (projectId) counts.projectIds.present += 1;
     tally(samples.customerTypes, customerType);
     tally(samples.stages, stage);
+    tally(samples.stageLabels, clean(item.text[DEAL_COL.stage]) ?? '(blank)');
 
     // ---- Organization (deal name is the customer name on this board) ----
     counts.organizations.seen += 1;
@@ -321,6 +338,7 @@ async function importDeals(
         [...unmapped].join(', '),
     );
   }
+  return processed;
 }
 
 // ----- Legacy path: Organizations + Contacts boards -----
@@ -463,24 +481,45 @@ async function importContacts(
 }
 
 export async function importCrmFromMonday(options: ImportOptions = {}): Promise<ImportResult> {
-  const { dryRun = true, limit, organizationsOnly = false, source = 'deals' } = options;
+  const {
+    dryRun = true,
+    limit,
+    offset = 0,
+    budgetMs = 45_000,
+    organizationsOnly = false,
+    source = 'deals',
+  } = options;
+  const deadline = Date.now() + budgetMs;
   const started = Date.now();
   const counts = emptyCounts();
   const warnings: string[] = [];
   const samples: ImportResult['samples'] = {
     customerTypes: {},
     stages: {},
+    stageLabels: {},
     unmappedIndustryLabels: [],
     firstRows: [],
   };
 
-  logger.info({ dryRun, limit, source }, 'monday CRM import starting');
+  let processed = 0;
+  let remaining = 0;
+
+  logger.info({ dryRun, limit, offset, source }, 'monday CRM import starting');
 
   if (source === 'deals') {
-    const dealItems = await fetchAllItems(DEALS_BOARD_ID, 100, limit);
-    await importDeals(dealItems, counts, warnings, samples, dryRun);
+    const fetched = await fetchAllItems(DEALS_BOARD_ID, 100, limit ? offset + limit : undefined);
+    const dealItems = offset ? fetched.slice(offset) : fetched;
+    processed = await importDeals(dealItems, counts, warnings, samples, dryRun, deadline);
+    remaining = Math.max(0, dealItems.length - processed);
+    if (remaining > 0) {
+      warnings.push(
+        `Stopped after ${processed} row(s) to stay inside the function timeout — ` +
+          `re-run with ?offset=${offset + processed} to continue.`,
+      );
+    }
   } else {
-    const orgItems = await fetchAllItems(ORGANIZATIONS_BOARD_ID, 100, limit);
+    const orgItems = (await fetchAllItems(ORGANIZATIONS_BOARD_ID, 100, limit ? offset + limit : undefined)).slice(offset);
+    processed = orgItems.length;
     const orgIdByMondayId = await importOrganizations(orgItems, counts, warnings, dryRun);
     if (!organizationsOnly) {
       const contactItems = await fetchAllItems(CONTACTS_BOARD_ID, 100, limit);
@@ -497,6 +536,9 @@ export async function importCrmFromMonday(options: ImportOptions = {}): Promise<
   const result: ImportResult = {
     ...counts,
     source,
+    offset,
+    nextOffset: offset + processed,
+    complete: remaining === 0,
     dryRun,
     durationMs: Date.now() - started,
     warnings,

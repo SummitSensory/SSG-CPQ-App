@@ -93,14 +93,19 @@ export function registerIntegrationRoutes(app: FastifyInstance): void {
     const q = req.query as {
       apply?: string;
       limit?: string;
+      offset?: string;
+      budgetMs?: string;
       organizationsOnly?: string;
       source?: string;
     };
     const limit = q.limit ? Math.max(1, Number(q.limit) || 0) : undefined;
+    const offset = q.offset ? Math.max(0, Number(q.offset) || 0) : 0;
     try {
       return await importCrmFromMonday({
         dryRun: q.apply !== 'true',
         ...(limit ? { limit } : {}),
+        offset,
+        ...(q.budgetMs ? { budgetMs: Math.max(5_000, Number(q.budgetMs) || 45_000) } : {}),
         organizationsOnly: q.organizationsOnly === 'true',
         source: q.source === 'orgs' ? 'orgs' : 'deals',
       });
