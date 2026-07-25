@@ -52,6 +52,14 @@ async function main() {
     console.log(`Admin user already exists: ${ADMIN_EMAIL}. No change.`);
   }
 
+  // Seed the one product line this catalog ships with. Idempotent: does
+  // nothing once it exists, so re-running never overwrites edits.
+  await prisma.productLine.upsert({
+    where: { slug: 'adventure-series' },
+    update: {},
+    create: { name: 'Adventure Series', slug: 'adventure-series' },
+  });
+
   // Seed SKUs only if the table is empty, so we never overwrite the user's edits.
   const count = await prisma.sku.count();
   if (count === 0) {

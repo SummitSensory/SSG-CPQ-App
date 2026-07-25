@@ -720,15 +720,93 @@
   }
 
   /* --- Catalog --- */
-  var cat = { q: '', status: '', page: 1, tab: 'products' };
+  var cat = { q: '', status: '', page: 1, tab: 'products', lineTreeId: null };
   var catCategories = [];
+  var catLines = [];
   var KINDS = ['PRODUCT', 'VARIANT', 'COMPONENT', 'BUNDLE', 'ACCESSORY', 'SERVICE'];
   var STATUSES = ['DRAFT', 'ACTIVE', 'INACTIVE', 'ARCHIVED'];
+  // Full path "Parent › Child" so the products table shows where a product sits.
   function catName(id) {
-    var c = catCategories.filter(function (x) {
+    var path = [];
+    var cur = catCategories.filter(function (x) {
       return x.id === id;
     })[0];
-    return c ? c.name : '—';
+    var guard = 0;
+    while (cur && guard++ < 10) {
+      path.unshift(cur.name);
+      cur = cur.parentId
+        ? catCategories.filter(function (x) {
+            return x.id === cur.parentId;
+          })[0]
+        : null;
+    }
+    return path.length ? path.join(' › ') : '—';
+  }
+  // Flat category list in tree order: top level by sortOrder/name, each
+  // followed by its own children in the same order. Depth is 0 at top level.
+  function categoryTreeOrder(cats) {
+    var byParent = {};
+    cats.forEach(function (c) {
+      var key = c.parentId || '';
+      (byParent[key] = byParent[key] || []).push(c);
+    });
+    Object.keys(byParent).forEach(function (k) {
+      byParent[k].sort(function (a, b) {
+        return a.sortOrder - b.sortOrder || a.name.localeCompare(b.name);
+      });
+    });
+    var out = [];
+    function walk(parentKey, depth) {
+      (byParent[parentKey] || []).forEach(function (c) {
+        out.push({ cat: c, depth: depth });
+        walk(c.id, depth + 1);
+      });
+    }
+    walk('', 0);
+    return out;
+  }
+  function sortCategoriesTree(cats) {
+    return categoryTreeOrder(cats).map(function (n) {
+      return n.cat;
+    });
+  }
+  function categoryDescendantIds(cats, id) {
+    var ids = {};
+    var stack = [id];
+    while (stack.length) {
+      var cur = stack.pop();
+      cats.forEach(function (c) {
+        if (c.parentId === cur && !ids[c.id]) {
+          ids[c.id] = true;
+          stack.push(c.id);
+        }
+      });
+    }
+    return ids;
+  }
+  // Parent-category <option>s in tree order, indented two nbsp per depth.
+  // excludeId (when editing an existing category) drops it and its descendants.
+  function categoryParentOptions(cats, excludeId) {
+    var excluded = excludeId ? categoryDescendantIds(cats, excludeId) : {};
+    if (excludeId) excluded[excludeId] = true;
+    var opts = '<option value="">— None (top level) —</option>';
+    categoryTreeOrder(cats).forEach(function (n) {
+      if (excluded[n.cat.id]) return;
+      var pad = '';
+      for (var i = 0; i < n.depth; i++) pad += '&nbsp;&nbsp;';
+      opts += '<option value="' + n.cat.id + '">' + pad + esc(n.cat.name) + '</option>';
+    });
+    return opts;
+  }
+  async function ensureCatLines() {
+    if (catLines.length) return catLines;
+    try {
+      var r = await authed('/catalog/product-lines');
+      catLines = r.ok ? await r.json() : [];
+    } catch (e) {
+      catLines = [];
+    }
+    return catLines;
   }
   function slugify(s) {
     return String(s)
@@ -760,6 +838,7 @@
     document.getElementById('view').innerHTML =
       '<div style="display:flex;gap:5px;background:#eef0ea;padding:4px;border-radius:10px;width:max-content;margin-bottom:18px;">' +
       ctab('products', 'Products') +
+      ctab('lines', 'Product lines') +
       ctab('skus', 'Pricing &amp; SKUs') +
       '</div><div id="catBody"></div>';
     document.querySelectorAll('[data-ctab]').forEach(function (b) {
@@ -769,13 +848,14 @@
       });
     });
     if (cat.tab === 'skus') renderSkus(user);
+    else if (cat.tab === 'lines') renderProductLines(user);
     else renderCatalogProducts(user);
   }
   async function renderCatalogProducts(user) {
     var admin = canCatalogAdmin(user.role);
     try {
       var rc = await authed('/catalog/categories');
-      catCategories = rc.ok ? await rc.json() : [];
+      catCategories = rc.ok ? sortCategoriesTree(await rc.json()) : [];
     } catch (e) {
       catCategories = [];
     }
@@ -827,6 +907,233 @@
       document.getElementById('catNewCat').addEventListener('click', openCategoryForm);
     }
     loadProducts(user);
+  }
+
+  /* --- Product lines (4-tier product hierarchy) --- */
+  async function renderProductLines(user) {
+    var admin = canCatalogAdmin(user.role);
+    document.getElementById('catBody').innerHTML =
+      '<div style="display:flex;justify-content:flex-end;margin-bottom:14px;">' +
+      (admin
+        ? '<button class="btn" id="plNew" style="width:auto;padding:10px 17px;">New product line</button>'
+        : '') +
+      '</div>' +
+      '<div id="plBody"><div class="muted" style="padding:24px;">Loading…</div></div>';
+    if (admin)
+      document.getElementById('plNew').addEventListener('click', function () {
+        openProductLineForm(user);
+      });
+    loadProductLines(user);
+  }
+  async function loadProductLines(user) {
+    var box = document.getElementById('plBody');
+    if (!box) return;
+    if (cat.lineTreeId) {
+      renderProductLineTree(cat.lineTreeId, user);
+      return;
+    }
+    var admin = canCatalogAdmin(user.role);
+    try {
+      var r = await authed('/catalog/product-lines');
+      if (!r.ok) {
+        box.innerHTML = '<div class="err">Could not load (' + r.status + ').</div>';
+        return;
+      }
+      var lines = await r.json();
+      catLines = lines;
+      var rows = lines
+        .map(function (l) {
+          return (
+            '<tr style="cursor:pointer;" data-id="' +
+            l.id +
+            '">' +
+            td('<b style="font-weight:600;">' + esc(l.name) + '</b>') +
+            td('<code style="font-size:12.5px;color:#4a4f47;">' + esc(l.slug) + '</code>') +
+            td(l.isActive ? 'Active' : 'Inactive') +
+            td(
+              admin
+                ? '<button type="button" class="plEdit link-btn" data-id="' +
+                    l.id +
+                    '" style="width:auto;padding:6px 12px;font-size:12px;">Edit</button>'
+                : '',
+            ) +
+            '</tr>'
+          );
+        })
+        .join('');
+      box.innerHTML = tableShell(['Name', 'Slug', 'Status', ''], rows, 4, 'No product lines yet.');
+      document.querySelectorAll('#plBody tr[data-id]').forEach(function (tr) {
+        tr.addEventListener('click', function (e) {
+          if (e.target.closest('.plEdit')) return;
+          cat.lineTreeId = tr.getAttribute('data-id');
+          loadProductLines(user);
+        });
+      });
+      document.querySelectorAll('.plEdit').forEach(function (b) {
+        b.addEventListener('click', function (e) {
+          e.stopPropagation();
+          var line = lines.filter(function (x) {
+            return x.id === b.getAttribute('data-id');
+          })[0];
+          openProductLineForm(user, line);
+        });
+      });
+    } catch (e) {
+      box.innerHTML = '<div class="err">Could not reach the server.</div>';
+    }
+  }
+  function openProductLineForm(user, line) {
+    openModal(
+      line ? 'Edit product line' : 'New product line',
+      fieldRow(
+        'Name',
+        '<input id="plName" style="' +
+          IN +
+          '" value="' +
+          esc(line ? line.name : '') +
+          '" required>',
+      ) +
+        fieldRow(
+          'Slug',
+          '<input id="plSlug" placeholder="auto-generated" style="' +
+            IN +
+            '" value="' +
+            esc(line ? line.slug : '') +
+            '">',
+        ) +
+        fieldRow(
+          'Description (optional)',
+          '<textarea id="plDesc" rows="2" style="' +
+            IN +
+            'resize:vertical;">' +
+            esc(line ? line.description || '' : '') +
+            '</textarea>',
+        ),
+      async function (close, showErr) {
+        var name = document.getElementById('plName').value.trim();
+        if (name.length < 2) return showErr('Name must be at least 2 characters.');
+        var slug = document.getElementById('plSlug').value.trim() || slugify(name);
+        var body = {
+          name: name,
+          slug: slug,
+          description: document.getElementById('plDesc').value.trim() || undefined,
+        };
+        var r = line
+          ? await authed('/catalog/product-lines/' + line.id, { method: 'PATCH', body: body })
+          : await authed('/catalog/product-lines', { method: 'POST', body: body });
+        if (r.status === 409) return showErr('That slug already exists — try another.');
+        if (!r.ok) return showErr('Could not save (' + r.status + ').');
+        close();
+        catLines = [];
+        loadProductLines(user);
+      },
+      line ? 'Save' : 'Create',
+    );
+    var n = document.getElementById('plName');
+    if (n)
+      n.addEventListener('input', function () {
+        var sl = document.getElementById('plSlug');
+        if (sl && !sl.dataset.touched) sl.value = slugify(n.value);
+      });
+    var sl2 = document.getElementById('plSlug');
+    if (sl2)
+      sl2.addEventListener('input', function () {
+        sl2.dataset.touched = '1';
+      });
+  }
+  // Indent per spec: tier 1 = 0px, tier 2 = 18px, tier 3 = 36px, tier 4 = 54px.
+  function productTreeNodeHtml(n, depth) {
+    var indent = depth * 18;
+    var below = indent + 18;
+    var row;
+    if (!n.product) {
+      row =
+        '<div style="padding:8px 12px;padding-left:' +
+        (indent + 12) +
+        'px;font-weight:700;font-size:13.5px;">' +
+        esc(n.name) +
+        '</div>';
+    } else {
+      var p = n.product;
+      row =
+        '<div style="display:flex;align-items:center;gap:10px;padding:6px 12px;padding-left:' +
+        (indent + 12) +
+        'px;font-size:13.5px;">' +
+        '<span style="flex:1;">' +
+        esc(n.name) +
+        '</span>' +
+        '<code style="font-size:11.5px;color:#7a7f75;width:80px;">' +
+        esc(p.sku) +
+        '</code>' +
+        '<span style="width:150px;font-size:11.5px;color:#8a6d1f;">' +
+        esc(p.badge || '') +
+        '</span>' +
+        '<span style="width:40px;text-align:right;color:#5c6157;">' +
+        p.defaultQuantity +
+        '</span>' +
+        '<span style="width:80px;text-align:right;">' +
+        (p.unitPriceMinor != null ? fmtMoney(p.unitPriceMinor, '') : '—') +
+        '</span>' +
+        '</div>';
+      if (p.showDimensions && p.dimensions) {
+        row +=
+          '<div style="padding-left:' +
+          (below + 12) +
+          'px;font-size:85%;color:#8a8f85;">' +
+          esc(p.dimensions) +
+          '</div>';
+      }
+      (p.notes || []).forEach(function (note) {
+        row +=
+          '<div style="padding-left:' +
+          (below + 12) +
+          'px;font-size:85%;color:#8a8f85;">' +
+          esc(note.text) +
+          '</div>';
+      });
+    }
+    return (
+      row +
+      (n.children || [])
+        .map(function (c) {
+          return productTreeNodeHtml(c, depth + 1);
+        })
+        .join('')
+    );
+  }
+  async function renderProductLineTree(id, user) {
+    var box = document.getElementById('plBody');
+    if (!box) return;
+    box.innerHTML = '<div class="muted" style="padding:24px;">Loading…</div>';
+    try {
+      var r = await authed('/catalog/product-lines/' + id + '/tree');
+      if (!r.ok) {
+        box.innerHTML = '<div class="err">Could not load (' + r.status + ').</div>';
+        return;
+      }
+      var d = await r.json();
+      box.innerHTML =
+        '<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">' +
+        '<button class="link-btn" id="plBack" style="width:auto;padding:7px 13px;">‹ Back</button>' +
+        '<h3 style="margin:0;font-size:18px;">' +
+        esc(d.name) +
+        '</h3>' +
+        '</div>' +
+        '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:14px;padding:8px 0;">' +
+        ((d.tree || [])
+          .map(function (n) {
+            return productTreeNodeHtml(n, 0);
+          })
+          .join('') ||
+          '<div class="muted" style="padding:24px;">No categories yet. Add one from the Products tab.</div>') +
+        '</div>';
+      document.getElementById('plBack').addEventListener('click', function () {
+        cat.lineTreeId = null;
+        loadProductLines(user);
+      });
+    } catch (e) {
+      box.innerHTML = '<div class="err">Could not reach the server.</div>';
+    }
   }
 
   /* --- SKU / Pricing manager (in-app editor + Excel/CSV import) --- */
@@ -1193,28 +1500,53 @@
     }
   }
 
-  function openCategoryForm() {
+  async function openCategoryForm() {
+    await ensureCatLines();
+    var lineOpts =
+      '<option value="">— None —</option>' +
+      catLines
+        .map(function (l) {
+          return '<option value="' + l.id + '">' + esc(l.name) + '</option>';
+        })
+        .join('');
+    var parentOpts = categoryParentOptions(catCategories, null);
     openModal(
       'New category',
       fieldRow('Name', '<input id="cName" style="' + IN + '" required>') +
         fieldRow('Slug', '<input id="cSlug" placeholder="auto-generated" style="' + IN + '">') +
+        fieldRow(
+          'Product line',
+          '<select id="cLine" style="' + IN + '">' + lineOpts + '</select>',
+        ) +
+        fieldRow(
+          'Parent category',
+          '<select id="cParent" style="' + IN + '">' + parentOpts + '</select>',
+        ) +
+        fieldRow(
+          'Tier level',
+          '<input id="cTier" disabled style="' + IN + 'background:#f2f3ef;" value="1">',
+        ) +
         fieldRow('Sort order', '<input id="cSort" type="number" value="0" style="' + IN + '">'),
       async function (close, showErr) {
         var name = document.getElementById('cName').value.trim();
         if (name.length < 2) return showErr('Name must be at least 2 characters.');
         var slug = document.getElementById('cSlug').value.trim() || slugify(name);
+        var parentId = document.getElementById('cParent').value;
+        var lineId = document.getElementById('cLine').value;
         var body = {
           name: name,
           slug: slug,
           sortOrder: parseInt(document.getElementById('cSort').value, 10) || 0,
           isActive: true,
         };
+        if (parentId) body.parentId = parentId;
+        if (lineId) body.productLineId = lineId;
         var r = await authed('/catalog/categories', { method: 'POST', body: body });
         if (r.status === 409) return showErr('That slug already exists — try another.');
         if (!r.ok) return showErr('Could not create (' + r.status + ').');
         close();
         var rc = await authed('/catalog/categories');
-        catCategories = rc.ok ? await rc.json() : catCategories;
+        catCategories = rc.ok ? sortCategoriesTree(await rc.json()) : catCategories;
       },
     );
     var n = document.getElementById('cName');
@@ -1228,18 +1560,108 @@
       sl2.addEventListener('input', function () {
         sl2.dataset.touched = '1';
       });
+    var pEl = document.getElementById('cParent');
+    var lEl = document.getElementById('cLine');
+    var tEl = document.getElementById('cTier');
+    if (pEl)
+      pEl.addEventListener('change', function () {
+        var pid = pEl.value;
+        var parent = pid
+          ? catCategories.filter(function (x) {
+              return x.id === pid;
+            })[0]
+          : null;
+        tEl.value = String(parent ? parent.tierLevel + 1 : 1);
+        if (parent && parent.productLineId) lEl.value = parent.productLineId;
+      });
   }
 
-  function openProductForm(user) {
+  async function openProductForm(user) {
     if (!catCategories.length) {
       alert('Create a category first — products must belong to one.');
       return;
     }
+    await ensureCatLines();
     var catOpts = catCategories
       .map(function (c) {
-        return '<option value="' + c.id + '">' + esc(c.name) + '</option>';
+        return '<option value="' + c.id + '">' + esc(catName(c.id)) + '</option>';
       })
       .join('');
+    var lineOpts =
+      '<option value="">— None —</option>' +
+      catLines
+        .map(function (l) {
+          return '<option value="' + l.id + '">' + esc(l.name) + '</option>';
+        })
+        .join('');
+    var notes = [];
+    function notesListHtml() {
+      return (
+        notes
+          .map(function (n, i) {
+            return (
+              '<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">' +
+              '<input class="pNoteText" data-i="' +
+              i +
+              '" value="' +
+              esc(n.text) +
+              '" placeholder="*Please allow 8-10 weeks for manufacturing…" style="' +
+              IN +
+              'flex:1;">' +
+              '<button type="button" class="pNoteUp" data-i="' +
+              i +
+              '" style="border:1px solid #e0e1db;background:#fff;border-radius:7px;width:28px;height:28px;cursor:pointer;"' +
+              (i === 0 ? ' disabled' : '') +
+              '>↑</button>' +
+              '<button type="button" class="pNoteDown" data-i="' +
+              i +
+              '" style="border:1px solid #e0e1db;background:#fff;border-radius:7px;width:28px;height:28px;cursor:pointer;"' +
+              (i === notes.length - 1 ? ' disabled' : '') +
+              '>↓</button>' +
+              '<button type="button" class="pNoteDel" data-i="' +
+              i +
+              '" style="border:1px solid #e0e1db;background:#fff;border-radius:7px;width:28px;height:28px;color:#9c3327;cursor:pointer;">✕</button>' +
+              '</div>'
+            );
+          })
+          .join('') ||
+        '<div class="muted" style="font-size:12px;margin-bottom:6px;">No notes yet.</div>'
+      );
+    }
+    function wireNotes() {
+      var list = document.getElementById('pNotesList');
+      if (!list) return;
+      list.innerHTML = notesListHtml();
+      list.querySelectorAll('.pNoteText').forEach(function (el) {
+        el.addEventListener('input', function () {
+          notes[+el.getAttribute('data-i')].text = el.value;
+        });
+      });
+      list.querySelectorAll('.pNoteUp').forEach(function (b) {
+        b.addEventListener('click', function () {
+          var i = +b.getAttribute('data-i');
+          var tmp = notes[i - 1];
+          notes[i - 1] = notes[i];
+          notes[i] = tmp;
+          wireNotes();
+        });
+      });
+      list.querySelectorAll('.pNoteDown').forEach(function (b) {
+        b.addEventListener('click', function () {
+          var i = +b.getAttribute('data-i');
+          var tmp = notes[i + 1];
+          notes[i + 1] = notes[i];
+          notes[i] = tmp;
+          wireNotes();
+        });
+      });
+      list.querySelectorAll('.pNoteDel').forEach(function (b) {
+        b.addEventListener('click', function () {
+          notes.splice(+b.getAttribute('data-i'), 1);
+          wireNotes();
+        });
+      });
+    }
     openModal(
       'New product',
       fieldRow(
@@ -1252,18 +1674,37 @@
         fieldRow('Kind', selectEl('pKind', KINDS, 'PRODUCT')) +
         fieldRow('Category', '<select id="pCat" style="' + IN + '">' + catOpts + '</select>') +
         fieldRow(
+          'Product line',
+          '<select id="pLine" style="' + IN + '">' + lineOpts + '</select>',
+        ) +
+        '<div style="display:flex;gap:8px;"><div class="field" style="flex:1;"><label>Default quantity</label><input id="pQty" type="number" min="1" value="1" style="' +
+        IN +
+        '"></div>' +
+        '<div class="field" style="flex:1;"><label>Badge</label><input id="pBadge" placeholder="*Popular Addition" style="' +
+        IN +
+        '"></div></div>' +
+        fieldRow(
           'Proposal description',
           '<textarea id="pDesc" rows="3" style="' + IN + 'resize:vertical;"></textarea>',
         ) +
-        '<div style="display:flex;gap:8px;"><div class="field" style="flex:1;"><label>Length (in)</label><input id="pL" type="number" min="0" style="' +
+        '<div style="display:flex;gap:8px;"><div class="field" style="flex:1;"><label>Length (in)</label><input id="pL" type="number" min="0" step="any" style="' +
         IN +
         '"></div>' +
-        '<div class="field" style="flex:1;"><label>Width (in)</label><input id="pW" type="number" min="0" style="' +
+        '<div class="field" style="flex:1;"><label>Width (in)</label><input id="pW" type="number" min="0" step="any" style="' +
         IN +
         '"></div>' +
-        '<div class="field" style="flex:1;"><label>Height (in)</label><input id="pH" type="number" min="0" style="' +
+        '<div class="field" style="flex:1;"><label>Height (in)</label><input id="pH" type="number" min="0" step="any" style="' +
         IN +
-        '"></div></div>',
+        '"></div>' +
+        '<div class="field" style="flex:1;"><label>Thickness (in)</label><input id="pT" type="number" min="0" step="any" style="' +
+        IN +
+        '"></div></div>' +
+        '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:4px;cursor:pointer;"><input type="checkbox" id="pShowDim"> Show dimensions on proposal</label>' +
+        '<details style="margin-top:8px;"><summary style="cursor:pointer;font-size:13px;color:#5c6157;">Custom dimension text override</summary>' +
+        '<div class="field" style="margin-top:8px;"><textarea id="pDimOverride" rows="2" placeholder="e.g. 67&quot; x 3.5&quot; x 4.875&quot; x 3.5&quot; x 1.375&quot;" style="' +
+        IN +
+        'resize:vertical;"></textarea></div></details>' +
+        '<div class="field" style="margin-top:12px;"><label>Notes (print beneath the product)</label><div id="pNotesList"></div><button type="button" class="link-btn" id="pNoteAdd" style="width:auto;padding:7px 13px;">+ Add note</button></div>',
       async function (close, showErr) {
         var sku = document.getElementById('pSku').value.trim().toUpperCase();
         if (!/^[A-Z0-9][A-Z0-9-]{2,39}$/.test(sku))
@@ -1275,12 +1716,25 @@
           name: name,
           kind: document.getElementById('pKind').value,
           categoryId: document.getElementById('pCat').value,
+          defaultQuantity: parseInt(document.getElementById('pQty').value, 10) || 1,
+          showDimensions: document.getElementById('pShowDim').checked,
+          notes: notes.filter(function (n) {
+            return n.text.trim();
+          }),
         };
+        var lineId = document.getElementById('pLine').value;
+        if (lineId) body.productLineId = lineId;
+        var badge = document.getElementById('pBadge').value.trim();
+        if (badge) body.badge = badge;
         var desc = document.getElementById('pDesc').value.trim();
         if (desc) body.proposalDescription = desc;
-        ['L', 'W', 'H'].forEach(function (k) {
+        var override = document.getElementById('pDimOverride').value.trim();
+        if (override) body.dimensionsOverride = override;
+        ['L', 'W', 'H', 'T'].forEach(function (k) {
           var v = document.getElementById('p' + k).value;
-          if (v !== '') body[{ L: 'lengthIn', W: 'widthIn', H: 'heightIn' }[k]] = parseInt(v, 10);
+          if (v !== '')
+            body[{ L: 'lengthIn', W: 'widthIn', H: 'heightIn', T: 'thicknessIn' }[k]] =
+              parseFloat(v);
         });
         var r = await authed('/catalog/products', { method: 'POST', body: body });
         if (r.status === 409) return showErr('That SKU already exists.');
@@ -1290,6 +1744,13 @@
         loadProducts(user);
       },
     );
+    wireNotes();
+    var noteAdd = document.getElementById('pNoteAdd');
+    if (noteAdd)
+      noteAdd.addEventListener('click', function () {
+        notes.push({ text: '' });
+        wireNotes();
+      });
   }
 
   /* --- shared table helpers --- */
@@ -1670,6 +2131,7 @@
         billTo: meta.billTo || '',
         shipTo: meta.shipTo || orgShipTo || '',
         projectId: meta.projectId || '',
+        productLineId: meta.productLineId || '',
         showProjectId: meta.showProjectId !== false,
         showTitle: meta.showTitle !== false,
         proposalDate: propDate,
@@ -1682,6 +2144,7 @@
       },
       lines: lines,
     };
+    await ensureCatLines();
     renderBuilder();
   }
 
@@ -1785,6 +2248,26 @@
       fieldRow(
         'Expiration date',
         '<input id="mExp" type="date" style="' + IN + '" value="' + esc(pb.meta.expiration) + '">',
+      ) +
+      fieldRow(
+        'Product line',
+        '<select id="mLine" style="' +
+          IN +
+          '"><option value="">— None —</option>' +
+          catLines
+            .map(function (l) {
+              return (
+                '<option value="' +
+                l.id +
+                '"' +
+                (pb.meta.productLineId === l.id ? ' selected' : '') +
+                '>' +
+                esc(l.name) +
+                '</option>'
+              );
+            })
+            .join('') +
+          '</select>',
       ) +
       '</div>' +
       '<div class="field" style="margin-top:4px;"><label>Bill to</label><textarea id="mBillTo" rows="2" style="' +
@@ -2164,6 +2647,11 @@
       mst.addEventListener('change', function () {
         pb.meta.showTitle = mst.checked;
       });
+    var mln = document.getElementById('mLine');
+    if (mln)
+      mln.addEventListener('change', function () {
+        pb.meta.productLineId = mln.value;
+      });
     var me = document.getElementById('mExp');
     if (me)
       me.addEventListener('input', function () {
@@ -2270,7 +2758,12 @@
   async function openProductPicker() {
     var products = [];
     try {
-      var r = await authed('/catalog/products?pageSize=100');
+      var path =
+        '/catalog/products?pageSize=100' +
+        (pb.meta.productLineId
+          ? '&productLineId=' + encodeURIComponent(pb.meta.productLineId)
+          : '');
+      var r = await authed(path);
       if (r.ok) products = (await r.json()).items || [];
     } catch (e) {}
     var listHtml = function (items) {
@@ -2319,7 +2812,7 @@
               productId: p.id,
               name: p.name,
               description: p.proposalDescription || '',
-              quantity: 1,
+              quantity: p.defaultQuantity || 1,
               rateMinor: 0,
               group: '',
             });

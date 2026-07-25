@@ -342,6 +342,21 @@ enum RelationType {
   ACCESSORY_OF
 }
 
+// A top-level product line (e.g. "Adventure Series"). Categories hang off a
+// line and double as its 4-tier structure: header rows and product rows.
+model ProductLine {
+  id          String            @id @default(cuid())
+  name        String            @unique
+  slug        String            @unique
+  description String?
+  sortOrder   Int               @default(0)
+  isActive    Boolean           @default(true)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  categories  ProductCategory[]
+  products    Product[]
+}
+
 model ProductCategory {
   id        String            @id @default(cuid())
   name      String
@@ -353,6 +368,17 @@ model ProductCategory {
   isActive  Boolean           @default(true)
   families  ProductFamily[]
   products  Product[]
+
+  // Tier-tree fields: a category node is a HEADER when productId is null, or
+  // a PRODUCT line when it points at one. Tier 1 is always a header.
+  productLineId String?
+  productLine   ProductLine? @relation(fields: [productLineId], references: [id], onDelete: Cascade)
+  tierLevel     Int          @default(1)
+  productId     String?
+  product       Product?     @relation("CategoryTierProduct", fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([productLineId, tierLevel])
+  @@index([parentId, sortOrder])
 }
 
 model ProductFamily {
@@ -381,13 +407,30 @@ model Product {
   familyId            String?
   family              ProductFamily?      @relation(fields: [familyId], references: [id], onDelete: SetNull)
 
+  productLineId       String?
+  productLine         ProductLine?        @relation(fields: [productLineId], references: [id], onDelete: SetNull)
+  defaultQuantity     Int                 @default(1)
+  badge               String?
+
   proposalDescription String?
   internalDescription String?
 
-  // Dimensions in whole inches, weight in whole ounces — integers, never floats.
-  lengthIn            Int?
-  widthIn             Int?
-  heightIn            Int?
+  // Legacy whole-inch dimensions, superseded by the decimal columns below.
+  // Kept (not dropped) so no historical data is lost.
+  lengthInLegacy      Int?
+  widthInLegacy       Int?
+  heightInLegacy      Int?
+
+  // Dimensions in inches (fractional, e.g. 4.875), weight in whole ounces.
+  lengthIn            Decimal?            @db.Decimal(8, 3)
+  widthIn             Decimal?            @db.Decimal(8, 3)
+  heightIn            Decimal?            @db.Decimal(8, 3)
+  thicknessIn         Decimal?            @db.Decimal(8, 3)
+  // Verbatim override for shapes the L/W/H/T formula can't express (e.g.
+  // five-value U-profile mats). When set, this is printed as-is.
+  dimensionsOverride  String?
+  showDimensions      Boolean             @default(false)
+
   weightOz            Int?
   capacity            String?
 
@@ -405,11 +448,26 @@ model Product {
   statusHistory       ProductStatusHistory[]
   parentRelations     ProductRelation[]   @relation("RelationParent")
   childRelations      ProductRelation[]   @relation("RelationChild")
+  notes               ProductNote[]
+  tierNodes           ProductCategory[]   @relation("CategoryTierProduct")
 
   @@index([categoryId])
   @@index([familyId])
   @@index([status])
   @@index([kind])
+  @@index([productLineId])
+}
+
+// The asterisked lines that print beneath a product on the proposal, e.g.
+// "*OPTIONAL ADD-ON: Enhances Versatility".
+model ProductNote {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  text      String
+  sortOrder Int     @default(0)
+
+  @@index([productId])
 }
 
 model ProductRelation {

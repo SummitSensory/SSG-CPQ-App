@@ -1,5 +1,5 @@
 import { prisma } from '../lib/prisma.js';
-import type { Product, ProductStatus } from '@prisma/client';
+import type { Product, ProductCategory, ProductStatus } from '@prisma/client';
 import { ConflictError, ValidationError } from '../lib/errors.js';
 
 /** Allowed status transitions. */
@@ -96,6 +96,55 @@ export async function changeStatus(
     const started = to === 'ACTIVE' && !current.activeFrom ? { activeFrom: new Date() } : {};
     return tx.product.update({ where: { id }, data: { status: to, ...extra, ...started } });
   });
+}
+
+/**
+ * Resolves and validates where a category node sits in its product line's
+ * tier tree: tier 1 has no parent; every other tier is exactly parent + 1
+ * (max 4), and a node's product line must match its parent's.
+ */
+export function resolveCategoryTier(
+  input: { tierLevel?: number; productLineId?: string; productId?: string },
+  parent: ProductCategory | null,
+): { tierLevel: number; productLineId: string | null } {
+  if (!parent) {
+    const tierLevel = input.tierLevel ?? 1;
+    if (tierLevel !== 1) throw new ValidationError('A top-level category must be tier 1');
+    if (input.productId) {
+      throw new ValidationError(
+        'Tier 1 categories are headers only — they cannot reference a product',
+      );
+    }
+    return { tierLevel: 1, productLineId: input.productLineId ?? null };
+  }
+  const tierLevel = parent.tierLevel + 1;
+  if (tierLevel > 4) throw new ValidationError('Maximum tier depth is 4');
+  if (input.tierLevel != null && input.tierLevel !== tierLevel) {
+    throw new ValidationError(`tierLevel must be ${tierLevel} (parent tier + 1)`);
+  }
+  const productLineId = input.productLineId ?? parent.productLineId ?? null;
+  if (parent.productLineId && productLineId !== parent.productLineId) {
+    throw new ValidationError("A category's product line must match its parent's");
+  }
+  return { tierLevel, productLineId };
+}
+
+/** True if setting `nodeId`'s parent to `newParentId` would create a cycle. */
+export function wouldCreateCycle(
+  categories: Array<{ id: string; parentId: string | null }>,
+  nodeId: string,
+  newParentId: string | null,
+): boolean {
+  const byId = new Map(categories.map((c) => [c.id, c]));
+  const seen = new Set<string>();
+  let cur = newParentId;
+  while (cur) {
+    if (cur === nodeId) return true;
+    if (seen.has(cur)) return false;
+    seen.add(cur);
+    cur = byId.get(cur)?.parentId ?? null;
+  }
+  return false;
 }
 
 /** Throw if the product cannot be hard-deleted; the caller should archive instead. */
