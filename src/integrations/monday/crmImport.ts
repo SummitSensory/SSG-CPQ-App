@@ -242,8 +242,9 @@ async function importDeals(
       counts.organizations.created += 1;
     }
 
+    const addr = buildAddress(item.text, item.raw[DEAL_COL.location]);
     await writeAddressIfMissing(
-      buildAddress(item.text, item.raw[DEAL_COL.location]),
+      addr,
       organizationId,
       dealName,
       counts,
@@ -268,10 +269,11 @@ async function importDeals(
         projectId,
         contact: clean(item.text[DEAL_COL.contactName]),
         email: parseEmail(item.raw[DEAL_COL.contactEmail], item.text[DEAL_COL.contactEmail] ?? ''),
-        street: clean(item.text[DEAL_COL.street1]),
-        city: clean(item.text[DEAL_COL.city]),
-        state: clean(item.text[DEAL_COL.state]),
-        zip: clean(item.text[DEAL_COL.zip]),
+        street: addr?.line1 ?? null,
+        city: addr?.city ?? null,
+        state: addr?.region ?? null,
+        zip: addr?.postalCode ?? null,
+        country: addr?.country ?? null,
       });
     }
 

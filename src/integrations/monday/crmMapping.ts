@@ -41,10 +41,15 @@ export const DEAL_COL = {
   location: 'location__1',
   /** formula — street address */
   street1: 'formula_mkpsy1b6',
+  /** text — street address (typed, used when the formula is empty) */
+  streetText: 'text_mkq249md',
   /** text — unit / suite */
   unit: 'text_mm1zssfw',
-  /** formula — city */
+  /** formula — city; NOTE: often resolves to a COUNTY, so cityText and the
+   *  location blob are preferred over it */
   city: 'formula_mkpsgx0y',
+  /** text — city (typed) */
+  cityText: 'text_mkq2tbvv',
   /** text — state */
   state: 'text_mkpzwfqz',
   /** text — zip code */
@@ -116,6 +121,8 @@ export const INDUSTRY_TO_CUSTOMER_TYPE: Record<string, CustomerType> = {
   'Multi-Disciplinary Therapy Practice': 'PRIVATE_PRACTICE',
   'Rehabilitation Facility': 'PRIVATE_PRACTICE',
   'Rehab Facility': 'PRIVATE_PRACTICE',
+  'Orthotics / Prosthetics': 'PRIVATE_PRACTICE',
+  'Orthotics/Prosthetics': 'PRIVATE_PRACTICE',
   Hospital: 'HOSPITAL',
   Hosptial: 'HOSPITAL',
   'Healthcare System': 'HEALTHCARE_SYSTEM',
@@ -238,25 +245,18 @@ export function buildAddress(
   text: Record<string, string | undefined>,
   rawLocation: string | null | undefined,
 ): ParsedLocation | null {
-  const line1 = clean(text[DEAL_COL.street1]);
-  const line2 = clean(text[DEAL_COL.unit]);
-  const city = clean(text[DEAL_COL.city]);
-  const region = clean(text[DEAL_COL.state]);
-  const postalCode = clean(text[DEAL_COL.zip]);
-  const country = clean(text[DEAL_COL.country]) ?? 'US';
-
-  if (line1 || city || postalCode) {
-    return { line1, line2, city, region, postalCode, country };
-  }
-
   const loc = parseLocation(rawLocation);
-  if (!loc) return null;
-  return {
-    ...loc,
-    line2,
-    postalCode: postalCode ?? loc.postalCode,
-    region: region ?? loc.region,
-  };
+
+  const line1 = clean(text[DEAL_COL.street1]) ?? clean(text[DEAL_COL.streetText]) ?? loc?.line1 ?? null;
+  const line2 = clean(text[DEAL_COL.unit]);
+  // The City formula frequently resolves to a county, so it is the last resort.
+  const city = clean(text[DEAL_COL.cityText]) ?? loc?.city ?? clean(text[DEAL_COL.city]);
+  const region = clean(text[DEAL_COL.state]) ?? loc?.region ?? null;
+  const postalCode = clean(text[DEAL_COL.zip]) ?? loc?.postalCode ?? null;
+  const country = clean(text[DEAL_COL.country]) ?? loc?.country ?? 'US';
+
+  if (!(line1 || city || postalCode)) return null;
+  return { line1, line2, city, region, postalCode, country };
 }
 
 /** The email column's raw value is JSON; its `text` is the display label. */
