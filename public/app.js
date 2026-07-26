@@ -15,6 +15,8 @@
   function titleCase(v) { return String(v || '').toLowerCase().split('_').map(function (w) { return w.charAt(0).toUpperCase() + w.slice(1); }).join(' '); }
   // Title-case a product/section name word-by-word, preserving punctuation and existing caps mid-word.
   function tc(s) { return String(s || '').replace(/\b([a-z])/g, function (m0, c) { return c.toUpperCase(); }); }
+  // Section headings carry the "(Optional)" tag from the optional flag, never from the name itself.
+  function stripOptional(s) { return String(s || '').replace(/\s*[—-]?\s*\(\s*optional\s*\)\s*$/i, '').replace(/\s*[—-]\s*optional\s*(?=\))/i, '').trim(); }
   function fmtDate(s) { if (!s) return '—'; var d = new Date(s); return isNaN(d) ? '—' : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }); }
   function fmtMoney(minor, cur) { if (minor == null) return '—'; var n = Number(minor) / 100; return (cur ? cur + ' ' : '$') + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
@@ -122,6 +124,7 @@
           '</nav>' +
           '<div class="side-foot"><div class="user-row"><div class="avatar">' + esc(initials) + '</div>' +
             '<div class="user-meta"><b>' + esc(user.name || user.email) + '</b><span>' + esc(roleLabel(user.role)) + '</span></div></div>' +
+            '<button class="link-btn" id="profBtn" style="margin-bottom:6px;">My profile</button>' +
             '<button class="link-btn" id="pwdBtn" style="margin-bottom:6px;">Change password</button>' +
             '<button class="link-btn" id="logoutBtn">Sign out</button>' +
             '<div style="text-align:center;font-size:10px;color:#b3b7ac;margin-top:8px;letter-spacing:.04em;">build 2 · proposal builder</div></div>' +
@@ -147,6 +150,7 @@
     });
     document.getElementById('logoutBtn').addEventListener('click', logout);
     document.getElementById('pwdBtn').addEventListener('click', openPasswordForm);
+    document.getElementById('profBtn').addEventListener('click', function () { openProfileForm(user); });
     renderDashboard(user);
   }
 
@@ -441,15 +445,19 @@
         var priceCell = admin
           ? '<input class="skuEdit" data-id="' + k.id + '" data-f="unitPriceMinor" value="' + (Number(k.unitPriceMinor) / 100).toFixed(2) + '" style="width:90px;padding:5px 7px;border:1px solid #dcded7;border-radius:6px;text-align:right;font-size:13px;">'
           : '$' + (Number(k.unitPriceMinor) / 100).toFixed(2);
+        var costCell = admin
+          ? '<input class="skuEdit" data-id="' + k.id + '" data-f="unitCostMinor" value="' + (Number(k.unitCostMinor || 0) / 100).toFixed(2) + '" style="width:90px;padding:5px 7px;border:1px solid #e4dfd0;background:#fdfcf7;border-radius:6px;text-align:right;font-size:13px;">'
+          : '$' + (Number(k.unitCostMinor || 0) / 100).toFixed(2);
+        var marginPct = Number(k.unitPriceMinor) ? Math.round(((Number(k.unitPriceMinor) - Number(k.unitCostMinor || 0)) / Number(k.unitPriceMinor)) * 1000) / 10 : 0;
         var wtCell = admin
           ? '<input class="skuEdit" data-id="' + k.id + '" data-f="weightLbs" value="' + k.weightLbs + '" style="width:70px;padding:5px 7px;border:1px solid #dcded7;border-radius:6px;text-align:right;font-size:13px;">'
           : k.weightLbs;
         return '<tr>' + td('<code style="font-size:12.5px;color:#4a4f47;">' + esc(k.part) + '</code>') + td('<span style="font-size:13px;">' + esc(k.description) + '</span>') +
-          td(esc(k.category)) + td(priceCell) + td(wtCell) +
+          td(esc(k.category)) + td(priceCell) + td(costCell) + td('<span style="font-size:13px;color:' + (marginPct >= 0 ? '#2f7d5d' : '#9c3327') + ';font-weight:600;">' + marginPct + '%</span>') + td(wtCell) +
           td(admin ? '<button class="skuDel" data-id="' + k.id + '" style="border:1px solid #e0e1db;background:#fff;border-radius:7px;color:#9c3327;cursor:pointer;padding:4px 9px;font-size:12px;">Delete</button>' : '') + '</tr>';
       }).join('');
       var totalPages = Math.max(1, Math.ceil((d.total || 0) / (d.pageSize || 50)));
-      box.innerHTML = tableShell(['Part #', 'Description', 'Category', 'Unit price', 'Weight (lb)', ''], rows, 6, 'No SKUs yet. Import a sheet or add one.') +
+      box.innerHTML = tableShell(['Part #', 'Description', 'Category', 'Unit price', 'Unit cost', 'Margin', 'Weight (lb)', ''], rows, 8, 'No SKUs yet. Import a sheet or add one.') +
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;color:#82877d;font-size:13px;"><span>' + (d.total || 0) + ' SKUs</span>' +
         '<span style="display:flex;gap:8px;align-items:center;"><button id="skuPrev" ' + (skuState.page <= 1 ? 'disabled' : '') + ' class="link-btn" style="width:auto;padding:6px 12px;">Prev</button><span>Page ' + (d.page || 1) + ' of ' + totalPages + '</span><button id="skuNext" ' + (skuState.page >= totalPages ? 'disabled' : '') + ' class="link-btn" style="width:auto;padding:6px 12px;">Next</button></span></div>';
       var pv = document.getElementById('skuPrev'), nx = document.getElementById('skuNext');
@@ -458,7 +466,7 @@
       document.querySelectorAll('.skuEdit').forEach(function (el) {
         el.addEventListener('change', async function () {
           var f = el.getAttribute('data-f'); var body = {};
-          body[f] = f === 'unitPriceMinor' ? d2m(el.value) : (parseFloat(el.value) || 0);
+          body[f] = (f === 'unitPriceMinor' || f === 'unitCostMinor') ? d2m(el.value) : (parseFloat(el.value) || 0);
           el.style.borderColor = '#c9a227';
           var r2 = await authed('/skus/' + el.getAttribute('data-id'), { method: 'PATCH', body: body });
           el.style.borderColor = r2.ok ? '#3f9d78' : '#c2452f';
@@ -472,13 +480,13 @@
     openModal('New SKU',
       fieldRow('Part #', '<input id="kPart" style="' + IN + '" required>') +
       fieldRow('Description', '<input id="kDesc" style="' + IN + '" required>') +
-      '<div style="display:flex;gap:8px;"><div class="field" style="flex:1;"><label>Unit price ($)</label><input id="kPrice" value="0.00" style="' + IN + '"></div><div class="field" style="flex:1;"><label>Weight (lb)</label><input id="kWt" value="0" style="' + IN + '"></div></div>' +
+      '<div style="display:flex;gap:8px;"><div class="field" style="flex:1;"><label>Unit price ($)</label><input id="kPrice" value="0.00" style="' + IN + '"></div><div class="field" style="flex:1;"><label>Unit cost ($)</label><input id="kCost" value="0.00" style="' + IN + '"></div><div class="field" style="flex:1;"><label>Weight (lb)</label><input id="kWt" value="0" style="' + IN + '"></div></div>' +
       fieldRow('Category', '<input id="kCat" value="OTHER" style="' + IN + '">') +
       fieldRow('Proposal group (optional)', '<input id="kGroup" style="' + IN + '">'),
       async function (close, showErr) {
         var part = document.getElementById('kPart').value.trim(); if (!part) return showErr('Part # is required.');
         var desc = document.getElementById('kDesc').value.trim(); if (!desc) return showErr('Description is required.');
-        var body = { part: part, description: desc, unitPriceMinor: d2m(document.getElementById('kPrice').value), weightLbs: parseFloat(document.getElementById('kWt').value) || 0, category: document.getElementById('kCat').value.trim() || 'OTHER', proposalGroup: document.getElementById('kGroup').value.trim() || undefined };
+        var body = { part: part, description: desc, unitPriceMinor: d2m(document.getElementById('kPrice').value), unitCostMinor: d2m(document.getElementById('kCost').value), weightLbs: parseFloat(document.getElementById('kWt').value) || 0, category: document.getElementById('kCat').value.trim() || 'OTHER', proposalGroup: document.getElementById('kGroup').value.trim() || undefined };
         var r = await authed('/skus', { method: 'POST', body: body });
         if (!r.ok) return showErr(r.status === 400 ? 'That part # may already exist.' : 'Could not create (' + r.status + ').');
         close(); skuState.page = 1; loadSkus(user);
@@ -486,7 +494,7 @@
   }
   function openSkuImport(user) {
     openModal('Import SKUs from Excel / CSV',
-      '<div class="muted" style="font-size:13px;margin-bottom:10px;line-height:1.5;">Save your sheet as <b>CSV</b> with a header row of columns: <code>part, description, unitPrice, weightLbs, category, proposalGroup</code>. Existing part #s are updated; new ones are added.</div>' +
+      '<div class="muted" style="font-size:13px;margin-bottom:10px;line-height:1.5;">Save your sheet as <b>CSV</b> with a header row of columns: <code>part, description, unitPrice, unitCost, weightLbs, category, proposalGroup</code>. Existing part #s are updated; new ones are added.</div>' +
       '<input type="file" id="skuFile" accept=".csv,text/csv" style="width:100%;padding:10px;border:1px dashed #cfd3ca;border-radius:9px;background:#fff;">',
       async function (close, showErr) {
         var fi = document.getElementById('skuFile').files[0]; if (!fi) return showErr('Choose a CSV file first.');
@@ -683,7 +691,7 @@
     return {
       ref: it.ref || uid(), lineType: it.lineType || (it.isNote ? 'NOTE' : 'PRODUCT'), kind: it.kind || 'INCLUDED',
       productId: it.productId || null, sku: it.sku || '', name: it.name || '', description: it.description || '',
-      quantity: it.quantity == null ? 1 : it.quantity, rateMinor: it.rateMinor || 0, weightEach: it.weightEach || 0, group: it.group || '',
+      quantity: it.quantity == null ? 1 : it.quantity, rateMinor: it.rateMinor || 0, costEach: it.costEach || 0, weightEach: it.weightEach || 0, group: it.group || '',
       optional: !!it.optional,
       delivery: it.delivery || '', returnable: it.returnable || '', addlFreight: it.addlFreight || '', freightCalc: it.freightCalc || '',
       tpFreightMinor: it.tpFreightMinor || 0, tpFreightLabel: it.tpFreightLabel || '',
@@ -701,9 +709,15 @@
     var l2 = a.line2 ? a.line2 + '\n' : '';
     return a.line1 + '\n' + l2 + a.city + ', ' + a.region + ' ' + a.postalCode;
   }
+  function primaryContactName(org) {
+    var cs = (org && org.contacts) || [];
+    var c = cs.filter(function (x) { return x.isDecisionMaker; })[0] || cs[0];
+    if (!c) return '';
+    return [c.firstName, c.lastName].filter(Boolean).join(' ').trim();
+  }
   async function openBuilder(proposal, version, user) {
-    var orgName = '', orgShipTo = '';
-    try { var rd = await authed('/crm/organizations/' + proposal.organizationId); if (rd.ok) { var org = await rd.json(); orgName = org.name || ''; orgShipTo = formatOrgShipTo(org); } } catch (e) {}
+    var orgName = '', orgShipTo = '', orgContact = '';
+    try { var rd = await authed('/crm/organizations/' + proposal.organizationId); if (rd.ok) { var org = await rd.json(); orgName = org.name || ''; orgShipTo = formatOrgShipTo(org); orgContact = primaryContactName(org); } } catch (e) {}
     if (!orgName) { try { var ro = await authed('/crm/organizations?pageSize=100'); if (ro.ok) { var found = ((await ro.json()).items || []).filter(function (o) { return o.id === proposal.organizationId; })[0]; orgName = found ? found.name : ''; } } catch (e2) {} }
     // Project ID rides along on the imported opportunity's notes.
     var importedProjectId = '';
@@ -729,23 +743,24 @@
     pb = {
       proposalId: proposal.id, versionId: version.id, user: user, orgName: orgName,
       title: proposal.title || '', number: proposal.number || '',
-      meta: { shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7) },
+      meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7) },
       lines: lines,
     };
     renderBuilder();
   }
 
   function builderTotals() {
-    var subtotal = 0, tpFreight = 0, weight = 0;
+    var subtotal = 0, tpFreight = 0, weight = 0, cogs = 0;
     var groups = []; var cur = null;
     pb.lines.forEach(function (l) {
-      if (l.lineType === 'GROUP') { cur = { name: l.name, optional: l.optional, subtotal: 0 }; groups.push(cur); return; }
+      if (l.lineType === 'GROUP') { cur = { name: l.name, optional: l.optional, subtotal: 0, cogs: 0 }; groups.push(cur); return; }
       if (l.lineType === 'PRODUCT') {
         var amt = (Number(l.quantity) || 0) * (Number(l.rateMinor) || 0);
+        var cst = (Number(l.quantity) || 0) * (Number(l.costEach) || 0);
         var tp = Number(l.tpFreightMinor) || 0;
-        subtotal += amt; tpFreight += tp;
+        subtotal += amt; tpFreight += tp; cogs += cst;
         weight += (Number(l.quantity) || 0) * (Number(l.weightEach) || 0);
-        if (cur) cur.subtotal += amt + tp;
+        if (cur) { cur.subtotal += amt + tp; cur.cogs += cst; }
       }
     });
     var discountPct = Number(pb.meta.discountPct) || 0;
@@ -755,14 +770,20 @@
     var matsFreight = Number(pb.meta.matsFreightMinor) || 0;
     var total = subtotal - discount + tpFreight + tax + structureFreight + matsFreight;
     var deposit = Math.round(total * 0.5);
-    return { subtotal: subtotal, discountPct: discountPct, discount: discount, tpFreight: tpFreight, tax: tax, structureFreight: structureFreight, matsFreight: matsFreight, total: total, deposit: deposit, groups: groups, weight: weight };
+    var revenue = subtotal - discount + tpFreight;
+    groups.forEach(function (g) { g.margin = g.subtotal - g.cogs; g.marginPct = g.subtotal ? Math.round((g.margin / g.subtotal) * 1000) / 10 : 0; });
+    return { subtotal: subtotal, discountPct: discountPct, discount: discount, tpFreight: tpFreight, tax: tax, structureFreight: structureFreight, matsFreight: matsFreight, total: total, deposit: deposit, groups: groups, weight: weight,
+      revenue: revenue, cogs: cogs, margin: revenue - cogs, marginPct: revenue ? Math.round(((revenue - cogs) / revenue) * 1000) / 10 : 0 };
   }
-  // subtotal per GROUP line index, for inline display in the builder
+  // subtotal + cost per GROUP line index, for inline display in the builder
   function groupSubtotalMap() {
     var map = {}, curIdx = null;
     pb.lines.forEach(function (l, i) {
-      if (l.lineType === 'GROUP') { curIdx = i; map[i] = 0; return; }
-      if (l.lineType === 'PRODUCT' && curIdx != null) map[curIdx] += (Number(l.quantity) || 0) * (Number(l.rateMinor) || 0) + (Number(l.tpFreightMinor) || 0);
+      if (l.lineType === 'GROUP') { curIdx = i; map[i] = { rev: 0, cogs: 0 }; return; }
+      if (l.lineType === 'PRODUCT' && curIdx != null) {
+        map[curIdx].rev += (Number(l.quantity) || 0) * (Number(l.rateMinor) || 0) + (Number(l.tpFreightMinor) || 0);
+        map[curIdx].cogs += (Number(l.quantity) || 0) * (Number(l.costEach) || 0);
+      }
     });
     return map;
   }
@@ -786,6 +807,7 @@
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' +
           fieldRow('Title', '<input id="mTitle" style="' + IN + '" value="' + esc(pb.title) + '">') +
           fieldRow('Prepared for', '<input style="' + IN + 'background:#f2f3ef;" value="' + esc(pb.orgName) + '" disabled>') +
+          fieldRow('Contact name', '<input id="mContact" style="' + IN + '" placeholder="Full name of the customer contact" value="' + esc(pb.meta.contactName || '') + '">') +
           fieldRow('Proposal date', '<input id="mPropDate" type="date" style="' + IN + '" value="' + esc(pb.meta.proposalDate) + '">') +
           fieldRow('Project ID', '<input id="mProj" style="' + IN + '" value="' + esc(pb.meta.projectId) + '">') +
           fieldRow('Expiration date', '<input id="mExp" type="date" style="' + IN + '" value="' + esc(pb.meta.expiration) + '">') +
@@ -821,19 +843,69 @@
         '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:14px;"><span class="muted">Mats &amp; Padding Freight $</span><input id="mMatsFreight" style="width:100px;padding:5px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;" value="' + m2d(pb.meta.matsFreightMinor) + '"></div>' +
         '<div style="display:flex;justify-content:space-between;padding:8px 0 0;margin-top:6px;border-top:1px solid #e7e8e3;font-size:16px;font-weight:600;font-family:\'Newsreader\',serif;"><span>Total</span><span>' + fmtMoney(t.total, 'USD') + '</span></div>' +
         '<div style="display:flex;justify-content:space-between;padding:6px 0 0;font-size:14px;color:#3d4a55;font-weight:600;"><span>Deposit due (50%)</span><span>' + fmtMoney(t.deposit, 'USD') + '</span></div>' +
-      '</div>';
+      '</div>' +
+      '<div id="bMarginRail" style="' + marginRailStyle() + '">' + marginCard(t) + '</div>';
     wireBuilder();
+  }
+
+  /** The profitability rail floats beside the builder when there is room; otherwise it stacks. */
+  function marginRailStyle() {
+    return window.innerWidth >= 1680
+      ? 'position:fixed;top:92px;right:22px;width:342px;max-height:calc(100vh - 116px);overflow:auto;z-index:20;'
+      : 'margin-top:16px;';
+  }
+
+  /** Internal-only profitability panel: never rendered on the customer proposal. */
+  function marginCard(t) {
+    function stat(label, value, color, big) {
+      return '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:5px 0;">' +
+        '<span style="font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;">' + label + '</span>' +
+        '<span style="font-size:' + (big ? '19px' : '15px') + ';font-weight:600;font-family:\'Newsreader\',serif;color:' + (color || '#20241f') + ';">' + value + '</span></div>';
+    }
+    var mColor = t.margin >= 0 ? '#2f7d5d' : '#9c3327';
+    var rows = t.groups.map(function (g) {
+      var c = g.margin >= 0 ? '#2f7d5d' : '#9c3327';
+      return '<div style="padding:8px 0;border-bottom:1px solid #ece7d8;">' +
+        '<div style="font-size:12px;font-weight:600;line-height:1.35;">' + esc(tc(stripOptional(g.name || 'Untitled section'))) + (g.optional ? ' <span style="font-weight:400;color:#8a8f85;">(Optional)</span>' : '') + '</div>' +
+        '<div style="display:flex;justify-content:space-between;gap:8px;font-size:11.5px;color:#5c6157;margin-top:3px;">' +
+          '<span>Rev ' + fmtMoney(g.subtotal, '') + '</span>' +
+          '<span>COGS ' + fmtMoney(g.cogs, '') + '</span>' +
+          '<span style="color:' + c + ';font-weight:600;">' + fmtMoney(g.margin, '') + ' · ' + g.marginPct + '%</span>' +
+        '</div></div>';
+    }).join('');
+    return '<div class="card" style="border:1px solid #e4dfd0;background:#fdfcf7;">' +
+      '<div class="section-title" style="margin:0 0 2px;">Profitability</div>' +
+      '<div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;">Internal only — not printed</div>' +
+      stat('Revenue', fmtMoney(t.revenue, 'USD'), null, 1) +
+      stat('COGS', fmtMoney(t.cogs, 'USD')) +
+      stat('Margin', fmtMoney(t.margin, 'USD'), mColor, 1) +
+      stat('Margin %', t.marginPct + '%', mColor) +
+      (rows ? '<div style="margin-top:12px;padding-top:10px;border-top:1px solid #ece7d8;">' +
+        '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin-bottom:2px;">By section</div>' + rows + '</div>'
+        : '<div class="muted" style="font-size:12px;margin-top:10px;">Add a section heading to see per-section margin.</div>') +
+      (t.cogs === 0 ? '<div style="margin-top:10px;font-size:11.5px;color:#8a6d1f;line-height:1.5;">No costs recorded yet — add unit costs in Catalog → Pricing &amp; SKUs, or type a cost on any line.</div>' : '') +
+    '</div>';
   }
 
   function builderLineRow(l, i, gsub) {
     var handle = '<div class="bDrag" style="cursor:grab;color:#c2c6bd;font-size:18px;padding:0 4px;user-select:none;" title="Drag to reorder">⋮⋮</div>';
     var del = '<button class="bDel" data-i="' + i + '" style="border:1px solid #e0e1db;background:#fff;border-radius:8px;width:30px;height:30px;color:#9c3327;cursor:pointer;flex:0 0 auto;">✕</button>';
     if (l.lineType === 'GROUP') {
-      var sub = (gsub && gsub[i]) || 0;
-      return '<div class="bRow" draggable="true" data-i="' + i + '" style="display:flex;align-items:center;gap:8px;background:#3d4a55;border:1px solid #33404a;border-radius:10px;padding:9px 10px;color:#fff;">' + handle.replace('#c2c6bd', '#8fa0ac') +
+      var g = (gsub && gsub[i]) || { rev: 0, cogs: 0 };
+      var gMargin = g.rev - g.cogs;
+      var gPct = g.rev ? Math.round((gMargin / g.rev) * 1000) / 10 : 0;
+      return '<div class="bRow" draggable="true" data-i="' + i + '" style="background:#3d4a55;border:1px solid #33404a;border-radius:10px;padding:9px 10px;color:#fff;">' +
+        '<div style="display:flex;align-items:center;gap:8px;">' + handle.replace('#c2c6bd', '#8fa0ac') +
         '<input class="bF" data-i="' + i + '" data-k="name" value="' + esc(l.name) + '" placeholder="SECTION HEADING" style="flex:1;border:none;background:transparent;font-weight:700;font-size:13px;letter-spacing:.03em;text-transform:uppercase;color:#fff;outline:none;">' +
+        '<input class="bF" data-i="' + i + '" data-k="description" value="' + esc(l.description || '') + '" placeholder="Heading note (e.g. Frame Dimensions: 10\' × 10\')" style="flex:0 1 250px;border:none;background:rgba(255,255,255,.1);border-radius:7px;padding:5px 8px;font-size:11.5px;color:#e6ebef;outline:none;">' +
         '<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:#cdd6dc;white-space:nowrap;cursor:pointer;"><input type="checkbox" class="bChk" data-i="' + i + '" data-k="optional"' + (l.optional ? ' checked' : '') + '> Optional</label>' +
-        '<span style="font-size:12.5px;font-weight:600;color:#cdd6dc;min-width:90px;text-align:right;">' + fmtMoney(sub, 'USD') + '</span>' + del.replace('#9c3327', '#f0b8ae').replace('background:#fff', 'background:rgba(255,255,255,.12)').replace('border:1px solid #e0e1db', 'border:1px solid rgba(255,255,255,.25)') + '</div>';
+        '<span style="font-size:12.5px;font-weight:600;color:#cdd6dc;min-width:90px;text-align:right;">' + fmtMoney(g.rev, 'USD') + '</span>' + del.replace('#9c3327', '#f0b8ae').replace('background:#fff', 'background:rgba(255,255,255,.12)').replace('border:1px solid #e0e1db', 'border:1px solid rgba(255,255,255,.25)') +
+        '</div>' +
+        '<div style="display:flex;gap:16px;justify-content:flex-end;font-size:11px;color:#a9bac6;padding:6px 40px 0 0;">' +
+          '<span>Revenue <b style="color:#fff;font-weight:600;">' + fmtMoney(g.rev, '') + '</b></span>' +
+          '<span>COGS <b style="color:#fff;font-weight:600;">' + fmtMoney(g.cogs, '') + '</b></span>' +
+          '<span>Margin <b style="color:' + (gMargin >= 0 ? '#9fe0c4' : '#f0b8ae') + ';font-weight:600;">' + fmtMoney(gMargin, '') + ' · ' + gPct + '%</b></span>' +
+        '</div></div>';
     }
     if (l.lineType === 'SUBGROUP') {
       return '<div class="bRow" draggable="true" data-i="' + i + '" style="display:flex;align-items:center;gap:8px;background:#eef0ea;border:1px solid #e2e5dd;border-radius:9px;padding:7px 10px;margin-left:14px;">' + handle +
@@ -873,6 +945,7 @@
         '</div>' +
         '<div style="display:flex;flex-direction:column;gap:5px;width:74px;flex:0 0 auto;"><label style="font-size:10px;color:#8a8f85;text-transform:uppercase;">Qty</label><input class="bF" data-i="' + i + '" data-k="quantity" value="' + esc(l.quantity) + '" style="width:100%;padding:6px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;"></div>' +
         '<div style="display:flex;flex-direction:column;gap:5px;width:104px;flex:0 0 auto;"><label style="font-size:10px;color:#8a8f85;text-transform:uppercase;">Rate</label><input class="bF" data-i="' + i + '" data-k="rate" value="' + m2d(l.rateMinor) + '" style="width:100%;padding:6px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;"></div>' +
+        '<div style="display:flex;flex-direction:column;gap:5px;width:96px;flex:0 0 auto;"><label style="font-size:10px;color:#8a8f85;text-transform:uppercase;" title="Internal only — never printed">Cost</label><input class="bF" data-i="' + i + '" data-k="cost" value="' + m2d(l.costEach) + '" style="width:100%;padding:6px 8px;border:1px solid #e4dfd0;background:#fdfcf7;border-radius:7px;text-align:right;"></div>' +
         '<div style="width:96px;flex:0 0 auto;text-align:right;padding-top:20px;font-weight:600;font-size:14px;">' + fmtMoney(amt, 'USD') + '</div>' + del +
       '</div></div>';
   }
@@ -882,6 +955,10 @@
 
   var bDragFrom = null;
   function wireBuilder() {
+    if (!wireBuilder._rail) {
+      wireBuilder._rail = true;
+      window.addEventListener('resize', function () { var el = document.getElementById('bMarginRail'); if (el) el.setAttribute('style', marginRailStyle()); });
+    }
     document.getElementById('bBack').addEventListener('click', function () { openProposalDetail(pb.proposalId, pb.user); });
     document.getElementById('bSave').addEventListener('click', saveBuilder);
     document.getElementById('bPreview').addEventListener('click', function () { previewProposalDoc(builderDoc()); });
@@ -901,6 +978,7 @@
     document.querySelectorAll('.grpChip').forEach(function (c) { c.addEventListener('click', function () { pb.lines.push({ ref: uid(), lineType: 'GROUP', kind: 'GROUP', name: c.getAttribute('data-g'), description: '', quantity: 0, rateMinor: 0, optional: /trolley|adventure|foundation|mat/i.test(c.getAttribute('data-g')) }); renderBuilder(); }); });
     // header/meta inputs
     var mt = document.getElementById('mTitle'); if (mt) mt.addEventListener('input', function () { pb.title = mt.value; });
+    var mct = document.getElementById('mContact'); if (mct) mct.addEventListener('input', function () { pb.meta.contactName = mct.value; });
     var mp = document.getElementById('mProj'); if (mp) mp.addEventListener('input', function () { pb.meta.projectId = mp.value; });
     var mpd = document.getElementById('mPropDate'); if (mpd) mpd.addEventListener('input', function () { pb.meta.proposalDate = mpd.value; pb.meta.expiration = addDays(mpd.value, 7); var me2 = document.getElementById('mExp'); if (me2) me2.value = pb.meta.expiration; });
     var msp = document.getElementById('mShowProj'); if (msp) msp.addEventListener('change', function () { pb.meta.showProjectId = msp.checked; });
@@ -917,13 +995,14 @@
       var handler = function () {
         var i = +el.getAttribute('data-i'), k = el.getAttribute('data-k'), l = pb.lines[i]; if (!l) return;
         if (k === 'rate') l.rateMinor = d2m(el.value);
+        else if (k === 'cost') l.costEach = d2m(el.value);
         else if (k === 'tpFreight') l.tpFreightMinor = d2m(el.value);
         else if (k === 'quantity') l.quantity = parseFloat(el.value) || 0;
         else l[k] = el.value;
       };
       el.addEventListener('input', handler);
       var k = el.getAttribute('data-k');
-      if (k === 'rate' || k === 'quantity' || k === 'tpFreight' || el.tagName === 'SELECT') el.addEventListener('change', renderBuilder);
+      if (k === 'rate' || k === 'cost' || k === 'quantity' || k === 'tpFreight' || el.tagName === 'SELECT') el.addEventListener('change', renderBuilder);
     });
     document.querySelectorAll('.bChk').forEach(function (el) { el.addEventListener('change', function () { var l = pb.lines[+el.getAttribute('data-i')]; if (l) { l[el.getAttribute('data-k')] = el.checked; } }); });
     document.querySelectorAll('.bToggleNotes').forEach(function (b) { b.addEventListener('click', function () { var l = pb.lines[+b.getAttribute('data-i')]; if (l) { l.showNotes = !l.showNotes; renderBuilder(); } }); });
@@ -969,7 +1048,7 @@
   async function saveBuilder() {
     var btn = document.getElementById('bSave'); btn.disabled = true; btn.textContent = 'Saving…';
     var sections = [{ id: 'meta', type: 'CUSTOMER_INFO', title: 'Proposal', order: 0, enabled: true, data: pb.meta }];
-    var items = pb.lines.map(function (l, i) { return { ref: l.ref, lineType: l.lineType, kind: l.kind, productId: l.productId, sku: l.sku || '', name: l.name, description: l.description, quantity: Number(l.quantity) || 0, rateMinor: Number(l.rateMinor) || 0, weightEach: Number(l.weightEach) || 0, group: l.group || '', optional: !!l.optional, delivery: l.delivery || '', returnable: l.returnable || '', addlFreight: l.addlFreight || '', freightCalc: l.freightCalc || '', tpFreightMinor: Number(l.tpFreightMinor) || 0, tpFreightLabel: l.tpFreightLabel || '', order: i }; });
+    var items = pb.lines.map(function (l, i) { return { ref: l.ref, lineType: l.lineType, kind: l.kind, productId: l.productId, sku: l.sku || '', name: l.name, description: l.description, quantity: Number(l.quantity) || 0, rateMinor: Number(l.rateMinor) || 0, costEach: Number(l.costEach) || 0, weightEach: Number(l.weightEach) || 0, group: l.group || '', optional: !!l.optional, delivery: l.delivery || '', returnable: l.returnable || '', addlFreight: l.addlFreight || '', freightCalc: l.freightCalc || '', tpFreightMinor: Number(l.tpFreightMinor) || 0, tpFreightLabel: l.tpFreightLabel || '', order: i }; });
     try {
       var r = await authed('/proposals/versions/' + pb.versionId, { method: 'PATCH', body: { sections: sections, items: items, expirationDate: pb.meta.expiration || undefined } });
       if (!r.ok) { alert('Could not save (' + r.status + ').'); btn.disabled = false; btn.textContent = 'Save proposal'; return; }
@@ -1050,7 +1129,7 @@
       if (lt === 'GROUP') {
         body += subtotalRow();
         groupOpenSub = 0; groupName = l.name; inSub = false;
-        body += '<tr style="break-inside:avoid;break-after:avoid;"><td colspan="5" style="padding:6px 10px;font-weight:700;font-size:12px;letter-spacing:.03em;text-transform:uppercase;color:#3d4a55;background:#eef0ea;border-bottom:1px solid #d5d8d2;">' + esc(tc(l.name)) + (l.optional ? ' <span style="font-weight:400;text-transform:none;color:#8a8f85;">(Optional)</span>' : '') + '</td></tr>';
+        body += '<tr style="break-inside:avoid;break-after:avoid;"><td colspan="5" style="padding:6px 10px;font-weight:700;font-size:12px;letter-spacing:.03em;text-transform:uppercase;color:#3d4a55;background:#eef0ea;border-bottom:1px solid #d5d8d2;"><span style="display:inline-flex;align-items:baseline;gap:46px;"><span>' + esc(tc(stripOptional(l.name))) + (l.optional ? ' <span style="font-weight:400;text-transform:none;color:#8a8f85;">(Optional)</span>' : '') + '</span>' + (l.description ? '<span style="color:#20241f;">' + esc(l.description) + '</span>' : '') + '</span></td></tr>';
         return;
       }
       if (lt === 'SUBGROUP') { inSub = true; body += '<tr style="break-inside:avoid;break-after:avoid;"><td colspan="5" style="padding:7px 8px 3px 22px;font-weight:600;font-size:11.5px;color:#3d4a55;border-bottom:1px solid #d5d8d2;">' + esc(tc(l.name)) + '</td></tr>'; return; }
@@ -1075,10 +1154,20 @@
     });
     body += subtotalRow();
     var bottomNotesHtml = bottomNotes.length ? '<div style="margin-top:22px;padding-top:12px;border-top:1px solid #e7e8e3;font-size:10.5px;color:#5c6157;line-height:1.6;break-inside:avoid;"><div style="font-weight:600;color:#20241f;margin-bottom:4px;">Delivery, Returns &amp; Freight Notes</div>' + bottomNotes.map(function (n) { return '<div><b style="font-weight:600;">' + esc(tc(n.name)) + ':</b> ' + esc(n.text) + '</div>'; }).join('') + '</div>' : '';
+    var u = pb.user || {};
+    var preparerLine2 = [u.title, u.phone].filter(Boolean).join(' · ');
+    var preparedBy =
+      '<div style="margin-top:14px;font-size:11.5px;line-height:1.55;">' +
+        '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin-bottom:3px;">Proposal Prepared By</div>' +
+        '<div style="font-weight:600;">' + esc(u.name || u.email || '') + '</div>' +
+        (preparerLine2 ? '<div style="color:#5c6157;">' + esc(preparerLine2) + '</div>' : '') +
+        (u.email ? '<div style="color:#5c6157;">' + esc(u.email) + '</div>' : '') +
+      '</div>';
     var html =
       '<div id="propPrintArea" style="max-width:760px;margin:0 auto;background:#fff;padding:44px 48px;font-family:\'IBM Plex Sans\',sans-serif;color:#20241f;">' +
-        '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;border-bottom:2px solid #3d4a55;padding-bottom:16px;margin-bottom:20px;">' +
-          '<div style="display:flex;gap:12px;align-items:center;"><div class="login-logo" style="width:76px;height:76px;margin:0;background-size:contain;background-repeat:no-repeat;background-position:center;"></div><div><div style="font-family:\'Newsreader\',serif;font-weight:600;font-size:19px;">Summit Sensory Gym</div><div style="font-size:11px;color:#8a8f85;line-height:1.5;margin-top:2px;">6150 S Geneva Ct, Englewood, CO 80111<br>(720) 457-5500 · Sales@SummitSensory.com</div></div></div>' +
+        '<div style="border-bottom:2px solid #3d4a55;padding-bottom:16px;margin-bottom:20px;">' +
+          '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;">' +
+          '<div style="display:flex;gap:14px;align-items:center;"><img src="logo.png" alt="Summit Sensory Gym" width="84" height="84" style="width:84px;height:84px;display:block;"><div><div style="font-family:\'Newsreader\',serif;font-weight:600;font-size:19px;">Summit Sensory Gym</div><div style="font-size:11px;color:#8a8f85;line-height:1.5;margin-top:2px;">6150 S Geneva Ct, Englewood, CO 80111<br>(720) 457-5500 · Sales@SummitSensory.com</div></div></div>' +
           '<div style="text-align:right;"><div style="font-family:\'Newsreader\',serif;font-size:22px;font-weight:600;">Proposal</div><div style="font-size:11.5px;color:#5c6157;margin-top:4px;">' + esc(d.number || '') + '</div>' +
             '<div style="font-size:11px;color:#5c6157;margin-top:8px;line-height:1.7;">' +
               '<div>Proposal Date: <b style="color:#20241f;">' + (m.proposalDate ? fmtDate(m.proposalDate) : fmtDate(new Date().toISOString())) + '</b></div>' +
@@ -1087,9 +1176,11 @@
               '<div>Total Weight: <b style="color:#20241f;">' + (Number(t.weight) || 0).toLocaleString() + ' lbs</b></div>' +
             '</div>' +
           '</div>' +
+        '</div>' + preparedBy +
         '</div>' +
-        '<div style="display:flex;justify-content:space-between;gap:24px;margin-bottom:20px;font-size:12px;">' +
+        '<div style="display:flex;justify-content:flex-start;gap:56px;margin-bottom:20px;font-size:12px;">' +
           '<div><div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin-bottom:4px;">Prepared For</div><div style="font-weight:600;">' + esc(d.orgName || '') + '</div>' +
+            (m.contactName ? '<div style="color:#20241f;margin-top:1px;">' + esc(m.contactName) + '</div>' : '') +
             (m.billTo ? '<div style="color:#5c6157;white-space:pre-line;margin-top:2px;">' + esc(m.billTo) + '</div>' : '') + '</div>' +
           (m.shipTo ? '<div><div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin-bottom:4px;">Ship To</div><div style="color:#5c6157;white-space:pre-line;">' + esc(m.shipTo) + '</div></div>' : '') +
         '</div>' +
@@ -1125,7 +1216,9 @@
     if (document.getElementById('propPrintStyle')) return;
     var st = document.createElement('style'); st.id = 'propPrintStyle';
     st.textContent = '@page{margin:0.5in;}' +
-      '@media print{body *{visibility:hidden!important;}#propPreviewOverlay,#propPreviewOverlay *{visibility:visible!important;}#propPreviewOverlay{position:absolute!important;inset:0!important;background:#fff!important;padding:0!important;overflow:visible!important;}#propPreviewOverlay .noprint{display:none!important;}' +
+      '@media print{html,body{height:auto!important;overflow:visible!important;background:#fff!important;}' +
+      'body > *{display:none!important;}body > #propPreviewOverlay{display:block!important;}' +
+      '#propPreviewOverlay{position:static!important;inset:auto!important;height:auto!important;background:#fff!important;padding:0!important;overflow:visible!important;}#propPreviewOverlay .noprint{display:none!important;}' +
       // Keep rows, headings and the totals block from being split across sheets.
       '#propPrintArea tr,#propPrintArea thead{break-inside:avoid!important;page-break-inside:avoid!important;}' +
       '#propPrintArea thead{display:table-header-group;}' +
@@ -1219,7 +1312,9 @@
           ) +
           '<div style="display:flex;justify-content:space-between;gap:10px;margin-top:20px;padding-top:16px;border-top:1px solid #e7e8e3;">' +
             '<label style="display:flex;align-items:center;gap:7px;font-size:12.5px;color:#5c6157;"><input type="checkbox" id="advReplace"> Replace existing lines</label>' +
-            '<button class="btn" id="advGen" style="width:auto;padding:11px 22px;">Generate proposal lines →</button>' +
+            '<div style="display:flex;gap:8px;">' +
+            '<button class="link-btn" id="advTrace" style="width:auto;padding:11px 16px;">Test the logic →</button>' +
+            '<button class="btn" id="advGen" style="width:auto;padding:11px 22px;">Generate proposal lines →</button></div>' +
           '</div>' +
         '</div>' +
       '</div>';
@@ -1227,6 +1322,7 @@
     o.addEventListener('mousedown', function (e) { if (e.target === o) advClose(); });
     document.getElementById('advX').addEventListener('click', advClose);
     document.getElementById('advGen').addEventListener('click', function () { generateAdvLines(document.getElementById('advReplace').checked); });
+    document.getElementById('advTrace').addEventListener('click', openAdvTrace);
     o.querySelectorAll('[data-ak]').forEach(function (el) {
       var k = el.getAttribute('data-ak');
       if (el.type === 'checkbox') { el.addEventListener('change', function () { adv[k] = el.checked; syncAdvDefaults(k); renderAdv(); }); }
@@ -1243,9 +1339,8 @@
     if (changed === 'matColumn' && adv.matColumn) { if (!adv.uShaped) adv.uShaped = adv.ladders ? adv.laddersQty : 0; adv.completeWrap = Math.max(0, (Number(adv.legs) || 0) - (Number(adv.uShaped) || 0)); }
     if (changed === 'uShaped') { adv.completeWrap = Math.max(0, (Number(adv.legs) || 0) - (Number(adv.uShaped) || 0)); }
   }
-  async function generateAdvLines(replace) {
-    var btn = document.getElementById('advGen'); if (btn) { btn.disabled = true; btn.textContent = 'Pricing…'; }
-    var answers = {
+  function advAnswers() {
+    return {
       length: Number(adv.length), width: Number(adv.width), config: adv.config, legs: Number(adv.legs), ladders: adv.ladders ? Number(adv.laddersQty) : 0,
       monkeyBars: !!adv.monkeyBars, monkeyBarsQty: Number(adv.monkeyBarsQty),
       interiorBeams: !!adv.interiorBeams, interiorBeamsQty: Number(adv.interiorBeamsQty),
@@ -1255,6 +1350,69 @@
       matFloor: !!adv.matFloor, matColumn: !!adv.matColumn, uShaped: Number(adv.uShaped), completeWrap: Number(adv.completeWrap), matLadderLeg: !!adv.matLadderLeg, matCustom: !!adv.matCustom,
       brackets: !!adv.brackets, bracketsQty: Number(adv.bracketsQty), swivel360: Number(adv.swivel360), forged: Number(adv.forged), swingHanger: Number(adv.swingHanger), vRings: Number(adv.vRings), carabiner: Number(adv.carabiner), webbingSling: Number(adv.webbingSling),
     };
+  }
+
+  /** Logic trace overlay — every derived quantity, its formula, and the catalog price behind it. */
+  async function openAdvTrace() {
+    var btn = document.getElementById('advTrace'); if (btn) { btn.disabled = true; btn.textContent = 'Tracing…'; }
+    var t = null;
+    try { var r = await authed('/proposals/adventure-series/trace', { method: 'POST', body: advAnswers() }); if (r.ok) t = await r.json(); } catch (e) {}
+    if (btn) { btn.disabled = false; btn.textContent = 'Test the logic →'; }
+    if (!t) { alert('Could not reach the logic engine. Is the server running the latest build?'); return; }
+    var ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(32,36,31,.5);z-index:80;overflow:auto;padding:24px 16px;';
+    function th(label, right) { return '<th style="text-align:' + (right ? 'right' : 'left') + ';padding:6px 8px;border-bottom:2px solid #3d4a55;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:#8a8f85;white-space:nowrap;">' + label + '</th>'; }
+    var rows = (t.rows || []).map(function (r) {
+      return '<tr style="' + (r.rolledIntoH1000 ? 'background:#fdfcf7;' : '') + '">' +
+        '<td style="padding:5px 8px;border-bottom:1px solid #eef0ea;font-size:11.5px;color:#5c6157;">' + esc(r.rule) + '</td>' +
+        '<td style="padding:5px 8px;border-bottom:1px solid #eef0ea;font-family:ui-monospace,monospace;font-size:11px;">' + esc(r.part) + (r.inCatalog ? '' : ' <span style="color:#9c3327;">✕</span>') + '</td>' +
+        '<td style="padding:5px 8px;border-bottom:1px solid #eef0ea;font-size:11.5px;">' + esc(r.description) + (r.rolledIntoH1000 ? '<span style="color:#8a6d1f;font-size:10.5px;"> — rolled into H-1000</span>' : '') + '</td>' +
+        '<td style="padding:5px 8px;border-bottom:1px solid #eef0ea;font-size:11px;color:#5c6157;">' + esc(r.formula) + '</td>' +
+        '<td style="padding:5px 8px;border-bottom:1px solid #eef0ea;text-align:right;font-weight:600;font-size:12px;">' + r.qty + '</td>' +
+        '<td style="padding:5px 8px;border-bottom:1px solid #eef0ea;text-align:right;font-size:11.5px;">' + fmtMoney(r.unitPriceMinor, '') + '</td>' +
+        '<td style="padding:5px 8px;border-bottom:1px solid #eef0ea;text-align:right;font-size:11.5px;font-weight:600;">' + fmtMoney(r.extendedMinor, '') + '</td>' +
+        '<td style="padding:5px 8px;border-bottom:1px solid #eef0ea;text-align:right;font-size:11.5px;color:#5c6157;">' + fmtMoney(r.extendedCostMinor, '') + '</td></tr>';
+    }).join('');
+    var hw = t.hardware || { components: [] };
+    var hwRows = (hw.components || []).map(function (c) {
+      return '<tr><td style="padding:4px 8px;border-bottom:1px solid #eef0ea;font-family:ui-monospace,monospace;font-size:11px;">' + esc(c.part || '—') + '</td>' +
+        '<td style="padding:4px 8px;border-bottom:1px solid #eef0ea;font-size:11.5px;">' + esc(c.name) + (c.inCatalog ? '' : ' <span style="color:#9c3327;font-size:10.5px;">no SKU record</span>') + '</td>' +
+        '<td style="padding:4px 8px;border-bottom:1px solid #eef0ea;text-align:right;font-size:11.5px;">' + c.qty + '</td>' +
+        '<td style="padding:4px 8px;border-bottom:1px solid #eef0ea;text-align:right;font-size:11.5px;">' + fmtMoney(c.unitPriceMinor, '') + '</td>' +
+        '<td style="padding:4px 8px;border-bottom:1px solid #eef0ea;text-align:right;font-size:11.5px;font-weight:600;">' + fmtMoney(c.unitPriceMinor * c.qty, '') + '</td></tr>';
+    }).join('');
+    var warn = (t.warnings || []).length ? '<div style="margin-top:14px;padding:10px 12px;background:#fbecea;border:1px solid #f0d5d0;border-radius:9px;font-size:12px;color:#9c3327;line-height:1.6;">' + t.warnings.map(esc).join('<br>') + '</div>' : '';
+    ov.innerHTML =
+      '<div style="max-width:1080px;margin:0 auto;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 24px 60px -20px rgba(32,36,31,.55);">' +
+        '<div style="background:#3d4a55;color:#fff;padding:16px 22px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">' +
+          '<div><div style="font-family:\'Newsreader\',serif;font-size:19px;font-weight:600;">Calculation trace — ' + esc(t.model) + '</div>' +
+            '<div style="font-size:12px;color:#cdd6dc;">Frame Dimensions: ' + esc(t.dimensions) + ' · every quantity, formula and catalog price behind this configuration</div></div>' +
+          '<button id="trClose" style="border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.12);color:#fff;border-radius:8px;padding:7px 14px;cursor:pointer;">Close</button>' +
+        '</div>' +
+        '<div style="padding:18px 22px;">' +
+          '<div style="display:flex;gap:22px;flex-wrap:wrap;padding-bottom:14px;border-bottom:1px solid #eef0ea;margin-bottom:14px;">' +
+            '<div><div style="font-size:10px;text-transform:uppercase;color:#8a8f85;letter-spacing:.05em;">Revenue</div><div style="font-size:17px;font-weight:600;">' + fmtMoney(t.totals.revenueMinor, 'USD') + '</div></div>' +
+            '<div><div style="font-size:10px;text-transform:uppercase;color:#8a8f85;letter-spacing:.05em;">COGS</div><div style="font-size:17px;font-weight:600;">' + fmtMoney(t.totals.cogsMinor, 'USD') + '</div></div>' +
+            '<div><div style="font-size:10px;text-transform:uppercase;color:#8a8f85;letter-spacing:.05em;">Margin</div><div style="font-size:17px;font-weight:600;color:' + (t.totals.marginMinor >= 0 ? '#2f7d5d' : '#9c3327') + ';">' + fmtMoney(t.totals.marginMinor, 'USD') + ' · ' + t.totals.marginPct + '%</div></div>' +
+            '<div><div style="font-size:10px;text-transform:uppercase;color:#8a8f85;letter-spacing:.05em;">Weight</div><div style="font-size:17px;font-weight:600;">' + (t.totals.weightLbs || 0).toLocaleString() + ' lbs</div></div>' +
+          '</div>' +
+          warn +
+          '<div style="font-weight:600;font-size:13.5px;margin:14px 0 6px;">Bill of materials</div>' +
+          '<div style="overflow:auto;"><table style="width:100%;border-collapse:collapse;"><thead><tr>' + th('Rule') + th('Part') + th('Description') + th('Quantity formula') + th('Qty', 1) + th('Unit', 1) + th('Extended', 1) + th('Ext. cost', 1) + '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
+          '<div style="font-weight:600;font-size:13.5px;margin:20px 0 6px;">H-1000 hardware roll-up</div>' +
+          '<div class="muted" style="font-size:12px;margin-bottom:8px;">Every component below is summed into the single H-1000 line on the proposal — the components are not billed separately.</div>' +
+          (hwRows ? '<div style="overflow:auto;"><table style="width:100%;border-collapse:collapse;"><thead><tr>' + th('Part') + th('Component') + th('Qty', 1) + th('Unit', 1) + th('Extended', 1) + '</tr></thead><tbody>' + hwRows +
+            '<tr><td colspan="4" style="padding:7px 8px;text-align:right;font-weight:700;font-size:12.5px;">H-1000 total</td><td style="padding:7px 8px;text-align:right;font-weight:700;font-size:12.5px;">' + fmtMoney(hw.priceMinor, 'USD') + '</td></tr>' +
+            '</tbody></table></div>' : '<div class="muted" style="font-size:12.5px;">No hardware selected.</div>') +
+        '</div></div>';
+    document.body.appendChild(ov);
+    ov.addEventListener('mousedown', function (e) { if (e.target === ov) document.body.removeChild(ov); });
+    document.getElementById('trClose').addEventListener('click', function () { document.body.removeChild(ov); });
+  }
+
+  async function generateAdvLines(replace) {
+    var btn = document.getElementById('advGen'); if (btn) { btn.disabled = true; btn.textContent = 'Pricing…'; }
+    var answers = advAnswers();
     var priced = null;
     try {
       var r = await authed('/proposals/adventure-series/price', { method: 'POST', body: answers });
@@ -1265,7 +1423,7 @@
       return normalizeLine({
         lineType: l.lineType, kind: l.lineType === 'GROUP' ? 'GROUP' : l.lineType === 'SUBGROUP' ? 'SUBGROUP' : l.lineType === 'NOTE' ? 'NOTE' : 'INCLUDED',
         name: l.name, sku: l.sku || '', description: l.description || '', quantity: l.quantity == null ? 0 : l.quantity,
-        rateMinor: l.rateMinor || 0, weightEach: l.weightEach || 0, optional: !!l.optional,
+        rateMinor: l.rateMinor || 0, costEach: l.costEach || 0, weightEach: l.weightEach || 0, optional: !!l.optional,
       });
     });
     if (replace) pb.lines = out; else pb.lines = pb.lines.concat(out);
@@ -1400,6 +1558,25 @@
         if (!r.ok) return showErr('Could not create (' + r.status + ').');
         close(); loadUsers();
       });
+  }
+
+  function openProfileForm(user) {
+    openModal('My profile',
+      fieldRow('Full name', '<input id="upName" style="' + IN + '" value="' + esc(user.name || '') + '" required>') +
+      fieldRow('Title', '<input id="upTitle" style="' + IN + '" placeholder="e.g. Director of Sales" value="' + esc(user.title || '') + '">') +
+      fieldRow('Phone', '<input id="upPhone" style="' + IN + '" placeholder="e.g. (720) 457-5500" value="' + esc(user.phone || '') + '">') +
+      fieldRow('Email', '<input style="' + IN + 'background:#f2f3ef;" value="' + esc(user.email || '') + '" disabled>') +
+      '<div class="muted" style="font-size:12px;margin-top:2px;">These details appear in the “Proposal Prepared By” block on every proposal you generate.</div>',
+      async function (close, showErr) {
+        var name = document.getElementById('upName').value.trim();
+        if (name.length < 2) return showErr('Enter your full name.');
+        var r = await authed('/auth/me', { method: 'PATCH', body: { name: name, title: document.getElementById('upTitle').value.trim(), phone: document.getElementById('upPhone').value.trim() } });
+        if (!r.ok) return showErr('Could not save your profile (' + r.status + ').');
+        var updated = await r.json();
+        user.name = updated.name; user.title = updated.title; user.phone = updated.phone;
+        if (currentUser) { currentUser.name = updated.name; currentUser.title = updated.title; currentUser.phone = updated.phone; }
+        close(); renderShell(user);
+      }, 'Save profile');
   }
 
   function openPasswordForm() {

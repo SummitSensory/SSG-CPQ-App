@@ -26,6 +26,8 @@ model User {
   id           String    @id @default(cuid())
   email        String    @unique
   name         String?
+  title        String?
+  phone        String?
   passwordHash String
   role         Role      @default(READ_ONLY)
   isActive     Boolean   @default(true)
@@ -857,6 +859,7 @@ model Sku {
   part           String   @unique
   description    String
   unitPriceMinor Int      @default(0)
+  unitCostMinor  Int      @default(0)
   weightLbs      Float    @default(0)
   category       String   @default("OTHER")
   proposalGroup  String?

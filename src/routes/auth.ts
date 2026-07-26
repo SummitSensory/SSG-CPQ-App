@@ -3,13 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { verifyPassword } from '../auth/password.js';
 import { signAccessToken } from '../auth/tokens.js';
-import {
-  createSession,
-  rotateSession,
-  revokeSession,
-  resolveSession,
-  revokeAllForUser,
-} from '../auth/session.js';
+import { createSession, rotateSession, revokeSession, resolveSession, revokeAllForUser } from '../auth/session.js';
 import { hashPassword } from '../auth/password.js';
 import { UnauthorizedError, ValidationError } from '../lib/errors.js';
 import { requireAuth } from '../plugins/authz.js';
@@ -19,6 +13,12 @@ const RefreshBody = z.object({ refreshToken: z.string().min(1) });
 const ChangePasswordBody = z.object({
   currentPassword: z.string().min(1),
   newPassword: z.string().min(12, 'New password must be at least 12 characters'),
+});
+
+const ProfileBody = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  title: z.string().trim().max(120).nullish(),
+  phone: z.string().trim().max(40).nullish(),
 });
 
 export function registerAuthRoutes(app: FastifyInstance): void {
@@ -93,9 +93,25 @@ export function registerAuthRoutes(app: FastifyInstance): void {
   app.get('/auth/me', { preHandler: requireAuth }, async (req) => {
     const user = await prisma.user.findUnique({
       where: { id: req.user!.sub },
-      select: { id: true, email: true, name: true, role: true, isActive: true },
+      select: { id: true, email: true, name: true, title: true, phone: true, role: true, isActive: true },
     });
     if (!user) throw new UnauthorizedError();
     return user;
+  });
+
+  /** Preparer details that appear on generated proposals. */
+  app.patch('/auth/me', { preHandler: requireAuth }, async (req) => {
+    const parsed = ProfileBody.safeParse(req.body);
+    if (!parsed.success) throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid profile');
+    const { name, title, phone } = parsed.data;
+    return prisma.user.update({
+      where: { id: req.user!.sub },
+      data: {
+        ...(name === undefined ? {} : { name }),
+        ...(title === undefined ? {} : { title: title || null }),
+        ...(phone === undefined ? {} : { phone: phone || null }),
+      },
+      select: { id: true, email: true, name: true, title: true, phone: true, role: true, isActive: true },
+    });
   });
 }
