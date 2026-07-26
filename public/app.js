@@ -117,8 +117,20 @@
   function navFor(role) { return NAV.filter(function (n) { return n.roles === '*' || n.roles.indexOf(role) !== -1; }); }
   function roleLabel(role) { return titleCase(role); }
 
+  // Business numbers (deposit %, proposal validity, leg spans) come from
+  // Administration → Formulas → Business numbers; these are the fallbacks.
+  var fxSettings = { depositPct: 50, proposalValidityDays: 7, legsSmallMaxFt: 10, legsSmallCount: 4, legsMediumMaxFt: 20, legsMediumCount: 6, legsLargeCount: 8 };
+  function loadFxSettings() {
+    return authed('/formulas/settings').then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) { if (d) Object.keys(d).forEach(function (k) { fxSettings[k] = Number(d[k]); }); })
+      .catch(function () {});
+  }
+  function depositPct() { return Number(fxSettings.depositPct) || 50; }
+  function depositOf(total) { return Math.round((Number(total) || 0) * depositPct() / 100); }
+
   function renderShell(user) {
     currentUser = user;
+    loadFxSettings();
     var items = navFor(user.role);
     var initials = (user.name || user.email || '?').slice(0, 1).toUpperCase();
     root.innerHTML =
@@ -474,7 +486,30 @@
   var catCategories = [];
   var KINDS = ['PRODUCT', 'VARIANT', 'COMPONENT', 'BUNDLE', 'ACCESSORY', 'SERVICE'];
   var STATUSES = ['DRAFT', 'ACTIVE', 'INACTIVE', 'ARCHIVED'];
-  function catName(id) { var c = catCategories.filter(function (x) { return x.id === id; })[0]; return c ? c.name : '—'; }
+  function catById(id) { return catCategories.filter(function (x) { return x.id === id; })[0] || null; }
+  function catName(id) { var c = catById(id); return c ? c.name : '—'; }
+  /** Full tier path for a category, e.g. ["Adventure Series", "Zip Line", "Complete Zip Line Kit"]. */
+  function catPath(id) {
+    var out = [], seen = {}, c = catById(id);
+    while (c && !seen[c.id]) { seen[c.id] = 1; out.unshift(c); c = c.parentId ? catById(c.parentId) : null; }
+    return out;
+  }
+  function catPathLabel(id, sep) {
+    var p = catPath(id);
+    return p.length ? p.map(function (c) { return c.name; }).join(sep || ' › ') : '—';
+  }
+  /** Categories ordered by their path, for an indented picker. */
+  function catOptionsTree(selectedId) {
+    var rows = catCategories.map(function (c) {
+      var p = catPath(c.id);
+      return { id: c.id, depth: Math.max(0, p.length - 1), sortKey: p.map(function (x) { return x.name.toLowerCase(); }).join(' / '), name: c.name, tier: c.tierLevel || p.length };
+    }).sort(function (a, b) { return a.sortKey.localeCompare(b.sortKey); });
+    return rows.map(function (r) {
+      var pad = '';
+      for (var i = 0; i < r.depth; i++) pad += '\u00a0\u00a0\u00a0';
+      return '<option value="' + r.id + '"' + (r.id === selectedId ? ' selected' : '') + '>' + pad + esc(r.name) + ' · tier ' + r.tier + '</option>';
+    }).join('');
+  }
   function slugify(s) { return String(s).toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''); }
 
   function renderCatalog(user) {
@@ -597,6 +632,8 @@
     { key: 'margin', label: 'Margin', w: 78, type: 'num', align: 'right' },
     { key: 'weightLbs', label: 'Weight (lb)', w: 96, type: 'num', align: 'right' },
     { key: 'record', label: 'Record', w: 132, type: 'enum', options: [['Product + priced', 'Product + priced'], ['Product only', 'Product only'], ['Priced only', 'Priced only']] },
+    { key: 'statusLabel', label: 'Status', w: 118, type: 'enum' },
+    { key: '', label: '', w: 96 },
   ];
 
   async function loadItems(user) {
@@ -624,6 +661,10 @@
         var rec = k.productId ? (k.skuId ? 'Product + priced' : 'Product only') : 'Priced only';
         var row = {}; for (var kk in k) row[kk] = k[kk];
         row.margin = margin; row.record = rec;
+        // One readable status across both records: the product workflow when there
+        // is a Product, otherwise the flat SKU's active flag.
+        row.statusLabel = k.productStatus ? titleCase(k.productStatus) : (k.active === false ? 'Inactive' : 'Active');
+        row.isActive = k.productStatus ? k.productStatus === 'ACTIVE' : k.active !== false;
         return row;
       });
       itemState.page = 1;
@@ -667,7 +708,11 @@
         cell(admin ? txt(k.part, 'unitPriceMinor', (Number(k.unitPriceMinor) / 100).toFixed(2), NUM) : '$' + (Number(k.unitPriceMinor) / 100).toFixed(2), 'text-align:right;') +
         cell('<span style="font-size:13px;font-weight:600;color:' + (k.margin >= 0 ? '#2f7d5d' : '#9c3327') + ';">' + k.margin + '%</span>', 'text-align:right;') +
         cell(admin ? txt(k.part, 'weightLbs', k.weightLbs, NUM) : String(k.weightLbs), 'text-align:right;') +
-        cell(where, 'white-space:nowrap;') + '</tr>';
+        cell(where, 'white-space:nowrap;') +
+        cell('<span style="display:inline-block;background:' + (k.isActive ? '#eaf3ee' : '#f2f3ef') + ';border:1px solid ' + (k.isActive ? '#cfe3d7' : '#dcded7') + ';color:' + (k.isActive ? '#2f7d5d' : '#8a8f85') + ';border-radius:999px;padding:2px 9px;font-size:11.5px;font-weight:600;white-space:nowrap;">' + esc(k.statusLabel) + '</span>', 'white-space:nowrap;') +
+        cell(admin ? '<div style="display:flex;gap:5px;justify-content:flex-end;">' +
+          '<button class="itToggle" data-part="' + esc(k.part) + '" data-to="' + (k.isActive ? 'false' : 'true') + '" title="' + (k.isActive ? 'Stop offering this part on new proposals' : 'Offer this part again') + '" style="border:1px solid #dcded7;background:#fff;border-radius:7px;padding:5px 9px;font-size:11.5px;color:#3d4a55;cursor:pointer;white-space:nowrap;">' + (k.isActive ? 'Deactivate' : 'Activate') + '</button>' +
+          '<button class="itDel" data-part="' + esc(k.part) + '" title="Delete this part" style="border:1px solid #e0e1db;background:#fff;border-radius:7px;padding:5px 8px;font-size:11.5px;color:#9c3327;cursor:pointer;">✕</button></div>' : '', 'text-align:right;') + '</tr>';
     }).join('');
 
     box.innerHTML =
@@ -676,7 +721,7 @@
         '<colgroup>' + IT_COLS.map(function (c) { return '<col' + (c.w ? ' style="width:' + c.w + 'px;"' : '') + '>'; }).join('') + '</colgroup>' +
         '<thead><tr>' + colHead(IT_COLS, itemState) + '</tr>' +
         '<tr>' + IT_COLS.map(function (c) { return filterCell('colFilter', c, all, itemState.filters); }).join('') + '</tr></thead>' +
-        '<tbody>' + (rows || '<tr><td colspan="9" style="padding:28px;text-align:center;color:#8a8f85;">' + (all.length ? 'No parts match these filters.' : 'Nothing in the catalog yet. Import a sheet or add a product.') + '</td></tr>') + '</tbody></table></div>' +
+        '<tbody>' + (rows || '<tr><td colspan="11" style="padding:28px;text-align:center;color:#8a8f85;">' + (all.length ? 'No parts match these filters.' : 'Nothing in the catalog yet. Import a sheet or add a product.') + '</td></tr>') + '</tbody></table></div>' +
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;color:#82877d;font-size:13px;flex-wrap:wrap;gap:8px;">' +
         '<span>' + rowsData.length.toLocaleString() + (activeFilters ? ' of ' + all.length.toLocaleString() : '') + ' items' +
           (activeFilters ? ' · <button id="itClearF" class="link-btn" style="width:auto;padding:4px 10px;display:inline-block;">Clear filters</button>' : '') + '</span>' +
@@ -711,6 +756,62 @@
         if (f === 'unitCostMinor' || f === 'unitPriceMinor') drawItems(user);
         setTimeout(function () { el.style.borderColor = f === 'unitCostMinor' ? '#e4dfd0' : '#dcded7'; }, 900);
       });
+    });
+    box.querySelectorAll('.itToggle').forEach(function (b) {
+      b.addEventListener('click', async function () {
+        var part = b.getAttribute('data-part'), to = b.getAttribute('data-to') === 'true';
+        b.disabled = true;
+        var r = await authed('/catalog/items/' + encodeURIComponent(part) + '/active', { method: 'POST', body: { active: to } });
+        if (!r.ok) { var m1 = ''; try { m1 = ((await r.json()) || {}).message || ''; } catch (e1) {} alert(m1 || 'Could not change status (' + r.status + ').'); b.disabled = false; return; }
+        var row = (itemState.rows || []).filter(function (x) { return x.part === part; })[0];
+        if (row) {
+          row.isActive = to;
+          if (row.productStatus) { row.productStatus = to ? 'ACTIVE' : 'INACTIVE'; row.statusLabel = to ? 'Active' : 'Inactive'; }
+          else { row.active = to; row.statusLabel = to ? 'Active' : 'Inactive'; }
+        }
+        drawItems(user);
+      });
+    });
+    box.querySelectorAll('.itDel').forEach(function (b) {
+      b.addEventListener('click', function () { openItemDeleteForm(b.getAttribute('data-part'), user); });
+    });
+  }
+
+  /**
+   * Deleting a catalog part is only safe when no proposal references it — otherwise
+   * a historical document would silently change. The dialog says which it is and
+   * offers deactivation as the alternative.
+   */
+  async function openItemDeleteForm(part, user) {
+    var u = null;
+    try { var r = await authed('/catalog/items/' + encodeURIComponent(part) + '/usage'); if (r.ok) u = await r.json(); } catch (e) {}
+    if (!u) { alert('Could not check where this part is used.'); return; }
+    var safe = u.deletable;
+    openModal('Remove ' + part,
+      (safe
+        ? '<div style="font-size:13.5px;line-height:1.6;">Nothing references this part, so it can be deleted outright. This removes the catalog record, its price/cost and its sourcing — permanently.</div>'
+        : '<div style="background:#fbe9e6;border:1px solid #f0cdc7;border-radius:10px;padding:11px 13px;font-size:12.5px;color:#9c3327;line-height:1.55;">' + esc(u.reason || 'This part cannot be deleted.') + '</div>') +
+      '<div class="muted" style="font-size:12.5px;margin-top:10px;line-height:1.55;">' +
+        (u.active === false ? 'This part is already inactive.' : 'Deactivating keeps every existing proposal exactly as priced and simply stops the part being offered on new ones.') +
+      '</div>' +
+      '<div style="display:flex;gap:8px;margin-top:14px;">' +
+        (u.active !== false ? '<button type="button" class="link-btn" id="idDeact" style="width:auto;padding:9px 15px;">Deactivate instead</button>' : '') +
+      '</div>',
+      safe
+        ? async function (close, showErr) {
+          var rr = await authed('/catalog/items/' + encodeURIComponent(part), { method: 'DELETE' });
+          if (!rr.ok && rr.status !== 204) { var m = ''; try { m = ((await rr.json()) || {}).message || ''; } catch (e2) {} return showErr(m || 'Could not delete (' + rr.status + ').'); }
+          close(); loadItems(user);
+        }
+        : async function (close) { close(); },
+      safe ? 'Delete permanently' : 'Close');
+    var da = document.getElementById('idDeact');
+    if (da) da.addEventListener('click', async function () {
+      var rr = await authed('/catalog/items/' + encodeURIComponent(part) + '/active', { method: 'POST', body: { active: false } });
+      if (!rr.ok) { alert('Could not deactivate (' + rr.status + ').'); return; }
+      var form = document.getElementById('mForm');
+      if (form && form.parentNode && form.parentNode.parentNode) form.parentNode.parentNode.removeChild(form.parentNode);
+      loadItems(user);
     });
   }
   async function renderCatalogProducts(user) {
@@ -871,6 +972,7 @@
       cat.rows = all.map(function (p) {
         var row = {}; for (var k in p) row[k] = p[k];
         row.categoryName = catName(p.categoryId) || '';
+        row.categoryPath = catPathLabel(p.categoryId);
         row.kindLabel = titleCase(p.kind);
         return row;
       });
@@ -900,7 +1002,7 @@
         : '<span class="chip">' + titleCase(p.status) + '</span>';
       return '<tr>' + td('<code style="font-size:13px;color:#4a4f47;">' + esc(p.sku) + '</code>') +
         td('<b style="font-weight:600;">' + esc(p.name) + '</b>' + (p.proposalDescription ? '<div class="muted" style="font-size:12px;max-width:420px;line-height:1.45;">' + esc(String(p.proposalDescription).slice(0, 120)) + (String(p.proposalDescription).length > 120 ? '…' : '') + '</div>' : '')) +
-        td(esc(titleCase(p.kind))) + td(esc(p.categoryName || '—')) + td(statusCell) +
+        td(esc(titleCase(p.kind))) + td('<span style="font-size:13px;">' + esc(p.categoryName || '—') + '</span>' + (p.categoryPath && p.categoryPath !== p.categoryName ? '<div class="muted" style="font-size:11.5px;line-height:1.4;">' + esc(p.categoryPath) + '</div>' : '')) + td(statusCell) +
         td(admin ? '<button class="prodEdit" data-pid="' + p.id + '" style="border:1px solid #dcded7;background:#fff;border-radius:8px;padding:6px 12px;font-size:12.5px;color:#3d4a55;cursor:pointer;">Edit</button>' : '') + '</tr>';
     }).join('');
 
@@ -951,13 +1053,39 @@
 
   /** Edit a product-tree record in place: name, kind, category, descriptions, dimensions. */
   function openProductEditForm(p, user) {
-    var catOpts = catCategories.map(function (c) { return '<option value="' + c.id + '"' + (c.id === p.categoryId ? ' selected' : '') + '>' + esc(c.name) + '</option>'; }).join('');
+    var catOpts = catOptionsTree(p.categoryId);
     var num = function (v) { return v == null || v === '' ? '' : String(v); };
+    /** Where this product sits, and what else is filed in the same category. */
+    function tierPanel(categoryId) {
+      var c = catById(categoryId);
+      var path = catPath(categoryId);
+      var siblings = (cat.rows || []).filter(function (x) { return x.categoryId === categoryId && x.id !== p.id; });
+      var crumbs = path.length
+        ? path.map(function (node, i) {
+          return '<span style="' + (i === path.length - 1 ? 'font-weight:600;color:#20241f;' : 'color:#5c6157;') + '">' + esc(node.name) + '</span>';
+        }).join('<span style="color:#b3b7ac;"> › </span>')
+        : '<span class="muted">No category</span>';
+      return '<div style="background:#f7f8f4;border:1px solid #eef0ea;border-radius:10px;padding:10px 12px;margin-bottom:12px;">' +
+        '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin-bottom:3px;">Where this sits</div>' +
+        '<div style="font-size:12.5px;line-height:1.55;">' + crumbs + '</div>' +
+        '<div class="muted" style="font-size:11.5px;margin-top:3px;">Tier ' + ((c && c.tierLevel) || path.length || '—') +
+          (path.length > 1 ? ' · parent: ' + esc(path[path.length - 2].name) : ' · top level') + '</div>' +
+        '<div style="margin-top:8px;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Also in this category (' + siblings.length + ')</div>' +
+        (siblings.length
+          ? '<div style="max-height:132px;overflow:auto;margin-top:4px;">' + siblings.slice(0, 40).map(function (x) {
+            return '<div style="display:flex;justify-content:space-between;gap:10px;font-size:12px;padding:2px 0;">' +
+              '<span style="color:#20241f;">' + esc(x.name) + '</span>' +
+              '<code style="color:#7a7f75;font-size:11px;white-space:nowrap;">' + esc(x.sku) + '</code></div>';
+          }).join('') + (siblings.length > 40 ? '<div class="muted" style="font-size:11.5px;">…and ' + (siblings.length - 40) + ' more</div>' : '') + '</div>'
+          : '<div class="muted" style="font-size:12px;margin-top:2px;">Nothing else — this is the only part filed here.</div>') +
+        '</div>';
+    }
     openModal('Edit ' + p.sku,
+      '<div id="ePTier">' + tierPanel(p.categoryId) + '</div>' +
       fieldRow('SKU', '<input style="' + IN + 'background:#f2f3ef;" value="' + esc(p.sku) + '" disabled>') +
       fieldRow('Name', '<input id="ePName" style="' + IN + '" value="' + esc(p.name) + '">') +
       fieldRow('Kind', '<select id="ePKind" style="' + IN + '">' + KINDS.map(function (k) { return '<option value="' + k + '"' + (k === p.kind ? ' selected' : '') + '>' + titleCase(k) + '</option>'; }).join('') + '</select>') +
-      fieldRow('Category', '<select id="ePCat" style="' + IN + '">' + catOpts + '</select>') +
+      fieldRow('Category / tier position', '<select id="ePCat" style="' + IN + '">' + catOpts + '</select>') +
       '<div class="field"><label>Proposal description</label><textarea id="ePDesc" rows="3" style="' + IN + 'resize:vertical;">' + esc(p.proposalDescription || '') + '</textarea>' +
         '<div class="muted" style="font-size:11.5px;margin-top:3px;">This is the text that prints under the line item on a proposal.</div></div>' +
       '<div class="field"><label>Internal description</label><textarea id="ePInt" rows="2" style="' + IN + 'resize:vertical;">' + esc(p.internalDescription || '') + '</textarea></div>' +
@@ -986,7 +1114,12 @@
         var r = await authed('/catalog/products/' + p.id, { method: 'PATCH', body: body });
         if (!r.ok) return showErr('Could not save (' + r.status + ').');
         close(); loadProducts(user);
-      });
+      }, 'Save changes');
+    var catSel = document.getElementById('ePCat');
+    if (catSel) catSel.addEventListener('change', function () {
+      var host = document.getElementById('ePTier');
+      if (host) host.innerHTML = tierPanel(catSel.value);
+    });
   }
 
   function openCategoryForm() {
@@ -1228,7 +1361,13 @@
     var view = document.getElementById('view'); view.innerHTML = '<div class="muted" style="padding:24px;">Loading…</div>';
     var r = await authed('/proposals/' + id); if (!r.ok) { view.innerHTML = '<div class="err">Could not load proposal.</div>'; return; }
     var p = await r.json(); var versions = p.versions || []; var latest = versions[versions.length - 1] || {};
-    var actions = proposalActions(latest, user);
+    // If this version is already locked into an operational order, offer the unlock
+    // path instead of a second lock.
+    var lockedOrder = null;
+    if (latest.id && latest.status === 'ACCEPTED') {
+      try { var ro = await authed('/orders/by-version/' + latest.id); if (ro.ok) lockedOrder = await ro.json(); } catch (e) {}
+    }
+    var actions = proposalActions(latest, user, lockedOrder);
     view.innerHTML =
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;"><button class="link-btn" id="propBack" style="width:auto;padding:7px 13px;">‹ Back to proposals</button>' +
       (latest.status === 'DRAFT' && hasRole(PROP_WRITE, user.role) ? '<button class="btn" id="propBuild" style="width:auto;padding:9px 17px;">Build / edit proposal</button>' : '<button class="link-btn" id="propPreview" style="width:auto;padding:8px 15px;">Preview</button>') + '</div>' +
@@ -1238,6 +1377,8 @@
     document.getElementById('propBack').addEventListener('click', function () { renderProposals(user); });
     var pbBtn = document.getElementById('propBuild'); if (pbBtn) pbBtn.addEventListener('click', function () { openBuilder(p, latest, user); });
     var pvBtn = document.getElementById('propPreview'); if (pvBtn) pvBtn.addEventListener('click', function () { previewProposal(p, latest); });
+    var puBtn = document.getElementById('propUnlock');
+    if (puBtn) puBtn.addEventListener('click', function () { openUnlockForm({ id: lockedOrder.id, number: lockedOrder.number }, user); });
     document.querySelectorAll('#propActions [data-act]').forEach(function (bt) {
       bt.addEventListener('click', async function () {
         var act = bt.getAttribute('data-act'), vid = bt.getAttribute('data-vid');
@@ -1250,13 +1391,22 @@
       });
     });
   }
-  function proposalActions(v, user) {
+  function proposalActions(v, user, lockedOrder) {
     var s = v.status || 'DRAFT', b = [];
     function btn(act, label, primary) { return '<button class="' + (primary ? 'btn' : 'link-btn') + '" data-act="' + act + '" data-vid="' + v.id + '" style="width:auto;padding:9px 15px;">' + label + '</button>'; }
     if (s === 'DRAFT') { if (hasRole(PROP_WRITE, user.role)) b.push(btn('submit-review', 'Submit for review')); if (hasRole(PROP_RELEASE, user.role)) b.push(btn('release', 'Release', 1)); }
     else if (s === 'INTERNAL_REVIEW') { if (hasRole(PROP_REVIEW, user.role)) b.push(btn('return-draft', 'Return to draft')); if (hasRole(PROP_RELEASE, user.role)) b.push(btn('release', 'Release', 1)); }
     else if (s === 'RELEASED') { if (hasRole(PROP_REVIEW, user.role)) { b.push(btn('accept', 'Mark accepted', 1)); b.push(btn('reject', 'Reject')); b.push(btn('expire', 'Expire')); } }
-    else if (s === 'ACCEPTED') { if (hasRole(ORDERS_MANAGE_ROLES, user.role)) b.push('<button class="btn" data-act="lock" data-vid="' + v.id + '" style="width:auto;padding:9px 15px;">Lock to operational order</button>'); }
+    else if (s === 'ACCEPTED') {
+      if (lockedOrder && lockedOrder.id && lockedOrder.status !== 'CANCELLED') {
+        b.push('<span class="chip" style="align-self:center;">Locked to ' + esc(lockedOrder.number || 'order') + '</span>');
+        if (hasRole(ORDERS_MANAGE_ROLES, user.role) && lockedOrder.status !== 'COMPLETE') {
+          b.push('<button class="link-btn" id="propUnlock" style="width:auto;padding:9px 15px;color:#9c3327;">Unlock for changes</button>');
+        }
+      } else if (hasRole(ORDERS_MANAGE_ROLES, user.role)) {
+        b.push('<button class="btn" data-act="lock" data-vid="' + v.id + '" style="width:auto;padding:9px 15px;">Lock to operational order</button>');
+      }
+    }
     if (hasRole(PROP_WRITE, user.role) && (s === 'RELEASED' || s === 'REJECTED' || s === 'EXPIRED')) b.push(btn('new-version', 'Create new version'));
     return b.join('');
   }
@@ -1690,7 +1840,7 @@
     var structureFreight = Number(pb.meta.structureFreightMinor) || 0;
     var matsFreight = Number(pb.meta.matsFreightMinor) || 0;
     var total = subtotal - discount + tpFreight + tax + structureFreight + matsFreight;
-    var deposit = Math.round(total * 0.5);
+    var deposit = depositOf(total);
     var revenue = subtotal - discount + tpFreight;
     groups.forEach(function (g) { g.margin = g.subtotal - g.cogs; g.marginPct = g.subtotal ? Math.round((g.margin / g.subtotal) * 1000) / 10 : 0; });
     return { subtotal: subtotal, discountPct: discountPct, discount: discount, tpFreight: tpFreight, tax: tax, structureFreight: structureFreight, matsFreight: matsFreight, total: total, deposit: deposit, groups: groups, weight: weight,
@@ -1763,7 +1913,7 @@
         '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:14px;"><span class="muted">Structure Crating &amp; Freight $</span><input id="mStructFreight" style="width:100px;padding:5px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;" value="' + m2d(pb.meta.structureFreightMinor) + '"></div>' +
         '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:14px;"><span class="muted">Mats &amp; Padding Freight $</span><input id="mMatsFreight" style="width:100px;padding:5px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;" value="' + m2d(pb.meta.matsFreightMinor) + '"></div>' +
         '<div style="display:flex;justify-content:space-between;padding:8px 0 0;margin-top:6px;border-top:1px solid #e7e8e3;font-size:16px;font-weight:600;font-family:\'Newsreader\',serif;"><span>Total</span><span>' + fmtMoney(t.total, 'USD') + '</span></div>' +
-        '<div style="display:flex;justify-content:space-between;padding:6px 0 0;font-size:14px;color:#3d4a55;font-weight:600;"><span>Deposit due (50%)</span><span>' + fmtMoney(t.deposit, 'USD') + '</span></div>' +
+        '<div style="display:flex;justify-content:space-between;padding:6px 0 0;font-size:14px;color:#3d4a55;font-weight:600;"><span>Deposit due (' + depositPct() + '%)</span><span>' + fmtMoney(t.deposit, 'USD') + '</span></div>' +
       '</div>' +
       footerNotesCard() +
       '<div id="bMarginRail" style="' + marginRailStyle() + '">' + marginCard(t) + '</div>';
@@ -1977,7 +2127,7 @@
 
   async function openProductPicker() {
     var products = [];
-    try { var r = await authed('/catalog/products?pageSize=100'); if (r.ok) products = (await r.json()).items || []; } catch (e) {}
+    try { var r = await authed('/catalog/products?pageSize=100&status=ACTIVE'); if (r.ok) products = (await r.json()).items || []; } catch (e) {}
     var listHtml = function (items) { return items.map(function (p) { return '<button type="button" class="pkRow" data-id="' + p.id + '" style="display:block;width:100%;text-align:left;border:none;border-bottom:1px solid #f2f3ef;background:#fff;padding:10px 12px;cursor:pointer;font-size:13.5px;"><b style="font-weight:600;">' + esc(p.name) + '</b> <span class="muted" style="font-size:12px;">' + esc(p.sku) + '</span></button>'; }).join('') || '<div class="muted" style="padding:16px;">No products. Add some in Catalog first.</div>'; };
     openModal('Add product line',
       '<input id="pkSearch" placeholder="Search products…" style="' + IN + 'margin-bottom:10px;">' +
@@ -2058,7 +2208,7 @@
     var tax = Number(meta.taxAmountMinor) || 0;
     var structureFreight = Number(meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0)); var matsFreight = Number(meta.matsFreightMinor) || 0;
     var total = subtotal - discount + tpFreight + tax + structureFreight + matsFreight;
-    previewProposalDoc({ title: proposal.title, number: proposal.number, orgName: orgName, meta: meta, lines: lines, totals: { subtotal: subtotal, discountPct: discountPct, discount: discount, tpFreight: tpFreight, tax: tax, structureFreight: structureFreight, matsFreight: matsFreight, total: total, deposit: Math.round(total * 0.5), weight: weight } });
+    previewProposalDoc({ title: proposal.title, number: proposal.number, orgName: orgName, meta: meta, lines: lines, totals: { subtotal: subtotal, discountPct: discountPct, discount: discount, tpFreight: tpFreight, tax: tax, structureFreight: structureFreight, matsFreight: matsFreight, total: total, deposit: depositOf(total), weight: weight } });
   }
 
   function previewProposalDoc(doc) {
@@ -2161,7 +2311,7 @@
           '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Mats &amp; Padding Freight</span><span>' + (t.matsFreight ? fmtMoney(t.matsFreight, 'USD') : TBD) + '</span></div>' +
           '<div style="display:flex;justify-content:space-between;padding:8px;margin-top:5px;border-top:2px solid #3d4a55;font-size:15px;font-weight:700;"><span>Total</span><span>' + fmtMoney(t.total, 'USD') + '</span></div>' +
           (anyTbd ? '<div style="padding:2px 8px 0;font-size:10px;color:#8a8f85;text-align:right;line-height:1.5;">Total excludes items marked TBD.</div>' : '') +
-          '<div style="display:flex;justify-content:space-between;padding:6px 8px 0;font-size:13px;color:#3d4a55;font-weight:700;"><span>Deposit Due (50%)</span><span>' + fmtMoney(t.deposit, 'USD') + '</span></div>' +
+          '<div style="display:flex;justify-content:space-between;padding:6px 8px 0;font-size:13px;color:#3d4a55;font-weight:700;"><span>Deposit Due (' + depositPct() + '%)</span><span>' + fmtMoney(t.deposit, 'USD') + '</span></div>' +
         '</div></div>' + bottomNotesHtml +
         '<div style="display:flex;gap:40px;margin-top:40px;padding-top:14px;">' +
           '<div style="flex:1;"><div style="border-bottom:1.5px solid #20241f;height:26px;"></div><div style="font-size:10.5px;color:#8a8f85;margin-top:5px;">Signer\'s Name</div></div>' +
@@ -2192,7 +2342,12 @@
   }
 
   /* --- Adventure Series guided configurator (decision tree) --- */
-  function legsFor(len) { len = Number(len) || 0; if (len <= 10) return 4; if (len <= 20) return 6; return 8; }
+  function legsFor(len) {
+    len = Number(len) || 0;
+    if (len <= Number(fxSettings.legsSmallMaxFt)) return Number(fxSettings.legsSmallCount);
+    if (len <= Number(fxSettings.legsMediumMaxFt)) return Number(fxSettings.legsMediumCount);
+    return Number(fxSettings.legsLargeCount);
+  }
   function _xlfnPrefix(config) { return config === 'Square' ? 'SQ-' : config === 'L-Shape' ? 'L-' : config === 'T-Shape' ? 'T-' : 'R-'; }
   var adv = null;
   function openAdventureConfigurator() {
@@ -2411,13 +2566,50 @@
         var name = document.getElementById('aName').value.trim(); if (!name) return showErr('Approver name is required.');
         var body = { method: document.getElementById('aMethod').value, approverName: name, approverTitle: document.getElementById('aTitle').value.trim() || undefined, poNumber: document.getElementById('aPo').value.trim() || undefined, approvedAt: new Date(document.getElementById('aDate').value || Date.now()).toISOString(), notes: document.getElementById('aNotes').value.trim() || undefined };
         var r = await authed('/orders/from-version/' + versionId, { method: 'POST', body: body });
-        if (!r.ok) return showErr('Could not lock order (' + r.status + ').');
+        if (!r.ok) {
+          var msg = '';
+          try { msg = ((await r.json()) || {}).message || ''; } catch (e) {}
+          return showErr(msg || 'Could not lock order (' + r.status + ').');
+        }
         close(); alert('Operational order created.');
         var nb = document.querySelector('[data-view="orders"]'); if (nb) nb.click();
       }, 'Lock order');
   }
 
   /* --- Orders & Handoff --- */
+  /**
+   * Unlock an operational order so a last-minute customer change can be made. The
+   * order is cancelled (kept on record with the reason) and a new draft version of
+   * the proposal is cloned for the edit.
+   */
+  function openUnlockForm(order, user) {
+    openModal('Unlock ' + (order.number || 'order') + ' for changes',
+      '<div style="background:#fdf6e3;border:1px solid #eadfbe;border-radius:10px;padding:11px 13px;font-size:12.5px;color:#8a6d1f;line-height:1.55;margin-bottom:12px;">' +
+        'The order is cancelled and kept on record with this reason on its timeline. The accepted proposal stays frozen as the signed record, and a new draft version is created for the change. Re-accept and lock the new version when the customer signs off.' +
+      '</div>' +
+      '<div class="field"><label>Reason (required)</label><textarea id="ulReason" rows="3" placeholder="e.g. Customer added a second zip line before production started" style="' + IN + 'resize:vertical;"></textarea></div>' +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;"><input type="checkbox" id="ulRevision" checked> Create a new draft version to edit</label>',
+      async function (close, showErr) {
+        var reason = document.getElementById('ulReason').value.trim();
+        if (reason.length < 4) return showErr('Please give a reason — it goes on the order record.');
+        var r = await authed('/orders/' + order.id + '/unlock', { method: 'POST', body: { reason: reason, createRevision: document.getElementById('ulRevision').checked } });
+        if (!r.ok) {
+          var msg = ''; try { msg = ((await r.json()) || {}).message || ''; } catch (e) {}
+          return showErr(msg || 'Could not unlock (' + r.status + ').');
+        }
+        var d = await r.json();
+        close();
+        if (d.revision) {
+          alert('Order ' + (d.number || '') + ' unlocked. Draft v' + d.revision.version + ' is ready to edit.');
+          activateNav('proposals');
+          openProposalDetail(d.proposalId, user);
+        } else {
+          alert('Order ' + (d.number || '') + ' unlocked.');
+          renderOrders(user);
+        }
+      }, 'Unlock order');
+  }
+
   async function renderOrders(user) {
     document.getElementById('view').innerHTML = '<div id="ordList"><div class="muted" style="padding:24px;">Loading…</div></div>';
     try {
@@ -2441,7 +2633,11 @@
     var canHandoff = hasRole(HANDOFF_ROLES, user.role);
     var integ = st.integrity || {};
     view.innerHTML =
-      '<button class="link-btn" id="ordBack" style="width:auto;padding:7px 13px;margin-bottom:16px;">‹ Back to orders</button>' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;">' +
+        '<button class="link-btn" id="ordBack" style="width:auto;padding:7px 13px;">‹ Back to orders</button>' +
+        (hasRole(ORDERS_MANAGE_ROLES, user.role) && order.status !== 'CANCELLED' && order.status !== 'COMPLETE'
+          ? '<button class="link-btn" id="ordUnlock" style="width:auto;padding:8px 15px;color:#9c3327;">Unlock for changes</button>' : '') +
+      '</div>' +
       '<div class="card" style="margin-bottom:16px;"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;"><div><div class="k">' + esc(order.number) + '</div><h2 style="font-size:22px;margin-top:2px;">Operational order</h2><div class="muted" style="font-size:13px;margin-top:4px;">Accepted proposal v' + (order.acceptedVersion || '') + '</div></div>' +
         '<div style="text-align:right;"><span class="chip">' + titleCase(order.status) + '</span><div style="margin-top:8px;font-size:13px;">' + (integ.ok ? '<span class="dot ok"></span>Integrity verified' : '<span class="dot bad"></span>Integrity drift') + '</div></div></div>' +
         '<div class="grid" style="margin-top:16px;"><div><div class="k">Total</div><div class="v small">' + fmtMoney(order.grandTotalMinor, order.currency) + '</div></div>' +
@@ -2452,6 +2648,8 @@
       sectionBlock('Procurement', procRows(order.procurement || [])) +
       sectionBlock('Audit timeline', auditRows(audit));
     document.getElementById('ordBack').addEventListener('click', function () { renderOrders(user); });
+    var unl = document.getElementById('ordUnlock');
+    if (unl) unl.addEventListener('click', function () { openUnlockForm(order, user); });
     if (canHandoff) {
       document.querySelectorAll('.hoStatus').forEach(function (sel) {
         sel.addEventListener('change', async function () {
@@ -2496,229 +2694,361 @@
         '<button class="btn" id="snNew" style="width:auto;padding:9px 15px;">+ New note</button></div>' +
       '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;">Reusable note blocks for proposals. “Always include” notes are added to every new proposal automatically. Table notes print inside the line items; footer notes print below the signature lines. Wrap text in **double asterisks** to bold it.</div>' +
       '<div id="snList"><div class="muted" style="padding:16px;">Loading…</div></div>' +
-      '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:26px;"><div class="section-title" style="margin:0;">Hardware quantity formulas</div>' +
-        '<button class="link-btn" id="hrReset" style="width:auto;padding:9px 15px;">Restore workbook defaults</button></div>' +
-      '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;">The coefficients behind the H-1000 fastener counts. Quantities stay formula-driven — these are the numbers each formula multiplies by, from the v73 workbook. Edit one and the next proposal uses it; rows you have changed are marked <b>Edited</b> and can be reset individually.</div>' +
-      '<div id="hrList"><div class="muted" style="padding:16px;">Loading…</div></div>';
+      '<div class="section-title" style="margin-top:26px;">Formulas</div>' +
+      '<div class="muted" style="font-size:12.5px;margin:0 0 10px;">Every calculation the pricing engine runs. Frame and hardware quantities are editable coefficients; business numbers are the scalars the proposal math uses; the last tab lists what is fixed in code and why.</div>' +
+      '<div id="fxTabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;"></div>' +
+      '<div id="fxBody"><div class="muted" style="padding:16px;">Loading…</div></div>';
     document.getElementById('admNew').addEventListener('click', openUserForm);
     document.getElementById('snNew').addEventListener('click', function () { openStandardNoteForm(null); });
-    document.getElementById('hrReset').addEventListener('click', async function () {
-      if (!confirm('Clear every hardware formula edit and return all 37 parts to the v73 workbook values?')) return;
-      var r = await authed('/hardware-rules/reset', { method: 'POST', body: {} });
-      if (!r.ok) { alert('Could not reset (' + r.status + ').'); return; }
-      loadHardwareRules();
-    });
     loadUsers();
     loadStandardNotes();
-    loadHardwareRules();
+    loadFormulas();
   }
 
-  /* --- Hardware quantity formulas (editable coefficients) --- */
-  var hrData = null;
-  function hrSourceLabel(src) {
-    if (src.indexOf('in:') === 0) {
-      var k = src.slice(3);
-      var f = ((hrData && hrData.sources.inputs) || []).filter(function (i) { return i.key === k; })[0];
+  /* --- Formulas: every editable calculation in the engine --- */
+  var fx = { data: null, tab: 'frame' };
+  var FX_TABS = [
+    { id: 'frame', label: 'Frame & components' },
+    { id: 'hardware', label: 'Hardware fasteners' },
+    { id: 'settings', label: 'Business numbers' },
+    { id: 'code', label: 'Fixed in code' },
+  ];
+  function fxSet(kind) { return fx.data ? fx.data[kind] : null; }
+  function fxInputs(kind) { var set = fxSet(kind); return (set && set.inputs) || []; }
+  function fxSourceLabel(kind, src) {
+    if (!src) return '';
+    if (src.indexOf('in:') === 0 || src.indexOf('flag:') === 0) {
+      var k = src.slice(src.indexOf(':') + 1);
+      var f = fxInputs(kind).filter(function (i) { return i.key === k; })[0];
       return f ? f.label : k;
     }
     return src.slice(src.indexOf(':') + 1);
   }
-  function hrFormulaText(r) {
+  function fxCondText(kind, c) {
+    if (!c) return '';
+    var lbl = fxSourceLabel(kind, 'in:' + c.input) || c.input;
+    if (c.value === true) return 'when ' + lbl;
+    if (c.value === false) return 'when not ' + lbl;
+    return 'when ' + lbl + ' ' + c.op + ' ' + c.value;
+  }
+  function fxFormulaText(kind, r) {
     if (!r.active) return r.note || 'switched off — always 0';
     var body = (r.terms || []).map(function (t, i) {
       var sign = t.coefficient < 0 ? ' − ' : (i ? ' + ' : '');
       var mag = Math.abs(t.coefficient);
-      return sign + hrSourceLabel(t.source) + (mag === 1 ? '' : ' × ' + mag);
+      var base = t.source ? fxSourceLabel(kind, t.source) + (mag === 1 ? '' : ' × ' + mag) : String(mag);
+      return sign + base + (t.when ? ' (' + fxCondText(kind, t.when) + ')' : '');
     }).join('') || '0';
-    if (r.mode === 'PRESENCE') return '(' + body + ') > 0 ? ' + r.constant + ' : 0';
-    if (r.constant) body += (r.constant < 0 ? ' − ' : ' + ') + Math.abs(r.constant);
-    if (Number(r.factor) !== 1) body = '(' + body + ') × ' + r.factor;
-    if (r.roundMode === 'CEIL') body = 'ceil(' + body + (Number(r.roundStep) > 1 ? ', step ' + r.roundStep : '') + ')';
-    else if (r.roundMode === 'ROUND') body = 'round(' + body + (Number(r.roundStep) > 1 ? ', step ' + r.roundStep : '') + ')';
-    return body;
+    if (r.mode === 'PRESENCE') body = '(' + body + ') > 0 ? ' + r.constant + ' : 0';
+    else {
+      if (r.constant) body += (r.constant < 0 ? ' − ' : ' + ') + Math.abs(r.constant);
+      if (Number(r.factor) !== 1) body = '(' + body + ') × ' + r.factor;
+      if (r.roundMode === 'CEIL') body = 'ceil(' + body + (Number(r.roundStep) > 1 ? ', step ' + r.roundStep : '') + ')';
+      else if (r.roundMode === 'ROUND') body = 'round(' + body + (Number(r.roundStep) > 1 ? ', step ' + r.roundStep : '') + ')';
+    }
+    return body + (r.when ? '  —  only ' + fxCondText(kind, r.when) : '');
   }
-  async function loadHardwareRules() {
-    var box = document.getElementById('hrList'); if (!box) return;
+  async function loadFormulas() {
+    var box = document.getElementById('fxBody'); if (!box) return;
+    box.innerHTML = '<div class="muted" style="padding:16px;">Loading…</div>';
     try {
-      var r = await authed('/hardware-rules');
-      if (!r.ok) { box.innerHTML = '<div class="err">Could not load hardware formulas (' + r.status + '). Run the 0020 migration if this persists.</div>'; return; }
-      hrData = await r.json();
-      var over = hrData.overriddenParts || [];
-      var rows = (hrData.rules || []).map(function (rl) {
-        var edited = over.indexOf(rl.part) !== -1;
-        return '<tr' + (rl.active ? '' : ' style="opacity:.6;"') + '>' +
-          td('<code style="font-size:12.5px;color:#4a4f47;">' + esc(rl.part) + '</code>' + (edited ? '<div><span style="display:inline-block;margin-top:3px;background:#fdf6e3;border:1px solid #eadfbe;color:#8a6d1f;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:600;">Edited</span></div>' : '')) +
-          td('<span style="font-size:13px;">' + esc(rl.name) + '</span>') +
-          td('<span style="font-size:12.5px;color:#4a4f47;font-family:ui-monospace,monospace;line-height:1.45;">' + esc(hrFormulaText(rl)) + '</span>') +
-          td('<div style="display:flex;gap:6px;justify-content:flex-end;"><button class="hrEdit" data-part="' + esc(rl.part) + '" style="border:1px solid #dcded7;background:#fff;border-radius:8px;padding:6px 12px;font-size:12.5px;color:#3d4a55;cursor:pointer;">Edit</button>' +
-            (edited ? '<button class="hrRevert" data-part="' + esc(rl.part) + '" style="border:1px solid #e0e1db;background:#fff;border-radius:8px;padding:6px 12px;font-size:12.5px;color:#9c3327;cursor:pointer;">Reset</button>' : '') + '</div>') + '</tr>';
-      }).join('');
-      box.innerHTML = tableShell(['Part #', 'Fastener', 'Quantity formula', ''], rows, 4, 'No hardware rules.');
-      box.querySelectorAll('.hrEdit').forEach(function (b) {
-        b.addEventListener('click', function () {
-          openHardwareRuleForm((hrData.rules || []).filter(function (x) { return x.part === b.getAttribute('data-part'); })[0]);
-        });
-      });
-      box.querySelectorAll('.hrRevert').forEach(function (b) {
-        b.addEventListener('click', async function () {
-          if (!confirm('Return ' + b.getAttribute('data-part') + ' to the workbook default?')) return;
-          var rr = await authed('/hardware-rules/' + encodeURIComponent(b.getAttribute('data-part')), { method: 'DELETE' });
-          if (!rr.ok && rr.status !== 204) { alert('Could not reset (' + rr.status + ').'); return; }
-          loadHardwareRules();
-        });
-      });
+      var r = await authed('/formulas');
+      if (!r.ok) { box.innerHTML = '<div class="err">Could not load formulas (' + r.status + '). Run the 0021 migration if this persists.</div>'; return; }
+      fx.data = await r.json();
+      drawFormulas();
     } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
   }
-  function hrSourceOptions(sel) {
-    var s = (hrData && hrData.sources) || { frame: [], inputs: [], hardware: [] };
+  function drawFxTabs() {
+    var box = document.getElementById('fxTabs'); if (!box) return;
+    box.innerHTML = FX_TABS.map(function (t) {
+      var on = fx.tab === t.id;
+      var count = fx.data && fx.data[t.id] && fx.data[t.id].rules ? fx.data[t.id].rules.length : 0;
+      return '<button data-fxt="' + t.id + '" style="border:1px solid ' + (on ? '#3d4a55' : '#dcded7') + ';background:' + (on ? '#3d4a55' : '#fff') + ';color:' + (on ? '#fff' : '#3d4a55') + ';border-radius:999px;padding:7px 13px;font-size:12.5px;cursor:pointer;">' + esc(t.label) + (count ? ' <span style="opacity:.65;">' + count + '</span>' : '') + '</button>';
+    }).join('');
+    box.querySelectorAll('[data-fxt]').forEach(function (b) {
+      b.addEventListener('click', function () { fx.tab = b.getAttribute('data-fxt'); drawFxTabs(); drawFormulas(); });
+    });
+  }
+  function drawFormulas() {
+    var box = document.getElementById('fxBody'); if (!box || !fx.data) return;
+    drawFxTabs();
+    if (fx.tab === 'code') {
+      box.innerHTML =
+        '<div class="muted" style="font-size:12.5px;margin-bottom:10px;line-height:1.55;">These are lookups and naming conventions rather than coefficients, so they live in code. Listed here so this page is a complete inventory of the engine — tell me what should change and I will change it.</div>' +
+        (fx.data.inCode || []).map(function (c) {
+          return '<div class="card" style="margin-bottom:10px;"><div style="font-weight:600;font-size:14px;">' + esc(c.name) + '</div>' +
+            '<div class="muted" style="font-size:12px;font-family:ui-monospace,monospace;margin-top:2px;">' + esc(c.where) + '</div>' +
+            '<div style="font-size:13px;line-height:1.55;margin-top:6px;">' + esc(c.what) + '</div>' +
+            '<div class="muted" style="font-size:12.5px;line-height:1.5;margin-top:4px;">Why it is not a setting: ' + esc(c.why) + '</div></div>';
+        }).join('');
+      return;
+    }
+    if (fx.tab === 'settings') {
+      var st = fx.data.settings || { values: {}, defs: [], defaults: {} };
+      var groups = [];
+      st.defs.forEach(function (d) { if (groups.indexOf(d.group) === -1) groups.push(d.group); });
+      box.innerHTML =
+        '<div class="muted" style="font-size:12.5px;margin-bottom:12px;">The business numbers the proposal math uses. Changing one affects new proposals; documents already saved keep their own figures.</div>' +
+        groups.map(function (g) {
+          return '<div class="card" style="margin-bottom:12px;"><div class="section-title" style="margin:0 0 10px;">' + esc(g) + '</div>' +
+            st.defs.filter(function (d) { return d.group === g; }).map(function (d) {
+              var v = st.values[d.key];
+              var changed = Number(v) !== Number(st.defaults[d.key]);
+              return '<div style="display:flex;align-items:flex-start;gap:12px;padding:8px 0;border-top:1px solid #f2f3ef;">' +
+                '<div style="flex:1;"><div style="font-size:13.5px;font-weight:600;">' + esc(d.label) +
+                  (changed ? ' <span style="background:#fdf6e3;border:1px solid #eadfbe;color:#8a6d1f;border-radius:999px;padding:1px 7px;font-size:10.5px;font-weight:600;">changed from ' + st.defaults[d.key] + '</span>' : '') + '</div>' +
+                  '<div class="muted" style="font-size:12px;line-height:1.5;margin-top:2px;">' + esc(d.help) + '</div></div>' +
+                '<div style="display:flex;align-items:center;gap:6px;flex:0 0 auto;">' +
+                  '<input class="fxSet" data-k="' + d.key + '" type="number" min="' + d.min + '" max="' + d.max + '" step="' + d.step + '" value="' + esc(v) + '" style="width:92px;padding:7px 9px;border:1px solid #dcded7;border-radius:8px;text-align:right;font-size:13.5px;">' +
+                  '<span class="muted" style="font-size:12px;min-width:34px;">' + esc(d.unit) + '</span></div></div>';
+            }).join('') + '</div>';
+        }).join('') +
+        '<div style="display:flex;gap:8px;align-items:center;"><button class="btn" id="fxSaveSet" style="width:auto;padding:10px 18px;">Save business numbers</button>' +
+          '<span id="fxSetMsg" class="muted" style="font-size:12.5px;"></span></div>';
+      document.getElementById('fxSaveSet').addEventListener('click', async function () {
+        var body = {};
+        document.querySelectorAll('.fxSet').forEach(function (el) { body[el.getAttribute('data-k')] = Number(el.value); });
+        var msg = document.getElementById('fxSetMsg'); msg.textContent = 'Saving…';
+        var r = await authed('/formulas/settings', { method: 'PATCH', body: body });
+        if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} msg.textContent = m || 'Could not save (' + r.status + ').'; return; }
+        fx.data.settings.values = await r.json();
+        msg.textContent = 'Saved.';
+        drawFormulas();
+      });
+      return;
+    }
+    // rule sets: frame or hardware
+    var kind = fx.tab;
+    var set = fxSet(kind);
+    var over = set.overriddenParts || [];
+    var lastGroup = null;
+    var rows = (set.rules || []).map(function (rl) {
+      var edited = over.indexOf(rl.part) !== -1;
+      var head = '';
+      if (kind === 'frame' && rl.group && rl.group !== lastGroup) {
+        lastGroup = rl.group;
+        head = '<tr><td colspan="4" style="padding:9px 14px 5px;background:#f7f8f4;border-bottom:1px solid #e7e8e3;font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#3d4a55;">' + esc(rl.group) + '</td></tr>';
+      }
+      return head + '<tr' + (rl.active ? '' : ' style="opacity:.6;"') + '>' +
+        td('<code style="font-size:12.5px;color:#4a4f47;">' + esc(rl.part) + '</code>' + (edited ? '<div><span style="display:inline-block;margin-top:3px;background:#fdf6e3;border:1px solid #eadfbe;color:#8a6d1f;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:600;">Edited</span></div>' : '')) +
+        td('<span style="font-size:13px;">' + esc(rl.name) + '</span>') +
+        td('<span style="font-size:12.5px;color:#4a4f47;font-family:ui-monospace,monospace;line-height:1.45;">' + esc(fxFormulaText(kind, rl)) + '</span>') +
+        td('<div style="display:flex;gap:6px;justify-content:flex-end;"><button class="fxEdit" data-part="' + esc(rl.part) + '" style="border:1px solid #dcded7;background:#fff;border-radius:8px;padding:6px 12px;font-size:12.5px;color:#3d4a55;cursor:pointer;">Edit</button>' +
+          (edited ? '<button class="fxRevert" data-part="' + esc(rl.part) + '" style="border:1px solid #e0e1db;background:#fff;border-radius:8px;padding:6px 12px;font-size:12.5px;color:#9c3327;cursor:pointer;">Reset</button>' : '') + '</div>') + '</tr>';
+    }).join('');
+    box.innerHTML =
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">' +
+        '<div class="muted" style="font-size:12.5px;max-width:760px;line-height:1.55;">' + esc(set.blurb || '') + ' Quantities stay formula-driven — these are the numbers each formula multiplies by. Rows you have changed are badged <b>Edited</b> and can be reset individually.</div>' +
+        '<div style="display:flex;gap:8px;white-space:nowrap;">' +
+          '<button class="link-btn" id="fxNewRule" style="width:auto;padding:8px 14px;">+ New rule</button>' +
+          '<button class="link-btn" id="fxResetKind" style="width:auto;padding:8px 14px;">Restore workbook defaults</button></div>' +
+      '</div>' +
+      tableShell(['Part #', 'Item', 'Quantity formula', ''], rows, 4, 'No rules.');
+    document.getElementById('fxNewRule').addEventListener('click', function () {
+      var part = (prompt('Part number for the new quantity rule (e.g. 6820H-LP-ZP):') || '').trim();
+      if (!part) return;
+      if ((set.rules || []).some(function (x) { return x.part === part; })) { alert('That part already has a rule — edit it in the list.'); return; }
+      openFormulaForm(kind, {
+        part: part, name: part, terms: [], constant: 0, factor: 1, roundMode: 'NONE', roundStep: 1,
+        mode: 'SUM', minZero: true, active: true, when: null, group: kind === 'frame' ? 'Zip line' : 'Hardware',
+      });
+    });
+    document.getElementById('fxResetKind').addEventListener('click', async function () {
+      if (!confirm('Clear every edit in “' + (set.label || kind) + '” and return to the v73 workbook values?')) return;
+      var r = await authed('/formulas/reset', { method: 'POST', body: { kind: kind.toUpperCase() } });
+      if (!r.ok) { alert('Could not reset (' + r.status + ').'); return; }
+      loadFormulas();
+    });
+    box.querySelectorAll('.fxEdit').forEach(function (b) {
+      b.addEventListener('click', function () {
+        openFormulaForm(kind, (set.rules || []).filter(function (x) { return x.part === b.getAttribute('data-part'); })[0]);
+      });
+    });
+    box.querySelectorAll('.fxRevert').forEach(function (b) {
+      b.addEventListener('click', async function () {
+        if (!confirm('Return ' + b.getAttribute('data-part') + ' to the workbook default?')) return;
+        var rr = await authed('/formulas/' + kind.toUpperCase() + '/' + encodeURIComponent(b.getAttribute('data-part')), { method: 'DELETE' });
+        if (!rr.ok && rr.status !== 204) { alert('Could not reset (' + rr.status + ').'); return; }
+        loadFormulas();
+      });
+    });
+  }
+  function fxSourceOptions(kind, sel) {
+    var set = fxSet(kind) || {};
+    var src = (fx.data && fx.data.sources) || {};
     var group = function (label, opts) {
+      if (!opts.length) return '';
       return '<optgroup label="' + label + '">' + opts.map(function (o) {
         return '<option value="' + esc(o[0]) + '"' + (o[0] === sel ? ' selected' : '') + '>' + esc(o[1]) + '</option>';
       }).join('') + '</optgroup>';
     };
-    return group('Configurator answers', (s.inputs || []).map(function (i) { return ['in:' + i.key, i.label]; })) +
-      group('Frame BOM quantities', (s.frame || []).map(function (p) { return ['bom:' + p, p]; })) +
-      group('Other hardware rows', (s.hardware || []).map(function (p) { return ['hw:' + p, p]; }));
+    var inputs = (set.inputs || []);
+    var numeric = inputs.filter(function (i) { return i.kind !== 'flag' && i.kind !== 'choice'; }).map(function (i) { return ['in:' + i.key, i.label]; });
+    var flags = inputs.filter(function (i) { return i.kind === 'flag'; }).map(function (i) { return ['flag:' + i.key, i.label + ' (yes = 1)']; });
+    var out = '<option value=""' + (sel ? '' : ' selected') + '>— a plain number —</option>' + group('Configurator answers', numeric) + group('Yes / no answers', flags);
+    if (kind === 'hardware') {
+      out += group('Frame quantities', (src.frameParts || []).concat((src.skuParts || []).filter(function (p) { return (src.frameParts || []).indexOf(p) === -1 && p.indexOf('6820H-') !== 0; })).map(function (p) { return ['bom:' + p, p]; }));
+      out += group('Other fastener rows', (src.hardwareParts || []).map(function (p) { return ['hw:' + p, p]; }));
+    }
+    return out;
   }
-  function openHardwareRuleForm(rule) {
+  function openFormulaForm(kind, rule) {
     if (!rule) return;
-    var terms = (rule.terms || []).map(function (t) { return { source: t.source, coefficient: t.coefficient }; });
+    var terms = (rule.terms || []).map(function (t) { return { source: t.source || '', coefficient: t.coefficient, when: t.when ? { input: t.when.input, op: t.when.op, value: t.when.value } : null }; });
+    var ruleWhen = rule.when ? { input: rule.when.input, op: rule.when.op, value: rule.when.value } : null;
+    var inputs = fxInputs(kind);
+    var condOptions = function (sel) {
+      return '<option value="">always</option>' + inputs.map(function (i) {
+        return '<option value="' + esc(i.key) + '"' + (sel === i.key ? ' selected' : '') + '>' + esc(i.label) + '</option>';
+      }).join('');
+    };
+    var opOptions = function (sel) {
+      return ['=', '!=', '>', '<', '>=', '<='].map(function (o) { return '<option value="' + o + '"' + (sel === o ? ' selected' : '') + '>' + o + '</option>'; }).join('');
+    };
+    var condValueField = function (cls, i, cond) {
+      var key = cond ? cond.input : '';
+      var def = inputs.filter(function (x) { return x.key === key; })[0];
+      if (def && def.kind === 'flag') {
+        return '<select class="' + cls + 'V" data-i="' + i + '" style="' + IN + 'width:110px;"><option value="true"' + (cond && cond.value !== false ? ' selected' : '') + '>yes</option><option value="false"' + (cond && cond.value === false ? ' selected' : '') + '>no</option></select>';
+      }
+      if (def && def.kind === 'choice') {
+        var shapes = (fxSet(kind) || {}).shapes || [];
+        return '<select class="' + cls + 'V" data-i="' + i + '" style="' + IN + 'width:130px;">' + shapes.map(function (sh) { return '<option value="' + esc(sh) + '"' + (cond && cond.value === sh ? ' selected' : '') + '>' + esc(sh) + '</option>'; }).join('') + '</select>';
+      }
+      return '<input class="' + cls + 'V" data-i="' + i + '" value="' + esc(cond && cond.value != null ? cond.value : 0) + '" style="' + IN + 'width:80px;text-align:right;">';
+    };
     var termsHtml = function () {
       return terms.map(function (t, i) {
-        return '<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">' +
-          '<select class="hrTermSrc" data-i="' + i + '" style="' + IN + 'flex:1;">' + hrSourceOptions(t.source) + '</select>' +
-          '<span class="muted" style="font-size:13px;">×</span>' +
-          '<input class="hrTermK" data-i="' + i + '" value="' + esc(t.coefficient) + '" style="width:90px;padding:9px 10px;border:1px solid #dcded7;border-radius:9px;text-align:right;font-size:14px;">' +
-          '<button type="button" class="hrTermDel" data-i="' + i + '" style="border:1px solid #e0e1db;background:#fff;border-radius:8px;width:32px;height:32px;color:#9c3327;cursor:pointer;">✕</button></div>';
-      }).join('') || '<div class="muted" style="font-size:12.5px;margin-bottom:6px;">No drivers — this rule always produces 0.</div>';
+        return '<div style="border:1px solid #eef0ea;border-radius:9px;padding:8px;margin-bottom:7px;background:#fff;">' +
+          '<div style="display:flex;gap:6px;align-items:center;">' +
+            '<select class="fxTermSrc" data-i="' + i + '" style="' + IN + 'flex:1;">' + fxSourceOptions(kind, t.source) + '</select>' +
+            '<span class="muted" style="font-size:13px;">×</span>' +
+            '<input class="fxTermK" data-i="' + i + '" value="' + esc(t.coefficient) + '" style="width:84px;padding:9px 10px;border:1px solid #dcded7;border-radius:9px;text-align:right;font-size:14px;">' +
+            '<button type="button" class="fxTermDel" data-i="' + i + '" style="border:1px solid #e0e1db;background:#fff;border-radius:8px;width:32px;height:32px;color:#9c3327;cursor:pointer;">✕</button>' +
+          '</div>' +
+          '<div style="display:flex;gap:6px;align-items:center;margin-top:6px;">' +
+            '<span class="muted" style="font-size:11.5px;min-width:44px;">Count</span>' +
+            '<select class="fxTermCond" data-i="' + i + '" style="' + IN + 'flex:1;">' + condOptions(t.when ? t.when.input : '') + '</select>' +
+            (t.when ? '<select class="fxTermOp" data-i="' + i + '" style="' + IN + 'width:74px;">' + opOptions(t.when.op) + '</select>' + condValueField('fxTermCond', i, t.when) : '') +
+          '</div></div>';
+      }).join('') || '<div class="muted" style="font-size:12.5px;margin-bottom:6px;">No drivers — this rule produces its constant only.</div>';
+    };
+    var readTerms = function () {
+      document.querySelectorAll('.fxTermSrc').forEach(function (el) { terms[+el.getAttribute('data-i')].source = el.value; });
+      document.querySelectorAll('.fxTermK').forEach(function (el) { terms[+el.getAttribute('data-i')].coefficient = Number(el.value) || 0; });
+      document.querySelectorAll('.fxTermCond').forEach(function (el) {
+        var i = +el.getAttribute('data-i'), t = terms[i];
+        if (!el.value) { t.when = null; return; }
+        var opEl = document.querySelector('.fxTermOp[data-i="' + i + '"]');
+        var vEl = document.querySelector('.fxTermCondV[data-i="' + i + '"]');
+        var raw = vEl ? vEl.value : 'true';
+        var val = raw === 'true' ? true : raw === 'false' ? false : (isNaN(Number(raw)) ? raw : Number(raw));
+        t.when = { input: el.value, op: opEl ? opEl.value : '=', value: val };
+      });
     };
     var wireTerms = function () {
-      var host = document.getElementById('hrTerms'); if (!host) return;
+      var host = document.getElementById('fxTerms'); if (!host) return;
       host.innerHTML = termsHtml();
-      host.querySelectorAll('.hrTermSrc').forEach(function (el) { el.addEventListener('change', function () { terms[+el.getAttribute('data-i')].source = el.value; }); });
-      host.querySelectorAll('.hrTermK').forEach(function (el) { el.addEventListener('input', function () { terms[+el.getAttribute('data-i')].coefficient = Number(el.value) || 0; }); });
-      host.querySelectorAll('.hrTermDel').forEach(function (b) { b.addEventListener('click', function () { terms.splice(+b.getAttribute('data-i'), 1); wireTerms(); }); });
+      host.querySelectorAll('.fxTermSrc, .fxTermK, .fxTermOp, .fxTermCondV').forEach(function (el) {
+        el.addEventListener('change', function () { readTerms(); });
+      });
+      host.querySelectorAll('.fxTermCond').forEach(function (el) {
+        el.addEventListener('change', function () { readTerms(); wireTerms(); });
+      });
+      host.querySelectorAll('.fxTermDel').forEach(function (b) {
+        b.addEventListener('click', function () { readTerms(); terms.splice(+b.getAttribute('data-i'), 1); wireTerms(); });
+      });
     };
     openModal('Quantity formula — ' + rule.part,
-      '<div class="muted" style="font-size:12.5px;margin-bottom:10px;">' + esc(rule.name) + '</div>' +
-      '<div class="field"><label>Driven by</label><div id="hrTerms"></div>' +
-        '<button type="button" class="link-btn" id="hrAddTerm" style="width:auto;padding:7px 12px;">+ Add driver</button></div>' +
+      '<div class="muted" style="font-size:12.5px;margin-bottom:10px;">' + esc(rule.name) + (rule.group ? ' · ' + esc(rule.group) : '') + '</div>' +
+      '<div class="field"><label>Driven by</label><div id="fxTerms"></div>' +
+        '<button type="button" class="link-btn" id="fxAddTerm" style="width:auto;padding:7px 12px;">+ Add driver</button></div>' +
       '<div style="display:flex;gap:8px;">' +
-        '<div class="field" style="flex:1;"><label>Constant</label><input id="hrConst" value="' + esc(rule.constant) + '" style="' + IN + 'text-align:right;"></div>' +
-        '<div class="field" style="flex:1;"><label>Overage factor</label><input id="hrFactor" value="' + esc(rule.factor) + '" style="' + IN + 'text-align:right;"></div>' +
+        '<div class="field" style="flex:1;"><label>Constant</label><input id="fxConst" value="' + esc(rule.constant) + '" style="' + IN + 'text-align:right;"></div>' +
+        '<div class="field" style="flex:1;"><label>Overage factor</label><input id="fxFactor" value="' + esc(rule.factor) + '" style="' + IN + 'text-align:right;"></div>' +
       '</div>' +
       '<div style="display:flex;gap:8px;">' +
-        '<div class="field" style="flex:1;"><label>Rounding</label><select id="hrRound" style="' + IN + '">' +
+        '<div class="field" style="flex:1;"><label>Rounding</label><select id="fxRound" style="' + IN + '">' +
           [['NONE', 'None'], ['CEIL', 'Round up'], ['ROUND', 'Nearest']].map(function (o) { return '<option value="' + o[0] + '"' + (rule.roundMode === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></div>' +
-        '<div class="field" style="flex:1;"><label>Sold in multiples of</label><input id="hrStep" value="' + esc(rule.roundStep) + '" style="' + IN + 'text-align:right;"></div>' +
-        '<div class="field" style="flex:1;"><label>Mode</label><select id="hrMode" style="' + IN + '">' +
+        '<div class="field" style="flex:1;"><label>Sold in multiples of</label><input id="fxStep" value="' + esc(rule.roundStep) + '" style="' + IN + 'text-align:right;"></div>' +
+        '<div class="field" style="flex:1;"><label>Mode</label><select id="fxMode" style="' + IN + '">' +
           [['SUM', 'Sum of drivers'], ['PRESENCE', 'If any, use constant']].map(function (o) { return '<option value="' + o[0] + '"' + (rule.mode === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></div>' +
       '</div>' +
-      '<label style="display:flex;align-items:center;gap:8px;font-size:14px;margin:2px 0;cursor:pointer;"><input type="checkbox" id="hrMinZero"' + (rule.minZero !== false ? ' checked' : '') + '> Never go below zero</label>' +
-      '<label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;"><input type="checkbox" id="hrActive"' + (rule.active !== false ? ' checked' : '') + '> Include this fastener in H-1000</label>' +
-      '<div style="margin-top:10px;"><button type="button" class="link-btn" id="hrPreview" style="width:auto;padding:8px 13px;">Preview against a 10′ × 10′ frame</button>' +
-        '<div id="hrPreviewOut" class="muted" style="font-size:12.5px;margin-top:8px;"></div></div>',
+      '<div class="field"><label>Only include this item</label><div style="display:flex;gap:6px;align-items:center;">' +
+        '<select id="fxRuleCond" style="' + IN + 'flex:1;">' + condOptions(ruleWhen ? ruleWhen.input : '') + '</select>' +
+        '<select id="fxRuleOp" style="' + IN + 'width:74px;' + (ruleWhen ? '' : 'display:none;') + '">' + opOptions(ruleWhen ? ruleWhen.op : '=') + '</select>' +
+        '<span id="fxRuleValWrap">' + (ruleWhen ? condValueField('fxRuleCond', 0, ruleWhen) : '') + '</span>' +
+      '</div></div>' +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:14px;margin:2px 0;cursor:pointer;"><input type="checkbox" id="fxMinZero"' + (rule.minZero !== false ? ' checked' : '') + '> Never go below zero</label>' +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;"><input type="checkbox" id="fxActive"' + (rule.active !== false ? ' checked' : '') + '> Include this item at all</label>' +
+      '<div style="margin-top:10px;"><button type="button" class="link-btn" id="fxPreview" style="width:auto;padding:8px 13px;">Preview against a 10′ × 10′ frame</button>' +
+        '<div id="fxPreviewOut" class="muted" style="font-size:12.5px;margin-top:8px;"></div></div>',
       async function (close, showErr) {
-        var body = {
-          terms: terms,
-          constant: Number(document.getElementById('hrConst').value) || 0,
-          factor: Number(document.getElementById('hrFactor').value) || 1,
-          roundMode: document.getElementById('hrRound').value,
-          roundStep: Number(document.getElementById('hrStep').value) || 1,
-          mode: document.getElementById('hrMode').value,
-          minZero: document.getElementById('hrMinZero').checked,
-          active: document.getElementById('hrActive').checked,
-        };
+        var body = fxFormBody();
         if (body.factor <= 0) return showErr('Overage factor must be greater than zero.');
-        var r = await authed('/hardware-rules/' + encodeURIComponent(rule.part), { method: 'PATCH', body: body });
-        if (!r.ok) return showErr('Could not save (' + r.status + ').');
-        close(); loadHardwareRules();
-      });
+        var r = await authed('/formulas/' + kind.toUpperCase() + '/' + encodeURIComponent(rule.part), { method: 'PATCH', body: body });
+        if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} return showErr(m || 'Could not save (' + r.status + ').'); }
+        close(); loadFormulas();
+      }, 'Save formula');
+    function readRuleCond() {
+      var sel = document.getElementById('fxRuleCond');
+      if (!sel.value) return null;
+      var opEl = document.getElementById('fxRuleOp');
+      var vEl = document.querySelector('.fxRuleCondV');
+      var raw = vEl ? vEl.value : 'true';
+      var val = raw === 'true' ? true : raw === 'false' ? false : (isNaN(Number(raw)) ? raw : Number(raw));
+      return { input: sel.value, op: opEl ? opEl.value : '=', value: val };
+    }
+    function fxFormBody() {
+      readTerms();
+      return {
+        terms: terms.map(function (t) {
+          var out = { coefficient: t.coefficient };
+          if (t.source) out.source = t.source;
+          if (t.when) out.when = t.when;
+          return out;
+        }),
+        constant: Number(document.getElementById('fxConst').value) || 0,
+        factor: Number(document.getElementById('fxFactor').value) || 1,
+        roundMode: document.getElementById('fxRound').value,
+        roundStep: Number(document.getElementById('fxStep').value) || 1,
+        mode: document.getElementById('fxMode').value,
+        minZero: document.getElementById('fxMinZero').checked,
+        active: document.getElementById('fxActive').checked,
+        when: readRuleCond(),
+        name: rule.name || rule.part,
+        group: rule.group || null,
+      };
+    }
     wireTerms();
-    document.getElementById('hrAddTerm').addEventListener('click', function () { terms.push({ source: 'bom:A-2245', coefficient: 1 }); wireTerms(); });
-    document.getElementById('hrPreview').addEventListener('click', async function () {
-      var out = document.getElementById('hrPreviewOut');
+    document.getElementById('fxAddTerm').addEventListener('click', function () { readTerms(); terms.push({ source: '', coefficient: 1, when: null }); wireTerms(); });
+    document.getElementById('fxRuleCond').addEventListener('change', function () {
+      var sel = this.value;
+      document.getElementById('fxRuleOp').style.display = sel ? '' : 'none';
+      var def = inputs.filter(function (x) { return x.key === sel; })[0];
+      document.getElementById('fxRuleValWrap').innerHTML = sel
+        ? condValueField('fxRuleCond', 0, { input: sel, op: '=', value: def && def.kind === 'flag' ? true : (def && def.kind === 'choice' ? ((fxSet(kind) || {}).shapes || [''])[0] : 0) })
+        : '';
+    });
+    document.getElementById('fxPreview').addEventListener('click', async function () {
+      var out = document.getElementById('fxPreviewOut');
       out.textContent = 'Calculating…';
       var answers = adv || { length: 10, width: 10, config: 'Square', legs: 4, ladders: 1, monkeyBars: true, trolley: true, trolleyType: 'Dual', zipLine: true, zipLineQty: 1, brackets: true, bracketsQty: 4, swivel360: 2, forged: 2, swingHanger: 1, vRings: 1 };
-      var body = {
-        answers: answers,
-        overrides: [{
-          part: rule.part, terms: terms,
-          constant: Number(document.getElementById('hrConst').value) || 0,
-          factor: Number(document.getElementById('hrFactor').value) || 1,
-          roundMode: document.getElementById('hrRound').value,
-          roundStep: Number(document.getElementById('hrStep').value) || 1,
-          mode: document.getElementById('hrMode').value,
-          minZero: document.getElementById('hrMinZero').checked,
-          active: document.getElementById('hrActive').checked,
-        }],
-      };
-      var r = await authed('/hardware-rules/preview', { method: 'POST', body: body });
+      var body = fxFormBody();
+      body.part = rule.part;
+      var r = await authed('/formulas/preview', { method: 'POST', body: { kind: kind.toUpperCase(), answers: answers, overrides: [body] } });
       if (!r.ok) { out.textContent = 'Preview failed (' + r.status + ').'; return; }
       var d = await r.json();
       var changed = (d.rows || []).filter(function (x) { return x.changed; });
       var mine = (d.rows || []).filter(function (x) { return x.part === rule.part; })[0];
       out.innerHTML =
         (mine ? '<div style="color:#20241f;"><b>' + esc(rule.part) + '</b>: ' + mine.qtyBefore + ' → <b>' + mine.qtyAfter + '</b> · <span style="font-family:ui-monospace,monospace;font-size:11.5px;">' + esc(mine.formula) + '</span></div>' : '') +
-        (changed.length > 1 ? '<div style="margin-top:5px;">Knock-on changes: ' + changed.filter(function (x) { return x.part !== rule.part; }).map(function (x) { return esc(x.part) + ' ' + x.qtyBefore + '→' + x.qtyAfter; }).join(', ') + '</div>'
+        (changed.filter(function (x) { return x.part !== rule.part; }).length
+          ? '<div style="margin-top:5px;">Knock-on changes: ' + changed.filter(function (x) { return x.part !== rule.part; }).map(function (x) { return esc(x.part) + ' ' + x.qtyBefore + '→' + x.qtyAfter; }).join(', ') + '</div>'
           : (changed.length ? '' : '<div style="margin-top:5px;">No change on this configuration.</div>'));
     });
   }
-  async function loadStandardNotes() {
-    var box = document.getElementById('snList'); if (!box) return;
-    try {
-      var r = await authed('/standard-notes');
-      if (!r.ok) { box.innerHTML = '<div class="err">Could not load standard notes (' + r.status + '). Run the 0019 migration if this persists.</div>'; return; }
-      var notes = await r.json();
-      var rows = (notes || []).map(function (n) {
-        return '<tr>' + td('<b style="font-weight:600;">' + esc(n.title) + '</b><div class="muted" style="font-size:12px;max-width:520px;line-height:1.45;">' + esc(String(n.body).slice(0, 160)) + (String(n.body).length > 160 ? '…' : '') + '</div>') +
-          td(n.placement === 'FOOTER' ? '<span class="chip">Below signatures</span>' : '<span class="chip">In line items</span>') +
-          td(n.autoInclude ? '<span style="display:inline-block;background:#eaf3ee;border:1px solid #cfe3d7;color:#2f7d5d;border-radius:999px;padding:3px 10px;font-size:12px;font-weight:600;">Always</span>' : '<span class="muted">On request</span>') +
-          td(n.active ? '<span class="chip">Active</span>' : '<span class="muted">Hidden</span>') +
-          td('<div style="display:flex;gap:6px;justify-content:flex-end;"><button class="link-btn snEdit" data-id="' + n.id + '" style="width:auto;padding:6px 11px;">Edit</button>' +
-            '<button class="link-btn snDel" data-id="' + n.id + '" style="width:auto;padding:6px 11px;color:#9c3327;">Delete</button></div>') + '</tr>';
-      }).join('');
-      box.innerHTML = tableShell(['Note', 'Prints', 'Include', 'Status', ''], rows, 5, 'No standard notes yet.');
-      box.querySelectorAll('.snEdit').forEach(function (b) {
-        b.addEventListener('click', function () { openStandardNoteForm((notes || []).filter(function (n) { return n.id === b.getAttribute('data-id'); })[0]); });
-      });
-      box.querySelectorAll('.snDel').forEach(function (b) {
-        b.addEventListener('click', async function () {
-          if (!confirm('Delete this standard note?')) return;
-          var rr = await authed('/standard-notes/' + b.getAttribute('data-id'), { method: 'DELETE' });
-          if (!rr.ok && rr.status !== 204) { alert('Could not delete (' + rr.status + ').'); return; }
-          loadStandardNotes();
-        });
-      });
-    } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
-  }
-  function openStandardNoteForm(note) {
-    var n = note || { title: '', body: '', placement: 'TABLE', autoInclude: false, sortOrder: 0, active: true };
-    openModal(note ? 'Edit standard note' : 'New standard note',
-      fieldRow('Title', '<input id="snTitle" style="' + IN + '" value="' + esc(n.title) + '">') +
-      '<div class="field"><label>Note text</label><textarea id="snBody" rows="6" style="' + IN + 'resize:vertical;">' + esc(n.body) + '</textarea>' +
-        '<div class="muted" style="font-size:11.5px;margin-top:3px;">**bold** · *italic* · line breaks are kept</div></div>' +
-      fieldRow('Where it prints', '<select id="snPlace" style="' + IN + '"><option value="TABLE"' + (n.placement === 'TABLE' ? ' selected' : '') + '>Inside the line items</option><option value="FOOTER"' + (n.placement === 'FOOTER' ? ' selected' : '') + '>Below the signature lines</option></select>') +
-      fieldRow('Order', '<input id="snOrder" type="number" style="' + IN + '" value="' + (Number(n.sortOrder) || 0) + '">') +
-      '<label style="display:flex;align-items:center;gap:8px;font-size:14px;margin:4px 0;cursor:pointer;"><input type="checkbox" id="snAuto"' + (n.autoInclude ? ' checked' : '') + '> Always include on new proposals</label>' +
-      '<label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;"><input type="checkbox" id="snActive"' + (n.active !== false ? ' checked' : '') + '> Available in the builder</label>',
-      async function (close, showErr) {
-        var body = {
-          title: document.getElementById('snTitle').value.trim(),
-          body: document.getElementById('snBody').value.trim(),
-          placement: document.getElementById('snPlace').value,
-          sortOrder: Number(document.getElementById('snOrder').value) || 0,
-          autoInclude: document.getElementById('snAuto').checked,
-          active: document.getElementById('snActive').checked,
-        };
-        if (!body.title || !body.body) return showErr('Title and note text are both required.');
-        var r = note
-          ? await authed('/standard-notes/' + note.id, { method: 'PATCH', body: body })
-          : await authed('/standard-notes', { method: 'POST', body: body });
-        if (!r.ok) return showErr('Could not save (' + r.status + ').');
-        close(); loadStandardNotes();
-      });
-  }
+
   async function loadUsers() {
     var box = document.getElementById('admList'); if (!box) return;
     try {

@@ -4,7 +4,7 @@ import { prisma } from '../lib/prisma.js';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import { recordAudit } from '../lib/audit.js';
-import { ValidationError } from '../lib/errors.js';
+import { ValidationError, ConflictError, NotFoundError } from '../lib/errors.js';
 
 /**
  * The single catalog list.
@@ -204,5 +204,105 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
 
     await recordAudit({ actorId: req.user!.sub, action: 'catalog.item.update', entity: 'Sku', entityId: part, details: d as object });
     return { ok: true, part };
+  });
+
+  /**
+   * How many saved proposals reference this part. Proposal items are JSON, so this
+   * scans them — the volume is small and the answer is what makes a delete safe.
+   */
+  async function proposalUsage(part: string): Promise<{ count: number; numbers: string[] }> {
+    const versions = await prisma.proposalVersion.findMany({
+      select: { items: true, proposal: { select: { number: true } } },
+    });
+    const numbers = new Set<string>();
+    for (const v of versions) {
+      const items = Array.isArray(v.items) ? (v.items as { sku?: string; name?: string }[]) : [];
+      if (items.some((i) => i && (i.sku === part || i.name === part))) numbers.add(v.proposal.number);
+    }
+    return { count: numbers.size, numbers: [...numbers].slice(0, 5) };
+  }
+
+  /** What deleting this part would remove, and whether it is safe. */
+  app.get('/catalog/items/:part/usage', read, async (req) => {
+    const { part } = req.params as { part: string };
+    const [product, sku, usage] = await Promise.all([
+      prisma.product.findUnique({ where: { sku: part }, select: { id: true, status: true } }),
+      prisma.sku.findUnique({ where: { part }, select: { id: true, active: true } }),
+      proposalUsage(part),
+    ]);
+    const everActive = product
+      ? (await prisma.productStatusHistory.count({ where: { productId: product.id, toStatus: 'ACTIVE' } })) > 0
+      : false;
+    return {
+      part,
+      hasProduct: !!product, hasSku: !!sku,
+      productStatus: product?.status ?? null, active: sku ? sku.active : product?.status === 'ACTIVE',
+      proposalCount: usage.count, proposalNumbers: usage.numbers,
+      deletable: usage.count === 0 && !everActive,
+      reason: usage.count > 0
+        ? `Used on ${usage.count} proposal${usage.count === 1 ? '' : 's'} (${usage.numbers.join(', ')}${usage.count > usage.numbers.length ? '…' : ''}) — deactivate it instead so historical proposals keep their pricing.`
+        : everActive ? 'This product has been active, so its history is kept — deactivate or archive it instead.' : null,
+    };
+  });
+
+  /**
+   * Delete a catalog part outright — both the Product record and the flat Sku row.
+   * Refused when a proposal references the part or the product was ever ACTIVE:
+   * deleting then would silently change historical documents. Deactivate instead.
+   */
+  app.delete('/catalog/items/:part', admin, async (req, reply) => {
+    const { part } = req.params as { part: string };
+    const [product, sku, usage] = await Promise.all([
+      prisma.product.findUnique({ where: { sku: part } }),
+      prisma.sku.findUnique({ where: { part } }),
+      proposalUsage(part),
+    ]);
+    if (!product && !sku) throw new NotFoundError('No catalog part with that number');
+    if (usage.count > 0) {
+      throw new ConflictError(`“${part}” is used on ${usage.count} proposal${usage.count === 1 ? '' : 's'} (${usage.numbers.join(', ')}). Deactivate it instead — deleting would change what those proposals priced.`);
+    }
+    if (product) {
+      const everActive = await prisma.productStatusHistory.count({ where: { productId: product.id, toStatus: 'ACTIVE' } });
+      if (everActive > 0) throw new ConflictError(`“${part}” has been an active product, so its record is kept for history. Archive or deactivate it instead.`);
+    }
+    await prisma.$transaction(async (tx) => {
+      if (sku) await tx.sku.delete({ where: { id: sku.id } });
+      if (product) {
+        await tx.productCost.deleteMany({ where: { productId: product.id } });
+        await tx.productSourcing.deleteMany({ where: { productId: product.id } });
+        await tx.product.delete({ where: { id: product.id } });
+      }
+    });
+    await recordAudit({ actorId: req.user!.sub, action: 'catalog.item.delete', entity: 'Sku', entityId: part, details: { hadProduct: !!product, hadSku: !!sku } });
+    reply.code(204);
+    return null;
+  });
+
+  /**
+   * Deactivate / reactivate a part in one call: the flat Sku row's `active` flag and
+   * the Product status workflow move together, so an inactive part stops being
+   * offered in the builder while every existing proposal keeps its pricing.
+   */
+  app.post('/catalog/items/:part/active', admin, async (req) => {
+    const { part } = req.params as { part: string };
+    const body = (req.body || {}) as { active?: boolean };
+    if (typeof body.active !== 'boolean') throw new ValidationError('active must be true or false');
+    const [product, sku] = await Promise.all([
+      prisma.product.findUnique({ where: { sku: part } }),
+      prisma.sku.findUnique({ where: { part } }),
+    ]);
+    if (!product && !sku) throw new NotFoundError('No catalog part with that number');
+    if (sku) await prisma.sku.update({ where: { id: sku.id }, data: { active: body.active } });
+    if (product) {
+      const to = body.active ? 'ACTIVE' : 'INACTIVE';
+      if (product.status !== to) {
+        await prisma.product.update({ where: { id: product.id }, data: { status: to } });
+        await prisma.productStatusHistory.create({
+          data: { productId: product.id, fromStatus: product.status, toStatus: to, reason: 'catalog list', changedById: req.user!.sub },
+        });
+      }
+    }
+    await recordAudit({ actorId: req.user!.sub, action: body.active ? 'catalog.item.activate' : 'catalog.item.deactivate', entity: 'Sku', entityId: part });
+    return { part, active: body.active };
   });
 }

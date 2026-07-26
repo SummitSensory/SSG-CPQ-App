@@ -22,7 +22,7 @@ import { registerApprovalRoutes } from './routes/approvals.js';
 import { registerOrderRoutes } from './routes/orders.js';
 import { registerReportRoutes } from './routes/reports.js';
 import { registerStandardNoteRoutes } from './routes/standardNotes.js';
-import { registerHardwareRuleRoutes } from './routes/hardwareRules.js';
+import { registerFormulaRoutes } from './routes/formulas.js';
 import { registerWebRoutes } from './routes/web.js';
 
 export function buildApp(): FastifyInstance {
@@ -63,7 +63,7 @@ export function buildApp(): FastifyInstance {
   registerOrderRoutes(app);
   registerReportRoutes(app);
   registerStandardNoteRoutes(app);
-  registerHardwareRuleRoutes(app);
+  registerFormulaRoutes(app);
   registerWebRoutes(app);
   return app;
 }

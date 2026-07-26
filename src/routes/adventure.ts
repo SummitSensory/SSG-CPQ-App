@@ -3,7 +3,7 @@ import { prisma } from '../lib/prisma.js';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import { computeAdventureProposal, explainAdventure, frameModelNumber, frameDimensions, type AdvAnswers, type SkuRec } from '../proposals/adventureSeries.js';
-import { loadHardwareRules } from './hardwareRules.js';
+import { loadFormulaRules } from './formulas.js';
 
 /** Server-side Adventure Series pricing engine: answers -> priced, grouped lines.
  *  Prices/weights/costs are read live from the Sku table (editable in Catalog → Pricing & SKUs). */
@@ -37,10 +37,26 @@ export function registerAdventureRoutes(app: FastifyInstance): void {
     return map;
   }
 
+  /** Catalog category name → its ACTIVE part numbers, so kits print every member. */
+  async function kitParts(): Promise<Record<string, string[]>> {
+    const [cats, products] = await Promise.all([
+      prisma.productCategory.findMany({ select: { id: true, name: true } }),
+      prisma.product.findMany({ where: { status: 'ACTIVE' }, select: { sku: true, categoryId: true }, orderBy: { sku: 'asc' } }),
+    ]);
+    const nameById = new Map(cats.map((c) => [c.id, c.name]));
+    const out: Record<string, string[]> = {};
+    for (const p of products) {
+      const name = nameById.get(p.categoryId);
+      if (!name) continue;
+      (out[name] ||= []).push(p.sku);
+    }
+    return out;
+  }
+
   app.post('/proposals/adventure-series/price', write, async (req) => {
     const a = (req.body || {}) as AdvAnswers;
-    const [skus, rules] = await Promise.all([skuMap(), loadHardwareRules()]);
-    const out = computeAdventureProposal(a, skus, rules);
+    const [skus, rules, kits] = await Promise.all([skuMap(), loadFormulaRules(), kitParts()]);
+    const out = computeAdventureProposal(a, skus, rules.hardware, rules.frame, kits);
     return { ...out, frameModel: frameModelNumber(a), frameDimensions: frameDimensions(a) };
   });
 
@@ -48,7 +64,7 @@ export function registerAdventureRoutes(app: FastifyInstance): void {
    *  price/cost it was multiplied by — for cross-referencing against the workbook. */
   app.post('/proposals/adventure-series/trace', write, async (req) => {
     const a = (req.body || {}) as AdvAnswers;
-    const [skus, rules] = await Promise.all([skuMap(), loadHardwareRules()]);
-    return explainAdventure(a, skus, rules);
+    const [skus, rules] = await Promise.all([skuMap(), loadFormulaRules()]);
+    return explainAdventure(a, skus, rules.hardware, rules.frame);
   });
 }

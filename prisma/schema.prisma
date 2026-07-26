@@ -880,7 +880,8 @@ model StandardNote {
 // back to the workbook defaults.
 model HardwareRule {
   id          String   @id @default(cuid())
-  part        String   @unique
+  kind        String   @default("HARDWARE")
+  part        String
   name        String
   terms       Json
   constant    Float    @default(0)
@@ -891,12 +892,25 @@ model HardwareRule {
   minZero     Boolean  @default(true)
   sortOrder   Int      @default(0)
   active      Boolean  @default(true)
+  when        Json?
+  group       String?
   note        String?
   updatedById String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  @@unique([kind, part])
   @@index([sortOrder])
+}
+
+// Business scalars behind the proposal math (deposit %, proposal validity, leg
+// spans). Defaults live in src/proposals/formulaSettings.ts; a row here overrides
+// one of them.
+model FormulaSetting {
+  key         String   @id
+  value       Float
+  updatedById String?
+  updatedAt   DateTime @updatedAt
 }
 
 // Pricing/SKU master — the single editable source the Adventure engine and the

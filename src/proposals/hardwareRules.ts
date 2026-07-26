@@ -19,10 +19,26 @@
 export type RoundMode = 'NONE' | 'CEIL' | 'ROUND';
 export type RuleMode = 'SUM' | 'PRESENCE';
 
+export type CompareOp = '=' | '!=' | '>' | '<' | '>=' | '<=';
+
+/** A term (or a whole rule) can be gated on a configurator answer. */
+export interface RuleCondition {
+  /** Configurator answer key, e.g. `config`, `legs`, `monkeyBars`. */
+  input: string;
+  op: CompareOp;
+  value: string | number | boolean;
+}
+
 export interface HardwareTerm {
-  /** `bom:<part>` | `in:<answerKey>` | `hw:<part>` */
-  source: string;
+  /**
+   * `bom:<part>` (frame quantity) | `in:<answerKey>` (configurator number) |
+   * `flag:<answerKey>` (yes/no as 1/0) | `hw:<part>` (another rule's result).
+   * Omitted entirely for a plain constant term.
+   */
+  source?: string;
   coefficient: number;
+  /** Only counted when this condition holds. */
+  when?: RuleCondition;
 }
 
 export interface HardwareRule {
@@ -41,6 +57,10 @@ export interface HardwareRule {
   minZero: boolean;
   sortOrder: number;
   active: boolean;
+  /** The whole rule only applies when this holds (e.g. only when a slide is chosen). */
+  when?: RuleCondition;
+  /** Heading this row is grouped under in the BOM and the trace. */
+  group?: string;
   /** Set when the rule came from the database rather than the workbook defaults. */
   edited?: boolean;
   note?: string;
@@ -51,6 +71,7 @@ export interface HardwareBomRow {
   name: string;
   qty: number;
   formula: string;
+  group?: string;
   edited?: boolean;
 }
 
@@ -141,6 +162,33 @@ export interface RuleContext {
   bom: (part: string) => number;
   /** Configurator answer, as a number. */
   input: (key: string) => number;
+  /** Configurator answer as stored (string/boolean/number) — for conditions. */
+  raw?: (key: string) => unknown;
+}
+
+/** Evaluate a term/rule condition against the answers. */
+export function conditionHolds(c: RuleCondition | undefined, ctx: RuleContext): boolean {
+  if (!c) return true;
+  const raw = ctx.raw ? ctx.raw(c.input) : ctx.input(c.input);
+  if (typeof c.value === 'boolean') return !!raw === c.value;
+  if (typeof c.value === 'string' && typeof raw === 'string') {
+    return c.op === '!=' ? raw !== c.value : raw === c.value;
+  }
+  const a = typeof raw === 'boolean' ? (raw ? 1 : 0) : Number(raw) || 0;
+  const b = Number(c.value) || 0;
+  switch (c.op) {
+    case '>': return a > b;
+    case '<': return a < b;
+    case '>=': return a >= b;
+    case '<=': return a <= b;
+    case '!=': return a !== b;
+    default: return a === b;
+  }
+}
+
+export function describeCondition(c: RuleCondition): string {
+  if (typeof c.value === 'boolean') return c.value ? c.input : `not ${c.input}`;
+  return `${c.input} ${c.op} ${c.value}`;
 }
 
 const label = (source: string): string => {
@@ -161,6 +209,10 @@ export function evaluateHardwareRules(rules: HardwareRule[], ctx: RuleContext): 
   function valueOf(source: string): number {
     if (source.startsWith('bom:')) return ctx.bom(source.slice(4));
     if (source.startsWith('in:')) return ctx.input(source.slice(3));
+    if (source.startsWith('flag:')) {
+      const raw = ctx.raw ? ctx.raw(source.slice(5)) : ctx.input(source.slice(5));
+      return raw ? 1 : 0;
+    }
     if (source.startsWith('hw:')) return resolve(source.slice(3));
     return 0;
   }
@@ -179,13 +231,22 @@ export function evaluateHardwareRules(rules: HardwareRule[], ctx: RuleContext): 
 
     const parts: string[] = [];
     let sum = 0;
-    if (rule.active) {
+    const ruleApplies = rule.active && conditionHolds(rule.when, ctx);
+    if (ruleApplies) {
       for (const t of rule.terms) {
-        const v = valueOf(t.source);
-        sum += v * t.coefficient;
+        if (!conditionHolds(t.when, ctx)) continue;
         const sign = t.coefficient < 0 ? '−' : parts.length ? '+' : '';
         const mag = Math.abs(t.coefficient);
-        parts.push(`${sign} ${label(t.source)} (${v})${mag === 1 ? '' : ` × ${mag}`}`.trim());
+        const cond = t.when ? ` when ${describeCondition(t.when)}` : '';
+        if (!t.source) {
+          // Plain constant term (e.g. "4 per frame when legs > 0").
+          sum += t.coefficient;
+          parts.push(`${sign} ${mag}${cond}`.trim());
+          continue;
+        }
+        const v = valueOf(t.source);
+        sum += v * t.coefficient;
+        parts.push(`${sign} ${label(t.source)} (${v})${mag === 1 ? '' : ` × ${mag}`}${cond}`.trim());
       }
     }
 
@@ -194,6 +255,9 @@ export function evaluateHardwareRules(rules: HardwareRule[], ctx: RuleContext): 
     if (!rule.active) {
       qty = 0;
       expr = rule.note || 'rule switched off — 0';
+    } else if (!ruleApplies) {
+      qty = 0;
+      expr = `not applicable (${describeCondition(rule.when!)})`;
     } else if (rule.mode === 'PRESENCE') {
       qty = sum > 0 ? rule.constant : 0;
       expr = `${parts.join(' ') || '0'} > 0 ? ${rule.constant} : 0`;
@@ -222,7 +286,7 @@ export function evaluateHardwareRules(rules: HardwareRule[], ctx: RuleContext): 
 
   return [...rules]
     .sort((a, b) => a.sortOrder - b.sortOrder)
-    .map((r) => ({ part: r.part, name: r.name, qty: resolve(r.part), formula: detail.get(r.part) || '', edited: r.edited }))
+    .map((r) => ({ part: r.part, name: r.name, qty: resolve(r.part), formula: detail.get(r.part) || '', group: r.group, edited: r.edited }))
     .filter((r) => r.qty > 0)
     .map((r) => ({ ...r, qty: Math.round(r.qty) }));
 }
@@ -250,6 +314,33 @@ export function mergeHardwareRules(dbRows: Partial<HardwareRule>[] | null | unde
         constant: row.constant ?? 0, factor: row.factor ?? 1, roundMode: row.roundMode ?? 'NONE',
         roundStep: row.roundStep ?? 1, mode: row.mode ?? 'SUM', minZero: row.minZero ?? true,
         sortOrder: row.sortOrder ?? out.length, active: row.active ?? true, edited: true,
+      });
+    }
+  }
+  return out;
+}
+
+/** Shared aliases — the same shape drives hardware and frame quantities. */
+export type FormulaRule = HardwareRule;
+export type FormulaTerm = HardwareTerm;
+export const evaluateRules = evaluateHardwareRules;
+
+/** Overlay database rows onto any default rule set (frame, hardware, …). */
+export function mergeRules(defaults: FormulaRule[], dbRows: Partial<FormulaRule>[] | null | undefined): FormulaRule[] {
+  if (!dbRows || !dbRows.length) return defaults;
+  const out = defaults.map((d) => {
+    const row = dbRows.find((r) => r.part === d.part);
+    if (!row) return d;
+    return { ...d, ...row, terms: Array.isArray(row.terms) ? (row.terms as FormulaTerm[]) : d.terms, edited: true } as FormulaRule;
+  });
+  for (const row of dbRows) {
+    if (row.part && !out.some((r) => r.part === row.part)) {
+      out.push({
+        part: row.part, name: row.name || row.part, terms: (row.terms as FormulaTerm[]) || [],
+        constant: row.constant ?? 0, factor: row.factor ?? 1, roundMode: row.roundMode ?? 'NONE',
+        roundStep: row.roundStep ?? 1, mode: row.mode ?? 'SUM', minZero: row.minZero ?? true,
+        sortOrder: row.sortOrder ?? out.length, active: row.active ?? true,
+        when: row.when, group: row.group, edited: true,
       });
     }
   }
