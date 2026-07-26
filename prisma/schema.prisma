@@ -874,6 +874,31 @@ model StandardNote {
   @@index([active, placement, sortOrder])
 }
 
+// Editable coefficients behind the H-1000 fastener quantities. The formula shape
+// lives in src/proposals/hardwareRules.ts; these rows override its numbers so a
+// multiplier can be corrected in the app instead of in a deploy. Absent rows fall
+// back to the workbook defaults.
+model HardwareRule {
+  id          String   @id @default(cuid())
+  part        String   @unique
+  name        String
+  terms       Json
+  constant    Float    @default(0)
+  factor      Float    @default(1)
+  roundMode   String   @default("NONE")
+  roundStep   Float    @default(1)
+  mode        String   @default("SUM")
+  minZero     Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  active      Boolean  @default(true)
+  note        String?
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([sortOrder])
+}
+
 // Pricing/SKU master — the single editable source the Adventure engine and the
 // builder product picker both read from. Fed by seed, Excel/CSV import, the
 // in-app editor, and (later) live cloud sync.
