@@ -470,7 +470,7 @@
   }
 
   /* --- Catalog --- */
-  var cat = { q: '', status: '', page: 1, tab: 'items' };
+  var cat = { q: '', status: '', page: 1, tab: 'items', rows: [], filters: {}, sort: { key: 'sku', dir: 'asc' } };
   var catCategories = [];
   var KINDS = ['PRODUCT', 'VARIANT', 'COMPONENT', 'BUNDLE', 'ACCESSORY', 'SERVICE'];
   var STATUSES = ['DRAFT', 'ACTIVE', 'INACTIVE', 'ARCHIVED'];
@@ -485,7 +485,7 @@
   }
 
   /* --- The one catalog list: Product + SKU merged, one row per part number --- */
-  var itemState = { q: '', page: 1, categories: [], manufacturers: [] };
+  var itemState = { q: '', page: 1, categories: [], manufacturers: [], rows: [], filters: {}, sort: { key: 'part', dir: 'asc' } };
   function renderItems(user) {
     var admin = canCatalogAdmin(user.role);
     document.getElementById('catBody').innerHTML =
@@ -504,74 +504,214 @@
     loadItems(user);
   }
 
+  /* --- column filters (shared by the catalog list and the product tree) --- */
+  var FCELL = 'width:100%;padding:5px 7px;border:1px solid #e2e5dd;border-radius:6px;font-size:12px;background:#fff;color:#3d4a55;outline:none;';
+  /** Numeric column filter: 250, >250, <=0, >=1.5 … */
+  function numFilter(expr) {
+    var m = /^\s*(>=|<=|>|<|=)?\s*(-?[\d.]+)\s*$/.exec(expr || '');
+    if (!m) return null;
+    var op = m[1] || '=', v = parseFloat(m[2]);
+    return function (x) {
+      if (op === '>') return x > v; if (op === '<') return x < v;
+      if (op === '>=') return x >= v; if (op === '<=') return x <= v;
+      return Math.abs(x - v) < 1e-9;
+    };
+  }
+  function enumOptions(c, rows) {
+    if (c.options) return c.options;
+    var seen = {}, out = [];
+    rows.forEach(function (r) { var v = r[c.key]; if (v != null && v !== '' && !seen[v]) { seen[v] = 1; out.push([String(v), String(v)]); } });
+    return out.sort(function (a, b) { return a[1].localeCompare(b[1]); });
+  }
+  function filterCell(cls, c, rows, filters) {
+    if (!c.key) return '<td style="padding:5px 8px 9px;border-bottom:1px solid #e7e8e3;"></td>';
+    var val = filters[c.key] || '';
+    var inner;
+    if (c.type === 'enum') {
+      inner = '<select class="' + cls + '" data-k="' + c.key + '" style="' + FCELL + '"><option value="">All</option>' +
+        enumOptions(c, rows).map(function (o) { return '<option value="' + esc(o[0]) + '"' + (String(val) === String(o[0]) ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join('') + '</select>';
+    } else {
+      inner = '<input class="' + cls + '" data-k="' + c.key + '" value="' + esc(val) + '" placeholder="' + (c.type === 'num' ? '>0' : 'contains') + '" title="' + (c.type === 'num' ? 'Number, or an expression: >100, <=0, >=1.5' : 'Matches any part of the text') + '" style="' + FCELL + (c.align === 'right' ? 'text-align:right;' : '') + '">';
+    }
+    return '<td style="padding:5px 8px 9px;border-bottom:1px solid #e7e8e3;">' + inner + '</td>';
+  }
+  function passFilters(row, cols, filters) {
+    for (var i = 0; i < cols.length; i++) {
+      var c = cols[i]; if (!c.key) continue;
+      var f = String(filters[c.key] == null ? '' : filters[c.key]).trim();
+      if (!f) continue;
+      var v = row[c.key];
+      if (c.type === 'num') {
+        var fn = numFilter(f); if (!fn) continue;
+        if (!fn((Number(v) || 0) / (c.scale || 1))) return false;
+      } else if (c.type === 'enum') {
+        if (String(v == null ? '' : v) !== f) return false;
+      } else if (String(v == null ? '' : v).toLowerCase().indexOf(f.toLowerCase()) === -1) return false;
+    }
+    return true;
+  }
+  function sortByCol(rows, key, dir) {
+    var d = dir === 'asc' ? 1 : -1;
+    return rows.slice().sort(function (a, b) {
+      var x = a[key], y = b[key];
+      if (typeof x === 'number' || typeof y === 'number') { x = Number(x) || 0; y = Number(y) || 0; }
+      else { x = String(x == null ? '' : x).toLowerCase(); y = String(y == null ? '' : y).toLowerCase(); }
+      return x < y ? -d : x > y ? d : 0;
+    });
+  }
+  function colHead(cols, state, extraStyle) {
+    return cols.map(function (c) {
+      var on = c.key && state.sort && state.sort.key === c.key;
+      var arrow = !c.key ? '' : on ? (state.sort.dir === 'asc' ? ' ▲' : ' ▼') : ' <span style="opacity:.3;">↕</span>';
+      return '<th' + (c.key ? ' data-sk="' + c.key + '" style="cursor:pointer;' : ' style="') +
+        'text-align:' + (c.align || 'left') + ';padding:10px;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:' + (on ? '#3d4a55' : '#8a8f85') + ';font-weight:600;border-bottom:1px solid #e7e8e3;white-space:nowrap;' + (extraStyle || '') + '">' + esc(c.label) + arrow + '</th>';
+    }).join('');
+  }
+  /** Wire the header sort + filter row of a filterable table. */
+  function wireColTable(box, cols, state, redraw) {
+    box.querySelectorAll('th[data-sk]').forEach(function (th) {
+      th.addEventListener('click', function () {
+        var k = th.getAttribute('data-sk');
+        if (state.sort && state.sort.key === k) state.sort.dir = state.sort.dir === 'asc' ? 'desc' : 'asc';
+        else state.sort = { key: k, dir: 'asc' };
+        redraw();
+      });
+    });
+    box.querySelectorAll('.colFilter').forEach(function (el) {
+      var apply = function () { state.filters[el.getAttribute('data-k')] = el.value; state.page = 1; redraw(el.getAttribute('data-k')); };
+      if (el.tagName === 'SELECT') el.addEventListener('change', apply);
+      else {
+        var t;
+        el.addEventListener('input', function () { clearTimeout(t); t = setTimeout(apply, 250); });
+      }
+    });
+  }
+
+  var IT_COLS = [
+    { key: 'part', label: 'Part #', w: 128, type: 'text' },
+    { key: 'name', label: 'Product name', w: 0, type: 'text' },
+    { key: 'category', label: 'Category', w: 210, type: 'enum' },
+    { key: 'manufacturer', label: 'Manufacturer', w: 200, type: 'enum' },
+    { key: 'unitCostMinor', label: 'Unit cost', w: 108, type: 'num', scale: 100, align: 'right' },
+    { key: 'unitPriceMinor', label: 'Unit price', w: 108, type: 'num', scale: 100, align: 'right' },
+    { key: 'margin', label: 'Margin', w: 78, type: 'num', align: 'right' },
+    { key: 'weightLbs', label: 'Weight (lb)', w: 96, type: 'num', align: 'right' },
+    { key: 'record', label: 'Record', w: 132, type: 'enum', options: [['Product + priced', 'Product + priced'], ['Product only', 'Product only'], ['Priced only', 'Priced only']] },
+  ];
+
   async function loadItems(user) {
     var box = document.getElementById('itList'); if (!box) return;
-    var admin = canCatalogAdmin(user.role);
     try {
       if (!itemState.manufacturers.length) {
         try { var rm = await authed('/catalog/manufacturers'); if (rm.ok) itemState.manufacturers = ((await rm.json()) || []).map(function (m) { return m.name; }); } catch (e0) {}
       }
-      var r = await authed('/catalog/items?page=' + itemState.page + '&pageSize=100' + (itemState.q ? '&q=' + encodeURIComponent(itemState.q) : ''));
+      // The whole catalog is loaded once so the column filters and sorting apply
+      // across every part, not just the page you happen to be looking at.
+      var qs = itemState.q ? '&q=' + encodeURIComponent(itemState.q) : '';
+      var r = await authed('/catalog/items?page=1&pageSize=500' + qs);
       if (!r.ok) { box.innerHTML = '<div class="err">Could not load (' + r.status + ').</div>'; return; }
       var d = await r.json();
       itemState.categories = (d.categories || []).map(function (c) { return c.name; });
-      var CELL = 'width:100%;padding:6px 8px;border:1px solid #dcded7;border-radius:6px;font-size:13px;background:#fff;';
-      var NUM = CELL + 'text-align:right;';
-      function txt(part, field, value, style) {
-        var v = value == null ? '' : String(value);
-        return '<input class="itEdit" data-part="' + esc(part) + '" data-f="' + field + '" value="' + esc(v) + '" title="' + esc(v) + '" style="' + (style || CELL) + '">';
+      var all = (d.items || []).slice(), total = d.total || all.length, page = 1;
+      while (all.length < total && page < 8) {
+        page++;
+        var rn = await authed('/catalog/items?page=' + page + '&pageSize=500' + qs);
+        if (!rn.ok) break;
+        all = all.concat(((await rn.json()) || {}).items || []);
       }
-      function sel(part, field, value, options) {
-        return '<select class="itEdit" data-part="' + esc(part) + '" data-f="' + field + '" style="' + CELL + '">' +
-          ['<option value="">—</option>'].concat(options.map(function (o) {
-            return '<option value="' + esc(o) + '"' + (String(value) === String(o) ? ' selected' : '') + '>' + esc(o) + '</option>';
-          })).join('') + '</select>';
-      }
-      var rows = (d.items || []).map(function (k) {
+      itemState.rows = all.map(function (k) {
         var margin = k.unitPriceMinor ? Math.round(((k.unitPriceMinor - k.unitCostMinor) / k.unitPriceMinor) * 1000) / 10 : 0;
-        var where = (k.productId ? '<span class="chip" style="font-size:10px;">Product</span>' : '') + (k.skuId ? ' <span class="chip" style="font-size:10px;background:#fdfcf7;">Priced</span>' : '');
-        function cell(v, extra) { return '<td style="padding:7px 10px;border-bottom:1px solid #f2f3ef;vertical-align:middle;' + (extra || '') + '">' + v + '</td>'; }
-        return '<tr>' +
-          cell('<code style="font-size:12.5px;color:#4a4f47;white-space:nowrap;">' + esc(k.part) + '</code>') +
-          cell(admin ? txt(k.part, 'name', k.name) : '<span style="font-size:13px;" title="' + esc(k.name) + '">' + esc(k.name) + '</span>') +
-          cell(admin ? (k.categoryOptions && itemState.categories.length ? sel(k.part, 'category', k.category, itemState.categories) : txt(k.part, 'category', k.category)) : '<span title="' + esc(k.category) + '">' + esc(k.category) + '</span>') +
-          cell(admin ? txt(k.part, 'manufacturer', k.manufacturer) : '<span title="' + esc(k.manufacturer) + '">' + esc(k.manufacturer) + '</span>') +
-          cell(admin ? txt(k.part, 'unitCostMinor', (Number(k.unitCostMinor) / 100).toFixed(2), NUM + 'background:#fdfcf7;border-color:#e4dfd0;') : '$' + (Number(k.unitCostMinor) / 100).toFixed(2), 'text-align:right;') +
-          cell(admin ? txt(k.part, 'unitPriceMinor', (Number(k.unitPriceMinor) / 100).toFixed(2), NUM) : '$' + (Number(k.unitPriceMinor) / 100).toFixed(2), 'text-align:right;') +
-          cell('<span style="font-size:13px;font-weight:600;color:' + (margin >= 0 ? '#2f7d5d' : '#9c3327') + ';">' + margin + '%</span>', 'text-align:right;') +
-          cell(admin ? txt(k.part, 'weightLbs', k.weightLbs, NUM) : String(k.weightLbs), 'text-align:right;') +
-          cell(where, 'white-space:nowrap;') + '</tr>';
-      }).join('');
-      var heads = [['Part #', 128], ['Product name', 0], ['Category', 210], ['Manufacturer', 200], ['Unit cost', 108], ['Unit price', 108], ['Margin', 78], ['Weight (lb)', 96], ['Record', 116]];
-      var totalPages = Math.max(1, Math.ceil((d.total || 0) / (d.pageSize || 100)));
-      box.innerHTML =
-        '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:14px;overflow-x:auto;">' +
-          '<table style="width:100%;min-width:1240px;border-collapse:collapse;font-size:14px;table-layout:fixed;">' +
-          '<colgroup>' + heads.map(function (h) { return '<col' + (h[1] ? ' style="width:' + h[1] + 'px;"' : '') + '>'; }).join('') + '</colgroup>' +
-          '<thead><tr>' + heads.map(function (h, i) {
-            return '<th style="text-align:' + (i >= 4 && i <= 7 ? 'right' : 'left') + ';padding:10px;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;font-weight:600;border-bottom:1px solid #e7e8e3;white-space:nowrap;">' + h[0] + '</th>';
-          }).join('') + '</tr></thead>' +
-          '<tbody>' + (rows || '<tr><td colspan="9" style="padding:28px;text-align:center;color:#8a8f85;">Nothing in the catalog yet. Import a sheet or add a product.</td></tr>') + '</tbody></table></div>' +
-        '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;color:#82877d;font-size:13px;"><span>' + (d.total || 0) + ' items</span>' +
-        '<span style="display:flex;gap:8px;align-items:center;"><button id="itPrev" ' + (itemState.page <= 1 ? 'disabled' : '') + ' class="link-btn" style="width:auto;padding:6px 12px;">Prev</button><span>Page ' + (d.page || 1) + ' of ' + totalPages + '</span><button id="itNext" ' + (itemState.page >= totalPages ? 'disabled' : '') + ' class="link-btn" style="width:auto;padding:6px 12px;">Next</button></span></div>';
-      var pv = document.getElementById('itPrev'), nx = document.getElementById('itNext');
-      if (pv) pv.addEventListener('click', function () { if (itemState.page > 1) { itemState.page--; loadItems(user); } });
-      if (nx) nx.addEventListener('click', function () { if (itemState.page < totalPages) { itemState.page++; loadItems(user); } });
-      document.querySelectorAll('.itEdit').forEach(function (el) {
-        el.addEventListener('change', async function () {
-          var f = el.getAttribute('data-f'), part = el.getAttribute('data-part'), body = {};
-          if (f === 'unitPriceMinor' || f === 'unitCostMinor') body[f] = d2m(el.value);
-          else if (f === 'weightLbs') body[f] = parseFloat(el.value) || 0;
-          else body[f] = el.value.trim();
-          el.style.borderColor = '#c9a227';
-          var r2 = await authed('/catalog/items/' + encodeURIComponent(part), { method: 'PATCH', body: body });
-          el.style.borderColor = r2.ok ? '#3f9d78' : '#c2452f';
-          if (!r2.ok) { var msg = ''; try { msg = (await r2.json()).message || ''; } catch (e3) {} alert('Could not save' + (msg ? ': ' + msg : ' (' + r2.status + ').')); }
-          else if (f === 'unitCostMinor' || f === 'unitPriceMinor') loadItems(user);
-          setTimeout(function () { el.style.borderColor = f === 'unitCostMinor' ? '#e4dfd0' : '#dcded7'; }, 900);
-        });
+        var rec = k.productId ? (k.skuId ? 'Product + priced' : 'Product only') : 'Priced only';
+        var row = {}; for (var kk in k) row[kk] = k[kk];
+        row.margin = margin; row.record = rec;
+        return row;
       });
+      itemState.page = 1;
+      drawItems(user);
     } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
+  }
+
+  function drawItems(user, focusKey) {
+    var box = document.getElementById('itList'); if (!box) return;
+    var admin = canCatalogAdmin(user.role);
+    var all = itemState.rows || [];
+    var rowsData = all.filter(function (r) { return passFilters(r, IT_COLS, itemState.filters); });
+    if (itemState.sort) rowsData = sortByCol(rowsData, itemState.sort.key, itemState.sort.dir);
+    var size = 100;
+    var totalPages = Math.max(1, Math.ceil(rowsData.length / size));
+    if (itemState.page > totalPages) itemState.page = totalPages;
+    var pageRows = rowsData.slice((itemState.page - 1) * size, itemState.page * size);
+    var activeFilters = IT_COLS.filter(function (c) { return c.key && String(itemState.filters[c.key] || '').trim(); }).length;
+
+    var CELL = 'width:100%;padding:6px 8px;border:1px solid #dcded7;border-radius:6px;font-size:13px;background:#fff;';
+    var NUM = CELL + 'text-align:right;';
+    function txt(part, field, value, style) {
+      var v = value == null ? '' : String(value);
+      return '<input class="itEdit" data-part="' + esc(part) + '" data-f="' + field + '" value="' + esc(v) + '" title="' + esc(v) + '" style="' + (style || CELL) + '">';
+    }
+    function sel(part, field, value, options) {
+      return '<select class="itEdit" data-part="' + esc(part) + '" data-f="' + field + '" style="' + CELL + '">' +
+        ['<option value="">—</option>'].concat(options.map(function (o) {
+          return '<option value="' + esc(o) + '"' + (String(value) === String(o) ? ' selected' : '') + '>' + esc(o) + '</option>';
+        })).join('') + '</select>';
+    }
+    var rows = pageRows.map(function (k) {
+      var where = (k.productId ? '<span class="chip" style="font-size:10px;">Product</span>' : '') + (k.skuId ? ' <span class="chip" style="font-size:10px;background:#fdfcf7;">Priced</span>' : '');
+      function cell(v, extra) { return '<td style="padding:7px 10px;border-bottom:1px solid #f2f3ef;vertical-align:middle;' + (extra || '') + '">' + v + '</td>'; }
+      return '<tr>' +
+        cell('<code style="font-size:12.5px;color:#4a4f47;white-space:nowrap;">' + esc(k.part) + '</code>') +
+        cell(admin ? txt(k.part, 'name', k.name) : '<span style="font-size:13px;" title="' + esc(k.name) + '">' + esc(k.name) + '</span>') +
+        cell(admin ? (k.categoryOptions && itemState.categories.length ? sel(k.part, 'category', k.category, itemState.categories) : txt(k.part, 'category', k.category)) : '<span title="' + esc(k.category) + '">' + esc(k.category) + '</span>') +
+        cell(admin ? txt(k.part, 'manufacturer', k.manufacturer) : '<span title="' + esc(k.manufacturer) + '">' + esc(k.manufacturer) + '</span>') +
+        cell(admin ? txt(k.part, 'unitCostMinor', (Number(k.unitCostMinor) / 100).toFixed(2), NUM + 'background:#fdfcf7;border-color:#e4dfd0;') : '$' + (Number(k.unitCostMinor) / 100).toFixed(2), 'text-align:right;') +
+        cell(admin ? txt(k.part, 'unitPriceMinor', (Number(k.unitPriceMinor) / 100).toFixed(2), NUM) : '$' + (Number(k.unitPriceMinor) / 100).toFixed(2), 'text-align:right;') +
+        cell('<span style="font-size:13px;font-weight:600;color:' + (k.margin >= 0 ? '#2f7d5d' : '#9c3327') + ';">' + k.margin + '%</span>', 'text-align:right;') +
+        cell(admin ? txt(k.part, 'weightLbs', k.weightLbs, NUM) : String(k.weightLbs), 'text-align:right;') +
+        cell(where, 'white-space:nowrap;') + '</tr>';
+    }).join('');
+
+    box.innerHTML =
+      '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:14px;overflow-x:auto;">' +
+        '<table style="width:100%;min-width:1240px;border-collapse:collapse;font-size:14px;table-layout:fixed;">' +
+        '<colgroup>' + IT_COLS.map(function (c) { return '<col' + (c.w ? ' style="width:' + c.w + 'px;"' : '') + '>'; }).join('') + '</colgroup>' +
+        '<thead><tr>' + colHead(IT_COLS, itemState) + '</tr>' +
+        '<tr>' + IT_COLS.map(function (c) { return filterCell('colFilter', c, all, itemState.filters); }).join('') + '</tr></thead>' +
+        '<tbody>' + (rows || '<tr><td colspan="9" style="padding:28px;text-align:center;color:#8a8f85;">' + (all.length ? 'No parts match these filters.' : 'Nothing in the catalog yet. Import a sheet or add a product.') + '</td></tr>') + '</tbody></table></div>' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;color:#82877d;font-size:13px;flex-wrap:wrap;gap:8px;">' +
+        '<span>' + rowsData.length.toLocaleString() + (activeFilters ? ' of ' + all.length.toLocaleString() : '') + ' items' +
+          (activeFilters ? ' · <button id="itClearF" class="link-btn" style="width:auto;padding:4px 10px;display:inline-block;">Clear filters</button>' : '') + '</span>' +
+        '<span style="display:flex;gap:8px;align-items:center;"><button id="itPrev" ' + (itemState.page <= 1 ? 'disabled' : '') + ' class="link-btn" style="width:auto;padding:6px 12px;">Prev</button><span>Page ' + itemState.page + ' of ' + totalPages + '</span><button id="itNext" ' + (itemState.page >= totalPages ? 'disabled' : '') + ' class="link-btn" style="width:auto;padding:6px 12px;">Next</button></span></div>';
+
+    var pv = document.getElementById('itPrev'), nx = document.getElementById('itNext');
+    if (pv) pv.addEventListener('click', function () { if (itemState.page > 1) { itemState.page--; drawItems(user); } });
+    if (nx) nx.addEventListener('click', function () { if (itemState.page < totalPages) { itemState.page++; drawItems(user); } });
+    var cf = document.getElementById('itClearF');
+    if (cf) cf.addEventListener('click', function () { itemState.filters = {}; itemState.page = 1; drawItems(user); });
+    wireColTable(box, IT_COLS, itemState, function (key) { drawItems(user, key); });
+    if (focusKey) {
+      var back = box.querySelector('.colFilter[data-k="' + focusKey + '"]');
+      if (back && back.tagName === 'INPUT') { back.focus(); back.setSelectionRange(back.value.length, back.value.length); }
+    }
+    box.querySelectorAll('.itEdit').forEach(function (el) {
+      el.addEventListener('change', async function () {
+        var f = el.getAttribute('data-f'), part = el.getAttribute('data-part'), body = {};
+        if (f === 'unitPriceMinor' || f === 'unitCostMinor') body[f] = d2m(el.value);
+        else if (f === 'weightLbs') body[f] = parseFloat(el.value) || 0;
+        else body[f] = el.value.trim();
+        el.style.borderColor = '#c9a227';
+        var r2 = await authed('/catalog/items/' + encodeURIComponent(part), { method: 'PATCH', body: body });
+        el.style.borderColor = r2.ok ? '#3f9d78' : '#c2452f';
+        if (!r2.ok) { var msg = ''; try { msg = (await r2.json()).message || ''; } catch (e3) {} alert('Could not save' + (msg ? ': ' + msg : ' (' + r2.status + ').')); return; }
+        // Keep the in-memory row in step so filters and margin stay correct.
+        var row = (itemState.rows || []).filter(function (x) { return x.part === part; })[0];
+        if (row) {
+          row[f] = body[f];
+          row.margin = row.unitPriceMinor ? Math.round(((row.unitPriceMinor - row.unitCostMinor) / row.unitPriceMinor) * 1000) / 10 : 0;
+        }
+        if (f === 'unitCostMinor' || f === 'unitPriceMinor') drawItems(user);
+        setTimeout(function () { el.style.borderColor = f === 'unitCostMinor' ? '#e4dfd0' : '#dcded7'; }, 900);
+      });
+    });
   }
   async function renderCatalogProducts(user) {
     var admin = canCatalogAdmin(user.role);
@@ -586,7 +726,11 @@
       '<div id="catList"><div class="muted" style="padding:24px;">Loading…</div></div>';
     var search = document.getElementById('catSearch'), t;
     search.addEventListener('input', function () { clearTimeout(t); t = setTimeout(function () { cat.q = search.value.trim(); cat.page = 1; loadProducts(user); }, 300); });
-    document.getElementById('catStatus').addEventListener('change', function (e) { cat.status = e.target.value; cat.page = 1; loadProducts(user); });
+    document.getElementById('catStatus').addEventListener('change', function (e) {
+      // The toolbar dropdown is the Status column filter — no refetch needed.
+      cat.status = e.target.value; cat.filters.status = cat.status; cat.page = 1;
+      if ((cat.rows || []).length) drawProductTree(user); else loadProducts(user);
+    });
     if (admin) {
       document.getElementById('catNew').addEventListener('click', function () { openProductForm(user); });
       document.getElementById('catNewCat').addEventListener('click', openCategoryForm);
@@ -698,46 +842,111 @@
     return lines.slice(1).map(function (ln) { var cells = splitLine(ln); var o = {}; headers.forEach(function (h, i) { o[h] = (cells[i] || '').trim(); }); return o; });
   }
 
+  var PT_COLS = [
+    { key: 'sku', label: 'SKU', w: 160, type: 'text' },
+    { key: 'name', label: 'Name', w: 0, type: 'text' },
+    { key: 'kind', label: 'Kind', w: 140, type: 'enum' },
+    { key: 'categoryName', label: 'Category', w: 210, type: 'enum' },
+    { key: 'status', label: 'Status', w: 170, type: 'enum' },
+    { key: '', label: '', w: 96 },
+  ];
+
   async function loadProducts(user) {
     var box = document.getElementById('catList'); if (!box) return;
-    var admin = canCatalogAdmin(user.role);
-    var path = '/catalog/products?page=' + cat.page + '&pageSize=20' + (cat.q ? '&q=' + encodeURIComponent(cat.q) : '') + (cat.status ? '&status=' + cat.status : '');
     try {
-      var r = await authed(path);
-      if (!r.ok) { box.innerHTML = '<div class="err">Could not load (' + r.status + ').</div>'; return; }
-      var d = await r.json();
-      var rows = (d.items || []).map(function (p) {
-        var statusCell = admin
-          ? '<select data-pid="' + p.id + '" class="rowStatus" style="padding:6px 9px;border:1px solid #dcded7;border-radius:8px;font-size:13px;background:#fff;">' + STATUSES.map(function (s) { return '<option value="' + s + '"' + (p.status === s ? ' selected' : '') + '>' + titleCase(s) + '</option>'; }).join('') + '</select>'
-          : '<span class="chip">' + titleCase(p.status) + '</span>';
-        return '<tr>' + td('<code style="font-size:13px;color:#4a4f47;">' + esc(p.sku) + '</code>') + td('<b style="font-weight:600;">' + esc(p.name) + '</b>' + (p.proposalDescription ? '<div class="muted" style="font-size:12px;max-width:420px;line-height:1.45;">' + esc(String(p.proposalDescription).slice(0, 120)) + (String(p.proposalDescription).length > 120 ? '…' : '') + '</div>' : '')) +
-          td(esc(titleCase(p.kind))) + td(esc(catName(p.categoryId))) + td(statusCell) +
-          td(admin ? '<button class="prodEdit" data-pid="' + p.id + '" style="border:1px solid #dcded7;background:#fff;border-radius:8px;padding:6px 12px;font-size:12.5px;color:#3d4a55;cursor:pointer;">Edit</button>' : '') + '</tr>';
-      }).join('');
-      // reuse the CRM pager
-      var totalPages = Math.max(1, Math.ceil((d.total || 0) / (d.pageSize || 20)));
-      box.innerHTML = '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:14px;overflow:hidden;">' +
-        '<table style="width:100%;border-collapse:collapse;font-size:14px;"><thead><tr>' +
-        ['SKU', 'Name', 'Kind', 'Category', 'Status', ''].map(function (h) { return '<th style="text-align:left;padding:11px 16px;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;font-weight:600;border-bottom:1px solid #eef0ea;background:#f7f8f4;">' + h + '</th>'; }).join('') +
-        '</tr></thead><tbody>' + (rows || '<tr><td style="padding:22px 16px;color:#909689;" colspan="6">No products yet.</td></tr>') + '</tbody></table></div>' +
-        '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;color:#82877d;font-size:13px;"><span>' + (d.total || 0) + ' total</span>' +
-        '<span style="display:flex;gap:8px;align-items:center;"><button id="cPrev" ' + (cat.page <= 1 ? 'disabled' : '') + ' class="link-btn" style="width:auto;padding:6px 12px;">Prev</button><span>Page ' + (d.page || 1) + ' of ' + totalPages + '</span><button id="cNext" ' + (cat.page >= totalPages ? 'disabled' : '') + ' class="link-btn" style="width:auto;padding:6px 12px;">Next</button></span></div>';
-      var pv = document.getElementById('cPrev'), nx = document.getElementById('cNext');
-      if (pv) pv.addEventListener('click', function () { if (cat.page > 1) { cat.page--; loadProducts(user); } });
-      if (nx) nx.addEventListener('click', function () { if (cat.page < totalPages) { cat.page++; loadProducts(user); } });
-      Array.prototype.forEach.call(document.querySelectorAll('.rowStatus'), function (sel) {
-        sel.addEventListener('change', async function () {
-          var r2 = await authed('/catalog/products/' + sel.getAttribute('data-pid') + '/status', { method: 'PATCH', body: { status: sel.value, reason: 'changed from workspace' } });
-          if (!r2.ok) { alert('Could not change status (' + r2.status + ').'); loadProducts(user); }
-        });
+      // Load the whole tree (100 per request) so column filters and sorting cover
+      // every product rather than the current page.
+      var qs = (cat.q ? '&q=' + encodeURIComponent(cat.q) : '');
+      var all = [], page = 0, total = 1;
+      while (all.length < total && page < 20) {
+        page++;
+        var r = await authed('/catalog/products?page=' + page + '&pageSize=100' + qs);
+        if (!r.ok) { box.innerHTML = '<div class="err">Could not load (' + r.status + ').</div>'; return; }
+        var d = await r.json();
+        total = d.total || 0;
+        var got = d.items || [];
+        all = all.concat(got);
+        if (!got.length) break;
+      }
+      cat.rows = all.map(function (p) {
+        var row = {}; for (var k in p) row[k] = p[k];
+        row.categoryName = catName(p.categoryId) || '';
+        row.kindLabel = titleCase(p.kind);
+        return row;
       });
-      Array.prototype.forEach.call(document.querySelectorAll('.prodEdit'), function (b) {
-        b.addEventListener('click', function () {
-          var p = (d.items || []).filter(function (x) { return x.id === b.getAttribute('data-pid'); })[0];
-          if (p) openProductEditForm(p, user);
-        });
-      });
+      cat.page = 1;
+      drawProductTree(user);
     } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
+  }
+
+  function drawProductTree(user, focusKey) {
+    var box = document.getElementById('catList'); if (!box) return;
+    var admin = canCatalogAdmin(user.role);
+    var all = cat.rows || [];
+    var rowsData = all.filter(function (r) { return passFilters(r, PT_COLS, cat.filters); });
+    if (cat.sort) rowsData = sortByCol(rowsData, cat.sort.key, cat.sort.dir);
+    var size = 25;
+    var totalPages = Math.max(1, Math.ceil(rowsData.length / size));
+    if (cat.page > totalPages) cat.page = totalPages;
+    var pageRows = rowsData.slice((cat.page - 1) * size, cat.page * size);
+    var activeFilters = PT_COLS.filter(function (c) { return c.key && String(cat.filters[c.key] || '').trim(); }).length;
+
+    var kindOpts = PT_COLS[2]; kindOpts.options = KINDS.map(function (k) { return [k, titleCase(k)]; });
+    var statusCol = PT_COLS[4]; statusCol.options = STATUSES.map(function (st) { return [st, titleCase(st)]; });
+
+    var rows = pageRows.map(function (p) {
+      var statusCell = admin
+        ? '<select data-pid="' + p.id + '" class="rowStatus" style="padding:6px 9px;border:1px solid #dcded7;border-radius:8px;font-size:13px;background:#fff;width:100%;">' + STATUSES.map(function (st) { return '<option value="' + st + '"' + (p.status === st ? ' selected' : '') + '>' + titleCase(st) + '</option>'; }).join('') + '</select>'
+        : '<span class="chip">' + titleCase(p.status) + '</span>';
+      return '<tr>' + td('<code style="font-size:13px;color:#4a4f47;">' + esc(p.sku) + '</code>') +
+        td('<b style="font-weight:600;">' + esc(p.name) + '</b>' + (p.proposalDescription ? '<div class="muted" style="font-size:12px;max-width:420px;line-height:1.45;">' + esc(String(p.proposalDescription).slice(0, 120)) + (String(p.proposalDescription).length > 120 ? '…' : '') + '</div>' : '')) +
+        td(esc(titleCase(p.kind))) + td(esc(p.categoryName || '—')) + td(statusCell) +
+        td(admin ? '<button class="prodEdit" data-pid="' + p.id + '" style="border:1px solid #dcded7;background:#fff;border-radius:8px;padding:6px 12px;font-size:12.5px;color:#3d4a55;cursor:pointer;">Edit</button>' : '') + '</tr>';
+    }).join('');
+
+    box.innerHTML = '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:14px;overflow-x:auto;">' +
+      '<table style="width:100%;min-width:1040px;border-collapse:collapse;font-size:14px;table-layout:fixed;">' +
+      '<colgroup>' + PT_COLS.map(function (c) { return '<col' + (c.w ? ' style="width:' + c.w + 'px;"' : '') + '>'; }).join('') + '</colgroup>' +
+      '<thead><tr>' + colHead(PT_COLS, cat, 'background:#f7f8f4;') + '</tr>' +
+      '<tr>' + PT_COLS.map(function (c) { return filterCell('colFilter', c, all, cat.filters); }).join('') + '</tr></thead>' +
+      '<tbody>' + (rows || '<tr><td style="padding:22px 16px;color:#909689;" colspan="6">' + (all.length ? 'No products match these filters.' : 'No products yet.') + '</td></tr>') + '</tbody></table></div>' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;color:#82877d;font-size:13px;flex-wrap:wrap;gap:8px;">' +
+        '<span>' + rowsData.length.toLocaleString() + (activeFilters ? ' of ' + all.length.toLocaleString() : '') + ' products' +
+          (activeFilters ? ' · <button id="ptClearF" class="link-btn" style="width:auto;padding:4px 10px;display:inline-block;">Clear filters</button>' : '') + '</span>' +
+        '<span style="display:flex;gap:8px;align-items:center;"><button id="cPrev" ' + (cat.page <= 1 ? 'disabled' : '') + ' class="link-btn" style="width:auto;padding:6px 12px;">Prev</button><span>Page ' + cat.page + ' of ' + totalPages + '</span><button id="cNext" ' + (cat.page >= totalPages ? 'disabled' : '') + ' class="link-btn" style="width:auto;padding:6px 12px;">Next</button></span></div>';
+
+    var pv = document.getElementById('cPrev'), nx = document.getElementById('cNext');
+    if (pv) pv.addEventListener('click', function () { if (cat.page > 1) { cat.page--; drawProductTree(user); } });
+    if (nx) nx.addEventListener('click', function () { if (cat.page < totalPages) { cat.page++; drawProductTree(user); } });
+    var cf = document.getElementById('ptClearF');
+    if (cf) cf.addEventListener('click', function () {
+      cat.filters = {}; cat.status = ''; cat.page = 1;
+      var sSel = document.getElementById('catStatus'); if (sSel) sSel.value = '';
+      drawProductTree(user);
+    });
+    wireColTable(box, PT_COLS, cat, function (key) {
+      // Keep the toolbar dropdown in step when Status is filtered from the header.
+      if (key === 'status') { cat.status = cat.filters.status || ''; var sSel2 = document.getElementById('catStatus'); if (sSel2) sSel2.value = cat.status; }
+      drawProductTree(user, key);
+    });
+    if (focusKey) {
+      var back = box.querySelector('.colFilter[data-k="' + focusKey + '"]');
+      if (back && back.tagName === 'INPUT') { back.focus(); back.setSelectionRange(back.value.length, back.value.length); }
+    }
+    Array.prototype.forEach.call(box.querySelectorAll('.rowStatus'), function (sel) {
+      sel.addEventListener('change', async function () {
+        var r2 = await authed('/catalog/products/' + sel.getAttribute('data-pid') + '/status', { method: 'PATCH', body: { status: sel.value, reason: 'changed from workspace' } });
+        if (!r2.ok) { alert('Could not change status (' + r2.status + ').'); loadProducts(user); return; }
+        var row = (cat.rows || []).filter(function (x) { return x.id === sel.getAttribute('data-pid'); })[0];
+        if (row) row.status = sel.value;
+      });
+    });
+    Array.prototype.forEach.call(box.querySelectorAll('.prodEdit'), function (b) {
+      b.addEventListener('click', function () {
+        var p = (cat.rows || []).filter(function (x) { return x.id === b.getAttribute('data-pid'); })[0];
+        if (p) openProductEditForm(p, user);
+      });
+    });
   }
 
   /** Edit a product-tree record in place: name, kind, category, descriptions, dimensions. */
@@ -2133,7 +2342,7 @@
     var hw = t.hardware || { components: [] };
     var hwRows = (hw.components || []).map(function (c) {
       return '<tr><td style="padding:4px 8px;border-bottom:1px solid #eef0ea;font-family:ui-monospace,monospace;font-size:11px;">' + esc(c.part || '—') + '</td>' +
-        '<td style="padding:4px 8px;border-bottom:1px solid #eef0ea;font-size:11.5px;">' + esc(c.name) + (c.inCatalog ? '' : ' <span style="color:#9c3327;font-size:10.5px;">no SKU record</span>') + '</td>' +
+        '<td style="padding:4px 8px;border-bottom:1px solid #eef0ea;font-size:11.5px;">' + esc(c.name) + (c.inCatalog ? '' : ' <span style="color:#9c3327;font-size:10.5px;">no SKU record</span>') + (c.edited ? ' <span style="background:#fdf6e3;border:1px solid #eadfbe;color:#8a6d1f;border-radius:999px;padding:1px 6px;font-size:10px;font-weight:600;">edited formula</span>' : '') + '</td>' +
         '<td style="padding:4px 8px;border-bottom:1px solid #eef0ea;font-size:11px;color:#5c6157;">' + esc(c.formula || '') + '</td>' +
         '<td style="padding:4px 8px;border-bottom:1px solid #eef0ea;text-align:right;font-size:11.5px;">' + c.qty + '</td>' +
         '<td style="padding:4px 8px;border-bottom:1px solid #eef0ea;text-align:right;font-size:11.5px;">' + fmtMoney(c.unitPriceMinor, '') + '</td>' +
@@ -2286,11 +2495,174 @@
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:26px;"><div class="section-title" style="margin:0;">Standard proposal notes</div>' +
         '<button class="btn" id="snNew" style="width:auto;padding:9px 15px;">+ New note</button></div>' +
       '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;">Reusable note blocks for proposals. “Always include” notes are added to every new proposal automatically. Table notes print inside the line items; footer notes print below the signature lines. Wrap text in **double asterisks** to bold it.</div>' +
-      '<div id="snList"><div class="muted" style="padding:16px;">Loading…</div></div>';
+      '<div id="snList"><div class="muted" style="padding:16px;">Loading…</div></div>' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:26px;"><div class="section-title" style="margin:0;">Hardware quantity formulas</div>' +
+        '<button class="link-btn" id="hrReset" style="width:auto;padding:9px 15px;">Restore workbook defaults</button></div>' +
+      '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;">The coefficients behind the H-1000 fastener counts. Quantities stay formula-driven — these are the numbers each formula multiplies by, from the v73 workbook. Edit one and the next proposal uses it; rows you have changed are marked <b>Edited</b> and can be reset individually.</div>' +
+      '<div id="hrList"><div class="muted" style="padding:16px;">Loading…</div></div>';
     document.getElementById('admNew').addEventListener('click', openUserForm);
     document.getElementById('snNew').addEventListener('click', function () { openStandardNoteForm(null); });
+    document.getElementById('hrReset').addEventListener('click', async function () {
+      if (!confirm('Clear every hardware formula edit and return all 37 parts to the v73 workbook values?')) return;
+      var r = await authed('/hardware-rules/reset', { method: 'POST', body: {} });
+      if (!r.ok) { alert('Could not reset (' + r.status + ').'); return; }
+      loadHardwareRules();
+    });
     loadUsers();
     loadStandardNotes();
+    loadHardwareRules();
+  }
+
+  /* --- Hardware quantity formulas (editable coefficients) --- */
+  var hrData = null;
+  function hrSourceLabel(src) {
+    if (src.indexOf('in:') === 0) {
+      var k = src.slice(3);
+      var f = ((hrData && hrData.sources.inputs) || []).filter(function (i) { return i.key === k; })[0];
+      return f ? f.label : k;
+    }
+    return src.slice(src.indexOf(':') + 1);
+  }
+  function hrFormulaText(r) {
+    if (!r.active) return r.note || 'switched off — always 0';
+    var body = (r.terms || []).map(function (t, i) {
+      var sign = t.coefficient < 0 ? ' − ' : (i ? ' + ' : '');
+      var mag = Math.abs(t.coefficient);
+      return sign + hrSourceLabel(t.source) + (mag === 1 ? '' : ' × ' + mag);
+    }).join('') || '0';
+    if (r.mode === 'PRESENCE') return '(' + body + ') > 0 ? ' + r.constant + ' : 0';
+    if (r.constant) body += (r.constant < 0 ? ' − ' : ' + ') + Math.abs(r.constant);
+    if (Number(r.factor) !== 1) body = '(' + body + ') × ' + r.factor;
+    if (r.roundMode === 'CEIL') body = 'ceil(' + body + (Number(r.roundStep) > 1 ? ', step ' + r.roundStep : '') + ')';
+    else if (r.roundMode === 'ROUND') body = 'round(' + body + (Number(r.roundStep) > 1 ? ', step ' + r.roundStep : '') + ')';
+    return body;
+  }
+  async function loadHardwareRules() {
+    var box = document.getElementById('hrList'); if (!box) return;
+    try {
+      var r = await authed('/hardware-rules');
+      if (!r.ok) { box.innerHTML = '<div class="err">Could not load hardware formulas (' + r.status + '). Run the 0020 migration if this persists.</div>'; return; }
+      hrData = await r.json();
+      var over = hrData.overriddenParts || [];
+      var rows = (hrData.rules || []).map(function (rl) {
+        var edited = over.indexOf(rl.part) !== -1;
+        return '<tr' + (rl.active ? '' : ' style="opacity:.6;"') + '>' +
+          td('<code style="font-size:12.5px;color:#4a4f47;">' + esc(rl.part) + '</code>' + (edited ? '<div><span style="display:inline-block;margin-top:3px;background:#fdf6e3;border:1px solid #eadfbe;color:#8a6d1f;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:600;">Edited</span></div>' : '')) +
+          td('<span style="font-size:13px;">' + esc(rl.name) + '</span>') +
+          td('<span style="font-size:12.5px;color:#4a4f47;font-family:ui-monospace,monospace;line-height:1.45;">' + esc(hrFormulaText(rl)) + '</span>') +
+          td('<div style="display:flex;gap:6px;justify-content:flex-end;"><button class="hrEdit" data-part="' + esc(rl.part) + '" style="border:1px solid #dcded7;background:#fff;border-radius:8px;padding:6px 12px;font-size:12.5px;color:#3d4a55;cursor:pointer;">Edit</button>' +
+            (edited ? '<button class="hrRevert" data-part="' + esc(rl.part) + '" style="border:1px solid #e0e1db;background:#fff;border-radius:8px;padding:6px 12px;font-size:12.5px;color:#9c3327;cursor:pointer;">Reset</button>' : '') + '</div>') + '</tr>';
+      }).join('');
+      box.innerHTML = tableShell(['Part #', 'Fastener', 'Quantity formula', ''], rows, 4, 'No hardware rules.');
+      box.querySelectorAll('.hrEdit').forEach(function (b) {
+        b.addEventListener('click', function () {
+          openHardwareRuleForm((hrData.rules || []).filter(function (x) { return x.part === b.getAttribute('data-part'); })[0]);
+        });
+      });
+      box.querySelectorAll('.hrRevert').forEach(function (b) {
+        b.addEventListener('click', async function () {
+          if (!confirm('Return ' + b.getAttribute('data-part') + ' to the workbook default?')) return;
+          var rr = await authed('/hardware-rules/' + encodeURIComponent(b.getAttribute('data-part')), { method: 'DELETE' });
+          if (!rr.ok && rr.status !== 204) { alert('Could not reset (' + rr.status + ').'); return; }
+          loadHardwareRules();
+        });
+      });
+    } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
+  }
+  function hrSourceOptions(sel) {
+    var s = (hrData && hrData.sources) || { frame: [], inputs: [], hardware: [] };
+    var group = function (label, opts) {
+      return '<optgroup label="' + label + '">' + opts.map(function (o) {
+        return '<option value="' + esc(o[0]) + '"' + (o[0] === sel ? ' selected' : '') + '>' + esc(o[1]) + '</option>';
+      }).join('') + '</optgroup>';
+    };
+    return group('Configurator answers', (s.inputs || []).map(function (i) { return ['in:' + i.key, i.label]; })) +
+      group('Frame BOM quantities', (s.frame || []).map(function (p) { return ['bom:' + p, p]; })) +
+      group('Other hardware rows', (s.hardware || []).map(function (p) { return ['hw:' + p, p]; }));
+  }
+  function openHardwareRuleForm(rule) {
+    if (!rule) return;
+    var terms = (rule.terms || []).map(function (t) { return { source: t.source, coefficient: t.coefficient }; });
+    var termsHtml = function () {
+      return terms.map(function (t, i) {
+        return '<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">' +
+          '<select class="hrTermSrc" data-i="' + i + '" style="' + IN + 'flex:1;">' + hrSourceOptions(t.source) + '</select>' +
+          '<span class="muted" style="font-size:13px;">×</span>' +
+          '<input class="hrTermK" data-i="' + i + '" value="' + esc(t.coefficient) + '" style="width:90px;padding:9px 10px;border:1px solid #dcded7;border-radius:9px;text-align:right;font-size:14px;">' +
+          '<button type="button" class="hrTermDel" data-i="' + i + '" style="border:1px solid #e0e1db;background:#fff;border-radius:8px;width:32px;height:32px;color:#9c3327;cursor:pointer;">✕</button></div>';
+      }).join('') || '<div class="muted" style="font-size:12.5px;margin-bottom:6px;">No drivers — this rule always produces 0.</div>';
+    };
+    var wireTerms = function () {
+      var host = document.getElementById('hrTerms'); if (!host) return;
+      host.innerHTML = termsHtml();
+      host.querySelectorAll('.hrTermSrc').forEach(function (el) { el.addEventListener('change', function () { terms[+el.getAttribute('data-i')].source = el.value; }); });
+      host.querySelectorAll('.hrTermK').forEach(function (el) { el.addEventListener('input', function () { terms[+el.getAttribute('data-i')].coefficient = Number(el.value) || 0; }); });
+      host.querySelectorAll('.hrTermDel').forEach(function (b) { b.addEventListener('click', function () { terms.splice(+b.getAttribute('data-i'), 1); wireTerms(); }); });
+    };
+    openModal('Quantity formula — ' + rule.part,
+      '<div class="muted" style="font-size:12.5px;margin-bottom:10px;">' + esc(rule.name) + '</div>' +
+      '<div class="field"><label>Driven by</label><div id="hrTerms"></div>' +
+        '<button type="button" class="link-btn" id="hrAddTerm" style="width:auto;padding:7px 12px;">+ Add driver</button></div>' +
+      '<div style="display:flex;gap:8px;">' +
+        '<div class="field" style="flex:1;"><label>Constant</label><input id="hrConst" value="' + esc(rule.constant) + '" style="' + IN + 'text-align:right;"></div>' +
+        '<div class="field" style="flex:1;"><label>Overage factor</label><input id="hrFactor" value="' + esc(rule.factor) + '" style="' + IN + 'text-align:right;"></div>' +
+      '</div>' +
+      '<div style="display:flex;gap:8px;">' +
+        '<div class="field" style="flex:1;"><label>Rounding</label><select id="hrRound" style="' + IN + '">' +
+          [['NONE', 'None'], ['CEIL', 'Round up'], ['ROUND', 'Nearest']].map(function (o) { return '<option value="' + o[0] + '"' + (rule.roundMode === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></div>' +
+        '<div class="field" style="flex:1;"><label>Sold in multiples of</label><input id="hrStep" value="' + esc(rule.roundStep) + '" style="' + IN + 'text-align:right;"></div>' +
+        '<div class="field" style="flex:1;"><label>Mode</label><select id="hrMode" style="' + IN + '">' +
+          [['SUM', 'Sum of drivers'], ['PRESENCE', 'If any, use constant']].map(function (o) { return '<option value="' + o[0] + '"' + (rule.mode === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></div>' +
+      '</div>' +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:14px;margin:2px 0;cursor:pointer;"><input type="checkbox" id="hrMinZero"' + (rule.minZero !== false ? ' checked' : '') + '> Never go below zero</label>' +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;"><input type="checkbox" id="hrActive"' + (rule.active !== false ? ' checked' : '') + '> Include this fastener in H-1000</label>' +
+      '<div style="margin-top:10px;"><button type="button" class="link-btn" id="hrPreview" style="width:auto;padding:8px 13px;">Preview against a 10′ × 10′ frame</button>' +
+        '<div id="hrPreviewOut" class="muted" style="font-size:12.5px;margin-top:8px;"></div></div>',
+      async function (close, showErr) {
+        var body = {
+          terms: terms,
+          constant: Number(document.getElementById('hrConst').value) || 0,
+          factor: Number(document.getElementById('hrFactor').value) || 1,
+          roundMode: document.getElementById('hrRound').value,
+          roundStep: Number(document.getElementById('hrStep').value) || 1,
+          mode: document.getElementById('hrMode').value,
+          minZero: document.getElementById('hrMinZero').checked,
+          active: document.getElementById('hrActive').checked,
+        };
+        if (body.factor <= 0) return showErr('Overage factor must be greater than zero.');
+        var r = await authed('/hardware-rules/' + encodeURIComponent(rule.part), { method: 'PATCH', body: body });
+        if (!r.ok) return showErr('Could not save (' + r.status + ').');
+        close(); loadHardwareRules();
+      });
+    wireTerms();
+    document.getElementById('hrAddTerm').addEventListener('click', function () { terms.push({ source: 'bom:A-2245', coefficient: 1 }); wireTerms(); });
+    document.getElementById('hrPreview').addEventListener('click', async function () {
+      var out = document.getElementById('hrPreviewOut');
+      out.textContent = 'Calculating…';
+      var answers = adv || { length: 10, width: 10, config: 'Square', legs: 4, ladders: 1, monkeyBars: true, trolley: true, trolleyType: 'Dual', zipLine: true, zipLineQty: 1, brackets: true, bracketsQty: 4, swivel360: 2, forged: 2, swingHanger: 1, vRings: 1 };
+      var body = {
+        answers: answers,
+        overrides: [{
+          part: rule.part, terms: terms,
+          constant: Number(document.getElementById('hrConst').value) || 0,
+          factor: Number(document.getElementById('hrFactor').value) || 1,
+          roundMode: document.getElementById('hrRound').value,
+          roundStep: Number(document.getElementById('hrStep').value) || 1,
+          mode: document.getElementById('hrMode').value,
+          minZero: document.getElementById('hrMinZero').checked,
+          active: document.getElementById('hrActive').checked,
+        }],
+      };
+      var r = await authed('/hardware-rules/preview', { method: 'POST', body: body });
+      if (!r.ok) { out.textContent = 'Preview failed (' + r.status + ').'; return; }
+      var d = await r.json();
+      var changed = (d.rows || []).filter(function (x) { return x.changed; });
+      var mine = (d.rows || []).filter(function (x) { return x.part === rule.part; })[0];
+      out.innerHTML =
+        (mine ? '<div style="color:#20241f;"><b>' + esc(rule.part) + '</b>: ' + mine.qtyBefore + ' → <b>' + mine.qtyAfter + '</b> · <span style="font-family:ui-monospace,monospace;font-size:11.5px;">' + esc(mine.formula) + '</span></div>' : '') +
+        (changed.length > 1 ? '<div style="margin-top:5px;">Knock-on changes: ' + changed.filter(function (x) { return x.part !== rule.part; }).map(function (x) { return esc(x.part) + ' ' + x.qtyBefore + '→' + x.qtyAfter; }).join(', ') + '</div>'
+          : (changed.length ? '' : '<div style="margin-top:5px;">No change on this configuration.</div>'));
+    });
   }
   async function loadStandardNotes() {
     var box = document.getElementById('snList'); if (!box) return;

@@ -3,6 +3,7 @@ import { prisma } from '../lib/prisma.js';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import { computeAdventureProposal, explainAdventure, frameModelNumber, frameDimensions, type AdvAnswers, type SkuRec } from '../proposals/adventureSeries.js';
+import { loadHardwareRules } from './hardwareRules.js';
 
 /** Server-side Adventure Series pricing engine: answers -> priced, grouped lines.
  *  Prices/weights/costs are read live from the Sku table (editable in Catalog → Pricing & SKUs). */
@@ -38,7 +39,8 @@ export function registerAdventureRoutes(app: FastifyInstance): void {
 
   app.post('/proposals/adventure-series/price', write, async (req) => {
     const a = (req.body || {}) as AdvAnswers;
-    const out = computeAdventureProposal(a, await skuMap());
+    const [skus, rules] = await Promise.all([skuMap(), loadHardwareRules()]);
+    const out = computeAdventureProposal(a, skus, rules);
     return { ...out, frameModel: frameModelNumber(a), frameDimensions: frameDimensions(a) };
   });
 
@@ -46,6 +48,7 @@ export function registerAdventureRoutes(app: FastifyInstance): void {
    *  price/cost it was multiplied by — for cross-referencing against the workbook. */
   app.post('/proposals/adventure-series/trace', write, async (req) => {
     const a = (req.body || {}) as AdvAnswers;
-    return explainAdventure(a, await skuMap());
+    const [skus, rules] = await Promise.all([skuMap(), loadHardwareRules()]);
+    return explainAdventure(a, skus, rules);
   });
 }
