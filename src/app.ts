@@ -11,6 +11,7 @@ import { registerCrmRoutes } from './routes/crm.js';
 import { registerIntegrationRoutes } from './routes/integrations.js';
 import { registerQuickbooksRoutes } from './routes/quickbooks.js';
 import { registerCatalogRoutes } from './routes/catalog.js';
+import { registerCatalogItemRoutes } from './routes/catalogItems.js';
 import { registerRuleRoutes } from './routes/rules.js';
 import { registerPricingRoutes } from './routes/pricing.js';
 import { registerProposalRoutes } from './routes/proposals.js';
@@ -48,6 +49,7 @@ export function buildApp(): FastifyInstance {
   registerIntegrationRoutes(app);
   registerQuickbooksRoutes(app);
   registerCatalogRoutes(app);
+  registerCatalogItemRoutes(app);
   registerRuleRoutes(app);
   registerPricingRoutes(app);
   registerProposalRoutes(app);

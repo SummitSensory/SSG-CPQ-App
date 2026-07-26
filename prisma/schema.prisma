@@ -862,6 +862,7 @@ model Sku {
   unitCostMinor  Int      @default(0)
   weightLbs      Float    @default(0)
   category       String   @default("OTHER")
+  manufacturer   String?
   proposalGroup  String?
   active         Boolean  @default(true)
   createdAt      DateTime @default(now())

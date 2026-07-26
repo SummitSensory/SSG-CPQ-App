@@ -381,7 +381,7 @@
   }
 
   /* --- Catalog --- */
-  var cat = { q: '', status: '', page: 1, tab: 'products' };
+  var cat = { q: '', status: '', page: 1, tab: 'items' };
   var catCategories = [];
   var KINDS = ['PRODUCT', 'VARIANT', 'COMPONENT', 'BUNDLE', 'ACCESSORY', 'SERVICE'];
   var STATUSES = ['DRAFT', 'ACTIVE', 'INACTIVE', 'ARCHIVED'];
@@ -390,9 +390,89 @@
 
   function renderCatalog(user) {
     function ctab(id, label){var on=cat.tab===id;return '<button data-ctab="'+id+'" style="border:none;border-radius:8px;padding:8px 15px;font-size:13.5px;font-weight:'+(on?'600':'500')+';cursor:pointer;background:'+(on?'#fff':'transparent')+';color:'+(on?'#1c4039':'#6b7065')+';box-shadow:'+(on?'0 1px 2px rgba(0,0,0,.06)':'none')+';">'+label+'</button>';}
-    document.getElementById('view').innerHTML = '<div style="display:flex;gap:5px;background:#eef0ea;padding:4px;border-radius:10px;width:max-content;margin-bottom:18px;">'+ctab('products','Products')+ctab('skus','Pricing &amp; SKUs')+'</div><div id="catBody"></div>';
+    document.getElementById('view').innerHTML = '<div style="display:flex;gap:5px;background:#eef0ea;padding:4px;border-radius:10px;width:max-content;margin-bottom:18px;">'+ctab('items','Catalog')+ctab('products','Product tree')+'</div><div id="catBody"></div>';
     document.querySelectorAll('[data-ctab]').forEach(function(b){b.addEventListener('click',function(){cat.tab=b.getAttribute('data-ctab');renderCatalog(user);});});
-    if(cat.tab==='skus') renderSkus(user); else renderCatalogProducts(user);
+    if(cat.tab==='products') renderCatalogProducts(user); else renderItems(user);
+  }
+
+  /* --- The one catalog list: Product + SKU merged, one row per part number --- */
+  var itemState = { q: '', page: 1, categories: [], manufacturers: [] };
+  function renderItems(user) {
+    var admin = canCatalogAdmin(user.role);
+    document.getElementById('catBody').innerHTML =
+      '<div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">' +
+        '<input id="itSearch" placeholder="Search part #, name, category or manufacturer…" value="' + esc(itemState.q) + '" style="flex:1;min-width:240px;max-width:420px;padding:10px 13px;border:1px solid #dcded7;border-radius:10px;font-size:14px;background:#fff;outline:none;">' +
+        (admin ? '<div style="margin-left:auto;display:flex;gap:8px;"><button class="link-btn" id="itImport" style="width:auto;padding:10px 15px;">Import Excel / CSV</button><button class="btn" id="itNew" style="width:auto;padding:10px 17px;">New product</button></div>' : '') +
+      '</div>' +
+      '<div style="font-size:12px;color:#8a8f85;margin-bottom:10px;">Every product on one line — name, category, manufacturer, cost, price and weight. Edit any cell and it saves as you leave the field. These prices and weights are what the Adventure Series engine and the proposal builder multiply against.</div>' +
+      '<div id="itList"><div class="muted" style="padding:24px;">Loading…</div></div>';
+    var s = document.getElementById('itSearch'), t;
+    s.addEventListener('input', function () { clearTimeout(t); t = setTimeout(function () { itemState.q = s.value.trim(); itemState.page = 1; loadItems(user); }, 300); });
+    if (admin) {
+      document.getElementById('itNew').addEventListener('click', function () { openSkuForm(user); });
+      document.getElementById('itImport').addEventListener('click', function () { openSkuImport(user); });
+    }
+    loadItems(user);
+  }
+
+  async function loadItems(user) {
+    var box = document.getElementById('itList'); if (!box) return;
+    var admin = canCatalogAdmin(user.role);
+    try {
+      if (!itemState.manufacturers.length) {
+        try { var rm = await authed('/catalog/manufacturers'); if (rm.ok) itemState.manufacturers = ((await rm.json()) || []).map(function (m) { return m.name; }); } catch (e0) {}
+      }
+      var r = await authed('/catalog/items?page=' + itemState.page + '&pageSize=100' + (itemState.q ? '&q=' + encodeURIComponent(itemState.q) : ''));
+      if (!r.ok) { box.innerHTML = '<div class="err">Could not load (' + r.status + ').</div>'; return; }
+      var d = await r.json();
+      itemState.categories = (d.categories || []).map(function (c) { return c.name; });
+      var CELL = 'width:100%;padding:5px 7px;border:1px solid #dcded7;border-radius:6px;font-size:13px;background:#fff;';
+      var NUM = CELL + 'text-align:right;';
+      function txt(part, field, value, style) {
+        return '<input class="itEdit" data-part="' + esc(part) + '" data-f="' + field + '" value="' + esc(value == null ? '' : value) + '" style="' + (style || CELL) + '">';
+      }
+      function sel(part, field, value, options) {
+        return '<select class="itEdit" data-part="' + esc(part) + '" data-f="' + field + '" style="' + CELL + '">' +
+          ['<option value="">—</option>'].concat(options.map(function (o) {
+            return '<option value="' + esc(o) + '"' + (String(value) === String(o) ? ' selected' : '') + '>' + esc(o) + '</option>';
+          })).join('') + '</select>';
+      }
+      var rows = (d.items || []).map(function (k) {
+        var margin = k.unitPriceMinor ? Math.round(((k.unitPriceMinor - k.unitCostMinor) / k.unitPriceMinor) * 1000) / 10 : 0;
+        var where = (k.productId ? '<span class="chip" style="font-size:10px;">Product</span>' : '') + (k.skuId ? ' <span class="chip" style="font-size:10px;background:#fdfcf7;">Priced</span>' : '');
+        return '<tr>' +
+          td('<code style="font-size:12.5px;color:#4a4f47;">' + esc(k.part) + '</code>') +
+          td(admin ? txt(k.part, 'name', k.name) : '<span style="font-size:13px;">' + esc(k.name) + '</span>') +
+          td(admin ? (k.categoryOptions && itemState.categories.length ? sel(k.part, 'category', k.category, itemState.categories) : txt(k.part, 'category', k.category)) : esc(k.category)) +
+          td(admin ? txt(k.part, 'manufacturer', k.manufacturer) : esc(k.manufacturer)) +
+          td(admin ? txt(k.part, 'unitCostMinor', (Number(k.unitCostMinor) / 100).toFixed(2), NUM + 'background:#fdfcf7;border-color:#e4dfd0;') : '$' + (Number(k.unitCostMinor) / 100).toFixed(2)) +
+          td(admin ? txt(k.part, 'unitPriceMinor', (Number(k.unitPriceMinor) / 100).toFixed(2), NUM) : '$' + (Number(k.unitPriceMinor) / 100).toFixed(2)) +
+          td('<span style="font-size:13px;font-weight:600;color:' + (margin >= 0 ? '#2f7d5d' : '#9c3327') + ';">' + margin + '%</span>') +
+          td(admin ? txt(k.part, 'weightLbs', k.weightLbs, NUM) : String(k.weightLbs)) +
+          td(where) + '</tr>';
+      }).join('');
+      var totalPages = Math.max(1, Math.ceil((d.total || 0) / (d.pageSize || 100)));
+      box.innerHTML = tableShell(['Part #', 'Product name', 'Category', 'Manufacturer', 'Unit cost', 'Unit price', 'Margin', 'Weight (lb)', 'Record'], rows, 9, 'Nothing in the catalog yet. Import a sheet or add a product.') +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;color:#82877d;font-size:13px;"><span>' + (d.total || 0) + ' items</span>' +
+        '<span style="display:flex;gap:8px;align-items:center;"><button id="itPrev" ' + (itemState.page <= 1 ? 'disabled' : '') + ' class="link-btn" style="width:auto;padding:6px 12px;">Prev</button><span>Page ' + (d.page || 1) + ' of ' + totalPages + '</span><button id="itNext" ' + (itemState.page >= totalPages ? 'disabled' : '') + ' class="link-btn" style="width:auto;padding:6px 12px;">Next</button></span></div>';
+      var pv = document.getElementById('itPrev'), nx = document.getElementById('itNext');
+      if (pv) pv.addEventListener('click', function () { if (itemState.page > 1) { itemState.page--; loadItems(user); } });
+      if (nx) nx.addEventListener('click', function () { if (itemState.page < totalPages) { itemState.page++; loadItems(user); } });
+      document.querySelectorAll('.itEdit').forEach(function (el) {
+        el.addEventListener('change', async function () {
+          var f = el.getAttribute('data-f'), part = el.getAttribute('data-part'), body = {};
+          if (f === 'unitPriceMinor' || f === 'unitCostMinor') body[f] = d2m(el.value);
+          else if (f === 'weightLbs') body[f] = parseFloat(el.value) || 0;
+          else body[f] = el.value.trim();
+          el.style.borderColor = '#c9a227';
+          var r2 = await authed('/catalog/items/' + encodeURIComponent(part), { method: 'PATCH', body: body });
+          el.style.borderColor = r2.ok ? '#3f9d78' : '#c2452f';
+          if (!r2.ok) { var msg = ''; try { msg = (await r2.json()).message || ''; } catch (e3) {} alert('Could not save' + (msg ? ': ' + msg : ' (' + r2.status + ').')); }
+          else if (f === 'unitCostMinor' || f === 'unitPriceMinor') loadItems(user);
+          setTimeout(function () { el.style.borderColor = f === 'unitCostMinor' ? '#e4dfd0' : '#dcded7'; }, 900);
+        });
+      });
+    } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
   }
   async function renderCatalogProducts(user) {
     var admin = canCatalogAdmin(user.role);
@@ -434,6 +514,9 @@
     }
     loadSkus(user);
   }
+  /** Reload whichever catalog list is showing. */
+  function refreshCatalogList(user) { if (cat.tab === 'products') loadProducts(user); else { itemState.page = 1; loadItems(user); } }
+
   async function loadSkus(user) {
     var box = document.getElementById('skuList'); if (!box) return;
     var admin = canCatalogAdmin(user.role);
@@ -477,24 +560,25 @@
     } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
   }
   function openSkuForm(user) {
-    openModal('New SKU',
+    openModal('New catalog item',
       fieldRow('Part #', '<input id="kPart" style="' + IN + '" required>') +
       fieldRow('Description', '<input id="kDesc" style="' + IN + '" required>') +
       '<div style="display:flex;gap:8px;"><div class="field" style="flex:1;"><label>Unit price ($)</label><input id="kPrice" value="0.00" style="' + IN + '"></div><div class="field" style="flex:1;"><label>Unit cost ($)</label><input id="kCost" value="0.00" style="' + IN + '"></div><div class="field" style="flex:1;"><label>Weight (lb)</label><input id="kWt" value="0" style="' + IN + '"></div></div>' +
       fieldRow('Category', '<input id="kCat" value="OTHER" style="' + IN + '">') +
+      fieldRow('Manufacturer', '<input id="kMfr" placeholder="e.g. Summit Sensory Gym" style="' + IN + '">') +
       fieldRow('Proposal group (optional)', '<input id="kGroup" style="' + IN + '">'),
       async function (close, showErr) {
         var part = document.getElementById('kPart').value.trim(); if (!part) return showErr('Part # is required.');
         var desc = document.getElementById('kDesc').value.trim(); if (!desc) return showErr('Description is required.');
-        var body = { part: part, description: desc, unitPriceMinor: d2m(document.getElementById('kPrice').value), unitCostMinor: d2m(document.getElementById('kCost').value), weightLbs: parseFloat(document.getElementById('kWt').value) || 0, category: document.getElementById('kCat').value.trim() || 'OTHER', proposalGroup: document.getElementById('kGroup').value.trim() || undefined };
+        var body = { part: part, description: desc, unitPriceMinor: d2m(document.getElementById('kPrice').value), unitCostMinor: d2m(document.getElementById('kCost').value), weightLbs: parseFloat(document.getElementById('kWt').value) || 0, category: document.getElementById('kCat').value.trim() || 'OTHER', manufacturer: document.getElementById('kMfr').value.trim() || undefined, proposalGroup: document.getElementById('kGroup').value.trim() || undefined };
         var r = await authed('/skus', { method: 'POST', body: body });
         if (!r.ok) return showErr(r.status === 400 ? 'That part # may already exist.' : 'Could not create (' + r.status + ').');
-        close(); skuState.page = 1; loadSkus(user);
+        close(); refreshCatalogList(user);
       });
   }
   function openSkuImport(user) {
     openModal('Import SKUs from Excel / CSV',
-      '<div class="muted" style="font-size:13px;margin-bottom:10px;line-height:1.5;">Save your sheet as <b>CSV</b> with a header row of columns: <code>part, description, unitPrice, unitCost, weightLbs, category, proposalGroup</code>. Existing part #s are updated; new ones are added.</div>' +
+      '<div class="muted" style="font-size:13px;margin-bottom:10px;line-height:1.5;">Save your sheet as <b>CSV</b> with a header row of columns: <code>part, description, unitPrice, unitCost, weightLbs, category, manufacturer, proposalGroup</code>. Existing part #s are updated; new ones are added.</div>' +
       '<input type="file" id="skuFile" accept=".csv,text/csv" style="width:100%;padding:10px;border:1px dashed #cfd3ca;border-radius:9px;background:#fff;">',
       async function (close, showErr) {
         var fi = document.getElementById('skuFile').files[0]; if (!fi) return showErr('Choose a CSV file first.');
@@ -504,7 +588,7 @@
         var r = await authed('/skus/import', { method: 'POST', body: { rows: rows } });
         if (!r.ok) return showErr('Import failed (' + r.status + ').');
         var d = await r.json();
-        close(); alert('Import complete: ' + d.created + ' added, ' + d.updated + ' updated.'); skuState.page = 1; loadSkus(user);
+        close(); alert('Import complete: ' + d.created + ' added, ' + d.updated + ' updated.'); refreshCatalogList(user);
       }, 'Import');
   }
   function parseCsv(text) {
@@ -618,11 +702,19 @@
     try {
       var r = await authed('/proposals'); if (!r.ok) { box.innerHTML = '<div class="err">Could not load (' + r.status + ').</div>'; return; }
       var list = await r.json();
+      // Organization names are not on the proposal record; resolve them once for the list.
+      var orgById = {};
+      try { var ro = await authed('/crm/organizations?pageSize=500'); if (ro.ok) ((await ro.json()).items || []).forEach(function (o) { orgById[o.id] = o.name; }); } catch (e2) {}
       var rows = (list || []).map(function (p) {
         var v = (p.versions && p.versions[0]) || {};
-        return '<tr style="cursor:pointer;" data-id="' + p.id + '">' + td('<b style="font-weight:600;">' + esc(p.title) + '</b><div class="muted" style="font-size:12px;">' + esc(p.number || '') + '</div>') + td('v' + (v.version || p.currentVersion || 1)) + td('<span class="chip">' + titleCase(v.status || 'DRAFT') + '</span>') + td(fmtDate(p.updatedAt)) + '</tr>';
+        var meta = ((v.sections || []).filter(function (s) { return s && s.id === 'meta'; })[0] || {}).data || {};
+        var org = orgById[p.organizationId] || '—';
+        return '<tr style="cursor:pointer;" data-id="' + p.id + '">' +
+          td('<b style="font-weight:600;">' + esc(org) + '</b>' + (meta.contactName ? '<div class="muted" style="font-size:12px;">' + esc(meta.contactName) + '</div>' : '')) +
+          td('<b style="font-weight:600;">' + esc(p.title) + '</b><div class="muted" style="font-size:12px;">' + esc(p.number || '') + '</div>') +
+          td('v' + (v.version || p.currentVersion || 1)) + td('<span class="chip">' + titleCase(v.status || 'DRAFT') + '</span>') + td(fmtDate(p.updatedAt)) + '</tr>';
       }).join('');
-      box.innerHTML = tableShell(['Proposal', 'Version', 'Status', 'Updated'], rows, 4, 'No proposals yet.');
+      box.innerHTML = tableShell(['Customer', 'Proposal', 'Version', 'Status', 'Updated'], rows, 5, 'No proposals yet.');
       document.querySelectorAll('#propList tr[data-id]').forEach(function (tr) { tr.addEventListener('click', function () { openProposalDetail(tr.getAttribute('data-id'), user); }); });
     } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
   }
@@ -1239,7 +1331,7 @@
       slide: false, slideGray: false, steamroller: false,
       climbFrame: false, climbWall: false, climbShield: false, climbMat: false,
       matFloor: false, matColumn: false, uShaped: 0, completeWrap: 0, matLadderLeg: false, matCustom: false,
-      brackets: false, bracketsQty: 4, swivel360: 4, forged: 12, swingHanger: 0, vRings: 0, carabiner: 0, webbingSling: 6,
+      brackets: false, bracketsQty: 4, swivel360: 4, swivelStandalone: 0, forged: 12, swingHanger: 0, vRings: 0, carabiner: 0, webbingSling: 6,
     };
     adv.legs = legsFor(adv.length); adv.webbingSling = adv.legs;
     var ov = document.createElement('div');
@@ -1304,6 +1396,7 @@
             '<div style="font-weight:600;font-size:13.5px;color:#3d4a55;margin:14px 0 4px;border-top:1px solid #f2f3ef;padding-top:14px;">Additional Hardware</div>' +
             '<div style="' + stack + '">' +
               num('forged', '# 1/2" Forged Eye Bolts (×6)', 0, 36) +
+              num('swivelStandalone', '# Swing &amp; Swivel Eye Bolt (stand-alone)', 0, 24) +
               num('swingHanger', '# Swing Hanger w/ Bearing (×2)', 0, 12) +
               num('vRings', '# V-Rings (10-pack)', 0, 3) +
               '<div class="af"><label style="display:block;font-size:11px;color:#8a8f85;text-transform:uppercase;margin-bottom:4px;">Auto-Locking Carabiner (4pk)</label><input type="number" data-ak="carabiner" value="' + adv.carabiner + '" min="0" max="8" style="width:100%;padding:8px 10px;border:1px solid #dcded7;border-radius:8px;font-size:14px;"><span class="muted" style="font-size:11px;">Recommended: ' + carabRec + '</span></div>' +
@@ -1348,7 +1441,7 @@
       slide: !!adv.slide, slideGray: !!adv.slideGray, steamroller: !!adv.steamroller,
       climbFrame: !!adv.climbFrame, climbWall: !!adv.climbWall, climbShield: !!adv.climbShield, climbMat: !!adv.climbMat,
       matFloor: !!adv.matFloor, matColumn: !!adv.matColumn, uShaped: Number(adv.uShaped), completeWrap: Number(adv.completeWrap), matLadderLeg: !!adv.matLadderLeg, matCustom: !!adv.matCustom,
-      brackets: !!adv.brackets, bracketsQty: Number(adv.bracketsQty), swivel360: Number(adv.swivel360), forged: Number(adv.forged), swingHanger: Number(adv.swingHanger), vRings: Number(adv.vRings), carabiner: Number(adv.carabiner), webbingSling: Number(adv.webbingSling),
+      brackets: !!adv.brackets, bracketsQty: Number(adv.bracketsQty), swivel360: Number(adv.swivel360), swivelStandalone: Number(adv.swivelStandalone), forged: Number(adv.forged), swingHanger: Number(adv.swingHanger), vRings: Number(adv.vRings), carabiner: Number(adv.carabiner), webbingSling: Number(adv.webbingSling),
     };
   }
 
@@ -1377,6 +1470,7 @@
     var hwRows = (hw.components || []).map(function (c) {
       return '<tr><td style="padding:4px 8px;border-bottom:1px solid #eef0ea;font-family:ui-monospace,monospace;font-size:11px;">' + esc(c.part || '—') + '</td>' +
         '<td style="padding:4px 8px;border-bottom:1px solid #eef0ea;font-size:11.5px;">' + esc(c.name) + (c.inCatalog ? '' : ' <span style="color:#9c3327;font-size:10.5px;">no SKU record</span>') + '</td>' +
+        '<td style="padding:4px 8px;border-bottom:1px solid #eef0ea;font-size:11px;color:#5c6157;">' + esc(c.formula || '') + '</td>' +
         '<td style="padding:4px 8px;border-bottom:1px solid #eef0ea;text-align:right;font-size:11.5px;">' + c.qty + '</td>' +
         '<td style="padding:4px 8px;border-bottom:1px solid #eef0ea;text-align:right;font-size:11.5px;">' + fmtMoney(c.unitPriceMinor, '') + '</td>' +
         '<td style="padding:4px 8px;border-bottom:1px solid #eef0ea;text-align:right;font-size:11.5px;font-weight:600;">' + fmtMoney(c.unitPriceMinor * c.qty, '') + '</td></tr>';
@@ -1400,9 +1494,9 @@
           '<div style="font-weight:600;font-size:13.5px;margin:14px 0 6px;">Bill of materials</div>' +
           '<div style="overflow:auto;"><table style="width:100%;border-collapse:collapse;"><thead><tr>' + th('Rule') + th('Part') + th('Description') + th('Quantity formula') + th('Qty', 1) + th('Unit', 1) + th('Extended', 1) + th('Ext. cost', 1) + '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
           '<div style="font-weight:600;font-size:13.5px;margin:20px 0 6px;">H-1000 hardware roll-up</div>' +
-          '<div class="muted" style="font-size:12px;margin-bottom:8px;">Every component below is summed into the single H-1000 line on the proposal — the components are not billed separately.</div>' +
-          (hwRows ? '<div style="overflow:auto;"><table style="width:100%;border-collapse:collapse;"><thead><tr>' + th('Part') + th('Component') + th('Qty', 1) + th('Unit', 1) + th('Extended', 1) + '</tr></thead><tbody>' + hwRows +
-            '<tr><td colspan="4" style="padding:7px 8px;text-align:right;font-weight:700;font-size:12.5px;">H-1000 total</td><td style="padding:7px 8px;text-align:right;font-weight:700;font-size:12.5px;">' + fmtMoney(hw.priceMinor, 'USD') + '</td></tr>' +
+          '<div class="muted" style="font-size:12px;margin-bottom:8px;">Fastener quantities are driven off the frame BOM per the v73 workbook — every one of these is summed into the single H-1000 line and none are billed separately.</div>' +
+          (hwRows ? '<div style="overflow:auto;"><table style="width:100%;border-collapse:collapse;"><thead><tr>' + th('Part') + th('Component') + th('Quantity formula') + th('Qty', 1) + th('Unit', 1) + th('Extended', 1) + '</tr></thead><tbody>' + hwRows +
+            '<tr><td colspan="5" style="padding:7px 8px;text-align:right;font-weight:700;font-size:12.5px;">H-1000 total</td><td style="padding:7px 8px;text-align:right;font-weight:700;font-size:12.5px;">' + fmtMoney(hw.priceMinor, 'USD') + '</td></tr>' +
             '</tbody></table></div>' : '<div class="muted" style="font-size:12.5px;">No hardware selected.</div>') +
         '</div></div>';
     document.body.appendChild(ov);
