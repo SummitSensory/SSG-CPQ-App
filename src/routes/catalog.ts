@@ -4,7 +4,7 @@ import { recordAudit } from '../lib/audit.js';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import { ValidationError, ConflictError, NotFoundError } from '../lib/errors.js';
-import { CategoryInput, FamilyInput, ProductInput, StatusEnum } from '../catalog/validation.js';
+import { CategoryInput, FamilyInput, ProductInput, ProductUpdate, StatusEnum } from '../catalog/validation.js';
 import { validateImportBatch, ImportEnvelope } from '../catalog/import.js';
 import { changeStatus, assertDeletable } from '../catalog/service.js';
 import { ListQuery, buildOrderBy, paginate } from '../crm/query.js';
@@ -87,11 +87,13 @@ export function registerCatalogRoutes(app: FastifyInstance): void {
   // it runs the state machine; this one snapshots a new version like create does.
   app.patch('/catalog/products/:id', admin, async (req) => {
     const { id } = req.params as { id: string };
-    const parsed = ProductInput.partial().safeParse(req.body);
+    // ProductUpdate is the partial (and sku-less) shape — ProductInput is refined,
+    // so .partial() is not available on it. notes are a relation, written separately.
+    const parsed = ProductUpdate.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(parsed.error.message);
     const current = await prisma.product.findUnique({ where: { id } });
     if (!current) throw new NotFoundError();
-    const { activeFrom, activeTo, ...rest } = parsed.data;
+    const { activeFrom, activeTo, notes, ...rest } = parsed.data;
     const product = await prisma.product.update({
       where: { id },
       data: {
@@ -101,6 +103,12 @@ export function registerCatalogRoutes(app: FastifyInstance): void {
         version: current.version + 1,
       },
     });
+    if (notes) {
+      await prisma.productNote.deleteMany({ where: { productId: id } });
+      if (notes.length) {
+        await prisma.productNote.createMany({ data: notes.map((n, i) => ({ productId: id, text: n.text, sortOrder: i })) });
+      }
+    }
     await prisma.productVersion.create({
       data: { productId: id, version: product.version, snapshot: product as object, changedById: req.user!.sub, changeNote: 'edited' },
     });

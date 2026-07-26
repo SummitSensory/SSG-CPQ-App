@@ -710,15 +710,16 @@
         var statusCell = admin
           ? '<select data-pid="' + p.id + '" class="rowStatus" style="padding:6px 9px;border:1px solid #dcded7;border-radius:8px;font-size:13px;background:#fff;">' + STATUSES.map(function (s) { return '<option value="' + s + '"' + (p.status === s ? ' selected' : '') + '>' + titleCase(s) + '</option>'; }).join('') + '</select>'
           : '<span class="chip">' + titleCase(p.status) + '</span>';
-        return '<tr>' + td('<code style="font-size:13px;color:#4a4f47;">' + esc(p.sku) + '</code>') + td('<b style="font-weight:600;">' + esc(p.name) + '</b>') +
-          td(esc(titleCase(p.kind))) + td(esc(catName(p.categoryId))) + td(statusCell) + '</tr>';
+        return '<tr>' + td('<code style="font-size:13px;color:#4a4f47;">' + esc(p.sku) + '</code>') + td('<b style="font-weight:600;">' + esc(p.name) + '</b>' + (p.proposalDescription ? '<div class="muted" style="font-size:12px;max-width:420px;line-height:1.45;">' + esc(String(p.proposalDescription).slice(0, 120)) + (String(p.proposalDescription).length > 120 ? '…' : '') + '</div>' : '')) +
+          td(esc(titleCase(p.kind))) + td(esc(catName(p.categoryId))) + td(statusCell) +
+          td(admin ? '<button class="prodEdit" data-pid="' + p.id + '" style="border:1px solid #dcded7;background:#fff;border-radius:8px;padding:6px 12px;font-size:12.5px;color:#3d4a55;cursor:pointer;">Edit</button>' : '') + '</tr>';
       }).join('');
       // reuse the CRM pager
       var totalPages = Math.max(1, Math.ceil((d.total || 0) / (d.pageSize || 20)));
       box.innerHTML = '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:14px;overflow:hidden;">' +
         '<table style="width:100%;border-collapse:collapse;font-size:14px;"><thead><tr>' +
-        ['SKU', 'Name', 'Kind', 'Category', 'Status'].map(function (h) { return '<th style="text-align:left;padding:11px 16px;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;font-weight:600;border-bottom:1px solid #eef0ea;background:#f7f8f4;">' + h + '</th>'; }).join('') +
-        '</tr></thead><tbody>' + (rows || '<tr><td style="padding:22px 16px;color:#909689;" colspan="5">No products yet.</td></tr>') + '</tbody></table></div>' +
+        ['SKU', 'Name', 'Kind', 'Category', 'Status', ''].map(function (h) { return '<th style="text-align:left;padding:11px 16px;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;font-weight:600;border-bottom:1px solid #eef0ea;background:#f7f8f4;">' + h + '</th>'; }).join('') +
+        '</tr></thead><tbody>' + (rows || '<tr><td style="padding:22px 16px;color:#909689;" colspan="6">No products yet.</td></tr>') + '</tbody></table></div>' +
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;color:#82877d;font-size:13px;"><span>' + (d.total || 0) + ' total</span>' +
         '<span style="display:flex;gap:8px;align-items:center;"><button id="cPrev" ' + (cat.page <= 1 ? 'disabled' : '') + ' class="link-btn" style="width:auto;padding:6px 12px;">Prev</button><span>Page ' + (d.page || 1) + ' of ' + totalPages + '</span><button id="cNext" ' + (cat.page >= totalPages ? 'disabled' : '') + ' class="link-btn" style="width:auto;padding:6px 12px;">Next</button></span></div>';
       var pv = document.getElementById('cPrev'), nx = document.getElementById('cNext');
@@ -730,7 +731,53 @@
           if (!r2.ok) { alert('Could not change status (' + r2.status + ').'); loadProducts(user); }
         });
       });
+      Array.prototype.forEach.call(document.querySelectorAll('.prodEdit'), function (b) {
+        b.addEventListener('click', function () {
+          var p = (d.items || []).filter(function (x) { return x.id === b.getAttribute('data-pid'); })[0];
+          if (p) openProductEditForm(p, user);
+        });
+      });
     } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
+  }
+
+  /** Edit a product-tree record in place: name, kind, category, descriptions, dimensions. */
+  function openProductEditForm(p, user) {
+    var catOpts = catCategories.map(function (c) { return '<option value="' + c.id + '"' + (c.id === p.categoryId ? ' selected' : '') + '>' + esc(c.name) + '</option>'; }).join('');
+    var num = function (v) { return v == null || v === '' ? '' : String(v); };
+    openModal('Edit ' + p.sku,
+      fieldRow('SKU', '<input style="' + IN + 'background:#f2f3ef;" value="' + esc(p.sku) + '" disabled>') +
+      fieldRow('Name', '<input id="ePName" style="' + IN + '" value="' + esc(p.name) + '">') +
+      fieldRow('Kind', '<select id="ePKind" style="' + IN + '">' + KINDS.map(function (k) { return '<option value="' + k + '"' + (k === p.kind ? ' selected' : '') + '>' + titleCase(k) + '</option>'; }).join('') + '</select>') +
+      fieldRow('Category', '<select id="ePCat" style="' + IN + '">' + catOpts + '</select>') +
+      '<div class="field"><label>Proposal description</label><textarea id="ePDesc" rows="3" style="' + IN + 'resize:vertical;">' + esc(p.proposalDescription || '') + '</textarea>' +
+        '<div class="muted" style="font-size:11.5px;margin-top:3px;">This is the text that prints under the line item on a proposal.</div></div>' +
+      '<div class="field"><label>Internal description</label><textarea id="ePInt" rows="2" style="' + IN + 'resize:vertical;">' + esc(p.internalDescription || '') + '</textarea></div>' +
+      '<div style="display:flex;gap:8px;">' +
+        '<div class="field" style="flex:1;"><label>Length (in)</label><input id="ePL" type="number" min="0" style="' + IN + '" value="' + num(p.lengthIn) + '"></div>' +
+        '<div class="field" style="flex:1;"><label>Width (in)</label><input id="ePW" type="number" min="0" style="' + IN + '" value="' + num(p.widthIn) + '"></div>' +
+        '<div class="field" style="flex:1;"><label>Height (in)</label><input id="ePH" type="number" min="0" style="' + IN + '" value="' + num(p.heightIn) + '"></div>' +
+        '<div class="field" style="flex:1;"><label>Weight (oz)</label><input id="ePWt" type="number" min="0" style="' + IN + '" value="' + num(p.weightOz) + '"></div>' +
+      '</div>' +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;"><input type="checkbox" id="ePShowDims"' + (p.showDimensions ? ' checked' : '') + '> Print dimensions on the proposal</label>' +
+      '<div class="muted" style="font-size:12px;margin-top:8px;">Price, cost and weight in pounds live on the SKU — edit those in Catalog → Catalog or Pricing &amp; SKUs. Status has its own dropdown in the list.</div>',
+      async function (close, showErr) {
+        var body = {
+          name: document.getElementById('ePName').value.trim(),
+          kind: document.getElementById('ePKind').value,
+          categoryId: document.getElementById('ePCat').value,
+          proposalDescription: document.getElementById('ePDesc').value.trim(),
+          internalDescription: document.getElementById('ePInt').value.trim(),
+          showDimensions: document.getElementById('ePShowDims').checked,
+        };
+        if (body.name.length < 2) return showErr('Name must be at least 2 characters.');
+        [['ePL', 'lengthIn'], ['ePW', 'widthIn'], ['ePH', 'heightIn'], ['ePWt', 'weightOz']].forEach(function (f) {
+          var v = document.getElementById(f[0]).value;
+          if (v !== '') body[f[1]] = Number(v);
+        });
+        var r = await authed('/catalog/products/' + p.id, { method: 'PATCH', body: body });
+        if (!r.ok) return showErr('Could not save (' + r.status + ').');
+        close(); loadProducts(user);
+      });
   }
 
   function openCategoryForm() {
@@ -872,6 +919,7 @@
     { key: 'expires', label: 'Expires' },
     { key: '', label: '' },
   ];
+  function ptd(v, align, extra) { return '<td style="padding:12px 14px;border-bottom:1px solid #f2f3ef;white-space:nowrap;text-align:' + (align || 'left') + ';' + (extra || '') + '">' + v + '</td>'; }
   function drawProposals(user) {
     var box = document.getElementById('propList'); if (!box) return;
     var q = props.q.trim().toLowerCase();
@@ -904,13 +952,13 @@
           '<option value="">Quick status…</option>' + acts.map(function (a) { return '<option value="' + a[0] + '">' + esc(a[1]) + '</option>'; }).join('') + '</select>'
         : '';
       return '<tr style="cursor:pointer;" data-id="' + r.id + '">' +
-        td('<b style="font-weight:600;">' + esc(r.customer) + '</b>' + (r.contact ? '<div class="muted" style="font-size:12px;">' + esc(r.contact) + '</div>' : '')) +
-        td('<b style="font-weight:600;">' + esc(r.title) + '</b><div class="muted" style="font-size:12px;">' + esc(r.number) + (r.preparedBy ? ' · ' + esc(r.preparedBy) : '') + '</div>') +
-        '<td style="padding:12px 14px;border-bottom:1px solid #f2f3ef;text-align:center;">v' + r.version + (r.versionCount > 1 ? '<div class="muted" style="font-size:11px;">of ' + r.versionCount + '</div>' : '') + '</td>' +
-        td(statusChip(r.status)) + td(fmtDate(r.created)) + td(fmtDate(r.modified)) + td(expCell) +
-        '<td style="padding:8px 14px;border-bottom:1px solid #f2f3ef;text-align:right;">' + quick + '</td></tr>';
+        ptd('<b style="font-weight:600;">' + esc(r.customer) + '</b>' + (r.contact ? '<div class="muted" style="font-size:12px;">' + esc(r.contact) + '</div>' : '')) +
+        ptd('<b style="font-weight:600;">' + esc(r.title) + '</b><div class="muted" style="font-size:12px;">' + esc(r.number) + (r.preparedBy ? ' · ' + esc(r.preparedBy) : '') + '</div>') +
+        ptd('v' + r.version + (r.versionCount > 1 ? '<div class="muted" style="font-size:11px;">of ' + r.versionCount + '</div>' : ''), 'center') +
+        ptd(statusChip(r.status)) + ptd(fmtDate(r.created)) + ptd(fmtDate(r.modified)) + ptd(expCell) +
+        ptd(quick, 'right', 'padding:8px 14px;') + '</tr>';
     }).join('');
-    box.innerHTML = '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:14px;overflow:hidden;"><table style="width:100%;border-collapse:collapse;font-size:14px;"><thead><tr>' + head + '</tr></thead><tbody>' +
+    box.innerHTML = '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:14px;overflow-x:auto;"><table style="width:100%;min-width:1160px;border-collapse:collapse;font-size:14px;"><thead><tr>' + head + '</tr></thead><tbody>' +
       (body || '<tr><td style="padding:22px 16px;color:#909689;" colspan="8">' + (props.rows.length ? 'No proposals match this view.' : 'No proposals yet.') + '</td></tr>') + '</tbody></table></div>' +
       (props.rows.filter(function (r) { return r.expired; }).length ? '<div style="margin-top:10px;font-size:12.5px;color:#9c3327;">⚑ Flagged rows are past their expiration date and still open — re-date them or mark them no longer active.</div>' : '');
     box.querySelectorAll('th[data-sk]').forEach(function (th) {

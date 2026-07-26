@@ -20,6 +20,8 @@ import { registerAdventureRoutes } from './routes/adventure.js';
 import { registerSkuRoutes } from './routes/skus.js';
 import { registerApprovalRoutes } from './routes/approvals.js';
 import { registerOrderRoutes } from './routes/orders.js';
+import { registerReportRoutes } from './routes/reports.js';
+import { registerStandardNoteRoutes } from './routes/standardNotes.js';
 import { registerWebRoutes } from './routes/web.js';
 
 export function buildApp(): FastifyInstance {
@@ -58,6 +60,8 @@ export function buildApp(): FastifyInstance {
   registerSkuRoutes(app);
   registerApprovalRoutes(app);
   registerOrderRoutes(app);
+  registerReportRoutes(app);
+  registerStandardNoteRoutes(app);
   registerWebRoutes(app);
   return app;
 }
