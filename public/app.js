@@ -2705,6 +2705,62 @@
     loadFormulas();
   }
 
+  async function loadStandardNotes() {
+    var box = document.getElementById('snList'); if (!box) return;
+    try {
+      var r = await authed('/standard-notes');
+      if (!r.ok) { box.innerHTML = '<div class="err">Could not load standard notes (' + r.status + '). Run the 0019 migration if this persists.</div>'; return; }
+      var notes = await r.json();
+      var rows = (notes || []).map(function (n) {
+        return '<tr>' + td('<b style="font-weight:600;">' + esc(n.title) + '</b><div class="muted" style="font-size:12px;max-width:520px;line-height:1.45;">' + esc(String(n.body).slice(0, 160)) + (String(n.body).length > 160 ? '…' : '') + '</div>') +
+          td(n.placement === 'FOOTER' ? '<span class="chip">Below signatures</span>' : '<span class="chip">In line items</span>') +
+          td(n.autoInclude ? '<span style="display:inline-block;background:#eaf3ee;border:1px solid #cfe3d7;color:#2f7d5d;border-radius:999px;padding:3px 10px;font-size:12px;font-weight:600;">Always</span>' : '<span class="muted">On request</span>') +
+          td(n.active ? '<span class="chip">Active</span>' : '<span class="muted">Hidden</span>') +
+          td('<div style="display:flex;gap:6px;justify-content:flex-end;"><button class="link-btn snEdit" data-id="' + n.id + '" style="width:auto;padding:6px 11px;">Edit</button>' +
+            '<button class="link-btn snDel" data-id="' + n.id + '" style="width:auto;padding:6px 11px;color:#9c3327;">Delete</button></div>') + '</tr>';
+      }).join('');
+      box.innerHTML = tableShell(['Note', 'Prints', 'Include', 'Status', ''], rows, 5, 'No standard notes yet.');
+      box.querySelectorAll('.snEdit').forEach(function (b) {
+        b.addEventListener('click', function () { openStandardNoteForm((notes || []).filter(function (n) { return n.id === b.getAttribute('data-id'); })[0]); });
+      });
+      box.querySelectorAll('.snDel').forEach(function (b) {
+        b.addEventListener('click', async function () {
+          if (!confirm('Delete this standard note?')) return;
+          var rr = await authed('/standard-notes/' + b.getAttribute('data-id'), { method: 'DELETE' });
+          if (!rr.ok && rr.status !== 204) { alert('Could not delete (' + rr.status + ').'); return; }
+          loadStandardNotes();
+        });
+      });
+    } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
+  }
+  function openStandardNoteForm(note) {
+    var n = note || { title: '', body: '', placement: 'TABLE', autoInclude: false, sortOrder: 0, active: true };
+    openModal(note ? 'Edit standard note' : 'New standard note',
+      fieldRow('Title', '<input id="snTitle" style="' + IN + '" value="' + esc(n.title) + '">') +
+      '<div class="field"><label>Note text</label><textarea id="snBody" rows="6" style="' + IN + 'resize:vertical;">' + esc(n.body) + '</textarea>' +
+        '<div class="muted" style="font-size:11.5px;margin-top:3px;">**bold** · *italic* · line breaks are kept</div></div>' +
+      fieldRow('Where it prints', '<select id="snPlace" style="' + IN + '"><option value="TABLE"' + (n.placement === 'TABLE' ? ' selected' : '') + '>Inside the line items</option><option value="FOOTER"' + (n.placement === 'FOOTER' ? ' selected' : '') + '>Below the signature lines</option></select>') +
+      fieldRow('Order', '<input id="snOrder" type="number" style="' + IN + '" value="' + (Number(n.sortOrder) || 0) + '">') +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:14px;margin:4px 0;cursor:pointer;"><input type="checkbox" id="snAuto"' + (n.autoInclude ? ' checked' : '') + '> Always include on new proposals</label>' +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;"><input type="checkbox" id="snActive"' + (n.active !== false ? ' checked' : '') + '> Available in the builder</label>',
+      async function (close, showErr) {
+        var body = {
+          title: document.getElementById('snTitle').value.trim(),
+          body: document.getElementById('snBody').value.trim(),
+          placement: document.getElementById('snPlace').value,
+          sortOrder: Number(document.getElementById('snOrder').value) || 0,
+          autoInclude: document.getElementById('snAuto').checked,
+          active: document.getElementById('snActive').checked,
+        };
+        if (!body.title || !body.body) return showErr('Title and note text are both required.');
+        var r = note
+          ? await authed('/standard-notes/' + note.id, { method: 'PATCH', body: body })
+          : await authed('/standard-notes', { method: 'POST', body: body });
+        if (!r.ok) return showErr('Could not save (' + r.status + ').');
+        close(); loadStandardNotes();
+      }, note ? 'Save changes' : 'Create note');
+  }
+
   /* --- Formulas: every editable calculation in the engine --- */
   var fx = { data: null, tab: 'frame' };
   var FX_TABS = [
