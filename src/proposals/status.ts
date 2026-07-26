@@ -6,8 +6,10 @@ import type { ProposalStatus } from '@prisma/client';
  * are recorded but the content stays frozen. Editing requires a NEW version.
  */
 const TRANSITIONS: Record<ProposalStatus, ProposalStatus[]> = {
-  DRAFT: ['INTERNAL_REVIEW', 'RELEASED'],
-  INTERNAL_REVIEW: ['DRAFT', 'RELEASED'],
+  // EXPIRED doubles as "no longer active": a draft or in-review proposal can be
+  // retired straight from the proposal list without being released first.
+  DRAFT: ['INTERNAL_REVIEW', 'RELEASED', 'EXPIRED'],
+  INTERNAL_REVIEW: ['DRAFT', 'RELEASED', 'EXPIRED'],
   RELEASED: ['ACCEPTED', 'REJECTED', 'EXPIRED'],
   ACCEPTED: [],
   REJECTED: [],

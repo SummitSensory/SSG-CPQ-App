@@ -17,6 +17,13 @@
   function tc(s) { return String(s || '').replace(/\b([a-z])/g, function (m0, c) { return c.toUpperCase(); }); }
   // Section headings carry the "(Optional)" tag from the optional flag, never from the name itself.
   function stripOptional(s) { return String(s || '').replace(/\s*[—-]?\s*\(\s*optional\s*\)\s*$/i, '').replace(/\s*[—-]\s*optional\s*(?=\))/i, '').trim(); }
+  // Notes accept lightweight formatting: **bold**, *italic*, and real line breaks.
+  function rt(s) {
+    var out = esc(s == null ? '' : s)
+      .replace(/\*\*([^*]+)\*\*/g, '<b style="font-weight:700;color:#20241f;">$1</b>')
+      .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<i>$2</i>');
+    return out.replace(/\n/g, '<br>');
+  }
   function fmtDate(s) { if (!s) return '—'; var d = new Date(s); return isNaN(d) ? '—' : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }); }
   function fmtMoney(minor, cur) { if (minor == null) return '—'; var n = Number(minor) / 100; return (cur ? cur + ' ' : '$') + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
@@ -92,6 +99,7 @@
     { id: 'crm', label: 'CRM', ready: true, roles: '*' },
     { id: 'catalog', label: 'Catalog', ready: true, roles: '*' },
     { id: 'proposals', label: 'Proposals', ready: true, roles: '*' },
+    { id: 'reports', label: 'Reports', ready: true, roles: '*' },
     { id: 'orders', label: 'Orders & Handoff', ready: true, roles: '*' },
     { id: 'admin', label: 'Administration', ready: true, roles: ['SYSTEM_ADMIN'] },
     { id: 'integrations', label: 'Integrations', ready: true, roles: ['SYSTEM_ADMIN', 'EXECUTIVE', 'ACCOUNTING'] },
@@ -127,7 +135,7 @@
             '<button class="link-btn" id="profBtn" style="margin-bottom:6px;">My profile</button>' +
             '<button class="link-btn" id="pwdBtn" style="margin-bottom:6px;">Change password</button>' +
             '<button class="link-btn" id="logoutBtn">Sign out</button>' +
-            '<div style="text-align:center;font-size:10px;color:#b3b7ac;margin-top:8px;letter-spacing:.04em;">build 2 · proposal builder</div></div>' +
+            '<div style="text-align:center;font-size:10px;color:#b3b7ac;margin-top:8px;letter-spacing:.04em;">build 17 · proposal reporting</div></div>' +
         '</aside>' +
         '<main class="main"><div class="topbar"><div class="eyebrow">Summit Sensory Gym Proposal Management Software</div><h2 id="viewTitle">Dashboard</h2></div>' +
           '<div class="content" id="view"></div></main>' +
@@ -143,6 +151,7 @@
       else if (id === 'crm') renderCrm(user);
       else if (id === 'catalog') renderCatalog(user);
       else if (id === 'proposals') renderProposals(user);
+      else if (id === 'reports') renderReports(user);
       else if (id === 'orders') renderOrders(user);
       else if (id === 'admin') renderAdmin(user);
       else if (id === 'integrations') renderIntegrations(user);
@@ -154,19 +163,99 @@
     renderDashboard(user);
   }
 
+  /** Jump to a view from anywhere (keeps the sidebar selection in sync). */
+  function activateNav(id) {
+    var item = NAV.filter(function (n) { return n.id === id; })[0]; if (!item) return;
+    Array.prototype.forEach.call(document.querySelectorAll('.nav-item'), function (b) {
+      b.classList.toggle('active', b.getAttribute('data-view') === id);
+    });
+    var t = document.getElementById('viewTitle'); if (t) t.textContent = item.label;
+  }
+
   async function renderDashboard(user) {
+    var canWrite = hasRole(PROP_WRITE, user.role);
     document.getElementById('view').innerHTML =
-      '<div class="grid">' +
-        '<div class="card"><div class="k">Signed in as</div><div class="v small">' + esc(user.name || user.email) + '</div><div class="muted" style="font-size:12.5px;margin-top:4px;">' + esc(user.email) + '</div></div>' +
-        '<div class="card"><div class="k">Your role</div><div class="v small"><span class="chip">' + esc(roleLabel(user.role)) + '</span></div></div>' +
-        '<div class="card"><div class="k">API status</div><div class="v small" id="apiStatus"><span class="dot wait"></span>Checking…</div></div>' +
-        '<div class="card"><div class="k">Workspace</div><div class="v small">Summit Sensory Gym Proposal Management Software</div><div class="muted" style="font-size:12.5px;margin-top:4px;">Milestones 1–12 live</div></div>' +
+      '<div id="dashKpis" class="grid"><div class="card"><div class="k">Loading…</div></div></div>' +
+      '<div class="section-title">Needs your attention</div>' +
+      '<div id="dashAttention"><div class="muted" style="padding:18px;">Loading…</div></div>' +
+      '<div class="section-title">Recently updated proposals</div>' +
+      '<div id="dashRecent"><div class="muted" style="padding:18px;">Loading…</div></div>' +
+      '<div class="section-title">Quick actions</div>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px;">' +
+        (canWrite ? '<button class="btn" id="dqNew" style="width:auto;padding:10px 16px;">New proposal</button>' : '') +
+        (canCrmWrite(user.role) ? '<button class="link-btn" id="dqMonday" style="width:auto;padding:10px 15px;">Import a customer from monday</button>' : '') +
+        '<button class="link-btn" id="dqReports" style="width:auto;padding:10px 15px;">Open reports</button>' +
+        '<button class="link-btn" id="dqCatalog" style="width:auto;padding:10px 15px;">Catalog &amp; pricing</button>' +
       '</div>' +
-      '<div class="section-title">Get started</div>' +
-      '<div class="placeholder"><h3>Your modules are being connected</h3>' +
-        '<p>All modules are live — CRM, Catalog, Proposals, and Orders &amp; Handoff. Use the sidebar to navigate.</p></div>';
+      '<div class="grid">' +
+        '<div class="card"><div class="k">Signed in as</div><div class="v small">' + esc(user.name || user.email) + '</div><div class="muted" style="font-size:12.5px;margin-top:4px;">' + esc(user.email) + ' · ' + esc(roleLabel(user.role)) + '</div></div>' +
+        '<div class="card"><div class="k">API status</div><div class="v small" id="apiStatus"><span class="dot wait"></span>Checking…</div></div>' +
+        '<div class="card"><div class="k">Workspace</div><div class="v small">Summit Sensory Gym</div><div class="muted" style="font-size:12.5px;margin-top:4px;" id="dashScale">Proposal Management Software</div></div>' +
+      '</div>';
+    var nb = document.getElementById('dqNew'); if (nb) nb.addEventListener('click', function () { openProposalForm(user); });
+    var mb = document.getElementById('dqMonday'); if (mb) mb.addEventListener('click', function () { openMondayLookup(user); });
+    document.getElementById('dqReports').addEventListener('click', function () { activateNav('reports'); renderReports(user); });
+    document.getElementById('dqCatalog').addEventListener('click', function () { activateNav('catalog'); renderCatalog(user); });
     try { var r = await fetch('/health'); var el = document.getElementById('apiStatus'); if (el) el.innerHTML = r.ok ? '<span class="dot ok"></span>Online' : '<span class="dot bad"></span>Error ' + r.status; }
     catch (e) { var el2 = document.getElementById('apiStatus'); if (el2) el2.innerHTML = '<span class="dot bad"></span>Offline'; }
+    loadDashboard(user);
+  }
+
+  async function loadDashboard(user) {
+    var data = null, orgTotal = null;
+    try {
+      var rr = await authed('/reports/proposals');
+      if (rr.ok) data = await rr.json();
+    } catch (e) {}
+    try { var ro = await authed('/crm/organizations?pageSize=1'); if (ro.ok) orgTotal = (await ro.json()).total; } catch (e2) {}
+    var kpis = document.getElementById('dashKpis'); if (!kpis) return;
+    if (!data) { kpis.innerHTML = '<div class="card"><div class="k">Proposals</div><div class="v small">Unavailable</div><div class="muted" style="font-size:12.5px;margin-top:4px;">Could not load reporting data.</div></div>'; return; }
+    var s = data.summary;
+    var released = (data.pipeline.filter(function (p) { return p.status === 'RELEASED'; })[0] || { count: 0, value: 0 });
+    var review = (data.pipeline.filter(function (p) { return p.status === 'INTERNAL_REVIEW'; })[0] || { count: 0, value: 0 });
+    var stale = data.rows.filter(function (r) { return r.status === 'DRAFT' && r.daysOpen >= 14; });
+    var attn = data.expiredOpen.length + data.expiringSoon.length + review.count + stale.length;
+    kpis.innerHTML =
+      kpi('Open proposals', s.open.toLocaleString(), fmt0(s.openValue) + ' in flight · avg ' + s.avgDaysOpen + ' days old', '#3d4a55') +
+      kpi('Out with customers', released.count.toLocaleString(), fmt0(released.value) + ' awaiting a decision') +
+      kpi('Accepted to date', fmt0(s.wonValue), s.won + ' proposals · ' + s.conversionRate + '% conversion', '#2f7d5d') +
+      kpi('Needs attention', attn.toLocaleString(), attn ? 'expiring, stalled or awaiting review' : 'nothing waiting on you', attn ? '#9c3327' : '#2f7d5d');
+    var scale = document.getElementById('dashScale');
+    if (scale) scale.textContent = s.total.toLocaleString() + ' proposals · ' + (orgTotal == null ? data.byCustomer.length : orgTotal) + ' customers · ' + data.products.length.toLocaleString() + ' products proposed';
+
+    function attnGroup(label, rows, color, note) {
+      if (!rows.length) return '';
+      return '<div style="margin-bottom:10px;"><div style="display:flex;align-items:baseline;gap:8px;margin-bottom:5px;">' +
+          '<span style="font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:' + color + ';">' + esc(label) + ' · ' + rows.length + '</span>' +
+          (note ? '<span class="muted" style="font-size:11.5px;">' + esc(note) + '</span>' : '') + '</div>' +
+        '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:12px;overflow:hidden;">' +
+        rows.slice(0, 6).map(function (r, i) {
+          return '<div class="dashRow" data-id="' + r.id + '" style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 14px;cursor:pointer;' + (i ? 'border-top:1px solid #f2f3ef;' : '') + '">' +
+            '<div style="min-width:0;"><b style="font-weight:600;font-size:13.5px;">' + esc(r.customer) + '</b>' +
+              '<div class="muted" style="font-size:12px;">' + esc(r.title) + ' · ' + esc(r.number) + '</div></div>' +
+            '<div style="text-align:right;white-space:nowrap;font-size:12.5px;">' + fmt0(r.total) +
+              '<div class="muted" style="font-size:11.5px;">' + (r.expiration ? 'expires ' + fmtDate(r.expiration) : r.daysOpen + ' days old') + '</div></div></div>';
+        }).join('') + '</div></div>';
+    }
+    var box = document.getElementById('dashAttention');
+    var html = attnGroup('Past expiration', data.expiredOpen, '#9c3327', 're-date or mark inactive') +
+      attnGroup('Expiring within 14 days', data.expiringSoon, '#8a6d1f', 'follow up') +
+      attnGroup('Awaiting internal review', data.rows.filter(function (r) { return r.status === 'INTERNAL_REVIEW'; }), '#3d4a55', '') +
+      attnGroup('Drafts untouched 14+ days', stale, '#5c6157', 'stalled');
+    box.innerHTML = html || '<div class="placeholder" style="padding:22px;"><p class="muted" style="margin:0;">Nothing needs attention — no expiring, stalled or unreviewed proposals.</p></div>';
+
+    var recent = document.getElementById('dashRecent');
+    recent.innerHTML = repTable([['Customer'], ['Proposal'], ['Status'], ['Value', 'right'], ['Last modified']],
+      data.rows.slice(0, 6).map(function (r) {
+        return '<tr class="dashRow" data-id="' + r.id + '" style="cursor:pointer;">' +
+          rtd('<b style="font-weight:600;">' + esc(r.customer) + '</b>', 'left') +
+          rtd(esc(r.title) + '<div class="muted" style="font-size:11.5px;">' + esc(r.number) + '</div>') +
+          rtd(statusChip(r.status) + (r.expired ? ' <span style="color:#9c3327;">⚑</span>' : '')) +
+          rtd(fmt0(r.total), 'right', 1) + rtd(fmtDate(r.updatedAt)) + '</tr>';
+      }).join(''), 'No proposals yet.');
+    document.querySelectorAll('.dashRow').forEach(function (el) {
+      el.addEventListener('click', function () { activateNav('proposals'); openProposalDetail(el.getAttribute('data-id'), user); });
+    });
   }
 
   function renderSoon(label) {
@@ -426,10 +515,11 @@
       if (!r.ok) { box.innerHTML = '<div class="err">Could not load (' + r.status + ').</div>'; return; }
       var d = await r.json();
       itemState.categories = (d.categories || []).map(function (c) { return c.name; });
-      var CELL = 'width:100%;padding:5px 7px;border:1px solid #dcded7;border-radius:6px;font-size:13px;background:#fff;';
+      var CELL = 'width:100%;padding:6px 8px;border:1px solid #dcded7;border-radius:6px;font-size:13px;background:#fff;';
       var NUM = CELL + 'text-align:right;';
       function txt(part, field, value, style) {
-        return '<input class="itEdit" data-part="' + esc(part) + '" data-f="' + field + '" value="' + esc(value == null ? '' : value) + '" style="' + (style || CELL) + '">';
+        var v = value == null ? '' : String(value);
+        return '<input class="itEdit" data-part="' + esc(part) + '" data-f="' + field + '" value="' + esc(v) + '" title="' + esc(v) + '" style="' + (style || CELL) + '">';
       }
       function sel(part, field, value, options) {
         return '<select class="itEdit" data-part="' + esc(part) + '" data-f="' + field + '" style="' + CELL + '">' +
@@ -440,19 +530,28 @@
       var rows = (d.items || []).map(function (k) {
         var margin = k.unitPriceMinor ? Math.round(((k.unitPriceMinor - k.unitCostMinor) / k.unitPriceMinor) * 1000) / 10 : 0;
         var where = (k.productId ? '<span class="chip" style="font-size:10px;">Product</span>' : '') + (k.skuId ? ' <span class="chip" style="font-size:10px;background:#fdfcf7;">Priced</span>' : '');
+        function cell(v, extra) { return '<td style="padding:7px 10px;border-bottom:1px solid #f2f3ef;vertical-align:middle;' + (extra || '') + '">' + v + '</td>'; }
         return '<tr>' +
-          td('<code style="font-size:12.5px;color:#4a4f47;">' + esc(k.part) + '</code>') +
-          td(admin ? txt(k.part, 'name', k.name) : '<span style="font-size:13px;">' + esc(k.name) + '</span>') +
-          td(admin ? (k.categoryOptions && itemState.categories.length ? sel(k.part, 'category', k.category, itemState.categories) : txt(k.part, 'category', k.category)) : esc(k.category)) +
-          td(admin ? txt(k.part, 'manufacturer', k.manufacturer) : esc(k.manufacturer)) +
-          td(admin ? txt(k.part, 'unitCostMinor', (Number(k.unitCostMinor) / 100).toFixed(2), NUM + 'background:#fdfcf7;border-color:#e4dfd0;') : '$' + (Number(k.unitCostMinor) / 100).toFixed(2)) +
-          td(admin ? txt(k.part, 'unitPriceMinor', (Number(k.unitPriceMinor) / 100).toFixed(2), NUM) : '$' + (Number(k.unitPriceMinor) / 100).toFixed(2)) +
-          td('<span style="font-size:13px;font-weight:600;color:' + (margin >= 0 ? '#2f7d5d' : '#9c3327') + ';">' + margin + '%</span>') +
-          td(admin ? txt(k.part, 'weightLbs', k.weightLbs, NUM) : String(k.weightLbs)) +
-          td(where) + '</tr>';
+          cell('<code style="font-size:12.5px;color:#4a4f47;white-space:nowrap;">' + esc(k.part) + '</code>') +
+          cell(admin ? txt(k.part, 'name', k.name) : '<span style="font-size:13px;" title="' + esc(k.name) + '">' + esc(k.name) + '</span>') +
+          cell(admin ? (k.categoryOptions && itemState.categories.length ? sel(k.part, 'category', k.category, itemState.categories) : txt(k.part, 'category', k.category)) : '<span title="' + esc(k.category) + '">' + esc(k.category) + '</span>') +
+          cell(admin ? txt(k.part, 'manufacturer', k.manufacturer) : '<span title="' + esc(k.manufacturer) + '">' + esc(k.manufacturer) + '</span>') +
+          cell(admin ? txt(k.part, 'unitCostMinor', (Number(k.unitCostMinor) / 100).toFixed(2), NUM + 'background:#fdfcf7;border-color:#e4dfd0;') : '$' + (Number(k.unitCostMinor) / 100).toFixed(2), 'text-align:right;') +
+          cell(admin ? txt(k.part, 'unitPriceMinor', (Number(k.unitPriceMinor) / 100).toFixed(2), NUM) : '$' + (Number(k.unitPriceMinor) / 100).toFixed(2), 'text-align:right;') +
+          cell('<span style="font-size:13px;font-weight:600;color:' + (margin >= 0 ? '#2f7d5d' : '#9c3327') + ';">' + margin + '%</span>', 'text-align:right;') +
+          cell(admin ? txt(k.part, 'weightLbs', k.weightLbs, NUM) : String(k.weightLbs), 'text-align:right;') +
+          cell(where, 'white-space:nowrap;') + '</tr>';
       }).join('');
+      var heads = [['Part #', 128], ['Product name', 0], ['Category', 210], ['Manufacturer', 200], ['Unit cost', 108], ['Unit price', 108], ['Margin', 78], ['Weight (lb)', 96], ['Record', 116]];
       var totalPages = Math.max(1, Math.ceil((d.total || 0) / (d.pageSize || 100)));
-      box.innerHTML = tableShell(['Part #', 'Product name', 'Category', 'Manufacturer', 'Unit cost', 'Unit price', 'Margin', 'Weight (lb)', 'Record'], rows, 9, 'Nothing in the catalog yet. Import a sheet or add a product.') +
+      box.innerHTML =
+        '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:14px;overflow-x:auto;">' +
+          '<table style="width:100%;min-width:1240px;border-collapse:collapse;font-size:14px;table-layout:fixed;">' +
+          '<colgroup>' + heads.map(function (h) { return '<col' + (h[1] ? ' style="width:' + h[1] + 'px;"' : '') + '>'; }).join('') + '</colgroup>' +
+          '<thead><tr>' + heads.map(function (h, i) {
+            return '<th style="text-align:' + (i >= 4 && i <= 7 ? 'right' : 'left') + ';padding:10px;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;font-weight:600;border-bottom:1px solid #e7e8e3;white-space:nowrap;">' + h[0] + '</th>';
+          }).join('') + '</tr></thead>' +
+          '<tbody>' + (rows || '<tr><td colspan="9" style="padding:28px;text-align:center;color:#8a8f85;">Nothing in the catalog yet. Import a sheet or add a product.</td></tr>') + '</tbody></table></div>' +
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;color:#82877d;font-size:13px;"><span>' + (d.total || 0) + ' items</span>' +
         '<span style="display:flex;gap:8px;align-items:center;"><button id="itPrev" ' + (itemState.page <= 1 ? 'disabled' : '') + ' class="link-btn" style="width:auto;padding:6px 12px;">Prev</button><span>Page ' + (d.page || 1) + ' of ' + totalPages + '</span><button id="itNext" ' + (itemState.page >= totalPages ? 'disabled' : '') + ' class="link-btn" style="width:auto;padding:6px 12px;">Next</button></span></div>';
       var pv = document.getElementById('itPrev'), nx = document.getElementById('itNext');
@@ -690,33 +789,183 @@
   function sectionBlock(title, inner) { return '<div class="section-title">' + esc(title) + '</div>' + inner; }
 
   /* --- Proposals --- */
+  var OPEN_STATUSES = ['DRAFT', 'INTERNAL_REVIEW', 'RELEASED'];
+  var props = { rows: [], sort: { key: 'modified', dir: 'desc' }, filter: 'all', q: '' };
+  var PROP_FILTERS = [
+    { id: 'all', label: 'All' },
+    { id: 'active', label: 'Active' },
+    { id: 'expired', label: 'Past expiration' },
+    { id: 'inactive', label: 'Inactive' },
+    { id: 'won', label: 'Accepted' },
+    { id: 'lost', label: 'Rejected' },
+  ];
+  function today0() { var d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); }
+  function dayDiff(v) { if (!v) return null; var d = new Date(v); if (isNaN(d)) return null; d.setHours(0, 0, 0, 0); return Math.round((d.getTime() - today0()) / 86400000); }
+  function metaOfVersion(v) { var secs = (v && v.sections) || []; var m = (Array.isArray(secs) ? secs : []).filter(function (s) { return s && s.id === 'meta'; })[0]; return (m && m.data) || {}; }
+
   async function renderProposals(user) {
     document.getElementById('view').innerHTML =
-      '<div style="display:flex;justify-content:flex-end;margin-bottom:16px;">' + (hasRole(PROP_WRITE, user.role) ? '<button class="btn" id="propNew" style="width:auto;padding:10px 17px;">New proposal</button>' : '') + '</div>' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;">' +
+        '<div id="propFilters" style="display:flex;gap:6px;flex-wrap:wrap;"></div>' +
+        '<div style="display:flex;gap:8px;align-items:center;">' +
+          '<input id="propSearch" placeholder="Search customer, title, number…" value="' + esc(props.q) + '" style="padding:9px 12px;border:1px solid #dcded7;border-radius:9px;font-size:13.5px;background:#fff;width:240px;">' +
+          (hasRole(PROP_WRITE, user.role) ? '<button class="btn" id="propNew" style="width:auto;padding:10px 17px;white-space:nowrap;">New proposal</button>' : '') +
+        '</div></div>' +
       '<div id="propList"><div class="muted" style="padding:24px;">Loading…</div></div>';
+    drawPropFilters(user);
     if (hasRole(PROP_WRITE, user.role)) document.getElementById('propNew').addEventListener('click', function () { openProposalForm(user); });
+    var s = document.getElementById('propSearch');
+    s.addEventListener('input', function () { props.q = s.value; drawProposals(user); });
     loadProposals(user);
+  }
+  function drawPropFilters(user) {
+    var box = document.getElementById('propFilters'); if (!box) return;
+    box.innerHTML = PROP_FILTERS.map(function (f) {
+      var on = props.filter === f.id;
+      var count = f.id === 'all' ? props.rows.length : props.rows.filter(function (r) { return matchFilter(r, f.id); }).length;
+      return '<button data-f="' + f.id + '" style="border:1px solid ' + (on ? '#3d4a55' : '#dcded7') + ';background:' + (on ? '#3d4a55' : '#fff') + ';color:' + (on ? '#fff' : '#3d4a55') + ';border-radius:999px;padding:7px 13px;font-size:12.5px;cursor:pointer;">' + esc(f.label) +
+        (props.rows.length ? ' <span style="opacity:.65;">' + count + '</span>' : '') + '</button>';
+    }).join('');
+    box.querySelectorAll('[data-f]').forEach(function (b) {
+      b.addEventListener('click', function () { props.filter = b.getAttribute('data-f'); drawPropFilters(user); drawProposals(user); });
+    });
+  }
+  function matchFilter(r, f) {
+    if (f === 'all') return true;
+    if (f === 'active') return OPEN_STATUSES.indexOf(r.status) !== -1 && !r.expired;
+    if (f === 'expired') return r.expired;
+    if (f === 'inactive') return r.status === 'EXPIRED';
+    if (f === 'won') return r.status === 'ACCEPTED';
+    if (f === 'lost') return r.status === 'REJECTED';
+    return true;
   }
   async function loadProposals(user) {
     var box = document.getElementById('propList'); if (!box) return;
     try {
       var r = await authed('/proposals'); if (!r.ok) { box.innerHTML = '<div class="err">Could not load (' + r.status + ').</div>'; return; }
       var list = await r.json();
-      // Organization names are not on the proposal record; resolve them once for the list.
-      var orgById = {};
-      try { var ro = await authed('/crm/organizations?pageSize=500'); if (ro.ok) ((await ro.json()).items || []).forEach(function (o) { orgById[o.id] = o.name; }); } catch (e2) {}
-      var rows = (list || []).map(function (p) {
+      props.rows = (list || []).map(function (p) {
         var v = (p.versions && p.versions[0]) || {};
-        var meta = ((v.sections || []).filter(function (s) { return s && s.id === 'meta'; })[0] || {}).data || {};
-        var org = orgById[p.organizationId] || '—';
-        return '<tr style="cursor:pointer;" data-id="' + p.id + '">' +
-          td('<b style="font-weight:600;">' + esc(org) + '</b>' + (meta.contactName ? '<div class="muted" style="font-size:12px;">' + esc(meta.contactName) + '</div>' : '')) +
-          td('<b style="font-weight:600;">' + esc(p.title) + '</b><div class="muted" style="font-size:12px;">' + esc(p.number || '') + '</div>') +
-          td('v' + (v.version || p.currentVersion || 1)) + td('<span class="chip">' + titleCase(v.status || 'DRAFT') + '</span>') + td(fmtDate(p.updatedAt)) + '</tr>';
-      }).join('');
-      box.innerHTML = tableShell(['Customer', 'Proposal', 'Version', 'Status', 'Updated'], rows, 5, 'No proposals yet.');
-      document.querySelectorAll('#propList tr[data-id]').forEach(function (tr) { tr.addEventListener('click', function () { openProposalDetail(tr.getAttribute('data-id'), user); }); });
+        var meta = metaOfVersion(v);
+        var exp = p.expirationDate || meta.expiration || '';
+        var st = v.status || 'DRAFT';
+        var dd = dayDiff(exp);
+        return {
+          id: p.id, vid: v.id, customer: p.organizationName || '—', contact: meta.contactName || '',
+          title: p.title || '', number: p.number || '', version: v.version || p.currentVersion || 1,
+          versionCount: p.versionCount || 1, status: st, preparedBy: p.preparedBy || '',
+          created: p.createdAt, modified: p.lastModifiedAt || p.updatedAt, expires: exp, expDays: dd,
+          expired: dd != null && dd < 0 && OPEN_STATUSES.indexOf(st) !== -1,
+        };
+      });
+      drawPropFilters(user);
+      drawProposals(user);
     } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
+  }
+  var PROP_COLS = [
+    { key: 'customer', label: 'Customer' },
+    { key: 'title', label: 'Proposal' },
+    { key: 'version', label: 'Ver', align: 'center' },
+    { key: 'status', label: 'Status' },
+    { key: 'created', label: 'Created' },
+    { key: 'modified', label: 'Last modified' },
+    { key: 'expires', label: 'Expires' },
+    { key: '', label: '' },
+  ];
+  function drawProposals(user) {
+    var box = document.getElementById('propList'); if (!box) return;
+    var q = props.q.trim().toLowerCase();
+    var rows = props.rows.filter(function (r) { return matchFilter(r, props.filter); })
+      .filter(function (r) { return !q || (r.customer + ' ' + r.contact + ' ' + r.title + ' ' + r.number + ' ' + r.preparedBy).toLowerCase().indexOf(q) !== -1; });
+    var sk = props.sort.key, dir = props.sort.dir === 'asc' ? 1 : -1;
+    rows.sort(function (a, b) {
+      var x = a[sk], y = b[sk];
+      if (sk === 'created' || sk === 'modified' || sk === 'expires') { x = x ? new Date(x).getTime() : 0; y = y ? new Date(y).getTime() : 0; }
+      if (typeof x === 'string' || typeof y === 'string') { x = String(x || '').toLowerCase(); y = String(y || '').toLowerCase(); }
+      return x < y ? -dir : x > y ? dir : 0;
+    });
+    var head = PROP_COLS.map(function (c) {
+      var on = c.key && props.sort.key === c.key;
+      var arrow = on ? (props.sort.dir === 'asc' ? ' ▲' : ' ▼') : (c.key ? ' <span style="opacity:.3;">↕</span>' : '');
+      return '<th' + (c.key ? ' data-sk="' + c.key + '" style="cursor:pointer;' : ' style="') +
+        'text-align:' + (c.align || 'left') + ';padding:11px 14px;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:' + (on ? '#3d4a55' : '#8a8f85') + ';font-weight:600;border-bottom:1px solid #e7e8e3;white-space:nowrap;">' + esc(c.label) + arrow + '</th>';
+    }).join('');
+    var body = rows.map(function (r) {
+      var expCell = r.expires
+        ? (r.expired
+          ? '<span style="display:inline-flex;align-items:center;gap:5px;background:#fbe9e6;border:1px solid #f0cdc7;color:#9c3327;border-radius:999px;padding:3px 9px;font-size:12px;font-weight:600;" title="Expired ' + Math.abs(r.expDays) + ' day(s) ago">⚑ ' + fmtDate(r.expires) + '</span>'
+          : (r.expDays != null && r.expDays <= 7 && OPEN_STATUSES.indexOf(r.status) !== -1
+            ? '<span style="display:inline-flex;align-items:center;gap:5px;background:#fdf6e3;border:1px solid #eadfbe;color:#8a6d1f;border-radius:999px;padding:3px 9px;font-size:12px;font-weight:600;" title="Expires in ' + r.expDays + ' day(s)">' + fmtDate(r.expires) + '</span>'
+            : fmtDate(r.expires)))
+        : '<span class="muted">—</span>';
+      var acts = quickActions(r, user);
+      var quick = acts.length
+        ? '<select class="pQuick" data-id="' + r.id + '" data-vid="' + r.vid + '" style="padding:6px 8px;border:1px solid #dcded7;border-radius:8px;font-size:12px;background:#fff;color:#3d4a55;max-width:170px;">' +
+          '<option value="">Quick status…</option>' + acts.map(function (a) { return '<option value="' + a[0] + '">' + esc(a[1]) + '</option>'; }).join('') + '</select>'
+        : '';
+      return '<tr style="cursor:pointer;" data-id="' + r.id + '">' +
+        td('<b style="font-weight:600;">' + esc(r.customer) + '</b>' + (r.contact ? '<div class="muted" style="font-size:12px;">' + esc(r.contact) + '</div>' : '')) +
+        td('<b style="font-weight:600;">' + esc(r.title) + '</b><div class="muted" style="font-size:12px;">' + esc(r.number) + (r.preparedBy ? ' · ' + esc(r.preparedBy) : '') + '</div>') +
+        '<td style="padding:12px 14px;border-bottom:1px solid #f2f3ef;text-align:center;">v' + r.version + (r.versionCount > 1 ? '<div class="muted" style="font-size:11px;">of ' + r.versionCount + '</div>' : '') + '</td>' +
+        td(statusChip(r.status)) + td(fmtDate(r.created)) + td(fmtDate(r.modified)) + td(expCell) +
+        '<td style="padding:8px 14px;border-bottom:1px solid #f2f3ef;text-align:right;">' + quick + '</td></tr>';
+    }).join('');
+    box.innerHTML = '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:14px;overflow:hidden;"><table style="width:100%;border-collapse:collapse;font-size:14px;"><thead><tr>' + head + '</tr></thead><tbody>' +
+      (body || '<tr><td style="padding:22px 16px;color:#909689;" colspan="8">' + (props.rows.length ? 'No proposals match this view.' : 'No proposals yet.') + '</td></tr>') + '</tbody></table></div>' +
+      (props.rows.filter(function (r) { return r.expired; }).length ? '<div style="margin-top:10px;font-size:12.5px;color:#9c3327;">⚑ Flagged rows are past their expiration date and still open — re-date them or mark them no longer active.</div>' : '');
+    box.querySelectorAll('th[data-sk]').forEach(function (th) {
+      th.addEventListener('click', function () {
+        var k = th.getAttribute('data-sk');
+        if (props.sort.key === k) props.sort.dir = props.sort.dir === 'asc' ? 'desc' : 'asc';
+        else { props.sort.key = k; props.sort.dir = (k === 'created' || k === 'modified' || k === 'expires') ? 'desc' : 'asc'; }
+        drawProposals(user);
+      });
+    });
+    box.querySelectorAll('tr[data-id]').forEach(function (tr) { tr.addEventListener('click', function () { openProposalDetail(tr.getAttribute('data-id'), user); }); });
+    box.querySelectorAll('.pQuick').forEach(function (sel) {
+      sel.addEventListener('click', function (e) { e.stopPropagation(); });
+      sel.addEventListener('change', async function (e) {
+        e.stopPropagation();
+        var act = sel.value; if (!act) return;
+        if (act === 'expire' && !confirm('Mark this proposal no longer active? It stays on record and can be revived as a new version.')) { sel.value = ''; return; }
+        var id = sel.getAttribute('data-id'), vid = sel.getAttribute('data-vid');
+        sel.disabled = true;
+        var path = act === 'new-version' ? '/proposals/' + id + '/versions' : '/proposals/versions/' + vid + '/' + act;
+        var rr = await authed(path, { method: 'POST', body: {} });
+        if (!rr.ok) { alert('Could not update (' + rr.status + ').'); sel.disabled = false; sel.value = ''; return; }
+        loadProposals(user);
+      });
+    });
+  }
+  function statusChip(s) {
+    var map = {
+      DRAFT: ['#f2f3ef', '#e2e5dd', '#5c6157'],
+      INTERNAL_REVIEW: ['#eef2f6', '#d8e2ea', '#3d4a55'],
+      RELEASED: ['#eaf3ee', '#cfe3d7', '#2f7d5d'],
+      ACCEPTED: ['#2f7d5d', '#2f7d5d', '#fff'],
+      REJECTED: ['#fbe9e6', '#f0cdc7', '#9c3327'],
+      EXPIRED: ['#f2f3ef', '#dcded7', '#8a8f85'],
+    };
+    var c = map[s] || map.DRAFT;
+    return '<span style="display:inline-block;background:' + c[0] + ';border:1px solid ' + c[1] + ';color:' + c[2] + ';border-radius:999px;padding:3px 10px;font-size:12px;font-weight:600;white-space:nowrap;">' + esc(titleCase(s === 'EXPIRED' ? 'NO_LONGER_ACTIVE' : s)) + '</span>';
+  }
+  /** Status changes reachable straight from the list, permission-gated. */
+  function quickActions(r, user) {
+    var a = [], w = hasRole(PROP_WRITE, user.role), rev = hasRole(PROP_REVIEW, user.role), rel = hasRole(PROP_RELEASE, user.role);
+    if (r.status === 'DRAFT') {
+      if (w) a.push(['submit-review', 'Submit for review']);
+      if (rel) a.push(['release', 'Release']);
+      if (w) a.push(['expire', 'Mark no longer active']);
+    } else if (r.status === 'INTERNAL_REVIEW') {
+      if (rev) a.push(['return-draft', 'Return to draft']);
+      if (rel) a.push(['release', 'Release']);
+      if (w) a.push(['expire', 'Mark no longer active']);
+    } else if (r.status === 'RELEASED') {
+      if (rev) { a.push(['accept', 'Mark accepted']); a.push(['reject', 'Mark rejected']); a.push(['expire', 'Mark no longer active']); }
+    } else if (w) {
+      a.push(['new-version', 'Create new version']);
+    }
+    return a;
   }
   async function openProposalDetail(id, user) {
     var view = document.getElementById('view'); view.innerHTML = '<div class="muted" style="padding:24px;">Loading…</div>';
@@ -768,6 +1017,307 @@
         close(); renderProposals(user);
       });
   }
+  /* --- Reports: company-wide proposal analytics --- */
+  var rep = { data: null, tab: 'overview', range: '365', from: '', to: '', pq: '', psort: 'proposedValue' };
+  var REP_TABS = [
+    { id: 'overview', label: 'Overview' },
+    { id: 'conversion', label: 'Conversion' },
+    { id: 'aging', label: 'Aging' },
+    { id: 'pipeline', label: 'Pipeline' },
+    { id: 'winloss', label: 'Win / loss' },
+    { id: 'products', label: 'Product demand' },
+    { id: 'team', label: 'Team' },
+    { id: 'detail', label: 'All proposals' },
+  ];
+  var REP_RANGES = [['30', 'Last 30 days'], ['90', 'Last 90 days'], ['180', 'Last 6 months'], ['365', 'Last 12 months'], ['ytd', 'Year to date'], ['all', 'All time'], ['custom', 'Custom…']];
+  function fmt0(minor) { return '$' + Math.round((Number(minor) || 0) / 100).toLocaleString(); }
+  function repRangeParams() {
+    var t = new Date(), from = null;
+    if (rep.range === 'custom') return { from: rep.from || '', to: rep.to || '' };
+    if (rep.range === 'all') return { from: '', to: '' };
+    if (rep.range === 'ytd') from = new Date(t.getFullYear(), 0, 1);
+    else { from = new Date(t.getTime() - Number(rep.range) * 86400000); }
+    return { from: from.toISOString().slice(0, 10), to: '' };
+  }
+  async function renderReports(user) {
+    document.getElementById('view').innerHTML =
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;">' +
+        '<div id="repTabs" style="display:flex;gap:6px;flex-wrap:wrap;"></div>' +
+        '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
+          '<select id="repRange" style="padding:9px 12px;border:1px solid #dcded7;border-radius:9px;font-size:13px;background:#fff;">' +
+            REP_RANGES.map(function (r) { return '<option value="' + r[0] + '"' + (rep.range === r[0] ? ' selected' : '') + '>' + r[1] + '</option>'; }).join('') + '</select>' +
+          '<span id="repCustom" style="display:' + (rep.range === 'custom' ? 'flex' : 'none') + ';gap:6px;align-items:center;">' +
+            '<input id="repFrom" type="date" value="' + esc(rep.from) + '" style="padding:8px 10px;border:1px solid #dcded7;border-radius:9px;font-size:13px;">' +
+            '<span class="muted" style="font-size:12px;">to</span>' +
+            '<input id="repTo" type="date" value="' + esc(rep.to) + '" style="padding:8px 10px;border:1px solid #dcded7;border-radius:9px;font-size:13px;"></span>' +
+          '<button class="link-btn" id="repCsv" style="width:auto;padding:9px 14px;white-space:nowrap;">Export CSV</button>' +
+        '</div></div>' +
+      '<div id="repBody"><div class="muted" style="padding:24px;">Loading reports…</div></div>';
+    drawRepTabs(user);
+    var sel = document.getElementById('repRange');
+    sel.addEventListener('change', function () {
+      rep.range = sel.value;
+      document.getElementById('repCustom').style.display = rep.range === 'custom' ? 'flex' : 'none';
+      if (rep.range !== 'custom') loadReports();
+    });
+    ['repFrom', 'repTo'].forEach(function (id) {
+      document.getElementById(id).addEventListener('change', function () {
+        rep.from = document.getElementById('repFrom').value; rep.to = document.getElementById('repTo').value; loadReports();
+      });
+    });
+    document.getElementById('repCsv').addEventListener('click', exportReportCsv);
+    loadReports();
+  }
+  function drawRepTabs(user) {
+    var box = document.getElementById('repTabs'); if (!box) return;
+    box.innerHTML = REP_TABS.map(function (t) {
+      var on = rep.tab === t.id;
+      return '<button data-t="' + t.id + '" style="border:1px solid ' + (on ? '#3d4a55' : '#dcded7') + ';background:' + (on ? '#3d4a55' : '#fff') + ';color:' + (on ? '#fff' : '#3d4a55') + ';border-radius:999px;padding:7px 13px;font-size:12.5px;cursor:pointer;">' + esc(t.label) + '</button>';
+    }).join('');
+    box.querySelectorAll('[data-t]').forEach(function (b) {
+      b.addEventListener('click', function () { rep.tab = b.getAttribute('data-t'); drawRepTabs(user); drawReports(); });
+    });
+  }
+  async function loadReports() {
+    var box = document.getElementById('repBody'); if (!box) return;
+    box.innerHTML = '<div class="muted" style="padding:24px;">Loading reports…</div>';
+    var p = repRangeParams();
+    var qs = [];
+    if (p.from) qs.push('from=' + encodeURIComponent(p.from));
+    if (p.to) qs.push('to=' + encodeURIComponent(p.to));
+    try {
+      var r = await authed('/reports/proposals' + (qs.length ? '?' + qs.join('&') : ''));
+      if (!r.ok) { box.innerHTML = '<div class="err">Could not load reports (' + r.status + ').</div>'; return; }
+      rep.data = await r.json();
+      drawReports();
+    } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
+  }
+  function kpi(label, value, sub, color) {
+    return '<div class="card"><div class="k">' + esc(label) + '</div>' +
+      '<div style="font-family:\'Newsreader\',serif;font-size:26px;font-weight:600;margin-top:2px;color:' + (color || '#20241f') + ';">' + value + '</div>' +
+      (sub ? '<div class="muted" style="font-size:12px;margin-top:3px;">' + sub + '</div>' : '') + '</div>';
+  }
+  function bar(fraction, color, height) {
+    var w = Math.max(0, Math.min(1, fraction || 0)) * 100;
+    return '<div style="background:#eef0ea;border-radius:999px;height:' + (height || 8) + 'px;overflow:hidden;"><div style="width:' + w.toFixed(1) + '%;height:100%;background:' + (color || '#3d4a55') + ';border-radius:999px;"></div></div>';
+  }
+  function repTable(head, rows, empty) {
+    return '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:14px;overflow:auto;"><table style="width:100%;border-collapse:collapse;font-size:13.5px;"><thead><tr>' +
+      head.map(function (h) { return '<th style="text-align:' + (h[1] || 'left') + ';padding:10px 14px;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;font-weight:600;border-bottom:1px solid #e7e8e3;white-space:nowrap;">' + esc(h[0]) + '</th>'; }).join('') +
+      '</tr></thead><tbody>' + (rows || '<tr><td colspan="' + head.length + '" style="padding:20px 14px;color:#909689;">' + esc(empty || 'No data in this period.') + '</td></tr>') + '</tbody></table></div>';
+  }
+  function rtd(v, align, weight) { return '<td style="padding:10px 14px;border-bottom:1px solid #f2f3ef;text-align:' + (align || 'left') + ';' + (weight ? 'font-weight:600;' : '') + 'white-space:nowrap;">' + v + '</td>'; }
+  function drawReports() {
+    var box = document.getElementById('repBody'); if (!box || !rep.data) return;
+    var d = rep.data, s = d.summary;
+    if (!s.total) { box.innerHTML = '<div class="placeholder"><h3>No proposals in this period</h3><p>Widen the date range to see reporting across the company.</p></div>'; return; }
+    if (rep.tab === 'overview') {
+      var pipeMax = Math.max.apply(null, d.pipeline.map(function (p) { return p.value; }).concat([1]));
+      box.innerHTML =
+        '<div class="grid">' +
+          kpi('Proposals', s.total.toLocaleString(), fmt0(s.totalValue) + ' total value') +
+          kpi('Conversion rate', s.conversionRate + '%', s.won + ' of ' + s.sent + ' sent accepted', '#2f7d5d') +
+          kpi('Win rate', s.winRate + '%', 'vs ' + s.lost + ' rejected', s.winRate >= 50 ? '#2f7d5d' : '#9c3327') +
+          kpi('Open pipeline', fmt0(s.openValue), s.open + ' open · avg ' + s.avgDaysOpen + ' days old', '#3d4a55') +
+        '</div>' +
+        '<div class="grid" style="margin-top:12px;">' +
+          kpi('Accepted value', fmt0(s.wonValue), s.won + ' proposals', '#2f7d5d') +
+          kpi('Avg proposal', fmt0(s.avgValue), 'across all proposals') +
+          kpi('Avg days to decision', s.avgDaysToDecision, 'release → accepted / rejected') +
+          kpi('Avg margin', s.avgMarginPct + '%', 'accepted: ' + s.wonMarginPct + '%') +
+        '</div>' +
+        (s.expiredFlagged ? '<div style="margin-top:14px;background:#fbe9e6;border:1px solid #f0cdc7;color:#9c3327;border-radius:12px;padding:12px 14px;font-size:13px;">⚑ ' + s.expiredFlagged + ' open proposal(s) are past their expiration date. See the Aging tab.</div>' : '') +
+        '<div class="section-title">Pipeline by stage</div>' +
+        d.pipeline.map(function (p) {
+          return '<div style="margin-bottom:10px;"><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;"><span>' + esc(p.label) + ' <span class="muted">· ' + p.count + '</span></span><span style="font-weight:600;">' + fmt0(p.value) + '</span></div>' +
+            bar(p.value / pipeMax, p.status === 'ACCEPTED' ? '#2f7d5d' : p.status === 'REJECTED' ? '#9c3327' : p.status === 'EXPIRED' ? '#b3b7ac' : '#3d4a55') + '</div>';
+        }).join('') +
+        '<div class="section-title">Most-proposed products</div>' +
+        repTable([['Product'], ['SKU'], ['Proposals', 'center'], ['Qty', 'center'], ['Proposed value', 'right'], ['Won value', 'right']],
+          d.products.slice(0, 10).map(function (p) {
+            return '<tr>' + rtd(esc(p.name), 'left', 1) + rtd('<span style="font-family:ui-monospace,monospace;font-size:11.5px;color:#5c6157;">' + esc(p.sku) + '</span>') +
+              rtd(p.proposals, 'center') + rtd(p.qty, 'center') + rtd(fmt0(p.proposedValue), 'right') + rtd(fmt0(p.wonValue), 'right') + '</tr>';
+          }).join(''));
+      return;
+    }
+    if (rep.tab === 'conversion') {
+      var stages = [
+        ['All proposals created', s.total, s.totalValue, '#3d4a55'],
+        ['Sent to customer', s.sent, s.sentValue, '#3d4a55'],
+        ['Accepted', s.won, s.wonValue, '#2f7d5d'],
+      ];
+      box.innerHTML =
+        '<div class="grid">' +
+          kpi('Conversion rate', s.conversionRate + '%', 'accepted ÷ sent', '#2f7d5d') +
+          kpi('Conversion by value', s.conversionRateByValue + '%', fmt0(s.wonValue) + ' of ' + fmt0(s.sentValue)) +
+          kpi('Win rate', s.winRate + '%', 'accepted ÷ decided', s.winRate >= 50 ? '#2f7d5d' : '#9c3327') +
+          kpi('Expiry rate', s.expiryRate + '%', s.expired + ' went inactive', '#8a6d1f') +
+        '</div>' +
+        '<div class="section-title">Funnel</div>' +
+        stages.map(function (st) {
+          return '<div style="margin-bottom:12px;"><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;"><span>' + st[0] + ' <span class="muted">· ' + st[1] + '</span></span><span style="font-weight:600;">' + fmt0(st[2]) + '</span></div>' +
+            bar(s.total ? st[1] / s.total : 0, st[3], 12) + '</div>';
+        }).join('') +
+        '<div class="section-title">Conversion by customer type</div>' +
+        repTable([['Customer type'], ['Proposals', 'center'], ['Value', 'right'], ['Accepted', 'center'], ['Accepted value', 'right'], ['Rate', 'right']],
+          d.byCustomerType.map(function (g) {
+            return '<tr>' + rtd(esc(titleCase(g.customerType)), 'left', 1) + rtd(g.count, 'center') + rtd(fmt0(g.value), 'right') +
+              rtd(g.won, 'center') + rtd(fmt0(g.wonValue), 'right') + rtd((g.count ? Math.round((g.won / g.count) * 1000) / 10 : 0) + '%', 'right', 1) + '</tr>';
+          }).join('')) +
+        '<div class="section-title">Conversion by customer</div>' +
+        repTable([['Customer'], ['Proposals', 'center'], ['Value', 'right'], ['Won', 'center'], ['Lost', 'center'], ['Win rate', 'right']],
+          d.byCustomer.map(function (g) {
+            return '<tr>' + rtd(esc(g.customer), 'left', 1) + rtd(g.count, 'center') + rtd(fmt0(g.value), 'right') + rtd(g.won, 'center') + rtd(g.lost, 'center') + rtd(g.winRate + '%', 'right', 1) + '</tr>';
+          }).join(''));
+      return;
+    }
+    if (rep.tab === 'aging') {
+      var amax = Math.max.apply(null, d.aging.map(function (a) { return a.count; }).concat([1]));
+      var rowsOf = function (list) {
+        return list.map(function (r) {
+          return '<tr>' + rtd('<b style="font-weight:600;">' + esc(r.customer) + '</b><div class="muted" style="font-size:11.5px;">' + esc(r.title) + ' · ' + esc(r.number) + '</div>') +
+            rtd(statusChip(r.status)) + rtd(fmtDate(r.createdAt)) + rtd(r.daysOpen + ' d', 'center') +
+            rtd(r.expiration ? fmtDate(r.expiration) : '<span class="muted">—</span>') + rtd(fmt0(r.total), 'right', 1) + '</tr>';
+        }).join('');
+      };
+      var ageHead = [['Proposal'], ['Status'], ['Created'], ['Age', 'center'], ['Expires'], ['Value', 'right']];
+      box.innerHTML =
+        '<div class="grid">' +
+          kpi('Open proposals', s.open, fmt0(s.openValue) + ' in flight') +
+          kpi('Avg age', s.avgDaysOpen + ' d', 'open proposals') +
+          kpi('Past expiration', d.expiredOpen.length, 'still open — needs action', d.expiredOpen.length ? '#9c3327' : '#2f7d5d') +
+          kpi('Expiring ≤ 14 days', d.expiringSoon.length, 'follow up now', '#8a6d1f') +
+        '</div>' +
+        '<div class="section-title">Aging buckets (open proposals)</div>' +
+        d.aging.map(function (a) {
+          return '<div style="margin-bottom:10px;"><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;"><span>' + esc(a.bucket) + ' <span class="muted">· ' + a.count + '</span></span><span style="font-weight:600;">' + fmt0(a.value) + '</span></div>' + bar(a.count / amax, '#3d4a55') + '</div>';
+        }).join('') +
+        '<div class="section-title">Past expiration — open</div>' + repTable(ageHead, rowsOf(d.expiredOpen), 'Nothing past expiration. ') +
+        '<div class="section-title">Expiring within 14 days</div>' + repTable(ageHead, rowsOf(d.expiringSoon), 'Nothing expiring soon.') +
+        '<div class="section-title">Oldest open proposals</div>' + repTable(ageHead, rowsOf(d.oldestOpen), 'No open proposals.');
+      return;
+    }
+    if (rep.tab === 'pipeline') {
+      var vmax = Math.max.apply(null, d.pipeline.map(function (p) { return p.value; }).concat([1]));
+      box.innerHTML =
+        '<div class="grid">' +
+          kpi('Total pipeline', fmt0(s.totalValue), s.total + ' proposals') +
+          kpi('Open', fmt0(s.openValue), s.open + ' proposals', '#3d4a55') +
+          kpi('Released & awaiting', fmt0(d.pipeline.filter(function (p) { return p.status === 'RELEASED'; })[0].value), s.released + ' out with customers') +
+          kpi('Closed won', fmt0(s.wonValue), s.won + ' proposals', '#2f7d5d') +
+        '</div>' +
+        '<div class="section-title">By stage</div>' +
+        repTable([['Stage'], ['Proposals', 'center'], ['Value', 'right'], ['Share of value', 'left']],
+          d.pipeline.map(function (p) {
+            return '<tr>' + rtd(esc(p.label), 'left', 1) + rtd(p.count, 'center') + rtd(fmt0(p.value), 'right', 1) +
+              '<td style="padding:10px 14px;border-bottom:1px solid #f2f3ef;min-width:180px;">' + bar(p.value / vmax, p.status === 'ACCEPTED' ? '#2f7d5d' : p.status === 'REJECTED' ? '#9c3327' : '#3d4a55') + '</td></tr>';
+          }).join('')) +
+        '<div class="section-title">Pipeline by customer</div>' +
+        repTable([['Customer'], ['Proposals', 'center'], ['Total value', 'right'], ['Accepted value', 'right']],
+          d.byCustomer.map(function (g) { return '<tr>' + rtd(esc(g.customer), 'left', 1) + rtd(g.count, 'center') + rtd(fmt0(g.value), 'right') + rtd(fmt0(g.wonValue), 'right') + '</tr>'; }).join(''));
+      return;
+    }
+    if (rep.tab === 'winloss') {
+      var mmax = Math.max.apply(null, d.winLossByMonth.map(function (m) { return Math.max(m.won, m.lost); }).concat([1]));
+      box.innerHTML =
+        '<div class="grid">' +
+          kpi('Accepted', s.won, fmt0(s.wonValue), '#2f7d5d') +
+          kpi('Rejected', s.lost, fmt0(s.lostValue), '#9c3327') +
+          kpi('Expired / inactive', s.expired, fmt0(s.expiredValue), '#8a8f85') +
+          kpi('Avg days to decision', s.avgDaysToDecision, 'from release to outcome') +
+        '</div>' +
+        '<div class="section-title">Outcomes by month</div>' +
+        repTable([['Month'], ['Accepted', 'center'], ['Rejected', 'center'], ['Inactive', 'center'], ['Accepted value', 'right'], ['Lost value', 'right'], ['Mix', 'left']],
+          d.winLossByMonth.map(function (m) {
+            var tot = m.won + m.lost || 1;
+            return '<tr>' + rtd(esc(m.month), 'left', 1) + rtd(m.won, 'center') + rtd(m.lost, 'center') + rtd(m.expired, 'center') +
+              rtd(fmt0(m.wonValue), 'right') + rtd(fmt0(m.lostValue), 'right') +
+              '<td style="padding:10px 14px;border-bottom:1px solid #f2f3ef;min-width:160px;"><div style="display:flex;height:8px;border-radius:999px;overflow:hidden;background:#eef0ea;"><div style="width:' + ((m.won / tot) * 100).toFixed(1) + '%;background:#2f7d5d;"></div><div style="width:' + ((m.lost / tot) * 100).toFixed(1) + '%;background:#9c3327;"></div></div></td></tr>';
+          }).join('')) +
+        '<div class="section-title">Win / loss by customer</div>' +
+        repTable([['Customer'], ['Won', 'center'], ['Lost', 'center'], ['Win rate', 'right'], ['Won value', 'right']],
+          d.byCustomer.filter(function (g) { return g.won || g.lost; }).map(function (g) {
+            return '<tr>' + rtd(esc(g.customer), 'left', 1) + rtd(g.won, 'center') + rtd(g.lost, 'center') + rtd(g.winRate + '%', 'right', 1) + rtd(fmt0(g.wonValue), 'right') + '</tr>';
+          }).join(''), 'No decided proposals yet.');
+      return;
+    }
+    if (rep.tab === 'products') {
+      var q = rep.pq.trim().toLowerCase();
+      var list = d.products.filter(function (p) { return !q || (p.name + ' ' + p.sku).toLowerCase().indexOf(q) !== -1; });
+      list = list.slice().sort(function (a, b) { return (b[rep.psort] || 0) - (a[rep.psort] || 0); });
+      var top = list.slice(0, 12);
+      var pmax = Math.max.apply(null, top.map(function (p) { return p.proposedValue; }).concat([1]));
+      box.innerHTML =
+        '<div class="grid">' +
+          kpi('Distinct products proposed', d.products.length, 'in this period') +
+          kpi('Units proposed', d.products.reduce(function (a, p) { return a + p.qty; }, 0).toLocaleString(), 'all line items') +
+          kpi('Proposed value', fmt0(d.products.reduce(function (a, p) { return a + p.proposedValue; }, 0)), 'product lines only') +
+          kpi('Accepted value', fmt0(d.products.reduce(function (a, p) { return a + p.wonValue; }, 0)), 'from accepted proposals', '#2f7d5d') +
+        '</div>' +
+        '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:16px 0 10px;">' +
+          '<input id="repPq" placeholder="Filter products or SKUs…" value="' + esc(rep.pq) + '" style="padding:9px 12px;border:1px solid #dcded7;border-radius:9px;font-size:13px;background:#fff;width:240px;">' +
+          '<select id="repPsort" style="padding:9px 12px;border:1px solid #dcded7;border-radius:9px;font-size:13px;background:#fff;">' +
+            [['proposedValue', 'Sort: proposed value'], ['qty', 'Sort: units proposed'], ['proposals', 'Sort: times proposed'], ['wonValue', 'Sort: accepted value'], ['attachRate', 'Sort: attach rate']]
+              .map(function (o) { return '<option value="' + o[0] + '"' + (rep.psort === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select>' +
+        '</div>' +
+        '<div class="section-title">Top products by proposed value</div>' +
+        top.map(function (p) {
+          return '<div style="margin-bottom:10px;"><div style="display:flex;justify-content:space-between;gap:12px;font-size:13px;margin-bottom:4px;"><span>' + esc(p.name) + ' <span class="muted" style="font-family:ui-monospace,monospace;font-size:11px;">' + esc(p.sku) + '</span></span><span style="font-weight:600;">' + fmt0(p.proposedValue) + '</span></div>' + bar(p.proposedValue / pmax, '#3d4a55') + '</div>';
+        }).join('') +
+        '<div class="section-title">Product demand detail</div>' +
+        repTable([['Product'], ['SKU'], ['Proposals', 'center'], ['Attach rate', 'right'], ['Units', 'center'], ['Avg rate', 'right'], ['Proposed value', 'right'], ['Accepted', 'center'], ['Accepted value', 'right']],
+          list.map(function (p) {
+            return '<tr>' + rtd(esc(p.name), 'left', 1) + rtd('<span style="font-family:ui-monospace,monospace;font-size:11.5px;color:#5c6157;">' + esc(p.sku) + '</span>') +
+              rtd(p.proposals, 'center') + rtd(p.attachRate + '%', 'right') + rtd(p.qty, 'center') + rtd(fmt0(p.avgRate), 'right') +
+              rtd(fmt0(p.proposedValue), 'right', 1) + rtd(p.wonProposals, 'center') + rtd(fmt0(p.wonValue), 'right') + '</tr>';
+          }).join(''), 'No product lines in this period.');
+      var pq = document.getElementById('repPq');
+      pq.addEventListener('input', function () { rep.pq = pq.value; drawReports(); document.getElementById('repPq').focus(); });
+      document.getElementById('repPsort').addEventListener('change', function () { rep.psort = this.value; drawReports(); });
+      return;
+    }
+    if (rep.tab === 'team') {
+      box.innerHTML =
+        '<div class="section-title">By preparer</div>' +
+        repTable([['Prepared by'], ['Proposals', 'center'], ['Total value', 'right'], ['Accepted', 'center'], ['Accepted value', 'right'], ['Win rate', 'right'], ['Avg margin', 'right']],
+          d.byPreparer.map(function (g) {
+            return '<tr>' + rtd(esc(g.preparedBy), 'left', 1) + rtd(g.count, 'center') + rtd(fmt0(g.value), 'right') + rtd(g.won, 'center') +
+              rtd(fmt0(g.wonValue), 'right') + rtd(g.winRate + '%', 'right', 1) + rtd(g.avgMarginPct + '%', 'right') + '</tr>';
+          }).join(''));
+      return;
+    }
+    // detail
+    box.innerHTML =
+      '<div class="section-title">All proposals in range <span class="muted" style="font-weight:400;font-size:12px;">— ' + d.rows.length + ' records</span></div>' +
+      repTable([['Customer'], ['Proposal'], ['Prepared by'], ['Status'], ['Created'], ['Modified'], ['Expires'], ['Age', 'center'], ['Value', 'right'], ['Margin', 'right']],
+        d.rows.map(function (r) {
+          return '<tr>' + rtd('<b style="font-weight:600;">' + esc(r.customer) + '</b>') +
+            rtd(esc(r.title) + '<div class="muted" style="font-size:11.5px;">' + esc(r.number) + '</div>') +
+            rtd(esc(r.preparedBy || '—')) + rtd(statusChip(r.status) + (r.expired ? ' <span style="color:#9c3327;">⚑</span>' : '')) +
+            rtd(fmtDate(r.createdAt)) + rtd(fmtDate(r.updatedAt)) + rtd(r.expiration ? fmtDate(r.expiration) : '—') +
+            rtd(r.daysOpen + ' d', 'center') + rtd(fmt0(r.total), 'right', 1) + rtd(r.marginPct + '%', 'right') + '</tr>';
+        }).join(''));
+  }
+  function exportReportCsv() {
+    if (!rep.data) return;
+    var cols = ['number', 'customer', 'customerType', 'title', 'preparedBy', 'status', 'createdAt', 'updatedAt', 'releasedAt', 'decidedAt', 'expiration', 'expired', 'daysOpen', 'daysToDecision', 'version', 'lineCount', 'total', 'revenue', 'cogs', 'margin', 'marginPct'];
+    var csv = [cols.join(',')].concat(rep.data.rows.map(function (r) {
+      return cols.map(function (c) {
+        var v = r[c];
+        if (c === 'total' || c === 'revenue' || c === 'cogs' || c === 'margin') v = (Number(v) || 0) / 100;
+        if (v == null) v = '';
+        var s = String(v);
+        return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+      }).join(',');
+    })).join('\n');
+    var blob = new Blob([csv], { type: 'text/csv' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'proposal-report-' + new Date().toISOString().slice(0, 10) + '.csv';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+  }
+
   /* --- Proposal Builder --- */
   var STD_GROUPS = ['Dual Trolley System', 'Therapeutic Activity & Adventure Components', 'Adventure Mat System', 'Summit Foundation System', 'Hardware'];
   var STD_NOTES = {
@@ -832,10 +1382,32 @@
       return normalizeLine(it);
     });
     var propDate = meta.proposalDate || new Date().toISOString().slice(0, 10);
+    // Standard notes come from Administration → Standard proposal notes; the
+    // hard-coded set is only a fallback for an un-migrated database.
+    var stdNotes = [];
+    try { var rn = await authed('/standard-notes'); if (rn.ok) stdNotes = (await rn.json()) || []; } catch (e) {}
+    if (!stdNotes.length) {
+      stdNotes = Object.keys(STD_NOTES).map(function (k, i) {
+        return { id: 'local-' + i, title: k, body: STD_NOTES[k], placement: 'TABLE', autoInclude: i === 0, active: true, sortOrder: i };
+      });
+    }
+    stdNotes = stdNotes.filter(function (nn) { return nn.active !== false; });
+    // Notes flagged "always include" are dropped onto a proposal the first time it
+    // is built, so nobody has to remember to add them.
+    if (!(version.items || []).length) {
+      stdNotes.filter(function (nn) { return nn.autoInclude && nn.placement !== 'FOOTER'; }).forEach(function (nn) {
+        lines.push(normalizeLine({ lineType: 'NOTE', kind: 'NOTE', name: nn.title, description: nn.body, quantity: 0, rateMinor: 0 }));
+      });
+    }
+    var footerNotes = Array.isArray(meta.footerNotes) ? meta.footerNotes : null;
+    if (!footerNotes) {
+      footerNotes = stdNotes.filter(function (nn) { return nn.autoInclude && nn.placement === 'FOOTER'; })
+        .map(function (nn) { return { title: nn.title, body: nn.body }; });
+    }
     pb = {
-      proposalId: proposal.id, versionId: version.id, user: user, orgName: orgName,
+      proposalId: proposal.id, versionId: version.id, user: user, orgName: orgName, stdNotes: stdNotes,
       title: proposal.title || '', number: proposal.number || '',
-      meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7) },
+      meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7), footerNotes: footerNotes },
       lines: lines,
     };
     renderBuilder();
@@ -916,7 +1488,7 @@
           '<button class="btn" id="bAddProd" style="width:auto;padding:9px 15px;">+ Product line</button>' +
           '<button class="link-btn" id="bAddGroup" style="width:auto;padding:9px 15px;">+ Group section</button>' +
           '<button class="link-btn" id="bAddSub" style="width:auto;padding:9px 15px;">+ Sub-heading</button>' +
-          '<select id="bAddNote" style="padding:9px 12px;border:1px solid #dcded7;border-radius:9px;font-size:13.5px;background:#fff;"><option value="">+ Standard note…</option>' + Object.keys(STD_NOTES).map(function (k) { return '<option value="' + esc(k) + '">' + esc(k) + '</option>'; }).join('') + '<option value="__custom">Custom note…</option></select>' +
+          '<select id="bAddNote" style="padding:9px 12px;border:1px solid #dcded7;border-radius:9px;font-size:13.5px;background:#fff;"><option value="">+ Standard note…</option>' + (pb.stdNotes || []).map(function (nn, ni) { return '<option value="' + ni + '">' + esc(nn.title) + (nn.placement === 'FOOTER' ? ' — footer' : '') + '</option>'; }).join('') + '<option value="__custom">Custom note…</option></select>' +
         '</div>' +
         '<div style="font-size:12px;color:#8a8f85;margin-bottom:6px;">Optional product groups (click to add a section heading):</div>' +
         '<div style="display:flex;gap:6px;flex-wrap:wrap;">' + STD_GROUPS.map(function (g) { return '<button class="grpChip" data-g="' + esc(g) + '" style="border:1px solid #dcded7;background:#fff;border-radius:999px;padding:6px 12px;font-size:12.5px;cursor:pointer;color:#3d4a55;">' + esc(g) + '</button>'; }).join('') + '</div>' +
@@ -936,8 +1508,25 @@
         '<div style="display:flex;justify-content:space-between;padding:8px 0 0;margin-top:6px;border-top:1px solid #e7e8e3;font-size:16px;font-weight:600;font-family:\'Newsreader\',serif;"><span>Total</span><span>' + fmtMoney(t.total, 'USD') + '</span></div>' +
         '<div style="display:flex;justify-content:space-between;padding:6px 0 0;font-size:14px;color:#3d4a55;font-weight:600;"><span>Deposit due (50%)</span><span>' + fmtMoney(t.deposit, 'USD') + '</span></div>' +
       '</div>' +
+      footerNotesCard() +
       '<div id="bMarginRail" style="' + marginRailStyle() + '">' + marginCard(t) + '</div>';
     wireBuilder();
+  }
+
+  /** Notes that print below the signature lines on the customer proposal. */
+  function footerNotesCard() {
+    var fn = pb.meta.footerNotes || [];
+    var rows = fn.map(function (n, i) {
+      return '<div style="display:flex;align-items:flex-start;gap:8px;background:#fbfaf4;border:1px solid #ece9db;border-radius:10px;padding:10px;margin-bottom:8px;">' +
+        '<div style="flex:1;"><input class="bFN" data-i="' + i + '" data-k="title" value="' + esc(n.title || '') + '" placeholder="Note title (optional)" style="width:100%;border:none;background:transparent;font-weight:600;font-size:13.5px;outline:none;margin-bottom:4px;">' +
+        '<textarea class="bFN" data-i="' + i + '" data-k="body" rows="3" placeholder="Note text — **bold** supported" style="width:100%;border:1px solid #ece9db;border-radius:7px;padding:6px 8px;font-size:12.5px;font-family:inherit;resize:vertical;background:#fff;">' + esc(n.body || '') + '</textarea></div>' +
+        '<button class="bFNDel" data-i="' + i + '" style="border:1px solid #e0e1db;background:#fff;border-radius:8px;width:30px;height:30px;color:#9c3327;cursor:pointer;flex:0 0 auto;">✕</button></div>';
+    }).join('');
+    return '<div class="card" style="margin-top:16px;">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;"><div class="section-title" style="margin:0;">Notes below the signature lines</div>' +
+        '<button class="link-btn" id="bAddFooter" style="width:auto;padding:7px 12px;">+ Add note</button></div>' +
+      '<div class="muted" style="font-size:12px;margin-bottom:10px;">Printed at the foot of the proposal, under the signature block. Standard footer notes flagged “always include” in Administration appear here automatically.</div>' +
+      (rows || '<div class="muted" style="font-size:12.5px;">None yet.</div>') + '</div>';
   }
 
   /** The profitability rail floats beside the builder when there is room; otherwise it stacks. */
@@ -1006,7 +1595,8 @@
     if (l.lineType === 'NOTE') {
       return '<div class="bRow" draggable="true" data-i="' + i + '" style="display:flex;align-items:flex-start;gap:8px;background:#fbfaf4;border:1px solid #ece9db;border-radius:10px;padding:10px;">' + handle +
         '<div style="flex:1;"><input class="bF" data-i="' + i + '" data-k="name" value="' + esc(l.name) + '" placeholder="Note title" style="width:100%;border:none;background:transparent;font-weight:600;font-size:13.5px;outline:none;margin-bottom:4px;">' +
-        '<textarea class="bF" data-i="' + i + '" data-k="description" rows="2" placeholder="Note text" style="width:100%;border:1px solid #ece9db;border-radius:7px;padding:6px 8px;font-size:12.5px;font-family:inherit;resize:vertical;background:#fff;">' + esc(l.description) + '</textarea></div>' + del + '</div>';
+        '<textarea class="bF" data-i="' + i + '" data-k="description" rows="3" placeholder="Note text" style="width:100%;border:1px solid #ece9db;border-radius:7px;padding:6px 8px;font-size:12.5px;font-family:inherit;resize:vertical;background:#fff;">' + esc(l.description) + '</textarea>' +
+        '<div style="font-size:10.5px;color:#8a8f85;margin-top:3px;">Formatting: <b>**bold**</b> · <i>*italic*</i> · line breaks are kept</div></div>' + del + '</div>';
     }
     // PRODUCT
     var amt = (Number(l.quantity) || 0) * (Number(l.rateMinor) || 0);
@@ -1064,8 +1654,24 @@
     noteSel.addEventListener('change', function () {
       var v = noteSel.value; if (!v) return;
       if (v === '__custom') pb.lines.push({ ref: uid(), lineType: 'NOTE', kind: 'NOTE', name: 'Note', description: '', quantity: 0, rateMinor: 0 });
-      else pb.lines.push({ ref: uid(), lineType: 'NOTE', kind: 'NOTE', name: v, description: STD_NOTES[v], quantity: 0, rateMinor: 0 });
+      else {
+        var nn = (pb.stdNotes || [])[Number(v)];
+        if (nn && nn.placement === 'FOOTER') { pb.meta.footerNotes = (pb.meta.footerNotes || []).concat([{ title: nn.title, body: nn.body }]); }
+        else if (nn) pb.lines.push({ ref: uid(), lineType: 'NOTE', kind: 'NOTE', name: nn.title, description: nn.body, quantity: 0, rateMinor: 0 });
+      }
       noteSel.value = ''; renderBuilder();
+    });
+    document.querySelectorAll('.bFN').forEach(function (el) {
+      el.addEventListener('input', function () {
+        var n = (pb.meta.footerNotes || [])[+el.getAttribute('data-i')];
+        if (n) n[el.getAttribute('data-k')] = el.value;
+      });
+    });
+    document.querySelectorAll('.bFNDel').forEach(function (b) {
+      b.addEventListener('click', function () { (pb.meta.footerNotes || []).splice(+b.getAttribute('data-i'), 1); renderBuilder(); });
+    });
+    document.getElementById('bAddFooter').addEventListener('click', function () {
+      pb.meta.footerNotes = (pb.meta.footerNotes || []).concat([{ title: '', body: '' }]); renderBuilder();
     });
     document.querySelectorAll('.grpChip').forEach(function (c) { c.addEventListener('click', function () { pb.lines.push({ ref: uid(), lineType: 'GROUP', kind: 'GROUP', name: c.getAttribute('data-g'), description: '', quantity: 0, rateMinor: 0, optional: /trolley|adventure|foundation|mat/i.test(c.getAttribute('data-g')) }); renderBuilder(); }); });
     // header/meta inputs
@@ -1225,7 +1831,7 @@
         return;
       }
       if (lt === 'SUBGROUP') { inSub = true; body += '<tr style="break-inside:avoid;break-after:avoid;"><td colspan="5" style="padding:7px 8px 3px 22px;font-weight:600;font-size:11.5px;color:#3d4a55;border-bottom:1px solid #d5d8d2;">' + esc(tc(l.name)) + '</td></tr>'; return; }
-      if (lt === 'NOTE') { body += '<tr style="break-inside:avoid;"><td colspan="5" style="padding:7px 8px;background:#fbfaf4;font-size:11px;color:#5c6157;line-height:1.5;"><b style="display:block;color:#20241f;margin-bottom:2px;">' + esc(tc(l.name)) + '</b>' + esc(l.description) + '</td></tr>'; return; }
+      if (lt === 'NOTE') { body += '<tr style="break-inside:avoid;"><td colspan="5" style="padding:7px 8px;background:#fbfaf4;font-size:11px;color:#5c6157;line-height:1.5;"><b style="display:block;color:#20241f;margin-bottom:2px;">' + esc(tc(l.name)) + '</b>' + rt(l.description) + '</td></tr>'; return; }
       var amt = (Number(l.quantity) || 0) * (Number(l.rateMinor) || 0);
       var indent = groupOpenSub != null ? (inSub ? 34 : 20) : 8;
       if (groupOpenSub != null) groupOpenSub += amt + (Number(l.tpFreightMinor) || 0);
@@ -1246,10 +1852,19 @@
     });
     body += subtotalRow();
     var bottomNotesHtml = bottomNotes.length ? '<div style="margin-top:22px;padding-top:12px;border-top:1px solid #e7e8e3;font-size:10.5px;color:#5c6157;line-height:1.6;break-inside:avoid;"><div style="font-weight:600;color:#20241f;margin-bottom:4px;">Delivery, Returns &amp; Freight Notes</div>' + bottomNotes.map(function (n) { return '<div><b style="font-weight:600;">' + esc(tc(n.name)) + ':</b> ' + esc(n.text) + '</div>'; }).join('') + '</div>' : '';
-    var u = pb.user || {};
+    var u = (pb && pb.user) || currentUser || {};
     var preparerLine2 = [u.title, u.phone].filter(Boolean).join(' · ');
+    // Notes that print beneath the signature lines (terms, acceptance language).
+    var footerNotes = (m.footerNotes || []).filter(function (fn) { return fn && (fn.title || fn.body); });
+    var footerNotesHtml = footerNotes.length
+      ? '<div style="margin-top:24px;padding-top:13px;border-top:1px solid #e7e8e3;break-inside:avoid;">' +
+        footerNotes.map(function (fn) {
+          return '<div style="margin-bottom:9px;font-size:10.5px;line-height:1.6;color:#5c6157;">' +
+            (fn.title ? '<div style="font-weight:700;font-size:11px;color:#20241f;margin-bottom:2px;">' + esc(fn.title) + '</div>' : '') + rt(fn.body) + '</div>';
+        }).join('') + '</div>'
+      : '';
     var preparedBy =
-      '<div style="margin-top:14px;font-size:11.5px;line-height:1.55;">' +
+      '<div style="margin-top:12px;font-size:11.5px;line-height:1.55;">' +
         '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin-bottom:3px;">Proposal Prepared By</div>' +
         '<div style="font-weight:600;">' + esc(u.name || u.email || '') + '</div>' +
         (preparerLine2 ? '<div style="color:#5c6157;">' + esc(preparerLine2) + '</div>' : '') +
@@ -1259,7 +1874,8 @@
       '<div id="propPrintArea" style="max-width:760px;margin:0 auto;background:#fff;padding:44px 48px;font-family:\'IBM Plex Sans\',sans-serif;color:#20241f;">' +
         '<div style="border-bottom:2px solid #3d4a55;padding-bottom:16px;margin-bottom:20px;">' +
           '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;">' +
-          '<div style="display:flex;gap:14px;align-items:center;"><img src="logo.png" alt="Summit Sensory Gym" width="84" height="84" style="width:84px;height:84px;display:block;"><div><div style="font-family:\'Newsreader\',serif;font-weight:600;font-size:19px;">Summit Sensory Gym</div><div style="font-size:11px;color:#8a8f85;line-height:1.5;margin-top:2px;">6150 S Geneva Ct, Englewood, CO 80111<br>(720) 457-5500 · Sales@SummitSensory.com</div></div></div>' +
+          '<div style="display:flex;flex-direction:column;">' +
+          '<div style="display:flex;gap:14px;align-items:center;"><img src="logo.png" alt="Summit Sensory Gym" width="84" height="84" style="width:84px;height:84px;display:block;"><div><div style="font-family:\'Newsreader\',serif;font-weight:600;font-size:19px;">Summit Sensory Gym</div><div style="font-size:11px;color:#8a8f85;line-height:1.5;margin-top:2px;">6150 S Geneva Ct, Englewood, CO 80111<br>(720) 457-5500 · Sales@SummitSensory.com</div></div></div>' + preparedBy + '</div>' +
           '<div style="text-align:right;"><div style="font-family:\'Newsreader\',serif;font-size:22px;font-weight:600;">Proposal</div><div style="font-size:11.5px;color:#5c6157;margin-top:4px;">' + esc(d.number || '') + '</div>' +
             '<div style="font-size:11px;color:#5c6157;margin-top:8px;line-height:1.7;">' +
               '<div>Proposal Date: <b style="color:#20241f;">' + (m.proposalDate ? fmtDate(m.proposalDate) : fmtDate(new Date().toISOString())) + '</b></div>' +
@@ -1268,7 +1884,7 @@
               '<div>Total Weight: <b style="color:#20241f;">' + (Number(t.weight) || 0).toLocaleString() + ' lbs</b></div>' +
             '</div>' +
           '</div>' +
-        '</div>' + preparedBy +
+        '</div>' +
         '</div>' +
         '<div style="display:flex;justify-content:flex-start;gap:56px;margin-bottom:20px;font-size:12px;">' +
           '<div><div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin-bottom:4px;">Prepared For</div><div style="font-weight:600;">' + esc(d.orgName || '') + '</div>' +
@@ -1294,7 +1910,7 @@
           '<div style="flex:1;"><div style="border-bottom:1.5px solid #20241f;height:26px;"></div><div style="font-size:10.5px;color:#8a8f85;margin-top:5px;">Signer\'s Name</div></div>' +
           '<div style="flex:1;"><div style="border-bottom:1.5px solid #20241f;height:26px;"></div><div style="font-size:10.5px;color:#8a8f85;margin-top:5px;">Signer\'s Signature</div></div>' +
           '<div style="flex:0 0 150px;"><div style="border-bottom:1.5px solid #20241f;height:26px;"></div><div style="font-size:10.5px;color:#8a8f85;margin-top:5px;">Date</div></div>' +
-        '</div>' +
+        '</div>' + footerNotesHtml +
       '</div>';
     var ov = document.createElement('div');
     ov.id = 'propPreviewOverlay';
@@ -1618,9 +2234,70 @@
   async function renderAdmin(user) {
     document.getElementById('view').innerHTML =
       '<div style="display:flex;justify-content:flex-end;margin-bottom:16px;"><button class="btn" id="admNew" style="width:auto;padding:10px 17px;">New user</button></div>' +
-      '<div id="admList"><div class="muted" style="padding:24px;">Loading…</div></div>';
+      '<div id="admList"><div class="muted" style="padding:24px;">Loading…</div></div>' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:26px;"><div class="section-title" style="margin:0;">Standard proposal notes</div>' +
+        '<button class="btn" id="snNew" style="width:auto;padding:9px 15px;">+ New note</button></div>' +
+      '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;">Reusable note blocks for proposals. “Always include” notes are added to every new proposal automatically. Table notes print inside the line items; footer notes print below the signature lines. Wrap text in **double asterisks** to bold it.</div>' +
+      '<div id="snList"><div class="muted" style="padding:16px;">Loading…</div></div>';
     document.getElementById('admNew').addEventListener('click', openUserForm);
+    document.getElementById('snNew').addEventListener('click', function () { openStandardNoteForm(null); });
     loadUsers();
+    loadStandardNotes();
+  }
+  async function loadStandardNotes() {
+    var box = document.getElementById('snList'); if (!box) return;
+    try {
+      var r = await authed('/standard-notes');
+      if (!r.ok) { box.innerHTML = '<div class="err">Could not load standard notes (' + r.status + '). Run the 0019 migration if this persists.</div>'; return; }
+      var notes = await r.json();
+      var rows = (notes || []).map(function (n) {
+        return '<tr>' + td('<b style="font-weight:600;">' + esc(n.title) + '</b><div class="muted" style="font-size:12px;max-width:520px;line-height:1.45;">' + esc(String(n.body).slice(0, 160)) + (String(n.body).length > 160 ? '…' : '') + '</div>') +
+          td(n.placement === 'FOOTER' ? '<span class="chip">Below signatures</span>' : '<span class="chip">In line items</span>') +
+          td(n.autoInclude ? '<span style="display:inline-block;background:#eaf3ee;border:1px solid #cfe3d7;color:#2f7d5d;border-radius:999px;padding:3px 10px;font-size:12px;font-weight:600;">Always</span>' : '<span class="muted">On request</span>') +
+          td(n.active ? '<span class="chip">Active</span>' : '<span class="muted">Hidden</span>') +
+          td('<div style="display:flex;gap:6px;justify-content:flex-end;"><button class="link-btn snEdit" data-id="' + n.id + '" style="width:auto;padding:6px 11px;">Edit</button>' +
+            '<button class="link-btn snDel" data-id="' + n.id + '" style="width:auto;padding:6px 11px;color:#9c3327;">Delete</button></div>') + '</tr>';
+      }).join('');
+      box.innerHTML = tableShell(['Note', 'Prints', 'Include', 'Status', ''], rows, 5, 'No standard notes yet.');
+      box.querySelectorAll('.snEdit').forEach(function (b) {
+        b.addEventListener('click', function () { openStandardNoteForm((notes || []).filter(function (n) { return n.id === b.getAttribute('data-id'); })[0]); });
+      });
+      box.querySelectorAll('.snDel').forEach(function (b) {
+        b.addEventListener('click', async function () {
+          if (!confirm('Delete this standard note?')) return;
+          var rr = await authed('/standard-notes/' + b.getAttribute('data-id'), { method: 'DELETE' });
+          if (!rr.ok && rr.status !== 204) { alert('Could not delete (' + rr.status + ').'); return; }
+          loadStandardNotes();
+        });
+      });
+    } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
+  }
+  function openStandardNoteForm(note) {
+    var n = note || { title: '', body: '', placement: 'TABLE', autoInclude: false, sortOrder: 0, active: true };
+    openModal(note ? 'Edit standard note' : 'New standard note',
+      fieldRow('Title', '<input id="snTitle" style="' + IN + '" value="' + esc(n.title) + '">') +
+      '<div class="field"><label>Note text</label><textarea id="snBody" rows="6" style="' + IN + 'resize:vertical;">' + esc(n.body) + '</textarea>' +
+        '<div class="muted" style="font-size:11.5px;margin-top:3px;">**bold** · *italic* · line breaks are kept</div></div>' +
+      fieldRow('Where it prints', '<select id="snPlace" style="' + IN + '"><option value="TABLE"' + (n.placement === 'TABLE' ? ' selected' : '') + '>Inside the line items</option><option value="FOOTER"' + (n.placement === 'FOOTER' ? ' selected' : '') + '>Below the signature lines</option></select>') +
+      fieldRow('Order', '<input id="snOrder" type="number" style="' + IN + '" value="' + (Number(n.sortOrder) || 0) + '">') +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:14px;margin:4px 0;cursor:pointer;"><input type="checkbox" id="snAuto"' + (n.autoInclude ? ' checked' : '') + '> Always include on new proposals</label>' +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;"><input type="checkbox" id="snActive"' + (n.active !== false ? ' checked' : '') + '> Available in the builder</label>',
+      async function (close, showErr) {
+        var body = {
+          title: document.getElementById('snTitle').value.trim(),
+          body: document.getElementById('snBody').value.trim(),
+          placement: document.getElementById('snPlace').value,
+          sortOrder: Number(document.getElementById('snOrder').value) || 0,
+          autoInclude: document.getElementById('snAuto').checked,
+          active: document.getElementById('snActive').checked,
+        };
+        if (!body.title || !body.body) return showErr('Title and note text are both required.');
+        var r = note
+          ? await authed('/standard-notes/' + note.id, { method: 'PATCH', body: body })
+          : await authed('/standard-notes', { method: 'POST', body: body });
+        if (!r.ok) return showErr('Could not save (' + r.status + ').');
+        close(); loadStandardNotes();
+      });
   }
   async function loadUsers() {
     var box = document.getElementById('admList'); if (!box) return;

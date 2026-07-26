@@ -58,15 +58,20 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
   app.get('/catalog/items', read, async (req) => {
     const { q = '', page = '1', pageSize = '100' } = req.query as Record<string, string>;
     const term = q.trim();
-    const [skus, products, sourcing, cats] = await Promise.all([
+    const [skus, products, sourcing, cats, costs] = await Promise.all([
       prisma.sku.findMany({ orderBy: { part: 'asc' } }),
       prisma.product.findMany({
-        select: { id: true, sku: true, name: true, status: true, categoryId: true },
+        select: { id: true, sku: true, name: true, status: true, categoryId: true, weightOz: true },
         orderBy: { sku: 'asc' },
       }),
       prisma.productSourcing.findMany({ select: { productId: true, manufacturer: { select: { name: true } } } }),
       prisma.productCategory.findMany({ select: { id: true, name: true }, orderBy: { sortOrder: 'asc' } }),
+      // Dated cost history from the product workbook import — the fallback when the
+      // flat Sku row has no cost of its own.
+      prisma.productCost.findMany({ select: { productId: true, unitCost: true, effectiveDate: true }, orderBy: { effectiveDate: 'desc' } }),
     ]);
+    const latestCost: Record<string, number> = {};
+    for (const c of costs) if (latestCost[c.productId] === undefined) latestCost[c.productId] = Number(c.unitCost);
     const catName: Record<string, string> = {};
     for (const c of cats) catName[c.id] = c.name;
     const mfrByProduct: Record<string, string> = {};
@@ -86,17 +91,21 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
       const productCategory = catName[p.categoryId] || '';
       const mfr = mfrByProduct[p.id] || '';
       if (existing) {
-        // The Product record wins on name/category; the Sku record owns money.
+        // The Product record wins on name/category; the Sku record owns money,
+        // falling back to the workbook's cost history and ounce weight.
         existing.name = p.name || existing.name;
         existing.category = productCategory || existing.category;
         existing.categoryOptions = true;
         existing.manufacturer = mfr || existing.manufacturer;
+        if (!existing.unitCostMinor && latestCost[p.id]) existing.unitCostMinor = latestCost[p.id];
+        if (!existing.weightLbs && p.weightOz) existing.weightLbs = Math.round((p.weightOz / 16) * 1000) / 1000;
         existing.productId = p.id;
         existing.productStatus = p.status;
       } else {
         byPart.set(p.sku, {
           part: p.sku, name: p.name, category: productCategory, categoryOptions: true,
-          manufacturer: mfr, unitPriceMinor: 0, unitCostMinor: 0, weightLbs: 0,
+          manufacturer: mfr, unitPriceMinor: 0, unitCostMinor: latestCost[p.id] || 0,
+          weightLbs: p.weightOz ? Math.round((p.weightOz / 16) * 1000) / 1000 : 0,
           proposalGroup: '', active: p.status === 'ACTIVE',
           skuId: null, productId: p.id, productStatus: p.status,
         });
@@ -180,6 +189,17 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
       if (d.proposalGroup !== undefined) money.proposalGroup = d.proposalGroup || null;
       if (d.active !== undefined) money.active = d.active;
       if (Object.keys(money).length) await prisma.sku.update({ where: { id: sku.id }, data: money });
+    }
+
+    // A cost edit also lands in the dated cost history, so pricing/service.ts and
+    // the workbook's cost trail stay in step with the flat SKU record.
+    if (d.unitCostMinor !== undefined && product) {
+      await prisma.productCost.create({
+        data: {
+          productId: product.id, unitCost: BigInt(d.unitCostMinor), currency: 'USD',
+          effectiveDate: new Date(), createdById: req.user!.sub,
+        },
+      });
     }
 
     await recordAudit({ actorId: req.user!.sub, action: 'catalog.item.update', entity: 'Sku', entityId: part, details: d as object });

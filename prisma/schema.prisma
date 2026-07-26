@@ -851,6 +851,29 @@ model ProposalTemplate {
   @@index([name])
 }
 
+// Where a standard note prints: inside the line-item table, or beneath the
+// signature lines at the foot of the proposal.
+enum NotePlacement {
+  TABLE
+  FOOTER
+}
+
+// Reusable boilerplate note blocks. autoInclude notes are added to every new
+// proposal automatically; the rest stay available in the builder's note picker.
+model StandardNote {
+  id          String        @id @default(cuid())
+  title       String
+  body        String
+  placement   NotePlacement @default(TABLE)
+  autoInclude Boolean       @default(false)
+  sortOrder   Int           @default(0)
+  active      Boolean       @default(true)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@index([active, placement, sortOrder])
+}
+
 // Pricing/SKU master — the single editable source the Adventure engine and the
 // builder product picker both read from. Fed by seed, Excel/CSV import, the
 // in-app editor, and (later) live cloud sync.
