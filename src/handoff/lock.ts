@@ -129,5 +129,6 @@ export function procurementFromItems(items: unknown): Array<{ productId: string 
   if (!Array.isArray(items)) return [];
   return (items as ItemLike[])
     .filter((i) => (i.kind ?? 'INCLUDED') === 'INCLUDED')
-    .map((i) => ({ productId: i.productId ?? null, sku: i.sku ?? i.ref ?? null, name: i.name ?? i.ref ?? 'Item', quantity: i.quantity ?? 1 }));
+    // `ref` is a random line id, NOT a part number — never let it into `sku`.
+    .map((i) => ({ productId: i.productId ?? null, sku: (i.sku || '').trim() || null, name: i.name ?? 'Item', quantity: i.quantity ?? 1 }));
 }

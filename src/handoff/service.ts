@@ -78,28 +78,30 @@ async function snapshotAcceptedContent(versionId: string, sections: unknown, ite
 }
 
 /**
- * Resolve the supplying vendor for procurement lines. Two sources, in order of
- * authority: the product's sourcing record (Manufacturer, the BOM's own notion of
- * who fabricates a part) and the pricing SKU master's `manufacturer` column,
- * which is what imported Adventure parts carry. Lines whose part is in neither
- * stay null and read as "Unassigned" — that is a data gap to fix in the catalog,
- * not something to invent here.
+ * Resolve the supplying vendor for procurement lines. Three keys, in order of
+ * confidence: the line's productId, its part number, and — for generated frame /
+ * adventure lines that carry neither — an exact match on the catalog name
+ * (Product.name or Sku.description). The vendor itself comes from the product's
+ * sourcing record (primary Manufacturer) or the SKU master's manufacturer column,
+ * which is the same field the Catalog screen edits.
  */
 export async function resolveVendors(
   lines: Array<{ productId?: string | null; sku?: string | null; name?: string | null }>,
 ): Promise<(string | null)[]> {
   const productIds = [...new Set(lines.map((l) => l.productId).filter((v): v is string => !!v))];
   const parts = [...new Set(lines.map((l) => l.sku).filter((v): v is string => !!v))];
-  if (!productIds.length && !parts.length) return lines.map(() => null);
+  const names = [...new Set(lines.map((l) => (l.name || '').trim()).filter(Boolean))];
+  if (!productIds.length && !parts.length && !names.length) return lines.map(() => null);
 
   const [products, skus] = await Promise.all([
     prisma.product.findMany({
-      where: { OR: [{ id: { in: productIds } }, { sku: { in: parts } }] },
-      select: { id: true, sku: true, sourcing: { select: { isPrimary: true, manufacturer: { select: { name: true } } } } },
+      where: { OR: [{ id: { in: productIds } }, { sku: { in: parts } }, { name: { in: names } }] },
+      select: { id: true, sku: true, name: true, sourcing: { select: { isPrimary: true, manufacturer: { select: { name: true } } } } },
     }),
-    parts.length
-      ? prisma.sku.findMany({ where: { part: { in: parts } }, select: { part: true, manufacturer: true } })
-      : [],
+    prisma.sku.findMany({
+      where: { OR: [{ part: { in: parts } }, { description: { in: names } }] },
+      select: { part: true, description: true, manufacturer: true },
+    }),
   ]);
 
   const vendorOf = (p: (typeof products)[number]): string | null => {
@@ -108,10 +110,25 @@ export async function resolveVendors(
   };
   const byId = new Map(products.map((p) => [p.id, vendorOf(p)]));
   const byPart = new Map<string, string | null>();
-  for (const p of products) if (p.sku) byPart.set(p.sku, vendorOf(p));
-  for (const s of skus) if (s.manufacturer && !byPart.get(s.part)) byPart.set(s.part, s.manufacturer);
+  const byName = new Map<string, string | null>();
+  for (const p of products) {
+    if (p.sku && !byPart.get(p.sku)) byPart.set(p.sku, vendorOf(p));
+    if (p.name && !byName.get(p.name)) byName.set(p.name, vendorOf(p));
+  }
+  for (const s of skus) {
+    if (s.manufacturer) {
+      if (!byPart.get(s.part)) byPart.set(s.part, s.manufacturer);
+      if (s.description && !byName.get(s.description)) byName.set(s.description, s.manufacturer);
+    }
+  }
 
-  return lines.map((l) => (l.productId ? byId.get(l.productId) : null) || (l.sku ? byPart.get(l.sku) : null) || null);
+  return lines.map(
+    (l) =>
+      (l.productId ? byId.get(l.productId) : null) ||
+      (l.sku ? byPart.get(l.sku) : null) ||
+      byName.get((l.name || '').trim()) ||
+      null,
+  );
 }
 
 /**
