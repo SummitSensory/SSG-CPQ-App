@@ -77,6 +77,58 @@ async function snapshotAcceptedContent(versionId: string, sections: unknown, ite
   });
 }
 
+/**
+ * Resolve the supplying vendor for procurement lines. Two sources, in order of
+ * authority: the product's sourcing record (Manufacturer, the BOM's own notion of
+ * who fabricates a part) and the pricing SKU master's `manufacturer` column,
+ * which is what imported Adventure parts carry. Lines whose part is in neither
+ * stay null and read as "Unassigned" — that is a data gap to fix in the catalog,
+ * not something to invent here.
+ */
+export async function resolveVendors(
+  lines: Array<{ productId?: string | null; sku?: string | null; name?: string | null }>,
+): Promise<(string | null)[]> {
+  const productIds = [...new Set(lines.map((l) => l.productId).filter((v): v is string => !!v))];
+  const parts = [...new Set(lines.map((l) => l.sku).filter((v): v is string => !!v))];
+  if (!productIds.length && !parts.length) return lines.map(() => null);
+
+  const [products, skus] = await Promise.all([
+    prisma.product.findMany({
+      where: { OR: [{ id: { in: productIds } }, { sku: { in: parts } }] },
+      select: { id: true, sku: true, sourcing: { select: { isPrimary: true, manufacturer: { select: { name: true } } } } },
+    }),
+    parts.length
+      ? prisma.sku.findMany({ where: { part: { in: parts } }, select: { part: true, manufacturer: true } })
+      : [],
+  ]);
+
+  const vendorOf = (p: (typeof products)[number]): string | null => {
+    const s = p.sourcing.find((x) => x.isPrimary) ?? p.sourcing[0];
+    return s?.manufacturer?.name ?? null;
+  };
+  const byId = new Map(products.map((p) => [p.id, vendorOf(p)]));
+  const byPart = new Map<string, string | null>();
+  for (const p of products) if (p.sku) byPart.set(p.sku, vendorOf(p));
+  for (const s of skus) if (s.manufacturer && !byPart.get(s.part)) byPart.set(s.part, s.manufacturer);
+
+  return lines.map((l) => (l.productId ? byId.get(l.productId) : null) || (l.sku ? byPart.get(l.sku) : null) || null);
+}
+
+/**
+ * Fill in vendors on lines locked before vendor resolution existed (or before the
+ * part was given a manufacturer in the catalog). Idempotent and only ever writes
+ * a line whose vendor is still blank — an operator's manual override is never
+ * overwritten.
+ */
+async function backfillVendors(orderId: string): Promise<void> {
+  const blanks = await prisma.procurementLine.findMany({ where: { orderId, vendor: null }, select: { id: true, productId: true, sku: true, name: true } });
+  if (!blanks.length) return;
+  const vendors = await resolveVendors(blanks);
+  await Promise.all(
+    blanks.map((l, i) => (vendors[i] ? prisma.procurementLine.update({ where: { id: l.id }, data: { vendor: vendors[i] } }) : null)).filter(Boolean) as Promise<unknown>[],
+  );
+}
+
 export async function createAcceptedOrder(versionId: string, approval: CustomerApprovalInput, userId: string) {
   if (!approval?.approverName?.trim()) throw new ValidationError('Customer approver name is required');
 
@@ -105,6 +157,8 @@ export async function createAcceptedOrder(versionId: string, approval: CustomerA
   const integrityHash = computeIntegrityHash(contentSnapshot);
   const depositDue = depositFromSnapshot(sLike);
   const number = await nextOrderNumber();
+  const procurement = procurementFromItems(version.items);
+  const vendors = await resolveVendors(procurement);
 
   const order = await prisma.$transaction(async (tx) => {
     const o = await tx.acceptedOrder.create({
@@ -133,7 +187,7 @@ export async function createAcceptedOrder(versionId: string, approval: CustomerA
           },
         },
         requirements: { create: defaultRequirements().map((r) => ({ category: r.category as RequirementCategory, title: r.title, createdById: userId })) },
-        procurement: { create: procurementFromItems(version.items).map((p) => ({ productId: p.productId, name: p.name, quantity: p.quantity })) },
+        procurement: { create: procurement.map((p, i) => ({ productId: p.productId, sku: p.sku, name: p.name, quantity: p.quantity, vendor: vendors[i] })) },
         tasks: { create: defaultTasks(depositDue > 0n).map((t) => ({ title: t.title, assigneeRole: (t.assigneeRole as Role) ?? null, category: (t.category as RequirementCategory) ?? null, createdById: userId })) },
         events: { create: { action: 'order.locked', actorId: userId, detail: { number, acceptedVersion: version.version, integrityHash } as object } },
       },
@@ -203,6 +257,7 @@ export async function unlockOrder(
 }
 
 export async function getOrder(id: string) {
+  await backfillVendors(id);
   const order = await prisma.acceptedOrder.findUnique({
     where: { id },
     include: { customerApproval: true, requirements: true, procurement: true, tasks: true, events: { orderBy: { createdAt: 'asc' } } },
@@ -211,10 +266,51 @@ export async function getOrder(id: string) {
   return order;
 }
 
+/**
+ * Orders list. Each row carries the fields the list view can show as columns —
+ * customer and signed date lead, the rest are opt-in from the column picker — so
+ * the client never has to fan out a request per order to label a row.
+ */
 export async function listOrders(filter: { status?: HandoffStatus; organizationId?: string } = {}) {
-  return prisma.acceptedOrder.findMany({
+  const rows = await prisma.acceptedOrder.findMany({
     where: { ...(filter.status ? { status: filter.status } : {}), ...(filter.organizationId ? { organizationId: filter.organizationId } : {}) },
     orderBy: { createdAt: 'desc' }, take: 200,
+    include: {
+      customerApproval: true,
+      tasks: { select: { status: true } },
+      requirements: { select: { status: true } },
+      procurement: { select: { sourced: true } },
+    },
+  });
+
+  const orgIds = [...new Set(rows.map((r) => r.organizationId))];
+  const proposalIds = [...new Set(rows.map((r) => r.proposalId))];
+  const [orgs, proposals] = await Promise.all([
+    prisma.organization.findMany({ where: { id: { in: orgIds } }, select: { id: true, name: true } }),
+    prisma.proposal.findMany({ where: { id: { in: proposalIds } }, select: { id: true, number: true, title: true } }),
+  ]);
+  const orgName = new Map(orgs.map((o) => [o.id, o.name]));
+  const prop = new Map(proposals.map((p) => [p.id, p]));
+
+  return rows.map(({ customerApproval, tasks, requirements, procurement, ...o }) => {
+    const p = prop.get(o.proposalId);
+    return {
+      ...o,
+      customer: orgName.get(o.organizationId) ?? null,
+      signedAt: customerApproval?.approvedAt ?? null,
+      approvedBy: customerApproval?.approverName ?? null,
+      approvalMethod: customerApproval?.method ?? null,
+      poNumber: customerApproval?.poNumber ?? null,
+      proposalNumber: p?.number ?? null,
+      proposalTitle: p?.title ?? null,
+      balanceDueMinor: (o.grandTotalMinor - o.depositDueMinor).toString(),
+      openTasks: tasks.filter((t) => t.status !== 'DONE' && t.status !== 'CANCELLED').length,
+      taskCount: tasks.length,
+      openRequirements: requirements.filter((r) => r.status !== 'COMPLETE' && r.status !== 'WAIVED').length,
+      requirementCount: requirements.length,
+      procurementCount: procurement.length,
+      procurementSourced: procurement.filter((l) => l.sourced).length,
+    };
   });
 }
 

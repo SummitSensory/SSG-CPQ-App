@@ -113,6 +113,9 @@
   var PROP_RELEASE = PROP_REVIEW;
   var ORDERS_MANAGE_ROLES = ['SYSTEM_ADMIN', 'EXECUTIVE', 'SALES_MANAGER', 'OPERATIONS', 'PROJECT_MANAGER'];
   var HANDOFF_ROLES = ['SYSTEM_ADMIN', 'EXECUTIVE', 'OPERATIONS', 'PROJECT_MANAGER'];
+  // quickbooks:transact — who may authorize and create live financial documents.
+  var QBO_TXN_ROLES = ['SYSTEM_ADMIN', 'ACCOUNTING'];
+  var QBO_VIEW_ROLES = ['SYSTEM_ADMIN', 'EXECUTIVE', 'ACCOUNTING'];
   function hasRole(list, role) { return list.indexOf(role) !== -1; }
   function navFor(role) { return NAV.filter(function (n) { return n.roles === '*' || n.roles.indexOf(role) !== -1; }); }
   function roleLabel(role) { return titleCase(role); }
@@ -1369,14 +1372,25 @@
     }
     var actions = proposalActions(latest, user, lockedOrder);
     view.innerHTML =
-      '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;"><button class="link-btn" id="propBack" style="width:auto;padding:7px 13px;">‹ Back to proposals</button>' +
-      (latest.status === 'DRAFT' && hasRole(PROP_WRITE, user.role) ? '<button class="btn" id="propBuild" style="width:auto;padding:9px 17px;">Build / edit proposal</button>' : '<button class="link-btn" id="propPreview" style="width:auto;padding:8px 15px;">Preview</button>') + '</div>' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;"><button class="link-btn" id="propBack" style="width:auto;padding:7px 13px;">‹ Back to proposals</button></div>' +
       '<div class="card" style="margin-bottom:16px;"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;"><div><div class="k">' + esc(p.number || '') + '</div><h2 style="font-size:22px;margin-top:2px;">' + esc(p.title) + '</h2></div><span class="chip">' + titleCase(latest.status || 'DRAFT') + '</span></div></div>' +
-      sectionBlock('Versions', tableShell(['Version', 'Status', 'Created', 'Frozen'], versions.map(function (v) { return '<tr>' + td('v' + v.version) + td('<span class="chip">' + titleCase(v.status) + '</span>') + td(fmtDate(v.createdAt)) + td(v.frozen ? 'Yes' : 'No') + '</tr>'; }).join(''), 4, '')) +
+      sectionBlock('Versions', tableShell(['Version', 'Status', 'Created', 'Frozen', ''], versions.map(function (v) {
+        // A frozen version is the record of what went out — it opens read-only.
+        var editable = !v.frozen && v.status === 'DRAFT' && hasRole(PROP_WRITE, user.role);
+        var action = editable
+          ? '<button class="btn" data-open="edit" data-vid="' + v.id + '" style="width:auto;padding:8px 15px;">Build / edit proposal</button>'
+          : '<button class="link-btn" data-open="view" data-vid="' + v.id + '" style="width:auto;padding:8px 15px;">View (read only)</button>';
+        return '<tr>' + td('v' + v.version) + td('<span class="chip">' + titleCase(v.status) + '</span>') + td(fmtDate(v.createdAt)) + td(v.frozen ? 'Yes' : 'No') + td('<div style="display:flex;justify-content:flex-end;">' + action + '</div>') + '</tr>';
+      }).join(''), 5, '')) +
       (actions ? sectionBlock('Actions', '<div style="display:flex;gap:8px;flex-wrap:wrap;" id="propActions">' + actions + '</div>') : '');
     document.getElementById('propBack').addEventListener('click', function () { renderProposals(user); });
-    var pbBtn = document.getElementById('propBuild'); if (pbBtn) pbBtn.addEventListener('click', function () { openBuilder(p, latest, user); });
-    var pvBtn = document.getElementById('propPreview'); if (pvBtn) pvBtn.addEventListener('click', function () { previewProposal(p, latest); });
+    document.querySelectorAll('[data-open]').forEach(function (bt) {
+      bt.addEventListener('click', function () {
+        var v = versions.filter(function (x) { return x.id === bt.getAttribute('data-vid'); })[0];
+        if (!v) return;
+        if (bt.getAttribute('data-open') === 'edit') openBuilder(p, v, user); else previewProposal(p, v);
+      });
+    });
     var puBtn = document.getElementById('propUnlock');
     if (puBtn) puBtn.addEventListener('click', function () { openUnlockForm({ id: lockedOrder.id, number: lockedOrder.number }, user); });
     document.querySelectorAll('#propActions [data-act]').forEach(function (bt) {
@@ -2610,18 +2624,83 @@
       }, 'Unlock order');
   }
 
+  /* --- Orders list: columns are configurable; customer + signed date lead. --- */
+  var ORDER_COLS = [
+    { key: 'customer', label: 'Customer', fixed: true, cell: function (o) { return '<b style="font-weight:600;">' + esc(o.customer || '—') + '</b>'; }, plain: function (o) { return o.customer || ''; } },
+    { key: 'signedAt', label: 'Signed', fixed: true, cell: function (o) { return fmtDate(o.signedAt); }, plain: function (o) { return o.signedAt || ''; } },
+    { key: 'number', label: 'Order', cell: function (o) { return esc(o.number); }, plain: function (o) { return o.number; } },
+    { key: 'status', label: 'Status', cell: function (o) { return '<span class="chip">' + titleCase(o.status) + '</span>'; }, plain: function (o) { return titleCase(o.status); } },
+    { key: 'total', label: 'Total', cell: function (o) { return fmtMoney(o.grandTotalMinor, o.currency); }, plain: function (o) { return money(o.grandTotalMinor); } },
+    { key: 'deposit', label: 'Deposit', cell: function (o) { return o.depositRequired ? fmtMoney(o.depositDueMinor, o.currency) : '—'; }, plain: function (o) { return o.depositRequired ? money(o.depositDueMinor) : ''; } },
+    { key: 'createdAt', label: 'Created', cell: function (o) { return fmtDate(o.createdAt); }, plain: function (o) { return o.createdAt || ''; } },
+    { key: 'balance', label: 'Balance due', cell: function (o) { return fmtMoney(o.balanceDueMinor, o.currency); }, plain: function (o) { return money(o.balanceDueMinor); } },
+    { key: 'proposalNumber', label: 'Proposal #', cell: function (o) { return esc(o.proposalNumber || '—'); }, plain: function (o) { return o.proposalNumber || ''; } },
+    { key: 'proposalTitle', label: 'Project', cell: function (o) { return esc(o.proposalTitle || '—'); }, plain: function (o) { return o.proposalTitle || ''; } },
+    { key: 'acceptedVersion', label: 'Accepted version', cell: function (o) { return o.acceptedVersion ? 'v' + o.acceptedVersion : '—'; }, plain: function (o) { return o.acceptedVersion || ''; } },
+    { key: 'approvedBy', label: 'Approved by', cell: function (o) { return esc(o.approvedBy || '—'); }, plain: function (o) { return o.approvedBy || ''; } },
+    { key: 'approvalMethod', label: 'Approval method', cell: function (o) { return o.approvalMethod ? titleCase(o.approvalMethod) : '—'; }, plain: function (o) { return titleCase(o.approvalMethod || ''); } },
+    { key: 'poNumber', label: 'PO number', cell: function (o) { return esc(o.poNumber || '—'); }, plain: function (o) { return o.poNumber || ''; } },
+    { key: 'tasks', label: 'Open tasks', cell: function (o) { return (o.openTasks || 0) + ' / ' + (o.taskCount || 0); }, plain: function (o) { return (o.openTasks || 0) + ' of ' + (o.taskCount || 0); } },
+    { key: 'requirements', label: 'Open requirements', cell: function (o) { return (o.openRequirements || 0) + ' / ' + (o.requirementCount || 0); }, plain: function (o) { return (o.openRequirements || 0) + ' of ' + (o.requirementCount || 0); } },
+    { key: 'procurement', label: 'Sourced', cell: function (o) { return (o.procurementSourced || 0) + ' / ' + (o.procurementCount || 0); }, plain: function (o) { return (o.procurementSourced || 0) + ' of ' + (o.procurementCount || 0); } },
+    { key: 'qbo', label: 'QuickBooks', cell: function (o) { return o.qboEstimateTxnId ? '<span class="chip">Linked</span>' : '<span class="muted">Not pushed</span>'; }, plain: function (o) { return o.qboEstimateTxnId ? 'Linked' : 'Not pushed'; } },
+    { key: 'monday', label: 'monday.com', cell: function (o) { return o.mondayProjectId ? '<span class="chip">Linked</span>' : '<span class="muted">—</span>'; }, plain: function (o) { return o.mondayProjectId ? 'Linked' : ''; } },
+    { key: 'updatedAt', label: 'Last activity', cell: function (o) { return fmtDate(o.updatedAt); }, plain: function (o) { return o.updatedAt || ''; } }
+  ];
+  var ORDER_COLS_DEFAULT = ['customer', 'signedAt', 'number', 'status', 'total', 'deposit', 'createdAt'];
+  var ORDER_COLS_KEY = 'ssg.orderColumns';
+  function money(minor) { return minor == null ? '' : (Number(minor) / 100).toFixed(2); }
+  function orderColKeys() {
+    var saved = null;
+    try { saved = JSON.parse(localStorage.getItem(ORDER_COLS_KEY) || 'null'); } catch (e) {}
+    var keys = Array.isArray(saved) && saved.length ? saved : ORDER_COLS_DEFAULT.slice();
+    // Customer then signed date always lead, whatever else is chosen.
+    keys = keys.filter(function (k) { return k !== 'customer' && k !== 'signedAt' && ORDER_COLS.some(function (c) { return c.key === k; }); });
+    return ['customer', 'signedAt'].concat(keys);
+  }
+  function orderCol(key) { for (var i = 0; i < ORDER_COLS.length; i++) if (ORDER_COLS[i].key === key) return ORDER_COLS[i]; return null; }
+
+  var ordersData = [];
   async function renderOrders(user) {
-    document.getElementById('view').innerHTML = '<div id="ordList"><div class="muted" style="padding:24px;">Loading…</div></div>';
+    document.getElementById('view').innerHTML =
+      '<div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:14px;">' +
+        '<button class="link-btn" id="ordCols" style="width:auto;padding:9px 15px;">Columns</button>' +
+        '<button class="link-btn" id="ordCsv" style="width:auto;padding:9px 15px;">Export Excel (CSV)</button>' +
+      '</div><div id="ordList"><div class="muted" style="padding:24px;">Loading…</div></div>';
+    document.getElementById('ordCols').addEventListener('click', function () { openOrderColumnPicker(user); });
+    document.getElementById('ordCsv').addEventListener('click', function () {
+      var cols = orderColKeys().map(orderCol);
+      downloadCsv('orders-' + new Date().toISOString().slice(0, 10) + '.csv',
+        [cols.map(function (c) { return c.label; })].concat(ordersData.map(function (o) { return cols.map(function (c) { return c.plain(o); }); })));
+    });
     try {
       var r = await authed('/orders'); if (!r.ok) { document.getElementById('ordList').innerHTML = '<div class="err">Could not load (' + r.status + ').</div>'; return; }
-      var list = await r.json();
-      var rows = (list || []).map(function (o) {
-        return '<tr style="cursor:pointer;" data-id="' + o.id + '">' + td('<b style="font-weight:600;">' + esc(o.number) + '</b>') + td('<span class="chip">' + titleCase(o.status) + '</span>') + td(fmtMoney(o.grandTotalMinor, o.currency)) + td(o.depositRequired ? fmtMoney(o.depositDueMinor, o.currency) : '—') + td(fmtDate(o.createdAt)) + '</tr>';
+      ordersData = (await r.json()) || [];
+      var cols = orderColKeys().map(orderCol);
+      var rows = ordersData.map(function (o) {
+        return '<tr style="cursor:pointer;" data-id="' + o.id + '">' + cols.map(function (c) { return td(c.cell(o)); }).join('') + '</tr>';
       }).join('');
-      document.getElementById('ordList').innerHTML = tableShell(['Order', 'Status', 'Total', 'Deposit', 'Created'], rows, 5, 'No operational orders yet. Lock an accepted proposal to create one.');
+      document.getElementById('ordList').innerHTML = tableShell(cols.map(function (c) { return c.label; }), rows, cols.length, 'No operational orders yet. Lock an accepted proposal to create one.');
       document.querySelectorAll('#ordList tr[data-id]').forEach(function (tr) { tr.addEventListener('click', function () { openOrderDetail(tr.getAttribute('data-id'), user); }); });
     } catch (e) { document.getElementById('ordList').innerHTML = '<div class="err">Could not reach the server.</div>'; }
   }
+
+  function openOrderColumnPicker(user) {
+    var chosen = orderColKeys();
+    var body = '<div class="muted" style="font-size:13px;margin-bottom:12px;">Customer and signed date always lead the table. Choose what else to show.</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 18px;">' +
+      ORDER_COLS.filter(function (c) { return !c.fixed; }).map(function (c) {
+        return '<label style="display:flex;gap:8px;align-items:center;font-size:13.5px;"><input type="checkbox" class="ordColChk" value="' + c.key + '"' + (chosen.indexOf(c.key) > -1 ? ' checked' : '') + '>' + esc(c.label) + '</label>';
+      }).join('') + '</div>';
+    openModal('Table columns', body, function (close) {
+      var keys = [];
+      document.querySelectorAll('.ordColChk').forEach(function (chk) { if (chk.checked) keys.push(chk.value); });
+      localStorage.setItem(ORDER_COLS_KEY, JSON.stringify(keys));
+      close();
+      renderOrders(user);
+    }, 'Apply');
+  }
+
   async function openOrderDetail(id, user) {
     var view = document.getElementById('view'); view.innerHTML = '<div class="muted" style="padding:24px;">Loading…</div>';
     var order, st, audit;
@@ -2645,9 +2724,12 @@
         '<div><div class="k">Customer approval</div><div class="v small">' + (order.customerApproval ? esc(order.customerApproval.approverName) : '—') + '</div></div></div></div>' +
       sectionBlock('Requirements', reqRows(order.requirements || [], canHandoff)) +
       sectionBlock('Internal tasks', taskRows(order.tasks || [], canHandoff)) +
-      sectionBlock('Procurement', procRows(order.procurement || [])) +
+      sectionBlock('Procurement', procSections(order.procurement || [])) +
+      (hasRole(QBO_VIEW_ROLES, user.role) ? sectionBlock('QuickBooks', '<div id="qboBox"><div class="muted" style="padding:16px;">Loading…</div></div>') : '') +
       sectionBlock('Audit timeline', auditRows(audit));
     document.getElementById('ordBack').addEventListener('click', function () { renderOrders(user); });
+    wireProcExports(order);
+    if (hasRole(QBO_VIEW_ROLES, user.role)) loadQbo(order, user);
     var unl = document.getElementById('ordUnlock');
     if (unl) unl.addEventListener('click', function () { openUnlockForm(order, user); });
     if (canHandoff) {
@@ -2676,9 +2758,160 @@
     }).join('');
     return tableShell(['Task', 'Owner', 'Status', 'Due'], rows, 4, 'No tasks.');
   }
-  function procRows(lines) {
-    var rows = lines.map(function (p) { return '<tr>' + td('<b style="font-weight:600;">' + esc(p.name) + '</b>') + td(String(p.quantity)) + td(esc(p.vendor || '—')) + td(p.sourced ? '<span class="chip">Sourced</span>' : '<span class="muted">Pending</span>') + '</tr>'; }).join('');
-    return tableShell(['Item', 'Qty', 'Vendor', 'Sourcing'], rows, 4, 'No procurement lines.');
+  /* --- Procurement: grouped by vendor, each block exportable. --- */
+  var procData = [];
+  function procSections(lines) {
+    procData = lines || [];
+    if (!procData.length) return '<div class="placeholder" style="padding:20px;"><p class="muted" style="margin:0;">No procurement lines.</p></div>';
+    var groups = {}, order = [];
+    procData.forEach(function (p) {
+      var v = (p.vendor && String(p.vendor).trim()) || 'Unassigned vendor';
+      if (!groups[v]) { groups[v] = []; order.push(v); }
+      groups[v].push(p);
+    });
+    order.sort(function (a, b) { return a === 'Unassigned vendor' ? 1 : b === 'Unassigned vendor' ? -1 : a.localeCompare(b); });
+    return '<div style="display:flex;justify-content:flex-end;gap:8px;margin:-6px 0 12px;">' +
+        '<button class="link-btn" data-proc="csv" data-vendor="*" style="width:auto;padding:8px 14px;">Export all — Excel</button>' +
+        '<button class="link-btn" data-proc="pdf" data-vendor="*" style="width:auto;padding:8px 14px;">Export all — PDF</button>' +
+      '</div>' +
+      order.map(function (v) {
+        var lines2 = groups[v];
+        var qty = lines2.reduce(function (a, l) { return a + (Number(l.quantity) || 0); }, 0);
+        var rows = lines2.map(function (p) {
+          return '<tr>' + td('<b style="font-weight:600;">' + esc(p.name) + '</b>') + td(esc(p.sku || '—')) + td(String(p.quantity)) +
+            td(p.sourced ? '<span class="chip">Sourced</span>' : '<span class="muted">Pending</span>') + '</tr>';
+        }).join('') +
+          '<tr><td style="padding:12px 16px;border-top:1px solid #e7e8e3;font-weight:600;">Total — ' + lines2.length + ' line' + (lines2.length === 1 ? '' : 's') + '</td>' +
+          '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td>' +
+          '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;font-weight:600;">' + qty + '</td>' +
+          '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td></tr>';
+        return '<div style="margin-bottom:18px;">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">' +
+            '<div style="font-weight:600;font-size:14.5px;">' + esc(v) + '<span class="muted" style="font-weight:400;font-size:12.5px;margin-left:8px;">' + qty + ' unit' + (qty === 1 ? '' : 's') + '</span></div>' +
+            '<div style="display:flex;gap:6px;">' +
+              '<button class="link-btn" data-proc="csv" data-vendor="' + esc(v) + '" style="width:auto;padding:7px 13px;">Excel</button>' +
+              '<button class="link-btn" data-proc="pdf" data-vendor="' + esc(v) + '" style="width:auto;padding:7px 13px;">PDF</button>' +
+            '</div>' +
+          '</div>' +
+          tableShell(['Item', 'Part #', 'Qty', 'Sourcing'], rows, 4, '') +
+        '</div>';
+      }).join('');
+  }
+  function procLinesFor(vendor) {
+    return vendor === '*' ? procData : procData.filter(function (p) { return ((p.vendor && String(p.vendor).trim()) || 'Unassigned vendor') === vendor; });
+  }
+  function wireProcExports(order) {
+    document.querySelectorAll('[data-proc]').forEach(function (bt) {
+      bt.addEventListener('click', function () {
+        var vendor = bt.getAttribute('data-vendor');
+        var lines = procLinesFor(vendor);
+        var title = 'Procurement — ' + (vendor === '*' ? 'all vendors' : vendor);
+        var head = vendor === '*' ? ['Vendor', 'Item', 'Part #', 'Qty', 'Sourcing'] : ['Item', 'Part #', 'Qty', 'Sourcing'];
+        var body = lines.map(function (p) {
+          var base = [p.name || '', p.sku || '', String(p.quantity || 0), p.sourced ? 'Sourced' : 'Pending'];
+          return vendor === '*' ? [(p.vendor || 'Unassigned vendor')].concat(base) : base;
+        });
+        var qty = lines.reduce(function (a, l) { return a + (Number(l.quantity) || 0); }, 0);
+        var totalRow = (vendor === '*' ? ['', 'Total', '', String(qty), ''] : ['Total', '', String(qty), '']);
+        var slug = (vendor === '*' ? 'all-vendors' : vendor).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+        if (bt.getAttribute('data-proc') === 'csv') downloadCsv(order.number + '-procurement-' + slug + '.csv', [head].concat(body).concat([totalRow]));
+        else printTable(title, order.number + ' · accepted proposal v' + (order.acceptedVersion || ''), head, body, totalRow);
+      });
+    });
+  }
+  /* --- QuickBooks push: prepare → authorize → execute, on the order itself. --- */
+  var QBO_TYPES = [
+    ['ESTIMATE', 'Estimate'],
+    ['DEPOSIT_INVOICE', 'Deposit invoice'],
+    ['PROGRESS_INVOICE', 'Progress invoice'],
+    ['FINAL_INVOICE', 'Final invoice']
+  ];
+  function qboTypeLabel(t) { for (var i = 0; i < QBO_TYPES.length; i++) if (QBO_TYPES[i][0] === t) return QBO_TYPES[i][1]; return titleCase(t); }
+  async function loadQbo(order, user) {
+    var box = document.getElementById('qboBox'); if (!box) return;
+    var txns = [];
+    var conn = null;
+    try {
+      var rs = await authed('/integrations/quickbooks/status'); conn = rs.ok ? await rs.json() : null;
+      var r = await authed('/integrations/quickbooks/transactions?proposalId=' + encodeURIComponent(order.proposalId));
+      if (r.status === 403) { box.innerHTML = '<div class="placeholder" style="padding:18px;"><p class="muted" style="margin:0;">Your role cannot view QuickBooks documents.</p></div>'; return; }
+      if (r.ok) txns = (await r.json()) || [];
+    } catch (e) { box.innerHTML = '<div class="err">Could not reach QuickBooks.</div>'; return; }
+
+    var connected = conn && (conn.connections || 0) > 0;
+    var canTransact = hasRole(QBO_TXN_ROLES, user.role) && connected && order.status !== 'CANCELLED';
+    var rows = txns.map(function (t) {
+      var step = '';
+      if (canTransact) {
+        if (t.status === 'DRAFT' || t.status === 'PENDING_AUTHORIZATION') step = '<button class="link-btn" data-qbo="authorize" data-id="' + t.id + '" style="width:auto;padding:7px 13px;">Step 2 · Authorize</button>';
+        else if (t.status === 'AUTHORIZED') step = '<button class="btn" data-qbo="execute" data-id="' + t.id + '" style="width:auto;padding:7px 13px;">Step 3 · Create in QuickBooks</button>';
+        else if (t.status === 'FAILED') step = '<button class="link-btn" data-qbo="retry" data-id="' + t.id + '" style="width:auto;padding:7px 13px;color:#9c3327;">Retry</button>';
+      }
+      return '<tr>' + td('<b style="font-weight:600;">' + esc(qboTypeLabel(t.type)) + '</b>' + (t.error ? '<div style="font-size:12px;color:#9c3327;">' + esc(t.error) + '</div>' : '')) +
+        td('<span class="chip">' + titleCase(t.status) + '</span>') +
+        td(fmtMoney(t.amountMinor, t.currency)) +
+        td(esc(t.qboDocNumber || t.qboId || '—')) +
+        td('<div style="display:flex;justify-content:flex-end;">' + (step || '<span class="muted">—</span>') + '</div>') + '</tr>';
+    }).join('');
+
+    box.innerHTML =
+      '<div class="muted" style="font-size:12.5px;margin:-4px 0 10px;line-height:1.55;">Pushing to QuickBooks is three deliberate steps: <b>prepare</b> freezes the totals and an idempotency key (nothing leaves this app), <b>authorize</b> is the sign-off, <b>create</b> writes the document into QuickBooks. A retry reuses the same key, so it can never duplicate a document.</div>' +
+      (!connected ? '<div class="placeholder" style="padding:16px;margin-bottom:10px;"><p class="muted" style="margin:0;">QuickBooks is not connected — connect it under Integrations first.</p></div>' : '') +
+      (canTransact ? '<div style="display:flex;justify-content:flex-end;margin-bottom:10px;"><button class="btn" id="qboPrepare" style="width:auto;padding:9px 15px;">Step 1 · Prepare a document</button></div>' : '') +
+      tableShell(['Document', 'Status', 'Amount', 'QuickBooks #', ''], rows, 5, 'Nothing pushed to QuickBooks for this order yet.');
+
+    var pb = document.getElementById('qboPrepare');
+    if (pb) pb.addEventListener('click', function () { openQboPrepare(order, user); });
+    document.querySelectorAll('[data-qbo]').forEach(function (bt) {
+      bt.addEventListener('click', async function () {
+        var act = bt.getAttribute('data-qbo');
+        if (act === 'execute' && !confirm('This creates the document in QuickBooks. Continue?')) return;
+        bt.disabled = true; bt.textContent = 'Working…';
+        var r = await authed('/integrations/quickbooks/transactions/' + bt.getAttribute('data-id') + '/' + act, { method: 'POST', body: {} });
+        if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} alert(m || ('Step failed (' + r.status + ').')); }
+        loadQbo(order, user);
+      });
+    });
+  }
+  function openQboPrepare(order, user) {
+    openModal('Prepare a QuickBooks document',
+      '<div class="muted" style="font-size:13px;margin-bottom:12px;">This freezes the accepted totals of ' + esc(order.number) + ' against an idempotency key. Nothing is sent to QuickBooks until you authorize and create it.</div>' +
+      fieldRow('Document type', '<select id="qboType" style="' + IN + '">' + QBO_TYPES.map(function (t) { return '<option value="' + t[0] + '">' + t[1] + '</option>'; }).join('') + '</select>'),
+      async function (close, showErr) {
+        var r = await authed('/integrations/quickbooks/transactions/prepare', { method: 'POST', body: { proposalVersionId: order.proposalVersionId, type: document.getElementById('qboType').value } });
+        if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} return showErr(m || 'Could not prepare (' + r.status + ').'); }
+        close(); loadQbo(order, user);
+      }, 'Prepare');
+  }
+
+  function downloadCsv(filename, rows) {
+    var csv = rows.map(function (r) {
+      return r.map(function (v) { v = v == null ? '' : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(',');
+    }).join('\n');
+    var blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+  }
+  /** Print-to-PDF of one table — the browser's print dialog saves it as PDF. */
+  function printTable(title, subtitle, head, rows, totalRow) {
+    var w = window.open('', '_blank', 'width=900,height=1000');
+    if (!w) { alert('Allow pop-ups to export a PDF.'); return; }
+    var cell = function (v, b) { return '<td style="padding:7px 10px;border-bottom:1px solid #e7e8e3;' + (b ? 'font-weight:600;border-top:1px solid #cfd3ca;' : '') + '">' + esc(v) + '</td>'; };
+    w.document.write('<!doctype html><meta charset="utf-8"><title>' + esc(title) + '</title>' +
+      '<body style="font-family:Georgia,serif;color:#23261f;margin:34px;">' +
+      '<div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#8a8f85;">Summit Sensory Gym</div>' +
+      '<h1 style="font-size:21px;margin:4px 0 2px;">' + esc(title) + '</h1>' +
+      '<div style="font-size:12.5px;color:#6c7266;margin-bottom:16px;">' + esc(subtitle) + '</div>' +
+      '<table style="width:100%;border-collapse:collapse;font-family:Helvetica,Arial,sans-serif;font-size:12.5px;"><thead><tr>' +
+      head.map(function (h) { return '<th style="text-align:left;padding:7px 10px;font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;border-bottom:1px solid #cfd3ca;">' + esc(h) + '</th>'; }).join('') +
+      '</tr></thead><tbody>' +
+      rows.map(function (r) { return '<tr>' + r.map(function (v) { return cell(v); }).join('') + '</tr>'; }).join('') +
+      (totalRow ? '<tr>' + totalRow.map(function (v) { return cell(v, 1); }).join('') + '</tr>' : '') +
+      '</tbody></table></body>');
+    w.document.close();
+    setTimeout(function () { w.focus(); w.print(); }, 300);
   }
   function auditRows(events) {
     if (!events || !events.length) return '<div class="placeholder" style="padding:20px;"><p class="muted" style="margin:0;">No events recorded.</p></div>';
