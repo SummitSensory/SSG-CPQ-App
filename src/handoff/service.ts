@@ -78,20 +78,21 @@ async function snapshotAcceptedContent(versionId: string, sections: unknown, ite
 }
 
 /**
- * Resolve the supplying vendor for procurement lines. Three keys, in order of
- * confidence: the line's productId, its part number, and — for generated frame /
- * adventure lines that carry neither — an exact match on the catalog name
- * (Product.name or Sku.description). The vendor itself comes from the product's
- * sourcing record (primary Manufacturer) or the SKU master's manufacturer column,
- * which is the same field the Catalog screen edits.
+ * Resolve the catalog identity of procurement lines — part number and supplying
+ * vendor. Three keys, in order of confidence: the line's productId, its part
+ * number, and — for generated frame / adventure lines that carry neither — an
+ * exact match on the catalog name (Product.name or Sku.description). The part
+ * number IS the catalog SKU: `Product.sku` / `Sku.part`, the same value the
+ * Catalog screen shows. The vendor comes from the product's sourcing record
+ * (primary Manufacturer) or the SKU master's manufacturer column.
  */
-export async function resolveVendors(
+export async function resolveCatalogRefs(
   lines: Array<{ productId?: string | null; sku?: string | null; name?: string | null }>,
-): Promise<(string | null)[]> {
+): Promise<Array<{ sku: string | null; vendor: string | null }>> {
   const productIds = [...new Set(lines.map((l) => l.productId).filter((v): v is string => !!v))];
   const parts = [...new Set(lines.map((l) => l.sku).filter((v): v is string => !!v))];
   const names = [...new Set(lines.map((l) => (l.name || '').trim()).filter(Boolean))];
-  if (!productIds.length && !parts.length && !names.length) return lines.map(() => null);
+  if (!productIds.length && !parts.length && !names.length) return lines.map(() => ({ sku: null, vendor: null }));
 
   const [products, skus] = await Promise.all([
     prisma.product.findMany({
@@ -104,45 +105,61 @@ export async function resolveVendors(
     }),
   ]);
 
+  type Ref = { sku: string | null; vendor: string | null };
   const vendorOf = (p: (typeof products)[number]): string | null => {
     const s = p.sourcing.find((x) => x.isPrimary) ?? p.sourcing[0];
     return s?.manufacturer?.name ?? null;
   };
-  const byId = new Map(products.map((p) => [p.id, vendorOf(p)]));
-  const byPart = new Map<string, string | null>();
-  const byName = new Map<string, string | null>();
+  const byId = new Map<string, Ref>();
+  const byPart = new Map<string, Ref>();
+  const byName = new Map<string, Ref>();
   for (const p of products) {
-    if (p.sku && !byPart.get(p.sku)) byPart.set(p.sku, vendorOf(p));
-    if (p.name && !byName.get(p.name)) byName.set(p.name, vendorOf(p));
+    const ref: Ref = { sku: p.sku ?? null, vendor: vendorOf(p) };
+    byId.set(p.id, ref);
+    if (p.sku && !byPart.has(p.sku)) byPart.set(p.sku, ref);
+    if (p.name && !byName.has(p.name)) byName.set(p.name, ref);
   }
   for (const s of skus) {
-    if (s.manufacturer) {
-      if (!byPart.get(s.part)) byPart.set(s.part, s.manufacturer);
-      if (s.description && !byName.get(s.description)) byName.set(s.description, s.manufacturer);
+    const ref: Ref = { sku: s.part, vendor: s.manufacturer ?? null };
+    if (!byPart.has(s.part)) byPart.set(s.part, ref);
+    // A Product match wins on vendor, but the flat SKU row can still supply a
+    // part number the product record lacks.
+    const existing = s.description ? byName.get(s.description) : undefined;
+    if (s.description) {
+      if (!existing) byName.set(s.description, ref);
+      else byName.set(s.description, { sku: existing.sku ?? ref.sku, vendor: existing.vendor ?? ref.vendor });
     }
   }
 
-  return lines.map(
-    (l) =>
-      (l.productId ? byId.get(l.productId) : null) ||
-      (l.sku ? byPart.get(l.sku) : null) ||
-      byName.get((l.name || '').trim()) ||
-      null,
-  );
+  return lines.map((l) => {
+    const hit =
+      (l.productId ? byId.get(l.productId) : undefined) ??
+      (l.sku ? byPart.get(l.sku) : undefined) ??
+      byName.get((l.name || '').trim());
+    return { sku: l.sku || hit?.sku || null, vendor: hit?.vendor ?? null };
+  });
 }
 
 /**
- * Fill in vendors on lines locked before vendor resolution existed (or before the
- * part was given a manufacturer in the catalog). Idempotent and only ever writes
- * a line whose vendor is still blank — an operator's manual override is never
- * overwritten.
+ * Fill in part numbers and vendors on lines locked before catalog resolution
+ * existed (or before the part was given a manufacturer). Idempotent, and only
+ * ever writes a field that is still blank — an operator's manual override is
+ * never overwritten.
  */
-async function backfillVendors(orderId: string): Promise<void> {
-  const blanks = await prisma.procurementLine.findMany({ where: { orderId, vendor: null }, select: { id: true, productId: true, sku: true, name: true } });
+async function backfillCatalogRefs(orderId: string): Promise<void> {
+  const blanks = await prisma.procurementLine.findMany({
+    where: { orderId, OR: [{ vendor: null }, { sku: null }] },
+    select: { id: true, productId: true, sku: true, name: true, vendor: true },
+  });
   if (!blanks.length) return;
-  const vendors = await resolveVendors(blanks);
+  const refs = await resolveCatalogRefs(blanks);
   await Promise.all(
-    blanks.map((l, i) => (vendors[i] ? prisma.procurementLine.update({ where: { id: l.id }, data: { vendor: vendors[i] } }) : null)).filter(Boolean) as Promise<unknown>[],
+    blanks.map((l, i) => {
+      const data: { sku?: string; vendor?: string } = {};
+      if (!l.sku && refs[i].sku) data.sku = refs[i].sku as string;
+      if (!l.vendor && refs[i].vendor) data.vendor = refs[i].vendor as string;
+      return Object.keys(data).length ? prisma.procurementLine.update({ where: { id: l.id }, data }) : null;
+    }).filter(Boolean) as Promise<unknown>[],
   );
 }
 
@@ -175,7 +192,7 @@ export async function createAcceptedOrder(versionId: string, approval: CustomerA
   const depositDue = depositFromSnapshot(sLike);
   const number = await nextOrderNumber();
   const procurement = procurementFromItems(version.items);
-  const vendors = await resolveVendors(procurement);
+  const refs = await resolveCatalogRefs(procurement);
 
   const order = await prisma.$transaction(async (tx) => {
     const o = await tx.acceptedOrder.create({
@@ -204,7 +221,7 @@ export async function createAcceptedOrder(versionId: string, approval: CustomerA
           },
         },
         requirements: { create: defaultRequirements().map((r) => ({ category: r.category as RequirementCategory, title: r.title, createdById: userId })) },
-        procurement: { create: procurement.map((p, i) => ({ productId: p.productId, sku: p.sku, name: p.name, quantity: p.quantity, vendor: vendors[i] })) },
+        procurement: { create: procurement.map((p, i) => ({ productId: p.productId, sku: refs[i].sku, name: p.name, quantity: p.quantity, vendor: refs[i].vendor })) },
         tasks: { create: defaultTasks(depositDue > 0n).map((t) => ({ title: t.title, assigneeRole: (t.assigneeRole as Role) ?? null, category: (t.category as RequirementCategory) ?? null, createdById: userId })) },
         events: { create: { action: 'order.locked', actorId: userId, detail: { number, acceptedVersion: version.version, integrityHash } as object } },
       },
@@ -274,7 +291,7 @@ export async function unlockOrder(
 }
 
 export async function getOrder(id: string) {
-  await backfillVendors(id);
+  await backfillCatalogRefs(id);
   const order = await prisma.acceptedOrder.findUnique({
     where: { id },
     include: { customerApproval: true, requirements: true, procurement: true, tasks: true, events: { orderBy: { createdAt: 'asc' } } },
