@@ -24,6 +24,75 @@
       .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<i>$2</i>');
     return out.replace(/\n/g, '<br>');
   }
+  /* --- Rich-text notes ---------------------------------------------------
+     Notes are stored as the same lightweight markup the printer already reads
+     (**bold**, *italic*, line breaks) so nothing downstream changes; the editor
+     just gives you a normal formatting surface over it. */
+  function mdToEditHtml(s) {
+    return esc(s == null ? '' : s)
+      .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+      .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<i>$2</i>')
+      .replace(/\n/g, '<br>');
+  }
+  /** Walk the editor DOM back into **bold** / *italic* markup. */
+  function editHtmlToMd(root) {
+    var out = '';
+    (function walk(node) {
+      for (var i = 0; i < node.childNodes.length; i++) {
+        var c = node.childNodes[i];
+        if (c.nodeType === 3) { out += c.nodeValue; continue; }
+        if (c.nodeType !== 1) continue;
+        var tag = c.tagName.toLowerCase();
+        if (tag === 'br') { out += '\n'; continue; }
+        if ((tag === 'div' || tag === 'p') && out && !/\n$/.test(out)) out += '\n';
+        var st = (c.getAttribute('style') || '') + ' ';
+        var bold = tag === 'b' || tag === 'strong' || /font-weight:\s*(bold|[6-9]00)/i.test(st);
+        var ital = tag === 'i' || tag === 'em' || /font-style:\s*italic/i.test(st);
+        var inner = out.length;
+        if (bold) out += '**';
+        if (ital) out += '*';
+        walk(c);
+        // An empty wrapper would leave dangling markers behind.
+        if (out.length === inner + (bold ? 2 : 0) + (ital ? 1 : 0)) { out = out.slice(0, inner); continue; }
+        if (ital) out += '*';
+        if (bold) out += '**';
+      }
+    })(root);
+    return out.replace(/\u00a0/g, ' ').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  }
+  /** Contenteditable field + B/I toolbar. Returns the markup via editHtmlToMd(). */
+  function richTextField(id, label, value, hint) {
+    var btn = 'border:1px solid #dcded7;background:#fff;border-radius:6px;width:30px;height:28px;font-size:13px;cursor:pointer;color:#20241f;';
+    return '<div class="field"><label>' + esc(label) + '</label>' +
+      '<div style="border:1px solid #dcded7;border-radius:8px;overflow:hidden;background:#fff;">' +
+        '<div style="display:flex;gap:5px;align-items:center;padding:6px 7px;border-bottom:1px solid #ece9db;background:#fafaf7;">' +
+          '<button type="button" data-rtcmd="bold" data-rt="' + id + '" title="Bold (\u2318B)" style="' + btn + 'font-weight:700;">B</button>' +
+          '<button type="button" data-rtcmd="italic" data-rt="' + id + '" title="Italic (\u2318I)" style="' + btn + 'font-style:italic;font-family:Georgia,serif;">I</button>' +
+          '<button type="button" data-rtcmd="removeFormat" data-rt="' + id + '" title="Clear formatting" style="' + btn + 'width:auto;padding:0 9px;font-size:11.5px;">Clear</button>' +
+          '<span class="muted" style="font-size:11px;margin-left:4px;">Select text, then click B or I</span>' +
+        '</div>' +
+        '<div id="' + id + '" contenteditable="true" style="min-height:120px;padding:10px 12px;font-size:14px;line-height:1.55;outline:none;">' + mdToEditHtml(value) + '</div>' +
+      '</div>' +
+      (hint ? '<div class="muted" style="font-size:11.5px;margin-top:3px;">' + hint + '</div>' : '') + '</div>';
+  }
+  /** Wire the toolbar + keyboard shortcuts + plain-text paste for a rich-text field. */
+  function wireRichText(id) {
+    var el = document.getElementById(id); if (!el) return;
+    document.querySelectorAll('[data-rt="' + id + '"]').forEach(function (b) {
+      // mousedown so the selection inside the editor survives the click.
+      b.addEventListener('mousedown', function (e) { e.preventDefault(); el.focus(); document.execCommand(b.getAttribute('data-rtcmd'), false, null); });
+    });
+    el.addEventListener('keydown', function (e) {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      var k = String(e.key).toLowerCase();
+      if (k === 'b' || k === 'i') { e.preventDefault(); document.execCommand(k === 'b' ? 'bold' : 'italic', false, null); }
+    });
+    el.addEventListener('paste', function (e) {
+      e.preventDefault();
+      var t = (e.clipboardData || window.clipboardData).getData('text/plain');
+      document.execCommand('insertText', false, t);
+    });
+  }
   function fmtDate(s) { if (!s) return '—'; var d = new Date(s); return isNaN(d) ? '—' : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }); }
   function fmtMoney(minor, cur) { if (minor == null) return '—'; var n = Number(minor) / 100; return (cur ? cur + ' ' : '$') + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
@@ -150,7 +219,7 @@
             '<button class="link-btn" id="profBtn" style="margin-bottom:6px;">My profile</button>' +
             '<button class="link-btn" id="pwdBtn" style="margin-bottom:6px;">Change password</button>' +
             '<button class="link-btn" id="logoutBtn">Sign out</button>' +
-            '<div style="text-align:center;font-size:10px;color:#b3b7ac;margin-top:8px;letter-spacing:.04em;">build 19 · manufacturers, bundles &amp; BOM</div></div>' +
+            '<div style="text-align:center;font-size:10px;color:#b3b7ac;margin-top:8px;letter-spacing:.04em;">build 20 · hardware lines &amp; proposal notes</div></div>' +
         '</aside>' +
         '<main class="main"><div class="topbar"><div class="eyebrow">Summit Sensory Gym Proposal Management Software</div><h2 id="viewTitle">Dashboard</h2></div>' +
           '<div class="content" id="view"></div></main>' +
@@ -517,12 +586,24 @@
 
   function renderCatalog(user) {
     function ctab(id, label){var on=cat.tab===id;return '<button data-ctab="'+id+'" style="border:none;border-radius:8px;padding:8px 15px;font-size:13.5px;font-weight:'+(on?'600':'500')+';cursor:pointer;background:'+(on?'#fff':'transparent')+';color:'+(on?'#1c4039':'#6b7065')+';box-shadow:'+(on?'0 1px 2px rgba(0,0,0,.06)':'none')+';">'+label+'</button>';}
-    document.getElementById('view').innerHTML = '<div style="display:flex;gap:5px;background:#eef0ea;padding:4px;border-radius:10px;width:max-content;margin-bottom:18px;">'+ctab('items','Catalog')+ctab('products','Product tree')+ctab('bundles','Bundles')+ctab('manufacturers','Manufacturers')+'</div><div id="catBody"></div>';
+    document.getElementById('view').innerHTML = '<div style="display:flex;gap:5px;background:#eef0ea;padding:4px;border-radius:10px;width:max-content;margin-bottom:18px;">'+ctab('items','Catalog')+ctab('products','Product tree')+ctab('bundles','Bundles')+ctab('manufacturers','Manufacturers')+ctab('notes','Proposal notes')+'</div><div id="catBody"></div>';
     document.querySelectorAll('[data-ctab]').forEach(function(b){b.addEventListener('click',function(){cat.tab=b.getAttribute('data-ctab');renderCatalog(user);});});
     if(cat.tab==='products') renderCatalogProducts(user);
     else if(cat.tab==='bundles') renderBundles(user);
     else if(cat.tab==='manufacturers') renderManufacturers(user);
+    else if(cat.tab==='notes') renderNotesTab(user);
     else renderItems(user);
+  }
+
+  /** Catalog → Proposal notes: the reusable note blocks the builder can drop onto a proposal. */
+  function renderNotesTab() {
+    document.getElementById('catBody').innerHTML =
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:12px;">' +
+        '<div class="muted" style="font-size:12.5px;max-width:640px;line-height:1.5;">Reusable note blocks for proposals. “Always include” notes are added to every new proposal automatically; the rest are picked from <b style="font-weight:600;">+ Standard note…</b> in the builder. Table notes print inside the line items; footer notes print below the signature lines.</div>' +
+        '<button class="btn" id="snNew" style="width:auto;padding:9px 15px;white-space:nowrap;">+ New note</button></div>' +
+      '<div id="snList"><div class="muted" style="padding:16px;">Loading…</div></div>';
+    document.getElementById('snNew').addEventListener('click', function () { openStandardNoteForm(null); });
+    loadStandardNotes();
   }
 
   /* --- The one catalog list: Product + SKU merged, one row per part number --- */
@@ -3894,7 +3975,7 @@
       '<div id="admList"><div class="muted" style="padding:24px;">Loading…</div></div>' +
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:26px;"><div class="section-title" style="margin:0;">Standard proposal notes</div>' +
         '<button class="btn" id="snNew" style="width:auto;padding:9px 15px;">+ New note</button></div>' +
-      '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;">Reusable note blocks for proposals. “Always include” notes are added to every new proposal automatically. Table notes print inside the line items; footer notes print below the signature lines. Wrap text in **double asterisks** to bold it.</div>' +
+      '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;">Reusable note blocks for proposals. “Always include” notes are added to every new proposal automatically. Table notes print inside the line items; footer notes print below the signature lines. Also editable under Catalog → Proposal notes.</div>' +
       '<div id="snList"><div class="muted" style="padding:16px;">Loading…</div></div>' +
       '<div class="section-title" style="margin-top:26px;">Formulas</div>' +
       '<div class="muted" style="font-size:12.5px;margin:0 0 10px;">Every calculation the pricing engine runs. Frame and hardware quantities are editable coefficients; business numbers are the scalars the proposal math uses; the last tab lists what is fixed in code and why.</div>' +
@@ -3914,7 +3995,7 @@
       if (!r.ok) { box.innerHTML = '<div class="err">Could not load standard notes (' + r.status + '). Run the 0019 migration if this persists.</div>'; return; }
       var notes = await r.json();
       var rows = (notes || []).map(function (n) {
-        return '<tr>' + td('<b style="font-weight:600;">' + esc(n.title) + '</b><div class="muted" style="font-size:12px;max-width:520px;line-height:1.45;">' + esc(String(n.body).slice(0, 160)) + (String(n.body).length > 160 ? '…' : '') + '</div>') +
+        return '<tr>' + td('<b style="font-weight:600;">' + esc(n.title) + '</b><div class="muted" style="font-size:12px;max-width:520px;line-height:1.45;">' + rt(String(n.body).slice(0, 160)) + (String(n.body).length > 160 ? '…' : '') + '</div>') +
           td(n.placement === 'FOOTER' ? '<span class="chip">Below signatures</span>' : '<span class="chip">In line items</span>') +
           td(n.autoInclude ? '<span style="display:inline-block;background:#eaf3ee;border:1px solid #cfe3d7;color:#2f7d5d;border-radius:999px;padding:3px 10px;font-size:12px;font-weight:600;">Always</span>' : '<span class="muted">On request</span>') +
           td(n.active ? '<span class="chip">Active</span>' : '<span class="muted">Hidden</span>') +
@@ -3939,8 +4020,7 @@
     var n = note || { title: '', body: '', placement: 'TABLE', autoInclude: false, sortOrder: 0, active: true };
     openModal(note ? 'Edit standard note' : 'New standard note',
       fieldRow('Title', '<input id="snTitle" style="' + IN + '" value="' + esc(n.title) + '">') +
-      '<div class="field"><label>Note text</label><textarea id="snBody" rows="6" style="' + IN + 'resize:vertical;">' + esc(n.body) + '</textarea>' +
-        '<div class="muted" style="font-size:11.5px;margin-top:3px;">**bold** · *italic* · line breaks are kept</div></div>' +
+      richTextField('snBody', 'Note text', n.body, 'Line breaks are kept. Bold and italic print on the customer proposal.') +
       fieldRow('Where it prints', '<select id="snPlace" style="' + IN + '"><option value="TABLE"' + (n.placement === 'TABLE' ? ' selected' : '') + '>Inside the line items</option><option value="FOOTER"' + (n.placement === 'FOOTER' ? ' selected' : '') + '>Below the signature lines</option></select>') +
       fieldRow('Order', '<input id="snOrder" type="number" style="' + IN + '" value="' + (Number(n.sortOrder) || 0) + '">') +
       '<label style="display:flex;align-items:center;gap:8px;font-size:14px;margin:4px 0;cursor:pointer;"><input type="checkbox" id="snAuto"' + (n.autoInclude ? ' checked' : '') + '> Always include on new proposals</label>' +
@@ -3948,7 +4028,7 @@
       async function (close, showErr) {
         var body = {
           title: document.getElementById('snTitle').value.trim(),
-          body: document.getElementById('snBody').value.trim(),
+          body: editHtmlToMd(document.getElementById('snBody')),
           placement: document.getElementById('snPlace').value,
           sortOrder: Number(document.getElementById('snOrder').value) || 0,
           autoInclude: document.getElementById('snAuto').checked,
@@ -3961,6 +4041,7 @@
         if (!r.ok) return showErr('Could not save (' + r.status + ').');
         close(); loadStandardNotes();
       }, note ? 'Save changes' : 'Create note');
+    wireRichText('snBody');
   }
 
   /* --- Formulas: every editable calculation in the engine --- */

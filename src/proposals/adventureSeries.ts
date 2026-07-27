@@ -210,10 +210,28 @@ export function computeAdventureProposal(
   const addlHw = n(a.forged) || n(a.swingHanger) || n(a.vRings) || n(a.carabiner) || n(a.webbingSling) || n(a.swivelStandalone);
   if (a.brackets || addlHw) {
     G('Hardware', false);
-    // Fasteners roll up into the single H-1000 line per the v73 workbook: rate,
-    // cost and weight are the sums of the 6820H-* components, which are listed in
-    // the description so the roll-up can be cross-referenced against the trace.
-    const roll = hardwareRollup(a, LOOK, rules, frameRules);
+    // The saddle bracket and the eye bolts the configurator asks for by name are
+    // things the customer chose — they print as their own lines instead of being
+    // buried in the H-1000 description, and are excluded from the roll-up below so
+    // nothing is counted twice.
+    if (a.brackets && qtyOf(BRACKET_PART) > 0) P(BRACKET_PART);
+    const hwRows = hardwareBOM(a, rules, frameRules);
+    for (const part of ACCESSORY_HW_PARTS) {
+      const row = hwRows.find((h) => h.part === part);
+      if (!row || row.qty <= 0) continue;
+      const rec = LOOK[part];
+      const w = rec ? rec.weightLbs : 0;
+      weight += row.qty * w;
+      lines.push({
+        lineType: 'PRODUCT', name: rec ? rec.description : row.name, sku: part, description: '',
+        quantity: row.qty, rateMinor: rec ? rec.unitPriceMinor : 0,
+        costEach: rec ? (rec.unitCostMinor ?? 0) : 0, weightEach: w, needsPrice: !rec,
+      });
+    }
+    // The remaining fasteners roll up into the single H-1000 line per the v73
+    // workbook: rate, cost and weight are the sums of the 6820H-* components, which
+    // are listed in the description so the roll-up can be cross-referenced.
+    const roll = hardwareRollup(a, LOOK, rules, frameRules, ACCESSORY_HW_PARTS);
     if (roll.components.length) {
       weight += roll.weightLbs;
       lines.push({
@@ -231,6 +249,16 @@ export function computeAdventureProposal(
 
   return { lines, totalWeightLbs: Math.round(weight * 100) / 100 };
 }
+
+/** Frame part number for the Quick Shift Saddle Bracket. */
+export const BRACKET_PART = 'P-2124';
+
+/**
+ * Hardware the configurator asks for by name. These print as their own proposal
+ * lines rather than rolling into H-1000, so ticking the box visibly changes the
+ * proposal. Excluded from `hardwareRollup` at the same time.
+ */
+export const ACCESSORY_HW_PARTS = ['6820H-LDD', '6820H-LAC-G', '6820H-LP', 'B0C4Y8XSNB', 'SSG-SA-SWIVEL-EYE'];
 
 export interface HardwareComponent { part: string; name: string; qty: number; formula: string; unitPriceMinor: number; unitCostMinor: number; weightLbs: number; inCatalog: boolean; edited?: boolean; }
 
@@ -252,13 +280,19 @@ export function hardwareBOM(a: AdvAnswers, rules?: HardwareRule[], frameRules?: 
 }
 
 /** The 6820H-* fastener components and their summed roll-up into H-1000. */
-export function hardwareRollup(a: AdvAnswers, look: Record<string, SkuRec>, rules?: HardwareRule[], frameRules?: FormulaRule[]): {
+export function hardwareRollup(
+  a: AdvAnswers, look: Record<string, SkuRec>, rules?: HardwareRule[], frameRules?: FormulaRule[],
+  /** Parts that print as their own lines and so must not be summed into H-1000. */
+  exclude?: string[],
+): {
   components: HardwareComponent[]; priceMinor: number; costMinor: number; weightLbs: number; missing: string[];
 } {
   const components: HardwareComponent[] = [];
   const missing: string[] = [];
+  const skip = new Set(exclude || []);
   let priceMinor = 0, costMinor = 0, weightLbs = 0;
   for (const h of hardwareBOM(a, rules, frameRules)) {
+    if (skip.has(h.part)) continue;
     const rec = look[h.part];
     if (!rec) missing.push(h.part);
     const unitPriceMinor = rec ? rec.unitPriceMinor : 0;
