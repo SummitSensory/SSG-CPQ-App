@@ -100,7 +100,7 @@
     { id: 'catalog', label: 'Catalog', ready: true, roles: '*' },
     { id: 'proposals', label: 'Proposals', ready: true, roles: '*' },
     { id: 'reports', label: 'Reports', ready: true, roles: '*' },
-    { id: 'orders', label: 'Orders & Handoff', ready: true, roles: '*' },
+    { id: 'orders', label: 'Orders & Bill of Materials', ready: true, roles: '*' },
     { id: 'admin', label: 'Administration', ready: true, roles: ['SYSTEM_ADMIN'] },
     { id: 'integrations', label: 'Integrations', ready: true, roles: ['SYSTEM_ADMIN', 'EXECUTIVE', 'ACCOUNTING'] },
   ];
@@ -150,7 +150,7 @@
             '<button class="link-btn" id="profBtn" style="margin-bottom:6px;">My profile</button>' +
             '<button class="link-btn" id="pwdBtn" style="margin-bottom:6px;">Change password</button>' +
             '<button class="link-btn" id="logoutBtn">Sign out</button>' +
-            '<div style="text-align:center;font-size:10px;color:#b3b7ac;margin-top:8px;letter-spacing:.04em;">build 18 · orders, vendors &amp; QuickBooks</div></div>' +
+            '<div style="text-align:center;font-size:10px;color:#b3b7ac;margin-top:8px;letter-spacing:.04em;">build 19 · manufacturers, bundles &amp; BOM</div></div>' +
         '</aside>' +
         '<main class="main"><div class="topbar"><div class="eyebrow">Summit Sensory Gym Proposal Management Software</div><h2 id="viewTitle">Dashboard</h2></div>' +
           '<div class="content" id="view"></div></main>' +
@@ -517,9 +517,12 @@
 
   function renderCatalog(user) {
     function ctab(id, label){var on=cat.tab===id;return '<button data-ctab="'+id+'" style="border:none;border-radius:8px;padding:8px 15px;font-size:13.5px;font-weight:'+(on?'600':'500')+';cursor:pointer;background:'+(on?'#fff':'transparent')+';color:'+(on?'#1c4039':'#6b7065')+';box-shadow:'+(on?'0 1px 2px rgba(0,0,0,.06)':'none')+';">'+label+'</button>';}
-    document.getElementById('view').innerHTML = '<div style="display:flex;gap:5px;background:#eef0ea;padding:4px;border-radius:10px;width:max-content;margin-bottom:18px;">'+ctab('items','Catalog')+ctab('products','Product tree')+'</div><div id="catBody"></div>';
+    document.getElementById('view').innerHTML = '<div style="display:flex;gap:5px;background:#eef0ea;padding:4px;border-radius:10px;width:max-content;margin-bottom:18px;">'+ctab('items','Catalog')+ctab('products','Product tree')+ctab('bundles','Bundles')+ctab('manufacturers','Manufacturers')+'</div><div id="catBody"></div>';
     document.querySelectorAll('[data-ctab]').forEach(function(b){b.addEventListener('click',function(){cat.tab=b.getAttribute('data-ctab');renderCatalog(user);});});
-    if(cat.tab==='products') renderCatalogProducts(user); else renderItems(user);
+    if(cat.tab==='products') renderCatalogProducts(user);
+    else if(cat.tab==='bundles') renderBundles(user);
+    else if(cat.tab==='manufacturers') renderManufacturers(user);
+    else renderItems(user);
   }
 
   /* --- The one catalog list: Product + SKU merged, one row per part number --- */
@@ -825,7 +828,7 @@
       '<div style="display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap;">' +
         '<input id="catSearch" placeholder="Search SKU or name…" value="' + esc(cat.q) + '" style="flex:1;min-width:220px;max-width:340px;padding:10px 13px;border:1px solid #dcded7;border-radius:10px;font-size:14px;background:#fff;outline:none;">' +
         '<select id="catStatus" style="padding:10px 12px;border:1px solid #dcded7;border-radius:10px;font-size:14px;background:#fff;">' + statusOpts + '</select>' +
-        (admin ? '<div style="margin-left:auto;display:flex;gap:8px;"><button class="link-btn" id="catNewCat" style="width:auto;padding:10px 15px;">New category</button><button class="btn" id="catNew" style="width:auto;padding:10px 17px;">New product</button></div>' : '') +
+        (admin ? '<div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;"><button class="link-btn" id="catCats" style="width:auto;padding:10px 14px;">Categories &amp; tiers</button><button class="link-btn" id="catOrder" style="width:auto;padding:10px 14px;">Reorder list</button><button class="link-btn" id="catExport" style="width:auto;padding:10px 14px;">Export tree</button><button class="link-btn" id="catImport" style="width:auto;padding:10px 14px;">Import tree</button><button class="btn" id="catNew" style="width:auto;padding:10px 17px;">New product</button></div>' : '') +
       '</div>' +
       '<div id="catList"><div class="muted" style="padding:24px;">Loading…</div></div>';
     var search = document.getElementById('catSearch'), t;
@@ -837,7 +840,10 @@
     });
     if (admin) {
       document.getElementById('catNew').addEventListener('click', function () { openProductForm(user); });
-      document.getElementById('catNewCat').addEventListener('click', openCategoryForm);
+      document.getElementById('catCats').addEventListener('click', function () { openCategoryManager(user); });
+      document.getElementById('catOrder').addEventListener('click', function () { openProductReorder(user); });
+      document.getElementById('catExport').addEventListener('click', exportProductTree);
+      document.getElementById('catImport').addEventListener('click', function () { openTreeImport(user); });
     }
     loadProducts(user);
   }
@@ -923,19 +929,67 @@
         close(); refreshCatalogList(user);
       });
   }
+  /**
+   * Import prices and catalog columns from a sheet. Two passes: the first is a
+   * preview (which columns the file carries, what will be created and changed, and
+   * which catalog parts the file leaves out), the second commits. Only the columns
+   * present in the file are written — leaving `unitCost` out of the sheet leaves
+   * every cost alone.
+   */
+  var skuImportConfirmed = false;
   function openSkuImport(user) {
-    openModal('Import SKUs from Excel / CSV',
-      '<div class="muted" style="font-size:13px;margin-bottom:10px;line-height:1.5;">Save your sheet as <b>CSV</b> with a header row of columns: <code>part, description, unitPrice, unitCost, weightLbs, category, manufacturer, proposalGroup</code>. Existing part #s are updated; new ones are added.</div>' +
-      '<input type="file" id="skuFile" accept=".csv,text/csv" style="width:100%;padding:10px;border:1px dashed #cfd3ca;border-radius:9px;background:#fff;">',
+    skuImportConfirmed = false;
+    openModal('Import products from Excel / CSV',
+      '<div class="muted" style="font-size:13px;margin-bottom:10px;line-height:1.55;">Save your sheet as <b>CSV</b> with a header row. Recognised columns: <code>part, description, unitPrice, unitCost, weightLbs, category, manufacturer, proposalGroup</code>. <b>part</b> is the match key and is required; every other column is optional — only the columns you include are overwritten.</div>' +
+      '<input type="file" id="skuFile" accept=".csv,text/csv" style="width:100%;padding:10px;border:1px dashed #cfd3ca;border-radius:9px;background:#fff;">' +
+      '<div id="siReview" style="margin-top:12px;"></div>',
       async function (close, showErr) {
         var fi = document.getElementById('skuFile').files[0]; if (!fi) return showErr('Choose a CSV file first.');
         var text = await fi.text();
         var rows = parseCsv(text);
         if (!rows.length) return showErr('No data rows found in that file.');
-        var r = await authed('/skus/import', { method: 'POST', body: { rows: rows } });
-        if (!r.ok) return showErr('Import failed (' + r.status + ').');
-        var d = await r.json();
-        close(); alert('Import complete: ' + d.created + ' added, ' + d.updated + ' updated.'); refreshCatalogList(user);
+        if (!Object.prototype.hasOwnProperty.call(rows[0], 'part')) return showErr('The sheet needs a “part” column — it is how rows are matched.');
+        var missingSel = document.getElementById('siMissing');
+        var r = await authed('/skus/import', { method: 'POST', body: {
+          rows: rows, dryRun: !skuImportConfirmed, missingAction: missingSel ? missingSel.value : 'leave'
+        } });
+        var d = null; try { d = await r.json(); } catch (e) {}
+        if (!d) return showErr('Import failed (' + r.status + ').');
+        if (d.issues && d.issues.length) {
+          document.getElementById('siReview').innerHTML =
+            '<div style="background:#fbe9e6;border:1px solid #f0cdc7;border-radius:10px;padding:11px 13px;font-size:12.5px;color:#9c3327;max-height:180px;overflow:auto;">' +
+            '<b>' + d.issues.length + ' row(s) could not be read:</b><ul style="margin:6px 0 0;padding-left:18px;line-height:1.5;">' +
+            d.issues.slice(0, 30).map(function (i) { return '<li>Row ' + i.row + ': ' + esc(i.message) + '</li>'; }).join('') + '</ul></div>';
+          skuImportConfirmed = false;
+          return showErr('Fix those rows and try again.');
+        }
+        if (!skuImportConfirmed) {
+          var p = d.plan || {};
+          document.getElementById('siReview').innerHTML =
+            '<div style="background:#f7f8f4;border:1px solid #eef0ea;border-radius:10px;padding:11px 13px;font-size:12.5px;line-height:1.6;">' +
+              '<b>Ready to import ' + (d.willUpsert || 0) + ' row(s)</b><br>' +
+              (p.create || 0) + ' new part(s), ' + (p.update || 0) + ' updated<br>' +
+              'Columns this file will overwrite: <b>' + ((p.columns || []).join(', ') || 'none — part numbers only') + '</b>' +
+            '</div>' +
+            ((p.missing && p.missing.length)
+              ? '<div style="margin-top:10px;background:#fdf6e3;border:1px solid #eadfbe;border-radius:10px;padding:11px 13px;font-size:12.5px;color:#7a6320;line-height:1.55;">' +
+                  '<b>' + p.missing.length + ' active catalog part(s) are not in this file.</b>' +
+                  '<div style="max-height:120px;overflow:auto;margin:6px 0;">' + p.missing.slice(0, 60).map(function (mm) { return esc(mm.part + ' — ' + mm.name); }).join('<br>') + '</div>' +
+                  '<label style="display:block;margin-top:6px;">What should happen to them? ' +
+                    '<select id="siMissing" style="padding:6px 8px;border:1px solid #dcded7;border-radius:6px;font-size:12.5px;background:#fff;">' +
+                      '<option value="leave">Leave them exactly as they are</option>' +
+                      '<option value="deactivate">Deactivate them</option>' +
+                    '</select></label></div>'
+              : '') +
+            '<div class="muted" style="font-size:12px;margin-top:8px;">Press Import again to commit.</div>';
+          skuImportConfirmed = true;
+          return showErr('Review the summary above, then press Import to commit.');
+        }
+        skuImportConfirmed = false;
+        close();
+        alert('Import complete: ' + (d.created || 0) + ' added, ' + (d.updated || 0) + ' updated' +
+          (d.deactivated ? ', ' + d.deactivated + ' deactivated' : '') + '.');
+        refreshCatalogList(user);
       }, 'Import');
   }
   function parseCsv(text) {
@@ -1125,26 +1179,6 @@
     });
   }
 
-  function openCategoryForm() {
-    openModal('New category',
-      fieldRow('Name', '<input id="cName" style="' + IN + '" required>') +
-      fieldRow('Slug', '<input id="cSlug" placeholder="auto-generated" style="' + IN + '">') +
-      fieldRow('Sort order', '<input id="cSort" type="number" value="0" style="' + IN + '">'),
-      async function (close, showErr) {
-        var name = document.getElementById('cName').value.trim();
-        if (name.length < 2) return showErr('Name must be at least 2 characters.');
-        var slug = document.getElementById('cSlug').value.trim() || slugify(name);
-        var body = { name: name, slug: slug, sortOrder: parseInt(document.getElementById('cSort').value, 10) || 0, isActive: true };
-        var r = await authed('/catalog/categories', { method: 'POST', body: body });
-        if (r.status === 409) return showErr('That slug already exists — try another.');
-        if (!r.ok) return showErr('Could not create (' + r.status + ').');
-        close();
-        var rc = await authed('/catalog/categories'); catCategories = rc.ok ? await rc.json() : catCategories;
-      });
-    var n = document.getElementById('cName'); if (n) n.addEventListener('input', function () { var sl = document.getElementById('cSlug'); if (sl && !sl.dataset.touched) sl.value = slugify(n.value); });
-    var sl2 = document.getElementById('cSlug'); if (sl2) sl2.addEventListener('input', function () { sl2.dataset.touched = '1'; });
-  }
-
   function openProductForm(user) {
     if (!catCategories.length) { alert('Create a category first — products must belong to one.'); return; }
     var catOpts = catCategories.map(function (c) { return '<option value="' + c.id + '">' + esc(c.name) + '</option>'; }).join('');
@@ -1170,6 +1204,659 @@
         if (!r.ok) return showErr('Could not create (' + r.status + ').');
         close(); cat.page = 1; loadProducts(user);
       });
+  }
+
+  /* ==================== Manufacturers ====================
+   * The vendor of record: where a purchase order goes, who is called about it,
+   * and whether their parts count toward the BOM's steel weight. */
+  var mfrState = { rows: [], q: '', showInactive: false };
+
+  async function renderManufacturers(user) {
+    var admin = canCatalogAdmin(user.role);
+    document.getElementById('catBody').innerHTML =
+      '<div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">' +
+        '<input id="mfSearch" placeholder="Search name, city or contact…" value="' + esc(mfrState.q) + '" style="flex:1;min-width:240px;max-width:380px;padding:10px 13px;border:1px solid #dcded7;border-radius:10px;font-size:14px;background:#fff;outline:none;">' +
+        '<label style="display:flex;gap:7px;align-items:center;font-size:13px;color:#5c6157;cursor:pointer;"><input type="checkbox" id="mfInactive"' + (mfrState.showInactive ? ' checked' : '') + '> Show inactive</label>' +
+        (admin ? '<div style="margin-left:auto;"><button class="btn" id="mfNew" style="width:auto;padding:10px 17px;">New manufacturer</button></div>' : '') +
+      '</div>' +
+      '<div style="font-size:12px;color:#8a8f85;margin-bottom:10px;">Each manufacturer is the vendor of record for the parts sourced from it. The address and point of contact print as the <b>Ship from</b> block on a Bill of Materials, and vendors marked as steel fabricators are the ones whose weight rolls into a BOM’s total steel weight.</div>' +
+      '<div id="mfList"><div class="muted" style="padding:24px;">Loading…</div></div>';
+    var s = document.getElementById('mfSearch'), t;
+    s.addEventListener('input', function () { clearTimeout(t); t = setTimeout(function () { mfrState.q = s.value.trim(); drawManufacturers(user); }, 250); });
+    document.getElementById('mfInactive').addEventListener('change', function (e) { mfrState.showInactive = e.target.checked; loadManufacturers(user); });
+    if (admin) document.getElementById('mfNew').addEventListener('click', function () { openManufacturerForm(null, user); });
+    loadManufacturers(user);
+  }
+
+  async function loadManufacturers(user) {
+    var box = document.getElementById('mfList'); if (!box) return;
+    try {
+      var r = await authed('/manufacturers' + (mfrState.showInactive ? '?includeInactive=true' : ''));
+      if (!r.ok) { box.innerHTML = '<div class="err">Could not load manufacturers (' + r.status + '). Run the 0022 migration if this persists.</div>'; return; }
+      mfrState.rows = (await r.json()) || [];
+      drawManufacturers(user);
+    } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
+  }
+
+  function mfrCityLine(m) {
+    var right = [m.region, m.postalCode].filter(Boolean).join(' ');
+    return [m.city, right].filter(Boolean).join(', ');
+  }
+
+  function drawManufacturers(user) {
+    var box = document.getElementById('mfList'); if (!box) return;
+    var admin = canCatalogAdmin(user.role);
+    var q = mfrState.q.toLowerCase();
+    var rows = (mfrState.rows || []).filter(function (m) {
+      return !q || (m.name + ' ' + (m.city || '') + ' ' + (m.contactName || '') + ' ' + (m.contactEmail || '')).toLowerCase().indexOf(q) !== -1;
+    });
+    var body = rows.map(function (m) {
+      var parts = (m.productCount || 0) + (m.skuCount || 0);
+      return '<tr>' +
+        td('<b style="font-weight:600;">' + esc(m.name) + '</b>' +
+          (m.isSteelFabricator ? ' <span class="chip" style="font-size:10.5px;background:#eef0ea;">Steel</span>' : '') +
+          (m.isActive === false ? ' <span class="chip" style="font-size:10.5px;background:#f2f3ef;color:#8a8f85;">Inactive</span>' : '') +
+          (m.accountNumber ? '<div class="muted" style="font-size:11.5px;">Acct ' + esc(m.accountNumber) + '</div>' : '')) +
+        td(m.contactName
+          ? '<span style="font-size:13px;">' + esc(m.contactName) + '</span>' +
+            (m.contactEmail ? '<div class="muted" style="font-size:11.5px;">' + esc(m.contactEmail) + '</div>' : '') +
+            (m.contactPhone ? '<div class="muted" style="font-size:11.5px;">' + esc(m.contactPhone) + '</div>' : '')
+          : '<span class="muted">—</span>') +
+        td(m.addressLine1
+          ? '<span style="font-size:13px;">' + esc(m.addressLine1) + '</span><div class="muted" style="font-size:11.5px;">' + esc(mfrCityLine(m)) + '</div>'
+          : '<span class="muted">—</span>') +
+        td(esc(m.paymentTerms || '—')) +
+        td(m.defaultLeadTimeDays == null ? '—' : m.defaultLeadTimeDays + ' days') +
+        td(String(parts)) +
+        td(admin ? '<div style="display:flex;gap:6px;justify-content:flex-end;">' +
+          '<button class="mfEdit link-btn" data-id="' + m.id + '" style="width:auto;padding:6px 12px;">Edit</button>' +
+          '<button class="mfDel link-btn" data-id="' + m.id + '" style="width:auto;padding:6px 10px;color:#9c3327;">Remove</button></div>' : '') +
+        '</tr>';
+    }).join('');
+    box.innerHTML = tableShell(['Manufacturer', 'Primary contact', 'Address', 'Terms', 'Lead time', 'Parts', ''], body, 7,
+      mfrState.rows.length ? 'No manufacturers match that search.' : 'No manufacturers yet. Add the vendors you buy from.');
+    box.querySelectorAll('.mfEdit').forEach(function (b) {
+      b.addEventListener('click', function () {
+        openManufacturerForm((mfrState.rows || []).filter(function (x) { return x.id === b.getAttribute('data-id'); })[0], user);
+      });
+    });
+    box.querySelectorAll('.mfDel').forEach(function (b) {
+      b.addEventListener('click', function () { openManufacturerDelete(b.getAttribute('data-id'), user); });
+    });
+  }
+
+  function openManufacturerForm(m, user) {
+    m = m || {};
+    var v = function (k) { return esc(m[k] == null ? '' : m[k]); };
+    var two = function (a, b) { return '<div style="display:flex;gap:8px;"><div style="flex:1;">' + a + '</div><div style="flex:1;">' + b + '</div></div>'; };
+    openModal(m.id ? 'Edit ' + m.name : 'New manufacturer',
+      fieldRow('Manufacturer name', '<input id="mfName" style="' + IN + '" value="' + v('name') + '" required>') +
+      '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin:14px 0 6px;">Primary point of contact</div>' +
+      two(fieldRow('Name', '<input id="mfCName" style="' + IN + '" value="' + v('contactName') + '">'),
+          fieldRow('Title', '<input id="mfCTitle" style="' + IN + '" value="' + v('contactTitle') + '">')) +
+      two(fieldRow('Email', '<input id="mfCEmail" type="email" style="' + IN + '" value="' + v('contactEmail') + '">'),
+          fieldRow('Phone', '<input id="mfCPhone" style="' + IN + '" value="' + v('contactPhone') + '">')) +
+      '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin:14px 0 6px;">Secondary contact</div>' +
+      two(fieldRow('Name', '<input id="mfAName" style="' + IN + '" value="' + v('altContactName') + '">'),
+          fieldRow('Phone', '<input id="mfAPhone" style="' + IN + '" value="' + v('altContactPhone') + '">')) +
+      fieldRow('Email', '<input id="mfAEmail" type="email" style="' + IN + '" value="' + v('altContactEmail') + '">') +
+      '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin:14px 0 6px;">Address</div>' +
+      fieldRow('Street', '<input id="mfAddr1" style="' + IN + '" value="' + v('addressLine1') + '">') +
+      fieldRow('Suite / unit', '<input id="mfAddr2" style="' + IN + '" value="' + v('addressLine2') + '">') +
+      '<div style="display:flex;gap:8px;">' +
+        '<div style="flex:2;">' + fieldRow('City', '<input id="mfCity" style="' + IN + '" value="' + v('city') + '">') + '</div>' +
+        '<div style="flex:1;">' + fieldRow('State', '<input id="mfRegion" style="' + IN + '" value="' + v('region') + '">') + '</div>' +
+        '<div style="flex:1;">' + fieldRow('ZIP', '<input id="mfZip" style="' + IN + '" value="' + v('postalCode') + '">') + '</div>' +
+      '</div>' +
+      two(fieldRow('Country', '<input id="mfCountry" style="' + IN + '" value="' + esc(m.country == null ? 'USA' : m.country) + '">'),
+          fieldRow('Website', '<input id="mfWeb" placeholder="https://" style="' + IN + '" value="' + v('website') + '">')) +
+      '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin:14px 0 6px;">Purchasing</div>' +
+      '<div style="display:flex;gap:8px;">' +
+        '<div style="flex:1;">' + fieldRow('Our account #', '<input id="mfAcct" style="' + IN + '" value="' + v('accountNumber') + '">') + '</div>' +
+        '<div style="flex:1;">' + fieldRow('Payment terms', '<input id="mfTerms" placeholder="e.g. Net 30" style="' + IN + '" value="' + v('paymentTerms') + '">') + '</div>' +
+        '<div style="flex:1;">' + fieldRow('Lead time (days)', '<input id="mfLead" type="number" min="0" style="' + IN + '" value="' + (m.defaultLeadTimeDays == null ? '' : m.defaultLeadTimeDays) + '">') + '</div>' +
+      '</div>' +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;margin-top:4px;"><input type="checkbox" id="mfSteel"' + (m.isSteelFabricator ? ' checked' : '') + '> Steel fabricator — their lines count toward total steel weight on a BOM</label>' +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;margin-top:6px;"><input type="checkbox" id="mfThird"' + (m.id ? (m.isThirdParty ? ' checked' : '') : ' checked') + '> Third-party vendor (unchecked = made in-house)</label>' +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;margin-top:6px;"><input type="checkbox" id="mfActive"' + (m.id ? (m.isActive !== false ? ' checked' : '') : ' checked') + '> Active — offered when assigning a vendor</label>' +
+      '<div class="field" style="margin-top:10px;"><label>Notes</label><textarea id="mfNotes" rows="2" style="' + IN + 'resize:vertical;">' + esc(m.notes || '') + '</textarea></div>',
+      async function (close, showErr) {
+        var name = document.getElementById('mfName').value.trim();
+        if (name.length < 2) return showErr('Manufacturer name is required.');
+        var lead = document.getElementById('mfLead').value;
+        var body = {
+          name: name,
+          contactName: document.getElementById('mfCName').value.trim(),
+          contactTitle: document.getElementById('mfCTitle').value.trim(),
+          contactEmail: document.getElementById('mfCEmail').value.trim(),
+          contactPhone: document.getElementById('mfCPhone').value.trim(),
+          altContactName: document.getElementById('mfAName').value.trim(),
+          altContactEmail: document.getElementById('mfAEmail').value.trim(),
+          altContactPhone: document.getElementById('mfAPhone').value.trim(),
+          addressLine1: document.getElementById('mfAddr1').value.trim(),
+          addressLine2: document.getElementById('mfAddr2').value.trim(),
+          city: document.getElementById('mfCity').value.trim(),
+          region: document.getElementById('mfRegion').value.trim(),
+          postalCode: document.getElementById('mfZip').value.trim(),
+          country: document.getElementById('mfCountry').value.trim(),
+          website: document.getElementById('mfWeb').value.trim(),
+          accountNumber: document.getElementById('mfAcct').value.trim(),
+          paymentTerms: document.getElementById('mfTerms').value.trim(),
+          defaultLeadTimeDays: lead === '' ? null : parseInt(lead, 10) || 0,
+          isSteelFabricator: document.getElementById('mfSteel').checked,
+          isThirdParty: document.getElementById('mfThird').checked,
+          isActive: document.getElementById('mfActive').checked,
+          notes: document.getElementById('mfNotes').value.trim()
+        };
+        var r = m.id
+          ? await authed('/manufacturers/' + m.id, { method: 'PATCH', body: body })
+          : await authed('/manufacturers', { method: 'POST', body: body });
+        if (!r.ok) { var msg = ''; try { msg = ((await r.json()) || {}).message || ''; } catch (e) {} return showErr(msg || 'Could not save (' + r.status + ').'); }
+        close(); loadManufacturers(user);
+      }, m.id ? 'Save manufacturer' : 'Create manufacturer');
+  }
+
+  /** Removing a vendor is only safe when nothing points at it. */
+  async function openManufacturerDelete(id, user) {
+    var u = null;
+    try { var r = await authed('/manufacturers/' + id + '/usage'); if (r.ok) u = await r.json(); } catch (e) {}
+    if (!u) { alert('Could not check where this vendor is used.'); return; }
+    openModal('Remove ' + u.name,
+      (u.deletable
+        ? '<div style="font-size:13.5px;line-height:1.6;">Nothing references this vendor, so it can be deleted outright.</div>'
+        : '<div style="background:#fbe9e6;border:1px solid #f0cdc7;border-radius:10px;padding:11px 13px;font-size:12.5px;color:#9c3327;line-height:1.55;">' + esc(u.reason) + '</div>') +
+      '<div class="muted" style="font-size:12.5px;margin-top:10px;line-height:1.55;">Deactivating keeps every part, order and past BOM exactly as it is, and simply stops the vendor being offered.</div>' +
+      '<div style="display:flex;gap:8px;margin-top:14px;"><button type="button" class="link-btn" id="mfDeact" style="width:auto;padding:9px 15px;">Deactivate instead</button></div>',
+      u.deletable
+        ? async function (close, showErr) {
+          var rr = await authed('/manufacturers/' + id, { method: 'DELETE' });
+          if (!rr.ok && rr.status !== 204) { var msg = ''; try { msg = ((await rr.json()) || {}).message || ''; } catch (e) {} return showErr(msg || 'Could not delete (' + rr.status + ').'); }
+          close(); loadManufacturers(user);
+        }
+        : async function (close) { close(); },
+      u.deletable ? 'Delete permanently' : 'Close');
+    var da = document.getElementById('mfDeact');
+    if (da) da.addEventListener('click', async function () {
+      var rr = await authed('/manufacturers/' + id, { method: 'PATCH', body: { isActive: false } });
+      if (!rr.ok) { alert('Could not deactivate (' + rr.status + ').'); return; }
+      var form = document.getElementById('mForm');
+      if (form && form.parentNode && form.parentNode.parentNode) form.parentNode.parentNode.removeChild(form.parentNode);
+      loadManufacturers(user);
+    });
+  }
+
+  /* ==================== Bundles ====================
+   * A bundle is one catalog part whose contents are other catalog parts. It has no
+   * price of its own — price, cost and weight are always the sum of its
+   * components, so repricing a component can never leave a stale bundle behind. */
+  var bundleState = { rows: [], q: '' };
+
+  async function renderBundles(user) {
+    var admin = canCatalogAdmin(user.role);
+    document.getElementById('catBody').innerHTML =
+      '<div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">' +
+        '<input id="bnSearch" placeholder="Search bundles…" value="' + esc(bundleState.q) + '" style="flex:1;min-width:220px;max-width:340px;padding:10px 13px;border:1px solid #dcded7;border-radius:10px;font-size:14px;background:#fff;outline:none;">' +
+        (admin ? '<div style="margin-left:auto;"><button class="btn" id="bnNew" style="width:auto;padding:10px 17px;">New bundle</button></div>' : '') +
+      '</div>' +
+      '<div style="font-size:12px;color:#8a8f85;margin-bottom:10px;">A bundle is a single proposal line priced as the sum of its parts, with the parts listed beneath it. Because those sub-lines carry the real part numbers, the Bill of Materials, the cost of goods and the freight weight all see the actual components.</div>' +
+      '<div id="bnList"><div class="muted" style="padding:24px;">Loading…</div></div>';
+    var s = document.getElementById('bnSearch'), t;
+    s.addEventListener('input', function () { clearTimeout(t); t = setTimeout(function () { bundleState.q = s.value.trim(); drawBundles(user); }, 250); });
+    if (admin) document.getElementById('bnNew').addEventListener('click', function () { openBundleForm(user); });
+    loadBundles(user);
+  }
+
+  async function loadBundles(user) {
+    var box = document.getElementById('bnList'); if (!box) return;
+    try {
+      var r = await authed('/catalog/bundles');
+      if (!r.ok) { box.innerHTML = '<div class="err">Could not load bundles (' + r.status + ').</div>'; return; }
+      bundleState.rows = (await r.json()) || [];
+      drawBundles(user);
+    } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
+  }
+
+  function drawBundles(user) {
+    var box = document.getElementById('bnList'); if (!box) return;
+    var admin = canCatalogAdmin(user.role);
+    var q = bundleState.q.toLowerCase();
+    var rows = (bundleState.rows || []).filter(function (b) { return !q || (b.name + ' ' + b.sku).toLowerCase().indexOf(q) !== -1; });
+    if (!rows.length) {
+      box.innerHTML = '<div class="placeholder" style="padding:22px;"><p class="muted" style="margin:0;">' +
+        (bundleState.rows.length ? 'No bundles match that search.' : 'No bundles yet. Create one, then add the parts it contains.') + '</p></div>';
+      return;
+    }
+    box.innerHTML = rows.map(function (b) {
+      var comp = b.components || [];
+      var inner = comp.length
+        ? '<table style="width:100%;border-collapse:collapse;font-size:13px;">' +
+            '<thead><tr>' + ['Part #', 'Component', 'Qty', 'Unit price', 'Extended'].map(function (h, i) {
+              return '<th style="text-align:' + (i > 1 ? 'right' : 'left') + ';padding:7px 10px;font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;border-bottom:1px solid #eef0ea;">' + h + '</th>';
+            }).join('') + '</tr></thead><tbody>' +
+            comp.map(function (c) {
+              return '<tr>' +
+                '<td style="padding:7px 10px;border-bottom:1px solid #f2f3ef;"><code style="font-size:12px;color:#4a4f47;">' + esc(c.sku) + '</code></td>' +
+                '<td style="padding:7px 10px;border-bottom:1px solid #f2f3ef;">' + esc(c.name) + '</td>' +
+                '<td style="padding:7px 10px;border-bottom:1px solid #f2f3ef;text-align:right;">' + c.quantity + '</td>' +
+                '<td style="padding:7px 10px;border-bottom:1px solid #f2f3ef;text-align:right;">$' + (Number(c.unitPriceMinor) / 100).toFixed(2) + '</td>' +
+                '<td style="padding:7px 10px;border-bottom:1px solid #f2f3ef;text-align:right;">$' + (Number(c.extendedPriceMinor) / 100).toFixed(2) + '</td></tr>';
+            }).join('') +
+          '</tbody></table>'
+        : '<div class="muted" style="padding:12px 10px;font-size:13px;">Nothing in this bundle yet.</div>';
+      return '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:14px;padding:14px 16px;margin-bottom:14px;">' +
+        '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">' +
+          '<div><div style="font-weight:600;font-size:15px;">' + esc(b.name) + ' <code style="font-size:12px;color:#7a7f75;font-weight:400;">' + esc(b.sku) + '</code></div>' +
+            '<div class="muted" style="font-size:12px;margin-top:2px;">' + comp.length + ' component' + (comp.length === 1 ? '' : 's') +
+              ' · rolls up to <b style="color:#20241f;">$' + (Number(b.unitPriceMinor) / 100).toFixed(2) + '</b>' +
+              ' · cost $' + (Number(b.unitCostMinor) / 100).toFixed(2) + ' · ' + b.weightLbs + ' lb' +
+              (b.missingPrice && b.missingPrice.length ? ' · <span style="color:#9c3327;">' + b.missingPrice.length + ' component(s) have no price</span>' : '') + '</div></div>' +
+          (admin ? '<div style="display:flex;gap:6px;">' +
+            '<button class="bnEdit link-btn" data-id="' + b.id + '" style="width:auto;padding:7px 13px;">Edit contents</button>' +
+            '<button class="bnDel link-btn" data-id="' + b.id + '" style="width:auto;padding:7px 11px;color:#9c3327;">Delete</button></div>' : '') +
+        '</div>' +
+        '<div style="margin-top:10px;">' + inner + '</div>' +
+      '</div>';
+    }).join('');
+    box.querySelectorAll('.bnEdit').forEach(function (bt) {
+      bt.addEventListener('click', function () {
+        openBundleComponents((bundleState.rows || []).filter(function (x) { return x.id === bt.getAttribute('data-id'); })[0], user);
+      });
+    });
+    box.querySelectorAll('.bnDel').forEach(function (bt) {
+      bt.addEventListener('click', async function () {
+        if (!confirm('Delete this bundle? Its component parts are not touched.')) return;
+        var r = await authed('/catalog/bundles/' + bt.getAttribute('data-id'), { method: 'DELETE' });
+        if (!r.ok && r.status !== 204) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} alert(m || 'Could not delete (' + r.status + ').'); return; }
+        loadBundles(user);
+      });
+    });
+  }
+
+  async function openBundleForm(user) {
+    if (!catCategories.length) {
+      try { var rc = await authed('/catalog/categories'); catCategories = rc.ok ? await rc.json() : []; } catch (e) {}
+    }
+    if (!catCategories.length) { alert('Create a category first — a bundle is filed like any other product.'); return; }
+    openModal('New bundle',
+      fieldRow('Part #', '<input id="bnSku" placeholder="e.g. SSG-STARTER-BUNDLE" style="' + IN + 'text-transform:uppercase;" required>') +
+      fieldRow('Bundle name', '<input id="bnName" style="' + IN + '" required>') +
+      fieldRow('Category', '<select id="bnCat" style="' + IN + '">' + catOptionsTree('') + '</select>') +
+      fieldRow('Proposal description', '<textarea id="bnDesc" rows="3" style="' + IN + 'resize:vertical;"></textarea>') +
+      '<div class="muted" style="font-size:12px;">You add the parts it contains next. The price is always the sum of those parts.</div>',
+      async function (close, showErr) {
+        var sku = document.getElementById('bnSku').value.trim().toUpperCase();
+        if (sku.length < 2) return showErr('A part # is required.');
+        var name = document.getElementById('bnName').value.trim();
+        if (name.length < 2) return showErr('Give the bundle a name.');
+        var r = await authed('/catalog/bundles', { method: 'POST', body: {
+          sku: sku, name: name, categoryId: document.getElementById('bnCat').value,
+          proposalDescription: document.getElementById('bnDesc').value.trim() || undefined
+        } });
+        if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} return showErr(m || 'Could not create (' + r.status + ').'); }
+        var created = await r.json();
+        close();
+        await loadBundles(user);
+        openBundleComponents({ id: created.id, sku: created.sku, name: created.name, components: [] }, user);
+      }, 'Create bundle');
+  }
+
+  /** Search-and-add panel for a bundle's contents. Sends the whole list at once. */
+  async function openBundleComponents(bundle, user) {
+    if (!bundle) return;
+    var picked = (bundle.components || []).map(function (c) { return { productId: c.productId, sku: c.sku, name: c.name, quantity: c.quantity, unitPriceMinor: c.unitPriceMinor }; });
+    var products = [];
+    try {
+      var r = await authed('/catalog/products?pageSize=500');
+      if (r.ok) products = ((await r.json()) || {}).items || [];
+    } catch (e) {}
+    products = products.filter(function (p) { return p.kind !== 'BUNDLE'; });
+
+    function pickedHtml() {
+      if (!picked.length) return '<div class="muted" style="padding:12px;font-size:13px;">Nothing added yet — search below.</div>';
+      var total = picked.reduce(function (a, c) { return a + (Number(c.unitPriceMinor) || 0) * (Number(c.quantity) || 0); }, 0);
+      return picked.map(function (c, i) {
+        return '<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid #f2f3ef;">' +
+          '<div style="flex:1;font-size:13px;">' + esc(c.name) + ' <code style="font-size:11.5px;color:#7a7f75;">' + esc(c.sku) + '</code></div>' +
+          '<input class="bcQty" data-i="' + i + '" type="number" min="1" value="' + (c.quantity || 1) + '" style="width:64px;padding:5px 7px;border:1px solid #dcded7;border-radius:6px;text-align:right;font-size:13px;">' +
+          '<div style="width:88px;text-align:right;font-size:12.5px;color:#5c6157;">$' + ((Number(c.unitPriceMinor) || 0) * (Number(c.quantity) || 0) / 100).toFixed(2) + '</div>' +
+          '<button type="button" class="bcRm" data-i="' + i + '" style="border:1px solid #e0e1db;background:#fff;border-radius:7px;color:#9c3327;cursor:pointer;padding:4px 9px;font-size:12px;">✕</button>' +
+        '</div>';
+      }).join('') +
+      '<div style="display:flex;justify-content:flex-end;gap:10px;padding:9px 10px;font-size:13px;font-weight:600;">Bundle price $' + (total / 100).toFixed(2) + '</div>';
+    }
+    function searchHtml(list) {
+      return (list.slice(0, 60).map(function (p) {
+        return '<button type="button" class="bcAdd" data-id="' + p.id + '" style="display:block;width:100%;text-align:left;border:none;border-bottom:1px solid #f2f3ef;background:#fff;padding:8px 11px;cursor:pointer;font-size:13px;">' +
+          esc(p.name) + ' <code style="font-size:11.5px;color:#7a7f75;">' + esc(p.sku) + '</code></button>';
+      }).join('')) || '<div class="muted" style="padding:12px;font-size:13px;">No parts match.</div>';
+    }
+
+    openModal('Contents of ' + bundle.name,
+      '<div style="border:1px solid #e7e8e3;border-radius:10px;overflow:hidden;margin-bottom:12px;"><div id="bcPicked">' + pickedHtml() + '</div></div>' +
+      '<input id="bcSearch" placeholder="Search a part to add…" style="' + IN + 'margin-bottom:8px;">' +
+      '<div id="bcResults" style="max-height:220px;overflow:auto;border:1px solid #e7e8e3;border-radius:10px;">' + searchHtml(products) + '</div>',
+      async function (close, showErr) {
+        var r2 = await authed('/catalog/bundles/' + bundle.id + '/components', { method: 'PUT', body: {
+          components: picked.map(function (c) { return { productId: c.productId, quantity: Number(c.quantity) || 1 }; })
+        } });
+        if (!r2.ok) { var m = ''; try { m = ((await r2.json()) || {}).message || ''; } catch (e) {} return showErr(m || 'Could not save (' + r2.status + ').'); }
+        close(); loadBundles(user);
+      }, 'Save contents');
+
+    function repaint() {
+      var host = document.getElementById('bcPicked'); if (!host) return;
+      host.innerHTML = pickedHtml();
+      host.querySelectorAll('.bcQty').forEach(function (el) {
+        el.addEventListener('change', function () { picked[Number(el.getAttribute('data-i'))].quantity = Math.max(1, parseInt(el.value, 10) || 1); repaint(); });
+      });
+      host.querySelectorAll('.bcRm').forEach(function (el) {
+        el.addEventListener('click', function () { picked.splice(Number(el.getAttribute('data-i')), 1); repaint(); });
+      });
+    }
+    function wireResults(list) {
+      var box = document.getElementById('bcResults'); if (!box) return;
+      box.querySelectorAll('.bcAdd').forEach(function (b) {
+        b.addEventListener('click', async function () {
+          var p = list.filter(function (x) { return x.id === b.getAttribute('data-id'); })[0];
+          if (!p || picked.some(function (c) { return c.productId === p.id; })) return;
+          var price = 0;
+          try {
+            var rp = await authed('/catalog/items?q=' + encodeURIComponent(p.sku) + '&pageSize=5');
+            if (rp.ok) {
+              var hit = (((await rp.json()) || {}).items || []).filter(function (x) { return x.part === p.sku; })[0];
+              if (hit) price = hit.unitPriceMinor || 0;
+            }
+          } catch (e) {}
+          picked.push({ productId: p.id, sku: p.sku, name: p.name, quantity: 1, unitPriceMinor: price });
+          repaint();
+        });
+      });
+    }
+    setTimeout(function () {
+      repaint(); wireResults(products);
+      var s = document.getElementById('bcSearch');
+      if (s) s.addEventListener('input', function () {
+        var q = s.value.toLowerCase();
+        var list = products.filter(function (p) { return (p.name + ' ' + p.sku).toLowerCase().indexOf(q) !== -1; });
+        document.getElementById('bcResults').innerHTML = searchHtml(list);
+        wireResults(list);
+      });
+    }, 50);
+  }
+
+  /* ==================== Product tree: categories, order, workbook ==================== */
+
+  /** Rename, reorder, hide and delete the tier categories. */
+  async function openCategoryManager(user) {
+    try { var rc = await authed('/catalog/categories'); catCategories = rc.ok ? await rc.json() : catCategories; } catch (e) {}
+    var list = (catCategories || []).slice().sort(function (a, b) {
+      return ((a.tierLevel || 1) - (b.tierLevel || 1)) || ((a.sortOrder || 0) - (b.sortOrder || 0)) || a.name.localeCompare(b.name);
+    });
+    var counts = {};
+    (cat.rows || []).forEach(function (p) { counts[p.categoryId] = (counts[p.categoryId] || 0) + 1; });
+
+    function rowHtml(c, i) {
+      return '<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid #f2f3ef;">' +
+        '<div style="display:flex;flex-direction:column;gap:2px;">' +
+          '<button type="button" class="cmUp" data-i="' + i + '" title="Move up" style="border:1px solid #dcded7;background:#fff;border-radius:5px;cursor:pointer;font-size:10px;line-height:1;padding:2px 5px;">▲</button>' +
+          '<button type="button" class="cmDown" data-i="' + i + '" title="Move down" style="border:1px solid #dcded7;background:#fff;border-radius:5px;cursor:pointer;font-size:10px;line-height:1;padding:2px 5px;">▼</button>' +
+        '</div>' +
+        '<input class="cmName" data-id="' + c.id + '" value="' + esc(c.name) + '" style="flex:1;padding:6px 8px;border:1px solid #dcded7;border-radius:6px;font-size:13px;">' +
+        '<select class="cmTier" data-id="' + c.id + '" style="padding:6px 7px;border:1px solid #dcded7;border-radius:6px;font-size:12.5px;background:#fff;">' +
+          [1, 2, 3, 4].map(function (t) { return '<option value="' + t + '"' + ((c.tierLevel || 1) === t ? ' selected' : '') + '>Tier ' + t + '</option>'; }).join('') +
+        '</select>' +
+        '<span class="muted" style="font-size:11.5px;width:74px;text-align:right;">' + (counts[c.id] || 0) + ' part' + ((counts[c.id] || 0) === 1 ? '' : 's') + '</span>' +
+        '<label style="display:flex;gap:5px;align-items:center;font-size:11.5px;color:#5c6157;"><input type="checkbox" class="cmActive" data-id="' + c.id + '"' + (c.isActive === false ? '' : ' checked') + '> shown</label>' +
+        '<button type="button" class="cmDel" data-id="' + c.id + '" style="border:1px solid #e0e1db;background:#fff;border-radius:7px;color:#9c3327;cursor:pointer;padding:4px 8px;font-size:12px;">✕</button>' +
+      '</div>';
+    }
+    openModal('Categories & tiers',
+      '<div class="muted" style="font-size:12.5px;margin-bottom:10px;line-height:1.55;">Renaming a category never moves a product — the name is only a label. The arrows set the order categories appear in; the tier is the level it sits at in the tree.</div>' +
+      '<div id="cmList" style="border:1px solid #e7e8e3;border-radius:10px;max-height:380px;overflow:auto;">' + list.map(rowHtml).join('') + '</div>' +
+      '<div style="display:flex;justify-content:flex-end;margin-top:10px;"><button type="button" class="link-btn" id="cmAdd" style="width:auto;padding:8px 14px;">+ New category</button></div>',
+      async function (close, showErr) {
+        // Names, tiers and visibility first, then one reorder call for the lot.
+        for (var i = 0; i < list.length; i++) {
+          var c = list[i];
+          var nameEl = document.querySelector('.cmName[data-id="' + c.id + '"]');
+          var tierEl = document.querySelector('.cmTier[data-id="' + c.id + '"]');
+          var actEl = document.querySelector('.cmActive[data-id="' + c.id + '"]');
+          if (!nameEl) continue;
+          var body = {};
+          if (nameEl.value.trim() && nameEl.value.trim() !== c.name) body.name = nameEl.value.trim();
+          if (tierEl && Number(tierEl.value) !== (c.tierLevel || 1)) body.tierLevel = Number(tierEl.value);
+          if (actEl && actEl.checked !== (c.isActive !== false)) body.isActive = actEl.checked;
+          if (!Object.keys(body).length) continue;
+          var r = await authed('/catalog/categories/' + c.id, { method: 'PATCH', body: body });
+          if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e2) {} return showErr(m || 'Could not save “' + c.name + '” (' + r.status + ').'); }
+        }
+        var rr = await authed('/catalog/categories/reorder', { method: 'POST', body: { ids: list.map(function (c2) { return c2.id; }) } });
+        if (!rr.ok) return showErr('Saved the names, but could not save the order (' + rr.status + ').');
+        close();
+        try { var rc2 = await authed('/catalog/categories'); catCategories = rc2.ok ? await rc2.json() : catCategories; } catch (e3) {}
+        loadProducts(user);
+      }, 'Save categories');
+
+    function repaint() {
+      var host = document.getElementById('cmList'); if (!host) return;
+      host.innerHTML = list.map(rowHtml).join('');
+      wire();
+    }
+    function wire() {
+      var host = document.getElementById('cmList'); if (!host) return;
+      host.querySelectorAll('.cmUp').forEach(function (b) {
+        b.addEventListener('click', function () { var i = Number(b.getAttribute('data-i')); if (i > 0) { var t = list[i - 1]; list[i - 1] = list[i]; list[i] = t; repaint(); } });
+      });
+      host.querySelectorAll('.cmDown').forEach(function (b) {
+        b.addEventListener('click', function () { var i = Number(b.getAttribute('data-i')); if (i < list.length - 1) { var t = list[i + 1]; list[i + 1] = list[i]; list[i] = t; repaint(); } });
+      });
+      host.querySelectorAll('.cmDel').forEach(function (b) {
+        b.addEventListener('click', async function () {
+          var id = b.getAttribute('data-id');
+          if (!confirm('Delete this category? It must be empty.')) return;
+          var r = await authed('/catalog/categories/' + id, { method: 'DELETE' });
+          if (!r.ok && r.status !== 204) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} alert(m || 'Could not delete (' + r.status + ').'); return; }
+          list = list.filter(function (c) { return c.id !== id; });
+          catCategories = (catCategories || []).filter(function (c) { return c.id !== id; });
+          repaint();
+        });
+      });
+    }
+    setTimeout(function () {
+      wire();
+      var add = document.getElementById('cmAdd');
+      if (add) add.addEventListener('click', async function () {
+        var name = prompt('New category name');
+        if (!name || name.trim().length < 2) return;
+        var r = await authed('/catalog/categories', { method: 'POST', body: { name: name.trim(), slug: slugify(name), sortOrder: list.length, isActive: true } });
+        if (!r.ok) { alert('Could not create (' + r.status + ').'); return; }
+        var created = await r.json();
+        list.push(created); catCategories.push(created); repaint();
+      });
+    }, 50);
+  }
+
+  /**
+   * The default product list order. The arrows move a part within the whole list;
+   * saving writes the order the proposal picker and the tier listings read.
+   */
+  function openProductReorder(user) {
+    var list = (cat.rows || []).slice().sort(function (a, b) {
+      return ((a.sortOrder || 0) - (b.sortOrder || 0)) || a.name.localeCompare(b.name);
+    });
+    function rowHtml(p, i) {
+      return '<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid #f2f3ef;">' +
+        '<span class="muted" style="width:34px;font-size:11.5px;">' + (i + 1) + '</span>' +
+        '<div style="flex:1;font-size:13px;">' + esc(p.name) + ' <code style="font-size:11.5px;color:#7a7f75;">' + esc(p.sku) + '</code></div>' +
+        '<span class="muted" style="font-size:11.5px;">' + esc(p.categoryName || '') + '</span>' +
+        '<button type="button" class="prUp" data-i="' + i + '" style="border:1px solid #dcded7;background:#fff;border-radius:5px;cursor:pointer;font-size:10px;padding:3px 6px;">▲</button>' +
+        '<button type="button" class="prDown" data-i="' + i + '" style="border:1px solid #dcded7;background:#fff;border-radius:5px;cursor:pointer;font-size:10px;padding:3px 6px;">▼</button>' +
+      '</div>';
+    }
+    openModal('Reorder the default product list',
+      '<div class="muted" style="font-size:12.5px;margin-bottom:10px;line-height:1.55;">This is the order products are offered in — the proposal builder’s picker and the tier listings both follow it.</div>' +
+      '<div id="prList" style="border:1px solid #e7e8e3;border-radius:10px;max-height:420px;overflow:auto;">' + list.map(rowHtml).join('') + '</div>',
+      async function (close, showErr) {
+        var r = await authed('/catalog/products/reorder', { method: 'POST', body: { ids: list.map(function (p) { return p.id; }) } });
+        if (!r.ok) return showErr('Could not save the order (' + r.status + ').');
+        close(); loadProducts(user);
+      }, 'Save order');
+    function repaint() {
+      var host = document.getElementById('prList'); if (!host) return;
+      host.innerHTML = list.map(rowHtml).join('');
+      host.querySelectorAll('.prUp').forEach(function (b) { b.addEventListener('click', function () { var i = Number(b.getAttribute('data-i')); if (i > 0) { var t = list[i - 1]; list[i - 1] = list[i]; list[i] = t; repaint(); } }); });
+      host.querySelectorAll('.prDown').forEach(function (b) { b.addEventListener('click', function () { var i = Number(b.getAttribute('data-i')); if (i < list.length - 1) { var t = list[i + 1]; list[i + 1] = list[i]; list[i] = t; repaint(); } }); });
+    }
+    setTimeout(repaint, 50);
+  }
+
+  /* --- Product-tree workbook: export and import, the same shape both ways ---
+   * SpreadsheetML (.xls) so one file can carry a sheet per level and Excel opens
+   * it natively; the importer reads exactly what the exporter writes. */
+  var TREE_SHEETS = [
+    { name: 'Categories', key: 'categories', cols: ['slug', 'name', 'parentSlug', 'tierLevel', 'sortOrder', 'isActive'] },
+    { name: 'Products', key: 'products', cols: ['sku', 'name', 'categorySlug', 'kind', 'status', 'sortOrder', 'proposalDescription'] },
+    { name: 'Bundles', key: 'bundles', cols: ['bundleSku', 'bundleName', 'componentSku', 'componentName', 'quantity'] }
+  ];
+  function xmlEsc(v) {
+    return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  function treeWorkbookXml(data) {
+    var sheets = TREE_SHEETS.map(function (sh) {
+      var rows = (data[sh.key] || []).map(function (r) {
+        return '<Row>' + sh.cols.map(function (c) {
+          var v = r[c];
+          var num = typeof v === 'number';
+          return '<Cell><Data ss:Type="' + (num ? 'Number' : 'String') + '">' + xmlEsc(num ? v : (v === true ? 'true' : v === false ? 'false' : v)) + '</Data></Cell>';
+        }).join('') + '</Row>';
+      }).join('');
+      return '<Worksheet ss:Name="' + xmlEsc(sh.name) + '"><Table>' +
+        '<Row>' + sh.cols.map(function (c) { return '<Cell><Data ss:Type="String">' + c + '</Data></Cell>'; }).join('') + '</Row>' +
+        rows + '</Table></Worksheet>';
+    }).join('');
+    return '<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">' + sheets + '</Workbook>';
+  }
+  function downloadText(filename, text, mime) {
+    var blob = new Blob(['\ufeff' + text], { type: (mime || 'text/plain') + ';charset=utf-8;' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+  }
+  /** Read a workbook this app wrote back into the same row shape. */
+  function parseWorkbookXml(text) {
+    var doc = new DOMParser().parseFromString(text, 'application/xml');
+    if (doc.getElementsByTagName('parsererror').length) return null;
+    var out = {};
+    var sheets = doc.getElementsByTagName('Worksheet');
+    for (var i = 0; i < sheets.length; i++) {
+      var name = sheets[i].getAttribute('ss:Name') || sheets[i].getAttribute('Name') || '';
+      var def = TREE_SHEETS.filter(function (s) { return s.name.toLowerCase() === String(name).toLowerCase(); })[0];
+      if (!def) continue;
+      var rows = sheets[i].getElementsByTagName('Row'), headers = [], data = [];
+      for (var r = 0; r < rows.length; r++) {
+        var cells = rows[r].getElementsByTagName('Cell'), vals = [];
+        for (var c = 0; c < cells.length; c++) {
+          var dd = cells[c].getElementsByTagName('Data')[0];
+          vals.push(dd ? dd.textContent : '');
+        }
+        if (r === 0) { headers = vals.map(function (h) { return String(h).trim(); }); continue; }
+        if (!vals.join('').trim()) continue;
+        var o = {};
+        headers.forEach(function (h, idx) { if (h) o[h] = (vals[idx] == null ? '' : String(vals[idx]).trim()); });
+        data.push(o);
+      }
+      out[def.key] = data;
+    }
+    return out;
+  }
+  /** A blank cell means "no value given" on import, so drop it from the row. */
+  function pruneBlanks(rows, keep) {
+    return (rows || []).map(function (r) {
+      var o = {};
+      Object.keys(r).forEach(function (k) {
+        if (r[k] === '' && keep.indexOf(k) === -1) return;
+        if (k === 'isActive') o[k] = String(r[k]).toLowerCase() === 'true';
+        else o[k] = r[k];
+      });
+      return o;
+    });
+  }
+
+  async function exportProductTree() {
+    var r = await authed('/catalog/tree/export');
+    if (!r.ok) { alert('Could not export the tree (' + r.status + ').'); return; }
+    var data = await r.json();
+    downloadText('product-tree-' + new Date().toISOString().slice(0, 10) + '.xls', treeWorkbookXml(data), 'application/vnd.ms-excel');
+  }
+
+  /**
+   * Import a product-tree workbook. Always previewed first: the review step says
+   * what will be created and changed, and lists the parts the file leaves out so
+   * the operator decides whether to leave or deactivate them.
+   */
+  var treeImportConfirmed = false;
+  function openTreeImport(user) {
+    treeImportConfirmed = false;
+    openModal('Import product tree',
+      '<div class="muted" style="font-size:13px;line-height:1.55;margin-bottom:10px;">Use a workbook exported from this screen — sheets <b>Categories</b>, <b>Products</b> and <b>Bundles</b>. Only the columns present in the file are written; anything you leave out stays exactly as it is. Nothing is ever deleted.</div>' +
+      '<input type="file" id="tiFile" accept=".xls,.xml" style="width:100%;padding:10px;border:1px dashed #cfd3ca;border-radius:9px;background:#fff;">' +
+      '<div id="tiReview" style="margin-top:12px;"></div>',
+      async function (close, showErr) {
+        var fi = document.getElementById('tiFile').files[0];
+        if (!fi) return showErr('Choose a workbook first.');
+        var text = await fi.text();
+        var parsed = /<Workbook/i.test(text) ? parseWorkbookXml(text) : null;
+        if (!parsed) return showErr('That file is not a workbook exported from this screen.');
+        var missingSel = document.getElementById('tiMissing');
+        var payload = {
+          dryRun: !treeImportConfirmed,
+          missingAction: missingSel ? missingSel.value : 'leave',
+          categories: pruneBlanks(parsed.categories, ['name']),
+          products: pruneBlanks(parsed.products, ['name']),
+          bundles: (parsed.bundles || []).map(function (b) { return { bundleSku: b.bundleSku, componentSku: b.componentSku, quantity: Number(b.quantity) || 1 }; })
+            .filter(function (b) { return b.bundleSku && b.componentSku; })
+        };
+        var r = await authed('/catalog/tree/import', { method: 'POST', body: payload });
+        var d = null; try { d = await r.json(); } catch (e) {}
+        if (!d) return showErr('Import failed (' + r.status + ').');
+        if (d.issues && d.issues.length) {
+          document.getElementById('tiReview').innerHTML =
+            '<div style="background:#fbe9e6;border:1px solid #f0cdc7;border-radius:10px;padding:11px 13px;font-size:12.5px;color:#9c3327;max-height:200px;overflow:auto;">' +
+            '<b>' + d.issues.length + ' problem(s) — nothing was written:</b><ul style="margin:6px 0 0;padding-left:18px;line-height:1.5;">' +
+            d.issues.slice(0, 40).map(function (i) { return '<li>' + esc(i.sheet + ' · ' + i.key + ': ' + i.message) + '</li>'; }).join('') + '</ul></div>';
+          treeImportConfirmed = false;
+          return showErr('Fix the problems listed and try again.');
+        }
+        if (!treeImportConfirmed) {
+          var p = d.plan || {};
+          document.getElementById('tiReview').innerHTML =
+            '<div style="background:#f7f8f4;border:1px solid #eef0ea;border-radius:10px;padding:11px 13px;font-size:12.5px;line-height:1.6;">' +
+              '<b>Ready to import</b><br>Categories: ' + (p.categories ? p.categories.create + ' new, ' + p.categories.update + ' updated' : '—') +
+              '<br>Products: ' + (p.products ? p.products.create + ' new, ' + p.products.update + ' updated' : '—') +
+              '<br>Bundle links: ' + ((p.bundles && p.bundles.links) || 0) +
+            '</div>' +
+            ((p.missing && p.missing.length)
+              ? '<div style="margin-top:10px;background:#fdf6e3;border:1px solid #eadfbe;border-radius:10px;padding:11px 13px;font-size:12.5px;color:#7a6320;line-height:1.55;">' +
+                  '<b>' + p.missing.length + ' catalog part(s) are not in this file.</b>' +
+                  '<div style="max-height:120px;overflow:auto;margin:6px 0;">' + p.missing.slice(0, 60).map(function (mm) { return esc(mm.sku + ' — ' + mm.name); }).join('<br>') + '</div>' +
+                  '<label style="display:block;margin-top:6px;">What should happen to them? ' +
+                    '<select id="tiMissing" style="padding:6px 8px;border:1px solid #dcded7;border-radius:6px;font-size:12.5px;background:#fff;">' +
+                      '<option value="leave">Leave them exactly as they are</option>' +
+                      '<option value="deactivate">Deactivate them</option>' +
+                    '</select></label></div>'
+              : '') +
+            '<div class="muted" style="font-size:12px;margin-top:8px;">Press Import again to commit.</div>';
+          treeImportConfirmed = true;
+          return showErr('Review the summary above, then press Import to commit.');
+        }
+        treeImportConfirmed = false;
+        close();
+        var res = d.result || {};
+        alert('Import complete: ' + (res.created || 0) + ' created, ' + (res.updated || 0) + ' updated, ' + (res.links || 0) + ' bundle link(s)' +
+          (res.deactivated ? ', ' + res.deactivated + ' deactivated' : '') + '.');
+        loadProducts(user);
+      }, 'Import');
   }
 
   /* --- shared table helpers --- */
@@ -2140,24 +2827,62 @@
   }
 
   async function openProductPicker() {
-    var products = [];
+    var products = [], bundles = [];
     try { var r = await authed('/catalog/products?pageSize=100&status=ACTIVE'); if (r.ok) products = (await r.json()).items || []; } catch (e) {}
-    var listHtml = function (items) { return items.map(function (p) { return '<button type="button" class="pkRow" data-id="' + p.id + '" style="display:block;width:100%;text-align:left;border:none;border-bottom:1px solid #f2f3ef;background:#fff;padding:10px 12px;cursor:pointer;font-size:13.5px;"><b style="font-weight:600;">' + esc(p.name) + '</b> <span class="muted" style="font-size:12px;">' + esc(p.sku) + '</span></button>'; }).join('') || '<div class="muted" style="padding:16px;">No products. Add some in Catalog first.</div>'; };
+    try { var rb = await authed('/catalog/bundles'); if (rb.ok) bundles = (await rb.json()) || []; } catch (e2) {}
+    products = products.filter(function (p) { return p.kind !== 'BUNDLE'; });
+    var listHtml = function (items, bnd) {
+      var out = '';
+      if (bnd && bnd.length) {
+        out += '<div style="padding:6px 12px;background:#f7f8f4;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:#8a8f85;">Bundles</div>' +
+          bnd.map(function (b) {
+            return '<button type="button" class="pkBundle" data-id="' + b.id + '" style="display:block;width:100%;text-align:left;border:none;border-bottom:1px solid #f2f3ef;background:#fff;padding:10px 12px;cursor:pointer;font-size:13.5px;">' +
+              '<b style="font-weight:600;">' + esc(b.name) + '</b> <span class="muted" style="font-size:12px;">' + esc(b.sku) + '</span>' +
+              '<div class="muted" style="font-size:11.5px;">' + (b.componentCount || 0) + ' parts · $' + (Number(b.unitPriceMinor) / 100).toFixed(2) + '</div></button>';
+          }).join('') +
+          '<div style="padding:6px 12px;background:#f7f8f4;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:#8a8f85;">Products</div>';
+      }
+      out += items.map(function (p) { return '<button type="button" class="pkRow" data-id="' + p.id + '" style="display:block;width:100%;text-align:left;border:none;border-bottom:1px solid #f2f3ef;background:#fff;padding:10px 12px;cursor:pointer;font-size:13.5px;"><b style="font-weight:600;">' + esc(p.name) + '</b> <span class="muted" style="font-size:12px;">' + esc(p.sku) + '</span></button>'; }).join('');
+      return out || '<div class="muted" style="padding:16px;">No products. Add some in Catalog first.</div>';
+    };
     openModal('Add product line',
-      '<input id="pkSearch" placeholder="Search products…" style="' + IN + 'margin-bottom:10px;">' +
-      '<div id="pkList" style="max-height:320px;overflow:auto;border:1px solid #e7e8e3;border-radius:10px;">' + listHtml(products) + '</div>' +
-      '<div class="muted" style="font-size:12px;margin-top:8px;">Rate is entered per proposal after adding.</div>',
+      '<input id="pkSearch" placeholder="Search products and bundles…" style="' + IN + 'margin-bottom:10px;">' +
+      '<div id="pkList" style="max-height:320px;overflow:auto;border:1px solid #e7e8e3;border-radius:10px;">' + listHtml(products, bundles) + '</div>' +
+      '<div class="muted" style="font-size:12px;margin-top:8px;">Rate is entered per proposal after adding. A bundle adds one priced line plus its parts as zero-rate sub-lines.</div>',
       async function (close) { close(); }, 'Done');
     setTimeout(function () {
-      var wire = function () { document.querySelectorAll('.pkRow').forEach(function (b) { b.addEventListener('click', function () {
-        var p = products.filter(function (x) { return x.id === b.getAttribute('data-id'); })[0];
-        pb.lines.push({ ref: uid(), lineType: 'PRODUCT', kind: 'INCLUDED', productId: p.id, name: p.name, description: p.proposalDescription || '', quantity: 1, rateMinor: 0, group: '' });
-        var form = document.getElementById('mForm'); if (form && form.parentNode && form.parentNode.parentNode) form.parentNode.parentNode.removeChild(form.parentNode);
-        renderBuilder();
-      }); }); };
+      var closeForm = function () {
+        var form = document.getElementById('mForm');
+        if (form && form.parentNode && form.parentNode.parentNode) form.parentNode.parentNode.removeChild(form.parentNode);
+      };
+      var wire = function () {
+        document.querySelectorAll('.pkRow').forEach(function (b) { b.addEventListener('click', function () {
+          var p = products.filter(function (x) { return x.id === b.getAttribute('data-id'); })[0];
+          pb.lines.push({ ref: uid(), lineType: 'PRODUCT', kind: 'INCLUDED', productId: p.id, sku: p.sku || '', name: p.name, description: p.proposalDescription || '', quantity: 1, rateMinor: 0, group: '' });
+          closeForm(); renderBuilder();
+        }); });
+        // A bundle becomes one priced line plus its components as zero-rate
+        // sub-lines: the customer sees a single price, while the sub-lines carry the
+        // real part numbers, cost and weight for the BOM, the COGS and freight.
+        document.querySelectorAll('.pkBundle').forEach(function (b) { b.addEventListener('click', function () {
+          var bn = bundles.filter(function (x) { return x.id === b.getAttribute('data-id'); })[0];
+          if (!bn) return;
+          pb.lines.push({ ref: uid(), lineType: 'PRODUCT', kind: 'INCLUDED', productId: bn.id, sku: bn.sku || '', name: bn.name, description: bn.proposalDescription || '', quantity: 1, rateMinor: bn.unitPriceMinor || 0, costEach: 0, weightEach: 0, group: bn.name });
+          (bn.components || []).forEach(function (c) {
+            pb.lines.push({ ref: uid(), lineType: 'PRODUCT', kind: 'INCLUDED', productId: c.productId, sku: c.sku || '', name: '— ' + c.name, description: '', quantity: c.quantity || 1, rateMinor: 0, costEach: c.unitCostMinor || 0, weightEach: c.weightLbs || 0, group: bn.name });
+          });
+          closeForm(); renderBuilder();
+        }); });
+      };
       wire();
       var s = document.getElementById('pkSearch');
-      if (s) s.addEventListener('input', function () { var q = s.value.toLowerCase(); var filtered = products.filter(function (p) { return (p.name + ' ' + p.sku).toLowerCase().indexOf(q) !== -1; }); document.getElementById('pkList').innerHTML = listHtml(filtered); wire(); });
+      if (s) s.addEventListener('input', function () {
+        var q = s.value.toLowerCase();
+        var filtered = products.filter(function (p) { return (p.name + ' ' + p.sku).toLowerCase().indexOf(q) !== -1; });
+        var fb = bundles.filter(function (p) { return (p.name + ' ' + p.sku).toLowerCase().indexOf(q) !== -1; });
+        document.getElementById('pkList').innerHTML = listHtml(filtered, fb);
+        wire();
+      });
     }, 50);
   }
   function builderDoc() {
@@ -2590,7 +3315,7 @@
       }, 'Lock order');
   }
 
-  /* --- Orders & Handoff --- */
+  /* --- Orders & Bill of Materials --- */
   /**
    * Unlock an operational order so a last-minute customer change can be made. The
    * order is cancelled (kept on record with the reason) and a new draft version of
@@ -2724,11 +3449,11 @@
         '<div><div class="k">Customer approval</div><div class="v small">' + (order.customerApproval ? esc(order.customerApproval.approverName) : '—') + '</div></div></div></div>' +
       sectionBlock('Requirements', reqRows(order.requirements || [], canHandoff)) +
       sectionBlock('Internal tasks', taskRows(order.tasks || [], canHandoff)) +
-      sectionBlock('Procurement', procSections(order.procurement || [])) +
+      sectionBlock('Bill of Materials', bomBlock(order, canHandoff)) +
       (hasRole(QBO_VIEW_ROLES, user.role) ? sectionBlock('QuickBooks', '<div id="qboBox"><div class="muted" style="padding:16px;">Loading…</div></div>') : '') +
       sectionBlock('Audit timeline', auditRows(audit));
     document.getElementById('ordBack').addEventListener('click', function () { renderOrders(user); });
-    wireProcExports(order);
+    wireBom(order, user, canHandoff);
     if (hasRole(QBO_VIEW_ROLES, user.role)) loadQbo(order, user);
     var unl = document.getElementById('ordUnlock');
     if (unl) unl.addEventListener('click', function () { openUnlockForm(order, user); });
@@ -2758,11 +3483,53 @@
     }).join('');
     return tableShell(['Task', 'Owner', 'Status', 'Due'], rows, 4, 'No tasks.');
   }
-  /* --- Procurement: grouped by vendor, each block exportable. --- */
+  /* --- Bill of Materials: the vendor-facing document, grouped by vendor. ---
+   * Quantities and part numbers come from the accepted proposal and the catalog;
+   * powder colour, vendor notes and the sourced flag are operational and editable
+   * here. Prices shown are OUR unit cost — this is a purchasing document. */
   var procData = [];
-  function procSections(lines) {
+  var bomOrder = null;
+
+  function bomFieldStyle(w) {
+    return 'width:' + (w || '100%') + ';padding:7px 9px;border:1px solid #dcded7;border-radius:8px;font-size:13px;background:#fff;color:#20241f;outline:none;';
+  }
+
+  /** The header a Bill of Materials needs that a proposal has no concept of. */
+  function bomHeaderCard(order, edit) {
+    var dis = edit ? '' : ' disabled';
+    var d = order.bomSubmittedOn ? String(order.bomSubmittedOn).slice(0, 10) : '';
+    return '<div class="card" style="margin-bottom:14px;">' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;">' +
+        '<div><div class="k">Job name</div><input id="bomJob" value="' + esc(order.jobName || '') + '" placeholder="Defaults to the project name" style="' + bomFieldStyle() + '"' + dis + '></div>' +
+        '<div><div class="k">Ship to</div><select id="bomShipTo" style="' + bomFieldStyle() + '"' + dis + '>' +
+          '<option value="CUSTOMER"' + (order.bomShipTo === 'SUMMIT' ? '' : ' selected') + '>Customer site</option>' +
+          '<option value="SUMMIT"' + (order.bomShipTo === 'SUMMIT' ? ' selected' : '') + '>Summit Sensory Gym</option>' +
+        '</select></div>' +
+        '<div><div class="k">Submission date</div><input id="bomDate" type="date" value="' + esc(d) + '" style="' + bomFieldStyle() + '"' + dis + '></div>' +
+        '<div><div class="k">Delivery type</div><input id="bomDelivery" value="' + esc(order.deliveryType || '') + '" placeholder="e.g. Lift Gate" style="' + bomFieldStyle() + '"' + dis + '></div>' +
+        '<div><div class="k">Powder coat brand</div><input id="bomBrand" value="' + esc(order.powderCoatBrand || '') + '" placeholder="e.g. Cardinal" style="' + bomFieldStyle() + '"' + dis + '></div>' +
+        '<div><div class="k">Estimated shipment quote</div><input id="bomQuote" value="' + esc(order.shipmentQuote || '') + '" placeholder="TBD" style="' + bomFieldStyle() + '"' + dis + '></div>' +
+      '</div>' +
+      '<div style="margin-top:12px;"><div class="k">Notes to the vendor</div>' +
+        '<textarea id="bomNotes" rows="2" placeholder="Prints beneath the line items" style="' + bomFieldStyle() + 'resize:vertical;"' + dis + '>' + esc(order.bomNotes || '') + '</textarea></div>' +
+      (edit ? '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap;">' +
+        '<div style="display:flex;gap:8px;align-items:center;">' +
+          '<input id="bomPowderAll" placeholder="Powder colour for all steel lines" style="' + bomFieldStyle('260px') + '">' +
+          '<button class="link-btn" id="bomPowderApply" style="width:auto;padding:8px 13px;">Apply to steel lines</button>' +
+        '</div>' +
+        '<span id="bomSaved" class="muted" style="font-size:12px;"></span>' +
+      '</div>' : '') +
+    '</div>';
+  }
+
+  function bomBlock(order, edit) {
+    bomOrder = order;
+    return bomHeaderCard(order, edit) + bomSections(order.procurement || [], edit);
+  }
+
+  function bomSections(lines, edit) {
     procData = lines || [];
-    if (!procData.length) return '<div class="placeholder" style="padding:20px;"><p class="muted" style="margin:0;">No procurement lines.</p></div>';
+    if (!procData.length) return '<div class="placeholder" style="padding:20px;"><p class="muted" style="margin:0;">No Bill of Materials lines.</p></div>';
     var groups = {}, order = [];
     procData.forEach(function (p) {
       var v = (p.vendor && String(p.vendor).trim()) || 'Unassigned vendor';
@@ -2770,54 +3537,256 @@
       groups[v].push(p);
     });
     order.sort(function (a, b) { return a === 'Unassigned vendor' ? 1 : b === 'Unassigned vendor' ? -1 : a.localeCompare(b); });
-    return '<div style="display:flex;justify-content:flex-end;gap:8px;margin:-6px 0 12px;">' +
-        '<button class="link-btn" data-proc="csv" data-vendor="*" style="width:auto;padding:8px 14px;">Export all — Excel</button>' +
-        '<button class="link-btn" data-proc="pdf" data-vendor="*" style="width:auto;padding:8px 14px;">Export all — PDF</button>' +
+    var money2 = function (minor) { return '$' + (Number(minor || 0) / 100).toFixed(2); };
+
+    return '<div style="display:flex;justify-content:flex-end;align-items:center;gap:12px;margin:-6px 0 12px;flex-wrap:wrap;">' +
+        '<label style="display:flex;gap:7px;align-items:center;font-size:12.5px;color:#5c6157;cursor:pointer;" title="Prints the rest of that vendor’s catalogue at quantity 0, like a full order form">' +
+          '<input type="checkbox" id="bomZeroQty"> Include zero-quantity parts</label>' +
+        '<button class="link-btn" data-proc="csv" data-vendor="*" style="width:auto;padding:8px 14px;">Export BOM — Excel</button>' +
+        '<button class="link-btn" data-proc="pdf" data-vendor="*" style="width:auto;padding:8px 14px;">Export BOM — PDF</button>' +
       '</div>' +
       order.map(function (v) {
         var lines2 = groups[v];
         var qty = lines2.reduce(function (a, l) { return a + (Number(l.quantity) || 0); }, 0);
+        var cost = lines2.reduce(function (a, l) { return a + (Number(l.unitCostMinor) || 0) * (Number(l.quantity) || 0); }, 0);
+        var wt = lines2.reduce(function (a, l) { return a + (Number(l.unitWeightLbs) || 0) * (Number(l.quantity) || 0); }, 0);
         var rows = lines2.map(function (p) {
-          return '<tr>' + td('<b style="font-weight:600;">' + esc(p.name) + '</b>') + td(esc(p.sku || '—')) + td(String(p.quantity)) +
-            td(p.sourced ? '<span class="chip">Sourced</span>' : '<span class="muted">Pending</span>') + '</tr>';
+          var ext = (Number(p.unitCostMinor) || 0) * (Number(p.quantity) || 0);
+          return '<tr>' +
+            td('<b style="font-weight:600;">' + esc(p.name) + '</b>') +
+            td('<code style="font-size:12.5px;color:#4a4f47;">' + esc(p.sku || '—') + '</code>') +
+            td(String(p.quantity)) +
+            td(edit
+              ? '<input class="bomLine" data-id="' + p.id + '" data-f="powderColor" value="' + esc(p.powderColor || '') + '" placeholder="—" style="' + bomFieldStyle('120px') + '">'
+              : esc(p.powderColor || '—')) +
+            td(String(Math.round((Number(p.unitWeightLbs) || 0) * (Number(p.quantity) || 0) * 100) / 100)) +
+            td(money2(p.unitCostMinor)) +
+            td(money2(ext)) +
+            td(edit
+              ? '<input class="bomLine" data-id="' + p.id + '" data-f="vendorNotes" value="' + esc(p.vendorNotes || '') + '" placeholder="—" style="' + bomFieldStyle('160px') + '">'
+              : esc(p.vendorNotes || '—')) +
+            td(edit
+              ? '<select class="bomLine" data-id="' + p.id + '" data-f="sourced" style="' + bomFieldStyle('110px') + '">' +
+                  '<option value="false"' + (p.sourced ? '' : ' selected') + '>Pending</option>' +
+                  '<option value="true"' + (p.sourced ? ' selected' : '') + '>Ordered</option></select>'
+              : (p.sourced ? '<span class="chip">Ordered</span>' : '<span class="muted">Pending</span>')) +
+            '</tr>';
         }).join('') +
           '<tr><td style="padding:12px 16px;border-top:1px solid #e7e8e3;font-weight:600;">Total — ' + lines2.length + ' line' + (lines2.length === 1 ? '' : 's') + '</td>' +
           '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td>' +
           '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;font-weight:600;">' + qty + '</td>' +
+          '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td>' +
+          '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;font-weight:600;">' + (Math.round(wt * 100) / 100) + '</td>' +
+          '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td>' +
+          '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;font-weight:600;">' + money2(cost) + '</td>' +
+          '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td>' +
           '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td></tr>';
         return '<div style="margin-bottom:18px;">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">' +
-            '<div style="font-weight:600;font-size:14.5px;">' + esc(v) + '<span class="muted" style="font-weight:400;font-size:12.5px;margin-left:8px;">' + qty + ' unit' + (qty === 1 ? '' : 's') + '</span></div>' +
+            '<div style="font-weight:600;font-size:14.5px;">' + esc(v) + '<span class="muted" style="font-weight:400;font-size:12.5px;margin-left:8px;">' + qty + ' unit' + (qty === 1 ? '' : 's') + ' · ' + money2(cost) + ' at cost</span></div>' +
             '<div style="display:flex;gap:6px;">' +
               '<button class="link-btn" data-proc="csv" data-vendor="' + esc(v) + '" style="width:auto;padding:7px 13px;">Excel</button>' +
               '<button class="link-btn" data-proc="pdf" data-vendor="' + esc(v) + '" style="width:auto;padding:7px 13px;">PDF</button>' +
             '</div>' +
           '</div>' +
-          tableShell(['Item', 'Part #', 'Qty', 'Sourcing'], rows, 4, '') +
+          tableShell(['Item', 'Part #', 'Qty', 'Powder color', 'Weight (lb)', 'Cost each', 'Total cost', 'Notes', 'Status'], rows, 9, '') +
         '</div>';
       }).join('');
   }
-  function procLinesFor(vendor) {
-    return vendor === '*' ? procData : procData.filter(function (p) { return ((p.vendor && String(p.vendor).trim()) || 'Unassigned vendor') === vendor; });
-  }
-  function wireProcExports(order) {
-    document.querySelectorAll('[data-proc]').forEach(function (bt) {
-      bt.addEventListener('click', function () {
-        var vendor = bt.getAttribute('data-vendor');
-        var lines = procLinesFor(vendor);
-        var title = 'Procurement — ' + (vendor === '*' ? 'all vendors' : vendor);
-        var head = vendor === '*' ? ['Vendor', 'Item', 'Part #', 'Qty', 'Sourcing'] : ['Item', 'Part #', 'Qty', 'Sourcing'];
-        var body = lines.map(function (p) {
-          var base = [p.name || '', p.sku || '', String(p.quantity || 0), p.sourced ? 'Sourced' : 'Pending'];
-          return vendor === '*' ? [(p.vendor || 'Unassigned vendor')].concat(base) : base;
+
+  /** Wire the header fields, the per-line edits and the two export buttons. */
+  function wireBom(order, user, edit) {
+    if (edit) {
+      var saved = document.getElementById('bomSaved');
+      var flash = function (msg) { if (saved) { saved.textContent = msg; setTimeout(function () { if (saved.textContent === msg) saved.textContent = ''; }, 1800); } };
+      var HEADER = [['bomJob', 'jobName'], ['bomShipTo', 'bomShipTo'], ['bomDate', 'bomSubmittedOn'], ['bomDelivery', 'deliveryType'], ['bomBrand', 'powderCoatBrand'], ['bomQuote', 'shipmentQuote'], ['bomNotes', 'bomNotes']];
+      HEADER.forEach(function (pair) {
+        var el = document.getElementById(pair[0]); if (!el) return;
+        el.addEventListener('change', async function () {
+          var body = {};
+          if (pair[1] === 'bomSubmittedOn') body[pair[1]] = el.value ? new Date(el.value + 'T12:00:00').toISOString() : null;
+          else body[pair[1]] = el.value.trim ? el.value.trim() : el.value;
+          var r = await authed('/orders/' + order.id + '/bom', { method: 'PATCH', body: body });
+          if (!r.ok) { alert('Could not save (' + r.status + ').'); return; }
+          var updated = null; try { updated = await r.json(); } catch (e) {}
+          if (updated) { for (var k in updated) order[k] = updated[k]; }
+          flash('Saved');
         });
-        var qty = lines.reduce(function (a, l) { return a + (Number(l.quantity) || 0); }, 0);
-        var totalRow = (vendor === '*' ? ['', 'Total', '', String(qty), ''] : ['Total', '', String(qty), '']);
-        var slug = (vendor === '*' ? 'all-vendors' : vendor).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-        if (bt.getAttribute('data-proc') === 'csv') downloadCsv(order.number + '-procurement-' + slug + '.csv', [head].concat(body).concat([totalRow]));
-        else printTable(title, order.number + ' · accepted proposal v' + (order.acceptedVersion || ''), head, body, totalRow);
+      });
+      var applyBtn = document.getElementById('bomPowderApply');
+      if (applyBtn) applyBtn.addEventListener('click', async function () {
+        var val = (document.getElementById('bomPowderAll') || {}).value || '';
+        if (!val.trim()) { alert('Type the powder colour first.'); return; }
+        var r = await authed('/orders/' + order.id + '/bom/powder-color', { method: 'POST', body: { color: val.trim(), overwrite: true } });
+        if (!r.ok) { alert('Could not apply (' + r.status + ').'); return; }
+        var d = await r.json();
+        alert((d.updated || 0) + ' steel line(s) set to ' + val.trim() + '.');
+        openOrderDetail(order.id, user);
+      });
+      document.querySelectorAll('.bomLine').forEach(function (el) {
+        el.addEventListener('change', async function () {
+          var f = el.getAttribute('data-f'), body = {};
+          body[f] = f === 'sourced' ? el.value === 'true' : el.value.trim();
+          el.style.borderColor = '#c9a227';
+          var r = await authed('/orders/procurement/' + el.getAttribute('data-id'), { method: 'PATCH', body: body });
+          el.style.borderColor = r.ok ? '#3f9d78' : '#c2452f';
+          if (!r.ok) { alert('Could not save the line (' + r.status + ').'); return; }
+          var line = (procData || []).filter(function (x) { return x.id === el.getAttribute('data-id'); })[0];
+          if (line) line[f] = body[f];
+          setTimeout(function () { el.style.borderColor = '#dcded7'; }, 900);
+        });
+      });
+    }
+    document.querySelectorAll('[data-proc]').forEach(function (bt) {
+      bt.addEventListener('click', async function () {
+        var vendor = bt.getAttribute('data-vendor');
+        var zero = document.getElementById('bomZeroQty');
+        var qs = '?vendor=' + encodeURIComponent(vendor) + (zero && zero.checked ? '&includeZeroQty=true' : '');
+        bt.disabled = true;
+        var doc = null;
+        try {
+          var r = await authed('/orders/' + order.id + '/bom' + qs);
+          if (r.ok) doc = await r.json();
+        } catch (e) {}
+        bt.disabled = false;
+        if (!doc) { alert('Could not build the Bill of Materials.'); return; }
+        if (bt.getAttribute('data-proc') === 'csv') downloadBomCsv(doc, vendor);
+        else printBom(doc, vendor);
       });
     });
+  }
+
+  function bomFileSlug(vendor) {
+    return (vendor === '*' ? 'all-vendors' : vendor).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  }
+
+  function downloadBomCsv(doc, vendor) {
+    var all = vendor === '*';
+    var head = (all ? ['Vendor'] : []).concat(['Line #', 'Description', 'Qty', 'Powder color', 'Weight (lb)', 'Cost each', 'Total cost', 'Notes', 'Status']);
+    var body = (doc.lines || []).map(function (l) {
+      var base = [l.lineNo, l.name, String(l.quantity), l.powderColor, String(l.extendedWeightLbs),
+        (l.unitCostMinor / 100).toFixed(2), (l.extendedCostMinor / 100).toFixed(2), l.vendorNotes, l.sourced ? 'Ordered' : 'Pending'];
+      return all ? [l.vendor].concat(base) : base;
+    });
+    var t = doc.totals || {};
+    var totalRow = (all ? [''] : []).concat(['Total', '', String(t.unitCount || 0), '', String(t.totalWeightLbs || 0), '', ((t.extendedCostMinor || 0) / 100).toFixed(2), '', '']);
+    var meta = [
+      ['Bill of Materials', doc.order.number],
+      ['Job', doc.order.jobName], ['Vendor', all ? 'All vendors' : vendor],
+      ['Submission date', doc.order.submittedOn ? String(doc.order.submittedOn).slice(0, 10) : ''],
+      ['Ship to', doc.shipTo.name], ['Delivery type', doc.order.deliveryType],
+      ['Powder coat brand', doc.order.powderCoatBrand], ['Estimated shipment quote', doc.order.shipmentQuote],
+      ['Total steel weight (lb)', String(t.steelWeightLbs || 0)],
+      ['Prepared by', (doc.createdBy && doc.createdBy.name) || ''], ['Prepared on', new Date(doc.createdAt).toLocaleString()],
+      []
+    ];
+    downloadCsv(doc.order.number + '-bom-' + bomFileSlug(vendor) + '.csv', meta.concat([head]).concat(body).concat([totalRow]));
+  }
+
+  /**
+   * The printed Bill of Materials: Summit branding, ship-from / ship-to blocks like
+   * a purchase order, the fabrication header, then the lines. Print-to-PDF from the
+   * browser dialog; the table header repeats on every page.
+   */
+  function printBom(doc, vendor) {
+    var w = window.open('', '_blank', 'width=1000,height=1100');
+    if (!w) { alert('Allow pop-ups to export a PDF.'); return; }
+    var all = vendor === '*';
+    var t = doc.totals || {};
+    var c = doc.company;
+    var money2 = function (minor) { return '$' + (Number(minor || 0) / 100).toFixed(2); };
+    var dateStr = function (v) { return v ? new Date(v).toLocaleDateString() : '—'; };
+    var block = function (label, name, lines, contact, phone, email) {
+      return '<div style="flex:1;min-width:200px;">' +
+        '<div style="font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;color:#8a8f85;margin-bottom:3px;">' + esc(label) + '</div>' +
+        '<div style="font-size:12.5px;line-height:1.5;">' +
+          '<b>' + esc(name || '—') + '</b>' +
+          (lines || []).map(function (l) { return '<br>' + esc(l); }).join('') +
+          (contact ? '<br>' + esc(contact) : '') +
+          (phone ? '<br>' + esc(phone) : '') +
+          (email ? '<br>' + esc(email) : '') +
+        '</div></div>';
+    };
+    var field = function (label, value) {
+      return '<div><div style="font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;color:#8a8f85;">' + esc(label) + '</div>' +
+        '<div style="font-size:12.5px;font-weight:600;">' + esc(value == null || value === '' ? '—' : value) + '</div></div>';
+    };
+    var cols = (all ? ['Vendor'] : []).concat(['Line #', 'Description', 'Qty', 'Powder color', 'Weight (lb)', 'Cost each', 'Total cost', 'Notes']);
+    var rightFrom = all ? 3 : 2;
+    var thead = cols.map(function (h, i) {
+      return '<th style="text-align:' + (i > rightFrom ? 'right' : 'left') + ';padding:6px 8px;font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:#5c6157;border-bottom:1.5px solid #3d4a55;white-space:nowrap;">' + esc(h) + '</th>';
+    }).join('');
+    var tbody = (doc.lines || []).map(function (l) {
+      var cells = (all ? [esc(l.vendor)] : []).concat([
+        '<code style="font-size:10.5px;">' + esc(l.lineNo) + '</code>', esc(l.name), String(l.quantity),
+        esc(l.powderColor || '—'), String(l.extendedWeightLbs || 0), money2(l.unitCostMinor), money2(l.extendedCostMinor), esc(l.vendorNotes || '')
+      ]);
+      var zeroed = l.quantity === 0;
+      return '<tr style="' + (zeroed ? 'color:#9a9f95;' : '') + '">' + cells.map(function (v, i) {
+        return '<td style="padding:5px 8px;border-bottom:1px solid #e7e8e3;font-size:10.5px;text-align:' + (i > rightFrom ? 'right' : 'left') + ';">' + v + '</td>';
+      }).join('') + '</tr>';
+    }).join('');
+    var totalCells = (all ? [''] : []).concat(['', 'Total', String(t.unitCount || 0), '', String(t.totalWeightLbs || 0), '', money2(t.extendedCostMinor), '']);
+
+    w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>' +
+      esc('BOM ' + doc.order.number + ' — ' + (all ? 'all vendors' : vendor)) + '</title>' +
+      '<style>@page{margin:14mm 12mm;}body{font-family:Helvetica,Arial,sans-serif;color:#20241f;margin:0;}' +
+      'thead{display:table-header-group;}tr{page-break-inside:avoid;}</style></head>' +
+      '<body>' +
+      // Branding band
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;border-bottom:2.5px solid #1c4039;padding-bottom:10px;">' +
+        '<div style="display:flex;gap:12px;align-items:center;">' +
+          '<img src="' + location.origin + '/logo.png" alt="" style="height:52px;width:auto;">' +
+          '<div><div style="font-family:Georgia,serif;font-size:20px;font-weight:700;letter-spacing:-.01em;">' + esc(c.name) + '</div>' +
+            '<div style="font-size:10.5px;color:#5c6157;line-height:1.45;">' + esc(c.addressLine1) + ' · ' + esc(c.city + ', ' + c.region + ' ' + c.postalCode) +
+            '<br>' + esc(c.phone) + ' · ' + esc(c.email) + '</div></div>' +
+        '</div>' +
+        '<div style="text-align:right;">' +
+          '<div style="font-family:Georgia,serif;font-size:17px;font-weight:700;">Bill of Materials</div>' +
+          '<div style="font-size:11px;color:#5c6157;margin-top:2px;">' + esc(doc.order.number) + ' · accepted proposal v' + (doc.order.acceptedVersion || '') + '</div>' +
+          '<div style="font-size:11px;color:#5c6157;">' + esc(all ? 'All vendors' : vendor) + '</div>' +
+        '</div>' +
+      '</div>' +
+      // Ship from / ship to
+      '<div style="display:flex;gap:24px;margin-top:14px;">' +
+        block('Ship from (vendor)',
+          doc.vendor ? doc.vendor.name : (all ? 'Multiple vendors — see line items' : vendor),
+          doc.vendor ? [doc.vendor.addressLine1, doc.vendor.addressLine2, [doc.vendor.city, [doc.vendor.region, doc.vendor.postalCode].filter(Boolean).join(' ')].filter(Boolean).join(', ')].filter(Boolean) : [],
+          doc.vendor ? [doc.vendor.contactName, doc.vendor.contactTitle].filter(Boolean).join(', ') : '',
+          doc.vendor ? doc.vendor.contactPhone : '', doc.vendor ? doc.vendor.contactEmail : '') +
+        block('Ship to (' + doc.shipTo.label + ')', doc.shipTo.name, doc.shipTo.lines, doc.shipTo.contactName, doc.shipTo.phone, doc.shipTo.email) +
+        block('Customer of record', doc.customer.name,
+          [doc.customer.addressLine1, doc.customer.addressLine2, [doc.customer.city, [doc.customer.region, doc.customer.postalCode].filter(Boolean).join(' ')].filter(Boolean).join(', ')].filter(Boolean),
+          [doc.customer.contactName, doc.customer.contactTitle].filter(Boolean).join(', '), doc.customer.contactPhone, doc.customer.contactEmail) +
+      '</div>' +
+      // Fabrication header
+      '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px 18px;margin-top:14px;padding:11px 13px;background:#f7f8f4;border:1px solid #e7e8e3;border-radius:8px;">' +
+        field('Job', doc.order.jobName) +
+        field('Submission date', dateStr(doc.order.submittedOn)) +
+        field('Delivery type', doc.order.deliveryType) +
+        field('Powder coat brand', doc.order.powderCoatBrand) +
+        field('Total steel weight', (t.steelWeightLbs || 0) + ' lb') +
+        field('Total weight', (t.totalWeightLbs || 0) + ' lb') +
+        field('Estimated shipment quote', doc.order.shipmentQuote || 'TBD') +
+        field('Vendor terms', doc.vendor ? (doc.vendor.paymentTerms || '—') : '—') +
+      '</div>' +
+      '<div style="font-size:9.5px;color:#8a8f85;margin:5px 0 0;">Total steel weight is fabricated steel only — it excludes hardware and crating.</div>' +
+      // Lines
+      '<table style="width:100%;border-collapse:collapse;margin-top:12px;"><thead><tr>' + thead + '</tr></thead><tbody>' + tbody +
+      '<tr>' + totalCells.map(function (v, i) {
+        return '<td style="padding:7px 8px;border-top:1.5px solid #3d4a55;font-size:11px;font-weight:700;text-align:' + (i > rightFrom ? 'right' : 'left') + ';">' + esc(v) + '</td>';
+      }).join('') + '</tr></tbody></table>' +
+      (doc.order.notes ? '<div style="margin-top:12px;padding:10px 12px;border:1px solid #e7e8e3;border-radius:8px;font-size:11px;line-height:1.55;"><b>Notes:</b> ' + esc(doc.order.notes) + '</div>' : '') +
+      // Sign-off footer
+      '<div style="display:flex;justify-content:space-between;gap:20px;margin-top:18px;padding-top:10px;border-top:1px solid #e7e8e3;font-size:10px;color:#5c6157;">' +
+        '<div>Prepared by <b>' + esc((doc.createdBy && doc.createdBy.name) || '—') + '</b>' +
+          ((doc.createdBy && doc.createdBy.email) ? ' · ' + esc(doc.createdBy.email) : '') +
+          '<br>Created ' + esc(new Date(doc.createdAt).toLocaleString()) + '</div>' +
+        '<div style="text-align:right;">' + esc(c.name) + ' · ' + esc(c.email) + '<br>' + esc(doc.order.number) + '</div>' +
+      '</div>' +
+      '</body></html>');
+    w.document.close();
+    setTimeout(function () { w.focus(); w.print(); }, 400);
   }
   /* --- QuickBooks push: prepare → authorize → execute, on the order itself. --- */
   var QBO_TYPES = [

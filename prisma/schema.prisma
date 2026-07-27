@@ -413,6 +413,8 @@ model Product {
   productLine         ProductLine?        @relation(fields: [productLineId], references: [id], onDelete: SetNull)
   defaultQuantity     Int                 @default(1)
   badge               String?
+  // Manual order of the default product list (product picker + tier listings).
+  sortOrder           Int                 @default(0)
 
   proposalDescription String?
   internalDescription String?
@@ -459,6 +461,7 @@ model Product {
   @@index([status])
   @@index([kind])
   @@index([productLineId])
+  @@index([sortOrder])
 }
 
 // The asterisked lines that print beneath a product on the proposal, e.g.
@@ -490,6 +493,27 @@ model Manufacturer {
   contactEmail        String?
   notes               String?
   isActive            Boolean           @default(true)
+
+  // Vendor of record: where a purchase order is sent and who is called about it.
+  // The BOM prints this block as "Ship from".
+  contactTitle        String?
+  contactPhone        String?
+  altContactName      String?
+  altContactEmail     String?
+  altContactPhone     String?
+  addressLine1        String?
+  addressLine2        String?
+  city                String?
+  region              String?
+  postalCode          String?
+  country             String?           @default("USA")
+  website             String?
+  accountNumber       String?
+  paymentTerms        String?
+  // Steel fabricators are the vendors whose lines roll into the BOM's
+  // "Total steel weight" — hardware and crating are excluded by definition.
+  isSteelFabricator   Boolean           @default(false)
+
   createdAt           DateTime          @default(now())
   updatedAt           DateTime          @updatedAt
   sourcing            ProductSourcing[]
@@ -1194,6 +1218,12 @@ enum RequirementStatus {
   WAIVED
 }
 
+// Who the bill of materials ships to: the end customer's site, or Summit's dock.
+enum BomShipTo {
+  CUSTOMER
+  SUMMIT
+}
+
 enum HandoffTaskStatus {
   TODO
   IN_PROGRESS
@@ -1226,6 +1256,17 @@ model AcceptedOrder {
 
   status            HandoffStatus @default(NEW)
   locked            Boolean       @default(true)
+
+  // ---- Bill of Materials header (operational, editable after lock) ----
+  // The BOM is a shop/vendor document, so these are entered per order rather
+  // than carried from the proposal.
+  jobName           String?
+  bomShipTo         BomShipTo     @default(CUSTOMER)
+  bomSubmittedOn    DateTime?
+  deliveryType      String?
+  powderCoatBrand   String?
+  shipmentQuote     String?
+  bomNotes          String?
 
   // Integration cross-references (documented in QBO/monday milestones).
   qboEstimateTxnId  String?
@@ -1277,6 +1318,13 @@ model ProcurementLine {
   vendor       String?
   poNumber     String?
   sourced      Boolean       @default(false)
+  // Snapshot of what we pay the vendor and what the part weighs, resolved from
+  // the catalog at lock time (and backfilled once for orders locked earlier).
+  unitCostMinor   Int?
+  unitWeightLbs   Decimal?   @db.Decimal(10, 3)
+  // Fabrication instructions that print on the BOM line.
+  powderColor  String?
+  vendorNotes  String?
   targetDate   DateTime?
   notes        String?
   isException  Boolean       @default(false)

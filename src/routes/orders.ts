@@ -6,8 +6,9 @@ import { ValidationError } from '../lib/errors.js';
 import {
   createAcceptedOrder, getOrder, listOrders, handoffStatus, orderAudit, verifyIntegrity,
   addRequirement, updateRequirement, addTask, updateTask, upsertProcurementLine, recordIntegrationRef,
-  unlockOrder, orderForVersion,
+  unlockOrder, orderForVersion, patchProcurementLine, updateOrderBomHeader, applyPowderColorToOrder,
 } from '../handoff/service.js';
+import { buildBom } from '../handoff/bom.js';
 import type { HandoffStatus, RequirementCategory, RequirementStatus, HandoffTaskStatus, Role } from '@prisma/client';
 
 /** AcceptedOrder rows carry BigInt columns — serialize for JSON. */
@@ -25,6 +26,24 @@ const ApprovalSchema = z.object({
   ipAddress: z.string().optional(),
   approvedAt: z.coerce.date(),
   notes: z.string().optional(),
+});
+
+const BomHeader = z.object({
+  jobName: z.string().trim().max(240).nullish(),
+  bomShipTo: z.enum(['CUSTOMER', 'SUMMIT']).optional(),
+  bomSubmittedOn: z.union([z.coerce.date(), z.null()]).optional(),
+  deliveryType: z.string().trim().max(120).nullish(),
+  powderCoatBrand: z.string().trim().max(120).nullish(),
+  shipmentQuote: z.string().trim().max(120).nullish(),
+  bomNotes: z.string().trim().max(4000).nullish(),
+});
+
+const BomLinePatch = z.object({
+  powderColor: z.string().trim().max(80).nullish(),
+  vendorNotes: z.string().trim().max(500).nullish(),
+  poNumber: z.string().trim().max(80).nullish(),
+  sourced: z.boolean().optional(),
+  unitCostMinor: z.number().int().nonnegative().nullish(),
 });
 
 export function registerOrderRoutes(app: FastifyInstance): void {
@@ -105,5 +124,43 @@ export function registerOrderRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const b = req.body as { qboEstimateTxnId?: string; mondayProjectId?: string };
     return serializeOrder(await recordIntegrationRef(id, b, req.user!.sub));
+  });
+
+  // --- Bill of Materials ---
+  /**
+   * The assembled BOM document: header, ship-from / ship-to blocks, lines and
+   * totals. `vendor` scopes it to one vendor ('*' for all of them);
+   * `includeZeroQty` adds the rest of that vendor's catalogue at quantity 0 so the
+   * shop can hand-add a part without asking for a new sheet.
+   */
+  app.get('/orders/:id/bom', read, async (req) => {
+    const { id } = req.params as { id: string };
+    const q = req.query as { vendor?: string; includeZeroQty?: string };
+    // Reading the order first backfills part numbers, vendors, cost and weight on
+    // lines locked before those were resolved.
+    await getOrder(id);
+    return buildBom(id, { vendor: q.vendor, includeZeroQty: q.includeZeroQty === 'true' });
+  });
+
+  app.patch('/orders/:id/bom', handoff, async (req) => {
+    const { id } = req.params as { id: string };
+    const parsed = BomHeader.safeParse(req.body);
+    if (!parsed.success) throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid BOM header');
+    return serializeOrder(await updateOrderBomHeader(id, parsed.data, req.user!.sub));
+  });
+
+  app.patch('/orders/procurement/:lineId', handoff, async (req) => {
+    const { lineId } = req.params as { lineId: string };
+    const parsed = BomLinePatch.safeParse(req.body);
+    if (!parsed.success) throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid line');
+    return patchProcurementLine(lineId, parsed.data, req.user!.sub);
+  });
+
+  /** Set one powder colour across every steel line on the order. */
+  app.post('/orders/:id/bom/powder-color', handoff, async (req) => {
+    const { id } = req.params as { id: string };
+    const b = (req.body || {}) as { color?: string; overwrite?: boolean };
+    if (typeof b.color !== 'string') throw new ValidationError('color is required');
+    return applyPowderColorToOrder(id, b.color.trim(), { overwrite: !!b.overwrite }, req.user!.sub);
   });
 }

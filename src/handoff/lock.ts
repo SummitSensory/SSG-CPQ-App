@@ -110,7 +110,7 @@ export function defaultTasks(depositRequired: boolean): SeededTask[] {
   if (depositRequired) tasks.push({ title: 'Create QuickBooks deposit invoice', assigneeRole: 'ACCOUNTING', category: null });
   tasks.push(
     { title: 'Create or update monday.com project', assigneeRole: 'PROJECT_MANAGER', category: null },
-    { title: 'Verify procurement list & source items', assigneeRole: 'OPERATIONS', category: 'PRODUCTION' },
+    { title: 'Verify Bill of Materials & order parts', assigneeRole: 'OPERATIONS', category: 'PRODUCTION' },
     { title: 'Schedule shipping / delivery', assigneeRole: 'OPERATIONS', category: 'SHIPPING' },
     { title: 'Schedule installation', assigneeRole: 'PROJECT_MANAGER', category: 'INSTALLATION' },
     { title: 'Schedule training', assigneeRole: 'PROJECT_MANAGER', category: 'TRAINING' },

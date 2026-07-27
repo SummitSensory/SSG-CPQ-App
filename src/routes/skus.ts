@@ -91,35 +91,94 @@ export function registerSkuRoutes(app: FastifyInstance): void {
     return reply.status(204).send();
   });
 
-  // Bulk import: upsert rows by part#. dryRun returns a preview without writing.
+  /**
+   * Bulk import, matched on part number.
+   *
+   * Overwrite is COLUMN-WISE: only the columns actually present in the file are
+   * written, so a sheet of `part,unitCost` reprices the catalog and leaves names,
+   * categories, weights and vendors untouched. A blank cell in a column that IS
+   * present is a real value (it clears the field) — an absent column is not.
+   *
+   * Nothing is ever deleted. Parts in the catalog but absent from the file come
+   * back as `missing` for review; only `missingAction: 'deactivate'` acts on them.
+   */
   app.post('/skus/import', admin, async (req, reply) => {
-    const body = z.object({ dryRun: z.boolean().default(false), rows: z.array(z.record(z.unknown())).min(1).max(5000) }).safeParse(req.body);
+    const body = z.object({
+      dryRun: z.boolean().default(false),
+      missingAction: z.enum(['leave', 'deactivate']).default('leave'),
+      rows: z.array(z.record(z.unknown())).min(1).max(5000),
+    }).safeParse(req.body);
     if (!body.success) throw new ValidationError(body.error.message);
+
     const issues: { row: number; message: string }[] = [];
-    const clean: { part: string; description: string; unitPriceMinor: number; unitCostMinor: number; weightLbs: number; category: string; manufacturer: string | null; proposalGroup: string | null }[] = [];
+    type Row = { part: string; data: Record<string, unknown>; columns: string[] };
+    const clean: Row[] = [];
+    const has = (raw: Record<string, unknown>, ...keys: string[]) =>
+      keys.some((k) => Object.prototype.hasOwnProperty.call(raw, k) && raw[k] !== undefined);
+
     body.data.rows.forEach((raw, i) => {
       const p = ImportRow.safeParse(raw);
       if (!p.success) { issues.push({ row: i + 1, message: p.error.issues[0]?.message || 'invalid row' }); return; }
       const d = p.data;
-      clean.push({
-        part: d.part.trim(),
-        description: (d.description || '').trim() || d.part.trim(),
-        unitPriceMinor: d.unitPriceMinor != null ? Math.round(d.unitPriceMinor) : toMinor(d.unitPrice),
-        unitCostMinor: d.unitCostMinor != null ? Math.round(d.unitCostMinor) : toMinor(d.unitCost),
-        weightLbs: toNum(d.weightLbs),
-        category: (d.category || 'OTHER').trim(),
-        manufacturer: d.manufacturer ? d.manufacturer.trim() : null,
-        proposalGroup: d.proposalGroup ? d.proposalGroup.trim() : null,
-      });
+      const data: Record<string, unknown> = {};
+      const columns: string[] = [];
+      if (has(raw, 'description')) { data.description = (d.description || '').trim() || d.part.trim(); columns.push('description'); }
+      if (has(raw, 'unitPrice', 'unitPriceMinor')) { data.unitPriceMinor = d.unitPriceMinor != null ? Math.round(d.unitPriceMinor) : toMinor(d.unitPrice); columns.push('unitPrice'); }
+      if (has(raw, 'unitCost', 'unitCostMinor')) { data.unitCostMinor = d.unitCostMinor != null ? Math.round(d.unitCostMinor) : toMinor(d.unitCost); columns.push('unitCost'); }
+      if (has(raw, 'weightLbs')) { data.weightLbs = toNum(d.weightLbs); columns.push('weightLbs'); }
+      if (has(raw, 'category')) { data.category = (d.category || 'OTHER').trim(); columns.push('category'); }
+      if (has(raw, 'manufacturer')) { data.manufacturer = d.manufacturer ? d.manufacturer.trim() : null; columns.push('manufacturer'); }
+      if (has(raw, 'proposalGroup')) { data.proposalGroup = d.proposalGroup ? d.proposalGroup.trim() : null; columns.push('proposalGroup'); }
+      clean.push({ part: d.part.trim(), data, columns });
     });
-    if (body.data.dryRun) return { dryRun: true, valid: issues.length === 0, willUpsert: clean.length, issues };
+
+    const parts = clean.map((c) => c.part);
+    const existing = await prisma.sku.findMany({ where: { part: { in: parts } }, select: { part: true } });
+    const known = new Set(existing.map((e) => e.part));
+    // Any part the file leaves out — the review list.
+    const absent = await prisma.sku.findMany({
+      where: { part: { notIn: parts.length ? parts : ['\u0000'] }, active: true },
+      select: { part: true, description: true },
+      orderBy: { part: 'asc' },
+    });
+    const columnsSeen = [...new Set(clean.flatMap((c) => c.columns))];
+    const plan = {
+      create: clean.filter((c) => !known.has(c.part)).length,
+      update: clean.filter((c) => known.has(c.part)).length,
+      columns: columnsSeen,
+      missing: absent.map((a) => ({ part: a.part, name: a.description })),
+    };
+
+    if (body.data.dryRun) return { dryRun: true, valid: issues.length === 0, willUpsert: clean.length, issues, plan };
+
     let created = 0, updated = 0;
     for (const c of clean) {
-      const ex = await prisma.sku.findUnique({ where: { part: c.part } });
-      if (ex) { await prisma.sku.update({ where: { part: c.part }, data: c }); updated++; }
-      else { await prisma.sku.create({ data: c }); created++; }
+      if (known.has(c.part)) {
+        if (Object.keys(c.data).length) await prisma.sku.update({ where: { part: c.part }, data: c.data });
+        updated++;
+      } else {
+        // A new part still needs the non-null basics, whether the file gave them or not.
+        await prisma.sku.create({
+          data: {
+            part: c.part,
+            description: (c.data.description as string) ?? c.part,
+            category: (c.data.category as string) ?? 'OTHER',
+            unitPriceMinor: (c.data.unitPriceMinor as number) ?? 0,
+            unitCostMinor: (c.data.unitCostMinor as number) ?? 0,
+            weightLbs: (c.data.weightLbs as number) ?? 0,
+            manufacturer: (c.data.manufacturer as string | null) ?? null,
+            proposalGroup: (c.data.proposalGroup as string | null) ?? null,
+          },
+        });
+        created++;
+      }
     }
-    await recordAudit({ actorId: req.user!.sub, action: 'sku.import', details: { created, updated } });
-    return reply.status(201).send({ valid: issues.length === 0, created, updated, issues });
+    let deactivated = 0;
+    if (body.data.missingAction === 'deactivate' && absent.length) {
+      const r = await prisma.sku.updateMany({ where: { part: { in: absent.map((a) => a.part) } }, data: { active: false } });
+      deactivated = r.count;
+    }
+    await recordAudit({ actorId: req.user!.sub, action: 'sku.import', details: { created, updated, deactivated, columns: columnsSeen } });
+    return reply.status(201).send({ valid: issues.length === 0, created, updated, deactivated, issues, plan });
   });
 }
