@@ -16,11 +16,17 @@ function file(name: string): string {
   return body;
 }
 
+/**
+ * The shell and the client are served with no caching. Without this the browser
+ * heuristically caches /app.js forever and a deploy silently keeps running the old
+ * build — the sidebar build stamp is how you catch it. index.html also carries a
+ * ?v= on the script tag so a cached shell can't pull a stale client.
+ */
+const NO_STORE = 'no-store, no-cache, must-revalidate, max-age=0';
+
 export function registerWebRoutes(app: FastifyInstance): void {
   app.get('/', async (_req, reply) =>
-    reply.type('text/html; charset=utf-8').send(file('index.html')),
-  );
+    reply.type('text/html; charset=utf-8').header('Cache-Control', NO_STORE).send(file('index.html')));
   app.get('/app.js', async (_req, reply) =>
-    reply.type('text/javascript; charset=utf-8').send(file('app.js')),
-  );
+    reply.type('text/javascript; charset=utf-8').header('Cache-Control', NO_STORE).send(file('app.js')));
 }
