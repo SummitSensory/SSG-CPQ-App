@@ -77,12 +77,19 @@ export function registerSkuRoutes(app: FastifyInstance): void {
    * is administered in one place and audited with the rest of the SKU master.
    */
   app.get('/skus/overridable', read, async () => {
-    const items = await prisma.sku.findMany({
-      where: { overrideAllowed: true, active: true },
-      select: { part: true, description: true },
-      orderBy: { part: 'asc' },
-    });
-    return { items };
+    try {
+      const items = await prisma.sku.findMany({
+        where: { overrideAllowed: true, active: true },
+        select: { part: true, description: true },
+        orderBy: { part: 'asc' },
+      });
+      return { items };
+    } catch (e) {
+      // Migration 0024 not deployed yet — no part is overridable, which is the
+      // safe answer. The builder then shows every part number as fixed.
+      if ((e as { code?: string }).code !== 'P2022') throw e;
+      return { items: [] };
+    }
   });
 
   app.post('/skus', admin, async (req, reply) => {

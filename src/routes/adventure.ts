@@ -10,9 +10,33 @@ import { loadFormulaRules } from './formulas.js';
 export function registerAdventureRoutes(app: FastifyInstance): void {
   const write = { preHandler: requirePermission(Permission.PROPOSAL_WRITE) };
 
+  /**
+   * Pricing must never depend on migration timing. `overrideAllowed` arrived in
+   * 0024; if the code is live before the migration is, the column is missing and a
+   * bare findMany() takes the whole engine down with P2022. Read it optionally and
+   * fall back to "nothing is overridable" instead.
+   */
+  let skuHasOverrideFlag = true;
+  const SKU_COLS = {
+    part: true, description: true, unitPriceMinor: true, unitCostMinor: true,
+    weightLbs: true, category: true, proposalGroup: true,
+  } as const;
+  async function skuRows(): Promise<Array<Record<string, unknown>>> {
+    if (skuHasOverrideFlag) {
+      try {
+        return await prisma.sku.findMany({ select: { ...SKU_COLS, overrideAllowed: true } });
+      } catch (e) {
+        if ((e as { code?: string }).code !== 'P2022') throw e;
+        skuHasOverrideFlag = false;
+        app.log.warn('Sku.overrideAllowed is missing — run migration 0024. Part overrides are off.');
+      }
+    }
+    return await prisma.sku.findMany({ select: SKU_COLS });
+  }
+
   async function skuMap(): Promise<Record<string, SkuRec>> {
     const [rows, products, costs, place] = await Promise.all([
-      prisma.sku.findMany(),
+      skuRows(),
       prisma.product.findMany({ select: { id: true, sku: true, weightOz: true } }),
       prisma.productCost.findMany({ select: { productId: true, unitCost: true, effectiveDate: true }, orderBy: { effectiveDate: 'desc' } }),
       placements(),
@@ -26,7 +50,11 @@ export function registerAdventureRoutes(app: FastifyInstance): void {
       byPart[p.sku] = { cost: latestCost[p.id] || 0, weightLbs: p.weightOz ? p.weightOz / 16 : 0 };
     }
     const map: Record<string, SkuRec> = {};
-    for (const r of rows) {
+    for (const row of rows) {
+      const r = row as {
+        part: string; description: string; unitPriceMinor: number; unitCostMinor: number;
+        weightLbs: number; category: string; proposalGroup: string | null; overrideAllowed?: boolean;
+      };
       const fb = byPart[r.part];
       const pl = place[r.part];
       map[r.part] = {
@@ -36,7 +64,7 @@ export function registerAdventureRoutes(app: FastifyInstance): void {
         category: r.category,
         proposalGroup: (pl ? pl.group : '') || r.proposalGroup || undefined,
         proposalSubgroup: pl ? pl.subgroup || undefined : undefined,
-        overrideAllowed: r.overrideAllowed,
+        overrideAllowed: r.overrideAllowed === true,
       };
     }
     return map;
