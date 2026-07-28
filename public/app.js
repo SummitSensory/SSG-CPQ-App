@@ -3145,7 +3145,44 @@
     ov.innerHTML = '<div class="noprint" style="max-width:760px;margin:0 auto 14px;display:flex;justify-content:space-between;gap:10px;"><button class="link-btn" id="pvClose" style="width:auto;padding:9px 16px;background:#fff;">‹ Close preview</button><button class="btn" id="pvPrint" style="width:auto;padding:9px 20px;">Print / Save PDF</button></div>' + html;
     document.body.appendChild(ov);
     document.getElementById('pvClose').addEventListener('click', function () { document.body.removeChild(ov); });
-    document.getElementById('pvPrint').addEventListener('click', function () { window.print(); });
+    document.getElementById('pvPrint').addEventListener('click', function () {
+      // Browsers name the saved PDF after the document title, so set it for the print
+      // and put it back afterwards.
+      var prev = document.title;
+      document.title = proposalFileName(d);
+      var restore = function () { document.title = prev; window.removeEventListener('afterprint', restore); };
+      window.addEventListener('afterprint', restore);
+      window.print();
+      setTimeout(restore, 60000);
+    });
+  }
+
+  /**
+   * Save-as-PDF file name: Customer Name-Model-Frame Size-Proposal#-MMDDYYYY.
+   * Model and frame size are read off the itemized frame heading the builder writes
+   * (“SQ-2MBL2T — Itemized” / “Frame Dimensions: 10' × 8'”), so an edited heading is
+   * respected and a proposal without a frame simply drops those segments.
+   */
+  function proposalFileName(d) {
+    var model = '', size = '';
+    (d.lines || []).forEach(function (l) {
+      if ((l.lineType || '') !== 'GROUP') return;
+      if (!model && /itemized/i.test(l.name || '')) {
+        model = String(l.name).replace(/\s*[-\u2013\u2014]\s*itemized.*$/i, '').trim();
+      }
+      if (!size) {
+        var sm = String(l.description || '').match(/(\d+)\s*'?\s*[\u00d7x]\s*(\d+)/i);
+        if (sm) size = sm[1] + 'x' + sm[2];
+      }
+    });
+    var now = new Date();
+    var p2 = function (v) { return String(v).length < 2 ? '0' + v : String(v); };
+    var today = p2(now.getMonth() + 1) + p2(now.getDate()) + now.getFullYear();
+    return [d.orgName || 'Proposal', model, size, d.number || '', today]
+      .filter(Boolean).join('-')
+      .replace(/[\\/:*?"<>|]+/g, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
   }
   function ensurePrintStyle() {
     if (document.getElementById('propPrintStyle')) return;

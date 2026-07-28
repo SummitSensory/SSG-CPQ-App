@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeFloorPadding, matSku } from '../../src/proposals/matPricing.js';
-import { computeAdventureProposal, explainAdventure, type AdvAnswers } from '../../src/proposals/adventureSeries.js';
+import { computeFloorPadding, matSku } from '../../src/proposals/matPricing.js';import { computeAdventureProposal, explainAdventure, type AdvAnswers } from '../../src/proposals/adventureSeries.js';
 
 const frame = (over: Partial<AdvAnswers> = {}): AdvAnswers => ({
   length: 8, width: 8, config: 'Square', legs: 4, ladders: 0, ...over,
@@ -58,5 +57,28 @@ describe('floor padding on the proposal', () => {
     expect(on.revenueMinor - off.revenueMinor).toBe(89993);
     expect(on.cogsMinor - off.cogsMinor).toBe(64281);
     expect(on.marginMinor - off.marginMinor).toBe(89993 - 64281);
+  });
+});
+
+describe('column wraps, ladder legs and packs price from the catalog', () => {
+  it('resolves each configurator part to its catalog rate and cost', () => {
+    const { lines } = computeAdventureProposal(frame({
+      matColumn: true, uShaped: 1, completeWrap: 3, matLadderLeg: true, ladders: 1,
+      vRings: 1, carabiner: 2, webbingSling: 4,
+    }));
+    for (const part of ['SSUSP67', 'SSCW67', 'SSUSP72', 'B07MB985GW', 'B0CDVDZSB1', '6820H-LAN']) {
+      const l = lines.find((x) => x.sku === part);
+      expect(l, part).toBeTruthy();
+      expect(l!.rateMinor, part).toBeGreaterThan(0);
+      expect(l!.needsPrice, part).toBeFalsy();
+    }
+    expect(lines.find((l) => l.sku === 'SSCW67')!.quantity).toBe(3);
+    expect(lines.find((l) => l.sku === 'SSUSP72')!.quantity).toBe(1);
+  });
+
+  it('carries them into revenue and COGS', () => {
+    const off = explainAdventure(frame()).totals;
+    const on = explainAdventure(frame({ matColumn: true, uShaped: 2, completeWrap: 2 })).totals;
+    expect(on.revenueMinor).toBeGreaterThan(off.revenueMinor);
   });
 });

@@ -6,7 +6,12 @@ import {
 import { DEFAULT_FRAME_RULES, frameContext } from './frameRules.js';
 import { computeFloorPadding, type MatQuote, type MatThickness } from './matPricing.js';
 
-export interface SkuRec { part: string; description: string; unitPriceMinor: number; unitCostMinor?: number; weightLbs: number; category: string; }
+export interface SkuRec {
+  part: string; description: string; unitPriceMinor: number; unitCostMinor?: number; weightLbs: number; category: string;
+  /** Where the catalog files this part: tier-1 group and tier-2 subgroup. Drives
+   *  which proposal heading a configurator-picked accessory prints under. */
+  proposalGroup?: string; proposalSubgroup?: string;
+}
 const SKUS: Record<string, SkuRec> = {};
 for (const s of skuData as SkuRec[]) SKUS[s.part] = s;
 
@@ -204,15 +209,45 @@ export function computeAdventureProposal(
   if (a.trolley) { G('Dual Trolley System', true); ['P-2018', 'P-2025', 'TR2000-A07', 'TR2000-A08', 'TR2000-A09', 'TR2000-A10', 'TRH2005', 'TRN2016', 'TRT2001'].forEach((p) => P(p)); }
 
   const hasComp = a.slide || a.climbFrame || a.climbWall || a.ballRack;
-  if (hasComp) {
+  // Packs the configurator asks for by quantity. Which heading they print under is
+  // the catalog's decision (tier 1 = group, tier 2 = subgroup), not the engine's —
+  // so a part filed under “Essential Carabiners & Connectors” prints there rather
+  // than being lumped into Hardware.
+  const extras: Array<{ part: string; qty: number }> = [
+    { part: V_RING_PART, qty: n(a.vRings) },
+    { part: CARABINER_PART, qty: n(a.carabiner) },
+    { part: WEBBING_SLING_PART, qty: n(a.webbingSling) },
+  ].filter((e) => e.qty > 0);
+  const norm = (s?: string) => (s || '').trim().toLowerCase();
+  const takeExtras = (groupName: string): Array<{ part: string; qty: number }> => {
+    const want = norm(groupName);
+    const hit = extras.filter((e) => norm(LOOK[e.part] && LOOK[e.part].proposalGroup) === want);
+    for (const h of hit) extras.splice(extras.indexOf(h), 1);
+    return hit;
+  };
+  /** Print picked parts beneath their catalog subgroup heading. */
+  const emitExtras = (items: Array<{ part: string; qty: number }>) => {
+    const subs: string[] = [];
+    const bySub: Record<string, Array<{ part: string; qty: number }>> = {};
+    for (const it of items) {
+      const sub = (LOOK[it.part] && LOOK[it.part].proposalSubgroup) || '';
+      if (!bySub[sub]) { bySub[sub] = []; subs.push(sub); }
+      bySub[sub].push(it);
+    }
+    for (const sub of subs) { if (sub) SG(sub); bySub[sub].forEach((it) => P(it.part, it.qty)); }
+  };
+  const compExtras = takeExtras('Therapeutic Activity & Adventure Components');
+  const matExtras = takeExtras('Adventure Mat System');
+  if (hasComp || compExtras.length) {
     G('Therapeutic Activity & Adventure Components', true);
     if (a.slide) { SG('Summit Adventure Slide System'); P('A-2216'); if (a.slideGray) P('WS8203'); if (a.steamroller) { P('150045'); P('A-2349'); } }
     if (a.climbFrame || a.climbWall) { SG('Climbing Wall & Safety Accessories'); P('SSG-SA-CFM'); P('SSG-SA-CWM'); P('P-2500'); }
     if (a.ballRack) { SG('Ball Rack System'); P('K-5000'); }
+    emitExtras(compExtras);
   }
 
   const pad = floorPaddingQuote(a);
-  if (pad || a.matColumn || a.matLadderLeg || a.matCustom) {
+  if (pad || a.matColumn || a.matLadderLeg || a.matCustom || matExtras.length) {
     G('Adventure Mat System (Highly Recommended)', true); SG('Adventure Mat System');
     if (pad) {
       // Sized and priced from the frame footprint — see matPricing.ts. The catalog
@@ -227,13 +262,14 @@ export function computeAdventureProposal(
         quantity: 1, rateMinor: pad.priceMinor, costEach: pad.costMinor, weightEach: w, needsPrice: false,
       });
     }
-    if (a.matColumn) { if (n(a.uShaped) > 0) lines.push({ lineType: 'PRODUCT', name: 'U-Shaped Column Wraps', sku: '', quantity: n(a.uShaped), rateMinor: 0, weightEach: 0, needsPrice: true }); if (n(a.completeWrap) > 0) lines.push({ lineType: 'PRODUCT', name: 'Complete Column Wraps', sku: '', quantity: n(a.completeWrap), rateMinor: 0, weightEach: 0, needsPrice: true }); }
-    if (a.matLadderLeg) lines.push({ lineType: 'PRODUCT', name: 'Adventure Mat System — Ladder Leg', sku: '', quantity: n(a.ladders), rateMinor: 0, weightEach: 0, needsPrice: true });
+    if (a.matColumn) { P(U_SHAPED_WRAP_PART, n(a.uShaped)); P(COMPLETE_WRAP_PART, n(a.completeWrap)); }
+    if (a.matLadderLeg) P(LADDER_LEG_WRAP_PART, n(a.ladders));
     if (a.matCustom) lines.push({ lineType: 'PRODUCT', name: 'Adventure Mat System — CUSTOM', sku: '', description: 'Mat SKU determined by logic (to be provided).', quantity: 1, rateMinor: 0, weightEach: 0, needsPrice: true });
+    emitExtras(matExtras);
     NOTE('Mat System', '*Please allow 8–10 weeks for manufacturing & delivery of all mat systems. *All column wraps & floor padding colors will be determined after proposal is signed.');
   }
 
-  const addlHw = n(a.forged) || n(a.swingHanger) || n(a.vRings) || n(a.carabiner) || n(a.webbingSling) || n(a.swivelStandalone);
+  const addlHw = n(a.forged) || n(a.swingHanger) || n(a.swivelStandalone) || extras.length;
   if (a.brackets || addlHw) {
     G('Hardware', false);
     // The saddle bracket and the eye bolts the configurator asks for by name are
@@ -267,10 +303,8 @@ export function computeAdventureProposal(
         weightEach: roll.weightLbs, needsPrice: roll.missing.length > 0,
       });
     }
-    // Sold as packs alongside the kit — not fasteners, so not rolled into H-1000.
-    if (n(a.vRings) > 0) lines.push({ lineType: 'PRODUCT', name: 'V-Rings (10-Pack)', sku: '', quantity: n(a.vRings), rateMinor: 0, costEach: 0, weightEach: 0, needsPrice: true });
-    if (n(a.carabiner) > 0) lines.push({ lineType: 'PRODUCT', name: 'Auto-Locking Carabiner (4-Pack)', sku: '', quantity: n(a.carabiner), rateMinor: 0, costEach: 0, weightEach: 0, needsPrice: true });
-    if (n(a.webbingSling) > 0) lines.push({ lineType: 'PRODUCT', name: 'Multi-Pocket Webbing Sling', sku: '', quantity: n(a.webbingSling), rateMinor: 0, costEach: 0, weightEach: 0, needsPrice: true });
+    // Anything the catalog files under Hardware (or files nowhere yet).
+    emitExtras(extras);
   }
 
   return { lines, totalWeightLbs: Math.round(weight * 100) / 100 };
@@ -278,6 +312,18 @@ export function computeAdventureProposal(
 
 /** Frame part number for the Quick Shift Saddle Bracket. */
 export const BRACKET_PART = 'P-2124';
+
+/**
+ * Catalog parts behind the configurator's mat and pack questions. These used to be
+ * emitted as nameless $0 lines, so they never picked up a price, cost or weight —
+ * they now resolve through the same catalog lookup as every other part.
+ */
+export const U_SHAPED_WRAP_PART = 'SSUSP67';
+export const COMPLETE_WRAP_PART = 'SSCW67';
+export const LADDER_LEG_WRAP_PART = 'SSUSP72';
+export const V_RING_PART = 'B07MB985GW';
+export const CARABINER_PART = 'B0CDVDZSB1';
+export const WEBBING_SLING_PART = '6820H-LAN';
 
 /**
  * Hardware the configurator asks for by name. These print as their own proposal
@@ -372,6 +418,32 @@ export function explainAdventure(a: AdvAnswers, skuMap?: Record<string, SkuRec>,
       unitCostMinor: pad.costMinor, extendedCostMinor: pad.costMinor,
       weightLbs: LOOK[pad.sku] ? LOOK[pad.sku].weightLbs : 0,
       inCatalog: true, rolledIntoH1000: false,
+    });
+  }
+  // Catalog parts chosen directly in the configurator rather than derived from the
+  // frame BOM — they carry price and cost like any other line, so the totals below
+  // must include them.
+  const picked: Array<{ rule: string; part: string; qty: number; formula: string }> = [];
+  if (a.matColumn) {
+    picked.push({ rule: 'Mat System', part: U_SHAPED_WRAP_PART, qty: n(a.uShaped), formula: '# U-shaped column wraps answered' });
+    picked.push({ rule: 'Mat System', part: COMPLETE_WRAP_PART, qty: n(a.completeWrap), formula: `legs ${n(a.legs)} − U-shaped ${n(a.uShaped)}` });
+  }
+  if (a.matLadderLeg) picked.push({ rule: 'Mat System', part: LADDER_LEG_WRAP_PART, qty: n(a.ladders), formula: `# of ladders = ${n(a.ladders)}` });
+  picked.push({ rule: 'Accessories', part: V_RING_PART, qty: n(a.vRings), formula: '# V-ring packs answered' });
+  picked.push({ rule: 'Accessories', part: CARABINER_PART, qty: n(a.carabiner), formula: '# carabiner packs answered' });
+  picked.push({ rule: 'Accessories', part: WEBBING_SLING_PART, qty: n(a.webbingSling), formula: '# webbing slings answered' });
+  for (const p of picked) {
+    if (p.qty <= 0) continue;
+    const rec = LOOK[p.part];
+    if (!rec) warnings.push(`${p.part} is not in the SKU table — priced at $0.00.`);
+    const unitPriceMinor = rec ? rec.unitPriceMinor : 0;
+    const unitCostMinor = rec ? (rec.unitCostMinor ?? 0) : 0;
+    rows.push({
+      rule: p.rule, part: p.part, description: rec ? rec.description : '(not in catalog)', formula: p.formula, qty: p.qty,
+      unitPriceMinor, extendedMinor: unitPriceMinor * p.qty,
+      unitCostMinor, extendedCostMinor: unitCostMinor * p.qty,
+      weightLbs: rec ? rec.weightLbs * p.qty : 0,
+      inCatalog: !!rec, rolledIntoH1000: false,
     });
   }
   const hardware = hardwareRollup(a, LOOK, rules);

@@ -11,10 +11,11 @@ export function registerAdventureRoutes(app: FastifyInstance): void {
   const write = { preHandler: requirePermission(Permission.PROPOSAL_WRITE) };
 
   async function skuMap(): Promise<Record<string, SkuRec>> {
-    const [rows, products, costs] = await Promise.all([
+    const [rows, products, costs, place] = await Promise.all([
       prisma.sku.findMany(),
       prisma.product.findMany({ select: { id: true, sku: true, weightOz: true } }),
       prisma.productCost.findMany({ select: { productId: true, unitCost: true, effectiveDate: true }, orderBy: { effectiveDate: 'desc' } }),
+      placements(),
     ]);
     // Costs and weights imported from the product workbook live on ProductCost /
     // Product.weightOz; use them when the flat SKU row has none of its own.
@@ -27,14 +28,45 @@ export function registerAdventureRoutes(app: FastifyInstance): void {
     const map: Record<string, SkuRec> = {};
     for (const r of rows) {
       const fb = byPart[r.part];
+      const pl = place[r.part];
       map[r.part] = {
         part: r.part, description: r.description, unitPriceMinor: r.unitPriceMinor,
         unitCostMinor: r.unitCostMinor || (fb ? fb.cost : 0),
         weightLbs: r.weightLbs || (fb ? fb.weightLbs : 0),
         category: r.category,
+        proposalGroup: (pl ? pl.group : '') || r.proposalGroup || undefined,
+        proposalSubgroup: pl ? pl.subgroup || undefined : undefined,
       };
     }
     return map;
+  }
+
+  /**
+   * Where the catalog files each part: tier 1 is the proposal group, tier 2 the
+   * subgroup. The engine reads this so a part shows up under the heading it is
+   * filed under in Catalog, instead of the heading the engine happened to hardcode.
+   */
+  async function placements(): Promise<Record<string, { group: string; subgroup: string }>> {
+    const [cats, products] = await Promise.all([
+      prisma.productCategory.findMany({ select: { id: true, name: true, parentId: true, productId: true } }),
+      prisma.product.findMany({ select: { id: true, sku: true } }),
+    ]);
+    const byId = new Map(cats.map((c) => [c.id, c]));
+    const skuById = new Map(products.map((p) => [p.id, p.sku]));
+    const out: Record<string, { group: string; subgroup: string }> = {};
+    for (const c of cats) {
+      if (!c.productId) continue;
+      const sku = skuById.get(c.productId);
+      if (!sku) continue;
+      const chain: string[] = [];
+      let node: (typeof cats)[number] | undefined = c;
+      while (node && chain.length < 8) {
+        chain.unshift(node.name);
+        node = node.parentId ? byId.get(node.parentId) : undefined;
+      }
+      out[sku] = { group: chain[0] || '', subgroup: chain.length > 2 ? chain[1] : '' };
+    }
+    return out;
   }
 
   /** Catalog category name → its ACTIVE part numbers, so kits print every member. */
