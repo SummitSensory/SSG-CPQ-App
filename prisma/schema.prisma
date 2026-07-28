@@ -951,6 +951,9 @@ model Sku {
   manufacturer   String?
   proposalGroup  String?
   active         Boolean  @default(true)
+  /// Pre-approved for part-number substitution in the proposal builder. Only
+  /// flagged parts can be swapped by a rep; everything else is fixed.
+  overrideAllowed Boolean @default(false)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 

@@ -16,6 +16,7 @@ const SkuBody = z.object({
   manufacturer: z.string().trim().max(160).nullish(),
   proposalGroup: z.string().trim().max(120).optional(),
   active: z.boolean().default(true),
+  overrideAllowed: z.boolean().default(false),
 });
 
 // One import row; prices may arrive as dollars (unitPrice) or minor (unitPriceMinor).
@@ -30,11 +31,17 @@ const ImportRow = z.object({
   category: z.string().trim().optional(),
   manufacturer: z.string().trim().optional(),
   proposalGroup: z.string().trim().optional(),
+  overrideAllowed: z.union([z.boolean(), z.string(), z.number()]).optional(),
 });
 const toMinor = (v: unknown): number => {
   if (v == null || v === '') return 0;
   const num = typeof v === 'string' ? parseFloat(v.replace(/[^0-9.\-]/g, '')) : Number(v);
   return isFinite(num) ? Math.round(num * 100) : 0;
+};
+const toBool = (v: unknown): boolean => {
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'number') return v !== 0;
+  return ['y', 'yes', 'true', '1', 'x'].includes(String(v ?? '').trim().toLowerCase());
 };
 const toNum = (v: unknown): number => {
   if (v == null || v === '') return 0;
@@ -62,6 +69,20 @@ export function registerSkuRoutes(app: FastifyInstance): void {
       prisma.sku.count({ where }),
     ]);
     return { items, total, page: parseInt(page, 10) || 1, pageSize: take };
+  });
+
+  /**
+   * The parts a rep may substitute in the proposal builder. Membership is a
+   * catalog decision (`overrideAllowed`), never the builder's — so pre-approval
+   * is administered in one place and audited with the rest of the SKU master.
+   */
+  app.get('/skus/overridable', read, async () => {
+    const items = await prisma.sku.findMany({
+      where: { overrideAllowed: true, active: true },
+      select: { part: true, description: true },
+      orderBy: { part: 'asc' },
+    });
+    return { items };
   });
 
   app.post('/skus', admin, async (req, reply) => {
@@ -129,6 +150,7 @@ export function registerSkuRoutes(app: FastifyInstance): void {
       if (has(raw, 'category')) { data.category = (d.category || 'OTHER').trim(); columns.push('category'); }
       if (has(raw, 'manufacturer')) { data.manufacturer = d.manufacturer ? d.manufacturer.trim() : null; columns.push('manufacturer'); }
       if (has(raw, 'proposalGroup')) { data.proposalGroup = d.proposalGroup ? d.proposalGroup.trim() : null; columns.push('proposalGroup'); }
+      if (has(raw, 'overrideAllowed')) { data.overrideAllowed = toBool(d.overrideAllowed); columns.push('overrideAllowed'); }
       clean.push({ part: d.part.trim(), data, columns });
     });
 
@@ -168,6 +190,7 @@ export function registerSkuRoutes(app: FastifyInstance): void {
             weightLbs: (c.data.weightLbs as number) ?? 0,
             manufacturer: (c.data.manufacturer as string | null) ?? null,
             proposalGroup: (c.data.proposalGroup as string | null) ?? null,
+            overrideAllowed: (c.data.overrideAllowed as boolean) ?? false,
           },
         });
         created++;

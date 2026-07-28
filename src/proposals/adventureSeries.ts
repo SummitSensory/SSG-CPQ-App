@@ -11,6 +11,8 @@ export interface SkuRec {
   /** Where the catalog files this part: tier-1 group and tier-2 subgroup. Drives
    *  which proposal heading a configurator-picked accessory prints under. */
   proposalGroup?: string; proposalSubgroup?: string;
+  /** Catalog pre-approval: may a rep swap this part for another in the builder? */
+  overrideAllowed?: boolean;
 }
 const SKUS: Record<string, SkuRec> = {};
 for (const s of skuData as SkuRec[]) SKUS[s.part] = s;
@@ -24,6 +26,11 @@ export interface AdvAnswers {
   matFloor?: boolean; matColumn?: boolean; uShaped?: number; completeWrap?: number; matLadderLeg?: boolean; matCustom?: boolean;
   /** Floor padding decision tree: include it, and at which thickness. */
   floorPadding?: boolean; floorPadThickness?: MatThickness;
+  /**
+   * Rep-entered part substitutions, keyed by the part the engine would normally
+   * pick. Honoured only when the catalog flags the original `overrideAllowed`.
+   */
+  partOverrides?: Record<string, string>;
   brackets?: boolean; bracketsQty?: number; swivel360?: number; swivelStandalone?: number; forged?: number; swingHanger?: number; vRings?: number; carabiner?: number; webbingSling?: number;
 }
 
@@ -31,10 +38,15 @@ export interface AdvAnswers {
  * Frame configuration product number, per "Frame Configuration Product Number
  * Identification": {SHAPE}-{beams}{MB}{L}{#ladders}{T}{Z}{R}  e.g. SQ-2MBL2TZR.
  * Segments are omitted when the option is not included.
+ *
+ * The beam digit counts the monkey bar run as a beam (+1 when monkey bars are on,
+ * flat, regardless of how many sets) because it occupies its own bay — so 1
+ * interior beam with monkey bars is `SQ-2MBL2`, not `SQ-1MBL2`. Matches the v73
+ * workbook rule "Interior Beams (+1 if monkey bars)".
  */
 export function frameModelNumber(a: AdvAnswers): string {
   const shape = a.config === 'Square' ? 'SQ' : a.config === 'L-Shape' ? 'L' : a.config === 'T-Shape' ? 'T' : 'R';
-  const beams = a.interiorBeams ? n(a.interiorBeamsQty) : 0;
+  const beams = (a.interiorBeams ? n(a.interiorBeamsQty) : 0) + (a.monkeyBars ? 1 : 0);
   const ladders = n(a.ladders);
   let code = '';
   if (beams > 0) code += String(beams);
@@ -162,14 +174,28 @@ export function computeAdventureProposal(
   const qtyOf = (part: string) => (bom.find((b) => b.part === part) || { qty: 0 }).qty;
   const lines: PricedLine[] = [];
   let weight = 0;
+  /**
+   * Swap a part for the rep's substitute — but only when the catalog has
+   * pre-approved the original AND the substitute is itself a real catalog part.
+   * Any other answer falls back to the engine's own pick, so a stale or invented
+   * override can never reach a proposal.
+   */
+  const subPart = (part: string): string => {
+    const to = a.partOverrides && a.partOverrides[part];
+    if (!to || to === part) return part;
+    const base = LOOK[part];
+    if (!base || !base.overrideAllowed) return part;
+    return LOOK[to] ? to : part;
+  };
   const P = (part: string, qtyOverride?: number, nameOverride?: string): void => {
-    const rec = LOOK[part];
+    const use = subPart(part);
+    const rec = LOOK[use];
     const qty = qtyOverride != null ? qtyOverride : qtyOf(part);
     if (qty <= 0) return;
     const w = rec ? rec.weightLbs : 0;
     weight += qty * w;
     lines.push({
-      lineType: 'PRODUCT', name: nameOverride || (rec ? rec.description : part), sku: part,
+      lineType: 'PRODUCT', name: nameOverride || (rec ? rec.description : use), sku: use,
       description: '', quantity: qty, rateMinor: rec ? rec.unitPriceMinor : 0,
       costEach: rec ? (rec.unitCostMinor ?? 0) : 0, weightEach: w, needsPrice: !rec,
     });
@@ -281,11 +307,12 @@ export function computeAdventureProposal(
     for (const part of ACCESSORY_HW_PARTS) {
       const row = hwRows.find((h) => h.part === part);
       if (!row || row.qty <= 0) continue;
-      const rec = LOOK[part];
+      const use = subPart(part);
+      const rec = LOOK[use];
       const w = rec ? rec.weightLbs : 0;
       weight += row.qty * w;
       lines.push({
-        lineType: 'PRODUCT', name: rec ? rec.description : row.name, sku: part, description: '',
+        lineType: 'PRODUCT', name: rec ? rec.description : row.name, sku: use, description: '',
         quantity: row.qty, rateMinor: rec ? rec.unitPriceMinor : 0,
         costEach: rec ? (rec.unitCostMinor ?? 0) : 0, weightEach: w, needsPrice: !rec,
       });

@@ -938,7 +938,7 @@
         '<input id="skuSearch" placeholder="Search part # or description…" value="' + esc(skuState.q) + '" style="flex:1;min-width:220px;max-width:360px;padding:10px 13px;border:1px solid #dcded7;border-radius:10px;font-size:14px;background:#fff;outline:none;">' +
         (admin ? '<div style="margin-left:auto;display:flex;gap:8px;"><button class="link-btn" id="skuImport" style="width:auto;padding:10px 15px;">Import Excel / CSV</button><button class="btn" id="skuNew" style="width:auto;padding:10px 17px;">New SKU</button></div>' : '') +
       '</div>' +
-      '<div style="font-size:12px;color:#8a8f85;margin-bottom:10px;">These prices &amp; weights feed the Adventure Series engine and the proposal builder. Edit a price or weight inline and it saves automatically.</div>' +
+      '<div style="font-size:12px;color:#8a8f85;margin-bottom:10px;">These prices &amp; weights feed the Adventure Series engine and the proposal builder. Edit a price or weight inline and it saves automatically. <b>Override OK</b> lets a rep substitute that part number in the Adventure Series builder — leave it off and the part is fixed.</div>' +
       '<div id="skuList"><div class="muted" style="padding:24px;">Loading…</div></div>';
     var s = document.getElementById('skuSearch'), t;
     s.addEventListener('input', function () { clearTimeout(t); t = setTimeout(function () { skuState.q = s.value.trim(); skuState.page = 1; loadSkus(user); }, 300); });
@@ -969,12 +969,17 @@
         var wtCell = admin
           ? '<input class="skuEdit" data-id="' + k.id + '" data-f="weightLbs" value="' + k.weightLbs + '" style="width:70px;padding:5px 7px;border:1px solid #dcded7;border-radius:6px;text-align:right;font-size:13px;">'
           : k.weightLbs;
+        // Pre-approval to substitute this part in the Adventure Series builder.
+        // Off by default: a rep can only swap what the catalog says is swappable.
+        var ovrCell = admin
+          ? '<input type="checkbox" class="skuFlag" data-id="' + k.id + '" data-f="overrideAllowed"' + (k.overrideAllowed ? ' checked' : '') + ' title="Allow reps to substitute this part number" style="width:15px;height:15px;cursor:pointer;">'
+          : (k.overrideAllowed ? '<span style="font-size:12px;color:#3f9d78;">Yes</span>' : '<span style="color:#b6bab1;">—</span>');
         return '<tr>' + td('<code style="font-size:12.5px;color:#4a4f47;">' + esc(k.part) + '</code>') + td('<span style="font-size:13px;">' + esc(k.description) + '</span>') +
-          td(esc(k.category)) + td(priceCell) + td(costCell) + td('<span style="font-size:13px;color:' + (marginPct >= 0 ? '#2f7d5d' : '#9c3327') + ';font-weight:600;">' + marginPct + '%</span>') + td(wtCell) +
+          td(esc(k.category)) + td(priceCell) + td(costCell) + td('<span style="font-size:13px;color:' + (marginPct >= 0 ? '#2f7d5d' : '#9c3327') + ';font-weight:600;">' + marginPct + '%</span>') + td(wtCell) + td(ovrCell) +
           td(admin ? '<button class="skuDel" data-id="' + k.id + '" style="border:1px solid #e0e1db;background:#fff;border-radius:7px;color:#9c3327;cursor:pointer;padding:4px 9px;font-size:12px;">Delete</button>' : '') + '</tr>';
       }).join('');
       var totalPages = Math.max(1, Math.ceil((d.total || 0) / (d.pageSize || 50)));
-      box.innerHTML = tableShell(['Part #', 'Description', 'Category', 'Unit price', 'Unit cost', 'Margin', 'Weight (lb)', ''], rows, 8, 'No SKUs yet. Import a sheet or add one.') +
+      box.innerHTML = tableShell(['Part #', 'Description', 'Category', 'Unit price', 'Unit cost', 'Margin', 'Weight (lb)', 'Override OK', ''], rows, 9, 'No SKUs yet. Import a sheet or add one.') +
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;color:#82877d;font-size:13px;"><span>' + (d.total || 0) + ' SKUs</span>' +
         '<span style="display:flex;gap:8px;align-items:center;"><button id="skuPrev" ' + (skuState.page <= 1 ? 'disabled' : '') + ' class="link-btn" style="width:auto;padding:6px 12px;">Prev</button><span>Page ' + (d.page || 1) + ' of ' + totalPages + '</span><button id="skuNext" ' + (skuState.page >= totalPages ? 'disabled' : '') + ' class="link-btn" style="width:auto;padding:6px 12px;">Next</button></span></div>';
       var pv = document.getElementById('skuPrev'), nx = document.getElementById('skuNext');
@@ -988,6 +993,13 @@
           var r2 = await authed('/skus/' + el.getAttribute('data-id'), { method: 'PATCH', body: body });
           el.style.borderColor = r2.ok ? '#3f9d78' : '#c2452f';
           setTimeout(function () { el.style.borderColor = '#dcded7'; }, 800);
+        });
+      });
+      document.querySelectorAll('.skuFlag').forEach(function (el) {
+        el.addEventListener('change', async function () {
+          var body = {}; body[el.getAttribute('data-f')] = el.checked;
+          var r2 = await authed('/skus/' + el.getAttribute('data-id'), { method: 'PATCH', body: body });
+          if (!r2.ok) { el.checked = !el.checked; alert('Could not save that change.'); }
         });
       });
       document.querySelectorAll('.skuDel').forEach(function (b) { b.addEventListener('click', async function () { if (!confirm('Delete this SKU?')) return; await authed('/skus/' + b.getAttribute('data-id'), { method: 'DELETE' }); loadSkus(user); }); });
@@ -3209,7 +3221,7 @@
   var adv = null;
   function openAdventureConfigurator() {
     adv = {
-      length: 20, width: 10, config: 'Rectangle', legs: 6, legsAuto: true,
+      length: 10, width: 10, config: 'Square', legs: 6, legsAuto: true, configManual: false,
       monkeyBars: false, monkeyBarsQty: 1, ladders: false, laddersQty: 1, ladderShield: false,
       trolley: false, trolleyType: 'Dual', interiorBeams: false, interiorBeamsQty: 1,
       zipLine: false, zipLineQty: 1, ballRack: false,
@@ -3217,9 +3229,12 @@
       climbFrame: false, climbWall: false, climbShield: false, climbMat: false,
       matFloor: false, matColumn: false, uShaped: 0, completeWrap: 0, matLadderLeg: false, matCustom: false,
       floorPadding: false, floorPadThickness: '3.25',
-      brackets: false, bracketsQty: 4, swivel360: 4, swivelStandalone: 0, forged: 12, swingHanger: 0, vRings: 0, carabiner: 0, webbingSling: 6,
+      brackets: false, bracketsQty: 0, swivel360: 0, swivelStandalone: 0, forged: 0, swingHanger: 0, vRings: 0, carabiner: 0, webbingSling: 0,
+      partOverrides: {},
     };
-    adv.legs = legsFor(adv.length); adv.webbingSling = adv.legs;
+    adv.legs = legsFor(adv.length);
+    advOverridable = null;
+    loadAdvOverridable();
     var ov = document.createElement('div');
     ov.id = 'advOverlay';
     ov.style.cssText = 'position:fixed;inset:0;background:rgba(32,36,31,.4);z-index:70;overflow:auto;padding:24px 16px;';
@@ -3235,6 +3250,32 @@
    * show the number before the server prices the proposal. Keep both in step.
    */
   var MAT_RATE = { '3.25': 11.78, '2': 7.65 }, MAT_MARKUP = 1.4, MAT_OVERAGE_IN = 14;
+
+  /**
+   * The part number each Additional Hardware quantity resolves to, mirroring
+   * hardwareRules.ts and the accessory constants in adventureSeries.ts. Shown so a
+   * rep can see what they are actually quoting. An array means the answer drives
+   * more than one part, which is never substitutable.
+   */
+  var ADV_HW_PARTS = {
+    forged: '6820H-LP',
+    swivelStandalone: 'SSG-SA-SWIVEL-EYE',
+    swingHanger: 'B0C4Y8XSNB',
+    vRings: ['6820H-LAE', '6820H-LAF'],
+    carabiner: 'B0CDVDZSB1',
+    webbingSling: '6820H-LAN',
+  };
+  /** Parts the CATALOG has pre-approved for substitution. Null until loaded. */
+  var advOverridable = null;
+  async function loadAdvOverridable() {
+    var map = {};
+    try {
+      var r = await authed('/skus/overridable');
+      if (r.ok) { var d = await r.json(); (d.items || []).forEach(function (s) { map[s.part] = s.description || ''; }); }
+    } catch (e) { /* leave empty — nothing is overridable if we cannot confirm it */ }
+    advOverridable = map;
+    if (document.getElementById('advOverlay')) renderAdv();
+  }
   function matQuote() {
     var th = adv.floorPadThickness === '2' ? '2' : '3.25';
     var L = Number(adv.length) || 0, W = Number(adv.width) || 0;
@@ -3273,9 +3314,26 @@
     var nonSwivel = Math.max(0, (Number(adv.bracketsQty) || 0) - (Number(adv.swivel360) || 0));
     var carabRec = Math.ceil(eyeboltSum() / 4);
     function sec(title, inner) { return '<div style="margin-bottom:18px;"><div style="font-family:\'Newsreader\',serif;font-size:16px;font-weight:600;color:#3d4a55;border-bottom:1px solid #e7e8e3;padding-bottom:6px;margin-bottom:12px;">' + title + '</div>' + inner + '</div>'; }
-    function num(key, label, min, max, extra) { return '<div class="af" style="' + (extra || '') + '"><label style="display:block;font-size:11px;color:#8a8f85;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">' + label + '</label><input type="number" data-ak="' + key + '" value="' + adv[key] + '"' + (min != null ? ' min="' + min + '"' : '') + (max != null ? ' max="' + max + '"' : '') + ' style="width:100%;padding:8px 10px;border:1px solid #dcded7;border-radius:8px;font-size:14px;"></div>'; }
+    function num(key, label, min, max, extra, hint) { return '<div class="af" style="' + (extra || '') + '"><label style="display:block;font-size:11px;color:#8a8f85;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">' + label + '</label><input type="number" data-ak="' + key + '" value="' + adv[key] + '"' + (min != null ? ' min="' + min + '"' : '') + (max != null ? ' max="' + max + '"' : '') + ' style="width:100%;padding:8px 10px;border:1px solid #dcded7;border-radius:8px;font-size:14px;">' + (hint ? '<span class="muted" style="font-size:11px;">' + hint + '</span>' : '') + '</div>'; }
     function tog(key, label, hint) { return '<label style="display:flex;align-items:center;gap:9px;padding:8px 0;cursor:pointer;font-size:14px;border-bottom:1px solid #f2f3ef;"><input type="checkbox" data-ak="' + key + '"' + (adv[key] ? ' checked' : '') + ' style="width:17px;height:17px;flex:0 0 auto;"><span style="flex:1;"><b style="font-weight:600;">' + label + '</b>' + (hint ? '<span class="muted" style="font-size:12px;display:block;">' + hint + '</span>' : '') + '</span></label>'; }
     function sel(key, label, opts) { return '<div class="af"><label style="display:block;font-size:11px;color:#8a8f85;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">' + label + '</label><select data-ak="' + key + '" style="width:100%;padding:8px 10px;border:1px solid #dcded7;border-radius:8px;font-size:14px;background:#fff;">' + opts.map(function (op) { return '<option value="' + op + '"' + (String(adv[key]) === String(op) ? ' selected' : '') + '>' + op + '</option>'; }).join('') + '</select></div>'; }
+    /** The part number under a hardware quantity — editable only when pre-approved. */
+    function hwPartRow(key) {
+      var p = ADV_HW_PARTS[key]; if (!p) return '';
+      var lab = 'font-size:10.5px;color:#8a8f85;letter-spacing:.02em;';
+      if (Array.isArray(p)) return '<div style="' + lab + 'margin-top:5px;">Part ' + p.map(function (x) { return '<code>' + esc(x) + '</code>'; }).join(' + ') + '</div>';
+      if (!advOverridable) return '<div style="' + lab + 'margin-top:5px;">Part <code>' + esc(p) + '</code></div>';
+      if (!(p in advOverridable)) return '<div style="' + lab + 'margin-top:5px;">Part <code>' + esc(p) + '</code> · fixed</div>';
+      var cur = (adv.partOverrides && adv.partOverrides[p]) || p, swapped = cur !== p;
+      return '<div style="display:flex;align-items:center;gap:6px;margin-top:5px;">' +
+        '<span style="' + lab + 'flex:0 0 auto;">Part</span>' +
+        '<input data-ovr="' + esc(p) + '" value="' + esc(cur) + '" style="flex:1;min-width:0;padding:4px 7px;border:1px solid ' + (swapped ? '#c9a227' : '#dcded7') + ';border-radius:6px;font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">' +
+        (swapped
+          ? '<button data-ovrclear="' + esc(p) + '" style="border:none;background:none;color:#8a8f85;cursor:pointer;font-size:11px;padding:2px 3px;flex:0 0 auto;">reset</button>'
+          : '<span style="font-size:10px;color:#3f9d78;flex:0 0 auto;">pre-approved</span>') +
+      '</div>';
+    }
+    function hwNum(key, label, min, max, hint) { return '<div>' + num(key, label, min, max, '', hint) + hwPartRow(key) + '</div>'; }
     var grid = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;';
     var stack = 'display:flex;flex-direction:column;gap:10px;';
 
@@ -3287,8 +3345,8 @@
         '</div>' +
         '<div style="padding:22px 24px;">' +
           sec('Frame Dimensions', '<div style="' + grid + '">' + sel('length', 'Length (long, ft)', rangeArr(6, 30)) + sel('width', 'Width (short, ft)', rangeArr(6, 10)) + '</div>') +
-          sec('Frame Configuration', '<div style="' + grid + '">' + sel('config', 'Configuration (manual)', ['Rectangle', 'Square', 'L-Shape', 'T-Shape']) + num('legs', '# of Frame Legs (auto, editable)', 0, 20) + '</div>' +
-            '<div class="muted" style="font-size:11.5px;margin-top:6px;">Suggested: ' + (adv.length === adv.width ? 'Square' : 'Rectangle') + ' · legs auto-set from length (' + legsFor(adv.length) + ')</div>') +
+          sec('Frame Configuration', '<div style="' + grid + '">' + sel('config', 'Configuration' + (adv.configManual ? ' (overridden)' : ' (auto)'), ['Rectangle', 'Square', 'L-Shape', 'T-Shape']) + num('legs', '# of Frame Legs (auto, editable)', 0, 20) + '</div>' +
+            '<div class="muted" style="font-size:11.5px;margin-top:6px;">' + (adv.configManual ? 'Manually set — auto would be ' + autoConfig() + '. <a href="#" id="advCfgReset">Reset to auto</a>' : 'Auto from dimensions: ' + autoConfig()) + ' · legs auto-set from length (' + legsFor(adv.length) + ')</div>') +
           sec('Frame Options',
             tog('monkeyBars', 'Monkey Bars') + (adv.monkeyBars ? '<div style="' + grid + 'margin:8px 0 4px;">' + num('monkeyBarsQty', '# of Monkey Bars', 1, 3) + '</div>' : '') +
             tog('ladders', 'Ladders') + (adv.ladders ? '<div style="' + grid + 'margin:8px 0 4px;">' + num('laddersQty', '# of Ladders', 1, 4) + '</div>' + tog('ladderShield', 'Ladder — Safety Shield', 'Qty mirrors # of ladders (' + adv.laddersQty + ')') : '') +
@@ -3320,12 +3378,12 @@
             '</div>' : '') +
             '<div style="font-weight:600;font-size:13.5px;color:#3d4a55;margin:14px 0 4px;border-top:1px solid #f2f3ef;padding-top:14px;">Additional Hardware</div>' +
             '<div style="' + stack + '">' +
-              num('forged', '# 1/2" Forged Eye Bolts (×6)', 0, 36) +
-              num('swivelStandalone', '# Swing &amp; Swivel Eye Bolt (stand-alone)', 0, 24) +
-              num('swingHanger', '# Swing Hanger w/ Bearing (×2)', 0, 12) +
-              num('vRings', '# V-Rings (10-pack)', 0, 3) +
-              '<div class="af"><label style="display:block;font-size:11px;color:#8a8f85;text-transform:uppercase;margin-bottom:4px;">Auto-Locking Carabiner (4pk)</label><input type="number" data-ak="carabiner" value="' + adv.carabiner + '" min="0" max="8" style="width:100%;padding:8px 10px;border:1px solid #dcded7;border-radius:8px;font-size:14px;"><span class="muted" style="font-size:11px;">Recommended: ' + carabRec + '</span></div>' +
-              num('webbingSling', 'Multi-Pocket Webbing Sling (def = legs)', 0, 16) +
+              hwNum('forged', '# 1/2" Forged Eye Bolts (×6)', 0, 36) +
+              hwNum('swivelStandalone', '# Swing &amp; Swivel Eye Bolt (stand-alone)', 0, 24) +
+              hwNum('swingHanger', '# Swing Hanger w/ Bearing (×2)', 0, 12) +
+              hwNum('vRings', '# V-Rings (10-pack)', 0, 3) +
+              hwNum('carabiner', 'Auto-Locking Carabiner (4pk)', 0, 8, 'Suggested: ' + carabRec + ' — enter a quantity to include it') +
+              hwNum('webbingSling', 'Multi-Pocket Webbing Sling', 0, 16, 'Suggested: ' + (Number(adv.legs) || 0) + ' (one per leg)') +
             '</div>'
           ) +
           '<div style="display:flex;justify-content:space-between;gap:10px;margin-top:20px;padding-top:16px;border-top:1px solid #e7e8e3;">' +
@@ -3339,8 +3397,21 @@
     o.innerHTML = html;
     o.addEventListener('mousedown', function (e) { if (e.target === o) advClose(); });
     document.getElementById('advX').addEventListener('click', advClose);
+    var cfgReset = document.getElementById('advCfgReset');
+    if (cfgReset) cfgReset.addEventListener('click', function (e) { e.preventDefault(); adv.configManual = false; adv.config = autoConfig(); renderAdv(); });
     document.getElementById('advGen').addEventListener('click', function () { generateAdvLines(document.getElementById('advReplace').checked); });
     document.getElementById('advTrace').addEventListener('click', openAdvTrace);
+    o.querySelectorAll('[data-ovr]').forEach(function (el) {
+      el.addEventListener('change', function () {
+        var base = el.getAttribute('data-ovr'), v = el.value.trim();
+        adv.partOverrides = adv.partOverrides || {};
+        if (!v || v === base) delete adv.partOverrides[base]; else adv.partOverrides[base] = v;
+        renderAdv();
+      });
+    });
+    o.querySelectorAll('[data-ovrclear]').forEach(function (b) {
+      b.addEventListener('click', function () { if (adv.partOverrides) delete adv.partOverrides[b.getAttribute('data-ovrclear')]; renderAdv(); });
+    });
     o.querySelectorAll('[data-ak]').forEach(function (el) {
       var k = el.getAttribute('data-ak');
       if (el.type === 'checkbox') { el.addEventListener('change', function () { adv[k] = el.checked; syncAdvDefaults(k); renderAdv(); }); }
@@ -3350,8 +3421,17 @@
       }
     });
   }
+  /** Square when the footprint is a square, Rectangle otherwise. */
+  function autoConfig() { return (Number(adv.length) || 0) === (Number(adv.width) || 0) ? 'Square' : 'Rectangle'; }
+
   function syncAdvDefaults(changed) {
-    if (changed === 'length') { adv.legs = legsFor(adv.length); if (!adv.matColumn) adv.webbingSling = adv.legs; adv.webbingSling = adv.legs; }
+    if (changed === 'config') adv.configManual = true;
+    if ((changed === 'length' || changed === 'width') && !adv.configManual) adv.config = autoConfig();
+    if (changed === 'length') { adv.legs = legsFor(adv.length); }
+    // Turning the bracket option ON is an explicit choice, so its own quantities may
+    // seed themselves. Nothing under Additional Hardware ever self-populates — a
+    // quantity nobody typed used to reach the proposal as a priced line.
+    if (changed === 'brackets' && adv.brackets && !Number(adv.bracketsQty)) { adv.bracketsQty = 4; adv.swivel360 = 4; }
     if (changed === 'legs' || changed === 'length') { adv.completeWrap = Math.max(0, (Number(adv.legs) || 0) - (Number(adv.uShaped) || 0)); }
     if (changed === 'ladders' || changed === 'laddersQty') { if (adv.ladders && adv.matColumn && !adv.uShaped) adv.uShaped = adv.laddersQty; }
     if (changed === 'matColumn' && adv.matColumn) { if (!adv.uShaped) adv.uShaped = adv.ladders ? adv.laddersQty : 0; adv.completeWrap = Math.max(0, (Number(adv.legs) || 0) - (Number(adv.uShaped) || 0)); }
@@ -3368,6 +3448,7 @@
       matFloor: !!adv.floorPadding, matColumn: !!adv.matColumn, uShaped: Number(adv.uShaped), completeWrap: Number(adv.completeWrap), matLadderLeg: !!adv.matLadderLeg, matCustom: !!adv.matCustom,
       floorPadding: !!adv.floorPadding, floorPadThickness: adv.floorPadThickness === '2' ? '2' : '3.25',
       brackets: !!adv.brackets, bracketsQty: Number(adv.bracketsQty), swivel360: Number(adv.swivel360), swivelStandalone: Number(adv.swivelStandalone), forged: Number(adv.forged), swingHanger: Number(adv.swingHanger), vRings: Number(adv.vRings), carabiner: Number(adv.carabiner), webbingSling: Number(adv.webbingSling),
+      partOverrides: adv.partOverrides || {},
     };
   }
 

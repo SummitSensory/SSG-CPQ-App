@@ -36,6 +36,7 @@ export function registerAdventureRoutes(app: FastifyInstance): void {
         category: r.category,
         proposalGroup: (pl ? pl.group : '') || r.proposalGroup || undefined,
         proposalSubgroup: pl ? pl.subgroup || undefined : undefined,
+        overrideAllowed: r.overrideAllowed,
       };
     }
     return map;
