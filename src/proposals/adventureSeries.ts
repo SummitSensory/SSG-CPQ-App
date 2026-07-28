@@ -4,6 +4,7 @@ import {
   type HardwareRule, type HardwareBomRow, type FormulaRule,
 } from './hardwareRules.js';
 import { DEFAULT_FRAME_RULES, frameContext } from './frameRules.js';
+import { computeFloorPadding, type MatQuote, type MatThickness } from './matPricing.js';
 
 export interface SkuRec { part: string; description: string; unitPriceMinor: number; unitCostMinor?: number; weightLbs: number; category: string; }
 const SKUS: Record<string, SkuRec> = {};
@@ -16,6 +17,8 @@ export interface AdvAnswers {
   slide?: boolean; slideGray?: boolean; steamroller?: boolean;
   climbFrame?: boolean; climbWall?: boolean; climbShield?: boolean; climbMat?: boolean;
   matFloor?: boolean; matColumn?: boolean; uShaped?: number; completeWrap?: number; matLadderLeg?: boolean; matCustom?: boolean;
+  /** Floor padding decision tree: include it, and at which thickness. */
+  floorPadding?: boolean; floorPadThickness?: MatThickness;
   brackets?: boolean; bracketsQty?: number; swivel360?: number; swivelStandalone?: number; forged?: number; swingHanger?: number; vRings?: number; carabiner?: number; webbingSling?: number;
 }
 
@@ -53,6 +56,16 @@ export interface PricedLine {
 export interface BomRow { part: string; qty: number; formula: string; rule: string; }
 
 const n = (v: unknown) => (typeof v === 'number' && isFinite(v) ? v : 0);
+
+/**
+ * Floor padding priced from the frame footprint, or null when the answer is No.
+ * `matFloor` is the legacy flag for the same option, so old answer sets still price.
+ */
+export function floorPaddingQuote(a: AdvAnswers): MatQuote | null {
+  const on = a.floorPadding != null ? !!a.floorPadding : !!a.matFloor;
+  if (!on) return null;
+  return computeFloorPadding(n(a.length), n(a.width), a.floorPadThickness === '2' ? '2' : '3.25');
+}
 
 /** Catalog category whose members make up the zip line kit. */
 export const ZIP_KIT_CATEGORY = 'Complete Zip Line Kit';
@@ -198,9 +211,22 @@ export function computeAdventureProposal(
     if (a.ballRack) { SG('Ball Rack System'); P('K-5000'); }
   }
 
-  if (a.matFloor || a.matColumn || a.matLadderLeg || a.matCustom) {
+  const pad = floorPaddingQuote(a);
+  if (pad || a.matColumn || a.matLadderLeg || a.matCustom) {
     G('Adventure Mat System (Highly Recommended)', true); SG('Adventure Mat System');
-    if (a.matFloor) lines.push({ lineType: 'PRODUCT', name: 'Adventure Mat System — Floor', sku: '', description: 'Mat SKU determined by logic (to be provided).', quantity: 1, rateMinor: 0, weightEach: 0, needsPrice: true });
+    if (pad) {
+      // Sized and priced from the frame footprint — see matPricing.ts. The catalog
+      // record, when the part exists, only supplies weight; price and cost come
+      // from the formula so a new frame size never needs a new catalog row.
+      const rec = LOOK[pad.sku];
+      const w = rec ? rec.weightLbs : 0;
+      weight += w;
+      lines.push({
+        lineType: 'PRODUCT', name: pad.description, sku: pad.sku,
+        description: `Floor padding ${pad.thickness}" thick · ${pad.matLengthIn}" × ${pad.matWidthIn}" (${pad.squareFeet.toFixed(2)} sq ft)`,
+        quantity: 1, rateMinor: pad.priceMinor, costEach: pad.costMinor, weightEach: w, needsPrice: false,
+      });
+    }
     if (a.matColumn) { if (n(a.uShaped) > 0) lines.push({ lineType: 'PRODUCT', name: 'U-Shaped Column Wraps', sku: '', quantity: n(a.uShaped), rateMinor: 0, weightEach: 0, needsPrice: true }); if (n(a.completeWrap) > 0) lines.push({ lineType: 'PRODUCT', name: 'Complete Column Wraps', sku: '', quantity: n(a.completeWrap), rateMinor: 0, weightEach: 0, needsPrice: true }); }
     if (a.matLadderLeg) lines.push({ lineType: 'PRODUCT', name: 'Adventure Mat System — Ladder Leg', sku: '', quantity: n(a.ladders), rateMinor: 0, weightEach: 0, needsPrice: true });
     if (a.matCustom) lines.push({ lineType: 'PRODUCT', name: 'Adventure Mat System — CUSTOM', sku: '', description: 'Mat SKU determined by logic (to be provided).', quantity: 1, rateMinor: 0, weightEach: 0, needsPrice: true });
@@ -336,6 +362,16 @@ export function explainAdventure(a: AdvAnswers, skuMap?: Record<string, SkuRec>,
       unitCostMinor, extendedCostMinor: unitCostMinor * b.qty,
       weightLbs: rec ? rec.weightLbs * b.qty : 0,
       inCatalog: !!rec, rolledIntoH1000: false,
+    });
+  }
+  const pad = floorPaddingQuote(a);
+  if (pad) {
+    rows.push({
+      rule: 'Floor Padding', part: pad.sku, description: pad.description, formula: pad.formula, qty: 1,
+      unitPriceMinor: pad.priceMinor, extendedMinor: pad.priceMinor,
+      unitCostMinor: pad.costMinor, extendedCostMinor: pad.costMinor,
+      weightLbs: LOOK[pad.sku] ? LOOK[pad.sku].weightLbs : 0,
+      inCatalog: true, rolledIntoH1000: false,
     });
   }
   const hardware = hardwareRollup(a, LOOK, rules);

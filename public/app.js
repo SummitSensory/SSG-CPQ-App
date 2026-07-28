@@ -219,7 +219,7 @@
             '<button class="link-btn" id="profBtn" style="margin-bottom:6px;">My profile</button>' +
             '<button class="link-btn" id="pwdBtn" style="margin-bottom:6px;">Change password</button>' +
             '<button class="link-btn" id="logoutBtn">Sign out</button>' +
-            '<div style="text-align:center;font-size:10px;color:#b3b7ac;margin-top:8px;letter-spacing:.04em;">build 20 · hardware lines &amp; proposal notes</div></div>' +
+            '<div style="text-align:center;font-size:10px;color:#b3b7ac;margin-top:8px;letter-spacing:.04em;">build 21 · floor padding pricing</div></div>' +
         '</aside>' +
         '<main class="main"><div class="topbar"><div class="eyebrow">Summit Sensory Gym Proposal Management Software</div><h2 id="viewTitle">Dashboard</h2></div>' +
           '<div class="content" id="view"></div></main>' +
@@ -3179,6 +3179,7 @@
       slide: false, slideGray: false, steamroller: false,
       climbFrame: false, climbWall: false, climbShield: false, climbMat: false,
       matFloor: false, matColumn: false, uShaped: 0, completeWrap: 0, matLadderLeg: false, matCustom: false,
+      floorPadding: false, floorPadThickness: '3.25',
       brackets: false, bracketsQty: 4, swivel360: 4, swivelStandalone: 0, forged: 12, swingHanger: 0, vRings: 0, carabiner: 0, webbingSling: 6,
     };
     adv.legs = legsFor(adv.length); adv.webbingSling = adv.legs;
@@ -3191,6 +3192,44 @@
   function advClose() { var o = document.getElementById('advOverlay'); if (o) document.body.removeChild(o); }
   function climbWalls() { return (adv.climbFrame ? 1 : 0) + (adv.climbWall ? 1 : 0); }
   function eyeboltSum() { var nonSwivel = Math.max(0, (Number(adv.bracketsQty) || 0) - (Number(adv.swivel360) || 0)); return (Number(adv.swivel360) || 0) + nonSwivel + (Number(adv.forged) || 0) + (Number(adv.swingHanger) || 0); }
+
+  /**
+   * Floor padding price, mirroring src/proposals/matPricing.ts so the builder can
+   * show the number before the server prices the proposal. Keep both in step.
+   */
+  var MAT_RATE = { '3.25': 11.78, '2': 7.65 }, MAT_MARKUP = 1.4, MAT_OVERAGE_IN = 14;
+  function matQuote() {
+    var th = adv.floorPadThickness === '2' ? '2' : '3.25';
+    var L = Number(adv.length) || 0, W = Number(adv.width) || 0;
+    var li = L * 12 + MAT_OVERAGE_IN, wi = W * 12 + MAT_OVERAGE_IN;
+    var sqIn = li * wi, sqFt = sqIn / 144;
+    var costMinor = Math.round(sqFt * MAT_RATE[th] * 100);
+    var p2 = function (v) { return String(Math.max(0, Math.round(v))).padStart(2, '0'); };
+    return {
+      thickness: th, matLengthIn: li, matWidthIn: wi, squareInches: sqIn, squareFeet: sqFt,
+      rate: MAT_RATE[th], costMinor: costMinor, priceMinor: Math.round(costMinor * MAT_MARKUP),
+      sku: 'R-SSG-' + p2(L) + p2(W) + 'CLM' + (th === '2' ? '-2' : ''),
+    };
+  }
+  function padThicknessPicker() {
+    var th = adv.floorPadThickness === '2' ? '2' : '3.25';
+    function opt(val, label, sub) {
+      var on = th === val;
+      return '<label style="flex:1;display:flex;gap:8px;align-items:flex-start;padding:10px 12px;border:1px solid ' + (on ? '#3d4a55' : '#dcded7') + ';border-radius:10px;background:' + (on ? '#f3f6f8' : '#fff') + ';cursor:pointer;">' +
+        '<input type="radio" name="advPadTh" data-ak="floorPadThickness" value="' + val + '"' + (on ? ' checked' : '') + ' style="margin-top:2px;">' +
+        '<span><b style="font-weight:600;font-size:13.5px;">' + label + '</b><span class="muted" style="display:block;font-size:11.5px;">' + sub + '</span></span></label>';
+    }
+    return '<div style="font-size:11px;color:#8a8f85;text-transform:uppercase;letter-spacing:.03em;margin-bottom:6px;">Padding thickness</div>' +
+      '<div style="display:flex;gap:10px;">' + opt('3.25', '3.25" thick', '$11.78 / sq ft cost') + opt('2', '2" thick', '$7.65 / sq ft cost') + '</div>';
+  }
+  function padQuoteHint() {
+    var q = matQuote();
+    return '<div style="margin-top:10px;background:#f8f9f6;border:1px solid #e7e8e3;border-radius:10px;padding:10px 12px;font-size:12px;color:#5c6157;line-height:1.6;">' +
+      '<div style="font-family:ui-monospace,monospace;font-size:11.5px;color:#3d4a55;font-weight:600;">' + esc(q.sku) + '</div>' +
+      q.matLengthIn + '" × ' + q.matWidthIn + '" = ' + q.squareInches.toLocaleString() + ' sq in ÷ 144 = <b>' + q.squareFeet.toFixed(2) + ' sq ft</b><br>' +
+      q.squareFeet.toFixed(2) + ' × $' + q.rate.toFixed(2) + ' = ' + fmtMoney(q.costMinor, 'USD') + ' cost × ' + MAT_MARKUP + ' = <b style="color:#2f7d5d;">' + fmtMoney(q.priceMinor, 'USD') + '</b> sell' +
+      '</div>';
+  }
 
   function renderAdv() {
     var o = document.getElementById('advOverlay'); if (!o) return;
@@ -3227,7 +3266,8 @@
             (climbWalls() > 0 ? '<div style="padding-left:16px;">' + tog('climbShield', 'Climbing Wall — Safety Shield', 'Qty mirrors # climbing walls (' + climbWalls() + ')') + tog('climbMat', 'Climbing Wall — Mat', 'Qty mirrors # climbing walls (' + climbWalls() + ')') + '</div>' : '')
           ) +
           sec('Mats & Padding',
-            tog('matFloor', 'Adventure Mat System — Floor', 'Mat SKU logic to be provided — added as manual line') +
+            tog('floorPadding', 'Floor Padding', 'Sized from the frame: 14" added to each side. Priced per sq ft.') +
+            (adv.floorPadding ? '<div style="margin:8px 0 12px;padding-left:16px;">' + padThicknessPicker() + padQuoteHint() + '</div>' : '') +
             tog('matColumn', 'Adventure Mat System — Column') +
             (adv.matColumn ? '<div style="' + grid + 'margin:8px 0 4px;">' + num('uShaped', 'U-Shaped Column Wraps (def = # ladders)', 0, 40) + num('completeWrap', 'Complete Column Wraps (def = legs − U-shaped)', 0, 40) + '</div>' : '') +
             tog('matLadderLeg', 'Adventure Mat System — Ladder Leg', 'Qty = # of ladders (' + adv.laddersQty + ')') +
@@ -3288,7 +3328,8 @@
       trolley: !!adv.trolley, trolleyType: adv.trolleyType, zipLine: !!adv.zipLine, zipLineQty: Number(adv.zipLineQty), ballRack: !!adv.ballRack,
       slide: !!adv.slide, slideGray: !!adv.slideGray, steamroller: !!adv.steamroller,
       climbFrame: !!adv.climbFrame, climbWall: !!adv.climbWall, climbShield: !!adv.climbShield, climbMat: !!adv.climbMat,
-      matFloor: !!adv.matFloor, matColumn: !!adv.matColumn, uShaped: Number(adv.uShaped), completeWrap: Number(adv.completeWrap), matLadderLeg: !!adv.matLadderLeg, matCustom: !!adv.matCustom,
+      matFloor: !!adv.floorPadding, matColumn: !!adv.matColumn, uShaped: Number(adv.uShaped), completeWrap: Number(adv.completeWrap), matLadderLeg: !!adv.matLadderLeg, matCustom: !!adv.matCustom,
+      floorPadding: !!adv.floorPadding, floorPadThickness: adv.floorPadThickness === '2' ? '2' : '3.25',
       brackets: !!adv.brackets, bracketsQty: Number(adv.bracketsQty), swivel360: Number(adv.swivel360), swivelStandalone: Number(adv.swivelStandalone), forged: Number(adv.forged), swingHanger: Number(adv.swingHanger), vRings: Number(adv.vRings), carabiner: Number(adv.carabiner), webbingSling: Number(adv.webbingSling),
     };
   }
