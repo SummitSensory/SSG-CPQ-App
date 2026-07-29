@@ -124,16 +124,19 @@
   }
 
   /* --- Login --- */
-  function renderLogin(msg) {
+  function renderLogin(msg, isGood) {
     root.innerHTML =
       '<div class="login-wrap"><form class="login-card" id="loginForm">' +
         '<div style="text-align:center;margin-bottom:22px;"><div class="login-logo"></div><div class="login-brandname">Summit Sensory Gym</div><div class="login-brandsub">Proposal Management Software</div></div>' +
         '<h1>Welcome back</h1>' +
         '<div class="login-sub">Sign in to Summit Sensory Gym Proposal Management Software.</div>' +
-        (msg ? '<div class="err">' + esc(msg) + '</div>' : '') +
+        (msg ? (isGood
+          ? '<div style="background:#eef6f0;border:1px solid #cfe4d6;color:#2f6b4c;border-radius:10px;padding:10px 13px;font-size:13px;margin-bottom:14px;">' + esc(msg) + '</div>'
+          : '<div class="err">' + esc(msg) + '</div>') : '') +
         '<div class="field"><label for="email">Email</label><input id="email" type="email" autocomplete="username" required></div>' +
         '<div class="field"><label for="password">Password</label><input id="password" type="password" autocomplete="current-password" required></div>' +
         '<button class="btn" type="submit" id="submitBtn">Sign in</button>' +
+        '<button type="button" class="link-btn" id="forgotBtn" style="margin-top:10px;text-align:center;padding:9px 16px;font-size:13px;">Forgot your password?</button>' +
         '<div id="ssoBlock" class="hidden">' +
           '<div style="display:flex;align-items:center;gap:10px;margin:18px 0 14px;color:#a0a49a;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;">' +
             '<span style="flex:1;height:1px;background:#e7e8e3;"></span>or<span style="flex:1;height:1px;background:#e7e8e3;"></span>' +
@@ -151,6 +154,9 @@
         var d = await r.json(); setTokens(d.accessToken, d.refreshToken); boot();
       } catch (err) { renderLogin('Could not reach the server. Is it running?'); }
     });
+    document.getElementById('forgotBtn').addEventListener('click', function () {
+      renderForgotPassword(document.getElementById('email').value.trim());
+    });
     // Reveal the Microsoft button only where SSO is actually configured.
     api('/auth/sso/status', { noAuth: true }).then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
       if (!d || !d.enabled) return;
@@ -161,6 +167,103 @@
         location.href = '/auth/sso/start';
       });
     }).catch(function () {});
+  }
+
+  /* --- Forgot / reset password ---------------------------------------------
+   * Both screens live outside the shell: nobody is signed in yet. The request
+   * endpoint always answers 204 so this page can never reveal whether an address
+   * has an account — the confirmation copy is deliberately non-committal.
+   */
+  function loginShell(inner) {
+    return '<div class="login-wrap"><form class="login-card" id="pwForm">' +
+      '<div style="text-align:center;margin-bottom:22px;"><div class="login-logo"></div>' +
+      '<div class="login-brandname">Summit Sensory Gym</div>' +
+      '<div class="login-brandsub">Proposal Management Software</div></div>' +
+      inner +
+      '<div class="hint">Summit Sensory Gym · Proposal Management Software</div>' +
+      '</form></div>';
+  }
+
+  function renderForgotPassword(prefill) {
+    root.innerHTML = loginShell(
+      '<h1>Reset your password</h1>' +
+      '<div class="login-sub">Enter your work email and we will send you a link to choose a new password.</div>' +
+      '<div class="field"><label for="fpEmail">Email</label><input id="fpEmail" type="email" autocomplete="username" value="' + esc(prefill || '') + '" required></div>' +
+      '<button class="btn" type="submit" id="fpBtn">Send reset link</button>' +
+      '<button type="button" class="link-btn" id="fpBack" style="margin-top:10px;text-align:center;padding:9px 16px;font-size:13px;">Back to sign in</button>',
+    );
+    document.getElementById('fpBack').addEventListener('click', function () { renderLogin(); });
+    document.getElementById('pwForm').addEventListener('submit', async function (e) {
+      e.preventDefault();
+      var email = document.getElementById('fpEmail').value.trim();
+      if (!/.+@.+\..+/.test(email)) return;
+      var btn = document.getElementById('fpBtn'); btn.disabled = true; btn.textContent = 'Sending…';
+      try { await api('/auth/forgot-password', { method: 'POST', noAuth: true, body: { email: email } }); } catch (err) {}
+      root.innerHTML = loginShell(
+        '<h1>Check your email</h1>' +
+        '<div class="login-sub">If <b>' + esc(email) + '</b> has an account, a reset link is on its way. ' +
+        'The link expires in 60 minutes and can only be used once.</div>' +
+        '<button type="button" class="btn" id="fpDone">Back to sign in</button>',
+      );
+      document.getElementById('fpDone').addEventListener('click', function () { renderLogin(); });
+    });
+  }
+
+  /** Landing screen for an emailed link: /?reset=<token> */
+  async function renderResetPassword(token) {
+    root.innerHTML = loginShell('<h1>Reset your password</h1><div class="login-sub">Checking your link…</div>');
+    var state = 'UNKNOWN';
+    try {
+      var r = await api('/auth/reset-password?token=' + encodeURIComponent(token), { noAuth: true });
+      if (r.ok) state = ((await r.json()) || {}).state || 'UNKNOWN';
+    } catch (err) {}
+    if (state !== 'VALID') {
+      var why = state === 'EXPIRED' ? 'That link has expired.'
+        : state === 'USED' ? 'That link has already been used.'
+        : 'That link is not valid.';
+      root.innerHTML = loginShell(
+        '<h1>Link no longer works</h1>' +
+        '<div class="login-sub">' + why + ' Reset links last 60 minutes and work once. Request a new one below.</div>' +
+        '<button type="button" class="btn" id="rpAgain">Request a new link</button>' +
+        '<button type="button" class="link-btn" id="rpBack" style="margin-top:10px;text-align:center;padding:9px 16px;font-size:13px;">Back to sign in</button>',
+      );
+      document.getElementById('rpAgain').addEventListener('click', function () { clearResetParam(); renderForgotPassword(''); });
+      document.getElementById('rpBack').addEventListener('click', function () { clearResetParam(); renderLogin(); });
+      return;
+    }
+    root.innerHTML = loginShell(
+      '<h1>Choose a new password</h1>' +
+      '<div class="login-sub">At least 12 characters. You will be signed out everywhere else.</div>' +
+      '<div id="rpErr"></div>' +
+      '<div class="field"><label for="rpPass">New password</label><input id="rpPass" type="password" autocomplete="new-password" required></div>' +
+      '<div class="field"><label for="rpPass2">Confirm new password</label><input id="rpPass2" type="password" autocomplete="new-password" required></div>' +
+      '<button class="btn" type="submit" id="rpBtn">Set new password</button>',
+    );
+    document.getElementById('pwForm').addEventListener('submit', async function (e) {
+      e.preventDefault();
+      var box = document.getElementById('rpErr');
+      var p1 = document.getElementById('rpPass').value, p2 = document.getElementById('rpPass2').value;
+      if (p1.length < 12) { box.innerHTML = '<div class="err">Password must be at least 12 characters.</div>'; return; }
+      if (p1 !== p2) { box.innerHTML = '<div class="err">Those passwords do not match.</div>'; return; }
+      var btn = document.getElementById('rpBtn'); btn.disabled = true; btn.textContent = 'Saving…';
+      var msg = '';
+      try {
+        var r = await api('/auth/reset-password', { method: 'POST', noAuth: true, body: { token: token, newPassword: p1 } });
+        if (r.ok) {
+          clearResetParam();
+          renderLogin('Password updated. Sign in with your new password.', true);
+          return;
+        }
+        try { msg = ((await r.json()) || {}).message || ''; } catch (err2) {}
+      } catch (err) {}
+      btn.disabled = false; btn.textContent = 'Set new password';
+      box.innerHTML = '<div class="err">' + esc(msg || 'Could not set the password. Request a new link.') + '</div>';
+    });
+  }
+
+  /** Drop ?reset= from the address bar so the token is not left in history. */
+  function clearResetParam() {
+    try { history.replaceState(null, '', location.pathname); } catch (e) {}
   }
 
   function brandHtml() {
@@ -224,7 +327,7 @@
             '<button class="link-btn" id="profBtn" style="margin-bottom:6px;">My profile</button>' +
             '<button class="link-btn" id="pwdBtn" style="margin-bottom:6px;">Change password</button>' +
             '<button class="link-btn" id="logoutBtn">Sign out</button>' +
-            '<div style="text-align:center;font-size:10px;color:#b3b7ac;margin-top:8px;letter-spacing:.04em;">build 32 · user create fix · password reset</div></div>' +
+            '<div style="text-align:center;font-size:10px;color:#b3b7ac;margin-top:8px;letter-spacing:.04em;">build 33 · user create fix · password reset</div></div>' +
         '</aside>' +
         '<main class="main"><div class="topbar"><div class="eyebrow">Summit Sensory Gym Proposal Management Software</div><h2 id="viewTitle">Dashboard</h2></div>' +
           '<div class="content" id="view"></div></main>' +
@@ -5079,6 +5182,11 @@
   }
 
   async function boot() {
+    // An emailed reset link wins over any existing session — the person clicking it
+    // is by definition trying to get back in.
+    var resetToken = null;
+    try { resetToken = new URLSearchParams(location.search).get('reset'); } catch (e) {}
+    if (resetToken) { renderResetPassword(resetToken); return; }
     if (!tokens().at && !tokens().rt) { renderLogin(); return; }
     try { var r = await authed('/auth/me'); if (r.ok) { renderShell(await r.json()); return; } clearTokens(); renderLogin(); }
     catch (e) { renderLogin('Could not reach the server. Is it running?'); }

@@ -7,11 +7,20 @@ import { createSession, rotateSession, revokeSession, resolveSession, revokeAllF
 import { hashPassword } from '../auth/password.js';
 import { UnauthorizedError, ValidationError } from '../lib/errors.js';
 import { requireAuth } from '../plugins/authz.js';
+import { env } from '../config/env.js';
+import { recordAudit } from '../lib/audit.js';
+import { requestPasswordReset, checkResetToken, consumeResetToken } from '../auth/passwordReset.js';
 
 const LoginBody = z.object({ email: z.string().email(), password: z.string().min(1) });
 const RefreshBody = z.object({ refreshToken: z.string().min(1) });
 const ChangePasswordBody = z.object({
   currentPassword: z.string().min(1),
+  newPassword: z.string().min(12, 'New password must be at least 12 characters'),
+});
+
+const ForgotPasswordBody = z.object({ email: z.string().email() });
+const ResetPasswordBody = z.object({
+  token: z.string().min(10),
   newPassword: z.string().min(12, 'New password must be at least 12 characters'),
 });
 
@@ -90,8 +99,61 @@ export function registerAuthRoutes(app: FastifyInstance): void {
     return reply.status(204).send();
   });
 
-  app.get('/auth/me', { preHandler: requireAuth }, async (req) => {
-    const user = await prisma.user.findUnique({
+  /**
+   * Start a self-service reset. Public by necessity.
+   *
+   * Always answers 204, whether or not the address has an account — a different
+   * response for a known address would turn this into an account-enumeration oracle.
+   * Failures inside the mail send are logged, never surfaced, for the same reason.
+   */
+  app.post('/auth/forgot-password', async (req, reply) => {
+    const parsed = ForgotPasswordBody.safeParse(req.body);
+    // Even a malformed address gets the neutral answer.
+    if (parsed.success) {
+      const configured = env.APP_BASE_URL;
+      const proto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim();
+      const host = (req.headers['x-forwarded-host'] as string | undefined) ?? req.headers.host;
+      const baseUrl = configured ?? `${proto ?? 'https'}://${host ?? 'localhost:3000'}`;
+      try {
+        await requestPasswordReset(parsed.data.email, baseUrl, req.ip);
+      } catch (err) {
+        req.log.error({ err }, 'password reset request failed');
+      }
+    }
+    return reply.status(204).send();
+  });
+
+  /** Report whether a reset link is still good, so the UI can explain itself. */
+  app.get('/auth/reset-password', async (req) => {
+    const { token } = req.query as { token?: string };
+    if (!token) return { state: 'UNKNOWN' };
+    return { state: await checkResetToken(token) };
+  });
+
+  /** Complete a self-service reset. The token is single-use. */
+  app.post('/auth/reset-password', async (req, reply) => {
+    const parsed = ResetPasswordBody.safeParse(req.body);
+    if (!parsed.success) {
+      throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid password');
+    }
+    const user = await consumeResetToken(parsed.data.token);
+    if (!user) {
+      throw new ValidationError('That reset link is no longer valid. Request a new one.');
+    }
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash: await hashPassword(parsed.data.newPassword) },
+    });
+    // Any session opened with the old password dies with it.
+    await revokeAllForUser(user.id);
+    await recordAudit({
+      actorId: user.id, action: 'user.password.reset', targetUserId: user.id,
+      details: { email: user.email, by: 'self-service' },
+    });
+    return reply.status(204).send();
+  });
+
+  app.get('/auth/me', { preHandler: requireAuth }, async (req) => {    const user = await prisma.user.findUnique({
       where: { id: req.user!.sub },
       select: { id: true, email: true, name: true, title: true, phone: true, role: true, isActive: true },
     });
