@@ -54,6 +54,7 @@ class ResendInviteSender implements InviteSender {
       body: JSON.stringify({
         from: `${env.INVITE_FROM_NAME} <${env.INVITE_FROM_EMAIL}>`,
         to: [invite.email],
+        reply_to: env.INVITE_REPLY_TO,
         subject: 'Your Summit Sensory CPQ account',
         html: inviteHtml(invite),
       }),

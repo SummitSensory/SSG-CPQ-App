@@ -327,7 +327,7 @@
             '<button class="link-btn" id="profBtn" style="margin-bottom:6px;">My profile</button>' +
             '<button class="link-btn" id="pwdBtn" style="margin-bottom:6px;">Change password</button>' +
             '<button class="link-btn" id="logoutBtn">Sign out</button>' +
-            '<div style="text-align:center;font-size:10px;color:#b3b7ac;margin-top:8px;letter-spacing:.04em;">build 33 · user create fix · password reset</div></div>' +
+            '<div style="text-align:center;font-size:10px;color:#b3b7ac;margin-top:8px;letter-spacing:.04em;">build 34 · password reset · Resend domain</div></div>' +
         '</aside>' +
         '<main class="main"><div class="topbar"><div class="eyebrow">Summit Sensory Gym Proposal Management Software</div><h2 id="viewTitle">Dashboard</h2></div>' +
           '<div class="content" id="view"></div></main>' +
@@ -4598,7 +4598,9 @@
   /* --- Admin --- */
   async function renderAdmin(user) {
     document.getElementById('view').innerHTML =
-      '<div style="display:flex;justify-content:flex-end;margin-bottom:16px;"><button class="btn" id="admNew" style="width:auto;padding:10px 17px;">New user</button></div>' +
+      '<div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:16px;">' +
+        '<button class="link-btn" id="admMailTest" style="width:auto;padding:10px 15px;">Send test email</button>' +
+        '<button class="btn" id="admNew" style="width:auto;padding:10px 17px;">New user</button></div>' +
       '<div id="admList"><div class="muted" style="padding:24px;">Loading…</div></div>' +
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:26px;"><div class="section-title" style="margin:0;">Standard proposal notes</div>' +
         '<button class="btn" id="snNew" style="width:auto;padding:9px 15px;">+ New note</button></div>' +
@@ -4609,6 +4611,18 @@
       '<div id="fxTabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;"></div>' +
       '<div id="fxBody"><div class="muted" style="padding:16px;">Loading…</div></div>';
     document.getElementById('admNew').addEventListener('click', openUserForm);
+    document.getElementById('admMailTest').addEventListener('click', async function () {
+      var bt = this, label = bt.textContent;
+      bt.disabled = true; bt.textContent = 'Sending…';
+      try {
+        var r = await authed('/admin/email/test', { method: 'POST', body: {} });
+        var d = null; try { d = await r.json(); } catch (e) {}
+        if (r.ok && d && d.sent) alert('Sent to ' + d.to + '\nFrom: ' + d.from + '\nReply-to: ' + d.replyTo + '\n\nIf it does not arrive, check spam and the Resend dashboard.');
+        else if (r.ok && d) alert(d.message || 'Email is not configured.');
+        else alert((d && d.message) || 'Test failed (' + r.status + ').');
+      } catch (e) { alert('Could not reach the server.'); }
+      bt.disabled = false; bt.textContent = label;
+    });
     document.getElementById('snNew').addEventListener('click', function () { openStandardNoteForm(null); });
     loadUsers();
     loadStandardNotes();

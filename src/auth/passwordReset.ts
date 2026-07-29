@@ -60,6 +60,9 @@ class ResendResetSender implements ResetSender {
       body: JSON.stringify({
         from: `${env.RESET_FROM_NAME} <${env.RESET_FROM_EMAIL}>`,
         to: [m.email],
+        // Sending must come from the Resend-verified subdomain, but a person hitting
+        // reply should reach the real inbox.
+        reply_to: env.RESET_REPLY_TO,
         subject: 'Reset your Summit Sensory CPQ password',
         html: resetHtml(m),
       }),

@@ -7,6 +7,8 @@ import { recordAudit } from '../lib/audit.js';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission, ROLES, isRole } from '../authz/permissions.js';
 import { ValidationError, NotFoundError, ConflictError } from '../lib/errors.js';
+import { env } from '../config/env.js';
+import { resetSender } from '../auth/passwordReset.js';
 
 const CreateUserBody = z.object({
   email: z.string().email(),
@@ -119,6 +121,42 @@ export function registerAdminRoutes(app: FastifyInstance): void {
     });
     await recordAudit({ actorId: req.user!.sub, action: 'user.reactivate', targetUserId: id });
     return user;
+  });
+
+  /**
+   * Send a test email to the signed-in admin.
+   *
+   * /auth/forgot-password deliberately returns 204 even when Resend rejects the send,
+   * so misconfiguration is invisible there by design. This endpoint reports the real
+   * failure instead, which is what you want when checking a from-address or a
+   * domain's verification status.
+   */
+  app.post('/admin/email/test', guard, async (req) => {
+    const me = await prisma.user.findUnique({
+      where: { id: req.user!.sub },
+      select: { email: true, name: true },
+    });
+    if (!me) throw new NotFoundError('User not found');
+    if (!env.RESEND_API_KEY) {
+      return {
+        sent: false,
+        from: env.RESET_FROM_EMAIL,
+        to: me.email,
+        message: 'RESEND_API_KEY is not set — emails are written to the log instead of sent.',
+      };
+    }
+    try {
+      await resetSender.send({
+        email: me.email, name: me.name,
+        link: `${env.APP_BASE_URL ?? 'https://example.invalid'}/?reset=test-link-not-valid`,
+        expiresInMinutes: 60,
+      });
+      return { sent: true, from: env.RESET_FROM_EMAIL, replyTo: env.RESET_REPLY_TO, to: me.email };
+    } catch (err) {
+      throw new ValidationError(
+        `Resend rejected the send from ${env.RESET_FROM_EMAIL}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   });
 
   // Audit records are themselves a protected resource.

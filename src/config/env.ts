@@ -37,12 +37,16 @@ const EnvSchema = z
     // Transactional email (Resend). Optional: without a key, invites are
     // logged instead of sent.
     RESEND_API_KEY: z.string().min(1).optional(),
-    // Must be an address on a domain verified in Resend.
-    INVITE_FROM_EMAIL: z.string().email().default('no-reply@summitsensory.com'),
+    // Must be an address on a domain verified in Resend. The verified domain is the
+    // SUBdomain updates.summitsensory.com — sending as @summitsensory.com is rejected.
+    INVITE_FROM_EMAIL: z.string().email().default('no-reply@updates.summitsensory.com'),
     INVITE_FROM_NAME: z.string().min(1).default('Summit Sensory CPQ'),
-    // Password-reset email sender. Must also be on a Resend-verified domain.
-    RESET_FROM_EMAIL: z.string().email().default('info@summitsensory.com'),
+    // Where replies land. This one does NOT need to be a verified sending domain.
+    INVITE_REPLY_TO: z.string().email().default('info@summitsensory.com'),
+    // Password-reset email sender. Same verified-subdomain rule as above.
+    RESET_FROM_EMAIL: z.string().email().default('info@updates.summitsensory.com'),
     RESET_FROM_NAME: z.string().min(1).default('Summit Sensory Gym'),
+    RESET_REPLY_TO: z.string().email().default('info@summitsensory.com'),
     // Absolute base URL used to build reset links. When unset the request's own
     // host is used, which is correct on Vercel and in local dev alike.
     APP_BASE_URL: z.string().url().optional(),
