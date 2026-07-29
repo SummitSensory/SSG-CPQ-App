@@ -17,6 +17,8 @@ const SkuBody = z.object({
   proposalGroup: z.string().trim().max(120).optional(),
   active: z.boolean().default(true),
   overrideAllowed: z.boolean().default(false),
+  /** Builder default quantity; null = no default. */
+  defaultQty: z.number().int().min(0).max(9999).nullish(),
 });
 
 // One import row; prices may arrive as dollars (unitPrice) or minor (unitPriceMinor).
@@ -32,6 +34,7 @@ const ImportRow = z.object({
   manufacturer: z.string().trim().optional(),
   proposalGroup: z.string().trim().optional(),
   overrideAllowed: z.union([z.boolean(), z.string(), z.number()]).optional(),
+  defaultQty: z.union([z.number(), z.string()]).optional(),
 });
 const toMinor = (v: unknown): number => {
   if (v == null || v === '') return 0;
@@ -76,6 +79,27 @@ export function registerSkuRoutes(app: FastifyInstance): void {
    * catalog decision (`overrideAllowed`), never the builder's — so pre-approval
    * is administered in one place and audited with the rest of the SKU master.
    */
+  /**
+   * Everything the Adventure Series builder needs to know about a part before a
+   * rep answers anything: whether the part may be substituted, and the quantity
+   * the field should start at. One call so the builder never renders half-informed.
+   */
+  app.get('/skus/builder-meta', read, async () => {
+    try {
+      const items = await prisma.sku.findMany({
+        where: { active: true, OR: [{ overrideAllowed: true }, { defaultQty: { not: null } }] },
+        select: { part: true, description: true, overrideAllowed: true, defaultQty: true },
+        orderBy: { part: 'asc' },
+      });
+      return { items };
+    } catch (e) {
+      // Migration 0024/0025 not deployed yet: nothing is overridable and nothing
+      // has a default, which is the safe answer rather than a broken builder.
+      if ((e as { code?: string }).code !== 'P2022') throw e;
+      return { items: [] };
+    }
+  });
+
   app.get('/skus/overridable', read, async () => {
     try {
       const items = await prisma.sku.findMany({
@@ -158,6 +182,12 @@ export function registerSkuRoutes(app: FastifyInstance): void {
       if (has(raw, 'manufacturer')) { data.manufacturer = d.manufacturer ? d.manufacturer.trim() : null; columns.push('manufacturer'); }
       if (has(raw, 'proposalGroup')) { data.proposalGroup = d.proposalGroup ? d.proposalGroup.trim() : null; columns.push('proposalGroup'); }
       if (has(raw, 'overrideAllowed')) { data.overrideAllowed = toBool(d.overrideAllowed); columns.push('overrideAllowed'); }
+      if (has(raw, 'defaultQty')) {
+        // Blank clears the default; a number sets it. 0 is a real value meaning
+        // "offer this part but start it at none".
+        data.defaultQty = d.defaultQty === '' || d.defaultQty == null ? null : Math.max(0, Math.round(toNum(d.defaultQty)));
+        columns.push('defaultQty');
+      }
       clean.push({ part: d.part.trim(), data, columns });
     });
 
@@ -198,6 +228,7 @@ export function registerSkuRoutes(app: FastifyInstance): void {
             manufacturer: (c.data.manufacturer as string | null) ?? null,
             proposalGroup: (c.data.proposalGroup as string | null) ?? null,
             overrideAllowed: (c.data.overrideAllowed as boolean) ?? false,
+            defaultQty: (c.data.defaultQty as number | null) ?? null,
           },
         });
         created++;

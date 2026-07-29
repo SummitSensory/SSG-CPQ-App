@@ -720,6 +720,7 @@
     { key: 'weightLbs', label: 'Weight (lb)', w: 96, type: 'num', align: 'right' },
     { key: 'record', label: 'Record', w: 132, type: 'enum', options: [['Product + priced', 'Product + priced'], ['Product only', 'Product only'], ['Priced only', 'Priced only']] },
     { key: 'statusLabel', label: 'Status', w: 118, type: 'enum' },
+    { key: 'defaultQty', label: 'Default qty', w: 104, type: 'num', align: 'center' },
     { key: 'ovrLabel', label: 'Override OK', w: 104, type: 'enum', options: [['Yes', 'Yes'], ['No', 'No']], align: 'center' },
     { key: '', label: '', w: 96 },
   ];
@@ -753,6 +754,7 @@
         // is a Product, otherwise the flat SKU's active flag.
         row.statusLabel = k.productStatus ? titleCase(k.productStatus) : (k.active === false ? 'Inactive' : 'Active');
         row.ovrLabel = k.overrideAllowed ? 'Yes' : 'No';
+        row.defaultQty = k.defaultQty == null ? '' : Number(k.defaultQty);
         row.isActive = k.productStatus ? k.productStatus === 'ACTIVE' : k.active !== false;
         return row;
       });
@@ -799,6 +801,11 @@
         cell(admin ? txt(k.part, 'weightLbs', k.weightLbs, NUM) : String(k.weightLbs), 'text-align:right;') +
         cell(where, 'white-space:nowrap;') +
         cell('<span style="display:inline-block;background:' + (k.isActive ? '#eaf3ee' : '#f2f3ef') + ';border:1px solid ' + (k.isActive ? '#cfe3d7' : '#dcded7') + ';color:' + (k.isActive ? '#2f7d5d' : '#8a8f85') + ';border-radius:999px;padding:2px 9px;font-size:11.5px;font-weight:600;white-space:nowrap;">' + esc(k.statusLabel) + '</span>', 'white-space:nowrap;') +
+        // The quantity the proposal builder starts this part at. Blank = no default,
+        // so the field opens at 0 and nothing reaches a proposal unasked.
+        cell(admin
+          ? '<input type="number" min="0" class="itDefQty" data-part="' + esc(k.part) + '" value="' + (k.defaultQty === '' || k.defaultQty == null ? '' : k.defaultQty) + '" placeholder="—" title="Quantity the Adventure Series builder starts this part at. Blank for none." style="' + NUM + 'text-align:center;">'
+          : (k.defaultQty === '' || k.defaultQty == null ? '<span style="color:#b6bab1;">—</span>' : '<span style="font-size:13px;font-weight:600;">' + k.defaultQty + '</span>'), 'text-align:center;') +
         // Pre-approval to substitute this part number in the Adventure Series
         // builder. Off unless an admin says otherwise.
         cell(admin
@@ -815,7 +822,7 @@
         '<colgroup>' + IT_COLS.map(function (c) { return '<col' + (c.w ? ' style="width:' + c.w + 'px;"' : '') + '>'; }).join('') + '</colgroup>' +
         '<thead><tr>' + colHead(IT_COLS, itemState) + '</tr>' +
         '<tr>' + IT_COLS.map(function (c) { return filterCell('colFilter', c, all, itemState.filters); }).join('') + '</tr></thead>' +
-        '<tbody>' + (rows || '<tr><td colspan="12" style="padding:28px;text-align:center;color:#8a8f85;">' + (all.length ? 'No parts match these filters.' : 'Nothing in the catalog yet. Import a sheet or add a product.') + '</td></tr>') + '</tbody></table></div>' +
+        '<tbody>' + (rows || '<tr><td colspan="13" style="padding:28px;text-align:center;color:#8a8f85;">' + (all.length ? 'No parts match these filters.' : 'Nothing in the catalog yet. Import a sheet or add a product.') + '</td></tr>') + '</tbody></table></div>' +
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;color:#82877d;font-size:13px;flex-wrap:wrap;gap:8px;">' +
         '<span>' + rowsData.length.toLocaleString() + (activeFilters ? ' of ' + all.length.toLocaleString() : '') + ' items' +
           (activeFilters ? ' · <button id="itClearF" class="link-btn" style="width:auto;padding:4px 10px;display:inline-block;">Clear filters</button>' : '') + '</span>' +
@@ -849,6 +856,24 @@
         }
         if (f === 'unitCostMinor' || f === 'unitPriceMinor') drawItems(user);
         setTimeout(function () { el.style.borderColor = f === 'unitCostMinor' ? '#e4dfd0' : '#dcded7'; }, 900);
+      });
+    });
+    box.querySelectorAll('.itDefQty').forEach(function (el) {
+      el.addEventListener('change', async function () {
+        var part = el.getAttribute('data-part'), raw = el.value.trim();
+        var to = raw === '' ? null : Math.max(0, Math.round(parseFloat(raw) || 0));
+        el.style.borderColor = '#c9a227';
+        var rq = await authed('/catalog/items/' + encodeURIComponent(part), { method: 'PATCH', body: { defaultQty: to } });
+        el.style.borderColor = rq.ok ? '#3f9d78' : '#c2452f';
+        if (!rq.ok) {
+          var mq = ''; try { mq = ((await rq.json()) || {}).message || ''; } catch (eq) {}
+          alert(mq || 'Could not save that default (' + rq.status + '). If this says the column is missing, migration 0025 has not been deployed.');
+          return;
+        }
+        el.value = to == null ? '' : String(to);
+        var rowq = (itemState.rows || []).filter(function (x) { return x.part === part; })[0];
+        if (rowq) { rowq.defaultQty = to == null ? '' : to; }
+        setTimeout(function () { el.style.borderColor = '#dcded7'; }, 900);
       });
     });
     box.querySelectorAll('.itFlag').forEach(function (el) {
@@ -3256,6 +3281,7 @@
       floorPadding: false, floorPadThickness: '3.25',
       brackets: false, bracketsQty: 0, swivel360: 0, swivelStandalone: 0, forged: 0, swingHanger: 0, vRings: 0, carabiner: 0, webbingSling: 0,
       partOverrides: {},
+      hwTouched: {},
     };
     adv.legs = legsFor(adv.length);
     advOverridable = null;
@@ -3292,14 +3318,41 @@
   };
   /** Parts the CATALOG has pre-approved for substitution. Null until loaded. */
   var advOverridable = null;
+  /** Catalog default quantities, part -> number. Empty until loaded. */
+  var advDefaults = {};
   async function loadAdvOverridable() {
-    var map = {};
+    var map = {}, defs = {};
     try {
-      var r = await authed('/skus/overridable');
-      if (r.ok) { var d = await r.json(); (d.items || []).forEach(function (s) { map[s.part] = s.description || ''; }); }
-    } catch (e) { /* leave empty — nothing is overridable if we cannot confirm it */ }
+      var r = await authed('/skus/builder-meta');
+      if (r.ok) {
+        var d = await r.json();
+        (d.items || []).forEach(function (s) {
+          if (s.overrideAllowed) map[s.part] = s.description || '';
+          if (s.defaultQty != null) defs[s.part] = Number(s.defaultQty) || 0;
+        });
+      }
+    } catch (e) { /* leave empty — nothing is overridable or defaulted if we cannot confirm it */ }
     advOverridable = map;
+    advDefaults = defs;
+    applyHwDefaults();
     if (document.getElementById('advOverlay')) renderAdv();
+  }
+
+  /**
+   * Seed the Additional Hardware quantities from the catalog defaults. Only fields
+   * the rep has not touched are seeded — an entered quantity always wins, including
+   * a deliberate 0. Parts with no catalog default stay at 0.
+   */
+  function applyHwDefaults() {
+    if (!adv) return;
+    adv.hwTouched = adv.hwTouched || {};
+    Object.keys(ADV_HW_PARTS).forEach(function (key) {
+      var p = ADV_HW_PARTS[key];
+      if (Array.isArray(p)) p = p[0];
+      var def = advDefaults[p];
+      if (def == null || adv.hwTouched[key]) return;
+      if (!(Number(adv[key]) > 0)) adv[key] = def;
+    });
   }
   function matQuote() {
     var th = adv.floorPadThickness === '2' ? '2' : '3.25';
@@ -3358,7 +3411,19 @@
           : '<span style="font-size:10px;color:#3f9d78;flex:0 0 auto;">pre-approved</span>') +
       '</div>';
     }
-    function hwNum(key, label, min, max, hint) { return '<div>' + num(key, label, min, max, '', hint) + hwPartRow(key) + '</div>'; }
+    /** The catalog default under a hardware quantity, with a one-click way back to it. */
+    function hwDefaultRow(key) {
+      var p = ADV_HW_PARTS[key]; if (Array.isArray(p)) p = p[0];
+      var def = advDefaults[p];
+      if (def == null) return '';
+      var cur = Number(adv[key]) || 0;
+      return '<div style="font-size:10.5px;color:#8a8f85;margin-top:4px;">Catalog default ' + def +
+        (cur !== def
+          ? ' · <button data-hwdef="' + key + '" style="border:none;background:none;padding:0;color:#3d4a55;text-decoration:underline;cursor:pointer;font-size:10.5px;">use default</button>'
+          : ' · applied') +
+        '</div>';
+    }
+    function hwNum(key, label, min, max, hint) { return '<div>' + num(key, label, min, max, '', hint) + hwDefaultRow(key) + hwPartRow(key) + '</div>'; }
     var grid = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;';
     var stack = 'display:flex;flex-direction:column;gap:10px;';
 
@@ -3437,14 +3502,30 @@
     o.querySelectorAll('[data-ovrclear]').forEach(function (b) {
       b.addEventListener('click', function () { if (adv.partOverrides) delete adv.partOverrides[b.getAttribute('data-ovrclear')]; renderAdv(); });
     });
+    o.querySelectorAll('[data-hwdef]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var key = b.getAttribute('data-hwdef'), p = ADV_HW_PARTS[key];
+        if (Array.isArray(p)) p = p[0];
+        adv[key] = advDefaults[p] || 0;
+        adv.hwTouched = adv.hwTouched || {};
+        delete adv.hwTouched[key];
+        renderAdv();
+      });
+    });
     o.querySelectorAll('[data-ak]').forEach(function (el) {
       var k = el.getAttribute('data-ak');
       if (el.type === 'checkbox') { el.addEventListener('change', function () { adv[k] = el.checked; syncAdvDefaults(k); renderAdv(); }); }
       else {
-        el.addEventListener('input', function () { adv[k] = el.type === 'number' ? (parseFloat(el.value) || 0) : el.value; });
-        el.addEventListener('change', function () { adv[k] = el.type === 'number' ? (parseFloat(el.value) || 0) : el.value; syncAdvDefaults(k); renderAdv(); });
+        el.addEventListener('input', function () { adv[k] = el.type === 'number' ? (parseFloat(el.value) || 0) : el.value; markHwTouched(k); });
+        el.addEventListener('change', function () { adv[k] = el.type === 'number' ? (parseFloat(el.value) || 0) : el.value; markHwTouched(k); syncAdvDefaults(k); renderAdv(); });
       }
     });
+  }
+  /** Once a rep types in a hardware field, no default may overwrite it. */
+  function markHwTouched(key) {
+    if (!(key in ADV_HW_PARTS)) return;
+    adv.hwTouched = adv.hwTouched || {};
+    adv.hwTouched[key] = true;
   }
   /** Square when the footprint is a square, Rectangle otherwise. */
   function autoConfig() { return (Number(adv.length) || 0) === (Number(adv.width) || 0) ? 'Square' : 'Rectangle'; }

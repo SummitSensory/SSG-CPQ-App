@@ -76,24 +76,32 @@ export function registerAdventureRoutes(app: FastifyInstance): void {
    * filed under in Catalog, instead of the heading the engine happened to hardcode.
    */
   async function placements(): Promise<Record<string, { group: string; subgroup: string }>> {
-    const [cats, products] = await Promise.all([
-      prisma.productCategory.findMany({ select: { id: true, name: true, parentId: true, productId: true } }),
+    const [cats, products, skus] = await Promise.all([
+      prisma.productCategory.findMany({ select: { id: true, name: true, slug: true, parentId: true, productId: true } }),
       prisma.product.findMany({ select: { id: true, sku: true } }),
+      prisma.sku.findMany({ select: { part: true } }),
     ]);
     const byId = new Map(cats.map((c) => [c.id, c]));
     const skuById = new Map(products.map((p) => [p.id, p.sku]));
+    // A tier node can name a part the Product table has never heard of — accessory
+    // parts are often only in the SKU master, so `productId` is null and the node
+    // used to be skipped, which dropped the part into Hardware. Recover the part
+    // from the node's slug tail so it still prints under the tier it is filed under.
+    const partByTail = new Map(skus.map((s) => [s.part.toLowerCase(), s.part]));
     const out: Record<string, { group: string; subgroup: string }> = {};
     for (const c of cats) {
-      if (!c.productId) continue;
-      const sku = skuById.get(c.productId);
-      if (!sku) continue;
+      const tail = (c.slug.split('--').pop() || '').toLowerCase();
+      const sku = (c.productId ? skuById.get(c.productId) : undefined) || partByTail.get(tail);
+      if (!sku || out[sku]) continue;
+      // Walk the HEADERS above this part: nearest header is the subgroup (tier 2),
+      // outermost is the group (tier 1).
       const chain: string[] = [];
-      let node: (typeof cats)[number] | undefined = c;
+      let node = c.parentId ? byId.get(c.parentId) : undefined;
       while (node && chain.length < 8) {
         chain.unshift(node.name);
         node = node.parentId ? byId.get(node.parentId) : undefined;
       }
-      out[sku] = { group: chain[0] || '', subgroup: chain.length > 2 ? chain[1] : '' };
+      out[sku] = { group: chain[0] || '', subgroup: chain.length > 1 ? chain[chain.length - 1] : '' };
     }
     return out;
   }

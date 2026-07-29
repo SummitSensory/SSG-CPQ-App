@@ -295,6 +295,20 @@ export function computeAdventureProposal(
     NOTE('Mat System', '*Please allow 8–10 weeks for manufacturing & delivery of all mat systems. *All column wraps & floor padding colors will be determined after proposal is signed.');
   }
 
+  // Anything still unplaced but filed under some OTHER catalog group prints under
+  // that group's own heading. Only a part with no catalog placement at all falls
+  // through to Hardware — a tier-2 accessory is never swept in with the fasteners.
+  const otherGroups: string[] = [];
+  const byGroup: Record<string, Array<{ part: string; qty: number }>> = {};
+  for (const e of extras.slice()) {
+    const g = (LOOK[e.part] && LOOK[e.part].proposalGroup) || '';
+    if (!g) continue;
+    if (!byGroup[g]) { byGroup[g] = []; otherGroups.push(g); }
+    byGroup[g].push(e);
+    extras.splice(extras.indexOf(e), 1);
+  }
+  for (const g of otherGroups) { G(g, true); emitExtras(byGroup[g]); }
+
   const addlHw = n(a.forged) || n(a.swingHanger) || n(a.swivelStandalone) || extras.length;
   if (a.brackets || addlHw) {
     G('Hardware', false);

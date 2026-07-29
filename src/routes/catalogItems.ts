@@ -32,12 +32,12 @@ const SKU_COLS = {
 type SkuRow = {
   id: string; part: string; description: string; category: string | null; manufacturer: string | null;
   unitPriceMinor: number; unitCostMinor: number; weightLbs: number; proposalGroup: string | null;
-  active: boolean; overrideAllowed?: boolean;
+  active: boolean; overrideAllowed?: boolean; defaultQty?: number | null;
 };
 async function listSkus(): Promise<SkuRow[]> {
   if (skuHasOverrideFlag) {
     try {
-      return await prisma.sku.findMany({ select: { ...SKU_COLS, overrideAllowed: true }, orderBy: { part: 'asc' } }) as SkuRow[];
+      return await prisma.sku.findMany({ select: { ...SKU_COLS, overrideAllowed: true, defaultQty: true }, orderBy: { part: 'asc' } }) as SkuRow[];
     } catch (e) {
       if ((e as { code?: string }).code !== 'P2022') throw e;
       skuHasOverrideFlag = false;
@@ -56,6 +56,7 @@ const ItemPatch = z.object({
   proposalGroup: z.string().trim().max(120).nullish(),
   active: z.boolean().optional(),
   overrideAllowed: z.boolean().optional(),
+  defaultQty: z.number().int().min(0).max(9999).nullable().optional(),
 });
 
 export interface CatalogItem {
@@ -71,6 +72,8 @@ export interface CatalogItem {
   active: boolean;
   /** Pre-approved for part-number substitution in the Adventure Series builder. */
   overrideAllowed: boolean;
+  /** Builder default quantity; null = no default, so the field starts at 0. */
+  defaultQty: number | null;
   skuId: string | null;
   productId: string | null;
   productStatus: string | null;
@@ -114,6 +117,7 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
         manufacturer: s.manufacturer || '', unitPriceMinor: s.unitPriceMinor, unitCostMinor: s.unitCostMinor,
         weightLbs: s.weightLbs, proposalGroup: s.proposalGroup || '', active: s.active,
         overrideAllowed: s.overrideAllowed === true,
+        defaultQty: s.defaultQty ?? null,
         skuId: s.id, productId: null, productStatus: null,
       });
     }
@@ -137,7 +141,7 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
           part: p.sku, name: p.name, category: productCategory, categoryOptions: true,
           manufacturer: mfr, unitPriceMinor: 0, unitCostMinor: latestCost[p.id] || 0,
           weightLbs: p.weightOz ? Math.round((p.weightOz / 16) * 1000) / 1000 : 0,
-          proposalGroup: '', active: p.status === 'ACTIVE', overrideAllowed: false,
+          proposalGroup: '', active: p.status === 'ACTIVE', overrideAllowed: false, defaultQty: null,
           skuId: null, productId: p.id, productStatus: p.status,
         });
       }
@@ -174,7 +178,7 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
 
     const needsSku = d.unitPriceMinor !== undefined || d.unitCostMinor !== undefined || d.weightLbs !== undefined ||
       d.proposalGroup !== undefined || d.active !== undefined || d.manufacturer !== undefined ||
-      d.overrideAllowed !== undefined ||
+      d.overrideAllowed !== undefined || d.defaultQty !== undefined ||
       (d.name !== undefined && !product) || (d.category !== undefined && !product);
     if (!sku && needsSku) {
       sku = await prisma.sku.create({
@@ -221,6 +225,7 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
       if (d.proposalGroup !== undefined) money.proposalGroup = d.proposalGroup || null;
       if (d.active !== undefined) money.active = d.active;
       if (d.overrideAllowed !== undefined) money.overrideAllowed = d.overrideAllowed;
+      if (d.defaultQty !== undefined) money.defaultQty = d.defaultQty;
       if (Object.keys(money).length) await prisma.sku.update({ where: { id: sku.id }, data: money });
     }
 
