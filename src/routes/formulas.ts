@@ -166,8 +166,11 @@ export function registerFormulaRoutes(app: FastifyInstance): void {
       sortOrder: base?.sortOrder ?? next.sortOrder ?? 999, active: next.active,
       group: base?.group ?? parsed.data.group ?? next.group ?? null,
       // Prisma rejects a bare `null` on a nullable Json column — it wants the field
-      // omitted (leave as-is) or Prisma.DbNull (clear it).
-      when: (parsed.data.when === null ? Prisma.DbNull : ((next.when ?? Prisma.DbNull) as Prisma.InputJsonValue)),
+      // omitted (leave as-is) or Prisma.DbNull (clear it). RuleCondition is a plain
+      // interface with no index signature, so it needs the double cast.
+      when: (parsed.data.when === null
+        ? Prisma.DbNull
+        : ((next.when ?? Prisma.DbNull) as unknown as Prisma.InputJsonValue)),
       note: next.note ?? null,
       updatedById: req.user!.sub,
     };

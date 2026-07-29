@@ -139,6 +139,7 @@ function beamMembers(a: AdvAnswers): BomRow[] {
   };
   Object.keys(memLen).forEach((part) => {
     const len = memLen[part];
+    if (len == null) return;
     const jj = shortCap(part) + longBeam(part);
     const kk = (legs === 6 && L === len && len >= 8) ? 3 : 0;
     const ll = (legs === 8 && L === len && len >= 8) ? 6 : 0;
