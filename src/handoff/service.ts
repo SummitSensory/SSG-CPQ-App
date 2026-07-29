@@ -9,13 +9,16 @@ import {
 import { versionTotals, metaOf } from '../proposals/analytics.js';
 import { createNewVersion } from '../proposals/service.js';
 import { loadFormulaSettings } from '../routes/formulas.js';
+import { defaultSettings } from '../proposals/formulaSettings.js';
 import type {
   RequirementCategory, RequirementStatus, HandoffTaskStatus, HandoffStatus,
   CustomerApprovalMethod, Role, BomShipTo,
 } from '@prisma/client';
 
-/** Allocate the next sequential sales-order number for the current year. */
-async function nextOrderNumber(): Promise<string> {
+/** A catalog ref with nothing resolved — the parallel-array fallback. */
+const EMPTY_REF = { sku: null, vendor: null, unitCostMinor: null, unitWeightLbs: null } as const;
+
+/** Allocate the next sequential sales-order number for the current year. */async function nextOrderNumber(): Promise<string> {
   const year = new Date().getFullYear();
   const prefix = `SO-${year}-`;
   const last = await prisma.acceptedOrder.findFirst({ where: { number: { startsWith: prefix } }, orderBy: { number: 'desc' }, select: { number: true } });
@@ -51,7 +54,10 @@ async function snapshotAcceptedContent(versionId: string, sections: unknown, ite
   const meta = metaOf(sections);
   // Deposit percentage is a business number (Administration → Formulas).
   const settings = await loadFormulaSettings();
-  const depositPct = settings.depositPct;
+  // FormulaSettings is a Record, so the key is optional to the compiler even though
+  // loadFormulaSettings() fills every key from FORMULA_SETTINGS. Fall back to the
+  // declared default rather than 0, which would silently snapshot a zero deposit.
+  const depositPct = settings.depositPct ?? defaultSettings().depositPct ?? 0;
   const deposit = Math.round((t.total * depositPct) / 100);
   return prisma.priceSnapshot.create({
     data: {
@@ -174,11 +180,14 @@ async function backfillCatalogRefs(orderId: string): Promise<void> {
   const refs = await resolveCatalogRefs(blanks);
   await Promise.all(
     blanks.map((l, i) => {
+      // refs is built parallel to blanks, so this always resolves; the fallback is
+      // only here to satisfy noUncheckedIndexedAccess.
+      const ref = refs[i] ?? EMPTY_REF;
       const data: { sku?: string; vendor?: string; unitCostMinor?: number; unitWeightLbs?: number } = {};
-      if (!l.sku && refs[i].sku) data.sku = refs[i].sku as string;
-      if (!l.vendor && refs[i].vendor) data.vendor = refs[i].vendor as string;
-      if (l.unitCostMinor == null && refs[i].unitCostMinor != null) data.unitCostMinor = refs[i].unitCostMinor as number;
-      if (l.unitWeightLbs == null && refs[i].unitWeightLbs != null) data.unitWeightLbs = refs[i].unitWeightLbs as number;
+      if (!l.sku && ref.sku) data.sku = ref.sku;
+      if (!l.vendor && ref.vendor) data.vendor = ref.vendor;
+      if (l.unitCostMinor == null && ref.unitCostMinor != null) data.unitCostMinor = ref.unitCostMinor;
+      if (l.unitWeightLbs == null && ref.unitWeightLbs != null) data.unitWeightLbs = ref.unitWeightLbs;
       return Object.keys(data).length ? prisma.procurementLine.update({ where: { id: l.id }, data }) : null;
     }).filter(Boolean) as Promise<unknown>[],
   );
@@ -242,7 +251,7 @@ export async function createAcceptedOrder(versionId: string, approval: CustomerA
           },
         },
         requirements: { create: defaultRequirements().map((r) => ({ category: r.category as RequirementCategory, title: r.title, createdById: userId })) },
-        procurement: { create: procurement.map((p, i) => ({ productId: p.productId, sku: refs[i].sku, name: p.name, quantity: p.quantity, vendor: refs[i].vendor, unitCostMinor: refs[i].unitCostMinor, unitWeightLbs: refs[i].unitWeightLbs })) },
+        procurement: { create: procurement.map((p, i) => { const ref = refs[i] ?? EMPTY_REF; return { productId: p.productId, sku: ref.sku, name: p.name, quantity: p.quantity, vendor: ref.vendor, unitCostMinor: ref.unitCostMinor, unitWeightLbs: ref.unitWeightLbs }; }) },
         tasks: { create: defaultTasks(depositDue > 0n).map((t) => ({ title: t.title, assigneeRole: (t.assigneeRole as Role) ?? null, category: (t.category as RequirementCategory) ?? null, createdById: userId })) },
         events: { create: { action: 'order.locked', actorId: userId, detail: { number, acceptedVersion: version.version, integrityHash } as object } },
       },

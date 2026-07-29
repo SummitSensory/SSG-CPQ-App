@@ -26,7 +26,10 @@ jobs:
       JWT_REFRESH_SECRET: ci-refresh-secret-xxxxxxx
     steps:
       - uses: actions/checkout@v5
-      - uses: pnpm/action-setup@v4
+      # pnpm/action-setup@v4 still targets Node 20, which GitHub has deprecated and
+      # now force-runs on Node 24. Corepack reads `packageManager` from package.json,
+      # so it installs the same pinned pnpm with no third-party action involved.
+      - run: corepack enable
       - uses: actions/setup-node@v5
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
