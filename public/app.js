@@ -3126,11 +3126,13 @@
         }).join('') + '</div>'
       : '';
     var preparedBy =
-      '<div style="margin-top:12px;font-size:11.5px;line-height:1.55;">' +
-        '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin-bottom:3px;">Proposal Prepared By</div>' +
+      // Line rhythm matches the "Prepared For" block below it — same 12px size and
+      // the same 1px / 2px steps between lines, so the two read as one system.
+      '<div style="margin-top:12px;font-size:12px;">' +
+        '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin-bottom:4px;">Proposal Prepared By</div>' +
         '<div style="font-weight:600;">' + esc(u.name || u.email || '') + '</div>' +
-        (preparerLine2 ? '<div style="color:#5c6157;">' + esc(preparerLine2) + '</div>' : '') +
-        (u.email ? '<div style="color:#5c6157;">' + esc(u.email) + '</div>' : '') +
+        (preparerLine2 ? '<div style="color:#5c6157;margin-top:1px;">' + esc(preparerLine2) + '</div>' : '') +
+        (u.email ? '<div style="color:#5c6157;margin-top:2px;">' + esc(u.email) + '</div>' : '') +
       '</div>';
     var html =
       '<div id="propPrintArea" style="max-width:760px;margin:0 auto;background:#fff;padding:44px 48px;font-family:\'IBM Plex Sans\',sans-serif;color:#20241f;">' +
