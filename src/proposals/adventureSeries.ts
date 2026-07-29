@@ -143,11 +143,12 @@ function beamMembers(a: AdvAnswers): BomRow[] {
     const kk = (legs === 6 && L === len && len >= 8) ? 3 : 0;
     const ll = (legs === 8 && L === len && len >= 8) ? 6 : 0;
     const nn = (L === len) ? interiorCount : 0;
-    const mq = (monkey && L === len && monkeyMem[len]) ? 2 : 0;
+    const mm = monkeyMem[len];
+    const mq = (monkey && L === len && mm) ? 2 : 0;
     const oo = -0.5 * mq;
     add(part, jj + kk + ll + nn + oo, `Beam members (${len}')`,
       `short cap ${shortCap(part)} + long ${longBeam(part)} + 6-leg ${kk} + 8-leg ${ll} + interior ${nn} − monkey offset ${-oo} (W ${W}, L ${L})`);
-    if (mq > 0) add(monkeyMem[len], mq, `Monkey bar beam (${len}')`, `monkey bars on a ${len}' run → 2`);
+    if (mq > 0 && mm) add(mm, mq, `Monkey bar beam (${len}')`, `monkey bars on a ${len}' run → 2`);
   });
   return rows;
 }
@@ -247,7 +248,7 @@ export function computeAdventureProposal(
   const norm = (s?: string) => (s || '').trim().toLowerCase();
   const takeExtras = (groupName: string): Array<{ part: string; qty: number }> => {
     const want = norm(groupName);
-    const hit = extras.filter((e) => norm(LOOK[e.part] && LOOK[e.part].proposalGroup) === want);
+    const hit = extras.filter((e) => norm(LOOK[e.part]?.proposalGroup) === want);
     for (const h of hit) extras.splice(extras.indexOf(h), 1);
     return hit;
   };
@@ -256,11 +257,11 @@ export function computeAdventureProposal(
     const subs: string[] = [];
     const bySub: Record<string, Array<{ part: string; qty: number }>> = {};
     for (const it of items) {
-      const sub = (LOOK[it.part] && LOOK[it.part].proposalSubgroup) || '';
+      const sub = LOOK[it.part]?.proposalSubgroup || '';
       if (!bySub[sub]) { bySub[sub] = []; subs.push(sub); }
       bySub[sub].push(it);
     }
-    for (const sub of subs) { if (sub) SG(sub); bySub[sub].forEach((it) => P(it.part, it.qty)); }
+    for (const sub of subs) { if (sub) SG(sub); (bySub[sub] ?? []).forEach((it) => P(it.part, it.qty)); }
   };
   const compExtras = takeExtras('Therapeutic Activity & Adventure Components');
   const matExtras = takeExtras('Adventure Mat System');
@@ -301,13 +302,13 @@ export function computeAdventureProposal(
   const otherGroups: string[] = [];
   const byGroup: Record<string, Array<{ part: string; qty: number }>> = {};
   for (const e of extras.slice()) {
-    const g = (LOOK[e.part] && LOOK[e.part].proposalGroup) || '';
+    const g = LOOK[e.part]?.proposalGroup || '';
     if (!g) continue;
     if (!byGroup[g]) { byGroup[g] = []; otherGroups.push(g); }
     byGroup[g].push(e);
     extras.splice(extras.indexOf(e), 1);
   }
-  for (const g of otherGroups) { G(g, true); emitExtras(byGroup[g]); }
+  for (const g of otherGroups) { G(g, true); emitExtras(byGroup[g] ?? []); }
 
   // V-rings must keep this block alive even on their own: each pack answered adds
   // 10× 6820H-LAE + 10× 6820H-LAF, which are priced inside H-1000, so dropping the
@@ -460,7 +461,7 @@ export function explainAdventure(a: AdvAnswers, skuMap?: Record<string, SkuRec>,
       rule: 'Floor Padding', part: pad.sku, description: pad.description, formula: pad.formula, qty: 1,
       unitPriceMinor: pad.priceMinor, extendedMinor: pad.priceMinor,
       unitCostMinor: pad.costMinor, extendedCostMinor: pad.costMinor,
-      weightLbs: LOOK[pad.sku] ? LOOK[pad.sku].weightLbs : 0,
+      weightLbs: LOOK[pad.sku]?.weightLbs ?? 0,
       inCatalog: true, rolledIntoH1000: false,
     });
   }

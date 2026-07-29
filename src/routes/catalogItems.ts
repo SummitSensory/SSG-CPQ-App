@@ -132,7 +132,8 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
         existing.category = productCategory || existing.category;
         existing.categoryOptions = true;
         existing.manufacturer = mfr || existing.manufacturer;
-        if (!existing.unitCostMinor && latestCost[p.id]) existing.unitCostMinor = latestCost[p.id];
+        const cost = latestCost[p.id];
+        if (!existing.unitCostMinor && cost) existing.unitCostMinor = cost;
         if (!existing.weightLbs && p.weightOz) existing.weightLbs = Math.round((p.weightOz / 16) * 1000) / 1000;
         existing.productId = p.id;
         existing.productStatus = p.status;
@@ -240,7 +241,7 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
       });
     }
 
-    await recordAudit({ actorId: req.user!.sub, action: 'catalog.item.update', entity: 'Sku', entityId: part, details: d as object });
+    await recordAudit({ actorId: req.user!.sub, action: 'catalog.item.update', entity: 'Sku', entityId: part, details: d as Record<string, unknown> });
     return { ok: true, part };
   });
 

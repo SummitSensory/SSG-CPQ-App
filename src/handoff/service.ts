@@ -9,7 +9,7 @@ import {
 import { versionTotals, metaOf } from '../proposals/analytics.js';
 import { createNewVersion } from '../proposals/service.js';
 import { loadFormulaSettings } from '../routes/formulas.js';
-import { defaultSettings } from '../proposals/formulaSettings.js';
+import { setting } from '../proposals/formulaSettings.js';
 import type {
   RequirementCategory, RequirementStatus, HandoffTaskStatus, HandoffStatus,
   CustomerApprovalMethod, Role, BomShipTo,
@@ -55,9 +55,9 @@ async function snapshotAcceptedContent(versionId: string, sections: unknown, ite
   // Deposit percentage is a business number (Administration → Formulas).
   const settings = await loadFormulaSettings();
   // FormulaSettings is a Record, so the key is optional to the compiler even though
-  // loadFormulaSettings() fills every key from FORMULA_SETTINGS. Fall back to the
-  // declared default rather than 0, which would silently snapshot a zero deposit.
-  const depositPct = settings.depositPct ?? defaultSettings().depositPct ?? 0;
+  // loadFormulaSettings() fills every key. setting() falls back to the declared
+  // default (50) rather than 0, which would snapshot a zero deposit.
+  const depositPct = setting(settings, 'depositPct');
   const deposit = Math.round((t.total * depositPct) / 100);
   return prisma.priceSnapshot.create({
     data: {

@@ -99,7 +99,7 @@ export function registerProductTreeRoutes(app: FastifyInstance): void {
         ...(d.productLineId !== undefined ? { productLineId: d.productLineId || null } : {}),
       },
     });
-    await recordAudit({ actorId: req.user!.sub, action: 'catalog.category.update', entity: 'ProductCategory', entityId: id, details: { from: current.name, ...d } as object });
+    await recordAudit({ actorId: req.user!.sub, action: 'catalog.category.update', entity: 'ProductCategory', entityId: id, details: { from: current.name, ...d } as Record<string, unknown> });
     return cat;
   });
 

@@ -57,7 +57,7 @@ describe('catalog seed validation', () => {
     d.tiers.push({
       slug: 'bad', name: 'Bad', productLine: 'Adventure Series',
       tierLevel: 1, parentSlug: null, sku: 'A-2245', sortOrder: 30,
-    });
+    } as unknown as (typeof d.tiers)[number]);
     expect(loadCatalogSeed(d).report.ok).toBe(false);
   });
 

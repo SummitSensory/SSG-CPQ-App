@@ -50,6 +50,20 @@ export const FORMULA_SETTINGS: FormulaSettingDef[] = [
 
 export type FormulaSettings = Record<string, number>;
 
+/** The declared default for every key, so a missing setting still has a real value. */
+const DEFAULT_BY_KEY: Record<string, number> = Object.fromEntries(
+  FORMULA_SETTINGS.map((s) => [s.key, s.default]),
+);
+
+/**
+ * Read one setting. FormulaSettings is a Record, so every key is optional to the
+ * compiler even though loadFormulaSettings() fills them all — this falls back to the
+ * workbook default rather than 0, which would silently change the math.
+ */
+export function setting(s: FormulaSettings, key: string): number {
+  return s[key] ?? DEFAULT_BY_KEY[key] ?? 0;
+}
+
 export function defaultSettings(): FormulaSettings {
   const out: FormulaSettings = {};
   for (const s of FORMULA_SETTINGS) out[s.key] = s.default;
@@ -72,7 +86,7 @@ export function mergeSettings(rows: { key: string; value: number }[] | null | un
 /** Legs for a frame length, per the configurator's span table. */
 export function legsForLength(lengthFt: number, s: FormulaSettings = defaultSettings()): number {
   const L = Number(lengthFt) || 0;
-  if (L <= s.legsSmallMaxFt) return s.legsSmallCount;
-  if (L <= s.legsMediumMaxFt) return s.legsMediumCount;
-  return s.legsLargeCount;
+  if (L <= setting(s, 'legsSmallMaxFt')) return setting(s, 'legsSmallCount');
+  if (L <= setting(s, 'legsMediumMaxFt')) return setting(s, 'legsMediumCount');
+  return setting(s, 'legsLargeCount');
 }

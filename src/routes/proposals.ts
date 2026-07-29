@@ -68,8 +68,13 @@ export function registerProposalRoutes(app: FastifyInstance): void {
   app.post('/proposals', write, async (req, reply) => {
     const parsed = CreateSchema.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(parsed.error.message);
-    const { expirationDate, ...rest } = parsed.data;
-    const result = await createProposal({ ...rest, expirationDate: expirationDate ?? null }, req.user!.sub);
+    const { expirationDate, sections, ...rest } = parsed.data;
+    // SectionSchema types `type` as a free string for forward compatibility; the
+    // service narrows it to the ProposalSectionType union.
+    const result = await createProposal(
+      { ...rest, sections: sections as ProposalSection[], expirationDate: expirationDate ?? null },
+      req.user!.sub,
+    );
     return reply.status(201).send(result);
   });
 

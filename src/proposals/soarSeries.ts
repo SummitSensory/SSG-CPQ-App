@@ -180,7 +180,10 @@ export function computeSoarProposal(
   if (a.padding) {
     const defs = soarPadDefaults(a);
     const rows = SOAR_PAD_ROWS
-      .map((r) => ({ part: r.part, qty: (a as Record<string, unknown>)[r.key] == null ? defs[r.key] : n((a as Record<string, number>)[r.key]) }))
+      .map((r) => {
+        const override = (a as Record<string, number | undefined>)[r.key];
+        return { part: r.part, qty: override == null ? (defs[r.key] ?? 0) : n(override) };
+      })
       .filter((r) => r.qty > 0);
     if (rows.length) {
       lines.push({ lineType: 'GROUP', name: SOAR_GROUP_MATS, optional: true, description: 'Optional' });

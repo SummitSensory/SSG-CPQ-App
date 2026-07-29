@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
@@ -164,14 +165,16 @@ export function registerFormulaRoutes(app: FastifyInstance): void {
       roundMode: next.roundMode, roundStep: next.roundStep, mode: next.mode, minZero: next.minZero,
       sortOrder: base?.sortOrder ?? next.sortOrder ?? 999, active: next.active,
       group: base?.group ?? parsed.data.group ?? next.group ?? null,
-      when: (parsed.data.when === null ? null : next.when ?? null) as object | null,
+      // Prisma rejects a bare `null` on a nullable Json column — it wants the field
+      // omitted (leave as-is) or Prisma.DbNull (clear it).
+      when: (parsed.data.when === null ? Prisma.DbNull : ((next.when ?? Prisma.DbNull) as Prisma.InputJsonValue)),
       note: next.note ?? null,
       updatedById: req.user!.sub,
     };
     const saved = existing
       ? await prisma.hardwareRule.update({ where: { id: existing.id }, data })
       : await prisma.hardwareRule.create({ data: { part, ...data } });
-    await recordAudit({ actorId: req.user!.sub, action: 'formula.rule.update', entity: 'HardwareRule', entityId: saved.id, details: { kind, part, ...parsed.data } as object });
+    await recordAudit({ actorId: req.user!.sub, action: 'formula.rule.update', entity: 'HardwareRule', entityId: saved.id, details: { kind, part, ...parsed.data } as Record<string, unknown> });
     return saved;
   });
 

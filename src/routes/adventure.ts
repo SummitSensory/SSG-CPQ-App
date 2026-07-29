@@ -101,7 +101,7 @@ export function registerAdventureRoutes(app: FastifyInstance): void {
         chain.unshift(node.name);
         node = node.parentId ? byId.get(node.parentId) : undefined;
       }
-      out[sku] = { group: chain[0] || '', subgroup: chain.length > 1 ? chain[chain.length - 1] : '' };
+      out[sku] = { group: chain[0] ?? '', subgroup: chain.length > 1 ? (chain[chain.length - 1] ?? '') : '' };
     }
     return out;
   }

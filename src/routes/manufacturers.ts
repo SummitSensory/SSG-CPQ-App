@@ -137,7 +137,7 @@ export function registerManufacturerRoutes(app: FastifyInstance): void {
       await prisma.sku.updateMany({ where: { manufacturer: current.name }, data: { manufacturer: d.name } });
     }
     const m = await prisma.manufacturer.update({ where: { id }, data: d });
-    await recordAudit({ actorId: req.user!.sub, action: 'manufacturer.update', entity: 'Manufacturer', entityId: id, details: d as object });
+    await recordAudit({ actorId: req.user!.sub, action: 'manufacturer.update', entity: 'Manufacturer', entityId: id, details: d as Record<string, unknown> });
     return m;
   });
 

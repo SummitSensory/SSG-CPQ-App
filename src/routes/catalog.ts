@@ -67,9 +67,13 @@ export function registerCatalogRoutes(app: FastifyInstance): void {
     if (!parsed.success) throw new ValidationError(parsed.error.message);
     const dupe = await prisma.product.findUnique({ where: { sku: parsed.data.sku } });
     if (dupe) throw new ConflictError('SKU already exists');
-    const { activeFrom, activeTo, ...rest } = parsed.data;
+    const { activeFrom, activeTo, notes, ...rest } = parsed.data;
     const product = await prisma.product.create({
-      data: { ...rest, activeFrom: activeFrom ?? null, activeTo: activeTo ?? null, createdById: req.user!.sub },
+      data: {
+        ...rest, activeFrom: activeFrom ?? null, activeTo: activeTo ?? null, createdById: req.user!.sub,
+        // ProductInput carries notes as a flat array; Prisma needs a nested create.
+        ...(notes.length ? { notes: { create: notes.map((n, i) => ({ text: n.text, sortOrder: i })) } } : {}),
+      },
     });
     await prisma.productVersion.create({
       data: { productId: product.id, version: 1, snapshot: parsed.data as object, changedById: req.user!.sub, changeNote: 'created' },
@@ -112,7 +116,7 @@ export function registerCatalogRoutes(app: FastifyInstance): void {
     await prisma.productVersion.create({
       data: { productId: id, version: product.version, snapshot: product as object, changedById: req.user!.sub, changeNote: 'edited' },
     });
-    await recordAudit({ actorId: req.user!.sub, action: 'catalog.product.update', entity: 'Product', entityId: id, details: rest as object });
+    await recordAudit({ actorId: req.user!.sub, action: 'catalog.product.update', entity: 'Product', entityId: id, details: rest as Record<string, unknown> });
     return product;
   });
 
@@ -158,8 +162,13 @@ export function registerCatalogRoutes(app: FastifyInstance): void {
     const created = await prisma.$transaction(
       env.data.rows.map((r) => {
         const d = ProductInput.parse(r);
-        const { activeFrom, activeTo, ...rest } = d;
-        return prisma.product.create({ data: { ...rest, activeFrom: activeFrom ?? null, activeTo: activeTo ?? null, createdById: req.user!.sub } });
+        const { activeFrom, activeTo, notes, ...rest } = d;
+        return prisma.product.create({
+          data: {
+            ...rest, activeFrom: activeFrom ?? null, activeTo: activeTo ?? null, createdById: req.user!.sub,
+            ...(notes.length ? { notes: { create: notes.map((n, i) => ({ text: n.text, sortOrder: i })) } } : {}),
+          },
+        });
       }),
     );
     await recordAudit({ actorId: req.user!.sub, action: 'catalog.import', details: { count: created.length } });
