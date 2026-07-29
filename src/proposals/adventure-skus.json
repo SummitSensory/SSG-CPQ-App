@@ -1155,55 +1155,6 @@
     "category": "ACCESSORY"
   },
   {
-    "part": "K-4000",
-    "description": "Summit Soar S1 - Mobile Free-Standing Swing Frame w/ Single Cross Beam",
-    "unitPriceMinor": 390000,
-    "weightLbs": 460,
-    "category": "ACCESSORY"
-  },
-  {
-    "part": "K-4002",
-    "description": "Summit Soar - Swing Mount Extensions",
-    "unitPriceMinor": 51100,
-    "weightLbs": 50,
-    "category": "ACCESSORY"
-  },
-  {
-    "part": "SOAR-S2",
-    "description": "Summit Soar S2 - Mobile Free-Standing Swing Frame w/ Two Cross Beams",
-    "unitPriceMinor": 441100,
-    "weightLbs": 510,
-    "category": "ACCESSORY"
-  },
-  {
-    "part": "SOAR-S3",
-    "description": "Summit Soar S3 - Mobile Free-Standing Swing Frame w/ Three Cross Beams",
-    "unitPriceMinor": 492200,
-    "weightLbs": 560,
-    "category": "ACCESSORY"
-  },
-  {
-    "part": "SOAR-S1-XL",
-    "description": "Summit Soar S1-XL - Mobile Free-Standing Swing Frame w/ Single Cross Beam (Width: 12')",
-    "unitPriceMinor": 432900,
-    "weightLbs": 510,
-    "category": "ACCESSORY"
-  },
-  {
-    "part": "SOAR-S2-XL",
-    "description": "Summit Soar S2-XL - Mobile Free-Standing Swing Frame w/ Two Cross Beams (Width: 12')",
-    "unitPriceMinor": 484000,
-    "weightLbs": 560,
-    "category": "ACCESSORY"
-  },
-  {
-    "part": "SOAR-S3-XL",
-    "description": "Summit Soar S3-XL - Mobile Free-Standing Swing Frame w/ Three Cross Beams (Width: 12')",
-    "unitPriceMinor": 535100,
-    "weightLbs": 600,
-    "category": "ACCESSORY"
-  },
-  {
     "part": "382-408",
     "description": "Wheelchair Swing Platform - Adult",
     "unitPriceMinor": 211050,
@@ -1221,36 +1172,41 @@
     "part": "CLM325",
     "description": "Soar-XL Floor Mat System (138\" x 80\" x 3.25\") - Single Fold",
     "unitPriceMinor": 144000,
+    "unitCostMinor": 96000,
     "weightLbs": 0,
-    "category": "ACCESSORY"
+    "category": "SOAR_PADDING"
   },
   {
     "part": "SSM80100",
     "description": "Soar Floor Mat System (100\" x 80\" x 3.25\") - Single Fold",
     "unitPriceMinor": 104250,
+    "unitCostMinor": 69500,
     "weightLbs": 0,
-    "category": "ACCESSORY"
+    "category": "SOAR_PADDING"
   },
   {
     "part": "COLU2812",
     "description": "Soar Base Beam U Column Wrap (30\" x 4.5\" x 3.5\" x 3.5\" x 1.375\")",
     "unitPriceMinor": 17850,
+    "unitCostMinor": 10500,
     "weightLbs": 0,
-    "category": "ACCESSORY"
+    "category": "SOAR_PADDING"
   },
   {
     "part": "SFGPC",
     "description": "Gusset Plate Padding",
     "unitPriceMinor": 17550,
+    "unitCostMinor": 13000,
     "weightLbs": 0,
-    "category": "ACCESSORY"
+    "category": "SOAR_PADDING"
   },
   {
     "part": "COLW2812",
     "description": "Soar Column Wrap (60\" x 4.5\" x 4.5\" x 1.375\")",
     "unitPriceMinor": 22113,
+    "unitCostMinor": 12500,
     "weightLbs": 0,
-    "category": "ACCESSORY"
+    "category": "SOAR_PADDING"
   },
   {
     "part": "A-2200",
@@ -1447,5 +1403,69 @@
     "unitPriceMinor": 236999,
     "weightLbs": 65,
     "category": "ACCESSORY"
+  },
+  {
+    "part": "K-4000",
+    "description": "Summit Soar S1 - Mobile Free-Standing Swing Frame w/ Single Cross Beam",
+    "unitPriceMinor": 390000,
+    "unitCostMinor": 195000,
+    "weightLbs": 460,
+    "category": "SOAR_FRAME"
+  },
+  {
+    "part": "K-4002",
+    "description": "Summit Soar S2 - Mobile Free-Standing Swing Frame w/ Two Cross Beams",
+    "unitPriceMinor": 441100,
+    "unitCostMinor": 224200,
+    "weightLbs": 510,
+    "category": "SOAR_FRAME"
+  },
+  {
+    "part": "K-4003",
+    "description": "Summit Soar S3 - Mobile Free-Standing Swing Frame w/ Three Cross Beams",
+    "unitPriceMinor": 492200,
+    "unitCostMinor": 253400,
+    "weightLbs": 560,
+    "category": "SOAR_FRAME"
+  },
+  {
+    "part": "K-4001",
+    "description": "Summit Soar S1-XL - Mobile Free-Standing Swing Frame w/ Single Cross Beam (Width: 12')",
+    "unitPriceMinor": 432900,
+    "unitCostMinor": 195000,
+    "weightLbs": 0,
+    "category": "SOAR_FRAME"
+  },
+  {
+    "part": "K-4006",
+    "description": "Summit Soar S2-XL - Mobile Free-Standing Swing Frame w/ Two Cross Beams (Width: 12')",
+    "unitPriceMinor": 484000,
+    "unitCostMinor": 257830,
+    "weightLbs": 0,
+    "category": "SOAR_FRAME"
+  },
+  {
+    "part": "K-4007",
+    "description": "Summit Soar S3-XL - Mobile Free-Standing Swing Frame w/ Three Cross Beams (Width: 12')",
+    "unitPriceMinor": 535100,
+    "unitCostMinor": 291410,
+    "weightLbs": 0,
+    "category": "SOAR_FRAME"
+  },
+  {
+    "part": "K-4004",
+    "description": "Summit Soar S1 - Mobile Free-Standing Swing Frame w/ Single Cross Beam (Height: 7')",
+    "unitPriceMinor": 390000,
+    "unitCostMinor": 195000,
+    "weightLbs": 460,
+    "category": "SOAR_FRAME"
+  },
+  {
+    "part": "K-4005",
+    "description": "Summit Soar S2 - Mobile Free-Standing Swing Frame w/ Single Cross Beam (Height: 7')",
+    "unitPriceMinor": 441100,
+    "unitCostMinor": 224200,
+    "weightLbs": 510,
+    "category": "SOAR_FRAME"
   }
 ]

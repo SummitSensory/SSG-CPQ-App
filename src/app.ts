@@ -20,6 +20,7 @@ import { registerPricingRoutes } from './routes/pricing.js';
 import { registerProposalRoutes } from './routes/proposals.js';
 import { registerProposalTemplateRoutes } from './routes/templates.js';
 import { registerAdventureRoutes } from './routes/adventure.js';
+import { registerSoarRoutes } from './routes/soar.js';
 import { registerSkuRoutes } from './routes/skus.js';
 import { registerApprovalRoutes } from './routes/approvals.js';
 import { registerOrderRoutes } from './routes/orders.js';
@@ -64,6 +65,7 @@ export function buildApp(): FastifyInstance {
   registerProposalRoutes(app);
   registerProposalTemplateRoutes(app);
   registerAdventureRoutes(app);
+  registerSoarRoutes(app);
   registerSkuRoutes(app);
   registerApprovalRoutes(app);
   registerOrderRoutes(app);

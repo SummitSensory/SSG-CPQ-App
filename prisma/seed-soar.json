@@ -1,0 +1,495 @@
+{
+  "generatedAt": "2026-07-29T16:52:06.918Z",
+  "source": "Soar Builder SKUs & Logic.xlsx — Products tab",
+  "defaultEffectiveDate": "2026-07-29",
+  "productLines": [
+    {
+      "name": "Summit Soar",
+      "slug": "soar",
+      "description": "Mobile free-standing therapeutic swing frames",
+      "sortOrder": 20,
+      "isActive": true
+    }
+  ],
+  "manufacturers": [
+    {
+      "name": "Goldberg Brothers",
+      "isThirdParty": true,
+      "isActive": true
+    },
+    {
+      "name": "Resilite",
+      "isThirdParty": true,
+      "isActive": true
+    }
+  ],
+  "products": [
+    {
+      "sku": "K-4000",
+      "name": "Summit Soar S1 - Mobile Free-Standing Swing Frame w/ Single Cross Beam",
+      "productLine": "Summit Soar",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 390000,
+      "lengthIn": 80.2,
+      "widthIn": 114,
+      "heightIn": 100,
+      "thicknessIn": null,
+      "showDimensions": true,
+      "weightOz": 7360
+    },
+    {
+      "sku": "K-4002",
+      "name": "Summit Soar S2 - Mobile Free-Standing Swing Frame w/ Two Cross Beams",
+      "productLine": "Summit Soar",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 441100,
+      "lengthIn": 80.2,
+      "widthIn": 114,
+      "heightIn": 100,
+      "thicknessIn": null,
+      "showDimensions": true,
+      "weightOz": 8160
+    },
+    {
+      "sku": "K-4003",
+      "name": "Summit Soar S3 - Mobile Free-Standing Swing Frame w/ Three Cross Beams",
+      "productLine": "Summit Soar",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 492200,
+      "lengthIn": 80.2,
+      "widthIn": 114,
+      "heightIn": 100,
+      "thicknessIn": null,
+      "showDimensions": true,
+      "weightOz": 8960
+    },
+    {
+      "sku": "K-4001",
+      "name": "Summit Soar S1-XL - Mobile Free-Standing Swing Frame w/ Single Cross Beam (Width: 12')",
+      "productLine": "Summit Soar",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 432900,
+      "lengthIn": 80.2,
+      "widthIn": 144,
+      "heightIn": 100,
+      "thicknessIn": null,
+      "showDimensions": true,
+      "weightOz": 0
+    },
+    {
+      "sku": "K-4006",
+      "name": "Summit Soar S2-XL - Mobile Free-Standing Swing Frame w/ Two Cross Beams (Width: 12')",
+      "productLine": "Summit Soar",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 484000,
+      "lengthIn": 80.2,
+      "widthIn": 144,
+      "heightIn": 100,
+      "thicknessIn": null,
+      "showDimensions": true,
+      "weightOz": 0
+    },
+    {
+      "sku": "K-4007",
+      "name": "Summit Soar S3-XL - Mobile Free-Standing Swing Frame w/ Three Cross Beams (Width: 12')",
+      "productLine": "Summit Soar",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 535100,
+      "lengthIn": 80.2,
+      "widthIn": 144,
+      "heightIn": 100,
+      "thicknessIn": null,
+      "showDimensions": true,
+      "weightOz": 0
+    },
+    {
+      "sku": "K-4004",
+      "name": "Summit Soar S1 - Mobile Free-Standing Swing Frame w/ Single Cross Beam (Height: 7')",
+      "productLine": "Summit Soar",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 390000,
+      "lengthIn": 80.2,
+      "widthIn": 114,
+      "heightIn": 100,
+      "thicknessIn": null,
+      "showDimensions": true,
+      "weightOz": 7360
+    },
+    {
+      "sku": "K-4005",
+      "name": "Summit Soar S2 - Mobile Free-Standing Swing Frame w/ Single Cross Beam (Height: 7')",
+      "productLine": "Summit Soar",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 441100,
+      "lengthIn": 80.2,
+      "widthIn": 114,
+      "heightIn": 84,
+      "thicknessIn": null,
+      "showDimensions": true,
+      "weightOz": 8160
+    },
+    {
+      "sku": "CLM325",
+      "name": "Soar-XL Floor Mat System (138\" x 80\" x 3.25\") - Single Fold",
+      "productLine": "Summit Soar",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 144000,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "weightOz": 0
+    },
+    {
+      "sku": "SSM80100",
+      "name": "Soar Floor Mat System (100\" x 80\" x 3.25\") - Single Fold",
+      "productLine": "Summit Soar",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 104250,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "weightOz": 0
+    },
+    {
+      "sku": "COLU2812",
+      "name": "Soar Base Beam U Column Wrap (30\" x 4.5\" x 3.5\" x 3.5\" x 1.375\")",
+      "productLine": "Summit Soar",
+      "defaultQuantity": 4,
+      "unitPriceMinor": 17850,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "weightOz": 0
+    },
+    {
+      "sku": "SFGPC",
+      "name": "Gusset Plate Padding",
+      "productLine": "Summit Soar",
+      "defaultQuantity": 2,
+      "unitPriceMinor": 17550,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "weightOz": 0
+    },
+    {
+      "sku": "COLW2812",
+      "name": "Soar Column Wrap (60\" x 4.5\" x 4.5\" x 1.375\")",
+      "productLine": "Summit Soar",
+      "defaultQuantity": 2,
+      "unitPriceMinor": 22113,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "weightOz": 0
+    }
+  ],
+  "tiers": [
+    {
+      "slug": "soar-series",
+      "name": "SUMMIT SOAR SERIES",
+      "productLine": "Summit Soar",
+      "tierLevel": 1,
+      "parentSlug": null,
+      "sku": null,
+      "sortOrder": 10
+    },
+    {
+      "slug": "soar-mats-accessories",
+      "name": "SUMMIT SOAR MATS & ACCESSORIES",
+      "productLine": "Summit Soar",
+      "tierLevel": 1,
+      "parentSlug": null,
+      "sku": null,
+      "sortOrder": 100
+    },
+    {
+      "slug": "soar-k-4000",
+      "name": "Summit Soar S1 - Mobile Free-Standing Swing Frame w/ Single Cross Beam",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar-series",
+      "sku": "K-4000",
+      "sortOrder": 20
+    },
+    {
+      "slug": "soar-k-4002",
+      "name": "Summit Soar S2 - Mobile Free-Standing Swing Frame w/ Two Cross Beams",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar-series",
+      "sku": "K-4002",
+      "sortOrder": 30
+    },
+    {
+      "slug": "soar-k-4003",
+      "name": "Summit Soar S3 - Mobile Free-Standing Swing Frame w/ Three Cross Beams",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar-series",
+      "sku": "K-4003",
+      "sortOrder": 40
+    },
+    {
+      "slug": "soar-k-4001",
+      "name": "Summit Soar S1-XL - Mobile Free-Standing Swing Frame w/ Single Cross Beam (Width: 12')",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar-series",
+      "sku": "K-4001",
+      "sortOrder": 50
+    },
+    {
+      "slug": "soar-k-4006",
+      "name": "Summit Soar S2-XL - Mobile Free-Standing Swing Frame w/ Two Cross Beams (Width: 12')",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar-series",
+      "sku": "K-4006",
+      "sortOrder": 60
+    },
+    {
+      "slug": "soar-k-4007",
+      "name": "Summit Soar S3-XL - Mobile Free-Standing Swing Frame w/ Three Cross Beams (Width: 12')",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar-series",
+      "sku": "K-4007",
+      "sortOrder": 70
+    },
+    {
+      "slug": "soar-k-4004",
+      "name": "Summit Soar S1 - Mobile Free-Standing Swing Frame w/ Single Cross Beam (Height: 7')",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar-series",
+      "sku": "K-4004",
+      "sortOrder": 80
+    },
+    {
+      "slug": "soar-k-4005",
+      "name": "Summit Soar S2 - Mobile Free-Standing Swing Frame w/ Single Cross Beam (Height: 7')",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar-series",
+      "sku": "K-4005",
+      "sortOrder": 90
+    },
+    {
+      "slug": "soar-clm325",
+      "name": "Soar-XL Floor Mat System (138\" x 80\" x 3.25\") - Single Fold",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar-mats-accessories",
+      "sku": "CLM325",
+      "sortOrder": 110
+    },
+    {
+      "slug": "soar-ssm80100",
+      "name": "Soar Floor Mat System (100\" x 80\" x 3.25\") - Single Fold",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar-mats-accessories",
+      "sku": "SSM80100",
+      "sortOrder": 120
+    },
+    {
+      "slug": "soar-colu2812",
+      "name": "Soar Base Beam U Column Wrap (30\" x 4.5\" x 3.5\" x 3.5\" x 1.375\")",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar-mats-accessories",
+      "sku": "COLU2812",
+      "sortOrder": 130
+    },
+    {
+      "slug": "soar-sfgpc",
+      "name": "Gusset Plate Padding",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar-mats-accessories",
+      "sku": "SFGPC",
+      "sortOrder": 140
+    },
+    {
+      "slug": "soar-colw2812",
+      "name": "Soar Column Wrap (60\" x 4.5\" x 4.5\" x 1.375\")",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar-mats-accessories",
+      "sku": "COLW2812",
+      "sortOrder": 150
+    }
+  ],
+  "notes": [],
+  "costs": [
+    {
+      "sku": "K-4000",
+      "unitCostMinor": 195000,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-29"
+    },
+    {
+      "sku": "K-4002",
+      "unitCostMinor": 224200,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-29"
+    },
+    {
+      "sku": "K-4003",
+      "unitCostMinor": 253400,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-29"
+    },
+    {
+      "sku": "K-4001",
+      "unitCostMinor": 195000,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-29"
+    },
+    {
+      "sku": "K-4006",
+      "unitCostMinor": 257830,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-29"
+    },
+    {
+      "sku": "K-4007",
+      "unitCostMinor": 291410,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-29"
+    },
+    {
+      "sku": "K-4004",
+      "unitCostMinor": 195000,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-29"
+    },
+    {
+      "sku": "K-4005",
+      "unitCostMinor": 224200,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-29"
+    },
+    {
+      "sku": "CLM325",
+      "unitCostMinor": 96000,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-29"
+    },
+    {
+      "sku": "SSM80100",
+      "unitCostMinor": 69500,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-29"
+    },
+    {
+      "sku": "COLU2812",
+      "unitCostMinor": 10500,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-29"
+    },
+    {
+      "sku": "SFGPC",
+      "unitCostMinor": 13000,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-29"
+    },
+    {
+      "sku": "COLW2812",
+      "unitCostMinor": 12500,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-29"
+    }
+  ],
+  "sourcing": [
+    {
+      "sku": "K-4000",
+      "manufacturer": "Goldberg Brothers",
+      "isPrimary": true
+    },
+    {
+      "sku": "K-4002",
+      "manufacturer": "Goldberg Brothers",
+      "isPrimary": true
+    },
+    {
+      "sku": "K-4003",
+      "manufacturer": "Goldberg Brothers",
+      "isPrimary": true
+    },
+    {
+      "sku": "K-4001",
+      "manufacturer": "Goldberg Brothers",
+      "isPrimary": true
+    },
+    {
+      "sku": "K-4006",
+      "manufacturer": "Goldberg Brothers",
+      "isPrimary": true
+    },
+    {
+      "sku": "K-4007",
+      "manufacturer": "Goldberg Brothers",
+      "isPrimary": true
+    },
+    {
+      "sku": "K-4004",
+      "manufacturer": "Goldberg Brothers",
+      "isPrimary": true
+    },
+    {
+      "sku": "K-4005",
+      "manufacturer": "Goldberg Brothers",
+      "isPrimary": true
+    },
+    {
+      "sku": "CLM325",
+      "manufacturer": "Resilite",
+      "isPrimary": true
+    },
+    {
+      "sku": "SSM80100",
+      "manufacturer": "Resilite",
+      "isPrimary": true
+    },
+    {
+      "sku": "COLU2812",
+      "manufacturer": "Resilite",
+      "isPrimary": true
+    },
+    {
+      "sku": "SFGPC",
+      "manufacturer": "Resilite",
+      "isPrimary": true
+    },
+    {
+      "sku": "COLW2812",
+      "manufacturer": "Resilite",
+      "isPrimary": true
+    }
+  ]
+}

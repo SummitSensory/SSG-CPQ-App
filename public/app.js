@@ -219,7 +219,7 @@
             '<button class="link-btn" id="profBtn" style="margin-bottom:6px;">My profile</button>' +
             '<button class="link-btn" id="pwdBtn" style="margin-bottom:6px;">Change password</button>' +
             '<button class="link-btn" id="logoutBtn">Sign out</button>' +
-            '<div style="text-align:center;font-size:10px;color:#b3b7ac;margin-top:8px;letter-spacing:.04em;">build 24 · default quantities · V-ring roll-up · bill-to</div></div>' +
+            '<div style="text-align:center;font-size:10px;color:#b3b7ac;margin-top:8px;letter-spacing:.04em;">build 27 · Summit Soar builder</div></div>' +
         '</aside>' +
         '<main class="main"><div class="topbar"><div class="eyebrow">Summit Sensory Gym Proposal Management Software</div><h2 id="viewTitle">Dashboard</h2></div>' +
           '<div class="content" id="view"></div></main>' +
@@ -2740,7 +2740,10 @@
       '</div>' +
       // quick add
       '<div class="card" style="margin-bottom:16px;"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin:0 0 10px;"><div class="section-title" style="margin:0;">Add to proposal</div>' +
-          '<button class="btn" id="bAdvSeries" style="width:auto;padding:9px 16px;background:#3d4a55;">⚙ Start from Adventure Series</button></div>' +
+          '<div style="display:flex;flex-direction:column;gap:6px;">' +
+            '<button class="btn" id="bAdvSeries" style="width:auto;padding:9px 16px;background:#3d4a55;">⚙ Start from Adventure Series</button>' +
+            '<button class="btn" id="bSoarSeries" style="width:auto;padding:9px 16px;background:#3d4a55;">⚙ Start from Summit Soar</button>' +
+          '</div></div>' +
         '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
           '<button class="btn" id="bAddProd" style="width:auto;padding:9px 15px;">+ Product line</button>' +
           '<button class="link-btn" id="bAddGroup" style="width:auto;padding:9px 15px;">+ Group section</button>' +
@@ -2905,6 +2908,7 @@
     document.getElementById('bLoadTpl').addEventListener('click', loadTemplate);
     document.getElementById('bAddProd').addEventListener('click', openProductPicker);
     document.getElementById('bAdvSeries').addEventListener('click', openAdventureConfigurator);
+    document.getElementById('bSoarSeries').addEventListener('click', openSoarConfigurator);
     document.getElementById('bAddGroup').addEventListener('click', function () { pb.lines.push({ ref: uid(), lineType: 'GROUP', kind: 'GROUP', name: '', description: '', quantity: 0, rateMinor: 0, group: '', optional: false }); renderBuilder(); });
     document.getElementById('bAddSub').addEventListener('click', function () { pb.lines.push({ ref: uid(), lineType: 'SUBGROUP', kind: 'SUBGROUP', name: '', description: '', quantity: 0, rateMinor: 0, group: '' }); renderBuilder(); });
     var noteSel = document.getElementById('bAddNote');
@@ -3677,6 +3681,217 @@
     var bl = document.getElementById('bLines'); if (bl) bl.scrollIntoView({ block: 'start' });
   }
   function rangeArr(a, b) { var r = []; for (var i = a; i <= b; i++) r.push(i); return r; }
+
+  /* --- Summit Soar configurator ---------------------------------------------
+   * Ported from the "Soar Series Build Logic" block of the product workbook.
+   * Soar is a catalogue pick: choose one or more of the eight K-40xx frames, then
+   * optionally switch on the padding & column-wrap package, whose five lines carry
+   * the workbook's Default Qty values. Server engine: src/proposals/soarSeries.ts.
+   */
+  var soar = null, soarCat = null;
+  var SOAR_FRAME_FALLBACK = [
+    { part: 'K-4000', label: 'S1 — Single Cross Beam', xl: false },
+    { part: 'K-4002', label: 'S2 — Two Cross Beams', xl: false },
+    { part: 'K-4003', label: 'S3 — Three Cross Beams', xl: false },
+    { part: 'K-4001', label: "S1-XL — Single Cross Beam (Width 12')", xl: true },
+    { part: 'K-4006', label: "S2-XL — Two Cross Beams (Width 12')", xl: true },
+    { part: 'K-4007', label: "S3-XL — Three Cross Beams (Width 12')", xl: true },
+    { part: 'K-4004', label: "S1 — Single Cross Beam (Height 7')", xl: false },
+    { part: 'K-4005', label: "S2 — Single Cross Beam (Height 7')", xl: false }
+  ];
+  var SOAR_PAD_FALLBACK = [
+    { key: 'matXlQty', part: 'CLM325', defaultQty: 0, matFor: 'xl', description: 'Soar-XL Floor Mat System (138" x 80" x 3.25") - Single Fold' },
+    { key: 'matStdQty', part: 'SSM80100', defaultQty: 1, matFor: 'std', description: 'Soar Floor Mat System (100" x 80" x 3.25") - Single Fold' },
+    { key: 'uWrapQty', part: 'COLU2812', defaultQty: 4, description: 'Soar Base Beam U Column Wrap' },
+    { key: 'gussetQty', part: 'SFGPC', defaultQty: 2, description: 'Gusset Plate Padding' },
+    { key: 'colWrapQty', part: 'COLW2812', defaultQty: 2, description: 'Soar Column Wrap' }
+  ];
+  function soarFrameList() { return soarCat && soarCat.frames && soarCat.frames.length ? soarCat.frames : SOAR_FRAME_FALLBACK; }
+  function soarPadList() { return soarCat && soarCat.padRows && soarCat.padRows.length ? soarCat.padRows : SOAR_PAD_FALLBACK; }
+
+  function openSoarConfigurator() {
+    soar = {
+      rows: [{ part: 'K-4000', qty: 1 }],
+      padding: false,
+      matXlQty: null, matStdQty: null, uWrapQty: null, gussetQty: null, colWrapQty: null,
+      includeOverview: true
+    };
+    var ov = document.createElement('div');
+    ov.id = 'soarOverlay';
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(32,36,31,.4);z-index:70;overflow:auto;padding:24px 16px;';
+    document.body.appendChild(ov);
+    renderSoar();
+    if (!soarCat) loadSoarCatalog();
+  }
+  function soarClose() { var o = document.getElementById('soarOverlay'); if (o) document.body.removeChild(o); }
+  async function loadSoarCatalog() {
+    try {
+      var r = await authed('/proposals/soar-series/catalog');
+      if (r.ok) soarCat = (await r.json()) || null;
+    } catch (e) {}
+    if (document.getElementById('soarOverlay')) renderSoar();
+  }
+  function soarUnits() { return soar.rows.reduce(function (s, r) { return s + (Number(r.qty) || 0); }, 0); }
+  /** Padding defaults for the current frame mix — mirrors soarPadDefaults() server-side. */
+  function soarPadDefaults() {
+    var byPart = {};
+    soarFrameList().forEach(function (f) { byPart[f.part] = f; });
+    var xl = 0, std = 0;
+    soar.rows.forEach(function (r) {
+      var q = Number(r.qty) || 0; if (q <= 0) return;
+      if (byPart[r.part] && byPart[r.part].xl) xl += q; else std += q;
+    });
+    var units = xl + std || 1, out = {};
+    soarPadList().forEach(function (p) {
+      out[p.key] = p.matFor === 'xl' ? xl : p.matFor === 'std' ? std : (p.defaultQty || 0) * units;
+    });
+    return out;
+  }
+  function soarVal(key, fallback) { return soar[key] == null || soar[key] === '' ? fallback : Math.max(0, Number(soar[key]) || 0); }
+
+  function renderSoar() {
+    var o = document.getElementById('soarOverlay'); if (!o) return;
+    var frames = soarFrameList(), pads = soarPadList(), defs = soarPadDefaults();
+    function sec(title, inner, note) {
+      return '<div style="margin-bottom:18px;">' +
+        '<div style="font-family:\'Newsreader\',serif;font-size:16px;font-weight:600;color:#3d4a55;border-bottom:1px solid #e7e8e3;padding-bottom:6px;margin-bottom:12px;">' + title + '</div>' +
+        inner + (note ? '<div class="muted" style="font-size:11.5px;margin-top:8px;">' + note + '</div>' : '') + '</div>';
+    }
+    var frameRows = soar.rows.map(function (r, i) {
+      var hit = null;
+      frames.forEach(function (f) { if (f.part === r.part) hit = f; });
+      var price = hit && hit.unitPriceMinor ? hit.unitPriceMinor : 0;
+      var missing = hit && hit.inCatalog === false;
+      return '<div style="margin-bottom:9px;">' +
+        '<div style="display:flex;gap:8px;align-items:center;">' +
+          '<select data-sfpart="' + i + '" style="flex:1;min-width:0;padding:8px 10px;border:1px solid #dcded7;border-radius:8px;font-size:14px;background:#fff;">' +
+            frames.map(function (f) {
+              return '<option value="' + esc(f.part) + '"' + (f.part === r.part ? ' selected' : '') + '>' +
+                esc(f.part) + ' — ' + esc(f.label) + (f.unitPriceMinor ? '  ' + fmtMoney(f.unitPriceMinor, 'USD') : '') + '</option>';
+            }).join('') +
+          '</select>' +
+          '<input type="number" min="0" data-sfqty="' + i + '" value="' + r.qty + '" title="Quantity" style="width:74px;flex:0 0 auto;padding:8px 10px;border:1px solid #dcded7;border-radius:8px;font-size:14px;text-align:right;">' +
+          (soar.rows.length > 1
+            ? '<button data-sfdel="' + i + '" style="border:none;background:none;color:#8a8f85;cursor:pointer;font-size:18px;line-height:1;padding:0 4px;flex:0 0 auto;" title="Remove">×</button>'
+            : '<span style="width:22px;flex:0 0 auto;"></span>') +
+        '</div>' +
+        (missing
+          ? '<div style="font-size:11px;color:#b4522e;margin-top:3px;">Not in the catalog yet — import the Soar workbook so this prices.</div>'
+          : (price ? '<div style="font-size:11px;color:#8a8f85;margin-top:3px;">' + fmtMoney(price * (Number(r.qty) || 0), 'USD') + ' extended</div>' : '')) +
+      '</div>';
+    }).join('');
+
+    var padBody = !soar.padding ? '' : '<div style="margin-top:4px;">' +
+      pads.map(function (p) {
+        var isDef = soar[p.key] == null || soar[p.key] === '';
+        var v = soarVal(p.key, defs[p.key]);
+        return '<div style="display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid #f2f3ef;' + (v <= 0 ? 'opacity:.55;' : '') + '">' +
+          '<div style="flex:1;min-width:0;">' +
+            '<div style="font-size:13.5px;font-weight:600;">' + esc(p.description || p.part) + '</div>' +
+            '<div style="font-size:11px;color:#8a8f85;margin-top:2px;"><code>' + esc(p.part) + '</code>' +
+              (p.unitPriceMinor ? ' · ' + fmtMoney(p.unitPriceMinor, 'USD') + ' each' : '') +
+              (p.matFor ? ' · mat for ' + (p.matFor === 'xl' ? "12' frames" : 'standard frames') : '') +
+              (isDef ? ' · <span style="color:#3f9d78;">workbook default</span>' : ' · <span style="color:#b4522e;">overridden</span>') +
+            '</div>' +
+          '</div>' +
+          '<input type="number" min="0" data-sk="' + p.key + '" value="' + v + '" style="width:82px;flex:0 0 auto;padding:8px 10px;border:1px solid #dcded7;border-radius:8px;font-size:14px;text-align:right;">' +
+        '</div>';
+      }).join('') + '</div>';
+
+    o.innerHTML =
+      '<div style="max-width:720px;margin:0 auto;background:#fbfbf9;border-radius:16px;box-shadow:0 24px 60px -20px rgba(32,36,31,.5);overflow:hidden;">' +
+        '<div style="background:#3d4a55;color:#fff;padding:18px 24px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:2;">' +
+          '<div><div style="font-family:\'Newsreader\',serif;font-size:20px;font-weight:600;">Summit Soar Series</div>' +
+          '<div style="font-size:12px;color:#cdd6dc;">Pick the frame, choose padding — the proposal builds itself</div></div>' +
+          '<button id="soarX" style="border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.12);color:#fff;border-radius:8px;padding:7px 12px;cursor:pointer;">Cancel</button>' +
+        '</div>' +
+        '<div style="padding:22px 24px;">' +
+          sec('Swing Frame', frameRows +
+            '<button class="link-btn" id="soarAddFrame" style="width:auto;padding:7px 13px;font-size:12.5px;">+ Add another frame</button>',
+            soarUnits() + ' frame' + (soarUnits() === 1 ? '' : 's') + ' on this proposal. All eight models are K-40xx parts.') +
+          sec('Padding / Column Wraps',
+            '<label style="display:flex;align-items:center;gap:9px;padding:6px 0;cursor:pointer;font-size:14px;">' +
+              '<input type="checkbox" data-sk="padding"' + (soar.padding ? ' checked' : '') + ' style="width:17px;height:17px;flex:0 0 auto;">' +
+              '<span><b style="font-weight:600;">Include the padding package</b>' +
+              '<span class="muted" style="font-size:12px;display:block;">Floor mat, base beam U wraps, gusset plate padding and column wraps</span></span>' +
+            '</label>' + padBody,
+            soar.padding ? 'Quantities are the workbook defaults (4 / 2 / 2 per frame). The mat follows frame width — XL frames take CLM325, everything else SSM80100. Edit any number to override.' : '') +
+          '<label style="display:flex;align-items:center;gap:9px;font-size:13px;color:#5c6157;cursor:pointer;padding:6px 0;">' +
+            '<input type="checkbox" data-sk="includeOverview"' + (soar.includeOverview ? ' checked' : '') + '> Print the Summit Soar overview &amp; Engineer-of-Record copy on each frame line' +
+          '</label>' +
+          '<div style="display:flex;justify-content:space-between;gap:10px;margin-top:16px;padding-top:16px;border-top:1px solid #e7e8e3;">' +
+            '<label style="display:flex;align-items:center;gap:7px;font-size:12.5px;color:#5c6157;"><input type="checkbox" id="soarReplace"> Replace existing lines</label>' +
+            '<button class="btn" id="soarGen" style="width:auto;padding:11px 22px;">Generate proposal lines →</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+
+    o.addEventListener('mousedown', function (e) { if (e.target === o) soarClose(); });
+    document.getElementById('soarX').addEventListener('click', soarClose);
+    document.getElementById('soarGen').addEventListener('click', function () { generateSoarLines(document.getElementById('soarReplace').checked); });
+    document.getElementById('soarAddFrame').addEventListener('click', function () {
+      var used = soar.rows.map(function (r) { return r.part; });
+      var next = frames.filter(function (f) { return used.indexOf(f.part) < 0; })[0] || frames[0];
+      soar.rows.push({ part: next.part, qty: 1 }); renderSoar();
+    });
+    o.querySelectorAll('[data-sfpart]').forEach(function (el) {
+      el.addEventListener('change', function () { soar.rows[Number(el.getAttribute('data-sfpart'))].part = el.value; renderSoar(); });
+    });
+    o.querySelectorAll('[data-sfqty]').forEach(function (el) {
+      el.addEventListener('change', function () { soar.rows[Number(el.getAttribute('data-sfqty'))].qty = Math.max(0, Number(el.value) || 0); renderSoar(); });
+    });
+    o.querySelectorAll('[data-sfdel]').forEach(function (el) {
+      el.addEventListener('click', function () { soar.rows.splice(Number(el.getAttribute('data-sfdel')), 1); renderSoar(); });
+    });
+    o.querySelectorAll('[data-sk]').forEach(function (el) {
+      var key = el.getAttribute('data-sk');
+      el.addEventListener('change', function () {
+        if (el.type === 'checkbox') soar[key] = el.checked;
+        else soar[key] = el.value === '' ? null : Math.max(0, Number(el.value) || 0);
+        renderSoar();
+      });
+    });
+  }
+  function soarAnswers() {
+    var a = {
+      frames: soar.rows.filter(function (r) { return (Number(r.qty) || 0) > 0; })
+        .map(function (r) { return { part: r.part, qty: Number(r.qty) || 0 }; }),
+      padding: !!soar.padding,
+      includeOverview: !!soar.includeOverview
+    };
+    // Only send a quantity the rep actually typed, so the server applies its own
+    // workbook default otherwise and the two can never drift apart.
+    soarPadList().forEach(function (p) {
+      if (soar[p.key] != null && soar[p.key] !== '') a[p.key] = Math.max(0, Number(soar[p.key]) || 0);
+    });
+    return a;
+  }
+  async function generateSoarLines(replace) {
+    var btn = document.getElementById('soarGen');
+    if (btn) { btn.disabled = true; btn.textContent = 'Pricing…'; }
+    var priced = null;
+    try {
+      var r = await authed('/proposals/soar-series/price', { method: 'POST', body: soarAnswers() });
+      if (r.ok) priced = await r.json();
+    } catch (e) {}
+    if (!priced) {
+      if (btn) { btn.disabled = false; btn.textContent = 'Generate proposal lines →'; }
+      alert('Could not reach the pricing engine. Is the server running the latest build?');
+      return;
+    }
+    var out = (priced.lines || []).map(function (l) {
+      return normalizeLine({
+        lineType: l.lineType,
+        kind: l.lineType === 'GROUP' ? 'GROUP' : l.lineType === 'SUBGROUP' ? 'SUBGROUP' : l.lineType === 'NOTE' ? 'NOTE' : 'INCLUDED',
+        name: l.name, sku: l.sku || '', description: l.description || '',
+        quantity: l.quantity == null ? 0 : l.quantity, rateMinor: l.rateMinor || 0,
+        costEach: l.costEach || 0, weightEach: l.weightEach || 0, optional: !!l.optional
+      });
+    });
+    if (replace) pb.lines = out; else pb.lines = pb.lines.concat(out);
+    soarClose();
+    renderBuilder();
+  }
 
   function openLockForm(versionId, user) {
     openModal('Lock to operational order',
