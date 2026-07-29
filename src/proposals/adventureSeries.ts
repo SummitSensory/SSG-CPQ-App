@@ -309,7 +309,10 @@ export function computeAdventureProposal(
   }
   for (const g of otherGroups) { G(g, true); emitExtras(byGroup[g]); }
 
-  const addlHw = n(a.forged) || n(a.swingHanger) || n(a.swivelStandalone) || extras.length;
+  // V-rings must keep this block alive even on their own: each pack answered adds
+  // 10× 6820H-LAE + 10× 6820H-LAF, which are priced inside H-1000, so dropping the
+  // block would silently drop their cost.
+  const addlHw = n(a.forged) || n(a.swingHanger) || n(a.swivelStandalone) || n(a.vRings) || extras.length;
   if (a.brackets || addlHw) {
     G('Hardware', false);
     // The saddle bracket and the eye bolts the configurator asks for by name are

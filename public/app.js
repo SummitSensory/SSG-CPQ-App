@@ -2656,9 +2656,11 @@
     pb = {
       proposalId: proposal.id, versionId: version.id, user: user, orgName: orgName, stdNotes: stdNotes,
       title: proposal.title || '', number: proposal.number || '',
-      meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7), footerNotes: footerNotes },
+      meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', billSameAsShip: !meta.billTo || meta.billTo === (meta.shipTo || orgShipTo || ''), showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7), footerNotes: footerNotes },
       lines: lines,
     };
+    // A new proposal starts with the billing address the same as the shipping one.
+    if (pb.meta.billSameAsShip && !pb.meta.billTo) pb.meta.billTo = pb.meta.shipTo || '';
     renderBuilder();
   }
 
@@ -2725,7 +2727,13 @@
           fieldRow('Project ID', '<input id="mProj" style="' + IN + '" value="' + esc(pb.meta.projectId) + '">') +
           fieldRow('Expiration date', '<input id="mExp" type="date" style="' + IN + '" value="' + esc(pb.meta.expiration) + '">') +
         '</div>' +
-        '<div class="field" style="margin-top:4px;"><label>Bill to</label><textarea id="mBill" rows="2" placeholder="Billing address" style="' + IN + 'resize:vertical;">' + esc(pb.meta.billTo || '') + '</textarea></div>' +
+        '<div class="field" style="margin-top:4px;">' +
+          '<label style="display:flex;align-items:baseline;gap:10px;">Bill to' +
+            '<span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:12px;color:#8a8f85;display:flex;align-items:center;gap:5px;cursor:pointer;">' +
+              '<input type="checkbox" id="mBillSame"' + (pb.meta.billSameAsShip ? ' checked' : '') + '> same as ship to' +
+            '</span>' +
+          '</label>' +
+          '<textarea id="mBill" rows="2" placeholder="Billing address" style="' + IN + 'resize:vertical;">' + esc(pb.meta.billTo || '') + '</textarea></div>' +
         '<div class="field" style="margin-top:4px;"><label>Ship to</label><textarea id="mShip" rows="2" style="' + IN + 'resize:vertical;">' + esc(pb.meta.shipTo) + '</textarea></div>' +
         '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:8px;cursor:pointer;"><input type="checkbox" id="mShowTitle"' + (pb.meta.showTitle !== false ? ' checked' : '') + '> Show the proposal title on the customer proposal</label>' +
         '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:8px;cursor:pointer;"><input type="checkbox" id="mShowProj"' + (pb.meta.showProjectId ? ' checked' : '') + '> Show Project ID on the customer proposal</label>' +
@@ -2930,9 +2938,28 @@
     var mpd = document.getElementById('mPropDate'); if (mpd) mpd.addEventListener('input', function () { pb.meta.proposalDate = mpd.value; pb.meta.expiration = addDays(mpd.value, 7); var me2 = document.getElementById('mExp'); if (me2) me2.value = pb.meta.expiration; });
     var msp = document.getElementById('mShowProj'); if (msp) msp.addEventListener('change', function () { pb.meta.showProjectId = msp.checked; });
     var mst = document.getElementById('mShowTitle'); if (mst) mst.addEventListener('change', function () { pb.meta.showTitle = mst.checked; });
-    var mb = document.getElementById('mBill'); if (mb) mb.addEventListener('input', function () { pb.meta.billTo = mb.value; });
+    // Bill to mirrors ship to until someone types in it. Editing it is what breaks
+    // the link — no mode to switch, and the text stays whatever was typed.
+    var mb = document.getElementById('mBill'), mbs = document.getElementById('mBillSame');
+    if (mb) mb.addEventListener('input', function () {
+      pb.meta.billTo = mb.value;
+      if (pb.meta.billSameAsShip && mb.value !== (pb.meta.shipTo || '')) {
+        pb.meta.billSameAsShip = false;
+        if (mbs) mbs.checked = false;
+      }
+    });
+    if (mbs) mbs.addEventListener('change', function () {
+      pb.meta.billSameAsShip = mbs.checked;
+      if (mbs.checked) { pb.meta.billTo = pb.meta.shipTo || ''; if (mb) mb.value = pb.meta.billTo; }
+    });
     var me = document.getElementById('mExp'); if (me) me.addEventListener('input', function () { pb.meta.expiration = me.value; });
-    var ms = document.getElementById('mShip'); if (ms) ms.addEventListener('input', function () { pb.meta.shipTo = ms.value; });
+    var ms = document.getElementById('mShip');
+    if (ms) ms.addEventListener('input', function () {
+      pb.meta.shipTo = ms.value;
+      // Keep meta.billTo resolved at all times, so the preview, PDF, template and
+      // save path need to know nothing about the link.
+      if (pb.meta.billSameAsShip) { pb.meta.billTo = ms.value; if (mb) mb.value = ms.value; }
+    });
     var mtx = document.getElementById('mTax'); if (mtx) mtx.addEventListener('change', function () { pb.meta.taxAmountMinor = d2m(mtx.value); renderBuilder(); });
     var mdisc = document.getElementById('mDisc'); if (mdisc) mdisc.addEventListener('change', function () { pb.meta.discountPct = parseFloat(mdisc.value) || 0; renderBuilder(); });
     var msf = document.getElementById('mStructFreight'); if (msf) msf.addEventListener('change', function () { pb.meta.structureFreightMinor = d2m(msf.value); renderBuilder(); });
@@ -3312,9 +3339,13 @@
     forged: '6820H-LP',
     swivelStandalone: 'SSG-SA-SWIVEL-EYE',
     swingHanger: 'B0C4Y8XSNB',
-    vRings: ['6820H-LAE', '6820H-LAF'],
+    vRings: 'B07MB985GW',
     carabiner: 'B0CDVDZSB1',
     webbingSling: '6820H-LAN',
+  };
+  /** Parts a quantity also pulls into the H-1000 kit, per unit answered. */
+  var ADV_HW_ROLLUP = {
+    vRings: [{ part: '6820H-LAE', per: 10 }, { part: '6820H-LAF', per: 10 }],
   };
   /** Parts the CATALOG has pre-approved for substitution. Null until loaded. */
   var advOverridable = null;
@@ -3423,7 +3454,15 @@
           : ' · applied') +
         '</div>';
     }
-    function hwNum(key, label, min, max, hint) { return '<div>' + num(key, label, min, max, '', hint) + hwDefaultRow(key) + hwPartRow(key) + '</div>'; }
+    /** What a quantity adds behind the visible line, priced inside H-1000. */
+    function hwRollRow(key) {
+      var r = ADV_HW_ROLLUP[key]; if (!r) return '';
+      var q = Number(adv[key]) || 0; if (q <= 0) return '';
+      return '<div style="font-size:10.5px;color:#8a8f85;margin-top:3px;">Also adds ' +
+        r.map(function (x) { return (q * x.per) + '× <code>' + esc(x.part) + '</code>'; }).join(' + ') +
+        ' into the H-1000 hardware kit</div>';
+    }
+    function hwNum(key, label, min, max, hint) { return '<div>' + num(key, label, min, max, '', hint) + hwDefaultRow(key) + hwPartRow(key) + hwRollRow(key) + '</div>'; }
     var grid = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;';
     var stack = 'display:flex;flex-direction:column;gap:10px;';
 
