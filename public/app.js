@@ -111,10 +111,15 @@
     if (!r.ok) return false;
     var d = await r.json(); setTokens(d.accessToken, d.refreshToken); return true;
   }
-  // Auth'd request with one transparent refresh-retry on 401.
+  // Auth'd request with one transparent refresh-retry on 401. If the refresh itself
+  // fails the session is genuinely dead — drop the tokens and show the login screen
+  // rather than handing a 401 back to a caller that will render an empty page.
   async function authed(path, opts) {
     var r = await api(path, opts);
-    if (r.status === 401 && (await refresh())) r = await api(path, opts);
+    if (r.status === 401) {
+      if (await refresh()) r = await api(path, opts);
+      else { clearTokens(); renderLogin('Your session expired. Please sign in again.'); return r; }
+    }
     return r;
   }
 
@@ -219,7 +224,7 @@
             '<button class="link-btn" id="profBtn" style="margin-bottom:6px;">My profile</button>' +
             '<button class="link-btn" id="pwdBtn" style="margin-bottom:6px;">Change password</button>' +
             '<button class="link-btn" id="logoutBtn">Sign out</button>' +
-            '<div style="text-align:center;font-size:10px;color:#b3b7ac;margin-top:8px;letter-spacing:.04em;">build 27 · Summit Soar builder</div></div>' +
+            '<div style="text-align:center;font-size:10px;color:#b3b7ac;margin-top:8px;letter-spacing:.04em;">build 28 · Summit Soar · favicon · session expiry</div></div>' +
         '</aside>' +
         '<main class="main"><div class="topbar"><div class="eyebrow">Summit Sensory Gym Proposal Management Software</div><h2 id="viewTitle">Dashboard</h2></div>' +
           '<div class="content" id="view"></div></main>' +
