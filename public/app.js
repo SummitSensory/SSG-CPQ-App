@@ -615,7 +615,7 @@
         '<input id="itSearch" placeholder="Search part #, name, category or manufacturer…" value="' + esc(itemState.q) + '" style="flex:1;min-width:240px;max-width:420px;padding:10px 13px;border:1px solid #dcded7;border-radius:10px;font-size:14px;background:#fff;outline:none;">' +
         (admin ? '<div style="margin-left:auto;display:flex;gap:8px;"><button class="link-btn" id="itImport" style="width:auto;padding:10px 15px;">Import Excel / CSV</button><button class="btn" id="itNew" style="width:auto;padding:10px 17px;">New product</button></div>' : '') +
       '</div>' +
-      '<div style="font-size:12px;color:#8a8f85;margin-bottom:10px;">Every product on one line — name, category, manufacturer, cost, price and weight. Edit any cell and it saves as you leave the field. These prices and weights are what the Adventure Series engine and the proposal builder multiply against.</div>' +
+      '<div style="font-size:12px;color:#8a8f85;margin-bottom:10px;">Every product on one line — name, category, manufacturer, cost, price and weight. Edit any cell and it saves as you leave the field. These prices and weights are what the Adventure Series engine and the proposal builder multiply against. <b>Override OK</b> lets a rep substitute that part number in the Adventure Series builder — leave it off and the part is fixed.</div>' +
       '<div id="itList"><div class="muted" style="padding:24px;">Loading…</div></div>';
     var s = document.getElementById('itSearch'), t;
     s.addEventListener('input', function () { clearTimeout(t); t = setTimeout(function () { itemState.q = s.value.trim(); itemState.page = 1; loadItems(user); }, 300); });
@@ -720,6 +720,7 @@
     { key: 'weightLbs', label: 'Weight (lb)', w: 96, type: 'num', align: 'right' },
     { key: 'record', label: 'Record', w: 132, type: 'enum', options: [['Product + priced', 'Product + priced'], ['Product only', 'Product only'], ['Priced only', 'Priced only']] },
     { key: 'statusLabel', label: 'Status', w: 118, type: 'enum' },
+    { key: 'ovrLabel', label: 'Override OK', w: 104, type: 'enum', options: [['Yes', 'Yes'], ['No', 'No']], align: 'center' },
     { key: '', label: '', w: 96 },
   ];
 
@@ -751,6 +752,7 @@
         // One readable status across both records: the product workflow when there
         // is a Product, otherwise the flat SKU's active flag.
         row.statusLabel = k.productStatus ? titleCase(k.productStatus) : (k.active === false ? 'Inactive' : 'Active');
+        row.ovrLabel = k.overrideAllowed ? 'Yes' : 'No';
         row.isActive = k.productStatus ? k.productStatus === 'ACTIVE' : k.active !== false;
         return row;
       });
@@ -797,6 +799,11 @@
         cell(admin ? txt(k.part, 'weightLbs', k.weightLbs, NUM) : String(k.weightLbs), 'text-align:right;') +
         cell(where, 'white-space:nowrap;') +
         cell('<span style="display:inline-block;background:' + (k.isActive ? '#eaf3ee' : '#f2f3ef') + ';border:1px solid ' + (k.isActive ? '#cfe3d7' : '#dcded7') + ';color:' + (k.isActive ? '#2f7d5d' : '#8a8f85') + ';border-radius:999px;padding:2px 9px;font-size:11.5px;font-weight:600;white-space:nowrap;">' + esc(k.statusLabel) + '</span>', 'white-space:nowrap;') +
+        // Pre-approval to substitute this part number in the Adventure Series
+        // builder. Off unless an admin says otherwise.
+        cell(admin
+          ? '<input type="checkbox" class="itFlag" data-part="' + esc(k.part) + '"' + (k.overrideAllowed ? ' checked' : '') + ' title="Allow reps to substitute this part number in the Adventure Series builder" style="width:16px;height:16px;cursor:pointer;">'
+          : (k.overrideAllowed ? '<span style="font-size:12px;color:#2f7d5d;font-weight:600;">Yes</span>' : '<span style="color:#b6bab1;">—</span>'), 'text-align:center;') +
         cell(admin ? '<div style="display:flex;gap:5px;justify-content:flex-end;">' +
           '<button class="itToggle" data-part="' + esc(k.part) + '" data-to="' + (k.isActive ? 'false' : 'true') + '" title="' + (k.isActive ? 'Stop offering this part on new proposals' : 'Offer this part again') + '" style="border:1px solid #dcded7;background:#fff;border-radius:7px;padding:5px 9px;font-size:11.5px;color:#3d4a55;cursor:pointer;white-space:nowrap;">' + (k.isActive ? 'Deactivate' : 'Activate') + '</button>' +
           '<button class="itDel" data-part="' + esc(k.part) + '" title="Delete this part" style="border:1px solid #e0e1db;background:#fff;border-radius:7px;padding:5px 8px;font-size:11.5px;color:#9c3327;cursor:pointer;">✕</button></div>' : '', 'text-align:right;') + '</tr>';
@@ -808,7 +815,7 @@
         '<colgroup>' + IT_COLS.map(function (c) { return '<col' + (c.w ? ' style="width:' + c.w + 'px;"' : '') + '>'; }).join('') + '</colgroup>' +
         '<thead><tr>' + colHead(IT_COLS, itemState) + '</tr>' +
         '<tr>' + IT_COLS.map(function (c) { return filterCell('colFilter', c, all, itemState.filters); }).join('') + '</tr></thead>' +
-        '<tbody>' + (rows || '<tr><td colspan="11" style="padding:28px;text-align:center;color:#8a8f85;">' + (all.length ? 'No parts match these filters.' : 'Nothing in the catalog yet. Import a sheet or add a product.') + '</td></tr>') + '</tbody></table></div>' +
+        '<tbody>' + (rows || '<tr><td colspan="12" style="padding:28px;text-align:center;color:#8a8f85;">' + (all.length ? 'No parts match these filters.' : 'Nothing in the catalog yet. Import a sheet or add a product.') + '</td></tr>') + '</tbody></table></div>' +
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;color:#82877d;font-size:13px;flex-wrap:wrap;gap:8px;">' +
         '<span>' + rowsData.length.toLocaleString() + (activeFilters ? ' of ' + all.length.toLocaleString() : '') + ' items' +
           (activeFilters ? ' · <button id="itClearF" class="link-btn" style="width:auto;padding:4px 10px;display:inline-block;">Clear filters</button>' : '') + '</span>' +
@@ -842,6 +849,22 @@
         }
         if (f === 'unitCostMinor' || f === 'unitPriceMinor') drawItems(user);
         setTimeout(function () { el.style.borderColor = f === 'unitCostMinor' ? '#e4dfd0' : '#dcded7'; }, 900);
+      });
+    });
+    box.querySelectorAll('.itFlag').forEach(function (el) {
+      el.addEventListener('change', async function () {
+        var part = el.getAttribute('data-part'), to = el.checked;
+        el.disabled = true;
+        var r = await authed('/catalog/items/' + encodeURIComponent(part), { method: 'PATCH', body: { overrideAllowed: to } });
+        el.disabled = false;
+        if (!r.ok) {
+          el.checked = !to;
+          var m0 = ''; try { m0 = ((await r.json()) || {}).message || ''; } catch (e2) {}
+          alert(m0 || 'Could not save that change (' + r.status + '). If this says the column is missing, migration 0024 has not been deployed.');
+          return;
+        }
+        var row0 = (itemState.rows || []).filter(function (x) { return x.part === part; })[0];
+        if (row0) { row0.overrideAllowed = to; row0.ovrLabel = to ? 'Yes' : 'No'; }
       });
     });
     box.querySelectorAll('.itToggle').forEach(function (b) {

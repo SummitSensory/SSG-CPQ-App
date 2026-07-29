@@ -19,6 +19,33 @@ import { ValidationError, ConflictError, NotFoundError } from '../lib/errors.js'
 
 const slugify = (s: string) => s.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 
+/**
+ * `overrideAllowed` arrived in migration 0024. Read it optionally so the catalog
+ * still loads if the code is deployed before the migration — a missing column
+ * degrades to "nothing is overridable" rather than a P2022 on the whole list.
+ */
+let skuHasOverrideFlag = true;
+const SKU_COLS = {
+  id: true, part: true, description: true, category: true, manufacturer: true,
+  unitPriceMinor: true, unitCostMinor: true, weightLbs: true, proposalGroup: true, active: true,
+} as const;
+type SkuRow = {
+  id: string; part: string; description: string; category: string | null; manufacturer: string | null;
+  unitPriceMinor: number; unitCostMinor: number; weightLbs: number; proposalGroup: string | null;
+  active: boolean; overrideAllowed?: boolean;
+};
+async function listSkus(): Promise<SkuRow[]> {
+  if (skuHasOverrideFlag) {
+    try {
+      return await prisma.sku.findMany({ select: { ...SKU_COLS, overrideAllowed: true }, orderBy: { part: 'asc' } }) as SkuRow[];
+    } catch (e) {
+      if ((e as { code?: string }).code !== 'P2022') throw e;
+      skuHasOverrideFlag = false;
+    }
+  }
+  return await prisma.sku.findMany({ select: SKU_COLS, orderBy: { part: 'asc' } }) as SkuRow[];
+}
+
 const ItemPatch = z.object({
   name: z.string().trim().min(1).max(400).optional(),
   category: z.string().trim().max(120).nullish(),
@@ -28,6 +55,7 @@ const ItemPatch = z.object({
   weightLbs: z.number().nonnegative().optional(),
   proposalGroup: z.string().trim().max(120).nullish(),
   active: z.boolean().optional(),
+  overrideAllowed: z.boolean().optional(),
 });
 
 export interface CatalogItem {
@@ -41,6 +69,8 @@ export interface CatalogItem {
   weightLbs: number;
   proposalGroup: string;
   active: boolean;
+  /** Pre-approved for part-number substitution in the Adventure Series builder. */
+  overrideAllowed: boolean;
   skuId: string | null;
   productId: string | null;
   productStatus: string | null;
@@ -59,7 +89,7 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
     const { q = '', page = '1', pageSize = '100' } = req.query as Record<string, string>;
     const term = q.trim();
     const [skus, products, sourcing, cats, costs] = await Promise.all([
-      prisma.sku.findMany({ orderBy: { part: 'asc' } }),
+      listSkus(),
       prisma.product.findMany({
         select: { id: true, sku: true, name: true, status: true, categoryId: true, weightOz: true },
         orderBy: { sku: 'asc' },
@@ -83,6 +113,7 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
         part: s.part, name: s.description, category: s.category || '', categoryOptions: false,
         manufacturer: s.manufacturer || '', unitPriceMinor: s.unitPriceMinor, unitCostMinor: s.unitCostMinor,
         weightLbs: s.weightLbs, proposalGroup: s.proposalGroup || '', active: s.active,
+        overrideAllowed: s.overrideAllowed === true,
         skuId: s.id, productId: null, productStatus: null,
       });
     }
@@ -106,7 +137,7 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
           part: p.sku, name: p.name, category: productCategory, categoryOptions: true,
           manufacturer: mfr, unitPriceMinor: 0, unitCostMinor: latestCost[p.id] || 0,
           weightLbs: p.weightOz ? Math.round((p.weightOz / 16) * 1000) / 1000 : 0,
-          proposalGroup: '', active: p.status === 'ACTIVE',
+          proposalGroup: '', active: p.status === 'ACTIVE', overrideAllowed: false,
           skuId: null, productId: p.id, productStatus: p.status,
         });
       }
@@ -143,6 +174,7 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
 
     const needsSku = d.unitPriceMinor !== undefined || d.unitCostMinor !== undefined || d.weightLbs !== undefined ||
       d.proposalGroup !== undefined || d.active !== undefined || d.manufacturer !== undefined ||
+      d.overrideAllowed !== undefined ||
       (d.name !== undefined && !product) || (d.category !== undefined && !product);
     if (!sku && needsSku) {
       sku = await prisma.sku.create({
@@ -188,6 +220,7 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
       if (d.weightLbs !== undefined) money.weightLbs = d.weightLbs;
       if (d.proposalGroup !== undefined) money.proposalGroup = d.proposalGroup || null;
       if (d.active !== undefined) money.active = d.active;
+      if (d.overrideAllowed !== undefined) money.overrideAllowed = d.overrideAllowed;
       if (Object.keys(money).length) await prisma.sku.update({ where: { id: sku.id }, data: money });
     }
 
