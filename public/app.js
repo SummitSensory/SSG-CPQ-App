@@ -224,7 +224,7 @@
             '<button class="link-btn" id="profBtn" style="margin-bottom:6px;">My profile</button>' +
             '<button class="link-btn" id="pwdBtn" style="margin-bottom:6px;">Change password</button>' +
             '<button class="link-btn" id="logoutBtn">Sign out</button>' +
-            '<div style="text-align:center;font-size:10px;color:#b3b7ac;margin-top:8px;letter-spacing:.04em;">build 31 · Summit Soar · favicon · session expiry</div></div>' +
+            '<div style="text-align:center;font-size:10px;color:#b3b7ac;margin-top:8px;letter-spacing:.04em;">build 32 · user create fix · password reset</div></div>' +
         '</aside>' +
         '<main class="main"><div class="topbar"><div class="eyebrow">Summit Sensory Gym Proposal Management Software</div><h2 id="viewTitle">Dashboard</h2></div>' +
           '<div class="content" id="view"></div></main>' +
@@ -4921,11 +4921,18 @@
         return '<tr>' + td('<b style="font-weight:600;">' + esc(u.name || '—') + '</b>') + td(esc(u.email)) +
           td('<select data-id="' + u.id + '" class="roleSel" style="padding:6px 9px;border:1px solid #dcded7;border-radius:8px;font-size:13px;background:#fff;">' + ROLES.map(function (rl) { return '<option value="' + rl + '"' + (rl === u.role ? ' selected' : '') + '>' + titleCase(rl) + '</option>'; }).join('') + '</select>') +
           td(u.isActive ? '<span class="chip">Active</span>' : '<span class="muted">Inactive</span>') +
-          td(u.isActive ? '<button class="link-btn" data-deact="' + u.id + '" style="width:auto;padding:6px 11px;">Deactivate</button>' : '') + '</tr>';
+          td('<div style="display:flex;gap:6px;justify-content:flex-end;">' +
+            '<button class="link-btn" data-pwd="' + u.id + '" data-email="' + esc(u.email) + '" style="width:auto;padding:6px 11px;">Reset password</button>' +
+            (u.isActive
+              ? '<button class="link-btn" data-deact="' + u.id + '" style="width:auto;padding:6px 11px;">Deactivate</button>'
+              : '<button class="link-btn" data-react="' + u.id + '" style="width:auto;padding:6px 11px;">Reactivate</button>') +
+          '</div>') + '</tr>';
       }).join('');
       box.innerHTML = tableShell(['Name', 'Email', 'Role', 'Status', ''], rows, 5, 'No users.');
       document.querySelectorAll('.roleSel').forEach(function (sel) { sel.addEventListener('change', async function () { var r2 = await authed('/admin/users/' + sel.getAttribute('data-id') + '/role', { method: 'PATCH', body: { role: sel.value } }); if (!r2.ok) { alert('Could not change role (' + r2.status + ').'); loadUsers(); } }); });
       document.querySelectorAll('[data-deact]').forEach(function (bt) { bt.addEventListener('click', async function () { if (!confirm('Deactivate this user?')) return; var r2 = await authed('/admin/users/' + bt.getAttribute('data-deact') + '/deactivate', { method: 'PATCH', body: {} }); if (!r2.ok) alert('Could not deactivate.'); loadUsers(); }); });
+      document.querySelectorAll('[data-react]').forEach(function (bt) { bt.addEventListener('click', async function () { var r2 = await authed('/admin/users/' + bt.getAttribute('data-react') + '/reactivate', { method: 'PATCH', body: {} }); if (!r2.ok) alert('Could not reactivate.'); loadUsers(); }); });
+      document.querySelectorAll('[data-pwd]').forEach(function (bt) { bt.addEventListener('click', function () { openResetPasswordForm(bt.getAttribute('data-pwd'), bt.getAttribute('data-email')); }); });
     } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
   }
   function openUserForm() {
@@ -4939,9 +4946,29 @@
         var pass = document.getElementById('uPass').value; if (pass.length < 12) return showErr('Password must be at least 12 characters.');
         var body = { email: email, name: document.getElementById('uName').value.trim() || undefined, password: pass, role: document.getElementById('uRole').value };
         var r = await authed('/admin/users', { method: 'POST', body: body });
-        if (!r.ok) return showErr('Could not create (' + r.status + ').');
+        if (!r.ok) return showErr(await serverMessage(r, 'Could not create (' + r.status + ').'));
         close(); loadUsers();
       });
+  }
+
+  /** Read the API's error message so the user sees the cause, not just a status code. */
+  async function serverMessage(r, fallback) {
+    try { var d = await r.json(); if (d && d.message) return d.message; } catch (e) {}
+    return fallback;
+  }
+
+  /** Admin-set password reset for a locked-out user. Revokes their sessions. */
+  function openResetPasswordForm(id, email) {
+    openModal('Reset password',
+      '<div class="muted" style="font-size:12.5px;margin-bottom:12px;">Sets a new password for <b>' + esc(email) + '</b> and signs them out everywhere. Give them the new password directly — they can change it themselves from Change password once signed in.</div>' +
+      fieldRow('New password', '<input id="rPass" style="' + IN + '" placeholder="at least 12 characters" required>'),
+      async function (close, showErr) {
+        var pass = document.getElementById('rPass').value;
+        if (pass.length < 12) return showErr('Password must be at least 12 characters.');
+        var r = await authed('/admin/users/' + id + '/reset-password', { method: 'POST', body: { password: pass } });
+        if (!r.ok) return showErr(await serverMessage(r, 'Could not reset (' + r.status + ').'));
+        close(); loadUsers();
+      }, 'Reset password');
   }
 
   function openProfileForm(user) {
