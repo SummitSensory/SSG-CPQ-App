@@ -5,9 +5,17 @@
   "functions": {
     "api/index.ts": {
       "maxDuration": 30
+    },
+    "api/render.ts": {
+      "memory": 2048,
+      "maxDuration": 60
     }
   },
   "rewrites": [
+    {
+      "source": "/render/(.*)",
+      "destination": "/api/render"
+    },
     {
       "source": "/(.*)",
       "destination": "/api/index"
