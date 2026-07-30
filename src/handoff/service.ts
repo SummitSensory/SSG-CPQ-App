@@ -251,7 +251,10 @@ export async function createAcceptedOrder(versionId: string, approval: CustomerA
           },
         },
         requirements: { create: defaultRequirements().map((r) => ({ category: r.category as RequirementCategory, title: r.title, createdById: userId })) },
-        procurement: { create: procurement.map((p, i) => { const ref = refs[i] ?? EMPTY_REF; return { productId: p.productId, sku: ref.sku, name: p.name, quantity: p.quantity, vendor: ref.vendor, unitCostMinor: ref.unitCostMinor, unitWeightLbs: ref.unitWeightLbs }; }) },
+        // A kit component carries its own cost and weight from the breakdown, because
+        // a fastener is often not in the SKU master at all and would otherwise land on
+        // the BOM at $0.00 and 0 lb.
+        procurement: { create: procurement.map((p, i) => { const ref = refs[i] ?? EMPTY_REF; return { productId: p.productId, sku: ref.sku ?? p.sku, name: p.name, quantity: p.quantity, vendor: ref.vendor, unitCostMinor: ref.unitCostMinor ?? p.unitCostMinor ?? null, unitWeightLbs: ref.unitWeightLbs ?? p.unitWeightLbs ?? null, isHardwareComponent: !!p.isHardwareComponent, kitSku: p.kitSku ?? null }; }) },
         tasks: { create: defaultTasks(depositDue > 0n).map((t) => ({ title: t.title, assigneeRole: (t.assigneeRole as Role) ?? null, category: (t.category as RequirementCategory) ?? null, createdById: userId })) },
         events: { create: { action: 'order.locked', actorId: userId, detail: { number, acceptedVersion: version.version, integrityHash } as object } },
       },
@@ -350,8 +353,16 @@ export async function getOrder(id: string) {
     : [];
   const urlByPart = new Map(skus.map((s) => [s.part, s.productUrl]));
 
+  // The customer name leads every BOM filename and email subject, so it travels
+  // with the order rather than being fetched again by each caller.
+  const org = await prisma.organization.findUnique({
+    where: { id: order.organizationId },
+    select: { name: true },
+  });
+
   return {
     ...order,
+    customerName: org?.name ?? '',
     procurement: order.procurement.map((p) => ({ ...p, productUrl: (p.sku && urlByPart.get(p.sku)) || null })),
     requirements: order.requirements.map((r) => ({ ...r, updatedByName: r.updatedById ? nameById.get(r.updatedById) ?? null : null })),
     tasks: order.tasks.map((t) => ({ ...t, updatedByName: t.updatedById ? nameById.get(t.updatedById) ?? null : null })),

@@ -1,4 +1,4 @@
-import { buildBom, type BomDocument } from './bom.js';
+import { buildBom, streetLine, type BomDocument } from './bom.js';
 import { prisma } from '../lib/prisma.js';
 
 /**
@@ -33,6 +33,7 @@ async function sectionExtras(orderId: string, vendor: string) {
     notes: section.notes ?? '',
     jobName: section.jobName ?? '',
     status: section.status,
+    showPowderColor: section.showPowderColor,
     answers: section.answers
       .map((a) => {
         let value = a.value ?? '';
@@ -68,7 +69,8 @@ export interface BomModel {
   meta: Array<{ label: string; value: string }>;
   questions: Array<{ label: string; value: string }>;
   columns: string[];
-  rows: string[][];
+  /** Products in product-tree order, then a Hardware block. */
+  groups: Array<{ title: string; rows: string[][] }>;
   totals: string[];
   notes: string;
   footer: string;
@@ -87,14 +89,17 @@ async function buildModel(
   // A vendor section is the document of record once one exists; the order-level
   // header is only the default it was seeded from.
   const jobName = extras?.jobName || doc.order.jobName;
-  const submittedOn = dateOnly(extras ? extras.submittedOn : doc.order.submittedOn);
+  // An unsubmitted section prints TODAY. It was printing an em dash, which on a
+  // vendor's desk reads as "no date given" — the sheet is being sent today, so
+  // today is the honest answer. Confirming the section is what persists it.
+  const submittedOn =
+    dateOnly(extras ? extras.submittedOn : doc.order.submittedOn) || new Date().toISOString().slice(0, 10);
   const deliveryType = extras?.deliveryType || doc.order.deliveryType;
   const shipmentQuote = extras?.shipmentQuote || doc.order.shipmentQuote;
   const notes = extras?.notes || doc.order.notes;
 
   const c = doc.company;
   const v = doc.vendor;
-  const cu = doc.customer;
   const t = doc.totals;
 
   const addr = (...parts: Array<string | undefined>) => parts.filter(Boolean).map(String);
@@ -103,7 +108,7 @@ async function buildModel(
 
   const meta: Array<{ label: string; value: string }> = [
     { label: 'Job', value: jobName || '—' },
-    { label: 'Submission date', value: submittedOn || '—' },
+    { label: 'Submission date', value: submittedOn },
     { label: 'Delivery', value: deliveryType || '—' },
     { label: 'Shipment quote', value: shipmentQuote || 'TBD' },
   ];
@@ -112,29 +117,56 @@ async function buildModel(
   if (v?.leadTimeDays != null) meta.push({ label: 'Lead time', value: `${v.leadTimeDays} days` });
   // Steel weight only means something when a steel fabricator is involved; on a
   // distributor's sheet it would always read 0 and invite the wrong conclusion.
-  if (t.steelWeightLbs > 0) meta.push({ label: 'Total steel weight (lb)', value: String(t.steelWeightLbs) });
+  if (t.steelWeightLbs > 0) meta.push({ label: 'Total steel weight (lb)', value: t.steelWeightLbs.toFixed(2) });
 
+  // The powder-colour column is opt-in per vendor. It was on every sheet, where for
+  // most vendors it was a column of dashes; a section that has a colour on it keeps
+  // the column regardless, so information is never dropped silently.
+  const showColor = all
+    ? doc.lines.some((l) => l.powderColor)
+    : (extras?.showPowderColor ?? false) || doc.lines.some((l) => l.powderColor);
+
+  // Status and per-line Notes are gone. Status is our internal purchasing state and
+  // means nothing to the vendor reading the sheet; Notes was a narrow column that
+  // wrapped badly and pushed the table past the page. Any line note now reads in the
+  // notes block at the bottom, prefixed with its part number, where it has room.
   const columns = [
     ...(all ? ['Vendor'] : []),
-    'Line #', 'Description', 'Qty', 'Powder color', 'Weight (lb)', 'Cost each', 'Total cost', 'Notes', 'Status',
+    'Line #', 'Description', 'Qty',
+    ...(showColor ? ['Powder color'] : []),
+    'Weight (lb)', 'Cost each', 'Total cost',
   ];
 
-  const rows = doc.lines.map((l) => [
+  // Weight always carries two decimals. "12.5" and "12" on the same sheet read as
+  // different precisions of measurement; freight is quoted on the total, so the
+  // column has to add up visibly.
+  const lbs = (n: number): string => (Number(n) || 0).toFixed(2);
+
+  const rowOf = (l: (typeof doc.lines)[number]): string[] => [
     ...(all ? [l.vendor] : []),
     l.lineNo,
     l.name,
     String(l.quantity),
-    l.powderColor || '—',
-    String(l.extendedWeightLbs || 0),
+    ...(showColor ? [l.powderColor || '—'] : []),
+    lbs(l.extendedWeightLbs),
     money(l.unitCostMinor),
     money(l.extendedCostMinor),
-    l.vendorNotes || '',
-    l.sourced ? 'Ordered' : 'Pending',
-  ]);
+  ];
+
+  // Two blocks: products in tree order, then hardware. Hardware last because it is
+  // consumed last and because a hundred fasteners in the middle of the sheet buries
+  // the parts the shop is actually looking for.
+  const products = doc.lines.filter((l) => !l.isHardware);
+  const hardware = doc.lines.filter((l) => l.isHardware);
+  const groups: Array<{ title: string; rows: string[][] }> = [];
+  if (products.length) groups.push({ title: '', rows: products.map(rowOf) });
+  if (hardware.length) groups.push({ title: 'Hardware', rows: hardware.map(rowOf) });
 
   const totals = [
     ...(all ? [''] : []),
-    '', 'Total', String(t.unitCount), '', String(t.totalWeightLbs), '', money(t.extendedCostMinor), '', '',
+    '', 'Total', String(t.unitCount),
+    ...(showColor ? [''] : []),
+    lbs(t.totalWeightLbs), '', money(t.extendedCostMinor),
   ];
 
   return {
@@ -146,20 +178,20 @@ async function buildModel(
       name: c.name,
       lines: addr(c.addressLine1, cityLine(c.city, c.region, c.postalCode), [c.phone, c.email].filter(Boolean).join(' · ')),
     },
+    // Ship from / ship to only. Bill-to was removed: it repeated the ship-to block
+    // verbatim on every sheet, and a vendor invoices Summit, never the customer —
+    // printing the customer under "Bill to" on a purchase document is actively
+    // misleading.
     addresses: [
       {
         title: 'Ship from',
         lines: v
-          ? addr(v.name, v.addressLine1, v.addressLine2, cityLine(v.city, v.region, v.postalCode), v.contactName, v.contactPhone, v.contactEmail)
+          ? addr(v.name, streetLine(v.addressLine1, v.addressLine2), cityLine(v.city, v.region, v.postalCode), v.contactName, v.contactPhone, v.contactEmail)
           : ['All vendors'],
       },
       {
         title: 'Ship to',
         lines: addr(doc.shipTo.name, ...doc.shipTo.lines, doc.shipTo.contactName, doc.shipTo.phone, doc.shipTo.email),
-      },
-      {
-        title: 'Bill to',
-        lines: addr(cu.name, cu.addressLine1, cu.addressLine2, cityLine(cu.city, cu.region, cu.postalCode), cu.contactName, cu.contactPhone, cu.contactEmail),
       },
     ],
     meta,
@@ -167,14 +199,22 @@ async function buildModel(
     columns,
     rows,
     totals,
-    notes: notes || '',
+    // Line notes move here from their own column. Prefixed with the part number so a
+    // note is still attached to something once it is out of the table.
+    notes: [
+      notes || '',
+      ...doc.lines.filter((l) => (l.vendorNotes || '').trim()).map((l) => `${l.lineNo}: ${l.vendorNotes.trim()}`),
+    ].filter(Boolean).join('\n'),
     footer: `Prepared ${dateOnly(doc.createdAt)}${doc.createdBy ? ` by ${doc.createdBy.name}` : ''} · ${c.name}`,
     doc,
   };
 }
 
+// One type size across the whole table — the same 8.5pt the Line # column already
+// used. Body text at 9pt against an 8.5pt part number made the table look
+// misaligned, and the two columns that were dropped bought back the width.
 const TH = 'padding:7px 8px;text-align:left;font-size:8.5pt;text-transform:uppercase;letter-spacing:.05em;color:#5c6157;border-bottom:1.5px solid #20241f;font-weight:600;';
-const TD = 'padding:6px 8px;font-size:9pt;border-bottom:1px solid #e7e8e3;vertical-align:top;';
+const TD = 'padding:5px 8px;font-size:8.5pt;border-bottom:1px solid #e7e8e3;vertical-align:top;';
 
 /**
  * Render a BOM to a complete HTML document, from the shared model.
@@ -195,16 +235,23 @@ export async function renderBomHtml(
     <div style="font-size:9pt;line-height:1.45;">${a.lines.map(esc).join('<br>')}</div>
   </div>`;
 
-  const rows = m.rows
-    .map((cells) => {
-      // A zero-quantity row is a blank order line, not an omission — greyed so the
-      // shop can see it is there to be filled in.
-      const qtyIdx = m.columns.indexOf('Qty');
-      const zero = cells[qtyIdx] === '0';
-      return `<tr${zero ? ' style="color:#9aa093;"' : ''}>${cells
-        .map((x, i) => `<td style="${TD}">${i === m.columns.indexOf('Line #') ? `<code style="font-size:8.5pt;">${esc(x)}</code>` : esc(x)}</td>`)
-        .join('')}</tr>`;
-    })
+  const qtyIdx = m.columns.indexOf('Qty');
+  const lineIdx = m.columns.indexOf('Line #');
+  const rowTr = (cells: string[]): string => {
+    // A zero-quantity row is a blank order line, not an omission — greyed so the
+    // shop can see it is there to be filled in.
+    const zero = cells[qtyIdx] === '0';
+    return `<tr${zero ? ' style="color:#9aa093;"' : ''}>${cells
+      .map((x, i) => `<td style="${TD}">${i === lineIdx ? `<code>${esc(x)}</code>` : esc(x)}</td>`)
+      .join('')}</tr>`;
+  };
+  const rows = m.groups
+    .map(
+      (g) =>
+        (g.title
+          ? `<tr><td colspan="${m.columns.length}" style="padding:12px 8px 5px;font-size:8.5pt;font-weight:700;text-transform:uppercase;letter-spacing:.06em;border-bottom:1px solid #20241f;">${esc(g.title)}</td></tr>`
+          : '') + g.rows.map(rowTr).join(''),
+    )
     .join('');
 
   const questionRows = m.questions
@@ -320,7 +367,10 @@ export async function renderBomXml(
   }
 
   body.push(row(m.columns.map((h) => cell(h, 'th'))));
-  m.rows.forEach((r) => body.push(row(r.map((v) => cell(v)))));
+  m.groups.forEach((g) => {
+    if (g.title) body.push(row([cell(g.title, 'h')]));
+    g.rows.forEach((r) => body.push(row(r.map((v) => cell(v)))));
+  });
   body.push(row(m.totals.map((v) => cell(v, 'b'))));
 
   if (m.notes) {

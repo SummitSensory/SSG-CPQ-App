@@ -9,6 +9,9 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png">
 <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
 <meta name="theme-color" content="#1e2f5c">
+<!-- Lets the CRM be installed as its own desktop app: own taskbar icon, own
+     window, and no browser tab that can be closed by accident. -->
+<link rel="manifest" href="/manifest.webmanifest">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,500;6..72,600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
@@ -90,6 +93,6 @@
 </head>
 <body>
   <div id="root"><div style="padding:40px;text-align:center;color:#909689;">Loading…</div></div>
-  <script src="/app.js?v=34"></script>
+  <script src="/app.js?v=40"></script>
 </body>
 </html>

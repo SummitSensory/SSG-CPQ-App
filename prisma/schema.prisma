@@ -544,6 +544,8 @@ model Manufacturer {
   bomEmailBody        String?
   /// Which attachment this vendor expects: EXCEL, PDF or BOTH.
   bomEmailFormat      BomSendFormat     @default(PDF)
+  /// Whether a new BOM section for this vendor shows the powder-colour column.
+  bomShowPowderColor  Boolean           @default(false)
 
   createdAt           DateTime          @default(now())
   updatedAt           DateTime          @updatedAt
@@ -1383,6 +1385,11 @@ model ProcurementLine {
   powderBrandId   String?
   powderBrand     PowderColorBrand? @relation(fields: [powderBrandId], references: [id])
   powderColorCode String?
+  /// Produced by expanding a kit (H-1000) into its fasteners. The proposal keeps the
+  /// single kit line because that is what the customer buys; the shop needs the
+  /// pieces, so the BOM lists them in their own trailing section.
+  isHardwareComponent Boolean @default(false)
+  kitSku          String?
   vendorNotes  String?
   targetDate   DateTime?
   notes        String?
@@ -1479,6 +1486,9 @@ model BomVendorSection {
   /// SUBMITTED freezes the section's fields; unlocking is an explicit action and
   /// is recorded on the order timeline.
   status          BomSectionStatus @default(DRAFT)
+  /// The powder-colour column was printed on every vendor's sheet, where it was
+  /// usually a column of dashes. Opt-in per section; seeded from the vendor default.
+  showPowderColor Boolean          @default(false)
   confirmedAt     DateTime?
   confirmedById   String?
   unlockedAt      DateTime?

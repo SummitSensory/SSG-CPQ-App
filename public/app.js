@@ -1619,7 +1619,7 @@
       fieldRow('Email', '<input id="mfAEmail" type="email" style="' + IN + '" value="' + v('altContactEmail') + '">') +
       '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin:14px 0 6px;">Address</div>' +
       fieldRow('Street', '<input id="mfAddr1" style="' + IN + '" value="' + v('addressLine1') + '">') +
-      fieldRow('Suite / unit', '<input id="mfAddr2" style="' + IN + '" value="' + v('addressLine2') + '">') +
+      fieldRow('Suite / unit', '<input id="mfAddr2" placeholder="Suite 100" style="' + IN + '" value="' + v('addressLine2') + '">') +
       '<div style="display:flex;gap:8px;">' +
         '<div style="flex:2;">' + fieldRow('City', '<input id="mfCity" style="' + IN + '" value="' + v('city') + '">') + '</div>' +
         '<div style="flex:1;">' + fieldRow('State', '<input id="mfRegion" style="' + IN + '" value="' + v('region') + '">') + '</div>' +
@@ -2102,6 +2102,18 @@
     return out;
   }
   /** A blank cell means "no value given" on import, so drop it from the row. */
+  /**
+   * Street and suite on ONE line: "10488 Centennial Road, Suite 100".
+   * They were separate rows, which printed a bare "100" under the street and read as
+   * a truncated address. A suite that already names itself keeps its own wording.
+   */
+  function streetLine(l1, l2) {
+    var x = (l1 || '').trim(), y = (l2 || '').trim();
+    if (!y) return x;
+    if (!x) return y;
+    return x + ', ' + (/^(ste|suite|apt|apartment|unit|#|bldg|building|fl|floor|rm|room|dept|po box|p\.o\.)/i.test(y) ? y : 'Suite ' + y);
+  }
+
   function pruneBlanks(rows, keep) {
     return (rows || []).map(function (r) {
       var o = {};
@@ -2883,6 +2895,9 @@
       // Engineering warning for the person building the proposal. Kept separate
       // from `description` precisely so it can never be printed.
       internalNote: note,
+      // Kit breakdown (H-1000 → its fasteners). Opaque to the builder; it exists so
+      // the BOM can list the hardware out without re-running the configurator.
+      components: it.components || null,
       showNotes: false,
     };
   }
@@ -2894,8 +2909,7 @@
     if (!org || !org.addresses || !org.addresses.length) return '';
     var a = org.addresses.filter(function (x) { return x.type === 'SHIPPING'; })[0] || org.addresses.filter(function (x) { return x.type === 'BILLING'; })[0] || org.addresses[0];
     if (!a) return '';
-    var l2 = a.line2 ? a.line2 + '\n' : '';
-    return a.line1 + '\n' + l2 + a.city + ', ' + a.region + ' ' + a.postalCode;
+    return streetLine(a.line1, a.line2) + '\n' + a.city + ', ' + a.region + ' ' + a.postalCode;
   }
   function primaryContactName(org) {
     var cs = (org && org.contacts) || [];
@@ -3034,6 +3048,49 @@
     return map;
   }
 
+  /**
+   * Re-render the builder, keeping the keyboard where it was.
+   *
+   * Tab out of Qty, Rate or Cost and the field's `change` event fires — which
+   * re-renders to update the totals, replaces the DOM, and destroys focus. Tab then
+   * had nothing to move from and the caret vanished, which is why the keyboard could
+   * not be used to walk the builder. The focused field is identified by its line and
+   * key (not by node), so it survives being rebuilt; selection and caret position
+   * come with it.
+   */
+  /**
+   * Warn before closing while a proposal has unsaved edits.
+   *
+   * The builder holds everything in memory until Save, so a stray Cmd/Ctrl-W loses
+   * the work with no way back. The browser only honours this if the user has
+   * interacted with the page, and it deliberately cannot be triggered on a clean
+   * document — a prompt that fires every time gets dismissed reflexively and then
+   * protects nothing.
+   */
+  var pbDirty = false;
+  function markBuilderDirty() { pbDirty = true; }
+  function clearBuilderDirty() { pbDirty = false; }
+  window.addEventListener('beforeunload', function (e) {
+    if (!pbDirty) return;
+    e.preventDefault();
+    e.returnValue = '';
+    return '';
+  });
+
+  function renderBuilderKeepingFocus() {
+    var el = document.activeElement;
+    var mark = el && el.classList && el.classList.contains('bF')
+      ? { i: el.getAttribute('data-i'), k: el.getAttribute('data-k'), start: el.selectionStart, end: el.selectionEnd }
+      : null;
+    renderBuilder();
+    if (!mark) return;
+    var next = document.querySelector('.bF[data-i="' + mark.i + '"][data-k="' + mark.k + '"]');
+    if (!next) return;
+    next.focus();
+    // A number input has no selection range to restore; guarding avoids a throw.
+    try { if (mark.start != null) next.setSelectionRange(mark.start, mark.end); } catch (e) {}
+  }
+
   function renderBuilder() {
     var t = builderTotals();
     var gsub = groupSubtotalMap();
@@ -3067,6 +3124,17 @@
           '<textarea id="mBill" rows="2" placeholder="Billing address" style="' + IN + 'resize:vertical;">' + esc(pb.meta.billTo || '') + '</textarea></div>' +
         '<div class="field" style="margin-top:4px;"><label>Ship to</label><textarea id="mShip" rows="2" style="' + IN + 'resize:vertical;">' + esc(pb.meta.shipTo) + '</textarea></div>' +
         '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:8px;cursor:pointer;"><input type="checkbox" id="mShowTitle"' + (pb.meta.showTitle !== false ? ' checked' : '') + '> Show the proposal title on the customer proposal</label>' +
+        // Running shipment weight, recalculated on every edit. Read-only: it is the
+        // sum of the lines, and a typed override would quietly disagree with them.
+        // The zero-weight count is shown because a missing weight understates crating
+        // and freight, and a total that looks complete hides that.
+        '<div style="display:flex;align-items:baseline;gap:10px;margin-top:14px;padding:10px 12px;background:#f7f8f4;border:1px solid #eef0ea;border-radius:9px;">' +
+          '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Estimated shipment weight</div>' +
+          '<div style="font-size:16px;font-weight:600;">' + (Number(t.weight) || 0).toFixed(2) + ' lb</div>' +
+          (t.weightMissing
+            ? '<div style="font-size:11.5px;color:#8a5a12;">' + t.weightMissing + ' line' + (t.weightMissing === 1 ? '' : 's') + ' have no weight on record — the total is low</div>'
+            : '<div class="muted" style="font-size:11.5px;">Sum of all included lines</div>') +
+        '</div>' +
         '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:8px;cursor:pointer;"><input type="checkbox" id="mShowProj"' + (pb.meta.showProjectId ? ' checked' : '') + '> Show Project ID on the customer proposal</label>' +
       '</div>' +
       // quick add
@@ -3309,14 +3377,15 @@
       // save path need to know nothing about the link.
       if (pb.meta.billSameAsShip) { pb.meta.billTo = ms.value; if (mb) mb.value = ms.value; }
     });
-    var mtx = document.getElementById('mTax'); if (mtx) mtx.addEventListener('change', function () { pb.meta.taxAmountMinor = d2m(mtx.value); renderBuilder(); });
-    var mdisc = document.getElementById('mDisc'); if (mdisc) mdisc.addEventListener('change', function () { pb.meta.discountPct = parseFloat(mdisc.value) || 0; renderBuilder(); });
-    var msf = document.getElementById('mStructFreight'); if (msf) msf.addEventListener('change', function () { pb.meta.structureFreightMinor = d2m(msf.value); renderBuilder(); });
-    var mmf = document.getElementById('mMatsFreight'); if (mmf) mmf.addEventListener('change', function () { pb.meta.matsFreightMinor = d2m(mmf.value); renderBuilder(); });
+    var mtx = document.getElementById('mTax'); if (mtx) mtx.addEventListener('change', function () { pb.meta.taxAmountMinor = d2m(mtx.value); renderBuilderKeepingFocus(); });
+    var mdisc = document.getElementById('mDisc'); if (mdisc) mdisc.addEventListener('change', function () { pb.meta.discountPct = parseFloat(mdisc.value) || 0; renderBuilderKeepingFocus(); });
+    var msf = document.getElementById('mStructFreight'); if (msf) msf.addEventListener('change', function () { pb.meta.structureFreightMinor = d2m(msf.value); renderBuilderKeepingFocus(); });
+    var mmf = document.getElementById('mMatsFreight'); if (mmf) mmf.addEventListener('change', function () { pb.meta.matsFreightMinor = d2m(mmf.value); renderBuilderKeepingFocus(); });
     // line field inputs
     document.querySelectorAll('.bF').forEach(function (el) {
       var handler = function () {
         var i = +el.getAttribute('data-i'), k = el.getAttribute('data-k'), l = pb.lines[i]; if (!l) return;
+        markBuilderDirty();
         if (k === 'rate') l.rateMinor = d2m(el.value);
         else if (k === 'cost') l.costEach = d2m(el.value);
         else if (k === 'tpFreight') l.tpFreightMinor = d2m(el.value);
@@ -3325,11 +3394,11 @@
       };
       el.addEventListener('input', handler);
       var k = el.getAttribute('data-k');
-      if (k === 'rate' || k === 'cost' || k === 'quantity' || k === 'tpFreight' || el.tagName === 'SELECT') el.addEventListener('change', renderBuilder);
+      if (k === 'rate' || k === 'cost' || k === 'quantity' || k === 'tpFreight' || el.tagName === 'SELECT') el.addEventListener('change', renderBuilderKeepingFocus);
     });
-    document.querySelectorAll('.bChk').forEach(function (el) { el.addEventListener('change', function () { var l = pb.lines[+el.getAttribute('data-i')]; if (l) { l[el.getAttribute('data-k')] = el.checked; } }); });
+    document.querySelectorAll('.bChk').forEach(function (el) { el.addEventListener('change', function () { markBuilderDirty(); var l = pb.lines[+el.getAttribute('data-i')]; if (l) { l[el.getAttribute('data-k')] = el.checked; } }); });
     document.querySelectorAll('.bToggleNotes').forEach(function (b) { b.addEventListener('click', function () { var l = pb.lines[+b.getAttribute('data-i')]; if (l) { l.showNotes = !l.showNotes; renderBuilder(); } }); });
-    document.querySelectorAll('.bDel').forEach(function (b) { b.addEventListener('click', function () { pb.lines.splice(+b.getAttribute('data-i'), 1); renderBuilder(); }); });
+    document.querySelectorAll('.bDel').forEach(function (b) { b.addEventListener('click', function () { markBuilderDirty(); pb.lines.splice(+b.getAttribute('data-i'), 1); renderBuilder(); }); });
     // drag reorder
     document.querySelectorAll('.bRow').forEach(function (row) {
       row.addEventListener('dragstart', function () { bDragFrom = +row.getAttribute('data-i'); row.style.opacity = '0.4'; });
@@ -3409,11 +3478,12 @@
   async function saveBuilder() {
     var btn = document.getElementById('bSave'); btn.disabled = true; btn.textContent = 'Saving…';
     var sections = [{ id: 'meta', type: 'CUSTOMER_INFO', title: 'Proposal', order: 0, enabled: true, data: pb.meta }];
-    var items = pb.lines.map(function (l, i) { return { ref: l.ref, lineType: l.lineType, kind: l.kind, productId: l.productId, sku: l.sku || '', name: l.name, description: l.description, internalNote: l.internalNote || '', quantity: Number(l.quantity) || 0, rateMinor: Number(l.rateMinor) || 0, costEach: Number(l.costEach) || 0, weightEach: Number(l.weightEach) || 0, group: l.group || '', optional: !!l.optional, delivery: l.delivery || '', returnable: l.returnable || '', addlFreight: l.addlFreight || '', freightCalc: l.freightCalc || '', tpFreightMinor: Number(l.tpFreightMinor) || 0, tpFreightLabel: l.tpFreightLabel || '', order: i }; });
+    var items = pb.lines.map(function (l, i) { return { ref: l.ref, lineType: l.lineType, kind: l.kind, productId: l.productId, sku: l.sku || '', name: l.name, description: l.description, internalNote: l.internalNote || '', components: l.components || null, quantity: Number(l.quantity) || 0, rateMinor: Number(l.rateMinor) || 0, costEach: Number(l.costEach) || 0, weightEach: Number(l.weightEach) || 0, group: l.group || '', optional: !!l.optional, delivery: l.delivery || '', returnable: l.returnable || '', addlFreight: l.addlFreight || '', freightCalc: l.freightCalc || '', tpFreightMinor: Number(l.tpFreightMinor) || 0, tpFreightLabel: l.tpFreightLabel || '', order: i }; });
     try {
       var r = await authed('/proposals/versions/' + pb.versionId, { method: 'PATCH', body: { sections: sections, items: items, expirationDate: pb.meta.expiration || undefined } });
       if (!r.ok) { alert('Could not save (' + r.status + ').'); btn.disabled = false; btn.textContent = 'Save proposal'; return; }
       btn.textContent = 'Saved ✓';
+      clearBuilderDirty();
       setTimeout(function () { openProposalDetail(pb.proposalId, pb.user); }, 500);
     } catch (e) { alert('Could not reach the server.'); btn.disabled = false; btn.textContent = 'Save proposal'; }
   }
@@ -4019,7 +4089,7 @@
         lineType: l.lineType, kind: l.lineType === 'GROUP' ? 'GROUP' : l.lineType === 'SUBGROUP' ? 'SUBGROUP' : l.lineType === 'NOTE' ? 'NOTE' : 'INCLUDED',
         name: l.name, sku: l.sku || '', description: l.description || '', quantity: l.quantity == null ? 0 : l.quantity,
         rateMinor: l.rateMinor || 0, costEach: l.costEach || 0, weightEach: l.weightEach || 0, optional: !!l.optional,
-        internalNote: l.internalNote || '',
+        internalNote: l.internalNote || '', components: l.components || null, components: l.components || null,
       });
     });
     out.forEach(applyItemDefaults);
@@ -4233,7 +4303,7 @@
         name: l.name, sku: l.sku || '', description: l.description || '',
         quantity: l.quantity == null ? 0 : l.quantity, rateMinor: l.rateMinor || 0,
         costEach: l.costEach || 0, weightEach: l.weightEach || 0, optional: !!l.optional,
-        internalNote: l.internalNote || ''
+        internalNote: l.internalNote || '', components: l.components || null
       });
     });
     out.forEach(applyItemDefaults);
@@ -4528,7 +4598,9 @@
       ? '<div class="muted" style="font-size:11.5px;margin-top:4px;">Confirmed by ' + esc(s.confirmedBy) + ' · ' + fmtDate(s.confirmedAt) + '</div>'
       : (s.unlockedBy ? '<div class="muted" style="font-size:11.5px;margin-top:4px;">Reopened by ' + esc(s.unlockedBy) + ' · ' + fmtDate(s.unlockedAt) + '</div>' : '');
 
-    var rows = lines.map(function (p) {
+    var showColor = !!s.showPowderColor;
+    var cols = showColor ? 9 : 8;
+    var rowHtmlFor = function (p) {
       var ext = (Number(p.unitCostMinor) || 0) * (Number(p.quantity) || 0);
       var buy = p.productUrl
         ? ' <a href="' + esc(p.productUrl) + '" target="_blank" rel="noopener" style="font-size:11.5px;margin-left:6px;">Buy ↗</a>' : '';
@@ -4536,8 +4608,8 @@
         td('<b style="font-weight:600;">' + esc(p.name) + '</b>' + buy) +
         td('<code style="font-size:12.5px;color:#4a4f47;">' + esc(p.sku || '—') + '</code>') +
         td(String(p.quantity)) +
-        td(edit ? colorCell(p) : esc(p.powderColor || '—')) +
-        td(String(Math.round((Number(p.unitWeightLbs) || 0) * (Number(p.quantity) || 0) * 100) / 100)) +
+        (showColor ? td(edit ? colorCell(p) : esc(p.powderColor || '—')) : '') +
+        td(((Number(p.unitWeightLbs) || 0) * (Number(p.quantity) || 0)).toFixed(2)) +
         td(money2(p.unitCostMinor)) +
         td(money2(ext)) +
         td(edit
@@ -4549,11 +4621,21 @@
               '<option value="true"' + (p.sourced ? ' selected' : '') + '>Ordered</option></select>'
           : (p.sourced ? '<span class="chip">Ordered</span>' : '<span class="muted">Pending</span>')) +
         '</tr>';
-    }).join('') +
+    };
+
+    // Same two blocks as the printed sheet: products in product-tree order, then a
+    // Hardware block. The screen and the document must not disagree about order.
+    var prodLines = lines.filter(function (p) { return !p.isHardwareComponent; });
+    var hwLines = lines.filter(function (p) { return p.isHardwareComponent; });
+    var divider = function (label) {
+      return '<tr><td colspan="' + cols + '" style="padding:11px 16px 5px;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#5c6157;background:#f4f5f1;border-top:1px solid #e7e8e3;">' + label + '</td></tr>';
+    };
+    var rows = prodLines.map(rowHtmlFor).join('') +
+      (hwLines.length ? divider('Hardware') + hwLines.map(rowHtmlFor).join('') : '') +
       '<tr><td style="padding:12px 16px;border-top:1px solid #e7e8e3;font-weight:600;">Total — ' + s.lineCount + ' line' + (s.lineCount === 1 ? '' : 's') + '</td>' +
       '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td>' +
       '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;font-weight:600;">' + s.unitCount + '</td>' +
-      '<td colspan="3" style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td>' +
+      '<td colspan="' + (showColor ? 3 : 2) + '" style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td>' +
       '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;font-weight:600;">' + money2(s.extendedCostMinor) + '</td>' +
       '<td colspan="2" style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td></tr>';
 
@@ -4595,10 +4677,17 @@
         '</div>' +
         '<div style="margin-top:12px;"><div class="k">Notes to this vendor</div>' +
           '<textarea class="secF" data-id="' + s.id + '" data-f="notes" rows="2" placeholder="Prints beneath the line items" style="' + bomFieldStyle(null, locked) + 'resize:vertical;"' + dis + '>' + esc(s.notes || '') + '</textarea></div>' +
+        // Opt-in per vendor: most vendors powder coat nothing, and the column was
+        // printing a row of dashes on their sheet. Forced on once a line has a colour.
+        '<label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#5c6157;margin-top:10px;' + (edit ? 'cursor:pointer;' : 'opacity:.6;') + '">' +
+          '<input type="checkbox" class="secColorCol" data-id="' + s.id + '"' + (s.showPowderColor ? ' checked' : '') + (edit ? '' : ' disabled') + '>' +
+          'Show the powder colour column on this vendor’s sheet</label>' +
         questionBlock(s, edit) +
-        (edit ? colorApplyRow(s) : '') +
+        (edit && s.showPowderColor ? colorApplyRow(s) : '') +
         '<div style="margin-top:14px;overflow:auto;">' +
-          tableShell(['Item', 'Part #', 'Qty', 'Powder color', 'Weight (lb)', 'Cost each', 'Total cost', 'Notes', 'Status'], rows, 9, '') +
+          tableShell(
+            ['Item', 'Part #', 'Qty'].concat(showColor ? ['Powder color'] : [], ['Weight (lb)', 'Cost each', 'Total cost', 'Notes', 'Status']),
+            rows, cols, '') +
         '</div>' +
         sendHistory(s) +
       '</div>' +
@@ -4703,6 +4792,14 @@
       var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {}
       alert(m || (what + ' (' + r.status + ').'));
     };
+
+    document.querySelectorAll('.secColorCol').forEach(function (el) {
+      el.addEventListener('change', async function () {
+        var r = await authed('/bom/sections/' + el.getAttribute('data-id'), { method: 'PATCH', body: { showPowderColor: el.checked } });
+        if (!r.ok) { alert('Could not change that (' + r.status + ').'); el.checked = !el.checked; return; }
+        loadBomSections(order, user, canHandoff);
+      });
+    });
 
     document.querySelectorAll('.secF').forEach(function (el) {
       el.addEventListener('change', async function () {
@@ -4845,7 +4942,7 @@
           try {
             var rx = await authed('/render/orders/' + order.id + '/bom.xls' + qs);
             if (rx.ok) {
-              downloadBlob(await rx.blob(), bomFileSlug(vendor) + '.xls');
+              downloadBlob(await rx.blob(), bomFileSlug(vendor, order) + '.xls');
               bt.disabled = false; bt.textContent = label; return;
             }
           } catch (e) {}
@@ -4860,7 +4957,7 @@
           try {
             var rp = await authed('/render/orders/' + order.id + '/bom.pdf' + qs);
             if (rp.ok) {
-              downloadBlob(await rp.blob(), bomFileSlug(vendor) + '.pdf');
+              downloadBlob(await rp.blob(), bomFileSlug(vendor, order) + '.pdf');
               bt.disabled = false; bt.textContent = label; return;
             }
           } catch (e) {}
@@ -4938,31 +5035,42 @@
       }, 'Send');
   }
 
-  function bomFileSlug(vendor) {
-    return (vendor === '*' ? 'all-vendors' : vendor).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  /**
+   * `Customer_Name-Order_Number-Vendor_Name`, matching the server and the email
+   * subject exactly. It used to be the vendor slug alone, which is why repeat
+   * downloads piled up as "goldberg-brothers (4).pdf" — every order produced the
+   * same filename.
+   */
+  function bomFileSlug(vendor, order) {
+    var part = function (v) {
+      return String(v || '').trim().replace(/[\\/:*?"<>|]+/g, '').replace(/\s+/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+    };
+    var o = order || bomOrder || {};
+    return [part(o.customerName || o.organizationName || ''), part(o.number || ''), part(vendor === '*' ? 'All Vendors' : vendor)]
+      .filter(Boolean).join('-');
   }
 
   function downloadBomCsv(doc, vendor) {
     var all = vendor === '*';
-    var head = (all ? ['Vendor'] : []).concat(['Line #', 'Description', 'Qty', 'Powder color', 'Weight (lb)', 'Cost each', 'Total cost', 'Notes', 'Status']);
+    var head = (all ? ['Vendor'] : []).concat(['Line #', 'Description', 'Qty', 'Powder color', 'Weight (lb)', 'Cost each', 'Total cost']);
     var body = (doc.lines || []).map(function (l) {
-      var base = [l.lineNo, l.name, String(l.quantity), l.powderColor, String(l.extendedWeightLbs),
-        (l.unitCostMinor / 100).toFixed(2), (l.extendedCostMinor / 100).toFixed(2), l.vendorNotes, l.sourced ? 'Ordered' : 'Pending'];
+      var base = [l.lineNo, l.name, String(l.quantity), l.powderColor, (Number(l.extendedWeightLbs) || 0).toFixed(2),
+        (l.unitCostMinor / 100).toFixed(2), (l.extendedCostMinor / 100).toFixed(2)];
       return all ? [l.vendor].concat(base) : base;
     });
     var t = doc.totals || {};
-    var totalRow = (all ? [''] : []).concat(['Total', '', String(t.unitCount || 0), '', String(t.totalWeightLbs || 0), '', ((t.extendedCostMinor || 0) / 100).toFixed(2), '', '']);
+    var totalRow = (all ? [''] : []).concat(['Total', '', String(t.unitCount || 0), '', (Number(t.totalWeightLbs) || 0).toFixed(2), '', ((t.extendedCostMinor || 0) / 100).toFixed(2)]);
     var meta = [
       ['Bill of Materials', doc.order.number],
       ['Job', doc.order.jobName], ['Vendor', all ? 'All vendors' : vendor],
-      ['Submission date', doc.order.submittedOn ? String(doc.order.submittedOn).slice(0, 10) : ''],
+      ['Submission date', doc.order.submittedOn ? String(doc.order.submittedOn).slice(0, 10) : new Date().toISOString().slice(0, 10)],
       ['Ship to', doc.shipTo.name], ['Delivery type', doc.order.deliveryType],
       ['Powder coat brand', doc.order.powderCoatBrand], ['Estimated shipment quote', doc.order.shipmentQuote],
-      ['Total steel weight (lb)', String(t.steelWeightLbs || 0)],
+      ['Total steel weight (lb)', (Number(t.steelWeightLbs) || 0).toFixed(2)],
       ['Prepared by', (doc.createdBy && doc.createdBy.name) || ''], ['Prepared on', new Date(doc.createdAt).toLocaleString()],
       []
     ];
-    downloadCsv(doc.order.number + '-bom-' + bomFileSlug(vendor) + '.csv', meta.concat([head]).concat(body).concat([totalRow]));
+    downloadCsv(bomFileSlug(vendor, { number: doc.order.number, customerName: doc.customer && doc.customer.name }) + '.csv', meta.concat([head]).concat(body).concat([totalRow]));
   }
 
   /**
@@ -5001,14 +5109,14 @@
     var tbody = (doc.lines || []).map(function (l) {
       var cells = (all ? [esc(l.vendor)] : []).concat([
         '<code style="font-size:10.5px;">' + esc(l.lineNo) + '</code>', esc(l.name), String(l.quantity),
-        esc(l.powderColor || '—'), String(l.extendedWeightLbs || 0), money2(l.unitCostMinor), money2(l.extendedCostMinor), esc(l.vendorNotes || '')
+        esc(l.powderColor || '—'), (Number(l.extendedWeightLbs) || 0).toFixed(2), money2(l.unitCostMinor), money2(l.extendedCostMinor), esc(l.vendorNotes || '')
       ]);
       var zeroed = l.quantity === 0;
       return '<tr style="' + (zeroed ? 'color:#9a9f95;' : '') + '">' + cells.map(function (v, i) {
         return '<td style="padding:5px 8px;border-bottom:1px solid #e7e8e3;font-size:10.5px;text-align:' + (i > rightFrom ? 'right' : 'left') + ';">' + v + '</td>';
       }).join('') + '</tr>';
     }).join('');
-    var totalCells = (all ? [''] : []).concat(['', 'Total', String(t.unitCount || 0), '', String(t.totalWeightLbs || 0), '', money2(t.extendedCostMinor), '']);
+    var totalCells = (all ? [''] : []).concat(['', 'Total', String(t.unitCount || 0), '', (Number(t.totalWeightLbs) || 0).toFixed(2), '', money2(t.extendedCostMinor), '']);
 
     w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>' +
       esc('BOM ' + doc.order.number + ' — ' + (all ? 'all vendors' : vendor)) + '</title>' +
@@ -5033,13 +5141,10 @@
       '<div style="display:flex;gap:24px;margin-top:14px;">' +
         block('Ship from (vendor)',
           doc.vendor ? doc.vendor.name : (all ? 'Multiple vendors — see line items' : vendor),
-          doc.vendor ? [doc.vendor.addressLine1, doc.vendor.addressLine2, [doc.vendor.city, [doc.vendor.region, doc.vendor.postalCode].filter(Boolean).join(' ')].filter(Boolean).join(', ')].filter(Boolean) : [],
+          doc.vendor ? [streetLine(doc.vendor.addressLine1, doc.vendor.addressLine2), [doc.vendor.city, [doc.vendor.region, doc.vendor.postalCode].filter(Boolean).join(' ')].filter(Boolean).join(', ')].filter(Boolean) : [],
           doc.vendor ? [doc.vendor.contactName, doc.vendor.contactTitle].filter(Boolean).join(', ') : '',
           doc.vendor ? doc.vendor.contactPhone : '', doc.vendor ? doc.vendor.contactEmail : '') +
         block('Ship to (' + doc.shipTo.label + ')', doc.shipTo.name, doc.shipTo.lines, doc.shipTo.contactName, doc.shipTo.phone, doc.shipTo.email) +
-        block('Customer of record', doc.customer.name,
-          [doc.customer.addressLine1, doc.customer.addressLine2, [doc.customer.city, [doc.customer.region, doc.customer.postalCode].filter(Boolean).join(' ')].filter(Boolean).join(', ')].filter(Boolean),
-          [doc.customer.contactName, doc.customer.contactTitle].filter(Boolean).join(', '), doc.customer.contactPhone, doc.customer.contactEmail) +
       '</div>' +
       // Fabrication header
       '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px 18px;margin-top:14px;padding:11px 13px;background:#f7f8f4;border:1px solid #e7e8e3;border-radius:8px;">' +
@@ -5047,8 +5152,8 @@
         field('Submission date', dateStr(doc.order.submittedOn)) +
         field('Delivery type', doc.order.deliveryType) +
         field('Powder coat brand', doc.order.powderCoatBrand) +
-        field('Total steel weight', (t.steelWeightLbs || 0) + ' lb') +
-        field('Total weight', (t.totalWeightLbs || 0) + ' lb') +
+        field('Total steel weight', (Number(t.steelWeightLbs) || 0).toFixed(2) + ' lb') +
+        field('Total weight', (Number(t.totalWeightLbs) || 0).toFixed(2) + ' lb') +
         field('Estimated shipment quote', doc.order.shipmentQuote || 'TBD') +
         field('Vendor terms', doc.vendor ? (doc.vendor.paymentTerms || '—') : '—') +
       '</div>' +

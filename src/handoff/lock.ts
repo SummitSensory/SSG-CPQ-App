@@ -118,17 +118,69 @@ export function defaultTasks(depositRequired: boolean): SeededTask[] {
   return tasks;
 }
 
-interface ItemLike { ref?: string; sku?: string; productId?: string; name?: string; quantity?: number; kind?: string }
+interface KitComponent { part?: string; name?: string; qty?: number; unitCostMinor?: number; weightLbs?: number }
+interface ItemLike {
+  ref?: string; sku?: string; productId?: string; name?: string; quantity?: number; kind?: string;
+  components?: KitComponent[] | null;
+}
+
+export interface ProcurementSeed {
+  productId: string | null;
+  sku: string | null;
+  name: string;
+  quantity: number;
+  /** True for a line produced by expanding a kit; groups it into the BOM's hardware block. */
+  isHardwareComponent?: boolean;
+  /** The kit this line came out of, e.g. 'H-1000'. */
+  kitSku?: string | null;
+  /** Cost/weight carried from the kit breakdown, since the fastener may not be in the SKU master. */
+  unitCostMinor?: number | null;
+  unitWeightLbs?: number | null;
+}
 
 /**
  * Build the initial procurement list from the accepted INCLUDED items. The part
  * number rides along (`sku`, falling back to `ref`) because it is the key the
  * vendor lookup uses — without it every line prints a blank vendor.
+ *
+ * A KIT line is expanded here. The proposal shows one "Hardware Kit" (H-1000)
+ * because that is what the customer buys, but nobody can build from that — the shop
+ * needs every fastener and its count.
+ *
+ * The kit line itself is REPLACED by its components rather than kept alongside
+ * them. The kit's price is by definition the sum of its parts, so keeping both
+ * would double the hardware on every BOM total. The proposal is untouched — the
+ * customer still sees one line — and the BOM total comes out identical while
+ * carrying real per-part weights, which also stops H-1000 contributing 0 lb to
+ * freight.
  */
-export function procurementFromItems(items: unknown): Array<{ productId: string | null; sku: string | null; name: string; quantity: number }> {
+export function procurementFromItems(items: unknown): ProcurementSeed[] {
   if (!Array.isArray(items)) return [];
-  return (items as ItemLike[])
-    .filter((i) => (i.kind ?? 'INCLUDED') === 'INCLUDED')
+  const out: ProcurementSeed[] = [];
+  for (const i of (items as ItemLike[]).filter((x) => (x.kind ?? 'INCLUDED') === 'INCLUDED')) {
     // `ref` is a random line id, NOT a part number — never let it into `sku`.
-    .map((i) => ({ productId: i.productId ?? null, sku: (i.sku || '').trim() || null, name: i.name ?? 'Item', quantity: i.quantity ?? 1 }));
+    const sku = (i.sku || '').trim() || null;
+    const qty = i.quantity ?? 1;
+    const parts = (i.components ?? []).filter((c) => (c.part || '').trim() && c.qty);
+
+    if (!parts.length) {
+      out.push({ productId: i.productId ?? null, sku, name: i.name ?? 'Item', quantity: qty });
+      continue;
+    }
+
+    for (const c of parts) {
+      out.push({
+        productId: null,
+        sku: (c.part as string).trim(),
+        name: c.name || (c.part as string).trim(),
+        // The kit's own quantity multiplies through: two kits means twice the bolts.
+        quantity: (c.qty as number) * (qty || 1),
+        isHardwareComponent: true,
+        kitSku: sku,
+        unitCostMinor: c.unitCostMinor ?? null,
+        unitWeightLbs: c.weightLbs ?? null,
+      });
+    }
+  }
+  return out;
 }

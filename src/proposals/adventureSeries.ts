@@ -77,6 +77,13 @@ export interface PricedLine {
    * read by the person buying the gym.
    */
   internalNote?: string;
+  /**
+   * For a kit line (H-1000), the parts it is made of. The proposal prints the single
+   * kit line because that is what the customer buys; the BOM expands this so the
+   * shop has every fastener and its count. Carried on the saved proposal item, so
+   * the breakdown survives without re-running the configurator.
+   */
+  components?: Array<{ part: string; name: string; qty: number; unitCostMinor: number; weightLbs: number }>;
 }
 
 /** One BOM row with the expression that produced its quantity, for the logic trace. */
@@ -373,6 +380,10 @@ export function computeAdventureProposal(
           : `All mounting hardware for this structure — ${pieces} pieces across ${roll.components.length} part numbers.`,
         quantity: 1, rateMinor: roll.priceMinor, costEach: roll.costMinor,
         weightEach: roll.weightLbs, needsPrice: roll.missing.length > 0,
+        components: roll.components.map((c) => ({
+          part: c.part, name: c.name, qty: c.qty,
+          unitCostMinor: c.unitCostMinor, weightLbs: c.weightLbs,
+        })),
       });
     }
     // Anything the catalog files under Hardware (or files nowhere yet).

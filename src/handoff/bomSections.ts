@@ -61,6 +61,11 @@ export async function ensureSections(orderId: string, actorId?: string): Promise
   // operator has already dragged into place keeps its position.
   let next = order.bomSections.reduce((m, s) => Math.max(m, s.sortOrder), 0);
 
+  // A powder-coating vendor's new section starts with the colour column already on.
+  const colorVendors = new Set(
+    (await prisma.manufacturer.findMany({ where: { bomShowPowderColor: true }, select: { name: true } })).map((m) => m.name),
+  );
+
   const templates = await prisma.bomQuestionTemplate.findMany({
     where: { active: true, OR: [{ vendor: null }, { vendor: { in: missing } }] },
     orderBy: [{ sortOrder: 'asc' }, { label: 'asc' }],
@@ -81,6 +86,7 @@ export async function ensureSections(orderId: string, actorId?: string): Promise
         powderCoatBrand: order.powderCoatBrand,
         shipmentQuote: order.shipmentQuote,
         notes: order.bomNotes,
+        showPowderColor: colorVendors.has(vendor),
         answers: {
           create: mine.map((t, i) => ({
             templateId: t.id,
@@ -115,6 +121,8 @@ export interface SectionView {
   shipmentQuote: string | null;
   notes: string | null;
   status: BomSectionStatus;
+  /** Whether this vendor's sheet prints the powder-colour column. */
+  showPowderColor: boolean;
   editable: boolean;
   confirmedAt: string | null;
   confirmedBy: string | null;
@@ -189,7 +197,7 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
     }),
     prisma.procurementLine.findMany({
       where: { orderId },
-      select: { sku: true, vendor: true, quantity: true, unitCostMinor: true, powderColorCode: true, powderColor: true },
+      select: { sku: true, vendor: true, quantity: true, unitCostMinor: true, powderColorCode: true, powderColor: true, isHardwareComponent: true },
     }),
     prisma.manufacturer.findMany({
       select: {
@@ -246,6 +254,9 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
       shipmentQuote: s.shipmentQuote,
       notes: s.notes,
       status: s.status,
+      // Forced on when a line already carries a colour: hiding the column under a
+      // vendor who has been given one would drop information from their sheet.
+      showPowderColor: s.showPowderColor || mine.some((l) => (l.powderColorCode || l.powderColor || '').trim()),
       editable: s.status !== 'SUBMITTED',
       confirmedAt: iso(s.confirmedAt),
       confirmedBy: s.confirmedById ? nameById.get(s.confirmedById) ?? null : null,
@@ -310,6 +321,7 @@ function assertEditable(s: { status: BomSectionStatus; vendor: string }): void {
 }
 
 export interface SectionPatch {
+  showPowderColor?: boolean;
   jobName?: string | null;
   shipTo?: BomShipTo;
   submittedOn?: Date | null;
@@ -323,7 +335,7 @@ export async function patchSection(sectionId: string, patch: SectionPatch, actor
   const s = await loadSection(sectionId);
   assertEditable(s);
   const data: Record<string, unknown> = {};
-  for (const k of ['jobName', 'shipTo', 'submittedOn', 'deliveryType', 'powderCoatBrand', 'shipmentQuote', 'notes'] as const) {
+  for (const k of ['jobName', 'shipTo', 'submittedOn', 'deliveryType', 'powderCoatBrand', 'shipmentQuote', 'notes', 'showPowderColor'] as const) {
     if (patch[k] !== undefined) data[k] = patch[k];
   }
   if (!Object.keys(data).length) return s;

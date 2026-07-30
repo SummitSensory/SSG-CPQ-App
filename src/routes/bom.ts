@@ -23,6 +23,7 @@ import { sendBom } from '../handoff/bomSend.js';
 const QUESTION_TYPES = ['TEXT', 'LONG_TEXT', 'NUMBER', 'DATE', 'SELECT', 'MULTI_SELECT', 'BOOLEAN'] as const;
 
 const SectionPatchSchema = z.object({
+  showPowderColor: z.boolean().optional(),
   jobName: z.string().trim().max(240).nullish(),
   shipTo: z.enum(['CUSTOMER', 'SUMMIT']).optional(),
   submittedOn: z.union([z.coerce.date(), z.null()]).optional(),

@@ -41,6 +41,9 @@ export interface BomLine {
   vendorNotes: string;
   sourced: boolean;
   isSteel: boolean;
+  /** Product-tree sort order. Hardware carries Infinity so it sorts last. */
+  treeOrder: number;
+  isHardware: boolean;
 }
 
 export interface BomDocument {
@@ -72,6 +75,23 @@ export interface BomDocument {
 }
 
 const s = (v: unknown): string => (v == null ? '' : String(v));
+
+/**
+ * Street and suite on ONE line: "10488 Centennial Road, Suite 100".
+ *
+ * They were separate rows, which printed a bare "100" under the street and read as
+ * a truncated address on a document going to a vendor.
+ */
+export const streetLine = (line1: unknown, line2: unknown): string => {
+  const a = s(line1).trim();
+  const b = s(line2).trim();
+  if (!b) return a;
+  if (!a) return b;
+  // A suite that already says what it is keeps its own wording; a bare number gets
+  // labelled, since "100" alone means nothing to whoever is delivering.
+  const labelled = /^(ste|suite|apt|apartment|unit|#|bldg|building|fl|floor|rm|room|dept|po box|p\.o\.)/i.test(b);
+  return `${a}, ${labelled ? b : `Suite ${b}`}`;
+};
 
 /**
  * Build one BOM. `vendor` is a vendor name, or '*' for every vendor combined.
@@ -106,8 +126,44 @@ export async function buildBom(
   const mfrByName = new Map(manufacturers.map((m) => [m.name.toLowerCase(), m]));
   const steelVendors = new Set(manufacturers.filter((m) => m.isSteelFabricator).map((m) => m.name.toLowerCase()));
 
-  // ---- lines ----
-  const ordered = [...order.procurement].sort((a, b) => (a.sku || '').localeCompare(b.sku || ''));
+  // ---- ordering ----
+  // The BOM follows the PRODUCT TREE, not the alphabet: the tree order is the order
+  // the shop builds in, and `Product.sortOrder` is unique across the whole tree
+  // (Adventure in the 20000s, Soar in the 40000s) which is exactly why it can be
+  // sorted on its own. Header rows are deliberately not carried over — the sheet is
+  // a parts list, and a category heading is not a part.
+  const skusOnOrder = [...new Set(order.procurement.map((l) => s(l.sku)).filter(Boolean))];
+  const treeRows = skusOnOrder.length
+    ? await prisma.product.findMany({
+      where: { sku: { in: skusOnOrder } },
+      select: { sku: true, sortOrder: true },
+    })
+    : [];
+  const treeOrderBySku = new Map(treeRows.map((p) => [p.sku, p.sortOrder]));
+
+  // Hardware sorts to the end as its own block. Membership is decided by the
+  // hardware RULES rather than a part-number pattern, so a fastener that does not
+  // happen to start with 6820H- is still filed correctly.
+  const hardwareParts = new Set<string>([
+    'H-1000',
+    ...(await prisma.hardwareRule.findMany({ where: { kind: 'HARDWARE' }, select: { part: true } })).map((r) => r.part),
+  ]);
+  const isHardwarePart = (sku: string, flagged: boolean): boolean =>
+    flagged || hardwareParts.has(sku);
+
+  // A part the tree has never heard of would otherwise sort to position 0 and lead
+  // the sheet. Park it after the known products but before hardware.
+  const UNPLACED = 9_000_000;
+
+  const ordered = [...order.procurement].sort((a, b) => {
+    const aHw = isHardwarePart(s(a.sku), a.isHardwareComponent);
+    const bHw = isHardwarePart(s(b.sku), b.isHardwareComponent);
+    if (aHw !== bHw) return aHw ? 1 : -1;
+    const ao = treeOrderBySku.get(s(a.sku)) ?? UNPLACED;
+    const bo = treeOrderBySku.get(s(b.sku)) ?? UNPLACED;
+    if (ao !== bo) return ao - bo;
+    return (a.sku || '').localeCompare(b.sku || '');
+  });
   const scoped = vendorFilter
     ? ordered.filter((l) => (s(l.vendor).trim() || 'Unassigned vendor') === vendorFilter)
     : ordered;
@@ -132,6 +188,8 @@ export async function buildBom(
       vendorNotes: s(l.vendorNotes),
       sourced: l.sourced,
       isSteel: steelVendors.has(vendorName.toLowerCase()),
+      treeOrder: treeOrderBySku.get(s(l.sku)) ?? UNPLACED,
+      isHardware: isHardwarePart(s(l.sku), l.isHardwareComponent),
     };
   });
 
@@ -160,6 +218,7 @@ export async function buildBom(
         unitCostMinor: e.unitCostMinor, extendedCostMinor: 0, unitWeightLbs: e.weightLbs, extendedWeightLbs: 0,
         vendor: vendorFilter, vendorNotes: '', sourced: false,
         isSteel: steelVendors.has(vendorFilter.toLowerCase()),
+        treeOrder: UNPLACED, isHardware: isHardwarePart(e.sku, false),
       });
     }
   }
@@ -195,7 +254,7 @@ export async function buildBom(
     : {
       label: 'Customer site',
       name: customer.name,
-      lines: [customer.addressLine1, customer.addressLine2, cityLine(customer.city, customer.region, customer.postalCode)].filter(Boolean),
+      lines: [streetLine(customer.addressLine1, customer.addressLine2), cityLine(customer.city, customer.region, customer.postalCode)].filter(Boolean),
       contactName: customer.contactName,
       phone: customer.contactPhone,
       email: customer.contactEmail,
