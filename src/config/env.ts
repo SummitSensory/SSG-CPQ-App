@@ -51,6 +51,11 @@ const EnvSchema = z
     // host is used, which is correct on Vercel and in local dev alike.
     APP_BASE_URL: z.string().url().optional(),
 
+    // Signing secret for Resend's delivery webhook (Resend → Webhooks → whsec_…).
+    // Without it the webhook endpoint refuses every request: an unauthenticated
+    // endpoint that writes to an audit trail is worse than no endpoint.
+    RESEND_WEBHOOK_SECRET: z.string().optional(),
+
     // ---- Vendor + financing email (Bill of Materials, Ryan Capital sheet) ----
     // Same verified-subdomain rule as the senders above: the FROM address must be
     // on updates.summitsensory.com, while REPLY-TO can be the real inbox a vendor

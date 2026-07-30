@@ -27,6 +27,7 @@ import { registerOrderRoutes } from './routes/orders.js';
 import { registerBomRoutes } from './routes/bom.js';
 import { registerRenderRoutes } from './routes/render.js';
 import { registerFinancingRoutes } from './routes/financing.js';
+import { registerWebhookRoutes } from './routes/webhooks.js';
 import { registerReportRoutes } from './routes/reports.js';
 import { registerStandardNoteRoutes } from './routes/standardNotes.js';
 import { registerFormulaRoutes } from './routes/formulas.js';
@@ -49,8 +50,21 @@ export function buildApp(): FastifyInstance {
       },
     },
   });
+  // Keep the raw JSON body alongside the parsed one. The Resend webhook signs the
+  // exact bytes it sent, so re-serializing the parsed object would not verify —
+  // key order and whitespace differ.
+  app.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
+    (req as unknown as { rawBody?: string }).rawBody = body as string;
+    try {
+      done(null, (body as string).length ? JSON.parse(body as string) : {});
+    } catch (err) {
+      done(err as Error, undefined);
+    }
+  });
+
   registerErrorHandler(app);
   registerHealthRoutes(app);
+  registerWebhookRoutes(app);
   registerAuthRoutes(app);
   registerSsoRoutes(app);
   registerAdminRoutes(app);

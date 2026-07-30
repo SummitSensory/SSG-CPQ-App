@@ -1,163 +1,228 @@
-# Vercel setup — document renderer & vendor email
+# Vercel setup — click by click
 
-What has to be true on Vercel for the Bill of Materials and the Ryan Capital
-financing sheet to render as PDFs and be emailed to a vendor.
+Everything you do inside the Vercel dashboard, in order. Assumes the build 41
+files are already committed and pushed.
 
-Everything below fits inside the **Pro** plan you already pay for. There is no
-new subscription; the only added cost is function execution time on documents you
-actually render.
+Your plan (Pro) covers all of this. No new subscription.
 
 ---
 
-## 1. Install the two renderer packages
+## Before you start
+
+Open two tabs:
+
+- **Vercel** → your project
+- **GitHub** → `github.com/Sparticuz/chromium/releases`
+
+---
+
+## 1. Install the packages — pinned, exact versions
+
+The current Sparticuz release is **149.0.0** (Chromium 149). Pin to it rather than
+using `latest`, so a future release cannot change your browser under you:
 
 ```bash
-pnpm add playwright-core @sparticuz/chromium-min
+pnpm add playwright-core @sparticuz/chromium-min@149.0.0
 ```
 
-Why these two and not `playwright`:
-
-- **`playwright-core`** is the driver with no bundled browser (~2 MB). The full
-  `playwright` package ships a ~300 MB browser and would blow Vercel's 250 MB
-  unzipped function limit on its own.
-- **`@sparticuz/chromium-min`** is a Chromium build stripped for Lambda-style
-  hosts. The `-min` variant contains no browser either — it downloads a
-  compressed pack at cold start and unpacks it to `/tmp`. That is what keeps the
-  deployed function under the size cap.
-
-Both are imported lazily, so if this step is skipped the app still boots and
-Excel export still works — PDF export just reports that it is not installed.
-
-## 2. Host the Chromium pack and set `CHROMIUM_PACK_URL`
-
-`chromium-min` needs a URL to fetch the browser from. Use the `.tar` from the
-`@sparticuz/chromium` GitHub release whose Chromium version matches the
-`playwright-core` you installed (the release notes state it).
-
-Two options:
-
-- **Point at the GitHub release asset directly.** Simplest, and fine to start.
-- **Copy the `.tar` into Vercel Blob storage and point at that.** Preferred once
-  this is load-bearing: a cold start then never depends on GitHub being up, and
-  the download is same-region so it is faster.
-
-Either way the value goes in `CHROMIUM_PACK_URL`. Leave it **unset locally** —
-with no pack URL the renderer uses the Playwright browser already on your
-machine.
-
-> Version drift between the pack and `playwright-core` is the one failure mode
-> here, and it fails loudly at launch rather than producing a bad PDF. Pin both.
-
-## 3. Function sizing is already in `vercel.json`
-
-The repo now has a second serverless entry, `api/render.ts`, and everything under
-`/render/*` is routed to it:
-
-```json
-"functions": {
-  "api/index.ts":  { "maxDuration": 30 },
-  "api/render.ts": { "memory": 2048, "maxDuration": 60 }
-}
-```
-
-Both entries build the same Fastify app — the split exists only so they can be
-sized differently. **This is the part worth understanding:** Vercel bills memory
-× duration. If the single existing function were raised to 2 GB, every page view,
-every catalog search and every proposal save would be billed at 2 GB for a
-browser it never launches. Keeping the renderer separate means only an export
-pays for it.
-
-2048 MB is the working figure: Chromium needs roughly 1.5 GB, and Vercel scales
-CPU with memory, so a smaller function is not just tighter — it is slower.
-
-Nothing to do here beyond deploying; it is committed.
-
-## 4. Environment variables
-
-Add these in **Project → Settings → Environment Variables** (Production and
-Preview). Everything except `CHROMIUM_PACK_URL` has a working default, so add
-only what you want to change.
-
-| Variable | Purpose |
-|---|---|
-| `CHROMIUM_PACK_URL` | Browser pack from step 2. Without it, PDF export fails on Vercel and works locally. |
-| `RESEND_API_KEY` | Already set for invites and password resets. The same key sends vendor BOMs. |
-| `BOM_FROM_EMAIL` | Default `orders@updates.summitsensory.com`. **Must** be on the Resend-verified subdomain. |
-| `BOM_FROM_NAME` | Default `Summit Sensory Gym`. |
-| `BOM_REPLY_TO` | Default `Orders@SummitSensory.com` — where a vendor's reply lands. Does *not* need to be a verified domain. |
-| `BOM_BCC_EMAIL` | Optional. Blind-copies every vendor BOM to one internal inbox. |
-| `FINANCE_PARTNER_EMAIL` | Default `ckinsey@ryancapital.com`. |
-
-### The from-address rule that bites people
-
-Resend will only send from a domain verified in your Resend account. Yours is the
-**subdomain** `updates.summitsensory.com`, not `summitsensory.com`. A vendor sees
-"Summit Sensory Gym" as the sender name and their reply goes to
-`Orders@SummitSensory.com`, so the subdomain is invisible to them — but setting
-`BOM_FROM_EMAIL` to a bare `@summitsensory.com` address will be **rejected at
-send time**, and the failure is recorded against that send in the audit trail.
-
-### Deliverability, before you send a vendor anything
-
-Vendor email is different from an internal invite: it goes to people who have
-never received mail from this domain, and an attachment raises the bar further.
-Check in Resend that `updates.summitsensory.com` has **SPF, DKIM and DMARC** all
-green. Attachments from a domain without DKIM land in junk, and you will not be
-told — the send will simply report success.
-
-## 5. Run the migration
-
-`0029_bom_vendor_sections` creates the per-vendor sections, the question tables,
-the send audit trail, the colour brands and the financing factors — and backfills
-one section per existing (order, vendor).
+Then check what you got:
 
 ```bash
-pnpm db:migrate:deploy
+pnpm list playwright-core @sparticuz/chromium-min
 ```
 
-It is additive: no column is dropped and the order-level BOM header stays exactly
-where it is, so a rollback is a redeploy of the previous build.
+Commit `package.json` and `pnpm-lock.yaml`.
 
-## 6. Verify, in this order
+### Why the versions don't have to match exactly
 
-1. **Deploy** and confirm the app loads as normal — the renderer is lazy, so a
-   missing pack cannot break the site.
-2. **Open any order** and confirm each vendor now has its own section with today's
-   date shown as its submission date.
-3. **Export one section as PDF.** First call is slow (cold start, 3-5 s); the next
-   is under a second while the container stays warm.
-4. **Send a BOM to yourself** before sending one to a vendor. Check the audit row
-   records the address, the timestamp and the sender.
-5. **Check Vercel's function log** for `api/render` — if the pack URL is wrong, the
-   launch error names the version mismatch.
+Since Playwright 1.57 the bundled browser is *Chrome for Testing*, not Chromium —
+so strictly speaking Playwright's browser and the Sparticuz pack are different
+builds. That does not matter here, because the renderer passes an explicit
+`executablePath` and drives whatever binary it is pointed at over the DevTools
+protocol. Any recent `playwright-core` speaks to Chromium 149 without complaint.
 
----
+What you must not do is drift far apart — a pack several majors behind your
+`playwright-core` will eventually hit a protocol method the old browser lacks.
+When you bump one, bump the other, and re-run the verify step.
 
-## What the audit trail records
+## 2. Get the pack URL
 
-Every send writes a row against that vendor's section, and it is append-only —
-nothing in the UI edits or deletes one:
+The `-min` package ships no browser; it downloads one on first use. For 149.0.0
+the URL is:
 
-| Recorded | From |
+```
+https://github.com/Sparticuz/chromium/releases/download/v149.0.0/chromium-v149.0.0-pack.x64.tar
+```
+
+Vercel functions are **x64** — take the `x64` pack, not `arm64`.
+
+If you pinned a different version, the pattern is the same: on
+`github.com/Sparticuz/chromium/releases`, open the release, and under **Assets**
+copy the link to `chromium-v<version>-pack.x64.tar`.
+
+Hold that URL — it goes into Vercel in step 4.
+
+> A mismatch fails loudly at browser launch and the error names both versions. It
+> will never produce a silently wrong PDF.
+
+## 3. (Recommended) Host the pack yourself
+
+Skippable to start, but do it before this is load-bearing: a cold start otherwise
+depends on GitHub being reachable, and a cross-region download is slower.
+
+1. Vercel → your project → **Storage** tab
+2. **Create Database** → **Blob** → name it `assets` → **Create**
+3. Open the store → **Upload** → select the `.tar` you downloaded
+4. Copy the resulting public URL — use it instead of the GitHub link
+
+Blob storage is included on Pro at your volume; a ~50 MB file costs nothing
+meaningful.
+
+## 4. Set the environment variables
+
+Vercel → your project → **Settings** → **Environment Variables**.
+
+For each row: type the name, paste the value, tick **Production** and
+**Preview**, click **Save**.
+
+**Required:**
+
+| Name | Value |
 |---|---|
-| **Who sent it** | the signed-in user, resolved to their name |
-| **When** | timestamp of the send |
-| **Who it went to** | the To and Cc addresses actually used, not the vendor's saved default |
-| **What was sent** | subject line and attachment format (Excel, PDF or both) |
-| **What happened** | accepted / failed, with the provider's error text when it failed |
+| `CHROMIUM_PACK_URL` | the `.tar` URL from step 2 (or your Blob copy from step 3) |
 
-So "who on our team sent this, to which address at the vendor, and when" is fully
-answered, including when the same BOM is re-sent after an unlock — each send is
-its own row, so the history reads as a sequence.
+**Optional** — every one has a working default, so only add what you want to
+change:
+
+| Name | Default if you skip it |
+|---|---|
+| `BOM_FROM_EMAIL` | `orders@updates.summitsensory.com` |
+| `BOM_FROM_NAME` | `Summit Sensory Gym` |
+| `BOM_REPLY_TO` | `Orders@SummitSensory.com` |
+| `BOM_BCC_EMAIL` | *(none — set it to blind-copy every vendor BOM internally)* |
+| `FINANCE_PARTNER_EMAIL` | `ckinsey@ryancapital.com` |
+| `RESEND_WEBHOOK_SECRET` | *(unset — see below)* |
+
+### Delivery confirmation (optional, recommended)
+
+Without this the audit trail stops at "sent". With it, a row moves to
+**Delivered** or **Bounced** on its own.
+
+1. Resend → **Webhooks** → **Add Endpoint**
+2. URL: `https://<your-domain>/webhooks/resend`
+3. Subscribe to `email.delivered` and `email.bounced` only
+4. Copy the signing secret (`whsec_…`) into `RESEND_WEBHOOK_SECRET`
+
+The endpoint refuses every request until that secret is set — an unauthenticated
+endpoint that writes to an audit trail is worse than no endpoint. Signatures are
+verified and anything older than five minutes is rejected, so a captured payload
+cannot be replayed.
+
+`email.opened` is deliberately **not** subscribed. Most corporate mail clients
+block the tracking pixel, so "not opened" would mean nothing — putting it on screen
+would look like evidence and would not be. A bounce also lands on the order
+timeline, because nobody would otherwise find out the vendor never got the sheet.
+
+`RESEND_API_KEY` is already set from the invite and password-reset work. The same
+key sends vendor BOMs — nothing to add.
+
+> **The one rule:** if you override `BOM_FROM_EMAIL`, keep it on
+> `updates.summitsensory.com`. That subdomain is what is verified in Resend; a
+> bare `@summitsensory.com` sender is rejected at send time. The vendor never sees
+> it — the sender name reads "Summit Sensory Gym" and replies go to `BOM_REPLY_TO`.
+
+## 5. Confirm the function sizing landed
+
+Vercel reads this from the committed `vercel.json`, so there is nothing to click —
+just verify after the next deploy.
+
+**Deployments** → newest → **Functions** tab. You should see two:
+
+| Function | Memory | Max duration |
+|---|---|---|
+| `api/index` | default | 30 s |
+| `api/render` | 2 GB | 60 s |
+
+If `api/render` is missing, `vercel.json` did not get committed.
+
+**Why two:** Vercel bills memory × duration. Chromium needs ~1.5 GB, but if the
+single existing function were raised to 2 GB then every page view and every
+catalog search would be billed at 2 GB for a browser it never launches. The split
+means only an export pays.
+
+## 6. Run the database migration
+
+**Vercel does not run migrations.** Your build command is
+`prisma generate && pnpm build` — it generates the client, it does not touch the
+database. This is the right default: an auto-migrating build can wedge a
+deployment halfway through a schema change.
+
+Run it yourself, from your machine, against production:
+
+1. Take a database snapshot in your provider's dashboard. One click.
+2. Vercel → **Settings** → **Environment Variables** → reveal `DIRECT_URL` and
+   copy it. (`DATABASE_URL` is the pooled connection — migrations need the direct
+   one.)
+3. Locally:
+
+```bash
+DIRECT_URL="<paste>" DATABASE_URL="<paste>" pnpm db:migrate:deploy
+DIRECT_URL="<paste>" DATABASE_URL="<paste>" pnpm db:migrate:status
+```
+
+`status` should report no pending migrations.
+
+Migration 0029 is additive — nothing is dropped — and it backfills one BOM section
+per existing (order, vendor), so current orders render unchanged.
+
+## 7. Deploy
+
+Merge the branch. Vercel builds on push.
+
+Watch **Deployments** → the running build. If it fails, the log names the file.
+The likely cause is a missing `pnpm db:generate` before commit, which leaves the
+Prisma client out of step with the new schema.
+
+## 8. Verify on the deployed site
+
+In this order — each step rules out the previous one as a cause:
+
+1. **The app loads normally.** The renderer is imported lazily, so a wrong pack URL
+   cannot break the site.
+2. **Open any order.** Each vendor has its own BOM section, showing today's date as
+   its submission date.
+3. **Export one section as PDF.** First call takes 3–5 s (cold start), the next is
+   under a second while the container stays warm.
+4. **Send a BOM to yourself.** Confirm the audit row records your name, the
+   address and the timestamp.
+
+If step 3 fails: Vercel → **Logs**, filter to the `api/render` function. A pack
+mismatch names both versions; a missing `CHROMIUM_PACK_URL` says PDF is not
+installed.
+
+## 9. Before the first real vendor send
+
+In **Resend** → **Domains** → `updates.summitsensory.com`, confirm **SPF, DKIM and
+DMARC** are all green.
+
+A first-contact email carrying an attachment, from a domain without DKIM, goes to
+junk — and the send still reports success, so nothing tells you it happened.
 
 ---
 
-## What this does not cover
+## Cost, concretely
 
-- **Proof the recipient read it.** Delivery status (delivered / bounced) is honest
-  and comes from the provider. An open receipt is not: most corporate mail clients
-  block the tracking pixel, so "not opened" would mean nothing. The trail stops at
-  delivered.
-- **The delivery webhook itself.** Wiring Resend's webhook to move a row from
-  `SENT` to `DELIVERED` or `BOUNCED` is a follow-up; until then rows stay at
-  `SENT` and the send-time success or failure is still recorded.
+- **Blob storage** for the pack: a rounding error at one 50 MB file.
+- **`api/render`**: billed only while rendering. At 2 GB for ~3 s, roughly a
+  hundred documents sits inside your included Pro usage.
+- **`api/index`**: unchanged.
+
+No plan upgrade.
+
+## If you need to roll back
+
+Vercel → **Deployments** → the previous good one → **⋯** → **Promote to
+Production**.
+
+Migration 0029 drops nothing, so the old code runs against the new schema without
+error — the new tables simply sit unused. There is no database rollback to do.

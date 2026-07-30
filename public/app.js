@@ -711,6 +711,7 @@
         '<button class="btn" id="snNew" style="width:auto;padding:9px 15px;white-space:nowrap;">+ New note</button></div>' +
       '<div id="snList"><div class="muted" style="padding:16px;">Loading…</div></div>';
     document.getElementById('snNew').addEventListener('click', function () { openStandardNoteForm(null); });
+    document.getElementById('qtNew').addEventListener('click', function () { openQuestionTemplateForm(null); });
     loadStandardNotes();
   }
 
@@ -831,6 +832,8 @@
     { key: 'defaultQty', label: 'Default qty', w: 104, type: 'num', align: 'center' },
     { key: 'freightDisplay', label: 'Auto freight', w: 116, type: 'num', align: 'right' },
     { key: 'ovrLabel', label: 'Override OK', w: 104, type: 'enum', options: [['Yes', 'Yes'], ['No', 'No']], align: 'center' },
+    { key: 'productUrl', label: 'Buy link', w: 150, type: 'text' },
+    { key: 'colorLabel', label: 'Needs colour', w: 110, type: 'enum', options: [['Yes', 'Yes'], ['No', 'No']], align: 'center' },
     { key: '', label: '', w: 96 },
   ];
 
@@ -867,6 +870,8 @@
         row.freightMinor = k.freightMinor == null ? '' : Number(k.freightMinor);
         row.freightLabel = k.freightLabel || '';
         row.freightDisplay = k.freightMinor == null ? '' : Number(k.freightMinor) / 100;
+        row.productUrl = k.productUrl || '';
+        row.colorLabel = k.requiresPowderColor ? 'Yes' : 'No';
         row.isActive = k.productStatus ? k.productStatus === 'ACTIVE' : k.active !== false;
         return row;
       });
@@ -928,6 +933,16 @@
         cell(admin
           ? '<input type="checkbox" class="itFlag" data-part="' + esc(k.part) + '"' + (k.overrideAllowed ? ' checked' : '') + ' title="Allow reps to substitute this part number in the Adventure Series builder" style="width:16px;height:16px;cursor:pointer;">'
           : (k.overrideAllowed ? '<span style="font-size:12px;color:#2f7d5d;font-weight:600;">Yes</span>' : '<span style="color:#b6bab1;">—</span>'), 'text-align:center;') +
+        // Where this part is bought. Becomes a "Buy" link on the Bill of Materials
+        // so a purchaser goes straight to the vendor's order page.
+        cell(admin
+          ? '<input class="itUrl" data-part="' + esc(k.part) + '" value="' + esc(k.productUrl || '') + '" placeholder="—" title="Vendor order page. Shown as a Buy link on the Bill of Materials." style="width:100%;padding:5px 7px;border:1px solid #dcded7;border-radius:6px;font-size:12px;">'
+          : (k.productUrl ? '<a href="' + esc(k.productUrl) + '" target="_blank" rel="noopener" style="font-size:12px;">Buy ↗</a>' : '<span style="color:#b6bab1;">—</span>')) +
+        // Whether this part must carry a powder colour before its BOM section can be
+        // submitted. Off by default — most parts are not powder coated at all.
+        cell(admin
+          ? '<input type="checkbox" class="itColor" data-part="' + esc(k.part) + '"' + (k.requiresPowderColor ? ' checked' : '') + ' title="Block BOM submission until this part has a powder colour" style="width:16px;height:16px;cursor:pointer;">'
+          : (k.requiresPowderColor ? '<span style="font-size:12px;color:#2f7d5d;font-weight:600;">Yes</span>' : '<span style="color:#b6bab1;">—</span>'), 'text-align:center;') +
         cell(admin ? '<div style="display:flex;gap:5px;justify-content:flex-end;">' +
           '<button class="itToggle" data-part="' + esc(k.part) + '" data-to="' + (k.isActive ? 'false' : 'true') + '" title="' + (k.isActive ? 'Stop offering this part on new proposals' : 'Offer this part again') + '" style="border:1px solid #dcded7;background:#fff;border-radius:7px;padding:5px 9px;font-size:11.5px;color:#3d4a55;cursor:pointer;white-space:nowrap;">' + (k.isActive ? 'Deactivate' : 'Activate') + '</button>' +
           '<button class="itDel" data-part="' + esc(k.part) + '" title="Delete this part" style="border:1px solid #e0e1db;background:#fff;border-radius:7px;padding:5px 8px;font-size:11.5px;color:#9c3327;cursor:pointer;">✕</button></div>' : '', 'text-align:right;') + '</tr>';
@@ -935,7 +950,7 @@
 
     box.innerHTML =
       '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:14px;overflow-x:auto;">' +
-        '<table style="width:100%;min-width:1240px;border-collapse:collapse;font-size:14px;table-layout:fixed;">' +
+        '<table style="width:100%;min-width:1500px;border-collapse:collapse;font-size:14px;table-layout:fixed;">' +
         '<colgroup>' + IT_COLS.map(function (c) { return '<col' + (c.w ? ' style="width:' + c.w + 'px;"' : '') + '>'; }).join('') + '</colgroup>' +
         '<thead><tr>' + colHead(IT_COLS, itemState) + '</tr>' +
         '<tr>' + IT_COLS.map(function (c) { return filterCell('colFilter', c, all, itemState.filters); }).join('') + '</tr></thead>' +
@@ -1008,6 +1023,32 @@
         var rowq = (itemState.rows || []).filter(function (x) { return x.part === part; })[0];
         if (rowq) { rowq.defaultQty = to == null ? '' : to; }
         setTimeout(function () { el.style.borderColor = '#dcded7'; }, 900);
+      });
+    });
+    box.querySelectorAll('.itUrl').forEach(function (el) {
+      el.addEventListener('change', async function () {
+        var part = el.getAttribute('data-part'), v = el.value.trim();
+        // Validated before it is saved: a mistyped link becomes an unclickable
+        // "Buy" button on a purchasing document, which is worse than no link.
+        if (v && !/^https?:\/\//i.test(v)) { alert('A buy link must start with http:// or https://'); el.focus(); return; }
+        el.style.borderColor = '#c9a227';
+        var r = await authed('/catalog/items/' + encodeURIComponent(part), { method: 'PATCH', body: { productUrl: v || null } });
+        el.style.borderColor = r.ok ? '#3f9d78' : '#c2452f';
+        if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} alert(m || 'Could not save the link (' + r.status + ').'); return; }
+        var row = (itemState.rows || []).filter(function (x) { return x.part === part; })[0];
+        if (row) row.productUrl = v;
+        setTimeout(function () { el.style.borderColor = '#dcded7'; }, 900);
+      });
+    });
+    box.querySelectorAll('.itColor').forEach(function (el) {
+      el.addEventListener('change', async function () {
+        var part = el.getAttribute('data-part'), to = el.checked;
+        el.disabled = true;
+        var r = await authed('/catalog/items/' + encodeURIComponent(part), { method: 'PATCH', body: { requiresPowderColor: to } });
+        el.disabled = false;
+        if (!r.ok) { el.checked = !to; var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} alert(m || 'Could not save (' + r.status + ').'); return; }
+        var row = (itemState.rows || []).filter(function (x) { return x.part === part; })[0];
+        if (row) { row.requiresPowderColor = to; row.colorLabel = to ? 'Yes' : 'No'; }
       });
     });
     box.querySelectorAll('.itFlag').forEach(function (el) {
@@ -5023,6 +5064,101 @@
     return '<div class="card">' + events.map(function (e, i) { return '<div style="display:flex;gap:12px;padding:' + (i ? '10px' : '0') + ' 0 0;border-top:' + (i ? '1px solid #f2f3ef;margin-top:10px;' : 'none;') + 'font-size:13.5px;"><span style="color:#8a8f85;min-width:150px;">' + fmtDate(e.at) + '</span><span style="font-weight:500;">' + esc(e.action) + '</span></div>'; }).join('') + '</div>';
   }
 
+  /* --- Reusable Bill of Materials questions --- */
+  var QT_TYPES = [['TEXT', 'Short text'], ['LONG_TEXT', 'Paragraph'], ['NUMBER', 'Number'], ['DATE', 'Date'],
+    ['SELECT', 'Dropdown — pick one'], ['MULTI_SELECT', 'Dropdown — pick several'], ['BOOLEAN', 'Yes / No']];
+  var qtVendors = [];
+
+  async function loadQuestionTemplates() {
+    var box = document.getElementById('qtList'); if (!box) return;
+    var rows = [];
+    try {
+      var r = await authed('/bom/question-templates');
+      rows = r.ok ? (await r.json()) : [];
+      if (!qtVendors.length) {
+        var rm = await authed('/manufacturers');
+        if (rm.ok) qtVendors = ((await rm.json()) || []).map(function (m) { return m.name; });
+      }
+    } catch (e) { box.innerHTML = '<div class="err">Could not load questions.</div>'; return; }
+
+    var body = rows.map(function (q) {
+      var typeLabel = (QT_TYPES.filter(function (t) { return t[0] === q.type; })[0] || ['', q.type])[1];
+      var opts = Array.isArray(q.options) ? q.options : [];
+      return '<tr' + (q.active ? '' : ' style="opacity:.55;"') + '>' +
+        td('<b style="font-weight:600;">' + esc(q.label) + '</b>' +
+          (q.helpText ? '<div class="muted" style="font-size:11.5px;margin-top:3px;">' + esc(q.helpText) + '</div>' : '')) +
+        td(q.vendor ? esc(q.vendor) : '<span class="chip">Every vendor</span>') +
+        td(esc(typeLabel) + (opts.length ? '<div class="muted" style="font-size:11.5px;margin-top:3px;">' + opts.slice(0, 4).map(esc).join(' · ') + (opts.length > 4 ? ' …' : '') + '</div>' : '')) +
+        td(q.required ? '<span class="chip" style="background:#fdf6e6;color:#6b5a24;">Required</span>' : '<span class="muted">Optional</span>') +
+        td('<div style="display:flex;gap:6px;justify-content:flex-end;">' +
+          '<button class="link-btn" data-qt-edit="' + q.id + '" style="width:auto;padding:6px 11px;font-size:12px;">Edit</button>' +
+          '<button class="link-btn" data-qt-del="' + q.id + '" style="width:auto;padding:6px 10px;font-size:12px;color:#9c3327;">✕</button>' +
+        '</div>') +
+      '</tr>';
+    }).join('');
+
+    box.innerHTML = tableShell(['Question', 'Asked of', 'Answer type', '', ''], body, 5,
+      'No reusable questions yet. Add one and every new Bill of Materials section will ask it.');
+
+    box.querySelectorAll('[data-qt-edit]').forEach(function (bt) {
+      bt.addEventListener('click', function () {
+        openQuestionTemplateForm(rows.filter(function (x) { return x.id === bt.getAttribute('data-qt-edit'); })[0]);
+      });
+    });
+    box.querySelectorAll('[data-qt-del]').forEach(function (bt) {
+      bt.addEventListener('click', async function () {
+        if (!confirm('Remove this question?\n\nSections that already ask it keep their copy and their answers — only new sections stop asking.')) return;
+        var r = await authed('/bom/question-templates/' + bt.getAttribute('data-qt-del'), { method: 'DELETE' });
+        if (!r.ok) { alert('Could not remove (' + r.status + ').'); return; }
+        loadQuestionTemplates();
+      });
+    });
+  }
+
+  function openQuestionTemplateForm(q) {
+    q = q || {};
+    var opts = Array.isArray(q.options) ? q.options.join('\n') : '';
+    var isChoice = q.type === 'SELECT' || q.type === 'MULTI_SELECT';
+    openModal(q.id ? 'Edit question' : 'New vendor question',
+      fieldRow('Question', '<input id="qtLabel" style="' + IN + '" value="' + esc(q.label || '') + '" placeholder="e.g. What gauge steel?">') +
+      fieldRow('Asked of', '<select id="qtVendor" style="' + IN + '"><option value="">Every vendor</option>' +
+        qtVendors.map(function (v) { return '<option value="' + esc(v) + '"' + (q.vendor === v ? ' selected' : '') + '>' + esc(v) + '</option>'; }).join('') +
+        '</select>') +
+      fieldRow('Answer type', '<select id="qtType" style="' + IN + '">' +
+        QT_TYPES.map(function (t) { return '<option value="' + t[0] + '"' + (q.type === t[0] ? ' selected' : '') + '>' + t[1] + '</option>'; }).join('') + '</select>') +
+      '<div id="qtOptWrap" style="display:' + (isChoice ? 'block' : 'none') + ';">' +
+        fieldRow('Options', '<textarea id="qtOpts" rows="4" placeholder="One per line" style="' + IN + 'resize:vertical;">' + esc(opts) + '</textarea>') +
+      '</div>' +
+      fieldRow('Help text', '<input id="qtHelp" style="' + IN + '" value="' + esc(q.helpText || '') + '" placeholder="Optional — shown under the question">') +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;margin-top:4px;"><input type="checkbox" id="qtReq"' + (q.required ? ' checked' : '') + '> Required — blocks the section from being confirmed until answered</label>' +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;margin-top:6px;"><input type="checkbox" id="qtActive"' + (q.id ? (q.active !== false ? ' checked' : '') : ' checked') + '> Active — asked on new sections</label>',
+      async function (close, showErr) {
+        var type = document.getElementById('qtType').value;
+        var label = document.getElementById('qtLabel').value.trim();
+        if (!label) return showErr('Type the question.');
+        var list = document.getElementById('qtOpts').value.split('\n').map(function (x) { return x.trim(); }).filter(Boolean);
+        if ((type === 'SELECT' || type === 'MULTI_SELECT') && !list.length) return showErr('A dropdown needs at least one option.');
+        var payload = {
+          label: label,
+          vendor: document.getElementById('qtVendor').value || null,
+          type: type,
+          options: list,
+          helpText: document.getElementById('qtHelp').value.trim(),
+          required: document.getElementById('qtReq').checked,
+          active: document.getElementById('qtActive').checked,
+        };
+        var r = q.id
+          ? await authed('/bom/question-templates/' + q.id, { method: 'PATCH', body: payload })
+          : await authed('/bom/question-templates', { method: 'POST', body: payload });
+        if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} return showErr(m || 'Could not save.'); }
+        close(); loadQuestionTemplates();
+      }, q.id ? 'Save' : 'Add question');
+    var t = document.getElementById('qtType');
+    t.addEventListener('change', function () {
+      document.getElementById('qtOptWrap').style.display = (t.value === 'SELECT' || t.value === 'MULTI_SELECT') ? 'block' : 'none';
+    });
+  }
+
   async function loadFinancingAdmin() {
     var box = document.getElementById('finAdmin'); if (!box) return;
     var d = null;
@@ -5177,6 +5313,10 @@
       '<div class="muted" style="font-size:12.5px;margin:0 0 10px;">Every calculation the pricing engine runs. Frame and hardware quantities are editable coefficients; business numbers are the scalars the proposal math uses; the last tab lists what is fixed in code and why.</div>' +
       '<div id="fxTabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;"></div>' +
       '<div id="fxBody"><div class="muted" style="padding:16px;">Loading…</div></div>' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:26px;"><div class="section-title" style="margin:0;">Vendor questions</div>' +
+        '<button class="btn" id="qtNew" style="width:auto;padding:9px 15px;">+ New question</button></div>' +
+      '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;">Questions asked on a Bill of Materials section. A question with no vendor is asked of <b>every</b> vendor; one with a vendor is asked only of theirs. Each new section starts with a copy, so editing a question here never rewrites an answer already given on an order.</div>' +
+      '<div id="qtList"><div class="muted" style="padding:16px;">Loading…</div></div>' +
       '<div class="section-title" style="margin-top:26px;">Financing</div>' +
       '<div class="muted" style="font-size:12.5px;margin:0 0 10px;">Ryan Capital quotes from a <b>payment factor</b> per term, not an interest rate: the monthly payment is the amount financed × the factor. Change a factor here and every financing sheet uses it immediately.</div>' +
       '<div id="finAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>';
@@ -5194,10 +5334,12 @@
       bt.disabled = false; bt.textContent = label;
     });
     document.getElementById('snNew').addEventListener('click', function () { openStandardNoteForm(null); });
+    document.getElementById('qtNew').addEventListener('click', function () { openQuestionTemplateForm(null); });
     loadUsers();
     loadStandardNotes();
     loadFormulas();
     loadFinancingAdmin();
+    loadQuestionTemplates();
   }
 
   async function loadStandardNotes() {

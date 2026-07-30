@@ -33,11 +33,16 @@ type SkuRow = {
   id: string; part: string; description: string; category: string | null; manufacturer: string | null;
   unitPriceMinor: number; unitCostMinor: number; weightLbs: number; proposalGroup: string | null;
   active: boolean; overrideAllowed?: boolean; defaultQty?: number | null;
+  freightMinor?: number | null; freightLabel?: string | null;
+  productUrl?: string | null; requiresPowderColor?: boolean;
 };
 async function listSkus(): Promise<SkuRow[]> {
   if (skuHasOverrideFlag) {
     try {
-      return await prisma.sku.findMany({ select: { ...SKU_COLS, overrideAllowed: true, defaultQty: true }, orderBy: { part: 'asc' } }) as SkuRow[];
+      return await prisma.sku.findMany({
+        select: { ...SKU_COLS, overrideAllowed: true, defaultQty: true, freightMinor: true, freightLabel: true, productUrl: true, requiresPowderColor: true },
+        orderBy: { part: 'asc' },
+      }) as SkuRow[];
     } catch (e) {
       if ((e as { code?: string }).code !== 'P2022') throw e;
       skuHasOverrideFlag = false;
@@ -57,6 +62,12 @@ const ItemPatch = z.object({
   active: z.boolean().optional(),
   overrideAllowed: z.boolean().optional(),
   defaultQty: z.number().int().min(0).max(9999).nullable().optional(),
+  freightMinor: z.number().int().nonnegative().nullable().optional(),
+  freightLabel: z.string().trim().max(120).nullish(),
+  /** Vendor order page — becomes a "Buy" link on the Bill of Materials. */
+  productUrl: z.string().trim().max(600).nullish(),
+  /** Block BOM submission until this part carries a powder colour. */
+  requiresPowderColor: z.boolean().optional(),
 });
 
 export interface CatalogItem {
@@ -74,6 +85,11 @@ export interface CatalogItem {
   overrideAllowed: boolean;
   /** Builder default quantity; null = no default, so the field starts at 0. */
   defaultQty: number | null;
+  /** Fixed freight applied to this part's proposal line; null = none. */
+  freightMinor: number | null;
+  freightLabel: string | null;
+  productUrl: string | null;
+  requiresPowderColor: boolean;
   skuId: string | null;
   productId: string | null;
   productStatus: string | null;
@@ -118,6 +134,10 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
         weightLbs: s.weightLbs, proposalGroup: s.proposalGroup || '', active: s.active,
         overrideAllowed: s.overrideAllowed === true,
         defaultQty: s.defaultQty ?? null,
+        freightMinor: s.freightMinor ?? null,
+        freightLabel: s.freightLabel ?? null,
+        productUrl: s.productUrl ?? null,
+        requiresPowderColor: s.requiresPowderColor === true,
         skuId: s.id, productId: null, productStatus: null,
       });
     }
@@ -143,6 +163,7 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
           manufacturer: mfr, unitPriceMinor: 0, unitCostMinor: latestCost[p.id] || 0,
           weightLbs: p.weightOz ? Math.round((p.weightOz / 16) * 1000) / 1000 : 0,
           proposalGroup: '', active: p.status === 'ACTIVE', overrideAllowed: false, defaultQty: null,
+          freightMinor: null, freightLabel: null, productUrl: null, requiresPowderColor: false,
           skuId: null, productId: p.id, productStatus: p.status,
         });
       }
@@ -180,6 +201,8 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
     const needsSku = d.unitPriceMinor !== undefined || d.unitCostMinor !== undefined || d.weightLbs !== undefined ||
       d.proposalGroup !== undefined || d.active !== undefined || d.manufacturer !== undefined ||
       d.overrideAllowed !== undefined || d.defaultQty !== undefined ||
+      d.freightMinor !== undefined || d.freightLabel !== undefined ||
+      d.productUrl !== undefined || d.requiresPowderColor !== undefined ||
       (d.name !== undefined && !product) || (d.category !== undefined && !product);
     if (!sku && needsSku) {
       sku = await prisma.sku.create({
@@ -227,6 +250,16 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
       if (d.active !== undefined) money.active = d.active;
       if (d.overrideAllowed !== undefined) money.overrideAllowed = d.overrideAllowed;
       if (d.defaultQty !== undefined) money.defaultQty = d.defaultQty;
+      if (d.freightMinor !== undefined) money.freightMinor = d.freightMinor;
+      if (d.freightLabel !== undefined) money.freightLabel = (d.freightLabel || '').trim() || null;
+      // Validated here as well as in the browser: a mistyped link becomes an
+      // unclickable "Buy" button on a purchasing document.
+      if (d.productUrl !== undefined) {
+        const u = (d.productUrl || '').trim();
+        if (u && !/^https?:\/\//i.test(u)) throw new ValidationError('A buy link must start with http:// or https://');
+        money.productUrl = u || null;
+      }
+      if (d.requiresPowderColor !== undefined) money.requiresPowderColor = d.requiresPowderColor;
       if (Object.keys(money).length) await prisma.sku.update({ where: { id: sku.id }, data: money });
     }
 
@@ -260,6 +293,25 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
     }
     return { count: numbers.size, numbers: [...numbers].slice(0, 5) };
   }
+
+  /**
+   * Part → its builder defaults, for the proposal builder to apply on add. A small
+   * dedicated payload: the builder needs this on every line insert and should not
+   * pull the whole 300-row catalog to get it. Only parts that actually have a
+   * default are returned.
+   */
+  app.get('/catalog/items/defaults', read, async () => {
+    const rows = await listSkus();
+    const out: Record<string, { qty?: number; freightMinor?: number; freightLabel?: string }> = {};
+    for (const s of rows) {
+      const entry: { qty?: number; freightMinor?: number; freightLabel?: string } = {};
+      if (s.defaultQty != null) entry.qty = s.defaultQty;
+      if (s.freightMinor != null) entry.freightMinor = s.freightMinor;
+      if (s.freightLabel) entry.freightLabel = s.freightLabel;
+      if (Object.keys(entry).length) out[s.part] = entry;
+    }
+    return out;
+  });
 
   /** What deleting this part would remove, and whether it is safe. */
   app.get('/catalog/items/:part/usage', read, async (req) => {
