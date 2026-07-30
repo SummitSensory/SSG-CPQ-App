@@ -2231,7 +2231,19 @@
 
   /* --- Proposals --- */
   var OPEN_STATUSES = ['DRAFT', 'INTERNAL_REVIEW', 'RELEASED'];
-  var props = { rows: [], sort: { key: 'modified', dir: 'desc' }, filter: 'all', q: '' };
+  var props = {
+    rows: [], sort: { key: 'modified', dir: 'desc' }, filter: 'all', q: '',
+    // Grouping and which customers are collapsed persist per browser: someone who
+    // works one account all day should not re-collapse thirty others every visit.
+    grouped: localStorage.getItem('ssg.props.grouped') === '1',
+    collapsed: (function () {
+      try { return JSON.parse(localStorage.getItem('ssg.props.collapsed') || '[]'); } catch (e) { return []; }
+    })(),
+  };
+  function propsPersist() {
+    localStorage.setItem('ssg.props.grouped', props.grouped ? '1' : '0');
+    localStorage.setItem('ssg.props.collapsed', JSON.stringify(props.collapsed));
+  }
   var PROP_FILTERS = [
     { id: 'all', label: 'All' },
     { id: 'active', label: 'Active' },
@@ -2249,6 +2261,8 @@
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;">' +
         '<div id="propFilters" style="display:flex;gap:6px;flex-wrap:wrap;"></div>' +
         '<div style="display:flex;gap:8px;align-items:center;">' +
+          '<label style="display:flex;gap:7px;align-items:center;font-size:12.5px;color:#5c6157;cursor:pointer;white-space:nowrap;" title="One collapsible block per customer, with its open value">' +
+            '<input type="checkbox" id="propGroup"' + (props.grouped ? ' checked' : '') + '> Group by customer</label>' +
           '<input id="propSearch" placeholder="Search customer, title, number…" value="' + esc(props.q) + '" style="padding:9px 12px;border:1px solid #dcded7;border-radius:9px;font-size:13.5px;background:#fff;width:240px;">' +
           (hasRole(PROP_WRITE, user.role) ? '<button class="btn" id="propNew" style="width:auto;padding:10px 17px;white-space:nowrap;">New proposal</button>' : '') +
         '</div></div>' +
@@ -2257,6 +2271,9 @@
     if (hasRole(PROP_WRITE, user.role)) document.getElementById('propNew').addEventListener('click', function () { openProposalForm(user); });
     var s = document.getElementById('propSearch');
     s.addEventListener('input', function () { props.q = s.value; drawProposals(user); });
+    document.getElementById('propGroup').addEventListener('change', function () {
+      props.grouped = this.checked; propsPersist(); drawProposals(user);
+    });
     loadProposals(user);
   }
   function drawPropFilters(user) {
@@ -2332,7 +2349,7 @@
       return '<th' + (c.key ? ' data-sk="' + c.key + '" style="cursor:pointer;' : ' style="') +
         'text-align:' + (c.align || 'left') + ';padding:11px 14px;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:' + (on ? '#3d4a55' : '#8a8f85') + ';font-weight:600;border-bottom:1px solid #e7e8e3;white-space:nowrap;">' + esc(c.label) + arrow + '</th>';
     }).join('');
-    var body = rows.map(function (r) {
+    function rowHtml(r) {
       var expCell = r.expires
         ? (r.expired
           ? '<span style="display:inline-flex;align-items:center;gap:5px;background:#fbe9e6;border:1px solid #f0cdc7;color:#9c3327;border-radius:999px;padding:3px 9px;font-size:12px;font-weight:600;" title="Expired ' + Math.abs(r.expDays) + ' day(s) ago">⚑ ' + fmtDate(r.expires) + '</span>'
@@ -2351,7 +2368,34 @@
         ptd('v' + r.version + (r.versionCount > 1 ? '<div class="muted" style="font-size:11px;">of ' + r.versionCount + '</div>' : ''), 'center') +
         ptd(statusChip(r.status)) + ptd(fmtDate(r.created)) + ptd(fmtDate(r.modified)) + ptd(expCell) +
         ptd(quick, 'right', 'padding:8px 14px;') + '</tr>';
-    }).join('');
+    }
+    var body = rows.map(rowHtml).join('');
+    // Grouped view: one collapsible header per customer, carrying the count and the
+    // open value — the two numbers you actually want when scanning an account.
+    if (props.grouped && rows.length) {
+      var order = [], byCust = {};
+      rows.forEach(function (r) {
+        if (!byCust[r.customer]) { byCust[r.customer] = []; order.push(r.customer); }
+        byCust[r.customer].push(r);
+      });
+      order.sort(function (x, y) { return x.toLowerCase() < y.toLowerCase() ? -1 : 1; });
+      body = order.map(function (cust) {
+        var mine = byCust[cust];
+        var open = mine.filter(function (r) { return OPEN_STATUSES.indexOf(r.status) !== -1 && !r.expired; }).length;
+        var flagged = mine.filter(function (r) { return r.expired; }).length;
+        var isOpen = props.collapsed.indexOf(cust) === -1;
+        return '<tr class="pGroup" data-cust="' + esc(cust) + '" style="cursor:pointer;background:#f4f5f1;">' +
+            '<td colspan="8" style="padding:11px 14px;border-bottom:1px solid #e7e8e3;">' +
+              '<span style="display:inline-block;width:14px;color:#8a8f85;">' + (isOpen ? '▾' : '▸') + '</span>' +
+              '<b style="font-weight:650;font-size:13.5px;">' + esc(cust) + '</b>' +
+              '<span class="muted" style="font-size:12.5px;margin-left:10px;">' + mine.length + ' proposal' + (mine.length === 1 ? '' : 's') +
+                (open ? ' · ' + open + ' open' : '') + '</span>' +
+              (flagged ? '<span style="margin-left:10px;font-size:12px;color:#9c3327;">⚑ ' + flagged + ' expired</span>' : '') +
+            '</td></tr>' +
+          (isOpen ? mine.map(rowHtml).join('') : '');
+      }).join('');
+    }
+
     box.innerHTML = '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:14px;overflow-x:auto;"><table style="width:100%;min-width:1160px;border-collapse:collapse;font-size:14px;"><thead><tr>' + head + '</tr></thead><tbody>' +
       (body || '<tr><td style="padding:22px 16px;color:#909689;" colspan="8">' + (props.rows.length ? 'No proposals match this view.' : 'No proposals yet.') + '</td></tr>') + '</tbody></table></div>' +
       (props.rows.filter(function (r) { return r.expired; }).length ? '<div style="margin-top:10px;font-size:12.5px;color:#9c3327;">⚑ Flagged rows are past their expiration date and still open — re-date them or mark them no longer active.</div>' : '');
@@ -2361,6 +2405,13 @@
         if (props.sort.key === k) props.sort.dir = props.sort.dir === 'asc' ? 'desc' : 'asc';
         else { props.sort.key = k; props.sort.dir = (k === 'created' || k === 'modified' || k === 'expires') ? 'desc' : 'asc'; }
         drawProposals(user);
+      });
+    });
+    box.querySelectorAll('tr.pGroup').forEach(function (tr) {
+      tr.addEventListener('click', function () {
+        var c = tr.getAttribute('data-cust'), i = props.collapsed.indexOf(c);
+        if (i === -1) props.collapsed.push(c); else props.collapsed.splice(i, 1);
+        propsPersist(); drawProposals(user);
       });
     });
     box.querySelectorAll('tr[data-id]').forEach(function (tr) { tr.addEventListener('click', function () { openProposalDetail(tr.getAttribute('data-id'), user); }); });
@@ -2807,14 +2858,27 @@
   }
   function uid() { return 'l' + Math.random().toString(36).slice(2, 9); }
 
+  /**
+   * Warnings that were written into `description` before they had a field of their
+   * own. Left alone they would print on a customer's proposal, so they are lifted
+   * out on load — the line keeps the flag, the customer never sees it.
+   */
+  var LEAKED_INTERNAL = [/^Quantity assumed 1 per zip line/];
+
   function normalizeLine(it) {
+    var desc = it.description || '';
+    var note = it.internalNote || '';
+    if (!note && LEAKED_INTERNAL.some(function (re) { return re.test(desc); })) { note = desc; desc = ''; }
     return {
       ref: it.ref || uid(), lineType: it.lineType || (it.isNote ? 'NOTE' : 'PRODUCT'), kind: it.kind || 'INCLUDED',
-      productId: it.productId || null, sku: it.sku || '', name: it.name || '', description: it.description || '',
+      productId: it.productId || null, sku: it.sku || '', name: it.name || '', description: desc,
       quantity: it.quantity == null ? 1 : it.quantity, rateMinor: it.rateMinor || 0, costEach: it.costEach || 0, weightEach: it.weightEach || 0, group: it.group || '',
       optional: !!it.optional,
       delivery: it.delivery || '', returnable: it.returnable || '', addlFreight: it.addlFreight || '', freightCalc: it.freightCalc || '',
       tpFreightMinor: it.tpFreightMinor || 0, tpFreightLabel: it.tpFreightLabel || '',
+      // Engineering warning for the person building the proposal. Kept separate
+      // from `description` precisely so it can never be printed.
+      internalNote: note,
       showNotes: false,
     };
   }
@@ -3152,6 +3216,13 @@
             '<input class="bF" data-i="' + i + '" data-k="sku" value="' + esc(l.sku) + '" placeholder="SKU" style="width:130px;border:1px solid #eef0ea;border-radius:6px;padding:3px 7px;font-size:11.5px;color:#5c6157;font-family:ui-monospace,monospace;">' +
           '</div>' +
           '<textarea class="bF" data-i="' + i + '" data-k="description" rows="2" placeholder="Description" style="width:100%;border:1px solid #eef0ea;border-radius:7px;padding:6px 8px;font-size:12.5px;font-family:inherit;resize:vertical;color:#4a4f47;">' + esc(l.description) + '</textarea>' +
+          // An engineering warning for whoever is building this proposal. Styled as
+          // an obvious internal flag and never written into the description, so it
+          // cannot reach the printed document.
+          (l.internalNote
+            ? '<div style="margin-top:6px;display:flex;gap:7px;align-items:flex-start;background:#fdf6e6;border:1px solid #ecd9a6;border-radius:7px;padding:6px 9px;font-size:11.5px;color:#6b5a24;line-height:1.5;">' +
+                '<b style="font-weight:700;white-space:nowrap;">Internal</b><span>' + esc(l.internalNote) + '</span></div>'
+            : '') +
           '<button class="bToggleNotes" data-i="' + i + '" style="margin-top:6px;border:none;background:transparent;color:#3d4a55;font-size:11.5px;cursor:pointer;padding:0;font-weight:500;">' + (l.showNotes ? '− Hide delivery / freight notes' : (hasNotes ? '● Delivery / freight notes' : '+ Delivery / freight notes')) + '</button>' +
           notesPanel +
         '</div>' +
@@ -3334,7 +3405,7 @@
   async function saveBuilder() {
     var btn = document.getElementById('bSave'); btn.disabled = true; btn.textContent = 'Saving…';
     var sections = [{ id: 'meta', type: 'CUSTOMER_INFO', title: 'Proposal', order: 0, enabled: true, data: pb.meta }];
-    var items = pb.lines.map(function (l, i) { return { ref: l.ref, lineType: l.lineType, kind: l.kind, productId: l.productId, sku: l.sku || '', name: l.name, description: l.description, quantity: Number(l.quantity) || 0, rateMinor: Number(l.rateMinor) || 0, costEach: Number(l.costEach) || 0, weightEach: Number(l.weightEach) || 0, group: l.group || '', optional: !!l.optional, delivery: l.delivery || '', returnable: l.returnable || '', addlFreight: l.addlFreight || '', freightCalc: l.freightCalc || '', tpFreightMinor: Number(l.tpFreightMinor) || 0, tpFreightLabel: l.tpFreightLabel || '', order: i }; });
+    var items = pb.lines.map(function (l, i) { return { ref: l.ref, lineType: l.lineType, kind: l.kind, productId: l.productId, sku: l.sku || '', name: l.name, description: l.description, internalNote: l.internalNote || '', quantity: Number(l.quantity) || 0, rateMinor: Number(l.rateMinor) || 0, costEach: Number(l.costEach) || 0, weightEach: Number(l.weightEach) || 0, group: l.group || '', optional: !!l.optional, delivery: l.delivery || '', returnable: l.returnable || '', addlFreight: l.addlFreight || '', freightCalc: l.freightCalc || '', tpFreightMinor: Number(l.tpFreightMinor) || 0, tpFreightLabel: l.tpFreightLabel || '', order: i }; });
     try {
       var r = await authed('/proposals/versions/' + pb.versionId, { method: 'PATCH', body: { sections: sections, items: items, expirationDate: pb.meta.expiration || undefined } });
       if (!r.ok) { alert('Could not save (' + r.status + ').'); btn.disabled = false; btn.textContent = 'Save proposal'; return; }
@@ -3944,6 +4015,7 @@
         lineType: l.lineType, kind: l.lineType === 'GROUP' ? 'GROUP' : l.lineType === 'SUBGROUP' ? 'SUBGROUP' : l.lineType === 'NOTE' ? 'NOTE' : 'INCLUDED',
         name: l.name, sku: l.sku || '', description: l.description || '', quantity: l.quantity == null ? 0 : l.quantity,
         rateMinor: l.rateMinor || 0, costEach: l.costEach || 0, weightEach: l.weightEach || 0, optional: !!l.optional,
+        internalNote: l.internalNote || '',
       });
     });
     out.forEach(applyItemDefaults);
@@ -4156,7 +4228,8 @@
         kind: l.lineType === 'GROUP' ? 'GROUP' : l.lineType === 'SUBGROUP' ? 'SUBGROUP' : l.lineType === 'NOTE' ? 'NOTE' : 'INCLUDED',
         name: l.name, sku: l.sku || '', description: l.description || '',
         quantity: l.quantity == null ? 0 : l.quantity, rateMinor: l.rateMinor || 0,
-        costEach: l.costEach || 0, weightEach: l.weightEach || 0, optional: !!l.optional
+        costEach: l.costEach || 0, weightEach: l.weightEach || 0, optional: !!l.optional,
+        internalNote: l.internalNote || ''
       });
     });
     out.forEach(applyItemDefaults);
@@ -4302,7 +4375,19 @@
     var view = document.getElementById('view'); view.innerHTML = '<div class="muted" style="padding:24px;">Loading…</div>';
     var order, st, audit;
     try {
-      var r1 = await authed('/orders/' + id); order = await r1.json();
+      // Check the status before reading the body. Without this an error response
+      // parses into an object with none of the expected fields and the page renders
+      // completely blank — which looks like "the order is empty" rather than "the
+      // request failed", and sends you looking in the wrong place.
+      var r1 = await authed('/orders/' + id);
+      if (!r1.ok) {
+        var msg = ''; try { msg = ((await r1.json()) || {}).message || ''; } catch (e0) {}
+        view.innerHTML = '<div class="err">Could not load this order (' + r1.status + ').' +
+          (msg ? '<div style="margin-top:6px;font-weight:400;">' + esc(msg) + '</div>' : '') +
+          '<div style="margin-top:8px;font-weight:400;font-size:13px;">If this mentions a missing column, a migration has not been deployed yet.</div></div>';
+        return;
+      }
+      order = await r1.json();
       var r2 = await authed('/orders/' + id + '/status'); st = r2.ok ? await r2.json() : {};
       var r3 = await authed('/orders/' + id + '/audit'); audit = r3.ok ? await r3.json() : [];
     } catch (e) { view.innerHTML = '<div class="err">Could not load order.</div>'; return; }

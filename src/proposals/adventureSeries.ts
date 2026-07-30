@@ -70,6 +70,13 @@ export interface PricedLine {
   lineType: 'GROUP' | 'SUBGROUP' | 'PRODUCT' | 'NOTE';
   optional?: boolean; name: string; sku?: string; description?: string;
   quantity?: number; rateMinor?: number; costEach?: number; weightEach?: number; needsPrice?: boolean;
+  /**
+   * An engineering warning for whoever is building the proposal — never printed.
+   * `description` is the customer's text, so anything addressed to US belongs
+   * here instead: a note telling a rep to go set a formula has no business being
+   * read by the person buying the gym.
+   */
+  internalNote?: string;
 }
 
 /** One BOM row with the expression that produced its quantity, for the logic trace. */
@@ -232,9 +239,10 @@ export function computeAdventureProposal(
       P(part, ruled > 0 ? ruled : zipLines);
       const last = lines[lines.length - 1];
       if (last && last.sku === part && ruled <= 0) {
-        // No quantity rule for this member yet — one per zip line, flagged so it is
-        // reviewed rather than silently assumed.
-        last.description = 'Quantity assumed 1 per zip line — set its rule in Administration → Formulas → Frame quantities.';
+        // No quantity rule for this member yet — one per zip line. Flagged for the
+        // rep so it is reviewed rather than silently assumed, but kept OFF the
+        // description: this is a message to us, not to the customer.
+        last.internalNote = 'Quantity assumed 1 per zip line — set its rule in Administration → Formulas → Frame quantities.';
       }
     }
   }
