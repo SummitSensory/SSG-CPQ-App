@@ -532,6 +532,19 @@ model Manufacturer {
   // "Total steel weight" — hardware and crating are excluded by definition.
   isSteelFabricator   Boolean           @default(false)
 
+  // ---- Bill of Materials email defaults ----
+  // Each vendor is emailed differently: a fabricator gets the shop address and a
+  // "please confirm receipt" note, a distributor gets a purchasing inbox. These
+  // pre-fill the send dialog; the sender can still edit before sending.
+  /// Where the BOM goes by default. Comma-separated for more than one recipient.
+  bomEmailTo          String?
+  bomEmailCc          String?
+  /// Supports the tokens {{vendor}}, {{order}}, {{job}}, {{submittedOn}}.
+  bomEmailSubject     String?
+  bomEmailBody        String?
+  /// Which attachment this vendor expects: EXCEL, PDF or BOTH.
+  bomEmailFormat      BomSendFormat     @default(PDF)
+
   createdAt           DateTime          @default(now())
   updatedAt           DateTime          @updatedAt
   sourcing            ProductSourcing[]
@@ -975,6 +988,21 @@ model Sku {
   /// Default quantity the proposal builder seeds this part with. NULL = no
   /// default (starts at 0); 0 = an explicit "none". A rep's entry always wins.
   defaultQty     Int?
+  /// Fixed freight charge applied to this part's line automatically when it is
+  /// added to a proposal. NULL = no default; 0 = an explicit "no freight". Prints
+  /// as the line's 3rd-party freight row. A rep's entry always wins.
+  freightMinor   Int?
+  /// Wording for that freight row, e.g. "Passthrough freight — LTL". Defaults to
+  /// "Freight" when blank.
+  freightLabel   String?
+  /// Where this part is bought. Shown as a "Buy" link on the Bill of Materials so
+  /// a purchaser can go straight to the vendor's order page. Manually editable and
+  /// accepted as a `productUrl` column by the CSV importer.
+  productUrl     String?
+  /// Whether this part must carry a powder-coat colour before its BOM section can
+  /// be submitted. Off by default — most parts are not powder coated at all, and
+  /// requiring a colour on them was blocking submission.
+  requiresPowderColor Boolean @default(false)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -1304,6 +1332,7 @@ model AcceptedOrder {
   customerApproval  CustomerApproval?
   requirements      HandoffRequirement[]
   procurement       ProcurementLine[]
+  bomSections       BomVendorSection[]
   tasks             HandoffTask[]
   events            OrderEvent[]
 
@@ -1348,6 +1377,12 @@ model ProcurementLine {
   unitWeightLbs   Decimal?   @db.Decimal(10, 3)
   // Fabrication instructions that print on the BOM line.
   powderColor  String?
+  /// Brand from the managed list, and the code as typed for THIS part. The printed
+  /// `powderColor` above is kept in step ("Cardinal 5019") so a historic BOM still
+  /// reads the same even if the brand is later renamed.
+  powderBrandId   String?
+  powderBrand     PowderColorBrand? @relation(fields: [powderBrandId], references: [id])
+  powderColorCode String?
   vendorNotes  String?
   targetDate   DateTime?
   notes        String?
@@ -1400,6 +1435,191 @@ model HandoffTask {
   @@index([orderId])
   @@index([assigneeId])
   @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Bill of Materials — per-vendor sections
+//
+// The BOM header used to be one record on the order, which meant every vendor
+// shared one submission date, one set of notes and one lock. A section is that
+// header scoped to a single vendor: its own dates, its own questions, its own
+// send history, and its own confirm/unlock state. The order-level header fields
+// on AcceptedOrder remain as the DEFAULTS a new section inherits.
+// ---------------------------------------------------------------------------
+
+enum BomSectionStatus {
+  DRAFT
+  SUBMITTED
+}
+
+model BomVendorSection {
+  id              String           @id @default(cuid())
+  orderId         String
+  order           AcceptedOrder    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  /// Vendor name, matching ProcurementLine.vendor. 'Unassigned vendor' is a real
+  /// section so unsourced parts still get a sheet.
+  vendor          String
+  /// Print/export order of the sections, and the order they appear on screen.
+  sortOrder       Int              @default(0)
+
+  jobName         String?
+  shipTo          BomShipTo        @default(CUSTOMER)
+  /// Null means "not submitted yet" — the UI shows today's date as the default.
+  submittedOn     DateTime?
+  deliveryType    String?
+  powderCoatBrand String?
+  shipmentQuote   String?
+  notes           String?
+
+  /// SUBMITTED freezes the section's fields; unlocking is an explicit action and
+  /// is recorded on the order timeline.
+  status          BomSectionStatus @default(DRAFT)
+  confirmedAt     DateTime?
+  confirmedById   String?
+  unlockedAt      DateTime?
+  unlockedById    String?
+
+  answers         BomVendorAnswer[]
+  sends           BomSend[]
+
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  @@unique([orderId, vendor])
+  @@index([orderId])
+}
+
+enum BomQuestionType {
+  TEXT
+  LONG_TEXT
+  NUMBER
+  DATE
+  SELECT
+  MULTI_SELECT
+  BOOLEAN
+}
+
+/// A reusable question definition, administered per vendor. Every new section for
+/// that vendor starts with a copy of these, so "what gauge?" is asked of the same
+/// fabricator on every order without re-typing it.
+model BomQuestionTemplate {
+  id        String          @id @default(cuid())
+  /// Null applies the question to EVERY vendor section.
+  vendor    String?
+  label     String
+  type      BomQuestionType @default(TEXT)
+  /// Choice list for SELECT / MULTI_SELECT, as an ordered array of strings.
+  options   Json?
+  helpText  String?
+  required  Boolean         @default(false)
+  sortOrder Int             @default(0)
+  active    Boolean         @default(true)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  @@index([vendor])
+}
+
+/// The question AND its answer on one order's section. The label/type/options are
+/// snapshotted so editing a template never rewrites history on a sent BOM.
+model BomVendorAnswer {
+  id         String           @id @default(cuid())
+  sectionId  String
+  section    BomVendorSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  templateId String?
+  label      String
+  type       BomQuestionType  @default(TEXT)
+  options    Json?
+  required   Boolean          @default(false)
+  /// Scalar answers as text; MULTI_SELECT as a JSON array of strings.
+  value      String?
+  sortOrder  Int              @default(0)
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  @@index([sectionId])
+}
+
+enum BomSendFormat {
+  EXCEL
+  PDF
+  BOTH
+}
+
+enum BomSendStatus {
+  QUEUED
+  SENT
+  FAILED
+  DELIVERED
+  BOUNCED
+}
+
+/// Audit trail for every BOM emailed to a vendor: who sent it, to whom, when, in
+/// what format, and what the provider said afterwards. Append-only.
+model BomSend {
+  id                String           @id @default(cuid())
+  sectionId         String
+  section           BomVendorSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  orderId           String
+  vendor            String
+  toEmail           String
+  ccEmails          String?
+  subject           String
+  bodyPreview       String?
+  format            BomSendFormat    @default(PDF)
+  status            BomSendStatus    @default(QUEUED)
+  /// Resend's message id, so a delivery webhook can find this row later.
+  providerMessageId String?
+  error             String?
+  sentById          String
+  sentAt            DateTime         @default(now())
+  deliveredAt       DateTime?
+  openedAt          DateTime?
+
+  @@index([sectionId])
+  @@index([orderId])
+  @@index([providerMessageId])
+}
+
+// ---------------------------------------------------------------------------
+// Powder coat colours
+//
+// A customer picks a BRAND ("Cardinal", "Prismatic") and then types the specific
+// colour CODE for each part — different parts of the same frame routinely carry
+// different codes. The brand is a managed list because that is where the spelling
+// drift was; the code is free text because the brands' catalogues change faster
+// than we could maintain a copy of them.
+// ---------------------------------------------------------------------------
+
+model PowderColorBrand {
+  id        String            @id @default(cuid())
+  name      String            @unique
+  website   String?
+  active    Boolean           @default(true)
+  sortOrder Int               @default(0)
+  lines     ProcurementLine[]
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Ryan Capital financing options
+//
+// Payments are quoted from a PAYMENT FACTOR per term, not an interest rate:
+// monthly payment = financed amount x factor. Factors are what the lessor
+// publishes, so they are the editable unit.
+// ---------------------------------------------------------------------------
+
+model FinanceFactor {
+  id          String   @id @default(cuid())
+  termMonths  Int      @unique
+  /// Payment per $1 financed, e.g. 0.032700 for 36 months.
+  factor      Decimal  @db.Decimal(10, 6)
+  active      Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
 
 // Append-only, order-scoped audit timeline (complements the global AuditLog).

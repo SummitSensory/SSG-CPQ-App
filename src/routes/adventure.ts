@@ -3,7 +3,7 @@ import { prisma } from '../lib/prisma.js';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import { computeAdventureProposal, explainAdventure, frameModelNumber, frameDimensions, type AdvAnswers, type SkuRec } from '../proposals/adventureSeries.js';
-import { loadFormulaRules } from './formulas.js';
+import { loadFormulaRules, loadFormulaSettings } from './formulas.js';
 
 /** Server-side Adventure Series pricing engine: answers -> priced, grouped lines.
  *  Prices/weights/costs are read live from the Sku table (editable in Catalog → Pricing & SKUs). */
@@ -64,6 +64,8 @@ export function registerAdventureRoutes(app: FastifyInstance): void {
         category: r.category,
         proposalGroup: (pl ? pl.group : '') || r.proposalGroup || undefined,
         proposalSubgroup: pl ? pl.subgroup || undefined : undefined,
+        proposalGroupSort: pl ? pl.groupSort : undefined,
+        proposalSubgroupSort: pl ? pl.subSort : undefined,
         overrideAllowed: r.overrideAllowed === true,
       };
     }
@@ -75,10 +77,12 @@ export function registerAdventureRoutes(app: FastifyInstance): void {
    * subgroup. The engine reads this so a part shows up under the heading it is
    * filed under in Catalog, instead of the heading the engine happened to hardcode.
    */
-  async function placements(): Promise<Record<string, { group: string; subgroup: string }>> {
+  interface Placement { group: string; subgroup: string; groupSort: number; subSort: number }
+
+  async function placements(): Promise<Record<string, Placement>> {
     const [cats, products, skus] = await Promise.all([
-      prisma.productCategory.findMany({ select: { id: true, name: true, slug: true, parentId: true, productId: true } }),
-      prisma.product.findMany({ select: { id: true, sku: true } }),
+      prisma.productCategory.findMany({ select: { id: true, name: true, slug: true, parentId: true, productId: true, sortOrder: true } }),
+      prisma.product.findMany({ select: { id: true, sku: true, categoryId: true } }),
       prisma.sku.findMany({ select: { part: true } }),
     ]);
     const byId = new Map(cats.map((c) => [c.id, c]));
@@ -88,29 +92,69 @@ export function registerAdventureRoutes(app: FastifyInstance): void {
     // used to be skipped, which dropped the part into Hardware. Recover the part
     // from the node's slug tail so it still prints under the tier it is filed under.
     const partByTail = new Map(skus.map((s) => [s.part.toLowerCase(), s.part]));
-    const out: Record<string, { group: string; subgroup: string }> = {};
+    const out: Record<string, Placement> = {};
+
+    type Node = (typeof cats)[number];
+    /** Nodes from the outermost tier down to `startId`, inclusive. */
+    const chainFrom = (startId: string | null | undefined): Node[] => {
+      const chain: Node[] = [];
+      let node = startId ? byId.get(startId) : undefined;
+      while (node && chain.length < 8) {
+        chain.unshift(node);
+        node = node.parentId ? byId.get(node.parentId) : undefined;
+      }
+      return chain;
+    };
+    const place = (chain: Node[]): Placement => {
+      const top = chain[0];
+      const leaf = chain.length > 1 ? chain[chain.length - 1] : undefined;
+      return {
+        group: top ? top.name : '',
+        subgroup: leaf ? leaf.name : '',
+        // Tree sort order decides the order headings print in. Both default to a
+        // large number so an unordered node sinks to the bottom instead of jumping
+        // to the top of the proposal.
+        groupSort: top ? top.sortOrder : 9_999,
+        subSort: leaf ? leaf.sortOrder : 9_999,
+      };
+    };
+
+    // A product filed UNDER a category is the normal case — its own category is the
+    // subgroup and the outermost tier is the group. This is read from
+    // Product.categoryId, which the tier-node walk below never sees: that walk only
+    // finds parts a category node names directly. Missing this path is why an
+    // accessory filed under, say, "Essential Carabiners & Connectors" had no group at
+    // all and fell through to the Hardware block.
+    for (const p of products) {
+      if (!p.sku || !p.categoryId) continue;
+      const chain = chainFrom(p.categoryId);
+      if (!chain.length) continue;
+      out[p.sku] = place(chain);
+    }
+
+    // Legacy/secondary path: the tier node itself IS the part. Its own name is the
+    // product name, so placement comes from the headers above it. Does not overwrite
+    // a placement already resolved from Product.categoryId.
     for (const c of cats) {
       const tail = (c.slug.split('--').pop() || '').toLowerCase();
       const sku = (c.productId ? skuById.get(c.productId) : undefined) || partByTail.get(tail);
       if (!sku || out[sku]) continue;
-      // Walk the HEADERS above this part: nearest header is the subgroup (tier 2),
-      // outermost is the group (tier 1).
-      const chain: string[] = [];
-      let node = c.parentId ? byId.get(c.parentId) : undefined;
-      while (node && chain.length < 8) {
-        chain.unshift(node.name);
-        node = node.parentId ? byId.get(node.parentId) : undefined;
-      }
-      out[sku] = { group: chain[0] ?? '', subgroup: chain.length > 1 ? (chain[chain.length - 1] ?? '') : '' };
+      out[sku] = place(chainFrom(c.parentId));
     }
     return out;
   }
 
-  /** Catalog category name → its ACTIVE part numbers, so kits print every member. */
+  /** Catalog category name → its ACTIVE part numbers, so kits print every member.
+   *  Ordered by the tree's own sortOrder, so reordering a kit in the product tree
+   *  changes the order those lines print in — alphabetical-by-SKU ignored it. */
   async function kitParts(): Promise<Record<string, string[]>> {
     const [cats, products] = await Promise.all([
       prisma.productCategory.findMany({ select: { id: true, name: true } }),
-      prisma.product.findMany({ where: { status: 'ACTIVE' }, select: { sku: true, categoryId: true }, orderBy: { sku: 'asc' } }),
+      prisma.product.findMany({
+        where: { status: 'ACTIVE' },
+        select: { sku: true, categoryId: true },
+        orderBy: [{ sortOrder: 'asc' }, { sku: 'asc' }],
+      }),
     ]);
     const nameById = new Map(cats.map((c) => [c.id, c.name]));
     const out: Record<string, string[]> = {};
@@ -124,8 +168,8 @@ export function registerAdventureRoutes(app: FastifyInstance): void {
 
   app.post('/proposals/adventure-series/price', write, async (req) => {
     const a = (req.body || {}) as AdvAnswers;
-    const [skus, rules, kits] = await Promise.all([skuMap(), loadFormulaRules(), kitParts()]);
-    const out = computeAdventureProposal(a, skus, rules.hardware, rules.frame, kits);
+    const [skus, rules, kits, settings] = await Promise.all([skuMap(), loadFormulaRules(), kitParts(), loadFormulaSettings()]);
+    const out = computeAdventureProposal(a, skus, rules.hardware, rules.frame, kits, settings);
     return { ...out, frameModel: frameModelNumber(a), frameDimensions: frameDimensions(a) };
   });
 

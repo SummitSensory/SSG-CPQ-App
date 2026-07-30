@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-07-25T14:56:47.351Z",
-  "source": "Summit Product Workbook v3 (updated 2026-07-25)",
+  "generatedAt": "2026-07-30T13:12:40.900Z",
+  "source": "summit-product-tree-1-Revised-336bbf52.xlsx (Tree sheet, validated 2026-07-29)",
   "defaultEffectiveDate": "2026-07-25",
   "productLines": [
     {
@@ -782,36 +782,6 @@
       "productLine": "Adventure Series",
       "defaultQuantity": 1,
       "unitPriceMinor": 3450,
-      "badge": null,
-      "lengthIn": null,
-      "widthIn": null,
-      "heightIn": null,
-      "thicknessIn": null,
-      "showDimensions": false,
-      "dimensionsOverride": null,
-      "weightOz": 0
-    },
-    {
-      "sku": "CUST-LOGO",
-      "name": "Custom Branding Setup (Logo Application on Mats & Padding)",
-      "productLine": "Adventure Series",
-      "defaultQuantity": 1,
-      "unitPriceMinor": 156250,
-      "badge": null,
-      "lengthIn": null,
-      "widthIn": null,
-      "heightIn": null,
-      "thicknessIn": null,
-      "showDimensions": false,
-      "dimensionsOverride": null,
-      "weightOz": 0
-    },
-    {
-      "sku": "CUSTOM",
-      "name": "Custom Mat Design & Size",
-      "productLine": "Adventure Series",
-      "defaultQuantity": 1,
-      "unitPriceMinor": 0,
       "badge": null,
       "lengthIn": null,
       "widthIn": null,
@@ -2097,7 +2067,7 @@
       "weightOz": 0
     },
     {
-      "sku": "382-408_x000D_",
+      "sku": "382-408",
       "name": "Wheelchair Swing Platform - Adult",
       "productLine": "Adventure Series",
       "defaultQuantity": 1,
@@ -4047,21 +4017,6 @@
       "weightOz": 0
     },
     {
-      "sku": "9RGRX",
-      "name": "Controllers above sold separately).",
-      "productLine": "Therapy Equipment",
-      "defaultQuantity": 1,
-      "unitPriceMinor": 31500,
-      "badge": null,
-      "lengthIn": null,
-      "widthIn": null,
-      "heightIn": null,
-      "thicknessIn": null,
-      "showDimensions": false,
-      "dimensionsOverride": null,
-      "weightOz": 0
-    },
-    {
       "sku": "9RORX",
       "name": "Vibroacoustic Relaxer",
       "productLine": "Therapy Equipment",
@@ -4157,21 +4112,6 @@
       "productLine": "Therapy Equipment",
       "defaultQuantity": 1,
       "unitPriceMinor": 49900,
-      "badge": null,
-      "lengthIn": null,
-      "widthIn": null,
-      "heightIn": null,
-      "thicknessIn": null,
-      "showDimensions": false,
-      "dimensionsOverride": null,
-      "weightOz": 0
-    },
-    {
-      "sku": "9TACP",
-      "name": "cushion",
-      "productLine": "Therapy Equipment",
-      "defaultQuantity": 1,
-      "unitPriceMinor": 189900,
       "badge": null,
       "lengthIn": null,
       "widthIn": null,
@@ -4810,6 +4750,201 @@
       "showDimensions": false,
       "dimensionsOverride": null,
       "weightOz": null
+    },
+    {
+      "sku": "K-4000",
+      "name": "Summit Soar S1 - Mobile Free-Standing Swing Frame w/ Single Cross Beam",
+      "productLine": "Summit Soar",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 390000,
+      "badge": null,
+      "lengthIn": 80.2,
+      "widthIn": 114,
+      "heightIn": 100,
+      "thicknessIn": null,
+      "showDimensions": true,
+      "dimensionsOverride": null,
+      "weightOz": 7360
+    },
+    {
+      "sku": "K-4002",
+      "name": "Summit Soar S2 - Mobile Free-Standing Swing Frame w/ Two Cross Beams",
+      "productLine": "Summit Soar",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 441100,
+      "badge": null,
+      "lengthIn": 80.2,
+      "widthIn": 114,
+      "heightIn": 100,
+      "thicknessIn": null,
+      "showDimensions": true,
+      "dimensionsOverride": null,
+      "weightOz": 8160
+    },
+    {
+      "sku": "K-4003",
+      "name": "Summit Soar S3 - Mobile Free-Standing Swing Frame w/ Three Cross Beams",
+      "productLine": "Summit Soar",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 492200,
+      "badge": null,
+      "lengthIn": 80.2,
+      "widthIn": 114,
+      "heightIn": 100,
+      "thicknessIn": null,
+      "showDimensions": true,
+      "dimensionsOverride": null,
+      "weightOz": 8960
+    },
+    {
+      "sku": "K-4001",
+      "name": "Summit Soar S1-XL - Mobile Free-Standing Swing Frame w/ Single Cross Beam (Width: 12')",
+      "productLine": "Summit Soar",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 432900,
+      "badge": null,
+      "lengthIn": 80.2,
+      "widthIn": 144,
+      "heightIn": 100,
+      "thicknessIn": null,
+      "showDimensions": true,
+      "dimensionsOverride": null,
+      "weightOz": null
+    },
+    {
+      "sku": "K-4006",
+      "name": "Summit Soar S2-XL - Mobile Free-Standing Swing Frame w/ Two Cross Beams (Width: 12')",
+      "productLine": "Summit Soar",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 484000,
+      "badge": null,
+      "lengthIn": 80.2,
+      "widthIn": 144,
+      "heightIn": 100,
+      "thicknessIn": null,
+      "showDimensions": true,
+      "dimensionsOverride": null,
+      "weightOz": null
+    },
+    {
+      "sku": "K-4007",
+      "name": "Summit Soar S3-XL - Mobile Free-Standing Swing Frame w/ Three Cross Beams (Width: 12')",
+      "productLine": "Summit Soar",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 535100,
+      "badge": null,
+      "lengthIn": 80.2,
+      "widthIn": 144,
+      "heightIn": 100,
+      "thicknessIn": null,
+      "showDimensions": true,
+      "dimensionsOverride": null,
+      "weightOz": null
+    },
+    {
+      "sku": "K-4004",
+      "name": "Summit Soar S1 - Mobile Free-Standing Swing Frame w/ Single Cross Beam (Height: 7')",
+      "productLine": "Summit Soar",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 390000,
+      "badge": null,
+      "lengthIn": 80.2,
+      "widthIn": 114,
+      "heightIn": 100,
+      "thicknessIn": null,
+      "showDimensions": true,
+      "dimensionsOverride": null,
+      "weightOz": 7360
+    },
+    {
+      "sku": "K-4005",
+      "name": "Summit Soar S2 - Mobile Free-Standing Swing Frame w/ Single Cross Beam (Height: 7')",
+      "productLine": "Summit Soar",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 441100,
+      "badge": null,
+      "lengthIn": 80.2,
+      "widthIn": 114,
+      "heightIn": 84,
+      "thicknessIn": null,
+      "showDimensions": true,
+      "dimensionsOverride": null,
+      "weightOz": 8160
+    },
+    {
+      "sku": "CLM325",
+      "name": "Soar-XL Floor Mat System (138\" x 80\" x 3.25\") - Single Fold",
+      "productLine": "Summit Soar",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 144000,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": null
+    },
+    {
+      "sku": "SSM80100",
+      "name": "Soar Floor Mat System (100\" x 80\" x 3.25\") - Single Fold",
+      "productLine": "Summit Soar",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 104250,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": null
+    },
+    {
+      "sku": "COLU2812",
+      "name": "Soar Base Beam U Column Wrap (30\" x 4.5\" x 3.5\" x 3.5\" x 1.375\")",
+      "productLine": "Summit Soar",
+      "defaultQuantity": 4,
+      "unitPriceMinor": 17850,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": null
+    },
+    {
+      "sku": "SFGPC",
+      "name": "Gusset Plate Padding",
+      "productLine": "Summit Soar",
+      "defaultQuantity": 2,
+      "unitPriceMinor": 17550,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": null
+    },
+    {
+      "sku": "COLW2812",
+      "name": "Soar Column Wrap (60\" x 4.5\" x 4.5\" x 1.375\")",
+      "productLine": "Summit Soar",
+      "defaultQuantity": 2,
+      "unitPriceMinor": 22113,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": null
     }
   ],
   "tiers": [
@@ -4820,151 +4955,7 @@
       "tierLevel": 1,
       "parentSlug": null,
       "sku": null,
-      "sortOrder": 10
-    },
-    {
-      "slug": "adventure-series--dual-trolley-system",
-      "name": "DUAL TROLLEY SYSTEM",
-      "productLine": "Adventure Series",
-      "tierLevel": 1,
-      "parentSlug": null,
-      "sku": null,
-      "sortOrder": 290
-    },
-    {
-      "slug": "adventure-series--therapeutic-activity-adventure-components",
-      "name": "THERAPEUTIC ACTIVITY & ADVENTURE COMPONENTS",
-      "productLine": "Adventure Series",
-      "tierLevel": 1,
-      "parentSlug": null,
-      "sku": null,
-      "sortOrder": 370
-    },
-    {
-      "slug": "adventure-series--therapeutic-activity-adventure-components--summit-adventure-slide-system",
-      "name": "Summit Adventure Slide System",
-      "productLine": "Adventure Series",
-      "tierLevel": 2,
-      "parentSlug": "adventure-series--therapeutic-activity-adventure-components",
-      "sku": null,
-      "sortOrder": 380
-    },
-    {
-      "slug": "adventure-series--therapeutic-activity-adventure-components--climbing-wall-safety-accessories",
-      "name": "Climbing Wall & Safety Accessories",
-      "productLine": "Adventure Series",
-      "tierLevel": 2,
-      "parentSlug": "adventure-series--therapeutic-activity-adventure-components",
-      "sku": null,
-      "sortOrder": 430
-    },
-    {
-      "slug": "adventure-series--therapeutic-activity-adventure-components--ladder-safety-accessories",
-      "name": "Ladder - Safety Accessories",
-      "productLine": "Adventure Series",
-      "tierLevel": 2,
-      "parentSlug": "adventure-series--therapeutic-activity-adventure-components",
-      "sku": null,
-      "sortOrder": 470
-    },
-    {
-      "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
-      "name": "Therapeutic Swing & Sensory Equipment Package",
-      "productLine": "Adventure Series",
-      "tierLevel": 2,
-      "parentSlug": "adventure-series--therapeutic-activity-adventure-components",
-      "sku": null,
-      "sortOrder": 500
-    },
-    {
-      "slug": "adventure-series--therapeutic-activity-adventure-components--essential-carabiners-connectors",
-      "name": "Essential Carabiners & Connectors",
-      "productLine": "Adventure Series",
-      "tierLevel": 2,
-      "parentSlug": "adventure-series--therapeutic-activity-adventure-components",
-      "sku": null,
-      "sortOrder": 2340
-    },
-    {
-      "slug": "adventure-series--therapeutic-activity-adventure-components--complete-zip-line-kit",
-      "name": "Complete Zip Line Kit",
-      "productLine": "Adventure Series",
-      "tierLevel": 2,
-      "parentSlug": "adventure-series--therapeutic-activity-adventure-components",
-      "sku": null,
-      "sortOrder": 2380
-    },
-    {
-      "slug": "adventure-series--therapeutic-activity-adventure-components--frame-mounted-therapy-rack",
-      "name": "Frame Mounted Therapy Rack",
-      "productLine": "Adventure Series",
-      "tierLevel": 2,
-      "parentSlug": "adventure-series--therapeutic-activity-adventure-components",
-      "sku": null,
-      "sortOrder": 2440
-    },
-    {
-      "slug": "adventure-series--adventure-mat-system",
-      "name": "ADVENTURE MAT SYSTEM",
-      "productLine": "Adventure Series",
-      "tierLevel": 1,
-      "parentSlug": null,
-      "sku": null,
-      "sortOrder": 2460
-    },
-    {
-      "slug": "adventure-series--adventure-mat-system--adventure-mat-system",
-      "name": "Adventure Mat System",
-      "productLine": "Adventure Series",
-      "tierLevel": 2,
-      "parentSlug": "adventure-series--adventure-mat-system",
-      "sku": null,
-      "sortOrder": 2470
-    },
-    {
-      "slug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories",
-      "name": "Advanced Therapy Mat Accessories",
-      "productLine": "Adventure Series",
-      "tierLevel": 2,
-      "parentSlug": "adventure-series--adventure-mat-system",
-      "sku": null,
-      "sortOrder": 2800
-    },
-    {
-      "slug": "adventure-series--summit-foundation-system",
-      "name": "SUMMIT FOUNDATION SYSTEM",
-      "productLine": "Adventure Series",
-      "tierLevel": 1,
-      "parentSlug": null,
-      "sku": null,
-      "sortOrder": 3040
-    },
-    {
-      "slug": "adventure-series--hardware",
-      "name": "HARDWARE",
-      "productLine": "Adventure Series",
-      "tierLevel": 1,
-      "parentSlug": null,
-      "sku": null,
-      "sortOrder": 3070
-    },
-    {
-      "slug": "adventure-series--hardware--hardware",
-      "name": "Hardware",
-      "productLine": "Adventure Series",
-      "tierLevel": 2,
-      "parentSlug": "adventure-series--hardware",
-      "sku": null,
-      "sortOrder": 3090
-    },
-    {
-      "slug": "adventure-series--hardware--quick-shift",
-      "name": "Quick Shift",
-      "productLine": "Adventure Series",
-      "tierLevel": 2,
-      "parentSlug": "adventure-series--hardware",
-      "sku": null,
-      "sortOrder": 3460
+      "sortOrder": 20010
     },
     {
       "slug": "adventure-series--adventure-series-frame--a-2245",
@@ -4973,7 +4964,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--adventure-series-frame",
       "sku": "A-2245",
-      "sortOrder": 20
+      "sortOrder": 20020
     },
     {
       "slug": "adventure-series--adventure-series-frame--a-2246",
@@ -4982,7 +4973,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--adventure-series-frame",
       "sku": "A-2246",
-      "sortOrder": 30
+      "sortOrder": 20030
     },
     {
       "slug": "adventure-series--adventure-series-frame--a-2241",
@@ -4991,7 +4982,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--adventure-series-frame",
       "sku": "A-2241",
-      "sortOrder": 40
+      "sortOrder": 20040
     },
     {
       "slug": "adventure-series--adventure-series-frame--a-2242",
@@ -5000,7 +4991,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--adventure-series-frame",
       "sku": "A-2242",
-      "sortOrder": 50
+      "sortOrder": 20050
     },
     {
       "slug": "adventure-series--adventure-series-frame--a-2243",
@@ -5009,7 +5000,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--adventure-series-frame",
       "sku": "A-2243",
-      "sortOrder": 60
+      "sortOrder": 20060
     },
     {
       "slug": "adventure-series--adventure-series-frame--a-2244",
@@ -5018,7 +5009,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--adventure-series-frame",
       "sku": "A-2244",
-      "sortOrder": 70
+      "sortOrder": 20070
     },
     {
       "slug": "adventure-series--adventure-series-frame--a-2022",
@@ -5027,7 +5018,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--adventure-series-frame",
       "sku": "A-2022",
-      "sortOrder": 80
+      "sortOrder": 20080
     },
     {
       "slug": "adventure-series--adventure-series-frame--a-2225",
@@ -5036,7 +5027,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--adventure-series-frame",
       "sku": "A-2225",
-      "sortOrder": 90
+      "sortOrder": 20090
     },
     {
       "slug": "adventure-series--adventure-series-frame--p-2531",
@@ -5045,7 +5036,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--adventure-series-frame",
       "sku": "P-2531",
-      "sortOrder": 100
+      "sortOrder": 20100
     },
     {
       "slug": "adventure-series--adventure-series-frame--a-2253",
@@ -5054,7 +5045,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--adventure-series-frame",
       "sku": "A-2253",
-      "sortOrder": 110
+      "sortOrder": 20110
     },
     {
       "slug": "adventure-series--adventure-series-frame--a-2248",
@@ -5063,7 +5054,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--adventure-series-frame",
       "sku": "A-2248",
-      "sortOrder": 120
+      "sortOrder": 20120
     },
     {
       "slug": "adventure-series--adventure-series-frame--p-2545",
@@ -5072,7 +5063,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--adventure-series-frame",
       "sku": "P-2545",
-      "sortOrder": 130
+      "sortOrder": 20130
     },
     {
       "slug": "adventure-series--adventure-series-frame--p-2206",
@@ -5081,7 +5072,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--adventure-series-frame",
       "sku": "P-2206",
-      "sortOrder": 140
+      "sortOrder": 20140
     },
     {
       "slug": "adventure-series--adventure-series-frame--p-2207",
@@ -5090,7 +5081,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--adventure-series-frame",
       "sku": "P-2207",
-      "sortOrder": 150
+      "sortOrder": 20150
     },
     {
       "slug": "adventure-series--adventure-series-frame--a-2408",
@@ -5099,7 +5090,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--adventure-series-frame",
       "sku": "A-2408",
-      "sortOrder": 160
+      "sortOrder": 20160
     },
     {
       "slug": "adventure-series--adventure-series-frame--a-2409",
@@ -5108,7 +5099,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--adventure-series-frame",
       "sku": "A-2409",
-      "sortOrder": 170
+      "sortOrder": 20170
     },
     {
       "slug": "adventure-series--adventure-series-frame--a-2410",
@@ -5117,7 +5108,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--adventure-series-frame",
       "sku": "A-2410",
-      "sortOrder": 180
+      "sortOrder": 20180
     },
     {
       "slug": "adventure-series--adventure-series-frame--p-2330",
@@ -5126,7 +5117,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--adventure-series-frame",
       "sku": "P-2330",
-      "sortOrder": 190
+      "sortOrder": 20190
     },
     {
       "slug": "adventure-series--adventure-series-frame--p-2216",
@@ -5135,7 +5126,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--adventure-series-frame",
       "sku": "P-2216",
-      "sortOrder": 200
+      "sortOrder": 20200
     },
     {
       "slug": "adventure-series--adventure-series-frame--p-2217",
@@ -5144,7 +5135,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--adventure-series-frame",
       "sku": "P-2217",
-      "sortOrder": 210
+      "sortOrder": 20210
     },
     {
       "slug": "adventure-series--adventure-series-frame--a-2418",
@@ -5153,7 +5144,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--adventure-series-frame",
       "sku": "A-2418",
-      "sortOrder": 220
+      "sortOrder": 20220
     },
     {
       "slug": "adventure-series--adventure-series-frame--a-2419",
@@ -5162,7 +5153,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--adventure-series-frame",
       "sku": "A-2419",
-      "sortOrder": 230
+      "sortOrder": 20230
     },
     {
       "slug": "adventure-series--adventure-series-frame--a-2420",
@@ -5171,7 +5162,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--adventure-series-frame",
       "sku": "A-2420",
-      "sortOrder": 240
+      "sortOrder": 20240
     },
     {
       "slug": "adventure-series--adventure-series-frame--p-2024",
@@ -5180,7 +5171,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--adventure-series-frame",
       "sku": "P-2024",
-      "sortOrder": 250
+      "sortOrder": 20250
     },
     {
       "slug": "adventure-series--adventure-series-frame--a-2530",
@@ -5189,7 +5180,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--adventure-series-frame",
       "sku": "A-2530",
-      "sortOrder": 260
+      "sortOrder": 20260
     },
     {
       "slug": "adventure-series--adventure-series-frame--p-2028",
@@ -5198,7 +5189,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--adventure-series-frame",
       "sku": "P-2028",
-      "sortOrder": 270
+      "sortOrder": 20270
     },
     {
       "slug": "adventure-series--adventure-series-frame--p-1032",
@@ -5207,7 +5198,16 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--adventure-series-frame",
       "sku": "P-1032",
-      "sortOrder": 280
+      "sortOrder": 20280
+    },
+    {
+      "slug": "adventure-series--dual-trolley-system",
+      "name": "DUAL TROLLEY SYSTEM",
+      "productLine": "Adventure Series",
+      "tierLevel": 1,
+      "parentSlug": null,
+      "sku": null,
+      "sortOrder": 21010
     },
     {
       "slug": "adventure-series--dual-trolley-system--tr2000-a10",
@@ -5216,7 +5216,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--dual-trolley-system",
       "sku": "TR2000-A10",
-      "sortOrder": 300
+      "sortOrder": 21020
     },
     {
       "slug": "adventure-series--dual-trolley-system--tr2000-a09",
@@ -5225,7 +5225,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--dual-trolley-system",
       "sku": "TR2000-A09",
-      "sortOrder": 310
+      "sortOrder": 21030
     },
     {
       "slug": "adventure-series--dual-trolley-system--tr2000-a08",
@@ -5234,7 +5234,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--dual-trolley-system",
       "sku": "TR2000-A08",
-      "sortOrder": 320
+      "sortOrder": 21040
     },
     {
       "slug": "adventure-series--dual-trolley-system--tr2000-a07",
@@ -5243,7 +5243,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--dual-trolley-system",
       "sku": "TR2000-A07",
-      "sortOrder": 330
+      "sortOrder": 21050
     },
     {
       "slug": "adventure-series--dual-trolley-system--trh2005",
@@ -5252,7 +5252,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--dual-trolley-system",
       "sku": "TRH2005",
-      "sortOrder": 340
+      "sortOrder": 21060
     },
     {
       "slug": "adventure-series--dual-trolley-system--trn2016",
@@ -5261,7 +5261,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--dual-trolley-system",
       "sku": "TRN2016",
-      "sortOrder": 350
+      "sortOrder": 21070
     },
     {
       "slug": "adventure-series--dual-trolley-system--trt2001",
@@ -5270,7 +5270,43 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--dual-trolley-system",
       "sku": "TRT2001",
-      "sortOrder": 360
+      "sortOrder": 21080
+    },
+    {
+      "slug": "adventure-series-p-2018",
+      "name": "Trolley Bar",
+      "productLine": "Adventure Series",
+      "tierLevel": 2,
+      "parentSlug": "adventure-series--dual-trolley-system",
+      "sku": "P-2018",
+      "sortOrder": 21090
+    },
+    {
+      "slug": "adventure-series-p-2025",
+      "name": "Trolley Bar Plate",
+      "productLine": "Adventure Series",
+      "tierLevel": 2,
+      "parentSlug": "adventure-series--dual-trolley-system",
+      "sku": "P-2025",
+      "sortOrder": 21100
+    },
+    {
+      "slug": "adventure-series--therapeutic-activity-adventure-components",
+      "name": "THERAPEUTIC ACTIVITY & ADVENTURE COMPONENTS",
+      "productLine": "Adventure Series",
+      "tierLevel": 1,
+      "parentSlug": null,
+      "sku": null,
+      "sortOrder": 22010
+    },
+    {
+      "slug": "adventure-series--therapeutic-activity-adventure-components--summit-adventure-slide-system",
+      "name": "Summit Adventure Slide System",
+      "productLine": "Adventure Series",
+      "tierLevel": 2,
+      "parentSlug": "adventure-series--therapeutic-activity-adventure-components",
+      "sku": null,
+      "sortOrder": 22020
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--summit-adventure-slide-system--a-2216",
@@ -5279,7 +5315,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--summit-adventure-slide-system",
       "sku": "A-2216",
-      "sortOrder": 390
+      "sortOrder": 22030
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--summit-adventure-slide-system--ws8203",
@@ -5288,7 +5324,25 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--summit-adventure-slide-system",
       "sku": "WS8203",
-      "sortOrder": 400
+      "sortOrder": 22040
+    },
+    {
+      "slug": "adventure-series-b01muebgvk",
+      "name": "Summit Adventure Slide - 2Piece Plastic Scoop Slide",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--therapeutic-activity-adventure-components--summit-adventure-slide-system",
+      "sku": "B01MUEBGVK",
+      "sortOrder": 22050
+    },
+    {
+      "slug": "adventure-series-b0018l8rjg",
+      "name": "Summit Adventure Slide - 2Piece Plastic Scoop Slide",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--therapeutic-activity-adventure-components--summit-adventure-slide-system",
+      "sku": "B0018L8RJG",
+      "sortOrder": 22060
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--summit-adventure-slide-system--150045",
@@ -5297,7 +5351,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--summit-adventure-slide-system",
       "sku": "150045",
-      "sortOrder": 410
+      "sortOrder": 22070
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--summit-adventure-slide-system--a-2349",
@@ -5306,7 +5360,16 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--summit-adventure-slide-system",
       "sku": "A-2349",
-      "sortOrder": 420
+      "sortOrder": 22080
+    },
+    {
+      "slug": "adventure-series--therapeutic-activity-adventure-components--climbing-wall-safety-accessories",
+      "name": "Climbing Wall & Safety Accessories",
+      "productLine": "Adventure Series",
+      "tierLevel": 2,
+      "parentSlug": "adventure-series--therapeutic-activity-adventure-components",
+      "sku": null,
+      "sortOrder": 22090
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--climbing-wall-safety-accessories--ssg-sa-cfm",
@@ -5315,7 +5378,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--climbing-wall-safety-accessories",
       "sku": "SSG-SA-CFM",
-      "sortOrder": 440
+      "sortOrder": 22100
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--climbing-wall-safety-accessories--p-2500",
@@ -5324,7 +5387,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--climbing-wall-safety-accessories",
       "sku": "P-2500",
-      "sortOrder": 450
+      "sortOrder": 22110
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--climbing-wall-safety-accessories--ssg-sa-cwm",
@@ -5333,7 +5396,25 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--climbing-wall-safety-accessories",
       "sku": "SSG-SA-CWM",
-      "sortOrder": 460
+      "sortOrder": 22120
+    },
+    {
+      "slug": "adventure-series-ssg-sa-climb-wall-mount-kit-only",
+      "name": "Adventure Climbing Wall - Conversion Kit",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--therapeutic-activity-adventure-components--climbing-wall-safety-accessories",
+      "sku": "SSG-SA-CLIMB-WALL-MOUNT-KIT-ONLY",
+      "sortOrder": 22130
+    },
+    {
+      "slug": "adventure-series--therapeutic-activity-adventure-components--ladder-safety-accessories",
+      "name": "Ladder - Safety Accessories",
+      "productLine": "Adventure Series",
+      "tierLevel": 2,
+      "parentSlug": "adventure-series--therapeutic-activity-adventure-components",
+      "sku": null,
+      "sortOrder": 22140
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--ladder-safety-accessories--p-2501",
@@ -5342,7 +5423,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--ladder-safety-accessories",
       "sku": "P-2501",
-      "sortOrder": 480
+      "sortOrder": 22150
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--ladder-safety-accessories--p-2502",
@@ -5351,7 +5432,43 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--ladder-safety-accessories",
       "sku": "P-2502",
-      "sortOrder": 490
+      "sortOrder": 22160
+    },
+    {
+      "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
+      "name": "Therapeutic Swing & Sensory Equipment Package",
+      "productLine": "Adventure Series",
+      "tierLevel": 2,
+      "parentSlug": "adventure-series--therapeutic-activity-adventure-components",
+      "sku": null,
+      "sortOrder": 22170
+    },
+    {
+      "slug": "adventure-series-b07v3j9s2r",
+      "name": "10' x 8' - Climbing Cargo Net Black",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
+      "sku": "B07V3J9S2R",
+      "sortOrder": 22180
+    },
+    {
+      "slug": "adventure-series-b07tsdmpnq",
+      "name": "8' x 6' - Climbing Cargo Net Black",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
+      "sku": "B07TSDMPNQ",
+      "sortOrder": 22190
+    },
+    {
+      "slug": "adventure-series-b004nto8t8",
+      "name": "Skil-Care Crash Pad",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
+      "sku": "B004NTO8T8",
+      "sortOrder": 22200
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--b09t76v33v",
@@ -5360,7 +5477,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "B09T76V33V",
-      "sortOrder": 510
+      "sortOrder": 22210
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--xl-plat",
@@ -5369,7 +5486,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "XL-PLAT",
-      "sortOrder": 520
+      "sortOrder": 22220
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--b0bgdqf46s",
@@ -5378,7 +5495,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "B0BGDQF46S",
-      "sortOrder": 530
+      "sortOrder": 22230
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--b08smn18wg",
@@ -5387,7 +5504,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "B08SMN18WG",
-      "sortOrder": 540
+      "sortOrder": 22240
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--b0193yg8gi",
@@ -5396,7 +5513,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "B0193YG8GI",
-      "sortOrder": 550
+      "sortOrder": 22250
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--b07mc3144w",
@@ -5405,7 +5522,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "B07MC3144W",
-      "sortOrder": 560
+      "sortOrder": 22260
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--b07pqhszpr",
@@ -5414,7 +5531,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "B07PQHSZPR",
-      "sortOrder": 570
+      "sortOrder": 22270
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--b0894xngjp",
@@ -5423,7 +5540,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "B0894XNGJP",
-      "sortOrder": 580
+      "sortOrder": 22280
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--b07wgzp8xt",
@@ -5432,7 +5549,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "B07WGZP8XT",
-      "sortOrder": 590
+      "sortOrder": 22290
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--b08dtp539f",
@@ -5441,7 +5558,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "B08DTP539F",
-      "sortOrder": 600
+      "sortOrder": 22300
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--b07z79zczx",
@@ -5450,7 +5567,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "B07Z79ZCZX",
-      "sortOrder": 610
+      "sortOrder": 22310
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--b01c3i4sl8",
@@ -5459,7 +5576,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "B01C3I4SL8",
-      "sortOrder": 620
+      "sortOrder": 22320
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--120040",
@@ -5468,7 +5585,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "120040",
-      "sortOrder": 630
+      "sortOrder": 22330
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--120050",
@@ -5477,7 +5594,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "120050",
-      "sortOrder": 640
+      "sortOrder": 22340
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--120077",
@@ -5486,7 +5603,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "120077",
-      "sortOrder": 650
+      "sortOrder": 22350
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--1909",
@@ -5495,7 +5612,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "1909",
-      "sortOrder": 660
+      "sortOrder": 22360
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--120145",
@@ -5504,16 +5621,16 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "120145",
-      "sortOrder": 670
+      "sortOrder": 22370
     },
     {
-      "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--382-408-x000d",
+      "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--382-408",
       "name": "Wheelchair Swing Platform - Adult",
       "productLine": "Adventure Series",
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
-      "sku": "382-408_x000D_",
-      "sortOrder": 680
+      "sku": "382-408",
+      "sortOrder": 22380
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--b0c4yb8d64",
@@ -5522,7 +5639,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "B0C4YB8D64",
-      "sortOrder": 690
+      "sortOrder": 22390
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--382-411",
@@ -5531,7 +5648,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "382-411",
-      "sortOrder": 700
+      "sortOrder": 22400
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--t00207",
@@ -5540,7 +5657,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "T00207",
-      "sortOrder": 710
+      "sortOrder": 22410
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8sqmc",
@@ -5549,7 +5666,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8SQMC",
-      "sortOrder": 720
+      "sortOrder": 22420
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--1001",
@@ -5558,7 +5675,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "1001",
-      "sortOrder": 730
+      "sortOrder": 22430
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--4602",
@@ -5567,7 +5684,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "4602",
-      "sortOrder": 740
+      "sortOrder": 22440
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--b09xv985jj",
@@ -5576,7 +5693,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "B09XV985JJ",
-      "sortOrder": 750
+      "sortOrder": 22450
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--3a0rd",
@@ -5585,7 +5702,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "3A0RD",
-      "sortOrder": 760
+      "sortOrder": 22460
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--3bcsst",
@@ -5594,7 +5711,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "3BCSST",
-      "sortOrder": 770
+      "sortOrder": 22470
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--3brwp",
@@ -5603,7 +5720,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "3BRWP",
-      "sortOrder": 780
+      "sortOrder": 22480
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--3crwp",
@@ -5612,7 +5729,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "3CRWP",
-      "sortOrder": 790
+      "sortOrder": 22490
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--3ctwp",
@@ -5621,7 +5738,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "3CTWP",
-      "sortOrder": 800
+      "sortOrder": 22500
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--3glmb",
@@ -5630,7 +5747,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "3GLMB",
-      "sortOrder": 810
+      "sortOrder": 22510
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--3hcsst",
@@ -5639,7 +5756,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "3HCSST",
-      "sortOrder": 820
+      "sortOrder": 22520
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--3kldl",
@@ -5648,7 +5765,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "3KLDL",
-      "sortOrder": 830
+      "sortOrder": 22530
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--3kvbc",
@@ -5657,7 +5774,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "3KVBC",
-      "sortOrder": 840
+      "sortOrder": 22540
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--3kvplr",
@@ -5666,7 +5783,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "3KVPLR",
-      "sortOrder": 850
+      "sortOrder": 22550
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--3kvplu",
@@ -5675,7 +5792,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "3KVPLU",
-      "sortOrder": 860
+      "sortOrder": 22560
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--3mapl",
@@ -5684,7 +5801,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "3MAPL",
-      "sortOrder": 870
+      "sortOrder": 22570
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--3slmp",
@@ -5693,7 +5810,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "3SLMP",
-      "sortOrder": 880
+      "sortOrder": 22580
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--3sold",
@@ -5702,7 +5819,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "3SOLD",
-      "sortOrder": 890
+      "sortOrder": 22590
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--3soldf",
@@ -5711,7 +5828,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "3SOLDF",
-      "sortOrder": 900
+      "sortOrder": 22600
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--3soldp",
@@ -5720,7 +5837,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "3SOLDP",
-      "sortOrder": 910
+      "sortOrder": 22610
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--3stvs",
@@ -5729,7 +5846,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "3STVS",
-      "sortOrder": 920
+      "sortOrder": 22620
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--3stvsb",
@@ -5738,7 +5855,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "3STVSB",
-      "sortOrder": 930
+      "sortOrder": 22630
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--3stvsg",
@@ -5747,7 +5864,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "3STVSG",
-      "sortOrder": 940
+      "sortOrder": 22640
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--3tbsw",
@@ -5756,7 +5873,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "3TBSW",
-      "sortOrder": 950
+      "sortOrder": 22650
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--4heft",
@@ -5765,7 +5882,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "4HEFT",
-      "sortOrder": 960
+      "sortOrder": 22660
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--4wdpd",
@@ -5774,7 +5891,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "4WDPD",
-      "sortOrder": 970
+      "sortOrder": 22670
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--4wdpi",
@@ -5783,7 +5900,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "4WDPI",
-      "sortOrder": 980
+      "sortOrder": 22680
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--4wdsg",
@@ -5792,7 +5909,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "4WDSG",
-      "sortOrder": 990
+      "sortOrder": 22690
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--4wdso",
@@ -5801,7 +5918,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "4WDSO",
-      "sortOrder": 1000
+      "sortOrder": 22700
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--4wdsy",
@@ -5810,7 +5927,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "4WDSY",
-      "sortOrder": 1010
+      "sortOrder": 22710
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--4wtmd20",
@@ -5819,7 +5936,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "4WTMD20",
-      "sortOrder": 1020
+      "sortOrder": 22720
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--4wtmd8",
@@ -5828,7 +5945,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "4WTMD8",
-      "sortOrder": 1030
+      "sortOrder": 22730
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--61ttl",
@@ -5837,7 +5954,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "61TTL",
-      "sortOrder": 1040
+      "sortOrder": 22740
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--6bala",
@@ -5846,7 +5963,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "6BALA",
-      "sortOrder": 1050
+      "sortOrder": 22750
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--6ftms",
@@ -5855,7 +5972,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "6FTMS",
-      "sortOrder": 1060
+      "sortOrder": 22760
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--6nkmg",
@@ -5864,7 +5981,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "6NKMG",
-      "sortOrder": 1070
+      "sortOrder": 22770
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--6ssht",
@@ -5873,7 +5990,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "6SSHT",
-      "sortOrder": 1080
+      "sortOrder": 22780
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--6tblc",
@@ -5882,7 +5999,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "6TBLC",
-      "sortOrder": 1090
+      "sortOrder": 22790
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--6tbls",
@@ -5891,7 +6008,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "6TBLS",
-      "sortOrder": 1100
+      "sortOrder": 22800
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--6tcxw",
@@ -5900,7 +6017,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "6TCXW",
-      "sortOrder": 1110
+      "sortOrder": 22810
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--6tttb",
@@ -5909,7 +6026,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "6TTTB",
-      "sortOrder": 1120
+      "sortOrder": 22820
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--71ass",
@@ -5918,7 +6035,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "71ASS",
-      "sortOrder": 1130
+      "sortOrder": 22830
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--7arfl",
@@ -5927,7 +6044,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "7ARFL",
-      "sortOrder": 1140
+      "sortOrder": 22840
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--7lflt5",
@@ -5936,7 +6053,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "7LFLT5",
-      "sortOrder": 1150
+      "sortOrder": 22850
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--7mptp",
@@ -5945,7 +6062,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "7MPTP",
-      "sortOrder": 1160
+      "sortOrder": 22860
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--7slmd",
@@ -5954,7 +6071,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "7SLMD",
-      "sortOrder": 1170
+      "sortOrder": 22870
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--7sltr",
@@ -5963,7 +6080,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "7SLTR",
-      "sortOrder": 1180
+      "sortOrder": 22880
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--7tsps",
@@ -5972,7 +6089,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "7TSPS",
-      "sortOrder": 1190
+      "sortOrder": 22890
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--7ttss",
@@ -5981,7 +6098,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "7TTSS",
-      "sortOrder": 1200
+      "sortOrder": 22900
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8-0mc",
@@ -5990,7 +6107,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8$0MC",
-      "sortOrder": 1210
+      "sortOrder": 22910
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8bdrk",
@@ -5999,7 +6116,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8BDRK",
-      "sortOrder": 1220
+      "sortOrder": 22920
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8bdrkuk",
@@ -6008,7 +6125,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8BDRKUK",
-      "sortOrder": 1230
+      "sortOrder": 22930
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8boch",
@@ -6017,7 +6134,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8BOCH",
-      "sortOrder": 1240
+      "sortOrder": 22940
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8bochd",
@@ -6026,7 +6143,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8BOCHD",
-      "sortOrder": 1250
+      "sortOrder": 22950
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8bochl",
@@ -6035,7 +6152,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8BOCHL",
-      "sortOrder": 1260
+      "sortOrder": 22960
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8bochx",
@@ -6044,7 +6161,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8BOCHX",
-      "sortOrder": 1270
+      "sortOrder": 22970
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8brfm",
@@ -6053,7 +6170,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8BRFM",
-      "sortOrder": 1280
+      "sortOrder": 22980
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8brns",
@@ -6062,7 +6179,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8BRNS",
-      "sortOrder": 1290
+      "sortOrder": 22990
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8emblq",
@@ -6071,7 +6188,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8EMBLQ",
-      "sortOrder": 1300
+      "sortOrder": 23000
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8emcc",
@@ -6080,7 +6197,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8EMCC",
-      "sortOrder": 1310
+      "sortOrder": 23010
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8emdt",
@@ -6089,7 +6206,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8EMDT",
-      "sortOrder": 1320
+      "sortOrder": 23020
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8emfc",
@@ -6098,7 +6215,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8EMFC",
-      "sortOrder": 1330
+      "sortOrder": 23030
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8emfr",
@@ -6107,7 +6224,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8EMFR",
-      "sortOrder": 1340
+      "sortOrder": 23040
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8emhl",
@@ -6116,7 +6233,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8EMHL",
-      "sortOrder": 1350
+      "sortOrder": 23050
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8emtc",
@@ -6125,7 +6242,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8EMTC",
-      "sortOrder": 1360
+      "sortOrder": 23060
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8fscs",
@@ -6134,7 +6251,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8FSCS",
-      "sortOrder": 1370
+      "sortOrder": 23070
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8fsts",
@@ -6143,7 +6260,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8FSTS",
-      "sortOrder": 1380
+      "sortOrder": 23080
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8gaat",
@@ -6152,7 +6269,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8GAAT",
-      "sortOrder": 1390
+      "sortOrder": 23090
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8gtct",
@@ -6161,7 +6278,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8GTCT",
-      "sortOrder": 1400
+      "sortOrder": 23100
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8gtmt",
@@ -6170,7 +6287,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8GTMT",
-      "sortOrder": 1410
+      "sortOrder": 23110
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8hgsw",
@@ -6179,7 +6296,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8HGSW",
-      "sortOrder": 1420
+      "sortOrder": 23120
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8rckc",
@@ -6188,7 +6305,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8RCKC",
-      "sortOrder": 1430
+      "sortOrder": 23130
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8rolcn",
@@ -6197,7 +6314,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8ROLCN",
-      "sortOrder": 1440
+      "sortOrder": 23140
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8rorx",
@@ -6206,7 +6323,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8RORX",
-      "sortOrder": 1450
+      "sortOrder": 23150
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8rotc",
@@ -6215,7 +6332,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8ROTC",
-      "sortOrder": 1460
+      "sortOrder": 23160
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8rotcj",
@@ -6224,7 +6341,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8ROTCJ",
-      "sortOrder": 1470
+      "sortOrder": 23170
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8rowbuk1",
@@ -6233,7 +6350,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8ROWBUK1",
-      "sortOrder": 1480
+      "sortOrder": 23180
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8rowbuk2",
@@ -6242,7 +6359,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8ROWBUK2",
-      "sortOrder": 1490
+      "sortOrder": 23190
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8tact",
@@ -6251,7 +6368,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8TACT",
-      "sortOrder": 1500
+      "sortOrder": 23200
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8tass",
@@ -6260,7 +6377,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8TASS",
-      "sortOrder": 1510
+      "sortOrder": 23210
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8tchna",
@@ -6269,7 +6386,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8TCHNA",
-      "sortOrder": 1520
+      "sortOrder": 23220
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8tlfs",
@@ -6278,7 +6395,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8TLFS",
-      "sortOrder": 1530
+      "sortOrder": 23230
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8tsaa",
@@ -6287,7 +6404,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8TSAA",
-      "sortOrder": 1540
+      "sortOrder": 23240
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8tsfd",
@@ -6296,7 +6413,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8TSFD",
-      "sortOrder": 1550
+      "sortOrder": 23250
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8tsfs",
@@ -6305,7 +6422,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8TSFS",
-      "sortOrder": 1560
+      "sortOrder": 23260
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8tshd",
@@ -6314,7 +6431,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8TSHD",
-      "sortOrder": 1570
+      "sortOrder": 23270
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8tspsin",
@@ -6323,7 +6440,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8TSPSIN",
-      "sortOrder": 1580
+      "sortOrder": 23280
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8tspsr",
@@ -6332,7 +6449,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8TSPSR",
-      "sortOrder": 1590
+      "sortOrder": 23290
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8ttac",
@@ -6341,7 +6458,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8TTAC",
-      "sortOrder": 1600
+      "sortOrder": 23300
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--8whsw",
@@ -6350,7 +6467,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "8WHSW",
-      "sortOrder": 1610
+      "sortOrder": 23310
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9bc200n",
@@ -6359,7 +6476,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9BC200N",
-      "sortOrder": 1620
+      "sortOrder": 23320
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9kkhh",
@@ -6368,7 +6485,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9KKHH",
-      "sortOrder": 1630
+      "sortOrder": 23330
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9kkhhk",
@@ -6377,7 +6494,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9KKHHK",
-      "sortOrder": 1640
+      "sortOrder": 23340
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9matw",
@@ -6386,7 +6503,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9MATW",
-      "sortOrder": 1650
+      "sortOrder": 23350
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9matwbg",
@@ -6395,7 +6512,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9MATWBG",
-      "sortOrder": 1660
+      "sortOrder": 23360
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9matwuv",
@@ -6404,7 +6521,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9MATWUV",
-      "sortOrder": 1670
+      "sortOrder": 23370
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9mawt",
@@ -6413,7 +6530,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9MAWT",
-      "sortOrder": 1680
+      "sortOrder": 23380
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9msqr",
@@ -6422,7 +6539,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9MSQR",
-      "sortOrder": 1690
+      "sortOrder": 23390
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9ncam",
@@ -6431,7 +6548,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9NCAM",
-      "sortOrder": 1700
+      "sortOrder": 23400
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9ndpw",
@@ -6440,7 +6557,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9NDPW",
-      "sortOrder": 1710
+      "sortOrder": 23410
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9nfww",
@@ -6449,7 +6566,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9NFWW",
-      "sortOrder": 1720
+      "sortOrder": 23420
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9nlip",
@@ -6458,7 +6575,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9NLIP",
-      "sortOrder": 1730
+      "sortOrder": 23430
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9nlll",
@@ -6467,7 +6584,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9NLLL",
-      "sortOrder": 1740
+      "sortOrder": 23440
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9nllm",
@@ -6476,7 +6593,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9NLLM",
-      "sortOrder": 1750
+      "sortOrder": 23450
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9nlqw",
@@ -6485,7 +6602,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9NLQW",
-      "sortOrder": 1760
+      "sortOrder": 23460
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9nlst",
@@ -6494,7 +6611,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9NLST",
-      "sortOrder": 1770
+      "sortOrder": 23470
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9nmrs22",
@@ -6503,7 +6620,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9NMRS22",
-      "sortOrder": 1780
+      "sortOrder": 23480
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9nmrs22a",
@@ -6512,7 +6629,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9NMRS22A",
-      "sortOrder": 1790
+      "sortOrder": 23490
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9nprfx",
@@ -6521,7 +6638,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9NPRFX",
-      "sortOrder": 1800
+      "sortOrder": 23500
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9ntpf",
@@ -6530,7 +6647,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9NTPF",
-      "sortOrder": 1810
+      "sortOrder": 23510
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9nw150a",
@@ -6539,7 +6656,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9NW150A",
-      "sortOrder": 1820
+      "sortOrder": 23520
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9nwhw",
@@ -6548,7 +6665,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9NWHW",
-      "sortOrder": 1830
+      "sortOrder": 23530
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9pd0w15",
@@ -6557,7 +6674,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9PD0W15",
-      "sortOrder": 1840
+      "sortOrder": 23540
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9pdqw",
@@ -6566,7 +6683,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9PDQW",
-      "sortOrder": 1850
+      "sortOrder": 23550
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9pdw",
@@ -6575,7 +6692,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9PDW",
-      "sortOrder": 1860
+      "sortOrder": 23560
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9pjsh",
@@ -6584,7 +6701,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9PJSH",
-      "sortOrder": 1870
+      "sortOrder": 23570
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9pjtu",
@@ -6593,7 +6710,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9PJTU",
-      "sortOrder": 1880
+      "sortOrder": 23580
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9pwca",
@@ -6602,7 +6719,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9PWCA",
-      "sortOrder": 1890
+      "sortOrder": 23590
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9pwdg",
@@ -6611,7 +6728,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9PWDG",
-      "sortOrder": 1900
+      "sortOrder": 23600
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9pwfx",
@@ -6620,7 +6737,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9PWFX",
-      "sortOrder": 1910
+      "sortOrder": 23610
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9pwsp",
@@ -6629,7 +6746,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9PWSP",
-      "sortOrder": 1920
+      "sortOrder": 23620
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9pxls",
@@ -6638,7 +6755,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9PXLS",
-      "sortOrder": 1930
+      "sortOrder": 23630
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9rdwl",
@@ -6647,16 +6764,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9RDWL",
-      "sortOrder": 1940
-    },
-    {
-      "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9rgrx",
-      "name": "Controllers above sold separately).",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
-      "sku": "9RGRX",
-      "sortOrder": 1950
+      "sortOrder": 23640
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9rorx",
@@ -6665,7 +6773,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9RORX",
-      "sortOrder": 1960
+      "sortOrder": 23650
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9rotc",
@@ -6674,7 +6782,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9ROTC",
-      "sortOrder": 1970
+      "sortOrder": 23660
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9rotcj",
@@ -6683,7 +6791,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9ROTCJ",
-      "sortOrder": 1980
+      "sortOrder": 23670
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9rsccus",
@@ -6692,7 +6800,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9RSCCUS",
-      "sortOrder": 1990
+      "sortOrder": 23680
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9rsxsn",
@@ -6701,7 +6809,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9RSXSN",
-      "sortOrder": 2000
+      "sortOrder": 23690
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9slpl",
@@ -6710,7 +6818,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9SLPL",
-      "sortOrder": 2010
+      "sortOrder": 23700
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9spsl",
@@ -6719,16 +6827,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9SPSL",
-      "sortOrder": 2020
-    },
-    {
-      "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9tacp",
-      "name": "cushion",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
-      "sku": "9TACP",
-      "sortOrder": 2030
+      "sortOrder": 23710
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9tclb",
@@ -6737,7 +6836,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9TCLB",
-      "sortOrder": 2040
+      "sortOrder": 23720
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9tclg",
@@ -6746,7 +6845,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9TCLG",
-      "sortOrder": 2050
+      "sortOrder": 23730
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9tclr",
@@ -6755,7 +6854,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9TCLR",
-      "sortOrder": 2060
+      "sortOrder": 23740
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9twgv",
@@ -6764,7 +6863,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9TWGV",
-      "sortOrder": 2070
+      "sortOrder": 23750
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9twkk",
@@ -6773,7 +6872,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9TWKK",
-      "sortOrder": 2080
+      "sortOrder": 23760
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9uvcc2",
@@ -6782,7 +6881,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9UVCC2",
-      "sortOrder": 2090
+      "sortOrder": 23770
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9vcjr",
@@ -6791,7 +6890,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9VCJR",
-      "sortOrder": 2100
+      "sortOrder": 23780
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9vctad",
@@ -6800,7 +6899,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9VCTAD",
-      "sortOrder": 2110
+      "sortOrder": 23790
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9vctah",
@@ -6809,7 +6908,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9VCTAH",
-      "sortOrder": 2120
+      "sortOrder": 23800
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9vctbh",
@@ -6818,7 +6917,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9VCTBH",
-      "sortOrder": 2130
+      "sortOrder": 23810
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9vfpd",
@@ -6827,7 +6926,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9VFPD",
-      "sortOrder": 2140
+      "sortOrder": 23820
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9vlwtbl",
@@ -6836,7 +6935,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9VLWTBL",
-      "sortOrder": 2150
+      "sortOrder": 23830
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9wbsf",
@@ -6845,7 +6944,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9WBSF",
-      "sortOrder": 2160
+      "sortOrder": 23840
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9wfoc",
@@ -6854,7 +6953,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9WFOC",
-      "sortOrder": 2170
+      "sortOrder": 23850
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9wfocb",
@@ -6863,7 +6962,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9WFOCB",
-      "sortOrder": 2180
+      "sortOrder": 23860
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9wfoccl",
@@ -6872,7 +6971,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9WFOCCL",
-      "sortOrder": 2190
+      "sortOrder": 23870
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9wfocn",
@@ -6881,7 +6980,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9WFOCN",
-      "sortOrder": 2200
+      "sortOrder": 23880
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--9wigil",
@@ -6890,7 +6989,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "9WIGIL",
-      "sortOrder": 2210
+      "sortOrder": 23890
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--b2hpc",
@@ -6899,7 +6998,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "B2HPC",
-      "sortOrder": 2220
+      "sortOrder": 23900
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--b2hpf",
@@ -6908,7 +7007,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "B2HPF",
-      "sortOrder": 2230
+      "sortOrder": 23910
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--lfssbx",
@@ -6917,7 +7016,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "lFSSBX",
-      "sortOrder": 2240
+      "sortOrder": 23920
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--silpl",
@@ -6926,7 +7025,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "SILPL",
-      "sortOrder": 2250
+      "sortOrder": 23930
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--slktbc",
@@ -6935,7 +7034,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "SLKTBC",
-      "sortOrder": 2260
+      "sortOrder": 23940
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--smdeg",
@@ -6944,7 +7043,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "SMDEG",
-      "sortOrder": 2270
+      "sortOrder": 23950
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--smdsp",
@@ -6953,7 +7052,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "SMDSP",
-      "sortOrder": 2280
+      "sortOrder": 23960
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--smdst",
@@ -6962,7 +7061,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "SMDST",
-      "sortOrder": 2290
+      "sortOrder": 23970
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--srgpm",
@@ -6971,7 +7070,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "SRGPM",
-      "sortOrder": 2300
+      "sortOrder": 23980
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--ssspo",
@@ -6980,7 +7079,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "SSSPO",
-      "sortOrder": 2310
+      "sortOrder": 23990
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--svbal",
@@ -6989,7 +7088,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "SVBAL",
-      "sortOrder": 2320
+      "sortOrder": 24000
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package--svrol",
@@ -6998,7 +7097,16 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--therapeutic-swing-sensory-equipment-package",
       "sku": "SVROL",
-      "sortOrder": 2330
+      "sortOrder": 24010
+    },
+    {
+      "slug": "adventure-series--therapeutic-activity-adventure-components--essential-carabiners-connectors",
+      "name": "Essential Carabiners & Connectors",
+      "productLine": "Adventure Series",
+      "tierLevel": 2,
+      "parentSlug": "adventure-series--therapeutic-activity-adventure-components",
+      "sku": null,
+      "sortOrder": 24020
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--essential-carabiners-connectors--b0cdvdzsb1",
@@ -7007,7 +7115,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--essential-carabiners-connectors",
       "sku": "B0CDVDZSB1",
-      "sortOrder": 2350
+      "sortOrder": 24030
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--essential-carabiners-connectors--b0937dryyf",
@@ -7016,7 +7124,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--essential-carabiners-connectors",
       "sku": "B0937DRYYF",
-      "sortOrder": 2360
+      "sortOrder": 24040
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--essential-carabiners-connectors--b07mb985gw",
@@ -7025,7 +7133,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--essential-carabiners-connectors",
       "sku": "B07MB985GW",
-      "sortOrder": 2370
+      "sortOrder": 24050
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--essential-carabiners-connectors--6820h-lan",
@@ -7034,7 +7142,16 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--essential-carabiners-connectors",
       "sku": "6820H-LAN",
-      "sortOrder": 2380
+      "sortOrder": 24060
+    },
+    {
+      "slug": "adventure-series--therapeutic-activity-adventure-components--complete-zip-line-kit",
+      "name": "Complete Zip Line Kit",
+      "productLine": "Adventure Series",
+      "tierLevel": 2,
+      "parentSlug": "adventure-series--therapeutic-activity-adventure-components",
+      "sku": null,
+      "sortOrder": 24070
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--complete-zip-line-kit--zipline-wire",
@@ -7043,7 +7160,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--complete-zip-line-kit",
       "sku": "ZIPLINE-WIRE",
-      "sortOrder": 2390
+      "sortOrder": 24080
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--complete-zip-line-kit--sstbw515",
@@ -7052,7 +7169,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--complete-zip-line-kit",
       "sku": "SSTBW515",
-      "sortOrder": 2400
+      "sortOrder": 24090
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--complete-zip-line-kit--zipline-trolley",
@@ -7061,7 +7178,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--complete-zip-line-kit",
       "sku": "ZIPLINE-TROLLEY",
-      "sortOrder": 2410
+      "sortOrder": 24100
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--complete-zip-line-kit--6820h-lp-zp",
@@ -7070,7 +7187,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--complete-zip-line-kit",
       "sku": "6820H-LP-ZP",
-      "sortOrder": 2420
+      "sortOrder": 24110
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--complete-zip-line-kit--b01mrlj93k",
@@ -7079,7 +7196,16 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--complete-zip-line-kit",
       "sku": "B01MRLJ93K",
-      "sortOrder": 2430
+      "sortOrder": 24120
+    },
+    {
+      "slug": "adventure-series--therapeutic-activity-adventure-components--frame-mounted-therapy-rack",
+      "name": "Frame Mounted Therapy Rack",
+      "productLine": "Adventure Series",
+      "tierLevel": 2,
+      "parentSlug": "adventure-series--therapeutic-activity-adventure-components",
+      "sku": null,
+      "sortOrder": 24130
     },
     {
       "slug": "adventure-series--therapeutic-activity-adventure-components--frame-mounted-therapy-rack--k-5000",
@@ -7088,7 +7214,25 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--therapeutic-activity-adventure-components--frame-mounted-therapy-rack",
       "sku": "K-5000",
-      "sortOrder": 2450
+      "sortOrder": 24140
+    },
+    {
+      "slug": "adventure-series--adventure-mat-system",
+      "name": "ADVENTURE MAT SYSTEM",
+      "productLine": "Adventure Series",
+      "tierLevel": 1,
+      "parentSlug": null,
+      "sku": null,
+      "sortOrder": 25010
+    },
+    {
+      "slug": "adventure-series--adventure-mat-system--adventure-mat-system",
+      "name": "Adventure Mat System",
+      "productLine": "Adventure Series",
+      "tierLevel": 2,
+      "parentSlug": "adventure-series--adventure-mat-system",
+      "sku": null,
+      "sortOrder": 25020
     },
     {
       "slug": "adventure-series--adventure-mat-system--adventure-mat-system--sscw67",
@@ -7097,7 +7241,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--adventure-mat-system--adventure-mat-system",
       "sku": "SSCW67",
-      "sortOrder": 2480
+      "sortOrder": 25030
     },
     {
       "slug": "adventure-series--adventure-mat-system--adventure-mat-system--ssusp67",
@@ -7106,7 +7250,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--adventure-mat-system--adventure-mat-system",
       "sku": "SSUSP67",
-      "sortOrder": 2490
+      "sortOrder": 25040
     },
     {
       "slug": "adventure-series--adventure-mat-system--adventure-mat-system--ssusp72",
@@ -7115,16 +7259,16 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--adventure-mat-system--adventure-mat-system",
       "sku": "SSUSP72",
-      "sortOrder": 2500
+      "sortOrder": 25050
     },
     {
-      "slug": "adventure-series--adventure-mat-system--adventure-mat-system--sstbw515",
-      "name": "Zip Line Cable Safety Cover",
+      "slug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories",
+      "name": "Advanced Therapy Mat Accessories",
       "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--adventure-mat-system--adventure-mat-system",
-      "sku": "SSTBW515",
-      "sortOrder": 2510
+      "tierLevel": 2,
+      "parentSlug": "adventure-series--adventure-mat-system",
+      "sku": null,
+      "sortOrder": 25060
     },
     {
       "slug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories--dlr-lm48302",
@@ -7133,7 +7277,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories",
       "sku": "DLR-LM48302",
-      "sortOrder": 2810
+      "sortOrder": 25070
     },
     {
       "slug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories--wcc2101",
@@ -7142,7 +7286,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories",
       "sku": "WCC2101",
-      "sortOrder": 2820
+      "sortOrder": 25080
     },
     {
       "slug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories--wcc2102",
@@ -7151,7 +7295,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories",
       "sku": "WCC2102",
-      "sortOrder": 2830
+      "sortOrder": 25090
     },
     {
       "slug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories--coll4812",
@@ -7160,7 +7304,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories",
       "sku": "COLL4812",
-      "sortOrder": 2840
+      "sortOrder": 25100
     },
     {
       "slug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories--wcoc01",
@@ -7169,7 +7313,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories",
       "sku": "WCOC01",
-      "sortOrder": 2850
+      "sortOrder": 25110
     },
     {
       "slug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories--ssrsem462-l",
@@ -7178,7 +7322,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories",
       "sku": "SSRSEM462-L",
-      "sortOrder": 2860
+      "sortOrder": 25120
     },
     {
       "slug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories--srfm200x",
@@ -7187,7 +7331,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories",
       "sku": "SRFM200X",
-      "sortOrder": 2870
+      "sortOrder": 25130
     },
     {
       "slug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories--cp4x8bl-4in",
@@ -7196,7 +7340,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories",
       "sku": "CP4x8BL-4IN",
-      "sortOrder": 2880
+      "sortOrder": 25140
     },
     {
       "slug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories--cp4x8bl-8in",
@@ -7205,7 +7349,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories",
       "sku": "CP4x8BL-8IN",
-      "sortOrder": 2890
+      "sortOrder": 25150
     },
     {
       "slug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories--cp4x8bl-12in",
@@ -7214,7 +7358,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories",
       "sku": "CP4x8BL-12IN",
-      "sortOrder": 2900
+      "sortOrder": 25160
     },
     {
       "slug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories--rss2432",
@@ -7223,7 +7367,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories",
       "sku": "RSS2432",
-      "sortOrder": 2910
+      "sortOrder": 25170
     },
     {
       "slug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories--rss2433",
@@ -7232,7 +7376,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories",
       "sku": "RSS2433",
-      "sortOrder": 2920
+      "sortOrder": 25180
     },
     {
       "slug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories--rpal6868",
@@ -7241,7 +7385,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories",
       "sku": "RPAL6868",
-      "sortOrder": 2930
+      "sortOrder": 25190
     },
     {
       "slug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories--rmp9628",
@@ -7250,7 +7394,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories",
       "sku": "RMP9628",
-      "sortOrder": 2940
+      "sortOrder": 25200
     },
     {
       "slug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories--ss72bp",
@@ -7259,7 +7403,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories",
       "sku": "SS72BP",
-      "sortOrder": 2950
+      "sortOrder": 25210
     },
     {
       "slug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories--ss48bp",
@@ -7268,7 +7412,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories",
       "sku": "SS48BP",
-      "sortOrder": 2960
+      "sortOrder": 25220
     },
     {
       "slug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories--ss7248bp",
@@ -7277,7 +7421,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories",
       "sku": "SS7248BP",
-      "sortOrder": 2970
+      "sortOrder": 25230
     },
     {
       "slug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories--psb-bpsm",
@@ -7286,7 +7430,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories",
       "sku": "PSB-BPSM",
-      "sortOrder": 2980
+      "sortOrder": 25240
     },
     {
       "slug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories--psb-bpmd",
@@ -7295,7 +7439,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories",
       "sku": "PSB-BPMD",
-      "sortOrder": 2990
+      "sortOrder": 25250
     },
     {
       "slug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories--psb-bplg",
@@ -7304,7 +7448,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories",
       "sku": "PSB-BPLG",
-      "sortOrder": 3000
+      "sortOrder": 25260
     },
     {
       "slug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories--rclsd5630",
@@ -7313,7 +7457,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories",
       "sku": "RCLSD5630",
-      "sortOrder": 3010
+      "sortOrder": 25270
     },
     {
       "slug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories--rlw758",
@@ -7322,7 +7466,7 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories",
       "sku": "RLW758",
-      "sortOrder": 3020
+      "sortOrder": 25280
     },
     {
       "slug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories--rlw758-1",
@@ -7331,7 +7475,16 @@
       "tierLevel": 3,
       "parentSlug": "adventure-series--adventure-mat-system--advanced-therapy-mat-accessories",
       "sku": "RLW758-1",
-      "sortOrder": 3030
+      "sortOrder": 25290
+    },
+    {
+      "slug": "adventure-series--summit-foundation-system",
+      "name": "SUMMIT FOUNDATION SYSTEM",
+      "productLine": "Adventure Series",
+      "tierLevel": 1,
+      "parentSlug": null,
+      "sku": null,
+      "sortOrder": 25300
     },
     {
       "slug": "adventure-series--summit-foundation-system--grpmat158",
@@ -7340,7 +7493,7 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--summit-foundation-system",
       "sku": "GRPMAT158",
-      "sortOrder": 3050
+      "sortOrder": 25310
     },
     {
       "slug": "adventure-series--summit-foundation-system--br158",
@@ -7349,376 +7502,16 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--summit-foundation-system",
       "sku": "BR158",
-      "sortOrder": 3060
+      "sortOrder": 25320
     },
     {
-      "slug": "adventure-series--hardware--hardware--6820h-lad",
-      "name": "Playground Handles, Gate Handles 1 handle (B08K2V5G6T)",
+      "slug": "adventure-series--hardware",
+      "name": "HARDWARE",
       "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LAD",
-      "sortOrder": 3090
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-lak",
-      "name": "1/2\" x 4\" Strong-Tie THD50400H Titen HD Screw Anchor, Zinc",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LAK",
-      "sortOrder": 3100
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-ldd",
-      "name": "Swing & Swivel Eye Bolt (for Quick Shift Saddle Bracket™)",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LDD",
-      "sortOrder": 3110
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-lac-g",
-      "name": "Eye Bolt - Fixed (for Quick Shift Saddle Bracket™)",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LAC-G",
-      "sortOrder": 3120
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-lp",
-      "name": "Eye Bolt - Fixed",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LP",
-      "sortOrder": 3130
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--b0c4y8xsnb",
-      "name": "Eye Bolt - Swing Hangers w/ Bearing",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "B0C4Y8XSNB",
-      "sortOrder": 3140
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-ly",
-      "name": "Eye Bolt; 1/4-20 X 2 Length",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LY",
-      "sortOrder": 3150
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-lai",
-      "name": "Quick Shift Bracket Bent Pin w / Lanyard",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LAI",
-      "sortOrder": 3160
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-lc",
-      "name": "Hex Nylon Insert Lock Nut, Zinc Plated Grade 5 Steel, 1/2-13",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LC",
-      "sortOrder": 3170
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-lx",
-      "name": "Flat Shoulder Rod End Bolt 5/16-18 X 1 Shank Thread",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LX",
-      "sortOrder": 3180
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-lf",
-      "name": "Hex Nylon Insert Lock Nut, Zinc Plated Grade 5 Steel, 3/8-16",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LF",
-      "sortOrder": 3190
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-lb",
-      "name": "Washer 1/2 Flat Zinc Plated Grade 5 Steel",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LB",
-      "sortOrder": 3200
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-la",
-      "name": "Hex Bolt, Zinc Plated Grade 5 Steel, 1/2-13 X 4-1/2\"",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LA",
-      "sortOrder": 3210
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-lag",
-      "name": "Hex Bolt, Zinc Plated Grade 5 Steel, 1/2-13 X 4\"",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LAG",
-      "sortOrder": 3220
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-lh",
-      "name": "Tap Bolt, Zinc Plated Grade 5 Steel, 3/8-16 X 2-1/4\"",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LH",
-      "sortOrder": 3230
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-lg",
-      "name": "Tap Bolt, Zinc Plated Grade 5 Steel, 3/8-16 X 1-3/4\"",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LG",
-      "sortOrder": 3240
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-li",
-      "name": "Hex Bolt, Zinc Plated Grade 5 Steel, 1/4-20 X 2-3/4\"",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LI",
-      "sortOrder": 3250
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-lj",
-      "name": "Hex Bolt, Zinc Plated Grade 5 Steel, 1/4-20 X 4\"",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LJ",
-      "sortOrder": 3260
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-lk",
-      "name": "Uss Flat Washer, Zinc Plated Grade 5 Steel, 1/4",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LK",
-      "sortOrder": 3270
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-ll",
-      "name": "Hex Nylon Insert Lock Nut, Zinc Plated Grade 5 Steel, 1/4-20",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LL",
-      "sortOrder": 3280
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-lt",
-      "name": "Coupling Nut, Zinc Plated Steel, 5/16-18 X 1-3/4",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LT",
-      "sortOrder": 3290
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-lab",
-      "name": "Hex Nut, Zinc Plated Grade 5 Steel, 5/16-18",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LAB",
-      "sortOrder": 3300
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-laa",
-      "name": "Lock Washer, Zinc Plated Steel, 5/16",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LAA",
-      "sortOrder": 3310
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-lu",
-      "name": "Uss Flat Washer, Zinc Plated Grade 5 Steel, 5/16",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LU",
-      "sortOrder": 3320
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-lv",
-      "name": "Hex Bolt, Zinc Plated Grade 5 Steel, 5/16\"-18 X 1\"",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LV",
-      "sortOrder": 3330
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-lw",
-      "name": "Hex Nylon Insert Lock Nut, Zinc Plated Grade 5 Steel, 5/16-18",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LW",
-      "sortOrder": 3340
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-lq",
-      "name": "Tap Bolt, Zinc Plated Grade 5 Steel, 1/2-13 X 6\"",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LQ",
-      "sortOrder": 3350
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-lo",
-      "name": "Hex Bolt, Zinc Plated Grade 5 Steel, 1/2-13 X 7\"",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LO",
-      "sortOrder": 3360
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-lr",
-      "name": "Hex Nut, Zinc Plated Grade 5 Steel, 1/2-13",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LR",
-      "sortOrder": 3370
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-lm",
-      "name": "Uss Flat Washer, Zinc Plated Grade 5 Steel, 3/8",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LM",
-      "sortOrder": 3380
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-ln",
-      "name": "Hex Bolt, Zinc Plated Grade 5 Steel, 1/2-13 X 3-1/2\"",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LN",
-      "sortOrder": 3390
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-ls",
-      "name": "Rubber Bumpers, 3/4 Od X 1/16 High Black 25 Pack",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LS",
-      "sortOrder": 3400
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-lae",
-      "name": "TAP BOLT, ZINC PLATED GRADE 5 STEEL, 3/8-16 X 4\"",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LAE",
-      "sortOrder": 3410
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-laf",
-      "name": "V-RING BOLT ON ANCHOR",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LAF",
-      "sortOrder": 3420
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-lah",
-      "name": "BUTTON HEAD HEX DRIVE SCREW, 3/8\"-16 X 1-1/2\"",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LAH",
-      "sortOrder": 3430
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--6820h-laj",
-      "name": "HEX BOLT, ZINC PLATED GRADE 5 STEEL, 1/2-13 X 5\"",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "6820H-LAJ",
-      "sortOrder": 3440
-    },
-    {
-      "slug": "adventure-series--hardware--hardware--ssg-sa-swivel-eye",
-      "name": "Swing & Swivel Eye Bolt (Stand Alone)",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
-      "sku": "SSG-SA-SWIVEL-EYE",
-      "sortOrder": 3450
-    },
-    {
-      "slug": "adventure-series--hardware--quick-shift--p-2124",
-      "name": "Quick Shift Saddle Bracket™",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--quick-shift",
-      "sku": "P-2124",
-      "sortOrder": 3470
-    },
-    {
-      "slug": "adventure-series--hardware--quick-shift--6820h-ldd",
-      "name": "Swing & Swivel Eye Bolt (for Quick Shift Saddle Bracket™)",
-      "productLine": "Adventure Series",
-      "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--quick-shift",
-      "sku": "6820H-LDD",
-      "sortOrder": 3480
-    },
-    {
-      "slug": "adventure-series--hardware--b0c4y8xsnb",
-      "name": "Eye Bolt - Swing Hangers w/ Bearing",
-      "productLine": "Adventure Series",
-      "tierLevel": 2,
-      "parentSlug": "adventure-series--hardware",
-      "sku": "B0C4Y8XSNB",
-      "sortOrder": 3490
-    },
-    {
-      "slug": "adventure-series--hardware--6820h-lp",
-      "name": "Eye Bolt - Fixed",
-      "productLine": "Adventure Series",
-      "tierLevel": 2,
-      "parentSlug": "adventure-series--hardware",
-      "sku": "6820H-LP",
-      "sortOrder": 3500
+      "tierLevel": 1,
+      "parentSlug": null,
+      "sku": null,
+      "sortOrder": 30010
     },
     {
       "slug": "adventure-series--hardware--h-1000",
@@ -7727,7 +7520,502 @@
       "tierLevel": 2,
       "parentSlug": "adventure-series--hardware",
       "sku": "H-1000",
-      "sortOrder": 1480
+      "sortOrder": 30020
+    },
+    {
+      "slug": "adventure-series--hardware--hardware",
+      "name": "Hardware Product List",
+      "productLine": "Adventure Series",
+      "tierLevel": 2,
+      "parentSlug": "adventure-series--hardware",
+      "sku": null,
+      "sortOrder": 30030
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-lad",
+      "name": "Playground Handles, Gate Handles 1 handle (B08K2V5G6T)",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LAD",
+      "sortOrder": 30040
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-lak",
+      "name": "1/2\" x 4\" Strong-Tie THD50400H Titen HD Screw Anchor, Zinc",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LAK",
+      "sortOrder": 30050
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-lac-g",
+      "name": "Eye Bolt - Fixed (for Quick Shift Saddle Bracket™)",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LAC-G",
+      "sortOrder": 30060
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-ly",
+      "name": "Eye Bolt; 1/4-20 X 2 Length",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LY",
+      "sortOrder": 30070
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-lai",
+      "name": "Quick Shift Bracket Bent Pin w / Lanyard",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LAI",
+      "sortOrder": 30080
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-lc",
+      "name": "Hex Nylon Insert Lock Nut, Zinc Plated Grade 5 Steel, 1/2-13",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LC",
+      "sortOrder": 30090
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-lx",
+      "name": "Flat Shoulder Rod End Bolt 5/16-18 X 1 Shank Thread",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LX",
+      "sortOrder": 30100
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-lf",
+      "name": "Hex Nylon Insert Lock Nut, Zinc Plated Grade 5 Steel, 3/8-16",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LF",
+      "sortOrder": 30110
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-lb",
+      "name": "Washer 1/2 Flat Zinc Plated Grade 5 Steel",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LB",
+      "sortOrder": 30120
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-la",
+      "name": "Hex Bolt, Zinc Plated Grade 5 Steel, 1/2-13 X 4-1/2\"",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LA",
+      "sortOrder": 30130
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-lag",
+      "name": "Hex Bolt, Zinc Plated Grade 5 Steel, 1/2-13 X 4\"",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LAG",
+      "sortOrder": 30140
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-lh",
+      "name": "Tap Bolt, Zinc Plated Grade 5 Steel, 3/8-16 X 2-1/4\"",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LH",
+      "sortOrder": 30150
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-lg",
+      "name": "Tap Bolt, Zinc Plated Grade 5 Steel, 3/8-16 X 1-3/4\"",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LG",
+      "sortOrder": 30160
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-li",
+      "name": "Hex Bolt, Zinc Plated Grade 5 Steel, 1/4-20 X 2-3/4\"",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LI",
+      "sortOrder": 30170
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-lj",
+      "name": "Hex Bolt, Zinc Plated Grade 5 Steel, 1/4-20 X 4\"",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LJ",
+      "sortOrder": 30180
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-lk",
+      "name": "Uss Flat Washer, Zinc Plated Grade 5 Steel, 1/4",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LK",
+      "sortOrder": 30190
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-ll",
+      "name": "Hex Nylon Insert Lock Nut, Zinc Plated Grade 5 Steel, 1/4-20",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LL",
+      "sortOrder": 30200
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-lt",
+      "name": "Coupling Nut, Zinc Plated Steel, 5/16-18 X 1-3/4",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LT",
+      "sortOrder": 30210
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-lab",
+      "name": "Hex Nut, Zinc Plated Grade 5 Steel, 5/16-18",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LAB",
+      "sortOrder": 30220
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-laa",
+      "name": "Lock Washer, Zinc Plated Steel, 5/16",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LAA",
+      "sortOrder": 30230
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-lu",
+      "name": "Uss Flat Washer, Zinc Plated Grade 5 Steel, 5/16",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LU",
+      "sortOrder": 30240
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-lv",
+      "name": "Hex Bolt, Zinc Plated Grade 5 Steel, 5/16\"-18 X 1\"",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LV",
+      "sortOrder": 30250
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-lw",
+      "name": "Hex Nylon Insert Lock Nut, Zinc Plated Grade 5 Steel, 5/16-18",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LW",
+      "sortOrder": 30260
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-lq",
+      "name": "Tap Bolt, Zinc Plated Grade 5 Steel, 1/2-13 X 6\"",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LQ",
+      "sortOrder": 30270
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-lo",
+      "name": "Hex Bolt, Zinc Plated Grade 5 Steel, 1/2-13 X 7\"",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LO",
+      "sortOrder": 30280
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-lr",
+      "name": "Hex Nut, Zinc Plated Grade 5 Steel, 1/2-13",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LR",
+      "sortOrder": 30290
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-lm",
+      "name": "Uss Flat Washer, Zinc Plated Grade 5 Steel, 3/8",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LM",
+      "sortOrder": 30300
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-ln",
+      "name": "Hex Bolt, Zinc Plated Grade 5 Steel, 1/2-13 X 3-1/2\"",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LN",
+      "sortOrder": 30310
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-ls",
+      "name": "Rubber Bumpers, 3/4 Od X 1/16 High Black 25 Pack",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LS",
+      "sortOrder": 30320
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-lae",
+      "name": "TAP BOLT, ZINC PLATED GRADE 5 STEEL, 3/8-16 X 4\"",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LAE",
+      "sortOrder": 30330
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-laf",
+      "name": "V-RING BOLT ON ANCHOR",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LAF",
+      "sortOrder": 30340
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-lah",
+      "name": "BUTTON HEAD HEX DRIVE SCREW, 3/8\"-16 X 1-1/2\"",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LAH",
+      "sortOrder": 30350
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-laj",
+      "name": "HEX BOLT, ZINC PLATED GRADE 5 STEEL, 1/2-13 X 5\"",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--hardware",
+      "sku": "6820H-LAJ",
+      "sortOrder": 30360
+    },
+    {
+      "slug": "adventure-series--hardware--quick-shift",
+      "name": "Quick Shift",
+      "productLine": "Adventure Series",
+      "tierLevel": 2,
+      "parentSlug": "adventure-series--hardware",
+      "sku": null,
+      "sortOrder": 30370
+    },
+    {
+      "slug": "adventure-series--hardware--quick-shift--p-2124",
+      "name": "Quick Shift Saddle Bracket™",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--quick-shift",
+      "sku": "P-2124",
+      "sortOrder": 30380
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-ldd",
+      "name": "Swing & Swivel Eye Bolt (for Quick Shift Saddle Bracket™)",
+      "productLine": "Adventure Series",
+      "tierLevel": 3,
+      "parentSlug": "adventure-series--hardware--quick-shift",
+      "sku": "6820H-LDD",
+      "sortOrder": 30390
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--ssg-sa-swivel-eye",
+      "name": "Swing & Swivel Eye Bolt (Stand Alone)",
+      "productLine": "Adventure Series",
+      "tierLevel": 2,
+      "parentSlug": "adventure-series--hardware",
+      "sku": "SSG-SA-SWIVEL-EYE",
+      "sortOrder": 30400
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--6820h-lp",
+      "name": "Eye Bolt - Fixed",
+      "productLine": "Adventure Series",
+      "tierLevel": 2,
+      "parentSlug": "adventure-series--hardware",
+      "sku": "6820H-LP",
+      "sortOrder": 30410
+    },
+    {
+      "slug": "adventure-series--hardware--hardware--b0c4y8xsnb",
+      "name": "Eye Bolt - Swing Hangers w/ Bearing",
+      "productLine": "Adventure Series",
+      "tierLevel": 2,
+      "parentSlug": "adventure-series--hardware",
+      "sku": "B0C4Y8XSNB",
+      "sortOrder": 30420
+    },
+    {
+      "slug": "soar--summit-soar-series",
+      "name": "SUMMIT SOAR SERIES",
+      "productLine": "Summit Soar",
+      "tierLevel": 1,
+      "parentSlug": null,
+      "sku": null,
+      "sortOrder": 40010
+    },
+    {
+      "slug": "soar--k-4000",
+      "name": "Summit Soar S1 - Mobile Free-Standing Swing Frame w/ Single Cross Beam",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar--summit-soar-series",
+      "sku": "K-4000",
+      "sortOrder": 40020
+    },
+    {
+      "slug": "soar--k-4002",
+      "name": "Summit Soar S2 - Mobile Free-Standing Swing Frame w/ Two Cross Beams",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar--summit-soar-series",
+      "sku": "K-4002",
+      "sortOrder": 40030
+    },
+    {
+      "slug": "soar--k-4003",
+      "name": "Summit Soar S3 - Mobile Free-Standing Swing Frame w/ Three Cross Beams",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar--summit-soar-series",
+      "sku": "K-4003",
+      "sortOrder": 40040
+    },
+    {
+      "slug": "soar--k-4001",
+      "name": "Summit Soar S1-XL - Mobile Free-Standing Swing Frame w/ Single Cross Beam (Width: 12')",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar--summit-soar-series",
+      "sku": "K-4001",
+      "sortOrder": 40050
+    },
+    {
+      "slug": "soar--k-4006",
+      "name": "Summit Soar S2-XL - Mobile Free-Standing Swing Frame w/ Two Cross Beams (Width: 12')",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar--summit-soar-series",
+      "sku": "K-4006",
+      "sortOrder": 40060
+    },
+    {
+      "slug": "soar--k-4007",
+      "name": "Summit Soar S3-XL - Mobile Free-Standing Swing Frame w/ Three Cross Beams (Width: 12')",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar--summit-soar-series",
+      "sku": "K-4007",
+      "sortOrder": 40070
+    },
+    {
+      "slug": "soar--k-4004",
+      "name": "Summit Soar S1 - Mobile Free-Standing Swing Frame w/ Single Cross Beam (Height: 7')",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar--summit-soar-series",
+      "sku": "K-4004",
+      "sortOrder": 40080
+    },
+    {
+      "slug": "soar--k-4005",
+      "name": "Summit Soar S2 - Mobile Free-Standing Swing Frame w/ Single Cross Beam (Height: 7')",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar--summit-soar-series",
+      "sku": "K-4005",
+      "sortOrder": 40090
+    },
+    {
+      "slug": "soar--summit-soar-mats-accessories",
+      "name": "SUMMIT SOAR MATS & ACCESSORIES",
+      "productLine": "Summit Soar",
+      "tierLevel": 1,
+      "parentSlug": null,
+      "sku": null,
+      "sortOrder": 40100
+    },
+    {
+      "slug": "soar--clm325",
+      "name": "Soar-XL Floor Mat System (138\" x 80\" x 3.25\") - Single Fold",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar--summit-soar-mats-accessories",
+      "sku": "CLM325",
+      "sortOrder": 40110
+    },
+    {
+      "slug": "soar--ssm80100",
+      "name": "Soar Floor Mat System (100\" x 80\" x 3.25\") - Single Fold",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar--summit-soar-mats-accessories",
+      "sku": "SSM80100",
+      "sortOrder": 40120
+    },
+    {
+      "slug": "soar--colu2812",
+      "name": "Soar Base Beam U Column Wrap (30\" x 4.5\" x 3.5\" x 3.5\" x 1.375\")",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar--summit-soar-mats-accessories",
+      "sku": "COLU2812",
+      "sortOrder": 40130
+    },
+    {
+      "slug": "soar--sfgpc",
+      "name": "Gusset Plate Padding",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar--summit-soar-mats-accessories",
+      "sku": "SFGPC",
+      "sortOrder": 40140
+    },
+    {
+      "slug": "soar--colw2812",
+      "name": "Soar Column Wrap (60\" x 4.5\" x 4.5\" x 1.375\")",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar--summit-soar-mats-accessories",
+      "sku": "COLW2812",
+      "sortOrder": 40150
     }
   ],
   "notes": [
@@ -8162,24 +8450,6 @@
     {
       "sku": "SSTBW515",
       "unitCostMinor": 2000,
-      "currency": "USD",
-      "uom": "EA",
-      "effectiveDate": "2026-07-25",
-      "defaultedDate": true,
-      "sourceRef": null
-    },
-    {
-      "sku": "CUST-LOGO",
-      "unitCostMinor": 125000,
-      "currency": "USD",
-      "uom": "EA",
-      "effectiveDate": "2026-07-25",
-      "defaultedDate": true,
-      "sourceRef": null
-    },
-    {
-      "sku": "CUSTOM",
-      "unitCostMinor": 0,
       "currency": "USD",
       "uom": "EA",
       "effectiveDate": "2026-07-25",
@@ -8943,7 +9213,7 @@
       "sourceRef": null
     },
     {
-      "sku": "382-408_x000D_",
+      "sku": "382-408",
       "unitCostMinor": 140700,
       "currency": "USD",
       "uom": "EA",
@@ -10113,15 +10383,6 @@
       "sourceRef": null
     },
     {
-      "sku": "9RGRX",
-      "unitCostMinor": 25200,
-      "currency": "USD",
-      "uom": "EA",
-      "effectiveDate": "2026-07-25",
-      "defaultedDate": true,
-      "sourceRef": null
-    },
-    {
       "sku": "9RORX",
       "unitCostMinor": 135920,
       "currency": "USD",
@@ -10178,15 +10439,6 @@
     {
       "sku": "9SPSL",
       "unitCostMinor": 39920,
-      "currency": "USD",
-      "uom": "EA",
-      "effectiveDate": "2026-07-25",
-      "defaultedDate": true,
-      "sourceRef": null
-    },
-    {
-      "sku": "9TACP",
-      "unitCostMinor": 151920,
       "currency": "USD",
       "uom": "EA",
       "effectiveDate": "2026-07-25",
@@ -10556,6 +10808,123 @@
     {
       "sku": "SSG-SA-CLIMB-WALL-MOUNT-KIT-ONLY",
       "unitCostMinor": 18534,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-25",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "K-4000",
+      "unitCostMinor": 195000,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-25",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "K-4002",
+      "unitCostMinor": 224200,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-25",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "K-4003",
+      "unitCostMinor": 253400,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-25",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "K-4001",
+      "unitCostMinor": 195000,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-25",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "K-4006",
+      "unitCostMinor": 257830,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-25",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "K-4007",
+      "unitCostMinor": 291410,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-25",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "K-4004",
+      "unitCostMinor": 195000,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-25",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "K-4005",
+      "unitCostMinor": 224200,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-25",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "CLM325",
+      "unitCostMinor": 96000,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-25",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "SSM80100",
+      "unitCostMinor": 69500,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-25",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "COLU2812",
+      "unitCostMinor": 10500,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-25",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "SFGPC",
+      "unitCostMinor": 13000,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-25",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "COLW2812",
+      "unitCostMinor": 12500,
       "currency": "USD",
       "uom": "EA",
       "effectiveDate": "2026-07-25",
@@ -10962,24 +11331,6 @@
     },
     {
       "sku": "SSTBW515",
-      "manufacturer": "Resilite",
-      "vendorPartNo": null,
-      "leadTimeDays": null,
-      "minOrderQty": null,
-      "isPrimary": true,
-      "notes": null
-    },
-    {
-      "sku": "CUST-LOGO",
-      "manufacturer": "Resilite",
-      "vendorPartNo": null,
-      "leadTimeDays": null,
-      "minOrderQty": null,
-      "isPrimary": true,
-      "notes": null
-    },
-    {
-      "sku": "CUSTOM",
       "manufacturer": "Resilite",
       "vendorPartNo": null,
       "leadTimeDays": null,
@@ -11744,7 +12095,7 @@
       "notes": null
     },
     {
-      "sku": "382-408_x000D_",
+      "sku": "382-408",
       "manufacturer": "Play Sports",
       "vendorPartNo": null,
       "leadTimeDays": null,
@@ -12914,15 +13265,6 @@
       "notes": null
     },
     {
-      "sku": "9RGRX",
-      "manufacturer": "TFH",
-      "vendorPartNo": null,
-      "leadTimeDays": null,
-      "minOrderQty": null,
-      "isPrimary": true,
-      "notes": null
-    },
-    {
       "sku": "9RORX",
       "manufacturer": "TFH",
       "vendorPartNo": null,
@@ -12978,15 +13320,6 @@
     },
     {
       "sku": "9SPSL",
-      "manufacturer": "TFH",
-      "vendorPartNo": null,
-      "leadTimeDays": null,
-      "minOrderQty": null,
-      "isPrimary": true,
-      "notes": null
-    },
-    {
-      "sku": "9TACP",
       "manufacturer": "TFH",
       "vendorPartNo": null,
       "leadTimeDays": null,
@@ -13258,6 +13591,123 @@
     {
       "sku": "SVROL",
       "manufacturer": "TFH",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "K-4000",
+      "manufacturer": "Goldberg Brothers",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "K-4002",
+      "manufacturer": "Goldberg Brothers",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "K-4003",
+      "manufacturer": "Goldberg Brothers",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "K-4001",
+      "manufacturer": "Goldberg Brothers",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "K-4006",
+      "manufacturer": "Goldberg Brothers",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "K-4007",
+      "manufacturer": "Goldberg Brothers",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "K-4004",
+      "manufacturer": "Goldberg Brothers",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "K-4005",
+      "manufacturer": "Goldberg Brothers",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "CLM325",
+      "manufacturer": "Resilite",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "SSM80100",
+      "manufacturer": "Resilite",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "COLU2812",
+      "manufacturer": "Resilite",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "SFGPC",
+      "manufacturer": "Resilite",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "COLW2812",
+      "manufacturer": "Resilite",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,

@@ -40,6 +40,10 @@ const BomHeader = z.object({
 
 const BomLinePatch = z.object({
   powderColor: z.string().trim().max(80).nullish(),
+  /** Brand from the managed list (Cardinal, Prismatic). Null clears the colour. */
+  powderBrandId: z.string().trim().max(40).nullish(),
+  /** Colour code as typed for this part. */
+  powderColorCode: z.string().trim().max(60).nullish(),
   vendorNotes: z.string().trim().max(500).nullish(),
   poNumber: z.string().trim().max(80).nullish(),
   sourced: z.boolean().optional(),

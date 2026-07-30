@@ -19,6 +19,9 @@ const SkuBody = z.object({
   overrideAllowed: z.boolean().default(false),
   /** Builder default quantity; null = no default. */
   defaultQty: z.number().int().min(0).max(9999).nullish(),
+  /** Where to buy this part — becomes a "Buy" link on the Bill of Materials. */
+  productUrl: z.string().trim().url().max(600).nullish(),
+  requiresPowderColor: z.boolean().optional(),
 });
 
 // One import row; prices may arrive as dollars (unitPrice) or minor (unitPriceMinor).
@@ -35,6 +38,8 @@ const ImportRow = z.object({
   proposalGroup: z.string().trim().optional(),
   overrideAllowed: z.union([z.boolean(), z.string(), z.number()]).optional(),
   defaultQty: z.union([z.number(), z.string()]).optional(),
+  productUrl: z.string().trim().optional(),
+  requiresPowderColor: z.union([z.boolean(), z.string(), z.number()]).optional(),
 });
 const toMinor = (v: unknown): number => {
   if (v == null || v === '') return 0;
@@ -182,6 +187,14 @@ export function registerSkuRoutes(app: FastifyInstance): void {
       if (has(raw, 'manufacturer')) { data.manufacturer = d.manufacturer ? d.manufacturer.trim() : null; columns.push('manufacturer'); }
       if (has(raw, 'proposalGroup')) { data.proposalGroup = d.proposalGroup ? d.proposalGroup.trim() : null; columns.push('proposalGroup'); }
       if (has(raw, 'overrideAllowed')) { data.overrideAllowed = toBool(d.overrideAllowed); columns.push('overrideAllowed'); }
+      if (has(raw, 'requiresPowderColor')) { data.requiresPowderColor = toBool(d.requiresPowderColor); columns.push('requiresPowderColor'); }
+      // A blank clears the link; anything else must be a real URL, so a typo can't
+      // become an unclickable "link" on a purchasing document.
+      if (has(raw, 'productUrl')) {
+        const u = (d.productUrl ?? '').trim();
+        if (u && !/^https?:\/\//i.test(u)) issues.push({ row: i + 1, message: `${d.part}: productUrl must start with http:// or https://` });
+        else { data.productUrl = u || null; columns.push('productUrl'); }
+      }
       if (has(raw, 'defaultQty')) {
         // Blank clears the default; a number sets it. 0 is a real value meaning
         // "offer this part but start it at none".
@@ -229,6 +242,8 @@ export function registerSkuRoutes(app: FastifyInstance): void {
             proposalGroup: (c.data.proposalGroup as string | null) ?? null,
             overrideAllowed: (c.data.overrideAllowed as boolean) ?? false,
             defaultQty: (c.data.defaultQty as number | null) ?? null,
+            productUrl: (c.data.productUrl as string | null) ?? null,
+            requiresPowderColor: (c.data.requiresPowderColor as boolean) ?? false,
           },
         });
         created++;

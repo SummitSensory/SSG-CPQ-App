@@ -467,15 +467,50 @@ export async function upsertProcurementLine(orderId: string, input: { id?: strin
  */
 export async function patchProcurementLine(
   lineId: string,
-  patch: { powderColor?: string | null; vendorNotes?: string | null; poNumber?: string | null; sourced?: boolean; targetDate?: Date | null; unitCostMinor?: number | null },
+  patch: {
+    powderColor?: string | null; vendorNotes?: string | null; poNumber?: string | null;
+    sourced?: boolean; targetDate?: Date | null; unitCostMinor?: number | null;
+    /** Brand from the managed list; null clears it. */
+    powderBrandId?: string | null;
+    /** The colour code as typed for this part. */
+    powderColorCode?: string | null;
+  },
   userId: string,
 ) {
   const existing = await prisma.procurementLine.findUnique({ where: { id: lineId } });
   if (!existing) throw new NotFoundError('Bill of Materials line not found');
+
+  // A submitted section is the sheet the vendor already has — its lines are frozen
+  // with it, so this is refused rather than silently allowed.
+  const vendor = (existing.vendor && existing.vendor.trim()) || 'Unassigned vendor';
+  const section = await prisma.bomVendorSection.findUnique({
+    where: { orderId_vendor: { orderId: existing.orderId, vendor } },
+    select: { status: true },
+  });
+  if (section?.status === 'SUBMITTED') {
+    throw new ValidationError(`The ${vendor} Bill of Materials is submitted. Unlock it for changes first.`);
+  }
+
+  // Brand + code are the source of truth; `powderColor` is the text that prints, so
+  // it is kept in step whenever either half changes.
+  const brandId = patch.powderBrandId !== undefined ? patch.powderBrandId : existing.powderBrandId;
+  const code = patch.powderColorCode !== undefined ? patch.powderColorCode : existing.powderColorCode;
+  const colorTouched = patch.powderBrandId !== undefined || patch.powderColorCode !== undefined;
+  let printed: string | null = null;
+  if (colorTouched) {
+    const brand = brandId
+      ? await prisma.powderColorBrand.findUnique({ where: { id: brandId }, select: { name: true } })
+      : null;
+    printed = [brand?.name, (code || '').trim()].filter(Boolean).join(' ') || null;
+  }
+
   const line = await prisma.procurementLine.update({
     where: { id: lineId },
     data: {
-      ...(patch.powderColor !== undefined ? { powderColor: patch.powderColor || null } : {}),
+      ...(patch.powderBrandId !== undefined ? { powderBrandId: patch.powderBrandId || null } : {}),
+      ...(patch.powderColorCode !== undefined ? { powderColorCode: (patch.powderColorCode || '').trim() || null } : {}),
+      ...(colorTouched ? { powderColor: printed } : {}),
+      ...(!colorTouched && patch.powderColor !== undefined ? { powderColor: patch.powderColor || null } : {}),
       ...(patch.vendorNotes !== undefined ? { vendorNotes: patch.vendorNotes || null } : {}),
       ...(patch.poNumber !== undefined ? { poNumber: patch.poNumber || null } : {}),
       ...(patch.sourced !== undefined ? { sourced: patch.sourced } : {}),

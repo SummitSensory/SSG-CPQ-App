@@ -83,7 +83,7 @@ const IN_CODE = [
   {
     name: 'H-1000 roll-up',
     where: 'src/proposals/adventureSeries.ts → hardwareRollup()',
-    what: 'Sums every fastener’s price, cost and weight into the single H-1000 line.',
+    what: 'Sums every fastener’s price, cost and weight into the single H-1000 line. Whether the fasteners are also listed in that line’s description is set by “List every fastener on the Hardware Kit line” under Business numbers — it changes the wording only, never the total.',
     why: 'A sum of the hardware rules above — edit those to change it.',
   },
 ];

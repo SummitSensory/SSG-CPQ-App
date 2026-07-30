@@ -27,6 +27,11 @@ export const FORMULA_SETTINGS: FormulaSettingDef[] = [
     unit: 'days', default: 7, min: 1, max: 365, step: 1, group: 'Proposal terms',
   },
   {
+    key: 'hardwareRollupDetail', label: 'List every fastener on the Hardware Kit line',
+    help: 'Off (0): the H-1000 line reads as a single kit with a piece count. On (1): every 6820H-* fastener and its quantity is printed in the line description. The price, cost and weight are the same either way — this only changes what the customer reads.',
+    unit: '0 = kit only, 1 = itemize', default: 0, min: 0, max: 1, step: 1, group: 'Hardware kit',
+  },
+  {
     key: 'legsSmallMaxFt', label: 'Small frame up to', help: 'Frames up to this length use the small leg count.',
     unit: 'ft', default: 10, min: 1, max: 100, step: 1, group: 'Leg count by frame length',
   },

@@ -51,6 +51,25 @@ const EnvSchema = z
     // host is used, which is correct on Vercel and in local dev alike.
     APP_BASE_URL: z.string().url().optional(),
 
+    // ---- Vendor + financing email (Bill of Materials, Ryan Capital sheet) ----
+    // Same verified-subdomain rule as the senders above: the FROM address must be
+    // on updates.summitsensory.com, while REPLY-TO can be the real inbox a vendor
+    // should answer to.
+    BOM_FROM_EMAIL: z.string().email().default('orders@updates.summitsensory.com'),
+    BOM_FROM_NAME: z.string().min(1).default('Summit Sensory Gym'),
+    BOM_REPLY_TO: z.string().email().default('Orders@SummitSensory.com'),
+    // Every vendor BOM is silently copied here, so there is one internal record of
+    // what left the building. Blank disables the copy.
+    BOM_BCC_EMAIL: z.string().email().optional(),
+    // Where a financing request goes. Ryan Capital's contact of record.
+    FINANCE_PARTNER_EMAIL: z.string().email().default('ckinsey@ryancapital.com'),
+
+    // ---- PDF renderer ----
+    // Headless Chromium pack for serverless hosts, e.g. the @sparticuz/chromium
+    // GitHub release .tar matching the installed playwright-core. Unset locally:
+    // Playwright then uses the browser already installed on the machine.
+    CHROMIUM_PACK_URL: z.string().url().optional(),
+
     // QuickBooks Online integration. Client credentials come from env ONLY —
     // never source. OAuth tokens are encrypted with QBO_TOKEN_ENC_KEY.
     QBO_CLIENT_ID: z.string().min(1).optional(),

@@ -5,12 +5,15 @@ import {
 } from './hardwareRules.js';
 import { DEFAULT_FRAME_RULES, frameContext } from './frameRules.js';
 import { computeFloorPadding, type MatQuote, type MatThickness } from './matPricing.js';
+import { setting, defaultSettings, type FormulaSettings } from './formulaSettings.js';
 
 export interface SkuRec {
   part: string; description: string; unitPriceMinor: number; unitCostMinor?: number; weightLbs: number; category: string;
   /** Where the catalog files this part: tier-1 group and tier-2 subgroup. Drives
    *  which proposal heading a configurator-picked accessory prints under. */
   proposalGroup?: string; proposalSubgroup?: string;
+  /** Tree sort order of that group and subgroup — decides heading order. */
+  proposalGroupSort?: number; proposalSubgroupSort?: number;
   /** Catalog pre-approval: may a rep swap this part for another in the builder? */
   overrideAllowed?: boolean;
 }
@@ -170,6 +173,8 @@ export function computeAdventureProposal(
   frameRules?: FormulaRule[],
   /** Catalog category name → the part numbers filed under it, so a "kit" prints every member. */
   kitParts?: Record<string, string[]>,
+  /** Business numbers (Administration → Formulas). Only `hardwareRollupDetail` is read here. */
+  settings?: FormulaSettings,
 ): { lines: PricedLine[]; totalWeightLbs: number } {
   const LOOK = skuMap && Object.keys(skuMap).length ? skuMap : SKUS;
   const bom = computeAdventureBOM(a, frameRules);
@@ -253,15 +258,19 @@ export function computeAdventureProposal(
     for (const h of hit) extras.splice(extras.indexOf(h), 1);
     return hit;
   };
-  /** Print picked parts beneath their catalog subgroup heading. */
+  /** Print picked parts beneath their catalog subgroup heading, in tree order. */
   const emitExtras = (items: Array<{ part: string; qty: number }>) => {
-    const subs: string[] = [];
     const bySub: Record<string, Array<{ part: string; qty: number }>> = {};
+    const subSort: Record<string, number> = {};
     for (const it of items) {
-      const sub = LOOK[it.part]?.proposalSubgroup || '';
-      if (!bySub[sub]) { bySub[sub] = []; subs.push(sub); }
+      const rec = LOOK[it.part];
+      const sub = rec?.proposalSubgroup || '';
+      if (!bySub[sub]) { bySub[sub] = []; subSort[sub] = rec?.proposalSubgroupSort ?? 9_999; }
       bySub[sub].push(it);
     }
+    // Subgroup headings follow the product tree's sort order, not the order the
+    // configurator's questions happen to be asked in.
+    const subs = Object.keys(bySub).sort((a, b) => (subSort[a] ?? 9_999) - (subSort[b] ?? 9_999) || a.localeCompare(b));
     for (const sub of subs) { if (sub) SG(sub); (bySub[sub] ?? []).forEach((it) => P(it.part, it.qty)); }
   };
   const compExtras = takeExtras('Therapeutic Activity & Adventure Components');
@@ -302,13 +311,16 @@ export function computeAdventureProposal(
   // through to Hardware — a tier-2 accessory is never swept in with the fasteners.
   const otherGroups: string[] = [];
   const byGroup: Record<string, Array<{ part: string; qty: number }>> = {};
+  const groupSort: Record<string, number> = {};
   for (const e of extras.slice()) {
-    const g = LOOK[e.part]?.proposalGroup || '';
+    const rec = LOOK[e.part];
+    const g = rec?.proposalGroup || '';
     if (!g) continue;
-    if (!byGroup[g]) { byGroup[g] = []; otherGroups.push(g); }
+    if (!byGroup[g]) { byGroup[g] = []; otherGroups.push(g); groupSort[g] = rec?.proposalGroupSort ?? 9_999; }
     byGroup[g].push(e);
     extras.splice(extras.indexOf(e), 1);
   }
+  otherGroups.sort((a, b) => (groupSort[a] ?? 9_999) - (groupSort[b] ?? 9_999) || a.localeCompare(b));
   for (const g of otherGroups) { G(g, true); emitExtras(byGroup[g] ?? []); }
 
   // V-rings must keep this block alive even on their own: each pack answered adds
@@ -337,14 +349,20 @@ export function computeAdventureProposal(
       });
     }
     // The remaining fasteners roll up into the single H-1000 line per the v73
-    // workbook: rate, cost and weight are the sums of the 6820H-* components, which
-    // are listed in the description so the roll-up can be cross-referenced.
+    // workbook: rate, cost and weight are the sums of the 6820H-* components.
+    // Whether those components are also PRINTED is a business decision, not a
+    // pricing one — see `hardwareRollupDetail`. The math is identical either way;
+    // the full breakdown always stays available in the logic trace.
     const roll = hardwareRollup(a, LOOK, rules, frameRules, ACCESSORY_HW_PARTS);
     if (roll.components.length) {
       weight += roll.weightLbs;
+      const itemize = setting(settings ?? defaultSettings(), 'hardwareRollupDetail') === 1;
+      const pieces = roll.components.reduce((s, c) => s + c.qty, 0);
       lines.push({
         lineType: 'PRODUCT', name: 'Hardware Kit', sku: 'H-1000',
-        description: roll.components.map((c) => `${c.qty}× ${c.name} (${c.part})`).join(' · '),
+        description: itemize
+          ? roll.components.map((c) => `${c.qty}× ${c.name} (${c.part})`).join(' · ')
+          : `All mounting hardware for this structure — ${pieces} pieces across ${roll.components.length} part numbers.`,
         quantity: 1, rateMinor: roll.priceMinor, costEach: roll.costMinor,
         weightEach: roll.weightLbs, needsPrice: roll.missing.length > 0,
       });

@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-07-29T16:52:06.918Z",
-  "source": "Soar Builder SKUs & Logic.xlsx — Products tab",
+  "generatedAt": "2026-07-30T03:09:17.291Z",
+  "source": "summit-product-tree-1-Revised-336bbf52.xlsx (Tree sheet, validated 2026-07-29)",
   "defaultEffectiveDate": "2026-07-29",
   "productLines": [
     {
@@ -35,7 +35,8 @@
       "heightIn": 100,
       "thicknessIn": null,
       "showDimensions": true,
-      "weightOz": 7360
+      "weightOz": 7360,
+      "sortOrder": 20
     },
     {
       "sku": "K-4002",
@@ -48,7 +49,8 @@
       "heightIn": 100,
       "thicknessIn": null,
       "showDimensions": true,
-      "weightOz": 8160
+      "weightOz": 8160,
+      "sortOrder": 30
     },
     {
       "sku": "K-4003",
@@ -61,7 +63,8 @@
       "heightIn": 100,
       "thicknessIn": null,
       "showDimensions": true,
-      "weightOz": 8960
+      "weightOz": 8960,
+      "sortOrder": 40
     },
     {
       "sku": "K-4001",
@@ -74,7 +77,8 @@
       "heightIn": 100,
       "thicknessIn": null,
       "showDimensions": true,
-      "weightOz": 0
+      "weightOz": 0,
+      "sortOrder": 50
     },
     {
       "sku": "K-4006",
@@ -87,7 +91,8 @@
       "heightIn": 100,
       "thicknessIn": null,
       "showDimensions": true,
-      "weightOz": 0
+      "weightOz": 0,
+      "sortOrder": 60
     },
     {
       "sku": "K-4007",
@@ -100,7 +105,8 @@
       "heightIn": 100,
       "thicknessIn": null,
       "showDimensions": true,
-      "weightOz": 0
+      "weightOz": 0,
+      "sortOrder": 70
     },
     {
       "sku": "K-4004",
@@ -113,7 +119,8 @@
       "heightIn": 100,
       "thicknessIn": null,
       "showDimensions": true,
-      "weightOz": 7360
+      "weightOz": 7360,
+      "sortOrder": 80
     },
     {
       "sku": "K-4005",
@@ -126,7 +133,8 @@
       "heightIn": 84,
       "thicknessIn": null,
       "showDimensions": true,
-      "weightOz": 8160
+      "weightOz": 8160,
+      "sortOrder": 90
     },
     {
       "sku": "CLM325",
@@ -139,7 +147,8 @@
       "heightIn": null,
       "thicknessIn": null,
       "showDimensions": false,
-      "weightOz": 0
+      "weightOz": 0,
+      "sortOrder": 110
     },
     {
       "sku": "SSM80100",
@@ -152,7 +161,8 @@
       "heightIn": null,
       "thicknessIn": null,
       "showDimensions": false,
-      "weightOz": 0
+      "weightOz": 0,
+      "sortOrder": 120
     },
     {
       "sku": "COLU2812",
@@ -165,7 +175,8 @@
       "heightIn": null,
       "thicknessIn": null,
       "showDimensions": false,
-      "weightOz": 0
+      "weightOz": 0,
+      "sortOrder": 130
     },
     {
       "sku": "SFGPC",
@@ -178,7 +189,8 @@
       "heightIn": null,
       "thicknessIn": null,
       "showDimensions": false,
-      "weightOz": 0
+      "weightOz": 0,
+      "sortOrder": 140
     },
     {
       "sku": "COLW2812",
@@ -191,144 +203,145 @@
       "heightIn": null,
       "thicknessIn": null,
       "showDimensions": false,
-      "weightOz": 0
+      "weightOz": 0,
+      "sortOrder": 150
     }
   ],
   "tiers": [
     {
-      "slug": "soar-series",
+      "slug": "soar--summit-soar-series",
       "name": "SUMMIT SOAR SERIES",
       "productLine": "Summit Soar",
       "tierLevel": 1,
       "parentSlug": null,
       "sku": null,
-      "sortOrder": 10
+      "sortOrder": 40010
     },
     {
-      "slug": "soar-mats-accessories",
+      "slug": "soar--k-4000",
+      "name": "Summit Soar S1 - Mobile Free-Standing Swing Frame w/ Single Cross Beam",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar--summit-soar-series",
+      "sku": "K-4000",
+      "sortOrder": 40020
+    },
+    {
+      "slug": "soar--k-4002",
+      "name": "Summit Soar S2 - Mobile Free-Standing Swing Frame w/ Two Cross Beams",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar--summit-soar-series",
+      "sku": "K-4002",
+      "sortOrder": 40030
+    },
+    {
+      "slug": "soar--k-4003",
+      "name": "Summit Soar S3 - Mobile Free-Standing Swing Frame w/ Three Cross Beams",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar--summit-soar-series",
+      "sku": "K-4003",
+      "sortOrder": 40040
+    },
+    {
+      "slug": "soar--k-4001",
+      "name": "Summit Soar S1-XL - Mobile Free-Standing Swing Frame w/ Single Cross Beam (Width: 12')",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar--summit-soar-series",
+      "sku": "K-4001",
+      "sortOrder": 40050
+    },
+    {
+      "slug": "soar--k-4006",
+      "name": "Summit Soar S2-XL - Mobile Free-Standing Swing Frame w/ Two Cross Beams (Width: 12')",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar--summit-soar-series",
+      "sku": "K-4006",
+      "sortOrder": 40060
+    },
+    {
+      "slug": "soar--k-4007",
+      "name": "Summit Soar S3-XL - Mobile Free-Standing Swing Frame w/ Three Cross Beams (Width: 12')",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar--summit-soar-series",
+      "sku": "K-4007",
+      "sortOrder": 40070
+    },
+    {
+      "slug": "soar--k-4004",
+      "name": "Summit Soar S1 - Mobile Free-Standing Swing Frame w/ Single Cross Beam (Height: 7')",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar--summit-soar-series",
+      "sku": "K-4004",
+      "sortOrder": 40080
+    },
+    {
+      "slug": "soar--k-4005",
+      "name": "Summit Soar S2 - Mobile Free-Standing Swing Frame w/ Single Cross Beam (Height: 7')",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar--summit-soar-series",
+      "sku": "K-4005",
+      "sortOrder": 40090
+    },
+    {
+      "slug": "soar--summit-soar-mats-accessories",
       "name": "SUMMIT SOAR MATS & ACCESSORIES",
       "productLine": "Summit Soar",
       "tierLevel": 1,
       "parentSlug": null,
       "sku": null,
-      "sortOrder": 100
+      "sortOrder": 40100
     },
     {
-      "slug": "soar-k-4000",
-      "name": "Summit Soar S1 - Mobile Free-Standing Swing Frame w/ Single Cross Beam",
-      "productLine": "Summit Soar",
-      "tierLevel": 2,
-      "parentSlug": "soar-series",
-      "sku": "K-4000",
-      "sortOrder": 20
-    },
-    {
-      "slug": "soar-k-4002",
-      "name": "Summit Soar S2 - Mobile Free-Standing Swing Frame w/ Two Cross Beams",
-      "productLine": "Summit Soar",
-      "tierLevel": 2,
-      "parentSlug": "soar-series",
-      "sku": "K-4002",
-      "sortOrder": 30
-    },
-    {
-      "slug": "soar-k-4003",
-      "name": "Summit Soar S3 - Mobile Free-Standing Swing Frame w/ Three Cross Beams",
-      "productLine": "Summit Soar",
-      "tierLevel": 2,
-      "parentSlug": "soar-series",
-      "sku": "K-4003",
-      "sortOrder": 40
-    },
-    {
-      "slug": "soar-k-4001",
-      "name": "Summit Soar S1-XL - Mobile Free-Standing Swing Frame w/ Single Cross Beam (Width: 12')",
-      "productLine": "Summit Soar",
-      "tierLevel": 2,
-      "parentSlug": "soar-series",
-      "sku": "K-4001",
-      "sortOrder": 50
-    },
-    {
-      "slug": "soar-k-4006",
-      "name": "Summit Soar S2-XL - Mobile Free-Standing Swing Frame w/ Two Cross Beams (Width: 12')",
-      "productLine": "Summit Soar",
-      "tierLevel": 2,
-      "parentSlug": "soar-series",
-      "sku": "K-4006",
-      "sortOrder": 60
-    },
-    {
-      "slug": "soar-k-4007",
-      "name": "Summit Soar S3-XL - Mobile Free-Standing Swing Frame w/ Three Cross Beams (Width: 12')",
-      "productLine": "Summit Soar",
-      "tierLevel": 2,
-      "parentSlug": "soar-series",
-      "sku": "K-4007",
-      "sortOrder": 70
-    },
-    {
-      "slug": "soar-k-4004",
-      "name": "Summit Soar S1 - Mobile Free-Standing Swing Frame w/ Single Cross Beam (Height: 7')",
-      "productLine": "Summit Soar",
-      "tierLevel": 2,
-      "parentSlug": "soar-series",
-      "sku": "K-4004",
-      "sortOrder": 80
-    },
-    {
-      "slug": "soar-k-4005",
-      "name": "Summit Soar S2 - Mobile Free-Standing Swing Frame w/ Single Cross Beam (Height: 7')",
-      "productLine": "Summit Soar",
-      "tierLevel": 2,
-      "parentSlug": "soar-series",
-      "sku": "K-4005",
-      "sortOrder": 90
-    },
-    {
-      "slug": "soar-clm325",
+      "slug": "soar--clm325",
       "name": "Soar-XL Floor Mat System (138\" x 80\" x 3.25\") - Single Fold",
       "productLine": "Summit Soar",
       "tierLevel": 2,
-      "parentSlug": "soar-mats-accessories",
+      "parentSlug": "soar--summit-soar-mats-accessories",
       "sku": "CLM325",
-      "sortOrder": 110
+      "sortOrder": 40110
     },
     {
-      "slug": "soar-ssm80100",
+      "slug": "soar--ssm80100",
       "name": "Soar Floor Mat System (100\" x 80\" x 3.25\") - Single Fold",
       "productLine": "Summit Soar",
       "tierLevel": 2,
-      "parentSlug": "soar-mats-accessories",
+      "parentSlug": "soar--summit-soar-mats-accessories",
       "sku": "SSM80100",
-      "sortOrder": 120
+      "sortOrder": 40120
     },
     {
-      "slug": "soar-colu2812",
+      "slug": "soar--colu2812",
       "name": "Soar Base Beam U Column Wrap (30\" x 4.5\" x 3.5\" x 3.5\" x 1.375\")",
       "productLine": "Summit Soar",
       "tierLevel": 2,
-      "parentSlug": "soar-mats-accessories",
+      "parentSlug": "soar--summit-soar-mats-accessories",
       "sku": "COLU2812",
-      "sortOrder": 130
+      "sortOrder": 40130
     },
     {
-      "slug": "soar-sfgpc",
+      "slug": "soar--sfgpc",
       "name": "Gusset Plate Padding",
       "productLine": "Summit Soar",
       "tierLevel": 2,
-      "parentSlug": "soar-mats-accessories",
+      "parentSlug": "soar--summit-soar-mats-accessories",
       "sku": "SFGPC",
-      "sortOrder": 140
+      "sortOrder": 40140
     },
     {
-      "slug": "soar-colw2812",
+      "slug": "soar--colw2812",
       "name": "Soar Column Wrap (60\" x 4.5\" x 4.5\" x 1.375\")",
       "productLine": "Summit Soar",
       "tierLevel": 2,
-      "parentSlug": "soar-mats-accessories",
+      "parentSlug": "soar--summit-soar-mats-accessories",
       "sku": "COLW2812",
-      "sortOrder": 150
+      "sortOrder": 40150
     }
   ],
   "notes": [],
