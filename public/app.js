@@ -2972,7 +2972,9 @@
     };
     // A new proposal starts with the billing address the same as the shipping one.
     if (pb.meta.billSameAsShip && !pb.meta.billTo) pb.meta.billTo = pb.meta.shipTo || '';
-    loadItemDefaults();
+    // Awaited: the zero-price warning is computed from these, and rendering first
+    // would show a clean builder for a moment on a proposal that has stale figures.
+    loadItemDefaults().then(renderBuilder);
     renderBuilder();
   }
 
@@ -3003,7 +3005,83 @@
       // Open the notes panel so the charge is visible rather than buried.
       line.showNotes = true;
     }
+    // Fill a BLANK figure from the catalog. Only blanks: a rate the engine or a rep
+    // put on the line is deliberate and is never overwritten here.
+    if (!(Number(line.rateMinor) || 0) && d.priceMinor) line.rateMinor = d.priceMinor;
+    if (!(Number(line.costEach) || 0) && d.costMinor) line.costEach = d.costMinor;
+    if (!(Number(line.weightEach) || 0) && d.weightLbs) line.weightEach = d.weightLbs;
     return line;
+  }
+
+  /**
+   * Included product lines priced at $0.00 that the catalog has a price for.
+   *
+   * A line's price is snapshotted when the line is inserted — deliberately, so that
+   * reopening a saved proposal cannot silently re-price it. The failure was that
+   * nothing said so: a part priced in the catalog after a proposal was built sat at
+   * $0.00 and looked intentional. This is what drives the warning and the re-pull.
+   */
+  function stalePricedLines() {
+    return pb.lines.filter(function (l) {
+      if (l.lineType !== 'PRODUCT' || l.kind !== 'INCLUDED' || !l.sku) return false;
+      var d = itemDefaults[l.sku];
+      if (!d) return false;
+      return (!(Number(l.rateMinor) || 0) && d.priceMinor > 0)
+        || (!(Number(l.costEach) || 0) && d.costMinor > 0)
+        || (!(Number(l.weightEach) || 0) && d.weightLbs > 0);
+    });
+  }
+
+  /** Included product lines the catalog has no price for at all. */
+  function unpricedLines() {
+    return pb.lines.filter(function (l) {
+      if (l.lineType !== 'PRODUCT' || l.kind !== 'INCLUDED' || !l.sku) return false;
+      if (Number(l.rateMinor) || 0) return false;
+      var d = itemDefaults[l.sku];
+      return !d || !d.priceMinor;
+    });
+  }
+
+  /** Pull catalog price, cost and weight onto the lines that are missing them. */
+  function repullCatalogFigures() {
+    var stale = stalePricedLines();
+    if (!stale.length) return;
+    var changed = [];
+    stale.forEach(function (l) {
+      var d = itemDefaults[l.sku], bits = [];
+      if (!(Number(l.rateMinor) || 0) && d.priceMinor) { l.rateMinor = d.priceMinor; bits.push('rate'); }
+      if (!(Number(l.costEach) || 0) && d.costMinor) { l.costEach = d.costMinor; bits.push('cost'); }
+      if (!(Number(l.weightEach) || 0) && d.weightLbs) { l.weightEach = d.weightLbs; bits.push('weight'); }
+      if (bits.length) changed.push(l.sku + ' (' + bits.join(', ') + ')');
+    });
+    markBuilderDirty();
+    renderBuilder();
+    alert('Updated ' + changed.length + ' line' + (changed.length === 1 ? '' : 's') + ' from the catalog:\n\n' + changed.join('\n') + '\n\nSave the proposal to keep this.');
+  }
+
+  /**
+   * Two different problems, said plainly, because the fix differs:
+   *   - the catalog HAS a price and this line does not (fixable in one click)
+   *   - the catalog has no price either (someone has to go price the part)
+   */
+  function priceWarningHtml() {
+    var stale = stalePricedLines(), unpriced = unpricedLines();
+    if (!stale.length && !unpriced.length) return '';
+    var out = '';
+    if (stale.length) {
+      out += '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px;padding:10px 12px;background:#fdf6e6;border:1px solid #ecd9a6;border-radius:9px;font-size:12.5px;color:#6b5a24;">' +
+        '<div style="flex:1;min-width:240px;"><b>' + stale.length + ' line' + (stale.length === 1 ? ' is' : 's are') + ' missing a figure the catalog has.</b> ' +
+          'A line keeps the price it had when it was added, so a part priced later stays at $0.00 until you pull it in.</div>' +
+        '<button class="btn" id="bRepull" style="width:auto;padding:7px 13px;white-space:nowrap;">Pull from catalog</button></div>';
+    }
+    if (unpriced.length) {
+      out += '<div style="margin-top:10px;padding:10px 12px;background:#fbecea;border:1px solid #e8c4bd;border-radius:9px;font-size:12.5px;color:#7d2f24;">' +
+        '<b>' + unpriced.length + ' line' + (unpriced.length === 1 ? ' has' : 's have') + ' no price in the catalog either:</b> ' +
+        '<code>' + unpriced.slice(0, 8).map(function (l) { return esc(l.sku); }).join('</code>, <code>') + '</code>' +
+        (unpriced.length > 8 ? ' and ' + (unpriced.length - 8) + ' more' : '') +
+        '. Price them under Catalog → Pricing &amp; SKUs, then use “Pull from catalog”.</div>';
+    }
+    return out;
   }
 
   function builderTotals() {
@@ -3124,6 +3202,7 @@
           '<textarea id="mBill" rows="2" placeholder="Billing address" style="' + IN + 'resize:vertical;">' + esc(pb.meta.billTo || '') + '</textarea></div>' +
         '<div class="field" style="margin-top:4px;"><label>Ship to</label><textarea id="mShip" rows="2" style="' + IN + 'resize:vertical;">' + esc(pb.meta.shipTo) + '</textarea></div>' +
         '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:8px;cursor:pointer;"><input type="checkbox" id="mShowTitle"' + (pb.meta.showTitle !== false ? ' checked' : '') + '> Show the proposal title on the customer proposal</label>' +
+        priceWarningHtml() +
         // Running shipment weight, recalculated on every edit. Read-only: it is the
         // sum of the lines, and a typed override would quietly disagree with them.
         // The zero-weight count is shown because a missing weight understates crating
@@ -3297,6 +3376,14 @@
             : '') +
           '<button class="bToggleNotes" data-i="' + i + '" style="margin-top:6px;border:none;background:transparent;color:#3d4a55;font-size:11.5px;cursor:pointer;padding:0;font-weight:500;">' + (l.showNotes ? '− Hide delivery / freight notes' : (hasNotes ? '● Delivery / freight notes' : '+ Delivery / freight notes')) + '</button>' +
           notesPanel +
+          // Flagged on the line itself, not only in the banner — the banner tells you
+          // how many, this tells you which.
+          (l.kind === 'INCLUDED' && l.sku && !(Number(l.rateMinor) || 0)
+            ? '<div style="margin-top:6px;font-size:11.5px;color:#8a5a12;">No rate on this line' +
+                (itemDefaults[l.sku] && itemDefaults[l.sku].priceMinor
+                  ? ' — the catalog has $' + (itemDefaults[l.sku].priceMinor / 100).toFixed(2) + '. Use “Pull from catalog” above.'
+                  : ' — and no price in the catalog for ' + esc(l.sku) + '.') + '</div>'
+            : '') +
         '</div>' +
         '<div style="display:flex;flex-direction:column;gap:5px;width:74px;flex:0 0 auto;"><label style="font-size:10px;color:#8a8f85;text-transform:uppercase;">Qty</label><input class="bF" data-i="' + i + '" data-k="quantity" value="' + esc(l.quantity) + '" style="width:100%;padding:6px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;"></div>' +
         '<div style="display:flex;flex-direction:column;gap:5px;width:104px;flex:0 0 auto;"><label style="font-size:10px;color:#8a8f85;text-transform:uppercase;">Rate</label><input class="bF" data-i="' + i + '" data-k="rate" value="' + m2d(l.rateMinor) + '" style="width:100%;padding:6px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;"></div>' +
@@ -3381,6 +3468,8 @@
     var mdisc = document.getElementById('mDisc'); if (mdisc) mdisc.addEventListener('change', function () { pb.meta.discountPct = parseFloat(mdisc.value) || 0; renderBuilderKeepingFocus(); });
     var msf = document.getElementById('mStructFreight'); if (msf) msf.addEventListener('change', function () { pb.meta.structureFreightMinor = d2m(msf.value); renderBuilderKeepingFocus(); });
     var mmf = document.getElementById('mMatsFreight'); if (mmf) mmf.addEventListener('change', function () { pb.meta.matsFreightMinor = d2m(mmf.value); renderBuilderKeepingFocus(); });
+    var brp = document.getElementById('bRepull');
+    if (brp) brp.addEventListener('click', repullCatalogFigures);
     // line field inputs
     document.querySelectorAll('.bF').forEach(function (el) {
       var handler = function () {

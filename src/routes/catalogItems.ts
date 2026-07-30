@@ -297,18 +297,33 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
   /**
    * Part → its builder defaults, for the proposal builder to apply on add. A small
    * dedicated payload: the builder needs this on every line insert and should not
-   * pull the whole 300-row catalog to get it. Only parts that actually have a
-   * default are returned.
+   * pull the whole 300-row catalog to get it.
+   *
+   * Price, cost and weight are included for EVERY active part, not just parts with a
+   * default. The builder snapshots a line's price when the line is inserted — which
+   * is right, because a saved proposal must not silently re-price itself — but that
+   * meant a part priced in the catalog AFTER a proposal was built stayed at $0.00
+   * with nothing on screen saying so. The builder now uses these to flag a
+   * zero-priced line and to re-pull catalog figures on request.
    */
   app.get('/catalog/items/defaults', read, async () => {
     const rows = await listSkus();
-    const out: Record<string, { qty?: number; freightMinor?: number; freightLabel?: string }> = {};
+    type Entry = {
+      qty?: number; freightMinor?: number; freightLabel?: string;
+      priceMinor?: number; costMinor?: number; weightLbs?: number; description?: string;
+    };
+    const out: Record<string, Entry> = {};
     for (const s of rows) {
-      const entry: { qty?: number; freightMinor?: number; freightLabel?: string } = {};
+      if (!s.active) continue;
+      const entry: Entry = {};
       if (s.defaultQty != null) entry.qty = s.defaultQty;
       if (s.freightMinor != null) entry.freightMinor = s.freightMinor;
       if (s.freightLabel) entry.freightLabel = s.freightLabel;
-      if (Object.keys(entry).length) out[s.part] = entry;
+      entry.priceMinor = s.unitPriceMinor || 0;
+      entry.costMinor = s.unitCostMinor || 0;
+      entry.weightLbs = Number(s.weightLbs) || 0;
+      entry.description = s.description;
+      out[s.part] = entry;
     }
     return out;
   });
