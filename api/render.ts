@@ -13,10 +13,13 @@ import { buildApp } from '../src/app.js';
  * Memory and duration are set per-function in vercel.json.
  */
 const app = buildApp();
-let ready: Promise<void> | undefined;
+// Typed as `unknown` rather than `void`: Fastify's ready() resolves to a
+// PromiseLike, not a full Promise, so narrowing it here just fights the compiler
+// for no benefit — nothing reads the value.
+let ready: Promise<unknown> | undefined;
 
 export default async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  ready ??= app.ready().then(() => undefined);
+  ready ??= Promise.resolve(app.ready());
   await ready;
   app.server.emit('request', req, res);
 }
