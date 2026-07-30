@@ -1405,6 +1405,9 @@ model HandoffRequirement {
   isException     Boolean             @default(false)
   exceptionReason String?
   createdById     String
+  /// Who last changed this requirement, shown beside the status so the order page
+  /// reads as a history rather than an anonymous state.
+  updatedById     String?
   createdAt       DateTime            @default(now())
   updatedAt       DateTime            @updatedAt
 
@@ -1428,6 +1431,8 @@ model HandoffTask {
   isException     Boolean           @default(false)
   exceptionReason String?
   createdById     String
+  /// Who last changed this task — shown beside the status on the order page.
+  updatedById     String?
   completedAt     DateTime?
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt

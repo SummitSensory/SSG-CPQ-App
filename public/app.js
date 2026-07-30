@@ -327,7 +327,7 @@
             '<button class="link-btn" id="profBtn" style="margin-bottom:6px;">My profile</button>' +
             '<button class="link-btn" id="pwdBtn" style="margin-bottom:6px;">Change password</button>' +
             '<button class="link-btn" id="logoutBtn">Sign out</button>' +
-            '<div style="text-align:center;font-size:10px;color:#b3b7ac;margin-top:8px;letter-spacing:.04em;">build 34 · password reset · Resend domain</div></div>' +
+            '<div style="text-align:center;font-size:10px;color:#b3b7ac;margin-top:8px;letter-spacing:.04em;">build 40 · auto freight · SKU repair</div></div>' +
         '</aside>' +
         '<main class="main"><div class="topbar"><div class="eyebrow">Summit Sensory Gym Proposal Management Software</div><h2 id="viewTitle">Dashboard</h2></div>' +
           '<div class="content" id="view"></div></main>' +
@@ -829,6 +829,7 @@
     { key: 'record', label: 'Record', w: 132, type: 'enum', options: [['Product + priced', 'Product + priced'], ['Product only', 'Product only'], ['Priced only', 'Priced only']] },
     { key: 'statusLabel', label: 'Status', w: 118, type: 'enum' },
     { key: 'defaultQty', label: 'Default qty', w: 104, type: 'num', align: 'center' },
+    { key: 'freightDisplay', label: 'Auto freight', w: 116, type: 'num', align: 'right' },
     { key: 'ovrLabel', label: 'Override OK', w: 104, type: 'enum', options: [['Yes', 'Yes'], ['No', 'No']], align: 'center' },
     { key: '', label: '', w: 96 },
   ];
@@ -863,6 +864,9 @@
         row.statusLabel = k.productStatus ? titleCase(k.productStatus) : (k.active === false ? 'Inactive' : 'Active');
         row.ovrLabel = k.overrideAllowed ? 'Yes' : 'No';
         row.defaultQty = k.defaultQty == null ? '' : Number(k.defaultQty);
+        row.freightMinor = k.freightMinor == null ? '' : Number(k.freightMinor);
+        row.freightLabel = k.freightLabel || '';
+        row.freightDisplay = k.freightMinor == null ? '' : Number(k.freightMinor) / 100;
         row.isActive = k.productStatus ? k.productStatus === 'ACTIVE' : k.active !== false;
         return row;
       });
@@ -914,6 +918,11 @@
         cell(admin
           ? '<input type="number" min="0" class="itDefQty" data-part="' + esc(k.part) + '" value="' + (k.defaultQty === '' || k.defaultQty == null ? '' : k.defaultQty) + '" placeholder="—" title="Quantity the Adventure Series builder starts this part at. Blank for none." style="' + NUM + 'text-align:center;">'
           : (k.defaultQty === '' || k.defaultQty == null ? '<span style="color:#b6bab1;">—</span>' : '<span style="font-size:13px;font-weight:600;">' + k.defaultQty + '</span>'), 'text-align:center;') +
+        // A fixed freight charge added to this part's proposal line automatically.
+        // Blank = none. Prints as the line's 3rd-party freight row.
+        cell(admin
+          ? '<input class="itFreight" data-part="' + esc(k.part) + '" value="' + (k.freightMinor === '' || k.freightMinor == null ? '' : (Number(k.freightMinor) / 100).toFixed(2)) + '" placeholder="—" title="Freight added automatically when this part is put on a proposal. Blank for none." style="' + NUM + 'text-align:right;">'
+          : (k.freightMinor === '' || k.freightMinor == null ? '<span style="color:#b6bab1;">—</span>' : '<span style="font-size:13px;font-weight:600;">' + fmtMoney(Number(k.freightMinor), 'USD') + '</span>'), 'text-align:right;') +
         // Pre-approval to substitute this part number in the Adventure Series
         // builder. Off unless an admin says otherwise.
         cell(admin
@@ -966,8 +975,25 @@
         setTimeout(function () { el.style.borderColor = f === 'unitCostMinor' ? '#e4dfd0' : '#dcded7'; }, 900);
       });
     });
-    box.querySelectorAll('.itDefQty').forEach(function (el) {
+    box.querySelectorAll('.itFreight').forEach(function (el) {
       el.addEventListener('change', async function () {
+        var part = el.getAttribute('data-part'), raw = el.value.trim();
+        var to = raw === '' ? null : d2m(raw);
+        el.style.borderColor = '#c9a227';
+        var rf = await authed('/catalog/items/' + encodeURIComponent(part), { method: 'PATCH', body: { freightMinor: to } });
+        el.style.borderColor = rf.ok ? '#3f9d78' : '#c2452f';
+        if (!rf.ok) {
+          var mf = ''; try { mf = ((await rf.json()) || {}).message || ''; } catch (ef) {}
+          alert(mf || 'Could not save that freight amount (' + rf.status + '). If this says the column is missing, migration 0027 has not been deployed.');
+          return;
+        }
+        el.value = to == null ? '' : (to / 100).toFixed(2);
+        var rowf = (itemState.rows || []).filter(function (x) { return x.part === part; })[0];
+        if (rowf) { rowf.freightMinor = to == null ? '' : to; rowf.freightDisplay = to == null ? '' : to / 100; }
+        setTimeout(function () { el.style.borderColor = '#dcded7'; }, 900);
+      });
+    });
+    box.querySelectorAll('.itDefQty').forEach(function (el) {      el.addEventListener('change', async function () {
         var part = el.getAttribute('data-part'), raw = el.value.trim();
         var to = raw === '' ? null : Math.max(0, Math.round(parseFloat(raw) || 0));
         el.style.borderColor = '#c9a227';
@@ -1065,7 +1091,7 @@
       '<div style="display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap;">' +
         '<input id="catSearch" placeholder="Search SKU or name…" value="' + esc(cat.q) + '" style="flex:1;min-width:220px;max-width:340px;padding:10px 13px;border:1px solid #dcded7;border-radius:10px;font-size:14px;background:#fff;outline:none;">' +
         '<select id="catStatus" style="padding:10px 12px;border:1px solid #dcded7;border-radius:10px;font-size:14px;background:#fff;">' + statusOpts + '</select>' +
-        (admin ? '<div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;"><button class="link-btn" id="catCats" style="width:auto;padding:10px 14px;">Categories &amp; tiers</button><button class="link-btn" id="catOrder" style="width:auto;padding:10px 14px;">Reorder list</button><button class="link-btn" id="catExport" style="width:auto;padding:10px 14px;">Export tree</button><button class="link-btn" id="catImport" style="width:auto;padding:10px 14px;">Import tree</button><button class="btn" id="catNew" style="width:auto;padding:10px 17px;">New product</button></div>' : '') +
+        (admin ? '<div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;"><button class="link-btn" id="catCats" style="width:auto;padding:10px 14px;">Categories &amp; tiers</button><button class="link-btn" id="catOrder" style="width:auto;padding:10px 14px;">Reorder list</button><button class="link-btn" id="catSortAudit" style="width:auto;padding:10px 14px;">Sort order</button><button class="link-btn" id="catExport" style="width:auto;padding:10px 14px;">Export tree</button><button class="link-btn" id="catImport" style="width:auto;padding:10px 14px;">Import tree</button><button class="btn" id="catNew" style="width:auto;padding:10px 17px;">New product</button></div>' : '') +
       '</div>' +
       '<div id="catList"><div class="muted" style="padding:24px;">Loading…</div></div>';
     var search = document.getElementById('catSearch'), t;
@@ -1080,6 +1106,7 @@
       document.getElementById('catCats').addEventListener('click', function () { openCategoryManager(user); });
       document.getElementById('catOrder').addEventListener('click', function () { openProductReorder(user); });
       document.getElementById('catExport').addEventListener('click', exportProductTree);
+      document.getElementById('catSortAudit').addEventListener('click', function () { openSortAudit(user); });
       document.getElementById('catImport').addEventListener('click', function () { openTreeImport(user); });
     }
     loadProducts(user);
@@ -1568,7 +1595,16 @@
       '<label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;margin-top:4px;"><input type="checkbox" id="mfSteel"' + (m.isSteelFabricator ? ' checked' : '') + '> Steel fabricator — their lines count toward total steel weight on a BOM</label>' +
       '<label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;margin-top:6px;"><input type="checkbox" id="mfThird"' + (m.id ? (m.isThirdParty ? ' checked' : '') : ' checked') + '> Third-party vendor (unchecked = made in-house)</label>' +
       '<label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;margin-top:6px;"><input type="checkbox" id="mfActive"' + (m.id ? (m.isActive !== false ? ' checked' : '') : ' checked') + '> Active — offered when assigning a vendor</label>' +
-      '<div class="field" style="margin-top:10px;"><label>Notes</label><textarea id="mfNotes" rows="2" style="' + IN + 'resize:vertical;">' + esc(m.notes || '') + '</textarea></div>',
+      '<div class="field" style="margin-top:10px;"><label>Notes</label><textarea id="mfNotes" rows="2" style="' + IN + 'resize:vertical;">' + esc(m.notes || '') + '</textarea></div>' +
+      '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin:16px 0 6px;">Bill of Materials email</div>' +
+      '<div class="muted" style="font-size:12px;margin-bottom:8px;line-height:1.5;">Pre-fills the send dialog for this vendor — a fabricator and a distributor rarely want the same note or the same format. Tokens: <code>{{vendor}}</code> <code>{{order}}</code> <code>{{job}}</code> <code>{{submittedOn}}</code>.</div>' +
+      two(fieldRow('Send BOMs to', '<input id="mfBomTo" type="email" placeholder="Falls back to the contact email" style="' + IN + '" value="' + v('bomEmailTo') + '">'),
+          fieldRow('Cc', '<input id="mfBomCc" placeholder="Optional" style="' + IN + '" value="' + v('bomEmailCc') + '">')) +
+      fieldRow('Subject', '<input id="mfBomSubject" placeholder="Bill of Materials — {{order}} — {{job}}" style="' + IN + '" value="' + v('bomEmailSubject') + '">') +
+      fieldRow('Attach as', '<select id="mfBomFormat" style="' + IN + '">' +
+        ['PDF', 'EXCEL', 'BOTH'].map(function (f) { return '<option value="' + f + '"' + ((m.bomEmailFormat || 'PDF') === f ? ' selected' : '') + '>' + (f === 'BOTH' ? 'Both' : f === 'EXCEL' ? 'Excel' : 'PDF') + '</option>'; }).join('') +
+        '</select>') +
+      '<div class="field"><label>Default message</label><textarea id="mfBomBody" rows="5" placeholder="Left blank, a standard covering note is used." style="' + IN + 'resize:vertical;">' + esc(m.bomEmailBody || '') + '</textarea></div>',
       async function (close, showErr) {
         var name = document.getElementById('mfName').value.trim();
         if (name.length < 2) return showErr('Manufacturer name is required.');
@@ -1582,6 +1618,11 @@
           altContactName: document.getElementById('mfAName').value.trim(),
           altContactEmail: document.getElementById('mfAEmail').value.trim(),
           altContactPhone: document.getElementById('mfAPhone').value.trim(),
+          bomEmailTo: document.getElementById('mfBomTo').value.trim(),
+          bomEmailCc: document.getElementById('mfBomCc').value.trim(),
+          bomEmailSubject: document.getElementById('mfBomSubject').value.trim(),
+          bomEmailBody: document.getElementById('mfBomBody').value,
+          bomEmailFormat: document.getElementById('mfBomFormat').value,
           addressLine1: document.getElementById('mfAddr1').value.trim(),
           addressLine2: document.getElementById('mfAddr2').value.trim(),
           city: document.getElementById('mfCity').value.trim(),
@@ -2032,6 +2073,37 @@
     });
   }
 
+  /** Duplicate sort orders in the live tree, with a one-click renumber. */
+  async function openSortAudit(user) {
+    var r = await authed('/catalog/tree/sort-audit');
+    if (!r.ok) { alert('Could not audit sort order (' + r.status + ').'); return; }
+    var d = await r.json();
+    function block(title, list) {
+      if (!list.length) return '';
+      return '<div style="margin-bottom:14px;"><div style="font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin-bottom:6px;">' + title + '</div>' +
+        list.map(function (c) {
+          return '<div style="border:1px solid #e7e8e3;border-radius:9px;padding:9px 11px;margin-bottom:6px;">' +
+            '<div style="font-size:12.5px;color:#5c6157;">' + esc(c.scope) + ' · order <b>' + c.sortOrder + '</b></div>' +
+            c.members.map(function (m) { return '<div style="font-size:13px;">' + esc(m.label) + '</div>'; }).join('') +
+          '</div>';
+        }).join('') + '</div>';
+    }
+    var body = d.clashCount === 0
+      ? '<div class="muted" style="font-size:13.5px;">No duplicates — every sibling has a distinct sort order.</div>'
+      : '<div style="font-size:13.5px;margin-bottom:12px;"><b>' + d.clashCount + '</b> collision' + (d.clashCount === 1 ? '' : 's') +
+        ' across <b>' + d.affected + '</b> rows. Ties break alphabetically, so these print in an arbitrary order.</div>' +
+        block('Categories', d.categoryClashes) + block('Products', d.productClashes) +
+        '<div class="muted" style="font-size:12px;">Renumber rewrites every sibling group to 10, 20, 30… keeping the order things are in now. Gaps of 10 leave room to slot one item in later by hand.</div>';
+    openModal('Sort order', body, d.clashCount === 0 ? null : async function (close, showErr) {
+      var r2 = await authed('/catalog/tree/renumber', { method: 'POST', body: {} });
+      if (!r2.ok) return showErr('Could not renumber (' + r2.status + ').');
+      var out = await r2.json();
+      close();
+      alert('Renumbered ' + out.categories + ' categor' + (out.categories === 1 ? 'y' : 'ies') + ' and ' + out.products + ' product' + (out.products === 1 ? '' : 's') + '.');
+      refreshCatalogList(user);
+    }, 'Renumber all');
+  }
+
   async function exportProductTree() {
     var r = await authed('/catalog/tree/export');
     if (!r.ok) { alert('Could not export the tree (' + r.status + ').'); return; }
@@ -2318,8 +2390,10 @@
           : '<button class="link-btn" data-open="view" data-vid="' + v.id + '" style="width:auto;padding:8px 15px;">View (read only)</button>';
         return '<tr>' + td('v' + v.version) + td('<span class="chip">' + titleCase(v.status) + '</span>') + td(fmtDate(v.createdAt)) + td(v.frozen ? 'Yes' : 'No') + td('<div style="display:flex;justify-content:flex-end;">' + action + '</div>') + '</tr>';
       }).join(''), 5, '')) +
+      sectionBlock('Financing options', '<div id="finBox"><div class="muted" style="padding:16px;">Loading…</div></div>') +
       (actions ? sectionBlock('Actions', '<div style="display:flex;gap:8px;flex-wrap:wrap;" id="propActions">' + actions + '</div>') : '');
     document.getElementById('propBack').addEventListener('click', function () { renderProposals(user); });
+    loadFinancing(p, user);
     document.querySelectorAll('[data-open]').forEach(function (bt) {
       bt.addEventListener('click', function () {
         var v = versions.filter(function (x) { return x.id === bt.getAttribute('data-vid'); })[0];
@@ -2684,6 +2758,12 @@
   };
   function d2m(v) { var n = parseFloat(String(v).replace(/[^0-9.\-]/g, '')); return isNaN(n) ? 0 : Math.round(n * 100); }
   function m2d(m) { return (Number(m || 0) / 100).toFixed(2); }
+  /** Pounds, with one decimal only when it matters. */
+  function fmtWeight(lbs) {
+    var n = Number(lbs) || 0;
+    var s = n >= 100 ? Math.round(n).toLocaleString() : (Math.round(n * 10) / 10).toLocaleString();
+    return s + ' lbs';
+  }
   function uid() { return 'l' + Math.random().toString(36).slice(2, 9); }
 
   function normalizeLine(it) {
@@ -2769,11 +2849,42 @@
     };
     // A new proposal starts with the billing address the same as the shipping one.
     if (pb.meta.billSameAsShip && !pb.meta.billTo) pb.meta.billTo = pb.meta.shipTo || '';
+    loadItemDefaults();
     renderBuilder();
   }
 
+  /**
+   * Per-part builder defaults (quantity, automatic freight) from Catalog → Pricing &
+   * SKUs. Fetched once per builder session and applied when a line is inserted, never
+   * on load — reopening a saved proposal must not silently re-price it.
+   */
+  var itemDefaults = {};
+  async function loadItemDefaults() {
+    try {
+      var r = await authed('/catalog/items/defaults');
+      if (r.ok) itemDefaults = (await r.json()) || {};
+    } catch (e) { itemDefaults = {}; }
+  }
+  /**
+   * Stamp a freshly inserted line with its part's automatic freight. Leaves a line
+   * alone if it already carries a freight amount, so a builder-generated or
+   * hand-entered figure always wins.
+   */
+  function applyItemDefaults(line) {
+    if (!line || !line.sku) return line;
+    var d = itemDefaults[line.sku];
+    if (!d) return line;
+    if (d.freightMinor != null && !(Number(line.tpFreightMinor) || 0)) {
+      line.tpFreightMinor = d.freightMinor;
+      line.tpFreightLabel = line.tpFreightLabel || d.freightLabel || 'Freight';
+      // Open the notes panel so the charge is visible rather than buried.
+      line.showNotes = true;
+    }
+    return line;
+  }
+
   function builderTotals() {
-    var subtotal = 0, tpFreight = 0, weight = 0, cogs = 0;
+    var subtotal = 0, tpFreight = 0, weight = 0, cogs = 0, weightMissing = 0;
     var groups = []; var cur = null;
     pb.lines.forEach(function (l) {
       if (l.lineType === 'GROUP') { cur = { name: l.name, optional: l.optional, subtotal: 0, cogs: 0 }; groups.push(cur); return; }
@@ -2783,6 +2894,9 @@
         var tp = Number(l.tpFreightMinor) || 0;
         subtotal += amt; tpFreight += tp; cogs += cst;
         weight += (Number(l.quantity) || 0) * (Number(l.weightEach) || 0);
+        // A priced line with no weight on record silently understates crating and
+        // freight, so count them rather than letting the total look complete.
+        if ((Number(l.quantity) || 0) > 0 && !(Number(l.weightEach) || 0)) weightMissing++;
         if (cur) { cur.subtotal += amt + tp; cur.cogs += cst; }
       }
     });
@@ -2795,7 +2909,7 @@
     var deposit = depositOf(total);
     var revenue = subtotal - discount + tpFreight;
     groups.forEach(function (g) { g.margin = g.subtotal - g.cogs; g.marginPct = g.subtotal ? Math.round((g.margin / g.subtotal) * 1000) / 10 : 0; });
-    return { subtotal: subtotal, discountPct: discountPct, discount: discount, tpFreight: tpFreight, tax: tax, structureFreight: structureFreight, matsFreight: matsFreight, total: total, deposit: deposit, groups: groups, weight: weight,
+    return { subtotal: subtotal, discountPct: discountPct, discount: discount, tpFreight: tpFreight, tax: tax, structureFreight: structureFreight, matsFreight: matsFreight, total: total, deposit: deposit, groups: groups, weight: weight, weightMissing: weightMissing,
       revenue: revenue, cogs: cogs, margin: revenue - cogs, marginPct: revenue ? Math.round(((revenue - cogs) / revenue) * 1000) / 10 : 0 };
   }
   // subtotal + cost per GROUP line index, for inline display in the builder
@@ -2875,6 +2989,13 @@
         '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:14px;"><span class="muted">Mats &amp; Padding Freight $</span><input id="mMatsFreight" style="width:100px;padding:5px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;" value="' + m2d(pb.meta.matsFreightMinor) + '"></div>' +
         '<div style="display:flex;justify-content:space-between;padding:8px 0 0;margin-top:6px;border-top:1px solid #e7e8e3;font-size:16px;font-weight:600;font-family:\'Newsreader\',serif;"><span>Total</span><span>' + fmtMoney(t.total, 'USD') + '</span></div>' +
         '<div style="display:flex;justify-content:space-between;padding:6px 0 0;font-size:14px;color:#3d4a55;font-weight:600;"><span>Deposit due (' + depositPct() + '%)</span><span>' + fmtMoney(t.deposit, 'USD') + '</span></div>' +
+        // Read-only: the sum of quantity × per-unit weight across product lines. Drives
+        // crating and freight, so it is worth seeing before those numbers are entered.
+        '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0 0;margin-top:6px;border-top:1px solid #e7e8e3;font-size:14px;">' +
+          '<span class="muted">Total weight</span>' +
+          '<span style="font-variant-numeric:tabular-nums;">' + fmtWeight(t.weight) + '</span>' +
+        '</div>' +
+        (t.weightMissing ? '<div style="font-size:11px;color:#b4522e;text-align:right;margin-top:3px;">' + t.weightMissing + ' line' + (t.weightMissing === 1 ? '' : 's') + ' have no weight on record</div>' : '') +
       '</div>' +
       footerNotesCard() +
       '<div id="bMarginRail" style="' + marginRailStyle() + '">' + marginCard(t) + '</div>';
@@ -3138,7 +3259,7 @@
       var wire = function () {
         document.querySelectorAll('.pkRow').forEach(function (b) { b.addEventListener('click', function () {
           var p = products.filter(function (x) { return x.id === b.getAttribute('data-id'); })[0];
-          pb.lines.push({ ref: uid(), lineType: 'PRODUCT', kind: 'INCLUDED', productId: p.id, sku: p.sku || '', name: p.name, description: p.proposalDescription || '', quantity: 1, rateMinor: 0, group: '' });
+          pb.lines.push(applyItemDefaults({ ref: uid(), lineType: 'PRODUCT', kind: 'INCLUDED', productId: p.id, sku: p.sku || '', name: p.name, description: p.proposalDescription || '', quantity: 1, rateMinor: 0, group: '' }));
           closeForm(); renderBuilder();
         }); });
         // A bundle becomes one priced line plus its components as zero-rate
@@ -3147,9 +3268,9 @@
         document.querySelectorAll('.pkBundle').forEach(function (b) { b.addEventListener('click', function () {
           var bn = bundles.filter(function (x) { return x.id === b.getAttribute('data-id'); })[0];
           if (!bn) return;
-          pb.lines.push({ ref: uid(), lineType: 'PRODUCT', kind: 'INCLUDED', productId: bn.id, sku: bn.sku || '', name: bn.name, description: bn.proposalDescription || '', quantity: 1, rateMinor: bn.unitPriceMinor || 0, costEach: 0, weightEach: 0, group: bn.name });
+          pb.lines.push(applyItemDefaults({ ref: uid(), lineType: 'PRODUCT', kind: 'INCLUDED', productId: bn.id, sku: bn.sku || '', name: bn.name, description: bn.proposalDescription || '', quantity: 1, rateMinor: bn.unitPriceMinor || 0, costEach: 0, weightEach: 0, group: bn.name }));
           (bn.components || []).forEach(function (c) {
-            pb.lines.push({ ref: uid(), lineType: 'PRODUCT', kind: 'INCLUDED', productId: c.productId, sku: c.sku || '', name: '— ' + c.name, description: '', quantity: c.quantity || 1, rateMinor: 0, costEach: c.unitCostMinor || 0, weightEach: c.weightLbs || 0, group: bn.name });
+            pb.lines.push(applyItemDefaults({ ref: uid(), lineType: 'PRODUCT', kind: 'INCLUDED', productId: c.productId, sku: c.sku || '', name: '— ' + c.name, description: '', quantity: c.quantity || 1, rateMinor: 0, costEach: c.unitCostMinor || 0, weightEach: c.weightLbs || 0, group: bn.name }));
           });
           closeForm(); renderBuilder();
         }); });
@@ -3784,6 +3905,7 @@
         rateMinor: l.rateMinor || 0, costEach: l.costEach || 0, weightEach: l.weightEach || 0, optional: !!l.optional,
       });
     });
+    out.forEach(applyItemDefaults);
     if (replace) pb.lines = out; else pb.lines = pb.lines.concat(out);
     advClose(); renderBuilder();
     var bl = document.getElementById('bLines'); if (bl) bl.scrollIntoView({ block: 'start' });
@@ -3996,6 +4118,7 @@
         costEach: l.costEach || 0, weightEach: l.weightEach || 0, optional: !!l.optional
       });
     });
+    out.forEach(applyItemDefaults);
     if (replace) pb.lines = out; else pb.lines = pb.lines.concat(out);
     soarClose();
     renderBuilder();
@@ -4157,11 +4280,11 @@
         '<div><div class="k">Customer approval</div><div class="v small">' + (order.customerApproval ? esc(order.customerApproval.approverName) : '—') + '</div></div></div></div>' +
       sectionBlock('Requirements', reqRows(order.requirements || [], canHandoff)) +
       sectionBlock('Internal tasks', taskRows(order.tasks || [], canHandoff)) +
-      sectionBlock('Bill of Materials', bomBlock(order, canHandoff)) +
       (hasRole(QBO_VIEW_ROLES, user.role) ? sectionBlock('QuickBooks', '<div id="qboBox"><div class="muted" style="padding:16px;">Loading…</div></div>') : '') +
+      sectionBlock('Bill of Materials', '<div id="bomBox"><div class="muted" style="padding:16px;">Loading…</div></div>') +
       sectionBlock('Audit timeline', auditRows(audit));
     document.getElementById('ordBack').addEventListener('click', function () { renderOrders(user); });
-    wireBom(order, user, canHandoff);
+    loadBomSections(order, user, canHandoff);
     if (hasRole(QBO_VIEW_ROLES, user.role)) loadQbo(order, user);
     var unl = document.getElementById('ordUnlock');
     if (unl) unl.addEventListener('click', function () { openUnlockForm(order, user); });
@@ -4177,19 +4300,29 @@
     }
   }
   function hoStatusSelect(kind, id, opts, sel) { return '<select data-kind="' + kind + '" data-id="' + id + '" class="hoStatus" style="padding:6px 9px;border:1px solid #dcded7;border-radius:8px;font-size:13px;background:#fff;">' + opts.map(function (o) { return '<option value="' + o + '"' + (o === sel ? ' selected' : '') + '>' + titleCase(o) + '</option>'; }).join('') + '</select>'; }
+  /**
+   * Who last touched a row, under its status. A status on its own says what state
+   * something is in but never who put it there — which is the question actually
+   * asked when a requirement is disputed.
+   */
+  function changedBy(row) {
+    if (!row.updatedByName) return '';
+    return '<div class="muted" style="font-size:11.5px;margin-top:5px;line-height:1.4;">' +
+      esc(row.updatedByName) + ' · ' + fmtDate(row.updatedAt) + '</div>';
+  }
   function reqRows(reqs, edit) {
     var rows = reqs.map(function (r) {
       var cell = edit ? hoStatusSelect('req', r.id, ['OPEN', 'IN_PROGRESS', 'BLOCKED', 'COMPLETE', 'WAIVED'], r.status) : '<span class="chip">' + titleCase(r.status) + '</span>';
-      return '<tr>' + td(esc(titleCase(r.category))) + td(esc(r.title)) + td(cell) + td(r.isException ? '<span class="chip" style="background:#fbecea;color:#9c3327;">Exception</span>' : '—') + '</tr>';
+      return '<tr>' + td(esc(titleCase(r.category))) + td(esc(r.title)) + td(cell + changedBy(r)) + td(r.isException ? '<span class="chip" style="background:#fbecea;color:#9c3327;">Exception</span>' : '—') + '</tr>';
     }).join('');
-    return tableShell(['Category', 'Requirement', 'Status', 'Flag'], rows, 4, 'No requirements.');
+    return tableShell(['Category', 'Requirement', 'Status & last change', 'Flag'], rows, 4, 'No requirements.');
   }
   function taskRows(tasks, edit) {
     var rows = tasks.map(function (t) {
       var cell = edit ? hoStatusSelect('task', t.id, ['TODO', 'IN_PROGRESS', 'BLOCKED', 'DONE', 'CANCELLED'], t.status) : '<span class="chip">' + titleCase(t.status) + '</span>';
-      return '<tr>' + td('<b style="font-weight:600;">' + esc(t.title) + '</b>') + td(esc(t.assigneeRole ? titleCase(t.assigneeRole) : 'Unassigned')) + td(cell) + td(t.dueDate ? fmtDate(t.dueDate) : '—') + '</tr>';
+      return '<tr>' + td('<b style="font-weight:600;">' + esc(t.title) + '</b>') + td(esc(t.assigneeRole ? titleCase(t.assigneeRole) : 'Unassigned')) + td(cell + changedBy(t)) + td(t.dueDate ? fmtDate(t.dueDate) : '—') + '</tr>';
     }).join('');
-    return tableShell(['Task', 'Owner', 'Status', 'Due'], rows, 4, 'No tasks.');
+    return tableShell(['Task', 'Owner', 'Status & last change', 'Due'], rows, 4, 'No tasks.');
   }
   /* --- Bill of Materials: the vendor-facing document, grouped by vendor. ---
    * Quantities and part numbers come from the accepted proposal and the catalog;
@@ -4202,166 +4335,461 @@
     return 'width:' + (w || '100%') + ';padding:7px 9px;border:1px solid #dcded7;border-radius:8px;font-size:13px;background:#fff;color:#20241f;outline:none;';
   }
 
-  /** The header a Bill of Materials needs that a proposal has no concept of. */
-  function bomHeaderCard(order, edit) {
-    var dis = edit ? '' : ' disabled';
-    var d = order.bomSubmittedOn ? String(order.bomSubmittedOn).slice(0, 10) : '';
-    return '<div class="card" style="margin-bottom:14px;">' +
-      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;">' +
-        '<div><div class="k">Job name</div><input id="bomJob" value="' + esc(order.jobName || '') + '" placeholder="Defaults to the project name" style="' + bomFieldStyle() + '"' + dis + '></div>' +
-        '<div><div class="k">Ship to</div><select id="bomShipTo" style="' + bomFieldStyle() + '"' + dis + '>' +
-          '<option value="CUSTOMER"' + (order.bomShipTo === 'SUMMIT' ? '' : ' selected') + '>Customer site</option>' +
-          '<option value="SUMMIT"' + (order.bomShipTo === 'SUMMIT' ? ' selected' : '') + '>Summit Sensory Gym</option>' +
-        '</select></div>' +
-        '<div><div class="k">Submission date</div><input id="bomDate" type="date" value="' + esc(d) + '" style="' + bomFieldStyle() + '"' + dis + '></div>' +
-        '<div><div class="k">Delivery type</div><input id="bomDelivery" value="' + esc(order.deliveryType || '') + '" placeholder="e.g. Lift Gate" style="' + bomFieldStyle() + '"' + dis + '></div>' +
-        '<div><div class="k">Powder coat brand</div><input id="bomBrand" value="' + esc(order.powderCoatBrand || '') + '" placeholder="e.g. Cardinal" style="' + bomFieldStyle() + '"' + dis + '></div>' +
-        '<div><div class="k">Estimated shipment quote</div><input id="bomQuote" value="' + esc(order.shipmentQuote || '') + '" placeholder="TBD" style="' + bomFieldStyle() + '"' + dis + '></div>' +
+  /* Per-vendor sections. Each vendor gets its own header, questions, colours,
+   * lock and send history — a fabricator and a distributor are prepared, confirmed
+   * and sent independently, so one shared header could never be right. */
+  var bomSectionData = [];
+  var bomBrands = [];
+
+  function bomFieldStyle(w, locked) {
+    return 'width:' + (w || '100%') + ';padding:7px 9px;border:1px solid ' + (locked ? '#e7e8e3' : '#dcded7') +
+      ';border-radius:8px;font-size:13px;background:' + (locked ? '#f6f7f4' : '#fff') +
+      ';color:' + (locked ? '#8a8f85' : '#20241f') + ';outline:none;';
+  }
+
+  async function loadBomSections(order, user, canHandoff) {
+    var box = document.getElementById('bomBox'); if (!box) return;
+    bomOrder = order;
+    procData = order.procurement || [];
+    try {
+      var r = await authed('/orders/' + order.id + '/bom/sections');
+      bomSectionData = r.ok ? ((await r.json()).sections || []) : [];
+      var rb = await authed('/powder-colors');
+      bomBrands = rb.ok ? ((await rb.json()).brands || []) : [];
+    } catch (e) { box.innerHTML = '<div class="err">Could not load the Bill of Materials.</div>'; return; }
+
+    if (!procData.length) {
+      box.innerHTML = '<div class="placeholder" style="padding:20px;"><p class="muted" style="margin:0;">No Bill of Materials lines.</p></div>';
+      return;
+    }
+    box.innerHTML =
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin:-4px 0 14px;flex-wrap:wrap;">' +
+        '<div class="muted" style="font-size:12.5px;max-width:620px;line-height:1.55;">One section per vendor. Each has its own submission date, questions and send history, and locks on its own when you confirm it.</div>' +
+        '<label style="display:flex;gap:7px;align-items:center;font-size:12.5px;color:#5c6157;cursor:pointer;white-space:nowrap;" title="Prints the rest of that vendor’s catalogue at quantity 0, like a full order form">' +
+          '<input type="checkbox" id="bomZeroQty"> Include zero-quantity parts</label>' +
       '</div>' +
-      '<div style="margin-top:12px;"><div class="k">Notes to the vendor</div>' +
-        '<textarea id="bomNotes" rows="2" placeholder="Prints beneath the line items" style="' + bomFieldStyle() + 'resize:vertical;"' + dis + '>' + esc(order.bomNotes || '') + '</textarea></div>' +
-      (edit ? '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap;">' +
-        '<div style="display:flex;gap:8px;align-items:center;">' +
-          '<input id="bomPowderAll" placeholder="Powder colour for all steel lines" style="' + bomFieldStyle('260px') + '">' +
-          '<button class="link-btn" id="bomPowderApply" style="width:auto;padding:8px 13px;">Apply to steel lines</button>' +
+      bomSectionData.map(function (s, i) { return sectionCard(s, i, canHandoff); }).join('') +
+      '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:6px;">' +
+        '<button class="link-btn" data-proc="csv" data-vendor="*" style="width:auto;padding:8px 14px;">Export all vendors — Excel</button>' +
+        '<button class="link-btn" data-proc="pdf" data-vendor="*" style="width:auto;padding:8px 14px;">Export all vendors — PDF</button>' +
+      '</div>';
+    wireBom(order, user, canHandoff);
+  }
+
+  /** One vendor's block: visually separated, greyed out once submitted. */
+  function sectionCard(s, idx, canHandoff) {
+    var locked = !s.editable;
+    var edit = canHandoff && !locked;
+    var dis = edit ? '' : ' disabled';
+    var lines = (procData || []).filter(function (p) {
+      return ((p.vendor && String(p.vendor).trim()) || 'Unassigned vendor') === s.vendor;
+    });
+    var money2 = function (m) { return '$' + (Number(m || 0) / 100).toFixed(2); };
+    // Unsubmitted sections SHOW today without having written it — the date is only
+    // persisted when someone types one or confirms the section.
+    var dateVal = s.submittedOn ? String(s.submittedOn).slice(0, 10) : s.submittedOnDefault;
+    var placeholderDate = !s.submittedOn;
+
+    var statusChip = locked
+      ? '<span class="chip" style="background:#eaf1ec;color:#2f6b4f;">Submitted ' + (s.submittedOn ? fmtDate(s.submittedOn) : '') + '</span>'
+      : '<span class="chip">Draft</span>';
+
+    var confirmLine = locked && s.confirmedBy
+      ? '<div class="muted" style="font-size:11.5px;margin-top:4px;">Confirmed by ' + esc(s.confirmedBy) + ' · ' + fmtDate(s.confirmedAt) + '</div>'
+      : (s.unlockedBy ? '<div class="muted" style="font-size:11.5px;margin-top:4px;">Reopened by ' + esc(s.unlockedBy) + ' · ' + fmtDate(s.unlockedAt) + '</div>' : '');
+
+    var rows = lines.map(function (p) {
+      var ext = (Number(p.unitCostMinor) || 0) * (Number(p.quantity) || 0);
+      var buy = p.productUrl
+        ? ' <a href="' + esc(p.productUrl) + '" target="_blank" rel="noopener" style="font-size:11.5px;margin-left:6px;">Buy ↗</a>' : '';
+      return '<tr>' +
+        td('<b style="font-weight:600;">' + esc(p.name) + '</b>' + buy) +
+        td('<code style="font-size:12.5px;color:#4a4f47;">' + esc(p.sku || '—') + '</code>') +
+        td(String(p.quantity)) +
+        td(edit ? colorCell(p) : esc(p.powderColor || '—')) +
+        td(String(Math.round((Number(p.unitWeightLbs) || 0) * (Number(p.quantity) || 0) * 100) / 100)) +
+        td(money2(p.unitCostMinor)) +
+        td(money2(ext)) +
+        td(edit
+          ? '<input class="bomLine" data-id="' + p.id + '" data-f="vendorNotes" value="' + esc(p.vendorNotes || '') + '" placeholder="—" style="' + bomFieldStyle('160px') + '">'
+          : esc(p.vendorNotes || '—')) +
+        td(edit
+          ? '<select class="bomLine" data-id="' + p.id + '" data-f="sourced" style="' + bomFieldStyle('110px') + '">' +
+              '<option value="false"' + (p.sourced ? '' : ' selected') + '>Pending</option>' +
+              '<option value="true"' + (p.sourced ? ' selected' : '') + '>Ordered</option></select>'
+          : (p.sourced ? '<span class="chip">Ordered</span>' : '<span class="muted">Pending</span>')) +
+        '</tr>';
+    }).join('') +
+      '<tr><td style="padding:12px 16px;border-top:1px solid #e7e8e3;font-weight:600;">Total — ' + s.lineCount + ' line' + (s.lineCount === 1 ? '' : 's') + '</td>' +
+      '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td>' +
+      '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;font-weight:600;">' + s.unitCount + '</td>' +
+      '<td colspan="3" style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td>' +
+      '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;font-weight:600;">' + money2(s.extendedCostMinor) + '</td>' +
+      '<td colspan="2" style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td></tr>';
+
+    var warn = s.missingColorSkus.length
+      ? '<div style="background:#fdf6e6;border:1px solid #ecd9a6;border-radius:9px;padding:9px 12px;font-size:12.5px;color:#6b5a24;margin-bottom:10px;">' +
+        s.missingColorSkus.length + ' part' + (s.missingColorSkus.length === 1 ? '' : 's') + ' still need a colour: <code>' + s.missingColorSkus.slice(0, 6).map(esc).join('</code>, <code>') + '</code>' +
+        (s.missingColorSkus.length > 6 ? ' and ' + (s.missingColorSkus.length - 6) + ' more' : '') + '</div>' : '';
+
+    return '<div class="card" data-section="' + s.id + '" style="margin-bottom:22px;padding:0;overflow:hidden;border-left:3px solid ' + (locked ? '#3f9d78' : '#c9a227') + ';">' +
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;padding:16px 18px;background:' + (locked ? '#f6f7f4' : '#fbfbf9') + ';border-bottom:1px solid #e7e8e3;">' +
+        '<div>' +
+          '<div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;">' +
+            '<h3 style="font-size:16px;margin:0;font-weight:650;">' + esc(s.vendor) + '</h3>' + statusChip +
+          '</div>' +
+          '<div class="muted" style="font-size:12.5px;margin-top:3px;">' + s.unitCount + ' unit' + (s.unitCount === 1 ? '' : 's') + ' · ' + money2(s.extendedCostMinor) + ' at cost</div>' +
+          confirmLine +
         '</div>' +
-        '<span id="bomSaved" class="muted" style="font-size:12px;"></span>' +
-      '</div>' : '') +
+        '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">' +
+          (canHandoff && idx > 0 ? '<button class="link-btn" data-sec-move="up" data-id="' + s.id + '" title="Move this section earlier in the export" style="width:auto;padding:6px 10px;">↑</button>' : '') +
+          (canHandoff && idx < bomSectionData.length - 1 ? '<button class="link-btn" data-sec-move="down" data-id="' + s.id + '" title="Move this section later in the export" style="width:auto;padding:6px 10px;">↓</button>' : '') +
+          '<button class="link-btn" data-proc="csv" data-vendor="' + esc(s.vendor) + '" style="width:auto;padding:7px 13px;">Excel</button>' +
+          '<button class="link-btn" data-proc="pdf" data-vendor="' + esc(s.vendor) + '" style="width:auto;padding:7px 13px;">PDF</button>' +
+          (canHandoff ? '<button class="btn" data-sec-email="' + s.id + '" style="width:auto;padding:8px 14px;">Email vendor</button>' : '') +
+          (canHandoff && !locked ? '<button class="btn" data-sec-confirm="' + s.id + '" style="width:auto;padding:8px 14px;">Confirm sent</button>' : '') +
+          (canHandoff && locked ? '<button class="link-btn" data-sec-unlock="' + s.id + '" style="width:auto;padding:8px 14px;color:#9c3327;">Unlock for revisions</button>' : '') +
+        '</div>' +
+      '</div>' +
+      '<div style="padding:16px 18px;">' +
+        warn +
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;">' +
+          '<div><div class="k">Job name</div><input class="secF" data-id="' + s.id + '" data-f="jobName" value="' + esc(s.jobName || '') + '" style="' + bomFieldStyle(null, locked) + '"' + dis + '></div>' +
+          '<div><div class="k">Ship to</div><select class="secF" data-id="' + s.id + '" data-f="shipTo" style="' + bomFieldStyle(null, locked) + '"' + dis + '>' +
+            '<option value="CUSTOMER"' + (s.shipTo === 'SUMMIT' ? '' : ' selected') + '>Customer site</option>' +
+            '<option value="SUMMIT"' + (s.shipTo === 'SUMMIT' ? ' selected' : '') + '>Summit Sensory Gym</option></select></div>' +
+          '<div><div class="k">Submission date</div><input class="secF" data-id="' + s.id + '" data-f="submittedOn" type="date" value="' + esc(dateVal) + '" style="' + bomFieldStyle(null, locked) + (placeholderDate ? 'color:#8a8f85;' : '') + '"' + dis + '>' +
+            (placeholderDate ? '<div class="muted" style="font-size:11px;margin-top:3px;">Today, until you confirm or change it</div>' : '') + '</div>' +
+          '<div><div class="k">Delivery type</div><input class="secF" data-id="' + s.id + '" data-f="deliveryType" value="' + esc(s.deliveryType || '') + '" placeholder="e.g. Lift Gate" style="' + bomFieldStyle(null, locked) + '"' + dis + '></div>' +
+          '<div><div class="k">Estimated shipment quote</div><input class="secF" data-id="' + s.id + '" data-f="shipmentQuote" value="' + esc(s.shipmentQuote || '') + '" placeholder="TBD" style="' + bomFieldStyle(null, locked) + '"' + dis + '></div>' +
+        '</div>' +
+        '<div style="margin-top:12px;"><div class="k">Notes to this vendor</div>' +
+          '<textarea class="secF" data-id="' + s.id + '" data-f="notes" rows="2" placeholder="Prints beneath the line items" style="' + bomFieldStyle(null, locked) + 'resize:vertical;"' + dis + '>' + esc(s.notes || '') + '</textarea></div>' +
+        questionBlock(s, edit) +
+        (edit ? colorApplyRow(s) : '') +
+        '<div style="margin-top:14px;overflow:auto;">' +
+          tableShell(['Item', 'Part #', 'Qty', 'Powder color', 'Weight (lb)', 'Cost each', 'Total cost', 'Notes', 'Status'], rows, 9, '') +
+        '</div>' +
+        sendHistory(s) +
+      '</div>' +
     '</div>';
   }
 
-  function bomBlock(order, edit) {
-    bomOrder = order;
-    return bomHeaderCard(order, edit) + bomSections(order.procurement || [], edit);
+  /** Brand from the managed list, code typed per part. */
+  function colorCell(p) {
+    var opts = '<option value="">—</option>' + bomBrands.map(function (b) {
+      return '<option value="' + b.id + '"' + (p.powderBrandId === b.id ? ' selected' : '') + '>' + esc(b.name) + '</option>';
+    }).join('');
+    return '<div style="display:flex;gap:5px;">' +
+      '<select class="bomLine" data-id="' + p.id + '" data-f="powderBrandId" style="' + bomFieldStyle('92px') + '">' + opts + '</select>' +
+      '<input class="bomLine" data-id="' + p.id + '" data-f="powderColorCode" value="' + esc(p.powderColorCode || '') + '" placeholder="Code" style="' + bomFieldStyle('80px') + '">' +
+    '</div>';
   }
 
-  function bomSections(lines, edit) {
-    procData = lines || [];
-    if (!procData.length) return '<div class="placeholder" style="padding:20px;"><p class="muted" style="margin:0;">No Bill of Materials lines.</p></div>';
-    var groups = {}, order = [];
-    procData.forEach(function (p) {
-      var v = (p.vendor && String(p.vendor).trim()) || 'Unassigned vendor';
-      if (!groups[v]) { groups[v] = []; order.push(v); }
-      groups[v].push(p);
-    });
-    order.sort(function (a, b) { return a === 'Unassigned vendor' ? 1 : b === 'Unassigned vendor' ? -1 : a.localeCompare(b); });
-    var money2 = function (minor) { return '$' + (Number(minor || 0) / 100).toFixed(2); };
+  /** Paint one brand + code across the parts of this section. */
+  function colorApplyRow(s) {
+    var codes = [];
+    bomBrands.forEach(function (b) { (b.recentCodes || []).forEach(function (c) { codes.push(c); }); });
+    return '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px;padding:11px 13px;background:#fbfbf9;border:1px solid #eceee8;border-radius:9px;">' +
+      '<span style="font-size:12.5px;color:#5c6157;">Set a colour across this section:</span>' +
+      '<select class="secColorBrand" data-id="' + s.id + '" style="' + bomFieldStyle('130px') + '">' +
+        '<option value="">Brand…</option>' +
+        bomBrands.map(function (b) { return '<option value="' + b.id + '">' + esc(b.name) + '</option>'; }).join('') +
+      '</select>' +
+      '<input class="secColorCode" data-id="' + s.id + '" list="bomCodeList" placeholder="Colour code" style="' + bomFieldStyle('140px') + '">' +
+      (codes.length ? '<datalist id="bomCodeList">' + codes.map(function (c) { return '<option value="' + esc(c) + '">'; }).join('') + '</datalist>' : '') +
+      '<button class="link-btn" data-sec-color="' + s.id + '" style="width:auto;padding:7px 13px;">Apply</button>' +
+      '<span class="muted" style="font-size:11.5px;">Skips parts that already have a colour.</span>' +
+    '</div>';
+  }
 
-    return '<div style="display:flex;justify-content:flex-end;align-items:center;gap:12px;margin:-6px 0 12px;flex-wrap:wrap;">' +
-        '<label style="display:flex;gap:7px;align-items:center;font-size:12.5px;color:#5c6157;cursor:pointer;" title="Prints the rest of that vendor’s catalogue at quantity 0, like a full order form">' +
-          '<input type="checkbox" id="bomZeroQty"> Include zero-quantity parts</label>' +
-        '<button class="link-btn" data-proc="csv" data-vendor="*" style="width:auto;padding:8px 14px;">Export BOM — Excel</button>' +
-        '<button class="link-btn" data-proc="pdf" data-vendor="*" style="width:auto;padding:8px 14px;">Export BOM — PDF</button>' +
+  /** User-defined questions for this vendor. */
+  function questionBlock(s, edit) {
+    var qs = s.questions || [];
+    if (!qs.length && !edit) return '';
+    var fields = qs.map(function (q) {
+      var name = 'q_' + q.id, v = q.value || '', st = bomFieldStyle(null, !edit), dis = edit ? '' : ' disabled';
+      var input;
+      if (q.type === 'SELECT') {
+        input = '<select class="secQ" data-id="' + q.id + '" style="' + st + '"' + dis + '><option value="">—</option>' +
+          q.options.map(function (o) { return '<option value="' + esc(o) + '"' + (v === o ? ' selected' : '') + '>' + esc(o) + '</option>'; }).join('') + '</select>';
+      } else if (q.type === 'MULTI_SELECT') {
+        var picked = []; try { picked = JSON.parse(v || '[]'); } catch (e) {}
+        input = '<div style="display:flex;flex-wrap:wrap;gap:9px;padding:4px 0;">' + q.options.map(function (o) {
+          return '<label style="display:flex;gap:5px;align-items:center;font-size:13px;cursor:' + (edit ? 'pointer' : 'default') + ';">' +
+            '<input type="checkbox" class="secQM" data-id="' + q.id + '" value="' + esc(o) + '"' + (picked.indexOf(o) >= 0 ? ' checked' : '') + dis + '> ' + esc(o) + '</label>';
+        }).join('') + '</div>';
+      } else if (q.type === 'BOOLEAN') {
+        input = '<select class="secQ" data-id="' + q.id + '" style="' + st + '"' + dis + '>' +
+          '<option value="">—</option><option value="Yes"' + (v === 'Yes' ? ' selected' : '') + '>Yes</option>' +
+          '<option value="No"' + (v === 'No' ? ' selected' : '') + '>No</option></select>';
+      } else if (q.type === 'LONG_TEXT') {
+        input = '<textarea class="secQ" data-id="' + q.id + '" rows="2" style="' + st + 'resize:vertical;"' + dis + '>' + esc(v) + '</textarea>';
+      } else {
+        var t = q.type === 'NUMBER' ? 'number' : q.type === 'DATE' ? 'date' : 'text';
+        input = '<input type="' + t + '" class="secQ" data-id="' + q.id + '" value="' + esc(v) + '" style="' + st + '"' + dis + '>';
+      }
+      return '<div><div class="k">' + esc(q.label) + (q.required ? ' <span style="color:#9c3327;">*</span>' : '') +
+        (edit && !q.fromTemplate ? ' <button class="link-btn" data-q-del="' + q.id + '" title="Remove this question" style="width:auto;padding:0 4px;font-size:11px;color:#9c3327;display:inline;">×</button>' : '') +
+        '</div>' + input + '</div>';
+    }).join('');
+    return '<div style="margin-top:14px;padding-top:14px;border-top:1px dashed #e2e4de;">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:9px;">' +
+        '<div style="font-size:12.5px;font-weight:600;color:#4a4f47;">Vendor questions</div>' +
+        (edit ? '<button class="link-btn" data-q-add="' + s.id + '" style="width:auto;padding:6px 11px;font-size:12px;">Add a question</button>' : '') +
       '</div>' +
-      order.map(function (v) {
-        var lines2 = groups[v];
-        var qty = lines2.reduce(function (a, l) { return a + (Number(l.quantity) || 0); }, 0);
-        var cost = lines2.reduce(function (a, l) { return a + (Number(l.unitCostMinor) || 0) * (Number(l.quantity) || 0); }, 0);
-        var wt = lines2.reduce(function (a, l) { return a + (Number(l.unitWeightLbs) || 0) * (Number(l.quantity) || 0); }, 0);
-        var rows = lines2.map(function (p) {
-          var ext = (Number(p.unitCostMinor) || 0) * (Number(p.quantity) || 0);
-          return '<tr>' +
-            td('<b style="font-weight:600;">' + esc(p.name) + '</b>') +
-            td('<code style="font-size:12.5px;color:#4a4f47;">' + esc(p.sku || '—') + '</code>') +
-            td(String(p.quantity)) +
-            td(edit
-              ? '<input class="bomLine" data-id="' + p.id + '" data-f="powderColor" value="' + esc(p.powderColor || '') + '" placeholder="—" style="' + bomFieldStyle('120px') + '">'
-              : esc(p.powderColor || '—')) +
-            td(String(Math.round((Number(p.unitWeightLbs) || 0) * (Number(p.quantity) || 0) * 100) / 100)) +
-            td(money2(p.unitCostMinor)) +
-            td(money2(ext)) +
-            td(edit
-              ? '<input class="bomLine" data-id="' + p.id + '" data-f="vendorNotes" value="' + esc(p.vendorNotes || '') + '" placeholder="—" style="' + bomFieldStyle('160px') + '">'
-              : esc(p.vendorNotes || '—')) +
-            td(edit
-              ? '<select class="bomLine" data-id="' + p.id + '" data-f="sourced" style="' + bomFieldStyle('110px') + '">' +
-                  '<option value="false"' + (p.sourced ? '' : ' selected') + '>Pending</option>' +
-                  '<option value="true"' + (p.sourced ? ' selected' : '') + '>Ordered</option></select>'
-              : (p.sourced ? '<span class="chip">Ordered</span>' : '<span class="muted">Pending</span>')) +
-            '</tr>';
-        }).join('') +
-          '<tr><td style="padding:12px 16px;border-top:1px solid #e7e8e3;font-weight:600;">Total — ' + lines2.length + ' line' + (lines2.length === 1 ? '' : 's') + '</td>' +
-          '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td>' +
-          '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;font-weight:600;">' + qty + '</td>' +
-          '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td>' +
-          '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;font-weight:600;">' + (Math.round(wt * 100) / 100) + '</td>' +
-          '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td>' +
-          '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;font-weight:600;">' + money2(cost) + '</td>' +
-          '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td>' +
-          '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td></tr>';
-        return '<div style="margin-bottom:18px;">' +
-          '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">' +
-            '<div style="font-weight:600;font-size:14.5px;">' + esc(v) + '<span class="muted" style="font-weight:400;font-size:12.5px;margin-left:8px;">' + qty + ' unit' + (qty === 1 ? '' : 's') + ' · ' + money2(cost) + ' at cost</span></div>' +
-            '<div style="display:flex;gap:6px;">' +
-              '<button class="link-btn" data-proc="csv" data-vendor="' + esc(v) + '" style="width:auto;padding:7px 13px;">Excel</button>' +
-              '<button class="link-btn" data-proc="pdf" data-vendor="' + esc(v) + '" style="width:auto;padding:7px 13px;">PDF</button>' +
-            '</div>' +
-          '</div>' +
-          tableShell(['Item', 'Part #', 'Qty', 'Powder color', 'Weight (lb)', 'Cost each', 'Total cost', 'Notes', 'Status'], rows, 9, '') +
-        '</div>';
-      }).join('');
+      (qs.length
+        ? '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">' + fields + '</div>'
+        : '<div class="muted" style="font-size:12.5px;">None yet. Questions you add here are asked of this vendor on this order; add a reusable one under Administration.</div>') +
+    '</div>';
   }
 
-  /** Wire the header fields, the per-line edits and the two export buttons. */
-  function wireBom(order, user, edit) {
-    if (edit) {
-      var saved = document.getElementById('bomSaved');
-      var flash = function (msg) { if (saved) { saved.textContent = msg; setTimeout(function () { if (saved.textContent === msg) saved.textContent = ''; }, 1800); } };
-      var HEADER = [['bomJob', 'jobName'], ['bomShipTo', 'bomShipTo'], ['bomDate', 'bomSubmittedOn'], ['bomDelivery', 'deliveryType'], ['bomBrand', 'powderCoatBrand'], ['bomQuote', 'shipmentQuote'], ['bomNotes', 'bomNotes']];
-      HEADER.forEach(function (pair) {
-        var el = document.getElementById(pair[0]); if (!el) return;
-        el.addEventListener('change', async function () {
-          var body = {};
-          if (pair[1] === 'bomSubmittedOn') body[pair[1]] = el.value ? new Date(el.value + 'T12:00:00').toISOString() : null;
-          else body[pair[1]] = el.value.trim ? el.value.trim() : el.value;
-          var r = await authed('/orders/' + order.id + '/bom', { method: 'PATCH', body: body });
-          if (!r.ok) { alert('Could not save (' + r.status + ').'); return; }
-          var updated = null; try { updated = await r.json(); } catch (e) {}
-          if (updated) { for (var k in updated) order[k] = updated[k]; }
-          flash('Saved');
-        });
+  /** Append-only record of every BOM emailed to this vendor. */
+  function sendHistory(s) {
+    if (!s.sends.length) return '';
+    var rows = s.sends.map(function (x) {
+      var chip = x.status === 'FAILED' || x.status === 'BOUNCED'
+        ? '<span class="chip" style="background:#fbecea;color:#9c3327;">' + titleCase(x.status) + '</span>'
+        : '<span class="chip" style="background:#eaf1ec;color:#2f6b4f;">' + titleCase(x.status) + '</span>';
+      return '<tr>' + td(fmtDateTime(x.sentAt)) + td(esc(x.sentBy || '—')) + td(esc(x.toEmail)) +
+        td(esc(x.format)) + td(chip + (x.error ? '<div class="muted" style="font-size:11px;color:#9c3327;margin-top:3px;">' + esc(x.error) + '</div>' : '')) + '</tr>';
+    }).join('');
+    return '<div style="margin-top:14px;">' +
+      '<div style="font-size:12.5px;font-weight:600;color:#4a4f47;margin-bottom:8px;">Sent to this vendor</div>' +
+      tableShell(['Date & time', 'Sent by', 'To', 'Format', 'Delivery'], rows, 5, '') +
+    '</div>';
+  }
+
+  function fmtDateTime(v) {
+    if (!v) return '—';
+    var d = new Date(v);
+    return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  }
+
+  /** Wire every control inside the section cards. */
+  function wireBom(order, user, canHandoff) {
+    var reload = function () { loadBomSections(order, user, canHandoff); };
+    var fail = async function (r, what) {
+      var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {}
+      alert(m || (what + ' (' + r.status + ').'));
+    };
+
+    document.querySelectorAll('.secF').forEach(function (el) {
+      el.addEventListener('change', async function () {
+        var f = el.getAttribute('data-f'), body = {};
+        if (f === 'submittedOn') body[f] = el.value ? new Date(el.value + 'T12:00:00').toISOString() : null;
+        else body[f] = el.value.trim ? el.value.trim() : el.value;
+        el.style.borderColor = '#c9a227';
+        var r = await authed('/bom/sections/' + el.getAttribute('data-id'), { method: 'PATCH', body: body });
+        el.style.borderColor = r.ok ? '#3f9d78' : '#c2452f';
+        if (!r.ok) return fail(r, 'Could not save');
+        setTimeout(function () { el.style.borderColor = '#dcded7'; }, 900);
       });
-      var applyBtn = document.getElementById('bomPowderApply');
-      if (applyBtn) applyBtn.addEventListener('click', async function () {
-        var val = (document.getElementById('bomPowderAll') || {}).value || '';
-        if (!val.trim()) { alert('Type the powder colour first.'); return; }
-        var r = await authed('/orders/' + order.id + '/bom/powder-color', { method: 'POST', body: { color: val.trim(), overwrite: true } });
-        if (!r.ok) { alert('Could not apply (' + r.status + ').'); return; }
+    });
+
+    document.querySelectorAll('.bomLine').forEach(function (el) {
+      el.addEventListener('change', async function () {
+        var f = el.getAttribute('data-f'), body = {};
+        body[f] = f === 'sourced' ? el.value === 'true' : el.value.trim();
+        el.style.borderColor = '#c9a227';
+        var r = await authed('/orders/procurement/' + el.getAttribute('data-id'), { method: 'PATCH', body: body });
+        el.style.borderColor = r.ok ? '#3f9d78' : '#c2452f';
+        if (!r.ok) return fail(r, 'Could not save the line');
+        var line = (procData || []).filter(function (x) { return x.id === el.getAttribute('data-id'); })[0];
+        if (line) line[f] = body[f];
+        setTimeout(function () { el.style.borderColor = '#dcded7'; }, 900);
+      });
+    });
+
+    document.querySelectorAll('.secQ').forEach(function (el) {
+      el.addEventListener('change', async function () {
+        el.style.borderColor = '#c9a227';
+        var r = await authed('/bom/questions/' + el.getAttribute('data-id'), { method: 'PATCH', body: { value: el.value } });
+        el.style.borderColor = r.ok ? '#3f9d78' : '#c2452f';
+        if (!r.ok) return fail(r, 'Could not save the answer');
+        setTimeout(function () { el.style.borderColor = '#dcded7'; }, 900);
+      });
+    });
+    document.querySelectorAll('.secQM').forEach(function (el) {
+      el.addEventListener('change', async function () {
+        var id = el.getAttribute('data-id');
+        var picked = [];
+        document.querySelectorAll('.secQM[data-id="' + id + '"]').forEach(function (c) { if (c.checked) picked.push(c.value); });
+        var r = await authed('/bom/questions/' + id, { method: 'PATCH', body: { value: JSON.stringify(picked) } });
+        if (!r.ok) return fail(r, 'Could not save the answer');
+      });
+    });
+    document.querySelectorAll('[data-q-del]').forEach(function (bt) {
+      bt.addEventListener('click', async function () {
+        if (!confirm('Remove this question and its answer?')) return;
+        var r = await authed('/bom/questions/' + bt.getAttribute('data-q-del'), { method: 'DELETE' });
+        if (!r.ok) return fail(r, 'Could not remove');
+        reload();
+      });
+    });
+    document.querySelectorAll('[data-q-add]').forEach(function (bt) {
+      bt.addEventListener('click', function () { openQuestionForm(bt.getAttribute('data-q-add'), reload); });
+    });
+
+    document.querySelectorAll('[data-sec-color]').forEach(function (bt) {
+      bt.addEventListener('click', async function () {
+        var id = bt.getAttribute('data-sec-color');
+        var brand = document.querySelector('.secColorBrand[data-id="' + id + '"]').value;
+        var code = document.querySelector('.secColorCode[data-id="' + id + '"]').value.trim();
+        if (!brand || !code) { alert('Pick a brand and type the colour code.'); return; }
+        var sec = bomSectionData.filter(function (x) { return x.id === id; })[0];
+        var r = await authed('/orders/' + order.id + '/bom/apply-color', {
+          method: 'POST', body: { brandId: brand, code: code, vendor: sec.vendor, overwrite: false },
+        });
+        if (!r.ok) return fail(r, 'Could not apply the colour');
         var d = await r.json();
-        alert((d.updated || 0) + ' steel line(s) set to ' + val.trim() + '.');
-        openOrderDetail(order.id, user);
+        alert(d.applied + ' part' + (d.applied === 1 ? '' : 's') + ' set to ' + d.color +
+          (d.skipped ? '. ' + d.skipped + ' skipped — already coloured, or in another section.' : '.'));
+        var o = await (await authed('/orders/' + order.id)).json();
+        order.procurement = o.procurement; reload();
       });
-      document.querySelectorAll('.bomLine').forEach(function (el) {
-        el.addEventListener('change', async function () {
-          var f = el.getAttribute('data-f'), body = {};
-          body[f] = f === 'sourced' ? el.value === 'true' : el.value.trim();
-          el.style.borderColor = '#c9a227';
-          var r = await authed('/orders/procurement/' + el.getAttribute('data-id'), { method: 'PATCH', body: body });
-          el.style.borderColor = r.ok ? '#3f9d78' : '#c2452f';
-          if (!r.ok) { alert('Could not save the line (' + r.status + ').'); return; }
-          var line = (procData || []).filter(function (x) { return x.id === el.getAttribute('data-id'); })[0];
-          if (line) line[f] = body[f];
-          setTimeout(function () { el.style.borderColor = '#dcded7'; }, 900);
-        });
+    });
+
+    document.querySelectorAll('[data-sec-move]').forEach(function (bt) {
+      bt.addEventListener('click', async function () {
+        var id = bt.getAttribute('data-id'), dir = bt.getAttribute('data-sec-move');
+        var ids = bomSectionData.map(function (x) { return x.id; });
+        var i = ids.indexOf(id), j = dir === 'up' ? i - 1 : i + 1;
+        if (j < 0 || j >= ids.length) return;
+        ids[i] = ids[j]; ids[j] = id;
+        var r = await authed('/orders/' + order.id + '/bom/sections/reorder', { method: 'POST', body: { ids: ids } });
+        if (!r.ok) return fail(r, 'Could not reorder');
+        reload();
       });
-    }
+    });
+
+    document.querySelectorAll('[data-sec-confirm]').forEach(function (bt) {
+      bt.addEventListener('click', async function () {
+        var id = bt.getAttribute('data-sec-confirm');
+        var sec = bomSectionData.filter(function (x) { return x.id === id; })[0];
+        if (!confirm('Confirm the ' + sec.vendor + ' Bill of Materials has been sent?\n\nIts fields lock until you unlock them for revisions.')) return;
+        bt.disabled = true;
+        var r = await authed('/bom/sections/' + id + '/confirm', { method: 'POST', body: {} });
+        bt.disabled = false;
+        if (!r.ok) return fail(r, 'Could not confirm');
+        reload();
+      });
+    });
+    document.querySelectorAll('[data-sec-unlock]').forEach(function (bt) {
+      bt.addEventListener('click', function () {
+        var id = bt.getAttribute('data-sec-unlock');
+        openModal('Unlock for revisions',
+          '<div class="muted" style="font-size:13px;margin-bottom:12px;line-height:1.55;">This reopens the section for editing. The vendor already has the version you sent, so note what is changing — it goes on the order timeline.</div>' +
+          fieldRow('Reason', '<input id="secUnlockReason" placeholder="e.g. customer changed two colours" style="' + IN + '">'),
+          async function (close, showErr) {
+            var reason = document.getElementById('secUnlockReason').value.trim();
+            if (!reason) return showErr('Give a reason.');
+            var r = await authed('/bom/sections/' + id + '/unlock', { method: 'POST', body: { reason: reason } });
+            if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} return showErr(m || 'Could not unlock.'); }
+            close(); reload();
+          }, 'Unlock');
+      });
+    });
+
+    document.querySelectorAll('[data-sec-email]').forEach(function (bt) {
+      bt.addEventListener('click', function () {
+        var sec = bomSectionData.filter(function (x) { return x.id === bt.getAttribute('data-sec-email'); })[0];
+        openSendForm(order, sec, reload);
+      });
+    });
+
     document.querySelectorAll('[data-proc]').forEach(function (bt) {
       bt.addEventListener('click', async function () {
         var vendor = bt.getAttribute('data-vendor');
         var zero = document.getElementById('bomZeroQty');
         var qs = '?vendor=' + encodeURIComponent(vendor) + (zero && zero.checked ? '&includeZeroQty=true' : '');
+        var label = bt.textContent;
         bt.disabled = true;
+
+        if (bt.getAttribute('data-proc') === 'pdf') {
+          // The server renders the same HTML the print dialog would, so the emailed
+          // and downloaded documents cannot drift apart. If the renderer is not
+          // installed, fall back to the browser print path rather than failing.
+          bt.textContent = 'Rendering…';
+          try {
+            var rp = await authed('/render/orders/' + order.id + '/bom.pdf' + qs);
+            if (rp.ok) {
+              downloadBlob(await rp.blob(), bomFileSlug(vendor) + '.pdf');
+              bt.disabled = false; bt.textContent = label; return;
+            }
+          } catch (e) {}
+          bt.textContent = label;
+        }
+
         var doc = null;
-        try {
-          var r = await authed('/orders/' + order.id + '/bom' + qs);
-          if (r.ok) doc = await r.json();
-        } catch (e) {}
+        try { var r = await authed('/orders/' + order.id + '/bom' + qs); if (r.ok) doc = await r.json(); } catch (e) {}
         bt.disabled = false;
         if (!doc) { alert('Could not build the Bill of Materials.'); return; }
         if (bt.getAttribute('data-proc') === 'csv') downloadBomCsv(doc, vendor);
         else printBom(doc, vendor);
       });
     });
+  }
+
+  var Q_TYPES = [['TEXT', 'Short text'], ['LONG_TEXT', 'Paragraph'], ['NUMBER', 'Number'], ['DATE', 'Date'],
+    ['SELECT', 'Dropdown — pick one'], ['MULTI_SELECT', 'Dropdown — pick several'], ['BOOLEAN', 'Yes / No']];
+
+  function openQuestionForm(sectionId, done) {
+    openModal('Add a question',
+      '<div class="muted" style="font-size:13px;margin-bottom:12px;line-height:1.55;">Asked on this vendor’s section of this order. For a question you ask the same vendor every time, add it under Administration instead.</div>' +
+      fieldRow('Question', '<input id="qLabel" placeholder="e.g. What gauge steel?" style="' + IN + '">') +
+      fieldRow('Answer type', '<select id="qType" style="' + IN + '">' + Q_TYPES.map(function (t) { return '<option value="' + t[0] + '">' + t[1] + '</option>'; }).join('') + '</select>') +
+      '<div id="qOptWrap" style="display:none;">' +
+        fieldRow('Options', '<textarea id="qOpts" rows="3" placeholder="One per line" style="' + IN + 'resize:vertical;"></textarea>') +
+      '</div>' +
+      fieldRow('Required', '<select id="qReq" style="' + IN + '"><option value="false">Optional</option><option value="true">Required before the section can be confirmed</option></select>'),
+      async function (close, showErr) {
+        var type = document.getElementById('qType').value;
+        var label = document.getElementById('qLabel').value.trim();
+        if (!label) return showErr('Type the question.');
+        var opts = document.getElementById('qOpts').value.split('\n').map(function (x) { return x.trim(); }).filter(Boolean);
+        if ((type === 'SELECT' || type === 'MULTI_SELECT') && !opts.length) return showErr('A dropdown needs at least one option.');
+        var r = await authed('/bom/sections/' + sectionId + '/questions', {
+          method: 'POST',
+          body: { label: label, type: type, options: opts, required: document.getElementById('qReq').value === 'true' },
+        });
+        if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} return showErr(m || 'Could not add.'); }
+        close(); done();
+      }, 'Add question');
+    var t = document.getElementById('qType');
+    t.addEventListener('change', function () {
+      document.getElementById('qOptWrap').style.display = (t.value === 'SELECT' || t.value === 'MULTI_SELECT') ? 'block' : 'none';
+    });
+  }
+
+  /** Email this vendor's BOM, pre-filled from the vendor's saved defaults. */
+  function openSendForm(order, sec, done) {
+    var e = sec.email;
+    openModal('Email the ' + sec.vendor + ' Bill of Materials',
+      (e.hasDefault ? '' : '<div style="background:#fdf6e6;border:1px solid #ecd9a6;border-radius:9px;padding:9px 12px;font-size:12.5px;color:#6b5a24;margin-bottom:12px;">No saved address for this vendor. Type one below, then set a default under Manufacturers so it is pre-filled next time.</div>') +
+      fieldRow('To', '<input id="sndTo" value="' + esc(e.to) + '" placeholder="purchasing@vendor.com" style="' + IN + '">') +
+      fieldRow('Cc', '<input id="sndCc" value="' + esc(e.cc) + '" placeholder="Optional" style="' + IN + '">') +
+      fieldRow('Subject', '<input id="sndSubject" value="' + esc(e.subject) + '" style="' + IN + '">') +
+      fieldRow('Attach', '<select id="sndFormat" style="' + IN + '">' +
+        '<option value="PDF"' + (e.format === 'PDF' ? ' selected' : '') + '>PDF</option>' +
+        '<option value="EXCEL"' + (e.format === 'EXCEL' ? ' selected' : '') + '>Excel</option>' +
+        '<option value="BOTH"' + (e.format === 'BOTH' ? ' selected' : '') + '>Both</option></select>') +
+      fieldRow('Message', '<textarea id="sndBody" rows="8" style="' + IN + 'resize:vertical;font-family:inherit;">' + esc(e.body) + '</textarea>'),
+      async function (close, showErr) {
+        var to = document.getElementById('sndTo').value.trim();
+        if (!to) return showErr('Type at least one address.');
+        var r = await authed('/bom/sections/' + sec.id + '/send', {
+          method: 'POST',
+          body: {
+            to: to, cc: document.getElementById('sndCc').value.trim(),
+            subject: document.getElementById('sndSubject').value.trim(),
+            body: document.getElementById('sndBody').value,
+            format: document.getElementById('sndFormat').value,
+          },
+        });
+        if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e2) {} return showErr(m || 'Could not send.'); }
+        close(); done();
+      }, 'Send');
   }
 
   function bomFileSlug(vendor) {
@@ -4595,6 +5023,145 @@
     return '<div class="card">' + events.map(function (e, i) { return '<div style="display:flex;gap:12px;padding:' + (i ? '10px' : '0') + ' 0 0;border-top:' + (i ? '1px solid #f2f3ef;margin-top:10px;' : 'none;') + 'font-size:13.5px;"><span style="color:#8a8f85;min-width:150px;">' + fmtDate(e.at) + '</span><span style="font-weight:500;">' + esc(e.action) + '</span></div>'; }).join('') + '</div>';
   }
 
+  async function loadFinancingAdmin() {
+    var box = document.getElementById('finAdmin'); if (!box) return;
+    var d = null;
+    try { var r = await authed('/admin/financing'); if (r.ok) d = await r.json(); } catch (e) {}
+    if (!d) { box.innerHTML = '<div class="err">Could not load financing settings.</div>'; return; }
+
+    var factorRows = d.factors.map(function (f) {
+      // A factor is shown at six decimals because that is the precision the lessor
+      // publishes; rounding it would move a payment by real dollars.
+      return '<tr>' +
+        td('<b style="font-weight:600;">' + f.termMonths + ' months</b>') +
+        td('<input class="finFactor" data-term="' + f.termMonths + '" type="number" step="0.000001" min="0.0001" max="1" value="' + Number(f.factor).toFixed(6) + '" style="width:130px;padding:7px 9px;border:1px solid #dcded7;border-radius:8px;font-size:13px;">') +
+        td('<span class="muted" style="font-size:12.5px;">$100,000 → <b style="color:#20241f;">$' + Math.round(100000 * f.factor).toLocaleString() + '</b>/mo</span>') +
+        td('<label style="display:flex;gap:6px;align-items:center;font-size:12.5px;cursor:pointer;"><input type="checkbox" class="finActive" data-term="' + f.termMonths + '"' + (f.active ? ' checked' : '') + '> Offered</label>') +
+        '</tr>';
+    }).join('');
+
+    var settingRows = d.settings.map(function (s) {
+      return '<div style="margin-bottom:12px;">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;">' +
+          '<div><div style="font-size:13.5px;font-weight:600;">' + esc(s.label) + '</div>' +
+            '<div class="muted" style="font-size:12px;line-height:1.5;max-width:560px;margin-top:2px;">' + esc(s.help) + '</div></div>' +
+          '<input class="finSetting" data-key="' + s.key + '" type="number" step="' + s.step + '" min="' + s.min + '" max="' + s.max + '" value="' + s.value + '" style="width:140px;padding:7px 9px;border:1px solid #dcded7;border-radius:8px;font-size:13px;text-align:right;">' +
+        '</div></div>';
+    }).join('');
+
+    box.innerHTML =
+      tableShell(['Term', 'Payment factor', 'Example', 'Offered'], factorRows, 4, '') +
+      '<div style="margin-top:18px;padding:14px 16px;background:#fbfbf9;border:1px solid #e7e8e3;border-radius:10px;">' + settingRows + '</div>' +
+      '<div class="muted" style="font-size:12px;margin-top:10px;">Financing enquiries are sent to <b>' + esc(d.partnerEmail) + '</b>.</div>';
+
+    var save = async function (el, path, body) {
+      el.style.borderColor = '#c9a227';
+      var r = await authed(path, { method: 'PUT', body: body });
+      el.style.borderColor = r.ok ? '#3f9d78' : '#c2452f';
+      if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} alert(m || 'Could not save.'); }
+      setTimeout(function () { el.style.borderColor = '#dcded7'; }, 900);
+    };
+    document.querySelectorAll('.finFactor').forEach(function (el) {
+      el.addEventListener('change', function () {
+        save(el, '/admin/financing/factors/' + el.getAttribute('data-term'), { factor: Number(el.value) }).then(loadFinancingAdmin);
+      });
+    });
+    document.querySelectorAll('.finActive').forEach(function (el) {
+      el.addEventListener('change', function () {
+        authed('/admin/financing/factors/' + el.getAttribute('data-term'), { method: 'PUT', body: { active: el.checked } });
+      });
+    });
+    document.querySelectorAll('.finSetting').forEach(function (el) {
+      el.addEventListener('change', function () {
+        save(el, '/admin/financing/settings/' + el.getAttribute('data-key'), { value: Number(el.value) });
+      });
+    });
+  }
+
+  /* --- Ryan Capital financing ---
+   * Computed entirely from the proposal total: there is no document to create and
+   * nothing to fill in. Payments come from the lessor's published payment factors,
+   * editable under Administration → Financing. */
+  async function loadFinancing(p, user) {
+    var box = document.getElementById('finBox'); if (!box) return;
+    var d = null;
+    try { var r = await authed('/proposals/' + p.id + '/financing'); if (r.ok) d = await r.json(); } catch (e) {}
+    if (!d) { box.innerHTML = '<div class="placeholder" style="padding:18px;"><p class="muted" style="margin:0;">No released version to quote from yet.</p></div>'; return; }
+    var q = d.quote, s = q.section179;
+    var m0 = function (x) { return '$' + Math.round(Number(x || 0) / 100).toLocaleString(); };
+    var lowest = q.terms.reduce(function (a2, b) { return b.monthlyPaymentMinor < a2.monthlyPaymentMinor ? b : a2; }, q.terms[0]);
+
+    box.innerHTML =
+      '<div class="muted" style="font-size:12.5px;margin:-4px 0 12px;line-height:1.55;">Calculated from the ' + fmtMoney(d.proposal.grandTotalMinor) + ' project total. Nothing to fill in — the sheet is generated on demand.</div>' +
+      '<div style="display:flex;gap:9px;flex-wrap:wrap;margin-bottom:14px;">' +
+        q.terms.map(function (t) {
+          var best = t.termMonths === lowest.termMonths;
+          return '<div style="flex:1;min-width:112px;border:1px solid ' + (best ? '#c9a227' : '#e7e8e3') + ';border-radius:11px;padding:12px 11px;background:' + (best ? '#fdfaf0' : '#fff') + ';text-align:center;">' +
+            '<div class="k" style="margin:0;">' + t.termMonths + ' months</div>' +
+            '<div style="font-family:Georgia,serif;font-size:19px;font-weight:700;margin:5px 0 1px;">' + m0(t.monthlyPaymentMinor) + '</div>' +
+            '<div class="muted" style="font-size:11px;">per month</div>' +
+            '<div class="muted" style="font-size:11px;margin-top:7px;padding-top:7px;border-top:1px solid #eceee8;">' + m0(t.totalOfPaymentsMinor) + ' total</div>' +
+          '</div>';
+        }).join('') +
+      '</div>' +
+      '<div style="display:flex;gap:14px;flex-wrap:wrap;padding:12px 14px;background:#fbfbf9;border:1px solid #e7e8e3;border-radius:10px;margin-bottom:14px;">' +
+        '<div><div class="k">Section 179 deduction</div><div class="v small">' + fmtMoney(s.deductionMinor) + '</div></div>' +
+        '<div><div class="k">Estimated savings at ' + s.taxRatePct + '%</div><div class="v small" style="color:#2f6b4f;">' + fmtMoney(s.estimatedSavingsMinor) + '</div></div>' +
+        '<div><div class="k">Net cost</div><div class="v small">' + fmtMoney(s.netCostMinor) + '</div></div>' +
+        (s.exceedsCap ? '<div class="muted" style="font-size:11.5px;align-self:center;max-width:230px;">Above the ' + m0(s.capMinor) + ' cap — the excess may still be depreciated.</div>' : '') +
+      '</div>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+        '<button class="link-btn" id="finPreview" style="width:auto;padding:9px 15px;">Preview the sheet</button>' +
+        '<button class="link-btn" id="finPdf" style="width:auto;padding:9px 15px;">Download PDF</button>' +
+        (hasRole(PROP_WRITE, user.role) ? '<button class="btn" id="finSend" style="width:auto;padding:9px 15px;">Send to Ryan Capital</button>' : '') +
+      '</div>';
+
+    document.getElementById('finPreview').addEventListener('click', async function () {
+      var r = await authed('/proposals/' + p.id + '/financing.html');
+      if (!r.ok) { alert('Could not build the sheet.'); return; }
+      var w = window.open('', '_blank');
+      w.document.write(await r.text()); w.document.close();
+    });
+    document.getElementById('finPdf').addEventListener('click', async function () {
+      var bt = this; bt.disabled = true; bt.textContent = 'Rendering…';
+      try {
+        var r = await authed('/render/proposals/' + p.id + '/financing.pdf');
+        if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} alert(m || 'Could not render the PDF.'); }
+        else downloadBlob(await r.blob(), d.proposal.number + '-financing.pdf');
+      } catch (e) { alert('Could not reach the renderer.'); }
+      bt.disabled = false; bt.textContent = 'Download PDF';
+    });
+    var sb = document.getElementById('finSend');
+    if (sb) sb.addEventListener('click', function () { openFinancingSend(p, d); });
+  }
+
+  function openFinancingSend(p, d) {
+    openModal('Send to Ryan Capital',
+      '<div class="muted" style="font-size:13px;margin-bottom:12px;line-height:1.55;">Sends the financing sheet for ' + esc(d.proposal.number) + ' to the financing partner. Replies come back to you, not the shared inbox.</div>' +
+      fieldRow('To', '<input id="finTo" value="ckinsey@ryancapital.com" style="' + IN + '">') +
+      fieldRow('Cc', '<input id="finCc" placeholder="Optional" style="' + IN + '">') +
+      fieldRow('Anything to add?', '<textarea id="finMsg" rows="4" placeholder="Optional — appears above the project details" style="' + IN + 'resize:vertical;"></textarea>'),
+      async function (close, showErr) {
+        var r = await authed('/proposals/' + p.id + '/financing/send', {
+          method: 'POST',
+          body: {
+            to: document.getElementById('finTo').value.trim(),
+            cc: document.getElementById('finCc').value.trim(),
+            message: document.getElementById('finMsg').value,
+          },
+        });
+        if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} return showErr(m || 'Could not send.'); }
+        close(); alert('Sent to ' + document.getElementById('finTo').value.trim() + '.');
+      }, 'Send');
+  }
+
+  function downloadBlob(blob, filename) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = filename; document.body.appendChild(a); a.click();
+    document.body.removeChild(a); setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+
   /* --- Admin --- */
   async function renderAdmin(user) {
     document.getElementById('view').innerHTML =
@@ -4609,7 +5176,10 @@
       '<div class="section-title" style="margin-top:26px;">Formulas</div>' +
       '<div class="muted" style="font-size:12.5px;margin:0 0 10px;">Every calculation the pricing engine runs. Frame and hardware quantities are editable coefficients; business numbers are the scalars the proposal math uses; the last tab lists what is fixed in code and why.</div>' +
       '<div id="fxTabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;"></div>' +
-      '<div id="fxBody"><div class="muted" style="padding:16px;">Loading…</div></div>';
+      '<div id="fxBody"><div class="muted" style="padding:16px;">Loading…</div></div>' +
+      '<div class="section-title" style="margin-top:26px;">Financing</div>' +
+      '<div class="muted" style="font-size:12.5px;margin:0 0 10px;">Ryan Capital quotes from a <b>payment factor</b> per term, not an interest rate: the monthly payment is the amount financed × the factor. Change a factor here and every financing sheet uses it immediately.</div>' +
+      '<div id="finAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>';
     document.getElementById('admNew').addEventListener('click', openUserForm);
     document.getElementById('admMailTest').addEventListener('click', async function () {
       var bt = this, label = bt.textContent;
@@ -4627,6 +5197,7 @@
     loadUsers();
     loadStandardNotes();
     loadFormulas();
+    loadFinancingAdmin();
   }
 
   async function loadStandardNotes() {

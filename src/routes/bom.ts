@@ -8,6 +8,7 @@ import {
   listSections, patchSection, confirmSection, unlockSection, reorderSections,
   addQuestion, updateQuestion, deleteQuestion, submissionBlockers, UNASSIGNED,
 } from '../handoff/bomSections.js';
+import { sendBom } from '../handoff/bomSend.js';
 
 /**
  * Bill of Materials — per-vendor sections, their questions, and the powder-coat
@@ -29,6 +30,15 @@ const SectionPatchSchema = z.object({
   powderCoatBrand: z.string().trim().max(120).nullish(),
   shipmentQuote: z.string().trim().max(120).nullish(),
   notes: z.string().trim().max(4000).nullish(),
+});
+
+const SendSchema = z.object({
+  to: z.string().trim().min(1),
+  cc: z.string().trim().max(500).optional(),
+  subject: z.string().trim().min(1).max(300),
+  body: z.string().max(20000),
+  format: z.enum(['EXCEL', 'PDF', 'BOTH']).default('PDF'),
+  includeZeroQty: z.boolean().optional(),
 });
 
 const QuestionSchema = z.object({
@@ -126,6 +136,18 @@ export function registerBomRoutes(app: FastifyInstance): void {
     if (!Array.isArray(b.ids) || !b.ids.length) throw new ValidationError('ids are required');
     await reorderSections(id, b.ids, req.user!.sub);
     return { sections: await listSections(id) };
+  });
+
+  /**
+   * Email this vendor's BOM. The attachment is built first: if the document
+   * cannot be produced, nothing is sent and the operator is told, rather than a
+   * vendor receiving a covering note with no sheet.
+   */
+  app.post('/bom/sections/:sectionId/send', handoff, async (req) => {
+    const { sectionId } = req.params as { sectionId: string };
+    const parsed = SendSchema.safeParse(req.body);
+    if (!parsed.success) throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid email');
+    return sendBom(sectionId, parsed.data, req.user!.sub);
   });
 
   // ------------------------------------------------------------- questions

@@ -45,6 +45,12 @@ const MfrInput = z.object({
   defaultLeadTimeDays: z.number().int().nonnegative().max(3650).nullish(),
   isThirdParty: z.boolean().optional(),
   isSteelFabricator: z.boolean().optional(),
+  // Bill of Materials email defaults — pre-fill the send dialog for this vendor.
+  bomEmailTo: str(300),
+  bomEmailCc: str(400),
+  bomEmailSubject: str(300),
+  bomEmailBody: z.string().max(8000).nullish(),
+  bomEmailFormat: z.enum(['EXCEL', 'PDF', 'BOTH']).optional(),
   isActive: z.boolean().optional(),
   notes: str(2000),
 });

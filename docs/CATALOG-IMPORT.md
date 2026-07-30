@@ -193,3 +193,48 @@ procurement lines, so existing orders render unchanged.
 `patchProcurementLine` now looks up the line's vendor section and refuses the write
 when it is SUBMITTED. Without that, the grey-out in the UI would be cosmetic — a
 stale tab could still PATCH a frozen line.
+
+## Build 42 — BOM sections in the UI, financing, server-rendered PDFs
+
+Migration `0030_requirement_task_updated_by` adds `updatedById` to
+`HandoffRequirement` and `HandoffTask`. Nullable on purpose: rows that predate it
+genuinely have no recorded author, and inventing one would be worse than "—".
+
+### Order page
+
+- **QuickBooks now sits above the Bill of Materials.**
+- **One card per vendor**, gold-edged while draft, green once submitted, greyed and
+  disabled when locked. Confirm freezes it; unlocking needs a reason and lands on
+  the order timeline.
+- Requirements and internal tasks show **who last changed the row and when**, under
+  the status.
+- Sections carry ↑/↓ ordering, which is the order they print and export in.
+- A part with a `productUrl` shows a **Buy ↗** link.
+
+### Documents
+
+`src/handoff/bomDocuments.ts` renders the BOM as self-contained HTML and as
+SpreadsheetML. The same HTML feeds the browser print dialog, the PDF download and
+the email attachment, so the three cannot drift apart. PDF export tries the server
+renderer first and silently falls back to the browser print path when it is not
+installed.
+
+### Financing
+
+Everything is computed from the proposal's price snapshot — there is no document to
+create. `src/proposals/financing.ts` holds the maths, `financingDocument.ts` the
+sheet. Administration → Financing edits the payment factors and the two tax
+settings; the settings reuse the `FormulaSetting` table under a `finance.` prefix
+rather than adding a second settings table.
+
+**Payment factors, not interest rates.** A lessor publishes a factor per term and
+the payment is `amount x factor`. Deriving that from an APR would mean guessing at
+their compounding and fees and printing a payment they would not honour.
+
+### Vendor email defaults
+
+Per-manufacturer To/Cc/subject/body/format, with `{{vendor}}`, `{{order}}`,
+`{{job}}` and `{{submittedOn}}` tokens. The send dialog pre-fills from these and
+stays editable. Every send writes a `BomSend` row — sender, timestamp, recipients,
+subject, format, and success or failure — before and after the provider call, so a
+failed send is recorded rather than lost.

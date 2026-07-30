@@ -327,7 +327,35 @@ export async function getOrder(id: string) {
     include: { customerApproval: true, requirements: true, procurement: true, tasks: true, events: { orderBy: { createdAt: 'asc' } } },
   });
   if (!order) throw new NotFoundError('Order not found');
-  return order;
+
+  // Resolve the last editor of each requirement and task to a display name. The
+  // order page shows status, person and date in one column, and an id there would
+  // be useless to the person reading it.
+  const editorIds = [
+    ...new Set([
+      ...order.requirements.map((r) => r.updatedById),
+      ...order.tasks.map((t) => t.updatedById),
+    ].filter(Boolean) as string[]),
+  ];
+  const editors = editorIds.length
+    ? await prisma.user.findMany({ where: { id: { in: editorIds } }, select: { id: true, name: true } })
+    : [];
+  const nameById = new Map(editors.map((u) => [u.id, u.name]));
+
+  // Where each part can be bought. Lives on the SKU, not the line, so it is
+  // resolved here — the Bill of Materials shows it as a "Buy" link.
+  const parts = [...new Set(order.procurement.map((p) => p.sku).filter(Boolean) as string[])];
+  const skus = parts.length
+    ? await prisma.sku.findMany({ where: { part: { in: parts } }, select: { part: true, productUrl: true } })
+    : [];
+  const urlByPart = new Map(skus.map((s) => [s.part, s.productUrl]));
+
+  return {
+    ...order,
+    procurement: order.procurement.map((p) => ({ ...p, productUrl: (p.sku && urlByPart.get(p.sku)) || null })),
+    requirements: order.requirements.map((r) => ({ ...r, updatedByName: r.updatedById ? nameById.get(r.updatedById) ?? null : null })),
+    tasks: order.tasks.map((t) => ({ ...t, updatedByName: t.updatedById ? nameById.get(t.updatedById) ?? null : null })),
+  };
 }
 
 /**
@@ -416,6 +444,7 @@ export async function updateRequirement(id: string, patch: { status?: Requiremen
   if (!existing) throw new NotFoundError('Requirement not found');
   if (patch.isException && !patch.exceptionReason?.trim()) throw new ValidationError('An exception requires a reason');
   const r = await prisma.handoffRequirement.update({ where: { id }, data: {
+    updatedById: userId,
     ...(patch.status ? { status: patch.status } : {}),
     ...(patch.targetDate !== undefined ? { targetDate: patch.targetDate } : {}),
     ...(patch.detail ? { detail: patch.detail as object } : {}),
@@ -438,6 +467,7 @@ export async function updateTask(id: string, patch: { status?: HandoffTaskStatus
   if (!existing) throw new NotFoundError('Task not found');
   if (patch.isException && !patch.exceptionReason?.trim()) throw new ValidationError('An exception requires a reason');
   const t = await prisma.handoffTask.update({ where: { id }, data: {
+    updatedById: userId,
     ...(patch.status ? { status: patch.status, ...(patch.status === 'DONE' ? { completedAt: new Date() } : {}) } : {}),
     ...(patch.assigneeId !== undefined ? { assigneeId: patch.assigneeId } : {}),
     ...(patch.assigneeRole !== undefined ? { assigneeRole: patch.assigneeRole } : {}),
