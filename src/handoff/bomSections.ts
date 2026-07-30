@@ -149,11 +149,16 @@ export function renderTemplate(text: string, vars: Record<string, string>): stri
   return text.replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, k: string) => vars[k] ?? '');
 }
 
-const DEFAULT_SUBJECT = 'Bill of Materials — {{order}} — {{job}}';
+/**
+ * Matches the attachment filename exactly: `Customer_Name-Order_Number-Vendor_Name`.
+ * A vendor searching their inbox for the subject finds the same string as the file
+ * they saved, which is the whole point of the two agreeing.
+ */
+const DEFAULT_SUBJECT = '{{customer}}-{{order}}-{{vendor}}';
 const DEFAULT_BODY = [
   'Hello,',
   '',
-  'Attached is the Bill of Materials for {{job}} ({{order}}).',
+  'Attached is the Bill of Materials for {{customer}} ({{order}}).',
   '',
   'Please confirm receipt and let us know the expected ship date.',
   '',
@@ -170,7 +175,10 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
   await ensureSections(orderId, actorId);
 
   const [order, sections, lines, manufacturers] = await Promise.all([
-    prisma.acceptedOrder.findUnique({ where: { id: orderId }, select: { number: true, jobName: true } }),
+    prisma.acceptedOrder.findUnique({
+      where: { id: orderId },
+      select: { number: true, jobName: true, organizationId: true },
+    }),
     prisma.bomVendorSection.findMany({
       where: { orderId },
       orderBy: [{ sortOrder: 'asc' }, { vendor: 'asc' }],
@@ -192,6 +200,14 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
   ]);
   if (!order) throw new NotFoundError('Order not found');
 
+  // The customer leads both the subject and the attachment name, so it is resolved
+  // once here rather than per section.
+  const org = await prisma.organization.findUnique({
+    where: { id: order.organizationId },
+    select: { name: true },
+  });
+  const customerName = org?.name ?? '';
+
   // Which parts insist on a colour. Off by default, so this is usually a short list.
   const skusNeedingColor = new Set(
     (await prisma.sku.findMany({ where: { requiresPowderColor: true }, select: { part: true } })).map((s) => s.part),
@@ -211,6 +227,7 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
     const mfr = mfrByName.get(s.vendor.toLowerCase());
     const vars = {
       vendor: s.vendor,
+      customer: customerName,
       order: order.number,
       job: s.jobName || order.jobName || '',
       submittedOn: s.submittedOn ? s.submittedOn.toISOString().slice(0, 10) : today(),

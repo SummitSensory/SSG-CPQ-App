@@ -258,11 +258,24 @@ export async function renderBomXml(
 </Workbook>`;
 }
 
-/** Filesystem-safe basename for an attachment, e.g. `SO-1042-acme-steel`. */
-export function bomFilename(orderNumber: string, vendor: string): string {
-  const slug = (vendor === '*' ? 'all-vendors' : vendor)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '');
-  return `${orderNumber}-${slug}`;
+/**
+ * Attachment basename: `Customer_Name-Order_Number-Vendor_Name`.
+ *
+ * Customer first because that is how a vendor's inbox gets searched — they hold
+ * jobs for several of our customers and know ours by name, not by our order
+ * numbering. Spaces become underscores and separators become hyphens, so the two
+ * levels stay readable apart; anything a filesystem or mail client would object to
+ * is dropped.
+ */
+export function bomFilename(orderNumber: string, vendor: string, customerName = ''): string {
+  const part = (v: string) =>
+    v
+      .trim()
+      .replace(/[\\/:*?"<>|]+/g, '')
+      .replace(/[\s]+/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_|_$/g, '');
+  return [part(customerName), part(orderNumber), part(vendor === '*' ? 'All Vendors' : vendor)]
+    .filter(Boolean)
+    .join('-');
 }

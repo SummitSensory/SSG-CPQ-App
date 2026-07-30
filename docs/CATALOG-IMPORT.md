@@ -233,8 +233,14 @@ their compounding and fees and printing a payment they would not honour.
 
 ### Vendor email defaults
 
-Per-manufacturer To/Cc/subject/body/format, with `{{vendor}}`, `{{order}}`,
-`{{job}}` and `{{submittedOn}}` tokens. The send dialog pre-fills from these and
+Per-manufacturer To/Cc/subject/body/format, with `{{customer}}`, `{{vendor}}`,
+`{{order}}`, `{{job}}` and `{{submittedOn}}` tokens.
+
+**Attachment name and default subject are the same string**:
+`Customer_Name-Order_Number-Vendor_Name`. Customer leads because that is how a
+vendor's inbox gets searched — they hold jobs for several of our customers and know
+ours by name, not by our order numbering. Spaces become underscores and the three
+parts are hyphen-separated, so the two levels stay readable apart. The send dialog pre-fills from these and
 stays editable. Every send writes a `BomSend` row — sender, timestamp, recipients,
 subject, format, and success or failure — before and after the provider call, so a
 failed send is recorded rather than lost.

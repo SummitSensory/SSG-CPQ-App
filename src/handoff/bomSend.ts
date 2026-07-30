@@ -73,12 +73,15 @@ export async function sendBom(sectionId: string, input: SendInput, actorId: stri
     throw new ValidationError('PDF rendering is not available on this deployment. Send as Excel, or install the renderer.');
   }
 
-  const base = bomFilename(section.order.number, section.vendor);
   const attachments: Array<{ filename: string; content: string }> = [];
 
   try {
+    // The customer name comes off the built document rather than a second query,
+    // and it is what leads the filename — a vendor searching their inbox looks for
+    // our customer, not our order numbering.
+    const { html, doc } = await renderBomHtml(section.orderId, section.vendor, { includeZeroQty: input.includeZeroQty });
+    const base = bomFilename(section.order.number, section.vendor, doc.customer.name);
     if (wantsPdf) {
-      const { html } = await renderBomHtml(section.orderId, section.vendor, { includeZeroQty: input.includeZeroQty });
       const pdf = await renderPdf(html, { format: 'Letter' });
       attachments.push({ filename: `${base}.pdf`, content: pdf.toString('base64') });
     }

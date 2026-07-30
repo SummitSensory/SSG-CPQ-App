@@ -1638,10 +1638,10 @@
       '<label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;margin-top:6px;"><input type="checkbox" id="mfActive"' + (m.id ? (m.isActive !== false ? ' checked' : '') : ' checked') + '> Active — offered when assigning a vendor</label>' +
       '<div class="field" style="margin-top:10px;"><label>Notes</label><textarea id="mfNotes" rows="2" style="' + IN + 'resize:vertical;">' + esc(m.notes || '') + '</textarea></div>' +
       '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin:16px 0 6px;">Bill of Materials email</div>' +
-      '<div class="muted" style="font-size:12px;margin-bottom:8px;line-height:1.5;">Pre-fills the send dialog for this vendor — a fabricator and a distributor rarely want the same note or the same format. Tokens: <code>{{vendor}}</code> <code>{{order}}</code> <code>{{job}}</code> <code>{{submittedOn}}</code>.</div>' +
+      '<div class="muted" style="font-size:12px;margin-bottom:8px;line-height:1.5;">Pre-fills the send dialog for this vendor — a fabricator and a distributor rarely want the same note or the same format. Tokens: <code>{{customer}}</code> <code>{{vendor}}</code> <code>{{order}}</code> <code>{{job}}</code> <code>{{submittedOn}}</code>. Left blank, the subject matches the attachment name: <code>{{customer}}-{{order}}-{{vendor}}</code>.</div>' +
       two(fieldRow('Send BOMs to', '<input id="mfBomTo" type="email" placeholder="Falls back to the contact email" style="' + IN + '" value="' + v('bomEmailTo') + '">'),
           fieldRow('Cc', '<input id="mfBomCc" placeholder="Optional" style="' + IN + '" value="' + v('bomEmailCc') + '">')) +
-      fieldRow('Subject', '<input id="mfBomSubject" placeholder="Bill of Materials — {{order}} — {{job}}" style="' + IN + '" value="' + v('bomEmailSubject') + '">') +
+      fieldRow('Subject', '<input id="mfBomSubject" placeholder="{{customer}}-{{order}}-{{vendor}}" style="' + IN + '" value="' + v('bomEmailSubject') + '">') +
       fieldRow('Attach as', '<select id="mfBomFormat" style="' + IN + '">' +
         ['PDF', 'EXCEL', 'BOTH'].map(function (f) { return '<option value="' + f + '"' + ((m.bomEmailFormat || 'PDF') === f ? ' selected' : '') + '>' + (f === 'BOTH' ? 'Both' : f === 'EXCEL' ? 'Excel' : 'PDF') + '</option>'; }).join('') +
         '</select>') +
@@ -2232,16 +2232,20 @@
   /* --- Proposals --- */
   var OPEN_STATUSES = ['DRAFT', 'INTERNAL_REVIEW', 'RELEASED'];
   var props = {
-    rows: [], sort: { key: 'modified', dir: 'desc' }, filter: 'all', q: '',
-    // Grouping and which customers are collapsed persist per browser: someone who
-    // works one account all day should not re-collapse thirty others every visit.
-    grouped: localStorage.getItem('ssg.props.grouped') === '1',
+    rows: [], sort: { key: 'modified', dir: 'desc' },
+    // Grouped and filtered to Active out of the box: the open work is what someone
+    // opens this page to see, and the twenty-row flat list buries it. Both are
+    // remembered per browser once changed, so a preference sticks.
+    filter: localStorage.getItem('ssg.props.filter') || 'active',
+    q: '',
+    grouped: localStorage.getItem('ssg.props.grouped') !== '0',
     collapsed: (function () {
       try { return JSON.parse(localStorage.getItem('ssg.props.collapsed') || '[]'); } catch (e) { return []; }
     })(),
   };
   function propsPersist() {
     localStorage.setItem('ssg.props.grouped', props.grouped ? '1' : '0');
+    localStorage.setItem('ssg.props.filter', props.filter);
     localStorage.setItem('ssg.props.collapsed', JSON.stringify(props.collapsed));
   }
   var PROP_FILTERS = [
@@ -2285,7 +2289,7 @@
         (props.rows.length ? ' <span style="opacity:.65;">' + count + '</span>' : '') + '</button>';
     }).join('');
     box.querySelectorAll('[data-f]').forEach(function (b) {
-      b.addEventListener('click', function () { props.filter = b.getAttribute('data-f'); drawPropFilters(user); drawProposals(user); });
+      b.addEventListener('click', function () { props.filter = b.getAttribute('data-f'); propsPersist(); drawPropFilters(user); drawProposals(user); });
     });
   }
   function matchFilter(r, f) {

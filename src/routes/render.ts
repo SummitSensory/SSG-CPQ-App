@@ -33,11 +33,11 @@ export function registerRenderRoutes(app: FastifyInstance): void {
     const order = await prisma.acceptedOrder.findUnique({ where: { id }, select: { number: true } });
     if (!order) throw new ValidationError('Order not found');
 
-    const { html } = await renderBomHtml(id, vendor, { includeZeroQty: q.includeZeroQty === 'true' });
+    const { html, doc } = await renderBomHtml(id, vendor, { includeZeroQty: q.includeZeroQty === 'true' });
     const pdf = await renderPdf(html, { format: 'Letter' });
     return reply
       .header('Content-Type', 'application/pdf')
-      .header('Content-Disposition', `attachment; filename="${bomFilename(order.number, vendor)}.pdf"`)
+      .header('Content-Disposition', `attachment; filename="${bomFilename(order.number, vendor, doc.customer.name)}.pdf"`)
       .send(pdf);
   });
 }
