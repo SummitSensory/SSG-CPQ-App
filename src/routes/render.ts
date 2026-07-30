@@ -3,7 +3,7 @@ import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import { ValidationError } from '../lib/errors.js';
 import { prisma } from '../lib/prisma.js';
-import { renderBomHtml, bomFilename } from '../handoff/bomDocuments.js';
+import { renderBomHtml, renderBomXml, bomFilename } from '../handoff/bomDocuments.js';
 import { renderPdf, pdfAvailable } from '../render/pdf.js';
 
 /**
@@ -39,5 +39,33 @@ export function registerRenderRoutes(app: FastifyInstance): void {
       .header('Content-Type', 'application/pdf')
       .header('Content-Disposition', `attachment; filename="${bomFilename(order.number, vendor, doc.customer.name)}.pdf"`)
       .send(pdf);
+  });
+
+  /**
+   * The same document as a spreadsheet. Built from the same model as the PDF, so
+   * the two carry identical content — the browser-side CSV they replace had drifted
+   * and was missing the addresses, the account and terms, the vendor questions and
+   * the notes.
+   *
+   * Needs no browser, so it lives here beside the PDF only for symmetry of URL.
+   */
+  app.get('/render/orders/:id/bom.xls', read, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const q = req.query as { vendor?: string; includeZeroQty?: string };
+    const vendor = q.vendor || '*';
+    const order = await prisma.acceptedOrder.findUnique({
+      where: { id },
+      select: { number: true, organizationId: true },
+    });
+    if (!order) throw new ValidationError('Order not found');
+    const org = await prisma.organization.findUnique({
+      where: { id: order.organizationId },
+      select: { name: true },
+    });
+    const xml = await renderBomXml(id, vendor, { includeZeroQty: q.includeZeroQty === 'true' });
+    return reply
+      .header('Content-Type', 'application/vnd.ms-excel; charset=utf-8')
+      .header('Content-Disposition', `attachment; filename="${bomFilename(order.number, vendor, org?.name ?? '')}.xls"`)
+      .send(xml);
   });
 }

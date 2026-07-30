@@ -4836,7 +4836,23 @@
         var label = bt.textContent;
         bt.disabled = true;
 
-        if (bt.getAttribute('data-proc') === 'pdf') {
+        // Both formats come from the server, off one shared model, so the
+        // spreadsheet and the PDF carry identical content. The browser-side CSV
+        // below is only a fallback for a deployment without the renderer.
+        var kind = bt.getAttribute('data-proc');
+        if (kind === 'csv') {
+          bt.textContent = 'Building…';
+          try {
+            var rx = await authed('/render/orders/' + order.id + '/bom.xls' + qs);
+            if (rx.ok) {
+              downloadBlob(await rx.blob(), bomFileSlug(vendor) + '.xls');
+              bt.disabled = false; bt.textContent = label; return;
+            }
+          } catch (e) {}
+          bt.textContent = label;
+        }
+
+        if (kind === 'pdf') {
           // The server renders the same HTML the print dialog would, so the emailed
           // and downloaded documents cannot drift apart. If the renderer is not
           // installed, fall back to the browser print path rather than failing.

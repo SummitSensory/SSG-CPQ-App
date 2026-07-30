@@ -49,33 +49,43 @@ async function sectionExtras(orderId: string, vendor: string) {
   };
 }
 
-const TH = 'padding:7px 8px;text-align:left;font-size:8.5pt;text-transform:uppercase;letter-spacing:.05em;color:#5c6157;border-bottom:1.5px solid #20241f;font-weight:600;';
-const TD = 'padding:6px 8px;font-size:9pt;border-bottom:1px solid #e7e8e3;vertical-align:top;';
-
-function addressBlock(title: string, lines: string[]): string {
-  return `<div style="flex:1;min-width:0;">
-    <div style="font-size:8pt;text-transform:uppercase;letter-spacing:.06em;color:#8a8f85;margin-bottom:3px;font-weight:600;">${esc(title)}</div>
-    <div style="font-size:9pt;line-height:1.45;">${lines.filter(Boolean).map(esc).join('<br>')}</div>
-  </div>`;
+/**
+ * The document's CONTENT, resolved once.
+ *
+ * The PDF and the spreadsheet were built by separate code, and separate code
+ * drifts: the spreadsheet quietly lost the address blocks, the account and terms,
+ * the vendor questions and the notes. Both renderers now consume this, so a field
+ * added here appears in both or neither — they cannot disagree again.
+ */
+export interface BomModel {
+  title: string;
+  subtitle: string;
+  vendorLabel: string;
+  submitted: boolean;
+  company: { name: string; lines: string[] };
+  addresses: Array<{ title: string; lines: string[] }>;
+  /** Job, submission date, delivery, quote, account, terms — label/value pairs. */
+  meta: Array<{ label: string; value: string }>;
+  questions: Array<{ label: string; value: string }>;
+  columns: string[];
+  rows: string[][];
+  totals: string[];
+  notes: string;
+  footer: string;
+  doc: BomDocument;
 }
 
-/**
- * Render a BOM to a complete HTML document.
- *
- * `vendor` is a single vendor name, or '*' for every vendor combined. When it is
- * a single vendor and that vendor has a section, the section's own header and
- * question answers are used in place of the order-level defaults — the section is
- * the document of record.
- */
-export async function renderBomHtml(
+async function buildModel(
   orderId: string,
   vendor: string,
-  opts: { includeZeroQty?: boolean } = {},
-): Promise<{ html: string; doc: BomDocument }> {
+  opts: { includeZeroQty?: boolean },
+): Promise<BomModel> {
   const doc = await buildBom(orderId, { vendor, includeZeroQty: opts.includeZeroQty });
   const all = vendor === '*';
   const extras = all ? null : await sectionExtras(orderId, vendor);
 
+  // A vendor section is the document of record once one exists; the order-level
+  // header is only the default it was seeded from.
   const jobName = extras?.jobName || doc.order.jobName;
   const submittedOn = dateOnly(extras ? extras.submittedOn : doc.order.submittedOn);
   const deliveryType = extras?.deliveryType || doc.order.deliveryType;
@@ -84,39 +94,120 @@ export async function renderBomHtml(
 
   const c = doc.company;
   const v = doc.vendor;
+  const cu = doc.customer;
+  const t = doc.totals;
 
-  const headCells = [
+  const addr = (...parts: Array<string | undefined>) => parts.filter(Boolean).map(String);
+  const cityLine = (city?: string, region?: string, postal?: string) =>
+    [city, region, postal].filter(Boolean).join(', ').replace(/, ([^,]*)$/, ' $1').trim();
+
+  const meta: Array<{ label: string; value: string }> = [
+    { label: 'Job', value: jobName || '—' },
+    { label: 'Submission date', value: submittedOn || '—' },
+    { label: 'Delivery', value: deliveryType || '—' },
+    { label: 'Shipment quote', value: shipmentQuote || 'TBD' },
+  ];
+  if (v?.accountNumber) meta.push({ label: 'Account', value: v.accountNumber });
+  if (v?.paymentTerms) meta.push({ label: 'Terms', value: v.paymentTerms });
+  if (v?.leadTimeDays != null) meta.push({ label: 'Lead time', value: `${v.leadTimeDays} days` });
+  // Steel weight only means something when a steel fabricator is involved; on a
+  // distributor's sheet it would always read 0 and invite the wrong conclusion.
+  if (t.steelWeightLbs > 0) meta.push({ label: 'Total steel weight (lb)', value: String(t.steelWeightLbs) });
+
+  const columns = [
     ...(all ? ['Vendor'] : []),
-    'Line #', 'Description', 'Qty', 'Powder color', 'Weight (lb)', 'Cost each', 'Total cost', 'Notes',
+    'Line #', 'Description', 'Qty', 'Powder color', 'Weight (lb)', 'Cost each', 'Total cost', 'Notes', 'Status',
   ];
 
-  const rows = doc.lines
-    .map((l) => {
-      const zero = l.quantity === 0;
-      const cells = [
-        ...(all ? [esc(l.vendor)] : []),
-        `<code style="font-size:8.5pt;">${esc(l.lineNo)}</code>`,
-        esc(l.name),
-        String(l.quantity),
-        esc(l.powderColor || '—'),
-        String(l.extendedWeightLbs || 0),
-        money(l.unitCostMinor),
-        money(l.extendedCostMinor),
-        esc(l.vendorNotes || ''),
-      ];
+  const rows = doc.lines.map((l) => [
+    ...(all ? [l.vendor] : []),
+    l.lineNo,
+    l.name,
+    String(l.quantity),
+    l.powderColor || '—',
+    String(l.extendedWeightLbs || 0),
+    money(l.unitCostMinor),
+    money(l.extendedCostMinor),
+    l.vendorNotes || '',
+    l.sourced ? 'Ordered' : 'Pending',
+  ]);
+
+  const totals = [
+    ...(all ? [''] : []),
+    '', 'Total', String(t.unitCount), '', String(t.totalWeightLbs), '', money(t.extendedCostMinor), '', '',
+  ];
+
+  return {
+    title: 'Bill of Materials',
+    subtitle: `${doc.order.number} · accepted proposal v${doc.order.acceptedVersion}`,
+    vendorLabel: all ? 'All vendors' : vendor,
+    submitted: extras?.status === 'SUBMITTED',
+    company: {
+      name: c.name,
+      lines: addr(c.addressLine1, cityLine(c.city, c.region, c.postalCode), [c.phone, c.email].filter(Boolean).join(' · ')),
+    },
+    addresses: [
+      {
+        title: 'Ship from',
+        lines: v
+          ? addr(v.name, v.addressLine1, v.addressLine2, cityLine(v.city, v.region, v.postalCode), v.contactName, v.contactPhone, v.contactEmail)
+          : ['All vendors'],
+      },
+      {
+        title: 'Ship to',
+        lines: addr(doc.shipTo.name, ...doc.shipTo.lines, doc.shipTo.contactName, doc.shipTo.phone, doc.shipTo.email),
+      },
+      {
+        title: 'Bill to',
+        lines: addr(cu.name, cu.addressLine1, cu.addressLine2, cityLine(cu.city, cu.region, cu.postalCode), cu.contactName, cu.contactPhone, cu.contactEmail),
+      },
+    ],
+    meta,
+    questions: extras?.answers ?? [],
+    columns,
+    rows,
+    totals,
+    notes: notes || '',
+    footer: `Prepared ${dateOnly(doc.createdAt)}${doc.createdBy ? ` by ${doc.createdBy.name}` : ''} · ${c.name}`,
+    doc,
+  };
+}
+
+const TH = 'padding:7px 8px;text-align:left;font-size:8.5pt;text-transform:uppercase;letter-spacing:.05em;color:#5c6157;border-bottom:1.5px solid #20241f;font-weight:600;';
+const TD = 'padding:6px 8px;font-size:9pt;border-bottom:1px solid #e7e8e3;vertical-align:top;';
+
+/**
+ * Render a BOM to a complete HTML document, from the shared model.
+ *
+ * Self-contained: inline styles, no external CSS, no images, no fonts to fetch.
+ * A renderer that reaches out to the network can hang on a dead asset, and a
+ * vendor's document is the wrong place to discover that.
+ */
+export async function renderBomHtml(
+  orderId: string,
+  vendor: string,
+  opts: { includeZeroQty?: boolean } = {},
+): Promise<{ html: string; doc: BomDocument }> {
+  const m = await buildModel(orderId, vendor, opts);
+
+  const addressBlock = (a: { title: string; lines: string[] }) => `<div style="flex:1;min-width:0;">
+    <div style="font-size:8pt;text-transform:uppercase;letter-spacing:.06em;color:#8a8f85;margin-bottom:3px;font-weight:600;">${esc(a.title)}</div>
+    <div style="font-size:9pt;line-height:1.45;">${a.lines.map(esc).join('<br>')}</div>
+  </div>`;
+
+  const rows = m.rows
+    .map((cells) => {
       // A zero-quantity row is a blank order line, not an omission — greyed so the
       // shop can see it is there to be filled in.
-      return `<tr${zero ? ' style="color:#9aa093;"' : ''}>${cells.map((x) => `<td style="${TD}">${x}</td>`).join('')}</tr>`;
+      const qtyIdx = m.columns.indexOf('Qty');
+      const zero = cells[qtyIdx] === '0';
+      return `<tr${zero ? ' style="color:#9aa093;"' : ''}>${cells
+        .map((x, i) => `<td style="${TD}">${i === m.columns.indexOf('Line #') ? `<code style="font-size:8.5pt;">${esc(x)}</code>` : esc(x)}</td>`)
+        .join('')}</tr>`;
     })
     .join('');
 
-  const t = doc.totals;
-  const totalCells = [
-    ...(all ? [''] : []),
-    '', '<b>Total</b>', `<b>${t.unitCount}</b>`, '', `<b>${t.totalWeightLbs}</b>`, '', `<b>${money(t.extendedCostMinor)}</b>`, '',
-  ];
-
-  const questionRows = (extras?.answers ?? [])
+  const questionRows = m.questions
     .map(
       (a) => `<tr>
         <td style="padding:4px 10px 4px 0;font-size:9pt;color:#5c6157;white-space:nowrap;vertical-align:top;">${esc(a.label)}</td>
@@ -127,7 +218,7 @@ export async function renderBomHtml(
 
   const html = `<!doctype html>
 <html><head><meta charset="utf-8">
-<title>Bill of Materials — ${esc(doc.order.number)}</title>
+<title>${esc(m.title)} — ${esc(m.doc.order.number)}</title>
 <style>
   @page { margin: 0.45in; }
   body { margin:0; font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; color:#20241f; }
@@ -138,123 +229,118 @@ export async function renderBomHtml(
 <body>
   <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;padding-bottom:12px;border-bottom:2px solid #20241f;">
     <div>
-      <div style="font-family:Georgia,serif;font-size:16pt;font-weight:700;letter-spacing:-.01em;">${esc(c.name)}</div>
-      <div style="font-size:8.5pt;color:#5c6157;line-height:1.45;margin-top:3px;">
-        ${esc(c.addressLine1)}<br>${esc(c.city)}, ${esc(c.region)} ${esc(c.postalCode)}<br>${esc(c.phone)} · ${esc(c.email)}
-      </div>
+      <div style="font-family:Georgia,serif;font-size:16pt;font-weight:700;letter-spacing:-.01em;">${esc(m.company.name)}</div>
+      <div style="font-size:8.5pt;color:#5c6157;line-height:1.45;margin-top:3px;">${m.company.lines.map(esc).join('<br>')}</div>
     </div>
     <div style="text-align:right;">
-      <div style="font-family:Georgia,serif;font-size:14pt;font-weight:700;">Bill of Materials</div>
-      <div style="font-size:8.5pt;color:#5c6157;margin-top:2px;">${esc(doc.order.number)} · accepted proposal v${esc(doc.order.acceptedVersion)}</div>
-      <div style="font-size:8.5pt;color:#5c6157;">${esc(all ? 'All vendors' : vendor)}</div>
-      ${extras?.status === 'SUBMITTED' ? '<div style="font-size:8pt;color:#2f6b4f;margin-top:3px;font-weight:600;">SUBMITTED</div>' : ''}
+      <div style="font-family:Georgia,serif;font-size:14pt;font-weight:700;">${esc(m.title)}</div>
+      <div style="font-size:8.5pt;color:#5c6157;margin-top:2px;">${esc(m.subtitle)}</div>
+      <div style="font-size:8.5pt;color:#5c6157;">${esc(m.vendorLabel)}</div>
+      ${m.submitted ? '<div style="font-size:8pt;color:#2f6b4f;margin-top:3px;font-weight:600;">SUBMITTED</div>' : ''}
     </div>
   </div>
 
-  <div style="display:flex;gap:24px;margin:14px 0 12px;">
-    ${addressBlock('Ship from', v ? [v.name, v.addressLine1, v.addressLine2, [v.city, v.region, v.postalCode].filter(Boolean).join(', '), v.contactName, v.contactPhone, v.contactEmail] : ['All vendors'])}
-    ${addressBlock('Ship to', [doc.shipTo.name, ...doc.shipTo.lines, doc.shipTo.contactName, doc.shipTo.phone])}
-    ${addressBlock('Bill to', [doc.customer.name, doc.customer.addressLine1, doc.customer.addressLine2, [doc.customer.city, doc.customer.region, doc.customer.postalCode].filter(Boolean).join(', ')])}
-  </div>
+  <div style="display:flex;gap:24px;margin:14px 0 12px;">${m.addresses.map(addressBlock).join('')}</div>
 
   <table style="width:100%;border-collapse:collapse;background:#fbfbf9;border:1px solid #e7e8e3;margin-bottom:14px;">
-    <tr>
-      <td style="padding:8px 10px;font-size:8.5pt;"><span style="color:#8a8f85;">Job</span><br><b>${esc(jobName || '—')}</b></td>
-      <td style="padding:8px 10px;font-size:8.5pt;"><span style="color:#8a8f85;">Submission date</span><br><b>${esc(submittedOn || '—')}</b></td>
-      <td style="padding:8px 10px;font-size:8.5pt;"><span style="color:#8a8f85;">Delivery</span><br><b>${esc(deliveryType || '—')}</b></td>
-      <td style="padding:8px 10px;font-size:8.5pt;"><span style="color:#8a8f85;">Shipment quote</span><br><b>${esc(shipmentQuote || 'TBD')}</b></td>
-      ${v?.accountNumber ? `<td style="padding:8px 10px;font-size:8.5pt;"><span style="color:#8a8f85;">Account</span><br><b>${esc(v.accountNumber)}</b></td>` : ''}
-      ${v?.paymentTerms ? `<td style="padding:8px 10px;font-size:8.5pt;"><span style="color:#8a8f85;">Terms</span><br><b>${esc(v.paymentTerms)}</b></td>` : ''}
-    </tr>
+    <tr>${m.meta
+      .map(
+        (x) => `<td style="padding:8px 10px;font-size:8.5pt;"><span style="color:#8a8f85;">${esc(x.label)}</span><br><b>${esc(x.value)}</b></td>`,
+      )
+      .join('')}</tr>
   </table>
 
   ${questionRows ? `<table style="border-collapse:collapse;margin-bottom:14px;">${questionRows}</table>` : ''}
 
   <table style="width:100%;border-collapse:collapse;">
-    <thead><tr>${headCells.map((h) => `<th style="${TH}">${esc(h)}</th>`).join('')}</tr></thead>
+    <thead><tr>${m.columns.map((h) => `<th style="${TH}">${esc(h)}</th>`).join('')}</tr></thead>
     <tbody>
       ${rows}
-      <tr style="background:#f6f7f4;">${totalCells.map((x) => `<td style="${TD}border-bottom:none;">${x}</td>`).join('')}</tr>
+      <tr style="background:#f6f7f4;">${m.totals.map((x) => `<td style="${TD}border-bottom:none;font-weight:700;">${esc(x)}</td>`).join('')}</tr>
     </tbody>
   </table>
 
-  ${notes ? `<div style="margin-top:14px;padding:10px 12px;background:#fbfbf9;border:1px solid #e7e8e3;font-size:9pt;line-height:1.5;"><b style="font-size:8pt;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Notes</b><br>${esc(notes).replace(/\n/g, '<br>')}</div>` : ''}
+  ${m.notes ? `<div style="margin-top:14px;padding:10px 12px;background:#fbfbf9;border:1px solid #e7e8e3;font-size:9pt;line-height:1.5;"><b style="font-size:8pt;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Notes</b><br>${esc(m.notes).replace(/\n/g, '<br>')}</div>` : ''}
 
-  <div style="margin-top:18px;font-size:8pt;color:#8a8f85;">
-    Prepared ${esc(dateOnly(doc.createdAt))}${doc.createdBy ? ` by ${esc(doc.createdBy.name)}` : ''} · ${esc(c.name)}
-  </div>
+  <div style="margin-top:18px;font-size:8pt;color:#8a8f85;">${esc(m.footer)}</div>
 </body></html>`;
 
-  return { html, doc };
+  return { html, doc: m.doc };
 }
 
 /**
- * The same document as a spreadsheet. SpreadsheetML rather than real xlsx: it is
- * a single XML string with no zip step and no dependency, and Excel opens it
- * natively. The header block is written as rows above the table so a purchaser
- * can read the sheet without the covering email.
+ * The same document as a spreadsheet — same model, so it carries the same header
+ * blocks, addresses, questions, lines, totals and notes as the PDF.
+ *
+ * SpreadsheetML rather than real xlsx: it is a single XML string with no zip step
+ * and no dependency, and Excel opens it natively.
  */
 export async function renderBomXml(
   orderId: string,
   vendor: string,
   opts: { includeZeroQty?: boolean } = {},
 ): Promise<string> {
-  const doc = await buildBom(orderId, { vendor, includeZeroQty: opts.includeZeroQty });
-  const all = vendor === '*';
-  const extras = all ? null : await sectionExtras(orderId, vendor);
+  const m = await buildModel(orderId, vendor, opts);
 
-  const cell = (v: unknown, numeric = false): string =>
-    `<Cell><Data ss:Type="${numeric ? 'Number' : 'String'}">${esc(v)}</Data></Cell>`;
+  // Money and quantities are written as text, exactly as the PDF prints them.
+  // Excel would otherwise reformat "$1,212.50" to its own locale and the two
+  // documents would no longer read the same.
+  const cell = (v: unknown, style?: string): string =>
+    `<Cell${style ? ` ss:StyleID="${style}"` : ''}><Data ss:Type="String">${esc(v)}</Data></Cell>`;
   const row = (cells: string[]): string => `<Row>${cells.join('')}</Row>`;
+  const blank = row([]);
+  const heading = (text: string) => row([cell(text, 'h')]);
 
-  const meta: string[] = [
-    row([cell('Bill of Materials'), cell(doc.order.number)]),
-    row([cell('Job'), cell(extras?.jobName || doc.order.jobName)]),
-    row([cell('Vendor'), cell(all ? 'All vendors' : vendor)]),
-    row([cell('Submission date'), cell(dateOnly(extras ? extras.submittedOn : doc.order.submittedOn))]),
-    row([cell('Delivery type'), cell(extras?.deliveryType || doc.order.deliveryType)]),
-    row([cell('Shipment quote'), cell(extras?.shipmentQuote || doc.order.shipmentQuote)]),
-    ...(extras?.answers ?? []).map((a) => row([cell(a.label), cell(a.value)])),
-    row([]),
-  ];
+  const body: string[] = [];
 
-  const head = row(
-    [...(all ? ['Vendor'] : []), 'Line #', 'Description', 'Qty', 'Powder color', 'Weight (lb)', 'Cost each', 'Total cost', 'Notes', 'Status'].map((h) =>
-      cell(h),
-    ),
-  );
+  body.push(row([cell(m.title, 'title'), cell(m.doc.order.number, 'b')]));
+  body.push(row([cell(m.subtitle)]));
+  body.push(row([cell('Vendor', 'lbl'), cell(m.vendorLabel, 'b')]));
+  if (m.submitted) body.push(row([cell('Status', 'lbl'), cell('SUBMITTED', 'b')]));
+  body.push(blank);
 
-  const body = doc.lines.map((l) =>
-    row([
-      ...(all ? [cell(l.vendor)] : []),
-      cell(l.lineNo),
-      cell(l.name),
-      cell(l.quantity, true),
-      cell(l.powderColor),
-      cell(l.extendedWeightLbs, true),
-      cell(l.unitCostMinor / 100, true),
-      cell(l.extendedCostMinor / 100, true),
-      cell(l.vendorNotes),
-      cell(l.sourced ? 'Ordered' : 'Pending'),
-    ]),
-  );
+  body.push(row([cell(m.company.name, 'b')]));
+  m.company.lines.forEach((l) => body.push(row([cell(l)])));
+  body.push(blank);
 
-  const t = doc.totals;
-  const total = row([
-    ...(all ? [cell('')] : []),
-    cell('Total'),
-    cell(''),
-    cell(t.unitCount, true),
-    cell(''),
-    cell(t.totalWeightLbs, true),
-    cell(''),
-    cell(t.extendedCostMinor / 100, true),
-    cell(''),
-    cell(''),
-  ]);
+  // Addresses side by side, as they appear on the PDF, rather than stacked — the
+  // sheet should be recognisable as the same document.
+  const depth = Math.max(...m.addresses.map((a) => a.lines.length), 0);
+  body.push(row(m.addresses.map((a) => cell(a.title, 'lbl'))));
+  for (let i = 0; i < depth; i++) body.push(row(m.addresses.map((a) => cell(a.lines[i] ?? ''))));
+  body.push(blank);
+
+  m.meta.forEach((x) => body.push(row([cell(x.label, 'lbl'), cell(x.value, 'b')])));
+  body.push(blank);
+
+  if (m.questions.length) {
+    body.push(heading('Vendor questions'));
+    m.questions.forEach((q) => body.push(row([cell(q.label, 'lbl'), cell(q.value, 'b')])));
+    body.push(blank);
+  }
+
+  body.push(row(m.columns.map((h) => cell(h, 'th'))));
+  m.rows.forEach((r) => body.push(row(r.map((v) => cell(v)))));
+  body.push(row(m.totals.map((v) => cell(v, 'b'))));
+
+  if (m.notes) {
+    body.push(blank);
+    body.push(heading('Notes'));
+    m.notes.split('\n').forEach((line) => body.push(row([cell(line)])));
+  }
+
+  body.push(blank);
+  body.push(row([cell(m.footer)]));
 
   return `<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
-<Worksheet ss:Name="Bill of Materials"><Table>${meta.join('')}${head}${body.join('')}${total}</Table></Worksheet>
+<Styles>
+  <Style ss:ID="title"><Font ss:Bold="1" ss:Size="14"/></Style>
+  <Style ss:ID="h"><Font ss:Bold="1" ss:Size="11"/></Style>
+  <Style ss:ID="th"><Font ss:Bold="1"/><Interior ss:Color="#F2F3EF" ss:Pattern="Solid"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="2"/></Borders></Style>
+  <Style ss:ID="lbl"><Font ss:Color="#5C6157"/></Style>
+  <Style ss:ID="b"><Font ss:Bold="1"/></Style>
+</Styles>
+<Worksheet ss:Name="Bill of Materials"><Table>${body.join('')}</Table></Worksheet>
 </Workbook>`;
 }
 
