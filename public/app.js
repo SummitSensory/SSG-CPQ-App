@@ -3051,6 +3051,75 @@
     });
   }
 
+  /* --- Freight: weight out to monday.com, amount back --- */
+
+  /**
+   * Request Freight and the amount beside it. Red until the request has actually
+   * reached the board, green afterwards — the colour reports what monday.com holds,
+   * not that the button was clicked, so a failed push stays red.
+   *
+   * The amount is pulled on demand rather than polled: it is entered by the freight
+   * desk hours or days later, and a stale cached number on a customer proposal is
+   * worse than an empty one.
+   */
+  function freightControlsHtml() {
+    var sent = !!pb.meta.freightRequestedAt;
+    var busy = pb.meta.freightBusy || '';
+    var quote = pb.meta.freightQuoteMinor;
+    var amtLabel = quote != null ? fmtMoney(quote, 'USD') : (pb.meta.freightPending ? 'Awaiting the desk' : 'Not pulled yet');
+    return '<div style="display:flex;align-items:stretch;gap:10px;">' +
+      '<button class="btn" id="bFreightReq" style="width:auto;padding:9px 16px;background:' + (sent ? '#2f6b4f' : '#9c3327') + ';border-color:transparent;">' +
+        (busy === 'req' ? 'Sending\u2026' : (sent ? '\u2713 Freight Requested' : 'Request Freight')) +
+      '</button>' +
+      '<button class="link-btn" id="bFreightAmt" style="width:auto;padding:6px 14px;text-align:left;line-height:1.25;">' +
+        '<span style="display:block;font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Freight amount</span>' +
+        '<span style="display:block;font-size:14px;font-weight:600;color:' + (quote != null ? '#20241f' : '#8a8f85') + ';">' +
+          (busy === 'amt' ? 'Checking\u2026' : esc(amtLabel)) +
+        '</span>' +
+      '</button>' +
+    '</div>';
+  }
+
+  function freightItemId() {
+    var id = String(pb.meta.projectId || '').trim();
+    return /^\d{4,}$/.test(id) ? id : '';
+  }
+
+  async function requestFreight() {
+    var item = freightItemId();
+    if (!item) return alert('This proposal needs its Project ID — that is the monday.com deal item the weight is written to.');
+    var t = builderTotals();
+    pb.meta.freightBusy = 'req'; renderBuilderKeepingFocus();
+    var r = await authed('/proposals/' + pb.proposalId + '/freight-request', {
+      method: 'POST',
+      body: { itemId: item, weightLb: Math.round((Number(t.weight) || 0) * 100) / 100, linesMissingWeight: t.weightMissing || 0 },
+    });
+    pb.meta.freightBusy = '';
+    if (!r.ok) { renderBuilderKeepingFocus(); return alert('monday.com did not accept the request (' + r.status + '). The button stays red — nothing was written.'); }
+    var d = await r.json();
+    pb.meta.freightRequestedAt = d.requestedAt;
+    pb.meta.freightRequestedWeight = d.weightLb;
+    renderBuilderKeepingFocus();
+  }
+
+  async function pullFreightAmount() {
+    var item = freightItemId();
+    if (!item) return alert('This proposal needs its Project ID — that is the monday.com deal item the amount is read from.');
+    pb.meta.freightBusy = 'amt'; renderBuilderKeepingFocus();
+    var r = await authed('/proposals/' + pb.proposalId + '/freight-amount?itemId=' + encodeURIComponent(item));
+    pb.meta.freightBusy = '';
+    if (!r.ok) { renderBuilderKeepingFocus(); return alert('Could not read the freight amount from monday.com (' + r.status + ').'); }
+    var d = await r.json();
+    pb.meta.freightPending = !!d.pending;
+    if (d.amountMinor != null) {
+      pb.meta.freightQuoteMinor = d.amountMinor;
+      // The amount the desk quoted IS the structure crating and freight line — the
+      // proposal total should not need it typed a second time.
+      pb.meta.structureFreightMinor = d.amountMinor;
+    }
+    renderBuilderKeepingFocus();
+  }
+
   /** Pull catalog price, cost and weight onto the lines that are missing them. */
   function repullCatalogFigures() {
     var stale = stalePricedLines();
@@ -3216,12 +3285,15 @@
         // sum of the lines, and a typed override would quietly disagree with them.
         // The zero-weight count is shown because a missing weight understates crating
         // and freight, and a total that looks complete hides that.
-        '<div style="display:flex;align-items:baseline;gap:10px;margin-top:14px;padding:10px 12px;background:#f7f8f4;border:1px solid #eef0ea;border-radius:9px;">' +
-          '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Estimated shipment weight</div>' +
-          '<div style="font-size:16px;font-weight:600;">' + (Number(t.weight) || 0).toFixed(2) + ' lb</div>' +
-          (t.weightMissing
-            ? '<div style="font-size:11.5px;color:#8a5a12;">' + t.weightMissing + ' line' + (t.weightMissing === 1 ? '' : 's') + ' have no weight on record — the total is low</div>'
-            : '<div class="muted" style="font-size:11.5px;">Sum of all included lines</div>') +
+        '<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:14px;padding:10px 12px;background:#f7f8f4;border:1px solid #eef0ea;border-radius:9px;">' +
+          '<div style="display:flex;align-items:baseline;gap:10px;flex:1;min-width:260px;">' +
+            '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Estimated shipment weight</div>' +
+            '<div style="font-size:16px;font-weight:600;">' + (Number(t.weight) || 0).toFixed(2) + ' lb</div>' +
+            (t.weightMissing
+              ? '<div style="font-size:11.5px;color:#8a5a12;">' + t.weightMissing + ' line' + (t.weightMissing === 1 ? '' : 's') + ' have no weight on record — the total is low</div>'
+              : '<div class="muted" style="font-size:11.5px;">Sum of all included lines</div>') +
+          '</div>' +
+          freightControlsHtml() +
         '</div>' +
         '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:8px;cursor:pointer;"><input type="checkbox" id="mShowProj"' + (pb.meta.showProjectId ? ' checked' : '') + '> Show Project ID on the customer proposal</label>' +
       '</div>' +
@@ -3479,6 +3551,8 @@
     var mmf = document.getElementById('mMatsFreight'); if (mmf) mmf.addEventListener('change', function () { pb.meta.matsFreightMinor = d2m(mmf.value); renderBuilderKeepingFocus(); });
     var brp = document.getElementById('bRepull');
     if (brp) brp.addEventListener('click', repullCatalogFigures);
+    var bfr = document.getElementById('bFreightReq'); if (bfr) bfr.addEventListener('click', requestFreight);
+    var bfa = document.getElementById('bFreightAmt'); if (bfa) bfa.addEventListener('click', pullFreightAmount);
     // line field inputs
     document.querySelectorAll('.bF').forEach(function (el) {
       var handler = function () {
