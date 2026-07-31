@@ -28,7 +28,6 @@ import { registerBomRoutes } from './routes/bom.js';
 import { registerFinanceRoutes } from './routes/finance.js';
 import { registerRenderRoutes } from './routes/render.js';
 import { registerFreightRoutes } from './routes/freight.js';
-import { registerFinancingRoutes } from './routes/financing.js';
 import { registerWebhookRoutes } from './routes/webhooks.js';
 import { registerReportRoutes } from './routes/reports.js';
 import { registerStandardNoteRoutes } from './routes/standardNotes.js';
@@ -95,7 +94,6 @@ export function buildApp(): FastifyInstance {
   registerFinanceRoutes(app);
   registerRenderRoutes(app);
   registerFreightRoutes(app);
-  registerFinancingRoutes(app);
   registerReportRoutes(app);
   registerStandardNoteRoutes(app);
   registerFormulaRoutes(app);

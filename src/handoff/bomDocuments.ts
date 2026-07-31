@@ -197,7 +197,7 @@ async function buildModel(
     meta,
     questions: extras?.answers ?? [],
     columns,
-    rows,
+    groups,
     totals,
     // Line notes move here from their own column. Prefixed with the part number so a
     // note is still attached to something once it is out of the table.
