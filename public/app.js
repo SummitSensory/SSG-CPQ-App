@@ -2498,9 +2498,18 @@
           : '<button class="link-btn" data-open="view" data-vid="' + v.id + '" style="width:auto;padding:8px 15px;">View (read only)</button>';
         return '<tr>' + td('v' + v.version) + td('<span class="chip">' + titleCase(v.status) + '</span>') + td(fmtDate(v.createdAt)) + td(v.frozen ? 'Yes' : 'No') + td('<div style="display:flex;justify-content:flex-end;">' + action + '</div>') + '</tr>';
       }).join(''), 5, '')) +
+      (hasRole(PROP_WRITE, user.role)
+        ? sectionBlock('Send to the customer',
+          '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">' +
+            '<button class="btn" id="propSendDocs" style="width:auto;padding:10px 17px;">Send documents…</button>' +
+            '<div class="muted" style="font-size:12.5px;max-width:520px;line-height:1.55;">Choose the proposal, the financing options, or both. Every send is recorded with the recipient and the date.</div>' +
+          '</div>')
+        : '') +
       sectionBlock('Financing options', '<div id="finBox"><div class="muted" style="padding:16px;">Loading…</div></div>') +
       (actions ? sectionBlock('Actions', '<div style="display:flex;gap:8px;flex-wrap:wrap;" id="propActions">' + actions + '</div>') : '');
     document.getElementById('propBack').addEventListener('click', function () { renderProposals(user); });
+    var psd = document.getElementById('propSendDocs');
+    if (psd) psd.addEventListener('click', function () { openSendDocuments(p, finCache, 'customer'); });
     loadFinancing(p, user);
     document.querySelectorAll('[data-open]').forEach(function (bt) {
       bt.addEventListener('click', function () {
@@ -2966,7 +2975,7 @@
     }
     pb = {
       proposalId: proposal.id, versionId: version.id, user: user, orgName: orgName, stdNotes: stdNotes,
-      title: proposal.title || '', number: proposal.number || '',
+      title: proposal.title || '', number: proposal.number || '', version: version.version || 1,
       meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', billSameAsShip: !meta.billTo || meta.billTo === (meta.shipTo || orgShipTo || ''), showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7), footerNotes: footerNotes },
       lines: lines,
     };
@@ -3612,6 +3621,14 @@
 
   /* --- Proposal preview (PDF-style) --- */
   async function previewProposal(proposal, version) {
+    previewProposalDoc(await proposalDocData(proposal, version));
+  }
+
+  /**
+   * Everything the proposal document needs, assembled from a version. Shared by the
+   * preview and the send path so both produce the same figures.
+   */
+  async function proposalDocData(proposal, version) {
     var orgName = '';
     try { var ro = await authed('/crm/organizations?pageSize=100'); if (ro.ok) { var f = ((await ro.json()).items || []).filter(function (o) { return o.id === proposal.organizationId; })[0]; orgName = f ? f.name : ''; } } catch (e) {}
     var secs = version.sections || []; var metaSec = Array.isArray(secs) ? secs.filter(function (s) { return s && s.id === 'meta'; })[0] : null;
@@ -3623,11 +3640,25 @@
     var tax = Number(meta.taxAmountMinor) || 0;
     var structureFreight = Number(meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0)); var matsFreight = Number(meta.matsFreightMinor) || 0;
     var total = subtotal - discount + tpFreight + tax + structureFreight + matsFreight;
-    previewProposalDoc({ title: proposal.title, number: proposal.number, orgName: orgName, meta: meta, lines: lines, totals: { subtotal: subtotal, discountPct: discountPct, discount: discount, tpFreight: tpFreight, tax: tax, structureFreight: structureFreight, matsFreight: matsFreight, total: total, deposit: depositOf(total), weight: weight } });
+    return {
+      title: proposal.title, number: proposal.number, version: version.version || 1,
+      orgName: orgName, meta: meta, lines: lines,
+      totals: {
+        subtotal: subtotal, discountPct: discountPct, discount: discount, tpFreight: tpFreight,
+        tax: tax, structureFreight: structureFreight, matsFreight: matsFreight,
+        total: total, deposit: depositOf(total), weight: weight,
+      },
+    };
   }
 
-  function previewProposalDoc(doc) {
-    ensurePrintStyle();
+  /**
+   * The customer proposal as a self-contained HTML string.
+   *
+   * Extracted from the preview so the SAME markup can be sent to the server and
+   * rendered to PDF there. Two renderers for one document is exactly how the BOM's
+   * Excel export drifted away from its PDF, and I am not repeating it.
+   */
+  function proposalDocHtml(doc) {
     var d = doc, m = d.meta || {}, t = d.totals || {};
     // Tax and freight are frequently unknown when a proposal goes out. Showing a
     // hard $0.00 reads as "free"; TBD states the truth.
@@ -3700,7 +3731,12 @@
           '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;">' +
           '<div style="display:flex;flex-direction:column;">' +
           '<div style="display:flex;gap:14px;align-items:center;"><img src="logo.png" alt="Summit Sensory Gym" width="84" height="84" style="width:84px;height:84px;display:block;"><div><div style="font-family:\'Newsreader\',serif;font-weight:600;font-size:19px;">Summit Sensory Gym</div><div style="font-size:11px;color:#8a8f85;line-height:1.5;margin-top:2px;">6150 S Geneva Ct, Englewood, CO 80111<br>(720) 457-5500 · Sales@SummitSensory.com</div></div></div>' + preparedBy + '</div>' +
-          '<div style="text-align:right;"><div style="font-family:\'Newsreader\',serif;font-size:22px;font-weight:600;">Proposal</div><div style="font-size:11.5px;color:#5c6157;margin-top:4px;">' + esc(d.number || '') + '</div>' +
+          '<div style="text-align:right;"><div style="font-family:\'Newsreader\',serif;font-size:22px;font-weight:600;">Proposal</div><div style="font-size:11.5px;color:#5c6157;margin-top:4px;">' + esc(d.number || '') +
+            // The number stays constant across revisions so both sides can say "P-2026-000021"
+            // and mean the project. The revision is what distinguishes the documents, so it
+            // prints beside it — and only from v2, because a first proposal is not a revision
+            // of anything and "Revision 1" on it just invites the question.
+            ((Number(d.version) || 1) > 1 ? ' · Revision ' + (Number(d.version) - 1) : '') + '</div>' +
             '<div style="font-size:11px;color:#5c6157;margin-top:8px;line-height:1.7;">' +
               '<div>Proposal Date: <b style="color:#20241f;">' + (m.proposalDate ? fmtDate(m.proposalDate) : fmtDate(new Date().toISOString())) + '</b></div>' +
               (m.expiration ? '<div>Expiration Date: <b style="color:#20241f;">' + fmtDate(m.expiration) + '</b></div>' : '') +
@@ -3736,6 +3772,26 @@
           '<div style="flex:0 0 150px;"><div style="border-bottom:1.5px solid #20241f;height:26px;"></div><div style="font-size:10.5px;color:#8a8f85;margin-top:5px;">Date</div></div>' +
         '</div>' + footerNotesHtml +
       '</div>';
+    return html;
+  }
+
+  /**
+   * A standalone document for the server renderer: the same markup, wrapped so it
+   * stands alone with no stylesheet, no fonts to fetch and no script. Georgia stands
+   * in for Newsreader — a webfont fetch inside a headless browser is the one thing
+   * that can hang a render, and the serif shape is what carries the brand here.
+   */
+  function proposalStandaloneHtml(doc) {
+    return '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(doc.title || 'Proposal') + '</title>' +
+      '<style>@page{margin:0.5in;}body{margin:0;font-family:-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;color:#20241f;}' +
+      'tr{break-inside:avoid;}thead{display:table-header-group;}' +
+      "*[style*='Newsreader']{font-family:Georgia,serif !important;}</style></head><body>" +
+      proposalDocHtml(doc) + '</body></html>';
+  }
+
+  function previewProposalDoc(doc) {
+    ensurePrintStyle();
+    var html = proposalDocHtml(doc);
     var ov = document.createElement('div');
     ov.id = 'propPreviewOverlay';
     ov.style.cssText = 'position:fixed;inset:0;background:#e7e8e3;z-index:60;overflow:auto;padding:24px 16px;';
@@ -3746,7 +3802,7 @@
       // Browsers name the saved PDF after the document title, so set it for the print
       // and put it back afterwards.
       var prev = document.title;
-      document.title = proposalFileName(d);
+      document.title = proposalFileName(doc);
       var restore = function () { document.title = prev; window.removeEventListener('afterprint', restore); };
       window.addEventListener('afterprint', restore);
       window.print();
@@ -3775,7 +3831,8 @@
     var now = new Date();
     var p2 = function (v) { return String(v).length < 2 ? '0' + v : String(v); };
     var today = p2(now.getMonth() + 1) + p2(now.getDate()) + now.getFullYear();
-    return [d.orgName || 'Proposal', model, size, d.number || '', today]
+    var rev = (Number(d.version) || 1) > 1 ? 'Rev' + (Number(d.version) - 1) : '';
+    return [d.orgName || 'Proposal', model, size, d.number || '', rev, today]
       .filter(Boolean).join('-')
       .replace(/[\\/:*?"<>|]+/g, '')
       .replace(/\s{2,}/g, ' ')
@@ -5517,10 +5574,12 @@
    * Computed entirely from the proposal total: there is no document to create and
    * nothing to fill in. Payments come from the lessor's published payment factors,
    * editable under Administration → Financing. */
+  var finCache = null;
   async function loadFinancing(p, user) {
     var box = document.getElementById('finBox'); if (!box) return;
     var d = null;
     try { var r = await authed('/proposals/' + p.id + '/financing'); if (r.ok) d = await r.json(); } catch (e) {}
+    finCache = d;
     if (!d) { box.innerHTML = '<div class="placeholder" style="padding:18px;"><p class="muted" style="margin:0;">No released version to quote from yet.</p></div>'; return; }
     var q = d.quote, s = q.section179;
     var m0 = function (x) { return '$' + Math.round(Number(x || 0) / 100).toLocaleString(); };
@@ -5548,7 +5607,10 @@
       '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
         '<button class="link-btn" id="finPreview" style="width:auto;padding:9px 15px;">Preview the sheet</button>' +
         '<button class="link-btn" id="finPdf" style="width:auto;padding:9px 15px;">Download PDF</button>' +
-        (hasRole(PROP_WRITE, user.role) ? '<button class="btn" id="finSend" style="width:auto;padding:9px 15px;">Send to Ryan Capital</button>' : '') +
+        (hasRole(PROP_WRITE, user.role)
+          ? '<button class="link-btn" id="finSendCust" style="width:auto;padding:9px 15px;">Send to the customer</button>' +
+            '<button class="btn" id="finSend" style="width:auto;padding:9px 15px;">Send to Ryan Capital</button>'
+          : '') +
       '</div>';
 
     document.getElementById('finPreview').addEventListener('click', async function () {
@@ -5567,27 +5629,141 @@
       bt.disabled = false; bt.textContent = 'Download PDF';
     });
     var sb = document.getElementById('finSend');
-    if (sb) sb.addEventListener('click', function () { openFinancingSend(p, d); });
+    if (sb) sb.addEventListener('click', function () { openSendDocuments(p, d, 'partner'); });
+    var sc = document.getElementById('finSendCust');
+    // Financing only, to the customer — the "they asked about payments" case, weeks
+    // after the proposal already went out.
+    if (sc) sc.addEventListener('click', function () { openSendDocuments(p, d, 'financing'); });
   }
 
-  function openFinancingSend(p, d) {
-    openModal('Send to Ryan Capital',
-      '<div class="muted" style="font-size:13px;margin-bottom:12px;line-height:1.55;">Sends the financing sheet for ' + esc(d.proposal.number) + ' to the financing partner. Replies come back to you, not the shared inbox.</div>' +
-      fieldRow('To', '<input id="finTo" value="ckinsey@ryancapital.com" style="' + IN + '">') +
-      fieldRow('Cc', '<input id="finCc" placeholder="Optional" style="' + IN + '">') +
-      fieldRow('Anything to add?', '<textarea id="finMsg" rows="4" placeholder="Optional — appears above the project details" style="' + IN + 'resize:vertical;"></textarea>'),
+  /**
+   * One dialog for sending the customer's documents.
+   *
+   * Both jobs live here on purpose: "proposal and financing together" and "financing
+   * on its own, weeks later, because they asked" are the same act with different
+   * boxes ticked. Two separate flows would drift, and one would become the neglected
+   * one that nobody trusts.
+   *
+   * `preset` chooses what it opens with — 'customer', 'financing' (customer, sheet
+   * only) or 'partner' (Ryan Capital).
+   */
+  async function openSendDocuments(p, fin, preset) {
+    var ctx = { contacts: [], partnerEmail: 'ckinsey@ryancapital.com', history: [] };
+    try { var rc = await authed('/proposals/' + p.id + '/send-context'); if (rc.ok) ctx = await rc.json(); } catch (e) {}
+
+    var toPartner = preset === 'partner';
+    var wantProposal = preset !== 'financing';
+    var wantFinancing = preset === 'financing' || preset === 'partner';
+    var hasFinancing = !!(fin && fin.quote && fin.quote.terms && fin.quote.terms.length);
+    var dm = ctx.contacts.filter(function (c) { return c.isDecisionMaker; })[0] || ctx.contacts[0];
+    var defaultTo = toPartner ? ctx.partnerEmail : (dm ? dm.email : '');
+
+    // Past sends, newest first. Without this someone re-sends a proposal the customer
+    // already has, or hesitates to send one they never got.
+    var histHtml = (ctx.history || []).length
+      ? '<div style="margin-top:14px;padding-top:12px;border-top:1px solid #e7e8e3;">' +
+          '<div class="k" style="margin-bottom:6px;">Already sent</div>' +
+          ctx.history.slice(0, 5).map(function (h) {
+            var det = h.details || {};
+            var who = Array.isArray(det.to) ? det.to.join(', ') : (det.to || '');
+            var docs = Array.isArray(det.documents) ? det.documents.length + ' file' + (det.documents.length === 1 ? '' : 's') : 'financing sheet';
+            return '<div style="font-size:12px;color:' + (h.failed ? '#9c3327' : '#5c6157') + ';line-height:1.6;">' +
+              (h.failed ? '✕ Failed — ' : '✓ ') + esc(docs) + ' to ' + esc(who) +
+              ' · ' + fmtDate(h.at) + (h.by ? ' · ' + esc(h.by) : '') + '</div>';
+          }).join('') +
+        '</div>'
+      : '';
+
+    var contactChips = ctx.contacts.length
+      ? '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:7px;">' +
+          ctx.contacts.map(function (c) {
+            return '<button type="button" class="sdWho link-btn" data-email="' + esc(c.email) + '" style="width:auto;padding:5px 10px;font-size:12px;">' +
+              esc(c.name || c.email) + (c.isDecisionMaker ? ' ★' : '') + '</button>';
+          }).join('') +
+          '<button type="button" class="sdWho link-btn" data-email="' + esc(ctx.partnerEmail) + '" style="width:auto;padding:5px 10px;font-size:12px;">Ryan Capital</button>' +
+        '</div>'
+      : '';
+
+    var check = function (id, on, label, note, disabled) {
+      return '<label style="display:flex;gap:9px;align-items:flex-start;padding:10px 12px;border:1px solid #e7e8e3;border-radius:9px;background:' + (disabled ? '#f4f5f1' : '#fff') + ';' + (disabled ? 'opacity:.6;' : 'cursor:pointer;') + '">' +
+        '<input type="checkbox" id="' + id + '"' + (on ? ' checked' : '') + (disabled ? ' disabled' : '') + ' style="margin-top:2px;">' +
+        '<span><b style="font-weight:600;font-size:13px;">' + label + '</b>' +
+        '<div class="muted" style="font-size:11.5px;line-height:1.5;margin-top:1px;">' + note + '</div></span></label>';
+    };
+
+    openModal('Send documents',
+      '<div class="muted" style="font-size:13px;margin-bottom:12px;line-height:1.55;">' +
+        'Attaches the documents as PDFs. Replies come back to your orders inbox.</div>' +
+      '<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px;">' +
+        check('sdProp', wantProposal, 'Proposal', 'The customer document, exactly as the preview shows it.') +
+        check('sdFin', wantFinancing && hasFinancing, 'Financing options',
+          hasFinancing ? 'Monthly payments and the Section 179 position, calculated from this proposal.' : 'Not available until the proposal has a saved price.',
+          !hasFinancing) +
+      '</div>' +
+      fieldRow('To', '<input id="sdTo" value="' + esc(defaultTo) + '" placeholder="name@company.com" style="' + IN + '">' + contactChips) +
+      fieldRow('Cc', '<input id="sdCc" placeholder="Optional — comma separated" style="' + IN + '">') +
+      fieldRow('Subject', '<input id="sdSubject" placeholder="Leave blank for the default" style="' + IN + '">') +
+      fieldRow('Message', '<textarea id="sdMsg" rows="5" placeholder="Leave blank for a short default note" style="' + IN + 'resize:vertical;"></textarea>') +
+      histHtml,
       async function (close, showErr) {
-        var r = await authed('/proposals/' + p.id + '/financing/send', {
-          method: 'POST',
-          body: {
-            to: document.getElementById('finTo').value.trim(),
-            cc: document.getElementById('finCc').value.trim(),
-            message: document.getElementById('finMsg').value,
-          },
-        });
+        var wantP = document.getElementById('sdProp').checked;
+        var wantF = document.getElementById('sdFin').checked;
+        if (!wantP && !wantF) return showErr('Choose at least one document to send.');
+        var to = document.getElementById('sdTo').value.trim();
+        if (!to) return showErr('Give a recipient.');
+
+        var body = {
+          to: to,
+          cc: document.getElementById('sdCc').value.trim(),
+          subject: document.getElementById('sdSubject').value.trim(),
+          message: document.getElementById('sdMsg').value,
+          includeProposal: wantP,
+          includeFinancing: wantF,
+        };
+
+        // The proposal PDF is rendered from the markup the browser already builds for
+        // the preview, so the customer receives the document they were shown.
+        if (wantP) {
+          var doc = await buildProposalDocForSend(p);
+          if (!doc) return showErr('Could not prepare the proposal. Open the proposal preview once, then try again.');
+          body.proposalHtml = doc.html;
+          body.proposalFilename = doc.filename;
+        }
+
+        var r = await authed('/proposals/' + p.id + '/send-documents', { method: 'POST', body: body });
         if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} return showErr(m || 'Could not send.'); }
-        close(); alert('Sent to ' + document.getElementById('finTo').value.trim() + '.');
+        var out = await r.json();
+        close();
+        alert('Sent to ' + out.to.join(', ') + ':\n' + out.documents.join('\n'));
       }, 'Send');
+
+    document.querySelectorAll('.sdWho').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var el = document.getElementById('sdTo');
+        var cur = el.value.split(',').map(function (x) { return x.trim(); }).filter(Boolean);
+        var em = b.getAttribute('data-email');
+        // Toggle rather than replace: sending to two people at a customer is normal.
+        if (cur.indexOf(em) === -1) cur.push(em); else cur = cur.filter(function (x) { return x !== em; });
+        el.value = cur.join(', ');
+      });
+    });
+  }
+
+  /**
+   * Build the proposal document for sending: load the current version, assemble the
+   * same markup the preview uses, and wrap it to stand alone.
+   */
+  async function buildProposalDocForSend(p) {
+    try {
+      var rv = await authed('/proposals/' + p.id);
+      if (!rv.ok) return null;
+      var full = await rv.json();
+      var versions = (full.versions || []).slice().sort(function (x, y) { return y.version - x.version; });
+      var v = versions[0];
+      if (!v) return null;
+      var doc = await proposalDocData(full, v);
+      return { html: proposalStandaloneHtml(doc), filename: proposalFileName(doc) };
+    } catch (e) { return null; }
   }
 
   function downloadBlob(blob, filename) {

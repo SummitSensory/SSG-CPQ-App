@@ -32,6 +32,16 @@ export const FORMULA_SETTINGS: FormulaSettingDef[] = [
     unit: '0 = kit only, 1 = itemize', default: 0, min: 0, max: 1, step: 1, group: 'Hardware kit',
   },
   {
+    key: 'financeTaxRatePct', label: 'Customer tax rate for Section 179',
+    help: 'Used only on the Ryan Capital financing sheet, to estimate the first-year tax saving. It is the CUSTOMER’s effective rate, not ours, so it is an illustration — the sheet says so and tells them to confirm it with their accountant.',
+    unit: '%', default: 21, min: 0, max: 60, step: 0.5, group: 'Financing',
+  },
+  {
+    key: 'section179CapDollars', label: 'Section 179 annual limit',
+    help: 'The most a business can expense in one year. Changes most years, which is why it lives here. A purchase above the limit is only deductible up to it, and the financing sheet states that rather than overstating the saving.',
+    unit: '$', default: 1000000, min: 0, max: 10000000, step: 1000, group: 'Financing',
+  },
+  {
     key: 'legsSmallMaxFt', label: 'Small frame up to', help: 'Frames up to this length use the small leg count.',
     unit: 'ft', default: 10, min: 1, max: 100, step: 1, group: 'Leg count by frame length',
   },

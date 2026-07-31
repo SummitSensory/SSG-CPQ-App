@@ -1,182 +1,122 @@
 import { prisma } from '../lib/prisma.js';
-import { NotFoundError } from '../lib/errors.js';
 
 /**
  * Ryan Capital financing options.
  *
- * Payments are quoted from a PAYMENT FACTOR per term, not an interest rate:
+ * Lessors quote from a PAYMENT FACTOR, not an interest rate: the monthly payment is
+ * the financed amount multiplied by a published factor for that term. The factor is
+ * therefore the editable unit (Administration → Financing) — deriving one from an
+ * APR would introduce a compounding convention Ryan Capital has not agreed to, and
+ * the number on the sheet would stop matching the number they quote.
  *
- *     monthly payment = amount financed x factor
- *
- * That is how equipment lessors publish their pricing, and it is the number the
- * partner gives us — deriving it from an APR would mean guessing at their
- * compounding and fee structure and printing a payment they would not honour. The
- * factors are editable under Administration -> Financing.
- *
- * Everything on the sheet is computed from the proposal total. There is nothing
- * to fill in.
+ * Everything here is derived from the accepted proposal total. There is no data
+ * entry: the document exists the moment a proposal has a price.
  */
-
-/** Fallbacks matching the partner's published sheet, used if the table is empty. */
-const FALLBACK_FACTORS: Array<{ termMonths: number; factor: number }> = [
-  { termMonths: 12, factor: 0.0907 },
-  { termMonths: 24, factor: 0.04708 },
-  { termMonths: 36, factor: 0.0327 },
-  { termMonths: 48, factor: 0.02553 },
-  { termMonths: 60, factor: 0.02124 },
-];
-
-/**
- * Section 179 lets a business deduct qualifying equipment in the year it is
- * placed in service, up to a cap. Both numbers move — the cap is indexed
- * annually and the rate depends on the buyer — so both are settings.
- */
-export const FINANCE_SETTINGS = [
-  {
-    key: 'section179Cap',
-    label: 'Section 179 deduction cap',
-    help: 'The maximum equipment cost a business can deduct in the first year. Indexed for inflation each year by the IRS — check it every January.',
-    unit: 'dollars',
-    default: 1_000_000,
-    min: 0,
-    max: 10_000_000,
-    step: 1000,
-  },
-  {
-    key: 'taxRate',
-    label: 'Assumed tax rate',
-    help: 'Used to estimate the cash value of the Section 179 deduction. 21% is the federal corporate rate; a pass-through buyer’s effective rate differs, so the sheet prints this as an estimate.',
-    unit: 'percent',
-    default: 21,
-    min: 0,
-    max: 60,
-    step: 0.5,
-  },
-] as const;
 
 export interface FinanceTerm {
   termMonths: number;
+  /** Payment per $1 financed, e.g. 0.0327 for 36 months. */
   factor: number;
   monthlyPaymentMinor: number;
   totalOfPaymentsMinor: number;
-  costOfFinancingMinor: number;
+  /** Total of payments less the amount financed — the cost of financing, not interest. */
+  financeChargeMinor: number;
+}
+
+export interface Section179 {
+  taxRatePct: number;
+  capMinor: number;
+  /** The portion of the purchase that can be expensed this year. */
+  deductionMinor: number;
+  estimatedSavingsMinor: number;
+  /** Purchase price less the tax saving. */
+  netCostMinor: number;
+  /** True when the purchase exceeds the cap and is only partly deductible. */
+  exceedsCap: boolean;
 }
 
 export interface FinanceQuote {
-  amountFinancedMinor: number;
+  amountMinor: number;
   terms: FinanceTerm[];
-  section179: {
-    /** The deductible portion — the equipment cost, capped. */
-    deductionMinor: number;
-    capMinor: number;
-    taxRatePct: number;
-    /** Estimated cash value of the deduction. */
-    estimatedSavingsMinor: number;
-    netCostMinor: number;
-    /** True when the purchase exceeds the cap, so the sheet can say so plainly. */
-    exceedsCap: boolean;
-  };
+  section179: Section179;
 }
 
-export async function loadFactors(): Promise<Array<{ termMonths: number; factor: number }>> {
+/** The two business numbers behind the tax panel, both admin-editable. */
+export interface FinanceSettings {
+  taxRatePct: number;
+  section179CapMinor: number;
+}
+
+export const FINANCE_DEFAULTS: FinanceSettings = {
+  // The figure the example sheet was built on.
+  taxRatePct: 21,
+  // 2025 Section 179 limit. It changes most years, which is why it is editable.
+  section179CapMinor: 1_000_000_00,
+};
+
+const round = (n: number): number => Math.round(n);
+
+/**
+ * Build every financing option for an amount.
+ *
+ * Terms come from the database so a factor change reaches the next document with no
+ * deploy. An amount of zero returns no terms rather than a table of $0.00 rows — a
+ * proposal with no price has nothing to finance, and printing zeros invites someone
+ * to send it anyway.
+ */
+export async function quoteFinancing(
+  amountMinor: number,
+  settings?: Partial<FinanceSettings>,
+): Promise<FinanceQuote> {
   const rows = await prisma.financeFactor.findMany({
     where: { active: true },
     orderBy: [{ sortOrder: 'asc' }, { termMonths: 'asc' }],
   });
-  if (!rows.length) return FALLBACK_FACTORS;
-  return rows.map((r) => ({ termMonths: r.termMonths, factor: Number(r.factor) }));
-}
 
-/**
- * Reuses the FormulaSetting table the proposal maths already uses, namespaced
- * under `finance.` — a second settings table would be the same shape with a
- * different name and one more thing to keep in step.
- */
-async function loadSetting(key: string, fallback: number): Promise<number> {
-  const row = await prisma.formulaSetting.findUnique({ where: { key: `finance.${key}` } }).catch(() => null);
-  if (!row) return fallback;
-  const n = Number(row.value);
-  return Number.isFinite(n) ? n : fallback;
-}
+  const taxRatePct = settings?.taxRatePct ?? FINANCE_DEFAULTS.taxRatePct;
+  const capMinor = settings?.section179CapMinor ?? FINANCE_DEFAULTS.section179CapMinor;
 
-/**
- * Build the whole quote from one number: the proposal total in minor units.
- *
- * Rounding is to the cent at each payment, then multiplied out — a lessor quotes
- * a real monthly payment, so the total of payments must be that payment times the
- * term, not an unrounded product.
- */
-export async function quoteFinancing(amountFinancedMinor: number): Promise<FinanceQuote> {
-  const [factors, capDollars, taxRatePct] = await Promise.all([
-    loadFactors(),
-    loadSetting('section179Cap', 1_000_000),
-    loadSetting('taxRate', 21),
-  ]);
+  const amount = Math.max(0, round(amountMinor));
+  const terms: FinanceTerm[] = amount
+    ? rows.map((r) => {
+      const factor = Number(r.factor);
+      const monthlyMinor = round(amount * factor);
+      const totalOfPaymentsMinor = monthlyMinor * r.termMonths;
+      return {
+        termMonths: r.termMonths,
+        factor,
+        monthlyPaymentMinor: monthlyMinor,
+        totalOfPaymentsMinor,
+        financeChargeMinor: totalOfPaymentsMinor - amount,
+      };
+    })
+    : [];
 
-  const terms: FinanceTerm[] = factors.map((f) => {
-    const monthly = Math.round(amountFinancedMinor * f.factor);
-    const total = monthly * f.termMonths;
-    return {
-      termMonths: f.termMonths,
-      factor: f.factor,
-      monthlyPaymentMinor: monthly,
-      totalOfPaymentsMinor: total,
-      costOfFinancingMinor: total - amountFinancedMinor,
-    };
-  });
-
-  const capMinor = Math.round(capDollars * 100);
-  const deductionMinor = Math.min(amountFinancedMinor, capMinor);
-  const estimatedSavingsMinor = Math.round(deductionMinor * (taxRatePct / 100));
+  // Section 179 expenses the equipment cost in year one, up to the annual cap. Above
+  // the cap only the cap is deductible, and the sheet says so rather than quietly
+  // overstating the saving.
+  const deductionMinor = Math.min(amount, capMinor);
+  const estimatedSavingsMinor = round(deductionMinor * (taxRatePct / 100));
 
   return {
-    amountFinancedMinor,
+    amountMinor: amount,
     terms,
     section179: {
-      deductionMinor,
-      capMinor,
       taxRatePct,
+      capMinor,
+      deductionMinor,
       estimatedSavingsMinor,
-      netCostMinor: amountFinancedMinor - estimatedSavingsMinor,
-      exceedsCap: amountFinancedMinor > capMinor,
+      netCostMinor: amount - estimatedSavingsMinor,
+      exceedsCap: amount > capMinor,
     },
   };
 }
 
-/** The quote for a proposal, with the customer and total it was built from. */
-export async function quoteForProposal(proposalId: string) {
-  const proposal = await prisma.proposal.findUnique({
-    where: { id: proposalId },
-    include: { versions: { orderBy: { version: 'desc' }, take: 1 } },
-  });
-  if (!proposal) throw new NotFoundError('Proposal not found');
-  const version = proposal.versions[0];
-  if (!version) throw new NotFoundError('That proposal has no versions yet');
-
-  // The total lives on the price snapshot, not the version — a version's `items`
-  // are the content, the snapshot is the priced result of them.
-  const snap = version.priceSnapshotId
-    ? await prisma.priceSnapshot.findUnique({ where: { id: version.priceSnapshotId }, select: { grandTotal: true } })
-    : null;
-  if (!snap) throw new NotFoundError('That proposal version has not been priced yet, so there is nothing to finance');
-
-  // Proposal carries organizationId without a relation, so the customer name is a
-  // second read rather than an include.
-  const org = await prisma.organization.findUnique({
-    where: { id: proposal.organizationId },
-    select: { name: true },
-  });
-
-  const total = Number(snap.grandTotal);
+/** The two settings keys, resolved from the admin store. */
+export function financeSettingsFrom(get: (k: string) => number): FinanceSettings {
   return {
-    proposal: {
-      id: proposal.id,
-      number: proposal.number,
-      title: proposal.title,
-      version: version.version,
-      customerName: org?.name ?? '',
-      grandTotalMinor: total,
-    },
-    quote: await quoteFinancing(total),
+    taxRatePct: get('financeTaxRatePct'),
+    // Stored in whole dollars for a legible admin field; the math works in minor units.
+    section179CapMinor: Math.round(get('section179CapDollars') * 100),
   };
 }

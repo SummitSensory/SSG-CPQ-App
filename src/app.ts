@@ -25,6 +25,7 @@ import { registerSkuRoutes } from './routes/skus.js';
 import { registerApprovalRoutes } from './routes/approvals.js';
 import { registerOrderRoutes } from './routes/orders.js';
 import { registerBomRoutes } from './routes/bom.js';
+import { registerFinanceRoutes } from './routes/finance.js';
 import { registerRenderRoutes } from './routes/render.js';
 import { registerFinancingRoutes } from './routes/financing.js';
 import { registerWebhookRoutes } from './routes/webhooks.js';
@@ -37,7 +38,10 @@ export function buildApp(): FastifyInstance {
   // Fastify infers pino's concrete Logger from `loggerInstance`, which is not
   // structurally assignable to the FastifyBaseLogger the register* helpers
   // expect. The instance is identical at runtime — this pins the public type.
-  const app = Fastify({ loggerInstance: logger }) as unknown as FastifyInstance;
+  // 8 MB body limit, up from Fastify's 1 MB default. The proposal send posts the
+  // rendered proposal HTML for server-side PDF, and a long itemized proposal with
+  // inline styles runs well past 1 MB — the default silently 413s the send.
+  const app = Fastify({ loggerInstance: logger, bodyLimit: 8 * 1024 * 1024 }) as unknown as FastifyInstance;
   app.register(helmet, {
     contentSecurityPolicy: {
       directives: {
@@ -87,6 +91,7 @@ export function buildApp(): FastifyInstance {
   registerApprovalRoutes(app);
   registerOrderRoutes(app);
   registerBomRoutes(app);
+  registerFinanceRoutes(app);
   registerRenderRoutes(app);
   registerFinancingRoutes(app);
   registerReportRoutes(app);

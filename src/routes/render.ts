@@ -68,4 +68,5 @@ export function registerRenderRoutes(app: FastifyInstance): void {
       .header('Content-Disposition', `attachment; filename="${bomFilename(order.number, vendor, org?.name ?? '')}.xls"`)
       .send(xml);
   });
+
 }
