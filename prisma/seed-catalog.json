@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-30T13:12:40.900Z",
+  "generatedAt": "2026-07-31T20:03:23.831Z",
   "source": "summit-product-tree-1-Revised-336bbf52.xlsx (Tree sheet, validated 2026-07-29)",
   "defaultEffectiveDate": "2026-07-25",
   "productLines": [
@@ -7523,310 +7523,301 @@
       "sortOrder": 30020
     },
     {
-      "slug": "adventure-series--hardware--hardware",
-      "name": "Hardware Product List",
-      "productLine": "Adventure Series",
-      "tierLevel": 2,
-      "parentSlug": "adventure-series--hardware",
-      "sku": null,
-      "sortOrder": 30030
-    },
-    {
       "slug": "adventure-series--hardware--hardware--6820h-lad",
       "name": "Playground Handles, Gate Handles 1 handle (B08K2V5G6T)",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LAD",
-      "sortOrder": 30040
+      "sortOrder": 30020020
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-lak",
       "name": "1/2\" x 4\" Strong-Tie THD50400H Titen HD Screw Anchor, Zinc",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LAK",
-      "sortOrder": 30050
+      "sortOrder": 30020030
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-lac-g",
       "name": "Eye Bolt - Fixed (for Quick Shift Saddle Bracket™)",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LAC-G",
-      "sortOrder": 30060
+      "sortOrder": 30020040
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-ly",
       "name": "Eye Bolt; 1/4-20 X 2 Length",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LY",
-      "sortOrder": 30070
+      "sortOrder": 30020050
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-lai",
       "name": "Quick Shift Bracket Bent Pin w / Lanyard",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LAI",
-      "sortOrder": 30080
+      "sortOrder": 30020060
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-lc",
       "name": "Hex Nylon Insert Lock Nut, Zinc Plated Grade 5 Steel, 1/2-13",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LC",
-      "sortOrder": 30090
+      "sortOrder": 30020070
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-lx",
       "name": "Flat Shoulder Rod End Bolt 5/16-18 X 1 Shank Thread",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LX",
-      "sortOrder": 30100
+      "sortOrder": 30020080
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-lf",
       "name": "Hex Nylon Insert Lock Nut, Zinc Plated Grade 5 Steel, 3/8-16",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LF",
-      "sortOrder": 30110
+      "sortOrder": 30020090
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-lb",
       "name": "Washer 1/2 Flat Zinc Plated Grade 5 Steel",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LB",
-      "sortOrder": 30120
+      "sortOrder": 30020100
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-la",
       "name": "Hex Bolt, Zinc Plated Grade 5 Steel, 1/2-13 X 4-1/2\"",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LA",
-      "sortOrder": 30130
+      "sortOrder": 30020110
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-lag",
       "name": "Hex Bolt, Zinc Plated Grade 5 Steel, 1/2-13 X 4\"",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LAG",
-      "sortOrder": 30140
+      "sortOrder": 30020120
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-lh",
       "name": "Tap Bolt, Zinc Plated Grade 5 Steel, 3/8-16 X 2-1/4\"",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LH",
-      "sortOrder": 30150
+      "sortOrder": 30020130
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-lg",
       "name": "Tap Bolt, Zinc Plated Grade 5 Steel, 3/8-16 X 1-3/4\"",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LG",
-      "sortOrder": 30160
+      "sortOrder": 30020140
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-li",
       "name": "Hex Bolt, Zinc Plated Grade 5 Steel, 1/4-20 X 2-3/4\"",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LI",
-      "sortOrder": 30170
+      "sortOrder": 30020150
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-lj",
       "name": "Hex Bolt, Zinc Plated Grade 5 Steel, 1/4-20 X 4\"",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LJ",
-      "sortOrder": 30180
+      "sortOrder": 30020160
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-lk",
       "name": "Uss Flat Washer, Zinc Plated Grade 5 Steel, 1/4",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LK",
-      "sortOrder": 30190
+      "sortOrder": 30020170
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-ll",
       "name": "Hex Nylon Insert Lock Nut, Zinc Plated Grade 5 Steel, 1/4-20",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LL",
-      "sortOrder": 30200
+      "sortOrder": 30020180
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-lt",
       "name": "Coupling Nut, Zinc Plated Steel, 5/16-18 X 1-3/4",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LT",
-      "sortOrder": 30210
+      "sortOrder": 30020190
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-lab",
       "name": "Hex Nut, Zinc Plated Grade 5 Steel, 5/16-18",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LAB",
-      "sortOrder": 30220
+      "sortOrder": 30020200
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-laa",
       "name": "Lock Washer, Zinc Plated Steel, 5/16",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LAA",
-      "sortOrder": 30230
+      "sortOrder": 30020210
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-lu",
       "name": "Uss Flat Washer, Zinc Plated Grade 5 Steel, 5/16",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LU",
-      "sortOrder": 30240
+      "sortOrder": 30020220
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-lv",
       "name": "Hex Bolt, Zinc Plated Grade 5 Steel, 5/16\"-18 X 1\"",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LV",
-      "sortOrder": 30250
+      "sortOrder": 30020230
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-lw",
       "name": "Hex Nylon Insert Lock Nut, Zinc Plated Grade 5 Steel, 5/16-18",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LW",
-      "sortOrder": 30260
+      "sortOrder": 30020240
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-lq",
       "name": "Tap Bolt, Zinc Plated Grade 5 Steel, 1/2-13 X 6\"",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LQ",
-      "sortOrder": 30270
+      "sortOrder": 30020250
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-lo",
       "name": "Hex Bolt, Zinc Plated Grade 5 Steel, 1/2-13 X 7\"",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LO",
-      "sortOrder": 30280
+      "sortOrder": 30020260
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-lr",
       "name": "Hex Nut, Zinc Plated Grade 5 Steel, 1/2-13",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LR",
-      "sortOrder": 30290
+      "sortOrder": 30020270
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-lm",
       "name": "Uss Flat Washer, Zinc Plated Grade 5 Steel, 3/8",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LM",
-      "sortOrder": 30300
+      "sortOrder": 30020280
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-ln",
       "name": "Hex Bolt, Zinc Plated Grade 5 Steel, 1/2-13 X 3-1/2\"",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LN",
-      "sortOrder": 30310
+      "sortOrder": 30020290
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-ls",
       "name": "Rubber Bumpers, 3/4 Od X 1/16 High Black 25 Pack",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LS",
-      "sortOrder": 30320
+      "sortOrder": 30020300
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-lae",
       "name": "TAP BOLT, ZINC PLATED GRADE 5 STEEL, 3/8-16 X 4\"",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LAE",
-      "sortOrder": 30330
+      "sortOrder": 30020310
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-laf",
       "name": "V-RING BOLT ON ANCHOR",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LAF",
-      "sortOrder": 30340
+      "sortOrder": 30020320
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-lah",
       "name": "BUTTON HEAD HEX DRIVE SCREW, 3/8\"-16 X 1-1/2\"",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LAH",
-      "sortOrder": 30350
+      "sortOrder": 30020330
     },
     {
       "slug": "adventure-series--hardware--hardware--6820h-laj",
       "name": "HEX BOLT, ZINC PLATED GRADE 5 STEEL, 1/2-13 X 5\"",
       "productLine": "Adventure Series",
       "tierLevel": 3,
-      "parentSlug": "adventure-series--hardware--hardware",
+      "parentSlug": "adventure-series--hardware--h-1000",
       "sku": "6820H-LAJ",
-      "sortOrder": 30360
+      "sortOrder": 30020340
     },
     {
       "slug": "adventure-series--hardware--quick-shift",
@@ -13715,5 +13706,6 @@
       "notes": null
     }
   ],
-  "issues": []
+  "issues": [],
+  "notesOnEdit": "Hardware Product List grouping node removed; its 33 parts reparented under H-1000 so the Hardware bundle carries its own BOM, cost and freight weight."
 }
