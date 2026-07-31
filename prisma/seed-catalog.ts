@@ -172,6 +172,7 @@ async function main(): Promise<void> {
       name: t.name,
       productLineId: lineIdByName.get(t.productLine) ?? null,
       tierLevel: t.tierLevel,
+      defaultQuantity: t.defaultQuantity ?? null,
       parentId: t.parentSlug ? (tierIdBySlug.get(t.parentSlug) ?? null) : null,
       productId: t.sku ? (productIdBySku.get(t.sku) ?? null) : null,
       sortOrder: t.sortOrder,

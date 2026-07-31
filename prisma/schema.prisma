@@ -391,11 +391,12 @@ model ProductCategory {
 
   // Tier-tree fields: a category node is a HEADER when productId is null, or
   // a PRODUCT line when it points at one. Tier 1 is always a header.
-  productLineId String?
-  productLine   ProductLine? @relation(fields: [productLineId], references: [id], onDelete: Cascade)
-  tierLevel     Int          @default(1)
-  productId     String?
-  product       Product?     @relation("CategoryTierProduct", fields: [productId], references: [id], onDelete: SetNull)
+  productLineId   String?
+  productLine     ProductLine? @relation(fields: [productLineId], references: [id], onDelete: Cascade)
+  tierLevel       Int          @default(1)
+  defaultQuantity Int?
+  productId       String?
+  product         Product?     @relation("CategoryTierProduct", fields: [productId], references: [id], onDelete: SetNull)
 
   @@index([productLineId, tierLevel])
   @@index([parentId, sortOrder])

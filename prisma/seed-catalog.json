@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-31T20:03:23.831Z",
+  "generatedAt": "2026-07-31T22:21:05.953Z",
   "source": "summit-product-tree-1-Revised-336bbf52.xlsx (Tree sheet, validated 2026-07-29)",
   "defaultEffectiveDate": "2026-07-25",
   "productLines": [
@@ -112,6 +112,15 @@
       "defaultLeadTimeDays": null,
       "contact": null,
       "notes": "Zip Line",
+      "isActive": true
+    },
+    {
+      "name": "Pediasuit",
+      "code": "pediasuit",
+      "isThirdParty": true,
+      "defaultLeadTimeDays": null,
+      "contact": null,
+      "notes": "Summit Flex training",
       "isActive": true
     }
   ],
@@ -4945,6 +4954,381 @@
       "showDimensions": false,
       "dimensionsOverride": null,
       "weightOz": null
+    },
+    {
+      "sku": "A-2200",
+      "name": "Summit Flex: Universial Excerise Unit (Spider Cage) w/ Hardware",
+      "productLine": "Summit Flex",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 541440,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": 6400
+    },
+    {
+      "sku": "UEU-ISTRS",
+      "name": "Integrated Suspension Tracking Rail System",
+      "productLine": "Summit Flex",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 141504,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": 560
+    },
+    {
+      "sku": "P-2513",
+      "name": "Summit Flex: Trolley Rail Rear Bracket",
+      "productLine": "Summit Flex",
+      "defaultQuantity": 1,
+      "unitPriceMinor": null,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": 80
+    },
+    {
+      "sku": "FLEX69482",
+      "name": "Vertical UEU Rear Frame Padding - 69\" x 48\" x 2\" V1 Folding Mat - 2 Sections",
+      "productLine": "Summit Flex",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 54528,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": 416
+    },
+    {
+      "sku": "FLEX72482",
+      "name": "Vertical UEU Side Frame Padding - 72\" x 48\" x 2\" V1 Folding Mat - 2 Sections",
+      "productLine": "Summit Flex",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 54528,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": 416
+    },
+    {
+      "sku": "FLEX-VERT-BUNDLE",
+      "name": "Vertical UEU Frame Padding Bundle (3 - Vertical UEU Frame Pads)",
+      "productLine": "Summit Flex",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 140580,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": 1248
+    },
+    {
+      "sku": "FLEX69722",
+      "name": "Floor Padding - 69\" x 72\" x 2\" V1 Folding Mat - 2 Sections",
+      "productLine": "Summit Flex",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 57409,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": 416
+    },
+    {
+      "sku": "FLEX-BELT-TBD",
+      "name": "Leather Belt (Size - TBD)",
+      "productLine": "Summit Flex",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 22688,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": 16
+    },
+    {
+      "sku": "FLEX-BELT-XXS",
+      "name": "Leather Belt (Size - XX Small)",
+      "productLine": "Summit Flex",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 22688,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": 16
+    },
+    {
+      "sku": "FLEX-BELT-XS",
+      "name": "Leather Belt (Size - X Small)",
+      "productLine": "Summit Flex",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 22688,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": 16
+    },
+    {
+      "sku": "FLEX-BELT-S",
+      "name": "Leather Belt (Size - Small)",
+      "productLine": "Summit Flex",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 22688,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": 16
+    },
+    {
+      "sku": "FLEX-BELT-M",
+      "name": "Leather Belt (Size - Medium)",
+      "productLine": "Summit Flex",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 22688,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": 16
+    },
+    {
+      "sku": "FLEX-BELT-L",
+      "name": "Leather Belt (Size - Large)",
+      "productLine": "Summit Flex",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 22688,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": 16
+    },
+    {
+      "sku": "FLEX-BELT-XL",
+      "name": "Leather Belt (Size - X Large)",
+      "productLine": "Summit Flex",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 22688,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": 16
+    },
+    {
+      "sku": "FLEX-BELT-XXL",
+      "name": "Leather Belt (Size - XX Large)",
+      "productLine": "Summit Flex",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 22688,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": 16
+    },
+    {
+      "sku": "3RD-FREIGHT",
+      "name": "Passthrough Freight Charge for Belt(s) / Boot(s)",
+      "productLine": "Summit Flex",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 9500,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": 16
+    },
+    {
+      "sku": "P-2526",
+      "name": "Suspension Spreader Bar",
+      "productLine": "Summit Flex",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 2363,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": 240
+    },
+    {
+      "sku": "B0983M934C",
+      "name": "Nylon Daisy Chain Straps (2 Piece)",
+      "productLine": "Summit Flex",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 3643,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": 0
+    },
+    {
+      "sku": "B01MSIUGTM",
+      "name": "30KN CE Certified Micro Rotator Swivel",
+      "productLine": "Summit Flex",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 5123,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": 0
+    },
+    {
+      "sku": "B0C9Y4Q8WG",
+      "name": "Heavy Duty Carabiner (2 Pack)",
+      "productLine": "Summit Flex",
+      "defaultQuantity": 3,
+      "unitPriceMinor": 3105,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": 0
+    },
+    {
+      "sku": "FLEX-RACK",
+      "name": "Equipment Rack (Frame Mounted)",
+      "productLine": "Summit Flex",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 10725,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": 0
+    },
+    {
+      "sku": "UEU-THERABUNGEE-23",
+      "name": "TheraBungee - 10 Piece Bungee Set",
+      "productLine": "Summit Flex",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 29707,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": 400
+    },
+    {
+      "sku": "BASIC",
+      "name": "Basic Equipment Set - 69 Elements",
+      "productLine": "Summit Flex",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 124999,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": 1040
+    },
+    {
+      "sku": "STANDARD",
+      "name": "Standard Equipment Set - 82 Elements",
+      "productLine": "Summit Flex",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 164999,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": 1040
+    },
+    {
+      "sku": "FULL",
+      "name": "Full Equipment Set - 132 Elements",
+      "productLine": "Summit Flex",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 236999,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": 1040
     }
   ],
   "tiers": [
@@ -8007,6 +8391,423 @@
       "parentSlug": "soar--summit-soar-mats-accessories",
       "sku": "COLW2812",
       "sortOrder": 40150
+    },
+    {
+      "slug": "flex--summit-flex-series",
+      "name": "SUMMIT FLEX SERIES",
+      "productLine": "Summit Flex",
+      "tierLevel": 1,
+      "parentSlug": null,
+      "sku": null,
+      "sortOrder": 50010
+    },
+    {
+      "slug": "flex--a-2200",
+      "name": "Summit Flex: Universial Excerise Unit (Spider Cage) w/ Hardware",
+      "productLine": "Summit Flex",
+      "tierLevel": 2,
+      "parentSlug": "flex--summit-flex-series",
+      "sku": "A-2200",
+      "sortOrder": 50020
+    },
+    {
+      "slug": "flex--universal-exercise-unit-spider-cage-tracking-rail-system",
+      "name": "UNIVERSAL EXERCISE UNIT (SPIDER CAGE) TRACKING RAIL SYSTEM",
+      "productLine": "Summit Flex",
+      "tierLevel": 1,
+      "parentSlug": null,
+      "sku": null,
+      "sortOrder": 50100
+    },
+    {
+      "slug": "flex--ueu-istrs",
+      "name": "Integrated Suspension Tracking Rail System",
+      "productLine": "Summit Flex",
+      "tierLevel": 2,
+      "parentSlug": "flex--universal-exercise-unit-spider-cage-tracking-rail-system",
+      "sku": "UEU-ISTRS",
+      "sortOrder": 50110
+    },
+    {
+      "slug": "flex--integrated-suspension-tracking-rail-system-universal-conversion-kit",
+      "name": "Integrated Suspension Tracking Rail System (Universal Conversion Kit)",
+      "productLine": "Summit Flex",
+      "tierLevel": 2,
+      "parentSlug": "flex--universal-exercise-unit-spider-cage-tracking-rail-system",
+      "sku": null,
+      "sortOrder": 50200
+    },
+    {
+      "slug": "flex--tr2000-a07",
+      "name": "7' Aluminum Enclosed Rail 550lbs. Max Weight",
+      "productLine": "Summit Flex",
+      "tierLevel": 3,
+      "parentSlug": "flex--integrated-suspension-tracking-rail-system-universal-conversion-kit",
+      "sku": "TR2000-A07",
+      "sortOrder": 50210
+    },
+    {
+      "slug": "flex--p-2513",
+      "name": "Summit Flex: Trolley Rail Rear Bracket",
+      "productLine": "Summit Flex",
+      "tierLevel": 3,
+      "parentSlug": "flex--integrated-suspension-tracking-rail-system-universal-conversion-kit",
+      "sku": "P-2513",
+      "sortOrder": 50220
+    },
+    {
+      "slug": "flex--trh2005",
+      "name": "Universal Threaded Rod Hanger",
+      "productLine": "Summit Flex",
+      "tierLevel": 3,
+      "parentSlug": "flex--integrated-suspension-tracking-rail-system-universal-conversion-kit",
+      "sku": "TRH2005",
+      "sortOrder": 0,
+      "defaultQuantity": 3
+    },
+    {
+      "slug": "flex--trn2016",
+      "name": "End Cap for Rail",
+      "productLine": "Summit Flex",
+      "tierLevel": 3,
+      "parentSlug": "flex--integrated-suspension-tracking-rail-system-universal-conversion-kit",
+      "sku": "TRN2016",
+      "sortOrder": 0,
+      "defaultQuantity": 2
+    },
+    {
+      "slug": "flex--trt2001",
+      "name": "Trolley for Rail",
+      "productLine": "Summit Flex",
+      "tierLevel": 3,
+      "parentSlug": "flex--integrated-suspension-tracking-rail-system-universal-conversion-kit",
+      "sku": "TRT2001",
+      "sortOrder": 0
+    },
+    {
+      "slug": "flex--flex-series-safety-padding",
+      "name": "FLEX SERIES SAFETY PADDING",
+      "productLine": "Summit Flex",
+      "tierLevel": 1,
+      "parentSlug": null,
+      "sku": null,
+      "sortOrder": 51000
+    },
+    {
+      "slug": "flex--flex69482",
+      "name": "Vertical UEU Rear Frame Padding - 69\" x 48\" x 2\" V1 Folding Mat - 2 Sections",
+      "productLine": "Summit Flex",
+      "tierLevel": 2,
+      "parentSlug": "flex--flex-series-safety-padding",
+      "sku": "FLEX69482",
+      "sortOrder": 51010
+    },
+    {
+      "slug": "flex--flex72482",
+      "name": "Vertical UEU Side Frame Padding - 72\" x 48\" x 2\" V1 Folding Mat - 2 Sections",
+      "productLine": "Summit Flex",
+      "tierLevel": 2,
+      "parentSlug": "flex--flex-series-safety-padding",
+      "sku": "FLEX72482",
+      "sortOrder": 51020
+    },
+    {
+      "slug": "flex--flex-vert-bundle",
+      "name": "Vertical UEU Frame Padding Bundle (3 - Vertical UEU Frame Pads)",
+      "productLine": "Summit Flex",
+      "tierLevel": 2,
+      "parentSlug": "flex--flex-series-safety-padding",
+      "sku": "FLEX-VERT-BUNDLE",
+      "sortOrder": 0
+    },
+    {
+      "slug": "flex--flex69722",
+      "name": "Floor Padding - 69\" x 72\" x 2\" V1 Folding Mat - 2 Sections",
+      "productLine": "Summit Flex",
+      "tierLevel": 2,
+      "parentSlug": "flex--flex-series-safety-padding",
+      "sku": "FLEX69722",
+      "sortOrder": 0
+    },
+    {
+      "slug": "flex--flex-accessories",
+      "name": "FLEX ACCESSORIES",
+      "productLine": "Summit Flex",
+      "tierLevel": 1,
+      "parentSlug": null,
+      "sku": null,
+      "sortOrder": 52000
+    },
+    {
+      "slug": "flex--belts",
+      "name": "Belts",
+      "productLine": "Summit Flex",
+      "tierLevel": 2,
+      "parentSlug": "flex--flex-accessories",
+      "sku": null,
+      "sortOrder": 52100
+    },
+    {
+      "slug": "flex--flex-belt-tbd",
+      "name": "Leather Belt (Size - TBD)",
+      "productLine": "Summit Flex",
+      "tierLevel": 3,
+      "parentSlug": "flex--belts",
+      "sku": "FLEX-BELT-TBD",
+      "sortOrder": 52110
+    },
+    {
+      "slug": "flex--flex-belt-xxs",
+      "name": "Leather Belt (Size - XX Small)",
+      "productLine": "Summit Flex",
+      "tierLevel": 3,
+      "parentSlug": "flex--belts",
+      "sku": "FLEX-BELT-XXS",
+      "sortOrder": 52120
+    },
+    {
+      "slug": "flex--flex-belt-xs",
+      "name": "Leather Belt (Size - X Small)",
+      "productLine": "Summit Flex",
+      "tierLevel": 3,
+      "parentSlug": "flex--belts",
+      "sku": "FLEX-BELT-XS",
+      "sortOrder": 0
+    },
+    {
+      "slug": "flex--flex-belt-s",
+      "name": "Leather Belt (Size - Small)",
+      "productLine": "Summit Flex",
+      "tierLevel": 3,
+      "parentSlug": "flex--belts",
+      "sku": "FLEX-BELT-S",
+      "sortOrder": 0
+    },
+    {
+      "slug": "flex--flex-belt-m",
+      "name": "Leather Belt (Size - Medium)",
+      "productLine": "Summit Flex",
+      "tierLevel": 3,
+      "parentSlug": "flex--belts",
+      "sku": "FLEX-BELT-M",
+      "sortOrder": 0
+    },
+    {
+      "slug": "flex--flex-belt-l",
+      "name": "Leather Belt (Size - Large)",
+      "productLine": "Summit Flex",
+      "tierLevel": 3,
+      "parentSlug": "flex--belts",
+      "sku": "FLEX-BELT-L",
+      "sortOrder": 0
+    },
+    {
+      "slug": "flex--flex-belt-xl",
+      "name": "Leather Belt (Size - X Large)",
+      "productLine": "Summit Flex",
+      "tierLevel": 3,
+      "parentSlug": "flex--belts",
+      "sku": "FLEX-BELT-XL",
+      "sortOrder": 0
+    },
+    {
+      "slug": "flex--flex-belt-xxl",
+      "name": "Leather Belt (Size - XX Large)",
+      "productLine": "Summit Flex",
+      "tierLevel": 3,
+      "parentSlug": "flex--belts",
+      "sku": "FLEX-BELT-XXL",
+      "sortOrder": 0
+    },
+    {
+      "slug": "flex--3rd-freight",
+      "name": "Passthrough Freight Charge for Belt(s) / Boot(s)",
+      "productLine": "Summit Flex",
+      "tierLevel": 3,
+      "parentSlug": "flex--belts",
+      "sku": "3RD-FREIGHT",
+      "sortOrder": 0
+    },
+    {
+      "slug": "flex--suspension-harness-kit",
+      "name": "Suspension Harness Kit",
+      "productLine": "Summit Flex",
+      "tierLevel": 2,
+      "parentSlug": "flex--flex-accessories",
+      "sku": null,
+      "sortOrder": 53000
+    },
+    {
+      "slug": "flex--p-2526",
+      "name": "Suspension Spreader Bar",
+      "productLine": "Summit Flex",
+      "tierLevel": 3,
+      "parentSlug": "flex--suspension-harness-kit",
+      "sku": "P-2526",
+      "sortOrder": 53010
+    },
+    {
+      "slug": "flex--b0983m934c",
+      "name": "Nylon Daisy Chain Straps (2 Piece)",
+      "productLine": "Summit Flex",
+      "tierLevel": 3,
+      "parentSlug": "flex--suspension-harness-kit",
+      "sku": "B0983M934C",
+      "sortOrder": 53020
+    },
+    {
+      "slug": "flex--b01msiugtm",
+      "name": "30KN CE Certified Micro Rotator Swivel",
+      "productLine": "Summit Flex",
+      "tierLevel": 3,
+      "parentSlug": "flex--suspension-harness-kit",
+      "sku": "B01MSIUGTM",
+      "sortOrder": 0
+    },
+    {
+      "slug": "flex--b0c9y4q8wg",
+      "name": "Heavy Duty Carabiner (2 Pack)",
+      "productLine": "Summit Flex",
+      "tierLevel": 3,
+      "parentSlug": "flex--suspension-harness-kit",
+      "sku": "B0C9Y4Q8WG",
+      "sortOrder": 0,
+      "defaultQuantity": 3
+    },
+    {
+      "slug": "flex--flex-rack",
+      "name": "Equipment Rack (Frame Mounted)",
+      "productLine": "Summit Flex",
+      "tierLevel": 2,
+      "parentSlug": "flex--flex-accessories",
+      "sku": "FLEX-RACK",
+      "sortOrder": 54000
+    },
+    {
+      "slug": "flex--ueu-therabungee-23",
+      "name": "TheraBungee - 10 Piece Bungee Set",
+      "productLine": "Summit Flex",
+      "tierLevel": 2,
+      "parentSlug": "flex--flex-accessories",
+      "sku": "UEU-THERABUNGEE-23",
+      "sortOrder": 55000
+    },
+    {
+      "slug": "flex--ueu-spider-cage-accessories-kit",
+      "name": "UEU (Spider Cage) Accessories Kit",
+      "productLine": "Summit Flex",
+      "tierLevel": 2,
+      "parentSlug": "flex--flex-accessories",
+      "sku": null,
+      "sortOrder": 56000
+    },
+    {
+      "slug": "flex--basic",
+      "name": "Basic Equipment Set - 69 Elements",
+      "productLine": "Summit Flex",
+      "tierLevel": 3,
+      "parentSlug": "flex--ueu-spider-cage-accessories-kit",
+      "sku": "BASIC",
+      "sortOrder": 56010
+    },
+    {
+      "slug": "flex--standard",
+      "name": "Standard Equipment Set - 82 Elements",
+      "productLine": "Summit Flex",
+      "tierLevel": 3,
+      "parentSlug": "flex--ueu-spider-cage-accessories-kit",
+      "sku": "STANDARD",
+      "sortOrder": 56020
+    },
+    {
+      "slug": "flex--full",
+      "name": "Full Equipment Set - 132 Elements",
+      "productLine": "Summit Flex",
+      "tierLevel": 3,
+      "parentSlug": "flex--ueu-spider-cage-accessories-kit",
+      "sku": "FULL",
+      "sortOrder": 0
+    },
+    {
+      "slug": "flex--training",
+      "name": "TRAINING",
+      "productLine": "Summit Flex",
+      "tierLevel": 1,
+      "parentSlug": null,
+      "sku": null,
+      "sortOrder": 57000
+    },
+    {
+      "slug": "flex--intensive-training-course",
+      "name": "Intensive Training Course",
+      "productLine": "Summit Flex",
+      "tierLevel": 2,
+      "parentSlug": "flex--training",
+      "sku": null,
+      "sortOrder": 57100
+    },
+    {
+      "slug": "flex--intensive-1",
+      "name": "TBD — INTENSIVE-1",
+      "productLine": "Summit Flex",
+      "tierLevel": 3,
+      "parentSlug": "flex--intensive-training-course",
+      "sku": null,
+      "sortOrder": 57110
+    },
+    {
+      "slug": "flex--intensive-2",
+      "name": "TBD — INTENSIVE-2",
+      "productLine": "Summit Flex",
+      "tierLevel": 3,
+      "parentSlug": "flex--intensive-training-course",
+      "sku": null,
+      "sortOrder": 57120
+    },
+    {
+      "slug": "flex--intensive-3",
+      "name": "TBD — INTENSIVE-3",
+      "productLine": "Summit Flex",
+      "tierLevel": 3,
+      "parentSlug": "flex--intensive-training-course",
+      "sku": null,
+      "sortOrder": 0
+    },
+    {
+      "slug": "flex--training-course",
+      "name": "Training Course",
+      "productLine": "Summit Flex",
+      "tierLevel": 2,
+      "parentSlug": "flex--training",
+      "sku": null,
+      "sortOrder": 57200
+    },
+    {
+      "slug": "flex--standard-1",
+      "name": "TBD — STANDARD-1",
+      "productLine": "Summit Flex",
+      "tierLevel": 3,
+      "parentSlug": "flex--training-course",
+      "sku": null,
+      "sortOrder": 57210
+    },
+    {
+      "slug": "flex--standard-2",
+      "name": "TBD — STANDARD-2",
+      "productLine": "Summit Flex",
+      "tierLevel": 3,
+      "parentSlug": "flex--training-course",
+      "sku": null,
+      "sortOrder": 57220
+    },
+    {
+      "slug": "flex--standard-3",
+      "name": "TBD — STANDARD-3",
+      "productLine": "Summit Flex",
+      "tierLevel": 3,
+      "parentSlug": "flex--training-course",
+      "sku": null,
+      "sortOrder": 0
     }
   ],
   "notes": [
@@ -10921,6 +11722,231 @@
       "effectiveDate": "2026-07-25",
       "defaultedDate": true,
       "sourceRef": null
+    },
+    {
+      "sku": "A-2200",
+      "unitCostMinor": 282000,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-31",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "UEU-ISTRS",
+      "unitCostMinor": 72700,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-31",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "P-2513",
+      "unitCostMinor": 2000,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-31",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "FLEX69482",
+      "unitCostMinor": 28400,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-31",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "FLEX72482",
+      "unitCostMinor": 28400,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-31",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "FLEX-VERT-BUNDLE",
+      "unitCostMinor": 85200,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-31",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "FLEX69722",
+      "unitCostMinor": 28400,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-31",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "FLEX-BELT-TBD",
+      "unitCostMinor": 14000,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-31",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "FLEX-BELT-XXS",
+      "unitCostMinor": 14000,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-31",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "FLEX-BELT-XS",
+      "unitCostMinor": 15000,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-31",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "FLEX-BELT-S",
+      "unitCostMinor": 15000,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-31",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "FLEX-BELT-M",
+      "unitCostMinor": 15000,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-31",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "FLEX-BELT-L",
+      "unitCostMinor": 15000,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-31",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "FLEX-BELT-XL",
+      "unitCostMinor": 15000,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-31",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "FLEX-BELT-XXL",
+      "unitCostMinor": 15000,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-31",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "3RD-FREIGHT",
+      "unitCostMinor": 1000,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-31",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "P-2526",
+      "unitCostMinor": 1050,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-31",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "B0983M934C",
+      "unitCostMinor": 1619,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-31",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "B01MSIUGTM",
+      "unitCostMinor": 2277,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-31",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "B0C9Y4Q8WG",
+      "unitCostMinor": 1380,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-31",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "FLEX-RACK",
+      "unitCostMinor": 6500,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-31",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "UEU-THERABUNGEE-23",
+      "unitCostMinor": 18004,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-31",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "BASIC",
+      "unitCostMinor": 59360,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-31",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "STANDARD",
+      "unitCostMinor": 65013,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-31",
+      "defaultedDate": true,
+      "sourceRef": null
+    },
+    {
+      "sku": "FULL",
+      "unitCostMinor": 103075,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-07-31",
+      "defaultedDate": true,
+      "sourceRef": null
     }
   ],
   "sourcing": [
@@ -13704,8 +14730,224 @@
       "minOrderQty": null,
       "isPrimary": true,
       "notes": null
+    },
+    {
+      "sku": "A-2200",
+      "manufacturer": "Goldberg Brothers",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "UEU-ISTRS",
+      "manufacturer": "Productive Tool Products",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "P-2513",
+      "manufacturer": "Goldberg Brothers",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "FLEX69482",
+      "manufacturer": "Resilite",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "FLEX72482",
+      "manufacturer": "Resilite",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "FLEX-VERT-BUNDLE",
+      "manufacturer": "Resilite",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "FLEX69722",
+      "manufacturer": "Resilite",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "FLEX-BELT-TBD",
+      "manufacturer": "Pediasuit",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "FLEX-BELT-XXS",
+      "manufacturer": "Pediasuit",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "FLEX-BELT-XS",
+      "manufacturer": "Pediasuit",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "FLEX-BELT-S",
+      "manufacturer": "Pediasuit",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "FLEX-BELT-M",
+      "manufacturer": "Pediasuit",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "FLEX-BELT-L",
+      "manufacturer": "Pediasuit",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "FLEX-BELT-XL",
+      "manufacturer": "Pediasuit",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "FLEX-BELT-XXL",
+      "manufacturer": "Pediasuit",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "P-2526",
+      "manufacturer": "Goldberg Brothers",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "B0983M934C",
+      "manufacturer": "Amazon",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "B01MSIUGTM",
+      "manufacturer": "Amazon",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "B0C9Y4Q8WG",
+      "manufacturer": "Amazon",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "FLEX-RACK",
+      "manufacturer": "Goldberg Brothers",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "UEU-THERABUNGEE-23",
+      "manufacturer": "Goldberg Brothers",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "BASIC",
+      "manufacturer": "Goldberg Brothers",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "STANDARD",
+      "manufacturer": "Goldberg Brothers",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "FULL",
+      "manufacturer": "Goldberg Brothers",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
     }
   ],
   "issues": [],
-  "notesOnEdit": "Hardware Product List grouping node removed; its 33 parts reparented under H-1000 so the Hardware bundle carries its own BOM, cost and freight weight."
+  "notesOnEdit": "H-1000 hardware reparented; Summit Flex imported (46 tier nodes, 25 new products); Summit Flex placement quantities set on the tier node so shared Adventure Series parts keep defaultQuantity 1."
 }
