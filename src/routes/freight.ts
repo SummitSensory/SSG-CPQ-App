@@ -133,9 +133,10 @@ export function registerFreightRoutes(app: FastifyInstance): void {
     const found = data.items?.[0];
     if (!found) throw new ValidationError(`monday item ${item} is not on the Deal Tracking board, or the token cannot see it`);
 
-    const cols = new Map(found.column_values.map((c) => [c.id, c.display_value || c.text || '']));
-    const raw = cols.get(AMOUNT_COLUMN) ?? '';
+    const amountCol = found.column_values.find((c) => c.id === AMOUNT_COLUMN);
+    const raw = amountCol?.display_value ?? '';
     const amountMinor = parseAmountMinor(raw);
+    const requestFlag = found.column_values.find((c) => c.id === REQUESTED_COLUMN)?.text ?? '';
 
     return {
       itemId: item,
@@ -145,7 +146,7 @@ export function registerFreightRoutes(app: FastifyInstance): void {
       // Null rather than 0 when the desk has not answered yet: 0 would read as
       // "freight is free" and go straight onto a customer proposal.
       pending: amountMinor == null,
-      requestFlag: cols.get(REQUESTED_COLUMN) ?? '',
+      requestFlag,
       fetchedAt: new Date().toISOString(),
     };
   });
