@@ -3067,8 +3067,10 @@
     var busy = pb.meta.freightBusy || '';
     var quote = pb.meta.freightQuoteMinor;
     var amtLabel = quote != null ? fmtMoney(quote, 'USD') : (pb.meta.freightPending ? 'Awaiting the desk' : 'Not pulled yet');
-    var matsFreight = Number(pb.meta.mondayMatsFreightMinor) || 0;
-    var matsTax = Number(pb.meta.mondayMatsTaxMinor) || 0;
+    var matsFreight = pb.meta.mondayMatsFreightMinor;
+    var matsTax = pb.meta.mondayMatsTaxMinor;
+    var matsFreightLabel = matsFreight != null ? fmtMoney(matsFreight, 'USD') : 'Not pulled yet';
+    var matsTaxLabel = matsTax != null ? fmtMoney(matsTax, 'USD') : 'Not pulled yet';
     return '<div style="display:flex;align-items:center;gap:12px;flex-wrap:nowrap;">' +
       '<button class="btn" id="bFreightReq" style="width:auto;padding:9px 16px;background:' + (sent ? '#2f6b4f' : '#9c3327') + ';border-color:transparent;">' +
         (busy === 'req' ? 'Sending\u2026' : (sent ? '\u2713 Freight Requested' : 'Request Freight')) +
@@ -3084,11 +3086,15 @@
       '</div>' +
       '<div style="padding:6px 14px;text-align:left;line-height:1.25;">' +
         '<span style="display:block;font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Mats &amp; Padding Freight $</span>' +
-        '<span style="display:block;font-size:14px;font-weight:600;">' + fmtMoney(matsFreight, 'USD') + '</span>' +
+        '<span style="display:block;font-size:14px;font-weight:600;color:' + (matsFreight != null ? '#20241f' : '#8a8f85') + ';">' +
+          (busy === 'amt' ? 'Checking…' : esc(matsFreightLabel)) +
+        '</span>' +
       '</div>' +
       '<div style="padding:6px 14px;text-align:left;line-height:1.25;">' +
         '<span style="display:block;font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Mats &amp; Padding Tax $</span>' +
-        '<span style="display:block;font-size:14px;font-weight:600;">' + fmtMoney(matsTax, 'USD') + '</span>' +
+        '<span style="display:block;font-size:14px;font-weight:600;color:' + (matsTax != null ? '#20241f' : '#8a8f85') + ';">' +
+          (busy === 'amt' ? 'Checking…' : esc(matsTaxLabel)) +
+        '</span>' +
       '</div>' +
     '</div>';
   }
@@ -3130,8 +3136,8 @@
       // proposal total should not need it typed a second time.
       pb.meta.structureFreightMinor = d.amountMinor;
     }
-    pb.meta.mondayMatsFreightMinor = d.matsFreightMinor || 0;
-    pb.meta.mondayMatsTaxMinor = d.matsTaxMinor || 0;
+    pb.meta.mondayMatsFreightMinor = d.matsFreightMinor;
+    pb.meta.mondayMatsTaxMinor = d.matsTaxMinor;
     // Same logic as the structure freight line above, but skipped once the user has
     // typed their own number — a pull should never clobber a manual correction.
     if (!pb.meta.matsFreightTouched) pb.meta.matsFreightMinor = pb.meta.mondayMatsFreightMinor;

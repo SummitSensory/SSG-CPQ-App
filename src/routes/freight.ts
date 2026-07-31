@@ -139,8 +139,8 @@ export function registerFreightRoutes(app: FastifyInstance): void {
     const raw = amountCol?.display_value ?? '';
     const amountMinor = parseAmountMinor(raw);
     const requestFlag = found.column_values.find((c) => c.id === REQUESTED_COLUMN)?.text ?? '';
-    const matsFreightMinor = parseAmountMinor(found.column_values.find((c) => c.id === MATS_FREIGHT_COLUMN)?.display_value) ?? 0;
-    const matsTaxMinor = parseAmountMinor(found.column_values.find((c) => c.id === MATS_TAX_COLUMN)?.display_value) ?? 0;
+    const matsFreightMinor = parseAmountMinor(found.column_values.find((c) => c.id === MATS_FREIGHT_COLUMN)?.display_value);
+    const matsTaxMinor = parseAmountMinor(found.column_values.find((c) => c.id === MATS_TAX_COLUMN)?.display_value);
 
     return {
       itemId: item,
