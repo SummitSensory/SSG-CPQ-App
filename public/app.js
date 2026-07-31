@@ -4559,6 +4559,157 @@
     renderBuilder();
   }
 
+  /**
+   * Generic "start from a product line" picker (currently Summit Flex). Unlike
+   * Adventure/Soar, this line has no bespoke configurator — it is just its tier
+   * tree, so the picker fetches that tree and lets a rep check the products they
+   * want at whatever quantity the catalog defaults to.
+   */
+  var linePicker = null;
+  function openLinePicker(lineName) {
+    linePicker = { lineName: lineName, nodes: null, error: null, checked: {}, qty: {} };
+    var ov = document.createElement('div');
+    ov.id = 'linePickerOverlay';
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(32,36,31,.4);z-index:70;overflow:auto;padding:24px 16px;';
+    document.body.appendChild(ov);
+    renderLinePicker();
+    loadLineTree(lineName);
+  }
+  function linePickerClose() { var o = document.getElementById('linePickerOverlay'); if (o) document.body.removeChild(o); linePicker = null; }
+
+  async function loadLineTree(lineName) {
+    try {
+      var r = await authed('/proposals/line-tree/' + encodeURIComponent(lineName));
+      if (r.ok) {
+        var nodes = (await r.json()) || [];
+        linePicker.nodes = nodes;
+        // Prefill every product's quantity from the tier's default, falling back to
+        // the product's own default — nothing is checked yet, so nothing is added
+        // until the rep opts in.
+        nodes.forEach(function (n) { if (n.sku) linePicker.qty[n.slug] = n.defaultQuantity != null ? n.defaultQuantity : 1; });
+      } else {
+        linePicker.error = 'Could not load ' + lineName + ' (' + r.status + ').';
+      }
+    } catch (e) {
+      linePicker.error = 'Could not reach the server.';
+    }
+    if (document.getElementById('linePickerOverlay')) renderLinePicker();
+  }
+
+  /** Flat nodes -> a parent/child tree, siblings in sortOrder. */
+  function linePickerTree() {
+    var nodes = linePicker.nodes || [];
+    var bySlug = {};
+    nodes.forEach(function (n) { bySlug[n.slug] = { node: n, children: [] }; });
+    var roots = [];
+    nodes.forEach(function (n) {
+      var entry = bySlug[n.slug];
+      var parent = n.parentSlug ? bySlug[n.parentSlug] : null;
+      if (parent) parent.children.push(entry); else roots.push(entry);
+    });
+    var bySort = function (a, b) { return (Number(a.node.sortOrder) || 0) - (Number(b.node.sortOrder) || 0); };
+    (function sortRec(list) { list.sort(bySort); list.forEach(function (e) { sortRec(e.children); }); })(roots);
+    return roots;
+  }
+  /** Depth-first walk of a linePickerTree(), in tier sort order. */
+  function walkLinePickerTree(entries, depth, visit) {
+    entries.forEach(function (e) { visit(e.node, depth); walkLinePickerTree(e.children, depth + 1, visit); });
+  }
+
+  function renderLinePicker() {
+    var o = document.getElementById('linePickerOverlay'); if (!o) return;
+    var nodes = linePicker.nodes;
+    var body;
+    if (linePicker.error) {
+      body = '<div style="padding:24px;color:#b4522e;">' + esc(linePicker.error) + '</div>';
+    } else if (!nodes) {
+      body = '<div class="muted" style="padding:24px;text-align:center;">Loading…</div>';
+    } else if (!nodes.length) {
+      body = '<div class="muted" style="padding:24px;text-align:center;">No items found for ' + esc(linePicker.lineName) + '.</div>';
+    } else {
+      var rows = '';
+      walkLinePickerTree(linePickerTree(), 0, function (n, depth) {
+        var indent = depth * 20;
+        if (!n.sku) {
+          // A header node — Tier 1 is the section heading; anything deeper is a
+          // sub-heading purely for visual grouping in the tree.
+          var isTier1 = n.tierLevel === 1;
+          rows += '<div style="margin-left:' + indent + 'px;padding:' + (isTier1 ? '14px 0 6px' : '8px 0 4px') + ';font-weight:600;font-size:' + (isTier1 ? '14.5px' : '13px') + ';color:#3d4a55;' + (isTier1 ? 'border-top:1px solid #e7e8e3;' : '') + '">' + esc(n.name) + '</div>';
+          return;
+        }
+        var checked = !!linePicker.checked[n.slug];
+        var qty = linePicker.qty[n.slug] != null ? linePicker.qty[n.slug] : 1;
+        var price = n.unitPriceMinor || 0;
+        rows += '<label style="display:flex;align-items:center;gap:10px;padding:6px 0;margin-left:' + indent + 'px;cursor:pointer;">' +
+          '<input type="checkbox" class="lpCheck" data-slug="' + esc(n.slug) + '"' + (checked ? ' checked' : '') + ' style="width:16px;height:16px;flex:0 0 auto;">' +
+          '<span style="flex:1;min-width:0;font-size:13.5px;">' + esc(n.name) + ' <span class="muted" style="font-size:11.5px;">' + esc(n.sku) + (price ? ' · ' + fmtMoney(price, 'USD') + ' each' : '') + '</span></span>' +
+          '<input type="number" min="0" class="lpQty" data-slug="' + esc(n.slug) + '" value="' + qty + '"' + (checked ? '' : ' disabled') + ' style="width:64px;flex:0 0 auto;padding:6px 8px;border:1px solid #dcded7;border-radius:7px;font-size:13px;text-align:right;">' +
+        '</label>';
+      });
+      body = rows;
+    }
+    var checkedCount = Object.keys(linePicker.checked).filter(function (k) { return linePicker.checked[k]; }).length;
+
+    o.innerHTML =
+      '<div style="max-width:640px;margin:0 auto;background:#fbfbf9;border-radius:16px;box-shadow:0 24px 60px -20px rgba(32,36,31,.5);overflow:hidden;">' +
+        '<div style="background:#3d4a55;color:#fff;padding:18px 24px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:2;">' +
+          '<div><div style="font-family:\'Newsreader\',serif;font-size:20px;font-weight:600;">' + esc(linePicker.lineName) + '</div>' +
+          '<div style="font-size:12px;color:#cdd6dc;">Check the items to add, set quantities, then insert</div></div>' +
+          '<button id="lpX" style="border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.12);color:#fff;border-radius:8px;padding:7px 12px;cursor:pointer;">Cancel</button>' +
+        '</div>' +
+        '<div style="padding:22px 24px;max-height:60vh;overflow:auto;">' + body + '</div>' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:16px 24px;border-top:1px solid #e7e8e3;">' +
+          '<span class="muted" style="font-size:12.5px;">' + checkedCount + ' item' + (checkedCount === 1 ? '' : 's') + ' selected</span>' +
+          '<button class="btn" id="lpGen" style="width:auto;padding:11px 22px;"' + (checkedCount ? '' : ' disabled') + '>Insert into proposal →</button>' +
+        '</div>' +
+      '</div>';
+
+    o.addEventListener('mousedown', function (e) { if (e.target === o) linePickerClose(); });
+    var x = document.getElementById('lpX'); if (x) x.addEventListener('click', linePickerClose);
+    var gen = document.getElementById('lpGen'); if (gen) gen.addEventListener('click', insertLinePickerSelection);
+    o.querySelectorAll('.lpCheck').forEach(function (el) {
+      el.addEventListener('change', function () {
+        linePicker.checked[el.getAttribute('data-slug')] = el.checked;
+        renderLinePicker();
+      });
+    });
+    o.querySelectorAll('.lpQty').forEach(function (el) {
+      el.addEventListener('change', function () { linePicker.qty[el.getAttribute('data-slug')] = Math.max(0, Number(el.value) || 0); });
+    });
+  }
+
+  /**
+   * One PRODUCT line per checked node, in tier sort order. A Tier 1 header
+   * becomes a GROUP section heading whenever it has at least one checked
+   * descendant, checked at any depth beneath it — mirroring how the rest of
+   * the builder's groups work (one heading, its lines follow).
+   */
+  function insertLinePickerSelection() {
+    var out = [];
+    function hasCheckedDescendant(entry) {
+      return entry.children.some(function (c) { return (c.node.sku && linePicker.checked[c.node.slug]) || (!c.node.sku && hasCheckedDescendant(c)); });
+    }
+    function walk(entries) {
+      entries.forEach(function (e) {
+        var n = e.node;
+        if (!n.sku) {
+          if (n.tierLevel === 1 && hasCheckedDescendant(e)) {
+            out.push({ ref: uid(), lineType: 'GROUP', kind: 'GROUP', name: n.name, description: '', quantity: 0, rateMinor: 0, group: '', optional: false });
+          }
+          walk(e.children);
+          return;
+        }
+        if (!linePicker.checked[n.slug]) return;
+        var qty = linePicker.qty[n.slug] != null ? Math.max(0, Number(linePicker.qty[n.slug]) || 0) : 1;
+        out.push(applyItemDefaults({ ref: uid(), lineType: 'PRODUCT', kind: 'INCLUDED', productId: null, sku: n.sku, name: n.name, description: '', quantity: qty, rateMinor: 0, group: '' }));
+      });
+    }
+    walk(linePickerTree());
+    if (out.length) pb.lines = pb.lines.concat(out);
+    linePickerClose();
+    renderBuilder();
+  }
+
   function openLockForm(versionId, user) {
     openModal('Lock to operational order',
       fieldRow('Approval method', selectEl('aMethod', ['SIGNATURE', 'COUNTERSIGNED_PROPOSAL', 'PURCHASE_ORDER', 'EMAIL', 'VERBAL', 'PORTAL'], 'COUNTERSIGNED_PROPOSAL')) +
