@@ -3,10 +3,11 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
-import { ValidationError } from '../lib/errors.js';
+import { ValidationError, NotFoundError } from '../lib/errors.js';
 import {
   createProposal, updateVersionContent, createNewVersion, changeStatus, compareProposalVersions,
 } from '../proposals/service.js';
+import { snapshotAcceptedContent } from '../handoff/service.js';
 import { resolveVisibleSections, reorderSections, type ProposalSection } from '../proposals/sections.js';
 
 const SectionSchema = z.object({
@@ -120,6 +121,51 @@ export function registerProposalRoutes(app: FastifyInstance): void {
     return compareProposalVersions(id, parseInt(q.a, 10), parseInt(q.b, 10));
   });
 
+  /**
+   * The tier tree for a product line configurator (e.g. "Start from Summit
+   * Flex"), flattened for the client to rebuild as a checkbox tree. `:lineSlug`
+   * matches on slug OR name, since a line's slug does not always derive from
+   * its display name (e.g. "Summit Soar" is slug "soar").
+   *
+   * defaultQuantity resolves tier-first: a tier node can override the quantity
+   * a product defaults to elsewhere in the builder (Product.defaultQuantity),
+   * so the configurator always shows one number, never two disagreeing ones.
+   */
+  app.get('/proposals/line-tree/:lineSlug', read, async (req) => {
+    const { lineSlug } = req.params as { lineSlug: string };
+    const line = await prisma.productLine.findFirst({ where: { OR: [{ slug: lineSlug }, { name: lineSlug }] }, select: { id: true } });
+    if (!line) throw new NotFoundError(`Product line "${lineSlug}" not found`);
+
+    const cats = await prisma.productCategory.findMany({
+      where: { productLineId: line.id, isActive: true },
+      orderBy: [{ tierLevel: 'asc' }, { sortOrder: 'asc' }],
+      select: {
+        id: true, slug: true, name: true, tierLevel: true, sortOrder: true, defaultQuantity: true, parentId: true,
+        product: { select: { sku: true, weightOz: true, defaultQuantity: true, status: true } },
+      },
+    });
+
+    const slugOf = new Map(cats.map((c) => [c.id, c.slug]));
+    const skus = [...new Set(cats.map((c) => c.product?.sku).filter((v): v is string => !!v))];
+    const priceBySku = skus.length
+      ? new Map((await prisma.sku.findMany({ where: { part: { in: skus } }, select: { part: true, unitPriceMinor: true } })).map((s) => [s.part, s.unitPriceMinor]))
+      : new Map<string, number>();
+
+    return cats
+      .filter((c) => !c.product || c.product.status === 'ACTIVE')
+      .map((c) => ({
+        slug: c.slug,
+        name: c.name,
+        tierLevel: c.tierLevel,
+        parentSlug: c.parentId ? (slugOf.get(c.parentId) ?? null) : null,
+        sortOrder: c.sortOrder,
+        sku: c.product?.sku ?? null,
+        unitPriceMinor: c.product?.sku ? (priceBySku.get(c.product.sku) ?? 0) : null,
+        weightOz: c.product?.weightOz ?? null,
+        defaultQuantity: c.defaultQuantity ?? c.product?.defaultQuantity ?? null,
+      }));
+  });
+
   // Status transitions, permission-gated by target.
   app.post('/proposals/versions/:versionId/submit-review', write, async (req) => {
     const { versionId } = req.params as { versionId: string };
@@ -133,7 +179,15 @@ export function registerProposalRoutes(app: FastifyInstance): void {
   });
   app.post('/proposals/versions/:versionId/release', release, async (req) => {
     const { versionId } = req.params as { versionId: string };
+    const before = await prisma.proposalVersion.findUnique({ where: { id: versionId }, select: { priceSnapshotId: true, sections: true, items: true } });
     await changeStatus(versionId, 'RELEASED', req.user!.sub, (req.body as { note?: string })?.note);
+    // A released version is the price of record from here on, so it gets a
+    // PriceSnapshot at release time rather than waiting for acceptance — but never
+    // overwrite one a prior release or acceptance already froze.
+    if (before && !before.priceSnapshotId) {
+      const snap = await snapshotAcceptedContent(versionId, before.sections, before.items, req.user!.sub);
+      await prisma.proposalVersion.update({ where: { id: versionId }, data: { priceSnapshotId: snap.id } });
+    }
     return { status: 'RELEASED' };
   });
   app.post('/proposals/versions/:versionId/accept', review, async (req) => {

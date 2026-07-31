@@ -63,6 +63,7 @@ export const SeedTier = z.object({
   name: z.string().trim().min(1),
   productLine: z.string().trim().min(1),
   tierLevel: z.number().int().min(1).max(4),
+  defaultQuantity: optInt,
   parentSlug: z.string().nullable(),
   sku: z.string().nullable(),
   sortOrder: z.number().int().default(0),

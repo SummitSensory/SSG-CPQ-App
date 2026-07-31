@@ -3327,6 +3327,7 @@
           '<div style="display:flex;flex-direction:column;gap:6px;">' +
             '<button class="btn" id="bAdvSeries" style="width:auto;padding:9px 16px;background:#3d4a55;">⚙ Start from Adventure Series</button>' +
             '<button class="btn" id="bSoarSeries" style="width:auto;padding:9px 16px;background:#3d4a55;">⚙ Start from Summit Soar</button>' +
+            '<button class="btn" id="bFlexSeries" style="width:auto;padding:9px 16px;background:#3d4a55;">⚙ Start from Summit Flex</button>' +
           '</div></div>' +
         '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
           '<button class="btn" id="bAddProd" style="width:auto;padding:9px 15px;">+ Product line</button>' +
@@ -3515,6 +3516,7 @@
     document.getElementById('bAddProd').addEventListener('click', openProductPicker);
     document.getElementById('bAdvSeries').addEventListener('click', openAdventureConfigurator);
     document.getElementById('bSoarSeries').addEventListener('click', openSoarConfigurator);
+    document.getElementById('bFlexSeries').addEventListener('click', function () { openLinePicker('Summit Flex'); });
     document.getElementById('bAddGroup').addEventListener('click', function () { pb.lines.push({ ref: uid(), lineType: 'GROUP', kind: 'GROUP', name: '', description: '', quantity: 0, rateMinor: 0, group: '', optional: false }); renderBuilder(); });
     document.getElementById('bAddSub').addEventListener('click', function () { pb.lines.push({ ref: uid(), lineType: 'SUBGROUP', kind: 'SUBGROUP', name: '', description: '', quantity: 0, rateMinor: 0, group: '' }); renderBuilder(); });
     var noteSel = document.getElementById('bAddNote');

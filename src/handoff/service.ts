@@ -49,7 +49,7 @@ export interface CustomerApprovalInput {
  * as the builder and the reports (`versionTotals`), so the order's grand total can
  * never disagree with the proposal the customer signed.
  */
-async function snapshotAcceptedContent(versionId: string, sections: unknown, items: unknown, userId: string) {
+export async function snapshotAcceptedContent(versionId: string, sections: unknown, items: unknown, userId: string) {
   const t = versionTotals(items, sections);
   const meta = metaOf(sections);
   // Deposit percentage is a business number (Administration → Formulas).
