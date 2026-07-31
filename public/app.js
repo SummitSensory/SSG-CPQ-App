@@ -3067,16 +3067,30 @@
     var busy = pb.meta.freightBusy || '';
     var quote = pb.meta.freightQuoteMinor;
     var amtLabel = quote != null ? fmtMoney(quote, 'USD') : (pb.meta.freightPending ? 'Awaiting the desk' : 'Not pulled yet');
-    return '<div style="display:flex;align-items:stretch;gap:10px;">' +
-      '<button class="btn" id="bFreightReq" style="width:auto;padding:9px 16px;background:' + (sent ? '#2f6b4f' : '#9c3327') + ';border-color:transparent;">' +
-        (busy === 'req' ? 'Sending\u2026' : (sent ? '\u2713 Freight Requested' : 'Request Freight')) +
-      '</button>' +
-      '<button class="link-btn" id="bFreightAmt" style="width:auto;padding:6px 14px;text-align:left;line-height:1.25;">' +
-        '<span style="display:block;font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Freight amount</span>' +
-        '<span style="display:block;font-size:14px;font-weight:600;color:' + (quote != null ? '#20241f' : '#8a8f85') + ';">' +
-          (busy === 'amt' ? 'Checking\u2026' : esc(amtLabel)) +
-        '</span>' +
-      '</button>' +
+    var matsFreight = Number(pb.meta.mondayMatsFreightMinor) || 0;
+    var matsTax = Number(pb.meta.mondayMatsTaxMinor) || 0;
+    return '<div style="display:flex;flex-direction:column;gap:8px;">' +
+      '<div style="display:flex;align-items:stretch;gap:10px;">' +
+        '<button class="btn" id="bFreightReq" style="width:auto;padding:9px 16px;background:' + (sent ? '#2f6b4f' : '#9c3327') + ';border-color:transparent;">' +
+          (busy === 'req' ? 'Sending\u2026' : (sent ? '\u2713 Freight Requested' : 'Request Freight')) +
+        '</button>' +
+        '<button class="link-btn" id="bFreightAmt" style="width:auto;padding:6px 14px;text-align:left;line-height:1.25;">' +
+          '<span style="display:block;font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Freight amount</span>' +
+          '<span style="display:block;font-size:14px;font-weight:600;color:' + (quote != null ? '#20241f' : '#8a8f85') + ';">' +
+            (busy === 'amt' ? 'Checking\u2026' : esc(amtLabel)) +
+          '</span>' +
+        '</button>' +
+      '</div>' +
+      '<div style="display:flex;align-items:stretch;gap:10px;">' +
+        '<div style="padding:6px 14px;text-align:left;line-height:1.25;">' +
+          '<span style="display:block;font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Mat &amp; Padding Freight</span>' +
+          '<span style="display:block;font-size:14px;font-weight:600;">' + fmtMoney(matsFreight, 'USD') + '</span>' +
+        '</div>' +
+        '<div style="padding:6px 14px;text-align:left;line-height:1.25;">' +
+          '<span style="display:block;font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Mat &amp; Padding Taxes</span>' +
+          '<span style="display:block;font-size:14px;font-weight:600;">' + fmtMoney(matsTax, 'USD') + '</span>' +
+        '</div>' +
+      '</div>' +
     '</div>';
   }
 
@@ -3117,6 +3131,12 @@
       // proposal total should not need it typed a second time.
       pb.meta.structureFreightMinor = d.amountMinor;
     }
+    pb.meta.mondayMatsFreightMinor = d.matsFreightMinor || 0;
+    pb.meta.mondayMatsTaxMinor = d.matsTaxMinor || 0;
+    // Same logic as the structure freight line above, but skipped once the user has
+    // typed their own number — a pull should never clobber a manual correction.
+    if (!pb.meta.matsFreightTouched) pb.meta.matsFreightMinor = pb.meta.mondayMatsFreightMinor;
+    if (!pb.meta.taxTouched) pb.meta.taxAmountMinor = pb.meta.mondayMatsTaxMinor;
     renderBuilderKeepingFocus();
   }
 
@@ -3545,10 +3565,10 @@
       // save path need to know nothing about the link.
       if (pb.meta.billSameAsShip) { pb.meta.billTo = ms.value; if (mb) mb.value = ms.value; }
     });
-    var mtx = document.getElementById('mTax'); if (mtx) mtx.addEventListener('change', function () { pb.meta.taxAmountMinor = d2m(mtx.value); renderBuilderKeepingFocus(); });
+    var mtx = document.getElementById('mTax'); if (mtx) mtx.addEventListener('change', function () { pb.meta.taxAmountMinor = d2m(mtx.value); pb.meta.taxTouched = true; renderBuilderKeepingFocus(); });
     var mdisc = document.getElementById('mDisc'); if (mdisc) mdisc.addEventListener('change', function () { pb.meta.discountPct = parseFloat(mdisc.value) || 0; renderBuilderKeepingFocus(); });
     var msf = document.getElementById('mStructFreight'); if (msf) msf.addEventListener('change', function () { pb.meta.structureFreightMinor = d2m(msf.value); renderBuilderKeepingFocus(); });
-    var mmf = document.getElementById('mMatsFreight'); if (mmf) mmf.addEventListener('change', function () { pb.meta.matsFreightMinor = d2m(mmf.value); renderBuilderKeepingFocus(); });
+    var mmf = document.getElementById('mMatsFreight'); if (mmf) mmf.addEventListener('change', function () { pb.meta.matsFreightMinor = d2m(mmf.value); pb.meta.matsFreightTouched = true; renderBuilderKeepingFocus(); });
     var brp = document.getElementById('bRepull');
     if (brp) brp.addEventListener('click', repullCatalogFigures);
     var bfr = document.getElementById('bFreightReq'); if (bfr) bfr.addEventListener('click', requestFreight);

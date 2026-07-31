@@ -27,6 +27,8 @@ import { DEALS_BOARD_ID } from '../integrations/monday/crmMapping.js';
 const WEIGHT_COLUMN = 'numbers__1';
 const REQUESTED_COLUMN = 'color__1';
 const AMOUNT_COLUMN = 'formula_mky8s42a';
+const MATS_FREIGHT_COLUMN = 'formula_mkzd3p9s';
+const MATS_TAX_COLUMN = 'formula_mkzde17n';
 
 /** The monday item id — the proposal header's Project ID. */
 const ItemIdSchema = z.string().trim().regex(/^\d{4,}$/, 'Project ID must be the numeric monday item id');
@@ -119,7 +121,7 @@ export function registerFreightRoutes(app: FastifyInstance): void {
          items (ids: $items) {
            id
            name
-           column_values (ids: ["${AMOUNT_COLUMN}", "${REQUESTED_COLUMN}"]) {
+           column_values (ids: ["${AMOUNT_COLUMN}", "${REQUESTED_COLUMN}", "${MATS_FREIGHT_COLUMN}", "${MATS_TAX_COLUMN}"]) {
              id
              text
              ... on FormulaValue { display_value }
@@ -137,6 +139,8 @@ export function registerFreightRoutes(app: FastifyInstance): void {
     const raw = amountCol?.display_value ?? '';
     const amountMinor = parseAmountMinor(raw);
     const requestFlag = found.column_values.find((c) => c.id === REQUESTED_COLUMN)?.text ?? '';
+    const matsFreightMinor = parseAmountMinor(found.column_values.find((c) => c.id === MATS_FREIGHT_COLUMN)?.display_value) ?? 0;
+    const matsTaxMinor = parseAmountMinor(found.column_values.find((c) => c.id === MATS_TAX_COLUMN)?.display_value) ?? 0;
 
     return {
       itemId: item,
@@ -147,6 +151,8 @@ export function registerFreightRoutes(app: FastifyInstance): void {
       // "freight is free" and go straight onto a customer proposal.
       pending: amountMinor == null,
       requestFlag,
+      matsFreightMinor,
+      matsTaxMinor,
       fetchedAt: new Date().toISOString(),
     };
   });
