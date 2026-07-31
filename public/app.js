@@ -3069,27 +3069,26 @@
     var amtLabel = quote != null ? fmtMoney(quote, 'USD') : (pb.meta.freightPending ? 'Awaiting the desk' : 'Not pulled yet');
     var matsFreight = Number(pb.meta.mondayMatsFreightMinor) || 0;
     var matsTax = Number(pb.meta.mondayMatsTaxMinor) || 0;
-    return '<div style="display:flex;flex-direction:column;gap:8px;">' +
-      '<div style="display:flex;align-items:stretch;gap:10px;">' +
-        '<button class="btn" id="bFreightReq" style="width:auto;padding:9px 16px;background:' + (sent ? '#2f6b4f' : '#9c3327') + ';border-color:transparent;">' +
-          (busy === 'req' ? 'Sending\u2026' : (sent ? '\u2713 Freight Requested' : 'Request Freight')) +
-        '</button>' +
-        '<button class="link-btn" id="bFreightAmt" style="width:auto;padding:6px 14px;text-align:left;line-height:1.25;">' +
-          '<span style="display:block;font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Freight amount</span>' +
-          '<span style="display:block;font-size:14px;font-weight:600;color:' + (quote != null ? '#20241f' : '#8a8f85') + ';">' +
-            (busy === 'amt' ? 'Checking\u2026' : esc(amtLabel)) +
-          '</span>' +
-        '</button>' +
+    return '<div style="display:flex;align-items:center;gap:12px;flex-wrap:nowrap;">' +
+      '<button class="btn" id="bFreightReq" style="width:auto;padding:9px 16px;background:' + (sent ? '#2f6b4f' : '#9c3327') + ';border-color:transparent;">' +
+        (busy === 'req' ? 'Sending\u2026' : (sent ? '\u2713 Freight Requested' : 'Request Freight')) +
+      '</button>' +
+      '<button class="btn" id="bFreightSync" style="width:auto;padding:9px 16px;background:#dbeafe;border:1px solid #93c5fd;color:#1e40af;">' +
+        (busy === 'amt' ? 'Syncing\u2026' : 'Sync Request') +
+      '</button>' +
+      '<div style="padding:6px 14px;text-align:left;line-height:1.25;">' +
+        '<span style="display:block;font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Structure Crating &amp; Freight $</span>' +
+        '<span style="display:block;font-size:14px;font-weight:600;color:' + (quote != null ? '#20241f' : '#8a8f85') + ';">' +
+          (busy === 'amt' ? 'Checking\u2026' : esc(amtLabel)) +
+        '</span>' +
       '</div>' +
-      '<div style="display:flex;align-items:stretch;gap:10px;">' +
-        '<div style="padding:6px 14px;text-align:left;line-height:1.25;">' +
-          '<span style="display:block;font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Mat &amp; Padding Freight</span>' +
-          '<span style="display:block;font-size:14px;font-weight:600;">' + fmtMoney(matsFreight, 'USD') + '</span>' +
-        '</div>' +
-        '<div style="padding:6px 14px;text-align:left;line-height:1.25;">' +
-          '<span style="display:block;font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Mat &amp; Padding Taxes</span>' +
-          '<span style="display:block;font-size:14px;font-weight:600;">' + fmtMoney(matsTax, 'USD') + '</span>' +
-        '</div>' +
+      '<div style="padding:6px 14px;text-align:left;line-height:1.25;">' +
+        '<span style="display:block;font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Mats &amp; Padding Freight $</span>' +
+        '<span style="display:block;font-size:14px;font-weight:600;">' + fmtMoney(matsFreight, 'USD') + '</span>' +
+      '</div>' +
+      '<div style="padding:6px 14px;text-align:left;line-height:1.25;">' +
+        '<span style="display:block;font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Mats &amp; Padding Tax $</span>' +
+        '<span style="display:block;font-size:14px;font-weight:600;">' + fmtMoney(matsTax, 'USD') + '</span>' +
       '</div>' +
     '</div>';
   }
@@ -3572,7 +3571,7 @@
     var brp = document.getElementById('bRepull');
     if (brp) brp.addEventListener('click', repullCatalogFigures);
     var bfr = document.getElementById('bFreightReq'); if (bfr) bfr.addEventListener('click', requestFreight);
-    var bfa = document.getElementById('bFreightAmt'); if (bfa) bfa.addEventListener('click', pullFreightAmount);
+    var bfs = document.getElementById('bFreightSync'); if (bfs) bfs.addEventListener('click', pullFreightAmount);
     // line field inputs
     document.querySelectorAll('.bF').forEach(function (el) {
       var handler = function () {
