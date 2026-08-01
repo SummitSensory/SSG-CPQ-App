@@ -24,6 +24,7 @@ const QUESTION_TYPES = ['TEXT', 'LONG_TEXT', 'NUMBER', 'DATE', 'SELECT', 'MULTI_
 
 const SectionPatchSchema = z.object({
   showPowderColor: z.boolean().optional(),
+  showPackagingBag: z.boolean().optional(),
   jobName: z.string().trim().max(240).nullish(),
   shipTo: z.enum(['CUSTOMER', 'SUMMIT']).optional(),
   submittedOn: z.union([z.coerce.date(), z.null()]).optional(),

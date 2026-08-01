@@ -35,12 +35,13 @@ type SkuRow = {
   active: boolean; overrideAllowed?: boolean; defaultQty?: number | null;
   freightMinor?: number | null; freightLabel?: string | null;
   productUrl?: string | null; requiresPowderColor?: boolean;
+  packagingBag?: string | null;
 };
 async function listSkus(): Promise<SkuRow[]> {
   if (skuHasOverrideFlag) {
     try {
       return await prisma.sku.findMany({
-        select: { ...SKU_COLS, overrideAllowed: true, defaultQty: true, freightMinor: true, freightLabel: true, productUrl: true, requiresPowderColor: true },
+        select: { ...SKU_COLS, overrideAllowed: true, defaultQty: true, freightMinor: true, freightLabel: true, productUrl: true, requiresPowderColor: true, packagingBag: true },
         orderBy: { part: 'asc' },
       }) as SkuRow[];
     } catch (e) {
@@ -68,6 +69,8 @@ const ItemPatch = z.object({
   productUrl: z.string().trim().max(600).nullish(),
   /** Block BOM submission until this part carries a powder colour. */
   requiresPowderColor: z.boolean().optional(),
+  /** Packaging bag the part ships in, e.g. "Bag 7". Blank clears it. */
+  packagingBag: z.string().trim().max(60).nullish(),
 });
 
 export interface CatalogItem {
@@ -90,6 +93,8 @@ export interface CatalogItem {
   freightLabel: string | null;
   productUrl: string | null;
   requiresPowderColor: boolean;
+  /** Packaging bag this part ships in; null when it is not bagged. */
+  packagingBag: string | null;
   skuId: string | null;
   productId: string | null;
   productStatus: string | null;
@@ -137,6 +142,7 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
         freightMinor: s.freightMinor ?? null,
         freightLabel: s.freightLabel ?? null,
         productUrl: s.productUrl ?? null,
+        packagingBag: s.packagingBag ?? null,
         requiresPowderColor: s.requiresPowderColor === true,
         skuId: s.id, productId: null, productStatus: null,
       });
@@ -163,7 +169,7 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
           manufacturer: mfr, unitPriceMinor: 0, unitCostMinor: latestCost[p.id] || 0,
           weightLbs: p.weightOz ? Math.round((p.weightOz / 16) * 1000) / 1000 : 0,
           proposalGroup: '', active: p.status === 'ACTIVE', overrideAllowed: false, defaultQty: null,
-          freightMinor: null, freightLabel: null, productUrl: null, requiresPowderColor: false,
+          freightMinor: null, freightLabel: null, productUrl: null, requiresPowderColor: false, packagingBag: null,
           skuId: null, productId: p.id, productStatus: p.status,
         });
       }
@@ -202,7 +208,7 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
       d.proposalGroup !== undefined || d.active !== undefined || d.manufacturer !== undefined ||
       d.overrideAllowed !== undefined || d.defaultQty !== undefined ||
       d.freightMinor !== undefined || d.freightLabel !== undefined ||
-      d.productUrl !== undefined || d.requiresPowderColor !== undefined ||
+      d.productUrl !== undefined || d.requiresPowderColor !== undefined || d.packagingBag !== undefined ||
       (d.name !== undefined && !product) || (d.category !== undefined && !product);
     if (!sku && needsSku) {
       sku = await prisma.sku.create({
@@ -260,6 +266,9 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
         money.productUrl = u || null;
       }
       if (d.requiresPowderColor !== undefined) money.requiresPowderColor = d.requiresPowderColor;
+      // Bag numbers are typed by hand on about thirty hardware items; a blank
+      // clears the label rather than storing an empty string.
+      if (d.packagingBag !== undefined) money.packagingBag = (d.packagingBag || '').trim() || null;
       if (Object.keys(money).length) await prisma.sku.update({ where: { id: sku.id }, data: money });
     }
 

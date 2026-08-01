@@ -123,6 +123,8 @@ export interface SectionView {
   status: BomSectionStatus;
   /** Whether this vendor's sheet prints the powder-colour column. */
   showPowderColor: boolean;
+  /** Whether this vendor's sheet prints the packaging-bag column. */
+  showPackagingBag: boolean;
   editable: boolean;
   confirmedAt: string | null;
   confirmedBy: string | null;
@@ -257,6 +259,7 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
       // Forced on when a line already carries a colour: hiding the column under a
       // vendor who has been given one would drop information from their sheet.
       showPowderColor: s.showPowderColor || mine.some((l) => (l.powderColorCode || l.powderColor || '').trim()),
+      showPackagingBag: s.showPackagingBag,
       editable: s.status !== 'SUBMITTED',
       confirmedAt: iso(s.confirmedAt),
       confirmedBy: s.confirmedById ? nameById.get(s.confirmedById) ?? null : null,
@@ -322,6 +325,7 @@ function assertEditable(s: { status: BomSectionStatus; vendor: string }): void {
 
 export interface SectionPatch {
   showPowderColor?: boolean;
+  showPackagingBag?: boolean;
   jobName?: string | null;
   shipTo?: BomShipTo;
   submittedOn?: Date | null;
@@ -335,7 +339,7 @@ export async function patchSection(sectionId: string, patch: SectionPatch, actor
   const s = await loadSection(sectionId);
   assertEditable(s);
   const data: Record<string, unknown> = {};
-  for (const k of ['jobName', 'shipTo', 'submittedOn', 'deliveryType', 'powderCoatBrand', 'shipmentQuote', 'notes', 'showPowderColor'] as const) {
+  for (const k of ['jobName', 'shipTo', 'submittedOn', 'deliveryType', 'powderCoatBrand', 'shipmentQuote', 'notes', 'showPowderColor', 'showPackagingBag'] as const) {
     if (patch[k] !== undefined) data[k] = patch[k];
   }
   if (!Object.keys(data).length) return s;

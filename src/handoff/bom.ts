@@ -33,6 +33,8 @@ export interface BomLine {
   name: string;
   quantity: number;
   powderColor: string;
+  /** Packaging bag the part ships in, e.g. "Bag 7". Blank when it is not bagged. */
+  packagingBag: string;
   unitCostMinor: number;
   extendedCostMinor: number;
   unitWeightLbs: number;
@@ -141,6 +143,13 @@ export async function buildBom(
     : [];
   const treeOrderBySku = new Map(treeRows.map((p) => [p.sku, p.sortOrder]));
 
+  // Packaging bag per part. Lives on the SKU rather than the line, so one edit in
+  // the catalog re-labels every sheet that part appears on.
+  const bagRows = skusOnOrder.length
+    ? await prisma.sku.findMany({ where: { part: { in: skusOnOrder } }, select: { part: true, packagingBag: true } })
+    : [];
+  const bagBySku = new Map(bagRows.map((k) => [k.part, k.packagingBag ?? '']));
+
   // Hardware sorts to the end as its own block. Membership is decided by the
   // hardware RULES rather than a part-number pattern, so a fastener that does not
   // happen to start with 6820H- is still filed correctly.
@@ -180,6 +189,7 @@ export async function buildBom(
       name: l.name,
       quantity: qty,
       powderColor: s(l.powderColor),
+      packagingBag: bagBySku.get(s(l.sku)) ?? '',
       unitCostMinor: cost,
       extendedCostMinor: cost * qty,
       unitWeightLbs: wt,
@@ -215,6 +225,7 @@ export async function buildBom(
     for (const e of [...extra.values()].sort((a, b) => a.sku.localeCompare(b.sku))) {
       lines.push({
         id: `zero:${e.sku}`, lineNo: e.sku, sku: e.sku, name: e.name, quantity: 0, powderColor: '',
+        packagingBag: bagBySku.get(e.sku) ?? '',
         unitCostMinor: e.unitCostMinor, extendedCostMinor: 0, unitWeightLbs: e.weightLbs, extendedWeightLbs: 0,
         vendor: vendorFilter, vendorNotes: '', sourced: false,
         isSteel: steelVendors.has(vendorFilter.toLowerCase()),

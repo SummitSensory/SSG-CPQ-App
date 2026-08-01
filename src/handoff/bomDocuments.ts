@@ -34,6 +34,7 @@ async function sectionExtras(orderId: string, vendor: string) {
     jobName: section.jobName ?? '',
     status: section.status,
     showPowderColor: section.showPowderColor,
+    showPackagingBag: section.showPackagingBag,
     answers: section.answers
       .map((a) => {
         let value = a.value ?? '';
@@ -126,6 +127,11 @@ async function buildModel(
     ? doc.lines.some((l) => l.powderColor)
     : (extras?.showPowderColor ?? false) || doc.lines.some((l) => l.powderColor);
 
+  // Packaging bag: opt-in per section the same way, and never printed when no part
+  // on the sheet is bagged — about thirty hardware items carry one.
+  const hasBag = doc.lines.some((l) => l.packagingBag);
+  const showBag = hasBag && (all || (extras?.showPackagingBag ?? false));
+
   // Status and per-line Notes are gone. Status is our internal purchasing state and
   // means nothing to the vendor reading the sheet; Notes was a narrow column that
   // wrapped badly and pushed the table past the page. Any line note now reads in the
@@ -133,6 +139,7 @@ async function buildModel(
   const columns = [
     ...(all ? ['Vendor'] : []),
     'Line #', 'Description', 'Qty',
+    ...(showBag ? ['Bag #'] : []),
     ...(showColor ? ['Powder color'] : []),
     'Weight (lb)', 'Cost each', 'Total cost',
   ];
@@ -147,6 +154,7 @@ async function buildModel(
     l.lineNo,
     l.name,
     String(l.quantity),
+    ...(showBag ? [l.packagingBag || '—'] : []),
     ...(showColor ? [l.powderColor || '—'] : []),
     lbs(l.extendedWeightLbs),
     money(l.unitCostMinor),
@@ -165,6 +173,7 @@ async function buildModel(
   const totals = [
     ...(all ? [''] : []),
     '', 'Total', String(t.unitCount),
+    ...(showBag ? [''] : []),
     ...(showColor ? [''] : []),
     lbs(t.totalWeightLbs), '', money(t.extendedCostMinor),
   ];

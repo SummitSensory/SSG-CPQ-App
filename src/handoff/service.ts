@@ -352,9 +352,11 @@ export async function getOrder(id: string) {
   // resolved here — the Bill of Materials shows it as a "Buy" link.
   const parts = [...new Set(order.procurement.map((p) => p.sku).filter(Boolean) as string[])];
   const skus = parts.length
-    ? await prisma.sku.findMany({ where: { part: { in: parts } }, select: { part: true, productUrl: true } })
+    ? await prisma.sku.findMany({ where: { part: { in: parts } }, select: { part: true, productUrl: true, packagingBag: true } })
     : [];
   const urlByPart = new Map(skus.map((s) => [s.part, s.productUrl]));
+  // Which packaging bag the part ships in. Also a SKU fact, not a line fact.
+  const bagByPart = new Map(skus.map((s) => [s.part, s.packagingBag]));
 
   // The customer name leads every BOM filename and email subject, so it travels
   // with the order rather than being fetched again by each caller.
@@ -366,7 +368,11 @@ export async function getOrder(id: string) {
   return {
     ...order,
     customerName: org?.name ?? '',
-    procurement: order.procurement.map((p) => ({ ...p, productUrl: (p.sku && urlByPart.get(p.sku)) || null })),
+    procurement: order.procurement.map((p) => ({
+      ...p,
+      productUrl: (p.sku && urlByPart.get(p.sku)) || null,
+      packagingBag: (p.sku && bagByPart.get(p.sku)) || null,
+    })),
     requirements: order.requirements.map((r) => ({ ...r, updatedByName: r.updatedById ? nameById.get(r.updatedById) ?? null : null })),
     tasks: order.tasks.map((t) => ({ ...t, updatedByName: t.updatedById ? nameById.get(t.updatedById) ?? null : null })),
   };

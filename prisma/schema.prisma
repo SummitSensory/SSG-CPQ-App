@@ -1006,6 +1006,9 @@ model Sku {
   /// be submitted. Off by default — most parts are not powder coated at all, and
   /// requiring a colour on them was blocking submission.
   requiresPowderColor Boolean @default(false)
+  /// Packaging bag this part is shipped in, e.g. "Bag 7". Set on about thirty
+  /// hardware items so the shop can tell which bag to open. NULL = not bagged.
+  packagingBag   String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -1490,6 +1493,9 @@ model BomVendorSection {
   /// The powder-colour column was printed on every vendor's sheet, where it was
   /// usually a column of dashes. Opt-in per section; seeded from the vendor default.
   showPowderColor Boolean          @default(false)
+  /// Whether this vendor's sheet prints the packaging-bag column. Opt-in, the
+  /// same way the powder-colour column is.
+  showPackagingBag Boolean         @default(false)
   confirmedAt     DateTime?
   confirmedById   String?
   unlockedAt      DateTime?

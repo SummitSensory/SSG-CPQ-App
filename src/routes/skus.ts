@@ -22,6 +22,8 @@ const SkuBody = z.object({
   /** Where to buy this part — becomes a "Buy" link on the Bill of Materials. */
   productUrl: z.string().trim().url().max(600).nullish(),
   requiresPowderColor: z.boolean().optional(),
+  /** Packaging bag the part ships in, e.g. "Bag 7". */
+  packagingBag: z.string().trim().max(60).nullish(),
 });
 
 // One import row; prices may arrive as dollars (unitPrice) or minor (unitPriceMinor).
@@ -40,6 +42,7 @@ const ImportRow = z.object({
   defaultQty: z.union([z.number(), z.string()]).optional(),
   productUrl: z.string().trim().optional(),
   requiresPowderColor: z.union([z.boolean(), z.string(), z.number()]).optional(),
+  packagingBag: z.string().trim().optional(),
 });
 const toMinor = (v: unknown): number => {
   if (v == null || v === '') return 0;
@@ -188,6 +191,8 @@ export function registerSkuRoutes(app: FastifyInstance): void {
       if (has(raw, 'proposalGroup')) { data.proposalGroup = d.proposalGroup ? d.proposalGroup.trim() : null; columns.push('proposalGroup'); }
       if (has(raw, 'overrideAllowed')) { data.overrideAllowed = toBool(d.overrideAllowed); columns.push('overrideAllowed'); }
       if (has(raw, 'requiresPowderColor')) { data.requiresPowderColor = toBool(d.requiresPowderColor); columns.push('requiresPowderColor'); }
+      // Blank clears the bag label rather than storing an empty string.
+      if (has(raw, 'packagingBag')) { data.packagingBag = (d.packagingBag ?? '').trim() || null; columns.push('packagingBag'); }
       // A blank clears the link; anything else must be a real URL, so a typo can't
       // become an unclickable "link" on a purchasing document.
       if (has(raw, 'productUrl')) {
@@ -244,6 +249,7 @@ export function registerSkuRoutes(app: FastifyInstance): void {
             defaultQty: (c.data.defaultQty as number | null) ?? null,
             productUrl: (c.data.productUrl as string | null) ?? null,
             requiresPowderColor: (c.data.requiresPowderColor as boolean) ?? false,
+            packagingBag: (c.data.packagingBag as string | null) ?? null,
           },
         });
         created++;

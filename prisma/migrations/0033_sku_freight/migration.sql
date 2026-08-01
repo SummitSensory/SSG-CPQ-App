@@ -1,17 +1,12 @@
--- Sku: fixed per-part freight defaults.
+-- 0033_sku_packaging_bag
 --
--- These two columns exist in schema.prisma but were never captured in a
--- migration, so the production database is missing them and any read of the
--- Sku model fails with P2022 (see catalogItems PATCH /catalog/items/:part).
---
--- freightMinor: fixed freight charge applied to this part's proposal line
---   automatically. NULL = no default; 0 = an explicit "no freight". A rep's
---   entry always wins.
--- freightLabel: wording for that freight row. Defaults to "Freight" when blank.
---
--- Both nullable with no default, so this is additive and safe to apply to a
--- live database: existing rows get NULL, and older application builds that
--- don't select these columns are unaffected.
+-- About thirty hardware items ship inside a numbered packaging bag. The shop
+-- needs to know which bag to open; nobody else does. So the bag lives on the
+-- SKU (one edit re-labels every sheet the part appears on) and prints on a
+-- vendor's Bill of Materials only when that section asks for it.
 
-ALTER TABLE "Sku" ADD COLUMN IF NOT EXISTS "freightMinor" INTEGER;
-ALTER TABLE "Sku" ADD COLUMN IF NOT EXISTS "freightLabel" TEXT;
+ALTER TABLE "Sku" ADD COLUMN "packagingBag" TEXT;
+
+-- Opt-in per BOM section, exactly like the powder-colour column. Off by
+-- default: on a sheet with no bagged parts the column would be all dashes.
+ALTER TABLE "BomVendorSection" ADD COLUMN "showPackagingBag" BOOLEAN NOT NULL DEFAULT false;

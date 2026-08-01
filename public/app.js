@@ -833,6 +833,7 @@
     { key: 'freightDisplay', label: 'Auto freight', w: 116, type: 'num', align: 'right' },
     { key: 'ovrLabel', label: 'Override OK', w: 104, type: 'enum', options: [['Yes', 'Yes'], ['No', 'No']], align: 'center' },
     { key: 'productUrl', label: 'Buy link', w: 150, type: 'text' },
+    { key: 'packagingBag', label: 'Bag #', w: 96, type: 'text' },
     { key: 'colorLabel', label: 'Needs colour', w: 110, type: 'enum', options: [['Yes', 'Yes'], ['No', 'No']], align: 'center' },
     { key: '', label: '', w: 96 },
   ];
@@ -871,6 +872,7 @@
         row.freightLabel = k.freightLabel || '';
         row.freightDisplay = k.freightMinor == null ? '' : Number(k.freightMinor) / 100;
         row.productUrl = k.productUrl || '';
+        row.packagingBag = k.packagingBag || '';
         row.colorLabel = k.requiresPowderColor ? 'Yes' : 'No';
         row.isActive = k.productStatus ? k.productStatus === 'ACTIVE' : k.active !== false;
         return row;
@@ -938,6 +940,11 @@
         cell(admin
           ? '<input class="itUrl" data-part="' + esc(k.part) + '" value="' + esc(k.productUrl || '') + '" placeholder="—" title="Vendor order page. Shown as a Buy link on the Bill of Materials." style="width:100%;padding:5px 7px;border:1px solid #dcded7;border-radius:6px;font-size:12px;">'
           : (k.productUrl ? '<a href="' + esc(k.productUrl) + '" target="_blank" rel="noopener" style="font-size:12px;">Buy ↗</a>' : '<span style="color:#b6bab1;">—</span>')) +
+        // Which packaging bag the part ships in. Only about thirty hardware items
+        // carry one; blank everywhere else and never printed unless asked for.
+        cell(admin
+          ? '<input class="itBag" data-part="' + esc(k.part) + '" value="' + esc(k.packagingBag || '') + '" placeholder="—" title="Packaging bag this part ships in, e.g. Bag 7. Shown on the Bill of Materials when the bag column is turned on." style="width:100%;padding:5px 7px;border:1px solid #dcded7;border-radius:6px;font-size:12px;">'
+          : (k.packagingBag ? '<span style="font-size:12.5px;font-weight:600;">' + esc(k.packagingBag) + '</span>' : '<span style="color:#b6bab1;">—</span>')) +
         // Whether this part must carry a powder colour before its BOM section can be
         // submitted. Off by default — most parts are not powder coated at all.
         cell(admin
@@ -1022,6 +1029,22 @@
         el.value = to == null ? '' : String(to);
         var rowq = (itemState.rows || []).filter(function (x) { return x.part === part; })[0];
         if (rowq) { rowq.defaultQty = to == null ? '' : to; }
+        setTimeout(function () { el.style.borderColor = '#dcded7'; }, 900);
+      });
+    });
+    box.querySelectorAll('.itBag').forEach(function (el) {
+      el.addEventListener('change', async function () {
+        var part = el.getAttribute('data-part'), v = el.value.trim();
+        el.style.borderColor = '#c9a227';
+        var rb = await authed('/catalog/items/' + encodeURIComponent(part), { method: 'PATCH', body: { packagingBag: v || null } });
+        el.style.borderColor = rb.ok ? '#3f9d78' : '#c2452f';
+        if (!rb.ok) {
+          var mb = ''; try { mb = ((await rb.json()) || {}).message || ''; } catch (eb) {}
+          alert(mb || 'Could not save that bag number (' + rb.status + '). If this says the column is missing, migration 0033 has not been deployed.');
+          return;
+        }
+        var rowb = (itemState.rows || []).filter(function (x) { return x.part === part; })[0];
+        if (rowb) rowb.packagingBag = v;
         setTimeout(function () { el.style.borderColor = '#dcded7'; }, 900);
       });
     });
@@ -5033,7 +5056,11 @@
       : (s.unlockedBy ? '<div class="muted" style="font-size:11.5px;margin-top:4px;">Reopened by ' + esc(s.unlockedBy) + ' · ' + fmtDate(s.unlockedAt) + '</div>' : '');
 
     var showColor = !!s.showPowderColor;
-    var cols = showColor ? 9 : 8;
+    // The bag column is opt-in per vendor and only offered when a part on this
+    // section actually has a bag number — most vendors ship nothing bagged.
+    var hasBag = lines.some(function (p) { return p.packagingBag; });
+    var showBag = hasBag && !!s.showPackagingBag;
+    var cols = 8 + (showColor ? 1 : 0) + (showBag ? 1 : 0);
     var rowHtmlFor = function (p) {
       var ext = (Number(p.unitCostMinor) || 0) * (Number(p.quantity) || 0);
       var buy = p.productUrl
@@ -5042,6 +5069,7 @@
         td('<b style="font-weight:600;">' + esc(p.name) + '</b>' + buy) +
         td('<code style="font-size:12.5px;color:#4a4f47;">' + esc(p.sku || '—') + '</code>') +
         td(String(p.quantity)) +
+        (showBag ? td(esc(p.packagingBag || '—')) : '') +
         (showColor ? td(edit ? colorCell(p) : esc(p.powderColor || '—')) : '') +
         td(((Number(p.unitWeightLbs) || 0) * (Number(p.quantity) || 0)).toFixed(2)) +
         td(money2(p.unitCostMinor)) +
@@ -5069,7 +5097,7 @@
       '<tr><td style="padding:12px 16px;border-top:1px solid #e7e8e3;font-weight:600;">Total — ' + s.lineCount + ' line' + (s.lineCount === 1 ? '' : 's') + '</td>' +
       '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td>' +
       '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;font-weight:600;">' + s.unitCount + '</td>' +
-      '<td colspan="' + (showColor ? 3 : 2) + '" style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td>' +
+      '<td colspan="' + (2 + (showColor ? 1 : 0) + (showBag ? 1 : 0)) + '" style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td>' +
       '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;font-weight:600;">' + money2(s.extendedCostMinor) + '</td>' +
       '<td colspan="2" style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td></tr>';
 
@@ -5116,11 +5144,18 @@
         '<label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#5c6157;margin-top:10px;' + (edit ? 'cursor:pointer;' : 'opacity:.6;') + '">' +
           '<input type="checkbox" class="secColorCol" data-id="' + s.id + '"' + (s.showPowderColor ? ' checked' : '') + (edit ? '' : ' disabled') + '>' +
           'Show the powder colour column on this vendor’s sheet</label>' +
+        // Same opt-in for the packaging bag. Hidden entirely when nothing on this
+        // section is bagged, so it never becomes a column of dashes.
+        (hasBag
+          ? '<label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#5c6157;margin-top:6px;' + (edit ? 'cursor:pointer;' : 'opacity:.6;') + '">' +
+              '<input type="checkbox" class="secBagCol" data-id="' + s.id + '"' + (s.showPackagingBag ? ' checked' : '') + (edit ? '' : ' disabled') + '>' +
+              'Show the packaging bag column on this vendor’s sheet</label>'
+          : '') +
         questionBlock(s, edit) +
         (edit && s.showPowderColor ? colorApplyRow(s) : '') +
         '<div style="margin-top:14px;overflow:auto;">' +
           tableShell(
-            ['Item', 'Part #', 'Qty'].concat(showColor ? ['Powder color'] : [], ['Weight (lb)', 'Cost each', 'Total cost', 'Notes', 'Status']),
+            ['Item', 'Part #', 'Qty'].concat(showBag ? ['Bag #'] : [], showColor ? ['Powder color'] : [], ['Weight (lb)', 'Cost each', 'Total cost', 'Notes', 'Status']),
             rows, cols, '') +
         '</div>' +
         sendHistory(s) +
@@ -5231,6 +5266,14 @@
       el.addEventListener('change', async function () {
         var r = await authed('/bom/sections/' + el.getAttribute('data-id'), { method: 'PATCH', body: { showPowderColor: el.checked } });
         if (!r.ok) { alert('Could not change that (' + r.status + ').'); el.checked = !el.checked; return; }
+        loadBomSections(order, user, canHandoff);
+      });
+    });
+
+    document.querySelectorAll('.secBagCol').forEach(function (el) {
+      el.addEventListener('change', async function () {
+        var rb = await authed('/bom/sections/' + el.getAttribute('data-id'), { method: 'PATCH', body: { showPackagingBag: el.checked } });
+        if (!rb.ok) { alert('Could not change that (' + rb.status + '). If this says the column is missing, migration 0033 has not been deployed.'); el.checked = !el.checked; return; }
         loadBomSections(order, user, canHandoff);
       });
     });
