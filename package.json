@@ -29,6 +29,7 @@
     "db:backfill:snapshots": "tsx --env-file=.env prisma/backfill-price-snapshots.ts",
     "db:backfill:weights": "tsx --env-file=.env prisma/backfill-missing-weights.ts",
     "db:report:shared-parts": "tsx --env-file=.env prisma/report-shared-parts.ts",
+    "db:price:p2513": "tsx --env-file=.env prisma/price-p2513.ts",
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
     "test:e2e": "playwright test",
