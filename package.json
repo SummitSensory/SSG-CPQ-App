@@ -28,6 +28,7 @@
     "db:seed:soar": "tsx --env-file=.env prisma/seed-soar.ts",
     "db:backfill:snapshots": "tsx --env-file=.env prisma/backfill-price-snapshots.ts",
     "db:backfill:weights": "tsx --env-file=.env prisma/backfill-missing-weights.ts",
+    "db:report:shared-parts": "tsx --env-file=.env prisma/report-shared-parts.ts",
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
     "test:e2e": "playwright test",

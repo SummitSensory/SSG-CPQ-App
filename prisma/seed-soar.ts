@@ -169,16 +169,31 @@ async function main(): Promise<void> {
   for (const s of data.sourcing) if (s.isPrimary) manBySku.set(s.sku, s.manufacturer);
 
   let skusWritten = 0;
+  let skusKept = 0;
   for (const p of data.products) {
     if (p.unitPriceMinor == null) {
       console.warn(`    ${p.sku}: no unit price — skipped in the Sku price list`);
       continue;
     }
+    // Shared parts (the tracking-rail hardware sits in both Adventure Series and
+    // Summit Flex) must keep the price already in the catalog. A workbook re-import
+    // is allowed to describe a part, never to re-price one that is already selling.
+    const current = await prisma.sku.findUnique({
+      where: { part: p.sku },
+      select: { unitPriceMinor: true, unitCostMinor: true, weightLbs: true },
+    });
+    const seedCost = costBySku.get(p.sku) ?? 0;
+    const seedWeight = p.weightOz ? p.weightOz / 16 : 0;
+    if (current && (current.unitPriceMinor !== p.unitPriceMinor || (current.unitCostMinor && current.unitCostMinor !== seedCost))) {
+      console.log(`    ${p.sku}: kept catalog price ${(current.unitPriceMinor / 100).toFixed(2)} / cost ${(current.unitCostMinor / 100).toFixed(2)} (workbook said ${(p.unitPriceMinor / 100).toFixed(2)} / ${(seedCost / 100).toFixed(2)})`);
+      skusKept += 1;
+    }
     const payload = {
       description: p.name,
-      unitPriceMinor: p.unitPriceMinor,
-      unitCostMinor: costBySku.get(p.sku) ?? 0,
-      weightLbs: p.weightOz ? p.weightOz / 16 : 0,
+      // Catalog wins on money and weight; the workbook only fills a blank.
+      unitPriceMinor: current ? current.unitPriceMinor : p.unitPriceMinor,
+      unitCostMinor: current && current.unitCostMinor ? current.unitCostMinor : seedCost,
+      weightLbs: current && current.weightLbs ? current.weightLbs : seedWeight,
       category: skuCategory(p.sku),
       manufacturer: manBySku.get(p.sku) ?? null,
       // The workbook's Default Qty drives the builder's pre-filled quantity.
@@ -189,7 +204,7 @@ async function main(): Promise<void> {
     skusWritten += 1;
   }
 
-  console.log(`\n  Applied. ${costsInserted} new cost row(s), ${skusWritten} SKU price row(s).\n`);
+  console.log(`\n  Applied. ${costsInserted} new cost row(s), ${skusWritten} SKU price row(s), ${skusKept} left at the catalog price.\n`);
 }
 
 main()
