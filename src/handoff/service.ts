@@ -122,7 +122,10 @@ export async function resolveCatalogRefs(
   for (const p of products) {
     const ref: Ref = {
       sku: p.sku ?? null, vendor: vendorOf(p), unitCostMinor: null,
-      unitWeightLbs: p.weightOz ? Math.round((p.weightOz / 16) * 1000) / 1000 : null,
+      // A product with no weight on record weighs zero for our purposes: the
+      // catalog has 277 such items and no shipper is waiting on them, so a blank
+      // is read as 0 lb rather than "unknown" and never blocks a freight request.
+      unitWeightLbs: Math.round(((p.weightOz ?? 0) / 16) * 1000) / 1000,
     };
     byId.set(p.id, ref);
     if (p.sku && !byPart.has(p.sku)) byPart.set(p.sku, ref);

@@ -3111,7 +3111,7 @@
     pb.meta.freightBusy = 'req'; renderBuilderKeepingFocus();
     var r = await authed('/proposals/' + pb.proposalId + '/freight-request', {
       method: 'POST',
-      body: { itemId: item, weightLb: Math.round((Number(t.weight) || 0) * 100) / 100, linesMissingWeight: t.weightMissing || 0 },
+      body: { itemId: item, weightLb: Math.round((Number(t.weight) || 0) * 100) / 100 },
     });
     pb.meta.freightBusy = '';
     if (!r.ok) { renderBuilderKeepingFocus(); return alert('monday.com did not accept the request (' + r.status + '). The button stays red — nothing was written.'); }
@@ -3188,7 +3188,7 @@
   }
 
   function builderTotals() {
-    var subtotal = 0, tpFreight = 0, weight = 0, cogs = 0, weightMissing = 0;
+    var subtotal = 0, tpFreight = 0, weight = 0, cogs = 0;
     var groups = []; var cur = null;
     pb.lines.forEach(function (l) {
       if (l.lineType === 'GROUP') { cur = { name: l.name, optional: l.optional, subtotal: 0, cogs: 0 }; groups.push(cur); return; }
@@ -3197,10 +3197,9 @@
         var cst = (Number(l.quantity) || 0) * (Number(l.costEach) || 0);
         var tp = Number(l.tpFreightMinor) || 0;
         subtotal += amt; tpFreight += tp; cogs += cst;
+        // A line with no weight on record counts as 0 lb — blanks in the catalog
+        // are treated as zero weight, not as an unknown to be flagged.
         weight += (Number(l.quantity) || 0) * (Number(l.weightEach) || 0);
-        // A priced line with no weight on record silently understates crating and
-        // freight, so count them rather than letting the total look complete.
-        if ((Number(l.quantity) || 0) > 0 && !(Number(l.weightEach) || 0)) weightMissing++;
         if (cur) { cur.subtotal += amt + tp; cur.cogs += cst; }
       }
     });
@@ -3213,7 +3212,7 @@
     var deposit = depositOf(total);
     var revenue = subtotal - discount + tpFreight;
     groups.forEach(function (g) { g.margin = g.subtotal - g.cogs; g.marginPct = g.subtotal ? Math.round((g.margin / g.subtotal) * 1000) / 10 : 0; });
-    return { subtotal: subtotal, discountPct: discountPct, discount: discount, tpFreight: tpFreight, tax: tax, structureFreight: structureFreight, matsFreight: matsFreight, total: total, deposit: deposit, groups: groups, weight: weight, weightMissing: weightMissing,
+    return { subtotal: subtotal, discountPct: discountPct, discount: discount, tpFreight: tpFreight, tax: tax, structureFreight: structureFreight, matsFreight: matsFreight, total: total, deposit: deposit, groups: groups, weight: weight,
       revenue: revenue, cogs: cogs, margin: revenue - cogs, marginPct: revenue ? Math.round(((revenue - cogs) / revenue) * 1000) / 10 : 0 };
   }
   // subtotal + cost per GROUP line index, for inline display in the builder
@@ -3308,15 +3307,12 @@
         priceWarningHtml() +
         // Running shipment weight, recalculated on every edit. Read-only: it is the
         // sum of the lines, and a typed override would quietly disagree with them.
-        // The zero-weight count is shown because a missing weight understates crating
-        // and freight, and a total that looks complete hides that.
+        // Lines with no weight on record contribute 0 lb.
         '<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:14px;padding:10px 12px;background:#f7f8f4;border:1px solid #eef0ea;border-radius:9px;">' +
           '<div style="display:flex;align-items:baseline;gap:10px;flex:1;min-width:260px;">' +
             '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Estimated shipment weight</div>' +
             '<div style="font-size:16px;font-weight:600;">' + (Number(t.weight) || 0).toFixed(2) + ' lb</div>' +
-            (t.weightMissing
-              ? '<div style="font-size:11.5px;color:#8a5a12;">' + t.weightMissing + ' line' + (t.weightMissing === 1 ? '' : 's') + ' have no weight on record — the total is low</div>'
-              : '<div class="muted" style="font-size:11.5px;">Sum of all included lines</div>') +
+            '<div class="muted" style="font-size:11.5px;">Sum of all included lines</div>' +
           '</div>' +
           freightControlsHtml() +
         '</div>' +
@@ -3358,7 +3354,6 @@
           '<span class="muted">Total weight</span>' +
           '<span style="font-variant-numeric:tabular-nums;">' + fmtWeight(t.weight) + '</span>' +
         '</div>' +
-        (t.weightMissing ? '<div style="font-size:11px;color:#b4522e;text-align:right;margin-top:3px;">' + t.weightMissing + ' line' + (t.weightMissing === 1 ? '' : 's') + ' have no weight on record</div>' : '') +
       '</div>' +
       footerNotesCard() +
       '<div id="bMarginRail" style="' + marginRailStyle() + '">' + marginCard(t) + '</div>';
@@ -4613,7 +4608,24 @@
   }
   /** Depth-first walk of a linePickerTree(), in tier sort order. */
   function walkLinePickerTree(entries, depth, visit) {
-    entries.forEach(function (e) { visit(e.node, depth); walkLinePickerTree(e.children, depth + 1, visit); });
+    entries.forEach(function (e) { visit(e.node, depth, e); walkLinePickerTree(e.children, depth + 1, visit); });
+  }
+  /** Every checkbox-able product beneath a header entry, at any depth. */
+  function productDescendantSlugs(entry) {
+    var out = [];
+    entry.children.forEach(function (c) {
+      if (c.node.sku) out.push(c.node.slug); else out = out.concat(productDescendantSlugs(c));
+    });
+    return out;
+  }
+  /** The tree entry for a slug, searching a linePickerTree() result. */
+  function findLinePickerEntry(entries, slug) {
+    for (var i = 0; i < entries.length; i++) {
+      if (entries[i].node.slug === slug) return entries[i];
+      var found = findLinePickerEntry(entries[i].children, slug);
+      if (found) return found;
+    }
+    return null;
   }
 
   function renderLinePicker() {
@@ -4628,13 +4640,26 @@
       body = '<div class="muted" style="padding:24px;text-align:center;">No items found for ' + esc(linePicker.lineName) + '.</div>';
     } else {
       var rows = '';
-      walkLinePickerTree(linePickerTree(), 0, function (n, depth) {
+      var tree = linePickerTree();
+      walkLinePickerTree(tree, 0, function (n, depth, entry) {
         var indent = depth * 20;
         if (!n.sku) {
           // A header node — Tier 1 is the section heading; anything deeper is a
-          // sub-heading purely for visual grouping in the tree.
+          // sub-heading purely for visual grouping in the tree. A header with no
+          // product beneath it (a TBD placeholder) stays a plain heading; one with
+          // products gets a checkbox that reflects and drives their check state.
           var isTier1 = n.tierLevel === 1;
-          rows += '<div style="margin-left:' + indent + 'px;padding:' + (isTier1 ? '14px 0 6px' : '8px 0 4px') + ';font-weight:600;font-size:' + (isTier1 ? '14.5px' : '13px') + ';color:#3d4a55;' + (isTier1 ? 'border-top:1px solid #e7e8e3;' : '') + '">' + esc(n.name) + '</div>';
+          var prodSlugs = productDescendantSlugs(entry);
+          var headerCheck = '';
+          if (prodSlugs.length) {
+            var checkedN = prodSlugs.filter(function (s) { return !!linePicker.checked[s]; }).length;
+            var state = checkedN === 0 ? 'none' : checkedN === prodSlugs.length ? 'all' : 'some';
+            headerCheck = '<input type="checkbox" class="lpHeaderCheck" data-slug="' + esc(n.slug) + '" data-state="' + state + '"' + (state === 'all' ? ' checked' : '') + ' style="width:16px;height:16px;flex:0 0 auto;margin-right:8px;">';
+          }
+          rows += '<div style="display:flex;align-items:center;margin-left:' + indent + 'px;padding:' + (isTier1 ? '14px 0 6px' : '8px 0 4px') + ';' + (isTier1 ? 'border-top:1px solid #e7e8e3;' : '') + '">' +
+            headerCheck +
+            '<span style="font-weight:600;font-size:' + (isTier1 ? '14.5px' : '13px') + ';color:#3d4a55;">' + esc(n.name) + '</span>' +
+          '</div>';
           return;
         }
         var checked = !!linePicker.checked[n.slug];
@@ -4675,6 +4700,17 @@
     });
     o.querySelectorAll('.lpQty').forEach(function (el) {
       el.addEventListener('change', function () { linePicker.qty[el.getAttribute('data-slug')] = Math.max(0, Number(el.value) || 0); });
+    });
+    o.querySelectorAll('.lpHeaderCheck').forEach(function (el) {
+      // Indeterminate is a DOM property, not a markup attribute — it has to be set
+      // here, after the checkbox already exists.
+      if (el.getAttribute('data-state') === 'some') el.indeterminate = true;
+      el.addEventListener('change', function () {
+        var entry = findLinePickerEntry(tree, el.getAttribute('data-slug'));
+        if (!entry) return;
+        productDescendantSlugs(entry).forEach(function (slug) { linePicker.checked[slug] = el.checked; });
+        renderLinePicker();
+      });
     });
   }
 
