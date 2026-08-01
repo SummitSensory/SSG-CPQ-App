@@ -40,6 +40,12 @@ vi.mock('../../src/lib/prisma.js', () => {
         return row;
       },
     },
+    // resolveCatalogRefs() looks up procurement identity (part number, vendor,
+    // cost, weight) for every order line. These tests assert on version locking
+    // and integrity hashing, not catalog resolution, so no matches is the right
+    // neutral input — the service falls back to nulls.
+    product: { findMany: async () => [] },
+    sku: { findMany: async () => [] },
     proposalVersion: { findUnique: async () => s.version },
     priceSnapshot: { findUnique: async () => s.snapshot },
     orderEvent: { create: async () => ({}) },
