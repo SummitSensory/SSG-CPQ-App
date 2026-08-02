@@ -7,7 +7,7 @@ import { env, isQuickbooksConfigured, qboEnvironment } from '../config/env.js';
 import { prisma } from '../lib/prisma.js';
 import { authorizeUrl, exchangeCode, disconnect } from '../integrations/quickbooks/oauth.js';
 import { findOrCreateCustomer } from '../integrations/quickbooks/customers.js';
-import { syncItem } from '../integrations/quickbooks/items.js';
+import { syncItem, linkItemsBySku } from '../integrations/quickbooks/items.js';
 import {
   prepareTransaction,
   authorizeTransaction,
@@ -153,6 +153,8 @@ export function registerQuickbooksRoutes(app: FastifyInstance): void {
   });
 
   // --- Master-data sync (manage) ---
+  // refresh: true — push the current CRM profile onto an already-linked
+  // QuickBooks customer, so fields missing at first creation get filled in.
   app.post(
     '/integrations/quickbooks/customers/:organizationId/sync',
     manage,
@@ -160,9 +162,21 @@ export function registerQuickbooksRoutes(app: FastifyInstance): void {
       const realmId = await activeRealmId();
       if (!realmId) return reply.status(409).send({ error: 'NOT_CONNECTED' });
       const { organizationId } = req.params as { organizationId: string };
-      return findOrCreateCustomer(organizationId, realmId, req.user!.sub);
+      return findOrCreateCustomer(organizationId, realmId, req.user!.sub, fetch, {
+        refresh: true,
+      });
     },
   );
+
+  // Bulk-link the catalog to QuickBooks items by SKU. Creates nothing in
+  // QuickBooks — items are imported there via the Products & Services
+  // spreadsheet; this records which CPQ record maps to which QuickBooks item.
+  // Idempotent, safe to re-run after any catalog or import change.
+  app.post('/integrations/quickbooks/items/link-by-sku', manage, async (req, reply) => {
+    const realmId = await activeRealmId();
+    if (!realmId) return reply.status(409).send({ error: 'NOT_CONNECTED' });
+    return linkItemsBySku(realmId, req.user!.sub);
+  });
 
   app.post('/integrations/quickbooks/items/:productId/sync', manage, async (req, reply) => {
     const realmId = await activeRealmId();
