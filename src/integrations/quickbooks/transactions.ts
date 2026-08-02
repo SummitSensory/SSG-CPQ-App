@@ -49,6 +49,14 @@ interface AcceptedTotals {
   taxMinor: bigint;
 }
 
+/** The snapshot fields both readers below need. */
+interface SnapshotHead {
+  id: string;
+  currency: string;
+  grandTotal: bigint;
+  engineVersion: string;
+}
+
 /** Read + freeze the accepted proposal totals. Throws unless the version is ACCEPTED. */
 async function loadAcceptedTotals(proposalVersionId: string): Promise<AcceptedTotals> {
   const version = await prisma.proposalVersion.findUnique({ where: { id: proposalVersionId } });
@@ -60,10 +68,27 @@ async function loadAcceptedTotals(proposalVersionId: string): Promise<AcceptedTo
   const snap = await prisma.priceSnapshot.findUnique({ where: { id: version.priceSnapshotId } });
   if (!snap) throw new NotFoundError('Price snapshot not found');
   const b = snap.breakdown as Record<string, unknown>;
-  const payment = (b.payment ?? {}) as Record<string, unknown>;
 
+  // Two snapshot shapes exist in this database. The pricing engine writes a
+  // `lines[]` array with a `net` per line plus a `fees` map. The proposal
+  // builder ('proposal-builder-1', src/handoff/service.ts) writes flat *Minor
+  // totals and keeps the line detail on the version itself. Reading a builder
+  // snapshot with the pricing-engine reader yields zero lines and a zero total,
+  // which the document builders then (correctly) refuse to send.
+  return Array.isArray(b.lines)
+    ? fromPricingEngine(snap, b, version.items)
+    : fromProposalBuilder(snap, b, version.items);
+}
+
+/** Pricing-engine snapshot: `lines[].net`, `fees` map, `tax`, `orderDiscount`. */
+async function fromPricingEngine(
+  snap: SnapshotHead,
+  b: Record<string, unknown>,
+  rawItems: unknown,
+): Promise<AcceptedTotals> {
+  const payment = (b.payment ?? {}) as Record<string, unknown>;
   const items =
-    (version.items as unknown as Array<{
+    (rawItems as unknown as Array<{
       ref: string;
       productId: string;
       name: string;
@@ -102,6 +127,73 @@ async function loadAcceptedTotals(proposalVersionId: string): Promise<AcceptedTo
     fees,
     orderDiscountMinor: toBig(b.orderDiscount ?? 0),
     taxMinor: toBig(b.tax ?? 0),
+  };
+}
+
+/**
+ * Proposal-builder snapshot ('proposal-builder-1'). Flat totals on the
+ * breakdown; product lines come from ProposalVersion.items. Mirrors
+ * versionTotals() in src/proposals/analytics.ts so the assembled document total
+ * equals the accepted grand total exactly:
+ *   subtotal - discount + tpFreight + tax + structureFreight + matsFreight
+ */
+async function fromProposalBuilder(
+  snap: SnapshotHead,
+  b: Record<string, unknown>,
+  rawItems: unknown,
+): Promise<AcceptedTotals> {
+  const num = (v: unknown): number =>
+    typeof v === 'number' && Number.isFinite(v) ? v : Number(v) || 0;
+
+  const items = Array.isArray(rawItems)
+    ? (rawItems.filter((i) => i && typeof i === 'object') as Array<Record<string, unknown>>)
+    : [];
+
+  const lines: AcceptedLine[] = [];
+  for (const it of items) {
+    // Non-PRODUCT rows (headings, notes) carry no money — the same rule the
+    // proposal's own totals use.
+    if ((it.lineType ?? 'PRODUCT') !== 'PRODUCT') continue;
+    const qty = num(it.quantity);
+    const amountMinor = BigInt(Math.round(qty * num(it.rateMinor)));
+    if (amountMinor === 0n) continue;
+    const productId = typeof it.productId === 'string' ? it.productId : null;
+    const link = productId ? await findLink({ entity: 'Item', entityId: productId }) : null;
+    lines.push({
+      description: String(it.name ?? it.sku ?? 'Line item'),
+      qboItemId: link?.qboId ?? null,
+      quantity: qty || 1,
+      amountMinor,
+    });
+  }
+
+  const fees: Array<{ label: string; amountMinor: bigint }> = [];
+  const addFee = (label: string, key: string) => {
+    const amt = toBig(b[key] ?? 0);
+    if (amt !== 0n) fees.push({ label, amountMinor: amt });
+  };
+  addFee('Third-party freight', 'thirdPartyFreightMinor');
+  addFee('Structure freight', 'structureFreightMinor');
+  addFee('Mats & padding freight', 'matsFreightMinor');
+
+  const payment = (b.payment ?? {}) as Record<string, unknown>;
+  const deposit = toBig(payment.deposit ?? 0);
+  // This builder has no progress stage: deposit + balance is the whole schedule.
+  const balance =
+    payment.balanceDueMinor != null ? toBig(payment.balanceDueMinor) : snap.grandTotal - deposit;
+
+  return {
+    currency: snap.currency,
+    grandTotalMinor: snap.grandTotal,
+    deposit,
+    progress: 0n,
+    final: balance,
+    priceSnapshotId: snap.id,
+    engineVersion: snap.engineVersion,
+    lines,
+    fees,
+    orderDiscountMinor: toBig(b.discountMinor ?? 0),
+    taxMinor: toBig(b.taxMinor ?? 0),
   };
 }
 
