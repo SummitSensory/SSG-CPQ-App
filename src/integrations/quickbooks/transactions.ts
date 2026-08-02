@@ -103,6 +103,7 @@ async function fromPricingEngine(
     const item = byRef.get(bl.ref);
     const link = item ? await findLink({ entity: 'Item', entityId: item.productId }) : null;
     lines.push({
+      kind: 'PRODUCT',
       description: item?.name ?? bl.ref,
       qboItemId: link?.qboId ?? null,
       quantity: item?.quantity ?? 1,
@@ -149,18 +150,51 @@ async function fromProposalBuilder(
     ? (rawItems.filter((i) => i && typeof i === 'object') as Array<Record<string, unknown>>)
     : [];
 
+  // The proposal's structure is preserved: GROUP / SUBGROUP / NOTE rows travel
+  // through as description-only lines so the QuickBooks document reads like the
+  // proposal the customer accepted. Only PRODUCT rows carry money, which is the
+  // same rule the proposal's own totals use.
   const lines: AcceptedLine[] = [];
   for (const it of items) {
-    // Non-PRODUCT rows (headings, notes) carry no money — the same rule the
-    // proposal's own totals use.
-    if ((it.lineType ?? 'PRODUCT') !== 'PRODUCT') continue;
+    const lineType = String(it.lineType ?? 'PRODUCT');
+
+    if (lineType === 'GROUP' || lineType === 'SUBGROUP') {
+      const heading = String(it.name ?? '').trim();
+      if (!heading) continue;
+      lines.push({
+        kind: lineType,
+        description: heading,
+        optional: Boolean(it.optional),
+        quantity: 0,
+        amountMinor: 0n,
+      });
+      continue;
+    }
+    if (lineType === 'NOTE') {
+      const text = [it.name, it.description]
+        .map((v) => String(v ?? '').trim())
+        .filter(Boolean)
+        .join(' — ');
+      if (text) lines.push({ kind: 'NOTE', description: text, quantity: 0, amountMinor: 0n });
+      continue;
+    }
+    if (lineType !== 'PRODUCT') continue;
+
     const qty = num(it.quantity);
     const amountMinor = BigInt(Math.round(qty * num(it.rateMinor)));
-    if (amountMinor === 0n) continue;
     const productId = typeof it.productId === 'string' ? it.productId : null;
-    const link = productId ? await findLink({ entity: 'Item', entityId: productId }) : null;
+    const sku = typeof it.sku === 'string' ? it.sku.trim().toUpperCase() : '';
+    // Prefer the product-id link; fall back to the SKU-keyed link so generated
+    // frame / adventure lines (which carry a part number but no productId) still
+    // land on the right QuickBooks item instead of the default service.
+    const link =
+      (productId ? await findLink({ entity: 'Item', entityId: productId }) : null) ??
+      (sku ? await findLink({ entity: 'ItemSku', entityId: sku }) : null);
+    const name = String(it.name ?? it.sku ?? 'Line item');
+    const detail = String(it.description ?? '').trim();
     lines.push({
-      description: String(it.name ?? it.sku ?? 'Line item'),
+      kind: 'PRODUCT',
+      description: detail ? `${name} — ${detail}` : name,
       qboItemId: link?.qboId ?? null,
       quantity: qty || 1,
       amountMinor,
@@ -195,6 +229,25 @@ async function fromProposalBuilder(
     orderDiscountMinor: toBig(b.discountMinor ?? 0),
     taxMinor: toBig(b.taxMinor ?? 0),
   };
+}
+
+/**
+ * Document-number suffix per type. The estimate carries the proposal number
+ * verbatim so the two are trivially cross-referenced; invoices append a stage
+ * marker because QuickBooks requires document numbers to be unique per type.
+ * Requires "Custom transaction numbers" to be ON in QuickBooks
+ * (Settings → Account and settings → Sales → Sales form content).
+ */
+const DOC_SUFFIX: Record<QboTxnType, string> = {
+  ESTIMATE: '',
+  DEPOSIT_INVOICE: '-D',
+  PROGRESS_INVOICE: '-P',
+  FINAL_INVOICE: '-F',
+};
+
+/** QuickBooks date fields are plain yyyy-mm-dd. */
+function toQboDate(d: Date | null | undefined): string | null {
+  return d ? d.toISOString().slice(0, 10) : null;
 }
 
 function amountForType(type: QboTxnType, t: AcceptedTotals): bigint {
@@ -369,12 +422,13 @@ export async function executeTransaction(
       where: { id: txn.proposalVersionId },
       include: { proposal: true },
     });
-    const { qboId: customerQboId } = await findOrCreateCustomer(
+    const { qboId: customerQboId, email: billEmail } = await findOrCreateCustomer(
       version.proposal.organizationId,
       realmId,
       userId,
       fetchImpl,
     );
+    const docNumber = `${version.proposal.number}${DOC_SUFFIX[txn.type]}`;
 
     const memo = `Per accepted proposal ${version.proposal.number} v${txn.proposalVersion}`;
     let resource: string;
@@ -384,6 +438,9 @@ export async function executeTransaction(
       body = buildEstimateBody({
         customerQboId,
         currency: totals.currency,
+        docNumber,
+        billEmail,
+        expirationDate: toQboDate(version.expirationDate),
         memo,
         lines: totals.lines,
         fees: totals.fees,
@@ -396,6 +453,8 @@ export async function executeTransaction(
       body = buildInvoiceBody({
         customerQboId,
         currency: totals.currency,
+        docNumber,
+        billEmail,
         amountMinor: txn.amountMinor,
         description: `${TXN_LABEL[txn.type]} — ${memo}`,
         memo,

@@ -14,6 +14,8 @@ export interface InvoiceInput {
   description: string;
   memo: string;
   docNumber?: string;
+  /** Customer-facing email; QuickBooks stores it on the document. */
+  billEmail?: string | null;
   dueDate?: string; // yyyy-mm-dd
 }
 
@@ -25,6 +27,7 @@ export function buildInvoiceBody(input: InvoiceInput): Record<string, unknown> {
     CustomerRef: { value: input.customerQboId },
     CurrencyRef: { value: input.currency },
     ...(input.docNumber ? { DocNumber: input.docNumber } : {}),
+    ...(input.billEmail ? { BillEmail: { Address: input.billEmail } } : {}),
     ...(input.dueDate ? { DueDate: input.dueDate } : {}),
     CustomerMemo: { value: input.memo },
     Line: [
