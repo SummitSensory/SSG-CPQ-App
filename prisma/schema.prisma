@@ -175,6 +175,12 @@ model Organization {
   taxExempt      Boolean        @default(false)
   taxExemptId    String?
   notes          String?
+  /// Default QuickBooks payment term for this client (Settings → All lists →
+  /// Terms). A proposal may override it; neither is required.
+  qboSalesTermId   String?
+  /// Human label, cached so the portal can show the term without calling QuickBooks.
+  qboSalesTermName String?
+
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
   contacts       Contact[]
@@ -850,6 +856,11 @@ model Proposal {
   title          String
   currentVersion Int               @default(1)
   createdById    String
+  /// Per-deal QuickBooks payment term. Overrides the organization default when
+  /// set; null means fall back to the client default, then the system default.
+  qboSalesTermId   String?
+  qboSalesTermName String?
+
   createdAt      DateTime          @default(now())
   updatedAt      DateTime          @updatedAt
   versions       ProposalVersion[]
@@ -1176,6 +1187,10 @@ model QboEntityLink {
 
 enum QboTxnType {
   ESTIMATE
+  /// Full-value itemized invoice: the whole accepted order on one document,
+  /// with the payment split expressed as terms. This is how SSG bills.
+  INVOICE
+  /// Portion invoices — retained for staged billing, unused by default.
   DEPOSIT_INVOICE
   PROGRESS_INVOICE
   FINAL_INVOICE
