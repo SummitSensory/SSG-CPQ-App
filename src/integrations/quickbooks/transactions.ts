@@ -13,9 +13,10 @@ import { env, qboEnvironment } from '../../config/env.js';
 import { create } from './client.js';
 import { findOrCreateCustomer } from './customers.js';
 import { buildEstimateBody } from './estimates.js';
-import { buildInvoiceBody } from './invoices.js';
+import { buildInvoiceBody, buildPortionInvoiceBody } from './invoices.js';
 import { TXN_LABEL, type AcceptedLine } from './mapping.js';
 import { findLink } from './links.js';
+import { resolveTermForProposal } from './terms.js';
 import type { QboTxnType, QboTxnStatus, QboEnvironment, Prisma } from '@prisma/client';
 
 /**
@@ -240,6 +241,9 @@ async function fromProposalBuilder(
  */
 const DOC_SUFFIX: Record<QboTxnType, string> = {
   ESTIMATE: '',
+  // Invoice numbers are a separate sequence in QuickBooks, so the full-value
+  // invoice can carry the proposal number verbatim alongside its estimate.
+  INVOICE: '',
   DEPOSIT_INVOICE: '-D',
   PROGRESS_INVOICE: '-P',
   FINAL_INVOICE: '-F',
@@ -253,6 +257,10 @@ function toQboDate(d: Date | null | undefined): string | null {
 function amountForType(type: QboTxnType, t: AcceptedTotals): bigint {
   switch (type) {
     case 'ESTIMATE':
+      return t.grandTotalMinor;
+    // The full-value invoice bills the entire accepted order; the payment split
+    // is expressed as terms on the document, not as a reduced amount.
+    case 'INVOICE':
       return t.grandTotalMinor;
     case 'DEPOSIT_INVOICE':
       return t.deposit;
@@ -431,6 +439,9 @@ export async function executeTransaction(
     const docNumber = `${version.proposal.number}${DOC_SUFFIX[txn.type]}`;
 
     const memo = `Per accepted proposal ${version.proposal.number} v${txn.proposalVersion}`;
+    // Invoice date is today in QuickBooks terms; sent explicitly so the due date
+    // can be pinned to it when no payment term governs.
+    const txnDate = new Date().toISOString().slice(0, 10);
     let resource: string;
     let body: Record<string, unknown>;
     if (txn.type === 'ESTIMATE') {
@@ -448,9 +459,42 @@ export async function executeTransaction(
         taxMinor: totals.taxMinor,
         expectedTotalMinor: totals.grandTotalMinor,
       });
-    } else {
+    } else if (txn.type === 'INVOICE') {
+      // Full-value itemized invoice: same line structure as the estimate, with
+      // the accepted payment split stated as terms and a closing schedule row.
       resource = 'invoice';
+      // Resolved here rather than above so an estimate never touches the term
+      // tables — the invoice is the only document a payment term applies to.
+      const term = await resolveTermForProposal(version.proposalId);
       body = buildInvoiceBody({
+        customerQboId,
+        currency: totals.currency,
+        docNumber,
+        billEmail,
+        memo,
+        lines: totals.lines,
+        fees: totals.fees,
+        orderDiscountMinor: totals.orderDiscountMinor,
+        taxMinor: totals.taxMinor,
+        expectedTotalMinor: totals.grandTotalMinor,
+        // Payment term: proposal override -> client default -> system default.
+        // Chosen in the portal, never hard-coded per deal.
+        salesTermId: term.id,
+        // With a term set, QuickBooks derives the due date from it. With none,
+        // the invoice is due the day it is issued.
+        dueDate: term.id ? null : txnDate,
+        txnDate,
+        schedule: {
+          depositMinor: totals.deposit,
+          progressMinor: totals.progress,
+          finalMinor: totals.final,
+        },
+      });
+    } else {
+      // Portion invoices (deposit / progress / final): a single summary line for
+      // the scheduled portion. Retained for staged billing.
+      resource = 'invoice';
+      body = buildPortionInvoiceBody({
         customerQboId,
         currency: totals.currency,
         docNumber,

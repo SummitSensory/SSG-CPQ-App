@@ -167,6 +167,31 @@ function descriptionLine(text: string): Record<string, unknown> {
 }
 
 /**
+ * Per-unit rate implied by an extended amount. Used only to render a component
+ * row's "4 × $221.13" text — never for arithmetic that has to balance, since an
+ * amount that does not divide evenly by its quantity would not round-trip. The
+ * extended amount is always shown verbatim beside it.
+ */
+function unitRateText(amountMinor: bigint, quantity: number, currency: string): string {
+  const qty = Number.isFinite(quantity) && quantity > 0 ? Math.round(quantity) : 1;
+  if (qty === 1) return formatMinor(amountMinor, currency);
+  const per = amountMinor / BigInt(qty);
+  return `${qty} × ${formatMinor(per, currency)} = ${formatMinor(amountMinor, currency)}`;
+}
+
+/**
+ * A component row inside a bundled group: the product text plus its quantity and
+ * rate, carrying no Amount. Mirrors how QuickBooks prints bundle components
+ * (QTY and RATE shown, AMOUNT blank) without requiring a QuickBooks Bundle to
+ * exist and be maintained by hand for every configuration.
+ */
+function componentLine(l: AcceptedLine, currency: string): Record<string, unknown> {
+  return descriptionLine(
+    `    ${l.description.trim()}  —  ${unitRateText(l.amountMinor, l.quantity, currency)}`,
+  );
+}
+
+/**
  * Build QuickBooks estimate/invoice lines, preserving the proposal's structure:
  * group headings, sub-headings, notes and per-group subtotals become
  * description-only rows so the document reads like the proposal the customer
@@ -174,20 +199,55 @@ function descriptionLine(text: string): Record<string, unknown> {
  */
 export function toSalesLines(
   lines: AcceptedLine[],
-  opts: { currency?: string; groupSubtotals?: boolean } = {},
+  opts: { currency?: string; groupSubtotals?: boolean; bundleGroups?: boolean } = {},
 ): Array<Record<string, unknown>> {
   const currency = opts.currency ?? 'USD';
-  const withSubtotals = opts.groupSubtotals ?? true;
+  const bundled = opts.bundleGroups ?? false;
+  // A bundled group states its total on the parent line, so a trailing subtotal
+  // row would print the same number twice.
+  const withSubtotals = bundled ? false : (opts.groupSubtotals ?? true);
   const out: Array<Record<string, unknown>> = [];
 
   let openGroup: string | null = null;
+  let openGroupOptional = false;
+  let openGroupItemId: string | null = null;
   let groupSum = 0n;
+  /*
+   * Bundled mode buffers a group's rows: the parent priced line cannot be
+   * written until every component is known, because its Amount IS their sum.
+   */
+  let buffer: Array<Record<string, unknown>> = [];
+
+  const headingText = (name: string, optional: boolean) => {
+    const h = name.trim().toUpperCase();
+    return optional ? `${h} (OPTIONAL)` : h;
+  };
 
   const closeGroup = () => {
-    if (openGroup !== null && withSubtotals) {
+    if (openGroup === null) {
+      buffer = [];
+      return;
+    }
+    if (bundled) {
+      // Parent carries the money; components print beneath it as text. The sum
+      // is exact by construction — components carry no Amount at all.
+      out.push({
+        DetailType: 'SalesItemLineDetail',
+        Amount: minorToQboAmount(groupSum),
+        Description: headingText(openGroup, openGroupOptional),
+        SalesItemLineDetail: {
+          Qty: 1,
+          ...(openGroupItemId ? { ItemRef: { value: openGroupItemId } } : {}),
+        },
+      });
+      out.push(...buffer);
+    } else if (withSubtotals) {
       out.push(descriptionLine(`Subtotal — ${openGroup}: ${formatMinor(groupSum, currency)}`));
     }
+    buffer = [];
     openGroup = null;
+    openGroupOptional = false;
+    openGroupItemId = null;
     groupSum = 0n;
   };
 
@@ -196,22 +256,39 @@ export function toSalesLines(
 
     if (kind === 'GROUP') {
       closeGroup();
-      const heading = l.description.trim().toUpperCase();
-      out.push(descriptionLine(l.optional ? `${heading} (OPTIONAL)` : heading));
       openGroup = l.description.trim();
+      openGroupOptional = Boolean(l.optional);
+      openGroupItemId = l.qboItemId ?? null;
       groupSum = 0n;
-      continue;
-    }
-    if (kind === 'SUBGROUP') {
-      out.push(descriptionLine(`  ${l.description.trim()}`));
-      continue;
-    }
-    if (kind === 'NOTE') {
-      out.push(descriptionLine(l.description.trim()));
+      // Unbundled: the heading is its own description row, emitted now.
+      // Bundled: the heading becomes the parent priced line, written on close.
+      if (!bundled) out.push(descriptionLine(headingText(openGroup, openGroupOptional)));
       continue;
     }
 
-    if (openGroup !== null) groupSum += l.amountMinor;
+    if (kind === 'SUBGROUP') {
+      const row = descriptionLine(`  ${l.description.trim()}`);
+      if (bundled && openGroup !== null) buffer.push(row);
+      else out.push(row);
+      continue;
+    }
+
+    if (kind === 'NOTE') {
+      const row = descriptionLine(l.description.trim());
+      if (bundled && openGroup !== null) buffer.push(row);
+      else out.push(row);
+      continue;
+    }
+
+    if (openGroup !== null) {
+      groupSum += l.amountMinor;
+      if (bundled) {
+        buffer.push(componentLine(l, currency));
+        continue;
+      }
+    }
+
+    // Ungrouped product, or unbundled mode: an ordinary priced line.
     out.push({
       DetailType: 'SalesItemLineDetail',
       Amount: minorToQboAmount(l.amountMinor),
@@ -228,6 +305,7 @@ export function toSalesLines(
 
 export const TXN_LABEL: Record<QboTxnType, string> = {
   ESTIMATE: 'Estimate',
+  INVOICE: 'Invoice',
   DEPOSIT_INVOICE: 'Deposit invoice',
   PROGRESS_INVOICE: 'Progress invoice',
   FINAL_INVOICE: 'Final invoice',

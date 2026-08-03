@@ -9,6 +9,12 @@ import { authorizeUrl, exchangeCode, disconnect } from '../integrations/quickboo
 import { findOrCreateCustomer } from '../integrations/quickbooks/customers.js';
 import { syncItem, linkItemsBySku } from '../integrations/quickbooks/items.js';
 import {
+  listTerms,
+  resolveTermForProposal,
+  setProposalTerm,
+  setOrganizationTerm,
+} from '../integrations/quickbooks/terms.js';
+import {
   prepareTransaction,
   authorizeTransaction,
   executeTransaction,
@@ -190,6 +196,45 @@ export function registerQuickbooksRoutes(app: FastifyInstance): void {
     }
   });
 
+  // --- Payment terms (manage) ---
+  // Terms live in QuickBooks; CPQ references them by Id. The portal reads this
+  // list to populate its dropdowns.
+  app.get('/integrations/quickbooks/terms', manage, async (_req, reply) => {
+    const realmId = await activeRealmId();
+    if (!realmId) return reply.status(409).send({ error: 'NOT_CONNECTED' });
+    return { terms: await listTerms(realmId) };
+  });
+
+  // Effective term for a proposal, with its source, so the UI can distinguish a
+  // per-deal choice from one inherited from the client.
+  app.get('/integrations/quickbooks/terms/proposal/:proposalId', manage, async (req) => {
+    const { proposalId } = req.params as { proposalId: string };
+    return resolveTermForProposal(proposalId);
+  });
+
+  // Send termId: null to clear an override and fall back to the client default.
+  app.put('/integrations/quickbooks/terms/proposal/:proposalId', manage, async (req, reply) => {
+    const { proposalId } = req.params as { proposalId: string };
+    const b = (req.body ?? {}) as { termId?: string | null; termName?: string | null };
+    if (b.termId !== null && typeof b.termId !== 'string') {
+      return reply.status(400).send({ error: 'INVALID_INPUT' });
+    }
+    return setProposalTerm(proposalId, b.termId ?? null, b.termName ?? null);
+  });
+
+  app.put(
+    '/integrations/quickbooks/terms/organization/:organizationId',
+    manage,
+    async (req, reply) => {
+      const { organizationId } = req.params as { organizationId: string };
+      const b = (req.body ?? {}) as { termId?: string | null; termName?: string | null };
+      if (b.termId !== null && typeof b.termId !== 'string') {
+        return reply.status(400).send({ error: 'INVALID_INPUT' });
+      }
+      return setOrganizationTerm(organizationId, b.termId ?? null, b.termName ?? null);
+    },
+  );
+
   app.post('/integrations/quickbooks/items/:productId/sync', manage, async (req, reply) => {
     const realmId = await activeRealmId();
     if (!realmId) return reply.status(409).send({ error: 'NOT_CONNECTED' });
@@ -212,6 +257,7 @@ export function registerQuickbooksRoutes(app: FastifyInstance): void {
 
   const TXN_TYPES: QboTxnType[] = [
     'ESTIMATE',
+    'INVOICE',
     'DEPOSIT_INVOICE',
     'PROGRESS_INVOICE',
     'FINAL_INVOICE',

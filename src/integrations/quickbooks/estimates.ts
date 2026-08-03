@@ -20,6 +20,12 @@ export interface EstimateInput {
   /** yyyy-mm-dd — document date; defaults to today in QuickBooks. */
   txnDate?: string | null;
   lines: AcceptedLine[];
+  /**
+   * Render each proposal group as a bundle: one priced parent line carrying the
+   * group total, with its products beneath as description rows showing qty and
+   * rate. Matches how SSG's QuickBooks invoices already read. Default true.
+   */
+  bundleGroups?: boolean;
   fees: Array<{ label: string; amountMinor: bigint }>;
   orderDiscountMinor: bigint;
   taxMinor: bigint;
@@ -32,6 +38,7 @@ export function buildEstimateBody(input: EstimateInput): Record<string, unknown>
   const lines: Array<Record<string, unknown>> = [
     ...toSalesLines(input.lines, {
       currency: input.currency,
+      bundleGroups: input.bundleGroups ?? true,
       groupSubtotals: input.groupSubtotals ?? true,
     }),
   ];
