@@ -66,7 +66,7 @@ async function fetchAllQboItems(
   realmId: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<QboItem[]> {
-  const PAGE = 1000; // QuickBooks caps maxresults at 1000.
+  const PAGE = 500; // Conservative: QuickBooks documents 1000 but throttles large pages.
   const all: QboItem[] = [];
   for (let start = 1; ; start += PAGE) {
     const res = await query<{ Item?: QboItem[] }>(
@@ -113,7 +113,13 @@ export async function linkItemsBySku(
   _userId: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<SkuLinkReport> {
-  const qboItems = await fetchAllQboItems(realmId, fetchImpl);
+  let qboItems: QboItem[];
+  try {
+    qboItems = await fetchAllQboItems(realmId, fetchImpl);
+  } catch (err) {
+    logger.error({ err, realmId }, 'QuickBooks item read failed during link-by-SKU');
+    throw new Error(`Reading items from QuickBooks failed: ${String(err)}`);
+  }
   const bySku = new Map<string, QboItem>();
   for (const it of qboItems) {
     if (it.Sku) bySku.set(normSku(it.Sku), it);
