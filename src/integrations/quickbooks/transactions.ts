@@ -439,7 +439,6 @@ export async function executeTransaction(
     const docNumber = `${version.proposal.number}${DOC_SUFFIX[txn.type]}`;
 
     const memo = `Per accepted proposal ${version.proposal.number} v${txn.proposalVersion}`;
-    const term = await resolveTermForProposal(version.proposalId);
     // Invoice date is today in QuickBooks terms; sent explicitly so the due date
     // can be pinned to it when no payment term governs.
     const txnDate = new Date().toISOString().slice(0, 10);
@@ -464,6 +463,9 @@ export async function executeTransaction(
       // Full-value itemized invoice: same line structure as the estimate, with
       // the accepted payment split stated as terms and a closing schedule row.
       resource = 'invoice';
+      // Resolved here rather than above so an estimate never touches the term
+      // tables — the invoice is the only document a payment term applies to.
+      const term = await resolveTermForProposal(version.proposalId);
       body = buildInvoiceBody({
         customerQboId,
         currency: totals.currency,

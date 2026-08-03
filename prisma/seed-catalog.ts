@@ -250,7 +250,39 @@ async function main(): Promise<void> {
     });
   }
 
-  console.log(`\n  Applied. ${costsInserted} new cost row(s).\n`);
+  // ----- Sku: the flat priced record the proposal builder multiplies against -----
+  //
+  // The workbook's costs land in ProductCost (dated history). The builder reads the
+  // Sku row, so a cost that lives only in history reaches the catalog list — which
+  // falls back to history — and nowhere else: the part inserts onto a proposal at
+  // cost 0 and 100% margin. Mirroring the import onto Sku here is what stops that,
+  // and it matches what seed-soar.ts has always done.
+  //
+  // Existing catalog figures win: a re-import describes a part, it never re-prices
+  // or re-costs one that is already selling. Only blanks are filled.
+  const costBySku = new Map<string, number>();
+  for (const c of data.costs) if (!costBySku.has(c.sku)) costBySku.set(c.sku, c.unitCostMinor);
+
+  let skuCostsFilled = 0;
+  let skuWeightsFilled = 0;
+  for (const p of data.products) {
+    const current = await prisma.sku.findUnique({
+      where: { part: p.sku },
+      select: { id: true, unitCostMinor: true, weightLbs: true },
+    });
+    if (!current) continue;
+    const seedCost = costBySku.get(p.sku) ?? 0;
+    const seedWeight = p.weightOz ? Math.round((p.weightOz / 16) * 1000) / 1000 : 0;
+    const patch: { unitCostMinor?: number; weightLbs?: number } = {};
+    if (!current.unitCostMinor && seedCost) patch.unitCostMinor = seedCost;
+    if (!Number(current.weightLbs) && seedWeight) patch.weightLbs = seedWeight;
+    if (!Object.keys(patch).length) continue;
+    await prisma.sku.update({ where: { id: current.id }, data: patch });
+    if (patch.unitCostMinor) skuCostsFilled += 1;
+    if (patch.weightLbs) skuWeightsFilled += 1;
+  }
+
+  console.log(`\n  Applied. ${costsInserted} new cost row(s), ${skuCostsFilled} SKU cost(s) and ${skuWeightsFilled} SKU weight(s) filled from the workbook.\n`);
 }
 
 main()

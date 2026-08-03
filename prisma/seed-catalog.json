@@ -8554,7 +8554,7 @@
       "tierLevel": 3,
       "parentSlug": "flex--belts",
       "sku": "FLEX-BELT-TBD",
-      "sortOrder": 52110
+      "sortOrder": 52190
     },
     {
       "slug": "flex--flex-belt-xxs",
@@ -8572,7 +8572,7 @@
       "tierLevel": 3,
       "parentSlug": "flex--belts",
       "sku": "FLEX-BELT-XS",
-      "sortOrder": 0
+      "sortOrder": 52130
     },
     {
       "slug": "flex--flex-belt-s",
@@ -8581,7 +8581,7 @@
       "tierLevel": 3,
       "parentSlug": "flex--belts",
       "sku": "FLEX-BELT-S",
-      "sortOrder": 0
+      "sortOrder": 52140
     },
     {
       "slug": "flex--flex-belt-m",
@@ -8590,7 +8590,7 @@
       "tierLevel": 3,
       "parentSlug": "flex--belts",
       "sku": "FLEX-BELT-M",
-      "sortOrder": 0
+      "sortOrder": 52150
     },
     {
       "slug": "flex--flex-belt-l",
@@ -8599,7 +8599,7 @@
       "tierLevel": 3,
       "parentSlug": "flex--belts",
       "sku": "FLEX-BELT-L",
-      "sortOrder": 0
+      "sortOrder": 52160
     },
     {
       "slug": "flex--flex-belt-xl",
@@ -8608,7 +8608,7 @@
       "tierLevel": 3,
       "parentSlug": "flex--belts",
       "sku": "FLEX-BELT-XL",
-      "sortOrder": 0
+      "sortOrder": 52170
     },
     {
       "slug": "flex--flex-belt-xxl",
@@ -8617,7 +8617,7 @@
       "tierLevel": 3,
       "parentSlug": "flex--belts",
       "sku": "FLEX-BELT-XXL",
-      "sortOrder": 0
+      "sortOrder": 52180
     },
     {
       "slug": "flex--3rd-freight",

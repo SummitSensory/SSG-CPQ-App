@@ -4715,6 +4715,64 @@
     if (document.getElementById('linePickerOverlay')) renderLinePicker();
   }
 
+  /**
+   * Sibling order within a tier.
+   *
+   * The workbook's sortOrder wins where it is set. Where a whole run of siblings
+   * shares one number — the belts all import as 0 — falling back to insertion
+   * order put XX Small after Medium. Size is the meaning behind those names, so
+   * it is what breaks the tie, and plain alphabetical is the last resort.
+   */
+  var SIZE_ORDER = ['xxxs', 'xxs', 'xs', 'x small', 'small', 'medium', 'large', 'x large', 'xl', 'xxl', 'xxxl'];
+  function sizeRank(name) {
+    var n = String(name || '').toLowerCase();
+    var m = n.match(/\(\s*size\s*[-–—:]?\s*([^)]+)\)/);
+    var size = (m ? m[1] : n).trim().replace(/\s+/g, ' ');
+    var table = [
+      [/^(xxx\s*small|3x\s*small|xxxs)$/, 0],
+      [/^(xx\s*small|2x\s*small|xxs)$/, 1],
+      [/^(x\s*small|xs)$/, 2],
+      [/^(small|s)$/, 3],
+      [/^(medium|med|m)$/, 4],
+      [/^(large|l)$/, 5],
+      [/^(x\s*large|xl)$/, 6],
+      [/^(xx\s*large|2x\s*large|xxl)$/, 7],
+      [/^(xxx\s*large|3x\s*large|xxxl)$/, 8],
+    ];
+    for (var i = 0; i < table.length; i++) if (table[i][0].test(size)) return table[i][1];
+    return null;
+  }
+  function linePickerSiblingCmp(a, b) {
+    var d = (Number(a.node.sortOrder) || 0) - (Number(b.node.sortOrder) || 0);
+    if (d) return d;
+    var ra = sizeRank(a.node.name), rb = sizeRank(b.node.name);
+    if (ra != null && rb != null && ra !== rb) return ra - rb;
+    if (ra != null && rb == null) return -1;
+    if (ra == null && rb != null) return 1;
+    return String(a.node.name || '').localeCompare(String(b.node.name || ''));
+  }
+
+  /**
+   * A header whose products are sold as one kit — every part beneath it is
+   * required, so the group is checked and unchecked as a unit and the individual
+   * rows are not separately selectable.
+   */
+  function isKitHeader(node) {
+    return !!node && !node.sku && /\bkits?\b/i.test(String(node.name || ''));
+  }
+  /** The kit header above this entry, if any — kits do not nest. */
+  function kitAncestor(entries, slug) {
+    var found = null;
+    (function walk(list, kit) {
+      list.forEach(function (e) {
+        var k = kit || (isKitHeader(e.node) ? e.node : null);
+        if (e.node.slug === slug) found = k;
+        walk(e.children, k);
+      });
+    })(entries, null);
+    return found;
+  }
+
   /** Flat nodes -> a parent/child tree, siblings in sortOrder. */
   function linePickerTree() {
     var nodes = linePicker.nodes || [];
@@ -4726,8 +4784,7 @@
       var parent = n.parentSlug ? bySlug[n.parentSlug] : null;
       if (parent) parent.children.push(entry); else roots.push(entry);
     });
-    var bySort = function (a, b) { return (Number(a.node.sortOrder) || 0) - (Number(b.node.sortOrder) || 0); };
-    (function sortRec(list) { list.sort(bySort); list.forEach(function (e) { sortRec(e.children); }); })(roots);
+    (function sortRec(list) { list.sort(linePickerSiblingCmp); list.forEach(function (e) { sortRec(e.children); }); })(roots);
     return roots;
   }
   /** Depth-first walk of a linePickerTree(), in tier sort order. */
@@ -4775,6 +4832,7 @@
           var isTier1 = n.tierLevel === 1;
           var prodSlugs = productDescendantSlugs(entry);
           var headerCheck = '';
+          var kit = isKitHeader(n);
           if (prodSlugs.length) {
             var checkedN = prodSlugs.filter(function (s) { return !!linePicker.checked[s]; }).length;
             var state = checkedN === 0 ? 'none' : checkedN === prodSlugs.length ? 'all' : 'some';
@@ -4783,14 +4841,19 @@
           rows += '<div style="display:flex;align-items:center;margin-left:' + indent + 'px;padding:' + (isTier1 ? '14px 0 6px' : '8px 0 4px') + ';' + (isTier1 ? 'border-top:1px solid #e7e8e3;' : '') + '">' +
             headerCheck +
             '<span style="font-weight:600;font-size:' + (isTier1 ? '14.5px' : '13px') + ';color:#3d4a55;">' + esc(n.name) + '</span>' +
+            (kit ? '<span style="margin-left:8px;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;border:1px solid #dcded7;border-radius:999px;padding:2px 8px;">All parts required</span>' : '') +
           '</div>';
           return;
         }
         var checked = !!linePicker.checked[n.slug];
         var qty = linePicker.qty[n.slug] != null ? linePicker.qty[n.slug] : 1;
         var price = n.unitPriceMinor || 0;
-        rows += '<label style="display:flex;align-items:center;gap:10px;padding:6px 0;margin-left:' + indent + 'px;cursor:pointer;">' +
-          '<input type="checkbox" class="lpCheck" data-slug="' + esc(n.slug) + '"' + (checked ? ' checked' : '') + ' style="width:16px;height:16px;flex:0 0 auto;">' +
+        // Inside a kit the row is not independently selectable: the header owns the
+        // whole group. The box still reports the state, so the rep can see what the
+        // kit contains and that all of it is coming.
+        var inKit = !!kitAncestor(tree, n.slug);
+        rows += '<label style="display:flex;align-items:center;gap:10px;padding:6px 0;margin-left:' + indent + 'px;cursor:' + (inKit ? 'default' : 'pointer') + ';">' +
+          '<input type="checkbox" class="lpCheck" data-slug="' + esc(n.slug) + '"' + (checked ? ' checked' : '') + (inKit ? ' disabled title="Part of a kit — the whole kit is selected together"' : '') + ' style="width:16px;height:16px;flex:0 0 auto;">' +
           '<span style="flex:1;min-width:0;font-size:13.5px;">' + esc(n.name) + ' <span class="muted" style="font-size:11.5px;">' + esc(n.sku) + (price ? ' · ' + fmtMoney(price, 'USD') + ' each' : '') + '</span></span>' +
           '<input type="number" min="0" class="lpQty" data-slug="' + esc(n.slug) + '" value="' + qty + '"' + (checked ? '' : ' disabled') + ' style="width:64px;flex:0 0 auto;padding:6px 8px;border:1px solid #dcded7;border-radius:7px;font-size:13px;text-align:right;">' +
         '</label>';

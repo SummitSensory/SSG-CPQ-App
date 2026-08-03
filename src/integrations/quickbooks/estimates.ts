@@ -38,7 +38,7 @@ export function buildEstimateBody(input: EstimateInput): Record<string, unknown>
   const lines: Array<Record<string, unknown>> = [
     ...toSalesLines(input.lines, {
       currency: input.currency,
-      bundleGroups: input.bundleGroups ?? true,
+      bundleGroups: input.bundleGroups ?? false,
       groupSubtotals: input.groupSubtotals ?? true,
     }),
   ];
