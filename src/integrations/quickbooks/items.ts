@@ -19,32 +19,59 @@ interface QboItem {
   SyncToken: string;
   Name: string;
   Sku?: string;
+  [key: string]: unknown;
 }
 
 function esc(s: string): string {
   return s.replace(/'/g, "\\'");
 }
 
-/** SKUs are compared case- and whitespace-insensitively. */
+/**
+ * SKUs are compared case- and whitespace-insensitively.
+ *
+ * Also strips the literal `_x000D_` token and any embedded CR/LF. Those come
+ * from spreadsheet round-trips where a carriage return was saved into a part
+ * number (e.g. `382-408_x000D_`); without this they can never match their
+ * QuickBooks twin. The underlying catalog rows still want cleaning up — see
+ * `dirtySkus` in the link report — but a data-entry artifact should not be
+ * allowed to silently break mapping.
+ */
 function normSku(s: string): string {
-  return s.trim().toUpperCase();
+  return s
+    .replace(/_x000D_/gi, '')
+    .replace(/[\r\n\t]+/g, '')
+    .trim()
+    .toUpperCase();
+}
+
+/** True when a SKU only matches after normalization stripped junk out of it. */
+function isDirtySku(s: string): boolean {
+  return normSku(s) !== s.trim().toUpperCase();
 }
 
 function itemHash(name: string, sku: string, description: string | null): string {
   return createHash('sha256').update(JSON.stringify({ name, sku, description })).digest('hex');
 }
 
-/** Page through every Item in the QuickBooks company. */
+/**
+ * Page through every Item in the QuickBooks company.
+ *
+ * MUST use `select *`. The QuickBooks Online query API does not reliably honour
+ * a named-column projection: `select Id, SyncToken, Name, Sku from Item` returns
+ * rows with `Sku` silently omitted, so every item looks SKU-less and the whole
+ * link scan matches nothing. `select *` is the documented form and returns the
+ * full item payload. Do not "optimise" this back into a column list.
+ */
 async function fetchAllQboItems(
   realmId: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<QboItem[]> {
-  const PAGE = 500;
+  const PAGE = 1000; // QuickBooks caps maxresults at 1000.
   const all: QboItem[] = [];
   for (let start = 1; ; start += PAGE) {
     const res = await query<{ Item?: QboItem[] }>(
       realmId,
-      `select Id, SyncToken, Name, Sku from Item startposition ${start} maxresults ${PAGE}`,
+      `select * from Item startposition ${start} maxresults ${PAGE}`,
       fetchImpl,
     );
     const batch = res.Item ?? [];
@@ -54,12 +81,20 @@ async function fetchAllQboItems(
 }
 
 export interface SkuLinkReport {
+  /** Total items read from QuickBooks, SKU or not — 0 here means a read problem. */
+  qboItemsTotal: number;
   qboItemsWithSku: number;
   productsLinked: number;
   skusLinked: number;
   /** CPQ part numbers with no matching QuickBooks item (first 100). */
   unmatched: string[];
   unmatchedCount: number;
+  /**
+   * CPQ part numbers that only matched after normalization stripped a stray
+   * carriage return or tab out of them. These linked successfully but the
+   * catalog rows are dirty and should be cleaned at source.
+   */
+  dirtySkus: string[];
 }
 
 /**
@@ -88,6 +123,7 @@ export async function linkItemsBySku(
   const skus = await prisma.sku.findMany({ select: { part: true } });
 
   const unmatched = new Set<string>();
+  const dirty = new Set<string>();
   let productsLinked = 0;
   let skusLinked = 0;
 
@@ -98,6 +134,7 @@ export async function linkItemsBySku(
       unmatched.add(p.sku);
       continue;
     }
+    if (isDirtySku(p.sku)) dirty.add(p.sku);
     await upsertLink({ entity: ENTITY, entityId: p.id }, match.Id, {
       syncToken: match.SyncToken,
     });
@@ -112,6 +149,7 @@ export async function linkItemsBySku(
       unmatched.add(s.part);
       continue;
     }
+    if (isDirtySku(s.part)) dirty.add(s.part);
     await upsertLink({ entity: ENTITY_BY_SKU, entityId: key }, match.Id, {
       syncToken: match.SyncToken,
     });
@@ -119,16 +157,26 @@ export async function linkItemsBySku(
   }
 
   const list = [...unmatched].sort();
+  const dirtyList = [...dirty].sort();
   logger.info(
-    { qboItems: qboItems.length, productsLinked, skusLinked, unmatched: list.length },
+    {
+      qboItems: qboItems.length,
+      qboItemsWithSku: bySku.size,
+      productsLinked,
+      skusLinked,
+      unmatched: list.length,
+      dirtySkus: dirtyList.length,
+    },
     'QuickBooks item link-by-SKU complete',
   );
   return {
+    qboItemsTotal: qboItems.length,
     qboItemsWithSku: bySku.size,
     productsLinked,
     skusLinked,
     unmatched: list.slice(0, 100),
     unmatchedCount: list.length,
+    dirtySkus: dirtyList,
   };
 }
 
@@ -162,7 +210,7 @@ export async function syncItem(
       if (product.sku) {
         const bySku = await query<{ Item?: QboItem[] }>(
           realmId,
-          `select Id, SyncToken, Name, Sku from Item where Sku = '${esc(product.sku)}'`,
+          `select * from Item where Sku = '${esc(normSku(product.sku))}'`,
           fetchImpl,
         );
         const skuMatch = bySku.Item?.[0];
@@ -175,7 +223,7 @@ export async function syncItem(
       // Then by name.
       const found = await query<{ Item?: QboItem[] }>(
         realmId,
-        `select Id, SyncToken, Name, Sku from Item where Name = '${esc(product.name)}'`,
+        `select * from Item where Name = '${esc(product.name)}'`,
         fetchImpl,
       );
       const match = found.Item?.[0];

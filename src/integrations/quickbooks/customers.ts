@@ -111,7 +111,7 @@ export async function findOrCreateCustomer(
       // one, and our cached copy can lag if the customer was edited in QBO.
       const current = await query<{ Customer?: QboCustomer[] }>(
         realmId,
-        `select Id, SyncToken, DisplayName from Customer where Id = '${esc(existing.qboId)}'`,
+        `select * from Customer where Id = '${esc(existing.qboId)}'`,
         fetchImpl,
       );
       const live = current.Customer?.[0];
@@ -135,7 +135,7 @@ export async function findOrCreateCustomer(
     // bring its profile up to date with what CPQ knows.
     const found = await query<{ Customer?: QboCustomer[] }>(
       realmId,
-      `select Id, SyncToken, DisplayName from Customer where DisplayName = '${esc(src.displayName)}'`,
+      `select * from Customer where DisplayName = '${esc(src.displayName)}'`,
       fetchImpl,
     );
     const match = found.Customer?.[0];
