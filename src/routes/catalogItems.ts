@@ -316,7 +316,22 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
    * zero-priced line and to re-pull catalog figures on request.
    */
   app.get('/catalog/items/defaults', read, async () => {
-    const rows = await listSkus();
+    // Same three sources, and the same precedence, as GET /catalog/items above: the
+    // Sku row owns money, and where it carries none the workbook's dated cost history
+    // and the Product's ounce weight stand in. Reading Sku alone was the bug — parts
+    // whose cost lives only in ProductCost (the Pediasuit belts, among others) showed
+    // a cost in the catalog and inserted onto a proposal at 0, taking the line to 100%
+    // margin. Whatever the catalog shows, the builder now inserts.
+    const [rows, products, costs] = await Promise.all([
+      listSkus(),
+      prisma.product.findMany({ select: { id: true, sku: true, name: true, status: true, weightOz: true } }),
+      prisma.productCost.findMany({ select: { productId: true, unitCost: true, effectiveDate: true }, orderBy: { effectiveDate: 'desc' } }),
+    ]);
+    const latestCost: Record<string, number> = {};
+    for (const c of costs) if (latestCost[c.productId] === undefined) latestCost[c.productId] = Number(c.unitCost);
+    const productByPart = new Map(products.map((p) => [p.sku, p]));
+    const lbsFromOz = (oz: number | null | undefined): number => (oz ? Math.round((oz / 16) * 1000) / 1000 : 0);
+
     type Entry = {
       qty?: number; freightMinor?: number; freightLabel?: string;
       priceMinor?: number; costMinor?: number; weightLbs?: number; description?: string;
@@ -324,15 +339,23 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
     const out: Record<string, Entry> = {};
     for (const s of rows) {
       if (!s.active) continue;
+      const p = productByPart.get(s.part);
       const entry: Entry = {};
       if (s.defaultQty != null) entry.qty = s.defaultQty;
       if (s.freightMinor != null) entry.freightMinor = s.freightMinor;
       if (s.freightLabel) entry.freightLabel = s.freightLabel;
       entry.priceMinor = s.unitPriceMinor || 0;
-      entry.costMinor = s.unitCostMinor || 0;
-      entry.weightLbs = Number(s.weightLbs) || 0;
+      entry.costMinor = s.unitCostMinor || (p ? latestCost[p.id] || 0 : 0);
+      entry.weightLbs = Number(s.weightLbs) || (p ? lbsFromOz(p.weightOz) : 0);
       entry.description = s.description;
       out[s.part] = entry;
+    }
+    // Parts that exist as a Product but were never given a Sku row still have a cost
+    // and a weight worth applying. No price, so the builder's zero-price warning goes
+    // on flagging them.
+    for (const p of products) {
+      if (out[p.sku] || p.status !== 'ACTIVE') continue;
+      out[p.sku] = { priceMinor: 0, costMinor: latestCost[p.id] || 0, weightLbs: lbsFromOz(p.weightOz), description: p.name };
     }
     return out;
   });
