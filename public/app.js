@@ -307,6 +307,19 @@
   }
   function depositPct() { return Number(fxSettings.depositPct) || 50; }
   function depositOf(total) { return Math.round((Number(total) || 0) * depositPct() / 100); }
+  /**
+   * A totals row whose amount is optional. The first box is what prints on the
+   * customer proposal when the amount is 0 — left blank, the standing "TBD" prints.
+   */
+  function optionalAmountRow(label, id, minor, tbdId, tbdVal) {
+    var box = 'padding:5px 8px;border:1px solid #dcded7;border-radius:7px;';
+    return '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:4px 0;font-size:14px;">' +
+      '<span class="muted">' + label + '</span>' +
+      '<span style="display:flex;align-items:center;gap:6px;">' +
+        '<input id="' + tbdId + '" value="' + esc(tbdVal || '') + '" placeholder="TBD" title="Prints on the customer proposal in place of TBD when the amount is 0" style="width:104px;' + box + 'font-size:12.5px;color:#5c6157;">' +
+        '<input id="' + id + '" value="' + m2d(minor) + '" style="width:100px;' + box + 'text-align:right;">' +
+      '</span></div>';
+  }
 
   function renderShell(user) {
     currentUser = user;
@@ -2999,7 +3012,7 @@
     pb = {
       proposalId: proposal.id, versionId: version.id, user: user, orgName: orgName, stdNotes: stdNotes,
       title: proposal.title || '', number: proposal.number || '', version: version.version || 1,
-      meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', billSameAsShip: !meta.billTo || meta.billTo === (meta.shipTo || orgShipTo || ''), showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7), footerNotes: footerNotes },
+      meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', billSameAsShip: !meta.billTo || meta.billTo === (meta.shipTo || orgShipTo || ''), showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, showDeposit: meta.showDeposit !== false, tbdTax: meta.tbdTax || '', tbdStructureFreight: meta.tbdStructureFreight || '', tbdMatsFreight: meta.tbdMatsFreight || '', proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7), footerNotes: footerNotes },
       lines: lines,
     };
     // A new proposal starts with the billing address the same as the shipping one.
@@ -3340,6 +3353,9 @@
           freightControlsHtml() +
         '</div>' +
         '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:8px;cursor:pointer;"><input type="checkbox" id="mShowProj"' + (pb.meta.showProjectId ? ' checked' : '') + '> Show Project ID on the customer proposal</label>' +
+        // Not every job takes a deposit. Unchecked, the deposit line is left off the
+        // customer proposal entirely rather than printed as $0.
+        '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:6px;cursor:pointer;"><input type="checkbox" id="mShowDeposit"' + (pb.meta.showDeposit !== false ? ' checked' : '') + '> Show the ' + depositPct() + '% deposit on the customer proposal</label>' +
       '</div>' +
       // quick add
       '<div class="card" style="margin-bottom:16px;"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin:0 0 10px;"><div class="section-title" style="margin:0;">Add to proposal</div>' +
@@ -3366,11 +3382,12 @@
         '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:14px;"><span class="muted">Discount %</span><input id="mDisc" style="width:80px;padding:5px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;" value="' + esc(pb.meta.discountPct) + '"></div>' +
         (t.discount ? '<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:14px;color:#9c3327;"><span>Discount (' + t.discountPct + '%)</span><span>− ' + fmtMoney(t.discount, 'USD') + '</span></div>' +
           '<div style="font-size:11px;color:#8a8f85;text-align:right;margin-bottom:2px;">Discount expires ' + (pb.meta.expiration ? fmtDate(pb.meta.expiration) : 'with the proposal') + '</div>' : '') +
-        '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:14px;"><span class="muted">Tax $</span><input id="mTax" style="width:100px;padding:5px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;" value="' + m2d(pb.meta.taxAmountMinor) + '"></div>' +
-        '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:14px;"><span class="muted">Structure Crating &amp; Freight $</span><input id="mStructFreight" style="width:100px;padding:5px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;" value="' + m2d(pb.meta.structureFreightMinor) + '"></div>' +
-        '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:14px;"><span class="muted">Mats &amp; Padding Freight $</span><input id="mMatsFreight" style="width:100px;padding:5px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;" value="' + m2d(pb.meta.matsFreightMinor) + '"></div>' +
+        optionalAmountRow('Tax $', 'mTax', pb.meta.taxAmountMinor, 'mTaxTbd', pb.meta.tbdTax) +
+        optionalAmountRow('Structure Crating &amp; Freight $', 'mStructFreight', pb.meta.structureFreightMinor, 'mStructFreightTbd', pb.meta.tbdStructureFreight) +
+        optionalAmountRow('Mats &amp; Padding Freight $', 'mMatsFreight', pb.meta.matsFreightMinor, 'mMatsFreightTbd', pb.meta.tbdMatsFreight) +
+        '<div style="font-size:11px;color:#8a8f85;text-align:right;margin:-2px 0 2px;">Left box prints in place of TBD when the amount is 0</div>' +
         '<div style="display:flex;justify-content:space-between;padding:8px 0 0;margin-top:6px;border-top:1px solid #e7e8e3;font-size:16px;font-weight:600;font-family:\'Newsreader\',serif;"><span>Total</span><span>' + fmtMoney(t.total, 'USD') + '</span></div>' +
-        '<div style="display:flex;justify-content:space-between;padding:6px 0 0;font-size:14px;color:#3d4a55;font-weight:600;"><span>Deposit due (' + depositPct() + '%)</span><span>' + fmtMoney(t.deposit, 'USD') + '</span></div>' +
+        (pb.meta.showDeposit !== false ? '<div style="display:flex;justify-content:space-between;padding:6px 0 0;font-size:14px;color:#3d4a55;font-weight:600;"><span>Deposit due (' + depositPct() + '%)</span><span>' + fmtMoney(t.deposit, 'USD') + '</span></div>' : '<div style="display:flex;justify-content:space-between;padding:6px 0 0;font-size:12.5px;color:#8a8f85;"><span>Deposit</span><span>Not shown on the proposal</span></div>') +
         // Read-only: the sum of quantity × per-unit weight across product lines. Drives
         // crating and freight, so it is worth seeing before those numbers are entered.
         '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0 0;margin-top:6px;border-top:1px solid #e7e8e3;font-size:14px;">' +
@@ -3567,6 +3584,7 @@
     var mp = document.getElementById('mProj'); if (mp) mp.addEventListener('input', function () { pb.meta.projectId = mp.value; });
     var mpd = document.getElementById('mPropDate'); if (mpd) mpd.addEventListener('input', function () { pb.meta.proposalDate = mpd.value; pb.meta.expiration = addDays(mpd.value, 7); var me2 = document.getElementById('mExp'); if (me2) me2.value = pb.meta.expiration; });
     var msp = document.getElementById('mShowProj'); if (msp) msp.addEventListener('change', function () { pb.meta.showProjectId = msp.checked; });
+    var mdep = document.getElementById('mShowDeposit'); if (mdep) mdep.addEventListener('change', function () { pb.meta.showDeposit = mdep.checked; renderBuilderKeepingFocus(); });
     var mst = document.getElementById('mShowTitle'); if (mst) mst.addEventListener('change', function () { pb.meta.showTitle = mst.checked; });
     // Bill to mirrors ship to until someone types in it. Editing it is what breaks
     // the link — no mode to switch, and the text stays whatever was typed.
@@ -3591,6 +3609,10 @@
       if (pb.meta.billSameAsShip) { pb.meta.billTo = ms.value; if (mb) mb.value = ms.value; }
     });
     var mtx = document.getElementById('mTax'); if (mtx) mtx.addEventListener('change', function () { pb.meta.taxAmountMinor = d2m(mtx.value); pb.meta.taxTouched = true; renderBuilderKeepingFocus(); });
+    [['mTaxTbd', 'tbdTax'], ['mStructFreightTbd', 'tbdStructureFreight'], ['mMatsFreightTbd', 'tbdMatsFreight']].forEach(function (p) {
+      var el = document.getElementById(p[0]);
+      if (el) el.addEventListener('input', function () { pb.meta[p[1]] = el.value.trim(); });
+    });
     var mdisc = document.getElementById('mDisc'); if (mdisc) mdisc.addEventListener('change', function () { pb.meta.discountPct = parseFloat(mdisc.value) || 0; renderBuilderKeepingFocus(); });
     var msf = document.getElementById('mStructFreight'); if (msf) msf.addEventListener('change', function () { pb.meta.structureFreightMinor = d2m(msf.value); renderBuilderKeepingFocus(); });
     var mmf = document.getElementById('mMatsFreight'); if (mmf) mmf.addEventListener('change', function () { pb.meta.matsFreightMinor = d2m(mmf.value); pb.meta.matsFreightTouched = true; renderBuilderKeepingFocus(); });
@@ -3850,7 +3872,18 @@
     // Tax and freight are frequently unknown when a proposal goes out. Showing a
     // hard $0.00 reads as "free"; TBD states the truth.
     var TBD = '<span style="color:#8a8f85;font-weight:600;">TBD</span>';
-    var anyTbd = !t.tax || !t.structureFreight || !t.matsFreight;
+    // A zero amount prints TBD unless this proposal overrides the wording — plenty of
+    // jobs genuinely carry no tax or no freight, and TBD there reads as unanswered.
+    var anyTbd = false;
+    function amountCell(value, override) {
+      if (value) return fmtMoney(value, 'USD');
+      if (override) return '<span style="color:#5c6157;">' + esc(override) + '</span>';
+      anyTbd = true;
+      return TBD;
+    }
+    var cellTax = amountCell(t.tax, m.tbdTax);
+    var cellStructureFreight = amountCell(t.structureFreight, m.tbdStructureFreight);
+    var cellMatsFreight = amountCell(t.matsFreight, m.tbdMatsFreight);
     var body = '';
     var groupOpenSub = null, groupName = '';
     // Indent depth: top-level group flush, sub-heading indented, line items
@@ -3946,12 +3979,12 @@
           (t.discount ? '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;color:#9c3327;"><span>Discount (' + t.discountPct + '%)</span><span>− ' + fmtMoney(t.discount, 'USD') + '</span></div>' +
             '<div style="padding:0 8px 3px;font-size:10px;color:#8a8f85;text-align:right;">Discount expires ' + (m.expiration ? fmtDate(m.expiration) : 'with this proposal') + '</div>' : '') +
           (t.tpFreight ? '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Third-Party Freight</span><span>' + fmtMoney(t.tpFreight, 'USD') + '</span></div>' : '') +
-          '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Tax</span><span>' + (t.tax ? fmtMoney(t.tax, 'USD') : TBD) + '</span></div>' +
-          '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Structure Crating &amp; Freight</span><span>' + (t.structureFreight ? fmtMoney(t.structureFreight, 'USD') : TBD) + '</span></div>' +
-          '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Mats &amp; Padding Freight</span><span>' + (t.matsFreight ? fmtMoney(t.matsFreight, 'USD') : TBD) + '</span></div>' +
+          '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Tax</span><span>' + cellTax + '</span></div>' +
+          '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Structure Crating &amp; Freight</span><span>' + cellStructureFreight + '</span></div>' +
+          '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Mats &amp; Padding Freight</span><span>' + cellMatsFreight + '</span></div>' +
           '<div style="display:flex;justify-content:space-between;padding:8px;margin-top:5px;border-top:2px solid #3d4a55;font-size:15px;font-weight:700;"><span>Total</span><span>' + fmtMoney(t.total, 'USD') + '</span></div>' +
           (anyTbd ? '<div style="padding:2px 8px 0;font-size:10px;color:#8a8f85;text-align:right;line-height:1.5;">Total excludes items marked TBD.</div>' : '') +
-          '<div style="display:flex;justify-content:space-between;padding:6px 8px 0;font-size:13px;color:#3d4a55;font-weight:700;"><span>Deposit Due (' + depositPct() + '%)</span><span>' + fmtMoney(t.deposit, 'USD') + '</span></div>' +
+          (m.showDeposit !== false ? '<div style="display:flex;justify-content:space-between;padding:6px 8px 0;font-size:13px;color:#3d4a55;font-weight:700;"><span>Deposit Due (' + depositPct() + '%)</span><span>' + fmtMoney(t.deposit, 'USD') + '</span></div>' : '') +
         '</div></div>' + bottomNotesHtml +
         '<div style="display:flex;gap:40px;margin-top:40px;padding-top:14px;">' +
           '<div style="flex:1;"><div style="border-bottom:1.5px solid #20241f;height:26px;"></div><div style="font-size:10.5px;color:#8a8f85;margin-top:5px;">Signer\'s Name</div></div>' +
