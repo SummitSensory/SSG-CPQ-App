@@ -4,6 +4,7 @@ import { logger } from '../../lib/logger.js';
 import { query, create } from './client.js';
 import { toQboItem } from './mapping.js';
 import { findLink, upsertLink, markLinkState } from './links.js';
+import { qboEnvironment } from '../../config/env.js';
 
 const ENTITY = 'Item';
 /**
@@ -90,6 +91,13 @@ export interface SkuLinkReport {
   unmatched: string[];
   unmatchedCount: number;
   /**
+   * CPQ part numbers that resolved to a QuickBooks item already claimed by a
+   * different CPQ record — i.e. duplicate part numbers in the catalog. These
+   * are NOT linked; the first claimant keeps the item. Each entry reads
+   * "<part> -> already linked to <entityId>".
+   */
+  conflicts: string[];
+  /**
    * CPQ part numbers that only matched after normalization stripped a stray
    * carriage return or tab out of them. These linked successfully but the
    * catalog rows are dirty and should be cleaned at source.
@@ -128,8 +136,34 @@ export async function linkItemsBySku(
   const products = await prisma.product.findMany({ select: { id: true, sku: true } });
   const skus = await prisma.sku.findMany({ select: { part: true } });
 
+  /*
+   * QboEntityLink is unique on (environment, entity, qboId) as well as on
+   * (environment, entity, entityId): one QuickBooks object may be claimed by
+   * only one CPQ record. Duplicate part numbers in the catalog resolve to the
+   * same QuickBooks item and would violate it, so claims are resolved in memory
+   * BEFORE any write — first claimant wins, everyone else is reported. Doing it
+   * here rather than catching the database error keeps one bad row from
+   * aborting a 600-row scan.
+   */
+  const claims = new Map<string, string>(); // `${entity}\u0000${qboId}` -> entityId
+  const existingLinks = await prisma.qboEntityLink.findMany({
+    where: {
+      environment: qboEnvironment() as never,
+      entity: { in: [ENTITY, ENTITY_BY_SKU] },
+    },
+    select: { entity: true, entityId: true, qboId: true },
+  });
+  for (const row of existingLinks) claims.set(`${row.entity}\u0000${row.qboId}`, row.entityId);
+
+  /** Returns the current holder if someone else already claims this item. */
+  function claimedByOther(entity: string, qboId: string, entityId: string): string | null {
+    const holder = claims.get(`${entity}\u0000${qboId}`);
+    return holder && holder !== entityId ? holder : null;
+  }
+
   const unmatched = new Set<string>();
   const dirty = new Set<string>();
+  const conflicts: string[] = [];
   let productsLinked = 0;
   let skusLinked = 0;
 
@@ -141,9 +175,15 @@ export async function linkItemsBySku(
       continue;
     }
     if (isDirtySku(p.sku)) dirty.add(p.sku);
+    const heldBy = claimedByOther(ENTITY, match.Id, p.id);
+    if (heldBy) {
+      conflicts.push(`${p.sku} -> QuickBooks item ${match.Id} already linked to product ${heldBy}`);
+      continue;
+    }
     await upsertLink({ entity: ENTITY, entityId: p.id }, match.Id, {
       syncToken: match.SyncToken,
     });
+    claims.set(`${ENTITY}\u0000${match.Id}`, p.id);
     productsLinked++;
   }
 
@@ -156,9 +196,15 @@ export async function linkItemsBySku(
       continue;
     }
     if (isDirtySku(s.part)) dirty.add(s.part);
+    const heldBy = claimedByOther(ENTITY_BY_SKU, match.Id, key);
+    if (heldBy) {
+      conflicts.push(`${s.part} -> QuickBooks item ${match.Id} already linked to part ${heldBy}`);
+      continue;
+    }
     await upsertLink({ entity: ENTITY_BY_SKU, entityId: key }, match.Id, {
       syncToken: match.SyncToken,
     });
+    claims.set(`${ENTITY_BY_SKU}\u0000${match.Id}`, key);
     skusLinked++;
   }
 
@@ -172,6 +218,7 @@ export async function linkItemsBySku(
       skusLinked,
       unmatched: list.length,
       dirtySkus: dirtyList.length,
+      conflicts: conflicts.length,
     },
     'QuickBooks item link-by-SKU complete',
   );
@@ -182,6 +229,7 @@ export async function linkItemsBySku(
     skusLinked,
     unmatched: list.slice(0, 100),
     unmatchedCount: list.length,
+    conflicts,
     dirtySkus: dirtyList,
   };
 }
