@@ -133,15 +133,7 @@ export async function linkItemsBySku(
     if (it.Sku) bySku.set(normSku(it.Sku), it);
   }
 
-  /*
-   * Retired catalog rows are excluded. An INACTIVE/ARCHIVED product keeps its
-   * SKU, so a deliberately retired duplicate would otherwise be reported as a
-   * conflict on every scan forever — noise that hides real collisions.
-   */
-  const products = await prisma.product.findMany({
-    where: { status: { notIn: ['INACTIVE', 'ARCHIVED'] } },
-    select: { id: true, sku: true },
-  });
+  const products = await prisma.product.findMany({ select: { id: true, sku: true } });
   const skus = await prisma.sku.findMany({ select: { part: true } });
 
   /*
