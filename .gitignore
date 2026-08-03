@@ -10,3 +10,5 @@ env
 *.log
 .DS_Store
 prisma/*.db
+.vercel
+.env*
