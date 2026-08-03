@@ -36,7 +36,13 @@ export interface InvoiceInput {
   salesTermId?: string | null;
   /** Frozen payment schedule, used to state the split in words. */
   schedule?: { depositMinor: bigint; progressMinor: bigint; finalMinor: bigint } | null;
-  /** Render each proposal group as a bundle. Default true. */
+  /**
+   * Bundle-shaped rendering: one priced parent per group, components as text
+   * rows. QuickBooks cannot put qty/rate into a description-only row, so the
+   * numbers end up inside the text and the money columns sit empty — only use
+   * this with real QuickBooks Bundles. Default false: every component is its own
+   * priced line with proper Qty / Rate / Amount columns.
+   */
   bundleGroups?: boolean;
   groupSubtotals?: boolean;
 }
@@ -59,23 +65,31 @@ function scheduleNote(
   total: bigint,
   currency: string,
 ): string | null {
-  const parts: string[] = [];
-  const add = (label: string, amount: bigint) => {
-    if (amount <= 0n) return;
-    const p = pct(amount, total);
-    parts.push(`${label}: ${formatMinor(amount, currency)}${p !== null ? ` (${p}%)` : ''}`);
-  };
-  add('Due upfront', schedule.depositMinor);
-  add('Progress payment', schedule.progressMinor);
-  add('Due prior to shipment', schedule.finalMinor);
-  return parts.length ? `PAYMENT SCHEDULE — ${parts.join('  |  ')}` : null;
+  const stages: Array<{ label: string; amount: bigint }> = [
+    { label: 'Due upfront', amount: schedule.depositMinor },
+    { label: 'Progress payment', amount: schedule.progressMinor },
+    { label: 'Due prior to shipment', amount: schedule.finalMinor },
+  ].filter((s) => s.amount > 0n);
+  if (!stages.length) return null;
+
+  // Percentages are rounded for display, and the LAST stage absorbs the residual
+  // so they always sum to 100 — never "50% | 49.99%" on an even split.
+  const percents = stages.map((s) => pct(s.amount, total) ?? 0);
+  const rounded = percents.map((p) => Math.round(p));
+  const drift = 100 - rounded.reduce((a, b) => a + b, 0);
+  if (rounded.length) rounded[rounded.length - 1] = (rounded[rounded.length - 1] ?? 0) + drift;
+
+  const parts = stages.map(
+    (s, i) => `${s.label}: ${formatMinor(s.amount, currency)} (${rounded[i]}%)`,
+  );
+  return `PAYMENT SCHEDULE — ${parts.join('  |  ')}`;
 }
 
 export function buildInvoiceBody(input: InvoiceInput): Record<string, unknown> {
   const lines: Array<Record<string, unknown>> = [
     ...toSalesLines(input.lines, {
       currency: input.currency,
-      bundleGroups: input.bundleGroups ?? true,
+      bundleGroups: input.bundleGroups ?? false,
       groupSubtotals: input.groupSubtotals ?? true,
     }),
   ];
