@@ -175,7 +175,19 @@ export function registerQuickbooksRoutes(app: FastifyInstance): void {
   app.post('/integrations/quickbooks/items/link-by-sku', manage, async (req, reply) => {
     const realmId = await activeRealmId();
     if (!realmId) return reply.status(409).send({ error: 'NOT_CONNECTED' });
-    return linkItemsBySku(realmId, req.user!.sub);
+    // This is an operator-run maintenance scan, not a customer-facing route:
+    // return the real failure so it can be diagnosed without digging through
+    // platform logs. The generic INTERNAL handler hides the cause entirely.
+    try {
+      return await linkItemsBySku(realmId, req.user!.sub);
+    } catch (err) {
+      req.log.error({ err, realmId }, 'link-by-sku failed');
+      return reply.status(500).send({
+        error: 'LINK_BY_SKU_FAILED',
+        message: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack?.split('\n').slice(0, 6).join('\n') : undefined,
+      });
+    }
   });
 
   app.post('/integrations/quickbooks/items/:productId/sync', manage, async (req, reply) => {
