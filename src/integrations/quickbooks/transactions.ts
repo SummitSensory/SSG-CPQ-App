@@ -13,9 +13,10 @@ import { env, qboEnvironment } from '../../config/env.js';
 import { create } from './client.js';
 import { findOrCreateCustomer } from './customers.js';
 import { buildEstimateBody } from './estimates.js';
-import { buildInvoiceBody } from './invoices.js';
+import { buildInvoiceBody, buildPortionInvoiceBody } from './invoices.js';
 import { TXN_LABEL, type AcceptedLine } from './mapping.js';
 import { findLink } from './links.js';
+import { resolveTermForProposal } from './terms.js';
 import type { QboTxnType, QboTxnStatus, QboEnvironment, Prisma } from '@prisma/client';
 
 /**
@@ -49,6 +50,14 @@ interface AcceptedTotals {
   taxMinor: bigint;
 }
 
+/** The snapshot fields both readers below need. */
+interface SnapshotHead {
+  id: string;
+  currency: string;
+  grandTotal: bigint;
+  engineVersion: string;
+}
+
 /** Read + freeze the accepted proposal totals. Throws unless the version is ACCEPTED. */
 async function loadAcceptedTotals(proposalVersionId: string): Promise<AcceptedTotals> {
   const version = await prisma.proposalVersion.findUnique({ where: { id: proposalVersionId } });
@@ -60,10 +69,27 @@ async function loadAcceptedTotals(proposalVersionId: string): Promise<AcceptedTo
   const snap = await prisma.priceSnapshot.findUnique({ where: { id: version.priceSnapshotId } });
   if (!snap) throw new NotFoundError('Price snapshot not found');
   const b = snap.breakdown as Record<string, unknown>;
-  const payment = (b.payment ?? {}) as Record<string, unknown>;
 
+  // Two snapshot shapes exist in this database. The pricing engine writes a
+  // `lines[]` array with a `net` per line plus a `fees` map. The proposal
+  // builder ('proposal-builder-1', src/handoff/service.ts) writes flat *Minor
+  // totals and keeps the line detail on the version itself. Reading a builder
+  // snapshot with the pricing-engine reader yields zero lines and a zero total,
+  // which the document builders then (correctly) refuse to send.
+  return Array.isArray(b.lines)
+    ? fromPricingEngine(snap, b, version.items)
+    : fromProposalBuilder(snap, b, version.items);
+}
+
+/** Pricing-engine snapshot: `lines[].net`, `fees` map, `tax`, `orderDiscount`. */
+async function fromPricingEngine(
+  snap: SnapshotHead,
+  b: Record<string, unknown>,
+  rawItems: unknown,
+): Promise<AcceptedTotals> {
+  const payment = (b.payment ?? {}) as Record<string, unknown>;
   const items =
-    (version.items as unknown as Array<{
+    (rawItems as unknown as Array<{
       ref: string;
       productId: string;
       name: string;
@@ -78,6 +104,7 @@ async function loadAcceptedTotals(proposalVersionId: string): Promise<AcceptedTo
     const item = byRef.get(bl.ref);
     const link = item ? await findLink({ entity: 'Item', entityId: item.productId }) : null;
     lines.push({
+      kind: 'PRODUCT',
       description: item?.name ?? bl.ref,
       qboItemId: link?.qboId ?? null,
       quantity: item?.quantity ?? 1,
@@ -105,9 +132,135 @@ async function loadAcceptedTotals(proposalVersionId: string): Promise<AcceptedTo
   };
 }
 
+/**
+ * Proposal-builder snapshot ('proposal-builder-1'). Flat totals on the
+ * breakdown; product lines come from ProposalVersion.items. Mirrors
+ * versionTotals() in src/proposals/analytics.ts so the assembled document total
+ * equals the accepted grand total exactly:
+ *   subtotal - discount + tpFreight + tax + structureFreight + matsFreight
+ */
+async function fromProposalBuilder(
+  snap: SnapshotHead,
+  b: Record<string, unknown>,
+  rawItems: unknown,
+): Promise<AcceptedTotals> {
+  const num = (v: unknown): number =>
+    typeof v === 'number' && Number.isFinite(v) ? v : Number(v) || 0;
+
+  const items = Array.isArray(rawItems)
+    ? (rawItems.filter((i) => i && typeof i === 'object') as Array<Record<string, unknown>>)
+    : [];
+
+  // The proposal's structure is preserved: GROUP / SUBGROUP / NOTE rows travel
+  // through as description-only lines so the QuickBooks document reads like the
+  // proposal the customer accepted. Only PRODUCT rows carry money, which is the
+  // same rule the proposal's own totals use.
+  const lines: AcceptedLine[] = [];
+  for (const it of items) {
+    const lineType = String(it.lineType ?? 'PRODUCT');
+
+    if (lineType === 'GROUP' || lineType === 'SUBGROUP') {
+      const heading = String(it.name ?? '').trim();
+      if (!heading) continue;
+      lines.push({
+        kind: lineType,
+        description: heading,
+        optional: Boolean(it.optional),
+        quantity: 0,
+        amountMinor: 0n,
+      });
+      continue;
+    }
+    if (lineType === 'NOTE') {
+      const text = [it.name, it.description]
+        .map((v) => String(v ?? '').trim())
+        .filter(Boolean)
+        .join(' — ');
+      if (text) lines.push({ kind: 'NOTE', description: text, quantity: 0, amountMinor: 0n });
+      continue;
+    }
+    if (lineType !== 'PRODUCT') continue;
+
+    const qty = num(it.quantity);
+    const amountMinor = BigInt(Math.round(qty * num(it.rateMinor)));
+    const productId = typeof it.productId === 'string' ? it.productId : null;
+    const sku = typeof it.sku === 'string' ? it.sku.trim().toUpperCase() : '';
+    // Prefer the product-id link; fall back to the SKU-keyed link so generated
+    // frame / adventure lines (which carry a part number but no productId) still
+    // land on the right QuickBooks item instead of the default service.
+    const link =
+      (productId ? await findLink({ entity: 'Item', entityId: productId }) : null) ??
+      (sku ? await findLink({ entity: 'ItemSku', entityId: sku }) : null);
+    const name = String(it.name ?? it.sku ?? 'Line item');
+    const detail = String(it.description ?? '').trim();
+    lines.push({
+      kind: 'PRODUCT',
+      description: detail ? `${name} — ${detail}` : name,
+      qboItemId: link?.qboId ?? null,
+      quantity: qty || 1,
+      amountMinor,
+    });
+  }
+
+  const fees: Array<{ label: string; amountMinor: bigint }> = [];
+  const addFee = (label: string, key: string) => {
+    const amt = toBig(b[key] ?? 0);
+    if (amt !== 0n) fees.push({ label, amountMinor: amt });
+  };
+  addFee('Third-party freight', 'thirdPartyFreightMinor');
+  addFee('Structure freight', 'structureFreightMinor');
+  addFee('Mats & padding freight', 'matsFreightMinor');
+
+  const payment = (b.payment ?? {}) as Record<string, unknown>;
+  const deposit = toBig(payment.deposit ?? 0);
+  // This builder has no progress stage: deposit + balance is the whole schedule.
+  const balance =
+    payment.balanceDueMinor != null ? toBig(payment.balanceDueMinor) : snap.grandTotal - deposit;
+
+  return {
+    currency: snap.currency,
+    grandTotalMinor: snap.grandTotal,
+    deposit,
+    progress: 0n,
+    final: balance,
+    priceSnapshotId: snap.id,
+    engineVersion: snap.engineVersion,
+    lines,
+    fees,
+    orderDiscountMinor: toBig(b.discountMinor ?? 0),
+    taxMinor: toBig(b.taxMinor ?? 0),
+  };
+}
+
+/**
+ * Document-number suffix per type. The estimate carries the proposal number
+ * verbatim so the two are trivially cross-referenced; invoices append a stage
+ * marker because QuickBooks requires document numbers to be unique per type.
+ * Requires "Custom transaction numbers" to be ON in QuickBooks
+ * (Settings → Account and settings → Sales → Sales form content).
+ */
+const DOC_SUFFIX: Record<QboTxnType, string> = {
+  ESTIMATE: '',
+  // Invoice numbers are a separate sequence in QuickBooks, so the full-value
+  // invoice can carry the proposal number verbatim alongside its estimate.
+  INVOICE: '',
+  DEPOSIT_INVOICE: '-D',
+  PROGRESS_INVOICE: '-P',
+  FINAL_INVOICE: '-F',
+};
+
+/** QuickBooks date fields are plain yyyy-mm-dd. */
+function toQboDate(d: Date | null | undefined): string | null {
+  return d ? d.toISOString().slice(0, 10) : null;
+}
+
 function amountForType(type: QboTxnType, t: AcceptedTotals): bigint {
   switch (type) {
     case 'ESTIMATE':
+      return t.grandTotalMinor;
+    // The full-value invoice bills the entire accepted order; the payment split
+    // is expressed as terms on the document, not as a reduced amount.
+    case 'INVOICE':
       return t.grandTotalMinor;
     case 'DEPOSIT_INVOICE':
       return t.deposit;
@@ -277,14 +430,19 @@ export async function executeTransaction(
       where: { id: txn.proposalVersionId },
       include: { proposal: true },
     });
-    const { qboId: customerQboId } = await findOrCreateCustomer(
+    const { qboId: customerQboId, email: billEmail } = await findOrCreateCustomer(
       version.proposal.organizationId,
       realmId,
       userId,
       fetchImpl,
     );
+    const docNumber = `${version.proposal.number}${DOC_SUFFIX[txn.type]}`;
 
     const memo = `Per accepted proposal ${version.proposal.number} v${txn.proposalVersion}`;
+    const term = await resolveTermForProposal(version.proposalId);
+    // Invoice date is today in QuickBooks terms; sent explicitly so the due date
+    // can be pinned to it when no payment term governs.
+    const txnDate = new Date().toISOString().slice(0, 10);
     let resource: string;
     let body: Record<string, unknown>;
     if (txn.type === 'ESTIMATE') {
@@ -292,6 +450,9 @@ export async function executeTransaction(
       body = buildEstimateBody({
         customerQboId,
         currency: totals.currency,
+        docNumber,
+        billEmail,
+        expirationDate: toQboDate(version.expirationDate),
         memo,
         lines: totals.lines,
         fees: totals.fees,
@@ -299,11 +460,43 @@ export async function executeTransaction(
         taxMinor: totals.taxMinor,
         expectedTotalMinor: totals.grandTotalMinor,
       });
-    } else {
+    } else if (txn.type === 'INVOICE') {
+      // Full-value itemized invoice: same line structure as the estimate, with
+      // the accepted payment split stated as terms and a closing schedule row.
       resource = 'invoice';
       body = buildInvoiceBody({
         customerQboId,
         currency: totals.currency,
+        docNumber,
+        billEmail,
+        memo,
+        lines: totals.lines,
+        fees: totals.fees,
+        orderDiscountMinor: totals.orderDiscountMinor,
+        taxMinor: totals.taxMinor,
+        expectedTotalMinor: totals.grandTotalMinor,
+        // Payment term: proposal override -> client default -> system default.
+        // Chosen in the portal, never hard-coded per deal.
+        salesTermId: term.id,
+        // With a term set, QuickBooks derives the due date from it. With none,
+        // the invoice is due the day it is issued.
+        dueDate: term.id ? null : txnDate,
+        txnDate,
+        schedule: {
+          depositMinor: totals.deposit,
+          progressMinor: totals.progress,
+          finalMinor: totals.final,
+        },
+      });
+    } else {
+      // Portion invoices (deposit / progress / final): a single summary line for
+      // the scheduled portion. Retained for staged billing.
+      resource = 'invoice';
+      body = buildPortionInvoiceBody({
+        customerQboId,
+        currency: totals.currency,
+        docNumber,
+        billEmail,
         amountMinor: txn.amountMinor,
         description: `${TXN_LABEL[txn.type]} — ${memo}`,
         memo,

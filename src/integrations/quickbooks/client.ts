@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { env, qboEnvironment } from '../../config/env.js';
 import { logger } from '../../lib/logger.js';
 import { getAccessToken } from './oauth.js';
@@ -12,6 +13,23 @@ const MINOR_VERSION = '73';
 const MAX_ATTEMPTS = 5;
 const BASE_BACKOFF_MS = 500;
 const MAX_BACKOFF_MS = 15_000;
+
+/**
+ * Intuit rejects a `requestid` longer than 50 characters (validation error
+ * 6000). Our internal idempotency keys are readable and longer than that
+ * (`qbo:SANDBOX:ESTIMATE:<cuid>:1` is 56), so the wire value is a stable
+ * 32-char hash of the key: same key in, same requestid out, forever. That is
+ * what preserves QuickBooks' server-side duplicate protection across retries.
+ * Hex only, so nothing is altered by URL encoding either.
+ */
+const REQUEST_ID_MAX = 50;
+
+export function toRequestId(idempotencyKey: string): string {
+  if (idempotencyKey.length <= REQUEST_ID_MAX && /^[A-Za-z0-9._-]+$/.test(idempotencyKey)) {
+    return idempotencyKey;
+  }
+  return createHash('sha256').update(idempotencyKey).digest('hex').slice(0, 32);
+}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -38,7 +56,7 @@ async function request<T>(
   url.searchParams.set('minorversion', MINOR_VERSION);
   // requestid is QuickBooks' server-side idempotency key: repeated creates with
   // the same value return the original object rather than creating a new one.
-  if (opts.requestId) url.searchParams.set('requestid', opts.requestId);
+  if (opts.requestId) url.searchParams.set('requestid', toRequestId(opts.requestId));
   for (const [k, v] of Object.entries(opts.query ?? {})) url.searchParams.set(k, v);
 
   let lastErr: Error | undefined;
@@ -88,7 +106,8 @@ export async function query<T>(
 
 /**
  * Create an object. `requestId` MUST be a stable idempotency key for financial
- * documents so a retry cannot double-create.
+ * documents so a retry cannot double-create. It is hashed to a wire-safe
+ * 32-char value by toRequestId() — deterministically, so retries still match.
  */
 export async function create<T>(
   realmId: string,
