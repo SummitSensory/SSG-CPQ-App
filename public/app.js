@@ -3629,14 +3629,58 @@
     });
   }
 
+  /**
+   * Add-product-line picker.
+   *
+   * Reads /catalog/items — the SAME merged Product + Sku list the Catalog screen
+   * shows — so any part visible in Catalog is selectable here, by construction.
+   *
+   * Two separate faults used to hide parts, and either alone was enough:
+   *   1. it fetched a single 100-row page of /catalog/products and then filtered
+   *      that page in the browser, so a part outside the first 100 could never be
+   *      found no matter what was typed;
+   *   2. /catalog/products reads the Product table only, while Catalog merges
+   *      Product and Sku by part number — so a part carried solely as a Sku row
+   *      was invisible however much was fetched.
+   * Search is now server-side across the whole catalog.
+   */
   async function openProductPicker() {
-    var products = [], bundles = [];
-    try { var r = await authed('/catalog/products?pageSize=100&status=ACTIVE'); if (r.ok) products = (await r.json()).items || []; } catch (e) {}
-    try { var rb = await authed('/catalog/bundles'); if (rb.ok) bundles = (await rb.json()) || []; } catch (e2) {}
-    products = products.filter(function (p) { return p.kind !== 'BUNDLE'; });
-    var listHtml = function (items, bnd) {
+    var bundles = [], bundleSkus = {};
+    try {
+      var rb = await authed('/catalog/bundles');
+      if (rb.ok) bundles = (await rb.json()) || [];
+    } catch (e) {}
+    bundles.forEach(function (b) { if (b.sku) bundleSkus[b.sku] = true; });
+
+    var items = [], loading = true, seq = 0;
+
+    function closeForm() {
+      var form = document.getElementById('mForm');
+      if (form && form.parentNode && form.parentNode.parentNode) form.parentNode.parentNode.removeChild(form.parentNode);
+    }
+
+    /* Queries the whole catalog, not a page held in memory. `seq` discards a slow
+       response that a later keystroke has already superseded. */
+    async function fetchItems(term) {
+      var mine = ++seq;
+      loading = true; paint();
+      var found = [];
+      try {
+        var r = await authed('/catalog/items?pageSize=200&q=' + encodeURIComponent(term || ''));
+        if (r.ok) found = (await r.json()).items || [];
+      } catch (e) {}
+      if (mine !== seq) return;
+      items = found.filter(function (i) { return i.active && !bundleSkus[i.part]; });
+      loading = false; paint();
+    }
+
+    function rowsHtml(term) {
       var out = '';
-      if (bnd && bnd.length) {
+      var t = (term || '').toLowerCase();
+      var bnd = bundles.filter(function (b) {
+        return !t || ((b.name || '') + ' ' + (b.sku || '')).toLowerCase().indexOf(t) !== -1;
+      });
+      if (bnd.length) {
         out += '<div style="padding:6px 12px;background:#f7f8f4;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:#8a8f85;">Bundles</div>' +
           bnd.map(function (b) {
             return '<button type="button" class="pkBundle" data-id="' + b.id + '" style="display:block;width:100%;text-align:left;border:none;border-bottom:1px solid #f2f3ef;background:#fff;padding:10px 12px;cursor:pointer;font-size:13.5px;">' +
@@ -3645,29 +3689,34 @@
           }).join('') +
           '<div style="padding:6px 12px;background:#f7f8f4;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:#8a8f85;">Products</div>';
       }
-      out += items.map(function (p) { return '<button type="button" class="pkRow" data-id="' + p.id + '" style="display:block;width:100%;text-align:left;border:none;border-bottom:1px solid #f2f3ef;background:#fff;padding:10px 12px;cursor:pointer;font-size:13.5px;"><b style="font-weight:600;">' + esc(p.name) + '</b> <span class="muted" style="font-size:12px;">' + esc(p.sku) + '</span></button>'; }).join('');
-      return out || '<div class="muted" style="padding:16px;">No products. Add some in Catalog first.</div>';
-    };
-    openModal('Add product line',
-      '<input id="pkSearch" placeholder="Search products and bundles…" style="' + IN + 'margin-bottom:10px;">' +
-      '<div id="pkList" style="max-height:320px;overflow:auto;border:1px solid #e7e8e3;border-radius:10px;">' + listHtml(products, bundles) + '</div>' +
-      '<div class="muted" style="font-size:12px;margin-top:8px;">Rate is entered per proposal after adding. A bundle adds one priced line plus its parts as zero-rate sub-lines.</div>',
-      async function (close) { close(); }, 'Done');
-    setTimeout(function () {
-      var closeForm = function () {
-        var form = document.getElementById('mForm');
-        if (form && form.parentNode && form.parentNode.parentNode) form.parentNode.parentNode.removeChild(form.parentNode);
-      };
-      var wire = function () {
-        document.querySelectorAll('.pkRow').forEach(function (b) { b.addEventListener('click', function () {
-          var p = products.filter(function (x) { return x.id === b.getAttribute('data-id'); })[0];
-          pb.lines.push(applyItemDefaults({ ref: uid(), lineType: 'PRODUCT', kind: 'INCLUDED', productId: p.id, sku: p.sku || '', name: p.name, description: p.proposalDescription || '', quantity: 1, rateMinor: 0, group: '' }));
+      out += items.map(function (p) {
+        var price = Number(p.unitPriceMinor) || 0;
+        return '<button type="button" class="pkRow" data-part="' + esc(p.part) + '" style="display:block;width:100%;text-align:left;border:none;border-bottom:1px solid #f2f3ef;background:#fff;padding:10px 12px;cursor:pointer;font-size:13.5px;">' +
+          '<b style="font-weight:600;">' + esc(p.name || p.part) + '</b> <span class="muted" style="font-size:12px;">' + esc(p.part) + '</span>' +
+          '<div class="muted" style="font-size:11.5px;">' + esc(p.category || '—') + (price ? ' · $' + (price / 100).toFixed(2) : '') + '</div></button>';
+      }).join('');
+      if (out) return out;
+      if (loading) return '<div class="muted" style="padding:16px;">Searching…</div>';
+      return '<div class="muted" style="padding:16px;">No active catalog part matches that search.</div>';
+    }
+
+    function wire() {
+      document.querySelectorAll('.pkRow').forEach(function (b) {
+        b.addEventListener('click', function () {
+          var part = b.getAttribute('data-part');
+          var p = items.filter(function (x) { return x.part === part; })[0];
+          if (!p) return;
+          // productId is null for a part carried only as a Sku row; the line is
+          // keyed by part number, which is what pricing and the BOM read.
+          pb.lines.push(applyItemDefaults({ ref: uid(), lineType: 'PRODUCT', kind: 'INCLUDED', productId: p.productId || null, sku: p.part, name: p.name || p.part, description: '', quantity: 1, rateMinor: 0, group: '' }));
           closeForm(); renderBuilder();
-        }); });
-        // A bundle becomes one priced line plus its components as zero-rate
-        // sub-lines: the customer sees a single price, while the sub-lines carry the
-        // real part numbers, cost and weight for the BOM, the COGS and freight.
-        document.querySelectorAll('.pkBundle').forEach(function (b) { b.addEventListener('click', function () {
+        });
+      });
+      // A bundle becomes one priced line plus its components as zero-rate
+      // sub-lines: the customer sees a single price, while the sub-lines carry the
+      // real part numbers, cost and weight for the BOM, the COGS and freight.
+      document.querySelectorAll('.pkBundle').forEach(function (b) {
+        b.addEventListener('click', function () {
           var bn = bundles.filter(function (x) { return x.id === b.getAttribute('data-id'); })[0];
           if (!bn) return;
           pb.lines.push(applyItemDefaults({ ref: uid(), lineType: 'PRODUCT', kind: 'INCLUDED', productId: bn.id, sku: bn.sku || '', name: bn.name, description: bn.proposalDescription || '', quantity: 1, rateMinor: bn.unitPriceMinor || 0, costEach: 0, weightEach: 0, group: bn.name }));
@@ -3675,19 +3724,38 @@
             pb.lines.push(applyItemDefaults({ ref: uid(), lineType: 'PRODUCT', kind: 'INCLUDED', productId: c.productId, sku: c.sku || '', name: '— ' + c.name, description: '', quantity: c.quantity || 1, rateMinor: 0, costEach: c.unitCostMinor || 0, weightEach: c.weightLbs || 0, group: bn.name }));
           });
           closeForm(); renderBuilder();
-        }); });
-      };
-      wire();
-      var s = document.getElementById('pkSearch');
-      if (s) s.addEventListener('input', function () {
-        var q = s.value.toLowerCase();
-        var filtered = products.filter(function (p) { return (p.name + ' ' + p.sku).toLowerCase().indexOf(q) !== -1; });
-        var fb = bundles.filter(function (p) { return (p.name + ' ' + p.sku).toLowerCase().indexOf(q) !== -1; });
-        document.getElementById('pkList').innerHTML = listHtml(filtered, fb);
-        wire();
+        });
       });
+    }
+
+    function paint() {
+      var list = document.getElementById('pkList');
+      if (!list) return;
+      var s = document.getElementById('pkSearch');
+      list.innerHTML = rowsHtml(s ? s.value.trim() : '');
+      wire();
+    }
+
+    openModal('Add product line',
+      '<input id="pkSearch" placeholder="Search part number or name…" style="' + IN + 'margin-bottom:10px;">' +
+      '<div id="pkList" style="max-height:320px;overflow:auto;border:1px solid #e7e8e3;border-radius:10px;"><div class="muted" style="padding:16px;">Searching…</div></div>' +
+      '<div class="muted" style="font-size:12px;margin-top:8px;">Rate is entered per proposal after adding. A bundle adds one priced line plus its parts as zero-rate sub-lines.</div>',
+      async function (close) { close(); }, 'Done');
+
+    setTimeout(function () {
+      var s = document.getElementById('pkSearch');
+      if (s) {
+        var t;
+        s.addEventListener('input', function () {
+          clearTimeout(t);
+          t = setTimeout(function () { fetchItems(s.value.trim()); }, 200);
+        });
+        s.focus();
+      }
+      fetchItems('');
     }, 50);
   }
+
   function builderDoc() {
     return { title: pb.title, number: pb.number, orgName: pb.orgName, meta: pb.meta, lines: pb.lines, totals: builderTotals() };
   }
