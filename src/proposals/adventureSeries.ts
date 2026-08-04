@@ -195,6 +195,8 @@ export function computeAdventureProposal(
   const qtyOf = (part: string) => (bom.find((b) => b.part === part) || { qty: 0 }).qty;
   const lines: PricedLine[] = [];
   let weight = 0;
+  /** The headings currently open, so a subgroup is never a repeat of its own group. */
+  let curGroup = '', curSub = '';
   /**
    * Swap a part for the rep's substitute — but only when the catalog has
    * pre-approved the original AND the substitute is itself a real catalog part.
@@ -221,8 +223,11 @@ export function computeAdventureProposal(
       costEach: rec ? (rec.unitCostMinor ?? 0) : 0, weightEach: w, needsPrice: !rec,
     });
   };
-  const G = (name: string, optional = false, description = '') => lines.push({ lineType: 'GROUP', name, optional, description });
-  const SG = (name: string) => lines.push({ lineType: 'SUBGROUP', name });
+  const G = (name: string, optional = false, description = '') => {
+    curGroup = name; curSub = '';
+    lines.push({ lineType: 'GROUP', name, optional, description });
+  };
+  const SG = (name: string) => { curSub = name; lines.push({ lineType: 'SUBGROUP', name }); };
   const NOTE = (name: string, description: string) => lines.push({ lineType: 'NOTE', name, description });
   // Main itemized frame — heading carries the configuration product number; the
   // footprint sits beside it as the heading's right-hand note.
@@ -286,7 +291,14 @@ export function computeAdventureProposal(
     // Subgroup headings follow the product tree's sort order, not the order the
     // configurator's questions happen to be asked in.
     const subs = Object.keys(bySub).sort((a, b) => (subSort[a] ?? 9_999) - (subSort[b] ?? 9_999) || a.localeCompare(b));
-    for (const sub of subs) { if (sub) SG(sub); (bySub[sub] ?? []).forEach((it) => P(it.part, it.qty)); }
+    for (const sub of subs) {
+      // A category named the same as the section it sits in adds nothing — the
+      // catalog files these fasteners under Hardware › Hardware, which printed a
+      // second “Hardware” heading inside the HARDWARE section. Same for a heading
+      // already open, which happened because this runs twice per section.
+      if (sub && norm(sub) !== norm(curGroup) && norm(sub) !== norm(curSub)) SG(sub);
+      (bySub[sub] ?? []).forEach((it) => P(it.part, it.qty));
+    }
   };
   const compExtras = takeExtras('Therapeutic Activity & Adventure Components');
   const matExtras = takeExtras('Adventure Mat System');

@@ -2929,7 +2929,7 @@
   /** The rolled-up hardware kit line on this draft, if it has one. */
   function hardwareKitLine() {
     return (pb && pb.lines ? pb.lines : []).filter(function (l) {
-      return String(l.sku || '').toUpperCase() === 'H-1000' || (l.components && l.components.length);
+      return String(l.sku || '').toUpperCase() === 'H-1000';
     })[0] || null;
   }
 
@@ -4472,7 +4472,7 @@
           '<div style="font-weight:600;font-size:13.5px;margin:14px 0 6px;">Bill of materials</div>' +
           '<div style="overflow:auto;"><table style="width:100%;border-collapse:collapse;"><thead><tr>' + th('Rule') + th('Part') + th('Description') + th('Quantity formula') + th('Qty', 1) + th('Unit', 1) + th('Extended', 1) + th('Ext. cost', 1) + '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
           '<div style="font-weight:600;font-size:13.5px;margin:20px 0 6px;">H-1000 hardware roll-up</div>' +
-          '<div class="muted" style="font-size:12px;margin-bottom:8px;">Fastener quantities are driven off the frame BOM per the v73 workbook — every one of these is summed into the single H-1000 line and none are billed separately.</div>' +
+          '<div class="muted" style="font-size:12px;margin-bottom:8px;">Fastener quantities are driven off the frame BOM per the v73 workbook. Every one of these is summed into the single H-1000 line — the brackets and eye bolts answered by name in the configurator are excluded here and print as their own proposal lines.</div>' +
           (hwRows ? '<div style="overflow:auto;"><table style="width:100%;border-collapse:collapse;"><thead><tr>' + th('Part') + th('Component') + th('Quantity formula') + th('Qty', 1) + th('Unit', 1) + th('Extended', 1) + '</tr></thead><tbody>' + hwRows +
             '<tr><td colspan="5" style="padding:7px 8px;text-align:right;font-weight:700;font-size:12.5px;">H-1000 total</td><td style="padding:7px 8px;text-align:right;font-weight:700;font-size:12.5px;">' + fmtMoney(hw.priceMinor, 'USD') + '</td></tr>' +
             '</tbody></table></div>' : '<div class="muted" style="font-size:12.5px;">No hardware selected.</div>') +
@@ -4498,6 +4498,11 @@
     var lineRate = (Number(line.rateMinor) || 0) * qtyLine;
     var lineCost = (Number(line.costEach) || 0) * qtyLine;
     var noPrice = comps.filter(function (c) { return !c.unitPriceMinor; }).length;
+    // Lines generated before unit prices were stored on the breakdown carry cost and
+    // weight only. Reconciling their $0 price sum against the line would read as a
+    // pricing fault when nothing is actually wrong.
+    var hasPrices = comps.some(function (c) { return Number(c.unitPriceMinor) > 0; });
+    var drift = hasPrices && (Math.abs(sumPrice - lineRate) > 1 || Math.abs(sumCost - lineCost) > 1);
     var hasAnswers = !!(pb && pb.meta && pb.meta.advAnswers);
     var ov = document.createElement('div');
     ov.style.cssText = 'position:fixed;inset:0;background:rgba(32,36,31,.5);z-index:80;overflow:auto;padding:24px 16px;';
@@ -4516,13 +4521,12 @@
         td('<span style="color:#5c6157;font-family:ui-monospace,monospace;font-size:11px;">' + esc(c.formula || '—') + '</span>') +
         td('<b>' + q + '</b>', 1) +
         td(fmtMoney(up, ''), 1) +
-        td('<b>' + fmtMoney(up * q, '') + '</b>', 1) +
+        td(hasPrices ? '<b>' + fmtMoney(up * q, '') + '</b>' : '—', 1) +
         td(fmtMoney(uc, ''), 1) +
         td(fmtMoney(uc * q, ''), 1) +
         td(((Number(c.weightLbs) || 0) * q).toFixed(2), 1) +
       '</tr>';
     }).join('');
-    var drift = Math.abs(sumPrice - lineRate) > 1 || Math.abs(sumCost - lineCost) > 1;
     ov.innerHTML =
       '<div style="max-width:1120px;margin:0 auto;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 24px 60px -20px rgba(32,36,31,.55);">' +
         '<div style="background:#3d4a55;color:#fff;padding:16px 22px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">' +
@@ -4535,7 +4539,7 @@
         '</div>' +
         '<div style="padding:18px 22px;">' +
           '<div style="display:flex;gap:22px;flex-wrap:wrap;padding-bottom:14px;border-bottom:1px solid #eef0ea;margin-bottom:14px;">' +
-            stat('Sum of components', fmtMoney(sumPrice, 'USD')) +
+            stat('Sum of components', hasPrices ? fmtMoney(sumPrice, 'USD') : 'not stored') +
             stat('On the line', fmtMoney(lineRate, 'USD'), drift ? '#9c3327' : '#2f7d5d') +
             stat('Component cost', fmtMoney(sumCost, 'USD')) +
             stat('Cost on the line', fmtMoney(lineCost, 'USD'), Math.abs(sumCost - lineCost) > 1 ? '#9c3327' : '#2f7d5d') +
@@ -4544,14 +4548,17 @@
           (drift
             ? '<div style="margin-bottom:14px;padding:10px 12px;background:#fbecea;border:1px solid #f0d5d0;border-radius:9px;font-size:12px;color:#9c3327;line-height:1.6;">The rate or cost on this line no longer matches the sum of its components — someone typed over it, or catalog prices have moved since the line was generated. Re-generate the Adventure Series lines, or pull from the catalog, to bring them back in step.</div>'
             : '') +
-          (noPrice
+          (noPrice && hasPrices
             ? '<div style="margin-bottom:14px;padding:10px 12px;background:#fdf6e6;border:1px solid #ecd9a6;border-radius:9px;font-size:12px;color:#6b5a24;line-height:1.6;">' + noPrice + ' of these part numbers carried no unit price when this line was built, so they added $0.00 to the kit. Set their price in Catalog → Pricing &amp; SKUs and re-generate.</div>'
+            : '') +
+          (!hasPrices
+            ? '<div style="margin-bottom:14px;padding:10px 12px;background:#f8f9f6;border:1px solid #e7e8e3;border-radius:9px;font-size:12px;color:#5c6157;line-height:1.6;">This line was generated before unit prices were kept on the breakdown, so only quantities, costs and weights are stored. The kit total is still the one on the line. Re-generate the Adventure Series lines to see the price side reconciled part by part.</div>'
             : '') +
           '<div style="overflow:auto;"><table style="width:100%;border-collapse:collapse;"><thead><tr>' +
             th('Part') + th('Component') + th('Quantity formula') + th('Qty', 1) + th('Unit', 1) + th('Extended', 1) + th('Unit cost', 1) + th('Ext. cost', 1) + th('Weight', 1) +
           '</tr></thead><tbody>' + rows +
             '<tr><td colspan="3" style="padding:8px;text-align:right;font-weight:700;font-size:12.5px;">Totals</td>' +
-            td('<b>' + pieces + '</b>', 1) + td('', 1) + td('<b>' + fmtMoney(sumPrice, 'USD') + '</b>', 1) + td('', 1) + td('<b>' + fmtMoney(sumCost, 'USD') + '</b>', 1) + td('<b>' + sumWeight.toFixed(2) + '</b>', 1) +
+            td('<b>' + pieces + '</b>', 1) + td('', 1) + td('<b>' + (hasPrices ? fmtMoney(sumPrice, 'USD') : '—') + '</b>', 1) + td('', 1) + td('<b>' + fmtMoney(sumCost, 'USD') + '</b>', 1) + td('<b>' + sumWeight.toFixed(2) + '</b>', 1) +
           '</tr></tbody></table></div>' +
           '<div class="muted" style="font-size:11.5px;margin-top:12px;line-height:1.6;">Quantities come from Administration → Formulas → Hardware quantities, evaluated against this configuration when the lines were generated. Prices and costs are the catalog figures at that moment. The eye bolts and brackets answered by name in the configurator print as their own lines and are deliberately excluded from this kit, so nothing is billed twice.' +
             (hasAnswers ? '' : ' This proposal was built before the configurator answers were kept with the proposal, so the live re-run is not available here — re-generate the lines from the configurator to enable it.') + '</div>' +
@@ -4577,7 +4584,7 @@
         lineType: l.lineType, kind: l.lineType === 'GROUP' ? 'GROUP' : l.lineType === 'SUBGROUP' ? 'SUBGROUP' : l.lineType === 'NOTE' ? 'NOTE' : 'INCLUDED',
         name: l.name, sku: l.sku || '', description: l.description || '', quantity: l.quantity == null ? 0 : l.quantity,
         rateMinor: l.rateMinor || 0, costEach: l.costEach || 0, weightEach: l.weightEach || 0, optional: !!l.optional,
-        internalNote: l.internalNote || '', components: l.components || null, components: l.components || null,
+        internalNote: l.internalNote || '', components: l.components || null,
       });
     });
     out.forEach(applyItemDefaults);
