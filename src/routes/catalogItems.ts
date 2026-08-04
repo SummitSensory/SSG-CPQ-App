@@ -105,7 +105,7 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
   const admin = { preHandler: requirePermission(Permission.PRODUCTS_ADMIN) };
 
   app.get('/catalog/manufacturers', read, async () =>
-    prisma.manufacturer.findMany({ where: { isActive: true }, orderBy: { name: 'asc' }, select: { id: true, name: true, isThirdParty: true } }),
+    prisma.manufacturer.findMany({ where: { isActive: true }, orderBy: { name: 'asc' }, select: { id: true, name: true, isThirdParty: true, freightTbd: true } }),
   );
 
   /** One row per part number, merged across Product and Sku. */
@@ -322,18 +322,32 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
     // whose cost lives only in ProductCost (the Pediasuit belts, among others) showed
     // a cost in the catalog and inserted onto a proposal at 0, taking the line to 100%
     // margin. Whatever the catalog shows, the builder now inserts.
-    const [rows, products, costs] = await Promise.all([
+    const [rows, products, costs, freightTbdMfrs, sourcing] = await Promise.all([
       listSkus(),
       prisma.product.findMany({ select: { id: true, sku: true, name: true, status: true, weightOz: true } }),
       prisma.productCost.findMany({ select: { productId: true, unitCost: true, effectiveDate: true }, orderBy: { effectiveDate: 'desc' } }),
+      // Vendors that quote freight after the fact. Their parts carry a standing note
+      // on the proposal line until a freight figure is entered.
+      prisma.manufacturer.findMany({ where: { freightTbd: true }, select: { id: true, name: true } }),
+      prisma.productSourcing.findMany({ select: { productId: true, manufacturerId: true } }),
     ]);
     const latestCost: Record<string, number> = {};
     for (const c of costs) if (latestCost[c.productId] === undefined) latestCost[c.productId] = Number(c.unitCost);
     const productByPart = new Map(products.map((p) => [p.sku, p]));
     const lbsFromOz = (oz: number | null | undefined): number => (oz ? Math.round((oz / 16) * 1000) / 1000 : 0);
 
+    // A part reaches its vendor two ways — by name on the flat SKU master, or through
+    // ProductSourcing. Both are checked, because the catalog is populated by both.
+    const tbdNames = new Set(freightTbdMfrs.map((m) => m.name.trim().toLowerCase()));
+    const tbdIds = new Set(freightTbdMfrs.map((m) => m.id));
+    const tbdProductIds = new Set(sourcing.filter((s) => tbdIds.has(s.manufacturerId)).map((s) => s.productId));
+    const freightTbdFor = (manufacturer?: string | null, productId?: string): boolean => {
+      if (manufacturer && tbdNames.has(manufacturer.trim().toLowerCase())) return true;
+      return !!productId && tbdProductIds.has(productId);
+    };
+
     type Entry = {
-      qty?: number; freightMinor?: number; freightLabel?: string;
+      qty?: number; freightMinor?: number; freightLabel?: string; freightTbd?: boolean;
       priceMinor?: number; costMinor?: number; weightLbs?: number; description?: string;
     };
     const out: Record<string, Entry> = {};
@@ -348,6 +362,7 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
       entry.costMinor = s.unitCostMinor || (p ? latestCost[p.id] || 0 : 0);
       entry.weightLbs = Number(s.weightLbs) || (p ? lbsFromOz(p.weightOz) : 0);
       entry.description = s.description;
+      if (freightTbdFor(s.manufacturer, p?.id)) entry.freightTbd = true;
       out[s.part] = entry;
     }
     // Parts that exist as a Product but were never given a Sku row still have a cost
@@ -355,7 +370,10 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
     // on flagging them.
     for (const p of products) {
       if (out[p.sku] || p.status !== 'ACTIVE') continue;
-      out[p.sku] = { priceMinor: 0, costMinor: latestCost[p.id] || 0, weightLbs: lbsFromOz(p.weightOz), description: p.name };
+      out[p.sku] = {
+        priceMinor: 0, costMinor: latestCost[p.id] || 0, weightLbs: lbsFromOz(p.weightOz), description: p.name,
+        ...(freightTbdFor(null, p.id) ? { freightTbd: true } : {}),
+      };
     }
     return out;
   });

@@ -1686,6 +1686,7 @@
       '<label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;margin-top:4px;"><input type="checkbox" id="mfSteel"' + (m.isSteelFabricator ? ' checked' : '') + '> Steel fabricator — their lines count toward total steel weight on a BOM</label>' +
       '<label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;margin-top:6px;"><input type="checkbox" id="mfThird"' + (m.id ? (m.isThirdParty ? ' checked' : '') : ' checked') + '> Third-party vendor (unchecked = made in-house)</label>' +
       '<label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;margin-top:6px;"><input type="checkbox" id="mfActive"' + (m.id ? (m.isActive !== false ? ' checked' : '') : ' checked') + '> Active — offered when assigning a vendor</label>' +
+      '<label style="display:flex;align-items:flex-start;gap:8px;font-size:14px;cursor:pointer;margin-top:6px;"><input type="checkbox" id="mfFreightTbd" style="margin-top:3px;"' + (m.freightTbd ? ' checked' : '') + '><span>Freight quoted after approval<span class="muted" style="display:block;font-size:11.5px;line-height:1.5;">Every part from this vendor carries the standing “freight not yet determined” note on its proposal line, until a freight amount is entered on that line.</span></span></label>' +
       '<div class="field" style="margin-top:10px;"><label>Notes</label><textarea id="mfNotes" rows="2" style="' + IN + 'resize:vertical;">' + esc(m.notes || '') + '</textarea></div>' +
       '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin:16px 0 6px;">Bill of Materials email</div>' +
       '<div class="muted" style="font-size:12px;margin-bottom:8px;line-height:1.5;">Pre-fills the send dialog for this vendor — a fabricator and a distributor rarely want the same note or the same format. Tokens: <code>{{customer}}</code> <code>{{vendor}}</code> <code>{{order}}</code> <code>{{job}}</code> <code>{{submittedOn}}</code>. Left blank, the subject matches the attachment name: <code>{{customer}}-{{order}}-{{vendor}}</code>.</div>' +
@@ -1726,6 +1727,7 @@
           defaultLeadTimeDays: lead === '' ? null : parseInt(lead, 10) || 0,
           isSteelFabricator: document.getElementById('mfSteel').checked,
           isThirdParty: document.getElementById('mfThird').checked,
+          freightTbd: document.getElementById('mfFreightTbd').checked,
           isActive: document.getElementById('mfActive').checked,
           notes: document.getElementById('mfNotes').value.trim()
         };
@@ -3013,6 +3015,19 @@
     return lines;
   }
 
+  /**
+   * The standing freight note for vendors who quote delivery after the fact (set per
+   * vendor in Administration → Manufacturers). It is derived, never typed: it appears
+   * on a line whose part comes from such a vendor and disappears the moment that line
+   * carries a freight figure — so it can never contradict a charge on the same line.
+   */
+  var FREIGHT_TBD_NOTE = 'Shipping and freight charges for this item have not yet been determined. Upon approval of this proposal, current freight pricing will be obtained and added to the final invoice.';
+  function showsFreightTbd(l) {
+    if (!l || !l.freightTbd) return false;
+    if ((Number(l.tpFreightMinor) || 0) > 0) return false;
+    return l.freightCalc !== 'YES';
+  }
+
   function normalizeLine(it) {
     var desc = it.description || '';
     var note = it.internalNote || '';
@@ -3024,6 +3039,9 @@
       optional: !!it.optional,
       delivery: it.delivery || '', returnable: it.returnable || '', addlFreight: it.addlFreight || '', freightCalc: it.freightCalc || '',
       tpFreightMinor: it.tpFreightMinor || 0, tpFreightLabel: it.tpFreightLabel || '',
+      // Vendor-driven: this part is sourced from a vendor who quotes freight later.
+      // Set from the catalog, so it survives a save and travels to the PDF.
+      freightTbd: !!it.freightTbd,
       // Engineering warning for the person building the proposal. Kept separate
       // from `description` precisely so it can never be printed.
       internalNote: note,
@@ -3142,6 +3160,7 @@
     if (!(Number(line.rateMinor) || 0) && d.priceMinor) line.rateMinor = d.priceMinor;
     if (!(Number(line.costEach) || 0) && d.costMinor) line.costEach = d.costMinor;
     if (!(Number(line.weightEach) || 0) && d.weightLbs) line.weightEach = d.weightLbs;
+    if (d.freightTbd) line.freightTbd = true;
     return line;
   }
 
@@ -3586,9 +3605,17 @@
     }
     // PRODUCT
     var amt = (Number(l.quantity) || 0) * (Number(l.rateMinor) || 0);
-    var hasNotes = l.delivery || l.returnable || l.addlFreight || l.freightCalc || l.tpFreightMinor;
+    var hasNotes = l.delivery || l.returnable || l.addlFreight || l.freightCalc || l.tpFreightMinor || showsFreightTbd(l);
+    var freightTbdBlock = showsFreightTbd(l)
+      ? '<div style="background:#fdf6e6;border:1px solid #ecd9a6;border-radius:8px;padding:9px 11px;margin-bottom:10px;">' +
+          '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:#8a6d1f;font-weight:700;margin-bottom:4px;">Freight to be determined · prints on the proposal</div>' +
+          '<div style="font-size:12px;color:#6b5a24;line-height:1.55;">' + esc(FREIGHT_TBD_NOTE) + '</div>' +
+          '<div style="font-size:10.5px;color:#8a8f85;margin-top:5px;">Added automatically because this part’s vendor quotes freight after approval. Enter a freight amount below, or set “Freight charges calculated” to Yes, and it is removed.</div>' +
+        '</div>'
+      : '';
     var notesPanel = l.showNotes ?
       '<div style="margin-top:10px;padding:10px;background:#f7f8f4;border:1px solid #eef0ea;border-radius:9px;">' +
+        freightTbdBlock +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">' +
           '<div><label style="font-size:10px;color:#8a8f85;text-transform:uppercase;">Delivery timeline</label><input class="bF" data-i="' + i + '" data-k="delivery" value="' + esc(l.delivery) + '" placeholder="e.g. 8–10 weeks" style="' + IN + 'padding:7px 9px;"></div>' +
           '<div><label style="font-size:10px;color:#8a8f85;text-transform:uppercase;">Returnable</label>' + ynSelect(i, 'returnable', l.returnable) + '</div>' +
@@ -3626,6 +3653,9 @@
           notesPanel +
           // Flagged on the line itself, not only in the banner — the banner tells you
           // how many, this tells you which.
+          (showsFreightTbd(l) && !l.showNotes
+            ? '<div style="margin-top:6px;font-size:11.5px;color:#8a6d1f;line-height:1.5;">Freight to be determined — the vendor’s standing freight note prints on this line.</div>'
+            : '') +
           (l.kind === 'INCLUDED' && l.sku && !(Number(l.rateMinor) || 0)
             ? '<div style="margin-top:6px;font-size:11.5px;color:#8a5a12;">No rate on this line' +
                 (itemDefaults[l.sku] && itemDefaults[l.sku].priceMinor
@@ -3894,7 +3924,7 @@
   async function saveBuilder() {
     var btn = document.getElementById('bSave'); btn.disabled = true; btn.textContent = 'Saving…';
     var sections = [{ id: 'meta', type: 'CUSTOMER_INFO', title: 'Proposal', order: 0, enabled: true, data: pb.meta }];
-    var items = pb.lines.map(function (l, i) { return { ref: l.ref, lineType: l.lineType, kind: l.kind, productId: l.productId, sku: l.sku || '', name: l.name, description: l.description, internalNote: l.internalNote || '', components: l.components || null, quantity: Number(l.quantity) || 0, rateMinor: Number(l.rateMinor) || 0, costEach: Number(l.costEach) || 0, weightEach: Number(l.weightEach) || 0, group: l.group || '', optional: !!l.optional, delivery: l.delivery || '', returnable: l.returnable || '', addlFreight: l.addlFreight || '', freightCalc: l.freightCalc || '', tpFreightMinor: Number(l.tpFreightMinor) || 0, tpFreightLabel: l.tpFreightLabel || '', order: i }; });
+    var items = pb.lines.map(function (l, i) { return { ref: l.ref, lineType: l.lineType, kind: l.kind, productId: l.productId, sku: l.sku || '', name: l.name, description: l.description, internalNote: l.internalNote || '', components: l.components || null, freightTbd: !!l.freightTbd, quantity: Number(l.quantity) || 0, rateMinor: Number(l.rateMinor) || 0, costEach: Number(l.costEach) || 0, weightEach: Number(l.weightEach) || 0, group: l.group || '', optional: !!l.optional, delivery: l.delivery || '', returnable: l.returnable || '', addlFreight: l.addlFreight || '', freightCalc: l.freightCalc || '', tpFreightMinor: Number(l.tpFreightMinor) || 0, tpFreightLabel: l.tpFreightLabel || '', order: i }; });
     try {
       var r = await authed('/proposals/versions/' + pb.versionId, { method: 'PATCH', body: { sections: sections, items: items, expirationDate: pb.meta.expiration || undefined } });
       if (!r.ok) { alert('Could not save (' + r.status + ').'); btn.disabled = false; btn.textContent = 'Save proposal'; return; }
@@ -4018,7 +4048,8 @@
       var indent = groupOpenSub != null ? (inSub ? 34 : 20) : 8;
       if (groupOpenSub != null) groupOpenSub += amt + (Number(l.tpFreightMinor) || 0);
       body += '<tr style="break-inside:avoid;"><td style="padding:5px 8px 5px ' + indent + 'px;border-bottom:1px solid #eef0ea;vertical-align:top;"><b style="font-weight:600;">' + esc(tc(l.name)) + '</b>' + (l.description ? '<div style="font-size:10.5px;color:#5c6157;line-height:1.45;margin-top:2px;">' + esc(l.description) + '</div>' : '') +
-        (l.delivery ? '<div style="font-size:10px;color:#7a7f75;margin-top:2px;">Delivery: ' + esc(l.delivery) + '</div>' : '') + '</td>' +
+        (l.delivery ? '<div style="font-size:10px;color:#7a7f75;margin-top:2px;">Delivery: ' + esc(l.delivery) + '</div>' : '') +
+        (showsFreightTbd(l) ? '<div style="font-size:10px;color:#5c6157;line-height:1.45;margin-top:3px;font-style:italic;">' + esc(FREIGHT_TBD_NOTE) + '</div>' : '') + '</td>' +
         '<td style="padding:5px 8px;border-bottom:1px solid #eef0ea;font-size:10px;color:#7a7f75;vertical-align:top;font-family:ui-monospace,monospace;">' + esc(l.sku || '') + '</td>' +
         '<td style="padding:5px 8px;border-bottom:1px solid #eef0ea;text-align:center;vertical-align:top;">' + (Number(l.quantity) || 0) + '</td>' +
         '<td style="padding:5px 8px;border-bottom:1px solid #eef0ea;text-align:right;vertical-align:top;">' + fmtMoney(l.rateMinor, '') + '</td>' +

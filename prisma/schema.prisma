@@ -513,6 +513,10 @@ model Manufacturer {
   name                String            @unique
   slug                String            @unique
   isThirdParty        Boolean           @default(true)
+  /// Every part sourced from this vendor carries the "freight to be determined"
+  /// note on its proposal line until a freight figure is entered on that line.
+  /// Southpaw and the other freight-quoted vendors are the reason this exists.
+  freightTbd          Boolean           @default(false)
   defaultLeadTimeDays Int?
   contactName         String?
   contactEmail        String?
