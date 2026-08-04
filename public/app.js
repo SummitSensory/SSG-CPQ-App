@@ -2926,6 +2926,25 @@
    */
   var LEAKED_INTERNAL = [/^Quantity assumed 1 per zip line/];
 
+  /** The Hardware Kit always sits at the top of its section. Applied when lines are
+   *  loaded or generated — not on every render, so dragging still works mid-session. */
+  function hoistHardwareKit(lines) {
+    if (!Array.isArray(lines)) return lines;
+    for (var i = 0; i < lines.length; i++) {
+      if (lines[i].lineType !== 'GROUP') continue;
+      var end = i + 1;
+      while (end < lines.length && lines[end].lineType !== 'GROUP') end++;
+      for (var j = i + 1; j < end; j++) {
+        if (String(lines[j].sku || '').toUpperCase() !== 'H-1000') continue;
+        var kit = lines.splice(j, 1)[0];
+        lines.splice(i + 1, 0, kit);
+        break;
+      }
+      i = end - 1;
+    }
+    return lines;
+  }
+
   function normalizeLine(it) {
     var desc = it.description || '';
     var note = it.internalNote || '';
@@ -2983,9 +3002,9 @@
     var secs = version.sections || [];
     var metaSec = Array.isArray(secs) ? secs.filter(function (s) { return s && s.id === 'meta'; })[0] : null;
     if (metaSec && metaSec.data) meta = metaSec.data;
-    var lines = (version.items || []).map(function (it) {
+    var lines = hoistHardwareKit((version.items || []).map(function (it) {
       return normalizeLine(it);
-    });
+    }));
     var propDate = meta.proposalDate || new Date().toISOString().slice(0, 10);
     // Standard notes come from Administration → Standard proposal notes; the
     // hard-coded set is only a fallback for an un-migrated database.
@@ -3012,7 +3031,7 @@
     pb = {
       proposalId: proposal.id, versionId: version.id, user: user, orgName: orgName, stdNotes: stdNotes,
       title: proposal.title || '', number: proposal.number || '', version: version.version || 1,
-      meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', billSameAsShip: !meta.billTo || meta.billTo === (meta.shipTo || orgShipTo || ''), showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, showDeposit: meta.showDeposit !== false, tbdTax: meta.tbdTax || '', tbdStructureFreight: meta.tbdStructureFreight || '', tbdMatsFreight: meta.tbdMatsFreight || '', proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7), footerNotes: footerNotes },
+      meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', billSameAsShip: !meta.billTo || meta.billTo === (meta.shipTo || orgShipTo || ''), showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, showDeposit: meta.showDeposit !== false, tbdTax: meta.tbdTax || '', tbdStructureFreight: meta.tbdStructureFreight || '', tbdMatsFreight: meta.tbdMatsFreight || '', proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7), footerNotes: footerNotes, advAnswers: meta.advAnswers || null },
       lines: lines,
     };
     // A new proposal starts with the billing address the same as the shipping one.
@@ -3516,7 +3535,14 @@
             ? '<div style="margin-top:6px;display:flex;gap:7px;align-items:flex-start;background:#fdf6e6;border:1px solid #ecd9a6;border-radius:7px;padding:6px 9px;font-size:11.5px;color:#6b5a24;line-height:1.5;">' +
                 '<b style="font-weight:700;white-space:nowrap;">Internal</b><span>' + esc(l.internalNote) + '</span></div>'
             : '') +
-          '<button class="bToggleNotes" data-i="' + i + '" style="margin-top:6px;border:none;background:transparent;color:#3d4a55;font-size:11.5px;cursor:pointer;padding:0;font-weight:500;">' + (l.showNotes ? '− Hide delivery / freight notes' : (hasNotes ? '● Delivery / freight notes' : '+ Delivery / freight notes')) + '</button>' +
+          '<div style="display:flex;align-items:center;gap:14px;margin-top:6px;flex-wrap:wrap;">' +
+            '<button class="bToggleNotes" data-i="' + i + '" style="border:none;background:transparent;color:#3d4a55;font-size:11.5px;cursor:pointer;padding:0;font-weight:500;">' + (l.showNotes ? '− Hide delivery / freight notes' : (hasNotes ? '● Delivery / freight notes' : '+ Delivery / freight notes')) + '</button>' +
+            // Every fastener behind a rolled-up kit line, on a proposal that was
+            // built at any point in the past — the breakdown travels on the line.
+            ((l.components && l.components.length)
+              ? '<button class="bHwLogic" data-i="' + i + '" style="border:none;background:transparent;color:#3d4a55;font-size:11.5px;cursor:pointer;padding:0;font-weight:500;text-decoration:underline;">Show the ' + esc(l.sku || 'kit') + ' calculation (' + l.components.length + ' part numbers) →</button>'
+              : '') +
+          '</div>' +
           notesPanel +
           // Flagged on the line itself, not only in the banner — the banner tells you
           // how many, this tells you which.
@@ -3637,6 +3663,7 @@
     });
     document.querySelectorAll('.bChk').forEach(function (el) { el.addEventListener('change', function () { markBuilderDirty(); var l = pb.lines[+el.getAttribute('data-i')]; if (l) { l[el.getAttribute('data-k')] = el.checked; } }); });
     document.querySelectorAll('.bToggleNotes').forEach(function (b) { b.addEventListener('click', function () { var l = pb.lines[+b.getAttribute('data-i')]; if (l) { l.showNotes = !l.showNotes; renderBuilder(); } }); });
+    document.querySelectorAll('.bHwLogic').forEach(function (b) { b.addEventListener('click', function () { openHardwareAudit(pb.lines[+b.getAttribute('data-i')]); }); });
     document.querySelectorAll('.bDel').forEach(function (b) { b.addEventListener('click', function () { markBuilderDirty(); pb.lines.splice(+b.getAttribute('data-i'), 1); renderBuilder(); }); });
     // drag reorder
     document.querySelectorAll('.bRow').forEach(function (row) {
@@ -4314,7 +4341,7 @@
     var cfgReset = document.getElementById('advCfgReset');
     if (cfgReset) cfgReset.addEventListener('click', function (e) { e.preventDefault(); adv.configManual = false; adv.config = autoConfig(); renderAdv(); });
     document.getElementById('advGen').addEventListener('click', function () { generateAdvLines(document.getElementById('advReplace').checked); });
-    document.getElementById('advTrace').addEventListener('click', openAdvTrace);
+    document.getElementById('advTrace').addEventListener('click', function () { openAdvTrace(); });
     o.querySelectorAll('[data-ovr]').forEach(function (el) {
       el.addEventListener('change', function () {
         var base = el.getAttribute('data-ovr'), v = el.value.trim();
@@ -4383,10 +4410,10 @@
   }
 
   /** Logic trace overlay — every derived quantity, its formula, and the catalog price behind it. */
-  async function openAdvTrace() {
+  async function openAdvTrace(answers) {
     var btn = document.getElementById('advTrace'); if (btn) { btn.disabled = true; btn.textContent = 'Tracing…'; }
     var t = null;
-    try { var r = await authed('/proposals/adventure-series/trace', { method: 'POST', body: advAnswers() }); if (r.ok) t = await r.json(); } catch (e) {}
+    try { var r = await authed('/proposals/adventure-series/trace', { method: 'POST', body: answers || advAnswers() }); if (r.ok) t = await r.json(); } catch (e) {}
     if (btn) { btn.disabled = false; btn.textContent = 'Test the logic →'; }
     if (!t) { alert('Could not reach the logic engine. Is the server running the latest build?'); return; }
     var ov = document.createElement('div');
@@ -4441,6 +4468,87 @@
     document.getElementById('trClose').addEventListener('click', function () { document.body.removeChild(ov); });
   }
 
+  /**
+   * The full calculation behind a rolled-up kit line (H-1000), read from the
+   * breakdown stored ON the line. Works on any draft, however long ago it was built
+   * and whether or not the configurator answers were kept with it.
+   */
+  function openHardwareAudit(line) {
+    if (!line || !(line.components || []).length) return;
+    var comps = line.components.slice().sort(function (x, y) { return String(x.part).localeCompare(String(y.part)); });
+    var qtyLine = Number(line.quantity) || 1;
+    var sumPrice = comps.reduce(function (s, c) { return s + (Number(c.unitPriceMinor) || 0) * (Number(c.qty) || 0); }, 0);
+    var sumCost = comps.reduce(function (s, c) { return s + (Number(c.unitCostMinor) || 0) * (Number(c.qty) || 0); }, 0);
+    var sumWeight = comps.reduce(function (s, c) { return s + (Number(c.weightLbs) || 0) * (Number(c.qty) || 0); }, 0);
+    var pieces = comps.reduce(function (s, c) { return s + (Number(c.qty) || 0); }, 0);
+    var lineRate = (Number(line.rateMinor) || 0) * qtyLine;
+    var lineCost = (Number(line.costEach) || 0) * qtyLine;
+    var noPrice = comps.filter(function (c) { return !c.unitPriceMinor; }).length;
+    var hasAnswers = !!(pb && pb.meta && pb.meta.advAnswers);
+    var ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(32,36,31,.5);z-index:80;overflow:auto;padding:24px 16px;';
+    function th(label, right) { return '<th style="text-align:' + (right ? 'right' : 'left') + ';padding:6px 8px;border-bottom:2px solid #3d4a55;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:#8a8f85;white-space:nowrap;">' + label + '</th>'; }
+    function td(v, right, mono) { return '<td style="padding:5px 8px;border-bottom:1px solid #eef0ea;font-size:11.5px;' + (right ? 'text-align:right;' : '') + (mono ? 'font-family:ui-monospace,monospace;font-size:11px;' : '') + '">' + v + '</td>'; }
+    function stat(label, value, color) {
+      return '<div><div style="font-size:10px;text-transform:uppercase;color:#8a8f85;letter-spacing:.05em;">' + label + '</div>' +
+        '<div style="font-size:17px;font-weight:600;' + (color ? 'color:' + color + ';' : '') + '">' + value + '</div></div>';
+    }
+    var rows = comps.map(function (c) {
+      var q = Number(c.qty) || 0;
+      var up = Number(c.unitPriceMinor) || 0, uc = Number(c.unitCostMinor) || 0;
+      return '<tr>' +
+        td(esc(c.part || '—') + (c.inCatalog === false ? ' <span style="color:#9c3327;">✕</span>' : ''), 0, 1) +
+        td(esc(c.name || '') + (c.edited ? ' <span style="background:#fdf6e3;border:1px solid #eadfbe;color:#8a6d1f;border-radius:999px;padding:1px 6px;font-size:10px;font-weight:600;">edited formula</span>' : '')) +
+        td('<span style="color:#5c6157;font-family:ui-monospace,monospace;font-size:11px;">' + esc(c.formula || '—') + '</span>') +
+        td('<b>' + q + '</b>', 1) +
+        td(fmtMoney(up, ''), 1) +
+        td('<b>' + fmtMoney(up * q, '') + '</b>', 1) +
+        td(fmtMoney(uc, ''), 1) +
+        td(fmtMoney(uc * q, ''), 1) +
+        td(((Number(c.weightLbs) || 0) * q).toFixed(2), 1) +
+      '</tr>';
+    }).join('');
+    var drift = Math.abs(sumPrice - lineRate) > 1 || Math.abs(sumCost - lineCost) > 1;
+    ov.innerHTML =
+      '<div style="max-width:1120px;margin:0 auto;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 24px 60px -20px rgba(32,36,31,.55);">' +
+        '<div style="background:#3d4a55;color:#fff;padding:16px 22px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">' +
+          '<div><div style="font-family:\'Newsreader\',serif;font-size:19px;font-weight:600;">' + esc(line.sku || 'Kit') + ' — how this line was calculated</div>' +
+            '<div style="font-size:12px;color:#cdd6dc;">' + esc(line.name || '') + ' · ' + comps.length + ' part numbers · ' + pieces + ' pieces</div></div>' +
+          '<div style="display:flex;gap:8px;align-items:center;">' +
+            (hasAnswers ? '<button id="hwLive" style="border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.12);color:#fff;border-radius:8px;padding:7px 14px;cursor:pointer;">Re-run the live logic →</button>' : '') +
+            '<button id="hwClose" style="border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.12);color:#fff;border-radius:8px;padding:7px 14px;cursor:pointer;">Close</button>' +
+          '</div>' +
+        '</div>' +
+        '<div style="padding:18px 22px;">' +
+          '<div style="display:flex;gap:22px;flex-wrap:wrap;padding-bottom:14px;border-bottom:1px solid #eef0ea;margin-bottom:14px;">' +
+            stat('Sum of components', fmtMoney(sumPrice, 'USD')) +
+            stat('On the line', fmtMoney(lineRate, 'USD'), drift ? '#9c3327' : '#2f7d5d') +
+            stat('Component cost', fmtMoney(sumCost, 'USD')) +
+            stat('Cost on the line', fmtMoney(lineCost, 'USD'), Math.abs(sumCost - lineCost) > 1 ? '#9c3327' : '#2f7d5d') +
+            stat('Weight', sumWeight.toFixed(2) + ' lbs') +
+          '</div>' +
+          (drift
+            ? '<div style="margin-bottom:14px;padding:10px 12px;background:#fbecea;border:1px solid #f0d5d0;border-radius:9px;font-size:12px;color:#9c3327;line-height:1.6;">The rate or cost on this line no longer matches the sum of its components — someone typed over it, or catalog prices have moved since the line was generated. Re-generate the Adventure Series lines, or pull from the catalog, to bring them back in step.</div>'
+            : '') +
+          (noPrice
+            ? '<div style="margin-bottom:14px;padding:10px 12px;background:#fdf6e6;border:1px solid #ecd9a6;border-radius:9px;font-size:12px;color:#6b5a24;line-height:1.6;">' + noPrice + ' of these part numbers carried no unit price when this line was built, so they added $0.00 to the kit. Set their price in Catalog → Pricing &amp; SKUs and re-generate.</div>'
+            : '') +
+          '<div style="overflow:auto;"><table style="width:100%;border-collapse:collapse;"><thead><tr>' +
+            th('Part') + th('Component') + th('Quantity formula') + th('Qty', 1) + th('Unit', 1) + th('Extended', 1) + th('Unit cost', 1) + th('Ext. cost', 1) + th('Weight', 1) +
+          '</tr></thead><tbody>' + rows +
+            '<tr><td colspan="3" style="padding:8px;text-align:right;font-weight:700;font-size:12.5px;">Totals</td>' +
+            td('<b>' + pieces + '</b>', 1) + td('', 1) + td('<b>' + fmtMoney(sumPrice, 'USD') + '</b>', 1) + td('', 1) + td('<b>' + fmtMoney(sumCost, 'USD') + '</b>', 1) + td('<b>' + sumWeight.toFixed(2) + '</b>', 1) +
+          '</tr></tbody></table></div>' +
+          '<div class="muted" style="font-size:11.5px;margin-top:12px;line-height:1.6;">Quantities come from Administration → Formulas → Hardware quantities, evaluated against this configuration when the lines were generated. Prices and costs are the catalog figures at that moment. The eye bolts and brackets answered by name in the configurator print as their own lines and are deliberately excluded from this kit, so nothing is billed twice.' +
+            (hasAnswers ? '' : ' This proposal was built before the configurator answers were kept with the proposal, so the live re-run is not available here — re-generate the lines from the configurator to enable it.') + '</div>' +
+        '</div></div>';
+    document.body.appendChild(ov);
+    ov.addEventListener('mousedown', function (e) { if (e.target === ov) document.body.removeChild(ov); });
+    document.getElementById('hwClose').addEventListener('click', function () { document.body.removeChild(ov); });
+    var live = document.getElementById('hwLive');
+    if (live) live.addEventListener('click', function () { openAdvTrace(pb.meta.advAnswers); });
+  }
+
   async function generateAdvLines(replace) {
     var btn = document.getElementById('advGen'); if (btn) { btn.disabled = true; btn.textContent = 'Pricing…'; }
     var answers = advAnswers();
@@ -4460,6 +4568,10 @@
     });
     out.forEach(applyItemDefaults);
     if (replace) pb.lines = out; else pb.lines = pb.lines.concat(out);
+    // Kept with the proposal so the hardware logic can be re-run against the same
+    // configuration later, on a draft nobody has open in the configurator.
+    pb.meta.advAnswers = answers;
+    hoistHardwareKit(pb.lines);
     advClose(); renderBuilder();
     var bl = document.getElementById('bLines'); if (bl) bl.scrollIntoView({ block: 'start' });
   }

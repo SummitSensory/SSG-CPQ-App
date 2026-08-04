@@ -83,7 +83,7 @@ export interface PricedLine {
    * shop has every fastener and its count. Carried on the saved proposal item, so
    * the breakdown survives without re-running the configurator.
    */
-  components?: Array<{ part: string; name: string; qty: number; unitCostMinor: number; weightLbs: number }>;
+  components?: Array<{ part: string; name: string; qty: number; unitPriceMinor?: number; unitCostMinor: number; weightLbs: number; formula?: string; inCatalog?: boolean; edited?: boolean }>;
 }
 
 /** One BOM row with the expression that produced its quantity, for the logic trace. */
@@ -348,26 +348,17 @@ export function computeAdventureProposal(
     // things the customer chose — they print as their own lines instead of being
     // buried in the H-1000 description, and are excluded from the roll-up below so
     // nothing is counted twice.
-    if (a.brackets && qtyOf(BRACKET_PART) > 0) P(BRACKET_PART);
+    // They print beneath their own catalog subgroup heading — 6820H-LDD is filed
+    // under HARDWARE › Quick Shift alongside P-2124, so the bracket and the eye
+    // bolts that belong to it sit together instead of loose under Hardware.
     const hwRows = hardwareBOM(a, rules, frameRules);
-    for (const part of ACCESSORY_HW_PARTS) {
-      const row = hwRows.find((h) => h.part === part);
-      if (!row || row.qty <= 0) continue;
-      const use = subPart(part);
-      const rec = LOOK[use];
-      const w = rec ? rec.weightLbs : 0;
-      weight += row.qty * w;
-      lines.push({
-        lineType: 'PRODUCT', name: rec ? rec.description : row.name, sku: use, description: '',
-        quantity: row.qty, rateMinor: rec ? rec.unitPriceMinor : 0,
-        costEach: rec ? (rec.unitCostMinor ?? 0) : 0, weightEach: w, needsPrice: !rec,
-      });
-    }
-    // The remaining fasteners roll up into the single H-1000 line per the v73
-    // workbook: rate, cost and weight are the sums of the 6820H-* components.
-    // Whether those components are also PRINTED is a business decision, not a
-    // pricing one — see `hardwareRollupDetail`. The math is identical either way;
-    // the full breakdown always stays available in the logic trace.
+    // The fasteners roll up into the single H-1000 line per the v73 workbook: rate,
+    // cost and weight are the sums of the 6820H-* components. It prints FIRST in the
+    // Hardware section — the kit is the section's headline, not its footnote.
+    // Whether those components are also PRINTED in the description is a business
+    // decision, not a pricing one — see `hardwareRollupDetail`. The math is identical
+    // either way; the full breakdown always travels on the line in `components`, so
+    // the H-1000 audit works on a draft that was built weeks ago.
     const roll = hardwareRollup(a, LOOK, rules, frameRules, ACCESSORY_HW_PARTS);
     if (roll.components.length) {
       weight += roll.weightLbs;
@@ -381,11 +372,25 @@ export function computeAdventureProposal(
         quantity: 1, rateMinor: roll.priceMinor, costEach: roll.costMinor,
         weightEach: roll.weightLbs, needsPrice: roll.missing.length > 0,
         components: roll.components.map((c) => ({
-          part: c.part, name: c.name, qty: c.qty,
-          unitCostMinor: c.unitCostMinor, weightLbs: c.weightLbs,
+          part: c.part, name: c.name, qty: c.qty, formula: c.formula,
+          unitPriceMinor: c.unitPriceMinor, unitCostMinor: c.unitCostMinor,
+          weightLbs: c.weightLbs, inCatalog: c.inCatalog, edited: c.edited,
         })),
       });
     }
+    const picked: Array<{ part: string; qty: number }> = [];
+    if (a.brackets && qtyOf(BRACKET_PART) > 0) picked.push({ part: BRACKET_PART, qty: qtyOf(BRACKET_PART) });
+    for (const part of ACCESSORY_HW_PARTS) {
+      const ruled = hwRows.find((h) => h.part === part)?.qty ?? 0;
+      // A quantity the rep typed reaches the proposal even when that part's rule row
+      // has been switched off, emptied or zeroed in Administration → Formulas. The
+      // rule may ADD to the answer (6820H-LP also covers the zip-line BOM); it may
+      // not erase it. This is why "# of 360 Swivel / 180 Eye Bolts" could be
+      // answered and still not print.
+      const qty = Math.max(ruled, accessoryAnswerQty(a, part));
+      if (qty > 0) picked.push({ part, qty });
+    }
+    emitExtras(picked);
     // Anything the catalog files under Hardware (or files nowhere yet).
     emitExtras(extras);
   }
@@ -414,6 +419,22 @@ export const WEBBING_SLING_PART = '6820H-LAN';
  * proposal. Excluded from `hardwareRollup` at the same time.
  */
 export const ACCESSORY_HW_PARTS = ['6820H-LDD', '6820H-LAC-G', '6820H-LP', 'B0C4Y8XSNB', 'SSG-SA-SWIVEL-EYE'];
+
+/**
+ * The configurator answer standing behind each accessory part. Used as a floor on
+ * the rule result so an answered quantity can never be zeroed out by a missing or
+ * edited HardwareRule row — the rep typed it, so the customer sees it.
+ */
+export function accessoryAnswerQty(a: AdvAnswers, part: string): number {
+  switch (part) {
+    case '6820H-LDD': return a.brackets ? n(a.swivel360) : 0;
+    case '6820H-LAC-G': return a.brackets ? Math.max(0, n(a.bracketsQty) - n(a.swivel360)) : 0;
+    case '6820H-LP': return n(a.forged);
+    case 'B0C4Y8XSNB': return n(a.swingHanger);
+    case 'SSG-SA-SWIVEL-EYE': return n(a.swivelStandalone);
+    default: return 0;
+  }
+}
 
 export interface HardwareComponent { part: string; name: string; qty: number; formula: string; unitPriceMinor: number; unitCostMinor: number; weightLbs: number; inCatalog: boolean; edited?: boolean; }
 
@@ -515,6 +536,15 @@ export function explainAdventure(a: AdvAnswers, skuMap?: Record<string, SkuRec>,
   picked.push({ rule: 'Accessories', part: V_RING_PART, qty: n(a.vRings), formula: '# V-ring packs answered' });
   picked.push({ rule: 'Accessories', part: CARABINER_PART, qty: n(a.carabiner), formula: '# carabiner packs answered' });
   picked.push({ rule: 'Accessories', part: WEBBING_SLING_PART, qty: n(a.webbingSling), formula: '# webbing slings answered' });
+  // Hardware the rep answers for by name prints as its own proposal line, so it is
+  // traced as its own row — and excluded from the H-1000 roll-up below, which used
+  // to count it twice: once here and once inside the kit.
+  const hwRows = hardwareBOM(a, rules, frameRules);
+  for (const part of ACCESSORY_HW_PARTS) {
+    const ruled = hwRows.find((h) => h.part === part);
+    const qty = Math.max(ruled?.qty ?? 0, accessoryAnswerQty(a, part));
+    if (qty > 0) picked.push({ rule: 'Accessories & Hardware', part, qty, formula: ruled?.formula || 'answered in the configurator' });
+  }
   for (const p of picked) {
     if (p.qty <= 0) continue;
     const rec = LOOK[p.part];
@@ -529,7 +559,7 @@ export function explainAdventure(a: AdvAnswers, skuMap?: Record<string, SkuRec>,
       inCatalog: !!rec, rolledIntoH1000: false,
     });
   }
-  const hardware = hardwareRollup(a, LOOK, rules);
+  const hardware = hardwareRollup(a, LOOK, rules, frameRules, ACCESSORY_HW_PARTS);
   for (const m of hardware.missing) warnings.push(`Hardware component “${m}” has no SKU record — contributes $0.00 to H-1000.`);
   const revenueMinor = rows.reduce((s, r) => s + r.extendedMinor, 0) + hardware.priceMinor;
   const cogsMinor = rows.reduce((s, r) => s + r.extendedCostMinor, 0) + hardware.costMinor;
