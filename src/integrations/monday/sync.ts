@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { prisma } from '../../lib/prisma.js';
-import { env, isMondayConfigured } from '../../config/env.js';
+import { env, isMondayPushConfigured } from '../../config/env.js';
 import { logger } from '../../lib/logger.js';
 import { createItem, updateItem } from './client.js';
 import { toColumnValues, STATUS_TO_STAGE, type SyncableOpportunity } from './mapping.js';
@@ -23,7 +23,7 @@ export function syncHash(opp: SyncableOpportunity): string {
 
 /** Push a local opportunity to monday. Idempotent + duplicate-safe via ExternalLink. */
 export async function pushOpportunity(opportunityId: string): Promise<void> {
-  if (!isMondayConfigured()) return;
+  if (!isMondayPushConfigured()) return;
   const opp = await prisma.opportunity.findUnique({ where: { id: opportunityId } });
   if (!opp) return;
   const ref = { entity: ENTITY, entityId: opp.id };

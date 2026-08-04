@@ -145,9 +145,25 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
 
 export const env: Env = loadEnv();
 
-/** True only when every monday credential is present. */
+/** True only when every monday credential is present, inbound webhooks included. */
 export function isMondayConfigured(e: Env = env): boolean {
   return Boolean(e.MONDAY_API_TOKEN && e.MONDAY_SIGNING_SECRET && e.MONDAY_DEALS_BOARD_ID);
+}
+
+/**
+ * What an OUTBOUND write to monday actually needs: a token to authenticate with and
+ * a board to write to. MONDAY_SIGNING_SECRET verifies the JWT on webhooks monday
+ * sends US — it has no part in a push, and it only exists if someone registered a
+ * monday app. Requiring it here meant a correctly credentialled deployment reported
+ * "monday.com is not configured on this deployment" when a proposal was released.
+ */
+export function isMondayPushConfigured(e: Env = env): boolean {
+  return Boolean(e.MONDAY_API_TOKEN && e.MONDAY_DEALS_BOARD_ID);
+}
+
+/** Inbound webhooks are the one path that genuinely needs the signing secret. */
+export function isMondayWebhookConfigured(e: Env = env): boolean {
+  return Boolean(e.MONDAY_API_TOKEN && e.MONDAY_SIGNING_SECRET);
 }
 
 /** True only when every Entra SSO setting is present. */

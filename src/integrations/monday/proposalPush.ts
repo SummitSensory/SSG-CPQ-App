@@ -1,5 +1,5 @@
 import { prisma } from '../../lib/prisma.js';
-import { env, isMondayConfigured } from '../../config/env.js';
+import { env, isMondayPushConfigured } from '../../config/env.js';
 import { logger } from '../../lib/logger.js';
 import { setColumnValues, uploadFileToColumn } from './client.js';
 import { findLink } from './links.js';
@@ -76,7 +76,13 @@ export async function pushReleasedProposal(input: {
   proposalHtml?: string;
   filename?: string;
 }): Promise<ProposalPushResult> {
-  if (!isMondayConfigured()) return { pushed: false, skipped: 'monday.com is not configured on this deployment' };
+  // Token + board id only. The signing secret guards inbound webhooks, not this.
+  if (!isMondayPushConfigured()) {
+    return {
+      pushed: false,
+      skipped: 'monday.com is not configured on this deployment — set MONDAY_API_TOKEN and MONDAY_DEALS_BOARD_ID.',
+    };
+  }
 
   const version = await prisma.proposalVersion.findUnique({
     where: { id: input.versionId },

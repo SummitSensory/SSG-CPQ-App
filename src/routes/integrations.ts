@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
-import { isMondayConfigured, env } from '../config/env.js';
+import { isMondayConfigured, isMondayPushConfigured, isMondayWebhookConfigured, env } from '../config/env.js';
 import { verifyMondayWebhook } from '../integrations/monday/webhook.js';
 import { applyInboundChange, retrySync } from '../integrations/monday/sync.js';
 import { reconcile } from '../integrations/monday/reconcile.js';
@@ -24,6 +24,15 @@ export function registerIntegrationRoutes(app: FastifyInstance): void {
     async () => ({
       provider: 'monday',
       configured: isMondayConfigured(),
+      // Broken out so the settings page can say WHICH half is missing: a deployment
+      // that only pushes deals needs the token and board id, and nothing else.
+      pushConfigured: isMondayPushConfigured(),
+      webhookConfigured: isMondayWebhookConfigured(),
+      missing: [
+        env.MONDAY_API_TOKEN ? null : 'MONDAY_API_TOKEN',
+        env.MONDAY_DEALS_BOARD_ID ? null : 'MONDAY_DEALS_BOARD_ID',
+        env.MONDAY_SIGNING_SECRET ? null : 'MONDAY_SIGNING_SECRET',
+      ].filter(Boolean),
       mode: 'two-way',
       entity: 'deal',
     }),
