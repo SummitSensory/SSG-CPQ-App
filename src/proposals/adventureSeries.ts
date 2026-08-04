@@ -130,11 +130,16 @@ export function computeAdventureBOM(a: AdvAnswers, frameRules?: FormulaRule[]): 
  * expressible as an editable coefficient.
  */
 /**
- * How a frame's length breaks into spans. A span is filled to 10 ft and the remainder
- * is the next one: 4 legs is a single span of the whole length, 6 legs is 10 ft plus
+ * How a frame's length breaks into bays. A bay is filled to 10 ft and the remainder
+ * is the next one: 4 legs is a single bay of the whole length, 6 legs is 10 ft plus
  * the difference (18 ft → 10 + 8), 8 legs is 10 + 10 plus the difference. Stock members
  * only exist at 5–10 ft, so matching them against the TOTAL length — which is what the
  * engine did — found nothing above 10 ft and every beam quantity came out zero.
+ *
+ * The workbook cannot express this: VLOOKUP!E9 holds ONE bay length, hand-entered,
+ * so an 18 ft frame is costed there as a single 10 ft bay and the 8 ft bay never
+ * appears. Bay 1 is therefore the workbook's E9 and every later bay is the K/L leg
+ * addition, resolved against its own member length — see beamMembers().
  */
 export function beamSpans(a: AdvAnswers): number[] {
   const legs = n(a.legs), L = n(a.length);
@@ -181,21 +186,33 @@ function beamMembers(a: AdvAnswers): BomRow[] {
     if (c > 0) add(part, c, `Beam members (${memLen[part]}')`, `short cap by width → ${c} (W ${W})`);
   });
 
-  // Long members, span by span. Each span takes the count the workbook gives a
-  // single-bay frame of that length; the old 6-leg/8-leg additions are gone because
-  // the extra spans are now emitted explicitly instead of being folded into one row.
+  // Long members, bay by bay, ported term for term from VLOOKUP!J:O.
+  //
+  //   bay 1  (the workbook's E9 row)  = J2 − E64 + interior beams − ½× monkey members
+  //   each later bay (columns K and L) = 3
+  //
+  // Six legs is two bays and adds K = 3; eight legs is three bays and adds L = 6,
+  // i.e. 3 per bay past the first. The old code emitted a full perimeter set for
+  // every bay and no leg addition at all, which is why a 20 × 10 came out at 7
+  // A-2410 where the workbook gives 8. Uneven bays resolve the addition against
+  // the member that bay actually uses (18 ft = 10 + 8 → the 3 land on A-2408).
   const label = spans.join("' + ") + "'";
+  const LEG_ADDITION_PER_BAY = 3;
   spans.forEach((sp, idx) => {
     const part = partForLen[sp];
     if (!part) return;
+    if (idx > 0) {
+      add(part, LEG_ADDITION_PER_BAY, `Beam members (${sp}')`,
+        `bay ${idx + 1} of ${spans.length} (L ${L} = ${label}): leg addition → ${LEG_ADDITION_PER_BAY}`);
+      return;
+    }
     const mm = monkeyMem[sp];
-    const mq = (monkey && idx === 0 && mm) ? 2 : 0;
-    const nn = idx === 0 ? interiorCount : 0;
-    const qty = (J2 - e64) + nn - 0.5 * mq;
+    const mq = (monkey && mm) ? 2 : 0;
+    const qty = (J2 - e64) + interiorCount - 0.5 * mq;
     add(part, qty, `Beam members (${sp}')`,
-      `span ${idx + 1} of ${spans.length} (L ${L} = ${label}): perimeter ${J2} − width caps ${e64}` +
-      (nn ? ` + interior ${nn}` : '') + (mq ? ` − monkey offset ${0.5 * mq}` : ''));
-    if (mq > 0 && mm) add(mm, mq, `Monkey bar beam (${sp}')`, `monkey bars on the ${sp}' span → 2`);
+      `bay 1 of ${spans.length} (L ${L} = ${label}): perimeter ${J2} − width caps ${e64}` +
+      (interiorCount ? ` + interior ${interiorCount}` : '') + (mq ? ` − monkey offset ${0.5 * mq}` : ''));
+    if (mq > 0 && mm) add(mm, mq, `Monkey bar beam (${sp}')`, `monkey bars on the ${sp}' bay → 2`);
   });
   return rows;
 }
