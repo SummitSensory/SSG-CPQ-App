@@ -229,7 +229,13 @@ export function computeAdventureProposal(
 ): { lines: PricedLine[]; totalWeightLbs: number; warnings: string[] } {
   const LOOK = skuMap && Object.keys(skuMap).length ? skuMap : SKUS;
   const bom = computeAdventureBOM(a, frameRules);
-  const qtyOf = (part: string) => (bom.find((b) => b.part === part) || { qty: 0 }).qty;
+  /**
+   * Total quantity of a part across the WHOLE bill of materials. The BOM emits one
+   * row per reason a part is needed — a 20' frame produces three A-2410 rows (width
+   * end caps, span 1, span 2) — so taking the first match, which is what this did,
+   * put 2 beams on the proposal where the trace correctly showed 7.
+   */
+  const qtyOf = (part: string) => bom.reduce((s, b) => (b.part === part ? s + b.qty : s), 0);
   const lines: PricedLine[] = [];
   let weight = 0;
   /** The headings currently open, so a subgroup is never a repeat of its own group. */
@@ -499,7 +505,8 @@ export function hardwareBOM(a: AdvAnswers, rules?: HardwareRule[], frameRules?: 
     forged: n(a.forged), swingHanger: n(a.swingHanger), vRings: n(a.vRings),
   };
   return evaluateHardwareRules(rules && rules.length ? rules : DEFAULT_HARDWARE_RULES, {
-    bom: (part) => (bom.find((b) => b.part === part) || { qty: 0 }).qty,
+    // Summed, not first-match: multi-span frames emit several rows per beam part.
+    bom: (part) => bom.reduce((s, b) => (b.part === part ? s + b.qty : s), 0),
     input: (key) => inputs[key] ?? 0,
   });
 }

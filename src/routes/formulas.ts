@@ -259,7 +259,9 @@ export function registerFormulaRoutes(app: FastifyInstance): void {
         swingHanger: num(answers.swingHanger), vRings: num(answers.vRings),
       };
       return evaluateRules(rules, {
-        bom: (part: string) => (bom.find((b) => b.part === part) || { qty: 0 }).qty,
+        // Summed across every BOM row for that part — a multi-span frame emits one
+        // row per span, so first-match under-counted the beams hardware hangs off.
+        bom: (part: string) => bom.reduce((s, b) => (b.part === part ? s + b.qty : s), 0),
         input: (key: string) => inputs[key] ?? 0,
       });
     };
