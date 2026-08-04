@@ -2490,12 +2490,58 @@
         var id = sel.getAttribute('data-id'), vid = sel.getAttribute('data-vid');
         sel.disabled = true;
         var path = act === 'new-version' ? '/proposals/' + id + '/versions' : '/proposals/versions/' + vid + '/' + act;
-        var rr = await authed(path, { method: 'POST', body: {} });
+        var rr = await authed(path, { method: 'POST', body: await actionBody(act, id, vid) });
         if (!rr.ok) { alert('Could not update (' + rr.status + ').'); sel.disabled = false; sel.value = ''; return; }
+        await reportRelease(act, rr);
         loadProposals(user);
       });
     });
   }
+  /**
+   * Releasing also hands the deal board its copy of the proposal, and the proposal
+   * layout only exists in the browser — so the rendered document travels with the
+   * release call and the server turns it into the PDF monday receives.
+   */
+  async function actionBody(act, proposalId, versionId) {
+    if (act !== 'release') return {};
+    try {
+      var doc = await buildProposalDocForSend({ id: proposalId }, versionId);
+      if (doc) return { proposalHtml: doc.html, proposalFilename: doc.filename };
+    } catch (e) {}
+    return {};
+  }
+
+  /** Say so when a release went through but the monday push did not. */
+  async function reportRelease(act, rr) {
+    if (act !== 'release') return;
+    var d = null;
+    try { d = await rr.json(); } catch (e) { return; }
+    var m = d && d.monday;
+    if (!m || m.pushed) return;
+    alert('The proposal was released, but monday.com was not updated: ' +
+      (m.skipped || m.error || 'the deal board did not respond') + '.');
+  }
+
+  /**
+   * The proposal total for a stored version. Same order of operations as the customer
+   * document (subtotal − discount + 3rd-party freight + tax + structure freight + mats
+   * freight), so the figure in the Versions table is the figure on the proposal.
+   */
+  function versionTotalMinor(version) {
+    var secs = (version && version.sections) || [];
+    var metaSec = Array.isArray(secs) ? secs.filter(function (s) { return s && s.id === 'meta'; })[0] : null;
+    var meta = (metaSec && metaSec.data) || {};
+    var subtotal = 0, tpFreight = 0;
+    ((version && version.items) || []).forEach(function (l) {
+      if ((l.lineType || 'PRODUCT') !== 'PRODUCT') return;
+      subtotal += (Number(l.quantity) || 0) * (Number(l.rateMinor) || 0);
+      tpFreight += Number(l.tpFreightMinor) || 0;
+    });
+    var discount = Math.round(subtotal * (Number(meta.discountPct) || 0) / 100);
+    var structureFreight = Number(meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0)) || 0;
+    return subtotal - discount + tpFreight + (Number(meta.taxAmountMinor) || 0) + structureFreight + (Number(meta.matsFreightMinor) || 0);
+  }
+
   function statusChip(s) {
     var map = {
       DRAFT: ['#f2f3ef', '#e2e5dd', '#5c6157'],
@@ -2540,14 +2586,14 @@
     view.innerHTML =
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;"><button class="link-btn" id="propBack" style="width:auto;padding:7px 13px;">‹ Back to proposals</button></div>' +
       '<div class="card" style="margin-bottom:16px;"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;"><div><div class="k">' + esc(p.number || '') + '</div><h2 style="font-size:22px;margin-top:2px;">' + esc(p.title) + '</h2></div><span class="chip">' + titleCase(latest.status || 'DRAFT') + '</span></div></div>' +
-      sectionBlock('Versions', tableShell(['Version', 'Status', 'Created', 'Frozen', ''], versions.map(function (v) {
+      sectionBlock('Versions', tableShell(['Version', 'Status', 'Created', 'Frozen', 'Total', ''], versions.map(function (v) {
         // A frozen version is the record of what went out — it opens read-only.
         var editable = !v.frozen && v.status === 'DRAFT' && hasRole(PROP_WRITE, user.role);
         var action = editable
           ? '<button class="btn" data-open="edit" data-vid="' + v.id + '" style="width:auto;padding:8px 15px;">Build / edit proposal</button>'
           : '<button class="link-btn" data-open="view" data-vid="' + v.id + '" style="width:auto;padding:8px 15px;">View (read only)</button>';
-        return '<tr>' + td('v' + v.version) + td('<span class="chip">' + titleCase(v.status) + '</span>') + td(fmtDate(v.createdAt)) + td(v.frozen ? 'Yes' : 'No') + td('<div style="display:flex;justify-content:flex-end;">' + action + '</div>') + '</tr>';
-      }).join(''), 5, '')) +
+        return '<tr>' + td('v' + v.version) + td('<span class="chip">' + titleCase(v.status) + '</span>') + td(fmtDate(v.createdAt)) + td(v.frozen ? 'Yes' : 'No') + td('<b style="font-weight:600;">' + fmtMoney(versionTotalMinor(v), 'USD') + '</b>') + td('<div style="display:flex;justify-content:flex-end;">' + action + '</div>') + '</tr>';
+      }).join(''), 6, '')) +
       (hasRole(PROP_WRITE, user.role)
         ? sectionBlock('Send to the customer',
           '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">' +
@@ -2576,8 +2622,9 @@
         if (act === 'lock') { openLockForm(vid, user); return; }
         var path = act === 'new-version' ? '/proposals/' + id + '/versions' : '/proposals/versions/' + vid + '/' + act;
         bt.disabled = true;
-        var rr = await authed(path, { method: 'POST', body: {} });
+        var rr = await authed(path, { method: 'POST', body: await actionBody(act, id, vid) });
         if (!rr.ok) { alert('Action failed (' + rr.status + ').'); bt.disabled = false; return; }
+        await reportRelease(act, rr);
         openProposalDetail(id, user);
       });
     });
@@ -6403,13 +6450,13 @@
    * Build the proposal document for sending: load the current version, assemble the
    * same markup the preview uses, and wrap it to stand alone.
    */
-  async function buildProposalDocForSend(p) {
+  async function buildProposalDocForSend(p, versionId) {
     try {
       var rv = await authed('/proposals/' + p.id);
       if (!rv.ok) return null;
       var full = await rv.json();
       var versions = (full.versions || []).slice().sort(function (x, y) { return y.version - x.version; });
-      var v = versions[0];
+      var v = versionId ? (versions.filter(function (x) { return x.id === versionId; })[0] || versions[0]) : versions[0];
       if (!v) return null;
       var doc = await proposalDocData(full, v);
       return { html: proposalStandaloneHtml(doc), filename: proposalFileName(doc) };

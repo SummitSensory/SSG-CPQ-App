@@ -9,6 +9,7 @@ import {
 } from '../proposals/service.js';
 import { snapshotAcceptedContent } from '../handoff/service.js';
 import { resolveVisibleSections, reorderSections, type ProposalSection } from '../proposals/sections.js';
+import { pushReleasedProposal } from '../integrations/monday/proposalPush.js';
 
 const SectionSchema = z.object({
   id: z.string(), type: z.string(), title: z.string(), order: z.number().int(),
@@ -179,8 +180,9 @@ export function registerProposalRoutes(app: FastifyInstance): void {
   });
   app.post('/proposals/versions/:versionId/release', release, async (req) => {
     const { versionId } = req.params as { versionId: string };
+    const body = (req.body ?? {}) as { note?: string; proposalHtml?: string; proposalFilename?: string };
     const before = await prisma.proposalVersion.findUnique({ where: { id: versionId }, select: { priceSnapshotId: true, sections: true, items: true } });
-    await changeStatus(versionId, 'RELEASED', req.user!.sub, (req.body as { note?: string })?.note);
+    await changeStatus(versionId, 'RELEASED', req.user!.sub, body.note);
     // A released version is the price of record from here on, so it gets a
     // PriceSnapshot at release time rather than waiting for acceptance — but never
     // overwrite one a prior release or acceptance already froze.
@@ -188,7 +190,15 @@ export function registerProposalRoutes(app: FastifyInstance): void {
       const snap = await snapshotAcceptedContent(versionId, before.sections, before.items, req.user!.sub);
       await prisma.proposalVersion.update({ where: { id: versionId }, data: { priceSnapshotId: snap.id } });
     }
-    return { status: 'RELEASED' };
+    // Release is also the handoff to the deal board: subtotal, title and the proposal
+    // document itself. Reported, never fatal — the proposal is released whatever
+    // monday does, and the rep is told if the push did not land.
+    const monday = await pushReleasedProposal({
+      versionId,
+      proposalHtml: body.proposalHtml,
+      filename: body.proposalFilename,
+    });
+    return { status: 'RELEASED', monday };
   });
   app.post('/proposals/versions/:versionId/accept', review, async (req) => {
     const { versionId } = req.params as { versionId: string };

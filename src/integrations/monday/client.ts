@@ -88,6 +88,77 @@ export async function createItem(
   return data.create_item.id;
 }
 
+/**
+ * Set specific columns on an existing item without touching its name. `updateItem`
+ * always rewrites the name, which is wrong when the item is a monday-owned deal row
+ * and we only own two of its columns.
+ */
+export async function setColumnValues(
+  boardId: string,
+  itemId: string,
+  columnValues: Record<string, unknown>,
+): Promise<void> {
+  await mondayQuery(
+    `mutation ($board: ID!, $item: ID!, $cols: JSON!) {
+       change_multiple_column_values (board_id: $board, item_id: $item, column_values: $cols) { id }
+     }`,
+    { board: boardId, item: itemId, cols: JSON.stringify(columnValues) },
+  );
+}
+
+/**
+ * Upload a file into a file column. This is the one monday call that is NOT plain
+ * GraphQL-over-JSON: it goes to /v2/file as multipart, with the item and column
+ * inlined in the query and the bytes in `variables[file]`. Retries on 429 with the
+ * same backoff as `mondayQuery`.
+ */
+export async function uploadFileToColumn(
+  itemId: string,
+  columnId: string,
+  filename: string,
+  bytes: Buffer,
+  contentType = 'application/pdf',
+  fetchImpl: typeof fetch = fetch,
+): Promise<string> {
+  if (!env.MONDAY_API_TOKEN) throw new Error('MONDAY_API_TOKEN not configured');
+  const query =
+    `mutation ($file: File!) {
+       add_file_to_column (item_id: ${JSON.stringify(String(itemId))}, column_id: ${JSON.stringify(columnId)}, file: $file) { id }
+     }`;
+
+  let lastErr: Error | undefined;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const form = new FormData();
+    form.append('query', query);
+    // A fresh Blob per attempt — a consumed body cannot be replayed on a retry.
+    form.append('variables[file]', new Blob([new Uint8Array(bytes)], { type: contentType }), filename);
+
+    const res = await fetchImpl(`${API_URL}/file`, {
+      method: 'POST',
+      headers: { Authorization: env.MONDAY_API_TOKEN, 'API-Version': '2024-01' },
+      body: form,
+    });
+
+    if (res.status === 429) {
+      const wait = backoff(attempt, Number(res.headers.get('retry-after') ?? '') || undefined);
+      logger.warn({ attempt, wait }, 'monday file upload 429; backing off');
+      await sleep(wait);
+      lastErr = new Error('monday file upload HTTP 429');
+      continue;
+    }
+    if (!res.ok) throw new Error(`monday file upload HTTP ${res.status}`);
+
+    const body = (await res.json()) as GraphQLResponse<{ add_file_to_column: { id: string } }>;
+    if (body.errors?.length) {
+      throw new Error('monday file upload error: ' + body.errors.map((e) => e.message).join('; '));
+    }
+    const id = body.data?.add_file_to_column?.id;
+    if (!id) throw new Error('monday file upload returned no asset id');
+    return id;
+  }
+  throw lastErr ?? new Error('monday file upload: exhausted retries');
+}
+
 export async function updateItem(
   boardId: string,
   itemId: string,
