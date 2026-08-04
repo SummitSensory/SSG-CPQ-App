@@ -129,8 +129,29 @@ export function computeAdventureBOM(a: AdvAnswers, frameRules?: FormulaRule[]): 
  * the monkey-bar half-offset. A lookup table, not a multiplier, so it is not
  * expressible as an editable coefficient.
  */
+/**
+ * How a frame's length breaks into spans. A span is filled to 10 ft and the remainder
+ * is the next one: 4 legs is a single span of the whole length, 6 legs is 10 ft plus
+ * the difference (18 ft → 10 + 8), 8 legs is 10 + 10 plus the difference. Stock members
+ * only exist at 5–10 ft, so matching them against the TOTAL length — which is what the
+ * engine did — found nothing above 10 ft and every beam quantity came out zero.
+ */
+export function beamSpans(a: AdvAnswers): number[] {
+  const legs = n(a.legs), L = n(a.length);
+  const full = legs >= 8 ? 2 : legs >= 6 ? 1 : 0;
+  if (!full) return L > 0 ? [L] : [];
+  const spans: number[] = [];
+  let left = L;
+  for (let i = 0; i < full && left > 10; i++) { spans.push(10); left -= 10; }
+  if (left > 0) spans.push(Math.round(left * 100) / 100);
+  return spans;
+}
+
+const STOCK_MEMBER_FT = [5, 6, 7, 8, 9, 10];
+
 function beamMembers(a: AdvAnswers): BomRow[] {
-  const legs = n(a.legs), L = n(a.length), W = n(a.width);
+  const L = n(a.length), W = n(a.width);
+  const spans = beamSpans(a);
   const monkey = !!a.monkeyBars;
   const interiorCount = a.interiorBeams ? n(a.interiorBeamsQty) : 0;
   const rows: BomRow[] = [];
@@ -145,30 +166,46 @@ function beamMembers(a: AdvAnswers): BomRow[] {
     if (part === 'A-2408') return W === 8 ? 2 : 0;
     if (part === 'A-2409') return W === 9 ? 2 : 0;
     if (part === 'A-2410') return W === 10 ? 2 : 0;
-    if (part === 'P-2545') return L === 7 ? 2 : 0; // per workbook (references length)
+    if (part === 'P-2545') return spans.indexOf(7) >= 0 ? 2 : 0; // per workbook (references the run length)
     return 0;
   };
   const e64 = shortCap('A-2408') + shortCap('A-2409') + shortCap('A-2410');
   const J2 = 4; // Horizontal Beams (perimeter top members for rect/square)
-  const longBeam = (part: string): number => {
-    if (part === 'P-2545') return 0;
-    return L === memLen[part] ? (J2 - e64) : 0;
-  };
+  const partForLen: Record<number, string> = {};
+  Object.keys(memLen).forEach((p) => { const len = memLen[p]; if (p !== 'P-2545' && len != null) partForLen[len] = p; });
+  partForLen[5] = 'P-2545';
+
+  // Width end caps are a property of the frame, not of a span — emitted once.
   Object.keys(memLen).forEach((part) => {
-    const len = memLen[part];
-    if (len == null) return;
-    const jj = shortCap(part) + longBeam(part);
-    const kk = (legs === 6 && L === len && len >= 8) ? 3 : 0;
-    const ll = (legs === 8 && L === len && len >= 8) ? 6 : 0;
-    const nn = (L === len) ? interiorCount : 0;
-    const mm = monkeyMem[len];
-    const mq = (monkey && L === len && mm) ? 2 : 0;
-    const oo = -0.5 * mq;
-    add(part, jj + kk + ll + nn + oo, `Beam members (${len}')`,
-      `short cap ${shortCap(part)} + long ${longBeam(part)} + 6-leg ${kk} + 8-leg ${ll} + interior ${nn} − monkey offset ${-oo} (W ${W}, L ${L})`);
-    if (mq > 0 && mm) add(mm, mq, `Monkey bar beam (${len}')`, `monkey bars on a ${len}' run → 2`);
+    const c = shortCap(part);
+    if (c > 0) add(part, c, `Beam members (${memLen[part]}')`, `short cap by width → ${c} (W ${W})`);
+  });
+
+  // Long members, span by span. Each span takes the count the workbook gives a
+  // single-bay frame of that length; the old 6-leg/8-leg additions are gone because
+  // the extra spans are now emitted explicitly instead of being folded into one row.
+  const label = spans.join("' + ") + "'";
+  spans.forEach((sp, idx) => {
+    const part = partForLen[sp];
+    if (!part) return;
+    const mm = monkeyMem[sp];
+    const mq = (monkey && idx === 0 && mm) ? 2 : 0;
+    const nn = idx === 0 ? interiorCount : 0;
+    const qty = (J2 - e64) + nn - 0.5 * mq;
+    add(part, qty, `Beam members (${sp}')`,
+      `span ${idx + 1} of ${spans.length} (L ${L} = ${label}): perimeter ${J2} − width caps ${e64}` +
+      (nn ? ` + interior ${nn}` : '') + (mq ? ` − monkey offset ${0.5 * mq}` : ''));
+    if (mq > 0 && mm) add(mm, mq, `Monkey bar beam (${sp}')`, `monkey bars on the ${sp}' span → 2`);
   });
   return rows;
+}
+
+/** Said out loud when a frame length does not break into stock beam members. */
+export function beamSpanWarning(a: AdvAnswers): string | null {
+  const spans = beamSpans(a);
+  const bad = spans.filter((s) => STOCK_MEMBER_FT.indexOf(s) < 0);
+  if (!bad.length) return null;
+  return `Frame length ${n(a.length)}' with ${n(a.legs)} legs breaks into ${spans.join("' + ")}' spans, and ${bad.join("', ")}' is not a stock beam member (5–10'). No beams were generated for that span — confirm the frame breakdown with engineering before sending this proposal.`;
 }
 
 /** Trolley rail part is sized from the frame length (a lookup, so it stays in code). */
@@ -189,7 +226,7 @@ export function computeAdventureProposal(
   kitParts?: Record<string, string[]>,
   /** Business numbers (Administration → Formulas). Only `hardwareRollupDetail` is read here. */
   settings?: FormulaSettings,
-): { lines: PricedLine[]; totalWeightLbs: number } {
+): { lines: PricedLine[]; totalWeightLbs: number; warnings: string[] } {
   const LOOK = skuMap && Object.keys(skuMap).length ? skuMap : SKUS;
   const bom = computeAdventureBOM(a, frameRules);
   const qtyOf = (part: string) => (bom.find((b) => b.part === part) || { qty: 0 }).qty;
@@ -407,7 +444,7 @@ export function computeAdventureProposal(
     emitExtras(extras);
   }
 
-  return { lines, totalWeightLbs: Math.round(weight * 100) / 100 };
+  return { lines, totalWeightLbs: Math.round(weight * 100) / 100, warnings: [beamSpanWarning(a)].filter((w): w is string => !!w) };
 }
 
 /** Frame part number for the Quick Shift Saddle Bracket. */
@@ -572,6 +609,8 @@ export function explainAdventure(a: AdvAnswers, skuMap?: Record<string, SkuRec>,
     });
   }
   const hardware = hardwareRollup(a, LOOK, rules, frameRules, ACCESSORY_HW_PARTS);
+  const spanWarning = beamSpanWarning(a);
+  if (spanWarning) warnings.push(spanWarning);
   for (const m of hardware.missing) warnings.push(`Hardware component “${m}” has no SKU record — contributes $0.00 to H-1000.`);
   const revenueMinor = rows.reduce((s, r) => s + r.extendedMinor, 0) + hardware.priceMinor;
   const cogsMinor = rows.reduce((s, r) => s + r.extendedCostMinor, 0) + hardware.costMinor;

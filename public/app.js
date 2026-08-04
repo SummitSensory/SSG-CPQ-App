@@ -93,7 +93,21 @@
       document.execCommand('insertText', false, t);
     });
   }
-  function fmtDate(s) { if (!s) return '—'; var d = new Date(s); return isNaN(d) ? '—' : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }); }
+  /** Today as YYYY-MM-DD in the user's own timezone. `toISOString()` returns the UTC
+   *  day, which is the wrong date for part of every day. */
+  function isoLocal(d) {
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+  function todayISO() { return isoLocal(new Date()); }
+  /** A bare YYYY-MM-DD is a calendar date, not an instant. `new Date('2026-08-04')`
+   *  parses it as UTC midnight, which renders as the 3rd anywhere west of Greenwich —
+   *  which is why a proposal created today printed yesterday's date. */
+  function fmtDate(s) {
+    if (!s) return '—';
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s).trim());
+    var d = m ? new Date(+m[1], +m[2] - 1, +m[3]) : new Date(s);
+    return isNaN(d) ? '—' : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  }
   function fmtMoney(minor, cur) { if (minor == null) return '—'; var n = Number(minor) / 100; return (cur ? cur + ' ' : '$') + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
   /* --- API --- */
@@ -2197,7 +2211,7 @@
     var r = await authed('/catalog/tree/export');
     if (!r.ok) { alert('Could not export the tree (' + r.status + ').'); return; }
     var data = await r.json();
-    downloadText('product-tree-' + new Date().toISOString().slice(0, 10) + '.xls', treeWorkbookXml(data), 'application/vnd.ms-excel');
+    downloadText('product-tree-' + todayISO() + '.xls', treeWorkbookXml(data), 'application/vnd.ms-excel');
   }
 
   /**
@@ -2621,7 +2635,7 @@
     if (rep.range === 'all') return { from: '', to: '' };
     if (rep.range === 'ytd') from = new Date(t.getFullYear(), 0, 1);
     else { from = new Date(t.getTime() - Number(rep.range) * 86400000); }
-    return { from: from.toISOString().slice(0, 10), to: '' };
+    return { from: isoLocal(from), to: '' };
   }
   async function renderReports(user) {
     document.getElementById('view').innerHTML =
@@ -2897,7 +2911,7 @@
     var blob = new Blob([csv], { type: 'text/csv' });
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'proposal-report-' + new Date().toISOString().slice(0, 10) + '.csv';
+    a.download = 'proposal-report-' + todayISO() + '.csv';
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
   }
@@ -2975,7 +2989,7 @@
 
   var pb = null; // active builder document
 
-  function addDays(iso, n) { if (!iso) return ''; var d = new Date(iso + 'T00:00:00'); if (isNaN(d)) return ''; d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); }
+  function addDays(iso, n) { if (!iso) return ''; var d = new Date(iso + 'T00:00:00'); if (isNaN(d)) return ''; d.setDate(d.getDate() + n); return isoLocal(d); }
   function formatOrgShipTo(org) {
     if (!org || !org.addresses || !org.addresses.length) return '';
     var a = org.addresses.filter(function (x) { return x.type === 'SHIPPING'; })[0] || org.addresses.filter(function (x) { return x.type === 'BILLING'; })[0] || org.addresses[0];
@@ -3012,7 +3026,7 @@
     var lines = hoistHardwareKit((version.items || []).map(function (it) {
       return normalizeLine(it);
     }));
-    var propDate = meta.proposalDate || new Date().toISOString().slice(0, 10);
+    var propDate = meta.proposalDate || todayISO();
     // Standard notes come from Administration → Standard proposal notes; the
     // hard-coded set is only a fallback for an un-migrated database.
     var stdNotes = [];
@@ -3038,7 +3052,7 @@
     pb = {
       proposalId: proposal.id, versionId: version.id, user: user, orgName: orgName, stdNotes: stdNotes,
       title: proposal.title || '', number: proposal.number || '', version: version.version || 1,
-      meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', billSameAsShip: !meta.billTo || meta.billTo === (meta.shipTo || orgShipTo || ''), showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, showDeposit: meta.showDeposit !== false, tbdTax: meta.tbdTax || '', tbdStructureFreight: meta.tbdStructureFreight || '', tbdMatsFreight: meta.tbdMatsFreight || '', proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7), footerNotes: footerNotes, advAnswers: meta.advAnswers || null },
+      meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', billSameAsShip: !meta.billTo || meta.billTo === (meta.shipTo || orgShipTo || ''), showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, showDeposit: meta.showDeposit !== false, tbdTax: meta.tbdTax || '', tbdStructureFreight: meta.tbdStructureFreight || '', tbdMatsFreight: meta.tbdMatsFreight || '', proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7), footerNotes: footerNotes, advAnswers: meta.advAnswers || null, advWarnings: meta.advWarnings || [] },
       lines: lines,
     };
     // A new proposal starts with the billing address the same as the shipping one.
@@ -3405,6 +3419,13 @@
         '<div style="display:flex;gap:6px;flex-wrap:wrap;">' + STD_GROUPS.map(function (g) { return '<button class="grpChip" data-g="' + esc(g) + '" style="border:1px solid #dcded7;background:#fff;border-radius:999px;padding:6px 12px;font-size:12.5px;cursor:pointer;color:#3d4a55;">' + esc(g) + '</button>'; }).join('') + '</div>' +
       '</div>' +
       // lines
+      // Engineering warnings from the pricing engine — internal, never printed.
+      ((pb.meta.advWarnings || []).length
+        ? '<div class="card" style="margin-bottom:12px;background:#fbecea;border:1px solid #f0d5d0;">' +
+            '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#9c3327;font-weight:600;margin-bottom:6px;">Check before sending — internal only</div>' +
+            (pb.meta.advWarnings || []).map(function (w) { return '<div style="font-size:12.5px;color:#7d2a20;line-height:1.6;">' + esc(w) + '</div>'; }).join('') +
+          '</div>'
+        : '') +
       '<div class="section-title">Line items <span class="muted" style="font-weight:400;font-size:12px;">— drag rows to reorder</span></div>' +
       '<div id="bLines" style="display:flex;flex-direction:column;gap:8px;">' + (lineRows || '<div class="placeholder" style="padding:26px;"><p class="muted" style="margin:0;">No lines yet. Add a product line or load a template.</p></div>') + '</div>' +
       // totals
@@ -3999,7 +4020,7 @@
             // of anything and "Revision 1" on it just invites the question.
             ((Number(d.version) || 1) > 1 ? ' · Revision ' + (Number(d.version) - 1) : '') + '</div>' +
             '<div style="font-size:11px;color:#5c6157;margin-top:8px;line-height:1.7;">' +
-              '<div>Proposal Date: <b style="color:#20241f;">' + (m.proposalDate ? fmtDate(m.proposalDate) : fmtDate(new Date().toISOString())) + '</b></div>' +
+              '<div>Proposal Date: <b style="color:#20241f;">' + (m.proposalDate ? fmtDate(m.proposalDate) : fmtDate(todayISO())) + '</b></div>' +
               (m.expiration ? '<div>Expiration Date: <b style="color:#20241f;">' + fmtDate(m.expiration) + '</b></div>' : '') +
               (m.showProjectId !== false && m.projectId ? '<div>Project ID: <b style="color:#20241f;">' + esc(m.projectId) + '</b></div>' : '') +
               '<div>Total Weight: <b style="color:#20241f;">' + (Number(t.weight) || 0).toLocaleString() + ' lbs</b></div>' +
@@ -4592,6 +4613,7 @@
     // Kept with the proposal so the hardware logic can be re-run against the same
     // configuration later, on a draft nobody has open in the configurator.
     pb.meta.advAnswers = answers;
+    pb.meta.advWarnings = priced.warnings || [];
     hoistHardwareKit(pb.lines);
     advClose(); renderBuilder();
     var bl = document.getElementById('bLines'); if (bl) bl.scrollIntoView({ block: 'start' });
@@ -5072,7 +5094,7 @@
       fieldRow('Approver name', '<input id="aName" style="' + IN + '" required>') +
       fieldRow('Approver title', '<input id="aTitle" style="' + IN + '">') +
       fieldRow('PO number (optional)', '<input id="aPo" style="' + IN + '">') +
-      fieldRow('Approved on', '<input id="aDate" type="date" value="' + new Date().toISOString().slice(0, 10) + '" style="' + IN + '">') +
+      fieldRow('Approved on', '<input id="aDate" type="date" value="' + todayISO() + '" style="' + IN + '">') +
       fieldRow('Notes', '<textarea id="aNotes" rows="2" style="' + IN + 'resize:vertical;"></textarea>'),
       async function (close, showErr) {
         var name = document.getElementById('aName').value.trim(); if (!name) return showErr('Approver name is required.');
@@ -5168,7 +5190,7 @@
     document.getElementById('ordCols').addEventListener('click', function () { openOrderColumnPicker(user); });
     document.getElementById('ordCsv').addEventListener('click', function () {
       var cols = orderColKeys().map(orderCol);
-      downloadCsv('orders-' + new Date().toISOString().slice(0, 10) + '.csv',
+      downloadCsv('orders-' + todayISO() + '.csv',
         [cols.map(function (c) { return c.label; })].concat(ordersData.map(function (o) { return cols.map(function (c) { return c.plain(o); }); })));
     });
     try {
@@ -5837,7 +5859,7 @@
     var meta = [
       ['Bill of Materials', doc.order.number],
       ['Job', doc.order.jobName], ['Vendor', all ? 'All vendors' : vendor],
-      ['Submission date', doc.order.submittedOn ? String(doc.order.submittedOn).slice(0, 10) : new Date().toISOString().slice(0, 10)],
+      ['Submission date', doc.order.submittedOn ? String(doc.order.submittedOn).slice(0, 10) : todayISO()],
       ['Ship to', doc.shipTo.name], ['Delivery type', doc.order.deliveryType],
       ['Powder coat brand', doc.order.powderCoatBrand], ['Estimated shipment quote', doc.order.shipmentQuote],
       ['Total steel weight (lb)', (Number(t.steelWeightLbs) || 0).toFixed(2)],
