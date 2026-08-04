@@ -2926,6 +2926,13 @@
    */
   var LEAKED_INTERNAL = [/^Quantity assumed 1 per zip line/];
 
+  /** The rolled-up hardware kit line on this draft, if it has one. */
+  function hardwareKitLine() {
+    return (pb && pb.lines ? pb.lines : []).filter(function (l) {
+      return String(l.sku || '').toUpperCase() === 'H-1000' || (l.components && l.components.length);
+    })[0] || null;
+  }
+
   /** The Hardware Kit always sits at the top of its section. Applied when lines are
    *  loaded or generated — not on every render, so dragging still works mid-session. */
   function hoistHardwareKit(lines) {
@@ -3387,6 +3394,11 @@
           '<button class="btn" id="bAddProd" style="width:auto;padding:9px 15px;">+ Product line</button>' +
           '<button class="link-btn" id="bAddGroup" style="width:auto;padding:9px 15px;">+ Group section</button>' +
           '<button class="link-btn" id="bAddSub" style="width:auto;padding:9px 15px;">+ Sub-heading</button>' +
+          // The hardware audit, reachable from the proposal itself rather than only
+          // from the kit line — enabled whenever this draft has a kit line on it.
+          (hardwareKitLine()
+            ? '<button class="link-btn" id="bHwTest" style="width:auto;padding:9px 15px;">Test the hardware logic →</button>'
+            : '') +
           '<select id="bAddNote" style="padding:9px 12px;border:1px solid #dcded7;border-radius:9px;font-size:13.5px;background:#fff;"><option value="">+ Standard note…</option>' + (pb.stdNotes || []).map(function (nn, ni) { return '<option value="' + ni + '">' + esc(nn.title) + (nn.placement === 'FOOTER' ? ' — footer' : '') + '</option>'; }).join('') + '<option value="__custom">Custom note…</option></select>' +
         '</div>' +
         '<div style="font-size:12px;color:#8a8f85;margin-bottom:6px;">Optional product groups (click to add a section heading):</div>' +
@@ -3580,6 +3592,8 @@
     document.getElementById('bFlexSeries').addEventListener('click', function () { openLinePicker('Summit Flex'); });
     document.getElementById('bAddGroup').addEventListener('click', function () { pb.lines.push({ ref: uid(), lineType: 'GROUP', kind: 'GROUP', name: '', description: '', quantity: 0, rateMinor: 0, group: '', optional: false }); renderBuilder(); });
     document.getElementById('bAddSub').addEventListener('click', function () { pb.lines.push({ ref: uid(), lineType: 'SUBGROUP', kind: 'SUBGROUP', name: '', description: '', quantity: 0, rateMinor: 0, group: '' }); renderBuilder(); });
+    var hwTest = document.getElementById('bHwTest');
+    if (hwTest) hwTest.addEventListener('click', function () { openHardwareAudit(hardwareKitLine()); });
     var noteSel = document.getElementById('bAddNote');
     noteSel.addEventListener('change', function () {
       var v = noteSel.value; if (!v) return;
