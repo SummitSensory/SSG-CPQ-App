@@ -7,7 +7,8 @@ import {
   listRfqVendors, createRfq, setLineIncluded, addRfqLine, removeRfqLine,
   setRfqNotes, startRfqRevision, buildRfqModel, listProposalRfqs,
 } from '../handoff/freightRfq.js';
-import { renderRfqHtml } from '../handoff/freightRfqDocument.js';
+import { renderRfqHtml, rfqFilename } from '../handoff/freightRfqDocument.js';
+import { renderPdf, pdfAvailable } from '../render/pdf.js';
 import { rfqSendDefaults, sendRfq } from '../handoff/freightRfqSend.js';
 
 /**
@@ -122,6 +123,25 @@ export function registerFreightRfqRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const { html } = await renderRfqHtml(id);
     return reply.type('text/html; charset=utf-8').send(html);
+  });
+
+  /**
+   * The same document as a PDF — byte-for-byte what the vendor is emailed, so
+   * what a rep checks before sending is what actually goes out. Served inline:
+   * the browser's viewer opens it and the save button is right there.
+   */
+  app.get('/rfqs/:id/pdf', read, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!(await pdfAvailable())) {
+      throw new ValidationError('PDF rendering is not available on this deployment.');
+    }
+    const { html, model } = await renderRfqHtml(id);
+    const pdf = await renderPdf(html, { format: 'Letter' });
+    const name = rfqFilename(model.reference, model.vendor, model.customerName);
+    return reply
+      .type('application/pdf')
+      .header('Content-Disposition', `inline; filename="${name}.pdf"`)
+      .send(pdf);
   });
 
   app.get('/rfqs/:id/send-defaults', read, async (req) => {

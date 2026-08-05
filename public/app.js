@@ -3836,10 +3836,10 @@
       var btn = ov.querySelector('#rfqPreview');
       btn.disabled = true;
       try {
-        var r = await authed('/rfqs/' + rfqId + '/preview');
-        if (!r.ok) throw new Error('Could not build the preview (' + r.status + ').');
-        var html = await r.text();
-        var url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+        var r = await authed('/rfqs/' + rfqId + '/pdf');
+        if (!r.ok) throw new Error('Could not build the PDF (' + r.status + ').');
+        var blob = await r.blob();
+        var url = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }));
         window.open(url, '_blank');
         setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
       } catch (e) { ov.err(e.message); }

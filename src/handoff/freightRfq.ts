@@ -1,4 +1,5 @@
 import { prisma } from '../lib/prisma.js';
+import { env } from '../config/env.js';
 import { NotFoundError, ValidationError } from '../lib/errors.js';
 import { logger } from '../lib/logger.js';
 import { COMPANY, streetLine } from './bom.js';
@@ -494,7 +495,10 @@ export async function buildRfqModel(rfqId: string): Promise<RfqModel> {
       lines: [streetLine(rfq.shipToLine1, rfq.shipToLine2), cityLine, s(rfq.shipToCountry)].filter(Boolean),
     },
     contact: { name: s(rfq.contactName), phone: s(rfq.contactPhone) },
-    submittedBy: { name: s(creator?.name), email: s(creator?.email) || COMPANY.email },
+    // The name is the rep who owns the job; the address is the sales desk. A
+    // vendor replying to a personal inbox is a quote nobody else can see, and
+    // it is the same address the email's reply-to carries.
+    submittedBy: { name: s(creator?.name), email: env.RFQ_REPLY_TO },
     lines: rfq.lines.map((l) => ({
       id: l.id, sku: l.sku, name: l.name, quantity: l.quantity,
       unitCostMinor: l.unitCostMinor, extendedCostMinor: l.extendedCostMinor,
