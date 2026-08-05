@@ -3829,7 +3829,22 @@
 
     var ov = rfqOverlay('Request for Freight', body, foot);
     ov.querySelector('#rfqClose').addEventListener('click', ov.close);
-    ov.querySelector('#rfqPreview').addEventListener('click', function () { window.open('/rfqs/' + rfqId + '/preview', '_blank'); });
+    ov.querySelector('#rfqPreview').addEventListener('click', async function () {
+      // Opening the endpoint directly would send no Authorization header, so the
+      // route answers with a 401 body instead of the document. Fetch it as an
+      // authenticated request and hand the browser a blob.
+      var btn = ov.querySelector('#rfqPreview');
+      btn.disabled = true;
+      try {
+        var r = await authed('/rfqs/' + rfqId + '/preview');
+        if (!r.ok) throw new Error('Could not build the preview (' + r.status + ').');
+        var html = await r.text();
+        var url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+        window.open(url, '_blank');
+        setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+      } catch (e) { ov.err(e.message); }
+      btn.disabled = false;
+    });
 
     ov.querySelectorAll('.rfqL').forEach(function (c) {
       c.addEventListener('change', async function () {

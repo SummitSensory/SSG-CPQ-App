@@ -140,14 +140,24 @@ export async function listRfqVendors(versionId: string, draftLines?: ProposalLin
 }
 
 /**
- * The monday Project ID behind "RFQ-8050".
+ * The Project ID behind "RFQ-8050".
  *
- * It lives on the deal row, not in our database, so it is read through the
- * organization's linked opportunity. A board that cannot be reached must not stop
- * a rep raising an RFQ — the proposal number stands in, and the document still
- * makes sense to the vendor.
+ * Three sources, in the order they can be trusted:
+ *
+ *   1. The Project ID typed on the proposal itself. It is what prints on the
+ *      customer's document, so an RFQ quoting the same number cannot disagree
+ *      with the paperwork.
+ *   2. The monday deal row's Project ID column.
+ *   3. The proposal number, so a board that is unreachable never stops a rep
+ *      raising an RFQ.
+ *
+ * Source 2 is discarded when it comes back equal to monday's own item id: the
+ * column is an Item ID type on some boards, and "RFQ-12727069823" is not a
+ * reference anyone can use.
  */
-async function resolveProjectId(organizationId: string, fallback: string): Promise<string> {
+async function resolveProjectId(organizationId: string, metaProjectId: string, fallback: string): Promise<string> {
+  const typed = s(metaProjectId).trim();
+  if (typed) return typed;
   try {
     const opp = await prisma.opportunity.findFirst({
       where: { organizationId, mondayItemId: { not: null } },
@@ -157,11 +167,22 @@ async function resolveProjectId(organizationId: string, fallback: string): Promi
     if (!opp?.mondayItemId) return fallback;
     const item = await fetchItemById(opp.mondayItemId);
     const value = s(item?.text?.[DEAL_COL.projectId]).trim();
-    return value || fallback;
+    if (!value || value === String(opp.mondayItemId)) return fallback;
+    return value;
   } catch (err) {
     logger.warn({ err, organizationId }, 'freight rfq: could not read the monday Project ID, using the proposal number');
     return fallback;
   }
+}
+
+/** The Project ID a rep typed into the proposal builder, if any. */
+function metaProjectIdOf(sections: unknown): string {
+  if (!Array.isArray(sections)) return '';
+  for (const sec of sections as Array<{ data?: { projectId?: unknown } }>) {
+    const v = s(sec?.data?.projectId).trim();
+    if (v) return v;
+  }
+  return '';
 }
 
 /** "RFQ-8050" for the first, "RFQ-8050 R2" for every revision after it. */
@@ -214,7 +235,7 @@ export async function createRfq(input: { versionId: string; vendor: string }, ac
   const version = await prisma.proposalVersion.findUnique({
     where: { id: input.versionId },
     select: {
-      id: true, items: true, proposalId: true, createdById: true,
+      id: true, items: true, sections: true, proposalId: true, createdById: true,
       proposal: { select: { id: true, number: true, organizationId: true } },
     },
   });
@@ -231,7 +252,11 @@ export async function createRfq(input: { versionId: string; vendor: string }, ac
   if (!mine.length) throw new ValidationError(`No lines on this proposal are sourced from ${input.vendor}.`);
 
   const mfr = await prisma.manufacturer.findFirst({ where: { name: input.vendor }, select: { id: true } });
-  const projectId = await resolveProjectId(version.proposal.organizationId, version.proposal.number);
+  const projectId = await resolveProjectId(
+    version.proposal.organizationId,
+    metaProjectIdOf(version.sections),
+    version.proposal.number,
+  );
   // The rep who built the proposal is the point of contact, not whoever happens
   // to be raising the RFQ.
   const contact = await contactFor(version.createdById);
