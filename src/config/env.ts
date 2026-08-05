@@ -132,8 +132,37 @@ const EnvSchema = z
 
 export type Env = z.infer<typeof EnvSchema>;
 
+/**
+ * Normalize the raw environment before validation.
+ *
+ * Two hosting realities this absorbs:
+ *
+ * 1) A variable added in the Vercel dashboard with no value (or cleared later)
+ *    arrives as an empty string, not as absent. Every optional field here is
+ *    `.min(1)`, so an empty MONDAY_SIGNING_SECRET failed validation, `loadEnv()`
+ *    threw at module scope, and the ENTIRE function crashed with
+ *    FUNCTION_INVOCATION_FAILED — a 500 on every route, including the public
+ *    monday webhook, because one optional integration secret was blank.
+ *    Blank now means "not configured", which is what the operator meant.
+ *
+ * 2) Secrets pasted into a dashboard field routinely carry a trailing newline or
+ *    space. Untrimmed, a signing secret still passes `.min(1)` and then fails
+ *    every signature check at runtime — a far more expensive bug to find than a
+ *    boot error. Trim once, here.
+ */
+function normalizeSource(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    if (trimmed === '') continue;
+    out[key] = trimmed;
+  }
+  return out;
+}
+
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
-  const parsed = EnvSchema.safeParse(source);
+  const parsed = EnvSchema.safeParse(normalizeSource(source));
   if (!parsed.success) {
     const issues = parsed.error.issues
       .map((i) => `  - ${i.path.join('.')}: ${i.message}`)
