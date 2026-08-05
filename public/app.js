@@ -3835,14 +3835,31 @@
       // authenticated request and hand the browser a blob.
       var btn = ov.querySelector('#rfqPreview');
       btn.disabled = true;
+      // Opened NOW, while the click is still the reason the browser is running
+      // this code. Open it after the await and the popup blocker kills it
+      // silently — no error, no tab, nothing to tell the rep what happened.
+      var win = window.open('', '_blank');
       try {
         var r = await authed('/rfqs/' + rfqId + '/pdf');
         if (!r.ok) throw new Error('Could not build the PDF (' + r.status + ').');
         var blob = await r.blob();
         var url = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }));
-        window.open(url, '_blank');
+        if (win) {
+          win.location = url;
+        } else {
+          // Blocked anyway: fall back to a download, which never is.
+          var a = document.createElement('a');
+          a.href = url;
+          a.download = 'RFQ.pdf';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        }
         setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
-      } catch (e) { ov.err(e.message); }
+      } catch (e) {
+        if (win) win.close();
+        ov.err(e.message);
+      }
       btn.disabled = false;
     });
 
