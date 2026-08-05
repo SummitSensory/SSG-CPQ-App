@@ -43,9 +43,24 @@ function addresses(list: string | undefined): string[] {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+/**
+ * Plain-text body to HTML, preserving the operator's spacing.
+ *
+ * `white-space: pre-wrap` looks right in a browser and is thrown away by
+ * Outlook, which is where these land — a carefully spaced note with bullet lines
+ * arrived as one unreadable paragraph. Blank lines become paragraphs and single
+ * breaks become <br>, which every mail client honours.
+ */
 function bodyHtml(text: string): string {
   const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  return `<div style="font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px;line-height:1.6;color:#20241f;white-space:pre-wrap;">${escaped}</div>`;
+  const paragraphs = escaped
+    .replace(/\r\n/g, '\n')
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean)
+    .map((block) => `<p style="margin:0 0 14px;">${block.replace(/\n/g, '<br>')}</p>`)
+    .join('');
+  return `<div style="font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px;line-height:1.6;color:#20241f;">${paragraphs}</div>`;
 }
 
 function renderTemplate(text: string, vars: Record<string, string>): string {
