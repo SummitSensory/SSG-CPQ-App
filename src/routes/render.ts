@@ -4,6 +4,7 @@ import { Permission } from '../authz/permissions.js';
 import { ValidationError } from '../lib/errors.js';
 import { prisma } from '../lib/prisma.js';
 import { renderBomHtml, renderBomXml, bomFilename } from '../handoff/bomDocuments.js';
+import { uploadProposalPdfToMonday } from '../integrations/monday/proposalPush.js';
 import { renderPdf, pdfAvailable } from '../render/pdf.js';
 
 /**
@@ -15,6 +16,31 @@ import { renderPdf, pdfAvailable } from '../render/pdf.js';
  */
 export function registerRenderRoutes(app: FastifyInstance): void {
   const read = { preHandler: requirePermission(Permission.ORDERS_READ) };
+  const release = { preHandler: requirePermission(Permission.PROPOSAL_RELEASE) };
+
+  /**
+   * The released proposal, rendered and dropped into the monday deal row's file
+   * column.
+   *
+   * Split out of the release call deliberately. Release runs on the main API
+   * function, which has 30 seconds and no headroom for a cold headless browser —
+   * the PDF either never rendered or took the whole request down with it, and the
+   * deal board ended up with the numbers but no document. Here it gets the
+   * renderer's memory and its 60-second ceiling.
+   */
+  app.post('/render/proposals/versions/:versionId/monday-file', release, async (req) => {
+    const { versionId } = req.params as { versionId: string };
+    const body = (req.body ?? {}) as { proposalHtml?: string; filename?: string };
+    if (!body.proposalHtml) throw new ValidationError('The rendered proposal is missing from the request.');
+    if (!(await pdfAvailable())) {
+      throw new ValidationError('PDF rendering is not available on this deployment.');
+    }
+    return uploadProposalPdfToMonday({
+      versionId,
+      proposalHtml: body.proposalHtml,
+      filename: body.filename,
+    });
+  });
 
   /** Is the renderer installed? The UI uses this to hide PDF options when not. */
   app.get('/render/status', async () => ({ pdf: await pdfAvailable() }));

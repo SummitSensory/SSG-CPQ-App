@@ -2521,12 +2521,21 @@
    * Releasing also hands the deal board its copy of the proposal, and the proposal
    * layout only exists in the browser — so the rendered document travels with the
    * release call and the server turns it into the PDF monday receives.
+   *
+   * The document is kept aside as well: the upload runs as a second call against
+   * the renderer function, which is the only one with the memory and the time for
+   * a headless browser.
    */
+  var lastReleaseDoc = null;
   async function actionBody(act, proposalId, versionId) {
+    lastReleaseDoc = null;
     if (act !== 'release') return {};
     try {
       var doc = await buildProposalDocForSend({ id: proposalId }, versionId);
-      if (doc) return { proposalHtml: doc.html, proposalFilename: doc.filename };
+      if (doc) {
+        lastReleaseDoc = { versionId: versionId, html: doc.html, filename: doc.filename };
+        return { proposalHtml: doc.html, proposalFilename: doc.filename };
+      }
     } catch (e) {}
     return {};
   }
@@ -2537,7 +2546,22 @@
     var d = null;
     try { d = await rr.json(); } catch (e) { return; }
     var m = d && d.monday;
-    if (!m || m.pushed) return;
+    // Upload the document itself on the renderer function. Failing here costs the
+    // attachment, not the release, so it is reported and never thrown.
+    var fileNote = '';
+    if (lastReleaseDoc && m && m.pushed) {
+      try {
+        var fr = await authed('/render/proposals/versions/' + lastReleaseDoc.versionId + '/monday-file', {
+          method: 'POST',
+          body: { proposalHtml: lastReleaseDoc.html, filename: lastReleaseDoc.filename },
+        });
+        var fd = fr.ok ? await fr.json() : null;
+        if (!fd || !fd.uploaded) fileNote = ' The deal row was updated, but the proposal document did not attach.';
+      } catch (e) { fileNote = ' The deal row was updated, but the proposal document did not attach.'; }
+    }
+    lastReleaseDoc = null;
+    if (m && m.pushed) { if (fileNote) alert(fileNote.trim()); return; }
+    if (!m) return;
     alert('The proposal was released, but monday.com was not updated: ' +
       (m.skipped || m.error || 'the deal board did not respond') + '.');
   }
@@ -3840,7 +3864,7 @@
       // silently — no error, no tab, nothing to tell the rep what happened.
       var win = window.open('', '_blank');
       try {
-        var r = await authed('/rfqs/' + rfqId + '/pdf');
+        var r = await authed('/render/rfqs/' + rfqId + '.pdf');
         if (!r.ok) throw new Error('Could not build the PDF (' + r.status + ').');
         var blob = await r.blob();
         var url = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }));

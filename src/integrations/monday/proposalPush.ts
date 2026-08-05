@@ -4,7 +4,7 @@ import { logger } from '../../lib/logger.js';
 import { setColumnValues, uploadFileToColumn } from './client.js';
 import { findLink } from './links.js';
 import { versionTotals } from '../../proposals/analytics.js';
-import { renderPdf, pdfAvailable } from '../../render/pdf.js';
+import { renderPdf } from '../../render/pdf.js';
 
 /**
  * Releasing a proposal writes back to the monday deal row: the amount, the proposal
@@ -118,7 +118,7 @@ export async function pushReleasedProposal(input: {
   const expiration = mondayDateValue(version.expirationDate ?? null);
   const expirationDate = 'date' in expiration ? expiration.date : null;
   const boardId = env.MONDAY_DEALS_BOARD_ID!;
-  let fileUploaded = false;
+  const fileUploaded = false;
 
   try {
     await setColumnValues(boardId, itemId, {
@@ -135,14 +135,10 @@ export async function pushReleasedProposal(input: {
     });
 
     if (input.proposalHtml) {
-      if (await pdfAvailable()) {
-        const name = (input.filename || version.proposal.number).replace(/\.pdf$/i, '');
-        const pdf = await renderPdf(input.proposalHtml, { format: 'Letter' });
-        await uploadFileToColumn(itemId, DEAL_COLUMNS.file, `${name}.pdf`, pdf);
-        fileUploaded = true;
-      } else {
-        logger.warn({ versionId: input.versionId }, 'monday proposal push: PDF renderer unavailable, columns updated without the file');
-      }
+      // The document itself is uploaded separately, by the renderer function.
+      // Rendering a PDF here would need a headless browser on the main API
+      // function, which has neither the memory nor the 30 seconds to spare.
+      logger.info({ versionId: input.versionId }, 'monday proposal push: columns updated, document follows from the renderer');
     }
 
     await prisma.integrationSyncLog.create({
@@ -158,5 +154,60 @@ export async function pushReleasedProposal(input: {
       },
     });
     return { pushed: false, itemId, subtotalMinor, discountMinor: totals.discount, expirationDate, fileUploaded, error: String(err) };
+  }
+}
+
+export interface ProposalFileUploadResult {
+  uploaded: boolean;
+  itemId?: string;
+  filename?: string;
+  skipped?: string;
+  error?: string;
+}
+
+/**
+ * Render the released proposal and put it in the deal row's file column.
+ *
+ * Called from the renderer function, not from the release request — see the note
+ * on the route. Never throws for a monday-side problem: the proposal is already
+ * released, and a missing attachment is worth reporting rather than turning into
+ * a failed request the rep cannot act on.
+ */
+export async function uploadProposalPdfToMonday(input: {
+  versionId: string;
+  proposalHtml: string;
+  filename?: string;
+}): Promise<ProposalFileUploadResult> {
+  if (!isMondayPushConfigured()) {
+    return { uploaded: false, skipped: 'monday.com is not configured on this deployment.' };
+  }
+
+  const version = await prisma.proposalVersion.findUnique({
+    where: { id: input.versionId },
+    select: { id: true, proposal: { select: { number: true, organizationId: true } } },
+  });
+  if (!version?.proposal) return { uploaded: false, skipped: 'proposal version not found' };
+
+  const { itemId, note } = await dealItemIdFor(version.proposal.organizationId);
+  if (!itemId) return { uploaded: false, skipped: note };
+
+  const name = (input.filename || version.proposal.number).replace(/\.pdf$/i, '');
+  try {
+    const pdf = await renderPdf(input.proposalHtml, { format: 'Letter' });
+    await uploadFileToColumn(itemId, DEAL_COLUMNS.file, `${name}.pdf`, pdf);
+    await prisma.integrationSyncLog.create({
+      data: { direction: 'OUTBOUND', entity: ENTITY, entityId: version.id, externalId: itemId, status: 'ok' },
+    });
+    logger.info({ versionId: input.versionId, itemId }, 'monday proposal push: document uploaded');
+    return { uploaded: true, itemId, filename: `${name}.pdf` };
+  } catch (err) {
+    logger.error({ err, versionId: input.versionId, itemId }, 'monday proposal push: document upload failed');
+    await prisma.integrationSyncLog.create({
+      data: {
+        direction: 'OUTBOUND', entity: ENTITY, entityId: version.id, externalId: itemId,
+        status: 'error', error: String(err),
+      },
+    });
+    return { uploaded: false, itemId, error: String(err) };
   }
 }

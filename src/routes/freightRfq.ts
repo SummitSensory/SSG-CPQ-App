@@ -129,8 +129,13 @@ export function registerFreightRfqRoutes(app: FastifyInstance): void {
    * The same document as a PDF — byte-for-byte what the vendor is emailed, so
    * what a rep checks before sending is what actually goes out. Served inline:
    * the browser's viewer opens it and the save button is right there.
+   *
+   * Deliberately under /render/*. vercel.json routes that prefix to its own
+   * function with the memory and 60-second ceiling headless Chromium needs; on
+   * the main API function a cold browser start runs past 30 seconds and the
+   * request dies with a 504.
    */
-  app.get('/rfqs/:id/pdf', read, async (req, reply) => {
+  app.get('/render/rfqs/:id.pdf', read, async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!(await pdfAvailable())) {
       throw new ValidationError('PDF rendering is not available on this deployment.');
