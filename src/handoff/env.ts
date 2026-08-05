@@ -104,8 +104,30 @@ const EnvSchema = z
 
 export type Env = z.infer<typeof EnvSchema>;
 
+/**
+ * Normalize the raw environment before validation. Mirrors src/config/env.ts.
+ *
+ * A variable added in a hosting dashboard with no value arrives as an empty
+ * string, not as absent. Every optional field here is `.min(1)`, so a blank
+ * MONDAY_SIGNING_SECRET failed validation and threw at module scope, taking the
+ * whole process down. Blank now means "not configured".
+ *
+ * Values are also trimmed: a secret pasted with a trailing newline otherwise
+ * passes `.min(1)` and then fails every signature check at runtime.
+ */
+function normalizeSource(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    if (trimmed === '') continue;
+    out[key] = trimmed;
+  }
+  return out;
+}
+
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
-  const parsed = EnvSchema.safeParse(source);
+  const parsed = EnvSchema.safeParse(normalizeSource(source));
   if (!parsed.success) {
     const issues = parsed.error.issues
       .map((i) => `  - ${i.path.join('.')}: ${i.message}`)
@@ -117,9 +139,23 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
 
 export const env: Env = loadEnv();
 
-/** True only when every monday credential is present. */
+/** True only when every monday credential is present, inbound webhooks included. */
 export function isMondayConfigured(e: Env = env): boolean {
   return Boolean(e.MONDAY_API_TOKEN && e.MONDAY_SIGNING_SECRET && e.MONDAY_DEALS_BOARD_ID);
+}
+
+/**
+ * What an OUTBOUND write to monday actually needs: a token to authenticate with
+ * and a board to write to. The signing secret verifies webhooks monday sends US
+ * and has no part in a push.
+ */
+export function isMondayPushConfigured(e: Env = env): boolean {
+  return Boolean(e.MONDAY_API_TOKEN && e.MONDAY_DEALS_BOARD_ID);
+}
+
+/** Inbound webhooks are the one path that genuinely needs the signing secret. */
+export function isMondayWebhookConfigured(e: Env = env): boolean {
+  return Boolean(e.MONDAY_API_TOKEN && e.MONDAY_SIGNING_SECRET);
 }
 
 /** True only when every Entra SSO setting is present. */
