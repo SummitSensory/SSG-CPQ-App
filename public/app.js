@@ -3670,6 +3670,7 @@
     return '<div class="card" style="margin-top:14px;border:1px solid #e4dfd0;background:#fdfcf7;">' +
       '<div class="section-title" style="margin:0 0 2px;">Freight requests</div>' +
       '<div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;">Internal only \u2014 not printed</div>' +
+      (rfqData.error ? '<div style="background:#fbecea;border:1px solid #f0ccc6;color:#9c3327;font-size:12px;line-height:1.5;padding:8px 10px;border-radius:9px;margin-bottom:10px;">' + esc(rfqData.error) + '</div>' : '') +
       prompt +
       (rows || '<div class="muted" style="font-size:12px;">None raised yet.</div>') +
     '</div>';
@@ -3702,19 +3703,55 @@
     wireRfqCard();
   }
 
-  /** Cached per version: the rail re-renders on every keystroke in the builder. */
+  /** Cached per version and per line set: the rail re-renders on every keystroke. */
+  function rfqLineSignature() {
+    if (!pb) return '';
+    return pb.lines.filter(function (l) { return (l.lineType || 'PRODUCT') === 'PRODUCT' && l.sku && !l.optional; })
+      .map(function (l) { return l.sku + ':' + (Number(l.quantity) || 0); }).join('|');
+  }
+
+  function rfqDraftLines() {
+    return pb.lines.map(function (l) {
+      return {
+        sku: l.sku || '',
+        name: l.name || '',
+        lineType: l.lineType || 'PRODUCT',
+        optional: !!l.optional,
+        quantity: Number(l.quantity) || 0,
+        costEach: Number(l.costEach) || 0,
+      };
+    });
+  }
+
+  /**
+   * Refreshes itself off the lines currently on screen, so dropping a vendor's
+   * product onto the proposal raises the freight prompt straight away — no save,
+   * no reload. Debounced, because this runs on every builder render.
+   */
   async function loadRfqPanel(force) {
     if (!pb) return;
-    if (!force && rfqData && rfqData.versionId === pb.versionId) { renderRfqRail(); return; }
-    renderRfqRail();
-    try {
-      var vendors = await rfqApi('/proposals/versions/' + pb.versionId + '/rfq/vendors');
-      var rfqs = await rfqApi('/proposals/' + pb.proposalId + '/rfqs');
-      rfqData = { versionId: pb.versionId, vendors: vendors.vendors || [], rfqs: rfqs.rfqs || [] };
-    } catch (e) {
-      rfqData = { versionId: pb.versionId, vendors: [], rfqs: [] };
+    var sig = rfqLineSignature();
+    if (!force && rfqData && rfqData.versionId === pb.versionId && rfqData.sig === sig) { renderRfqRail(); return; }
+    if (!force) {
+      clearTimeout(loadRfqPanel._t);
+      loadRfqPanel._t = setTimeout(function () { loadRfqPanel(true); }, 400);
+      renderRfqRail();
+      return;
     }
+    if (loadRfqPanel._busy) { loadRfqPanel._again = true; return; }
+    loadRfqPanel._busy = true;
     renderRfqRail();
+    var versionId = pb.versionId;
+    try {
+      var vendors = await rfqApi('/proposals/versions/' + versionId + '/rfq/vendors', { method: 'POST', body: { lines: rfqDraftLines() } });
+      var rfqs = await rfqApi('/proposals/' + pb.proposalId + '/rfqs');
+      rfqData = { versionId: versionId, sig: sig, vendors: vendors.vendors || [], rfqs: rfqs.rfqs || [], error: null };
+    } catch (e) {
+      rfqData = { versionId: versionId, sig: sig, vendors: [], rfqs: [], error: e.message };
+    }
+    loadRfqPanel._busy = false;
+    renderRfqRail();
+    if (loadRfqPanel._again) { loadRfqPanel._again = false; loadRfqPanel(true); }
   }
 
   function openRfqVendorPicker() {
@@ -3737,6 +3774,9 @@
         if (!picked.length) return showErr('Pick at least one vendor.');
         var first = null;
         try {
+          // The RFQ is built from the SAVED version, so anything still sitting in
+          // the builder has to land first or the request goes out short a line.
+          await saveBuilderQuiet();
           for (var i = 0; i < picked.length; i++) {
             var made = await rfqApi('/proposals/versions/' + pb.versionId + '/rfqs', { method: 'POST', body: { vendor: picked[i] } });
             if (!first) first = made.id;
@@ -4196,12 +4236,28 @@
     return { title: pb.title, number: pb.number, orgName: pb.orgName, meta: pb.meta, lines: pb.lines, totals: builderTotals() };
   }
 
-  async function saveBuilder() {
-    var btn = document.getElementById('bSave'); btn.disabled = true; btn.textContent = 'Saving…';
+  /** The version payload, shared by the Save button and the quiet save below. */
+  function builderVersionPayload() {
     var sections = [{ id: 'meta', type: 'CUSTOMER_INFO', title: 'Proposal', order: 0, enabled: true, data: pb.meta }];
     var items = pb.lines.map(function (l, i) { return { ref: l.ref, lineType: l.lineType, kind: l.kind, productId: l.productId, sku: l.sku || '', name: l.name, description: l.description, internalNote: l.internalNote || '', components: l.components || null, freightTbd: !!l.freightTbd, quantity: Number(l.quantity) || 0, rateMinor: Number(l.rateMinor) || 0, costEach: Number(l.costEach) || 0, weightEach: Number(l.weightEach) || 0, group: l.group || '', optional: !!l.optional, delivery: l.delivery || '', returnable: l.returnable || '', addlFreight: l.addlFreight || '', freightCalc: l.freightCalc || '', tpFreightMinor: Number(l.tpFreightMinor) || 0, tpFreightLabel: l.tpFreightLabel || '', order: i }; });
+    return { sections: sections, items: items, expirationDate: pb.meta.expiration || undefined };
+  }
+
+  /**
+   * Save without leaving the builder. Used before raising an RFQ, which is built
+   * server-side from the stored version and would otherwise miss a line the rep
+   * added a moment ago.
+   */
+  async function saveBuilderQuiet() {
+    var r = await authed('/proposals/versions/' + pb.versionId, { method: 'PATCH', body: builderVersionPayload() });
+    if (!r.ok) throw new Error('Could not save the proposal before raising the request (' + r.status + ').');
+    clearBuilderDirty();
+  }
+
+  async function saveBuilder() {
+    var btn = document.getElementById('bSave'); btn.disabled = true; btn.textContent = 'Saving…';
     try {
-      var r = await authed('/proposals/versions/' + pb.versionId, { method: 'PATCH', body: { sections: sections, items: items, expirationDate: pb.meta.expiration || undefined } });
+      var r = await authed('/proposals/versions/' + pb.versionId, { method: 'PATCH', body: builderVersionPayload() });
       if (!r.ok) { alert('Could not save (' + r.status + ').'); btn.disabled = false; btn.textContent = 'Save proposal'; return; }
       btn.textContent = 'Saved ✓';
       clearBuilderDirty();

@@ -19,6 +19,20 @@ import { rfqSendDefaults, sendRfq } from '../handoff/freightRfqSend.js';
  */
 
 const CreateSchema = z.object({ vendor: z.string().trim().min(1).max(160) });
+const DraftLinesSchema = z.object({
+  lines: z
+    .array(
+      z.object({
+        sku: z.string().trim().max(64).optional(),
+        name: z.string().max(240).optional(),
+        lineType: z.string().max(32).optional(),
+        optional: z.boolean().optional(),
+        quantity: z.number().optional(),
+        costEach: z.number().optional(),
+      }),
+    )
+    .max(500),
+});
 const NotesSchema = z.object({ notes: z.string().max(4000) });
 const LineSchema = z.object({ included: z.boolean() });
 const AddLineSchema = z.object({
@@ -47,6 +61,17 @@ export function registerFreightRfqRoutes(app: FastifyInstance): void {
   app.get('/proposals/versions/:versionId/rfq/vendors', read, async (req) => {
     const { versionId } = req.params as { versionId: string };
     return { vendors: await listRfqVendors(versionId) };
+  });
+
+  /**
+   * The same list, but computed from the lines the builder currently has on
+   * screen. Keeps the freight prompt honest while a proposal is being edited,
+   * without forcing a save first.
+   */
+  app.post('/proposals/versions/:versionId/rfq/vendors', read, async (req) => {
+    const { versionId } = req.params as { versionId: string };
+    const { lines } = parse(DraftLinesSchema, req.body);
+    return { vendors: await listRfqVendors(versionId, lines) };
   });
 
   app.post('/proposals/versions/:versionId/rfqs', write, async (req) => {

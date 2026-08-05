@@ -77,18 +77,24 @@ async function vendorBySku(skus: string[]): Promise<Map<string, string>> {
 /**
  * Every vendor represented on a proposal version, RFQ-capable or not.
  *
+ * `draftLines` lets the builder ask about lines it has not saved yet. A rep who
+ * has just dropped a Play Sports swing onto the proposal expects the freight
+ * prompt to appear immediately, not after a save and a page reload — so the
+ * client sends what is on screen and this reads that instead of the stored
+ * version.
+ *
  * Vendors without the flag are still returned, marked `rfqEnabled: false`: the
  * rep asked for the ability to add items from anywhere, and hiding the vendor
  * entirely would make that impossible to discover.
  */
-export async function listRfqVendors(versionId: string): Promise<RfqVendorOption[]> {
+export async function listRfqVendors(versionId: string, draftLines?: ProposalLine[]): Promise<RfqVendorOption[]> {
   const version = await prisma.proposalVersion.findUnique({
     where: { id: versionId },
     select: { id: true, items: true, proposalId: true },
   });
   if (!version) throw new NotFoundError('Proposal version not found');
 
-  const lines = productLines(version.items);
+  const lines = draftLines && draftLines.length ? productLines(draftLines) : productLines(version.items);
   const skuVendor = await vendorBySku([...new Set(lines.map((l) => s(l.sku)))]);
 
   const grouped = new Map<string, { lineCount: number; unitCount: number; cost: number }>();
