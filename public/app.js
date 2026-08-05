@@ -354,7 +354,7 @@
             '<button class="link-btn" id="profBtn" style="margin-bottom:6px;">My profile</button>' +
             '<button class="link-btn" id="pwdBtn" style="margin-bottom:6px;">Change password</button>' +
             '<button class="link-btn" id="logoutBtn">Sign out</button>' +
-            '<div style="text-align:center;font-size:10px;color:#b3b7ac;margin-top:8px;letter-spacing:.04em;">build 41 · deposit toggle · TBD overrides</div></div>' +
+            '<div style="text-align:center;font-size:10px;color:#b3b7ac;margin-top:8px;letter-spacing:.04em;">build 50 · freight alerts</div></div>' +
         '</aside>' +
         '<main class="main"><div class="topbar"><div class="eyebrow">Summit Sensory Gym Proposal Management Software</div><h2 id="viewTitle">Dashboard</h2></div>' +
           '<div class="content" id="view"></div></main>' +
@@ -427,13 +427,18 @@
       if (rr.ok) data = await rr.json();
     } catch (e) {}
     try { var ro = await authed('/crm/organizations?pageSize=1'); if (ro.ok) orgTotal = (await ro.json()).total; } catch (e2) {}
+    // Released proposals whose freight nobody has asked a vendor about. Its own
+    // endpoint rather than part of the reporting payload: it reads the freight
+    // requests, which reporting has no business knowing about.
+    var freightRows = [];
+    try { var rfq = await authed('/proposals/freight-alerts'); if (rfq.ok) freightRows = (await rfq.json()).alerts || []; } catch (e3) {}
     var kpis = document.getElementById('dashKpis'); if (!kpis) return;
     if (!data) { kpis.innerHTML = '<div class="card"><div class="k">Proposals</div><div class="v small">Unavailable</div><div class="muted" style="font-size:12.5px;margin-top:4px;">Could not load reporting data.</div></div>'; return; }
     var s = data.summary;
     var released = (data.pipeline.filter(function (p) { return p.status === 'RELEASED'; })[0] || { count: 0, value: 0 });
     var review = (data.pipeline.filter(function (p) { return p.status === 'INTERNAL_REVIEW'; })[0] || { count: 0, value: 0 });
     var stale = data.rows.filter(function (r) { return r.status === 'DRAFT' && r.daysOpen >= 14; });
-    var attn = data.expiredOpen.length + data.expiringSoon.length + review.count + stale.length;
+    var attn = data.expiredOpen.length + data.expiringSoon.length + review.count + stale.length + freightRows.length;
     kpis.innerHTML =
       kpi('Open proposals', s.open.toLocaleString(), fmt0(s.openValue) + ' in flight · avg ' + s.avgDaysOpen + ' days old', '#3d4a55') +
       kpi('Out with customers', released.count.toLocaleString(), fmt0(released.value) + ' awaiting a decision') +
@@ -457,7 +462,8 @@
         }).join('') + '</div></div>';
     }
     var box = document.getElementById('dashAttention');
-    var html = attnGroup('Past expiration', data.expiredOpen, '#9c3327', 're-date or mark inactive') +
+    var html = freightAlertGroup(freightRows) +
+      attnGroup('Past expiration', data.expiredOpen, '#9c3327', 're-date or mark inactive') +
       attnGroup('Expiring within 14 days', data.expiringSoon, '#8a6d1f', 'follow up') +
       attnGroup('Awaiting internal review', data.rows.filter(function (r) { return r.status === 'INTERNAL_REVIEW'; }), '#3d4a55', '') +
       attnGroup('Drafts untouched 14+ days', stale, '#5c6157', 'stalled');
@@ -475,6 +481,134 @@
     document.querySelectorAll('.dashRow').forEach(function (el) {
       el.addEventListener('click', function () { activateNav('proposals'); openProposalDetail(el.getAttribute('data-id'), user); });
     });
+    // Straight into the proposal itself, freight section first — not the version
+    // list, and not the builder.
+    document.querySelectorAll('.freightRow').forEach(function (el) {
+      el.addEventListener('click', function () {
+        activateNav('proposals');
+        openFreightReview(el.getAttribute('data-pid'), user, el.getAttribute('data-vid'));
+      });
+    });
+  }
+
+  /**
+   * Released proposals carrying parts whose freight has never been requested.
+   * First in the attention list and coloured like the overdue group: a job that
+   * ships without a freight quote is a margin hole nobody planned.
+   */
+  function freightAlertGroup(rows) {
+    if (!rows || !rows.length) return '';
+    return '<div style="margin-bottom:10px;"><div style="display:flex;align-items:baseline;gap:8px;margin-bottom:5px;">' +
+        '<span style="font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#9c3327;">Freight not requested \u00b7 ' + rows.length + '</span>' +
+        '<span class="muted" style="font-size:11.5px;">released proposals waiting on a vendor freight quote</span></div>' +
+      '<div style="background:#fdf1ef;border:1px solid #f0ccc6;border-radius:12px;overflow:hidden;">' +
+      rows.slice(0, 8).map(function (r, i) {
+        var vend = (r.vendors || []).join(', ');
+        return '<div class="freightRow" data-pid="' + r.proposalId + '" data-vid="' + r.versionId + '" style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 14px;cursor:pointer;' + (i ? 'border-top:1px solid #f6dcd7;' : '') + '">' +
+          '<div style="min-width:0;"><b style="font-weight:600;font-size:13.5px;">' + esc(r.customer) + '</b>' +
+            '<div class="muted" style="font-size:12px;">' + esc(r.title) + ' \u00b7 ' + esc(r.number) + ' v' + r.version + '</div></div>' +
+          '<div style="text-align:right;white-space:nowrap;font-size:12.5px;color:#9c3327;font-weight:600;">' + r.pendingCount + ' item' + (r.pendingCount === 1 ? '' : 's') +
+            '<div class="muted" style="font-size:11.5px;font-weight:400;">' + esc(vend || 'freight outstanding') + (r.removedCount ? ' \u00b7 ' + r.removedCount + ' removed' : '') + '</div></div></div>';
+      }).join('') + '</div></div>';
+  }
+
+  /**
+   * The proposal opened straight from the dashboard alert: the freight request
+   * section at the top, flagged, with the line items below it marked up. Read only
+   * by design \u2014 a released version is frozen, and the only thing outstanding here
+   * is the request to the vendor, which is not part of the proposal.
+   */
+  async function openFreightReview(proposalId, user, versionId) {
+    var view = document.getElementById('view');
+    view.innerHTML = '<div class="muted" style="padding:24px;">Loading\u2026</div>';
+    var r = await authed('/proposals/' + proposalId);
+    if (!r.ok) { view.innerHTML = '<div class="err">Could not load proposal.</div>'; return; }
+    var p = await r.json();
+    var versions = p.versions || [];
+    var v = (versionId ? versions.filter(function (x) { return x.id === versionId; })[0] : null) || versions[versions.length - 1];
+    if (!v) { view.innerHTML = '<div class="err">This proposal has no versions.</div>'; return; }
+    var orgName = '';
+    try { var ro = await authed('/crm/organizations/' + p.organizationId); if (ro.ok) orgName = (await ro.json()).name || ''; } catch (e) {}
+
+    // The RFQ rail reads the builder state, so the review screen fills it in the
+    // same shape. readOnly is what keeps the save-before-request step out.
+    pb = {
+      proposalId: p.id, versionId: v.id, user: user, readOnly: true, orgName: orgName,
+      title: p.title || '', number: p.number || '', version: v.version || 1,
+      meta: {}, stdNotes: [], lines: (v.items || []).map(function (it) { return normalizeLine(it); }),
+    };
+    rfqData = null;
+    var cov = null;
+    try { cov = await rfqApi('/proposals/versions/' + v.id + '/freight-coverage'); } catch (e2) {}
+
+    var needs = !cov || cov.needsRequest;
+    var headline = !cov
+      ? 'Freight coverage could not be read.'
+      : cov.needsRequest
+        ? (cov.pendingCount || cov.lines.filter(function (l) { return l.state === 'DRAFT'; }).length) + ' item' +
+          ((cov.pendingCount === 1) ? '' : 's') + ' on this proposal have no freight quote requested.'
+        : 'Every item that needs freight has been requested.';
+    var covLines = cov ? cov.lines : [];
+    var removed = cov ? (cov.removed || []) : [];
+
+    view.innerHTML =
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap;">' +
+        '<button class="link-btn" id="frBack" style="width:auto;padding:7px 13px;">\u2039 Back to proposals</button>' +
+        '<button class="link-btn" id="frDoc" style="width:auto;padding:9px 14px;">View the proposal document</button>' +
+      '</div>' +
+      '<div class="card" style="margin-bottom:14px;">' +
+        '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;">' +
+          '<div><div class="k">' + esc(p.number || '') + ' \u00b7 v' + (v.version || 1) + '</div>' +
+            '<h2 style="font-size:22px;margin-top:2px;">' + esc(p.title || '') + '</h2>' +
+            '<div class="muted" style="font-size:13px;margin-top:2px;">' + esc(orgName) + '</div></div>' +
+          '<span class="chip">' + titleCase(v.status || 'DRAFT') + '</span></div>' +
+        '<div class="muted" style="font-size:12.5px;margin-top:10px;line-height:1.55;">Read only. Freight can be requested from here without editing the proposal \u2014 a released version is frozen.</div>' +
+      '</div>' +
+      '<div id="frFreight" style="' + (needs ? 'border:2px solid #c8483a;background:#fdf1ef;' : 'border:1px solid #cfe3d7;background:#f4faf6;') + 'border-radius:14px;padding:14px 15px;margin-bottom:18px;">' +
+        '<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;">' +
+          '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:' + (needs ? '#9c3327' : '#2f7d5d') + ';">Request for Freight</div>' +
+          '<div style="font-size:12.5px;color:' + (needs ? '#7d2a20' : '#2f7d5d') + ';line-height:1.5;">' + esc(headline) + '</div>' +
+        '</div>' +
+        '<div id="bRfqRail"></div>' +
+      '</div>' +
+      '<div class="section-title">Line items</div>' +
+      '<div style="display:flex;flex-direction:column;gap:6px;">' +
+        (covLines.length
+          ? covLines.map(freightReviewRow).join('') + removed.map(freightRemovedRow).join('')
+          : '<div class="placeholder" style="padding:22px;"><p class="muted" style="margin:0;">No product lines on this version.</p></div>') +
+      '</div>';
+
+    document.getElementById('frBack').addEventListener('click', function () { renderProposals(user); });
+    document.getElementById('frDoc').addEventListener('click', function () { previewProposal(p, v); });
+    loadRfqPanel(true);
+  }
+
+  /** One product line on the freight review, with its request state. */
+  function freightReviewRow(l) {
+    return '<div style="display:flex;align-items:center;gap:11px;background:#fff;border:1px solid #e7e8e3;border-radius:10px;padding:9px 12px;">' +
+      '<span class="bFreightMark" data-sku="' + esc(l.sku || '') + '" style="width:20px;display:flex;align-items:center;justify-content:center;">' + freightMarkHtml(l.sku) + '</span>' +
+      '<div style="flex:1;min-width:0;">' +
+        '<div style="font-size:13.5px;font-weight:600;">' + esc(l.name || l.sku) + '</div>' +
+        '<div class="muted" style="font-size:11.5px;">' + esc(l.sku) + (l.vendor ? ' \u00b7 ' + esc(l.vendor) : '') + (l.reference ? ' \u00b7 ' + esc(l.reference) : '') + '</div>' +
+      '</div>' +
+      '<div style="font-size:12.5px;color:#5c6157;white-space:nowrap;">' + (Number(l.quantity) || 0) + '\u00d7</div>' +
+      freightStateChip(l.state) + '</div>';
+  }
+
+  /**
+   * A line that has been taken off the proposal but is still on a request the
+   * vendor holds. Kept in the list and struck through rather than dropped: the
+   * vendor is quoting it until the request is revised.
+   */
+  function freightRemovedRow(r) {
+    return '<div style="display:flex;align-items:center;gap:11px;background:#fdf7f6;border:1px dashed #f0ccc6;border-radius:10px;padding:9px 12px;">' +
+      '<span style="width:20px;text-align:center;color:#c8483a;font-size:13px;">\u2715</span>' +
+      '<div style="flex:1;min-width:0;">' +
+        '<div style="font-size:13.5px;font-weight:600;color:#9c3327;text-decoration:line-through;text-decoration-color:#c8483a;">' + esc(r.name || r.sku) + '</div>' +
+        '<div style="font-size:11.5px;color:#9c3327;">Removed from the proposal \u00b7 still listed on ' + esc(r.reference) + ' \u00b7 ' + esc(r.vendor) + '</div>' +
+      '</div>' +
+      '<div style="font-size:12.5px;color:#9c3327;white-space:nowrap;text-decoration:line-through;">' + (Number(r.quantity) || 0) + '\u00d7</div>' +
+      '<span style="font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#9c3327;background:#fbecea;padding:3px 8px;border-radius:999px;white-space:nowrap;">Revise</span></div>';
   }
 
   function renderSoon(label) {
@@ -2636,7 +2770,8 @@
         var action = editable
           ? '<button class="btn" data-open="edit" data-vid="' + v.id + '" style="width:auto;padding:8px 15px;">Build / edit proposal</button>'
           : '<button class="link-btn" data-open="view" data-vid="' + v.id + '" style="width:auto;padding:8px 15px;">View (read only)</button>';
-        return '<tr>' + td('v' + v.version) + td('<span class="chip">' + titleCase(v.status) + '</span>') + td(fmtDate(v.createdAt)) + td(v.frozen ? 'Yes' : 'No') + td('<b style="font-weight:600;">' + fmtMoney(versionTotalMinor(v), 'USD') + '</b>') + td('<div style="display:flex;justify-content:flex-end;">' + action + '</div>') + '</tr>';
+        var freightBtn = '<button class="link-btn" data-open="freight" data-vid="' + v.id + '" style="width:auto;padding:8px 13px;">Freight</button>';
+        return '<tr>' + td('v' + v.version) + td('<span class="chip">' + titleCase(v.status) + '</span>') + td(fmtDate(v.createdAt)) + td(v.frozen ? 'Yes' : 'No') + td('<b style="font-weight:600;">' + fmtMoney(versionTotalMinor(v), 'USD') + '</b>') + td('<div style="display:flex;justify-content:flex-end;gap:8px;">' + freightBtn + action + '</div>') + '</tr>';
       }).join(''), 6, '')) +
       (hasRole(PROP_WRITE, user.role)
         ? sectionBlock('Send to the customer',
@@ -2655,7 +2790,10 @@
       bt.addEventListener('click', function () {
         var v = versions.filter(function (x) { return x.id === bt.getAttribute('data-vid'); })[0];
         if (!v) return;
-        if (bt.getAttribute('data-open') === 'edit') openBuilder(p, v, user); else previewProposal(p, v);
+        var how = bt.getAttribute('data-open');
+        if (how === 'edit') openBuilder(p, v, user);
+        else if (how === 'freight') openFreightReview(p.id, user, v.id);
+        else previewProposal(p, v);
       });
     });
     var puBtn = document.getElementById('propUnlock');
@@ -3667,8 +3805,8 @@
         '<div class="muted" style="font-size:12px;margin-top:6px;">Loading\u2026</div></div>';
     }
     var waiting = rfqData.vendors.filter(function (v) { return v.rfqEnabled && !v.existingRfqId; });
-    var prompt = '';
-    if (waiting.length) {
+    var prompt = freightActionHtml();
+    if (!prompt && waiting.length) {
       var names = waiting.map(function (v) { return v.vendor; });
       var list = names.length > 1 ? names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1] : names[0];
       prompt = '<div style="background:#fdf6e6;border:1px solid #ecd9a6;border-radius:10px;padding:10px 11px;margin-bottom:10px;">' +
@@ -3696,6 +3834,7 @@
       '<div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;">Internal only \u2014 not printed</div>' +
       (rfqData.error ? '<div style="background:#fbecea;border:1px solid #f0ccc6;color:#9c3327;font-size:12px;line-height:1.5;padding:8px 10px;border-radius:9px;margin-bottom:10px;">' + esc(rfqData.error) + '</div>' : '') +
       prompt +
+      freightRemovedHtml() +
       (rows || '<div class="muted" style="font-size:12px;">None raised yet.</div>') +
     '</div>';
   }
@@ -3705,6 +3844,9 @@
     if (ask) ask.addEventListener('click', openRfqVendorPicker);
     var rail = document.getElementById('bRfqRail');
     if (!rail) return;
+    rail.querySelectorAll('.rfqAskBtn').forEach(function (b) {
+      b.addEventListener('click', openRfqVendorPicker);
+    });
     rail.querySelectorAll('.rfqOpen').forEach(function (b) {
       b.addEventListener('click', function () { openRfqEditor(b.getAttribute('data-id')); });
     });
@@ -3721,10 +3863,105 @@
   }
 
   function renderRfqRail() {
+    paintFreightMarks();
     var el = document.getElementById('bRfqRail');
     if (!el) return;
     el.innerHTML = rfqCardHtml();
     wireRfqCard();
+  }
+
+  /** The freight state of one SKU, from the coverage that came back with the rail. */
+  function freightStateOf(sku) {
+    var cov = rfqData && rfqData.cov;
+    var k = String(sku || '').trim().toLowerCase();
+    if (!cov || !k) return '';
+    var hit = (cov.lines || []).filter(function (l) { return String(l.sku || '').trim().toLowerCase() === k; })[0];
+    return hit ? hit.state : '';
+  }
+
+  /**
+   * Beside a product line: a green thumbs up once a vendor has been asked to quote
+   * its freight, a red dot while nobody has. Silent for parts whose vendor does not
+   * quote freight for us \u2014 there is nothing to chase.
+   */
+  function freightMarkHtml(sku) {
+    var st = freightStateOf(sku);
+    if (st === 'REQUESTED') return '<span title="Freight requested" style="font-size:12px;line-height:1;">\uD83D\uDC4D</span>';
+    if (st === 'DRAFT') return '<span title="On a freight request that has not been sent" style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#d9a520;"></span>';
+    if (st === 'PENDING') return '<span title="No freight quote requested" style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#c8483a;"></span>';
+    return '';
+  }
+
+  function freightStateChip(state) {
+    var map = {
+      REQUESTED: ['#2f7d5d', '#eaf4ef', 'Freight requested'],
+      DRAFT: ['#8a6d1f', '#fdf6e6', 'Request not sent'],
+      PENDING: ['#9c3327', '#fbecea', 'Not requested'],
+      NA: ['#8a8f85', '#f2f3ef', 'No freight quote'],
+    };
+    var m = map[state] || map.NA;
+    return '<span style="font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:' + m[0] + ';background:' + m[1] + ';padding:3px 8px;border-radius:999px;white-space:nowrap;">' + m[2] + '</span>';
+  }
+
+  /** Marks are painted after the rail loads, so a builder render never waits on it. */
+  function paintFreightMarks() {
+    document.querySelectorAll('.bFreightMark').forEach(function (el) {
+      el.innerHTML = freightMarkHtml(el.getAttribute('data-sku'));
+    });
+  }
+
+  /**
+   * What still has to be sent, per vendor. This is the prompt that has to reappear
+   * when a line is added to a proposal whose freight was already requested: the
+   * vendor quoted a shipment that no longer matches, so the answer is a revision
+   * rather than a second request.
+   */
+  function freightActionHtml() {
+    var cov = rfqData && rfqData.cov;
+    if (!cov) return '';
+    var out = '', seen = {};
+    (cov.pendingVendors || []).forEach(function (v) {
+      seen[String(v.vendor).toLowerCase()] = true;
+      var many = v.lineCount === 1 ? '' : 's';
+      var btn = v.existingStatus === 'SENT'
+        ? '<button class="btn rfqRev" data-id="' + v.existingRfqId + '" style="width:auto;padding:8px 14px;margin-top:9px;font-size:13px;background:#9c3327;">Revise ' + esc(v.existingReference || 'the request') + '</button>'
+        : v.existingStatus === 'DRAFT'
+          ? '<button class="btn rfqOpen" data-id="' + v.existingRfqId + '" style="width:auto;padding:8px 14px;margin-top:9px;font-size:13px;background:#9c3327;">Finish and send the request</button>'
+          : '<button class="btn rfqAskBtn" style="width:auto;padding:8px 14px;margin-top:9px;font-size:13px;background:#9c3327;">Request freight quote</button>';
+      out += '<div style="background:#fbecea;border:1px solid #f0ccc6;border-radius:10px;padding:10px 11px;margin-bottom:8px;">' +
+        '<div style="font-size:12.5px;line-height:1.5;color:#7d2a20;"><b>' + esc(v.vendor) + '</b> \u2014 ' + v.lineCount + ' item' + many +
+          ' with no freight request' + (v.existingStatus === 'SENT' ? ' since ' + esc(v.existingReference || 'the last request') + ' went out' : '') + '.</div>' +
+        btn + '</div>';
+    });
+    // A request that was raised and never emailed is still an open action.
+    var drafts = {};
+    (cov.lines || []).forEach(function (l) {
+      if (l.state !== 'DRAFT' || !l.rfqId || seen[String(l.vendor || '').toLowerCase()]) return;
+      drafts[l.rfqId] = drafts[l.rfqId] || { id: l.rfqId, reference: l.reference, vendor: l.vendor, count: 0 };
+      drafts[l.rfqId].count += 1;
+    });
+    Object.keys(drafts).forEach(function (k) {
+      var d = drafts[k];
+      out += '<div style="background:#fdf6e6;border:1px solid #ecd9a6;border-radius:10px;padding:10px 11px;margin-bottom:8px;">' +
+        '<div style="font-size:12.5px;line-height:1.5;color:#6b5a24;"><b>' + esc(d.reference || 'A request') + '</b> for ' + esc(d.vendor || 'this vendor') +
+          ' has been raised but never sent \u2014 ' + d.count + ' item' + (d.count === 1 ? '' : 's') + '.</div>' +
+        '<button class="btn rfqOpen" data-id="' + d.id + '" style="width:auto;padding:8px 14px;margin-top:9px;font-size:13px;">Finish and send</button></div>';
+    });
+    return out;
+  }
+
+  /** Lines the vendor is still quoting that have come off the proposal since. */
+  function freightRemovedHtml() {
+    var cov = rfqData && rfqData.cov;
+    if (!cov || !(cov.removed || []).length) return '';
+    return '<div style="border:1px dashed #f0ccc6;background:#fdf7f6;border-radius:10px;padding:10px 11px;margin-bottom:10px;">' +
+      '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;font-weight:700;color:#9c3327;margin-bottom:6px;">Off the proposal \u2014 still on the request</div>' +
+      cov.removed.map(function (r) {
+        return '<div style="font-size:12px;line-height:1.5;color:#9c3327;text-decoration:line-through;text-decoration-color:#c8483a;">' +
+            (Number(r.quantity) || 0) + '\u00d7 ' + esc(r.sku) + ' \u2014 ' + esc(r.name) + '</div>' +
+          '<div style="font-size:11px;color:#8a8f85;margin:1px 0 6px;">' + esc(r.reference) + ' \u00b7 ' + esc(r.vendor) + '</div>';
+      }).join('') +
+      '<div style="font-size:11.5px;color:#7d2a20;line-height:1.5;">Revise the request so the vendor quotes what is actually shipping.</div></div>';
   }
 
   /** Cached per version and per line set: the rail re-renders on every keystroke. */
@@ -3767,11 +4004,13 @@
     renderRfqRail();
     var versionId = pb.versionId;
     try {
-      var vendors = await rfqApi('/proposals/versions/' + versionId + '/rfq/vendors', { method: 'POST', body: { lines: rfqDraftLines() } });
+      var body = { lines: rfqDraftLines() };
+      var vendors = await rfqApi('/proposals/versions/' + versionId + '/rfq/vendors', { method: 'POST', body: body });
       var rfqs = await rfqApi('/proposals/' + pb.proposalId + '/rfqs');
-      rfqData = { versionId: versionId, sig: sig, vendors: vendors.vendors || [], rfqs: rfqs.rfqs || [], error: null };
+      var cov = await rfqApi('/proposals/versions/' + versionId + '/freight-coverage', { method: 'POST', body: body });
+      rfqData = { versionId: versionId, sig: sig, vendors: vendors.vendors || [], rfqs: rfqs.rfqs || [], cov: cov, error: null };
     } catch (e) {
-      rfqData = { versionId: versionId, sig: sig, vendors: [], rfqs: [], error: e.message };
+      rfqData = { versionId: versionId, sig: sig, vendors: [], rfqs: [], cov: null, error: e.message };
     }
     loadRfqPanel._busy = false;
     renderRfqRail();
@@ -4001,6 +4240,7 @@
       '<div style="display:flex;align-items:flex-start;gap:8px;">' + handle +
         '<div style="flex:1;min-width:0;">' +
           '<div style="display:flex;gap:8px;margin-bottom:5px;">' +
+            '<span class="bFreightMark" data-sku="' + esc(l.sku || '') + '" style="display:flex;align-items:center;flex:0 0 auto;">' + freightMarkHtml(l.sku) + '</span>' +
             '<input class="bF" data-i="' + i + '" data-k="name" value="' + esc(l.name) + '" placeholder="Product / activity" style="flex:1;border:none;font-weight:600;font-size:14px;outline:none;">' +
             '<input class="bF" data-i="' + i + '" data-k="sku" value="' + esc(l.sku) + '" placeholder="SKU" style="width:130px;border:1px solid #eef0ea;border-radius:6px;padding:3px 7px;font-size:11.5px;color:#5c6157;font-family:ui-monospace,monospace;">' +
           '</div>' +
@@ -4305,6 +4545,9 @@
    * added a moment ago.
    */
   async function saveBuilderQuiet() {
+    // The freight review opens a frozen version in the same state shape. There is
+    // nothing to save and the API would refuse it.
+    if (pb && pb.readOnly) return;
     var r = await authed('/proposals/versions/' + pb.versionId, { method: 'PATCH', body: builderVersionPayload() });
     if (!r.ok) throw new Error('Could not save the proposal before raising the request (' + r.status + ').');
     clearBuilderDirty();
