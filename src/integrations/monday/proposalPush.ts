@@ -23,6 +23,8 @@ export const DEAL_COLUMNS = {
   discount: 'numbers4__1',
   /** File column — the released proposal PDF. */
   file: 'file_mm5xt53s',
+  /** Date column — the date this proposal stops being honoured. */
+  expiration: 'date_mm5y5hxm',
 } as const;
 
 const ENTITY = 'ProposalVersion';
@@ -34,8 +36,23 @@ export interface ProposalPushResult {
   itemId?: string;
   subtotalMinor?: number;
   discountMinor?: number;
+  /** The expiration written to the board, YYYY-MM-DD, or null when the column was cleared. */
+  expirationDate?: string | null;
   fileUploaded?: boolean;
   error?: string;
+}
+
+/**
+ * monday date columns take `{"date":"YYYY-MM-DD"}`, and an empty object clears them.
+ *
+ * The calendar day is read in UTC deliberately. An expiration is a date, not an
+ * instant: the stored DateTime is midnight for that day, and formatting it in the
+ * server's local zone would slide a proposal that expires on the 30th back to the
+ * 29th on any deployment running west of UTC — which is every Vercel region we use.
+ */
+function mondayDateValue(date: Date | null): { date: string } | Record<string, never> {
+  if (!date) return {};
+  return { date: date.toISOString().slice(0, 10) };
 }
 
 /**
@@ -87,7 +104,7 @@ export async function pushReleasedProposal(input: {
   const version = await prisma.proposalVersion.findUnique({
     where: { id: input.versionId },
     select: {
-      id: true, sections: true, items: true,
+      id: true, sections: true, items: true, expirationDate: true,
       proposal: { select: { id: true, number: true, title: true, organizationId: true } },
     },
   });
@@ -98,6 +115,8 @@ export async function pushReleasedProposal(input: {
 
   const totals = versionTotals(version.items, version.sections);
   const subtotalMinor = totals.subtotal;
+  const expiration = mondayDateValue(version.expirationDate ?? null);
+  const expirationDate = 'date' in expiration ? expiration.date : null;
   const boardId = env.MONDAY_DEALS_BOARD_ID!;
   let fileUploaded = false;
 
@@ -108,6 +127,11 @@ export async function pushReleasedProposal(input: {
       // The discount as an amount, to match the subtotal beside it. The percentage is
       // what the rep types; the dollars are what the deal board reports on.
       [DEAL_COLUMNS.discount]: (totals.discount / 100).toFixed(2),
+      // Written on every release, including as an empty value. A released version
+      // with no expiration must clear whatever the previous version left behind —
+      // a stale date on the board is worse than a blank one, because the team will
+      // chase a deadline that no longer exists.
+      [DEAL_COLUMNS.expiration]: expiration,
     });
 
     if (input.proposalHtml) {
@@ -124,7 +148,7 @@ export async function pushReleasedProposal(input: {
     await prisma.integrationSyncLog.create({
       data: { direction: 'OUTBOUND', entity: ENTITY, entityId: version.id, externalId: itemId, status: 'ok' },
     });
-    return { pushed: true, itemId, subtotalMinor, discountMinor: totals.discount, fileUploaded };
+    return { pushed: true, itemId, subtotalMinor, discountMinor: totals.discount, expirationDate, fileUploaded };
   } catch (err) {
     logger.error({ err, versionId: input.versionId, itemId }, 'monday proposal push failed');
     await prisma.integrationSyncLog.create({
@@ -133,6 +157,6 @@ export async function pushReleasedProposal(input: {
         status: 'error', error: String(err),
       },
     });
-    return { pushed: false, itemId, subtotalMinor, discountMinor: totals.discount, fileUploaded, error: String(err) };
+    return { pushed: false, itemId, subtotalMinor, discountMinor: totals.discount, expirationDate, fileUploaded, error: String(err) };
   }
 }
