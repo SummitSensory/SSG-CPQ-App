@@ -69,6 +69,12 @@ const EnvSchema = z
     // Where a financing request goes. Ryan Capital's contact of record.
     FINANCE_PARTNER_EMAIL: z.string().email().default('ckinsey@ryancapital.com'),
 
+    // ---- Request for Freight ----
+    // An RFQ goes out on the same sending identity as a BOM, but a freight quote
+    // is a sales conversation, not a purchasing one: replies belong with the desk
+    // that priced the job.
+    RFQ_REPLY_TO: z.string().email().default('sales@summitsensory.com'),
+
     // ---- PDF renderer ----
     // Headless Chromium pack for serverless hosts, e.g. the @sparticuz/chromium
     // GitHub release .tar matching the installed playwright-core. Unset locally:

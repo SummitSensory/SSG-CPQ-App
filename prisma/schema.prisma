@@ -558,6 +558,25 @@ model Manufacturer {
   /// Whether a new BOM section for this vendor shows the powder-colour column.
   bomShowPowderColor  Boolean           @default(false)
 
+  // ---- Freight RFQ ----
+  /// Whether this vendor quotes freight for us. Off by default: an RFQ sent to a
+  /// vendor who does not handle freight is noise in their inbox, so only flagged
+  /// vendors appear as RFQ targets on a proposal.
+  rfqEnabled          Boolean           @default(false)
+  /// The freight desk, which is rarely the same person as the purchasing contact
+  /// the BOM goes to. Blank falls back to the primary contact above.
+  rfqContactName      String?
+  rfqContactEmail     String?
+  rfqContactPhone     String?
+  /// Send-dialog defaults, same pattern as the BOM's. Tokens: {{vendor}},
+  /// {{reference}}, {{customer}}, {{projectId}}, {{total}}.
+  rfqEmailTo          String?
+  rfqEmailCc          String?
+  rfqEmailSubject     String?
+  rfqEmailBody        String?
+
+  freightRfqs         FreightRfq[]
+
   createdAt           DateTime          @default(now())
   updatedAt           DateTime          @updatedAt
   sourcing            ProductSourcing[]
@@ -868,6 +887,7 @@ model Proposal {
   createdAt      DateTime          @default(now())
   updatedAt      DateTime          @updatedAt
   versions       ProposalVersion[]
+  freightRfqs    FreightRfq[]
 
   @@index([organizationId])
 }
@@ -1674,4 +1694,113 @@ model OrderEvent {
   createdAt DateTime      @default(now())
 
   @@index([orderId])
+}
+
+/// A freight RFQ is frozen the moment it is emailed. Correcting one means a new
+/// revision, so the vendor and we can always point at the same document.
+enum FreightRfqStatus {
+  DRAFT
+  SENT
+  SUPERSEDED
+}
+
+enum FreightRfqSendStatus {
+  QUEUED
+  SENT
+  FAILED
+}
+
+/// A request for freight costs, one per vendor per proposal — the same
+/// segmentation the Bill of Materials uses, for the same reason: each vendor
+/// quotes only what they ship.
+model FreightRfq {
+  id             String            @id @default(cuid())
+  proposalId     String
+  proposal       Proposal          @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  /// The proposal version the lines were taken from. Kept so a stale RFQ can be
+  /// recognised after the proposal moves on.
+  versionId      String
+  organizationId String
+  /// Vendor name as it appears on Sku.manufacturer, so lines can be grouped
+  /// without a join through the product tree.
+  vendor         String
+  manufacturerId String?
+  manufacturer   Manufacturer?     @relation(fields: [manufacturerId], references: [id], onDelete: SetNull)
+
+  /// "8050" — the monday Project ID, resolved once at creation. Stored rather
+  /// than looked up on render: the reference on a sent document must never
+  /// change, even if the board does.
+  projectId      String
+  /// "RFQ-8050", then "RFQ-8050 R2" on the first revision.
+  reference      String
+  revision       Int               @default(1)
+
+  notes          String?
+  status         FreightRfqStatus  @default(DRAFT)
+
+  /// Ship-to, frozen at creation from the proposal's shipping address (billing
+  /// when there is no shipping one) and the rep who built the proposal.
+  shipToName     String
+  shipToLine1    String?
+  shipToLine2    String?
+  shipToCity     String?
+  shipToRegion   String?
+  shipToPostal   String?
+  shipToCountry  String?
+  contactName    String?
+  contactPhone   String?
+
+  totalCostMinor Int               @default(0)
+  sentAt         DateTime?
+  sentById       String?
+  createdById    String
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  lines          FreightRfqLine[]
+  sends          FreightRfqSend[]
+
+  @@unique([proposalId, vendor, revision])
+  @@index([versionId])
+  @@index([organizationId])
+  @@index([status])
+}
+
+/// One product line on the RFQ. Included by default; a rep unticks what should
+/// not travel on this shipment. Unticked lines are kept rather than deleted so a
+/// revision can put them back.
+model FreightRfqLine {
+  id                String     @id @default(cuid())
+  rfqId             String
+  rfq               FreightRfq @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  sku               String
+  name              String
+  quantity          Int        @default(1)
+  /// What we pay the vendor for one unit, not what the customer pays us.
+  unitCostMinor     Int        @default(0)
+  extendedCostMinor Int        @default(0)
+  included          Boolean    @default(true)
+  /// True when a rep added this line by hand rather than it coming off the
+  /// proposal for this vendor.
+  addedManually     Boolean    @default(false)
+  sortOrder         Int        @default(0)
+
+  @@index([rfqId])
+}
+
+model FreightRfqSend {
+  id                String               @id @default(cuid())
+  rfqId             String
+  rfq               FreightRfq           @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  toEmail           String
+  ccEmails          String?
+  subject           String
+  bodyPreview       String
+  status            FreightRfqSendStatus @default(QUEUED)
+  providerMessageId String?
+  error             String?
+  sentById          String
+  createdAt         DateTime             @default(now())
+
+  @@index([rfqId])
 }

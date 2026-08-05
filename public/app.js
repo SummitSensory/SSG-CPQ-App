@@ -1688,6 +1688,16 @@
       '<label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;margin-top:6px;"><input type="checkbox" id="mfActive"' + (m.id ? (m.isActive !== false ? ' checked' : '') : ' checked') + '> Active — offered when assigning a vendor</label>' +
       '<label style="display:flex;align-items:flex-start;gap:8px;font-size:14px;cursor:pointer;margin-top:6px;"><input type="checkbox" id="mfFreightTbd" style="margin-top:3px;"' + (m.freightTbd ? ' checked' : '') + '><span>Freight quoted after approval<span class="muted" style="display:block;font-size:11.5px;line-height:1.5;">Every part from this vendor carries the standing “freight not yet determined” note on its proposal line, until a freight amount is entered on that line.</span></span></label>' +
       '<div class="field" style="margin-top:10px;"><label>Notes</label><textarea id="mfNotes" rows="2" style="' + IN + 'resize:vertical;">' + esc(m.notes || '') + '</textarea></div>' +
+      '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin:16px 0 6px;">Request for Freight (RFQ)</div>' +
+      '<label style="display:flex;align-items:flex-start;gap:8px;font-size:14px;cursor:pointer;"><input type="checkbox" id="mfRfq" style="margin-top:3px;"' + (m.rfqEnabled ? ' checked' : '') + '><span>Can receive freight quote requests<span class="muted" style="display:block;font-size:11.5px;line-height:1.5;">Offered as an RFQ recipient on any proposal carrying their parts. Vendors who do not quote freight stay off the list.</span></span></label>' +
+      '<div class="muted" style="font-size:12px;margin:10px 0 8px;line-height:1.5;">The freight desk is rarely the purchasing contact the BOM goes to. Left blank, these fall back to the primary contact above. Tokens for the message: <code>{{customer}}</code> <code>{{vendor}}</code> <code>{{reference}}</code> <code>{{projectId}}</code> <code>{{total}}</code>.</div>' +
+      two(fieldRow('Freight contact', '<input id="mfRfqName" style="' + IN + '" value="' + v('rfqContactName') + '">'),
+          fieldRow('Phone', '<input id="mfRfqPhone" style="' + IN + '" value="' + v('rfqContactPhone') + '">')) +
+      two(fieldRow('Send RFQs to', '<input id="mfRfqTo" type="email" placeholder="Falls back to the contact email" style="' + IN + '" value="' + v('rfqEmailTo') + '">'),
+          fieldRow('Cc', '<input id="mfRfqCc" placeholder="Optional" style="' + IN + '" value="' + v('rfqEmailCc') + '">')) +
+      fieldRow('Freight contact email', '<input id="mfRfqEmail" type="email" placeholder="Named contact, if different from the send-to address" style="' + IN + '" value="' + v('rfqContactEmail') + '">') +
+      fieldRow('Subject', '<input id="mfRfqSubject" placeholder="Freight quote request {{reference}} — {{customer}}" style="' + IN + '" value="' + v('rfqEmailSubject') + '">') +
+      '<div class="field"><label>Default message</label><textarea id="mfRfqBody" rows="4" placeholder="Left blank, a standard covering note is used." style="' + IN + 'resize:vertical;">' + esc(m.rfqEmailBody || '') + '</textarea></div>' +
       '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin:16px 0 6px;">Bill of Materials email</div>' +
       '<div class="muted" style="font-size:12px;margin-bottom:8px;line-height:1.5;">Pre-fills the send dialog for this vendor — a fabricator and a distributor rarely want the same note or the same format. Tokens: <code>{{customer}}</code> <code>{{vendor}}</code> <code>{{order}}</code> <code>{{job}}</code> <code>{{submittedOn}}</code>. Left blank, the subject matches the attachment name: <code>{{customer}}-{{order}}-{{vendor}}</code>.</div>' +
       two(fieldRow('Send BOMs to', '<input id="mfBomTo" type="email" placeholder="Falls back to the contact email" style="' + IN + '" value="' + v('bomEmailTo') + '">'),
@@ -1715,6 +1725,14 @@
           bomEmailSubject: document.getElementById('mfBomSubject').value.trim(),
           bomEmailBody: document.getElementById('mfBomBody').value,
           bomEmailFormat: document.getElementById('mfBomFormat').value,
+          rfqEnabled: document.getElementById('mfRfq').checked,
+          rfqContactName: document.getElementById('mfRfqName').value.trim(),
+          rfqContactEmail: document.getElementById('mfRfqEmail').value.trim(),
+          rfqContactPhone: document.getElementById('mfRfqPhone').value.trim(),
+          rfqEmailTo: document.getElementById('mfRfqTo').value.trim(),
+          rfqEmailCc: document.getElementById('mfRfqCc').value.trim(),
+          rfqEmailSubject: document.getElementById('mfRfqSubject').value.trim(),
+          rfqEmailBody: document.getElementById('mfRfqBody').value,
           addressLine1: document.getElementById('mfAddr1').value.trim(),
           addressLine2: document.getElementById('mfAddr2').value.trim(),
           city: document.getElementById('mfCity').value.trim(),
@@ -3514,7 +3532,7 @@
         '</div>' +
       '</div>' +
       footerNotesCard() +
-      '<div id="bMarginRail" style="' + marginRailStyle() + '">' + marginCard(t) + '</div>';
+      '<div id="bMarginRail" style="' + marginRailStyle() + '">' + marginCard(t) + '<div id="bRfqRail"></div></div>';
     wireBuilder();
   }
 
@@ -3571,6 +3589,262 @@
         : '<div class="muted" style="font-size:12px;margin-top:10px;">Add a section heading to see per-section margin.</div>') +
       (t.cogs === 0 ? '<div style="margin-top:10px;font-size:11.5px;color:#8a6d1f;line-height:1.5;">No costs recorded yet — add unit costs in Catalog → Pricing &amp; SKUs, or type a cost on any line.</div>' : '') +
     '</div>';
+  }
+
+  /* --- Request for Freight -------------------------------------------------
+     Third-party freight is quoted by the vendor who ships the goods, so the rail
+     asks for one request per vendor and the document carries only the lines that
+     are actually travelling. Everything here is available after release too:
+     freight is usually the last unknown on a job, and the proposal has often gone
+     to the customer before a carrier has quoted it. */
+  var rfqData = null;
+
+  function rfqDate(iso) {
+    if (!iso) return '\u2014';
+    var d = new Date(iso);
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  }
+
+  function rfqStatusChip(status) {
+    var map = { DRAFT: ['#8a6d1f', '#fdf6e6', 'Draft'], SENT: ['#2f7d5d', '#eaf4ef', 'Sent'], SUPERSEDED: ['#8a8f85', '#f2f3ef', 'Superseded'] };
+    var m = map[status] || map.DRAFT;
+    return '<span style="font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:' + m[0] + ';background:' + m[1] + ';padding:2px 7px;border-radius:999px;">' + m[2] + '</span>';
+  }
+
+  /** Wider than openModal: an item list at 460px is unreadable. */
+  function rfqOverlay(title, bodyHtml, footHtml) {
+    var ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(32,36,31,.34);display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;z-index:60;overflow:auto;';
+    ov.innerHTML = '<div style="width:100%;max-width:720px;background:#fbfbf9;border:1px solid #e7e8e3;border-radius:16px;box-shadow:0 24px 60px -20px rgba(32,36,31,.4);padding:22px 24px 20px;">' +
+      '<h2 style="font-size:20px;margin-bottom:4px;">' + esc(title) + '</h2>' +
+      '<div id="rfqErr"></div>' +
+      '<div id="rfqBody">' + bodyHtml + '</div>' +
+      '<div style="display:flex;gap:10px;margin-top:18px;justify-content:flex-end;">' + footHtml + '</div></div>';
+    document.body.appendChild(ov);
+    ov.close = function () { if (ov.parentNode) document.body.removeChild(ov); };
+    ov.err = function (msg) { ov.querySelector('#rfqErr').innerHTML = '<div class="err">' + esc(msg) + '</div>'; };
+    ov.addEventListener('mousedown', function (e) { if (e.target === ov) ov.close(); });
+    return ov;
+  }
+
+  async function rfqApi(path, opts) {
+    var r = await authed(path, opts);
+    if (!r.ok) {
+      var msg = 'Request failed (' + r.status + ').';
+      try { var j = await r.json(); if (j && j.message) msg = j.message; } catch (e) {}
+      throw new Error(msg);
+    }
+    return r.status === 204 ? null : r.json();
+  }
+
+  function rfqCardHtml() {
+    if (!rfqData) {
+      return '<div class="card" style="margin-top:14px;"><div class="section-title" style="margin:0;">Freight requests</div>' +
+        '<div class="muted" style="font-size:12px;margin-top:6px;">Loading\u2026</div></div>';
+    }
+    var waiting = rfqData.vendors.filter(function (v) { return v.rfqEnabled && !v.existingRfqId; });
+    var prompt = '';
+    if (waiting.length) {
+      var names = waiting.map(function (v) { return v.vendor; });
+      var list = names.length > 1 ? names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1] : names[0];
+      prompt = '<div style="background:#fdf6e6;border:1px solid #ecd9a6;border-radius:10px;padding:10px 11px;margin-bottom:10px;">' +
+        '<div style="font-size:12.5px;line-height:1.5;color:#6b5a24;">' + esc(list) + ' ' + (names.length > 1 ? 'supply' : 'supplies') + ' parts on this proposal and quote their own freight.</div>' +
+        '<button class="btn" id="rfqAsk" style="width:auto;padding:8px 14px;margin-top:9px;font-size:13px;">Request freight quote</button></div>';
+    }
+
+    var rows = rfqData.rfqs.map(function (r) {
+      var items = r.items.slice(0, 4).map(function (i) { return i.quantity + '\u00d7 ' + i.sku; }).join(' \u00b7 ');
+      if (r.items.length > 4) items += ' \u00b7 +' + (r.items.length - 4) + ' more';
+      return '<div style="padding:9px 0;border-bottom:1px solid #ece7d8;">' +
+        '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;">' +
+          '<span style="font-size:12.5px;font-weight:600;">' + esc(r.vendor) + '</span>' + rfqStatusChip(r.status) + '</div>' +
+        '<div style="display:flex;justify-content:space-between;gap:8px;font-size:11.5px;color:#5c6157;margin-top:2px;">' +
+          '<span>' + esc(r.reference) + '</span><span>' + rfqDate(r.requestedAt) + '</span></div>' +
+        '<div style="font-size:11px;color:#8a8f85;margin-top:3px;line-height:1.45;">' + r.itemCount + ' item' + (r.itemCount === 1 ? '' : 's') + (items ? ' \u2014 ' + esc(items) : '') + '</div>' +
+        '<div style="display:flex;gap:6px;margin-top:6px;">' +
+          '<button class="link-btn rfqOpen" data-id="' + r.id + '" style="width:auto;padding:5px 10px;font-size:12px;">' + (r.status === 'DRAFT' ? 'Edit &amp; send' : 'View') + '</button>' +
+          (r.status === 'SENT' ? '<button class="link-btn rfqRev" data-id="' + r.id + '" style="width:auto;padding:5px 10px;font-size:12px;">Revise</button>' : '') +
+        '</div></div>';
+    }).join('');
+
+    return '<div class="card" style="margin-top:14px;border:1px solid #e4dfd0;background:#fdfcf7;">' +
+      '<div class="section-title" style="margin:0 0 2px;">Freight requests</div>' +
+      '<div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;">Internal only \u2014 not printed</div>' +
+      prompt +
+      (rows || '<div class="muted" style="font-size:12px;">None raised yet.</div>') +
+    '</div>';
+  }
+
+  function wireRfqCard() {
+    var ask = document.getElementById('rfqAsk');
+    if (ask) ask.addEventListener('click', openRfqVendorPicker);
+    var rail = document.getElementById('bRfqRail');
+    if (!rail) return;
+    rail.querySelectorAll('.rfqOpen').forEach(function (b) {
+      b.addEventListener('click', function () { openRfqEditor(b.getAttribute('data-id')); });
+    });
+    rail.querySelectorAll('.rfqRev').forEach(function (b) {
+      b.addEventListener('click', async function () {
+        b.disabled = true;
+        try {
+          var next = await rfqApi('/rfqs/' + b.getAttribute('data-id') + '/revision', { method: 'POST', body: {} });
+          await loadRfqPanel(true);
+          openRfqEditor(next.id);
+        } catch (e) { alert(e.message); b.disabled = false; }
+      });
+    });
+  }
+
+  function renderRfqRail() {
+    var el = document.getElementById('bRfqRail');
+    if (!el) return;
+    el.innerHTML = rfqCardHtml();
+    wireRfqCard();
+  }
+
+  /** Cached per version: the rail re-renders on every keystroke in the builder. */
+  async function loadRfqPanel(force) {
+    if (!pb) return;
+    if (!force && rfqData && rfqData.versionId === pb.versionId) { renderRfqRail(); return; }
+    renderRfqRail();
+    try {
+      var vendors = await rfqApi('/proposals/versions/' + pb.versionId + '/rfq/vendors');
+      var rfqs = await rfqApi('/proposals/' + pb.proposalId + '/rfqs');
+      rfqData = { versionId: pb.versionId, vendors: vendors.vendors || [], rfqs: rfqs.rfqs || [] };
+    } catch (e) {
+      rfqData = { versionId: pb.versionId, vendors: [], rfqs: [] };
+    }
+    renderRfqRail();
+  }
+
+  function openRfqVendorPicker() {
+    var choices = rfqData.vendors.filter(function (v) { return v.rfqEnabled && !v.existingRfqId; });
+    var others = rfqData.vendors.filter(function (v) { return !v.rfqEnabled && !v.existingRfqId; });
+    var rows = choices.map(function (v, i) {
+      return '<label style="display:flex;align-items:flex-start;gap:9px;padding:9px 10px;border:1px solid #e7e8e3;border-radius:10px;background:#fff;margin-bottom:7px;cursor:pointer;">' +
+        '<input type="checkbox" class="rfqV" data-v="' + esc(v.vendor) + '" checked style="margin-top:2px;">' +
+        '<span style="flex:1;"><b style="font-size:13.5px;">' + esc(v.vendor) + '</b>' +
+        '<span class="muted" style="display:block;font-size:12px;margin-top:2px;">' + v.lineCount + ' line' + (v.lineCount === 1 ? '' : 's') + ' \u00b7 ' + v.unitCount + ' unit' + (v.unitCount === 1 ? '' : 's') + '</span></span></label>';
+    }).join('');
+    var note = others.length
+      ? '<div class="muted" style="font-size:11.5px;line-height:1.5;margin-top:4px;">' + esc(others.map(function (v) { return v.vendor; }).join(', ')) + ' also supply parts here but are not set up for freight requests. Turn that on in Settings \u2192 Manufacturers.</div>'
+      : '';
+
+    openModal('Request freight quotes',
+      '<div class="muted" style="font-size:12.5px;line-height:1.55;margin-bottom:12px;">One request per vendor. You pick the items on the next screen.</div>' + rows + note,
+      async function (close, showErr) {
+        var picked = [].slice.call(document.querySelectorAll('.rfqV')).filter(function (c) { return c.checked; }).map(function (c) { return c.getAttribute('data-v'); });
+        if (!picked.length) return showErr('Pick at least one vendor.');
+        var first = null;
+        try {
+          for (var i = 0; i < picked.length; i++) {
+            var made = await rfqApi('/proposals/versions/' + pb.versionId + '/rfqs', { method: 'POST', body: { vendor: picked[i] } });
+            if (!first) first = made.id;
+          }
+        } catch (e) { return showErr(e.message); }
+        close();
+        await loadRfqPanel(true);
+        if (first) openRfqEditor(first);
+      }, 'Continue');
+  }
+
+  async function openRfqEditor(rfqId) {
+    var m;
+    try { m = await rfqApi('/rfqs/' + rfqId); } catch (e) { alert(e.message); return; }
+    var editable = m.status === 'DRAFT';
+
+    function lineRows() {
+      return m.lines.map(function (l) {
+        return '<tr style="border-bottom:1px solid #eef0ea;">' +
+          '<td style="padding:7px 8px;"><input type="checkbox" class="rfqL" data-id="' + l.id + '"' + (l.included ? ' checked' : '') + (editable ? '' : ' disabled') + '></td>' +
+          '<td style="padding:7px 8px;font-family:ui-monospace,monospace;font-size:11.5px;white-space:nowrap;">' + esc(l.sku) + '</td>' +
+          '<td style="padding:7px 8px;font-size:12.5px;">' + esc(l.name) + '</td>' +
+          '<td style="padding:7px 8px;text-align:right;font-size:12.5px;">' + l.quantity + '</td>' +
+          '<td style="padding:7px 8px;text-align:right;font-size:12.5px;">' + fmtMoney(l.unitCostMinor, '') + '</td>' +
+          '<td style="padding:7px 8px;text-align:right;font-size:12.5px;font-variant-numeric:tabular-nums;">' + fmtMoney(l.extendedCostMinor, '') + '</td>' +
+        '</tr>';
+      }).join('');
+    }
+
+    var body =
+      '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:12px;">' +
+        '<span class="muted" style="font-size:12.5px;">' + esc(m.vendor) + ' \u00b7 ' + esc(m.reference) + '</span>' + rfqStatusChip(m.status) + '</div>' +
+      (editable ? '' : '<div style="background:#f2f3ef;border:1px solid #e7e8e3;border-radius:10px;padding:9px 11px;font-size:12.5px;color:#5c6157;line-height:1.5;margin-bottom:12px;">This request has been sent and is locked. Use Revise on the rail to raise ' + esc(m.reference.replace(/ R\d+$/, '')) + ' R' + (m.revision + 1) + ' with these items carried over.</div>') +
+      '<table style="width:100%;border-collapse:collapse;">' +
+        '<thead><tr style="border-bottom:1.5px solid #20241f;">' +
+          '<th style="width:28px;"></th>' +
+          '<th style="padding:6px 8px;text-align:left;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;">SKU</th>' +
+          '<th style="padding:6px 8px;text-align:left;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;">Product name</th>' +
+          '<th style="padding:6px 8px;text-align:right;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;">Qty</th>' +
+          '<th style="padding:6px 8px;text-align:right;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;">Unit price</th>' +
+          '<th style="padding:6px 8px;text-align:right;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;">Total</th>' +
+        '</tr></thead><tbody id="rfqLines">' + lineRows() + '</tbody></table>' +
+      '<div style="display:flex;justify-content:flex-end;gap:10px;padding:10px 8px 0;font-size:14px;font-weight:600;"><span>Total</span><span id="rfqTotal" style="font-variant-numeric:tabular-nums;min-width:110px;text-align:right;">' + fmtMoney(m.totalCostMinor, 'USD') + '</span></div>' +
+      '<div class="field" style="margin-top:14px;"><label>Special notes for this request</label>' +
+        '<textarea id="rfqNotes" rows="3"' + (editable ? '' : ' disabled') + ' placeholder="Anything the vendor needs to know \u2014 dock access, delivery window, liftgate." style="' + IN + 'resize:vertical;">' + esc(m.notes || '') + '</textarea></div>';
+
+    var foot = '<button class="link-btn" id="rfqClose" style="width:auto;padding:10px 16px;">Close</button>' +
+      '<button class="link-btn" id="rfqPreview" style="width:auto;padding:10px 16px;">Preview PDF</button>' +
+      (editable ? '<button class="btn" id="rfqSend" style="width:auto;padding:10px 20px;">Send to vendor</button>' : '');
+
+    var ov = rfqOverlay('Request for Freight', body, foot);
+    ov.querySelector('#rfqClose').addEventListener('click', ov.close);
+    ov.querySelector('#rfqPreview').addEventListener('click', function () { window.open('/rfqs/' + rfqId + '/preview', '_blank'); });
+
+    ov.querySelectorAll('.rfqL').forEach(function (c) {
+      c.addEventListener('change', async function () {
+        try {
+          var res = await rfqApi('/rfqs/' + rfqId + '/lines/' + c.getAttribute('data-id'), { method: 'PATCH', body: { included: c.checked } });
+          ov.querySelector('#rfqTotal').textContent = fmtMoney(res.totalCostMinor, 'USD');
+        } catch (e) { c.checked = !c.checked; ov.err(e.message); }
+      });
+    });
+
+    var notes = ov.querySelector('#rfqNotes');
+    if (editable) {
+      notes.addEventListener('blur', async function () {
+        try { await rfqApi('/rfqs/' + rfqId + '/notes', { method: 'PATCH', body: { notes: notes.value } }); }
+        catch (e) { ov.err(e.message); }
+      });
+    }
+
+    var send = ov.querySelector('#rfqSend');
+    if (send) send.addEventListener('click', async function () {
+      if (notes.value !== (m.notes || '')) {
+        try { await rfqApi('/rfqs/' + rfqId + '/notes', { method: 'PATCH', body: { notes: notes.value } }); } catch (e) {}
+      }
+      ov.close();
+      openRfqSend(rfqId);
+    });
+  }
+
+  async function openRfqSend(rfqId) {
+    var d;
+    try { d = await rfqApi('/rfqs/' + rfqId + '/send-defaults'); } catch (e) { alert(e.message); return; }
+    openModal('Send ' + d.reference,
+      '<div class="muted" style="font-size:12.5px;line-height:1.55;margin-bottom:12px;">The RFQ is attached as a PDF. Replies come back to sales@summitsensory.com. Sending locks this request.</div>' +
+      fieldRow('To', '<input id="rfqTo" type="text" style="' + IN + '" value="' + esc(d.to) + '" placeholder="freight@vendor.com">') +
+      fieldRow('Cc', '<input id="rfqCc" type="text" style="' + IN + '" value="' + esc(d.cc) + '" placeholder="Optional">') +
+      fieldRow('Subject', '<input id="rfqSubj" style="' + IN + '" value="' + esc(d.subject) + '">') +
+      '<div class="field"><label>Message</label><textarea id="rfqBodyTxt" rows="8" style="' + IN + 'resize:vertical;">' + esc(d.body) + '</textarea></div>' +
+      (d.to ? '' : '<div class="muted" style="font-size:11.5px;line-height:1.5;">No address is stored for this vendor. Add one in Settings \u2192 Manufacturers and it will be filled in next time.</div>'),
+      async function (close, showErr) {
+        var to = document.getElementById('rfqTo').value.trim();
+        if (!to) return showErr('Give at least one recipient.');
+        try {
+          await rfqApi('/rfqs/' + rfqId + '/send', {
+            method: 'POST',
+            body: {
+              to: to,
+              cc: document.getElementById('rfqCc').value.trim(),
+              subject: document.getElementById('rfqSubj').value.trim(),
+              body: document.getElementById('rfqBodyTxt').value,
+            },
+          });
+        } catch (e) { return showErr(e.message); }
+        close();
+        await loadRfqPanel(true);
+      }, 'Send RFQ');
   }
 
   function builderLineRow(l, i, gsub) {
@@ -3682,6 +3956,7 @@
     document.getElementById('bBack').addEventListener('click', function () { openProposalDetail(pb.proposalId, pb.user); });
     document.getElementById('bSave').addEventListener('click', saveBuilder);
     document.getElementById('bPreview').addEventListener('click', function () { previewProposalDoc(builderDoc()); });
+    loadRfqPanel();
     document.getElementById('bSaveTpl').addEventListener('click', saveAsTemplate);
     document.getElementById('bLoadTpl').addEventListener('click', loadTemplate);
     document.getElementById('bAddProd').addEventListener('click', openProductPicker);

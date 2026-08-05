@@ -53,6 +53,17 @@ const MfrInput = z.object({
   bomEmailSubject: str(300),
   bomEmailBody: z.string().max(8000).nullish(),
   bomEmailFormat: z.enum(['EXCEL', 'PDF', 'BOTH']).optional(),
+  // ---- Request for Freight ----
+  // Only flagged vendors are offered as RFQ recipients on a proposal, and the
+  // freight desk is kept apart from the purchasing contact the BOM goes to.
+  rfqEnabled: z.boolean().optional(),
+  rfqContactName: str(160),
+  rfqContactEmail: str(300),
+  rfqContactPhone: str(60),
+  rfqEmailTo: str(300),
+  rfqEmailCc: str(400),
+  rfqEmailSubject: str(300),
+  rfqEmailBody: z.string().max(8000).nullish(),
   isActive: z.boolean().optional(),
   notes: str(2000),
 });
