@@ -17,6 +17,17 @@ const CreateUserBody = z.object({
   role: z.enum(ROLES),
 });
 const RoleBody = z.object({ role: z.enum(ROLES) });
+/**
+ * Profile edit. Every field is optional so a caller can change one thing, but an
+ * empty name/title/phone means "clear it" — hence the nullish handling below,
+ * which distinguishes absent from blank.
+ */
+const ProfileBody = z.object({
+  email: z.string().email().optional(),
+  name: z.string().trim().max(120).nullish(),
+  title: z.string().trim().max(120).nullish(),
+  phone: z.string().trim().max(40).nullish(),
+});
 const ResetPasswordBody = z.object({ password: z.string().min(12) });
 
 export function registerAdminRoutes(app: FastifyInstance): void {
@@ -24,9 +35,69 @@ export function registerAdminRoutes(app: FastifyInstance): void {
 
   app.get('/admin/users', guard, async () =>
     prisma.user.findMany({
-      select: { id: true, email: true, name: true, role: true, isActive: true },
+      orderBy: [{ isActive: 'desc' }, { name: 'asc' }],
+      select: { id: true, email: true, name: true, title: true, phone: true, role: true, isActive: true },
     }),
   );
+
+  /**
+   * Edit another user's profile, including their email address.
+   *
+   * Email is the login identifier, so a change here changes how that person signs
+   * in. Their existing sessions stay valid — access tokens carry the user id, not
+   * the address — but they are told, and the change is audited with both values so
+   * the trail explains a login that suddenly stops working.
+   *
+   * Editing yourself is allowed and is the supported way to move the account off a
+   * shared address like admin@ onto a personal one.
+   */
+  app.patch('/admin/users/:id', guard, async (req) => {
+    const { id } = req.params as { id: string };
+    const parsed = ProfileBody.safeParse(req.body);
+    if (!parsed.success) throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid profile');
+    const { email, name, title, phone } = parsed.data;
+
+    const before = await prisma.user.findUnique({
+      where: { id },
+      select: { id: true, email: true, name: true, title: true, phone: true },
+    });
+    if (!before) throw new NotFoundError('User not found');
+
+    // Same unique-email trap as user creation: check first so the caller gets a
+    // sentence instead of a Prisma P2002 surfacing as a bare 500.
+    if (email && email !== before.email) {
+      const clash = await prisma.user.findUnique({ where: { email }, select: { id: true, isActive: true } });
+      if (clash && clash.id !== id) {
+        throw new ConflictError(
+          clash.isActive
+            ? 'Another user already signs in with that email.'
+            : 'A deactivated user already has that email — reactivate or change that account first.',
+        );
+      }
+    }
+
+    // undefined means the field was not sent; null or '' means clear it.
+    const blank = (v: string | null | undefined) => (v === undefined ? undefined : v === null || v === '' ? null : v);
+    const user = await prisma.user.update({
+      where: { id },
+      data: { email: email ?? undefined, name: blank(name), title: blank(title), phone: blank(phone) },
+      select: { id: true, email: true, name: true, title: true, phone: true, role: true, isActive: true },
+    });
+
+    const changed: Record<string, { from: unknown; to: unknown }> = {};
+    for (const k of ['email', 'name', 'title', 'phone'] as const) {
+      if (user[k] !== before[k]) changed[k] = { from: before[k], to: user[k] };
+    }
+    if (Object.keys(changed).length) {
+      await recordAudit({
+        actorId: req.user!.sub,
+        action: email && email !== before.email ? 'user.email.change' : 'user.profile.update',
+        targetUserId: id,
+        details: changed,
+      });
+    }
+    return user;
+  });
 
   app.post('/admin/users', guard, async (req, reply) => {
     const parsed = CreateUserBody.safeParse(req.body);

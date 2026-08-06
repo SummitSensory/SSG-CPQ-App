@@ -7597,11 +7597,20 @@
     try {
       var r = await authed('/admin/users'); if (!r.ok) { box.innerHTML = '<div class="err">Could not load (' + r.status + ').</div>'; return; }
       var users = await r.json();
+      // Keep the loaded records so Edit opens with what is actually stored rather
+      // than re-reading the values back out of table cells.
+      admUsers = {};
+      (users || []).forEach(function (u) { admUsers[u.id] = u; });
       var rows = (users || []).map(function (u) {
-        return '<tr>' + td('<b style="font-weight:600;">' + esc(u.name || '—') + '</b>') + td(esc(u.email)) +
+        return '<tr>' +
+          td('<b style="font-weight:600;">' + esc(u.name || '—') + '</b>' +
+            (u.title ? '<div class="muted" style="font-size:12px;margin-top:2px;">' + esc(u.title) + '</div>' : '')) +
+          td(esc(u.email) +
+            (u.phone ? '<div class="muted" style="font-size:12px;margin-top:2px;">' + esc(u.phone) + '</div>' : '')) +
           td('<select data-id="' + u.id + '" class="roleSel" style="padding:6px 9px;border:1px solid #dcded7;border-radius:8px;font-size:13px;background:#fff;">' + ROLES.map(function (rl) { return '<option value="' + rl + '"' + (rl === u.role ? ' selected' : '') + '>' + titleCase(rl) + '</option>'; }).join('') + '</select>') +
           td(u.isActive ? '<span class="chip">Active</span>' : '<span class="muted">Inactive</span>') +
           td('<div style="display:flex;gap:6px;justify-content:flex-end;">' +
+            '<button class="link-btn" data-edit="' + u.id + '" style="width:auto;padding:6px 11px;">Edit</button>' +
             '<button class="link-btn" data-pwd="' + u.id + '" data-email="' + esc(u.email) + '" style="width:auto;padding:6px 11px;">Reset password</button>' +
             (u.isActive
               ? '<button class="link-btn" data-deact="' + u.id + '" style="width:auto;padding:6px 11px;">Deactivate</button>'
@@ -7613,12 +7622,61 @@
       document.querySelectorAll('[data-deact]').forEach(function (bt) { bt.addEventListener('click', async function () { if (!confirm('Deactivate this user?')) return; var r2 = await authed('/admin/users/' + bt.getAttribute('data-deact') + '/deactivate', { method: 'PATCH', body: {} }); if (!r2.ok) alert('Could not deactivate.'); loadUsers(); }); });
       document.querySelectorAll('[data-react]').forEach(function (bt) { bt.addEventListener('click', async function () { var r2 = await authed('/admin/users/' + bt.getAttribute('data-react') + '/reactivate', { method: 'PATCH', body: {} }); if (!r2.ok) alert('Could not reactivate.'); loadUsers(); }); });
       document.querySelectorAll('[data-pwd]').forEach(function (bt) { bt.addEventListener('click', function () { openResetPasswordForm(bt.getAttribute('data-pwd'), bt.getAttribute('data-email')); }); });
+      document.querySelectorAll('[data-edit]').forEach(function (bt) { bt.addEventListener('click', function () { openEditUserForm(admUsers[bt.getAttribute('data-edit')]); }); });
     } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
   }
+  /** Users from the last /admin/users load, by id — the source for the Edit form. */
+  var admUsers = {};
+
+  /**
+   * Edit another user's profile. Email is included deliberately: it is the login
+   * identifier, and moving an account off a shared address like admin@ onto a
+   * personal one is the whole reason this form exists.
+   */
+  function openEditUserForm(u) {
+    if (!u) return;
+    var isMe = currentUser && currentUser.id === u.id;
+    openModal('Edit ' + (u.name || u.email),
+      fieldRow('Name', '<input id="eName" style="' + IN + '" value="' + esc(u.name || '') + '">') +
+      fieldRow('Email', '<input id="eEmail" type="email" style="' + IN + '" value="' + esc(u.email || '') + '" required>') +
+      '<div class="muted" style="font-size:12px;margin:-6px 0 14px;">' +
+        (isMe ? 'This is the address you sign in with. Changing it takes effect immediately — you stay signed in here.'
+              : 'This is the address they sign in with. Tell them before you change it.') + '</div>' +
+      fieldRow('Title', '<input id="eTitle" style="' + IN + '" value="' + esc(u.title || '') + '" placeholder="e.g. Sales Director">') +
+      fieldRow('Phone', '<input id="ePhone" style="' + IN + '" value="' + esc(u.phone || '') + '" placeholder="720-457-5500">'),
+      async function (close, showErr) {
+        var email = document.getElementById('eEmail').value.trim();
+        if (!/.+@.+\..+/.test(email)) return showErr('Enter a valid email.');
+        var body = {
+          email: email,
+          name: document.getElementById('eName').value.trim(),
+          title: document.getElementById('eTitle').value.trim(),
+          phone: document.getElementById('ePhone').value.trim(),
+        };
+        var r = await authed('/admin/users/' + u.id, { method: 'PATCH', body: body });
+        if (!r.ok) return showErr(await serverMessage(r, 'Could not save (' + r.status + ').'));
+        var updated = await r.json().catch(function () { return null; });
+        close();
+        // The sidebar greets you by name and the proposal footer prints your title
+        // and phone — rebuild the shell when you edited your own record, otherwise
+        // just refresh the table.
+        if (isMe && updated && currentUser) {
+          currentUser.name = updated.name; currentUser.email = updated.email;
+          currentUser.title = updated.title; currentUser.phone = updated.phone;
+          renderShell(currentUser);
+          renderAdmin(currentUser);
+        } else {
+          loadUsers();
+        }
+      }, 'Save');
+  }
+
   function openUserForm() {
     openModal('New user',
       fieldRow('Email', '<input id="uEmail" type="email" style="' + IN + '" required>') +
       fieldRow('Name', '<input id="uName" style="' + IN + '">') +
+      fieldRow('Title', '<input id="uTitle" style="' + IN + '" placeholder="e.g. Sales Director">') +
+      fieldRow('Phone', '<input id="uPhone" style="' + IN + '" placeholder="720-457-5500">') +
       fieldRow('Temporary password', '<input id="uPass" style="' + IN + '" placeholder="at least 12 characters" required>') +
       fieldRow('Role', selectEl('uRole', ROLES, 'SALES_REP')),
       async function (close, showErr) {
@@ -7627,6 +7685,14 @@
         var body = { email: email, name: document.getElementById('uName').value.trim() || undefined, password: pass, role: document.getElementById('uRole').value };
         var r = await authed('/admin/users', { method: 'POST', body: body });
         if (!r.ok) return showErr(await serverMessage(r, 'Could not create (' + r.status + ').'));
+        // Title and phone are not part of the create payload; set them in the same
+        // action so a new user is not left with a half-filled profile.
+        var created = await r.json().catch(function () { return null; });
+        var title = document.getElementById('uTitle').value.trim();
+        var phone = document.getElementById('uPhone').value.trim();
+        if (created && created.id && (title || phone)) {
+          await authed('/admin/users/' + created.id, { method: 'PATCH', body: { title: title, phone: phone } });
+        }
         close(); loadUsers();
       });
   }
