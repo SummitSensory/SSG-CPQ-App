@@ -5267,7 +5267,7 @@
           '<button id="advX" style="border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.12);color:#fff;border-radius:8px;padding:7px 12px;cursor:pointer;">Cancel</button>' +
         '</div>' +
         '<div style="padding:22px 24px;">' +
-          sec('Frame Dimensions', '<div style="' + grid + '">' + sel('length', 'Length (long, ft)', rangeArr(6, 30)) + sel('width', 'Width (short, ft)', rangeArr(6, 10)) + '</div>') +
+          sec('Frame Dimensions', '<div style="' + grid + '">' + sel('length', 'Length (long, ft)', rangeArr(6, 30)) + sel('width', 'Width (short, ft)', rangeArr(6, 20)) + '</div>') +
           sec('Frame Configuration', '<div style="' + grid + '">' + sel('config', 'Configuration' + (adv.configManual ? ' (overridden)' : ' (auto)'), ['Rectangle', 'Square', 'L-Shape', 'T-Shape']) + num('legs', '# of Frame Legs (auto, editable)', 0, 20) + '</div>' +
             '<div class="muted" style="font-size:11.5px;margin-top:6px;">' + (adv.configManual ? 'Manually set — auto would be ' + autoConfig() + '. <a href="#" id="advCfgReset">Reset to auto</a>' : 'Auto from dimensions: ' + autoConfig()) + ' · legs auto-set from length (' + legsFor(adv.length) + ')</div>') +
           sec('Frame Options',
