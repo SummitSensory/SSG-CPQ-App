@@ -1,0 +1,13 @@
+#!/usr/bin/env sh
+
+# Format and auto-fix only what is being committed.
+#
+# A repo-wide `prettier --write` would rewrite 78 files nobody touched, so
+# formatting is applied per-commit to changed files instead: new code lands
+# formatted, existing code is left alone until someone edits it.
+#
+# See .prettierignore for what stays out of this — public/app.js in particular.
+#
+# To commit anyway: git commit --no-verify
+
+pnpm exec lint-staged

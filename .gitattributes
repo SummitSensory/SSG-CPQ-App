@@ -1,0 +1,6 @@
+# Shell hooks must keep LF endings. Git's autocrlf turns them into CRLF on
+# Windows checkouts, and sh then reads the shebang as "#!/usr/bin/env sh\r",
+# fails to find an interpreter called "sh\r", and every push dies with
+# "bad interpreter: no such file or directory".
+.husky/* text eol=lf
+*.sh text eol=lf

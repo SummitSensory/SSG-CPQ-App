@@ -2,3 +2,16 @@ dist
 coverage
 playwright-report
 pnpm-lock.yaml
+
+# The browser app is one 8,000-line file written in a consistent hand-rolled
+# style. Letting Prettier at it would rewrite the whole thing on the first
+# commit that touches it, burying every real change in reformatting noise and
+# making `git blame` useless on the busiest file in the repo. Excluded until
+# someone decides to reformat it deliberately, as its own commit.
+public/app.js
+
+# Generated or hand-maintained data, not source.
+prisma/migrations
+src/proposals/adventure-skus.json
+prisma/seed-catalog.json
+prisma/seed-soar.json
