@@ -7580,6 +7580,12 @@
         var r = await authed('/formulas/settings', { method: 'PATCH', body: body });
         if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} msg.textContent = m || 'Could not save (' + r.status + ').'; return; }
         fx.data.settings.values = await r.json();
+        // The configurator reads these through the shared fxSettings object, loaded
+        // once at sign-in. Without this the number saves, the screen shows the new
+        // value, and the leg count keeps using the old one until a hard refresh.
+        Object.keys(fx.data.settings.values).forEach(function (k) {
+          fxSettings[k] = Number(fx.data.settings.values[k]);
+        });
         msg.textContent = 'Saved.';
         drawFormulas();
       });
