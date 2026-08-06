@@ -2786,7 +2786,13 @@
           ? '<button class="btn" data-open="edit" data-vid="' + v.id + '" style="width:auto;padding:8px 15px;">Build / edit proposal</button>'
           : '<button class="link-btn" data-open="view" data-vid="' + v.id + '" style="width:auto;padding:8px 15px;">View (read only)</button>';
         var freightBtn = '<button class="link-btn" data-open="freight" data-vid="' + v.id + '" style="width:auto;padding:8px 13px;">Freight</button>';
-        return '<tr>' + td('v' + v.version) + td('<span class="chip">' + titleCase(v.status) + '</span>') + td(fmtDate(v.createdAt)) + td(v.frozen ? 'Yes' : 'No') + td('<b style="font-weight:600;">' + fmtMoney(versionTotalMinor(v), 'USD') + '</b>') + td('<div style="display:flex;justify-content:flex-end;gap:8px;">' + freightBtn + action + '</div>') + '</tr>';
+        // A draft raised and then thought better of can be thrown away, provided it
+        // is not the only version. Released versions never can be — they are the
+        // record of what the customer was sent.
+        var discardBtn = (editable && versions.length > 1)
+          ? '<button class="link-btn" data-discard="' + v.id + '" data-v="' + v.version + '" style="width:auto;padding:8px 13px;color:#9c3327;">Discard draft</button>'
+          : '';
+        return '<tr>' + td('v' + v.version) + td('<span class="chip">' + titleCase(v.status) + '</span>') + td(fmtDate(v.createdAt)) + td(v.frozen ? 'Yes' : 'No') + td('<b style="font-weight:600;">' + fmtMoney(versionTotalMinor(v), 'USD') + '</b>') + td('<div style="display:flex;justify-content:flex-end;gap:8px;">' + freightBtn + discardBtn + action + '</div>') + '</tr>';
       }).join(''), 6, '')) +
       (hasRole(PROP_WRITE, user.role)
         ? sectionBlock('Send to the customer',
@@ -2809,6 +2815,18 @@
         if (how === 'edit') openBuilder(p, v, user);
         else if (how === 'freight') openFreightReview(p.id, user, v.id);
         else previewProposal(p, v);
+      });
+    });
+    document.querySelectorAll('[data-discard]').forEach(function (bt) {
+      bt.addEventListener('click', async function () {
+        var vid = bt.getAttribute('data-discard'), vn = bt.getAttribute('data-v');
+        // Names the version and says plainly that it does not come back. There is no
+        // undo behind this and a proposal list is not the place to discover that.
+        if (!confirm('Discard draft v' + vn + '?\n\nIts lines and pricing are deleted and cannot be recovered. The earlier versions are untouched.')) return;
+        bt.disabled = true;
+        var r = await authed('/proposals/versions/' + vid, { method: 'DELETE' });
+        if (!r.ok) { bt.disabled = false; alert(await serverMessage(r, 'Could not discard this version (' + r.status + ').')); return; }
+        openProposalDetail(id, user);
       });
     });
     var puBtn = document.getElementById('propUnlock');

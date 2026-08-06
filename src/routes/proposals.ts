@@ -6,6 +6,7 @@ import { Permission } from '../authz/permissions.js';
 import { ValidationError, NotFoundError } from '../lib/errors.js';
 import {
   createProposal, updateVersionContent, createNewVersion, changeStatus, compareProposalVersions,
+  discardDraftVersion,
 } from '../proposals/service.js';
 import { snapshotAcceptedContent } from '../handoff/service.js';
 import { resolveVisibleSections, reorderSections, type ProposalSection } from '../proposals/sections.js';
@@ -168,6 +169,15 @@ export function registerProposalRoutes(app: FastifyInstance): void {
   });
 
   // Status transitions, permission-gated by target.
+  /**
+   * Discard a draft version. Only a draft, only when another version remains, and
+   * never when an accepted order is locked to it — the service enforces all three.
+   */
+  app.delete('/proposals/versions/:versionId', write, async (req) => {
+    const { versionId } = req.params as { versionId: string };
+    return discardDraftVersion(versionId, req.user!.sub);
+  });
+
   app.post('/proposals/versions/:versionId/submit-review', write, async (req) => {
     const { versionId } = req.params as { versionId: string };
     await changeStatus(versionId, 'INTERNAL_REVIEW', req.user!.sub, (req.body as { note?: string })?.note);

@@ -149,6 +149,79 @@ export async function createNewVersion(
   });
 }
 
+/**
+ * Throw away a draft version that was started and then thought better of.
+ *
+ * Raising a version to make a change and then deciding the change is not wanted
+ * used to leave the draft sitting above the released one forever, so the proposal
+ * read as Draft when the live document was v2. There is no soft-delete: a draft
+ * that never left the building is not a record of anything, and keeping it would
+ * only reintroduce the confusion it causes.
+ *
+ * Refused in four cases, each for its own reason:
+ *   - not a DRAFT, or frozen — a released version is the record of what a customer
+ *     was sent, and that is never deleted;
+ *   - the only version — deleting it would leave a proposal with no content, which
+ *     nothing downstream expects;
+ *   - an accepted order is locked to it — the order's immutability anchor would
+ *     point at nothing.
+ *
+ * Deleting the current version rolls `currentVersion` back to the highest one that
+ * remains, so the proposal shows the status of the document that is actually live.
+ */
+export async function discardDraftVersion(
+  versionId: string,
+  userId: string,
+): Promise<{ proposalId: string; currentVersion: number }> {
+  return prisma.$transaction(async (tx) => {
+    const version = await tx.proposalVersion.findUnique({
+      where: { id: versionId },
+      select: { id: true, proposalId: true, version: true, status: true, frozen: true },
+    });
+    if (!version) throw new NotFoundError('Version not found');
+    if (version.frozen || version.status !== 'DRAFT') {
+      throw new ConflictError(
+        `Only a draft can be discarded — v${version.version} is ${version.status.toLowerCase().replace('_', ' ')}.`,
+      );
+    }
+
+    const siblings = await tx.proposalVersion.findMany({
+      where: { proposalId: version.proposalId },
+      select: { id: true, version: true },
+      orderBy: { version: 'desc' },
+    });
+    if (siblings.length < 2) {
+      throw new ConflictError('This is the only version — delete the proposal itself instead.');
+    }
+
+    const order = await tx.acceptedOrder.findUnique({
+      where: { proposalVersionId: versionId },
+      select: { number: true },
+    });
+    if (order) {
+      throw new ConflictError(`Order ${order.number} is locked to this version — unlock the order first.`);
+    }
+
+    // ProposalStatusEvent cascades on the version's own foreign key.
+    await tx.proposalVersion.delete({ where: { id: versionId } });
+
+    const highest = siblings.filter((s) => s.id !== versionId)[0];
+    await tx.proposal.update({
+      where: { id: version.proposalId },
+      data: { currentVersion: highest.version },
+    });
+
+    await recordAudit({
+      actorId: userId,
+      action: 'proposal.version.discard',
+      entity: 'ProposalVersion',
+      entityId: versionId,
+      details: { version: version.version, currentVersion: highest.version },
+    });
+    return { proposalId: version.proposalId, currentVersion: highest.version };
+  });
+}
+
 export async function changeStatus(
   versionId: string,
   to: ProposalStatus,
