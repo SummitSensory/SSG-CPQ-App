@@ -37,13 +37,9 @@ export interface InvoiceInput {
   /** Frozen payment schedule, used to state the split in words. */
   schedule?: { depositMinor: bigint; progressMinor: bigint; finalMinor: bigint } | null;
   /**
-   * Bundle-shaped rendering: one priced parent per group, components as text
-   * rows. QuickBooks cannot put qty/rate into a description-only row, so the
-   * numbers end up inside the text and the money columns sit empty — only use
-   * this with real QuickBooks Bundles. Default false: every component is its own
-   * priced line with proper Qty / Rate / Amount columns.
+   * Print a native QuickBooks subtotal at the end of each proposal section.
+   * Default true — it is what makes the invoice read like the proposal.
    */
-  bundleGroups?: boolean;
   groupSubtotals?: boolean;
 }
 
@@ -89,7 +85,6 @@ export function buildInvoiceBody(input: InvoiceInput): Record<string, unknown> {
   const lines: Array<Record<string, unknown>> = [
     ...toSalesLines(input.lines, {
       currency: input.currency,
-      bundleGroups: input.bundleGroups ?? false,
       groupSubtotals: input.groupSubtotals ?? true,
     }),
   ];

@@ -153,6 +153,13 @@ export type AcceptedLineKind = 'PRODUCT' | 'GROUP' | 'SUBGROUP' | 'NOTE';
 export interface AcceptedLine {
   description: string;
   qboItemId?: string | null;
+  /**
+   * Set when this part IS a QuickBooks Bundle (an Item of Type "Group") — the
+   * Hardware Kit, the Complete Zip Line Kit, the carabiner pack. Those have fixed
+   * compositions maintained in QuickBooks, so they go out as one GroupLineDetail
+   * line and QuickBooks prints their components itself.
+   */
+  qboGroupItemId?: string | null;
   quantity: number;
   amountMinor: bigint;
   /** Defaults to PRODUCT. Non-product kinds become description-only rows. */
@@ -167,139 +174,124 @@ function descriptionLine(text: string): Record<string, unknown> {
 }
 
 /**
- * Per-unit rate implied by an extended amount. Used only to render a component
- * row's "4 × $221.13" text — never for arithmetic that has to balance, since an
- * amount that does not divide evenly by its quantity would not round-trip. The
- * extended amount is always shown verbatim beside it.
+ * A native QuickBooks subtotal: totals every line since the previous subtotal.
+ *
+ * No Amount is sent. QuickBooks computes it, and supplying one would both risk
+ * disagreeing with the lines above and be counted twice by sumLineAmounts().
  */
-function unitRateText(amountMinor: bigint, quantity: number, currency: string): string {
-  const qty = Number.isFinite(quantity) && quantity > 0 ? Math.round(quantity) : 1;
-  if (qty === 1) return formatMinor(amountMinor, currency);
-  const per = amountMinor / BigInt(qty);
-  return `${qty} × ${formatMinor(per, currency)} = ${formatMinor(amountMinor, currency)}`;
+function subtotalLine(): Record<string, unknown> {
+  return { DetailType: 'SubTotalLineDetail', SubTotalLineDetail: {} };
 }
 
 /**
- * A component row inside a bundled group: the product text plus its quantity and
- * rate, carrying no Amount. Mirrors how QuickBooks prints bundle components
- * (QTY and RATE shown, AMOUNT blank) without requiring a QuickBooks Bundle to
- * exist and be maintained by hand for every configuration.
+ * Qty and unit price for a priced row.
+ *
+ * Proposal amounts are built as rate × quantity, so they divide evenly in almost
+ * every case and the invoice can show the same three columns the proposal does.
+ * Where they do not — a hand-typed extended amount, a rounded allocation — the row
+ * collapses to a single unit at the full amount rather than printing a rate that
+ * does not multiply up. A customer checking the arithmetic must never find a row
+ * where qty × rate ≠ amount.
  */
-function componentLine(l: AcceptedLine, currency: string): Record<string, unknown> {
-  return descriptionLine(
-    `    ${l.description.trim()}  —  ${unitRateText(l.amountMinor, l.quantity, currency)}`,
-  );
+function pricedDetail(l: AcceptedLine): Record<string, unknown> {
+  const qty = Number.isFinite(l.quantity) && l.quantity > 0 ? Math.round(l.quantity) : 1;
+  const divides = qty > 0 && l.amountMinor % BigInt(qty) === 0n;
+  if (!divides || qty === 1) {
+    return { Qty: 1, UnitPrice: minorToQboAmount(l.amountMinor) };
+  }
+  return { Qty: qty, UnitPrice: minorToQboAmount(l.amountMinor / BigInt(qty)) };
 }
 
 /**
- * Build QuickBooks estimate/invoice lines, preserving the proposal's structure:
- * group headings, sub-headings, notes and per-group subtotals become
- * description-only rows so the document reads like the proposal the customer
- * accepted rather than one flat list. Only PRODUCT rows carry money.
+ * Build QuickBooks estimate/invoice lines from the accepted proposal.
+ *
+ * EVERY product is a real priced line — its own ItemRef, Qty, Rate and Amount — so
+ * it reaches Sales by Product/Service, can be credited on its own, and taxes
+ * correctly. The proposal's structure is drawn with QuickBooks' own structural
+ * line types rather than faked: section headings are DescriptionOnly rows and each
+ * section closes with SubTotalLineDetail.
+ *
+ * This replaced an earlier "bundle" mode that emitted one priced parent per section
+ * with its parts as indented DescriptionOnly text. That printed the same number of
+ * rows while carrying none of the data: no ItemRef, no Amount, invisible to every
+ * report, impossible to credit individually.
+ *
+ * Genuine QuickBooks Bundles — items of Type "Group", with fixed compositions kept
+ * in QuickBooks — are still used where they exist, as GroupLineDetail lines.
+ * Proposal SECTIONS are deliberately not bundles: their composition changes with
+ * every deal, and a Group's composition lives on the item, not the transaction.
  */
 export function toSalesLines(
   lines: AcceptedLine[],
-  opts: { currency?: string; groupSubtotals?: boolean; bundleGroups?: boolean } = {},
+  opts: { currency?: string; groupSubtotals?: boolean } = {},
 ): Array<Record<string, unknown>> {
-  const currency = opts.currency ?? 'USD';
-  const bundled = opts.bundleGroups ?? false;
-  // A bundled group states its total on the parent line, so a trailing subtotal
-  // row would print the same number twice.
-  const withSubtotals = bundled ? false : (opts.groupSubtotals ?? true);
+  const withSubtotals = opts.groupSubtotals ?? true;
   const out: Array<Record<string, unknown>> = [];
 
   let openGroup: string | null = null;
-  let openGroupOptional = false;
-  let openGroupItemId: string | null = null;
-  let groupSum = 0n;
-  /*
-   * Bundled mode buffers a group's rows: the parent priced line cannot be
-   * written until every component is known, because its Amount IS their sum.
-   */
-  let buffer: Array<Record<string, unknown>> = [];
+  let sectionHasLines = false;
 
   const headingText = (name: string, optional: boolean) => {
     const h = name.trim().toUpperCase();
     return optional ? `${h} (OPTIONAL)` : h;
   };
 
-  const closeGroup = () => {
-    if (openGroup === null) {
-      buffer = [];
-      return;
-    }
-    if (bundled) {
-      // Parent carries the money; components print beneath it as text. The sum
-      // is exact by construction — components carry no Amount at all.
-      out.push({
-        DetailType: 'SalesItemLineDetail',
-        Amount: minorToQboAmount(groupSum),
-        Description: headingText(openGroup, openGroupOptional),
-        SalesItemLineDetail: {
-          Qty: 1,
-          ...(openGroupItemId ? { ItemRef: { value: openGroupItemId } } : {}),
-        },
-      });
-      out.push(...buffer);
-    } else if (withSubtotals) {
-      out.push(descriptionLine(`Subtotal — ${openGroup}: ${formatMinor(groupSum, currency)}`));
-    }
-    buffer = [];
+  const closeSection = () => {
+    // A heading with nothing under it gets no subtotal — an empty optional section
+    // would otherwise print a bare "0.00".
+    if (openGroup !== null && withSubtotals && sectionHasLines) out.push(subtotalLine());
     openGroup = null;
-    openGroupOptional = false;
-    openGroupItemId = null;
-    groupSum = 0n;
+    sectionHasLines = false;
   };
 
   for (const l of lines) {
     const kind = l.kind ?? 'PRODUCT';
 
     if (kind === 'GROUP') {
-      closeGroup();
+      closeSection();
       openGroup = l.description.trim();
-      openGroupOptional = Boolean(l.optional);
-      openGroupItemId = l.qboItemId ?? null;
-      groupSum = 0n;
-      // Unbundled: the heading is its own description row, emitted now.
-      // Bundled: the heading becomes the parent priced line, written on close.
-      if (!bundled) out.push(descriptionLine(headingText(openGroup, openGroupOptional)));
+      out.push(descriptionLine(headingText(openGroup, Boolean(l.optional))));
       continue;
     }
 
     if (kind === 'SUBGROUP') {
-      const row = descriptionLine(`  ${l.description.trim()}`);
-      if (bundled && openGroup !== null) buffer.push(row);
-      else out.push(row);
+      out.push(descriptionLine(`  ${l.description.trim()}`));
       continue;
     }
 
     if (kind === 'NOTE') {
-      const row = descriptionLine(l.description.trim());
-      if (bundled && openGroup !== null) buffer.push(row);
-      else out.push(row);
+      out.push(descriptionLine(l.description.trim()));
       continue;
     }
 
-    if (openGroup !== null) {
-      groupSum += l.amountMinor;
-      if (bundled) {
-        buffer.push(componentLine(l, currency));
-        continue;
-      }
+    if (openGroup !== null) sectionHasLines = true;
+
+    // A real QuickBooks Bundle: one line, components printed by QuickBooks from
+    // the item definition. The money sits on the expanded component rows, so the
+    // parent carries no Amount.
+    if (l.qboGroupItemId) {
+      out.push({
+        DetailType: 'GroupLineDetail',
+        Description: l.description,
+        GroupLineDetail: {
+          GroupItemRef: { value: l.qboGroupItemId },
+          Quantity: Number.isFinite(l.quantity) && l.quantity > 0 ? Math.round(l.quantity) : 1,
+        },
+      });
+      continue;
     }
 
-    // Ungrouped product, or unbundled mode: an ordinary priced line.
     out.push({
       DetailType: 'SalesItemLineDetail',
       Amount: minorToQboAmount(l.amountMinor),
       Description: l.description,
       SalesItemLineDetail: {
-        Qty: l.quantity,
+        ...pricedDetail(l),
         ...(l.qboItemId ? { ItemRef: { value: l.qboItemId } } : {}),
       },
     });
   }
-  closeGroup();
+  closeSection();
   return out;
 }
 

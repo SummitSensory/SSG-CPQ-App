@@ -20,12 +20,6 @@ export interface EstimateInput {
   /** yyyy-mm-dd — document date; defaults to today in QuickBooks. */
   txnDate?: string | null;
   lines: AcceptedLine[];
-  /**
-   * Render each proposal group as a bundle: one priced parent line carrying the
-   * group total, with its products beneath as description rows showing qty and
-   * rate. Matches how SSG's QuickBooks invoices already read. Default true.
-   */
-  bundleGroups?: boolean;
   fees: Array<{ label: string; amountMinor: bigint }>;
   orderDiscountMinor: bigint;
   taxMinor: bigint;
@@ -38,7 +32,6 @@ export function buildEstimateBody(input: EstimateInput): Record<string, unknown>
   const lines: Array<Record<string, unknown>> = [
     ...toSalesLines(input.lines, {
       currency: input.currency,
-      bundleGroups: input.bundleGroups ?? false,
       groupSubtotals: input.groupSubtotals ?? true,
     }),
   ];
@@ -97,7 +90,18 @@ export function buildEstimateBody(input: EstimateInput): Record<string, unknown>
  * not money.
  */
 export function sumLineAmounts(lines: Array<Record<string, unknown>>): bigint {
-  return lines.reduce((acc, l) => {
+  return lines.reduce((acc: bigint, l) => {
+    // A subtotal restates money already counted; adding it would double the
+    // section it summarises and fail the assertion against the frozen total.
+    if (l.DetailType === 'SubTotalLineDetail') return acc;
+
+    // A bundle's parent line carries no Amount — the money is on the component
+    // rows QuickBooks expands beneath it, so those are what get summed.
+    if (l.DetailType === 'GroupLineDetail') {
+      const detail = l.GroupLineDetail as { Line?: Array<Record<string, unknown>> } | undefined;
+      return acc + sumLineAmounts(detail?.Line ?? []);
+    }
+
     const amount = l.Amount;
     if (typeof amount !== 'number' || !Number.isFinite(amount)) return acc;
     return acc + BigInt(Math.round(amount * 100));
