@@ -109,6 +109,21 @@
     return isNaN(d) ? '—' : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
   }
   function fmtMoney(minor, cur) { if (minor == null) return '—'; var n = Number(minor) / 100; return (cur ? cur + ' ' : '$') + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+  /** Money as it prints in the proposal totals block: "USD $8,662.50". */
+  function fmtUsd(minor) { return 'USD ' + fmtMoney(minor, ''); }
+  /**
+   * The "prints instead of TBD" box takes wording, but people type the amount into it
+   * — it sits beside the amount box and looks like one. A plain number in there is
+   * money, so it counts toward the total instead of printing as loose text.
+   */
+  function overrideMinor(text) {
+    if (text == null) return 0;
+    var s = String(text).trim().replace(/^\$/, '').replace(/,/g, '');
+    if (!s || !/^-?\d+(?:\.\d+)?$/.test(s)) return 0;
+    return Math.round(parseFloat(s) * 100);
+  }
+  /** The amount box if it carries a figure, otherwise a numeric TBD override. */
+  function metaAmount(minor, override) { return (Number(minor) || 0) || overrideMinor(override); }
 
   /* --- API --- */
   function api(path, opts) {
@@ -2716,8 +2731,8 @@
       tpFreight += Number(l.tpFreightMinor) || 0;
     });
     var discount = Math.round(subtotal * (Number(meta.discountPct) || 0) / 100);
-    var structureFreight = Number(meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0)) || 0;
-    return subtotal - discount + tpFreight + (Number(meta.taxAmountMinor) || 0) + structureFreight + (Number(meta.matsFreightMinor) || 0);
+    var structureFreight = metaAmount(meta.structureFreightMinor != null ? meta.structureFreightMinor : meta.freightMinor, meta.tbdStructureFreight);
+    return subtotal - discount + tpFreight + metaAmount(meta.taxAmountMinor, meta.tbdTax) + structureFreight + metaAmount(meta.matsFreightMinor, meta.tbdMatsFreight);
   }
 
   function statusChip(s) {
@@ -3527,9 +3542,9 @@
     });
     var discountPct = Number(pb.meta.discountPct) || 0;
     var discount = Math.round(subtotal * discountPct / 100);
-    var tax = Number(pb.meta.taxAmountMinor) || 0;
-    var structureFreight = Number(pb.meta.structureFreightMinor) || 0;
-    var matsFreight = Number(pb.meta.matsFreightMinor) || 0;
+    var tax = metaAmount(pb.meta.taxAmountMinor, pb.meta.tbdTax);
+    var structureFreight = metaAmount(pb.meta.structureFreightMinor, pb.meta.tbdStructureFreight);
+    var matsFreight = metaAmount(pb.meta.matsFreightMinor, pb.meta.tbdMatsFreight);
     var total = subtotal - discount + tpFreight + tax + structureFreight + matsFreight;
     var deposit = depositOf(total);
     var revenue = subtotal - discount + tpFreight;
@@ -3676,7 +3691,7 @@
       '<div id="bLines" style="display:flex;flex-direction:column;gap:8px;">' + (lineRows || '<div class="placeholder" style="padding:26px;"><p class="muted" style="margin:0;">No lines yet. Add a product line or load a template.</p></div>') + '</div>' +
       // totals
       '<div class="card" style="margin-top:16px;max-width:390px;margin-left:auto;">' +
-        '<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:14px;"><span class="muted">Subtotal</span><span>' + fmtMoney(t.subtotal, 'USD') + '</span></div>' +
+        '<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:14px;"><span class="muted">Subtotal</span><span>' + fmtUsd(t.subtotal) + '</span></div>' +
         '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:14px;"><span class="muted">Discount %</span><input id="mDisc" style="width:80px;padding:5px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;" value="' + esc(pb.meta.discountPct) + '"></div>' +
         (t.discount ? '<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:14px;color:#9c3327;"><span>Discount (' + t.discountPct + '%)</span><span>− ' + fmtMoney(t.discount, 'USD') + '</span></div>' +
           '<div style="font-size:11px;color:#8a8f85;text-align:right;margin-bottom:2px;">Discount expires ' + (pb.meta.expiration ? fmtDate(pb.meta.expiration) : 'with the proposal') + '</div>' : '') +
@@ -3684,8 +3699,8 @@
         optionalAmountRow('Structure Crating &amp; Freight $', 'mStructFreight', pb.meta.structureFreightMinor, 'mStructFreightTbd', pb.meta.tbdStructureFreight) +
         optionalAmountRow('Mats &amp; Padding Freight $', 'mMatsFreight', pb.meta.matsFreightMinor, 'mMatsFreightTbd', pb.meta.tbdMatsFreight) +
         '<div style="font-size:11px;color:#8a8f85;text-align:right;margin:-2px 0 2px;">Left box prints in place of TBD when the amount is 0</div>' +
-        '<div style="display:flex;justify-content:space-between;padding:8px 0 0;margin-top:6px;border-top:1px solid #e7e8e3;font-size:16px;font-weight:600;font-family:\'Newsreader\',serif;"><span>Total</span><span>' + fmtMoney(t.total, 'USD') + '</span></div>' +
-        (pb.meta.showDeposit !== false ? '<div style="display:flex;justify-content:space-between;padding:6px 0 0;font-size:14px;color:#3d4a55;font-weight:600;"><span>Deposit due (' + depositPct() + '%)</span><span>' + fmtMoney(t.deposit, 'USD') + '</span></div>' : '<div style="display:flex;justify-content:space-between;padding:6px 0 0;font-size:12.5px;color:#8a8f85;"><span>Deposit</span><span>Not shown on the proposal</span></div>') +
+        '<div style="display:flex;justify-content:space-between;padding:8px 0 0;margin-top:6px;border-top:1px solid #e7e8e3;font-size:16px;font-weight:600;font-family:\'Newsreader\',serif;"><span>Total</span><span>' + fmtUsd(t.total) + '</span></div>' +
+        (pb.meta.showDeposit !== false ? '<div style="display:flex;justify-content:space-between;padding:6px 0 0;font-size:14px;color:#3d4a55;font-weight:600;"><span>Deposit due (' + depositPct() + '%)</span><span>' + fmtUsd(t.deposit) + '</span></div>' : '<div style="display:flex;justify-content:space-between;padding:6px 0 0;font-size:12.5px;color:#8a8f85;"><span>Deposit</span><span>Not shown on the proposal</span></div>') +
         // Read-only: the sum of quantity × per-unit weight across product lines. Drives
         // crating and freight, so it is worth seeing before those numbers are entered.
         '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0 0;margin-top:6px;border-top:1px solid #e7e8e3;font-size:14px;">' +
@@ -4615,8 +4630,9 @@
     var subtotal = 0, weight = 0; lines.forEach(function (l) { if ((l.lineType || 'PRODUCT') === 'PRODUCT') { subtotal += (Number(l.quantity) || 0) * (Number(l.rateMinor) || 0); weight += (Number(l.quantity) || 0) * (Number(l.weightEach) || 0); } });
     var tpFreight = 0; lines.forEach(function (l) { if ((l.lineType || 'PRODUCT') === 'PRODUCT') tpFreight += Number(l.tpFreightMinor) || 0; });
     var discountPct = Number(meta.discountPct) || 0; var discount = Math.round(subtotal * discountPct / 100);
-    var tax = Number(meta.taxAmountMinor) || 0;
-    var structureFreight = Number(meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0)); var matsFreight = Number(meta.matsFreightMinor) || 0;
+    var tax = metaAmount(meta.taxAmountMinor, meta.tbdTax);
+    var structureFreight = metaAmount(meta.structureFreightMinor != null ? meta.structureFreightMinor : meta.freightMinor, meta.tbdStructureFreight);
+    var matsFreight = metaAmount(meta.matsFreightMinor, meta.tbdMatsFreight);
     var total = subtotal - discount + tpFreight + tax + structureFreight + matsFreight;
     return {
       title: proposal.title, number: proposal.number, version: version.version || 1,
@@ -4645,7 +4661,8 @@
     // jobs genuinely carry no tax or no freight, and TBD there reads as unanswered.
     var anyTbd = false;
     function amountCell(value, override) {
-      if (value) return fmtMoney(value, 'USD');
+      if (value) return fmtUsd(value);
+      if (overrideMinor(override)) return fmtUsd(overrideMinor(override));
       if (override) return '<span style="color:#5c6157;">' + esc(override) + '</span>';
       anyTbd = true;
       return TBD;
@@ -4661,7 +4678,7 @@
     var bottomNotes = [];
     function subtotalRow() {
       if (groupOpenSub == null) return '';
-      var r = '<tr style="break-inside:avoid;"><td colspan="5" style="padding:5px 8px;text-align:right;font-weight:600;font-size:11px;border-bottom:2px solid #d5d8d2;">Subtotal: ' + fmtMoney(groupOpenSub, 'USD') + '</td></tr>';
+      var r = '<tr style="break-inside:avoid;"><td colspan="5" style="padding:5px 8px;text-align:right;font-weight:600;font-size:11px;border-bottom:2px solid #d5d8d2;">Subtotal: ' + fmtUsd(groupOpenSub) + '</td></tr>';
       groupOpenSub = null; return r;
     }
     (d.lines || []).forEach(function (l) {
@@ -4745,16 +4762,16 @@
         (m.showTitle !== false && d.title ? '<div style="font-family:\'Newsreader\',serif;font-size:24px;font-weight:600;margin-bottom:14px;">' + esc(d.title) + '</div>' : '') +
         '<table style="width:100%;border-collapse:collapse;font-size:11px;"><thead><tr style="color:#8a8f85;font-size:10px;text-transform:uppercase;letter-spacing:.04em;"><th style="text-align:left;padding:6px 8px;border-bottom:2px solid #3d4a55;">Activity / Description</th><th style="text-align:left;padding:6px 8px;border-bottom:2px solid #3d4a55;width:90px;">SKU</th><th style="text-align:center;padding:6px 8px;border-bottom:2px solid #3d4a55;width:44px;">Qty</th><th style="text-align:right;padding:6px 8px;border-bottom:2px solid #3d4a55;width:84px;">Rate</th><th style="text-align:right;padding:6px 8px;border-bottom:2px solid #3d4a55;width:94px;">Amount</th></tr></thead><tbody>' + body + '</tbody></table>' +
         '<div style="display:flex;justify-content:flex-end;margin-top:16px;break-inside:avoid;"><div style="min-width:260px;">' +
-          '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Subtotal</span><span>' + fmtMoney(t.subtotal, 'USD') + '</span></div>' +
-          (t.discount ? '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;color:#9c3327;"><span>Discount (' + t.discountPct + '%)</span><span>− ' + fmtMoney(t.discount, 'USD') + '</span></div>' +
+          '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Subtotal</span><span>' + fmtUsd(t.subtotal) + '</span></div>' +
+          (t.discount ? '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;color:#9c3327;"><span>Discount (' + t.discountPct + '%)</span><span>− ' + fmtUsd(t.discount) + '</span></div>' +
             '<div style="padding:0 8px 3px;font-size:10px;color:#8a8f85;text-align:right;">Discount expires ' + (m.expiration ? fmtDate(m.expiration) : 'with this proposal') + '</div>' : '') +
-          (t.tpFreight ? '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Third-Party Freight</span><span>' + fmtMoney(t.tpFreight, 'USD') + '</span></div>' : '') +
+          (t.tpFreight ? '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Third-Party Freight</span><span>' + fmtUsd(t.tpFreight) + '</span></div>' : '') +
           '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Tax</span><span>' + cellTax + '</span></div>' +
           '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Structure Crating &amp; Freight</span><span>' + cellStructureFreight + '</span></div>' +
           '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Mats &amp; Padding Freight</span><span>' + cellMatsFreight + '</span></div>' +
-          '<div style="display:flex;justify-content:space-between;padding:8px;margin-top:5px;border-top:2px solid #3d4a55;font-size:15px;font-weight:700;"><span>Total</span><span>' + fmtMoney(t.total, 'USD') + '</span></div>' +
+          '<div style="display:flex;justify-content:space-between;padding:8px;margin-top:5px;border-top:2px solid #3d4a55;font-size:15px;font-weight:700;"><span>Total</span><span>' + fmtUsd(t.total) + '</span></div>' +
           (anyTbd ? '<div style="padding:2px 8px 0;font-size:10px;color:#8a8f85;text-align:right;line-height:1.5;">Total excludes items marked TBD.</div>' : '') +
-          (m.showDeposit !== false ? '<div style="display:flex;justify-content:space-between;padding:6px 8px 0;font-size:13px;color:#3d4a55;font-weight:700;"><span>Deposit Due (' + depositPct() + '%)</span><span>' + fmtMoney(t.deposit, 'USD') + '</span></div>' : '') +
+          (m.showDeposit !== false ? '<div style="display:flex;justify-content:space-between;padding:6px 8px 0;font-size:13px;color:#3d4a55;font-weight:700;"><span>Deposit Due (' + depositPct() + '%)</span><span>' + fmtUsd(t.deposit) + '</span></div>' : '') +
         '</div></div>' + bottomNotesHtml +
         '<div style="display:flex;gap:40px;margin-top:40px;padding-top:14px;">' +
           '<div style="flex:1;"><div style="border-bottom:1.5px solid #20241f;height:26px;"></div><div style="font-size:10.5px;color:#8a8f85;margin-top:5px;">Signer\'s Name</div></div>' +

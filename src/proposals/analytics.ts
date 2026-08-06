@@ -22,6 +22,9 @@ export interface RawMeta {
   structureFreightMinor?: number;
   matsFreightMinor?: number;
   freightMinor?: number;
+  tbdTax?: string;
+  tbdStructureFreight?: string;
+  tbdMatsFreight?: string;
   expiration?: string;
   contactName?: string;
   projectId?: string;
@@ -43,6 +46,20 @@ export interface Totals {
 }
 
 const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : Number(v) || 0);
+
+/**
+ * The "prints instead of TBD" field takes wording, but it sits beside the amount box
+ * and people type the figure into it. A plain number there is money, so it counts
+ * toward the total; anything else is wording and contributes nothing.
+ */
+const overrideMinor = (text: unknown): number => {
+  if (text == null) return 0;
+  const s = String(text).trim().replace(/^\$/, '').replace(/,/g, '');
+  return /^-?\d+(?:\.\d+)?$/.test(s) ? Math.round(parseFloat(s) * 100) : 0;
+};
+
+/** The amount field if it carries a figure, otherwise a numeric TBD override. */
+const metaAmount = (minor: unknown, override: unknown): number => n(minor) || overrideMinor(override);
 
 export function metaOf(sections: unknown): RawMeta {
   if (!Array.isArray(sections)) return {};
@@ -70,9 +87,12 @@ export function versionTotals(items: unknown, sections: unknown): Totals {
   }
   const discountPct = n(meta.discountPct);
   const discount = Math.round((subtotal * discountPct) / 100);
-  const tax = n(meta.taxAmountMinor);
-  const structureFreight = meta.structureFreightMinor != null ? n(meta.structureFreightMinor) : n(meta.freightMinor);
-  const matsFreight = n(meta.matsFreightMinor);
+  const tax = metaAmount(meta.taxAmountMinor, meta.tbdTax);
+  const structureFreight = metaAmount(
+    meta.structureFreightMinor != null ? meta.structureFreightMinor : meta.freightMinor,
+    meta.tbdStructureFreight,
+  );
+  const matsFreight = metaAmount(meta.matsFreightMinor, meta.tbdMatsFreight);
   const total = subtotal - discount + tpFreight + tax + structureFreight + matsFreight;
   const revenue = subtotal - discount + tpFreight;
   const margin = revenue - cogs;
