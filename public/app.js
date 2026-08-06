@@ -3211,6 +3211,81 @@
   }
 
   /**
+   * Keep the H-1000 fastener kit in step with the proposal, with nobody asked to
+   * re-run anything.
+   *
+   * Add an eye bolt (6820H-LP) and the nuts and washers that hang off it move with
+   * it — 6820H-LC and 6820H-LB both read `hw:6820H-LP`. The server re-evaluates the
+   * rules with the proposal's own fastener quantities layered over the
+   * configurator's, and returns just the kit; regenerating every line instead would
+   * throw away whatever the rep has edited by hand.
+   *
+   * Only the kit's own figures are written back. Nothing else on the proposal moves.
+   */
+  var hwTimer = null, hwSig = null, hwBusy = false;
+
+  /** Fastener quantities on the proposal, keyed by part. */
+  function hardwareQty() {
+    var kit = hardwareKitLine();
+    var known = {};
+    ((kit && kit.components) || []).forEach(function (c) { known[String(c.part || '').toUpperCase()] = true; });
+    var out = {};
+    (pb && pb.lines ? pb.lines : []).forEach(function (l) {
+      if (!l || l.lineType !== 'PRODUCT' || l.optional) return;
+      var sku = String(l.sku || '').toUpperCase();
+      // Rule parts are the ones already in the kit, plus the 6820H-* accessories that
+      // print as their own lines and so are never in it.
+      if (!sku || (!known[sku] && sku.indexOf('6820') !== 0)) return;
+      if (sku === 'H-1000') return;
+      out[sku] = (out[sku] || 0) + (Number(l.quantity) || 0);
+    });
+    return out;
+  }
+
+  function scheduleHardwareRefresh() {
+    if (!pb || !pb.meta || !pb.meta.advAnswers || !hardwareKitLine()) return;
+    var sig = JSON.stringify(hardwareQty());
+    if (sig === hwSig) return;
+    hwSig = sig;
+    if (hwTimer) clearTimeout(hwTimer);
+    hwTimer = setTimeout(refreshHardwareKit, 700);
+  }
+
+  async function refreshHardwareKit() {
+    hwTimer = null;
+    if (hwBusy) { hwTimer = setTimeout(refreshHardwareKit, 400); return; }
+    var kit = hardwareKitLine();
+    if (!kit || !pb.meta || !pb.meta.advAnswers) return;
+    hwBusy = true;
+    try {
+      var r = await authed('/proposals/adventure-series/hardware', {
+        method: 'POST', body: { answers: pb.meta.advAnswers, hwQty: hardwareQty() },
+      });
+      if (!r.ok) return;
+      var d = await r.json();
+      if (!d || !d.components) return;
+      // The line may have been deleted while the request was in flight.
+      kit = hardwareKitLine();
+      if (!kit) return;
+      var was = Number(kit.rateMinor) || 0;
+      kit.components = d.components;
+      kit.rateMinor = d.priceMinor;
+      kit.costEach = d.costMinor;
+      kit.weightEach = d.weightLbs;
+      // Only the summary form is rewritten; an itemised description was chosen
+      // deliberately and is left for the configurator to regenerate.
+      if (kit.description && /^All mounting hardware/.test(kit.description)) {
+        kit.description = 'All mounting hardware for this structure — ' + d.pieces +
+          ' pieces across ' + d.components.length + ' part numbers.';
+      }
+      if (was !== d.priceMinor) markBuilderDirty();
+      renderBuilderKeepingFocus();
+    } catch (e) {
+      // Offline or a server error: leave the kit as it stands rather than zeroing it.
+    } finally { hwBusy = false; }
+  }
+
+  /**
    * The standing freight note for vendors who quote delivery after the fact (set per
    * vendor in Administration → Manufacturers). It is derived, never typed: it appears
    * on a line whose part comes from such a vendor and disappears the moment that line
@@ -3317,6 +3392,9 @@
     };
     // A new proposal starts with the billing address the same as the shipping one.
     if (pb.meta.billSameAsShip && !pb.meta.billTo) pb.meta.billTo = pb.meta.shipTo || '';
+    // Record the fastener quantities as loaded, so the automatic hardware refresh
+    // fires on the first real change rather than on opening the proposal.
+    hwSig = JSON.stringify(hardwareQty());
     // Awaited: the zero-price warning is computed from these, and rendering first
     // would show a clean builder for a moment on a proposal that has stale figures.
     loadItemDefaults().then(renderBuilder);
@@ -3357,6 +3435,71 @@
     if (!(Number(line.weightEach) || 0) && d.weightLbs) line.weightEach = d.weightLbs;
     if (d.freightTbd) line.freightTbd = true;
     return line;
+  }
+
+  /**
+   * Where a freshly picked part belongs in the line list.
+   *
+   * Appending was leaving reps to drag every new part up into place. The catalog
+   * already knows the answer: /catalog/items/defaults carries a sortKey built from
+   * the category tree and the product's own sort order, so a part can be dropped
+   * straight into position.
+   *
+   * Two rules keep this predictable rather than clever:
+   *
+   *   - Nothing already on the proposal moves. Only the new line is placed. A rep
+   *     who has hand-ordered a section keeps that order.
+   *   - The line lands in the section its category is already in, if there is one;
+   *     otherwise in the section currently being built, which is where it landed
+   *     before. It never jumps across a group header on a guess.
+   *
+   * A part with no sortKey — anything the catalog does not place — appends, exactly
+   * as it used to.
+   */
+  function isSectionHeader(l) { return l && (l.lineType === 'GROUP' || l.lineType === 'SUBGROUP'); }
+  /** Bundle components are the '— ' rows that must stay under their parent line. */
+  function isBundleChild(l) { return !!l && l.lineType === 'PRODUCT' && /^—\s/.test(String(l.name || '')); }
+
+  function insertLineInOrder(line) {
+    var d = line && line.sku ? itemDefaults[line.sku] : null;
+    var key = d && d.sortKey;
+    if (!key) { pb.lines.push(line); return; }
+
+    // Split the list into runs delimited by section headers. A run is [start, end).
+    var runs = [], start = 0, i;
+    for (i = 0; i < pb.lines.length; i++) {
+      if (isSectionHeader(pb.lines[i])) { if (i > start) runs.push([start, i]); start = i + 1; }
+    }
+    if (pb.lines.length > start) runs.push([start, pb.lines.length]);
+    if (!runs.length) { pb.lines.push(line); return; }
+
+    var cat = (d.category || '').toLowerCase();
+    function catMatches(run) {
+      if (!cat) return 0;
+      var hits = 0;
+      for (var j = run[0]; j < run[1]; j++) {
+        var l = pb.lines[j];
+        if (l.lineType !== 'PRODUCT' || !l.sku) continue;
+        var ld = itemDefaults[l.sku];
+        if (ld && (ld.category || '').toLowerCase() === cat) hits++;
+      }
+      return hits;
+    }
+    var target = runs[runs.length - 1], best = 0;
+    runs.forEach(function (r) { var h = catMatches(r); if (h > best) { best = h; target = r; } });
+
+    // First placed sibling that sorts after the new part. Bundle children are
+    // skipped so a line can never be dropped between a bundle and its components.
+    var at = target[1];
+    for (i = target[0]; i < target[1]; i++) {
+      var l = pb.lines[i];
+      if (l.lineType !== 'PRODUCT' || !l.sku || isBundleChild(l)) continue;
+      var ld = itemDefaults[l.sku];
+      if (ld && ld.sortKey && String(ld.sortKey) > String(key)) { at = i; break; }
+    }
+    // Never land between a parent bundle line and its components.
+    while (at < pb.lines.length && isBundleChild(pb.lines[at])) at++;
+    pb.lines.splice(at, 0, line);
   }
 
   /**
@@ -3585,7 +3728,12 @@
    * protects nothing.
    */
   var pbDirty = false;
-  function markBuilderDirty() { pbDirty = true; }
+  function markBuilderDirty() {
+    pbDirty = true;
+    // Cheap: scheduleHardwareRefresh compares a signature of the fastener quantities
+    // and does nothing at all unless one of them actually moved.
+    scheduleHardwareRefresh();
+  }
   function clearBuilderDirty() { pbDirty = false; }
   window.addEventListener('beforeunload', function (e) {
     if (!pbDirty) return;
@@ -4403,15 +4551,46 @@
     document.querySelectorAll('.bToggleNotes').forEach(function (b) { b.addEventListener('click', function () { var l = pb.lines[+b.getAttribute('data-i')]; if (l) { l.showNotes = !l.showNotes; renderBuilder(); } }); });
     document.querySelectorAll('.bHwLogic').forEach(function (b) { b.addEventListener('click', function () { openHardwareAudit(pb.lines[+b.getAttribute('data-i')]); }); });
     document.querySelectorAll('.bDel').forEach(function (b) { b.addEventListener('click', function () { markBuilderDirty(); pb.lines.splice(+b.getAttribute('data-i'), 1); renderBuilder(); }); });
-    // drag reorder
+    /* Drag reorder.
+     *
+     * Dragging a header moves its whole section — the header and every line under
+     * it, to the next header of the same or higher level. Moving a header on its
+     * own left its products stranded under the section above, which is never what
+     * anyone means by moving a section.
+     *
+     * A single line still drags on its own; only headers carry their contents. */
+    function blockAt(i) {
+      var l = pb.lines[i];
+      if (!l) return { from: i, count: 1 };
+      if (l.lineType !== 'GROUP' && l.lineType !== 'SUBGROUP') return { from: i, count: 1 };
+      var end = i + 1;
+      while (end < pb.lines.length) {
+        var t = pb.lines[end].lineType;
+        // A GROUP ends at the next GROUP; a SUBGROUP ends at either.
+        if (t === 'GROUP' || (l.lineType === 'SUBGROUP' && t === 'SUBGROUP')) break;
+        end++;
+      }
+      return { from: i, count: end - i };
+    }
+
     document.querySelectorAll('.bRow').forEach(function (row) {
       row.addEventListener('dragstart', function () { bDragFrom = +row.getAttribute('data-i'); row.style.opacity = '0.4'; });
       row.addEventListener('dragend', function () { row.style.opacity = '1'; });
       row.addEventListener('dragover', function (e) { e.preventDefault(); });
       row.addEventListener('drop', function (e) {
-        e.preventDefault(); var to = +row.getAttribute('data-i');
+        e.preventDefault();
+        var to = +row.getAttribute('data-i');
         if (bDragFrom == null || bDragFrom === to) return;
-        var moved = pb.lines.splice(bDragFrom, 1)[0]; pb.lines.splice(to, 0, moved); bDragFrom = null; renderBuilder();
+        var blk = blockAt(bDragFrom);
+        // Dropping a section onto one of its own lines is a no-op, not a shuffle.
+        if (to >= blk.from && to < blk.from + blk.count) { bDragFrom = null; return; }
+        var moved = pb.lines.splice(blk.from, blk.count);
+        // Removing the block shifts everything after it back by its length.
+        var at = to > blk.from ? to - blk.count : to;
+        pb.lines.splice.apply(pb.lines, [Math.max(0, at), 0].concat(moved));
+        bDragFrom = null;
+        markBuilderDirty();
+        renderBuilder();
       });
     });
   }
@@ -4495,7 +4674,8 @@
           if (!p) return;
           // productId is null for a part carried only as a Sku row; the line is
           // keyed by part number, which is what pricing and the BOM read.
-          pb.lines.push(applyItemDefaults({ ref: uid(), lineType: 'PRODUCT', kind: 'INCLUDED', productId: p.productId || null, sku: p.part, name: p.name || p.part, description: '', quantity: 1, rateMinor: 0, group: '' }));
+          insertLineInOrder(applyItemDefaults({ ref: uid(), lineType: 'PRODUCT', kind: 'INCLUDED', productId: p.productId || null, sku: p.part, name: p.name || p.part, description: '', quantity: 1, rateMinor: 0, group: '' }));
+          markBuilderDirty();
           closeForm(); renderBuilder();
         });
       });
@@ -5340,6 +5520,9 @@
     pb.meta.advAnswers = answers;
     pb.meta.advWarnings = priced.warnings || [];
     hoistHardwareKit(pb.lines);
+    // The configurator has just produced the kit itself — record its quantities so
+    // the automatic refresh does not immediately recompute what was just computed.
+    hwSig = JSON.stringify(hardwareQty());
     advClose(); renderBuilder();
     var bl = document.getElementById('bLines'); if (bl) bl.scrollIntoView({ block: 'start' });
   }

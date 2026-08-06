@@ -164,6 +164,19 @@ export interface RuleContext {
   input: (key: string) => number;
   /** Configurator answer as stored (string/boolean/number) — for conditions. */
   raw?: (key: string) => unknown;
+  /**
+   * Quantity of a fastener actually on the proposal, when a rep has put one there
+   * by hand. Returns undefined for a part nobody has touched.
+   *
+   * Adding an eye bolt to a proposal has to move the nuts and washers that hang off
+   * it — 6820H-LC and 6820H-LB both read `hw:6820H-LP`. Without this the rule only
+   * ever sees the configurator's own count and the dependants never move.
+   *
+   * It raises a quantity, never lowers one: the rule's own result stands unless the
+   * proposal asks for more. That mirrors how the configurator's accessory answers
+   * already work — a rule may add to the answer, it may not erase it.
+   */
+  override?: (part: string) => number | undefined;
 }
 
 /** Evaluate a term/rule condition against the answers. */
@@ -276,6 +289,14 @@ export function evaluateHardwareRules(rules: HardwareRule[], ctx: RuleContext): 
       }
       if (rule.minZero && v < 0) { v = 0; expr = `max(0, ${expr})`; }
       qty = v;
+    }
+
+    // What the proposal actually asks for wins when it asks for more. Applied here,
+    // before caching, so every dependant rule resolves against the same number.
+    const asked = ctx.override ? ctx.override(part) : undefined;
+    if (asked !== undefined && asked > qty) {
+      expr = `${expr} → ${asked} (quantity on the proposal)`;
+      qty = asked;
     }
 
     visiting.delete(part);

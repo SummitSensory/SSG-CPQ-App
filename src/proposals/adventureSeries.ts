@@ -515,7 +515,11 @@ export interface HardwareComponent { part: string; name: string; qty: number; fo
  * "ADVENTURE SERIES: HARDWARE COSTS" block (Calcs rows 183–219). Quantities are
  * driven off the frame BOM, so adding frame items increases the fastener counts.
  */
-export function hardwareBOM(a: AdvAnswers, rules?: HardwareRule[], frameRules?: FormulaRule[]): HardwareBomRow[] {
+export function hardwareBOM(
+  a: AdvAnswers, rules?: HardwareRule[], frameRules?: FormulaRule[],
+  /** Fastener quantities the proposal carries by hand — see RuleContext.override. */
+  hwQty?: Record<string, number>,
+): HardwareBomRow[] {
   const bom = computeAdventureBOM(a, frameRules);
   const inputs: Record<string, number> = {
     bracketsQty: n(a.bracketsQty), swivel360: n(a.swivel360), swivelStandalone: n(a.swivelStandalone),
@@ -525,6 +529,7 @@ export function hardwareBOM(a: AdvAnswers, rules?: HardwareRule[], frameRules?: 
     // Summed, not first-match: multi-span frames emit several rows per beam part.
     bom: (part) => bom.reduce((s, b) => (b.part === part ? s + b.qty : s), 0),
     input: (key) => inputs[key] ?? 0,
+    override: hwQty ? (part) => hwQty[part] : undefined,
   });
 }
 
@@ -533,6 +538,8 @@ export function hardwareRollup(
   a: AdvAnswers, look: Record<string, SkuRec>, rules?: HardwareRule[], frameRules?: FormulaRule[],
   /** Parts that print as their own lines and so must not be summed into H-1000. */
   exclude?: string[],
+  /** Fastener quantities the proposal carries by hand — see RuleContext.override. */
+  hwQty?: Record<string, number>,
 ): {
   components: HardwareComponent[]; priceMinor: number; costMinor: number; weightLbs: number; missing: string[];
 } {
@@ -540,7 +547,7 @@ export function hardwareRollup(
   const missing: string[] = [];
   const skip = new Set(exclude || []);
   let priceMinor = 0, costMinor = 0, weightLbs = 0;
-  for (const h of hardwareBOM(a, rules, frameRules)) {
+  for (const h of hardwareBOM(a, rules, frameRules, hwQty)) {
     if (skip.has(h.part)) continue;
     const rec = look[h.part];
     if (!rec) missing.push(h.part);

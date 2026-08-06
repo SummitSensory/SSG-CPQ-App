@@ -2,7 +2,10 @@ import type { FastifyInstance } from 'fastify';
 import { prisma } from '../lib/prisma.js';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
-import { computeAdventureProposal, explainAdventure, frameModelNumber, frameDimensions, type AdvAnswers, type SkuRec } from '../proposals/adventureSeries.js';
+import {
+  computeAdventureProposal, explainAdventure, frameModelNumber, frameDimensions,
+  hardwareRollup, ACCESSORY_HW_PARTS, type AdvAnswers, type SkuRec,
+} from '../proposals/adventureSeries.js';
 import { loadFormulaRules, loadFormulaSettings } from './formulas.js';
 
 /** Server-side Adventure Series pricing engine: answers -> priced, grouped lines.
@@ -171,6 +174,45 @@ export function registerAdventureRoutes(app: FastifyInstance): void {
     const [skus, rules, kits, settings] = await Promise.all([skuMap(), loadFormulaRules(), kitParts(), loadFormulaSettings()]);
     const out = computeAdventureProposal(a, skus, rules.hardware, rules.frame, kits, settings);
     return { ...out, frameModel: frameModelNumber(a), frameDimensions: frameDimensions(a) };
+  });
+
+  /**
+   * Re-price the H-1000 fastener kit against the proposal as it now stands.
+   *
+   * The builder calls this whenever a hardware quantity on the proposal changes, so
+   * adding an eye bolt moves the nuts and washers that depend on it without anyone
+   * being asked to re-run anything. It returns ONLY the kit, deliberately: running
+   * the full pricing engine would regenerate every line and throw away the rep's
+   * manual edits.
+   *
+   * Body: `{ answers, hwQty }` — the stored configurator answers, plus the fastener
+   * quantities currently on the proposal keyed by part number.
+   */
+  app.post('/proposals/adventure-series/hardware', write, async (req) => {
+    const body = (req.body || {}) as { answers?: AdvAnswers; hwQty?: Record<string, number> };
+    const a = (body.answers || {}) as AdvAnswers;
+    const hwQty: Record<string, number> = {};
+    for (const [part, qty] of Object.entries(body.hwQty || {})) {
+      const v = Number(qty);
+      if (Number.isFinite(v) && v > 0) hwQty[part] = Math.round(v);
+    }
+    const [skus, rules] = await Promise.all([skuMap(), loadFormulaRules()]);
+    // Same exclusion list the generator uses: parts that print as their own lines
+    // are not summed into the kit, or they would be billed twice.
+    const roll = hardwareRollup(a, skus, rules.hardware, rules.frame, ACCESSORY_HW_PARTS, hwQty);
+    const pieces = roll.components.reduce((s, c) => s + c.qty, 0);
+    return {
+      priceMinor: roll.priceMinor,
+      costMinor: roll.costMinor,
+      weightLbs: roll.weightLbs,
+      missing: roll.missing,
+      pieces,
+      components: roll.components.map((c) => ({
+        part: c.part, name: c.name, qty: c.qty, formula: c.formula,
+        unitPriceMinor: c.unitPriceMinor, unitCostMinor: c.unitCostMinor,
+        weightLbs: c.weightLbs, inCatalog: c.inCatalog, edited: c.edited,
+      })),
+    };
   });
 
   /** Logic trace: every derived quantity, the expression behind it, and the live
