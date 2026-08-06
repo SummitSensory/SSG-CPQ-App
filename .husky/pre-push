@@ -1,0 +1,24 @@
+#!/usr/bin/env sh
+
+# Stop a push that would not compile.
+#
+# Two things reached main in one afternoon that this catches: four type errors
+# from a Prisma client that had not been regenerated, and a deleted route file
+# that app.ts still imported. Both are tsc errors, and neither was visible in a
+# diff.
+#
+# Deliberately NOT running `pnpm check`. That also runs db:migrate:status, which
+# reaches out to Neon — a push should not fail because the network is slow or a
+# laptop is offline, and migration state is a deploy-time concern, not a
+# push-time one.
+#
+# To push anyway in an emergency: git push --no-verify
+
+echo "pre-push: typecheck"
+pnpm typecheck || exit 1
+
+echo "pre-push: lint"
+pnpm lint || exit 1
+
+echo "pre-push: format"
+pnpm format:check || exit 1

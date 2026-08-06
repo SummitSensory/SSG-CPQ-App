@@ -10,3 +10,8 @@ env
 *.log
 .DS_Store
 prisma/*.db
+
+# Scratch output of `pnpm db:baseline`. The finished article is committed as
+# prisma/migrations/0000_baseline/migration.sql; the raw diff is not.
+baseline.sql
+next.sql
