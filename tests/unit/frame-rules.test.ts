@@ -2,17 +2,43 @@ import { describe, it, expect } from 'vitest';
 import { computeAdventureBOM, type AdvAnswers } from '../../src/proposals/adventureSeries.js';
 import { DEFAULT_FRAME_RULES, frameContext } from '../../src/proposals/frameRules.js';
 import { evaluateRules, mergeRules } from '../../src/proposals/hardwareRules.js';
-import { defaultSettings, legsForLength, mergeSettings } from '../../src/proposals/formulaSettings.js';
+import {
+  defaultSettings,
+  legsForLength,
+  mergeSettings,
+} from '../../src/proposals/formulaSettings.js';
 
 /** 10′ × 10′ square, 4 legs, one ladder, monkey bars, trolley, one zip line, 4 brackets. */
 const answers: AdvAnswers = {
-  length: 10, width: 10, config: 'Square', legs: 4, ladders: 1,
-  monkeyBars: true, trolley: true, trolleyType: 'Dual', zipLine: true, zipLineQty: 1,
-  brackets: true, bracketsQty: 4, swivel360: 2, forged: 2, swingHanger: 1, vRings: 1,
+  length: 10,
+  width: 10,
+  config: 'Square',
+  legs: 4,
+  ladders: 1,
+  monkeyBars: true,
+  trolley: true,
+  trolleyType: 'Dual',
+  zipLine: true,
+  zipLineQty: 1,
+  brackets: true,
+  bracketsQty: 4,
+  swivel360: 2,
+  forged: 2,
+  swingHanger: 1,
+  vRings: 1,
 };
 
+/**
+ * Total quantity of a part across the whole BOM.
+ *
+ * The engine emits one row per REASON a part is needed — a 10′ × 10′ frame gives
+ * two A-2410 rows, two as width end caps and one on the bay — and sums them with
+ * its own qtyOf(). This helper used .find(), so it read only the first row and
+ * asserted against a number the proposal never sees. Same bug the engine already
+ * fixed and documented; the test kept it.
+ */
 const qty = (part: string, a: AdvAnswers = answers): number =>
-  (computeAdventureBOM(a).find((b) => b.part === part) || { qty: 0 }).qty;
+  computeAdventureBOM(a).reduce((s, b) => (b.part === part ? s + b.qty : s), 0);
 
 describe('frame quantities (workbook defaults, now data-driven)', () => {
   it('reproduces the v73 frame counts', () => {
@@ -58,7 +84,10 @@ describe('frame quantities (workbook defaults, now data-driven)', () => {
     const rules = mergeRules(DEFAULT_FRAME_RULES, [
       { part: 'P-2028', terms: [{ source: 'in:legs', coefficient: 3 }] },
     ]);
-    const rows = evaluateRules(rules, frameContext(answers, () => 0));
+    const rows = evaluateRules(
+      rules,
+      frameContext(answers, () => 0),
+    );
     expect((rows.find((r) => r.part === 'P-2028') || { qty: 0 }).qty).toBe(12); // legs 4 × 3
     expect((rows.find((r) => r.part === 'P-2330') || { qty: 0 }).qty).toBe(14); // untouched
   });
@@ -74,7 +103,10 @@ describe('business numbers', () => {
   });
 
   it('applies overrides and clamps them to each range', () => {
-    const s = mergeSettings([{ key: 'depositPct', value: 30 }, { key: 'proposalValidityDays', value: 9999 }]);
+    const s = mergeSettings([
+      { key: 'depositPct', value: 30 },
+      { key: 'proposalValidityDays', value: 9999 },
+    ]);
     expect(s.depositPct).toBe(30);
     expect(s.proposalValidityDays).toBe(365); // clamped to the maximum
   });

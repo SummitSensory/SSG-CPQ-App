@@ -963,6 +963,15 @@ model StandardNote {
   body        String
   placement   NotePlacement @default(TABLE)
   autoInclude Boolean       @default(false)
+  /// Part numbers that pull this note onto a proposal, comma-separated. When any
+  /// of them is on the proposal the note is added once, at the end of the section
+  /// that part sits in. Blank means the note is never triggered by a part — it is
+  /// either always included or picked by hand.
+  ///
+  /// Several parts share one note deliberately: the floor mat, both column wraps
+  /// and the ladder-leg wrap all pull the single "Mat System" note rather than
+  /// each carrying its own copy of the wording.
+  triggerParts String?
   sortOrder   Int           @default(0)
   active      Boolean       @default(true)
   createdAt   DateTime      @default(now())

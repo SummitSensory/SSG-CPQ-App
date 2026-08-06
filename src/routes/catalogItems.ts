@@ -17,7 +17,12 @@ import { ValidationError, ConflictError, NotFoundError } from '../lib/errors.js'
  * whichever table owns it.
  */
 
-const slugify = (s: string) => s.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+const slugify = (s: string) =>
+  s
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
 
 /**
  * `overrideAllowed` arrived in migration 0024. Read it optionally so the catalog
@@ -26,30 +31,58 @@ const slugify = (s: string) => s.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-'
  */
 let skuHasOverrideFlag = true;
 const SKU_COLS = {
-  id: true, part: true, description: true, category: true, manufacturer: true,
-  unitPriceMinor: true, unitCostMinor: true, weightLbs: true, proposalGroup: true, active: true,
+  id: true,
+  part: true,
+  description: true,
+  category: true,
+  manufacturer: true,
+  unitPriceMinor: true,
+  unitCostMinor: true,
+  weightLbs: true,
+  proposalGroup: true,
+  active: true,
 } as const;
 type SkuRow = {
-  id: string; part: string; description: string; category: string | null; manufacturer: string | null;
-  unitPriceMinor: number; unitCostMinor: number; weightLbs: number; proposalGroup: string | null;
-  active: boolean; overrideAllowed?: boolean; defaultQty?: number | null;
-  freightMinor?: number | null; freightLabel?: string | null;
-  productUrl?: string | null; requiresPowderColor?: boolean;
+  id: string;
+  part: string;
+  description: string;
+  category: string | null;
+  manufacturer: string | null;
+  unitPriceMinor: number;
+  unitCostMinor: number;
+  weightLbs: number;
+  proposalGroup: string | null;
+  active: boolean;
+  overrideAllowed?: boolean;
+  defaultQty?: number | null;
+  freightMinor?: number | null;
+  freightLabel?: string | null;
+  productUrl?: string | null;
+  requiresPowderColor?: boolean;
   packagingBag?: string | null;
 };
 async function listSkus(): Promise<SkuRow[]> {
   if (skuHasOverrideFlag) {
     try {
-      return await prisma.sku.findMany({
-        select: { ...SKU_COLS, overrideAllowed: true, defaultQty: true, freightMinor: true, freightLabel: true, productUrl: true, requiresPowderColor: true, packagingBag: true },
+      return (await prisma.sku.findMany({
+        select: {
+          ...SKU_COLS,
+          overrideAllowed: true,
+          defaultQty: true,
+          freightMinor: true,
+          freightLabel: true,
+          productUrl: true,
+          requiresPowderColor: true,
+          packagingBag: true,
+        },
         orderBy: { part: 'asc' },
-      }) as SkuRow[];
+      })) as SkuRow[];
     } catch (e) {
       if ((e as { code?: string }).code !== 'P2022') throw e;
       skuHasOverrideFlag = false;
     }
   }
-  return await prisma.sku.findMany({ select: SKU_COLS, orderBy: { part: 'asc' } }) as SkuRow[];
+  return (await prisma.sku.findMany({ select: SKU_COLS, orderBy: { part: 'asc' } })) as SkuRow[];
 }
 
 const ItemPatch = z.object({
@@ -105,7 +138,11 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
   const admin = { preHandler: requirePermission(Permission.PRODUCTS_ADMIN) };
 
   app.get('/catalog/manufacturers', read, async () =>
-    prisma.manufacturer.findMany({ where: { isActive: true }, orderBy: { name: 'asc' }, select: { id: true, name: true, isThirdParty: true, freightTbd: true } }),
+    prisma.manufacturer.findMany({
+      where: { isActive: true },
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true, isThirdParty: true, freightTbd: true },
+    }),
   );
 
   /** One row per part number, merged across Product and Sku. */
@@ -118,25 +155,43 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
         select: { id: true, sku: true, name: true, status: true, categoryId: true, weightOz: true },
         orderBy: { sku: 'asc' },
       }),
-      prisma.productSourcing.findMany({ select: { productId: true, manufacturer: { select: { name: true } } } }),
-      prisma.productCategory.findMany({ select: { id: true, name: true }, orderBy: { sortOrder: 'asc' } }),
+      prisma.productSourcing.findMany({
+        select: { productId: true, manufacturer: { select: { name: true } } },
+      }),
+      prisma.productCategory.findMany({
+        select: { id: true, name: true },
+        orderBy: { sortOrder: 'asc' },
+      }),
       // Dated cost history from the product workbook import — the fallback when the
       // flat Sku row has no cost of its own.
-      prisma.productCost.findMany({ select: { productId: true, unitCost: true, effectiveDate: true }, orderBy: { effectiveDate: 'desc' } }),
+      prisma.productCost.findMany({
+        select: { productId: true, unitCost: true, effectiveDate: true },
+        orderBy: { effectiveDate: 'desc' },
+      }),
     ]);
     const latestCost: Record<string, number> = {};
-    for (const c of costs) if (latestCost[c.productId] === undefined) latestCost[c.productId] = Number(c.unitCost);
+    for (const c of costs)
+      if (latestCost[c.productId] === undefined) latestCost[c.productId] = Number(c.unitCost);
     const catName: Record<string, string> = {};
     for (const c of cats) catName[c.id] = c.name;
     const mfrByProduct: Record<string, string> = {};
-    for (const s of sourcing) if (s.manufacturer?.name && !mfrByProduct[s.productId]) mfrByProduct[s.productId] = s.manufacturer.name;
+    for (const s of sourcing)
+      if (s.manufacturer?.name && !mfrByProduct[s.productId])
+        mfrByProduct[s.productId] = s.manufacturer.name;
 
     const byPart = new Map<string, CatalogItem>();
     for (const s of skus) {
       byPart.set(s.part, {
-        part: s.part, name: s.description, category: s.category || '', categoryOptions: false,
-        manufacturer: s.manufacturer || '', unitPriceMinor: s.unitPriceMinor, unitCostMinor: s.unitCostMinor,
-        weightLbs: s.weightLbs, proposalGroup: s.proposalGroup || '', active: s.active,
+        part: s.part,
+        name: s.description,
+        category: s.category || '',
+        categoryOptions: false,
+        manufacturer: s.manufacturer || '',
+        unitPriceMinor: s.unitPriceMinor,
+        unitCostMinor: s.unitCostMinor,
+        weightLbs: s.weightLbs,
+        proposalGroup: s.proposalGroup || '',
+        active: s.active,
         overrideAllowed: s.overrideAllowed === true,
         defaultQty: s.defaultQty ?? null,
         freightMinor: s.freightMinor ?? null,
@@ -144,7 +199,9 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
         productUrl: s.productUrl ?? null,
         packagingBag: s.packagingBag ?? null,
         requiresPowderColor: s.requiresPowderColor === true,
-        skuId: s.id, productId: null, productStatus: null,
+        skuId: s.id,
+        productId: null,
+        productStatus: null,
       });
     }
     for (const p of products) {
@@ -160,32 +217,57 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
         existing.manufacturer = mfr || existing.manufacturer;
         const cost = latestCost[p.id];
         if (!existing.unitCostMinor && cost) existing.unitCostMinor = cost;
-        if (!existing.weightLbs && p.weightOz) existing.weightLbs = Math.round((p.weightOz / 16) * 1000) / 1000;
+        if (!existing.weightLbs && p.weightOz)
+          existing.weightLbs = Math.round((p.weightOz / 16) * 1000) / 1000;
         existing.productId = p.id;
         existing.productStatus = p.status;
       } else {
         byPart.set(p.sku, {
-          part: p.sku, name: p.name, category: productCategory, categoryOptions: true,
-          manufacturer: mfr, unitPriceMinor: 0, unitCostMinor: latestCost[p.id] || 0,
+          part: p.sku,
+          name: p.name,
+          category: productCategory,
+          categoryOptions: true,
+          manufacturer: mfr,
+          unitPriceMinor: 0,
+          unitCostMinor: latestCost[p.id] || 0,
           weightLbs: p.weightOz ? Math.round((p.weightOz / 16) * 1000) / 1000 : 0,
-          proposalGroup: '', active: p.status === 'ACTIVE', overrideAllowed: false, defaultQty: null,
-          freightMinor: null, freightLabel: null, productUrl: null, requiresPowderColor: false, packagingBag: null,
-          skuId: null, productId: p.id, productStatus: p.status,
+          proposalGroup: '',
+          active: p.status === 'ACTIVE',
+          overrideAllowed: false,
+          defaultQty: null,
+          freightMinor: null,
+          freightLabel: null,
+          productUrl: null,
+          requiresPowderColor: false,
+          packagingBag: null,
+          skuId: null,
+          productId: p.id,
+          productStatus: p.status,
         });
       }
     }
     let items = [...byPart.values()];
     if (term) {
       const t = term.toLowerCase();
-      items = items.filter((i) =>
-        i.part.toLowerCase().includes(t) || i.name.toLowerCase().includes(t) ||
-        i.category.toLowerCase().includes(t) || i.manufacturer.toLowerCase().includes(t));
+      items = items.filter(
+        (i) =>
+          i.part.toLowerCase().includes(t) ||
+          i.name.toLowerCase().includes(t) ||
+          i.category.toLowerCase().includes(t) ||
+          i.manufacturer.toLowerCase().includes(t),
+      );
     }
     items.sort((a, b) => a.part.localeCompare(b.part));
     const total = items.length;
     const pg = Math.max(1, parseInt(page, 10) || 1);
     const size = Math.min(500, Math.max(1, parseInt(pageSize, 10) || 100));
-    return { items: items.slice((pg - 1) * size, pg * size), total, page: pg, pageSize: size, categories: cats };
+    return {
+      items: items.slice((pg - 1) * size, pg * size),
+      total,
+      page: pg,
+      pageSize: size,
+      categories: cats,
+    };
   });
 
   /**
@@ -198,26 +280,42 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
   app.patch('/catalog/items/:part', admin, async (req) => {
     const { part } = req.params as { part: string };
     const parsed = ItemPatch.safeParse(req.body);
-    if (!parsed.success) throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid item');
+    if (!parsed.success)
+      throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid item');
     const d = parsed.data;
 
     const product = await prisma.product.findUnique({ where: { sku: part } });
     let sku = await prisma.sku.findUnique({ where: { part } });
 
-    const needsSku = d.unitPriceMinor !== undefined || d.unitCostMinor !== undefined || d.weightLbs !== undefined ||
-      d.proposalGroup !== undefined || d.active !== undefined || d.manufacturer !== undefined ||
-      d.overrideAllowed !== undefined || d.defaultQty !== undefined ||
-      d.freightMinor !== undefined || d.freightLabel !== undefined ||
-      d.productUrl !== undefined || d.requiresPowderColor !== undefined || d.packagingBag !== undefined ||
-      (d.name !== undefined && !product) || (d.category !== undefined && !product);
+    const needsSku =
+      d.unitPriceMinor !== undefined ||
+      d.unitCostMinor !== undefined ||
+      d.weightLbs !== undefined ||
+      d.proposalGroup !== undefined ||
+      d.active !== undefined ||
+      d.manufacturer !== undefined ||
+      d.overrideAllowed !== undefined ||
+      d.defaultQty !== undefined ||
+      d.freightMinor !== undefined ||
+      d.freightLabel !== undefined ||
+      d.productUrl !== undefined ||
+      d.requiresPowderColor !== undefined ||
+      d.packagingBag !== undefined ||
+      (d.name !== undefined && !product) ||
+      (d.category !== undefined && !product);
     if (!sku && needsSku) {
       sku = await prisma.sku.create({
-        data: { part, description: d.name || product?.name || part, category: (!product && d.category) || 'OTHER' },
+        data: {
+          part,
+          description: d.name || product?.name || part,
+          category: (!product && d.category) || 'OTHER',
+        },
       });
     }
 
     if (d.name !== undefined) {
-      if (product) await prisma.product.update({ where: { id: product.id }, data: { name: d.name } });
+      if (product)
+        await prisma.product.update({ where: { id: product.id }, data: { name: d.name } });
       if (sku) await prisma.sku.update({ where: { id: sku.id }, data: { description: d.name } });
     }
 
@@ -227,22 +325,35 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
         if (!cat) throw new ValidationError(`No product category named “${d.category}”`);
         await prisma.product.update({ where: { id: product.id }, data: { categoryId: cat.id } });
       } else if (sku) {
-        await prisma.sku.update({ where: { id: sku.id }, data: { category: d.category || 'OTHER' } });
+        await prisma.sku.update({
+          where: { id: sku.id },
+          data: { category: d.category || 'OTHER' },
+        });
       }
     }
 
     if (d.manufacturer !== undefined) {
       const name = (d.manufacturer || '').trim();
-      if (sku) await prisma.sku.update({ where: { id: sku.id }, data: { manufacturer: name || null } });
+      if (sku)
+        await prisma.sku.update({ where: { id: sku.id }, data: { manufacturer: name || null } });
       if (product) {
         if (!name) {
           await prisma.productSourcing.deleteMany({ where: { productId: product.id } });
         } else {
           let mfr = await prisma.manufacturer.findFirst({ where: { name } });
           if (!mfr) mfr = await prisma.manufacturer.create({ data: { name, slug: slugify(name) } });
-          const existing = await prisma.productSourcing.findFirst({ where: { productId: product.id } });
-          if (existing) await prisma.productSourcing.update({ where: { id: existing.id }, data: { manufacturerId: mfr.id } });
-          else await prisma.productSourcing.create({ data: { productId: product.id, manufacturerId: mfr.id } });
+          const existing = await prisma.productSourcing.findFirst({
+            where: { productId: product.id },
+          });
+          if (existing)
+            await prisma.productSourcing.update({
+              where: { id: existing.id },
+              data: { manufacturerId: mfr.id },
+            });
+          else
+            await prisma.productSourcing.create({
+              data: { productId: product.id, manufacturerId: mfr.id },
+            });
         }
       }
     }
@@ -262,14 +373,16 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
       // unclickable "Buy" button on a purchasing document.
       if (d.productUrl !== undefined) {
         const u = (d.productUrl || '').trim();
-        if (u && !/^https?:\/\//i.test(u)) throw new ValidationError('A buy link must start with http:// or https://');
+        if (u && !/^https?:\/\//i.test(u))
+          throw new ValidationError('A buy link must start with http:// or https://');
         money.productUrl = u || null;
       }
       if (d.requiresPowderColor !== undefined) money.requiresPowderColor = d.requiresPowderColor;
       // Bag numbers are typed by hand on about thirty hardware items; a blank
       // clears the label rather than storing an empty string.
       if (d.packagingBag !== undefined) money.packagingBag = (d.packagingBag || '').trim() || null;
-      if (Object.keys(money).length) await prisma.sku.update({ where: { id: sku.id }, data: money });
+      if (Object.keys(money).length)
+        await prisma.sku.update({ where: { id: sku.id }, data: money });
     }
 
     // A cost edit also lands in the dated cost history, so pricing/service.ts and
@@ -277,13 +390,22 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
     if (d.unitCostMinor !== undefined && product) {
       await prisma.productCost.create({
         data: {
-          productId: product.id, unitCost: BigInt(d.unitCostMinor), currency: 'USD',
-          effectiveDate: new Date(), createdById: req.user!.sub,
+          productId: product.id,
+          unitCost: BigInt(d.unitCostMinor),
+          currency: 'USD',
+          effectiveDate: new Date(),
+          createdById: req.user!.sub,
         },
       });
     }
 
-    await recordAudit({ actorId: req.user!.sub, action: 'catalog.item.update', entity: 'Sku', entityId: part, details: d as Record<string, unknown> });
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'catalog.item.update',
+      entity: 'Sku',
+      entityId: part,
+      details: d as Record<string, unknown>,
+    });
     return { ok: true, part };
   });
 
@@ -298,7 +420,8 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
     const numbers = new Set<string>();
     for (const v of versions) {
       const items = Array.isArray(v.items) ? (v.items as { sku?: string; name?: string }[]) : [];
-      if (items.some((i) => i && (i.sku === part || i.name === part))) numbers.add(v.proposal.number);
+      if (items.some((i) => i && (i.sku === part || i.name === part)))
+        numbers.add(v.proposal.number);
     }
     return { count: numbers.size, numbers: [...numbers].slice(0, 5) };
   }
@@ -322,33 +445,99 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
     // whose cost lives only in ProductCost (the Pediasuit belts, among others) showed
     // a cost in the catalog and inserted onto a proposal at 0, taking the line to 100%
     // margin. Whatever the catalog shows, the builder now inserts.
-    const [rows, products, costs, freightTbdMfrs, sourcing] = await Promise.all([
+    const [rows, products, costs, freightTbdMfrs, sourcing, categories] = await Promise.all([
       listSkus(),
-      prisma.product.findMany({ select: { id: true, sku: true, name: true, status: true, weightOz: true } }),
-      prisma.productCost.findMany({ select: { productId: true, unitCost: true, effectiveDate: true }, orderBy: { effectiveDate: 'desc' } }),
+      prisma.product.findMany({
+        select: {
+          id: true,
+          sku: true,
+          name: true,
+          status: true,
+          weightOz: true,
+          sortOrder: true,
+          categoryId: true,
+        },
+      }),
+      prisma.productCost.findMany({
+        select: { productId: true, unitCost: true, effectiveDate: true },
+        orderBy: { effectiveDate: 'desc' },
+      }),
       // Vendors that quote freight after the fact. Their parts carry a standing note
       // on the proposal line until a freight figure is entered.
-      prisma.manufacturer.findMany({ where: { freightTbd: true }, select: { id: true, name: true } }),
+      prisma.manufacturer.findMany({
+        where: { freightTbd: true },
+        select: { id: true, name: true },
+      }),
       prisma.productSourcing.findMany({ select: { productId: true, manufacturerId: true } }),
+      prisma.productCategory.findMany({
+        select: { id: true, name: true, parentId: true, sortOrder: true },
+      }),
     ]);
+
+    /**
+     * Catalogue position as one comparable string, so the builder can drop a part
+     * into its right place without knowing the category tree.
+     *
+     * The key is the category's ancestry by sortOrder, then the product's own
+     * sortOrder, then the part number. Numbers are zero-padded because the builder
+     * compares these lexically — "10" must not sort before "9".
+     *
+     * Parts carried only as a Sku row have no tree position at all. They get a "z"
+     * prefix and sort after everything placed, by category name then part, which is
+     * the same order the catalog list shows them in.
+     */
+    const catById = new Map(categories.map((c) => [c.id, c]));
+    const pad = (n: number): string => String(Math.max(0, Math.round(n))).padStart(5, '0');
+    const catPathKey = (categoryId: string | null | undefined): string | null => {
+      const path: string[] = [];
+      let node = categoryId ? catById.get(categoryId) : undefined;
+      // Depth guard: a self-referencing parentId would otherwise spin forever.
+      for (let hops = 0; node && hops < 12; hops++) {
+        path.unshift(pad(node.sortOrder));
+        node = node.parentId ? catById.get(node.parentId) : undefined;
+      }
+      return path.length ? path.join('.') : null;
+    };
+    const sortKeyFor = (
+      part: string,
+      product?: { sortOrder: number; categoryId: string },
+      skuCategory?: string | null,
+    ): string => {
+      const tree = product ? catPathKey(product.categoryId) : null;
+      if (tree) return tree + '|' + pad(product!.sortOrder) + '|' + part;
+      return 'z|' + String(skuCategory || '').toLowerCase() + '|' + part;
+    };
     const latestCost: Record<string, number> = {};
-    for (const c of costs) if (latestCost[c.productId] === undefined) latestCost[c.productId] = Number(c.unitCost);
+    for (const c of costs)
+      if (latestCost[c.productId] === undefined) latestCost[c.productId] = Number(c.unitCost);
     const productByPart = new Map(products.map((p) => [p.sku, p]));
-    const lbsFromOz = (oz: number | null | undefined): number => (oz ? Math.round((oz / 16) * 1000) / 1000 : 0);
+    const lbsFromOz = (oz: number | null | undefined): number =>
+      oz ? Math.round((oz / 16) * 1000) / 1000 : 0;
 
     // A part reaches its vendor two ways — by name on the flat SKU master, or through
     // ProductSourcing. Both are checked, because the catalog is populated by both.
     const tbdNames = new Set(freightTbdMfrs.map((m) => m.name.trim().toLowerCase()));
     const tbdIds = new Set(freightTbdMfrs.map((m) => m.id));
-    const tbdProductIds = new Set(sourcing.filter((s) => tbdIds.has(s.manufacturerId)).map((s) => s.productId));
+    const tbdProductIds = new Set(
+      sourcing.filter((s) => tbdIds.has(s.manufacturerId)).map((s) => s.productId),
+    );
     const freightTbdFor = (manufacturer?: string | null, productId?: string): boolean => {
       if (manufacturer && tbdNames.has(manufacturer.trim().toLowerCase())) return true;
       return !!productId && tbdProductIds.has(productId);
     };
 
     type Entry = {
-      qty?: number; freightMinor?: number; freightLabel?: string; freightTbd?: boolean;
-      priceMinor?: number; costMinor?: number; weightLbs?: number; description?: string;
+      qty?: number;
+      freightMinor?: number;
+      freightLabel?: string;
+      freightTbd?: boolean;
+      priceMinor?: number;
+      costMinor?: number;
+      weightLbs?: number;
+      description?: string;
+      /** Catalogue position — see sortKeyFor above. Drives insertion order in the builder. */
+      sortKey?: string;
+      category?: string;
     };
     const out: Record<string, Entry> = {};
     for (const s of rows) {
@@ -362,6 +551,12 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
       entry.costMinor = s.unitCostMinor || (p ? latestCost[p.id] || 0 : 0);
       entry.weightLbs = Number(s.weightLbs) || (p ? lbsFromOz(p.weightOz) : 0);
       entry.description = s.description;
+      entry.sortKey = sortKeyFor(
+        s.part,
+        p ? { sortOrder: p.sortOrder, categoryId: p.categoryId } : undefined,
+        s.category,
+      );
+      entry.category = (p ? catById.get(p.categoryId)?.name : null) || s.category || '';
       if (freightTbdFor(s.manufacturer, p?.id)) entry.freightTbd = true;
       out[s.part] = entry;
     }
@@ -371,7 +566,12 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
     for (const p of products) {
       if (out[p.sku] || p.status !== 'ACTIVE') continue;
       out[p.sku] = {
-        priceMinor: 0, costMinor: latestCost[p.id] || 0, weightLbs: lbsFromOz(p.weightOz), description: p.name,
+        priceMinor: 0,
+        costMinor: latestCost[p.id] || 0,
+        weightLbs: lbsFromOz(p.weightOz),
+        description: p.name,
+        sortKey: sortKeyFor(p.sku, { sortOrder: p.sortOrder, categoryId: p.categoryId }),
+        category: catById.get(p.categoryId)?.name || '',
         ...(freightTbdFor(null, p.id) ? { freightTbd: true } : {}),
       };
     }
@@ -387,17 +587,25 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
       proposalUsage(part),
     ]);
     const everActive = product
-      ? (await prisma.productStatusHistory.count({ where: { productId: product.id, toStatus: 'ACTIVE' } })) > 0
+      ? (await prisma.productStatusHistory.count({
+          where: { productId: product.id, toStatus: 'ACTIVE' },
+        })) > 0
       : false;
     return {
       part,
-      hasProduct: !!product, hasSku: !!sku,
-      productStatus: product?.status ?? null, active: sku ? sku.active : product?.status === 'ACTIVE',
-      proposalCount: usage.count, proposalNumbers: usage.numbers,
+      hasProduct: !!product,
+      hasSku: !!sku,
+      productStatus: product?.status ?? null,
+      active: sku ? sku.active : product?.status === 'ACTIVE',
+      proposalCount: usage.count,
+      proposalNumbers: usage.numbers,
       deletable: usage.count === 0 && !everActive,
-      reason: usage.count > 0
-        ? `Used on ${usage.count} proposal${usage.count === 1 ? '' : 's'} (${usage.numbers.join(', ')}${usage.count > usage.numbers.length ? '…' : ''}) — deactivate it instead so historical proposals keep their pricing.`
-        : everActive ? 'This product has been active, so its history is kept — deactivate or archive it instead.' : null,
+      reason:
+        usage.count > 0
+          ? `Used on ${usage.count} proposal${usage.count === 1 ? '' : 's'} (${usage.numbers.join(', ')}${usage.count > usage.numbers.length ? '…' : ''}) — deactivate it instead so historical proposals keep their pricing.`
+          : everActive
+            ? 'This product has been active, so its history is kept — deactivate or archive it instead.'
+            : null,
     };
   });
 
@@ -415,11 +623,18 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
     ]);
     if (!product && !sku) throw new NotFoundError('No catalog part with that number');
     if (usage.count > 0) {
-      throw new ConflictError(`“${part}” is used on ${usage.count} proposal${usage.count === 1 ? '' : 's'} (${usage.numbers.join(', ')}). Deactivate it instead — deleting would change what those proposals priced.`);
+      throw new ConflictError(
+        `“${part}” is used on ${usage.count} proposal${usage.count === 1 ? '' : 's'} (${usage.numbers.join(', ')}). Deactivate it instead — deleting would change what those proposals priced.`,
+      );
     }
     if (product) {
-      const everActive = await prisma.productStatusHistory.count({ where: { productId: product.id, toStatus: 'ACTIVE' } });
-      if (everActive > 0) throw new ConflictError(`“${part}” has been an active product, so its record is kept for history. Archive or deactivate it instead.`);
+      const everActive = await prisma.productStatusHistory.count({
+        where: { productId: product.id, toStatus: 'ACTIVE' },
+      });
+      if (everActive > 0)
+        throw new ConflictError(
+          `“${part}” has been an active product, so its record is kept for history. Archive or deactivate it instead.`,
+        );
     }
     await prisma.$transaction(async (tx) => {
       if (sku) await tx.sku.delete({ where: { id: sku.id } });
@@ -429,7 +644,13 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
         await tx.product.delete({ where: { id: product.id } });
       }
     });
-    await recordAudit({ actorId: req.user!.sub, action: 'catalog.item.delete', entity: 'Sku', entityId: part, details: { hadProduct: !!product, hadSku: !!sku } });
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'catalog.item.delete',
+      entity: 'Sku',
+      entityId: part,
+      details: { hadProduct: !!product, hadSku: !!sku },
+    });
     reply.code(204);
     return null;
   });
@@ -454,11 +675,22 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
       if (product.status !== to) {
         await prisma.product.update({ where: { id: product.id }, data: { status: to } });
         await prisma.productStatusHistory.create({
-          data: { productId: product.id, fromStatus: product.status, toStatus: to, reason: 'catalog list', changedById: req.user!.sub },
+          data: {
+            productId: product.id,
+            fromStatus: product.status,
+            toStatus: to,
+            reason: 'catalog list',
+            changedById: req.user!.sub,
+          },
         });
       }
     }
-    await recordAudit({ actorId: req.user!.sub, action: body.active ? 'catalog.item.activate' : 'catalog.item.deactivate', entity: 'Sku', entityId: part });
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: body.active ? 'catalog.item.activate' : 'catalog.item.deactivate',
+      entity: 'Sku',
+      entityId: part,
+    });
     return { part, active: body.active };
   });
 }

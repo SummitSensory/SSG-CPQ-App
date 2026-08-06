@@ -54,33 +54,66 @@ describe('QuickBooks mapping (money is decimal-safe)', () => {
   });
 });
 
-describe('bundled group lines', () => {
+describe('proposal sections on a sales document', () => {
   const grouped = [
     { kind: 'GROUP' as const, description: 'Climbing Wall', quantity: 1, amountMinor: 0n },
     { description: 'Wall', quantity: 1, amountMinor: 189750n },
     { description: 'Shield', quantity: 2, amountMinor: 23920n },
   ];
 
-  it('prices the parent line at the sum of its components', () => {
-    const lines = toSalesLines(grouped, { bundleGroups: true });
+  it('gives every product its own priced line', () => {
+    const lines = toSalesLines(grouped);
     const priced = lines.filter((l) => typeof l.Amount === 'number');
-    expect(priced).toHaveLength(1);
-    expect(priced[0]?.Description).toBe('CLIMBING WALL');
+    expect(priced).toHaveLength(2);
+    expect(priced.every((l) => l.DetailType === 'SalesItemLineDetail')).toBe(true);
     expect(sumLineAmounts(lines)).toBe(213670n);
   });
 
-  it('renders components as description rows carrying no money', () => {
-    const lines = toSalesLines(grouped, { bundleGroups: true });
-    const components = lines.filter((l) => l.DetailType === 'DescriptionOnly');
-    expect(components).toHaveLength(2);
-    for (const c of components) expect(c.Amount).toBeUndefined();
-    expect(String(components[1]?.Description)).toContain('2 ×');
+  it('splits qty × rate only when the amount divides evenly', () => {
+    const lines = toSalesLines([
+      { description: 'Shield', quantity: 2, amountMinor: 23920n },
+      // 3 does not divide 1001 — a rate of 3.34 would multiply back to 10.02.
+      { description: 'Odd', quantity: 3, amountMinor: 1001n },
+    ]);
+    const even = lines[0]?.SalesItemLineDetail as { Qty: number; UnitPrice: number };
+    expect(even.Qty).toBe(2);
+    expect(even.UnitPrice).toBe(119.6);
+    const odd = lines[1]?.SalesItemLineDetail as { Qty: number; UnitPrice: number };
+    expect(odd.Qty).toBe(1);
+    expect(odd.UnitPrice).toBe(10.01);
   });
 
-  it('unbundled mode keeps one priced line per product plus a subtotal row', () => {
-    const lines = toSalesLines(grouped, { bundleGroups: false });
-    expect(lines.filter((l) => typeof l.Amount === 'number')).toHaveLength(2);
+  it('closes a section with a native subtotal that is not counted twice', () => {
+    const lines = toSalesLines(grouped);
+    const subtotals = lines.filter((l) => l.DetailType === 'SubTotalLineDetail');
+    expect(subtotals).toHaveLength(1);
+    expect(subtotals[0]?.Amount).toBeUndefined();
     expect(sumLineAmounts(lines)).toBe(213670n);
+  });
+
+  it('gives an empty section no subtotal', () => {
+    const lines = toSalesLines([
+      { kind: 'GROUP' as const, description: 'Nothing Here', quantity: 1, amountMinor: 0n },
+    ]);
+    expect(lines.filter((l) => l.DetailType === 'SubTotalLineDetail')).toHaveLength(0);
+  });
+
+  it('sends a real QuickBooks bundle as one group line and counts its components', () => {
+    const lines = toSalesLines([
+      { description: 'Hardware Kit', quantity: 1, amountMinor: 48655n, qboGroupItemId: '907' },
+    ]);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.DetailType).toBe('GroupLineDetail');
+    // The parent carries no Amount — QuickBooks prices it from the components it
+    // expands, which is what sumLineAmounts has to read.
+    expect(lines[0]?.Amount).toBeUndefined();
+    const withComponents = [
+      {
+        DetailType: 'GroupLineDetail',
+        GroupLineDetail: { Line: [{ Amount: 300.0 }, { Amount: 186.55 }] },
+      },
+    ];
+    expect(sumLineAmounts(withComponents)).toBe(48655n);
   });
 });
 

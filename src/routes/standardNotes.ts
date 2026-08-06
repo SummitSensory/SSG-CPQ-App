@@ -16,6 +16,24 @@ const NoteSchema = z.object({
   body: z.string().min(1),
   placement: z.enum(['TABLE', 'FOOTER']).default('TABLE'),
   autoInclude: z.boolean().default(false),
+  /**
+   * Comma-separated part numbers that pull this note onto a proposal.
+   *
+   * Normalised on the way in — upper-cased, trimmed, de-duplicated, newlines
+   * treated as separators — so the builder can match on part number without
+   * caring how the list was typed.
+   */
+  triggerParts: z
+    .string()
+    .max(2000)
+    .nullish()
+    .transform((v) => {
+      const parts = String(v ?? '')
+        .split(/[,\n]/)
+        .map((p) => p.trim().toUpperCase())
+        .filter(Boolean);
+      return parts.length ? [...new Set(parts)].join(', ') : null;
+    }),
   sortOrder: z.number().int().default(0),
   active: z.boolean().default(true),
 });
@@ -25,7 +43,9 @@ export function registerStandardNoteRoutes(app: FastifyInstance): void {
   const manage = { preHandler: requirePermission(Permission.PROPOSAL_REVIEW) };
 
   app.get('/standard-notes', read, async () =>
-    prisma.standardNote.findMany({ orderBy: [{ placement: 'asc' }, { sortOrder: 'asc' }, { title: 'asc' }] }),
+    prisma.standardNote.findMany({
+      orderBy: [{ placement: 'asc' }, { sortOrder: 'asc' }, { title: 'asc' }],
+    }),
   );
 
   app.post('/standard-notes', manage, async (req, reply) => {

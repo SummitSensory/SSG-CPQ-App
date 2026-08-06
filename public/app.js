@@ -883,7 +883,7 @@
   function renderNotesTab() {
     document.getElementById('catBody').innerHTML =
       '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:12px;">' +
-        '<div class="muted" style="font-size:12.5px;max-width:640px;line-height:1.5;">Reusable note blocks for proposals. “Always include” notes are added to every new proposal automatically; the rest are picked from <b style="font-weight:600;">+ Standard note…</b> in the builder. Table notes print inside the line items; footer notes print below the signature lines.</div>' +
+        '<div class="muted" style="font-size:12.5px;max-width:640px;line-height:1.5;">Reusable note blocks for proposals. “Always include” notes are added to every new proposal automatically, and a note can name the parts that pull it in; the rest are picked from <b style="font-weight:600;">+ Standard note…</b> in the builder. Table notes print inside the line items; footer notes print below the signature lines.</div>' +
         '<button class="btn" id="snNew" style="width:auto;padding:9px 15px;white-space:nowrap;">+ New note</button></div>' +
       '<div id="snList"><div class="muted" style="padding:16px;">Loading…</div></div>';
     document.getElementById('snNew').addEventListener('click', function () { openStandardNoteForm(null); });
@@ -3469,6 +3469,75 @@
   }
 
   /**
+   * Notes a part brings with it.
+   *
+   * Some wording has to travel with a product rather than with a proposal — the
+   * mat system's 8–10 week lead time, for instance, is true whenever a mat is on
+   * the job and misleading when one is not. Before this it was hardcoded in the
+   * Adventure Series engine, so adding the same mat by hand from the product
+   * picker produced a proposal with no note on it at all.
+   *
+   * A note is added ONCE, at the end of the section its triggering part sits in,
+   * and only if it is not already on the proposal. Deleting it is respected until
+   * another triggering part is added — the alternative, re-inserting on every
+   * render, fights the rep and is worse.
+   */
+  function notesTriggeredBy(sku) {
+    var part = String(sku || '').trim().toUpperCase();
+    if (!part) return [];
+    return (stdNotes || []).filter(function (nn) {
+      if (nn.active === false || !nn.triggerParts) return false;
+      return String(nn.triggerParts).split(',').some(function (p) { return p.trim().toUpperCase() === part; });
+    });
+  }
+
+  /** True when this note's text is already somewhere on the proposal. */
+  function noteAlreadyPresent(nn) {
+    return (pb.lines || []).some(function (l) {
+      return l.lineType === 'NOTE' && String(l.name || '').trim() === String(nn.title || '').trim();
+    }) || (pb.meta.footerNotes || []).some(function (f) {
+      return String(f.title || '').trim() === String(nn.title || '').trim();
+    });
+  }
+
+  /**
+   * Add whatever notes this part pulls in. FOOTER notes join the footer block;
+   * TABLE notes are inserted after the last line of the part's own section, so
+   * the note reads as part of that section rather than drifting to the bottom.
+   */
+  function applyTriggeredNotes(sku, atIndex) {
+    var added = 0;
+    notesTriggeredBy(sku).forEach(function (nn) {
+      if (noteAlreadyPresent(nn)) return;
+      if (nn.placement === 'FOOTER') {
+        pb.meta.footerNotes = (pb.meta.footerNotes || []).concat([{ title: nn.title, body: nn.body }]);
+        added++;
+        return;
+      }
+      var at = pb.lines.length;
+      if (typeof atIndex === 'number' && atIndex >= 0) {
+        at = atIndex + 1;
+        while (at < pb.lines.length && !isSectionHeader(pb.lines[at])) at++;
+      }
+      pb.lines.splice(at, 0, normalizeLine({
+        lineType: 'NOTE', kind: 'NOTE', name: nn.title, description: nn.body, quantity: 0, rateMinor: 0,
+      }));
+      added++;
+    });
+    return added;
+  }
+
+  /** Every part on the proposal gets a chance to pull its notes in. */
+  function applyAllTriggeredNotes() {
+    var added = 0;
+    (pb.lines || []).slice().forEach(function (l) {
+      if (!l || l.lineType !== 'PRODUCT' || !l.sku) return;
+      added += applyTriggeredNotes(l.sku, pb.lines.indexOf(l));
+    });
+    return added;
+  }
+
+  /**
    * Where a freshly picked part belongs in the line list.
    *
    * Appending was leaving reps to drag every new part up into place. The catalog
@@ -4390,6 +4459,12 @@
   function builderLineRow(l, i, gsub) {
     var handle = '<div class="bDrag" style="cursor:grab;color:#c2c6bd;font-size:18px;padding:0 4px;user-select:none;" title="Drag to reorder">⋮⋮</div>';
     var del = '<button class="bDel" data-i="' + i + '" style="border:1px solid #e0e1db;background:#fff;border-radius:8px;width:30px;height:30px;color:#9c3327;cursor:pointer;flex:0 0 auto;">✕</button>';
+    /* Adds a note directly beneath this row rather than at the bottom of the
+     * proposal. The old "+ Standard note…" picker appended to the end and left the
+     * rep to drag it into place, which is why notes drifted away from the thing
+     * they were about. Available on headings, sub-headings and products alike. */
+    var noteBtn = '<button class="bAddNote" data-i="' + i + '" title="Add a note directly under this line" style="border:1px solid #e0e1db;background:#fff;border-radius:8px;height:30px;padding:0 9px;color:#5c6157;cursor:pointer;flex:0 0 auto;font-size:11.5px;white-space:nowrap;">+ Note</button>';
+    var noteBtnLight = noteBtn.replace('border:1px solid #e0e1db;background:#fff', 'border:1px solid rgba(255,255,255,.25);background:rgba(255,255,255,.12)').replace('color:#5c6157', 'color:#e6ebef');
     if (l.lineType === 'GROUP') {
       var g = (gsub && gsub[i]) || { rev: 0, cogs: 0 };
       var gMargin = g.rev - g.cogs;
@@ -4399,7 +4474,7 @@
         '<input class="bF" data-i="' + i + '" data-k="name" value="' + esc(l.name) + '" placeholder="SECTION HEADING" style="flex:1;border:none;background:transparent;font-weight:700;font-size:13px;letter-spacing:.03em;text-transform:uppercase;color:#fff;outline:none;">' +
         '<input class="bF" data-i="' + i + '" data-k="description" value="' + esc(l.description || '') + '" placeholder="Heading note (e.g. Frame Dimensions: 10\' × 10\')" style="flex:0 1 250px;border:none;background:rgba(255,255,255,.1);border-radius:7px;padding:5px 8px;font-size:11.5px;color:#e6ebef;outline:none;">' +
         '<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:#cdd6dc;white-space:nowrap;cursor:pointer;"><input type="checkbox" class="bChk" data-i="' + i + '" data-k="optional"' + (l.optional ? ' checked' : '') + '> Optional</label>' +
-        '<span style="font-size:12.5px;font-weight:600;color:#cdd6dc;min-width:90px;text-align:right;">' + fmtMoney(g.rev, 'USD') + '</span>' + del.replace('#9c3327', '#f0b8ae').replace('background:#fff', 'background:rgba(255,255,255,.12)').replace('border:1px solid #e0e1db', 'border:1px solid rgba(255,255,255,.25)') +
+        '<span style="font-size:12.5px;font-weight:600;color:#cdd6dc;min-width:90px;text-align:right;">' + fmtMoney(g.rev, 'USD') + '</span>' + noteBtnLight + del.replace('#9c3327', '#f0b8ae').replace('background:#fff', 'background:rgba(255,255,255,.12)').replace('border:1px solid #e0e1db', 'border:1px solid rgba(255,255,255,.25)') +
         '</div>' +
         '<div style="display:flex;gap:16px;justify-content:flex-end;font-size:11px;color:#a9bac6;padding:6px 40px 0 0;">' +
           '<span>Revenue <b style="color:#fff;font-weight:600;">' + fmtMoney(g.rev, '') + '</b></span>' +
@@ -4409,7 +4484,11 @@
     }
     if (l.lineType === 'SUBGROUP') {
       return '<div class="bRow" draggable="true" data-i="' + i + '" style="display:flex;align-items:center;gap:8px;background:#eef0ea;border:1px solid #e2e5dd;border-radius:9px;padding:7px 10px;margin-left:14px;">' + handle +
-        '<input class="bF" data-i="' + i + '" data-k="name" value="' + esc(l.name) + '" placeholder="Sub-heading" style="flex:1;border:none;background:transparent;font-weight:600;font-size:13px;color:#3d4a55;outline:none;">' + del + '</div>';
+        '<input class="bF" data-i="' + i + '" data-k="name" value="' + esc(l.name) + '" placeholder="Sub-heading" style="flex:1;border:none;background:transparent;font-weight:600;font-size:13px;color:#3d4a55;outline:none;">' +
+        // Matches the one-line note a GROUP heading already has, and prints the
+        // same way — beneath the heading, before the first product under it.
+        '<input class="bF" data-i="' + i + '" data-k="description" value="' + esc(l.description || '') + '" placeholder="Sub-heading note" style="flex:0 1 260px;border:1px solid #dfe3da;background:#fff;border-radius:7px;padding:5px 8px;font-size:11.5px;color:#3d4a55;outline:none;">' +
+        noteBtn + del + '</div>';
     }
     if (l.lineType === 'NOTE') {
       return '<div class="bRow" draggable="true" data-i="' + i + '" style="display:flex;align-items:flex-start;gap:8px;background:#fbfaf4;border:1px solid #ece9db;border-radius:10px;padding:10px;">' + handle +
@@ -4464,6 +4543,7 @@
             ((l.components && l.components.length)
               ? '<button class="bHwLogic" data-i="' + i + '" style="border:none;background:transparent;color:#3d4a55;font-size:11.5px;cursor:pointer;padding:0;font-weight:500;text-decoration:underline;">Show the ' + esc(l.sku || 'kit') + ' calculation (' + l.components.length + ' part numbers) →</button>'
               : '') +
+            '<button class="bAddNote" data-i="' + i + '" style="border:none;background:transparent;color:#3d4a55;font-size:11.5px;cursor:pointer;padding:0;font-weight:500;">+ Note under this item</button>' +
           '</div>' +
           notesPanel +
           // Flagged on the line itself, not only in the banner — the banner tells you
@@ -4593,6 +4673,23 @@
     document.querySelectorAll('.bToggleNotes').forEach(function (b) { b.addEventListener('click', function () { var l = pb.lines[+b.getAttribute('data-i')]; if (l) { l.showNotes = !l.showNotes; renderBuilder(); } }); });
     document.querySelectorAll('.bHwLogic').forEach(function (b) { b.addEventListener('click', function () { openHardwareAudit(pb.lines[+b.getAttribute('data-i')]); }); });
     document.querySelectorAll('.bDel').forEach(function (b) { b.addEventListener('click', function () { markBuilderDirty(); pb.lines.splice(+b.getAttribute('data-i'), 1); renderBuilder(); }); });
+    /* A note added from a row goes directly beneath it. Under a heading that means
+     * before the first product in the section; under a product it means attached to
+     * that product. Either way the rep never has to drag it into place. */
+    document.querySelectorAll('.bAddNote').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var i = +b.getAttribute('data-i');
+        markBuilderDirty();
+        pb.lines.splice(i + 1, 0, normalizeLine({
+          lineType: 'NOTE', kind: 'NOTE', name: '', description: '', quantity: 0, rateMinor: 0,
+        }));
+        renderBuilder();
+        // Land the caret in the new note's title so it can be typed straight away.
+        var rows = document.querySelectorAll('.bRow');
+        var next = rows[i + 1];
+        if (next) { var f = next.querySelector('input.bF'); if (f) f.focus(); }
+      });
+    });
     /* Drag reorder.
      *
      * Dragging a header moves its whole section — the header and every line under
@@ -4716,7 +4813,9 @@
           if (!p) return;
           // productId is null for a part carried only as a Sku row; the line is
           // keyed by part number, which is what pricing and the BOM read.
-          insertLineInOrder(applyItemDefaults({ ref: uid(), lineType: 'PRODUCT', kind: 'INCLUDED', productId: p.productId || null, sku: p.part, name: p.name || p.part, description: '', quantity: 1, rateMinor: 0, group: '' }));
+          var line = applyItemDefaults({ ref: uid(), lineType: 'PRODUCT', kind: 'INCLUDED', productId: p.productId || null, sku: p.part, name: p.name || p.part, description: '', quantity: 1, rateMinor: 0, group: '' });
+          insertLineInOrder(line);
+          applyTriggeredNotes(p.part, pb.lines.indexOf(line));
           markBuilderDirty();
           closeForm(); renderBuilder();
         });
@@ -4911,7 +5010,14 @@
         body += '<tr style="break-inside:avoid;break-after:avoid;"><td colspan="5" style="padding:6px 10px;font-weight:700;font-size:12px;letter-spacing:.03em;text-transform:uppercase;color:#3d4a55;background:#eef0ea;border-bottom:1px solid #d5d8d2;"><span style="display:inline-flex;align-items:baseline;gap:46px;"><span>' + esc(tc(stripOptional(l.name))) + (l.optional ? ' <span style="font-weight:400;text-transform:none;color:#8a8f85;">(Optional)</span>' : '') + '</span>' + (l.description ? '<span style="color:#20241f;">' + esc(l.description) + '</span>' : '') + '</span></td></tr>';
         return;
       }
-      if (lt === 'SUBGROUP') { inSub = true; body += '<tr style="break-inside:avoid;break-after:avoid;"><td colspan="5" style="padding:7px 8px 3px 22px;font-weight:600;font-size:11.5px;color:#3d4a55;border-bottom:1px solid #d5d8d2;">' + esc(tc(l.name)) + '</td></tr>'; return; }
+      if (lt === 'SUBGROUP') {
+        inSub = true;
+        var subNote = String(l.description || '').trim();
+        body += '<tr style="break-inside:avoid;break-after:avoid;"><td colspan="5" style="padding:7px 8px 3px 22px;font-weight:600;font-size:11.5px;color:#3d4a55;border-bottom:1px solid #d5d8d2;">' + esc(tc(l.name)) +
+          (subNote ? '<div style="font-weight:400;font-size:10.5px;color:#5c6157;margin-top:2px;line-height:1.5;">' + rt(subNote) + '</div>' : '') +
+          '</td></tr>';
+        return;
+      }
       if (lt === 'NOTE') { body += '<tr style="break-inside:avoid;"><td colspan="5" style="padding:7px 8px;background:#fbfaf4;font-size:11px;color:#5c6157;line-height:1.5;"><b style="display:block;color:#20241f;margin-bottom:2px;">' + esc(tc(l.name)) + '</b>' + rt(l.description) + '</td></tr>'; return; }
       var amt = (Number(l.quantity) || 0) * (Number(l.rateMinor) || 0);
       var indent = groupOpenSub != null ? (inSub ? 34 : 20) : 8;
@@ -5562,6 +5668,7 @@
     pb.meta.advAnswers = answers;
     pb.meta.advWarnings = priced.warnings || [];
     hoistHardwareKit(pb.lines);
+    applyAllTriggeredNotes();
     // The configurator has just produced the kit itself — record its quantities so
     // the automatic refresh does not immediately recompute what was just computed.
     hwSig = JSON.stringify(hardwareQty());
@@ -7382,7 +7489,7 @@
       '<div id="admList"><div class="muted" style="padding:24px;">Loading…</div></div>' +
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:26px;"><div class="section-title" style="margin:0;">Standard proposal notes</div>' +
         '<button class="btn" id="snNew" style="width:auto;padding:9px 15px;">+ New note</button></div>' +
-      '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;">Reusable note blocks for proposals. “Always include” notes are added to every new proposal automatically. Table notes print inside the line items; footer notes print below the signature lines. Also editable under Catalog → Proposal notes.</div>' +
+      '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;">Reusable note blocks for proposals. “Always include” notes are added to every new proposal automatically, and a note can name the parts that pull it in. Table notes print inside the line items; footer notes print below the signature lines. Also editable under Catalog → Proposal notes.</div>' +
       '<div id="snList"><div class="muted" style="padding:16px;">Loading…</div></div>' +
       '<div class="section-title" style="margin-top:26px;">Formulas</div>' +
       '<div class="muted" style="font-size:12.5px;margin:0 0 10px;">Every calculation the pricing engine runs. Frame and hardware quantities are editable coefficients; business numbers are the scalars the proposal math uses; the last tab lists what is fixed in code and why.</div>' +
@@ -7446,12 +7553,15 @@
     } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
   }
   function openStandardNoteForm(note) {
-    var n = note || { title: '', body: '', placement: 'TABLE', autoInclude: false, sortOrder: 0, active: true };
+    var n = note || { title: '', body: '', placement: 'TABLE', autoInclude: false, sortOrder: 0, active: true, triggerParts: '' };
     openModal(note ? 'Edit standard note' : 'New standard note',
       fieldRow('Title', '<input id="snTitle" style="' + IN + '" value="' + esc(n.title) + '">') +
       richTextField('snBody', 'Note text', n.body, 'Line breaks are kept. Bold and italic print on the customer proposal.') +
       fieldRow('Where it prints', '<select id="snPlace" style="' + IN + '"><option value="TABLE"' + (n.placement === 'TABLE' ? ' selected' : '') + '>Inside the line items</option><option value="FOOTER"' + (n.placement === 'FOOTER' ? ' selected' : '') + '>Below the signature lines</option></select>') +
       fieldRow('Order', '<input id="snOrder" type="number" style="' + IN + '" value="' + (Number(n.sortOrder) || 0) + '">') +
+      fieldRow('Add this note when these parts are on the proposal',
+        '<input id="snParts" style="' + IN + '" value="' + esc(n.triggerParts || '') + '" placeholder="SSUSP67, SSCW67, SSUSP72">' +
+        '<div class="muted" style="font-size:12px;margin-top:5px;line-height:1.5;">Part numbers, comma separated. The note is added once, at the end of the section the part is in, and can still be deleted from a proposal. Leave blank for a note that is always included or picked by hand.</div>') +
       '<label style="display:flex;align-items:center;gap:8px;font-size:14px;margin:4px 0;cursor:pointer;"><input type="checkbox" id="snAuto"' + (n.autoInclude ? ' checked' : '') + '> Always include on new proposals</label>' +
       '<label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;"><input type="checkbox" id="snActive"' + (n.active !== false ? ' checked' : '') + '> Available in the builder</label>',
       async function (close, showErr) {
@@ -7460,6 +7570,7 @@
           body: editHtmlToMd(document.getElementById('snBody')),
           placement: document.getElementById('snPlace').value,
           sortOrder: Number(document.getElementById('snOrder').value) || 0,
+          triggerParts: document.getElementById('snParts').value.trim(),
           autoInclude: document.getElementById('snAuto').checked,
           active: document.getElementById('snActive').checked,
         };
