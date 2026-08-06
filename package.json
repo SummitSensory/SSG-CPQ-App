@@ -23,6 +23,7 @@
     "db:migrate": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",
     "db:migrate:status": "prisma migrate status",
+    "db:baseline": "prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script > baseline.sql",
     "db:seed": "tsx --env-file=.env prisma/seed.ts",
     "db:seed:catalog": "tsx --env-file=.env prisma/seed-catalog.ts",
     "db:seed:soar": "tsx --env-file=.env prisma/seed-soar.ts",

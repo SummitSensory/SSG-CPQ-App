@@ -204,8 +204,9 @@ export function vendorAbbrev(vendor: string, stored?: string | null): string {
     .replace(/[^A-Za-z0-9 ]/g, ' ')
     .split(/\s+/)
     .filter((w) => w && !/^(the|and|of|inc|llc|co|company|corp|ltd)$/i.test(w));
-  if (!words.length) return '';
-  if (words.length === 1) return words[0].slice(0, 3).toUpperCase();
+  const first = words[0];
+  if (!first) return '';
+  if (words.length === 1) return first.slice(0, 3).toUpperCase();
   return words.map((w) => w[0]).join('').slice(0, 4).toUpperCase();
 }
 

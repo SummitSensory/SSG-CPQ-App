@@ -186,11 +186,14 @@ export async function discardDraftVersion(
     }
 
     const siblings = await tx.proposalVersion.findMany({
-      where: { proposalId: version.proposalId },
+      where: { proposalId: version.proposalId, id: { not: versionId } },
       select: { id: true, version: true },
       orderBy: { version: 'desc' },
     });
-    if (siblings.length < 2) {
+    // The highest version that will remain once this one is gone. Read after the
+    // guards above so it is only ever computed when the delete is going ahead.
+    const highest = siblings[0];
+    if (!highest) {
       throw new ConflictError('This is the only version — delete the proposal itself instead.');
     }
 
@@ -205,7 +208,6 @@ export async function discardDraftVersion(
     // ProposalStatusEvent cascades on the version's own foreign key.
     await tx.proposalVersion.delete({ where: { id: versionId } });
 
-    const highest = siblings.filter((s) => s.id !== versionId)[0];
     await tx.proposal.update({
       where: { id: version.proposalId },
       data: { currentVersion: highest.version },
