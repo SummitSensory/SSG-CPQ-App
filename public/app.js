@@ -1805,8 +1805,20 @@
     m = m || {};
     var v = function (k) { return esc(m[k] == null ? '' : m[k]); };
     var two = function (a, b) { return '<div style="display:flex;gap:8px;"><div style="flex:1;">' + a + '</div><div style="flex:1;">' + b + '</div></div>'; };
+    // Mirrors vendorAbbrev() in src/handoff/freightRfq.ts — shown as the placeholder
+    // so the field says what it will do when left blank.
+    function derivedAbbrev(name) {
+      var words = String(name || '').replace(/[^A-Za-z0-9 ]/g, ' ').split(/\s+/)
+        .filter(function (w) { return w && !/^(the|and|of|inc|llc|co|company|corp|ltd)$/i.test(w); });
+      if (!words.length) return '';
+      if (words.length === 1) return words[0].slice(0, 3).toUpperCase();
+      return words.map(function (w) { return w[0]; }).join('').slice(0, 4).toUpperCase();
+    }
     openModal(m.id ? 'Edit ' + m.name : 'New manufacturer',
       fieldRow('Manufacturer name', '<input id="mfName" style="' + IN + '" value="' + v('name') + '" required>') +
+      fieldRow('Freight RFQ code',
+        '<input id="mfRfqAbbrev" maxlength="8" style="' + IN + 'text-transform:uppercase;" value="' + v('rfqAbbrev') + '" placeholder="' + esc(derivedAbbrev(m.name) || 'SE') + '">' +
+        '<div class="muted" style="font-size:12px;margin-top:5px;line-height:1.5;">Appended to this vendor\'s freight requests so several on one project are told apart — <b>RFQ-12414494509-' + esc(derivedAbbrev(m.name) || 'SE') + '</b>, where the middle number is the monday Project ID. Leave it blank to use the initials shown.</div>') +
       '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin:14px 0 6px;">Primary point of contact</div>' +
       two(fieldRow('Name', '<input id="mfCName" style="' + IN + '" value="' + v('contactName') + '">'),
           fieldRow('Title', '<input id="mfCTitle" style="' + IN + '" value="' + v('contactTitle') + '">')) +
@@ -1895,6 +1907,7 @@
           isSteelFabricator: document.getElementById('mfSteel').checked,
           isThirdParty: document.getElementById('mfThird').checked,
           freightTbd: document.getElementById('mfFreightTbd').checked,
+          rfqAbbrev: document.getElementById('mfRfqAbbrev').value.trim().toUpperCase(),
           isActive: document.getElementById('mfActive').checked,
           notes: document.getElementById('mfNotes').value.trim()
         };
@@ -4006,6 +4019,7 @@
         '<div style="font-size:11px;color:#8a8f85;margin-top:3px;line-height:1.45;">' + r.itemCount + ' item' + (r.itemCount === 1 ? '' : 's') + (items ? ' \u2014 ' + esc(items) : '') + '</div>' +
         '<div style="display:flex;gap:6px;margin-top:6px;">' +
           '<button class="link-btn rfqOpen" data-id="' + r.id + '" style="width:auto;padding:5px 10px;font-size:12px;">' + (r.status === 'DRAFT' ? 'Edit &amp; send' : 'View') + '</button>' +
+          (r.status === 'SENT' ? '<button class="link-btn rfqResend" data-id="' + r.id + '" style="width:auto;padding:5px 10px;font-size:12px;">Send again</button>' : '') +
           (r.status === 'SENT' ? '<button class="link-btn rfqRev" data-id="' + r.id + '" style="width:auto;padding:5px 10px;font-size:12px;">Revise</button>' : '') +
         '</div></div>';
     }).join('');
@@ -4030,6 +4044,11 @@
     });
     rail.querySelectorAll('.rfqOpen').forEach(function (b) {
       b.addEventListener('click', function () { openRfqEditor(b.getAttribute('data-id')); });
+    });
+    // Sending again reuses the send dialog. The server assigns the "S2" suffix, so
+    // nothing here needs to know how the reference is built.
+    rail.querySelectorAll('.rfqResend').forEach(function (b) {
+      b.addEventListener('click', function () { openRfqSend(b.getAttribute('data-id')); });
     });
     rail.querySelectorAll('.rfqRev').forEach(function (b) {
       b.addEventListener('click', async function () {
@@ -4253,7 +4272,10 @@
     var body =
       '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:12px;">' +
         '<span class="muted" style="font-size:12.5px;">' + esc(m.vendor) + ' \u00b7 ' + esc(m.reference) + '</span>' + rfqStatusChip(m.status) + '</div>' +
-      (editable ? '' : '<div style="background:#f2f3ef;border:1px solid #e7e8e3;border-radius:10px;padding:9px 11px;font-size:12.5px;color:#5c6157;line-height:1.5;margin-bottom:12px;">This request has been sent and is locked. Use Revise on the rail to raise ' + esc(m.reference.replace(/ R\d+$/, '')) + ' R' + (m.revision + 1) + ' with these items carried over.</div>') +
+      (editable ? '' : '<div style="background:#f2f3ef;border:1px solid #e7e8e3;border-radius:10px;padding:9px 11px;font-size:12.5px;color:#5c6157;line-height:1.5;margin-bottom:12px;">' +
+        'This request has been sent, so its items are locked. <b>Send again</b> emails this same document a second time — it goes out as ' +
+        esc(m.reference.replace(/ S\d+$/, '')) + ' S' + ((m.submission || 1) + 1) + '. <b>Revise</b> raises ' +
+        esc(m.reference.replace(/ R\d+$/, '').replace(/ S\d+$/, '')) + ' R' + (m.revision + 1) + ' with these items carried over, for when the shipment itself has changed.</div>') +
       '<table style="width:100%;border-collapse:collapse;">' +
         '<thead><tr style="border-bottom:1.5px solid #20241f;">' +
           '<th style="width:28px;"></th>' +
@@ -4269,7 +4291,9 @@
 
     var foot = '<button class="link-btn" id="rfqClose" style="width:auto;padding:10px 16px;">Close</button>' +
       '<button class="link-btn" id="rfqPreview" style="width:auto;padding:10px 16px;">Preview PDF</button>' +
-      (editable ? '<button class="btn" id="rfqSend" style="width:auto;padding:10px 20px;">Send to vendor</button>' : '');
+      (editable
+        ? '<button class="btn" id="rfqSend" style="width:auto;padding:10px 20px;">Send to vendor</button>'
+        : '<button class="btn" id="rfqSend" style="width:auto;padding:10px 20px;">Send again</button>');
 
     var ov = rfqOverlay('Request for Freight', body, foot);
     ov.querySelector('#rfqClose').addEventListener('click', ov.close);

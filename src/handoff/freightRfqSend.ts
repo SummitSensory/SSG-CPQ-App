@@ -4,6 +4,7 @@ import { logger } from '../lib/logger.js';
 import { NotFoundError, ValidationError } from '../lib/errors.js';
 import { renderRfqHtml, rfqFilename } from './freightRfqDocument.js';
 import { renderPdf, pdfAvailable } from '../render/pdf.js';
+import { rfqReference } from './freightRfq.js';
 
 /**
  * Emailing a Request for Freight, on the same terms as the BOM send: the audit
@@ -122,8 +123,31 @@ export async function sendRfq(rfqId: string, input: RfqSendInput, actorId: strin
   });
   if (!rfq) throw new NotFoundError('RFQ not found');
   if (rfq.status === 'SUPERSEDED') throw new ValidationError(`${rfq.reference} has been superseded by a newer revision.`);
-  if (rfq.status === 'SENT') throw new ValidationError(`${rfq.reference} has already been sent. Start a revision to send an updated request.`);
   if (!rfq.lines.length) throw new ValidationError('Select at least one item before sending.');
+
+  /*
+   * Sending an already-sent request is allowed — a vendor mislays an email, or
+   * never answers, and the same document has to go out again. It is not a revision:
+   * the content is identical, so the lines are not reopened and `revision` does not
+   * move. What does move is `submission`, which puts an "S2" on the reference so two
+   * identical PDFs in a vendor's inbox are still tellable apart.
+   *
+   * The new reference is written BEFORE the PDF is rendered, because the reference
+   * is printed on the document and in the subject line. A send that then fails burns
+   * that submission number. That is the right trade: a burnt number is a gap in a
+   * sequence, whereas reusing it would put two different attempts behind one
+   * reference — and the whole point of the suffix is that it does not do that.
+   */
+  if (rfq.status === 'SENT') {
+    const submission = rfq.submission + 1;
+    const updated = await prisma.freightRfq.update({
+      where: { id: rfq.id },
+      data: { submission, reference: rfqReference(rfq.projectId, rfq.revision, rfq.vendorAbbrev, submission) },
+      select: { reference: true, submission: true },
+    });
+    rfq.submission = updated.submission;
+    rfq.reference = updated.reference;
+  }
 
   const to = addresses(input.to);
   const cc = addresses(input.cc);

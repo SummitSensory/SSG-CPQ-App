@@ -47,6 +47,8 @@ const MfrInput = z.object({
   isSteelFabricator: z.boolean().optional(),
   /** Parts from this vendor carry the freight-to-be-determined note on proposals. */
   freightTbd: z.boolean().optional(),
+  /** Short code on this vendor's freight RFQ references — "RFQ-12414494509-SE". */
+  rfqAbbrev: str(8),
   // Bill of Materials email defaults — pre-fill the send dialog for this vendor.
   bomEmailTo: str(300),
   bomEmailCc: str(400),

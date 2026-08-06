@@ -517,6 +517,10 @@ model Manufacturer {
   /// note on its proposal line until a freight figure is entered on that line.
   /// Southpaw and the other freight-quoted vendors are the reason this exists.
   freightTbd          Boolean           @default(false)
+  /// Short code appended to a freight RFQ reference, so several requests on one
+  /// project are told apart: "RFQ-12414494509-SE". Blank falls back to initials
+  /// derived from the vendor name, so this never has to be filled in for it to work.
+  rfqAbbrev           String?
   defaultLeadTimeDays Int?
   contactName         String?
   contactEmail        String?
@@ -1720,6 +1724,16 @@ model FreightRfq {
   /// The proposal version the lines were taken from. Kept so a stale RFQ can be
   /// recognised after the proposal moves on.
   versionId      String
+  /// Vendor short code as it was when this RFQ was raised. Frozen with the row for
+  /// the same reason projectId is: the reference the vendor is holding must not
+  /// change because someone edited the vendor record afterwards.
+  vendorAbbrev   String?
+  /// How many times this request has been emailed. A revision changes the CONTENT
+  /// and increments `revision`; a submission sends the SAME content again — the
+  /// vendor mislaid it, or never replied — and increments this. Each one carries
+  /// its own reference ("… S2") so two identical documents in a vendor's inbox are
+  /// still tellable apart.
+  submission     Int               @default(1)
   organizationId String
   /// Vendor name as it appears on Sku.manufacturer, so lines can be grouped
   /// without a join through the product tree.
@@ -1731,7 +1745,7 @@ model FreightRfq {
   /// than looked up on render: the reference on a sent document must never
   /// change, even if the board does.
   projectId      String
-  /// "RFQ-8050", then "RFQ-8050 R2" on the first revision.
+  /// "RFQ-12414494509-SE", then " R2" on a revision and " S2" on a resend.
   reference      String
   revision       Int               @default(1)
 

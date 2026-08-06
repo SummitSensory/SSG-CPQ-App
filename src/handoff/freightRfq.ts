@@ -20,9 +20,10 @@ import { DEAL_COL } from '../integrations/monday/crmMapping.js';
  *   2. **Frozen on send.** The document a vendor holds must never change under
  *      them. Editing a sent RFQ raises a revision instead, which carries the
  *      previous selection forward.
- *   3. **The reference is resolved once.** "RFQ-8050" comes from the monday
- *      Project ID at creation and is then stored. If the board changes later, the
- *      paper trail still lines up.
+ *   3. **The reference is resolved once.** "RFQ-12414494509-SE" is built from the
+ *      monday Project ID (`pulse_id_mm5kc9f8`) and the vendor's code at creation,
+ *      then stored. If the board or the vendor record changes later, the paper
+ *      trail still lines up with what the vendor is holding.
  */
 
 const s = (v: unknown): string => (v == null ? '' : String(v));
@@ -141,20 +142,22 @@ export async function listRfqVendors(versionId: string, draftLines?: ProposalLin
 }
 
 /**
- * The Project ID behind "RFQ-8050".
+ * The Project ID in the middle of "RFQ-12414494509-SE".
+ *
+ * It is monday's Project ID column, `pulse_id_mm5kc9f8` (DEAL_COL.projectId). That
+ * is an Item ID column by type, so its value IS the monday item id — 12414494509
+ * for the Remedy Speech Therapy deal. An earlier version of this function threw the
+ * value away whenever it matched the item id, on the assumption that a number that
+ * long could not be the intended reference. It is: that column is the convention,
+ * and discarding it silently fell back to the proposal number instead.
  *
  * Three sources, in the order they can be trusted:
  *
- *   1. The Project ID typed on the proposal itself. It is what prints on the
- *      customer's document, so an RFQ quoting the same number cannot disagree
- *      with the paperwork.
- *   2. The monday deal row's Project ID column.
- *   3. The proposal number, so a board that is unreachable never stops a rep
- *      raising an RFQ.
- *
- * Source 2 is discarded when it comes back equal to monday's own item id: the
- * column is an Item ID type on some boards, and "RFQ-12727069823" is not a
- * reference anyone can use.
+ *   1. The Project ID typed on the proposal itself. It prints on the customer's
+ *      document, so an RFQ quoting a different number would contradict paperwork
+ *      the customer is holding.
+ *   2. A live read of the monday deal row's Project ID column.
+ *   3. The proposal number, so an unreachable board never blocks the rep.
  */
 async function resolveProjectId(organizationId: string, metaProjectId: string, fallback: string): Promise<string> {
   const typed = s(metaProjectId).trim();
@@ -168,8 +171,7 @@ async function resolveProjectId(organizationId: string, metaProjectId: string, f
     if (!opp?.mondayItemId) return fallback;
     const item = await fetchItemById(opp.mondayItemId);
     const value = s(item?.text?.[DEAL_COL.projectId]).trim();
-    if (!value || value === String(opp.mondayItemId)) return fallback;
-    return value;
+    return value || fallback;
   } catch (err) {
     logger.warn({ err, organizationId }, 'freight rfq: could not read the monday Project ID, using the proposal number');
     return fallback;
@@ -186,9 +188,52 @@ function metaProjectIdOf(sections: unknown): string {
   return '';
 }
 
-/** "RFQ-8050" for the first, "RFQ-8050 R2" for every revision after it. */
-export function rfqReference(projectId: string, revision: number): string {
-  return revision <= 1 ? `RFQ-${projectId}` : `RFQ-${projectId} R${revision}`;
+/**
+ * Vendor short code for the RFQ reference.
+ *
+ * The code chosen on the manufacturer profile wins. Where none is set, initials are
+ * derived from the name — "Southpaw Enterprises" gives SE, "Goldberg Brothers"
+ * gives GB, a single-word vendor gives its first three letters — so every request
+ * is distinguishable the day this ships, without anyone editing 40 vendor records
+ * first. Set the field to override a derivation that reads badly.
+ */
+export function vendorAbbrev(vendor: string, stored?: string | null): string {
+  const explicit = (stored || '').trim().toUpperCase().replace(/[^A-Z0-9-]/g, '');
+  if (explicit) return explicit.slice(0, 8);
+  const words = String(vendor || '')
+    .replace(/[^A-Za-z0-9 ]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w && !/^(the|and|of|inc|llc|co|company|corp|ltd)$/i.test(w));
+  if (!words.length) return '';
+  if (words.length === 1) return words[0].slice(0, 3).toUpperCase();
+  return words.map((w) => w[0]).join('').slice(0, 4).toUpperCase();
+}
+
+/**
+ * RFQ-\<Project ID\>-\<vendor code\>\[ R\<revision\>\]\[ S\<submission\>\].
+ *
+ *   RFQ-12414494509-SE          Southpaw Enterprises, Remedy Speech Therapy
+ *   RFQ-12414494509-SE S2       the same request emailed a second time
+ *   RFQ-12414494509-SE R2       revised content, first send of that revision
+ *   RFQ-12414494509-SE R2 S3    that revision, emailed a third time
+ *
+ * R and S mean different things and both are needed. R changes when the CONTENT
+ * changes — lines added, quantities corrected — and the vendor should quote the new
+ * document instead of the old one. S changes when the SAME document goes out again
+ * because it was mislaid or never answered. Collapsing them would lose the
+ * distinction between "please requote" and "please look at this again".
+ *
+ * The vendor code sits before both, because it is the part that never changes for
+ * the life of the request. Without a code the bare "RFQ-12414494509" form is
+ * produced unchanged, so references raised before any of this existed still parse.
+ */
+export function rfqReference(
+  projectId: string, revision: number, abbrev?: string | null, submission = 1,
+): string {
+  let ref = abbrev ? `RFQ-${projectId}-${abbrev}` : `RFQ-${projectId}`;
+  if (revision > 1) ref += ` R${revision}`;
+  if (submission > 1) ref += ` S${submission}`;
+  return ref;
 }
 
 /**
@@ -252,7 +297,7 @@ export async function createRfq(input: { versionId: string; vendor: string }, ac
   const mine = lines.filter((l) => (skuVendor.get(s(l.sku)) ?? '').toLowerCase() === input.vendor.toLowerCase());
   if (!mine.length) throw new ValidationError(`No lines on this proposal are sourced from ${input.vendor}.`);
 
-  const mfr = await prisma.manufacturer.findFirst({ where: { name: input.vendor }, select: { id: true } });
+  const mfr = await prisma.manufacturer.findFirst({ where: { name: input.vendor }, select: { id: true, rfqAbbrev: true } });
   const projectId = await resolveProjectId(
     version.proposal.organizationId,
     metaProjectIdOf(version.sections),
@@ -262,6 +307,8 @@ export async function createRfq(input: { versionId: string; vendor: string }, ac
   // to be raising the RFQ.
   const contact = await contactFor(version.createdById);
   const shipTo = await shipToFor(version.proposal.organizationId);
+  // Resolved once, then frozen on the row — see vendorAbbrev above.
+  const abbrev = vendorAbbrev(input.vendor, mfr?.rfqAbbrev ?? null);
 
   const rfq = await prisma.freightRfq.create({
     data: {
@@ -271,7 +318,8 @@ export async function createRfq(input: { versionId: string; vendor: string }, ac
       vendor: input.vendor,
       manufacturerId: mfr?.id ?? null,
       projectId,
-      reference: rfqReference(projectId, 1),
+      vendorAbbrev: abbrev,
+      reference: rfqReference(projectId, 1, abbrev),
       revision: 1,
       ...shipTo,
       contactName: contact.contactName,
@@ -395,7 +443,8 @@ export async function startRfqRevision(rfqId: string, actorId: string) {
         vendor: prev.vendor,
         manufacturerId: prev.manufacturerId,
         projectId: prev.projectId,
-        reference: rfqReference(prev.projectId, revision),
+        vendorAbbrev: prev.vendorAbbrev,
+        reference: rfqReference(prev.projectId, revision, prev.vendorAbbrev),
         revision,
         notes: prev.notes,
         shipToName: prev.shipToName,
@@ -432,6 +481,8 @@ export interface RfqModel {
   id: string;
   reference: string;
   revision: number;
+  /** How many times this same document has been emailed — the "S2" in the reference. */
+  submission: number;
   status: string;
   vendor: string;
   notes: string;
@@ -482,6 +533,7 @@ export async function buildRfqModel(rfqId: string): Promise<RfqModel> {
     id: rfq.id,
     reference: rfq.reference,
     revision: rfq.revision,
+    submission: rfq.submission,
     status: rfq.status,
     vendor: rfq.vendor,
     notes: s(rfq.notes),
@@ -524,6 +576,7 @@ export async function listProposalRfqs(proposalId: string) {
     vendor: r.vendor,
     reference: r.reference,
     revision: r.revision,
+    submission: r.submission,
     status: r.status,
     requestedAt: (r.sentAt ?? r.createdAt).toISOString(),
     totalCostMinor: r.totalCostMinor,
