@@ -10,6 +10,7 @@ import {
 import { renderRfqHtml, rfqFilename } from '../handoff/freightRfqDocument.js';
 import { renderPdf, pdfAvailable } from '../render/pdf.js';
 import { rfqSendDefaults, sendRfq } from '../handoff/freightRfqSend.js';
+import { freightCoverage, releasedFreightAlerts } from '../handoff/freightCoverage.js';
 
 /**
  * Request for Freight routes.
@@ -73,6 +74,33 @@ export function registerFreightRfqRoutes(app: FastifyInstance): void {
     const { versionId } = req.params as { versionId: string };
     const { lines } = parse(DraftLinesSchema, req.body);
     return { vendors: await listRfqVendors(versionId, lines) };
+  });
+
+  /**
+   * Released proposals with freight still to request — the dashboard alert.
+   *
+   * Read-only and cheap enough to run on every dashboard load: it examines only
+   * the latest released version of each proposal and batches its lookups.
+   */
+  app.get('/proposals/freight-alerts', read, async () => ({ alerts: await releasedFreightAlerts() }));
+
+  /** Line-by-line freight state for one version, from the stored lines. */
+  app.get('/proposals/versions/:versionId/freight-coverage', read, async (req) => {
+    const { versionId } = req.params as { versionId: string };
+    return freightCoverage(versionId);
+  });
+
+  /**
+   * The same coverage, computed against the lines the builder has on screen, so a
+   * part dropped onto the proposal is flagged before anyone saves.
+   *
+   * POST rather than GET only because the line set travels in the body; it writes
+   * nothing, which is why it sits behind the read permission.
+   */
+  app.post('/proposals/versions/:versionId/freight-coverage', read, async (req) => {
+    const { versionId } = req.params as { versionId: string };
+    const { lines } = parse(DraftLinesSchema, req.body);
+    return freightCoverage(versionId, lines);
   });
 
   app.post('/proposals/versions/:versionId/rfqs', write, async (req) => {
