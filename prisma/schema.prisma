@@ -175,6 +175,13 @@ model Organization {
   taxExempt      Boolean        @default(false)
   taxExemptId    String?
   notes          String?
+  /// The window the customer expects to decide in. Two dates rather than one: a
+  /// decision "sometime in the fall" is a range, and forcing it to a single day
+  /// made reps invent a date they did not have.
+  decisionFrom   DateTime?
+  decisionTo     DateTime?
+  /// When we next intend to make contact. Read by the dashboard's follow-up count.
+  followUpDate   DateTime?
   /// Default QuickBooks payment term for this client (Settings → All lists →
   /// Terms). A proposal may override it; neither is required.
   qboSalesTermId   String?
@@ -188,9 +195,35 @@ model Organization {
   facilities     Facility[]
   opportunities  Opportunity[]
   attachments    Attachment[]
+  customerNotes  CustomerNote[]
 
   @@unique([normalizedName])
   @@index([customerType])
+}
+
+/// Internal notes about a customer, and about the proposals written for them.
+///
+/// A running log: entries are never edited or overwritten, so the account history
+/// survives whoever wrote it. The note belongs to the ORGANIZATION, not to the
+/// proposal — a proposal that is rejected, expired or deleted leaves its notes with
+/// the customer, which is the whole point of the section. `proposalId` only records
+/// which proposal the note was written from, and is deliberately not a foreign key
+/// for the same reason.
+///
+/// The author's name is cached alongside the id: attribution has to keep working
+/// after someone leaves and their user record is gone.
+model CustomerNote {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  proposalId     String?
+  authorId       String?
+  authorName     String
+  body           String
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId, createdAt])
+  @@index([proposalId])
 }
 
 model Contact {

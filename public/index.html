@@ -265,6 +265,52 @@
       .nav-item.soon:hover {
         background: #f2f3ef;
       }
+      /* --- Mock Proposal, promoted --- */
+      /* It sits in the empty space at the foot of the nav rather than in the list: it
+         is a tool a rep reaches for mid-call, not a section of the app, and in the
+         list it read as one more tab to skip past. */
+      .nav-promo {
+        margin-top: auto;
+        margin-bottom: 10px;
+        border: 1px solid #ccd5dd;
+        background: #eef2f6;
+        border-radius: 12px;
+        padding: 10px 10px 11px;
+      }
+      .nav-promo-eyebrow {
+        display: block;
+        padding: 0 3px 7px;
+        font-size: 9.5px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.07em;
+        color: #7d8894;
+      }
+      .nav-promo .nav-item {
+        background: #fff;
+        border: 1px solid #dbe2e8;
+        color: #2c353d;
+        font-weight: 600;
+        font-size: 14.5px;
+        padding: 10px 11px;
+      }
+      .nav-promo .nav-item:hover {
+        background: #2c353d;
+        border-color: #2c353d;
+        color: #fff;
+      }
+      .nav-promo .nav-item.active {
+        background: #2c353d;
+        border-color: #2c353d;
+        color: #fff;
+      }
+      .nav-promo-hint {
+        display: block;
+        padding: 7px 3px 0;
+        font-size: 11px;
+        line-height: 1.35;
+        color: #7d8894;
+      }
       .nav-tag {
         margin-left: auto;
         font-size: 9.5px;
@@ -415,6 +461,15 @@
         font-weight: 600;
         font-family: 'IBM Plex Sans', sans-serif;
         color: #3a3f37;
+        /* Every word of a section header starts capitalised. Done here rather than in
+           the strings so a header added later follows the rule without anyone
+           remembering it. */
+        text-transform: capitalize;
+      }
+      /* The muted tail of a header is a sentence, not a title: "Line Items — drag rows
+         to reorder". Capitalising it too would read as a second heading. */
+      .section-title .muted {
+        text-transform: none;
       }
       .placeholder {
         background: #fbfbf9;

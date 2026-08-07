@@ -377,7 +377,8 @@
     { id: 'crm', label: 'CRM', ready: true, roles: '*' },
     { id: 'catalog', label: 'Catalog', ready: true, roles: '*' },
     { id: 'proposals', label: 'Proposals', ready: true, roles: '*' },
-    { id: 'mock', label: 'Mock Proposal', ready: true, roles: ['SYSTEM_ADMIN', 'EXECUTIVE', 'SALES_MANAGER', 'SALES_REP', 'DESIGNER', 'ESTIMATOR', 'OPERATIONS', 'PROJECT_MANAGER'] },
+    // promoted: rendered as its own box at the foot of the nav, not as a list row.
+    { id: 'mock', label: 'Mock Proposal', ready: true, promoted: true, roles: ['SYSTEM_ADMIN', 'EXECUTIVE', 'SALES_MANAGER', 'SALES_REP', 'DESIGNER', 'ESTIMATOR', 'OPERATIONS', 'PROJECT_MANAGER'] },
     { id: 'reports', label: 'Reports', ready: true, roles: '*' },
     { id: 'orders', label: 'Orders & Bill of Materials', ready: true, roles: '*' },
     { id: 'admin', label: 'Administration', ready: true, roles: ['SYSTEM_ADMIN'] },
@@ -459,16 +460,25 @@
       '<div class="shell">' +
         '<aside class="side">' + brandHtml() +
           '<nav class="nav" id="nav">' +
-            items.map(function (n) {
+            items.filter(function (n) { return !n.promoted; }).map(function (n) {
               return '<button class="nav-item' + (n.id === 'dashboard' ? ' active' : '') + (n.ready ? '' : ' soon') + '" data-view="' + n.id + '">' +
                 '<span>' + esc(n.label) + '</span>' + (n.ready ? '' : '<span class="nav-tag">soon</span>') + '</button>';
+            }).join('') +
+            // Promoted entries sit in a box in the space the list leaves at the bottom.
+            // They stay inside <nav> so the existing click delegation still reaches them.
+            items.filter(function (n) { return n.promoted; }).map(function (n) {
+              return '<div class="nav-promo">' +
+                '<span class="nav-promo-eyebrow">Quick pricing</span>' +
+                '<button class="nav-item" data-view="' + n.id + '"><span>' + esc(n.label) + '</span></button>' +
+                '<span class="nav-promo-hint">Price a build on the spot. Nothing is saved.</span>' +
+              '</div>';
             }).join('') +
           '</nav>' +
           '<div class="side-foot"><div class="user-row"><div class="avatar">' + esc(initials) + '</div>' +
             '<div class="user-meta"><b>' + esc(user.name || user.email) + '</b><span>' + esc(roleLabel(user.role)) + '</span></div></div>' +
-            '<button class="link-btn" id="profBtn" style="margin-bottom:6px;">My profile</button>' +
-            '<button class="link-btn" id="pwdBtn" style="margin-bottom:6px;">Change password</button>' +
-            '<button class="link-btn" id="logoutBtn">Sign out</button>' +
+            '<button class="link-btn" id="profBtn" style="margin-bottom:6px;">My Profile</button>' +
+            '<button class="link-btn" id="pwdBtn" style="margin-bottom:6px;">Change Password</button>' +
+            '<button class="link-btn" id="logoutBtn">Sign Out</button>' +
             '<div style="text-align:center;font-size:10px;color:#b3b7ac;margin-top:8px;letter-spacing:.04em;">build 50 · freight alerts</div></div>' +
         '</aside>' +
         '<main class="main"><div class="topbar"><div class="eyebrow">Summit Sensory Gym Proposal Management Software</div><h2 id="viewTitle">Dashboard</h2></div>' +
@@ -655,13 +665,18 @@
     // requests, which reporting has no business knowing about.
     var freightRows = [];
     try { var rfq = await authed('/proposals/freight-alerts'); if (rfq.ok) freightRows = (await rfq.json()).alerts || []; } catch (e3) {}
+    // Customers whose follow-up date has arrived. The date is set on the proposal's
+    // notes rail but lives on the customer, so this reads the customer list rather
+    // than the proposals.
+    var followRows = [];
+    try { var rfu = await authed('/crm/follow-ups'); if (rfu.ok) followRows = (await rfu.json()).rows || []; } catch (e4) {}
     var kpis = document.getElementById('dashKpis'); if (!kpis) return;
     if (!data) { kpis.innerHTML = '<div class="card"><div class="k">Proposals</div><div class="v small">Unavailable</div><div class="muted" style="font-size:12.5px;margin-top:4px;">Could not load reporting data.</div></div>'; return; }
     var s = data.summary;
     var released = (data.pipeline.filter(function (p) { return p.status === 'RELEASED'; })[0] || { count: 0, value: 0 });
     var review = (data.pipeline.filter(function (p) { return p.status === 'INTERNAL_REVIEW'; })[0] || { count: 0, value: 0 });
     var stale = data.rows.filter(function (r) { return r.status === 'DRAFT' && r.daysOpen >= 14; });
-    var attn = data.expiredOpen.length + data.expiringSoon.length + review.count + stale.length + freightRows.length;
+    var attn = data.expiredOpen.length + data.expiringSoon.length + review.count + stale.length + freightRows.length + followRows.length;
     kpis.innerHTML =
       kpi('Open proposals', s.open.toLocaleString(), fmt0(s.openValue) + ' in flight · avg ' + s.avgDaysOpen + ' days old', '#3d4a55') +
       kpi('Out with customers', released.count.toLocaleString(), fmt0(released.value) + ' awaiting a decision') +
@@ -684,8 +699,30 @@
               '<div class="muted" style="font-size:11.5px;">' + (r.expiration ? 'expires ' + fmtDate(r.expiration) : r.daysOpen + ' days old') + '</div></div></div>';
         }).join('') + '</div></div>';
     }
+    /**
+     * Follow-ups that have come due. Customers, not proposals — the date is a promise
+     * to make contact, and it stands whether or not the quote behind it is still live.
+     */
+    function followUpGroup(rows) {
+      if (!rows.length) return '';
+      return '<div style="margin-bottom:10px;"><div style="display:flex;align-items:baseline;gap:8px;margin-bottom:5px;">' +
+          '<span style="font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#8a6d1f;">Follow-Up Due · ' + rows.length + '</span>' +
+          '<span class="muted" style="font-size:11.5px;">make contact</span></div>' +
+        '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:12px;overflow:hidden;">' +
+        rows.slice(0, 6).map(function (r, i) {
+          var win = r.decisionFrom || r.decisionTo
+            ? 'decides ' + (r.decisionFrom ? fmtDate(r.decisionFrom) : '?') + ' – ' + (r.decisionTo ? fmtDate(r.decisionTo) : '?')
+            : 'no decision window recorded';
+          return '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 14px;' + (i ? 'border-top:1px solid #f2f3ef;' : '') + '">' +
+            '<div style="min-width:0;"><b style="font-weight:600;font-size:13.5px;">' + esc(r.customer) + '</b>' +
+              '<div class="muted" style="font-size:12px;">' + esc(win) + '</div></div>' +
+            '<div style="text-align:right;white-space:nowrap;font-size:12.5px;">' + esc(fmtDate(r.followUpDate)) +
+              '<div class="muted" style="font-size:11.5px;">follow-up date</div></div></div>';
+        }).join('') + '</div></div>';
+    }
     var box = document.getElementById('dashAttention');
     var html = freightAlertGroup(freightRows) +
+      followUpGroup(followRows) +
       attnGroup('Past expiration', data.expiredOpen, '#9c3327', 're-date or mark inactive') +
       attnGroup('Expiring within 14 days', data.expiringSoon, '#8a6d1f', 'follow up') +
       attnGroup('Awaiting internal review', data.rows.filter(function (r) { return r.status === 'INTERNAL_REVIEW'; }), '#3d4a55', '') +
@@ -3751,7 +3788,7 @@
       }).map(function (nn) { return { title: nn.title, body: nn.body }; });
     }
     pb = {
-      proposalId: proposal.id, versionId: version.id, user: user, orgName: orgName, stdNotes: stdNotes,
+      proposalId: proposal.id, versionId: version.id, user: user, orgId: proposal.organizationId, orgName: orgName, stdNotes: stdNotes,
       title: proposal.title || '', number: proposal.number || '', version: version.version || 1,
       meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', billSameAsShip: !meta.billTo || meta.billTo === (meta.shipTo || orgShipTo || ''), showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, showDeposit: meta.showDeposit !== false, tbdTax: meta.tbdTax || '', tbdStructureFreight: meta.tbdStructureFreight || '', tbdMatsFreight: meta.tbdMatsFreight || '', proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, stdFreightOn: !!meta.stdFreightOn, stdFreightMinor: meta.stdFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7), footerNotes: footerNotes, advAnswers: meta.advAnswers || null, advWarnings: meta.advWarnings || [] },
       lines: lines,
@@ -4549,15 +4586,15 @@
             '<button class="btn" id="bFlexSeries" style="width:auto;padding:9px 16px;background:#3d4a55;">⚙ Start from Summit Flex</button>' +
           '</div></div>' +
         '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
-          '<button class="btn" id="bAddProd" style="width:auto;padding:9px 15px;">+ Product line</button>' +
-          '<button class="link-btn" id="bAddGroup" style="width:auto;padding:9px 15px;">+ Group section</button>' +
-          '<button class="link-btn" id="bAddSub" style="width:auto;padding:9px 15px;">+ Sub-heading</button>' +
+          '<button class="btn" id="bAddProd" style="width:auto;padding:9px 15px;">+ Product Line</button>' +
+          '<button class="link-btn" id="bAddGroup" style="width:auto;padding:9px 15px;">+ Group Section</button>' +
+          '<button class="link-btn" id="bAddSub" style="width:auto;padding:9px 15px;">+ Sub-Heading</button>' +
           // The hardware audit, reachable from the proposal itself rather than only
           // from the kit line — enabled whenever this draft has a kit line on it.
           (hardwareKitLine()
-            ? '<button class="link-btn" id="bHwTest" style="width:auto;padding:9px 15px;">Test the hardware logic →</button>'
+            ? '<button class="link-btn" id="bHwTest" style="width:auto;padding:9px 15px;">Test The Hardware Logic →</button>'
             : '') +
-          '<select id="bAddNote" style="padding:9px 12px;border:1px solid #dcded7;border-radius:9px;font-size:13.5px;background:#fff;"><option value="">+ Standard note…</option>' + (pb.stdNotes || []).map(function (nn, ni) { return '<option value="' + ni + '">' + esc(nn.title) + (nn.placement === 'FOOTER' ? ' — footer' : '') + '</option>'; }).join('') + '<option value="__custom">Custom note…</option></select>' +
+          '<select id="bAddNote" style="padding:9px 12px;border:1px solid #dcded7;border-radius:9px;font-size:13.5px;background:#fff;"><option value="">+ Standard Note…</option>' + (pb.stdNotes || []).map(function (nn, ni) { return '<option value="' + ni + '">' + esc(nn.title) + (nn.placement === 'FOOTER' ? ' — footer' : '') + '</option>'; }).join('') + '<option value="__custom">Custom Note…</option></select>' +
         '</div>' +
         '<div style="font-size:12px;color:#8a8f85;margin-bottom:6px;">Optional product groups (click to add a section heading):</div>' +
         '<div style="display:flex;gap:6px;flex-wrap:wrap;">' + STD_GROUPS.map(function (g) { return '<button class="grpChip" data-g="' + esc(g) + '" style="border:1px solid #dcded7;background:#fff;border-radius:999px;padding:6px 12px;font-size:12.5px;cursor:pointer;color:#3d4a55;">' + esc(g) + '</button>'; }).join('') + '</div>' +
@@ -4597,7 +4634,7 @@
         '</div>' +
       '</div>' +
       footerNotesCard() +
-      (isMock() ? '' : '<div id="bMarginRail" style="' + marginRailStyle() + '">' + marginCard(t) + '<div id="bRfqRail"></div></div>');
+      (isMock() ? '' : '<div id="bMarginRail" style="' + marginRailStyle() + '">' + marginCard(t) + '<div id="bRfqRail"></div><div id="bDatesRail"></div><div id="bNotesRail"></div></div>');
     wireBuilder();
   }
 
@@ -4781,6 +4818,169 @@
     if (!el) return;
     el.innerHTML = rfqCardHtml();
     wireRfqCard();
+  }
+
+  /* --- Customer dates and internal notes ----------------------------------
+     Both belong to the CUSTOMER, not to this proposal. A rejected, expired or
+     replaced proposal leaves the notes and the dates exactly where they were, which
+     is the point: the account history has to outlive the quote it was written on.
+     They save on their own, immediately, rather than waiting for Save — nothing here
+     prints, so there is no draft state to keep them in. */
+  var cnData = null;
+
+  function cnStamp(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    return d.toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+  }
+
+  async function loadCustomerNotes(force) {
+    if (!pb || isMock() || !pb.orgId) return;
+    if (!force && cnData && cnData.organizationId === pb.orgId) { renderCustomerRail(); return; }
+    if (force) cnData = null;
+    renderCustomerRail();
+    try {
+      var r = await authed('/crm/organizations/' + pb.orgId + '/notes?proposalId=' + encodeURIComponent(pb.proposalId || ''));
+      cnData = r.ok ? await r.json() : { error: 'Could not load internal notes.' };
+    } catch (e) { cnData = { error: 'Could not load internal notes.' }; }
+    renderCustomerRail();
+  }
+
+  /**
+   * The two customer dates. The decision window is a range because a customer who
+   * says "sometime after the board meets in March" has not given anyone a single day,
+   * and a single-date field only invited a made-up one.
+   */
+  function cnDatesCardHtml() {
+    var d = (cnData && cnData.dates) || {};
+    var box = 'width:100%;padding:6px 8px;border:1px solid #dcded7;border-radius:7px;font-size:13px;background:#fff;';
+    var lbl = 'font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;';
+    return '<div class="card" style="margin-top:14px;border:1px solid #e4dfd0;background:#fdfcf7;">' +
+      '<div class="section-title" style="margin:0 0 2px;">Ideal Decision Timeline</div>' +
+      '<div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:9px;">Kept On The Customer</div>' +
+      '<div style="display:flex;gap:8px;">' +
+        '<div style="flex:1;"><label style="' + lbl + '">From</label>' +
+          '<input type="date" id="cnFrom" value="' + esc(d.decisionFrom || '') + '" style="' + box + '"></div>' +
+        '<div style="flex:1;"><label style="' + lbl + '">To</label>' +
+          '<input type="date" id="cnTo" value="' + esc(d.decisionTo || '') + '" style="' + box + '"></div>' +
+      '</div>' +
+      '<div style="margin-top:12px;padding-top:11px;border-top:1px solid #ece7d8;">' +
+        '<div class="section-title" style="margin:0 0 7px;">Follow-Up Date</div>' +
+        '<input type="date" id="cnFollow" value="' + esc(d.followUpDate || '') + '" style="' + box + '">' +
+        '<div class="muted" style="font-size:11px;line-height:1.5;margin-top:6px;">Counts toward the follow-ups due on the dashboard once the date arrives.</div>' +
+      '</div>' +
+      '<div id="cnDatesMsg" style="font-size:11.5px;line-height:1.5;margin-top:8px;"></div>' +
+    '</div>';
+  }
+
+  function cnNoteHtml(n, me, admin) {
+    var mine = n.authorId && n.authorId === me;
+    return '<div style="padding:9px 0;border-bottom:1px solid #ece7d8;">' +
+      '<div style="font-size:12.5px;line-height:1.55;white-space:pre-wrap;color:#20241f;">' + esc(n.body) + '</div>' +
+      '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-top:4px;">' +
+        '<span style="font-size:11px;color:#8a8f85;">' + esc(n.authorName || 'Unknown') + ' · ' + esc(cnStamp(n.createdAt)) +
+          (n.proposalNumber ? ' · ' + esc(n.proposalNumber) : '') + '</span>' +
+        (mine || admin ? '<button class="cnDel" data-id="' + n.id + '" title="Remove this note" style="border:none;background:transparent;color:#9c3327;font-size:11px;cursor:pointer;padding:0;">Remove</button>' : '') +
+      '</div></div>';
+  }
+
+  function cnNotesCardHtml() {
+    var head = '<div class="card" style="margin-top:14px;border:1px solid #e4dfd0;background:#fdfcf7;">' +
+      '<div class="section-title" style="margin:0 0 2px;">Internal Notes</div>' +
+      '<div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:9px;">Internal Only — Not Printed</div>';
+    if (!cnData) return head + '<div class="muted" style="font-size:12px;">Loading…</div></div>';
+    if (cnData.error) return head + '<div style="font-size:12px;color:#9c3327;line-height:1.5;">' + esc(cnData.error) + '</div></div>';
+
+    var me = (pb.user && pb.user.id) || '';
+    var admin = pb.user && pb.user.role === 'SYSTEM_ADMIN';
+    var sub = 'font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;margin:12px 0 2px;';
+
+    return head +
+      '<textarea id="cnBody" rows="3" placeholder="What should the next person to open this know?" style="width:100%;border:1px solid #dcded7;border-radius:9px;padding:8px 9px;font-size:12.5px;font-family:inherit;resize:vertical;background:#fff;"></textarea>' +
+      '<label style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px;color:#5c6157;cursor:pointer;" title="Filed against the customer instead of this proposal">' +
+        '<input type="checkbox" id="cnAboutCustomer" style="width:14px;height:14px;accent-color:#3d4a55;cursor:pointer;">' +
+        '<span>About the customer, not this proposal</span></label>' +
+      '<button class="btn" id="cnAdd" style="width:auto;padding:7px 14px;margin-top:8px;font-size:13px;">Add Note</button>' +
+      '<div id="cnMsg" style="font-size:11.5px;line-height:1.5;margin-top:6px;"></div>' +
+      '<div style="' + sub + '">This Proposal</div>' +
+      (cnData.proposal.length
+        ? cnData.proposal.map(function (n) { return cnNoteHtml(n, me, admin); }).join('')
+        : '<div class="muted" style="font-size:12px;">Nothing recorded against this proposal yet.</div>') +
+      '<div style="' + sub + '">Customer</div>' +
+      (cnData.customer.length
+        ? cnData.customer.map(function (n) { return cnNoteHtml(n, me, admin); }).join('')
+        : '<div class="muted" style="font-size:12px;">Nothing recorded about this customer yet.</div>') +
+    '</div>';
+  }
+
+  function renderCustomerRail() {
+    var dates = document.getElementById('bDatesRail');
+    var notes = document.getElementById('bNotesRail');
+    if (!dates || !notes) return;
+    dates.innerHTML = cnDatesCardHtml();
+    notes.innerHTML = cnNotesCardHtml();
+    wireCustomerRail();
+  }
+
+  /** PATCHes one date. Saves as soon as the field is left — see the block comment. */
+  async function cnSaveDates(patch) {
+    var msg = document.getElementById('cnDatesMsg');
+    try {
+      var r = await authed('/crm/organizations/' + pb.orgId + '/dates', { method: 'PATCH', body: patch });
+      if (!r.ok) {
+        var m = 'Could not save.';
+        try { var j = await r.json(); if (j && j.message) m = j.message; } catch (e) {}
+        if (msg) msg.innerHTML = '<span style="color:#9c3327;">' + esc(m) + '</span>';
+        return;
+      }
+      var d = await r.json();
+      if (cnData) cnData.dates = d;
+      if (msg) msg.innerHTML = '<span style="color:#2f7d5d;">Saved.</span>';
+    } catch (e) {
+      if (msg) msg.innerHTML = '<span style="color:#9c3327;">Could not save.</span>';
+    }
+  }
+
+  function wireCustomerRail() {
+    [['cnFrom', 'decisionFrom'], ['cnTo', 'decisionTo'], ['cnFollow', 'followUpDate']].forEach(function (p) {
+      var el = document.getElementById(p[0]);
+      if (!el) return;
+      el.addEventListener('change', function () {
+        var patch = {}; patch[p[1]] = el.value || '';
+        cnSaveDates(patch);
+      });
+    });
+    var add = document.getElementById('cnAdd');
+    if (add) add.addEventListener('click', async function () {
+      var ta = document.getElementById('cnBody');
+      var msg = document.getElementById('cnMsg');
+      var body = (ta.value || '').trim();
+      if (!body) { ta.focus(); return; }
+      var aboutCustomer = document.getElementById('cnAboutCustomer').checked;
+      add.disabled = true;
+      try {
+        var r = await authed('/crm/organizations/' + pb.orgId + '/notes', {
+          method: 'POST',
+          body: { body: body, proposalId: aboutCustomer ? null : pb.proposalId },
+        });
+        if (!r.ok) throw new Error('Could not save the note.');
+        await loadCustomerNotes(true);
+      } catch (e) {
+        add.disabled = false;
+        if (msg) msg.innerHTML = '<span style="color:#9c3327;">' + esc(e.message) + '</span>';
+      }
+    });
+    document.querySelectorAll('.cnDel').forEach(function (b) {
+      b.addEventListener('click', async function () {
+        if (!confirm('Remove this note? The log cannot be edited, so this cannot be undone.')) return;
+        b.disabled = true;
+        try {
+          var r = await authed('/customer-notes/' + b.getAttribute('data-id'), { method: 'DELETE' });
+          if (!r.ok) throw new Error('Could not remove the note.');
+          await loadCustomerNotes(true);
+        } catch (e) { b.disabled = false; alert(e.message); }
+      });
+    });
   }
 
   /** The freight state of one SKU, from the coverage that came back with the rail. */
@@ -5257,6 +5457,8 @@
     }
     document.getElementById('bClose').addEventListener('click', function () { document.getElementById('bBack').click(); });
     loadRfqPanel();
+    // A mock has no customer behind it, so there is nothing to keep notes against.
+    if (!isMock()) loadCustomerNotes();
     if (!isMock()) {
       document.getElementById('bSaveTpl').addEventListener('click', saveAsTemplate);
       document.getElementById('bLoadTpl').addEventListener('click', loadTemplate);

@@ -32,6 +32,7 @@ import { registerFreightRoutes } from './routes/freight.js';
 import { registerWebhookRoutes } from './routes/webhooks.js';
 import { registerReportRoutes } from './routes/reports.js';
 import { registerStandardNoteRoutes } from './routes/standardNotes.js';
+import { registerCustomerNoteRoutes } from './routes/customerNotes.js';
 import { registerFormulaRoutes } from './routes/formulas.js';
 import { registerWebRoutes } from './routes/web.js';
 
@@ -42,7 +43,10 @@ export function buildApp(): FastifyInstance {
   // 8 MB body limit, up from Fastify's 1 MB default. The proposal send posts the
   // rendered proposal HTML for server-side PDF, and a long itemized proposal with
   // inline styles runs well past 1 MB — the default silently 413s the send.
-  const app = Fastify({ loggerInstance: logger, bodyLimit: 8 * 1024 * 1024 }) as unknown as FastifyInstance;
+  const app = Fastify({
+    loggerInstance: logger,
+    bodyLimit: 8 * 1024 * 1024,
+  }) as unknown as FastifyInstance;
   app.register(helmet, {
     contentSecurityPolicy: {
       directives: {
@@ -98,6 +102,7 @@ export function buildApp(): FastifyInstance {
   registerFreightRoutes(app);
   registerReportRoutes(app);
   registerStandardNoteRoutes(app);
+  registerCustomerNoteRoutes(app);
   registerFormulaRoutes(app);
   registerWebRoutes(app);
   return app;
