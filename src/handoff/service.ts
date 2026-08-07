@@ -2,26 +2,40 @@ import { prisma } from '../lib/prisma.js';
 import { ConflictError, NotFoundError, ValidationError } from '../lib/errors.js';
 import { recordAudit } from '../lib/audit.js';
 import {
-  buildContentSnapshot, computeIntegrityHash, depositFromSnapshot,
-  defaultRequirements, defaultTasks, procurementFromItems,
-  type AcceptedVersionLike, type PriceSnapshotLike,
+  buildContentSnapshot,
+  computeIntegrityHash,
+  depositFromSnapshot,
+  defaultRequirements,
+  defaultTasks,
+  procurementFromItems,
+  type AcceptedVersionLike,
+  type PriceSnapshotLike,
 } from './lock.js';
 import { versionTotals, metaOf } from '../proposals/analytics.js';
 import { createNewVersion } from '../proposals/service.js';
 import { loadFormulaSettings } from '../routes/formulas.js';
 import { setting } from '../proposals/formulaSettings.js';
 import type {
-  RequirementCategory, RequirementStatus, HandoffTaskStatus, HandoffStatus,
-  CustomerApprovalMethod, Role, BomShipTo,
+  RequirementCategory,
+  RequirementStatus,
+  HandoffTaskStatus,
+  HandoffStatus,
+  CustomerApprovalMethod,
+  Role,
+  BomShipTo,
 } from '@prisma/client';
 
 /** A catalog ref with nothing resolved — the parallel-array fallback. */
 const EMPTY_REF = { sku: null, vendor: null, unitCostMinor: null, unitWeightLbs: null } as const;
 
-/** Allocate the next sequential sales-order number for the current year. */async function nextOrderNumber(): Promise<string> {
+/** Allocate the next sequential sales-order number for the current year. */ async function nextOrderNumber(): Promise<string> {
   const year = new Date().getFullYear();
   const prefix = `SO-${year}-`;
-  const last = await prisma.acceptedOrder.findFirst({ where: { number: { startsWith: prefix } }, orderBy: { number: 'desc' }, select: { number: true } });
+  const last = await prisma.acceptedOrder.findFirst({
+    where: { number: { startsWith: prefix } },
+    orderBy: { number: 'desc' },
+    select: { number: true },
+  });
   const seq = last ? parseInt(last.number.slice(prefix.length), 10) + 1 : 1;
   return `${prefix}${String(seq).padStart(6, '0')}`;
 }
@@ -49,7 +63,12 @@ export interface CustomerApprovalInput {
  * as the builder and the reports (`versionTotals`), so the order's grand total can
  * never disagree with the proposal the customer signed.
  */
-export async function snapshotAcceptedContent(versionId: string, sections: unknown, items: unknown, userId: string) {
+export async function snapshotAcceptedContent(
+  versionId: string,
+  sections: unknown,
+  items: unknown,
+  userId: string,
+) {
   const t = versionTotals(items, sections);
   const meta = metaOf(sections);
   // Deposit percentage is a business number (Administration → Formulas).
@@ -72,6 +91,7 @@ export async function snapshotAcceptedContent(versionId: string, sections: unkno
         taxMinor: t.tax,
         structureFreightMinor: t.structureFreight,
         matsFreightMinor: t.matsFreight,
+        stdFreightMinor: t.stdFreight,
         cogsMinor: t.cogs,
         marginMinor: t.margin,
         weightLbs: t.weight,
@@ -94,24 +114,49 @@ export async function snapshotAcceptedContent(versionId: string, sections: unkno
  */
 export async function resolveCatalogRefs(
   lines: Array<{ productId?: string | null; sku?: string | null; name?: string | null }>,
-): Promise<Array<{ sku: string | null; vendor: string | null; unitCostMinor: number | null; unitWeightLbs: number | null }>> {
+): Promise<
+  Array<{
+    sku: string | null;
+    vendor: string | null;
+    unitCostMinor: number | null;
+    unitWeightLbs: number | null;
+  }>
+> {
   const productIds = [...new Set(lines.map((l) => l.productId).filter((v): v is string => !!v))];
   const parts = [...new Set(lines.map((l) => l.sku).filter((v): v is string => !!v))];
   const names = [...new Set(lines.map((l) => (l.name || '').trim()).filter(Boolean))];
-  if (!productIds.length && !parts.length && !names.length) return lines.map(() => ({ sku: null, vendor: null, unitCostMinor: null, unitWeightLbs: null }));
+  if (!productIds.length && !parts.length && !names.length)
+    return lines.map(() => ({ sku: null, vendor: null, unitCostMinor: null, unitWeightLbs: null }));
 
   const [products, skus] = await Promise.all([
     prisma.product.findMany({
       where: { OR: [{ id: { in: productIds } }, { sku: { in: parts } }, { name: { in: names } }] },
-      select: { id: true, sku: true, name: true, weightOz: true, sourcing: { select: { isPrimary: true, manufacturer: { select: { name: true } } } } },
+      select: {
+        id: true,
+        sku: true,
+        name: true,
+        weightOz: true,
+        sourcing: { select: { isPrimary: true, manufacturer: { select: { name: true } } } },
+      },
     }),
     prisma.sku.findMany({
       where: { OR: [{ part: { in: parts } }, { description: { in: names } }] },
-      select: { part: true, description: true, manufacturer: true, unitCostMinor: true, weightLbs: true },
+      select: {
+        part: true,
+        description: true,
+        manufacturer: true,
+        unitCostMinor: true,
+        weightLbs: true,
+      },
     }),
   ]);
 
-  type Ref = { sku: string | null; vendor: string | null; unitCostMinor: number | null; unitWeightLbs: number | null };
+  type Ref = {
+    sku: string | null;
+    vendor: string | null;
+    unitCostMinor: number | null;
+    unitWeightLbs: number | null;
+  };
   const vendorOf = (p: (typeof products)[number]): string | null => {
     const s = p.sourcing.find((x) => x.isPrimary) ?? p.sourcing[0];
     return s?.manufacturer?.name ?? null;
@@ -121,7 +166,9 @@ export async function resolveCatalogRefs(
   const byName = new Map<string, Ref>();
   for (const p of products) {
     const ref: Ref = {
-      sku: p.sku ?? null, vendor: vendorOf(p), unitCostMinor: null,
+      sku: p.sku ?? null,
+      vendor: vendorOf(p),
+      unitCostMinor: null,
       // A product with no weight on record weighs zero for our purposes: the
       // catalog has 277 such items and no shipper is waiting on them, so a blank
       // is read as 0 lb rather than "unknown" and never blocks a freight request.
@@ -135,21 +182,33 @@ export async function resolveCatalogRefs(
     // The flat SKU row is where money lives, so cost and pound weight always come
     // from here; a Product match only ever wins on vendor.
     const ref: Ref = {
-      sku: s.part, vendor: s.manufacturer ?? null,
+      sku: s.part,
+      vendor: s.manufacturer ?? null,
       unitCostMinor: s.unitCostMinor ?? null,
       unitWeightLbs: s.weightLbs == null ? null : Number(s.weightLbs),
     };
     const priorPart = byPart.get(s.part);
-    byPart.set(s.part, priorPart
-      ? { sku: priorPart.sku ?? ref.sku, vendor: priorPart.vendor ?? ref.vendor, unitCostMinor: ref.unitCostMinor, unitWeightLbs: ref.unitWeightLbs ?? priorPart.unitWeightLbs }
-      : ref);
+    byPart.set(
+      s.part,
+      priorPart
+        ? {
+            sku: priorPart.sku ?? ref.sku,
+            vendor: priorPart.vendor ?? ref.vendor,
+            unitCostMinor: ref.unitCostMinor,
+            unitWeightLbs: ref.unitWeightLbs ?? priorPart.unitWeightLbs,
+          }
+        : ref,
+    );
     const existing = s.description ? byName.get(s.description) : undefined;
     if (s.description) {
       if (!existing) byName.set(s.description, ref);
-      else byName.set(s.description, {
-        sku: existing.sku ?? ref.sku, vendor: existing.vendor ?? ref.vendor,
-        unitCostMinor: ref.unitCostMinor, unitWeightLbs: ref.unitWeightLbs ?? existing.unitWeightLbs,
-      });
+      else
+        byName.set(s.description, {
+          sku: existing.sku ?? ref.sku,
+          vendor: existing.vendor ?? ref.vendor,
+          unitCostMinor: ref.unitCostMinor,
+          unitWeightLbs: ref.unitWeightLbs ?? existing.unitWeightLbs,
+        });
     }
   }
 
@@ -176,35 +235,68 @@ export async function resolveCatalogRefs(
  */
 async function backfillCatalogRefs(orderId: string): Promise<void> {
   const blanks = await prisma.procurementLine.findMany({
-    where: { orderId, OR: [{ vendor: null }, { sku: null }, { unitCostMinor: null }, { unitWeightLbs: null }] },
-    select: { id: true, productId: true, sku: true, name: true, vendor: true, unitCostMinor: true, unitWeightLbs: true },
+    where: {
+      orderId,
+      OR: [{ vendor: null }, { sku: null }, { unitCostMinor: null }, { unitWeightLbs: null }],
+    },
+    select: {
+      id: true,
+      productId: true,
+      sku: true,
+      name: true,
+      vendor: true,
+      unitCostMinor: true,
+      unitWeightLbs: true,
+    },
   });
   if (!blanks.length) return;
   const refs = await resolveCatalogRefs(blanks);
   await Promise.all(
-    blanks.map((l, i) => {
-      // refs is built parallel to blanks, so this always resolves; the fallback is
-      // only here to satisfy noUncheckedIndexedAccess.
-      const ref = refs[i] ?? EMPTY_REF;
-      const data: { sku?: string; vendor?: string; unitCostMinor?: number; unitWeightLbs?: number } = {};
-      if (!l.sku && ref.sku) data.sku = ref.sku;
-      if (!l.vendor && ref.vendor) data.vendor = ref.vendor;
-      if (l.unitCostMinor == null && ref.unitCostMinor != null) data.unitCostMinor = ref.unitCostMinor;
-      if (l.unitWeightLbs == null && ref.unitWeightLbs != null) data.unitWeightLbs = ref.unitWeightLbs;
-      return Object.keys(data).length ? prisma.procurementLine.update({ where: { id: l.id }, data }) : null;
-    }).filter(Boolean) as Promise<unknown>[],
+    blanks
+      .map((l, i) => {
+        // refs is built parallel to blanks, so this always resolves; the fallback is
+        // only here to satisfy noUncheckedIndexedAccess.
+        const ref = refs[i] ?? EMPTY_REF;
+        const data: {
+          sku?: string;
+          vendor?: string;
+          unitCostMinor?: number;
+          unitWeightLbs?: number;
+        } = {};
+        if (!l.sku && ref.sku) data.sku = ref.sku;
+        if (!l.vendor && ref.vendor) data.vendor = ref.vendor;
+        if (l.unitCostMinor == null && ref.unitCostMinor != null)
+          data.unitCostMinor = ref.unitCostMinor;
+        if (l.unitWeightLbs == null && ref.unitWeightLbs != null)
+          data.unitWeightLbs = ref.unitWeightLbs;
+        return Object.keys(data).length
+          ? prisma.procurementLine.update({ where: { id: l.id }, data })
+          : null;
+      })
+      .filter(Boolean) as Promise<unknown>[],
   );
 }
 
-export async function createAcceptedOrder(versionId: string, approval: CustomerApprovalInput, userId: string) {
-  if (!approval?.approverName?.trim()) throw new ValidationError('Customer approver name is required');
+export async function createAcceptedOrder(
+  versionId: string,
+  approval: CustomerApprovalInput,
+  userId: string,
+) {
+  if (!approval?.approverName?.trim())
+    throw new ValidationError('Customer approver name is required');
 
-  const existing = await prisma.acceptedOrder.findUnique({ where: { proposalVersionId: versionId } });
+  const existing = await prisma.acceptedOrder.findUnique({
+    where: { proposalVersionId: versionId },
+  });
   if (existing) return existing;
 
-  const version = await prisma.proposalVersion.findUnique({ where: { id: versionId }, include: { proposal: true } });
+  const version = await prisma.proposalVersion.findUnique({
+    where: { id: versionId },
+    include: { proposal: true },
+  });
   if (!version) throw new NotFoundError('Proposal version not found');
-  if (version.status !== 'ACCEPTED') throw new ConflictError('Only an ACCEPTED proposal version can be locked into an order');
+  if (version.status !== 'ACCEPTED')
+    throw new ConflictError('Only an ACCEPTED proposal version can be locked into an order');
 
   // Proposals built in the builder carry their priced content on the version
   // itself rather than through the pricing engine, so an accepted version often
@@ -215,11 +307,28 @@ export async function createAcceptedOrder(versionId: string, approval: CustomerA
     : await snapshotAcceptedContent(version.id, version.sections, version.items, userId);
   if (!snap) throw new NotFoundError('Price snapshot not found');
   if (!version.priceSnapshotId) {
-    await prisma.proposalVersion.update({ where: { id: version.id }, data: { priceSnapshotId: snap.id } });
+    await prisma.proposalVersion.update({
+      where: { id: version.id },
+      data: { priceSnapshotId: snap.id },
+    });
   }
 
-  const vLike: AcceptedVersionLike = { id: version.id, version: version.version, proposalId: version.proposalId, sections: version.sections, items: version.items, priceSnapshotId: snap.id, status: version.status, frozen: version.frozen };
-  const sLike: PriceSnapshotLike = { id: snap.id, currency: snap.currency, grandTotal: snap.grandTotal, breakdown: snap.breakdown };
+  const vLike: AcceptedVersionLike = {
+    id: version.id,
+    version: version.version,
+    proposalId: version.proposalId,
+    sections: version.sections,
+    items: version.items,
+    priceSnapshotId: snap.id,
+    status: version.status,
+    frozen: version.frozen,
+  };
+  const sLike: PriceSnapshotLike = {
+    id: snap.id,
+    currency: snap.currency,
+    grandTotal: snap.grandTotal,
+    breakdown: snap.breakdown,
+  };
   const contentSnapshot = buildContentSnapshot(vLike, sLike);
   const integrityHash = computeIntegrityHash(contentSnapshot);
   const depositDue = depositFromSnapshot(sLike);
@@ -246,26 +355,71 @@ export async function createAcceptedOrder(versionId: string, approval: CustomerA
         acceptedById: userId,
         customerApproval: {
           create: {
-            method: approval.method, approverName: approval.approverName,
-            approverTitle: approval.approverTitle ?? null, approverEmail: approval.approverEmail ?? null,
-            poNumber: approval.poNumber ?? null, documentRef: approval.documentRef ?? null,
-            ipAddress: approval.ipAddress ?? null, approvedAt: approval.approvedAt, notes: approval.notes ?? null,
+            method: approval.method,
+            approverName: approval.approverName,
+            approverTitle: approval.approverTitle ?? null,
+            approverEmail: approval.approverEmail ?? null,
+            poNumber: approval.poNumber ?? null,
+            documentRef: approval.documentRef ?? null,
+            ipAddress: approval.ipAddress ?? null,
+            approvedAt: approval.approvedAt,
+            notes: approval.notes ?? null,
             recordedById: userId,
           },
         },
-        requirements: { create: defaultRequirements().map((r) => ({ category: r.category as RequirementCategory, title: r.title, createdById: userId })) },
+        requirements: {
+          create: defaultRequirements().map((r) => ({
+            category: r.category as RequirementCategory,
+            title: r.title,
+            createdById: userId,
+          })),
+        },
         // A kit component carries its own cost and weight from the breakdown, because
         // a fastener is often not in the SKU master at all and would otherwise land on
         // the BOM at $0.00 and 0 lb.
-        procurement: { create: procurement.map((p, i) => { const ref = refs[i] ?? EMPTY_REF; return { productId: p.productId, sku: ref.sku ?? p.sku, name: p.name, quantity: p.quantity, vendor: ref.vendor, unitCostMinor: ref.unitCostMinor ?? p.unitCostMinor ?? null, unitWeightLbs: ref.unitWeightLbs ?? p.unitWeightLbs ?? null, isHardwareComponent: !!p.isHardwareComponent, kitSku: p.kitSku ?? null }; }) },
-        tasks: { create: defaultTasks(depositDue > 0n).map((t) => ({ title: t.title, assigneeRole: (t.assigneeRole as Role) ?? null, category: (t.category as RequirementCategory) ?? null, createdById: userId })) },
-        events: { create: { action: 'order.locked', actorId: userId, detail: { number, acceptedVersion: version.version, integrityHash } as object } },
+        procurement: {
+          create: procurement.map((p, i) => {
+            const ref = refs[i] ?? EMPTY_REF;
+            return {
+              productId: p.productId,
+              sku: ref.sku ?? p.sku,
+              name: p.name,
+              quantity: p.quantity,
+              vendor: ref.vendor,
+              unitCostMinor: ref.unitCostMinor ?? p.unitCostMinor ?? null,
+              unitWeightLbs: ref.unitWeightLbs ?? p.unitWeightLbs ?? null,
+              isHardwareComponent: !!p.isHardwareComponent,
+              kitSku: p.kitSku ?? null,
+            };
+          }),
+        },
+        tasks: {
+          create: defaultTasks(depositDue > 0n).map((t) => ({
+            title: t.title,
+            assigneeRole: (t.assigneeRole as Role) ?? null,
+            category: (t.category as RequirementCategory) ?? null,
+            createdById: userId,
+          })),
+        },
+        events: {
+          create: {
+            action: 'order.locked',
+            actorId: userId,
+            detail: { number, acceptedVersion: version.version, integrityHash } as object,
+          },
+        },
       },
     });
     return o;
   });
 
-  await recordAudit({ actorId: userId, action: 'order.lock', entity: 'AcceptedOrder', entityId: order.id, details: { number, proposalVersionId: version.id, integrityHash } });
+  await recordAudit({
+    actorId: userId,
+    action: 'order.lock',
+    entity: 'AcceptedOrder',
+    entityId: order.id,
+    details: { number, proposalVersionId: version.id, integrityHash },
+  });
   return order;
 }
 
@@ -296,7 +450,10 @@ export async function unlockOrder(
   const order = await prisma.acceptedOrder.findUnique({ where: { id: orderId } });
   if (!order) throw new NotFoundError('Order not found');
   if (order.status === 'CANCELLED') throw new ConflictError('This order has already been unlocked');
-  if (order.status === 'COMPLETE') throw new ConflictError('A completed order cannot be unlocked — raise a new proposal for the change');
+  if (order.status === 'COMPLETE')
+    throw new ConflictError(
+      'A completed order cannot be unlocked — raise a new proposal for the change',
+    );
 
   // A financial document already exists in QuickBooks: that has to be voided
   // there first, or the books and the order would disagree.
@@ -306,31 +463,54 @@ export async function unlockOrder(
   });
   if (live) {
     const doc = live.qboDocNumber || live.qboId || 'created';
-    throw new ConflictError(`A QuickBooks ${live.type.toLowerCase().replace(/_/g, ' ')} (${doc}) exists for this order. Void it in QuickBooks before unlocking.`);
+    throw new ConflictError(
+      `A QuickBooks ${live.type.toLowerCase().replace(/_/g, ' ')} (${doc}) exists for this order. Void it in QuickBooks before unlocking.`,
+    );
   }
 
   await prisma.$transaction(async (tx) => {
     await tx.acceptedOrder.update({ where: { id: orderId }, data: { status: 'CANCELLED' } });
     await tx.orderEvent.create({
-      data: { orderId, action: 'order.unlocked', actorId: userId, detail: { reason, previousStatus: order.status } as object },
+      data: {
+        orderId,
+        action: 'order.unlocked',
+        actorId: userId,
+        detail: { reason, previousStatus: order.status } as object,
+      },
     });
   });
   await recordAudit({
-    actorId: userId, action: 'order.unlock', entity: 'AcceptedOrder', entityId: orderId,
+    actorId: userId,
+    action: 'order.unlock',
+    entity: 'AcceptedOrder',
+    entityId: orderId,
     details: { number: order.number, reason, proposalVersionId: order.proposalVersionId },
   });
 
   // A new editable version is the point of unlocking; skip it only when the caller
   // just wants the order cancelled.
-  const revision = opts.createRevision === false ? null : await createNewVersion(order.proposalId, userId);
-  return { orderId, number: order.number, status: 'CANCELLED' as const, proposalId: order.proposalId, revision };
+  const revision =
+    opts.createRevision === false ? null : await createNewVersion(order.proposalId, userId);
+  return {
+    orderId,
+    number: order.number,
+    status: 'CANCELLED' as const,
+    proposalId: order.proposalId,
+    revision,
+  };
 }
 
 export async function getOrder(id: string) {
   await backfillCatalogRefs(id);
   const order = await prisma.acceptedOrder.findUnique({
     where: { id },
-    include: { customerApproval: true, requirements: true, procurement: true, tasks: true, events: { orderBy: { createdAt: 'asc' } } },
+    include: {
+      customerApproval: true,
+      requirements: true,
+      procurement: true,
+      tasks: true,
+      events: { orderBy: { createdAt: 'asc' } },
+    },
   });
   if (!order) throw new NotFoundError('Order not found');
 
@@ -338,13 +518,18 @@ export async function getOrder(id: string) {
   // order page shows status, person and date in one column, and an id there would
   // be useless to the person reading it.
   const editorIds = [
-    ...new Set([
-      ...order.requirements.map((r) => r.updatedById),
-      ...order.tasks.map((t) => t.updatedById),
-    ].filter(Boolean) as string[]),
+    ...new Set(
+      [
+        ...order.requirements.map((r) => r.updatedById),
+        ...order.tasks.map((t) => t.updatedById),
+      ].filter(Boolean) as string[],
+    ),
   ];
   const editors = editorIds.length
-    ? await prisma.user.findMany({ where: { id: { in: editorIds } }, select: { id: true, name: true } })
+    ? await prisma.user.findMany({
+        where: { id: { in: editorIds } },
+        select: { id: true, name: true },
+      })
     : [];
   const nameById = new Map(editors.map((u) => [u.id, u.name]));
 
@@ -352,7 +537,10 @@ export async function getOrder(id: string) {
   // resolved here — the Bill of Materials shows it as a "Buy" link.
   const parts = [...new Set(order.procurement.map((p) => p.sku).filter(Boolean) as string[])];
   const skus = parts.length
-    ? await prisma.sku.findMany({ where: { part: { in: parts } }, select: { part: true, productUrl: true, packagingBag: true } })
+    ? await prisma.sku.findMany({
+        where: { part: { in: parts } },
+        select: { part: true, productUrl: true, packagingBag: true },
+      })
     : [];
   const urlByPart = new Map(skus.map((s) => [s.part, s.productUrl]));
   // Which packaging bag the part ships in. Also a SKU fact, not a line fact.
@@ -373,8 +561,14 @@ export async function getOrder(id: string) {
       productUrl: (p.sku && urlByPart.get(p.sku)) || null,
       packagingBag: (p.sku && bagByPart.get(p.sku)) || null,
     })),
-    requirements: order.requirements.map((r) => ({ ...r, updatedByName: r.updatedById ? nameById.get(r.updatedById) ?? null : null })),
-    tasks: order.tasks.map((t) => ({ ...t, updatedByName: t.updatedById ? nameById.get(t.updatedById) ?? null : null })),
+    requirements: order.requirements.map((r) => ({
+      ...r,
+      updatedByName: r.updatedById ? (nameById.get(r.updatedById) ?? null) : null,
+    })),
+    tasks: order.tasks.map((t) => ({
+      ...t,
+      updatedByName: t.updatedById ? (nameById.get(t.updatedById) ?? null) : null,
+    })),
   };
 }
 
@@ -385,8 +579,12 @@ export async function getOrder(id: string) {
  */
 export async function listOrders(filter: { status?: HandoffStatus; organizationId?: string } = {}) {
   const rows = await prisma.acceptedOrder.findMany({
-    where: { ...(filter.status ? { status: filter.status } : {}), ...(filter.organizationId ? { organizationId: filter.organizationId } : {}) },
-    orderBy: { createdAt: 'desc' }, take: 200,
+    where: {
+      ...(filter.status ? { status: filter.status } : {}),
+      ...(filter.organizationId ? { organizationId: filter.organizationId } : {}),
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 200,
     include: {
       customerApproval: true,
       tasks: { select: { status: true } },
@@ -398,8 +596,14 @@ export async function listOrders(filter: { status?: HandoffStatus; organizationI
   const orgIds = [...new Set(rows.map((r) => r.organizationId))];
   const proposalIds = [...new Set(rows.map((r) => r.proposalId))];
   const [orgs, proposals] = await Promise.all([
-    prisma.organization.findMany({ where: { id: { in: orgIds } }, select: { id: true, name: true } }),
-    prisma.proposal.findMany({ where: { id: { in: proposalIds } }, select: { id: true, number: true, title: true } }),
+    prisma.organization.findMany({
+      where: { id: { in: orgIds } },
+      select: { id: true, name: true },
+    }),
+    prisma.proposal.findMany({
+      where: { id: { in: proposalIds } },
+      select: { id: true, number: true, title: true },
+    }),
   ]);
   const orgName = new Map(orgs.map((o) => [o.id, o.name]));
   const prop = new Map(proposals.map((p) => [p.id, p]));
@@ -418,7 +622,8 @@ export async function listOrders(filter: { status?: HandoffStatus; organizationI
       balanceDueMinor: (o.grandTotalMinor - o.depositDueMinor).toString(),
       openTasks: tasks.filter((t) => t.status !== 'DONE' && t.status !== 'CANCELLED').length,
       taskCount: tasks.length,
-      openRequirements: requirements.filter((r) => r.status !== 'COMPLETE' && r.status !== 'WAIVED').length,
+      openRequirements: requirements.filter((r) => r.status !== 'COMPLETE' && r.status !== 'WAIVED')
+        .length,
       requirementCount: requirements.length,
       procurementCount: procurement.length,
       procurementSourced: procurement.filter((l) => l.sourced).length,
@@ -426,8 +631,15 @@ export async function listOrders(filter: { status?: HandoffStatus; organizationI
   });
 }
 
-async function logEvent(orderId: string, action: string, actorId: string, detail?: Record<string, unknown>) {
-  await prisma.orderEvent.create({ data: { orderId, action, actorId, detail: (detail ?? {}) as object } });
+async function logEvent(
+  orderId: string,
+  action: string,
+  actorId: string,
+  detail?: Record<string, unknown>,
+) {
+  await prisma.orderEvent.create({
+    data: { orderId, action, actorId, detail: (detail ?? {}) as object },
+  });
 }
 
 /**
@@ -438,74 +650,214 @@ async function logEvent(orderId: string, action: string, actorId: string, detail
 export async function verifyIntegrity(orderId: string) {
   const order = await prisma.acceptedOrder.findUnique({ where: { id: orderId } });
   if (!order) throw new NotFoundError('Order not found');
-  const version = await prisma.proposalVersion.findUnique({ where: { id: order.proposalVersionId } });
-  const snap = order.priceSnapshotId ? await prisma.priceSnapshot.findUnique({ where: { id: order.priceSnapshotId } }) : null;
-  if (!version || !snap) return { ok: false, reason: 'referenced version or snapshot missing', storedHash: order.integrityHash };
+  const version = await prisma.proposalVersion.findUnique({
+    where: { id: order.proposalVersionId },
+  });
+  const snap = order.priceSnapshotId
+    ? await prisma.priceSnapshot.findUnique({ where: { id: order.priceSnapshotId } })
+    : null;
+  if (!version || !snap)
+    return {
+      ok: false,
+      reason: 'referenced version or snapshot missing',
+      storedHash: order.integrityHash,
+    };
 
-  const rebuilt = computeIntegrityHash(buildContentSnapshot(
-    { id: version.id, version: version.version, proposalId: version.proposalId, sections: version.sections, items: version.items, priceSnapshotId: version.priceSnapshotId, status: version.status, frozen: version.frozen },
-    { id: snap.id, currency: snap.currency, grandTotal: snap.grandTotal, breakdown: snap.breakdown },
-  ));
+  const rebuilt = computeIntegrityHash(
+    buildContentSnapshot(
+      {
+        id: version.id,
+        version: version.version,
+        proposalId: version.proposalId,
+        sections: version.sections,
+        items: version.items,
+        priceSnapshotId: version.priceSnapshotId,
+        status: version.status,
+        frozen: version.frozen,
+      },
+      {
+        id: snap.id,
+        currency: snap.currency,
+        grandTotal: snap.grandTotal,
+        breakdown: snap.breakdown,
+      },
+    ),
+  );
   const ok = rebuilt === order.integrityHash && snap.grandTotal === order.grandTotalMinor;
-  return { ok, storedHash: order.integrityHash, currentHash: rebuilt, totalMatches: snap.grandTotal === order.grandTotalMinor };
+  return {
+    ok,
+    storedHash: order.integrityHash,
+    currentHash: rebuilt,
+    totalMatches: snap.grandTotal === order.grandTotalMinor,
+  };
 }
 
 // ---- Handoff sub-record management (operational data is mutable; the locked financial snapshot is not) ----
 
-export async function addRequirement(orderId: string, input: { category: RequirementCategory; title: string; detail?: Record<string, unknown>; targetDate?: Date }, userId: string) {
+export async function addRequirement(
+  orderId: string,
+  input: {
+    category: RequirementCategory;
+    title: string;
+    detail?: Record<string, unknown>;
+    targetDate?: Date;
+  },
+  userId: string,
+) {
   await getOrder(orderId);
-  const r = await prisma.handoffRequirement.create({ data: { orderId, category: input.category, title: input.title, detail: (input.detail ?? {}) as object, targetDate: input.targetDate ?? null, createdById: userId } });
-  await logEvent(orderId, 'requirement.add', userId, { requirementId: r.id, category: input.category });
+  const r = await prisma.handoffRequirement.create({
+    data: {
+      orderId,
+      category: input.category,
+      title: input.title,
+      detail: (input.detail ?? {}) as object,
+      targetDate: input.targetDate ?? null,
+      createdById: userId,
+    },
+  });
+  await logEvent(orderId, 'requirement.add', userId, {
+    requirementId: r.id,
+    category: input.category,
+  });
   return r;
 }
 
-export async function updateRequirement(id: string, patch: { status?: RequirementStatus; targetDate?: Date | null; detail?: Record<string, unknown>; isException?: boolean; exceptionReason?: string }, userId: string) {
+export async function updateRequirement(
+  id: string,
+  patch: {
+    status?: RequirementStatus;
+    targetDate?: Date | null;
+    detail?: Record<string, unknown>;
+    isException?: boolean;
+    exceptionReason?: string;
+  },
+  userId: string,
+) {
   const existing = await prisma.handoffRequirement.findUnique({ where: { id } });
   if (!existing) throw new NotFoundError('Requirement not found');
-  if (patch.isException && !patch.exceptionReason?.trim()) throw new ValidationError('An exception requires a reason');
-  const r = await prisma.handoffRequirement.update({ where: { id }, data: {
-    updatedById: userId,
-    ...(patch.status ? { status: patch.status } : {}),
-    ...(patch.targetDate !== undefined ? { targetDate: patch.targetDate } : {}),
-    ...(patch.detail ? { detail: patch.detail as object } : {}),
-    ...(patch.isException !== undefined ? { isException: patch.isException, exceptionReason: patch.exceptionReason ?? null } : {}),
-  } });
+  if (patch.isException && !patch.exceptionReason?.trim())
+    throw new ValidationError('An exception requires a reason');
+  const r = await prisma.handoffRequirement.update({
+    where: { id },
+    data: {
+      updatedById: userId,
+      ...(patch.status ? { status: patch.status } : {}),
+      ...(patch.targetDate !== undefined ? { targetDate: patch.targetDate } : {}),
+      ...(patch.detail ? { detail: patch.detail as object } : {}),
+      ...(patch.isException !== undefined
+        ? { isException: patch.isException, exceptionReason: patch.exceptionReason ?? null }
+        : {}),
+    },
+  });
   await logEvent(existing.orderId, 'requirement.update', userId, { requirementId: id, ...patch });
   await recomputeStatus(existing.orderId, userId);
   return r;
 }
 
-export async function addTask(orderId: string, input: { title: string; description?: string; category?: RequirementCategory; assigneeId?: string; assigneeRole?: Role; dueDate?: Date }, userId: string) {
+export async function addTask(
+  orderId: string,
+  input: {
+    title: string;
+    description?: string;
+    category?: RequirementCategory;
+    assigneeId?: string;
+    assigneeRole?: Role;
+    dueDate?: Date;
+  },
+  userId: string,
+) {
   await getOrder(orderId);
-  const t = await prisma.handoffTask.create({ data: { orderId, title: input.title, description: input.description ?? null, category: input.category ?? null, assigneeId: input.assigneeId ?? null, assigneeRole: input.assigneeRole ?? null, dueDate: input.dueDate ?? null, createdById: userId } });
+  const t = await prisma.handoffTask.create({
+    data: {
+      orderId,
+      title: input.title,
+      description: input.description ?? null,
+      category: input.category ?? null,
+      assigneeId: input.assigneeId ?? null,
+      assigneeRole: input.assigneeRole ?? null,
+      dueDate: input.dueDate ?? null,
+      createdById: userId,
+    },
+  });
   await logEvent(orderId, 'task.add', userId, { taskId: t.id, title: input.title });
   return t;
 }
 
-export async function updateTask(id: string, patch: { status?: HandoffTaskStatus; assigneeId?: string | null; assigneeRole?: Role | null; dueDate?: Date | null; isException?: boolean; exceptionReason?: string }, userId: string) {
+export async function updateTask(
+  id: string,
+  patch: {
+    status?: HandoffTaskStatus;
+    assigneeId?: string | null;
+    assigneeRole?: Role | null;
+    dueDate?: Date | null;
+    isException?: boolean;
+    exceptionReason?: string;
+  },
+  userId: string,
+) {
   const existing = await prisma.handoffTask.findUnique({ where: { id } });
   if (!existing) throw new NotFoundError('Task not found');
-  if (patch.isException && !patch.exceptionReason?.trim()) throw new ValidationError('An exception requires a reason');
-  const t = await prisma.handoffTask.update({ where: { id }, data: {
-    updatedById: userId,
-    ...(patch.status ? { status: patch.status, ...(patch.status === 'DONE' ? { completedAt: new Date() } : {}) } : {}),
-    ...(patch.assigneeId !== undefined ? { assigneeId: patch.assigneeId } : {}),
-    ...(patch.assigneeRole !== undefined ? { assigneeRole: patch.assigneeRole } : {}),
-    ...(patch.dueDate !== undefined ? { dueDate: patch.dueDate } : {}),
-    ...(patch.isException !== undefined ? { isException: patch.isException, exceptionReason: patch.exceptionReason ?? null } : {}),
-  } });
+  if (patch.isException && !patch.exceptionReason?.trim())
+    throw new ValidationError('An exception requires a reason');
+  const t = await prisma.handoffTask.update({
+    where: { id },
+    data: {
+      updatedById: userId,
+      ...(patch.status
+        ? { status: patch.status, ...(patch.status === 'DONE' ? { completedAt: new Date() } : {}) }
+        : {}),
+      ...(patch.assigneeId !== undefined ? { assigneeId: patch.assigneeId } : {}),
+      ...(patch.assigneeRole !== undefined ? { assigneeRole: patch.assigneeRole } : {}),
+      ...(patch.dueDate !== undefined ? { dueDate: patch.dueDate } : {}),
+      ...(patch.isException !== undefined
+        ? { isException: patch.isException, exceptionReason: patch.exceptionReason ?? null }
+        : {}),
+    },
+  });
   await logEvent(existing.orderId, 'task.update', userId, { taskId: id, ...patch });
   await recomputeStatus(existing.orderId, userId);
   return t;
 }
 
-export async function upsertProcurementLine(orderId: string, input: { id?: string; productId?: string; sku?: string; name: string; quantity: number; vendor?: string; poNumber?: string; sourced?: boolean; targetDate?: Date; notes?: string; isException?: boolean; exceptionReason?: string }, userId: string) {
+export async function upsertProcurementLine(
+  orderId: string,
+  input: {
+    id?: string;
+    productId?: string;
+    sku?: string;
+    name: string;
+    quantity: number;
+    vendor?: string;
+    poNumber?: string;
+    sourced?: boolean;
+    targetDate?: Date;
+    notes?: string;
+    isException?: boolean;
+    exceptionReason?: string;
+  },
+  userId: string,
+) {
   await getOrder(orderId);
-  const data = { orderId, productId: input.productId ?? null, sku: input.sku ?? null, name: input.name, quantity: input.quantity, vendor: input.vendor ?? null, poNumber: input.poNumber ?? null, sourced: input.sourced ?? false, targetDate: input.targetDate ?? null, notes: input.notes ?? null, isException: input.isException ?? false, exceptionReason: input.exceptionReason ?? null };
+  const data = {
+    orderId,
+    productId: input.productId ?? null,
+    sku: input.sku ?? null,
+    name: input.name,
+    quantity: input.quantity,
+    vendor: input.vendor ?? null,
+    poNumber: input.poNumber ?? null,
+    sourced: input.sourced ?? false,
+    targetDate: input.targetDate ?? null,
+    notes: input.notes ?? null,
+    isException: input.isException ?? false,
+    exceptionReason: input.exceptionReason ?? null,
+  };
   const line = input.id
     ? await prisma.procurementLine.update({ where: { id: input.id }, data })
     : await prisma.procurementLine.create({ data });
-  await logEvent(orderId, input.id ? 'procurement.update' : 'procurement.add', userId, { lineId: line.id });
+  await logEvent(orderId, input.id ? 'procurement.update' : 'procurement.add', userId, {
+    lineId: line.id,
+  });
   return line;
 }
 
@@ -518,8 +870,12 @@ export async function upsertProcurementLine(orderId: string, input: { id?: strin
 export async function patchProcurementLine(
   lineId: string,
   patch: {
-    powderColor?: string | null; vendorNotes?: string | null; poNumber?: string | null;
-    sourced?: boolean; targetDate?: Date | null; unitCostMinor?: number | null;
+    powderColor?: string | null;
+    vendorNotes?: string | null;
+    poNumber?: string | null;
+    sourced?: boolean;
+    targetDate?: Date | null;
+    unitCostMinor?: number | null;
     /** Brand from the managed list; null clears it. */
     powderBrandId?: string | null;
     /** The colour code as typed for this part. */
@@ -538,13 +894,16 @@ export async function patchProcurementLine(
     select: { status: true },
   });
   if (section?.status === 'SUBMITTED') {
-    throw new ValidationError(`The ${vendor} Bill of Materials is submitted. Unlock it for changes first.`);
+    throw new ValidationError(
+      `The ${vendor} Bill of Materials is submitted. Unlock it for changes first.`,
+    );
   }
 
   // Brand + code are the source of truth; `powderColor` is the text that prints, so
   // it is kept in step whenever either half changes.
   const brandId = patch.powderBrandId !== undefined ? patch.powderBrandId : existing.powderBrandId;
-  const code = patch.powderColorCode !== undefined ? patch.powderColorCode : existing.powderColorCode;
+  const code =
+    patch.powderColorCode !== undefined ? patch.powderColorCode : existing.powderColorCode;
   const colorTouched = patch.powderBrandId !== undefined || patch.powderColorCode !== undefined;
   let printed: string | null = null;
   if (colorTouched) {
@@ -558,9 +917,13 @@ export async function patchProcurementLine(
     where: { id: lineId },
     data: {
       ...(patch.powderBrandId !== undefined ? { powderBrandId: patch.powderBrandId || null } : {}),
-      ...(patch.powderColorCode !== undefined ? { powderColorCode: (patch.powderColorCode || '').trim() || null } : {}),
+      ...(patch.powderColorCode !== undefined
+        ? { powderColorCode: (patch.powderColorCode || '').trim() || null }
+        : {}),
       ...(colorTouched ? { powderColor: printed } : {}),
-      ...(!colorTouched && patch.powderColor !== undefined ? { powderColor: patch.powderColor || null } : {}),
+      ...(!colorTouched && patch.powderColor !== undefined
+        ? { powderColor: patch.powderColor || null }
+        : {}),
       ...(patch.vendorNotes !== undefined ? { vendorNotes: patch.vendorNotes || null } : {}),
       ...(patch.poNumber !== undefined ? { poNumber: patch.poNumber || null } : {}),
       ...(patch.sourced !== undefined ? { sourced: patch.sourced } : {}),
@@ -580,13 +943,20 @@ export async function patchProcurementLine(
 export async function updateOrderBomHeader(
   orderId: string,
   patch: {
-    jobName?: string | null; bomShipTo?: BomShipTo; bomSubmittedOn?: Date | null;
-    deliveryType?: string | null; powderCoatBrand?: string | null;
-    shipmentQuote?: string | null; bomNotes?: string | null;
+    jobName?: string | null;
+    bomShipTo?: BomShipTo;
+    bomSubmittedOn?: Date | null;
+    deliveryType?: string | null;
+    powderCoatBrand?: string | null;
+    shipmentQuote?: string | null;
+    bomNotes?: string | null;
   },
   userId: string,
 ) {
-  const order = await prisma.acceptedOrder.findUnique({ where: { id: orderId }, select: { id: true } });
+  const order = await prisma.acceptedOrder.findUnique({
+    where: { id: orderId },
+    select: { id: true },
+  });
   if (!order) throw new NotFoundError('Order not found');
   const updated = await prisma.acceptedOrder.update({
     where: { id: orderId },
@@ -595,7 +965,9 @@ export async function updateOrderBomHeader(
       ...(patch.bomShipTo !== undefined ? { bomShipTo: patch.bomShipTo } : {}),
       ...(patch.bomSubmittedOn !== undefined ? { bomSubmittedOn: patch.bomSubmittedOn } : {}),
       ...(patch.deliveryType !== undefined ? { deliveryType: patch.deliveryType || null } : {}),
-      ...(patch.powderCoatBrand !== undefined ? { powderCoatBrand: patch.powderCoatBrand || null } : {}),
+      ...(patch.powderCoatBrand !== undefined
+        ? { powderCoatBrand: patch.powderCoatBrand || null }
+        : {}),
       ...(patch.shipmentQuote !== undefined ? { shipmentQuote: patch.shipmentQuote || null } : {}),
       ...(patch.bomNotes !== undefined ? { bomNotes: patch.bomNotes || null } : {}),
     },
@@ -616,22 +988,44 @@ export async function applyPowderColorToOrder(
   userId: string,
 ) {
   const [lines, steel] = await Promise.all([
-    prisma.procurementLine.findMany({ where: { orderId }, select: { id: true, vendor: true, powderColor: true } }),
+    prisma.procurementLine.findMany({
+      where: { orderId },
+      select: { id: true, vendor: true, powderColor: true },
+    }),
     prisma.manufacturer.findMany({ where: { isSteelFabricator: true }, select: { name: true } }),
   ]);
   const steelNames = new Set(steel.map((m) => m.name.toLowerCase()));
-  const target = lines.filter((l) => steelNames.has((l.vendor || '').toLowerCase()) && (opts.overwrite || !l.powderColor));
+  const target = lines.filter(
+    (l) => steelNames.has((l.vendor || '').toLowerCase()) && (opts.overwrite || !l.powderColor),
+  );
   if (target.length) {
-    await prisma.procurementLine.updateMany({ where: { id: { in: target.map((l) => l.id) } }, data: { powderColor: color || null } });
+    await prisma.procurementLine.updateMany({
+      where: { id: { in: target.map((l) => l.id) } },
+      data: { powderColor: color || null },
+    });
   }
-  await logEvent(orderId, 'bom.powder.apply', userId, { color, count: target.length, overwrite: !!opts.overwrite });
+  await logEvent(orderId, 'bom.powder.apply', userId, {
+    color,
+    count: target.length,
+    overwrite: !!opts.overwrite,
+  });
   return { updated: target.length };
 }
 
 /** Link integration outputs (QuickBooks estimate txn, monday project) to the order. */
-export async function recordIntegrationRef(orderId: string, refs: { qboEstimateTxnId?: string; mondayProjectId?: string }, userId: string) {
+export async function recordIntegrationRef(
+  orderId: string,
+  refs: { qboEstimateTxnId?: string; mondayProjectId?: string },
+  userId: string,
+) {
   await getOrder(orderId);
-  const order = await prisma.acceptedOrder.update({ where: { id: orderId }, data: { ...(refs.qboEstimateTxnId ? { qboEstimateTxnId: refs.qboEstimateTxnId } : {}), ...(refs.mondayProjectId ? { mondayProjectId: refs.mondayProjectId } : {}) } });
+  const order = await prisma.acceptedOrder.update({
+    where: { id: orderId },
+    data: {
+      ...(refs.qboEstimateTxnId ? { qboEstimateTxnId: refs.qboEstimateTxnId } : {}),
+      ...(refs.mondayProjectId ? { mondayProjectId: refs.mondayProjectId } : {}),
+    },
+  });
   await logEvent(orderId, 'integration.link', userId, refs);
   return order;
 }
@@ -647,8 +1041,10 @@ async function recomputeStatus(orderId: string, userId: string): Promise<Handoff
 
   const openTasks = tasks.filter((t) => t.status !== 'DONE' && t.status !== 'CANCELLED');
   const openReqs = reqs.filter((r) => r.status !== 'COMPLETE' && r.status !== 'WAIVED');
-  const anyBlocked = tasks.some((t) => t.status === 'BLOCKED') || reqs.some((r) => r.status === 'BLOCKED');
-  const anyProgress = tasks.some((t) => t.status !== 'TODO') || reqs.some((r) => r.status !== 'OPEN');
+  const anyBlocked =
+    tasks.some((t) => t.status === 'BLOCKED') || reqs.some((r) => r.status === 'BLOCKED');
+  const anyProgress =
+    tasks.some((t) => t.status !== 'TODO') || reqs.some((r) => r.status !== 'OPEN');
 
   let next: HandoffStatus;
   if (openTasks.length === 0 && openReqs.length === 0) next = 'COMPLETE';
@@ -666,13 +1062,28 @@ async function recomputeStatus(orderId: string, userId: string): Promise<Handoff
 /** Handoff-status report: rollups, open exceptions, deposit + integration + integrity. */
 export async function handoffStatus(orderId: string) {
   const order = await getOrder(orderId);
-  const byStatus = <T extends { status: string }>(rows: T[]) => rows.reduce<Record<string, number>>((a, r) => { a[r.status] = (a[r.status] ?? 0) + 1; return a; }, {});
+  const byStatus = <T extends { status: string }>(rows: T[]) =>
+    rows.reduce<Record<string, number>>((a, r) => {
+      a[r.status] = (a[r.status] ?? 0) + 1;
+      return a;
+    }, {});
   const integrity = await verifyIntegrity(orderId);
 
   const exceptions = [
-    ...order.requirements.filter((r) => r.isException).map((r) => ({ kind: 'requirement', id: r.id, category: r.category, reason: r.exceptionReason })),
-    ...order.tasks.filter((t) => t.isException).map((t) => ({ kind: 'task', id: t.id, title: t.title, reason: t.exceptionReason })),
-    ...order.procurement.filter((p) => p.isException).map((p) => ({ kind: 'procurement', id: p.id, name: p.name, reason: p.exceptionReason })),
+    ...order.requirements
+      .filter((r) => r.isException)
+      .map((r) => ({
+        kind: 'requirement',
+        id: r.id,
+        category: r.category,
+        reason: r.exceptionReason,
+      })),
+    ...order.tasks
+      .filter((t) => t.isException)
+      .map((t) => ({ kind: 'task', id: t.id, title: t.title, reason: t.exceptionReason })),
+    ...order.procurement
+      .filter((p) => p.isException)
+      .map((p) => ({ kind: 'procurement', id: p.id, name: p.name, reason: p.exceptionReason })),
   ];
 
   return {
@@ -685,13 +1096,26 @@ export async function handoffStatus(orderId: string) {
     priceSnapshotId: order.priceSnapshotId,
     grandTotalMinor: order.grandTotalMinor.toString(),
     deposit: { required: order.depositRequired, dueMinor: order.depositDueMinor.toString() },
-    customerApproval: order.customerApproval ? { method: order.customerApproval.method, approverName: order.customerApproval.approverName, approvedAt: order.customerApproval.approvedAt.toISOString(), poNumber: order.customerApproval.poNumber } : null,
+    customerApproval: order.customerApproval
+      ? {
+          method: order.customerApproval.method,
+          approverName: order.customerApproval.approverName,
+          approvedAt: order.customerApproval.approvedAt.toISOString(),
+          poNumber: order.customerApproval.poNumber,
+        }
+      : null,
     tasks: { total: order.tasks.length, byStatus: byStatus(order.tasks) },
     requirements: { total: order.requirements.length, byStatus: byStatus(order.requirements) },
-    procurement: { total: order.procurement.length, sourced: order.procurement.filter((p) => p.sourced).length },
+    procurement: {
+      total: order.procurement.length,
+      sourced: order.procurement.filter((p) => p.sourced).length,
+    },
     exceptions,
     exceptionCount: exceptions.length,
-    integrations: { qboEstimateTxnId: order.qboEstimateTxnId, mondayProjectId: order.mondayProjectId },
+    integrations: {
+      qboEstimateTxnId: order.qboEstimateTxnId,
+      mondayProjectId: order.mondayProjectId,
+    },
     integrity,
   };
 }
@@ -699,6 +1123,14 @@ export async function handoffStatus(orderId: string) {
 /** Full order audit timeline (order-scoped events, chronological). */
 export async function orderAudit(orderId: string) {
   await getOrder(orderId);
-  const events = await prisma.orderEvent.findMany({ where: { orderId }, orderBy: { createdAt: 'asc' } });
-  return events.map((e) => ({ action: e.action, actorId: e.actorId, detail: e.detail, at: e.createdAt.toISOString() }));
+  const events = await prisma.orderEvent.findMany({
+    where: { orderId },
+    orderBy: { createdAt: 'asc' },
+  });
+  return events.map((e) => ({
+    action: e.action,
+    actorId: e.actorId,
+    detail: e.detail,
+    at: e.createdAt.toISOString(),
+  }));
 }

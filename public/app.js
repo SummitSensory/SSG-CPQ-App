@@ -190,6 +190,12 @@
   }
   /** The amount box if it carries a figure, otherwise a numeric TBD override. */
   function metaAmount(minor, override) { return (Number(minor) || 0) || overrideMinor(override); }
+  /**
+   * Standard Freight: a manually keyed amount for shipments the two quoted freight
+   * lines do not describe. It counts — and prints — only while its box is ticked, so
+   * an amount left behind from an earlier draft cannot leak into a proposal.
+   */
+  function stdFreightOf(meta) { return (meta && meta.stdFreightOn) ? (Number(meta.stdFreightMinor) || 0) : 0; }
 
   /* --- API --- */
   function api(path, opts) {
@@ -424,6 +430,26 @@
       '</span></div>';
   }
 
+  /**
+   * Standard Freight — manual entry only. It sits in the same column as the other
+   * hand-keyed boxes and deliberately has nothing in the automated column: no desk
+   * quote feeds it. Unticked, the amount is ignored and the line does not print.
+   */
+  function stdFreightRow() {
+    var box = 'padding:5px 8px;border:1px solid #dcded7;border-radius:7px;';
+    var on = !!pb.meta.stdFreightOn;
+    return '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:4px 0;font-size:14px;">' +
+      '<label style="display:flex;align-items:center;gap:7px;cursor:pointer;" title="Tick to put a manually entered freight amount on this proposal">' +
+        '<input type="checkbox" id="mStdFreightOn"' + (on ? ' checked' : '') + ' style="width:15px;height:15px;accent-color:#3d4a55;cursor:pointer;flex:0 0 auto;">' +
+        '<span class="muted">Standard Freight $</span>' +
+      '</label>' +
+      '<span style="display:flex;align-items:center;gap:6px;">' +
+        '<input id="mStdFreight" value="' + (on ? m2d(pb.meta.stdFreightMinor || 0) : '') + '" placeholder="0.00"' + (on ? '' : ' disabled') +
+          ' title="Enter the freight amount by hand" style="width:104px;' + box + 'text-align:right;' + (on ? '' : 'background:#f4f5f1;color:#a0a49a;') + '">' +
+        '<span style="width:100px;flex:0 0 auto;" aria-hidden="true"></span>' +
+      '</span></div>';
+  }
+
   function renderShell(user) {
     currentUser = user;
     loadFxSettings();
@@ -523,6 +549,7 @@
         tbdTax: '', tbdStructureFreight: '', tbdMatsFreight: '',
         proposalDate: today, taxAmountMinor: 0, discountPct: 0,
         structureFreightMinor: 0, matsFreightMinor: 0,
+        stdFreightOn: false, stdFreightMinor: 0,
         expiration: addDays(today, 7), footerNotes: [], advAnswers: null, advWarnings: [],
       },
       lines: [],
@@ -3034,7 +3061,7 @@
     });
     var discount = Math.round(subtotal * (Number(meta.discountPct) || 0) / 100);
     var structureFreight = metaAmount(meta.structureFreightMinor != null ? meta.structureFreightMinor : meta.freightMinor, meta.tbdStructureFreight);
-    return subtotal - discount + tpFreight + metaAmount(meta.taxAmountMinor, meta.tbdTax) + structureFreight + metaAmount(meta.matsFreightMinor, meta.tbdMatsFreight);
+    return subtotal - discount + tpFreight + metaAmount(meta.taxAmountMinor, meta.tbdTax) + structureFreight + metaAmount(meta.matsFreightMinor, meta.tbdMatsFreight) + stdFreightOf(meta);
   }
 
   function statusChip(s) {
@@ -3726,7 +3753,7 @@
     pb = {
       proposalId: proposal.id, versionId: version.id, user: user, orgName: orgName, stdNotes: stdNotes,
       title: proposal.title || '', number: proposal.number || '', version: version.version || 1,
-      meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', billSameAsShip: !meta.billTo || meta.billTo === (meta.shipTo || orgShipTo || ''), showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, showDeposit: meta.showDeposit !== false, tbdTax: meta.tbdTax || '', tbdStructureFreight: meta.tbdStructureFreight || '', tbdMatsFreight: meta.tbdMatsFreight || '', proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7), footerNotes: footerNotes, advAnswers: meta.advAnswers || null, advWarnings: meta.advWarnings || [] },
+      meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', billSameAsShip: !meta.billTo || meta.billTo === (meta.shipTo || orgShipTo || ''), showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, showDeposit: meta.showDeposit !== false, tbdTax: meta.tbdTax || '', tbdStructureFreight: meta.tbdStructureFreight || '', tbdMatsFreight: meta.tbdMatsFreight || '', proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, stdFreightOn: !!meta.stdFreightOn, stdFreightMinor: meta.stdFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7), footerNotes: footerNotes, advAnswers: meta.advAnswers || null, advWarnings: meta.advWarnings || [] },
       lines: lines,
     };
     // A new proposal starts with the billing address the same as the shipping one.
@@ -4377,11 +4404,12 @@
     var tax = metaAmount(pb.meta.taxAmountMinor, pb.meta.tbdTax);
     var structureFreight = metaAmount(pb.meta.structureFreightMinor, pb.meta.tbdStructureFreight);
     var matsFreight = metaAmount(pb.meta.matsFreightMinor, pb.meta.tbdMatsFreight);
-    var total = subtotal - discount + tpFreight + tax + structureFreight + matsFreight;
+    var stdFreight = stdFreightOf(pb.meta);
+    var total = subtotal - discount + tpFreight + tax + structureFreight + matsFreight + stdFreight;
     var deposit = depositOf(total);
     var revenue = subtotal - discount + tpFreight;
     groups.forEach(function (g) { g.margin = g.subtotal - g.cogs; g.marginPct = g.subtotal ? Math.round((g.margin / g.subtotal) * 1000) / 10 : 0; });
-    return { subtotal: subtotal, discountPct: discountPct, discount: discount, tpFreight: tpFreight, tax: tax, structureFreight: structureFreight, matsFreight: matsFreight, total: total, deposit: deposit, groups: groups, weight: weight,
+    return { subtotal: subtotal, discountPct: discountPct, discount: discount, tpFreight: tpFreight, tax: tax, structureFreight: structureFreight, matsFreight: matsFreight, stdFreight: stdFreight, total: total, deposit: deposit, groups: groups, weight: weight,
       revenue: revenue, cogs: cogs, margin: revenue - cogs, marginPct: revenue ? Math.round(((revenue - cogs) / revenue) * 1000) / 10 : 0 };
   }
   // subtotal + cost per GROUP line index, for inline display in the builder
@@ -4435,7 +4463,9 @@
     var el = document.activeElement;
     var sel = el && el.classList && el.classList.contains('bF')
       ? '.bF[data-i="' + el.getAttribute('data-i') + '"][data-k="' + el.getAttribute('data-k') + '"]'
-      : null;
+      // The totals boxes are addressed by id, not by line/key. Without this branch a
+      // re-render triggered from one of them threw the caret out of the field.
+      : (el && el.id && /^m[A-Z]/.test(el.id) ? '#' + el.id : null);
     renderKeepingTab(renderBuilder, function () { return document.getElementById('view'); }, sel);
   }
 
@@ -4554,7 +4584,8 @@
         (isMock() ? '' :
           optionalAmountRow('Structure Crating &amp; Freight $', 'mStructFreight', pb.meta.structureFreightMinor, 'mStructFreightTbd', pb.meta.tbdStructureFreight) +
           optionalAmountRow('Mats &amp; Padding Freight $', 'mMatsFreight', pb.meta.matsFreightMinor, 'mMatsFreightTbd', pb.meta.tbdMatsFreight) +
-          '<div style="font-size:11px;color:#8a8f85;text-align:right;margin:-2px 0 2px;">Left box prints in place of TBD when the amount is 0</div>') +
+          '<div style="font-size:11px;color:#8a8f85;text-align:right;margin:-2px 0 2px;">Left box prints in place of TBD when the amount is 0</div>' +
+          stdFreightRow()) +
         '<div style="display:flex;justify-content:space-between;padding:8px 0 0;margin-top:6px;border-top:1px solid #e7e8e3;font-size:16px;font-weight:600;font-family:\'Newsreader\',serif;"><span>Total</span><span>' + fmtUsd(t.total) + '</span></div>' +
         (isMock() ? '<div class="muted" style="font-size:11.5px;text-align:right;margin-top:4px;line-height:1.5;">Product retail only. Crating, freight and tax are quoted on a real proposal.</div>' : '') +
         (pb.meta.showDeposit !== false ? '<div style="display:flex;justify-content:space-between;padding:6px 0 0;font-size:14px;color:#3d4a55;font-weight:600;"><span>Deposit due (' + depositPct() + '%)</span><span>' + fmtUsd(t.deposit) + '</span></div>' : '<div style="display:flex;justify-content:space-between;padding:6px 0 0;font-size:12.5px;color:#8a8f85;"><span>Deposit</span><span>Not shown on the proposal</span></div>') +
@@ -5301,11 +5332,24 @@
     var mtx = document.getElementById('mTax'); if (mtx) mtx.addEventListener('change', function () { pb.meta.taxAmountMinor = d2m(mtx.value); pb.meta.taxTouched = true; renderBuilderKeepingFocus(); });
     [['mTaxTbd', 'tbdTax'], ['mStructFreightTbd', 'tbdStructureFreight'], ['mMatsFreightTbd', 'tbdMatsFreight']].forEach(function (p) {
       var el = document.getElementById(p[0]);
-      if (el) el.addEventListener('input', function () { pb.meta[p[1]] = el.value.trim(); });
+      if (el) {
+        // A plain number typed in here IS money (see overrideMinor), so Total and
+        // Deposit have to move with it. It only updated the stored meta before, which
+        // is why the printed proposal was right and the screen was not.
+        var upd = function () { pb.meta[p[1]] = el.value.trim(); markBuilderDirty(); renderBuilderKeepingFocus(); };
+        el.addEventListener('input', upd);
+        el.addEventListener('change', upd);
+      }
     });
     var mdisc = document.getElementById('mDisc'); if (mdisc) mdisc.addEventListener('change', function () { pb.meta.discountPct = parseFloat(mdisc.value) || 0; renderBuilderKeepingFocus(); });
     var msf = document.getElementById('mStructFreight'); if (msf) msf.addEventListener('change', function () { pb.meta.structureFreightMinor = d2m(msf.value); renderBuilderKeepingFocus(); });
     var mmf = document.getElementById('mMatsFreight'); if (mmf) mmf.addEventListener('change', function () { pb.meta.matsFreightMinor = d2m(mmf.value); pb.meta.matsFreightTouched = true; renderBuilderKeepingFocus(); });
+    // Standard Freight. The amount commits on blur rather than per keystroke: the box
+    // re-renders formatted, and reformatting mid-type eats the digits.
+    var mso = document.getElementById('mStdFreightOn');
+    if (mso) mso.addEventListener('change', function () { pb.meta.stdFreightOn = mso.checked; markBuilderDirty(); renderBuilderKeepingFocus(); });
+    var msf2 = document.getElementById('mStdFreight');
+    if (msf2) msf2.addEventListener('change', function () { pb.meta.stdFreightMinor = d2m(msf2.value); markBuilderDirty(); renderBuilderKeepingFocus(); });
     var brp = document.getElementById('bRepull');
     if (brp) brp.addEventListener('click', repullCatalogFigures);
     var bfr = document.getElementById('bFreightReq'); if (bfr) bfr.addEventListener('click', requestFreight);
@@ -5571,7 +5615,7 @@
       fieldRow('Description (optional)', '<input id="tplDesc" style="' + IN + '">'),
       async function (close, showErr) {
         var name = document.getElementById('tplName').value.trim(); if (!name) return showErr('Give the template a name.');
-        var data = { title: pb.title, meta: { taxAmountMinor: pb.meta.taxAmountMinor, discountPct: pb.meta.discountPct, structureFreightMinor: pb.meta.structureFreightMinor, matsFreightMinor: pb.meta.matsFreightMinor, shipTo: '', projectId: '', expiration: '' }, lines: pb.lines.map(function (l) { return { lineType: l.lineType, kind: l.kind, productId: l.productId, sku: l.sku || '', name: l.name, description: l.description, quantity: l.quantity, rateMinor: l.rateMinor, group: l.group || '', optional: !!l.optional, delivery: l.delivery || '', returnable: l.returnable || '', addlFreight: l.addlFreight || '', freightCalc: l.freightCalc || '', tpFreightMinor: l.tpFreightMinor || 0, tpFreightLabel: l.tpFreightLabel || '' }; }) };
+        var data = { title: pb.title, meta: { taxAmountMinor: pb.meta.taxAmountMinor, discountPct: pb.meta.discountPct, structureFreightMinor: pb.meta.structureFreightMinor, matsFreightMinor: pb.meta.matsFreightMinor, stdFreightOn: !!pb.meta.stdFreightOn, stdFreightMinor: pb.meta.stdFreightMinor || 0, shipTo: '', projectId: '', expiration: '' }, lines: pb.lines.map(function (l) { return { lineType: l.lineType, kind: l.kind, productId: l.productId, sku: l.sku || '', name: l.name, description: l.description, quantity: l.quantity, rateMinor: l.rateMinor, group: l.group || '', optional: !!l.optional, delivery: l.delivery || '', returnable: l.returnable || '', addlFreight: l.addlFreight || '', freightCalc: l.freightCalc || '', tpFreightMinor: l.tpFreightMinor || 0, tpFreightLabel: l.tpFreightLabel || '' }; }) };
         var r = await authed('/proposal-templates', { method: 'POST', body: { name: name, description: document.getElementById('tplDesc').value.trim() || undefined, data: data } });
         if (!r.ok) return showErr('Could not save template (' + r.status + ').');
         close();
@@ -5619,13 +5663,14 @@
     var tax = metaAmount(meta.taxAmountMinor, meta.tbdTax);
     var structureFreight = metaAmount(meta.structureFreightMinor != null ? meta.structureFreightMinor : meta.freightMinor, meta.tbdStructureFreight);
     var matsFreight = metaAmount(meta.matsFreightMinor, meta.tbdMatsFreight);
-    var total = subtotal - discount + tpFreight + tax + structureFreight + matsFreight;
+    var stdFreight = stdFreightOf(meta);
+    var total = subtotal - discount + tpFreight + tax + structureFreight + matsFreight + stdFreight;
     return {
       title: proposal.title, number: proposal.number, version: version.version || 1,
       orgName: orgName, meta: meta, lines: lines,
       totals: {
         subtotal: subtotal, discountPct: discountPct, discount: discount, tpFreight: tpFreight,
-        tax: tax, structureFreight: structureFreight, matsFreight: matsFreight,
+        tax: tax, structureFreight: structureFreight, matsFreight: matsFreight, stdFreight: stdFreight,
         total: total, deposit: depositOf(total), weight: weight,
       },
     };
@@ -5770,6 +5815,8 @@
           '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Tax</span><span>' + cellTax + '</span></div>' +
           '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Structure Crating &amp; Freight</span><span>' + cellStructureFreight + '</span></div>' +
           '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Mats &amp; Padding Freight</span><span>' + cellMatsFreight + '</span></div>' +
+          // Standard Freight is opt-in: unticked, the customer never sees the line.
+          (m.stdFreightOn ? '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Standard Freight</span><span>' + amountCell(t.stdFreight, '') + '</span></div>' : '') +
           '<div style="display:flex;justify-content:space-between;padding:8px;margin-top:5px;border-top:2px solid #3d4a55;font-size:15px;font-weight:700;"><span>Total</span><span>' + fmtUsd(t.total) + '</span></div>' +
           (anyTbd ? '<div style="padding:2px 8px 0;font-size:10px;color:#8a8f85;text-align:right;line-height:1.5;">Total excludes items marked TBD.</div>' : '') +
           (m.showDeposit !== false ? '<div style="display:flex;justify-content:space-between;padding:6px 8px 0;font-size:13px;color:#3d4a55;font-weight:700;"><span>Deposit Due (' + depositPct() + '%)</span><span>' + fmtUsd(t.deposit) + '</span></div>' : '') +

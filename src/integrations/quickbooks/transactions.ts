@@ -210,6 +210,7 @@ async function fromProposalBuilder(
   addFee('Third-party freight', 'thirdPartyFreightMinor');
   addFee('Structure freight', 'structureFreightMinor');
   addFee('Mats & padding freight', 'matsFreightMinor');
+  addFee('Standard freight', 'stdFreightMinor');
 
   const payment = (b.payment ?? {}) as Record<string, unknown>;
   const deposit = toBig(payment.deposit ?? 0);

@@ -21,6 +21,8 @@ export interface RawMeta {
   taxAmountMinor?: number;
   structureFreightMinor?: number;
   matsFreightMinor?: number;
+  stdFreightOn?: boolean;
+  stdFreightMinor?: number;
   freightMinor?: number;
   tbdTax?: string;
   tbdStructureFreight?: string;
@@ -37,6 +39,7 @@ export interface Totals {
   tax: number;
   structureFreight: number;
   matsFreight: number;
+  stdFreight: number;
   total: number;
   cogs: number;
   revenue: number;
@@ -45,7 +48,8 @@ export interface Totals {
   weight: number;
 }
 
-const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : Number(v) || 0);
+const n = (v: unknown): number =>
+  typeof v === 'number' && Number.isFinite(v) ? v : Number(v) || 0;
 
 /**
  * The "prints instead of TBD" field takes wording, but it sits beside the amount box
@@ -59,11 +63,20 @@ const overrideMinor = (text: unknown): number => {
 };
 
 /** The amount field if it carries a figure, otherwise a numeric TBD override. */
-const metaAmount = (minor: unknown, override: unknown): number => n(minor) || overrideMinor(override);
+const metaAmount = (minor: unknown, override: unknown): number =>
+  n(minor) || overrideMinor(override);
+
+/**
+ * Standard Freight is hand-keyed and opt-in. It counts only while its box is ticked,
+ * so an amount left over from an earlier draft cannot quietly inflate a total.
+ */
+const stdFreightOf = (meta: RawMeta): number => (meta.stdFreightOn ? n(meta.stdFreightMinor) : 0);
 
 export function metaOf(sections: unknown): RawMeta {
   if (!Array.isArray(sections)) return {};
-  const meta = sections.find((s) => s && typeof s === 'object' && (s as { id?: string }).id === 'meta');
+  const meta = sections.find(
+    (s) => s && typeof s === 'object' && (s as { id?: string }).id === 'meta',
+  );
   const data = meta && typeof meta === 'object' ? (meta as { data?: unknown }).data : undefined;
   return data && typeof data === 'object' ? (data as RawMeta) : {};
 }
@@ -76,7 +89,10 @@ export function itemsOf(items: unknown): RawItem[] {
 export function versionTotals(items: unknown, sections: unknown): Totals {
   const lines = itemsOf(items);
   const meta = metaOf(sections);
-  let subtotal = 0, cogs = 0, tpFreight = 0, weight = 0;
+  let subtotal = 0,
+    cogs = 0,
+    tpFreight = 0,
+    weight = 0;
   for (const l of lines) {
     if ((l.lineType ?? 'PRODUCT') !== 'PRODUCT') continue;
     const qty = n(l.quantity);
@@ -93,12 +109,22 @@ export function versionTotals(items: unknown, sections: unknown): Totals {
     meta.tbdStructureFreight,
   );
   const matsFreight = metaAmount(meta.matsFreightMinor, meta.tbdMatsFreight);
-  const total = subtotal - discount + tpFreight + tax + structureFreight + matsFreight;
+  const stdFreight = stdFreightOf(meta);
+  const total = subtotal - discount + tpFreight + tax + structureFreight + matsFreight + stdFreight;
   const revenue = subtotal - discount + tpFreight;
   const margin = revenue - cogs;
   return {
-    subtotal, discount, tpFreight, tax, structureFreight, matsFreight, total,
-    cogs, revenue, margin,
+    subtotal,
+    discount,
+    tpFreight,
+    tax,
+    structureFreight,
+    matsFreight,
+    stdFreight,
+    total,
+    cogs,
+    revenue,
+    margin,
     marginPct: revenue ? Math.round((margin / revenue) * 1000) / 10 : 0,
     weight,
   };
@@ -163,10 +189,12 @@ export interface ReportRow {
 
 const OPEN: Status[] = ['DRAFT', 'INTERNAL_REVIEW', 'RELEASED'];
 const DAY = 86_400_000;
-const days = (a: Date, b: Date): number => Math.max(0, Math.round((b.getTime() - a.getTime()) / DAY));
+const days = (a: Date, b: Date): number =>
+  Math.max(0, Math.round((b.getTime() - a.getTime()) / DAY));
 const iso = (d: Date | null | undefined): string | null => (d ? d.toISOString() : null);
 const pct = (num: number, den: number): number => (den ? Math.round((num / den) * 1000) / 10 : 0);
-const avg = (xs: number[]): number => (xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : 0);
+const avg = (xs: number[]): number =>
+  xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : 0;
 
 export interface ReportBundle {
   generatedAt: string;
@@ -177,10 +205,39 @@ export interface ReportBundle {
   oldestOpen: ReportRow[];
   expiringSoon: ReportRow[];
   expiredOpen: ReportRow[];
-  winLossByMonth: { month: string; won: number; lost: number; expired: number; wonValue: number; lostValue: number }[];
-  byCustomer: { customer: string; count: number; value: number; won: number; wonValue: number; lost: number; winRate: number }[];
-  byPreparer: { preparedBy: string; count: number; value: number; won: number; wonValue: number; winRate: number; avgMarginPct: number }[];
-  byCustomerType: { customerType: string; count: number; value: number; won: number; wonValue: number }[];
+  winLossByMonth: {
+    month: string;
+    won: number;
+    lost: number;
+    expired: number;
+    wonValue: number;
+    lostValue: number;
+  }[];
+  byCustomer: {
+    customer: string;
+    count: number;
+    value: number;
+    won: number;
+    wonValue: number;
+    lost: number;
+    winRate: number;
+  }[];
+  byPreparer: {
+    preparedBy: string;
+    count: number;
+    value: number;
+    won: number;
+    wonValue: number;
+    winRate: number;
+    avgMarginPct: number;
+  }[];
+  byCustomerType: {
+    customerType: string;
+    count: number;
+    value: number;
+    won: number;
+    wonValue: number;
+  }[];
   products: {
     sku: string;
     name: string;
@@ -253,7 +310,9 @@ export function buildReport(
 
   const by = (s: Status): ReportRow[] => inRange.filter((r) => r.status === s);
   const value = (xs: ReportRow[]): number => xs.reduce((a, r) => a + r.total, 0);
-  const won = by('ACCEPTED'), lost = by('REJECTED'), expired = by('EXPIRED');
+  const won = by('ACCEPTED'),
+    lost = by('REJECTED'),
+    expired = by('EXPIRED');
   const released = by('RELEASED');
   const open = inRange.filter((r) => OPEN.includes(r.status));
   // A proposal only counts toward conversion once it has actually gone out.
@@ -287,7 +346,9 @@ export function buildReport(
     avgMarginPct: inRange.length
       ? Math.round((inRange.reduce((a, r) => a + r.marginPct, 0) / inRange.length) * 10) / 10
       : 0,
-    wonMarginPct: won.length ? Math.round((won.reduce((a, r) => a + r.marginPct, 0) / won.length) * 10) / 10 : 0,
+    wonMarginPct: won.length
+      ? Math.round((won.reduce((a, r) => a + r.marginPct, 0) / won.length) * 10) / 10
+      : 0,
     expiredFlagged: inRange.filter((r) => r.expired).length,
   };
 
@@ -312,48 +373,120 @@ export function buildReport(
   });
 
   const monthKey = (s: string): string => s.slice(0, 7);
-  const months = new Map<string, { month: string; won: number; lost: number; expired: number; wonValue: number; lostValue: number }>();
-  const bump = (key: string): { month: string; won: number; lost: number; expired: number; wonValue: number; lostValue: number } => {
+  const months = new Map<
+    string,
+    {
+      month: string;
+      won: number;
+      lost: number;
+      expired: number;
+      wonValue: number;
+      lostValue: number;
+    }
+  >();
+  const bump = (
+    key: string,
+  ): {
+    month: string;
+    won: number;
+    lost: number;
+    expired: number;
+    wonValue: number;
+    lostValue: number;
+  } => {
     let m = months.get(key);
-    if (!m) { m = { month: key, won: 0, lost: 0, expired: 0, wonValue: 0, lostValue: 0 }; months.set(key, m); }
+    if (!m) {
+      m = { month: key, won: 0, lost: 0, expired: 0, wonValue: 0, lostValue: 0 };
+      months.set(key, m);
+    }
     return m;
   };
-  for (const r of won) { const m = bump(monthKey(r.decidedAt ?? r.updatedAt)); m.won++; m.wonValue += r.total; }
-  for (const r of lost) { const m = bump(monthKey(r.decidedAt ?? r.updatedAt)); m.lost++; m.lostValue += r.total; }
-  for (const r of expired) { bump(monthKey(r.decidedAt ?? r.updatedAt)).expired++; }
+  for (const r of won) {
+    const m = bump(monthKey(r.decidedAt ?? r.updatedAt));
+    m.won++;
+    m.wonValue += r.total;
+  }
+  for (const r of lost) {
+    const m = bump(monthKey(r.decidedAt ?? r.updatedAt));
+    m.lost++;
+    m.lostValue += r.total;
+  }
+  for (const r of expired) {
+    bump(monthKey(r.decidedAt ?? r.updatedAt)).expired++;
+  }
 
   function group<T extends string>(keyOf: (r: ReportRow) => T) {
-    const m = new Map<T, { key: T; count: number; value: number; won: number; wonValue: number; lost: number; marginSum: number }>();
+    const m = new Map<
+      T,
+      {
+        key: T;
+        count: number;
+        value: number;
+        won: number;
+        wonValue: number;
+        lost: number;
+        marginSum: number;
+      }
+    >();
     for (const r of inRange) {
       const k = keyOf(r);
       let g = m.get(k);
-      if (!g) { g = { key: k, count: 0, value: 0, won: 0, wonValue: 0, lost: 0, marginSum: 0 }; m.set(k, g); }
-      g.count++; g.value += r.total; g.marginSum += r.marginPct;
-      if (r.status === 'ACCEPTED') { g.won++; g.wonValue += r.total; }
+      if (!g) {
+        g = { key: k, count: 0, value: 0, won: 0, wonValue: 0, lost: 0, marginSum: 0 };
+        m.set(k, g);
+      }
+      g.count++;
+      g.value += r.total;
+      g.marginSum += r.marginPct;
+      if (r.status === 'ACCEPTED') {
+        g.won++;
+        g.wonValue += r.total;
+      }
       if (r.status === 'REJECTED') g.lost++;
     }
     return [...m.values()];
   }
 
   const byCustomer = group((r) => r.customer)
-    .map((g) => ({ customer: g.key, count: g.count, value: g.value, won: g.won, wonValue: g.wonValue, lost: g.lost, winRate: pct(g.won, g.won + g.lost) }))
+    .map((g) => ({
+      customer: g.key,
+      count: g.count,
+      value: g.value,
+      won: g.won,
+      wonValue: g.wonValue,
+      lost: g.lost,
+      winRate: pct(g.won, g.won + g.lost),
+    }))
     .sort((a, b) => b.value - a.value);
 
   const byPreparer = group((r) => r.preparedBy ?? '—')
     .map((g) => ({
-      preparedBy: g.key, count: g.count, value: g.value, won: g.won, wonValue: g.wonValue,
+      preparedBy: g.key,
+      count: g.count,
+      value: g.value,
+      won: g.won,
+      wonValue: g.wonValue,
       winRate: pct(g.won, g.won + g.lost),
       avgMarginPct: g.count ? Math.round((g.marginSum / g.count) * 10) / 10 : 0,
     }))
     .sort((a, b) => b.value - a.value);
 
   const byCustomerType = group((r) => r.customerType ?? 'Unspecified')
-    .map((g) => ({ customerType: g.key, count: g.count, value: g.value, won: g.won, wonValue: g.wonValue }))
+    .map((g) => ({
+      customerType: g.key,
+      count: g.count,
+      value: g.value,
+      won: g.won,
+      wonValue: g.wonValue,
+    }))
     .sort((a, b) => b.value - a.value);
 
   // Product performance: what is actually being put in front of customers, and
   // what of that closes. Keyed by SKU when present, otherwise by line name.
-  const prod = new Map<string, ReportBundle['products'][number] & { rateSum: number; rateCount: number }>();
+  const prod = new Map<
+    string,
+    ReportBundle['products'][number] & { rateSum: number; rateCount: number }
+  >();
   const idsIn = new Set(inRange.map((r) => r.id));
   for (const p of proposals) {
     if (!idsIn.has(p.id)) continue;
@@ -366,21 +499,51 @@ export function buildReport(
       if (!key) continue;
       let e = prod.get(key);
       if (!e) {
-        e = { sku: l.sku || '—', name: l.name || key, proposals: 0, qty: 0, proposedValue: 0, wonProposals: 0, wonQty: 0, wonValue: 0, attachRate: 0, avgRate: 0, rateSum: 0, rateCount: 0 };
+        e = {
+          sku: l.sku || '—',
+          name: l.name || key,
+          proposals: 0,
+          qty: 0,
+          proposedValue: 0,
+          wonProposals: 0,
+          wonQty: 0,
+          wonValue: 0,
+          attachRate: 0,
+          avgRate: 0,
+          rateSum: 0,
+          rateCount: 0,
+        };
         prod.set(key, e);
       }
       const qty = n(l.quantity);
       const amt = qty * n(l.rateMinor);
-      if (!seen.has(key)) { e.proposals++; if (isWon) e.wonProposals++; seen.add(key); }
-      e.qty += qty; e.proposedValue += amt;
-      if (isWon) { e.wonQty += qty; e.wonValue += amt; }
-      if (n(l.rateMinor) > 0) { e.rateSum += n(l.rateMinor); e.rateCount++; }
+      if (!seen.has(key)) {
+        e.proposals++;
+        if (isWon) e.wonProposals++;
+        seen.add(key);
+      }
+      e.qty += qty;
+      e.proposedValue += amt;
+      if (isWon) {
+        e.wonQty += qty;
+        e.wonValue += amt;
+      }
+      if (n(l.rateMinor) > 0) {
+        e.rateSum += n(l.rateMinor);
+        e.rateCount++;
+      }
     }
   }
   const products = [...prod.values()]
     .map((e) => ({
-      sku: e.sku, name: e.name, proposals: e.proposals, qty: e.qty, proposedValue: e.proposedValue,
-      wonProposals: e.wonProposals, wonQty: e.wonQty, wonValue: e.wonValue,
+      sku: e.sku,
+      name: e.name,
+      proposals: e.proposals,
+      qty: e.qty,
+      proposedValue: e.proposedValue,
+      wonProposals: e.wonProposals,
+      wonQty: e.wonQty,
+      wonValue: e.wonValue,
       attachRate: pct(e.proposals, inRange.length),
       avgRate: e.rateCount ? Math.round(e.rateSum / e.rateCount) : 0,
     }))
@@ -389,7 +552,10 @@ export function buildReport(
   const soon = now.getTime() + 14 * DAY;
   return {
     generatedAt: now.toISOString(),
-    range: { from: opts.from ? opts.from.toISOString() : null, to: opts.to ? opts.to.toISOString() : null },
+    range: {
+      from: opts.from ? opts.from.toISOString() : null,
+      to: opts.to ? opts.to.toISOString() : null,
+    },
     summary,
     pipeline,
     aging,
@@ -397,7 +563,9 @@ export function buildReport(
     expiringSoon: open
       .filter((r) => r.expiration && !r.expired && new Date(r.expiration).getTime() <= soon)
       .sort((a, b) => (a.expiration ?? '').localeCompare(b.expiration ?? '')),
-    expiredOpen: open.filter((r) => r.expired).sort((a, b) => (a.expiration ?? '').localeCompare(b.expiration ?? '')),
+    expiredOpen: open
+      .filter((r) => r.expired)
+      .sort((a, b) => (a.expiration ?? '').localeCompare(b.expiration ?? '')),
     winLossByMonth: [...months.values()].sort((a, b) => a.month.localeCompare(b.month)),
     byCustomer,
     byPreparer,
