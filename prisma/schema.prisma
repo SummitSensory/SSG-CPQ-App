@@ -972,12 +972,24 @@ model StandardNote {
   /// and the ladder-leg wrap all pull the single "Mat System" note rather than
   /// each carrying its own copy of the wording.
   triggerParts String?
+  /// When this note applies. NULL means always.
+  ///
+  /// The case it exists for: two versions of the same paragraph, one that mentions
+  /// the deposit and one that does not, so unticking "show the deposit" on a proposal
+  /// swaps the wording instead of leaving a note that contradicts the totals. A pair
+  /// is two notes, one DEPOSIT_SHOWN and one DEPOSIT_HIDDEN — the builder keeps
+  /// whichever matches the proposal and takes the other one off.
+  ///
+  /// Values: DEPOSIT_SHOWN | DEPOSIT_HIDDEN. A string rather than an enum so a new
+  /// condition does not need a migration to add.
+  condition   String?
   sortOrder   Int           @default(0)
   active      Boolean       @default(true)
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 
   @@index([active, placement, sortOrder])
+  @@index([condition])
 }
 
 // Editable coefficients behind the H-1000 fastener quantities. The formula shape

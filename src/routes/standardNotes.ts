@@ -34,6 +34,18 @@ const NoteSchema = z.object({
         .filter(Boolean);
       return parts.length ? [...new Set(parts)].join(', ') : null;
     }),
+  /**
+   * When this note applies. Null means always.
+   *
+   * A pair is two notes, one DEPOSIT_SHOWN and one DEPOSIT_HIDDEN: the builder keeps
+   * whichever matches the proposal and removes the other, so a proposal that takes
+   * payment in full never carries wording about a deposit. Left as a string rather
+   * than an enum so a new condition needs no migration.
+   */
+  condition: z
+    .enum(['DEPOSIT_SHOWN', 'DEPOSIT_HIDDEN'])
+    .nullish()
+    .transform((v) => v ?? null),
   sortOrder: z.number().int().default(0),
   active: z.boolean().default(true),
 });

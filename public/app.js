@@ -17,11 +17,42 @@
   function tc(s) { return String(s || '').replace(/\b([a-z])/g, function (m0, c) { return c.toUpperCase(); }); }
   // Section headings carry the "(Optional)" tag from the optional flag, never from the name itself.
   function stripOptional(s) { return String(s || '').replace(/\s*[—-]?\s*\(\s*optional\s*\)\s*$/i, '').replace(/\s*[—-]\s*optional\s*(?=\))/i, '').trim(); }
-  // Notes accept lightweight formatting: **bold**, *italic*, and real line breaks.
+  /**
+   * Note text → printable HTML.
+   *
+   * Notes accept three things: the lightweight **bold** / *italic* markup the toolbar
+   * writes, real line breaks, and a small set of hand-written HTML tags for the layouts
+   * markup cannot express — mainly bulleted lists and links.
+   *
+   * Everything is escaped first and the allowed tags are then let back through, which
+   * is the only order that is safe: a note is typed by staff but printed on a customer
+   * document, and a stray < in a dimension ("<3/8 in") must not eat the rest of the
+   * paragraph. Anything not on the list prints as the literal text that was typed, so a
+   * mistake is visible rather than silent.
+   */
+  var RT_TAGS = ['b', 'strong', 'i', 'em', 'u', 's', 'br', 'p', 'ul', 'ol', 'li', 'small', 'sup', 'sub'];
+  function rtUnescapeTags(html) {
+    var open = new RegExp('&lt;(' + RT_TAGS.join('|') + ')(\\s*/)?&gt;', 'gi');
+    var close = new RegExp('&lt;/(' + RT_TAGS.join('|') + ')&gt;', 'gi');
+    // Links carry one attribute, and only to somewhere a browser should follow.
+    var anchor = /&lt;a\s+href=(?:&quot;|')([^"'&<>\s]+)(?:&quot;|')&gt;/gi;
+    return html
+      .replace(open, function (m0, tag, slash) { return '<' + tag.toLowerCase() + (slash ? ' /' : '') + '>'; })
+      .replace(close, function (m0, tag) { return '</' + tag.toLowerCase() + '>'; })
+      .replace(anchor, function (m0, href) {
+        return /^(https?:|mailto:)/i.test(href)
+          ? '<a href="' + href.replace(/"/g, '') + '" style="color:#3d4a55;">'
+          : m0;
+      })
+      .replace(/&lt;\/a&gt;/gi, '</a>');
+  }
   function rt(s) {
-    var out = esc(s == null ? '' : s)
+    var out = rtUnescapeTags(esc(s == null ? '' : s))
       .replace(/\*\*([^*]+)\*\*/g, '<b style="font-weight:700;color:#20241f;">$1</b>')
       .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<i>$2</i>');
+    // A note written as HTML block tags supplies its own line breaks; adding <br> as
+    // well double-spaces it.
+    if (/<(p|ul|ol|li)>/i.test(out)) return out;
     return out.replace(/\n/g, '<br>');
   }
   /* --- Rich-text notes ---------------------------------------------------
@@ -69,15 +100,50 @@
           '<button type="button" data-rtcmd="bold" data-rt="' + id + '" title="Bold (\u2318B)" style="' + btn + 'font-weight:700;">B</button>' +
           '<button type="button" data-rtcmd="italic" data-rt="' + id + '" title="Italic (\u2318I)" style="' + btn + 'font-style:italic;font-family:Georgia,serif;">I</button>' +
           '<button type="button" data-rtcmd="removeFormat" data-rt="' + id + '" title="Clear formatting" style="' + btn + 'width:auto;padding:0 9px;font-size:11.5px;">Clear</button>' +
-          '<span class="muted" style="font-size:11px;margin-left:4px;">Select text, then click B or I</span>' +
+          // The escape hatch for what the toolbar cannot do — lists, links, anything
+          // needing real markup. Switching views hands the text over verbatim.
+          '<button type="button" id="' + id + '__htmlBtn" style="' + btn + 'width:auto;padding:0 9px;font-size:11.5px;margin-left:auto;">HTML</button>' +
         '</div>' +
         '<div id="' + id + '" contenteditable="true" style="min-height:120px;padding:10px 12px;font-size:14px;line-height:1.55;outline:none;">' + mdToEditHtml(value) + '</div>' +
+        '<textarea id="' + id + '__html" spellcheck="false" style="display:none;width:100%;box-sizing:border-box;min-height:150px;padding:10px 12px;border:none;outline:none;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;line-height:1.6;">' + esc(value == null ? '' : value) + '</textarea>' +
       '</div>' +
       (hint ? '<div class="muted" style="font-size:11.5px;margin-top:3px;">' + hint + '</div>' : '') + '</div>';
   }
+  /**
+   * Which view a rich-text field is showing, by field id. The HTML view is
+   * authoritative while it is open: readRichText reads the textarea verbatim rather
+   * than walking the editor DOM, so hand-written tags are never flattened by a
+   * round-trip through the toolbar.
+   */
+  var rtHtmlMode = {};
+  function readRichText(id) {
+    if (rtHtmlMode[id]) {
+      var ta = document.getElementById(id + '__html');
+      return ta ? ta.value.trim() : '';
+    }
+    var el = document.getElementById(id);
+    return el ? editHtmlToMd(el) : '';
+  }
+
   /** Wire the toolbar + keyboard shortcuts + plain-text paste for a rich-text field. */
   function wireRichText(id) {
     var el = document.getElementById(id); if (!el) return;
+    rtHtmlMode[id] = false;
+    var ta = document.getElementById(id + '__html');
+    var hb = document.getElementById(id + '__htmlBtn');
+    if (ta && hb) {
+      hb.addEventListener('click', function () {
+        var toHtml = !rtHtmlMode[id];
+        if (toHtml) ta.value = editHtmlToMd(el);
+        else el.innerHTML = mdToEditHtml(ta.value);
+        rtHtmlMode[id] = toHtml;
+        el.style.display = toHtml ? 'none' : 'block';
+        ta.style.display = toHtml ? 'block' : 'none';
+        hb.style.background = toHtml ? '#eef0ea' : '#fff';
+        hb.textContent = toHtml ? 'Formatted' : 'HTML';
+        (toHtml ? ta : el).focus();
+      });
+    }
     document.querySelectorAll('[data-rt="' + id + '"]').forEach(function (b) {
       // mousedown so the selection inside the editor survives the click.
       b.addEventListener('mousedown', function (e) { e.preventDefault(); el.focus(); document.execCommand(b.getAttribute('data-rtcmd'), false, null); });
@@ -3516,14 +3582,29 @@
     // Notes flagged "always include" are dropped onto a proposal the first time it
     // is built, so nobody has to remember to add them.
     if (!(version.items || []).length) {
-      stdNotes.filter(function (nn) { return nn.autoInclude && nn.placement !== 'FOOTER'; }).forEach(function (nn) {
+      // Only the version of a paired note that matches this proposal. showDeposit is
+      // read straight off the stored meta because pb is not assembled yet.
+      var depositShown = meta.showDeposit !== false;
+      var condOk = function (nn) {
+        if (!nn.condition) return true;
+        if (nn.condition === 'DEPOSIT_SHOWN') return depositShown;
+        if (nn.condition === 'DEPOSIT_HIDDEN') return !depositShown;
+        return true;
+      };
+      stdNotes.filter(function (nn) { return nn.autoInclude && nn.placement !== 'FOOTER' && condOk(nn); }).forEach(function (nn) {
         lines.push(normalizeLine({ lineType: 'NOTE', kind: 'NOTE', name: nn.title, description: nn.body, quantity: 0, rateMinor: 0 }));
       });
     }
     var footerNotes = Array.isArray(meta.footerNotes) ? meta.footerNotes : null;
     if (!footerNotes) {
-      footerNotes = stdNotes.filter(function (nn) { return nn.autoInclude && nn.placement === 'FOOTER'; })
-        .map(function (nn) { return { title: nn.title, body: nn.body }; });
+      var depositShownF = meta.showDeposit !== false;
+      footerNotes = stdNotes.filter(function (nn) {
+        if (!nn.autoInclude || nn.placement !== 'FOOTER') return false;
+        if (!nn.condition) return true;
+        if (nn.condition === 'DEPOSIT_SHOWN') return depositShownF;
+        if (nn.condition === 'DEPOSIT_HIDDEN') return !depositShownF;
+        return true;
+      }).map(function (nn) { return { title: nn.title, body: nn.body }; });
     }
     pb = {
       proposalId: proposal.id, versionId: version.id, user: user, orgName: orgName, stdNotes: stdNotes,
@@ -3598,6 +3679,7 @@
     if (!part) return [];
     return ((pb && pb.stdNotes) || []).filter(function (nn) {
       if (nn.active === false || !nn.triggerParts) return false;
+      if (!noteConditionHolds(nn)) return false;
       return String(nn.triggerParts).split(',').some(function (p) { return p.trim().toUpperCase() === part; });
     });
   }
@@ -3636,6 +3718,81 @@
       added++;
     });
     return added;
+  }
+
+  /**
+   * Does a note's condition hold for this proposal?
+   *
+   * Null means always, which is every note that existed before conditions did.
+   */
+  function noteConditionHolds(nn) {
+    var c = nn && nn.condition;
+    if (!c) return true;
+    var deposit = !pb || !pb.meta || pb.meta.showDeposit !== false;
+    if (c === 'DEPOSIT_SHOWN') return deposit;
+    if (c === 'DEPOSIT_HIDDEN') return !deposit;
+    // An unknown condition is not a reason to drop a note off a customer document.
+    return true;
+  }
+
+  /** A note already on the proposal, matched to the standard note it came from. */
+  function stdNoteFor(line) {
+    var t = String((line && line.name) || '').trim().toLowerCase();
+    if (!t) return null;
+    return ((pb && pb.stdNotes) || []).filter(function (nn) {
+      return String(nn.title || '').trim().toLowerCase() === t;
+    })[0] || null;
+  }
+
+  /**
+   * Keep the conditional notes in step with the proposal.
+   *
+   * Called when something a condition depends on changes — today that is the deposit
+   * checkbox. Any note whose condition no longer holds comes off, and its counterpart
+   * goes on in the same place, so the deposit paragraph is replaced by the
+   * payment-in-full paragraph rather than both being present or neither.
+   *
+   * Only notes flagged "always include" are added this way. A note a rep picked by
+   * hand is their decision, and one that has been deleted stays deleted — the swap
+   * puts the alternative where the outgoing note was, and adds nothing otherwise.
+   */
+  function applyConditionalNotes() {
+    if (!pb || !pb.stdNotes) return 0;
+    var changed = 0;
+
+    // Table notes: swap in place.
+    for (var i = pb.lines.length - 1; i >= 0; i--) {
+      var l = pb.lines[i];
+      if (!l || l.lineType !== 'NOTE') continue;
+      var src = stdNoteFor(l);
+      if (!src || !src.condition || noteConditionHolds(src)) continue;
+      var alt = pb.stdNotes.filter(function (nn) {
+        return nn.placement !== 'FOOTER' && nn.condition && nn.condition !== src.condition && noteConditionHolds(nn);
+      })[0];
+      if (alt && !noteAlreadyPresent(alt)) {
+        pb.lines[i] = normalizeLine({ lineType: 'NOTE', kind: 'NOTE', name: alt.title, description: alt.body, quantity: 0, rateMinor: 0 });
+      } else {
+        pb.lines.splice(i, 1);
+      }
+      changed++;
+    }
+
+    // Footer notes: the same swap over pb.meta.footerNotes.
+    var footer = pb.meta.footerNotes || [];
+    for (var j = footer.length - 1; j >= 0; j--) {
+      var fsrc = ((pb.stdNotes) || []).filter(function (nn) {
+        return String(nn.title || '').trim().toLowerCase() === String(footer[j].title || '').trim().toLowerCase();
+      })[0];
+      if (!fsrc || !fsrc.condition || noteConditionHolds(fsrc)) continue;
+      var falt = pb.stdNotes.filter(function (nn) {
+        return nn.placement === 'FOOTER' && nn.condition && nn.condition !== fsrc.condition && noteConditionHolds(nn);
+      })[0];
+      if (falt && !noteAlreadyPresent(falt)) footer[j] = { title: falt.title, body: falt.body };
+      else footer.splice(j, 1);
+      changed++;
+    }
+    pb.meta.footerNotes = footer;
+    return changed;
   }
 
   /** Every part on the proposal gets a chance to pull its notes in. */
@@ -4713,6 +4870,20 @@
       }, 'Send RFQ');
   }
 
+  /**
+   * How deep a line sits: 0 outside any heading, 1 under a group, 2 under a
+   * sub-heading. Found by looking back for the nearest heading, which is the only
+   * place the structure lives — pb.lines is flat.
+   */
+  function builderDepth(i) {
+    for (var j = i - 1; j >= 0; j--) {
+      var lt = pb.lines[j] && pb.lines[j].lineType;
+      if (lt === 'SUBGROUP') return 2;
+      if (lt === 'GROUP') return 1;
+    }
+    return 0;
+  }
+
   function builderLineRow(l, i, gsub) {
     var handle = '<div class="bDrag" style="cursor:grab;color:#c2c6bd;font-size:18px;padding:0 4px;user-select:none;" title="Drag to reorder">⋮⋮</div>';
     var del = '<button class="bDel" data-i="' + i + '" style="border:1px solid #e0e1db;background:#fff;border-radius:8px;width:30px;height:30px;color:#9c3327;cursor:pointer;flex:0 0 auto;">✕</button>';
@@ -4748,10 +4919,14 @@
         noteBtn + del + '</div>';
     }
     if (l.lineType === 'NOTE') {
-      return '<div class="bRow" draggable="true" data-i="' + i + '" style="display:flex;align-items:flex-start;gap:8px;background:#fbfaf4;border:1px solid #ece9db;border-radius:10px;padding:10px;">' + handle +
+      // Lines up with the heading it was added under, on the same 14px step the
+      // sub-heading row uses, so a note reads as belonging to its section rather than
+      // to the whole proposal.
+      var noteIndent = builderDepth(i) * 14;
+      return '<div class="bRow" draggable="true" data-i="' + i + '" style="display:flex;align-items:flex-start;gap:8px;background:#fbfaf4;border:1px solid #ece9db;border-radius:10px;padding:10px;' + (noteIndent ? 'margin-left:' + noteIndent + 'px;' : '') + '">' + handle +
         '<div style="flex:1;"><input class="bF" data-i="' + i + '" data-k="name" value="' + esc(l.name) + '" placeholder="Note title" style="width:100%;border:none;background:transparent;font-weight:600;font-size:13.5px;outline:none;margin-bottom:4px;">' +
         '<textarea class="bF" data-i="' + i + '" data-k="description" rows="3" placeholder="Note text" style="width:100%;border:1px solid #ece9db;border-radius:7px;padding:6px 8px;font-size:12.5px;font-family:inherit;resize:vertical;background:#fff;">' + esc(l.description) + '</textarea>' +
-        '<div style="font-size:10.5px;color:#8a8f85;margin-top:3px;">Formatting: <b>**bold**</b> · <i>*italic*</i> · line breaks are kept</div></div>' + del + '</div>';
+        '<div style="font-size:10.5px;color:#8a8f85;margin-top:3px;">Formatting: <b>**bold**</b> · <i>*italic*</i> · line breaks are kept · HTML: &lt;ul&gt;&lt;li&gt; &lt;b&gt; &lt;i&gt; &lt;a href&gt;</div></div>' + del + '</div>';
     }
     // PRODUCT
     var amt = (Number(l.quantity) || 0) * (Number(l.rateMinor) || 0);
@@ -4882,7 +5057,13 @@
     var mp = document.getElementById('mProj'); if (mp) mp.addEventListener('input', function () { pb.meta.projectId = mp.value; });
     var mpd = document.getElementById('mPropDate'); if (mpd) mpd.addEventListener('input', function () { pb.meta.proposalDate = mpd.value; pb.meta.expiration = addDays(mpd.value, 7); var me2 = document.getElementById('mExp'); if (me2) me2.value = pb.meta.expiration; });
     var msp = document.getElementById('mShowProj'); if (msp) msp.addEventListener('change', function () { pb.meta.showProjectId = msp.checked; });
-    var mdep = document.getElementById('mShowDeposit'); if (mdep) mdep.addEventListener('change', function () { pb.meta.showDeposit = mdep.checked; renderBuilderKeepingFocus(); });
+    var mdep = document.getElementById('mShowDeposit'); if (mdep) mdep.addEventListener('change', function () {
+      pb.meta.showDeposit = mdep.checked;
+      // Wording that references the deposit is swapped for wording that does not, and
+      // the other way round — see applyConditionalNotes.
+      if (applyConditionalNotes()) markBuilderDirty();
+      renderBuilderKeepingFocus();
+    });
     var mst = document.getElementById('mShowTitle'); if (mst) mst.addEventListener('change', function () { pb.meta.showTitle = mst.checked; });
     // Bill to mirrors ship to until someone types in it. Editing it is what breaks
     // the link — no mode to switch, and the text stays whatever was typed.
@@ -5270,6 +5451,8 @@
     // indented one step further than whichever heading they sit under.
     var inSub = false;
     var bottomNotes = [];
+    /** Indent for anything sitting inside the current heading. */
+    function lineIndent() { return groupOpenSub != null ? (inSub ? 34 : 20) : 8; }
     function subtotalRow() {
       if (groupOpenSub == null) return '';
       var r = '<tr style="break-inside:avoid;"><td colspan="5" style="padding:5px 8px;text-align:right;font-weight:600;font-size:11px;border-bottom:2px solid #d5d8d2;">Subtotal: ' + fmtUsd(groupOpenSub) + '</td></tr>';
@@ -5291,9 +5474,15 @@
           '</td></tr>';
         return;
       }
-      if (lt === 'NOTE') { body += '<tr style="break-inside:avoid;"><td colspan="5" style="padding:7px 8px;background:#fbfaf4;font-size:11px;color:#5c6157;line-height:1.5;"><b style="display:block;color:#20241f;margin-bottom:2px;">' + esc(tc(l.name)) + '</b>' + rt(l.description) + '</td></tr>'; return; }
+      // A note reads as belonging to the section it was added under, so it takes the
+      // same indent as the lines around it rather than sitting flush left where it
+      // looked like a statement about the whole proposal.
+      if (lt === 'NOTE') {
+        body += '<tr style="break-inside:avoid;"><td colspan="5" style="padding:7px 8px 7px ' + lineIndent() + 'px;background:#fbfaf4;font-size:11px;color:#5c6157;line-height:1.5;"><b style="display:block;color:#20241f;margin-bottom:2px;">' + esc(tc(l.name)) + '</b>' + rt(l.description) + '</td></tr>';
+        return;
+      }
       var amt = (Number(l.quantity) || 0) * (Number(l.rateMinor) || 0);
-      var indent = groupOpenSub != null ? (inSub ? 34 : 20) : 8;
+      var indent = lineIndent();
       if (groupOpenSub != null) groupOpenSub += amt + (Number(l.tpFreightMinor) || 0);
       body += '<tr style="break-inside:avoid;"><td style="padding:5px 8px 5px ' + indent + 'px;border-bottom:1px solid #eef0ea;vertical-align:top;"><b style="font-weight:600;">' + esc(tc(l.name)) + '</b>' + (l.description ? '<div style="font-size:10.5px;color:#5c6157;line-height:1.45;margin-top:2px;">' + esc(l.description) + '</div>' : '') +
         (l.delivery ? '<div style="font-size:10px;color:#7a7f75;margin-top:2px;">Delivery: ' + esc(l.delivery) + '</div>' : '') +
@@ -8058,12 +8247,19 @@
     } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
   }
   function openStandardNoteForm(note) {
-    var n = note || { title: '', body: '', placement: 'TABLE', autoInclude: false, sortOrder: 0, active: true, triggerParts: '' };
+    var n = note || { title: '', body: '', placement: 'TABLE', autoInclude: false, sortOrder: 0, active: true, triggerParts: '', condition: null };
     openModal(note ? 'Edit standard note' : 'New standard note',
       fieldRow('Title', '<input id="snTitle" style="' + IN + '" value="' + esc(n.title) + '">') +
       richTextField('snBody', 'Note text', n.body, 'Line breaks are kept. Bold and italic print on the customer proposal.') +
       fieldRow('Where it prints', '<select id="snPlace" style="' + IN + '"><option value="TABLE"' + (n.placement === 'TABLE' ? ' selected' : '') + '>Inside the line items</option><option value="FOOTER"' + (n.placement === 'FOOTER' ? ' selected' : '') + '>Below the signature lines</option></select>') +
       fieldRow('Order', '<input id="snOrder" type="number" style="' + IN + '" value="' + (Number(n.sortOrder) || 0) + '">') +
+      fieldRow('When it applies',
+        '<select id="snCond" style="' + IN + '">' +
+          '<option value=""' + (!n.condition ? ' selected' : '') + '>Always</option>' +
+          '<option value="DEPOSIT_SHOWN"' + (n.condition === 'DEPOSIT_SHOWN' ? ' selected' : '') + '>Only when the deposit is shown on the proposal</option>' +
+          '<option value="DEPOSIT_HIDDEN"' + (n.condition === 'DEPOSIT_HIDDEN' ? ' selected' : '') + '>Only when the deposit is NOT shown</option>' +
+        '</select>' +
+        '<div class="muted" style="font-size:12px;margin-top:5px;line-height:1.5;">Write the two versions of a paragraph as two notes, one for each case, and tick “always include” on both. Unticking the deposit on a proposal then swaps the wording rather than leaving a note that contradicts the totals.</div>') +
       fieldRow('Add this note when these parts are on the proposal',
         '<input id="snParts" style="' + IN + '" value="' + esc(n.triggerParts || '') + '" placeholder="SSUSP67, SSCW67, SSUSP72">' +
         '<div class="muted" style="font-size:12px;margin-top:5px;line-height:1.5;">Part numbers, comma separated. The note is added once, at the end of the section the part is in, and can still be deleted from a proposal. Leave blank for a note that is always included or picked by hand.</div>') +
@@ -8072,10 +8268,11 @@
       async function (close, showErr) {
         var body = {
           title: document.getElementById('snTitle').value.trim(),
-          body: editHtmlToMd(document.getElementById('snBody')),
+          body: readRichText('snBody'),
           placement: document.getElementById('snPlace').value,
           sortOrder: Number(document.getElementById('snOrder').value) || 0,
           triggerParts: document.getElementById('snParts').value.trim(),
+          condition: document.getElementById('snCond').value || null,
           autoInclude: document.getElementById('snAuto').checked,
           active: document.getElementById('snActive').checked,
         };
