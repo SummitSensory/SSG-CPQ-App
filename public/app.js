@@ -777,6 +777,50 @@
       catch (err) { document.getElementById('mErr').innerHTML = '<div class="err">Something went wrong.</div>'; save.disabled = false; save.textContent = submitLabel || 'Create'; }
     });
   }
+  /** Which way the user was tabbing, if the render was triggered by a Tab at all. */
+  var tabDir = null;
+  document.addEventListener('keydown', function (e) {
+    tabDir = e.key === 'Tab' ? (e.shiftKey ? 'back' : 'fwd') : null;
+  }, true);
+  // A click or a programmatic change is not a Tab, and must not advance the caret.
+  document.addEventListener('mousedown', function () { tabDir = null; }, true);
+
+  function focusablesIn(root) {
+    return Array.prototype.filter.call(
+      root.querySelectorAll('input,select,textarea'),
+      function (el) { return !el.disabled && el.type !== 'hidden' && el.offsetParent !== null; },
+    );
+  }
+
+  /**
+   * Re-render an overlay and leave the caret where the keystroke was heading.
+   *
+   * `render` rebuilds the DOM; `host` is (or returns) the container to search
+   * afterwards; `sel` finds the field that changed in the NEW markup. When the change
+   * came from a Tab we advance to the next field ourselves, because the browser's own
+   * focus move is aimed at a node that no longer exists. Otherwise we restore the
+   * field that was focused, caret position included.
+   */
+  function renderKeepingTab(render, host, sel) {
+    var dir = tabDir;
+    var was = document.activeElement, range = null;
+    try { range = was && was.selectionStart != null ? [was.selectionStart, was.selectionEnd] : null; } catch (e) {}
+    render();
+    var root = typeof host === 'function' ? host() : host;
+    if (!root) return;
+    var same = null;
+    try { same = sel ? root.querySelector(sel) : null; } catch (e2) { same = null; }
+    if (!dir) {
+      if (same) { same.focus(); try { if (range) same.setSelectionRange(range[0], range[1]); } catch (e3) {} }
+      return;
+    }
+    var list = focusablesIn(root);
+    var i = same ? list.indexOf(same) : -1;
+    var next = i === -1 ? null : list[dir === 'fwd' ? i + 1 : i - 1];
+    if (next) { next.focus(); try { next.select(); } catch (e4) {} }
+    else if (same) same.focus();
+  }
+
   function fieldRow(label, inner) { return '<div class="field"><label>' + esc(label) + '</label>' + inner + '</div>'; }
   var IN = 'width:100%;padding:10px 12px;border:1px solid #dcded7;border-radius:9px;font-size:14px;background:#fff;color:#20241f;outline:none;';
   function selectEl(id, opts, sel) { return '<select id="' + id + '" style="' + IN + '">' + opts.map(function (o) { return '<option value="' + o + '"' + (o === sel ? ' selected' : '') + '>' + titleCase(o) + '</option>'; }).join('') + '</select>'; }
@@ -3492,6 +3536,7 @@
     // would show a clean builder for a moment on a proposal that has stale figures.
     loadItemDefaults().then(renderBuilder);
     renderBuilder();
+    autoSyncFreightOnOpen();
   }
 
   /**
@@ -3786,11 +3831,30 @@
    * desk hours or days later, and a stale cached number on a customer proposal is
    * worse than an empty one.
    */
+  /**
+   * Has the board actually got an outstanding request on it?
+   *
+   * monday.com's own flag decides, not our local one. A proposal copied from a
+   * template, or a new version of an old proposal, carries a local
+   * freightRequestedAt that says "requested" while the board has nothing — which is
+   * how a proposal goes out with freight nobody was ever asked for. `null` means we
+   * have not read the board yet, and then the local flag stands in.
+   */
+  function freightRequestedOnBoard() {
+    var flag = pb.meta.freightBoardFlag;
+    if (flag == null || flag === '') return !!pb.meta.freightRequestedAt;
+    return String(flag).trim().toLowerCase() === 'yes';
+  }
+
   function freightControlsHtml() {
-    var sent = !!pb.meta.freightRequestedAt;
+    var sent = freightRequestedOnBoard();
     var busy = pb.meta.freightBusy || '';
     var quote = pb.meta.freightQuoteMinor;
-    var amtLabel = quote != null ? fmtMoney(quote, 'USD') : (pb.meta.freightPending ? 'Awaiting the desk' : 'Not pulled yet');
+    // Three different states, and the wording has to separate them: nobody has asked
+    // the desk yet, the desk has been asked and not answered, and the desk answered.
+    var amtLabel = quote != null
+      ? fmtMoney(quote, 'USD')
+      : (sent ? (pb.meta.freightPending ? 'Awaiting the desk' : 'Not pulled yet') : 'Freight Needs to be Requested');
     var matsFreight = pb.meta.mondayMatsFreightMinor;
     var matsTax = pb.meta.mondayMatsTaxMinor;
     var matsFreightLabel = matsFreight != null ? fmtMoney(matsFreight, 'USD') : 'Not pulled yet';
@@ -3804,7 +3868,7 @@
       '</button>' +
       '<div style="padding:6px 14px;text-align:left;line-height:1.25;">' +
         '<span style="display:block;font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Structure Crating &amp; Freight $</span>' +
-        '<span style="display:block;font-size:14px;font-weight:600;color:' + (quote != null ? '#20241f' : '#8a8f85') + ';">' +
+        '<span style="display:block;font-size:' + (quote == null && !sent ? '12px' : '14px') + ';font-weight:600;color:' + (quote != null ? '#20241f' : (sent ? '#8a8f85' : '#9c3327')) + ';">' +
           (busy === 'amt' ? 'Checking\u2026' : esc(amtLabel)) +
         '</span>' +
       '</div>' +
@@ -3853,6 +3917,7 @@
     pb.meta.freightBusy = '';
     if (!r.ok) { renderBuilderKeepingFocus(); return alert('Could not read the freight amount from monday.com (' + r.status + ').'); }
     var d = await r.json();
+    pb.meta.freightBoardFlag = d.requestFlag || 'No';
     pb.meta.freightPending = !!d.pending;
     if (d.amountMinor != null) {
       pb.meta.freightQuoteMinor = d.amountMinor;
@@ -3867,6 +3932,41 @@
     if (!pb.meta.matsFreightTouched) pb.meta.matsFreightMinor = pb.meta.mondayMatsFreightMinor;
     if (!pb.meta.taxTouched) pb.meta.taxAmountMinor = pb.meta.mondayMatsTaxMinor;
     renderBuilderKeepingFocus();
+  }
+
+  /**
+   * The sync the rep would otherwise have to remember.
+   *
+   * Runs once when a proposal opens in the builder, never on save: the desk's number
+   * arrives on monday.com's clock, and the figure on screen should be theirs rather
+   * than whatever was cached the last time somebody pressed a button. Silent by
+   * design — a proposal with no Project ID, or a board that cannot be reached, is
+   * not something to interrupt the rep with on open. The manual "Sync Request"
+   * button still reports failures out loud.
+   */
+  async function autoSyncFreightOnOpen() {
+    if (!pb || pb.readOnly) return;
+    var item = freightItemId();
+    if (!item) return;
+    try {
+      var r = await authed('/proposals/' + pb.proposalId + '/freight-amount?itemId=' + encodeURIComponent(item));
+      if (!r.ok) return;
+      var d = await r.json();
+      // Guard against a stale response: the rep may have left the builder, or opened
+      // a different proposal, while this was in flight.
+      if (!pb || pb.meta.projectId !== String(d.itemId)) return;
+      pb.meta.freightBoardFlag = d.requestFlag || 'No';
+      pb.meta.freightPending = !!d.pending;
+      if (d.amountMinor != null) {
+        pb.meta.freightQuoteMinor = d.amountMinor;
+        pb.meta.structureFreightMinor = d.amountMinor;
+      }
+      pb.meta.mondayMatsFreightMinor = d.matsFreightMinor;
+      pb.meta.mondayMatsTaxMinor = d.matsTaxMinor;
+      if (!pb.meta.matsFreightTouched && d.matsFreightMinor != null) pb.meta.matsFreightMinor = d.matsFreightMinor;
+      if (!pb.meta.taxTouched && d.matsTaxMinor != null) pb.meta.taxAmountMinor = d.matsTaxMinor;
+      renderBuilderKeepingFocus();
+    } catch (e) { /* silent on open — see above */ }
   }
 
   /** Pull catalog price, cost and weight onto the lines that are missing them. */
@@ -3988,16 +4088,10 @@
 
   function renderBuilderKeepingFocus() {
     var el = document.activeElement;
-    var mark = el && el.classList && el.classList.contains('bF')
-      ? { i: el.getAttribute('data-i'), k: el.getAttribute('data-k'), start: el.selectionStart, end: el.selectionEnd }
+    var sel = el && el.classList && el.classList.contains('bF')
+      ? '.bF[data-i="' + el.getAttribute('data-i') + '"][data-k="' + el.getAttribute('data-k') + '"]'
       : null;
-    renderBuilder();
-    if (!mark) return;
-    var next = document.querySelector('.bF[data-i="' + mark.i + '"][data-k="' + mark.k + '"]');
-    if (!next) return;
-    next.focus();
-    // A number input has no selection range to restore; guarding avoids a throw.
-    try { if (mark.start != null) next.setSelectionRange(mark.start, mark.end); } catch (e) {}
+    renderKeepingTab(renderBuilder, function () { return document.getElementById('view'); }, sel);
   }
 
   function renderBuilder() {
@@ -4009,10 +4103,12 @@
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap;">' +
         '<button class="link-btn" id="bBack" style="width:auto;padding:7px 13px;">‹ Cancel</button>' +
         '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
-          '<button class="link-btn" id="bLoadTpl" style="width:auto;padding:9px 14px;">Load template</button>' +
-          '<button class="link-btn" id="bSaveTpl" style="width:auto;padding:9px 14px;">Save as template</button>' +
+          '<button class="link-btn" id="bLoadTpl" style="width:auto;padding:9px 14px;">Load Template</button>' +
+          '<button class="link-btn" id="bSaveTpl" style="width:auto;padding:9px 14px;">Save as Template</button>' +
           '<button class="link-btn" id="bPreview" style="width:auto;padding:9px 14px;">Preview</button>' +
-          '<button class="btn" id="bSave" style="width:auto;padding:9px 18px;">Save proposal</button>' +
+          '<button class="link-btn" id="bPdf" style="width:auto;padding:9px 14px;">Save as PDF</button>' +
+          '<button class="btn" id="bSave" style="width:auto;padding:9px 18px;">Save</button>' +
+          '<button class="link-btn" id="bClose" style="width:auto;padding:9px 16px;">Close</button>' +
         '</div></div>' +
       // Who this proposal is for, and which version is open — the builder is
       // otherwise identical for every customer, and a rep with two tabs open has
@@ -4734,6 +4830,13 @@
     document.getElementById('bBack').addEventListener('click', function () { openProposalDetail(pb.proposalId, pb.user); });
     document.getElementById('bSave').addEventListener('click', saveBuilder);
     document.getElementById('bPreview').addEventListener('click', function () { previewProposalDoc(builderDoc()); });
+    // Straight to the print dialog. The preview still opens behind it, so cancelling
+    // the print leaves the document on screen rather than dumping you back.
+    document.getElementById('bPdf').addEventListener('click', function () { previewProposalDoc(builderDoc(), true); });
+    // Leaves the builder. Identical to "‹ Cancel" — both honour the unsaved-changes
+    // guard — and it is here because the exit belongs beside Save, not only in the
+    // top-left corner.
+    document.getElementById('bClose').addEventListener('click', function () { document.getElementById('bBack').click(); });
     loadRfqPanel();
     document.getElementById('bSaveTpl').addEventListener('click', saveAsTemplate);
     document.getElementById('bLoadTpl').addEventListener('click', loadTemplate);
@@ -5057,13 +5160,13 @@
     var btn = document.getElementById('bSave'); btn.disabled = true; btn.textContent = 'Saving…';
     try {
       var r = await authed('/proposals/versions/' + pb.versionId, { method: 'PATCH', body: builderVersionPayload() });
-      if (!r.ok) { alert('Could not save (' + r.status + ').'); btn.disabled = false; btn.textContent = 'Save proposal'; return; }
+      if (!r.ok) { alert('Could not save (' + r.status + ').'); btn.disabled = false; btn.textContent = 'Save'; return; }
       btn.textContent = 'Saved ✓';
       clearBuilderDirty();
       // Stay in the builder. Saving mid-edit is the common case; bouncing back to
       // the detail page forced a re-entry for every save. "‹ Cancel" is the way out.
-      setTimeout(function () { var b = document.getElementById('bSave'); if (b) { b.disabled = false; b.textContent = 'Save proposal'; } }, 1200);
-    } catch (e) { alert('Could not reach the server.'); btn.disabled = false; btn.textContent = 'Save proposal'; }
+      setTimeout(function () { var b = document.getElementById('bSave'); if (b) { b.disabled = false; b.textContent = 'Save'; } }, 1200);
+    } catch (e) { alert('Could not reach the server.'); btn.disabled = false; btn.textContent = 'Save'; }
   }
 
   function saveAsTemplate() {
@@ -5173,13 +5276,13 @@
       if (lt === 'GROUP') {
         body += subtotalRow();
         groupOpenSub = 0; groupName = l.name; inSub = false;
-        body += '<tr style="break-inside:avoid;break-after:avoid;"><td colspan="5" style="padding:6px 10px;font-weight:700;font-size:12px;letter-spacing:.03em;text-transform:uppercase;color:#3d4a55;background:#eef0ea;border-bottom:1px solid #d5d8d2;"><span style="display:inline-flex;align-items:baseline;gap:46px;"><span>' + esc(tc(stripOptional(l.name))) + (l.optional ? ' <span style="font-weight:400;text-transform:none;color:#8a8f85;">(Optional)</span>' : '') + '</span>' + (l.description ? '<span style="color:#20241f;">' + esc(l.description) + '</span>' : '') + '</span></td></tr>';
+        body += '<tr data-brk="head" style="break-inside:avoid;break-after:avoid;"><td colspan="5" style="padding:6px 10px;font-weight:700;font-size:12px;letter-spacing:.03em;text-transform:uppercase;color:#3d4a55;background:#eef0ea;border-bottom:1px solid #d5d8d2;"><span style="display:inline-flex;align-items:baseline;gap:46px;"><span>' + esc(tc(stripOptional(l.name))) + (l.optional ? ' <span style="font-weight:400;text-transform:none;color:#8a8f85;">(Optional)</span>' : '') + '</span>' + (l.description ? '<span style="color:#20241f;">' + esc(l.description) + '</span>' : '') + '</span></td></tr>';
         return;
       }
       if (lt === 'SUBGROUP') {
         inSub = true;
         var subNote = String(l.description || '').trim();
-        body += '<tr style="break-inside:avoid;break-after:avoid;"><td colspan="5" style="padding:7px 8px 3px 22px;font-weight:600;font-size:11.5px;color:#3d4a55;border-bottom:1px solid #d5d8d2;">' + esc(tc(l.name)) +
+        body += '<tr data-brk="head" style="break-inside:avoid;break-after:avoid;"><td colspan="5" style="padding:7px 8px 3px 22px;font-weight:600;font-size:11.5px;color:#3d4a55;border-bottom:1px solid #d5d8d2;">' + esc(tc(l.name)) +
           (subNote ? '<div style="font-weight:400;font-size:10.5px;color:#5c6157;margin-top:2px;line-height:1.5;">' + rt(subNote) + '</div>' : '') +
           '</td></tr>';
         return;
@@ -5290,7 +5393,42 @@
       proposalDocHtml(doc) + '</body></html>';
   }
 
-  function previewProposalDoc(doc) {
+  /**
+   * Push headings off the bottom of a printed page.
+   *
+   * `break-after: avoid` on a table row is honoured inconsistently, so a section
+   * heading regularly printed as the last line on a sheet with its parts overleaf.
+   * This measures the rendered rows against the page box and inserts a spacer row
+   * ahead of any heading that would land in the last inch, and ahead of the totals
+   * block if it would be split. Nothing is reflowed or resized — only pushed.
+   */
+  function paginatePrintDoc() {
+    var area = document.getElementById('propPrintArea');
+    if (!area) return;
+    // Letter at 96dpi, less the 0.5in margins the print stylesheet sets.
+    var PAGE = 10 * 96, KEEP = 96;
+    Array.prototype.forEach.call(area.querySelectorAll('tr[data-pgspacer]'), function (r) { r.parentNode.removeChild(r); });
+    var rows = Array.prototype.slice.call(area.querySelectorAll('tbody > tr'));
+    var top = area.getBoundingClientRect().top;
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (r.getAttribute('data-brk') !== 'head') continue;
+      var y = r.getBoundingClientRect().top - top;
+      var into = y % PAGE;
+      var left = PAGE - into;
+      // A heading is only worth keeping with its parts if parts follow it.
+      if (left >= KEEP || i === rows.length - 1) continue;
+      var sp = document.createElement('tr');
+      sp.setAttribute('data-pgspacer', '1');
+      sp.innerHTML = '<td colspan="5" style="padding:0;border:none;height:' + Math.ceil(left) + 'px;"></td>';
+      r.parentNode.insertBefore(sp, r);
+      top = area.getBoundingClientRect().top;
+      rows = Array.prototype.slice.call(area.querySelectorAll('tbody > tr'));
+      i = rows.indexOf(r);
+    }
+  }
+
+  function previewProposalDoc(doc, printNow) {
     ensurePrintStyle();
     var html = proposalDocHtml(doc);
     var ov = document.createElement('div');
@@ -5299,16 +5437,21 @@
     ov.innerHTML = '<div class="noprint" style="max-width:760px;margin:0 auto 14px;display:flex;justify-content:space-between;gap:10px;"><button class="link-btn" id="pvClose" style="width:auto;padding:9px 16px;background:#fff;">‹ Close preview</button><button class="btn" id="pvPrint" style="width:auto;padding:9px 20px;">Print / Save PDF</button></div>' + html;
     document.body.appendChild(ov);
     document.getElementById('pvClose').addEventListener('click', function () { document.body.removeChild(ov); });
-    document.getElementById('pvPrint').addEventListener('click', function () {
+    function firePrint() {
       // Browsers name the saved PDF after the document title, so set it for the print
       // and put it back afterwards.
       var prev = document.title;
       document.title = proposalFileName(doc);
       var restore = function () { document.title = prev; window.removeEventListener('afterprint', restore); };
       window.addEventListener('afterprint', restore);
+      paginatePrintDoc();
       window.print();
       setTimeout(restore, 60000);
-    });
+    }
+    document.getElementById('pvPrint').addEventListener('click', firePrint);
+    // Save as PDF goes straight through. One frame's delay so the overlay has laid
+    // out — the page-break pass measures real geometry and needs it.
+    if (printNow) setTimeout(firePrint, 120);
   }
 
   /**
@@ -5601,7 +5744,7 @@
         var base = el.getAttribute('data-ovr'), v = el.value.trim();
         adv.partOverrides = adv.partOverrides || {};
         if (!v || v === base) delete adv.partOverrides[base]; else adv.partOverrides[base] = v;
-        renderAdv();
+        renderAdvKeepingTab(null, '[data-ovr="' + base.replace(/"/g, '') + '"]');
       });
     });
     o.querySelectorAll('[data-ovrclear]').forEach(function (b) {
@@ -5619,13 +5762,18 @@
     });
     o.querySelectorAll('[data-ak]').forEach(function (el) {
       var k = el.getAttribute('data-ak');
-      if (el.type === 'checkbox') { el.addEventListener('change', function () { adv[k] = el.checked; syncAdvDefaults(k); renderAdv(); }); }
+      if (el.type === 'checkbox') { el.addEventListener('change', function () { adv[k] = el.checked; syncAdvDefaults(k); renderAdvKeepingTab(k); }); }
       else {
         el.addEventListener('input', function () { adv[k] = el.type === 'number' ? (parseFloat(el.value) || 0) : el.value; markHwTouched(k); });
-        el.addEventListener('change', function () { adv[k] = el.type === 'number' ? (parseFloat(el.value) || 0) : el.value; markHwTouched(k); syncAdvDefaults(k); renderAdv(); });
+        el.addEventListener('change', function () { adv[k] = el.type === 'number' ? (parseFloat(el.value) || 0) : el.value; markHwTouched(k); syncAdvDefaults(k); renderAdvKeepingTab(k); });
       }
     });
   }
+  function renderAdvKeepingTab(key, sel) {
+    renderKeepingTab(renderAdv, function () { return document.getElementById('advOverlay'); },
+      sel || (key ? '[data-ak="' + key + '"]' : null));
+  }
+
   /** Once a rep types in a hardware field, no default may overwrite it. */
   function markHwTouched(key) {
     if (!(key in ADV_HW_PARTS)) return;
@@ -5996,10 +6144,18 @@
       soar.rows.push({ part: next.part, qty: 1 }); renderSoar();
     });
     o.querySelectorAll('[data-sfpart]').forEach(function (el) {
-      el.addEventListener('change', function () { soar.rows[Number(el.getAttribute('data-sfpart'))].part = el.value; renderSoar(); });
+      el.addEventListener('change', function () {
+        var ix = Number(el.getAttribute('data-sfpart'));
+        soar.rows[ix].part = el.value;
+        renderKeepingTab(renderSoar, function () { return document.getElementById('soarOverlay'); }, '[data-sfpart="' + ix + '"]');
+      });
     });
     o.querySelectorAll('[data-sfqty]').forEach(function (el) {
-      el.addEventListener('change', function () { soar.rows[Number(el.getAttribute('data-sfqty'))].qty = Math.max(0, Number(el.value) || 0); renderSoar(); });
+      el.addEventListener('change', function () {
+        var ix = Number(el.getAttribute('data-sfqty'));
+        soar.rows[ix].qty = Math.max(0, Number(el.value) || 0);
+        renderKeepingTab(renderSoar, function () { return document.getElementById('soarOverlay'); }, '[data-sfqty="' + ix + '"]');
+      });
     });
     o.querySelectorAll('[data-sfdel]').forEach(function (el) {
       el.addEventListener('click', function () { soar.rows.splice(Number(el.getAttribute('data-sfdel')), 1); renderSoar(); });
@@ -6009,7 +6165,7 @@
       el.addEventListener('change', function () {
         if (el.type === 'checkbox') soar[key] = el.checked;
         else soar[key] = el.value === '' ? null : Math.max(0, Number(el.value) || 0);
-        renderSoar();
+        renderKeepingTab(renderSoar, function () { return document.getElementById('soarOverlay'); }, '[data-sk="' + key + '"]');
       });
     });
   }

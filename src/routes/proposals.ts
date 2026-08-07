@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
+import { releaseFreightRequest } from './freight.js';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import { ValidationError, NotFoundError } from '../lib/errors.js';
@@ -296,14 +297,29 @@ export function registerProposalRoutes(app: FastifyInstance): void {
     await changeStatus(versionId, 'ACCEPTED', req.user!.sub, (req.body as { note?: string })?.note);
     return { status: 'ACCEPTED' };
   });
+  // Rejecting or shelving a proposal also takes any unanswered freight request back
+  // off the monday.com board — the desk works a queue of flagged items and a dead
+  // proposal in it costs them a quote nobody will use. releaseFreightRequest never
+  // throws, so an unreachable board cannot stop a proposal being marked lost, and it
+  // leaves a request the desk has already answered alone.
   app.post('/proposals/versions/:versionId/reject', review, async (req) => {
     const { versionId } = req.params as { versionId: string };
     await changeStatus(versionId, 'REJECTED', req.user!.sub, (req.body as { note?: string })?.note);
+    const v = await prisma.proposalVersion.findUnique({
+      where: { id: versionId },
+      select: { proposalId: true },
+    });
+    if (v) await releaseFreightRequest(v.proposalId, req.user!.sub, 'proposal rejected');
     return { status: 'REJECTED' };
   });
   app.post('/proposals/versions/:versionId/expire', review, async (req) => {
     const { versionId } = req.params as { versionId: string };
     await changeStatus(versionId, 'EXPIRED', req.user!.sub, (req.body as { note?: string })?.note);
+    const v = await prisma.proposalVersion.findUnique({
+      where: { id: versionId },
+      select: { proposalId: true },
+    });
+    if (v) await releaseFreightRequest(v.proposalId, req.user!.sub, 'proposal no longer active');
     return { status: 'EXPIRED' };
   });
 }
