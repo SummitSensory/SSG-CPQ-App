@@ -3455,6 +3455,10 @@
       // Kit breakdown (H-1000 → its fasteners). Opaque to the builder; it exists so
       // the BOM can list the hardware out without re-running the configurator.
       components: it.components || null,
+      // Which builder produced this line, if any. 'ADV' / 'SOAR' means the
+      // configurator owns it and a revise may replace it; blank means a person put it
+      // there and nothing may touch it. Without this, revising could only ever append.
+      source: it.source || '',
       showNotes: false,
     };
   }
@@ -5138,7 +5142,7 @@
   /** The version payload, shared by the Save button and the quiet save below. */
   function builderVersionPayload() {
     var sections = [{ id: 'meta', type: 'CUSTOMER_INFO', title: 'Proposal', order: 0, enabled: true, data: pb.meta }];
-    var items = pb.lines.map(function (l, i) { return { ref: l.ref, lineType: l.lineType, kind: l.kind, productId: l.productId, sku: l.sku || '', name: l.name, description: l.description, internalNote: l.internalNote || '', components: l.components || null, freightTbd: !!l.freightTbd, quantity: Number(l.quantity) || 0, rateMinor: Number(l.rateMinor) || 0, costEach: Number(l.costEach) || 0, weightEach: Number(l.weightEach) || 0, group: l.group || '', optional: !!l.optional, delivery: l.delivery || '', returnable: l.returnable || '', addlFreight: l.addlFreight || '', freightCalc: l.freightCalc || '', tpFreightMinor: Number(l.tpFreightMinor) || 0, tpFreightLabel: l.tpFreightLabel || '', order: i }; });
+    var items = pb.lines.map(function (l, i) { return { ref: l.ref, lineType: l.lineType, kind: l.kind, productId: l.productId, sku: l.sku || '', name: l.name, description: l.description, internalNote: l.internalNote || '', components: l.components || null, source: l.source || '', freightTbd: !!l.freightTbd, quantity: Number(l.quantity) || 0, rateMinor: Number(l.rateMinor) || 0, costEach: Number(l.costEach) || 0, weightEach: Number(l.weightEach) || 0, group: l.group || '', optional: !!l.optional, delivery: l.delivery || '', returnable: l.returnable || '', addlFreight: l.addlFreight || '', freightCalc: l.freightCalc || '', tpFreightMinor: Number(l.tpFreightMinor) || 0, tpFreightLabel: l.tpFreightLabel || '', order: i }; });
     return { title: pb.title || undefined, sections: sections, items: items, expirationDate: pb.meta.expiration || undefined };
   }
 
@@ -5506,20 +5510,13 @@
   function _xlfnPrefix(config) { return config === 'Square' ? 'SQ-' : config === 'L-Shape' ? 'L-' : config === 'T-Shape' ? 'T-' : 'R-'; }
   var adv = null;
   function openAdventureConfigurator() {
-    adv = {
-      length: 10, width: 10, config: 'Square', legs: 6, legsAuto: true, configManual: false,
-      monkeyBars: false, monkeyBarsQty: 1, ladders: false, laddersQty: 1, ladderShield: false,
-      trolley: false, trolleyType: 'Dual', interiorBeams: false, interiorBeamsQty: 1,
-      zipLine: false, zipLineQty: 1, ballRack: false,
-      slide: false, slideGray: false, steamroller: false,
-      climbFrame: false, climbWall: false, climbShield: false, climbMat: false,
-      matFloor: false, matColumn: false, uShaped: 0, completeWrap: 0, matLadderLeg: false, matCustom: false,
-      floorPadding: false, floorPadThickness: '3.25',
-      brackets: false, bracketsQty: 0, swivel360: 0, swivelStandalone: 0, forged: 0, swingHanger: 0, vRings: 0, carabiner: 0, webbingSling: 0,
-      partOverrides: {},
-      hwTouched: {},
-    };
-    adv.legs = legsFor(adv.length);
+    adv = advBlank();
+    // Reopen where the proposal actually is. The configurator used to reset to a
+    // 10×10 square every time, so revisiting it on a draft meant re-answering
+    // everything and then generating a second set of lines beside the first.
+    var prior = pb && pb.meta ? pb.meta.advAnswers : null;
+    if (prior) advApplyAnswers(prior);
+    else adv.legs = legsFor(adv.length);
     advOverridable = null;
     loadAdvOverridable();
     var ov = document.createElement('div');
@@ -5528,8 +5525,85 @@
     document.body.appendChild(ov);
     renderAdv();
   }
+  function advBlank() {
+    return {
+      length: 10, width: 10, config: 'Square', legs: 6, legsAuto: true, configManual: false,
+      monkeyBars: false, monkeyBarsQty: 1, ladders: false, laddersQty: 1, ladderShield: false,
+      trolley: false, trolleyType: 'Dual', interiorBeams: false, interiorBeamsQty: 1,
+      zipLine: false, zipLineQty: 1, ballRack: false,
+      slide: false, slideGray: false, steamroller: false, slideConvKit: false,
+      cargoNet: false, cargoNet10x8: false, cargoNet10x8Qty: 1, cargoNet8x6: false, cargoNet8x6Qty: 1,
+      cargoHwCarabiner: true, cargoHwVRing: true,
+      climbFrame: false, climbWall: false, climbShield: false, climbMat: false,
+      matFloor: false, matColumn: false, uShaped: 0, completeWrap: 0, matLadderLeg: false, matCustom: false,
+      floorPadding: false, floorPadThickness: '3.25',
+      brackets: false, bracketsQty: 0, swivel360: 0, swivelStandalone: 0, forged: 0, swingHanger: 0, vRings: 0, carabiner: 0, webbingSling: 0,
+      partOverrides: {},
+      hwTouched: {},
+    };
+  }
+
+  /**
+   * The stored answers, back into the configurator's own shape.
+   *
+   * The two differ in a few places on purpose: the engine takes `ladders` as a count
+   * while the form has a toggle and a quantity beside it, and the form tracks which
+   * fields a rep has typed in so catalog defaults cannot overwrite them. Everything
+   * reloaded counts as touched — a saved quantity is a decision, and re-seeding it
+   * from the catalog on reopen would quietly undo that decision.
+   */
+  function advApplyAnswers(a) {
+    if (!a) return;
+    adv.length = Number(a.length) || 10;
+    adv.width = Number(a.width) || 10;
+    adv.config = a.config || autoConfig();
+    adv.configManual = adv.config !== autoConfig();
+    adv.legs = Number(a.legs) || legsFor(adv.length);
+    adv.monkeyBars = !!a.monkeyBars; adv.monkeyBarsQty = Number(a.monkeyBarsQty) || 1;
+    adv.ladders = Number(a.ladders) > 0; adv.laddersQty = Number(a.ladders) || 1;
+    adv.trolley = !!a.trolley; adv.trolleyType = a.trolleyType || 'Dual';
+    adv.interiorBeams = !!a.interiorBeams; adv.interiorBeamsQty = Number(a.interiorBeamsQty) || 1;
+    adv.zipLine = !!a.zipLine; adv.zipLineQty = Number(a.zipLineQty) || 1;
+    adv.ballRack = !!a.ballRack;
+    adv.slide = !!a.slide; adv.slideGray = !!a.slideGray; adv.steamroller = !!a.steamroller;
+    // Undefined means the answer predates the toggle, when the kit always rode with
+    // the ramp — see slideConvKitOn() in adventureSeries.ts.
+    adv.slideConvKit = a.slideConvKit === undefined ? !!a.steamroller : !!a.slideConvKit;
+    adv.cargoNet = !!a.cargoNet;
+    adv.cargoNet10x8 = !!a.cargoNet10x8; adv.cargoNet10x8Qty = Number(a.cargoNet10x8Qty) || 1;
+    adv.cargoNet8x6 = !!a.cargoNet8x6; adv.cargoNet8x6Qty = Number(a.cargoNet8x6Qty) || 1;
+    adv.cargoHwCarabiner = a.cargoHwCarabiner !== false;
+    adv.cargoHwVRing = a.cargoHwVRing !== false;
+    adv.climbFrame = !!a.climbFrame; adv.climbWall = !!a.climbWall;
+    adv.climbShield = !!a.climbShield; adv.climbMat = !!a.climbMat;
+    adv.floorPadding = !!(a.floorPadding || a.matFloor);
+    adv.floorPadThickness = a.floorPadThickness === '2' ? '2' : '3.25';
+    adv.matColumn = !!a.matColumn; adv.uShaped = Number(a.uShaped) || 0; adv.completeWrap = Number(a.completeWrap) || 0;
+    adv.matLadderLeg = !!a.matLadderLeg; adv.matCustom = !!a.matCustom;
+    adv.brackets = !!a.brackets; adv.bracketsQty = Number(a.bracketsQty) || 0; adv.swivel360 = Number(a.swivel360) || 0;
+    adv.swivelStandalone = Number(a.swivelStandalone) || 0; adv.forged = Number(a.forged) || 0;
+    adv.swingHanger = Number(a.swingHanger) || 0; adv.vRings = Number(a.vRings) || 0;
+    adv.carabiner = Number(a.carabiner) || 0; adv.webbingSling = Number(a.webbingSling) || 0;
+    adv.partOverrides = a.partOverrides ? JSON.parse(JSON.stringify(a.partOverrides)) : {};
+    adv.hwTouched = { forged: 1, swivelStandalone: 1, swingHanger: 1, vRings: 1, carabiner: 1, webbingSling: 1 };
+  }
+
+  /** True when this proposal already carries a generated Adventure Series set. */
+  function advAlreadyBuilt() { return !!(pb && pb.meta && pb.meta.advAnswers); }
+  function advGenLabel() { return advAlreadyBuilt() ? 'Revise Current Proposal' : 'Generate Proposal'; }
+
   function advClose() { var o = document.getElementById('advOverlay'); if (o) document.body.removeChild(o); }
   function climbWalls() { return (adv.climbFrame ? 1 : 0) + (adv.climbWall ? 1 : 0); }
+  /**
+   * What the cargo net adds to the fastener totals. Mirrors
+   * CARGO_NET_CARABINER_PER_NET / CARGO_NET_VRING_PER_NET in adventureSeries.ts so the
+   * form can state the number before the server prices it — keep both in step. These
+   * are ADDED to the quantities answered under Hardware rather than becoming their own
+   * lines, so the same part number never appears on a proposal twice.
+   */
+  function cargoNetOn() { return !!(adv.cargoNet && (adv.cargoNet10x8 || adv.cargoNet8x6)); }
+  function cargoCarabinerAdds() { return cargoNetOn() && adv.cargoHwCarabiner !== false ? 1 : 0; }
+  function cargoVRingAdds() { return cargoNetOn() && adv.cargoHwVRing !== false ? 2 : 0; }
   function eyeboltSum() { var nonSwivel = Math.max(0, (Number(adv.bracketsQty) || 0) - (Number(adv.swivel360) || 0)); return (Number(adv.swivel360) || 0) + nonSwivel + (Number(adv.forged) || 0) + (Number(adv.swingHanger) || 0); }
 
   /**
@@ -5672,6 +5746,13 @@
         ' into the H-1000 hardware kit</div>';
     }
     function hwNum(key, label, min, max, hint) { return '<div>' + num(key, label, min, max, '', hint) + hwDefaultRow(key) + hwPartRow(key) + hwRollRow(key) + '</div>'; }
+    /** A part this option always brings with it — stated, not choosable. */
+    function partLine(label, part) {
+      return '<div style="display:flex;align-items:baseline;gap:8px;padding:8px 0;border-bottom:1px solid #f2f3ef;font-size:14px;">' +
+        '<span style="font-weight:600;">' + label + '</span>' +
+        '<code style="font-size:11.5px;color:#8a8f85;">' + esc(part) + '</code>' +
+        '<span class="muted" style="font-size:11.5px;margin-left:auto;">always included</span></div>';
+    }
     var grid = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;';
     var stack = 'display:flex;flex-direction:column;gap:10px;';
 
@@ -5694,9 +5775,38 @@
           sec('Frame Accessories',
             tog('zipLine', 'Zip Line') + (adv.zipLine ? '<div style="' + grid + 'margin:8px 0 4px;">' + num('zipLineQty', '# of Zip Line', 1, 3) + '</div>' : '') +
             tog('ballRack', 'Frame Mount — Ball Rack') +
-            tog('slide', 'Slide') + (adv.slide ? '<div style="padding-left:16px;">' + tog('slideGray', 'Slide — Gray Upcharge') + tog('steamroller', 'Steamroller Ramp (3rd Party)', 'Auto-adds Slide Conversion Kit') + '</div>' : '') +
+            tog('slide', 'Summit Adventure Slide System') +
+            (adv.slide ? '<div style="padding-left:16px;">' +
+              partLine('Slide', 'A-2216') +
+              tog('slideGray', 'Slide — Gray Upcharge') +
+              tog('steamroller', 'Steamroller Ramp (3rd Party)', 'Ticks the conversion kit below') +
+              (adv.steamroller ? '<div style="padding-left:16px;">' + tog('slideConvKit', 'Adventure Steamroller/Scooter Board — Conversion Kit', 'Part A-2349 · required with the ramp') + '</div>' : '') +
+            '</div>' : '') +
+            tog('cargoNet', 'Cargo Net') +
+            (adv.cargoNet ? '<div style="padding-left:16px;">' +
+              tog('cargoNet10x8', "10' x 8' — Climbing Cargo Net Black", 'Part B07V3J9S2R') +
+              (adv.cargoNet10x8 ? '<div style="' + grid + 'margin:8px 0 4px;">' + num('cargoNet10x8Qty', "# of 10' x 8' nets", 1, 20) + '</div>' : '') +
+              tog('cargoNet8x6', "8' x 6' — Climbing Cargo Net Black", 'Part B07TSDMPNQ') +
+              (adv.cargoNet8x6 ? '<div style="' + grid + 'margin:8px 0 4px;">' + num('cargoNet8x6Qty', "# of 8' x 6' nets", 1, 20) + '</div>' : '') +
+              (adv.cargoNet10x8 || adv.cargoNet8x6
+                ? '<div style="margin-top:10px;padding:10px 12px;background:#f8f9f6;border:1px solid #e7e8e3;border-radius:9px;">' +
+                    '<div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:#8a8f85;margin-bottom:2px;">Comes with the net</div>' +
+                    tog('cargoHwCarabiner', 'Heavy Duty Carabiners — Spring Snap', 'Part ' + ADV_HW_PARTS.carabiner + ' · 1 pack · added to the carabiner total under Hardware') +
+                    tog('cargoHwVRing', 'V-Ring Bolt', 'Part ' + ADV_HW_PARTS.vRings + ' · 2 packs · added to the V-ring total under Hardware') +
+                  '</div>'
+                : '') +
+            '</div>' : '') +
             tog('climbFrame', 'Climbing Wall — Frame Mounted') + tog('climbWall', 'Climbing Wall — Wall Mounted') +
             (climbWalls() > 0 ? '<div style="padding-left:16px;">' + tog('climbShield', 'Climbing Wall — Safety Shield', 'Qty mirrors # climbing walls (' + climbWalls() + ')') + tog('climbMat', 'Climbing Wall — Mat', 'Qty mirrors # climbing walls (' + climbWalls() + ')') + '</div>' : '')
+          ) +
+          // Two fixings that belong to the whole frame rather than to any one
+          // accessory, so they have their own section instead of sitting at the very
+          // bottom under Additional Hardware where they were routinely missed.
+          sec('Essential Carabiners &amp; Connectors',
+            '<div style="' + stack + '">' +
+              hwNum('carabiner', 'Auto-Locking Carabiner (4pk)', 0, 8, 'Suggested: ' + carabRec + ' — enter a quantity to include it' + (cargoCarabinerAdds() ? ' · +' + cargoCarabinerAdds() + ' from the cargo net' : '')) +
+              hwNum('webbingSling', 'Multi-Pocket Webbing Sling', 0, 16, 'Suggested: ' + (Number(adv.legs) || 0) + ' (one per leg)') +
+            '</div>'
           ) +
           sec('Mats & Padding',
             tog('floorPadding', 'Floor Padding', 'Sized from the frame: 14" added to each side. Priced per sq ft.') +
@@ -5706,29 +5816,30 @@
             tog('matLadderLeg', 'Adventure Mat System — Ladder Leg', 'Qty = # of ladders (' + adv.laddersQty + ')') +
             tog('matCustom', 'Adventure Mat System — CUSTOM', 'Mat SKU logic to be provided — added as manual line')
           ) +
-          sec('Accessories & Hardware',
+          sec('Hardware',
             '<div style="font-weight:600;font-size:13.5px;color:#3d4a55;margin-bottom:4px;">Quick Shift Saddle Bracket</div>' +
-            tog('brackets', 'Include Quick Shift Saddle Bracket') +
+            tog('brackets', 'Quick Shift Saddle Bracket') +
             (adv.brackets ? '<div style="' + stack + 'margin:10px 0 4px;">' +
               num('bracketsQty', '# of Saddle Brackets', 0, 8) +
               num('swivel360', '# of 360 Swivel / 180 Eye Bolts (≤ brackets)', 0, 8) +
               '<div class="af"><label style="display:block;font-size:11px;color:#8a8f85;text-transform:uppercase;margin-bottom:4px;"># of 3/8" Non-Swivel Eye Bolts (auto)</label><input value="' + nonSwivel + '" disabled style="width:100%;padding:8px 10px;border:1px solid #eef0ea;border-radius:8px;font-size:14px;background:#f2f3ef;"></div>' +
             '</div>' : '') +
-            '<div style="font-weight:600;font-size:13.5px;color:#3d4a55;margin:14px 0 4px;border-top:1px solid #f2f3ef;padding-top:14px;">Additional Hardware</div>' +
-            '<div style="' + stack + '">' +
+            '<div style="' + stack + 'margin-top:14px;border-top:1px solid #f2f3ef;padding-top:14px;">' +
               hwNum('forged', '# 1/2" Forged Eye Bolts (×6)', 0, 36) +
               hwNum('swivelStandalone', '# Swing &amp; Swivel Eye Bolt (stand-alone)', 0, 24) +
               hwNum('swingHanger', '# Swing Hanger w/ Bearing (×2)', 0, 12) +
-              hwNum('vRings', '# V-Rings (10-pack)', 0, 3) +
-              hwNum('carabiner', 'Auto-Locking Carabiner (4pk)', 0, 8, 'Suggested: ' + carabRec + ' — enter a quantity to include it') +
-              hwNum('webbingSling', 'Multi-Pocket Webbing Sling', 0, 16, 'Suggested: ' + (Number(adv.legs) || 0) + ' (one per leg)') +
+              hwNum('vRings', '# V-Rings (10-pack)', 0, 3, cargoVRingAdds() ? '+' + cargoVRingAdds() + ' from the cargo net' : '') +
             '</div>'
           ) +
           '<div style="display:flex;justify-content:space-between;gap:10px;margin-top:20px;padding-top:16px;border-top:1px solid #e7e8e3;">' +
-            '<label style="display:flex;align-items:center;gap:7px;font-size:12.5px;color:#5c6157;"><input type="checkbox" id="advReplace"> Replace existing lines</label>' +
-            '<div style="display:flex;gap:8px;">' +
+            // Revising already knows which lines are its own, so the blunt "replace
+            // everything" switch is only offered on a first build.
+            (advAlreadyBuilt()
+              ? '<div class="muted" style="font-size:12px;line-height:1.5;max-width:300px;">Replaces the lines this configurator generated and re-pulls their catalog prices. Anything you added by hand is left alone.</div>'
+              : '<label style="display:flex;align-items:center;gap:7px;font-size:12.5px;color:#5c6157;"><input type="checkbox" id="advReplace"> Replace existing lines</label>') +
+            '<div style="display:flex;gap:8px;align-items:flex-start;">' +
             '<button class="link-btn" id="advTrace" style="width:auto;padding:11px 16px;">Test the logic →</button>' +
-            '<button class="btn" id="advGen" style="width:auto;padding:11px 22px;">Generate proposal lines →</button></div>' +
+            '<button class="btn" id="advGen" style="width:auto;padding:11px 22px;">' + advGenLabel() + '</button></div>' +
           '</div>' +
         '</div>' +
       '</div>';
@@ -5737,7 +5848,10 @@
     document.getElementById('advX').addEventListener('click', advClose);
     var cfgReset = document.getElementById('advCfgReset');
     if (cfgReset) cfgReset.addEventListener('click', function (e) { e.preventDefault(); adv.configManual = false; adv.config = autoConfig(); renderAdv(); });
-    document.getElementById('advGen').addEventListener('click', function () { generateAdvLines(document.getElementById('advReplace').checked); });
+    document.getElementById('advGen').addEventListener('click', function () {
+      var rp = document.getElementById('advReplace');
+      generateAdvLines(!!(rp && rp.checked));
+    });
     document.getElementById('advTrace').addEventListener('click', function () { openAdvTrace(); });
     o.querySelectorAll('[data-ovr]').forEach(function (el) {
       el.addEventListener('change', function () {
@@ -5791,6 +5905,18 @@
     // seed themselves. Nothing under Additional Hardware ever self-populates — a
     // quantity nobody typed used to reach the proposal as a priced line.
     if (changed === 'brackets' && adv.brackets && !Number(adv.bracketsQty)) { adv.bracketsQty = 4; adv.swivel360 = 4; }
+    // The ramp cannot be used without its conversion kit, so choosing the ramp ticks
+    // the kit. Unticking the ramp puts the kit away with it.
+    if (changed === 'steamroller') adv.slideConvKit = !!adv.steamroller;
+    // A net has to hang off something. Both fixings come with the first net and can
+    // be unticked afterwards; clearing the section clears them.
+    if (changed === 'cargoNet10x8' || changed === 'cargoNet8x6') {
+      if (adv.cargoNet10x8 || adv.cargoNet8x6) { adv.cargoHwCarabiner = true; adv.cargoHwVRing = true; }
+    }
+    if (changed === 'cargoNet' && !adv.cargoNet) {
+      adv.cargoNet10x8 = false; adv.cargoNet8x6 = false;
+      adv.cargoHwCarabiner = true; adv.cargoHwVRing = true;
+    }
     if (changed === 'legs' || changed === 'length') { adv.completeWrap = Math.max(0, (Number(adv.legs) || 0) - (Number(adv.uShaped) || 0)); }
     if (changed === 'ladders' || changed === 'laddersQty') { if (adv.ladders && adv.matColumn && !adv.uShaped) adv.uShaped = adv.laddersQty; }
     if (changed === 'matColumn' && adv.matColumn) { if (!adv.uShaped) adv.uShaped = adv.ladders ? adv.laddersQty : 0; adv.completeWrap = Math.max(0, (Number(adv.legs) || 0) - (Number(adv.uShaped) || 0)); }
@@ -5802,7 +5928,11 @@
       monkeyBars: !!adv.monkeyBars, monkeyBarsQty: Number(adv.monkeyBarsQty),
       interiorBeams: !!adv.interiorBeams, interiorBeamsQty: Number(adv.interiorBeamsQty),
       trolley: !!adv.trolley, trolleyType: adv.trolleyType, zipLine: !!adv.zipLine, zipLineQty: Number(adv.zipLineQty), ballRack: !!adv.ballRack,
-      slide: !!adv.slide, slideGray: !!adv.slideGray, steamroller: !!adv.steamroller,
+      slide: !!adv.slide, slideGray: !!adv.slideGray, steamroller: !!adv.steamroller, slideConvKit: !!adv.slideConvKit,
+      cargoNet: !!adv.cargoNet,
+      cargoNet10x8: !!adv.cargoNet10x8, cargoNet10x8Qty: Number(adv.cargoNet10x8Qty) || 1,
+      cargoNet8x6: !!adv.cargoNet8x6, cargoNet8x6Qty: Number(adv.cargoNet8x6Qty) || 1,
+      cargoHwCarabiner: adv.cargoHwCarabiner !== false, cargoHwVRing: adv.cargoHwVRing !== false,
       climbFrame: !!adv.climbFrame, climbWall: !!adv.climbWall, climbShield: !!adv.climbShield, climbMat: !!adv.climbMat,
       matFloor: !!adv.floorPadding, matColumn: !!adv.matColumn, uShaped: Number(adv.uShaped), completeWrap: Number(adv.completeWrap), matLadderLeg: !!adv.matLadderLeg, matCustom: !!adv.matCustom,
       floorPadding: !!adv.floorPadding, floorPadThickness: adv.floorPadThickness === '2' ? '2' : '3.25',
@@ -5966,17 +6096,25 @@
       var r = await authed('/proposals/adventure-series/price', { method: 'POST', body: answers });
       if (r.ok) priced = await r.json();
     } catch (e) {}
-    if (!priced) { if (btn) { btn.disabled = false; btn.textContent = 'Generate proposal lines →'; } alert('Could not reach the pricing engine. Is the server running the latest build?'); return; }
+    if (!priced) { if (btn) { btn.disabled = false; btn.textContent = advGenLabel(); } alert('Could not reach the pricing engine. Is the server running the latest build?'); return; }
     var out = (priced.lines || []).map(function (l) {
       return normalizeLine({
         lineType: l.lineType, kind: l.lineType === 'GROUP' ? 'GROUP' : l.lineType === 'SUBGROUP' ? 'SUBGROUP' : l.lineType === 'NOTE' ? 'NOTE' : 'INCLUDED',
         name: l.name, sku: l.sku || '', description: l.description || '', quantity: l.quantity == null ? 0 : l.quantity,
         rateMinor: l.rateMinor || 0, costEach: l.costEach || 0, weightEach: l.weightEach || 0, optional: !!l.optional,
-        internalNote: l.internalNote || '', components: l.components || null,
+        internalNote: l.internalNote || '', components: l.components || null, source: 'ADV',
       });
     });
     out.forEach(applyItemDefaults);
-    if (replace) pb.lines = out; else pb.lines = pb.lines.concat(out);
+    var revising = advAlreadyBuilt();
+    if (revising) {
+      var at = replaceAdvLines(out);
+      if (at === -1) pb.lines = pb.lines.concat(out);
+    } else if (replace) {
+      pb.lines = out;
+    } else {
+      pb.lines = pb.lines.concat(out);
+    }
     // Kept with the proposal so the hardware logic can be re-run against the same
     // configuration later, on a draft nobody has open in the configurator.
     pb.meta.advAnswers = answers;
@@ -5989,6 +6127,50 @@
     advClose(); renderBuilder();
     var bl = document.getElementById('bLines'); if (bl) bl.scrollIntoView({ block: 'start' });
   }
+  /**
+   * Swap the configurator's own lines for a freshly generated set, in place.
+   *
+   * Revising used to append, so a second pass through the configurator left two of
+   * every line. What makes a clean replacement possible is knowing which lines belong
+   * to the configurator: lines it generated carry source 'ADV'.
+   *
+   * Proposals built before that marker existed have none, so they are matched instead
+   * against the set the configurator WOULD have produced — the same generated block,
+   * compared on line type, part number and name. Only a line that matches something
+   * in the new set is removed, and each match is consumed once, so a part a rep added
+   * by hand on top of a generated one survives. If nothing can be matched the caller
+   * appends rather than guessing.
+   *
+   * Returns the index the block was written back to, or -1 when nothing was replaced.
+   */
+  function replaceAdvLines(out) {
+    var owned = [];
+    for (var i = 0; i < pb.lines.length; i++) if (pb.lines[i] && pb.lines[i].source === 'ADV') owned.push(i);
+
+    if (!owned.length) {
+      // Legacy fallback: match on identity against the new set.
+      var key = function (l) {
+        return (l.lineType || 'PRODUCT') + '|' + String(l.sku || '').toUpperCase() + '|' + String(l.name || '').trim().toLowerCase();
+      };
+      var wanted = {};
+      out.forEach(function (l) { var k = key(l); wanted[k] = (wanted[k] || 0) + 1; });
+      for (var j = 0; j < pb.lines.length; j++) {
+        var k2 = key(pb.lines[j]);
+        if (wanted[k2] > 0) { wanted[k2]--; owned.push(j); }
+      }
+      if (!owned.length) return -1;
+    }
+
+    var at = owned[0];
+    // Back to front, so the earlier indexes stay valid as we splice.
+    for (var d = owned.length - 1; d >= 0; d--) pb.lines.splice(owned[d], 1);
+    // Anything sitting between the removed lines has moved up; the block goes back
+    // where it started, which keeps a hand-added line below it below it.
+    if (at > pb.lines.length) at = pb.lines.length;
+    pb.lines.splice.apply(pb.lines, [at, 0].concat(out));
+    return at;
+  }
+
   function rangeArr(a, b) { var r = []; for (var i = a; i <= b; i++) r.push(i); return r; }
 
   /* --- Summit Soar configurator ---------------------------------------------
@@ -6183,6 +6365,7 @@
     });
     return a;
   }
+  /** Same contract as the Adventure path — see replaceAdvLines. */
   async function generateSoarLines(replace) {
     var btn = document.getElementById('soarGen');
     if (btn) { btn.disabled = true; btn.textContent = 'Pricing…'; }

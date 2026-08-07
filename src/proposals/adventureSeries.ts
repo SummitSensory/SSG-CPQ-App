@@ -1,19 +1,30 @@
 import skuData from './adventure-skus.json' with { type: 'json' };
 import {
-  evaluateHardwareRules, evaluateRules, DEFAULT_HARDWARE_RULES,
-  type HardwareRule, type HardwareBomRow, type FormulaRule,
+  evaluateHardwareRules,
+  evaluateRules,
+  DEFAULT_HARDWARE_RULES,
+  type HardwareRule,
+  type HardwareBomRow,
+  type FormulaRule,
 } from './hardwareRules.js';
 import { DEFAULT_FRAME_RULES, frameContext } from './frameRules.js';
 import { computeFloorPadding, type MatQuote, type MatThickness } from './matPricing.js';
 import { setting, defaultSettings, type FormulaSettings } from './formulaSettings.js';
 
 export interface SkuRec {
-  part: string; description: string; unitPriceMinor: number; unitCostMinor?: number; weightLbs: number; category: string;
+  part: string;
+  description: string;
+  unitPriceMinor: number;
+  unitCostMinor?: number;
+  weightLbs: number;
+  category: string;
   /** Where the catalog files this part: tier-1 group and tier-2 subgroup. Drives
    *  which proposal heading a configurator-picked accessory prints under. */
-  proposalGroup?: string; proposalSubgroup?: string;
+  proposalGroup?: string;
+  proposalSubgroup?: string;
   /** Tree sort order of that group and subgroup — decides heading order. */
-  proposalGroupSort?: number; proposalSubgroupSort?: number;
+  proposalGroupSort?: number;
+  proposalSubgroupSort?: number;
   /** Catalog pre-approval: may a rep swap this part for another in the builder? */
   overrideAllowed?: boolean;
 }
@@ -21,20 +32,75 @@ const SKUS: Record<string, SkuRec> = {};
 for (const s of skuData as SkuRec[]) SKUS[s.part] = s;
 
 export interface AdvAnswers {
-  length: number; width: number; config: string; legs: number; ladders: number;
-  monkeyBars?: boolean; monkeyBarsQty?: number; interiorBeams?: boolean; interiorBeamsQty?: number;
-  trolley?: boolean; trolleyType?: string; zipLine?: boolean; zipLineQty?: number; ballRack?: boolean;
-  slide?: boolean; slideGray?: boolean; steamroller?: boolean;
-  climbFrame?: boolean; climbWall?: boolean; climbShield?: boolean; climbMat?: boolean;
-  matFloor?: boolean; matColumn?: boolean; uShaped?: number; completeWrap?: number; matLadderLeg?: boolean; matCustom?: boolean;
+  length: number;
+  width: number;
+  config: string;
+  legs: number;
+  ladders: number;
+  monkeyBars?: boolean;
+  monkeyBarsQty?: number;
+  interiorBeams?: boolean;
+  interiorBeamsQty?: number;
+  trolley?: boolean;
+  trolleyType?: string;
+  zipLine?: boolean;
+  zipLineQty?: number;
+  ballRack?: boolean;
+  slide?: boolean;
+  slideGray?: boolean;
+  steamroller?: boolean;
+  /**
+   * The Steamroller/Scooter Board conversion kit (A-2349). The steamroller ramp
+   * cannot be used without it, so the configurator ticks this the moment the ramp is
+   * chosen — but it stays a separate answer so a rep who already has the kit on site
+   * can untick it. Undefined means "follow the ramp", which keeps every proposal built
+   * before this answer existed pricing exactly as it did.
+   */
+  slideConvKit?: boolean;
+  /**
+   * Climbing cargo nets, each with its own quantity. Two sizes are stocked and a job
+   * can take either or both.
+   */
+  cargoNet?: boolean;
+  cargoNet10x8?: boolean;
+  cargoNet10x8Qty?: number;
+  cargoNet8x6?: boolean;
+  cargoNet8x6Qty?: number;
+  /**
+   * A net has to hang off something. Both are ticked automatically with the first net
+   * and can be unticked. Their quantities are ADDED to the carabiner and V-ring packs
+   * answered under Hardware rather than becoming lines of their own — same part
+   * number, one line, one total.
+   */
+  cargoHwCarabiner?: boolean;
+  cargoHwVRing?: boolean;
+  climbFrame?: boolean;
+  climbWall?: boolean;
+  climbShield?: boolean;
+  climbMat?: boolean;
+  matFloor?: boolean;
+  matColumn?: boolean;
+  uShaped?: number;
+  completeWrap?: number;
+  matLadderLeg?: boolean;
+  matCustom?: boolean;
   /** Floor padding decision tree: include it, and at which thickness. */
-  floorPadding?: boolean; floorPadThickness?: MatThickness;
+  floorPadding?: boolean;
+  floorPadThickness?: MatThickness;
   /**
    * Rep-entered part substitutions, keyed by the part the engine would normally
    * pick. Honoured only when the catalog flags the original `overrideAllowed`.
    */
   partOverrides?: Record<string, string>;
-  brackets?: boolean; bracketsQty?: number; swivel360?: number; swivelStandalone?: number; forged?: number; swingHanger?: number; vRings?: number; carabiner?: number; webbingSling?: number;
+  brackets?: boolean;
+  bracketsQty?: number;
+  swivel360?: number;
+  swivelStandalone?: number;
+  forged?: number;
+  swingHanger?: number;
+  vRings?: number;
+  carabiner?: number;
+  webbingSling?: number;
 }
 
 /**
@@ -48,7 +114,14 @@ export interface AdvAnswers {
  * workbook rule "Interior Beams (+1 if monkey bars)".
  */
 export function frameModelNumber(a: AdvAnswers): string {
-  const shape = a.config === 'Square' ? 'SQ' : a.config === 'L-Shape' ? 'L' : a.config === 'T-Shape' ? 'T' : 'R';
+  const shape =
+    a.config === 'Square'
+      ? 'SQ'
+      : a.config === 'L-Shape'
+        ? 'L'
+        : a.config === 'T-Shape'
+          ? 'T'
+          : 'R';
   const beams = (a.interiorBeams ? n(a.interiorBeamsQty) : 0) + (a.monkeyBars ? 1 : 0);
   const ladders = n(a.ladders);
   let code = '';
@@ -68,8 +141,15 @@ export function frameDimensions(a: AdvAnswers): string {
 
 export interface PricedLine {
   lineType: 'GROUP' | 'SUBGROUP' | 'PRODUCT' | 'NOTE';
-  optional?: boolean; name: string; sku?: string; description?: string;
-  quantity?: number; rateMinor?: number; costEach?: number; weightEach?: number; needsPrice?: boolean;
+  optional?: boolean;
+  name: string;
+  sku?: string;
+  description?: string;
+  quantity?: number;
+  rateMinor?: number;
+  costEach?: number;
+  weightEach?: number;
+  needsPrice?: boolean;
   /**
    * An engineering warning for whoever is building the proposal — never printed.
    * `description` is the customer's text, so anything addressed to US belongs
@@ -83,11 +163,26 @@ export interface PricedLine {
    * shop has every fastener and its count. Carried on the saved proposal item, so
    * the breakdown survives without re-running the configurator.
    */
-  components?: Array<{ part: string; name: string; qty: number; unitPriceMinor?: number; unitCostMinor: number; weightLbs: number; formula?: string; inCatalog?: boolean; edited?: boolean }>;
+  components?: Array<{
+    part: string;
+    name: string;
+    qty: number;
+    unitPriceMinor?: number;
+    unitCostMinor: number;
+    weightLbs: number;
+    formula?: string;
+    inCatalog?: boolean;
+    edited?: boolean;
+  }>;
 }
 
 /** One BOM row with the expression that produced its quantity, for the logic trace. */
-export interface BomRow { part: string; qty: number; formula: string; rule: string; }
+export interface BomRow {
+  part: string;
+  qty: number;
+  formula: string;
+  rule: string;
+}
 
 const n = (v: unknown) => (typeof v === 'number' && isFinite(v) ? v : 0);
 
@@ -113,9 +208,17 @@ export const ZIP_KIT_CATEGORY = 'Complete Zip Line Kit';
 export function computeAdventureBOM(a: AdvAnswers, frameRules?: FormulaRule[]): BomRow[] {
   const out: BomRow[] = [];
   // Data-driven frame quantities (Administration → Formulas → Frame quantities).
-  const evaluated = evaluateRules(frameRules && frameRules.length ? frameRules : DEFAULT_FRAME_RULES, frameContext(a, () => 0));
+  const evaluated = evaluateRules(
+    frameRules && frameRules.length ? frameRules : DEFAULT_FRAME_RULES,
+    frameContext(a, () => 0),
+  );
   for (const r of evaluated) {
-    out.push({ part: r.part, qty: Math.round(r.qty), rule: r.group || 'Frame', formula: r.formula });
+    out.push({
+      part: r.part,
+      qty: Math.round(r.qty),
+      rule: r.group || 'Frame',
+      formula: r.formula,
+    });
   }
   // Structural pieces that are a lookup rather than a coefficient stay in code.
   out.push(...beamMembers(a));
@@ -142,12 +245,16 @@ export function computeAdventureBOM(a: AdvAnswers, frameRules?: FormulaRule[]): 
  * addition, resolved against its own member length — see beamMembers().
  */
 export function beamSpans(a: AdvAnswers): number[] {
-  const legs = n(a.legs), L = n(a.length);
+  const legs = n(a.legs),
+    L = n(a.length);
   const full = legs >= 8 ? 2 : legs >= 6 ? 1 : 0;
   if (!full) return L > 0 ? [L] : [];
   const spans: number[] = [];
   let left = L;
-  for (let i = 0; i < full && left > 10; i++) { spans.push(10); left -= 10; }
+  for (let i = 0; i < full && left > 10; i++) {
+    spans.push(10);
+    left -= 10;
+  }
   if (left > 0) spans.push(Math.round(left * 100) / 100);
   return spans;
 }
@@ -155,7 +262,8 @@ export function beamSpans(a: AdvAnswers): number[] {
 const STOCK_MEMBER_FT = [5, 6, 7, 8, 9, 10];
 
 function beamMembers(a: AdvAnswers): BomRow[] {
-  const L = n(a.length), W = n(a.width);
+  const L = n(a.length),
+    W = n(a.width);
   const spans = beamSpans(a);
   const monkey = !!a.monkeyBars;
   const interiorCount = a.interiorBeams ? n(a.interiorBeamsQty) : 0;
@@ -163,8 +271,21 @@ function beamMembers(a: AdvAnswers): BomRow[] {
   const add = (part: string, qty: number, rule: string, formula: string) => {
     if (qty > 0) rows.push({ part, qty: Math.round(qty), rule, formula });
   };
-  const memLen: Record<string, number> = { 'P-2545': 5, 'P-2206': 6, 'P-2207': 7, 'A-2408': 8, 'A-2409': 9, 'A-2410': 10 };
-  const monkeyMem: Record<number, string> = { 6: 'P-2216', 7: 'P-2217', 8: 'A-2418', 9: 'A-2419', 10: 'A-2420' };
+  const memLen: Record<string, number> = {
+    'P-2545': 5,
+    'P-2206': 6,
+    'P-2207': 7,
+    'A-2408': 8,
+    'A-2409': 9,
+    'A-2410': 10,
+  };
+  const monkeyMem: Record<number, string> = {
+    6: 'P-2216',
+    7: 'P-2217',
+    8: 'A-2418',
+    9: 'A-2419',
+    10: 'A-2420',
+  };
   const shortCap = (part: string): number => {
     if (part === 'P-2206') return W === 6 ? 2 : 0;
     if (part === 'P-2207') return W === 7 ? 2 : 0;
@@ -177,13 +298,17 @@ function beamMembers(a: AdvAnswers): BomRow[] {
   const e64 = shortCap('A-2408') + shortCap('A-2409') + shortCap('A-2410');
   const J2 = 4; // Horizontal Beams (perimeter top members for rect/square)
   const partForLen: Record<number, string> = {};
-  Object.keys(memLen).forEach((p) => { const len = memLen[p]; if (p !== 'P-2545' && len != null) partForLen[len] = p; });
+  Object.keys(memLen).forEach((p) => {
+    const len = memLen[p];
+    if (p !== 'P-2545' && len != null) partForLen[len] = p;
+  });
   partForLen[5] = 'P-2545';
 
   // Width end caps are a property of the frame, not of a span — emitted once.
   Object.keys(memLen).forEach((part) => {
     const c = shortCap(part);
-    if (c > 0) add(part, c, `Beam members (${memLen[part]}')`, `short cap by width → ${c} (W ${W})`);
+    if (c > 0)
+      add(part, c, `Beam members (${memLen[part]}')`, `short cap by width → ${c} (W ${W})`);
   });
 
   // Long members, bay by bay, ported term for term from VLOOKUP!J:O.
@@ -202,16 +327,25 @@ function beamMembers(a: AdvAnswers): BomRow[] {
     const part = partForLen[sp];
     if (!part) return;
     if (idx > 0) {
-      add(part, LEG_ADDITION_PER_BAY, `Beam members (${sp}')`,
-        `bay ${idx + 1} of ${spans.length} (L ${L} = ${label}): leg addition → ${LEG_ADDITION_PER_BAY}`);
+      add(
+        part,
+        LEG_ADDITION_PER_BAY,
+        `Beam members (${sp}')`,
+        `bay ${idx + 1} of ${spans.length} (L ${L} = ${label}): leg addition → ${LEG_ADDITION_PER_BAY}`,
+      );
       return;
     }
     const mm = monkeyMem[sp];
-    const mq = (monkey && mm) ? 2 : 0;
-    const qty = (J2 - e64) + interiorCount - 0.5 * mq;
-    add(part, qty, `Beam members (${sp}')`,
+    const mq = monkey && mm ? 2 : 0;
+    const qty = J2 - e64 + interiorCount - 0.5 * mq;
+    add(
+      part,
+      qty,
+      `Beam members (${sp}')`,
       `bay 1 of ${spans.length} (L ${L} = ${label}): perimeter ${J2} − width caps ${e64}` +
-      (interiorCount ? ` + interior ${interiorCount}` : '') + (mq ? ` − monkey offset ${0.5 * mq}` : ''));
+        (interiorCount ? ` + interior ${interiorCount}` : '') +
+        (mq ? ` − monkey offset ${0.5 * mq}` : ''),
+    );
     if (mq > 0 && mm) add(mm, mq, `Monkey bar beam (${sp}')`, `monkey bars on the ${sp}' bay → 2`);
   });
   return rows;
@@ -229,8 +363,20 @@ export function beamSpanWarning(a: AdvAnswers): string | null {
 function trolleyRail(a: AdvAnswers): BomRow[] {
   if (!a.trolley) return [];
   const L = n(a.length);
-  const rail: Record<number, string> = { 7: 'TR2000-A07', 8: 'TR2000-A08', 9: 'TR2000-A09', 10: 'TR2000-A10' };
-  return [{ part: rail[L - 1] || 'TR2000-A09', qty: 2, rule: 'Trolley', formula: `rail sized from length − 1 = ${L - 1}' → 2` }];
+  const rail: Record<number, string> = {
+    7: 'TR2000-A07',
+    8: 'TR2000-A08',
+    9: 'TR2000-A09',
+    10: 'TR2000-A10',
+  };
+  return [
+    {
+      part: rail[L - 1] || 'TR2000-A09',
+      qty: 2,
+      rule: 'Trolley',
+      formula: `rail sized from length − 1 = ${L - 1}' → 2`,
+    },
+  ];
 }
 
 /** Full priced, grouped proposal-line output for the builder. */
@@ -256,7 +402,8 @@ export function computeAdventureProposal(
   const lines: PricedLine[] = [];
   let weight = 0;
   /** The headings currently open, so a subgroup is never a repeat of its own group. */
-  let curGroup = '', curSub = '';
+  let curGroup = '',
+    curSub = '';
   /**
    * Swap a part for the rep's substitute — but only when the catalog has
    * pre-approved the original AND the substitute is itself a real catalog part.
@@ -278,23 +425,55 @@ export function computeAdventureProposal(
     const w = rec ? rec.weightLbs : 0;
     weight += qty * w;
     lines.push({
-      lineType: 'PRODUCT', name: nameOverride || (rec ? rec.description : use), sku: use,
-      description: '', quantity: qty, rateMinor: rec ? rec.unitPriceMinor : 0,
-      costEach: rec ? (rec.unitCostMinor ?? 0) : 0, weightEach: w, needsPrice: !rec,
+      lineType: 'PRODUCT',
+      name: nameOverride || (rec ? rec.description : use),
+      sku: use,
+      description: '',
+      quantity: qty,
+      rateMinor: rec ? rec.unitPriceMinor : 0,
+      costEach: rec ? (rec.unitCostMinor ?? 0) : 0,
+      weightEach: w,
+      needsPrice: !rec,
     });
   };
   const G = (name: string, optional = false, description = '') => {
-    curGroup = name; curSub = '';
+    curGroup = name;
+    curSub = '';
     lines.push({ lineType: 'GROUP', name, optional, description });
   };
-  const SG = (name: string) => { curSub = name; lines.push({ lineType: 'SUBGROUP', name }); };
-  const NOTE = (name: string, description: string) => lines.push({ lineType: 'NOTE', name, description });
+  const SG = (name: string) => {
+    curSub = name;
+    lines.push({ lineType: 'SUBGROUP', name });
+  };
+  const NOTE = (name: string, description: string) =>
+    lines.push({ lineType: 'NOTE', name, description });
   // Main itemized frame — heading carries the configuration product number; the
   // footprint sits beside it as the heading's right-hand note.
   G(`${frameModelNumber(a)} — Itemized`, false, `Frame Dimensions: ${frameDimensions(a)}`);
-  ['A-2245', 'A-2246', 'A-2241', 'A-2242', 'A-2243', 'A-2244', 'A-2225', 'P-2531', 'A-2253',
-    'P-2545', 'P-2206', 'P-2207', 'A-2408', 'A-2409', 'A-2410', 'P-2216', 'P-2217', 'A-2418', 'A-2419', 'A-2420',
-    'P-2330', 'P-2028'].forEach((p) => P(p));
+  [
+    'A-2245',
+    'A-2246',
+    'A-2241',
+    'A-2242',
+    'A-2243',
+    'A-2244',
+    'A-2225',
+    'P-2531',
+    'A-2253',
+    'P-2545',
+    'P-2206',
+    'P-2207',
+    'A-2408',
+    'A-2409',
+    'A-2410',
+    'P-2216',
+    'P-2217',
+    'A-2418',
+    'A-2419',
+    'A-2420',
+    'P-2330',
+    'P-2028',
+  ].forEach((p) => P(p));
 
   // The zip line is part of the structure, so its kit sits inside the itemized
   // frame. Membership comes from the catalog category of the same name: every
@@ -303,7 +482,12 @@ export function computeAdventureProposal(
     const zipLines = n(a.zipLineQty || 1);
     SG(ZIP_KIT_CATEGORY);
     const emitted = new Set<string>();
-    ['P-2024', 'A-2530'].forEach((p) => { if (qtyOf(p) > 0) { P(p); emitted.add(p); } });
+    ['P-2024', 'A-2530'].forEach((p) => {
+      if (qtyOf(p) > 0) {
+        P(p);
+        emitted.add(p);
+      }
+    });
     for (const part of (kitParts && kitParts[ZIP_KIT_CATEGORY]) || []) {
       if (emitted.has(part)) continue;
       emitted.add(part);
@@ -314,21 +498,41 @@ export function computeAdventureProposal(
         // No quantity rule for this member yet — one per zip line. Flagged for the
         // rep so it is reviewed rather than silently assumed, but kept OFF the
         // description: this is a message to us, not to the customer.
-        last.internalNote = 'Quantity assumed 1 per zip line — set its rule in Administration → Formulas → Frame quantities.';
+        last.internalNote =
+          'Quantity assumed 1 per zip line — set its rule in Administration → Formulas → Frame quantities.';
       }
     }
   }
 
-  if (a.trolley) { G('Dual Trolley System', true); ['P-2018', 'P-2025', 'TR2000-A07', 'TR2000-A08', 'TR2000-A09', 'TR2000-A10', 'TRH2005', 'TRN2016', 'TRT2001'].forEach((p) => P(p)); }
+  if (a.trolley) {
+    G('Dual Trolley System', true);
+    [
+      'P-2018',
+      'P-2025',
+      'TR2000-A07',
+      'TR2000-A08',
+      'TR2000-A09',
+      'TR2000-A10',
+      'TRH2005',
+      'TRN2016',
+      'TRT2001',
+    ].forEach((p) => P(p));
+  }
 
-  const hasComp = a.slide || a.climbFrame || a.climbWall || a.ballRack;
+  const hasComp = a.slide || a.climbFrame || a.climbWall || a.ballRack || cargoNetPicked(a);
   // Packs the configurator asks for by quantity. Which heading they print under is
   // the catalog's decision (tier 1 = group, tier 2 = subgroup), not the engine's —
   // so a part filed under “Essential Carabiners & Connectors” prints there rather
   // than being lumped into Hardware.
+  //
+  // The cargo net's own hardware is folded into these totals on purpose. A net needs
+  // carabiners and V-rings, and they are the same part numbers the Hardware section
+  // already asks for — adding them as separate entries would put the same SKU on the
+  // proposal twice, which is what the section subtotals and the BOM then have to
+  // reconcile.
   const extras: Array<{ part: string; qty: number }> = [
-    { part: V_RING_PART, qty: n(a.vRings) },
-    { part: CARABINER_PART, qty: n(a.carabiner) },
+    { part: V_RING_PART, qty: n(a.vRings) + cargoVRingQty(a) },
+    { part: CARABINER_PART, qty: n(a.carabiner) + cargoCarabinerQty(a) },
     { part: WEBBING_SLING_PART, qty: n(a.webbingSling) },
   ].filter((e) => e.qty > 0);
   const norm = (s?: string) => (s || '').trim().toLowerCase();
@@ -345,12 +549,17 @@ export function computeAdventureProposal(
     for (const it of items) {
       const rec = LOOK[it.part];
       const sub = rec?.proposalSubgroup || '';
-      if (!bySub[sub]) { bySub[sub] = []; subSort[sub] = rec?.proposalSubgroupSort ?? 9_999; }
+      if (!bySub[sub]) {
+        bySub[sub] = [];
+        subSort[sub] = rec?.proposalSubgroupSort ?? 9_999;
+      }
       bySub[sub].push(it);
     }
     // Subgroup headings follow the product tree's sort order, not the order the
     // configurator's questions happen to be asked in.
-    const subs = Object.keys(bySub).sort((a, b) => (subSort[a] ?? 9_999) - (subSort[b] ?? 9_999) || a.localeCompare(b));
+    const subs = Object.keys(bySub).sort(
+      (a, b) => (subSort[a] ?? 9_999) - (subSort[b] ?? 9_999) || a.localeCompare(b),
+    );
     for (const sub of subs) {
       // A category named the same as the section it sits in adds nothing — the
       // catalog files these fasteners under Hardware › Hardware, which printed a
@@ -364,15 +573,37 @@ export function computeAdventureProposal(
   const matExtras = takeExtras('Adventure Mat System');
   if (hasComp || compExtras.length) {
     G('Therapeutic Activity & Adventure Components', true);
-    if (a.slide) { SG('Summit Adventure Slide System'); P('A-2216'); if (a.slideGray) P('WS8203'); if (a.steamroller) { P('150045'); P('A-2349'); } }
-    if (a.climbFrame || a.climbWall) { SG('Climbing Wall & Safety Accessories'); P('SSG-SA-CFM'); P('SSG-SA-CWM'); P('P-2500'); }
-    if (a.ballRack) { SG('Ball Rack System'); P('K-5000'); }
+    if (a.slide) {
+      SG('Summit Adventure Slide System');
+      P('A-2216');
+      if (a.slideGray) P('WS8203');
+      if (a.steamroller) {
+        P('150045');
+        if (slideConvKitOn(a)) P('A-2349');
+      }
+    }
+    if (cargoNetPicked(a)) {
+      SG('Cargo Net');
+      if (a.cargoNet10x8) P(CARGO_NET_10X8_PART, Math.max(1, n(a.cargoNet10x8Qty) || 1));
+      if (a.cargoNet8x6) P(CARGO_NET_8X6_PART, Math.max(1, n(a.cargoNet8x6Qty) || 1));
+    }
+    if (a.climbFrame || a.climbWall) {
+      SG('Climbing Wall & Safety Accessories');
+      P('SSG-SA-CFM');
+      P('SSG-SA-CWM');
+      P('P-2500');
+    }
+    if (a.ballRack) {
+      SG('Ball Rack System');
+      P('K-5000');
+    }
     emitExtras(compExtras);
   }
 
   const pad = floorPaddingQuote(a);
   if (pad || a.matColumn || a.matLadderLeg || a.matCustom || matExtras.length) {
-    G('Adventure Mat System (Highly Recommended)', true); SG('Adventure Mat System');
+    G('Adventure Mat System (Highly Recommended)', true);
+    SG('Adventure Mat System');
     if (pad) {
       // Sized and priced from the frame footprint — see matPricing.ts. The catalog
       // record, when the part exists, only supplies weight; price and cost come
@@ -381,16 +612,38 @@ export function computeAdventureProposal(
       const w = rec ? rec.weightLbs : 0;
       weight += w;
       lines.push({
-        lineType: 'PRODUCT', name: pad.description, sku: pad.sku,
+        lineType: 'PRODUCT',
+        name: pad.description,
+        sku: pad.sku,
         description: `Floor padding ${pad.thickness}" thick · ${pad.matLengthIn}" × ${pad.matWidthIn}" (${pad.squareFeet.toFixed(2)} sq ft)`,
-        quantity: 1, rateMinor: pad.priceMinor, costEach: pad.costMinor, weightEach: w, needsPrice: false,
+        quantity: 1,
+        rateMinor: pad.priceMinor,
+        costEach: pad.costMinor,
+        weightEach: w,
+        needsPrice: false,
       });
     }
-    if (a.matColumn) { P(U_SHAPED_WRAP_PART, n(a.uShaped)); P(COMPLETE_WRAP_PART, n(a.completeWrap)); }
+    if (a.matColumn) {
+      P(U_SHAPED_WRAP_PART, n(a.uShaped));
+      P(COMPLETE_WRAP_PART, n(a.completeWrap));
+    }
     if (a.matLadderLeg) P(LADDER_LEG_WRAP_PART, n(a.ladders));
-    if (a.matCustom) lines.push({ lineType: 'PRODUCT', name: 'Adventure Mat System — CUSTOM', sku: '', description: 'Mat SKU determined by logic (to be provided).', quantity: 1, rateMinor: 0, weightEach: 0, needsPrice: true });
+    if (a.matCustom)
+      lines.push({
+        lineType: 'PRODUCT',
+        name: 'Adventure Mat System — CUSTOM',
+        sku: '',
+        description: 'Mat SKU determined by logic (to be provided).',
+        quantity: 1,
+        rateMinor: 0,
+        weightEach: 0,
+        needsPrice: true,
+      });
     emitExtras(matExtras);
-    NOTE('Mat System', '*Please allow 8–10 weeks for manufacturing & delivery of all mat systems. *All column wraps & floor padding colors will be determined after proposal is signed.');
+    NOTE(
+      'Mat System',
+      '*Please allow 8–10 weeks for manufacturing & delivery of all mat systems. *All column wraps & floor padding colors will be determined after proposal is signed.',
+    );
   }
 
   // Anything still unplaced but filed under some OTHER catalog group prints under
@@ -403,17 +656,27 @@ export function computeAdventureProposal(
     const rec = LOOK[e.part];
     const g = rec?.proposalGroup || '';
     if (!g) continue;
-    if (!byGroup[g]) { byGroup[g] = []; otherGroups.push(g); groupSort[g] = rec?.proposalGroupSort ?? 9_999; }
+    if (!byGroup[g]) {
+      byGroup[g] = [];
+      otherGroups.push(g);
+      groupSort[g] = rec?.proposalGroupSort ?? 9_999;
+    }
     byGroup[g].push(e);
     extras.splice(extras.indexOf(e), 1);
   }
-  otherGroups.sort((a, b) => (groupSort[a] ?? 9_999) - (groupSort[b] ?? 9_999) || a.localeCompare(b));
-  for (const g of otherGroups) { G(g, true); emitExtras(byGroup[g] ?? []); }
+  otherGroups.sort(
+    (a, b) => (groupSort[a] ?? 9_999) - (groupSort[b] ?? 9_999) || a.localeCompare(b),
+  );
+  for (const g of otherGroups) {
+    G(g, true);
+    emitExtras(byGroup[g] ?? []);
+  }
 
   // V-rings must keep this block alive even on their own: each pack answered adds
   // 10× 6820H-LAE + 10× 6820H-LAF, which are priced inside H-1000, so dropping the
   // block would silently drop their cost.
-  const addlHw = n(a.forged) || n(a.swingHanger) || n(a.swivelStandalone) || n(a.vRings) || extras.length;
+  const addlHw =
+    n(a.forged) || n(a.swingHanger) || n(a.swivelStandalone) || n(a.vRings) || extras.length;
   if (a.brackets || addlHw) {
     G('Hardware', false);
     // The saddle bracket and the eye bolts the configurator asks for by name are
@@ -437,21 +700,33 @@ export function computeAdventureProposal(
       const itemize = setting(settings ?? defaultSettings(), 'hardwareRollupDetail') === 1;
       const pieces = roll.components.reduce((s, c) => s + c.qty, 0);
       lines.push({
-        lineType: 'PRODUCT', name: 'Hardware Kit', sku: 'H-1000',
+        lineType: 'PRODUCT',
+        name: 'Hardware Kit',
+        sku: 'H-1000',
         description: itemize
           ? roll.components.map((c) => `${c.qty}× ${c.name} (${c.part})`).join(' · ')
           : `All mounting hardware for this structure — ${pieces} pieces across ${roll.components.length} part numbers.`,
-        quantity: 1, rateMinor: roll.priceMinor, costEach: roll.costMinor,
-        weightEach: roll.weightLbs, needsPrice: roll.missing.length > 0,
+        quantity: 1,
+        rateMinor: roll.priceMinor,
+        costEach: roll.costMinor,
+        weightEach: roll.weightLbs,
+        needsPrice: roll.missing.length > 0,
         components: roll.components.map((c) => ({
-          part: c.part, name: c.name, qty: c.qty, formula: c.formula,
-          unitPriceMinor: c.unitPriceMinor, unitCostMinor: c.unitCostMinor,
-          weightLbs: c.weightLbs, inCatalog: c.inCatalog, edited: c.edited,
+          part: c.part,
+          name: c.name,
+          qty: c.qty,
+          formula: c.formula,
+          unitPriceMinor: c.unitPriceMinor,
+          unitCostMinor: c.unitCostMinor,
+          weightLbs: c.weightLbs,
+          inCatalog: c.inCatalog,
+          edited: c.edited,
         })),
       });
     }
     const picked: Array<{ part: string; qty: number }> = [];
-    if (a.brackets && qtyOf(BRACKET_PART) > 0) picked.push({ part: BRACKET_PART, qty: qtyOf(BRACKET_PART) });
+    if (a.brackets && qtyOf(BRACKET_PART) > 0)
+      picked.push({ part: BRACKET_PART, qty: qtyOf(BRACKET_PART) });
     for (const part of ACCESSORY_HW_PARTS) {
       const ruled = hwRows.find((h) => h.part === part)?.qty ?? 0;
       // A quantity the rep typed reaches the proposal even when that part's rule row
@@ -467,7 +742,11 @@ export function computeAdventureProposal(
     emitExtras(extras);
   }
 
-  return { lines, totalWeightLbs: Math.round(weight * 100) / 100, warnings: [beamSpanWarning(a)].filter((w): w is string => !!w) };
+  return {
+    lines,
+    totalWeightLbs: Math.round(weight * 100) / 100,
+    warnings: [beamSpanWarning(a)].filter((w): w is string => !!w),
+  };
 }
 
 /** Frame part number for the Quick Shift Saddle Bracket. */
@@ -484,13 +763,45 @@ export const LADDER_LEG_WRAP_PART = 'SSUSP72';
 export const V_RING_PART = 'B07MB985GW';
 export const CARABINER_PART = 'B0CDVDZSB1';
 export const WEBBING_SLING_PART = '6820H-LAN';
+export const CARGO_NET_10X8_PART = 'B07V3J9S2R';
+export const CARGO_NET_8X6_PART = 'B07TSDMPNQ';
+/** Carabiner packs and V-ring packs one cargo net brings with it. */
+export const CARGO_NET_CARABINER_PER_NET = 1;
+export const CARGO_NET_VRING_PER_NET = 2;
+
+/** Is either cargo net on the job? */
+export function cargoNetPicked(a: AdvAnswers): boolean {
+  return !!(a.cargoNet && (a.cargoNet10x8 || a.cargoNet8x6));
+}
+/**
+ * The conversion kit follows the ramp unless the rep has said otherwise. Reading an
+ * absent answer as "on" is what keeps proposals built before this answer existed
+ * pricing identically.
+ */
+export function slideConvKitOn(a: AdvAnswers): boolean {
+  return a.slideConvKit === undefined ? true : !!a.slideConvKit;
+}
+export function cargoCarabinerQty(a: AdvAnswers): number {
+  if (!cargoNetPicked(a) || a.cargoHwCarabiner === false) return 0;
+  return CARGO_NET_CARABINER_PER_NET;
+}
+export function cargoVRingQty(a: AdvAnswers): number {
+  if (!cargoNetPicked(a) || a.cargoHwVRing === false) return 0;
+  return CARGO_NET_VRING_PER_NET;
+}
 
 /**
  * Hardware the configurator asks for by name. These print as their own proposal
  * lines rather than rolling into H-1000, so ticking the box visibly changes the
  * proposal. Excluded from `hardwareRollup` at the same time.
  */
-export const ACCESSORY_HW_PARTS = ['6820H-LDD', '6820H-LAC-G', '6820H-LP', 'B0C4Y8XSNB', 'SSG-SA-SWIVEL-EYE'];
+export const ACCESSORY_HW_PARTS = [
+  '6820H-LDD',
+  '6820H-LAC-G',
+  '6820H-LP',
+  'B0C4Y8XSNB',
+  'SSG-SA-SWIVEL-EYE',
+];
 
 /**
  * The configurator answer standing behind each accessory part. Used as a floor on
@@ -499,16 +810,32 @@ export const ACCESSORY_HW_PARTS = ['6820H-LDD', '6820H-LAC-G', '6820H-LP', 'B0C4
  */
 export function accessoryAnswerQty(a: AdvAnswers, part: string): number {
   switch (part) {
-    case '6820H-LDD': return a.brackets ? n(a.swivel360) : 0;
-    case '6820H-LAC-G': return a.brackets ? Math.max(0, n(a.bracketsQty) - n(a.swivel360)) : 0;
-    case '6820H-LP': return n(a.forged);
-    case 'B0C4Y8XSNB': return n(a.swingHanger);
-    case 'SSG-SA-SWIVEL-EYE': return n(a.swivelStandalone);
-    default: return 0;
+    case '6820H-LDD':
+      return a.brackets ? n(a.swivel360) : 0;
+    case '6820H-LAC-G':
+      return a.brackets ? Math.max(0, n(a.bracketsQty) - n(a.swivel360)) : 0;
+    case '6820H-LP':
+      return n(a.forged);
+    case 'B0C4Y8XSNB':
+      return n(a.swingHanger);
+    case 'SSG-SA-SWIVEL-EYE':
+      return n(a.swivelStandalone);
+    default:
+      return 0;
   }
 }
 
-export interface HardwareComponent { part: string; name: string; qty: number; formula: string; unitPriceMinor: number; unitCostMinor: number; weightLbs: number; inCatalog: boolean; edited?: boolean; }
+export interface HardwareComponent {
+  part: string;
+  name: string;
+  qty: number;
+  formula: string;
+  unitPriceMinor: number;
+  unitCostMinor: number;
+  weightLbs: number;
+  inCatalog: boolean;
+  edited?: boolean;
+}
 
 /**
  * Fastener bill of materials for H-1000, ported from the v73 workbook's
@@ -516,14 +843,20 @@ export interface HardwareComponent { part: string; name: string; qty: number; fo
  * driven off the frame BOM, so adding frame items increases the fastener counts.
  */
 export function hardwareBOM(
-  a: AdvAnswers, rules?: HardwareRule[], frameRules?: FormulaRule[],
+  a: AdvAnswers,
+  rules?: HardwareRule[],
+  frameRules?: FormulaRule[],
   /** Fastener quantities the proposal carries by hand — see RuleContext.override. */
   hwQty?: Record<string, number>,
 ): HardwareBomRow[] {
   const bom = computeAdventureBOM(a, frameRules);
   const inputs: Record<string, number> = {
-    bracketsQty: n(a.bracketsQty), swivel360: n(a.swivel360), swivelStandalone: n(a.swivelStandalone),
-    forged: n(a.forged), swingHanger: n(a.swingHanger), vRings: n(a.vRings),
+    bracketsQty: n(a.bracketsQty),
+    swivel360: n(a.swivel360),
+    swivelStandalone: n(a.swivelStandalone),
+    forged: n(a.forged),
+    swingHanger: n(a.swingHanger),
+    vRings: n(a.vRings),
   };
   return evaluateHardwareRules(rules && rules.length ? rules : DEFAULT_HARDWARE_RULES, {
     // Summed, not first-match: multi-span frames emit several rows per beam part.
@@ -535,18 +868,27 @@ export function hardwareBOM(
 
 /** The 6820H-* fastener components and their summed roll-up into H-1000. */
 export function hardwareRollup(
-  a: AdvAnswers, look: Record<string, SkuRec>, rules?: HardwareRule[], frameRules?: FormulaRule[],
+  a: AdvAnswers,
+  look: Record<string, SkuRec>,
+  rules?: HardwareRule[],
+  frameRules?: FormulaRule[],
   /** Parts that print as their own lines and so must not be summed into H-1000. */
   exclude?: string[],
   /** Fastener quantities the proposal carries by hand — see RuleContext.override. */
   hwQty?: Record<string, number>,
 ): {
-  components: HardwareComponent[]; priceMinor: number; costMinor: number; weightLbs: number; missing: string[];
+  components: HardwareComponent[];
+  priceMinor: number;
+  costMinor: number;
+  weightLbs: number;
+  missing: string[];
 } {
   const components: HardwareComponent[] = [];
   const missing: string[] = [];
   const skip = new Set(exclude || []);
-  let priceMinor = 0, costMinor = 0, weightLbs = 0;
+  let priceMinor = 0,
+    costMinor = 0,
+    weightLbs = 0;
   for (const h of hardwareBOM(a, rules, frameRules, hwQty)) {
     if (skip.has(h.part)) continue;
     const rec = look[h.part];
@@ -557,25 +899,63 @@ export function hardwareRollup(
     priceMinor += unitPriceMinor * h.qty;
     costMinor += unitCostMinor * h.qty;
     weightLbs += wt * h.qty;
-    components.push({ part: h.part, name: h.name, qty: h.qty, formula: h.formula, unitPriceMinor, unitCostMinor, weightLbs: wt, inCatalog: !!rec, edited: h.edited });
+    components.push({
+      part: h.part,
+      name: h.name,
+      qty: h.qty,
+      formula: h.formula,
+      unitPriceMinor,
+      unitCostMinor,
+      weightLbs: wt,
+      inCatalog: !!rec,
+      edited: h.edited,
+    });
   }
-  return { components, priceMinor, costMinor, weightLbs: Math.round(weightLbs * 100) / 100, missing };
+  return {
+    components,
+    priceMinor,
+    costMinor,
+    weightLbs: Math.round(weightLbs * 100) / 100,
+    missing,
+  };
 }
 
 export interface TraceRow {
-  rule: string; part: string; description: string; formula: string; qty: number;
-  unitPriceMinor: number; extendedMinor: number; unitCostMinor: number; extendedCostMinor: number;
-  weightLbs: number; inCatalog: boolean; rolledIntoH1000: boolean;
+  rule: string;
+  part: string;
+  description: string;
+  formula: string;
+  qty: number;
+  unitPriceMinor: number;
+  extendedMinor: number;
+  unitCostMinor: number;
+  extendedCostMinor: number;
+  weightLbs: number;
+  inCatalog: boolean;
+  rolledIntoH1000: boolean;
 }
 
 /**
  * Every quantity the engine derived, with the expression behind it and the live
  * catalog price/cost it was multiplied by — the cross-reference for the workbook.
  */
-export function explainAdventure(a: AdvAnswers, skuMap?: Record<string, SkuRec>, rules?: HardwareRule[], frameRules?: FormulaRule[]): {
-  model: string; dimensions: string; rows: TraceRow[];
+export function explainAdventure(
+  a: AdvAnswers,
+  skuMap?: Record<string, SkuRec>,
+  rules?: HardwareRule[],
+  frameRules?: FormulaRule[],
+): {
+  model: string;
+  dimensions: string;
+  rows: TraceRow[];
   hardware: ReturnType<typeof hardwareRollup>;
-  totals: { revenueMinor: number; cogsMinor: number; marginMinor: number; marginPct: number; weightLbs: number };
+  totals: {
+    revenueMinor: number;
+    cogsMinor: number;
+    marginMinor: number;
+    marginPct: number;
+    weightLbs: number;
+  };
   warnings: string[];
 } {
   const LOOK = skuMap && Object.keys(skuMap).length ? skuMap : SKUS;
@@ -587,21 +967,35 @@ export function explainAdventure(a: AdvAnswers, skuMap?: Record<string, SkuRec>,
     const unitPriceMinor = rec ? rec.unitPriceMinor : 0;
     const unitCostMinor = rec ? (rec.unitCostMinor ?? 0) : 0;
     rows.push({
-      rule: b.rule, part: b.part, description: rec ? rec.description : '(not in catalog)', formula: b.formula, qty: b.qty,
-      unitPriceMinor, extendedMinor: unitPriceMinor * b.qty,
-      unitCostMinor, extendedCostMinor: unitCostMinor * b.qty,
+      rule: b.rule,
+      part: b.part,
+      description: rec ? rec.description : '(not in catalog)',
+      formula: b.formula,
+      qty: b.qty,
+      unitPriceMinor,
+      extendedMinor: unitPriceMinor * b.qty,
+      unitCostMinor,
+      extendedCostMinor: unitCostMinor * b.qty,
       weightLbs: rec ? rec.weightLbs * b.qty : 0,
-      inCatalog: !!rec, rolledIntoH1000: false,
+      inCatalog: !!rec,
+      rolledIntoH1000: false,
     });
   }
   const pad = floorPaddingQuote(a);
   if (pad) {
     rows.push({
-      rule: 'Floor Padding', part: pad.sku, description: pad.description, formula: pad.formula, qty: 1,
-      unitPriceMinor: pad.priceMinor, extendedMinor: pad.priceMinor,
-      unitCostMinor: pad.costMinor, extendedCostMinor: pad.costMinor,
+      rule: 'Floor Padding',
+      part: pad.sku,
+      description: pad.description,
+      formula: pad.formula,
+      qty: 1,
+      unitPriceMinor: pad.priceMinor,
+      extendedMinor: pad.priceMinor,
+      unitCostMinor: pad.costMinor,
+      extendedCostMinor: pad.costMinor,
       weightLbs: LOOK[pad.sku]?.weightLbs ?? 0,
-      inCatalog: true, rolledIntoH1000: false,
+      inCatalog: true,
+      rolledIntoH1000: false,
     });
   }
   // Catalog parts chosen directly in the configurator rather than derived from the
@@ -609,13 +1003,48 @@ export function explainAdventure(a: AdvAnswers, skuMap?: Record<string, SkuRec>,
   // must include them.
   const picked: Array<{ rule: string; part: string; qty: number; formula: string }> = [];
   if (a.matColumn) {
-    picked.push({ rule: 'Mat System', part: U_SHAPED_WRAP_PART, qty: n(a.uShaped), formula: '# U-shaped column wraps answered' });
-    picked.push({ rule: 'Mat System', part: COMPLETE_WRAP_PART, qty: n(a.completeWrap), formula: `legs ${n(a.legs)} − U-shaped ${n(a.uShaped)}` });
+    picked.push({
+      rule: 'Mat System',
+      part: U_SHAPED_WRAP_PART,
+      qty: n(a.uShaped),
+      formula: '# U-shaped column wraps answered',
+    });
+    picked.push({
+      rule: 'Mat System',
+      part: COMPLETE_WRAP_PART,
+      qty: n(a.completeWrap),
+      formula: `legs ${n(a.legs)} − U-shaped ${n(a.uShaped)}`,
+    });
   }
-  if (a.matLadderLeg) picked.push({ rule: 'Mat System', part: LADDER_LEG_WRAP_PART, qty: n(a.ladders), formula: `# of ladders = ${n(a.ladders)}` });
-  picked.push({ rule: 'Accessories', part: V_RING_PART, qty: n(a.vRings), formula: '# V-ring packs answered' });
-  picked.push({ rule: 'Accessories', part: CARABINER_PART, qty: n(a.carabiner), formula: '# carabiner packs answered' });
-  picked.push({ rule: 'Accessories', part: WEBBING_SLING_PART, qty: n(a.webbingSling), formula: '# webbing slings answered' });
+  if (a.matLadderLeg)
+    picked.push({
+      rule: 'Mat System',
+      part: LADDER_LEG_WRAP_PART,
+      qty: n(a.ladders),
+      formula: `# of ladders = ${n(a.ladders)}`,
+    });
+  picked.push({
+    rule: 'Accessories',
+    part: V_RING_PART,
+    qty: n(a.vRings) + cargoVRingQty(a),
+    formula:
+      '# V-ring packs answered' +
+      (cargoVRingQty(a) ? ' + ' + cargoVRingQty(a) + ' for the cargo net' : ''),
+  });
+  picked.push({
+    rule: 'Accessories',
+    part: CARABINER_PART,
+    qty: n(a.carabiner) + cargoCarabinerQty(a),
+    formula:
+      '# carabiner packs answered' +
+      (cargoCarabinerQty(a) ? ' + ' + cargoCarabinerQty(a) + ' for the cargo net' : ''),
+  });
+  picked.push({
+    rule: 'Accessories',
+    part: WEBBING_SLING_PART,
+    qty: n(a.webbingSling),
+    formula: '# webbing slings answered',
+  });
   // Hardware the rep answers for by name prints as its own proposal line, so it is
   // traced as its own row — and excluded from the H-1000 roll-up below, which used
   // to count it twice: once here and once inside the kit.
@@ -623,7 +1052,13 @@ export function explainAdventure(a: AdvAnswers, skuMap?: Record<string, SkuRec>,
   for (const part of ACCESSORY_HW_PARTS) {
     const ruled = hwRows.find((h) => h.part === part);
     const qty = Math.max(ruled?.qty ?? 0, accessoryAnswerQty(a, part));
-    if (qty > 0) picked.push({ rule: 'Accessories & Hardware', part, qty, formula: ruled?.formula || 'answered in the configurator' });
+    if (qty > 0)
+      picked.push({
+        rule: 'Accessories & Hardware',
+        part,
+        qty,
+        formula: ruled?.formula || 'answered in the configurator',
+      });
   }
   for (const p of picked) {
     if (p.qty <= 0) continue;
@@ -632,24 +1067,42 @@ export function explainAdventure(a: AdvAnswers, skuMap?: Record<string, SkuRec>,
     const unitPriceMinor = rec ? rec.unitPriceMinor : 0;
     const unitCostMinor = rec ? (rec.unitCostMinor ?? 0) : 0;
     rows.push({
-      rule: p.rule, part: p.part, description: rec ? rec.description : '(not in catalog)', formula: p.formula, qty: p.qty,
-      unitPriceMinor, extendedMinor: unitPriceMinor * p.qty,
-      unitCostMinor, extendedCostMinor: unitCostMinor * p.qty,
+      rule: p.rule,
+      part: p.part,
+      description: rec ? rec.description : '(not in catalog)',
+      formula: p.formula,
+      qty: p.qty,
+      unitPriceMinor,
+      extendedMinor: unitPriceMinor * p.qty,
+      unitCostMinor,
+      extendedCostMinor: unitCostMinor * p.qty,
       weightLbs: rec ? rec.weightLbs * p.qty : 0,
-      inCatalog: !!rec, rolledIntoH1000: false,
+      inCatalog: !!rec,
+      rolledIntoH1000: false,
     });
   }
   const hardware = hardwareRollup(a, LOOK, rules, frameRules, ACCESSORY_HW_PARTS);
   const spanWarning = beamSpanWarning(a);
   if (spanWarning) warnings.push(spanWarning);
-  for (const m of hardware.missing) warnings.push(`Hardware component “${m}” has no SKU record — contributes $0.00 to H-1000.`);
+  for (const m of hardware.missing)
+    warnings.push(`Hardware component “${m}” has no SKU record — contributes $0.00 to H-1000.`);
   const revenueMinor = rows.reduce((s, r) => s + r.extendedMinor, 0) + hardware.priceMinor;
   const cogsMinor = rows.reduce((s, r) => s + r.extendedCostMinor, 0) + hardware.costMinor;
-  const weightLbs = Math.round((rows.reduce((s, r) => s + r.weightLbs, 0) + hardware.weightLbs) * 100) / 100;
+  const weightLbs =
+    Math.round((rows.reduce((s, r) => s + r.weightLbs, 0) + hardware.weightLbs) * 100) / 100;
   const marginMinor = revenueMinor - cogsMinor;
   return {
-    model: frameModelNumber(a), dimensions: frameDimensions(a), rows, hardware,
-    totals: { revenueMinor, cogsMinor, marginMinor, marginPct: revenueMinor ? Math.round((marginMinor / revenueMinor) * 1000) / 10 : 0, weightLbs },
+    model: frameModelNumber(a),
+    dimensions: frameDimensions(a),
+    rows,
+    hardware,
+    totals: {
+      revenueMinor,
+      cogsMinor,
+      marginMinor,
+      marginPct: revenueMinor ? Math.round((marginMinor / revenueMinor) * 1000) / 10 : 0,
+      weightLbs,
+    },
     warnings,
   };
 }
