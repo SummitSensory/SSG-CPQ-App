@@ -153,13 +153,6 @@ export type AcceptedLineKind = 'PRODUCT' | 'GROUP' | 'SUBGROUP' | 'NOTE';
 export interface AcceptedLine {
   description: string;
   qboItemId?: string | null;
-  /**
-   * Set when this part IS a QuickBooks Bundle (an Item of Type "Group") — the
-   * Hardware Kit, the Complete Zip Line Kit, the carabiner pack. Those have fixed
-   * compositions maintained in QuickBooks, so they go out as one GroupLineDetail
-   * line and QuickBooks prints their components itself.
-   */
-  qboGroupItemId?: string | null;
   quantity: number;
   amountMinor: bigint;
   /** Defaults to PRODUCT. Non-product kinds become description-only rows. */
@@ -216,10 +209,15 @@ function pricedDetail(l: AcceptedLine): Record<string, unknown> {
  * rows while carrying none of the data: no ItemRef, no Amount, invisible to every
  * report, impossible to credit individually.
  *
- * Genuine QuickBooks Bundles — items of Type "Group", with fixed compositions kept
- * in QuickBooks — are still used where they exist, as GroupLineDetail lines.
- * Proposal SECTIONS are deliberately not bundles: their composition changes with
- * every deal, and a Group's composition lives on the item, not the transaction.
+ * QuickBooks Bundles (items of Type "Group") are deliberately NOT used, even where
+ * one exists for a kit we sell. A Bundle's composition lives on the item, not on
+ * the transaction: QuickBooks always expands it to every component at the
+ * quantities in its definition, and silently ignores any attempt to send a
+ * modified component list. A proposal that drops a part or changes a count would
+ * therefore invoice for the unmodified kit — a real overcharge, with no API error
+ * to catch it. Since every component already gets its own priced line here, the
+ * only thing a Bundle would add is the indent, and it would cost correctness to
+ * get it.
  */
 export function toSalesLines(
   lines: AcceptedLine[],
@@ -265,21 +263,6 @@ export function toSalesLines(
     }
 
     if (openGroup !== null) sectionHasLines = true;
-
-    // A real QuickBooks Bundle: one line, components printed by QuickBooks from
-    // the item definition. The money sits on the expanded component rows, so the
-    // parent carries no Amount.
-    if (l.qboGroupItemId) {
-      out.push({
-        DetailType: 'GroupLineDetail',
-        Description: l.description,
-        GroupLineDetail: {
-          GroupItemRef: { value: l.qboGroupItemId },
-          Quantity: Number.isFinite(l.quantity) && l.quantity > 0 ? Math.round(l.quantity) : 1,
-        },
-      });
-      continue;
-    }
 
     out.push({
       DetailType: 'SalesItemLineDetail',

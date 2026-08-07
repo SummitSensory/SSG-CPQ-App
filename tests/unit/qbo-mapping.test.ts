@@ -98,15 +98,22 @@ describe('proposal sections on a sales document', () => {
     expect(lines.filter((l) => l.DetailType === 'SubTotalLineDetail')).toHaveLength(0);
   });
 
-  it('sends a real QuickBooks bundle as one group line and counts its components', () => {
+  it('sends a kit as its own priced lines, never as a QuickBooks bundle', () => {
+    // A Bundle would expand from its QuickBooks-side definition and ignore what the
+    // proposal actually accepted, so kits go out as ordinary priced lines like
+    // everything else.
     const lines = toSalesLines([
-      { description: 'Hardware Kit', quantity: 1, amountMinor: 48655n, qboGroupItemId: '907' },
+      { description: 'Hardware Kit', quantity: 1, amountMinor: 48655n, qboItemId: '907' },
     ]);
     expect(lines).toHaveLength(1);
-    expect(lines[0]?.DetailType).toBe('GroupLineDetail');
-    // The parent carries no Amount — QuickBooks prices it from the components it
-    // expands, which is what sumLineAmounts has to read.
-    expect(lines[0]?.Amount).toBeUndefined();
+    expect(lines[0]?.DetailType).toBe('SalesItemLineDetail');
+    expect(lines[0]?.Amount).toBe(486.55);
+    expect(lines.some((l) => l.DetailType === 'GroupLineDetail')).toBe(false);
+  });
+
+  it('still totals a GroupLineDetail read back from QuickBooks', () => {
+    // Nothing we send produces one, but an invoice edited in QuickBooks can come
+    // back with one and sumLineAmounts must not silently drop it.
     const withComponents = [
       {
         DetailType: 'GroupLineDetail',
