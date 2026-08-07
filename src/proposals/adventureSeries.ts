@@ -58,6 +58,13 @@ export interface AdvAnswers {
    */
   slideConvKit?: boolean;
   /**
+   * The slide deck itself (A-2216). Separate from the slide system toggle because a
+   * job can take the gray upcharge or the steamroller ramp against a deck the customer
+   * already owns. Undefined reads as ON so proposals priced before this answer existed
+   * keep the deck they were quoted.
+   */
+  slideA2216?: boolean;
+  /**
    * Climbing cargo nets, each with its own quantity. Two sizes are stocked and a job
    * can take either or both.
    */
@@ -74,6 +81,8 @@ export interface AdvAnswers {
    */
   cargoHwCarabiner?: boolean;
   cargoHwVRing?: boolean;
+  cargoHwCarabinerQty?: number;
+  cargoHwVRingQty?: number;
   climbFrame?: boolean;
   climbWall?: boolean;
   climbShield?: boolean;
@@ -530,9 +539,12 @@ export function computeAdventureProposal(
   // already asks for — adding them as separate entries would put the same SKU on the
   // proposal twice, which is what the section subtotals and the BOM then have to
   // reconcile.
+  // V-rings are no longer answered here at all — they arrive with a cargo net and print
+  // in that section, which is the only place they are chosen. `a.vRings` survives on the
+  // type for proposals that still carry it, and still drives the H-1000 roll-up below,
+  // but it no longer produces a line of its own.
   const extras: Array<{ part: string; qty: number }> = [
-    { part: V_RING_PART, qty: n(a.vRings) + cargoVRingQty(a) },
-    { part: CARABINER_PART, qty: n(a.carabiner) + cargoCarabinerQty(a) },
+    { part: CARABINER_PART, qty: n(a.carabiner) },
     { part: WEBBING_SLING_PART, qty: n(a.webbingSling) },
   ].filter((e) => e.qty > 0);
   const norm = (s?: string) => (s || '').trim().toLowerCase();
@@ -575,7 +587,7 @@ export function computeAdventureProposal(
     G('Therapeutic Activity & Adventure Components', true);
     if (a.slide) {
       SG('Summit Adventure Slide System');
-      P('A-2216');
+      if (slideA2216On(a)) P('A-2216');
       if (a.slideGray) P('WS8203');
       if (a.steamroller) {
         P('150045');
@@ -586,6 +598,11 @@ export function computeAdventureProposal(
       SG('Cargo Net');
       if (a.cargoNet10x8) P(CARGO_NET_10X8_PART, Math.max(1, n(a.cargoNet10x8Qty) || 1));
       if (a.cargoNet8x6) P(CARGO_NET_8X6_PART, Math.max(1, n(a.cargoNet8x6Qty) || 1));
+      // The net's fixings print here, under Cargo Net, rather than being folded into
+      // the fastener totals further down. They belong to the net: a rep reading the
+      // proposal should see what hangs it without cross-referencing Hardware.
+      if (cargoCarabinerQty(a) > 0) P(CARGO_NET_CARABINER_PART, cargoCarabinerQty(a));
+      if (cargoVRingQty(a) > 0) P(V_RING_PART, cargoVRingQty(a));
     }
     if (a.climbFrame || a.climbWall) {
       SG('Climbing Wall & Safety Accessories');
@@ -764,6 +781,14 @@ export const V_RING_PART = 'B07MB985GW';
 export const CARABINER_PART = 'B0CDVDZSB1';
 export const WEBBING_SLING_PART = '6820H-LAN';
 export const CARGO_NET_10X8_PART = 'B07V3J9S2R';
+/**
+ * The net's own carabiner: B0937DRYYF, "50 Pack Heavy Duty Snap Hooks M8 5/16\" Carabiner
+ * Clips". Deliberately NOT CARABINER_PART — that is B0CDVDZSB1, the 4-pack auto-locking
+ * carabiner answered under Essential Carabiners & Connectors. Two different products,
+ * and pointing the net at the wrong one is why its carabiners printed under Hardware
+ * instead of under Cargo Net.
+ */
+export const CARGO_NET_CARABINER_PART = 'B0937DRYYF';
 export const CARGO_NET_8X6_PART = 'B07TSDMPNQ';
 /** Carabiner packs and V-ring packs one cargo net brings with it. */
 export const CARGO_NET_CARABINER_PER_NET = 1;
@@ -783,11 +808,17 @@ export function slideConvKitOn(a: AdvAnswers): boolean {
 }
 export function cargoCarabinerQty(a: AdvAnswers): number {
   if (!cargoNetPicked(a) || a.cargoHwCarabiner === false) return 0;
-  return CARGO_NET_CARABINER_PER_NET;
+  const q = n(a.cargoHwCarabinerQty);
+  return q > 0 ? q : CARGO_NET_CARABINER_PER_NET;
 }
 export function cargoVRingQty(a: AdvAnswers): number {
   if (!cargoNetPicked(a) || a.cargoHwVRing === false) return 0;
-  return CARGO_NET_VRING_PER_NET;
+  const q = n(a.cargoHwVRingQty);
+  return q > 0 ? q : CARGO_NET_VRING_PER_NET;
+}
+/** The slide deck ships unless someone says otherwise; see AdvAnswers.slideA2216. */
+export function slideA2216On(a: AdvAnswers): boolean {
+  return a.slideA2216 === undefined ? true : !!a.slideA2216;
 }
 
 /**
@@ -856,7 +887,10 @@ export function hardwareBOM(
     swivelStandalone: n(a.swivelStandalone),
     forged: n(a.forged),
     swingHanger: n(a.swingHanger),
-    vRings: n(a.vRings),
+    // Each V-ring pack pulls 10× 6820H-LAE + 10× 6820H-LAF into H-1000. The packs now
+    // come from the cargo net rather than from a Hardware quantity, so both are summed
+    // here — dropping the cargo side would silently drop those fasteners' cost.
+    vRings: n(a.vRings) + cargoVRingQty(a),
   };
   return evaluateHardwareRules(rules && rules.length ? rules : DEFAULT_HARDWARE_RULES, {
     // Summed, not first-match: multi-span frames emit several rows per beam part.
@@ -1027,17 +1061,31 @@ export function explainAdventure(
     rule: 'Accessories',
     part: V_RING_PART,
     qty: n(a.vRings) + cargoVRingQty(a),
-    formula:
-      '# V-ring packs answered' +
-      (cargoVRingQty(a) ? ' + ' + cargoVRingQty(a) + ' for the cargo net' : ''),
+    formula: 'V-ring packs from the cargo net',
   });
   picked.push({
     rule: 'Accessories',
     part: CARABINER_PART,
-    qty: n(a.carabiner) + cargoCarabinerQty(a),
-    formula:
-      '# carabiner packs answered' +
-      (cargoCarabinerQty(a) ? ' + ' + cargoCarabinerQty(a) + ' for the cargo net' : ''),
+    qty: n(a.carabiner),
+    formula: '# carabiner packs answered',
+  });
+  picked.push({
+    rule: 'Cargo net',
+    part: CARGO_NET_CARABINER_PART,
+    qty: cargoCarabinerQty(a),
+    formula: '# snap-hook packs answered with the cargo net',
+  });
+  picked.push({
+    rule: 'Cargo net',
+    part: CARGO_NET_10X8_PART,
+    qty: a.cargoNet && a.cargoNet10x8 ? Math.max(1, n(a.cargoNet10x8Qty) || 1) : 0,
+    formula: "# of 10' x 8' nets",
+  });
+  picked.push({
+    rule: 'Cargo net',
+    part: CARGO_NET_8X6_PART,
+    qty: a.cargoNet && a.cargoNet8x6 ? Math.max(1, n(a.cargoNet8x6Qty) || 1) : 0,
+    formula: "# of 8' x 6' nets",
   });
   picked.push({
     rule: 'Accessories',

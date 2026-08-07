@@ -3836,9 +3836,56 @@
 
   function isGroupHeader(l) { return !!l && l.lineType === 'GROUP'; }
   function isSubHeader(l) { return !!l && l.lineType === 'SUBGROUP'; }
-  /** Headings are matched by wording, so a rep who typed the tier name keeps their row. */
+  /**
+   * A heading reduced to something comparable.
+   *
+   * The engine decorates the headings it writes — "Adventure Mat System (Highly
+   * Recommended)", "… (Optional)" — while the catalogue category behind the same
+   * section is the plain name. Comparing the two literally never matched, so a part
+   * picked into an existing section either grew a second heading or fell to the bottom
+   * of the proposal. The trailing parenthetical and any surrounding punctuation come off
+   * before comparing; a rep who retitled a heading in their own words still keeps it,
+   * they just do not get automatic filing into it.
+   */
+  function headingKey(s) {
+    return String(s || '')
+      .replace(/\s*\([^()]*\)\s*$/g, '')
+      .replace(/[\s\u2013\u2014\-—:]+$/, '')
+      .trim()
+      .toLowerCase();
+  }
   function sameHeading(a, b) {
-    return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+    var x = headingKey(a), y = headingKey(b);
+    return !!x && x === y;
+  }
+
+  /** The group heading that owns index i, or -1 when i sits above the first one. */
+  function groupIndexBefore(i) {
+    for (var j = i - 1; j >= 0; j--) if (isGroupHeader(pb.lines[j])) return j;
+    return -1;
+  }
+
+  /**
+   * The heading on this proposal that a part belongs under, matched on any name in its
+   * catalogue ancestry. Sub-headings are checked first so the deepest match wins — a
+   * part filed under "Adventure Mat System" lands in that sub-heading rather than at
+   * the top of the group of the same name.
+   */
+  function findHeadingFor(labels) {
+    var i, k;
+    for (i = 0; i < pb.lines.length; i++) {
+      if (!isSubHeader(pb.lines[i])) continue;
+      for (k = labels.length - 1; k >= 0; k--) {
+        if (sameHeading(pb.lines[i].name, labels[k])) return { index: i, isSub: true };
+      }
+    }
+    for (i = 0; i < pb.lines.length; i++) {
+      if (!isGroupHeader(pb.lines[i])) continue;
+      for (k = 0; k < labels.length; k++) {
+        if (sameHeading(pb.lines[i].name, labels[k])) return { index: i, isSub: false };
+      }
+    }
+    return null;
   }
 
   /**
@@ -3878,24 +3925,34 @@
 
   function insertLineInOrder(line) {
     var d = line && line.sku ? itemDefaults[line.sku] : null;
-    var key = d && d.sortKey;
-    var path = d && Array.isArray(d.path) ? d.path.filter(Boolean) : [];
+    if (!d) { pb.lines.push(line); return; }
+    var key = d.sortKey || '';
+    var path = Array.isArray(d.path) ? d.path.filter(Boolean) : [];
     var keys = tierKeys(d);
-    // Nothing to file by: no catalogue position, or a part with no tree place.
-    if (!key || !keys || !path.length) { pb.lines.push(line); return; }
+    // Names this part could be filed under. A part carried only as a Sku row has no
+    // category tree, but it does have a category name — and that name is usually the
+    // section it belongs in, which is enough to file it. Without this fallback those
+    // parts appended, which is what happened to the floor padding.
+    var labels = path.length ? path : (d.category ? [String(d.category)] : []);
+    if (!labels.length) { pb.lines.push(line); return; }
 
-    var groupLabel = path[0];
+    var groupLabel = path.length ? path[0] : labels[0];
     var subLabel = path.length > 1 ? path[path.length - 1] : '';
-    var groupKey = keys[0];
-    var subKey = keys.join('.');
+    var groupKey = keys ? keys[0] : '';
+    var subKey = keys ? keys.join('.') : '';
     var i, j;
 
-    // ---- the group heading, created if the proposal has not got it ----
-    var gi = -1;
-    for (i = 0; i < pb.lines.length; i++) {
-      if (isGroupHeader(pb.lines[i]) && sameHeading(pb.lines[i].name, groupLabel)) { gi = i; break; }
-    }
-    if (gi === -1) {
+    // ---- an existing heading first, and only then a new one ----
+    // Matching what is already on the proposal is what keeps a picked part out of the
+    // bottom of the document. Building headings needs a tree position to place them by,
+    // so a part without one is filed if a heading matches and appended if none does.
+    var found = findHeadingFor(labels);
+    var gi = -1, si = -1;
+    if (found && found.isSub) { si = found.index; gi = groupIndexBefore(si); }
+    else if (found) gi = found.index;
+
+    if (gi === -1 && si === -1) {
+      if (!keys) { pb.lines.push(line); return; }
       var gAt = pb.lines.length;
       for (i = 0; i < pb.lines.length; i++) {
         if (!isGroupHeader(pb.lines[i])) continue;
@@ -3905,12 +3962,16 @@
       pb.lines.splice(gAt, 0, { ref: uid(), lineType: 'GROUP', kind: 'GROUP', name: groupLabel, description: '', quantity: 0, rateMinor: 0, group: '', optional: false });
       gi = gAt;
     }
-    var gEnd = groupSpanEnd(gi);
+    // A sub-heading matched with no group above it: treat the whole run as the span.
+    var gEnd = gi === -1 ? pb.lines.length : groupSpanEnd(gi);
 
-    // ---- the sub-heading, likewise ----
+    // ---- the sub-heading ----
     var from = gi + 1, to = gEnd;
-    if (subLabel) {
-      var si = -1;
+    if (si !== -1) {
+      from = si + 1;
+      to = gEnd;
+      for (i = from; i < gEnd; i++) if (isSubHeader(pb.lines[i]) || isGroupHeader(pb.lines[i])) { to = i; break; }
+    } else if (subLabel && keys) {
       for (i = from; i < gEnd; i++) {
         if (isSubHeader(pb.lines[i]) && sameHeading(pb.lines[i].name, subLabel)) { si = i; break; }
       }
@@ -3934,16 +3995,19 @@
       // Filed at the top of the tree, so above this group's first sub-heading.
       for (i = from; i < gEnd; i++) if (isSubHeader(pb.lines[i])) { to = i; break; }
     }
+    if (from < 0) from = 0;
 
     // ---- position among its siblings ----
     // First placed sibling that sorts after the new part. Bundle children are
     // skipped so a line can never be dropped between a bundle and its components.
     var at = to;
-    for (i = from; i < to; i++) {
-      var l = pb.lines[i];
-      if (!l || l.lineType !== 'PRODUCT' || !l.sku || isBundleChild(l)) continue;
-      var ld = itemDefaults[l.sku];
-      if (ld && ld.sortKey && String(ld.sortKey) > String(key)) { at = i; break; }
+    if (key) {
+      for (i = from; i < to; i++) {
+        var l = pb.lines[i];
+        if (!l || l.lineType !== 'PRODUCT' || !l.sku || isBundleChild(l)) continue;
+        var ld = itemDefaults[l.sku];
+        if (ld && ld.sortKey && String(ld.sortKey) > String(key)) { at = i; break; }
+      }
     }
     // A section's triggered notes sit at its end; products belong above them.
     if (at === to) while (at > from && pb.lines[at - 1] && pb.lines[at - 1].lineType === 'NOTE') at--;
@@ -5586,41 +5650,6 @@
       proposalDocHtml(doc) + '</body></html>';
   }
 
-  /**
-   * Push headings off the bottom of a printed page.
-   *
-   * `break-after: avoid` on a table row is honoured inconsistently, so a section
-   * heading regularly printed as the last line on a sheet with its parts overleaf.
-   * This measures the rendered rows against the page box and inserts a spacer row
-   * ahead of any heading that would land in the last inch, and ahead of the totals
-   * block if it would be split. Nothing is reflowed or resized — only pushed.
-   */
-  function paginatePrintDoc() {
-    var area = document.getElementById('propPrintArea');
-    if (!area) return;
-    // Letter at 96dpi, less the 0.5in margins the print stylesheet sets.
-    var PAGE = 10 * 96, KEEP = 96;
-    Array.prototype.forEach.call(area.querySelectorAll('tr[data-pgspacer]'), function (r) { r.parentNode.removeChild(r); });
-    var rows = Array.prototype.slice.call(area.querySelectorAll('tbody > tr'));
-    var top = area.getBoundingClientRect().top;
-    for (var i = 0; i < rows.length; i++) {
-      var r = rows[i];
-      if (r.getAttribute('data-brk') !== 'head') continue;
-      var y = r.getBoundingClientRect().top - top;
-      var into = y % PAGE;
-      var left = PAGE - into;
-      // A heading is only worth keeping with its parts if parts follow it.
-      if (left >= KEEP || i === rows.length - 1) continue;
-      var sp = document.createElement('tr');
-      sp.setAttribute('data-pgspacer', '1');
-      sp.innerHTML = '<td colspan="5" style="padding:0;border:none;height:' + Math.ceil(left) + 'px;"></td>';
-      r.parentNode.insertBefore(sp, r);
-      top = area.getBoundingClientRect().top;
-      rows = Array.prototype.slice.call(area.querySelectorAll('tbody > tr'));
-      i = rows.indexOf(r);
-    }
-  }
-
   function previewProposalDoc(doc, printNow) {
     ensurePrintStyle();
     var html = proposalDocHtml(doc);
@@ -5637,7 +5666,6 @@
       document.title = proposalFileName(doc);
       var restore = function () { document.title = prev; window.removeEventListener('afterprint', restore); };
       window.addEventListener('afterprint', restore);
-      paginatePrintDoc();
       window.print();
       setTimeout(restore, 60000);
     }
@@ -5683,7 +5711,20 @@
       'body > *{display:none!important;}body > #propPreviewOverlay{display:block!important;}' +
       '#propPreviewOverlay{position:static!important;inset:auto!important;height:auto!important;background:#fff!important;padding:0!important;overflow:visible!important;}#propPreviewOverlay .noprint{display:none!important;}' +
       // Keep rows, headings and the totals block from being split across sheets.
+      //
+      // This is deliberately CSS rather than measured-and-spaced markup. An earlier
+      // version walked the rendered rows and inserted spacer rows to push headings off
+      // a page bottom, but it measured the on-screen preview while the print layout has
+      // its own geometry — so the arithmetic was wrong and it left visible holes in the
+      // middle of the document. The browser is the only thing that knows where a page
+      // break will actually fall, so the rules below tell it what to keep together and
+      // nothing moves anything by hand.
       '#propPrintArea tr,#propPrintArea thead{break-inside:avoid!important;page-break-inside:avoid!important;}' +
+      // A heading must not be the last thing on a sheet: keep it with what follows, and
+      // keep the row after it with the heading. Both halves are needed — either one
+      // alone is treated as advisory by the print engines.
+      '#propPrintArea tr[data-brk="head"]{break-after:avoid!important;page-break-after:avoid!important;}' +
+      '#propPrintArea tr[data-brk="head"] + tr{break-before:avoid!important;page-break-before:avoid!important;}' +
       '#propPrintArea thead{display:table-header-group;}' +
       '#propPrintArea{padding:0!important;max-width:none!important;}}';
     document.head.appendChild(st);
@@ -5720,9 +5761,9 @@
       monkeyBars: false, monkeyBarsQty: 1, ladders: false, laddersQty: 1, ladderShield: false,
       trolley: false, trolleyType: 'Dual', interiorBeams: false, interiorBeamsQty: 1,
       zipLine: false, zipLineQty: 1, ballRack: false,
-      slide: false, slideGray: false, steamroller: false, slideConvKit: false,
+      slide: false, slideA2216: false, slideGray: false, steamroller: false, slideConvKit: false,
       cargoNet: false, cargoNet10x8: false, cargoNet10x8Qty: 1, cargoNet8x6: false, cargoNet8x6Qty: 1,
-      cargoHwCarabiner: true, cargoHwVRing: true,
+      cargoHwCarabiner: true, cargoHwCarabinerQty: 1, cargoHwVRing: true, cargoHwVRingQty: 2,
       climbFrame: false, climbWall: false, climbShield: false, climbMat: false,
       matFloor: false, matColumn: false, uShaped: 0, completeWrap: 0, matLadderLeg: false, matCustom: false,
       floorPadding: false, floorPadThickness: '3.25',
@@ -5755,6 +5796,8 @@
     adv.zipLine = !!a.zipLine; adv.zipLineQty = Number(a.zipLineQty) || 1;
     adv.ballRack = !!a.ballRack;
     adv.slide = !!a.slide; adv.slideGray = !!a.slideGray; adv.steamroller = !!a.steamroller;
+    // Undefined means the answer predates the toggle, when the deck always shipped.
+    adv.slideA2216 = a.slideA2216 === undefined ? !!a.slide : !!a.slideA2216;
     // Undefined means the answer predates the toggle, when the kit always rode with
     // the ramp — see slideConvKitOn() in adventureSeries.ts.
     adv.slideConvKit = a.slideConvKit === undefined ? !!a.steamroller : !!a.slideConvKit;
@@ -5762,7 +5805,9 @@
     adv.cargoNet10x8 = !!a.cargoNet10x8; adv.cargoNet10x8Qty = Number(a.cargoNet10x8Qty) || 1;
     adv.cargoNet8x6 = !!a.cargoNet8x6; adv.cargoNet8x6Qty = Number(a.cargoNet8x6Qty) || 1;
     adv.cargoHwCarabiner = a.cargoHwCarabiner !== false;
+    adv.cargoHwCarabinerQty = Number(a.cargoHwCarabinerQty) || 1;
     adv.cargoHwVRing = a.cargoHwVRing !== false;
+    adv.cargoHwVRingQty = Number(a.cargoHwVRingQty) || 2;
     adv.climbFrame = !!a.climbFrame; adv.climbWall = !!a.climbWall;
     adv.climbShield = !!a.climbShield; adv.climbMat = !!a.climbMat;
     adv.floorPadding = !!(a.floorPadding || a.matFloor);
@@ -5791,8 +5836,6 @@
    * lines, so the same part number never appears on a proposal twice.
    */
   function cargoNetOn() { return !!(adv.cargoNet && (adv.cargoNet10x8 || adv.cargoNet8x6)); }
-  function cargoCarabinerAdds() { return cargoNetOn() && adv.cargoHwCarabiner !== false ? 1 : 0; }
-  function cargoVRingAdds() { return cargoNetOn() && adv.cargoHwVRing !== false ? 2 : 0; }
   function eyeboltSum() { var nonSwivel = Math.max(0, (Number(adv.bracketsQty) || 0) - (Number(adv.swivel360) || 0)); return (Number(adv.swivel360) || 0) + nonSwivel + (Number(adv.forged) || 0) + (Number(adv.swingHanger) || 0); }
 
   /**
@@ -5807,6 +5850,12 @@
    * rep can see what they are actually quoting. An array means the answer drives
    * more than one part, which is never substitutable.
    */
+  /**
+   * The net's carabiner is the 50-pack of snap hooks, NOT the 4-pack auto-locking
+   * carabiner answered under Essential Carabiners & Connectors. Mirrors
+   * CARGO_NET_CARABINER_PART in adventureSeries.ts.
+   */
+  var CARGO_NET_CARABINER_PART = 'B0937DRYYF';
   var ADV_HW_PARTS = {
     forged: '6820H-LP',
     swivelStandalone: 'SSG-SA-SWIVEL-EYE',
@@ -5935,13 +5984,6 @@
         ' into the H-1000 hardware kit</div>';
     }
     function hwNum(key, label, min, max, hint) { return '<div>' + num(key, label, min, max, '', hint) + hwDefaultRow(key) + hwPartRow(key) + hwRollRow(key) + '</div>'; }
-    /** A part this option always brings with it — stated, not choosable. */
-    function partLine(label, part) {
-      return '<div style="display:flex;align-items:baseline;gap:8px;padding:8px 0;border-bottom:1px solid #f2f3ef;font-size:14px;">' +
-        '<span style="font-weight:600;">' + label + '</span>' +
-        '<code style="font-size:11.5px;color:#8a8f85;">' + esc(part) + '</code>' +
-        '<span class="muted" style="font-size:11.5px;margin-left:auto;">always included</span></div>';
-    }
     var grid = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;';
     var stack = 'display:flex;flex-direction:column;gap:10px;';
 
@@ -5966,7 +6008,7 @@
             tog('ballRack', 'Frame Mount — Ball Rack') +
             tog('slide', 'Summit Adventure Slide System') +
             (adv.slide ? '<div style="padding-left:16px;">' +
-              partLine('Slide', 'A-2216') +
+              tog('slideA2216', 'Slide', 'Part A-2216') +
               tog('slideGray', 'Slide — Gray Upcharge') +
               tog('steamroller', 'Steamroller Ramp (3rd Party)', 'Ticks the conversion kit below') +
               (adv.steamroller ? '<div style="padding-left:16px;">' + tog('slideConvKit', 'Adventure Steamroller/Scooter Board — Conversion Kit', 'Part A-2349 · required with the ramp') + '</div>' : '') +
@@ -5979,9 +6021,11 @@
               (adv.cargoNet8x6 ? '<div style="' + grid + 'margin:8px 0 4px;">' + num('cargoNet8x6Qty', "# of 8' x 6' nets", 1, 20) + '</div>' : '') +
               (adv.cargoNet10x8 || adv.cargoNet8x6
                 ? '<div style="margin-top:10px;padding:10px 12px;background:#f8f9f6;border:1px solid #e7e8e3;border-radius:9px;">' +
-                    '<div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:#8a8f85;margin-bottom:2px;">Comes with the net</div>' +
-                    tog('cargoHwCarabiner', 'Heavy Duty Carabiners — Spring Snap', 'Part ' + ADV_HW_PARTS.carabiner + ' · 1 pack · added to the carabiner total under Hardware') +
-                    tog('cargoHwVRing', 'V-Ring Bolt', 'Part ' + ADV_HW_PARTS.vRings + ' · 2 packs · added to the V-ring total under Hardware') +
+                    '<div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:#8a8f85;margin-bottom:2px;">Comes with the net · prints under Cargo Net</div>' +
+                    tog('cargoHwCarabiner', 'Heavy Duty Carabiners — 5/16" Spring Snap (50 Pack)', 'Part ' + CARGO_NET_CARABINER_PART) +
+                    (adv.cargoHwCarabiner !== false ? '<div style="' + grid + 'margin:8px 0 4px;">' + num('cargoHwCarabinerQty', '# of carabiner packs', 1, 40) + '</div>' : '') +
+                    tog('cargoHwVRing', 'V-Ring Bolt', 'Part ' + ADV_HW_PARTS.vRings) +
+                    (adv.cargoHwVRing !== false ? '<div style="' + grid + 'margin:8px 0 4px;">' + num('cargoHwVRingQty', '# of V-ring packs', 1, 40) + '</div>' : '') +
                   '</div>'
                 : '') +
             '</div>' : '') +
@@ -5993,7 +6037,7 @@
           // bottom under Additional Hardware where they were routinely missed.
           sec('Essential Carabiners &amp; Connectors',
             '<div style="' + stack + '">' +
-              hwNum('carabiner', 'Auto-Locking Carabiner (4pk)', 0, 8, 'Suggested: ' + carabRec + ' — enter a quantity to include it' + (cargoCarabinerAdds() ? ' · +' + cargoCarabinerAdds() + ' from the cargo net' : '')) +
+              hwNum('carabiner', 'Auto-Locking Carabiner (4pk)', 0, 8, 'Suggested: ' + carabRec + ' — enter a quantity to include it') +
               hwNum('webbingSling', 'Multi-Pocket Webbing Sling', 0, 16, 'Suggested: ' + (Number(adv.legs) || 0) + ' (one per leg)') +
             '</div>'
           ) +
@@ -6017,7 +6061,6 @@
               hwNum('forged', '# 1/2" Forged Eye Bolts (×6)', 0, 36) +
               hwNum('swivelStandalone', '# Swing &amp; Swivel Eye Bolt (stand-alone)', 0, 24) +
               hwNum('swingHanger', '# Swing Hanger w/ Bearing (×2)', 0, 12) +
-              hwNum('vRings', '# V-Rings (10-pack)', 0, 3, cargoVRingAdds() ? '+' + cargoVRingAdds() + ' from the cargo net' : '') +
             '</div>'
           ) +
           '<div style="display:flex;justify-content:space-between;gap:10px;margin-top:20px;padding-top:16px;border-top:1px solid #e7e8e3;">' +
@@ -6097,10 +6140,16 @@
     // The ramp cannot be used without its conversion kit, so choosing the ramp ticks
     // the kit. Unticking the ramp puts the kit away with it.
     if (changed === 'steamroller') adv.slideConvKit = !!adv.steamroller;
+    // Turning the slide system off puts everything under it away.
+    if (changed === 'slide' && !adv.slide) { adv.slideA2216 = false; adv.slideGray = false; adv.steamroller = false; adv.slideConvKit = false; }
     // A net has to hang off something. Both fixings come with the first net and can
     // be unticked afterwards; clearing the section clears them.
     if (changed === 'cargoNet10x8' || changed === 'cargoNet8x6') {
-      if (adv.cargoNet10x8 || adv.cargoNet8x6) { adv.cargoHwCarabiner = true; adv.cargoHwVRing = true; }
+      if (adv.cargoNet10x8 || adv.cargoNet8x6) {
+        adv.cargoHwCarabiner = true; adv.cargoHwVRing = true;
+        if (!(Number(adv.cargoHwCarabinerQty) > 0)) adv.cargoHwCarabinerQty = 1;
+        if (!(Number(adv.cargoHwVRingQty) > 0)) adv.cargoHwVRingQty = 2;
+      }
     }
     if (changed === 'cargoNet' && !adv.cargoNet) {
       adv.cargoNet10x8 = false; adv.cargoNet8x6 = false;
@@ -6117,11 +6166,12 @@
       monkeyBars: !!adv.monkeyBars, monkeyBarsQty: Number(adv.monkeyBarsQty),
       interiorBeams: !!adv.interiorBeams, interiorBeamsQty: Number(adv.interiorBeamsQty),
       trolley: !!adv.trolley, trolleyType: adv.trolleyType, zipLine: !!adv.zipLine, zipLineQty: Number(adv.zipLineQty), ballRack: !!adv.ballRack,
-      slide: !!adv.slide, slideGray: !!adv.slideGray, steamroller: !!adv.steamroller, slideConvKit: !!adv.slideConvKit,
+      slide: !!adv.slide, slideA2216: !!adv.slideA2216, slideGray: !!adv.slideGray, steamroller: !!adv.steamroller, slideConvKit: !!adv.slideConvKit,
       cargoNet: !!adv.cargoNet,
       cargoNet10x8: !!adv.cargoNet10x8, cargoNet10x8Qty: Number(adv.cargoNet10x8Qty) || 1,
       cargoNet8x6: !!adv.cargoNet8x6, cargoNet8x6Qty: Number(adv.cargoNet8x6Qty) || 1,
-      cargoHwCarabiner: adv.cargoHwCarabiner !== false, cargoHwVRing: adv.cargoHwVRing !== false,
+      cargoHwCarabiner: adv.cargoHwCarabiner !== false, cargoHwCarabinerQty: Number(adv.cargoHwCarabinerQty) || 1,
+      cargoHwVRing: adv.cargoHwVRing !== false, cargoHwVRingQty: Number(adv.cargoHwVRingQty) || 2,
       climbFrame: !!adv.climbFrame, climbWall: !!adv.climbWall, climbShield: !!adv.climbShield, climbMat: !!adv.climbMat,
       matFloor: !!adv.floorPadding, matColumn: !!adv.matColumn, uShaped: Number(adv.uShaped), completeWrap: Number(adv.completeWrap), matLadderLeg: !!adv.matLadderLeg, matCustom: !!adv.matCustom,
       floorPadding: !!adv.floorPadding, floorPadThickness: adv.floorPadThickness === '2' ? '2' : '3.25',

@@ -38,6 +38,7 @@ export const FRAME_INPUTS: { key: string; label: string; kind: 'number' | 'flag'
   { key: 'slideGray', label: 'Gray slide upcharge', kind: 'flag' },
   { key: 'steamroller', label: 'Steamroller ramp', kind: 'flag' },
   { key: 'slideConvKit', label: 'Slide conversion kit', kind: 'flag' },
+  { key: 'slideA2216', label: 'Slide deck (A-2216)', kind: 'flag' },
   // Cargo nets are quantities rather than flags so a hardware formula can be driven
   // off how many are on the job, not merely that one is.
   { key: 'cargoNet10x8', label: "# of 10' x 8' cargo nets", kind: 'number' },
@@ -121,7 +122,7 @@ export const DEFAULT_FRAME_RULES: FormulaRule[] = [
 
   R('Ball rack', 'K-5000', 'Ball Rack', [[null, 1]], { when: flagOn('ballRack') }),
 
-  R('Slide', 'A-2216', 'Slide', [[null, 1]], { when: flagOn('slide') }),
+  R('Slide', 'A-2216', 'Slide', [[null, 1]], { when: flagOn('slideA2216') }),
   R('Slide', 'WS8203', 'Slide — Gray Upcharge', [[null, 1]], { when: flagOn('slideGray') }),
   R('Slide', '150045', 'Steamroller Ramp', [[null, 1]], { when: flagOn('steamroller') }),
   R('Slide', 'A-2349', 'Slide Conversion Kit', [[null, 1]], { when: flagOn('slideConvKit') }),
@@ -165,6 +166,7 @@ export interface FrameAnswers {
   slideGray?: boolean;
   steamroller?: boolean;
   slideConvKit?: boolean;
+  slideA2216?: boolean;
   cargoNet?: boolean;
   cargoNet10x8?: boolean;
   cargoNet10x8Qty?: number;
@@ -205,6 +207,9 @@ export function frameContext(a: FrameAnswers, bomQty: (part: string) => number):
     // The conversion kit rides with the ramp. An undefined answer reads as on, so a
     // proposal built before the kit had its own toggle still prices the same way.
     slideConvKit: !!(a.slide && a.steamroller && (a.slideConvKit === undefined || a.slideConvKit)),
+    // Undefined reads as on, so a frame quoted before the deck had its own toggle still
+    // carries it — see slideA2216On() in adventureSeries.ts.
+    slideA2216: !!(a.slide && (a.slideA2216 === undefined || a.slideA2216)),
     climbFrame: !!a.climbFrame,
     climbWall: !!a.climbWall,
     climbShield: !!a.climbShield,
