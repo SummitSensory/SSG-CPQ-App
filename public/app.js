@@ -3870,6 +3870,19 @@
           '<button class="link-btn" id="bPreview" style="width:auto;padding:9px 14px;">Preview</button>' +
           '<button class="btn" id="bSave" style="width:auto;padding:9px 18px;">Save proposal</button>' +
         '</div></div>' +
+      // Who this proposal is for, and which version is open — the builder is
+      // otherwise identical for every customer, and a rep with two tabs open has
+      // no way to tell them apart.
+      '<div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:0 0 16px;padding:12px 16px;background:#f7f8f4;border:1px solid #eef0ea;border-radius:10px;">' +
+        '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Prepared for</div>' +
+        '<div style="font-size:17px;font-weight:600;color:#26303a;">' + esc(pb.orgName || '—') + '</div>' +
+        (pb.number ? '<div class="muted" style="font-size:12.5px;">' + esc(pb.number) + '</div>' : '') +
+        '<div style="margin-left:auto;display:flex;align-items:baseline;gap:8px;">' +
+          '<span style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Version</span>' +
+          '<span style="font-size:13px;font-weight:600;color:#3d4a55;">v' + (pb.version || 1) + '</span>' +
+          (pb.readOnly ? '<span class="muted" style="font-size:12px;">read only</span>' : '') +
+        '</div>' +
+      '</div>' +
       // header card
       '<div class="card" style="margin-bottom:16px;"><div class="section-title" style="margin:0 0 12px;">Proposal header</div>' +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' +
@@ -4613,7 +4626,7 @@
     });
     document.querySelectorAll('.grpChip').forEach(function (c) { c.addEventListener('click', function () { pb.lines.push({ ref: uid(), lineType: 'GROUP', kind: 'GROUP', name: c.getAttribute('data-g'), description: '', quantity: 0, rateMinor: 0, optional: /trolley|adventure|foundation|mat/i.test(c.getAttribute('data-g')) }); renderBuilder(); }); });
     // header/meta inputs
-    var mt = document.getElementById('mTitle'); if (mt) mt.addEventListener('input', function () { pb.title = mt.value; });
+    var mt = document.getElementById('mTitle'); if (mt) mt.addEventListener('input', function () { pb.title = mt.value; markBuilderDirty(); });
     var mct = document.getElementById('mContact'); if (mct) mct.addEventListener('input', function () { pb.meta.contactName = mct.value; });
     var mp = document.getElementById('mProj'); if (mp) mp.addEventListener('input', function () { pb.meta.projectId = mp.value; });
     var mpd = document.getElementById('mPropDate'); if (mpd) mpd.addEventListener('input', function () { pb.meta.proposalDate = mpd.value; pb.meta.expiration = addDays(mpd.value, 7); var me2 = document.getElementById('mExp'); if (me2) me2.value = pb.meta.expiration; });
@@ -4872,7 +4885,7 @@
   function builderVersionPayload() {
     var sections = [{ id: 'meta', type: 'CUSTOMER_INFO', title: 'Proposal', order: 0, enabled: true, data: pb.meta }];
     var items = pb.lines.map(function (l, i) { return { ref: l.ref, lineType: l.lineType, kind: l.kind, productId: l.productId, sku: l.sku || '', name: l.name, description: l.description, internalNote: l.internalNote || '', components: l.components || null, freightTbd: !!l.freightTbd, quantity: Number(l.quantity) || 0, rateMinor: Number(l.rateMinor) || 0, costEach: Number(l.costEach) || 0, weightEach: Number(l.weightEach) || 0, group: l.group || '', optional: !!l.optional, delivery: l.delivery || '', returnable: l.returnable || '', addlFreight: l.addlFreight || '', freightCalc: l.freightCalc || '', tpFreightMinor: Number(l.tpFreightMinor) || 0, tpFreightLabel: l.tpFreightLabel || '', order: i }; });
-    return { sections: sections, items: items, expirationDate: pb.meta.expiration || undefined };
+    return { title: pb.title || undefined, sections: sections, items: items, expirationDate: pb.meta.expiration || undefined };
   }
 
   /**
@@ -4896,7 +4909,9 @@
       if (!r.ok) { alert('Could not save (' + r.status + ').'); btn.disabled = false; btn.textContent = 'Save proposal'; return; }
       btn.textContent = 'Saved ✓';
       clearBuilderDirty();
-      setTimeout(function () { openProposalDetail(pb.proposalId, pb.user); }, 500);
+      // Stay in the builder. Saving mid-edit is the common case; bouncing back to
+      // the detail page forced a re-entry for every save. "‹ Cancel" is the way out.
+      setTimeout(function () { var b = document.getElementById('bSave'); if (b) { b.disabled = false; b.textContent = 'Save proposal'; } }, 1200);
     } catch (e) { alert('Could not reach the server.'); btn.disabled = false; btn.textContent = 'Save proposal'; }
   }
 

@@ -5,28 +5,47 @@ import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import { ValidationError, NotFoundError } from '../lib/errors.js';
 import {
-  createProposal, updateVersionContent, createNewVersion, changeStatus, compareProposalVersions,
+  createProposal,
+  updateVersionContent,
+  createNewVersion,
+  changeStatus,
+  compareProposalVersions,
   discardDraftVersion,
+  renameProposalForVersion,
 } from '../proposals/service.js';
 import { snapshotAcceptedContent } from '../handoff/service.js';
-import { resolveVisibleSections, reorderSections, type ProposalSection } from '../proposals/sections.js';
+import {
+  resolveVisibleSections,
+  reorderSections,
+  type ProposalSection,
+} from '../proposals/sections.js';
 import { pushReleasedProposal } from '../integrations/monday/proposalPush.js';
 
 const SectionSchema = z.object({
-  id: z.string(), type: z.string(), title: z.string(), order: z.number().int(),
+  id: z.string(),
+  type: z.string(),
+  title: z.string(),
+  order: z.number().int(),
   enabled: z.boolean(),
   condition: z.object({ field: z.string(), equals: z.unknown() }).optional(),
-  body: z.string().optional(), data: z.record(z.unknown()).optional(),
+  body: z.string().optional(),
+  data: z.record(z.unknown()).optional(),
 });
 const ItemSchema = z.object({
-  ref: z.string(), productId: z.string(), name: z.string(),
+  ref: z.string(),
+  productId: z.string(),
+  name: z.string(),
   kind: z.enum(['INCLUDED', 'OPTIONAL', 'ALTERNATE']),
-  quantity: z.number().int().positive(), alternateForRef: z.string().optional(),
+  quantity: z.number().int().positive(),
+  alternateForRef: z.string().optional(),
 });
 const CreateSchema = z.object({
-  organizationId: z.string().min(1), title: z.string().min(2),
-  sections: z.array(SectionSchema), items: z.array(ItemSchema),
-  priceSnapshotId: z.string().optional(), ruleSnapshotId: z.string().optional(),
+  organizationId: z.string().min(1),
+  title: z.string().min(2),
+  sections: z.array(SectionSchema),
+  items: z.array(ItemSchema),
+  priceSnapshotId: z.string().optional(),
+  ruleSnapshotId: z.string().optional(),
   expirationDate: z.coerce.date().optional(),
 });
 
@@ -47,7 +66,10 @@ export function registerProposalRoutes(app: FastifyInstance): void {
     });
     const orgIds = [...new Set(rows.map((r) => r.organizationId))];
     const [orgs, users] = await Promise.all([
-      prisma.organization.findMany({ where: { id: { in: orgIds } }, select: { id: true, name: true, customerType: true } }),
+      prisma.organization.findMany({
+        where: { id: { in: orgIds } },
+        select: { id: true, name: true, customerType: true },
+      }),
       prisma.user.findMany({ select: { id: true, name: true, email: true } }),
     ]);
     const orgById = new Map(orgs.map((o) => [o.id, o]));
@@ -83,7 +105,10 @@ export function registerProposalRoutes(app: FastifyInstance): void {
 
   app.get('/proposals/:id', read, async (req) => {
     const { id } = req.params as { id: string };
-    return prisma.proposal.findUnique({ where: { id }, include: { versions: { orderBy: { version: 'asc' } } } });
+    return prisma.proposal.findUnique({
+      where: { id },
+      include: { versions: { orderBy: { version: 'asc' } } },
+    });
   });
 
   // Preview: returns visible sections resolved for the given facts (conditional + reordered).
@@ -93,19 +118,39 @@ export function registerProposalRoutes(app: FastifyInstance): void {
     const v = await prisma.proposalVersion.findUnique({ where: { id: versionId } });
     if (!v) throw new ValidationError('Version not found');
     const sections = v.sections as unknown as ProposalSection[];
-    return { visibleSections: resolveVisibleSections(sections, facts), status: v.status, frozen: v.frozen };
+    return {
+      visibleSections: resolveVisibleSections(sections, facts),
+      status: v.status,
+      frozen: v.frozen,
+    };
   });
 
   app.patch('/proposals/versions/:versionId', write, async (req) => {
     const { versionId } = req.params as { versionId: string };
-    const body = req.body as { sections?: ProposalSection[]; items?: unknown[]; orderedSectionIds?: string[]; expirationDate?: string };
+    const body = req.body as {
+      title?: string;
+      sections?: ProposalSection[];
+      items?: unknown[];
+      orderedSectionIds?: string[];
+      expirationDate?: string;
+    };
     let sections = body.sections;
-    if (body.orderedSectionIds && sections) sections = reorderSections(sections, body.orderedSectionIds);
-    await updateVersionContent(versionId, {
-      ...(sections ? { sections } : {}),
-      ...(body.items ? { items: body.items as never } : {}),
-      ...(body.expirationDate ? { expirationDate: new Date(body.expirationDate) } : {}),
-    }, req.user!.sub);
+    if (body.orderedSectionIds && sections)
+      sections = reorderSections(sections, body.orderedSectionIds);
+    // The title belongs to the proposal, not the version, so it is saved alongside
+    // the version content rather than needing its own call from the builder.
+    if (typeof body.title === 'string' && body.title.trim()) {
+      await renameProposalForVersion(versionId, body.title.trim(), req.user!.sub);
+    }
+    await updateVersionContent(
+      versionId,
+      {
+        ...(sections ? { sections } : {}),
+        ...(body.items ? { items: body.items as never } : {}),
+        ...(body.expirationDate ? { expirationDate: new Date(body.expirationDate) } : {}),
+      },
+      req.user!.sub,
+    );
     return { ok: true };
   });
 
@@ -135,14 +180,23 @@ export function registerProposalRoutes(app: FastifyInstance): void {
    */
   app.get('/proposals/line-tree/:lineSlug', read, async (req) => {
     const { lineSlug } = req.params as { lineSlug: string };
-    const line = await prisma.productLine.findFirst({ where: { OR: [{ slug: lineSlug }, { name: lineSlug }] }, select: { id: true } });
+    const line = await prisma.productLine.findFirst({
+      where: { OR: [{ slug: lineSlug }, { name: lineSlug }] },
+      select: { id: true },
+    });
     if (!line) throw new NotFoundError(`Product line "${lineSlug}" not found`);
 
     const cats = await prisma.productCategory.findMany({
       where: { productLineId: line.id, isActive: true },
       orderBy: [{ tierLevel: 'asc' }, { sortOrder: 'asc' }],
       select: {
-        id: true, slug: true, name: true, tierLevel: true, sortOrder: true, defaultQuantity: true, parentId: true,
+        id: true,
+        slug: true,
+        name: true,
+        tierLevel: true,
+        sortOrder: true,
+        defaultQuantity: true,
+        parentId: true,
         product: { select: { sku: true, weightOz: true, defaultQuantity: true, status: true } },
       },
     });
@@ -150,7 +204,14 @@ export function registerProposalRoutes(app: FastifyInstance): void {
     const slugOf = new Map(cats.map((c) => [c.id, c.slug]));
     const skus = [...new Set(cats.map((c) => c.product?.sku).filter((v): v is string => !!v))];
     const priceBySku = skus.length
-      ? new Map((await prisma.sku.findMany({ where: { part: { in: skus } }, select: { part: true, unitPriceMinor: true } })).map((s) => [s.part, s.unitPriceMinor]))
+      ? new Map(
+          (
+            await prisma.sku.findMany({
+              where: { part: { in: skus } },
+              select: { part: true, unitPriceMinor: true },
+            })
+          ).map((s) => [s.part, s.unitPriceMinor]),
+        )
       : new Map<string, number>();
 
     return cats
@@ -180,7 +241,12 @@ export function registerProposalRoutes(app: FastifyInstance): void {
 
   app.post('/proposals/versions/:versionId/submit-review', write, async (req) => {
     const { versionId } = req.params as { versionId: string };
-    await changeStatus(versionId, 'INTERNAL_REVIEW', req.user!.sub, (req.body as { note?: string })?.note);
+    await changeStatus(
+      versionId,
+      'INTERNAL_REVIEW',
+      req.user!.sub,
+      (req.body as { note?: string })?.note,
+    );
     return { status: 'INTERNAL_REVIEW' };
   });
   app.post('/proposals/versions/:versionId/return-draft', review, async (req) => {
@@ -190,15 +256,30 @@ export function registerProposalRoutes(app: FastifyInstance): void {
   });
   app.post('/proposals/versions/:versionId/release', release, async (req) => {
     const { versionId } = req.params as { versionId: string };
-    const body = (req.body ?? {}) as { note?: string; proposalHtml?: string; proposalFilename?: string };
-    const before = await prisma.proposalVersion.findUnique({ where: { id: versionId }, select: { priceSnapshotId: true, sections: true, items: true } });
+    const body = (req.body ?? {}) as {
+      note?: string;
+      proposalHtml?: string;
+      proposalFilename?: string;
+    };
+    const before = await prisma.proposalVersion.findUnique({
+      where: { id: versionId },
+      select: { priceSnapshotId: true, sections: true, items: true },
+    });
     await changeStatus(versionId, 'RELEASED', req.user!.sub, body.note);
     // A released version is the price of record from here on, so it gets a
     // PriceSnapshot at release time rather than waiting for acceptance — but never
     // overwrite one a prior release or acceptance already froze.
     if (before && !before.priceSnapshotId) {
-      const snap = await snapshotAcceptedContent(versionId, before.sections, before.items, req.user!.sub);
-      await prisma.proposalVersion.update({ where: { id: versionId }, data: { priceSnapshotId: snap.id } });
+      const snap = await snapshotAcceptedContent(
+        versionId,
+        before.sections,
+        before.items,
+        req.user!.sub,
+      );
+      await prisma.proposalVersion.update({
+        where: { id: versionId },
+        data: { priceSnapshotId: snap.id },
+      });
     }
     // Release is also the handoff to the deal board: subtotal, title and the proposal
     // document itself. Reported, never fatal — the proposal is released whatever

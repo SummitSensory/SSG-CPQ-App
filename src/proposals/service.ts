@@ -102,6 +102,38 @@ export async function updateVersionContent(
   });
 }
 
+/**
+ * Rename the proposal that owns `versionId`.
+ *
+ * The builder edits the title in the same form as the version content, so it
+ * arrives on the version PATCH. A frozen version refuses the rename for the same
+ * reason it refuses a line edit: a released document must not change under a
+ * customer who already has it.
+ */
+export async function renameProposalForVersion(
+  versionId: string,
+  title: string,
+  userId: string,
+): Promise<void> {
+  const version = await prisma.proposalVersion.findUnique({ where: { id: versionId } });
+  if (!version) throw new NotFoundError('Version not found');
+  if (version.frozen || isFrozenStatus(version.status)) {
+    throw new ConflictError(
+      'Released proposal versions are immutable. Create a new version to make changes.',
+    );
+  }
+  const proposal = await prisma.proposal.findUnique({ where: { id: version.proposalId } });
+  if (!proposal || proposal.title === title) return;
+  await prisma.proposal.update({ where: { id: version.proposalId }, data: { title } });
+  await recordAudit({
+    actorId: userId,
+    action: 'proposal.rename',
+    entity: 'Proposal',
+    entityId: version.proposalId,
+    details: { from: proposal.title, to: title },
+  });
+}
+
 /** Create a new editable DRAFT version by cloning the current one (the only way to change a released proposal). */
 export async function createNewVersion(
   proposalId: string,
@@ -202,7 +234,9 @@ export async function discardDraftVersion(
       select: { number: true },
     });
     if (order) {
-      throw new ConflictError(`Order ${order.number} is locked to this version — unlock the order first.`);
+      throw new ConflictError(
+        `Order ${order.number} is locked to this version — unlock the order first.`,
+      );
     }
 
     // ProposalStatusEvent cascades on the version's own foreign key.
