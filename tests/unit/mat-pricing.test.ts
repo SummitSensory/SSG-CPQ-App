@@ -1,8 +1,18 @@
 import { describe, it, expect } from 'vitest';
-import { computeFloorPadding, matSku } from '../../src/proposals/matPricing.js';import { computeAdventureProposal, explainAdventure, type AdvAnswers } from '../../src/proposals/adventureSeries.js';
+import { computeFloorPadding, matSku } from '../../src/proposals/matPricing.js';
+import {
+  computeAdventureProposal,
+  explainAdventure,
+  type AdvAnswers,
+} from '../../src/proposals/adventureSeries.js';
 
 const frame = (over: Partial<AdvAnswers> = {}): AdvAnswers => ({
-  length: 8, width: 8, config: 'Square', legs: 4, ladders: 0, ...over,
+  length: 8,
+  width: 8,
+  config: 'Square',
+  legs: 4,
+  ladders: 0,
+  ...over,
 });
 
 describe('floor padding pricing', () => {
@@ -37,7 +47,9 @@ describe('floor padding pricing', () => {
 
 describe('floor padding on the proposal', () => {
   it('emits a priced mat line under the mat system group', () => {
-    const { lines } = computeAdventureProposal(frame({ floorPadding: true, floorPadThickness: '3.25' }));
+    const { lines } = computeAdventureProposal(
+      frame({ floorPadding: true, floorPadThickness: '3.25' }),
+    );
     const mat = lines.find((l) => l.sku === 'R-SSG-0808CLM');
     expect(mat).toBeTruthy();
     expect(mat!.quantity).toBe(1);
@@ -62,10 +74,22 @@ describe('floor padding on the proposal', () => {
 
 describe('column wraps, ladder legs and packs price from the catalog', () => {
   it('resolves each configurator part to its catalog rate and cost', () => {
-    const { lines } = computeAdventureProposal(frame({
-      matColumn: true, uShaped: 1, completeWrap: 3, matLadderLeg: true, ladders: 1,
-      vRings: 1, carabiner: 2, webbingSling: 4,
-    }));
+    // V-rings are no longer a Hardware quantity — they arrive with a cargo net and print
+    // in that section, so the net has to be switched on for B07MB985GW to appear at all.
+    const { lines } = computeAdventureProposal(
+      frame({
+        matColumn: true,
+        uShaped: 1,
+        completeWrap: 3,
+        matLadderLeg: true,
+        ladders: 1,
+        cargoNet: true,
+        cargoNet8x6: true,
+        cargoNet8x6Qty: 1,
+        carabiner: 2,
+        webbingSling: 4,
+      }),
+    );
     for (const part of ['SSUSP67', 'SSCW67', 'SSUSP72', 'B07MB985GW', 'B0CDVDZSB1', '6820H-LAN']) {
       const l = lines.find((x) => x.sku === part);
       expect(l, part).toBeTruthy();
@@ -74,6 +98,36 @@ describe('column wraps, ladder legs and packs price from the catalog', () => {
     }
     expect(lines.find((l) => l.sku === 'SSCW67')!.quantity).toBe(3);
     expect(lines.find((l) => l.sku === 'SSUSP72')!.quantity).toBe(1);
+  });
+
+  it('does not price V-rings from a bare Hardware quantity any more', () => {
+    // The Hardware section no longer offers them, so an answer left on an older proposal
+    // must not quietly add a line the rep cannot see or remove in the configurator.
+    const { lines } = computeAdventureProposal(frame({ vRings: 2 }));
+    expect(lines.some((l) => l.sku === 'B07MB985GW')).toBe(false);
+  });
+
+  it('prices the cargo net and its own fixings under Cargo Net', () => {
+    const { lines } = computeAdventureProposal(
+      frame({
+        cargoNet: true,
+        cargoNet10x8: true,
+        cargoNet10x8Qty: 2,
+        cargoHwCarabinerQty: 3,
+        cargoHwVRingQty: 4,
+      }),
+    );
+    const net = lines.find((l) => l.sku === 'B07V3J9S2R');
+    expect(net).toBeTruthy();
+    expect(net!.quantity).toBe(2);
+    // The net's carabiner is the 50-pack of snap hooks, NOT the 4-pack auto-locking
+    // carabiner answered under Essential Carabiners & Connectors.
+    const snap = lines.find((l) => l.sku === 'B0937DRYYF');
+    expect(snap).toBeTruthy();
+    expect(snap!.quantity).toBe(3);
+    const vring = lines.find((l) => l.sku === 'B07MB985GW');
+    expect(vring).toBeTruthy();
+    expect(vring!.quantity).toBe(4);
   });
 
   it('carries them into revenue and COGS', () => {

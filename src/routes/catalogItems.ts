@@ -498,6 +498,23 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
       }
       return path.length ? path.join('.') : null;
     };
+    /**
+     * The category ancestry as names, outermost first — e.g.
+     * ["THERAPEUTIC ACTIVITY & ADVENTURE COMPONENTS", "Therapeutic Swing & Sensory
+     * Equipment Package"]. The builder turns the first into the proposal's group
+     * heading and the last into its sub-heading, creating either if the proposal does
+     * not have it yet, so a picked part lands in the right place on a bare proposal.
+     * Empty for a part carried only as a Sku row: nothing places it, so it appends.
+     */
+    const catPathNames = (categoryId: string | null | undefined): string[] => {
+      const names: string[] = [];
+      let node = categoryId ? catById.get(categoryId) : undefined;
+      for (let hops = 0; node && hops < 12; hops++) {
+        names.unshift(node.name);
+        node = node.parentId ? catById.get(node.parentId) : undefined;
+      }
+      return names;
+    };
     const sortKeyFor = (
       part: string,
       product?: { sortOrder: number; categoryId: string },
@@ -538,6 +555,8 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
       /** Catalogue position — see sortKeyFor above. Drives insertion order in the builder. */
       sortKey?: string;
       category?: string;
+      /** Category ancestry, outermost first — see catPathNames above. */
+      path?: string[];
     };
     const out: Record<string, Entry> = {};
     for (const s of rows) {
@@ -557,6 +576,7 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
         s.category,
       );
       entry.category = (p ? catById.get(p.categoryId)?.name : null) || s.category || '';
+      entry.path = p ? catPathNames(p.categoryId) : [];
       if (freightTbdFor(s.manufacturer, p?.id)) entry.freightTbd = true;
       out[s.part] = entry;
     }
@@ -572,6 +592,7 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
         description: p.name,
         sortKey: sortKeyFor(p.sku, { sortOrder: p.sortOrder, categoryId: p.categoryId }),
         category: catById.get(p.categoryId)?.name || '',
+        path: catPathNames(p.categoryId),
         ...(freightTbdFor(null, p.id) ? { freightTbd: true } : {}),
       };
     }

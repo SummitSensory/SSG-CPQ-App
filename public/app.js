@@ -371,6 +371,7 @@
     { id: 'crm', label: 'CRM', ready: true, roles: '*' },
     { id: 'catalog', label: 'Catalog', ready: true, roles: '*' },
     { id: 'proposals', label: 'Proposals', ready: true, roles: '*' },
+    { id: 'mock', label: 'Mock Proposal', ready: true, roles: ['SYSTEM_ADMIN', 'EXECUTIVE', 'SALES_MANAGER', 'SALES_REP', 'DESIGNER', 'ESTIMATOR', 'OPERATIONS', 'PROJECT_MANAGER'] },
     { id: 'reports', label: 'Reports', ready: true, roles: '*' },
     { id: 'orders', label: 'Orders & Bill of Materials', ready: true, roles: '*' },
     { id: 'admin', label: 'Administration', ready: true, roles: ['SYSTEM_ADMIN'] },
@@ -389,7 +390,14 @@
   var QBO_TXN_ROLES = ['SYSTEM_ADMIN', 'ACCOUNTING'];
   var QBO_VIEW_ROLES = ['SYSTEM_ADMIN', 'EXECUTIVE', 'ACCOUNTING'];
   function hasRole(list, role) { return list.indexOf(role) !== -1; }
-  function navFor(role) { return NAV.filter(function (n) { return n.roles === '*' || n.roles.indexOf(role) !== -1; }); }
+  function navFor(role) {
+    return NAV.filter(function (n) {
+      if (n.roles === '*') return true;
+      // Defensive: a nav entry whose role list is missing used to throw here and take
+      // the entire shell down rather than just hiding one tab.
+      return Array.isArray(n.roles) && n.roles.indexOf(role) !== -1;
+    });
+  }
   function roleLabel(role) { return titleCase(role); }
 
   // Business numbers (deposit %, proposal validity, leg spans) come from
@@ -451,6 +459,7 @@
       else if (id === 'crm') renderCrm(user);
       else if (id === 'catalog') renderCatalog(user);
       else if (id === 'proposals') renderProposals(user);
+      else if (id === 'mock') renderMockProposal(user);
       else if (id === 'reports') renderReports(user);
       else if (id === 'orders') renderOrders(user);
       else if (id === 'admin') renderAdmin(user);
@@ -461,6 +470,112 @@
     document.getElementById('pwdBtn').addEventListener('click', openPasswordForm);
     document.getElementById('profBtn').addEventListener('click', function () { openProfileForm(user); });
     renderDashboard(user);
+  }
+
+  /* ==================== Mock Proposal ====================
+   * A proposal built for a phone call: pick a series, answer the configurator, read the
+   * retail figures back. Nothing is stored and nothing is printed — it exists to answer
+   * "what would that cost" without creating a customer record first.
+   *
+   * It is the SAME builder, not a copy. `pb.mock` switches off everything a customer
+   * must not see (margin, cost, freight) and everything that would commit it (save,
+   * templates, freight requests, print). Sharing the code is the point: a mock priced by
+   * a parallel implementation would drift from the real one, and then it would be worse
+   * than no answer at all.
+   */
+  function isMock() { return !!(pb && pb.mock); }
+
+  function renderMockProposal(user) {
+    pb = null;
+    document.getElementById('view').innerHTML =
+      '<div style="max-width:760px;">' +
+        '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:14px;padding:24px 26px;">' +
+          '<div style="font-family:\'Newsreader\',serif;font-size:22px;font-weight:600;margin-bottom:6px;">Price something on the spot</div>' +
+          '<div class="muted" style="font-size:13.5px;line-height:1.6;max-width:560px;">Answer a configurator and read the retail total back. Nothing is saved, nothing prints, and no internal figures appear — so the screen can be turned toward a customer. Turn it into a real proposal at any point and it asks who it is for.</div>' +
+          '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:20px;">' +
+            '<button class="btn" id="mkAdv" style="width:auto;padding:11px 20px;background:#3d4a55;">⚙ Adventure Series</button>' +
+            '<button class="btn" id="mkSoar" style="width:auto;padding:11px 20px;background:#3d4a55;">⚙ Summit Soar</button>' +
+            '<button class="btn" id="mkFlex" style="width:auto;padding:11px 20px;background:#3d4a55;">⚙ Summit Flex</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    document.getElementById('mkAdv').addEventListener('click', function () { startMock(user, 'adv'); });
+    document.getElementById('mkSoar').addEventListener('click', function () { startMock(user, 'soar'); });
+    document.getElementById('mkFlex').addEventListener('click', function () { startMock(user, 'flex'); });
+  }
+
+  /**
+   * Stand up a builder with no proposal behind it.
+   *
+   * proposalId and versionId are deliberately null: every path that would reach the
+   * server for this document checks them, so a mock cannot save, cannot raise a freight
+   * request and cannot be released by accident.
+   */
+  function startMock(user, series) {
+    var today = todayISO();
+    pb = {
+      mock: true, mockSeries: series,
+      proposalId: null, versionId: null, user: user, orgName: '', stdNotes: [],
+      title: '', number: '', version: 1,
+      meta: {
+        contactName: '', shipTo: '', billTo: '', billSameAsShip: true, showTitle: true,
+        projectId: '', showProjectId: false, showDeposit: true,
+        tbdTax: '', tbdStructureFreight: '', tbdMatsFreight: '',
+        proposalDate: today, taxAmountMinor: 0, discountPct: 0,
+        structureFreightMinor: 0, matsFreightMinor: 0,
+        expiration: addDays(today, 7), footerNotes: [], advAnswers: null, advWarnings: [],
+      },
+      lines: [],
+    };
+    hwSig = JSON.stringify(hardwareQty());
+    loadItemDefaults().then(function () {
+      renderBuilder();
+      if (series === 'adv') openAdventureConfigurator();
+      else if (series === 'soar') openSoarConfigurator();
+      // Flex has no configurator anywhere in the app — it is a catalogue pick, and the
+      // builder's own "Start from Summit Flex" button does exactly this.
+      else openLinePicker('Summit Flex');
+    });
+  }
+
+  /**
+   * Hand a mock over to a real customer.
+   *
+   * Creates the proposal, then writes the lines onto its first version — the same PATCH
+   * the builder uses — so the document that appears is the one that was on screen.
+   */
+  async function convertMockToProposal(user) {
+    var orgs = [];
+    try { var r = await authed('/crm/organizations?pageSize=200'); if (r.ok) orgs = (await r.json()).items || []; } catch (e) {}
+    if (!orgs.length) { alert('There are no customers to attach this to yet. Create one under CRM first.'); return; }
+    var lines = pb.lines.slice(), meta = pb.meta, title = pb.title;
+    openModal('Turn this into a real proposal',
+      fieldRow('Customer', '<select id="mkOrg" style="' + IN + '">' + orgs.map(function (o) { return '<option value="' + o.id + '">' + esc(o.name) + '</option>'; }).join('') + '</select>') +
+      fieldRow('Proposal title', '<input id="mkTitle" style="' + IN + '" value="' + esc(title || '') + '" placeholder="e.g. Adventure Series 10\' × 8\'">') +
+      '<div class="muted" style="font-size:12.5px;line-height:1.55;">The lines on screen are copied across as a draft. Freight, tax and the internal figures are filled in on the real proposal, where they belong.</div>',
+      async function (close, showErr) {
+        var t = document.getElementById('mkTitle').value.trim();
+        if (t.length < 2) return showErr('Give the proposal a title.');
+        var cr = await authed('/proposals', { method: 'POST', body: { organizationId: document.getElementById('mkOrg').value, title: t } });
+        if (!cr.ok) return showErr(await serverMessage(cr, 'Could not create the proposal (' + cr.status + ').'));
+        var created = await cr.json();
+        var vid = created && created.versions && created.versions.length ? created.versions[0].id : (created && created.versionId);
+        if (!vid) return showErr('The proposal was created but its first version could not be found — open it from Proposals and re-run the configurator.');
+        var payload = {
+          title: t,
+          sections: [{ id: 'meta', type: 'CUSTOMER_INFO', title: 'Proposal', order: 0, enabled: true, data: meta }],
+          items: lines.map(function (l, i) {
+            return { ref: l.ref, lineType: l.lineType, kind: l.kind, productId: l.productId, sku: l.sku || '', name: l.name, description: l.description, internalNote: l.internalNote || '', components: l.components || null, source: l.source || '', freightTbd: !!l.freightTbd, quantity: Number(l.quantity) || 0, rateMinor: Number(l.rateMinor) || 0, costEach: Number(l.costEach) || 0, weightEach: Number(l.weightEach) || 0, group: l.group || '', optional: !!l.optional, delivery: l.delivery || '', returnable: l.returnable || '', addlFreight: l.addlFreight || '', freightCalc: l.freightCalc || '', tpFreightMinor: Number(l.tpFreightMinor) || 0, tpFreightLabel: l.tpFreightLabel || '', order: i };
+          }),
+          expirationDate: meta.expiration || undefined,
+        };
+        var pr = await authed('/proposals/versions/' + vid, { method: 'PATCH', body: payload });
+        if (!pr.ok) return showErr('The proposal was created but its lines could not be saved (' + pr.status + '). Open it from Proposals.');
+        close();
+        pb = null;
+        activateNav('proposals');
+        openProposalDetail(created.id || (created.proposal && created.proposal.id), user);
+      }, 'Create proposal');
   }
 
   /** Jump to a view from anywhere (keeps the sidebar selection in sync). */
@@ -997,7 +1112,9 @@
         '<button class="btn" id="snNew" style="width:auto;padding:9px 15px;white-space:nowrap;">+ New note</button></div>' +
       '<div id="snList"><div class="muted" style="padding:16px;">Loading…</div></div>';
     document.getElementById('snNew').addEventListener('click', function () { openStandardNoteForm(null); });
-    document.getElementById('qtNew').addEventListener('click', function () { openQuestionTemplateForm(null); });
+    // No question-template button on this tab — it belongs to Administration. Wiring it
+    // here threw on a null element and killed loadStandardNotes() below it, which is why
+    // the list sat on "Loading…" forever.
     loadStandardNotes();
   }
 
@@ -4072,6 +4189,9 @@
   }
 
   function freightControlsHtml() {
+    // Freight is an internal conversation with the desk. Nothing about it belongs on a
+    // screen a customer is looking at, and a mock has no board item to request against.
+    if (isMock()) return '';
     var sent = freightRequestedOnBoard();
     var busy = pb.meta.freightBusy || '';
     var quote = pb.meta.freightQuoteMinor;
@@ -4328,23 +4448,30 @@
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap;">' +
         '<button class="link-btn" id="bBack" style="width:auto;padding:7px 13px;">‹ Cancel</button>' +
         '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
-          '<button class="link-btn" id="bLoadTpl" style="width:auto;padding:9px 14px;">Load Template</button>' +
-          '<button class="link-btn" id="bSaveTpl" style="width:auto;padding:9px 14px;">Save as Template</button>' +
-          '<button class="link-btn" id="bPreview" style="width:auto;padding:9px 14px;">Preview</button>' +
-          '<button class="link-btn" id="bPdf" style="width:auto;padding:9px 14px;">Save as PDF</button>' +
-          '<button class="btn" id="bSave" style="width:auto;padding:9px 18px;">Save</button>' +
-          '<button class="link-btn" id="bClose" style="width:auto;padding:9px 16px;">Close</button>' +
+          // A mock is priced on screen and nowhere else: no preview and no PDF, because
+          // both lead to a printable customer document, and no save because there is no
+          // proposal behind it. "Create Real Proposal" is the way out of read-only.
+          (isMock()
+            ? '<button class="btn" id="bMkReal" style="width:auto;padding:9px 18px;">Create Real Proposal…</button>' +
+              '<button class="link-btn" id="bClose" style="width:auto;padding:9px 16px;">Close</button>'
+            : '<button class="link-btn" id="bLoadTpl" style="width:auto;padding:9px 14px;">Load Template</button>' +
+              '<button class="link-btn" id="bSaveTpl" style="width:auto;padding:9px 14px;">Save as Template</button>' +
+              '<button class="link-btn" id="bPreview" style="width:auto;padding:9px 14px;">Preview</button>' +
+              '<button class="link-btn" id="bPdf" style="width:auto;padding:9px 14px;">Save as PDF</button>' +
+              '<button class="btn" id="bSave" style="width:auto;padding:9px 18px;">Save</button>' +
+              '<button class="link-btn" id="bClose" style="width:auto;padding:9px 16px;">Close</button>') +
         '</div></div>' +
       // Who this proposal is for, and which version is open — the builder is
       // otherwise identical for every customer, and a rep with two tabs open has
       // no way to tell them apart.
       '<div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:0 0 16px;padding:12px 16px;background:#f7f8f4;border:1px solid #eef0ea;border-radius:10px;">' +
-        '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Prepared for</div>' +
-        '<div style="font-size:17px;font-weight:600;color:#26303a;">' + esc(pb.orgName || '—') + '</div>' +
+        '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">' + (isMock() ? 'Mock proposal' : 'Prepared for') + '</div>' +
+        '<div style="font-size:17px;font-weight:600;color:#26303a;">' + esc(isMock() ? 'No customer — nothing is saved' : (pb.orgName || '—')) + '</div>' +
         (pb.number ? '<div class="muted" style="font-size:12.5px;">' + esc(pb.number) + '</div>' : '') +
         '<div style="margin-left:auto;display:flex;align-items:baseline;gap:8px;">' +
-          '<span style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Version</span>' +
-          '<span style="font-size:13px;font-weight:600;color:#3d4a55;">v' + (pb.version || 1) + '</span>' +
+          (isMock() ? '' :
+            '<span style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Version</span>' +
+            '<span style="font-size:13px;font-weight:600;color:#3d4a55;">v' + (pb.version || 1) + '</span>') +
           (pb.readOnly ? '<span class="muted" style="font-size:12px;">read only</span>' : '') +
         '</div>' +
       '</div>' +
@@ -4422,10 +4549,14 @@
         (t.discount ? '<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:14px;color:#9c3327;"><span>Discount (' + t.discountPct + '%)</span><span>− ' + fmtMoney(t.discount, 'USD') + '</span></div>' +
           '<div style="font-size:11px;color:#8a8f85;text-align:right;margin-bottom:2px;">Discount expires ' + (pb.meta.expiration ? fmtDate(pb.meta.expiration) : 'with the proposal') + '</div>' : '') +
         optionalAmountRow('Tax $', 'mTax', pb.meta.taxAmountMinor, 'mTaxTbd', pb.meta.tbdTax) +
-        optionalAmountRow('Structure Crating &amp; Freight $', 'mStructFreight', pb.meta.structureFreightMinor, 'mStructFreightTbd', pb.meta.tbdStructureFreight) +
-        optionalAmountRow('Mats &amp; Padding Freight $', 'mMatsFreight', pb.meta.matsFreightMinor, 'mMatsFreightTbd', pb.meta.tbdMatsFreight) +
-        '<div style="font-size:11px;color:#8a8f85;text-align:right;margin:-2px 0 2px;">Left box prints in place of TBD when the amount is 0</div>' +
+        // Crating and freight are quoted by the desk against a real shipment. A mock has
+        // no shipment, so it quotes product retail and says so rather than showing $0.
+        (isMock() ? '' :
+          optionalAmountRow('Structure Crating &amp; Freight $', 'mStructFreight', pb.meta.structureFreightMinor, 'mStructFreightTbd', pb.meta.tbdStructureFreight) +
+          optionalAmountRow('Mats &amp; Padding Freight $', 'mMatsFreight', pb.meta.matsFreightMinor, 'mMatsFreightTbd', pb.meta.tbdMatsFreight) +
+          '<div style="font-size:11px;color:#8a8f85;text-align:right;margin:-2px 0 2px;">Left box prints in place of TBD when the amount is 0</div>') +
         '<div style="display:flex;justify-content:space-between;padding:8px 0 0;margin-top:6px;border-top:1px solid #e7e8e3;font-size:16px;font-weight:600;font-family:\'Newsreader\',serif;"><span>Total</span><span>' + fmtUsd(t.total) + '</span></div>' +
+        (isMock() ? '<div class="muted" style="font-size:11.5px;text-align:right;margin-top:4px;line-height:1.5;">Product retail only. Crating, freight and tax are quoted on a real proposal.</div>' : '') +
         (pb.meta.showDeposit !== false ? '<div style="display:flex;justify-content:space-between;padding:6px 0 0;font-size:14px;color:#3d4a55;font-weight:600;"><span>Deposit due (' + depositPct() + '%)</span><span>' + fmtUsd(t.deposit) + '</span></div>' : '<div style="display:flex;justify-content:space-between;padding:6px 0 0;font-size:12.5px;color:#8a8f85;"><span>Deposit</span><span>Not shown on the proposal</span></div>') +
         // Read-only: the sum of quantity × per-unit weight across product lines. Drives
         // crating and freight, so it is worth seeing before those numbers are entered.
@@ -4435,7 +4566,7 @@
         '</div>' +
       '</div>' +
       footerNotesCard() +
-      '<div id="bMarginRail" style="' + marginRailStyle() + '">' + marginCard(t) + '<div id="bRfqRail"></div></div>';
+      (isMock() ? '' : '<div id="bMarginRail" style="' + marginRailStyle() + '">' + marginCard(t) + '<div id="bRfqRail"></div></div>');
     wireBuilder();
   }
 
@@ -4456,6 +4587,7 @@
   }
 
   /** The profitability rail floats beside the builder when there is room; otherwise it stacks. */
+  /** Internal figures, so a mock never renders the rail at all — see isMock(). */
   function marginRailStyle() {
     return window.innerWidth >= 1680
       ? 'position:fixed;top:92px;right:22px;width:342px;max-height:calc(100vh - 116px);overflow:auto;z-index:20;'
@@ -4480,6 +4612,9 @@
           '<span style="color:' + c + ';font-weight:600;">' + fmtMoney(g.margin, '') + ' · ' + g.marginPct + '%</span>' +
         '</div></div>';
     }).join('');
+    // Says "internal only" on its own face, so it has no business on a screen turned
+    // toward a customer.
+    if (isMock()) return '';
     return '<div class="card" style="border:1px solid #e4dfd0;background:#fdfcf7;">' +
       '<div class="section-title" style="margin:0 0 2px;">Profitability</div>' +
       '<div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;">Internal only — not printed</div>' +
@@ -4968,11 +5103,12 @@
         '<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:#cdd6dc;white-space:nowrap;cursor:pointer;"><input type="checkbox" class="bChk" data-i="' + i + '" data-k="optional"' + (l.optional ? ' checked' : '') + '> Optional</label>' +
         '<span style="font-size:12.5px;font-weight:600;color:#cdd6dc;min-width:90px;text-align:right;">' + fmtMoney(g.rev, 'USD') + '</span>' + noteBtnLight + del.replace('#9c3327', '#f0b8ae').replace('background:#fff', 'background:rgba(255,255,255,.12)').replace('border:1px solid #e0e1db', 'border:1px solid rgba(255,255,255,.25)') +
         '</div>' +
-        '<div style="display:flex;gap:16px;justify-content:flex-end;font-size:11px;color:#a9bac6;padding:6px 40px 0 0;">' +
-          '<span>Revenue <b style="color:#fff;font-weight:600;">' + fmtMoney(g.rev, '') + '</b></span>' +
-          '<span>COGS <b style="color:#fff;font-weight:600;">' + fmtMoney(g.cogs, '') + '</b></span>' +
-          '<span>Margin <b style="color:' + (gMargin >= 0 ? '#9fe0c4' : '#f0b8ae') + ';font-weight:600;">' + fmtMoney(gMargin, '') + ' · ' + gPct + '%</b></span>' +
-        '</div></div>';
+        (isMock() ? '' :
+          '<div style="display:flex;gap:16px;justify-content:flex-end;font-size:11px;color:#a9bac6;padding:6px 40px 0 0;">' +
+            '<span>Revenue <b style="color:#fff;font-weight:600;">' + fmtMoney(g.rev, '') + '</b></span>' +
+            '<span>COGS <b style="color:#fff;font-weight:600;">' + fmtMoney(g.cogs, '') + '</b></span>' +
+            '<span>Margin <b style="color:' + (gMargin >= 0 ? '#9fe0c4' : '#f0b8ae') + ';font-weight:600;">' + fmtMoney(gMargin, '') + ' · ' + gPct + '%</b></span>' +
+          '</div>') + '</div>';
     }
     if (l.lineType === 'SUBGROUP') {
       return '<div class="bRow" draggable="true" data-i="' + i + '" style="display:flex;align-items:center;gap:8px;background:#eef0ea;border:1px solid #e2e5dd;border-radius:9px;padding:7px 10px;margin-left:14px;">' + handle +
@@ -5056,7 +5192,7 @@
         '</div>' +
         '<div style="display:flex;flex-direction:column;gap:5px;width:74px;flex:0 0 auto;"><label style="font-size:10px;color:#8a8f85;text-transform:uppercase;">Qty</label><input class="bF" data-i="' + i + '" data-k="quantity" value="' + esc(l.quantity) + '" style="width:100%;padding:6px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;"></div>' +
         '<div style="display:flex;flex-direction:column;gap:5px;width:104px;flex:0 0 auto;"><label style="font-size:10px;color:#8a8f85;text-transform:uppercase;">Rate</label><input class="bF" data-i="' + i + '" data-k="rate" value="' + m2d(l.rateMinor) + '" style="width:100%;padding:6px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;"></div>' +
-        '<div style="display:flex;flex-direction:column;gap:5px;width:96px;flex:0 0 auto;"><label style="font-size:10px;color:#8a8f85;text-transform:uppercase;" title="Internal only — never printed">Cost</label><input class="bF" data-i="' + i + '" data-k="cost" value="' + m2d(l.costEach) + '" style="width:100%;padding:6px 8px;border:1px solid #e4dfd0;background:#fdfcf7;border-radius:7px;text-align:right;"></div>' +
+        (isMock() ? '' : '<div style="display:flex;flex-direction:column;gap:5px;width:96px;flex:0 0 auto;"><label style="font-size:10px;color:#8a8f85;text-transform:uppercase;" title="Internal only — never printed">Cost</label><input class="bF" data-i="' + i + '" data-k="cost" value="' + m2d(l.costEach) + '" style="width:100%;padding:6px 8px;border:1px solid #e4dfd0;background:#fdfcf7;border-radius:7px;text-align:right;"></div>') +
         '<div style="width:96px;flex:0 0 auto;text-align:right;padding-top:20px;font-weight:600;font-size:14px;">' + fmtMoney(amt, 'USD') + '</div>' + del +
       '</div></div>';
   }
@@ -5070,19 +5206,30 @@
       wireBuilder._rail = true;
       window.addEventListener('resize', function () { var el = document.getElementById('bMarginRail'); if (el) el.setAttribute('style', marginRailStyle()); });
     }
-    document.getElementById('bBack').addEventListener('click', function () { openProposalDetail(pb.proposalId, pb.user); });
-    document.getElementById('bSave').addEventListener('click', saveBuilder);
-    document.getElementById('bPreview').addEventListener('click', function () { previewProposalDoc(builderDoc()); });
+    document.getElementById('bBack').addEventListener('click', function () {
+      // A mock has no proposal behind it, so there is nothing to go back TO — and
+      // nothing to lose either, which is why it leaves without the unsaved-work prompt.
+      if (isMock()) { var u = pb.user; pb = null; pbDirty = false; activateNav('mock'); renderMockProposal(u); return; }
+      openProposalDetail(pb.proposalId, pb.user);
+    });
+    if (isMock()) {
+      document.getElementById('bMkReal').addEventListener('click', function () { convertMockToProposal(pb.user); });
+    } else {
+      document.getElementById('bSave').addEventListener('click', saveBuilder);
+      document.getElementById('bPreview').addEventListener('click', function () { previewProposalDoc(builderDoc()); });
     // Straight to the print dialog. The preview still opens behind it, so cancelling
     // the print leaves the document on screen rather than dumping you back.
-    document.getElementById('bPdf').addEventListener('click', function () { previewProposalDoc(builderDoc(), true); });
+      document.getElementById('bPdf').addEventListener('click', function () { previewProposalDoc(builderDoc(), true); });
     // Leaves the builder. Identical to "‹ Cancel" — both honour the unsaved-changes
     // guard — and it is here because the exit belongs beside Save, not only in the
     // top-left corner.
+    }
     document.getElementById('bClose').addEventListener('click', function () { document.getElementById('bBack').click(); });
     loadRfqPanel();
-    document.getElementById('bSaveTpl').addEventListener('click', saveAsTemplate);
-    document.getElementById('bLoadTpl').addEventListener('click', loadTemplate);
+    if (!isMock()) {
+      document.getElementById('bSaveTpl').addEventListener('click', saveAsTemplate);
+      document.getElementById('bLoadTpl').addEventListener('click', loadTemplate);
+    }
     document.getElementById('bAddProd').addEventListener('click', openProductPicker);
     document.getElementById('bAdvSeries').addEventListener('click', openAdventureConfigurator);
     document.getElementById('bSoarSeries').addEventListener('click', openSoarConfigurator);
@@ -5397,9 +5544,9 @@
    * added a moment ago.
    */
   async function saveBuilderQuiet() {
-    // The freight review opens a frozen version in the same state shape. There is
-    // nothing to save and the API would refuse it.
-    if (pb && pb.readOnly) return;
+    // The freight review opens a frozen version in the same state shape, and a mock has
+    // no version at all. Nothing to save either way, and the API would refuse it.
+    if (pb && (pb.readOnly || pb.mock)) return;
     var r = await authed('/proposals/versions/' + pb.versionId, { method: 'PATCH', body: builderVersionPayload() });
     if (!r.ok) throw new Error('Could not save the proposal before raising the request (' + r.status + ').');
     clearBuilderDirty();
