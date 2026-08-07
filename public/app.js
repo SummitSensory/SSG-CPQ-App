@@ -1331,7 +1331,7 @@
       '<div style="display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap;">' +
         '<input id="catSearch" placeholder="Search SKU or name…" value="' + esc(cat.q) + '" style="flex:1;min-width:220px;max-width:340px;padding:10px 13px;border:1px solid #dcded7;border-radius:10px;font-size:14px;background:#fff;outline:none;">' +
         '<select id="catStatus" style="padding:10px 12px;border:1px solid #dcded7;border-radius:10px;font-size:14px;background:#fff;">' + statusOpts + '</select>' +
-        (admin ? '<div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;"><button class="link-btn" id="catCats" style="width:auto;padding:10px 14px;">Categories &amp; tiers</button><button class="link-btn" id="catOrder" style="width:auto;padding:10px 14px;">Reorder list</button><button class="link-btn" id="catSortAudit" style="width:auto;padding:10px 14px;">Sort order</button><button class="link-btn" id="catExport" style="width:auto;padding:10px 14px;">Export tree</button><button class="link-btn" id="catImport" style="width:auto;padding:10px 14px;">Import tree</button><button class="btn" id="catNew" style="width:auto;padding:10px 17px;">New product</button></div>' : '') +
+        (admin ? '<div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;"><button class="link-btn" id="catCats" style="width:auto;padding:10px 14px;">Categories &amp; tiers</button><button class="link-btn" id="catOrder" style="width:auto;padding:10px 14px;">Sort order by tier</button><button class="link-btn" id="catSortAudit" style="width:auto;padding:10px 14px;">Sort order</button><button class="link-btn" id="catExport" style="width:auto;padding:10px 14px;">Export tree</button><button class="link-btn" id="catImport" style="width:auto;padding:10px 14px;">Import tree</button><button class="btn" id="catNew" style="width:auto;padding:10px 17px;">New product</button></div>' : '') +
       '</div>' +
       '<div id="catList"><div class="muted" style="padding:24px;">Loading…</div></div>';
     var search = document.getElementById('catSearch'), t;
@@ -1521,6 +1521,7 @@
     { key: 'name', label: 'Name', w: 0, type: 'text' },
     { key: 'kind', label: 'Kind', w: 140, type: 'enum' },
     { key: 'categoryName', label: 'Category', w: 210, type: 'enum' },
+    { key: 'sortOrder', label: 'Order', w: 90, type: 'num' },
     { key: 'status', label: 'Status', w: 170, type: 'enum' },
     { key: '', label: '', w: 96 },
   ];
@@ -1575,16 +1576,19 @@
         : '<span class="chip">' + titleCase(p.status) + '</span>';
       return '<tr>' + td('<code style="font-size:13px;color:#4a4f47;">' + esc(p.sku) + '</code>') +
         td('<b style="font-weight:600;">' + esc(p.name) + '</b>' + (p.proposalDescription ? '<div class="muted" style="font-size:12px;max-width:420px;line-height:1.45;">' + esc(String(p.proposalDescription).slice(0, 120)) + (String(p.proposalDescription).length > 120 ? '…' : '') + '</div>' : '')) +
-        td(esc(titleCase(p.kind))) + td('<span style="font-size:13px;">' + esc(p.categoryName || '—') + '</span>' + (p.categoryPath && p.categoryPath !== p.categoryName ? '<div class="muted" style="font-size:11.5px;line-height:1.4;">' + esc(p.categoryPath) + '</div>' : '')) + td(statusCell) +
+        td(esc(titleCase(p.kind))) + td('<span style="font-size:13px;">' + esc(p.categoryName || '—') + '</span>' + (p.categoryPath && p.categoryPath !== p.categoryName ? '<div class="muted" style="font-size:11.5px;line-height:1.4;">' + esc(p.categoryPath) + '</div>' : '')) +
+        // The number that decides where this part lands on a proposal. Sort by this
+        // column and filter Category to read a tier in its proposal order.
+        td('<span style="font-variant-numeric:tabular-nums;font-size:13px;color:#5c6157;">' + (Number(p.sortOrder) || 0) + '</span>') + td(statusCell) +
         td(admin ? '<button class="prodEdit" data-pid="' + p.id + '" style="border:1px solid #dcded7;background:#fff;border-radius:8px;padding:6px 12px;font-size:12.5px;color:#3d4a55;cursor:pointer;">Edit</button>' : '') + '</tr>';
     }).join('');
 
     box.innerHTML = '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:14px;overflow-x:auto;">' +
-      '<table style="width:100%;min-width:1040px;border-collapse:collapse;font-size:14px;table-layout:fixed;">' +
+      '<table style="width:100%;min-width:1130px;border-collapse:collapse;font-size:14px;table-layout:fixed;">' +
       '<colgroup>' + PT_COLS.map(function (c) { return '<col' + (c.w ? ' style="width:' + c.w + 'px;"' : '') + '>'; }).join('') + '</colgroup>' +
       '<thead><tr>' + colHead(PT_COLS, cat, 'background:#f7f8f4;') + '</tr>' +
       '<tr>' + PT_COLS.map(function (c) { return filterCell('colFilter', c, all, cat.filters); }).join('') + '</tr></thead>' +
-      '<tbody>' + (rows || '<tr><td style="padding:22px 16px;color:#909689;" colspan="6">' + (all.length ? 'No products match these filters.' : 'No products yet.') + '</td></tr>') + '</tbody></table></div>' +
+      '<tbody>' + (rows || '<tr><td style="padding:22px 16px;color:#909689;" colspan="7">' + (all.length ? 'No products match these filters.' : 'No products yet.') + '</td></tr>') + '</tbody></table></div>' +
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;color:#82877d;font-size:13px;flex-wrap:wrap;gap:8px;">' +
         '<span>' + rowsData.length.toLocaleString() + (activeFilters ? ' of ' + all.length.toLocaleString() : '') + ' products' +
           (activeFilters ? ' · <button id="ptClearF" class="link-btn" style="width:auto;padding:4px 10px;display:inline-block;">Clear filters</button>' : '') + '</span>' +
@@ -1632,7 +1636,8 @@
     function tierPanel(categoryId) {
       var c = catById(categoryId);
       var path = catPath(categoryId);
-      var siblings = (cat.rows || []).filter(function (x) { return x.categoryId === categoryId && x.id !== p.id; });
+      var siblings = (cat.rows || []).filter(function (x) { return x.categoryId === categoryId && x.id !== p.id; })
+        .sort(function (a, b) { return ((a.sortOrder || 0) - (b.sortOrder || 0)) || a.name.localeCompare(b.name); });
       var crumbs = path.length
         ? path.map(function (node, i) {
           return '<span style="' + (i === path.length - 1 ? 'font-weight:600;color:#20241f;' : 'color:#5c6157;') + '">' + esc(node.name) + '</span>';
@@ -1643,11 +1648,11 @@
         '<div style="font-size:12.5px;line-height:1.55;">' + crumbs + '</div>' +
         '<div class="muted" style="font-size:11.5px;margin-top:3px;">Tier ' + ((c && c.tierLevel) || path.length || '—') +
           (path.length > 1 ? ' · parent: ' + esc(path[path.length - 2].name) : ' · top level') + '</div>' +
-        '<div style="margin-top:8px;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Also in this category (' + siblings.length + ')</div>' +
+        '<div style="margin-top:8px;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Also in this category, in order (' + siblings.length + ')</div>' +
         (siblings.length
           ? '<div style="max-height:132px;overflow:auto;margin-top:4px;">' + siblings.slice(0, 40).map(function (x) {
             return '<div style="display:flex;justify-content:space-between;gap:10px;font-size:12px;padding:2px 0;">' +
-              '<span style="color:#20241f;">' + esc(x.name) + '</span>' +
+              '<span style="color:#20241f;"><code style="color:#8a8f85;font-size:11px;font-variant-numeric:tabular-nums;">' + (Number(x.sortOrder) || 0) + '</code> ' + esc(x.name) + '</span>' +
               '<code style="color:#7a7f75;font-size:11px;white-space:nowrap;">' + esc(x.sku) + '</code></div>';
           }).join('') + (siblings.length > 40 ? '<div class="muted" style="font-size:11.5px;">…and ' + (siblings.length - 40) + ' more</div>' : '') + '</div>'
           : '<div class="muted" style="font-size:12px;margin-top:2px;">Nothing else — this is the only part filed here.</div>') +
@@ -1659,6 +1664,8 @@
       fieldRow('Name', '<input id="ePName" style="' + IN + '" value="' + esc(p.name) + '">') +
       fieldRow('Kind', '<select id="ePKind" style="' + IN + '">' + KINDS.map(function (k) { return '<option value="' + k + '"' + (k === p.kind ? ' selected' : '') + '>' + titleCase(k) + '</option>'; }).join('') + '</select>') +
       fieldRow('Category / tier position', '<select id="ePCat" style="' + IN + '">' + catOpts + '</select>') +
+      '<div class="field"><label>Sort order</label><input id="ePSort" type="number" min="0" step="1" style="' + IN + '" value="' + (Number(p.sortOrder) || 0) + '">' +
+        '<div class="muted" style="font-size:11.5px;margin-top:3px;">Position among the parts above. Lower comes first, and this is where the proposal builder files the part when a rep adds it. Ties break alphabetically — leaving gaps of 10 makes room to slot one in later. Catalog → Sort order by tier does the same thing with arrows.</div></div>' +
       '<div class="field"><label>Proposal description</label><textarea id="ePDesc" rows="3" style="' + IN + 'resize:vertical;">' + esc(p.proposalDescription || '') + '</textarea>' +
         '<div class="muted" style="font-size:11.5px;margin-top:3px;">This is the text that prints under the line item on a proposal.</div></div>' +
       '<div class="field"><label>Internal description</label><textarea id="ePInt" rows="2" style="' + IN + 'resize:vertical;">' + esc(p.internalDescription || '') + '</textarea></div>' +
@@ -1680,6 +1687,12 @@
           showDimensions: document.getElementById('ePShowDims').checked,
         };
         if (body.name.length < 2) return showErr('Name must be at least 2 characters.');
+        var sortRaw = document.getElementById('ePSort').value;
+        if (sortRaw !== '') {
+          var sortNum = Number(sortRaw);
+          if (!isFinite(sortNum) || sortNum < 0 || Math.floor(sortNum) !== sortNum) return showErr('Sort order must be a whole number, 0 or more.');
+          body.sortOrder = sortNum;
+        }
         [['ePL', 'lengthIn'], ['ePW', 'widthIn'], ['ePH', 'heightIn'], ['ePWt', 'weightOz']].forEach(function (f) {
           var v = document.getElementById(f[0]).value;
           if (v !== '') body[f[1]] = Number(v);
@@ -2244,33 +2257,82 @@
    * saving writes the order the proposal picker and the tier listings read.
    */
   function openProductReorder(user) {
+    // The whole catalogue, in its current order, is always what gets saved. The
+    // tier filter narrows what is SHOWN; moving a row swaps it with its neighbour in
+    // the same tier, and every other product keeps the number it has. Saving a
+    // filtered view used to renumber the catalogue from the filtered rows alone.
     var list = (cat.rows || []).slice().sort(function (a, b) {
       return ((a.sortOrder || 0) - (b.sortOrder || 0)) || a.name.localeCompare(b.name);
     });
-    function rowHtml(p, i) {
-      return '<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid #f2f3ef;">' +
-        '<span class="muted" style="width:34px;font-size:11.5px;">' + (i + 1) + '</span>' +
-        '<div style="flex:1;font-size:13px;">' + esc(p.name) + ' <code style="font-size:11.5px;color:#7a7f75;">' + esc(p.sku) + '</code></div>' +
-        '<span class="muted" style="font-size:11.5px;">' + esc(p.categoryName || '') + '</span>' +
-        '<button type="button" class="prUp" data-i="' + i + '" style="border:1px solid #dcded7;background:#fff;border-radius:5px;cursor:pointer;font-size:10px;padding:3px 6px;">▲</button>' +
-        '<button type="button" class="prDown" data-i="' + i + '" style="border:1px solid #dcded7;background:#fff;border-radius:5px;cursor:pointer;font-size:10px;padding:3px 6px;">▼</button>' +
-      '</div>';
+    var pick = '';
+
+    /** Indices into `list`, in display order, for the tier on screen. */
+    function view() {
+      var out = [];
+      for (var i = 0; i < list.length; i++) {
+        if (!pick || list[i].categoryId === pick) out.push(i);
+      }
+      return out;
     }
-    openModal('Reorder the default product list',
-      '<div class="muted" style="font-size:12.5px;margin-bottom:10px;line-height:1.55;">This is the order products are offered in — the proposal builder’s picker and the tier listings both follow it.</div>' +
-      '<div id="prList" style="border:1px solid #e7e8e3;border-radius:10px;max-height:420px;overflow:auto;">' + list.map(rowHtml).join('') + '</div>',
+
+    var tierOpts = '<option value="">Every tier · ' + list.length + ' products</option>' +
+      (catCategories || []).slice().map(function (c) {
+        return { id: c.id, label: catPathLabel(c.id), n: list.filter(function (p) { return p.categoryId === c.id; }).length };
+      }).filter(function (o) { return o.n > 0; })
+        .sort(function (a, b) { return a.label.localeCompare(b.label); })
+        .map(function (o) { return '<option value="' + o.id + '">' + esc(o.label) + ' · ' + o.n + '</option>'; }).join('');
+
+    function rowsHtml() {
+      var v = view();
+      if (!v.length) return '<div class="muted" style="padding:16px;font-size:13px;">No products in this tier.</div>';
+      return v.map(function (idx, n) {
+        var p = list[idx];
+        return '<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid #f2f3ef;">' +
+          '<span class="muted" style="width:26px;font-size:11.5px;text-align:right;">' + (n + 1) + '</span>' +
+          '<code style="width:52px;font-size:11px;color:#8a8f85;text-align:right;font-variant-numeric:tabular-nums;">' + (Number(p.sortOrder) || 0) + '</code>' +
+          '<div style="flex:1;font-size:13px;">' + esc(p.name) + ' <code style="font-size:11.5px;color:#7a7f75;">' + esc(p.sku) + '</code>' +
+            (pick ? '' : '<div class="muted" style="font-size:11px;line-height:1.4;">' + esc(p.categoryName || '') + '</div>') + '</div>' +
+          '<button type="button" class="prUp" data-n="' + n + '"' + (n === 0 ? ' disabled' : '') + ' style="border:1px solid #dcded7;background:#fff;border-radius:5px;cursor:pointer;font-size:10px;padding:3px 6px;">▲</button>' +
+          '<button type="button" class="prDown" data-n="' + n + '"' + (n === v.length - 1 ? ' disabled' : '') + ' style="border:1px solid #dcded7;background:#fff;border-radius:5px;cursor:pointer;font-size:10px;padding:3px 6px;">▼</button>' +
+        '</div>';
+      }).join('');
+    }
+
+    openModal('Sort order within a tier',
+      '<div class="muted" style="font-size:12.5px;margin-bottom:10px;line-height:1.55;">This is the order parts are offered and printed in. A part picked in the proposal builder is filed into its tier at this position, so the order here is the order a proposal comes out in. Pick a tier to see just that group.</div>' +
+      '<select id="prTier" style="' + IN + 'margin-bottom:10px;">' + tierOpts + '</select>' +
+      '<div id="prList" style="border:1px solid #e7e8e3;border-radius:10px;max-height:380px;overflow:auto;"></div>' +
+      '<div class="muted" style="font-size:11.5px;margin-top:8px;">The middle column is the stored order number. Saving writes the whole list back in the order shown, so parts outside the tier on screen keep their place.</div>',
       async function (close, showErr) {
         var r = await authed('/catalog/products/reorder', { method: 'POST', body: { ids: list.map(function (p) { return p.id; }) } });
         if (!r.ok) return showErr('Could not save the order (' + r.status + ').');
         close(); loadProducts(user);
       }, 'Save order');
+
+    function swap(a, b) { var t = list[a]; list[a] = list[b]; list[b] = t; }
+
     function repaint() {
       var host = document.getElementById('prList'); if (!host) return;
-      host.innerHTML = list.map(rowHtml).join('');
-      host.querySelectorAll('.prUp').forEach(function (b) { b.addEventListener('click', function () { var i = Number(b.getAttribute('data-i')); if (i > 0) { var t = list[i - 1]; list[i - 1] = list[i]; list[i] = t; repaint(); } }); });
-      host.querySelectorAll('.prDown').forEach(function (b) { b.addEventListener('click', function () { var i = Number(b.getAttribute('data-i')); if (i < list.length - 1) { var t = list[i + 1]; list[i + 1] = list[i]; list[i] = t; repaint(); } }); });
+      host.innerHTML = rowsHtml();
+      host.querySelectorAll('.prUp').forEach(function (b) {
+        b.addEventListener('click', function () {
+          var v = view(), n = Number(b.getAttribute('data-n'));
+          if (n > 0) { swap(v[n - 1], v[n]); repaint(); }
+        });
+      });
+      host.querySelectorAll('.prDown').forEach(function (b) {
+        b.addEventListener('click', function () {
+          var v = view(), n = Number(b.getAttribute('data-n'));
+          if (n < v.length - 1) { swap(v[n], v[n + 1]); repaint(); }
+        });
+      });
     }
-    setTimeout(repaint, 50);
+
+    setTimeout(function () {
+      var sel = document.getElementById('prTier');
+      if (sel) sel.addEventListener('change', function () { pick = sel.value; repaint(); });
+      repaint();
+    }, 50);
   }
 
   /* --- Product-tree workbook: export and import, the same shape both ways ---
@@ -3485,7 +3547,7 @@
   function notesTriggeredBy(sku) {
     var part = String(sku || '').trim().toUpperCase();
     if (!part) return [];
-    return (stdNotes || []).filter(function (nn) {
+    return ((pb && pb.stdNotes) || []).filter(function (nn) {
       if (nn.active === false || !nn.triggerParts) return false;
       return String(nn.triggerParts).split(',').some(function (p) { return p.trim().toUpperCase() === part; });
     });
@@ -3545,10 +3607,16 @@
    * the category tree and the product's own sort order, so a part can be dropped
    * straight into position.
    *
+   * The catalogue also names the tiers a part belongs to, so a proposal that does
+   * not yet have that group or sub-heading gets it: adding SKU 1001 to a bare
+   * proposal creates "THERAPEUTIC ACTIVITY & ADVENTURE COMPONENTS", then
+   * "Therapeutic Swing & Sensory Equipment Package" under it, then the line.
+   *
    * Two rules keep this predictable rather than clever:
    *
-   *   - Nothing already on the proposal moves. Only the new line is placed. A rep
-   *     who has hand-ordered a section keeps that order.
+   *   - Nothing already on the proposal moves. Only the new line is placed, and a
+   *     heading is only ever added, never renamed or reordered. A rep who has
+   *     hand-ordered a section keeps that order.
    *   - The line lands in the section its category is already in, if there is one;
    *     otherwise in the section currently being built, which is where it landed
    *     before. It never jumps across a group header on a guess.
@@ -3560,43 +3628,119 @@
   /** Bundle components are the '— ' rows that must stay under their parent line. */
   function isBundleChild(l) { return !!l && l.lineType === 'PRODUCT' && /^—\s/.test(String(l.name || '')); }
 
+  function isGroupHeader(l) { return !!l && l.lineType === 'GROUP'; }
+  function isSubHeader(l) { return !!l && l.lineType === 'SUBGROUP'; }
+  /** Headings are matched by wording, so a rep who typed the tier name keeps their row. */
+  function sameHeading(a, b) {
+    return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+  }
+
+  /**
+   * A part's catalogue tree position as one padded segment per tier, e.g.
+   * ['00002', '00001']. Null for a part the catalogue does not place — those carry a
+   * sortKey beginning "z|" and are appended rather than filed.
+   */
+  function tierKeys(d) {
+    var tree = String((d && d.sortKey) || '').split('|')[0];
+    if (!tree || tree.charAt(0) === 'z') return null;
+    return tree.split('.');
+  }
+
+  /**
+   * Where an existing heading sits in the catalogue, read off the parts filed under
+   * it — the lowest tree key among them. A heading with no placed parts under it
+   * returns null and simply keeps its position.
+   */
+  function spanTierKey(from, to, depth) {
+    var best = null;
+    for (var i = from; i < to; i++) {
+      var l = pb.lines[i];
+      if (!l || l.lineType !== 'PRODUCT' || !l.sku) continue;
+      var k = tierKeys(itemDefaults[l.sku]);
+      if (!k) continue;
+      var v = (depth ? k.slice(0, depth) : k).join('.');
+      if (best === null || v < best) best = v;
+    }
+    return best;
+  }
+
+  /** End of the group heading at gi: the next group heading, or the end of the list. */
+  function groupSpanEnd(gi) {
+    for (var i = gi + 1; i < pb.lines.length; i++) if (isGroupHeader(pb.lines[i])) return i;
+    return pb.lines.length;
+  }
+
   function insertLineInOrder(line) {
     var d = line && line.sku ? itemDefaults[line.sku] : null;
     var key = d && d.sortKey;
-    if (!key) { pb.lines.push(line); return; }
+    var path = d && Array.isArray(d.path) ? d.path.filter(Boolean) : [];
+    var keys = tierKeys(d);
+    // Nothing to file by: no catalogue position, or a part with no tree place.
+    if (!key || !keys || !path.length) { pb.lines.push(line); return; }
 
-    // Split the list into runs delimited by section headers. A run is [start, end).
-    var runs = [], start = 0, i;
+    var groupLabel = path[0];
+    var subLabel = path.length > 1 ? path[path.length - 1] : '';
+    var groupKey = keys[0];
+    var subKey = keys.join('.');
+    var i, j;
+
+    // ---- the group heading, created if the proposal has not got it ----
+    var gi = -1;
     for (i = 0; i < pb.lines.length; i++) {
-      if (isSectionHeader(pb.lines[i])) { if (i > start) runs.push([start, i]); start = i + 1; }
+      if (isGroupHeader(pb.lines[i]) && sameHeading(pb.lines[i].name, groupLabel)) { gi = i; break; }
     }
-    if (pb.lines.length > start) runs.push([start, pb.lines.length]);
-    if (!runs.length) { pb.lines.push(line); return; }
-
-    var cat = (d.category || '').toLowerCase();
-    function catMatches(run) {
-      if (!cat) return 0;
-      var hits = 0;
-      for (var j = run[0]; j < run[1]; j++) {
-        var l = pb.lines[j];
-        if (l.lineType !== 'PRODUCT' || !l.sku) continue;
-        var ld = itemDefaults[l.sku];
-        if (ld && (ld.category || '').toLowerCase() === cat) hits++;
+    if (gi === -1) {
+      var gAt = pb.lines.length;
+      for (i = 0; i < pb.lines.length; i++) {
+        if (!isGroupHeader(pb.lines[i])) continue;
+        var gk = spanTierKey(i + 1, groupSpanEnd(i), 1);
+        if (gk !== null && gk > groupKey) { gAt = i; break; }
       }
-      return hits;
+      pb.lines.splice(gAt, 0, { ref: uid(), lineType: 'GROUP', kind: 'GROUP', name: groupLabel, description: '', quantity: 0, rateMinor: 0, group: '', optional: false });
+      gi = gAt;
     }
-    var target = runs[runs.length - 1], best = 0;
-    runs.forEach(function (r) { var h = catMatches(r); if (h > best) { best = h; target = r; } });
+    var gEnd = groupSpanEnd(gi);
 
+    // ---- the sub-heading, likewise ----
+    var from = gi + 1, to = gEnd;
+    if (subLabel) {
+      var si = -1;
+      for (i = from; i < gEnd; i++) {
+        if (isSubHeader(pb.lines[i]) && sameHeading(pb.lines[i].name, subLabel)) { si = i; break; }
+      }
+      if (si === -1) {
+        var sAt = gEnd;
+        for (i = from; i < gEnd; i++) {
+          if (!isSubHeader(pb.lines[i])) continue;
+          var sEnd = gEnd;
+          for (j = i + 1; j < gEnd; j++) if (isSubHeader(pb.lines[j])) { sEnd = j; break; }
+          var sk = spanTierKey(i + 1, sEnd, 0);
+          if (sk !== null && sk > subKey) { sAt = i; break; }
+        }
+        pb.lines.splice(sAt, 0, { ref: uid(), lineType: 'SUBGROUP', kind: 'SUBGROUP', name: subLabel, description: '', quantity: 0, rateMinor: 0, group: '' });
+        si = sAt;
+        gEnd++;
+      }
+      from = si + 1;
+      to = gEnd;
+      for (i = from; i < gEnd; i++) if (isSubHeader(pb.lines[i]) || isGroupHeader(pb.lines[i])) { to = i; break; }
+    } else {
+      // Filed at the top of the tree, so above this group's first sub-heading.
+      for (i = from; i < gEnd; i++) if (isSubHeader(pb.lines[i])) { to = i; break; }
+    }
+
+    // ---- position among its siblings ----
     // First placed sibling that sorts after the new part. Bundle children are
     // skipped so a line can never be dropped between a bundle and its components.
-    var at = target[1];
-    for (i = target[0]; i < target[1]; i++) {
+    var at = to;
+    for (i = from; i < to; i++) {
       var l = pb.lines[i];
-      if (l.lineType !== 'PRODUCT' || !l.sku || isBundleChild(l)) continue;
+      if (!l || l.lineType !== 'PRODUCT' || !l.sku || isBundleChild(l)) continue;
       var ld = itemDefaults[l.sku];
       if (ld && ld.sortKey && String(ld.sortKey) > String(key)) { at = i; break; }
     }
+    // A section's triggered notes sit at its end; products belong above them.
+    if (at === to) while (at > from && pb.lines[at - 1] && pb.lines[at - 1].lineType === 'NOTE') at--;
     // Never land between a parent bundle line and its components.
     while (at < pb.lines.length && isBundleChild(pb.lines[at])) at++;
     pb.lines.splice(at, 0, line);
@@ -4826,10 +4970,17 @@
           if (!p) return;
           // productId is null for a part carried only as a Sku row; the line is
           // keyed by part number, which is what pricing and the BOM read.
-          var line = applyItemDefaults({ ref: uid(), lineType: 'PRODUCT', kind: 'INCLUDED', productId: p.productId || null, sku: p.part, name: p.name || p.part, description: '', quantity: 1, rateMinor: 0, group: '' });
-          insertLineInOrder(line);
-          applyTriggeredNotes(p.part, pb.lines.indexOf(line));
-          markBuilderDirty();
+          // Wrapped because a throw in here used to leave the picker open with the
+          // line silently half-added, which read as "clicking does nothing".
+          try {
+            var line = applyItemDefaults({ ref: uid(), lineType: 'PRODUCT', kind: 'INCLUDED', productId: p.productId || null, sku: p.part, name: p.name || p.part, description: '', quantity: 1, rateMinor: 0, group: '' });
+            insertLineInOrder(line);
+            applyTriggeredNotes(p.part, pb.lines.indexOf(line));
+            markBuilderDirty();
+          } catch (err) {
+            alert('Could not add ' + (p.part || 'that part') + ': ' + (err && err.message ? err.message : err));
+            return;
+          }
           closeForm(); renderBuilder();
         });
       });

@@ -73,6 +73,13 @@ export const ProductShape = z.object({
   familyId: z.string().optional(),
   productLineId: z.string().optional(),
   defaultQuantity: z.number().int().positive().default(1),
+  /**
+   * Position among the siblings in this product's category. Drives the proposal
+   * builder's insertion point, so it is editable on the product itself as well as
+   * through /catalog/products/reorder. Optional rather than defaulted: leaving it
+   * out of a PATCH must not silently reset a part to the top of its tier.
+   */
+  sortOrder: z.number().int().min(0).max(999999).optional(),
   badge: z.string().max(120).optional(),
   proposalDescription: z.string().max(5000).optional(),
   internalDescription: z.string().max(5000).optional(),
