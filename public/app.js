@@ -1622,7 +1622,7 @@
       '<div style="display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap;">' +
         '<input id="catSearch" placeholder="Search SKU or name…" value="' + esc(cat.q) + '" style="flex:1;min-width:220px;max-width:340px;padding:10px 13px;border:1px solid #dcded7;border-radius:10px;font-size:14px;background:#fff;outline:none;">' +
         '<select id="catStatus" style="padding:10px 12px;border:1px solid #dcded7;border-radius:10px;font-size:14px;background:#fff;">' + statusOpts + '</select>' +
-        (admin ? '<div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;"><button class="link-btn" id="catCats" style="width:auto;padding:10px 14px;">Categories &amp; tiers</button><button class="link-btn" id="catOrder" style="width:auto;padding:10px 14px;">Sort order by tier</button><button class="link-btn" id="catSortAudit" style="width:auto;padding:10px 14px;">Sort order</button><button class="link-btn" id="catExport" style="width:auto;padding:10px 14px;">Export tree</button><button class="link-btn" id="catImport" style="width:auto;padding:10px 14px;">Import tree</button><button class="btn" id="catNew" style="width:auto;padding:10px 17px;">New product</button></div>' : '') +
+        (admin ? '<div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;"><button class="link-btn" id="catCats" style="width:auto;padding:10px 14px;">Categories &amp; tiers</button><button class="link-btn" id="catOrder" style="width:auto;padding:10px 14px;">Sort order by tier</button><button class="link-btn" id="catSortAudit" style="width:auto;padding:10px 14px;">Sort order</button><button class="link-btn" id="catExport" style="width:auto;padding:10px 14px;">Export tree</button><button class="link-btn" id="catListCsv" style="width:auto;padding:10px 14px;">Export product list</button><button class="link-btn" id="catImport" style="width:auto;padding:10px 14px;">Import tree</button><button class="btn" id="catNew" style="width:auto;padding:10px 17px;">New product</button></div>' : '') +
       '</div>' +
       '<div id="catList"><div class="muted" style="padding:24px;">Loading…</div></div>';
     var search = document.getElementById('catSearch'), t;
@@ -1637,6 +1637,7 @@
       document.getElementById('catCats').addEventListener('click', function () { openCategoryManager(user); });
       document.getElementById('catOrder').addEventListener('click', function () { openProductReorder(user); });
       document.getElementById('catExport').addEventListener('click', exportProductTree);
+      document.getElementById('catListCsv').addEventListener('click', exportCategoryProductList);
       document.getElementById('catSortAudit').addEventListener('click', function () { openSortAudit(user); });
       document.getElementById('catImport').addEventListener('click', function () { openTreeImport(user); });
     }
@@ -2763,6 +2764,55 @@
       alert('Renumbered ' + out.categories + ' categor' + (out.categories === 1 ? 'y' : 'ies') + ' and ' + out.products + ' product' + (out.products === 1 ? '' : 's') + '.');
       refreshCatalogList(user);
     }, 'Renumber all');
+  }
+
+  /**
+   * The category → product list as a flat CSV: one row per part, its full category
+   * path spelled out, and the price and weight from the SKU master joined on part
+   * number. This is the file to hand someone who wants to read or filter the
+   * catalog — the workbook above is for round-tripping edits back in, and its
+   * sheet-per-level shape makes it useless for a sort or a pivot.
+   *
+   * Category path is built from parentSlug, so a part four tiers down reads
+   * "Adventure Series › Frames › Uprights › 3in" rather than a bare slug.
+   *
+   * Parts with no SKU-master row export with blank price and weight rather than a
+   * zero — the tree and the pricing master are separate records and a real 0.00
+   * must not be indistinguishable from "not priced yet".
+   */
+  async function exportCategoryProductList() {
+    var r = await authed('/catalog/tree/export');
+    if (!r.ok) { alert('Could not export the product list (' + r.status + ').'); return; }
+    var d = await r.json();
+
+    var bySlug = {};
+    (d.categories || []).forEach(function (c) { bySlug[c.slug] = c; });
+    function pathOf(slug) {
+      var parts = [], seen = {}, cur = bySlug[slug];
+      while (cur && !seen[cur.slug]) { seen[cur.slug] = 1; parts.unshift(cur.name || cur.slug); cur = cur.parentSlug ? bySlug[cur.parentSlug] : null; }
+      return parts.join(' \u203a ');
+    }
+
+    // Price and weight live on the SKU master, not the tree. Joined here so one
+    // file answers "what do we sell and what does it cost".
+    var priced = {};
+    var rs = await authed('/skus/export');
+    if (rs.ok) {
+      var sd = await rs.json();
+      (sd.items || []).forEach(function (s) { priced[String(s.part).trim().toUpperCase()] = s; });
+    }
+
+    var cols = ['sku', 'name', 'categoryPath', 'categorySlug', 'kind', 'status', 'sortOrder', 'unitPrice', 'unitCost', 'weightLbs', 'proposalDescription'];
+    var rows = [cols];
+    (d.products || []).forEach(function (p) {
+      var m = priced[String(p.sku || '').trim().toUpperCase()];
+      rows.push([
+        p.sku, p.name, pathOf(p.categorySlug), p.categorySlug, p.kind, p.status, p.sortOrder,
+        m ? m.unitPrice : '', m ? m.unitCost : '', m ? m.weightLbs : '',
+        p.proposalDescription
+      ]);
+    });
+    downloadCsv('catalog-product-list-' + todayISO() + '.csv', rows);
   }
 
   async function exportProductTree() {
