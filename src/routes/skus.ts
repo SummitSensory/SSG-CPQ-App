@@ -52,13 +52,39 @@ const toMinor = (v: unknown): number => {
 const toBool = (v: unknown): boolean => {
   if (typeof v === 'boolean') return v;
   if (typeof v === 'number') return v !== 0;
-  return ['y', 'yes', 'true', '1', 'x'].includes(String(v ?? '').trim().toLowerCase());
+  return ['y', 'yes', 'true', '1', 'x'].includes(
+    String(v ?? '')
+      .trim()
+      .toLowerCase(),
+  );
 };
 const toNum = (v: unknown): number => {
   if (v == null || v === '') return 0;
   const num = typeof v === 'string' ? parseFloat(v.replace(/[^0-9.\-]/g, '')) : Number(v);
   return isFinite(num) ? num : 0;
 };
+
+/**
+ * Export column order, matched to the importer's recognised columns so a file
+ * this route writes re-imports without being touched. `active` is the one
+ * read-only column — see the note on `/skus/export`.
+ */
+const EXPORT_COLUMNS = [
+  'part',
+  'description',
+  'unitPrice',
+  'unitCost',
+  'weightLbs',
+  'category',
+  'manufacturer',
+  'proposalGroup',
+  'packagingBag',
+  'productUrl',
+  'overrideAllowed',
+  'defaultQty',
+  'requiresPowderColor',
+  'active',
+] as const;
 
 /** SKU/pricing master: list, in-app editor CRUD, and bulk Excel/CSV import (upsert by part#). */
 export function registerSkuRoutes(app: FastifyInstance): void {
@@ -68,10 +94,11 @@ export function registerSkuRoutes(app: FastifyInstance): void {
   app.get('/skus', read, async (req) => {
     const { q, category, page = '1', pageSize = '50' } = req.query as Record<string, string>;
     const where: Record<string, unknown> = {};
-    if (q) where.OR = [
-      { part: { contains: q, mode: 'insensitive' } },
-      { description: { contains: q, mode: 'insensitive' } },
-    ];
+    if (q)
+      where.OR = [
+        { part: { contains: q, mode: 'insensitive' } },
+        { description: { contains: q, mode: 'insensitive' } },
+      ];
     if (category) where.category = category;
     const take = Math.min(500, parseInt(pageSize, 10) || 50);
     const skip = ((parseInt(page, 10) || 1) - 1) * take;
@@ -124,13 +151,68 @@ export function registerSkuRoutes(app: FastifyInstance): void {
     }
   });
 
+  /**
+   * The SKU master as plain rows, in the exact column names and order the
+   * importer below reads. Export, edit a column in Excel, re-import: the round
+   * trip is the reason the shapes are pinned together, so keep `EXPORT_COLUMNS`
+   * and the `has(raw, …)` checks in `/skus/import` in step.
+   *
+   * Prices are dollars with two decimals, built from integer minor units — Excel
+   * mangles nothing and the importer's `toMinor` reads them straight back.
+   *
+   * `active` is exported for visibility but is NOT an import column (ImportRow
+   * strips it). Status changes go through the app or the missing-parts review.
+   */
+  app.get('/skus/export', read, async (req) => {
+    const { q, category } = req.query as Record<string, string>;
+    const where: Record<string, unknown> = {};
+    if (q)
+      where.OR = [
+        { part: { contains: q, mode: 'insensitive' } },
+        { description: { contains: q, mode: 'insensitive' } },
+      ];
+    if (category) where.category = category;
+
+    const rows = await prisma.sku.findMany({ where, orderBy: { part: 'asc' } });
+    const dollars = (minor: number) => (Math.round(minor) / 100).toFixed(2);
+
+    return {
+      exportedAt: new Date().toISOString(),
+      count: rows.length,
+      columns: EXPORT_COLUMNS,
+      items: rows.map((s) => ({
+        part: s.part,
+        description: s.description,
+        unitPrice: dollars(s.unitPriceMinor),
+        unitCost: dollars(s.unitCostMinor),
+        weightLbs: s.weightLbs,
+        category: s.category,
+        manufacturer: s.manufacturer ?? '',
+        proposalGroup: s.proposalGroup ?? '',
+        packagingBag: s.packagingBag ?? '',
+        productUrl: s.productUrl ?? '',
+        overrideAllowed: s.overrideAllowed ? 'true' : 'false',
+        defaultQty: s.defaultQty == null ? '' : s.defaultQty,
+        requiresPowderColor: s.requiresPowderColor ? 'true' : 'false',
+        active: s.active ? 'true' : 'false',
+      })),
+    };
+  });
+
   app.post('/skus', admin, async (req, reply) => {
     const parsed = SkuBody.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(parsed.error.message);
     const existing = await prisma.sku.findUnique({ where: { part: parsed.data.part } });
     if (existing) throw new ValidationError('A SKU with that part number already exists.');
-    const sku = await prisma.sku.create({ data: { ...parsed.data, proposalGroup: parsed.data.proposalGroup ?? null } });
-    await recordAudit({ actorId: req.user!.sub, action: 'sku.create', entity: 'Sku', entityId: sku.id });
+    const sku = await prisma.sku.create({
+      data: { ...parsed.data, proposalGroup: parsed.data.proposalGroup ?? null },
+    });
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'sku.create',
+      entity: 'Sku',
+      entityId: sku.id,
+    });
     return reply.status(201).send(sku);
   });
 
@@ -141,13 +223,20 @@ export function registerSkuRoutes(app: FastifyInstance): void {
     const existing = await prisma.sku.findUnique({ where: { id } });
     if (!existing) throw new NotFoundError('SKU not found');
     const sku = await prisma.sku.update({ where: { id }, data: parsed.data });
-    await recordAudit({ actorId: req.user!.sub, action: 'sku.update', entity: 'Sku', entityId: id });
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'sku.update',
+      entity: 'Sku',
+      entityId: id,
+    });
     return sku;
   });
 
   app.delete('/skus/:id', admin, async (req, reply) => {
     const { id } = req.params as { id: string };
-    await prisma.sku.delete({ where: { id } }).catch(() => { throw new NotFoundError('SKU not found'); });
+    await prisma.sku.delete({ where: { id } }).catch(() => {
+      throw new NotFoundError('SKU not found');
+    });
     return reply.status(204).send();
   });
 
@@ -163,11 +252,13 @@ export function registerSkuRoutes(app: FastifyInstance): void {
    * back as `missing` for review; only `missingAction: 'deactivate'` acts on them.
    */
   app.post('/skus/import', admin, async (req, reply) => {
-    const body = z.object({
-      dryRun: z.boolean().default(false),
-      missingAction: z.enum(['leave', 'deactivate']).default('leave'),
-      rows: z.array(z.record(z.unknown())).min(1).max(5000),
-    }).safeParse(req.body);
+    const body = z
+      .object({
+        dryRun: z.boolean().default(false),
+        missingAction: z.enum(['leave', 'deactivate']).default('leave'),
+        rows: z.array(z.record(z.unknown())).min(1).max(5000),
+      })
+      .safeParse(req.body);
     if (!body.success) throw new ValidationError(body.error.message);
 
     const issues: { row: number; message: string }[] = [];
@@ -178,39 +269,87 @@ export function registerSkuRoutes(app: FastifyInstance): void {
 
     body.data.rows.forEach((raw, i) => {
       const p = ImportRow.safeParse(raw);
-      if (!p.success) { issues.push({ row: i + 1, message: p.error.issues[0]?.message || 'invalid row' }); return; }
+      if (!p.success) {
+        issues.push({ row: i + 1, message: p.error.issues[0]?.message || 'invalid row' });
+        return;
+      }
       const d = p.data;
       const data: Record<string, unknown> = {};
       const columns: string[] = [];
-      if (has(raw, 'description')) { data.description = (d.description || '').trim() || d.part.trim(); columns.push('description'); }
-      if (has(raw, 'unitPrice', 'unitPriceMinor')) { data.unitPriceMinor = d.unitPriceMinor != null ? Math.round(d.unitPriceMinor) : toMinor(d.unitPrice); columns.push('unitPrice'); }
-      if (has(raw, 'unitCost', 'unitCostMinor')) { data.unitCostMinor = d.unitCostMinor != null ? Math.round(d.unitCostMinor) : toMinor(d.unitCost); columns.push('unitCost'); }
-      if (has(raw, 'weightLbs')) { data.weightLbs = toNum(d.weightLbs); columns.push('weightLbs'); }
-      if (has(raw, 'category')) { data.category = (d.category || 'OTHER').trim(); columns.push('category'); }
-      if (has(raw, 'manufacturer')) { data.manufacturer = d.manufacturer ? d.manufacturer.trim() : null; columns.push('manufacturer'); }
-      if (has(raw, 'proposalGroup')) { data.proposalGroup = d.proposalGroup ? d.proposalGroup.trim() : null; columns.push('proposalGroup'); }
-      if (has(raw, 'overrideAllowed')) { data.overrideAllowed = toBool(d.overrideAllowed); columns.push('overrideAllowed'); }
-      if (has(raw, 'requiresPowderColor')) { data.requiresPowderColor = toBool(d.requiresPowderColor); columns.push('requiresPowderColor'); }
+      if (has(raw, 'description')) {
+        data.description = (d.description || '').trim() || d.part.trim();
+        columns.push('description');
+      }
+      if (has(raw, 'unitPrice', 'unitPriceMinor')) {
+        data.unitPriceMinor =
+          d.unitPriceMinor != null ? Math.round(d.unitPriceMinor) : toMinor(d.unitPrice);
+        columns.push('unitPrice');
+      }
+      if (has(raw, 'unitCost', 'unitCostMinor')) {
+        data.unitCostMinor =
+          d.unitCostMinor != null ? Math.round(d.unitCostMinor) : toMinor(d.unitCost);
+        columns.push('unitCost');
+      }
+      if (has(raw, 'weightLbs')) {
+        data.weightLbs = toNum(d.weightLbs);
+        columns.push('weightLbs');
+      }
+      if (has(raw, 'category')) {
+        data.category = (d.category || 'OTHER').trim();
+        columns.push('category');
+      }
+      if (has(raw, 'manufacturer')) {
+        data.manufacturer = d.manufacturer ? d.manufacturer.trim() : null;
+        columns.push('manufacturer');
+      }
+      if (has(raw, 'proposalGroup')) {
+        data.proposalGroup = d.proposalGroup ? d.proposalGroup.trim() : null;
+        columns.push('proposalGroup');
+      }
+      if (has(raw, 'overrideAllowed')) {
+        data.overrideAllowed = toBool(d.overrideAllowed);
+        columns.push('overrideAllowed');
+      }
+      if (has(raw, 'requiresPowderColor')) {
+        data.requiresPowderColor = toBool(d.requiresPowderColor);
+        columns.push('requiresPowderColor');
+      }
       // Blank clears the bag label rather than storing an empty string.
-      if (has(raw, 'packagingBag')) { data.packagingBag = (d.packagingBag ?? '').trim() || null; columns.push('packagingBag'); }
+      if (has(raw, 'packagingBag')) {
+        data.packagingBag = (d.packagingBag ?? '').trim() || null;
+        columns.push('packagingBag');
+      }
       // A blank clears the link; anything else must be a real URL, so a typo can't
       // become an unclickable "link" on a purchasing document.
       if (has(raw, 'productUrl')) {
         const u = (d.productUrl ?? '').trim();
-        if (u && !/^https?:\/\//i.test(u)) issues.push({ row: i + 1, message: `${d.part}: productUrl must start with http:// or https://` });
-        else { data.productUrl = u || null; columns.push('productUrl'); }
+        if (u && !/^https?:\/\//i.test(u))
+          issues.push({
+            row: i + 1,
+            message: `${d.part}: productUrl must start with http:// or https://`,
+          });
+        else {
+          data.productUrl = u || null;
+          columns.push('productUrl');
+        }
       }
       if (has(raw, 'defaultQty')) {
         // Blank clears the default; a number sets it. 0 is a real value meaning
         // "offer this part but start it at none".
-        data.defaultQty = d.defaultQty === '' || d.defaultQty == null ? null : Math.max(0, Math.round(toNum(d.defaultQty)));
+        data.defaultQty =
+          d.defaultQty === '' || d.defaultQty == null
+            ? null
+            : Math.max(0, Math.round(toNum(d.defaultQty)));
         columns.push('defaultQty');
       }
       clean.push({ part: d.part.trim(), data, columns });
     });
 
     const parts = clean.map((c) => c.part);
-    const existing = await prisma.sku.findMany({ where: { part: { in: parts } }, select: { part: true } });
+    const existing = await prisma.sku.findMany({
+      where: { part: { in: parts } },
+      select: { part: true },
+    });
     const known = new Set(existing.map((e) => e.part));
     // Any part the file leaves out — the review list.
     const absent = await prisma.sku.findMany({
@@ -226,12 +365,15 @@ export function registerSkuRoutes(app: FastifyInstance): void {
       missing: absent.map((a) => ({ part: a.part, name: a.description })),
     };
 
-    if (body.data.dryRun) return { dryRun: true, valid: issues.length === 0, willUpsert: clean.length, issues, plan };
+    if (body.data.dryRun)
+      return { dryRun: true, valid: issues.length === 0, willUpsert: clean.length, issues, plan };
 
-    let created = 0, updated = 0;
+    let created = 0,
+      updated = 0;
     for (const c of clean) {
       if (known.has(c.part)) {
-        if (Object.keys(c.data).length) await prisma.sku.update({ where: { part: c.part }, data: c.data });
+        if (Object.keys(c.data).length)
+          await prisma.sku.update({ where: { part: c.part }, data: c.data });
         updated++;
       } else {
         // A new part still needs the non-null basics, whether the file gave them or not.
@@ -257,10 +399,19 @@ export function registerSkuRoutes(app: FastifyInstance): void {
     }
     let deactivated = 0;
     if (body.data.missingAction === 'deactivate' && absent.length) {
-      const r = await prisma.sku.updateMany({ where: { part: { in: absent.map((a) => a.part) } }, data: { active: false } });
+      const r = await prisma.sku.updateMany({
+        where: { part: { in: absent.map((a) => a.part) } },
+        data: { active: false },
+      });
       deactivated = r.count;
     }
-    await recordAudit({ actorId: req.user!.sub, action: 'sku.import', details: { created, updated, deactivated, columns: columnsSeen } });
-    return reply.status(201).send({ valid: issues.length === 0, created, updated, deactivated, issues, plan });
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'sku.import',
+      details: { created, updated, deactivated, columns: columnsSeen },
+    });
+    return reply
+      .status(201)
+      .send({ valid: issues.length === 0, created, updated, deactivated, issues, plan });
   });
 }

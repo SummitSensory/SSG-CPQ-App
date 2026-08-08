@@ -1650,7 +1650,7 @@
     document.getElementById('catBody').innerHTML =
       '<div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">' +
         '<input id="skuSearch" placeholder="Search part # or description…" value="' + esc(skuState.q) + '" style="flex:1;min-width:220px;max-width:360px;padding:10px 13px;border:1px solid #dcded7;border-radius:10px;font-size:14px;background:#fff;outline:none;">' +
-        (admin ? '<div style="margin-left:auto;display:flex;gap:8px;"><button class="link-btn" id="skuImport" style="width:auto;padding:10px 15px;">Import Excel / CSV</button><button class="btn" id="skuNew" style="width:auto;padding:10px 17px;">New SKU</button></div>' : '') +
+        (admin ? '<div style="margin-left:auto;display:flex;gap:8px;"><button class="link-btn" id="skuExport" style="width:auto;padding:10px 15px;">Export Excel / CSV</button><button class="link-btn" id="skuImport" style="width:auto;padding:10px 15px;">Import Excel / CSV</button><button class="btn" id="skuNew" style="width:auto;padding:10px 17px;">New SKU</button></div>' : '') +
       '</div>' +
       '<div style="font-size:12px;color:#8a8f85;margin-bottom:10px;">These prices &amp; weights feed the Adventure Series engine and the proposal builder. Edit a price or weight inline and it saves automatically. <b>Override OK</b> lets a rep substitute that part number in the Adventure Series builder — leave it off and the part is fixed.</div>' +
       '<div id="skuList"><div class="muted" style="padding:24px;">Loading…</div></div>';
@@ -1658,6 +1658,7 @@
     s.addEventListener('input', function () { clearTimeout(t); t = setTimeout(function () { skuState.q = s.value.trim(); skuState.page = 1; loadSkus(user); }, 300); });
     if (admin) {
       document.getElementById('skuNew').addEventListener('click', function () { openSkuForm(user); });
+      document.getElementById('skuExport').addEventListener('click', exportSkuMaster);
       document.getElementById('skuImport').addEventListener('click', function () { openSkuImport(user); });
     }
     loadSkus(user);
@@ -1743,6 +1744,28 @@
    * present in the file are written — leaving `unitCost` out of the sheet leaves
    * every cost alone.
    */
+  /**
+   * The SKU master as a CSV the importer on this same screen reads back without
+   * edits — same column names, same order, prices as dollars. That round trip is
+   * the point: export, reprice a column in Excel, import. `active` is included so
+   * a retired part is visible in the sheet, but the importer ignores it (status is
+   * changed in the app, or by the missing-parts review on import).
+   *
+   * Exports what the search box is currently filtering to, not always the whole
+   * table — repricing one manufacturer's parts should not require a 3,000-row file.
+   */
+  async function exportSkuMaster() {
+    var qs = skuState.q ? '?q=' + encodeURIComponent(skuState.q) : '';
+    var r = await authed('/skus/export' + qs);
+    if (!r.ok) { alert('Could not export the catalog (' + r.status + ').'); return; }
+    var d = await r.json();
+    var cols = d.columns || [];
+    var rows = [cols].concat((d.items || []).map(function (it) {
+      return cols.map(function (c) { return it[c]; });
+    }));
+    downloadCsv('catalog-skus-' + todayISO() + (skuState.q ? '-filtered' : '') + '.csv', rows);
+  }
+
   var skuImportConfirmed = false;
   function openSkuImport(user) {
     skuImportConfirmed = false;
@@ -3064,6 +3087,10 @@
     // Upload the document itself on the renderer function. Failing here costs the
     // attachment, not the release, so it is reported and never thrown.
     var fileNote = '';
+    // The render can take the better part of a minute, so this notice often arrives
+    // after the rep has moved on to another screen. It names the proposal and the
+    // reason — an unattributed failure on an unrelated page reads as that page's bug.
+    var who = (lastReleaseDoc && lastReleaseDoc.filename) || 'the proposal';
     if (lastReleaseDoc && m && m.pushed) {
       try {
         var fr = await authed('/render/proposals/versions/' + lastReleaseDoc.versionId + '/monday-file', {
@@ -3071,11 +3098,15 @@
           body: { proposalHtml: lastReleaseDoc.html, filename: lastReleaseDoc.filename },
         });
         var fd = fr.ok ? await fr.json() : null;
-        if (!fd || !fd.uploaded) fileNote = ' The deal row was updated, but the proposal document did not attach.';
-      } catch (e) { fileNote = ' The deal row was updated, but the proposal document did not attach.'; }
+        if (!fr.ok) fileNote = await serverMessage(fr, 'the renderer did not respond (' + fr.status + ')');
+        else if (!fd || !fd.uploaded) fileNote = (fd && (fd.skipped || fd.error)) || 'monday did not accept the file';
+      } catch (e) { fileNote = 'the renderer could not be reached'; }
     }
     lastReleaseDoc = null;
-    if (m && m.pushed) { if (fileNote) alert(fileNote.trim()); return; }
+    if (m && m.pushed) {
+      if (fileNote) alert('Released. The deal row was updated, but ' + who + ' did not attach: ' + fileNote + '.');
+      return;
+    }
     if (!m) return;
     alert('The proposal was released, but monday.com was not updated: ' +
       (m.skipped || m.error || 'the deal board did not respond') + '.');
@@ -6311,7 +6342,8 @@
     var p2 = function (v) { return String(Math.max(0, Math.round(v))).padStart(2, '0'); };
     return {
       thickness: th, matLengthIn: li, matWidthIn: wi, squareInches: sqIn, squareFeet: sqFt,
-      rate: MAT_RATE[th], costMinor: costMinor, priceMinor: Math.round(costMinor * MAT_MARKUP),
+      rate: MAT_RATE[th], sellRate: MAT_RATE[th] * MAT_MARKUP,
+      costMinor: costMinor, priceMinor: Math.round(costMinor * MAT_MARKUP),
       sku: 'R-SSG-' + p2(L) + p2(W) + 'CLM' + (th === '2' ? '-2' : ''),
     };
   }
@@ -6323,15 +6355,18 @@
         '<input type="radio" name="advPadTh" data-ak="floorPadThickness" value="' + val + '"' + (on ? ' checked' : '') + ' style="margin-top:2px;">' +
         '<span><b style="font-weight:600;font-size:13.5px;">' + label + '</b><span class="muted" style="display:block;font-size:11.5px;">' + sub + '</span></span></label>';
     }
+    // Sell rate, not cost. The configurator is opened in front of customers, so no
+    // part of it quotes what we pay or the markup applied to it.
+    var per = function (v) { return '$' + (MAT_RATE[v] * MAT_MARKUP).toFixed(2) + ' / sq ft'; };
     return '<div style="font-size:11px;color:#8a8f85;text-transform:uppercase;letter-spacing:.03em;margin-bottom:6px;">Padding thickness</div>' +
-      '<div style="display:flex;gap:10px;">' + opt('3.25', '3.25" thick', '$11.78 / sq ft cost') + opt('2', '2" thick', '$7.65 / sq ft cost') + '</div>';
+      '<div style="display:flex;gap:10px;">' + opt('3.25', '3.25" thick', per('3.25')) + opt('2', '2" thick', per('2')) + '</div>';
   }
   function padQuoteHint() {
     var q = matQuote();
     return '<div style="margin-top:10px;background:#f8f9f6;border:1px solid #e7e8e3;border-radius:10px;padding:10px 12px;font-size:12px;color:#5c6157;line-height:1.6;">' +
       '<div style="font-family:ui-monospace,monospace;font-size:11.5px;color:#3d4a55;font-weight:600;">' + esc(q.sku) + '</div>' +
       q.matLengthIn + '" × ' + q.matWidthIn + '" = ' + q.squareInches.toLocaleString() + ' sq in ÷ 144 = <b>' + q.squareFeet.toFixed(2) + ' sq ft</b><br>' +
-      q.squareFeet.toFixed(2) + ' × $' + q.rate.toFixed(2) + ' = ' + fmtMoney(q.costMinor, 'USD') + ' cost × ' + MAT_MARKUP + ' = <b style="color:#2f7d5d;">' + fmtMoney(q.priceMinor, 'USD') + '</b> sell' +
+      q.squareFeet.toFixed(2) + ' sq ft × $' + q.sellRate.toFixed(2) + ' = <b style="color:#2f7d5d;">' + fmtMoney(q.priceMinor, 'USD') + '</b>' +
       '</div>';
   }
 
