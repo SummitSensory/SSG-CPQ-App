@@ -77,14 +77,17 @@ function sameish(a: string, b: string): boolean {
 }
 
 function oneLine(
-  a: {
-    line1?: string | null;
-    line2?: string | null;
-    city?: string | null;
-    region?: string | null;
-    postalCode?: string | null;
-    country?: string | null;
-  } | null,
+  a:
+    | {
+        line1?: string | null;
+        line2?: string | null;
+        city?: string | null;
+        region?: string | null;
+        postalCode?: string | null;
+        country?: string | null;
+      }
+    | null
+    | undefined,
 ): string {
   if (!a) return '';
   return [
