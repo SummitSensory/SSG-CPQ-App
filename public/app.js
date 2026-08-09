@@ -1003,20 +1003,34 @@
   }
 
   /* --- Modal + forms --- */
-  function openModal(title, bodyHtml, onSubmit, submitLabel) {
+  /**
+   * `opts.maxWidth` widens the dialog for content that is genuinely tabular —
+   * the QuickBooks profile comparison needs three columns side by side and is
+   * unreadable at the default width.
+   *
+   * `onSubmit` may be omitted for a read-only dialog; the primary button then
+   * just closes it, and the Cancel button is dropped since there is nothing to
+   * cancel.
+   */
+  function openModal(title, bodyHtml, onSubmit, submitLabel, opts) {
+    opts = opts || {};
+    var readOnly = typeof onSubmit !== 'function';
     var ov = document.createElement('div');
     ov.style.cssText = 'position:fixed;inset:0;background:rgba(32,36,31,.34);display:flex;align-items:flex-start;justify-content:center;padding:48px 16px;z-index:50;overflow:auto;';
-    ov.innerHTML = '<form id="mForm" style="width:100%;max-width:460px;background:#fbfbf9;border:1px solid #e7e8e3;border-radius:16px;box-shadow:0 24px 60px -20px rgba(32,36,31,.4);padding:24px 24px 22px;">' +
+    ov.innerHTML = '<form id="mForm" style="width:100%;max-width:' + (opts.maxWidth || '460px') + ';background:#fbfbf9;border:1px solid #e7e8e3;border-radius:16px;box-shadow:0 24px 60px -20px rgba(32,36,31,.4);padding:24px 24px 22px;">' +
       '<h2 style="font-size:20px;margin-bottom:16px;">' + esc(title) + '</h2>' +
       '<div id="mErr"></div>' + bodyHtml +
-      '<div style="display:flex;gap:10px;margin-top:20px;"><button type="button" id="mCancel" class="link-btn" style="width:auto;padding:11px 18px;">Cancel</button>' +
+      '<div style="display:flex;gap:10px;margin-top:20px;">' +
+      (readOnly ? '' : '<button type="button" id="mCancel" class="link-btn" style="width:auto;padding:11px 18px;">Cancel</button>') +
       '<button type="submit" class="btn" id="mSave" style="flex:1;">' + (submitLabel || 'Create') + '</button></div></form>';
     document.body.appendChild(ov);
     function close() { document.body.removeChild(ov); }
     ov.addEventListener('mousedown', function (e) { if (e.target === ov) close(); });
-    document.getElementById('mCancel').addEventListener('click', close);
+    var cancel = document.getElementById('mCancel');
+    if (cancel) cancel.addEventListener('click', close);
     document.getElementById('mForm').addEventListener('submit', async function (e) {
       e.preventDefault();
+      if (readOnly) return close();
       var save = document.getElementById('mSave'); save.disabled = true; save.textContent = 'Saving…';
       try { await onSubmit(close, function (msg) { document.getElementById('mErr').innerHTML = '<div class="err">' + esc(msg) + '</div>'; save.disabled = false; save.textContent = submitLabel || 'Create'; }); }
       catch (err) { document.getElementById('mErr').innerHTML = '<div class="err">Something went wrong.</div>'; save.disabled = false; save.textContent = submitLabel || 'Create'; }
@@ -8261,20 +8275,44 @@
     ['FINAL_INVOICE', 'Final invoice']
   ];
   function qboTypeLabel(t) { for (var i = 0; i < QBO_TYPES.length; i++) if (QBO_TYPES[i][0] === t) return QBO_TYPES[i][1]; return titleCase(t); }
+  function qboStatusChip(s) {
+    var tone = { PAID: '#3f9d78', PARTIALLY_PAID: '#b7873a', OVERDUE: '#c2452f', OPEN: '#5c6357' }[s] || '#82877d';
+    return '<span class="chip" style="color:' + tone + ';border-color:' + tone + '33;">' + titleCase(s || 'Open') + '</span>';
+  }
+  /** Date and time, because "was it sent" is usually really "was it sent before the call". */
+  function fmtStamp(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) +
+      ', ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  }
   async function loadQbo(order, user) {
     var box = document.getElementById('qboBox'); if (!box) return;
-    var txns = [];
-    var conn = null;
+    var txns = [], billing = null, conn = null;
     try {
       var rs = await authed('/integrations/quickbooks/status'); conn = rs.ok ? await rs.json() : null;
       var r = await authed('/integrations/quickbooks/transactions?proposalId=' + encodeURIComponent(order.proposalId));
       if (r.status === 403) { box.innerHTML = '<div class="placeholder" style="padding:18px;"><p class="muted" style="margin:0;">Your role cannot view QuickBooks documents.</p></div>'; return; }
       if (r.ok) txns = (await r.json()) || [];
+      // Local mirror, not a live read: opening an order must not cost an Intuit
+      // round trip per document. The Refresh button is the live one.
+      var rb = await authed('/integrations/quickbooks/billing/' + encodeURIComponent(order.proposalId));
+      if (rb.ok) billing = await rb.json();
     } catch (e) { box.innerHTML = '<div class="err">Could not reach QuickBooks.</div>'; return; }
 
     var connected = conn && (conn.connections || 0) > 0;
     var canTransact = hasRole(QBO_TXN_ROLES, user.role) && connected && order.status !== 'CANCELLED';
-    var rows = txns.map(function (t) {
+    var billByTxn = {};
+    ((billing && billing.documents) || []).forEach(function (d) { billByTxn[d.id] = d; });
+
+    // Two tables rather than one wide one. Before a document exists in
+    // QuickBooks the only question is which of the three steps is next; after it
+    // exists the question is entirely different — was it sent, has it been paid.
+    var pending = txns.filter(function (t) { return t.status !== 'CREATED'; });
+    var live = txns.filter(function (t) { return t.status === 'CREATED'; });
+
+    var pendingRows = pending.map(function (t) {
       var step = '';
       if (canTransact) {
         if (t.status === 'DRAFT' || t.status === 'PENDING_AUTHORIZATION') step = '<button class="link-btn" data-qbo="authorize" data-id="' + t.id + '" style="width:auto;padding:7px 13px;">Step 2 · Authorize</button>';
@@ -8284,18 +8322,88 @@
       return '<tr>' + td('<b style="font-weight:600;">' + esc(qboTypeLabel(t.type)) + '</b>' + (t.error ? '<div style="font-size:12px;color:#9c3327;">' + esc(t.error) + '</div>' : '')) +
         td('<span class="chip">' + titleCase(t.status) + '</span>') +
         td(fmtMoney(t.amountMinor, t.currency)) +
-        td(esc(t.qboDocNumber || t.qboId || '—')) +
         td('<div style="display:flex;justify-content:flex-end;">' + (step || '<span class="muted">—</span>') + '</div>') + '</tr>';
     }).join('');
+
+    var liveRows = live.map(function (t) {
+      var d = billByTxn[t.id] || {};
+      var isEstimate = t.type === 'ESTIMATE';
+      var sent = d.sentAt
+        ? '<b style="font-weight:600;color:#3f9d78;">Sent</b><div style="font-size:12px;color:#82877d;">' + esc(fmtStamp(d.sentAt)) +
+          (d.sentToEmail ? '<br>' + esc(d.sentToEmail) : '') + (d.sentBy ? '<br>by ' + esc(d.sentBy) : '') + '</div>'
+        : '<span class="muted">Not sent</span>' + (d.sendError ? '<div style="font-size:12px;color:#9c3327;">' + esc(d.sendError) + '</div>' : '');
+      var moneyCell = isEstimate ? '<span class="muted">—</span>'
+        : (d.balanceMinor == null
+            ? '<span class="muted">Not synced yet</span>'
+            : qboStatusChip(d.qboStatus) +
+              '<div style="font-size:12px;color:#82877d;margin-top:3px;">' +
+              fmtMoney(d.paidMinor || '0', t.currency) + ' paid of ' + fmtMoney(d.qboTotalMinor || t.amountMinor, t.currency) +
+              (Number(d.balanceMinor) > 0 ? '<br><b style="color:#20241f;">' + fmtMoney(d.balanceMinor, t.currency) + ' outstanding</b>' : '') +
+              (d.dueDate ? '<br>Due ' + esc(fmtDate(d.dueDate)) : '') + '</div>');
+      var acts = ['<button class="link-btn" data-qbob="pdf" data-id="' + t.id + '" style="width:auto;padding:6px 11px;">View</button>'];
+      if (canTransact) acts.push('<button class="link-btn" data-qbob="send" data-id="' + t.id + '" style="width:auto;padding:6px 11px;">' + (d.sentAt ? 'Resend' : 'Send to customer') + '</button>');
+      if (canTransact && !isEstimate && Number(d.balanceMinor || 0) > 0 && d.sentAt) {
+        acts.push('<button class="link-btn" data-qbob="remind" data-id="' + t.id + '" style="width:auto;padding:6px 11px;">Remind</button>');
+      }
+      return '<tr>' + td('<b style="font-weight:600;">' + esc(qboTypeLabel(t.type)) + '</b><div style="font-size:12px;color:#82877d;">' + esc(t.qboDocNumber || t.qboId || '') + '</div>') +
+        td(sent) + td(moneyCell) +
+        td('<div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;">' + acts.join('') + '</div>') + '</tr>';
+    }).join('');
+
+    var payRows = ((billing && billing.payments) || []).map(function (p) {
+      return '<tr>' + td(esc(fmtDate(p.txnDate))) +
+        td('<b style="font-weight:600;">' + fmtMoney(p.amountMinor, p.currency) + '</b>' +
+          (p.totalAmountMinor !== p.amountMinor ? '<div style="font-size:12px;color:#82877d;">of a ' + fmtMoney(p.totalAmountMinor, p.currency) + ' payment</div>' : '')) +
+        td(esc(p.method || '—')) + td(esc(p.referenceNumber || '—')) + td(esc(p.depositToAccount || '—')) + '</tr>';
+    }).join('');
+
+    var remRows = ((billing && billing.reminders) || []).map(function (m) {
+      return '<tr>' + td(esc(fmtStamp(m.at))) + td(esc(m.toEmail)) +
+        td(esc(m.subject) + (m.error ? '<div style="font-size:12px;color:#9c3327;">' + esc(m.error) + '</div>' : '')) +
+        td(fmtMoney(m.balanceMinor, 'USD')) +
+        td(m.status === 'sent' ? '<span class="chip" style="color:#3f9d78;border-color:#3f9d7833;">Sent</span>' : '<span class="chip" style="color:#c2452f;border-color:#c2452f33;">Failed</span>') + '</tr>';
+    }).join('');
+
+    var lastSync = ((billing && billing.documents) || []).map(function (d) { return d.lastSyncedAt; }).filter(Boolean).sort().pop();
 
     box.innerHTML =
       '<div class="muted" style="font-size:12.5px;margin:-4px 0 10px;line-height:1.55;">Pushing to QuickBooks is three deliberate steps: <b>prepare</b> freezes the totals and an idempotency key (nothing leaves this app), <b>authorize</b> is the sign-off, <b>create</b> writes the document into QuickBooks. A retry reuses the same key, so it can never duplicate a document.</div>' +
       (!connected ? '<div class="placeholder" style="padding:16px;margin-bottom:10px;"><p class="muted" style="margin:0;">QuickBooks is not connected — connect it under Integrations first.</p></div>' : '') +
-      (canTransact ? '<div style="display:flex;justify-content:flex-end;margin-bottom:10px;"><button class="btn" id="qboPrepare" style="width:auto;padding:9px 15px;">Step 1 · Prepare a document</button></div>' : '') +
-      tableShell(['Document', 'Status', 'Amount', 'QuickBooks #', ''], rows, 5, 'Nothing pushed to QuickBooks for this order yet.');
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">' +
+        (order.organizationId ? '<button class="link-btn" id="qboProfile" style="width:auto;padding:9px 14px;">Check customer profile</button>' : '') +
+        '<button class="link-btn" id="qboRefresh" style="width:auto;padding:9px 14px;">Refresh from QuickBooks</button>' +
+        (lastSync ? '<span class="muted" style="font-size:12px;">Last read ' + esc(fmtStamp(lastSync)) + '</span>' : '') +
+        '<div style="margin-left:auto;">' + (canTransact ? '<button class="btn" id="qboPrepare" style="width:auto;padding:9px 15px;">Step 1 · Prepare a document</button>' : '') + '</div>' +
+      '</div>' +
+      (pending.length ? '<div style="font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#8a8f85;margin:14px 0 6px;">Waiting to be created</div>' +
+        tableShell(['Document', 'Status', 'Amount', ''], pendingRows, 4, '') : '') +
+      '<div style="font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#8a8f85;margin:16px 0 6px;">In QuickBooks</div>' +
+      tableShell(['Document', 'Delivery', 'Payment', ''], liveRows, 4, 'Nothing has been created in QuickBooks for this order yet.') +
+      (payRows ? '<div style="font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#8a8f85;margin:18px 0 6px;">Payments received</div>' +
+        tableShell(['Date', 'Applied', 'Method', 'Reference', 'Deposited to'], payRows, 5, '') : '') +
+      (remRows ? '<div style="font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#8a8f85;margin:18px 0 6px;">Payment reminders</div>' +
+        tableShell(['Sent', 'To', 'Subject', 'Balance then', 'Status'], remRows, 5, '') : '');
 
     var pb = document.getElementById('qboPrepare');
     if (pb) pb.addEventListener('click', function () { openQboPrepare(order, user); });
+    var prof = document.getElementById('qboProfile');
+    if (prof) prof.addEventListener('click', function () { openQboProfile(order); });
+    var rf = document.getElementById('qboRefresh');
+    if (rf) rf.addEventListener('click', async function () {
+      rf.disabled = true; rf.textContent = 'Reading QuickBooks…';
+      var rr = await authed('/integrations/quickbooks/billing/' + encodeURIComponent(order.proposalId) + '?refresh=1');
+      if (!rr.ok) alert('Could not read QuickBooks (' + rr.status + ').');
+      else {
+        var jd = await rr.json();
+        // Per-document failures are reported rather than swallowed: a partial
+        // refresh that looks complete is how a stale balance gets trusted.
+        if (jd.refreshErrors && jd.refreshErrors.length) {
+          alert(jd.refreshErrors.length + ' document(s) could not be read:\n\n' + jd.refreshErrors.map(function (e) { return e.error; }).join('\n'));
+        }
+      }
+      loadQbo(order, user);
+    });
+
     document.querySelectorAll('[data-qbo]').forEach(function (bt) {
       bt.addEventListener('click', async function () {
         var act = bt.getAttribute('data-qbo');
@@ -8306,7 +8414,118 @@
         loadQbo(order, user);
       });
     });
+
+    document.querySelectorAll('[data-qbob]').forEach(function (bt) {
+      bt.addEventListener('click', async function () {
+        var id = bt.getAttribute('data-id'), act = bt.getAttribute('data-qbob');
+        if (act === 'pdf') return openQboPdf(id, bt);
+        if (act === 'remind') return openQboReminder(id, order, user);
+        if (act === 'send') return openQboSend(id, billByTxn[id] || {}, order, user);
+      });
+    });
   }
+
+  /**
+   * The document as the customer received it. Fetched with the session's
+   * credentials and opened as a blob — a plain link to the route would arrive
+   * without an Authorization header and 401.
+   */
+  async function openQboPdf(txnId, bt) {
+    var label = bt.textContent; bt.disabled = true; bt.textContent = 'Fetching…';
+    try {
+      var r = await authed('/integrations/quickbooks/transactions/' + txnId + '/pdf');
+      if (!r.ok) { alert('QuickBooks did not return a PDF (' + r.status + ').'); return; }
+      var url = URL.createObjectURL(await r.blob());
+      if (!window.open(url, '_blank')) alert('Allow pop-ups to view the invoice.');
+      setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+    } finally { bt.disabled = false; bt.textContent = label; }
+  }
+
+  /**
+   * Send through QuickBooks, not from here — the customer gets the QuickBooks
+   * invoice with its pay-online link, and the send is recorded in QuickBooks'
+   * own history, which is what the bookkeeper reconciles against.
+   */
+  function openQboSend(txnId, doc, order, user) {
+    openModal(doc.sentAt ? 'Resend this document' : 'Send to the customer',
+      '<div class="muted" style="font-size:13px;margin-bottom:12px;line-height:1.55;">QuickBooks emails the document and records the delivery on its side. ' +
+        (doc.sentAt ? 'It was last sent ' + esc(fmtStamp(doc.sentAt)) + '.' : 'It has not been sent yet.') + '</div>' +
+      fieldRow('Send to', '<input id="qbSendTo" type="email" value="' + esc(doc.sentToEmail || '') + '" placeholder="Leave blank to use the address on the invoice" style="' + IN + '">'),
+      async function (close, showErr) {
+        var r = await authed('/integrations/quickbooks/transactions/' + txnId + '/send', { method: 'POST', body: { to: document.getElementById('qbSendTo').value.trim() || null } });
+        if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} return showErr(m || 'Could not send (' + r.status + ').'); }
+        close(); loadQbo(order, user);
+      }, doc.sentAt ? 'Resend' : 'Send');
+  }
+
+  /**
+   * Compose a reminder. The draft comes from the server, which re-reads the
+   * balance from QuickBooks first — so nobody chases a customer for money that
+   * arrived this morning.
+   */
+  async function openQboReminder(txnId, order, user) {
+    var r = await authed('/integrations/quickbooks/transactions/' + txnId + '/reminder');
+    if (!r.ok) { alert('Could not prepare a reminder (' + r.status + ').'); return; }
+    var d = await r.json();
+    if (d.blockers && d.blockers.length) { alert(d.blockers.join('\n\n')); return; }
+    openModal('Remind ' + (d.customerName || 'the customer') + ' about ' + fmtMoney(d.balanceMinor, d.currency),
+      '<div class="muted" style="font-size:13px;margin-bottom:12px;line-height:1.55;">' +
+        fmtMoney(d.balanceMinor, d.currency) + ' outstanding' + (d.daysOverdue > 0 ? ', ' + d.daysOverdue + ' day' + (d.daysOverdue === 1 ? '' : 's') + ' past due' : '') +
+        '. The invoice PDF is attached as it currently stands in QuickBooks.</div>' +
+      fieldRow('To', '<input id="qbRemTo" type="text" value="' + esc(d.toEmail || '') + '" style="' + IN + '">') +
+      fieldRow('Cc', '<input id="qbRemCc" type="text" placeholder="Optional" style="' + IN + '">') +
+      fieldRow('Subject', '<input id="qbRemSubj" type="text" value="' + esc(d.subject) + '" style="' + IN + '">') +
+      fieldRow('Message', '<textarea id="qbRemBody" rows="12" style="' + IN + 'font-family:inherit;line-height:1.6;">' + esc(d.body) + '</textarea>'),
+      async function (close, showErr) {
+        var rr = await authed('/integrations/quickbooks/transactions/' + txnId + '/reminder', { method: 'POST', body: {
+          to: document.getElementById('qbRemTo').value.trim(),
+          cc: document.getElementById('qbRemCc').value.trim() || null,
+          subject: document.getElementById('qbRemSubj').value.trim(),
+          body: document.getElementById('qbRemBody').value
+        } });
+        if (!rr.ok) { var m = ''; try { m = ((await rr.json()) || {}).message || ''; } catch (e) {} return showErr(m || 'Could not send the reminder (' + rr.status + ').'); }
+        close(); loadQbo(order, user);
+      }, 'Send reminder');
+  }
+
+  /**
+   * What QuickBooks holds for this customer against what we hold. Read-only:
+   * the CRM owns every field here, so the fix for a difference is to correct the
+   * customer record and re-sync, never to pull QuickBooks' copy back in.
+   */
+  async function openQboProfile(order) {
+    var r = await authed('/integrations/quickbooks/customers/' + encodeURIComponent(order.organizationId) + '/profile');
+    if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} alert(m || ('Could not read the QuickBooks profile (' + r.status + ').')); return; }
+    var d = await r.json();
+    var rows = d.fields.map(function (f) {
+      var tone = f.differs ? '#c2452f' : f.missingInQbo ? '#b7873a' : '#82877d';
+      var note = f.differs ? 'Differs' : f.missingInQbo ? 'Not in QuickBooks' : f.empty ? 'Blank in both' : '';
+      return '<tr>' +
+        '<td style="padding:8px 10px;border-bottom:1px solid #e7e8e3;vertical-align:top;color:#5c6357;white-space:nowrap;">' + esc(f.label) + '</td>' +
+        '<td style="padding:8px 10px;border-bottom:1px solid #e7e8e3;vertical-align:top;">' + (esc(f.crm) || '<span class="muted">—</span>') + '</td>' +
+        '<td style="padding:8px 10px;border-bottom:1px solid #e7e8e3;vertical-align:top;' + (f.differs ? 'color:#9c3327;' : '') + '">' + (esc(f.qbo) || '<span class="muted">—</span>') + '</td>' +
+        '<td style="padding:8px 10px;border-bottom:1px solid #e7e8e3;vertical-align:top;font-size:12px;color:' + tone + ';white-space:nowrap;">' + note + '</td>' +
+        '</tr>';
+    }).join('');
+    openModal('QuickBooks customer profile',
+      (!d.linked
+        ? '<div class="placeholder" style="padding:16px;margin-bottom:12px;"><p class="muted" style="margin:0;">This customer is not linked to a QuickBooks customer yet. One will be created — or an existing customer with the same name adopted — the first time a document is pushed.</p></div>'
+        : '<div class="muted" style="font-size:12.5px;margin-bottom:12px;line-height:1.55;">QuickBooks customer ' + esc(d.qboCustomerId) +
+          (d.qboActive === false ? ' <b style="color:#9c3327;">(inactive)</b>' : '') +
+          (d.qboBalanceMinor != null ? ' · ' + fmtMoney(d.qboBalanceMinor, 'USD') + ' owed across all their invoices' : '') + '</div>') +
+      (d.warnings.length ? '<div style="background:#fbf6ec;border:1px solid #e6d9bd;border-radius:6px;padding:11px 13px;margin-bottom:12px;font-size:13px;color:#6b5a34;line-height:1.55;">' +
+        d.warnings.map(function (w) { return esc(w); }).join('<br>') + '</div>' : '') +
+      '<table style="width:100%;border-collapse:collapse;font-size:13.5px;">' +
+        '<thead><tr>' + ['', 'In this CRM', 'In QuickBooks', ''].map(function (h) {
+          return '<th style="text-align:left;padding:6px 10px;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:#8a8f85;font-weight:600;border-bottom:1px solid #cfd3ca;">' + h + '</th>';
+        }).join('') + '</tr></thead><tbody>' + rows + '</tbody></table>' +
+      '<div class="muted" style="font-size:12.5px;margin-top:12px;line-height:1.55;">' +
+        (d.differenceCount || d.missingCount
+          ? 'Correct anything wrong on the customer record, then push it with <b>Sync customer to QuickBooks</b> under Integrations. The CRM is the source of truth for every field above, so nothing here is ever pulled back the other way.'
+          : 'The two records agree.') + '</div>',
+      null, 'Close', { maxWidth: '760px' });
+  }
+
   function openQboPrepare(order, user) {
     openModal('Prepare a QuickBooks document',
       '<div class="muted" style="font-size:13px;margin-bottom:12px;">This freezes the accepted totals of ' + esc(order.number) + ' against an idempotency key. Nothing is sent to QuickBooks until you authorize and create it.</div>' +

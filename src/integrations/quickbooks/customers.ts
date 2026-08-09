@@ -29,8 +29,13 @@ function esc(s: string): string {
  * customer shape. Prefers the decision-maker contact, falling back to any
  * contact that has an email — a customer profile with no email is close to
  * useless in QuickBooks.
+ *
+ * Exported so the profile comparison in `customerProfile.ts` builds the CPQ
+ * side from this exact reader. A second copy of the same logic would drift, and
+ * a comparison screen that disagrees with what the push actually sends is worse
+ * than no comparison screen.
  */
-async function loadCustomerSource(
+export async function loadCustomerSource(
   organizationId: string,
 ): Promise<{ src: CustomerSource; email: string | null }> {
   const org = await prisma.organization.findUnique({
@@ -127,7 +132,15 @@ export async function findOrCreateCustomer(
         fetchImpl,
       );
       await upsertLink(ref, res.Customer.Id, { syncToken: res.Customer.SyncToken });
-      await log('OUTBOUND', ENTITY, organizationId, res.Customer.Id, 'ok', userId, 'updated customer');
+      await log(
+        'OUTBOUND',
+        ENTITY,
+        organizationId,
+        res.Customer.Id,
+        'ok',
+        userId,
+        'updated customer',
+      );
       return { qboId: res.Customer.Id, created: false, email };
     }
 

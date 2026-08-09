@@ -22,6 +22,14 @@ import {
   listTransactions,
 } from '../integrations/quickbooks/transactions.js';
 import { reconcile } from '../integrations/quickbooks/reconcile.js';
+import {
+  billingForProposal,
+  syncTransactionState,
+  sendTransaction,
+  documentPdf,
+} from '../integrations/quickbooks/billing.js';
+import { draftReminder, sendReminder } from '../integrations/quickbooks/reminders.js';
+import { compareCustomerProfile } from '../integrations/quickbooks/customerProfile.js';
 import type { QboEnvironment, QboTxnType } from '@prisma/client';
 
 /** QboTransaction rows carry BigInt columns — serialize to strings for JSON. */
@@ -296,5 +304,124 @@ export function registerQuickbooksRoutes(app: FastifyInstance): void {
   app.post('/integrations/quickbooks/transactions/:id/retry', transact, async (req) => {
     const { id } = req.params as { id: string };
     return serializeTxn(await retryTransaction(id, req.user!.sub));
+  });
+
+  // --- Customer profile comparison (manage) ---
+  // What QuickBooks holds for this customer against what the CRM holds, field
+  // by field. Read-only in both directions: CPQ owns every field compared, so
+  // the fix for a difference is to correct the CRM record and re-run the sync
+  // above — there is deliberately no way to pull an accountant's typo back into
+  // the CRM.
+  app.get(
+    '/integrations/quickbooks/customers/:organizationId/profile',
+    manage,
+    async (req, reply) => {
+      const { organizationId } = req.params as { organizationId: string };
+      try {
+        return await compareCustomerProfile(organizationId);
+      } catch (err) {
+        req.log.error({ err, organizationId }, 'customer profile comparison failed');
+        return reply.status(502).send({
+          error: 'QBO_PROFILE_FAILED',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+  );
+
+  // --- Billing: delivery, payments, reminders ---
+  // The whole billing picture for one proposal, from the local mirror.
+  // ?refresh=1 re-reads QuickBooks first; without it this is a cheap local read
+  // so opening an order does not cost an Intuit round trip per document.
+  app.get('/integrations/quickbooks/billing/:proposalId', manage, async (req) => {
+    const { proposalId } = req.params as { proposalId: string };
+    const { refresh } = req.query as { refresh?: string };
+    return billingForProposal(proposalId, { refresh: refresh === '1' || refresh === 'true' });
+  });
+
+  // Re-read one document's state from QuickBooks. Reading is not transacting,
+  // so this sits under manage rather than transact.
+  app.post('/integrations/quickbooks/transactions/:id/sync', manage, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    try {
+      const { transaction, payments } = await syncTransactionState(id);
+      return {
+        transaction: serializeTxn(transaction),
+        payments: payments.map((p) => ({
+          ...p,
+          amountMinor: p.amountMinor.toString(),
+          totalAmountMinor: p.totalAmountMinor.toString(),
+          unappliedMinor: p.unappliedMinor.toString(),
+        })),
+      };
+    } catch (err) {
+      req.log.error({ err, id }, 'qbo sync failed');
+      return reply.status(502).send({
+        error: 'QBO_SYNC_FAILED',
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
+  // Email the document to the customer through QuickBooks. This is a customer-
+  // facing action on a financial document, so it needs the transact permission,
+  // not merely manage.
+  app.post('/integrations/quickbooks/transactions/:id/send', transact, async (req) => {
+    const { id } = req.params as { id: string };
+    const b = (req.body ?? {}) as { to?: string | null };
+    const { transaction } = await sendTransaction(id, req.user!.sub, b.to?.trim() || null);
+    return serializeTxn(transaction);
+  });
+
+  // The document as the customer received it. Fetched live from QuickBooks each
+  // time — an invoice edited on the accounting side should show its current
+  // state, and a cached copy would quietly disagree with the customer's.
+  app.get('/integrations/quickbooks/transactions/:id/pdf', manage, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { pdf, filename } = await documentPdf(id);
+    return reply
+      .header('Content-Type', 'application/pdf')
+      .header('Content-Disposition', `inline; filename="${filename}"`)
+      .send(pdf);
+  });
+
+  // Compose a reminder. Refreshes the balance from QuickBooks first and returns
+  // any blockers (already paid, never sent, email not configured) so the UI can
+  // explain itself rather than failing at send time.
+  app.get('/integrations/quickbooks/transactions/:id/reminder', manage, async (req) => {
+    const { id } = req.params as { id: string };
+    return draftReminder(id);
+  });
+
+  app.post('/integrations/quickbooks/transactions/:id/reminder', transact, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const b = (req.body ?? {}) as {
+      to?: string;
+      cc?: string | null;
+      subject?: string;
+      body?: string;
+      attachInvoice?: boolean;
+    };
+    if (!b.to || !b.subject || !b.body) {
+      return reply
+        .status(400)
+        .send({
+          error: 'INVALID_INPUT',
+          message: 'A reminder needs a recipient, a subject and a message.',
+        });
+    }
+    // The author's name is cached on the reminder so attribution survives them
+    // leaving; read it here rather than making the mailer touch the user table.
+    const me = await prisma.user.findUnique({
+      where: { id: req.user!.sub },
+      select: { name: true },
+    });
+    return sendReminder(id, req.user!.sub, me?.name ?? 'Summit Sensory Gym', {
+      to: b.to,
+      cc: b.cc ?? null,
+      subject: b.subject,
+      body: b.body,
+      attachInvoice: b.attachInvoice !== false,
+    });
   });
 }

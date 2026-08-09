@@ -1320,6 +1320,36 @@ model QboTransaction {
   authorizedById    String?
   authorizedAt      DateTime?
   error             String?
+
+  // ---- Delivery and accounting state, mirrored FROM QuickBooks ----
+  // Everything below is QuickBooks-authoritative (source-of-truth.ts): read back
+  // for display, never pushed. sentAt in particular is Intuit's
+  // DeliveryInfo.DeliveryTime, not our clock, so an invoice emailed by hand from
+  // inside QuickBooks still reads as sent here.
+
+  /// NotSet | NeedToSend | EmailSent, verbatim from QuickBooks.
+  emailStatus       String?
+  /// When QuickBooks delivered it to the customer. Null means never sent.
+  sentAt            DateTime?
+  sentToEmail       String?
+  /// Who pressed send in this app. Null when it was sent from QuickBooks directly.
+  sentById          String?
+  lastSendAttemptAt DateTime?
+  sendError         String?
+  dueDate           DateTime?
+  /// The document total as QuickBooks holds it. Compared against the frozen
+  /// accepted total to catch an invoice edited on the accounting side.
+  qboTotalMinor     BigInt?
+  balanceMinor      BigInt?
+  paidMinor         BigInt?
+  /// OPEN | PARTIALLY_PAID | PAID | OVERDUE — derived, because QuickBooks has no
+  /// single status field on an invoice.
+  qboStatus         String?
+  qboLastSyncedAt   DateTime?
+
+  payments          QboPayment[]
+  reminders         PaymentReminder[]
+
   createdAt         DateTime       @default(now())
   updatedAt         DateTime       @updatedAt
 
@@ -1327,6 +1357,80 @@ model QboTransaction {
   @@index([status])
   @@index([type])
   @@index([environment])
+  @@index([qboStatus])
+  @@index([sentAt])
+}
+
+// A payment recorded in QuickBooks, as applied to ONE of our invoices.
+//
+// QuickBooks models a payment as its own document whose lines link to one or
+// more invoices, so a single cheque covering three invoices produces three rows
+// here. amountMinor is the portion applied to this invoice; totalAmountMinor is
+// the whole payment, kept so the figures are explicable when a customer pays
+// several invoices at once.
+//
+// A read-only mirror: rows are created, updated and deleted purely to match
+// QuickBooks. Nothing in this app records a payment.
+model QboPayment {
+  id               String         @id @default(cuid())
+  environment      QboEnvironment
+  qboPaymentId     String
+  qboTransactionId String
+  transaction      QboTransaction @relation(fields: [qboTransactionId], references: [id], onDelete: Cascade)
+  customerQboId    String?
+
+  /// Portion of this payment applied to this invoice.
+  amountMinor      BigInt
+  /// The full payment as received.
+  totalAmountMinor BigInt
+  /// Received but not yet applied to any invoice — a credit on the account.
+  unappliedMinor   BigInt         @default(0)
+  currency         String         @default("USD")
+  method           String?
+  referenceNumber  String?
+  depositToAccount String?
+  /// The payment date as entered in QuickBooks, not when we read it.
+  txnDate          DateTime
+  qboCreatedAt     DateTime?
+  qboUpdatedAt     DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  @@unique([environment, qboPaymentId, qboTransactionId])
+  @@index([qboTransactionId])
+  @@index([customerQboId])
+}
+
+// A payment reminder emailed to a customer about an outstanding invoice.
+//
+// The full sent message is stored rather than a reference to a template: a
+// reminder is correspondence, and "what exactly did we say to them" has to stay
+// answerable after the template changes. Failures are recorded too — this log is
+// the record of how hard a balance has been chased, and dropping the failures
+// would overstate it.
+model PaymentReminder {
+  id               String         @id @default(cuid())
+  qboTransactionId String
+  transaction      QboTransaction @relation(fields: [qboTransactionId], references: [id], onDelete: Cascade)
+  organizationId   String?
+  toEmail          String
+  ccEmail          String?
+  subject          String
+  body             String
+  /// The balance outstanding at the moment the reminder went out.
+  balanceMinor     BigInt
+  currency         String         @default("USD")
+  attachedInvoice  Boolean        @default(true)
+  /// sent | failed
+  status           String
+  error            String?
+  sentById         String
+  /// Cached so attribution survives the author leaving.
+  sentByName       String
+  createdAt        DateTime       @default(now())
+
+  @@index([qboTransactionId, createdAt])
+  @@index([organizationId, createdAt])
 }
 
 // ---------------- Accepted Order & Operational Handoff ----------------
