@@ -12,7 +12,7 @@ const ENTITY = 'Item';
  * proposal lines (frame parts, adventure components) carry a part number but no
  * productId, so a product-id-only map would leave them unmapped and they would
  * land in QuickBooks as the default "Services" item.
- */ 
+ */
 const ENTITY_BY_SKU = 'ItemSku';
 
 interface QboItem {
@@ -37,7 +37,7 @@ function esc(s: string): string {
  * `dirtySkus` in the link report — but a data-entry artifact should not be
  * allowed to silently break mapping.
  */
-function normSku(s: string): string {
+export function normSku(s: string): string {
   return s
     .replace(/_x000D_/gi, '')
     .replace(/[\r\n\t]+/g, '')

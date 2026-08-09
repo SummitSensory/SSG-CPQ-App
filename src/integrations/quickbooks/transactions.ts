@@ -16,6 +16,7 @@ import { buildEstimateBody } from './estimates.js';
 import { buildInvoiceBody, buildPortionInvoiceBody } from './invoices.js';
 import { TXN_LABEL, type AcceptedLine } from './mapping.js';
 import { findLink } from './links.js';
+import { assertSkusMapped } from './skuPreflight.js';
 import { resolveTermForProposal } from './terms.js';
 import type { QboTxnType, QboTxnStatus, QboEnvironment, Prisma } from '@prisma/client';
 
@@ -59,7 +60,7 @@ interface SnapshotHead {
 }
 
 /** Read + freeze the accepted proposal totals. Throws unless the version is ACCEPTED. */
-async function loadAcceptedTotals(proposalVersionId: string): Promise<AcceptedTotals> {
+export async function loadAcceptedTotals(proposalVersionId: string): Promise<AcceptedTotals> {
   const version = await prisma.proposalVersion.findUnique({ where: { id: proposalVersionId } });
   if (!version) throw new NotFoundError('Proposal version not found');
   if (version.status !== 'ACCEPTED')
@@ -107,6 +108,7 @@ async function fromPricingEngine(
       kind: 'PRODUCT',
       description: item?.name ?? bl.ref,
       qboItemId: link?.qboId ?? null,
+      productId: item?.productId ?? null,
       quantity: item?.quantity ?? 1,
       amountMinor: toBig(bl.net),
     });
@@ -197,6 +199,8 @@ async function fromProposalBuilder(
       kind: 'PRODUCT',
       description: detail ? `${name} — ${detail}` : name,
       qboItemId: link?.qboId ?? null,
+      sku: sku || null,
+      productId,
       quantity: qty || 1,
       amountMinor,
     });
@@ -426,6 +430,16 @@ export async function executeTransaction(
   const realmId = await activeRealmId(txn.environment);
 
   try {
+    // Every part number on the accepted proposal must resolve to a real, active
+    // QuickBooks item before a document carrying those lines is created. An
+    // unmapped line is not rejected by QuickBooks — it posts under the default
+    // service item, so the money is right and every product report is wrong,
+    // which nobody discovers until they read one. Portion invoices carry a
+    // single summary line with no ItemRef, so there is nothing to check there.
+    if (txn.type === 'ESTIMATE' || txn.type === 'INVOICE') {
+      await assertSkusMapped(totals.lines, realmId, fetchImpl);
+    }
+
     // Ensure the customer exists (find-or-create is itself duplicate-safe).
     const version = await prisma.proposalVersion.findUniqueOrThrow({
       where: { id: txn.proposalVersionId },

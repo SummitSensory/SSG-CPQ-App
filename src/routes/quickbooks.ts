@@ -20,6 +20,7 @@ import {
   executeTransaction,
   retryTransaction,
   listTransactions,
+  loadAcceptedTotals,
 } from '../integrations/quickbooks/transactions.js';
 import { reconcile } from '../integrations/quickbooks/reconcile.js';
 import {
@@ -30,6 +31,7 @@ import {
 } from '../integrations/quickbooks/billing.js';
 import { draftReminder, sendReminder } from '../integrations/quickbooks/reminders.js';
 import { compareCustomerProfile } from '../integrations/quickbooks/customerProfile.js';
+import { checkSkuMapping } from '../integrations/quickbooks/skuPreflight.js';
 import type { QboEnvironment, QboTxnType } from '@prisma/client';
 
 /** QboTransaction rows carry BigInt columns — serialize to strings for JSON. */
@@ -328,6 +330,30 @@ export function registerQuickbooksRoutes(app: FastifyInstance): void {
       }
     },
   );
+
+  // --- Part-number preflight (manage) ---
+  // Does every priced line on the accepted proposal resolve to a real, active
+  // QuickBooks item? This is the same check the create step enforces, exposed
+  // so the answer is visible before anyone authorizes a document rather than
+  // arriving as a failed create.
+  app.get('/integrations/quickbooks/preflight/:proposalVersionId', manage, async (req, reply) => {
+    const { proposalVersionId } = req.params as { proposalVersionId: string };
+    const realmId = await activeRealmId();
+    if (!realmId) return reply.status(409).send({ error: 'NOT_CONNECTED' });
+    try {
+      const totals = await loadAcceptedTotals(proposalVersionId);
+      return await checkSkuMapping(totals.lines, realmId);
+    } catch (err) {
+      // A version that is not ACCEPTED, or has no snapshot, is a 4xx the caller
+      // can act on — only a genuine QuickBooks read failure is a 502.
+      if (err && typeof err === 'object' && 'statusCode' in err) throw err;
+      req.log.error({ err, proposalVersionId }, 'QuickBooks SKU preflight failed');
+      return reply.status(502).send({
+        error: 'QBO_PREFLIGHT_FAILED',
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
 
   // --- Billing: delivery, payments, reminders ---
   // The whole billing picture for one proposal, from the local mirror.

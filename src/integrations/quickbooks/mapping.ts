@@ -153,6 +153,11 @@ export type AcceptedLineKind = 'PRODUCT' | 'GROUP' | 'SUBGROUP' | 'NOTE';
 export interface AcceptedLine {
   description: string;
   qboItemId?: string | null;
+  /** Part number as it appears on the proposal line. Carried so the QuickBooks
+   *  create can be blocked by name when it does not map to an item. */
+  sku?: string | null;
+  /** CPQ Product id, where the line has one (generated lines do not). */
+  productId?: string | null;
   quantity: number;
   amountMinor: bigint;
   /** Defaults to PRODUCT. Non-product kinds become description-only rows. */
