@@ -3,7 +3,13 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { verifyPassword } from '../auth/password.js';
 import { signAccessToken } from '../auth/tokens.js';
-import { createSession, rotateSession, revokeSession, resolveSession, revokeAllForUser } from '../auth/session.js';
+import {
+  createSession,
+  rotateSession,
+  revokeSession,
+  resolveSession,
+  revokeAllForUser,
+} from '../auth/session.js';
 import { hashPassword } from '../auth/password.js';
 import { UnauthorizedError, ValidationError } from '../lib/errors.js';
 import { requireAuth } from '../plugins/authz.js';
@@ -36,7 +42,12 @@ export function registerAuthRoutes(app: FastifyInstance): void {
     if (!parsed.success) throw new ValidationError();
     const { email, password } = parsed.data;
 
-    const user = await prisma.user.findUnique({ where: { email } });
+    // Email addresses are not case-sensitive, and SSO stores them lowercased.
+    // Match the same way here so a row saved as "Bryan@..." still accepts
+    // "bryan@..." at the password form.
+    const user = await prisma.user.findFirst({
+      where: { email: { equals: email.trim(), mode: 'insensitive' } },
+    });
     // Constant-ish path: always verify to reduce user enumeration.
     const ok = user && user.isActive ? await verifyPassword(user.passwordHash, password) : false;
     if (!user || !ok || !user.isActive) throw new UnauthorizedError('Invalid credentials');
@@ -147,15 +158,26 @@ export function registerAuthRoutes(app: FastifyInstance): void {
     // Any session opened with the old password dies with it.
     await revokeAllForUser(user.id);
     await recordAudit({
-      actorId: user.id, action: 'user.password.reset', targetUserId: user.id,
+      actorId: user.id,
+      action: 'user.password.reset',
+      targetUserId: user.id,
       details: { email: user.email, by: 'self-service' },
     });
     return reply.status(204).send();
   });
 
-  app.get('/auth/me', { preHandler: requireAuth }, async (req) => {    const user = await prisma.user.findUnique({
+  app.get('/auth/me', { preHandler: requireAuth }, async (req) => {
+    const user = await prisma.user.findUnique({
       where: { id: req.user!.sub },
-      select: { id: true, email: true, name: true, title: true, phone: true, role: true, isActive: true },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        title: true,
+        phone: true,
+        role: true,
+        isActive: true,
+      },
     });
     if (!user) throw new UnauthorizedError();
     return user;
@@ -164,7 +186,8 @@ export function registerAuthRoutes(app: FastifyInstance): void {
   /** Preparer details that appear on generated proposals. */
   app.patch('/auth/me', { preHandler: requireAuth }, async (req) => {
     const parsed = ProfileBody.safeParse(req.body);
-    if (!parsed.success) throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid profile');
+    if (!parsed.success)
+      throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid profile');
     const { name, title, phone } = parsed.data;
     return prisma.user.update({
       where: { id: req.user!.sub },
@@ -173,7 +196,15 @@ export function registerAuthRoutes(app: FastifyInstance): void {
         ...(title === undefined ? {} : { title: title || null }),
         ...(phone === undefined ? {} : { phone: phone || null }),
       },
-      select: { id: true, email: true, name: true, title: true, phone: true, role: true, isActive: true },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        title: true,
+        phone: true,
+        role: true,
+        isActive: true,
+      },
     });
   });
 }
