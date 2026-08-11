@@ -3648,6 +3648,16 @@
   };
   function d2m(v) { var n = parseFloat(String(v).replace(/[^0-9.\-]/g, '')); return isNaN(n) ? 0 : Math.round(n * 100); }
   function m2d(m) { return (Number(m || 0) / 100).toFixed(2); }
+  /**
+   * Professional-services and travel parts are quoted per project, so they are
+   * imported with no price and the rate is typed on the proposal. For these the
+   * builder has to keep "nobody has answered yet" (null) apart from "we decided it
+   * is zero" (0 plus a reason) — everywhere else a blank rate is still just 0.
+   * The server gate in priceEntry.ts draws the same line.
+   */
+  function isPriceEntrySku(sku) { return /^(SVC|TRV)-/.test(String(sku || '')); }
+  /** m2d, but an unanswered rate renders as an empty box rather than 0.00. */
+  function m2dBlank(m) { return (m === null || m === undefined || m === '') ? '' : m2d(m); }
   /** Pounds, with one decimal only when it matters. */
   function fmtWeight(lbs) {
     var n = Number(lbs) || 0;
@@ -3784,7 +3794,12 @@
     return {
       ref: it.ref || uid(), lineType: it.lineType || (it.isNote ? 'NOTE' : 'PRODUCT'), kind: it.kind || 'INCLUDED',
       productId: it.productId || null, sku: it.sku || '', name: it.name || '', description: desc,
-      quantity: it.quantity == null ? 1 : it.quantity, rateMinor: it.rateMinor || 0, costEach: it.costEach || 0, weightEach: it.weightEach || 0, group: it.group || '',
+      quantity: it.quantity == null ? 1 : it.quantity,
+      // Only per-project parts keep a null rate; for everything else a missing
+      // rate has always meant 0 and changing that would reprice the catalog.
+      rateMinor: (isPriceEntrySku(it.sku) && (it.rateMinor === null || it.rateMinor === undefined)) ? null : (it.rateMinor || 0),
+      priceNote: it.priceNote || '',
+      costEach: it.costEach || 0, weightEach: it.weightEach || 0, group: it.group || '',
       optional: !!it.optional,
       delivery: it.delivery || '', returnable: it.returnable || '', addlFreight: it.addlFreight || '', freightCalc: it.freightCalc || '',
       tpFreightMinor: it.tpFreightMinor || 0, tpFreightLabel: it.tpFreightLabel || '',
@@ -3919,6 +3934,10 @@
    */
   function applyItemDefaults(line) {
     if (!line || !line.sku) return line;
+    // A per-project part carries no catalog price, so it must arrive on the line
+    // unanswered rather than at 0 — otherwise adding one would immediately demand
+    // a reason for a zero nobody chose.
+    if (isPriceEntrySku(line.sku) && !(Number(line.rateMinor) || 0)) line.rateMinor = null;
     var d = itemDefaults[line.sku];
     if (!d) return line;
     if (d.freightMinor != null && !(Number(line.tpFreightMinor) || 0)) {
@@ -4315,6 +4334,9 @@
   function unpricedLines() {
     return pb.lines.filter(function (l) {
       if (l.lineType !== 'PRODUCT' || l.kind !== 'INCLUDED' || !l.sku) return false;
+      // Per-project parts are priced on the proposal by design, so “price them in
+      // the catalog” is the wrong advice — they get their own notice below.
+      if (isPriceEntrySku(l.sku)) return false;
       if (Number(l.rateMinor) || 0) return false;
       var d = itemDefaults[l.sku];
       return !d || !d.priceMinor;
@@ -4495,9 +4517,22 @@
    *   - the catalog HAS a price and this line does not (fixable in one click)
    *   - the catalog has no price either (someone has to go price the part)
    */
+  /**
+   * Per-project lines that cannot go out yet: no rate typed, or $0.00 with no
+   * reason. Mirrors auditPriceEntry on the server so the banner and the release
+   * gate never disagree.
+   */
+  function priceEntryLines() {
+    return pb.lines.filter(function (l) {
+      if (l.lineType !== 'PRODUCT' || l.kind !== 'INCLUDED' || !isPriceEntrySku(l.sku)) return false;
+      if (l.rateMinor === null || l.rateMinor === undefined) return true;
+      return Number(l.rateMinor) === 0 && !String(l.priceNote || '').trim();
+    });
+  }
+
   function priceWarningHtml() {
-    var stale = stalePricedLines(), unpriced = unpricedLines();
-    if (!stale.length && !unpriced.length) return '';
+    var stale = stalePricedLines(), unpriced = unpricedLines(), awaiting = priceEntryLines();
+    if (!stale.length && !unpriced.length && !awaiting.length) return '';
     var out = '';
     if (stale.length) {
       out += '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px;padding:10px 12px;background:#fdf6e6;border:1px solid #ecd9a6;border-radius:9px;font-size:12.5px;color:#6b5a24;">' +
@@ -4511,6 +4546,13 @@
         '<code>' + unpriced.slice(0, 8).map(function (l) { return esc(l.sku); }).join('</code>, <code>') + '</code>' +
         (unpriced.length > 8 ? ' and ' + (unpriced.length - 8) + ' more' : '') +
         '. Price them under Catalog → Pricing &amp; SKUs, then use “Pull from catalog”.</div>';
+    }
+    if (awaiting.length) {
+      out += '<div style="margin-top:10px;padding:10px 12px;background:#fdf6e6;border:1px solid #ecd9a6;border-radius:9px;font-size:12.5px;color:#6b5a24;">' +
+        '<b>' + awaiting.length + ' line' + (awaiting.length === 1 ? '' : 's') + ' quoted per project still need' + (awaiting.length === 1 ? 's' : '') + ' a rate:</b> ' +
+        '<code>' + awaiting.slice(0, 8).map(function (l) { return esc(l.sku); }).join('</code>, <code>') + '</code>' +
+        (awaiting.length > 8 ? ' and ' + (awaiting.length - 8) + ' more' : '') +
+        '. Enter the rate on the line. $0.00 is allowed with a reason. The proposal cannot be released until each one is answered.</div>';
     }
     return out;
   }
@@ -5509,15 +5551,16 @@
           (showsFreightTbd(l) && !l.showNotes
             ? '<div style="margin-top:6px;font-size:11.5px;color:#8a6d1f;line-height:1.5;">Freight to be determined — the vendor’s standing freight note prints on this line.</div>'
             : '') +
-          (l.kind === 'INCLUDED' && l.sku && !(Number(l.rateMinor) || 0)
+          (l.kind === 'INCLUDED' && l.sku && !isPriceEntrySku(l.sku) && !(Number(l.rateMinor) || 0)
             ? '<div style="margin-top:6px;font-size:11.5px;color:#8a5a12;">No rate on this line' +
                 (itemDefaults[l.sku] && itemDefaults[l.sku].priceMinor
                   ? ' — the catalog has $' + (itemDefaults[l.sku].priceMinor / 100).toFixed(2) + '. Use “Pull from catalog” above.'
                   : ' — and no price in the catalog for ' + esc(l.sku) + '.') + '</div>'
             : '') +
+          priceEntryBlock(l, i) +
         '</div>' +
         '<div style="display:flex;flex-direction:column;gap:5px;width:74px;flex:0 0 auto;"><label style="font-size:10px;color:#8a8f85;text-transform:uppercase;">Qty</label><input class="bF" data-i="' + i + '" data-k="quantity" value="' + esc(l.quantity) + '" style="width:100%;padding:6px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;"></div>' +
-        '<div style="display:flex;flex-direction:column;gap:5px;width:104px;flex:0 0 auto;"><label style="font-size:10px;color:#8a8f85;text-transform:uppercase;">Rate</label><input class="bF" data-i="' + i + '" data-k="rate" value="' + m2d(l.rateMinor) + '" style="width:100%;padding:6px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;"></div>' +
+        '<div style="display:flex;flex-direction:column;gap:5px;width:104px;flex:0 0 auto;"><label style="font-size:10px;color:#8a8f85;text-transform:uppercase;">Rate</label><input class="bF" data-i="' + i + '" data-k="rate" value="' + (isPriceEntrySku(l.sku) ? m2dBlank(l.rateMinor) : m2d(l.rateMinor)) + '"' + (isPriceEntrySku(l.sku) ? ' placeholder="—"' : '') + ' style="width:100%;padding:6px 8px;border:1px solid ' + ((isPriceEntrySku(l.sku) && l.rateMinor === null) ? '#d8a03c' : '#dcded7') + ';border-radius:7px;text-align:right;"></div>' +
         (isMock() ? '' : '<div style="display:flex;flex-direction:column;gap:5px;width:96px;flex:0 0 auto;"><label style="font-size:10px;color:#8a8f85;text-transform:uppercase;" title="Internal only — never printed">Cost</label><input class="bF" data-i="' + i + '" data-k="cost" value="' + m2d(l.costEach) + '" style="width:100%;padding:6px 8px;border:1px solid #e4dfd0;background:#fdfcf7;border-radius:7px;text-align:right;"></div>') +
         '<div style="width:96px;flex:0 0 auto;text-align:right;padding-top:20px;font-weight:600;font-size:14px;">' + fmtMoney(amt, 'USD') + '</div>' + del +
       '</div></div>';
@@ -5526,6 +5569,28 @@
     return '<select class="bF" data-i="' + i + '" data-k="' + k + '" style="' + IN + 'padding:7px 9px;"><option value="">—</option><option value="YES"' + (val === 'YES' ? ' selected' : '') + '>Yes</option><option value="NO"' + (val === 'NO' ? ' selected' : '') + '>No</option></select>';
   }
 
+  /**
+   * Rate prompt for the per-project parts. Three states, matching the server gate:
+   * no rate typed yet (blocks release), $0.00 with a reason (allowed), and a
+   * typed rate (nothing shown). The reason box only appears once the rate is
+   * actually 0, so a normal priced line never sees it.
+   */
+  function priceEntryBlock(l, i) {
+    if (l.kind !== 'INCLUDED' || !isPriceEntrySku(l.sku)) return '';
+    if (l.rateMinor === null || l.rateMinor === undefined) {
+      return '<div style="margin-top:6px;font-size:11.5px;color:#8a5a12;line-height:1.5;">' +
+        'This is quoted per project — enter a rate. If it is genuinely free, enter 0.00 and say why.' +
+        '</div>';
+    }
+    if (Number(l.rateMinor) !== 0) return '';
+    var missing = !String(l.priceNote || '').trim();
+    return '<div style="margin-top:7px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+      '<label style="font-size:10px;color:#8a8f85;text-transform:uppercase;letter-spacing:.04em;flex:0 0 auto;">Why $0.00</label>' +
+      '<input class="bF" data-i="' + i + '" data-k="priceNote" value="' + esc(l.priceNote || '') + '" maxlength="200" placeholder="e.g. mobilization waived — included in the project fee" ' +
+        'style="flex:1;min-width:240px;padding:6px 8px;font-size:12px;border:1px solid ' + (missing ? '#d8a03c' : '#dcded7') + ';background:' + (missing ? '#fdf6e6' : '#fff') + ';border-radius:7px;">' +
+      (missing ? '<span style="font-size:11px;color:#8a5a12;flex:0 0 auto;">Needed before release</span>' : '') +
+      '</div>';
+  }
   var bDragFrom = null;
   function wireBuilder() {
     if (!wireBuilder._rail) {
@@ -5656,7 +5721,11 @@
       var handler = function () {
         var i = +el.getAttribute('data-i'), k = el.getAttribute('data-k'), l = pb.lines[i]; if (!l) return;
         markBuilderDirty();
-        if (k === 'rate') l.rateMinor = d2m(el.value);
+        if (k === 'rate') {
+          // Clearing the box on a per-project part means "not answered yet", which
+          // is not the same as typing 0 — the release gate treats them differently.
+          l.rateMinor = (isPriceEntrySku(l.sku) && !String(el.value).trim()) ? null : d2m(el.value);
+        }
         else if (k === 'cost') l.costEach = d2m(el.value);
         else if (k === 'tpFreight') l.tpFreightMinor = d2m(el.value);
         else if (k === 'quantity') l.quantity = parseFloat(el.value) || 0;
@@ -5875,7 +5944,7 @@
   /** The version payload, shared by the Save button and the quiet save below. */
   function builderVersionPayload() {
     var sections = [{ id: 'meta', type: 'CUSTOMER_INFO', title: 'Proposal', order: 0, enabled: true, data: pb.meta }];
-    var items = pb.lines.map(function (l, i) { return { ref: l.ref, lineType: l.lineType, kind: l.kind, productId: l.productId, sku: l.sku || '', name: l.name, description: l.description, internalNote: l.internalNote || '', components: l.components || null, source: l.source || '', freightTbd: !!l.freightTbd, quantity: Number(l.quantity) || 0, rateMinor: Number(l.rateMinor) || 0, costEach: Number(l.costEach) || 0, weightEach: Number(l.weightEach) || 0, group: l.group || '', optional: !!l.optional, delivery: l.delivery || '', returnable: l.returnable || '', addlFreight: l.addlFreight || '', freightCalc: l.freightCalc || '', tpFreightMinor: Number(l.tpFreightMinor) || 0, tpFreightLabel: l.tpFreightLabel || '', order: i }; });
+    var items = pb.lines.map(function (l, i) { return { ref: l.ref, lineType: l.lineType, kind: l.kind, productId: l.productId, sku: l.sku || '', name: l.name, description: l.description, internalNote: l.internalNote || '', components: l.components || null, source: l.source || '', freightTbd: !!l.freightTbd, quantity: Number(l.quantity) || 0, rateMinor: (isPriceEntrySku(l.sku) && (l.rateMinor === null || l.rateMinor === undefined)) ? null : (Number(l.rateMinor) || 0), priceNote: String(l.priceNote || '').trim() || null, costEach: Number(l.costEach) || 0, weightEach: Number(l.weightEach) || 0, group: l.group || '', optional: !!l.optional, delivery: l.delivery || '', returnable: l.returnable || '', addlFreight: l.addlFreight || '', freightCalc: l.freightCalc || '', tpFreightMinor: Number(l.tpFreightMinor) || 0, tpFreightLabel: l.tpFreightLabel || '', order: i }; });
     return { title: pb.title || undefined, sections: sections, items: items, expirationDate: pb.meta.expiration || undefined };
   }
 
@@ -8371,6 +8440,7 @@
       (!connected ? '<div class="placeholder" style="padding:16px;margin-bottom:10px;"><p class="muted" style="margin:0;">QuickBooks is not connected — connect it under Integrations first.</p></div>' : '') +
       '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">' +
         (order.organizationId ? '<button class="link-btn" id="qboProfile" style="width:auto;padding:9px 14px;">Check customer profile</button>' : '') +
+        '<button class="link-btn" id="qboSkuCheck" style="width:auto;padding:9px 14px;">Check part numbers</button>' +
         '<button class="link-btn" id="qboRefresh" style="width:auto;padding:9px 14px;">Refresh from QuickBooks</button>' +
         (lastSync ? '<span class="muted" style="font-size:12px;">Last read ' + esc(fmtStamp(lastSync)) + '</span>' : '') +
         '<div style="margin-left:auto;">' + (canTransact ? '<button class="btn" id="qboPrepare" style="width:auto;padding:9px 15px;">Step 1 · Prepare a document</button>' : '') + '</div>' +
@@ -8388,6 +8458,8 @@
     if (pb) pb.addEventListener('click', function () { openQboPrepare(order, user); });
     var prof = document.getElementById('qboProfile');
     if (prof) prof.addEventListener('click', function () { openQboProfile(order); });
+    var skc = document.getElementById('qboSkuCheck');
+    if (skc) skc.addEventListener('click', function () { openQboSkuCheck(order, skc); });
     var rf = document.getElementById('qboRefresh');
     if (rf) rf.addEventListener('click', async function () {
       rf.disabled = true; rf.textContent = 'Reading QuickBooks…';
@@ -8524,6 +8596,45 @@
           ? 'Correct anything wrong on the customer record, then push it with <b>Sync customer to QuickBooks</b> under Integrations. The CRM is the source of truth for every field above, so nothing here is ever pulled back the other way.'
           : 'The two records agree.') + '</div>',
       null, 'Close', { maxWidth: '760px' });
+  }
+
+  /**
+   * Part-number preflight. Every priced line has to resolve to a real, active
+   * QuickBooks item before a document can be created — an unmapped line is not
+   * rejected by QuickBooks, it posts under the default service item, leaving
+   * the total right and every product report wrong. This is the same check the
+   * create step enforces, shown before anyone authorizes.
+   */
+  async function openQboSkuCheck(order, bt) {
+    var label = bt.textContent, d = null;
+    bt.disabled = true; bt.textContent = 'Reading QuickBooks…';
+    try {
+      var r = await authed('/integrations/quickbooks/preflight/' + encodeURIComponent(order.proposalVersionId));
+      if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} alert(m || ('Could not check the part numbers (' + r.status + ').')); return; }
+      d = await r.json();
+    } finally { bt.disabled = false; bt.textContent = label; }
+
+    var TONE = { OK: '#82877d', NO_SKU: '#b7873a' };
+    var cell = 'padding:8px 10px;border-bottom:1px solid #e7e8e3;vertical-align:top;';
+    var rows = d.lines.map(function (l) {
+      return '<tr>' +
+        '<td style="' + cell + 'font-family:ui-monospace,Menlo,monospace;font-size:12.5px;white-space:nowrap;">' + (l.sku ? esc(l.sku) : '<span class="muted">—</span>') + '</td>' +
+        '<td style="' + cell + '">' + esc(l.description || '') + '</td>' +
+        '<td style="' + cell + '">' + (l.qboItemName ? esc(l.qboItemName) : '<span class="muted">—</span>') + '</td>' +
+        '<td style="' + cell + 'font-size:12px;color:' + (TONE[l.status] || '#c2452f') + ';">' + esc(l.detail || 'Matched') + '</td>' +
+        '</tr>';
+    }).join('');
+
+    openModal('Part numbers in QuickBooks',
+      (d.ok
+        ? '<div style="background:#f1f6f1;border:1px solid #cfe0d2;border-radius:6px;padding:11px 13px;margin-bottom:12px;font-size:13px;color:#2f5d43;line-height:1.55;">All ' + d.productLines + ' priced lines resolve to an active QuickBooks item. This order can be created.</div>'
+        : '<div style="background:#fbefec;border:1px solid #e6c6bd;border-radius:6px;padding:11px 13px;margin-bottom:12px;font-size:13px;color:#8a3524;line-height:1.55;"><b>' + d.blockers.length + ' of ' + d.productLines + ' priced lines do not map to an active QuickBooks item.</b> Nothing will be created in QuickBooks until they do. Import the missing parts under Products &amp; Services in QuickBooks, run <b>Link items by SKU</b> under Integrations, then check again.</div>') +
+      (d.warnings.length ? '<div style="background:#fbf6ec;border:1px solid #e6d9bd;border-radius:6px;padding:11px 13px;margin-bottom:12px;font-size:13px;color:#6b5a34;line-height:1.55;">' + d.warnings.length + ' line(s) carry no part number. These are allowed through and invoice as text, with no QuickBooks item behind them.</div>' : '') +
+      '<table style="width:100%;border-collapse:collapse;font-size:13.5px;">' +
+        '<thead><tr>' + ['Part', 'Line', 'QuickBooks item', ''].map(function (h) {
+          return '<th style="text-align:left;padding:6px 10px;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:#8a8f85;font-weight:600;border-bottom:1px solid #cfd3ca;">' + h + '</th>';
+        }).join('') + '</tr></thead><tbody>' + rows + '</tbody></table>',
+      null, 'Close', { maxWidth: '880px' });
   }
 
   function openQboPrepare(order, user) {
