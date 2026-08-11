@@ -3,6 +3,7 @@ import { ConflictError, ValidationError, NotFoundError } from '../lib/errors.js'
 import { recordAudit } from '../lib/audit.js';
 import { canTransition, becomesFrozen, isFrozenStatus, formatProposalNumber } from './status.js';
 import { compareVersions, type VersionSnapshot } from './compare.js';
+import { auditPriceEntry, priceEntryMessage, type PriceEntryAudit } from './priceEntry.js';
 import type { ProposalSection, ProposalItem } from './sections.js';
 import type { ProposalStatus } from '@prisma/client';
 
@@ -258,16 +259,59 @@ export async function discardDraftVersion(
   });
 }
 
+/**
+ * Which lines on a version still need a price. Read-only — the builder polls this
+ * to badge the offending rows while the proposal is being written, so the block at
+ * release is never the first anyone hears of it.
+ */
+export async function priceEntryStatus(versionId: string): Promise<PriceEntryAudit> {
+  const version = await prisma.proposalVersion.findUnique({
+    where: { id: versionId },
+    select: { items: true },
+  });
+  if (!version) throw new NotFoundError('Version not found');
+  return auditPriceEntry(version.items);
+}
+
+/**
+ * Statuses that put the proposal in front of someone. Sending an unpriced line to
+ * a customer is the failure this gate exists to prevent; ACCEPTED and the terminal
+ * statuses are recorded after the fact and are never blocked, or a proposal that
+ * went out before this rule existed could not be marked won.
+ */
+const HARD_GATED: ProposalStatus[] = ['RELEASED'];
+const WARN_GATED: ProposalStatus[] = ['INTERNAL_REVIEW'];
+
+export interface StatusChangeResult {
+  status: ProposalStatus;
+  /** Advisory price-entry problems — populated on submit-for-review. */
+  warnings: string[];
+  priceEntry: PriceEntryAudit;
+}
+
 export async function changeStatus(
   versionId: string,
   to: ProposalStatus,
   userId: string,
   note?: string,
-): Promise<void> {
+): Promise<StatusChangeResult> {
   const version = await prisma.proposalVersion.findUnique({ where: { id: versionId } });
   if (!version) throw new NotFoundError('Version not found');
   if (!canTransition(version.status, to))
     throw new ConflictError(`Illegal transition ${version.status} -> ${to}`);
+
+  // Every priced line must carry an answer before the proposal goes out. Absent is
+  // not zero: a line nobody has priced totals as free in versionTotals, so without
+  // this the document ships understated and nothing says so.
+  const priceEntry = auditPriceEntry(version.items);
+  const warnings: string[] = [];
+  if (!priceEntry.ok) {
+    const message = priceEntryMessage(priceEntry) ?? 'Some lines need a price.';
+    if (HARD_GATED.includes(to)) {
+      throw new ValidationError(`This proposal cannot be released yet. ${message}`);
+    }
+    if (WARN_GATED.includes(to)) warnings.push(message);
+  }
 
   await prisma.$transaction(async (tx) => {
     await tx.proposalVersion.update({
@@ -285,7 +329,12 @@ export async function changeStatus(
         fromStatus: version.status,
         toStatus: to,
         changedById: userId,
-        note: note ?? null,
+        // The warning travels with the status event, so the reviewer sees on the
+        // timeline that the proposal arrived with lines still unpriced.
+        note: [note, warnings.length ? `unpriced at submit: ${warnings.join(' ')}` : null]
+          .filter(Boolean)
+          .join(' — ')
+          .trim() || null,
       },
     });
   });
@@ -294,8 +343,9 @@ export async function changeStatus(
     action: 'proposal.status',
     entity: 'ProposalVersion',
     entityId: versionId,
-    details: { to },
+    details: { to, priceWarnings: warnings.length },
   });
+  return { status: to, warnings, priceEntry };
 }
 
 export async function compareProposalVersions(proposalId: string, va: number, vb: number) {
