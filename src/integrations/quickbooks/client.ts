@@ -23,11 +23,22 @@ export function apiBaseUrl(): string {
     : 'https://sandbox-quickbooks.api.intuit.com';
 }
 
+/**
+ * One attempt loop shared by every call shape. `accept` and `raw` exist because
+ * two endpoints do not return JSON: the PDF download returns a binary body, and
+ * the send-document call returns the object but is a POST with no body.
+ */
 async function request<T>(
   realmId: string,
   method: 'GET' | 'POST',
   path: string,
-  opts: { body?: unknown; requestId?: string; query?: Record<string, string> } = {},
+  opts: {
+    body?: unknown;
+    requestId?: string;
+    query?: Record<string, string>;
+    accept?: string;
+    raw?: boolean;
+  } = {},
   fetchImpl: typeof fetch = fetch,
 ): Promise<T> {
   if (!env.QBO_CLIENT_ID) throw new Error('QuickBooks not configured');
@@ -45,7 +56,7 @@ async function request<T>(
       method,
       headers: {
         Authorization: `Bearer ${token}`,
-        Accept: 'application/json',
+        Accept: opts.accept ?? 'application/json',
         ...(opts.body ? { 'Content-Type': 'application/json' } : {}),
       },
       body: opts.body ? JSON.stringify(opts.body) : undefined,
@@ -73,6 +84,7 @@ async function request<T>(
       throw err;
     }
     logger.debug({ intuitTid: tid, path, method }, 'QuickBooks ok');
+    if (opts.raw) return (await res.arrayBuffer()) as unknown as T;
     return (await res.json()) as T;
   }
   throw lastErr ?? new Error('QuickBooks: exhausted retries');
@@ -96,6 +108,60 @@ export async function create<T>(
   fetchImpl: typeof fetch = fetch,
 ): Promise<T> {
   return request<T>(realmId, 'POST', resource, { body, requestId }, fetchImpl);
+}
+
+/**
+ * Read one object by its QuickBooks id. Returns the wrapper QuickBooks sends —
+ * `{ Invoice: {...} }` or `{ Estimate: {...} }` — because the caller knows which
+ * key it asked for and unwrapping here would lose the distinction.
+ */
+export async function readById<T>(
+  realmId: string,
+  resource: string,
+  id: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<T> {
+  return request<T>(realmId, 'GET', `${resource}/${encodeURIComponent(id)}`, {}, fetchImpl);
+}
+
+/**
+ * Ask QuickBooks to email the document. QuickBooks composes and sends it, so
+ * the message comes from the company's own QuickBooks account rather than from
+ * us — which is what a customer expects to receive an invoice from.
+ */
+export async function sendDocument<T>(
+  realmId: string,
+  resource: string,
+  id: string,
+  toEmail: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<T> {
+  return request<T>(
+    realmId,
+    'POST',
+    `${resource}/${encodeURIComponent(id)}/send`,
+    { query: { sendTo: toEmail } },
+    fetchImpl,
+  );
+}
+
+/**
+ * Download the QuickBooks-rendered PDF of a document. Binary, so it bypasses
+ * the JSON parse and comes back as an ArrayBuffer.
+ */
+export async function fetchPdf(
+  realmId: string,
+  resource: string,
+  id: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<ArrayBuffer> {
+  return request<ArrayBuffer>(
+    realmId,
+    'GET',
+    `${resource}/${encodeURIComponent(id)}/pdf`,
+    { accept: 'application/pdf', raw: true },
+    fetchImpl,
+  );
 }
 
 export { backoff };
