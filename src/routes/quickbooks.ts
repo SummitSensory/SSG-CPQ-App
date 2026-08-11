@@ -95,8 +95,7 @@ export function registerQuickbooksRoutes(app: FastifyInstance): void {
 
   // --- Status & connection (manage) ---
   app.get('/integrations/quickbooks/status', manage, async () => ({
-    provider: 'quickbooks',
-    configured: isQuickbooksConfigured(),
+    provider: 'quickbooks',    configured: isQuickbooksConfigured(),
     environment: qboEnvironment(),
     productionWritesEnabled: env.QBO_PRODUCTION_WRITE_ENABLED,
     connections: await prisma.qboConnection.count({
@@ -109,7 +108,7 @@ export function registerQuickbooksRoutes(app: FastifyInstance): void {
   app.get('/integrations/quickbooks/connect', manage, async (req, reply) => {
     if (!isQuickbooksConfigured()) return reply.status(409).send({ error: 'NOT_CONFIGURED' });
     const state = await signState(req.user!.sub);
-    return { url: authorizeUrl(state), state };
+    return { url: await authorizeUrl(state), state };
   });
 
   // OAuth redirect target. Public by necessity (see signState above); the state
@@ -314,22 +313,18 @@ export function registerQuickbooksRoutes(app: FastifyInstance): void {
   // the fix for a difference is to correct the CRM record and re-run the sync
   // above — there is deliberately no way to pull an accountant's typo back into
   // the CRM.
-  app.get(
-    '/integrations/quickbooks/customers/:organizationId/profile',
-    manage,
-    async (req, reply) => {
-      const { organizationId } = req.params as { organizationId: string };
-      try {
-        return await compareCustomerProfile(organizationId);
-      } catch (err) {
-        req.log.error({ err, organizationId }, 'customer profile comparison failed');
-        return reply.status(502).send({
-          error: 'QBO_PROFILE_FAILED',
-          message: err instanceof Error ? err.message : String(err),
-        });
-      }
-    },
-  );
+  app.get('/integrations/quickbooks/customers/:organizationId/profile', manage, async (req, reply) => {
+    const { organizationId } = req.params as { organizationId: string };
+    try {
+      return await compareCustomerProfile(organizationId);
+    } catch (err) {
+      req.log.error({ err, organizationId }, 'customer profile comparison failed');
+      return reply.status(502).send({
+        error: 'QBO_PROFILE_FAILED',
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
 
   // --- Part-number preflight (manage) ---
   // Does every priced line on the accepted proposal resolve to a real, active
@@ -429,12 +424,7 @@ export function registerQuickbooksRoutes(app: FastifyInstance): void {
       attachInvoice?: boolean;
     };
     if (!b.to || !b.subject || !b.body) {
-      return reply
-        .status(400)
-        .send({
-          error: 'INVALID_INPUT',
-          message: 'A reminder needs a recipient, a subject and a message.',
-        });
+      return reply.status(400).send({ error: 'INVALID_INPUT', message: 'A reminder needs a recipient, a subject and a message.' });
     }
     // The author's name is cached on the reminder so attribution survives them
     // leaving; read it here rather than making the mailer touch the user table.
