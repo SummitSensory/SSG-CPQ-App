@@ -27,10 +27,8 @@ import { reconcile } from '../integrations/quickbooks/reconcile.js';
 import {
   billingForProposal,
   syncTransactionState,
-  sendTransaction,
   documentPdf,
 } from '../integrations/quickbooks/billing.js';
-import { draftReminder, sendReminder } from '../integrations/quickbooks/reminders.js';
 import { compareCustomerProfile } from '../integrations/quickbooks/customerProfile.js';
 import { checkSkuMapping } from '../integrations/quickbooks/skuPreflight.js';
 import type { QboEnvironment, QboTxnType } from '@prisma/client';
@@ -426,15 +424,33 @@ export function registerQuickbooksRoutes(app: FastifyInstance): void {
     }
   });
 
-  // Email the document to the customer through QuickBooks. This is a customer-
-  // facing action on a financial document, so it needs the transact permission,
-  // not merely manage.
-  app.post('/integrations/quickbooks/transactions/:id/send', transact, async (req) => {
-    const { id } = req.params as { id: string };
-    const b = (req.body ?? {}) as { to?: string | null };
-    const { transaction } = await sendTransaction(id, req.user!.sub, b.to?.trim() || null);
-    return serializeTxn(transaction);
-  });
+  /**
+   * Customer delivery is NOT ours to do.
+   *
+   * Biller Genie owns every customer-facing email: it picks up each invoice from
+   * QuickBooks within a few minutes of creation and sends it on Summit's branded
+   * letterhead with its own payment link and follow-up schedule. If QuickBooks also
+   * emailed, the customer would receive the same invoice twice, from two systems,
+   * with two different ways to pay — and the payment taken through the wrong one
+   * would not reconcile.
+   *
+   * So the send and reminder endpoints are closed rather than merely hidden. The
+   * buttons are gone from the panel, but a stale tab, a bookmarked call or a future
+   * UI could still reach them, and the cost of one accidental send is a confused
+   * customer and a misapplied payment.
+   *
+   * To re-enable: delete these three handlers and restore the originals from git
+   * history — sendTransaction, draftReminder and sendReminder are all still intact.
+   */
+  const DELIVERY_IS_EXTERNAL = {
+    error: 'DELIVERY_HANDLED_EXTERNALLY',
+    message:
+      'Invoices are delivered by Biller Genie, not by QuickBooks. It collects each invoice from QuickBooks within a few minutes of creation and emails the customer itself, so nothing needs to be sent from here.',
+  } as const;
+
+  app.post('/integrations/quickbooks/transactions/:id/send', transact, async (_req, reply) =>
+    reply.status(409).send(DELIVERY_IS_EXTERNAL),
+  );
 
   // The document as the customer received it. Fetched live from QuickBooks each
   // time — an invoice edited on the accounting side should show its current
@@ -448,43 +464,12 @@ export function registerQuickbooksRoutes(app: FastifyInstance): void {
       .send(pdf);
   });
 
-  // Compose a reminder. Refreshes the balance from QuickBooks first and returns
-  // any blockers (already paid, never sent, email not configured) so the UI can
-  // explain itself rather than failing at send time.
-  app.get('/integrations/quickbooks/transactions/:id/reminder', manage, async (req) => {
-    const { id } = req.params as { id: string };
-    return draftReminder(id);
-  });
+  // Reminders are Biller Genie's follow-up schedule, not ours. See above.
+  app.get('/integrations/quickbooks/transactions/:id/reminder', manage, async (_req, reply) =>
+    reply.status(409).send(DELIVERY_IS_EXTERNAL),
+  );
 
-  app.post('/integrations/quickbooks/transactions/:id/reminder', transact, async (req, reply) => {
-    const { id } = req.params as { id: string };
-    const b = (req.body ?? {}) as {
-      to?: string;
-      cc?: string | null;
-      subject?: string;
-      body?: string;
-      attachInvoice?: boolean;
-    };
-    if (!b.to || !b.subject || !b.body) {
-      return reply
-        .status(400)
-        .send({
-          error: 'INVALID_INPUT',
-          message: 'A reminder needs a recipient, a subject and a message.',
-        });
-    }
-    // The author's name is cached on the reminder so attribution survives them
-    // leaving; read it here rather than making the mailer touch the user table.
-    const me = await prisma.user.findUnique({
-      where: { id: req.user!.sub },
-      select: { name: true },
-    });
-    return sendReminder(id, req.user!.sub, me?.name ?? 'Summit Sensory Gym', {
-      to: b.to,
-      cc: b.cc ?? null,
-      subject: b.subject,
-      body: b.body,
-      attachInvoice: b.attachInvoice !== false,
-    });
-  });
+  app.post('/integrations/quickbooks/transactions/:id/reminder', transact, async (_req, reply) =>
+    reply.status(409).send(DELIVERY_IS_EXTERNAL),
+  );
 }

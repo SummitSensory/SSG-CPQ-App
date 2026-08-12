@@ -8441,7 +8441,10 @@
       var sent = d.sentAt
         ? '<b style="font-weight:600;color:#3f9d78;">Sent</b><div style="font-size:12px;color:#82877d;">' + esc(fmtStamp(d.sentAt)) +
           (d.sentToEmail ? '<br>' + esc(d.sentToEmail) : '') + (d.sentBy ? '<br>by ' + esc(d.sentBy) : '') + '</div>'
-        : '<span class="muted">Not sent</span>' + (d.sendError ? '<div style="font-size:12px;color:#9c3327;">' + esc(d.sendError) + '</div>' : '');
+        : (isEstimate
+            ? '<span class="muted">Not sent</span>'
+            : '<span class="muted" title="Biller Genie collects each invoice from QuickBooks within a few minutes of creation and emails the customer on Summit letterhead. QuickBooks itself sends nothing.">Biller Genie</span>') +
+          (d.sendError ? '<div style="font-size:12px;color:#9c3327;">' + esc(d.sendError) + '</div>' : '');
       var moneyCell = isEstimate ? '<span class="muted">—</span>'
         : (d.balanceMinor == null
             ? '<span class="muted">Not synced yet</span>'
@@ -8451,10 +8454,11 @@
               (Number(d.balanceMinor) > 0 ? '<br><b style="color:#20241f;">' + fmtMoney(d.balanceMinor, t.currency) + ' outstanding</b>' : '') +
               (d.dueDate ? '<br>Due ' + esc(fmtDate(d.dueDate)) : '') + '</div>');
       var acts = ['<button class="link-btn" data-qbob="pdf" data-id="' + t.id + '" style="width:auto;padding:6px 11px;">View</button>'];
-      if (canTransact) acts.push('<button class="link-btn" data-qbob="send" data-id="' + t.id + '" style="width:auto;padding:6px 11px;">' + (d.sentAt ? 'Resend' : 'Send to customer') + '</button>');
-      if (canTransact && !isEstimate && Number(d.balanceMinor || 0) > 0 && d.sentAt) {
-        acts.push('<button class="link-btn" data-qbob="remind" data-id="' + t.id + '" style="width:auto;padding:6px 11px;">Remind</button>');
-      }
+      // No Send or Remind button. Biller Genie owns every customer-facing email — it
+      // picks each invoice up from QuickBooks within minutes of creation and delivers
+      // it on Summit letterhead with its own payment link and follow-up schedule. A
+      // send from here would reach the customer twice, from two systems, with two ways
+      // to pay. The endpoints refuse it too; this only removes the temptation.
       return '<tr>' + td('<b style="font-weight:600;">' + esc(qboTypeLabel(t.type)) + '</b><div style="font-size:12px;color:#82877d;">' + esc(t.qboDocNumber || t.qboId || '') + '</div>') +
         td(sent) + td(moneyCell) +
         td('<div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;">' + acts.join('') + '</div>') + '</tr>';
@@ -8477,7 +8481,7 @@
     var lastSync = ((billing && billing.documents) || []).map(function (d) { return d.lastSyncedAt; }).filter(Boolean).sort().pop();
 
     box.innerHTML =
-      '<div class="muted" style="font-size:12.5px;margin:-4px 0 10px;line-height:1.55;">Pushing to QuickBooks is three deliberate steps: <b>prepare</b> freezes the totals and an idempotency key (nothing leaves this app), <b>authorize</b> is the sign-off, <b>create</b> writes the document into QuickBooks. A retry reuses the same key, so it can never duplicate a document.</div>' +
+      '<div class="muted" style="font-size:12.5px;margin:-4px 0 10px;line-height:1.55;">Pushing to QuickBooks is three deliberate steps: <b>prepare</b> freezes the totals and an idempotency key (nothing leaves this app), <b>authorize</b> is the sign-off, <b>create</b> writes the document into QuickBooks. A retry reuses the same key, so it can never duplicate a document. Invoices are emailed to the customer by Biller Genie, which reads them out of QuickBooks on its own schedule — nothing is sent from here.</div>' +
       (!connected ? '<div class="placeholder" style="padding:16px;margin-bottom:10px;"><p class="muted" style="margin:0;">QuickBooks is not connected — connect it under Integrations first.</p></div>' : '') +
       '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">' +
         (order.organizationId ? '<button class="link-btn" id="qboProfile" style="width:auto;padding:9px 14px;">Check customer profile</button>' : '') +
@@ -8529,8 +8533,7 @@
       bt.addEventListener('click', async function () {
         var id = bt.getAttribute('data-id'), act = bt.getAttribute('data-qbob');
         if (act === 'pdf') return openQboPdf(id, bt);
-        if (act === 'remind') return openQboReminder(id, order, user);
-        if (act === 'send') return openQboSend(id, billByTxn[id] || {}, order, user);
+        // 'send' and 'remind' are deliberately gone — see the row builder above.
       });
     });
   }
