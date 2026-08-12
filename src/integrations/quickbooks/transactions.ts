@@ -291,6 +291,30 @@ const DOC_SUFFIX: Record<QboTxnType, string> = {
   FINAL_INVOICE: '-F',
 };
 
+/**
+ * Copy number off the tail of an idempotency key (`qbo:<env>:<type>:<id>:<seq>`).
+ * Copy 1 is the ordinary case; anything higher is a deliberate second document
+ * for the same accepted version, prepared with an explicit `sequence`.
+ */
+function sequenceOf(idempotencyKey: string): number {
+  const m = /:(\d+)$/.exec(idempotencyKey);
+  const n = m ? Number(m[1]) : 1;
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
+/**
+ * Document number for a transaction.
+ *
+ * A second copy MUST NOT reuse the first one's number. QuickBooks companies with
+ * custom transaction numbers switched on reject a duplicate DocNumber outright,
+ * and the whole point of a copy is that it is a distinct document someone can
+ * refer to. Copies are suffixed `-2`, `-3`, and so on, after any type suffix.
+ */
+function docNumberFor(proposalNumber: string, type: QboTxnType, seq: number): string {
+  const base = `${proposalNumber}${DOC_SUFFIX[type]}`;
+  return seq > 1 ? `${base}-${seq}` : base;
+}
+
 /** QuickBooks date fields are plain yyyy-mm-dd. */
 function toQboDate(d: Date | null | undefined): string | null {
   return d ? d.toISOString().slice(0, 10) : null;
@@ -488,7 +512,11 @@ export async function executeTransaction(
       userId,
       fetchImpl,
     );
-    const docNumber = `${version.proposal.number}${DOC_SUFFIX[txn.type]}`;
+    const docNumber = docNumberFor(
+      version.proposal.number,
+      txn.type,
+      sequenceOf(txn.idempotencyKey),
+    );
 
     const memo = `Per accepted proposal ${version.proposal.number} v${txn.proposalVersion}`;
     // Invoice date is today in QuickBooks terms; sent explicitly so the due date

@@ -8433,6 +8433,11 @@
   /* --- QuickBooks push: prepare → authorize → execute, on the order itself. --- */
   var QBO_TYPES = [
     ['ESTIMATE', 'Estimate'],
+    // The full itemized invoice — same lines as the estimate, with the accepted
+    // payment split carried as QuickBooks terms. The backend has always accepted
+    // this type; it was missing from this list, which left the portion invoices
+    // as the only way to bill from the CRM.
+    ['INVOICE', 'Invoice (full order, itemized)'],
     ['DEPOSIT_INVOICE', 'Deposit invoice'],
     ['PROGRESS_INVOICE', 'Progress invoice'],
     ['FINAL_INVOICE', 'Final invoice']
@@ -8552,7 +8557,7 @@
         tableShell(['Sent', 'To', 'Subject', 'Balance then', 'Status'], remRows, 5, '') : '');
 
     var pb = document.getElementById('qboPrepare');
-    if (pb) pb.addEventListener('click', function () { openQboPrepare(order, user); });
+    if (pb) pb.addEventListener('click', function () { openQboPrepare(order, user, txns); });
     var prof = document.getElementById('qboProfile');
     if (prof) prof.addEventListener('click', function () { openQboProfile(order); });
     var rf = document.getElementById('qboRefresh');
@@ -8692,15 +8697,84 @@
       null, 'Close', { maxWidth: '760px' });
   }
 
-  function openQboPrepare(order, user) {
+  /**
+   * Copy number of a prepared document, read off the tail of its idempotency key
+   * (`qbo:<env>:<type>:<versionId>:<seq>`). The key is already on the wire, so the
+   * copy number needs no column of its own.
+   */
+  function qboSeqOf(t) {
+    var m = /:(\d+)$/.exec(String((t && t.idempotencyKey) || ''));
+    return m ? Number(m[1]) : 1;
+  }
+
+  /**
+   * Prepare a document, with an explicit way to create a SECOND one of the same
+   * type for the same accepted version.
+   *
+   * The idempotency key is (environment, type, version, copy number) and it travels
+   * to QuickBooks as the requestid, which is what makes a retry safe. The same
+   * property means a document that already exists cannot simply be pushed again:
+   * prepare hands back the original row and create returns the original document.
+   * Deleting the estimate inside QuickBooks does not release the key either — the
+   * CRM still holds a CREATED row, and Intuit still recognises the requestid. So a
+   * genuine second document has to be a new copy, and the operator has to ask for
+   * it deliberately.
+   */
+  function openQboPrepare(order, user, txns) {
+    txns = txns || [];
+    function priorOf(type) { return txns.filter(function (t) { return t.type === type; }); }
+    function createdOf(type) { return priorOf(type).filter(function (t) { return t.status === 'CREATED'; }); }
+    function nextSeq(type) {
+      return priorOf(type).reduce(function (n, t) { return Math.max(n, qboSeqOf(t)); }, 0) + 1;
+    }
+    /** The panel under the type picker: what already exists, and the copy opt-in. */
+    function noteHtml(type) {
+      var made = createdOf(type);
+      var pending = priorOf(type).filter(function (t) { return t.status !== 'CREATED'; });
+      if (!made.length) {
+        return pending.length
+          ? '<div class="muted" style="font-size:12.5px;line-height:1.55;">A ' + esc(qboTypeLabel(type).toLowerCase()) + ' is already prepared and waiting to be created. Preparing again reopens that one rather than starting a second.</div>'
+          : '';
+      }
+      var list = made.map(function (t) {
+        return '<div>' + esc(qboTypeLabel(t.type)) + ' ' + esc(t.qboDocNumber || t.qboId || '') +
+          (qboSeqOf(t) > 1 ? ' (copy ' + qboSeqOf(t) + ')' : '') +
+          (t.createdAt ? ' · ' + esc(fmtStamp(t.createdAt)) : '') + '</div>';
+      }).join('');
+      return '<div style="background:#fbf6ec;border:1px solid #e6d9bd;border-radius:8px;padding:11px 13px;font-size:13px;color:#6b5a34;line-height:1.55;">' +
+        '<b style="font-weight:600;">Already in QuickBooks</b>' + list +
+        '<label style="display:flex;align-items:flex-start;gap:8px;margin-top:9px;cursor:pointer;color:#20241f;">' +
+          '<input type="checkbox" id="qboAnother" style="margin-top:3px;">' +
+          '<span>Create another copy (copy ' + nextSeq(type) + ')</span>' +
+        '</label>' +
+        '<div style="margin-top:6px;font-size:12px;">A copy is a genuinely new document in QuickBooks, with its own number. Deleting the original inside QuickBooks does not free the original to be re-sent — a copy is still the way to replace it.</div>' +
+      '</div>';
+    }
+    var initial = QBO_TYPES[0][0];
     openModal('Prepare a QuickBooks document',
       '<div class="muted" style="font-size:13px;margin-bottom:12px;">This freezes the accepted totals of ' + esc(order.number) + ' against an idempotency key. Nothing is sent to QuickBooks until you authorize and create it.</div>' +
-      fieldRow('Document type', '<select id="qboType" style="' + IN + '">' + QBO_TYPES.map(function (t) { return '<option value="' + t[0] + '">' + t[1] + '</option>'; }).join('') + '</select>'),
+      fieldRow('Document type', '<select id="qboType" style="' + IN + '">' + QBO_TYPES.map(function (t) { return '<option value="' + t[0] + '">' + t[1] + '</option>'; }).join('') + '</select>') +
+      '<div id="qboPrepNote">' + noteHtml(initial) + '</div>',
       async function (close, showErr) {
-        var r = await authed('/integrations/quickbooks/transactions/prepare', { method: 'POST', body: { proposalVersionId: order.proposalVersionId, type: document.getElementById('qboType').value } });
+        var type = document.getElementById('qboType').value;
+        var another = document.getElementById('qboAnother');
+        // An existing CREATED document is a hard stop unless the copy box is ticked.
+        // Without this the prepare silently returns the original row and the operator
+        // is left clicking Create on a document that will never change.
+        if (createdOf(type).length && !(another && another.checked)) {
+          return showErr('A ' + qboTypeLabel(type).toLowerCase() + ' already exists in QuickBooks for this version. Tick “Create another copy” to make a second one.');
+        }
+        var body = { proposalVersionId: order.proposalVersionId, type: type };
+        if (another && another.checked) body.sequence = nextSeq(type);
+        var r = await authed('/integrations/quickbooks/transactions/prepare', { method: 'POST', body: body });
         if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} return showErr(m || 'Could not prepare (' + r.status + ').'); }
         close(); loadQbo(order, user);
       }, 'Prepare');
+    var sel = document.getElementById('qboType');
+    if (sel) sel.addEventListener('change', function () {
+      var box = document.getElementById('qboPrepNote');
+      if (box) box.innerHTML = noteHtml(sel.value);
+    });
   }
 
   function downloadCsv(filename, rows) {
