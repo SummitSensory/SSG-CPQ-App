@@ -1,5 +1,6 @@
 import { prisma } from '../lib/prisma.js';
 import { NotFoundError } from '../lib/errors.js';
+import { vendorPartFor } from './vendorParts.js';
 
 /**
  * The Bill of Materials.
@@ -28,8 +29,16 @@ export const COMPANY = {
 
 export interface BomLine {
   id: string;
+  /**
+   * What prints in the Line # column. The vendor's own number where we and the
+   * vendor number a part differently (the Adventure mats), otherwise our SKU — the
+   * BOM is a purchasing document, so the vendor has to be able to order from it.
+   */
   lineNo: string;
+  /** Our internal part number, always. Kept alongside lineNo for traceability. */
   sku: string;
+  /** The vendor's number where it differs from ours, else ''. */
+  vendorSku: string;
   name: string;
   quantity: number;
   powderColor: string;
@@ -50,29 +59,67 @@ export interface BomLine {
 
 export interface BomDocument {
   order: {
-    id: string; number: string; status: string; acceptedVersion: number;
-    jobName: string; shipTo: 'CUSTOMER' | 'SUMMIT';
-    submittedOn: string | null; deliveryType: string; powderCoatBrand: string;
-    shipmentQuote: string; notes: string;
+    id: string;
+    number: string;
+    status: string;
+    acceptedVersion: number;
+    jobName: string;
+    shipTo: 'CUSTOMER' | 'SUMMIT';
+    submittedOn: string | null;
+    deliveryType: string;
+    powderCoatBrand: string;
+    shipmentQuote: string;
+    notes: string;
   };
   company: typeof COMPANY;
   createdBy: { name: string; email: string; title: string } | null;
   createdAt: string;
   customer: {
-    name: string; contactName: string; contactTitle: string; contactEmail: string; contactPhone: string;
-    addressLine1: string; addressLine2: string; city: string; region: string; postalCode: string; country: string;
+    name: string;
+    contactName: string;
+    contactTitle: string;
+    contactEmail: string;
+    contactPhone: string;
+    addressLine1: string;
+    addressLine2: string;
+    city: string;
+    region: string;
+    postalCode: string;
+    country: string;
   };
-  shipTo: { label: string; name: string; lines: string[]; contactName: string; phone: string; email: string };
+  shipTo: {
+    label: string;
+    name: string;
+    lines: string[];
+    contactName: string;
+    phone: string;
+    email: string;
+  };
   vendors: string[];
   vendor: {
-    name: string; contactName: string; contactTitle: string; contactEmail: string; contactPhone: string;
-    addressLine1: string; addressLine2: string; city: string; region: string; postalCode: string; country: string;
-    accountNumber: string; paymentTerms: string; leadTimeDays: number | null; isSteelFabricator: boolean;
+    name: string;
+    contactName: string;
+    contactTitle: string;
+    contactEmail: string;
+    contactPhone: string;
+    addressLine1: string;
+    addressLine2: string;
+    city: string;
+    region: string;
+    postalCode: string;
+    country: string;
+    accountNumber: string;
+    paymentTerms: string;
+    leadTimeDays: number | null;
+    isSteelFabricator: boolean;
   } | null;
   lines: BomLine[];
   totals: {
-    lineCount: number; unitCount: number; extendedCostMinor: number;
-    steelWeightLbs: number; totalWeightLbs: number;
+    lineCount: number;
+    unitCount: number;
+    extendedCostMinor: number;
+    steelWeightLbs: number;
+    totalWeightLbs: number;
   };
 }
 
@@ -91,7 +138,8 @@ export const streetLine = (line1: unknown, line2: unknown): string => {
   if (!a) return b;
   // A suite that already says what it is keeps its own wording; a bare number gets
   // labelled, since "100" alone means nothing to whoever is delivering.
-  const labelled = /^(ste|suite|apt|apartment|unit|#|bldg|building|fl|floor|rm|room|dept|po box|p\.o\.)/i.test(b);
+  const labelled =
+    /^(ste|suite|apt|apartment|unit|#|bldg|building|fl|floor|rm|room|dept|po box|p\.o\.)/i.test(b);
   return `${a}, ${labelled ? b : `Suite ${b}`}`;
 };
 
@@ -120,13 +168,18 @@ export async function buildBom(
         contacts: { orderBy: [{ isDecisionMaker: 'desc' }, { createdAt: 'asc' }], take: 5 },
       },
     }),
-    prisma.user.findUnique({ where: { id: order.acceptedById }, select: { name: true, email: true, title: true } }),
+    prisma.user.findUnique({
+      where: { id: order.acceptedById },
+      select: { name: true, email: true, title: true },
+    }),
     prisma.manufacturer.findMany(),
     prisma.proposal.findUnique({ where: { id: order.proposalId }, select: { title: true } }),
   ]);
 
   const mfrByName = new Map(manufacturers.map((m) => [m.name.toLowerCase(), m]));
-  const steelVendors = new Set(manufacturers.filter((m) => m.isSteelFabricator).map((m) => m.name.toLowerCase()));
+  const steelVendors = new Set(
+    manufacturers.filter((m) => m.isSteelFabricator).map((m) => m.name.toLowerCase()),
+  );
 
   // ---- ordering ----
   // The BOM follows the PRODUCT TREE, not the alphabet: the tree order is the order
@@ -137,16 +190,19 @@ export async function buildBom(
   const skusOnOrder = [...new Set(order.procurement.map((l) => s(l.sku)).filter(Boolean))];
   const treeRows = skusOnOrder.length
     ? await prisma.product.findMany({
-      where: { sku: { in: skusOnOrder } },
-      select: { sku: true, sortOrder: true },
-    })
+        where: { sku: { in: skusOnOrder } },
+        select: { sku: true, sortOrder: true },
+      })
     : [];
   const treeOrderBySku = new Map(treeRows.map((p) => [p.sku, p.sortOrder]));
 
   // Packaging bag per part. Lives on the SKU rather than the line, so one edit in
   // the catalog re-labels every sheet that part appears on.
   const bagRows = skusOnOrder.length
-    ? await prisma.sku.findMany({ where: { part: { in: skusOnOrder } }, select: { part: true, packagingBag: true } })
+    ? await prisma.sku.findMany({
+        where: { part: { in: skusOnOrder } },
+        select: { part: true, packagingBag: true },
+      })
     : [];
   const bagBySku = new Map(bagRows.map((k) => [k.part, k.packagingBag ?? '']));
 
@@ -155,7 +211,9 @@ export async function buildBom(
   // happen to start with 6820H- is still filed correctly.
   const hardwareParts = new Set<string>([
     'H-1000',
-    ...(await prisma.hardwareRule.findMany({ where: { kind: 'HARDWARE' }, select: { part: true } })).map((r) => r.part),
+    ...(
+      await prisma.hardwareRule.findMany({ where: { kind: 'HARDWARE' }, select: { part: true } })
+    ).map((r) => r.part),
   ]);
   const isHardwarePart = (sku: string, flagged: boolean): boolean =>
     flagged || hardwareParts.has(sku);
@@ -182,10 +240,12 @@ export async function buildBom(
     const cost = l.unitCostMinor ?? 0;
     const wt = l.unitWeightLbs == null ? 0 : Number(l.unitWeightLbs);
     const vendorName = s(l.vendor).trim() || 'Unassigned vendor';
+    const vendorSku = vendorPartFor(s(l.sku)) ?? '';
     return {
       id: l.id,
-      lineNo: s(l.sku) || '—',
+      lineNo: vendorSku || s(l.sku) || '—',
       sku: s(l.sku),
+      vendorSku,
       name: l.name,
       quantity: qty,
       powderColor: s(l.powderColor),
@@ -208,28 +268,60 @@ export async function buildBom(
     const have = new Set(lines.map((l) => l.sku).filter(Boolean));
     const mfr = mfrByName.get(vendorFilter.toLowerCase());
     const [skus, sourced] = await Promise.all([
-      prisma.sku.findMany({ where: { manufacturer: vendorFilter, active: true }, select: { part: true, description: true, unitCostMinor: true, weightLbs: true } }),
+      prisma.sku.findMany({
+        where: { manufacturer: vendorFilter, active: true },
+        select: { part: true, description: true, unitCostMinor: true, weightLbs: true },
+      }),
       mfr
-        ? prisma.productSourcing.findMany({ where: { manufacturerId: mfr.id }, select: { product: { select: { sku: true, name: true, status: true } } } })
+        ? prisma.productSourcing.findMany({
+            where: { manufacturerId: mfr.id },
+            select: { product: { select: { sku: true, name: true, status: true } } },
+          })
         : Promise.resolve([] as Array<{ product: { sku: string; name: string; status: string } }>),
     ]);
-    const extra = new Map<string, { sku: string; name: string; unitCostMinor: number; weightLbs: number }>();
+    const extra = new Map<
+      string,
+      { sku: string; name: string; unitCostMinor: number; weightLbs: number }
+    >();
     for (const k of skus) {
-      if (!have.has(k.part)) extra.set(k.part, { sku: k.part, name: k.description, unitCostMinor: k.unitCostMinor, weightLbs: Number(k.weightLbs) });
+      if (!have.has(k.part))
+        extra.set(k.part, {
+          sku: k.part,
+          name: k.description,
+          unitCostMinor: k.unitCostMinor,
+          weightLbs: Number(k.weightLbs),
+        });
     }
     for (const r of sourced) {
       if (!have.has(r.product.sku) && !extra.has(r.product.sku) && r.product.status === 'ACTIVE') {
-        extra.set(r.product.sku, { sku: r.product.sku, name: r.product.name, unitCostMinor: 0, weightLbs: 0 });
+        extra.set(r.product.sku, {
+          sku: r.product.sku,
+          name: r.product.name,
+          unitCostMinor: 0,
+          weightLbs: 0,
+        });
       }
     }
     for (const e of [...extra.values()].sort((a, b) => a.sku.localeCompare(b.sku))) {
       lines.push({
-        id: `zero:${e.sku}`, lineNo: e.sku, sku: e.sku, name: e.name, quantity: 0, powderColor: '',
+        id: `zero:${e.sku}`,
+        lineNo: vendorPartFor(e.sku) || e.sku,
+        sku: e.sku,
+        vendorSku: vendorPartFor(e.sku) ?? '',
+        name: e.name,
+        quantity: 0,
+        powderColor: '',
         packagingBag: bagBySku.get(e.sku) ?? '',
-        unitCostMinor: e.unitCostMinor, extendedCostMinor: 0, unitWeightLbs: e.weightLbs, extendedWeightLbs: 0,
-        vendor: vendorFilter, vendorNotes: '', sourced: false,
+        unitCostMinor: e.unitCostMinor,
+        extendedCostMinor: 0,
+        unitWeightLbs: e.weightLbs,
+        extendedWeightLbs: 0,
+        vendor: vendorFilter,
+        vendorNotes: '',
+        sourced: false,
         isSteel: steelVendors.has(vendorFilter.toLowerCase()),
-        treeOrder: UNPLACED, isHardware: isHardwarePart(e.sku, false),
+        treeOrder: UNPLACED,
+        isHardware: isHardwarePart(e.sku, false),
       });
     }
   }
@@ -239,7 +331,9 @@ export async function buildBom(
   const contact = org?.contacts[0] ?? null;
   const customer = {
     name: org?.name ?? '',
-    contactName: contact ? `${contact.firstName} ${contact.lastName}`.trim() : s(order.customerApproval?.approverName),
+    contactName: contact
+      ? `${contact.firstName} ${contact.lastName}`.trim()
+      : s(order.customerApproval?.approverName),
     contactTitle: s(contact?.title ?? order.customerApproval?.approverTitle),
     contactEmail: s(contact?.email ?? order.customerApproval?.approverEmail),
     contactPhone: s(contact?.phone),
@@ -252,45 +346,53 @@ export async function buildBom(
   };
 
   // ---- ship-to block: the customer's site, or Summit's dock ----
-  const cityLine = (city: string, region: string, zip: string) => [city, [region, zip].filter(Boolean).join(' ')].filter(Boolean).join(', ');
-  const shipTo = order.bomShipTo === 'SUMMIT'
-    ? {
-      label: 'Summit Sensory Gym',
-      name: COMPANY.name,
-      lines: [COMPANY.addressLine1, cityLine(COMPANY.city, COMPANY.region, COMPANY.postalCode)].filter(Boolean),
-      contactName: creator?.name ?? '',
-      phone: COMPANY.phone,
-      email: COMPANY.email,
-    }
-    : {
-      label: 'Customer site',
-      name: customer.name,
-      lines: [streetLine(customer.addressLine1, customer.addressLine2), cityLine(customer.city, customer.region, customer.postalCode)].filter(Boolean),
-      contactName: customer.contactName,
-      phone: customer.contactPhone,
-      email: customer.contactEmail,
-    };
+  const cityLine = (city: string, region: string, zip: string) =>
+    [city, [region, zip].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+  const shipTo =
+    order.bomShipTo === 'SUMMIT'
+      ? {
+          label: 'Summit Sensory Gym',
+          name: COMPANY.name,
+          lines: [
+            COMPANY.addressLine1,
+            cityLine(COMPANY.city, COMPANY.region, COMPANY.postalCode),
+          ].filter(Boolean),
+          contactName: creator?.name ?? '',
+          phone: COMPANY.phone,
+          email: COMPANY.email,
+        }
+      : {
+          label: 'Customer site',
+          name: customer.name,
+          lines: [
+            streetLine(customer.addressLine1, customer.addressLine2),
+            cityLine(customer.city, customer.region, customer.postalCode),
+          ].filter(Boolean),
+          contactName: customer.contactName,
+          phone: customer.contactPhone,
+          email: customer.contactEmail,
+        };
 
   // ---- vendor block (only for a single-vendor BOM) ----
   const mfr = vendorFilter ? mfrByName.get(vendorFilter.toLowerCase()) : undefined;
   const vendor = vendorFilter
     ? {
-      name: vendorFilter,
-      contactName: s(mfr?.contactName),
-      contactTitle: s(mfr?.contactTitle),
-      contactEmail: s(mfr?.contactEmail),
-      contactPhone: s(mfr?.contactPhone),
-      addressLine1: s(mfr?.addressLine1),
-      addressLine2: s(mfr?.addressLine2),
-      city: s(mfr?.city),
-      region: s(mfr?.region),
-      postalCode: s(mfr?.postalCode),
-      country: s(mfr?.country),
-      accountNumber: s(mfr?.accountNumber),
-      paymentTerms: s(mfr?.paymentTerms),
-      leadTimeDays: mfr?.defaultLeadTimeDays ?? null,
-      isSteelFabricator: !!mfr?.isSteelFabricator,
-    }
+        name: vendorFilter,
+        contactName: s(mfr?.contactName),
+        contactTitle: s(mfr?.contactTitle),
+        contactEmail: s(mfr?.contactEmail),
+        contactPhone: s(mfr?.contactPhone),
+        addressLine1: s(mfr?.addressLine1),
+        addressLine2: s(mfr?.addressLine2),
+        city: s(mfr?.city),
+        region: s(mfr?.region),
+        postalCode: s(mfr?.postalCode),
+        country: s(mfr?.country),
+        accountNumber: s(mfr?.accountNumber),
+        paymentTerms: s(mfr?.paymentTerms),
+        leadTimeDays: mfr?.defaultLeadTimeDays ?? null,
+        isSteelFabricator: !!mfr?.isSteelFabricator,
+      }
     : null;
 
   // ---- totals ----
@@ -300,16 +402,23 @@ export async function buildBom(
     lineCount: lines.filter((l) => l.quantity > 0).length,
     unitCount: lines.reduce((a, l) => a + l.quantity, 0),
     extendedCostMinor: lines.reduce((a, l) => a + l.extendedCostMinor, 0),
-    steelWeightLbs: Math.round(lines.filter((l) => l.isSteel).reduce((a, l) => a + l.extendedWeightLbs, 0) * 100) / 100,
+    steelWeightLbs:
+      Math.round(
+        lines.filter((l) => l.isSteel).reduce((a, l) => a + l.extendedWeightLbs, 0) * 100,
+      ) / 100,
     totalWeightLbs: Math.round(lines.reduce((a, l) => a + l.extendedWeightLbs, 0) * 100) / 100,
   };
 
-  const vendors = [...new Set(ordered.map((l) => s(l.vendor).trim() || 'Unassigned vendor'))]
-    .sort((a, b) => (a === 'Unassigned vendor' ? 1 : b === 'Unassigned vendor' ? -1 : a.localeCompare(b)));
+  const vendors = [...new Set(ordered.map((l) => s(l.vendor).trim() || 'Unassigned vendor'))].sort(
+    (a, b) => (a === 'Unassigned vendor' ? 1 : b === 'Unassigned vendor' ? -1 : a.localeCompare(b)),
+  );
 
   return {
     order: {
-      id: order.id, number: order.number, status: order.status, acceptedVersion: order.acceptedVersion,
+      id: order.id,
+      number: order.number,
+      status: order.status,
+      acceptedVersion: order.acceptedVersion,
       jobName: s(order.jobName) || s(proposal?.title) || s(org?.name),
       shipTo: order.bomShipTo,
       submittedOn: order.bomSubmittedOn ? order.bomSubmittedOn.toISOString() : null,
@@ -319,7 +428,9 @@ export async function buildBom(
       notes: s(order.bomNotes),
     },
     company: COMPANY,
-    createdBy: creator ? { name: s(creator.name), email: s(creator.email), title: s(creator.title) } : null,
+    createdBy: creator
+      ? { name: s(creator.name), email: s(creator.email), title: s(creator.title) }
+      : null,
     createdAt: new Date().toISOString(),
     customer,
     shipTo,
