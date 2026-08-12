@@ -8,6 +8,7 @@ import { prisma } from '../lib/prisma.js';
 import { authorizeUrl, exchangeCode, disconnect } from '../integrations/quickbooks/oauth.js';
 import { findOrCreateCustomer } from '../integrations/quickbooks/customers.js';
 import { syncItem, linkItemsBySku } from '../integrations/quickbooks/items.js';
+import { query } from '../integrations/quickbooks/client.js';
 import {
   listTerms,
   resolveTermForProposal,
@@ -95,7 +96,8 @@ export function registerQuickbooksRoutes(app: FastifyInstance): void {
 
   // --- Status & connection (manage) ---
   app.get('/integrations/quickbooks/status', manage, async () => ({
-    provider: 'quickbooks',    configured: isQuickbooksConfigured(),
+    provider: 'quickbooks',
+    configured: isQuickbooksConfigured(),
     environment: qboEnvironment(),
     productionWritesEnabled: env.QBO_PRODUCTION_WRITE_ENABLED,
     connections: await prisma.qboConnection.count({
@@ -203,6 +205,42 @@ export function registerQuickbooksRoutes(app: FastifyInstance): void {
         stack: err instanceof Error ? err.stack?.split('\n').slice(0, 6).join('\n') : undefined,
       });
     }
+  });
+
+  /**
+   * Income accounts, for the catalog's Sync to QuickBooks dialog.
+   *
+   * QuickBooks requires an income account on every item it creates. Which one is a
+   * bookkeeping decision belonging to whoever is doing the sync, so the dialog asks
+   * rather than a constant in code deciding for them. Inactive accounts are dropped
+   * — offering one would only produce a rejected create.
+   */
+  app.get('/integrations/quickbooks/accounts', manage, async (_req, reply) => {
+    const realmId = await activeRealmId();
+    if (!realmId) return reply.status(409).send({ error: 'NOT_CONNECTED' });
+    const res = await query<{
+      Account?: Array<{ Id: string; Name: string; AccountSubType?: string; Active?: boolean }>;
+    }>(realmId, "select * from Account where AccountType = 'Income' maxresults 200");
+    return {
+      accounts: (res.Account ?? [])
+        .filter((a) => a.Active !== false)
+        .map((a) => ({ id: a.Id, name: a.Name, subType: a.AccountSubType ?? '' }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    };
+  });
+
+  /**
+   * Which products already have a QuickBooks item, so the catalog can show the link
+   * state per row instead of making someone guess. Read from our own link table, not
+   * from QuickBooks — it is the record of what THIS system believes, which is exactly
+   * what decides whether an estimate will build.
+   */
+  app.get('/integrations/quickbooks/items/links', manage, async () => {
+    const rows = await prisma.qboEntityLink.findMany({
+      where: { environment: qboEnvironment() as QboEnvironment, entity: 'Item' },
+      select: { entityId: true, qboId: true, state: true },
+    });
+    return { links: rows.map((r) => ({ productId: r.entityId, qboId: r.qboId, state: r.state })) };
   });
 
   // --- Payment terms (manage) ---
@@ -313,18 +351,22 @@ export function registerQuickbooksRoutes(app: FastifyInstance): void {
   // the fix for a difference is to correct the CRM record and re-run the sync
   // above — there is deliberately no way to pull an accountant's typo back into
   // the CRM.
-  app.get('/integrations/quickbooks/customers/:organizationId/profile', manage, async (req, reply) => {
-    const { organizationId } = req.params as { organizationId: string };
-    try {
-      return await compareCustomerProfile(organizationId);
-    } catch (err) {
-      req.log.error({ err, organizationId }, 'customer profile comparison failed');
-      return reply.status(502).send({
-        error: 'QBO_PROFILE_FAILED',
-        message: err instanceof Error ? err.message : String(err),
-      });
-    }
-  });
+  app.get(
+    '/integrations/quickbooks/customers/:organizationId/profile',
+    manage,
+    async (req, reply) => {
+      const { organizationId } = req.params as { organizationId: string };
+      try {
+        return await compareCustomerProfile(organizationId);
+      } catch (err) {
+        req.log.error({ err, organizationId }, 'customer profile comparison failed');
+        return reply.status(502).send({
+          error: 'QBO_PROFILE_FAILED',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+  );
 
   // --- Part-number preflight (manage) ---
   // Does every priced line on the accepted proposal resolve to a real, active
@@ -424,7 +466,12 @@ export function registerQuickbooksRoutes(app: FastifyInstance): void {
       attachInvoice?: boolean;
     };
     if (!b.to || !b.subject || !b.body) {
-      return reply.status(400).send({ error: 'INVALID_INPUT', message: 'A reminder needs a recipient, a subject and a message.' });
+      return reply
+        .status(400)
+        .send({
+          error: 'INVALID_INPUT',
+          message: 'A reminder needs a recipient, a subject and a message.',
+        });
     }
     // The author's name is cached on the reminder so attribution survives them
     // leaving; read it here rather than making the mailer touch the user table.

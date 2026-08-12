@@ -483,11 +483,6 @@
             '<button class="link-btn" id="profBtn" style="margin-bottom:6px;">My Profile</button>' +
             '<button class="link-btn" id="pwdBtn" style="margin-bottom:6px;">Change Password</button>' +
             '<button class="link-btn" id="logoutBtn">Sign Out</button>' +
-            // Intuit asks whether users can reach support from inside the app.
-            // A mailto is enough for a team this size and needs no ticketing
-            // system behind it; the subject line saves someone typing it.
-            '<a class="link-btn" id="supportLink" href="mailto:info@summitsensory.com?subject=CPQ%20support%20request" ' +
-              'style="display:block;text-align:center;margin-top:6px;text-decoration:none;">Get Help</a>' +
             '<div style="text-align:center;font-size:10px;color:#b3b7ac;margin-top:8px;letter-spacing:.04em;">build 50 · freight alerts</div></div>' +
         '</aside>' +
         '<main class="main"><div class="topbar"><div class="eyebrow">Summit Sensory Gym Proposal Management Software</div><h2 id="viewTitle">Dashboard</h2></div>' +
@@ -1861,8 +1856,30 @@
     { key: 'categoryName', label: 'Category', w: 210, type: 'enum' },
     { key: 'sortOrder', label: 'Order', w: 90, type: 'num' },
     { key: 'status', label: 'Status', w: 170, type: 'enum' },
+    { key: '', label: 'QuickBooks', w: 150 },
     { key: '', label: '', w: 96 },
   ];
+
+  /**
+   * productId → QuickBooks item id, for the catalog's QuickBooks column. Null until
+   * loaded; an empty object means loaded and nothing is linked. Loaded once per
+   * visit to the Catalog, and refreshed in place after a sync rather than re-fetched.
+   */
+  var qboItemLinks = null;
+  /** The income account the last sync used, so the dialog remembers the answer. */
+  var qboIncomeAccount = null;
+  try { qboIncomeAccount = JSON.parse(localStorage.getItem('ssg.qboIncomeAccount') || 'null'); } catch (e) {}
+
+  async function loadQboItemLinks() {
+    try {
+      var r = await authed('/integrations/quickbooks/items/links');
+      if (!r.ok) { qboItemLinks = {}; return; }
+      var d = await r.json();
+      var map = {};
+      (d.links || []).forEach(function (l) { map[l.productId] = l; });
+      qboItemLinks = map;
+    } catch (e) { qboItemLinks = {}; }
+  }
 
   async function loadProducts(user) {
     var box = document.getElementById('catList'); if (!box) return;
@@ -1890,6 +1907,9 @@
       });
       cat.page = 1;
       drawProductTree(user);
+      // Not awaited above: the tree is useful before the link state arrives, and the
+      // column redraws itself when it does.
+      if (qboItemLinks === null) { await loadQboItemLinks(); drawProductTree(user); }
     } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
   }
 
@@ -1918,15 +1938,16 @@
         // The number that decides where this part lands on a proposal. Sort by this
         // column and filter Category to read a tier in its proposal order.
         td('<span style="font-variant-numeric:tabular-nums;font-size:13px;color:#5c6157;">' + (Number(p.sortOrder) || 0) + '</span>') + td(statusCell) +
+        td(qboCell(p, admin)) +
         td(admin ? '<button class="prodEdit" data-pid="' + p.id + '" style="border:1px solid #dcded7;background:#fff;border-radius:8px;padding:6px 12px;font-size:12.5px;color:#3d4a55;cursor:pointer;">Edit</button>' : '') + '</tr>';
     }).join('');
 
     box.innerHTML = '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:14px;overflow-x:auto;">' +
-      '<table style="width:100%;min-width:1130px;border-collapse:collapse;font-size:14px;table-layout:fixed;">' +
+      '<table style="width:100%;min-width:1280px;border-collapse:collapse;font-size:14px;table-layout:fixed;">' +
       '<colgroup>' + PT_COLS.map(function (c) { return '<col' + (c.w ? ' style="width:' + c.w + 'px;"' : '') + '>'; }).join('') + '</colgroup>' +
       '<thead><tr>' + colHead(PT_COLS, cat, 'background:#f7f8f4;') + '</tr>' +
       '<tr>' + PT_COLS.map(function (c) { return filterCell('colFilter', c, all, cat.filters); }).join('') + '</tr></thead>' +
-      '<tbody>' + (rows || '<tr><td style="padding:22px 16px;color:#909689;" colspan="7">' + (all.length ? 'No products match these filters.' : 'No products yet.') + '</td></tr>') + '</tbody></table></div>' +
+      '<tbody>' + (rows || '<tr><td style="padding:22px 16px;color:#909689;" colspan="8">' + (all.length ? 'No products match these filters.' : 'No products yet.') + '</td></tr>') + '</tbody></table></div>' +
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;color:#82877d;font-size:13px;flex-wrap:wrap;gap:8px;">' +
         '<span>' + rowsData.length.toLocaleString() + (activeFilters ? ' of ' + all.length.toLocaleString() : '') + ' products' +
           (activeFilters ? ' · <button id="ptClearF" class="link-btn" style="width:auto;padding:4px 10px;display:inline-block;">Clear filters</button>' : '') + '</span>' +
@@ -1958,12 +1979,86 @@
         if (row) row.status = sel.value;
       });
     });
+    Array.prototype.forEach.call(box.querySelectorAll('.qboSync'), function (b) {
+      b.addEventListener('click', function () {
+        var p = (cat.rows || []).filter(function (x) { return x.id === b.getAttribute('data-pid'); })[0];
+        if (p) openQboSyncForm(p, user);
+      });
+    });
     Array.prototype.forEach.call(box.querySelectorAll('.prodEdit'), function (b) {
       b.addEventListener('click', function () {
         var p = (cat.rows || []).filter(function (x) { return x.id === b.getAttribute('data-pid'); })[0];
         if (p) openProductEditForm(p, user);
       });
     });
+  }
+
+  /**
+   * The QuickBooks column for one product.
+   *
+   * Three states worth distinguishing: not yet known (the link fetch is still in
+   * flight), linked, and not linked. A product that is not ACTIVE cannot be synced —
+   * syncItem refuses it — so the cell says so rather than offering a button that
+   * will fail.
+   */
+  function qboCell(p, admin) {
+    var chip = function (bg, bd, fg, text, title) {
+      return '<span' + (title ? ' title="' + esc(title) + '"' : '') + ' style="display:inline-block;background:' + bg + ';border:1px solid ' + bd + ';color:' + fg + ';border-radius:999px;padding:2px 9px;font-size:11px;font-weight:600;">' + esc(text) + '</span>';
+    };
+    if (qboItemLinks === null) return '<span class="muted" style="font-size:12px;">…</span>';
+    var link = qboItemLinks[p.id];
+    if (link && link.state === 'ERROR') return chip('#fbe9e6', '#f0cdc7', '#9c3327', 'Sync error', 'The last sync failed. Try again.');
+    if (link) return chip('#eef5f0', '#cfe3d6', '#2f7d5d', 'Linked', 'QuickBooks item ' + link.qboId);
+    if (p.status !== 'ACTIVE') return chip('#f2f3ef', '#e2e4dd', '#8a8f85', 'Not active', 'Only an active product can be synced to QuickBooks.');
+    if (!admin) return chip('#fdf6e3', '#eadfbe', '#8a6d1f', 'Not linked');
+    return '<button class="qboSync" data-pid="' + p.id + '" style="border:1px solid #3d4a55;background:#fff;border-radius:8px;padding:6px 11px;font-size:12.5px;color:#3d4a55;cursor:pointer;white-space:nowrap;">Sync to QBO</button>';
+  }
+
+  /**
+   * Create (or adopt) the QuickBooks item for one product and record the link.
+   *
+   * QuickBooks needs an income account on a new item, so the first sync of a session
+   * asks which one and remembers the answer. The account list comes from the
+   * connected company — no typing account names, no guessing ids.
+   */
+  async function openQboSyncForm(p, user) {
+    var accounts = null, err = '';
+    try {
+      var ra = await authed('/integrations/quickbooks/accounts');
+      if (ra.status === 409) err = 'QuickBooks is not connected. Connect it under Administration → Integrations first.';
+      else if (!ra.ok) err = 'Could not read the account list from QuickBooks (' + ra.status + ').';
+      else accounts = ((await ra.json()) || {}).accounts || [];
+    } catch (e) { err = 'Could not reach QuickBooks.'; }
+
+    if (err) { openModal('Sync ' + p.sku, '<div class="err" style="font-size:13px;line-height:1.6;">' + esc(err) + '</div>', async function (close) { close(); }, 'Close'); return; }
+    if (!accounts.length) { openModal('Sync ' + p.sku, '<div class="err" style="font-size:13px;line-height:1.6;">This QuickBooks company has no active income accounts, so an item cannot be created.</div>', async function (close) { close(); }, 'Close'); return; }
+
+    var remembered = qboIncomeAccount && accounts.filter(function (x) { return x.id === qboIncomeAccount.id; })[0] ? qboIncomeAccount.id : accounts[0].id;
+    openModal('Sync ' + p.sku + ' to QuickBooks',
+      '<div style="font-size:13.5px;line-height:1.6;">Creates a QuickBooks item for <b>' + esc(p.name) + '</b> and links it to this catalog record, so proposal lines carrying this part can reach an estimate or invoice.</div>' +
+      '<div class="muted" style="font-size:12.5px;line-height:1.55;margin-top:8px;">If an item with SKU <code>' + esc(p.sku) + '</code> already exists in QuickBooks, it is adopted rather than duplicated. ' +
+        (p.kind === 'SERVICE' ? 'It will be created as a Service item.' : 'It will be created as a Non-inventory item — Summit does not track QuickBooks stock quantities.') + '</div>' +
+      '<div style="margin-top:14px;"><label style="display:block;font-size:11px;color:#8a8f85;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">Income account</label>' +
+        '<select id="qboAcct" style="width:100%;padding:9px 11px;border:1px solid #dcded7;border-radius:8px;font-size:14px;background:#fff;">' +
+        accounts.map(function (ac) { return '<option value="' + esc(ac.id) + '"' + (ac.id === remembered ? ' selected' : '') + '>' + esc(ac.name) + (ac.subType ? ' — ' + esc(titleCase(String(ac.subType).replace(/([A-Z])/g, ' $1').trim())) : '') + '</option>'; }).join('') +
+        '</select>' +
+        '<div class="muted" style="font-size:12px;margin-top:5px;line-height:1.5;">Where sales of this item post. Use the same account as the rest of your product lines unless you report on this one separately.</div></div>',
+      async function (close, showErr) {
+        var sel = document.getElementById('qboAcct');
+        var acctId = sel ? sel.value : '';
+        if (!acctId) return showErr('Choose an income account.');
+        var r = await authed('/integrations/quickbooks/items/' + encodeURIComponent(p.id) + '/sync', { method: 'POST', body: { incomeAccountRef: acctId } });
+        if (r.status === 409) return showErr('QuickBooks is not connected.');
+        if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} return showErr(m || 'The sync failed (' + r.status + ').'); }
+        var out = (await r.json()) || {};
+        var chosen = accounts.filter(function (x) { return x.id === acctId; })[0];
+        qboIncomeAccount = { id: acctId, name: chosen ? chosen.name : '' };
+        try { localStorage.setItem('ssg.qboIncomeAccount', JSON.stringify(qboIncomeAccount)); } catch (e) {}
+        if (qboItemLinks) qboItemLinks[p.id] = { productId: p.id, qboId: out.qboId, state: 'OK' };
+        close();
+        drawProductTree(user);
+      },
+      'Sync to QuickBooks');
   }
 
   /** Edit a product-tree record in place: name, kind, category, descriptions, dimensions. */
@@ -3657,16 +3752,6 @@
   };
   function d2m(v) { var n = parseFloat(String(v).replace(/[^0-9.\-]/g, '')); return isNaN(n) ? 0 : Math.round(n * 100); }
   function m2d(m) { return (Number(m || 0) / 100).toFixed(2); }
-  /**
-   * Professional-services and travel parts are quoted per project, so they are
-   * imported with no price and the rate is typed on the proposal. For these the
-   * builder has to keep "nobody has answered yet" (null) apart from "we decided it
-   * is zero" (0 plus a reason) — everywhere else a blank rate is still just 0.
-   * The server gate in priceEntry.ts draws the same line.
-   */
-  function isPriceEntrySku(sku) { return /^(SVC|TRV)-/.test(String(sku || '')); }
-  /** m2d, but an unanswered rate renders as an empty box rather than 0.00. */
-  function m2dBlank(m) { return (m === null || m === undefined || m === '') ? '' : m2d(m); }
   /** Pounds, with one decimal only when it matters. */
   function fmtWeight(lbs) {
     var n = Number(lbs) || 0;
@@ -3803,12 +3888,7 @@
     return {
       ref: it.ref || uid(), lineType: it.lineType || (it.isNote ? 'NOTE' : 'PRODUCT'), kind: it.kind || 'INCLUDED',
       productId: it.productId || null, sku: it.sku || '', name: it.name || '', description: desc,
-      quantity: it.quantity == null ? 1 : it.quantity,
-      // Only per-project parts keep a null rate; for everything else a missing
-      // rate has always meant 0 and changing that would reprice the catalog.
-      rateMinor: (isPriceEntrySku(it.sku) && (it.rateMinor === null || it.rateMinor === undefined)) ? null : (it.rateMinor || 0),
-      priceNote: it.priceNote || '',
-      costEach: it.costEach || 0, weightEach: it.weightEach || 0, group: it.group || '',
+      quantity: it.quantity == null ? 1 : it.quantity, rateMinor: it.rateMinor || 0, costEach: it.costEach || 0, weightEach: it.weightEach || 0, group: it.group || '',
       optional: !!it.optional,
       delivery: it.delivery || '', returnable: it.returnable || '', addlFreight: it.addlFreight || '', freightCalc: it.freightCalc || '',
       tpFreightMinor: it.tpFreightMinor || 0, tpFreightLabel: it.tpFreightLabel || '',
@@ -3943,10 +4023,6 @@
    */
   function applyItemDefaults(line) {
     if (!line || !line.sku) return line;
-    // A per-project part carries no catalog price, so it must arrive on the line
-    // unanswered rather than at 0 — otherwise adding one would immediately demand
-    // a reason for a zero nobody chose.
-    if (isPriceEntrySku(line.sku) && !(Number(line.rateMinor) || 0)) line.rateMinor = null;
     var d = itemDefaults[line.sku];
     if (!d) return line;
     if (d.freightMinor != null && !(Number(line.tpFreightMinor) || 0)) {
@@ -4343,9 +4419,6 @@
   function unpricedLines() {
     return pb.lines.filter(function (l) {
       if (l.lineType !== 'PRODUCT' || l.kind !== 'INCLUDED' || !l.sku) return false;
-      // Per-project parts are priced on the proposal by design, so “price them in
-      // the catalog” is the wrong advice — they get their own notice below.
-      if (isPriceEntrySku(l.sku)) return false;
       if (Number(l.rateMinor) || 0) return false;
       var d = itemDefaults[l.sku];
       return !d || !d.priceMinor;
@@ -4526,22 +4599,9 @@
    *   - the catalog HAS a price and this line does not (fixable in one click)
    *   - the catalog has no price either (someone has to go price the part)
    */
-  /**
-   * Per-project lines that cannot go out yet: no rate typed, or $0.00 with no
-   * reason. Mirrors auditPriceEntry on the server so the banner and the release
-   * gate never disagree.
-   */
-  function priceEntryLines() {
-    return pb.lines.filter(function (l) {
-      if (l.lineType !== 'PRODUCT' || l.kind !== 'INCLUDED' || !isPriceEntrySku(l.sku)) return false;
-      if (l.rateMinor === null || l.rateMinor === undefined) return true;
-      return Number(l.rateMinor) === 0 && !String(l.priceNote || '').trim();
-    });
-  }
-
   function priceWarningHtml() {
-    var stale = stalePricedLines(), unpriced = unpricedLines(), awaiting = priceEntryLines();
-    if (!stale.length && !unpriced.length && !awaiting.length) return '';
+    var stale = stalePricedLines(), unpriced = unpricedLines();
+    if (!stale.length && !unpriced.length) return '';
     var out = '';
     if (stale.length) {
       out += '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px;padding:10px 12px;background:#fdf6e6;border:1px solid #ecd9a6;border-radius:9px;font-size:12.5px;color:#6b5a24;">' +
@@ -4555,13 +4615,6 @@
         '<code>' + unpriced.slice(0, 8).map(function (l) { return esc(l.sku); }).join('</code>, <code>') + '</code>' +
         (unpriced.length > 8 ? ' and ' + (unpriced.length - 8) + ' more' : '') +
         '. Price them under Catalog → Pricing &amp; SKUs, then use “Pull from catalog”.</div>';
-    }
-    if (awaiting.length) {
-      out += '<div style="margin-top:10px;padding:10px 12px;background:#fdf6e6;border:1px solid #ecd9a6;border-radius:9px;font-size:12.5px;color:#6b5a24;">' +
-        '<b>' + awaiting.length + ' line' + (awaiting.length === 1 ? '' : 's') + ' quoted per project still need' + (awaiting.length === 1 ? 's' : '') + ' a rate:</b> ' +
-        '<code>' + awaiting.slice(0, 8).map(function (l) { return esc(l.sku); }).join('</code>, <code>') + '</code>' +
-        (awaiting.length > 8 ? ' and ' + (awaiting.length - 8) + ' more' : '') +
-        '. Enter the rate on the line. $0.00 is allowed with a reason. The proposal cannot be released until each one is answered.</div>';
     }
     return out;
   }
@@ -5560,16 +5613,15 @@
           (showsFreightTbd(l) && !l.showNotes
             ? '<div style="margin-top:6px;font-size:11.5px;color:#8a6d1f;line-height:1.5;">Freight to be determined — the vendor’s standing freight note prints on this line.</div>'
             : '') +
-          (l.kind === 'INCLUDED' && l.sku && !isPriceEntrySku(l.sku) && !(Number(l.rateMinor) || 0)
+          (l.kind === 'INCLUDED' && l.sku && !(Number(l.rateMinor) || 0)
             ? '<div style="margin-top:6px;font-size:11.5px;color:#8a5a12;">No rate on this line' +
                 (itemDefaults[l.sku] && itemDefaults[l.sku].priceMinor
                   ? ' — the catalog has $' + (itemDefaults[l.sku].priceMinor / 100).toFixed(2) + '. Use “Pull from catalog” above.'
                   : ' — and no price in the catalog for ' + esc(l.sku) + '.') + '</div>'
             : '') +
-          priceEntryBlock(l, i) +
         '</div>' +
         '<div style="display:flex;flex-direction:column;gap:5px;width:74px;flex:0 0 auto;"><label style="font-size:10px;color:#8a8f85;text-transform:uppercase;">Qty</label><input class="bF" data-i="' + i + '" data-k="quantity" value="' + esc(l.quantity) + '" style="width:100%;padding:6px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;"></div>' +
-        '<div style="display:flex;flex-direction:column;gap:5px;width:104px;flex:0 0 auto;"><label style="font-size:10px;color:#8a8f85;text-transform:uppercase;">Rate</label><input class="bF" data-i="' + i + '" data-k="rate" value="' + (isPriceEntrySku(l.sku) ? m2dBlank(l.rateMinor) : m2d(l.rateMinor)) + '"' + (isPriceEntrySku(l.sku) ? ' placeholder="—"' : '') + ' style="width:100%;padding:6px 8px;border:1px solid ' + ((isPriceEntrySku(l.sku) && l.rateMinor === null) ? '#d8a03c' : '#dcded7') + ';border-radius:7px;text-align:right;"></div>' +
+        '<div style="display:flex;flex-direction:column;gap:5px;width:104px;flex:0 0 auto;"><label style="font-size:10px;color:#8a8f85;text-transform:uppercase;">Rate</label><input class="bF" data-i="' + i + '" data-k="rate" value="' + m2d(l.rateMinor) + '" style="width:100%;padding:6px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;"></div>' +
         (isMock() ? '' : '<div style="display:flex;flex-direction:column;gap:5px;width:96px;flex:0 0 auto;"><label style="font-size:10px;color:#8a8f85;text-transform:uppercase;" title="Internal only — never printed">Cost</label><input class="bF" data-i="' + i + '" data-k="cost" value="' + m2d(l.costEach) + '" style="width:100%;padding:6px 8px;border:1px solid #e4dfd0;background:#fdfcf7;border-radius:7px;text-align:right;"></div>') +
         '<div style="width:96px;flex:0 0 auto;text-align:right;padding-top:20px;font-weight:600;font-size:14px;">' + fmtMoney(amt, 'USD') + '</div>' + del +
       '</div></div>';
@@ -5578,28 +5630,6 @@
     return '<select class="bF" data-i="' + i + '" data-k="' + k + '" style="' + IN + 'padding:7px 9px;"><option value="">—</option><option value="YES"' + (val === 'YES' ? ' selected' : '') + '>Yes</option><option value="NO"' + (val === 'NO' ? ' selected' : '') + '>No</option></select>';
   }
 
-  /**
-   * Rate prompt for the per-project parts. Three states, matching the server gate:
-   * no rate typed yet (blocks release), $0.00 with a reason (allowed), and a
-   * typed rate (nothing shown). The reason box only appears once the rate is
-   * actually 0, so a normal priced line never sees it.
-   */
-  function priceEntryBlock(l, i) {
-    if (l.kind !== 'INCLUDED' || !isPriceEntrySku(l.sku)) return '';
-    if (l.rateMinor === null || l.rateMinor === undefined) {
-      return '<div style="margin-top:6px;font-size:11.5px;color:#8a5a12;line-height:1.5;">' +
-        'This is quoted per project — enter a rate. If it is genuinely free, enter 0.00 and say why.' +
-        '</div>';
-    }
-    if (Number(l.rateMinor) !== 0) return '';
-    var missing = !String(l.priceNote || '').trim();
-    return '<div style="margin-top:7px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
-      '<label style="font-size:10px;color:#8a8f85;text-transform:uppercase;letter-spacing:.04em;flex:0 0 auto;">Why $0.00</label>' +
-      '<input class="bF" data-i="' + i + '" data-k="priceNote" value="' + esc(l.priceNote || '') + '" maxlength="200" placeholder="e.g. mobilization waived — included in the project fee" ' +
-        'style="flex:1;min-width:240px;padding:6px 8px;font-size:12px;border:1px solid ' + (missing ? '#d8a03c' : '#dcded7') + ';background:' + (missing ? '#fdf6e6' : '#fff') + ';border-radius:7px;">' +
-      (missing ? '<span style="font-size:11px;color:#8a5a12;flex:0 0 auto;">Needed before release</span>' : '') +
-      '</div>';
-  }
   var bDragFrom = null;
   function wireBuilder() {
     if (!wireBuilder._rail) {
@@ -5730,11 +5760,7 @@
       var handler = function () {
         var i = +el.getAttribute('data-i'), k = el.getAttribute('data-k'), l = pb.lines[i]; if (!l) return;
         markBuilderDirty();
-        if (k === 'rate') {
-          // Clearing the box on a per-project part means "not answered yet", which
-          // is not the same as typing 0 — the release gate treats them differently.
-          l.rateMinor = (isPriceEntrySku(l.sku) && !String(el.value).trim()) ? null : d2m(el.value);
-        }
+        if (k === 'rate') l.rateMinor = d2m(el.value);
         else if (k === 'cost') l.costEach = d2m(el.value);
         else if (k === 'tpFreight') l.tpFreightMinor = d2m(el.value);
         else if (k === 'quantity') l.quantity = parseFloat(el.value) || 0;
@@ -5953,7 +5979,7 @@
   /** The version payload, shared by the Save button and the quiet save below. */
   function builderVersionPayload() {
     var sections = [{ id: 'meta', type: 'CUSTOMER_INFO', title: 'Proposal', order: 0, enabled: true, data: pb.meta }];
-    var items = pb.lines.map(function (l, i) { return { ref: l.ref, lineType: l.lineType, kind: l.kind, productId: l.productId, sku: l.sku || '', name: l.name, description: l.description, internalNote: l.internalNote || '', components: l.components || null, source: l.source || '', freightTbd: !!l.freightTbd, quantity: Number(l.quantity) || 0, rateMinor: (isPriceEntrySku(l.sku) && (l.rateMinor === null || l.rateMinor === undefined)) ? null : (Number(l.rateMinor) || 0), priceNote: String(l.priceNote || '').trim() || null, costEach: Number(l.costEach) || 0, weightEach: Number(l.weightEach) || 0, group: l.group || '', optional: !!l.optional, delivery: l.delivery || '', returnable: l.returnable || '', addlFreight: l.addlFreight || '', freightCalc: l.freightCalc || '', tpFreightMinor: Number(l.tpFreightMinor) || 0, tpFreightLabel: l.tpFreightLabel || '', order: i }; });
+    var items = pb.lines.map(function (l, i) { return { ref: l.ref, lineType: l.lineType, kind: l.kind, productId: l.productId, sku: l.sku || '', name: l.name, description: l.description, internalNote: l.internalNote || '', components: l.components || null, source: l.source || '', freightTbd: !!l.freightTbd, quantity: Number(l.quantity) || 0, rateMinor: Number(l.rateMinor) || 0, costEach: Number(l.costEach) || 0, weightEach: Number(l.weightEach) || 0, group: l.group || '', optional: !!l.optional, delivery: l.delivery || '', returnable: l.returnable || '', addlFreight: l.addlFreight || '', freightCalc: l.freightCalc || '', tpFreightMinor: Number(l.tpFreightMinor) || 0, tpFreightLabel: l.tpFreightLabel || '', order: i }; });
     return { title: pb.title || undefined, sections: sections, items: items, expirationDate: pb.meta.expiration || undefined };
   }
 
@@ -8455,7 +8481,6 @@
       (!connected ? '<div class="placeholder" style="padding:16px;margin-bottom:10px;"><p class="muted" style="margin:0;">QuickBooks is not connected — connect it under Integrations first.</p></div>' : '') +
       '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">' +
         (order.organizationId ? '<button class="link-btn" id="qboProfile" style="width:auto;padding:9px 14px;">Check customer profile</button>' : '') +
-        '<button class="link-btn" id="qboSkuCheck" style="width:auto;padding:9px 14px;">Check part numbers</button>' +
         '<button class="link-btn" id="qboRefresh" style="width:auto;padding:9px 14px;">Refresh from QuickBooks</button>' +
         (lastSync ? '<span class="muted" style="font-size:12px;">Last read ' + esc(fmtStamp(lastSync)) + '</span>' : '') +
         '<div style="margin-left:auto;">' + (canTransact ? '<button class="btn" id="qboPrepare" style="width:auto;padding:9px 15px;">Step 1 · Prepare a document</button>' : '') + '</div>' +
@@ -8473,8 +8498,6 @@
     if (pb) pb.addEventListener('click', function () { openQboPrepare(order, user); });
     var prof = document.getElementById('qboProfile');
     if (prof) prof.addEventListener('click', function () { openQboProfile(order); });
-    var skc = document.getElementById('qboSkuCheck');
-    if (skc) skc.addEventListener('click', function () { openQboSkuCheck(order, skc); });
     var rf = document.getElementById('qboRefresh');
     if (rf) rf.addEventListener('click', async function () {
       rf.disabled = true; rf.textContent = 'Reading QuickBooks…';
@@ -8611,45 +8634,6 @@
           ? 'Correct anything wrong on the customer record, then push it with <b>Sync customer to QuickBooks</b> under Integrations. The CRM is the source of truth for every field above, so nothing here is ever pulled back the other way.'
           : 'The two records agree.') + '</div>',
       null, 'Close', { maxWidth: '760px' });
-  }
-
-  /**
-   * Part-number preflight. Every priced line has to resolve to a real, active
-   * QuickBooks item before a document can be created — an unmapped line is not
-   * rejected by QuickBooks, it posts under the default service item, leaving
-   * the total right and every product report wrong. This is the same check the
-   * create step enforces, shown before anyone authorizes.
-   */
-  async function openQboSkuCheck(order, bt) {
-    var label = bt.textContent, d = null;
-    bt.disabled = true; bt.textContent = 'Reading QuickBooks…';
-    try {
-      var r = await authed('/integrations/quickbooks/preflight/' + encodeURIComponent(order.proposalVersionId));
-      if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} alert(m || ('Could not check the part numbers (' + r.status + ').')); return; }
-      d = await r.json();
-    } finally { bt.disabled = false; bt.textContent = label; }
-
-    var TONE = { OK: '#82877d', NO_SKU: '#b7873a' };
-    var cell = 'padding:8px 10px;border-bottom:1px solid #e7e8e3;vertical-align:top;';
-    var rows = d.lines.map(function (l) {
-      return '<tr>' +
-        '<td style="' + cell + 'font-family:ui-monospace,Menlo,monospace;font-size:12.5px;white-space:nowrap;">' + (l.sku ? esc(l.sku) : '<span class="muted">—</span>') + '</td>' +
-        '<td style="' + cell + '">' + esc(l.description || '') + '</td>' +
-        '<td style="' + cell + '">' + (l.qboItemName ? esc(l.qboItemName) : '<span class="muted">—</span>') + '</td>' +
-        '<td style="' + cell + 'font-size:12px;color:' + (TONE[l.status] || '#c2452f') + ';">' + esc(l.detail || 'Matched') + '</td>' +
-        '</tr>';
-    }).join('');
-
-    openModal('Part numbers in QuickBooks',
-      (d.ok
-        ? '<div style="background:#f1f6f1;border:1px solid #cfe0d2;border-radius:6px;padding:11px 13px;margin-bottom:12px;font-size:13px;color:#2f5d43;line-height:1.55;">All ' + d.productLines + ' priced lines resolve to an active QuickBooks item. This order can be created.</div>'
-        : '<div style="background:#fbefec;border:1px solid #e6c6bd;border-radius:6px;padding:11px 13px;margin-bottom:12px;font-size:13px;color:#8a3524;line-height:1.55;"><b>' + d.blockers.length + ' of ' + d.productLines + ' priced lines do not map to an active QuickBooks item.</b> Nothing will be created in QuickBooks until they do. Import the missing parts under Products &amp; Services in QuickBooks, run <b>Link items by SKU</b> under Integrations, then check again.</div>') +
-      (d.warnings.length ? '<div style="background:#fbf6ec;border:1px solid #e6d9bd;border-radius:6px;padding:11px 13px;margin-bottom:12px;font-size:13px;color:#6b5a34;line-height:1.55;">' + d.warnings.length + ' line(s) carry no part number. These are allowed through and invoice as text, with no QuickBooks item behind them.</div>' : '') +
-      '<table style="width:100%;border-collapse:collapse;font-size:13.5px;">' +
-        '<thead><tr>' + ['Part', 'Line', 'QuickBooks item', ''].map(function (h) {
-          return '<th style="text-align:left;padding:6px 10px;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:#8a8f85;font-weight:600;border-bottom:1px solid #cfd3ca;">' + h + '</th>';
-        }).join('') + '</tr></thead><tbody>' + rows + '</tbody></table>',
-      null, 'Close', { maxWidth: '880px' });
   }
 
   function openQboPrepare(order, user) {

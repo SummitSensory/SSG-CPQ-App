@@ -66,7 +66,10 @@ async function request<T>(
 
     if (res.status === 429 || res.status >= 500) {
       const wait = backoff(attempt, Number(res.headers.get('retry-after') ?? '') || undefined);
-      logger.warn({ attempt, status: res.status, wait, intuitTid: tid, path }, 'QuickBooks throttled/5xx; backing off');
+      logger.warn(
+        { attempt, status: res.status, wait, intuitTid: tid, path },
+        'QuickBooks throttled/5xx; backing off',
+      );
       await sleep(wait);
       lastErr = new QboApiError(res.status, tid, '');
       continue;
@@ -91,8 +94,18 @@ async function request<T>(
 }
 
 /** Read-only query (find-or-create lookups). Uses the SQL-like QBO query API. */
-export async function query<T>(realmId: string, sql: string, fetchImpl: typeof fetch = fetch): Promise<T> {
-  const data = await request<{ QueryResponse: T }>(realmId, 'GET', 'query', { query: { query: sql } }, fetchImpl);
+export async function query<T>(
+  realmId: string,
+  sql: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<T> {
+  const data = await request<{ QueryResponse: T }>(
+    realmId,
+    'GET',
+    'query',
+    { query: { query: sql } },
+    fetchImpl,
+  );
   return data.QueryResponse;
 }
 
@@ -133,35 +146,46 @@ export async function sendDocument<T>(
   realmId: string,
   resource: string,
   id: string,
-  toEmail: string,
+  /**
+   * Override recipient. Null or omitted sends to the billing email QuickBooks
+   * already holds for the customer, which is the normal case — the caller only
+   * passes an address when someone typed a different one into the send dialog.
+   */
+  toEmail?: string | null,
   fetchImpl: typeof fetch = fetch,
 ): Promise<T> {
+  const to = String(toEmail ?? '').trim();
   return request<T>(
     realmId,
     'POST',
     `${resource}/${encodeURIComponent(id)}/send`,
-    { query: { sendTo: toEmail } },
+    to ? { query: { sendTo: to } } : {},
     fetchImpl,
   );
 }
 
 /**
- * Download the QuickBooks-rendered PDF of a document. Binary, so it bypasses
- * the JSON parse and comes back as an ArrayBuffer.
+ * Download the QuickBooks-rendered PDF of a document. Binary, so it bypasses the
+ * JSON parse.
+ *
+ * Returned as a Buffer rather than the raw ArrayBuffer the transport produces:
+ * both callers need Buffer semantics — the reminder base64-encodes it to attach,
+ * the route streams it to the reply — and an ArrayBuffer has neither.
  */
 export async function fetchPdf(
   realmId: string,
   resource: string,
   id: string,
   fetchImpl: typeof fetch = fetch,
-): Promise<ArrayBuffer> {
-  return request<ArrayBuffer>(
+): Promise<Buffer> {
+  const bytes = await request<ArrayBuffer>(
     realmId,
     'GET',
     `${resource}/${encodeURIComponent(id)}/pdf`,
     { accept: 'application/pdf', raw: true },
     fetchImpl,
   );
+  return Buffer.from(bytes);
 }
 
 export { backoff };
