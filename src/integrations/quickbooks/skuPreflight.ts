@@ -3,6 +3,7 @@ import { ConflictError } from '../../lib/errors.js';
 import { logger } from '../../lib/logger.js';
 import { query } from './client.js';
 import { normSku } from './items.js';
+import { synthesizedRuleFor, resolveSynthesizedItemId } from './synthesizedItems.js';
 import type { AcceptedLine } from './mapping.js';
 
 /**
@@ -186,6 +187,25 @@ export async function checkSkuMapping(
       };
     }
     if (sku && item.Sku && normSku(item.Sku) !== normSku(sku)) {
+      /**
+       * A synthesized family is the one legitimate mismatch.
+       *
+       * Every Adventure mat SIZE generates its own part number, and one QuickBooks
+       * item stands for the whole family — so the item's SKU can never equal the
+       * line's, by design. The check that matters is not "do the strings match" but
+       * "is this the item the family is configured to use", which is what
+       * resolveSynthesizedItemId answers. A line pointing at some OTHER item still
+       * fails, so the mismatch rule keeps its teeth.
+       */
+      const rule = synthesizedRuleFor(sku);
+      if (rule && resolveSynthesizedItemId(sku) === qboItemId) {
+        return {
+          ...base,
+          status: 'OK' as const,
+          detail: `Matched to the "${rule.family}" family item — a configured mat size has no item of its own.`,
+          blocking: false,
+        };
+      }
       return {
         ...base,
         status: 'SKU_MISMATCH' as const,
@@ -230,7 +250,6 @@ export async function assertSkusMapped(
   const result = await checkSkuMapping(lines, realmId, fetchImpl);
   if (result.ok) return result;
 
-  const first = result.blockers[0];
   const named = result.missingSkus.length ? result.missingSkus : [];
   const shown = named.slice(0, 12).join(', ');
   const more = named.length > 12 ? ` and ${named.length - 12} more` : '';
@@ -244,9 +263,20 @@ export async function assertSkusMapped(
     'QuickBooks create blocked: unmapped part numbers',
   );
 
+  /**
+   * Every blocker, not just the first. Each one can fail for a different reason —
+   * one part never imported, another linked to the wrong item — and reporting one
+   * at a time turns a single fix into as many round trips as there are problems.
+   */
+  const reasons = result.blockers
+    .slice(0, 12)
+    .map((b) => `• ${b.sku || b.description}: ${b.detail}`)
+    .join(' ');
+  const andMore = result.blockers.length > 12 ? ` …and ${result.blockers.length - 12} more.` : '';
+
   throw new ConflictError(
     `${subject} do not map to an active QuickBooks item, so this document was not created. ` +
-      (first ? `First blocker: ${first.detail} ` : '') +
+      `${reasons}${andMore} ` +
       `Import the missing parts into QuickBooks (Products & Services), run "Link items by SKU" under Integrations, then retry.`,
   );
 }
