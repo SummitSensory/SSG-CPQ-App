@@ -1,4 +1,5 @@
 import { minorToQboAmount, toSalesLines, type AcceptedLine } from './mapping.js';
+import { chargeDetail, feeChargeKind } from './chargeItems.js';
 
 /**
  * Pure QuickBooks Estimate body builder. The estimate mirrors the accepted
@@ -7,6 +8,13 @@ import { minorToQboAmount, toSalesLines, type AcceptedLine } from './mapping.js'
  * order discount line, and a tax line. It asserts the assembled total equals
  * the frozen accepted grand total and throws otherwise — the document is never
  * sent with a total that differs from the accepted proposal.
+ *
+ * Fee, discount and tax rows carry an ItemRef from chargeItems.ts. Without one
+ * QuickBooks files them under the company's default sales item, which put every
+ * freight, discount and tax dollar into the consulting-fee row of Sales by
+ * Product/Service. The rows still post when no item is configured — an
+ * unconfigured freight item must not block an accepted proposal — but the
+ * integration status page reports the gap.
  */
 export interface EstimateInput {
   customerQboId: string;
@@ -42,26 +50,30 @@ export function buildEstimateBody(input: EstimateInput): Record<string, unknown>
       DetailType: 'SalesItemLineDetail',
       Amount: minorToQboAmount(fee.amountMinor),
       Description: fee.label,
-      SalesItemLineDetail: { Qty: 1 },
+      SalesItemLineDetail: chargeDetail(feeChargeKind(fee.label)),
     });
   }
   if (input.orderDiscountMinor > 0n) {
-    // Represented as a negative line so the document total stays exact without
-    // requiring a configured QuickBooks discount account (scaffold). Production
-    // mapping may switch to DiscountLineDetail.
+    // A negative line rather than DiscountLineDetail: the discount is a frozen
+    // amount off the accepted total, and DiscountLineDetail would have
+    // QuickBooks recompute it against its own subtotal — which is exactly the
+    // drift the total assertion exists to prevent.
     lines.push({
       DetailType: 'SalesItemLineDetail',
       Amount: minorToQboAmount(-input.orderDiscountMinor),
       Description: 'Order discount (per accepted proposal)',
-      SalesItemLineDetail: { Qty: 1 },
+      SalesItemLineDetail: chargeDetail('DISCOUNT'),
     });
   }
   if (input.taxMinor > 0n) {
+    // The proposal's Tax field is a freight tax pass-through, not sales tax on
+    // the order — see chargeItems.ts. It posts as an ordinary charge line on the
+    // pass-through item, deliberately outside QuickBooks' sales tax engine.
     lines.push({
       DetailType: 'SalesItemLineDetail',
       Amount: minorToQboAmount(input.taxMinor),
-      Description: 'Sales tax (per accepted proposal)',
-      SalesItemLineDetail: { Qty: 1 },
+      Description: 'Crating & freight tax (per accepted proposal)',
+      SalesItemLineDetail: chargeDetail('FREIGHT_TAX'),
     });
   }
 

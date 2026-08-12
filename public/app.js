@@ -196,6 +196,37 @@
    * an amount left behind from an earlier draft cannot leak into a proposal.
    */
   function stdFreightOf(meta) { return (meta && meta.stdFreightOn) ? (Number(meta.stdFreightMinor) || 0) : 0; }
+  /**
+   * The order discount, entered either as a percentage of the product subtotal or
+   * as a flat amount.
+   *
+   * Percentage is the original and remains the default: a proposal saved before
+   * this existed has no discountMode, reads as PCT, and computes exactly what it
+   * always did. The basis is the product subtotal ONLY — freight and tax are not
+   * discounted, which is what the desk has always meant by "10% off".
+   *
+   * A flat amount is stored in minor units and used verbatim. It is clamped to the
+   * subtotal so a mistyped figure cannot produce a negative order, and rounding on
+   * the percentage path is to the cent.
+   */
+  function discountOf(meta, subtotal) {
+    var m = meta || {};
+    var mode = m.discountMode === 'AMT' ? 'AMT' : 'PCT';
+    var pct = Number(m.discountPct) || 0;
+    var amount = mode === 'AMT'
+      ? Math.round(Number(m.discountAmountMinor) || 0)
+      : Math.round(subtotal * pct / 100);
+    if (amount < 0) amount = 0;
+    if (amount > subtotal) amount = subtotal;
+    // The effective percentage is derived for display and reporting even on the
+    // amount path, so margin reporting reads the same either way.
+    var effPct = subtotal ? Math.round((amount / subtotal) * 1000) / 10 : 0;
+    return { mode: mode, pct: mode === 'AMT' ? effPct : pct, amount: amount };
+  }
+  /** Totals-row label: the percentage prints only when one was entered as such. */
+  function discountLabel(t) {
+    return (t && t.discountMode === 'AMT') ? 'Discount' : 'Discount (' + (t ? t.discountPct : 0) + '%)';
+  }
 
   /* --- API --- */
   function api(path, opts) {
@@ -561,7 +592,7 @@
         contactName: '', shipTo: '', billTo: '', billSameAsShip: true, showTitle: true,
         projectId: '', showProjectId: false, showDeposit: true,
         tbdTax: '', tbdStructureFreight: '', tbdMatsFreight: '',
-        proposalDate: today, taxAmountMinor: 0, discountPct: 0,
+        proposalDate: today, taxAmountMinor: 0, discountPct: 0, discountMode: 'PCT', discountAmountMinor: 0,
         structureFreightMinor: 0, matsFreightMinor: 0,
         stdFreightOn: false, stdFreightMinor: 0,
         expiration: addDays(today, 7), footerNotes: [], advAnswers: null, advWarnings: [],
@@ -3295,7 +3326,7 @@
       subtotal += (Number(l.quantity) || 0) * (Number(l.rateMinor) || 0);
       tpFreight += Number(l.tpFreightMinor) || 0;
     });
-    var discount = Math.round(subtotal * (Number(meta.discountPct) || 0) / 100);
+    var discount = discountOf(meta, subtotal).amount;
     var structureFreight = metaAmount(meta.structureFreightMinor != null ? meta.structureFreightMinor : meta.freightMinor, meta.tbdStructureFreight);
     return subtotal - discount + tpFreight + metaAmount(meta.taxAmountMinor, meta.tbdTax) + structureFreight + metaAmount(meta.matsFreightMinor, meta.tbdMatsFreight) + stdFreightOf(meta);
   }
@@ -3989,7 +4020,7 @@
     pb = {
       proposalId: proposal.id, versionId: version.id, user: user, orgId: proposal.organizationId, orgName: orgName, stdNotes: stdNotes,
       title: proposal.title || '', number: proposal.number || '', version: version.version || 1,
-      meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', billSameAsShip: !meta.billTo || meta.billTo === (meta.shipTo || orgShipTo || ''), showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, showDeposit: meta.showDeposit !== false, tbdTax: meta.tbdTax || '', tbdStructureFreight: meta.tbdStructureFreight || '', tbdMatsFreight: meta.tbdMatsFreight || '', proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, stdFreightOn: !!meta.stdFreightOn, stdFreightMinor: meta.stdFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7), footerNotes: footerNotes, advAnswers: meta.advAnswers || null, advWarnings: meta.advWarnings || [] },
+      meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', billSameAsShip: !meta.billTo || meta.billTo === (meta.shipTo || orgShipTo || ''), showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, showDeposit: meta.showDeposit !== false, tbdTax: meta.tbdTax || '', tbdStructureFreight: meta.tbdStructureFreight || '', tbdMatsFreight: meta.tbdMatsFreight || '', proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, discountMode: meta.discountMode === 'AMT' ? 'AMT' : 'PCT', discountAmountMinor: meta.discountAmountMinor || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, stdFreightOn: !!meta.stdFreightOn, stdFreightMinor: meta.stdFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7), footerNotes: footerNotes, advAnswers: meta.advAnswers || null, advWarnings: meta.advWarnings || [] },
       lines: lines,
     };
     // A new proposal starts with the billing address the same as the shipping one.
@@ -4635,8 +4666,9 @@
         if (cur) { cur.subtotal += amt + tp; cur.cogs += cst; }
       }
     });
-    var discountPct = Number(pb.meta.discountPct) || 0;
-    var discount = Math.round(subtotal * discountPct / 100);
+    var disc = discountOf(pb.meta, subtotal);
+    var discountPct = disc.pct, discountMode = disc.mode;
+    var discount = disc.amount;
     var tax = metaAmount(pb.meta.taxAmountMinor, pb.meta.tbdTax);
     var structureFreight = metaAmount(pb.meta.structureFreightMinor, pb.meta.tbdStructureFreight);
     var matsFreight = metaAmount(pb.meta.matsFreightMinor, pb.meta.tbdMatsFreight);
@@ -4645,7 +4677,7 @@
     var deposit = depositOf(total);
     var revenue = subtotal - discount + tpFreight;
     groups.forEach(function (g) { g.margin = g.subtotal - g.cogs; g.marginPct = g.subtotal ? Math.round((g.margin / g.subtotal) * 1000) / 10 : 0; });
-    return { subtotal: subtotal, discountPct: discountPct, discount: discount, tpFreight: tpFreight, tax: tax, structureFreight: structureFreight, matsFreight: matsFreight, stdFreight: stdFreight, total: total, deposit: deposit, groups: groups, weight: weight,
+    return { subtotal: subtotal, discountPct: discountPct, discountMode: discountMode, discount: discount, tpFreight: tpFreight, tax: tax, structureFreight: structureFreight, matsFreight: matsFreight, stdFreight: stdFreight, total: total, deposit: deposit, groups: groups, weight: weight,
       revenue: revenue, cogs: cogs, margin: revenue - cogs, marginPct: revenue ? Math.round(((revenue - cogs) / revenue) * 1000) / 10 : 0 };
   }
   // subtotal + cost per GROUP line index, for inline display in the builder
@@ -4811,10 +4843,17 @@
       // totals
       '<div class="card" style="margin-top:16px;max-width:390px;margin-left:auto;">' +
         '<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:14px;"><span class="muted">Subtotal</span><span>' + fmtUsd(t.subtotal) + '</span></div>' +
-        '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:14px;"><span class="muted">Discount %</span><input id="mDisc" style="width:80px;padding:5px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;" value="' + esc(pb.meta.discountPct) + '"></div>' +
-        (t.discount ? '<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:14px;color:#9c3327;"><span>Discount (' + t.discountPct + '%)</span><span>− ' + fmtMoney(t.discount, 'USD') + '</span></div>' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:4px 0;font-size:14px;"><span class="muted">Discount</span>' +
+          '<div style="display:flex;align-items:center;gap:6px;">' +
+            '<select id="mDiscMode" style="padding:5px 6px;border:1px solid #dcded7;border-radius:7px;font-size:13px;">' +
+              '<option value="PCT"' + (pb.meta.discountMode === 'AMT' ? '' : ' selected') + '>%</option>' +
+              '<option value="AMT"' + (pb.meta.discountMode === 'AMT' ? ' selected' : '') + '>$</option>' +
+            '</select>' +
+            '<input id="mDisc" style="width:80px;padding:5px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;" value="' + esc(pb.meta.discountMode === 'AMT' ? ((Number(pb.meta.discountAmountMinor) || 0) / 100).toFixed(2) : pb.meta.discountPct) + '">' +
+          '</div></div>' +
+        (t.discount ? '<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:14px;color:#9c3327;"><span>' + discountLabel(t) + '</span><span>− ' + fmtMoney(t.discount, 'USD') + '</span></div>' +
           '<div style="font-size:11px;color:#8a8f85;text-align:right;margin-bottom:2px;">Discount expires ' + (pb.meta.expiration ? fmtDate(pb.meta.expiration) : 'with the proposal') + '</div>' : '') +
-        optionalAmountRow('Tax $', 'mTax', pb.meta.taxAmountMinor, 'mTaxTbd', pb.meta.tbdTax) +
+        optionalAmountRow('Mat Freight Tax Pass-Through', 'mTax', pb.meta.taxAmountMinor, 'mTaxTbd', pb.meta.tbdTax) +
         // Crating and freight are quoted by the desk against a real shipment. A mock has
         // no shipment, so it quotes product retail and says so rather than showing $0.
         (isMock() ? '' :
@@ -5742,7 +5781,21 @@
         el.addEventListener('change', upd);
       }
     });
-    var mdisc = document.getElementById('mDisc'); if (mdisc) mdisc.addEventListener('change', function () { pb.meta.discountPct = parseFloat(mdisc.value) || 0; renderBuilderKeepingFocus(); });
+    var mdisc = document.getElementById('mDisc');
+    if (mdisc) mdisc.addEventListener('change', function () {
+      var v = parseFloat(String(mdisc.value).replace(/[$,]/g, '')) || 0;
+      // Whichever field is not in play is zeroed, so a mode switch can never leave
+      // a stale figure behind that a later switch would silently resurrect.
+      if (pb.meta.discountMode === 'AMT') { pb.meta.discountAmountMinor = Math.round(v * 100); pb.meta.discountPct = 0; }
+      else { pb.meta.discountPct = v; pb.meta.discountAmountMinor = 0; }
+      renderBuilderKeepingFocus();
+    });
+    var mdiscMode = document.getElementById('mDiscMode');
+    if (mdiscMode) mdiscMode.addEventListener('change', function () {
+      pb.meta.discountMode = mdiscMode.value === 'AMT' ? 'AMT' : 'PCT';
+      pb.meta.discountPct = 0; pb.meta.discountAmountMinor = 0;
+      renderBuilderKeepingFocus();
+    });
     var msf = document.getElementById('mStructFreight'); if (msf) msf.addEventListener('change', function () { pb.meta.structureFreightMinor = d2m(msf.value); renderBuilderKeepingFocus(); });
     var mmf = document.getElementById('mMatsFreight'); if (mmf) mmf.addEventListener('change', function () { pb.meta.matsFreightMinor = d2m(mmf.value); pb.meta.matsFreightTouched = true; renderBuilderKeepingFocus(); });
     // Standard Freight. The amount commits on blur rather than per keystroke: the box
@@ -6016,7 +6069,7 @@
       fieldRow('Description (optional)', '<input id="tplDesc" style="' + IN + '">'),
       async function (close, showErr) {
         var name = document.getElementById('tplName').value.trim(); if (!name) return showErr('Give the template a name.');
-        var data = { title: pb.title, meta: { taxAmountMinor: pb.meta.taxAmountMinor, discountPct: pb.meta.discountPct, structureFreightMinor: pb.meta.structureFreightMinor, matsFreightMinor: pb.meta.matsFreightMinor, stdFreightOn: !!pb.meta.stdFreightOn, stdFreightMinor: pb.meta.stdFreightMinor || 0, shipTo: '', projectId: '', expiration: '' }, lines: pb.lines.map(function (l) { return { lineType: l.lineType, kind: l.kind, productId: l.productId, sku: l.sku || '', name: l.name, description: l.description, quantity: l.quantity, rateMinor: l.rateMinor, group: l.group || '', optional: !!l.optional, delivery: l.delivery || '', returnable: l.returnable || '', addlFreight: l.addlFreight || '', freightCalc: l.freightCalc || '', tpFreightMinor: l.tpFreightMinor || 0, tpFreightLabel: l.tpFreightLabel || '' }; }) };
+        var data = { title: pb.title, meta: { taxAmountMinor: pb.meta.taxAmountMinor, discountPct: pb.meta.discountPct, discountMode: pb.meta.discountMode === 'AMT' ? 'AMT' : 'PCT', discountAmountMinor: pb.meta.discountAmountMinor || 0, structureFreightMinor: pb.meta.structureFreightMinor, matsFreightMinor: pb.meta.matsFreightMinor, stdFreightOn: !!pb.meta.stdFreightOn, stdFreightMinor: pb.meta.stdFreightMinor || 0, shipTo: '', projectId: '', expiration: '' }, lines: pb.lines.map(function (l) { return { lineType: l.lineType, kind: l.kind, productId: l.productId, sku: l.sku || '', name: l.name, description: l.description, quantity: l.quantity, rateMinor: l.rateMinor, group: l.group || '', optional: !!l.optional, delivery: l.delivery || '', returnable: l.returnable || '', addlFreight: l.addlFreight || '', freightCalc: l.freightCalc || '', tpFreightMinor: l.tpFreightMinor || 0, tpFreightLabel: l.tpFreightLabel || '' }; }) };
         var r = await authed('/proposal-templates', { method: 'POST', body: { name: name, description: document.getElementById('tplDesc').value.trim() || undefined, data: data } });
         if (!r.ok) return showErr('Could not save template (' + r.status + ').');
         close();
@@ -6060,7 +6113,7 @@
     var lines = (version.items || []);
     var subtotal = 0, weight = 0; lines.forEach(function (l) { if ((l.lineType || 'PRODUCT') === 'PRODUCT') { subtotal += (Number(l.quantity) || 0) * (Number(l.rateMinor) || 0); weight += (Number(l.quantity) || 0) * (Number(l.weightEach) || 0); } });
     var tpFreight = 0; lines.forEach(function (l) { if ((l.lineType || 'PRODUCT') === 'PRODUCT') tpFreight += Number(l.tpFreightMinor) || 0; });
-    var discountPct = Number(meta.discountPct) || 0; var discount = Math.round(subtotal * discountPct / 100);
+    var disc = discountOf(meta, subtotal); var discountPct = disc.pct, discountMode = disc.mode, discount = disc.amount;
     var tax = metaAmount(meta.taxAmountMinor, meta.tbdTax);
     var structureFreight = metaAmount(meta.structureFreightMinor != null ? meta.structureFreightMinor : meta.freightMinor, meta.tbdStructureFreight);
     var matsFreight = metaAmount(meta.matsFreightMinor, meta.tbdMatsFreight);
@@ -6070,7 +6123,7 @@
       title: proposal.title, number: proposal.number, version: version.version || 1,
       orgName: orgName, meta: meta, lines: lines,
       totals: {
-        subtotal: subtotal, discountPct: discountPct, discount: discount, tpFreight: tpFreight,
+        subtotal: subtotal, discountPct: discountPct, discountMode: discountMode, discount: discount, tpFreight: tpFreight,
         tax: tax, structureFreight: structureFreight, matsFreight: matsFreight, stdFreight: stdFreight,
         total: total, deposit: depositOf(total), weight: weight,
       },
@@ -6210,10 +6263,10 @@
         '<table style="width:100%;border-collapse:collapse;font-size:11px;"><thead><tr style="color:#8a8f85;font-size:10px;text-transform:uppercase;letter-spacing:.04em;"><th style="text-align:left;padding:6px 8px;border-bottom:2px solid #3d4a55;">Activity / Description</th><th style="text-align:left;padding:6px 8px;border-bottom:2px solid #3d4a55;width:90px;">SKU</th><th style="text-align:center;padding:6px 8px;border-bottom:2px solid #3d4a55;width:44px;">Qty</th><th style="text-align:right;padding:6px 8px;border-bottom:2px solid #3d4a55;width:84px;">Rate</th><th style="text-align:right;padding:6px 8px;border-bottom:2px solid #3d4a55;width:94px;">Amount</th></tr></thead><tbody>' + body + '</tbody></table>' +
         '<div style="display:flex;justify-content:flex-end;margin-top:16px;break-inside:avoid;"><div style="min-width:260px;">' +
           '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Subtotal</span><span>' + fmtUsd(t.subtotal) + '</span></div>' +
-          (t.discount ? '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;color:#9c3327;"><span>Discount (' + t.discountPct + '%)</span><span>− ' + fmtUsd(t.discount) + '</span></div>' +
+          (t.discount ? '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;color:#9c3327;"><span>' + discountLabel(t) + '</span><span>− ' + fmtUsd(t.discount) + '</span></div>' +
             '<div style="padding:0 8px 3px;font-size:10px;color:#8a8f85;text-align:right;">Discount expires ' + (m.expiration ? fmtDate(m.expiration) : 'with this proposal') + '</div>' : '') +
           (t.tpFreight ? '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Third-Party Freight</span><span>' + fmtUsd(t.tpFreight) + '</span></div>' : '') +
-          '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Tax</span><span>' + cellTax + '</span></div>' +
+          '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Mat Freight Tax Pass-Through</span><span>' + cellTax + '</span></div>' +
           '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Structure Crating &amp; Freight</span><span>' + cellStructureFreight + '</span></div>' +
           '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Mats &amp; Padding Freight</span><span>' + cellMatsFreight + '</span></div>' +
           // Standard Freight is opt-in: unticked, the customer never sees the line.

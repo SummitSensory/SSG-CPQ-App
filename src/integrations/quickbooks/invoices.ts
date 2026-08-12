@@ -1,5 +1,6 @@
 import { minorToQboAmount, formatMinor, toSalesLines, type AcceptedLine } from './mapping.js';
 import { sumLineAmounts } from './estimates.js';
+import { chargeDetail, feeChargeKind } from './chargeItems.js';
 
 /**
  * Pure QuickBooks Invoice body builder.
@@ -12,6 +13,9 @@ import { sumLineAmounts } from './estimates.js';
  * As with the estimate, the assembled line total is asserted against the frozen
  * accepted grand total and throws on mismatch, so an invoice can never bill an
  * amount the customer did not accept.
+ *
+ * Fee, discount and tax rows carry an ItemRef from chargeItems.ts — see the note
+ * in estimates.ts for why.
  */
 export interface InvoiceInput {
   customerQboId: string;
@@ -95,7 +99,7 @@ export function buildInvoiceBody(input: InvoiceInput): Record<string, unknown> {
       DetailType: 'SalesItemLineDetail',
       Amount: minorToQboAmount(fee.amountMinor),
       Description: fee.label,
-      SalesItemLineDetail: { Qty: 1 },
+      SalesItemLineDetail: chargeDetail(feeChargeKind(fee.label)),
     });
   }
 
@@ -104,16 +108,17 @@ export function buildInvoiceBody(input: InvoiceInput): Record<string, unknown> {
       DetailType: 'SalesItemLineDetail',
       Amount: minorToQboAmount(-input.orderDiscountMinor),
       Description: 'Order discount (per accepted proposal)',
-      SalesItemLineDetail: { Qty: 1 },
+      SalesItemLineDetail: chargeDetail('DISCOUNT'),
     });
   }
 
   if (input.taxMinor > 0n) {
+    // Freight tax pass-through, not sales tax — see chargeItems.ts.
     lines.push({
       DetailType: 'SalesItemLineDetail',
       Amount: minorToQboAmount(input.taxMinor),
-      Description: 'Sales tax (per accepted proposal)',
-      SalesItemLineDetail: { Qty: 1 },
+      Description: 'Crating & freight tax (per accepted proposal)',
+      SalesItemLineDetail: chargeDetail('FREIGHT_TAX'),
     });
   }
 
@@ -175,7 +180,7 @@ export function buildPortionInvoiceBody(input: PortionInvoiceInput): Record<stri
         DetailType: 'SalesItemLineDetail',
         Amount: minorToQboAmount(input.amountMinor),
         Description: input.description,
-        SalesItemLineDetail: { Qty: 1 },
+        SalesItemLineDetail: chargeDetail('DEPOSIT'),
       },
     ],
   };
