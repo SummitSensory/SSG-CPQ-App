@@ -17,6 +17,7 @@ import { buildInvoiceBody, buildPortionInvoiceBody } from './invoices.js';
 import { TXN_LABEL, type AcceptedLine } from './mapping.js';
 import { findLink } from './links.js';
 import { assertSkusMapped } from './skuPreflight.js';
+import { resolveSynthesizedItemId } from './synthesizedItems.js';
 import { resolveTermForProposal } from './terms.js';
 import type { QboTxnType, QboTxnStatus, QboEnvironment, Prisma } from '@prisma/client';
 
@@ -193,12 +194,17 @@ async function fromProposalBuilder(
     const link =
       (productId ? await findLink({ entity: 'Item', entityId: productId }) : null) ??
       (sku ? await findLink({ entity: 'ItemSku', entityId: sku }) : null);
+    // Third fallback, for lines the engine synthesizes: every Adventure mat SIZE
+    // generates its own R-SSG-…CLM part number, so no catalog row and no link can
+    // ever match it. One QuickBooks item stands for the family — see
+    // synthesizedItems.ts. Tried last, so a real link always wins.
+    const qboItemId = link?.qboId ?? (sku ? resolveSynthesizedItemId(sku) : null);
     const name = String(it.name ?? it.sku ?? 'Line item');
     const detail = String(it.description ?? '').trim();
     lines.push({
       kind: 'PRODUCT',
       description: detail ? `${name} — ${detail}` : name,
-      qboItemId: link?.qboId ?? null,
+      qboItemId,
       sku: sku || null,
       productId,
       quantity: qty || 1,
