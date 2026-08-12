@@ -60,6 +60,24 @@ interface SnapshotHead {
   engineVersion: string;
 }
 
+/**
+ * The QuickBooks item id linked to the catalog product carrying this part number.
+ *
+ * Generated lines (the H-1000 hardware rollup, frame parts) name a part but carry no
+ * productId, so the ordinary product-id lookup misses a link that plainly exists.
+ * Matching is case-insensitive because line part numbers are upper-cased on the way
+ * in while the catalog stores them as entered.
+ */
+async function linkForProductSku(sku: string): Promise<string | null> {
+  const product = await prisma.product.findFirst({
+    where: { sku: { equals: sku, mode: 'insensitive' } },
+    select: { id: true },
+  });
+  if (!product) return null;
+  const link = await findLink({ entity: 'Item', entityId: product.id });
+  return link?.qboId ?? null;
+}
+
 /** Read + freeze the accepted proposal totals. Throws unless the version is ACCEPTED. */
 export async function loadAcceptedTotals(proposalVersionId: string): Promise<AcceptedTotals> {
   const version = await prisma.proposalVersion.findUnique({ where: { id: proposalVersionId } });
@@ -194,11 +212,24 @@ async function fromProposalBuilder(
     const link =
       (productId ? await findLink({ entity: 'Item', entityId: productId }) : null) ??
       (sku ? await findLink({ entity: 'ItemSku', entityId: sku }) : null);
-    // Third fallback, for lines the engine synthesizes: every Adventure mat SIZE
-    // generates its own R-SSG-…CLM part number, so no catalog row and no link can
-    // ever match it. One QuickBooks item stands for the family — see
-    // synthesizedItems.ts. Tried last, so a real link always wins.
-    const qboItemId = link?.qboId ?? (sku ? resolveSynthesizedItemId(sku) : null);
+    /**
+     * Third: the line carries a part number but no productId, and the part IS a real
+     * catalog product.
+     *
+     * The hardware rollup is the case that matters. H-1000 is an ACTIVE product with
+     * a QuickBooks item linked to it, but the engine synthesizes the rollup line
+     * rather than reading the catalog, so the line arrives with sku "H-1000" and
+     * productId null — and the product-id lookup above has nothing to look up. This
+     * resolves the part number to its catalog product and uses that product's link.
+     */
+    const skuProductLink = !link && sku ? await linkForProductSku(sku) : null;
+    /**
+     * Fourth, for lines the engine synthesizes out of nothing: every Adventure mat
+     * SIZE generates its own R-SSG-…CLM part number, so no catalog row and no link
+     * can ever match it. One QuickBooks item stands for the family — see
+     * synthesizedItems.ts. Tried last, so a real link always wins.
+     */
+    const qboItemId = link?.qboId ?? skuProductLink ?? (sku ? resolveSynthesizedItemId(sku) : null);
     const name = String(it.name ?? it.sku ?? 'Line item');
     const detail = String(it.description ?? '').trim();
     lines.push({
