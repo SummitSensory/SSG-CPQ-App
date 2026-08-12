@@ -222,21 +222,19 @@ function pricedDetail(l: AcceptedLine): Record<string, unknown> {
 /**
  * The description printed under a product line.
  *
- * QuickBooks renders the linked item's NAME on the line already. Sending the
- * proposal's own `name — detail` string as the description therefore printed the
- * name a second time, immediately below itself, on every line of the document.
- * So the description carries only what the item name does not: the part number,
- * and the line's detail text where it says something different.
+ * QuickBooks prints the linked item's NAME on the line and its SKU in the SKU
+ * column, both read off the ItemRef. Sending the proposal's own `name — detail`
+ * string as the description therefore printed the name a second time, directly
+ * below itself, on every line. So the description carries the line's detail text
+ * and nothing else — the second line of the invoice's activity row.
  *
  * A line with no ItemRef has no item name to lean on, so it keeps its full
  * description — otherwise it would print as a bare amount.
  */
 function productDescription(l: AcceptedLine): string | undefined {
-  const sku = (l.sku ?? '').trim();
-  const detail = (l.detail ?? '').trim();
   if (!l.qboItemId) return l.description;
-  const parts = [sku, detail].filter(Boolean);
-  return parts.length ? parts.join(' — ') : undefined;
+  const detail = (l.detail ?? '').trim();
+  return detail || undefined;
 }
 
 /**
@@ -323,6 +321,25 @@ export function toSalesLines(
   }
   closeSection();
   return out;
+}
+
+/**
+ * The document's Project ID custom field.
+ *
+ * QuickBooks prints custom fields in the header block — the PROJECT ID slot on
+ * SSG's invoice style. They are POSITIONAL: QuickBooks matches on DefinitionId,
+ * the slot number, not on the name, so the caller resolves the slot first (see
+ * customFields.ts) and passes it in. With no slot or no project id, nothing is
+ * sent and the field simply does not print.
+ */
+export function projectCustomField(
+  projectId?: string | null,
+  definitionId?: string | null,
+): Array<Record<string, unknown>> {
+  const value = String(projectId ?? '').trim();
+  const slot = String(definitionId ?? '').trim();
+  if (!value || !slot) return [];
+  return [{ DefinitionId: slot, Name: 'Project ID', Type: 'StringType', StringValue: value }];
 }
 
 export const TXN_LABEL: Record<QboTxnType, string> = {
