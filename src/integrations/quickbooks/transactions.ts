@@ -19,6 +19,7 @@ import { findLink } from './links.js';
 import { assertSkusMapped } from './skuPreflight.js';
 import { resolveSynthesizedItemId } from './synthesizedItems.js';
 import { resolveTermForProposal } from './terms.js';
+import { customFieldId } from './customFields.js';
 import type { QboTxnType, QboTxnStatus, QboEnvironment, Prisma } from '@prisma/client';
 
 /**
@@ -235,6 +236,10 @@ async function fromProposalBuilder(
     lines.push({
       kind: 'PRODUCT',
       description: detail ? `${name} — ${detail}` : name,
+      // Kept apart from `description` so the QuickBooks builder can print the
+      // part number and the detail WITHOUT repeating the item name QuickBooks
+      // already prints from the ItemRef.
+      detail: detail || null,
       qboItemId,
       sku: sku || null,
       productId,
@@ -313,6 +318,21 @@ function sequenceOf(idempotencyKey: string): number {
 function docNumberFor(proposalNumber: string, type: QboTxnType, seq: number): string {
   const base = `${proposalNumber}${DOC_SUFFIX[type]}`;
   return seq > 1 ? `${base}-${seq}` : base;
+}
+
+/**
+ * The monday.com Project ID off a proposal version's `meta` section.
+ *
+ * It is the number the shop, the freight desk and the customer all use to talk
+ * about a job, so it belongs on the QuickBooks document. Stored in the same
+ * sections blob the builder writes, hence the defensive read.
+ */
+function projectIdOf(sections: unknown): string {
+  if (!Array.isArray(sections)) return '';
+  const meta = sections.find(
+    (s) => s && typeof s === 'object' && (s as { id?: string }).id === 'meta',
+  ) as { data?: { projectId?: unknown } } | undefined;
+  return String(meta?.data?.projectId ?? '').trim();
 }
 
 /** QuickBooks date fields are plain yyyy-mm-dd. */
@@ -518,7 +538,29 @@ export async function executeTransaction(
       sequenceOf(txn.idempotencyKey),
     );
 
-    const memo = `Per accepted proposal ${version.proposal.number} v${txn.proposalVersion}`;
+    const projectId = projectIdOf(version.sections);
+    // The custom field's slot number is read from company preferences, not
+    // guessed — see customFields.ts. Env var overrides it if ever needed.
+    const projectFieldId = projectId
+      ? await customFieldId(
+          realmId,
+          'Project ID',
+          process.env.QBO_CUSTOM_FIELD_ID_PROJECT,
+          fetchImpl,
+        )
+      : null;
+    const memo = [
+      // Fallback when the Project ID cannot be written to a custom field. QuickBooks'
+      // v3 API can only populate the three LEGACY sales-form custom fields; the
+      // newer Custom Fields feature (Settings → Custom fields, with per-form "Print
+      // on form" toggles) is not writable through the API at all. Where that is the
+      // case the slot lookup returns null, and the Project ID would silently vanish
+      // — so it goes into the memo instead, which always prints.
+      projectId && !projectFieldId ? `Project ID ${projectId}` : null,
+      `Per accepted proposal ${version.proposal.number} v${txn.proposalVersion}`,
+    ]
+      .filter(Boolean)
+      .join('  ·  ');
     // Invoice date is today in QuickBooks terms; sent explicitly so the due date
     // can be pinned to it when no payment term governs.
     const txnDate = new Date().toISOString().slice(0, 10);
@@ -533,6 +575,8 @@ export async function executeTransaction(
         billEmail,
         expirationDate: toQboDate(version.expirationDate),
         memo,
+        projectId,
+        projectFieldId,
         lines: totals.lines,
         fees: totals.fees,
         orderDiscountMinor: totals.orderDiscountMinor,
@@ -552,6 +596,8 @@ export async function executeTransaction(
         docNumber,
         billEmail,
         memo,
+        projectId,
+        projectFieldId,
         lines: totals.lines,
         fees: totals.fees,
         orderDiscountMinor: totals.orderDiscountMinor,

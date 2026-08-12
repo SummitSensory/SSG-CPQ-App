@@ -84,7 +84,11 @@ function customerFields(src: CustomerSource): Record<string, unknown> {
   };
   if (src.contactFirstName) body.GivenName = src.contactFirstName;
   if (src.contactLastName) body.FamilyName = src.contactLastName;
-  if (src.contactTitle) body.Title = src.contactTitle;
+  // Title is deliberately NOT sent. QuickBooks' Title field is a name PREFIX
+  // (Mr., Ms., Dr.) and it prints immediately before the first name. The CRM's
+  // contactTitle is a job title — "Director of Operations" — so sending it
+  // rendered customers as "Director of Operations Jane Smith". The job title has
+  // no equivalent field on a QuickBooks customer; it stays in the CRM.
   if (src.email) body.PrimaryEmailAddr = { Address: src.email };
   if (src.phone) body.PrimaryPhone = { FreeFormNumber: src.phone };
 
