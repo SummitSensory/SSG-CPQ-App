@@ -38,6 +38,13 @@ const NO_STORE = 'no-store, no-cache, must-revalidate, max-age=0';
 /** Icons are content-addressed by filename and change only on a rebrand. */
 const IMMUTABLE = 'public, max-age=604800';
 
+/**
+ * Legal and integration pages change rarely but must never serve stale for long:
+ * Intuit's reviewers fetch them, and a policy correction needs to be visible the
+ * same day it ships.
+ */
+const PUBLIC_PAGE = 'public, max-age=3600';
+
 /** Every static image the shell references. Anything not listed here 404s. */
 const IMAGES = [
   'logo.png',
@@ -48,11 +55,39 @@ const IMAGES = [
   'apple-touch-icon.png',
 ];
 
+/**
+ * Pages that must be reachable WITHOUT signing in.
+ *
+ * Intuit requires a public EULA and privacy policy before it will issue
+ * production keys, and its reviewers open the connect and disconnect URLs while
+ * signed out. Anything behind the auth wall reads to them as a broken link, so
+ * these are plain static files served outside it.
+ *
+ * They are also the URLs registered in the Intuit developer portal — changing a
+ * path here means changing it there too.
+ */
+const PUBLIC_PAGES: Array<{ route: string; file: string }> = [
+  { route: '/legal/privacy', file: 'legal-privacy.html' },
+  { route: '/legal/eula', file: 'legal-eula.html' },
+  // One page, three paths. Intuit's portal wants a distinct URL per field and
+  // rejects a Connect value that duplicates Disconnect, but the instructions a
+  // user needs are the same either way — so both land on the same page rather
+  // than on two near-identical ones that would drift apart.
+  { route: '/quickbooks', file: 'quickbooks.html' },
+  { route: '/quickbooks/connect', file: 'quickbooks.html' },
+  { route: '/quickbooks/disconnect', file: 'quickbooks.html' },
+];
+
 export function registerWebRoutes(app: FastifyInstance): void {
   app.get('/', async (_req, reply) =>
     reply.type('text/html; charset=utf-8').header('Cache-Control', NO_STORE).send(file('index.html')));
   app.get('/app.js', async (_req, reply) =>
     reply.type('text/javascript; charset=utf-8').header('Cache-Control', NO_STORE).send(file('app.js')));
+
+  for (const page of PUBLIC_PAGES) {
+    app.get(page.route, async (_req, reply) =>
+      reply.type('text/html; charset=utf-8').header('Cache-Control', PUBLIC_PAGE).send(file(page.file)));
+  }
 
   for (const name of IMAGES) {
     app.get(`/${name}`, async (_req, reply) =>

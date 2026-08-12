@@ -13,6 +13,7 @@ import {
   compareProposalVersions,
   discardDraftVersion,
   renameProposalForVersion,
+  priceEntryStatus,
 } from '../proposals/service.js';
 import { snapshotAcceptedContent } from '../handoff/service.js';
 import {
@@ -39,6 +40,12 @@ const ItemSchema = z.object({
   kind: z.enum(['INCLUDED', 'OPTIONAL', 'ALTERNATE']),
   quantity: z.number().int().positive(),
   alternateForRef: z.string().optional(),
+  // Unit price in minor units. Nullable and optional on purpose: absent means the
+  // line is still awaiting a price, which is a different state from 0. The gate in
+  // changeStatus is what enforces an answer before the proposal goes out.
+  rateMinor: z.number().int().nullish(),
+  // Why a line is $0.00. Required by the gate whenever rateMinor is 0.
+  priceNote: z.string().trim().max(200).nullish(),
 });
 const CreateSchema = z.object({
   organizationId: z.string().min(1),
@@ -126,6 +133,16 @@ export function registerProposalRoutes(app: FastifyInstance): void {
     };
   });
 
+  /**
+   * Which lines still need a price. The builder calls this as the proposal is
+   * written so the rows can be badged in place — the hard stop at release should
+   * never be the first anyone hears of an unpriced line.
+   */
+  app.get('/proposals/versions/:versionId/price-check', read, async (req) => {
+    const { versionId } = req.params as { versionId: string };
+    return priceEntryStatus(versionId);
+  });
+
   app.patch('/proposals/versions/:versionId', write, async (req) => {
     const { versionId } = req.params as { versionId: string };
     const body = req.body as {
@@ -152,7 +169,9 @@ export function registerProposalRoutes(app: FastifyInstance): void {
       },
       req.user!.sub,
     );
-    return { ok: true };
+    // Saving never blocks — an unpriced line is a normal state mid-build. The audit
+    // rides back on the save so the builder can badge the rows without a second call.
+    return { ok: true, priceEntry: await priceEntryStatus(versionId) };
   });
 
   // New version — the ONLY way to change a released proposal.
@@ -217,17 +236,25 @@ export function registerProposalRoutes(app: FastifyInstance): void {
 
     return cats
       .filter((c) => !c.product || c.product.status === 'ACTIVE')
-      .map((c) => ({
-        slug: c.slug,
-        name: c.name,
-        tierLevel: c.tierLevel,
-        parentSlug: c.parentId ? (slugOf.get(c.parentId) ?? null) : null,
-        sortOrder: c.sortOrder,
-        sku: c.product?.sku ?? null,
-        unitPriceMinor: c.product?.sku ? (priceBySku.get(c.product.sku) ?? 0) : null,
-        weightOz: c.product?.weightOz ?? null,
-        defaultQuantity: c.defaultQuantity ?? c.product?.defaultQuantity ?? null,
-      }));
+      .map((c) => {
+        const sku = c.product?.sku ?? null;
+        // null, not 0, when the part has no price on record: the builder copies this
+        // straight onto the line, and a 0 here would look like a decision nobody made.
+        const priced = sku ? priceBySku.get(sku) : undefined;
+        return {
+          slug: c.slug,
+          name: c.name,
+          tierLevel: c.tierLevel,
+          parentSlug: c.parentId ? (slugOf.get(c.parentId) ?? null) : null,
+          sortOrder: c.sortOrder,
+          sku,
+          unitPriceMinor: priced ?? null,
+          /** True when this part is priced per proposal — the builder prompts for a rate. */
+          requiresPriceEntry: !!sku && priced == null,
+          weightOz: c.product?.weightOz ?? null,
+          defaultQuantity: c.defaultQuantity ?? c.product?.defaultQuantity ?? null,
+        };
+      });
   });
 
   // Status transitions, permission-gated by target.
@@ -240,15 +267,24 @@ export function registerProposalRoutes(app: FastifyInstance): void {
     return discardDraftVersion(versionId, req.user!.sub);
   });
 
+  /**
+   * Submit for review. Unpriced lines do not block here — they come back as
+   * warnings, and are recorded on the status timeline so the reviewer sees the
+   * proposal arrived incomplete.
+   */
   app.post('/proposals/versions/:versionId/submit-review', write, async (req) => {
     const { versionId } = req.params as { versionId: string };
-    await changeStatus(
+    const result = await changeStatus(
       versionId,
       'INTERNAL_REVIEW',
       req.user!.sub,
       (req.body as { note?: string })?.note,
     );
-    return { status: 'INTERNAL_REVIEW' };
+    return {
+      status: 'INTERNAL_REVIEW',
+      warnings: result.warnings,
+      priceEntry: result.priceEntry,
+    };
   });
   app.post('/proposals/versions/:versionId/return-draft', review, async (req) => {
     const { versionId } = req.params as { versionId: string };
@@ -266,6 +302,8 @@ export function registerProposalRoutes(app: FastifyInstance): void {
       where: { id: versionId },
       select: { priceSnapshotId: true, sections: true, items: true },
     });
+    // Throws before anything is written when a line is still unpriced, or is $0.00
+    // with no reason given — the proposal stays exactly as it was.
     await changeStatus(versionId, 'RELEASED', req.user!.sub, body.note);
     // A released version is the price of record from here on, so it gets a
     // PriceSnapshot at release time rather than waiting for acceptance — but never

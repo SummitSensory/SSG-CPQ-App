@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QuickBooks Connection · Summit Sensory Gym CPQ</title>
+<meta name="description" content="How the Summit Sensory Gym CPQ application connects to and disconnects from QuickBooks Online.">
+<link rel="icon" href="/favicon-32.png" sizes="32x32">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,500;6..72,600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;}
+  html,body{margin:0;}
+  body{font-family:'IBM Plex Sans',system-ui,sans-serif;color:#20241f;background:#f4f5f2;-webkit-font-smoothing:antialiased;line-height:1.65;}
+  a{color:#3d4a55;}a:hover{color:#2c353d;}
+  .wrap{max-width:720px;margin:0 auto;padding:52px 24px 96px;}
+  header{border-bottom:1px solid #e7e8e3;padding-bottom:22px;margin-bottom:34px;}
+  .brand{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:#8a8f85;}
+  h1{font-family:'Newsreader',Georgia,serif;font-weight:600;font-size:32px;margin:10px 0 0;letter-spacing:-.01em;}
+  h2{font-family:'Newsreader',Georgia,serif;font-weight:600;font-size:20px;margin:36px 0 10px;}
+  p{margin:0 0 13px;text-wrap:pretty;}
+  ol,ul{margin:0 0 13px;padding-left:20px;}
+  li{margin-bottom:7px;text-wrap:pretty;}
+  .card{background:#fbfbf9;border:1px solid #e7e8e3;border-radius:12px;padding:18px 20px;margin:22px 0;}
+  .card p:last-child{margin-bottom:0;}
+  .btn{display:inline-block;background:#3d4a55;color:#fff;text-decoration:none;padding:11px 20px;border-radius:9px;font-size:14px;font-weight:600;margin-top:4px;}
+  .btn:hover{background:#2c353d;color:#fff;}
+  footer{border-top:1px solid #e7e8e3;margin-top:48px;padding-top:20px;font-size:12.5px;color:#8a8f85;display:flex;gap:18px;flex-wrap:wrap;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="brand">Summit Sensory Gym</div>
+  <h1>QuickBooks Connection</h1>
+</header>
+
+<p>The Summit Sensory Gym CPQ application connects to Summit Sensory Gym&rsquo;s own QuickBooks Online company so that accepted proposals can be raised as estimates and invoices without being re-keyed.</p>
+
+<div class="card">
+  <p>This is internal business software. It connects to one QuickBooks company — our own — and is not used to access any customer&rsquo;s QuickBooks data. Accounts are issued by an administrator; there is no public sign-up.</p>
+</div>
+
+<h2>Connecting or reconnecting</h2>
+<p>Connecting requires an administrator account in the Application.</p>
+<ol>
+  <li>Sign in at <a href="/">crm.summitsensory.com</a>.</li>
+  <li>Go to <strong>Administration &rarr; Integrations</strong>.</li>
+  <li>Choose <strong>Connect QuickBooks</strong>. You will be sent to Intuit to sign in and authorize the connection.</li>
+  <li>Approve access. Intuit returns you to the Application and the connection is confirmed on screen.</li>
+</ol>
+<p>Reconnecting follows the same steps. It is needed if the authorization was revoked, if it expired through disuse, or when moving between QuickBooks companies.</p>
+
+<p><a class="btn" href="/">Open the application</a></p>
+
+<h2>Disconnecting</h2>
+<p>You can end the connection from either side. Both take effect immediately.</p>
+
+<p><strong>From the Application:</strong> sign in as an administrator, go to <strong>Administration &rarr; Integrations</strong>, and choose <strong>Disconnect</strong>. The stored authorization is revoked and deleted.</p>
+
+<p><strong>From QuickBooks:</strong> in QuickBooks Online, open <strong>Settings &rarr; Apps</strong> (or Manage your apps), find Summit Sensory Gym CPQ, and disconnect it there.</p>
+
+<p>After disconnecting, the Application can no longer read from or write to QuickBooks. Estimates and invoices already created in QuickBooks remain in your books and are unaffected; proposals and orders in the Application remain intact and simply stop syncing.</p>
+
+<h2>What the connection accesses</h2>
+<p>The Application sends customer names and addresses, product and service names and SKUs, and the line items and totals of accepted proposals. It reads back document numbers, payment status and outstanding balances for reconciliation only. Nothing read from QuickBooks overwrites a proposal or a price.</p>
+<p>Full detail is in our <a href="/legal/privacy">Privacy Policy</a>.</p>
+
+<h2>Help</h2>
+<p>For questions about this integration, contact <a href="mailto:info@summitsensory.com">info@summitsensory.com</a>.</p>
+
+<footer>
+  <a href="/legal/privacy">Privacy Policy</a>
+  <a href="/legal/eula">End-User License Agreement</a>
+  <a href="/">Summit Sensory Gym CPQ</a>
+</footer>
+
+</div>
+</body>
+</html>
