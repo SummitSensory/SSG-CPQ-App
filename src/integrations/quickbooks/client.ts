@@ -24,21 +24,27 @@ const MAX_REQUEST_ID = 50;
 /**
  * A requestid QuickBooks will accept, derived from our idempotency key.
  *
- * Our keys read like `qbo:PRODUCTION:ESTIMATE:<cuid>` — descriptive, and at 59
- * characters nine over the limit Intuit enforces. Truncating is not an option: the
- * distinguishing part is the id at the END, so every estimate in an environment
- * would truncate to the same string and QuickBooks would return the first document
- * ever created instead of making a new one.
+ * Our keys read like `qbo:PRODUCTION:ESTIMATE:<cuid>:1` — descriptive, and over
+ * the limit Intuit enforces. Truncating is not an option: the distinguishing part
+ * is the id at the END, so every estimate in an environment would truncate to the
+ * same string and QuickBooks would return the first document ever created instead
+ * of making a new one.
  *
  * So an over-long key is replaced by a hash of itself. Deterministic, which is the
  * only property that matters here — the same transaction retried produces the same
  * requestid, and QuickBooks still returns the original document rather than a
  * duplicate. Keys within the limit pass through unchanged, so they stay readable in
  * Intuit's own logs.
+ *
+ * The length is measured ENCODED, not raw. requestid travels as a query parameter,
+ * so each `:` in the key reaches Intuit as `%3A` — three characters, not one — and
+ * Intuit counts what it receives. A four-colon key of 49 raw characters arrives as
+ * 57 and was rejected with fault 6000 while passing a raw-length check. The hash is
+ * hex, which URL-encodes to itself, so the replacement is always within the limit.
  */
 export function qboRequestId(key: string): string {
   const k = String(key ?? '').trim();
-  if (k.length <= MAX_REQUEST_ID) return k;
+  if (encodeURIComponent(k).length <= MAX_REQUEST_ID) return k;
   return createHash('sha256').update(k).digest('hex').slice(0, MAX_REQUEST_ID);
 }
 
