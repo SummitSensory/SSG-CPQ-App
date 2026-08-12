@@ -1,4 +1,10 @@
-import { minorToQboAmount, formatMinor, toSalesLines, type AcceptedLine } from './mapping.js';
+import {
+  minorToQboAmount,
+  formatMinor,
+  toSalesLines,
+  projectCustomField,
+  type AcceptedLine,
+} from './mapping.js';
 import { sumLineAmounts } from './estimates.js';
 import { chargeDetail, feeChargeKind } from './chargeItems.js';
 
@@ -32,6 +38,10 @@ export interface InvoiceInput {
   orderDiscountMinor: bigint;
   taxMinor: bigint;
   expectedTotalMinor: bigint;
+  /** monday.com Project ID, printed in the document's PROJECT ID custom field. */
+  projectId?: string | null;
+  /** DefinitionId of that custom field, resolved from company preferences. */
+  projectFieldId?: string | null;
   /**
    * QuickBooks Term id (Settings → All lists → Terms). Optional: without it the
    * customer's default term applies, and the split is still stated on the
@@ -95,10 +105,10 @@ export function buildInvoiceBody(input: InvoiceInput): Record<string, unknown> {
 
   for (const fee of input.fees) {
     if (fee.amountMinor === 0n) continue;
+    // No Description — the charge item's own name is what prints.
     lines.push({
       DetailType: 'SalesItemLineDetail',
       Amount: minorToQboAmount(fee.amountMinor),
-      Description: fee.label,
       SalesItemLineDetail: chargeDetail(feeChargeKind(fee.label)),
     });
   }
@@ -107,7 +117,6 @@ export function buildInvoiceBody(input: InvoiceInput): Record<string, unknown> {
     lines.push({
       DetailType: 'SalesItemLineDetail',
       Amount: minorToQboAmount(-input.orderDiscountMinor),
-      Description: 'Order discount (per accepted proposal)',
       SalesItemLineDetail: chargeDetail('DISCOUNT'),
     });
   }
@@ -117,7 +126,6 @@ export function buildInvoiceBody(input: InvoiceInput): Record<string, unknown> {
     lines.push({
       DetailType: 'SalesItemLineDetail',
       Amount: minorToQboAmount(input.taxMinor),
-      Description: 'Crating & freight tax (per accepted proposal)',
       SalesItemLineDetail: chargeDetail('FREIGHT_TAX'),
     });
   }
@@ -129,21 +137,25 @@ export function buildInvoiceBody(input: InvoiceInput): Record<string, unknown> {
     );
   }
 
-  // Closing description row, added after the assertion so it can never move money.
-  if (input.schedule) {
-    const note = scheduleNote(input.schedule, input.expectedTotalMinor, input.currency);
-    if (note) lines.push({ DetailType: 'DescriptionOnly', Description: note });
-  }
+  // The payment split is carried by the QuickBooks payment term (SalesTermRef)
+  // and restated in the memo. It used to print as a closing description row,
+  // which put a long line of text in the middle of the totals block.
+  const note = input.schedule
+    ? scheduleNote(input.schedule, input.expectedTotalMinor, input.currency)
+    : null;
+  const memo = [input.memo, note].filter(Boolean).join('  ·  ');
 
+  const customField = projectCustomField(input.projectId, input.projectFieldId);
   return {
     CustomerRef: { value: input.customerQboId },
     CurrencyRef: { value: input.currency },
+    ...(customField.length ? { CustomField: customField } : {}),
     ...(input.docNumber ? { DocNumber: input.docNumber } : {}),
     ...(input.billEmail ? { BillEmail: { Address: input.billEmail } } : {}),
     ...(input.txnDate ? { TxnDate: input.txnDate } : {}),
     ...(input.dueDate ? { DueDate: input.dueDate } : {}),
     ...(input.salesTermId ? { SalesTermRef: { value: input.salesTermId } } : {}),
-    CustomerMemo: { value: input.memo },
+    CustomerMemo: { value: memo },
     Line: lines,
   };
 }

@@ -1,4 +1,9 @@
-import { minorToQboAmount, toSalesLines, type AcceptedLine } from './mapping.js';
+import {
+  minorToQboAmount,
+  toSalesLines,
+  projectCustomField,
+  type AcceptedLine,
+} from './mapping.js';
 import { chargeDetail, feeChargeKind } from './chargeItems.js';
 
 /**
@@ -32,6 +37,10 @@ export interface EstimateInput {
   orderDiscountMinor: bigint;
   taxMinor: bigint;
   expectedTotalMinor: bigint;
+  /** monday.com Project ID, printed in the document's PROJECT ID custom field. */
+  projectId?: string | null;
+  /** DefinitionId of that custom field, resolved from company preferences. */
+  projectFieldId?: string | null;
   /** Print a subtotal row under each proposal group. Default true. */
   groupSubtotals?: boolean;
 }
@@ -46,10 +55,11 @@ export function buildEstimateBody(input: EstimateInput): Record<string, unknown>
 
   for (const fee of input.fees) {
     if (fee.amountMinor === 0n) continue;
+    // No Description: the charge item's own name prints on the line, and sending
+    // our label as well printed the same thing twice.
     lines.push({
       DetailType: 'SalesItemLineDetail',
       Amount: minorToQboAmount(fee.amountMinor),
-      Description: fee.label,
       SalesItemLineDetail: chargeDetail(feeChargeKind(fee.label)),
     });
   }
@@ -61,7 +71,6 @@ export function buildEstimateBody(input: EstimateInput): Record<string, unknown>
     lines.push({
       DetailType: 'SalesItemLineDetail',
       Amount: minorToQboAmount(-input.orderDiscountMinor),
-      Description: 'Order discount (per accepted proposal)',
       SalesItemLineDetail: chargeDetail('DISCOUNT'),
     });
   }
@@ -72,7 +81,6 @@ export function buildEstimateBody(input: EstimateInput): Record<string, unknown>
     lines.push({
       DetailType: 'SalesItemLineDetail',
       Amount: minorToQboAmount(input.taxMinor),
-      Description: 'Crating & freight tax (per accepted proposal)',
       SalesItemLineDetail: chargeDetail('FREIGHT_TAX'),
     });
   }
@@ -84,9 +92,11 @@ export function buildEstimateBody(input: EstimateInput): Record<string, unknown>
     );
   }
 
+  const customField = projectCustomField(input.projectId, input.projectFieldId);
   return {
     CustomerRef: { value: input.customerQboId },
     CurrencyRef: { value: input.currency },
+    ...(customField.length ? { CustomField: customField } : {}),
     ...(input.docNumber ? { DocNumber: input.docNumber } : {}),
     ...(input.billEmail ? { BillEmail: { Address: input.billEmail } } : {}),
     ...(input.txnDate ? { TxnDate: input.txnDate } : {}),

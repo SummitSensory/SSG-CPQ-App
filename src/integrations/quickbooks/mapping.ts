@@ -152,6 +152,12 @@ export type AcceptedLineKind = 'PRODUCT' | 'GROUP' | 'SUBGROUP' | 'NOTE';
 /** A single frozen line from the accepted proposal, in minor units. */
 export interface AcceptedLine {
   description: string;
+  /**
+   * The line's own detail text, without the product name. QuickBooks already
+   * prints the linked item's name, so sending `name — detail` as the
+   * description printed the name twice on every line.
+   */
+  detail?: string | null;
   qboItemId?: string | null;
   /** Part number as it appears on the proposal line. Carried so the QuickBooks
    *  create can be blocked by name when it does not map to an item. */
@@ -206,13 +212,31 @@ function pricedDetail(l: AcceptedLine): Record<string, unknown> {
   const q = BigInt(qty);
   const absQ = q < 0n ? -q : q;
   const absAmt = l.amountMinor < 0n ? -l.amountMinor : l.amountMinor;
-  const divides = absAmt % absQ === 0n;
-  if (!divides || absQ === 1n) {
-    // A single unit — including the -1 discount row — prints at the rate that
-    // multiplies up to the amount, so qty × rate = amount holds for both signs.
-    return { Qty: qty, UnitPrice: minorToQboAmount(l.amountMinor / q) };
-  }
+  // An amount that does not divide evenly collapses to one unit at the full
+  // amount, as before. |qty| = 1 divides trivially, so the -1 discount row keeps
+  // its sign and prints at the positive rate the proposal shows.
+  if (absAmt % absQ !== 0n) return { Qty: 1, UnitPrice: minorToQboAmount(l.amountMinor) };
   return { Qty: qty, UnitPrice: minorToQboAmount(l.amountMinor / q) };
+}
+
+/**
+ * The description printed under a product line.
+ *
+ * QuickBooks renders the linked item's NAME on the line already. Sending the
+ * proposal's own `name — detail` string as the description therefore printed the
+ * name a second time, immediately below itself, on every line of the document.
+ * So the description carries only what the item name does not: the part number,
+ * and the line's detail text where it says something different.
+ *
+ * A line with no ItemRef has no item name to lean on, so it keeps its full
+ * description — otherwise it would print as a bare amount.
+ */
+function productDescription(l: AcceptedLine): string | undefined {
+  const sku = (l.sku ?? '').trim();
+  const detail = (l.detail ?? '').trim();
+  if (!l.qboItemId) return l.description;
+  const parts = [sku, detail].filter(Boolean);
+  return parts.length ? parts.join(' — ') : undefined;
 }
 
 /**
@@ -273,7 +297,9 @@ export function toSalesLines(
     }
 
     if (kind === 'SUBGROUP') {
-      out.push(descriptionLine(`  ${l.description.trim()}`));
+      // Sub-headings are dropped. On the printed QuickBooks document they read as
+      // unpriced rows interleaved with the priced ones, which made the invoice
+      // hard to follow. The group heading and its subtotal carry the structure.
       continue;
     }
 
@@ -284,10 +310,11 @@ export function toSalesLines(
 
     if (openGroup !== null) sectionHasLines = true;
 
+    const desc = productDescription(l);
     out.push({
       DetailType: 'SalesItemLineDetail',
       Amount: minorToQboAmount(l.amountMinor),
-      Description: l.description,
+      ...(desc ? { Description: desc } : {}),
       SalesItemLineDetail: {
         ...pricedDetail(l),
         ...(l.qboItemId ? { ItemRef: { value: l.qboItemId } } : {}),
