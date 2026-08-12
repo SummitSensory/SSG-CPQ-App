@@ -7,11 +7,25 @@ import { Permission } from '../authz/permissions.js';
 import { ValidationError } from '../lib/errors.js';
 import { recordAudit } from '../lib/audit.js';
 import {
-  DEFAULT_HARDWARE_RULES, HARDWARE_INPUTS, mergeRules, evaluateRules,
+  DEFAULT_HARDWARE_RULES,
+  HARDWARE_INPUTS,
+  mergeRules,
+  evaluateRules,
   type FormulaRule,
 } from '../proposals/hardwareRules.js';
-import { DEFAULT_FRAME_RULES, FRAME_INPUTS, FRAME_SHAPES, frameContext } from '../proposals/frameRules.js';
-import { FORMULA_SETTINGS, mergeSettings, defaultSettings, type FormulaSettings } from '../proposals/formulaSettings.js';
+import {
+  DEFAULT_FRAME_RULES,
+  FRAME_INPUTS,
+  FRAME_SHAPES,
+  frameContext,
+} from '../proposals/frameRules.js';
+import {
+  FORMULA_SETTINGS,
+  GUARDED_SETTING_KEYS,
+  mergeSettings,
+  defaultSettings,
+  type FormulaSettings,
+} from '../proposals/formulaSettings.js';
 import { computeAdventureBOM, type AdvAnswers } from '../proposals/adventureSeries.js';
 
 /**
@@ -52,7 +66,8 @@ const RuleSchema = z.object({
   note: z.string().max(500).nullable().optional(),
 });
 
-const defaultsFor = (kind: Kind): FormulaRule[] => (kind === 'FRAME' ? DEFAULT_FRAME_RULES : DEFAULT_HARDWARE_RULES);
+const defaultsFor = (kind: Kind): FormulaRule[] =>
+  kind === 'FRAME' ? DEFAULT_FRAME_RULES : DEFAULT_HARDWARE_RULES;
 
 /** Calculations that are a lookup or a code path, not an editable coefficient. */
 const IN_CODE = [
@@ -81,6 +96,12 @@ const IN_CODE = [
     why: 'The order of operations is fixed; the editable parts (deposit %, discount, freight, tax) are entered per proposal or set under Business numbers.',
   },
   {
+    name: 'Adventure floor mat sizing and part number',
+    where: 'src/proposals/matPricing.ts → computeFloorPadding()',
+    what: 'Adds the mat overage to each side of the frame footprint, converts to square feet, multiplies by the cost per square foot for the chosen thickness, then applies the mat markup. The part number R-SSG-{LLWW}CLM[-2] is built from the same dimensions.',
+    why: 'The four numbers behind it — cost per sq ft at each thickness, the markup and the overage — ARE editable, under Business numbers → Mat pricing. What stays in code is the shape of the calculation and the part-number convention, which no proposal can be allowed to disagree with retroactively.',
+  },
+  {
     name: 'H-1000 roll-up',
     where: 'src/proposals/adventureSeries.ts → hardwareRollup()',
     what: 'Sums every fastener’s price, cost and weight into the single H-1000 line. Whether the fasteners are also listed in that line’s description is set by “List every fastener on the Hardware Kit line” under Business numbers — it changes the wording only, never the total.',
@@ -88,12 +109,23 @@ const IN_CODE = [
   },
 ];
 
-export async function loadFormulaRules(): Promise<{ frame: FormulaRule[]; hardware: FormulaRule[] }> {
+export async function loadFormulaRules(): Promise<{
+  frame: FormulaRule[];
+  hardware: FormulaRule[];
+}> {
   const rows = await prisma.hardwareRule.findMany({ orderBy: { sortOrder: 'asc' } });
-  const byKind = (kind: Kind) => rows.filter((r) => (r as unknown as { kind?: string }).kind === kind || (kind === 'HARDWARE' && !(r as unknown as { kind?: string }).kind));
+  const byKind = (kind: Kind) =>
+    rows.filter(
+      (r) =>
+        (r as unknown as { kind?: string }).kind === kind ||
+        (kind === 'HARDWARE' && !(r as unknown as { kind?: string }).kind),
+    );
   return {
     frame: mergeRules(DEFAULT_FRAME_RULES, byKind('FRAME') as unknown as Partial<FormulaRule>[]),
-    hardware: mergeRules(DEFAULT_HARDWARE_RULES, byKind('HARDWARE') as unknown as Partial<FormulaRule>[]),
+    hardware: mergeRules(
+      DEFAULT_HARDWARE_RULES,
+      byKind('HARDWARE') as unknown as Partial<FormulaRule>[],
+    ),
   };
 }
 
@@ -119,7 +151,8 @@ export function registerFormulaRoutes(app: FastifyInstance): void {
       prisma.hardwareRule.findMany({ select: { part: true, kind: true } }),
       prisma.sku.findMany({ select: { part: true }, orderBy: { part: 'asc' } }),
     ]);
-    const overriddenBy = (kind: Kind) => overrides.filter((o) => (o.kind || 'HARDWARE') === kind).map((o) => o.part);
+    const overriddenBy = (kind: Kind) =>
+      overrides.filter((o) => (o.kind || 'HARDWARE') === kind).map((o) => o.part);
     const frameParts = DEFAULT_FRAME_RULES.map((r) => r.part);
     return {
       frame: {
@@ -154,30 +187,58 @@ export function registerFormulaRoutes(app: FastifyInstance): void {
     if (!parsed.success) throw new ValidationError(parsed.error.message);
     const base = defaultsFor(kind).find((r) => r.part === part);
     const existing = await prisma.hardwareRule.findFirst({ where: { part, kind } });
-    if (!base && !existing && !parsed.data.terms) throw new ValidationError('Unknown part — send terms to define a new rule.');
-    const start = (existing as unknown as FormulaRule) ?? base ?? ({
-      part, name: part, terms: [], constant: 0, factor: 1, roundMode: 'NONE', roundStep: 1,
-      mode: 'SUM', minZero: true, sortOrder: 999, active: true,
-    } as FormulaRule);
+    if (!base && !existing && !parsed.data.terms)
+      throw new ValidationError('Unknown part — send terms to define a new rule.');
+    const start =
+      (existing as unknown as FormulaRule) ??
+      base ??
+      ({
+        part,
+        name: part,
+        terms: [],
+        constant: 0,
+        factor: 1,
+        roundMode: 'NONE',
+        roundStep: 1,
+        mode: 'SUM',
+        minZero: true,
+        sortOrder: 999,
+        active: true,
+      } as FormulaRule);
     const next = { ...start, ...parsed.data };
     const data = {
-      kind, name: next.name, terms: next.terms as object, constant: next.constant, factor: next.factor,
-      roundMode: next.roundMode, roundStep: next.roundStep, mode: next.mode, minZero: next.minZero,
-      sortOrder: base?.sortOrder ?? next.sortOrder ?? 999, active: next.active,
+      kind,
+      name: next.name,
+      terms: next.terms as object,
+      constant: next.constant,
+      factor: next.factor,
+      roundMode: next.roundMode,
+      roundStep: next.roundStep,
+      mode: next.mode,
+      minZero: next.minZero,
+      sortOrder: base?.sortOrder ?? next.sortOrder ?? 999,
+      active: next.active,
       group: base?.group ?? parsed.data.group ?? next.group ?? null,
       // Prisma rejects a bare `null` on a nullable Json column — it wants the field
       // omitted (leave as-is) or Prisma.DbNull (clear it). RuleCondition is a plain
       // interface with no index signature, so it needs the double cast.
-      when: (parsed.data.when === null
-        ? Prisma.DbNull
-        : ((next.when ?? Prisma.DbNull) as unknown as Prisma.InputJsonValue)),
+      when:
+        parsed.data.when === null
+          ? Prisma.DbNull
+          : ((next.when ?? Prisma.DbNull) as unknown as Prisma.InputJsonValue),
       note: next.note ?? null,
       updatedById: req.user!.sub,
     };
     const saved = existing
       ? await prisma.hardwareRule.update({ where: { id: existing.id }, data })
       : await prisma.hardwareRule.create({ data: { part, ...data } });
-    await recordAudit({ actorId: req.user!.sub, action: 'formula.rule.update', entity: 'HardwareRule', entityId: saved.id, details: { kind, part, ...parsed.data } as Record<string, unknown> });
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'formula.rule.update',
+      entity: 'HardwareRule',
+      entityId: saved.id,
+      details: { kind, part, ...parsed.data } as Record<string, unknown>,
+    });
     return saved;
   });
 
@@ -186,7 +247,12 @@ export function registerFormulaRoutes(app: FastifyInstance): void {
     const { kind: kindRaw, part } = req.params as { kind: string; part: string };
     const kind = parseKind(kindRaw);
     await prisma.hardwareRule.deleteMany({ where: { part, kind } });
-    await recordAudit({ actorId: req.user!.sub, action: 'formula.rule.reset', entity: 'HardwareRule', entityId: `${kind}:${part}` });
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'formula.rule.reset',
+      entity: 'HardwareRule',
+      entityId: `${kind}:${part}`,
+    });
     reply.code(204);
     return null;
   });
@@ -197,8 +263,13 @@ export function registerFormulaRoutes(app: FastifyInstance): void {
     const where = body.kind ? { kind: parseKind(body.kind) } : {};
     const { count } = await prisma.hardwareRule.deleteMany({ where });
     let settingsCleared = 0;
-    if (body.settings !== false && !body.kind) settingsCleared = (await prisma.formulaSetting.deleteMany({})).count;
-    await recordAudit({ actorId: req.user!.sub, action: 'formula.reset', details: { kind: body.kind ?? 'ALL', cleared: count, settingsCleared } });
+    if (body.settings !== false && !body.kind)
+      settingsCleared = (await prisma.formulaSetting.deleteMany({})).count;
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'formula.reset',
+      details: { kind: body.kind ?? 'ALL', cleared: count, settingsCleared },
+    });
     return { cleared: count, settingsCleared };
   });
 
@@ -213,10 +284,37 @@ export function registerFormulaRoutes(app: FastifyInstance): void {
       if (raw === undefined) continue;
       const v = Number(raw);
       if (!Number.isFinite(v)) throw new ValidationError(`${def.label} must be a number`);
-      if (v < def.min || v > def.max) throw new ValidationError(`${def.label} must be between ${def.min} and ${def.max} ${def.unit}`);
+      if (v < def.min || v > def.max)
+        throw new ValidationError(
+          `${def.label} must be between ${def.min} and ${def.max} ${def.unit}`,
+        );
       updates.push({ key: def.key, value: v });
     }
     if (!updates.length) throw new ValidationError('Nothing to update');
+
+    /**
+     * Guarded numbers (mat pricing) re-price every future quote, so they need a
+     * typed confirmation. The editor collects it in a second window and sends
+     * `confirm: "CONFIRM"`; anything else is refused here, so the guard holds for a
+     * direct API call too. Only keys whose value actually MOVES are guarded — saving
+     * the panel with the mat rates untouched does not demand a confirmation.
+     */
+    const current = await loadFormulaSettings();
+    const guarded = updates.filter(
+      (u) => GUARDED_SETTING_KEYS.has(u.key) && Number(current[u.key]) !== u.value,
+    );
+    if (guarded.length) {
+      const word = String((body as { confirm?: unknown }).confirm ?? '')
+        .trim()
+        .toUpperCase();
+      if (word !== 'CONFIRM') {
+        const names = guarded
+          .map((g) => FORMULA_SETTINGS.find((d) => d.key === g.key)?.label ?? g.key)
+          .join(', ');
+        throw new ValidationError(`Type CONFIRM to change ${names}.`);
+      }
+    }
+
     for (const u of updates) {
       await prisma.formulaSetting.upsert({
         where: { key: u.key },
@@ -224,7 +322,24 @@ export function registerFormulaRoutes(app: FastifyInstance): void {
         update: { value: u.value, updatedById: req.user!.sub },
       });
     }
-    await recordAudit({ actorId: req.user!.sub, action: 'formula.settings.update', details: Object.fromEntries(updates.map((u) => [u.key, u.value])) });
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'formula.settings.update',
+      details: {
+        ...Object.fromEntries(updates.map((u) => [u.key, u.value])),
+        // Recorded so a mat re-price is answerable later: who typed CONFIRM, when,
+        // and what the number was before they did.
+        ...(guarded.length
+          ? {
+              confirmed: guarded.map((g) => ({
+                key: g.key,
+                from: Number(current[g.key]),
+                to: g.value,
+              })),
+            }
+          : {}),
+      } as Record<string, unknown>,
+    });
     return loadFormulaSettings();
   });
 
@@ -244,19 +359,29 @@ export function registerFormulaRoutes(app: FastifyInstance): void {
     const base = kind === 'FRAME' ? saved.frame : saved.hardware;
     const proposed = body.overrides?.length
       ? base.map((r) => {
-        const o = body.overrides!.find((x) => x.part === r.part);
-        return o ? ({ ...r, ...o, terms: (o.terms as FormulaRule['terms']) ?? r.terms } as FormulaRule) : r;
-      })
+          const o = body.overrides!.find((x) => x.part === r.part);
+          return o
+            ? ({ ...r, ...o, terms: (o.terms as FormulaRule['terms']) ?? r.terms } as FormulaRule)
+            : r;
+        })
       : base;
 
-    const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : Number(v) || 0);
+    const num = (v: unknown): number =>
+      typeof v === 'number' && Number.isFinite(v) ? v : Number(v) || 0;
     const evalSet = (rules: FormulaRule[]) => {
-      if (kind === 'FRAME') return evaluateRules(rules, frameContext(answers, () => 0));
+      if (kind === 'FRAME')
+        return evaluateRules(
+          rules,
+          frameContext(answers, () => 0),
+        );
       const bom = computeAdventureBOM(answers, saved.frame);
       const inputs: Record<string, number> = {
-        bracketsQty: num(answers.bracketsQty), swivel360: num(answers.swivel360),
-        swivelStandalone: num(answers.swivelStandalone), forged: num(answers.forged),
-        swingHanger: num(answers.swingHanger), vRings: num(answers.vRings),
+        bracketsQty: num(answers.bracketsQty),
+        swivel360: num(answers.swivel360),
+        swivelStandalone: num(answers.swivelStandalone),
+        forged: num(answers.forged),
+        swingHanger: num(answers.swingHanger),
+        vRings: num(answers.vRings),
       };
       return evaluateRules(rules, {
         // Summed across every BOM row for that part — a multi-span frame emits one
@@ -272,7 +397,8 @@ export function registerFormulaRoutes(app: FastifyInstance): void {
     return {
       kind,
       rows: parts.map((p) => {
-        const b = before.find((r) => r.part === p), a2 = after.find((r) => r.part === p);
+        const b = before.find((r) => r.part === p),
+          a2 = after.find((r) => r.part === p);
         return {
           part: p,
           name: (a2 || b)!.name,

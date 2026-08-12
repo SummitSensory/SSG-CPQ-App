@@ -6,6 +6,12 @@
  */
 
 export interface FormulaSettingDef {
+  /**
+   * True for numbers that re-price future work the moment they change. The editor
+   * puts them behind a two-window typed confirmation and the API refuses the change
+   * without it. Advisory numbers leave this unset.
+   */
+  confirm?: boolean;
   key: string;
   label: string;
   help: string;
@@ -19,51 +25,174 @@ export interface FormulaSettingDef {
 
 export const FORMULA_SETTINGS: FormulaSettingDef[] = [
   {
-    key: 'depositPct', label: 'Deposit required', help: 'Percentage of the total due to start production. Shown on the proposal and frozen onto the order when it is locked.',
-    unit: '%', default: 50, min: 0, max: 100, step: 1, group: 'Proposal terms',
+    key: 'depositPct',
+    label: 'Deposit required',
+    help: 'Percentage of the total due to start production. Shown on the proposal and frozen onto the order when it is locked.',
+    unit: '%',
+    default: 50,
+    min: 0,
+    max: 100,
+    step: 1,
+    group: 'Proposal terms',
   },
   {
-    key: 'proposalValidityDays', label: 'Proposal valid for', help: 'Default expiration date for a new proposal, counted from the proposal date.',
-    unit: 'days', default: 7, min: 1, max: 365, step: 1, group: 'Proposal terms',
+    key: 'proposalValidityDays',
+    label: 'Proposal valid for',
+    help: 'Default expiration date for a new proposal, counted from the proposal date.',
+    unit: 'days',
+    default: 7,
+    min: 1,
+    max: 365,
+    step: 1,
+    group: 'Proposal terms',
   },
   {
-    key: 'hardwareRollupDetail', label: 'List every fastener on the Hardware Kit line',
+    key: 'hardwareRollupDetail',
+    label: 'List every fastener on the Hardware Kit line',
     help: 'Off (0): the H-1000 line reads as a single kit with a piece count. On (1): every 6820H-* fastener and its quantity is printed in the line description. The price, cost and weight are the same either way — this only changes what the customer reads.',
-    unit: '0 = kit only, 1 = itemize', default: 0, min: 0, max: 1, step: 1, group: 'Hardware kit',
+    unit: '0 = kit only, 1 = itemize',
+    default: 0,
+    min: 0,
+    max: 1,
+    step: 1,
+    group: 'Hardware kit',
   },
   {
-    key: 'financeTaxRatePct', label: 'Customer tax rate for Section 179',
+    key: 'financeTaxRatePct',
+    label: 'Customer tax rate for Section 179',
     help: 'Used only on the Ryan Capital financing sheet, to estimate the first-year tax saving. It is the CUSTOMER’s effective rate, not ours, so it is an illustration — the sheet says so and tells them to confirm it with their accountant.',
-    unit: '%', default: 21, min: 0, max: 60, step: 0.5, group: 'Financing',
+    unit: '%',
+    default: 21,
+    min: 0,
+    max: 60,
+    step: 0.5,
+    group: 'Financing',
   },
   {
-    key: 'section179CapDollars', label: 'Section 179 annual limit',
+    key: 'section179CapDollars',
+    label: 'Section 179 annual limit',
     help: 'The most a business can expense in one year. Changes most years, which is why it lives here. A purchase above the limit is only deductible up to it, and the financing sheet states that rather than overstating the saving.',
-    unit: '$', default: 1000000, min: 0, max: 10000000, step: 1000, group: 'Financing',
+    unit: '$',
+    default: 1000000,
+    min: 0,
+    max: 10000000,
+    step: 1000,
+    group: 'Financing',
   },
   {
-    key: 'legsSmallMaxFt', label: 'Small frame up to', help: 'Frames up to this length use the small leg count.',
-    unit: 'ft', default: 10, min: 1, max: 100, step: 1, group: 'Leg count by frame length',
+    key: 'matCostPerSqFt325',
+    label: 'Mat cost per sq ft — 3.25" thick',
+    help: 'Vendor cost for one square foot of 3.25" padding. Sell price is this times the mat markup. Changing it re-prices every Adventure mat quoted from now on, so it asks you to type CONFIRM.',
+    unit: '$/sq ft',
+    default: 11.78,
+    min: 0,
+    max: 200,
+    step: 0.01,
+    group: 'Mat pricing',
+    confirm: true,
   },
   {
-    key: 'legsSmallCount', label: 'Small frame legs', help: 'Legs on a frame up to the small-frame length.',
-    unit: 'legs', default: 4, min: 2, max: 20, step: 1, group: 'Leg count by frame length',
+    key: 'matCostPerSqFt2',
+    label: 'Mat cost per sq ft — 2" thick',
+    help: 'Vendor cost for one square foot of 2" padding. Sell price is this times the mat markup. Changing it re-prices every Adventure mat quoted from now on, so it asks you to type CONFIRM.',
+    unit: '$/sq ft',
+    default: 7.65,
+    min: 0,
+    max: 200,
+    step: 0.01,
+    group: 'Mat pricing',
+    confirm: true,
   },
   {
-    key: 'legsMediumMaxFt', label: 'Medium frame up to', help: 'Frames up to this length use the medium leg count.',
-    unit: 'ft', default: 20, min: 1, max: 200, step: 1, group: 'Leg count by frame length',
+    key: 'matMarkupMultiplier',
+    label: 'Mat markup',
+    help: 'Sell price = cost × this. 1.4 is the 140% markup that reproduces the published mat price list. Changing it re-prices every Adventure mat quoted from now on, so it asks you to type CONFIRM.',
+    unit: '× cost',
+    default: 1.4,
+    min: 1,
+    max: 5,
+    step: 0.01,
+    group: 'Mat pricing',
+    confirm: true,
   },
   {
-    key: 'legsMediumCount', label: 'Medium frame legs', help: 'Legs on a frame up to the medium-frame length.',
-    unit: 'legs', default: 6, min: 2, max: 20, step: 1, group: 'Leg count by frame length',
+    key: 'matOverageIn',
+    label: 'Mat overage per side',
+    help: 'Inches of padding added to EACH side of the frame footprint before the area is worked out. 14" is the standard. Changing it re-sizes and re-prices every Adventure mat quoted from now on, so it asks you to type CONFIRM.',
+    unit: 'in',
+    default: 14,
+    min: 0,
+    max: 60,
+    step: 0.5,
+    group: 'Mat pricing',
+    confirm: true,
   },
   {
-    key: 'legsLargeCount', label: 'Long frame legs', help: 'Legs on a frame longer than the medium-frame length.',
-    unit: 'legs', default: 8, min: 2, max: 40, step: 1, group: 'Leg count by frame length',
+    key: 'legsSmallMaxFt',
+    label: 'Small frame up to',
+    help: 'Frames up to this length use the small leg count.',
+    unit: 'ft',
+    default: 10,
+    min: 1,
+    max: 100,
+    step: 1,
+    group: 'Leg count by frame length',
+  },
+  {
+    key: 'legsSmallCount',
+    label: 'Small frame legs',
+    help: 'Legs on a frame up to the small-frame length.',
+    unit: 'legs',
+    default: 4,
+    min: 2,
+    max: 20,
+    step: 1,
+    group: 'Leg count by frame length',
+  },
+  {
+    key: 'legsMediumMaxFt',
+    label: 'Medium frame up to',
+    help: 'Frames up to this length use the medium leg count.',
+    unit: 'ft',
+    default: 20,
+    min: 1,
+    max: 200,
+    step: 1,
+    group: 'Leg count by frame length',
+  },
+  {
+    key: 'legsMediumCount',
+    label: 'Medium frame legs',
+    help: 'Legs on a frame up to the medium-frame length.',
+    unit: 'legs',
+    default: 6,
+    min: 2,
+    max: 20,
+    step: 1,
+    group: 'Leg count by frame length',
+  },
+  {
+    key: 'legsLargeCount',
+    label: 'Long frame legs',
+    help: 'Legs on a frame longer than the medium-frame length.',
+    unit: 'legs',
+    default: 8,
+    min: 2,
+    max: 40,
+    step: 1,
+    group: 'Leg count by frame length',
   },
 ];
 
 export type FormulaSettings = Record<string, number>;
+
+/**
+ * Keys that cannot be saved without a typed CONFIRM. Derived from the definitions
+ * above, so marking a setting `confirm: true` is the only place it has to be said.
+ */
+export const GUARDED_SETTING_KEYS: ReadonlySet<string> = new Set(
+  FORMULA_SETTINGS.filter((s) => s.confirm).map((s) => s.key),
+);
 
 /** The declared default for every key, so a missing setting still has a real value. */
 const DEFAULT_BY_KEY: Record<string, number> = Object.fromEntries(
@@ -86,7 +215,9 @@ export function defaultSettings(): FormulaSettings {
 }
 
 /** Defaults with any saved overrides applied, clamped to each setting's range. */
-export function mergeSettings(rows: { key: string; value: number }[] | null | undefined): FormulaSettings {
+export function mergeSettings(
+  rows: { key: string; value: number }[] | null | undefined,
+): FormulaSettings {
   const out = defaultSettings();
   for (const r of rows ?? []) {
     const def = FORMULA_SETTINGS.find((s) => s.key === r.key);

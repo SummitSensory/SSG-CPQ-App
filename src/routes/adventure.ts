@@ -3,8 +3,14 @@ import { prisma } from '../lib/prisma.js';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import {
-  computeAdventureProposal, explainAdventure, frameModelNumber, frameDimensions,
-  hardwareRollup, ACCESSORY_HW_PARTS, type AdvAnswers, type SkuRec,
+  computeAdventureProposal,
+  explainAdventure,
+  frameModelNumber,
+  frameDimensions,
+  hardwareRollup,
+  ACCESSORY_HW_PARTS,
+  type AdvAnswers,
+  type SkuRec,
 } from '../proposals/adventureSeries.js';
 import { loadFormulaRules, loadFormulaSettings } from './formulas.js';
 
@@ -21,8 +27,13 @@ export function registerAdventureRoutes(app: FastifyInstance): void {
    */
   let skuHasOverrideFlag = true;
   const SKU_COLS = {
-    part: true, description: true, unitPriceMinor: true, unitCostMinor: true,
-    weightLbs: true, category: true, proposalGroup: true,
+    part: true,
+    description: true,
+    unitPriceMinor: true,
+    unitCostMinor: true,
+    weightLbs: true,
+    category: true,
+    proposalGroup: true,
   } as const;
   async function skuRows(): Promise<Array<Record<string, unknown>>> {
     if (skuHasOverrideFlag) {
@@ -31,7 +42,9 @@ export function registerAdventureRoutes(app: FastifyInstance): void {
       } catch (e) {
         if ((e as { code?: string }).code !== 'P2022') throw e;
         skuHasOverrideFlag = false;
-        app.log.warn('Sku.overrideAllowed is missing — run migration 0024. Part overrides are off.');
+        app.log.warn(
+          'Sku.overrideAllowed is missing — run migration 0024. Part overrides are off.',
+        );
       }
     }
     return await prisma.sku.findMany({ select: SKU_COLS });
@@ -41,13 +54,17 @@ export function registerAdventureRoutes(app: FastifyInstance): void {
     const [rows, products, costs, place] = await Promise.all([
       skuRows(),
       prisma.product.findMany({ select: { id: true, sku: true, weightOz: true } }),
-      prisma.productCost.findMany({ select: { productId: true, unitCost: true, effectiveDate: true }, orderBy: { effectiveDate: 'desc' } }),
+      prisma.productCost.findMany({
+        select: { productId: true, unitCost: true, effectiveDate: true },
+        orderBy: { effectiveDate: 'desc' },
+      }),
       placements(),
     ]);
     // Costs and weights imported from the product workbook live on ProductCost /
     // Product.weightOz; use them when the flat SKU row has none of its own.
     const latestCost: Record<string, number> = {};
-    for (const c of costs) if (latestCost[c.productId] === undefined) latestCost[c.productId] = Number(c.unitCost);
+    for (const c of costs)
+      if (latestCost[c.productId] === undefined) latestCost[c.productId] = Number(c.unitCost);
     const byPart: Record<string, { cost: number; weightLbs: number }> = {};
     for (const p of products) {
       byPart[p.sku] = { cost: latestCost[p.id] || 0, weightLbs: p.weightOz ? p.weightOz / 16 : 0 };
@@ -55,13 +72,21 @@ export function registerAdventureRoutes(app: FastifyInstance): void {
     const map: Record<string, SkuRec> = {};
     for (const row of rows) {
       const r = row as {
-        part: string; description: string; unitPriceMinor: number; unitCostMinor: number;
-        weightLbs: number; category: string; proposalGroup: string | null; overrideAllowed?: boolean;
+        part: string;
+        description: string;
+        unitPriceMinor: number;
+        unitCostMinor: number;
+        weightLbs: number;
+        category: string;
+        proposalGroup: string | null;
+        overrideAllowed?: boolean;
       };
       const fb = byPart[r.part];
       const pl = place[r.part];
       map[r.part] = {
-        part: r.part, description: r.description, unitPriceMinor: r.unitPriceMinor,
+        part: r.part,
+        description: r.description,
+        unitPriceMinor: r.unitPriceMinor,
         unitCostMinor: r.unitCostMinor || (fb ? fb.cost : 0),
         weightLbs: r.weightLbs || (fb ? fb.weightLbs : 0),
         category: r.category,
@@ -80,11 +105,25 @@ export function registerAdventureRoutes(app: FastifyInstance): void {
    * subgroup. The engine reads this so a part shows up under the heading it is
    * filed under in Catalog, instead of the heading the engine happened to hardcode.
    */
-  interface Placement { group: string; subgroup: string; groupSort: number; subSort: number }
+  interface Placement {
+    group: string;
+    subgroup: string;
+    groupSort: number;
+    subSort: number;
+  }
 
   async function placements(): Promise<Record<string, Placement>> {
     const [cats, products, skus] = await Promise.all([
-      prisma.productCategory.findMany({ select: { id: true, name: true, slug: true, parentId: true, productId: true, sortOrder: true } }),
+      prisma.productCategory.findMany({
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          parentId: true,
+          productId: true,
+          sortOrder: true,
+        },
+      }),
       prisma.product.findMany({ select: { id: true, sku: true, categoryId: true } }),
       prisma.sku.findMany({ select: { part: true } }),
     ]);
@@ -171,7 +210,12 @@ export function registerAdventureRoutes(app: FastifyInstance): void {
 
   app.post('/proposals/adventure-series/price', write, async (req) => {
     const a = (req.body || {}) as AdvAnswers;
-    const [skus, rules, kits, settings] = await Promise.all([skuMap(), loadFormulaRules(), kitParts(), loadFormulaSettings()]);
+    const [skus, rules, kits, settings] = await Promise.all([
+      skuMap(),
+      loadFormulaRules(),
+      kitParts(),
+      loadFormulaSettings(),
+    ]);
     const out = computeAdventureProposal(a, skus, rules.hardware, rules.frame, kits, settings);
     return { ...out, frameModel: frameModelNumber(a), frameDimensions: frameDimensions(a) };
   });
@@ -208,9 +252,15 @@ export function registerAdventureRoutes(app: FastifyInstance): void {
       missing: roll.missing,
       pieces,
       components: roll.components.map((c) => ({
-        part: c.part, name: c.name, qty: c.qty, formula: c.formula,
-        unitPriceMinor: c.unitPriceMinor, unitCostMinor: c.unitCostMinor,
-        weightLbs: c.weightLbs, inCatalog: c.inCatalog, edited: c.edited,
+        part: c.part,
+        name: c.name,
+        qty: c.qty,
+        formula: c.formula,
+        unitPriceMinor: c.unitPriceMinor,
+        unitCostMinor: c.unitCostMinor,
+        weightLbs: c.weightLbs,
+        inCatalog: c.inCatalog,
+        edited: c.edited,
       })),
     };
   });
@@ -219,7 +269,11 @@ export function registerAdventureRoutes(app: FastifyInstance): void {
    *  price/cost it was multiplied by — for cross-referencing against the workbook. */
   app.post('/proposals/adventure-series/trace', write, async (req) => {
     const a = (req.body || {}) as AdvAnswers;
-    const [skus, rules] = await Promise.all([skuMap(), loadFormulaRules()]);
-    return explainAdventure(a, skus, rules.hardware, rules.frame);
+    const [skus, rules, settings] = await Promise.all([
+      skuMap(),
+      loadFormulaRules(),
+      loadFormulaSettings(),
+    ]);
+    return explainAdventure(a, skus, rules.hardware, rules.frame, settings);
   });
 }

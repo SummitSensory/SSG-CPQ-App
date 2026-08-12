@@ -199,10 +199,17 @@ const n = (v: unknown) => (typeof v === 'number' && isFinite(v) ? v : 0);
  * Floor padding priced from the frame footprint, or null when the answer is No.
  * `matFloor` is the legacy flag for the same option, so old answer sets still price.
  */
-export function floorPaddingQuote(a: AdvAnswers): MatQuote | null {
+export function floorPaddingQuote(a: AdvAnswers, s?: FormulaSettings): MatQuote | null {
   const on = a.floorPadding != null ? !!a.floorPadding : !!a.matFloor;
   if (!on) return null;
-  return computeFloorPadding(n(a.length), n(a.width), a.floorPadThickness === '2' ? '2' : '3.25');
+  // The rates, markup and overage come from Administration → Formulas → Mat pricing.
+  // Omitted, computeFloorPadding falls back to the published defaults.
+  return computeFloorPadding(
+    n(a.length),
+    n(a.width),
+    a.floorPadThickness === '2' ? '2' : '3.25',
+    s ?? defaultSettings(),
+  );
 }
 
 /** Catalog category whose members make up the zip line kit. */
@@ -396,7 +403,7 @@ export function computeAdventureProposal(
   frameRules?: FormulaRule[],
   /** Catalog category name → the part numbers filed under it, so a "kit" prints every member. */
   kitParts?: Record<string, string[]>,
-  /** Business numbers (Administration → Formulas). Only `hardwareRollupDetail` is read here. */
+  /** Business numbers (Administration → Formulas): `hardwareRollupDetail` and the mat pricing rates. */
   settings?: FormulaSettings,
 ): { lines: PricedLine[]; totalWeightLbs: number; warnings: string[] } {
   const LOOK = skuMap && Object.keys(skuMap).length ? skuMap : SKUS;
@@ -617,7 +624,7 @@ export function computeAdventureProposal(
     emitExtras(compExtras);
   }
 
-  const pad = floorPaddingQuote(a);
+  const pad = floorPaddingQuote(a, settings);
   if (pad || a.matColumn || a.matLadderLeg || a.matCustom || matExtras.length) {
     G('Adventure Mat System (Highly Recommended)', true);
     SG('Adventure Mat System');
@@ -978,6 +985,8 @@ export function explainAdventure(
   skuMap?: Record<string, SkuRec>,
   rules?: HardwareRule[],
   frameRules?: FormulaRule[],
+  /** Business numbers, so the trace shows the mat rates actually in force. */
+  settings?: FormulaSettings,
 ): {
   model: string;
   dimensions: string;
@@ -1015,7 +1024,7 @@ export function explainAdventure(
       rolledIntoH1000: false,
     });
   }
-  const pad = floorPaddingQuote(a);
+  const pad = floorPaddingQuote(a, settings);
   if (pad) {
     rows.push({
       rule: 'Floor Padding',

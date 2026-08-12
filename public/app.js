@@ -409,7 +409,11 @@
 
   // Business numbers (deposit %, proposal validity, leg spans) come from
   // Administration → Formulas → Business numbers; these are the fallbacks.
-  var fxSettings = { depositPct: 50, proposalValidityDays: 7, legsSmallMaxFt: 10, legsSmallCount: 4, legsMediumMaxFt: 20, legsMediumCount: 6, legsLargeCount: 8 };
+  var fxSettings = {
+    depositPct: 50, proposalValidityDays: 7,
+    legsSmallMaxFt: 10, legsSmallCount: 4, legsMediumMaxFt: 20, legsMediumCount: 6, legsLargeCount: 8,
+    matCostPerSqFt325: 11.78, matCostPerSqFt2: 7.65, matMarkupMultiplier: 1.4, matOverageIn: 14,
+  };
   function loadFxSettings() {
     return authed('/formulas/settings').then(function (r) { return r.ok ? r.json() : null; })
       .then(function (d) { if (d) Object.keys(d).forEach(function (k) { fxSettings[k] = Number(d[k]); }); })
@@ -6333,7 +6337,12 @@
    * Floor padding price, mirroring src/proposals/matPricing.ts so the builder can
    * show the number before the server prices the proposal. Keep both in step.
    */
-  var MAT_RATE = { '3.25': 11.78, '2': 7.65 }, MAT_MARKUP = 1.4, MAT_OVERAGE_IN = 14;
+  function matRate(th) {
+    var v = Number(fxSettings[th === '2' ? 'matCostPerSqFt2' : 'matCostPerSqFt325']);
+    return Number.isFinite(v) ? v : (th === '2' ? 7.65 : 11.78);
+  }
+  function matMarkup() { var v = Number(fxSettings.matMarkupMultiplier); return Number.isFinite(v) && v > 0 ? v : 1.4; }
+  function matOverageIn() { var v = Number(fxSettings.matOverageIn); return Number.isFinite(v) ? v : 14; }
 
   /**
    * The part number each Additional Hardware quantity resolves to, mirroring
@@ -6400,14 +6409,15 @@
   function matQuote() {
     var th = adv.floorPadThickness === '2' ? '2' : '3.25';
     var L = Number(adv.length) || 0, W = Number(adv.width) || 0;
-    var li = L * 12 + MAT_OVERAGE_IN, wi = W * 12 + MAT_OVERAGE_IN;
+    var ov = matOverageIn();
+    var li = L * 12 + ov, wi = W * 12 + ov;
     var sqIn = li * wi, sqFt = sqIn / 144;
-    var costMinor = Math.round(sqFt * MAT_RATE[th] * 100);
+    var costMinor = Math.round(sqFt * matRate(th) * 100);
     var p2 = function (v) { return String(Math.max(0, Math.round(v))).padStart(2, '0'); };
     return {
       thickness: th, matLengthIn: li, matWidthIn: wi, squareInches: sqIn, squareFeet: sqFt,
-      rate: MAT_RATE[th], sellRate: MAT_RATE[th] * MAT_MARKUP,
-      costMinor: costMinor, priceMinor: Math.round(costMinor * MAT_MARKUP),
+      rate: matRate(th), sellRate: matRate(th) * matMarkup(),
+      costMinor: costMinor, priceMinor: Math.round(costMinor * matMarkup()),
       sku: 'R-SSG-' + p2(L) + p2(W) + 'CLM' + (th === '2' ? '-2' : ''),
     };
   }
@@ -6421,7 +6431,7 @@
     }
     // Sell rate, not cost. The configurator is opened in front of customers, so no
     // part of it quotes what we pay or the markup applied to it.
-    var per = function (v) { return '$' + (MAT_RATE[v] * MAT_MARKUP).toFixed(2) + ' / sq ft'; };
+    var per = function (v) { return '$' + (matRate(v) * matMarkup()).toFixed(2) + ' / sq ft'; };
     return '<div style="font-size:11px;color:#8a8f85;text-transform:uppercase;letter-spacing:.03em;margin-bottom:6px;">Padding thickness</div>' +
       '<div style="display:flex;gap:10px;">' + opt('3.25', '3.25" thick', per('3.25')) + opt('2', '2" thick', per('2')) + '</div>';
   }
@@ -9100,6 +9110,69 @@
       b.addEventListener('click', function () { fx.tab = b.getAttribute('data-fxt'); drawFxTabs(); drawFormulas(); });
     });
   }
+  /**
+   * Typed confirmation for the guarded business numbers. Two windows: the first
+   * states plainly what is changing and what it affects, the second will not enable
+   * Save until the word CONFIRM has been typed. Resolves true only when both are
+   * cleared — Cancel, Escape or a click on the backdrop resolves false and nothing is
+   * sent. The server enforces the same rule, so this is the courtesy, not the lock.
+   */
+  function fxConfirmGuarded(changes) {
+    return new Promise(function (resolve) {
+      var wrap = document.createElement('div');
+      wrap.style.cssText = 'position:fixed;inset:0;background:rgba(30,34,30,.45);z-index:9000;display:flex;align-items:center;justify-content:center;padding:20px;';
+      var card = document.createElement('div');
+      card.style.cssText = 'background:#fff;border:1px solid #dcded7;border-radius:14px;max-width:540px;width:100%;padding:22px 24px;box-shadow:0 18px 50px rgba(0,0,0,.18);';
+      wrap.appendChild(card);
+      document.body.appendChild(wrap);
+      function done(v) { document.removeEventListener('keydown', onKey); wrap.remove(); resolve(v); }
+      function onKey(e) { if (e.key === 'Escape') done(false); }
+      document.addEventListener('keydown', onKey);
+      wrap.addEventListener('mousedown', function (e) { if (e.target === wrap) done(false); });
+      var rows = changes.map(function (c) {
+        return '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:14px;padding:8px 0;border-top:1px solid #f2f3ef;font-size:13.5px;">' +
+          '<span>' + esc(String(c.label)) + '</span>' +
+          '<span style="font-family:ui-monospace,monospace;font-size:12.5px;white-space:nowrap;">' +
+            '<span style="color:#8a8f85;text-decoration:line-through;">' + esc(String(c.from)) + '</span>' +
+            ' &rarr; <b style="color:#9c3327;">' + esc(String(c.to)) + '</b>' +
+            ' <span class="muted">' + esc(String(c.unit || '')) + '</span></span></div>';
+      }).join('');
+      function step1() {
+        card.innerHTML =
+          '<div style="font-family:\'Newsreader\',serif;font-size:19px;font-weight:600;color:#3d4a55;">Change mat pricing?</div>' +
+          '<div class="muted" style="font-size:13px;line-height:1.6;margin-top:8px;">This changes the price of every Adventure mat quoted from now on. Proposals already accepted keep the figures they were signed with. Drafts re-price the next time they are opened.</div>' +
+          '<div style="margin:14px 0 2px;">' + rows + '</div>' +
+          '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:20px;">' +
+            '<button id="fxcCancel" style="border:1px solid #dcded7;background:#fff;border-radius:9px;padding:9px 16px;font-size:13px;color:#3d4a55;cursor:pointer;">Cancel</button>' +
+            '<button id="fxcNext" style="border:1px solid #3d4a55;background:#3d4a55;color:#fff;border-radius:9px;padding:9px 16px;font-size:13px;cursor:pointer;">Continue</button></div>';
+        card.querySelector('#fxcCancel').addEventListener('click', function () { done(false); });
+        card.querySelector('#fxcNext').addEventListener('click', step2);
+      }
+      function step2() {
+        card.innerHTML =
+          '<div style="font-family:\'Newsreader\',serif;font-size:19px;font-weight:600;color:#3d4a55;">Type CONFIRM to save</div>' +
+          '<div class="muted" style="font-size:13px;line-height:1.6;margin-top:8px;">Type the word CONFIRM below to apply the mat pricing change. The change is recorded against your name.</div>' +
+          '<input id="fxcWord" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="CONFIRM" style="width:100%;margin-top:14px;padding:11px 13px;border:1px solid #dcded7;border-radius:9px;font-size:15px;font-family:ui-monospace,monospace;letter-spacing:.1em;">' +
+          '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:20px;">' +
+            '<button id="fxcBack" style="border:1px solid #dcded7;background:#fff;border-radius:9px;padding:9px 16px;font-size:13px;color:#3d4a55;cursor:pointer;">Back</button>' +
+            '<button id="fxcGo" disabled style="border:1px solid #dcded7;background:#eef0ea;color:#9aa093;border-radius:9px;padding:9px 16px;font-size:13px;cursor:not-allowed;">Save change</button></div>';
+        var input = card.querySelector('#fxcWord'), go = card.querySelector('#fxcGo');
+        function sync() {
+          var ok = input.value.trim().toUpperCase() === 'CONFIRM';
+          go.disabled = !ok;
+          go.style.cssText = 'border:1px solid ' + (ok ? '#9c3327' : '#dcded7') + ';background:' + (ok ? '#9c3327' : '#eef0ea') +
+            ';color:' + (ok ? '#fff' : '#9aa093') + ';border-radius:9px;padding:9px 16px;font-size:13px;cursor:' + (ok ? 'pointer' : 'not-allowed') + ';';
+          return ok;
+        }
+        input.addEventListener('input', sync);
+        input.addEventListener('keydown', function (e) { if (e.key === 'Enter' && sync()) done(true); });
+        card.querySelector('#fxcBack').addEventListener('click', step1);
+        go.addEventListener('click', function () { if (!go.disabled) done(true); });
+        input.focus();
+      }
+      step1();
+    });
+  }
   function drawFormulas() {
     var box = document.getElementById('fxBody'); if (!box || !fx.data) return;
     drawFxTabs();
@@ -9127,7 +9200,8 @@
               var changed = Number(v) !== Number(st.defaults[d.key]);
               return '<div style="display:flex;align-items:flex-start;gap:12px;padding:8px 0;border-top:1px solid #f2f3ef;">' +
                 '<div style="flex:1;"><div style="font-size:13.5px;font-weight:600;">' + esc(d.label) +
-                  (changed ? ' <span style="background:#fdf6e3;border:1px solid #eadfbe;color:#8a6d1f;border-radius:999px;padding:1px 7px;font-size:10.5px;font-weight:600;">changed from ' + st.defaults[d.key] + '</span>' : '') + '</div>' +
+                  (changed ? ' <span style="background:#fdf6e3;border:1px solid #eadfbe;color:#8a6d1f;border-radius:999px;padding:1px 7px;font-size:10.5px;font-weight:600;">changed from ' + st.defaults[d.key] + '</span>' : '') +
+                  (d.confirm ? ' <span title="Changing this asks you to type CONFIRM" style="background:#fbf0ee;border:1px solid #e6cbc6;color:#9c3327;border-radius:999px;padding:1px 7px;font-size:10.5px;font-weight:600;">confirmation required</span>' : '') + '</div>' +
                   '<div class="muted" style="font-size:12px;line-height:1.5;margin-top:2px;">' + esc(d.help) + '</div></div>' +
                 '<div style="display:flex;align-items:center;gap:6px;flex:0 0 auto;">' +
                   '<input class="fxSet" data-k="' + d.key + '" type="number" min="' + d.min + '" max="' + d.max + '" step="' + d.step + '" value="' + esc(v) + '" style="width:92px;padding:7px 9px;border:1px solid #dcded7;border-radius:8px;text-align:right;font-size:13.5px;">' +
@@ -9139,7 +9213,21 @@
       document.getElementById('fxSaveSet').addEventListener('click', async function () {
         var body = {};
         document.querySelectorAll('.fxSet').forEach(function (el) { body[el.getAttribute('data-k')] = Number(el.value); });
-        var msg = document.getElementById('fxSetMsg'); msg.textContent = 'Saving…';
+        var msg = document.getElementById('fxSetMsg');
+        // Numbers flagged `confirm` server-side (mat pricing) need the two-window typed
+        // confirmation, but only when the value has actually moved — saving the panel
+        // with the mat rates untouched goes straight through.
+        var guarded = (st.defs || []).filter(function (d) {
+          return d.confirm && body[d.key] !== undefined && Number(body[d.key]) !== Number(st.values[d.key]);
+        }).map(function (d) {
+          return { label: d.label, from: st.values[d.key], to: body[d.key], unit: d.unit };
+        });
+        if (guarded.length) {
+          var confirmed = await fxConfirmGuarded(guarded);
+          if (!confirmed) { msg.textContent = 'Cancelled — nothing was saved.'; return; }
+          body.confirm = 'CONFIRM';
+        }
+        msg.textContent = 'Saving…';
         var r = await authed('/formulas/settings', { method: 'PATCH', body: body });
         if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} msg.textContent = m || 'Could not save (' + r.status + ').'; return; }
         fx.data.settings.values = await r.json();
