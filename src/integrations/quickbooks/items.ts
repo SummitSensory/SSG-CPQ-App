@@ -20,6 +20,8 @@ interface QboItem {
   SyncToken: string;
   Name: string;
   Sku?: string;
+  Type?: string;
+  Active?: boolean;
   [key: string]: unknown;
 }
 
@@ -62,6 +64,14 @@ function itemHash(name: string, sku: string, description: string | null): string
  * rows with `Sku` silently omitted, so every item looks SKU-less and the whole
  * link scan matches nothing. `select *` is the documented form and returns the
  * full item payload. Do not "optimise" this back into a column list.
+ *
+ * `Active in (true, false)` is deliberate: a QuickBooks query returns only
+ * active rows by default, so a deactivated item is indistinguishable from one
+ * that was never imported, and the scan reports "not in QuickBooks" for a part
+ * that is sitting right there, deactivated. Inactive rows are read, kept out of
+ * the link maps, and reported separately as `inactiveMatches`. If an older
+ * minor version rejects the clause the page is retried plain and inactive items
+ * then read as missing, exactly as before.
  */
 async function fetchAllQboItems(
   realmId: string,
@@ -70,12 +80,23 @@ async function fetchAllQboItems(
   const PAGE = 500; // Conservative: QuickBooks documents 1000 but throttles large pages.
   const all: QboItem[] = [];
   for (let start = 1; ; start += PAGE) {
-    const res = await query<{ Item?: QboItem[] }>(
-      realmId,
-      `select * from Item startposition ${start} maxresults ${PAGE}`,
-      fetchImpl,
-    );
-    const batch = res.Item ?? [];
+    let batch: QboItem[];
+    try {
+      const res = await query<{ Item?: QboItem[] }>(
+        realmId,
+        `select * from Item where Active in (true, false) startposition ${start} maxresults ${PAGE}`,
+        fetchImpl,
+      );
+      batch = res.Item ?? [];
+    } catch (err) {
+      logger.warn({ err }, 'QuickBooks item scan: Active clause rejected, retrying plain');
+      const res = await query<{ Item?: QboItem[] }>(
+        realmId,
+        `select * from Item startposition ${start} maxresults ${PAGE}`,
+        fetchImpl,
+      );
+      batch = res.Item ?? [];
+    }
     all.push(...batch);
     if (batch.length < PAGE) return all;
   }
@@ -103,6 +124,20 @@ export interface SkuLinkReport {
    * catalog rows are dirty and should be cleaned at source.
    */
   dirtySkus: string[];
+  /**
+   * CPQ part numbers matched to a QuickBooks item by NAME because no item
+   * carried that part number in its SKU field. Each entry reads
+   * "<part> -> \"<item name>\" (Service)". These are linked and will post
+   * correctly; the entry exists so an operator can see that the match was made
+   * on the name and, if they want the tighter match, fill in the item's SKU.
+   */
+  nameMatched: string[];
+  /**
+   * CPQ part numbers whose only QuickBooks match is a DEACTIVATED item. These
+   * are NOT linked — linking would only move the failure to the preflight — and
+   * the fix is to reactivate the item in QuickBooks and re-run the scan.
+   */
+  inactiveMatches: string[];
 }
 
 /**
@@ -111,6 +146,16 @@ export interface SkuLinkReport {
  *   - each Product whose `sku` matches a QuickBooks item's Sku, and
  *   - each SKU master part, keyed by the part string, for generated lines that
  *     carry no productId.
+ *
+ * Matching is SKU first, then NAME. The name fallback exists because several
+ * QuickBooks item types — Service, and Discount in particular — have no SKU
+ * field in the Products & Services UI at all, so a part imported as one of them
+ * can only ever be identified by its name. `FLEX-PRO-DISCOUNT` is the case that
+ * forced this: the item was in QuickBooks, correctly named, and the scan could
+ * not see it, so every proposal carrying that part was blocked at preflight
+ * with "not linked to any QuickBooks item" and no way to fix it from the UI.
+ * SKU keeps priority, an ambiguous name (two items sharing one name) is left
+ * unmatched rather than guessed at, and every name match is reported.
  *
  * Creates nothing in QuickBooks — items are imported there via the Products &
  * Services spreadsheet, and this only records which CPQ record maps to which
@@ -128,9 +173,62 @@ export async function linkItemsBySku(
     logger.error({ err, realmId }, 'QuickBooks item read failed during link-by-SKU');
     throw new Error(`Reading items from QuickBooks failed: ${String(err)}`);
   }
+
+  const active = qboItems.filter((it) => it.Active !== false);
+  const inactive = qboItems.filter((it) => it.Active === false);
+
   const bySku = new Map<string, QboItem>();
-  for (const it of qboItems) {
+  for (const it of active) {
     if (it.Sku) bySku.set(normSku(it.Sku), it);
+  }
+
+  /*
+   * Name index. Only names that are UNIQUE across the company are usable — if
+   * two items share a name, no automatic choice between them is defensible, so
+   * the key is dropped and the part is reported unmatched.
+   */
+  const byName = new Map<string, QboItem>();
+  const ambiguousNames = new Set<string>();
+  for (const it of active) {
+    if (!it.Name) continue;
+    const key = normSku(it.Name);
+    if (byName.has(key)) ambiguousNames.add(key);
+    byName.set(key, it);
+  }
+  for (const key of ambiguousNames) byName.delete(key);
+
+  /* Same two indexes over deactivated items, purely to explain a miss. */
+  const inactiveByKey = new Map<string, QboItem>();
+  for (const it of inactive) {
+    if (it.Sku) inactiveByKey.set(normSku(it.Sku), it);
+    if (it.Name && !inactiveByKey.has(normSku(it.Name))) inactiveByKey.set(normSku(it.Name), it);
+  }
+
+  const nameMatched: string[] = [];
+  const inactiveMatches: string[] = [];
+
+  /**
+   * Resolve one CPQ part number to a QuickBooks item: SKU, then unique name.
+   * Records why it matched, or why it did not.
+   */
+  function resolve(part: string): QboItem | null {
+    const key = normSku(part);
+    const skuHit = bySku.get(key);
+    if (skuHit) return skuHit;
+    const nameHit = byName.get(key);
+    if (nameHit) {
+      nameMatched.push(
+        `${part} -> "${nameHit.Name}"${nameHit.Type ? ` (${nameHit.Type})` : ''} — matched by name; the QuickBooks item has no part number`,
+      );
+      return nameHit;
+    }
+    const dead = inactiveByKey.get(key);
+    if (dead) {
+      inactiveMatches.push(
+        `${part} -> "${dead.Name}" (QuickBooks item ${dead.Id}) is deactivated — reactivate it and re-run this scan`,
+      );
+    }
+    return null;
   }
 
   /*
@@ -177,7 +275,7 @@ export async function linkItemsBySku(
 
   for (const p of products) {
     if (!p.sku) continue;
-    const match = bySku.get(normSku(p.sku));
+    const match = resolve(p.sku);
     if (!match) {
       unmatched.add(p.sku);
       continue;
@@ -198,7 +296,7 @@ export async function linkItemsBySku(
   for (const s of skus) {
     if (!s.part) continue;
     const key = normSku(s.part);
-    const match = bySku.get(key);
+    const match = resolve(s.part);
     if (!match) {
       unmatched.add(s.part);
       continue;
@@ -224,6 +322,8 @@ export async function linkItemsBySku(
       qboItemsWithSku: bySku.size,
       productsLinked,
       skusLinked,
+      nameMatched: nameMatched.length,
+      inactiveMatches: inactiveMatches.length,
       unmatched: list.length,
       dirtySkus: dirtyList.length,
       conflicts: conflicts.length,
@@ -239,6 +339,8 @@ export async function linkItemsBySku(
     unmatchedCount: list.length,
     conflicts,
     dirtySkus: dirtyList,
+    nameMatched: [...new Set(nameMatched)].sort(),
+    inactiveMatches: [...new Set(inactiveMatches)].sort(),
   };
 }
 
@@ -282,17 +384,21 @@ export async function syncItem(
           return { qboId: skuMatch.Id, created: false, skipped: false };
         }
       }
-      // Then by name.
-      const found = await query<{ Item?: QboItem[] }>(
-        realmId,
-        `select * from Item where Name = '${esc(product.name)}'`,
-        fetchImpl,
-      );
-      const match = found.Item?.[0];
-      if (match) {
-        await upsertLink(ref, match.Id, { syncToken: match.SyncToken, hash });
-        await log(productId, match.Id, 'ok', 'adopted existing item by name');
-        return { qboId: match.Id, created: false, skipped: false };
+      // Then by the catalog name, then by the part number used as a name —
+      // Service and Discount items have no SKU field, so the part number is
+      // frequently the item's name.
+      for (const candidate of [product.name, product.sku].filter(Boolean) as string[]) {
+        const found = await query<{ Item?: QboItem[] }>(
+          realmId,
+          `select * from Item where Name = '${esc(candidate)}'`,
+          fetchImpl,
+        );
+        const match = found.Item?.[0];
+        if (match) {
+          await upsertLink(ref, match.Id, { syncToken: match.SyncToken, hash });
+          await log(productId, match.Id, 'ok', `adopted existing item by name "${candidate}"`);
+          return { qboId: match.Id, created: false, skipped: false };
+        }
       }
     }
 

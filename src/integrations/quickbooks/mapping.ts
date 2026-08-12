@@ -190,14 +190,29 @@ function subtotalLine(): Record<string, unknown> {
  * collapses to a single unit at the full amount rather than printing a rate that
  * does not multiply up. A customer checking the arithmetic must never find a row
  * where qty × rate ≠ amount.
+ *
+ * NEGATIVE quantities are carried through as written. A discount line is entered
+ * on the proposal as quantity -1 at a POSITIVE unit price, and an earlier
+ * `quantity > 0` guard sent those to QuickBooks as quantity 1 at a negative unit
+ * price. The extended amount came out the same, so the document total was never
+ * wrong — but the row printed inverted from the proposal the customer accepted,
+ * and a rep reading the two side by side could not reconcile them. The sign now
+ * lives on the quantity, where the proposal put it. Divisibility is tested on the
+ * magnitude, since BigInt remainders take the sign of the dividend.
  */
 function pricedDetail(l: AcceptedLine): Record<string, unknown> {
-  const qty = Number.isFinite(l.quantity) && l.quantity > 0 ? Math.round(l.quantity) : 1;
-  const divides = qty > 0 && l.amountMinor % BigInt(qty) === 0n;
-  if (!divides || qty === 1) {
-    return { Qty: 1, UnitPrice: minorToQboAmount(l.amountMinor) };
+  const qty = Number.isFinite(l.quantity) && l.quantity !== 0 ? Math.round(l.quantity) : 1;
+  if (qty === 0) return { Qty: 1, UnitPrice: minorToQboAmount(l.amountMinor) };
+  const q = BigInt(qty);
+  const absQ = q < 0n ? -q : q;
+  const absAmt = l.amountMinor < 0n ? -l.amountMinor : l.amountMinor;
+  const divides = absAmt % absQ === 0n;
+  if (!divides || absQ === 1n) {
+    // A single unit — including the -1 discount row — prints at the rate that
+    // multiplies up to the amount, so qty × rate = amount holds for both signs.
+    return { Qty: qty, UnitPrice: minorToQboAmount(l.amountMinor / q) };
   }
-  return { Qty: qty, UnitPrice: minorToQboAmount(l.amountMinor / BigInt(qty)) };
+  return { Qty: qty, UnitPrice: minorToQboAmount(l.amountMinor / q) };
 }
 
 /**
