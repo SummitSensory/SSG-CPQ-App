@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { env, qboEnvironment } from '../../config/env.js';
 import { logger } from '../../lib/logger.js';
 import { getAccessToken } from './oauth.js';
@@ -16,6 +17,30 @@ import { QboApiError, backoff, intuitTid, sleep } from './http.js';
  */
 const MINOR_VERSION = '73';
 const MAX_ATTEMPTS = 5;
+
+/** QuickBooks rejects a requestid longer than this with fault 6000. */
+const MAX_REQUEST_ID = 50;
+
+/**
+ * A requestid QuickBooks will accept, derived from our idempotency key.
+ *
+ * Our keys read like `qbo:PRODUCTION:ESTIMATE:<cuid>` — descriptive, and at 59
+ * characters nine over the limit Intuit enforces. Truncating is not an option: the
+ * distinguishing part is the id at the END, so every estimate in an environment
+ * would truncate to the same string and QuickBooks would return the first document
+ * ever created instead of making a new one.
+ *
+ * So an over-long key is replaced by a hash of itself. Deterministic, which is the
+ * only property that matters here — the same transaction retried produces the same
+ * requestid, and QuickBooks still returns the original document rather than a
+ * duplicate. Keys within the limit pass through unchanged, so they stay readable in
+ * Intuit's own logs.
+ */
+export function qboRequestId(key: string): string {
+  const k = String(key ?? '').trim();
+  if (k.length <= MAX_REQUEST_ID) return k;
+  return createHash('sha256').update(k).digest('hex').slice(0, MAX_REQUEST_ID);
+}
 
 export function apiBaseUrl(): string {
   return qboEnvironment() === 'PRODUCTION'
@@ -46,7 +71,7 @@ async function request<T>(
   url.searchParams.set('minorversion', MINOR_VERSION);
   // requestid is QuickBooks' server-side idempotency key: repeated creates with
   // the same value return the original object rather than creating a new one.
-  if (opts.requestId) url.searchParams.set('requestid', opts.requestId);
+  if (opts.requestId) url.searchParams.set('requestid', qboRequestId(opts.requestId));
   for (const [k, v] of Object.entries(opts.query ?? {})) url.searchParams.set(k, v);
 
   let lastErr: Error | undefined;
