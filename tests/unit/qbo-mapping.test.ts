@@ -141,8 +141,14 @@ describe('QuickBooks estimate builder preserves accepted totals', () => {
   });
 
   it('refuses to build a document whose total differs from the accepted total', () => {
+    // The message is part of the contract: it has to say the accepted total is not
+    // adjusted to fit, and itemize what was assembled so the wrong component is
+    // findable without opening the code.
     expect(() => buildEstimateBody({ ...base, expectedTotalMinor: 999n })).toThrow(
-      /never be altered/,
+      /never adjusted to match/,
+    );
+    expect(() => buildEstimateBody({ ...base, expectedTotalMinor: 999n })).toThrow(
+      /Assembled from:/,
     );
   });
 
@@ -176,7 +182,7 @@ describe('QuickBooks full-value invoice builder', () => {
     expect(() => buildInvoiceBody({ ...base, expectedTotalMinor: 999n })).toThrow();
   });
 
-  it('states the payment split without altering the total', () => {
+  it('states the payment split in the memo without altering the total', () => {
     const body = buildInvoiceBody({
       ...base,
       expectedTotalMinor: 100000n,
@@ -184,8 +190,15 @@ describe('QuickBooks full-value invoice builder', () => {
     });
     const lines = body.Line as Array<Record<string, unknown>>;
     expect(sumLineAmounts(lines)).toBe(100000n);
-    const note = lines.find((l) => String(l.Description ?? '').startsWith('PAYMENT SCHEDULE'));
-    expect(String(note?.Description)).toContain('50%');
+    // The split is carried by the payment term and restated in the memo. It is
+    // deliberately NOT a line: a long description row in the middle of the totals
+    // block is what this replaced.
+    const memo = String((body.CustomerMemo as { value?: string } | undefined)?.value ?? '');
+    expect(memo).toContain('PAYMENT SCHEDULE');
+    expect(memo).toContain('50%');
+    expect(lines.some((l) => String(l.Description ?? '').startsWith('PAYMENT SCHEDULE'))).toBe(
+      false,
+    );
   });
 
   it('sets the term reference only when one is supplied', () => {
