@@ -3069,6 +3069,10 @@
   }
   var PROP_FILTERS = [
     { id: 'all', label: 'All' },
+    // One page carrying both halves of the pipeline: what is still live on top, what
+    // has been shelved underneath. Answering "what is outstanding, and what went
+    // quiet" used to mean two tabs and two passes over the same list.
+    { id: 'both', label: 'Active & inactive' },
     { id: 'active', label: 'Active' },
     { id: 'expired', label: 'Past expiration' },
     { id: 'inactive', label: 'Inactive' },
@@ -3113,6 +3117,7 @@
   }
   function matchFilter(r, f) {
     if (f === 'all') return true;
+    if (f === 'both') return (OPEN_STATUSES.indexOf(r.status) !== -1 && !r.expired) || r.status === 'EXPIRED';
     if (f === 'active') return OPEN_STATUSES.indexOf(r.status) !== -1 && !r.expired;
     if (f === 'expired') return r.expired;
     if (f === 'inactive') return r.status === 'EXPIRED';
@@ -3137,23 +3142,40 @@
           versionCount: p.versionCount || 1, status: st, preparedBy: p.preparedBy || '',
           created: p.createdAt, modified: p.lastModifiedAt || p.updatedAt, expires: exp, expDays: dd,
           expired: dd != null && dd < 0 && OPEN_STATUSES.indexOf(st) !== -1,
+          organizationId: p.organizationId || '',
+          releasedAt: v.releasedAt || null,
+          // The same figure the Versions table and the customer document show. The
+          // latest version is already on the wire with its sections and items, so this
+          // costs no extra request per row.
+          totalMinor: versionTotalMinor(v),
         };
       });
       drawPropFilters(user);
       drawProposals(user);
     } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
   }
+  /**
+   * Seven narrow columns that add up to less than the content width, so the list no
+   * longer scrolls sideways.
+   *
+   * Two columns were folded away to pay for the one that was missing. Created rides
+   * under Last modified — the date people actually sort on — and the version rides
+   * under the proposal number, where it reads as "v2 of 2" without needing a heading
+   * of its own. The space both freed went to Total. Sorting by version went with the
+   * column; nobody sorts a pipeline by version number.
+   */
   var PROP_COLS = [
     { key: 'customer', label: 'Customer' },
     { key: 'title', label: 'Proposal' },
-    { key: 'version', label: 'Ver', align: 'center' },
     { key: 'status', label: 'Status' },
-    { key: 'created', label: 'Created' },
-    { key: 'modified', label: 'Last modified' },
+    { key: 'totalMinor', label: 'Total', align: 'right' },
+    { key: 'modified', label: 'Modified' },
     { key: 'expires', label: 'Expires' },
     { key: '', label: '' },
   ];
-  function ptd(v, align, extra) { return '<td style="padding:12px 14px;border-bottom:1px solid #f2f3ef;white-space:nowrap;text-align:' + (align || 'left') + ';' + (extra || '') + '">' + v + '</td>'; }
+  function ptd(v, align, extra) { return '<td style="padding:10px 11px;border-bottom:1px solid #f2f3ef;white-space:nowrap;text-align:' + (align || 'left') + ';' + (extra || '') + '">' + v + '</td>'; }
+  /** Customer and proposal names wrap rather than forcing the table wider. */
+  function ptdWrap(v, extra) { return '<td style="padding:10px 11px;border-bottom:1px solid #f2f3ef;white-space:normal;overflow-wrap:anywhere;' + (extra || '') + '">' + v + '</td>'; }
   function drawProposals(user) {
     var box = document.getElementById('propList'); if (!box) return;
     var q = props.q.trim().toLowerCase();
@@ -3185,17 +3207,48 @@
         ? '<select class="pQuick" data-id="' + r.id + '" data-vid="' + r.vid + '" style="padding:6px 8px;border:1px solid #dcded7;border-radius:8px;font-size:12px;background:#fff;color:#3d4a55;max-width:170px;">' +
           '<option value="">Quick status…</option>' + acts.map(function (a) { return '<option value="' + a[0] + '">' + esc(a[1]) + '</option>'; }).join('') + '</select>'
         : '';
+      // A shelved proposal gets one extra action: ask whether it is still live. It
+      // sits beside the status picker rather than inside it because it sends nothing
+      // on its own — it opens a draft for the rep to read and send.
+      var reengage = r.status === 'EXPIRED'
+        ? '<button class="pReengage" data-id="' + r.id + '" title="Draft an email asking whether they are still interested" style="border:1px solid #dcded7;background:#fff;border-radius:8px;padding:6px 9px;font-size:12px;color:#3d4a55;cursor:pointer;white-space:nowrap;">Still interested?</button>'
+        : '';
       return '<tr style="cursor:pointer;" data-id="' + r.id + '">' +
-        ptd('<b style="font-weight:600;">' + esc(r.customer) + '</b>' + (r.contact ? '<div class="muted" style="font-size:12px;">' + esc(r.contact) + '</div>' : '')) +
-        ptd('<b style="font-weight:600;">' + esc(r.title) + '</b><div class="muted" style="font-size:12px;">' + esc(r.number) + (r.preparedBy ? ' · ' + esc(r.preparedBy) : '') + '</div>') +
-        ptd('v' + r.version + (r.versionCount > 1 ? '<div class="muted" style="font-size:11px;">of ' + r.versionCount + '</div>' : ''), 'center') +
-        ptd(statusChip(r.status)) + ptd(fmtDate(r.created)) + ptd(fmtDate(r.modified)) + ptd(expCell) +
-        ptd(quick, 'right', 'padding:8px 14px;') + '</tr>';
+        ptdWrap('<b style="font-weight:600;">' + esc(r.customer) + '</b>' + (r.contact ? '<div class="muted" style="font-size:12px;">' + esc(r.contact) + '</div>' : '')) +
+        ptdWrap('<b style="font-weight:600;">' + esc(r.title) + '</b><div class="muted" style="font-size:12px;">' + esc(r.number) +
+          ' · v' + r.version + (r.versionCount > 1 ? ' of ' + r.versionCount : '') +
+          (r.preparedBy ? ' · ' + esc(r.preparedBy) : '') + '</div>') +
+        ptd(statusChip(r.status)) +
+        ptd('<b style="font-weight:600;">' + fmtMoney(r.totalMinor, 'USD') + '</b>', 'right') +
+        ptd(fmtDate(r.modified) + '<div class="muted" style="font-size:11px;">made ' + esc(fmtDate(r.created)) + '</div>') +
+        ptd(expCell) +
+        ptd('<div style="display:flex;gap:6px;justify-content:flex-end;align-items:center;flex-wrap:wrap;">' + reengage + quick + '</div>', 'right', 'padding:8px 11px;') + '</tr>';
     }
     var body = rows.map(rowHtml).join('');
+
+    /** A full-width banner row introducing a block of rows, with that block's total. */
+    function bandRow(label, list, tone) {
+      var sum = list.reduce(function (n, r) { return n + (Number(r.totalMinor) || 0); }, 0);
+      return '<tr><td colspan="7" style="padding:12px 11px 9px;border-bottom:1px solid #e7e8e3;background:' + tone + ';">' +
+        '<b style="font-weight:650;font-size:13px;letter-spacing:.02em;">' + esc(label) + '</b>' +
+        '<span class="muted" style="font-size:12.5px;margin-left:9px;">' + list.length + ' proposal' + (list.length === 1 ? '' : 's') +
+        (sum ? ' · ' + fmtMoney(sum, 'USD') : '') + '</span></td></tr>';
+    }
+
+    // The combined view is one page in two bands: what is still live, then what has
+    // been shelved. Grouping by customer is suppressed here — two nestings deep
+    // (band, then customer) stops being a list anyone can scan.
+    var banded = props.filter === 'both' && rows.length;
+    if (banded) {
+      var activeRows = rows.filter(function (r) { return r.status !== 'EXPIRED'; });
+      var deadRows = rows.filter(function (r) { return r.status === 'EXPIRED'; });
+      body =
+        (activeRows.length ? bandRow('Active', activeRows, '#f1f6f2') + activeRows.map(rowHtml).join('') : '') +
+        (deadRows.length ? bandRow('No longer active', deadRows, '#f4f5f1') + deadRows.map(rowHtml).join('') : '');
+    }
     // Grouped view: one collapsible header per customer, carrying the count and the
     // open value — the two numbers you actually want when scanning an account.
-    if (props.grouped && rows.length) {
+    if (!banded && props.grouped && rows.length) {
       var order = [], byCust = {};
       rows.forEach(function (r) {
         if (!byCust[r.customer]) { byCust[r.customer] = []; order.push(r.customer); }
@@ -3208,7 +3261,7 @@
         var flagged = mine.filter(function (r) { return r.expired; }).length;
         var isOpen = props.collapsed.indexOf(cust) === -1;
         return '<tr class="pGroup" data-cust="' + esc(cust) + '" style="cursor:pointer;background:#f4f5f1;">' +
-            '<td colspan="8" style="padding:11px 14px;border-bottom:1px solid #e7e8e3;">' +
+            '<td colspan="7" style="padding:11px 14px;border-bottom:1px solid #e7e8e3;">' +
               '<span style="display:inline-block;width:14px;color:#8a8f85;">' + (isOpen ? '▾' : '▸') + '</span>' +
               '<b style="font-weight:650;font-size:13.5px;">' + esc(cust) + '</b>' +
               '<span class="muted" style="font-size:12.5px;margin-left:10px;">' + mine.length + ' proposal' + (mine.length === 1 ? '' : 's') +
@@ -3219,8 +3272,10 @@
       }).join('');
     }
 
-    box.innerHTML = '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:14px;overflow-x:auto;"><table style="width:100%;min-width:1160px;border-collapse:collapse;font-size:14px;"><thead><tr>' + head + '</tr></thead><tbody>' +
-      (body || '<tr><td style="padding:22px 16px;color:#909689;" colspan="8">' + (props.rows.length ? 'No proposals match this view.' : 'No proposals yet.') + '</td></tr>') + '</tbody></table></div>' +
+    // No min-width, and the two name columns wrap: the table sizes itself to the
+    // window instead of demanding 1160px and scrolling sideways.
+    box.innerHTML = '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:14px;overflow:hidden;"><table style="width:100%;border-collapse:collapse;font-size:13.5px;table-layout:auto;"><thead><tr>' + head + '</tr></thead><tbody>' +
+      (body || '<tr><td style="padding:22px 16px;color:#909689;" colspan="7">' + (props.rows.length ? 'No proposals match this view.' : 'No proposals yet.') + '</td></tr>') + '</tbody></table></div>' +
       (props.rows.filter(function (r) { return r.expired; }).length ? '<div style="margin-top:10px;font-size:12.5px;color:#9c3327;">⚑ Flagged rows are past their expiration date and still open — re-date them or mark them no longer active.</div>' : '');
     box.querySelectorAll('th[data-sk]').forEach(function (th) {
       th.addEventListener('click', function () {
@@ -3235,6 +3290,15 @@
         var c = tr.getAttribute('data-cust'), i = props.collapsed.indexOf(c);
         if (i === -1) props.collapsed.push(c); else props.collapsed.splice(i, 1);
         propsPersist(); drawProposals(user);
+      });
+    });
+    // Bound before the row handler and stopping propagation, so drafting an email
+    // does not also navigate into the proposal.
+    box.querySelectorAll('button.pReengage').forEach(function (bt) {
+      bt.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        var row = props.rows.filter(function (r) { return r.id === bt.getAttribute('data-id'); })[0];
+        if (row) openCustomerEmail(row, user, 'reengage');
       });
     });
     box.querySelectorAll('tr[data-id]').forEach(function (tr) { tr.addEventListener('click', function () { openProposalDetail(tr.getAttribute('data-id'), user); }); });
@@ -3361,6 +3425,155 @@
     }
     return a;
   }
+  /**
+   * Draft a customer email and hand it to the desktop mail client.
+   *
+   * Nothing is sent from the server: the composer builds a mailto: URL, so the
+   * message opens in Outlook as a normal draft the rep reads, edits and sends from
+   * their own mailbox. That keeps it out of Resend's transactional stream (which the
+   * customer sees as machine mail) and means a reply lands in the rep's inbox.
+   *
+   * Because the send happens outside the app, the app cannot observe it. The log-it
+   * checkbox writes a line to the customer's note log so the account history still
+   * shows the outreach — that record is the rep's assertion, not a delivery receipt,
+   * and the wording says so.
+   *
+   * `row` needs: id, organizationId, number, title, customer, totalMinor,
+   * releasedAt, expires.
+   */
+  async function openCustomerEmail(row, user, kind) {
+    var ctx = { contacts: [] };
+    try {
+      var rc = await authed('/proposals/' + row.id + '/send-context');
+      if (rc.ok) ctx = await rc.json();
+    } catch (e) {}
+    var contacts = (ctx.contacts || []).filter(function (c) { return c.email; });
+    var me = (user && (user.name || user.email)) || '';
+    var money = fmtMoney(row.totalMinor, 'USD');
+    var first = function (n) { return String(n || '').trim().split(/\s+/)[0] || 'there'; };
+
+    function defaults(toName) {
+      if (kind === 'reengage') {
+        return {
+          subject: 'Still interested? ' + (row.title || row.number),
+          body: 'Hi ' + first(toName) + ',\n\n' +
+            'I am checking in on ' + (row.title || 'the proposal') + ' (' + row.number + '), ' + money + '.' +
+            (row.releasedAt ? ' We sent it on ' + fmtDate(row.releasedAt) + '.' : '') + '\n\n' +
+            'It is marked no longer active on our side' +
+            (row.expires ? ', as it passed its ' + fmtDate(row.expires) + ' expiration date' : '') + '. ' +
+            'If you are still considering it, reply and I will re-date it and confirm current pricing.\n\n' +
+            'If the timing has changed or the project is on hold, let me know and I will close it out.\n\n' +
+            'Thanks,\n' + me + '\nSummit Sensory Gym',
+        };
+      }
+      return {
+        subject: (row.title || row.number) + ' — Summit Sensory Gym',
+        body: 'Hi ' + first(toName) + ',\n\n' +
+          'Following up on ' + (row.title || 'your proposal') + ' (' + row.number + '), ' + money + '.\n\n' +
+          '\n\nThanks,\n' + me + '\nSummit Sensory Gym',
+      };
+    }
+
+    if (!contacts.length) {
+      return openModal('Email ' + (row.customer || 'the customer'),
+        '<div class="muted" style="font-size:13px;line-height:1.6;">No contact on this customer has an email address, so there is nobody to address this to. Add one under CRM → ' +
+        esc(row.customer || 'the customer') + ' → Contacts, then come back.</div>', null, '', {});
+    }
+
+    var d0 = defaults(contacts[0].name);
+    openModal(kind === 'reengage' ? 'Ask whether they are still interested' : 'Email ' + (row.customer || 'the customer'),
+      '<div class="muted" style="font-size:12.5px;line-height:1.55;margin-bottom:12px;">This opens a draft in your own mail client. Nothing is sent from this app — you read it, edit it and send it from your mailbox, so their reply comes back to you.</div>' +
+      fieldRow('To', '<select id="ceTo" style="' + IN + '">' + contacts.map(function (c, i) {
+        return '<option value="' + i + '">' + esc(c.name + ' <' + c.email + '>') + (c.isDecisionMaker ? ' — decision maker' : '') + '</option>';
+      }).join('') + '</select>') +
+      fieldRow('Subject', '<input id="ceSubj" style="' + IN + '" value="' + esc(d0.subject) + '">') +
+      '<div class="field"><label>Message</label><textarea id="ceBody" rows="12" style="' + IN + 'resize:vertical;font-size:13.5px;line-height:1.55;">' + esc(d0.body) + '</textarea></div>' +
+      '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:13px;line-height:1.5;">' +
+        '<input type="checkbox" id="ceLog" checked style="margin-top:3px;">' +
+        '<span>Add a line to this customer\u2019s note log recording that I sent this. <span class="muted">A note that you drafted and opened it — not proof of delivery.</span></span></label>',
+      async function (close, showErr) {
+        var i = Number(document.getElementById('ceTo').value) || 0;
+        var to = contacts[i];
+        if (!to) return showErr('Pick a recipient.');
+        var subj = document.getElementById('ceSubj').value;
+        var bodyTxt = document.getElementById('ceBody').value;
+        if (!subj.trim()) return showErr('The subject is empty.');
+        if (document.getElementById('ceLog').checked && row.organizationId) {
+          try {
+            await authed('/crm/organizations/' + row.organizationId + '/notes', {
+              method: 'POST',
+              body: {
+                proposalId: row.id,
+                body: 'Emailed ' + to.name + ' (' + to.email + ') from Outlook — subject: ' + subj.trim(),
+              },
+            });
+          } catch (e) {}
+        }
+        // A real anchor click, not location.href: it survives being inside an iframe
+        // and does not leave the app on a mailto: navigation if no handler is set.
+        var a = document.createElement('a');
+        a.href = 'mailto:' + encodeURIComponent(to.email) +
+          '?subject=' + encodeURIComponent(subj) + '&body=' + encodeURIComponent(bodyTxt);
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function () { document.body.removeChild(a); }, 0);
+        close();
+      }, 'Open in Outlook');
+
+    // Re-greet the newly chosen recipient, but only where the rep has not typed over
+    // the draft. Comparing against what was last generated is what makes that safe.
+    var prevIdx = 0;
+    var sel = document.getElementById('ceTo');
+    if (sel) sel.addEventListener('change', function () {
+      var i = Number(sel.value) || 0;
+      if (i === prevIdx) return;
+      var was = defaults(contacts[prevIdx].name), now = defaults(contacts[i].name);
+      var ta = document.getElementById('ceBody'), su = document.getElementById('ceSubj');
+      if (ta && ta.value === was.body) ta.value = now.body;
+      if (su && su.value === was.subject) su.value = now.subject;
+      prevIdx = i;
+    });
+  }
+
+  /**
+   * The ideal decision timeline and the follow-up date, editable from the proposal.
+   *
+   * All three live on the CUSTOMER record, not the proposal — one account has one
+   * decision window, and a per-proposal copy would immediately disagree with itself
+   * across versions. The panel says so, because editing something here that also
+   * changes elsewhere should never be a surprise.
+   *
+   * The follow-up date defaults to seven days after the version was released. That
+   * default is applied server-side at release time; this panel additionally SUGGESTS
+   * it (marked as such, not saved) when a released proposal has no follow-up date
+   * yet — an older one released before the rule existed, say.
+   */
+  function proposalTimelinePanel(p, latest) {
+    var dates = p.customerDates || {};
+    var suggested = '';
+    if (!dates.followUpDate && latest && latest.releasedAt) {
+      var d = new Date(latest.releasedAt);
+      if (!isNaN(d)) { d.setDate(d.getDate() + 7); suggested = d.toISOString().slice(0, 10); }
+    }
+    var lbl = 'font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;font-weight:600;margin-bottom:5px;';
+    return '<div class="card">' +
+      '<div class="muted" style="font-size:12.5px;line-height:1.55;margin-bottom:14px;">Kept on <b style="color:#20241f;font-weight:600;">' + esc(p.organizationName || 'the customer') + '</b>, so every proposal for this account reads the same window. Changing it here changes it in CRM.</div>' +
+      '<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end;">' +
+        '<div style="flex:1 1 150px;"><div style="' + lbl + '">Decision from</div><input type="date" id="ptFrom" value="' + esc(dates.decisionFrom || '') + '" style="' + IN + '"></div>' +
+        '<div style="flex:1 1 150px;"><div style="' + lbl + '">Decision to</div><input type="date" id="ptTo" value="' + esc(dates.decisionTo || '') + '" style="' + IN + '"></div>' +
+        '<div style="flex:1 1 150px;"><div style="' + lbl + '">Follow-up date</div><input type="date" id="ptFollow" value="' + esc(dates.followUpDate || suggested) + '" style="' + IN + (suggested ? 'border-color:#eadfbe;background:#fdfaf1;' : '') + '"></div>' +
+        '<button class="btn" id="ptSave" style="width:auto;padding:10px 17px;">Save dates</button>' +
+      '</div>' +
+      '<div id="ptMsg" style="font-size:12.5px;margin-top:10px;line-height:1.55;" class="muted">' +
+        (suggested
+          ? 'Suggested: seven days after this version was released on ' + esc(fmtDate(latest.releasedAt)) + '. Not saved until you press Save dates.'
+          : (latest && latest.releasedAt
+              ? 'Released ' + esc(fmtDate(latest.releasedAt)) + '. New releases set this to seven days later automatically unless a later date is already booked.'
+              : 'Once this version is released the follow-up date is set to seven days later automatically. Override it here at any time.')) +
+      '</div></div>';
+  }
+
   async function openProposalDetail(id, user) {
     var view = document.getElementById('view'); view.innerHTML = '<div class="muted" style="padding:24px;">Loading…</div>';
     var r = await authed('/proposals/' + id); if (!r.ok) { view.innerHTML = '<div class="err">Could not load proposal.</div>'; return; }
@@ -3371,10 +3584,21 @@
     if (latest.id && latest.status === 'ACCEPTED') {
       try { var ro = await authed('/orders/by-version/' + latest.id); if (ro.ok) lockedOrder = await ro.json(); } catch (e) {}
     }
+    // The accepted version is what QuickBooks can be pointed at; there is at most one.
+    var acceptedVersion = versions.filter(function (v) { return v.status === 'ACCEPTED'; })[0] || null;
     var actions = proposalActions(latest, user, lockedOrder);
     view.innerHTML =
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;"><button class="link-btn" id="propBack" style="width:auto;padding:7px 13px;">‹ Back to proposals</button></div>' +
-      '<div class="card" style="margin-bottom:16px;"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;"><div><div class="k">' + esc(p.number || '') + '</div><h2 style="font-size:22px;margin-top:2px;">' + esc(p.title) + '</h2></div><span class="chip">' + titleCase(latest.status || 'DRAFT') + '</span></div></div>' +
+      // The customer leads the card. Opening a proposal and having to infer whose it
+      // was from the title was the single most common complaint about this page.
+      '<div class="card" style="margin-bottom:16px;"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;"><div>' +
+        '<h2 style="font-size:23px;">' + esc(p.organizationName || 'Customer not found') + '</h2>' +
+        '<div style="font-size:15px;font-weight:600;margin-top:4px;">' + esc(p.title || '') + '</div>' +
+        '<div class="muted" style="font-size:12.5px;margin-top:3px;">' + esc(p.number || '') +
+          (latest.releasedAt ? ' · released ' + esc(fmtDate(latest.releasedAt)) : '') + '</div>' +
+      '</div><div style="text-align:right;"><span class="chip">' + titleCase(latest.status || 'DRAFT') + '</span>' +
+        '<div style="font-size:19px;font-weight:600;margin-top:8px;">' + fmtMoney(versionTotalMinor(latest), 'USD') + '</div>' +
+      '</div></div></div>' +
       sectionBlock('Versions', tableShell(['Version', 'Status', 'Created', 'Frozen', 'Total', ''], versions.map(function (v) {
         // A frozen version is the record of what went out — it opens read-only.
         var editable = !v.frozen && v.status === 'DRAFT' && hasRole(PROP_WRITE, user.role);
@@ -3394,14 +3618,65 @@
         ? sectionBlock('Send to the customer',
           '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">' +
             '<button class="btn" id="propSendDocs" style="width:auto;padding:10px 17px;">Send documents…</button>' +
-            '<div class="muted" style="font-size:12.5px;max-width:520px;line-height:1.55;">Choose the proposal, the financing options, or both. Every send is recorded with the recipient and the date.</div>' +
+            '<button class="link-btn" id="propEmail" style="width:auto;padding:10px 17px;">Write an email…</button>' +
+            '<div class="muted" style="font-size:12.5px;max-width:520px;line-height:1.55;">Send documents attaches the proposal or the financing sheet and records the send. Write an email opens a plain draft in Outlook for anything else.</div>' +
           '</div>')
+        : '') +
+      sectionBlock('Ideal decision timeline', proposalTimelinePanel(p, latest)) +
+      // QuickBooks, on the proposal, once a version has been accepted. Same three-step
+      // panel the order page shows and the same endpoints behind it — the order still
+      // owns the record, this is only a second door to it, so accounting does not have
+      // to leave the proposal they are looking at.
+      (acceptedVersion && hasRole(QBO_VIEW_ROLES, user.role)
+        ? sectionBlock('QuickBooks', '<div id="qboBox"><div class="muted" style="padding:16px;">Loading…</div></div>')
         : '') +
       sectionBlock('Financing options', '<div id="finBox"><div class="muted" style="padding:16px;">Loading…</div></div>') +
       (actions ? sectionBlock('Actions', '<div style="display:flex;gap:8px;flex-wrap:wrap;" id="propActions">' + actions + '</div>') : '');
     document.getElementById('propBack').addEventListener('click', function () { renderProposals(user); });
     var psd = document.getElementById('propSendDocs');
     if (psd) psd.addEventListener('click', function () { openSendDocuments(p, finCache, 'customer'); });
+    var pem = document.getElementById('propEmail');
+    if (pem) pem.addEventListener('click', function () {
+      openCustomerEmail({
+        id: p.id, organizationId: p.organizationId, number: p.number || '', title: p.title || '',
+        customer: p.organizationName || '', totalMinor: versionTotalMinor(latest),
+        releasedAt: latest.releasedAt || null, expires: latest.expirationDate || null,
+      }, user, 'general');
+    });
+
+    var ptSave = document.getElementById('ptSave');
+    if (ptSave) ptSave.addEventListener('click', async function () {
+      var msg = document.getElementById('ptMsg');
+      ptSave.disabled = true;
+      var r = await authed('/crm/organizations/' + p.organizationId + '/dates', {
+        method: 'PATCH',
+        body: {
+          decisionFrom: document.getElementById('ptFrom').value,
+          decisionTo: document.getElementById('ptTo').value,
+          followUpDate: document.getElementById('ptFollow').value,
+        },
+      });
+      ptSave.disabled = false;
+      if (!r.ok) {
+        var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {}
+        if (msg) { msg.style.color = '#9c3327'; msg.textContent = m || ('Could not save (' + r.status + ').'); }
+        return;
+      }
+      p.customerDates = await r.json();
+      if (msg) { msg.style.color = '#2f7d5d'; msg.textContent = 'Saved to ' + (p.organizationName || 'the customer') + '.'; }
+    });
+
+    // loadQbo was written against an operational order. Everything it reads is on the
+    // proposal too, so it is handed the same five fields rather than duplicated.
+    if (acceptedVersion && hasRole(QBO_VIEW_ROLES, user.role)) {
+      loadQbo({
+        proposalId: p.id,
+        proposalVersionId: acceptedVersion.id,
+        organizationId: p.organizationId,
+        number: p.number || '',
+        status: 'ACCEPTED',
+      }, user);
+    }
     loadFinancing(p, user);
     document.querySelectorAll('[data-open]').forEach(function (bt) {
       bt.addEventListener('click', function () {
@@ -8542,7 +8817,35 @@
     } catch (e) { box.innerHTML = '<div class="err">Could not reach QuickBooks.</div>'; return; }
 
     var connected = conn && (conn.connections || 0) > 0;
-    var canTransact = hasRole(QBO_TXN_ROLES, user.role) && connected && order.status !== 'CANCELLED';
+    /**
+     * Why Step 1 is unavailable, in words, instead of an absent button.
+     *
+     * This panel used to hide the Prepare button whenever any one of these was false,
+     * which left the operator staring at a QuickBooks section with nothing to press
+     * and no way to find out which condition had failed. The button is now always
+     * rendered; when it cannot be used it is disabled and carries the reason.
+     */
+    var blockReason = '';
+    if (!hasRole(QBO_TXN_ROLES, user.role)) {
+      blockReason = 'Your role (' + titleCase(user.role || 'unknown') + ') cannot create QuickBooks documents. Accounting or System Admin can.';
+    } else if (!conn) {
+      blockReason = 'This app could not read the QuickBooks connection status. Your role may lack the QuickBooks management permission, or Integrations is unreachable.';
+    } else if (!conn.configured) {
+      blockReason = 'QuickBooks is not configured on this deployment — the QBO environment variables are missing.';
+    } else if (!connected) {
+      blockReason = 'No active QuickBooks connection for the ' + titleCase(conn.environment || 'current') + ' environment. Connect it under Integrations.';
+    } else if (order.status === 'CANCELLED') {
+      blockReason = 'This order is cancelled, so its totals are no longer a thing to bill. Re-accept the proposal first.';
+    } else if (!order.proposalVersionId) {
+      blockReason = 'This record has no linked proposal version, so there are no accepted totals to freeze.';
+    }
+    var canTransact = !blockReason;
+    // A separate, softer warning: preparing and authorizing will both work, and the
+    // create at Step 3 will be refused by the server. Saying so here rather than two
+    // clicks later is the difference between a decision and a dead end.
+    var writeGate = connected && conn && conn.environment === 'PRODUCTION' && !conn.productionWritesEnabled
+      ? 'QuickBooks is connected to <b>Production</b> but production writes are switched off (QBO_PRODUCTION_WRITE_ENABLED is not true). You can prepare and authorize; Step 3 will be refused until that variable is set and the app redeployed.'
+      : '';
     var billByTxn = {};
     ((billing && billing.documents) || []).forEach(function (d) { billByTxn[d.id] = d; });
 
@@ -8617,8 +8920,17 @@
         (order.organizationId ? '<button class="link-btn" id="qboProfile" style="width:auto;padding:9px 14px;">Check customer profile</button>' : '') +
         '<button class="link-btn" id="qboRefresh" style="width:auto;padding:9px 14px;">Refresh from QuickBooks</button>' +
         (lastSync ? '<span class="muted" style="font-size:12px;">Last read ' + esc(fmtStamp(lastSync)) + '</span>' : '') +
-        '<div style="margin-left:auto;">' + (canTransact ? '<button class="btn" id="qboPrepare" style="width:auto;padding:9px 15px;">Step 1 · Prepare a document</button>' : '') + '</div>' +
+        '<div style="margin-left:auto;">' +
+          '<button class="btn" id="qboPrepare"' + (canTransact ? '' : ' disabled title="' + esc(blockReason) + '" style="width:auto;padding:9px 15px;opacity:.45;cursor:not-allowed;"') +
+          (canTransact ? ' style="width:auto;padding:9px 15px;"' : '') + '>Step 1 · Prepare a document</button>' +
+        '</div>' +
       '</div>' +
+      (blockReason
+        ? '<div style="background:#fbe9e6;border:1px solid #f0cdc7;border-radius:10px;padding:11px 13px;font-size:12.5px;color:#9c3327;line-height:1.55;margin-bottom:10px;"><b style="font-weight:600;">Step 1 is unavailable.</b> ' + esc(blockReason) + '</div>'
+        : '') +
+      (writeGate
+        ? '<div style="background:#fdf6e3;border:1px solid #eadfbe;border-radius:10px;padding:11px 13px;font-size:12.5px;color:#8a6d1f;line-height:1.55;margin-bottom:10px;">' + writeGate + '</div>'
+        : '') +
       (pending.length ? '<div style="font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#8a8f85;margin:14px 0 6px;">Waiting to be created</div>' +
         tableShell(['Document', 'Status', 'Amount', ''], pendingRows, 4, '') : '') +
       '<div style="font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#8a8f85;margin:16px 0 6px;">In QuickBooks</div>' +
@@ -8629,7 +8941,7 @@
         tableShell(['Sent', 'To', 'Subject', 'Balance then', 'Status'], remRows, 5, '') : '');
 
     var pb = document.getElementById('qboPrepare');
-    if (pb) pb.addEventListener('click', function () { openQboPrepare(order, user, txns); });
+    if (pb && canTransact) pb.addEventListener('click', function () { openQboPrepare(order, user, txns); });
     var prof = document.getElementById('qboProfile');
     if (prof) prof.addEventListener('click', function () { openQboProfile(order); });
     var rf = document.getElementById('qboRefresh');

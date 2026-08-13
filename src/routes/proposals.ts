@@ -57,6 +57,12 @@ const CreateSchema = z.object({
   expirationDate: z.coerce.date().optional(),
 });
 
+/**
+ * How long after release a proposal is chased. Overridable per customer from the
+ * proposal page or CRM; this is only the value used when nobody has said otherwise.
+ */
+const FOLLOW_UP_DAYS = 7;
+
 export function registerProposalRoutes(app: FastifyInstance): void {
   const read = { preHandler: requirePermission(Permission.PROPOSAL_READ) };
   const write = { preHandler: requirePermission(Permission.PROPOSAL_WRITE) };
@@ -111,12 +117,46 @@ export function registerProposalRoutes(app: FastifyInstance): void {
     return reply.status(201).send(result);
   });
 
+  /**
+   * One proposal with everything its page shows.
+   *
+   * The customer name and the three customer-level dates are resolved here rather
+   * than left to the client. The page leads with the customer name, and a header that
+   * needs a second request to say whose proposal this is renders blank first — which
+   * is exactly what it did.
+   *
+   * The dates live on Organization, not on the proposal: one account has one decision
+   * window, and a per-proposal copy would disagree with itself across versions.
+   */
   app.get('/proposals/:id', read, async (req) => {
     const { id } = req.params as { id: string };
-    return prisma.proposal.findUnique({
+    const proposal = await prisma.proposal.findUnique({
       where: { id },
       include: { versions: { orderBy: { version: 'asc' } } },
     });
+    if (!proposal) return null;
+    const org = await prisma.organization.findUnique({
+      where: { id: proposal.organizationId },
+      select: {
+        name: true,
+        decisionFrom: true,
+        decisionTo: true,
+        followUpDate: true,
+      },
+    });
+    const day = (d: Date | null | undefined): string | null =>
+      d ? d.toISOString().slice(0, 10) : null;
+    return {
+      ...proposal,
+      organizationName: org?.name ?? null,
+      // Same YYYY-MM-DD shape the date inputs and PATCH /crm/organizations/:id/dates
+      // both use, so the panel round-trips without reformatting.
+      customerDates: {
+        decisionFrom: day(org?.decisionFrom),
+        decisionTo: day(org?.decisionTo),
+        followUpDate: day(org?.followUpDate),
+      },
+    };
   });
 
   // Preview: returns visible sections resolved for the given facts (conditional + reordered).
@@ -319,6 +359,37 @@ export function registerProposalRoutes(app: FastifyInstance): void {
         where: { id: versionId },
         data: { priceSnapshotId: snap.id },
       });
+    }
+    // Releasing books the follow-up: seven days after the release, on the customer.
+    //
+    // Applied here rather than in the browser so it holds however the release
+    // happened — the builder, the list's quick-status picker, or a script. It only
+    // ever fills a gap: a date already sitting on or after the release is a decision
+    // somebody made deliberately (a customer who asked for three weeks), and
+    // overwriting that with a default would be the app arguing with its user. A date
+    // in the past is a stale follow-up from an earlier round, so that one is replaced.
+    const released = await prisma.proposalVersion.findUnique({
+      where: { id: versionId },
+      select: { releasedAt: true, proposal: { select: { organizationId: true } } },
+    });
+    if (released?.releasedAt && released.proposal) {
+      const org = await prisma.organization.findUnique({
+        where: { id: released.proposal.organizationId },
+        select: { followUpDate: true },
+      });
+      const due = new Date(released.releasedAt);
+      due.setUTCDate(due.getUTCDate() + FOLLOW_UP_DAYS);
+      const existing = org?.followUpDate ?? null;
+      if (!existing || existing < released.releasedAt) {
+        await prisma.organization.update({
+          where: { id: released.proposal.organizationId },
+          data: {
+            followUpDate: new Date(
+              Date.UTC(due.getUTCFullYear(), due.getUTCMonth(), due.getUTCDate()),
+            ),
+          },
+        });
+      }
     }
     // Release is also the handoff to the deal board: subtotal, title and the proposal
     // document itself. Reported, never fatal — the proposal is released whatever
