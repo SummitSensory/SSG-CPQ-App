@@ -3,6 +3,7 @@ import {
   formatMinor,
   toSalesLines,
   projectCustomField,
+  assertAssembledTotal,
   type AcceptedLine,
 } from './mapping.js';
 import { sumLineAmounts } from './estimates.js';
@@ -96,12 +97,14 @@ function scheduleNote(
 }
 
 export function buildInvoiceBody(input: InvoiceInput): Record<string, unknown> {
-  const lines: Array<Record<string, unknown>> = [
-    ...toSalesLines(input.lines, {
-      currency: input.currency,
-      groupSubtotals: input.groupSubtotals ?? true,
-    }),
-  ];
+  const productLines = toSalesLines(input.lines, {
+    currency: input.currency,
+    groupSubtotals: input.groupSubtotals ?? true,
+  });
+  // Summed before the charge rows are appended, so a mismatch can say whether the
+  // product lines or one of the charges is the component that disagrees.
+  const productTotal = sumLineAmounts(productLines);
+  const lines: Array<Record<string, unknown>> = [...productLines];
 
   for (const fee of input.fees) {
     if (fee.amountMinor === 0n) continue;
@@ -131,11 +134,15 @@ export function buildInvoiceBody(input: InvoiceInput): Record<string, unknown> {
   }
 
   const assembled = sumLineAmounts(lines);
-  if (assembled !== input.expectedTotalMinor) {
-    throw new Error(
-      `Invoice lines total ${assembled} but the accepted grand total is ${input.expectedTotalMinor}`,
-    );
-  }
+  assertAssembledTotal('Invoice', assembled, input.expectedTotalMinor, [
+    [
+      `${input.lines.filter((l) => (l.kind ?? 'PRODUCT') === 'PRODUCT').length} product lines`,
+      productTotal,
+    ],
+    ...input.fees.map((f) => [f.label, f.amountMinor] as [string, bigint]),
+    ['discount', -input.orderDiscountMinor],
+    ['tax', input.taxMinor],
+  ]);
 
   // The payment split is carried by the QuickBooks payment term (SalesTermRef)
   // and restated in the memo. It used to print as a closing description row,
