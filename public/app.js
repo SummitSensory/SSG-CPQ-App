@@ -3069,10 +3069,10 @@
   }
   var PROP_FILTERS = [
     { id: 'all', label: 'All' },
-    // One page carrying both halves of the pipeline: what is still live on top, what
-    // has been shelved underneath. Answering "what is outstanding, and what went
-    // quiet" used to mean two tabs and two passes over the same list.
-    { id: 'both', label: 'Active & inactive' },
+    // One page carrying the whole live pipeline: proposals still inside their
+    // expiration window on top, the ones that have run past it underneath. Both bands
+    // are open proposals — the lower one is the work, not an archive.
+    { id: 'both', label: 'Active & past expiration' },
     { id: 'active', label: 'Active' },
     { id: 'expired', label: 'Past expiration' },
     { id: 'inactive', label: 'Inactive' },
@@ -3117,7 +3117,9 @@
   }
   function matchFilter(r, f) {
     if (f === 'all') return true;
-    if (f === 'both') return (OPEN_STATUSES.indexOf(r.status) !== -1 && !r.expired) || r.status === 'EXPIRED';
+    // Every open proposal, in or out of date. `expired` is only ever set on an open
+    // status, so this one test covers both bands the view then splits them into.
+    if (f === 'both') return OPEN_STATUSES.indexOf(r.status) !== -1;
     if (f === 'active') return OPEN_STATUSES.indexOf(r.status) !== -1 && !r.expired;
     if (f === 'expired') return r.expired;
     if (f === 'inactive') return r.status === 'EXPIRED';
@@ -3235,16 +3237,16 @@
         (sum ? ' · ' + fmtMoney(sum, 'USD') : '') + '</span></td></tr>';
     }
 
-    // The combined view is one page in two bands: what is still live, then what has
-    // been shelved. Grouping by customer is suppressed here — two nestings deep
-    // (band, then customer) stops being a list anyone can scan.
+    // The combined view is one page in two bands: still inside the expiration window,
+    // then past it. Grouping by customer is suppressed here — two nestings deep (band,
+    // then customer) stops being a list anyone can scan.
     var banded = props.filter === 'both' && rows.length;
     if (banded) {
-      var activeRows = rows.filter(function (r) { return r.status !== 'EXPIRED'; });
-      var deadRows = rows.filter(function (r) { return r.status === 'EXPIRED'; });
+      var liveRows = rows.filter(function (r) { return !r.expired; });
+      var lateRows = rows.filter(function (r) { return r.expired; });
       body =
-        (activeRows.length ? bandRow('Active', activeRows, '#f1f6f2') + activeRows.map(rowHtml).join('') : '') +
-        (deadRows.length ? bandRow('No longer active', deadRows, '#f4f5f1') + deadRows.map(rowHtml).join('') : '');
+        (liveRows.length ? bandRow('Active', liveRows, '#f1f6f2') + liveRows.map(rowHtml).join('') : '') +
+        (lateRows.length ? bandRow('Past expiration', lateRows, '#fdf1ef') + lateRows.map(rowHtml).join('') : '');
     }
     // Grouped view: one collapsible header per customer, carrying the count and the
     // open value — the two numbers you actually want when scanning an account.
