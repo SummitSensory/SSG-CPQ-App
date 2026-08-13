@@ -15,6 +15,36 @@ export function minorToQboAmount(minor: bigint): number {
   return Number(`${neg ? '-' : ''}${whole}.${frac}`);
 }
 
+/**
+ * Refuse a document whose assembled lines do not equal the accepted grand total,
+ * and say WHERE the money went missing.
+ *
+ * The check itself is not new and must never be relaxed — a document that bills an
+ * amount the customer did not accept is the one outcome worse than a failed push.
+ * What was missing was the arithmetic. "lines total 1481300 but the accepted grand
+ * total is 1646690" says a difference exists and nothing about which of seven
+ * components caused it, which turns a one-line log into an afternoon of reading
+ * pricing code. Every component is now named with its figure, so the offending one
+ * is visible in the log entry itself.
+ */
+export function assertAssembledTotal(
+  kind: string,
+  assembled: bigint,
+  expected: bigint,
+  parts: Array<[string, bigint]>,
+): void {
+  if (assembled === expected) return;
+  const gap = expected - assembled;
+  const abs = gap < 0n ? -gap : gap;
+  const detail = parts.map(([label, v]) => `${label} ${v}`).join(', ');
+  throw new Error(
+    `${kind} lines total ${assembled} but the accepted grand total is ${expected} — ` +
+      `${gap > 0n ? 'short' : 'over'} by ${abs}. Assembled from: ${detail}. ` +
+      `The accepted total is never adjusted to match, so the component above that ` +
+      `disagrees with the proposal is the one to correct.`,
+  );
+}
+
 /** Human money for header/subtotal text lines (not used for any arithmetic). */
 export function formatMinor(minor: bigint, currency = 'USD'): string {
   const v = minorToQboAmount(minor);
