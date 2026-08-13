@@ -37,7 +37,7 @@ function esc(s: string): string {
  */
 export async function loadCustomerSource(
   organizationId: string,
-): Promise<{ src: CustomerSource; email: string | null }> {
+): Promise<{ src: CustomerSource; email: string | null; billingFromShipping: boolean }> {
   const org = await prisma.organization.findUnique({
     where: { id: organizationId },
     include: {
@@ -48,10 +48,17 @@ export async function loadCustomerSource(
   if (!org) throw new Error(`Organization ${organizationId} not found`);
 
   const contact = org.contacts.find((c) => c.email) ?? org.contacts[0] ?? null;
-  const billing = org.addresses.find((a) => a.type === 'BILLING') ?? null;
+  const billingRow = org.addresses.find((a) => a.type === 'BILLING') ?? null;
   const shipping = org.addresses.find((a) => a.type === 'SHIPPING') ?? null;
 
-  const addr = (a: typeof billing) =>
+  // Most customers are billed where they are shipped, and the proposal already
+  // works that way ("bill to same as ship to"). So a customer with one address on
+  // record bills to it rather than pushing an invoice with an empty bill-to. A
+  // BILLING row always wins — this is a fallback, never an override.
+  const billing = billingRow ?? shipping;
+  const billingFromShipping = !billingRow && !!shipping;
+
+  const addr = (a: typeof billingRow) =>
     a
       ? {
           line1: a.line1,
@@ -77,7 +84,7 @@ export async function loadCustomerSource(
     billing: addr(billing),
     shipping: addr(shipping),
   };
-  return { src, email: contact?.email ?? null };
+  return { src, email: contact?.email ?? null, billingFromShipping };
 }
 
 /**

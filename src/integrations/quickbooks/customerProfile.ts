@@ -156,7 +156,7 @@ export async function compareCustomerProfile(
   });
   if (!org) throw new NotFoundError('Customer not found');
 
-  const { src } = await loadCustomerSource(organizationId);
+  const { src, billingFromShipping } = await loadCustomerSource(organizationId);
   const link = await findLink({ entity: 'Customer', entityId: organizationId });
 
   const warnings: string[] = [];
@@ -166,6 +166,10 @@ export async function compareCustomerProfile(
     );
   if (!src.billing)
     warnings.push('No billing address on file. QuickBooks will show the invoice with no bill-to.');
+  else if (billingFromShipping)
+    warnings.push(
+      'No separate billing address on file — the shipping address below is what will be sent as the bill-to. Add a billing address on the customer record if they differ.',
+    );
   if (!src.shipping) warnings.push('No shipping address on file.');
 
   let qbo: QboCustomerFull | null = null;

@@ -42,11 +42,83 @@ export const MAT_MARKUP_MULTIPLIER = 1.4;
  */
 export const MAT_SKU_PREFIX = 'R-SSG';
 
+/**
+ * The mat vendor. Every Adventure floor pad is a Resilite pad, so the supplying
+ * vendor is a property of the family rather than something a catalog row has to
+ * carry — there are no catalog rows for mats (see MAT_SKU_PREFIX above).
+ *
+ * Match this string to the Manufacturer record name exactly, or the vendor's
+ * address block on the BOM comes out blank: the BOM looks its vendor up by name.
+ */
+export const MAT_VENDOR = 'Resilite';
+
+/**
+ * Pad weight per square foot, by thickness. Null means "not on record" — the
+ * procurement line then leaves weight alone and behaves exactly as it did before
+ * mats resolved at all, rather than asserting a made-up shipping weight. Fill both
+ * in and mat weight starts flowing onto BOMs and freight requests with no other
+ * change.
+ */
+export const MAT_WEIGHT_PER_SQFT: Record<MatThickness, number | null> = {
+  '3.25': null,
+  '2': null,
+};
+
 /** The settings key holding the cost per square foot for a given thickness. */
 const COST_KEY: Record<MatThickness, string> = {
   '3.25': 'matCostPerSqFt325',
   '2': 'matCostPerSqFt2',
 };
+
+/** R-SSG-{LL}{WW}CLM[-2] — the number matSku() generates. */
+const MAT_SKU_RE = /^R-SSG-(\d{2})(\d{2})CLM(-2)?$/i;
+
+/** What a procurement line needs to know about a mat that has no catalog row. */
+export interface MatProcurementRef {
+  vendor: string;
+  unitCostMinor: number;
+  /** Null while MAT_WEIGHT_PER_SQFT has no rate for this thickness. */
+  unitWeightLbs: number | null;
+}
+
+/**
+ * The dimensions and thickness encoded in a mat part number, or null when the
+ * string is not one. The inverse of matSku().
+ */
+export function parseMatSku(
+  sku: string | null | undefined,
+): { lengthFt: number; widthFt: number; thickness: MatThickness } | null {
+  const m = MAT_SKU_RE.exec(String(sku ?? '').trim());
+  if (!m) return null;
+  return {
+    lengthFt: Number(m[1]),
+    widthFt: Number(m[2]),
+    thickness: m[3] ? '2' : '3.25',
+  };
+}
+
+/**
+ * Vendor, cost and weight for a mat line, derived from its part number.
+ *
+ * The mat is priced, not stocked: cost is recomputed from the same business numbers
+ * the proposal quoted from rather than read off a catalog row, so purchasing sees
+ * the figure the deal was priced on. Returns null for any part number that is not
+ * a mat, which is how callers tell mats apart from everything else.
+ */
+export function matProcurementRef(
+  sku: string | null | undefined,
+  s: FormulaSettings = defaultSettings(),
+): MatProcurementRef | null {
+  const parsed = parseMatSku(sku);
+  if (!parsed) return null;
+  const quote = computeFloorPadding(parsed.lengthFt, parsed.widthFt, parsed.thickness, s);
+  const rate = MAT_WEIGHT_PER_SQFT[parsed.thickness];
+  return {
+    vendor: MAT_VENDOR,
+    unitCostMinor: quote.costMinor,
+    unitWeightLbs: rate == null ? null : Math.round(quote.squareFeet * rate * 1000) / 1000,
+  };
+}
 
 export interface MatQuote {
   sku: string;

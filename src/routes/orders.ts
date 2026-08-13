@@ -4,20 +4,54 @@ import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import { ValidationError } from '../lib/errors.js';
 import {
-  createAcceptedOrder, getOrder, listOrders, handoffStatus, orderAudit, verifyIntegrity,
-  addRequirement, updateRequirement, addTask, updateTask, upsertProcurementLine, recordIntegrationRef,
-  unlockOrder, orderForVersion, patchProcurementLine, updateOrderBomHeader, applyPowderColorToOrder,
+  createAcceptedOrder,
+  getOrder,
+  listOrders,
+  handoffStatus,
+  orderAudit,
+  verifyIntegrity,
+  addRequirement,
+  updateRequirement,
+  addTask,
+  updateTask,
+  upsertProcurementLine,
+  recordIntegrationRef,
+  unlockOrder,
+  orderForVersion,
+  patchProcurementLine,
+  updateOrderBomHeader,
+  applyPowderColorToOrder,
+  deleteProcurementLine,
 } from '../handoff/service.js';
 import { buildBom } from '../handoff/bom.js';
-import type { HandoffStatus, RequirementCategory, RequirementStatus, HandoffTaskStatus, Role } from '@prisma/client';
+import type {
+  HandoffStatus,
+  RequirementCategory,
+  RequirementStatus,
+  HandoffTaskStatus,
+  Role,
+} from '@prisma/client';
 
 /** AcceptedOrder rows carry BigInt columns — serialize for JSON. */
-function serializeOrder<T extends { grandTotalMinor: bigint; depositDueMinor: bigint }>(o: T): Record<string, unknown> {
-  return { ...o, grandTotalMinor: o.grandTotalMinor.toString(), depositDueMinor: o.depositDueMinor.toString() };
+function serializeOrder<T extends { grandTotalMinor: bigint; depositDueMinor: bigint }>(
+  o: T,
+): Record<string, unknown> {
+  return {
+    ...o,
+    grandTotalMinor: o.grandTotalMinor.toString(),
+    depositDueMinor: o.depositDueMinor.toString(),
+  };
 }
 
 const ApprovalSchema = z.object({
-  method: z.enum(['SIGNATURE', 'COUNTERSIGNED_PROPOSAL', 'PURCHASE_ORDER', 'EMAIL', 'VERBAL', 'PORTAL']),
+  method: z.enum([
+    'SIGNATURE',
+    'COUNTERSIGNED_PROPOSAL',
+    'PURCHASE_ORDER',
+    'EMAIL',
+    'VERBAL',
+    'PORTAL',
+  ]),
   approverName: z.string().min(1),
   approverTitle: z.string().optional(),
   approverEmail: z.string().email().optional(),
@@ -70,13 +104,21 @@ export function registerOrderRoutes(app: FastifyInstance): void {
     return rows.map(serializeOrder);
   });
 
-  app.get('/orders/:id', read, async (req) => serializeOrder(await getOrder((req.params as { id: string }).id)));
-  app.get('/orders/:id/status', read, async (req) => handoffStatus((req.params as { id: string }).id));
+  app.get('/orders/:id', read, async (req) =>
+    serializeOrder(await getOrder((req.params as { id: string }).id)),
+  );
+  app.get('/orders/:id/status', read, async (req) =>
+    handoffStatus((req.params as { id: string }).id),
+  );
   app.get('/orders/:id/audit', read, async (req) => orderAudit((req.params as { id: string }).id));
-  app.get('/orders/:id/verify', read, async (req) => verifyIntegrity((req.params as { id: string }).id));
+  app.get('/orders/:id/verify', read, async (req) =>
+    verifyIntegrity((req.params as { id: string }).id),
+  );
 
   /** Which order (if any) a proposal version is locked into — drives the unlock action. */
-  app.get('/orders/by-version/:versionId', read, async (req) => orderForVersion((req.params as { versionId: string }).versionId));
+  app.get('/orders/by-version/:versionId', read, async (req) =>
+    orderForVersion((req.params as { versionId: string }).versionId),
+  );
 
   /**
    * Unlock: the customer wants a last-minute change. The order is cancelled (never
@@ -86,42 +128,147 @@ export function registerOrderRoutes(app: FastifyInstance): void {
   app.post('/orders/:id/unlock', manage, async (req) => {
     const { id } = req.params as { id: string };
     const b = (req.body || {}) as { reason?: string; createRevision?: boolean };
-    if (!b.reason || !b.reason.trim()) throw new ValidationError('A reason is required to unlock an order');
+    if (!b.reason || !b.reason.trim())
+      throw new ValidationError('A reason is required to unlock an order');
     return unlockOrder(id, { reason: b.reason, createRevision: b.createRevision }, req.user!.sub);
   });
 
   // --- Handoff sub-records (operational data is mutable; the locked snapshot is not) ---
   app.post('/orders/:id/requirements', handoff, async (req) => {
     const { id } = req.params as { id: string };
-    const b = req.body as { category: RequirementCategory; title: string; detail?: Record<string, unknown>; targetDate?: string };
+    const b = req.body as {
+      category: RequirementCategory;
+      title: string;
+      detail?: Record<string, unknown>;
+      targetDate?: string;
+    };
     if (!b?.category || !b?.title) throw new ValidationError('category and title are required');
-    return addRequirement(id, { category: b.category, title: b.title, detail: b.detail, targetDate: b.targetDate ? new Date(b.targetDate) : undefined }, req.user!.sub);
+    return addRequirement(
+      id,
+      {
+        category: b.category,
+        title: b.title,
+        detail: b.detail,
+        targetDate: b.targetDate ? new Date(b.targetDate) : undefined,
+      },
+      req.user!.sub,
+    );
   });
 
   app.patch('/orders/requirements/:id', handoff, async (req) => {
     const { id } = req.params as { id: string };
-    const b = req.body as { status?: RequirementStatus; targetDate?: string | null; detail?: Record<string, unknown>; isException?: boolean; exceptionReason?: string };
-    return updateRequirement(id, { status: b.status, targetDate: b.targetDate === null ? null : b.targetDate ? new Date(b.targetDate) : undefined, detail: b.detail, isException: b.isException, exceptionReason: b.exceptionReason }, req.user!.sub);
+    const b = req.body as {
+      status?: RequirementStatus;
+      targetDate?: string | null;
+      detail?: Record<string, unknown>;
+      isException?: boolean;
+      exceptionReason?: string;
+    };
+    return updateRequirement(
+      id,
+      {
+        status: b.status,
+        targetDate:
+          b.targetDate === null ? null : b.targetDate ? new Date(b.targetDate) : undefined,
+        detail: b.detail,
+        isException: b.isException,
+        exceptionReason: b.exceptionReason,
+      },
+      req.user!.sub,
+    );
   });
 
   app.post('/orders/:id/tasks', handoff, async (req) => {
     const { id } = req.params as { id: string };
-    const b = req.body as { title: string; description?: string; category?: RequirementCategory; assigneeId?: string; assigneeRole?: Role; dueDate?: string };
+    const b = req.body as {
+      title: string;
+      description?: string;
+      category?: RequirementCategory;
+      assigneeId?: string;
+      assigneeRole?: Role;
+      dueDate?: string;
+    };
     if (!b?.title) throw new ValidationError('title is required');
-    return addTask(id, { title: b.title, description: b.description, category: b.category, assigneeId: b.assigneeId, assigneeRole: b.assigneeRole, dueDate: b.dueDate ? new Date(b.dueDate) : undefined }, req.user!.sub);
+    return addTask(
+      id,
+      {
+        title: b.title,
+        description: b.description,
+        category: b.category,
+        assigneeId: b.assigneeId,
+        assigneeRole: b.assigneeRole,
+        dueDate: b.dueDate ? new Date(b.dueDate) : undefined,
+      },
+      req.user!.sub,
+    );
   });
 
   app.patch('/orders/tasks/:id', handoff, async (req) => {
     const { id } = req.params as { id: string };
-    const b = req.body as { status?: HandoffTaskStatus; assigneeId?: string | null; assigneeRole?: Role | null; dueDate?: string | null; isException?: boolean; exceptionReason?: string };
-    return updateTask(id, { status: b.status, assigneeId: b.assigneeId, assigneeRole: b.assigneeRole, dueDate: b.dueDate === null ? null : b.dueDate ? new Date(b.dueDate) : undefined, isException: b.isException, exceptionReason: b.exceptionReason }, req.user!.sub);
+    const b = req.body as {
+      status?: HandoffTaskStatus;
+      assigneeId?: string | null;
+      assigneeRole?: Role | null;
+      dueDate?: string | null;
+      isException?: boolean;
+      exceptionReason?: string;
+    };
+    return updateTask(
+      id,
+      {
+        status: b.status,
+        assigneeId: b.assigneeId,
+        assigneeRole: b.assigneeRole,
+        dueDate: b.dueDate === null ? null : b.dueDate ? new Date(b.dueDate) : undefined,
+        isException: b.isException,
+        exceptionReason: b.exceptionReason,
+      },
+      req.user!.sub,
+    );
   });
 
+  /**
+   * Add (or update) a Bill of Materials line. Cost and weight are optional: left
+   * out, the catalog fills them in — see upsertProcurementLine.
+   */
   app.post('/orders/:id/procurement', handoff, async (req) => {
     const { id } = req.params as { id: string };
-    const b = req.body as { id?: string; productId?: string; sku?: string; name: string; quantity: number; vendor?: string; poNumber?: string; sourced?: boolean; targetDate?: string; notes?: string; isException?: boolean; exceptionReason?: string };
-    if (!b?.name || !b?.quantity) throw new ValidationError('name and quantity are required');
-    return upsertProcurementLine(id, { ...b, targetDate: b.targetDate ? new Date(b.targetDate) : undefined }, req.user!.sub);
+    const b = req.body as {
+      id?: string;
+      productId?: string;
+      sku?: string;
+      name: string;
+      quantity: number;
+      vendor?: string;
+      poNumber?: string;
+      sourced?: boolean;
+      targetDate?: string;
+      notes?: string;
+      isException?: boolean;
+      exceptionReason?: string;
+      unitCostMinor?: number | null;
+      unitWeightLbs?: number | null;
+    };
+    if (!b?.name?.trim()) throw new ValidationError('An item name is required');
+    const qty = Number(b?.quantity);
+    if (!Number.isFinite(qty) || qty <= 0)
+      throw new ValidationError('Quantity must be greater than zero');
+    return upsertProcurementLine(
+      id,
+      {
+        ...b,
+        name: b.name.trim(),
+        quantity: qty,
+        targetDate: b.targetDate ? new Date(b.targetDate) : undefined,
+      },
+      req.user!.sub,
+    );
+  });
+
+  /** Remove a Bill of Materials line. Refused while its vendor section is submitted. */
+  app.delete('/orders/procurement/:lineId', handoff, async (req) => {
+    const { lineId } = req.params as { lineId: string };
+    return deleteProcurementLine(lineId, req.user!.sub);
   });
 
   app.post('/orders/:id/integrations', manage, async (req) => {
@@ -149,14 +296,16 @@ export function registerOrderRoutes(app: FastifyInstance): void {
   app.patch('/orders/:id/bom', handoff, async (req) => {
     const { id } = req.params as { id: string };
     const parsed = BomHeader.safeParse(req.body);
-    if (!parsed.success) throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid BOM header');
+    if (!parsed.success)
+      throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid BOM header');
     return serializeOrder(await updateOrderBomHeader(id, parsed.data, req.user!.sub));
   });
 
   app.patch('/orders/procurement/:lineId', handoff, async (req) => {
     const { lineId } = req.params as { lineId: string };
     const parsed = BomLinePatch.safeParse(req.body);
-    if (!parsed.success) throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid line');
+    if (!parsed.success)
+      throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid line');
     return patchProcurementLine(lineId, parsed.data, req.user!.sub);
   });
 

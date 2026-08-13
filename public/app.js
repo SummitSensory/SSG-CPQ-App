@@ -7838,7 +7838,7 @@
     // section actually has a bag number — most vendors ship nothing bagged.
     var hasBag = lines.some(function (p) { return p.packagingBag; });
     var showBag = hasBag && !!s.showPackagingBag;
-    var cols = 8 + (showColor ? 1 : 0) + (showBag ? 1 : 0);
+    var cols = 8 + (showColor ? 1 : 0) + (showBag ? 1 : 0) + (edit ? 1 : 0);
     var rowHtmlFor = function (p) {
       var ext = (Number(p.unitCostMinor) || 0) * (Number(p.quantity) || 0);
       var buy = p.productUrl
@@ -7860,6 +7860,7 @@
               '<option value="false"' + (p.sourced ? '' : ' selected') + '>Pending</option>' +
               '<option value="true"' + (p.sourced ? ' selected' : '') + '>Ordered</option></select>'
           : (p.sourced ? '<span class="chip">Ordered</span>' : '<span class="muted">Pending</span>')) +
+        (edit ? td('<button class="link-btn" data-line-del="' + p.id + '" data-line-name="' + esc(p.name) + '" title="Take this part off the order" style="width:auto;padding:5px 10px;font-size:12px;color:#a2402f;">Remove</button>') : '') +
         '</tr>';
     };
 
@@ -7877,7 +7878,7 @@
       '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;font-weight:600;">' + s.unitCount + '</td>' +
       '<td colspan="' + (2 + (showColor ? 1 : 0) + (showBag ? 1 : 0)) + '" style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td>' +
       '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;font-weight:600;">' + money2(s.extendedCostMinor) + '</td>' +
-      '<td colspan="2" style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td></tr>';
+      '<td colspan="' + (edit ? 3 : 2) + '" style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td></tr>';
 
     var warn = s.missingColorSkus.length
       ? '<div style="background:#fdf6e6;border:1px solid #ecd9a6;border-radius:9px;padding:9px 12px;font-size:12.5px;color:#6b5a24;margin-bottom:10px;">' +
@@ -7933,9 +7934,15 @@
         (edit && s.showPowderColor ? colorApplyRow(s) : '') +
         '<div style="margin-top:14px;overflow:auto;">' +
           tableShell(
-            ['Item', 'Part #', 'Qty'].concat(showBag ? ['Bag #'] : [], showColor ? ['Powder color'] : [], ['Weight (lb)', 'Cost each', 'Total cost', 'Notes', 'Status']),
+            ['Item', 'Part #', 'Qty'].concat(showBag ? ['Bag #'] : [], showColor ? ['Powder color'] : [], ['Weight (lb)', 'Cost each', 'Total cost', 'Notes', 'Status'], edit ? [''] : []),
             rows, cols, '') +
         '</div>' +
+        (edit
+          ? '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:11px;flex-wrap:wrap;">' +
+              '<span class="muted" style="font-size:11.5px;">Parts added or removed here change what is purchased, not the accepted proposal. Both go on the order timeline.</span>' +
+              '<button class="link-btn" data-line-add="' + esc(s.vendor) + '" style="width:auto;padding:8px 14px;white-space:nowrap;">Add a part</button>' +
+            '</div>'
+          : '') +
         sendHistory(s) +
       '</div>' +
     '</div>';
@@ -8080,6 +8087,71 @@
         var line = (procData || []).filter(function (x) { return x.id === el.getAttribute('data-id'); })[0];
         if (line) line[f] = body[f];
         setTimeout(function () { el.style.borderColor = '#dcded7'; }, 900);
+      });
+    });
+
+    /* Add / remove parts. The BOM is the purchasing list: the shop routinely needs a
+     * part the proposal never mentioned, and just as routinely does not buy one it
+     * did. Both are refused once the vendor's section is submitted. */
+    var refreshLines = async function () {
+      var rr = await authed('/orders/' + order.id);
+      if (rr.ok) { var oo = await rr.json(); order.procurement = oo.procurement; }
+      reload();
+    };
+
+    document.querySelectorAll('[data-line-del]').forEach(function (bt) {
+      bt.addEventListener('click', async function () {
+        if (!confirm('Take “' + bt.getAttribute('data-line-name') + '” off this order?\n\nIt leaves the Bill of Materials but stays on the accepted proposal. The removal is recorded on the order timeline.')) return;
+        bt.disabled = true;
+        var r = await authed('/orders/procurement/' + bt.getAttribute('data-line-del'), { method: 'DELETE' });
+        bt.disabled = false;
+        if (!r.ok) return fail(r, 'Could not remove the line');
+        refreshLines();
+      });
+    });
+
+    document.querySelectorAll('[data-line-add]').forEach(function (bt) {
+      bt.addEventListener('click', function () {
+        var vendor = bt.getAttribute('data-line-add');
+        openModal('Add a part to ' + vendor,
+          '<div class="muted" style="font-size:13px;margin-bottom:12px;line-height:1.55;">Type a part number and the catalog fills in the rest. Leave cost blank to use the catalog’s.</div>' +
+          fieldRow('Part #', '<input id="plSku" placeholder="e.g. 6820H-114" style="' + IN + 'text-transform:uppercase;">') +
+          fieldRow('Item', '<input id="plName" placeholder="Description" style="' + IN + '">') +
+          fieldRow('Qty', '<input id="plQty" type="number" min="1" step="1" value="1" style="' + IN + '">') +
+          fieldRow('Cost each', '<input id="plCost" type="number" min="0" step="0.01" placeholder="From the catalog" style="' + IN + '">'),
+          async function (close, showErr) {
+            var name = document.getElementById('plName').value.trim();
+            var sku = document.getElementById('plSku').value.trim().toUpperCase();
+            var qty = parseFloat(document.getElementById('plQty').value);
+            var cost = document.getElementById('plCost').value.trim();
+            if (!name) return showErr('Give the item a description.');
+            if (!(qty > 0)) return showErr('Quantity must be greater than zero.');
+            var body = { name: name, quantity: qty };
+            if (sku) body.sku = sku;
+            // The section the button was pressed in wins, so a part lands where the
+            // person adding it expects even when the catalog names another vendor.
+            if (vendor && vendor !== 'Unassigned vendor') body.vendor = vendor;
+            if (cost !== '') body.unitCostMinor = Math.round(parseFloat(cost) * 100);
+            var r = await authed('/orders/' + order.id + '/procurement', { method: 'POST', body: body });
+            if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} return showErr(m || 'Could not add the part (' + r.status + ').'); }
+            close();
+            refreshLines();
+          });
+
+        // Part-number lookup: fills the description and cost from the SKU master.
+        var skuEl = document.getElementById('plSku');
+        if (skuEl) skuEl.addEventListener('blur', async function () {
+          var q = skuEl.value.trim();
+          if (!q) return;
+          var rs = await authed('/skus?q=' + encodeURIComponent(q) + '&pageSize=5');
+          if (!rs.ok) return;
+          var items = ((await rs.json()) || {}).items || [];
+          var hit = items.filter(function (k) { return String(k.part).toUpperCase() === q.toUpperCase(); })[0];
+          if (!hit) return;
+          var nameEl = document.getElementById('plName'), costEl = document.getElementById('plCost');
+          if (nameEl && !nameEl.value.trim()) nameEl.value = hit.description || '';
+          if (costEl && !costEl.value.trim() && hit.unitCostMinor != null) costEl.value = (Number(hit.unitCostMinor) / 100).toFixed(2);
+        });
       });
     });
 

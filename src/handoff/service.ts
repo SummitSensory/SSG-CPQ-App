@@ -15,6 +15,7 @@ import { versionTotals, metaOf } from '../proposals/analytics.js';
 import { createNewVersion } from '../proposals/service.js';
 import { loadFormulaSettings } from '../routes/formulas.js';
 import { setting } from '../proposals/formulaSettings.js';
+import { matProcurementRef } from '../proposals/matPricing.js';
 import type {
   RequirementCategory,
   RequirementStatus,
@@ -212,17 +213,28 @@ export async function resolveCatalogRefs(
     }
   }
 
+  // Mats are priced, never stocked, so no catalog row exists to resolve and the
+  // line would land on the BOM as Unassigned vendor at $0.00. Derive their vendor
+  // and cost from the part number instead — but only for fields the catalog left
+  // blank, so adding real Resilite SKUs later simply takes over.
+  const matSkus = lines.map((l) => l.sku).filter((v): v is string => !!v);
+  const matSettings = matSkus.some((sku) => matProcurementRef(sku) !== null)
+    ? await loadFormulaSettings()
+    : null;
+
   return lines.map((l) => {
     const hit =
       (l.productId ? byId.get(l.productId) : undefined) ??
       (l.sku ? byPart.get(l.sku) : undefined) ??
       byName.get((l.name || '').trim());
     const byPartHit = l.sku ? byPart.get(l.sku) : undefined;
+    const sku = l.sku || hit?.sku || null;
+    const mat = matSettings ? matProcurementRef(sku, matSettings) : null;
     return {
-      sku: l.sku || hit?.sku || null,
-      vendor: hit?.vendor ?? null,
-      unitCostMinor: hit?.unitCostMinor ?? byPartHit?.unitCostMinor ?? null,
-      unitWeightLbs: hit?.unitWeightLbs ?? byPartHit?.unitWeightLbs ?? null,
+      sku,
+      vendor: hit?.vendor ?? mat?.vendor ?? null,
+      unitCostMinor: hit?.unitCostMinor ?? byPartHit?.unitCostMinor ?? mat?.unitCostMinor ?? null,
+      unitWeightLbs: hit?.unitWeightLbs ?? byPartHit?.unitWeightLbs ?? mat?.unitWeightLbs ?? null,
     };
   });
 }
@@ -819,6 +831,33 @@ export async function updateTask(
   return t;
 }
 
+/**
+ * A submitted vendor section is the sheet that vendor already has, so its line-up is
+ * frozen with it: nothing may be added to it or taken off it until it is unlocked.
+ * 'Unassigned vendor' is the catch-all bucket and never has a section of its own.
+ */
+async function assertSectionOpen(orderId: string, vendor: string | null | undefined) {
+  const name = (vendor && vendor.trim()) || 'Unassigned vendor';
+  const section = await prisma.bomVendorSection.findUnique({
+    where: { orderId_vendor: { orderId, vendor: name } },
+    select: { status: true },
+  });
+  if (section?.status === 'SUBMITTED') {
+    throw new ValidationError(
+      `The ${name} Bill of Materials is submitted. Unlock it for changes first.`,
+    );
+  }
+}
+
+/**
+ * Add or update a Bill of Materials line.
+ *
+ * A part added by hand goes through the same catalog resolution as an accepted one,
+ * so it arrives with its vendor, unit cost and weight already filled in — someone
+ * adding a forgotten bracket types a part number and a quantity, not a cost. An
+ * explicitly supplied vendor or cost always wins, which is what keeps a part added
+ * inside a vendor's section in that section even when the catalog disagrees.
+ */
 export async function upsertProcurementLine(
   orderId: string,
   input: {
@@ -834,31 +873,71 @@ export async function upsertProcurementLine(
     notes?: string;
     isException?: boolean;
     exceptionReason?: string;
+    unitCostMinor?: number | null;
+    unitWeightLbs?: number | null;
   },
   userId: string,
 ) {
   await getOrder(orderId);
+  const [ref = EMPTY_REF] = await resolveCatalogRefs([
+    { productId: input.productId ?? null, sku: input.sku ?? null, name: input.name },
+  ]);
+  const vendor = input.vendor?.trim() || ref.vendor || null;
+  await assertSectionOpen(orderId, vendor);
+
   const data = {
     orderId,
     productId: input.productId ?? null,
-    sku: input.sku ?? null,
+    sku: input.sku ?? ref.sku ?? null,
     name: input.name,
     quantity: input.quantity,
-    vendor: input.vendor ?? null,
+    vendor,
     poNumber: input.poNumber ?? null,
     sourced: input.sourced ?? false,
     targetDate: input.targetDate ?? null,
     notes: input.notes ?? null,
     isException: input.isException ?? false,
     exceptionReason: input.exceptionReason ?? null,
+    unitCostMinor: input.unitCostMinor ?? ref.unitCostMinor ?? null,
+    unitWeightLbs: input.unitWeightLbs ?? ref.unitWeightLbs ?? null,
   };
   const line = input.id
     ? await prisma.procurementLine.update({ where: { id: input.id }, data })
     : await prisma.procurementLine.create({ data });
   await logEvent(orderId, input.id ? 'procurement.update' : 'procurement.add', userId, {
     lineId: line.id,
+    sku: data.sku,
+    name: data.name,
+    quantity: data.quantity,
+    vendor: data.vendor,
   });
+  await recomputeStatus(orderId, userId);
   return line;
+}
+
+/**
+ * Take a line off the Bill of Materials.
+ *
+ * The accepted proposal is untouched — this is the purchasing list, and a part the
+ * shop is not buying does not belong on it. What was removed is written to the order
+ * timeline with its part number and quantity, because a BOM that no longer matches
+ * what the customer signed has to be explainable months later.
+ */
+export async function deleteProcurementLine(lineId: string, userId: string) {
+  const existing = await prisma.procurementLine.findUnique({ where: { id: lineId } });
+  if (!existing) throw new NotFoundError('Bill of Materials line not found');
+  await assertSectionOpen(existing.orderId, existing.vendor);
+
+  await prisma.procurementLine.delete({ where: { id: lineId } });
+  await logEvent(existing.orderId, 'procurement.remove', userId, {
+    lineId,
+    sku: existing.sku,
+    name: existing.name,
+    quantity: existing.quantity,
+    vendor: existing.vendor,
+  });
+  await recomputeStatus(existing.orderId, userId);
+  return { ok: true };
 }
 
 /**
