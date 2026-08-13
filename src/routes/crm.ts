@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { recordAudit } from '../lib/audit.js';
 import { requirePermission } from '../plugins/authz.js';
@@ -57,6 +58,60 @@ export function registerCrmRoutes(app: FastifyInstance): void {
       include: { addresses: true, contacts: true },
     });
     if (!org) throw new NotFoundError();
+    return org;
+  });
+
+  /**
+   * Correct a customer's tax standing.
+   *
+   * There was no way to change an organization after it was created — tax status
+   * could only ever be set on the New organization form, and the exemption number had
+   * no field at all. So a customer entered as taxable who later produced a
+   * certificate (or the reverse) could not be fixed, and the QuickBooks push had
+   * nothing right to send.
+   *
+   * Deliberately narrow: tax standing only. Renaming an organization runs through
+   * duplicate detection and normalizedName, and changing a customer type moves it
+   * between reporting buckets — neither belongs behind a two-field form.
+   *
+   * Clearing the exemption flag also clears the number rather than leaving it behind,
+   * because a stale certificate number against a taxable customer is worse than none.
+   */
+  app.patch('/crm/organizations/:id', write, async (req) => {
+    const { id } = req.params as { id: string };
+    const parsed = z
+      .object({
+        taxExempt: z.boolean(),
+        taxExemptId: z.string().trim().max(60).nullish(),
+      })
+      .safeParse(req.body);
+    if (!parsed.success)
+      throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid tax details.');
+
+    const before = await prisma.organization.findUnique({
+      where: { id },
+      select: { taxExempt: true, taxExemptId: true },
+    });
+    if (!before) throw new NotFoundError();
+
+    const taxExempt = parsed.data.taxExempt;
+    const taxExemptId = taxExempt ? parsed.data.taxExemptId?.trim() || null : null;
+
+    const org = await prisma.organization.update({
+      where: { id },
+      data: { taxExempt, taxExemptId },
+      select: { id: true, name: true, taxExempt: true, taxExemptId: true },
+    });
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'crm.org.tax_update',
+      details: {
+        entity: 'Organization',
+        id,
+        from: { taxExempt: before.taxExempt, taxExemptId: before.taxExemptId },
+        to: { taxExempt, taxExemptId },
+      },
+    });
     return org;
   });
 

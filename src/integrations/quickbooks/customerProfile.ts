@@ -198,7 +198,12 @@ export async function compareCustomerProfile(
     field('email', 'Invoice email', src.email ?? '', qbo?.PrimaryEmailAddr?.Address ?? ''),
     field('phone', 'Phone', src.phone ?? '', qbo?.PrimaryPhone?.FreeFormNumber ?? ''),
     field('contact', 'Primary contact', contactName, qboContactName),
-    field('contactTitle', 'Contact title', src.contactTitle ?? '', qbo?.Title ?? ''),
+    // Contact title is deliberately absent. QuickBooks' `Title` is a name PREFIX
+    // (Mr., Ms., Dr.) that prints in front of the first name, while the CRM's
+    // contactTitle is a job title — so it is never sent (see customerFields in
+    // mapping.ts). Comparing a field nobody pushes only ever produced a permanent
+    // "Not in QuickBooks" flag against a difference that is correct and cannot be
+    // resolved, which trains people to ignore the flags that matter.
     field('billing', 'Bill to', oneLine(src.billing), qboLine(qbo?.BillAddr)),
     field('shipping', 'Ship to', oneLine(src.shipping), qboLine(qbo?.ShipAddr)),
     field(
@@ -220,6 +225,11 @@ export async function compareCustomerProfile(
     qboBalanceMinor:
       qbo && qbo.Balance != null ? BigInt(Math.round(Number(qbo.Balance) * 100)).toString() : null,
     qboLastUpdatedAt: qbo?.MetaData?.LastUpdatedTime ?? null,
+    // The two values the profile panel lets an operator correct in place. Sent as
+    // raw values, not only inside the formatted comparison rows, so the editor is
+    // seeded from the record rather than by parsing "Exempt" back out of a cell.
+    taxExempt: src.taxExempt,
+    taxExemptId: src.taxExemptId ?? null,
     fields,
     differenceCount: fields.filter((f) => f.differs).length,
     missingCount: fields.filter((f) => f.missingInQbo).length,

@@ -127,8 +127,30 @@ function customerFields(src: CustomerSource): Record<string, unknown> {
   if (billing) body.BillAddr = toQboAddr(billing);
   if (shipping) body.ShipAddr = toQboAddr(shipping);
 
-  // Tax-exempt customers must not be taxed by QuickBooks' own engine.
-  if (src.taxExempt) body.Taxable = false;
+  /**
+   * Taxability, sent in BOTH directions.
+   *
+   * This used to be `if (src.taxExempt) body.Taxable = false` — it could make a
+   * customer exempt and could never make one taxable again. Sparse updates leave
+   * unlisted fields alone, so once a QuickBooks customer was marked not taxable —
+   * by an earlier CRM push, by hand in QuickBooks, or by whatever created the record
+   * before this app existed — no amount of correcting the CRM would clear it. The
+   * profile panel would sit there reporting "CRM: Taxable / QuickBooks: Exempt,
+   * Differs" after a successful sync, which is precisely the state that makes people
+   * distrust the whole comparison.
+   *
+   * Always sending it is what makes the panel's own claim true: the CRM is the source
+   * of truth for this field.
+   */
+  body.Taxable = !src.taxExempt;
+
+  /**
+   * The exemption or resale number goes in QuickBooks' own ResaleNum field, not only
+   * into the notes. An auditor asking why a sale was untaxed wants the certificate
+   * number on the customer record, not buried in a free-text note. Cleared when the
+   * CRM has none, for the same reason as above.
+   */
+  body.ResaleNum = src.taxExempt ? src.taxExemptId?.trim() || '' : '';
 
   const notes = [
     src.notes?.trim() || null,

@@ -8945,7 +8945,7 @@
     var pb = document.getElementById('qboPrepare');
     if (pb && canTransact) pb.addEventListener('click', function () { openQboPrepare(order, user, txns); });
     var prof = document.getElementById('qboProfile');
-    if (prof) prof.addEventListener('click', function () { openQboProfile(order); });
+    if (prof) prof.addEventListener('click', function () { openQboProfile(order, user); });
     var rf = document.getElementById('qboRefresh');
     if (rf) rf.addEventListener('click', async function () {
       rf.disabled = true; rf.textContent = 'Reading QuickBooks…';
@@ -9050,20 +9050,26 @@
    * the CRM owns every field here, so the fix for a difference is to correct the
    * customer record and re-sync, never to pull QuickBooks' copy back in.
    */
-  async function openQboProfile(order) {
+  async function openQboProfile(order, user) {
     var r = await authed('/integrations/quickbooks/customers/' + encodeURIComponent(order.organizationId) + '/profile');
     if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} alert(m || ('Could not read the QuickBooks profile (' + r.status + ').')); return; }
     var d = await r.json();
-    var rows = d.fields.map(function (f) {
-      var tone = f.differs ? '#c2452f' : f.missingInQbo ? '#b7873a' : '#82877d';
-      var note = f.differs ? 'Differs' : f.missingInQbo ? 'Not in QuickBooks' : f.empty ? 'Blank in both' : '';
-      return '<tr>' +
-        '<td style="padding:8px 10px;border-bottom:1px solid #e7e8e3;vertical-align:top;color:#5c6357;white-space:nowrap;">' + esc(f.label) + '</td>' +
-        '<td style="padding:8px 10px;border-bottom:1px solid #e7e8e3;vertical-align:top;">' + (esc(f.crm) || '<span class="muted">—</span>') + '</td>' +
-        '<td style="padding:8px 10px;border-bottom:1px solid #e7e8e3;vertical-align:top;' + (f.differs ? 'color:#9c3327;' : '') + '">' + (esc(f.qbo) || '<span class="muted">—</span>') + '</td>' +
-        '<td style="padding:8px 10px;border-bottom:1px solid #e7e8e3;vertical-align:top;font-size:12px;color:' + tone + ';white-space:nowrap;">' + note + '</td>' +
-        '</tr>';
-    }).join('');
+    // Only somebody who may edit a customer gets the editor; everyone else keeps the
+    // read-only comparison they had.
+    var canEditTax = canCrmWrite(user && user.role);
+    function profileRows(fields) {
+      return (fields || []).map(function (f) {
+        var tone = f.differs ? '#c2452f' : f.missingInQbo ? '#b7873a' : '#82877d';
+        var note = f.differs ? 'Differs' : f.missingInQbo ? 'Not in QuickBooks' : f.empty ? 'Blank in both' : '';
+        return '<tr>' +
+          '<td style="padding:8px 10px;border-bottom:1px solid #e7e8e3;vertical-align:top;color:#5c6357;white-space:nowrap;">' + esc(f.label) + '</td>' +
+          '<td style="padding:8px 10px;border-bottom:1px solid #e7e8e3;vertical-align:top;">' + (esc(f.crm) || '<span class="muted">—</span>') + '</td>' +
+          '<td style="padding:8px 10px;border-bottom:1px solid #e7e8e3;vertical-align:top;' + (f.differs ? 'color:#9c3327;' : '') + '">' + (esc(f.qbo) || '<span class="muted">—</span>') + '</td>' +
+          '<td style="padding:8px 10px;border-bottom:1px solid #e7e8e3;vertical-align:top;font-size:12px;color:' + tone + ';white-space:nowrap;">' + note + '</td>' +
+          '</tr>';
+      }).join('');
+    }
+    var rows = profileRows(d.fields);
     openModal('QuickBooks customer profile',
       (!d.linked
         ? '<div class="placeholder" style="padding:16px;margin-bottom:12px;"><p class="muted" style="margin:0;">This customer is not linked to a QuickBooks customer yet. One will be created — or an existing customer with the same name adopted — the first time a document is pushed.</p></div>'
@@ -9075,12 +9081,83 @@
       '<table style="width:100%;border-collapse:collapse;font-size:13.5px;">' +
         '<thead><tr>' + ['', 'In this CRM', 'In QuickBooks', ''].map(function (h) {
           return '<th style="text-align:left;padding:6px 10px;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:#8a8f85;font-weight:600;border-bottom:1px solid #cfd3ca;">' + h + '</th>';
-        }).join('') + '</tr></thead><tbody>' + rows + '</tbody></table>' +
+        }).join('') + '</tr></thead><tbody id="ctxRows">' + rows + '</tbody></table>' +
+      /**
+       * Tax standing, editable here.
+       *
+       * This is the one field on the comparison whose correct value is a decision
+       * rather than a data-entry fix, and it is the field that decides whether
+       * QuickBooks adds sales tax to the invoice about to be pushed. Sending someone
+       * to CRM to change it was not possible in any case — an organization could not
+       * be edited after it was created — and sending them to Integrations to sync
+       * afterwards, from the screen where they are about to bill, was two detours from
+       * the place the question came up.
+       *
+       * Save writes the CRM record and immediately pushes the customer, then re-reads
+       * the comparison, so the row above either agrees or says why it does not.
+       */
+      (canEditTax
+        ? '<div style="border:1px solid #dcded7;border-radius:10px;padding:13px 14px;margin-top:14px;">' +
+            '<div style="font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#8a8f85;font-weight:600;margin-bottom:9px;">Tax standing</div>' +
+            '<label style="display:flex;align-items:center;gap:8px;font-size:13.5px;cursor:pointer;">' +
+              '<input type="checkbox" id="ctxExempt"' + (d.taxExempt ? ' checked' : '') + '>' +
+              ' This customer is exempt from sales tax</label>' +
+            '<div style="display:flex;gap:9px;align-items:flex-end;margin-top:11px;flex-wrap:wrap;">' +
+              '<div style="flex:1 1 220px;">' +
+                '<div style="font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;font-weight:600;margin-bottom:5px;">Exemption / resale certificate no.</div>' +
+                '<input id="ctxNum" value="' + esc(d.taxExemptId || '') + '" placeholder="As printed on the certificate" style="' + IN + '"' + (d.taxExempt ? '' : ' disabled') + '>' +
+              '</div>' +
+              '<button class="btn" id="ctxSave" style="width:auto;padding:10px 16px;">Save &amp; push to QuickBooks</button>' +
+            '</div>' +
+            '<div id="ctxMsg" class="muted" style="font-size:12.5px;margin-top:9px;line-height:1.55;">Exempt sends <b>Taxable: false</b> and the certificate number to QuickBooks. Taxable sends <b>Taxable: true</b>, which is what clears an exemption QuickBooks is holding.</div>' +
+          '</div>'
+        : '') +
       '<div class="muted" style="font-size:12.5px;margin-top:12px;line-height:1.55;">' +
         (d.differenceCount || d.missingCount
-          ? 'Correct anything wrong on the customer record, then push it with <b>Sync customer to QuickBooks</b> under Integrations. The CRM is the source of truth for every field above, so nothing here is ever pulled back the other way.'
+          ? 'Correct anything else on the customer record, then push it with <b>Sync customer to QuickBooks</b> under Integrations. The CRM is the source of truth for every field above, so nothing here is ever pulled back the other way.'
           : 'The two records agree.') + '</div>',
       null, 'Close', { maxWidth: '760px' });
+
+    var ctxEx = document.getElementById('ctxExempt');
+    var ctxNum = document.getElementById('ctxNum');
+    // A certificate number against a taxable customer is meaningless, so the field
+    // follows the flag rather than sitting there holding a stale value.
+    if (ctxEx && ctxNum) ctxEx.addEventListener('change', function () {
+      ctxNum.disabled = !ctxEx.checked;
+      if (!ctxEx.checked) ctxNum.value = '';
+    });
+    var ctxSave = document.getElementById('ctxSave');
+    if (ctxSave) ctxSave.addEventListener('click', async function () {
+      var msg = document.getElementById('ctxMsg');
+      var say = function (text, colour) { if (msg) { msg.style.color = colour || ''; msg.innerHTML = esc(text); } };
+      ctxSave.disabled = true; say('Saving…');
+      var rp = await authed('/crm/organizations/' + order.organizationId, {
+        method: 'PATCH',
+        body: { taxExempt: ctxEx.checked, taxExemptId: ctxEx.checked ? ctxNum.value.trim() : null },
+      });
+      if (!rp.ok) {
+        var pm = ''; try { pm = ((await rp.json()) || {}).message || ''; } catch (e) {}
+        ctxSave.disabled = false;
+        return say(pm || ('Could not save the customer record (' + rp.status + ').'), '#9c3327');
+      }
+      say('Saved. Pushing to QuickBooks…');
+      var rs = await authed('/integrations/quickbooks/customers/' + order.organizationId + '/sync', { method: 'POST' });
+      ctxSave.disabled = false;
+      if (!rs.ok) {
+        var sm = ''; try { sm = ((await rs.json()) || {}).message || ''; } catch (e) {}
+        return say('Saved in the CRM, but the push failed: ' + (sm || ('HTTP ' + rs.status)) + '. Retry with Sync customer to QuickBooks under Integrations.', '#9c3327');
+      }
+      // Re-read from QuickBooks and repaint the comparison. The whole point of this
+      // panel is that it reports what QuickBooks actually holds, so a success message
+      // on its own would be the app telling you it worked instead of showing you.
+      var rr = await authed('/integrations/quickbooks/customers/' + encodeURIComponent(order.organizationId) + '/profile');
+      if (!rr.ok) return say('Pushed to QuickBooks. Close and re-open this panel to see the result.', '#2f7d5d');
+      var nd = await rr.json();
+      var tb = document.getElementById('ctxRows');
+      if (tb) tb.innerHTML = profileRows(nd.fields);
+      say(nd.differenceCount ? 'Pushed. ' + nd.differenceCount + ' field(s) still differ above.' : 'Pushed. QuickBooks now matches the CRM.',
+        nd.differenceCount ? '#8a6d1f' : '#2f7d5d');
+    });
   }
 
   /**
