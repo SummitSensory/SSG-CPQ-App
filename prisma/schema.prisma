@@ -921,12 +921,21 @@ model Proposal {
   qboSalesTermId   String?
   qboSalesTermName String?
 
+  /// Archived proposals stay on record in full — nothing is destroyed. They drop out
+  /// of every pipeline view and out of the win-rate maths, and appear only under the
+  /// Archived tab with their reason. Reversible: clearing these three columns restores
+  /// the proposal exactly as it was, statuses and versions untouched.
+  archivedAt     DateTime?
+  archivedById   String?
+  archiveReason  String?
+
   createdAt      DateTime          @default(now())
   updatedAt      DateTime          @updatedAt
   versions       ProposalVersion[]
   freightRfqs    FreightRfq[]
 
   @@index([organizationId])
+  @@index([archivedAt])
 }
 
 // A version is the unit of immutability: once RELEASED it is frozen.

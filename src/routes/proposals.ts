@@ -5,6 +5,7 @@ import { releaseFreightRequest } from './freight.js';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import { ValidationError, NotFoundError } from '../lib/errors.js';
+import { recordAudit } from '../lib/audit.js';
 import {
   createProposal,
   updateVersionContent,
@@ -63,11 +64,18 @@ const CreateSchema = z.object({
  */
 const FOLLOW_UP_DAYS = 7;
 
+/**
+ * Roles that may archive or restore ANY proposal. Everyone else holding
+ * PROPOSAL_ARCHIVE (a sales rep) is limited to the ones they created.
+ */
+const MANAGES_ANY_PROPOSAL = ['SYSTEM_ADMIN', 'EXECUTIVE', 'SALES_MANAGER', 'ACCOUNTING'];
+
 export function registerProposalRoutes(app: FastifyInstance): void {
   const read = { preHandler: requirePermission(Permission.PROPOSAL_READ) };
   const write = { preHandler: requirePermission(Permission.PROPOSAL_WRITE) };
   const review = { preHandler: requirePermission(Permission.PROPOSAL_REVIEW) };
   const release = { preHandler: requirePermission(Permission.PROPOSAL_RELEASE) };
+  const archive = { preHandler: requirePermission(Permission.PROPOSAL_ARCHIVE) };
 
   // The list view needs the customer name, the created/modified/expiration dates
   // and the version count in one round trip — the proposal record itself carries
@@ -79,18 +87,28 @@ export function registerProposalRoutes(app: FastifyInstance): void {
       include: { versions: { orderBy: { version: 'desc' } } },
     });
     const orgIds = [...new Set(rows.map((r) => r.organizationId))];
-    const [orgs, users] = await Promise.all([
+    const [orgs, users, invoices] = await Promise.all([
       prisma.organization.findMany({
         where: { id: { in: orgIds } },
         select: { id: true, name: true, customerType: true },
       }),
       prisma.user.findMany({ select: { id: true, name: true, email: true } }),
+      // An accepted proposal that has been billed is a closed deal, and the invoice
+      // existing in QuickBooks is what says so. Only CREATED counts: a prepared or
+      // authorized invoice has not been raised yet, and a VOIDED one has been undone.
+      prisma.qboTransaction.findMany({
+        where: { type: 'INVOICE', status: 'CREATED' },
+        orderBy: { createdAt: 'asc' },
+        select: { proposalId: true, qboDocNumber: true, createdAt: true, amountMinor: true },
+      }),
     ]);
     const orgById = new Map(orgs.map((o) => [o.id, o]));
     const userById = new Map(users.map((u) => [u.id, u.name || u.email]));
+    const invoiceByProposal = new Map(invoices.map((t) => [t.proposalId, t]));
     return rows.map((p) => {
       const latest = p.versions[0];
       const org = orgById.get(p.organizationId);
+      const inv = invoiceByProposal.get(p.id) ?? null;
       return {
         ...p,
         versions: p.versions.slice(0, 1),
@@ -100,6 +118,11 @@ export function registerProposalRoutes(app: FastifyInstance): void {
         preparedBy: userById.get(p.createdById) ?? null,
         expirationDate: latest?.expirationDate ?? null,
         lastModifiedAt: latest?.updatedAt ?? p.updatedAt,
+        archivedBy: p.archivedById ? (userById.get(p.archivedById) ?? null) : null,
+        /** Deal Closed: accepted and invoiced in QuickBooks. */
+        invoiced: !!inv,
+        invoiceDocNumber: inv?.qboDocNumber ?? null,
+        invoicedAt: inv?.createdAt ?? null,
       };
     });
   });
@@ -430,5 +453,93 @@ export function registerProposalRoutes(app: FastifyInstance): void {
     });
     if (v) await releaseFreightRequest(v.proposalId, req.user!.sub, 'proposal no longer active');
     return { status: 'EXPIRED' };
+  });
+
+  /**
+   * Archive a proposal — the whole proposal, every version with it.
+   *
+   * Nothing is deleted and no status changes: an accepted proposal stays accepted, its
+   * snapshots and QuickBooks documents stay exactly where they are. The proposal simply
+   * leaves every pipeline view and the win-rate maths, and shows up under Archived with
+   * its reason. Restoring it clears the three columns and it is back as it was.
+   *
+   * Two guards. A sales rep may archive only proposals they created — the permission is
+   * granted broadly but ownership is checked here, because a rep tidying their own bad
+   * quotes must not be able to pull a colleague’s live deal out of the pipeline. And a
+   * proposal with live QuickBooks documents comes back needsConfirm on the first call:
+   * archiving does NOT void an estimate or an invoice, so somebody has to say out loud
+   * that they know the document is still standing in QuickBooks.
+   */
+  app.post('/proposals/:id/archive', archive, async (req) => {
+    const { id } = req.params as { id: string };
+    const body = (req.body ?? {}) as { reason?: string; confirm?: string };
+    const proposal = await prisma.proposal.findUnique({
+      where: { id },
+      select: { id: true, number: true, createdById: true, archivedAt: true },
+    });
+    if (!proposal) throw new NotFoundError('Proposal not found');
+    if (proposal.archivedAt) return { ok: true, archivedAt: proposal.archivedAt };
+    if (!MANAGES_ANY_PROPOSAL.includes(req.user!.role) && proposal.createdById !== req.user!.sub)
+      throw new ValidationError(
+        'You can only archive proposals you created. Ask a sales manager to archive this one.',
+      );
+
+    const live = await prisma.qboTransaction.findMany({
+      where: { proposalId: id, status: 'CREATED' },
+      select: { type: true, qboDocNumber: true, amountMinor: true },
+    });
+    if (live.length && (body.confirm ?? '').trim().toUpperCase() !== 'CONFIRM') {
+      return {
+        ok: false,
+        needsConfirm: true,
+        qboDocuments: live.map((t) => ({
+          type: t.type,
+          docNumber: t.qboDocNumber ?? '—',
+          amountMinor: Number(t.amountMinor),
+        })),
+      };
+    }
+
+    const reason = (body.reason ?? '').trim().slice(0, 500) || null;
+    const updated = await prisma.proposal.update({
+      where: { id },
+      data: { archivedAt: new Date(), archivedById: req.user!.sub, archiveReason: reason },
+      select: { archivedAt: true, archiveReason: true },
+    });
+    // A dead proposal must not leave a freight quote sitting in the desk’s queue.
+    await releaseFreightRequest(id, req.user!.sub, 'proposal archived');
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'proposal.archive',
+      entity: 'Proposal',
+      entityId: id,
+      details: { number: proposal.number, reason, qboDocuments: live.length },
+    });
+    return { ok: true, ...updated };
+  });
+
+  /** Restore an archived proposal. Same ownership rule as archiving. */
+  app.post('/proposals/:id/unarchive', archive, async (req) => {
+    const { id } = req.params as { id: string };
+    const proposal = await prisma.proposal.findUnique({
+      where: { id },
+      select: { id: true, number: true, createdById: true, archivedAt: true },
+    });
+    if (!proposal) throw new NotFoundError('Proposal not found');
+    if (!proposal.archivedAt) return { ok: true, archivedAt: null };
+    if (!MANAGES_ANY_PROPOSAL.includes(req.user!.role) && proposal.createdById !== req.user!.sub)
+      throw new ValidationError('You can only restore proposals you created.');
+    await prisma.proposal.update({
+      where: { id },
+      data: { archivedAt: null, archivedById: null, archiveReason: null },
+    });
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'proposal.unarchive',
+      entity: 'Proposal',
+      entityId: id,
+      details: { number: proposal.number },
+    });
+    return { ok: true, archivedAt: null };
   });
 }

@@ -2,7 +2,12 @@ import type { FastifyInstance } from 'fastify';
 import { prisma } from '../lib/prisma.js';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
-import { buildReport, type AnalyticsProposal, type Status } from '../proposals/analytics.js';
+import {
+  buildReport,
+  versionTotals,
+  type AnalyticsProposal,
+  type Status,
+} from '../proposals/analytics.js';
 
 /**
  * Company-wide proposal reporting. One aggregate endpoint: the client renders
@@ -35,8 +40,12 @@ export function registerReportRoutes(app: FastifyInstance): void {
     const userById = new Map(users.map((u) => [u.id, u.name || u.email]));
 
     const DECIDED: Status[] = ['ACCEPTED', 'REJECTED', 'EXPIRED'];
+    // Archived proposals are out of every figure below: they were withdrawn, not lost,
+    // and counting them as losses understates the win rate. They come back at the end as
+    // their own line so the number is visible rather than silently missing.
+    const archived = proposals.filter((p) => p.archivedAt && p.versions.length > 0);
     const shaped: AnalyticsProposal[] = proposals
-      .filter((p) => p.versions.length > 0)
+      .filter((p) => !p.archivedAt && p.versions.length > 0)
       .map((p) => {
         const v = p.versions[0]!;
         const decision = v.statusHistory.find((e) => DECIDED.includes(e.toStatus as Status));
@@ -69,6 +78,12 @@ export function registerReportRoutes(app: FastifyInstance): void {
         };
       });
 
-    return buildReport(shaped, { from, to });
+    const report = buildReport(shaped, { from, to });
+    report.summary.archivedCount = archived.length;
+    report.summary.archivedValue = archived.reduce((sum, p) => {
+      const v = p.versions[0]!;
+      return sum + versionTotals(v.items, v.sections).total;
+    }, 0);
+    return report;
   });
 }

@@ -11,6 +11,10 @@ export const Permission = {
   PROPOSAL_WRITE: 'proposal:write',
   PROPOSAL_REVIEW: 'proposal:review',
   PROPOSAL_RELEASE: 'proposal:release',
+  // Archive/restore a proposal. Reversible and destroys nothing, so it sits below
+  // review: a rep holds it for their own proposals (ownership is checked in the
+  // route), managers and accounting for anyone’s.
+  PROPOSAL_ARCHIVE: 'proposal:archive',
   COSTS_READ: 'costs:read',
   MARGINS_READ: 'margins:read',
   DISCOUNT_AUTHORIZE: 'discounts:authorize',
@@ -73,6 +77,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly string[]> = {
     P.PRICING_OVERRIDE,
     P.PROPOSAL_REVIEW,
     P.PROPOSAL_RELEASE,
+    P.PROPOSAL_ARCHIVE,
     P.QBO_MANAGE,
     P.ORDERS_MANAGE,
     P.HANDOFF_MANAGE,
@@ -85,9 +90,10 @@ export const ROLE_PERMISSIONS: Record<Role, readonly string[]> = {
     P.PRICING_OVERRIDE,
     P.PROPOSAL_REVIEW,
     P.PROPOSAL_RELEASE,
+    P.PROPOSAL_ARCHIVE,
     P.ORDERS_MANAGE,
   ],
-  SALES_REP: [...BASE],
+  SALES_REP: [...BASE, P.PROPOSAL_ARCHIVE],
   DESIGNER: [...BASE, P.RULES_MANAGE],
   ESTIMATOR: [...BASE, P.COSTS_READ, P.MARGINS_READ],
   OPERATIONS: [...BASE, P.ORDERS_MANAGE, P.HANDOFF_MANAGE],
@@ -106,6 +112,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly string[]> = {
     P.QBO_MANAGE,
     P.QBO_TRANSACT,
     P.ORDERS_READ,
+    P.PROPOSAL_ARCHIVE,
   ],
   INSTALLER: [P.CRM_READ, P.CATALOG_READ, P.RULES_READ, P.PROPOSAL_READ, P.ORDERS_READ],
   READ_ONLY: [

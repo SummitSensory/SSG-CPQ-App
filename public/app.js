@@ -422,6 +422,14 @@
   var PROP_WRITE = CRM_WRITE_ROLES;
   var PROP_REVIEW = ['SYSTEM_ADMIN', 'EXECUTIVE', 'SALES_MANAGER'];
   var PROP_RELEASE = PROP_REVIEW;
+  // proposal:archive. A rep is in the list but is limited to proposals they created —
+  // the button checks ownership, and so does the route.
+  var PROP_ARCHIVE = ['SYSTEM_ADMIN', 'EXECUTIVE', 'SALES_MANAGER', 'SALES_REP', 'ACCOUNTING'];
+  var PROP_ARCHIVE_ANY = ['SYSTEM_ADMIN', 'EXECUTIVE', 'SALES_MANAGER', 'ACCOUNTING'];
+  function canArchive(r, user) {
+    if (!hasRole(PROP_ARCHIVE, user.role)) return false;
+    return hasRole(PROP_ARCHIVE_ANY, user.role) || (r.createdById && r.createdById === user.id);
+  }
   var ORDERS_MANAGE_ROLES = ['SYSTEM_ADMIN', 'EXECUTIVE', 'SALES_MANAGER', 'OPERATIONS', 'PROJECT_MANAGER'];
   var HANDOFF_ROLES = ['SYSTEM_ADMIN', 'EXECUTIVE', 'OPERATIONS', 'PROJECT_MANAGER'];
   // quickbooks:transact — who may authorize and create live financial documents.
@@ -3076,8 +3084,14 @@
     { id: 'active', label: 'Active' },
     { id: 'expired', label: 'Past expiration' },
     { id: 'inactive', label: 'Inactive' },
+    // Accepted and Deal Closed partition the won work rather than overlapping: a deal
+    // leaves Accepted the moment its invoice exists in QuickBooks, so Accepted reads as
+    // "won, still to bill" — which is the list somebody actually acts on.
     { id: 'won', label: 'Accepted' },
+    { id: 'closed', label: 'Deal Closed' },
     { id: 'lost', label: 'Rejected' },
+    // Withdrawn proposals. Out of every other tab and out of the win rate, kept in full.
+    { id: 'archived', label: 'Archived' },
   ];
   function today0() { var d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); }
   function dayDiff(v) { if (!v) return null; var d = new Date(v); if (isNaN(d)) return null; d.setHours(0, 0, 0, 0); return Math.round((d.getTime() - today0()) / 86400000); }
@@ -3107,7 +3121,7 @@
     var box = document.getElementById('propFilters'); if (!box) return;
     box.innerHTML = PROP_FILTERS.map(function (f) {
       var on = props.filter === f.id;
-      var count = f.id === 'all' ? props.rows.length : props.rows.filter(function (r) { return matchFilter(r, f.id); }).length;
+      var count = props.rows.filter(function (r) { return matchFilter(r, f.id); }).length;
       return '<button data-f="' + f.id + '" style="border:1px solid ' + (on ? '#3d4a55' : '#dcded7') + ';background:' + (on ? '#3d4a55' : '#fff') + ';color:' + (on ? '#fff' : '#3d4a55') + ';border-radius:999px;padding:7px 13px;font-size:12.5px;cursor:pointer;">' + esc(f.label) +
         (props.rows.length ? ' <span style="opacity:.65;">' + count + '</span>' : '') + '</button>';
     }).join('');
@@ -3116,6 +3130,10 @@
     });
   }
   function matchFilter(r, f) {
+    // Archived is a separate world: its own tab, and absent from every other one,
+    // including All. Nothing is deleted — this is the only view that shows them.
+    if (f === 'archived') return !!r.archivedAt;
+    if (r.archivedAt) return false;
     if (f === 'all') return true;
     // Every open proposal, in or out of date. `expired` is only ever set on an open
     // status, so this one test covers both bands the view then splits them into.
@@ -3123,7 +3141,8 @@
     if (f === 'active') return OPEN_STATUSES.indexOf(r.status) !== -1 && !r.expired;
     if (f === 'expired') return r.expired;
     if (f === 'inactive') return r.status === 'EXPIRED';
-    if (f === 'won') return r.status === 'ACCEPTED';
+    if (f === 'won') return r.status === 'ACCEPTED' && !r.invoiced;
+    if (f === 'closed') return r.status === 'ACCEPTED' && !!r.invoiced;
     if (f === 'lost') return r.status === 'REJECTED';
     return true;
   }
@@ -3150,6 +3169,12 @@
           // latest version is already on the wire with its sections and items, so this
           // costs no extra request per row.
           totalMinor: versionTotalMinor(v),
+          createdById: p.createdById || '',
+          archivedAt: p.archivedAt || null, archiveReason: p.archiveReason || '',
+          archivedBy: p.archivedBy || '',
+          // Deal Closed comes off the invoice existing in QuickBooks, not off a status
+          // anyone sets by hand — the two can never disagree.
+          invoiced: !!p.invoiced, invoiceDocNumber: p.invoiceDocNumber || '', invoicedAt: p.invoicedAt || null,
         };
       });
       drawPropFilters(user);
@@ -3204,7 +3229,7 @@
             ? '<span style="display:inline-flex;align-items:center;gap:5px;background:#fdf6e3;border:1px solid #eadfbe;color:#8a6d1f;border-radius:999px;padding:3px 9px;font-size:12px;font-weight:600;" title="Expires in ' + r.expDays + ' day(s)">' + fmtDate(r.expires) + '</span>'
             : fmtDate(r.expires)))
         : '<span class="muted">—</span>';
-      var acts = quickActions(r, user);
+      var acts = r.archivedAt ? [] : quickActions(r, user);
       var quick = acts.length
         ? '<select class="pQuick" data-id="' + r.id + '" data-vid="' + r.vid + '" style="padding:6px 8px;border:1px solid #dcded7;border-radius:8px;font-size:12px;background:#fff;color:#3d4a55;max-width:170px;">' +
           '<option value="">Quick status…</option>' + acts.map(function (a) { return '<option value="' + a[0] + '">' + esc(a[1]) + '</option>'; }).join('') + '</select>'
@@ -3212,19 +3237,37 @@
       // A shelved proposal gets one extra action: ask whether it is still live. It
       // sits beside the status picker rather than inside it because it sends nothing
       // on its own — it opens a draft for the rep to read and send.
-      var reengage = r.status === 'EXPIRED'
+      var reengage = r.status === 'EXPIRED' && !r.archivedAt
         ? '<button class="pReengage" data-id="' + r.id + '" title="Draft an email asking whether they are still interested" style="border:1px solid #dcded7;background:#fff;border-radius:8px;padding:6px 9px;font-size:12px;color:#3d4a55;cursor:pointer;white-space:nowrap;">Still interested?</button>'
+        : '';
+      // Archive is deliberately quiet — a small text button, not a red one. It withdraws
+      // a proposal from the pipeline and can be undone from the Archived tab.
+      var arch = canArchive(r, user)
+        ? (r.archivedAt
+          ? '<button class="pRestore" data-id="' + r.id + '" title="Put this proposal back in the pipeline" style="border:1px solid #cfe3d7;background:#eaf3ee;border-radius:8px;padding:6px 9px;font-size:12px;color:#2f7d5d;cursor:pointer;white-space:nowrap;">Restore</button>'
+          : '<button class="pArchive" data-id="' + r.id + '" title="Withdraw from the pipeline. Nothing is deleted and it can be restored." style="border:1px solid #dcded7;background:#fff;border-radius:8px;padding:6px 9px;font-size:12px;color:#8a8f85;cursor:pointer;white-space:nowrap;">Archive</button>')
         : '';
       return '<tr style="cursor:pointer;" data-id="' + r.id + '">' +
         ptdWrap('<b style="font-weight:600;">' + esc(r.customer) + '</b>' + (r.contact ? '<div class="muted" style="font-size:12px;">' + esc(r.contact) + '</div>' : '')) +
         ptdWrap('<b style="font-weight:600;">' + esc(r.title) + '</b><div class="muted" style="font-size:12px;">' + esc(r.number) +
           ' · v' + r.version + (r.versionCount > 1 ? ' of ' + r.versionCount : '') +
-          (r.preparedBy ? ' · ' + esc(r.preparedBy) : '') + '</div>') +
-        ptd(statusChip(r.status)) +
+          (r.preparedBy ? ' · ' + esc(r.preparedBy) : '') + '</div>' +
+          (r.archivedAt
+            ? '<div class="muted" style="font-size:11.5px;margin-top:3px;">Archived ' + esc(fmtDate(r.archivedAt)) +
+              (r.archivedBy ? ' by ' + esc(r.archivedBy) : '') +
+              (r.archiveReason ? ' — ' + esc(r.archiveReason) : '') + '</div>'
+            : '')) +
+        ptd(statusChip(r.status) +
+          (r.invoiced && r.status === 'ACCEPTED'
+            ? '<div style="margin-top:4px;font-size:11.5px;color:#2f7d5d;">Invoiced' + (r.invoiceDocNumber ? ' · ' + esc(r.invoiceDocNumber) : '') + '</div>'
+            : '') +
+          (r.archivedAt
+            ? '<div style="margin-top:4px;"><span style="display:inline-block;background:#f2f3ef;border:1px dashed #cbcec5;color:#8a8f85;border-radius:999px;padding:2px 9px;font-size:11.5px;font-weight:600;">Archived</span></div>'
+            : '')) +
         ptd('<b style="font-weight:600;">' + fmtMoney(r.totalMinor, 'USD') + '</b>', 'right') +
         ptd(fmtDate(r.modified) + '<div class="muted" style="font-size:11px;">made ' + esc(fmtDate(r.created)) + '</div>') +
         ptd(expCell) +
-        ptd('<div style="display:flex;gap:6px;justify-content:flex-end;align-items:center;flex-wrap:wrap;">' + reengage + quick + '</div>', 'right', 'padding:8px 11px;') + '</tr>';
+        ptd('<div style="display:flex;gap:6px;justify-content:flex-end;align-items:center;flex-wrap:wrap;">' + reengage + quick + arch + '</div>', 'right', 'padding:8px 11px;') + '</tr>';
     }
     var body = rows.map(rowHtml).join('');
 
@@ -3276,9 +3319,14 @@
 
     // No min-width, and the two name columns wrap: the table sizes itself to the
     // window instead of demanding 1160px and scrolling sideways.
-    box.innerHTML = '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:14px;overflow:hidden;"><table style="width:100%;border-collapse:collapse;font-size:13.5px;table-layout:auto;"><thead><tr>' + head + '</tr></thead><tbody>' +
-      (body || '<tr><td style="padding:22px 16px;color:#909689;" colspan="7">' + (props.rows.length ? 'No proposals match this view.' : 'No proposals yet.') + '</td></tr>') + '</tbody></table></div>' +
-      (props.rows.filter(function (r) { return r.expired; }).length ? '<div style="margin-top:10px;font-size:12.5px;color:#9c3327;">⚑ Flagged rows are past their expiration date and still open — re-date them or mark them no longer active.</div>' : '');
+    var lead = props.filter === 'archived'
+      ? '<div style="margin-bottom:10px;font-size:12.5px;color:#5c6157;background:#f4f5f1;border:1px solid #e7e8e3;border-radius:10px;padding:10px 13px;">Withdrawn proposals. They are kept in full and left out of every other tab and of the win rate. Restore puts one back exactly as it was — any QuickBooks documents were never touched.</div>'
+      : props.filter === 'closed'
+        ? '<div style="margin-bottom:10px;font-size:12.5px;color:#5c6157;background:#f1f6f2;border:1px solid #cfe3d7;border-radius:10px;padding:10px 13px;">Accepted and invoiced in QuickBooks. A deal lands here on its own the moment its invoice is created, and leaves the Accepted tab.</div>'
+        : '';
+    box.innerHTML = lead + '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:14px;overflow:hidden;"><table style="width:100%;border-collapse:collapse;font-size:13.5px;table-layout:auto;"><thead><tr>' + head + '</tr></thead><tbody>' +
+      (body || '<tr><td style="padding:22px 16px;color:#909689;" colspan="7">' + (props.rows.length ? (props.filter === 'archived' ? 'Nothing archived.' : props.filter === 'closed' ? 'No invoiced deals yet.' : 'No proposals match this view.') : 'No proposals yet.') + '</td></tr>') + '</tbody></table></div>' +
+      (props.rows.filter(function (r) { return r.expired && !r.archivedAt; }).length ? '<div style="margin-top:10px;font-size:12.5px;color:#9c3327;">⚑ Flagged rows are past their expiration date and still open — re-date them or mark them no longer active.</div>' : '');
     box.querySelectorAll('th[data-sk]').forEach(function (th) {
       th.addEventListener('click', function () {
         var k = th.getAttribute('data-sk');
@@ -3301,6 +3349,20 @@
         ev.stopPropagation();
         var row = props.rows.filter(function (r) { return r.id === bt.getAttribute('data-id'); })[0];
         if (row) openCustomerEmail(row, user, 'reengage');
+      });
+    });
+    box.querySelectorAll('button.pArchive').forEach(function (bt) {
+      bt.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        var row = props.rows.filter(function (r) { return r.id === bt.getAttribute('data-id'); })[0];
+        if (row) archiveProposal(row, user);
+      });
+    });
+    box.querySelectorAll('button.pRestore').forEach(function (bt) {
+      bt.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        var row = props.rows.filter(function (r) { return r.id === bt.getAttribute('data-id'); })[0];
+        if (row) restoreProposal(row, user);
       });
     });
     box.querySelectorAll('tr[data-id]').forEach(function (tr) { tr.addEventListener('click', function () { openProposalDetail(tr.getAttribute('data-id'), user); }); });
@@ -3397,6 +3459,50 @@
     return subtotal - discount + tpFreight + metaAmount(meta.taxAmountMinor, meta.tbdTax) + structureFreight + metaAmount(meta.matsFreightMinor, meta.tbdMatsFreight) + stdFreightOf(meta);
   }
 
+  /**
+   * Withdraw a proposal from the pipeline.
+   *
+   * The reason is optional and goes on the record, so the Archived tab reads as a list of
+   * decisions rather than a pile of numbers. Live QuickBooks documents get a second pass:
+   * the server comes back needsConfirm with the documents it found, because archiving
+   * here does not void anything over there.
+   */
+  async function archiveProposal(r, user, confirmWord) {
+    var reason = confirmWord ? (r._pendingReason || '') : prompt(
+      'Archive ' + (r.number || 'this proposal') + ' — ' + (r.customer || '') + '.' + '\n\n' +
+      'It leaves every pipeline view and the win-rate figures, and stays on record under the' + '\n' +
+      'Archived tab where it can be restored. Nothing is deleted.' + '\n\n' +
+      'Reason (optional):', '');
+    if (reason === null) return;
+    r._pendingReason = reason;
+    var rr = await authed('/proposals/' + r.id + '/archive', {
+      method: 'POST',
+      body: { reason: reason, confirm: confirmWord || '' },
+    });
+    if (!rr.ok) { alert('Could not archive (' + rr.status + ').'); return; }
+    var d = null; try { d = await rr.json(); } catch (e) {}
+    if (d && d.needsConfirm) {
+      var list = (d.qboDocuments || []).map(function (t) {
+        return '  • ' + t.type.replace(/_/g, ' ').toLowerCase() + ' ' + t.docNumber + ' — ' + fmtMoney(t.amountMinor, 'USD');
+      }).join('\n');
+      var typed = prompt(
+        'This proposal has live QuickBooks documents:' + '\n\n' + list + '\n\n' +
+        'Archiving here does NOT void them — they stay standing in QuickBooks and must be' + '\n' +
+        'voided there separately. Type CONFIRM to archive anyway.', '');
+      if (!typed) { r._pendingReason = null; return; }
+      if (typed.trim().toUpperCase() !== 'CONFIRM') { alert('Not archived — CONFIRM was not typed.'); r._pendingReason = null; return; }
+      return archiveProposal(r, user, 'CONFIRM');
+    }
+    r._pendingReason = null;
+    loadProposals(user);
+  }
+  /** Restore. `after` lets the proposal page refresh itself instead of the list. */
+  async function restoreProposal(r, user, after) {
+    if (!confirm('Put ' + (r.number || 'this proposal') + ' back in the pipeline?')) return;
+    var rr = await authed('/proposals/' + r.id + '/unarchive', { method: 'POST', body: {} });
+    if (!rr.ok) { alert('Could not restore (' + rr.status + ').'); return; }
+    if (after) after(); else loadProposals(user);
+  }
   function statusChip(s) {
     var map = {
       DRAFT: ['#f2f3ef', '#e2e5dd', '#5c6157'],
@@ -3590,7 +3696,19 @@
     var acceptedVersion = versions.filter(function (v) { return v.status === 'ACCEPTED'; })[0] || null;
     var actions = proposalActions(latest, user, lockedOrder);
     view.innerHTML =
-      '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;"><button class="link-btn" id="propBack" style="width:auto;padding:7px 13px;">‹ Back to proposals</button></div>' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;"><button class="link-btn" id="propBack" style="width:auto;padding:7px 13px;">‹ Back to proposals</button>' +
+        // Archived is a property of the proposal, not a status, so it is said here rather
+        // than swapped into the status chip — the version statuses below are still true.
+        (p.archivedAt && canArchive({ createdById: p.createdById }, user)
+          ? '<button class="link-btn" id="propRestore" style="width:auto;padding:7px 13px;">Restore to pipeline</button>'
+          : '') +
+      '</div>' +
+      (p.archivedAt
+        ? '<div style="margin-bottom:16px;background:#f4f5f1;border:1px solid #cbcec5;border-radius:12px;padding:13px 15px;font-size:13px;color:#5c6157;">' +
+          '<b style="font-weight:650;">Archived</b> ' + esc(fmtDate(p.archivedAt)) +
+          (p.archiveReason ? ' · ' + esc(p.archiveReason) : '') +
+          '<div class="muted" style="font-size:12px;margin-top:4px;">Out of the pipeline and out of the win-rate figures. Everything on this page is intact, including any QuickBooks documents.</div></div>'
+        : '') +
       // The customer leads the card. Opening a proposal and having to infer whose it
       // was from the title was the single most common complaint about this page.
       '<div class="card" style="margin-bottom:16px;"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;"><div>' +
@@ -3635,6 +3753,12 @@
       sectionBlock('Financing options', '<div id="finBox"><div class="muted" style="padding:16px;">Loading…</div></div>') +
       (actions ? sectionBlock('Actions', '<div style="display:flex;gap:8px;flex-wrap:wrap;" id="propActions">' + actions + '</div>') : '');
     document.getElementById('propBack').addEventListener('click', function () { renderProposals(user); });
+    var prst = document.getElementById('propRestore');
+    if (prst) prst.addEventListener('click', async function () {
+      await restoreProposal({ id: p.id, number: p.number || '' }, user, function () {
+        openProposalDetail(p.id, user);
+      });
+    });
     var psd = document.getElementById('propSendDocs');
     if (psd) psd.addEventListener('click', function () { openSendDocuments(p, finCache, 'customer'); });
     var pem = document.getElementById('propEmail');
@@ -3859,6 +3983,7 @@
           kpi('Avg days to decision', s.avgDaysToDecision, 'release → accepted / rejected') +
           kpi('Avg margin', s.avgMarginPct + '%', 'accepted: ' + s.wonMarginPct + '%') +
         '</div>' +
+        (s.archivedCount ? '<div style="margin-top:14px;background:#f4f5f1;border:1px solid #cbcec5;color:#5c6157;border-radius:12px;padding:12px 14px;font-size:13px;">' + s.archivedCount + ' archived proposal(s) worth ' + fmt0(s.archivedValue) + ' are excluded from every figure above. See the Archived tab on the proposals list.</div>' : '') +
         (s.expiredFlagged ? '<div style="margin-top:14px;background:#fbe9e6;border:1px solid #f0cdc7;color:#9c3327;border-radius:12px;padding:12px 14px;font-size:13px;">⚑ ' + s.expiredFlagged + ' open proposal(s) are past their expiration date. See the Aging tab.</div>' : '') +
         '<div class="section-title">Pipeline by stage</div>' +
         d.pipeline.map(function (p) {
