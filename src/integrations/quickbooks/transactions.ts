@@ -120,8 +120,25 @@ async function fromPricingEngine(
   const breakdownLines = (b.lines as Array<{ ref: string; net: unknown }>) ?? [];
 
   const lines: AcceptedLine[] = [];
+  /**
+   * A line with no `net` used to be skipped.
+   *
+   * The grand total on the snapshot head still counted it, so skipping produced a
+   * document quietly short by that line's value and a total-mismatch error that named
+   * no cause. Refusing here instead points straight at the line, and the money can
+   * never go missing without somebody being told which line it was.
+   */
+  const netless = breakdownLines.filter((bl) => bl.net == null).map((bl) => bl.ref);
+  if (netless.length) {
+    throw new ConflictError(
+      `Accepted price snapshot has ${netless.length} line(s) with no net amount (${netless
+        .slice(0, 5)
+        .join(
+          ', ',
+        )}${netless.length > 5 ? ', …' : ''}). Re-price and re-accept the proposal before sending it to QuickBooks.`,
+    );
+  }
   for (const bl of breakdownLines) {
-    if (bl.net == null) continue;
     const item = byRef.get(bl.ref);
     const link = item ? await findLink({ entity: 'Item', entityId: item.productId }) : null;
     lines.push({
