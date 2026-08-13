@@ -233,7 +233,9 @@ export async function compareCustomerProfile(
       qbo && qbo.Balance != null ? BigInt(Math.round(Number(qbo.Balance) * 100)).toString() : null,
     qboLastUpdatedAt: qbo?.MetaData?.LastUpdatedTime ?? null,
     // The values the in-panel tax editor is seeded from; see the interface.
-    taxExempt: src.taxExempt,
+    // CustomerSource types this optional, so it is normalised here rather than
+    // widening the panel's own contract to boolean | undefined.
+    taxExempt: src.taxExempt ?? false,
     taxExemptId: src.taxExemptId ?? null,
     fields,
     differenceCount: fields.filter((f) => f.differs).length,
