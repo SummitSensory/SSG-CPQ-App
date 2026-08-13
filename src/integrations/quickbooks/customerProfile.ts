@@ -137,6 +137,13 @@ export interface CustomerProfileComparison {
   /** QuickBooks' running balance for the customer across all their invoices. */
   qboBalanceMinor: string | null;
   qboLastUpdatedAt: string | null;
+  /**
+   * The two values the profile panel lets an operator correct in place, as raw
+   * values rather than only inside the formatted comparison rows — so the editor is
+   * seeded from the record instead of parsing "Exempt" back out of a table cell.
+   */
+  taxExempt: boolean;
+  taxExemptId: string | null;
   fields: ProfileField[];
   /** Count of fields where the two disagree — the number worth showing as a badge. */
   differenceCount: number;
@@ -225,9 +232,7 @@ export async function compareCustomerProfile(
     qboBalanceMinor:
       qbo && qbo.Balance != null ? BigInt(Math.round(Number(qbo.Balance) * 100)).toString() : null,
     qboLastUpdatedAt: qbo?.MetaData?.LastUpdatedTime ?? null,
-    // The two values the profile panel lets an operator correct in place. Sent as
-    // raw values, not only inside the formatted comparison rows, so the editor is
-    // seeded from the record rather than by parsing "Exempt" back out of a cell.
+    // The values the in-panel tax editor is seeded from; see the interface.
     taxExempt: src.taxExempt,
     taxExemptId: src.taxExemptId ?? null,
     fields,
