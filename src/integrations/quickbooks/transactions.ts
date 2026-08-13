@@ -15,6 +15,7 @@ import { findOrCreateCustomer } from './customers.js';
 import { buildEstimateBody } from './estimates.js';
 import { buildInvoiceBody, buildPortionInvoiceBody } from './invoices.js';
 import { TXN_LABEL, type AcceptedLine } from './mapping.js';
+import { versionTotals } from '../../proposals/analytics.js';
 import { findLink } from './links.js';
 import { assertSkusMapped } from './skuPreflight.js';
 import { resolveSynthesizedItemId } from './synthesizedItems.js';
@@ -99,7 +100,7 @@ export async function loadAcceptedTotals(proposalVersionId: string): Promise<Acc
   // which the document builders then (correctly) refuse to send.
   return Array.isArray(b.lines)
     ? fromPricingEngine(snap, b, version.items)
-    : fromProposalBuilder(snap, b, version.items);
+    : fromProposalBuilder(snap, b, version.items, version.sections);
 }
 
 /** Pricing-engine snapshot: `lines[].net`, `fees` map, `tax`, `orderDiscount`. */
@@ -182,7 +183,48 @@ async function fromProposalBuilder(
   snap: SnapshotHead,
   b: Record<string, unknown>,
   rawItems: unknown,
+  rawSections: unknown,
 ): Promise<AcceptedTotals> {
+  /**
+   * Does the frozen snapshot still describe this version's contents?
+   *
+   * The document's money comes from two places that are supposed to agree. Line
+   * amounts are read LIVE from ProposalVersion.items. The grand total the document is
+   * asserted against is PriceSnapshot.grandTotal, frozen when the version was
+   * released. If the items were edited after that freeze the two disagree, and the
+   * builders fail their total assertion — which reports a difference and nothing about
+   * the fact that the accepted price of record no longer matches the proposal.
+   *
+   * The pre-existing check could not catch this: executeTransaction compares
+   * totalsHash(totals) with the hash frozen at prepare, but `totals` is recomputed
+   * from the same snapshot every time, so it only ever compares the snapshot to itself.
+   *
+   * Checked here, in the one place every document type loads its totals, so it fires at
+   * PREPARE rather than at the QuickBooks write — the operator finds out before
+   * authorising, not after. Nothing is repaired automatically: which of the two figures
+   * is correct is a commercial question about what the customer actually accepted, and
+   * an app that quietly re-freezes a price so an invoice balances is worse than one
+   * that refuses to send.
+   */
+  const live = versionTotals(rawItems, rawSections);
+  const liveTotal = BigInt(Math.round(live.total));
+  if (liveTotal !== snap.grandTotal) {
+    const drift = snap.grandTotal - liveTotal;
+    throw new ConflictError(
+      "This proposal's contents no longer match the price that was accepted. The frozen " +
+        'accepted total is ' +
+        snap.grandTotal +
+        " but the version's own lines now come " +
+        'to ' +
+        liveTotal +
+        ', a difference of ' +
+        (drift < 0n ? -drift : drift) +
+        '. That ' +
+        'happens when a version is edited after it was released. Nothing is sent to ' +
+        'QuickBooks until the two agree: create a new version with the correct content, ' +
+        'release it and accept it, then push from that.',
+    );
+  }
   const num = (v: unknown): number =>
     typeof v === 'number' && Number.isFinite(v) ? v : Number(v) || 0;
 
