@@ -16,6 +16,7 @@
  */
 
 import type { FormulaRule, RuleContext } from './hardwareRules.js';
+import { FOUR_LEG_MAX_FT, MIN_LEGS_OVER_FOUR_LEG_MAX } from './formulaSettings.js';
 
 const n = (v: unknown): number =>
   typeof v === 'number' && Number.isFinite(v) ? v : Number(v) || 0;
@@ -149,6 +150,15 @@ export const DEFAULT_FRAME_RULES: FormulaRule[] = [
   R('Hardware', 'P-2124', 'Quick Shift Saddle Bracket', [['in:brackets', 1]]),
 ].map((r, i) => ({ ...r, sortOrder: i }));
 
+/**
+ * The leg count the frame actually gets. Over FOUR_LEG_MAX_FT the engineering minimum
+ * wins over whatever the answer or the editable bands produced.
+ */
+function legsFloor(lengthFt: number, legs: number): number {
+  if (lengthFt > FOUR_LEG_MAX_FT) return Math.max(legs, MIN_LEGS_OVER_FOUR_LEG_MAX);
+  return legs;
+}
+
 export interface FrameAnswers {
   length?: number;
   width?: number;
@@ -185,7 +195,9 @@ export interface FrameAnswers {
  */
 export function frameContext(a: FrameAnswers, bomQty: (part: string) => number): RuleContext {
   const raw: Record<string, unknown> = {
-    legs: n(a.legs),
+    // Floored, not taken as given: a frame over 10 ft cannot stand on four legs, and
+    // answers saved while the leg-count bands were misconfigured still hold a 4.
+    legs: legsFloor(n(a.length), n(a.legs)),
     ladders: n(a.ladders),
     length: n(a.length),
     width: n(a.width),

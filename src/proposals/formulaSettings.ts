@@ -1,7 +1,7 @@
 /**
  * Business numbers behind the proposal math. Small scalars that belong to the
  * business rather than to code — deposit percentage, how long a proposal stands,
- * and the leg-count spans the configurator uses — editable in
+ * and the frame-size bands the configurator counts legs from — editable in
  * Administration → Formulas → Business numbers.
  */
 
@@ -129,58 +129,58 @@ export const FORMULA_SETTINGS: FormulaSettingDef[] = [
   },
   {
     key: 'legsSmallMaxFt',
-    label: 'Small frame up to',
-    help: 'Frames up to this length use the small leg count.',
+    label: "Small Frame — 10' or less",
+    help: "Upper length of the Small Frame band. Frames longer than 10' always get at least six legs regardless of this setting.",
     unit: 'ft',
     default: 10,
     min: 1,
     max: 100,
     step: 1,
-    group: 'Leg count by frame length',
+    group: 'Leg count by frame size',
   },
   {
     key: 'legsSmallCount',
-    label: 'Small frame legs',
-    help: 'Legs on a frame up to the small-frame length.',
+    label: 'Small Frame legs',
+    help: "Legs on a Small Frame. Only applies at 10' or less.",
     unit: 'legs',
     default: 4,
     min: 2,
     max: 20,
     step: 1,
-    group: 'Leg count by frame length',
+    group: 'Leg count by frame size',
   },
   {
     key: 'legsMediumMaxFt',
-    label: 'Medium frame up to',
-    help: 'Frames up to this length use the medium leg count.',
+    label: "Medium Size Frame — 11'\u201320'",
+    help: 'Upper length of the Medium Size Frame band. Frames above the Small Frame band and up to this length use the medium leg count.',
     unit: 'ft',
     default: 20,
     min: 1,
     max: 200,
     step: 1,
-    group: 'Leg count by frame length',
+    group: 'Leg count by frame size',
   },
   {
     key: 'legsMediumCount',
-    label: 'Medium frame legs',
-    help: 'Legs on a frame up to the medium-frame length.',
+    label: 'Medium Size Frame legs',
+    help: "Legs on a Medium Size Frame (11'\u201320').",
     unit: 'legs',
     default: 6,
     min: 2,
     max: 20,
     step: 1,
-    group: 'Leg count by frame length',
+    group: 'Leg count by frame size',
   },
   {
     key: 'legsLargeCount',
-    label: 'Long frame legs',
-    help: 'Legs on a frame longer than the medium-frame length.',
+    label: 'Large Frame legs',
+    help: "Legs on a Large Frame (21'\u201330'), the longest frame quoted.",
     unit: 'legs',
     default: 8,
     min: 2,
     max: 40,
     step: 1,
-    group: 'Leg count by frame length',
+    group: 'Leg count by frame size',
   },
 ];
 
@@ -229,10 +229,28 @@ export function mergeSettings(
   return out;
 }
 
-/** Legs for a frame length, per the configurator's span table. */
+/**
+ * A frame longer than this cannot stand on four legs, whatever the settings say.
+ * Engineering constraint, not a business preference, so it is not editable.
+ */
+export const FOUR_LEG_MAX_FT = 10;
+export const MIN_LEGS_OVER_FOUR_LEG_MAX = 6;
+
+/**
+ * Legs for a frame length, per the configurator's span table.
+ *
+ * The bands are editable, so a saved override could put a 20' frame in the small
+ * band and quote it with four legs — which is what happened. The floor below means
+ * the settings can only ever raise the leg count above 10', never drop it under six.
+ */
 export function legsForLength(lengthFt: number, s: FormulaSettings = defaultSettings()): number {
   const L = Number(lengthFt) || 0;
-  if (L <= setting(s, 'legsSmallMaxFt')) return setting(s, 'legsSmallCount');
-  if (L <= setting(s, 'legsMediumMaxFt')) return setting(s, 'legsMediumCount');
-  return setting(s, 'legsLargeCount');
+  const banded =
+    L <= setting(s, 'legsSmallMaxFt')
+      ? setting(s, 'legsSmallCount')
+      : L <= setting(s, 'legsMediumMaxFt')
+        ? setting(s, 'legsMediumCount')
+        : setting(s, 'legsLargeCount');
+  if (L > FOUR_LEG_MAX_FT) return Math.max(banded, MIN_LEGS_OVER_FOUR_LEG_MAX);
+  return banded;
 }

@@ -6656,11 +6656,20 @@
   }
 
   /* --- Adventure Series guided configurator (decision tree) --- */
+  /**
+   * Legs for a frame length. Mirrors legsForLength() in src/proposals/formulaSettings.ts,
+   * including the hard floor: a frame over 10 ft gets at least six legs no matter what the
+   * editable bands say. The bands are admin-editable, so a saved "Small frame up to 20"
+   * used to quote a 20 ft frame on four legs.
+   */
+  var FOUR_LEG_MAX_FT = 10, MIN_LEGS_OVER_FOUR_LEG_MAX = 6;
   function legsFor(len) {
     len = Number(len) || 0;
-    if (len <= Number(fxSettings.legsSmallMaxFt)) return Number(fxSettings.legsSmallCount);
-    if (len <= Number(fxSettings.legsMediumMaxFt)) return Number(fxSettings.legsMediumCount);
-    return Number(fxSettings.legsLargeCount);
+    var banded = len <= Number(fxSettings.legsSmallMaxFt) ? Number(fxSettings.legsSmallCount)
+      : len <= Number(fxSettings.legsMediumMaxFt) ? Number(fxSettings.legsMediumCount)
+      : Number(fxSettings.legsLargeCount);
+    if (!Number.isFinite(banded) || banded <= 0) banded = MIN_LEGS_OVER_FOUR_LEG_MAX;
+    return len > FOUR_LEG_MAX_FT ? Math.max(banded, MIN_LEGS_OVER_FOUR_LEG_MAX) : banded;
   }
   function _xlfnPrefix(config) { return config === 'Square' ? 'SQ-' : config === 'L-Shape' ? 'L-' : config === 'T-Shape' ? 'T-' : 'R-'; }
   var adv = null;
@@ -6713,7 +6722,10 @@
     adv.width = Number(a.width) || 10;
     adv.config = a.config || autoConfig();
     adv.configManual = adv.config !== autoConfig();
-    adv.legs = Number(a.legs) || legsFor(adv.length);
+    // A saved leg count is a decision and is kept, except where it is below the
+    // engineering minimum for the length — answers stored while the leg-count bands
+    // were misconfigured hold a 4 on frames that need six.
+    adv.legs = Math.max(Number(a.legs) || legsFor(adv.length), adv.length > FOUR_LEG_MAX_FT ? MIN_LEGS_OVER_FOUR_LEG_MAX : 0);
     adv.monkeyBars = !!a.monkeyBars; adv.monkeyBarsQty = Number(a.monkeyBarsQty) || 1;
     adv.ladders = Number(a.ladders) > 0; adv.laddersQty = Number(a.ladders) || 1;
     adv.trolley = !!a.trolley; adv.trolleyType = a.trolleyType || 'Dual';
@@ -6931,7 +6943,7 @@
         '<div style="padding:22px 24px;">' +
           sec('Frame Dimensions', '<div style="' + grid + '">' + sel('length', 'Length (long, ft)', rangeArr(6, 30)) + sel('width', 'Width (short, ft)', rangeArr(6, 20)) + '</div>') +
           sec('Frame Configuration', '<div style="' + grid + '">' + sel('config', 'Configuration' + (adv.configManual ? ' (overridden)' : ' (auto)'), ['Rectangle', 'Square', 'L-Shape', 'T-Shape']) + num('legs', '# of Frame Legs (auto, editable)', 0, 20) + '</div>' +
-            '<div class="muted" style="font-size:11.5px;margin-top:6px;">' + (adv.configManual ? 'Manually set — auto would be ' + autoConfig() + '. <a href="#" id="advCfgReset">Reset to auto</a>' : 'Auto from dimensions: ' + autoConfig()) + ' · legs auto-set from length (' + legsFor(adv.length) + ')</div>') +
+            '<div class="muted" style="font-size:11.5px;margin-top:6px;">' + (adv.configManual ? 'Manually set — auto would be ' + autoConfig() + '. <a href="#" id="advCfgReset">Reset to auto</a>' : 'Auto from dimensions: ' + autoConfig()) + ' · legs auto-set from length (' + legsFor(adv.length) + ')' + (Number(adv.legs) !== legsFor(adv.length) ? ' — currently ' + Number(adv.legs) + ', set by hand' : '') + '</div>') +
           sec('Frame Options',
             tog('monkeyBars', 'Monkey Bars') + (adv.monkeyBars ? '<div style="' + grid + 'margin:8px 0 4px;">' + num('monkeyBarsQty', '# of Monkey Bars', 1, 3) + '</div>' : '') +
             tog('ladders', 'Ladders') + (adv.ladders ? '<div style="' + grid + 'margin:8px 0 4px;">' + num('laddersQty', '# of Ladders', 1, 4) + '</div>' + tog('ladderShield', 'Ladder — Safety Shield', 'Qty mirrors # of ladders (' + adv.laddersQty + ')') : '') +
