@@ -67,6 +67,35 @@ const metaAmount = (minor: unknown, override: unknown): number =>
   n(minor) || overrideMinor(override);
 
 /**
+ * The order discount, in either of the two forms the builder offers.
+ *
+ * This mirrors `discountOf()` in public/app.js exactly, and it has to. This function
+ * is what writes the accepted price snapshot, and the snapshot is what the operational
+ * order, the deposit and every QuickBooks document are built from. It previously read
+ * only `discountPct`, so a discount entered as a dollar amount — the `$` option beside
+ * the discount box, saved as `discountMode: 'AMT'` with `discountAmountMinor` — was
+ * counted as zero here while the customer's proposal document deducted it in full.
+ *
+ * The result was not a failed push. It was a successful one: the order, the deposit
+ * and the invoice all came out HIGHER than the proposal the customer signed, by the
+ * exact amount of the discount, with nothing anywhere reporting a problem, because
+ * every downstream figure agreed with the same wrong snapshot.
+ *
+ * Percentage remains the default: a proposal with no `discountMode` reads as PCT and
+ * computes exactly what it always did.
+ */
+const discountOf = (meta: RawMeta, subtotal: number): number => {
+  const mode = (meta as { discountMode?: unknown }).discountMode === 'AMT' ? 'AMT' : 'PCT';
+  let amount =
+    mode === 'AMT'
+      ? Math.round(n((meta as { discountAmountMinor?: unknown }).discountAmountMinor))
+      : Math.round((subtotal * n(meta.discountPct)) / 100);
+  if (amount < 0) amount = 0;
+  if (amount > subtotal) amount = subtotal;
+  return amount;
+};
+
+/**
  * Standard Freight is hand-keyed and opt-in. It counts only while its box is ticked,
  * so an amount left over from an earlier draft cannot quietly inflate a total.
  */
@@ -101,8 +130,7 @@ export function versionTotals(items: unknown, sections: unknown): Totals {
     weight += qty * n(l.weightEach);
     tpFreight += n(l.tpFreightMinor);
   }
-  const discountPct = n(meta.discountPct);
-  const discount = Math.round((subtotal * discountPct) / 100);
+  const discount = discountOf(meta, subtotal);
   const tax = metaAmount(meta.taxAmountMinor, meta.tbdTax);
   const structureFreight = metaAmount(
     meta.structureFreightMinor != null ? meta.structureFreightMinor : meta.freightMinor,
