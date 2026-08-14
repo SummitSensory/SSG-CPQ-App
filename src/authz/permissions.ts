@@ -15,6 +15,19 @@ export const Permission = {
   // review: a rep holds it for their own proposals (ownership is checked in the
   // route), managers and accounting for anyone’s.
   PROPOSAL_ARCHIVE: 'proposal:archive',
+  // Enter vendor freight costs onto a proposal that has already gone out, and apply
+  // them to it. Narrow on purpose: it unlocks the freight fields of a frozen
+  // version and nothing else (see proposals/freightTrueUp.ts, which refuses any
+  // change that moves the subtotal, discount or tax). Held by the person who
+  // manages vendor freight pricing, who is Operations here — she needs to price
+  // freight on other people's jobs without being able to edit their proposals.
+  FREIGHT_COST_WRITE: 'freight:cost-write',
+  // Send an applied freight true-up to QuickBooks: append the freight to the
+  // existing invoice, or raise the freight-only invoice when the original has
+  // taken payment. Separate from QBO_TRANSACT — this changes what a customer owes
+  // on a document they already hold, so it is granted deliberately rather than
+  // inherited by anyone who can create a document.
+  FREIGHT_INVOICE_PUSH: 'freight:invoice-push',
   COSTS_READ: 'costs:read',
   MARGINS_READ: 'margins:read',
   DISCOUNT_AUTHORIZE: 'discounts:authorize',
@@ -78,6 +91,8 @@ export const ROLE_PERMISSIONS: Record<Role, readonly string[]> = {
     P.PROPOSAL_REVIEW,
     P.PROPOSAL_RELEASE,
     P.PROPOSAL_ARCHIVE,
+    P.FREIGHT_COST_WRITE,
+    P.FREIGHT_INVOICE_PUSH,
     P.QBO_MANAGE,
     P.ORDERS_MANAGE,
     P.HANDOFF_MANAGE,
@@ -91,13 +106,24 @@ export const ROLE_PERMISSIONS: Record<Role, readonly string[]> = {
     P.PROPOSAL_REVIEW,
     P.PROPOSAL_RELEASE,
     P.PROPOSAL_ARCHIVE,
+    P.FREIGHT_COST_WRITE,
     P.ORDERS_MANAGE,
   ],
-  SALES_REP: [...BASE, P.PROPOSAL_ARCHIVE],
+  // A rep true-ups freight on their own jobs — they are usually the one holding the
+  // vendor's email. Pushing the change to a live invoice is not theirs.
+  SALES_REP: [...BASE, P.PROPOSAL_ARCHIVE, P.FREIGHT_COST_WRITE],
   DESIGNER: [...BASE, P.RULES_MANAGE],
-  ESTIMATOR: [...BASE, P.COSTS_READ, P.MARGINS_READ],
-  OPERATIONS: [...BASE, P.ORDERS_MANAGE, P.HANDOFF_MANAGE],
-  PROJECT_MANAGER: [...BASE, P.COSTS_READ, P.ORDERS_MANAGE, P.HANDOFF_MANAGE],
+  ESTIMATOR: [...BASE, P.COSTS_READ, P.MARGINS_READ, P.FREIGHT_COST_WRITE],
+  // Operations owns vendor freight pricing: enters the quotes and puts them on the
+  // invoice, without proposal review, release or margin visibility.
+  OPERATIONS: [
+    ...BASE,
+    P.ORDERS_MANAGE,
+    P.HANDOFF_MANAGE,
+    P.FREIGHT_COST_WRITE,
+    P.FREIGHT_INVOICE_PUSH,
+  ],
+  PROJECT_MANAGER: [...BASE, P.COSTS_READ, P.ORDERS_MANAGE, P.HANDOFF_MANAGE, P.FREIGHT_COST_WRITE],
   ACCOUNTING: [
     P.CRM_READ,
     P.CATALOG_READ,
@@ -113,6 +139,8 @@ export const ROLE_PERMISSIONS: Record<Role, readonly string[]> = {
     P.QBO_TRANSACT,
     P.ORDERS_READ,
     P.PROPOSAL_ARCHIVE,
+    P.FREIGHT_COST_WRITE,
+    P.FREIGHT_INVOICE_PUSH,
   ],
   INSTALLER: [P.CRM_READ, P.CATALOG_READ, P.RULES_READ, P.PROPOSAL_READ, P.ORDERS_READ],
   READ_ONLY: [

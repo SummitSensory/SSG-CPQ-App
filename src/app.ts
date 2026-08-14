@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import helmet from '@fastify/helmet';
 import { logger } from './lib/logger.js';
 import { registerErrorHandler } from './plugins/error-handler.js';
+import { registerFreightGate } from './plugins/freightGate.js';
 import { registerHealthRoutes } from './routes/health.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerSsoRoutes } from './routes/sso.js';
@@ -29,6 +30,7 @@ import { registerFreightRfqRoutes } from './routes/freightRfq.js';
 import { registerFinanceRoutes } from './routes/finance.js';
 import { registerRenderRoutes } from './routes/render.js';
 import { registerFreightRoutes } from './routes/freight.js';
+import { registerFreightTrueUpRoutes } from './routes/freightTrueUp.js';
 import { registerWebhookRoutes } from './routes/webhooks.js';
 import { registerReportRoutes } from './routes/reports.js';
 import { registerStandardNoteRoutes } from './routes/standardNotes.js';
@@ -72,6 +74,10 @@ export function buildApp(): FastifyInstance {
   });
 
   registerErrorHandler(app);
+  // Money policy that spans modules: a Bill of Materials may not go to a vendor
+  // while the job's freight is unquoted and unexplained. Registered before the
+  // routes so it sees their requests.
+  registerFreightGate(app);
   registerHealthRoutes(app);
   registerWebhookRoutes(app);
   registerAuthRoutes(app);
@@ -100,6 +106,7 @@ export function buildApp(): FastifyInstance {
   registerFinanceRoutes(app);
   registerRenderRoutes(app);
   registerFreightRoutes(app);
+  registerFreightTrueUpRoutes(app);
   registerReportRoutes(app);
   registerStandardNoteRoutes(app);
   registerCustomerNoteRoutes(app);
