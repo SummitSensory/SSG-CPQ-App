@@ -1551,7 +1551,18 @@ model AcceptedOrder {
   procurement       ProcurementLine[]
   bomSections       BomVendorSection[]
   tasks             HandoffTask[]
-  events            OrderEvent[]
+  events            OrderEvent[]  // ---- Manufacturing release ----
+  // Creating the order and releasing it to the shop are two separate acts. The
+  // order is created when the proposal is marked signed; release is later, and is
+  // gated on a QuickBooks invoice existing — or on that requirement being waived
+  // on purpose, with a reason.
+  manufacturingReleasedAt   DateTime?
+  manufacturingReleasedById String?
+  qboInvoiceWaivedAt        DateTime?
+  qboInvoiceWaivedById      String?
+  qboInvoiceWaivedReason    String?
+
+
 
   @@index([organizationId])
   @@index([status])
@@ -1609,7 +1620,16 @@ model ProcurementLine {
   targetDate   DateTime?
   notes        String?
   isException  Boolean       @default(false)
-  exceptionReason String?
+  exceptionReason String?  /// What the formula produced for this line, captured when the line was created
+  /// from the accepted proposal. `quantity` above is the operational figure and
+  /// may be overridden by hand; a difference between the two is what badges the
+  /// line as edited. NULL on lines added by hand, which have no formula figure to
+  /// differ from.
+  quantityOriginal   Int?
+  quantityEditedById String?
+  quantityEditedAt   DateTime?
+
+
 
   @@index([orderId])
 }
@@ -2080,4 +2100,93 @@ model FreightTrueUp {
   @@index([proposalId])
   @@index([versionId])
   @@index([status])
+}
+
+
+/// The record of every change made to an editable formula — frame and component
+/// quantities, hardware fastener quantities, and the business numbers.
+///
+/// AuditLog already notes that a formula changed, but it stores only the fields
+/// that were SENT. That is enough to answer "who touched this" and not enough to
+/// answer "what did it used to be", which is the question actually asked when a
+/// bill of materials comes out wrong. So each revision carries a complete snapshot
+/// of the rule before and after, which is also what makes Undo possible without
+/// re-deriving anything.
+enum FormulaRevisionKind {
+  /// A frame or component quantity rule.
+  FRAME
+  /// A hardware fastener quantity rule.
+  HARDWARE
+  /// A business number (deposit %, mat rates, leg spans).
+  SETTING
+}
+
+enum FormulaRevisionAction {
+  /// A rule that had no override before now has one.
+  CREATE
+  /// An existing override changed.
+  UPDATE
+  /// An override was cleared, putting the row back on its workbook default.
+  RESET
+  /// Restore workbook defaults — one batch, one row per cleared override.
+  RESET_ALL
+  /// This revision reverses an earlier one. Recorded as a revision in its own
+  /// right, so the log reads as a history rather than as rows that vanish.
+  UNDO
+}
+
+model FormulaRevision {
+  id             String                @id @default(cuid())
+
+  /// One confirmation can move several rows — "Restore workbook defaults" moves
+  /// all of them. The batch groups those rows so the log can show the act.
+  batchId        String
+  kind           FormulaRevisionKind
+  action         FormulaRevisionAction
+
+  /// Part number for FRAME/HARDWARE, setting key for SETTING. One column rather
+  /// than two nullable ones: either way it is the row's identity.
+  target         String
+  /// The row's name as it read at the time, so an entry still makes sense after a
+  /// part is renamed or drops out of the workbook.
+  targetName     String?
+
+  /// Complete rule (or { key, value }) either side of the change. A null
+  /// `before` means no override existed; a null `after` means it was reset back
+  /// to the workbook default.
+  before         Json?
+  after          Json?
+  /// One-line description of what moved, composed when the row is written. Kept so
+  /// neither the log nor the Excel export has to re-derive wording from two JSON
+  /// blobs — and so the wording cannot drift as the formula editor changes.
+  summary        String
+
+  /// The confirmation the user typed, verbatim. Evidence the gate was met rather
+  /// than a boolean asserting it was.
+  confirmedWord  String?
+  /// Orders judged impacted at confirmation time: [{ id, number, customer }].
+  /// Snapshotted, not recomputed — which orders were open THEN is the fact worth
+  /// keeping, and it is what the notification email quoted.
+  impactedOrders Json?
+  impactedCount  Int                   @default(0)
+
+  notifiedAt     DateTime?
+  /// Why the notification did not go out. A failed email must not fail the change
+  /// that was already committed, so the failure is recorded here instead.
+  notifyError    String?
+
+  undoneAt       DateTime?
+  undoneById     String?
+  /// The revision this one reverses. Set only on action = UNDO.
+  undoesId       String?               @unique
+  undoes         FormulaRevision?      @relation("FormulaRevisionUndo", fields: [undoesId], references: [id], onDelete: SetNull)
+  undoneBy       FormulaRevision?      @relation("FormulaRevisionUndo")
+
+  actorId        String
+  createdAt      DateTime              @default(now())
+
+  @@index([kind, createdAt])
+  @@index([batchId])
+  @@index([target])
+  @@index([actorId])
 }
