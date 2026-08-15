@@ -398,6 +398,33 @@ export function projectCustomField(
   return [{ DefinitionId: slot, Name: 'Project ID', Type: 'StringType', StringValue: value }];
 }
 
+/**
+ * Every sales-form custom field a document should carry, in one array.
+ *
+ * QuickBooks accepts at most three legacy sales-form custom fields and matches
+ * them by DefinitionId — the slot number. Two values resolving to the SAME slot is
+ * therefore not a merge, it is one overwriting the other, and which one wins would
+ * depend on array order. That is a misconfiguration (both names pointing at one
+ * slot), so the later field is dropped and the first kept rather than silently
+ * shipping whichever happened to be last.
+ *
+ * Fields with no value or no resolved slot are simply omitted, and do not print.
+ */
+export function salesCustomFields(
+  fields: Array<{ name: string; value?: string | null; definitionId?: string | null }>,
+): Array<Record<string, unknown>> {
+  const out: Array<Record<string, unknown>> = [];
+  const used = new Set<string>();
+  for (const f of fields) {
+    const value = String(f.value ?? '').trim();
+    const slot = String(f.definitionId ?? '').trim();
+    if (!value || !slot || used.has(slot)) continue;
+    used.add(slot);
+    out.push({ DefinitionId: slot, Name: f.name, Type: 'StringType', StringValue: value });
+  }
+  return out;
+}
+
 export const TXN_LABEL: Record<QboTxnType, string> = {
   ESTIMATE: 'Estimate',
   INVOICE: 'Invoice',

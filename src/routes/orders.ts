@@ -23,6 +23,11 @@ import {
   applyPowderColorToOrder,
   deleteProcurementLine,
 } from '../handoff/service.js';
+import {
+  releaseToManufacturing,
+  waiveQboInvoice,
+  qboGateState,
+} from '../handoff/manufacturingRelease.js';
 import { buildBom } from '../handoff/bom.js';
 import type {
   HandoffStatus,
@@ -82,6 +87,12 @@ const BomLinePatch = z.object({
   poNumber: z.string().trim().max(80).nullish(),
   sourced: z.boolean().optional(),
   unitCostMinor: z.number().int().nonnegative().nullish(),
+  /**
+   * Operational quantity override. Bounds are re-checked in the service so a
+   * caller that skips this route cannot write a nonsense count onto a shop
+   * document; the same limits are stated in both places on purpose.
+   */
+  quantity: z.number().int().min(1).max(100000).optional(),
 });
 
 export function registerOrderRoutes(app: FastifyInstance): void {
@@ -315,5 +326,38 @@ export function registerOrderRoutes(app: FastifyInstance): void {
     const b = (req.body || {}) as { color?: string; overwrite?: boolean };
     if (typeof b.color !== 'string') throw new ValidationError('color is required');
     return applyPowderColorToOrder(id, b.color.trim(), { overwrite: !!b.overwrite }, req.user!.sub);
+  });
+
+  // --- Manufacturing release ---
+
+  /**
+   * The QuickBooks gate on its own, so the button can render disabled with a
+   * reason. Read-only — available to anyone who can read the order.
+   */
+  app.get('/orders/:id/manufacturing', read, async (req) =>
+    qboGateState((req.params as { id: string }).id),
+  );
+
+  /**
+   * Release the order to manufacturing. Refused unless a QuickBooks invoice has
+   * been created — or the requirement has been waived below.
+   */
+  app.post('/orders/:id/manufacturing/release', manage, async (req) =>
+    releaseToManufacturing((req.params as { id: string }).id, req.user!.sub),
+  );
+
+  /**
+   * Skip the QuickBooks-invoice requirement for this order.
+   *
+   * Open to anyone who can manage orders, deliberately: the people who hit this
+   * are the ones with a job to get to the shop, and routing it through Accounting
+   * would mean the override is never there when it is needed. What makes it
+   * accountable instead is that the reason is mandatory, it lands on the order
+   * timeline and the audit log, and Accounting is emailed the moment it happens.
+   */
+  app.post('/orders/:id/manufacturing/waive-invoice', manage, async (req) => {
+    const { id } = req.params as { id: string };
+    const b = (req.body || {}) as { reason?: string };
+    return waiveQboInvoice(id, b.reason ?? '', req.user!.sub);
   });
 }

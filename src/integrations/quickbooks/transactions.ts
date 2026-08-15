@@ -608,6 +608,42 @@ export async function executeTransaction(
           fetchImpl,
         )
       : null;
+
+    /**
+     * The customer's PO number, captured when the proposal was marked signed and
+     * stored on the order's CustomerApproval record. It belongs on the invoice
+     * because it is the reference the customer's accounts-payable team matches
+     * against; without it an invoice can sit unpaid pending "which PO is this?".
+     *
+     * Read from the order rather than the proposal: the PO is part of the
+     * acceptance, not part of the quote, and a proposal may be re-accepted with a
+     * different one.
+     *
+     * Slot resolution follows the Project ID precedent — env override first, then
+     * the company's own preferences by field NAME. The literal '1' is the final
+     * fallback because that is the slot named "Customer Purchase Order #" on this
+     * company, and the requirement is specifically custom field 1; a company whose
+     * slot 1 is something else should set QBO_CUSTOM_FIELD_ID_PO.
+     */
+    let poNumber: string | null = null;
+    let poFieldId: string | null = null;
+    if (txn.type === 'INVOICE') {
+      const order = await prisma.acceptedOrder.findUnique({
+        where: { proposalVersionId: version.id },
+        select: { customerApproval: { select: { poNumber: true } } },
+      });
+      poNumber = (order?.customerApproval?.poNumber ?? '').trim() || null;
+      if (poNumber) {
+        poFieldId =
+          (await customFieldId(
+            realmId,
+            'Customer Purchase Order #',
+            process.env.QBO_CUSTOM_FIELD_ID_PO,
+            fetchImpl,
+          )) ?? '1';
+      }
+    }
+
     const memo = [
       // Fallback when the Project ID cannot be written to a custom field. QuickBooks'
       // v3 API can only populate the three LEGACY sales-form custom fields; the
@@ -616,6 +652,9 @@ export async function executeTransaction(
       // case the slot lookup returns null, and the Project ID would silently vanish
       // — so it goes into the memo instead, which always prints.
       projectId && !projectFieldId ? `Project ID ${projectId}` : null,
+      // Same reasoning for the PO number. It also lands here when both fields
+      // resolve to the same slot and this one lost — see salesCustomFields.
+      poNumber && !poFieldId ? `Customer PO ${poNumber}` : null,
       `Per accepted proposal ${version.proposal.number} v${txn.proposalVersion}`,
     ]
       .filter(Boolean)
@@ -657,6 +696,8 @@ export async function executeTransaction(
         memo,
         projectId,
         projectFieldId,
+        poNumber,
+        poFieldId,
         lines: totals.lines,
         fees: totals.fees,
         orderDiscountMinor: totals.orderDiscountMinor,

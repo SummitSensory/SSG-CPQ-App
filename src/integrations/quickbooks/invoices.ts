@@ -2,7 +2,7 @@ import {
   minorToQboAmount,
   formatMinor,
   toSalesLines,
-  projectCustomField,
+  salesCustomFields,
   assertAssembledTotal,
   type AcceptedLine,
 } from './mapping.js';
@@ -43,6 +43,14 @@ export interface InvoiceInput {
   projectId?: string | null;
   /** DefinitionId of that custom field, resolved from company preferences. */
   projectFieldId?: string | null;
+  /**
+   * The customer's purchase-order number, as captured when the proposal was
+   * marked signed. Printed in the invoice's first sales-form custom field — on
+   * this company, "Customer Purchase Order #".
+   */
+  poNumber?: string | null;
+  /** DefinitionId of that field. Resolved by the caller, same as the project slot. */
+  poFieldId?: string | null;
   /**
    * QuickBooks Term id (Settings → All lists → Terms). Optional: without it the
    * customer's default term applies, and the split is still stated on the
@@ -152,7 +160,10 @@ export function buildInvoiceBody(input: InvoiceInput): Record<string, unknown> {
     : null;
   const memo = [input.memo, note].filter(Boolean).join('  ·  ');
 
-  const customField = projectCustomField(input.projectId, input.projectFieldId);
+  const customField = salesCustomFields([
+    { name: 'Customer Purchase Order #', value: input.poNumber, definitionId: input.poFieldId },
+    { name: 'Project ID', value: input.projectId, definitionId: input.projectFieldId },
+  ]);
   return {
     CustomerRef: { value: input.customerQboId },
     CurrencyRef: { value: input.currency },

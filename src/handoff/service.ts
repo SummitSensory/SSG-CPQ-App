@@ -11,6 +11,7 @@ import {
   type AcceptedVersionLike,
   type PriceSnapshotLike,
 } from './lock.js';
+import { qboGateState } from './manufacturingRelease.js';
 import { versionTotals, metaOf } from '../proposals/analytics.js';
 import { createNewVersion } from '../proposals/service.js';
 import { loadFormulaSettings } from '../routes/formulas.js';
@@ -397,6 +398,10 @@ export async function createAcceptedOrder(
               sku: ref.sku ?? p.sku,
               name: p.name,
               quantity: p.quantity,
+              // The formula figure, kept alongside the operational one so a later
+              // hand edit can be badged and the original recovered. They are equal
+              // at creation by definition — nothing has edited the line yet.
+              quantityOriginal: p.quantity,
               vendor: ref.vendor,
               unitCostMinor: ref.unitCostMinor ?? p.unitCostMinor ?? null,
               unitWeightLbs: ref.unitWeightLbs ?? p.unitWeightLbs ?? null,
@@ -607,7 +612,7 @@ export async function listOrders(filter: { status?: HandoffStatus; organizationI
 
   const orgIds = [...new Set(rows.map((r) => r.organizationId))];
   const proposalIds = [...new Set(rows.map((r) => r.proposalId))];
-  const [orgs, proposals] = await Promise.all([
+  const [orgs, proposals, invoices] = await Promise.all([
     prisma.organization.findMany({
       where: { id: { in: orgIds } },
       select: { id: true, name: true },
@@ -616,12 +621,48 @@ export async function listOrders(filter: { status?: HandoffStatus; organizationI
       where: { id: { in: proposalIds } },
       select: { id: true, number: true, title: true },
     }),
+    // Created QuickBooks invoices for every proposal in the page, in ONE query.
+    // The orders table shows whether an invoice exists and when it was generated,
+    // and a lookup per row would be a query per order.
+    prisma.qboTransaction.findMany({
+      where: { proposalId: { in: proposalIds }, type: 'INVOICE', status: 'CREATED' },
+      select: { id: true, proposalId: true, qboDocNumber: true, createdAt: true },
+      orderBy: { createdAt: 'asc' },
+    }),
   ]);
   const orgName = new Map(orgs.map((o) => [o.id, o.name]));
   const prop = new Map(proposals.map((p) => [p.id, p]));
 
+  // The generated date comes from the append-only audit entry, not from the
+  // transaction's updatedAt — that column moves on every later billing re-sync,
+  // which would make the "generated" date creep forwards forever.
+  const created = invoices.length
+    ? await prisma.auditLog.findMany({
+        where: {
+          action: 'qbo.txn.create',
+          entity: 'QboTransaction',
+          entityId: { in: invoices.map((i) => i.id) },
+        },
+        select: { entityId: true, createdAt: true },
+        orderBy: { createdAt: 'asc' },
+      })
+    : [];
+  const createdAtByTxn = new Map<string, Date>();
+  for (const c of created)
+    if (c.entityId && !createdAtByTxn.has(c.entityId)) createdAtByTxn.set(c.entityId, c.createdAt);
+
+  const invoiceByProposal = new Map<string, { docNumber: string | null; generatedAt: Date }>();
+  for (const inv of invoices) {
+    if (invoiceByProposal.has(inv.proposalId)) continue;
+    invoiceByProposal.set(inv.proposalId, {
+      docNumber: inv.qboDocNumber ?? null,
+      generatedAt: createdAtByTxn.get(inv.id) ?? inv.createdAt,
+    });
+  }
+
   return rows.map(({ customerApproval, tasks, requirements, procurement, ...o }) => {
     const p = prop.get(o.proposalId);
+    const inv = invoiceByProposal.get(o.proposalId) ?? null;
     return {
       ...o,
       customer: orgName.get(o.organizationId) ?? null,
@@ -631,7 +672,12 @@ export async function listOrders(filter: { status?: HandoffStatus; organizationI
       poNumber: customerApproval?.poNumber ?? null,
       proposalNumber: p?.number ?? null,
       proposalTitle: p?.title ?? null,
-      balanceDueMinor: (o.grandTotalMinor - o.depositDueMinor).toString(),
+      // The full invoice value, NOT the total less the deposit. A deposit is a
+      // payment schedule, not a reduction in what the customer owes, and showing
+      // the post-deposit figure here read as though half the job had been paid for
+      // before any money arrived. Payments actually received live in QuickBooks and
+      // are surfaced separately.
+      balanceDueMinor: o.grandTotalMinor.toString(),
       openTasks: tasks.filter((t) => t.status !== 'DONE' && t.status !== 'CANCELLED').length,
       taskCount: tasks.length,
       openRequirements: requirements.filter((r) => r.status !== 'COMPLETE' && r.status !== 'WAIVED')
@@ -639,6 +685,13 @@ export async function listOrders(filter: { status?: HandoffStatus; organizationI
       requirementCount: requirements.length,
       procurementCount: procurement.length,
       procurementSourced: procurement.filter((l) => l.sourced).length,
+      // ---- QuickBooks invoice, for the two columns on the orders table ----
+      qboInvoiceCreated: !!inv,
+      qboInvoiceDocNumber: inv?.docNumber ?? null,
+      qboInvoiceGeneratedAt: inv ? inv.generatedAt.toISOString() : null,
+      // Whether the invoice requirement was deliberately skipped, so the column can
+      // say "Waived" rather than showing a bare "No" that looks like an oversight.
+      qboInvoiceWaived: !!o.qboInvoiceWaivedAt,
     };
   });
 }
@@ -959,23 +1012,80 @@ export async function patchProcurementLine(
     powderBrandId?: string | null;
     /** The colour code as typed for this part. */
     powderColorCode?: string | null;
+    /**
+     * Operational quantity override. The formula figure stays in
+     * `quantityOriginal`; a difference between the two badges the line as edited.
+     * Passing the original value back clears the override.
+     */
+    quantity?: number;
   },
   userId: string,
 ) {
   const existing = await prisma.procurementLine.findUnique({ where: { id: lineId } });
   if (!existing) throw new NotFoundError('Bill of Materials line not found');
 
-  // A submitted section is the sheet the vendor already has — its lines are frozen
-  // with it, so this is refused rather than silently allowed.
   const vendor = (existing.vendor && existing.vendor.trim()) || 'Unassigned vendor';
   const section = await prisma.bomVendorSection.findUnique({
     where: { orderId_vendor: { orderId: existing.orderId, vendor } },
     select: { status: true },
   });
+
+  /**
+   * A submitted section is the sheet the vendor already has, so its lines are
+   * frozen with it — with one deliberate exception.
+   *
+   * `sourced` (the per-line Pending/Ordered status) stays editable after
+   * submission, because it records what happened to the part AFTER the sheet went
+   * out. Freezing it would mean receiving could never be tracked against the
+   * document the vendor was actually sent, which is the only document worth
+   * tracking it against. Everything else — quantity, colour, notes, cost — would
+   * put the BOM out of step with the vendor's copy and is refused.
+   */
   if (section?.status === 'SUBMITTED') {
-    throw new ValidationError(
-      `The ${vendor} Bill of Materials is submitted. Unlock it for changes first.`,
+    const touched = Object.keys(patch).filter(
+      (k) => (patch as Record<string, unknown>)[k] !== undefined,
     );
+    const frozen = touched.filter((k) => k !== 'sourced');
+    if (frozen.length) {
+      throw new ValidationError(
+        `The ${vendor} Bill of Materials is submitted. Unlock it for changes first. ` +
+          'Only the per-line status can be changed on a submitted sheet.',
+      );
+    }
+  }
+
+  /**
+   * The quantity override. Validated here rather than at the route so a direct API
+   * call cannot write a negative or fractional count onto a shop document.
+   *
+   * Setting the quantity back to the formula figure CLEARS the override rather than
+   * recording an edit that happens to match — otherwise a line nudged up and back
+   * again would carry an "edited" badge forever with nothing to show for it.
+   */
+  let quantityData: Record<string, unknown> = {};
+  if (patch.quantity !== undefined) {
+    const q = Number(patch.quantity);
+    if (!Number.isInteger(q) || q < 1)
+      throw new ValidationError('Quantity must be a whole number of at least 1');
+    if (q > 100000) throw new ValidationError('Quantity must be 100,000 or fewer');
+    // A line created before this column existed, or added by hand, has no formula
+    // figure. The first edit establishes one, so the badge has something to compare
+    // against and the original stays recoverable.
+    const original = existing.quantityOriginal ?? existing.quantity;
+    quantityData =
+      q === original
+        ? {
+            quantity: q,
+            quantityOriginal: original,
+            quantityEditedById: null,
+            quantityEditedAt: null,
+          }
+        : {
+            quantity: q,
+            quantityOriginal: original,
+            quantityEditedById: userId,
+            quantityEditedAt: new Date(),
+          };
   }
 
   // Brand + code are the source of truth; `powderColor` is the text that prints, so
@@ -1008,9 +1118,23 @@ export async function patchProcurementLine(
       ...(patch.sourced !== undefined ? { sourced: patch.sourced } : {}),
       ...(patch.targetDate !== undefined ? { targetDate: patch.targetDate } : {}),
       ...(patch.unitCostMinor !== undefined ? { unitCostMinor: patch.unitCostMinor } : {}),
+      ...quantityData,
     },
   });
-  await logEvent(existing.orderId, 'bom.line.update', userId, patch as Record<string, unknown>);
+  await logEvent(
+    existing.orderId,
+    patch.quantity !== undefined ? 'bom.line.quantity' : 'bom.line.update',
+    userId,
+    patch.quantity !== undefined
+      ? {
+          ...(patch as Record<string, unknown>),
+          sku: existing.sku,
+          name: existing.name,
+          from: existing.quantity,
+          to: patch.quantity,
+        }
+      : (patch as Record<string, unknown>),
+  );
   return line;
 }
 
@@ -1147,6 +1271,7 @@ export async function handoffStatus(orderId: string) {
       return a;
     }, {});
   const integrity = await verifyIntegrity(orderId);
+  const qboGate = await qboGateState(orderId);
 
   const exceptions = [
     ...order.requirements
@@ -1194,6 +1319,27 @@ export async function handoffStatus(orderId: string) {
     integrations: {
       qboEstimateTxnId: order.qboEstimateTxnId,
       mondayProjectId: order.mondayProjectId,
+    },
+    /**
+     * Manufacturing release. Reported as state PLUS a reason rather than a bare
+     * boolean, so the button can be disabled with the explanation attached instead
+     * of looking available and then refusing on click.
+     */
+    manufacturing: {
+      released: !!order.manufacturingReleasedAt,
+      releasedAt: order.manufacturingReleasedAt
+        ? order.manufacturingReleasedAt.toISOString()
+        : null,
+      canRelease:
+        !order.manufacturingReleasedAt && order.status !== 'CANCELLED' && qboGate.satisfied,
+      blockedReason: order.manufacturingReleasedAt
+        ? null
+        : order.status === 'CANCELLED'
+          ? 'This order is cancelled.'
+          : qboGate.satisfied
+            ? null
+            : 'A QuickBooks invoice has to be created first — steps 1 to 3.',
+      qbo: qboGate,
     },
     integrity,
   };
