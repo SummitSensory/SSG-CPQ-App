@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma.js';
 import { ConflictError, NotFoundError, ValidationError } from '../lib/errors.js';
 import { recordAudit } from '../lib/audit.js';
+import { vendorPartLookup } from './vendorParts.js';
 import {
   buildContentSnapshot,
   computeIntegrityHash,
@@ -539,6 +540,10 @@ export async function getOrder(id: string) {
       [
         ...order.requirements.map((r) => r.updatedById),
         ...order.tasks.map((t) => t.updatedById),
+        // Who overrode a quantity, and who released the order to manufacturing:
+        // both are shown by name on the order page.
+        ...order.procurement.map((p) => p.quantityEditedById),
+        order.manufacturingReleasedById,
       ].filter(Boolean) as string[],
     ),
   ];
@@ -560,6 +565,14 @@ export async function getOrder(id: string) {
       })
     : [];
   const urlByPart = new Map(skus.map((s) => [s.part, s.productUrl]));
+  // What each vendor calls the part, where they number it differently to us. The
+  // Bill of Materials screen shows it beside our number; nothing else reads it.
+  const vendorParts = await vendorPartLookup(
+    order.procurement.map((p) => ({
+      vendor: (p.vendor && p.vendor.trim()) || 'Unassigned vendor',
+      sku: p.sku,
+    })),
+  );
   // Which packaging bag the part ships in. Also a SKU fact, not a line fact.
   const bagByPart = new Map(skus.map((s) => [s.part, s.packagingBag]));
 
@@ -573,10 +586,21 @@ export async function getOrder(id: string) {
   return {
     ...order,
     customerName: org?.name ?? '',
+    /**
+     * The full order value, NOT the total less the deposit — the same rule the
+     * orders list follows. A deposit is a payment schedule, not a reduction in what
+     * the customer owes; payments actually received live in QuickBooks.
+     */
+    balanceDueMinor: order.grandTotalMinor.toString(),
+    manufacturingReleasedByName: order.manufacturingReleasedById
+      ? (nameById.get(order.manufacturingReleasedById) ?? null)
+      : null,
     procurement: order.procurement.map((p) => ({
       ...p,
       productUrl: (p.sku && urlByPart.get(p.sku)) || null,
       packagingBag: (p.sku && bagByPart.get(p.sku)) || null,
+      vendorPart: vendorParts.get((p.vendor && p.vendor.trim()) || 'Unassigned vendor', p.sku),
+      quantityEditedBy: p.quantityEditedById ? (nameById.get(p.quantityEditedById) ?? null) : null,
     })),
     requirements: order.requirements.map((r) => ({
       ...r,

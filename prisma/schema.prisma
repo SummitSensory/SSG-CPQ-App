@@ -613,10 +613,43 @@ model Manufacturer {
   rfqEmailBody        String?
 
   freightRfqs         FreightRfq[]
+  /// What this vendor calls the parts we number ourselves. See VendorPartNumber.
+  vendorParts         VendorPartNumber[]
 
   createdAt           DateTime          @default(now())
   updatedAt           DateTime          @updatedAt
   sourcing            ProductSourcing[]
+}
+
+/// A vendor's own number for a part we sell under a different one.
+///
+/// The Adventure floor mat is why this exists: the pricing engine generates
+/// R-SSG-{LLWW}CLM when a mat size is chosen, that number goes on the proposal and
+/// the customer knows the pad by it, while Resilite sell the same pad as A-3204.
+/// The vendor cannot order from our number and the customer must never see theirs,
+/// so both are kept and each document prints the one it needs: proposals ours, the
+/// Bill of Materials both.
+///
+/// ourPart is a part number as it appears on a BOM line — usually a Sku.part, but
+/// deliberately NOT a foreign key, because mat numbers are generated at price time
+/// and have no catalog row. Nothing joins on vendorPart; it is printed only.
+model VendorPartNumber {
+  id             String       @id @default(cuid())
+  manufacturerId String
+  manufacturer   Manufacturer @relation(fields: [manufacturerId], references: [id], onDelete: Cascade)
+  /// Our part number, stored as typed and matched case-insensitively.
+  ourPart        String
+  /// What the vendor calls it. Printed on the Bill of Materials, never elsewhere.
+  vendorPart     String
+  /// Optional note — the vendor's own description, or why the numbers differ.
+  description    String?
+  active         Boolean      @default(true)
+  createdById    String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([manufacturerId, ourPart])
+  @@index([ourPart])
 }
 
 model ProductSourcing {

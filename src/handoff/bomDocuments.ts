@@ -12,7 +12,11 @@ import { prisma } from '../lib/prisma.js';
  */
 
 const esc = (v: unknown): string =>
-  String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  String(v ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 
 const money = (minor: number): string =>
   `$${(Number(minor || 0) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -94,7 +98,8 @@ async function buildModel(
   // vendor's desk reads as "no date given" — the sheet is being sent today, so
   // today is the honest answer. Confirming the section is what persists it.
   const submittedOn =
-    dateOnly(extras ? extras.submittedOn : doc.order.submittedOn) || new Date().toISOString().slice(0, 10);
+    dateOnly(extras ? extras.submittedOn : doc.order.submittedOn) ||
+    new Date().toISOString().slice(0, 10);
   const deliveryType = extras?.deliveryType || doc.order.deliveryType;
   const shipmentQuote = extras?.shipmentQuote || doc.order.shipmentQuote;
   const notes = extras?.notes || doc.order.notes;
@@ -105,7 +110,11 @@ async function buildModel(
 
   const addr = (...parts: Array<string | undefined>) => parts.filter(Boolean).map(String);
   const cityLine = (city?: string, region?: string, postal?: string) =>
-    [city, region, postal].filter(Boolean).join(', ').replace(/, ([^,]*)$/, ' $1').trim();
+    [city, region, postal]
+      .filter(Boolean)
+      .join(', ')
+      .replace(/, ([^,]*)$/, ' $1')
+      .trim();
 
   const meta: Array<{ label: string; value: string }> = [
     { label: 'Job', value: jobName || '—' },
@@ -118,7 +127,8 @@ async function buildModel(
   if (v?.leadTimeDays != null) meta.push({ label: 'Lead time', value: `${v.leadTimeDays} days` });
   // Steel weight only means something when a steel fabricator is involved; on a
   // distributor's sheet it would always read 0 and invite the wrong conclusion.
-  if (t.steelWeightLbs > 0) meta.push({ label: 'Total steel weight (lb)', value: t.steelWeightLbs.toFixed(2) });
+  if (t.steelWeightLbs > 0)
+    meta.push({ label: 'Total steel weight (lb)', value: t.steelWeightLbs.toFixed(2) });
 
   // The powder-colour column is opt-in per vendor. It was on every sheet, where for
   // most vendors it was a column of dashes; a section that has a colour on it keeps
@@ -136,12 +146,24 @@ async function buildModel(
   // means nothing to the vendor reading the sheet; Notes was a narrow column that
   // wrapped badly and pushed the table past the page. Any line note now reads in the
   // notes block at the bottom, prefixed with its part number, where it has room.
+  // The vendor's own number for a part, where they number it differently to us
+  // (the Adventure mats: our R-SSG-1010CLM is their A-3204). Printed beside our
+  // number rather than instead of it — the shop and the vendor have to be able to
+  // talk about the same line — and the column disappears when nothing on the sheet
+  // is mapped.
+  const showVendorPart = doc.lines.some((l) => (l.vendorSku || '').trim());
+
   const columns = [
     ...(all ? ['Vendor'] : []),
-    'Line #', 'Description', 'Qty',
+    'Part #',
+    ...(showVendorPart ? ['Vendor part #'] : []),
+    'Description',
+    'Qty',
     ...(showBag ? ['Bag #'] : []),
     ...(showColor ? ['Powder color'] : []),
-    'Weight (lb)', 'Cost each', 'Total cost',
+    'Weight (lb)',
+    'Cost each',
+    'Total cost',
   ];
 
   // Weight always carries two decimals. "12.5" and "12" on the same sheet read as
@@ -151,7 +173,8 @@ async function buildModel(
 
   const rowOf = (l: (typeof doc.lines)[number]): string[] => [
     ...(all ? [l.vendor] : []),
-    l.lineNo,
+    l.sku || l.lineNo,
+    ...(showVendorPart ? [l.vendorSku || '—'] : []),
     l.name,
     String(l.quantity),
     ...(showBag ? [l.packagingBag || '—'] : []),
@@ -172,10 +195,15 @@ async function buildModel(
 
   const totals = [
     ...(all ? [''] : []),
-    '', 'Total', String(t.unitCount),
+    '',
+    ...(showVendorPart ? [''] : []),
+    'Total',
+    String(t.unitCount),
     ...(showBag ? [''] : []),
     ...(showColor ? [''] : []),
-    lbs(t.totalWeightLbs), '', money(t.extendedCostMinor),
+    lbs(t.totalWeightLbs),
+    '',
+    money(t.extendedCostMinor),
   ];
 
   return {
@@ -185,7 +213,11 @@ async function buildModel(
     submitted: extras?.status === 'SUBMITTED',
     company: {
       name: c.name,
-      lines: addr(c.addressLine1, cityLine(c.city, c.region, c.postalCode), [c.phone, c.email].filter(Boolean).join(' · ')),
+      lines: addr(
+        c.addressLine1,
+        cityLine(c.city, c.region, c.postalCode),
+        [c.phone, c.email].filter(Boolean).join(' · '),
+      ),
     },
     // Ship from / ship to only. Bill-to was removed: it repeated the ship-to block
     // verbatim on every sheet, and a vendor invoices Summit, never the customer —
@@ -195,12 +227,25 @@ async function buildModel(
       {
         title: 'Ship from',
         lines: v
-          ? addr(v.name, streetLine(v.addressLine1, v.addressLine2), cityLine(v.city, v.region, v.postalCode), v.contactName, v.contactPhone, v.contactEmail)
+          ? addr(
+              v.name,
+              streetLine(v.addressLine1, v.addressLine2),
+              cityLine(v.city, v.region, v.postalCode),
+              v.contactName,
+              v.contactPhone,
+              v.contactEmail,
+            )
           : ['All vendors'],
       },
       {
         title: 'Ship to',
-        lines: addr(doc.shipTo.name, ...doc.shipTo.lines, doc.shipTo.contactName, doc.shipTo.phone, doc.shipTo.email),
+        lines: addr(
+          doc.shipTo.name,
+          ...doc.shipTo.lines,
+          doc.shipTo.contactName,
+          doc.shipTo.phone,
+          doc.shipTo.email,
+        ),
       },
     ],
     meta,
@@ -212,8 +257,12 @@ async function buildModel(
     // note is still attached to something once it is out of the table.
     notes: [
       notes || '',
-      ...doc.lines.filter((l) => (l.vendorNotes || '').trim()).map((l) => `${l.lineNo}: ${l.vendorNotes.trim()}`),
-    ].filter(Boolean).join('\n'),
+      ...doc.lines
+        .filter((l) => (l.vendorNotes || '').trim())
+        .map((l) => `${l.lineNo}: ${l.vendorNotes.trim()}`),
+    ]
+      .filter(Boolean)
+      .join('\n'),
     footer: `Prepared ${dateOnly(doc.createdAt)}${doc.createdBy ? ` by ${doc.createdBy.name}` : ''} · ${c.name}`,
     doc,
   };
@@ -222,7 +271,8 @@ async function buildModel(
 // One type size across the whole table — the same 8.5pt the Line # column already
 // used. Body text at 9pt against an 8.5pt part number made the table look
 // misaligned, and the two columns that were dropped bought back the width.
-const TH = 'padding:7px 8px;text-align:left;font-size:8.5pt;text-transform:uppercase;letter-spacing:.05em;color:#5c6157;border-bottom:1.5px solid #20241f;font-weight:600;';
+const TH =
+  'padding:7px 8px;text-align:left;font-size:8.5pt;text-transform:uppercase;letter-spacing:.05em;color:#5c6157;border-bottom:1.5px solid #20241f;font-weight:600;';
 const TD = 'padding:5px 8px;font-size:8.5pt;border-bottom:1px solid #e7e8e3;vertical-align:top;';
 
 /**
@@ -301,7 +351,8 @@ export async function renderBomHtml(
   <table style="width:100%;border-collapse:collapse;background:#fbfbf9;border:1px solid #e7e8e3;margin-bottom:14px;">
     <tr>${m.meta
       .map(
-        (x) => `<td style="padding:8px 10px;font-size:8.5pt;"><span style="color:#8a8f85;">${esc(x.label)}</span><br><b>${esc(x.value)}</b></td>`,
+        (x) =>
+          `<td style="padding:8px 10px;font-size:8.5pt;"><span style="color:#8a8f85;">${esc(x.label)}</span><br><b>${esc(x.value)}</b></td>`,
       )
       .join('')}</tr>
   </table>

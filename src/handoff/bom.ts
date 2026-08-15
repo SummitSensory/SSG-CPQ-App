@@ -1,6 +1,6 @@
 import { prisma } from '../lib/prisma.js';
 import { NotFoundError } from '../lib/errors.js';
-import { vendorPartFor } from './vendorParts.js';
+import { vendorPartLookup } from './vendorParts.js';
 
 /**
  * The Bill of Materials.
@@ -235,12 +235,18 @@ export async function buildBom(
     ? ordered.filter((l) => (s(l.vendor).trim() || 'Unassigned vendor') === vendorFilter)
     : ordered;
 
+  // Every vendor part number that could apply to this sheet, in one query. Keyed
+  // on vendor AND part: two vendors may number the same part differently.
+  const vendorParts = await vendorPartLookup(
+    ordered.map((l) => ({ vendor: s(l.vendor).trim() || 'Unassigned vendor', sku: s(l.sku) })),
+  );
+
   const lines: BomLine[] = scoped.map((l) => {
     const qty = Number(l.quantity) || 0;
     const cost = l.unitCostMinor ?? 0;
     const wt = l.unitWeightLbs == null ? 0 : Number(l.unitWeightLbs);
     const vendorName = s(l.vendor).trim() || 'Unassigned vendor';
-    const vendorSku = vendorPartFor(s(l.sku)) ?? '';
+    const vendorSku = vendorParts.get(vendorName, s(l.sku)) ?? '';
     return {
       id: l.id,
       lineNo: vendorSku || s(l.sku) || '—',
@@ -302,12 +308,16 @@ export async function buildBom(
         });
       }
     }
+    const extraParts = await vendorPartLookup(
+      [...extra.values()].map((e) => ({ vendor: vendorFilter, sku: e.sku })),
+    );
     for (const e of [...extra.values()].sort((a, b) => a.sku.localeCompare(b.sku))) {
+      const extraVendorSku = extraParts.get(vendorFilter, e.sku) ?? '';
       lines.push({
         id: `zero:${e.sku}`,
-        lineNo: vendorPartFor(e.sku) || e.sku,
+        lineNo: extraVendorSku || e.sku,
         sku: e.sku,
-        vendorSku: vendorPartFor(e.sku) ?? '',
+        vendorSku: extraVendorSku,
         name: e.name,
         quantity: 0,
         powderColor: '',

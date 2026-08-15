@@ -3,13 +3,14 @@ import { env } from '../config/env.js';
 import { logger } from '../lib/logger.js';
 import { NotFoundError, ValidationError } from '../lib/errors.js';
 import { renderBomHtml, renderBomXml, bomFilename } from './bomDocuments.js';
+import { confirmSection, submissionBlockers } from './bomSections.js';
 import { renderPdf, pdfAvailable } from '../render/pdf.js';
 import type { BomSendFormat } from '@prisma/client';
 
 /**
  * Emailing a Bill of Materials to a vendor.
  *
- * Two things matter here beyond "send the mail":
+ * Three things matter here beyond "send the mail":
  *
  *   1. **The audit row is written whatever happens.** A failed send is a fact
  *      worth keeping — it is the difference between "the vendor never replied"
@@ -18,6 +19,10 @@ import type { BomSendFormat } from '@prisma/client';
  *   2. **The attachment is built before the send.** If the PDF renderer is down,
  *      nothing goes out and the operator is told, rather than a vendor receiving
  *      a covering note with no document.
+ *   3. **Sending submits the section.** The email IS the submission: the vendor
+ *      now holds the document, so the section freezes on a successful send and
+ *      the same blockers that guard the Confirm button guard the send. A failed
+ *      send leaves the section open — nothing left the building.
  */
 
 const RESEND_URL = 'https://api.resend.com/emails';
@@ -43,10 +48,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /** Plain-text body to simple HTML, preserving the operator's line breaks. */
 function bodyHtml(text: string): string {
-  const escaped = text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+  const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   return `<div style="font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px;line-height:1.6;color:#20241f;white-space:pre-wrap;">${escaped}</div>`;
 }
 
@@ -65,12 +67,26 @@ export async function sendBom(sectionId: string, input: SendInput, actorId: stri
   }
   if (!input.subject.trim()) throw new ValidationError('The email needs a subject');
 
+  // Sending is a submission, so it answers to the submission rules. An already
+  // submitted section is being re-sent, which is allowed — the document is
+  // unchanged and the blockers were cleared when it first went out.
+  if (section.status !== 'SUBMITTED') {
+    const blockers = await submissionBlockers(sectionId);
+    if (blockers.length) {
+      throw new ValidationError(
+        `Sending submits this Bill of Materials, and it is not ready: ${blockers.join('; ')}.`,
+      );
+    }
+  }
+
   const wantsPdf = input.format === 'PDF' || input.format === 'BOTH';
   const wantsExcel = input.format === 'EXCEL' || input.format === 'BOTH';
 
   // Fail before the audit row exists: this is a precondition, not a send attempt.
   if (wantsPdf && !(await pdfAvailable())) {
-    throw new ValidationError('PDF rendering is not available on this deployment. Send as Excel, or install the renderer.');
+    throw new ValidationError(
+      'PDF rendering is not available on this deployment. Send as Excel, or install the renderer.',
+    );
   }
 
   const attachments: Array<{ filename: string; content: string }> = [];
@@ -79,15 +95,22 @@ export async function sendBom(sectionId: string, input: SendInput, actorId: stri
     // The customer name comes off the built document rather than a second query,
     // and it is what leads the filename — a vendor searching their inbox looks for
     // our customer, not our order numbering.
-    const { html, doc } = await renderBomHtml(section.orderId, section.vendor, { includeZeroQty: input.includeZeroQty });
+    const { html, doc } = await renderBomHtml(section.orderId, section.vendor, {
+      includeZeroQty: input.includeZeroQty,
+    });
     const base = bomFilename(section.order.number, section.vendor, doc.customer.name);
     if (wantsPdf) {
       const pdf = await renderPdf(html, { format: 'Letter' });
       attachments.push({ filename: `${base}.pdf`, content: pdf.toString('base64') });
     }
     if (wantsExcel) {
-      const xml = await renderBomXml(section.orderId, section.vendor, { includeZeroQty: input.includeZeroQty });
-      attachments.push({ filename: `${base}.xls`, content: Buffer.from(xml, 'utf8').toString('base64') });
+      const xml = await renderBomXml(section.orderId, section.vendor, {
+        includeZeroQty: input.includeZeroQty,
+      });
+      attachments.push({
+        filename: `${base}.xls`,
+        content: Buffer.from(xml, 'utf8').toString('base64'),
+      });
     }
   } catch (err) {
     logger.error({ err, sectionId }, 'bom send: could not build the attachment');
@@ -109,14 +132,22 @@ export async function sendBom(sectionId: string, input: SendInput, actorId: stri
     },
   });
 
-  const finish = async (status: 'SENT' | 'FAILED', extra: { providerMessageId?: string; error?: string }) => {
+  const finish = async (
+    status: 'SENT' | 'FAILED',
+    extra: { providerMessageId?: string; error?: string },
+  ) => {
     await prisma.bomSend.update({ where: { id: send.id }, data: { status, ...extra } });
     await prisma.orderEvent.create({
       data: {
         orderId: section.orderId,
         action: status === 'SENT' ? 'bom.emailed' : 'bom.email.failed',
         actorId,
-        detail: { vendor: section.vendor, to: to.join(', '), format: input.format, ...(extra.error ? { error: extra.error } : {}) } as object,
+        detail: {
+          vendor: section.vendor,
+          to: to.join(', '),
+          format: input.format,
+          ...(extra.error ? { error: extra.error } : {}),
+        } as object,
       },
     });
   };
@@ -133,7 +164,10 @@ export async function sendBom(sectionId: string, input: SendInput, actorId: stri
   try {
     const res = await fetch(RESEND_URL, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      headers: {
+        Authorization: `Bearer ${env.RESEND_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
       body: JSON.stringify({
         from: `${env.BOM_FROM_NAME} <${env.BOM_FROM_EMAIL}>`,
         to,
@@ -155,8 +189,20 @@ export async function sendBom(sectionId: string, input: SendInput, actorId: stri
 
     const json = (await res.json()) as { id?: string };
     await finish('SENT', { providerMessageId: json.id });
+
+    // The vendor has it: freeze the section. The lock is a consequence of the
+    // send, never a reason to fail it — if this throws, the mail is already gone,
+    // so the error is logged and the send still reports success.
+    let submitted = section.status === 'SUBMITTED';
+    try {
+      await confirmSection(sectionId, actorId);
+      submitted = true;
+    } catch (err) {
+      logger.error({ err, sectionId }, 'bom send: sent, but could not submit the section');
+    }
+
     logger.info({ sectionId, vendor: section.vendor, to }, 'bom send: sent');
-    return { id: send.id, status: 'SENT' as const, providerMessageId: json.id ?? null };
+    return { id: send.id, status: 'SENT' as const, providerMessageId: json.id ?? null, submitted };
   } catch (err) {
     if (err instanceof ValidationError) throw err;
     const error = err instanceof Error ? err.message : 'Unknown error';

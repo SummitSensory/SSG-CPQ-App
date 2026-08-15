@@ -2270,6 +2270,7 @@
         td(m.defaultLeadTimeDays == null ? '—' : m.defaultLeadTimeDays + ' days') +
         td(String(parts)) +
         td(admin ? '<div style="display:flex;gap:6px;justify-content:flex-end;">' +
+          '<button class="mfParts link-btn" data-id="' + m.id + '" title="What this vendor calls parts we number ourselves" style="width:auto;padding:6px 12px;">Part numbers</button>' +
           '<button class="mfEdit link-btn" data-id="' + m.id + '" style="width:auto;padding:6px 12px;">Edit</button>' +
           '<button class="mfDel link-btn" data-id="' + m.id + '" style="width:auto;padding:6px 10px;color:#9c3327;">Remove</button></div>' : '') +
         '</tr>';
@@ -2284,6 +2285,176 @@
     box.querySelectorAll('.mfDel').forEach(function (b) {
       b.addEventListener('click', function () { openManufacturerDelete(b.getAttribute('data-id'), user); });
     });
+    box.querySelectorAll('.mfParts').forEach(function (b) {
+      b.addEventListener('click', function () {
+        openVendorParts((mfrState.rows || []).filter(function (x) { return x.id === b.getAttribute('data-id'); })[0], user);
+      });
+    });
+  }
+
+  /**
+   * What a vendor calls a part we sell under our own number.
+   *
+   * The Adventure mats are the case this was built for: the configurator generates
+   * R-SSG-1010CLM when a size is chosen, that number goes on the proposal and the
+   * customer knows the pad by it, and Resilite sell the same pad as A-3204. Both are
+   * kept — the proposal prints ours, the Bill of Materials prints both — so nothing
+   * here is ever seen by a customer.
+   *
+   * Mat numbers are generated at price time and have no catalog row, so a mapping
+   * can be typed for any part number, catalog or not.
+   */
+  async function openVendorParts(m, user) {
+    if (!m) return;
+    var rows = [];
+    var busy = false;
+
+    var load = async function () {
+      var r = await authed('/manufacturers/' + m.id + '/vendor-parts');
+      rows = r.ok ? await r.json() : [];
+      draw();
+    };
+
+    openModal('Vendor part numbers — ' + m.name,
+      '<div class="muted" style="font-size:12.5px;line-height:1.55;margin-bottom:12px;">' +
+        'Our part number on the left, ' + esc(m.name) + '&rsquo;s on the right. The vendor&rsquo;s number prints on the Bill of Materials beside ours and appears nowhere a customer can see. ' +
+        'A part with no entry here keeps our number on the sheet.</div>' +
+      '<div id="vpBody"><div class="muted" style="font-size:12.5px;padding:12px 0;">Loading…</div></div>',
+      null, null);
+
+    function row(x) {
+      return '<tr>' +
+        td('<input class="vpOur" data-id="' + x.id + '" value="' + esc(x.ourPart) + '" style="' + bomFieldStyle('150px') + 'text-transform:uppercase;font-family:ui-monospace,monospace;">') +
+        td('<input class="vpTheirs" data-id="' + x.id + '" value="' + esc(x.vendorPart) + '" style="' + bomFieldStyle('150px') + 'font-family:ui-monospace,monospace;">') +
+        td('<input class="vpDesc" data-id="' + x.id + '" value="' + esc(x.description || '') + '" placeholder="Optional note" style="' + bomFieldStyle('200px') + '">') +
+        td('<button class="vpDel link-btn" data-id="' + x.id + '" style="width:auto;padding:5px 10px;font-size:12px;color:#a2402f;">Remove</button>') +
+        '</tr>';
+    }
+
+    function draw() {
+      var box = document.getElementById('vpBody');
+      if (!box) return;
+      box.innerHTML =
+        '<div style="max-height:46vh;overflow:auto;">' +
+          tableShell(['Our part #', esc(m.name) + ' part #', 'Note', ''], rows.map(row).join(''), 4,
+            'No vendor numbers yet. Add one below, or paste a list.') +
+        '</div>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-top:12px;padding-top:12px;border-top:1px solid #eceee8;">' +
+          '<div><div class="k">Our part #</div><input id="vpNewOur" placeholder="R-SSG-1010CLM" style="' + bomFieldStyle('160px') + 'text-transform:uppercase;font-family:ui-monospace,monospace;"></div>' +
+          '<div><div class="k">Their part #</div><input id="vpNewTheirs" placeholder="A-3204" style="' + bomFieldStyle('150px') + 'font-family:ui-monospace,monospace;"></div>' +
+          '<div style="flex:1;min-width:160px;"><div class="k">Note</div><input id="vpNewDesc" placeholder="Optional" style="' + bomFieldStyle() + '"></div>' +
+          '<button class="btn" id="vpAdd" style="width:auto;padding:9px 15px;">Add</button>' +
+          '<button class="link-btn" id="vpPaste" style="width:auto;padding:9px 15px;">Paste a list…</button>' +
+        '</div>' +
+        '<div id="vpMsg" class="muted" style="font-size:12px;margin-top:8px;"></div>';
+
+      var msg = function (t, bad) {
+        var el = document.getElementById('vpMsg');
+        if (el) { el.style.color = bad ? '#9c3327' : '#5c6157'; el.textContent = t; }
+      };
+
+      var patch = async function (el, field) {
+        if (busy) return;
+        var body = {};
+        body[field] = el.value.trim();
+        if (field !== 'description' && !body[field]) { msg('A part number cannot be blank.', 1); load(); return; }
+        el.style.borderColor = '#c9a227';
+        var r = await authed('/vendor-parts/' + el.getAttribute('data-id'), { method: 'PATCH', body: body });
+        el.style.borderColor = r.ok ? '#3f9d78' : '#c2452f';
+        if (!r.ok) { msg(await serverMessage(r, 'Could not save that (' + r.status + ').'), 1); return; }
+        msg('Saved.');
+      };
+      document.querySelectorAll('.vpOur').forEach(function (el) { el.addEventListener('change', function () { patch(el, 'ourPart'); }); });
+      document.querySelectorAll('.vpTheirs').forEach(function (el) { el.addEventListener('change', function () { patch(el, 'vendorPart'); }); });
+      document.querySelectorAll('.vpDesc').forEach(function (el) { el.addEventListener('change', function () { patch(el, 'description'); }); });
+
+      document.querySelectorAll('.vpDel').forEach(function (b) {
+        b.addEventListener('click', async function () {
+          if (!confirm('Remove this vendor number?\n\nThe part keeps our number on the Bill of Materials.')) return;
+          var r = await authed('/vendor-parts/' + b.getAttribute('data-id'), { method: 'DELETE' });
+          if (!r.ok && r.status !== 204) { msg('Could not remove that (' + r.status + ').', 1); return; }
+          load();
+        });
+      });
+
+      document.getElementById('vpAdd').addEventListener('click', async function () {
+        var ourPart = document.getElementById('vpNewOur').value.trim().toUpperCase();
+        var vendorPart = document.getElementById('vpNewTheirs').value.trim();
+        if (!ourPart || !vendorPart) { msg('Both part numbers are needed.', 1); return; }
+        busy = true;
+        var r = await authed('/manufacturers/' + m.id + '/vendor-parts', {
+          method: 'POST',
+          body: { ourPart: ourPart, vendorPart: vendorPart, description: document.getElementById('vpNewDesc').value.trim() },
+        });
+        busy = false;
+        if (!r.ok) { msg(await serverMessage(r, 'Could not add that (' + r.status + ').'), 1); return; }
+        load();
+      });
+
+      document.getElementById('vpPaste').addEventListener('click', function () { openVendorPartPaste(m, load); });
+    }
+
+    load();
+  }
+
+  /**
+   * Bulk load. A vendor with a number for every mat size has dozens of rows, and a
+   * mapping typed one row at a time is a mapping that ends up half-loaded. The
+   * paste is checked before anything is written, so the count and any clash are
+   * seen first.
+   */
+  function openVendorPartPaste(m, done) {
+    openModal('Paste part numbers — ' + m.name,
+      '<div class="muted" style="font-size:12.5px;line-height:1.55;margin-bottom:10px;">' +
+        'One row per part: our number, then theirs, separated by a tab or a comma. A third column is kept as a note. ' +
+        'Paste straight out of a spreadsheet.</div>' +
+      '<textarea id="vpText" rows="10" placeholder="R-SSG-1010CLM&#9;A-3204&#10;R-SSG-1012CLM&#9;A-3205" style="' + IN + 'resize:vertical;font-family:ui-monospace,monospace;font-size:12.5px;"></textarea>' +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:10px;cursor:pointer;">' +
+        '<input type="checkbox" id="vpOverwrite"> Replace numbers already on record</label>' +
+      '<div id="vpPreview" class="muted" style="font-size:12.5px;line-height:1.6;margin-top:10px;"></div>',
+      async function (close, showErr) {
+        var text = document.getElementById('vpText').value;
+        if (!text.trim()) return showErr('Nothing pasted.');
+        var overwrite = document.getElementById('vpOverwrite').checked;
+        var pre = document.getElementById('vpPreview');
+
+        // First press checks, second press writes — the same two-step the catalog
+        // import uses, so the count is seen before anything lands.
+        if (!pre.getAttribute('data-checked')) {
+          var rc = await authed('/manufacturers/' + m.id + '/vendor-parts/import', {
+            method: 'POST', body: { text: text, dryRun: true, overwrite: overwrite },
+          });
+          if (!rc.ok) return showErr(await serverMessage(rc, 'Could not read that list (' + rc.status + ').'));
+          var d = await rc.json();
+          pre.innerHTML =
+            '<b style="color:#3d4a55;">' + d.parsed + ' row' + (d.parsed === 1 ? '' : 's') + ' read.</b> ' +
+            d.created + ' to add, ' + d.updated + ' to update, ' + d.skipped + ' unchanged or skipped.' +
+            ((d.conflicts || []).length
+              ? '<div style="margin-top:6px;color:#8a6d1f;">Already on record and left alone: ' +
+                d.conflicts.slice(0, 6).map(function (c) { return esc(c.ourPart) + ' (' + esc(c.current) + ' → ' + esc(c.incoming) + ')'; }).join(', ') +
+                ((d.conflicts || []).length > 6 ? ' and ' + (d.conflicts.length - 6) + ' more' : '') +
+                '. Tick the box above to replace them.</div>'
+              : '') +
+            ((d.errors || []).length ? '<div style="margin-top:6px;color:#9c3327;">' + d.errors.map(esc).join('<br>') + '</div>' : '') +
+            '<div style="margin-top:6px;">Press Import again to write these.</div>';
+          pre.setAttribute('data-checked', '1');
+          return;
+        }
+
+        var r = await authed('/manufacturers/' + m.id + '/vendor-parts/import', {
+          method: 'POST', body: { text: text, overwrite: overwrite },
+        });
+        if (!r.ok) return showErr(await serverMessage(r, 'Could not import (' + r.status + ').'));
+        close();
+        if (done) done();
+      }, 'Import');
+
+    // Any edit invalidates the check, so the two presses always describe the same
+    // text.
+    var t = document.getElementById('vpText'), o = document.getElementById('vpOverwrite');
+    var reset = function () { var p = document.getElementById('vpPreview'); if (p) { p.removeAttribute('data-checked'); p.innerHTML = ''; } };
+    if (t) t.addEventListener('input', reset);
+    if (o) o.addEventListener('change', reset);
   }
 
   function openManufacturerForm(m, user) {
@@ -3513,21 +3684,25 @@
       EXPIRED: ['#f2f3ef', '#dcded7', '#8a8f85'],
     };
     var c = map[s] || map.DRAFT;
-    return '<span style="display:inline-block;background:' + c[0] + ';border:1px solid ' + c[1] + ';color:' + c[2] + ';border-radius:999px;padding:3px 10px;font-size:12px;font-weight:600;white-space:nowrap;">' + esc(titleCase(s === 'EXPIRED' ? 'NO_LONGER_ACTIVE' : s)) + '</span>';
+    // A few statuses read to the business differently from their stored name:
+    // RELEASED means the customer has the proposal, EXPIRED that it lapsed.
+    var CHIP_LABELS = { RELEASED: 'Proposal Sent', EXPIRED: 'No Longer Active' };
+    var chipLabel = CHIP_LABELS[s] || titleCase(s);
+    return '<span style="display:inline-block;background:' + c[0] + ';border:1px solid ' + c[1] + ';color:' + c[2] + ';border-radius:999px;padding:3px 10px;font-size:12px;font-weight:600;white-space:nowrap;">' + esc(chipLabel) + '</span>';
   }
   /** Status changes reachable straight from the list, permission-gated. */
   function quickActions(r, user) {
     var a = [], w = hasRole(PROP_WRITE, user.role), rev = hasRole(PROP_REVIEW, user.role), rel = hasRole(PROP_RELEASE, user.role);
     if (r.status === 'DRAFT') {
       if (w) a.push(['submit-review', 'Submit for review']);
-      if (rel) a.push(['release', 'Release']);
+      if (rel) a.push(['release', 'Ready to Send to Customer']);
       if (w) a.push(['expire', 'Mark no longer active']);
     } else if (r.status === 'INTERNAL_REVIEW') {
       if (rev) a.push(['return-draft', 'Return to draft']);
-      if (rel) a.push(['release', 'Release']);
+      if (rel) a.push(['release', 'Ready to Send to Customer']);
       if (w) a.push(['expire', 'Mark no longer active']);
     } else if (r.status === 'RELEASED') {
-      if (rev) { a.push(['accept', 'Mark accepted']); a.push(['reject', 'Mark rejected']); a.push(['expire', 'Mark no longer active']); }
+      if (rev) { a.push(['accept', 'Proposal Signed']); a.push(['reject', 'Mark rejected']); a.push(['expire', 'Mark no longer active']); }
     } else if (w) {
       a.push(['new-version', 'Create new version']);
     }
@@ -3751,7 +3926,7 @@
         ? sectionBlock('QuickBooks', '<div id="qboBox"><div class="muted" style="padding:16px;">Loading…</div></div>')
         : '') +
       sectionBlock('Financing options', '<div id="finBox"><div class="muted" style="padding:16px;">Loading…</div></div>') +
-      (actions ? sectionBlock('Actions', '<div style="display:flex;gap:8px;flex-wrap:wrap;" id="propActions">' + actions + '</div>') : '');
+      (actions ? sectionBlock('Next Steps', '<div style="display:flex;gap:8px;flex-wrap:wrap;" id="propActions">' + actions + '</div>') : '');
     document.getElementById('propBack').addEventListener('click', function () { renderProposals(user); });
     var prst = document.getElementById('propRestore');
     if (prst) prst.addEventListener('click', async function () {
@@ -3844,9 +4019,9 @@
   function proposalActions(v, user, lockedOrder) {
     var s = v.status || 'DRAFT', b = [];
     function btn(act, label, primary) { return '<button class="' + (primary ? 'btn' : 'link-btn') + '" data-act="' + act + '" data-vid="' + v.id + '" style="width:auto;padding:9px 15px;">' + label + '</button>'; }
-    if (s === 'DRAFT') { if (hasRole(PROP_WRITE, user.role)) b.push(btn('submit-review', 'Submit for review')); if (hasRole(PROP_RELEASE, user.role)) b.push(btn('release', 'Release', 1)); }
-    else if (s === 'INTERNAL_REVIEW') { if (hasRole(PROP_REVIEW, user.role)) b.push(btn('return-draft', 'Return to draft')); if (hasRole(PROP_RELEASE, user.role)) b.push(btn('release', 'Release', 1)); }
-    else if (s === 'RELEASED') { if (hasRole(PROP_REVIEW, user.role)) { b.push(btn('accept', 'Mark accepted', 1)); b.push(btn('reject', 'Reject')); b.push(btn('expire', 'Expire')); } }
+    if (s === 'DRAFT') { if (hasRole(PROP_WRITE, user.role)) b.push(btn('submit-review', 'Submit for review')); if (hasRole(PROP_RELEASE, user.role)) b.push(btn('release', 'Ready to Send to Customer', 1)); }
+    else if (s === 'INTERNAL_REVIEW') { if (hasRole(PROP_REVIEW, user.role)) b.push(btn('return-draft', 'Return to draft')); if (hasRole(PROP_RELEASE, user.role)) b.push(btn('release', 'Ready to Send to Customer', 1)); }
+    else if (s === 'RELEASED') { if (hasRole(PROP_REVIEW, user.role)) { b.push(btn('accept', 'Proposal Signed', 1)); b.push(btn('reject', 'Reject')); b.push(btn('expire', 'Expire')); } }
     else if (s === 'ACCEPTED') {
       if (lockedOrder && lockedOrder.id && lockedOrder.status !== 'CANCELLED') {
         b.push('<span class="chip" style="align-self:center;">Locked to ' + esc(lockedOrder.number || 'order') + '</span>');
@@ -8126,7 +8301,9 @@
         '<div style="text-align:right;"><span class="chip">' + titleCase(order.status) + '</span><div style="margin-top:8px;font-size:13px;">' + (integ.ok ? '<span class="dot ok"></span>Integrity verified' : '<span class="dot bad"></span>Integrity drift') + '</div></div></div>' +
         '<div class="grid" style="margin-top:16px;"><div><div class="k">Total</div><div class="v small">' + fmtMoney(order.grandTotalMinor, order.currency) + '</div></div>' +
         '<div><div class="k">Deposit</div><div class="v small">' + (order.depositRequired ? fmtMoney(order.depositDueMinor, order.currency) : '—') + '</div></div>' +
+        '<div><div class="k">Balance due</div><div class="v small">' + fmtMoney(order.balanceDueMinor, order.currency) + '</div></div>' +
         '<div><div class="k">Customer approval</div><div class="v small">' + (order.customerApproval ? esc(order.customerApproval.approverName) : '—') + '</div></div></div></div>' +
+      (hasRole(ORDERS_MANAGE_ROLES, user.role) ? sectionBlock('Manufacturing', '<div id="mfgBox"><div class="muted" style="padding:16px;">Loading…</div></div>') : '') +
       sectionBlock('Requirements', reqRows(order.requirements || [], canHandoff)) +
       sectionBlock('Internal tasks', taskRows(order.tasks || [], canHandoff)) +
       (hasRole(QBO_VIEW_ROLES, user.role) ? sectionBlock('QuickBooks', '<div id="qboBox"><div class="muted" style="padding:16px;">Loading…</div></div>') : '') +
@@ -8135,6 +8312,7 @@
     document.getElementById('ordBack').addEventListener('click', function () { renderOrders(user); });
     loadBomSections(order, user, canHandoff);
     if (hasRole(QBO_VIEW_ROLES, user.role)) loadQbo(order, user);
+    if (hasRole(ORDERS_MANAGE_ROLES, user.role)) loadManufacturing(order, user);
     var unl = document.getElementById('ordUnlock');
     if (unl) unl.addEventListener('click', function () { openUnlockForm(order, user); });
     if (canHandoff) {
@@ -8173,6 +8351,91 @@
     }).join('');
     return tableShell(['Task', 'Owner', 'Status & last change', 'Due'], rows, 4, 'No tasks.');
   }
+  /* --- Manufacturing release ---------------------------------------------
+   * Pushing an order to manufacturing is the moment the shop starts spending
+   * money on it, so it is gated on the customer having been invoiced in
+   * QuickBooks. The gate can be waived by anyone who can manage orders, but only
+   * with a typed reason, and Accounting is emailed when it happens — a waiver is
+   * a decision on the record, not a way around the rule.
+   */
+  async function loadManufacturing(order, user) {
+    var box = document.getElementById('mfgBox');
+    if (!box) return;
+    var gate = {};
+    try {
+      var r = await authed('/orders/' + order.id + '/manufacturing');
+      if (!r.ok) { box.innerHTML = '<div class="muted" style="padding:16px;">Could not read the manufacturing gate (' + r.status + ').</div>'; return; }
+      gate = await r.json();
+    } catch (e) { box.innerHTML = '<div class="muted" style="padding:16px;">Could not read the manufacturing gate.</div>'; return; }
+
+    var released = !!order.manufacturingReleasedAt;
+    var cancelled = order.status === 'CANCELLED';
+
+    var state = released
+      ? '<div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;">' +
+          '<span class="chip" style="background:#eaf1ec;color:#2f6b4f;">Released to manufacturing</span>' +
+          '<span class="muted" style="font-size:12.5px;">' + fmtDateTime(order.manufacturingReleasedAt) +
+          (order.manufacturingReleasedByName ? ' · ' + esc(order.manufacturingReleasedByName) : '') + '</span>' +
+        '</div>'
+      : '<div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;">' +
+          '<span class="chip">Not released</span>' +
+          '<span class="muted" style="font-size:12.5px;">The shop starts on this order once it is released.</span>' +
+        '</div>';
+
+    // The gate, stated as a fact rather than as a disabled button with no reason.
+    var gateLine = gate.invoiceCreated
+      ? '<div style="font-size:13px;color:#2f6b4f;"><span class="dot ok"></span>Invoice ' +
+          esc(gate.invoiceDocNumber || '') + ' created in QuickBooks' +
+          (gate.invoiceCreatedAt ? ' on ' + fmtDate(gate.invoiceCreatedAt) : '') + '.</div>'
+      : gate.waived
+        ? '<div style="font-size:13px;color:#6b5a24;"><span class="dot"></span>Invoice requirement waived' +
+            (gate.waivedAt ? ' on ' + fmtDate(gate.waivedAt) : '') + '.' +
+            (gate.waivedReason ? '<div class="muted" style="font-size:12.5px;margin-top:4px;">“' + esc(gate.waivedReason) + '”</div>' : '') + '</div>'
+        : '<div style="font-size:13px;color:#9c3327;"><span class="dot bad"></span>No QuickBooks invoice yet. Create the invoice under QuickBooks above, or waive the requirement with a reason.</div>';
+
+    var docs = (gate.documents || []).length
+      ? '<div class="muted" style="font-size:11.5px;margin-top:8px;">In QuickBooks: ' +
+          gate.documents.map(function (d) { return esc(titleCase(d.type)) + ' ' + esc(d.docNumber || '—') + ' (' + esc(titleCase(d.status)) + ')'; }).join(' · ') +
+        '</div>'
+      : '';
+
+    var actions = released || cancelled
+      ? ''
+      : '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;">' +
+          '<button class="btn" id="mfgRelease" style="width:auto;padding:9px 16px;"' + (gate.satisfied ? '' : ' disabled') + '>Push to Manufacturing</button>' +
+          (gate.satisfied ? '' : '<button class="link-btn" id="mfgWaive" style="width:auto;padding:9px 16px;color:#9c3327;">Waive the invoice requirement…</button>') +
+        '</div>';
+
+    box.innerHTML = '<div style="padding:16px 18px;">' + state +
+      '<div style="margin-top:12px;">' + gateLine + docs + '</div>' + actions + '</div>';
+
+    var rel = document.getElementById('mfgRelease');
+    if (rel) rel.addEventListener('click', async function () {
+      if (!confirm('Release ' + (order.number || 'this order') + ' to manufacturing?\n\nThe shop treats this as the go-ahead to build.')) return;
+      rel.disabled = true;
+      var rr = await authed('/orders/' + order.id + '/manufacturing/release', { method: 'POST', body: {} });
+      if (!rr.ok) { rel.disabled = false; alert(await serverMessage(rr, 'Could not release this order (' + rr.status + ').')); return; }
+      openOrderDetail(order.id, user);
+    });
+
+    var wv = document.getElementById('mfgWaive');
+    if (wv) wv.addEventListener('click', function () {
+      openModal('Waive the invoice requirement',
+        '<div class="muted" style="font-size:13px;margin-bottom:12px;line-height:1.55;">Manufacturing normally waits for a QuickBooks invoice. Waiving that is recorded against your name on the order timeline, and Accounting is emailed straight away. Say why.</div>' +
+        fieldRow('Reason', '<input id="mfgWaiveReason" placeholder="e.g. PO received, invoice to follow Monday" style="' + IN + '">'),
+        async function (close, showErr) {
+          var reason = document.getElementById('mfgWaiveReason').value.trim();
+          if (!reason) return showErr('Give a reason — the waiver is not recorded without one.');
+          var rw = await authed('/orders/' + order.id + '/manufacturing/waive-invoice', { method: 'POST', body: { reason: reason } });
+          if (!rw.ok) { var m = ''; try { m = ((await rw.json()) || {}).message || ''; } catch (e) {} return showErr(m || 'Could not waive (' + rw.status + ').'); }
+          var out = await rw.json();
+          close();
+          if (out && out.notifyError) alert('Waived, but Accounting was not emailed: ' + out.notifyError);
+          openOrderDetail(order.id, user);
+        }, 'Waive');
+    });
+  }
+
   /* --- Bill of Materials: the vendor-facing document, grouped by vendor. ---
    * Quantities and part numbers come from the accepted proposal and the catalog;
    * powder colour, vendor notes and the sourced flag are operational and editable
@@ -8252,7 +8515,11 @@
     // section actually has a bag number — most vendors ship nothing bagged.
     var hasBag = lines.some(function (p) { return p.packagingBag; });
     var showBag = hasBag && !!s.showPackagingBag;
-    var cols = 8 + (showColor ? 1 : 0) + (showBag ? 1 : 0) + (edit ? 1 : 0);
+    // The vendor's own number for a part, where they number it differently to us.
+    // Managed under Catalog → Manufacturers → Part numbers; the column only appears
+    // when something on this section is mapped.
+    var showVendorPart = lines.some(function (p) { return p.vendorPart; });
+    var cols = 8 + (showVendorPart ? 1 : 0) + (showColor ? 1 : 0) + (showBag ? 1 : 0) + (edit ? 1 : 0);
     var rowHtmlFor = function (p) {
       var ext = (Number(p.unitCostMinor) || 0) * (Number(p.quantity) || 0);
       var buy = p.productUrl
@@ -8260,7 +8527,10 @@
       return '<tr>' +
         td('<b style="font-weight:600;">' + esc(p.name) + '</b>' + buy) +
         td('<code style="font-size:12.5px;color:#4a4f47;">' + esc(p.sku || '—') + '</code>') +
-        td(String(p.quantity)) +
+        (showVendorPart ? td(p.vendorPart
+          ? '<code style="font-size:12.5px;color:#4a4f47;">' + esc(p.vendorPart) + '</code>'
+          : '<span class="muted">—</span>') : '') +
+        td(qtyCell(p, edit)) +
         (showBag ? td(esc(p.packagingBag || '—')) : '') +
         (showColor ? td(edit ? colorCell(p) : esc(p.powderColor || '—')) : '') +
         td(((Number(p.unitWeightLbs) || 0) * (Number(p.quantity) || 0)).toFixed(2)) +
@@ -8288,7 +8558,7 @@
     var rows = prodLines.map(rowHtmlFor).join('') +
       (hwLines.length ? divider('Hardware') + hwLines.map(rowHtmlFor).join('') : '') +
       '<tr><td style="padding:12px 16px;border-top:1px solid #e7e8e3;font-weight:600;">Total — ' + s.lineCount + ' line' + (s.lineCount === 1 ? '' : 's') + '</td>' +
-      '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td>' +
+      '<td colspan="' + (showVendorPart ? 2 : 1) + '" style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td>' +
       '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;font-weight:600;">' + s.unitCount + '</td>' +
       '<td colspan="' + (2 + (showColor ? 1 : 0) + (showBag ? 1 : 0)) + '" style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td>' +
       '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;font-weight:600;">' + money2(s.extendedCostMinor) + '</td>' +
@@ -8313,8 +8583,8 @@
           (canHandoff && idx < bomSectionData.length - 1 ? '<button class="link-btn" data-sec-move="down" data-id="' + s.id + '" title="Move this section later in the export" style="width:auto;padding:6px 10px;">↓</button>' : '') +
           '<button class="link-btn" data-proc="csv" data-vendor="' + esc(s.vendor) + '" style="width:auto;padding:7px 13px;">Excel</button>' +
           '<button class="link-btn" data-proc="pdf" data-vendor="' + esc(s.vendor) + '" style="width:auto;padding:7px 13px;">PDF</button>' +
-          (canHandoff ? '<button class="btn" data-sec-email="' + s.id + '" style="width:auto;padding:8px 14px;">Email vendor</button>' : '') +
-          (canHandoff && !locked ? '<button class="btn" data-sec-confirm="' + s.id + '" style="width:auto;padding:8px 14px;">Confirm sent</button>' : '') +
+          (canHandoff ? '<button class="btn" data-sec-email="' + s.id + '" title="Emails this vendor their sheet and submits the section" style="width:auto;padding:8px 14px;">Email vendor</button>' : '') +
+          (canHandoff && !locked ? '<button class="link-btn" data-sec-confirm="' + s.id + '" title="Use when the sheet went out some other way" style="width:auto;padding:8px 14px;">Mark sent by hand</button>' : '') +
           (canHandoff && locked ? '<button class="link-btn" data-sec-unlock="' + s.id + '" style="width:auto;padding:8px 14px;color:#9c3327;">Unlock for revisions</button>' : '') +
         '</div>' +
       '</div>' +
@@ -8348,7 +8618,7 @@
         (edit && s.showPowderColor ? colorApplyRow(s) : '') +
         '<div style="margin-top:14px;overflow:auto;">' +
           tableShell(
-            ['Item', 'Part #', 'Qty'].concat(showBag ? ['Bag #'] : [], showColor ? ['Powder color'] : [], ['Weight (lb)', 'Cost each', 'Total cost', 'Notes', 'Status'], edit ? [''] : []),
+            ['Item', 'Part #'].concat(showVendorPart ? ['Vendor part #'] : [], ['Qty'], showBag ? ['Bag #'] : [], showColor ? ['Powder color'] : [], ['Weight (lb)', 'Cost each', 'Total cost', 'Notes', 'Status'], edit ? [''] : []),
             rows, cols, '') +
         '</div>' +
         (edit
@@ -8360,6 +8630,27 @@
         sendHistory(s) +
       '</div>' +
     '</div>';
+  }
+
+  /**
+   * The quantity cell.
+   *
+   * Editable while the section is open: what the shop buys is not always what the
+   * formula produced, and the alternative was a spreadsheet nobody could see. The
+   * formula figure is kept in quantityOriginal, so an edited line says what it used
+   * to be and can be put back by typing the original number in.
+   */
+  function qtyCell(p, edit) {
+    var orig = p.quantityOriginal == null ? null : Number(p.quantityOriginal);
+    var changed = orig != null && orig !== Number(p.quantity);
+    var badge = changed
+      ? '<div class="muted" style="font-size:11px;margin-top:3px;color:#8a6d1f;" title="' +
+          (p.quantityEditedBy ? esc(p.quantityEditedBy) + ' · ' : '') + (p.quantityEditedAt ? esc(fmtDateTime(p.quantityEditedAt)) : '') +
+          '">Was ' + orig + '</div>'
+      : '';
+    if (!edit) return String(p.quantity) + badge;
+    return '<input class="bomLine" data-id="' + p.id + '" data-f="quantity" type="number" min="1" step="1" value="' + Number(p.quantity) +
+      '" style="' + bomFieldStyle('72px') + (changed ? 'border-color:#c9a227;' : '') + '">' + badge;
   }
 
   /** Brand from the managed list, code typed per part. */
@@ -8438,12 +8729,18 @@
       var chip = x.status === 'FAILED' || x.status === 'BOUNCED'
         ? '<span class="chip" style="background:#fbecea;color:#9c3327;">' + titleCase(x.status) + '</span>'
         : '<span class="chip" style="background:#eaf1ec;color:#2f6b4f;">' + titleCase(x.status) + '</span>';
+      // Delivery is what the provider reported back, not what we attempted: a row
+      // with a sent time and no delivery time is a send nobody has confirmed landed.
+      var delivered = x.deliveredAt
+        ? fmtDateTime(x.deliveredAt) + (x.openedAt ? '<div class="muted" style="font-size:11px;margin-top:2px;">Opened ' + fmtDateTime(x.openedAt) + '</div>' : '')
+        : '<span class="muted">Not confirmed</span>';
       return '<tr>' + td(fmtDateTime(x.sentAt)) + td(esc(x.sentBy || '—')) + td(esc(x.toEmail)) +
-        td(esc(x.format)) + td(chip + (x.error ? '<div class="muted" style="font-size:11px;color:#9c3327;margin-top:3px;">' + esc(x.error) + '</div>' : '')) + '</tr>';
+        td(esc(x.format)) + td(chip + (x.error ? '<div class="muted" style="font-size:11px;color:#9c3327;margin-top:3px;">' + esc(x.error) + '</div>' : '')) +
+        td(delivered) + '</tr>';
     }).join('');
     return '<div style="margin-top:14px;">' +
       '<div style="font-size:12.5px;font-weight:600;color:#4a4f47;margin-bottom:8px;">Sent to this vendor</div>' +
-      tableShell(['Date & time', 'Sent by', 'To', 'Format', 'Delivery'], rows, 5, '') +
+      tableShell(['Sent', 'Sent by', 'To', 'Format', 'Status', 'Delivered'], rows, 6, '') +
     '</div>';
   }
 
@@ -8493,11 +8790,17 @@
     document.querySelectorAll('.bomLine').forEach(function (el) {
       el.addEventListener('change', async function () {
         var f = el.getAttribute('data-f'), body = {};
-        body[f] = f === 'sourced' ? el.value === 'true' : el.value.trim();
+        if (f === 'sourced') body[f] = el.value === 'true';
+        else if (f === 'quantity') body[f] = Math.round(Number(el.value));
+        else body[f] = el.value.trim();
+        if (f === 'quantity' && !(body[f] >= 1)) { alert('Quantity must be a whole number of at least 1.'); reload(); return; }
         el.style.borderColor = '#c9a227';
         var r = await authed('/orders/procurement/' + el.getAttribute('data-id'), { method: 'PATCH', body: body });
         el.style.borderColor = r.ok ? '#3f9d78' : '#c2452f';
-        if (!r.ok) return fail(r, 'Could not save the line');
+        if (!r.ok) { await fail(r, 'Could not save the line'); reload(); return; }
+        // A quantity change moves the section totals and the edited badge, so the
+        // panel is rebuilt from the server rather than patched in place.
+        if (f === 'quantity') { refreshLines(); return; }
         var line = (procData || []).filter(function (x) { return x.id === el.getAttribute('data-id'); })[0];
         if (line) line[f] = body[f];
         setTimeout(function () { el.style.borderColor = '#dcded7'; }, 900);
@@ -8635,7 +8938,7 @@
       bt.addEventListener('click', async function () {
         var id = bt.getAttribute('data-sec-confirm');
         var sec = bomSectionData.filter(function (x) { return x.id === id; })[0];
-        if (!confirm('Confirm the ' + sec.vendor + ' Bill of Materials has been sent?\n\nIts fields lock until you unlock them for revisions.')) return;
+        if (!confirm('Record the ' + sec.vendor + ' Bill of Materials as sent?\n\nUse this only when the sheet went out some other way — emailing it from here submits the section on its own. Its fields lock until you unlock them for revisions.')) return;
         bt.disabled = true;
         var r = await authed('/bom/sections/' + id + '/confirm', { method: 'POST', body: {} });
         bt.disabled = false;
@@ -8750,6 +9053,9 @@
   function openSendForm(order, sec, done) {
     var e = sec.email;
     openModal('Email the ' + sec.vendor + ' Bill of Materials',
+      (sec.editable
+        ? '<div style="background:#f2f5f3;border:1px solid #d7e0da;border-radius:9px;padding:9px 12px;font-size:12.5px;color:#3f5347;margin-bottom:12px;">Sending submits this section: its fields lock once the email goes out. Unlock it for revisions if it has to change afterwards.</div>'
+        : '<div style="background:#f2f3ef;border:1px solid #e2e5dd;border-radius:9px;padding:9px 12px;font-size:12.5px;color:#5c6157;margin-bottom:12px;">This section is already submitted. Sending again re-issues the same sheet and does not reopen it.</div>') +
       (e.hasDefault ? '' : '<div style="background:#fdf6e6;border:1px solid #ecd9a6;border-radius:9px;padding:9px 12px;font-size:12.5px;color:#6b5a24;margin-bottom:12px;">No saved address for this vendor. Type one below, then set a default under Manufacturers so it is pre-filled next time.</div>') +
       fieldRow('To', '<input id="sndTo" value="' + esc(e.to) + '" placeholder="purchasing@vendor.com" style="' + IN + '">') +
       fieldRow('Cc', '<input id="sndCc" value="' + esc(e.cc) + '" placeholder="Optional" style="' + IN + '">') +
@@ -9778,7 +10084,13 @@
       '<div class="section-title" style="margin-top:26px;">Formulas</div>' +
       '<div class="muted" style="font-size:12.5px;margin:0 0 10px;">Every calculation the pricing engine runs. Frame and hardware quantities are editable coefficients; business numbers are the scalars the proposal math uses; the last tab lists what is fixed in code and why.</div>' +
       '<div id="fxTabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;"></div>' +
-      '<div id="fxBody"><div class="muted" style="padding:16px;">Loading…</div></div>' +
+      // The log sits beside the formulas, not behind a tab: the question it answers
+      // is "what does this rule say now versus what it said before", and that needs
+      // both on screen at once.
+      '<div style="display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:18px;align-items:start;">' +
+        '<div id="fxBody"><div class="muted" style="padding:16px;">Loading…</div></div>' +
+        '<aside id="fxLog" style="position:sticky;top:16px;"></aside>' +
+      '</div>' +
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:26px;"><div class="section-title" style="margin:0;">Vendor questions</div>' +
         '<button class="btn" id="qtNew" style="width:auto;padding:9px 15px;">+ New question</button></div>' +
       '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;">Questions asked on a Bill of Materials section. A question with no vendor is asked of <b>every</b> vendor; one with a vendor is asked only of theirs. Each new section starts with a copy, so editing a question here never rewrites an answer already given on an order.</div>' +
@@ -9878,6 +10190,8 @@
 
   /* --- Formulas: every editable calculation in the engine --- */
   var fx = { data: null, tab: 'frame' };
+  /** Undo is the one formula action held tighter than the edit it reverses. */
+  function isSystemAdmin() { return !!(currentUser && currentUser.role === 'SYSTEM_ADMIN'); }
   var FX_TABS = [
     { id: 'frame', label: 'Frame & components' },
     { id: 'hardware', label: 'Hardware fasteners' },
@@ -9940,26 +10254,31 @@
       b.addEventListener('click', function () { fx.tab = b.getAttribute('data-fxt'); drawFxTabs(); drawFormulas(); });
     });
   }
-  /**
-   * Typed confirmation for the guarded business numbers. Two windows: the first
-   * states plainly what is changing and what it affects, the second will not enable
-   * Save until the word CONFIRM has been typed. Resolves true only when both are
-   * cleared — Cancel, Escape or a click on the backdrop resolves false and nothing is
-   * sent. The server enforces the same rule, so this is the courtesy, not the lock.
+/**
+   * The typed confirmation every formula write goes through.
+   *
+   * One window, not two: it states what is about to change, lists the open orders
+   * built on the current figures (read from the server, so the warning and the
+   * recorded impact are the same list), and enables Save only once the word has
+   * been typed. Resolves the typed word, or null when it is cancelled — Escape and
+   * a click on the backdrop both cancel and send nothing. The server enforces the
+   * same rule, so this is the courtesy, not the lock.
    */
-  function fxConfirmGuarded(changes) {
+  function fxConfirmChange(opts) {
+    var word = (fx.data && fx.data.confirmWord) || 'CONFIRMED';
     return new Promise(function (resolve) {
       var wrap = document.createElement('div');
       wrap.style.cssText = 'position:fixed;inset:0;background:rgba(30,34,30,.45);z-index:9000;display:flex;align-items:center;justify-content:center;padding:20px;';
       var card = document.createElement('div');
-      card.style.cssText = 'background:#fff;border:1px solid #dcded7;border-radius:14px;max-width:540px;width:100%;padding:22px 24px;box-shadow:0 18px 50px rgba(0,0,0,.18);';
+      card.style.cssText = 'background:#fff;border:1px solid #dcded7;border-radius:14px;max-width:560px;width:100%;padding:22px 24px;box-shadow:0 18px 50px rgba(0,0,0,.18);max-height:88vh;overflow:auto;';
       wrap.appendChild(card);
       document.body.appendChild(wrap);
       function done(v) { document.removeEventListener('keydown', onKey); wrap.remove(); resolve(v); }
-      function onKey(e) { if (e.key === 'Escape') done(false); }
+      function onKey(e) { if (e.key === 'Escape') done(null); }
       document.addEventListener('keydown', onKey);
-      wrap.addEventListener('mousedown', function (e) { if (e.target === wrap) done(false); });
-      var rows = changes.map(function (c) {
+      wrap.addEventListener('mousedown', function (e) { if (e.target === wrap) done(null); });
+
+      var rows = (opts.changes || []).map(function (c) {
         return '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:14px;padding:8px 0;border-top:1px solid #f2f3ef;font-size:13.5px;">' +
           '<span>' + esc(String(c.label)) + '</span>' +
           '<span style="font-family:ui-monospace,monospace;font-size:12.5px;white-space:nowrap;">' +
@@ -9967,45 +10286,173 @@
             ' &rarr; <b style="color:#9c3327;">' + esc(String(c.to)) + '</b>' +
             ' <span class="muted">' + esc(String(c.unit || '')) + '</span></span></div>';
       }).join('');
-      function step1() {
-        card.innerHTML =
-          '<div style="font-family:\'Newsreader\',serif;font-size:19px;font-weight:600;color:#3d4a55;">Change mat pricing?</div>' +
-          '<div class="muted" style="font-size:13px;line-height:1.6;margin-top:8px;">This changes the price of every Adventure mat quoted from now on. Proposals already accepted keep the figures they were signed with. Drafts re-price the next time they are opened.</div>' +
-          '<div style="margin:14px 0 2px;">' + rows + '</div>' +
-          '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:20px;">' +
-            '<button id="fxcCancel" style="border:1px solid #dcded7;background:#fff;border-radius:9px;padding:9px 16px;font-size:13px;color:#3d4a55;cursor:pointer;">Cancel</button>' +
-            '<button id="fxcNext" style="border:1px solid #3d4a55;background:#3d4a55;color:#fff;border-radius:9px;padding:9px 16px;font-size:13px;cursor:pointer;">Continue</button></div>';
-        card.querySelector('#fxcCancel').addEventListener('click', function () { done(false); });
-        card.querySelector('#fxcNext').addEventListener('click', step2);
+
+      card.innerHTML =
+        '<div style="font-family:\'Newsreader\',serif;font-size:19px;font-weight:600;color:#3d4a55;">Type ' + esc(word) + ' to ' + esc(opts.what) + '</div>' +
+        '<div class="muted" style="font-size:13px;line-height:1.6;margin-top:8px;">New proposals use the new figure. Proposals already accepted keep what they were signed with; drafts re-price the next time they are opened. The change is recorded against your name and can be undone from the revision log.</div>' +
+        (rows ? '<div style="margin:14px 0 2px;">' + rows + '</div>' : '') +
+        '<div id="fxcImpact" class="muted" style="font-size:12.5px;line-height:1.55;margin-top:14px;">Checking which open orders were built on the current figures…</div>' +
+        '<input id="fxcWord" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="' + esc(word) + '" style="width:100%;margin-top:14px;padding:11px 13px;border:1px solid #dcded7;border-radius:9px;font-size:15px;font-family:ui-monospace,monospace;letter-spacing:.1em;">' +
+        '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:20px;">' +
+          '<button id="fxcCancel" style="border:1px solid #dcded7;background:#fff;border-radius:9px;padding:9px 16px;font-size:13px;color:#3d4a55;cursor:pointer;">Cancel</button>' +
+          '<button id="fxcGo" disabled style="border:1px solid #dcded7;background:#eef0ea;color:#9aa093;border-radius:9px;padding:9px 16px;font-size:13px;cursor:not-allowed;">Save change</button></div>';
+
+      // The same list the server records and emails, read before anything is written
+      // so the warning and the record cannot disagree.
+      (async function () {
+        var el = card.querySelector('#fxcImpact');
+        var qs = (opts.parts || []).map(function (p) { return 'part=' + encodeURIComponent(p); }).join('&');
+        try {
+          var r = await authed('/formulas/impact' + (qs ? '?' + qs : ''));
+          if (!r.ok) { el.textContent = 'Could not check which open orders this affects.'; return; }
+          var d = await r.json();
+          var list = (d.orders || []).slice(0, 8).map(function (o) {
+            return '<div style="padding:3px 0;">' + esc(o.number || '') + (o.customer ? ' · ' + esc(o.customer) : '') + '</div>';
+          }).join('');
+          el.innerHTML = '<b style="font-weight:600;color:' + (d.count ? '#9c3327' : '#4a4f47') + ';">' + esc(d.sentence || '') + '</b>' +
+            (list ? '<div style="margin-top:6px;font-family:ui-monospace,monospace;font-size:11.5px;">' + list +
+              ((d.orders || []).length > 8 ? '<div class="muted" style="padding:3px 0;">and ' + ((d.orders || []).length - 8) + ' more</div>' : '') + '</div>' : '');
+        } catch (e) { el.textContent = 'Could not check which open orders this affects.'; }
+      })();
+
+      var input = card.querySelector('#fxcWord'), go = card.querySelector('#fxcGo');
+      function sync() {
+        var ok = input.value.trim().toUpperCase() === word.toUpperCase();
+        go.disabled = !ok;
+        go.style.cssText = 'border:1px solid ' + (ok ? '#9c3327' : '#dcded7') + ';background:' + (ok ? '#9c3327' : '#eef0ea') +
+          ';color:' + (ok ? '#fff' : '#9aa093') + ';border-radius:9px;padding:9px 16px;font-size:13px;cursor:' + (ok ? 'pointer' : 'not-allowed') + ';';
+        return ok;
       }
-      function step2() {
-        card.innerHTML =
-          '<div style="font-family:\'Newsreader\',serif;font-size:19px;font-weight:600;color:#3d4a55;">Type CONFIRM to save</div>' +
-          '<div class="muted" style="font-size:13px;line-height:1.6;margin-top:8px;">Type the word CONFIRM below to apply the mat pricing change. The change is recorded against your name.</div>' +
-          '<input id="fxcWord" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="CONFIRM" style="width:100%;margin-top:14px;padding:11px 13px;border:1px solid #dcded7;border-radius:9px;font-size:15px;font-family:ui-monospace,monospace;letter-spacing:.1em;">' +
-          '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:20px;">' +
-            '<button id="fxcBack" style="border:1px solid #dcded7;background:#fff;border-radius:9px;padding:9px 16px;font-size:13px;color:#3d4a55;cursor:pointer;">Back</button>' +
-            '<button id="fxcGo" disabled style="border:1px solid #dcded7;background:#eef0ea;color:#9aa093;border-radius:9px;padding:9px 16px;font-size:13px;cursor:not-allowed;">Save change</button></div>';
-        var input = card.querySelector('#fxcWord'), go = card.querySelector('#fxcGo');
-        function sync() {
-          var ok = input.value.trim().toUpperCase() === 'CONFIRM';
-          go.disabled = !ok;
-          go.style.cssText = 'border:1px solid ' + (ok ? '#9c3327' : '#dcded7') + ';background:' + (ok ? '#9c3327' : '#eef0ea') +
-            ';color:' + (ok ? '#fff' : '#9aa093') + ';border-radius:9px;padding:9px 16px;font-size:13px;cursor:' + (ok ? 'pointer' : 'not-allowed') + ';';
-          return ok;
-        }
-        input.addEventListener('input', sync);
-        input.addEventListener('keydown', function (e) { if (e.key === 'Enter' && sync()) done(true); });
-        card.querySelector('#fxcBack').addEventListener('click', step1);
-        go.addEventListener('click', function () { if (!go.disabled) done(true); });
-        input.focus();
-      }
-      step1();
+      input.addEventListener('input', sync);
+      input.addEventListener('keydown', function (e) { if (e.key === 'Enter' && sync()) done(input.value.trim()); });
+      card.querySelector('#fxcCancel').addEventListener('click', function () { done(null); });
+      go.addEventListener('click', function () { if (!go.disabled) done(input.value.trim()); });
+      input.focus();
     });
   }
+
+  /**
+   * What a write reported back. Silent on the ordinary case; speaks up when open
+   * orders are affected or when the notification to the team did not go out — an
+   * unsent alert is worse than no alert, so it is never swallowed.
+   */
+  function fxReportRevision(res) {
+    var rev = res && res.revision;
+    if (!rev) return;
+    if (rev.notifyError) {
+      alert('Saved, but the impact notification was not sent: ' + rev.notifyError);
+      return;
+    }
+    if (rev.impactedCount) {
+      var nums = (rev.impactedOrders || []).slice(0, 10).map(function (o) { return o.number; }).join(', ');
+      alert('Saved. ' + rev.impactedCount + ' open order' + (rev.impactedCount === 1 ? '' : 's') +
+        ' were built on the previous figures and need reviewing:\n\n' + nums +
+        (rev.impactedCount > 10 ? '\n…and ' + (rev.impactedCount - 10) + ' more' : ''));
+    }
+  }
+
+  /* --- Revision log -------------------------------------------------------
+   * Docked beside the formulas rather than on a tab of its own, so a coefficient
+   * on screen can be read against what it used to be. It scopes itself to the tab
+   * being looked at; "All sets" gives the combined log.
+   */
+  var fxLogAll = false;
+  function fxKindForTab() {
+    return fx.tab === 'frame' ? 'FRAME' : fx.tab === 'hardware' ? 'HARDWARE' : fx.tab === 'settings' ? 'SETTING' : null;
+  }
+  async function drawRevisionLog() {
+    var box = document.getElementById('fxLog'); if (!box) return;
+    var kind = fxLogAll ? null : fxKindForTab();
+    var head =
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;">' +
+        '<div class="section-title" style="margin:0;">Revision log</div>' +
+        '<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#5c6157;cursor:pointer;">' +
+          '<input type="checkbox" id="fxLogAll"' + (fxLogAll ? ' checked' : '') + '> All sets</label>' +
+      '</div>';
+    box.innerHTML = head + '<div class="card" style="padding:14px;"><div class="muted" style="font-size:12.5px;">Loading…</div></div>';
+    var wireToggle = function () {
+      var t = document.getElementById('fxLogAll');
+      if (t) t.addEventListener('change', function () { fxLogAll = t.checked; drawRevisionLog(); });
+    };
+
+    var rows = [];
+    try {
+      var r = await authed('/formulas/revisions' + (kind ? '?kind=' + kind : ''));
+      if (!r.ok) {
+        box.innerHTML = head + '<div class="card" style="padding:14px;"><div class="muted" style="font-size:12.5px;">Could not load the log (' + r.status + ').</div></div>';
+        wireToggle(); return;
+      }
+      rows = await r.json();
+    } catch (e) {
+      box.innerHTML = head + '<div class="card" style="padding:14px;"><div class="muted" style="font-size:12.5px;">Could not reach the server.</div></div>';
+      wireToggle(); return;
+    }
+
+    if (!rows.length) {
+      box.innerHTML = head + '<div class="card" style="padding:14px;"><div class="muted" style="font-size:12.5px;line-height:1.55;">' +
+        (kind ? 'Nothing in this set has been changed yet.' : 'No formula has been changed yet.') +
+        ' Every edit, reset and restore is recorded here with what it was, what it became, and which open orders it reached.</div></div>';
+      wireToggle(); return;
+    }
+
+    var KIND_LABEL = { FRAME: 'Frame', HARDWARE: 'Hardware', SETTING: 'Business number' };
+    box.innerHTML = head +
+      '<div class="card" style="padding:0;max-height:70vh;overflow:auto;">' +
+      rows.map(function (x) {
+        var undone = !!x.undoneAt;
+        return '<div style="padding:12px 14px;border-bottom:1px solid #f2f3ef;' + (undone ? 'opacity:.55;' : '') + '">' +
+          '<div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline;">' +
+            '<code style="font-size:12px;color:#4a4f47;">' + esc(x.target) + '</code>' +
+            '<span class="muted" style="font-size:11px;white-space:nowrap;">' + esc(KIND_LABEL[x.kind] || x.kind) + '</span>' +
+          '</div>' +
+          '<div style="font-size:12.5px;line-height:1.5;margin-top:4px;">' + esc(x.summary) + '</div>' +
+          '<div class="muted" style="font-size:11px;margin-top:5px;">' + esc(x.actorName || '') + ' · ' + fmtDateTime(x.createdAt) +
+            (x.impactedCount ? ' · <span style="color:#9c3327;">' + x.impactedCount + ' open order' + (x.impactedCount === 1 ? '' : 's') + '</span>' : '') +
+            (undone ? ' · undone' + (x.undoneByName ? ' by ' + esc(x.undoneByName) : '') : '') + '</div>' +
+          '<div style="display:flex;gap:10px;margin-top:6px;">' +
+            '<button class="fxRevDetail" data-id="' + x.id + '" style="border:none;background:none;padding:0;font-size:11.5px;color:#3d4a55;text-decoration:underline;cursor:pointer;">Before / after</button>' +
+            (x.undoable && isSystemAdmin() ? '<button class="fxRevUndo" data-id="' + x.id + '" style="border:none;background:none;padding:0;font-size:11.5px;color:#9c3327;text-decoration:underline;cursor:pointer;">Undo</button>' : '') +
+          '</div>' +
+        '</div>';
+      }).join('') + '</div>';
+    wireToggle();
+
+    box.querySelectorAll('.fxRevDetail').forEach(function (b) {
+      b.addEventListener('click', async function () {
+        var rr = await authed('/formulas/revisions/' + b.getAttribute('data-id'));
+        if (!rr.ok) { alert('Could not load that revision (' + rr.status + ').'); return; }
+        var d = await rr.json();
+        var pane = function (label, v) {
+          return '<div style="flex:1;min-width:0;"><div class="k">' + label + '</div>' +
+            '<pre style="margin:4px 0 0;padding:10px;background:#fbfbf9;border:1px solid #eceee8;border-radius:9px;font-size:11.5px;line-height:1.45;white-space:pre-wrap;word-break:break-word;">' +
+            esc(v == null ? 'No override — the workbook default applied.' : JSON.stringify(v, null, 2)) + '</pre></div>';
+        };
+        openModal(esc(d.targetName || d.target),
+          '<div class="muted" style="font-size:12.5px;line-height:1.55;margin-bottom:12px;">' + esc(d.summary) + '</div>' +
+          '<div style="display:flex;gap:12px;flex-wrap:wrap;">' + pane('Before', d.before) + pane('After', d.after) + '</div>' +
+          '<div class="muted" style="font-size:11.5px;margin-top:12px;">' + esc(d.actorName || '') + ' · ' + fmtDateTime(d.createdAt) +
+            (d.confirmedWord ? ' · typed ' + esc(d.confirmedWord) : '') + '</div>',
+          null, null);
+      });
+    });
+
+    box.querySelectorAll('.fxRevUndo').forEach(function (b) {
+      b.addEventListener('click', async function () {
+        // One row back to what it was, not the workbook default: those are different
+        // states, and only the first is what "undo" means.
+        if (!confirm('Undo this change?\n\nThe value goes back to what it was immediately before this edit — not to the workbook default. The undo is itself recorded.')) return;
+        var rr = await authed('/formulas/revisions/' + b.getAttribute('data-id') + '/undo', { method: 'POST', body: {} });
+        if (!rr.ok) { alert(await serverMessage(rr, 'Could not undo (' + rr.status + ').')); return; }
+        fxReportRevision(await rr.json());
+        loadFormulas();
+      });
+    });
+  }
+
   function drawFormulas() {
     var box = document.getElementById('fxBody'); if (!box || !fx.data) return;
     drawFxTabs();
+    drawRevisionLog();
     if (fx.tab === 'code') {
       box.innerHTML =
         '<div class="muted" style="font-size:12.5px;margin-bottom:10px;line-height:1.55;">These are lookups and naming conventions rather than coefficients, so they live in code. Listed here so this page is a complete inventory of the engine — tell me what should change and I will change it.</div>' +
@@ -10022,7 +10469,7 @@
       var groups = [];
       st.defs.forEach(function (d) { if (groups.indexOf(d.group) === -1) groups.push(d.group); });
       box.innerHTML =
-        '<div class="muted" style="font-size:12.5px;margin-bottom:12px;">The business numbers the proposal math uses. Changing one affects new proposals; documents already saved keep their own figures.</div>' +
+        '<div class="muted" style="font-size:12.5px;margin-bottom:12px;">The business numbers the proposal math uses. Changing one affects new proposals; documents already saved keep their own figures. Saving asks you to type ' + esc((fx.data && fx.data.confirmWord) || 'CONFIRMED') + ' and lists the open orders built on the current figures.</div>' +
         groups.map(function (g) {
           return '<div class="card" style="margin-bottom:12px;"><div class="section-title" style="margin:0 0 10px;">' + esc(g) + '</div>' +
             st.defs.filter(function (d) { return d.group === g; }).map(function (d) {
@@ -10031,7 +10478,7 @@
               return '<div style="display:flex;align-items:flex-start;gap:12px;padding:8px 0;border-top:1px solid #f2f3ef;">' +
                 '<div style="flex:1;"><div style="font-size:13.5px;font-weight:600;">' + esc(d.label) +
                   (changed ? ' <span style="background:#fdf6e3;border:1px solid #eadfbe;color:#8a6d1f;border-radius:999px;padding:1px 7px;font-size:10.5px;font-weight:600;">changed from ' + st.defaults[d.key] + '</span>' : '') +
-                  (d.confirm ? ' <span title="Changing this asks you to type CONFIRM" style="background:#fbf0ee;border:1px solid #e6cbc6;color:#9c3327;border-radius:999px;padding:1px 7px;font-size:10.5px;font-weight:600;">confirmation required</span>' : '') + '</div>' +
+                  (d.confirm ? ' <span title="Feeds the price of every Adventure mat quoted from now on" style="background:#fbf0ee;border:1px solid #e6cbc6;color:#9c3327;border-radius:999px;padding:1px 7px;font-size:10.5px;font-weight:600;">affects mat pricing</span>' : '') + '</div>' +
                   '<div class="muted" style="font-size:12px;line-height:1.5;margin-top:2px;">' + esc(d.help) + '</div></div>' +
                 '<div style="display:flex;align-items:center;gap:6px;flex:0 0 auto;">' +
                   '<input class="fxSet" data-k="' + d.key + '" type="number" min="' + d.min + '" max="' + d.max + '" step="' + d.step + '" value="' + esc(v) + '" style="width:92px;padding:7px 9px;border:1px solid #dcded7;border-radius:8px;text-align:right;font-size:13.5px;">' +
@@ -10047,20 +10494,26 @@
         // Numbers flagged `confirm` server-side (mat pricing) need the two-window typed
         // confirmation, but only when the value has actually moved — saving the panel
         // with the mat rates untouched goes straight through.
-        var guarded = (st.defs || []).filter(function (d) {
-          return d.confirm && body[d.key] !== undefined && Number(body[d.key]) !== Number(st.values[d.key]);
+        var moved = (st.defs || []).filter(function (d) {
+          return body[d.key] !== undefined && Number(body[d.key]) !== Number(st.values[d.key]);
         }).map(function (d) {
           return { label: d.label, from: st.values[d.key], to: body[d.key], unit: d.unit };
         });
-        if (guarded.length) {
-          var confirmed = await fxConfirmGuarded(guarded);
-          if (!confirmed) { msg.textContent = 'Cancelled — nothing was saved.'; return; }
-          body.confirm = 'CONFIRM';
-        }
+        if (!moved.length) { msg.textContent = 'Nothing changed.'; return; }
+        var word = await fxConfirmChange({
+          what: 'change ' + moved.map(function (g) { return g.label; }).join(', '),
+          changes: moved,
+          parts: [],
+        });
+        if (!word) { msg.textContent = 'Cancelled — nothing was saved.'; return; }
+        body.confirm = word;
         msg.textContent = 'Saving…';
         var r = await authed('/formulas/settings', { method: 'PATCH', body: body });
         if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} msg.textContent = m || 'Could not save (' + r.status + ').'; return; }
-        fx.data.settings.values = await r.json();
+        var savedSettings = await r.json();
+        fxReportRevision(savedSettings);
+        delete savedSettings.revision;
+        fx.data.settings.values = savedSettings;
         // The configurator reads these through the shared fxSettings object, loaded
         // once at sign-in. Without this the number saves, the screen shows the new
         // value, and the leg count keeps using the old one until a hard refresh.
@@ -10109,9 +10562,15 @@
       });
     });
     document.getElementById('fxResetKind').addEventListener('click', async function () {
-      if (!confirm('Clear every edit in “' + (set.label || kind) + '” and return to the v73 workbook values?')) return;
-      var r = await authed('/formulas/reset', { method: 'POST', body: { kind: kind.toUpperCase() } });
-      if (!r.ok) { alert('Could not reset (' + r.status + ').'); return; }
+      var word = await fxConfirmChange({
+        what: 'restore the workbook defaults for ' + (set.label || kind),
+        // A blanket restore is not part-specific, so its reach is every open order.
+        parts: [],
+      });
+      if (!word) return;
+      var r = await authed('/formulas/reset', { method: 'POST', body: { kind: kind.toUpperCase(), confirm: word } });
+      if (!r.ok) { alert(await serverMessage(r, 'Could not reset (' + r.status + ').')); return; }
+      fxReportRevision(await r.json());
       loadFormulas();
     });
     box.querySelectorAll('.fxEdit').forEach(function (b) {
@@ -10121,9 +10580,13 @@
     });
     box.querySelectorAll('.fxRevert').forEach(function (b) {
       b.addEventListener('click', async function () {
-        if (!confirm('Return ' + b.getAttribute('data-part') + ' to the workbook default?')) return;
-        var rr = await authed('/formulas/' + kind.toUpperCase() + '/' + encodeURIComponent(b.getAttribute('data-part')), { method: 'DELETE' });
-        if (!rr.ok && rr.status !== 204) { alert('Could not reset (' + rr.status + ').'); return; }
+        var part = b.getAttribute('data-part');
+        var word = await fxConfirmChange({ what: 'reset ' + part + ' to its workbook default', parts: [part] });
+        if (!word) return;
+        var rr = await authed('/formulas/' + kind.toUpperCase() + '/' + encodeURIComponent(part) +
+          '?confirm=' + encodeURIComponent(word), { method: 'DELETE' });
+        if (!rr.ok && rr.status !== 204) { alert(await serverMessage(rr, 'Could not reset (' + rr.status + ').')); return; }
+        if (rr.ok) fxReportRevision(await rr.json());
         loadFormulas();
       });
     });
@@ -10241,8 +10704,15 @@
       async function (close, showErr) {
         var body = fxFormBody();
         if (body.factor <= 0) return showErr('Overage factor must be greater than zero.');
+        var word = await fxConfirmChange({
+          what: 'change ' + rule.part + (rule.name ? ' (' + rule.name + ')' : ''),
+          parts: [rule.part],
+        });
+        if (!word) return showErr('Cancelled — nothing was saved.');
+        body.confirm = word;
         var r = await authed('/formulas/' + kind.toUpperCase() + '/' + encodeURIComponent(rule.part), { method: 'PATCH', body: body });
         if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} return showErr(m || 'Could not save (' + r.status + ').'); }
+        fxReportRevision(await r.json());
         close(); loadFormulas();
       }, 'Save formula');
     function readRuleCond() {
