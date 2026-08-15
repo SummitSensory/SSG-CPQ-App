@@ -2515,6 +2515,13 @@
       fieldRow('Freight contact email', '<input id="mfRfqEmail" type="email" placeholder="Named contact, if different from the send-to address" style="' + IN + '" value="' + v('rfqContactEmail') + '">') +
       fieldRow('Subject', '<input id="mfRfqSubject" placeholder="Freight quote request {{reference}} — {{customer}}" style="' + IN + '" value="' + v('rfqEmailSubject') + '">') +
       '<div class="field"><label>Default message</label><textarea id="mfRfqBody" rows="4" placeholder="Left blank, a standard covering note is used." style="' + IN + 'resize:vertical;">' + esc(m.rfqEmailBody || '') + '</textarea></div>' +
+      fieldRow('Freight figure on the deal',
+        '<select id="mfFreightSrc" style="' + IN + '">' +
+          '<option value="STRUCTURE"' + (m.bomFreightSource === 'MATS' || m.bomFreightSource === 'NONE' ? '' : ' selected') + '>Structure freight</option>' +
+          '<option value="MATS"' + (m.bomFreightSource === 'MATS' ? ' selected' : '') + '>Mats freight</option>' +
+          '<option value="NONE"' + (m.bomFreightSource === 'NONE' ? ' selected' : '') + '>None — this vendor quotes no freight</option>' +
+        '</select>' +
+        '<div class="muted" style="font-size:12px;margin-top:5px;line-height:1.5;">The structure and the mats ship as two loads and are quoted separately on the deal. This says which figure lands on this vendor&rsquo;s sheet.</div>') +
       '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin:16px 0 6px;">Bill of Materials email</div>' +
       '<div class="muted" style="font-size:12px;margin-bottom:8px;line-height:1.5;">Pre-fills the send dialog for this vendor — a fabricator and a distributor rarely want the same note or the same format. Tokens: <code>{{customer}}</code> <code>{{vendor}}</code> <code>{{order}}</code> <code>{{job}}</code> <code>{{submittedOn}}</code>. Left blank, the subject matches the attachment name: <code>{{customer}}-{{order}}-{{vendor}}</code>.</div>' +
       two(fieldRow('Send BOMs to', '<input id="mfBomTo" type="email" placeholder="Falls back to the contact email" style="' + IN + '" value="' + v('bomEmailTo') + '">'),
@@ -2542,6 +2549,7 @@
           bomEmailSubject: document.getElementById('mfBomSubject').value.trim(),
           bomEmailBody: document.getElementById('mfBomBody').value,
           bomEmailFormat: document.getElementById('mfBomFormat').value,
+          bomFreightSource: document.getElementById('mfFreightSrc').value,
           rfqEnabled: document.getElementById('mfRfq').checked,
           rfqContactName: document.getElementById('mfRfqName').value.trim(),
           rfqContactEmail: document.getElementById('mfRfqEmail').value.trim(),
@@ -8452,6 +8460,8 @@
    * and sent independently, so one shared header could never be right. */
   var bomSectionData = [];
   var bomBrands = [];
+  /** The ship-to address book, loaded with the sections that offer it. */
+  var bomShipToAddresses = [];
 
   function bomFieldStyle(w, locked) {
     return 'width:' + (w || '100%') + ';padding:7px 9px;border:1px solid ' + (locked ? '#e7e8e3' : '#dcded7') +
@@ -8468,6 +8478,8 @@
       bomSectionData = r.ok ? ((await r.json()).sections || []) : [];
       var rb = await authed('/powder-colors');
       bomBrands = rb.ok ? ((await rb.json()).brands || []) : [];
+      var ra = await authed('/ship-to-addresses');
+      bomShipToAddresses = ra.ok ? ((await ra.json()) || []) : [];
     } catch (e) { box.innerHTML = '<div class="err">Could not load the Bill of Materials.</div>'; return; }
 
     if (!procData.length) {
@@ -8592,14 +8604,27 @@
         warn +
         '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;">' +
           '<div><div class="k">Job name</div><input class="secF" data-id="' + s.id + '" data-f="jobName" value="' + esc(s.jobName || '') + '" style="' + bomFieldStyle(null, locked) + '"' + dis + '></div>' +
-          '<div><div class="k">Ship to</div><select class="secF" data-id="' + s.id + '" data-f="shipTo" style="' + bomFieldStyle(null, locked) + '"' + dis + '>' +
-            '<option value="CUSTOMER"' + (s.shipTo === 'SUMMIT' ? '' : ' selected') + '>Customer site</option>' +
-            '<option value="SUMMIT"' + (s.shipTo === 'SUMMIT' ? ' selected' : '') + '>Summit Sensory Gym</option></select></div>' +
+          '<div><div class="k">Ship to</div>' + shipToSelect(s, locked, dis) +
+            (s.shipToAddress
+              ? '<div class="muted" style="font-size:11px;margin-top:4px;line-height:1.45;">' + esc(shipToAddressLines(s.shipToAddress).join(' · ')) + '</div>'
+              : '') + '</div>' +
           '<div><div class="k">Submission date</div><input class="secF" data-id="' + s.id + '" data-f="submittedOn" type="date" value="' + esc(dateVal) + '" style="' + bomFieldStyle(null, locked) + (placeholderDate ? 'color:#8a8f85;' : '') + '"' + dis + '>' +
             (placeholderDate ? '<div class="muted" style="font-size:11px;margin-top:3px;">Today, until you confirm or change it</div>' : '') + '</div>' +
           '<div><div class="k">Delivery type</div><input class="secF" data-id="' + s.id + '" data-f="deliveryType" value="' + esc(s.deliveryType || '') + '" placeholder="e.g. Lift Gate" style="' + bomFieldStyle(null, locked) + '"' + dis + '></div>' +
-          '<div><div class="k">Estimated shipment quote</div><input class="secF" data-id="' + s.id + '" data-f="shipmentQuote" value="' + esc(s.shipmentQuote || '') + '" placeholder="TBD" style="' + bomFieldStyle(null, locked) + '"' + dis + '></div>' +
+          '<div><div class="k">Estimated shipment quote</div><input class="secF" data-id="' + s.id + '" data-f="shipmentQuote" value="' + esc(s.shipmentQuote || '') + '" placeholder="TBD" style="' + bomFieldStyle(null, locked) + '"' + dis + '>' +
+            '<div class="muted" style="font-size:11px;margin-top:3px;">' +
+              (s.freightSource === 'MATS' ? 'Mats freight from the deal' : s.freightSource === 'NONE' ? 'This vendor quotes no freight' : 'Structure freight from the deal') +
+            '</div></div>' +
+          // The deal carries one tax figure for the order; it is shown on each
+          // sheet rather than divided between vendors.
+          '<div><div class="k">Estimated tax</div><input class="secF" data-id="' + s.id + '" data-f="estimatedTax" value="' + esc(s.estimatedTax || '') + '" placeholder="From the deal" style="' + bomFieldStyle(null, locked) + '"' + dis + '></div>' +
         '</div>' +
+        (edit
+          ? '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;">' +
+              '<button class="link-btn" data-deal-pull="' + s.id + '" style="width:auto;padding:6px 12px;">Pull freight &amp; tax from the deal</button>' +
+              '<span class="muted" style="font-size:11.5px;">Reads the Deal Tracking board. Figures you have typed are kept.</span>' +
+            '</div>'
+          : '') +
         '<div style="margin-top:12px;"><div class="k">Notes to this vendor</div>' +
           '<textarea class="secF" data-id="' + s.id + '" data-f="notes" rows="2" placeholder="Prints beneath the line items" style="' + bomFieldStyle(null, locked) + 'resize:vertical;"' + dis + '>' + esc(s.notes || '') + '</textarea></div>' +
         // Opt-in per vendor: most vendors powder coat nothing, and the column was
@@ -8621,6 +8646,7 @@
             ['Item', 'Part #'].concat(showVendorPart ? ['Vendor part #'] : [], ['Qty'], showBag ? ['Bag #'] : [], showColor ? ['Powder color'] : [], ['Weight (lb)', 'Cost each', 'Total cost', 'Notes', 'Status'], edit ? [''] : []),
             rows, cols, '') +
         '</div>' +
+        sectionMoney(s) +
         (edit
           ? '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:11px;flex-wrap:wrap;">' +
               '<span class="muted" style="font-size:11.5px;">Parts added or removed here change what is purchased, not the accepted proposal. Both go on the order timeline.</span>' +
@@ -8765,6 +8791,67 @@
         ? '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">' + fields + '</div>'
         : '<div class="muted" style="font-size:12.5px;">None yet. Questions you add here are asked of this vendor on this order; add a reusable one under Administration.</div>') +
     '</div>';
+  }
+
+  /** "$1,240.50" → 124050; null when it is not a number ("TBD"). */
+  function moneyMinor(v) {
+    var raw = String(v == null ? '' : v).replace(/[$,\s]/g, '').trim();
+    if (!raw || !/^-?\d+(\.\d+)?$/.test(raw)) return null;
+    return Math.round(Number(raw) * 100);
+  }
+
+  function shipToAddressLines(a) {
+    var street = [a.line1, a.line2].filter(Boolean).join(', ');
+    var city = [a.city, [a.region, a.postalCode].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+    return [street, city, a.contactName, a.phone].filter(Boolean);
+  }
+
+  /**
+   * Where this vendor's shipment goes. The customer's site and Summit's dock are
+   * the two standing answers; anything else — a job trailer, an installer's
+   * warehouse — is a saved address, because the same one is used across vendors on
+   * an order and re-typing it is how two sheets end up disagreeing.
+   */
+  function shipToSelect(s, locked, dis) {
+    var saved = (bomShipToAddresses || []).map(function (a) {
+      return '<option value="addr:' + a.id + '"' + (s.shipToAddressId === a.id ? ' selected' : '') + '>' + esc(a.name) + '</option>';
+    }).join('');
+    return '<select class="secShipTo" data-id="' + s.id + '" style="' + bomFieldStyle(null, locked) + '"' + dis + '>' +
+      '<option value="CUSTOMER"' + (!s.shipToAddressId && s.shipTo !== 'SUMMIT' ? ' selected' : '') + '>Customer site</option>' +
+      '<option value="SUMMIT"' + (!s.shipToAddressId && s.shipTo === 'SUMMIT' ? ' selected' : '') + '>Summit Sensory Gym</option>' +
+      (saved ? '<optgroup label="Saved addresses">' + saved + '</optgroup>' : '') +
+      '<option value="new">+ New ship-to address…</option>' +
+    '</select>';
+  }
+
+  /**
+   * What the sheet adds up to. Freight and tax are typed as text, so a figure that
+   * is not a number prints as it reads and the grand total waits — a total that
+   * quietly leaves the freight out is worse than no total.
+   */
+  function sectionMoney(s) {
+    var items = Number(s.extendedCostMinor) || 0;
+    var ship = moneyMinor(s.shipmentQuote);
+    var tax = moneyMinor(s.estimatedTax);
+    var money2 = function (m) { return '$' + (Number(m || 0) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+    var rows = [
+      ['Item cost total', money2(items), 0],
+      ['Estimated shipment total', ship == null ? (s.shipmentQuote || 'TBD') : money2(ship), 0],
+    ];
+    if (s.estimatedTax) rows.push(['Estimated tax', tax == null ? s.estimatedTax : money2(tax), 0]);
+    var grand = ship == null || (s.estimatedTax && tax == null) ? null : items + ship + (tax || 0);
+    rows.push(['Bill of Materials grand total', grand == null ? 'Pending freight' : money2(grand), 1]);
+
+    return '<div style="display:flex;justify-content:flex-end;margin-top:12px;">' +
+      '<table style="border-collapse:collapse;font-size:13px;min-width:280px;">' +
+        rows.map(function (r) {
+          var top = r[2] ? 'border-top:1px solid #dcded7;' : '';
+          return '<tr>' +
+            '<td style="padding:5px 16px 5px 0;color:' + (r[2] ? '#20241f' : '#5c6157') + ';font-weight:' + (r[2] ? '700' : '400') + ';' + top + '">' + esc(r[0]) + '</td>' +
+            '<td style="padding:5px 0;text-align:right;font-weight:' + (r[2] ? '700' : '600') + ';' + top + '">' + esc(r[1]) + '</td>' +
+          '</tr>';
+        }).join('') +
+      '</table></div>';
   }
 
   /** Append-only record of every BOM emailed to this vendor. */
@@ -8979,6 +9066,38 @@
       });
     });
 
+    document.querySelectorAll('.secShipTo').forEach(function (el) {
+      el.addEventListener('change', async function () {
+        var id = el.getAttribute('data-id');
+        var v = el.value;
+        if (v === 'new') { openShipToForm(order, id, reload); return; }
+        var body = v.indexOf('addr:') === 0
+          ? { shipToAddressId: v.slice(5) }
+          // Back to a standing answer: the named address is cleared, or it would
+          // keep winning over the one just chosen.
+          : { shipTo: v, shipToAddressId: null };
+        var r = await authed('/bom/sections/' + id, { method: 'PATCH', body: body });
+        if (!r.ok) { await fail(r, 'Could not change the ship-to'); }
+        reload();
+      });
+    });
+
+    document.querySelectorAll('[data-deal-pull]').forEach(function (bt) {
+      bt.addEventListener('click', async function () {
+        bt.disabled = true;
+        var r = await authed('/orders/' + order.id + '/deal-figures/pull', { method: 'POST', body: {} });
+        bt.disabled = false;
+        if (!r.ok) return fail(r, 'Could not read the deal');
+        var d = await r.json();
+        if (d.figures && d.figures.error) { alert('Nothing pulled: ' + d.figures.error); return; }
+        if (!d.updated) {
+          alert('Nothing to pull — every section already has its freight and tax, or the deal has none recorded.');
+          return;
+        }
+        reload();
+      });
+    });
+
     document.querySelectorAll('[data-sec-move]').forEach(function (bt) {
       bt.addEventListener('click', async function () {
         var id = bt.getAttribute('data-id'), dir = bt.getAttribute('data-sec-move');
@@ -9105,6 +9224,57 @@
     t.addEventListener('change', function () {
       document.getElementById('qOptWrap').style.display = (t.value === 'SELECT' || t.value === 'MULTI_SELECT') ? 'block' : 'none';
     });
+  }
+
+  /**
+   * Add a ship-to address and put this section on it.
+   *
+   * Saved rather than typed onto the section: the same address is normally used by
+   * every vendor on the order, and it comes back on the next job at the same site.
+   */
+  function openShipToForm(order, sectionId, done) {
+    var two = function (a, b) { return '<div style="display:flex;gap:8px;"><div style="flex:1;">' + a + '</div><div style="flex:1;">' + b + '</div></div>'; };
+    openModal('New ship-to address',
+      '<div class="muted" style="font-size:12.5px;line-height:1.55;margin-bottom:12px;">This address is saved and offered on every vendor&rsquo;s sheet, on this order and the next. It prints in the Ship to block of the Bill of Materials.</div>' +
+      fieldRow('Name it', '<input id="stName" placeholder="e.g. Denver job trailer" style="' + IN + '" required>') +
+      fieldRow('Street', '<input id="stLine1" style="' + IN + '">') +
+      fieldRow('Suite / unit', '<input id="stLine2" placeholder="Optional" style="' + IN + '">') +
+      '<div style="display:flex;gap:8px;">' +
+        '<div style="flex:2;">' + fieldRow('City', '<input id="stCity" style="' + IN + '">') + '</div>' +
+        '<div style="flex:1;">' + fieldRow('State', '<input id="stRegion" style="' + IN + '">') + '</div>' +
+        '<div style="flex:1;">' + fieldRow('ZIP', '<input id="stZip" style="' + IN + '">') + '</div>' +
+      '</div>' +
+      two(fieldRow('Site contact', '<input id="stContact" style="' + IN + '">'),
+          fieldRow('Phone', '<input id="stPhone" style="' + IN + '">')) +
+      fieldRow('Email', '<input id="stEmail" type="email" placeholder="Optional" style="' + IN + '">'),
+      async function (close, showErr) {
+        var name = document.getElementById('stName').value.trim();
+        if (!name) return showErr('Give the address a name — that is what the picker shows.');
+        var r = await authed('/ship-to-addresses', {
+          method: 'POST',
+          body: {
+            name: name,
+            line1: document.getElementById('stLine1').value.trim(),
+            line2: document.getElementById('stLine2').value.trim(),
+            city: document.getElementById('stCity').value.trim(),
+            region: document.getElementById('stRegion').value.trim(),
+            postalCode: document.getElementById('stZip').value.trim(),
+            contactName: document.getElementById('stContact').value.trim(),
+            phone: document.getElementById('stPhone').value.trim(),
+            email: document.getElementById('stEmail').value.trim(),
+          },
+        });
+        if (!r.ok) return showErr(await serverMessage(r, 'Could not save that address (' + r.status + ').'));
+        var addr = await r.json();
+        // The section that asked for it goes onto it straight away; every other
+        // section can now pick it from the list.
+        if (sectionId) {
+          var rs = await authed('/bom/sections/' + sectionId, { method: 'PATCH', body: { shipToAddressId: addr.id } });
+          if (!rs.ok) return showErr(await serverMessage(rs, 'Address saved, but this section could not be moved onto it.'));
+        }
+        close();
+        if (done) done();
+      }, 'Save address');
   }
 
   /** Email this vendor's BOM, pre-filled from the vendor's saved defaults. */

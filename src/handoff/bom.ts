@@ -114,6 +114,19 @@ export interface BomDocument {
     isSteelFabricator: boolean;
   } | null;
   lines: BomLine[];
+  /**
+   * What the sheet adds up to. Freight and tax are quoted on the deal and typed as
+   * text ("TBD", "$1,240"), so each is carried both as it reads and, where it can
+   * be read as a number, in minor units. The grand total exists only when both can.
+   */
+  financials: {
+    itemCostMinor: number;
+    shipmentQuote: string;
+    shipmentMinor: number | null;
+    estimatedTax: string;
+    estimatedTaxMinor: number | null;
+    grandTotalMinor: number | null;
+  };
   totals: {
     lineCount: number;
     unitCount: number;
@@ -148,6 +161,15 @@ export const streetLine = (line1: unknown, line2: unknown): string => {
  * `includeZeroQty` adds the rest of that vendor's catalogue at qty 0 — the
  * "full order form" style, so the shop can hand-add a part without a new sheet.
  */
+/** "$1,240.50" / "1240.5" → 124050. Null when it is not a number at all ("TBD"). */
+function parseMoneyMinor(v: unknown): number | null {
+  const raw = String(v ?? '')
+    .replace(/[$,\s]/g, '')
+    .trim();
+  if (!raw || !/^-?\d+(\.\d+)?$/.test(raw)) return null;
+  return Math.round(Number(raw) * 100);
+}
+
 export async function buildBom(
   orderId: string,
   opts: { vendor?: string; includeZeroQty?: boolean } = {},
@@ -175,6 +197,15 @@ export async function buildBom(
     prisma.manufacturer.findMany(),
     prisma.proposal.findUnique({ where: { id: order.proposalId }, select: { title: true } }),
   ]);
+
+  // The vendor's own section holds the fields that used to live on the order: where
+  // this shipment goes, what its freight was quoted at, and the deal's tax figure.
+  const section = vendorFilter
+    ? await prisma.bomVendorSection.findUnique({
+        where: { orderId_vendor: { orderId, vendor: vendorFilter } },
+        include: { shipToAddress: true },
+      })
+    : null;
 
   const mfrByName = new Map(manufacturers.map((m) => [m.name.toLowerCase(), m]));
   const steelVendors = new Set(
@@ -358,8 +389,20 @@ export async function buildBom(
   // ---- ship-to block: the customer's site, or Summit's dock ----
   const cityLine = (city: string, region: string, zip: string) =>
     [city, [region, zip].filter(Boolean).join(' ')].filter(Boolean).join(', ');
-  const shipTo =
-    order.bomShipTo === 'SUMMIT'
+  const named = section?.shipToAddress ?? null;
+  const shipTo = named
+    ? {
+        label: named.name,
+        name: named.name,
+        lines: [
+          streetLine(named.line1, named.line2),
+          cityLine(s(named.city), s(named.region), s(named.postalCode)),
+        ].filter(Boolean),
+        contactName: s(named.contactName),
+        phone: s(named.phone),
+        email: s(named.email),
+      }
+    : order.bomShipTo === 'SUMMIT'
       ? {
           label: 'Summit Sensory Gym',
           name: COMPANY.name,
@@ -447,6 +490,27 @@ export async function buildBom(
     vendors,
     vendor,
     lines,
+    financials: (() => {
+      const itemCostMinor = totals.extendedCostMinor;
+      const shipmentQuote = s(section?.shipmentQuote ?? order.shipmentQuote);
+      const estimatedTax = s(section?.estimatedTax);
+      const shipmentMinor = parseMoneyMinor(shipmentQuote);
+      const estimatedTaxMinor = parseMoneyMinor(estimatedTax);
+      return {
+        itemCostMinor,
+        shipmentQuote,
+        shipmentMinor,
+        estimatedTax,
+        estimatedTaxMinor,
+        // Only a real total, never a partial one: a sheet whose freight still reads
+        // TBD has no grand total, and saying so is better than printing a number
+        // that quietly leaves the freight out.
+        grandTotalMinor:
+          shipmentMinor == null || (estimatedTax && estimatedTaxMinor == null)
+            ? null
+            : itemCostMinor + shipmentMinor + (estimatedTaxMinor ?? 0),
+      };
+    })(),
     totals,
   };
 }

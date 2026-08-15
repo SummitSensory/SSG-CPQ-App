@@ -15,7 +15,9 @@ import {
   deleteQuestion,
   submissionBlockers,
   UNASSIGNED,
+  pullDealFigures,
 } from '../handoff/bomSections.js';
+import { dealFigures } from '../handoff/dealFigures.js';
 import { sendBom } from '../handoff/bomSend.js';
 
 /**
@@ -47,6 +49,9 @@ const SectionPatchSchema = z.object({
   deliveryType: z.string().trim().max(120).nullish(),
   powderCoatBrand: z.string().trim().max(120).nullish(),
   shipmentQuote: z.string().trim().max(120).nullish(),
+  estimatedTax: z.string().trim().max(120).nullish(),
+  /** A named address. Null clears it and falls back to `shipTo`. */
+  shipToAddressId: z.string().trim().max(40).nullish(),
   notes: z.string().trim().max(4000).nullish(),
 });
 
@@ -123,6 +128,124 @@ export function registerBomRoutes(app: FastifyInstance): void {
   app.get('/orders/:id/bom/sections', read, async (req) => {
     const { id } = req.params as { id: string };
     return { sections: await listSections(id, req.user!.sub) };
+  });
+
+  /**
+   * The deal's freight and tax, read live from monday.
+   *
+   * Its own endpoint rather than part of the section load: monday being slow or
+   * unreachable must not stop an order from opening. The browser asks for these
+   * when someone looks at the figures, and the error, if there is one, is reported
+   * rather than thrown.
+   */
+  app.get('/orders/:id/deal-figures', read, async (req) =>
+    dealFigures((req.params as { id: string }).id),
+  );
+
+  /**
+   * Write those figures onto the sections. A figure typed by hand is kept unless
+   * `overwrite` is set — a negotiated number should not be undone by a refresh.
+   */
+  app.post('/orders/:id/deal-figures/pull', handoff, async (req) => {
+    const { id } = req.params as { id: string };
+    const b = (req.body || {}) as { overwrite?: boolean };
+    return pullDealFigures(id, { overwrite: !!b.overwrite }, req.user!.sub);
+  });
+
+  // ---------------------------------------------------------- ship-to addresses
+  //
+  // Where a shipment goes when it is neither the customer's site nor Summit's
+  // dock — a job trailer, an installer's warehouse. Kept as records because the
+  // same address is used across vendors on one order and across orders, and
+  // re-typing it is how two sheets end up disagreeing about where the truck goes.
+
+  const AddressInput = z.object({
+    name: z.string().trim().min(1).max(160),
+    line1: z.string().trim().max(200).nullish(),
+    line2: z.string().trim().max(200).nullish(),
+    city: z.string().trim().max(120).nullish(),
+    region: z.string().trim().max(80).nullish(),
+    postalCode: z.string().trim().max(20).nullish(),
+    country: z.string().trim().max(80).nullish(),
+    contactName: z.string().trim().max(160).nullish(),
+    phone: z.string().trim().max(40).nullish(),
+    email: z.string().trim().max(200).nullish(),
+    notes: z.string().trim().max(2000).nullish(),
+    active: z.boolean().optional(),
+  });
+
+  app.get('/ship-to-addresses', read, async (req) => {
+    const q = req.query as { includeInactive?: string };
+    return prisma.shipToAddress.findMany({
+      where: q.includeInactive === 'true' ? {} : { active: true },
+      orderBy: { name: 'asc' },
+    });
+  });
+
+  app.post('/ship-to-addresses', handoff, async (req, reply) => {
+    const parsed = AddressInput.safeParse(req.body);
+    if (!parsed.success)
+      throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid address');
+    const d = parsed.data;
+    const row = await prisma.shipToAddress.create({
+      data: {
+        name: d.name,
+        line1: d.line1 || null,
+        line2: d.line2 || null,
+        city: d.city || null,
+        region: d.region || null,
+        postalCode: d.postalCode || null,
+        country: d.country || 'USA',
+        contactName: d.contactName || null,
+        phone: d.phone || null,
+        email: d.email || null,
+        notes: d.notes || null,
+        createdById: req.user!.sub,
+      },
+    });
+    return reply.status(201).send(row);
+  });
+
+  app.patch('/ship-to-addresses/:addressId', handoff, async (req) => {
+    const { addressId } = req.params as { addressId: string };
+    const parsed = AddressInput.partial().safeParse(req.body);
+    if (!parsed.success)
+      throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid address');
+    const existing = await prisma.shipToAddress.findUnique({ where: { id: addressId } });
+    if (!existing) throw new NotFoundError('Ship-to address not found');
+    const d = parsed.data;
+    const data: Record<string, unknown> = {};
+    for (const k of [
+      'name',
+      'line1',
+      'line2',
+      'city',
+      'region',
+      'postalCode',
+      'country',
+      'contactName',
+      'phone',
+      'email',
+      'notes',
+    ] as const) {
+      if (d[k] !== undefined) data[k] = d[k] || null;
+    }
+    if (d.active !== undefined) data.active = d.active;
+    return prisma.shipToAddress.update({ where: { id: addressId }, data });
+  });
+
+  /**
+   * Retire an address. Never hard-deleted while a section points at it — that
+   * would blank the ship-to block on a sheet the vendor already has.
+   */
+  app.delete('/ship-to-addresses/:addressId', handoff, async (req) => {
+    const { addressId } = req.params as { addressId: string };
+    const inUse = await prisma.bomVendorSection.count({ where: { shipToAddressId: addressId } });
+    if (inUse) {
+      return prisma.shipToAddress.update({ where: { id: addressId }, data: { active: false } });
+    }
+    await prisma.shipToAddress.delete({ where: { id: addressId } });
+    return { deleted: addressId };
   });
 
   app.patch('/bom/sections/:sectionId', handoff, async (req) => {

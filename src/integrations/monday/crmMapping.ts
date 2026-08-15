@@ -25,6 +25,15 @@ export const CONTACTS_BOARD_ID = '6527740281';
 
 /** Deal Tracking columns — the ids listed in Monday Column Mapping.xlsx. */
 export const DEAL_COL = {
+  /**
+   * Freight, quoted as two separate figures because they ship as two separate
+   * loads: the steel structure on one truck, the mats on another. A vendor's Bill
+   * of Materials takes whichever belongs to it — see Manufacturer.bomFreightSource.
+   */
+  structureFreight: 'lookup5__1',
+  matsFreight: 'text_mkzdpjf2',
+  /** text — estimated tax on the deal. One figure for the order, not per vendor. */
+  estimatedTax: 'text_mkzd8x9t',
   /** mirror (from Organizations) — see INDUSTRY_TO_CUSTOMER_TYPE */
   industry: 'lookup3__1',
   /** status — Type of Customer, a cross-check on industry */
@@ -183,7 +192,12 @@ export function toStage(label: string | undefined | null): OpportunityStage {
   if (t.includes('lost') || t.includes('dead') || t.includes('no ')) return 'CLOSED_LOST';
   if (t.includes('negotiat')) return 'NEGOTIATION';
   if (t.includes('proposal') || t.includes('quote') || t.includes('estimate')) return 'PROPOSAL';
-  if (t.includes('discovery') || t.includes('consult') || t.includes('needs') || t.includes('design'))
+  if (
+    t.includes('discovery') ||
+    t.includes('consult') ||
+    t.includes('needs') ||
+    t.includes('design')
+  )
     return 'NEEDS_ANALYSIS';
   if (t.includes('qualif') || t.includes('contact') || t.includes('follow')) return 'QUALIFICATION';
   return 'PROSPECT';
@@ -260,7 +274,8 @@ export function buildAddress(
 ): ParsedLocation | null {
   const loc = parseLocation(rawLocation);
 
-  const line1 = clean(text[DEAL_COL.street1]) ?? clean(text[DEAL_COL.streetText]) ?? loc?.line1 ?? null;
+  const line1 =
+    clean(text[DEAL_COL.street1]) ?? clean(text[DEAL_COL.streetText]) ?? loc?.line1 ?? null;
   const line2 = clean(text[DEAL_COL.unit]);
   // The City formula frequently resolves to a county, so it is the last resort.
   const city = clean(text[DEAL_COL.cityText]) ?? loc?.city ?? clean(text[DEAL_COL.city]);

@@ -594,6 +594,9 @@ model Manufacturer {
   bomEmailFormat      BomSendFormat     @default(PDF)
   /// Whether a new BOM section for this vendor shows the powder-colour column.
   bomShowPowderColor  Boolean           @default(false)
+  /// Which freight figure on the deal belongs to this vendor's shipment. The mats
+  /// ship on their own freight line; everything else rides the structure figure.
+  bomFreightSource    BomFreightSource  @default(STRUCTURE)
 
   // ---- Freight RFQ ----
   /// Whether this vendor quotes freight for us. Off by default: an RFQ sent to a
@@ -1763,9 +1766,45 @@ model HandoffTask {
 // on AcceptedOrder remain as the DEFAULTS a new section inherits.
 // ---------------------------------------------------------------------------
 
+/// Which freight figure on the deal a vendor's shipment is quoted from.
+enum BomFreightSource {
+  STRUCTURE
+  MATS
+  NONE
+}
+
 enum BomSectionStatus {
   DRAFT
   SUBMITTED
+}
+
+/// A place an order can be shipped to that is neither the customer's site nor
+/// Summit's dock — a job trailer, an installer's warehouse, a second facility.
+///
+/// Kept as its own record rather than typed onto the section, because the same
+/// address is used across several vendors on one order and across orders, and
+/// re-typing it is how two sheets end up disagreeing about where the truck goes.
+model ShipToAddress {
+  id           String             @id @default(cuid())
+  /// What it is called in the picker: "Denver job trailer".
+  name         String
+  line1        String?
+  line2        String?
+  city         String?
+  region       String?
+  postalCode   String?
+  country      String?            @default("USA")
+  contactName  String?
+  phone        String?
+  email        String?
+  notes        String?
+  active       Boolean            @default(true)
+  createdById  String?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  sections     BomVendorSection[]
+
+  @@index([name])
 }
 
 model BomVendorSection {
@@ -1780,11 +1819,21 @@ model BomVendorSection {
 
   jobName         String?
   shipTo          BomShipTo        @default(CUSTOMER)
+  /// A specific address instead of the customer's site or Summit's dock. When set
+  /// it wins over `shipTo`, which stays as the fallback for every existing section.
+  shipToAddressId String?
+  shipToAddress   ShipToAddress?   @relation(fields: [shipToAddressId], references: [id])
   /// Null means "not submitted yet" — the UI shows today's date as the default.
   submittedOn     DateTime?
   deliveryType    String?
   powderCoatBrand String?
+  /// Freight for this vendor's shipment. Pulled from the deal's monday board —
+  /// mats freight for the mat vendor, structure freight for everyone else — and
+  /// editable afterwards, because the pull is a starting figure, not a contract.
   shipmentQuote   String?
+  /// Estimated tax, pulled from the same board. Informational on the sheet: the
+  /// deal carries one figure, and it is not divided between vendors.
+  estimatedTax    String?
   notes           String?
 
   /// SUBMITTED freezes the section's fields; unlocking is an explicit action and

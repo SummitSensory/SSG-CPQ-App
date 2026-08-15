@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma.js';
 import { NotFoundError, ValidationError } from '../lib/errors.js';
 import type { BomQuestionType, BomSectionStatus, BomShipTo } from '@prisma/client';
+import { dealFigures, freightFor } from './dealFigures.js';
 
 /**
  * Bill of Materials — per-vendor sections.
@@ -29,8 +30,15 @@ const vendorOf = (v: string | null | undefined): string => (v && v.trim()) || UN
 const byVendorName = (a: string, b: string): number =>
   a === UNASSIGNED ? 1 : b === UNASSIGNED ? -1 : a.localeCompare(b);
 
-async function logEvent(orderId: string, action: string, actorId: string, detail?: Record<string, unknown>): Promise<void> {
-  await prisma.orderEvent.create({ data: { orderId, action, actorId, detail: (detail ?? {}) as object } });
+async function logEvent(
+  orderId: string,
+  action: string,
+  actorId: string,
+  detail?: Record<string, unknown>,
+): Promise<void> {
+  await prisma.orderEvent.create({
+    data: { orderId, action, actorId, detail: (detail ?? {}) as object },
+  });
 }
 
 /**
@@ -44,8 +52,14 @@ export async function ensureSections(orderId: string, actorId?: string): Promise
   const order = await prisma.acceptedOrder.findUnique({
     where: { id: orderId },
     select: {
-      id: true, jobName: true, bomShipTo: true, bomSubmittedOn: true,
-      deliveryType: true, powderCoatBrand: true, shipmentQuote: true, bomNotes: true,
+      id: true,
+      jobName: true,
+      bomShipTo: true,
+      bomSubmittedOn: true,
+      deliveryType: true,
+      powderCoatBrand: true,
+      shipmentQuote: true,
+      bomNotes: true,
       procurement: { select: { vendor: true } },
       bomSections: { select: { vendor: true, sortOrder: true } },
     },
@@ -63,7 +77,12 @@ export async function ensureSections(orderId: string, actorId?: string): Promise
 
   // A powder-coating vendor's new section starts with the colour column already on.
   const colorVendors = new Set(
-    (await prisma.manufacturer.findMany({ where: { bomShowPowderColor: true }, select: { name: true } })).map((m) => m.name),
+    (
+      await prisma.manufacturer.findMany({
+        where: { bomShowPowderColor: true },
+        select: { name: true },
+      })
+    ).map((m) => m.name),
   );
 
   const templates = await prisma.bomQuestionTemplate.findMany({
@@ -119,7 +138,26 @@ export interface SectionView {
   deliveryType: string | null;
   powderCoatBrand: string | null;
   shipmentQuote: string | null;
+  /** Informational: the deal's tax figure, not divided between vendors. */
+  estimatedTax: string | null;
   notes: string | null;
+  /** A named address instead of the customer's site or Summit's dock. */
+  shipToAddressId: string | null;
+  shipToAddress: {
+    id: string;
+    name: string;
+    line1: string | null;
+    line2: string | null;
+    city: string | null;
+    region: string | null;
+    postalCode: string | null;
+    country: string | null;
+    contactName: string | null;
+    phone: string | null;
+    email: string | null;
+  } | null;
+  /** Which of the deal's two freight figures this vendor's shipment is quoted from. */
+  freightSource: string;
   status: BomSectionStatus;
   /** Whether this vendor's sheet prints the powder-colour column. */
   showPowderColor: boolean;
@@ -136,16 +174,34 @@ export interface SectionView {
   /** Parts on this section that require a colour and don't have one yet. */
   missingColorSkus: string[];
   questions: Array<{
-    id: string; label: string; type: BomQuestionType; options: string[];
-    required: boolean; value: string | null; sortOrder: number; fromTemplate: boolean;
+    id: string;
+    label: string;
+    type: BomQuestionType;
+    options: string[];
+    required: boolean;
+    value: string | null;
+    sortOrder: number;
+    fromTemplate: boolean;
   }>;
   sends: Array<{
-    id: string; toEmail: string; ccEmails: string | null; subject: string;
-    format: string; status: string; error: string | null;
-    sentAt: string; sentBy: string | null; deliveredAt: string | null; openedAt: string | null;
+    id: string;
+    toEmail: string;
+    ccEmails: string | null;
+    subject: string;
+    format: string;
+    status: string;
+    error: string | null;
+    sentAt: string;
+    sentBy: string | null;
+    deliveredAt: string | null;
+    openedAt: string | null;
   }>;
   email: {
-    to: string; cc: string; subject: string; body: string; format: string;
+    to: string;
+    cc: string;
+    subject: string;
+    body: string;
+    format: string;
     /** False when the vendor has no default address — the dialog then asks for one. */
     hasDefault: boolean;
   };
@@ -195,16 +251,31 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
       include: {
         answers: { orderBy: [{ sortOrder: 'asc' }, { label: 'asc' }] },
         sends: { orderBy: { sentAt: 'desc' } },
+        shipToAddress: true,
       },
     }),
     prisma.procurementLine.findMany({
       where: { orderId },
-      select: { sku: true, vendor: true, quantity: true, unitCostMinor: true, powderColorCode: true, powderColor: true, isHardwareComponent: true },
+      select: {
+        sku: true,
+        vendor: true,
+        quantity: true,
+        unitCostMinor: true,
+        powderColorCode: true,
+        powderColor: true,
+        isHardwareComponent: true,
+      },
     }),
     prisma.manufacturer.findMany({
       select: {
-        name: true, bomEmailTo: true, bomEmailCc: true, bomEmailSubject: true,
-        bomEmailBody: true, bomEmailFormat: true, contactEmail: true,
+        name: true,
+        bomEmailTo: true,
+        bomEmailCc: true,
+        bomEmailSubject: true,
+        bomEmailBody: true,
+        bomEmailFormat: true,
+        contactEmail: true,
+        bomFreightSource: true,
       },
     }),
   ]);
@@ -220,10 +291,16 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
 
   // Which parts insist on a colour. Off by default, so this is usually a short list.
   const skusNeedingColor = new Set(
-    (await prisma.sku.findMany({ where: { requiresPowderColor: true }, select: { part: true } })).map((s) => s.part),
+    (
+      await prisma.sku.findMany({ where: { requiresPowderColor: true }, select: { part: true } })
+    ).map((s) => s.part),
   );
 
-  const actorIds = [...new Set(sections.flatMap((s) => [s.confirmedById, s.unlockedById]).filter(Boolean) as string[])];
+  const actorIds = [
+    ...new Set(
+      sections.flatMap((s) => [s.confirmedById, s.unlockedById]).filter(Boolean) as string[],
+    ),
+  ];
   const senderIds = [...new Set(sections.flatMap((s) => s.sends.map((x) => x.sentById)))];
   const users = await prisma.user.findMany({
     where: { id: { in: [...new Set([...actorIds, ...senderIds])] } },
@@ -254,22 +331,50 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
       deliveryType: s.deliveryType,
       powderCoatBrand: s.powderCoatBrand,
       shipmentQuote: s.shipmentQuote,
+      estimatedTax: s.estimatedTax,
       notes: s.notes,
+      shipToAddressId: s.shipToAddressId,
+      shipToAddress: s.shipToAddress
+        ? {
+            id: s.shipToAddress.id,
+            name: s.shipToAddress.name,
+            line1: s.shipToAddress.line1,
+            line2: s.shipToAddress.line2,
+            city: s.shipToAddress.city,
+            region: s.shipToAddress.region,
+            postalCode: s.shipToAddress.postalCode,
+            country: s.shipToAddress.country,
+            contactName: s.shipToAddress.contactName,
+            phone: s.shipToAddress.phone,
+            email: s.shipToAddress.email,
+          }
+        : null,
+      freightSource: mfr?.bomFreightSource ?? 'STRUCTURE',
       status: s.status,
       // Forced on when a line already carries a colour: hiding the column under a
       // vendor who has been given one would drop information from their sheet.
-      showPowderColor: s.showPowderColor || mine.some((l) => (l.powderColorCode || l.powderColor || '').trim()),
+      showPowderColor:
+        s.showPowderColor || mine.some((l) => (l.powderColorCode || l.powderColor || '').trim()),
       showPackagingBag: s.showPackagingBag,
       editable: s.status !== 'SUBMITTED',
       confirmedAt: iso(s.confirmedAt),
-      confirmedBy: s.confirmedById ? nameById.get(s.confirmedById) ?? null : null,
+      confirmedBy: s.confirmedById ? (nameById.get(s.confirmedById) ?? null) : null,
       unlockedAt: iso(s.unlockedAt),
-      unlockedBy: s.unlockedById ? nameById.get(s.unlockedById) ?? null : null,
+      unlockedBy: s.unlockedById ? (nameById.get(s.unlockedById) ?? null) : null,
       lineCount: mine.filter((l) => (Number(l.quantity) || 0) > 0).length,
       unitCount: mine.reduce((a, l) => a + (Number(l.quantity) || 0), 0),
-      extendedCostMinor: mine.reduce((a, l) => a + (l.unitCostMinor ?? 0) * (Number(l.quantity) || 0), 0),
+      extendedCostMinor: mine.reduce(
+        (a, l) => a + (l.unitCostMinor ?? 0) * (Number(l.quantity) || 0),
+        0,
+      ),
       missingColorSkus: mine
-        .filter((l) => l.sku && skusNeedingColor.has(l.sku) && !(l.powderColorCode || '').trim() && !(l.powderColor || '').trim())
+        .filter(
+          (l) =>
+            l.sku &&
+            skusNeedingColor.has(l.sku) &&
+            !(l.powderColorCode || '').trim() &&
+            !(l.powderColor || '').trim(),
+        )
         .map((l) => l.sku as string),
       questions: s.answers.map((a) => ({
         id: a.id,
@@ -319,7 +424,9 @@ async function loadSection(sectionId: string) {
  */
 function assertEditable(s: { status: BomSectionStatus; vendor: string }): void {
   if (s.status === 'SUBMITTED') {
-    throw new ValidationError(`The ${s.vendor} Bill of Materials is submitted. Unlock it for changes first.`);
+    throw new ValidationError(
+      `The ${s.vendor} Bill of Materials is submitted. Unlock it for changes first.`,
+    );
   }
 }
 
@@ -328,6 +435,9 @@ export interface SectionPatch {
   showPackagingBag?: boolean;
   jobName?: string | null;
   shipTo?: BomShipTo;
+  /** Null clears it and falls back to `shipTo`. */
+  shipToAddressId?: string | null;
+  estimatedTax?: string | null;
   submittedOn?: Date | null;
   deliveryType?: string | null;
   powderCoatBrand?: string | null;
@@ -339,7 +449,19 @@ export async function patchSection(sectionId: string, patch: SectionPatch, actor
   const s = await loadSection(sectionId);
   assertEditable(s);
   const data: Record<string, unknown> = {};
-  for (const k of ['jobName', 'shipTo', 'submittedOn', 'deliveryType', 'powderCoatBrand', 'shipmentQuote', 'notes', 'showPowderColor', 'showPackagingBag'] as const) {
+  for (const k of [
+    'jobName',
+    'shipTo',
+    'shipToAddressId',
+    'submittedOn',
+    'deliveryType',
+    'powderCoatBrand',
+    'shipmentQuote',
+    'estimatedTax',
+    'notes',
+    'showPowderColor',
+    'showPackagingBag',
+  ] as const) {
     if (patch[k] !== undefined) data[k] = patch[k];
   }
   if (!Object.keys(data).length) return s;
@@ -350,7 +472,8 @@ export async function patchSection(sectionId: string, patch: SectionPatch, actor
   for (const k of Object.keys(data)) {
     const before = (s as unknown as Record<string, unknown>)[k];
     const after = (updated as unknown as Record<string, unknown>)[k];
-    if (String(before ?? '') !== String(after ?? '')) changes[k] = { from: before ?? null, to: after ?? null };
+    if (String(before ?? '') !== String(after ?? ''))
+      changes[k] = { from: before ?? null, to: after ?? null };
   }
   if (Object.keys(changes).length) {
     await logEvent(s.orderId, 'bom.section.updated', actorId, { vendor: s.vendor, changes });
@@ -385,26 +508,98 @@ export async function confirmSection(sectionId: string, actorId: string) {
 /** Re-open a submitted section. Reason is required — this is a deliberate act. */
 export async function unlockSection(sectionId: string, reason: string, actorId: string) {
   const s = await loadSection(sectionId);
-  if (!reason.trim()) throw new ValidationError('Give a reason for unlocking this Bill of Materials');
+  if (!reason.trim())
+    throw new ValidationError('Give a reason for unlocking this Bill of Materials');
   if (s.status !== 'SUBMITTED') return s;
   const updated = await prisma.bomVendorSection.update({
     where: { id: sectionId },
     data: { status: 'DRAFT', unlockedAt: new Date(), unlockedById: actorId },
   });
-  await logEvent(s.orderId, 'bom.section.unlocked', actorId, { vendor: s.vendor, reason: reason.trim() });
+  await logEvent(s.orderId, 'bom.section.unlocked', actorId, {
+    vendor: s.vendor,
+    reason: reason.trim(),
+  });
   return updated;
 }
 
 /** Sections in the order the ids arrive. Drives both the screen and the exports. */
-export async function reorderSections(orderId: string, ids: string[], actorId: string): Promise<void> {
-  const mine = await prisma.bomVendorSection.findMany({ where: { orderId }, select: { id: true, vendor: true } });
+export async function reorderSections(
+  orderId: string,
+  ids: string[],
+  actorId: string,
+): Promise<void> {
+  const mine = await prisma.bomVendorSection.findMany({
+    where: { orderId },
+    select: { id: true, vendor: true },
+  });
   const known = new Set(mine.map((s) => s.id));
-  if (ids.some((id) => !known.has(id))) throw new ValidationError('That section is not on this order');
+  if (ids.some((id) => !known.has(id)))
+    throw new ValidationError('That section is not on this order');
   await prisma.$transaction(
-    ids.map((id, i) => prisma.bomVendorSection.update({ where: { id }, data: { sortOrder: (i + 1) * 10 } })),
+    ids.map((id, i) =>
+      prisma.bomVendorSection.update({ where: { id }, data: { sortOrder: (i + 1) * 10 } }),
+    ),
   );
   const nameById = new Map(mine.map((s) => [s.id, s.vendor]));
-  await logEvent(orderId, 'bom.sections.reordered', actorId, { order: ids.map((id) => nameById.get(id)) });
+  await logEvent(orderId, 'bom.sections.reordered', actorId, {
+    order: ids.map((id) => nameById.get(id)),
+  });
+}
+
+/**
+ * Pull the deal's freight and tax onto this order's sections.
+ *
+ * Each section takes the freight figure its vendor quotes from — the mats vendor
+ * the mats line, everyone else the structure line — and every section gets the one
+ * tax figure. Submitted sections are skipped: they are the sheet the vendor already
+ * holds. A figure typed by hand is only replaced when `overwrite` is set, so a
+ * negotiated number is not silently undone by a refresh.
+ */
+export async function pullDealFigures(
+  orderId: string,
+  opts: { overwrite?: boolean } = {},
+  actorId?: string,
+): Promise<{ figures: Awaited<ReturnType<typeof dealFigures>>; updated: number; skipped: number }> {
+  const figures = await dealFigures(orderId);
+  if (figures.error) return { figures, updated: 0, skipped: 0 };
+
+  const sections = await prisma.bomVendorSection.findMany({
+    where: { orderId },
+    select: { id: true, vendor: true, status: true, shipmentQuote: true, estimatedTax: true },
+  });
+  const mfrs = await prisma.manufacturer.findMany({
+    select: { name: true, bomFreightSource: true },
+  });
+  const sourceByVendor = new Map(mfrs.map((m) => [m.name.toLowerCase(), m.bomFreightSource]));
+
+  let updated = 0;
+  let skipped = 0;
+  for (const sec of sections) {
+    if (sec.status === 'SUBMITTED') {
+      skipped++;
+      continue;
+    }
+    const freight = freightFor(
+      figures,
+      sourceByVendor.get(sec.vendor.toLowerCase()) ?? 'STRUCTURE',
+    );
+    const data: Record<string, unknown> = {};
+    const blank = (v: string | null) => !v || !v.trim() || v.trim().toUpperCase() === 'TBD';
+    if (freight && (opts.overwrite || blank(sec.shipmentQuote))) data.shipmentQuote = freight;
+    if (figures.estimatedTax && (opts.overwrite || blank(sec.estimatedTax))) {
+      data.estimatedTax = figures.estimatedTax;
+    }
+    if (!Object.keys(data).length) {
+      skipped++;
+      continue;
+    }
+    await prisma.bomVendorSection.update({ where: { id: sec.id }, data });
+    updated++;
+    if (actorId) {
+      await logEvent(orderId, 'bom.deal.figures', actorId, { vendor: sec.vendor, ...data });
+    }
+  }
+  return { figures, updated, skipped };
 }
 
 // ---------------------------------------------------------------- questions
@@ -430,7 +625,11 @@ export async function addQuestion(sectionId: string, input: QuestionInput, actor
   const s = await loadSection(sectionId);
   assertEditable(s);
   if (!input.label.trim()) throw new ValidationError('A question needs a label');
-  const last = await prisma.bomVendorAnswer.findFirst({ where: { sectionId }, orderBy: { sortOrder: 'desc' }, select: { sortOrder: true } });
+  const last = await prisma.bomVendorAnswer.findFirst({
+    where: { sectionId },
+    orderBy: { sortOrder: 'desc' },
+    select: { sortOrder: true },
+  });
   const q = await prisma.bomVendorAnswer.create({
     data: {
       sectionId,
@@ -441,17 +640,30 @@ export async function addQuestion(sectionId: string, input: QuestionInput, actor
       sortOrder: (last?.sortOrder ?? 0) + 10,
     },
   });
-  await logEvent(s.orderId, 'bom.question.added', actorId, { vendor: s.vendor, label: q.label, type: q.type });
+  await logEvent(s.orderId, 'bom.question.added', actorId, {
+    vendor: s.vendor,
+    label: q.label,
+    type: q.type,
+  });
   return q;
 }
 
 /** Answer a question, or edit its wording/choices while the section is open. */
 export async function updateQuestion(
   questionId: string,
-  patch: { value?: string | null; label?: string; options?: string[]; required?: boolean; sortOrder?: number },
+  patch: {
+    value?: string | null;
+    label?: string;
+    options?: string[];
+    required?: boolean;
+    sortOrder?: number;
+  },
   actorId: string,
 ) {
-  const existing = await prisma.bomVendorAnswer.findUnique({ where: { id: questionId }, include: { section: true } });
+  const existing = await prisma.bomVendorAnswer.findUnique({
+    where: { id: questionId },
+    include: { section: true },
+  });
   if (!existing) throw new NotFoundError('Question not found');
   assertEditable(existing.section);
 
@@ -460,7 +672,8 @@ export async function updateQuestion(
     if (!patch.label.trim()) throw new ValidationError('A question needs a label');
     data.label = patch.label.trim();
   }
-  if (patch.options !== undefined) data.options = cleanOptions(existing.type, patch.options) as unknown as object;
+  if (patch.options !== undefined)
+    data.options = cleanOptions(existing.type, patch.options) as unknown as object;
   if (patch.required !== undefined) data.required = patch.required;
   if (patch.sortOrder !== undefined) data.sortOrder = patch.sortOrder;
   if (patch.value !== undefined) {
@@ -468,9 +681,13 @@ export async function updateQuestion(
     // A choice answer has to be one of the choices, or the export prints a value
     // the vendor's own form doesn't offer.
     if (v && CHOICE_TYPES.has(existing.type)) {
-      const allowed = new Set(Array.isArray(existing.options) ? (existing.options as unknown[]).map(String) : []);
+      const allowed = new Set(
+        Array.isArray(existing.options) ? (existing.options as unknown[]).map(String) : [],
+      );
       const picked = existing.type === 'MULTI_SELECT' ? (JSON.parse(v) as string[]) : [v];
-      for (const p of picked) if (!allowed.has(p)) throw new ValidationError(`“${p}” is not an option for “${existing.label}”`);
+      for (const p of picked)
+        if (!allowed.has(p))
+          throw new ValidationError(`“${p}” is not an option for “${existing.label}”`);
     }
     data.value = v;
   }
@@ -480,13 +697,18 @@ export async function updateQuestion(
   await logEvent(existing.section.orderId, 'bom.question.updated', actorId, {
     vendor: existing.section.vendor,
     label: q.label,
-    ...(patch.value !== undefined ? { answer: { from: existing.value ?? null, to: q.value ?? null } } : {}),
+    ...(patch.value !== undefined
+      ? { answer: { from: existing.value ?? null, to: q.value ?? null } }
+      : {}),
   });
   return q;
 }
 
 export async function deleteQuestion(questionId: string, actorId: string): Promise<void> {
-  const existing = await prisma.bomVendorAnswer.findUnique({ where: { id: questionId }, include: { section: true } });
+  const existing = await prisma.bomVendorAnswer.findUnique({
+    where: { id: questionId },
+    include: { section: true },
+  });
   if (!existing) throw new NotFoundError('Question not found');
   assertEditable(existing.section);
   await prisma.bomVendorAnswer.delete({ where: { id: questionId } });
@@ -515,11 +737,18 @@ export async function submissionBlockers(sectionId: string): Promise<string[]> {
     select: { sku: true, vendor: true, powderColorCode: true, powderColor: true },
   });
   const needs = new Set(
-    (await prisma.sku.findMany({ where: { requiresPowderColor: true }, select: { part: true } })).map((x) => x.part),
+    (
+      await prisma.sku.findMany({ where: { requiresPowderColor: true }, select: { part: true } })
+    ).map((x) => x.part),
   );
   for (const l of lines) {
     if (vendorOf(l.vendor) !== s.vendor) continue;
-    if (l.sku && needs.has(l.sku) && !(l.powderColorCode || '').trim() && !(l.powderColor || '').trim()) {
+    if (
+      l.sku &&
+      needs.has(l.sku) &&
+      !(l.powderColorCode || '').trim() &&
+      !(l.powderColor || '').trim()
+    ) {
       out.push(`${l.sku} needs a powder colour`);
     }
   }

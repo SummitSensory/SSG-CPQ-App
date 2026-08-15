@@ -77,6 +77,8 @@ export interface BomModel {
   /** Products in product-tree order, then a Hardware block. */
   groups: Array<{ title: string; rows: string[][] }>;
   totals: string[];
+  /** What the sheet adds up to: items, freight, tax, grand total. */
+  summary: Array<{ label: string; value: string; strong?: boolean }>;
   notes: string;
   footer: string;
   doc: BomDocument;
@@ -206,6 +208,29 @@ async function buildModel(
     money(t.extendedCostMinor),
   ];
 
+  // The money block. Freight and tax are quoted on the deal and typed as text, so
+  // each prints as it reads; the grand total appears only when both are numbers,
+  // because a total that quietly omits an unquoted freight is worse than none.
+  const f = doc.financials;
+  const summary: Array<{ label: string; value: string; strong?: boolean }> = [
+    { label: 'Item cost total', value: money(f.itemCostMinor) },
+    {
+      label: 'Estimated shipment total',
+      value: f.shipmentMinor == null ? f.shipmentQuote || 'TBD' : money(f.shipmentMinor),
+    },
+  ];
+  if (f.estimatedTax) {
+    summary.push({
+      label: 'Estimated tax',
+      value: f.estimatedTaxMinor == null ? f.estimatedTax : money(f.estimatedTaxMinor),
+    });
+  }
+  summary.push({
+    label: 'Bill of Materials grand total',
+    value: f.grandTotalMinor == null ? 'Pending freight' : money(f.grandTotalMinor),
+    strong: true,
+  });
+
   return {
     title: 'Bill of Materials',
     subtitle: `${doc.order.number} · accepted proposal v${doc.order.acceptedVersion}`,
@@ -253,6 +278,7 @@ async function buildModel(
     columns,
     groups,
     totals,
+    summary,
     // Line notes move here from their own column. Prefixed with the part number so a
     // note is still attached to something once it is out of the table.
     notes: [
@@ -367,6 +393,10 @@ export async function renderBomHtml(
     </tbody>
   </table>
 
+  <table style="margin-top:12px;margin-left:auto;border-collapse:collapse;font-size:8.5pt;">
+    ${m.summary.map((r) => `<tr><td style="padding:4px 14px 4px 0;color:#5c6157;${r.strong ? 'font-weight:700;color:#20241f;border-top:1px solid #cfd2c9;' : ''}">${esc(r.label)}</td><td style="padding:4px 0;text-align:right;font-weight:${r.strong ? '700' : '600'};${r.strong ? 'border-top:1px solid #cfd2c9;' : ''}">${esc(r.value)}</td></tr>`).join('')}
+  </table>
+
   ${m.notes ? `<div style="margin-top:14px;padding:10px 12px;background:#fbfbf9;border:1px solid #e7e8e3;font-size:9pt;line-height:1.5;"><b style="font-size:8pt;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Notes</b><br>${esc(m.notes).replace(/\n/g, '<br>')}</div>` : ''}
 
   <div style="margin-top:18px;font-size:8pt;color:#8a8f85;">${esc(m.footer)}</div>
@@ -432,6 +462,11 @@ export async function renderBomXml(
     g.rows.forEach((r) => body.push(row(r.map((v) => cell(v)))));
   });
   body.push(row(m.totals.map((v) => cell(v, 'b'))));
+  // The money block, under the table.
+  body.push(row([]));
+  for (const line of m.summary) {
+    body.push(row([cell(line.label, line.strong ? 'b' : undefined), cell(line.value, 'b')]));
+  }
 
   if (m.notes) {
     body.push(blank);

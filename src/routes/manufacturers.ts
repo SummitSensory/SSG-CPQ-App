@@ -61,6 +61,11 @@ const MfrInput = z.object({
   bomEmailSubject: str(300),
   bomEmailBody: z.string().max(8000).nullish(),
   bomEmailFormat: z.enum(['EXCEL', 'PDF', 'BOTH']).optional(),
+  /**
+   * Which freight figure on the deal this vendor's shipment is quoted from. The
+   * mats ship on their own line; everything else rides the structure figure.
+   */
+  bomFreightSource: z.enum(['STRUCTURE', 'MATS', 'NONE']).optional(),
   // ---- Request for Freight ----
   // Only flagged vendors are offered as RFQ recipients on a proposal, and the
   // freight desk is kept apart from the purchasing contact the BOM goes to.
