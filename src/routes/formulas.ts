@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
-import { ValidationError } from '../lib/errors.js';
+import { ForbiddenError, ValidationError } from '../lib/errors.js';
 import { recordAudit } from '../lib/audit.js';
 import {
   DEFAULT_HARDWARE_RULES,
@@ -21,12 +21,26 @@ import {
 } from '../proposals/frameRules.js';
 import {
   FORMULA_SETTINGS,
-  GUARDED_SETTING_KEYS,
   mergeSettings,
   defaultSettings,
   type FormulaSettings,
 } from '../proposals/formulaSettings.js';
 import { computeAdventureBOM, type AdvAnswers } from '../proposals/adventureSeries.js';
+import {
+  CONFIRM_WORD,
+  assertConfirmed,
+  impactedOrders,
+  impactSentence,
+  writeRevisions,
+  listRevisions,
+  revisionDetail,
+  undoRevision,
+  describeRuleChange,
+  describeSettingChange,
+  type RevisionInput,
+  type RevisionKind,
+  type RuleSnapshot,
+} from '../proposals/formulaRevisions.js';
 
 /**
  * Every formula in the pricing engine, in one place.
@@ -36,6 +50,23 @@ import { computeAdventureBOM, type AdvAnswers } from '../proposals/adventureSeri
  * validity, leg spans). The handful of genuinely structural calculations are
  * reported as read-only entries so the page is a complete inventory rather than a
  * partial one.
+ *
+ * ---------------------------------------------------------------------------
+ * Confirmation gate
+ *
+ * Every write in this file now demands the word CONFIRMED. That covers editing a
+ * rule, adding one, resetting one, restoring the workbook defaults, and changing a
+ * business number — the five surfaces that can move a price or a quantity.
+ *
+ * This REPLACES the narrower gate that previously applied only to the mat-pricing
+ * business numbers and accepted the word CONFIRM. One word across the whole page
+ * is easier to trust than two words with a rule about which applies where; the
+ * check is case-insensitive and trimmed, because the gate exists to force a pause,
+ * not to catch typists out.
+ *
+ * The gate is enforced HERE, not only in the browser, so a direct API call is held
+ * to the same standard.
+ * ---------------------------------------------------------------------------
  */
 
 const KINDS = ['FRAME', 'HARDWARE'] as const;
@@ -64,6 +95,8 @@ const RuleSchema = z.object({
   when: ConditionSchema.nullable().optional(),
   group: z.string().max(120).nullable().optional(),
   note: z.string().max(500).nullable().optional(),
+  /** The typed confirmation. Checked by assertConfirmed, not by zod. */
+  confirm: z.string().optional(),
 });
 
 const defaultsFor = (kind: Kind): FormulaRule[] =>
@@ -134,6 +167,33 @@ export async function loadFormulaSettings(): Promise<FormulaSettings> {
   return mergeSettings(rows.map((r) => ({ key: r.key, value: Number(r.value) })));
 }
 
+/**
+ * Reduce a stored rule (or a workbook default) to the fields that define it.
+ *
+ * Only these fields go into a revision snapshot. Ids, timestamps and updatedById
+ * are deliberately left out: a snapshot is the RULE, and including bookkeeping
+ * columns would make every save look like a change to the diff that composes the
+ * log summary.
+ */
+function snapshot(r: Record<string, unknown> | null | undefined): RuleSnapshot | null {
+  if (!r) return null;
+  return {
+    part: String(r.part ?? ''),
+    name: (r.name ?? null) as string | null,
+    terms: r.terms ?? [],
+    constant: Number(r.constant ?? 0),
+    factor: Number(r.factor ?? 1),
+    roundMode: String(r.roundMode ?? 'NONE'),
+    roundStep: Number(r.roundStep ?? 1),
+    mode: String(r.mode ?? 'SUM'),
+    minZero: r.minZero !== false,
+    active: r.active !== false,
+    when: r.when ?? null,
+    group: (r.group ?? null) as string | null,
+    note: (r.note ?? null) as string | null,
+  };
+}
+
 export function registerFormulaRoutes(app: FastifyInstance): void {
   const read = { preHandler: requirePermission(Permission.PROPOSAL_READ) };
   const manage = { preHandler: requirePermission(Permission.PRODUCTS_ADMIN) };
@@ -177,7 +237,22 @@ export function registerFormulaRoutes(app: FastifyInstance): void {
         skuParts: skus.map((s) => s.part),
       },
       inCode: IN_CODE,
+      /** So the editor asks for the same word the server enforces. */
+      confirmWord: CONFIRM_WORD,
     };
+  });
+
+  /**
+   * Which open orders were built on the current figures — read BEFORE confirming,
+   * so the warning in the editor is the same list that will be recorded and
+   * emailed. `part` may be repeated; omit it entirely for a business number, whose
+   * reach is every open order.
+   */
+  app.get('/formulas/impact', read, async (req) => {
+    const q = req.query as { part?: string | string[] };
+    const parts = q.part == null ? [] : Array.isArray(q.part) ? q.part : [q.part];
+    const orders = await impactedOrders(parts);
+    return { orders, count: orders.length, sentence: impactSentence(orders.length) };
   });
 
   app.patch('/formulas/:kind/:part', manage, async (req) => {
@@ -185,10 +260,18 @@ export function registerFormulaRoutes(app: FastifyInstance): void {
     const kind = parseKind(kindRaw);
     const parsed = RuleSchema.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(parsed.error.message);
+    const { confirm, ...patch } = parsed.data;
+
     const base = defaultsFor(kind).find((r) => r.part === part);
     const existing = await prisma.hardwareRule.findFirst({ where: { part, kind } });
-    if (!base && !existing && !parsed.data.terms)
+    if (!base && !existing && !patch.terms)
       throw new ValidationError('Unknown part — send terms to define a new rule.');
+
+    const confirmedWord = assertConfirmed(
+      confirm,
+      `change ${part}${base?.name ? ` (${base.name})` : ''}`,
+    );
+
     const start =
       (existing as unknown as FormulaRule) ??
       base ??
@@ -205,7 +288,7 @@ export function registerFormulaRoutes(app: FastifyInstance): void {
         sortOrder: 999,
         active: true,
       } as FormulaRule);
-    const next = { ...start, ...parsed.data };
+    const next = { ...start, ...patch };
     const data = {
       kind,
       name: next.name,
@@ -218,59 +301,201 @@ export function registerFormulaRoutes(app: FastifyInstance): void {
       minZero: next.minZero,
       sortOrder: base?.sortOrder ?? next.sortOrder ?? 999,
       active: next.active,
-      group: base?.group ?? parsed.data.group ?? next.group ?? null,
+      group: base?.group ?? patch.group ?? next.group ?? null,
       // Prisma rejects a bare `null` on a nullable Json column — it wants the field
       // omitted (leave as-is) or Prisma.DbNull (clear it). RuleCondition is a plain
       // interface with no index signature, so it needs the double cast.
       when:
-        parsed.data.when === null
+        patch.when === null
           ? Prisma.DbNull
           : ((next.when ?? Prisma.DbNull) as unknown as Prisma.InputJsonValue),
       note: next.note ?? null,
       updatedById: req.user!.sub,
     };
+
+    // Captured before the write. `before` is null when no override existed, which
+    // is what makes an undo of a first-time edit a reset rather than a restore.
+    const beforeSnap = snapshot(existing as unknown as Record<string, unknown>);
+
     const saved = existing
       ? await prisma.hardwareRule.update({ where: { id: existing.id }, data })
       : await prisma.hardwareRule.create({ data: { part, ...data } });
+
+    const afterSnap = snapshot(saved as unknown as Record<string, unknown>);
+    const displayName = String(next.name ?? base?.name ?? part);
+
+    const revision = await writeRevisions({
+      actorId: req.user!.sub,
+      confirmedWord,
+      parts: [part],
+      entries: [
+        {
+          kind: kind as RevisionKind,
+          action: existing ? 'UPDATE' : 'CREATE',
+          target: part,
+          targetName: displayName,
+          before: beforeSnap,
+          after: afterSnap,
+          summary: describeRuleChange(part, displayName, beforeSnap, afterSnap),
+        },
+      ],
+    });
+
     await recordAudit({
       actorId: req.user!.sub,
       action: 'formula.rule.update',
       entity: 'HardwareRule',
       entityId: saved.id,
-      details: { kind, part, ...parsed.data } as Record<string, unknown>,
+      details: { kind, part, ...patch, revisionBatchId: revision.batchId } as Record<
+        string,
+        unknown
+      >,
     });
-    return saved;
+
+    return {
+      ...saved,
+      revision: {
+        batchId: revision.batchId,
+        impactedCount: revision.impacted.length,
+        impactedOrders: revision.impacted,
+        notifyError: revision.notifyError,
+      },
+    };
   });
 
   /** Revert one rule to its workbook default. */
-  app.delete('/formulas/:kind/:part', manage, async (req, reply) => {
+  app.delete('/formulas/:kind/:part', manage, async (req) => {
     const { kind: kindRaw, part } = req.params as { kind: string; part: string };
     const kind = parseKind(kindRaw);
+    // DELETE carries no body in most clients, so the confirmation rides on the
+    // query string. Same word, same check.
+    const q = req.query as { confirm?: string };
+    const base = defaultsFor(kind).find((r) => r.part === part);
+    const confirmedWord = assertConfirmed(q.confirm, `reset ${part} to its workbook default`);
+
+    const existing = await prisma.hardwareRule.findFirst({ where: { part, kind } });
+    if (!existing)
+      throw new ValidationError(`${part} has no override — it is already on the workbook default.`);
+
+    const beforeSnap = snapshot(existing as unknown as Record<string, unknown>);
     await prisma.hardwareRule.deleteMany({ where: { part, kind } });
+
+    const displayName = String(existing.name ?? base?.name ?? part);
+    const revision = await writeRevisions({
+      actorId: req.user!.sub,
+      confirmedWord,
+      parts: [part],
+      entries: [
+        {
+          kind: kind as RevisionKind,
+          action: 'RESET',
+          target: part,
+          targetName: displayName,
+          before: beforeSnap,
+          after: null,
+          summary: describeRuleChange(part, displayName, beforeSnap, null),
+        },
+      ],
+    });
+
     await recordAudit({
       actorId: req.user!.sub,
       action: 'formula.rule.reset',
       entity: 'HardwareRule',
       entityId: `${kind}:${part}`,
+      details: { revisionBatchId: revision.batchId },
     });
-    reply.code(204);
-    return null;
+
+    return {
+      reset: part,
+      revision: {
+        batchId: revision.batchId,
+        impactedCount: revision.impacted.length,
+        impactedOrders: revision.impacted,
+        notifyError: revision.notifyError,
+      },
+    };
   });
 
   /** Clear every override in one set (or all sets when no kind is given). */
   app.post('/formulas/reset', manage, async (req) => {
-    const body = (req.body || {}) as { kind?: string; settings?: boolean };
-    const where = body.kind ? { kind: parseKind(body.kind) } : {};
+    const body = (req.body || {}) as { kind?: string; settings?: boolean; confirm?: string };
+    const kind = body.kind ? parseKind(body.kind) : null;
+    const confirmedWord = assertConfirmed(
+      body.confirm,
+      kind
+        ? `restore the workbook defaults for ${kind === 'FRAME' ? 'Frame & components' : 'Hardware fasteners'}`
+        : 'restore every workbook default',
+    );
+
+    const where = kind ? { kind } : {};
+    // Read the rows before deleting them: one revision per cleared override is
+    // what makes each of them individually undoable afterwards.
+    const doomed = await prisma.hardwareRule.findMany({ where });
+    const clearSettings = body.settings !== false && !kind;
+    const settingRows = clearSettings ? await prisma.formulaSetting.findMany() : [];
+
     const { count } = await prisma.hardwareRule.deleteMany({ where });
     let settingsCleared = 0;
-    if (body.settings !== false && !body.kind)
-      settingsCleared = (await prisma.formulaSetting.deleteMany({})).count;
+    if (clearSettings) settingsCleared = (await prisma.formulaSetting.deleteMany({})).count;
+
+    const entries: RevisionInput[] = doomed.map((r) => {
+      const snap = snapshot(r as unknown as Record<string, unknown>);
+      const nm = String(r.name ?? r.part);
+      return {
+        kind: ((r as unknown as { kind?: string }).kind ?? 'HARDWARE') as RevisionKind,
+        action: 'RESET_ALL',
+        target: r.part,
+        targetName: nm,
+        before: snap,
+        after: null,
+        summary: describeRuleChange(r.part, nm, snap, null),
+      };
+    });
+    for (const s of settingRows) {
+      entries.push({
+        kind: 'SETTING',
+        action: 'RESET_ALL',
+        target: s.key,
+        targetName: FORMULA_SETTINGS.find((d) => d.key === s.key)?.label ?? s.key,
+        before: { key: s.key, value: Number(s.value) },
+        after: null,
+        summary: describeSettingChange(s.key, Number(s.value), null),
+      });
+    }
+
+    const revision = entries.length
+      ? await writeRevisions({
+          actorId: req.user!.sub,
+          confirmedWord,
+          // A blanket restore reaches everything, so the impact list is every open
+          // order rather than the union of the parts cleared.
+          parts: [],
+          entries,
+        })
+      : { batchId: '', impacted: [], notifyError: null, ids: [] };
+
     await recordAudit({
       actorId: req.user!.sub,
       action: 'formula.reset',
-      details: { kind: body.kind ?? 'ALL', cleared: count, settingsCleared },
+      details: {
+        kind: body.kind ?? 'ALL',
+        cleared: count,
+        settingsCleared,
+        revisionBatchId: revision.batchId,
+      },
     });
-    return { cleared: count, settingsCleared };
+
+    return {
+      cleared: count,
+      settingsCleared,
+      revision: {
+        batchId: revision.batchId,
+        impactedCount: revision.impacted.length,
+        impactedOrders: revision.impacted,
+        notifyError: revision.notifyError,
+      },
+    };
   });
 
   /** Just the business numbers — read by the browser at sign-in. */
@@ -293,54 +518,124 @@ export function registerFormulaRoutes(app: FastifyInstance): void {
     if (!updates.length) throw new ValidationError('Nothing to update');
 
     /**
-     * Guarded numbers (mat pricing) re-price every future quote, so they need a
-     * typed confirmation. The editor collects it in a second window and sends
-     * `confirm: "CONFIRM"`; anything else is refused here, so the guard holds for a
-     * direct API call too. Only keys whose value actually MOVES are guarded — saving
-     * the panel with the mat rates untouched does not demand a confirmation.
+     * Only keys whose value actually MOVES count as a change: saving the panel
+     * untouched is not an edit, demands no confirmation, and writes no revision.
+     * Previously this test guarded the mat-pricing keys alone; it now governs every
+     * business number, which is why the word is CONFIRMED rather than CONFIRM.
      */
+    const existingRows = await prisma.formulaSetting.findMany();
+    const hadRow = new Map(existingRows.map((r) => [r.key, Number(r.value)]));
     const current = await loadFormulaSettings();
-    const guarded = updates.filter(
-      (u) => GUARDED_SETTING_KEYS.has(u.key) && Number(current[u.key]) !== u.value,
-    );
-    if (guarded.length) {
-      const word = String((body as { confirm?: unknown }).confirm ?? '')
-        .trim()
-        .toUpperCase();
-      if (word !== 'CONFIRM') {
-        const names = guarded
-          .map((g) => FORMULA_SETTINGS.find((d) => d.key === g.key)?.label ?? g.key)
-          .join(', ');
-        throw new ValidationError(`Type CONFIRM to change ${names}.`);
-      }
-    }
+    const moved = updates.filter((u) => Number(current[u.key]) !== u.value);
 
-    for (const u of updates) {
+    if (!moved.length) return loadFormulaSettings();
+
+    const names = moved
+      .map((g) => FORMULA_SETTINGS.find((d) => d.key === g.key)?.label ?? g.key)
+      .join(', ');
+    const confirmedWord = assertConfirmed(body.confirm, `change ${names}`);
+
+    for (const u of moved) {
       await prisma.formulaSetting.upsert({
         where: { key: u.key },
         create: { key: u.key, value: u.value, updatedById: req.user!.sub },
         update: { value: u.value, updatedById: req.user!.sub },
       });
     }
+
+    const revision = await writeRevisions({
+      actorId: req.user!.sub,
+      confirmedWord,
+      // A business number is not part-specific, so every open order is in scope.
+      parts: [],
+      entries: moved.map((u) => {
+        // `before` is null only when no override row existed, so an undo of a
+        // first-time change removes the row rather than writing the default back
+        // into it — the two are different states.
+        const prior = hadRow.has(u.key) ? hadRow.get(u.key)! : null;
+        return {
+          kind: 'SETTING' as RevisionKind,
+          action: prior == null ? 'CREATE' : 'UPDATE',
+          target: u.key,
+          targetName: FORMULA_SETTINGS.find((d) => d.key === u.key)?.label ?? u.key,
+          before: prior == null ? null : { key: u.key, value: prior },
+          after: { key: u.key, value: u.value },
+          summary: describeSettingChange(u.key, prior ?? Number(current[u.key]), u.value),
+        };
+      }),
+    });
+
     await recordAudit({
       actorId: req.user!.sub,
       action: 'formula.settings.update',
       details: {
-        ...Object.fromEntries(updates.map((u) => [u.key, u.value])),
-        // Recorded so a mat re-price is answerable later: who typed CONFIRM, when,
-        // and what the number was before they did.
-        ...(guarded.length
-          ? {
-              confirmed: guarded.map((g) => ({
-                key: g.key,
-                from: Number(current[g.key]),
-                to: g.value,
-              })),
-            }
-          : {}),
+        ...Object.fromEntries(moved.map((u) => [u.key, u.value])),
+        confirmed: moved.map((g) => ({
+          key: g.key,
+          from: Number(current[g.key]),
+          to: g.value,
+        })),
+        revisionBatchId: revision.batchId,
       } as Record<string, unknown>,
     });
-    return loadFormulaSettings();
+
+    const values = await loadFormulaSettings();
+    return {
+      ...values,
+      revision: {
+        batchId: revision.batchId,
+        impactedCount: revision.impacted.length,
+        impactedOrders: revision.impacted,
+        notifyError: revision.notifyError,
+      },
+    };
+  });
+
+  // ---------------- Revision log ----------------
+
+  /**
+   * The log. `kind` scopes it to one tab's panel; omit it for the combined log.
+   * Readable by anyone who can read proposals — knowing a coefficient moved is not
+   * privileged, and the people who need it most are the ones chasing a wrong BOM.
+   */
+  app.get('/formulas/revisions', read, async (req) => {
+    const q = req.query as { kind?: string; limit?: string };
+    const kind = q.kind ? (q.kind.toUpperCase() as RevisionKind) : undefined;
+    if (kind && !['FRAME', 'HARDWARE', 'SETTING'].includes(kind))
+      throw new ValidationError('Unknown formula set');
+    return listRevisions({ kind, limit: q.limit ? Number(q.limit) : undefined });
+  });
+
+  app.get('/formulas/revisions/:id', read, async (req) =>
+    revisionDetail((req.params as { id: string }).id),
+  );
+
+  /**
+   * Undo one revision. System administrators only — this is the one action that
+   * changes a formula without going through the editor, so it is held tighter than
+   * the edit it reverses.
+   */
+  app.post('/formulas/revisions/:id/undo', manage, async (req) => {
+    if (req.user!.role !== 'SYSTEM_ADMIN')
+      throw new ForbiddenError('Only a system administrator can undo a formula change');
+    const { id } = req.params as { id: string };
+    const result = await undoRevision(id, req.user!.sub);
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'formula.revision.undo',
+      entity: 'FormulaRevision',
+      entityId: id,
+      details: { revisionBatchId: result.batchId },
+    });
+    return {
+      undone: id,
+      revision: {
+        batchId: result.batchId,
+        impactedCount: result.impacted.length,
+        impactedOrders: result.impacted,
+        notifyError: result.notifyError,
+      },
+    };
   });
 
   /**
