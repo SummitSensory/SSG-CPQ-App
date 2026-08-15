@@ -137,19 +137,20 @@ export function parseVendorPartPaste(text: string): {
       const cells = line
         .split(/\t|,|\s{2,}/)
         .map((c) => c.trim())
-        .filter((c, idx, all) => !(c === '' && idx === all.length - 1));
-      if (cells.length < 2 || !cells[0] || !cells[1]) {
+        .filter(Boolean);
+      const [rawOurs, rawTheirs] = cells;
+      if (!rawOurs || !rawTheirs) {
         errors.push(
           `Line ${i + 1}: needs our part number and the vendor's, separated by a tab or comma.`,
         );
         return;
       }
-      const ourPart = cells[0].toUpperCase();
+      const ourPart = rawOurs.toUpperCase();
       // A pasted header ("Our part", "SKU", "Part #") is not a mapping.
       if (
         i === 0 &&
-        /^(our )?(part|sku|item)/i.test(cells[0]) &&
-        /vendor|their|supplier/i.test(cells[1])
+        /^(our )?(part|sku|item)/i.test(rawOurs) &&
+        /vendor|their|supplier/i.test(rawTheirs)
       )
         return;
       if (seen.has(ourPart)) {
@@ -159,8 +160,8 @@ export function parseVendorPartPaste(text: string): {
       seen.add(ourPart);
       rows.push({
         ourPart,
-        vendorPart: cells[1],
-        description: cells[2] ? cells.slice(2).join(' ').trim() : null,
+        vendorPart: rawTheirs,
+        description: cells.length > 2 ? cells.slice(2).join(' ').trim() || null : null,
       });
     });
 

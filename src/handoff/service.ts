@@ -565,6 +565,15 @@ export async function getOrder(id: string) {
       })
     : [];
   const urlByPart = new Map(skus.map((s) => [s.part, s.productUrl]));
+  // Which paint colour group each part belongs to. The BOM asks for a brand and a
+  // code per group, so the screen has to know which lines fall in which.
+  const paintRows = parts.length
+    ? await prisma.paintColorGroupSku.findMany({
+        where: { sku: { in: parts, mode: 'insensitive' } },
+        include: { group: { select: { name: true, label: true, sortOrder: true } } },
+      })
+    : [];
+  const paintBySku = new Map(paintRows.map((r) => [r.sku.toUpperCase(), r.group]));
   // What each vendor calls the part, where they number it differently to us. The
   // Bill of Materials screen shows it beside our number; nothing else reads it.
   const vendorParts = await vendorPartLookup(
@@ -600,6 +609,8 @@ export async function getOrder(id: string) {
       productUrl: (p.sku && urlByPart.get(p.sku)) || null,
       packagingBag: (p.sku && bagByPart.get(p.sku)) || null,
       vendorPart: vendorParts.get((p.vendor && p.vendor.trim()) || 'Unassigned vendor', p.sku),
+      paintGroup: (p.sku && paintBySku.get(p.sku.toUpperCase())?.name) || null,
+      paintGroupLabel: (p.sku && paintBySku.get(p.sku.toUpperCase())?.label) || null,
       quantityEditedBy: p.quantityEditedById ? (nameById.get(p.quantityEditedById) ?? null) : null,
     })),
     requirements: order.requirements.map((r) => ({

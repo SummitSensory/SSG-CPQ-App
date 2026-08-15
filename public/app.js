@@ -8532,7 +8532,7 @@
           : '<span class="muted">—</span>') : '') +
         td(qtyCell(p, edit)) +
         (showBag ? td(esc(p.packagingBag || '—')) : '') +
-        (showColor ? td(edit ? colorCell(p) : esc(p.powderColor || '—')) : '') +
+        (showColor ? td((p.paintGroup ? '<span class="chip" style="font-size:10.5px;margin-bottom:4px;display:inline-block;" title="Paint colour group">' + esc(p.paintGroup) + '</span> ' : '') + (edit ? colorCell(p) : esc(p.powderColor || '—'))) : '') +
         td(((Number(p.unitWeightLbs) || 0) * (Number(p.quantity) || 0)).toFixed(2)) +
         td(money2(p.unitCostMinor)) +
         td(money2(ext)) +
@@ -8615,7 +8615,7 @@
               'Show the packaging bag column on this vendor’s sheet</label>'
           : '') +
         questionBlock(s, edit) +
-        (edit && s.showPowderColor ? colorApplyRow(s) : '') +
+        (edit && s.showPowderColor ? colorApplyRow(s, lines) : '') +
         '<div style="margin-top:14px;overflow:auto;">' +
           tableShell(
             ['Item', 'Part #'].concat(showVendorPart ? ['Vendor part #'] : [], ['Qty'], showBag ? ['Bag #'] : [], showColor ? ['Powder color'] : [], ['Weight (lb)', 'Cost each', 'Total cost', 'Notes', 'Status'], edit ? [''] : []),
@@ -8664,20 +8664,65 @@
     '</div>';
   }
 
-  /** Paint one brand + code across the parts of this section. */
-  function colorApplyRow(s) {
+  /**
+   * A brand and a code per paint colour group.
+   *
+   * The customer does not pick one colour for the whole structure — they pick one
+   * per group of parts, and which group a part is in is set once under
+   * Administration → Formulas → Paint colour. One row per group present on this
+   * section, so the person filling it in sees exactly the choices the customer was
+   * given. Parts the chart has nothing to say about get a row of their own rather
+   * than silently losing the ability to be coloured.
+   */
+  function colorApplyRow(s, lines) {
     var codes = [];
     bomBrands.forEach(function (b) { (b.recentCodes || []).forEach(function (c) { codes.push(c); }); });
-    return '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px;padding:11px 13px;background:#fbfbf9;border:1px solid #eceee8;border-radius:9px;">' +
-      '<span style="font-size:12.5px;color:#5c6157;">Set a colour across this section:</span>' +
-      '<select class="secColorBrand" data-id="' + s.id + '" style="' + bomFieldStyle('130px') + '">' +
+
+    // Groups in the order the chart lists them, counting only what is on this sheet.
+    var seen = [], counts = {}, labels = {}, ungrouped = 0;
+    (lines || []).forEach(function (p) {
+      var g = p.paintGroup || '';
+      if (!g) { ungrouped++; return; }
+      if (seen.indexOf(g) === -1) { seen.push(g); labels[g] = p.paintGroupLabel || ''; }
+      counts[g] = (counts[g] || 0) + 1;
+    });
+    seen.sort();
+
+    var brandSelect = function (key) {
+      return '<select class="secColorBrand" data-key="' + key + '" style="' + bomFieldStyle('130px') + '">' +
         '<option value="">Brand…</option>' +
         bomBrands.map(function (b) { return '<option value="' + b.id + '">' + esc(b.name) + '</option>'; }).join('') +
-      '</select>' +
-      '<input class="secColorCode" data-id="' + s.id + '" list="bomCodeList" placeholder="Colour code" style="' + bomFieldStyle('140px') + '">' +
+      '</select>';
+    };
+    var codeInput = function (key) {
+      return '<input class="secColorCode" data-key="' + key + '" list="bomCodeList" placeholder="Colour code" style="' + bomFieldStyle('140px') + '">';
+    };
+    var line = function (key, title, note, group) {
+      return '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:6px 0;">' +
+        '<span style="font-size:12.5px;color:#3d4a55;font-weight:600;min-width:150px;">' + title + '</span>' +
+        brandSelect(key) + codeInput(key) +
+        '<button class="link-btn" data-sec-color="' + s.id + '" data-group="' + esc(group || '') + '" style="width:auto;padding:7px 13px;">Apply</button>' +
+        '<span class="muted" style="font-size:11.5px;">' + note + '</span>' +
+      '</div>';
+    };
+
+    var rows = seen.map(function (g) {
+      return line(s.id + '|' + g,
+        'Group ' + esc(g) + (labels[g] ? ' — ' + esc(labels[g]) : ''),
+        counts[g] + ' part' + (counts[g] === 1 ? '' : 's') + ' on this sheet',
+        g);
+    }).join('');
+
+    if (ungrouped) {
+      rows += line(s.id + '|', 'Not in a group',
+        ungrouped + ' part' + (ungrouped === 1 ? '' : 's') + ' the chart does not cover', '');
+    }
+
+    return '<div style="margin-top:12px;padding:11px 13px;background:#fbfbf9;border:1px solid #eceee8;border-radius:9px;">' +
+      '<div style="font-size:12.5px;color:#5c6157;margin-bottom:2px;">Colour by group. Parts that already have a colour are left alone.</div>' +
+      rows +
       (codes.length ? '<datalist id="bomCodeList">' + codes.map(function (c) { return '<option value="' + esc(c) + '">'; }).join('') + '</datalist>' : '') +
-      '<button class="link-btn" data-sec-color="' + s.id + '" style="width:auto;padding:7px 13px;">Apply</button>' +
-      '<span class="muted" style="font-size:11.5px;">Skips parts that already have a colour.</span>' +
+      (seen.length ? '' : '<div class="muted" style="font-size:11.5px;margin-top:4px;">No part on this sheet is in the paint colour chart yet — build it under Administration → Formulas → Paint colour.</div>') +
     '</div>';
   }
 
@@ -8905,17 +8950,30 @@
     document.querySelectorAll('[data-sec-color]').forEach(function (bt) {
       bt.addEventListener('click', async function () {
         var id = bt.getAttribute('data-sec-color');
-        var brand = document.querySelector('.secColorBrand[data-id="' + id + '"]').value;
-        var code = document.querySelector('.secColorCode[data-id="' + id + '"]').value.trim();
+        var group = bt.getAttribute('data-group') || '';
+        var key = id + '|' + group;
+        var brand = document.querySelector('.secColorBrand[data-key="' + key + '"]').value;
+        var code = document.querySelector('.secColorCode[data-key="' + key + '"]').value.trim();
         if (!brand || !code) { alert('Pick a brand and type the colour code.'); return; }
         var sec = bomSectionData.filter(function (x) { return x.id === id; })[0];
-        var r = await authed('/orders/' + order.id + '/bom/apply-color', {
-          method: 'POST', body: { brandId: brand, code: code, vendor: sec.vendor, overwrite: false },
-        });
+        var body = { brandId: brand, code: code, vendor: sec.vendor, overwrite: false };
+        if (group) {
+          // The group names the parts; the server resolves them from the chart, so a
+          // screen left open while the chart changed cannot paint the wrong ones.
+          body.group = group;
+        } else {
+          // Ungrouped parts have no name to send, so the part numbers go instead.
+          body.skus = (procData || []).filter(function (p) {
+            return !p.paintGroup && ((p.vendor && String(p.vendor).trim()) || 'Unassigned vendor') === sec.vendor;
+          }).map(function (p) { return p.sku; }).filter(Boolean);
+          if (!body.skus.length) { alert('Nothing to paint here.'); return; }
+        }
+        var r = await authed('/orders/' + order.id + '/bom/apply-color', { method: 'POST', body: body });
         if (!r.ok) return fail(r, 'Could not apply the colour');
         var d = await r.json();
-        alert(d.applied + ' part' + (d.applied === 1 ? '' : 's') + ' set to ' + d.color +
-          (d.skipped ? '. ' + d.skipped + ' skipped — already coloured, or in another section.' : '.'));
+        alert(d.applied + ' part' + (d.applied === 1 ? '' : 's') +
+          (group ? ' in group ' + group : '') + ' set to ' + d.color +
+          (d.skipped ? '. ' + d.skipped + ' skipped — already coloured, in another group, or in another section.' : '.'));
         var o = await (await authed('/orders/' + order.id)).json();
         order.procurement = o.procurement; reload();
       });
@@ -10196,8 +10254,12 @@
     { id: 'frame', label: 'Frame & components' },
     { id: 'hardware', label: 'Hardware fasteners' },
     { id: 'settings', label: 'Business numbers' },
+    { id: 'paint', label: 'Paint colour' },
+    { id: 'vendorparts', label: 'Vendor part numbers' },
     { id: 'code', label: 'Fixed in code' },
   ];
+  /** The chart, loaded on demand — only the Paint colour tab reads it. */
+  var fxPaint = { data: null, loading: false };
   function fxSet(kind) { return fx.data ? fx.data[kind] : null; }
   function fxInputs(kind) { var set = fxSet(kind); return (set && set.inputs) || []; }
   function fxSourceLabel(kind, src) {
@@ -10464,6 +10526,14 @@
         }).join('');
       return;
     }
+    if (fx.tab === 'paint') {
+      drawPaintColors();
+      return;
+    }
+    if (fx.tab === 'vendorparts') {
+      drawVendorPartsTab();
+      return;
+    }
     if (fx.tab === 'settings') {
       var st = fx.data.settings || { values: {}, defs: [], defaults: {} };
       var groups = [];
@@ -10591,6 +10661,236 @@
       });
     });
   }
+  /**
+   * Every vendor's part-number mapping, in one place.
+   *
+   * The same data as Catalog → Manufacturers → Part numbers, reached from the
+   * other direction: the mat numbers this maps are generated by the pricing
+   * engine, so whoever is looking at the formulas is often the person who needs
+   * the mapping. Both doors open the same editor.
+   */
+  async function drawVendorPartsTab() {
+    var box = document.getElementById('fxBody'); if (!box) return;
+    box.innerHTML = '<div class="muted" style="padding:16px;">Loading…</div>';
+    var vendors = [];
+    try {
+      var r = await authed('/manufacturers?includeInactive=true');
+      if (!r.ok) { box.innerHTML = '<div class="err">Could not load vendors (' + r.status + ').</div>'; return; }
+      vendors = (await r.json()) || [];
+    } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; return; }
+
+    // One request per vendor would be a dozen round trips for a page that mostly
+    // shows zeroes, so the counts come from the vendor records themselves.
+    var counts = {};
+    var rc = await authed('/formulas/vendor-parts');
+    if (rc.ok) {
+      var all = await rc.json();
+      (all.rows || []).forEach(function (x) { counts[x.manufacturerId] = (counts[x.manufacturerId] || 0) + 1; });
+    }
+
+    var rows = vendors.map(function (m) {
+      var n = counts[m.id] || 0;
+      return '<tr>' +
+        td('<b style="font-weight:600;">' + esc(m.name) + '</b>' +
+          (m.isActive === false ? ' <span class="chip" style="font-size:10.5px;background:#f2f3ef;color:#8a8f85;">Inactive</span>' : '')) +
+        td(n ? n + ' mapped part' + (n === 1 ? '' : 's') : '<span class="muted">None</span>') +
+        td('<div style="display:flex;justify-content:flex-end;"><button class="vpOpen link-btn" data-id="' + m.id + '" style="width:auto;padding:6px 12px;">' + (n ? 'Edit' : 'Add') + '</button></div>') +
+        '</tr>';
+    }).join('');
+
+    box.innerHTML =
+      '<div class="muted" style="font-size:12.5px;max-width:760px;line-height:1.55;margin-bottom:10px;">What a vendor calls a part we sell under our own number — Resilite sell our <code>R-SSG-1010CLM</code> as <code>A-3204</code>. The vendor&rsquo;s number prints on the Bill of Materials beside ours and appears nowhere a customer can see. The same list is on each vendor under Catalog → Manufacturers.</div>' +
+      tableShell(['Vendor', 'Mapped parts', ''], rows, 3, 'No vendors yet.');
+
+    box.querySelectorAll('.vpOpen').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var m = vendors.filter(function (x) { return x.id === b.getAttribute('data-id'); })[0];
+        openVendorParts(m, currentUser);
+      });
+    });
+  }
+
+  /* --- Paint colour chart ------------------------------------------------
+   * Which parts a customer picks one colour for.
+   *
+   * Goldberg Brothers powder coat our steel, and the choice is not one colour for
+   * the structure: it is one per group of parts. The grouping belongs to the PART,
+   * so it is set here once and every Bill of Materials reads it — the BOM then asks
+   * for a brand and a code per group and paints only that group.
+   */
+  async function drawPaintColors() {
+    var box = document.getElementById('fxBody'); if (!box) return;
+    if (!fxPaint.data) {
+      box.innerHTML = '<div class="muted" style="padding:16px;">Loading…</div>';
+      var r = await authed('/formulas/paint-colors');
+      if (!r.ok) {
+        box.innerHTML = '<div class="err">Could not load the paint colour chart (' + r.status + '). Run migration 0048 if this persists.</div>';
+        return;
+      }
+      fxPaint.data = await r.json();
+    }
+    var groups = fxPaint.data.groups || [];
+    var admin = isSystemAdmin() || hasRole(['SYSTEM_ADMIN', 'EXECUTIVE'], (currentUser || {}).role);
+
+    var reload = async function () { fxPaint.data = null; await drawPaintColors(); };
+
+    var groupCard = function (g) {
+      var skus = g.skus || [];
+      return '<div class="card" style="margin-bottom:12px;padding:0;overflow:hidden;">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 16px;background:#fbfbf9;border-bottom:1px solid #e7e8e3;">' +
+          '<div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;">' +
+            '<span style="font-family:\'Newsreader\',serif;font-size:17px;font-weight:600;color:#3d4a55;">Group ' + esc(g.name) + '</span>' +
+            '<input class="pcLabel" data-id="' + g.id + '" value="' + esc(g.label || '') + '" placeholder="What this group is, e.g. Uprights and posts" style="' + bomFieldStyle('280px') + '"' + (admin ? '' : ' disabled') + '>' +
+          '</div>' +
+          '<div style="display:flex;align-items:center;gap:10px;">' +
+            '<span class="muted" style="font-size:12px;">' + skus.length + ' part' + (skus.length === 1 ? '' : 's') + '</span>' +
+            (admin ? '<button class="pcGroupDel link-btn" data-id="' + g.id + '" data-name="' + esc(g.name) + '" data-count="' + skus.length + '" style="width:auto;padding:6px 11px;color:#9c3327;">Remove group</button>' : '') +
+          '</div>' +
+        '</div>' +
+        '<div style="padding:12px 16px;">' +
+          (skus.length
+            ? '<div style="display:flex;flex-wrap:wrap;gap:6px;">' + skus.map(function (x) {
+                return '<span style="display:inline-flex;align-items:center;gap:6px;background:#f4f5f1;border:1px solid #e7e8e3;border-radius:999px;padding:4px 6px 4px 11px;font-size:12.5px;font-family:ui-monospace,monospace;">' +
+                  esc(x.sku) +
+                  (admin ? '<button class="pcRemove" data-sku="' + esc(x.sku) + '" title="Take this part out of the chart" style="border:none;background:none;cursor:pointer;color:#9c3327;font-size:13px;line-height:1;padding:0 3px;">×</button>' : '') +
+                '</span>';
+              }).join('') + '</div>'
+            : '<div class="muted" style="font-size:12.5px;">No parts in this group yet.</div>') +
+          (admin
+            ? '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px;">' +
+                '<input class="pcAddSku" data-id="' + g.id + '" list="pcPartList" placeholder="Part # — e.g. A-2245" style="' + bomFieldStyle('190px') + 'text-transform:uppercase;font-family:ui-monospace,monospace;">' +
+                '<button class="pcAdd link-btn" data-id="' + g.id + '" style="width:auto;padding:7px 13px;">Add to this group</button>' +
+                '<span class="muted" style="font-size:11.5px;">A part already in another group moves here.</span>' +
+              '</div>'
+            : '') +
+        '</div>' +
+      '</div>';
+    };
+
+    box.innerHTML =
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:12px;">' +
+        '<div class="muted" style="font-size:12.5px;max-width:720px;line-height:1.55;">Which parts the customer picks one colour for. A Bill of Materials asks for a brand and a colour code per group and paints only the parts in it, so a part belongs to exactly one group. Parts not in the chart can still be coloured by hand on the sheet.</div>' +
+        (admin
+          ? '<div style="display:flex;gap:8px;white-space:nowrap;">' +
+              '<button class="link-btn" id="pcNewGroup" style="width:auto;padding:8px 14px;">+ New group</button>' +
+              '<button class="link-btn" id="pcPaste" style="width:auto;padding:8px 14px;">Paste the chart…</button>' +
+            '</div>'
+          : '') +
+      '</div>' +
+      (groups.length ? groups.map(groupCard).join('') : '<div class="placeholder"><p class="muted" style="margin:0;">No groups yet. Add one to start the chart.</p></div>') +
+      '<datalist id="pcPartList">' + (fxPaint.data.skuParts || []).map(function (p) { return '<option value="' + esc(p) + '">'; }).join('') + '</datalist>';
+
+    if (!admin) return;
+
+    document.querySelectorAll('.pcLabel').forEach(function (el) {
+      el.addEventListener('change', async function () {
+        var r = await authed('/formulas/paint-colors/groups/' + el.getAttribute('data-id'), {
+          method: 'PATCH', body: { label: el.value.trim() },
+        });
+        el.style.borderColor = r.ok ? '#3f9d78' : '#c2452f';
+        if (!r.ok) alert(await serverMessage(r, 'Could not save that (' + r.status + ').'));
+      });
+    });
+
+    var assign = async function (sku, groupId) {
+      var r = await authed('/formulas/paint-colors/assign', { method: 'POST', body: { sku: sku, groupId: groupId } });
+      if (!r.ok) { alert(await serverMessage(r, 'Could not save that (' + r.status + ').')); return false; }
+      return true;
+    };
+
+    document.querySelectorAll('.pcAdd').forEach(function (b) {
+      b.addEventListener('click', async function () {
+        var id = b.getAttribute('data-id');
+        var el = document.querySelector('.pcAddSku[data-id="' + id + '"]');
+        var sku = el.value.trim().toUpperCase();
+        if (!sku) return;
+        if (await assign(sku, id)) reload();
+      });
+    });
+
+    document.querySelectorAll('.pcRemove').forEach(function (b) {
+      b.addEventListener('click', async function () {
+        if (await assign(b.getAttribute('data-sku'), null)) reload();
+      });
+    });
+
+    document.querySelectorAll('.pcGroupDel').forEach(function (b) {
+      b.addEventListener('click', async function () {
+        var count = Number(b.getAttribute('data-count')) || 0;
+        var name = b.getAttribute('data-name');
+        if (!confirm('Remove group ' + name + '?' + (count ? '\n\nIts ' + count + ' part' + (count === 1 ? ' is' : 's are') + ' taken out of the chart — they are not deleted, and can still be coloured by hand.' : ''))) return;
+        var r = await authed('/formulas/paint-colors/groups/' + b.getAttribute('data-id') + (count ? '?force=true' : ''), { method: 'DELETE' });
+        if (!r.ok && r.status !== 204) { alert(await serverMessage(r, 'Could not remove that group (' + r.status + ').')); return; }
+        reload();
+      });
+    });
+
+    document.getElementById('pcNewGroup').addEventListener('click', function () {
+      openModal('New paint colour group',
+        fieldRow('Name', '<input id="pcName" maxlength="40" placeholder="F" style="' + IN + '">') +
+        fieldRow('What it covers', '<input id="pcLabelNew" placeholder="Optional — e.g. Ladder rungs" style="' + IN + '">'),
+        async function (close, showErr) {
+          var name = document.getElementById('pcName').value.trim();
+          if (!name) return showErr('Give the group a name.');
+          var r = await authed('/formulas/paint-colors/groups', {
+            method: 'POST', body: { name: name, label: document.getElementById('pcLabelNew').value.trim() },
+          });
+          if (!r.ok) return showErr(await serverMessage(r, 'Could not add that group (' + r.status + ').'));
+          close(); reload();
+        }, 'Add group');
+    });
+
+    document.getElementById('pcPaste').addEventListener('click', function () { openPaintColorPaste(reload); });
+  }
+
+  /**
+   * Paste the chart out of the spreadsheet it lives in today: part number, group.
+   * Checked before anything is written, so the counts and any clash are seen first.
+   */
+  function openPaintColorPaste(done) {
+    openModal('Paste the paint colour chart',
+      '<div class="muted" style="font-size:12.5px;line-height:1.55;margin-bottom:10px;">One row per part: the part number, then its group, separated by a tab or a comma. The group has to exist already. Paste straight out of the spreadsheet.</div>' +
+      '<textarea id="pcText" rows="12" placeholder="A-2245&#9;A&#10;A-2246&#9;A&#10;A-2241&#9;B" style="' + IN + 'resize:vertical;font-family:ui-monospace,monospace;font-size:12.5px;"></textarea>' +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:10px;cursor:pointer;">' +
+        '<input type="checkbox" id="pcOverwrite"> Move parts that are already in another group</label>' +
+      '<div id="pcPreview" class="muted" style="font-size:12.5px;line-height:1.6;margin-top:10px;"></div>',
+      async function (close, showErr) {
+        var text = document.getElementById('pcText').value;
+        if (!text.trim()) return showErr('Nothing pasted.');
+        var overwrite = document.getElementById('pcOverwrite').checked;
+        var pre = document.getElementById('pcPreview');
+
+        if (!pre.getAttribute('data-checked')) {
+          var rc = await authed('/formulas/paint-colors/import', { method: 'POST', body: { text: text, dryRun: true, overwrite: overwrite } });
+          if (!rc.ok) return showErr(await serverMessage(rc, 'Could not read that list (' + rc.status + ').'));
+          var d = await rc.json();
+          pre.innerHTML =
+            '<b style="color:#3d4a55;">' + d.parsed + ' row' + (d.parsed === 1 ? '' : 's') + ' read.</b> ' +
+            d.created + ' to add, ' + d.moved + ' to move, ' + d.skipped + ' unchanged or skipped.' +
+            ((d.conflicts || []).length
+              ? '<div style="margin-top:6px;color:#8a6d1f;">Already grouped and left alone: ' +
+                d.conflicts.slice(0, 8).map(function (c) { return esc(c.sku) + ' (' + esc(c.current) + ' → ' + esc(c.incoming) + ')'; }).join(', ') +
+                ((d.conflicts || []).length > 8 ? ' and ' + (d.conflicts.length - 8) + ' more' : '') +
+                '. Tick the box above to move them.</div>'
+              : '') +
+            ((d.errors || []).length ? '<div style="margin-top:6px;color:#9c3327;">' + d.errors.slice(0, 8).map(esc).join('<br>') + '</div>' : '') +
+            '<div style="margin-top:6px;">Press Import again to write these.</div>';
+          pre.setAttribute('data-checked', '1');
+          return;
+        }
+
+        var r = await authed('/formulas/paint-colors/import', { method: 'POST', body: { text: text, overwrite: overwrite } });
+        if (!r.ok) return showErr(await serverMessage(r, 'Could not import (' + r.status + ').'));
+        close();
+        if (done) done();
+      }, 'Import');
+
+    var t = document.getElementById('pcText'), o = document.getElementById('pcOverwrite');
+    var reset = function () { var p = document.getElementById('pcPreview'); if (p) { p.removeAttribute('data-checked'); p.innerHTML = ''; } };
+    if (t) t.addEventListener('input', reset);
+    if (o) o.addEventListener('change', reset);
+  }
+
   function fxSourceOptions(kind, sel) {
     var set = fxSet(kind) || {};
     var src = (fx.data && fx.data.sources) || {};

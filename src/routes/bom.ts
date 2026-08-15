@@ -5,8 +5,16 @@ import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import { ValidationError, NotFoundError } from '../lib/errors.js';
 import {
-  listSections, patchSection, confirmSection, unlockSection, reorderSections,
-  addQuestion, updateQuestion, deleteQuestion, submissionBlockers, UNASSIGNED,
+  listSections,
+  patchSection,
+  confirmSection,
+  unlockSection,
+  reorderSections,
+  addQuestion,
+  updateQuestion,
+  deleteQuestion,
+  submissionBlockers,
+  UNASSIGNED,
 } from '../handoff/bomSections.js';
 import { sendBom } from '../handoff/bomSend.js';
 
@@ -20,7 +28,15 @@ import { sendBom } from '../handoff/bomSend.js';
  * the defaults a new section inherits.
  */
 
-const QUESTION_TYPES = ['TEXT', 'LONG_TEXT', 'NUMBER', 'DATE', 'SELECT', 'MULTI_SELECT', 'BOOLEAN'] as const;
+const QUESTION_TYPES = [
+  'TEXT',
+  'LONG_TEXT',
+  'NUMBER',
+  'DATE',
+  'SELECT',
+  'MULTI_SELECT',
+  'BOOLEAN',
+] as const;
 
 const SectionPatchSchema = z.object({
   showPowderColor: z.boolean().optional(),
@@ -86,6 +102,13 @@ const ApplyColorSchema = z.object({
   code: z.string().trim().min(1).max(60),
   /** Part numbers to paint. Empty means "every line in this vendor's section". */
   skus: z.array(z.string().trim().min(1)).default([]),
+  /**
+   * A paint colour group name. The customer chooses a colour per group of parts
+   * rather than one for the whole structure, so the group names what gets painted.
+   * Resolved from the chart here rather than trusted from the browser, so a stale
+   * screen cannot paint a part the chart has since moved.
+   */
+  group: z.string().trim().max(40).nullish(),
   vendor: z.string().trim().max(160).optional(),
   /** Off by default: a colour already chosen by hand is never overwritten. */
   overwrite: z.boolean().default(false),
@@ -105,7 +128,8 @@ export function registerBomRoutes(app: FastifyInstance): void {
   app.patch('/bom/sections/:sectionId', handoff, async (req) => {
     const { sectionId } = req.params as { sectionId: string };
     const parsed = SectionPatchSchema.safeParse(req.body);
-    if (!parsed.success) throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid change');
+    if (!parsed.success)
+      throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid change');
     return patchSection(sectionId, parsed.data, req.user!.sub);
   });
 
@@ -148,7 +172,8 @@ export function registerBomRoutes(app: FastifyInstance): void {
   app.post('/bom/sections/:sectionId/send', handoff, async (req) => {
     const { sectionId } = req.params as { sectionId: string };
     const parsed = SendSchema.safeParse(req.body);
-    if (!parsed.success) throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid email');
+    if (!parsed.success)
+      throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid email');
     return sendBom(sectionId, parsed.data, req.user!.sub);
   });
 
@@ -156,14 +181,16 @@ export function registerBomRoutes(app: FastifyInstance): void {
   app.post('/bom/sections/:sectionId/questions', handoff, async (req) => {
     const { sectionId } = req.params as { sectionId: string };
     const parsed = QuestionSchema.safeParse(req.body);
-    if (!parsed.success) throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid question');
+    if (!parsed.success)
+      throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid question');
     return addQuestion(sectionId, parsed.data, req.user!.sub);
   });
 
   app.patch('/bom/questions/:questionId', handoff, async (req) => {
     const { questionId } = req.params as { questionId: string };
     const parsed = QuestionPatchSchema.safeParse(req.body);
-    if (!parsed.success) throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid answer');
+    if (!parsed.success)
+      throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid answer');
     return updateQuestion(questionId, parsed.data, req.user!.sub);
   });
 
@@ -179,11 +206,13 @@ export function registerBomRoutes(app: FastifyInstance): void {
    * never rewrites an answer already given on an order.
    */
   app.get('/bom/question-templates', read, async () =>
-    prisma.bomQuestionTemplate.findMany({ orderBy: [{ vendor: 'asc' }, { sortOrder: 'asc' }] }));
+    prisma.bomQuestionTemplate.findMany({ orderBy: [{ vendor: 'asc' }, { sortOrder: 'asc' }] }),
+  );
 
   app.post('/bom/question-templates', admin, async (req) => {
     const parsed = TemplateSchema.safeParse(req.body);
-    if (!parsed.success) throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid question');
+    if (!parsed.success)
+      throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid question');
     const d = parsed.data;
     if ((d.type === 'SELECT' || d.type === 'MULTI_SELECT') && !(d.options ?? []).length) {
       throw new ValidationError('A dropdown needs at least one option');
@@ -205,7 +234,8 @@ export function registerBomRoutes(app: FastifyInstance): void {
   app.patch('/bom/question-templates/:id', admin, async (req) => {
     const { id } = req.params as { id: string };
     const parsed = TemplateSchema.partial().safeParse(req.body);
-    if (!parsed.success) throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid question');
+    if (!parsed.success)
+      throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid question');
     const d = parsed.data;
     return prisma.bomQuestionTemplate.update({
       where: { id },
@@ -236,7 +266,10 @@ export function registerBomRoutes(app: FastifyInstance): void {
    */
   app.get('/powder-colors', read, async () => {
     const [brands, used] = await Promise.all([
-      prisma.powderColorBrand.findMany({ where: { active: true }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] }),
+      prisma.powderColorBrand.findMany({
+        where: { active: true },
+        orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+      }),
       prisma.procurementLine.findMany({
         where: { powderColorCode: { not: null }, powderBrandId: { not: null } },
         select: { powderBrandId: true, powderColorCode: true },
@@ -247,24 +280,33 @@ export function registerBomRoutes(app: FastifyInstance): void {
     return {
       brands: brands.map((b) => ({
         ...b,
-        recentCodes: used.filter((u) => u.powderBrandId === b.id).map((u) => u.powderColorCode as string),
+        recentCodes: used
+          .filter((u) => u.powderBrandId === b.id)
+          .map((u) => u.powderColorCode as string),
       })),
     };
   });
 
   app.post('/powder-colors/brands', admin, async (req) => {
     const parsed = BrandSchema.safeParse(req.body);
-    if (!parsed.success) throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid brand');
+    if (!parsed.success)
+      throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid brand');
     const d = parsed.data;
     return prisma.powderColorBrand.create({
-      data: { name: d.name, website: d.website ?? null, active: d.active ?? true, sortOrder: d.sortOrder ?? 0 },
+      data: {
+        name: d.name,
+        website: d.website ?? null,
+        active: d.active ?? true,
+        sortOrder: d.sortOrder ?? 0,
+      },
     });
   });
 
   app.patch('/powder-colors/brands/:id', admin, async (req) => {
     const { id } = req.params as { id: string };
     const parsed = BrandSchema.partial().safeParse(req.body);
-    if (!parsed.success) throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid brand');
+    if (!parsed.success)
+      throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid brand');
     const d = parsed.data;
     return prisma.powderColorBrand.update({
       where: { id },
@@ -289,18 +331,36 @@ export function registerBomRoutes(app: FastifyInstance): void {
   app.post('/orders/:id/bom/apply-color', handoff, async (req) => {
     const { id } = req.params as { id: string };
     const parsed = ApplyColorSchema.safeParse(req.body);
-    if (!parsed.success) throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid request');
-    const { brandId, code, skus, vendor, overwrite } = parsed.data;
+    if (!parsed.success)
+      throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid request');
+    const { brandId, code, skus, vendor, overwrite, group } = parsed.data;
 
-    const brand = await prisma.powderColorBrand.findUnique({ where: { id: brandId }, select: { id: true, name: true } });
+    const brand = await prisma.powderColorBrand.findUnique({
+      where: { id: brandId },
+      select: { id: true, name: true },
+    });
     if (!brand) throw new NotFoundError('Powder colour brand not found');
+
+    // The chart decides which parts a group covers.
+    let groupSkus: string[] = [];
+    if (group) {
+      const g = await prisma.paintColorGroup.findFirst({
+        where: { name: { equals: group, mode: 'insensitive' } },
+        include: { skus: { select: { sku: true } } },
+      });
+      if (!g) throw new NotFoundError(`There is no paint colour group called ${group}`);
+      groupSkus = g.skus.map((x) => x.sku.toUpperCase());
+      if (!groupSkus.length) throw new ValidationError(`No part is in group ${g.name} yet.`);
+    }
 
     // A submitted section is frozen — colours included.
     const locked = new Set(
-      (await prisma.bomVendorSection.findMany({
-        where: { orderId: id, status: 'SUBMITTED' },
-        select: { vendor: true },
-      })).map((s) => s.vendor),
+      (
+        await prisma.bomVendorSection.findMany({
+          where: { orderId: id, status: 'SUBMITTED' },
+          select: { vendor: true },
+        })
+      ).map((s) => s.vendor),
     );
 
     const lines = await prisma.procurementLine.findMany({
@@ -308,13 +368,18 @@ export function registerBomRoutes(app: FastifyInstance): void {
       select: { id: true, sku: true, vendor: true, powderColor: true, powderColorCode: true },
     });
 
-    const wanted = new Set(skus);
+    // Both filters may be given; a part then has to satisfy each.
+    const wanted = new Set(skus.map((x) => x.toUpperCase()));
+    const inGroup = new Set(groupSkus);
     const targets = lines.filter((l) => {
       const v = (l.vendor && l.vendor.trim()) || UNASSIGNED;
+      const part = (l.sku || '').toUpperCase();
       if (locked.has(v)) return false;
       if (vendor && v !== vendor) return false;
-      if (wanted.size && !(l.sku && wanted.has(l.sku))) return false;
-      if (!overwrite && ((l.powderColorCode || '').trim() || (l.powderColor || '').trim())) return false;
+      if (inGroup.size && !(part && inGroup.has(part))) return false;
+      if (wanted.size && !(part && wanted.has(part))) return false;
+      if (!overwrite && ((l.powderColorCode || '').trim() || (l.powderColor || '').trim()))
+        return false;
       return true;
     });
 
@@ -333,6 +398,7 @@ export function registerBomRoutes(app: FastifyInstance): void {
             color: printed,
             brand: brand.name,
             code,
+            ...(group ? { group } : {}),
             parts: targets.map((t) => t.sku).filter(Boolean),
             overwrite,
           } as object,

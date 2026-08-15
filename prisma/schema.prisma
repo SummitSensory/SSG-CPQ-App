@@ -633,6 +633,42 @@ model Manufacturer {
 /// ourPart is a part number as it appears on a BOM line — usually a Sku.part, but
 /// deliberately NOT a foreign key, because mat numbers are generated at price time
 /// and have no catalog row. Nothing joins on vendorPart; it is printed only.
+/// A paint colour group: the sets a customer chooses a colour for.
+///
+/// Goldberg Brothers powder coat our steel, and the customer does not pick one
+/// colour for the whole structure — they pick one per group of parts (uprights
+/// one colour, rungs another). The grouping is a property of the PART, not of an
+/// order, so it is maintained once under Administration → Formulas → Paint colour
+/// and every Bill of Materials reads it.
+///
+/// Groups are seeded A–E and can be renamed; the letter is only a label.
+model PaintColorGroup {
+  id        String               @id @default(cuid())
+  /// Short name shown on the Bill of Materials — "A", "B", …
+  name      String               @unique
+  /// Optional plain-English name: "Uprights and posts".
+  label     String?
+  sortOrder Int                  @default(0)
+  skus      PaintColorGroupSku[]
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+}
+
+/// Which paint colour group a part belongs to. One group per part: two would make
+/// which colour it takes a matter of query order.
+model PaintColorGroupSku {
+  id        String          @id @default(cuid())
+  groupId   String
+  group     PaintColorGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  /// Our part number, stored as typed and matched case-insensitively. Not a foreign
+  /// key for the same reason VendorPartNumber.ourPart is not one.
+  sku       String          @unique
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  @@index([groupId])
+}
+
 model VendorPartNumber {
   id             String       @id @default(cuid())
   manufacturerId String
