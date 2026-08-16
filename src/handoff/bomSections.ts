@@ -48,6 +48,26 @@ async function logEvent(
  * per-order defaults — and a copy of the vendor's question templates. Existing
  * sections are never touched, so this is safe to call on every page load.
  */
+/**
+ * The job name a vendor sheet carries by default.
+ *
+ * Customer and sales order number, which between them identify the job on a vendor's
+ * desk with nobody typing anything: the vendor knows us by the order number and knows
+ * the job by the customer. It was a free-text field, so it was usually left blank, and a
+ * vendor sheet with no job name is one more email asking which job it is.
+ *
+ * A default, not a rule — whatever is typed into the field wins and stays. Blanking the
+ * field returns it to this.
+ */
+export function defaultJobName(
+  customerName: string | null | undefined,
+  orderNumber: string | null | undefined,
+): string {
+  return [String(customerName ?? '').trim(), String(orderNumber ?? '').trim()]
+    .filter(Boolean)
+    .join(' - ');
+}
+
 export async function ensureSections(orderId: string, actorId?: string): Promise<void> {
   const order = await prisma.acceptedOrder.findUnique({
     where: { id: orderId },
@@ -288,6 +308,7 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
     select: { name: true },
   });
   const customerName = org?.name ?? '';
+  const defaultJob = defaultJobName(customerName, order.number);
 
   // Which parts insist on a colour. Off by default, so this is usually a short list.
   const skusNeedingColor = new Set(
@@ -316,7 +337,7 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
       vendor: s.vendor,
       customer: customerName,
       order: order.number,
-      job: s.jobName || order.jobName || '',
+      job: s.jobName || order.jobName || defaultJob,
       submittedOn: s.submittedOn ? s.submittedOn.toISOString().slice(0, 10) : today(),
     };
     const to = (mfr?.bomEmailTo || mfr?.contactEmail || '').trim();
@@ -324,7 +345,9 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
       id: s.id,
       vendor: s.vendor,
       sortOrder: s.sortOrder,
-      jobName: s.jobName,
+      jobName: s.jobName || defaultJob,
+      /** What the field falls back to when it is cleared, so the UI can show it. */
+      jobNameDefault: defaultJob,
       shipTo: s.shipTo,
       submittedOn: iso(s.submittedOn),
       submittedOnDefault: today(),

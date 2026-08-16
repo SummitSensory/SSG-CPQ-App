@@ -3864,7 +3864,7 @@
 
     ov = openModal('Follow-up email — ' + (row.customer || 'customer'),
       '<div class="muted" style="font-size:12.5px;line-height:1.55;margin-bottom:12px;">' +
-        'Pick a template, copy it, and paste into Outlook — it sends from your mailbox so the reply comes back to you. ' +
+        'Pick a template and open it in Outlook — already addressed, with the subject and body filled in. It sends from your mailbox, so the reply comes back to you. ' +
         'The history below each one is per customer, so a second proposal does not reset it.</div>' +
       '<div id="fuBody"><div class="muted" style="font-size:12.5px;padding:12px 0;">Loading…</div></div>',
       null, 'Done', { maxWidth: '760px' });
@@ -3921,10 +3921,13 @@
                 '<div style="font-size:13px;font-weight:600;color:#20241f;line-height:1.4;margin-bottom:10px;">' + esc(chosenT.subject) + '</div>' +
                 '<div style="border:1px solid #e7e8e3;border-radius:10px;padding:12px 14px;background:#fff;max-height:34vh;overflow:auto;font-size:12.5px;line-height:1.5;">' + chosenT.html + '</div>' +
                 '<div class="muted" style="font-size:11.5px;line-height:1.5;margin-top:8px;">' + esc(chosenT.objective) + ' · ' + esc(chosenT.angle) + '</div>' +
-                '<div style="display:flex;gap:8px;margin-top:10px;">' +
-                  '<button type="button" class="btn" id="fuCopy" style="width:auto;padding:9px 16px;">Copy &amp; log it</button>' +
-                  '<button type="button" class="link-btn" id="fuCopyOnly" style="width:auto;padding:9px 15px;">Copy without logging</button>' +
+                '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">' +
+                  '<button type="button" class="btn" id="fuOutlook" style="width:auto;padding:9px 16px;">Open in Outlook</button>' +
+                  '<button type="button" class="link-btn" id="fuPlain" style="width:auto;padding:9px 15px;" title="Opens your mail client directly. Plain text — the bold on the question is lost.">Open as plain text</button>' +
+                  '<button type="button" class="link-btn" id="fuCopy" style="width:auto;padding:9px 15px;">Copy instead</button>' +
                 '</div>' +
+                '<label style="display:flex;align-items:center;gap:7px;margin-top:9px;font-size:12px;cursor:pointer;">' +
+                  '<input type="checkbox" id="fuLog" checked> Record it in this customer’s history</label>' +
                 '<div id="fuMsg" class="muted" style="font-size:12px;margin-top:8px;line-height:1.5;"></div>'
               : '<div class="muted" style="font-size:12.5px;line-height:1.55;padding:12px;border:1px dashed #dcded7;border-radius:10px;">Pick a template on the left to read it before you copy it.</div>') +
           '</div>' +
@@ -3946,6 +3949,7 @@
         var el = $('#fuMsg');
         if (el) { el.style.color = bad ? '#9c3327' : '#2f7d5d'; el.textContent = t; }
       };
+      var wantsLog = function () { var el = $('#fuLog'); return !el || el.checked; };
 
       box.querySelectorAll('.fuRow').forEach(function (el) {
         el.addEventListener('click', function () { selectedKey = el.getAttribute('data-key'); draw(); });
@@ -3992,10 +3996,7 @@
         return contacts.filter(function (c) { return c.id === id; })[0] || contacts[0];
       };
 
-      var onCopy = async function (andLog) {
-        var ok = await copy();
-        if (!ok) { msg('The browser blocked the copy. Select the preview text and copy it by hand.', 1); return; }
-        if (!andLog) { msg('Copied. Paste into Outlook — not logged.'); return; }
+      var logIt = async function () {
         var to = contactOf();
         var r = await authed('/crm/organizations/' + orgId + '/follow-ups', {
           method: 'POST',
@@ -4004,13 +4005,81 @@
             toEmail: to.email, toName: to.name, subject: chosenT.subject,
           },
         });
-        if (!r.ok) { msg('Copied, but the log failed (' + r.status + '). Record it by hand.', 1); return; }
-        msg('Copied and logged. Paste into Outlook and send.');
-        await load($('#fuTo') ? $('#fuTo').value : null);
+        return r.ok;
       };
 
-      var cp = $('#fuCopy'); if (cp) cp.addEventListener('click', function () { onCopy(true); });
-      var cpo = $('#fuCopyOnly'); if (cpo) cpo.addEventListener('click', function () { onCopy(false); });
+      /**
+       * Hand Outlook a real draft.
+       *
+       * The .eml comes from the server carrying X-Unsent, which is what makes Outlook open
+       * it as an editable, already-addressed draft rather than as a received message the
+       * rep would have to forward. It is fetched rather than linked because the route
+       * needs the auth header, so the response becomes a blob URL and a synthetic click
+       * hands it to whatever the machine has registered for .eml.
+       */
+      var openInOutlook = async function () {
+        msg('Building the draft…');
+        var to = contactOf();
+        var url = '/crm/organizations/' + orgId + '/follow-ups/' + encodeURIComponent(chosenT.key) +
+          '/draft.eml?proposalId=' + encodeURIComponent(row.id) +
+          (to && to.id ? '&contactId=' + encodeURIComponent(to.id) : '');
+        var r = await authed(url);
+        if (!r.ok) { msg('Could not build the draft (' + r.status + ').', 1); return; }
+        var blob = await r.blob();
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = chosenT.step + '-' + chosenT.key + '.eml';
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function () { URL.revokeObjectURL(a.href); document.body.removeChild(a); }, 4000);
+        var logged = wantsLog() ? await logIt() : null;
+        if (logged === false) { msg('Draft downloaded, but the history line failed. Record it by hand.', 1); return; }
+        msg('Draft downloaded — open it and Outlook will have it addressed and ready.' + (logged ? ' Logged.' : ''));
+        if (logged) await load(to && to.id ? to.id : null);
+      };
+
+      /**
+       * The mailto: route. No download step, but plain text only: the standard has no
+       * provision for HTML and Outlook ignores any attempt at it, so the bold on the
+       * question is lost. Offered because for a short email it is the fastest path, and
+       * these emails are plain by design anyway.
+       */
+      var openPlain = async function () {
+        var to = contactOf();
+        var href = 'mailto:' + encodeURIComponent(to.email) +
+          '?subject=' + encodeURIComponent(chosenT.subject) +
+          '&body=' + encodeURIComponent(chosenT.text);
+        // Some clients truncate a long mailto. Say so rather than let a half-written
+        // email reach a customer.
+        if (href.length > 1900) {
+          msg('This one is long enough that a mailto link may be truncated — use Open in Outlook instead.', 1);
+          return;
+        }
+        var a = document.createElement('a');
+        a.href = href;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function () { document.body.removeChild(a); }, 0);
+        var logged = wantsLog() ? await logIt() : null;
+        if (logged === false) { msg('Opened, but the history line failed.', 1); return; }
+        msg('Opened in your mail client.' + (logged ? ' Logged.' : ''));
+        if (logged) await load(to && to.id ? to.id : null);
+      };
+
+      var onCopy = async function () {
+        var ok = await copy();
+        if (!ok) { msg('The browser blocked the copy. Select the preview text and copy it by hand.', 1); return; }
+        var logged = wantsLog() ? await logIt() : null;
+        if (logged === false) { msg('Copied, but the history line failed.', 1); return; }
+        msg('Copied.' + (logged ? ' Logged.' : ''));
+        if (logged) await load($('#fuTo') ? $('#fuTo').value : null);
+      };
+
+      var ol = $('#fuOutlook'); if (ol) ol.addEventListener('click', openInOutlook);
+      var pl = $('#fuPlain'); if (pl) pl.addEventListener('click', openPlain);
+      var cp = $('#fuCopy'); if (cp) cp.addEventListener('click', onCopy);
 
       box.querySelectorAll('.fuDel').forEach(function (b) {
         b.addEventListener('click', async function () {
@@ -8904,7 +8973,7 @@
       '<div style="padding:16px 18px;">' +
         warn +
         '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;">' +
-          '<div><div class="k">Job name</div><input class="secF" data-id="' + s.id + '" data-f="jobName" value="' + esc(s.jobName || '') + '" style="' + bomFieldStyle(null, locked) + '"' + dis + '></div>' +
+          '<div><div class="k">Job name</div><input class="secF" data-id="' + s.id + '" data-f="jobName" value="' + esc(s.jobName || '') + '" placeholder="' + esc(s.jobNameDefault || '') + '" style="' + bomFieldStyle(null, locked) + '"' + dis + '></div>' +
           '<div><div class="k">Ship to</div>' + shipToSelect(s, locked, dis) +
             (s.shipToAddress
               ? '<div class="muted" style="font-size:11px;margin-top:4px;line-height:1.45;">' + esc(shipToAddressLines(s.shipToAddress).join(' · ')) + '</div>'
@@ -8923,7 +8992,7 @@
         (edit
           ? '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;">' +
               '<button class="link-btn" data-deal-pull="' + s.id + '" style="width:auto;padding:6px 12px;">Pull freight &amp; tax from the deal</button>' +
-              '<span class="muted" style="font-size:11.5px;">Reads the Deal Tracking board. Figures you have typed are kept.</span>' +
+              '<span class="muted" data-deal-out style="font-size:11.5px;line-height:1.5;flex:1;min-width:220px;">Reads the Deal Tracking board. Figures you have typed are kept.</span>' +
             '</div>'
           : '') +
         '<div style="margin-top:12px;"><div class="k">Notes to this vendor</div>' +
@@ -9383,18 +9452,56 @@
       });
     });
 
+    /**
+     * Pull the freight and tax figures off the deal.
+     *
+     * The outcome is reported beside the button rather than in an alert, and it always
+     * says what the deal actually held. "Nothing populated" has four different causes
+     * — the order is not linked to a deal, monday is unreachable, the deal's columns are
+     * empty, or every section already has a figure — and an alert that does not
+     * distinguish them leaves the rep guessing which.
+     */
     document.querySelectorAll('[data-deal-pull]').forEach(function (bt) {
+      var out = bt.parentNode ? bt.parentNode.querySelector('[data-deal-out]') : null;
+      var say = function (html, bad) {
+        if (!out) { if (bad) alert(String(html).replace(/<[^>]+>/g, '')); return; }
+        out.style.color = bad ? '#9c3327' : '#5c6157';
+        out.innerHTML = html;
+      };
       bt.addEventListener('click', async function () {
         bt.disabled = true;
+        say('Reading the deal…');
         var r = await authed('/orders/' + order.id + '/deal-figures/pull', { method: 'POST', body: {} });
         bt.disabled = false;
-        if (!r.ok) return fail(r, 'Could not read the deal');
+        if (!r.ok) { say('Could not read the deal (' + r.status + ').', 1); return; }
         var d = await r.json();
-        if (d.figures && d.figures.error) { alert('Nothing pulled: ' + d.figures.error); return; }
-        if (!d.updated) {
-          alert('Nothing to pull — every section already has its freight and tax, or the deal has none recorded.');
+        var f = d.figures || {};
+
+        if (f.error) {
+          say(esc(f.error) + (f.itemId ? ' <span class="muted">(deal ' + esc(f.itemId) + ')</span>' : ''), 1);
           return;
         }
+
+        // What the three columns held, named individually. A figure that is blank on the
+        // board is the single most common reason a pull appears to do nothing, and this
+        // is the only way to see it without opening monday.
+        var found = [
+          'structure freight ' + (f.structureFreight ? '<b>' + esc(f.structureFreight) + '</b>' : '<i>blank</i>'),
+          'mats freight ' + (f.matsFreight ? '<b>' + esc(f.matsFreight) + '</b>' : '<i>blank</i>'),
+          'tax ' + (f.estimatedTax ? '<b>' + esc(f.estimatedTax) + '</b>' : '<i>blank</i>'),
+        ].join(' \u00b7 ');
+        var head = 'Deal ' + esc(f.itemId || '?') + ': ' + found;
+
+        if (!d.updated) {
+          var why = (!f.structureFreight && !f.matsFreight && !f.estimatedTax)
+            ? 'Nothing to copy — those columns are empty on the Deal Tracking board. Fill them in there, then pull again.'
+            : 'Every section already has its figures. Clear a field first if you want the deal\u2019s number instead.';
+          say(head + '<br>' + why, 1);
+          return;
+        }
+        say(head + '<br>Filled in ' + d.updated + ' section' + (d.updated === 1 ? '' : 's') +
+          (d.skipped ? ', left ' + d.skipped + ' alone' : '') + '.' +
+          (f.note ? '<br><span style="color:#8a6d1f;">' + esc(f.note) + '</span>' : ''));
         reload();
       });
     });
@@ -10341,6 +10448,162 @@
     });
   }
 
+  /* --- Follow-up email templates -------------------------------------------
+   * The wording used to live in code, so changing a sentence meant a deploy. It now lives
+   * in the database, seeded once from the ten that shipped; this is where it is edited.
+   *
+   * The body is plain text on purpose: a blank line starts a paragraph, **asterisks** mark
+   * the one bolded question. A rich-text or HTML field would let one unclosed tag reach a
+   * customer, and nobody notices that until after it has gone. */
+  var futCache = null;
+  async function loadFollowUpTemplates() {
+    var box = document.getElementById('futList'); if (!box) return;
+    try {
+      var r = await authed('/admin/follow-up-templates');
+      if (!r.ok) { box.innerHTML = '<div class="err">Could not load the templates (' + r.status + '). Run migration 0053 if this persists.</div>'; return; }
+      futCache = await r.json();
+    } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; return; }
+
+    var rows = (futCache.templates || []).map(function (t) {
+      return '<tr>' +
+        td('<div style="display:flex;gap:9px;align-items:baseline;">' +
+            '<span style="font-family:Georgia,serif;font-size:12px;font-weight:700;color:#8a8f85;">' + (t.step < 10 ? '0' + t.step : t.step) + '</span>' +
+            '<div><b style="font-weight:600;">' + esc(t.name) + '</b>' +
+              (t.isBuiltIn ? '' : ' <span class="chip" style="font-size:10.5px;">Custom</span>') +
+              '<div class="muted" style="font-size:12px;max-width:460px;line-height:1.45;">' + esc(t.subject) + '</div>' +
+              '<div class="muted" style="font-size:11.5px;margin-top:2px;">' + esc(t.whenToSend) + '</div>' +
+            '</div></div>') +
+        td(t.active ? '<span class="chip">Active</span>' : '<span class="muted">Retired</span>') +
+        td('<span class="muted" style="font-size:12.5px;">' + (t.sentCount ? t.sentCount + ' sent' : 'Never sent') + '</span>') +
+        td('<div style="display:flex;gap:6px;justify-content:flex-end;">' +
+          '<button class="link-btn futEdit" data-id="' + t.id + '" style="width:auto;padding:6px 11px;">Edit</button>' +
+          (t.isBuiltIn ? '<button class="link-btn futReset" data-id="' + t.id + '" style="width:auto;padding:6px 11px;">Reset</button>' : '') +
+          '<button class="link-btn futDel" data-id="' + t.id + '" style="width:auto;padding:6px 11px;color:#9c3327;">' + (t.active ? 'Retire' : 'Delete') + '</button>' +
+          '</div>') +
+        '</tr>';
+    }).join('');
+
+    box.innerHTML = tableShell(['Template', 'Status', 'Use', ''], rows, 4, 'No templates yet.') +
+      '<div class="muted" style="font-size:12px;margin-top:8px;line-height:1.6;">Placeholders: ' +
+      (futCache.placeholders || []).map(function (p) {
+        return '<code style="font-size:11.5px;">' + esc(p.token) + '</code> ' + esc(p.means);
+      }).join(' &nbsp;' + EM + '&nbsp; ') + '</div>';
+
+    var find = function (id) {
+      return (futCache.templates || []).filter(function (t) { return t.id === id; })[0];
+    };
+    box.querySelectorAll('.futEdit').forEach(function (b) {
+      b.addEventListener('click', function () { openFollowUpTemplateForm(find(b.getAttribute('data-id')), futCache); });
+    });
+    box.querySelectorAll('.futReset').forEach(function (b) {
+      b.addEventListener('click', async function () {
+        var t = find(b.getAttribute('data-id'));
+        if (!confirm('Put ' + t.name + ' back to the wording it shipped with?\n\nYour edits to it are lost.')) return;
+        var r = await authed('/admin/follow-up-templates/' + t.id + '/reset', { method: 'POST', body: {} });
+        if (!r.ok) { alert(await serverMessage(r, 'Could not reset it (' + r.status + ').')); return; }
+        loadFollowUpTemplates();
+      });
+    });
+    box.querySelectorAll('.futDel').forEach(function (b) {
+      b.addEventListener('click', async function () {
+        var t = find(b.getAttribute('data-id'));
+        var q = t.sentCount || t.isBuiltIn
+          ? 'Retire ' + t.name + '?\n\nIt stops appearing in the picker. It is kept rather than deleted because the send history refers to it.'
+          : 'Delete ' + t.name + '?';
+        if (!confirm(q)) return;
+        var r = await authed('/admin/follow-up-templates/' + t.id, { method: 'DELETE' });
+        if (!r.ok && r.status !== 204) { alert(await serverMessage(r, 'Could not do that (' + r.status + ').')); return; }
+        loadFollowUpTemplates();
+      });
+    });
+  }
+
+  function openFollowUpTemplateForm(t, cache) {
+    var isNew = !t;
+    var count = ((cache && cache.templates) || []).length;
+    t = t || {
+      key: '', name: '', step: count + 1, whenToSend: '', objective: '', angle: '',
+      caution: '', subject: '', body: '', active: true, isBuiltIn: false, sentCount: 0,
+    };
+    var v = function (k) { return esc(t[k] == null ? '' : t[k]); };
+    var pv = openModal(isNew ? 'New follow-up email' : 'Edit ' + t.name,
+      '<div style="display:flex;gap:8px;">' +
+        '<div style="flex:2;">' + fieldRow('Name', '<input id="futName" style="' + IN + '" value="' + v('name') + '">') + '</div>' +
+        '<div style="flex:1;">' + fieldRow('Step', '<input id="futStep" type="number" min="1" max="99" style="' + IN + '" value="' + (Number(t.step) || 1) + '">') + '</div>' +
+      '</div>' +
+      fieldRow('Key',
+        '<input id="futKey" style="' + IN + 'font-family:ui-monospace,monospace;" value="' + v('key') + '"' + (t.sentCount ? ' disabled' : '') + '>' +
+        '<div class="muted" style="font-size:12px;margin-top:4px;line-height:1.5;">Lower-case letters, numbers and hyphens. ' +
+          (t.sentCount ? 'Fixed now that this template has been sent — the history refers to it.' : 'The send history records it, so pick it once.') + '</div>') +
+      fieldRow('Subject', '<input id="futSubj" style="' + IN + '" value="' + v('subject') + '">') +
+      '<div class="field"><label>Body</label>' +
+        '<textarea id="futBody" rows="13" style="' + IN + 'resize:vertical;font-size:13px;line-height:1.6;">' + esc(t.body || '') + '</textarea>' +
+        '<div class="muted" style="font-size:12px;margin-top:5px;line-height:1.55;">Blank line between paragraphs. Wrap the one question you want answered in <code>**double asterisks**</code> and it prints bold on its own line. The greeting and sign-off are added for you.</div></div>' +
+      '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin:14px 0 6px;">Guidance for the rep — never sent to the customer</div>' +
+      fieldRow('When to send', '<input id="futWhen" style="' + IN + '" value="' + v('whenToSend') + '">') +
+      '<div style="display:flex;gap:8px;">' +
+        '<div style="flex:1;">' + fieldRow('Objective', '<input id="futObj" style="' + IN + '" value="' + v('objective') + '">') + '</div>' +
+        '<div style="flex:1;">' + fieldRow('Angle', '<input id="futAngle" style="' + IN + '" value="' + v('angle') + '">') + '</div>' +
+      '</div>' +
+      fieldRow('Caution', '<input id="futCaution" placeholder="Optional warning shown in the picker" style="' + IN + '" value="' + v('caution') + '">') +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin:2px 0 4px;cursor:pointer;">' +
+        '<input type="checkbox" id="futActive"' + (t.active !== false ? ' checked' : '') + '> Offer it in the picker</label>' +
+      '<div id="futPrev" class="muted" style="font-size:12.5px;margin-top:10px;"></div>',
+      async function (close, showErr) {
+        var body = {
+          key: pv.querySelector('#futKey').value.trim(),
+          name: pv.querySelector('#futName').value.trim(),
+          step: Number(pv.querySelector('#futStep').value) || 1,
+          whenToSend: pv.querySelector('#futWhen').value.trim(),
+          objective: pv.querySelector('#futObj').value.trim(),
+          angle: pv.querySelector('#futAngle').value.trim(),
+          caution: pv.querySelector('#futCaution').value.trim(),
+          subject: pv.querySelector('#futSubj').value.trim(),
+          body: pv.querySelector('#futBody').value,
+          active: pv.querySelector('#futActive').checked,
+        };
+        if (!body.name) return showErr('Give it a name.');
+        if (!body.subject) return showErr('Give it a subject line.');
+        if (!body.body.trim()) return showErr('The body is empty.');
+        if (!body.whenToSend) return showErr('Say when a rep should send it — that line is how they choose between ten of these.');
+        if (!body.objective) body.objective = body.name;
+        if (!body.angle) body.angle = body.name;
+        if (isNew && !/^[a-z0-9][a-z0-9-]*$/.test(body.key)) {
+          return showErr('The key should be lower-case letters, numbers and hyphens.');
+        }
+        if (t.sentCount) delete body.key;
+        var r = isNew
+          ? await authed('/admin/follow-up-templates', { method: 'POST', body: body })
+          : await authed('/admin/follow-up-templates/' + t.id, { method: 'PATCH', body: body });
+        if (!r.ok) return showErr(await serverMessage(r, 'Could not save it (' + r.status + ').'));
+        close();
+        loadFollowUpTemplates();
+      }, isNew ? 'Create' : 'Save', { maxWidth: '640px' });
+
+    // Live preview, so the asterisk rule is learned by seeing it rather than by reading
+    // about it.
+    var prev = function () {
+      var el = pv.querySelector('#futPrev');
+      if (!el) return;
+      var paras = String(pv.querySelector('#futBody').value || '')
+        .replace(/\r\n/g, '\n').split(/\n{2,}/)
+        .map(function (c) { return c.trim(); }).filter(Boolean);
+      if (!paras.length) { el.innerHTML = ''; return; }
+      el.innerHTML = '<div class="k">Preview</div>' +
+        '<div style="border:1px solid #e7e8e3;border-radius:9px;padding:11px 13px;background:#fff;color:#000;font-size:12.5px;line-height:1.55;">' +
+        '<div>Hi Emily,</div><div style="height:8px;"></div>' +
+        paras.map(function (c) {
+          var ask = /^\*\*[\s\S]+\*\*$/.test(c);
+          var text = esc(ask ? c.replace(/^\*\*|\*\*$/g, '').trim() : c).replace(/\n/g, '<br>');
+          return '<div style="margin-bottom:8px;">' + (ask ? '<b>' + text + '</b>' : text) + '</div>';
+        }).join('') +
+        '<div>Best,<br>Bryan</div></div>';
+    };
+    var bodyEl = pv.querySelector('#futBody');
+    if (bodyEl) bodyEl.addEventListener('input', prev);
+    prev();
+  }
+
   async function loadFinancingAdmin() {
     var box = document.getElementById('finAdmin'); if (!box) return;
     var d = null;
@@ -10919,6 +11182,10 @@
         '<button class="btn" id="qtNew" style="width:auto;padding:9px 15px;">+ New question</button></div>' +
       '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;">Questions asked on a Bill of Materials section. A question with no vendor is asked of <b>every</b> vendor; one with a vendor is asked only of theirs. Each new section starts with a copy, so editing a question here never rewrites an answer already given on an order.</div>' +
       '<div id="qtList"><div class="muted" style="padding:16px;">Loading…</div></div>' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:26px;"><div class="section-title" style="margin:0;">Follow-up emails</div>' +
+        '<button class="btn" id="futNew" style="width:auto;padding:9px 15px;">+ New template</button></div>' +
+      '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;max-width:820px;line-height:1.55;">The emails a rep can pick from on a proposal. The order matters — financing is not raised until the email before it has established that budget is the obstacle — so the step number decides the sequence. Editing here changes what everyone sends, immediately.</div>' +
+      '<div id="futList"><div class="muted" style="padding:16px;">Loading…</div></div>' +
       '<div class="section-title" style="margin-top:26px;">Financing</div>' +
       '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">Ryan Capital quote a <b>payment factor</b> per amount band and term, not an interest rate: the monthly payment is the amount financed × the factor at that intersection. Paste their sheet or edit a cell; the published sheet is what every new financing document quotes from.</div>' +
       '<div id="finAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>';
@@ -10937,9 +11204,11 @@
     });
     document.getElementById('snNew').addEventListener('click', function () { openStandardNoteForm(null); });
     document.getElementById('qtNew').addEventListener('click', function () { openQuestionTemplateForm(null); });
+    document.getElementById('futNew').addEventListener('click', function () { openFollowUpTemplateForm(null, futCache); });
     loadUsers();
     loadStandardNotes();
     loadFormulas();
+    loadFollowUpTemplates();
     loadFinancingAdmin();
     loadQuestionTemplates();
   }

@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma.js';
 import { NotFoundError } from '../lib/errors.js';
 import { vendorPartLookup } from './vendorParts.js';
+import { defaultJobName } from './bomSections.js';
 
 /**
  * The Bill of Materials.
@@ -472,7 +473,12 @@ export async function buildBom(
       number: order.number,
       status: order.status,
       acceptedVersion: order.acceptedVersion,
-      jobName: s(order.jobName) || s(proposal?.title) || s(org?.name),
+      // Customer and order number, which between them identify the job on a vendor's
+      // desk. The proposal title was the old fallback and is kept behind the explicit
+      // job name, but ahead of nothing: a sheet with no job name is one more email
+      // asking which job it is.
+      jobName:
+        s(order.jobName) || defaultJobName(s(org?.name), s(order.number)) || s(proposal?.title),
       shipTo: order.bomShipTo,
       submittedOn: order.bomSubmittedOn ? order.bomSubmittedOn.toISOString() : null,
       deliveryType: s(order.deliveryType),
