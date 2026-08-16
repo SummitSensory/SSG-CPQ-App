@@ -50,6 +50,8 @@ const ItemSchema = z.object({
 });
 const CreateSchema = z.object({
   organizationId: z.string().min(1),
+  /** Which of the customer's deals this proposal is for. Optional — see the schema. */
+  opportunityId: z.string().min(1).nullish(),
   title: z.string().min(2),
   sections: z.array(SectionSchema),
   items: z.array(ItemSchema),

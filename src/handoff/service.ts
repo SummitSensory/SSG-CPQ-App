@@ -359,12 +359,20 @@ export async function createAcceptedOrder(
   // so mondayProjectId was null on every order ever created, and the Bill of Materials
   // could not pull freight or tax from the deal for any of them.
   //
+  // The proposal names its own opportunity, so for a customer with two concurrent
+  // projects this is an answer rather than an inference. Where a proposal predates the
+  // picker and names none, the shared rule falls back to the customer's most recently
+  // updated linked deal and flags that it did.
+  //
   // Resolved once, here, for the same reason the QuickBooks estimate reference is: the
   // deal an order was accepted against is a fact about the accept, and looking it up
   // later risks answering with whatever the board says by then. A customer with no
   // linked opportunity leaves it null and the BOM says what to do about it — a missing
   // deal must never stop an acceptance being recorded.
-  const deal = await dealItemIdFor(version.proposal.organizationId).catch(() => ({
+  const deal = await dealItemIdFor(
+    version.proposal.organizationId,
+    version.proposal.opportunityId,
+  ).catch(() => ({
     itemId: undefined,
     opportunityId: undefined,
     note: 'the deal lookup failed',
@@ -384,9 +392,9 @@ export async function createAcceptedOrder(
         proposalId: version.proposalId,
         proposalVersionId: version.id,
         acceptedVersion: version.version,
-        // Both halves of the deal link. opportunityId was never set either, which is why
-        // an order could not name its own deal even when the customer had one.
-        opportunityId: deal.opportunityId ?? null,
+        // Both halves of the deal link. The proposal's own choice wins; opportunityId
+        // was never set either, which is why an order could not name its own deal.
+        opportunityId: version.proposal.opportunityId ?? deal.opportunityId ?? null,
         mondayProjectId: deal.itemId ?? null,
         priceSnapshotId: snap.id,
         ruleSnapshotId: version.ruleSnapshotId,

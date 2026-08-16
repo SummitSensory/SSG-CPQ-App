@@ -158,7 +158,7 @@ export interface SectionView {
   deliveryType: string | null;
   powderCoatBrand: string | null;
   shipmentQuote: string | null;
-  /** Informational: the deal's tax figure, not divided between vendors. */
+  /** Informational: the deal's tax figure. Only the mats vendor's sheet carries it. */
   estimatedTax: string | null;
   notes: string | null;
   /** A named address instead of the customer's site or Summit's dock. */
@@ -178,6 +178,8 @@ export interface SectionView {
   } | null;
   /** Which of the deal's two freight figures this vendor's shipment is quoted from. */
   freightSource: string;
+  /** Whether the deal's single tax figure belongs on this vendor's sheet. */
+  showsEstimatedTax: boolean;
   status: BomSectionStatus;
   /** Whether this vendor's sheet prints the powder-colour column. */
   showPowderColor: boolean;
@@ -373,6 +375,16 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
           }
         : null,
       freightSource: mfr?.bomFreightSource ?? 'STRUCTURE',
+      /**
+       * Whether the deal's tax figure belongs on this vendor's sheet.
+       *
+       * The deal carries ONE tax figure for the job, so showing it against every vendor
+       * made a three-vendor order look like it owed the tax three times and left each
+       * sheet's grand total overstated by it. It rides with the mats vendor, which keeps
+       * the rule in the same setting that already decides which freight figure a vendor
+       * gets instead of hard-coding a name.
+       */
+      showsEstimatedTax: (mfr?.bomFreightSource ?? 'STRUCTURE') === 'MATS',
       status: s.status,
       // Forced on when a line already carries a colour: hiding the column under a
       // vendor who has been given one would drop information from their sheet.
@@ -606,12 +618,17 @@ export async function pullDealFigures(
       figures,
       sourceByVendor.get(sec.vendor.toLowerCase()) ?? 'STRUCTURE',
     );
+    const carriesTax = (sourceByVendor.get(sec.vendor.toLowerCase()) ?? 'STRUCTURE') === 'MATS';
     const data: Record<string, unknown> = {};
     const blank = (v: string | null) => !v || !v.trim() || v.trim().toUpperCase() === 'TBD';
     if (freight && (opts.overwrite || blank(sec.shipmentQuote))) data.shipmentQuote = freight;
-    if (figures.estimatedTax && (opts.overwrite || blank(sec.estimatedTax))) {
+    if (carriesTax && figures.estimatedTax && (opts.overwrite || blank(sec.estimatedTax))) {
       data.estimatedTax = figures.estimatedTax;
     }
+    // Clear a tax figure copied onto a vendor that should never have carried one. The
+    // sheet already hides it, but leaving the value behind would have it reappear the
+    // day someone changes which vendor quotes the mats.
+    if (!carriesTax && !blank(sec.estimatedTax)) data.estimatedTax = null;
     if (!Object.keys(data).length) {
       skipped++;
       continue;

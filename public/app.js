@@ -8987,7 +8987,13 @@
             '</div></div>' +
           // The deal carries one tax figure for the order; it is shown on each
           // sheet rather than divided between vendors.
-          '<div><div class="k">Estimated tax</div><input class="secF" data-id="' + s.id + '" data-f="estimatedTax" value="' + esc(s.estimatedTax || '') + '" placeholder="From the deal" style="' + bomFieldStyle(null, locked) + '"' + dis + '></div>' +
+          // The deal carries one tax figure for the job, so it belongs on one vendor's
+          // sheet. Shown against the mats vendor only — on every section it read as
+          // though the order owed the tax once per vendor, and each grand total was
+          // overstated by it.
+          (s.showsEstimatedTax
+            ? '<div><div class="k">Estimated tax</div><input class="secF" data-id="' + s.id + '" data-f="estimatedTax" value="' + esc(s.estimatedTax || '') + '" placeholder="From the deal" style="' + bomFieldStyle(null, locked) + '"' + dis + '></div>'
+            : '') +
         '</div>' +
         (edit
           ? '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;">' +
@@ -9208,8 +9214,9 @@
       ['Item cost total', money2(items), 0],
       ['Estimated shipment total', ship == null ? (s.shipmentQuote || 'TBD') : money2(ship), 0],
     ];
-    if (s.estimatedTax) rows.push(['Estimated tax', tax == null ? s.estimatedTax : money2(tax), 0]);
-    var grand = ship == null || (s.estimatedTax && tax == null) ? null : items + ship + (tax || 0);
+    var showTax = s.showsEstimatedTax && s.estimatedTax;
+    if (showTax) rows.push(['Estimated tax', tax == null ? s.estimatedTax : money2(tax), 0]);
+    var grand = ship == null || (showTax && tax == null) ? null : items + ship + (showTax ? tax || 0 : 0);
     rows.push(['Bill of Materials grand total', grand == null ? 'Pending freight' : money2(grand), 1]);
 
     return '<div style="display:flex;justify-content:flex-end;margin-top:12px;">' +

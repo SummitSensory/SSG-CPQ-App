@@ -29,7 +29,7 @@ async function nextNumber(): Promise<string> {
 }
 
 export async function createProposal(
-  input: { organizationId: string; title: string } & VersionContent,
+  input: { organizationId: string; opportunityId?: string | null; title: string } & VersionContent,
   userId: string,
 ): Promise<{ id: string; number: string }> {
   const number = await nextNumber();
@@ -38,6 +38,10 @@ export async function createProposal(
       data: {
         number,
         organizationId: input.organizationId,
+        // Which of the customer's deals this is for. Optional, because a proposal is
+        // often written before an opportunity exists — but when it is set, nothing
+        // downstream has to infer the deal from the customer's other projects.
+        opportunityId: input.opportunityId ?? null,
         title: input.title,
         currentVersion: 1,
         createdById: userId,
@@ -331,10 +335,11 @@ export async function changeStatus(
         changedById: userId,
         // The warning travels with the status event, so the reviewer sees on the
         // timeline that the proposal arrived with lines still unpriced.
-        note: [note, warnings.length ? `unpriced at submit: ${warnings.join(' ')}` : null]
-          .filter(Boolean)
-          .join(' — ')
-          .trim() || null,
+        note:
+          [note, warnings.length ? `unpriced at submit: ${warnings.join(' ')}` : null]
+            .filter(Boolean)
+            .join(' — ')
+            .trim() || null,
       },
     });
   });

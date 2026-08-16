@@ -499,7 +499,16 @@ export async function buildBom(
     financials: (() => {
       const itemCostMinor = totals.extendedCostMinor;
       const shipmentQuote = s(section?.shipmentQuote ?? order.shipmentQuote);
-      const estimatedTax = s(section?.estimatedTax);
+      // Tax belongs to ONE vendor's sheet, not to every vendor's.
+      //
+      // The deal carries a single tax figure for the job — the comment on DEAL_COL says
+      // as much — so copying it onto each vendor section made a three-vendor order look
+      // like it owed the tax three times, and each sheet's grand total was wrong by it.
+      // It rides with the mats vendor (Resilite, whose bomFreightSource is MATS), which
+      // keeps the rule in the same admin setting that already decides which freight
+      // figure a vendor gets rather than hard-coding a vendor's name in the code.
+      const carriesTax = mfr?.bomFreightSource === 'MATS';
+      const estimatedTax = carriesTax ? s(section?.estimatedTax) : '';
       const shipmentMinor = parseMoneyMinor(shipmentQuote);
       const estimatedTaxMinor = parseMoneyMinor(estimatedTax);
       return {
