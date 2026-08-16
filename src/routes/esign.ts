@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
@@ -15,6 +16,15 @@ import {
   voidEnvelope,
 } from '../integrations/docuseal/service.js';
 import { pdfAvailable } from '../render/pdf.js';
+
+/**
+ * A nullable Json column does not take `null` — Prisma distinguishes clearing the
+ * column (`DbNull`) from storing the JSON value `null` (`JsonNull`), so a plain
+ * null is a type error. Clearing is what an absent rule means here. Same shape as
+ * RuleCondition's `when` in routes/formulas.ts.
+ */
+const jsonOrClear = (v: Record<string, unknown> | null | undefined) =>
+  v == null ? Prisma.DbNull : (v as Prisma.InputJsonValue);
 
 /**
  * Proposal e-signing.
@@ -194,7 +204,7 @@ export function registerEsignRoutes(app: FastifyInstance): void {
         kind: parsed.data.kind,
         bodyHtml: parsed.data.bodyHtml,
         productLineIds: parsed.data.productLineIds ?? [],
-        attachRule: (parsed.data.attachRule ?? null) as object | null,
+        attachRule: jsonOrClear(parsed.data.attachRule),
         sortOrder: parsed.data.sortOrder ?? 0,
         active: parsed.data.active ?? true,
         createdById: req.user!.sub,
@@ -220,9 +230,7 @@ export function registerEsignRoutes(app: FastifyInstance): void {
         ...(d.kind ? { kind: d.kind } : {}),
         ...(d.bodyHtml ? { bodyHtml: d.bodyHtml } : {}),
         ...(d.productLineIds ? { productLineIds: d.productLineIds } : {}),
-        ...(d.attachRule !== undefined
-          ? { attachRule: (d.attachRule ?? null) as object | null }
-          : {}),
+        ...(d.attachRule !== undefined ? { attachRule: jsonOrClear(d.attachRule) } : {}),
         ...(d.sortOrder !== undefined ? { sortOrder: d.sortOrder } : {}),
         ...(d.active !== undefined ? { active: d.active } : {}),
       },

@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { logger } from '../../lib/logger.js';
 import { recordAudit } from '../../lib/audit.js';
@@ -240,7 +241,7 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
       versionId: version.id,
       templateId: template?.id ?? null,
       templateKey: template?.key ?? null,
-      attachments: attachments.map((a) => a.key) as object,
+      attachments: attachments.map((a) => a.key) as Prisma.InputJsonValue,
       status: 'DRAFT',
       subject: input.subject ?? null,
       message: input.message ?? null,
@@ -583,7 +584,7 @@ export async function recordEvent(input: {
         envelopeId: input.envelopeId,
         eventType: input.eventType,
         payloadHash,
-        payload: (input.payload ?? {}) as object,
+        payload: (input.payload ?? {}) as Prisma.InputJsonValue,
       },
     })
     .catch(() => undefined);
