@@ -13,7 +13,7 @@ import {
 import { hashPassword } from '../auth/password.js';
 import { UnauthorizedError, ValidationError } from '../lib/errors.js';
 import { requireAuth } from '../plugins/authz.js';
-import { env } from '../config/env.js';
+import { env, isPasswordSignInBlocked } from '../config/env.js';
 import { recordAudit } from '../lib/audit.js';
 import { requestPasswordReset, checkResetToken, consumeResetToken } from '../auth/passwordReset.js';
 
@@ -41,6 +41,23 @@ export function registerAuthRoutes(app: FastifyInstance): void {
     const parsed = LoginBody.safeParse(req.body);
     if (!parsed.success) throw new ValidationError();
     const { email, password } = parsed.data;
+
+    /**
+     * Domains listed in SSO_ENFORCED_DOMAINS must come through Microsoft.
+     *
+     * Checked before the password is looked at, and answered with a plain
+     * instruction rather than "Invalid credentials" — the point is to send somebody
+     * to the right button, and a person who is typing the right password into a form
+     * that will never accept it deserves to be told why.
+     *
+     * This does not reveal whether an account exists: the answer depends only on the
+     * domain typed into the box, which the person typing it already knows.
+     */
+    if (isPasswordSignInBlocked(email)) {
+      throw new UnauthorizedError(
+        'Accounts on this domain sign in with Microsoft. Use “Sign in with Microsoft” below.',
+      );
+    }
 
     // Email addresses are not case-sensitive, and SSO stores them lowercased.
     // Match the same way here so a row saved as "Bryan@..." still accepts

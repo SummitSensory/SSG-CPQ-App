@@ -30,9 +30,25 @@ const EnvSchema = z
     // Without this, anyone who can authenticate against the tenant is
     // auto-provisioned an account.
     ENTRA_ALLOWED_DOMAINS: z.string().min(1).default('summitsensory.com'),
-    // Role granted to a first-time SSO user. Least privilege by default; an
-    // admin promotes from Settings → Users.
+    // Role granted to a first-time SSO user when no group mapping applies. Least
+    // privilege by default; an admin promotes from Settings → Users.
     ENTRA_DEFAULT_ROLE: z.string().min(1).default('READ_ONLY'),
+    // Entra group → app role, as `key=ROLE` pairs separated by commas or newlines:
+    //   8f2c…=SYSTEM_ADMIN, 41ab…=SALES_REP, d0e9…=ACCOUNTING
+    // `key` is the group's object id (what a cloud-only tenant emits in the `groups`
+    // claim); a group name works where the tenant emits names. Requires the groups
+    // claim to be switched on in the app registration's Token configuration.
+    // Unset means every SSO user lands on ENTRA_DEFAULT_ROLE, as before.
+    ENTRA_ROLE_MAP: z.string().optional(),
+
+    // Domains whose users must sign in with Microsoft — the password form refuses
+    // them. Comma-separated, e.g. `summitsensory.com`. Only enforced while Entra SSO
+    // is actually configured, so a half-finished setup cannot lock everyone out.
+    SSO_ENFORCED_DOMAINS: z.string().optional(),
+    // Break-glass: these exact addresses keep password sign-in even inside an
+    // enforced domain. One admin account here is the difference between an Entra
+    // outage being an inconvenience and being a lockout.
+    SSO_ENFORCE_EXEMPT_EMAILS: z.string().optional(),
 
     // Transactional email (Resend). Optional: without a key, invites are
     // logged instead of sent.
@@ -80,6 +96,33 @@ const EnvSchema = z
     // GitHub release .tar matching the installed playwright-core. Unset locally:
     // Playwright then uses the browser already installed on the machine.
     CHROMIUM_PACK_URL: z.string().url().optional(),
+
+    // ---- Proposal e-signing (DocuSeal) ----
+    // API token from DocuSeal → Settings → API. Unset means e-signing is switched
+    // off: the routes report it plainly and every other path is unaffected.
+    DOCUSEAL_API_TOKEN: z.string().min(1).optional(),
+    // Cloud by default. Point this at a self-hosted instance's /api to move the
+    // integration without touching code.
+    DOCUSEAL_API_URL: z.string().url().default('https://api.docuseal.com'),
+    // Host that serves the signer links, used to build a URL from a submitter slug.
+    DOCUSEAL_SIGNING_BASE_URL: z.string().url().default('https://docuseal.com'),
+    // Secret for the inbound webhook: set the same value as a custom
+    // `X-Webhook-Secret` header on the DocuSeal webhook. Without it the endpoint
+    // refuses every request.
+    DOCUSEAL_WEBHOOK_SECRET: z.string().optional(),
+    // Whether DocuSeal emails the signers. False when the signing link should go
+    // out from the CRM instead — the envelope still records the per-signer URL.
+    DOCUSEAL_SEND_EMAIL: z
+      .enum(['true', 'false'])
+      .default('true')
+      .transform((v) => v === 'true'),
+    // Optional DocuSeal folder for the per-send templates, so the account does not
+    // become a flat list of every proposal ever sent.
+    DOCUSEAL_FOLDER: z.string().min(1).optional(),
+    // Vercel Blob read-write token: where the composed package and the executed PDF
+    // are kept, so the signed contract does not live only inside DocuSeal. Unset is
+    // supported — the envelope then keeps DocuSeal's own document URL.
+    BLOB_READ_WRITE_TOKEN: z.string().min(1).optional(),
 
     // QuickBooks Online integration. Client credentials come from env ONLY —
     // never source. OAuth tokens are encrypted with QBO_TOKEN_ENC_KEY.
@@ -208,11 +251,60 @@ export function isEntraConfigured(e: Env = env): boolean {
   );
 }
 
+/**
+ * Domains whose users must use Microsoft rather than the password form.
+ *
+ * Deliberately returns nothing unless SSO is configured. Enforcing this against a
+ * deployment with no working SSO would refuse the password form and offer no
+ * alternative — a locked door with no key, caused by one variable set too early.
+ */
+export function ssoEnforcedDomains(e: Env = env): string[] {
+  if (!isEntraConfigured(e) || !e.SSO_ENFORCED_DOMAINS) return [];
+  return e.SSO_ENFORCED_DOMAINS.split(',')
+    .map((d) => d.trim().toLowerCase().replace(/^@/, ''))
+    .filter(Boolean);
+}
+
+/** Addresses exempt from the above, verbatim and lower-cased. */
+export function ssoExemptEmails(e: Env = env): string[] {
+  if (!e.SSO_ENFORCE_EXEMPT_EMAILS) return [];
+  return e.SSO_ENFORCE_EXEMPT_EMAILS.split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+/**
+ * Whether this address must go through Microsoft instead of the password form.
+ * Case-insensitive on both sides; an exempt address always wins.
+ */
+export function isPasswordSignInBlocked(email: string, e: Env = env): boolean {
+  const addr = String(email || '')
+    .trim()
+    .toLowerCase();
+  if (!addr.includes('@')) return false;
+  if (ssoExemptEmails(e).includes(addr)) return false;
+  return ssoEnforcedDomains(e).includes(addr.split('@')[1]!);
+}
+
 /** Lower-cased list of email domains permitted to sign in via Entra. */
 export function entraAllowedDomains(e: Env = env): string[] {
   return e.ENTRA_ALLOWED_DOMAINS.split(',')
     .map((d) => d.trim().toLowerCase().replace(/^@/, ''))
     .filter(Boolean);
+}
+
+/**
+ * All an outbound send needs is the API token — the webhook secret guards inbound
+ * events and the Blob token only decides where our copy is kept, so neither may
+ * gate sending. Same lesson as isMondayPushConfigured.
+ */
+export function isDocusealConfigured(e: Env = env): boolean {
+  return Boolean(e.DOCUSEAL_API_TOKEN);
+}
+
+/** Inbound DocuSeal webhooks need the shared secret as well as the token. */
+export function isDocusealWebhookConfigured(e: Env = env): boolean {
+  return Boolean(e.DOCUSEAL_API_TOKEN && e.DOCUSEAL_WEBHOOK_SECRET);
 }
 
 /** True only when every QuickBooks credential + token encryption key is present. */

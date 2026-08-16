@@ -98,6 +98,17 @@ export interface EntraIdentity {
   email: string;
   name?: string;
   oid: string;
+  /** Group object ids (or names) from the `groups` claim; empty when not emitted. */
+  groups: string[];
+  /**
+   * True when Azure replaced the groups claim with a `_claim_names` pointer because
+   * the user is in too many groups for the token (roughly 200 for an ID token).
+   *
+   * This is not the same as "no groups". The caller must not read an overage as
+   * "unmapped and therefore demote" — it means the token cannot answer the question,
+   * and reading it as an answer would quietly strip somebody's access.
+   */
+  groupsOverage: boolean;
 }
 
 /**
@@ -127,9 +138,20 @@ export async function completeLogin(code: string, expectedNonce: string): Promis
     throw new UnauthorizedError(`${email} is outside the organizations permitted to sign in here.`);
   }
 
+  // Groups arrive as an array of object ids when the claim is switched on in the app
+  // registration. Anything that is not an array of strings is treated as absent.
+  const rawGroups = payload.groups;
+  const groups = Array.isArray(rawGroups)
+    ? rawGroups.filter((g): g is string => typeof g === 'string' && g.trim() !== '')
+    : [];
+  const claimNames = payload._claim_names as Record<string, unknown> | undefined;
+  const groupsOverage = !groups.length && Boolean(claimNames && 'groups' in claimNames);
+
   return {
     email,
     name: typeof payload.name === 'string' ? payload.name : undefined,
     oid: String(payload.oid ?? payload.sub),
+    groups,
+    groupsOverage,
   };
 }
