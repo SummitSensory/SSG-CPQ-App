@@ -3484,6 +3484,14 @@
         ? '<select class="pQuick" data-id="' + r.id + '" data-vid="' + r.vid + '" style="padding:6px 8px;border:1px solid #dcded7;border-radius:8px;font-size:12px;background:#fff;color:#3d4a55;max-width:170px;">' +
           '<option value="">Quick status…</option>' + acts.map(function (a) { return '<option value="' + a[0] + '">' + esc(a[1]) + '</option>'; }).join('') + '</select>'
         : '';
+      // Follow-up sits on the row because the list IS the follow-up queue — this is the
+      // screen where a rep reads down the past-expiration band deciding who to chase, and
+      // sending them into each proposal first to do it costs a page load per customer.
+      // Offered only while a proposal is still live or lapsed: a follow-up sequence has
+      // nothing to say to an accepted or rejected deal.
+      var followUp = !r.archivedAt && (OPEN_STATUSES.indexOf(r.status) !== -1 || r.status === 'EXPIRED') && r.organizationId
+        ? '<button class="pFollowUp" data-id="' + r.id + '" title="Pick a follow-up email for this customer, and see which ones they have already had" style="border:1px solid #dcded7;background:#fff;border-radius:8px;padding:6px 9px;font-size:12px;color:#3d4a55;cursor:pointer;white-space:nowrap;">Follow-up…</button>'
+        : '';
       // A shelved proposal gets one extra action: ask whether it is still live. It
       // sits beside the status picker rather than inside it because it sends nothing
       // on its own — it opens a draft for the rep to read and send.
@@ -3517,7 +3525,7 @@
         ptd('<b style="font-weight:600;">' + fmtMoney(r.totalMinor, 'USD') + '</b>', 'right') +
         ptd(fmtDate(r.modified) + '<div class="muted" style="font-size:11px;">made ' + esc(fmtDate(r.created)) + '</div>') +
         ptd(expCell) +
-        ptd('<div style="display:flex;gap:6px;justify-content:flex-end;align-items:center;flex-wrap:wrap;">' + reengage + quick + arch + '</div>', 'right', 'padding:8px 11px;') + '</tr>';
+        ptd('<div style="display:flex;gap:6px;justify-content:flex-end;align-items:center;flex-wrap:wrap;">' + followUp + reengage + quick + arch + '</div>', 'right', 'padding:8px 11px;') + '</tr>';
     }
     var body = rows.map(rowHtml).join('');
 
@@ -3594,6 +3602,13 @@
     });
     // Bound before the row handler and stopping propagation, so drafting an email
     // does not also navigate into the proposal.
+    box.querySelectorAll('button.pFollowUp').forEach(function (bt) {
+      bt.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        var row = props.rows.filter(function (r) { return r.id === bt.getAttribute('data-id'); })[0];
+        if (row) openFollowUpPicker(row, user);
+      });
+    });
     box.querySelectorAll('button.pReengage').forEach(function (bt) {
       bt.addEventListener('click', function (ev) {
         ev.stopPropagation();
@@ -3803,6 +3818,212 @@
    * `row` needs: id, organizationId, number, title, customer, totalMinor,
    * releasedAt, expires.
    */
+  /**
+   * Pick a follow-up email, copy it, log it.
+   *
+   * The ten templates run in a deliberate order — financing is not raised until
+   * budget is known to be the obstacle, and a concession is not hinted at until the
+   * gap is known to be small — so the picker leads with the sequence number and the
+   * "when to send" line rather than just a list of subjects.
+   *
+   * Copy rather than send. The rep pastes into Outlook and sends from their own
+   * mailbox, so the reply comes back to them and the mail is not a machine's. Two
+   * clipboard flavours go on at once: text/html keeps the paragraphs and the bolded
+   * question when pasted into Outlook, text/plain covers anything that refuses HTML.
+   *
+   * Nothing is blocked. The history is shown against each template and the rep
+   * decides — a hard block would be wrong the first time a project restarts a year
+   * later or the contact changes.
+   */
+  async function openFollowUpPicker(row, user) {
+    var orgId = row.organizationId;
+    if (!orgId) { alert('This proposal has no customer on it.'); return; }
+
+    var ov = null;
+    var $ = function (sel) { return ov ? ov.querySelector(sel) : null; };
+    var d = null;
+    var selectedKey = null;
+
+    var url = function (contactId) {
+      return '/crm/organizations/' + orgId + '/follow-ups' +
+        '?proposalId=' + encodeURIComponent(row.id) +
+        (contactId ? '&contactId=' + encodeURIComponent(contactId) : '');
+    };
+
+    var load = async function (contactId) {
+      var r = await authed(url(contactId));
+      if (!r.ok) {
+        var box = $('#fuBody');
+        if (box) box.innerHTML = '<div class="err">Could not load the templates (' + r.status + '). Run migration 0052 if this persists.</div>';
+        return;
+      }
+      d = await r.json();
+      draw();
+    };
+
+    ov = openModal('Follow-up email — ' + (row.customer || 'customer'),
+      '<div class="muted" style="font-size:12.5px;line-height:1.55;margin-bottom:12px;">' +
+        'Pick a template, copy it, and paste into Outlook — it sends from your mailbox so the reply comes back to you. ' +
+        'The history below each one is per customer, so a second proposal does not reset it.</div>' +
+      '<div id="fuBody"><div class="muted" style="font-size:12.5px;padding:12px 0;">Loading…</div></div>',
+      null, 'Done', { maxWidth: '760px' });
+
+    var fmtWhen = function (iso) {
+      try { return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); }
+      catch (e) { return String(iso || '').slice(0, 10); }
+    };
+
+    function draw() {
+      var box = $('#fuBody');
+      if (!box || !d) return;
+      var contacts = d.contacts || [];
+      if (!contacts.length) {
+        box.innerHTML = '<div class="muted" style="font-size:13px;line-height:1.6;">No contact on ' +
+          esc(d.customer.name) + ' has an email address, so there is nobody to address this to. Add one under CRM → Contacts, then come back.</div>';
+        return;
+      }
+      var sel = d.selectedContactId;
+
+      var rows = (d.templates || []).map(function (t) {
+        var chosen = t.key === selectedKey;
+        var sent = t.lastSent;
+        return '<div class="fuRow" data-key="' + t.key + '" style="border:1px solid ' + (chosen ? '#203060' : '#e7e8e3') + ';border-radius:10px;padding:10px 12px;margin-bottom:7px;cursor:pointer;background:' + (chosen ? '#f3f6fb' : '#fff') + ';">' +
+          '<div style="display:flex;gap:10px;align-items:baseline;">' +
+            '<div style="font-family:Georgia,serif;font-size:12px;font-weight:700;color:' + (sent ? '#9aa1b0' : '#d02030') + ';flex:none;width:16px;">' + String(t.step < 10 ? '0' + t.step : t.step) + '</div>' +
+            '<div style="flex:1;min-width:0;">' +
+              '<div style="font-size:13.5px;font-weight:600;color:#203060;">' + esc(t.name) +
+                (sent ? ' <span class="chip" style="font-size:10.5px;background:#f2f3ef;color:#7b8190;">Sent ' + esc(fmtWhen(sent.copiedAt)) + '</span>' : '') +
+                (t.sentCount > 1 ? ' <span class="muted" style="font-size:11px;">×' + t.sentCount + '</span>' : '') + '</div>' +
+              '<div class="muted" style="font-size:11.5px;line-height:1.45;margin-top:1px;">' + esc(t.whenToSend) + '</div>' +
+              (sent ? '<div class="muted" style="font-size:11.5px;">Last to ' + esc(sent.toName || sent.toEmail) + (sent.by ? ' by ' + esc(sent.by) : '') + '</div>' : '') +
+              (t.caution ? '<div style="font-size:11.5px;color:#8a6d1f;line-height:1.45;margin-top:3px;">' + esc(t.caution) + '</div>' : '') +
+            '</div>' +
+          '</div>' +
+        '</div>';
+      }).join('');
+
+      var chosenT = (d.templates || []).filter(function (t) { return t.key === selectedKey; })[0];
+
+      box.innerHTML =
+        '<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:12px;">' +
+          '<div style="flex:1;"><div class="k">To</div><select id="fuTo" style="' + IN + '">' +
+            contacts.map(function (c) {
+              return '<option value="' + c.id + '"' + (c.id === sel ? ' selected' : '') + '>' +
+                esc(c.name + ' <' + c.email + '>') + (c.isDecisionMaker ? ' — decision maker' : '') + '</option>';
+            }).join('') + '</select></div>' +
+        '</div>' +
+        '<div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start;">' +
+          '<div style="max-height:52vh;overflow:auto;">' + rows + '</div>' +
+          '<div id="fuPreview" style="position:sticky;top:0;">' +
+            (chosenT
+              ? '<div class="k">Subject</div>' +
+                '<div style="font-size:13px;font-weight:600;color:#20241f;line-height:1.4;margin-bottom:10px;">' + esc(chosenT.subject) + '</div>' +
+                '<div style="border:1px solid #e7e8e3;border-radius:10px;padding:12px 14px;background:#fff;max-height:34vh;overflow:auto;font-size:12.5px;line-height:1.5;">' + chosenT.html + '</div>' +
+                '<div class="muted" style="font-size:11.5px;line-height:1.5;margin-top:8px;">' + esc(chosenT.objective) + ' · ' + esc(chosenT.angle) + '</div>' +
+                '<div style="display:flex;gap:8px;margin-top:10px;">' +
+                  '<button type="button" class="btn" id="fuCopy" style="width:auto;padding:9px 16px;">Copy &amp; log it</button>' +
+                  '<button type="button" class="link-btn" id="fuCopyOnly" style="width:auto;padding:9px 15px;">Copy without logging</button>' +
+                '</div>' +
+                '<div id="fuMsg" class="muted" style="font-size:12px;margin-top:8px;line-height:1.5;"></div>'
+              : '<div class="muted" style="font-size:12.5px;line-height:1.55;padding:12px;border:1px dashed #dcded7;border-radius:10px;">Pick a template on the left to read it before you copy it.</div>') +
+          '</div>' +
+        '</div>' +
+        ((d.history || []).length
+          ? '<div class="k" style="margin-top:16px;">Everything sent to this customer</div>' +
+            '<div style="max-height:22vh;overflow:auto;">' +
+            (d.history || []).map(function (h) {
+              return '<div style="display:flex;gap:10px;align-items:baseline;padding:5px 0;border-bottom:1px solid #f2f3ef;font-size:12px;">' +
+                '<div class="muted" style="flex:none;width:96px;">' + esc(fmtWhen(h.copiedAt)) + '</div>' +
+                '<div style="flex:1;min-width:0;"><b style="font-weight:600;">' + esc(h.templateName) + '</b> ' +
+                  '<span class="muted">to ' + esc(h.toName || h.toEmail) + (h.by ? ' · ' + esc(h.by) : '') + '</span></div>' +
+                '<button type="button" class="fuDel link-btn" data-id="' + h.id + '" style="flex:none;width:auto;padding:3px 8px;font-size:11px;color:#a2402f;">Remove</button>' +
+              '</div>';
+            }).join('') + '</div>'
+          : '');
+
+      var msg = function (t, bad) {
+        var el = $('#fuMsg');
+        if (el) { el.style.color = bad ? '#9c3327' : '#2f7d5d'; el.textContent = t; }
+      };
+
+      box.querySelectorAll('.fuRow').forEach(function (el) {
+        el.addEventListener('click', function () { selectedKey = el.getAttribute('data-key'); draw(); });
+      });
+
+      var toEl = $('#fuTo');
+      if (toEl) toEl.addEventListener('change', function () { load(toEl.value); });
+
+      // Two flavours in one clipboard item, so Outlook takes the HTML and a plain
+      // editor still gets readable text. The async Clipboard API is the only way to
+      // put text/html on the clipboard without a contenteditable hack; where it is
+      // unavailable we fall back to a hidden selection copy, which also carries HTML.
+      var copy = async function () {
+        var html = chosenT.html, text = chosenT.text;
+        try {
+          if (navigator.clipboard && window.ClipboardItem) {
+            await navigator.clipboard.write([new ClipboardItem({
+              'text/html': new Blob([html], { type: 'text/html' }),
+              'text/plain': new Blob([text], { type: 'text/plain' }),
+            })]);
+            return true;
+          }
+        } catch (e) {}
+        try {
+          var holder = document.createElement('div');
+          holder.setAttribute('contenteditable', 'true');
+          holder.style.cssText = 'position:fixed;left:-9999px;top:0;white-space:normal;';
+          holder.innerHTML = html;
+          document.body.appendChild(holder);
+          var range = document.createRange();
+          range.selectNodeContents(holder);
+          var s2 = window.getSelection();
+          s2.removeAllRanges();
+          s2.addRange(range);
+          var ok = document.execCommand('copy');
+          s2.removeAllRanges();
+          document.body.removeChild(holder);
+          return ok;
+        } catch (e2) { return false; }
+      };
+
+      var contactOf = function () {
+        var id = $('#fuTo') ? $('#fuTo').value : null;
+        return contacts.filter(function (c) { return c.id === id; })[0] || contacts[0];
+      };
+
+      var onCopy = async function (andLog) {
+        var ok = await copy();
+        if (!ok) { msg('The browser blocked the copy. Select the preview text and copy it by hand.', 1); return; }
+        if (!andLog) { msg('Copied. Paste into Outlook — not logged.'); return; }
+        var to = contactOf();
+        var r = await authed('/crm/organizations/' + orgId + '/follow-ups', {
+          method: 'POST',
+          body: {
+            templateKey: chosenT.key, proposalId: row.id,
+            toEmail: to.email, toName: to.name, subject: chosenT.subject,
+          },
+        });
+        if (!r.ok) { msg('Copied, but the log failed (' + r.status + '). Record it by hand.', 1); return; }
+        msg('Copied and logged. Paste into Outlook and send.');
+        await load($('#fuTo') ? $('#fuTo').value : null);
+      };
+
+      var cp = $('#fuCopy'); if (cp) cp.addEventListener('click', function () { onCopy(true); });
+      var cpo = $('#fuCopyOnly'); if (cpo) cpo.addEventListener('click', function () { onCopy(false); });
+
+      box.querySelectorAll('.fuDel').forEach(function (b) {
+        b.addEventListener('click', async function () {
+          if (!confirm('Remove this line from the follow-up history?\n\nUse this for a mis-click — the log is meant to be complete, and the removal is audited.')) return;
+          var r = await authed('/follow-ups/' + b.getAttribute('data-id'), { method: 'DELETE' });
+          if (!r.ok && r.status !== 204) { alert('Could not remove it (' + r.status + ').'); return; }
+          load($('#fuTo') ? $('#fuTo').value : null);
+        });
+      });
+    }
+
+    load(null);
+  }
+
   async function openCustomerEmail(row, user, kind) {
     var ctx = { contacts: [] };
     try {
@@ -3992,8 +4213,9 @@
         ? sectionBlock('Send to the customer',
           '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">' +
             '<button class="btn" id="propSendDocs" style="width:auto;padding:10px 17px;">Send documents…</button>' +
+            '<button class="link-btn" id="propFollowUp" style="width:auto;padding:10px 17px;">Follow-up email…</button>' +
             '<button class="link-btn" id="propEmail" style="width:auto;padding:10px 17px;">Write an email…</button>' +
-            '<div class="muted" style="font-size:12.5px;max-width:520px;line-height:1.55;">Send documents attaches the proposal or the financing sheet and records the send. Write an email opens a plain draft in Outlook for anything else.</div>' +
+            '<div class="muted" style="font-size:12.5px;max-width:520px;line-height:1.55;">Send documents attaches the proposal or the financing sheet and records the send. Follow-up email picks from the ten templates and shows which this customer has already had. Write an email opens a plain draft in Outlook for anything else.</div>' +
           '</div>')
         : '') +
       sectionBlock('Ideal decision timeline', proposalTimelinePanel(p, latest)) +
@@ -4015,6 +4237,13 @@
     });
     var psd = document.getElementById('propSendDocs');
     if (psd) psd.addEventListener('click', function () { openSendDocuments(p, finCache, 'customer'); });
+    var pfu = document.getElementById('propFollowUp');
+    if (pfu) pfu.addEventListener('click', function () {
+      openFollowUpPicker({
+        id: p.id, organizationId: p.organizationId, number: p.number || '', title: p.title || '',
+        customer: p.organizationName || '',
+      }, user);
+    });
     var pem = document.getElementById('propEmail');
     if (pem) pem.addEventListener('click', function () {
       openCustomerEmail({

@@ -195,7 +195,8 @@ model Organization {
   facilities     Facility[]
   opportunities  Opportunity[]
   attachments    Attachment[]
-  customerNotes  CustomerNote[]
+  customerNotes  CustomerNote[]
+  followUpEmails  FollowUpEmailLog[]
 
   @@unique([normalizedName])
   @@index([customerType])
@@ -2554,4 +2555,45 @@ model FinanceRate {
 
   @@unique([bandId, termMonths])
   @@index([termMonths])
+}
+
+// ---------------------------------------------------------------------------
+// Proposal follow-up emails
+//
+// Ten templates in a deliberate order (see src/email/followUpTemplates.ts). The
+// log exists for one reason: so a rep can see which of the ten a customer has
+// already received and not send the same one twice.
+//
+// Scoped to the CUSTOMER, not the proposal. The same organization may have two
+// live proposals, and a second copy of "What Are Your Initial Thoughts?" reads as
+// a mail-merge accident no matter which proposal prompted it. proposalId is kept
+// alongside so the history still says which project the email was about.
+//
+// The rep sends from their own mailbox — the CRM formats the email and puts it on
+// the clipboard — so a row here is the rep’s assertion that they sent it, not a
+// delivery receipt. copiedAt is named for what the app actually observed.
+// ---------------------------------------------------------------------------
+
+model FollowUpEmailLog {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// The proposal the follow-up was about, where there was one.
+  proposalId     String?
+  /// Template key as sent. Text rather than a relation: the templates live in code,
+  /// and the history has to stay readable after one is renamed or retired.
+  templateKey    String
+  templateName   String
+  step           Int
+  subject        String
+  toName         String?
+  toEmail        String
+  /// What the app saw: the rep copied the email. Whether it left Outlook is theirs.
+  copiedAt       DateTime     @default(now())
+  sentById       String
+  note           String?
+
+  @@index([organizationId, copiedAt])
+  @@index([organizationId, templateKey])
+  @@index([proposalId])
 }
