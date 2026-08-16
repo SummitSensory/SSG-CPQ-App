@@ -986,6 +986,12 @@ model Proposal {
   id             String            @id @default(cuid())
   number         String            @unique
   organizationId String
+  /// Which of the customer's deals this proposal is for. Optional, because a proposal
+  /// is often written before an opportunity exists — but when it is set, nothing
+  /// downstream has to infer the deal from the customer's other concurrent projects.
+  /// Scalar only, matching AcceptedOrder.opportunityId: the link is a recorded fact,
+  /// not a cascade path.
+  opportunityId  String?
   title          String
   currentVersion Int               @default(1)
   createdById    String
@@ -1009,6 +1015,7 @@ model Proposal {
   freightTrueUps FreightTrueUp[]
 
   @@index([organizationId])
+  @@index([opportunityId])
   @@index([archivedAt])
 }
 
