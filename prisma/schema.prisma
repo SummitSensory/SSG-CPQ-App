@@ -2597,3 +2597,38 @@ model FollowUpEmailLog {
   @@index([organizationId, templateKey])
   @@index([proposalId])
 }
+
+/// A follow-up email template, editable under Administration → Follow-up emails.
+///
+/// Seeded once from the ten written in src/email/followUpTemplates.ts, then owned by
+/// the database — so changing a sentence is an edit, not a deploy.
+///
+/// `body` is plain text, not HTML. A blank line starts a new paragraph and a line
+/// wrapped in **asterisks** is the one bolded question. That is a format a person can
+/// edit in a textarea without breaking the email, which HTML is not: one unclosed tag
+/// pasted into a customer-facing message is a broken send nobody notices until after.
+model FollowUpTemplate {
+  id          String   @id @default(cuid())
+  /// Stable key. The email log records it, so renaming the name never breaks history.
+  key         String   @unique
+  name        String
+  /// Position in the sequence. The order is load-bearing — financing is not raised
+  /// until budget is known to be the obstacle.
+  step        Int
+  /// Guidance shown to the rep in the picker. Never sent.
+  whenToSend  String
+  objective   String
+  angle       String
+  /// An extra warning in the picker, e.g. attach the financing sheet.
+  caution     String?
+  subject     String
+  body        String
+  active      Boolean  @default(true)
+  /// Set on the ten that shipped with the app, so a reset knows what to restore.
+  isBuiltIn   Boolean  @default(false)
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([active, step])
+}
