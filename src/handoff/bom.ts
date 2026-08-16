@@ -23,7 +23,7 @@ export const COMPANY = {
   city: 'Englewood',
   region: 'CO',
   postalCode: '80111',
-  phone: '720-440-7850',
+  phone: '720-457-5500',
   email: 'Orders@SummitSensory.com',
 } as const;
 
