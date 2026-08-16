@@ -227,10 +227,18 @@ export function toBody(paragraphs: Array<string | { ask: string }>): string {
  * anything not written inline is lost by the time the message is composed. 11pt Calibri
  * after the system stack is Outlook's own default size — the email should look like the
  * rep typed it, not like it arrived from a system.
+ *
+ * ONE block element for the whole message, paragraphs separated by <br><br>, and this is
+ * the reason: Outlook inserts the rep's default signature into an X-Unsent draft after
+ * the FIRST block-level child of the body. With a <p> per paragraph that put the
+ * signature directly under "Hi Vanessa," and left the rest of the email below it. There
+ * is no header or flag that moves it — the placement follows from the markup — so the
+ * message is emitted as a single block whose end is the end of the email, which is where
+ * a signature belongs. Blank-line spacing comes from the double <br> instead of a
+ * paragraph margin; Outlook renders the two the same.
  */
 const WRAP =
   "font-family:-apple-system,'Segoe UI',Calibri,Arial,sans-serif;font-size:11pt;line-height:1.5;color:#000000;";
-const PARA = 'margin:0 0 12pt;padding:0;';
 
 export interface RenderedFollowUp {
   subject: string;
@@ -247,20 +255,18 @@ export function renderFollowUp(
   const greeting = `Hi ${ctx.firstName},`;
   const paragraphs = parseBody(template.body);
 
-  const bodyHtml = paragraphs
-    .map((p) => {
+  // Every visible line of the email, in order, as inline HTML. Joined with <br><br> so
+  // the whole thing is one block element — see WRAP above for why that matters.
+  const blocks = [
+    esc(greeting),
+    ...paragraphs.map((p) => {
       const inner = esc(fill(p.text, ctx)).replace(/\n/g, '<br>');
-      return p.ask
-        ? `<p style="${PARA}"><strong>${inner}</strong></p>`
-        : `<p style="${PARA}">${inner}</p>`;
-    })
-    .join('\n');
+      return p.ask ? `<strong>${inner}</strong>` : inner;
+    }),
+    `Best,<br>${esc(ctx.senderFirstName)}`,
+  ];
 
-  const html = `<div style="${WRAP}">
-<p style="${PARA}">${esc(greeting)}</p>
-${bodyHtml}
-<p style="${PARA}">Best,<br>${esc(ctx.senderFirstName)}</p>
-</div>`;
+  const html = `<div style="${WRAP}">${blocks.join('<br><br>')}</div>`;
 
   const text = [
     greeting,
@@ -327,7 +333,7 @@ export function buildEml(input: {
 /** RFC 2047 for a header that may hold a non-ASCII name or a curly apostrophe. */
 function encodeHeader(value: string): string {
   const v = String(value ?? '');
-   
+
   if (!/[^\x20-\x7E]/.test(v)) return v;
   const b64 = Buffer.from(v, 'utf8').toString('base64');
   return `=?UTF-8?B?${b64}?=`;
