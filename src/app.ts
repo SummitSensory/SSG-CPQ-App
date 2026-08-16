@@ -32,6 +32,8 @@ import { registerRenderRoutes } from './routes/render.js';
 import { registerFreightRoutes } from './routes/freight.js';
 import { registerFreightTrueUpRoutes } from './routes/freightTrueUp.js';
 import { registerWebhookRoutes } from './routes/webhooks.js';
+import { registerDocusealWebhookRoutes } from './routes/esignWebhook.js';
+import { registerEsignRoutes } from './routes/esign.js';
 import { registerReportRoutes } from './routes/reports.js';
 import { registerStandardNoteRoutes } from './routes/standardNotes.js';
 import { registerCustomerNoteRoutes } from './routes/customerNotes.js';
@@ -61,9 +63,9 @@ export function buildApp(): FastifyInstance {
       },
     },
   });
-  // Keep the raw JSON body alongside the parsed one. The Resend webhook signs the
-  // exact bytes it sent, so re-serializing the parsed object would not verify —
-  // key order and whitespace differ.
+  // Keep the raw JSON body alongside the parsed one. The Resend and DocuSeal
+  // webhooks are checked against the exact bytes they sent, so re-serializing the
+  // parsed object would not verify — key order and whitespace differ.
   app.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
     (req as unknown as { rawBody?: string }).rawBody = body as string;
     try {
@@ -80,6 +82,7 @@ export function buildApp(): FastifyInstance {
   registerFreightGate(app);
   registerHealthRoutes(app);
   registerWebhookRoutes(app);
+  registerDocusealWebhookRoutes(app);
   registerAuthRoutes(app);
   registerSsoRoutes(app);
   registerAdminRoutes(app);
@@ -105,6 +108,7 @@ export function buildApp(): FastifyInstance {
   registerFreightRfqRoutes(app);
   registerFinanceRoutes(app);
   registerRenderRoutes(app);
+  registerEsignRoutes(app);
   registerFreightRoutes(app);
   registerFreightTrueUpRoutes(app);
   registerReportRoutes(app);

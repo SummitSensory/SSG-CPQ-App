@@ -11,6 +11,12 @@ export const Permission = {
   PROPOSAL_WRITE: 'proposal:write',
   PROPOSAL_REVIEW: 'proposal:review',
   PROPOSAL_RELEASE: 'proposal:release',
+  // Send a released proposal for signature, and withdraw one that is out. Separate
+  // from release: releasing freezes a version internally, this puts a signable
+  // contract in front of a customer. Reading a signature request's status needs
+  // only PROPOSAL_READ; the ~10 signing document templates are managed under
+  // INTEGRATIONS_MANAGE, because editing signing boilerplate is an admin act.
+  PROPOSAL_ESIGN: 'proposal:esign',
   // Archive/restore a proposal. Reversible and destroys nothing, so it sits below
   // review: a rep holds it for their own proposals (ownership is checked in the
   // route), managers and accounting for anyone’s.
@@ -90,6 +96,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly string[]> = {
     P.PRICING_OVERRIDE,
     P.PROPOSAL_REVIEW,
     P.PROPOSAL_RELEASE,
+    P.PROPOSAL_ESIGN,
     P.PROPOSAL_ARCHIVE,
     P.FREIGHT_COST_WRITE,
     P.FREIGHT_INVOICE_PUSH,
@@ -105,13 +112,16 @@ export const ROLE_PERMISSIONS: Record<Role, readonly string[]> = {
     P.PRICING_OVERRIDE,
     P.PROPOSAL_REVIEW,
     P.PROPOSAL_RELEASE,
+    P.PROPOSAL_ESIGN,
     P.PROPOSAL_ARCHIVE,
     P.FREIGHT_COST_WRITE,
     P.ORDERS_MANAGE,
   ],
   // A rep true-ups freight on their own jobs — they are usually the one holding the
-  // vendor's email. Pushing the change to a live invoice is not theirs.
-  SALES_REP: [...BASE, P.PROPOSAL_ARCHIVE, P.FREIGHT_COST_WRITE],
+  // vendor's email. Pushing the change to a live invoice is not theirs. Sending for
+  // signature is: the rep owns the customer conversation, and the version they can
+  // send has already been released by someone who could review it.
+  SALES_REP: [...BASE, P.PROPOSAL_ARCHIVE, P.PROPOSAL_ESIGN, P.FREIGHT_COST_WRITE],
   DESIGNER: [...BASE, P.RULES_MANAGE],
   ESTIMATOR: [...BASE, P.COSTS_READ, P.MARGINS_READ, P.FREIGHT_COST_WRITE],
   // Operations owns vendor freight pricing: enters the quotes and puts them on the
