@@ -2,7 +2,7 @@ import { prisma } from '../../lib/prisma.js';
 import { env, isMondayPushConfigured } from '../../config/env.js';
 import { logger } from '../../lib/logger.js';
 import { setColumnValues, uploadFileToColumn } from './client.js';
-import { findLink } from './links.js';
+import { dealItemIdFor } from './dealLink.js';
 import { versionTotals } from '../../proposals/analytics.js';
 import { renderPdf } from '../../render/pdf.js';
 
@@ -56,27 +56,10 @@ function mondayDateValue(date: Date | null): { date: string } | Record<string, n
 }
 
 /**
- * The monday deal row behind a proposal. A proposal is filed against an
- * organization, not a deal, so the deal is reached through the organization's
- * opportunities: the most recently updated one that monday knows about. An
- * organization with no synced opportunity has no row to write to, which is reported
- * rather than guessed at.
+ * The monday deal row behind a proposal. Shared with the accept flow and the Bill of
+ * Materials freight pull — the rule lives in integrations/monday/dealLink.ts, because
+ * three callers need the same answer and were each working it out differently.
  */
-async function dealItemIdFor(organizationId: string): Promise<{ itemId?: string; note?: string }> {
-  const opps = await prisma.opportunity.findMany({
-    where: { organizationId },
-    select: { id: true, name: true, mondayItemId: true, updatedAt: true },
-    orderBy: { updatedAt: 'desc' },
-  });
-  if (!opps.length) return { note: 'this customer has no opportunity in the CRM, so there is no monday deal row to update' };
-
-  for (const o of opps) {
-    if (o.mondayItemId) return { itemId: o.mondayItemId };
-    const link = await findLink({ entity: 'Opportunity', entityId: o.id });
-    if (link?.externalId) return { itemId: link.externalId };
-  }
-  return { note: 'none of this customer’s opportunities are linked to a monday deal row yet' };
-}
 
 /**
  * Push a released proposal to the monday deal board. Never throws: a release must
@@ -97,14 +80,18 @@ export async function pushReleasedProposal(input: {
   if (!isMondayPushConfigured()) {
     return {
       pushed: false,
-      skipped: 'monday.com is not configured on this deployment — set MONDAY_API_TOKEN and MONDAY_DEALS_BOARD_ID.',
+      skipped:
+        'monday.com is not configured on this deployment — set MONDAY_API_TOKEN and MONDAY_DEALS_BOARD_ID.',
     };
   }
 
   const version = await prisma.proposalVersion.findUnique({
     where: { id: input.versionId },
     select: {
-      id: true, sections: true, items: true, expirationDate: true,
+      id: true,
+      sections: true,
+      items: true,
+      expirationDate: true,
       proposal: { select: { id: true, number: true, title: true, organizationId: true } },
     },
   });
@@ -138,22 +125,50 @@ export async function pushReleasedProposal(input: {
       // The document itself is uploaded separately, by the renderer function.
       // Rendering a PDF here would need a headless browser on the main API
       // function, which has neither the memory nor the 30 seconds to spare.
-      logger.info({ versionId: input.versionId }, 'monday proposal push: columns updated, document follows from the renderer');
+      logger.info(
+        { versionId: input.versionId },
+        'monday proposal push: columns updated, document follows from the renderer',
+      );
     }
 
     await prisma.integrationSyncLog.create({
-      data: { direction: 'OUTBOUND', entity: ENTITY, entityId: version.id, externalId: itemId, status: 'ok' },
+      data: {
+        direction: 'OUTBOUND',
+        entity: ENTITY,
+        entityId: version.id,
+        externalId: itemId,
+        status: 'ok',
+      },
     });
-    return { pushed: true, itemId, subtotalMinor, discountMinor: totals.discount, expirationDate, fileUploaded };
+    return {
+      pushed: true,
+      itemId,
+      subtotalMinor,
+      discountMinor: totals.discount,
+      expirationDate,
+      fileUploaded,
+    };
   } catch (err) {
     logger.error({ err, versionId: input.versionId, itemId }, 'monday proposal push failed');
     await prisma.integrationSyncLog.create({
       data: {
-        direction: 'OUTBOUND', entity: ENTITY, entityId: version.id, externalId: itemId,
-        status: 'error', error: String(err),
+        direction: 'OUTBOUND',
+        entity: ENTITY,
+        entityId: version.id,
+        externalId: itemId,
+        status: 'error',
+        error: String(err),
       },
     });
-    return { pushed: false, itemId, subtotalMinor, discountMinor: totals.discount, expirationDate, fileUploaded, error: String(err) };
+    return {
+      pushed: false,
+      itemId,
+      subtotalMinor,
+      discountMinor: totals.discount,
+      expirationDate,
+      fileUploaded,
+      error: String(err),
+    };
   }
 }
 
@@ -196,16 +211,29 @@ export async function uploadProposalPdfToMonday(input: {
     const pdf = await renderPdf(input.proposalHtml, { format: 'Letter' });
     await uploadFileToColumn(itemId, DEAL_COLUMNS.file, `${name}.pdf`, pdf);
     await prisma.integrationSyncLog.create({
-      data: { direction: 'OUTBOUND', entity: ENTITY, entityId: version.id, externalId: itemId, status: 'ok' },
+      data: {
+        direction: 'OUTBOUND',
+        entity: ENTITY,
+        entityId: version.id,
+        externalId: itemId,
+        status: 'ok',
+      },
     });
     logger.info({ versionId: input.versionId, itemId }, 'monday proposal push: document uploaded');
     return { uploaded: true, itemId, filename: `${name}.pdf` };
   } catch (err) {
-    logger.error({ err, versionId: input.versionId, itemId }, 'monday proposal push: document upload failed');
+    logger.error(
+      { err, versionId: input.versionId, itemId },
+      'monday proposal push: document upload failed',
+    );
     await prisma.integrationSyncLog.create({
       data: {
-        direction: 'OUTBOUND', entity: ENTITY, entityId: version.id, externalId: itemId,
-        status: 'error', error: String(err),
+        direction: 'OUTBOUND',
+        entity: ENTITY,
+        entityId: version.id,
+        externalId: itemId,
+        status: 'error',
+        error: String(err),
       },
     });
     return { uploaded: false, itemId, error: String(err) };
