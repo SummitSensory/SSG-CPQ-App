@@ -522,7 +522,7 @@
             '<button class="link-btn" id="profBtn" style="margin-bottom:6px;">My Profile</button>' +
             '<button class="link-btn" id="pwdBtn" style="margin-bottom:6px;">Change Password</button>' +
             '<button class="link-btn" id="logoutBtn">Sign Out</button>' +
-            '<div style="text-align:center;font-size:10px;color:#b3b7ac;margin-top:8px;letter-spacing:.04em;">build 50 · freight alerts</div></div>' +
+            '<div id="buildStamp" style="text-align:center;font-size:10px;color:#b3b7ac;margin-top:8px;letter-spacing:.04em;line-height:1.5;">&nbsp;</div></div>' +
         '</aside>' +
         '<main class="main"><div class="topbar"><div class="eyebrow">Summit Sensory Gym Proposal Management Software</div><h2 id="viewTitle">Dashboard</h2></div>' +
           '<div class="content" id="view"></div></main>' +
@@ -546,6 +546,7 @@
       else renderSoon(item.label);
     });
     document.getElementById('logoutBtn').addEventListener('click', logout);
+    showBuildStamp();
     document.getElementById('pwdBtn').addEventListener('click', openPasswordForm);
     document.getElementById('profBtn').addEventListener('click', function () { openProfileForm(user); });
     renderDashboard(user);
@@ -12063,6 +12064,51 @@
         location.href = d.url;
       });
     }
+  }
+
+  /**
+   * What build am I looking at?
+   *
+   * Two dates are available and they answer different questions: the commit date is when
+   * the code was written and pushed, the build date is when Vercel deployed it. The
+   * commit date is the one shown, because "is my fix live?" is a question about the push
+   * — the build time only differs from it when a deploy was retried or promoted later.
+   * Both are in the tooltip so the difference is visible when it matters.
+   *
+   * Fails silently. A shell that will not render because it could not label itself would
+   * be a poor trade.
+   */
+  async function showBuildStamp() {
+    var el = document.getElementById('buildStamp');
+    if (!el) return;
+    try {
+      // Cache-busted: this file's whole job is to be current, and a cached copy of it
+      // reporting the previous deploy is worse than no label at all.
+      var r = await api('/build-info?t=' + Date.now(), { noAuth: true });
+      if (!r.ok) return;
+      var b = await r.json();
+      if (!b || !b.shortCommit) {
+        el.textContent = 'local build';
+        return;
+      }
+      var stamp = b.committedAt || b.builtAt;
+      var when = '';
+      if (stamp) {
+        var dt = new Date(stamp);
+        when = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) +
+          ' ' + dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+      }
+      el.innerHTML = 'build ' + esc(b.shortCommit) + (when ? '<br>' + esc(when) : '') +
+        (b.environment && b.environment !== 'production' ? '<br>' + esc(b.environment) : '');
+      var tip = [
+        b.message ? b.message : null,
+        b.branch ? 'branch ' + b.branch : null,
+        b.author ? 'by ' + b.author : null,
+        b.committedAt ? 'pushed ' + new Date(b.committedAt).toLocaleString() : null,
+        b.builtAt ? 'deployed ' + new Date(b.builtAt).toLocaleString() : null,
+      ].filter(Boolean).join('\n');
+      if (tip) el.setAttribute('title', tip);
+    } catch (e) {}
   }
 
   async function logout() {

@@ -11,6 +11,7 @@
     "dev": "tsx watch --env-file=.env src/server.ts",
     "dev:ci": "tsx src/server.ts",
     "build": "tsc --noCheck -p tsconfig.build.json",
+    "stamp": "node scripts/build-stamp.mjs",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
