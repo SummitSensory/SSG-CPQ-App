@@ -1,6 +1,8 @@
 import { prisma } from '../lib/prisma.js';
 import { ConflictError, NotFoundError, ValidationError } from '../lib/errors.js';
 import { recordAudit } from '../lib/audit.js';
+import { logger } from '../lib/logger.js';
+import { dealItemIdFor } from '../integrations/monday/dealLink.js';
 import { vendorPartLookup } from './vendorParts.js';
 import {
   buildContentSnapshot,
@@ -350,6 +352,30 @@ export async function createAcceptedOrder(
   const procurement = procurementFromItems(version.items);
   const refs = await resolveCatalogRefs(procurement);
 
+  // The deal this order belongs to, resolved at accept time and stored on the order.
+  //
+  // This is where the link belongs. It was previously written only by an explicit call
+  // to /orders/:id/integrations, which nothing in this flow made and no screen offered —
+  // so mondayProjectId was null on every order ever created, and the Bill of Materials
+  // could not pull freight or tax from the deal for any of them.
+  //
+  // Resolved once, here, for the same reason the QuickBooks estimate reference is: the
+  // deal an order was accepted against is a fact about the accept, and looking it up
+  // later risks answering with whatever the board says by then. A customer with no
+  // linked opportunity leaves it null and the BOM says what to do about it — a missing
+  // deal must never stop an acceptance being recorded.
+  const deal = await dealItemIdFor(version.proposal.organizationId).catch(() => ({
+    itemId: undefined,
+    opportunityId: undefined,
+    note: 'the deal lookup failed',
+  }));
+  if (!deal.itemId) {
+    logger.info(
+      { versionId, organizationId: version.proposal.organizationId, reason: deal.note },
+      'accept: no monday deal to link',
+    );
+  }
+
   const order = await prisma.$transaction(async (tx) => {
     const o = await tx.acceptedOrder.create({
       data: {
@@ -358,6 +384,10 @@ export async function createAcceptedOrder(
         proposalId: version.proposalId,
         proposalVersionId: version.id,
         acceptedVersion: version.version,
+        // Both halves of the deal link. opportunityId was never set either, which is why
+        // an order could not name its own deal even when the customer had one.
+        opportunityId: deal.opportunityId ?? null,
+        mondayProjectId: deal.itemId ?? null,
         priceSnapshotId: snap.id,
         ruleSnapshotId: version.ruleSnapshotId,
         currency: snap.currency,

@@ -2,6 +2,7 @@ import { prisma } from '../lib/prisma.js';
 import { NotFoundError } from '../lib/errors.js';
 import { fetchItemById } from '../integrations/monday/discovery.js';
 import { DEAL_COL, clean } from '../integrations/monday/crmMapping.js';
+import { dealItemIdFor } from '../integrations/monday/dealLink.js';
 import { logger } from '../lib/logger.js';
 import type { BomFreightSource } from '@prisma/client';
 
@@ -43,16 +44,11 @@ const EMPTY: DealFigures = {
 /**
  * Which monday deal this order belongs to.
  *
- * `AcceptedOrder.mondayProjectId` is only ever set by an explicit call to
- * /orders/:id/integrations, and nothing in the accept flow calls it — so in practice
- * every order reported "not linked to a monday deal yet" and the freight pull could
- * never do anything. The link was always derivable: an order comes from a proposal,
- * which belongs to an opportunity, which is the deal.
- *
- * Resolved lazily and then STORED. Stored because the figures on a document must stay
- * traceable to one deal — the same reason FreightRfq keeps its projectId rather than
- * looking it up at render — and lazily because that fixes every order already in the
- * database without a backfill script.
+ * Normally already answered: the accept flow resolves the deal and stores it on the
+ * order, which is where that belongs. This is the repair path for orders accepted before
+ * it did — it resolves through the shared rule and then STORES the result, so an order
+ * fixes itself the first time someone pulls figures onto its Bill of Materials and no
+ * backfill script is needed.
  */
 async function resolveDealId(orderId: string): Promise<{ id: string | null; note: string | null }> {
   const order = await prisma.acceptedOrder.findUnique({
@@ -62,43 +58,25 @@ async function resolveDealId(orderId: string): Promise<{ id: string | null; note
   if (!order) throw new NotFoundError('Order not found');
   if (order.mondayProjectId) return { id: order.mondayProjectId, note: null };
 
-  // The opportunity this order came from is the deal. Anything else is a guess.
-  let found: string | null = null;
-  if (order.opportunityId) {
-    const opp = await prisma.opportunity.findUnique({
-      where: { id: order.opportunityId },
-      select: { mondayItemId: true },
-    });
-    found = opp?.mondayItemId ?? null;
-  }
+  const link = await dealItemIdFor(order.organizationId);
+  if (!link.itemId) return { id: null, note: link.note ?? null };
 
-  // Failing that, the customer's most recent opportunity that IS linked. A customer
-  // usually has one live deal, so this is right far more often than it is wrong — and
-  // when it is wrong the figures are visibly from another job, which is noticeable in a
-  // way that a silently empty pull is not.
-  let guessed = false;
-  if (!found) {
-    const opp = await prisma.opportunity.findFirst({
-      where: { organizationId: order.organizationId, mondayItemId: { not: null } },
-      orderBy: { createdAt: 'desc' },
-      select: { mondayItemId: true },
-    });
-    found = opp?.mondayItemId ?? null;
-    guessed = Boolean(found);
-  }
-
-  if (!found) return { id: null, note: null };
-
+  // Stored on first resolution, for the same reason a freight RFQ stores its project id:
+  // the deal reference on a document must not drift if the board changes later.
   await prisma.acceptedOrder.update({
     where: { id: orderId },
-    data: { mondayProjectId: found },
+    data: {
+      mondayProjectId: link.itemId,
+      ...(order.opportunityId ? {} : { opportunityId: link.opportunityId ?? null }),
+    },
   });
-  logger.info({ orderId, mondayProjectId: found, guessed }, 'deal figures: linked order to deal');
+  logger.info(
+    { orderId, mondayProjectId: link.itemId },
+    'deal figures: linked an order accepted before the link was recorded',
+  );
   return {
-    id: found,
-    note: guessed
-      ? 'Linked to this customer’s most recent monday deal. Check the figures are from the right job.'
-      : null,
+    id: link.itemId,
+    note: 'This order predates the deal link, so it was matched to this customer’s most recent monday deal. Check the figures are from the right job.',
   };
 }
 
@@ -107,8 +85,7 @@ export async function dealFigures(orderId: string): Promise<DealFigures> {
   if (!link.id) {
     return {
       ...EMPTY,
-      error:
-        'This order is not linked to a monday deal, and no opportunity on this customer has a deal either. Link the opportunity to its Deal Tracking row under CRM, then pull again.',
+      error: `This order is not linked to a monday deal — ${link.note ?? 'no opportunity on this customer has one'}. Link the opportunity to its Deal Tracking row under CRM, then pull again.`,
     };
   }
 
