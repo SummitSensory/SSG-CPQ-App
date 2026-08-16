@@ -78,19 +78,19 @@ export function registerDocusealWebhookRoutes(app: FastifyInstance): void {
 
     // Resolve on submission first, then on submitter: `submission.completed`
     // carries the submission id, while the form.* events carry the submitter's.
-    const envelope = submissionId
-      ? await prisma.esignEnvelope.findFirst({
-          where: { docusealSubmissionId: String(submissionId) },
-          select: { id: true },
-        })
-      : submitterId
-        ? await prisma.esignSigner
-            .findFirst({
-              where: { docusealSubmitterId: String(submitterId) },
-              select: { envelopeId: true },
-            })
-            .then((s) => (s ? { id: s.envelopeId } : null))
-        : null;
+    let envelope: { id: string } | null = null;
+    if (submissionId) {
+      envelope = await prisma.esignEnvelope.findFirst({
+        where: { docusealSubmissionId: String(submissionId) },
+        select: { id: true },
+      });
+    } else if (submitterId) {
+      const signer = await prisma.esignSigner.findFirst({
+        where: { docusealSubmitterId: String(submitterId) },
+        select: { envelopeId: true },
+      });
+      envelope = signer ? { id: signer.envelopeId } : null;
+    }
 
     // Not one of ours — a template signed straight from DocuSeal, or another
     // deployment pointed at the same account. Acknowledge and move on, or DocuSeal

@@ -1026,6 +1026,11 @@ model ProposalVersion {
   releasedAt      DateTime?
   releasedById    String?
   frozen          Boolean               @default(false)
+  /// The financing rate sheet this version was quoted from, set the first time a
+  /// financing sheet is SENT. Null until then, and a preview uses the current card.
+  /// Loading next year’s rates therefore cannot restate a payment a customer has
+  /// already been given in writing.
+  financeRateCardId String?
   createdById     String
   createdAt       DateTime              @default(now())
   updatedAt       DateTime              @updatedAt
@@ -2483,4 +2488,70 @@ model EsignEvent {
 
   @@unique([envelopeId, payloadHash])
   @@index([envelopeId])
+}
+
+// ---------------------------------------------------------------------------
+// Ryan Capital financing rate sheets
+//
+// A payment factor is not one number per term: it depends on how much is being
+// financed. Ryan Capital publish a grid — amount band down, term across — and the
+// monthly payment is the financed amount x the factor at that intersection.
+// Quoting one band for every amount overstates the payment on a large job, which
+// is what a single FinanceFactor row per term did.
+//
+// Sheets are VERSIONED. Ryan Capital reissue the workbook, and a proposal already
+// sent must keep the factors it was quoted on, so a new sheet is a new card with
+// its own effective date rather than an edit to the old one.
+// ---------------------------------------------------------------------------
+
+model FinanceRateCard {
+  id          String            @id @default(cuid())
+  /// What the lessor called it, e.g. "Ryan Capital 2025".
+  name        String
+  /// Where it came from — a workbook filename, an email date.
+  source      String?
+  /// The date the lessor’s sheet takes effect. The current card is the newest
+  /// active card effective on or before today.
+  effectiveOn DateTime          @db.Date
+  notes       String?
+  /// A card being built is inactive: it is not quoted from until it is published.
+  active      Boolean           @default(false)
+  createdById String?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  bands       FinanceRateBand[]
+
+  @@index([active, effectiveOn])
+}
+
+/// One amount band on a card. Bounds are in minor units, matching every other
+/// money column. maxMinor is null on the top band, which is how "and above" is
+/// expressed without inventing a ceiling.
+model FinanceRateBand {
+  id        String          @id @default(cuid())
+  cardId    String
+  card      FinanceRateCard @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  /// The lessor’s own label for the band, shown in the editor.
+  label     String
+  minMinor  Int
+  maxMinor  Int?
+  sortOrder Int             @default(0)
+  rates     FinanceRate[]
+
+  @@index([cardId, minMinor])
+}
+
+/// One factor: this band, this term. A term with NO row is a term the lessor does
+/// not offer at that amount — the 3,000–4,999 band has no 12- or 60-month option —
+/// so absence is the representation rather than a zero that would print 0.00.
+model FinanceRate {
+  id         String          @id @default(cuid())
+  bandId     String
+  band       FinanceRateBand @relation(fields: [bandId], references: [id], onDelete: Cascade)
+  termMonths Int
+  /// Payment per 1 dollar financed, e.g. 0.032700 for 36 months.
+  factor     Decimal         @db.Decimal(10, 6)
+
+  @@unique([bandId, termMonths])
+  @@index([termMonths])
 }

@@ -10117,14 +10117,47 @@
     try { var r = await authed('/admin/financing'); if (r.ok) d = await r.json(); } catch (e) {}
     if (!d) { box.innerHTML = '<div class="err">Could not load financing settings.</div>'; return; }
 
-    var factorRows = d.factors.map(function (f) {
-      // A factor is shown at six decimals because that is the precision the lessor
-      // publishes; rounding it would move a payment by real dollars.
+    // The rate grid: bands down, terms across. Every cell is editable and the whole
+    // sheet is saved in one request — a grid half-written by a dropped request would
+    // quote a payment nobody published.
+    var card = d.current;
+    var terms = card ? card.termMonths.slice() : [];
+    var money0 = function (v) { return '$' + Math.round(Number(v || 0)).toLocaleString(); };
+    var bandRange = function (b) {
+      var lo = money0(b.minMinor / 100);
+      return b.maxMinor == null ? lo + ' and above' : lo + ' – ' + money0(b.maxMinor / 100 - 1);
+    };
+    var cellStyle = 'width:96px;padding:6px 7px;border:1px solid #dcded7;border-radius:7px;font-size:12.5px;text-align:right;font-family:ui-monospace,monospace;';
+
+    var gridRows = card ? card.bands.map(function (b, bi) {
+      var byTerm = {};
+      b.terms.forEach(function (t) { byTerm[t.termMonths] = t.factor; });
       return '<tr>' +
-        td('<b style="font-weight:600;">' + f.termMonths + ' months</b>') +
-        td('<input class="finFactor" data-term="' + f.termMonths + '" type="number" step="0.000001" min="0.0001" max="1" value="' + Number(f.factor).toFixed(6) + '" style="width:130px;padding:7px 9px;border:1px solid #dcded7;border-radius:8px;font-size:13px;">') +
-        td('<span class="muted" style="font-size:12.5px;">$100,000 → <b style="color:#20241f;">$' + Math.round(100000 * f.factor).toLocaleString() + '</b>/mo</span>') +
-        td('<label style="display:flex;gap:6px;align-items:center;font-size:12.5px;cursor:pointer;"><input type="checkbox" class="finActive" data-term="' + f.termMonths + '"' + (f.active ? ' checked' : '') + '> Offered</label>') +
+        td('<div style="font-weight:600;font-size:13px;">' + esc(b.label) + '</div>' +
+           '<div class="muted" style="font-size:11.5px;">' + esc(bandRange(b)) + '</div>') +
+        terms.map(function (t) {
+          var f = byTerm[t];
+          // An empty cell is a term the lessor does not offer at this amount, which is
+          // a real state on the published sheet — not a missing value to default to 0.
+          return td('<input class="frCell" data-band="' + bi + '" data-term="' + t + '" value="' + (f == null ? '' : Number(f).toFixed(5)) + '" placeholder="—" style="' + cellStyle + '">');
+        }).join('') +
+        td('<button type="button" class="frBandDel link-btn" data-band="' + bi + '" style="width:auto;padding:5px 9px;font-size:12px;color:#a2402f;">Remove</button>') +
+        '</tr>';
+    }).join('') : '';
+
+    var gridHead = ['Amount band'].concat(terms.map(function (t) { return t + ' mo'; }), ['']);
+
+    var cardShelf = (d.cards || []).map(function (c) {
+      return '<tr>' +
+        td('<b style="font-weight:600;">' + esc(c.name) + '</b>' +
+          (c.isCurrent ? ' <span class="chip" style="background:#eaf3ee;border:1px solid #cfe3d7;color:#2f7d5d;font-size:10.5px;">In use</span>' : '') +
+          (c.source ? '<div class="muted" style="font-size:11.5px;">' + esc(c.source) + '</div>' : '')) +
+        td('<span class="muted" style="font-size:12.5px;">' + esc(String(c.effectiveOn).slice(0, 10)) + '</span>') +
+        td('<span class="muted" style="font-size:12.5px;">' + c.bandCount + ' band' + (c.bandCount === 1 ? '' : 's') + '</span>') +
+        td('<div style="display:flex;gap:6px;justify-content:flex-end;">' +
+          (c.isCurrent ? '' : '<button type="button" class="frUse link-btn" data-id="' + c.id + '" style="width:auto;padding:5px 10px;font-size:12px;">Publish</button>') +
+          (c.isCurrent ? '' : '<button type="button" class="frDel link-btn" data-id="' + c.id + '" style="width:auto;padding:5px 10px;font-size:12px;color:#a2402f;">Delete</button>') +
+          '</div>') +
         '</tr>';
     }).join('');
 
@@ -10138,7 +10171,37 @@
     }).join('');
 
     box.innerHTML =
-      tableShell(['Term', 'Payment factor', 'Example', 'Offered'], factorRows, 4, '') +
+      (card
+        ? '<div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:8px;">' +
+            '<div><div style="font-size:13.5px;font-weight:600;">' + esc(card.name) + '</div>' +
+              '<div class="muted" style="font-size:12px;">Effective ' + esc(String(card.effectiveOn).slice(0, 10)) +
+              (card.source ? ' · ' + esc(card.source) : '') + '</div></div>' +
+            '<div style="display:flex;gap:8px;">' +
+              '<button type="button" class="link-btn" id="frPaste" style="width:auto;padding:8px 14px;">Paste a sheet…</button>' +
+              '<button type="button" class="link-btn" id="frTerm" style="width:auto;padding:8px 14px;">Add a term</button>' +
+              '<button type="button" class="link-btn" id="frBand" style="width:auto;padding:8px 14px;">Add a band</button>' +
+              '<button type="button" class="btn" id="frSave" style="width:auto;padding:8px 16px;">Save sheet</button>' +
+            '</div>' +
+          '</div>' +
+          tableShell(gridHead, gridRows, gridHead.length, '') +
+          '<div class="muted" style="font-size:12px;margin-top:7px;">An empty cell means the term is not offered at that amount. Bands must not overlap, and the last one may be left open-ended.</div>' +
+          '<div style="display:flex;gap:8px;align-items:flex-end;margin-top:12px;padding-top:12px;border-top:1px solid #eceee8;">' +
+            '<div><div class="k">Try an amount</div><input id="frTry" placeholder="150000" style="width:150px;padding:7px 9px;border:1px solid #dcded7;border-radius:8px;font-size:13px;"></div>' +
+            '<button type="button" class="link-btn" id="frTryGo" style="width:auto;padding:8px 14px;">Quote it</button>' +
+            '<div id="frTryOut" class="muted" style="font-size:12.5px;line-height:1.5;"></div>' +
+          '</div>'
+        : '<div style="padding:14px 16px;background:#fdf8ec;border:1px solid #ecdcb4;border-radius:10px;">' +
+            '<div style="font-size:13.5px;font-weight:600;color:#7a5c1a;">No rate sheet published</div>' +
+            '<div class="muted" style="font-size:12.5px;line-height:1.55;margin:4px 0 10px;max-width:640px;">Financing sheets are falling back to one flat factor per term, which quotes the same payment at every amount. Load ' + esc(d.builtIn.name) + ' to start, then paste future sheets.</div>' +
+            '<div style="display:flex;gap:8px;">' +
+              '<button type="button" class="btn" id="frSeed" style="width:auto;padding:8px 16px;">Load ' + esc(d.builtIn.name) + '</button>' +
+              '<button type="button" class="link-btn" id="frPaste" style="width:auto;padding:8px 14px;">Paste a sheet…</button>' +
+            '</div>' +
+          '</div>') +
+      (cardShelf
+        ? '<div class="k" style="margin-top:20px;">Sheets on record</div>' +
+          tableShell(['Sheet', 'Effective', 'Bands', ''], cardShelf, 4, '')
+        : '') +
       '<div style="margin-top:18px;padding:14px 16px;background:#fbfbf9;border:1px solid #e7e8e3;border-radius:10px;">' + settingRows + '</div>' +
       '<div class="muted" style="font-size:12px;margin-top:10px;">Financing enquiries are sent to <b>' + esc(d.partnerEmail) + '</b>.</div>';
 
@@ -10149,16 +10212,170 @@
       if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} alert(m || 'Could not save.'); }
       setTimeout(function () { el.style.borderColor = '#dcded7'; }, 900);
     };
-    document.querySelectorAll('.finFactor').forEach(function (el) {
-      el.addEventListener('change', function () {
-        save(el, '/admin/financing/factors/' + el.getAttribute('data-term'), { factor: Number(el.value) }).then(loadFinancingAdmin);
+    var on = function (id, fn) { var el = document.getElementById(id); if (el) el.addEventListener('click', fn); };
+
+    // Read the grid back out of the DOM. One payload, so a band added and a factor
+    // corrected in the same sitting are saved together or not at all.
+    var collect = function () {
+      var bands = card.bands.map(function (b) {
+        return { label: b.label, minDollars: b.minMinor / 100, maxDollars: b.maxMinor == null ? null : b.maxMinor / 100, factors: {} };
+      });
+      var bad = null;
+      document.querySelectorAll('.frCell').forEach(function (el) {
+        var v = el.value.trim();
+        if (!v) return;
+        var n = Number(v);
+        if (!isFinite(n) || n <= 0 || n >= 1) { bad = el; return; }
+        bands[Number(el.getAttribute('data-band'))].factors[el.getAttribute('data-term')] = n;
+      });
+      if (bad) { bad.style.borderColor = '#c2452f'; bad.focus(); return null; }
+      return bands;
+    };
+
+    on('frSave', async function () {
+      var bands = collect();
+      if (!bands) { alert('A payment factor is the payment per $1 financed, so it sits between 0 and 1.'); return; }
+      var bt = document.getElementById('frSave');
+      bt.disabled = true; bt.textContent = 'Saving…';
+      var r = await authed('/admin/financing/rate-cards/' + card.id, {
+        method: 'PUT',
+        body: {
+          name: card.name, source: card.source || undefined,
+          effectiveOn: String(card.effectiveOn).slice(0, 10),
+          notes: card.notes || undefined, active: card.active, bands: bands,
+        },
+      });
+      bt.disabled = false; bt.textContent = 'Save sheet';
+      if (!r.ok) { alert(await serverMessage(r, 'Could not save the sheet (' + r.status + ').')); return; }
+      loadFinancingAdmin();
+    });
+
+    on('frSeed', async function () {
+      var r = await authed('/admin/financing/rate-cards/seed', { method: 'POST', body: {} });
+      if (!r.ok) { alert(await serverMessage(r, 'Could not load the sheet (' + r.status + ').')); return; }
+      loadFinancingAdmin();
+    });
+
+    on('frPaste', function () { openRateSheetPaste(loadFinancingAdmin); });
+
+    on('frBand', function () {
+      openModal('Add an amount band',
+        fieldRow('Label', '<input id="rbLabel" placeholder="$200,000-299,999" style="' + IN + '">') +
+        '<div style="display:flex;gap:8px;">' +
+          '<div style="flex:1;">' + fieldRow('From ($)', '<input id="rbMin" type="number" min="0" step="1" style="' + IN + '">') + '</div>' +
+          '<div style="flex:1;">' + fieldRow('Up to ($)', '<input id="rbMax" type="number" min="0" step="1" placeholder="Blank = and above" style="' + IN + '">') + '</div>' +
+        '</div>',
+        async function (close, showErr) {
+          var minD = Number(document.getElementById('rbMin').value);
+          var maxRaw = document.getElementById('rbMax').value.trim();
+          var maxD = maxRaw === '' ? null : Number(maxRaw);
+          if (!isFinite(minD) || minD < 0) return showErr('Give the bottom of the band.');
+          if (maxD != null && maxD <= minD) return showErr('The top of the band must be above the bottom.');
+          var bands = collect();
+          if (!bands) return showErr('Fix the highlighted factor first.');
+          bands.push({
+            label: document.getElementById('rbLabel').value.trim() || ('$' + minD.toLocaleString() + (maxD == null ? ' and above' : '-' + maxD.toLocaleString())),
+            minDollars: minD,
+            // The label's top is inclusive of cents, so the stored bound is the next dollar.
+            maxDollars: maxD == null ? null : maxD + 1,
+            factors: {},
+          });
+          var r = await authed('/admin/financing/rate-cards/' + card.id, {
+            method: 'PUT',
+            body: {
+              name: card.name, source: card.source || undefined,
+              effectiveOn: String(card.effectiveOn).slice(0, 10),
+              notes: card.notes || undefined, active: card.active, bands: bands,
+            },
+          });
+          if (!r.ok) return showErr(await serverMessage(r, 'Could not add the band (' + r.status + ').'));
+          close(); loadFinancingAdmin();
+        }, 'Add band');
+    });
+
+    on('frTerm', function () {
+      var months = prompt('How many months? The term is added to every band, with no factor until you type one.');
+      if (!months) return;
+      var n = Number(months);
+      if (!isFinite(n) || n < 1 || n > 120 || n % 1) { alert('Give a whole number of months.'); return; }
+      if (terms.indexOf(n) !== -1) { alert('That term is already on the sheet.'); return; }
+      // A term with no factor anywhere would vanish on save, so it starts on the first
+      // band at that band's nearest existing factor, which the user then corrects.
+      var bands = collect();
+      if (!bands) { alert('Fix the highlighted factor first.'); return; }
+      var seed = card.bands[0] && card.bands[0].terms[0];
+      if (!seed) { alert('Add a band with at least one factor first.'); return; }
+      bands[0].factors[String(n)] = seed.factor;
+      authed('/admin/financing/rate-cards/' + card.id, {
+        method: 'PUT',
+        body: {
+          name: card.name, source: card.source || undefined,
+          effectiveOn: String(card.effectiveOn).slice(0, 10),
+          notes: card.notes || undefined, active: card.active, bands: bands,
+        },
+      }).then(async function (r) {
+        if (!r.ok) { alert(await serverMessage(r, 'Could not add the term (' + r.status + ').')); return; }
+        loadFinancingAdmin();
       });
     });
-    document.querySelectorAll('.finActive').forEach(function (el) {
-      el.addEventListener('change', function () {
-        authed('/admin/financing/factors/' + el.getAttribute('data-term'), { method: 'PUT', body: { active: el.checked } });
+
+    document.querySelectorAll('.frBandDel').forEach(function (b) {
+      b.addEventListener('click', async function () {
+        var idx = Number(b.getAttribute('data-band'));
+        var band = card.bands[idx];
+        if (!confirm('Remove the ' + band.label + ' band?\n\nAmounts in it will fall to the nearest remaining band and be marked as an estimate.')) return;
+        var bands = collect();
+        if (!bands) { alert('Fix the highlighted factor first.'); return; }
+        bands.splice(idx, 1);
+        if (!bands.length) { alert('A sheet needs at least one band.'); return; }
+        var r = await authed('/admin/financing/rate-cards/' + card.id, {
+          method: 'PUT',
+          body: {
+            name: card.name, source: card.source || undefined,
+            effectiveOn: String(card.effectiveOn).slice(0, 10),
+            notes: card.notes || undefined, active: card.active, bands: bands,
+          },
+        });
+        if (!r.ok) { alert(await serverMessage(r, 'Could not remove the band (' + r.status + ').')); return; }
+        loadFinancingAdmin();
       });
     });
+
+    document.querySelectorAll('.frUse').forEach(function (b) {
+      b.addEventListener('click', async function () {
+        if (!confirm('Publish this sheet?\n\nNew financing documents will quote from it. Proposals that have already had a sheet sent keep the rates they were quoted.')) return;
+        var r = await authed('/admin/financing/rate-cards/' + b.getAttribute('data-id') + '/activate', { method: 'POST', body: {} });
+        if (!r.ok) { alert(await serverMessage(r, 'Could not publish that sheet (' + r.status + ').')); return; }
+        loadFinancingAdmin();
+      });
+    });
+
+    document.querySelectorAll('.frDel').forEach(function (b) {
+      b.addEventListener('click', async function () {
+        if (!confirm('Delete this rate sheet?')) return;
+        var r = await authed('/admin/financing/rate-cards/' + b.getAttribute('data-id'), { method: 'DELETE' });
+        if (!r.ok && r.status !== 204) { alert(await serverMessage(r, 'Could not delete it (' + r.status + ').')); return; }
+        loadFinancingAdmin();
+      });
+    });
+
+    // Quote an arbitrary amount. The fastest way to confirm a freshly pasted sheet is
+    // loaded the way the lessor wrote it.
+    on('frTryGo', async function () {
+      var out = document.getElementById('frTryOut');
+      var amt = Number((document.getElementById('frTry').value || '').replace(/[^0-9.]/g, ''));
+      if (!isFinite(amt) || amt <= 0) { out.textContent = 'Give an amount.'; return; }
+      out.textContent = 'Quoting…';
+      var r = await authed('/admin/financing/quote?amount=' + amt + (card ? '&cardId=' + card.id : ''));
+      if (!r.ok) { out.textContent = await serverMessage(r, 'Could not quote that.'); return; }
+      var q = await r.json();
+      if (!q.terms.length) { out.textContent = 'No terms available at that amount.'; return; }
+      out.innerHTML =
+        '<b style="color:#20241f;">' + esc(q.basis ? q.basis.bandLabel : 'flat factors') + '</b> — ' +
+        q.terms.map(function (t) { return t.termMonths + ' mo ' + money0(t.monthlyPaymentMinor / 100) + '/mo'; }).join(' · ') +
+        (q.basis && q.basis.approximate ? '<div style="color:#8a6d1f;">Outside the published bands — quoted from the nearest and marked as an estimate on the sheet.</div>' : '');
+    });
+
     document.querySelectorAll('.finSetting').forEach(function (el) {
       el.addEventListener('change', function () {
         save(el, '/admin/financing/settings/' + el.getAttribute('data-key'), { value: Number(el.value) });
@@ -10166,10 +10383,81 @@
     });
   }
 
+  /**
+   * Paste a rate sheet out of the lessor's workbook.
+   *
+   * Two presses, the same shape as the vendor part number importer: the first parses
+   * and shows what was read, the second writes. A rate grid is not something to load
+   * blind — a column read one place left would quote every job wrong.
+   */
+  function openRateSheetPaste(done) {
+    var pv = openModal('Paste a rate sheet',
+      '<div class="muted" style="font-size:12.5px;line-height:1.55;margin-bottom:10px;">' +
+        'Copy the rate block out of Ryan Capital&rsquo;s workbook, header row included: the terms across the top, one row per amount band. ' +
+        'Tabs, commas or aligned columns all work. A blank cell, a dash or <code>.0000</code> means the term is not offered at that amount.</div>' +
+      '<div style="display:flex;gap:8px;">' +
+        '<div style="flex:1.4;">' + fieldRow('Sheet name', '<input id="rsName" placeholder="Ryan Capital 2026" style="' + IN + '">') + '</div>' +
+        '<div style="flex:1;">' + fieldRow('Effective', '<input id="rsDate" type="date" style="' + IN + '">') + '</div>' +
+      '</div>' +
+      '<textarea id="rsText" rows="11" placeholder="COST&#9;12&#9;24&#9;36&#9;48&#9;60&#10;$5,000-9,999&#9;.09590&#9;.05016&#9;.03514&#9;.02769&#9;.02324" style="' + IN + 'resize:vertical;font-family:ui-monospace,monospace;font-size:12.5px;"></textarea>' +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:10px;cursor:pointer;">' +
+        '<input type="checkbox" id="rsPublish"> Publish it as soon as it loads</label>' +
+      '<div id="rsPreview" class="muted" style="font-size:12.5px;line-height:1.6;margin-top:10px;"></div>',
+      async function (close, showErr) {
+        var text = pv.querySelector('#rsText').value;
+        if (!text.trim()) return showErr('Nothing pasted.');
+        var pre = pv.querySelector('#rsPreview');
+        var body = {
+          text: text,
+          name: pv.querySelector('#rsName').value.trim() || undefined,
+          effectiveOn: pv.querySelector('#rsDate').value || undefined,
+          activate: pv.querySelector('#rsPublish').checked,
+        };
+
+        if (!pre.getAttribute('data-checked')) {
+          var rc = await authed('/admin/financing/rate-cards/import', { method: 'POST', body: body });
+          if (!rc.ok) return showErr(await serverMessage(rc, 'Could not read that sheet (' + rc.status + ').'));
+          var d = await rc.json();
+          var money0 = function (v) { return '$' + Math.round(Number(v || 0)).toLocaleString(); };
+          pre.innerHTML =
+            '<b style="color:#3d4a55;">' + d.bands.length + ' band' + (d.bands.length === 1 ? '' : 's') + ', terms ' + d.termMonths.join(' / ') + '.</b>' +
+            '<div style="margin-top:6px;">' + d.bands.map(function (b) {
+              return money0(b.minDollars) + (b.maxDollars == null ? ' and above' : '–' + money0(b.maxDollars - 1)) +
+                ': ' + d.termMonths.map(function (t) { return b.factors[t] == null ? '—' : Number(b.factors[t]).toFixed(5); }).join(' ') +
+                (b.missing.length ? ' <span style="color:#8a6d1f;">(' + b.missing.join(', ') + ' mo not offered)</span>' : '');
+            }).join('<br>') + '</div>' +
+            (d.topBandClosed
+              ? '<div style="margin-top:6px;color:#8a6d1f;">The highest band stops at a ceiling, so any project above it will be quoted from that band and marked as an estimate. If Ryan Capital apply the top row above that figure, edit the band and clear its upper bound.</div>'
+              : '') +
+            ((d.errors || []).length ? '<div style="margin-top:6px;color:#9c3327;">' + d.errors.map(esc).join('<br>') + '</div>' : '') +
+            '<div style="margin-top:6px;">Press Load again to write this sheet.</div>';
+          pre.setAttribute('data-checked', '1');
+          return;
+        }
+
+        body.commit = true;
+        var r = await authed('/admin/financing/rate-cards/import', { method: 'POST', body: body });
+        if (!r.ok) return showErr(await serverMessage(r, 'Could not load that sheet (' + r.status + ').'));
+        close();
+        if (done) done();
+      }, 'Load');
+
+    // Any edit invalidates the check, so both presses describe the same paste.
+    var reset = function () {
+      var p = pv.querySelector('#rsPreview');
+      if (p) { p.removeAttribute('data-checked'); p.innerHTML = ''; }
+    };
+    ['#rsText', '#rsPublish', '#rsName', '#rsDate'].forEach(function (sel) {
+      var el = pv.querySelector(sel);
+      if (el) el.addEventListener(sel === '#rsText' ? 'input' : 'change', reset);
+    });
+  }
+
   /* --- Ryan Capital financing ---
    * Computed entirely from the proposal total: there is no document to create and
-   * nothing to fill in. Payments come from the lessor's published payment factors,
-   * editable under Administration → Financing. */
+   * nothing to fill in. Payments come from the lessor's published rate sheet — a
+   * factor per amount band and term, loaded under Administration → Financing — and a
+   * sheet that has been sent keeps the rates it was quoted on. */
   var finCache = null;
   async function loadFinancing(p, user) {
     var box = document.getElementById('finBox'); if (!box) return;
@@ -10182,7 +10470,14 @@
     var lowest = q.terms.reduce(function (a2, b) { return b.monthlyPaymentMinor < a2.monthlyPaymentMinor ? b : a2; }, q.terms[0]);
 
     box.innerHTML =
-      '<div class="muted" style="font-size:12.5px;margin:-4px 0 12px;line-height:1.55;">Calculated from the ' + fmtMoney(d.proposal.grandTotalMinor) + ' project total. Nothing to fill in — the sheet is generated on demand.</div>' +
+      '<div class="muted" style="font-size:12.5px;margin:-4px 0 12px;line-height:1.55;">Calculated from the ' + fmtMoney(d.proposal.grandTotalMinor) + ' project total. Nothing to fill in — the sheet is generated on demand.' +
+        (q.basis
+          ? ' Factors from <b>' + esc(q.basis.cardName) + '</b>, ' + esc(q.basis.bandLabel) + ' band' + (q.basis.pinned ? ', pinned when this sheet was sent' : '') + '.'
+          : ' No rate sheet is published yet, so these use the flat per-term factors.') + '</div>' +
+      (q.basis && q.basis.approximate
+        ? '<div style="margin:-6px 0 12px;padding:8px 11px;background:#fdf8ec;border:1px solid #ecdcb4;border-radius:8px;font-size:12.5px;color:#7a5c1a;line-height:1.5;">' +
+            'This total is ' + (q.basis.direction === 'above' ? 'above' : 'below') + ' every band Ryan Capital publish, so the payments come from the closest one (' + esc(q.basis.bandLabel) + ') and print as an estimate. Ask them to confirm before the customer commits.</div>'
+        : '') +
       '<div style="display:flex;gap:9px;flex-wrap:wrap;margin-bottom:14px;">' +
         q.terms.map(function (t) {
           var best = t.termMonths === lowest.termMonths;
@@ -10395,7 +10690,7 @@
       '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;">Questions asked on a Bill of Materials section. A question with no vendor is asked of <b>every</b> vendor; one with a vendor is asked only of theirs. Each new section starts with a copy, so editing a question here never rewrites an answer already given on an order.</div>' +
       '<div id="qtList"><div class="muted" style="padding:16px;">Loading…</div></div>' +
       '<div class="section-title" style="margin-top:26px;">Financing</div>' +
-      '<div class="muted" style="font-size:12.5px;margin:0 0 10px;">Ryan Capital quotes from a <b>payment factor</b> per term, not an interest rate: the monthly payment is the amount financed × the factor. Change a factor here and every financing sheet uses it immediately.</div>' +
+      '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">Ryan Capital quote a <b>payment factor</b> per amount band and term, not an interest rate: the monthly payment is the amount financed × the factor at that intersection. Paste their sheet or edit a cell; the published sheet is what every new financing document quotes from.</div>' +
       '<div id="finAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>';
     document.getElementById('admNew').addEventListener('click', openUserForm);
     document.getElementById('admMailTest').addEventListener('click', async function () {

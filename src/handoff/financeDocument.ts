@@ -19,7 +19,11 @@ import { COMPANY } from './bom.js';
  */
 
 const esc = (v: unknown): string =>
-  String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  String(v ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 
 const money = (minor: number): string =>
   `$${(Number(minor || 0) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -59,16 +63,23 @@ export interface FinanceDoc {
  * newest first. The snapshot is used rather than a live recalculation because the
  * total is the number the customer was given, and a financing sheet that quotes a
  * different figure than the proposal beside it is worse than no sheet.
+ *
+ * The rate card is the one the version was pinned to when a sheet was last SENT, or
+ * the current card when none has been. Re-rendering a sheet a customer already holds
+ * therefore reproduces their payments rather than today's.
  */
 export async function financeDocFor(proposalId: string): Promise<FinanceDoc> {
   const proposal = await prisma.proposal.findUnique({
     where: { id: proposalId },
     select: {
-      title: true, number: true, organizationId: true, createdById: true,
+      title: true,
+      number: true,
+      organizationId: true,
+      createdById: true,
       versions: {
         where: { priceSnapshotId: { not: null } },
         orderBy: { version: 'desc' },
-        select: { id: true, version: true, priceSnapshotId: true },
+        select: { id: true, version: true, priceSnapshotId: true, financeRateCardId: true },
       },
     },
   });
@@ -80,15 +91,25 @@ export async function financeDocFor(proposalId: string): Promise<FinanceDoc> {
   }
 
   const [snap, org, author, settings] = await Promise.all([
-    prisma.priceSnapshot.findUnique({ where: { id: version.priceSnapshotId }, select: { grandTotal: true } }),
-    prisma.organization.findUnique({ where: { id: proposal.organizationId }, select: { name: true } }),
+    prisma.priceSnapshot.findUnique({
+      where: { id: version.priceSnapshotId },
+      select: { grandTotal: true },
+    }),
+    prisma.organization.findUnique({
+      where: { id: proposal.organizationId },
+      select: { name: true },
+    }),
     prisma.user.findUnique({ where: { id: proposal.createdById }, select: { name: true } }),
     loadFormulaSettings(),
   ]);
   if (!snap) throw new NotFoundError('Price snapshot not found');
 
   const grandTotalMinor = Number(snap.grandTotal);
-  const quote = await quoteFinancing(grandTotalMinor, financeSettingsFrom((k) => setting(settings, k)));
+  const quote = await quoteFinancing(
+    grandTotalMinor,
+    financeSettingsFrom((k) => setting(settings, k)),
+    version.financeRateCardId,
+  );
 
   return {
     quote,
@@ -106,7 +127,12 @@ export async function financeDocFor(proposalId: string): Promise<FinanceDoc> {
 /** Filesystem-safe basename, matching the BOM convention. */
 export function financeFilename(customerName: string, proposalNumber: string): string {
   const part = (v: string) =>
-    v.trim().replace(/[\\/:*?"<>|]+/g, '').replace(/\s+/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+    v
+      .trim()
+      .replace(/[\\/:*?"<>|]+/g, '')
+      .replace(/\s+/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_|_$/g, '');
   return [part(customerName), part(proposalNumber), 'Financing_Options'].filter(Boolean).join('-');
 }
 
@@ -148,6 +174,19 @@ export function renderFinanceHtml(d: FinanceDoc): string {
     ? `This purchase exceeds the ${money0(s.capMinor)} annual Section&nbsp;179 limit, so the deduction shown is capped at that limit. The remainder may still be depreciated over time.`
     : `Section&nbsp;179 lets a business deduct the full cost of qualifying equipment in the year it is placed in service, rather than depreciating it over several years.`;
 
+  // Where the factors came from. A payment a customer can act on should name the
+  // published sheet behind it, and when the amount sits outside that sheet's bands
+  // the figure is an approximation — saying so is the difference between an estimate
+  // and a misquote.
+  const basis = q.basis;
+  const bandNote = basis
+    ? basis.approximate
+      ? `These payments use the ${esc(basis.bandLabel)} band of ${esc(basis.cardName)}, the closest published to this amount — Ryan Capital have not published factors ${
+          basis.direction === 'above' ? 'above' : 'below'
+        } it, so treat the figures as an estimate and ask them to confirm.`
+      : `Payment factors from ${esc(basis.cardName)}, ${esc(basis.bandLabel)} band.`
+    : '';
+
   return `<!doctype html>
 <html><head><meta charset="utf-8">
 <title>Financing Options — ${esc(d.customerName)}</title>
@@ -188,15 +227,21 @@ export function renderFinanceHtml(d: FinanceDoc): string {
 
   <div style="display:flex;gap:7px;margin:11px 0 5px;">${termCards}</div>
   <div style="font-size:7.5pt;color:${MUTED};">Estimated monthly payments. Final terms, rate and approval are set by Ryan Capital.</div>
+  ${
+    basis && basis.approximate
+      ? `<div style="margin-top:6px;padding:6px 9px;background:#fdf8ec;border:1px solid #ecdcb4;border-radius:7px;font-size:8pt;color:#7a5c1a;line-height:1.45;">${bandNote}</div>`
+      : ''
+  }
 
   <div style="font-family:Georgia,serif;font-size:11pt;font-weight:700;margin:14px 0 5px;">Payment detail</div>
   <table style="width:100%;border-collapse:collapse;">
     <thead><tr>
       ${['Term', 'Monthly payment', 'Total of payments', 'Cost of financing']
-    .map(
-      (h, i) => `<th style="padding:4px 8px;text-align:${i ? 'right' : 'left'};font-size:7.5pt;text-transform:uppercase;letter-spacing:.05em;color:${MUTED};border-bottom:1.5px solid ${INK};font-weight:600;">${h}</th>`,
-    )
-    .join('')}
+        .map(
+          (h, i) =>
+            `<th style="padding:4px 8px;text-align:${i ? 'right' : 'left'};font-size:7.5pt;text-transform:uppercase;letter-spacing:.05em;color:${MUTED};border-bottom:1.5px solid ${INK};font-weight:600;">${h}</th>`,
+        )
+        .join('')}
     </tr></thead>
     <tbody>${detailRows}</tbody>
   </table>
@@ -245,9 +290,9 @@ export function renderFinanceHtml(d: FinanceDoc): string {
   </div>
 
   <div style="margin-top:13px;padding-top:8px;border-top:1px solid ${RULE};font-size:7pt;color:${MUTED};line-height:1.5;">
-    Payments are estimates based on Ryan Capital's published payment factors for each
-    term and are not an offer of credit; actual terms depend on credit approval and
-    may differ. The tax figures are an illustration at a ${s.taxRatePct}% rate and the
+    Payments are estimates based on Ryan Capital's published payment factors for the
+    amount and term shown and are not an offer of credit; actual terms depend on
+    credit approval and may differ.${basis && !basis.approximate ? ` ${bandNote}` : ''} The tax figures are an illustration at a ${s.taxRatePct}% rate and the
     current ${money0(s.capMinor)} Section&nbsp;179 limit — Summit Sensory Gym
     is not a tax advisor, and your own accountant should confirm what your business
     can deduct. Equipment must be placed in service within the tax year to qualify.
