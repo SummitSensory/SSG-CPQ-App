@@ -1065,19 +1065,42 @@
       '<div id="mErr"></div>' + bodyHtml +
       '<div style="display:flex;gap:10px;margin-top:20px;">' +
       (readOnly ? '' : '<button type="button" id="mCancel" class="link-btn" style="width:auto;padding:11px 18px;">Cancel</button>') +
-      '<button type="submit" class="btn" id="mSave" style="flex:1;">' + (submitLabel || 'Create') + '</button></div></form>';
+      '<button type="submit" class="btn" id="mSave" style="flex:1;">' + (submitLabel || (readOnly ? 'Done' : 'Create')) + '</button></div></form>';
     document.body.appendChild(ov);
-    function close() { document.body.removeChild(ov); }
+    function close() { if (ov.parentNode) document.body.removeChild(ov); }
     ov.addEventListener('mousedown', function (e) { if (e.target === ov) close(); });
-    var cancel = document.getElementById('mCancel');
+
+    // Every lookup below is scoped to THIS overlay. With document.getElementById a
+    // dialog opened over another one — "Paste a list…" over the vendor part numbers
+    // — bound its handlers to the FIRST form's #mSave and #mErr, because
+    // getElementById returns the older node when two ids collide.
+    var cancel = ov.querySelector('#mCancel');
     if (cancel) cancel.addEventListener('click', close);
-    document.getElementById('mForm').addEventListener('submit', async function (e) {
+    var label = submitLabel || (readOnly ? 'Done' : 'Create');
+
+    // A <button> with no type attribute is a SUBMIT button. Any dialog whose body
+    // carries buttons of its own therefore submitted this form on the first click:
+    // on a read-only dialog that silently closed it mid-request, which is how
+    // adding a second vendor part number dropped the user back to the page behind
+    // the modal with no confirmation and no refreshed list. The primary is the only
+    // submit in an overlay; everything else is a plain button.
+    ov.querySelectorAll('form#mForm button:not([type])').forEach(function (b) {
+      if (b.id !== 'mSave') b.type = 'button';
+    });
+
+    ov.querySelector('#mForm').addEventListener('submit', async function (e) {
       e.preventDefault();
       if (readOnly) return close();
-      var save = document.getElementById('mSave'); save.disabled = true; save.textContent = 'Saving…';
-      try { await onSubmit(close, function (msg) { document.getElementById('mErr').innerHTML = '<div class="err">' + esc(msg) + '</div>'; save.disabled = false; save.textContent = submitLabel || 'Create'; }); }
-      catch (err) { document.getElementById('mErr').innerHTML = '<div class="err">Something went wrong.</div>'; save.disabled = false; save.textContent = submitLabel || 'Create'; }
+      var save = ov.querySelector('#mSave'); save.disabled = true; save.textContent = 'Saving…';
+      var fail = function (msg) {
+        var box = ov.querySelector('#mErr');
+        if (box) box.innerHTML = '<div class="err">' + esc(msg) + '</div>';
+        save.disabled = false; save.textContent = label;
+      };
+      try { await onSubmit(close, fail); }
+      catch (err) { fail('Something went wrong.'); }
     });
+    return ov;
   }
   /** Which way the user was tabbing, if the render was triggered by a Tab at all. */
   var tabDir = null;
@@ -2308,14 +2331,30 @@
     if (!m) return;
     var rows = [];
     var busy = false;
+    var loadError = '';
+    // Held across a redraw, so the confirmation for a row that was just added is
+    // still on screen beside it rather than wiped by the render that shows it.
+    var pendingMsg = '';
+    var ov = null;
+    // Scoped to this overlay: a stacked dialog must not be reachable by id.
+    var $ = function (sel) { return ov ? ov.querySelector(sel) : null; };
 
     var load = async function () {
       var r = await authed('/manufacturers/' + m.id + '/vendor-parts');
-      rows = r.ok ? await r.json() : [];
+      if (!r.ok) {
+        // Saying so matters more than it looks. A failed reload used to leave an
+        // empty table, which reads as "nothing saved" when the rows are sitting in
+        // the database.
+        loadError = 'Could not load the list (' + r.status + '). Numbers already on record are unaffected.';
+        rows = [];
+      } else {
+        loadError = '';
+        rows = await r.json();
+      }
       draw();
     };
 
-    openModal('Vendor part numbers — ' + m.name,
+    ov = openModal('Vendor part numbers — ' + m.name,
       '<div class="muted" style="font-size:12.5px;line-height:1.55;margin-bottom:12px;">' +
         'Our part number on the left, ' + esc(m.name) + '&rsquo;s on the right. The vendor&rsquo;s number prints on the Bill of Materials beside ours and appears nowhere a customer can see. ' +
         'A part with no entry here keeps our number on the sheet.</div>' +
@@ -2327,14 +2366,15 @@
         td('<input class="vpOur" data-id="' + x.id + '" value="' + esc(x.ourPart) + '" style="' + bomFieldStyle('150px') + 'text-transform:uppercase;font-family:ui-monospace,monospace;">') +
         td('<input class="vpTheirs" data-id="' + x.id + '" value="' + esc(x.vendorPart) + '" style="' + bomFieldStyle('150px') + 'font-family:ui-monospace,monospace;">') +
         td('<input class="vpDesc" data-id="' + x.id + '" value="' + esc(x.description || '') + '" placeholder="Optional note" style="' + bomFieldStyle('200px') + '">') +
-        td('<button class="vpDel link-btn" data-id="' + x.id + '" style="width:auto;padding:5px 10px;font-size:12px;color:#a2402f;">Remove</button>') +
+        td('<button type="button" class="vpDel link-btn" data-id="' + x.id + '" style="width:auto;padding:5px 10px;font-size:12px;color:#a2402f;">Remove</button>') +
         '</tr>';
     }
 
     function draw() {
-      var box = document.getElementById('vpBody');
+      var box = $('#vpBody');
       if (!box) return;
       box.innerHTML =
+        (loadError ? '<div class="err">' + esc(loadError) + '</div>' : '') +
         '<div style="max-height:46vh;overflow:auto;">' +
           tableShell(['Our part #', esc(m.name) + ' part #', 'Note', ''], rows.map(row).join(''), 4,
             'No vendor numbers yet. Add one below, or paste a list.') +
@@ -2343,13 +2383,13 @@
           '<div><div class="k">Our part #</div><input id="vpNewOur" placeholder="R-SSG-1010CLM" style="' + bomFieldStyle('160px') + 'text-transform:uppercase;font-family:ui-monospace,monospace;"></div>' +
           '<div><div class="k">Their part #</div><input id="vpNewTheirs" placeholder="A-3204" style="' + bomFieldStyle('150px') + 'font-family:ui-monospace,monospace;"></div>' +
           '<div style="flex:1;min-width:160px;"><div class="k">Note</div><input id="vpNewDesc" placeholder="Optional" style="' + bomFieldStyle() + '"></div>' +
-          '<button class="btn" id="vpAdd" style="width:auto;padding:9px 15px;">Add</button>' +
-          '<button class="link-btn" id="vpPaste" style="width:auto;padding:9px 15px;">Paste a list…</button>' +
+          '<button type="button" class="btn" id="vpAdd" style="width:auto;padding:9px 15px;">Add</button>' +
+          '<button type="button" class="link-btn" id="vpPaste" style="width:auto;padding:9px 15px;">Paste a list…</button>' +
         '</div>' +
         '<div id="vpMsg" class="muted" style="font-size:12px;margin-top:8px;"></div>';
 
       var msg = function (t, bad) {
-        var el = document.getElementById('vpMsg');
+        var el = $('#vpMsg');
         if (el) { el.style.color = bad ? '#9c3327' : '#5c6157'; el.textContent = t; }
       };
 
@@ -2364,11 +2404,11 @@
         if (!r.ok) { msg(await serverMessage(r, 'Could not save that (' + r.status + ').'), 1); return; }
         msg('Saved.');
       };
-      document.querySelectorAll('.vpOur').forEach(function (el) { el.addEventListener('change', function () { patch(el, 'ourPart'); }); });
-      document.querySelectorAll('.vpTheirs').forEach(function (el) { el.addEventListener('change', function () { patch(el, 'vendorPart'); }); });
-      document.querySelectorAll('.vpDesc').forEach(function (el) { el.addEventListener('change', function () { patch(el, 'description'); }); });
+      box.querySelectorAll('.vpOur').forEach(function (el) { el.addEventListener('change', function () { patch(el, 'ourPart'); }); });
+      box.querySelectorAll('.vpTheirs').forEach(function (el) { el.addEventListener('change', function () { patch(el, 'vendorPart'); }); });
+      box.querySelectorAll('.vpDesc').forEach(function (el) { el.addEventListener('change', function () { patch(el, 'description'); }); });
 
-      document.querySelectorAll('.vpDel').forEach(function (b) {
+      box.querySelectorAll('.vpDel').forEach(function (b) {
         b.addEventListener('click', async function () {
           if (!confirm('Remove this vendor number?\n\nThe part keeps our number on the Bill of Materials.')) return;
           var r = await authed('/vendor-parts/' + b.getAttribute('data-id'), { method: 'DELETE' });
@@ -2377,21 +2417,52 @@
         });
       });
 
-      document.getElementById('vpAdd').addEventListener('click', async function () {
-        var ourPart = document.getElementById('vpNewOur').value.trim().toUpperCase();
-        var vendorPart = document.getElementById('vpNewTheirs').value.trim();
-        if (!ourPart || !vendorPart) { msg('Both part numbers are needed.', 1); return; }
+      var addBtn = $('#vpAdd');
+      var add = async function () {
+        if (busy) return;
+        var ourEl = $('#vpNewOur'), theirsEl = $('#vpNewTheirs'), descEl = $('#vpNewDesc');
+        var ourPart = ourEl.value.trim().toUpperCase();
+        var vendorPart = theirsEl.value.trim();
+        if (!ourPart || !vendorPart) {
+          msg('Both part numbers are needed.', 1);
+          (ourPart ? theirsEl : ourEl).focus();
+          return;
+        }
         busy = true;
+        addBtn.disabled = true; addBtn.textContent = 'Adding…';
         var r = await authed('/manufacturers/' + m.id + '/vendor-parts', {
           method: 'POST',
-          body: { ourPart: ourPart, vendorPart: vendorPart, description: document.getElementById('vpNewDesc').value.trim() },
+          body: { ourPart: ourPart, vendorPart: vendorPart, description: descEl.value.trim() },
         });
         busy = false;
-        if (!r.ok) { msg(await serverMessage(r, 'Could not add that (' + r.status + ').'), 1); return; }
-        load();
+        addBtn.disabled = false; addBtn.textContent = 'Add';
+        if (!r.ok) {
+          // 409 is the useful one: this vendor already has a number for that part and
+          // the server names it. What was typed is left alone so it can be corrected.
+          msg(await serverMessage(r, 'Could not add that (' + r.status + ').'), 1);
+          return;
+        }
+        ourEl.value = ''; theirsEl.value = ''; descEl.value = '';
+        pendingMsg = 'Added ' + ourPart + ' → ' + vendorPart + '.';
+        await load();
+        // Straight back to the first field: these are entered a dozen at a time.
+        var next = $('#vpNewOur');
+        if (next) next.focus();
+      };
+      addBtn.addEventListener('click', add);
+
+      // Enter in any of the three fields adds the row. This dialog has no submit of
+      // its own, so Enter previously did nothing.
+      [$('#vpNewOur'), $('#vpNewTheirs'), $('#vpNewDesc')].forEach(function (el) {
+        if (!el) return;
+        el.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter') { e.preventDefault(); add(); }
+        });
       });
 
-      document.getElementById('vpPaste').addEventListener('click', function () { openVendorPartPaste(m, load); });
+      $('#vpPaste').addEventListener('click', function () { openVendorPartPaste(m, load); });
+
+      if (pendingMsg) { msg(pendingMsg); pendingMsg = ''; }
     }
 
     load();
@@ -2404,7 +2475,7 @@
    * seen first.
    */
   function openVendorPartPaste(m, done) {
-    openModal('Paste part numbers — ' + m.name,
+    var pv = openModal('Paste part numbers — ' + m.name,
       '<div class="muted" style="font-size:12.5px;line-height:1.55;margin-bottom:10px;">' +
         'One row per part: our number, then theirs, separated by a tab or a comma. A third column is kept as a note. ' +
         'Paste straight out of a spreadsheet.</div>' +
@@ -2413,10 +2484,10 @@
         '<input type="checkbox" id="vpOverwrite"> Replace numbers already on record</label>' +
       '<div id="vpPreview" class="muted" style="font-size:12.5px;line-height:1.6;margin-top:10px;"></div>',
       async function (close, showErr) {
-        var text = document.getElementById('vpText').value;
+        var text = pv.querySelector('#vpText').value;
         if (!text.trim()) return showErr('Nothing pasted.');
-        var overwrite = document.getElementById('vpOverwrite').checked;
-        var pre = document.getElementById('vpPreview');
+        var overwrite = pv.querySelector('#vpOverwrite').checked;
+        var pre = pv.querySelector('#vpPreview');
 
         // First press checks, second press writes — the same two-step the catalog
         // import uses, so the count is seen before anything lands.
@@ -2451,8 +2522,8 @@
 
     // Any edit invalidates the check, so the two presses always describe the same
     // text.
-    var t = document.getElementById('vpText'), o = document.getElementById('vpOverwrite');
-    var reset = function () { var p = document.getElementById('vpPreview'); if (p) { p.removeAttribute('data-checked'); p.innerHTML = ''; } };
+    var t = pv.querySelector('#vpText'), o = pv.querySelector('#vpOverwrite');
+    var reset = function () { var p = pv.querySelector('#vpPreview'); if (p) { p.removeAttribute('data-checked'); p.innerHTML = ''; } };
     if (t) t.addEventListener('input', reset);
     if (o) o.addEventListener('change', reset);
   }

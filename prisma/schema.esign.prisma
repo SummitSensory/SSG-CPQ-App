@@ -1,0 +1,178 @@
+// ---------------------------------------------------------------------------
+// Proposal e-signing (DocuSeal)
+//
+// Paste these enums and models into prisma/schema.prisma (they are kept in a
+// fragment here for the same reason schema.freight-rfq.prisma is), then run the
+// 0050_esign migration.
+//
+// Shape of the flow, because it explains every column below:
+//
+//   1. The proposal is ASSEMBLED in the CRM — the browser's proposal HTML plus
+//      any attachment documents, rendered to one PDF by headless Chromium. That
+//      PDF is the signing package; nothing is composed inside DocuSeal.
+//   2. The package is uploaded to DocuSeal as a template (its signature block
+//      carries DocuSeal text tags, so field positions come from the document
+//      itself) and a submission is created for the signers.
+//   3. DocuSeal webhooks move the envelope forward. On completion the signed PDF
+//      is copied into our own storage so the executed contract does not live only
+//      inside a third party.
+//
+// One envelope per send. Re-sending after a change creates a NEW envelope rather
+// than mutating the old one: which document a customer signed is not a field that
+// may be edited.
+// ---------------------------------------------------------------------------
+
+enum EsignStatus {
+  /// Assembled and stored, not yet handed to DocuSeal.
+  DRAFT
+  SENT
+  VIEWED
+  /// Some signers done, at least one outstanding.
+  PARTIALLY_SIGNED
+  COMPLETED
+  DECLINED
+  VOIDED
+  FAILED
+}
+
+enum EsignSignerStatus {
+  PENDING
+  VIEWED
+  COMPLETED
+  DECLINED
+}
+
+enum EsignDocumentKind {
+  /// The proposal body itself — the document the customer is agreeing to.
+  PROPOSAL
+  /// Boilerplate bound into the same PDF behind the proposal: terms, liability
+  /// waiver, financing disclosure, specification pages.
+  ATTACHMENT
+}
+
+/// One of the ~10 signing document templates. `bodyHtml` is our own markup,
+/// rendered by the same Chromium that renders the proposal, so an attachment
+/// cannot drift from the proposal's typography.
+///
+/// `productLineIds` drives automatic selection and `attachRule` decides whether an
+/// ATTACHMENT rides along. Both are advisory: the send route always accepts an
+/// explicit template key and an explicit attachment list, so a rep can override.
+model EsignDocumentTemplate {
+  id          String            @id @default(cuid())
+  /// Stable key used by the API and by the auto-pick rules, e.g. `standard`,
+  /// `liability-waiver`. Renaming the display name never breaks a caller.
+  key         String            @unique
+  name        String
+  description String?
+  kind        EsignDocumentKind @default(ATTACHMENT)
+  bodyHtml    String
+  /// Product lines this template is the right one for. Empty means "any" — the
+  /// fallback used when nothing more specific matches.
+  productLineIds String[]       @default([])
+  /// When to bind this attachment in. Deliberately open-ended JSON: the real
+  /// conditions (financing present, mats on the job, install scope) are not
+  /// settled yet. `{"always": true}` is the only rule the resolver reads today;
+  /// everything else is recorded and ignored until the rules are decided.
+  attachRule  Json?
+  sortOrder   Int               @default(0)
+  active      Boolean           @default(true)
+  createdById String?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  envelopes   EsignEnvelope[]
+
+  @@index([kind, active])
+}
+
+model EsignEnvelope {
+  id         String      @id @default(cuid())
+  proposalId String
+  versionId  String
+  templateId String?
+  template   EsignDocumentTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  /// Template key as resolved at send time. Kept as text alongside the relation so
+  /// the record still reads correctly after a template is renamed or removed.
+  templateKey String?
+  /// Attachment keys bound into this package, in order. The audit answer to
+  /// "which documents did they actually sign?".
+  attachments Json?
+
+  status     EsignStatus @default(DRAFT)
+  subject    String?
+  message    String?
+
+  /// DocuSeal's ids. The template is created per send from our composed PDF.
+  docusealTemplateId   String?
+  docusealSubmissionId String?
+
+  /// SHA-256 of the composed PDF. Two sends of an unchanged proposal are provably
+  /// the same document; a tampered stored file is detectable.
+  packageSha256 String?
+  packageBytes  Int?
+  /// Our copy of the document that went out, and of the executed one.
+  packageUrl String?
+  signedUrl  String?
+
+  error        String?
+  declineReason String?
+
+  sentById    String?
+  sentAt      DateTime?
+  viewedAt    DateTime?
+  completedAt DateTime?
+  declinedAt  DateTime?
+  voidedAt    DateTime?
+  voidedById  String?
+
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  signers   EsignSigner[]
+  events    EsignEvent[]
+
+  @@index([proposalId])
+  @@index([versionId])
+  @@index([status])
+  @@index([docusealSubmissionId])
+}
+
+model EsignSigner {
+  id         String            @id @default(cuid())
+  envelopeId String
+  envelope   EsignEnvelope     @relation(fields: [envelopeId], references: [id], onDelete: Cascade)
+  /// Matches the `role=` in the document's text tags: `Customer`, `Summit`.
+  role       String
+  name       String?
+  email      String
+  /// Signing order. Equal values sign in parallel.
+  order      Int               @default(1)
+  status     EsignSignerStatus @default(PENDING)
+  docusealSubmitterId String?
+  /// DocuSeal's per-signer URL. Sent by DocuSeal's own email when
+  /// DOCUSEAL_SEND_EMAIL is on; otherwise this is the link we send or embed.
+  signingUrl  String?
+  viewedAt    DateTime?
+  completedAt DateTime?
+  declineReason String?
+  createdAt   DateTime          @default(now())
+
+  @@index([envelopeId])
+  @@index([docusealSubmitterId])
+  @@index([email])
+}
+
+/// Every DocuSeal webhook and every polled status change, append-only. The raw
+/// payload is kept: a dispute about when a document was opened is settled by what
+/// the provider said, not by our summary of it.
+model EsignEvent {
+  id         String        @id @default(cuid())
+  envelopeId String
+  envelope   EsignEnvelope @relation(fields: [envelopeId], references: [id], onDelete: Cascade)
+  eventType  String
+  /// SHA-256 of the raw body, so a retried webhook is not recorded twice.
+  payloadHash String
+  payload    Json
+  createdAt  DateTime      @default(now())
+
+  @@unique([envelopeId, payloadHash])
+  @@index([envelopeId])
+}
