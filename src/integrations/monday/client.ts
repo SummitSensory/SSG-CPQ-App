@@ -89,6 +89,36 @@ export async function createItem(
 }
 
 /**
+ * Create a subitem under an existing item.
+ *
+ * No board id: a subitem belongs to its parent's own subitem board, which monday
+ * creates on demand. The column ids in `columnValues` are therefore the SUBITEM
+ * board's ids, not the parent board's — see FREIGHT_REQUEST_COL.
+ *
+ * `create_labels_if_missing` is on because these writes carry status labels that are
+ * data, not configuration: a vendor new to the board must not fail the write because
+ * nobody added their label to the column by hand first.
+ */
+export async function createSubitem(
+  parentItemId: string,
+  name: string,
+  columnValues: Record<string, unknown>,
+): Promise<string> {
+  const data = await mondayQuery<{ create_subitem: { id: string } }>(
+    `mutation ($parent: ID!, $name: String!, $cols: JSON!) {
+       create_subitem (
+         parent_item_id: $parent,
+         item_name: $name,
+         column_values: $cols,
+         create_labels_if_missing: true
+       ) { id }
+     }`,
+    { parent: parentItemId, name, cols: JSON.stringify(columnValues) },
+  );
+  return data.create_subitem.id;
+}
+
+/**
  * Set specific columns on an existing item without touching its name. `updateItem`
  * always rewrites the name, which is wrong when the item is a monday-owned deal row
  * and we only own two of its columns.
@@ -121,8 +151,7 @@ export async function uploadFileToColumn(
   fetchImpl: typeof fetch = fetch,
 ): Promise<string> {
   if (!env.MONDAY_API_TOKEN) throw new Error('MONDAY_API_TOKEN not configured');
-  const query =
-    `mutation ($file: File!) {
+  const query = `mutation ($file: File!) {
        add_file_to_column (item_id: ${JSON.stringify(String(itemId))}, column_id: ${JSON.stringify(columnId)}, file: $file) { id }
      }`;
 
@@ -131,7 +160,11 @@ export async function uploadFileToColumn(
     const form = new FormData();
     form.append('query', query);
     // A fresh Blob per attempt — a consumed body cannot be replayed on a retry.
-    form.append('variables[file]', new Blob([new Uint8Array(bytes)], { type: contentType }), filename);
+    form.append(
+      'variables[file]',
+      new Blob([new Uint8Array(bytes)], { type: contentType }),
+      filename,
+    );
 
     const res = await fetchImpl(`${API_URL}/file`, {
       method: 'POST',

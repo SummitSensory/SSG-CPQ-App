@@ -5,6 +5,7 @@ import { NotFoundError, ValidationError } from '../lib/errors.js';
 import { renderRfqHtml, rfqFilename } from './freightRfqDocument.js';
 import { renderPdf, pdfAvailable } from '../render/pdf.js';
 import { rfqReference } from './freightRfq.js';
+import { pushFreightRequestToMonday } from '../integrations/monday/freightRequestPush.js';
 
 /**
  * Emailing a Request for Freight, on the same terms as the BOM send: the audit
@@ -14,6 +15,11 @@ import { rfqReference } from './freightRfq.js';
  *
  * One difference. Sending freezes the RFQ. A vendor quoting against a document
  * that can still be edited underneath them is how disputes start.
+ *
+ * A successful send also writes the request onto the monday deal row — one subitem
+ * per item, see integrations/monday/freightRequestPush.ts. It runs after the email,
+ * never before, and cannot fail the send: the vendor already has the request by
+ * then, so a board that is unreachable is a thing to report, not a thing to undo.
  */
 
 const RESEND_URL = 'https://api.resend.com/emails';
@@ -83,14 +89,20 @@ export async function rfqSendDefaults(rfqId: string) {
 
   const mfr = rfq.manufacturerId
     ? await prisma.manufacturer.findUnique({
-      where: { id: rfq.manufacturerId },
-      select: {
-        name: true, rfqEnabled: true, rfqEmailTo: true, rfqEmailCc: true,
-        rfqEmailSubject: true, rfqEmailBody: true,
-        rfqContactName: true, rfqContactEmail: true, rfqContactPhone: true,
-        contactEmail: true,
-      },
-    })
+        where: { id: rfq.manufacturerId },
+        select: {
+          name: true,
+          rfqEnabled: true,
+          rfqEmailTo: true,
+          rfqEmailCc: true,
+          rfqEmailSubject: true,
+          rfqEmailBody: true,
+          rfqContactName: true,
+          rfqContactEmail: true,
+          rfqContactPhone: true,
+          contactEmail: true,
+        },
+      })
     : null;
 
   const total = rfq.lines.reduce((t, l) => t + l.extendedCostMinor, 0);
@@ -122,7 +134,8 @@ export async function sendRfq(rfqId: string, input: RfqSendInput, actorId: strin
     include: { lines: { where: { included: true } } },
   });
   if (!rfq) throw new NotFoundError('RFQ not found');
-  if (rfq.status === 'SUPERSEDED') throw new ValidationError(`${rfq.reference} has been superseded by a newer revision.`);
+  if (rfq.status === 'SUPERSEDED')
+    throw new ValidationError(`${rfq.reference} has been superseded by a newer revision.`);
   if (!rfq.lines.length) throw new ValidationError('Select at least one item before sending.');
 
   /*
@@ -142,7 +155,10 @@ export async function sendRfq(rfqId: string, input: RfqSendInput, actorId: strin
     const submission = rfq.submission + 1;
     const updated = await prisma.freightRfq.update({
       where: { id: rfq.id },
-      data: { submission, reference: rfqReference(rfq.projectId, rfq.revision, rfq.vendorAbbrev, submission) },
+      data: {
+        submission,
+        reference: rfqReference(rfq.projectId, rfq.revision, rfq.vendorAbbrev, submission),
+      },
       select: { reference: true, submission: true },
     });
     rfq.submission = updated.submission;
@@ -158,7 +174,9 @@ export async function sendRfq(rfqId: string, input: RfqSendInput, actorId: strin
   if (!input.subject.trim()) throw new ValidationError('The email needs a subject');
 
   if (!(await pdfAvailable())) {
-    throw new ValidationError('PDF rendering is not available on this deployment, so the RFQ cannot be attached. Nothing was sent.');
+    throw new ValidationError(
+      'PDF rendering is not available on this deployment, so the RFQ cannot be attached. Nothing was sent.',
+    );
   }
 
   let attachment: { filename: string; content: string };
@@ -186,7 +204,10 @@ export async function sendRfq(rfqId: string, input: RfqSendInput, actorId: strin
     },
   });
 
-  const finish = async (status: 'SENT' | 'FAILED', extra: { providerMessageId?: string; error?: string }) => {
+  const finish = async (
+    status: 'SENT' | 'FAILED',
+    extra: { providerMessageId?: string; error?: string },
+  ) => {
     await prisma.freightRfqSend.update({ where: { id: send.id }, data: { status, ...extra } });
     if (status === 'SENT') {
       // Frozen only on a real send: a failed attempt leaves the RFQ editable so
@@ -208,7 +229,10 @@ export async function sendRfq(rfqId: string, input: RfqSendInput, actorId: strin
   try {
     const res = await fetch(RESEND_URL, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      headers: {
+        Authorization: `Bearer ${env.RESEND_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
       body: JSON.stringify({
         from: `${env.BOM_FROM_NAME} <${env.BOM_FROM_EMAIL}>`,
         to,
@@ -232,7 +256,32 @@ export async function sendRfq(rfqId: string, input: RfqSendInput, actorId: strin
     const json = (await res.json()) as { id?: string };
     await finish('SENT', { providerMessageId: json.id });
     logger.info({ rfqId, vendor: rfq.vendor, to }, 'rfq send: sent');
-    return { id: send.id, status: 'SENT' as const, reference: rfq.reference, providerMessageId: json.id ?? null };
+
+    /*
+     * The deal board, after the email and outside the try that owns it. `sentAt` is
+     * already written by `finish`, which is what the Request Date column reads, so
+     * the board shows the date the vendor was actually asked. Any failure here is
+     * swallowed on purpose — it is logged, reported back as data, and never allowed
+     * to turn a successful send into an error the rep has to interpret.
+     */
+    let mondayPush: Awaited<ReturnType<typeof pushFreightRequestToMonday>> = {
+      pushed: false,
+      skipped: 'not attempted',
+    };
+    try {
+      mondayPush = await pushFreightRequestToMonday(rfqId);
+    } catch (err) {
+      logger.error({ err, rfqId }, 'rfq send: monday freight request push threw');
+      mondayPush = { pushed: false, error: String(err) };
+    }
+
+    return {
+      id: send.id,
+      status: 'SENT' as const,
+      reference: rfq.reference,
+      providerMessageId: json.id ?? null,
+      mondayPush,
+    };
   } catch (err) {
     if (err instanceof ValidationError) throw err;
     const error = err instanceof Error ? err.message : 'Unknown error';
