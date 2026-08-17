@@ -35,6 +35,38 @@ model User {
   updatedAt    DateTime  @updatedAt
   sessions     Session[]
   passwordResets PasswordResetToken[]
+  outlookConnection OutlookConnection?
+
+  /// The rep's email signature, as HTML, appended to any draft this app writes into
+  /// their mailbox. Stored here because Outlook signatures live in the CLIENT, not in
+  /// the mailbox: Graph cannot read one, and Outlook on the web will not insert one into
+  /// a message that already exists. Pasted by the rep, sanitized on the way in.
+  emailSignatureHtml String?
+}
+
+/// One rep's delegated consent to have drafts written into their Outlook mailbox.
+///
+/// Per user and never shared: the tokens here authorize this mailbox and no other, so
+/// there is no tenant-wide credential in this system to lose. Both tokens are
+/// AES-256-GCM encrypted with GRAPH_TOKEN_ENC_KEY before they are stored.
+///
+/// revokedAt + lastError exist so an expired grant produces a clear "connect Outlook
+/// again" instead of a retry loop that fails identically every time.
+model OutlookConnection {
+  id           String    @id @default(cuid())
+  userId       String    @unique
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// The mailbox Microsoft says these tokens belong to, asked rather than assumed.
+  mailbox      String
+  accessToken  String
+  refreshToken String
+  expiresAt    DateTime
+  scope        String
+  lastUsedAt   DateTime?
+  revokedAt    DateTime?
+  lastError    String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 }
 
 /// Self-service password reset. Only the SHA-256 hash of the emailed token is

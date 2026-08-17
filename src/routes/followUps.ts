@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
-import { NotFoundError, ValidationError } from '../lib/errors.js';
+import { ConflictError, NotFoundError, ValidationError } from '../lib/errors.js';
+import { createOutlookDraft, OutlookNotConnectedError } from '../integrations/microsoft/graph.js';
 import { recordAudit } from '../lib/audit.js';
 import {
   DEFAULT_FOLLOW_UP_TEMPLATES,
@@ -280,6 +281,55 @@ export function registerFollowUpRoutes(app: FastifyInstance): void {
         .header('Content-Type', 'message/rfc822; charset=utf-8')
         .header('Content-Disposition', `attachment; filename="${safe}.eml"`)
         .send(eml);
+    },
+  );
+
+  /**
+   * The same email, written straight into the rep's Outlook mailbox as a draft.
+   *
+   * The preferred route when the rep has connected their mailbox: no file to download,
+   * no per-machine "always open files of this type", and the draft is in Drafts on every
+   * device immediately. The .eml route above stays as the fallback for anyone not
+   * connected — losing the ability to send a follow-up because an OAuth grant lapsed
+   * would be a worse failure than the download it replaced.
+   *
+   * Nothing is SENT. Graph creates an unsent message; the rep still reads it, edits it
+   * and presses Send, which is the point of an email they are meant to have judged.
+   */
+  app.post(
+    '/crm/organizations/:organizationId/follow-ups/:key/draft-in-outlook',
+    read,
+    async (req) => {
+      const { organizationId, key } = req.params as { organizationId: string; key: string };
+      const q = req.query as { proposalId?: string; contactId?: string };
+      const { contact, ctx } = await contextFor(organizationId, req.user!.sub, q);
+      if (!contact?.email) throw new ValidationError('That contact has no email address.');
+
+      const templates = await loadTemplates();
+      const template = templates.find((t) => t.key === key);
+      if (!template) throw new NotFoundError('Template not found');
+
+      const rendered = renderFollowUp(template, ctx);
+      try {
+        const draft = await createOutlookDraft({
+          userId: req.user!.sub,
+          to: {
+            email: contact.email,
+            name: [contact.firstName, contact.lastName].filter(Boolean).join(' ') || null,
+          },
+          subject: rendered.subject,
+          html: rendered.html,
+        });
+        return { webLink: draft.webLink, mailbox: draft.mailbox, subject: rendered.subject };
+      } catch (err) {
+        // A missing or lapsed connection is not an error the rep caused, and it has a
+        // specific remedy. 409 so the browser can fall back to the .eml download and say
+        // which of the two happened.
+        if (err instanceof OutlookNotConnectedError) {
+          throw new ConflictError(err.message);
+        }
+        throw err;
+      }
     },
   );
 

@@ -4017,13 +4017,18 @@
        * needs the auth header, so the response becomes a blob URL and a synthetic click
        * hands it to whatever the machine has registered for .eml.
        */
-      var openInOutlook = async function () {
-        msg('Building the draft…');
-        var to = contactOf();
-        var url = '/crm/organizations/' + orgId + '/follow-ups/' + encodeURIComponent(chosenT.key) +
-          '/draft.eml?proposalId=' + encodeURIComponent(row.id) +
+      var draftQuery = function (to) {
+        return '?proposalId=' + encodeURIComponent(row.id) +
           (to && to.id ? '&contactId=' + encodeURIComponent(to.id) : '');
-        var r = await authed(url);
+      };
+      var draftBase = function () {
+        return '/crm/organizations/' + orgId + '/follow-ups/' + encodeURIComponent(chosenT.key);
+      };
+
+      /* The fallback: download the .eml and let Windows hand it to Outlook. Kept because a
+       * lapsed OAuth grant must not be the reason a rep cannot follow up on a proposal. */
+      var downloadEml = async function (to, prefix) {
+        var r = await authed(draftBase() + '/draft.eml' + draftQuery(to));
         if (!r.ok) { msg('Could not build the draft (' + r.status + ').', 1); return; }
         var blob = await r.blob();
         var a = document.createElement('a');
@@ -4035,7 +4040,57 @@
         setTimeout(function () { URL.revokeObjectURL(a.href); document.body.removeChild(a); }, 4000);
         var logged = wantsLog() ? await logIt() : null;
         if (logged === false) { msg('Draft downloaded, but the history line failed. Record it by hand.', 1); return; }
-        msg('Draft downloaded — open it and Outlook will have it addressed and ready.' + (logged ? ' Logged.' : ''));
+        msg((prefix || 'Draft downloaded — open it and Outlook will have it addressed and ready.') + (logged ? ' Logged.' : ''));
+        if (logged) await load(to && to.id ? to.id : null);
+      };
+
+      /**
+       * Hand Outlook a real draft.
+       *
+       * First choice is Microsoft Graph: the message is written straight into the rep's
+       * mailbox and the returned link opens it. No file, no download, and the draft is in
+       * Drafts on every device at once. If the mailbox is not connected the server answers
+       * 409 and we fall back to the .eml download, saying which happened rather than
+       * silently doing something different from what the button offered.
+       *
+       * The blank tab is opened SYNCHRONOUSLY, inside the click, because a popup opened
+       * after an await is not attributed to the gesture and every browser blocks it. It is
+       * closed again if we end up on the download path.
+       */
+      var openInOutlook = async function () {
+        msg('Building the draft…');
+        var to = contactOf();
+        var tab = null;
+        try { tab = window.open('', '_blank'); } catch (e) { tab = null; }
+        if (tab) {
+          try {
+            tab.document.write('<title>Opening your draft…</title>' +
+              '<body style="font-family:system-ui;padding:40px;color:#82877d;">Opening your draft…</body>');
+            tab.document.close();
+          } catch (e) {}
+        }
+
+        var r = await authed(draftBase() + '/draft-in-outlook' + draftQuery(to), { method: 'POST', body: {} });
+        if (r.status === 409 || r.status === 404) {
+          if (tab) { try { tab.close(); } catch (e) {} }
+          await downloadEml(to, 'Outlook is not connected, so the draft downloaded as a file instead. Connect it under Administration to skip the download.');
+          return;
+        }
+        if (!r.ok) {
+          if (tab) { try { tab.close(); } catch (e) {} }
+          msg(await serverMessage(r, 'Could not create the draft (' + r.status + ').'), 1);
+          return;
+        }
+        var d = null; try { d = await r.json(); } catch (e) {}
+        if (!d || !d.webLink) {
+          if (tab) { try { tab.close(); } catch (e) {} }
+          msg('The draft was created but Outlook did not say where.', 1);
+          return;
+        }
+        if (tab) tab.location.href = d.webLink; else window.open(d.webLink, '_blank');
+        var logged = wantsLog() ? await logIt() : null;
+        if (logged === false) { msg('Draft is in your Drafts folder, but the history line failed. Record it by hand.', 1); return; }
+        msg('Draft created in ' + (d.mailbox || 'your mailbox') + ' — it is open in Outlook and in your Drafts folder.' + (logged ? ' Logged.' : ''));
         if (logged) await load(to && to.id ? to.id : null);
       };
 
@@ -10462,6 +10517,97 @@
    * The body is plain text on purpose: a blank line starts a paragraph, **asterisks** mark
    * the one bolded question. A rich-text or HTML field would let one unclosed tag reach a
    * customer, and nobody notices that until after it has gone. */
+  /**
+   * Per-user Outlook connection + email signature.
+   *
+   * Lives on the administration screen next to the templates because that is where
+   * someone goes to think about follow-up email, but it is NOT an administrative action:
+   * it connects the mailbox of whoever is signed in. There is deliberately no way for an
+   * admin to connect another person's mailbox.
+   */
+  async function loadOutlookPanel() {
+    var box = document.getElementById('olPanel'); if (!box) return;
+    var d = null;
+    try {
+      var r = await authed('/me/outlook');
+      if (!r.ok) { box.innerHTML = '<div class="err">Could not read your Outlook status (' + r.status + ').</div>'; return; }
+      d = await r.json();
+    } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; return; }
+
+    if (!d.configured) {
+      box.innerHTML = '<div class="muted" style="padding:14px 16px;border:1px solid #e8eae4;border-radius:8px;font-size:13px;line-height:1.6;">' +
+        'Outlook drafts are not switched on for this deployment yet. Until they are, a follow-up downloads as an <code>.eml</code> file that opens in Outlook. ' +
+        'Setting it up needs four settings on the server: <code>GRAPH_REDIRECT_URI</code>, <code>GRAPH_TOKEN_ENC_KEY</code>, and the existing Microsoft sign-in tenant and client credentials.</div>';
+      return;
+    }
+
+    var status = d.connected
+      ? '<span class="chip">Connected</span> <span class="muted" style="font-size:12.5px;">' + esc(d.mailbox || '') + '</span>'
+      : '<span class="muted" style="font-size:12.5px;">Not connected — follow-ups will download as a file.</span>';
+
+    box.innerHTML =
+      '<div style="border:1px solid #e8eae4;border-radius:8px;padding:14px 16px;">' +
+        '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">' +
+          '<div>' + status +
+            (d.lastError ? '<div class="muted" style="font-size:12px;margin-top:4px;color:#9c3327;">' + esc(d.lastError) + '</div>' : '') +
+          '</div>' +
+          '<div style="display:flex;gap:8px;">' +
+            '<button class="btn" id="olConnect" style="width:auto;padding:8px 14px;">' + (d.connected ? 'Reconnect' : 'Connect Outlook') + '</button>' +
+            (d.connected ? '<button class="link-btn" id="olDisconnect" style="width:auto;padding:8px 14px;color:#9c3327;">Disconnect</button>' : '') +
+          '</div>' +
+        '</div>' +
+        '<div style="margin-top:14px;">' +
+          '<div style="font-size:13px;font-weight:600;margin-bottom:4px;">Your signature</div>' +
+          '<div class="muted" style="font-size:12px;margin-bottom:6px;line-height:1.55;">Copy your signature out of Outlook and paste it below, then save. It is added to the bottom of every draft this app creates.</div>' +
+          '<div id="olSig" contenteditable="true" style="min-height:110px;border:1px solid #dfe2da;border-radius:6px;padding:10px 12px;background:#fff;font-size:13px;overflow:auto;"></div>' +
+          '<div style="display:flex;gap:8px;align-items:center;margin-top:8px;">' +
+            '<button class="btn" id="olSigSave" style="width:auto;padding:8px 14px;">Save signature</button>' +
+            '<button class="link-btn" id="olSigClear" style="width:auto;padding:8px 14px;">Clear</button>' +
+            '<span class="muted" id="olSigMsg" style="font-size:12px;"></span>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+
+    var sig = document.getElementById('olSig');
+    // Assigned rather than interpolated: the stored signature is HTML, and it is the
+    // server's sanitized copy that should render, not a re-escaped version of it.
+    if (sig) sig.innerHTML = d.signatureHtml || '';
+
+    var cn = document.getElementById('olConnect');
+    if (cn) cn.addEventListener('click', async function () {
+      cn.disabled = true;
+      try {
+        var r = await authed('/me/outlook/connect', { method: 'POST', body: {} });
+        var c = null; try { c = await r.json(); } catch (e) {}
+        if (!r.ok || !c || !c.url) { alert((c && c.message) || 'Could not start the connection (' + r.status + ').'); cn.disabled = false; return; }
+        // Same tab: Microsoft refuses to render its consent screen inside a frame, and a
+        // popup here is routinely blocked. The callback page comes back with a link home.
+        window.location.href = c.url;
+      } catch (e) { alert('Could not reach the server.'); cn.disabled = false; }
+    });
+
+    var dc = document.getElementById('olDisconnect');
+    if (dc) dc.addEventListener('click', async function () {
+      if (!confirm('Disconnect ' + (d.mailbox || 'your mailbox') + '?\n\nFollow-ups will download as a file again until you reconnect. Drafts already created are untouched.')) return;
+      var r = await authed('/me/outlook', { method: 'DELETE' });
+      if (!r.ok && r.status !== 204) { alert('Could not disconnect (' + r.status + ').'); return; }
+      loadOutlookPanel();
+    });
+
+    var saveSig = async function (html) {
+      var note = document.getElementById('olSigMsg');
+      var r = await authed('/me/outlook/signature', { method: 'PUT', body: { html: html } });
+      if (!r.ok) { if (note) { note.textContent = 'Could not save (' + r.status + ').'; note.style.color = '#9c3327'; } return; }
+      var out = null; try { out = await r.json(); } catch (e) {}
+      if (sig && out && typeof out.signatureHtml === 'string') sig.innerHTML = out.signatureHtml;
+      if (note) { note.textContent = out && out.hasSignature ? 'Saved.' : 'Cleared.'; note.style.color = ''; }
+    };
+    var sv = document.getElementById('olSigSave');
+    if (sv) sv.addEventListener('click', function () { saveSig(sig ? sig.innerHTML : ''); });
+    var cl = document.getElementById('olSigClear');
+    if (cl) cl.addEventListener('click', function () { if (sig) sig.innerHTML = ''; saveSig(''); });
+  }
+
   var futCache = null;
   async function loadFollowUpTemplates() {
     var box = document.getElementById('futList'); if (!box) return;
@@ -10470,6 +10616,20 @@
       if (!r.ok) { box.innerHTML = '<div class="err">Could not load the templates (' + r.status + '). Run migration 0053 if this persists.</div>'; return; }
       futCache = await r.json();
     } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; return; }
+
+    /* Render inside its own guard. The list used to build its markup in one unguarded
+     * assignment, so a single bad reference anywhere in it threw before box.innerHTML was
+     * ever set and the section sat on "Loading…" with the real error only in the console.
+     * A screen that cannot draw itself should say so. */
+    try {
+      renderFollowUpTemplates(box);
+    } catch (e) {
+      console.error('follow-up templates: render failed', e);
+      box.innerHTML = '<div class="err">The templates loaded but this list could not be drawn. ' + esc(String(e && e.message ? e.message : e)) + '</div>';
+    }
+  }
+
+  function renderFollowUpTemplates(box) {
 
     var rows = (futCache.templates || []).map(function (t) {
       return '<tr>' +
@@ -10494,7 +10654,7 @@
       '<div class="muted" style="font-size:12px;margin-top:8px;line-height:1.6;">Placeholders: ' +
       (futCache.placeholders || []).map(function (p) {
         return '<code style="font-size:11.5px;">' + esc(p.token) + '</code> ' + esc(p.means);
-      }).join(' &nbsp;' + EM + '&nbsp; ') + '</div>';
+      }).join(' &nbsp;&mdash;&nbsp; ') + '</div>';
 
     var find = function (id) {
       return (futCache.templates || []).filter(function (t) { return t.id === id; })[0];
@@ -11189,6 +11349,9 @@
         '<button class="btn" id="qtNew" style="width:auto;padding:9px 15px;">+ New question</button></div>' +
       '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;">Questions asked on a Bill of Materials section. A question with no vendor is asked of <b>every</b> vendor; one with a vendor is asked only of theirs. Each new section starts with a copy, so editing a question here never rewrites an answer already given on an order.</div>' +
       '<div id="qtList"><div class="muted" style="padding:16px;">Loading…</div></div>' +
+      '<div class="section-title" style="margin-top:26px;">Outlook drafts</div>' +
+      '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;max-width:820px;line-height:1.55;">Connect your own mailbox and a follow-up opens as a draft in Outlook instead of downloading a file. Each person connects their own — consent is per mailbox, so nobody can connect on your behalf and this app can never read anyone else&rsquo;s mail. Your signature is pasted here because Outlook keeps signatures in the app on your machine, where nothing on the server can reach them.</div>' +
+      '<div id="olPanel"><div class="muted" style="padding:16px;">Loading…</div></div>' +
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:26px;"><div class="section-title" style="margin:0;">Follow-up emails</div>' +
         '<button class="btn" id="futNew" style="width:auto;padding:9px 15px;">+ New template</button></div>' +
       '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;max-width:820px;line-height:1.55;">The emails a rep can pick from on a proposal. The order matters — financing is not raised until the email before it has established that budget is the obstacle — so the step number decides the sequence. Editing here changes what everyone sends, immediately.</div>' +
@@ -11216,6 +11379,7 @@
     loadStandardNotes();
     loadFormulas();
     loadFollowUpTemplates();
+    loadOutlookPanel();
     loadFinancingAdmin();
     loadQuestionTemplates();
   }

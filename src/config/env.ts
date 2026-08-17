@@ -41,6 +41,19 @@ const EnvSchema = z
     // Unset means every SSO user lands on ENTRA_DEFAULT_ROLE, as before.
     ENTRA_ROLE_MAP: z.string().optional(),
 
+    // ---- Outlook drafts (Microsoft Graph) ----
+    // Where Microsoft returns the browser after a rep consents to let the CRM write
+    // drafts into their mailbox, e.g. https://crm.summitsensory.com/me/outlook/callback.
+    // Must match a Redirect URI on the app registration EXACTLY, character for character.
+    GRAPH_REDIRECT_URI: z.string().url().optional(),
+    // 32-byte key (hex or base64) that AES-256-GCM encrypts stored mailbox tokens. A
+    // refresh token for a mailbox is a durable credential; it does not sit in the clear.
+    GRAPH_TOKEN_ENC_KEY: z.string().min(32).optional(),
+    // Only set these to run Graph off a SEPARATE app registration from SSO. Left unset,
+    // the SSO app's credentials are reused — one app, one secret to rotate.
+    GRAPH_CLIENT_ID: z.string().min(1).optional(),
+    GRAPH_CLIENT_SECRET: z.string().min(1).optional(),
+
     // Domains whose users must sign in with Microsoft — the password form refuses
     // them. Comma-separated, e.g. `summitsensory.com`. Only enforced while Entra SSO
     // is actually configured, so a half-finished setup cannot lock everyone out.
@@ -176,6 +189,35 @@ const EnvSchema = z
             message: 'required when Entra SSO is configured',
           });
       }
+    }
+    // Graph drafts ride on the Entra app registration, so half a Graph configuration
+    // means a rep gets sent to Microsoft and cannot be brought back. Named plainly at
+    // boot rather than discovered on the redirect.
+    if (v.GRAPH_REDIRECT_URI || v.GRAPH_TOKEN_ENC_KEY || v.GRAPH_CLIENT_ID) {
+      if (!v.GRAPH_REDIRECT_URI)
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['GRAPH_REDIRECT_URI'],
+          message: 'required when Outlook drafts are configured',
+        });
+      if (!v.GRAPH_TOKEN_ENC_KEY)
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['GRAPH_TOKEN_ENC_KEY'],
+          message: 'required when Outlook drafts are configured',
+        });
+      if (!v.ENTRA_TENANT_ID)
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['ENTRA_TENANT_ID'],
+          message: 'required when Outlook drafts are configured',
+        });
+      if (v.GRAPH_CLIENT_ID && !v.GRAPH_CLIENT_SECRET)
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['GRAPH_CLIENT_SECRET'],
+          message: 'required when GRAPH_CLIENT_ID is set',
+        });
     }
   });
 
@@ -317,4 +359,19 @@ export function isQuickbooksConfigured(e: Env = env): boolean {
 /** The QuickBooks environment this deployment targets, as the DB enum value. */
 export function qboEnvironment(e: Env = env): 'SANDBOX' | 'PRODUCTION' {
   return e.QBO_ENVIRONMENT === 'production' ? 'PRODUCTION' : 'SANDBOX';
+}
+
+/**
+ * True only when a rep can actually be walked through connecting their mailbox.
+ *
+ * Graph reuses the SSO app registration's client credentials unless GRAPH_CLIENT_ID
+ * overrides them, so the tenant and a client id/secret pair have to be present either
+ * way, plus this integration's own redirect URI and token encryption key.
+ */
+export function isOutlookConfigured(e: Env = env): boolean {
+  const id = e.GRAPH_CLIENT_ID ?? e.ENTRA_CLIENT_ID;
+  const secret = e.GRAPH_CLIENT_SECRET ?? e.ENTRA_CLIENT_SECRET;
+  return Boolean(
+    e.ENTRA_TENANT_ID && id && secret && e.GRAPH_REDIRECT_URI && e.GRAPH_TOKEN_ENC_KEY,
+  );
 }

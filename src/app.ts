@@ -38,6 +38,7 @@ import { registerReportRoutes } from './routes/reports.js';
 import { registerStandardNoteRoutes } from './routes/standardNotes.js';
 import { registerCustomerNoteRoutes } from './routes/customerNotes.js';
 import { registerFollowUpRoutes } from './routes/followUps.js';
+import { registerOutlookRoutes } from './routes/outlook.js';
 import { registerFormulaRoutes } from './routes/formulas.js';
 import { registerWebRoutes } from './routes/web.js';
 
@@ -116,6 +117,7 @@ export function buildApp(): FastifyInstance {
   registerStandardNoteRoutes(app);
   registerCustomerNoteRoutes(app);
   registerFollowUpRoutes(app);
+  registerOutlookRoutes(app);
   registerFormulaRoutes(app);
   registerWebRoutes(app);
   return app;
