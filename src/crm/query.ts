@@ -5,7 +5,15 @@ export const ListQuery = z.object({
   sort: z.string().optional(),
   dir: z.enum(['asc', 'desc']).default('desc'),
   page: z.coerce.number().int().min(1).default(1),
-  pageSize: z.coerce.number().int().min(1).max(100).default(20),
+  /**
+   * The paged views ask for 20. The ceiling is 500 because one caller is not a
+   * paged view at all: the New proposal dialog fills a customer picker in a single
+   * request, and at the old cap of 100 an organization beyond the first hundred
+   * simply could not be chosen — it was absent from the dropdown with nothing on
+   * screen to say so. The picker also searches the server as you type, so 500 is a
+   * comfortable list rather than a limit anyone is meant to reach.
+   */
+  pageSize: z.coerce.number().int().min(1).max(500).default(20),
 });
 export type ListQuery = z.infer<typeof ListQuery>;
 

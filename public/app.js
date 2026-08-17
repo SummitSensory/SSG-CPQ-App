@@ -949,11 +949,19 @@
     loadCrm();
   }
 
-  /* --- monday customer lookup: pull one customer on demand --- */
-  function openMondayLookup(user) {
+  /* --- monday customer lookup: pull one customer on demand ---
+   *
+   * Two callers, one dialog. From the CRM it imports and refreshes the list; from
+   * the New proposal form it imports and hands the customer back, so a rep who
+   * cannot find their customer in the dropdown does not have to leave the proposal,
+   * go to the CRM, import it there, and come back. `opts.onImported` is what tells
+   * the two apart — without it the CRM behaviour is exactly as it was.
+   */
+  function openMondayLookup(user, opts) {
+    opts = opts || {};
     openModal('Find a customer in monday',
       '<div class="field"><label for="mSearch">Customer name</label>' +
-        '<input id="mSearch" style="' + IN + '" placeholder="e.g. Soar Autism Center" value="' + esc(crm.q || '') + '" autocomplete="off"></div>' +
+        '<input id="mSearch" style="' + IN + '" placeholder="e.g. Soar Autism Center" value="' + esc(opts.q || crm.q || '') + '" autocomplete="off"></div>' +
       '<div id="mResults" class="muted" style="font-size:13px;padding:6px 0;">Type a name and press Search.</div>',
       async function (close, showErr) { await run(); var s = document.getElementById('mSave'); if (s) { s.disabled = false; s.textContent = 'Search'; } },
       'Search');
@@ -987,6 +995,9 @@
               var res = await ir.json();
               if (!ir.ok) { b.textContent = 'Failed'; return; }
               b.textContent = res.deals.created ? 'Imported' : 'Updated';
+              // From the proposal form the customer goes back to the caller; from the
+              // CRM the list refreshes, as before.
+              if (opts.onImported) { opts.onImported(x.name); return; }
               crm.q = ''; crm.page = 1; loadCrm();
             } catch (e) { b.textContent = 'Failed'; }
           });
@@ -4468,19 +4479,100 @@
     if (hasRole(PROP_WRITE, user.role) && (s === 'RELEASED' || s === 'REJECTED' || s === 'EXPIRED')) b.push(btn('new-version', 'Create new version'));
     return b.join('');
   }
-  async function openProposalForm(user) {
-    var orgs = [];
-    try { var r = await authed('/crm/organizations?pageSize=100'); if (r.ok) orgs = (await r.json()).items || []; } catch (e) {}
-    if (!orgs.length) { alert('Create an organization first.'); return; }
+  /**
+   * New proposal.
+   *
+   * The organization list is sorted here rather than trusted from the API:
+   * /crm/organizations returns its own paging order, and a rep scanning a hundred
+   * entries needs them alphabetical. localeCompare with sensitivity 'base', so "The
+   * Therapy Place" and "the therapy place" sort next to each other rather than by
+   * byte value.
+   *
+   * `preselectName` is the return leg of the monday lookup: the customer just
+   * imported is the one selected when the form reopens, because a rep who went
+   * looking for one specific customer should not have to find them a second time.
+   */
+  var ORG_PICK_PAGE = 500;
+  function sortOrgs(list) {
+    return list.slice().sort(function (a, b) { return String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' }); });
+  }
+  async function fetchOrgs(q) {
+    try {
+      var r = await authed('/crm/organizations?pageSize=' + ORG_PICK_PAGE + (q ? '&q=' + encodeURIComponent(q) : ''));
+      if (!r.ok) return [];
+      return sortOrgs((await r.json()).items || []);
+    } catch (e) { return []; }
+  }
+  async function openProposalForm(user, preselectName) {
+    var orgs = await fetchOrgs('');
+    var canFind = canCrmWrite(user.role);
+    // With the monday lookup available, an empty CRM is no longer a dead end.
+    if (!orgs.length && !canFind) { alert('Create an organization first.'); return; }
+
+    var wanted = String(preselectName || '').trim().toLowerCase();
+    var selectedId = '';
+    orgs.forEach(function (o) { if (!selectedId && wanted && String(o.name || '').trim().toLowerCase() === wanted) selectedId = o.id; });
+
     openModal('New proposal',
-      fieldRow('Organization', '<select id="fOrg" style="' + IN + '">' + orgs.map(function (o) { return '<option value="' + o.id + '">' + esc(o.name) + '</option>'; }).join('') + '</select>') +
+      fieldRow('Organization',
+        '<input id="fOrgFilter" style="' + IN + 'margin-bottom:7px;" placeholder="Type to search customers…" autocomplete="off">' +
+        '<select id="fOrg" size="1" style="' + IN + '">' +
+          (orgs.length ? '' : '<option value="">No organizations yet — find one in monday</option>') +
+          orgs.map(function (o) { return '<option value="' + o.id + '"' + (o.id === selectedId ? ' selected' : '') + '>' + esc(o.name) + '</option>'; }).join('') +
+        '</select>' +
+        (canFind ? '<button type="button" class="link-btn" id="fOrgMonday" style="width:auto;padding:6px 0;margin-top:6px;font-size:12.5px;">Not listed? Find a customer in monday</button>' : '')) +
       fieldRow('Title', '<input id="fTitle" style="' + IN + '" required>'),
       async function (close, showErr) {
+        var orgId = document.getElementById('fOrg').value;
+        if (!orgId) return showErr('Pick an organization, or find one in monday first.');
         var title = document.getElementById('fTitle').value.trim(); if (title.length < 2) return showErr('Title must be at least 2 characters.');
-        var r = await authed('/proposals', { method: 'POST', body: { organizationId: document.getElementById('fOrg').value, title: title, sections: [], items: [] } });
+        var r = await authed('/proposals', { method: 'POST', body: { organizationId: orgId, title: title, sections: [], items: [] } });
         if (!r.ok) return showErr('Could not create (' + r.status + ').');
         close(); renderProposals(user);
       });
+
+    /*
+     * Typing narrows the list. The first pass is local, so it responds on the
+     * keystroke; a query the loaded list cannot satisfy is then asked of the server,
+     * which is what makes a customer past the 500 loaded still reachable. The server
+     * answer replaces the working list, so selecting from it behaves the same.
+     */
+    var filterEl = document.getElementById('fOrgFilter');
+    var selEl = document.getElementById('fOrg');
+    var lookupTimer = null;
+    function paintOrgs(list, q) {
+      selEl.innerHTML = list.length
+        ? list.map(function (o) { return '<option value="' + o.id + '">' + esc(o.name) + '</option>'; }).join('')
+        : '<option value="">No customer matches “' + esc(q || '') + '”</option>';
+    }
+    filterEl.addEventListener('input', function () {
+      var q = filterEl.value.trim();
+      var qq = q.toLowerCase();
+      var local = qq ? orgs.filter(function (o) { return String(o.name || '').toLowerCase().indexOf(qq) !== -1; }) : orgs;
+      paintOrgs(local, q);
+      if (lookupTimer) clearTimeout(lookupTimer);
+      if (qq.length < 2 || local.length) return;
+      lookupTimer = setTimeout(async function () {
+        var found = await fetchOrgs(q);
+        if (filterEl.value.trim() !== q) return; // they kept typing
+        if (found.length) { orgs = found; paintOrgs(found, q); }
+      }, 250);
+    });
+
+    if (canFind) {
+      document.getElementById('fOrgMonday').addEventListener('click', function () {
+        // The detour to monday must not cost the rep the title they already typed.
+        var typed = document.getElementById('fTitle');
+        var titleAtOpen = typed ? typed.value : '';
+        openMondayLookup(user, {
+          onImported: async function (name) {
+            await openProposalForm(user, name);
+            var again = document.getElementById('fTitle');
+            if (again && titleAtOpen) again.value = titleAtOpen;
+          },
+        });
+      });
+    }
   }
   /* --- Reports: company-wide proposal analytics --- */
   var rep = { data: null, tab: 'overview', range: '365', from: '', to: '', pq: '', psort: 'proposedValue' };
