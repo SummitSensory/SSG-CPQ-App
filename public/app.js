@@ -984,7 +984,7 @@
           return '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid #f2f3ef;">' +
             '<div><div style="font-weight:600;font-size:13.5px;">' + esc(x.name) + '</div>' +
             '<div class="muted" style="font-size:12px;">' + [x.industry, where, x.contact, x.projectId ? 'Project ' + x.projectId : ''].filter(Boolean).map(esc).join(' · ') + '</div></div>' +
-            '<button class="link-btn mImp" data-id="' + esc(x.itemId) + '" style="width:auto;padding:6px 12px;white-space:nowrap;">Import</button>' +
+            '<button class="link-btn mImp" data-id="' + esc(x.itemId) + '" data-name="' + esc(x.name) + '" style="width:auto;padding:6px 12px;white-space:nowrap;">Import</button>' +
           '</div>';
         }).join('');
         box.querySelectorAll('.mImp').forEach(function (b) {
@@ -997,7 +997,11 @@
               b.textContent = res.deals.created ? 'Imported' : 'Updated';
               // From the proposal form the customer goes back to the caller; from the
               // CRM the list refreshes, as before.
-              if (opts.onImported) { opts.onImported(x.name); return; }
+              // The name comes off the button, not from the row that drew it: these
+              // handlers are wired in a second pass, where the row variable is out of
+              // scope. Reading it there threw after a perfectly good import and the
+              // catch below reported "Failed".
+              if (opts.onImported) { opts.onImported(b.getAttribute('data-name') || ''); return; }
               crm.q = ''; crm.page = 1; loadCrm();
             } catch (e) { b.textContent = 'Failed'; }
           });
