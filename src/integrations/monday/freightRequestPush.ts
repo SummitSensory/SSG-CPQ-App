@@ -47,6 +47,8 @@ export const FREIGHT_REQUEST_COL = {
   vendor: 'color_mm6as6fp',
   /** text — SKU */
   sku: 'text_mm6a1k7v',
+  /** text — the RFQ reference, e.g. "RFQ-12414494509-PS" */
+  reference: 'text_mm6axvpm',
   /** numbers — Vendor Freight Cost; blank until the vendor quotes */
   vendorFreightCost: 'numeric_mm6aqhvt',
   /** text — Vendor Quote #; blank until the vendor quotes */
@@ -165,6 +167,10 @@ export async function pushFreightRequestToMonday(rfqId: string): Promise<Freight
         // nobody added their label to the column first.
         [FREIGHT_REQUEST_COL.vendor]: { label: mfr.name || rfq.vendor },
         [FREIGHT_REQUEST_COL.sku]: line.sku,
+        // The reference the vendor is holding, frozen on the RFQ row — revision and
+        // resubmission suffixes included, so a board row and a PDF in a vendor's
+        // inbox can always be matched to each other.
+        [FREIGHT_REQUEST_COL.reference]: rfq.reference,
         [FREIGHT_REQUEST_COL.skuQuantity]: String(line.quantity),
         // Both statuses are what a request looks like the moment it goes out: it has
         // been requested, and the items on it are on the proposal.
