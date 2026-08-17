@@ -959,15 +959,17 @@
    */
   function openMondayLookup(user, opts) {
     opts = opts || {};
-    openModal('Find a customer in monday',
+    var ov = openModal('Find a customer in monday',
       '<div class="field"><label for="mSearch">Customer name</label>' +
         '<input id="mSearch" style="' + IN + '" placeholder="e.g. Soar Autism Center" value="' + esc(opts.q || crm.q || '') + '" autocomplete="off"></div>' +
       '<div id="mResults" class="muted" style="font-size:13px;padding:6px 0;">Type a name and press Search.</div>',
       async function (close, showErr) { await run(); var s = document.getElementById('mSave'); if (s) { s.disabled = false; s.textContent = 'Search'; } },
       'Search');
 
-    var input = document.getElementById('mSearch');
-    var box = document.getElementById('mResults');
+    // Scoped to this overlay, per the note in openModal: two dialogs can be on
+    // screen at once and getElementById returns the older node.
+    var input = ov.querySelector('#mSearch');
+    var box = ov.querySelector('#mResults');
     input.focus();
 
     async function run() {
@@ -1001,7 +1003,13 @@
               // handlers are wired in a second pass, where the row variable is out of
               // scope. Reading it there threw after a perfectly good import and the
               // catch below reported "Failed".
-              if (opts.onImported) { opts.onImported(b.getAttribute('data-name') || ''); return; }
+              if (opts.onImported) {
+                // Close this dialog before handing back, or the form that reopens
+                // stacks on top of it and duplicates its field ids.
+                if (ov.parentNode) ov.parentNode.removeChild(ov);
+                opts.onImported(b.getAttribute('data-name') || '');
+                return;
+              }
               crm.q = ''; crm.page = 1; loadCrm();
             } catch (e) { b.textContent = 'Failed'; }
           });
@@ -4517,7 +4525,7 @@
     var selectedId = '';
     orgs.forEach(function (o) { if (!selectedId && wanted && String(o.name || '').trim().toLowerCase() === wanted) selectedId = o.id; });
 
-    openModal('New proposal',
+    var ov = openModal('New proposal',
       fieldRow('Organization',
         '<input id="fOrgFilter" style="' + IN + 'margin-bottom:7px;" placeholder="Type to search customers…" autocomplete="off">' +
         '<select id="fOrg" size="1" style="' + IN + '">' +
@@ -4527,9 +4535,9 @@
         (canFind ? '<button type="button" class="link-btn" id="fOrgMonday" style="width:auto;padding:6px 0;margin-top:6px;font-size:12.5px;">Not listed? Find a customer in monday</button>' : '')) +
       fieldRow('Title', '<input id="fTitle" style="' + IN + '" required>'),
       async function (close, showErr) {
-        var orgId = document.getElementById('fOrg').value;
+        var orgId = ov.querySelector('#fOrg').value;
         if (!orgId) return showErr('Pick an organization, or find one in monday first.');
-        var title = document.getElementById('fTitle').value.trim(); if (title.length < 2) return showErr('Title must be at least 2 characters.');
+        var title = ov.querySelector('#fTitle').value.trim(); if (title.length < 2) return showErr('Title must be at least 2 characters.');
         var r = await authed('/proposals', { method: 'POST', body: { organizationId: orgId, title: title, sections: [], items: [] } });
         if (!r.ok) return showErr('Could not create (' + r.status + ').');
         close(); renderProposals(user);
@@ -4541,8 +4549,8 @@
      * which is what makes a customer past the 500 loaded still reachable. The server
      * answer replaces the working list, so selecting from it behaves the same.
      */
-    var filterEl = document.getElementById('fOrgFilter');
-    var selEl = document.getElementById('fOrg');
+    var filterEl = ov.querySelector('#fOrgFilter');
+    var selEl = ov.querySelector('#fOrg');
     var lookupTimer = null;
     function paintOrgs(list, q) {
       selEl.innerHTML = list.length
@@ -4564,19 +4572,24 @@
     });
 
     if (canFind) {
-      document.getElementById('fOrgMonday').addEventListener('click', function () {
+      ov.querySelector('#fOrgMonday').addEventListener('click', function () {
         // The detour to monday must not cost the rep the title they already typed.
-        var typed = document.getElementById('fTitle');
+        var typed = ov.querySelector('#fTitle');
         var titleAtOpen = typed ? typed.value : '';
+        // This dialog goes away first. Leaving it open stacked three overlays with
+        // two #fTitle inputs between them, and Create then read the empty one and
+        // reported a title that was plainly typed as too short.
+        if (ov.parentNode) ov.parentNode.removeChild(ov);
         openMondayLookup(user, {
           onImported: async function (name) {
-            await openProposalForm(user, name);
-            var again = document.getElementById('fTitle');
+            var next = await openProposalForm(user, name);
+            var again = next && next.querySelector('#fTitle');
             if (again && titleAtOpen) again.value = titleAtOpen;
           },
         });
       });
     }
+    return ov;
   }
   /* --- Reports: company-wide proposal analytics --- */
   var rep = { data: null, tab: 'overview', range: '365', from: '', to: '', pq: '', psort: 'proposedValue' };
