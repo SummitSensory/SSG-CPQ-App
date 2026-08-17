@@ -51,6 +51,8 @@ export const FREIGHT_REQUEST_COL = {
   vendorFreightCost: 'numeric_mm6aqhvt',
   /** text — Vendor Quote #; blank until the vendor quotes */
   vendorQuoteNumber: 'text_mm6ayr3q',
+  /** status — request state; "Requested" the moment the email goes out */
+  status: 'color_mm6a6v0z',
   /** status — Included in Signed Proposal */
   includedInSignedProposal: 'color_mm6a1naf',
   /** numbers — SKU Quantity */
@@ -152,17 +154,6 @@ export async function pushFreightRequestToMonday(rfqId: string): Promise<Freight
   const { itemId, note } = await dealItemIdFor(rfq.organizationId, rfq.proposal.opportunityId);
   if (!itemId) return { pushed: false, skipped: note };
 
-  /*
-   * "Included in Signed Proposal" answers a question about the PROPOSAL, not about
-   * the line: a request usually goes out before the customer signs, so this reads No
-   * on the way out. It reads Yes only in the true-up case — freight quoted after a
-   * signature, which is the whole reason freightTrueUp exists.
-   */
-  const accepted = await prisma.proposalVersion.findFirst({
-    where: { proposalId: rfq.proposal.id, status: 'ACCEPTED' },
-    select: { id: true },
-  });
-  const signedLabel = accepted ? 'Yes' : 'No';
   const requestDate = dateValue(rfq.sentAt ?? rfq.createdAt);
 
   const subitemIds: string[] = [];
@@ -175,7 +166,10 @@ export async function pushFreightRequestToMonday(rfqId: string): Promise<Freight
         [FREIGHT_REQUEST_COL.vendor]: { label: mfr.name || rfq.vendor },
         [FREIGHT_REQUEST_COL.sku]: line.sku,
         [FREIGHT_REQUEST_COL.skuQuantity]: String(line.quantity),
-        [FREIGHT_REQUEST_COL.includedInSignedProposal]: { label: signedLabel },
+        // Both statuses are what a request looks like the moment it goes out: it has
+        // been requested, and the items on it are on the proposal.
+        [FREIGHT_REQUEST_COL.status]: { label: 'Requested' },
+        [FREIGHT_REQUEST_COL.includedInSignedProposal]: { label: 'Included in Proposal' },
         // vendorFreightCost and vendorQuoteNumber stay empty — see the header note.
       });
       subitemIds.push(id);
