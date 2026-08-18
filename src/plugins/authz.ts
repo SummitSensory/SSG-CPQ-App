@@ -2,8 +2,9 @@ import type { FastifyRequest, FastifyReply } from 'fastify';
 import { authenticate } from './auth.js';
 import { assertCan, type Role } from '../authz/rbac.js';
 import { isRole } from '../authz/permissions.js';
-import { UnauthorizedError } from '../lib/errors.js';
+import { UnauthorizedError, ServiceUnavailableError } from '../lib/errors.js';
 import { prisma } from '../lib/prisma.js';
+import { logger } from '../lib/logger.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -43,10 +44,23 @@ async function liveAccount(userId: string): Promise<AccountState | null> {
   const now = Date.now();
   const cached = accounts.get(userId);
   if (cached && now - cached.at < CACHE_MS) return cached;
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { isActive: true, role: true },
-  });
+  let user: { isActive: boolean; role: string } | null;
+  try {
+    user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { isActive: true, role: true },
+    });
+  } catch (err) {
+    // The database is unreachable. Fail CLOSED — an authorization decision must not be
+    // made on unverified account state — but as a 503, not a 401: the caller's token is
+    // fine, and telling a room full of staff they are signed out because Postgres
+    // blipped would be its own incident. Logged, because during an outage this is the
+    // line that tells you whether requests are being refused for the reason you think.
+    logger.error({ err, userId }, 'authz: could not verify live account state');
+    throw new ServiceUnavailableError(
+      'Could not verify your account just now. Try again in a moment.',
+    );
+  }
   if (!user) {
     accounts.delete(userId);
     return null;

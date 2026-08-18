@@ -1,4 +1,24 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
+/**
+ * These suites mount routes without a database on purpose, and mint synthetic tokens
+ * for users that were never inserted. `requireAuth` now verifies live account state
+ * (so a deactivated or demoted user cannot spend a token minted before the change),
+ * which means it needs a User row to read. Mock it: the role is taken from the id the
+ * token carries (`user-SALES_REP` -> SALES_REP), so each case still exercises exactly
+ * the role it is named for, and the authorization decision is still made on account
+ * state rather than on the token's own claim.
+ */
+vi.mock('../../src/lib/prisma.js', () => ({
+  prisma: {
+    user: {
+      findUnique: async ({ where }: { where: { id: string } }) => ({
+        isActive: true,
+        role: String(where.id).replace(/^user-/, ''),
+      }),
+    },
+  },
+}));
+
 import type { FastifyInstance } from 'fastify';
 
 beforeAll(() => {
