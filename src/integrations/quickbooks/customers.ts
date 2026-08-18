@@ -155,12 +155,39 @@ export async function findOrCreateCustomer(
     }
 
     // (2) adopt an existing QuickBooks customer with the same name, then bring its
-    // profile up to date with what CPQ knows. The match is not exact-only: a CRM
-    // name imported from monday carries the deal code ("The Therapy Spot LLC
-    // (R-4MBL1Z)") that the accountant's customer does not, and matching on equality
-    // alone missed it and created a duplicate customer alongside the real one.
+    // profile up to date with what CPQ knows. The match is not exact-only: a CRM name
+    // imported from monday carries the deal code ("The Therapy Spot LLC (R-4MBL1Z)")
+    // that the accountant's customer does not, and matching on equality alone missed it
+    // and created a duplicate customer alongside the real one.
+    //
+    // Only an UNAMBIGUOUS EQUALITY match is adopted (see customerLookup.ts). A name that
+    // merely starts the same way — "Soar Autism Center" against "Soar Autism Center -
+    // Glendale" — is a different site with its own invoices, and adopting it would write
+    // this customer's address and contact over theirs in the real books with no undo.
+    // When the match is not safe to take automatically, fall through and create: a
+    // duplicate customer is a tidy-up, overwriting the wrong customer is not.
     const nameMatch = await findQboCustomerByName<QboCustomer>(realmId, src.displayName, fetchImpl);
-    const match = nameMatch?.customer ?? null;
+    if (nameMatch && !nameMatch.autoAdoptable) {
+      logger.warn(
+        {
+          organizationId,
+          candidateQboId: nameMatch.customer.Id,
+          matchedOn: nameMatch.matchedOn,
+          ambiguousCount: nameMatch.ambiguousCount ?? 1,
+        },
+        'quickbooks: a similarly-named customer exists but was not adopted automatically',
+      );
+      await log(
+        'OUTBOUND',
+        ENTITY,
+        organizationId,
+        nameMatch.customer.Id,
+        'skipped',
+        userId,
+        `not adopted automatically — ${describeNameMatch(nameMatch)}`,
+      );
+    }
+    const match = nameMatch?.autoAdoptable ? nameMatch.customer : null;
     if (match && nameMatch) {
       const res = await create<{ Customer: QboCustomer }>(
         realmId,

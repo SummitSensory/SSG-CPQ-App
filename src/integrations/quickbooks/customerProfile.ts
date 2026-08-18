@@ -220,10 +220,12 @@ export async function compareCustomerProfile(
     );
     if (match) {
       qbo = match.customer;
-      adoptableQboId = match.customer.Id;
+      adoptableQboId = match.autoAdoptable ? match.customer.Id : null;
       adoptableNote = describeNameMatch(match);
       warnings.push(
-        `Already in QuickBooks as ${adoptableNote}. Pushing a document adopts that customer rather than creating a new one, and brings the fields below up to date from the CRM.`,
+        match.autoAdoptable
+          ? `Already in QuickBooks as ${adoptableNote}. Pushing a document adopts that customer rather than creating a new one, and brings the fields below up to date from the CRM.`
+          : `A similar customer exists in QuickBooks: ${adoptableNote} Pushing will NOT adopt it — a new customer would be created instead. Link them by hand if they are the same business.`,
       );
     }
   }
