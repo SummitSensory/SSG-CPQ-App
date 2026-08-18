@@ -14,6 +14,7 @@ import { registerQuickbooksRoutes } from './routes/quickbooks.js';
 import { registerCatalogRoutes } from './routes/catalog.js';
 import { registerCatalogItemRoutes } from './routes/catalogItems.js';
 import { registerManufacturerRoutes } from './routes/manufacturers.js';
+import { registerVendorColorRoutes } from './routes/vendorColors.js';
 import { registerProductTreeRoutes } from './routes/productTree.js';
 import { registerBundleRoutes } from './routes/bundles.js';
 import { registerRuleRoutes } from './routes/rules.js';
@@ -95,6 +96,7 @@ export function buildApp(): FastifyInstance {
   registerCatalogRoutes(app);
   registerCatalogItemRoutes(app);
   registerManufacturerRoutes(app);
+  registerVendorColorRoutes(app);
   registerProductTreeRoutes(app);
   registerBundleRoutes(app);
   registerRuleRoutes(app);

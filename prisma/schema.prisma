@@ -652,6 +652,10 @@ model Manufacturer {
   /// What this vendor calls the parts we number ourselves. See VendorPartNumber.
   vendorParts         VendorPartNumber[]
 
+  /// This vendor's colour charts — the named colours it publishes, and which of
+  /// its products take how many of them. See VendorColorPalette.
+  colorPalettes       VendorColorPalette[]
+
   createdAt           DateTime          @default(now())
   updatedAt           DateTime          @updatedAt
   sourcing            ProductSourcing[]
@@ -1733,6 +1737,13 @@ model ProcurementLine {
   /// pieces, so the BOM lists them in their own trailing section.
   isHardwareComponent Boolean @default(false)
   kitSku          String?
+  /// Colours chosen for this line, in slot order, copied from the accepted proposal
+  /// item and editable on the sheet afterwards. Shape:
+  ///   [{ "slot": 1, "colorId": "…", "name": "Royal Blue", "vendorCode": "RB-124",
+  ///      "upchargeMinor": 0 }]
+  /// Denormalised on purpose: a BOM printed last year must still read the same after
+  /// the vendor renames a colour. colorId is kept for reporting only.
+  colorPicks   Json?
   vendorNotes  String?
   targetDate   DateTime?
   notes        String?
@@ -2670,4 +2681,128 @@ model FollowUpTemplate {
   updatedAt   DateTime @updatedAt
 
   @@index([active, step])
+}
+
+// ---------------------------------------------------------------------------
+// Vendor colour palettes — colour selection for any vendor, any finish.
+//
+// The Goldberg Brothers powder-coat chart (PaintColorGroup / PaintColorGroupSku
+// / PowderColorBrand) is deliberately left alone: it is brand + code driven,
+// because a powder coat colour IS a paint brand's code, and the grouping there
+// belongs to the PART. Nothing below changes it.
+//
+// This is the general case, and it is shaped differently on purpose:
+//
+//   * The VENDOR owns the palette. Resilite publish one vinyl chart, and every
+//     Resilite product picks from it — so the colour list hangs off Manufacturer,
+//     not off a paint brand.
+//   * A colour is a NAME from that palette, not free text. "Royal Blue" is a
+//     thing Resilite make; a typo is not.
+//   * A product takes N colours. A wall pad takes one; a shape trainer can take
+//     seven. The product says how many, and the picker asks for Colour 1…N.
+//
+// Append these models to schema.prisma, add the two Manufacturer relation fields
+// and the ProcurementLine column noted at the bottom, then run migration 0056.
+// ---------------------------------------------------------------------------
+
+/// What the colour is made of. Not a brand: vinyl has no Sherwin-Williams code.
+/// POWDER_COAT exists here for vendors who powder coat but are not Goldberg —
+/// the Goldberg chart keeps its own brand+code path.
+enum FinishType {
+  POWDER_COAT
+  VINYL
+  PAINT
+  OTHER
+}
+
+/// One vendor's colour chart for one finish.
+///
+/// A vendor may have more than one: Resilite sell vinyl-covered mats and painted
+/// steel frames, and those are different lists of colours. A product points at
+/// exactly one palette, so which chart the customer was shown is never ambiguous.
+model VendorColorPalette {
+  id             String             @id @default(cuid())
+  manufacturerId String
+  manufacturer   Manufacturer       @relation(fields: [manufacturerId], references: [id], onDelete: Cascade)
+  /// As the vendor names it — "2026 Vinyl Chart", "Standard Powder".
+  name           String
+  finishType     FinishType         @default(VINYL)
+  /// Free note for whoever maintains it: where the chart came from, when it was
+  /// last checked against the vendor's published list.
+  notes          String?
+  /// Retired palettes stop being offered on new products and keep every existing
+  /// selection readable. Never deleted while a product points at one.
+  active         Boolean            @default(true)
+  sortOrder      Int                @default(0)
+  colors         VendorColor[]
+  specs          ProductColorSpec[]
+  createdById    String?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  @@unique([manufacturerId, name])
+  @@index([manufacturerId])
+}
+
+/// One colour on a vendor's chart.
+model VendorColor {
+  id            String             @id @default(cuid())
+  paletteId     String
+  palette       VendorColorPalette @relation(fields: [paletteId], references: [id], onDelete: Cascade)
+  /// What we and the customer call it: "Royal Blue".
+  name          String
+  /// What the VENDOR calls it on a purchase order — "RB-124", "V-2201". Printed on
+  /// the Bill of Materials beside the name and never shown to a customer, same
+  /// arrangement as VendorPartNumber.
+  vendorCode    String?
+  /// Upcharge for choosing this colour, per slot it is chosen in. Null and 0 both
+  /// mean no upcharge; kept nullable so "not priced yet" is distinguishable from
+  /// "free" when a chart is half entered.
+  upchargeMinor Int?
+  /// Admin-set order, so the chart reads in the vendor's own sequence rather than
+  /// alphabetically. Ties break on name.
+  sortOrder     Int                @default(0)
+  /// Discontinued colours stay on record so an old proposal still reads correctly,
+  /// and are refused on new selections.
+  active        Boolean            @default(true)
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  @@unique([paletteId, name])
+  @@index([paletteId])
+}
+
+/// How many colours a product takes, and from which palette.
+///
+/// Keyed on productId for catalog products and on sku for part numbers that have
+/// no catalog row (generated mat numbers, flat SKU-master parts) — the same reason
+/// PaintColorGroupSku.sku is not a foreign key. Exactly one of the two is set.
+model ProductColorSpec {
+  id                String             @id @default(cuid())
+  paletteId         String
+  palette           VendorColorPalette @relation(fields: [paletteId], references: [id], onDelete: Restrict)
+  /// Catalog product this applies to. One spec per product.
+  productId         String?            @unique
+  /// Part number this applies to, stored as typed, matched case-insensitively.
+  sku               String?            @unique
+  /// How many colours the customer chooses for one unit of this product: 1–7.
+  slotCount         Int                @default(1)
+  /// Whether the product may be quoted with slots left unchosen. Off by default —
+  /// a colour is often decided after the proposal goes out.
+  required          Boolean            @default(false)
+  /// Upcharge that applies to each slot regardless of which colour is picked,
+  /// added on top of the colour's own upcharge. Multi-colour fabrication costs
+  /// more per panel, not per colour.
+  slotUpchargeMinor Int?
+  /// Optional per-slot names, in slot order: ["Top surface","Border"]. When absent
+  /// the picker labels them Colour 1…Colour N. Length need not equal slotCount;
+  /// missing entries fall back to the numbered label.
+  slotLabels        Json?
+  notes             String?
+  createdById       String?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  @@index([paletteId])
+  @@index([sku])
 }
