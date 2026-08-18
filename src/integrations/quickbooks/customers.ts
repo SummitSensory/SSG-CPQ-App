@@ -3,6 +3,7 @@ import { logger } from '../../lib/logger.js';
 import { query, create } from './client.js';
 import { toQboCustomer, toQboCustomerUpdate, type CustomerSource } from './mapping.js';
 import { findLink, upsertLink, markLinkState } from './links.js';
+import { findQboCustomerByName, describeNameMatch } from './customerLookup.js';
 
 const ENTITY = 'Customer';
 
@@ -10,6 +11,8 @@ interface QboCustomer {
   Id: string;
   SyncToken: string;
   DisplayName: string;
+  CompanyName?: string;
+  Active?: boolean;
 }
 
 export interface CustomerSyncResult {
@@ -151,15 +154,14 @@ export async function findOrCreateCustomer(
       return { qboId: res.Customer.Id, created: false, email };
     }
 
-    // (2) adopt an existing QuickBooks customer with the same DisplayName, then
-    // bring its profile up to date with what CPQ knows.
-    const found = await query<{ Customer?: QboCustomer[] }>(
-      realmId,
-      `select * from Customer where DisplayName = '${esc(src.displayName)}'`,
-      fetchImpl,
-    );
-    const match = found.Customer?.[0];
-    if (match) {
+    // (2) adopt an existing QuickBooks customer with the same name, then bring its
+    // profile up to date with what CPQ knows. The match is not exact-only: a CRM
+    // name imported from monday carries the deal code ("The Therapy Spot LLC
+    // (R-4MBL1Z)") that the accountant's customer does not, and matching on equality
+    // alone missed it and created a duplicate customer alongside the real one.
+    const nameMatch = await findQboCustomerByName<QboCustomer>(realmId, src.displayName, fetchImpl);
+    const match = nameMatch?.customer ?? null;
+    if (match && nameMatch) {
       const res = await create<{ Customer: QboCustomer }>(
         realmId,
         'customer',
@@ -175,7 +177,7 @@ export async function findOrCreateCustomer(
         res.Customer.Id,
         'ok',
         userId,
-        'adopted existing customer',
+        `adopted existing customer: ${describeNameMatch(nameMatch)}`,
       );
       return { qboId: res.Customer.Id, created: false, email };
     }

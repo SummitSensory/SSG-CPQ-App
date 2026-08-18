@@ -4,6 +4,7 @@ import { qboEnvironment } from '../../config/env.js';
 import { query } from './client.js';
 import { findLink } from './links.js';
 import { loadCustomerSource } from './customers.js';
+import { findQboCustomerByName, describeNameMatch } from './customerLookup.js';
 import type { QboEnvironment } from '@prisma/client';
 
 /**
@@ -144,6 +145,16 @@ export interface CustomerProfileComparison {
    */
   taxExempt: boolean;
   taxExemptId: string | null;
+  /**
+   * Set when the customer is NOT linked but a customer with this name already
+   * exists in QuickBooks — the one the first push will adopt. The comparison rows
+   * below are filled from it, because "not linked" and "not in QuickBooks" are
+   * different facts and the panel used to report the second whenever the first was
+   * true: it only ever queried QuickBooks for an already-linked customer, so an
+   * unlinked one showed a column of "Not in QuickBooks" without a search happening.
+   */
+  adoptableQboId: string | null;
+  adoptableNote: string | null;
   fields: ProfileField[];
   /** Count of fields where the two disagree — the number worth showing as a badge. */
   differenceCount: number;
@@ -180,8 +191,10 @@ export async function compareCustomerProfile(
   if (!src.shipping) warnings.push('No shipping address on file.');
 
   let qbo: QboCustomerFull | null = null;
+  let adoptableQboId: string | null = null;
+  let adoptableNote: string | null = null;
+  const conn = await prisma.qboConnection.findFirst({ where: { environment, isActive: true } });
   if (link) {
-    const conn = await prisma.qboConnection.findFirst({ where: { environment, isActive: true } });
     if (!conn) throw new ConflictError(`No active QuickBooks connection for ${environment}`);
     const res = await query<{ Customer?: QboCustomerFull[] }>(
       conn.realmId,
@@ -192,6 +205,25 @@ export async function compareCustomerProfile(
     if (!qbo) {
       warnings.push(
         `This customer is linked to QuickBooks id ${link.qboId}, but no customer with that id exists there any more.`,
+      );
+    }
+  } else if (conn) {
+    // Unlinked, which is not the same as absent. Search by name — including with the
+    // trailing account code ignored, since a CRM name imported from monday carries
+    // one and the QuickBooks name usually does not — and compare against whatever
+    // that finds, so the panel shows the customer the first push will adopt instead
+    // of claiming there is nothing there.
+    const match = await findQboCustomerByName<QboCustomerFull>(
+      conn.realmId,
+      src.displayName,
+      fetchImpl,
+    );
+    if (match) {
+      qbo = match.customer;
+      adoptableQboId = match.customer.Id;
+      adoptableNote = describeNameMatch(match);
+      warnings.push(
+        `Already in QuickBooks as ${adoptableNote}. Pushing a document adopts that customer rather than creating a new one, and brings the fields below up to date from the CRM.`,
       );
     }
   }
@@ -227,7 +259,9 @@ export async function compareCustomerProfile(
     organizationName: org.name,
     environment,
     linked: Boolean(link && qbo),
-    qboCustomerId: link?.qboId ?? null,
+    adoptableQboId,
+    adoptableNote,
+    qboCustomerId: link?.qboId ?? adoptableQboId,
     qboActive: qbo ? (qbo.Active ?? null) : null,
     qboBalanceMinor:
       qbo && qbo.Balance != null ? BigInt(Math.round(Number(qbo.Balance) * 100)).toString() : null,
