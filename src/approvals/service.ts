@@ -290,6 +290,46 @@ export async function queueFor(ctx: DeciderCtx): Promise<unknown[]> {
   return result;
 }
 
+/**
+ * The one request, if this caller is entitled to see it.
+ *
+ * `GET /approvals/:id` returned any approval request to any authenticated user —
+ * READ_ONLY and INSTALLER included. An approval request is not neutral data: it
+ * carries the reason for a discount, the value asked for against the value on record,
+ * the requester, and free-text supporting information about a deal. Guessing or
+ * enumerating an id disclosed all of it, and the route did not even look at who was
+ * asking.
+ *
+ * Entitled means: the requester, the approver who has already decided it, someone the
+ * authority is delegated to, or someone who could act on it now (the same guard the
+ * queue and the decision paths use, so one rule governs all three). Anyone else gets
+ * a not-found rather than a forbidden — a 403 on a specific id still confirms the
+ * request exists.
+ */
+export async function requestVisibleTo(
+  requestId: string,
+  ctx: DeciderCtx,
+): Promise<Awaited<ReturnType<typeof loadWithEvents>>> {
+  const req = await loadWithEvents(requestId);
+  if (!req) return null;
+  if (req.requesterId === ctx.userId || req.approverId === ctx.userId) return req;
+  const guard = canDecide({
+    type: req.type,
+    requesterId: req.requesterId,
+    deciderId: ctx.userId,
+    deciderHasPermission: can(ctx.role, approverPermissionFor(req.type)),
+    delegatedApproverIds: await activeDelegateIds(req.type),
+  });
+  return guard.allowed ? req : null;
+}
+
+function loadWithEvents(requestId: string) {
+  return prisma.approvalRequest.findUnique({
+    where: { id: requestId },
+    include: { events: { orderBy: { createdAt: 'asc' } } },
+  });
+}
+
 export async function createDelegation(
   fromUserId: string,
   toUserId: string,

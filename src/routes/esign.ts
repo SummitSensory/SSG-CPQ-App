@@ -16,6 +16,7 @@ import {
   voidEnvelope,
 } from '../integrations/docuseal/service.js';
 import { pdfAvailable } from '../render/pdf.js';
+import { checkDocumentTotal } from '../proposals/documentIntegrity.js';
 
 /**
  * A nullable Json column does not take `null` — Prisma distinguishes clearing the
@@ -95,6 +96,21 @@ export function registerEsignRoutes(app: FastifyInstance): void {
     const parsed = SendBody.safeParse(req.body);
     if (!parsed.success)
       throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid request');
+    // What the customer signs must be what the proposal says. The HTML comes from the
+    // rep's browser by design (the preview and the contract must not drift), which
+    // means a stale tab or a crafted request could otherwise put a different bottom
+    // line into a legally binding PDF. The server's own total has to appear in it.
+    const version = await prisma.proposalVersion.findUnique({
+      where: { id: versionId },
+      select: { items: true, sections: true },
+    });
+    if (!version) throw new NotFoundError('Proposal version not found');
+    const check = checkDocumentTotal(parsed.data.proposalHtml, version.items, version.sections);
+    if (!check.ok) {
+      throw new ValidationError(
+        `This document does not match the saved proposal (its total should be ${check.expected}). Reload the proposal before sending it for signature.`,
+      );
+    }
     const result = await sendProposalForSignature({
       versionId,
       ...parsed.data,

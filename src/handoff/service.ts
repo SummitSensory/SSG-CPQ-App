@@ -29,20 +29,22 @@ import type {
   Role,
   BomShipTo,
 } from '@prisma/client';
+import { allocateNumbered } from '../lib/documentNumber.js';
 
 /** A catalog ref with nothing resolved — the parallel-array fallback. */
 const EMPTY_REF = { sku: null, vendor: null, unitCostMinor: null, unitWeightLbs: null } as const;
 
-/** Allocate the next sequential sales-order number for the current year. */ async function nextOrderNumber(): Promise<string> {
-  const year = new Date().getFullYear();
-  const prefix = `SO-${year}-`;
+/** This year's order-number prefix, and its high-water mark, for the retry loop. */
+function orderNumberPrefix(year = new Date().getFullYear()): string {
+  return `SO-${year}-`;
+}
+async function highestOrderNumber(): Promise<string | null> {
   const last = await prisma.acceptedOrder.findFirst({
-    where: { number: { startsWith: prefix } },
+    where: { number: { startsWith: orderNumberPrefix() } },
     orderBy: { number: 'desc' },
     select: { number: true },
   });
-  const seq = last ? parseInt(last.number.slice(prefix.length), 10) + 1 : 1;
-  return `${prefix}${String(seq).padStart(6, '0')}`;
+  return last?.number ?? null;
 }
 
 export interface CustomerApprovalInput {
@@ -348,7 +350,6 @@ export async function createAcceptedOrder(
   const contentSnapshot = buildContentSnapshot(vLike, sLike);
   const integrityHash = computeIntegrityHash(contentSnapshot);
   const depositDue = depositFromSnapshot(sLike);
-  const number = await nextOrderNumber();
   const procurement = procurementFromItems(version.items);
   const refs = await resolveCatalogRefs(procurement);
 
@@ -384,90 +385,103 @@ export async function createAcceptedOrder(
     );
   }
 
-  const order = await prisma.$transaction(async (tx) => {
-    const o = await tx.acceptedOrder.create({
-      data: {
-        number,
-        organizationId: version.proposal.organizationId,
-        proposalId: version.proposalId,
-        proposalVersionId: version.id,
-        acceptedVersion: version.version,
-        // Both halves of the deal link. The proposal's own choice wins; opportunityId
-        // was never set either, which is why an order could not name its own deal.
-        opportunityId: version.proposal.opportunityId ?? deal.opportunityId ?? null,
-        mondayProjectId: deal.itemId ?? null,
-        priceSnapshotId: snap.id,
-        ruleSnapshotId: version.ruleSnapshotId,
-        currency: snap.currency,
-        grandTotalMinor: snap.grandTotal,
-        depositRequired: depositDue > 0n,
-        depositDueMinor: depositDue,
-        contentSnapshot: contentSnapshot as object,
-        integrityHash,
-        acceptedById: userId,
-        customerApproval: {
-          create: {
-            method: approval.method,
-            approverName: approval.approverName,
-            approverTitle: approval.approverTitle ?? null,
-            approverEmail: approval.approverEmail ?? null,
-            poNumber: approval.poNumber ?? null,
-            documentRef: approval.documentRef ?? null,
-            ipAddress: approval.ipAddress ?? null,
-            approvedAt: approval.approvedAt,
-            notes: approval.notes ?? null,
-            recordedById: userId,
+  // Order numbering is read-then-write against a unique column: two acceptances in
+  // the same second allocated the same SO number and the loser threw P2002, failing
+  // an acceptance that had nothing wrong with it. The number is allocated inside the
+  // retry, so each attempt re-reads the high-water mark. A P2002 on
+  // proposalVersionId — this version is already accepted — is rethrown untouched.
+  const allocatedOrder = await allocateNumbered({
+    prefix: orderNumberPrefix(),
+    field: 'number',
+    highest: highestOrderNumber,
+    create: (number: string) =>
+      prisma.$transaction(async (tx) => {
+        const o = await tx.acceptedOrder.create({
+          data: {
+            number,
+            organizationId: version.proposal.organizationId,
+            proposalId: version.proposalId,
+            proposalVersionId: version.id,
+            acceptedVersion: version.version,
+            // Both halves of the deal link. The proposal's own choice wins; opportunityId
+            // was never set either, which is why an order could not name its own deal.
+            opportunityId: version.proposal.opportunityId ?? deal.opportunityId ?? null,
+            mondayProjectId: deal.itemId ?? null,
+            priceSnapshotId: snap.id,
+            ruleSnapshotId: version.ruleSnapshotId,
+            currency: snap.currency,
+            grandTotalMinor: snap.grandTotal,
+            depositRequired: depositDue > 0n,
+            depositDueMinor: depositDue,
+            contentSnapshot: contentSnapshot as object,
+            integrityHash,
+            acceptedById: userId,
+            customerApproval: {
+              create: {
+                method: approval.method,
+                approverName: approval.approverName,
+                approverTitle: approval.approverTitle ?? null,
+                approverEmail: approval.approverEmail ?? null,
+                poNumber: approval.poNumber ?? null,
+                documentRef: approval.documentRef ?? null,
+                ipAddress: approval.ipAddress ?? null,
+                approvedAt: approval.approvedAt,
+                notes: approval.notes ?? null,
+                recordedById: userId,
+              },
+            },
+            requirements: {
+              create: defaultRequirements().map((r) => ({
+                category: r.category as RequirementCategory,
+                title: r.title,
+                createdById: userId,
+              })),
+            },
+            // A kit component carries its own cost and weight from the breakdown, because
+            // a fastener is often not in the SKU master at all and would otherwise land on
+            // the BOM at $0.00 and 0 lb.
+            procurement: {
+              create: procurement.map((p, i) => {
+                const ref = refs[i] ?? EMPTY_REF;
+                return {
+                  productId: p.productId,
+                  sku: ref.sku ?? p.sku,
+                  name: p.name,
+                  quantity: p.quantity,
+                  // The formula figure, kept alongside the operational one so a later
+                  // hand edit can be badged and the original recovered. They are equal
+                  // at creation by definition — nothing has edited the line yet.
+                  quantityOriginal: p.quantity,
+                  vendor: ref.vendor,
+                  unitCostMinor: ref.unitCostMinor ?? p.unitCostMinor ?? null,
+                  unitWeightLbs: ref.unitWeightLbs ?? p.unitWeightLbs ?? null,
+                  isHardwareComponent: !!p.isHardwareComponent,
+                  kitSku: p.kitSku ?? null,
+                };
+              }),
+            },
+            tasks: {
+              create: defaultTasks(depositDue > 0n).map((t) => ({
+                title: t.title,
+                assigneeRole: (t.assigneeRole as Role) ?? null,
+                category: (t.category as RequirementCategory) ?? null,
+                createdById: userId,
+              })),
+            },
+            events: {
+              create: {
+                action: 'order.locked',
+                actorId: userId,
+                detail: { number, acceptedVersion: version.version, integrityHash } as object,
+              },
+            },
           },
-        },
-        requirements: {
-          create: defaultRequirements().map((r) => ({
-            category: r.category as RequirementCategory,
-            title: r.title,
-            createdById: userId,
-          })),
-        },
-        // A kit component carries its own cost and weight from the breakdown, because
-        // a fastener is often not in the SKU master at all and would otherwise land on
-        // the BOM at $0.00 and 0 lb.
-        procurement: {
-          create: procurement.map((p, i) => {
-            const ref = refs[i] ?? EMPTY_REF;
-            return {
-              productId: p.productId,
-              sku: ref.sku ?? p.sku,
-              name: p.name,
-              quantity: p.quantity,
-              // The formula figure, kept alongside the operational one so a later
-              // hand edit can be badged and the original recovered. They are equal
-              // at creation by definition — nothing has edited the line yet.
-              quantityOriginal: p.quantity,
-              vendor: ref.vendor,
-              unitCostMinor: ref.unitCostMinor ?? p.unitCostMinor ?? null,
-              unitWeightLbs: ref.unitWeightLbs ?? p.unitWeightLbs ?? null,
-              isHardwareComponent: !!p.isHardwareComponent,
-              kitSku: p.kitSku ?? null,
-            };
-          }),
-        },
-        tasks: {
-          create: defaultTasks(depositDue > 0n).map((t) => ({
-            title: t.title,
-            assigneeRole: (t.assigneeRole as Role) ?? null,
-            category: (t.category as RequirementCategory) ?? null,
-            createdById: userId,
-          })),
-        },
-        events: {
-          create: {
-            action: 'order.locked',
-            actorId: userId,
-            detail: { number, acceptedVersion: version.version, integrityHash } as object,
-          },
-        },
-      },
-    });
-    return o;
+        });
+        return o;
+      }),
   });
+  const order = allocatedOrder.row;
+  const number = allocatedOrder.number;
 
   await recordAudit({
     actorId: userId,

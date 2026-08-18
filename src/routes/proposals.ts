@@ -17,6 +17,7 @@ import {
   priceEntryStatus,
 } from '../proposals/service.js';
 import { snapshotAcceptedContent } from '../handoff/service.js';
+import { VersionContentPatchSchema, assertMetaSectionsValid } from '../proposals/validation.js';
 import {
   resolveVisibleSections,
   reorderSections,
@@ -216,16 +217,31 @@ export function registerProposalRoutes(app: FastifyInstance): void {
     return priceEntryStatus(versionId);
   });
 
+  /**
+   * Save the builder's content.
+   *
+   * Validated with a schema rather than cast from the body. This is the write path
+   * every proposal figure travels, and it used to accept `req.body.items` as an
+   * opaque array: a negative quantity, a fractional cent or a 50 MB description all
+   * landed in the version, then in the price snapshot, the customer's PDF and the
+   * QuickBooks document built from it. See proposals/validation.ts.
+   */
   app.patch('/proposals/versions/:versionId', write, async (req) => {
     const { versionId } = req.params as { versionId: string };
-    const body = req.body as {
-      title?: string;
-      sections?: ProposalSection[];
-      items?: unknown[];
-      orderedSectionIds?: string[];
-      expirationDate?: string;
-    };
-    let sections = body.sections;
+    const parsed = VersionContentPatchSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0];
+      throw new ValidationError(
+        `${issue?.path.join('.') || 'request'}: ${issue?.message ?? 'is invalid'}`,
+      );
+    }
+    const body = parsed.data;
+    try {
+      assertMetaSectionsValid(body.sections);
+    } catch (err) {
+      throw new ValidationError(err instanceof Error ? err.message : 'Proposal header is invalid');
+    }
+    let sections = body.sections as ProposalSection[] | undefined;
     if (body.orderedSectionIds && sections)
       sections = reorderSections(sections, body.orderedSectionIds);
     // The title belongs to the proposal, not the version, so it is saved alongside
@@ -241,10 +257,23 @@ export function registerProposalRoutes(app: FastifyInstance): void {
         ...(body.expirationDate ? { expirationDate: new Date(body.expirationDate) } : {}),
       },
       req.user!.sub,
+      // Optimistic concurrency: refused with a 409 when someone else saved first.
+      { expectedUpdatedAt: body.expectedUpdatedAt ?? null },
     );
     // Saving never blocks — an unpriced line is a normal state mid-build. The audit
     // rides back on the save so the builder can badge the rows without a second call.
-    return { ok: true, priceEntry: await priceEntryStatus(versionId) };
+    // `updatedAt` is the new optimistic-concurrency token: the builder holds it and
+    // sends it as `expectedUpdatedAt` on the next save. Without it in the response,
+    // a second consecutive save by the same person would be refused as a conflict.
+    const saved = await prisma.proposalVersion.findUnique({
+      where: { id: versionId },
+      select: { updatedAt: true },
+    });
+    return {
+      ok: true,
+      updatedAt: saved?.updatedAt ?? null,
+      priceEntry: await priceEntryStatus(versionId),
+    };
   });
 
   // New version — the ONLY way to change a released proposal.

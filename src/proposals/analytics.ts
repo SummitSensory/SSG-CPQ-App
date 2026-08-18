@@ -114,7 +114,18 @@ export function itemsOf(items: unknown): RawItem[] {
   return Array.isArray(items) ? (items.filter((i) => i && typeof i === 'object') as RawItem[]) : [];
 }
 
-/** Mirrors the builder's math exactly so reports and the printed proposal agree. */
+/**
+ * Mirrors the builder's math exactly so reports and the printed proposal agree.
+ *
+ * Every accumulation is rounded to a whole minor unit. Money here is an integer
+ * number of cents by contract, but the contract was only ever enforced by the
+ * browser, so legacy rows can hold a fractional rateMinor — and `qty * rate`
+ * summed in binary floating point then produces totals like 12345.000000000002.
+ * That value reaches PriceSnapshot.grandTotal, and transactions.ts asserts the
+ * live total against the snapshot before it will send a QuickBooks document: a
+ * sub-cent difference stops an invoice for no reason a person can see. Rounding
+ * at each step keeps the arithmetic in integers, which is what it claims to be.
+ */
 export function versionTotals(items: unknown, sections: unknown): Totals {
   const lines = itemsOf(items);
   const meta = metaOf(sections);
@@ -125,19 +136,21 @@ export function versionTotals(items: unknown, sections: unknown): Totals {
   for (const l of lines) {
     if ((l.lineType ?? 'PRODUCT') !== 'PRODUCT') continue;
     const qty = n(l.quantity);
-    subtotal += qty * n(l.rateMinor);
-    cogs += qty * n(l.costEach);
+    subtotal += Math.round(qty * n(l.rateMinor));
+    cogs += Math.round(qty * n(l.costEach));
     weight += qty * n(l.weightEach);
-    tpFreight += n(l.tpFreightMinor);
+    tpFreight += Math.round(n(l.tpFreightMinor));
   }
   const discount = discountOf(meta, subtotal);
-  const tax = metaAmount(meta.taxAmountMinor, meta.tbdTax);
-  const structureFreight = metaAmount(
-    meta.structureFreightMinor != null ? meta.structureFreightMinor : meta.freightMinor,
-    meta.tbdStructureFreight,
+  const tax = Math.round(metaAmount(meta.taxAmountMinor, meta.tbdTax));
+  const structureFreight = Math.round(
+    metaAmount(
+      meta.structureFreightMinor != null ? meta.structureFreightMinor : meta.freightMinor,
+      meta.tbdStructureFreight,
+    ),
   );
-  const matsFreight = metaAmount(meta.matsFreightMinor, meta.tbdMatsFreight);
-  const stdFreight = stdFreightOf(meta);
+  const matsFreight = Math.round(metaAmount(meta.matsFreightMinor, meta.tbdMatsFreight));
+  const stdFreight = Math.round(stdFreightOf(meta));
   const total = subtotal - discount + tpFreight + tax + structureFreight + matsFreight + stdFreight;
   const revenue = subtotal - discount + tpFreight;
   const margin = revenue - cogs;

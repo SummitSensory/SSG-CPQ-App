@@ -6,6 +6,7 @@ import { prisma } from '../lib/prisma.js';
 import { renderBomHtml, renderBomXml, bomFilename } from '../handoff/bomDocuments.js';
 import { uploadProposalPdfToMonday } from '../integrations/monday/proposalPush.js';
 import { renderPdf, pdfAvailable } from '../render/pdf.js';
+import { checkDocumentTotal } from '../proposals/documentIntegrity.js';
 
 /**
  * Server-rendered PDFs.
@@ -31,9 +32,24 @@ export function registerRenderRoutes(app: FastifyInstance): void {
   app.post('/render/proposals/versions/:versionId/monday-file', release, async (req) => {
     const { versionId } = req.params as { versionId: string };
     const body = (req.body ?? {}) as { proposalHtml?: string; filename?: string };
-    if (!body.proposalHtml) throw new ValidationError('The rendered proposal is missing from the request.');
+    if (!body.proposalHtml)
+      throw new ValidationError('The rendered proposal is missing from the request.');
     if (!(await pdfAvailable())) {
       throw new ValidationError('PDF rendering is not available on this deployment.');
+    }
+    // The document is rendered by the browser and posted here, so a stale tab or a
+    // hand-edited payload could put a PDF on the deal board whose bottom line is not
+    // the proposal's. Refused rather than uploaded — see proposals/documentIntegrity.ts.
+    const version = await prisma.proposalVersion.findUnique({
+      where: { id: versionId },
+      select: { items: true, sections: true },
+    });
+    if (!version) throw new ValidationError('Proposal version not found');
+    const check = checkDocumentTotal(body.proposalHtml, version.items, version.sections);
+    if (!check.ok) {
+      throw new ValidationError(
+        `This document does not match the saved proposal (its total should be ${check.expected}). Reload the proposal and try again.`,
+      );
     }
     return uploadProposalPdfToMonday({
       versionId,
@@ -54,16 +70,26 @@ export function registerRenderRoutes(app: FastifyInstance): void {
     const q = req.query as { vendor?: string; includeZeroQty?: string };
     const vendor = q.vendor || '*';
     if (!(await pdfAvailable())) {
-      throw new ValidationError('PDF rendering is not installed on this deployment — export as Excel instead.');
+      throw new ValidationError(
+        'PDF rendering is not installed on this deployment — export as Excel instead.',
+      );
     }
-    const order = await prisma.acceptedOrder.findUnique({ where: { id }, select: { number: true } });
+    const order = await prisma.acceptedOrder.findUnique({
+      where: { id },
+      select: { number: true },
+    });
     if (!order) throw new ValidationError('Order not found');
 
-    const { html, doc } = await renderBomHtml(id, vendor, { includeZeroQty: q.includeZeroQty === 'true' });
+    const { html, doc } = await renderBomHtml(id, vendor, {
+      includeZeroQty: q.includeZeroQty === 'true',
+    });
     const pdf = await renderPdf(html, { format: 'Letter' });
     return reply
       .header('Content-Type', 'application/pdf')
-      .header('Content-Disposition', `attachment; filename="${bomFilename(order.number, vendor, doc.customer.name)}.pdf"`)
+      .header(
+        'Content-Disposition',
+        `attachment; filename="${bomFilename(order.number, vendor, doc.customer.name)}.pdf"`,
+      )
       .send(pdf);
   });
 
@@ -91,8 +117,10 @@ export function registerRenderRoutes(app: FastifyInstance): void {
     const xml = await renderBomXml(id, vendor, { includeZeroQty: q.includeZeroQty === 'true' });
     return reply
       .header('Content-Type', 'application/vnd.ms-excel; charset=utf-8')
-      .header('Content-Disposition', `attachment; filename="${bomFilename(order.number, vendor, org?.name ?? '')}.xls"`)
+      .header(
+        'Content-Disposition',
+        `attachment; filename="${bomFilename(order.number, vendor, org?.name ?? '')}.xls"`,
+      )
       .send(xml);
   });
-
 }

@@ -5076,6 +5076,7 @@
   }
   async function openBuilder(proposal, version, user) {
     var orgName = '', orgShipTo = '', orgContact = '';
+    var openedUpdatedAt = version.updatedAt || null;
     try { var rd = await authed('/crm/organizations/' + proposal.organizationId); if (rd.ok) { var org = await rd.json(); orgName = org.name || ''; orgShipTo = formatOrgShipTo(org); orgContact = primaryContactName(org); } } catch (e) {}
     if (!orgName) { try { var ro = await authed('/crm/organizations?pageSize=100'); if (ro.ok) { var found = ((await ro.json()).items || []).filter(function (o) { return o.id === proposal.organizationId; })[0]; orgName = found ? found.name : ''; } } catch (e2) {} }
     // Project ID rides along on the imported opportunity's notes.
@@ -5137,7 +5138,7 @@
       }).map(function (nn) { return { title: nn.title, body: nn.body }; });
     }
     pb = {
-      proposalId: proposal.id, versionId: version.id, user: user, orgId: proposal.organizationId, orgName: orgName, stdNotes: stdNotes,
+      proposalId: proposal.id, versionId: version.id, user: user, orgId: proposal.organizationId, orgName: orgName, stdNotes: stdNotes, updatedAt: openedUpdatedAt,
       title: proposal.title || '', number: proposal.number || '', version: version.version || 1,
       meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', billSameAsShip: !meta.billTo || meta.billTo === (meta.shipTo || orgShipTo || ''), showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, showDeposit: meta.showDeposit !== false, tbdTax: meta.tbdTax || '', tbdStructureFreight: meta.tbdStructureFreight || '', tbdMatsFreight: meta.tbdMatsFreight || '', proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, discountMode: meta.discountMode === 'AMT' ? 'AMT' : 'PCT', discountAmountMinor: meta.discountAmountMinor || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, stdFreightOn: !!meta.stdFreightOn, stdFreightMinor: meta.stdFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7), footerNotes: footerNotes, advAnswers: meta.advAnswers || null, advWarnings: meta.advWarnings || [] },
       lines: lines,
@@ -7152,7 +7153,7 @@
   function builderVersionPayload() {
     var sections = [{ id: 'meta', type: 'CUSTOMER_INFO', title: 'Proposal', order: 0, enabled: true, data: pb.meta }];
     var items = pb.lines.map(function (l, i) { return { ref: l.ref, lineType: l.lineType, kind: l.kind, productId: l.productId, sku: l.sku || '', name: l.name, description: l.description, internalNote: l.internalNote || '', components: l.components || null, source: l.source || '', freightTbd: !!l.freightTbd, quantity: Number(l.quantity) || 0, rateMinor: Number(l.rateMinor) || 0, costEach: Number(l.costEach) || 0, weightEach: Number(l.weightEach) || 0, group: l.group || '', optional: !!l.optional, delivery: l.delivery || '', returnable: l.returnable || '', addlFreight: l.addlFreight || '', freightCalc: l.freightCalc || '', tpFreightMinor: Number(l.tpFreightMinor) || 0, tpFreightLabel: l.tpFreightLabel || '', order: i }; });
-    return { title: pb.title || undefined, sections: sections, items: items, expirationDate: pb.meta.expiration || undefined };
+    return { title: pb.title || undefined, sections: sections, items: items, expirationDate: pb.meta.expiration || undefined, expectedUpdatedAt: pb.updatedAt || undefined };
   }
 
   /**
@@ -7165,7 +7166,10 @@
     // no version at all. Nothing to save either way, and the API would refuse it.
     if (pb && (pb.readOnly || pb.mock)) return;
     var r = await authed('/proposals/versions/' + pb.versionId, { method: 'PATCH', body: builderVersionPayload() });
+    if (r.status === 409) throw new Error('Someone else saved this proposal while you were editing it. Reload before raising the request.');
     if (!r.ok) throw new Error('Could not save the proposal before raising the request (' + r.status + ').');
+    var qj = null; try { qj = await r.json(); } catch (e) {}
+    if (qj && qj.updatedAt) pb.updatedAt = qj.updatedAt;
     clearBuilderDirty();
   }
 
@@ -7173,7 +7177,10 @@
     var btn = document.getElementById('bSave'); btn.disabled = true; btn.textContent = 'Saving…';
     try {
       var r = await authed('/proposals/versions/' + pb.versionId, { method: 'PATCH', body: builderVersionPayload() });
+      if (r.status === 409) { alert('Someone else saved this proposal while you were editing it. Reload the page to see their changes before saving yours.'); btn.disabled = false; btn.textContent = 'Save'; return; }
       if (!r.ok) { alert('Could not save (' + r.status + ').'); btn.disabled = false; btn.textContent = 'Save'; return; }
+      var sj = null; try { sj = await r.json(); } catch (e) {}
+      if (sj && sj.updatedAt) pb.updatedAt = sj.updatedAt;
       btn.textContent = 'Saved ✓';
       clearBuilderDirty();
       // Stay in the builder. Saving mid-edit is the common case; bouncing back to

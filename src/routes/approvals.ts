@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { requireAuth } from '../plugins/authz.js';
-import { ValidationError } from '../lib/errors.js';
+import { ValidationError, NotFoundError } from '../lib/errors.js';
 import { APPROVAL_TYPES } from '../approvals/policy.js';
 import {
   createRequest,
@@ -12,6 +12,7 @@ import {
   escalate,
   queueFor,
   createDelegation,
+  requestVisibleTo,
 } from '../approvals/service.js';
 
 const CreateSchema = z.object({
@@ -53,10 +54,14 @@ export function registerApprovalRoutes(app: FastifyInstance): void {
 
   app.get('/approvals/:id', auth, async (req) => {
     const { id } = req.params as { id: string };
-    return prisma.approvalRequest.findUnique({
-      where: { id },
-      include: { events: { orderBy: { createdAt: 'asc' } } },
+    // Authorized before disclosure, and answered as not-found when it is not the
+    // caller's to see — see requestVisibleTo.
+    const found = await requestVisibleTo(id, {
+      userId: req.user!.sub,
+      role: req.user!.role as never,
     });
+    if (!found) throw new NotFoundError('Approval request not found');
+    return found;
   });
 
   const ctx = (req: { user?: { sub: string; role: string } }) => ({

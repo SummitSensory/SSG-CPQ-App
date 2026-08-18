@@ -6,6 +6,7 @@ import { compareVersions, type VersionSnapshot } from './compare.js';
 import { auditPriceEntry, priceEntryMessage, type PriceEntryAudit } from './priceEntry.js';
 import type { ProposalSection, ProposalItem } from './sections.js';
 import { sectionsWithResolvedProjectId } from '../crm/projectId.js';
+import { allocateNumbered } from '../lib/documentNumber.js';
 import type { ProposalStatus } from '@prisma/client';
 
 interface VersionContent {
@@ -16,24 +17,26 @@ interface VersionContent {
   expirationDate?: Date | null;
 }
 
-/** Allocate the next sequential proposal number for the current year. */
-async function nextNumber(): Promise<string> {
-  const year = new Date().getFullYear();
-  const prefix = `P-${year}-`;
+/** The prefix all of a year's proposal numbers share. */
+function numberPrefix(year = new Date().getFullYear()): string {
+  return `P-${year}-`;
+}
+
+/** The highest proposal number on record for this year, for the retry loop. */
+async function highestNumber(): Promise<string | null> {
+  const prefix = numberPrefix();
   const last = await prisma.proposal.findFirst({
     where: { number: { startsWith: prefix } },
     orderBy: { number: 'desc' },
     select: { number: true },
   });
-  const seq = last ? parseInt(last.number.slice(prefix.length), 10) + 1 : 1;
-  return formatProposalNumber(year, seq);
+  return last?.number ?? null;
 }
 
 export async function createProposal(
   input: { organizationId: string; opportunityId?: string | null; title: string } & VersionContent,
   userId: string,
 ): Promise<{ id: string; number: string }> {
-  const number = await nextNumber();
   // A proposal is never born without its Project ID. The number is the customer's
   // monday deal, not a decision the rep makes: it prints on the document, it is the
   // board item freight is requested against, and it is the reference an RFQ quotes.
@@ -41,38 +44,50 @@ export async function createProposal(
   // effort — an unlinked customer or an unreachable board leaves the field blank for
   // the rep to fill, exactly as before.
   const sections = await sectionsWithResolvedProjectId(input.sections, input.organizationId);
-  const proposal = await prisma.$transaction(async (tx) => {
-    const p = await tx.proposal.create({
-      data: {
-        number,
-        organizationId: input.organizationId,
-        // Which of the customer's deals this is for. Optional, because a proposal is
-        // often written before an opportunity exists — but when it is set, nothing
-        // downstream has to infer the deal from the customer's other projects.
-        opportunityId: input.opportunityId ?? null,
-        title: input.title,
-        currentVersion: 1,
-        createdById: userId,
-      },
-    });
-    const v = await tx.proposalVersion.create({
-      data: {
-        proposalId: p.id,
-        version: 1,
-        status: 'DRAFT',
-        sections: sections as object,
-        items: input.items as object,
-        priceSnapshotId: input.priceSnapshotId ?? null,
-        ruleSnapshotId: input.ruleSnapshotId ?? null,
-        expirationDate: input.expirationDate ?? null,
-        createdById: userId,
-      },
-    });
-    await tx.proposalStatusEvent.create({
-      data: { versionId: v.id, toStatus: 'DRAFT', changedById: userId, note: 'created' },
-    });
-    return p;
+  // Numbering is read-then-write against a unique column, so two reps creating a
+  // proposal in the same second collided and the loser got a 500 with no proposal.
+  // allocateNumbered re-reads the high-water mark and retries past the collision.
+  const allocated = await allocateNumbered<{ id: string }>({
+    prefix: numberPrefix(),
+    field: 'number',
+    highest: highestNumber,
+    format: (seq) => formatProposalNumber(new Date().getFullYear(), seq),
+    create: (number) =>
+      prisma.$transaction(async (tx) => {
+        const p = await tx.proposal.create({
+          data: {
+            number,
+            organizationId: input.organizationId,
+            // Which of the customer's deals this is for. Optional, because a proposal is
+            // often written before an opportunity exists — but when it is set, nothing
+            // downstream has to infer the deal from the customer's other projects.
+            opportunityId: input.opportunityId ?? null,
+            title: input.title,
+            currentVersion: 1,
+            createdById: userId,
+          },
+        });
+        const v = await tx.proposalVersion.create({
+          data: {
+            proposalId: p.id,
+            version: 1,
+            status: 'DRAFT',
+            sections: sections as object,
+            items: input.items as object,
+            priceSnapshotId: input.priceSnapshotId ?? null,
+            ruleSnapshotId: input.ruleSnapshotId ?? null,
+            expirationDate: input.expirationDate ?? null,
+            createdById: userId,
+          },
+        });
+        await tx.proposalStatusEvent.create({
+          data: { versionId: v.id, toStatus: 'DRAFT', changedById: userId, note: 'created' },
+        });
+        return p as { id: string };
+      }),
   });
+  const proposal = allocated.row;
+  const number = allocated.number;
   await recordAudit({
     actorId: userId,
     action: 'proposal.create',
@@ -82,11 +97,21 @@ export async function createProposal(
   return { id: proposal.id, number };
 }
 
-/** Edit a version's content. Refused if the version is frozen (released or later). */
+/**
+ * Edit a version's content. Refused if the version is frozen (released or later).
+ *
+ * `expectedUpdatedAt` is an optional optimistic-concurrency precondition: the
+ * version's `updatedAt` as the caller last read it. Two people with the same draft
+ * open used to overwrite each other silently — last save won, and the earlier
+ * person's lines simply vanished with nothing reporting it. When the precondition is
+ * supplied and no longer holds, the save is refused and nothing is written. Absent,
+ * behaviour is unchanged, so an older client keeps working.
+ */
 export async function updateVersionContent(
   versionId: string,
   content: Partial<VersionContent>,
   userId: string,
+  opts: { expectedUpdatedAt?: string | Date | null } = {},
 ): Promise<void> {
   const version = await prisma.proposalVersion.findUnique({ where: { id: versionId } });
   if (!version) throw new NotFoundError('Version not found');
@@ -94,6 +119,17 @@ export async function updateVersionContent(
     throw new ConflictError(
       'Released proposal versions are immutable. Create a new version to make changes.',
     );
+  }
+  if (opts.expectedUpdatedAt) {
+    const expected = new Date(opts.expectedUpdatedAt).getTime();
+    const actual = version.updatedAt.getTime();
+    // Second precision: JSON round-trips of a timestamp lose sub-second detail on
+    // some clients, and a false conflict is its own kind of lost work.
+    if (Number.isFinite(expected) && Math.abs(expected - actual) > 1000) {
+      throw new ConflictError(
+        'Someone else saved this proposal while you were editing it. Reload to see their changes before saving yours.',
+      );
+    }
   }
   await prisma.proposalVersion.update({
     where: { id: versionId },

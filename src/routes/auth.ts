@@ -16,6 +16,36 @@ import { requireAuth } from '../plugins/authz.js';
 import { env, isPasswordSignInBlocked } from '../config/env.js';
 import { recordAudit } from '../lib/audit.js';
 import { requestPasswordReset, checkResetToken, consumeResetToken } from '../auth/passwordReset.js';
+import { hit, reset as resetLimit, AUTH_RULES } from '../lib/rateLimit.js';
+
+/**
+ * Throttle the unauthenticated auth endpoints.
+ *
+ * Two buckets per attempt — the caller's IP and the address they typed — because
+ * either one alone is the wrong unit: IP-only lets one office NAT lock out a whole
+ * company, address-only lets an attacker rotate addresses freely. Tripping either
+ * refuses the attempt. See lib/rateLimit.ts for the in-process scope caveat.
+ */
+function throttle(
+  req: { ip: string },
+  reply: { status: (code: number) => { send: (body: unknown) => unknown } },
+  route: keyof typeof AUTH_RULES,
+  discriminator: string,
+): boolean {
+  const rule = AUTH_RULES[route];
+  const keys = [`${route}:ip:${req.ip}`, `${route}:id:${discriminator.trim().toLowerCase()}`];
+  for (const key of keys) {
+    const result = hit(key, rule);
+    if (!result.allowed) {
+      reply.status(429).send({
+        message: 'Too many attempts. Wait a few minutes and try again.',
+        retryAfter: result.retryAfter,
+      });
+      return false;
+    }
+  }
+  return true;
+}
 
 const LoginBody = z.object({ email: z.string().email(), password: z.string().min(1) });
 const RefreshBody = z.object({ refreshToken: z.string().min(1) });
@@ -41,6 +71,10 @@ export function registerAuthRoutes(app: FastifyInstance): void {
     const parsed = LoginBody.safeParse(req.body);
     if (!parsed.success) throw new ValidationError();
     const { email, password } = parsed.data;
+
+    // Before argon2 runs: an unthrottled password endpoint is both a credential-
+    // stuffing target and the cheapest way to exhaust the function's CPU.
+    if (!throttle(req, reply, 'login', email)) return reply;
 
     /**
      * Domains listed in SSO_ENFORCED_DOMAINS must come through Microsoft.
@@ -74,6 +108,10 @@ export function registerAuthRoutes(app: FastifyInstance): void {
       userAgent: req.headers['user-agent'],
       ip: req.ip,
     });
+    // A correct sign-in clears the counters, so a few typos never cost a real user
+    // their next attempt.
+    resetLimit(`login:ip:${req.ip}`);
+    resetLimit(`login:id:${email.trim().toLowerCase()}`);
     return reply.send({ accessToken, refreshToken, role: user.role });
   });
 
@@ -138,6 +176,9 @@ export function registerAuthRoutes(app: FastifyInstance): void {
     const parsed = ForgotPasswordBody.safeParse(req.body);
     // Even a malformed address gets the neutral answer.
     if (parsed.success) {
+      // Throttled on the address as well as the IP: without this the endpoint is a
+      // free mail cannon aimed at any customer or colleague's inbox.
+      if (!throttle(req, reply, 'forgot', parsed.data.email)) return reply;
       const configured = env.APP_BASE_URL;
       const proto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim();
       const host = (req.headers['x-forwarded-host'] as string | undefined) ?? req.headers.host;
@@ -164,6 +205,9 @@ export function registerAuthRoutes(app: FastifyInstance): void {
     if (!parsed.success) {
       throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid password');
     }
+    // Guessing a reset token is meant to be hopeless; unthrottled it is merely
+    // expensive. The token itself is the discriminator, so one bucket per token.
+    if (!throttle(req, reply, 'reset', parsed.data.token.slice(0, 16))) return reply;
     const user = await consumeResetToken(parsed.data.token);
     if (!user) {
       throw new ValidationError('That reset link is no longer valid. Request a new one.');
