@@ -5,6 +5,7 @@ import { canTransition, becomesFrozen, isFrozenStatus, formatProposalNumber } fr
 import { compareVersions, type VersionSnapshot } from './compare.js';
 import { auditPriceEntry, priceEntryMessage, type PriceEntryAudit } from './priceEntry.js';
 import type { ProposalSection, ProposalItem } from './sections.js';
+import { sectionsWithResolvedProjectId } from '../crm/projectId.js';
 import type { ProposalStatus } from '@prisma/client';
 
 interface VersionContent {
@@ -33,6 +34,13 @@ export async function createProposal(
   userId: string,
 ): Promise<{ id: string; number: string }> {
   const number = await nextNumber();
+  // A proposal is never born without its Project ID. The number is the customer's
+  // monday deal, not a decision the rep makes: it prints on the document, it is the
+  // board item freight is requested against, and it is the reference an RFQ quotes.
+  // Resolved before the transaction because it may call monday, and it is best
+  // effort — an unlinked customer or an unreachable board leaves the field blank for
+  // the rep to fill, exactly as before.
+  const sections = await sectionsWithResolvedProjectId(input.sections, input.organizationId);
   const proposal = await prisma.$transaction(async (tx) => {
     const p = await tx.proposal.create({
       data: {
@@ -52,7 +60,7 @@ export async function createProposal(
         proposalId: p.id,
         version: 1,
         status: 'DRAFT',
-        sections: input.sections as object,
+        sections: sections as object,
         items: input.items as object,
         priceSnapshotId: input.priceSnapshotId ?? null,
         ruleSnapshotId: input.ruleSnapshotId ?? null,

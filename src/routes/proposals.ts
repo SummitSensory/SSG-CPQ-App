@@ -23,6 +23,7 @@ import {
   type ProposalSection,
 } from '../proposals/sections.js';
 import { pushReleasedProposal } from '../integrations/monday/proposalPush.js';
+import { backfillProjectIdOnVersions } from '../crm/projectId.js';
 
 const SectionSchema = z.object({
   id: z.string(),
@@ -152,6 +153,11 @@ export function registerProposalRoutes(app: FastifyInstance): void {
    *
    * The dates live on Organization, not on the proposal: one account has one decision
    * window, and a per-proposal copy would disagree with itself across versions.
+   *
+   * The Project ID is backfilled here for the same reason it is stamped at creation:
+   * the builder reads it off the version, and a draft that predates that stamping
+   * would still open blank and refuse to request freight. Editable drafts keep the
+   * backfilled value; frozen versions are only annotated in the response.
    */
   app.get('/proposals/:id', read, async (req) => {
     const { id } = req.params as { id: string };
@@ -160,6 +166,7 @@ export function registerProposalRoutes(app: FastifyInstance): void {
       include: { versions: { orderBy: { version: 'asc' } } },
     });
     if (!proposal) return null;
+    const versions = await backfillProjectIdOnVersions(proposal.organizationId, proposal.versions);
     const org = await prisma.organization.findUnique({
       where: { id: proposal.organizationId },
       select: {
@@ -173,6 +180,7 @@ export function registerProposalRoutes(app: FastifyInstance): void {
       d ? d.toISOString().slice(0, 10) : null;
     return {
       ...proposal,
+      versions,
       organizationName: org?.name ?? null,
       // Same YYYY-MM-DD shape the date inputs and PATCH /crm/organizations/:id/dates
       // both use, so the panel round-trips without reformatting.
