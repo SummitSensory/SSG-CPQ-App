@@ -17,6 +17,7 @@ import {
 } from '../integrations/docuseal/service.js';
 import { pdfAvailable } from '../render/pdf.js';
 import { checkDocumentTotal } from '../proposals/documentIntegrity.js';
+import { enforceOrReport } from '../lib/guards.js';
 
 /**
  * A nullable Json column does not take `null` — Prisma distinguishes clearing the
@@ -107,8 +108,15 @@ export function registerEsignRoutes(app: FastifyInstance): void {
     if (!version) throw new NotFoundError('Proposal version not found');
     const check = checkDocumentTotal(parsed.data.proposalHtml, version.items, version.sections);
     if (!check.ok) {
-      throw new ValidationError(
-        `This document does not match the saved proposal (its total should be ${check.expected}). Reload the proposal before sending it for signature.`,
+      // Monitor mode by default. A wrongly-refused send stops a deal, so until the logs
+      // confirm this only fires on a genuine mismatch it reports instead of refusing.
+      enforceOrReport(
+        'esign-document-total',
+        { versionId, expected: check.expected, expectedMinor: check.expectedMinor },
+        () =>
+          new ValidationError(
+            `This document does not match the saved proposal (its total should be ${check.expected}). Reload the proposal before sending it for signature.`,
+          ),
       );
     }
     const result = await sendProposalForSignature({

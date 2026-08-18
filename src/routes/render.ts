@@ -7,6 +7,7 @@ import { renderBomHtml, renderBomXml, bomFilename } from '../handoff/bomDocument
 import { uploadProposalPdfToMonday } from '../integrations/monday/proposalPush.js';
 import { renderPdf, pdfAvailable } from '../render/pdf.js';
 import { checkDocumentTotal } from '../proposals/documentIntegrity.js';
+import { enforceOrReport } from '../lib/guards.js';
 
 /**
  * Server-rendered PDFs.
@@ -47,8 +48,13 @@ export function registerRenderRoutes(app: FastifyInstance): void {
     if (!version) throw new ValidationError('Proposal version not found');
     const check = checkDocumentTotal(body.proposalHtml, version.items, version.sections);
     if (!check.ok) {
-      throw new ValidationError(
-        `This document does not match the saved proposal (its total should be ${check.expected}). Reload the proposal and try again.`,
+      enforceOrReport(
+        'monday-document-total',
+        { versionId, expected: check.expected, expectedMinor: check.expectedMinor },
+        () =>
+          new ValidationError(
+            `This document does not match the saved proposal (its total should be ${check.expected}). Reload the proposal and try again.`,
+          ),
       );
     }
     return uploadProposalPdfToMonday({

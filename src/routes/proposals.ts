@@ -17,7 +17,12 @@ import {
   priceEntryStatus,
 } from '../proposals/service.js';
 import { snapshotAcceptedContent } from '../handoff/service.js';
-import { VersionContentPatchSchema, assertMetaSectionsValid } from '../proposals/validation.js';
+import {
+  VersionContentPatchSchema,
+  assertMetaSectionsValid,
+  type VersionContentPatch,
+} from '../proposals/validation.js';
+import { enforceOrReport } from '../lib/guards.js';
 import {
   resolveVisibleSections,
   reorderSections,
@@ -231,15 +236,30 @@ export function registerProposalRoutes(app: FastifyInstance): void {
     const parsed = VersionContentPatchSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
       const issue = parsed.error.issues[0];
-      throw new ValidationError(
-        `${issue?.path.join('.') || 'request'}: ${issue?.message ?? 'is invalid'}`,
+      const field = issue?.path.join('.') || 'request';
+      const message = `${field}: ${issue?.message ?? 'is invalid'}`;
+      // Monitor mode by default: a legacy proposal whose stored numbers predate these
+      // rules must not become unsaveable in the middle of someone's day. See lib/guards.ts.
+      enforceOrReport(
+        'proposal-content-validation',
+        { versionId, field, message, issues: parsed.error.issues.length },
+        () => new ValidationError(message),
       );
     }
-    const body = parsed.data;
+    // In monitor mode an invalid body still has to be saved, so fall back to the raw
+    // body when parsing failed. Every field below is already optional and guarded.
+    const body: VersionContentPatch = parsed.success
+      ? parsed.data
+      : ((req.body ?? {}) as VersionContentPatch);
     try {
       assertMetaSectionsValid(body.sections);
     } catch (err) {
-      throw new ValidationError(err instanceof Error ? err.message : 'Proposal header is invalid');
+      const message = err instanceof Error ? err.message : 'Proposal header is invalid';
+      enforceOrReport(
+        'proposal-header-validation',
+        { versionId, message },
+        () => new ValidationError(message),
+      );
     }
     let sections = body.sections as ProposalSection[] | undefined;
     if (body.orderedSectionIds && sections)
