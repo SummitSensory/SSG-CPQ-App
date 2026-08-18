@@ -65,4 +65,15 @@ describe('requireAuth live account state', () => {
     await requireAuth(req(), reply);
     expect(findUnique).toHaveBeenCalledTimes(1);
   });
+
+  it('fails closed with a 503 when the database is unreachable', async () => {
+    // Not a 401: the token is fine, and signing every user out over a database blip
+    // would be its own incident. Not a 500 either — nothing is broken. But the request
+    // must not proceed on unverified account state.
+    verifyAccessToken.mockResolvedValue({ sub: 'u1', role: 'SYSTEM_ADMIN' });
+    findUnique.mockRejectedValue(new Error("Can't reach database server"));
+    const r = req();
+    await expect(requireAuth(r, reply)).rejects.toMatchObject({ statusCode: 503 });
+    expect(r.user).toBeUndefined();
+  });
 });
