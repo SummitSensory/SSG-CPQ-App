@@ -1,6 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "node scripts/build-stamp.mjs && prisma generate && pnpm build",
+  "buildCommand": "node scripts/build-stamp.mjs && prisma generate && prisma migrate deploy && pnpm build",
   "installCommand": "pnpm install --frozen-lockfile",
   "functions": {
     "api/index.ts": {
@@ -11,6 +11,12 @@
       "maxDuration": 60
     }
   },
+  "crons": [
+    {
+      "path": "/cron/portal-delivery",
+      "schedule": "0 13 * * *"
+    }
+  ],
   "rewrites": [
     {
       "source": "/render/(.*)",
