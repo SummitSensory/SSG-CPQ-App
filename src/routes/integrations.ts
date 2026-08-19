@@ -27,6 +27,11 @@ import {
   retryPendingSubmissions,
   listSubmissions,
 } from '../integrations/monday/portalDelivery.js';
+import {
+  syncWebhooks,
+  webhookStatus,
+  deleteWebhook,
+} from '../integrations/monday/webhookRegistration.js';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 
@@ -262,6 +267,52 @@ export function registerIntegrationRoutes(app: FastifyInstance): void {
   app.post('/integrations/monday/portal-delivery/retry-pending', manage, async (req) => {
     const { limit } = req.query as { limit?: string };
     return retryPendingSubmissions(Number(limit) || 25);
+  });
+
+  // ----- Webhook subscriptions (registering ourselves with monday) -----
+  //
+  // These were the missing half of the delivery integration: portalDelivery.ts knew
+  // how to handle an inbound event and webhookRegistration.ts knew how to subscribe,
+  // but nothing exposed the subscribe call, so the board was never told to post here
+  // and no submission ever arrived. Registration is idempotent, so the sync endpoint
+  // is safe to hit repeatedly and safe to call from the deploy cron.
+
+  /** What monday is subscribed to right now, against what the CRM needs. */
+  app.get('/integrations/monday/webhooks', manage, async (_req, reply) => {
+    try {
+      return await webhookStatus();
+    } catch (err) {
+      logger.error({ err }, 'monday webhook status failed');
+      return reply.status(502).send({ error: 'MONDAY_QUERY_FAILED', detail: String(err) });
+    }
+  });
+
+  /** Make monday's subscriptions match the declaration. `?dryRun=true` writes nothing. */
+  app.post('/integrations/monday/webhooks/sync', manage, async (req, reply) => {
+    if (!env.MONDAY_API_TOKEN) return reply.status(400).send({ error: 'MONDAY_TOKEN_MISSING' });
+    const { dryRun } = req.query as { dryRun?: string };
+    try {
+      return await syncWebhooks(dryRun === 'true');
+    } catch (err) {
+      logger.error({ err }, 'monday webhook sync failed');
+      return reply.status(502).send({ error: 'MONDAY_SYNC_FAILED', detail: String(err) });
+    }
+  });
+
+  /**
+   * Remove one subscription by monday webhook id. Deliberately explicit rather than
+   * part of sync: a stale subscription pointing at an old preview URL is reported by
+   * sync as `foreign` and removed only when somebody decides to remove it.
+   */
+  app.delete('/integrations/monday/webhooks/:id', manage, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    try {
+      await deleteWebhook(id);
+      return { deleted: id };
+    } catch (err) {
+      logger.error({ err, id }, 'monday webhook delete failed');
+      return reply.status(502).send({ error: 'MONDAY_QUERY_FAILED', detail: String(err) });
+    }
   });
 
   // Inbound webhook. Public endpoint, but authenticated by monday's signed JWT.
