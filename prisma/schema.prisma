@@ -1233,11 +1233,41 @@ model Sku {
   /// Packaging bag this part is shipped in, e.g. "Bag 7". Set on about thirty
   /// hardware items so the shop can tell which bag to open. NULL = not bagged.
   packagingBag   String?
+  /// A part made of other parts. On the proposal it stays one line; on the Bill of
+  /// Materials it is REPLACED by its components (see SkuComponent). Set this to keep
+  /// the parent line beside its components instead — off by default, because a
+  /// parent's cost is the sum of its children and printing both doubles it.
+  keepParentOnBom Boolean @default(false)
+  /// Free issue: the manufacturer NAME this part is shipped to when we buy it from
+  /// somewhere else and have it delivered there. It appears on THAT vendor's Bill of
+  /// Materials at no cost — Summit has already paid for it — and is left out of their
+  /// cost total. The real cost stays on the order line, so cost of goods is unchanged.
+  freeIssueVendor String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
   @@index([category])
   @@index([active])
+}
+
+/// One line of a part's build: `parentPart` is made up of `quantity` × `childPart`.
+///
+/// Kept by part NUMBER rather than by Sku id so a component can be declared for a
+/// generated part that has no catalog row — the same choice VendorPartNumber makes.
+/// Read only when a Bill of Materials is built; a proposal never sees it.
+model SkuComponent {
+  id         String   @id @default(cuid())
+  parentPart String
+  childPart  String
+  quantity   Int      @default(1)
+  sortOrder  Int      @default(0)
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([parentPart, childPart])
+  @@index([parentPart])
+  @@index([childPart])
 }
 
 // ---------------- Internal Approval Workflow ----------------
@@ -1767,6 +1797,12 @@ model ProcurementLine {
   quantityOriginal   Int?
   quantityEditedById String?
   quantityEditedAt   DateTime?
+  /// Bought from `purchaseVendor` and shipped to `vendor`, who crates it with the
+  /// rest of the order. Prints at no cost on that vendor's sheet and is excluded from
+  /// their section total; `unitCostMinor` is still the real cost, so the order's cost
+  /// of goods is unaffected. Set from Sku.freeIssueVendor.
+  freeIssue      Boolean  @default(false)
+  purchaseVendor String?
 
 
 

@@ -56,6 +56,14 @@ export interface BomLine {
   /** Product-tree sort order. Hardware carries Infinity so it sorts last. */
   treeOrder: number;
   isHardware: boolean;
+  /**
+   * Summit bought this part elsewhere and had it shipped to this vendor, who is
+   * crating it. It prints with no cost and adds nothing to the sheet's total — we
+   * have already paid for it and are not asking this vendor to buy it.
+   */
+  freeIssue: boolean;
+  /** Who it was actually bought from, printed as the free-issue note's source. */
+  purchaseVendor: string;
 }
 
 export interface BomDocument {
@@ -275,10 +283,20 @@ export async function buildBom(
 
   const lines: BomLine[] = scoped.map((l) => {
     const qty = Number(l.quantity) || 0;
-    const cost = l.unitCostMinor ?? 0;
+    // A free-issue part is already paid for. It prints at zero so it appears in the
+    // shipment without asking the receiving vendor to buy it, and so it cannot land in
+    // any total on their sheet. The real cost is untouched on the order line.
+    const free = !!l.freeIssue;
+    const cost = free ? 0 : (l.unitCostMinor ?? 0);
     const wt = l.unitWeightLbs == null ? 0 : Number(l.unitWeightLbs);
     const vendorName = s(l.vendor).trim() || 'Unassigned vendor';
     const vendorSku = vendorParts.get(vendorName, s(l.sku)) ?? '';
+    // Said on the line itself rather than in a legend, so it survives every export
+    // — Excel, PDF and the screen all read vendorNotes already.
+    const freeNote = free
+      ? `Supplied by ${COMPANY.name} at no charge${s(l.purchaseVendor) ? ` (from ${s(l.purchaseVendor)})` : ''} — do not invoice`
+      : '';
+    const notes = [s(l.vendorNotes), freeNote].filter(Boolean).join(' · ');
     return {
       id: l.id,
       lineNo: vendorSku || s(l.sku) || '—',
@@ -293,11 +311,13 @@ export async function buildBom(
       unitWeightLbs: wt,
       extendedWeightLbs: Math.round(wt * qty * 1000) / 1000,
       vendor: vendorName,
-      vendorNotes: s(l.vendorNotes),
+      vendorNotes: notes,
       sourced: l.sourced,
       isSteel: steelVendors.has(vendorName.toLowerCase()),
       treeOrder: treeOrderBySku.get(s(l.sku)) ?? UNPLACED,
       isHardware: isHardwarePart(s(l.sku), l.isHardwareComponent),
+      freeIssue: free,
+      purchaseVendor: s(l.purchaseVendor),
     };
   });
 
@@ -364,6 +384,8 @@ export async function buildBom(
         isSteel: steelVendors.has(vendorFilter.toLowerCase()),
         treeOrder: UNPLACED,
         isHardware: isHardwarePart(e.sku, false),
+        freeIssue: false,
+        purchaseVendor: '',
       });
     }
   }

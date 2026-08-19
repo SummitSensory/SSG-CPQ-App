@@ -1263,13 +1263,250 @@
 
   function renderCatalog(user) {
     function ctab(id, label){var on=cat.tab===id;return '<button data-ctab="'+id+'" style="border:none;border-radius:8px;padding:8px 15px;font-size:13.5px;font-weight:'+(on?'600':'500')+';cursor:pointer;background:'+(on?'#fff':'transparent')+';color:'+(on?'#1c4039':'#6b7065')+';box-shadow:'+(on?'0 1px 2px rgba(0,0,0,.06)':'none')+';">'+label+'</button>';}
-    document.getElementById('view').innerHTML = '<div style="display:flex;gap:5px;background:#eef0ea;padding:4px;border-radius:10px;width:max-content;margin-bottom:18px;">'+ctab('items','Catalog')+ctab('products','Product tree')+ctab('bundles','Bundles')+ctab('manufacturers','Manufacturers')+ctab('notes','Proposal notes')+'</div><div id="catBody"></div>';
+    document.getElementById('view').innerHTML = '<div style="display:flex;gap:5px;background:#eef0ea;padding:4px;border-radius:10px;width:max-content;margin-bottom:18px;">'+ctab('items','Catalog')+ctab('products','Product tree')+ctab('bundles','Bundles')+ctab('manufacturers','Manufacturers')+ctab('bombuild','BOM build')+ctab('notes','Proposal notes')+'</div><div id="catBody"></div>';
     document.querySelectorAll('[data-ctab]').forEach(function(b){b.addEventListener('click',function(){cat.tab=b.getAttribute('data-ctab');renderCatalog(user);});});
     if(cat.tab==='products') renderCatalogProducts(user);
     else if(cat.tab==='bundles') renderBundles(user);
     else if(cat.tab==='manufacturers') renderManufacturers(user);
+    else if(cat.tab==='bombuild') renderBomBuild(user);
     else if(cat.tab==='notes') renderNotesTab(user);
     else renderItems(user);
+  }
+
+  /**
+   * Catalog → BOM build: the two ways the Bill of Materials is allowed to differ
+   * from the proposal, as configuration rather than a code change.
+   *
+   *   * COMPONENTS — a part that is made of other parts. The customer sees one line
+   *     (UEU-HARKIT); purchasing sees the four parts we actually order. The parent is
+   *     replaced by its components on the sheet unless it is set to stay.
+   *   * FREE ISSUE — a part we buy from one vendor and have shipped to another. It
+   *     lands on the RECEIVING vendor's sheet at no cost, because Summit has already
+   *     paid for it, and out of their cost total. The cost stays on the order, so the
+   *     margin on the deal is unchanged.
+   *
+   * Neither can touch a proposal, a price or an accepted order's totals. Both apply
+   * to new orders at lock time; an order already locked picks them up from the
+   * "Apply BOM build rules" button on its Bill of Materials.
+   */
+  var bbState = { parents: [], vendors: [], q: '', draft: [] };
+
+  async function renderBomBuild(user) {
+    var admin = canCatalogAdmin(user.role);
+    document.getElementById('catBody').innerHTML =
+      '<div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">' +
+        '<input id="bbSearch" placeholder="Search part number or description…" value="' + esc(bbState.q) + '" style="' + IN + 'flex:1;min-width:240px;max-width:380px;">' +
+        (admin ? '<div style="margin-left:auto;"><button class="btn" id="bbNew" style="width:auto;padding:10px 17px;">Add a part rule</button></div>' : '') +
+      '</div>' +
+      '<div style="font-size:12px;color:#8a8f85;margin-bottom:14px;line-height:1.6;max-width:860px;">' +
+        'Two rules per part, both read only when a Bill of Materials is built. <b>Components</b> replace a part with the parts it is made of, so one proposal line becomes the several parts we order. ' +
+        '<b>Free issue</b> moves a part onto the sheet of the vendor it is shipped to, at no cost, for parts Summit buys elsewhere and has delivered there. ' +
+        'A proposal, a price and a deal total are never affected.</div>' +
+      '<div id="bbList"><div class="muted" style="padding:24px;">Loading…</div></div>';
+    var s = document.getElementById('bbSearch'), t;
+    s.addEventListener('input', function () {
+      clearTimeout(t);
+      t = setTimeout(function () { bbState.q = s.value.trim(); drawBomBuild(user); }, 200);
+    });
+    if (admin) document.getElementById('bbNew').addEventListener('click', function () { openBomBuildNew(user); });
+    loadBomBuild(user);
+  }
+
+  async function loadBomBuild(user) {
+    var box = document.getElementById('bbList');
+    if (!box) return;
+    try {
+      var r = await authed('/bom-build');
+      if (!r.ok) {
+        box.innerHTML = '<div class="err">Could not load the BOM build rules (' + r.status + '). Run the 0058 migration if this persists.</div>';
+        return;
+      }
+      bbState.parents = ((await r.json()) || {}).parents || [];
+      var rv = await authed('/manufacturers');
+      bbState.vendors = rv.ok ? ((await rv.json()) || []) : [];
+      drawBomBuild(user);
+    } catch (e) {
+      box.innerHTML = '<div class="err">Could not reach the server.</div>';
+    }
+  }
+
+  function bbVendorSelect(part, current) {
+    var opts = '<option value="">Not free issue — bought and billed normally</option>' +
+      bbState.vendors.map(function (v) {
+        return '<option value="' + esc(v.name) + '"' + (v.name === current ? ' selected' : '') + '>' + esc(v.name) + '</option>';
+      }).join('');
+    return '<select class="bbFree" data-part="' + esc(part) + '" style="' + bomFieldStyle('280px') + '">' + opts + '</select>';
+  }
+
+  function drawBomBuild(user) {
+    var box = document.getElementById('bbList');
+    if (!box) return;
+    var admin = canCatalogAdmin(user.role);
+    var q = bbState.q.toLowerCase();
+    // Draft cards are parts someone has just opened a rule for. They hold nothing yet,
+    // so they live in the browser until a component or a setting is saved.
+    var all = bbState.draft.filter(function (d) {
+      return !bbState.parents.some(function (p) { return p.parentPart === d.parentPart; });
+    }).concat(bbState.parents);
+    var rows = all.filter(function (p) {
+      return !q || (p.parentPart + ' ' + (p.name || '')).toLowerCase().indexOf(q) !== -1;
+    });
+    var money2 = function (m) { return m == null ? '—' : '$' + (Number(m) / 100).toFixed(2); };
+
+    var card = function (p) {
+      var comps = (p.components || []).map(function (c) {
+        return '<tr>' +
+          td('<code style="font-size:12.5px;color:#4a4f47;">' + esc(c.childPart) + '</code>' +
+            (c.unknown ? ' <span class="chip" style="font-size:10px;background:#fdf6e6;color:#6b5a24;" title="Not in the SKU master, so it will cost $0.00 on the sheet. Add it under Catalog → Pricing &amp; SKUs.">Not in catalog</span>' : '')) +
+          td('<span style="font-size:13px;">' + esc(c.name || '—') + '</span>') +
+          td(admin
+            ? '<input class="bbQty" data-id="' + c.id + '" type="number" min="1" step="1" value="' + (Number(c.quantity) || 1) + '" style="' + bomFieldStyle('80px') + '">'
+            : String(c.quantity)) +
+          td('<span style="font-size:13px;">' + esc(c.vendor || '—') + '</span>') +
+          td('<span style="font-size:13px;">' + money2(c.unitCostMinor) + '</span>') +
+          td(admin ? '<button class="bbDel link-btn" data-id="' + c.id + '" style="width:auto;padding:5px 10px;font-size:12px;color:#a2402f;">Remove</button>' : '') +
+          '</tr>';
+      }).join('');
+
+      return '<div class="card" style="margin-bottom:18px;padding:0;overflow:hidden;">' +
+        '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;padding:14px 18px;background:#fbfbf9;border-bottom:1px solid #e7e8e3;">' +
+          '<div>' +
+            '<div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap;">' +
+              '<code style="font-size:14px;font-weight:600;color:#1c4039;">' + esc(p.parentPart) + '</code>' +
+              (p.freeIssueVendor ? '<span class="chip" style="font-size:10.5px;background:#eef0ea;">Free issue → ' + esc(p.freeIssueVendor) + '</span>' : '') +
+              (p.keepParentOnBom ? '<span class="chip" style="font-size:10.5px;background:#eef0ea;">Parent kept on sheet</span>' : '') +
+            '</div>' +
+            '<div class="muted" style="font-size:12.5px;margin-top:3px;">' + esc(p.name || 'Not in the SKU master') + '</div>' +
+          '</div>' +
+          '<div class="muted" style="font-size:12px;">' + ((p.components || []).length || 'No') + ' component' + ((p.components || []).length === 1 ? '' : 's') + '</div>' +
+        '</div>' +
+        '<div style="padding:14px 18px;">' +
+          '<div style="overflow:auto;">' +
+            tableShell(['Component part #', 'Description', 'Qty per', 'Vendor', 'Unit cost', ''], comps, 6,
+              'No components yet. A part with no components is only affected by its free-issue setting.') +
+          '</div>' +
+          (admin
+            ? '<div style="display:flex;gap:8px;align-items:flex-end;margin-top:10px;flex-wrap:wrap;">' +
+                '<div><div class="k">Component part #</div><input class="bbAddPart" data-part="' + esc(p.parentPart) + '" placeholder="e.g. P-2526" style="' + bomFieldStyle('180px') + 'text-transform:uppercase;font-family:ui-monospace,monospace;"></div>' +
+                '<div><div class="k">Qty per</div><input class="bbAddQty" data-part="' + esc(p.parentPart) + '" type="number" min="1" step="1" value="1" style="' + bomFieldStyle('90px') + '"></div>' +
+                '<button class="bbAdd link-btn" data-part="' + esc(p.parentPart) + '" style="width:auto;padding:8px 14px;">Add component</button>' +
+                '<span class="bbMsg muted" data-part="' + esc(p.parentPart) + '" style="font-size:11.5px;flex:1;min-width:200px;"></span>' +
+              '</div>'
+            : '') +
+          '<div style="display:flex;gap:18px;align-items:flex-end;margin-top:14px;padding-top:14px;border-top:1px solid #f2f3ef;flex-wrap:wrap;">' +
+            '<div><div class="k">Shipped to (free issue)</div>' + bbVendorSelect(p.parentPart, p.freeIssueVendor || '') +
+              '<div class="muted" style="font-size:11px;margin-top:4px;max-width:300px;line-height:1.45;">Prints on that vendor’s sheet with no cost and stays out of their total.</div></div>' +
+            '<label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#5c6157;cursor:pointer;padding-bottom:20px;">' +
+              '<input type="checkbox" class="bbKeep" data-part="' + esc(p.parentPart) + '"' + (p.keepParentOnBom ? ' checked' : '') + (admin ? '' : ' disabled') + '> Keep the parent line on the sheet beside its components</label>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    };
+
+    box.innerHTML = rows.length
+      ? rows.map(card).join('')
+      : '<div class="placeholder" style="padding:22px;"><p class="muted" style="margin:0;">' +
+        (all.length ? 'No part matches that search.' : 'No rules yet. Add one for a part that should arrive on the Bill of Materials as several parts, or that ships to a different vendor than the one we buy it from.') +
+        '</p></div>';
+
+    var note = function (part, text, bad) {
+      var el = box.querySelector('.bbMsg[data-part="' + part.replace(/"/g, '\\"') + '"]');
+      if (el) { el.textContent = text; el.style.color = bad ? '#9c3327' : '#5c6157'; }
+    };
+
+    box.querySelectorAll('.bbAdd').forEach(function (b) {
+      b.addEventListener('click', async function () {
+        var part = b.getAttribute('data-part');
+        var pick = function (sel) { return box.querySelector(sel + '[data-part="' + part.replace(/"/g, '\\"') + '"]'); };
+        var child = (pick('.bbAddPart').value || '').trim().toUpperCase();
+        var qty = parseInt(pick('.bbAddQty').value, 10) || 1;
+        if (!child) return note(part, 'Type the component’s part number.', 1);
+        b.disabled = true;
+        var r = await authed('/bom-build/components', {
+          method: 'POST',
+          body: JSON.stringify({ parentPart: part, childPart: child, quantity: qty }),
+        });
+        b.disabled = false;
+        if (!r.ok) {
+          var m = '';
+          try { m = ((await r.json()) || {}).message || ''; } catch (e) {}
+          return note(part, m || 'Could not add that component.', 1);
+        }
+        loadBomBuild(user);
+      });
+    });
+
+    box.querySelectorAll('.bbQty').forEach(function (i) {
+      i.addEventListener('change', async function () {
+        var qty = parseInt(i.value, 10) || 1;
+        await authed('/bom-build/components/' + i.getAttribute('data-id'), {
+          method: 'PATCH',
+          body: JSON.stringify({ quantity: qty }),
+        });
+        loadBomBuild(user);
+      });
+    });
+
+    box.querySelectorAll('.bbDel').forEach(function (b) {
+      b.addEventListener('click', async function () {
+        b.disabled = true;
+        var r = await authed('/bom-build/components/' + b.getAttribute('data-id'), { method: 'DELETE' });
+        if (!r.ok) { b.disabled = false; return; }
+        loadBomBuild(user);
+      });
+    });
+
+    var saveSetting = async function (part, body, el) {
+      var r = await authed('/bom-build/settings/' + encodeURIComponent(part), {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) {
+        var m = '';
+        try { m = ((await r.json()) || {}).message || ''; } catch (e) {}
+        alert(m || 'Could not save that setting.');
+      }
+      loadBomBuild(user);
+    };
+    box.querySelectorAll('.bbFree').forEach(function (sel) {
+      sel.addEventListener('change', function () {
+        saveSetting(sel.getAttribute('data-part'), { freeIssueVendor: sel.value || null }, sel);
+      });
+    });
+    box.querySelectorAll('.bbKeep').forEach(function (cb) {
+      cb.addEventListener('change', function () {
+        saveSetting(cb.getAttribute('data-part'), { keepParentOnBom: cb.checked }, cb);
+      });
+    });
+  }
+
+  /**
+   * Open a rule for a part. Nothing is written yet — the card appears and the first
+   * component or setting saved is what creates the rule.
+   */
+  function openBomBuildNew(user) {
+    openModal('Add a part rule',
+      '<div class="muted" style="font-size:12.5px;line-height:1.55;margin-bottom:12px;">The part as it appears on the proposal. Its components, or the vendor it ships to, are set on the card that opens.</div>' +
+      fieldRow('Part #', '<input id="bbNewPart" placeholder="e.g. UEU-HARKIT" style="' + IN + 'text-transform:uppercase;font-family:ui-monospace,monospace;">'),
+      async function (close, showErr) {
+        var part = (document.getElementById('bbNewPart').value || '').trim().toUpperCase();
+        if (!part) return showErr('Type a part number.');
+        // Checked against the SKU master so a typo does not become a rule that never
+        // fires. The part still has to exist to be sold.
+        var r = await authed('/skus?q=' + encodeURIComponent(part) + '&pageSize=50');
+        var hit = null;
+        if (r.ok) {
+          var d = (await r.json()) || {};
+          var items = d.items || d.skus || (Array.isArray(d) ? d : []);
+          hit = items.filter(function (x) { return String(x.part || '').toUpperCase() === part; })[0] || null;
+        }
+        if (!hit) return showErr(part + ' is not in the SKU master. Add it under Catalog first.');
+        if (!bbState.draft.some(function (x) { return x.parentPart === part; }))
+          bbState.draft.push({ parentPart: part, name: hit.description || '', components: [], keepParentOnBom: false, freeIssueVendor: null });
+        close();
+        bbState.q = '';
+        renderBomBuild(user);
+      }, 'Open');
   }
 
   /** Catalog → Proposal notes: the reusable note blocks the builder can drop onto a proposal. */
@@ -2315,7 +2552,9 @@
           : '<span class="muted">—</span>') +
         td(esc(m.paymentTerms || '—')) +
         td(m.defaultLeadTimeDays == null ? '—' : m.defaultLeadTimeDays + ' days') +
-        td(String(parts)) +
+        td(parts
+          ? '<button class="mfPartsList link-btn" data-id="' + m.id + '" title="Show the parts sourced from this vendor" style="width:auto;padding:4px 10px;font-variant-numeric:tabular-nums;">' + parts + '</button>'
+          : '<span class="muted">0</span>') +
         td(admin ? '<div style="display:flex;gap:6px;justify-content:flex-end;">' +
           '<button class="mfParts link-btn" data-id="' + m.id + '" title="What this vendor calls parts we number ourselves" style="width:auto;padding:6px 12px;">Part numbers</button>' +
           '<button class="mfEdit link-btn" data-id="' + m.id + '" style="width:auto;padding:6px 12px;">Edit</button>' +
@@ -2337,6 +2576,106 @@
         openVendorParts((mfrState.rows || []).filter(function (x) { return x.id === b.getAttribute('data-id'); })[0], user);
       });
     });
+    box.querySelectorAll('.mfPartsList').forEach(function (b) {
+      b.addEventListener('click', function () {
+        openManufacturerPartsList((mfrState.rows || []).filter(function (x) { return x.id === b.getAttribute('data-id'); })[0], user);
+      });
+    });
+  }
+
+  /**
+   * The parts sourced from one vendor.
+   *
+   * The PARTS column was a bare count with nothing behind it — it said 134 and
+   * there was no way to see which 134. This is that list, and it is data the API
+   * has always returned: GET /manufacturers/:id carries a merged `parts` array
+   * the front end threw away.
+   *
+   * Two kinds of row are merged there, which is worth knowing when a number looks
+   * wrong. A CATALOG row is linked by id through ProductSourcing. A SKU-MASTER row
+   * is linked by manufacturer NAME — that is the only link a generated frame or
+   * hardware part has, so an exact-name near-duplicate ("Southpaw Enterprise" vs
+   * "Southpaw Enterprises") splits one vendor's parts across two records, and
+   * renaming a vendor drops the name-matched ones.
+   *
+   * Not to be confused with "Part numbers", which is this vendor's own numbering
+   * for parts we number ourselves.
+   */
+  async function openManufacturerPartsList(m, user) {
+    if (!m) return;
+    var all = [];
+    var q = '';
+    var loadError = '';
+    var loading = true;
+    var ov = null;
+    var $ = function (sel) { return ov ? ov.querySelector(sel) : null; };
+    var cash = function (minor) {
+      if (minor == null || minor === '') return '<span class="muted">—</span>';
+      return '$' + (Number(minor) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    };
+
+    ov = openModal('Parts from ' + m.name,
+      '<div class="muted" style="font-size:12.5px;line-height:1.55;margin-bottom:12px;">' +
+        'Every part this vendor is on record as the source for. Costs are what we pay ' + esc(m.name) + ', not what a customer sees.</div>' +
+      '<div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;">' +
+        '<input id="mpSearch" placeholder="Search part number or description…" style="' + IN + 'max-width:320px;">' +
+        '<div id="mpCount" class="muted" style="font-size:12px;white-space:nowrap;"></div>' +
+      '</div>' +
+      '<div id="mpBody"><div class="muted" style="font-size:12.5px;padding:12px 0;">Loading…</div></div>',
+      null, null, { maxWidth: '840px' });
+
+    var s = $('#mpSearch'), t;
+    if (s) s.addEventListener('input', function () {
+      clearTimeout(t);
+      t = setTimeout(function () { q = s.value.trim().toLowerCase(); draw(); }, 180);
+    });
+
+    function row(p) {
+      return '<tr>' +
+        td('<span style="font-family:ui-monospace,monospace;font-size:12.5px;">' + esc(p.part) + '</span>' +
+          (p.active === false ? ' <span class="chip" style="font-size:10px;background:#f2f3ef;color:#8a8f85;">Inactive</span>' : '')) +
+        td('<span style="font-size:13px;">' + esc(p.name || '') + '</span>') +
+        td(p.vendorPartNo
+          ? '<span style="font-family:ui-monospace,monospace;font-size:12.5px;">' + esc(p.vendorPartNo) + '</span>'
+          : '<span class="muted">—</span>') +
+        td('<span style="font-size:13px;">' + cash(p.unitCostMinor) + '</span>') +
+        td(p.weightLbs ? '<span style="font-size:13px;">' + Number(p.weightLbs).toFixed(1) + ' lb</span>' : '<span class="muted">—</span>') +
+        '</tr>';
+    }
+
+    function draw() {
+      var box = $('#mpBody'), count = $('#mpCount');
+      if (!box) return;
+      if (loading) { box.innerHTML = '<div class="muted" style="font-size:12.5px;padding:12px 0;">Loading…</div>'; return; }
+      var rows = all.filter(function (p) {
+        return !q || ((p.part || '') + ' ' + (p.name || '') + ' ' + (p.vendorPartNo || '')).toLowerCase().indexOf(q) !== -1;
+      });
+      if (count) count.innerHTML = rows.length === all.length
+        ? esc(all.length + (all.length === 1 ? ' part' : ' parts'))
+        : esc(rows.length + ' of ' + all.length);
+      box.innerHTML =
+        (loadError ? '<div class="err">' + esc(loadError) + '</div>' : '') +
+        '<div style="max-height:52vh;overflow:auto;">' +
+          tableShell(['Part #', 'Description', esc(m.name) + ' part #', 'Unit cost', 'Weight'], rows.map(row).join(''), 5,
+            all.length ? 'No parts match that search.' : 'No parts are sourced from this vendor yet.') +
+        '</div>';
+    }
+
+    draw();
+    try {
+      var r = await authed('/manufacturers/' + m.id);
+      loading = false;
+      if (!r.ok) {
+        loadError = 'Could not load the parts list (' + r.status + ').';
+      } else {
+        var d = await r.json();
+        all = (d.parts || []).slice();
+      }
+    } catch (e) {
+      loading = false;
+      loadError = 'Could not reach the server.';
+    }
+    draw();
   }
 
   /**
@@ -9032,6 +9371,9 @@
         '<div class="muted" style="font-size:12.5px;max-width:620px;line-height:1.55;">One section per vendor. Each has its own submission date, questions and send history, and locks on its own when you confirm it.</div>' +
         '<label style="display:flex;gap:7px;align-items:center;font-size:12.5px;color:#5c6157;cursor:pointer;white-space:nowrap;" title="Prints the rest of that vendor’s catalogue at quantity 0, like a full order form">' +
           '<input type="checkbox" id="bomZeroQty"> Include zero-quantity parts</label>' +
+        (canHandoff
+          ? '<button class="link-btn" id="bomApplyBuild" title="Re-read Catalog → BOM build: explode any part declared as made of other parts, and move free-issue parts onto the vendor they ship to" style="width:auto;padding:8px 14px;white-space:nowrap;">Apply BOM build rules</button>'
+          : '') +
       '</div>' +
       bomSectionData.map(function (s, i) { return sectionCard(s, i, canHandoff); }).join('') +
       '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:6px;">' +
@@ -9074,11 +9416,20 @@
     var showVendorPart = lines.some(function (p) { return p.vendorPart; });
     var cols = 8 + (showVendorPart ? 1 : 0) + (showColor ? 1 : 0) + (showBag ? 1 : 0) + (edit ? 1 : 0);
     var rowHtmlFor = function (p) {
-      var ext = (Number(p.unitCostMinor) || 0) * (Number(p.quantity) || 0);
+      // Free issue: bought elsewhere, shipped here, already paid for. The row shows
+      // what is arriving and no money, matching the sheet this vendor is sent.
+      var free = !!p.freeIssue;
+      var ext = free ? 0 : (Number(p.unitCostMinor) || 0) * (Number(p.quantity) || 0);
       var buy = p.productUrl
         ? ' <a href="' + esc(p.productUrl) + '" target="_blank" rel="noopener" style="font-size:11.5px;margin-left:6px;">Buy ↗</a>' : '';
+      var freeCell = '<span class="muted" title="Summit has already paid for this part. It prints on the vendor’s sheet with no cost and is left out of their total.">Free issue</span>';
       return '<tr>' +
-        td('<b style="font-weight:600;">' + esc(p.name) + '</b>' + buy) +
+        td('<b style="font-weight:600;">' + esc(p.name) + '</b>' + buy +
+          (free
+            ? '<div style="margin-top:3px;"><span class="chip" style="font-size:10px;background:#eef0ea;color:#5c6157;">Free issue</span>' +
+              '<span class="muted" style="font-size:11px;margin-left:6px;">Paid by Summit' +
+              (p.purchaseVendor ? ' · bought from ' + esc(p.purchaseVendor) : '') + '</span></div>'
+            : '')) +
         td('<code style="font-size:12.5px;color:#4a4f47;">' + esc(p.sku || '—') + '</code>') +
         (showVendorPart ? td(p.vendorPart
           ? '<code style="font-size:12.5px;color:#4a4f47;">' + esc(p.vendorPart) + '</code>'
@@ -9087,8 +9438,8 @@
         (showBag ? td(esc(p.packagingBag || '—')) : '') +
         (showColor ? td((p.paintGroup ? '<span class="chip" style="font-size:10.5px;margin-bottom:4px;display:inline-block;" title="Paint colour group">' + esc(p.paintGroup) + '</span> ' : '') + (edit ? colorCell(p) : esc(p.powderColor || '—'))) : '') +
         td(((Number(p.unitWeightLbs) || 0) * (Number(p.quantity) || 0)).toFixed(2)) +
-        td(money2(p.unitCostMinor)) +
-        td(money2(ext)) +
+        td(free ? freeCell : money2(p.unitCostMinor)) +
+        td(free ? freeCell : money2(ext)) +
         td(edit
           ? '<input class="bomLine" data-id="' + p.id + '" data-f="vendorNotes" value="' + esc(p.vendorNotes || '') + '" placeholder="—" style="' + bomFieldStyle('160px') + '">'
           : esc(p.vendorNotes || '—')) +
@@ -9495,6 +9846,26 @@
       if (rr.ok) { var oo = await rr.json(); order.procurement = oo.procurement; }
       reload();
     };
+
+    // Re-applies Catalog → BOM build to an order that is already locked, so a kit or a
+    // free-issue part configured today reaches an order locked last week. Idempotent.
+    var applyBtn = document.getElementById('bomApplyBuild');
+    if (applyBtn) applyBtn.addEventListener('click', async function () {
+      applyBtn.disabled = true;
+      var was = applyBtn.textContent;
+      applyBtn.textContent = 'Applying…';
+      var r = await authed('/orders/' + order.id + '/bom/apply-build', { method: 'POST' });
+      applyBtn.disabled = false;
+      applyBtn.textContent = was;
+      if (!r.ok) return fail(r, 'Could not apply the BOM build rules');
+      var d = (await r.json()) || {};
+      var said = [];
+      if (d.exploded && d.exploded.length)
+        said.push(d.exploded.length + ' part' + (d.exploded.length === 1 ? '' : 's') + ' expanded into ' + d.componentsAdded + ' component' + (d.componentsAdded === 1 ? '' : 's'));
+      if (d.redirected) said.push(d.redirected + ' free-issue line' + (d.redirected === 1 ? '' : 's') + ' moved to the receiving vendor');
+      alert(said.length ? said.join('\n') + '.' : 'Nothing to change — this order already matches the rules in Catalog → BOM build.');
+      refreshLines();
+    });
 
     document.querySelectorAll('[data-line-del]').forEach(function (bt) {
       bt.addEventListener('click', async function () {

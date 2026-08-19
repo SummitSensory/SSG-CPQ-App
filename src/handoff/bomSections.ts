@@ -295,6 +295,7 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
         powderColorCode: true,
         powderColor: true,
         isHardwareComponent: true,
+        freeIssue: true,
       },
     }),
     prisma.manufacturer.findMany({
@@ -412,8 +413,11 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
       unlockedBy: s.unlockedById ? (nameById.get(s.unlockedById) ?? null) : null,
       lineCount: mine.filter((l) => (Number(l.quantity) || 0) > 0).length,
       unitCount: mine.reduce((a, l) => a + (Number(l.quantity) || 0), 0),
+      // Free-issue lines are excluded: Summit already paid for them, so counting them
+      // here would tell this vendor they owe money for parts arriving at their dock.
+      // The cost is still on the line, so the order's cost of goods is unaffected.
       extendedCostMinor: mine.reduce(
-        (a, l) => a + (l.unitCostMinor ?? 0) * (Number(l.quantity) || 0),
+        (a, l) => a + (l.freeIssue ? 0 : (l.unitCostMinor ?? 0) * (Number(l.quantity) || 0)),
         0,
       ),
       missingColorSkus: mine

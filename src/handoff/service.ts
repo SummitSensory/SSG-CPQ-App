@@ -14,6 +14,7 @@ import {
   type AcceptedVersionLike,
   type PriceSnapshotLike,
 } from './lock.js';
+import { expandBomBuild } from './bomBuild.js';
 import { qboGateState } from './manufacturingRelease.js';
 import { versionTotals, metaOf } from '../proposals/analytics.js';
 import { createNewVersion } from '../proposals/service.js';
@@ -350,7 +351,11 @@ export async function createAcceptedOrder(
   const contentSnapshot = buildContentSnapshot(vLike, sLike);
   const integrityHash = computeIntegrityHash(contentSnapshot);
   const depositDue = depositFromSnapshot(sLike);
-  const procurement = procurementFromItems(version.items);
+  // The proposal's items, then the BOM build rules: a part declared as made of other
+  // parts is replaced by them, and a free-issue part is moved onto the sheet of the
+  // vendor it is shipped to. Both are configuration (Catalog → BOM build), so this is
+  // a no-op on a database where nothing is configured. See handoff/bomBuild.ts.
+  const procurement = await expandBomBuild(procurementFromItems(version.items));
   const refs = await resolveCatalogRefs(procurement);
 
   // The deal this order belongs to, resolved at accept time and stored on the order.
@@ -452,7 +457,12 @@ export async function createAcceptedOrder(
                   // hand edit can be badged and the original recovered. They are equal
                   // at creation by definition — nothing has edited the line yet.
                   quantityOriginal: p.quantity,
-                  vendor: ref.vendor,
+                  // A free-issue part sits with the vendor RECEIVING it; who we bought it
+                  // from is kept so the sheet can say so. The cost stays on the line —
+                  // only the printed sheet and the section total suppress it.
+                  vendor: p.vendorOverride ?? ref.vendor,
+                  purchaseVendor: p.vendorOverride ? (p.purchaseVendor ?? ref.vendor) : null,
+                  freeIssue: !!p.freeIssue,
                   unitCostMinor: ref.unitCostMinor ?? p.unitCostMinor ?? null,
                   unitWeightLbs: ref.unitWeightLbs ?? p.unitWeightLbs ?? null,
                   isHardwareComponent: !!p.isHardwareComponent,
