@@ -1,6 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "node scripts/build-stamp.mjs && prisma generate && prisma migrate deploy && pnpm build",
+  "buildCommand": "node scripts/build-stamp.mjs && prisma generate && node scripts/migrate-deploy.mjs && pnpm build",
   "installCommand": "pnpm install --frozen-lockfile",
   "functions": {
     "api/index.ts": {
