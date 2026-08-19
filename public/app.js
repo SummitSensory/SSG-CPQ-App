@@ -1424,7 +1424,7 @@
         b.disabled = true;
         var r = await authed('/bom-build/components', {
           method: 'POST',
-          body: JSON.stringify({ parentPart: part, childPart: child, quantity: qty }),
+          body: { parentPart: part, childPart: child, quantity: qty },
         });
         b.disabled = false;
         if (!r.ok) {
@@ -1441,7 +1441,7 @@
         var qty = parseInt(i.value, 10) || 1;
         await authed('/bom-build/components/' + i.getAttribute('data-id'), {
           method: 'PATCH',
-          body: JSON.stringify({ quantity: qty }),
+          body: { quantity: qty },
         });
         loadBomBuild(user);
       });
@@ -1459,7 +1459,7 @@
     var saveSetting = async function (part, body, el) {
       var r = await authed('/bom-build/settings/' + encodeURIComponent(part), {
         method: 'PATCH',
-        body: JSON.stringify(body),
+        body: body,
       });
       if (!r.ok) {
         var m = '';
