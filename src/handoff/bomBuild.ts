@@ -135,32 +135,87 @@ function reachable(roots: string[], t: BuildTables): string[] {
   return [...seen];
 }
 
+/** Ounces on the Product record; pounds everywhere a BOM is concerned. */
+const lbsFromOz = (oz: number | null | undefined): number =>
+  oz ? Math.round((oz / 16) * 1000) / 1000 : 0;
+
 /**
- * Description, cost, weight and vendor for a set of parts, from the SKU master.
- * A component that is not in the master still becomes a line — it just carries its
- * own part number as the description and no cost, which is visible on the sheet and
- * fixable in the catalog.
+ * Description, cost, weight and vendor for a set of parts.
+ *
+ * Read across BOTH catalog records, because the catalog has two and a part may be in
+ * either. `Sku` is the flat priced record the proposal engine multiplies against.
+ * `Product` is the rich record — name, category, sourcing — and a part can exist
+ * only there, with its cost in `ProductCost` history and its weight in ounces on the
+ * product. P-2526 is one of those: it shows in the catalog as a Product, and reading
+ * `Sku` alone made it look like a part number that did not exist.
+ *
+ * Where both records exist, Sku owns the money and Product is the fallback. A part in
+ * neither still becomes a line — it carries its own part number as the description and
+ * no cost, which is visible on the sheet and fixable in the catalog.
  */
 async function partInfo(parts: string[]): Promise<Map<string, PartInfo>> {
   const out = new Map<string, PartInfo>();
   if (!parts.length || !tablesAvailable()) return out;
-  const rows = await prisma.sku.findMany({
-    where: { part: { in: parts } },
-    select: {
-      part: true,
-      description: true,
-      unitCostMinor: true,
-      weightLbs: true,
-      manufacturer: true,
-    },
-  });
-  for (const r of rows)
-    out.set(key(r.part), {
-      name: r.description,
-      unitCostMinor: r.unitCostMinor,
-      weightLbs: Number(r.weightLbs),
-      vendor: r.manufacturer,
+
+  const [skus, products] = await Promise.all([
+    prisma.sku.findMany({
+      where: { part: { in: parts } },
+      select: {
+        part: true,
+        description: true,
+        unitCostMinor: true,
+        weightLbs: true,
+        manufacturer: true,
+      },
+    }),
+    prisma.product.findMany({
+      where: { sku: { in: parts } },
+      select: { id: true, sku: true, name: true, weightOz: true },
+    }),
+  ]);
+
+  const productIds = products.map((p) => p.id);
+  const [costs, sourcing] = await Promise.all([
+    productIds.length
+      ? prisma.productCost.findMany({
+          where: { productId: { in: productIds } },
+          select: { productId: true, unitCost: true },
+          orderBy: { effectiveDate: 'desc' },
+        })
+      : Promise.resolve([] as Array<{ productId: string; unitCost: bigint }>),
+    productIds.length
+      ? prisma.productSourcing.findMany({
+          where: { productId: { in: productIds } },
+          select: { productId: true, manufacturer: { select: { name: true } } },
+        })
+      : Promise.resolve([] as Array<{ productId: string; manufacturer: { name: string } | null }>),
+  ]);
+
+  const latestCost = new Map<string, number>();
+  for (const c of costs)
+    if (!latestCost.has(c.productId)) latestCost.set(c.productId, Number(c.unitCost));
+  const vendorByProduct = new Map<string, string>();
+  for (const s of sourcing)
+    if (s.manufacturer?.name && !vendorByProduct.has(s.productId))
+      vendorByProduct.set(s.productId, s.manufacturer.name);
+
+  // Product first as the floor, then Sku over the top wherever it carries a figure.
+  for (const p of products)
+    out.set(key(p.sku), {
+      name: p.name,
+      unitCostMinor: latestCost.get(p.id) ?? 0,
+      weightLbs: lbsFromOz(p.weightOz),
+      vendor: vendorByProduct.get(p.id) ?? null,
     });
+  for (const r of skus) {
+    const floor = out.get(key(r.part));
+    out.set(key(r.part), {
+      name: r.description || floor?.name || '',
+      unitCostMinor: r.unitCostMinor || floor?.unitCostMinor || 0,
+      weightLbs: Number(r.weightLbs) || floor?.weightLbs || 0,
+      vendor: r.manufacturer || floor?.vendor || null,
+    });
+  }
   return out;
 }
 

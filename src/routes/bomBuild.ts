@@ -55,22 +55,71 @@ export function registerBomBuildRoutes(app: FastifyInstance): void {
   const admin = { preHandler: requirePermission(Permission.PRODUCTS_ADMIN) };
   const handoff = { preHandler: requirePermission(Permission.HANDOFF_MANAGE) };
 
-  /** Description for a set of parts, so the screen can name what it is showing. */
+  /**
+   * Description, cost and vendor for a set of parts, read across BOTH catalog
+   * records. A part can exist as a `Sku` (the flat priced record), as a `Product`
+   * (the rich record, cost in ProductCost history, weight in ounces), or as both.
+   * Reading Sku alone reported a Product-only part like P-2526 as not in the catalog
+   * while the Catalog tab showed it plainly.
+   */
   async function describe(parts: string[]) {
-    const rows = parts.length
-      ? await prisma.sku.findMany({
-          where: { part: { in: parts } },
-          select: {
-            part: true,
-            description: true,
-            unitCostMinor: true,
-            weightLbs: true,
-            manufacturer: true,
-            active: true,
-          },
-        })
-      : [];
-    return new Map(rows.map((r) => [r.part.toUpperCase(), r]));
+    const out = new Map<
+      string,
+      { description: string; unitCostMinor: number; manufacturer: string | null }
+    >();
+    if (!parts.length) return out;
+
+    const [skus, products] = await Promise.all([
+      prisma.sku.findMany({
+        where: { part: { in: parts } },
+        select: { part: true, description: true, unitCostMinor: true, manufacturer: true },
+      }),
+      prisma.product.findMany({
+        where: { sku: { in: parts } },
+        select: { id: true, sku: true, name: true },
+      }),
+    ]);
+    const ids = products.map((p) => p.id);
+    const [costs, sourcing] = await Promise.all([
+      ids.length
+        ? prisma.productCost.findMany({
+            where: { productId: { in: ids } },
+            select: { productId: true, unitCost: true },
+            orderBy: { effectiveDate: 'desc' },
+          })
+        : Promise.resolve([] as Array<{ productId: string; unitCost: bigint }>),
+      ids.length
+        ? prisma.productSourcing.findMany({
+            where: { productId: { in: ids } },
+            select: { productId: true, manufacturer: { select: { name: true } } },
+          })
+        : Promise.resolve(
+            [] as Array<{ productId: string; manufacturer: { name: string } | null }>,
+          ),
+    ]);
+    const latestCost = new Map<string, number>();
+    for (const c of costs)
+      if (!latestCost.has(c.productId)) latestCost.set(c.productId, Number(c.unitCost));
+    const vendorByProduct = new Map<string, string>();
+    for (const s of sourcing)
+      if (s.manufacturer?.name && !vendorByProduct.has(s.productId))
+        vendorByProduct.set(s.productId, s.manufacturer.name);
+
+    for (const p of products)
+      out.set(p.sku.toUpperCase(), {
+        description: p.name,
+        unitCostMinor: latestCost.get(p.id) ?? 0,
+        manufacturer: vendorByProduct.get(p.id) ?? null,
+      });
+    for (const s of skus) {
+      const floor = out.get(s.part.toUpperCase());
+      out.set(s.part.toUpperCase(), {
+        description: s.description || floor?.description || '',
+        unitCostMinor: s.unitCostMinor || floor?.unitCostMinor || 0,
+        manufacturer: s.manufacturer || floor?.manufacturer || null,
+      });
+    }
+    return out;
   }
 
   /**
@@ -251,8 +300,35 @@ export function registerBomBuildRoutes(app: FastifyInstance): void {
     const parsed = SettingsInput.safeParse(req.body);
     if (!parsed.success)
       throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid setting');
-    const sku = await prisma.sku.findUnique({ where: { part } });
-    if (!sku) throw new NotFoundError(`${part} is not in the SKU master.`);
+    /**
+     * Both flags live on the flat Sku row, because that is the record the BOM build
+     * engine reads. A part carried only as a Product has no such row yet — the same
+     * situation Catalog → Pricing handles by creating one on demand, so this does the
+     * same rather than refusing a part the catalog plainly has.
+     */
+    let sku = await prisma.sku.findUnique({ where: { part } });
+    if (!sku) {
+      const product = await prisma.product.findUnique({
+        where: { sku: part },
+        select: { id: true, name: true },
+      });
+      if (!product)
+        throw new NotFoundError(
+          `${part} is not in the catalog — neither a product nor a SKU. Add it under Catalog first.`,
+        );
+      const src = await prisma.productSourcing.findFirst({
+        where: { productId: product.id },
+        select: { manufacturer: { select: { name: true } } },
+      });
+      sku = await prisma.sku.create({
+        data: {
+          part,
+          description: product.name || part,
+          category: 'OTHER',
+          manufacturer: src?.manufacturer?.name ?? null,
+        },
+      });
+    }
 
     const data: { keepParentOnBom?: boolean; freeIssueVendor?: string | null } = {};
     if (parsed.data.keepParentOnBom !== undefined)

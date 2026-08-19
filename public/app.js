@@ -1491,18 +1491,19 @@
       async function (close, showErr) {
         var part = (document.getElementById('bbNewPart').value || '').trim().toUpperCase();
         if (!part) return showErr('Type a part number.');
-        // Checked against the SKU master so a typo does not become a rule that never
-        // fires. The part still has to exist to be sold.
-        var r = await authed('/skus?q=' + encodeURIComponent(part) + '&pageSize=50');
+        // Checked against the MERGED catalog — a part may be carried as a Product, as a
+        // flat SKU, or both — so a typo cannot become a rule that never fires while a
+        // real part is never refused.
+        var r = await authed('/catalog/items?q=' + encodeURIComponent(part) + '&pageSize=100');
         var hit = null;
         if (r.ok) {
           var d = (await r.json()) || {};
           var items = d.items || d.skus || (Array.isArray(d) ? d : []);
           hit = items.filter(function (x) { return String(x.part || '').toUpperCase() === part; })[0] || null;
         }
-        if (!hit) return showErr(part + ' is not in the SKU master. Add it under Catalog first.');
+        if (!hit) return showErr(part + ' is not in the catalog. Add it under Catalog first.');
         if (!bbState.draft.some(function (x) { return x.parentPart === part; }))
-          bbState.draft.push({ parentPart: part, name: hit.description || '', components: [], keepParentOnBom: false, freeIssueVendor: null });
+          bbState.draft.push({ parentPart: part, name: hit.name || hit.description || '', components: [], keepParentOnBom: false, freeIssueVendor: null });
         close();
         bbState.q = '';
         renderBomBuild(user);
