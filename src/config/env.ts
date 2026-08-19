@@ -19,6 +19,21 @@ const EnvSchema = z
     MONDAY_API_TOKEN: z.string().min(1).optional(),
     MONDAY_SIGNING_SECRET: z.string().min(1).optional(),
     MONDAY_DEALS_BOARD_ID: z.string().min(1).optional(),
+    // The portal's Delivery & Site Details Submissions board. Same token, same
+    // signed webhook, different board — the webhook routes on the board id. Left
+    // unset it defaults to the live board (18421779422) in portalDelivery.ts, so
+    // this only needs setting if that board is ever rebuilt.
+    MONDAY_DELIVERY_BOARD_ID: z.string().min(1).optional(),
+
+    // ---- Customer portal ----
+    // Where the portal is served, used to build the customer's colour-selection
+    // link. Unset means the link is returned to staff as a token to paste.
+    PORTAL_BASE_URL: z.string().url().optional(),
+    // Whether the CRM collects colour choices from the customer, replacing the
+    // Jotform. `shadow` records the customer's picks and applies nothing, which is
+    // how the path is proven on a real order beside the existing form. Only `live`
+    // may write to a procurement line. Off is the default and the safe state.
+    PORTAL_COLOR_SELECTION: z.enum(['off', 'shadow', 'live']).default('off'),
 
     // Microsoft Entra ID (Azure AD) single sign-on. Optional: when unset the
     // app runs with email + password only.
@@ -284,6 +299,17 @@ export function isMondayPushConfigured(e: Env = env): boolean {
 /** Inbound webhooks are the one path that genuinely needs the signing secret. */
 export function isMondayWebhookConfigured(e: Env = env): boolean {
   return Boolean(e.MONDAY_API_TOKEN && e.MONDAY_SIGNING_SECRET);
+}
+
+/**
+ * Whether the CRM may write a customer's colour picks onto an order.
+ *
+ * Three states rather than a boolean on purpose: `shadow` exists so the path can
+ * be run beside the Jotform on a real job and compared, which is the condition for
+ * turning the Jotform off at all.
+ */
+export function portalColorSelectionMode(e: Env = env): 'off' | 'shadow' | 'live' {
+  return e.PORTAL_COLOR_SELECTION;
 }
 
 /** True only when every Entra SSO setting is present. */

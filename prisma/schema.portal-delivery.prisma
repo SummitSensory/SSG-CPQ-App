@@ -1,0 +1,212 @@
+// ---------------------------------------------------------------------------
+// Portal → CRM delivery details, and the portal colour-selection path.
+//
+// The customer portal has no database. It reads and writes monday, and the CRM
+// is already upstream of the same board — so this is not a new integration, it
+// is the return leg of a loop that already exists. Everything below is what the
+// CRM needs to RECEIVE that leg safely.
+//
+// Append these models to schema.prisma, add the noted columns to the existing
+// BomVendorSection / FreightRfq / ShipToAddress models, then run migration 0057.
+// ---------------------------------------------------------------------------
+
+/// Where one portal delivery submission got to.
+///
+/// Deliberately not just applied/failed. A submission can arrive perfectly valid
+/// and still have nowhere to go — the order may not be in the CRM yet, or every
+/// vendor section may already be submitted — and those two cases need different
+/// handling by a human.
+enum PortalSubmissionStatus {
+  /// The submissions row exists but has no usable address yet. The portal writes
+  /// its columns one at a time after creating the row, so the create event
+  /// routinely arrives before the address does. Re-processed on the next event.
+  INCOMPLETE
+  /// A complete address with no matching AcceptedOrder. Held, retried, and
+  /// visible on the integrations screen — never dropped.
+  PARKED
+  /// Applied to at least one editable vendor section.
+  APPLIED
+  /// The order was found, but every candidate section is SUBMITTED. Nothing was
+  /// changed under a vendor who already holds the sheet; the owner was emailed.
+  CONFLICT
+  /// Read or write failed. `note` carries the reason; retryable.
+  FAILED
+}
+
+/// One portal "Delivery & Site Details" submission, as the CRM received it.
+///
+/// Three jobs in one table, which is why it exists rather than the handler
+/// writing straight through to a ShipToAddress:
+///
+///   1. **Idempotency.** `mondayItemId` is the submissions-board row, and it is
+///      unique. monday redelivers webhooks, fires one event per column write,
+///      and the portal writes ~30 columns per submission; without this the same
+///      address would be processed thirty times.
+///   2. **Parking.** The portal invite is fired by a staff member setting a status
+///      column on the manufacturing board. Nothing in that act checks whether
+///      the deal has been imported into the CRM, so an address can legitimately
+///      arrive before the order exists. Parked here and retried.
+///   3. **Provenance.** What the customer actually typed, kept verbatim and
+///      separate from what the CRM did with it. When a sheet and a customer
+///      disagree about where the truck goes, this is the record that settles it.
+model PortalDeliverySubmission {
+  id                String                 @id @default(cuid())
+  /// The row on the Delivery & Site Details Submissions board. The idempotency key.
+  mondayItemId      String                 @unique
+  /// The Manufacturing Process row the submission belongs to — the portal's
+  /// "Order Item ID" column. Joined to AcceptedOrder.portalOrderItemId.
+  mondayOrderItemId String
+  /// Resolved AcceptedOrder, once one exists. Null while PARKED.
+  orderId           String?
+  order             AcceptedOrder?         @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  /// The address this submission produced, so a resubmission updates the same
+  /// record instead of leaving a trail of near-duplicates in the picker.
+  shipToAddressId   String?
+  shipToAddress     ShipToAddress?         @relation(fields: [shipToAddressId], references: [id])
+
+  status            PortalSubmissionStatus @default(INCOMPLETE)
+  /// How many vendor sections this submission actually changed.
+  sectionsUpdated   Int                    @default(0)
+  /// Vendors whose section was already submitted and therefore left alone.
+  skippedVendors    String?
+  /// Why it is in the state it is in, in words a human can act on.
+  note              String?
+
+  // ---- What the customer said. Verbatim, never normalised. ----
+  customerEmail        String?
+  /// The customer ticked "this address is correct" rather than editing it.
+  addressConfirmed     Boolean?
+  line1                String?
+  line2                String?
+  city                 String?
+  region               String?
+  postalCode           String?
+  country              String?
+  formattedAddress     String?
+  pocName              String?
+  pocPhone             String?
+  pocEmail             String?
+  secondaryPocName     String?
+  secondaryPocPhone    String?
+  secondaryPocEmail    String?
+  loadingDock          String?
+  deliveryTiming       String?
+  preferredDeliveryDate DateTime?
+  specialInstructions  String?
+  /// Changes the portal flagged as needing staff confirmation.
+  restrictedChanges    String?
+  freightAckBy         String?
+  freightAckDate       DateTime?
+  /// Every populated column on the row as read, so a column the CRM does not yet
+  /// map is still recoverable without going back to monday.
+  raw                  Json?
+
+  /// Bumped on every processing attempt — a row with a high count and a non-final
+  /// status is the thing to look at first.
+  attempts   Int      @default(0)
+  receivedAt DateTime @default(now())
+  resolvedAt DateTime?
+  updatedAt  DateTime @updatedAt
+
+  @@index([mondayOrderItemId])
+  @@index([status])
+  @@index([orderId])
+}
+
+/// Whether the customer's colour picks have been asked for, given, or applied.
+enum PortalColorSelectionStatus {
+  /// Link minted, nothing submitted yet.
+  OPEN
+  /// The customer picked. Not yet on the order.
+  SUBMITTED
+  /// Written onto the order's procurement lines.
+  APPLIED
+  /// Recorded for comparison against the Jotform run and deliberately NOT
+  /// applied. This is the whole of shadow mode.
+  SHADOWED
+  /// Cancelled — superseded by a newer request, or abandoned.
+  VOID
+}
+
+/// A customer colour selection collected by the portal against CRM palettes.
+///
+/// This replaces the Jotform colour form, and exists as its own record rather
+/// than writing straight onto ProcurementLine.colorPicks for one reason: it has
+/// to be possible to run it alongside Jotform on a real order and compare the
+/// two before anything downstream depends on it. In shadow mode the customer's
+/// picks land here and stop.
+model PortalColorSelection {
+  id                String                     @id @default(cuid())
+  orderId           String
+  order             AcceptedOrder              @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  /// Manufacturing Process row, so the portal can find its own request without
+  /// knowing CRM ids.
+  mondayOrderItemId String?
+  /// Single-use opaque token in the customer's link. Hashed at rest.
+  tokenHash         String                     @unique
+  expiresAt         DateTime
+  status            PortalColorSelectionStatus  @default(OPEN)
+
+  /// What the customer was shown: one entry per line that takes a colour, with
+  /// the palette and slot labels as they stood when the link was minted. Frozen,
+  /// so a palette edited mid-selection cannot change the question after the fact.
+  offered   Json?
+  /// What they chose, in the same shape ProcurementLine.colorPicks uses.
+  picks     Json?
+
+  submittedAt      DateTime?
+  submittedByEmail String?
+  appliedAt        DateTime?
+  appliedById      String?
+  /// Free text for the parallel-run comparison: what Jotform said versus this.
+  note             String?
+
+  createdAt   DateTime @default(now())
+  createdById String?
+  updatedAt   DateTime @updatedAt
+
+  @@index([orderId])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Columns to add to EXISTING models (migration 0057 does this in SQL).
+//
+// model BomVendorSection {
+//   /// Whether the site has a dock, as the customer answered it. Kept apart from
+//   /// `deliveryType`, which is a free-text field a human writes: these are two
+//   /// separate answers and concatenating them makes both unreadable and neither
+//   /// reportable.
+//   loadingDock           String?
+//   deliveryTiming        String?
+//   preferredDeliveryDate DateTime?
+//   portalDeliveries      PortalDeliverySubmission[]  // (not needed; see order)
+// }
+//
+// model ShipToAddress {
+//   /// Where this address came from: null for hand-typed, 'PORTAL' for one the
+//   /// customer confirmed themselves. The picker shows it, because "the customer
+//   /// told us this" and "someone here typed this" are not the same claim.
+//   source            String?
+//   portalSubmissions PortalDeliverySubmission[]
+// }
+//
+// model FreightRfq {
+//   /// Which address the frozen shipTo* fields came from: PORTAL_CONFIRMED,
+//   /// ORG_SHIPPING, ORG_BILLING or NONE. Printed nowhere — shown on the RFQ
+//   /// screen, so whoever sends it can see whether the ship-to is the customer's
+//   /// confirmed site or the billing entity's front office.
+//   shipToSource String?
+// }
+//
+// model AcceptedOrder {
+//   /// The Manufacturing Process board row this order corresponds to. NOT the same
+//   /// id as `mondayProjectId`, which is the Deal Tracking row — the portal lives on
+//   /// the manufacturing board and knows only that id. Recorded the first time a
+//   /// portal submission is matched to this order; every later one resolves on it
+//   /// directly.
+//   portalOrderItemId     String?  @unique
+//   portalDeliveries      PortalDeliverySubmission[]
+//   portalColorSelections PortalColorSelection[]
+// }
+// ---------------------------------------------------------------------------

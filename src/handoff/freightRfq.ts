@@ -5,6 +5,7 @@ import { logger } from '../lib/logger.js';
 import { COMPANY, streetLine } from './bom.js';
 import { fetchItemById } from '../integrations/monday/discovery.js';
 import { DEAL_COL } from '../integrations/monday/crmMapping.js';
+import { confirmedAddressForProposal } from '../integrations/monday/portalDelivery.js';
 
 /**
  * Request for Freight (RFQ).
@@ -56,7 +57,12 @@ export interface RfqVendorOption {
 function productLines(items: unknown): ProposalLine[] {
   if (!Array.isArray(items)) return [];
   return (items as ProposalLine[]).filter(
-    (l) => l && (l.lineType ?? 'PRODUCT') === 'PRODUCT' && !l.optional && s(l.sku).trim() !== '' && n(l.quantity) > 0,
+    (l) =>
+      l &&
+      (l.lineType ?? 'PRODUCT') === 'PRODUCT' &&
+      !l.optional &&
+      s(l.sku).trim() !== '' &&
+      n(l.quantity) > 0,
   );
 }
 
@@ -89,14 +95,18 @@ async function vendorBySku(skus: string[]): Promise<Map<string, string>> {
  * rep asked for the ability to add items from anywhere, and hiding the vendor
  * entirely would make that impossible to discover.
  */
-export async function listRfqVendors(versionId: string, draftLines?: ProposalLine[]): Promise<RfqVendorOption[]> {
+export async function listRfqVendors(
+  versionId: string,
+  draftLines?: ProposalLine[],
+): Promise<RfqVendorOption[]> {
   const version = await prisma.proposalVersion.findUnique({
     where: { id: versionId },
     select: { id: true, items: true, proposalId: true },
   });
   if (!version) throw new NotFoundError('Proposal version not found');
 
-  const lines = draftLines && draftLines.length ? productLines(draftLines) : productLines(version.items);
+  const lines =
+    draftLines && draftLines.length ? productLines(draftLines) : productLines(version.items);
   const skuVendor = await vendorBySku([...new Set(lines.map((l) => s(l.sku)))]);
 
   const grouped = new Map<string, { lineCount: number; unitCount: number; cost: number }>();
@@ -138,7 +148,9 @@ export async function listRfqVendors(versionId: string, draftLines?: ProposalLin
         existingStatus: r?.status ?? null,
       };
     })
-    .sort((a, b) => Number(b.rfqEnabled) - Number(a.rfqEnabled) || a.vendor.localeCompare(b.vendor));
+    .sort(
+      (a, b) => Number(b.rfqEnabled) - Number(a.rfqEnabled) || a.vendor.localeCompare(b.vendor),
+    );
 }
 
 /**
@@ -159,7 +171,11 @@ export async function listRfqVendors(versionId: string, draftLines?: ProposalLin
  *   2. A live read of the monday deal row's Project ID column.
  *   3. The proposal number, so an unreachable board never blocks the rep.
  */
-async function resolveProjectId(organizationId: string, metaProjectId: string, fallback: string): Promise<string> {
+async function resolveProjectId(
+  organizationId: string,
+  metaProjectId: string,
+  fallback: string,
+): Promise<string> {
   const typed = s(metaProjectId).trim();
   if (typed) return typed;
   try {
@@ -173,7 +189,10 @@ async function resolveProjectId(organizationId: string, metaProjectId: string, f
     const value = s(item?.text?.[DEAL_COL.projectId]).trim();
     return value || fallback;
   } catch (err) {
-    logger.warn({ err, organizationId }, 'freight rfq: could not read the monday Project ID, using the proposal number');
+    logger.warn(
+      { err, organizationId },
+      'freight rfq: could not read the monday Project ID, using the proposal number',
+    );
     return fallback;
   }
 }
@@ -198,7 +217,10 @@ function metaProjectIdOf(sections: unknown): string {
  * first. Set the field to override a derivation that reads badly.
  */
 export function vendorAbbrev(vendor: string, stored?: string | null): string {
-  const explicit = (stored || '').trim().toUpperCase().replace(/[^A-Z0-9-]/g, '');
+  const explicit = (stored || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9-]/g, '');
   if (explicit) return explicit.slice(0, 8);
   const words = String(vendor || '')
     .replace(/[^A-Za-z0-9 ]/g, ' ')
@@ -207,7 +229,11 @@ export function vendorAbbrev(vendor: string, stored?: string | null): string {
   const first = words[0];
   if (!first) return '';
   if (words.length === 1) return first.slice(0, 3).toUpperCase();
-  return words.map((w) => w[0]).join('').slice(0, 4).toUpperCase();
+  return words
+    .map((w) => w[0])
+    .join('')
+    .slice(0, 4)
+    .toUpperCase();
 }
 
 /**
@@ -229,7 +255,10 @@ export function vendorAbbrev(vendor: string, stored?: string | null): string {
  * produced unchanged, so references raised before any of this existed still parse.
  */
 export function rfqReference(
-  projectId: string, revision: number, abbrev?: string | null, submission = 1,
+  projectId: string,
+  revision: number,
+  abbrev?: string | null,
+  submission = 1,
 ): string {
   let ref = abbrev ? `RFQ-${projectId}-${abbrev}` : `RFQ-${projectId}`;
   if (revision > 1) ref += ` R${revision}`;
@@ -238,17 +267,52 @@ export function rfqReference(
 }
 
 /**
- * Ship-to, taken from the proposal's shipping address and falling back to
- * billing — a customer with one address on file usually has it filed as billing,
- * and a freight quote to nowhere is useless.
+ * Ship-to for the request.
+ *
+ * Three sources, in the order they can be trusted:
+ *
+ *   1. **The address the customer confirmed in the portal.** They typed it, about
+ *      their own building, for this job. Nothing beats it.
+ *   2. The organization's SHIPPING address.
+ *   3. Its BILLING address — a customer with one address on file usually has it
+ *      filed as billing, and a freight quote to nowhere is useless.
+ *
+ * The organization record is the BILLING entity, which on a job site with a
+ * trailer, or a school district with a central office, is the wrong building. It
+ * was the only source this used; that was a bug, and quoting freight to the wrong
+ * city is a bug that costs money. `shipToSource` is stored beside the frozen
+ * fields so the RFQ screen can show which of the three is in play before anyone
+ * sends it.
+ *
+ * `proposalId` is optional because the portal address usually does not exist yet
+ * when the RFQ is raised — the invite goes out after the order, and RFQs are
+ * quoted at proposal time. When it does exist, it wins.
  */
-async function shipToFor(organizationId: string) {
+async function shipToFor(organizationId: string, proposalId?: string) {
   const org = await prisma.organization.findUnique({
     where: { id: organizationId },
     select: { name: true, addresses: true },
   });
   if (!org) throw new NotFoundError('Customer not found');
-  const ship = org.addresses.find((a) => a.type === 'SHIPPING') ?? org.addresses.find((a) => a.type === 'BILLING');
+
+  if (proposalId) {
+    const confirmed = await confirmedAddressForProposal(proposalId).catch(() => null);
+    if (confirmed?.line1 && confirmed.city) {
+      return {
+        shipToName: org.name,
+        shipToLine1: s(confirmed.line1) || null,
+        shipToLine2: s(confirmed.line2) || null,
+        shipToCity: s(confirmed.city) || null,
+        shipToRegion: s(confirmed.region) || null,
+        shipToPostal: s(confirmed.postalCode) || null,
+        shipToCountry: s(confirmed.country) || 'United States',
+        shipToSource: 'PORTAL_CONFIRMED',
+      };
+    }
+  }
+
+  const shipping = org.addresses.find((a) => a.type === 'SHIPPING');
+  const ship = shipping ?? org.addresses.find((a) => a.type === 'BILLING');
   return {
     shipToName: org.name,
     shipToLine1: s(ship?.line1) || null,
@@ -257,6 +321,7 @@ async function shipToFor(organizationId: string) {
     shipToRegion: s(ship?.region) || null,
     shipToPostal: s(ship?.postalCode) || null,
     shipToCountry: s(ship?.country) || 'United States',
+    shipToSource: !ship ? 'NONE' : shipping ? 'ORG_SHIPPING' : 'ORG_BILLING',
   };
 }
 
@@ -282,7 +347,11 @@ export async function createRfq(input: { versionId: string; vendor: string }, ac
   const version = await prisma.proposalVersion.findUnique({
     where: { id: input.versionId },
     select: {
-      id: true, items: true, sections: true, proposalId: true, createdById: true,
+      id: true,
+      items: true,
+      sections: true,
+      proposalId: true,
+      createdById: true,
       proposal: { select: { id: true, number: true, organizationId: true } },
     },
   });
@@ -291,14 +360,21 @@ export async function createRfq(input: { versionId: string; vendor: string }, ac
   const open = await prisma.freightRfq.findFirst({
     where: { proposalId: version.proposalId, vendor: input.vendor, status: { not: 'SUPERSEDED' } },
   });
-  if (open) throw new ValidationError(`There is already an RFQ for ${input.vendor} on this proposal.`);
+  if (open)
+    throw new ValidationError(`There is already an RFQ for ${input.vendor} on this proposal.`);
 
   const lines = productLines(version.items);
   const skuVendor = await vendorBySku([...new Set(lines.map((l) => s(l.sku)))]);
-  const mine = lines.filter((l) => (skuVendor.get(s(l.sku)) ?? '').toLowerCase() === input.vendor.toLowerCase());
-  if (!mine.length) throw new ValidationError(`No lines on this proposal are sourced from ${input.vendor}.`);
+  const mine = lines.filter(
+    (l) => (skuVendor.get(s(l.sku)) ?? '').toLowerCase() === input.vendor.toLowerCase(),
+  );
+  if (!mine.length)
+    throw new ValidationError(`No lines on this proposal are sourced from ${input.vendor}.`);
 
-  const mfr = await prisma.manufacturer.findFirst({ where: { name: input.vendor }, select: { id: true, rfqAbbrev: true } });
+  const mfr = await prisma.manufacturer.findFirst({
+    where: { name: input.vendor },
+    select: { id: true, rfqAbbrev: true },
+  });
   const projectId = await resolveProjectId(
     version.proposal.organizationId,
     metaProjectIdOf(version.sections),
@@ -307,7 +383,7 @@ export async function createRfq(input: { versionId: string; vendor: string }, ac
   // The rep who built the proposal is the point of contact, not whoever happens
   // to be raising the RFQ.
   const contact = await contactFor(version.createdById);
-  const shipTo = await shipToFor(version.proposal.organizationId);
+  const shipTo = await shipToFor(version.proposal.organizationId, version.proposalId);
   // Resolved once, then frozen on the row — see vendorAbbrev above.
   const abbrev = vendorAbbrev(input.vendor, mfr?.rfqAbbrev ?? null);
 
@@ -366,8 +442,14 @@ export async function setLineIncluded(rfqId: string, lineId: string, included: b
 }
 
 /** Add a line the proposal did not source from this vendor. */
-export async function addRfqLine(rfqId: string, input: { sku: string; name?: string; quantity: number }) {
-  const rfq = await prisma.freightRfq.findUnique({ where: { id: rfqId }, include: { lines: true } });
+export async function addRfqLine(
+  rfqId: string,
+  input: { sku: string; name?: string; quantity: number },
+) {
+  const rfq = await prisma.freightRfq.findUnique({
+    where: { id: rfqId },
+    include: { lines: true },
+  });
   if (!rfq) throw new NotFoundError('RFQ not found');
   assertEditable(rfq);
   if (rfq.lines.some((l) => l.sku.toLowerCase() === input.sku.trim().toLowerCase())) {
@@ -404,7 +486,10 @@ export async function removeRfqLine(rfqId: string, lineId: string) {
   const line = await prisma.freightRfqLine.findUnique({ where: { id: lineId } });
   // Only hand-added lines are removable. A line that came off the proposal is
   // unticked instead, so the document still shows what was considered.
-  if (!line?.addedManually) throw new ValidationError('Untick this line instead — only manually added lines can be removed.');
+  if (!line?.addedManually)
+    throw new ValidationError(
+      'Untick this line instead — only manually added lines can be removed.',
+    );
   await prisma.freightRfqLine.delete({ where: { id: lineId } });
   return { totalCostMinor: await retotal(rfqId) };
 }
@@ -431,7 +516,8 @@ export async function startRfqRevision(rfqId: string, actorId: string) {
     include: { lines: { orderBy: { sortOrder: 'asc' } } },
   });
   if (!prev) throw new NotFoundError('RFQ not found');
-  if (prev.status === 'DRAFT') throw new ValidationError('This RFQ has not been sent yet — edit it directly.');
+  if (prev.status === 'DRAFT')
+    throw new ValidationError('This RFQ has not been sent yet — edit it directly.');
 
   const revision = prev.revision + 1;
   const [, next] = await prisma.$transaction([
@@ -455,6 +541,11 @@ export async function startRfqRevision(rfqId: string, actorId: string) {
         shipToRegion: prev.shipToRegion,
         shipToPostal: prev.shipToPostal,
         shipToCountry: prev.shipToCountry,
+        // Carried forward, not re-resolved: a revision corrects the LINES. Moving
+        // the ship-to under the vendor because a portal submission landed between
+        // revisions would change the shipment without anyone asking for it. Clear
+        // the address on the screen to pick it up deliberately.
+        shipToSource: prev.shipToSource,
         contactName: prev.contactName,
         contactPhone: prev.contactPhone,
         createdById: actorId,
@@ -492,21 +583,65 @@ export interface RfqModel {
   submittedLabel: string;
   company: typeof COMPANY;
   customerName: string;
-  shipTo: { name: string; lines: string[] };
+  shipTo: {
+    name: string;
+    lines: string[];
+    /** PORTAL_CONFIRMED | ORG_SHIPPING | ORG_BILLING | NONE — shown on the screen, not on the document. */
+    source: string;
+    /** One line the screen can print as-is. */
+    sourceLabel: string;
+  };
   contact: { name: string; phone: string };
   submittedBy: { name: string; email: string };
   lines: Array<{
-    id: string; sku: string; name: string; quantity: number;
-    unitCostMinor: number; extendedCostMinor: number; included: boolean; addedManually: boolean;
+    id: string;
+    sku: string;
+    name: string;
+    quantity: number;
+    unitCostMinor: number;
+    extendedCostMinor: number;
+    included: boolean;
+    addedManually: boolean;
   }>;
   totalCostMinor: number;
   sentAt: string | null;
 }
 
-const DATE = new Intl.DateTimeFormat('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Denver' });
+/**
+ * What the screen says about where the ship-to came from. Plain sentences: the
+ * person about to email a freight desk needs to know whether this is the site the
+ * customer confirmed or the address on the invoice, and "ORG_BILLING" does not
+ * tell them that.
+ */
+export function shipToSourceLabel(source: string | null | undefined): string {
+  switch (s(source)) {
+    case 'PORTAL_CONFIRMED':
+      return 'Confirmed by the customer in the portal';
+    case 'ORG_SHIPPING':
+      return 'Shipping address on the customer record';
+    case 'ORG_BILLING':
+      return 'Billing address on the customer record — no shipping address on file';
+    case 'NONE':
+      return 'No address on file — fill this in before sending';
+    default:
+      return 'Customer record';
+  }
+}
+
+const DATE = new Intl.DateTimeFormat('en-US', {
+  month: 'long',
+  day: 'numeric',
+  year: 'numeric',
+  timeZone: 'America/Denver',
+});
 const DATETIME = new Intl.DateTimeFormat('en-US', {
-  weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
-  hour: 'numeric', minute: '2-digit', timeZone: 'America/Denver',
+  weekday: 'long',
+  month: 'long',
+  day: 'numeric',
+  year: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+  timeZone: 'America/Denver',
 });
 
 /** Everything the document and the panel need, in one read. */
@@ -545,7 +680,11 @@ export async function buildRfqModel(rfqId: string): Promise<RfqModel> {
     customerName: rfq.shipToName,
     shipTo: {
       name: rfq.shipToName,
-      lines: [streetLine(rfq.shipToLine1, rfq.shipToLine2), cityLine, s(rfq.shipToCountry)].filter(Boolean),
+      lines: [streetLine(rfq.shipToLine1, rfq.shipToLine2), cityLine, s(rfq.shipToCountry)].filter(
+        Boolean,
+      ),
+      source: s(rfq.shipToSource) || 'ORG',
+      sourceLabel: shipToSourceLabel(rfq.shipToSource),
     },
     contact: { name: s(rfq.contactName), phone: s(rfq.contactPhone) },
     // The name is the rep who owns the job; the address is the sales desk. A
@@ -553,11 +692,18 @@ export async function buildRfqModel(rfqId: string): Promise<RfqModel> {
     // it is the same address the email's reply-to carries.
     submittedBy: { name: s(creator?.name), email: env.RFQ_REPLY_TO },
     lines: rfq.lines.map((l) => ({
-      id: l.id, sku: l.sku, name: l.name, quantity: l.quantity,
-      unitCostMinor: l.unitCostMinor, extendedCostMinor: l.extendedCostMinor,
-      included: l.included, addedManually: l.addedManually,
+      id: l.id,
+      sku: l.sku,
+      name: l.name,
+      quantity: l.quantity,
+      unitCostMinor: l.unitCostMinor,
+      extendedCostMinor: l.extendedCostMinor,
+      included: l.included,
+      addedManually: l.addedManually,
     })),
-    totalCostMinor: rfq.lines.filter((l) => l.included).reduce((t, l) => t + l.extendedCostMinor, 0),
+    totalCostMinor: rfq.lines
+      .filter((l) => l.included)
+      .reduce((t, l) => t + l.extendedCostMinor, 0),
     sentAt: rfq.sentAt ? rfq.sentAt.toISOString() : null,
   };
 }
@@ -579,6 +725,8 @@ export async function listProposalRfqs(proposalId: string) {
     revision: r.revision,
     submission: r.submission,
     status: r.status,
+    shipToSource: r.shipToSource ?? 'ORG',
+    shipToSourceLabel: shipToSourceLabel(r.shipToSource),
     requestedAt: (r.sentAt ?? r.createdAt).toISOString(),
     totalCostMinor: r.totalCostMinor,
     itemCount: r.lines.length,

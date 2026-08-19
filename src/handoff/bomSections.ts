@@ -156,6 +156,15 @@ export interface SectionView {
   submittedOn: string | null;
   submittedOnDefault: string;
   deliveryType: string | null;
+  /**
+   * The three delivery answers the customer gave in the portal. Separate fields,
+   * not appended to `deliveryType`: that one is free text a human writes, and
+   * running four answers together makes all four unreadable and none reportable.
+   * Null on any order the customer has not answered for.
+   */
+  loadingDock: string | null;
+  deliveryTiming: string | null;
+  preferredDeliveryDate: string | null;
   powderCoatBrand: string | null;
   shipmentQuote: string | null;
   /** Informational: the deal's tax figure. Only the mats vendor's sheet carries it. */
@@ -354,6 +363,11 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
       submittedOn: iso(s.submittedOn),
       submittedOnDefault: today(),
       deliveryType: s.deliveryType,
+      loadingDock: s.loadingDock,
+      deliveryTiming: s.deliveryTiming,
+      preferredDeliveryDate: s.preferredDeliveryDate
+        ? s.preferredDeliveryDate.toISOString().slice(0, 10)
+        : null,
       powderCoatBrand: s.powderCoatBrand,
       shipmentQuote: s.shipmentQuote,
       estimatedTax: s.estimatedTax,
@@ -475,6 +489,9 @@ export interface SectionPatch {
   estimatedTax?: string | null;
   submittedOn?: Date | null;
   deliveryType?: string | null;
+  loadingDock?: string | null;
+  deliveryTiming?: string | null;
+  preferredDeliveryDate?: Date | null;
   powderCoatBrand?: string | null;
   shipmentQuote?: string | null;
   notes?: string | null;
@@ -490,6 +507,9 @@ export async function patchSection(sectionId: string, patch: SectionPatch, actor
     'shipToAddressId',
     'submittedOn',
     'deliveryType',
+    'loadingDock',
+    'deliveryTiming',
+    'preferredDeliveryDate',
     'powderCoatBrand',
     'shipmentQuote',
     'estimatedTax',

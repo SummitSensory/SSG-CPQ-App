@@ -1,7 +1,12 @@
 import type { FastifyInstance } from 'fastify';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
-import { isMondayConfigured, isMondayPushConfigured, isMondayWebhookConfigured, env } from '../config/env.js';
+import {
+  isMondayConfigured,
+  isMondayPushConfigured,
+  isMondayWebhookConfigured,
+  env,
+} from '../config/env.js';
 import { verifyMondayWebhook } from '../integrations/monday/webhook.js';
 import { applyInboundChange, retrySync } from '../integrations/monday/sync.js';
 import { reconcile } from '../integrations/monday/reconcile.js';
@@ -13,6 +18,15 @@ import {
 } from '../integrations/monday/crmImport.js';
 import { searchItemsByName, fetchItemById } from '../integrations/monday/discovery.js';
 import { DEALS_BOARD_ID, DEAL_COL, clean, firstLabel } from '../integrations/monday/crmMapping.js';
+import {
+  deliveryBoardId,
+  isPortalDeliveryConfigured,
+  ingestDeliverySubmission,
+  processSubmission,
+  linkSubmission,
+  retryPendingSubmissions,
+  listSubmissions,
+} from '../integrations/monday/portalDelivery.js';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 
@@ -28,6 +42,13 @@ export function registerIntegrationRoutes(app: FastifyInstance): void {
       // that only pushes deals needs the token and board id, and nothing else.
       pushConfigured: isMondayPushConfigured(),
       webhookConfigured: isMondayWebhookConfigured(),
+      // The portal's delivery submissions ride the same webhook and the same token,
+      // so this reports which board that half is listening to rather than a second
+      // set of credentials.
+      portalDelivery: {
+        configured: isPortalDeliveryConfigured(),
+        boardId: deliveryBoardId(),
+      },
       missing: [
         env.MONDAY_API_TOKEN ? null : 'MONDAY_API_TOKEN',
         env.MONDAY_DEALS_BOARD_ID ? null : 'MONDAY_DEALS_BOARD_ID',
@@ -199,6 +220,50 @@ export function registerIntegrationRoutes(app: FastifyInstance): void {
     }
   });
 
+  // ----- Portal delivery submissions -----
+  // What the customer confirmed, what the CRM did with it, and what is stuck.
+  // The list is the operational screen: a PARKED row is an address with nowhere
+  // to go, and it carries the reason in words.
+
+  app.get('/integrations/monday/portal-delivery', manage, async (req) => {
+    const { limit } = req.query as { limit?: string };
+    return listSubmissions(Number(limit) || 100);
+  });
+
+  /** Pull one submissions row by monday item id — the manual version of the webhook. */
+  app.post('/integrations/monday/portal-delivery/import/:itemId', manage, async (req, reply) => {
+    if (!isPortalDeliveryConfigured())
+      return reply.status(400).send({ error: 'MONDAY_TOKEN_MISSING' });
+    const { itemId } = req.params as { itemId: string };
+    const result = await ingestDeliverySubmission(itemId);
+    if (result === 'notfound') return reply.status(404).send({ error: 'NOT_FOUND' });
+    return { result };
+  });
+
+  /** Re-run one stored submission (after the order was imported, say). */
+  app.post('/integrations/monday/portal-delivery/:id/retry', manage, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const result = await processSubmission(id);
+    if (result === 'notfound') return reply.status(404).send({ error: 'NOT_FOUND' });
+    return { result };
+  });
+
+  /**
+   * Attach a parked submission to an order by hand. Also records the order's
+   * portal item id, so nobody has to do this twice for the same job.
+   */
+  app.post('/integrations/monday/portal-delivery/:id/link', manage, async (req) => {
+    const { id } = req.params as { id: string };
+    const { orderId } = req.body as { orderId: string };
+    return { result: await linkSubmission(id, orderId) };
+  });
+
+  /** Sweep everything that is waiting on something. Safe to run on a schedule. */
+  app.post('/integrations/monday/portal-delivery/retry-pending', manage, async (req) => {
+    const { limit } = req.query as { limit?: string };
+    return retryPendingSubmissions(Number(limit) || 25);
+  });
+
   // Inbound webhook. Public endpoint, but authenticated by monday's signed JWT.
   app.post('/integrations/monday/webhook', async (req, reply) => {
     const body = req.body as { challenge?: string; event?: Record<string, unknown> };
@@ -211,12 +276,35 @@ export function registerIntegrationRoutes(app: FastifyInstance): void {
     if (!ok) return reply.status(401).send({ error: 'INVALID_SIGNATURE' });
 
     const ev = body?.event ?? {};
+    const boardId = String((ev as { boardId?: unknown }).boardId ?? '');
+    const itemId = String((ev as { pulseId?: unknown }).pulseId ?? '');
+
+    /**
+     * 3) Route on the board.
+     *
+     * One endpoint, two boards. The deals board drives opportunity stage; the
+     * portal's Delivery & Site Details Submissions board drives delivery
+     * addresses. They are different subscriptions in monday pointing at the same
+     * URL, which is why the board id — not the column — decides what happens.
+     *
+     * Every event for a submissions row is processed, not just the create: the
+     * portal creates the row first and writes its ~30 columns afterwards, one
+     * call each, so the create event carries no address. Re-processing is cheap
+     * and idempotent (see portalDelivery.ts).
+     */
+    if (boardId && boardId === deliveryBoardId()) {
+      if (!itemId) return reply.send({ ok: true, result: 'ignored' });
+      const result = await ingestDeliverySubmission(itemId);
+      logger.info({ itemId, result }, 'portal delivery webhook processed');
+      return reply.send({ ok: true, result });
+    }
+
     const result = await applyInboundChange({
       eventId: String(
         (ev as { triggerUuid?: string }).triggerUuid ??
           `${ev.pulseId}-${ev.columnId}-${Date.now()}`,
       ),
-      itemId: String((ev as { pulseId?: unknown }).pulseId ?? ''),
+      itemId,
       columnId: (ev as { columnId?: string }).columnId,
       newStatusLabel:
         (ev as { value?: { label?: { text?: string } } }).value?.label?.text ?? undefined,
