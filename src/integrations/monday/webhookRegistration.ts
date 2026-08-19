@@ -163,9 +163,11 @@ async function loadClaims(
   const keys = specs.map((sp) => claimKey(url, sp));
   const out = new Map<string, { id: string; adopted: boolean }>();
   if (!keys.length) return out;
-  const rows = await prisma.integrationSyncLog.findMany({
-    where: { entity: ENTITY, eventId: { in: keys }, status: 'registered' },
-  });
+  const rows: Array<{ eventId: string | null; externalId: string | null; error: string | null }> =
+    await prisma.integrationSyncLog.findMany({
+      where: { entity: ENTITY, eventId: { in: keys }, status: 'registered' },
+      select: { eventId: true, externalId: true, error: true },
+    });
   for (const sp of specs) {
     const key = claimKey(url, sp);
     const row = rows.find((r) => r.eventId === key);
