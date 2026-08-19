@@ -188,6 +188,18 @@
     if (!s || !/^-?\d+(?:\.\d+)?$/.test(s)) return 0;
     return Math.round(parseFloat(s) * 100);
   }
+  /**
+   * Whether the "prints instead of TBD" box holds a NUMBER rather than wording.
+   *
+   * Separate from overrideMinor because that returns 0 both for a typed zero and for
+   * text it cannot parse, and those mean opposite things on a proposal: a typed 0
+   * prints USD $0.00, while "call to confirm" prints as itself.
+   */
+  function isNumericOverride(text) {
+    if (text == null) return false;
+    var s = String(text).trim().replace(/^\$/, '').replace(/,/g, '');
+    return !!s && /^-?\d+(?:\.\d+)?$/.test(s);
+  }
   /** The amount box if it carries a figure, otherwise a numeric TBD override. */
   function metaAmount(minor, override) { return (Number(minor) || 0) || overrideMinor(override); }
   /**
@@ -5391,6 +5403,10 @@
       // Kit breakdown (H-1000 → its fasteners). Opaque to the builder; it exists so
       // the BOM can list the hardware out without re-running the configurator.
       components: it.components || null,
+      // A NOTE line the customer has to read, printed in an outlined box. Set from the
+      // standard note it came from and kept on the line, so a document already sent
+      // does not change shape when the note is edited later.
+      emphasis: !!it.emphasis,
       // Which builder produced this line, if any. 'ADV' / 'SOAR' means the
       // configurator owns it and a revise may replace it; blank means a person put it
       // there and nothing may touch it. Without this, revising could only ever append.
@@ -5585,6 +5601,9 @@
       }
       pb.lines.splice(at, 0, normalizeLine({
         lineType: 'NOTE', kind: 'NOTE', name: nn.title, description: nn.body, quantity: 0, rateMinor: 0,
+        // Travels with the line so the saved proposal keeps the treatment even if the
+        // note is later edited — a sent document must not change shape retroactively.
+        emphasis: !!nn.emphasis,
       }));
       added++;
     });
@@ -6311,7 +6330,7 @@
             '</select>' +
             '<input id="mDisc" style="width:80px;padding:5px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;" value="' + esc(pb.meta.discountMode === 'AMT' ? ((Number(pb.meta.discountAmountMinor) || 0) / 100).toFixed(2) : pb.meta.discountPct) + '">' +
           '</div></div>' +
-        (t.discount ? '<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:14px;color:#9c3327;"><span>' + discountLabel(t) + '</span><span>− ' + fmtMoney(t.discount, 'USD') + '</span></div>' +
+        (t.discount ? '<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:14px;color:#9c3327;font-weight:700;"><span>' + discountLabel(t) + '</span><span>− ' + fmtMoney(t.discount, 'USD') + '</span></div>' +
           '<div style="font-size:11px;color:#8a8f85;text-align:right;margin-bottom:2px;">Discount expires ' + (pb.meta.expiration ? fmtDate(pb.meta.expiration) : 'with the proposal') + '</div>' : '') +
         optionalAmountRow('Mat Freight Tax Pass-Through', 'mTax', pb.meta.taxAmountMinor, 'mTaxTbd', pb.meta.tbdTax) +
         // Crating and freight are quoted by the desk against a real shipment. A mock has
@@ -6319,7 +6338,7 @@
         (isMock() ? '' :
           optionalAmountRow('Structure Crating &amp; Freight $', 'mStructFreight', pb.meta.structureFreightMinor, 'mStructFreightTbd', pb.meta.tbdStructureFreight) +
           optionalAmountRow('Mats &amp; Padding Freight $', 'mMatsFreight', pb.meta.matsFreightMinor, 'mMatsFreightTbd', pb.meta.tbdMatsFreight) +
-          '<div style="font-size:11px;color:#8a8f85;text-align:right;margin:-2px 0 2px;">Left box prints in place of TBD when the amount is 0</div>' +
+          '<div style="font-size:11px;color:#8a8f85;text-align:right;margin:-2px 0 2px;">When the amount is 0 the proposal says TBD. Type <b>0</b> in the left box to print USD $0.00 instead, or any wording to print that.</div>' +
           stdFreightRow()) +
         '<div style="display:flex;justify-content:space-between;padding:8px 0 0;margin-top:6px;border-top:1px solid #e7e8e3;font-size:16px;font-weight:600;font-family:\'Newsreader\',serif;"><span>Total</span><span>' + fmtUsd(t.total) + '</span></div>' +
         (isMock() ? '<div class="muted" style="font-size:11.5px;text-align:right;margin-top:4px;line-height:1.5;">Product retail only. Crating, freight and tax are quoted on a real proposal.</div>' : '') +
@@ -7605,15 +7624,26 @@
    */
   function proposalDocHtml(doc) {
     var d = doc, m = d.meta || {}, t = d.totals || {};
-    // Tax and freight are frequently unknown when a proposal goes out. Showing a
-    // hard $0.00 reads as "free"; TBD states the truth.
+    // Tax and freight are frequently unknown when a proposal goes out. An untouched
+    // figure prints TBD, because a hard $0.00 there reads as "included" — the one
+    // wrong answer to give a customer about freight.
     var TBD = '<span style="color:#8a8f85;font-weight:600;">TBD</span>';
-    // A zero amount prints TBD unless this proposal overrides the wording — plenty of
-    // jobs genuinely carry no tax or no freight, and TBD there reads as unanswered.
     var anyTbd = false;
+    /**
+     * A money row on the totals block.
+     *
+     * The override box beside each figure in the builder decides what a zero means.
+     * Left empty, a zero is "not answered yet" and prints TBD. Type a number into the
+     * box — INCLUDING 0 — and that figure prints: "USD $0.00" is then a statement that
+     * this job carries no tax, or no mats freight, which is a different claim and a
+     * legitimate one. Any other wording in the box prints as written.
+     *
+     * A typed 0 has to be distinguished from unparseable text, and `overrideMinor`
+     * returns 0 for both, so the numeric test is made separately.
+     */
     function amountCell(value, override) {
       if (value) return fmtUsd(value);
-      if (overrideMinor(override)) return fmtUsd(overrideMinor(override));
+      if (isNumericOverride(override)) return fmtUsd(overrideMinor(override));
       if (override) return '<span style="color:#5c6157;">' + esc(override) + '</span>';
       anyTbd = true;
       return TBD;
@@ -7654,7 +7684,17 @@
       // same indent as the lines around it rather than sitting flush left where it
       // looked like a statement about the whole proposal.
       if (lt === 'NOTE') {
-        body += '<tr style="break-inside:avoid;"><td colspan="5" style="padding:7px 8px 7px ' + lineIndent() + 'px;background:#fbfaf4;font-size:11px;color:#5c6157;line-height:1.5;"><b style="display:block;color:#20241f;margin-bottom:2px;">' + esc(tc(l.name)) + '</b>' + rt(l.description) + '</td></tr>';
+        // An emphasised note is boxed and ruled, so the paragraph that has to be read
+        // — the engineer-of-record wording, a lead time — is not skimmed past as
+        // boilerplate. Everything else keeps the quiet cream background.
+        var noteBox = l.emphasis
+          ? 'border:1.5px solid #3d4a55;border-radius:5px;background:#fff;padding:9px 11px;'
+          : 'background:#fbfaf4;padding:7px 8px;';
+        body += '<tr style="break-inside:avoid;"><td colspan="5" style="padding-left:' + lineIndent() + 'px;font-size:11px;color:#5c6157;line-height:1.5;">' +
+          '<div style="' + noteBox + '">' +
+            '<b style="display:block;color:#20241f;margin-bottom:2px;' + (l.emphasis ? 'font-size:11.5px;letter-spacing:.02em;' : '') + '">' + esc(tc(l.name)) + '</b>' +
+            rt(l.description) +
+          '</div></td></tr>';
         return;
       }
       var amt = (Number(l.quantity) || 0) * (Number(l.rateMinor) || 0);
@@ -7729,7 +7769,9 @@
         '<table style="width:100%;border-collapse:collapse;font-size:11px;"><thead><tr style="color:#8a8f85;font-size:10px;text-transform:uppercase;letter-spacing:.04em;"><th style="text-align:left;padding:6px 8px;border-bottom:2px solid #3d4a55;">Activity / Description</th><th style="text-align:left;padding:6px 8px;border-bottom:2px solid #3d4a55;width:90px;">SKU</th><th style="text-align:center;padding:6px 8px;border-bottom:2px solid #3d4a55;width:44px;">Qty</th><th style="text-align:right;padding:6px 8px;border-bottom:2px solid #3d4a55;width:84px;">Rate</th><th style="text-align:right;padding:6px 8px;border-bottom:2px solid #3d4a55;width:94px;">Amount</th></tr></thead><tbody>' + body + '</tbody></table>' +
         '<div style="display:flex;justify-content:flex-end;margin-top:16px;break-inside:avoid;"><div style="min-width:260px;">' +
           '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Subtotal</span><span>' + fmtUsd(t.subtotal) + '</span></div>' +
-          (t.discount ? '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;color:#9c3327;"><span>' + discountLabel(t) + '</span><span>− ' + fmtUsd(t.discount) + '</span></div>' +
+          // Red and bold on purpose: the one line on the totals block the customer is
+          // most likely to be looking for, and the only one that moves in their favour.
+          (t.discount ? '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;color:#9c3327;font-weight:700;"><span>' + discountLabel(t) + '</span><span>− ' + fmtUsd(t.discount) + '</span></div>' +
             '<div style="padding:0 8px 3px;font-size:10px;color:#8a8f85;text-align:right;">Discount expires ' + (m.expiration ? fmtDate(m.expiration) : 'with this proposal') + '</div>' : '') +
           (t.tpFreight ? '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Third-Party Freight</span><span>' + fmtUsd(t.tpFreight) + '</span></div>' : '') +
           '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Mat Freight Tax Pass-Through</span><span>' + cellTax + '</span></div>' +
@@ -11925,7 +11967,7 @@
     } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
   }
   function openStandardNoteForm(note) {
-    var n = note || { title: '', body: '', placement: 'TABLE', autoInclude: false, sortOrder: 0, active: true, triggerParts: '', condition: null };
+    var n = note || { title: '', body: '', placement: 'TABLE', autoInclude: false, sortOrder: 0, active: true, triggerParts: '', condition: null, emphasis: false };
     openModal(note ? 'Edit standard note' : 'New standard note',
       fieldRow('Title', '<input id="snTitle" style="' + IN + '" value="' + esc(n.title) + '">') +
       richTextField('snBody', 'Note text', n.body, 'Line breaks are kept. Bold and italic print on the customer proposal.') +
@@ -11941,6 +11983,8 @@
       fieldRow('Add this note when these parts are on the proposal',
         '<input id="snParts" style="' + IN + '" value="' + esc(n.triggerParts || '') + '" placeholder="SSUSP67, SSCW67, SSUSP72">' +
         '<div class="muted" style="font-size:12px;margin-top:5px;line-height:1.5;">Part numbers, comma separated. The note is added once, at the end of the section the part is in, and can still be deleted from a proposal. Leave blank for a note that is always included or picked by hand.</div>') +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:14px;margin:4px 0;cursor:pointer;"><input type="checkbox" id="snEmph"' + (n.emphasis ? ' checked' : '') + '> Print in an outlined box</label>' +
+      '<div class="muted" style="font-size:12px;margin:-2px 0 8px 26px;line-height:1.5;">For wording the customer has to read. Use it sparingly — three boxed notes on one proposal emphasise nothing.</div>' +
       '<label style="display:flex;align-items:center;gap:8px;font-size:14px;margin:4px 0;cursor:pointer;"><input type="checkbox" id="snAuto"' + (n.autoInclude ? ' checked' : '') + '> Always include on new proposals</label>' +
       '<label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;"><input type="checkbox" id="snActive"' + (n.active !== false ? ' checked' : '') + '> Available in the builder</label>',
       async function (close, showErr) {
@@ -11952,6 +11996,7 @@
           triggerParts: document.getElementById('snParts').value.trim(),
           condition: document.getElementById('snCond').value || null,
           autoInclude: document.getElementById('snAuto').checked,
+          emphasis: document.getElementById('snEmph').checked,
           active: document.getElementById('snActive').checked,
         };
         if (!body.title || !body.body) return showErr('Title and note text are both required.');

@@ -46,6 +46,8 @@ const NoteSchema = z.object({
     .enum(['DEPOSIT_SHOWN', 'DEPOSIT_HIDDEN'])
     .nullish()
     .transform((v) => v ?? null),
+  /** Print the note in an outlined box on the proposal. See StandardNote.emphasis. */
+  emphasis: z.boolean().default(false),
   sortOrder: z.number().int().default(0),
   active: z.boolean().default(true),
 });
