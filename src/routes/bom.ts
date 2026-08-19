@@ -174,12 +174,54 @@ export function registerBomRoutes(app: FastifyInstance): void {
     active: z.boolean().optional(),
   });
 
+  /**
+   * The ship-to address book, scoped to one order by default.
+   *
+   * Two kinds of address live in this table. One typed by hand (`source` null) is
+   * GENERAL — a job trailer, an installer's warehouse — and is meant to be reused
+   * across orders. One the customer confirmed through the portal (`source` 'PORTAL')
+   * belongs to exactly ONE order and is meaningless on any other.
+   *
+   * The picker used to offer every row to every order, so another customer's
+   * confirmed address sat one click away from this order's vendor sheet, with the
+   * order number inside the address NAME as the only thing preventing the mistake.
+   * Pass `orderId` and the portal addresses of other orders are left out; pass
+   * `all=true` to see them anyway. An address a section on this order already points
+   * at is always included, whatever its source — hiding the current selection would
+   * silently reset the field.
+   *
+   * Each row carries `scope`: 'order' for this order's own, 'general' for the rest.
+   */
   app.get('/ship-to-addresses', read, async (req) => {
-    const q = req.query as { includeInactive?: string };
-    return prisma.shipToAddress.findMany({
+    const q = req.query as { includeInactive?: string; orderId?: string; all?: string };
+    const rows = await prisma.shipToAddress.findMany({
       where: q.includeInactive === 'true' ? {} : { active: true },
       orderBy: { name: 'asc' },
     });
+    const orderId = (q.orderId || '').trim();
+    if (!orderId) return rows.map((a) => ({ ...a, scope: 'general' }));
+
+    const [sections, subs] = await Promise.all([
+      prisma.bomVendorSection.findMany({
+        where: { orderId },
+        select: { shipToAddressId: true },
+      }),
+      prisma.portalDeliverySubmission.findMany({
+        where: { orderId },
+        select: { shipToAddressId: true },
+      }),
+    ]);
+    const mine = new Set(
+      [...sections, ...subs].map((x) => x.shipToAddressId).filter(Boolean) as string[],
+    );
+    const scoped = rows.map((a) => ({
+      ...a,
+      scope: mine.has(a.id) ? 'order' : 'general',
+    }));
+    if (q.all === 'true') return scoped;
+    // A portal address that is not this order's is another customer's confirmed
+    // delivery. It is never a valid answer here.
+    return scoped.filter((a) => a.scope === 'order' || a.source !== 'PORTAL');
   });
 
   app.post('/ship-to-addresses', handoff, async (req, reply) => {

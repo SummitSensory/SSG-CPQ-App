@@ -9342,6 +9342,12 @@
   var bomBrands = [];
   /** The ship-to address book, loaded with the sections that offer it. */
   var bomShipToAddresses = [];
+  /**
+   * Off by default: the list is scoped to this order, so another customer's
+   * portal-confirmed address cannot be picked by accident. On, it shows every saved
+   * address including other orders'.
+   */
+  var bomAllAddresses = false;
 
   function bomFieldStyle(w, locked) {
     return 'width:' + (w || '100%') + ';padding:7px 9px;border:1px solid ' + (locked ? '#e7e8e3' : '#dcded7') +
@@ -9358,7 +9364,8 @@
       bomSectionData = r.ok ? ((await r.json()).sections || []) : [];
       var rb = await authed('/powder-colors');
       bomBrands = rb.ok ? ((await rb.json()).brands || []) : [];
-      var ra = await authed('/ship-to-addresses');
+      var ra = await authed('/ship-to-addresses?orderId=' + encodeURIComponent(order.id) +
+        (bomAllAddresses ? '&all=true' : ''));
       bomShipToAddresses = ra.ok ? ((await ra.json()) || []) : [];
     } catch (e) { box.innerHTML = '<div class="err">Could not load the Bill of Materials.</div>'; return; }
 
@@ -9371,6 +9378,8 @@
         '<div class="muted" style="font-size:12.5px;max-width:620px;line-height:1.55;">One section per vendor. Each has its own submission date, questions and send history, and locks on its own when you confirm it.</div>' +
         '<label style="display:flex;gap:7px;align-items:center;font-size:12.5px;color:#5c6157;cursor:pointer;white-space:nowrap;" title="Prints the rest of that vendor’s catalogue at quantity 0, like a full order form">' +
           '<input type="checkbox" id="bomZeroQty"> Include zero-quantity parts</label>' +
+        '<label style="display:flex;gap:7px;align-items:center;font-size:12.5px;color:#5c6157;cursor:pointer;white-space:nowrap;" title="Off, the ship-to list shows this order’s confirmed address and the reusable ones. On, it also shows addresses confirmed by other orders’ customers.">' +
+          '<input type="checkbox" id="bomAllAddr"' + (bomAllAddresses ? ' checked' : '') + '> Show every saved address</label>' +
         (canHandoff
           ? '<button class="link-btn" id="bomApplyBuild" title="Re-read Catalog → BOM build: explode any part declared as made of other parts, and move free-issue parts onto the vendor they ship to" style="width:auto;padding:8px 14px;white-space:nowrap;">Apply BOM build rules</button>'
           : '') +
@@ -9711,13 +9720,22 @@
    * an order and re-typing it is how two sheets end up disagreeing.
    */
   function shipToSelect(s, locked, dis) {
-    var saved = (bomShipToAddresses || []).map(function (a) {
+    // Grouped by whose address it is. An address confirmed by THIS order's customer
+    // is the one almost always wanted; a hand-typed job trailer is reusable; another
+    // order's confirmed address is only here when "show every saved address" is on.
+    var opt = function (a) {
       return '<option value="addr:' + a.id + '"' + (s.shipToAddressId === a.id ? ' selected' : '') + '>' + esc(a.name) + '</option>';
-    }).join('');
+    };
+    var list = bomShipToAddresses || [];
+    var ours = list.filter(function (a) { return a.scope === 'order'; }).map(opt).join('');
+    var general = list.filter(function (a) { return a.scope !== 'order' && !a.source; }).map(opt).join('');
+    var others = list.filter(function (a) { return a.scope !== 'order' && a.source; }).map(opt).join('');
     return '<select class="secShipTo" data-id="' + s.id + '" style="' + bomFieldStyle(null, locked) + '"' + dis + '>' +
       '<option value="CUSTOMER"' + (!s.shipToAddressId && s.shipTo !== 'SUMMIT' ? ' selected' : '') + '>Customer site</option>' +
       '<option value="SUMMIT"' + (!s.shipToAddressId && s.shipTo === 'SUMMIT' ? ' selected' : '') + '>Summit Sensory Gym</option>' +
-      (saved ? '<optgroup label="Saved addresses">' + saved + '</optgroup>' : '') +
+      (ours ? '<optgroup label="This order">' + ours + '</optgroup>' : '') +
+      (general ? '<optgroup label="Saved addresses">' + general + '</optgroup>' : '') +
+      (others ? '<optgroup label="Other orders — check before using">' + others + '</optgroup>' : '') +
       '<option value="new">+ New ship-to address…</option>' +
     '</select>';
   }
@@ -9849,6 +9867,12 @@
 
     // Re-applies Catalog → BOM build to an order that is already locked, so a kit or a
     // free-issue part configured today reaches an order locked last week. Idempotent.
+    var allAddr = document.getElementById('bomAllAddr');
+    if (allAddr) allAddr.addEventListener('change', function () {
+      bomAllAddresses = allAddr.checked;
+      reload();
+    });
+
     var applyBtn = document.getElementById('bomApplyBuild');
     if (applyBtn) applyBtn.addEventListener('click', async function () {
       applyBtn.disabled = true;
