@@ -28,12 +28,24 @@ const EnvSchema = z
     // ---- Customer portal ----
     // Where the portal is served, used to build the customer's colour-selection
     // link. Unset means the link is returned to staff as a token to paste.
-    PORTAL_BASE_URL: z.string().url().optional(),
-    // Whether the CRM collects colour choices from the customer, replacing the
+    PORTAL_BASE_URL: z.string().url().optional(), // Whether the CRM collects colour choices from the customer, replacing the
     // Jotform. `shadow` records the customer's picks and applies nothing, which is
     // how the path is proven on a real order beside the existing form. Only `live`
     // may write to a procurement line. Off is the default and the safe state.
     PORTAL_COLOR_SELECTION: z.enum(['off', 'shadow', 'live']).default('off'),
+
+    // ---- Scheduled work ----
+    // Bearer token Vercel Cron sends on its own scheduled requests. Unset means
+    // /cron/* refuses outright rather than running unauthenticated — an open
+    // endpoint that retries integration work is a way for anyone to hammer
+    // monday's API.
+    CRON_SECRET: z.string().min(16).optional(),
+
+    // Where monday should post its webhooks. Set this explicitly in production:
+    // a preview deployment's own URL is not where production's subscriptions
+    // should point. VERCEL_URL is used as a fallback so previews can self-register.
+    PUBLIC_BASE_URL: z.string().url().optional(),
+    VERCEL_URL: z.string().min(1).optional(),
 
     // Microsoft Entra ID (Azure AD) single sign-on. Optional: when unset the
     // app runs with email + password only.
@@ -110,6 +122,10 @@ const EnvSchema = z
     // Every vendor BOM is silently copied here, so there is one internal record of
     // what left the building. Blank disables the copy.
     BOM_BCC_EMAIL: z.string().email().optional(),
+    // Where unhandled server faults are emailed. Comma-separated for several.
+    // Falls back to BOM_BCC_EMAIL; with neither set, faults are logged only — which
+    // means the first report of an outage is somebody noticing.
+    ALERT_EMAIL: z.string().min(3).optional(),
     // Where a financing request goes. Ryan Capital's contact of record.
     FINANCE_PARTNER_EMAIL: z.string().email().default('ckinsey@ryancapital.com'),
 

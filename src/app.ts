@@ -41,6 +41,8 @@ import { registerCustomerNoteRoutes } from './routes/customerNotes.js';
 import { registerFollowUpRoutes } from './routes/followUps.js';
 import { registerOutlookRoutes } from './routes/outlook.js';
 import { registerFormulaRoutes } from './routes/formulas.js';
+import { registerCronRoutes } from './routes/cron.js';
+import { verifySchemaOnBoot } from './lib/schemaCheck.js';
 import { registerPortalRoutes } from './routes/portal.js';
 import { registerWebRoutes } from './routes/web.js';
 
@@ -122,7 +124,16 @@ export function buildApp(): FastifyInstance {
   registerFollowUpRoutes(app);
   registerOutlookRoutes(app);
   registerFormulaRoutes(app);
+  registerCronRoutes(app);
   registerPortalRoutes(app);
   registerWebRoutes(app);
+
+  // Is the database shaped the way this build expects? Not awaited — a slow or
+  // failing check must not delay the server accepting requests — and it never
+  // throws. It emails when the schema is behind the code, which is the fault that
+  // took the orders screen down: Prisma selects every column it knows about, so one
+  // missing column breaks every query on that table.
+  void verifySchemaOnBoot();
+
   return app;
 }

@@ -5,10 +5,71 @@ and writes monday, and the CRM is already subscribed to a signed monday webhook.
 Nothing here adds infrastructure; it closes the return leg of a loop that already
 runs one way.
 
-Files: `prisma/schema.portal-delivery.prisma`, `prisma/migrations/0057_portal_delivery`,
-`src/integrations/monday/portalDelivery.ts`, `src/routes/integrations.ts`,
-`src/handoff/bomSections.ts`, `src/handoff/freightRfq.ts`, `src/portal/colorSelection.ts`,
-`src/routes/portal.ts`, `src/config/env.ts`, `src/app.ts`.
+Files: `prisma/schema.prisma`, `prisma/migrations/0057_portal_delivery`,
+`prisma/schema.portal-delivery.prisma` (annotated reference),
+`src/integrations/monday/portalDelivery.ts`,
+`src/integrations/monday/webhookRegistration.ts`, `src/routes/integrations.ts`,
+`src/routes/cron.ts`, `src/handoff/bomSections.ts`, `src/handoff/freightRfq.ts`,
+`src/portal/colorSelection.ts`, `src/routes/portal.ts`, `src/config/env.ts`,
+`src/app.ts`, `vercel.json`.
+
+New environment variables: `CRON_SECRET` and `PUBLIC_BASE_URL` (both needed for the
+automation in §3 and §6), and `ALERT_EMAIL` (§8). `PORTAL_COLOR_SELECTION` defaults
+to `off`; `MONDAY_DELIVERY_BOARD_ID` and `PORTAL_BASE_URL` are optional.
+
+---
+
+## 8. Knowing when something breaks
+
+Added after the `portalOrderItemId` outage, where the orders screen returned 500 on
+every request and the only record was a log nobody was reading.
+
+**What caused that outage.** Migration 0057 did not run, but the code that expects
+its columns deployed. Prisma selects every column its client knows about, so one
+missing column broke _every_ `acceptedOrder` query in the application — including
+the orders list, which has nothing to do with delivery details. This is worth
+internalising, because it means an unrun migration is never a small problem
+confined to its own feature.
+
+Three changes, in order of how much they matter:
+
+**1. Migrations run in the build.** `vercel.json` runs `prisma migrate deploy`
+between `generate` and `build`, so the schema can no longer lag the code it was
+generated from. This is the actual fix; the other two are for the cases it cannot
+cover — a migration applied to the wrong database, or a manual change to production.
+
+**2. Unhandled faults are emailed.** `src/lib/alerts.ts`, wired into the existing
+error handler. Set `ALERT_EMAIL` (comma-separated for several; falls back to
+`BOM_BCC_EMAIL`). Requires `RESEND_API_KEY`, which is already set.
+
+Three things keep it from becoming noise, because an alert people mute is worse than
+no alert:
+
+- Only genuine faults. A 4xx, a validation error, a QuickBooks reconnect prompt are
+  all handled states and none of them alert.
+- Deduplicated by fingerprint, one email per hour per distinct fault. A route broken
+  for every request is one email, not four hundred.
+- Fire-and-forget. Alerting never throws and never delays a response.
+
+Common Prisma codes are translated into a title and a remedy rather than a stack
+trace. `P2022` — the one from the outage — arrives as _"Database schema is behind the
+deployed code"_ with `pnpm db:migrate:deploy` in the body.
+
+**3. `GET /health/schema`.** Compares the database against the columns and tables
+this build requires and returns **503** when it is behind, with the remedy in the
+body. Also run at boot (alerting if it fails) and in the daily cron. Point an uptime
+monitor at it — Better Stack, Pingdom, or Vercel's own monitoring — and the condition
+is caught before anybody opens the affected screen.
+
+When a migration adds a column the application cannot work without, add it to
+`REQUIRED_COLUMNS` in `src/lib/schemaCheck.ts`. That list is what makes the check
+meaningful.
+
+> **What this does not cover.** A fault that never reaches the Fastify error handler
+> — a build failure, a function timeout, a crash during startup — is not emailed by
+> any of the above. Vercel emails you on failed deployments already; for the rest,
+> the uptime monitor on `/health/schema` is the backstop, because a dead function
+> fails that check by not answering at all.
 
 ---
 
@@ -26,8 +87,15 @@ what the customer actually said versus what reached the sheet.
 See §4 for what "RFQ ship-to" means, which is what you asked.
 
 **Colour selection is built and switched off.** `PORTAL_COLOR_SELECTION=off` is
-the default and refuses every endpoint. §5 is the parallel-run plan that has to
-pass before it moves.
+the default and refuses every endpoint. §5 is the parallel-run plan. The
+administration objection is resolved — Bryan edits the Jotforms himself, so the
+flexibility being traded away is his own.
+
+**Templates live in the CRM — no second database.** §7, including what that costs
+today, which is nothing.
+
+**The manual steps are automated.** The monday subscriptions register themselves
+(§3) and a daily cron retries everything waiting (§6).
 
 ---
 
@@ -59,17 +127,40 @@ would make rung 1 answer on the first submission for every order.
 
 ## 3. Turning delivery details on
 
+> **Migrations must run before or with the deploy, not after.** Prisma selects every
+> column its client knows about, so the moment code carrying
+> `AcceptedOrder.portalOrderItemId` is live against a database without that column,
+> _every_ `acceptedOrder` query fails — including the orders list, which has nothing
+> to do with this feature. `vercel.json` now runs `prisma migrate deploy` in the
+> build command for exactly this reason; before that change, a deploy without a
+> manual migration run took the orders screen down with `P2022`.
+
 1. Run migration 0057. Every change is additive; nothing existing is rewritten.
 2. `pnpm db:generate`. The models and the new columns are already in
    `prisma/schema.prisma`; `schema.portal-delivery.prisma` is kept only as the
    annotated reference, matching `schema.esign.prisma` and `schema.vendor-colors.prisma`.
-3. In monday: **Delivery & Site Details Submissions** board (18421779422) →
-   Integrate → Webhooks → add two subscriptions to
-   `https://crm.summitsensory.com/integrations/monday/webhook`:
-   _when an item is created_ and _when a column changes_. The endpoint answers
-   monday's `challenge` handshake already.
-4. No new env var is needed. `MONDAY_DELIVERY_BOARD_ID` only exists in case that
-   board is ever rebuilt.
+3. **Register the webhooks from the CRM**, rather than clicking through monday's
+   settings panel:
+
+   ```bash
+   curl -X POST ".../integrations/monday/webhooks/sync?dryRun=true"   # report
+   curl -X POST ".../integrations/monday/webhooks/sync"               # register
+   curl ".../integrations/monday/webhooks"                            # verify: ready=true
+   ```
+
+   Needs `PUBLIC_BASE_URL` set (e.g. `https://crm.summitsensory.com`) so monday is
+   given the right host — a preview deployment's own URL is not where production's
+   subscriptions should point. Idempotent, so it is safe on every deploy, and the
+   daily cron re-asserts it: a subscription deleted in monday by accident repairs
+   itself within a day instead of silently swallowing every submission.
+
+   Two subscriptions are created on the submissions board: `create_item` and
+   `change_column_value`. Both are needed — the portal creates the row and _then_
+   writes its ~30 columns one at a time, so the create event carries no address at
+   all. Sync never deletes anything; webhooks pointing elsewhere are reported as
+   `foreign` and removed by hand with `DELETE /integrations/monday/webhooks/:id`.
+
+4. Set `CRON_SECRET` (any 16+ char random string) so the daily sweep can run. See §6.
 5. Check Settings → Integrations → monday: `portalDelivery.configured` should be
    true and the board id should match.
 
@@ -105,13 +196,15 @@ case if it looks odd in practice.
 | `POST /integrations/monday/portal-delivery/:id/retry`            | Re-run a parked one after the order was imported           |
 | `POST /integrations/monday/portal-delivery/:id/link` `{orderId}` | Attach a parked one to an order, and record the link       |
 | `POST /integrations/monday/portal-delivery/retry-pending`        | Sweep everything waiting. Safe on a schedule               |
+| `GET /integrations/monday/webhooks`                              | Which subscriptions exist, against which should            |
+| `POST /integrations/monday/webhooks/sync`                        | Register whatever is missing. Idempotent                   |
 
 Statuses: `INCOMPLETE` (columns still landing — normal for a few seconds),
 `PARKED` (nowhere to put it yet), `APPLIED`, `CONFLICT` (every section already
 submitted), `FAILED`.
 
-Worth a daily cron on `retry-pending`; without one, a parked address waits for
-somebody to open the screen.
+The daily cron (§6) sweeps all three non-final states, so nothing waits on somebody
+opening this screen.
 
 ---
 
@@ -167,12 +260,17 @@ Applying is still a deliberate act by staff — a colour reaching a vendor sheet
 without anyone here looking at it is a failure the Jotform flow already has, and
 worth not reproducing.
 
-What it does worse, which is the risk you flagged: **a non-developer can edit a
-Jotform.** Palette content is administered in the CRM, but the question wording and
-the page around it are code. Confirm who at Summit edits those forms today before
-committing.
+What it does worse: **a non-developer cannot edit the question wording.** Palette
+content is administered in the CRM, but the page and its copy are code. Bryan
+administers the Jotforms himself, so this trade is between two things the same
+person maintains — the flexibility being given up is his own, and he can edit
+either. That removes the reason to keep Jotform. What remains to prove is only
+whether the data is right, which is what the parallel run is for.
 
 ### The parallel run
+
+Still worth doing once, but for correctness rather than for the administration
+question, which is now answered.
 
 Pick one live order with colour-bearing lines.
 
@@ -184,53 +282,72 @@ Pick one live order with colour-bearing lines.
    response, line by line.
 
 It passes if: every line the shop needs a colour for was offered; the customer
-could express what they wanted without emailing; the two answers agree; and the
-person who administers Jotform today can administer the palettes.
+could express what they wanted without emailing; and the two answers agree.
 
-If it passes, set `live`, apply from the order screen, and keep Jotform running
-one more order before retiring it. If it fails on the administration point rather
-than the data, that is an argument for keeping Jotform, not for fixing the code.
+If it passes, set `live`, apply from the order screen, and keep Jotform running one
+more order before retiring it. If a line the shop needs a colour for was _not_
+offered, that is a missing colour spec on the product (Administration →
+Manufacturers → Colours) rather than a fault in this code — fix the spec and re-mint
+the link.
 
 ---
 
-## 6. R7 — the portal's second database
+## 6. The daily sweep
 
-You asked for help rather than an answer, so here is the shape of it.
+`vercel.json` declares one cron: `POST /cron/portal-delivery` at 13:00 UTC (07:00
+MT), which does two things.
 
-**The decision is yours, and it has to be made before the portal provisions
-anything.** Not because a Postgres is expensive, but because unwinding one later
-means migrating live templates out of a database people are already writing to.
-This is cheap now and annoying in three months.
+1. **Retries everything waiting** — up to 50 submissions in `PARKED`, `INCOMPLETE`
+   or `FAILED`. An address that arrived before its order gets picked up the morning
+   after the order is imported, with nobody watching.
+2. **Re-asserts the monday subscriptions.** Cheap and idempotent, and it means a
+   webhook deleted in monday by accident repairs itself within a day rather than
+   silently swallowing every submission until someone notices.
 
-**What the portal actually needs a database for.** Email templates, and the state
-that goes with them — which template, which version, when it was sent, to whom.
+Authenticated on `CRON_SECRET`, which Vercel sends as a bearer token on its own
+scheduled requests. **Unset, the endpoint refuses outright** — an open endpoint that
+retries integration work is a way for anyone to hammer monday's API. Set it in
+Vercel's environment variables for production and preview both.
 
-**The argument against a second one.** A template in a separate database cannot
-reference order data. It can say "your order has shipped"; it cannot say "your Soar
-frame ships Tuesday and the mats follow on the 14th" without another integration
-hop to fetch the order — and that hop goes back through monday, which is the
-brittleness this whole exercise is trying to reduce. Templates in the CRM have the
-order sitting right there, and the CRM already has the follow-up template
-machinery (`src/email/followUpTemplates.ts`, migration 0053) to build on.
+It never returns 500. A failing cron endpoint is a Vercel alert with no reader; what
+failed is in the response body and the logs, and the sweep runs again tomorrow.
+Everything it calls is idempotent, so a double-fire is harmless.
 
-**The argument for.** Deployment independence. The portal ships on its own
-schedule, and a portal that needs the CRM up to render an email has a new
-dependency on a system it currently does not touch. If the templates are genuinely
-generic — "here is your invite", "here is your link" — that independence is worth
-something and the data poverty costs nothing.
+Note for Hobby-plan limits: this is one cron, and daily is within them. If more
+scheduled work is added later, add it to this endpoint rather than declaring a
+second cron.
 
-**How to decide it in one question.** Will any portal email ever need to say
-something specific about the order — a part, a ship date, a vendor, a figure?
+---
 
-- If yes: put the templates in the CRM, and give the portal a read endpoint. The
-  second database is a wall you will spend a year passing data over.
-- If no, and they stay generic: a small portal-side store is fine, and you keep the
-  deploy independence.
+## 7. R7 — the portal's second database: decided, no second database
 
-My read is that it is yes, because the portal's whole purpose is telling a customer
-about their specific order — but that is a product question about what those emails
-will say, and you know that better than the code does.
+Templates live in the CRM. The reasoning below is kept because it is the argument
+to re-read if anyone proposes a portal-side store later.
 
-**Whichever way it goes, one rule: templates live in exactly one place.** The
-expensive outcome is not either database. It is two, with the same template
-half-maintained in both.
+**What using the software today costs, given this decision: nothing.** That is the
+point worth being clear about. The decision is a _decision not to build_ a second
+store — there is no schema change, no migration, and no code in this changeset that
+depends on it. Nothing about current operation changes, and no work already done is
+wasted. What it buys is that when portal emails are built, they are built once, in
+the place that already has the order.
+
+The cost is deferred and small: portal email work will need a CRM endpoint to fetch
+a rendered template or the order data behind it, which is a day of work at the time
+rather than now. The alternative cost — migrating live templates out of a database
+people are already writing to — is the one that is not small.
+
+**Why.** A template in a separate database cannot reference order data. It can say
+"your order has shipped"; it cannot say "your Soar frame ships Tuesday and the mats
+follow on the 14th" without another integration hop to fetch the order, and that hop
+goes back through monday, which is the brittleness this whole exercise is reducing.
+The CRM already has follow-up template machinery (`src/email/followUpTemplates.ts`,
+migration 0053) to build on.
+
+**What was given up.** Deployment independence. A portal that renders an email from
+CRM data has a new dependency on a system it currently does not touch, so a CRM
+outage becomes a portal outage for that one path. Worth mitigating when the time
+comes: cache the rendered template, or fail to a generic version, rather than
+blocking the send.
+
+**The rule to hold.** Templates live in exactly one place. The expensive outcome was
+never either database — it is two, with the same template half-maintained in both.

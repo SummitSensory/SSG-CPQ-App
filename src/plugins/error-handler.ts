@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { AppError } from '../lib/errors.js';
+import { sendAlert, describeFault } from '../lib/alerts.js';
 import { QboApiError, QboAuthError } from '../integrations/quickbooks/http.js';
 
 export function registerErrorHandler(app: FastifyInstance): void {
@@ -38,6 +39,20 @@ export function registerErrorHandler(app: FastifyInstance): void {
     }
 
     req.log.error({ err: error }, 'unhandled error');
+
+    // Anything reaching here is a genuine fault rather than a handled state, so it
+    // is worth waking someone. Fire-and-forget and deduplicated by fingerprint — a
+    // route broken for every request sends one email an hour, not one per request.
+    const { title, detail } = describeFault(error);
+    sendAlert({
+      title,
+      detail,
+      err: error,
+      route: req.routeOptions?.url ?? req.url,
+      method: req.method,
+      context: { reqId: req.id },
+    });
+
     return reply.status(500).send({ error: 'INTERNAL', message: 'Internal server error' });
   });
 }
