@@ -561,6 +561,26 @@
     showBuildStamp();
     document.getElementById('pwdBtn').addEventListener('click', openPasswordForm);
     document.getElementById('profBtn').addEventListener('click', function () { openProfileForm(user); });
+    /* Freight true-up lives in public/freight-trueup.js. It borrows the shell's
+     * helpers rather than reimplementing them, so styling, auth, modals and money
+     * formatting stay identical to everything around it — the list below is the whole
+     * of what it depends on. Guarded because a client script that fails to load must
+     * not take the shell with it: the dashboard block and the workspace simply won't
+     * be there, which is the same failure mode as never wiring it up. */
+    if (window.FreightTrueUp) {
+      window.FreightTrueUp.init({
+        esc: esc,
+        authed: authed,
+        titleCase: titleCase,
+        fmtDate: fmtDate,
+        openModal: openModal,
+        goToProposals: function (u) {
+          activateNav('proposals');
+          document.getElementById('viewTitle').textContent = 'Proposals';
+          renderProposals(u || user);
+        },
+      });
+    }
     renderDashboard(user);
   }
 
@@ -684,6 +704,7 @@
     var canWrite = hasRole(PROP_WRITE, user.role);
     document.getElementById('view').innerHTML =
       '<div id="dashKpis" class="grid"><div class="card"><div class="k">Loading…</div></div></div>' +
+      '<div id="ftuDash"></div>' +
       '<div class="section-title">Needs your attention</div>' +
       '<div id="dashAttention"><div class="muted" style="padding:18px;">Loading…</div></div>' +
       '<div class="section-title">Recently updated proposals</div>' +
@@ -707,6 +728,21 @@
     try { var r = await fetch('/health'); var el = document.getElementById('apiStatus'); if (el) el.innerHTML = r.ok ? '<span class="dot ok"></span>Online' : '<span class="dot bad"></span>Error ' + r.status; }
     catch (e) { var el2 = document.getElementById('apiStatus'); if (el2) el2.innerHTML = '<span class="dot bad"></span>Offline'; }
     loadDashboard(user);
+    /* Freight outstanding — jobs that went out without final freight costs. Filled
+     * after loadDashboard is kicked off, so a slow /freight/queue never holds up the
+     * rest of the dashboard, and left empty when nothing is outstanding:
+     * dashboardSection returns '' rather than an empty card, so the block disappears
+     * instead of sitting there saying nothing. Clicking a row opens the workspace. */
+    if (window.FreightTrueUp) {
+      try {
+        var ftuHtml = await window.FreightTrueUp.dashboardSection(user);
+        var ftuHost = document.getElementById('ftuDash');
+        if (ftuHost && ftuHtml) {
+          ftuHost.innerHTML = ftuHtml;
+          window.FreightTrueUp.bindDashboard(user);
+        }
+      } catch (e) {}
+    }
   }
 
   async function loadDashboard(user) {
@@ -887,6 +923,11 @@
         '</div>' +
         '<div id="bRfqRail"></div>' +
       '</div>' +
+      /* Freight true-up — the same entry form as the standalone workspace, embedded
+       * here because this is the screen the freight owner is already on when a vendor
+       * invoice lands. One implementation, two places it can be reached from. */
+      '<div class="section-title">Freight true-up</div>' +
+      '<div id="ftuReviewPanel"><div class="muted" style="padding:14px 0;">Loading freight\u2026</div></div>' +
       '<div class="section-title">Line items</div>' +
       '<div style="display:flex;flex-direction:column;gap:6px;">' +
         (covLines.length
@@ -897,6 +938,16 @@
     document.getElementById('frBack').addEventListener('click', function () { renderProposals(user); });
     document.getElementById('frDoc').addEventListener('click', function () { previewProposal(p, v); });
     loadRfqPanel(true);
+    /* Mounted last, and guarded: the true-up panel reads its own endpoint, and a
+     * failure there must leave the RFQ rail above it working. Its container is
+     * emptied rather than left saying "Loading" if the script never loaded. */
+    if (window.FreightTrueUp) {
+      try { await window.FreightTrueUp.mountPanel('ftuReviewPanel', p.id, v.id, user); }
+      catch (e3) { document.getElementById('ftuReviewPanel').innerHTML = '<div class="err">Could not load the freight true-up.</div>'; }
+    } else {
+      var ftuSlot = document.getElementById('ftuReviewPanel');
+      if (ftuSlot) { ftuSlot.previousElementSibling.remove(); ftuSlot.remove(); }
+    }
   }
 
   /** One product line on the freight review, with its request state. */

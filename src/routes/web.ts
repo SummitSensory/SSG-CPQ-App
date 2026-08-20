@@ -58,17 +58,22 @@ const CLIENT_SCRIPTS = ['app.js', 'vendor-colors.js', 'portal-delivery.js'];
  * Scripts injected into the shell as it is served, rather than written into
  * index.html.
  *
- * index.html and app.js are the two files most likely to be edited by hand or
- * replaced wholesale, and a <script> tag added to index.html is silently lost the
- * moment either is overwritten from an older copy — the app still renders, the
- * feature just isn't there. Anything listed here cannot be lost that way: the tag is
- * added at serve time from this list, so shipping the script file and this line is
- * the whole install.
+ * EMPTY ON PURPOSE — do not add to this list. In production this list cannot work.
+ * Vercel matches files in public/ before it applies the rewrites in vercel.json, so
+ * a request for / is answered by public/index.html straight from the CDN and this
+ * function is never called. Injection only ever ran in local dev, which made a
+ * missing <script> tag look fine locally and vanish in production: that is exactly
+ * how the portal delivery panel shipped invisible.
  *
- * Self-contained client features only — a script here must not assume app.js will
- * call it. portal-delivery.js mounts itself.
+ * A client script needs three things in the same commit instead:
+ *   1. the file in public/
+ *   2. its route in CLIENT_SCRIPTS below
+ *   3. a <script> tag in public/index.html
+ *
+ * The mechanism is kept because it is the only way to add a tag on a host that does
+ * serve the shell through Fastify. It is not that host today.
  */
-const INJECTED_SCRIPTS = ['portal-delivery.js'];
+const INJECTED_SCRIPTS: string[] = [];
 
 /** Cache-buster for the injected tags: the deploy's own commit, when it has one. */
 const BUILD_TAG = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 8) || String(Date.now());

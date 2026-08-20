@@ -502,6 +502,26 @@
       <div style="padding: 40px; text-align: center; color: #909689">Loading…</div>
     </div>
     <script src="/vendor-colors.js?v=1"></script>
-    <script src="/app.js?v=61"></script>
+    <!--
+      Freight true-up (dashboard "Freight outstanding" block + the per-job workspace).
+      Loaded BEFORE app.js so window.FreightTrueUp exists when the shell boots and
+      calls its init() with the host helpers.
+    -->
+    <script src="/freight-trueup.js?v=1"></script>
+    <script src="/app.js?v=62"></script>
+    <!--
+      Portal delivery submissions panel (Administration → Integrations).
+
+      This tag MUST live here, not be injected at serve time. Vercel matches files
+      in public/ before it applies the rewrites in vercel.json, so a request for /
+      is answered by this file straight from the CDN and the Fastify shell() that
+      adds INJECTED_SCRIPTS never runs. Without the tag the panel fails silently:
+      window.SSGPortalDelivery is undefined, app.js skips its mount, and the
+      Integrations screen renders with an empty #portalDeliveryPanel div.
+
+      Adding a client script is therefore three things in one commit: the file in
+      public/, its route in CLIENT_SCRIPTS (src/routes/web.ts), and a tag here.
+    -->
+    <script src="/portal-delivery.js?v=1"></script>
   </body>
 </html>
