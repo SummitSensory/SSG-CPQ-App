@@ -92,12 +92,17 @@ export async function pushReleasedProposal(input: {
       sections: true,
       items: true,
       expirationDate: true,
-      proposal: { select: { id: true, number: true, title: true, organizationId: true } },
+      proposal: {
+        select: { id: true, number: true, title: true, organizationId: true, opportunityId: true },
+      },
     },
   });
   if (!version?.proposal) return { pushed: false, skipped: 'proposal version not found' };
 
-  const { itemId, note } = await dealItemIdFor(version.proposal.organizationId);
+  const { itemId, note } = await dealItemIdFor(
+    version.proposal.organizationId,
+    version.proposal.opportunityId,
+  );
   if (!itemId) return { pushed: false, skipped: note };
 
   const totals = versionTotals(version.items, version.sections);
@@ -199,11 +204,17 @@ export async function uploadProposalPdfToMonday(input: {
 
   const version = await prisma.proposalVersion.findUnique({
     where: { id: input.versionId },
-    select: { id: true, proposal: { select: { number: true, organizationId: true } } },
+    select: {
+      id: true,
+      proposal: { select: { number: true, organizationId: true, opportunityId: true } },
+    },
   });
   if (!version?.proposal) return { uploaded: false, skipped: 'proposal version not found' };
 
-  const { itemId, note } = await dealItemIdFor(version.proposal.organizationId);
+  const { itemId, note } = await dealItemIdFor(
+    version.proposal.organizationId,
+    version.proposal.opportunityId,
+  );
   if (!itemId) return { uploaded: false, skipped: note };
 
   const name = (input.filename || version.proposal.number).replace(/\.pdf$/i, '');

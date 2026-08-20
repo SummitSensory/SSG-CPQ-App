@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { env } from '../config/env.js';
 import { logger } from '../lib/logger.js';
 import { retryPendingSubmissions } from '../integrations/monday/portalDelivery.js';
+import { verifySchemaOnBoot } from '../lib/schemaCheck.js';
 import { syncWebhooks } from '../integrations/monday/webhookRegistration.js';
 
 /**
@@ -34,6 +35,16 @@ export function registerCronRoutes(app: FastifyInstance): void {
 
     const started = Date.now();
     const out: Record<string, unknown> = { ranAt: new Date().toISOString() };
+
+    // 0. Is the database still shaped the way this build expects? Cheap, and it
+    //    catches a migration that did not run even when nobody has hit the affected
+    //    screen yet.
+    try {
+      out.schema = await verifySchemaOnBoot();
+    } catch (err) {
+      logger.error({ err }, 'cron: schema check failed');
+      out.schema = { error: String(err) };
+    }
 
     // 1. Anything waiting on something: an address that arrived before its order,
     //    a row whose columns had not landed, a failed read.
