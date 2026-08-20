@@ -52,7 +52,7 @@ const PUBLIC_PAGE = 'public, max-age=3600';
  * there. Both of the entries below were shipped with a <script> tag in index.html
  * and no route, so add the file here in the same commit that adds the tag.
  */
-const CLIENT_SCRIPTS = ['app.js', 'vendor-colors.js', 'portal-delivery.js'];
+const CLIENT_SCRIPTS = ['app.js', 'vendor-colors.js', 'portal-delivery.js', 'freight-trueup.js'];
 
 /**
  * Scripts injected into the shell as it is served, rather than written into
