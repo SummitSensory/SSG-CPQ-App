@@ -26,6 +26,7 @@ import {
   linkSubmission,
   retryPendingSubmissions,
   backfillFromBoard,
+  purgeAddresslessIncomplete,
   listSubmissions,
 } from '../integrations/monday/portalDelivery.js';
 import {
@@ -293,6 +294,15 @@ export function registerIntegrationRoutes(app: FastifyInstance): void {
       return reply.status(502).send({ error: 'MONDAY_QUERY_FAILED', detail: String(err) });
     }
   });
+
+  /**
+   * Drop the stored rows that have no address at all — board rows nobody filled in.
+   * Kept out of the sweep and behind a button: deleting records is a decision, and
+   * anything that ever carried an address is never touched.
+   */
+  app.delete('/integrations/monday/portal-delivery/incomplete', manage, async () =>
+    purgeAddresslessIncomplete(),
+  );
 
   // ----- Webhook subscriptions (registering ourselves with monday) -----
   //

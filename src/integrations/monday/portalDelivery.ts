@@ -905,6 +905,33 @@ async function notifyConflict(
   }
 }
 
+/**
+ * Delete the stored submissions that have no address at all.
+ *
+ * These are invite rows on the board that nobody has filled in. They were recorded
+ * by an earlier, more lenient backfill, and they cost something: the retry sweep
+ * re-reads every INCOMPLETE row from monday on each run, so a dozen empty rows are a
+ * dozen pointless API calls a day, forever.
+ *
+ * Only rows with no street AND no formatted address go. Anything that has ever
+ * carried an address stays, whatever its status — a record of something a customer
+ * actually submitted is not ours to throw away. Should a deleted row ever be filled
+ * in on the board, the webhook or the next backfill brings it back.
+ */
+export async function purgeAddresslessIncomplete(): Promise<{ deleted: number }> {
+  const res = await prisma.portalDeliverySubmission.deleteMany({
+    where: {
+      status: 'INCOMPLETE',
+      line1: null,
+      formattedAddress: null,
+      shipToAddressId: null,
+      orderId: null,
+    },
+  });
+  logger.info({ deleted: res.count }, 'portal delivery: purged address-less submissions');
+  return { deleted: res.count };
+}
+
 /** Recent submissions for the integrations screen, newest first. */
 export async function listSubmissions(limit = 100) {
   const rows = await prisma.portalDeliverySubmission.findMany({
@@ -928,6 +955,8 @@ export async function listSubmissions(limit = 100) {
     address: [r.line1, r.city, r.region, r.postalCode].filter(Boolean).join(', ') || null,
     addressConfirmedByCustomer: r.addressConfirmed,
     addressParsedFromFormatted: wasParsedFromFormatted(r.raw),
+    pocName: r.pocName,
+    pocPhone: r.pocPhone,
     shipToAddress: r.shipToAddress,
     sectionsUpdated: r.sectionsUpdated,
     skippedVendors: r.skippedVendors,
