@@ -54,6 +54,39 @@ const PUBLIC_PAGE = 'public, max-age=3600';
  */
 const CLIENT_SCRIPTS = ['app.js', 'vendor-colors.js', 'portal-delivery.js'];
 
+/**
+ * Scripts injected into the shell as it is served, rather than written into
+ * index.html.
+ *
+ * index.html and app.js are the two files most likely to be edited by hand or
+ * replaced wholesale, and a <script> tag added to index.html is silently lost the
+ * moment either is overwritten from an older copy — the app still renders, the
+ * feature just isn't there. Anything listed here cannot be lost that way: the tag is
+ * added at serve time from this list, so shipping the script file and this line is
+ * the whole install.
+ *
+ * Self-contained client features only — a script here must not assume app.js will
+ * call it. portal-delivery.js mounts itself.
+ */
+const INJECTED_SCRIPTS = ['portal-delivery.js'];
+
+/** Cache-buster for the injected tags: the deploy's own commit, when it has one. */
+const BUILD_TAG = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 8) || String(Date.now());
+
+/**
+ * The shell, with the injected script tags added before </body> — after app.js, so
+ * a feature script sees the client it decorates. Falls back to the file untouched if
+ * the closing tag ever moves.
+ */
+function shell(): string {
+  const html = file('index.html');
+  if (!INJECTED_SCRIPTS.length) return html;
+  const tags = INJECTED_SCRIPTS.map(
+    (name) => `    <script src="/${name}?v=${BUILD_TAG}"></script>`,
+  ).join('\n');
+  return html.includes('</body>') ? html.replace('</body>', `${tags}\n  </body>`) : html + tags;
+}
+
 /** Every static image the shell references. Anything not listed here 404s. */
 const IMAGES = [
   'logo.png',
@@ -89,10 +122,7 @@ const PUBLIC_PAGES: Array<{ route: string; file: string }> = [
 
 export function registerWebRoutes(app: FastifyInstance): void {
   app.get('/', async (_req, reply) =>
-    reply
-      .type('text/html; charset=utf-8')
-      .header('Cache-Control', NO_STORE)
-      .send(file('index.html')),
+    reply.type('text/html; charset=utf-8').header('Cache-Control', NO_STORE).send(shell()),
   );
 
   for (const name of CLIENT_SCRIPTS) {

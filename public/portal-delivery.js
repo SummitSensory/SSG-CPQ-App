@@ -8,8 +8,10 @@
  * see it: which confirmed addresses arrived, which are stuck and why, and a way to
  * link a parked one to its order without a console.
  *
- * window.SSGPortalDelivery.mount(hostElement, { authed })
- *   authed — app.js's fetch wrapper (bearer token + one transparent 401 refresh).
+ * It mounts ITSELF. The Integrations screen is rendered by app.js, which this file
+ * cannot edit from here, and an edit to app.js is one more file that has to land in a
+ * push to work — so instead this watches for that screen and appends the panel to it.
+ * window.SSGPortalDelivery.mount(host, { authed }) still exists for an explicit mount.
  */
 (function () {
   'use strict';
@@ -47,8 +49,52 @@
     );
   }
 
+  /* ── Auth ───────────────────────────────────────────────────────────────────
+   * app.js keeps its authed() inside a closure, so this cannot borrow it. Same
+   * contract, same token keys (ssg_at / ssg_rt), same single transparent refresh on
+   * a 401 — deliberately duplicated rather than shared, because the alternative is
+   * this file depending on an edit to a 13,000-line one. */
+  var AT = 'ssg_at',
+    RT = 'ssg_rt';
+
+  function api(path, opts) {
+    opts = opts || {};
+    var headers = {};
+    if (opts.body) headers['Content-Type'] = 'application/json';
+    var at = localStorage.getItem(AT);
+    if (at) headers['Authorization'] = 'Bearer ' + at;
+    return fetch(path, {
+      method: opts.method || 'GET',
+      headers: headers,
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+  }
+
+  async function refresh() {
+    var rt = localStorage.getItem(RT);
+    if (!rt) return false;
+    var r = await fetch('/auth/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken: rt }),
+    });
+    if (!r.ok) return false;
+    var d = await r.json();
+    // Only ever writes the two keys it just received — never clears the session on
+    // failure, because that is app.js's call to make, not this panel's.
+    if (d.accessToken) localStorage.setItem(AT, d.accessToken);
+    if (d.refreshToken) localStorage.setItem(RT, d.refreshToken);
+    return true;
+  }
+
+  async function defaultAuthed(path, opts) {
+    var r = await api(path, opts);
+    if (r.status === 401 && (await refresh())) r = await api(path, opts);
+    return r;
+  }
+
   function mount(host, deps) {
-    var authed = deps.authed;
+    var authed = (deps && deps.authed) || defaultAuthed;
     var state = {
       rows: [],
       orders: [],
@@ -368,6 +414,61 @@
         if (el.parentNode) el.parentNode.removeChild(el);
       }, 9000);
     }
+  }
+
+  /* ── Self-mount ──────────────────────────────────────────────────────────────
+   * app.js renders each screen by replacing #view's innerHTML and writing the screen
+   * name into #viewTitle. So: whenever the DOM settles, if the current screen is
+   * Integrations and the panel is not on it, append it.
+   *
+   * Re-mounts naturally. When app.js re-renders the screen it discards our container
+   * along with everything else, and the flag we set goes with it, so the next
+   * mutation puts a fresh panel back. If app.js has been edited to provide a
+   * #portalDeliveryPanel div, that div is used as-is instead of a second one. */
+  function onIntegrationsScreen() {
+    var t = document.getElementById('viewTitle');
+    return !!t && t.textContent.trim() === 'Integrations';
+  }
+
+  function tryMount() {
+    if (!onIntegrationsScreen()) return;
+    var view = document.getElementById('view');
+    if (!view) return;
+    var slot = document.getElementById('portalDeliveryPanel');
+    if (slot && slot.getAttribute('data-pd-mounted') === '1') return;
+    if (!slot) {
+      slot = document.createElement('div');
+      slot.id = 'portalDeliveryPanel';
+      view.appendChild(slot);
+    }
+    slot.setAttribute('data-pd-mounted', '1');
+    try {
+      mount(slot, {});
+    } catch (e) {
+      slot.removeAttribute('data-pd-mounted');
+      // A panel that fails must not take the Integrations screen with it.
+      console.error('portal delivery panel failed to mount', e);
+    }
+  }
+
+  var pending = null;
+  function schedule() {
+    if (pending) clearTimeout(pending);
+    pending = setTimeout(function () {
+      pending = null;
+      tryMount();
+    }, 120);
+  }
+
+  function watch() {
+    schedule();
+    new MutationObserver(schedule).observe(document.body, { childList: true, subtree: true });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', watch);
+  } else {
+    watch();
   }
 
   window.SSGPortalDelivery = { mount: mount };
