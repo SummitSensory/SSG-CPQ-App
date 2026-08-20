@@ -2,7 +2,7 @@ import { prisma } from '../../lib/prisma.js';
 import { env } from '../../config/env.js';
 import { logger } from '../../lib/logger.js';
 import { NotFoundError, ValidationError } from '../../lib/errors.js';
-import { fetchItemById } from './discovery.js';
+import { fetchAllItems, fetchItemById } from './discovery.js';
 import { ensureSections } from '../../handoff/bomSections.js';
 
 /**
@@ -776,6 +776,61 @@ export async function retryPendingSubmissions(limit = 25): Promise<{
     results[r] = (results[r] ?? 0) + 1;
   }
   return { checked: pending.length, results };
+}
+
+/**
+ * Sweep the whole submissions board and ingest every row that carries an address.
+ *
+ * Webhooks are not retroactive. A row created before the CRM subscribed to the
+ * board never fired an event, so it is invisible here no matter how many times the
+ * retry sweep runs — the retry sweep only looks at submissions the CRM has already
+ * stored. That is how a board full of confirmed addresses can sit beside a CRM that
+ * has seen one of them.
+ *
+ * This reads the board directly and puts every row through the ordinary ingest, so
+ * a backfill and a webhook produce the same result. Idempotent: a row already
+ * APPLIED with an unchanged address returns 'unchanged' and nothing is touched.
+ *
+ * `max` bounds the run so it finishes inside a serverless request; run it again to
+ * continue. Rows with no address at all are skipped without being stored, so an
+ * empty invite row on the board does not become a permanent INCOMPLETE record.
+ */
+export async function backfillFromBoard(max = 100): Promise<{
+  scanned: number;
+  ingested: number;
+  skipped: number;
+  results: Record<string, number>;
+  rows: Array<{ mondayItemId: string; name: string; result: IngestResult }>;
+}> {
+  if (!isPortalDeliveryConfigured()) {
+    return { scanned: 0, ingested: 0, skipped: 0, results: { failed: 1 }, rows: [] };
+  }
+
+  const items = await fetchAllItems(deliveryBoardId(), 250, Math.min(Math.max(max, 1), 500));
+  const results: Record<string, number> = {};
+  const rows: Array<{ mondayItemId: string; name: string; result: IngestResult }> = [];
+  let ingested = 0;
+  let skipped = 0;
+
+  for (const item of items) {
+    const f = readFields(item.text ?? {});
+    // Nothing to ship to and nothing to read one out of: an invite row, not a
+    // submission. Left alone rather than recorded as incomplete.
+    if (!f.line1 && !f.city && !f.formattedAddress) {
+      skipped += 1;
+      continue;
+    }
+    const result = await ingestDeliverySubmission(item.id);
+    results[result] = (results[result] ?? 0) + 1;
+    rows.push({ mondayItemId: item.id, name: item.name, result });
+    ingested += 1;
+  }
+
+  logger.info(
+    { scanned: items.length, ingested, skipped, results },
+    'portal delivery: board backfill',
+  );
+  return { scanned: items.length, ingested, skipped, results, rows };
 }
 
 /**

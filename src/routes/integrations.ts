@@ -25,6 +25,7 @@ import {
   processSubmission,
   linkSubmission,
   retryPendingSubmissions,
+  backfillFromBoard,
   listSubmissions,
 } from '../integrations/monday/portalDelivery.js';
 import {
@@ -267,6 +268,30 @@ export function registerIntegrationRoutes(app: FastifyInstance): void {
   app.post('/integrations/monday/portal-delivery/retry-pending', manage, async (req) => {
     const { limit } = req.query as { limit?: string };
     return retryPendingSubmissions(Number(limit) || 25);
+  });
+
+  /**
+   * Read the submissions board itself and ingest every row that has an address.
+   *
+   * The retry sweep above only revisits submissions the CRM has already stored, so
+   * it cannot see a row that never arrived — and a row created before the CRM
+   * subscribed to the board never fired a webhook, because webhooks are not
+   * retroactive. This is the one endpoint that closes that gap. Idempotent, so it is
+   * safe to run whenever the board and the CRM look like they disagree.
+   *
+   * `?max=` bounds the run (default 100, cap 500) to stay inside the request
+   * timeout; run it again to continue.
+   */
+  app.post('/integrations/monday/portal-delivery/backfill', manage, async (req, reply) => {
+    if (!isPortalDeliveryConfigured())
+      return reply.status(400).send({ error: 'MONDAY_TOKEN_MISSING' });
+    const { max } = req.query as { max?: string };
+    try {
+      return await backfillFromBoard(Number(max) || 100);
+    } catch (err) {
+      logger.error({ err }, 'portal delivery backfill failed');
+      return reply.status(502).send({ error: 'MONDAY_QUERY_FAILED', detail: String(err) });
+    }
   });
 
   // ----- Webhook subscriptions (registering ourselves with monday) -----
