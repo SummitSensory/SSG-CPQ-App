@@ -162,6 +162,147 @@ function readFields(text: Record<string, string | null | undefined>): DeliveryFi
   };
 }
 
+// --------------------------------------------------------------- address salvage
+//
+// Some portal submissions land with the discrete address columns empty and only
+// `Full Ship-To Address Formatted` filled — the portal wrote the formatted string
+// but not the per-field columns. The row is a real, customer-confirmed address; it
+// just fails `isUsable` on a missing street, so it sat INCOMPLETE forever and never
+// reached a vendor sheet.
+//
+// So: when the street is missing and a formatted address is present, split the
+// formatted string back into fields. Only EMPTY fields are filled — anything monday
+// actually sent always wins — and the salvage has to produce a street and a city or
+// it is discarded and the row stays INCOMPLETE. A flag is written into `raw` so the
+// address record says on its face that the street was read out of the formatted
+// column rather than confirmed field by field.
+
+/** Marker left in `raw` when the fields below came out of the formatted string. */
+const PARSED_FLAG = '_addressParsedFromFormatted';
+
+const COUNTRIES = new Set([
+  'united states',
+  'united states of america',
+  'usa',
+  'us',
+  'u.s.',
+  'u.s.a.',
+  'canada',
+  'ca',
+  'mexico',
+]);
+
+const US_ZIP = /^\d{5}(?:-\d{4})?$/;
+const CA_POSTAL = /^[A-Za-z]\d[A-Za-z][ -]?\d[A-Za-z]\d$/;
+
+export interface ParsedAddress {
+  line1: string | null;
+  line2: string | null;
+  city: string | null;
+  region: string | null;
+  postalCode: string | null;
+  country: string | null;
+}
+
+/**
+ * Split a formatted one-line address into fields, from the end inwards.
+ *
+ * "901 N Washington St, 320, Alexandria, Virginia 22314, United States"
+ *   → line1 "901 N Washington St", line2 "320", city "Alexandria",
+ *     region "Virginia", postal "22314", country "United States"
+ *
+ * Deliberately conservative: it reads the tail it recognises (country, then a
+ * region/postal pair, then the city) and treats whatever is left at the front as
+ * the street. It returns nulls rather than guessing when there is nothing to read.
+ */
+export function parseFormattedAddress(formatted: string | null | undefined): ParsedAddress {
+  const empty: ParsedAddress = {
+    line1: null,
+    line2: null,
+    city: null,
+    region: null,
+    postalCode: null,
+    country: null,
+  };
+  const parts = s(formatted)
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (parts.length < 2) return empty;
+
+  let country: string | null = null;
+  if (COUNTRIES.has(parts[parts.length - 1]!.toLowerCase().replace(/\.$/, ''))) {
+    country = parts.pop()!;
+  }
+  if (!parts.length) return empty;
+
+  // "Virginia 22314", "MO 64402", "ok 74070", "Ontario M5V 2T6", or just "Virginia".
+  let region: string | null = null;
+  let postalCode: string | null = null;
+  const tail = parts.pop()!;
+  const words = tail.split(/\s+/);
+  const last = words[words.length - 1] ?? '';
+  const lastTwo = words.slice(-2).join(' ');
+  if (words.length > 1 && US_ZIP.test(last)) {
+    postalCode = last;
+    region = words.slice(0, -1).join(' ') || null;
+  } else if (words.length > 2 && CA_POSTAL.test(lastTwo)) {
+    postalCode = lastTwo;
+    region = words.slice(0, -2).join(' ') || null;
+  } else if (US_ZIP.test(tail) || CA_POSTAL.test(tail)) {
+    postalCode = tail;
+  } else {
+    region = tail;
+  }
+
+  const city = parts.length ? parts.pop()! : null;
+  const line1 = parts.length ? parts.shift()! : null;
+  const line2 = parts.length ? parts.join(', ') : null;
+
+  return { line1, line2, city, region, postalCode, country };
+}
+
+/**
+ * Fill in whatever the portal left blank from the formatted address.
+ *
+ * A no-op unless the street is missing and the salvage yields both a street and a
+ * city — a half-read address applied to a vendor sheet is the expensive outcome
+ * this whole file is arranged to avoid.
+ */
+function withFormattedFallback<
+  T extends {
+    line1: string | null;
+    line2: string | null;
+    city: string | null;
+    region: string | null;
+    postalCode: string | null;
+    country: string | null;
+    formattedAddress: string | null;
+    raw?: Record<string, string>;
+  },
+>(fields: T): T {
+  if (fields.line1 || !fields.formattedAddress) return fields;
+  const p = parseFormattedAddress(fields.formattedAddress);
+  const line1 = p.line1;
+  const city = fields.city ?? p.city;
+  if (!line1 || !city) return fields;
+  return {
+    ...fields,
+    line1,
+    line2: fields.line2 ?? p.line2,
+    city,
+    region: fields.region ?? p.region,
+    postalCode: fields.postalCode ?? p.postalCode,
+    country: fields.country ?? p.country,
+    raw: { ...(fields.raw ?? {}), [PARSED_FLAG]: 'true' },
+  };
+}
+
+/** Did this submission's street come out of the formatted column? */
+function wasParsedFromFormatted(raw: unknown): boolean {
+  return Boolean(raw && typeof raw === 'object' && (raw as Record<string, unknown>)[PARSED_FLAG]);
+}
+
 /**
  * Enough of an address to send a truck to. Street and city are the test: a ZIP on
  * its own is not an address, and applying half of one to a vendor sheet is worse
@@ -197,7 +338,15 @@ export async function ingestDeliverySubmission(mondayItemId: string): Promise<In
   });
   if (!item) return 'notfound';
 
-  const fields = readFields(item.text ?? {});
+  // The salvage runs here, before the change comparison, so a row whose street was
+  // read out of the formatted column still counts as unchanged on the next event.
+  const fields = withFormattedFallback(readFields(item.text ?? {}));
+  if (wasParsedFromFormatted(fields.raw)) {
+    logger.warn(
+      { mondayItemId, city: fields.city },
+      'portal delivery: street read from the formatted address column — the portal did not write the separate address fields',
+    );
+  }
   const existing = await prisma.portalDeliverySubmission.findUnique({ where: { mondayItemId } });
 
   const sameAddress =
@@ -256,8 +405,41 @@ export async function ingestDeliverySubmission(mondayItemId: string): Promise<In
  * parked row can be retried, and linked by hand, without going back to monday.
  */
 export async function processSubmission(submissionId: string): Promise<IngestResult> {
-  const sub = await prisma.portalDeliverySubmission.findUnique({ where: { id: submissionId } });
+  let sub = await prisma.portalDeliverySubmission.findUnique({ where: { id: submissionId } });
   if (!sub) return 'notfound';
+
+  // A row stored before the salvage existed keeps its formatted address, so it can
+  // be rescued from what is already in the database — no monday read needed.
+  if (!isUsable(sub) && sub.formattedAddress) {
+    const salvaged = withFormattedFallback({
+      line1: sub.line1,
+      line2: sub.line2,
+      city: sub.city,
+      region: sub.region,
+      postalCode: sub.postalCode,
+      country: sub.country,
+      formattedAddress: sub.formattedAddress,
+      raw: (sub.raw as Record<string, string> | null) ?? {},
+    });
+    if (isUsable(salvaged)) {
+      sub = await prisma.portalDeliverySubmission.update({
+        where: { id: sub.id },
+        data: {
+          line1: salvaged.line1,
+          line2: salvaged.line2,
+          city: salvaged.city,
+          region: salvaged.region,
+          postalCode: salvaged.postalCode,
+          country: salvaged.country,
+          raw: salvaged.raw as object,
+        },
+      });
+      logger.warn(
+        { submissionId: sub.id },
+        'portal delivery: stored row rescued from its formatted address column',
+      );
+    }
+  }
 
   const fieldsUsable = isUsable(sub);
   if (!fieldsUsable) {
@@ -265,7 +447,9 @@ export async function processSubmission(submissionId: string): Promise<IngestRes
       where: { id: sub.id },
       data: {
         status: 'INCOMPLETE',
-        note: 'No street and city on the row yet — the portal writes its columns one at a time, so this is normal for a few seconds after a submission.',
+        note: sub.formattedAddress
+          ? 'The row has a formatted address but no street that can be read out of it, and the separate address columns are empty. Check the submissions board row, or type the address on the order by hand.'
+          : 'No street and city on the row yet — the portal writes its columns one at a time, so this is normal for a few seconds after a submission.',
       },
     });
     return 'incomplete';
@@ -424,6 +608,9 @@ async function applyToOrder(submissionId: string, orderId: string): Promise<Inge
         sub.specialInstructions ? `Delivery instructions: ${sub.specialInstructions}` : null,
         sub.restrictedChanges ? `Flagged for staff confirmation: ${sub.restrictedChanges}` : null,
         sub.addressConfirmed === false ? 'Customer CHANGED the address on file.' : null,
+        wasParsedFromFormatted(sub.raw)
+          ? 'Street read from the portal’s formatted address line because the separate address fields were empty. Check it before a sheet goes out.'
+          : null,
       ]
         .filter(Boolean)
         .join('\n') || null,
@@ -504,6 +691,7 @@ async function applyToOrder(submissionId: string, orderId: string): Promise<Inge
         mondayItemId: sub.mondayItemId,
         addressId: address.id,
         addressConfirmedByCustomer: sub.addressConfirmed,
+        addressParsedFromFormatted: wasParsedFromFormatted(sub.raw),
         vendorsUpdated: editable.map((x) => x.vendor),
         vendorsSkipped: frozen.map((x) => x.vendor),
       } as object,
@@ -682,6 +870,7 @@ export async function listSubmissions(limit = 100) {
     customerEmail: r.customerEmail,
     address: [r.line1, r.city, r.region, r.postalCode].filter(Boolean).join(', ') || null,
     addressConfirmedByCustomer: r.addressConfirmed,
+    addressParsedFromFormatted: wasParsedFromFormatted(r.raw),
     shipToAddress: r.shipToAddress,
     sectionsUpdated: r.sectionsUpdated,
     skippedVendors: r.skippedVendors,
