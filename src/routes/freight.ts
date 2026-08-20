@@ -31,6 +31,32 @@ const AMOUNT_COLUMN = 'formula_mky8s42a';
 const MATS_FREIGHT_COLUMN = 'formula_mkzd3p9s';
 const MATS_TAX_COLUMN = 'formula_mkzde17n';
 
+/**
+ * What Goldberg needs before they can price the steel.
+ *
+ * They quote crating and freight from the weight, but the shape of the load is what
+ * decides how it crates: how many welded legs are in it, and whether a trolley rail
+ * is going in the same shipment. Both are answerable from the proposal's own lines,
+ * so neither should be a question anybody has to ask.
+ */
+const WELDED_LEGS_COLUMN = '__of_welded_legs__1';
+const TROLLEY_COLUMN = 'status7__1';
+
+/**
+ * A welded leg is a vertical post. The frame rules generate A-2245 as
+ * (legs − ladder bays) and A-2246 as the ladder-bay posts, so the two quantities
+ * together are the frame's leg count — which is why both are counted and neither
+ * alone would be right.
+ */
+const LEG_PARTS = new Set(['A-2245', 'A-2246']);
+
+/**
+ * The trolley rail, sized from the frame length. The rail is the tell rather than
+ * the trolley hardware: A07–A10 are the only parts that exist because a trolley
+ * system is in the order.
+ */
+const TROLLEY_PARTS = new Set(['TR2000-A07', 'TR2000-A08', 'TR2000-A09', 'TR2000-A10']);
+
 /** The monday item id — the proposal header's Project ID. */
 const ItemIdSchema = z
   .string()
@@ -42,6 +68,13 @@ const RequestSchema = z.object({
   weightLb: z.number().finite().min(0).max(1_000_000),
   /** Lines with no catalog weight — recorded so a low number is explainable later. */
   linesMissingWeight: z.number().int().min(0).optional(),
+  /**
+   * Legs and trolley as the builder counts them, from the same line list the weight
+   * comes from. Optional: an older client sends neither, and the version on file is
+   * counted instead.
+   */
+  weldedLegs: z.number().int().min(0).max(1000).optional(),
+  trolley: z.boolean().optional(),
 });
 
 /** "$1,234.56" / "1234.56" / "" → minor units, or null when there is no number. */
@@ -52,6 +85,68 @@ function parseAmountMinor(text: string | null | undefined): number | null {
   const n = Number.parseFloat(cleaned);
   if (!Number.isFinite(n)) return null;
   return Math.round(n * 100);
+}
+
+interface ProposalLineish {
+  sku?: string;
+  quantity?: number;
+  optional?: boolean;
+  components?: Array<{ part?: string; qty?: number }> | null;
+}
+
+export interface AdventureFacts {
+  legs: number;
+  trolley: boolean;
+  /** False when the proposal has no Adventure Series content at all. */
+  found: boolean;
+}
+
+/**
+ * Count the welded legs and spot a trolley rail in a set of proposal lines.
+ *
+ * Parts arrive two ways and both are counted: as a line in their own right, and as a
+ * component of a kit line (an Adventure frame is one customer-facing line carrying
+ * its real part numbers underneath — see the bundle/kit comment in the builder). A
+ * component's quantity is per parent unit, so it is multiplied by the parent's.
+ *
+ * Optional lines are excluded, exactly as they are from the shipment weight: a
+ * trolley the customer has not bought is not in the load Goldberg is pricing.
+ */
+export function adventureFacts(items: unknown): AdventureFacts {
+  const lines: ProposalLineish[] = Array.isArray(items) ? (items as ProposalLineish[]) : [];
+  let legs = 0;
+  let trolley = false;
+
+  for (const line of lines) {
+    if (line?.optional) continue;
+    const qty = Number(line?.quantity) || 0;
+    const sku = String(line?.sku ?? '')
+      .trim()
+      .toUpperCase();
+    if (LEG_PARTS.has(sku)) legs += qty;
+    if (TROLLEY_PARTS.has(sku)) trolley = true;
+
+    for (const c of line?.components ?? []) {
+      const part = String(c?.part ?? '')
+        .trim()
+        .toUpperCase();
+      const perParent = Number(c?.qty) || 0;
+      if (LEG_PARTS.has(part)) legs += perParent * (qty || 1);
+      if (TROLLEY_PARTS.has(part)) trolley = true;
+    }
+  }
+
+  return { legs, trolley, found: legs > 0 || trolley };
+}
+
+/** The same count from the version on file, for a client that did not send one. */
+async function adventureFactsFromVersion(proposalId: string): Promise<AdventureFacts> {
+  const version = await prisma.proposalVersion.findFirst({
+    where: { proposalId },
+    orderBy: { version: 'desc' },
+    select: { items: true },
+  });
+  return adventureFacts(version?.items);
 }
 
 /**
@@ -151,36 +246,74 @@ export async function releaseFreightRequest(
   });
 }
 
+/** One `change_multiple_column_values` call. */
+async function writeColumns(itemId: string, cols: Record<string, unknown>): Promise<void> {
+  await mondayQuery(
+    `mutation ($board: ID!, $item: ID!, $cols: JSON!) {
+       change_multiple_column_values (board_id: $board, item_id: $item, column_values: $cols) { id }
+     }`,
+    { board: DEALS_BOARD_ID, item: itemId, cols: JSON.stringify(cols) },
+  );
+}
+
 export function registerFreightRoutes(app: FastifyInstance): void {
   const read = { preHandler: requirePermission(Permission.PROPOSAL_READ) };
   const write = { preHandler: requirePermission(Permission.PROPOSAL_WRITE) };
 
   /**
-   * Push the weight and raise the flag. One mutation, so the board never ends up
-   * with a weight and no request marker (or the reverse) if the second call fails.
+   * Raise the request, in the order the desk reads the row.
+   *
+   * TWO mutations, and the sequence is the point:
+   *
+   *   1. `# of Welded Legs` and `Trolley` — what the load is.
+   *   2. `Approximate Weight` and `GB Freight Request` — how heavy, and "please quote".
+   *
+   * The flag is what Goldberg reacts to, so it flips LAST and only if the first write
+   * succeeded. A row that says "quote this" while the legs column is still empty is a
+   * question back to us, and that round trip is the thing this is meant to remove.
+   *
+   * Weight and flag stay in one mutation together, as before, so the board can never
+   * hold a weight with no request against it or the reverse.
+   *
+   * A proposal with no Adventure Series content writes NEITHER of the two new
+   * columns — not a zero and not a "No". There is nothing to say about legs on an
+   * order that has none, and a false "No trolley" on the row reads as a fact somebody
+   * checked.
    */
   app.post('/proposals/:id/freight-request', write, async (req) => {
     const { id } = req.params as { id: string };
     const input = RequestSchema.parse(req.body ?? {});
 
-    const columnValues = {
-      [WEIGHT_COLUMN]: String(Math.round(input.weightLb * 100) / 100),
-      [REQUESTED_COLUMN]: { label: 'Yes' },
-    };
+    // The builder counts from the same lines it weighed. Without those numbers (an
+    // older client), count the version on file rather than leaving the row silent.
+    const facts: AdventureFacts =
+      input.weldedLegs != null || input.trolley != null
+        ? {
+            legs: input.weldedLegs ?? 0,
+            trolley: !!input.trolley,
+            found: (input.weldedLegs ?? 0) > 0 || !!input.trolley,
+          }
+        : await adventureFactsFromVersion(id);
 
     let ok = false;
     let error: string | null = null;
+    let stage: 'load' | 'request' = 'load';
     try {
-      await mondayQuery(
-        `mutation ($board: ID!, $item: ID!, $cols: JSON!) {
-           change_multiple_column_values (board_id: $board, item_id: $item, column_values: $cols) { id }
-         }`,
-        { board: DEALS_BOARD_ID, item: input.itemId, cols: JSON.stringify(columnValues) },
-      );
+      if (facts.found) {
+        await writeColumns(input.itemId, {
+          [WELDED_LEGS_COLUMN]: String(facts.legs),
+          [TROLLEY_COLUMN]: { label: facts.trolley ? 'Yes' : 'No' },
+        });
+      }
+      stage = 'request';
+      await writeColumns(input.itemId, {
+        [WEIGHT_COLUMN]: String(Math.round(input.weightLb * 100) / 100),
+        [REQUESTED_COLUMN]: { label: 'Yes' },
+      });
       ok = true;
     } catch (e) {
       error = e instanceof Error ? e.message : 'monday update failed';
-      logger.error({ err: error, itemId: input.itemId }, 'freight request push failed');
+      logger.error({ err: error, itemId: input.itemId, stage }, 'freight request push failed');
     }
 
     // Logged either way: a request the board never received, with nothing on record,
@@ -195,15 +328,28 @@ export function registerFreightRoutes(app: FastifyInstance): void {
         boardId: DEALS_BOARD_ID,
         weightLb: input.weightLb,
         linesMissingWeight: input.linesMissingWeight ?? null,
+        weldedLegs: facts.found ? facts.legs : null,
+        trolley: facts.found ? facts.trolley : null,
+        failedAt: ok ? null : stage,
         error,
       },
     });
 
-    if (!ok) throw new ValidationError(`monday.com did not accept the freight request: ${error}`);
+    if (!ok) {
+      // Naming the stage matters: "the legs never landed" and "the flag never flipped"
+      // need different things done about them.
+      const where =
+        stage === 'load'
+          ? 'the welded legs and trolley columns'
+          : 'the weight and freight request columns';
+      throw new ValidationError(`monday.com did not accept ${where}: ${error}`);
+    }
     return {
       ok: true,
       itemId: input.itemId,
       weightLb: input.weightLb,
+      weldedLegs: facts.found ? facts.legs : null,
+      trolley: facts.found ? facts.trolley : null,
       requestedAt: new Date().toISOString(),
     };
   });
@@ -227,7 +373,7 @@ export function registerFreightRoutes(app: FastifyInstance): void {
          items (ids: $items) {
            id
            name
-           column_values (ids: ["${AMOUNT_COLUMN}", "${REQUESTED_COLUMN}", "${MATS_FREIGHT_COLUMN}", "${MATS_TAX_COLUMN}"]) {
+           column_values (ids: ["${AMOUNT_COLUMN}", "${REQUESTED_COLUMN}", "${MATS_FREIGHT_COLUMN}", "${MATS_TAX_COLUMN}", "${WELDED_LEGS_COLUMN}", "${TROLLEY_COLUMN}"]) {
              id
              text
              ... on FormulaValue { display_value }
@@ -266,6 +412,10 @@ export function registerFreightRoutes(app: FastifyInstance): void {
       requestFlag,
       matsFreightMinor,
       matsTaxMinor,
+      // Echoed back so the builder can show what the desk is looking at, and so a
+      // row edited by hand on the board is visible rather than silently overwritten.
+      weldedLegs: found.column_values.find((c) => c.id === WELDED_LEGS_COLUMN)?.text ?? '',
+      trolley: found.column_values.find((c) => c.id === TROLLEY_COLUMN)?.text ?? '',
       fetchedAt: new Date().toISOString(),
     };
   });
