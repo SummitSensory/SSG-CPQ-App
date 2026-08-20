@@ -5479,7 +5479,7 @@
         return true;
       };
       stdNotes.filter(function (nn) { return nn.autoInclude && nn.placement !== 'FOOTER' && condOk(nn); }).forEach(function (nn) {
-        lines.push(normalizeLine({ lineType: 'NOTE', kind: 'NOTE', name: nn.title, description: nn.body, quantity: 0, rateMinor: 0 }));
+        lines.push(normalizeLine({ lineType: 'NOTE', kind: 'NOTE', name: nn.title, description: nn.body, quantity: 0, rateMinor: 0, emphasis: !!nn.emphasis }));
       });
     }
     var footerNotes = Array.isArray(meta.footerNotes) ? meta.footerNotes : null;
@@ -5660,7 +5660,7 @@
         return nn.placement !== 'FOOTER' && nn.condition && nn.condition !== src.condition && noteConditionHolds(nn);
       })[0];
       if (alt && !noteAlreadyPresent(alt)) {
-        pb.lines[i] = normalizeLine({ lineType: 'NOTE', kind: 'NOTE', name: alt.title, description: alt.body, quantity: 0, rateMinor: 0 });
+        pb.lines[i] = normalizeLine({ lineType: 'NOTE', kind: 'NOTE', name: alt.title, description: alt.body, quantity: 0, rateMinor: 0, emphasis: !!alt.emphasis });
       } else {
         pb.lines.splice(i, 1);
       }
@@ -7074,7 +7074,13 @@
       return '<div class="bRow" draggable="true" data-i="' + i + '" style="display:flex;align-items:flex-start;gap:8px;background:#fbfaf4;border:1px solid #ece9db;border-radius:10px;padding:10px;' + (noteIndent ? 'margin-left:' + noteIndent + 'px;' : '') + '">' + handle +
         '<div style="flex:1;"><input class="bF" data-i="' + i + '" data-k="name" value="' + esc(l.name) + '" placeholder="Note title" style="width:100%;border:none;background:transparent;font-weight:600;font-size:13.5px;outline:none;margin-bottom:4px;">' +
         '<textarea class="bF" data-i="' + i + '" data-k="description" rows="3" placeholder="Note text" style="width:100%;border:1px solid #ece9db;border-radius:7px;padding:6px 8px;font-size:12.5px;font-family:inherit;resize:vertical;background:#fff;">' + esc(l.description) + '</textarea>' +
-        '<div style="font-size:10.5px;color:#8a8f85;margin-top:3px;">Formatting: <b>**bold**</b> · <i>*italic*</i> · line breaks are kept · HTML: &lt;ul&gt;&lt;li&gt; &lt;b&gt; &lt;i&gt; &lt;a href&gt;</div></div>' + del + '</div>';
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:3px;">' +
+          '<div style="font-size:10.5px;color:#8a8f85;">Formatting: <b>**bold**</b> · <i>*italic*</i> · line breaks are kept · HTML: &lt;ul&gt;&lt;li&gt; &lt;b&gt; &lt;i&gt; &lt;a href&gt;</div>' +
+          // Shown here because the box is invisible until the proposal is previewed, and
+          // because a rep sometimes wants this one note boxed on this one proposal.
+          '<label style="display:flex;align-items:center;gap:6px;font-size:10.5px;color:#5c6157;cursor:pointer;white-space:nowrap;" title="Prints this note inside a ruled box on the customer proposal">' +
+            '<input type="checkbox" class="bNoteBox" data-i="' + i + '"' + (l.emphasis ? ' checked' : '') + '> Outlined box on the proposal</label>' +
+        '</div></div>' + del + '</div>';
     }
     // PRODUCT
     var amt = (Number(l.quantity) || 0) * (Number(l.rateMinor) || 0);
@@ -7191,11 +7197,14 @@
     var noteSel = document.getElementById('bAddNote');
     noteSel.addEventListener('change', function () {
       var v = noteSel.value; if (!v) return;
-      if (v === '__custom') pb.lines.push({ ref: uid(), lineType: 'NOTE', kind: 'NOTE', name: 'Note', description: '', quantity: 0, rateMinor: 0 });
+      if (v === '__custom') pb.lines.push(normalizeLine({ lineType: 'NOTE', kind: 'NOTE', name: 'Note', description: '', quantity: 0, rateMinor: 0 }));
       else {
         var nn = (pb.stdNotes || [])[Number(v)];
         if (nn && nn.placement === 'FOOTER') { pb.meta.footerNotes = (pb.meta.footerNotes || []).concat([{ title: nn.title, body: nn.body }]); }
-        else if (nn) pb.lines.push({ ref: uid(), lineType: 'NOTE', kind: 'NOTE', name: nn.title, description: nn.body, quantity: 0, rateMinor: 0 });
+        // normalizeLine rather than a bare object: it is what carries `emphasis` (and
+        // every other line field) through a save. Built by hand here, a note picked from
+        // this dropdown printed unboxed however the note itself was configured.
+        else if (nn) pb.lines.push(normalizeLine({ lineType: 'NOTE', kind: 'NOTE', name: nn.title, description: nn.body, quantity: 0, rateMinor: 0, emphasis: !!nn.emphasis }));
       }
       noteSel.value = ''; renderBuilder();
     });
