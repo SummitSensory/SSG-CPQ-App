@@ -814,9 +814,11 @@ export async function backfillFromBoard(max = 100): Promise<{
 
   for (const item of items) {
     const f = readFields(item.text ?? {});
-    // Nothing to ship to and nothing to read one out of: an invite row, not a
-    // submission. Left alone rather than recorded as incomplete.
-    if (!f.line1 && !f.city && !f.formattedAddress) {
+    // No street and nothing to read one out of: an invite row the customer has not
+    // filled in, not a submission. A city and state alone is not an address, and
+    // storing it would put a permanently INCOMPLETE record into the retry sweep,
+    // which then re-reads it from monday on every run forever.
+    if (!f.line1 && !f.formattedAddress) {
       skipped += 1;
       continue;
     }
