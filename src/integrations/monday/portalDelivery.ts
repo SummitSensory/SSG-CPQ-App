@@ -180,6 +180,18 @@ function readFields(text: Record<string, string | null | undefined>): DeliveryFi
 /** Marker left in `raw` when the fields below came out of the formatted string. */
 const PARSED_FLAG = '_addressParsedFromFormatted';
 
+/**
+ * The submissions row's own name, kept in `raw`.
+ *
+ * The portal names each row after the customer ("Soar Autism Center - Maryvale
+ * Village", "Remedy Speech Therapy — 8/14/2026"), and that name is the only thing
+ * that says WHOSE address a row carries. Without it a parked row is a bare street in
+ * a city, and nobody can tell which order it belongs to — which is the one question
+ * the person looking at it needs answered. Stored in `raw` rather than as a column so
+ * this needs no migration.
+ */
+const ITEM_NAME = '_mondayItemName';
+
 const COUNTRIES = new Set([
   'united states',
   'united states of america',
@@ -303,6 +315,13 @@ function wasParsedFromFormatted(raw: unknown): boolean {
   return Boolean(raw && typeof raw === 'object' && (raw as Record<string, unknown>)[PARSED_FLAG]);
 }
 
+/** The submissions row's name, if it was captured. */
+function itemNameOf(raw: unknown): string | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const v = (raw as Record<string, unknown>)[ITEM_NAME];
+  return typeof v === 'string' && v.trim() ? v.trim() : null;
+}
+
 /**
  * Enough of an address to send a truck to. Street and city are the test: a ZIP on
  * its own is not an address, and applying half of one to a vendor sheet is worse
@@ -341,6 +360,7 @@ export async function ingestDeliverySubmission(mondayItemId: string): Promise<In
   // The salvage runs here, before the change comparison, so a row whose street was
   // read out of the formatted column still counts as unchanged on the next event.
   const fields = withFormattedFallback(readFields(item.text ?? {}));
+  if (item.name) fields.raw[ITEM_NAME] = item.name;
   if (wasParsedFromFormatted(fields.raw)) {
     logger.warn(
       { mondayItemId, city: fields.city },
@@ -361,6 +381,15 @@ export async function ingestDeliverySubmission(mondayItemId: string): Promise<In
   // Nothing new, and the last run finished the job. This is the common path: 29 of
   // the 30 column events for a submission end here.
   if (existing && existing.status === 'APPLIED' && sameAddress) {
+    // Nothing to redo — but if this row was stored before the name was captured,
+    // take it now. A backfill is then enough to label every historical row.
+    const priorRaw = (existing.raw as Record<string, string> | null) ?? {};
+    if (item.name && priorRaw[ITEM_NAME] !== item.name) {
+      await prisma.portalDeliverySubmission.update({
+        where: { id: existing.id },
+        data: { raw: { ...priorRaw, [ITEM_NAME]: item.name } as object },
+      });
+    }
     return 'unchanged';
   }
 
@@ -952,7 +981,14 @@ export async function listSubmissions(limit = 100) {
     mondayOrderItemId: r.mondayOrderItemId,
     order: r.order ? { id: r.order.id, number: r.order.number } : null,
     customerEmail: r.customerEmail,
+    // Whose submission this is. The panel leads with it: an address with no name
+    // beside it cannot be checked by anyone.
+    itemName: itemNameOf(r.raw),
     address: [r.line1, r.city, r.region, r.postalCode].filter(Boolean).join(', ') || null,
+    // A row with a city but no street still has nothing to ship to, and the panel
+    // needs the same test the purge uses rather than guessing from `address`.
+    hasStreet: !!r.line1,
+    hasFormattedAddress: !!r.formattedAddress,
     addressConfirmedByCustomer: r.addressConfirmed,
     addressParsedFromFormatted: wasParsedFromFormatted(r.raw),
     pocName: r.pocName,

@@ -156,8 +156,20 @@
         '"></span>' +
         esc(x.status) +
         '</div>' +
-        '<div style="font-size:13.5px;font-weight:600;min-width:150px;">' +
-        (x.order ? esc(x.order.number) : '<span class="muted">no order yet</span>') +
+        /* Whose address this is, first. The monday row is named after the customer;
+           the email is the fallback, and both being absent is itself worth seeing. */
+        '<div style="min-width:210px;flex:0 1 240px;">' +
+        '<div style="font-size:13.5px;font-weight:600;">' +
+        (x.itemName
+          ? esc(x.itemName)
+          : x.customerEmail
+            ? esc(x.customerEmail)
+            : '<span class="muted">unnamed row</span>') +
+        '</div>' +
+        '<div class="muted" style="font-size:12px;margin-top:2px;">' +
+        (x.order ? esc(x.order.number) : 'no order yet') +
+        (x.itemName && x.customerEmail ? ' · ' + esc(x.customerEmail) : '') +
+        '</div>' +
         '</div>' +
         '<div style="font-size:13.5px;flex:1 1 320px;min-width:240px;">' +
         esc(addr) +
@@ -234,8 +246,12 @@
       var applied = state.rows.filter(function (x) {
         return x.status === 'APPLIED';
       });
+      /* Same test the purge endpoint uses: no street and nothing to read one out of.
+         Counting on `address` was wrong — these rows carry a city and state, which
+         reads as an address here but is not one a truck can be sent to, so the
+         button never appeared for the 26 rows it exists for. */
       var emptyIncomplete = state.rows.filter(function (x) {
-        return x.status === 'INCOMPLETE' && !x.address;
+        return x.status === 'INCOMPLETE' && !x.hasStreet && !x.hasFormattedAddress;
       }).length;
 
       card.innerHTML =
