@@ -45,6 +45,15 @@ const IMMUTABLE = 'public, max-age=604800';
  */
 const PUBLIC_PAGE = 'public, max-age=3600';
 
+/**
+ * Every script index.html loads. Nothing in /public is served by a directory
+ * handler — each file needs a route here or it 404s, and a missing client script
+ * fails SILENTLY: the shell renders, the feature that script provides just isn't
+ * there. Both of the entries below were shipped with a <script> tag in index.html
+ * and no route, so add the file here in the same commit that adds the tag.
+ */
+const CLIENT_SCRIPTS = ['app.js', 'vendor-colors.js', 'portal-delivery.js'];
+
 /** Every static image the shell references. Anything not listed here 404s. */
 const IMAGES = [
   'logo.png',
@@ -80,23 +89,40 @@ const PUBLIC_PAGES: Array<{ route: string; file: string }> = [
 
 export function registerWebRoutes(app: FastifyInstance): void {
   app.get('/', async (_req, reply) =>
-    reply.type('text/html; charset=utf-8').header('Cache-Control', NO_STORE).send(file('index.html')));
-  app.get('/app.js', async (_req, reply) =>
-    reply.type('text/javascript; charset=utf-8').header('Cache-Control', NO_STORE).send(file('app.js')));
+    reply
+      .type('text/html; charset=utf-8')
+      .header('Cache-Control', NO_STORE)
+      .send(file('index.html')),
+  );
+
+  for (const name of CLIENT_SCRIPTS) {
+    app.get(`/${name}`, async (_req, reply) =>
+      reply
+        .type('text/javascript; charset=utf-8')
+        .header('Cache-Control', NO_STORE)
+        .send(file(name)),
+    );
+  }
 
   for (const page of PUBLIC_PAGES) {
     app.get(page.route, async (_req, reply) =>
-      reply.type('text/html; charset=utf-8').header('Cache-Control', PUBLIC_PAGE).send(file(page.file)));
+      reply
+        .type('text/html; charset=utf-8')
+        .header('Cache-Control', PUBLIC_PAGE)
+        .send(file(page.file)),
+    );
   }
 
   for (const name of IMAGES) {
     app.get(`/${name}`, async (_req, reply) =>
-      reply.type('image/png').header('Cache-Control', IMMUTABLE).send(binFile(name)));
+      reply.type('image/png').header('Cache-Control', IMMUTABLE).send(binFile(name)),
+    );
   }
 
   // Browsers and link unfurlers request /favicon.ico unprompted, ignoring the
   // <link> tags. Serving the 48px PNG here is valid — no .ico container needed —
   // and stops the unhandled 404 from filling the request log.
   app.get('/favicon.ico', async (_req, reply) =>
-    reply.type('image/png').header('Cache-Control', IMMUTABLE).send(binFile('favicon-48.png')));
+    reply.type('image/png').header('Cache-Control', IMMUTABLE).send(binFile('favicon-48.png')),
+  );
 }
