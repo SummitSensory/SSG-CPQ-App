@@ -663,16 +663,29 @@ export async function executeTransaction(
      * Restricting this to type INVOICE meant the deposit and progress invoices went
      * out without it.
      */
+    /**
+     * No made-up slot number.
+     *
+     * This used to fall back to DefinitionId '1' when the lookup found nothing, on
+     * the assumption that slot 1 was the PO field. On a company using Intuit's newer
+     * Custom Fields feature there are no legacy slots at all: the API accepts the
+     * field, silently discards it, and the PO disappears from the invoice AND from
+     * the memo — because the memo only carries it when no slot resolved. A guess that
+     * loses data is worse than no guess.
+     *
+     * So the slot is used only when it is genuinely configured, or when an operator
+     * has set QBO_CUSTOM_FIELD_ID_PO explicitly. Otherwise the value goes to the
+     * memo, which always prints.
+     */
     let poNumber: string | null = txn.type === 'ESTIMATE' ? null : refs.poNumber;
     let poFieldId: string | null = null;
     if (poNumber) {
-      poFieldId =
-        (await customFieldId(
-          realmId,
-          'Customer Purchase Order #',
-          process.env.QBO_CUSTOM_FIELD_ID_PO,
-          fetchImpl,
-        )) ?? '1';
+      poFieldId = await customFieldId(
+        realmId,
+        'Customer Purchase Order #',
+        process.env.QBO_CUSTOM_FIELD_ID_PO,
+        fetchImpl,
+      );
     }
 
     const memo = [
@@ -683,6 +696,10 @@ export async function executeTransaction(
       // case the slot lookup returns null, and the Project ID would silently vanish
       // — so it goes into the memo instead, which always prints.
       projectId && !projectFieldId ? `Project ID ${projectId}` : null,
+      // Deliberately second, so the two references read together at the front of the
+      // memo. On a company whose custom fields the API cannot write, this line IS the
+      // PO reference on the customer's invoice, and their accounts-payable team has to
+      // find it without being told where to look.
       // Same reasoning for the PO number. It also lands here when both fields
       // resolve to the same slot and this one lost — see salesCustomFields.
       poNumber && !poFieldId ? `Customer PO ${poNumber}` : null,
