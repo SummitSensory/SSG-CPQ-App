@@ -6489,7 +6489,7 @@
         '</div>' +
       '</div>' +
       footerNotesCard() +
-      (isMock() ? '' : '<div id="bMarginRail" style="' + marginRailStyle() + '">' + marginCard(t) + '<div id="bRfqRail"></div><div id="bDatesRail"></div><div id="bNotesRail"></div></div>');
+      (isMock() ? '' : '<div id="bMarginRail" style="' + marginRailStyle() + '">' + marginCard(t) + '<div id="bCbRail"></div><div id="bRfqRail"></div><div id="bDatesRail"></div><div id="bNotesRail"></div></div>');
     wireBuilder();
   }
 
@@ -6686,6 +6686,332 @@
           openRfqEditor(next.id);
         } catch (e) { alert(e.message); b.disabled = false; }
       });
+    });
+  }
+
+
+
+  /* --- Canadian proposals -------------------------------------------------
+     Everything below shows only when the customer's BILLING country is Canada and
+     an administrator has switched the feature on. On a US proposal the server
+     answers applicable:false and this rail renders nothing at all, which is the
+     guarantee that no existing proposal changes because this code exists.
+
+     Three separate totals, never merged: what the customer owes SSG, what they
+     should expect to pay CBSA or a broker, and the two added together. Merging the
+     first two would tell a customer they owe SSG money that goes to the government. */
+  var cbData = null;
+
+  async function loadCrossBorder(force) {
+    if (!pb || isMock() || !pb.versionId) return;
+    if (!force && cbData && cbData.versionId === pb.versionId) { renderCrossBorderRail(); return; }
+    if (force) cbData = null;
+    renderCrossBorderRail();
+    var versionId = pb.versionId;
+    try {
+      var r = await authed('/proposals/versions/' + versionId + '/cross-border');
+      var body = r.ok ? await r.json() : null;
+      cbData = body ? Object.assign({ versionId: versionId }, body) : { versionId: versionId, applicable: false };
+    } catch (e) {
+      cbData = { versionId: versionId, applicable: false, error: 'Could not load the Canadian calculation.' };
+    }
+    renderCrossBorderRail();
+  }
+
+  function renderCrossBorderRail() {
+    var el = document.getElementById('bCbRail');
+    if (!el) return;
+    el.innerHTML = cbCardHtml();
+    wireCrossBorderCard();
+  }
+
+  /** USD and estimated CAD side by side. Never a bare dollar sign. */
+  function cbPair(usdMinor, cadMinor) {
+    if (usdMinor == null) return '<span class="muted">—</span>';
+    var cad = cadMinor == null ? '' : '<span style="display:block;font-size:11px;color:#8a8f85;">' + fmtMoney(cadMinor, 'CAD') + ' est.</span>';
+    return '<span style="font-variant-numeric:tabular-nums;">' + fmtMoney(usdMinor, 'USD') + '</span>' + cad;
+  }
+
+  var CB_STATUS_TEXT = {
+    CALCULATED: '', CONFIRMED: 'Confirmed', ESTIMATED: 'Estimated',
+    TO_BE_CONFIRMED: 'To be confirmed', REQUIRES_CUSTOMS_REVIEW: 'Customs review required',
+    REQUIRES_TAX_REVIEW: 'Tax review required', NOT_APPLICABLE: 'Not applicable',
+    EXEMPT: 'Exempt', NOT_REGISTERED: 'Not registered'
+  };
+
+  function cbStatusChip(status) {
+    var text = CB_STATUS_TEXT[status];
+    if (!text) return '';
+    var warn = status === 'REQUIRES_CUSTOMS_REVIEW' || status === 'REQUIRES_TAX_REVIEW' || status === 'TO_BE_CONFIRMED';
+    var bg = warn ? '#fdf6e7' : '#f2f4f0', bd = warn ? '#e8d9ae' : '#e0e3dc', fg = warn ? '#7a5c1e' : '#5c6157';
+    return '<span style="display:inline-block;margin-left:6px;padding:1px 6px;border-radius:6px;font-size:10px;background:' + bg + ';border:1px solid ' + bd + ';color:' + fg + ';white-space:nowrap;">' + esc(text) + '</span>';
+  }
+
+  /** Plain-language text for each thing holding the proposal up. */
+  var CB_BLOCKER_TEXT = {
+    'address:no_billing_address': 'This customer has no billing address on file.',
+    'address:missing_country': 'The billing address has no country.',
+    'address:missing_province': 'The billing address has no province or territory. Canadian tax cannot be determined without it.',
+    'address:unrecognized_province': 'The province or territory on the billing address was not recognized.',
+    'address:missing_postal_code': 'The billing address has no postal code.',
+    'address:invalid_postal_code': 'The postal code is not a valid Canadian postal code.',
+    'address:province_postal_mismatch': 'The postal code belongs to a different province than the address says. Confirm which is right.',
+    'fx:review_required': 'The Bank of Canada rate could not be confirmed. CAD figures are indicative only.',
+    'tax:manual_amount_present': 'A tax amount has been typed into this proposal by hand. Canadian tax is calculated, so remove the manual amount or the customer is taxed twice.',
+    'calc:customs_requires_review': 'Nobody has entered the customs figures yet.',
+    'calc:broker_fee_unconfirmed': 'The customs brokerage fee has not been confirmed.',
+    'calc:importer_of_record_undetermined': 'Who is the importer of record has not been decided.',
+    'calc:tax_requires_review': 'Canadian sales tax needs review before this can be released.'
+  };
+
+  function cbCardHtml() {
+    if (!cbData) return '';
+    if (cbData.error) {
+      return '<div class="card" style="margin-top:14px;border:1px solid #f0ccc6;background:#fbecea;"><div class="section-title" style="margin:0 0 4px;">Canadian proposal</div>' +
+        '<div style="font-size:12px;color:#9c3327;line-height:1.5;">' + esc(cbData.error) + '</div></div>';
+    }
+    if (!cbData.applicable) return '';
+
+    var j = cbData.jurisdiction || {};
+    var fx = cbData.fx || {};
+    var res = cbData.result;
+
+    var head = '<div class="section-title" style="margin:0 0 2px;">Canadian proposal</div>' +
+      '<div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;">' +
+        esc(j.provinceLabel || 'Canada') + ' \u00b7 billing address</div>';
+
+    // The rate, its source and its date. A customer has to be able to see which
+    // published observation their CAD figures came from.
+    var fxBlock = fx.rate
+      ? '<div style="font-size:11.5px;line-height:1.55;color:#5c6157;padding:8px 10px;background:#f6f7f4;border:1px solid #e7e8e3;border-radius:9px;margin-bottom:10px;">' +
+          'Estimated CAD uses <b>1 USD = ' + esc(fx.rate) + ' CAD</b>' +
+          (fx.observationDate ? ', published ' + esc(fx.observationDate) : '') +
+          (fx.source === 'MANUAL' ? ' (entered by hand, not a Bank of Canada rate)' : fx.source === 'CACHE' ? ' (from cache)' : '') + '.' +
+          (fx.warning ? '<div style="color:#7a5c1e;margin-top:5px;">' + esc(fx.warning) + '</div>' : '') +
+        '</div>'
+      : '<div style="font-size:11.5px;line-height:1.55;color:#7a5c1e;padding:8px 10px;background:#fdf6e7;border:1px solid #e8d9ae;border-radius:9px;margin-bottom:10px;">' +
+          'No USD/CAD rate is available, so there are no CAD figures. The USD amounts are unaffected.</div>';
+
+    var blockers = (cbData.blockers || []);
+    var blockBlock = blockers.length
+      ? '<div style="font-size:11.5px;line-height:1.6;color:#7a5c1e;padding:8px 10px;background:#fdf6e7;border:1px solid #e8d9ae;border-radius:9px;margin-bottom:10px;">' +
+          '<b>Before this can be released</b><ul style="margin:5px 0 0;padding-left:16px;">' +
+          blockers.map(function (b) { return '<li>' + esc(CB_BLOCKER_TEXT[b] || b) + '</li>'; }).join('') +
+          '</ul></div>'
+      : '';
+
+    if (!res) {
+      return '<div class="card" style="margin-top:14px;border:1px solid #e4dfd0;background:#fdfcf7;">' + head + fxBlock + blockBlock + '</div>';
+    }
+
+    var rows = (res.lines || []).map(function (l) {
+      return '<tr>' +
+        '<td style="padding:4px 0;font-size:12px;vertical-align:top;">' + esc(l.label) + cbStatusChip(l.status) +
+          (l.percent ? '<span class="muted" style="font-size:10.5px;"> ' + esc(l.percent) + '%</span>' : '') +
+          (l.payableTo === 'CUSTOMS_OR_BROKER' ? '<span style="display:block;font-size:10px;color:#8a8f85;">payable at the border</span>' : '') +
+        '</td>' +
+        '<td style="padding:4px 0;text-align:right;font-size:12px;vertical-align:top;">' + cbPair(l.usdMinor, l.cadMinor) + '</td>' +
+      '</tr>';
+    }).join('');
+
+    var totalRow = function (label, t, strong) {
+      return '<tr><td style="padding:6px 0 2px;font-size:12px;' + (strong ? 'font-weight:700;' : '') + '">' + esc(label) + '</td>' +
+        '<td style="padding:6px 0 2px;text-align:right;font-size:12.5px;' + (strong ? 'font-weight:700;' : '') + '">' + cbPair(t.usdMinor, t.cadMinor) + '</td></tr>';
+    };
+
+    var totals = '<table style="width:100%;border-collapse:collapse;border-top:1px solid #ece7d8;margin-top:8px;">' +
+      totalRow('Payable to Summit', res.payableToSummit, true) +
+      (res.separatelyPayable.usdMinor ? totalRow('Payable at import', res.separatelyPayable, false) : '') +
+      (res.separatelyPayable.usdMinor ? totalRow('Estimated landed cost', res.estimatedLandedCost, false) : '') +
+      '</table>';
+
+    return '<div class="card" style="margin-top:14px;border:1px solid #e4dfd0;background:#fdfcf7;">' +
+      head + fxBlock + blockBlock +
+      '<table style="width:100%;border-collapse:collapse;">' + rows + '</table>' +
+      totals +
+      '<button class="link-btn" id="cbCustoms" style="width:auto;padding:6px 11px;font-size:12px;margin-top:11px;">Customs and duties\u2026</button>' +
+    '</div>';
+  }
+
+  function wireCrossBorderCard() {
+    var b = document.getElementById('cbCustoms');
+    if (b) b.addEventListener('click', openCustomsForm);
+  }
+
+
+
+  /* --- Customs and duties -------------------------------------------------
+     Typed in, not calculated. There is no tariff engine here on purpose: working
+     out duty needs a tariff classification number, a country of origin, CUSMA
+     origin documentation, material composition and the current surtax orders, and
+     none of that is in this catalog. A duty computed from missing data is worse
+     than no duty, because it produces a figure somebody quotes.
+
+     So the numbers come from the broker, and BLANK MEANS BLANK. A blank duty box is
+     "nobody has told us yet", which prints as a review notice; it is not zero. Zero
+     is a claim, and only a person gets to make it. */
+
+  /** A money box's value in minor units, or null when it is empty. */
+  function cbMinorFromInput(el) {
+    if (!el) return null;
+    var raw = String(el.value == null ? '' : el.value).trim().replace(/^\$/, '').replace(/,/g, '');
+    if (raw === '') return null;
+    if (!/^\d+(\.\d{1,2})?$/.test(raw)) return NaN;
+    return Math.round(parseFloat(raw) * 100);
+  }
+
+  function cbInputFromMinor(v) {
+    return v == null ? '' : (Number(v) / 100).toFixed(2);
+  }
+
+  async function openCustomsForm() {
+    if (!pb || !pb.versionId) return;
+    var e;
+    try {
+      var r = await authed('/proposals/versions/' + pb.versionId + '/customs');
+      if (!r.ok) { alert('Could not load the customs entry.'); return; }
+      e = await r.json();
+    } catch (err) { alert('Could not load the customs entry.'); return; }
+
+    var lbl = 'font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;display:block;margin-bottom:3px;';
+    var box = 'width:100%;padding:8px 10px;border:1px solid #dcded7;border-radius:8px;font-size:13px;background:#fff;';
+
+    var money = function (id, label, v) {
+      return '<div style="flex:1;min-width:120px;"><label style="' + lbl + '">' + esc(label) + '</label>' +
+        '<input id="' + id + '" inputmode="decimal" placeholder="blank = not yet known" value="' + esc(cbInputFromMinor(v)) + '" style="' + box + '"></div>';
+    };
+
+    var statusLine = {
+      REQUIRES_CUSTOMS_REVIEW: 'Nobody has entered these yet. The proposal shows a customs review notice.',
+      ESTIMATED: 'Entered, presented to the customer as an estimate. Not yet approved.',
+      CONFIRMED: 'Approved. The proposal can go out as a landed-cost quote.',
+      NOT_APPLICABLE: 'Recorded as having no customs charges.'
+    }[e.status] || '';
+
+    var body =
+      '<div style="font-size:11.5px;line-height:1.6;color:#5c6157;padding:8px 10px;background:#f6f7f4;border:1px solid #e7e8e3;border-radius:9px;margin-bottom:14px;">' +
+        '<b>' + esc(e.status.replace(/_/g, ' ').toLowerCase()) + '</b> \u2014 ' + esc(statusLine) +
+        '<div style="margin-top:5px;">Leave a box empty when the figure is not known. An empty box is reported as outstanding; it is not treated as zero.</div>' +
+      '</div>' +
+      '<div style="margin-bottom:12px;"><label style="' + lbl + '">Currency these were quoted in</label>' +
+        '<select id="cfCur" style="' + box + '">' +
+          '<option value="CAD"' + (e.currency === 'CAD' ? ' selected' : '') + '>CAD \u2014 as the broker quoted</option>' +
+          '<option value="USD"' + (e.currency === 'USD' ? ' selected' : '') + '>USD</option>' +
+        '</select></div>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">' +
+        money('cfDuty', 'Customs duty', e.dutyMinor) +
+        money('cfSurtax', 'Tariff / surtax', e.surtaxMinor) +
+      '</div>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">' +
+        money('cfSima', 'SIMA duties', e.simaMinor) +
+        money('cfOther', 'Other border duties', e.otherDutyMinor) +
+      '</div>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
+        money('cfImportTax', 'Import tax', e.importTaxMinor) +
+        money('cfBroker', 'Brokerage', e.brokerFeeMinor) +
+      '</div>' +
+      '<div style="margin-bottom:12px;"><label style="' + lbl + '">Where these figures came from</label>' +
+        '<input id="cfSource" placeholder="Broker quote reference, ruling, or a prior entry" value="' + esc(e.sourceReference || '') + '" style="' + box + '">' +
+        '<div class="muted" style="font-size:11px;line-height:1.5;margin-top:4px;">Required before these can be approved \u2014 without it there is nothing to check them against later.</div></div>' +
+      '<div style="margin-bottom:12px;"><label style="' + lbl + '">Importer of record</label>' +
+        '<select id="cfIor" style="' + box + '">' +
+          ['CUSTOMER|The customer', 'SUMMIT|Summit Sensory Gym', 'THIRD_PARTY|A third party', 'TO_BE_DETERMINED|Still to be decided'].map(function (o) {
+            var p = o.split('|');
+            return '<option value="' + p[0] + '"' + (e.importerOfRecord === p[0] ? ' selected' : '') + '>' + esc(p[1]) + '</option>';
+          }).join('') +
+        '</select></div>' +
+      '<label style="display:flex;gap:8px;align-items:flex-start;font-size:12.5px;line-height:1.5;margin-bottom:12px;">' +
+        '<input type="checkbox" id="cfIncl"' + (e.includedInSellerTotal ? ' checked' : '') + ' style="margin-top:2px;">' +
+        '<span>Summit is collecting these amounts, so add them to the amount payable to Summit.' +
+        '<span class="muted" style="display:block;font-size:11px;margin-top:2px;">Leave unticked when the customer pays the border directly \u2014 they then show as payable at import instead.</span></span></label>' +
+      '<div style="margin-bottom:4px;"><label style="' + lbl + '">Notes</label>' +
+        '<textarea id="cfNotes" rows="2" style="' + box + 'resize:vertical;">' + esc(e.notes || '') + '</textarea></div>' +
+      '<div id="cfMsg" style="font-size:11.5px;line-height:1.5;margin-top:10px;"></div>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid #ece7d8;">' +
+        '<button type="button" class="link-btn" id="cfApprove" style="width:auto;padding:7px 12px;font-size:12px;">Approve these figures</button>' +
+        '<button type="button" class="link-btn" id="cfNone" style="width:auto;padding:7px 12px;font-size:12px;">No customs charges apply</button>' +
+        (e.status === 'CONFIRMED' || e.status === 'NOT_APPLICABLE'
+          ? '<button type="button" class="link-btn" id="cfReopen" style="width:auto;padding:7px 12px;font-size:12px;">Send back for review</button>' : '') +
+      '</div>';
+
+    openModal('Customs and duties', body, async function (close) {
+      var msg = document.getElementById('cfMsg');
+      var amounts = {
+        dutyMinor: cbMinorFromInput(document.getElementById('cfDuty')),
+        surtaxMinor: cbMinorFromInput(document.getElementById('cfSurtax')),
+        simaMinor: cbMinorFromInput(document.getElementById('cfSima')),
+        otherDutyMinor: cbMinorFromInput(document.getElementById('cfOther')),
+        importTaxMinor: cbMinorFromInput(document.getElementById('cfImportTax')),
+        brokerFeeMinor: cbMinorFromInput(document.getElementById('cfBroker'))
+      };
+      for (var k in amounts) {
+        if (Number.isNaN(amounts[k])) {
+          msg.innerHTML = '<span style="color:#9c3327;">Enter amounts as plain numbers, e.g. 250.00, or leave the box empty.</span>';
+          return;
+        }
+      }
+      var payload = Object.assign(amounts, {
+        currency: document.getElementById('cfCur').value,
+        sourceReference: document.getElementById('cfSource').value.trim() || null,
+        importerOfRecord: document.getElementById('cfIor').value,
+        includedInSellerTotal: document.getElementById('cfIncl').checked,
+        notes: document.getElementById('cfNotes').value.trim() || null
+      });
+      var r = await authed('/proposals/versions/' + pb.versionId + '/customs', { method: 'PATCH', body: payload });
+      if (!r.ok) {
+        var j = null; try { j = await r.json(); } catch (err) {}
+        msg.innerHTML = '<span style="color:#9c3327;">' + esc((j && j.message) || 'Could not save (' + r.status + ').') + '</span>';
+        return;
+      }
+      close();
+      await loadCrossBorder(true);
+    }, 'Save figures');
+
+    // The three lifecycle actions. Each reloads the rail, because each changes what
+    // the proposal is allowed to do.
+    var act = async function (path, bodyObj, btn) {
+      var msg = document.getElementById('cfMsg');
+      btn.disabled = true;
+      try {
+        var r = await authed('/proposals/versions/' + pb.versionId + '/customs/' + path, { method: 'POST', body: bodyObj });
+        if (!r.ok) {
+          var j = null; try { j = await r.json(); } catch (e2) {}
+          msg.innerHTML = '<span style="color:#9c3327;">' + esc((j && j.message) || 'Could not do that (' + r.status + ').') + '</span>';
+          btn.disabled = false;
+          return false;
+        }
+        return true;
+      } catch (e3) { btn.disabled = false; return false; }
+    };
+
+    setTimeout(function () {
+      var ap = document.getElementById('cfApprove');
+      if (ap) ap.addEventListener('click', async function () {
+        // Approving is a claim about duty and tax, so the reason is offered but the
+        // source reference is what the server insists on.
+        var why = prompt('Anything to record about this approval? (optional)') || '';
+        if (await act('approve', { reason: why.trim() || undefined }, ap)) { closeAllModals(); await loadCrossBorder(true); }
+      });
+      var no = document.getElementById('cfNone');
+      if (no) no.addEventListener('click', async function () {
+        var why = prompt('Why do no customs charges apply? (required)');
+        if (!why || !why.trim()) return;
+        if (await act('not-applicable', { reason: why.trim() }, no)) { closeAllModals(); await loadCrossBorder(true); }
+      });
+      var re = document.getElementById('cfReopen');
+      if (re) re.addEventListener('click', async function () {
+        var why = prompt('Why is this going back for review? (required)');
+        if (!why || !why.trim()) return;
+        if (await act('reopen', { reason: why.trim() }, re)) { closeAllModals(); await loadCrossBorder(true); }
+      });
+    }, 0);
+  }
+
+  /** Dismiss any open overlay. The lifecycle buttons live inside one. */
+  function closeAllModals() {
+    document.querySelectorAll('form#mForm').forEach(function (f) {
+      var ov = f.parentNode;
+      if (ov && ov.parentNode) ov.parentNode.removeChild(ov);
     });
   }
 
@@ -7342,6 +7668,7 @@
     loadRfqPanel();
     // A mock has no customer behind it, so there is nothing to keep notes against.
     if (!isMock()) loadCustomerNotes();
+    if (!isMock()) loadCrossBorder();
     if (!isMock()) {
       document.getElementById('bSaveTpl').addEventListener('click', saveAsTemplate);
       document.getElementById('bLoadTpl').addEventListener('click', loadTemplate);
