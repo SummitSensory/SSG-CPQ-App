@@ -195,12 +195,22 @@ migration is additive, dropping loses only cross-border data.
 
 ## 6. Not built yet
 
-The charge-line pipeline and snapshot writer; the manual customs entry UI and its
-approval flow; broker fee-schedule evaluation; proposal and PDF presentation
-(dual-currency columns, the exchange-rate banner, the three summaries); the
-acceptance-date rate re-lock and immutable accepted snapshot; the admin screens;
-the configurable proposal-language templates; and the six end-to-end city
-fixtures.
+The charge-line pipeline, the snapshot writer, the customs entry flow, broker fee
+evaluation, the proposal and PDF presentation, the acceptance re-lock and the admin
+screens (`docs/cross-border-admin.md`) have all since landed. What remains:
+
+- **the six end-to-end city fixtures** — `tests/integration/crossBorderCities.test.ts`
+  now runs a whole proposal through the pipeline once per regime (Toronto, Halifax,
+  Vancouver, Winnipeg, Montreal, Calgary), so what remains here is only the same
+  fixture against the SEEDED rates rather than a written-out rule set
+- **configurable proposal-language templates** — the currency statement and the
+  cross-border terms are still written in `src/render/pdf.ts`
+- **a tier-table editor** — the admin screen enters flat, percentage and per-unit
+  brokerage schedules; a tiered tariff still needs its `tiers` JSON entered directly
+- **taxability rules for `INSTALLATION`, `DESIGN`, `TRAINING`, `TRAVEL` and
+  `OTHER`** — unseeded on purpose (§4.2), but they need a ruling before a Canadian
+  job with installation on it can be released
+- **`rateService.ts` tests** — see §7
 
 ## 7. Verification status
 
@@ -208,6 +218,18 @@ fixtures.
 jurisdiction resolution, conversion arithmetic and rounding symmetry, the Bank of
 Canada provider against a stubbed transport including the weekend fallback, and
 the tax engine including the GST/HST registration regression.
+
+`tests/unit/brokerFees.test.ts` covers the brokerage arithmetic: percent-not-fraction,
+the floor applying to the broker's own fee before pass-through charges, inclusive tier
+ceilings, and the refusal on a value above every tier.
+
+`tests/integration/crossBorderCities.test.ts` runs the whole pipeline once per tax
+regime and asserts what would print: one HST line at 13% in Ontario and 14% in Nova
+Scotia, GST + PST in British Columbia, RST in Manitoba, QST on the same base as GST in
+Quebec, GST alone in Alberta. It also locks the gates — a missing provincial
+registration, an absent taxability rule, unreviewed customs figures, an undetermined
+importer of record, and an exemption nobody approved — and the CAD column adding up to
+its own total.
 
 **`rateService.ts` has no tests.** It needs a test database or a Prisma mock, and
 an integration test rather than a unit test. It is reviewed, not proven.

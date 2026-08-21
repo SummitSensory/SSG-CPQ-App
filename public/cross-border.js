@@ -154,6 +154,7 @@
       readiness: null,
       rates: [],
       fx: null,
+      taxability: [],
       schedules: [],
       inForceId: null,
       queue: [],
@@ -194,6 +195,7 @@
         authed('/cross-border/fx'),
         authed('/cross-border/broker-fees'),
         authed('/cross-border/customs-queue'),
+        authed('/cross-border/taxability'),
       ]);
       S.rates = results[0].ok ? (await results[0].json()) || [] : [];
       S.fx = results[1].ok ? await results[1].json() : { observations: [], overrides: [] };
@@ -203,6 +205,7 @@
         S.inForceId = bf.inForceId || null;
       }
       S.queue = results[3].ok ? (await results[3].json()) || [] : [];
+      S.taxability = results[4].ok ? (await results[4].json()) || [] : [];
       render();
     }
 
@@ -494,6 +497,249 @@
       );
     }
 
+    /* ── Tax rates ─────────────────────────────────────────────────────────── */
+
+    /* A row is in force when it started on or before today and has not ended — and
+     * `effectiveTo` is EXCLUSIVE, so a row ending today is already finished. The same
+     * test the engine applies, because a screen that disagreed with the engine about
+     * which rate is live would be worse than no screen. */
+    function inForce(x) {
+      var t = today();
+      return day(x.effectiveFrom) <= t && (!x.effectiveTo || t < day(x.effectiveTo));
+    }
+
+    function ratesHtml() {
+      var byProvince = {};
+      S.rates.forEach(function (r) {
+        (byProvince[r.province] = byProvince[r.province] || []).push(r);
+      });
+
+      var missing = PROVINCES.filter(function (p) {
+        return !(byProvince[p[0]] || []).some(inForce);
+      });
+
+      return (
+        '<div class="muted" style="font-size:13px;line-height:1.6;max-width:680px;">' +
+        'A province with no rate on file returns <b>no rate for province</b> and cannot be quoted at all — ' +
+        'the engine will not guess one. Enter what the CRA or the province publishes, and record where it came from. ' +
+        'A rate that genuinely <b>changed</b> is a new row with its own start date, which supersedes the old one; ' +
+        'correcting a row in place restates what every proposal priced on it was quoted.' +
+        '</div>' +
+        (missing.length
+          ? '<div style="margin-top:14px;background:#fbecea;border:1px solid #efd3ce;border-radius:9px;padding:11px 13px;font-size:13px;color:#9c3327;line-height:1.55;">' +
+            '<b>' +
+            missing.length +
+            ' province(s) have no rate in force:</b> ' +
+            esc(
+              missing
+                .map(function (p) {
+                  return p[1];
+                })
+                .join(', '),
+            ) +
+            '.' +
+            '<div style="margin-top:4px;font-size:12.5px;">A proposal billed to any of them is blocked until a rate is entered.</div></div>'
+          : '<div style="margin-top:14px;background:#eef4ef;border:1px solid #cfe0d4;border-radius:9px;padding:11px 13px;font-size:13px;color:#2f6b4f;">Every province has a rate in force.</div>') +
+        PROVINCES.map(function (p) {
+          var rows = (byProvince[p[0]] || []).slice().sort(function (a, b) {
+            return day(b.effectiveFrom) < day(a.effectiveFrom) ? -1 : 1;
+          });
+          if (!rows.length) return '';
+          return (
+            '<div style="border-top:1px solid #eef0ea;padding:12px 0;">' +
+            '<div style="font-size:13.5px;font-weight:600;">' +
+            esc(p[1]) +
+            '</div>' +
+            rows
+              .map(function (x) {
+                var live = inForce(x);
+                return (
+                  '<div style="display:flex;gap:14px;align-items:baseline;flex-wrap:wrap;margin-top:7px;">' +
+                  '<div style="font-size:13px;min-width:96px;">' +
+                  '<span class="dot ' +
+                  (live ? 'ok' : 'wait') +
+                  '"></span>' +
+                  esc(x.taxType) +
+                  '</div>' +
+                  '<div style="font-size:14px;font-weight:600;min-width:74px;font-variant-numeric:tabular-nums;">' +
+                  esc(x.ratePercent) +
+                  '%</div>' +
+                  '<div class="muted" style="font-size:12.5px;min-width:180px;">' +
+                  day(x.effectiveFrom) +
+                  ' → ' +
+                  (x.effectiveTo ? day(x.effectiveTo) : 'open') +
+                  (live ? '' : ' · superseded') +
+                  '</div>' +
+                  '<div class="muted" style="font-size:12.5px;flex:1 1 220px;">' +
+                  esc(x.source || 'no source recorded') +
+                  '</div>' +
+                  '<button class="link-btn" data-act="fixRate" data-id="' +
+                  esc(x.id) +
+                  '" style="width:auto;padding:5px 11px;font-size:12.5px;white-space:nowrap;">Correct</button>' +
+                  '</div>'
+                );
+              })
+              .join('') +
+            '</div>'
+          );
+        }).join('') +
+        '<div class="section-title" style="margin:24px 0 6px;">Add a rate</div>' +
+        '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">' +
+        '<label style="font-size:12.5px;color:#82877d;">Province<br>' +
+        '<select id="cbRateProv" style="' +
+        IN +
+        'margin-top:4px;">' +
+        PROVINCES.map(function (p) {
+          return '<option value="' + p[0] + '">' + esc(p[1]) + '</option>';
+        }).join('') +
+        '</select></label>' +
+        '<label style="font-size:12.5px;color:#82877d;">Tax<br>' +
+        '<select id="cbRateType" style="' +
+        IN +
+        'margin-top:4px;">' +
+        ['GST', 'HST', 'PST', 'RST', 'QST']
+          .map(function (t) {
+            return '<option>' + t + '</option>';
+          })
+          .join('') +
+        '</select></label>' +
+        '<label style="font-size:12.5px;color:#82877d;">Rate %<br>' +
+        '<input id="cbRatePct" placeholder="9.975" style="' +
+        IN +
+        'margin-top:4px;width:96px;font-variant-numeric:tabular-nums;"></label>' +
+        '<label style="font-size:12.5px;color:#82877d;">In force from<br>' +
+        '<input id="cbRateFrom" type="date" value="' +
+        today() +
+        '" style="' +
+        IN +
+        'margin-top:4px;"></label>' +
+        '<label style="font-size:12.5px;color:#82877d;flex:1 1 240px;min-width:200px;">Source<br>' +
+        '<input id="cbRateSource" placeholder="CRA GST/HST rates page, checked ' +
+        today() +
+        '" style="' +
+        IN +
+        'margin-top:4px;width:100%;"></label>' +
+        '<label style="font-size:12.5px;color:#82877d;display:flex;gap:7px;align-items:center;padding-bottom:9px;">' +
+        '<input type="checkbox" id="cbRateSupersede"> supersede the current row</label>' +
+        '<button class="link-btn" data-act="addRate" style="' +
+        BTN +
+        '">Add</button>' +
+        '</div>' +
+        '<div class="muted" style="font-size:12.5px;margin-top:9px;line-height:1.55;">' +
+        'Superseding closes the row in force on the new start date, so the pair abuts exactly — the engine reads an end date as ' +
+        '<b>exclusive</b>, and a gap or an overlap of one day misprices every proposal dated in it. ' +
+        'HST replaces the provincial line rather than sitting beside it, and a province has one provincial sales tax, not two.' +
+        '</div>' +
+        taxabilityHtml()
+      );
+    }
+
+    /* Whether a charge category is taxable. A rate with no rule beside it charges
+     * nothing and blocks the proposal, so this belongs on the same screen. */
+    function taxabilityHtml() {
+      var CATEGORIES = [
+        'EQUIPMENT',
+        'PARTS',
+        'FREIGHT',
+        'INSTALLATION',
+        'DESIGN',
+        'TRAINING',
+        'TRAVEL',
+        'DISCOUNT',
+        'OTHER',
+      ];
+      var live = S.taxability.filter(inForce);
+      var covered = {};
+      live.forEach(function (t) {
+        covered[t.category] = covered[t.category] || {};
+        covered[t.category][t.taxType] = t.taxable;
+      });
+      var uncovered = CATEGORIES.filter(function (c) {
+        return !covered[c];
+      });
+
+      return (
+        '<div class="section-title" style="margin:28px 0 6px;">What is taxable</div>' +
+        '<div class="muted" style="font-size:13px;line-height:1.6;max-width:680px;">' +
+        'A charge category with no rule does not default to taxable or exempt — the proposal goes to review. ' +
+        'That is deliberate: a freight line silently acquiring or losing 13% is the failure this avoids.' +
+        '</div>' +
+        (uncovered.length
+          ? '<div style="margin-top:12px;background:#fdf3e3;border:1px solid #f0e0bc;border-radius:9px;padding:11px 13px;font-size:13px;color:#7a5c1a;line-height:1.55;">' +
+            '<b>No rule for:</b> ' +
+            esc(uncovered.join(', ').toLowerCase()) +
+            '.' +
+            '<div style="margin-top:4px;font-size:12.5px;">Installation into real property especially varies by province — it needs a ruling, not a guess.</div></div>'
+          : '') +
+        (live.length
+          ? '<div style="margin-top:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:7px;">' +
+            live
+              .map(function (t) {
+                return (
+                  '<div style="border:1px solid #eef0ea;border-radius:9px;padding:8px 11px;font-size:12.5px;">' +
+                  '<b>' +
+                  esc(t.category.toLowerCase()) +
+                  '</b> · ' +
+                  esc(t.taxType) +
+                  (t.province ? ' · ' + esc(t.province) : '') +
+                  '<div class="muted" style="margin-top:2px;">' +
+                  (t.taxable ? 'taxable' : 'not taxable') +
+                  ' from ' +
+                  day(t.effectiveFrom) +
+                  '</div></div>'
+                );
+              })
+              .join('') +
+            '</div>'
+          : '') +
+        '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-top:14px;">' +
+        '<label style="font-size:12.5px;color:#82877d;">Charge<br>' +
+        '<select id="cbTbCat" style="' +
+        IN +
+        'margin-top:4px;">' +
+        CATEGORIES.map(function (c) {
+          return '<option value="' + c + '">' + esc(c.toLowerCase()) + '</option>';
+        }).join('') +
+        '</select></label>' +
+        '<label style="font-size:12.5px;color:#82877d;">Tax<br>' +
+        '<select id="cbTbType" style="' +
+        IN +
+        'margin-top:4px;">' +
+        ['GST', 'HST', 'PST', 'RST', 'QST']
+          .map(function (t) {
+            return '<option>' + t + '</option>';
+          })
+          .join('') +
+        '</select></label>' +
+        '<label style="font-size:12.5px;color:#82877d;">Province<br>' +
+        '<select id="cbTbProv" style="' +
+        IN +
+        'margin-top:4px;"><option value="">every province</option>' +
+        PROVINCES.map(function (p) {
+          return '<option value="' + p[0] + '">' + esc(p[1]) + '</option>';
+        }).join('') +
+        '</select></label>' +
+        '<label style="font-size:12.5px;color:#82877d;">Treatment<br>' +
+        '<select id="cbTbTaxable" style="' +
+        IN +
+        'margin-top:4px;"><option value="1">taxable</option><option value="0">not taxable</option></select></label>' +
+        '<label style="font-size:12.5px;color:#82877d;">From<br>' +
+        '<input id="cbTbFrom" type="date" value="' +
+        today() +
+        '" style="' +
+        IN +
+        'margin-top:4px;"></label>' +
+        '<label style="font-size:12.5px;color:#82877d;flex:1 1 220px;min-width:180px;">Source<br>' +
+        '<input id="cbTbSource" placeholder="Ruling from SSG’s tax adviser, Aug 2026" style="' +
+        IN +
+        'margin-top:4px;width:100%;"></label>' +
+        '<button class="link-btn" data-act="addTaxability" style="' +
+        BTN +
+        '">Add</button>' +
+        '</div>'
+      );
+    }
+
     /* ── Exchange rate ─────────────────────────────────────────────────────── */
 
     function fxHtml() {
@@ -759,6 +1005,7 @@
       ['readiness', 'Readiness', readinessHtml],
       ['settings', 'Settings', settingsHtml],
       ['registrations', 'Tax registrations', registrationsHtml],
+      ['rates', 'Tax rates', ratesHtml],
       ['fx', 'Exchange rate', fxHtml],
       ['broker', 'Brokerage', brokerHtml],
       ['queue', 'Customs review queue', queueHtml],
@@ -864,6 +1111,70 @@
         call = [
           '/cross-border/tax-registrations/' + id,
           { method: 'PATCH', body: { effectiveTo: to || null } },
+        ];
+      } else if (kind === 'addRate') {
+        var pct = val('cbRatePct');
+        var src = val('cbRateSource');
+        if (!pct || !src) {
+          flash('A rate needs both the figure and where it came from.', true);
+          return;
+        }
+        var sup = document.getElementById('cbRateSupersede');
+        call = [
+          '/cross-border/tax-rates',
+          {
+            method: 'POST',
+            body: {
+              province: val('cbRateProv'),
+              taxType: val('cbRateType'),
+              ratePercent: pct,
+              effectiveFrom: val('cbRateFrom'),
+              source: src,
+              supersedePrevious: !!(sup && sup.checked),
+            },
+          },
+        ];
+      } else if (kind === 'fixRate') {
+        var row =
+          S.rates.filter(function (x) {
+            return x.id === id;
+          })[0] || {};
+        var fixed = prompt(
+          'Correct this rate in place. Use this only for a row entered wrongly — a rate that actually changed should be a new row, so the old proposals keep the rate they were quoted.\n\nRate %:',
+          String(row.ratePercent == null ? '' : row.ratePercent),
+        );
+        if (fixed === null) return;
+        var why = prompt('Where does the corrected figure come from?', row.source || '');
+        if (why === null) return;
+        call = [
+          '/cross-border/tax-rates/' + id,
+          {
+            method: 'PATCH',
+            body: {
+              ratePercent: String(fixed).trim(),
+              source: String(why).trim(),
+            },
+          },
+        ];
+      } else if (kind === 'addTaxability') {
+        var tbSrc = val('cbTbSource');
+        if (!tbSrc) {
+          flash('Record the ruling or reference this treatment comes from.', true);
+          return;
+        }
+        call = [
+          '/cross-border/taxability',
+          {
+            method: 'POST',
+            body: {
+              category: val('cbTbCat'),
+              taxType: val('cbTbType'),
+              province: val('cbTbProv') || null,
+              taxable: val('cbTbTaxable') === '1',
+              effectiveFrom: val('cbTbFrom'),
+              source: tbSrc,
+            },
+          },
         ];
       } else if (kind === 'addOverride') {
         if (!val('cbFxRate') || !val('cbFxReason')) {
