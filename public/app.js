@@ -6588,8 +6588,30 @@
       '<div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;">Internal only \u2014 not printed</div>' +
       (rfqData.error ? '<div style="background:#fbecea;border:1px solid #f0ccc6;color:#9c3327;font-size:12px;line-height:1.5;padding:8px 10px;border-radius:9px;margin-bottom:10px;">' + esc(rfqData.error) + '</div>' : '') +
       prompt +
+      rfqUnmatchedHtml() +
       freightRemovedHtml() +
       (rows || '<div class="muted" style="font-size:12px;">None raised yet.</div>') +
+    '</div>';
+  }
+
+  /**
+   * Lines on the proposal that belong to no vendor we can name.
+   *
+   * These used to be dropped in silence, which is how a proposal with several
+   * vendors showed a single vendor card and looked finished. A part with no
+   * catalog row, or a catalog row naming no manufacturer, can never appear on a
+   * freight request — so it is named here rather than omitted, with the one action
+   * that fixes it.
+   */
+  function rfqUnmatchedHtml() {
+    var u = (rfqData && rfqData.unmatched) || [];
+    if (!u.length) return '';
+    var shown = u.slice(0, 6).map(esc).join(', ');
+    if (u.length > 6) shown += ' and ' + (u.length - 6) + ' more';
+    return '<div style="background:#fdf6e7;border:1px solid #e8d9ae;color:#7a5c1e;font-size:12px;line-height:1.55;padding:9px 11px;border-radius:9px;margin-bottom:10px;">' +
+      '<b>' + u.length + ' item' + (u.length === 1 ? '' : 's') + ' cannot be requested.</b> ' +
+      'No supplier is recorded for ' + shown + '. ' +
+      'Set a manufacturer on the catalog record, or add these to a request by hand once it is open.' +
     '</div>';
   }
 
@@ -6930,9 +6952,9 @@
       var vendors = await rfqApi('/proposals/versions/' + versionId + '/rfq/vendors', { method: 'POST', body: body });
       var rfqs = await rfqApi('/proposals/' + pb.proposalId + '/rfqs');
       var cov = await rfqApi('/proposals/versions/' + versionId + '/freight-coverage', { method: 'POST', body: body });
-      rfqData = { versionId: versionId, sig: sig, vendors: vendors.vendors || [], rfqs: rfqs.rfqs || [], cov: cov, error: null };
+      rfqData = { versionId: versionId, sig: sig, vendors: vendors.vendors || [], unmatched: vendors.unmatchedNames || [], rfqs: rfqs.rfqs || [], cov: cov, error: null };
     } catch (e) {
-      rfqData = { versionId: versionId, sig: sig, vendors: [], rfqs: [], cov: null, error: e.message };
+      rfqData = { versionId: versionId, sig: sig, vendors: [], unmatched: [], rfqs: [], cov: null, error: e.message };
     }
     loadRfqPanel._busy = false;
     renderRfqRail();

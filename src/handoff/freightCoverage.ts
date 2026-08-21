@@ -1,5 +1,6 @@
 import { prisma } from '../lib/prisma.js';
 import { NotFoundError } from '../lib/errors.js';
+import { resolveVendors } from './vendorResolution.js';
 
 /**
  * Freight coverage — which product lines on a proposal have had their freight
@@ -33,11 +34,19 @@ interface ProposalLine {
   costEach?: number;
 }
 
-/** Product lines on a version, ignoring notes, headings and optional extras. */
+/**
+ * Product lines on a version, ignoring notes and headings.
+ *
+ * Optional lines ARE included. An option the customer takes still has to ship, so
+ * excluding it here meant a taken option arrived with no freight ever quoted for
+ * it — and on a proposal where most sections are optional, it meant the freight
+ * rail showed a handful of items out of dozens.
+ */
 function productLines(items: unknown): ProposalLine[] {
   if (!Array.isArray(items)) return [];
   return (items as ProposalLine[]).filter(
-    (l) => l && (l.lineType ?? 'PRODUCT') === 'PRODUCT' && !l.optional && s(l.sku).trim() !== '' && n(l.quantity) > 0,
+    (l) =>
+      l && (l.lineType ?? 'PRODUCT') === 'PRODUCT' && s(l.sku).trim() !== '' && n(l.quantity) > 0,
   );
 }
 
@@ -114,28 +123,46 @@ async function contextFor(versions: Array<{ proposalId: string; items: unknown }
   const skus = new Set<string>();
   for (const v of versions) for (const l of productLines(v.items)) skus.add(s(l.sku).trim());
 
-  const [skuRows, mfrs, rfqs] = await Promise.all([
-    skus.size
-      ? prisma.sku.findMany({ where: { part: { in: [...skus] } }, select: { part: true, manufacturer: true } })
-      : Promise.resolve([] as Array<{ part: string; manufacturer: string | null }>),
+  const [resolution, mfrs, rfqs] = await Promise.all([
+    // Reads Sku AND Product/ProductSourcing. Reading Sku alone left every
+    // sourcing-recorded part with no vendor, so it was reported as uncovered
+    // freight that no vendor card could ever cover.
+    resolveVendors([...skus]),
     prisma.manufacturer.findMany({ where: { rfqEnabled: true }, select: { name: true } }),
     prisma.freightRfq.findMany({
-      where: { proposalId: { in: [...new Set(versions.map((v) => v.proposalId))] }, status: { not: 'SUPERSEDED' } },
+      where: {
+        proposalId: { in: [...new Set(versions.map((v) => v.proposalId))] },
+        status: { not: 'SUPERSEDED' },
+      },
       orderBy: { createdAt: 'desc' },
       select: {
-        id: true, proposalId: true, vendor: true, reference: true, status: true, sentAt: true,
-        lines: { select: { sku: true, name: true, quantity: true, included: true }, orderBy: { sortOrder: 'asc' } },
+        id: true,
+        proposalId: true,
+        vendor: true,
+        reference: true,
+        status: true,
+        sentAt: true,
+        lines: {
+          select: { sku: true, name: true, quantity: true, included: true },
+          orderBy: { sortOrder: 'asc' },
+        },
       },
     }),
   ]);
 
-  const vendorBySku = new Map<string, string>();
-  for (const r of skuRows) if (r.manufacturer) vendorBySku.set(r.part, r.manufacturer);
+  const vendorBySku = resolution.vendorBySku;
 
   const rfqsByProposal = new Map<string, RfqRow[]>();
   for (const r of rfqs) {
     const list = rfqsByProposal.get(r.proposalId) ?? [];
-    list.push({ id: r.id, vendor: r.vendor, reference: r.reference, status: r.status, sentAt: r.sentAt, lines: r.lines });
+    list.push({
+      id: r.id,
+      vendor: r.vendor,
+      reference: r.reference,
+      status: r.status,
+      sentAt: r.sentAt,
+      lines: r.lines,
+    });
     rfqsByProposal.set(r.proposalId, list);
   }
 
@@ -163,7 +190,7 @@ function computeCoverage(
 
   const out: FreightCoverageLine[] = lines.map((l) => {
     const sku = s(l.sku).trim();
-    const vendor = ctx.vendorBySku.get(sku) ?? null;
+    const vendor = ctx.vendorBySku.get(key(sku)) ?? null;
     const rfqEnabled = !!vendor && ctx.rfqVendors.has(key(vendor));
     const held = cover.get(key(sku));
     let state: FreightLineState = 'NA';
@@ -197,8 +224,13 @@ function computeCoverage(
       if (onProposal.has(k) || seenRemoved.has(k)) continue;
       seenRemoved.add(k);
       removed.push({
-        sku: l.sku, name: l.name, quantity: l.quantity, vendor: r.vendor,
-        rfqId: r.id, reference: r.reference, status: r.status,
+        sku: l.sku,
+        name: l.name,
+        quantity: l.quantity,
+        vendor: r.vendor,
+        rfqId: r.id,
+        reference: r.reference,
+        status: r.status,
       });
     }
   }
@@ -244,13 +276,17 @@ function computeCoverage(
  * screen rather than the stored ones, so a part dropped onto the proposal is
  * flagged straight away instead of after a save.
  */
-export async function freightCoverage(versionId: string, draftLines?: ProposalLine[]): Promise<FreightCoverage> {
+export async function freightCoverage(
+  versionId: string,
+  draftLines?: ProposalLine[],
+): Promise<FreightCoverage> {
   const version = await prisma.proposalVersion.findUnique({
     where: { id: versionId },
     select: { id: true, items: true, proposalId: true },
   });
   if (!version) throw new NotFoundError('Proposal version not found');
-  const lines = draftLines && draftLines.length ? productLines(draftLines) : productLines(version.items);
+  const lines =
+    draftLines && draftLines.length ? productLines(draftLines) : productLines(version.items);
   const ctx = await contextFor([{ proposalId: version.proposalId, items: lines }]);
   return computeCoverage(version, lines, ctx);
 }
@@ -283,7 +319,11 @@ export async function releasedFreightAlerts(limit = 40): Promise<FreightAlert[]>
     orderBy: [{ releasedAt: 'desc' }, { createdAt: 'desc' }],
     take: 200,
     select: {
-      id: true, version: true, releasedAt: true, items: true, proposalId: true,
+      id: true,
+      version: true,
+      releasedAt: true,
+      items: true,
+      proposalId: true,
       proposal: { select: { id: true, number: true, title: true, organizationId: true } },
     },
   });
@@ -322,7 +362,9 @@ export async function releasedFreightAlerts(limit = 40): Promise<FreightAlert[]>
       removedCount: cov.removed.length,
       vendors: cov.pendingVendors.length
         ? cov.pendingVendors.map((p) => p.vendor)
-        : [...new Set(cov.lines.filter((l) => l.state === 'DRAFT').map((l) => l.vendor ?? ''))].filter(Boolean),
+        : [
+            ...new Set(cov.lines.filter((l) => l.state === 'DRAFT').map((l) => l.vendor ?? '')),
+          ].filter(Boolean),
       hasDraft: draftVendors.length > 0 || cov.lines.some((l) => l.state === 'DRAFT'),
     });
   }

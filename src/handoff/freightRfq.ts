@@ -6,6 +6,7 @@ import { COMPANY, streetLine } from './bom.js';
 import { fetchItemById } from '../integrations/monday/discovery.js';
 import { DEAL_COL } from '../integrations/monday/crmMapping.js';
 import { confirmedAddressForProposal } from '../integrations/monday/portalDelivery.js';
+import { resolvePartDetails, resolveVendors, skuKey } from './vendorResolution.js';
 
 /**
  * Request for Freight (RFQ).
@@ -41,6 +42,22 @@ interface ProposalLine {
   costEach?: number;
 }
 
+/**
+ * What the vendor list answers with: the vendors, plus the parts it could not
+ * attribute to any vendor.
+ *
+ * The unmatched list is the point. Before this existed, an unattributable part was
+ * skipped in silence, so a proposal could show one vendor card and give no hint
+ * that twenty other lines had been passed over.
+ */
+export interface RfqVendorList {
+  vendors: RfqVendorOption[];
+  /** SKUs on the proposal that match no catalog row, or none naming a vendor. */
+  unmatchedSkus: string[];
+  /** Those lines' names, for a message a rep can act on. */
+  unmatchedNames: string[];
+}
+
 export interface RfqVendorOption {
   vendor: string;
   manufacturerId: string | null;
@@ -53,33 +70,34 @@ export interface RfqVendorOption {
   existingStatus: string | null;
 }
 
-/** Product lines on a version, ignoring notes, headings and optional extras. */
+/**
+ * Product lines on a version, ignoring notes and headings.
+ *
+ * Optional lines ARE included. An option the customer takes still has to ship, so
+ * excluding it here meant a taken option arrived with no freight ever quoted for
+ * it — and on a proposal where most sections are optional, it meant the freight
+ * rail showed a handful of items out of dozens.
+ */
 function productLines(items: unknown): ProposalLine[] {
   if (!Array.isArray(items)) return [];
   return (items as ProposalLine[]).filter(
     (l) =>
-      l &&
-      (l.lineType ?? 'PRODUCT') === 'PRODUCT' &&
-      !l.optional &&
-      s(l.sku).trim() !== '' &&
-      n(l.quantity) > 0,
+      l && (l.lineType ?? 'PRODUCT') === 'PRODUCT' && s(l.sku).trim() !== '' && n(l.quantity) > 0,
   );
 }
 
 /**
- * Vendor for each SKU on the version. `Sku.manufacturer` is a plain name rather
- * than a relation, which is what the BOM matches on too — one lookup, no product
- * tree walk.
+ * Vendor for each SKU on the version.
+ *
+ * Delegates to vendorResolution.ts, which reads BOTH catalog tables. This used to
+ * query `Sku` alone, so every part whose vendor is recorded through
+ * `ProductSourcing` came back with no vendor and was dropped by the caller — the
+ * cause of a Freight Requests rail that listed one vendor when the proposal had
+ * several.
  */
 async function vendorBySku(skus: string[]): Promise<Map<string, string>> {
-  if (!skus.length) return new Map();
-  const rows = await prisma.sku.findMany({
-    where: { part: { in: skus } },
-    select: { part: true, manufacturer: true, unitCostMinor: true },
-  });
-  const out = new Map<string, string>();
-  for (const r of rows) if (r.manufacturer) out.set(r.part, r.manufacturer);
-  return out;
+  const { vendorBySku: map } = await resolveVendors(skus);
+  return map;
 }
 
 /**
@@ -98,7 +116,7 @@ async function vendorBySku(skus: string[]): Promise<Map<string, string>> {
 export async function listRfqVendors(
   versionId: string,
   draftLines?: ProposalLine[],
-): Promise<RfqVendorOption[]> {
+): Promise<RfqVendorList> {
   const version = await prisma.proposalVersion.findUnique({
     where: { id: versionId },
     select: { id: true, items: true, proposalId: true },
@@ -107,12 +125,25 @@ export async function listRfqVendors(
 
   const lines =
     draftLines && draftLines.length ? productLines(draftLines) : productLines(version.items);
-  const skuVendor = await vendorBySku([...new Set(lines.map((l) => s(l.sku)))]);
+  const { vendorBySku: skuVendor } = await resolveVendors(lines.map((l) => s(l.sku)));
 
   const grouped = new Map<string, { lineCount: number; unitCount: number; cost: number }>();
+  const unmatchedSkus: string[] = [];
+  const unmatchedNames: string[] = [];
   for (const l of lines) {
-    const vendor = skuVendor.get(s(l.sku));
-    if (!vendor) continue;
+    // Keyed on the normalized SKU, so a stray trailing space on a proposal line
+    // no longer costs the line its vendor.
+    const vendor = skuVendor.get(skuKey(l.sku));
+    if (!vendor) {
+      // Reported, not skipped. An unattributable part is precisely the one that
+      // would otherwise miss its freight request unnoticed.
+      const sku = s(l.sku).trim();
+      if (sku && !unmatchedSkus.includes(sku)) {
+        unmatchedSkus.push(sku);
+        unmatchedNames.push(s(l.name).trim() || sku);
+      }
+      continue;
+    }
     const g = grouped.get(vendor) ?? { lineCount: 0, unitCount: 0, cost: 0 };
     g.lineCount += 1;
     g.unitCount += n(l.quantity);
@@ -133,7 +164,7 @@ export async function listRfqVendors(
   const byName = new Map(mfrs.map((m) => [m.name.toLowerCase(), m]));
   const rfqByVendor = new Map(existing.map((r) => [r.vendor.toLowerCase(), r]));
 
-  return [...grouped.entries()]
+  const vendors = [...grouped.entries()]
     .map(([vendor, g]) => {
       const m = byName.get(vendor.toLowerCase());
       const r = rfqByVendor.get(vendor.toLowerCase());
@@ -151,6 +182,8 @@ export async function listRfqVendors(
     .sort(
       (a, b) => Number(b.rfqEnabled) - Number(a.rfqEnabled) || a.vendor.localeCompare(b.vendor),
     );
+
+  return { vendors, unmatchedSkus, unmatchedNames };
 }
 
 /**
@@ -364,9 +397,12 @@ export async function createRfq(input: { versionId: string; vendor: string }, ac
     throw new ValidationError(`There is already an RFQ for ${input.vendor} on this proposal.`);
 
   const lines = productLines(version.items);
-  const skuVendor = await vendorBySku([...new Set(lines.map((l) => s(l.sku)))]);
+  const skuVendor = await vendorBySku(lines.map((l) => s(l.sku)));
+  // skuKey, matching listRfqVendors exactly. If these two disagreed about which
+  // lines belong to a vendor, the card would offer a count the document did not
+  // contain.
   const mine = lines.filter(
-    (l) => (skuVendor.get(s(l.sku)) ?? '').toLowerCase() === input.vendor.toLowerCase(),
+    (l) => (skuVendor.get(skuKey(l.sku)) ?? '').toLowerCase() === input.vendor.toLowerCase(),
   );
   if (!mine.length)
     throw new ValidationError(`No lines on this proposal are sourced from ${input.vendor}.`);
@@ -456,10 +492,10 @@ export async function addRfqLine(
     throw new ValidationError(`${input.sku} is already on this RFQ.`);
   }
 
-  const sku = await prisma.sku.findUnique({
-    where: { part: input.sku.trim() },
-    select: { part: true, description: true, unitCostMinor: true },
-  });
+  // Both catalog tables. Reading Sku alone rejected every Product-only part,
+  // which is the same set the rail reports as having no supplier — so the one
+  // remedy offered for them did not work.
+  const sku = await resolvePartDetails(input.sku);
   if (!sku) throw new ValidationError(`${input.sku} is not in the catalogue.`);
 
   const qty = Math.max(1, Math.round(input.quantity));
@@ -468,7 +504,7 @@ export async function addRfqLine(
     data: {
       rfqId,
       sku: sku.part,
-      name: input.name?.trim() || sku.description,
+      name: input.name?.trim() || sku.name,
       quantity: qty,
       unitCostMinor: sku.unitCostMinor,
       extendedCostMinor: sku.unitCostMinor * qty,
