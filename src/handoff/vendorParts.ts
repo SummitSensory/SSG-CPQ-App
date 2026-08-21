@@ -41,8 +41,7 @@ const keyOf = (vendor: string | null | undefined, part: string | null | undefine
  * before Resilite's numbers were loaded still read the way they did. A mapping row
  * always wins. Delete this once the mat family is fully mapped.
  */
-const MAT_RE = /^R-SSG-(\d{2}\d{2}CLM(?:-2)?)$/i;
-const MAT_VENDOR_PREFIX = 'R-SSA';
+const MAT_RE = /^R-SS([GA])-(\d{4}CLM(?:-2)?)$/i;
 
 export function legacyVendorPartFor(sku: string | null | undefined): string | null {
   const s = String(sku ?? '')
@@ -50,7 +49,40 @@ export function legacyVendorPartFor(sku: string | null | undefined): string | nu
     .toUpperCase();
   if (!s) return null;
   const mat = MAT_RE.exec(s);
-  return mat ? `${MAT_VENDOR_PREFIX}-${mat[1]}` : null;
+  return mat ? `R-SSA-${mat[2]}` : null;
+}
+
+/**
+ * The other names a mat part answers to.
+ *
+ * A floor pad has had two of our numbers in circulation. The pricing engine
+ * generates R-SSG-1008CLM; the prefix-swap rule above then printed R-SSA-1008CLM on
+ * every Bill of Materials for months, so that is the string that got copied into
+ * spreadsheets, quoted at Resilite, and — the part that matters here — pasted into
+ * the "our part #" column when their numbers were finally loaded.
+ *
+ * Keying the mapping on only one of them means a table full of correct data silently
+ * fails to resolve: the lookup misses, falls back to the prefix swap, and the BOM
+ * prints R-SSA-1008CLM where it should print A-3206. That is the bug this fixes.
+ *
+ * So both forms are aliases of each other. Whichever one a mapping row was entered
+ * under, a line carrying either resolves to the same vendor number. Nothing else in
+ * the catalog is affected — the pattern only matches the generated mat family.
+ */
+export function partAliases(sku: string | null | undefined): string[] {
+  const s = String(sku ?? '')
+    .trim()
+    .toUpperCase();
+  if (!s) return [];
+  const out = [s];
+  const mat = MAT_RE.exec(s);
+  if (mat) {
+    for (const prefix of ['R-SSG', 'R-SSA']) {
+      const alias = `${prefix}-${mat[2]}`;
+      if (!out.includes(alias)) out.push(alias);
+    }
+  }
+  return out;
 }
 
 export interface VendorPartLookup {
@@ -67,14 +99,9 @@ export interface VendorPartLookup {
 export async function vendorPartLookup(
   lines: Array<{ vendor?: string | null; sku?: string | null }>,
 ): Promise<VendorPartLookup> {
-  const parts = [
-    ...new Set(
-      lines
-        .map((l) => String(l.sku ?? '').trim())
-        .filter(Boolean)
-        .map((p) => p.toUpperCase()),
-    ),
-  ];
+  // Every form of every part, so a mapping entered under either mat prefix is
+  // fetched. One query still.
+  const parts = [...new Set(lines.flatMap((l) => partAliases(l.sku)))];
 
   const byKey = new Map<string, string>();
   if (parts.length) {
@@ -90,8 +117,12 @@ export async function vendorPartLookup(
 
   return {
     get(vendor, part) {
-      const mapped = byKey.get(keyOf(vendor, part));
-      if (mapped) return mapped;
+      // Try the part as given, then its aliases. A real mapping always beats the
+      // prefix-swap fallback, whichever of our numbers it was filed under.
+      for (const alias of partAliases(part)) {
+        const mapped = byKey.get(keyOf(vendor, alias));
+        if (mapped) return mapped;
+      }
       return legacyVendorPartFor(part);
     },
   };
