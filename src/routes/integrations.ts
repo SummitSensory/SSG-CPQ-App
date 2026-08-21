@@ -8,6 +8,7 @@ import {
   env,
 } from '../config/env.js';
 import { verifyMondayWebhook } from '../integrations/monday/webhook.js';
+import { handleBoardChange } from '../integrations/monday/freightPull.js';
 import { applyInboundChange, retrySync } from '../integrations/monday/sync.js';
 import { reconcile } from '../integrations/monday/reconcile.js';
 import { listBoards, describeBoard } from '../integrations/monday/discovery.js';
@@ -395,6 +396,23 @@ export function registerIntegrationRoutes(app: FastifyInstance): void {
       newStatusLabel:
         (ev as { value?: { label?: { text?: string } } }).value?.label?.text ?? undefined,
     });
+    /**
+     * A deal-row column change may be the steel or mats freight figure landing.
+     *
+     * Best effort, and deliberately AFTER the stage sync: a freight read must never
+     * fail this webhook, because monday retries on failure and the retry would
+     * re-run the stage change that already succeeded. A failure here costs nothing
+     * — the freight panel reads the board when it opens, and the nightly sweep
+     * reads it again.
+     */
+    if (itemId && (!boardId || boardId === env.MONDAY_DEALS_BOARD_ID)) {
+      try {
+        await handleBoardChange(itemId, 'system:webhook');
+      } catch (err) {
+        logger.warn({ err, itemId }, 'freight pull from monday webhook failed');
+      }
+    }
+
     logger.info({ result }, 'monday webhook processed');
     return reply.send({ ok: true, result });
   });

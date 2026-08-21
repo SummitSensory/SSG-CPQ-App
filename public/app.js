@@ -580,6 +580,12 @@
           renderProposals(u || user);
         },
       });
+
+      /* The invoice-short banner sits above every screen rather than inside the
+       * freight panel, because an invoice missing money should not be discoverable
+       * only by whoever happens to open that panel. Mounted once, here, for the
+       * same reason init is: this is where the session is known. */
+      window.FreightTrueUp.mountBanner(user);
     }
     renderDashboard(user);
   }

@@ -15,6 +15,10 @@
     {
       "path": "/cron/portal-delivery",
       "schedule": "0 13 * * *"
+    },
+    {
+      "path": "/cron/freight-pull",
+      "schedule": "0 9 * * *"
     }
   ],
   "rewrites": [
