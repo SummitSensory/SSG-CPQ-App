@@ -9,61 +9,86 @@ import {
   computeIntegrityHash,
   depositFromSnapshot,
 } from '../handoff/lock.js';
+import { syncVersion } from '../integrations/monday/freightPull.js';
 import {
-  applyFreightAmounts,
+  BUCKETS,
+  FREIGHT_BUCKETS,
+  alertIsQuiet,
+  ageInDays,
+  apportion,
+  applyFreightEntries,
+  assertEvidence,
   assertFreightOnlyChange,
   describeChanges,
+  describeGaps,
   freightGaps,
-  thirdPartyTotal,
-  ageInDays,
+  freightLines,
+  normalizeBucket,
   urgencyFor,
   ESCALATION_DAYS,
+  type FreightBucket,
+  type FreightEntryInput,
   type FreightGaps,
-  type TrueUpAmounts,
+  type FreightLine,
+  type FreightScope,
+  type LineContext,
 } from './freightTrueUp.js';
-import type { FreightTrueUp, FreightTrueUpStatus, Prisma } from '@prisma/client';
+import type { FreightEntry, FreightTrueUp, Prisma } from '@prisma/client';
 
 /**
  * Freight true-up — the stateful half.
  *
- * Applying a true-up is the only write in this system that changes a frozen
- * proposal version, so it does the whole job rather than half of it:
+ * Applying freight is the only write in this system that changes a frozen proposal
+ * version, so it does the whole job rather than half of it:
  *
  *   1. the freight goes onto the version's content;
  *   2. the price snapshot is RE-FROZEN, because every downstream document is
- *      asserted against it (transactions.ts refuses to build an invoice whose
- *      lines and snapshot disagree — an amendment that skipped this step would
- *      silently break QuickBooks pushes for the rest of the job's life);
- *   3. the operational order's content snapshot and integrity hash are rebuilt,
- *      so `verifyIntegrity` keeps reading clean;
- *   4. the movement is written to PriceOverrideLog and the audit log with the
- *      vendor and quote reference that justified it.
+ *      asserted against it (transactions.ts refuses to build an invoice whose lines
+ *      and snapshot disagree — an amendment that skipped this step would silently
+ *      break QuickBooks pushes for the rest of the job's life);
+ *   3. the operational order's content snapshot and integrity hash are rebuilt, so
+ *      `verifyIntegrity` keeps reading clean;
+ *   4. the movement is written to PriceOverrideLog and the audit log with the source
+ *      and evidence that justified it.
  *
  * The version's status, number, signature and line items are untouched. What the
  * customer signed is still what the customer signed.
+ *
+ * Freight arrives in instalments, so entries apply in batches: three of the four
+ * buckets can be on the invoice while the fourth is still with a vendor. Each batch
+ * is its own amendment, its own snapshot pair and its own trip to QuickBooks.
  */
 
-const LIVE: FreightTrueUpStatus[] = ['OPEN', 'STAGED'];
+const LIVE: Array<FreightTrueUp['status']> = ['OPEN', 'STAGED'];
 
-type Lines = Array<{ ref: string; sku?: string; name?: string; amountMinor: number }>;
+/* ────────────────────────── loading context ────────────────────────── */
 
-function stagedLines(row: FreightTrueUp): Lines {
-  const raw = row.thirdPartyLines;
-  return Array.isArray(raw) ? (raw as unknown as Lines) : [];
-}
-
-/** Part numbers whose vendor quotes freight separately (`Manufacturer.freightTbd`). */
-async function freightTbdSkus(): Promise<Set<string>> {
-  const vendors = await prisma.manufacturer.findMany({
-    where: { OR: [{ freightTbd: true }, { rfqEnabled: true }] },
-    select: { name: true },
-  });
-  if (!vendors.length) return new Set();
-  const skus = await prisma.sku.findMany({
-    where: { manufacturer: { in: vendors.map((v) => v.name) } },
-    select: { part: true },
-  });
-  return new Set(skus.map((s) => s.part.trim().toUpperCase()));
+/**
+ * Vendors and part numbers, for naming what is being shipped.
+ *
+ * `freightQuotedSkus` marks the lines EXPECTED to carry freight (their vendor quotes
+ * shipping separately). It no longer filters what ops can see: the old screen showed
+ * a bare amount box with no indication of which items it covered, which is the
+ * complaint that prompted this rebuild. Every product line is offered; the marked
+ * ones are the ones that will be chased.
+ */
+async function lineContext(): Promise<LineContext> {
+  const [vendors, skus] = await Promise.all([
+    prisma.manufacturer.findMany({
+      where: { OR: [{ freightTbd: true }, { rfqEnabled: true }] },
+      select: { name: true },
+    }),
+    prisma.sku.findMany({ select: { part: true, manufacturer: true } }),
+  ]);
+  const quoting = new Set(vendors.map((v) => v.name));
+  const vendorBySku = new Map<string, string>();
+  const freightQuotedSkus = new Set<string>();
+  for (const s of skus) {
+    const key = s.part.trim().toUpperCase();
+    vendorBySku.set(key, s.manufacturer);
+    if (quoting.has(s.manufacturer)) freightQuotedSkus.add(key);
+  }
+  return { freightQuotedSkus, vendorBySku };
 }
 
 async function loadVersion(versionId: string) {
@@ -79,35 +104,7 @@ async function loadVersion(versionId: string) {
   return version;
 }
 
-/**
- * Gaps on a version, with the vendor names filled in.
- *
- * A rep looking at "3 lines have no freight" needs to know whose freight it is —
- * that is who has to be chased.
- */
-export async function gapsForVersion(versionId: string): Promise<FreightGaps> {
-  const version = await loadVersion(versionId);
-  const gaps = freightGaps(version.items, version.sections, {
-    freightTbdSkus: await freightTbdSkus(),
-  });
-  if (gaps.thirdParty.length) {
-    const rows = await prisma.sku.findMany({
-      where: { part: { in: gaps.thirdParty.map((l) => l.sku) } },
-      select: { part: true, manufacturer: true },
-    });
-    const byPart = new Map(rows.map((r) => [r.part.trim().toUpperCase(), r.manufacturer]));
-    for (const l of gaps.thirdParty) l.vendor = byPart.get(l.sku.trim().toUpperCase()) ?? null;
-  }
-  return gaps;
-}
-
-/**
- * The live true-up for a version, created on demand.
- *
- * Opening one is not a commitment to anything — it is the record that somebody is
- * responsible for a freight figure on this job, which is precisely what tends to
- * exist nowhere.
- */
+/** The live true-up folder for a version, created on demand. */
 export async function openTrueUp(versionId: string, actorId: string): Promise<FreightTrueUp> {
   const version = await loadVersion(versionId);
   if (!version.frozen && version.status === 'DRAFT') {
@@ -134,122 +131,263 @@ export async function openTrueUp(versionId: string, actorId: string): Promise<Fr
   return row;
 }
 
-export interface StageInput extends TrueUpAmounts {
-  thirdPartyLines?: Array<{ ref: string; sku?: string; name?: string; amountMinor: number }>;
+/* ────────────────────────── what is outstanding ────────────────────────── */
+
+/**
+ * Buckets still waiting on an answer, accounting for what has been entered.
+ *
+ * `freightGaps` reads the proposal's content, which is the truth about what the
+ * customer's document says. It cannot know that a figure is entered but not yet
+ * applied, or that a bucket has been closed out as not applicable — those live in
+ * the entries. This narrows the content-level gaps by both.
+ */
+async function outstandingBuckets(
+  versionId: string,
+  gaps: FreightGaps,
+): Promise<{
+  buckets: FreightBucket[];
+  answered: FreightBucket[];
+  notApplicable: FreightBucket[];
+}> {
+  const entries = await prisma.freightEntry.findMany({
+    where: { versionId },
+    select: { bucket: true, status: true, amountMinor: true },
+  });
+  const answered = new Set<FreightBucket>();
+  const notApplicable = new Set<FreightBucket>();
+  for (const e of entries) {
+    const bucket = normalizeBucket(e.bucket);
+    if (!bucket) continue;
+    if (e.status === 'VOID') notApplicable.add(bucket);
+    else answered.add(bucket);
+  }
+  return {
+    buckets: gaps.buckets.filter((b) => !answered.has(b) && !notApplicable.has(b)),
+    answered: [...answered],
+    notApplicable: [...notApplicable],
+  };
+}
+
+/* ────────────────────────── entries ────────────────────────── */
+
+export interface SaveEntryInput {
+  versionId: string;
+  bucket: string;
+  scope: FreightScope;
+  amountMinor: number;
+  /** For a LINES entry: the product items this amount covers. */
+  lineRefs?: string[];
   vendorName?: string | null;
   vendorQuoteRef?: string | null;
   quoteAttachmentId?: string | null;
-  freightRfqId?: string | null;
+  description?: string | null;
+  overrideReason?: string | null;
   note?: string | null;
+  /** Editing an existing staged entry rather than adding one. */
+  entryId?: string;
 }
 
 /**
- * Save entered amounts without applying them.
+ * Save one freight figure.
  *
- * Evidence is required as soon as there is money: a freight figure with no vendor
- * quote behind it is somebody's recollection, and it ends up being defended to a
- * customer months later. A reference number is enough — the quote PDF is better.
+ * A LINES entry takes ONE amount and the items it covers, and the split across them
+ * is computed here — ops asked for that shape because a vendor quotes "$1,840 to ship
+ * the swing, the platform and the crash pad", not a figure per part. The split is
+ * stored alongside the entry so the apportionment that reached the proposal is on the
+ * record, not recomputed later from prices that may have moved.
+ *
+ * A STEEL or MATS figure typed by hand is an override of the board and needs a
+ * reason. That is not bureaucracy: the board is what the freight desk maintains, and
+ * a hand-typed figure that silently disagrees with it is the bug this whole feature
+ * is trying to stop.
  */
-export async function stageTrueUp(
-  id: string,
-  input: StageInput,
-  actorId: string,
-): Promise<FreightTrueUp> {
-  const row = await prisma.freightTrueUp.findUnique({ where: { id } });
-  if (!row) throw new NotFoundError('Freight entry not found');
-  if (!LIVE.includes(row.status))
-    throw new ConflictError(
-      `This freight entry is ${row.status.toLowerCase()} and can no longer be edited`,
-    );
-
-  const lines = (input.thirdPartyLines ?? stagedLines(row)).filter((l) => l && l.ref);
-  const tpTotal = thirdPartyTotal(lines);
-  const structure = input.structureFreightMinor;
-  const standard = input.stdFreightMinor;
-  const money = tpTotal + (structure ?? 0) + (standard ?? 0);
-
-  const ref = (input.vendorQuoteRef ?? row.vendorQuoteRef ?? '').trim();
-  const attachment = input.quoteAttachmentId ?? row.quoteAttachmentId;
-  if (money > 0 && !ref && !attachment) {
+export async function saveEntry(input: SaveEntryInput, actorId: string): Promise<FreightEntry> {
+  const bucket = normalizeBucket(input.bucket);
+  if (!bucket) throw new ValidationError(`"${input.bucket}" is not a freight bucket`);
+  const spec = BUCKETS[bucket];
+  if (!spec.scopes.includes(input.scope)) {
     throw new ValidationError(
-      'Give the vendor quote reference, or attach the quote, before saving a freight amount.',
+      `${spec.label} is entered ${spec.scopes.includes('JOB') ? 'as one amount for the job' : 'against the items it covers'}.`,
     );
   }
 
-  const updated = await prisma.freightTrueUp.update({
-    where: { id },
-    data: {
-      status: 'STAGED',
-      thirdPartyLines: lines as unknown as Prisma.InputJsonValue,
-      thirdPartyTotalMinor: tpTotal,
-      ...(structure !== undefined ? { structureFreightMinor: structure } : {}),
-      ...(standard !== undefined ? { stdFreightMinor: standard } : {}),
-      ...(input.vendorName !== undefined ? { vendorName: input.vendorName } : {}),
-      ...(input.vendorQuoteRef !== undefined ? { vendorQuoteRef: input.vendorQuoteRef } : {}),
-      ...(input.quoteAttachmentId !== undefined
-        ? { quoteAttachmentId: input.quoteAttachmentId }
-        : {}),
-      ...(input.freightRfqId !== undefined ? { freightRfqId: input.freightRfqId } : {}),
-      ...(input.note !== undefined ? { note: input.note } : {}),
-    },
+  const version = await loadVersion(input.versionId);
+  // Anything saved through this form is hand-entered by definition; a board-sourced
+  // entry is created by the pull, never here. For STEEL and MATS that makes this an
+  // override, which is why assertEvidence demands a reason for it.
+  const source = 'MANUAL' as const;
+  assertEvidence({
+    bucket,
+    scope: input.scope,
+    amountMinor: input.amountMinor,
+    source,
+    vendorQuoteRef: input.vendorQuoteRef,
+    quoteAttachmentId: input.quoteAttachmentId,
+    description: input.description,
+    overrideReason: input.overrideReason,
   });
+
+  let allocations: Prisma.InputJsonValue | undefined;
+  if (input.scope === 'LINES') {
+    const refs = [...new Set((input.lineRefs ?? []).map((r) => String(r).trim()).filter(Boolean))];
+    if (!refs.length) throw new ValidationError('Pick the items this freight is for.');
+    const lines = freightLines(version.items, await lineContext());
+    const byRef = new Map(lines.map((l) => [l.ref, l]));
+    const chosen: FreightLine[] = [];
+    for (const ref of refs) {
+      const line = byRef.get(ref);
+      if (!line) {
+        throw new ValidationError(
+          `Item ${ref} is no longer on this proposal. Re-open the freight panel to pick up the current items.`,
+        );
+      }
+      chosen.push(line);
+    }
+    allocations = apportion(input.amountMinor, chosen).map((a) => {
+      const line = byRef.get(a.ref)!;
+      return { ref: a.ref, sku: line.sku, name: line.name, amountMinor: a.amountMinor };
+    }) as unknown as Prisma.InputJsonValue;
+  }
+
+  const trueUp = await openTrueUp(input.versionId, actorId);
+
+  if (input.entryId) {
+    const held = await prisma.freightEntry.findUnique({ where: { id: input.entryId } });
+    if (!held) throw new NotFoundError('That freight amount is not on file');
+    if (held.status !== 'STAGED') {
+      throw new ConflictError(
+        held.status === 'PUSHED'
+          ? 'This amount is already on the customer’s invoice. Correcting it means a credit and a rebill — raise a new amount for the difference instead of editing this one.'
+          : `This amount is ${held.status.toLowerCase()} and can no longer be edited. Add a new amount for the difference.`,
+      );
+    }
+  }
+
+  const data = {
+    trueUpId: trueUp.id,
+    proposalId: version.proposalId,
+    versionId: input.versionId,
+    bucket,
+    scope: input.scope,
+    source,
+    status: 'STAGED' as const,
+    amountMinor: input.amountMinor,
+    allocations: allocations ?? null,
+    vendorName: input.vendorName ?? null,
+    vendorQuoteRef: input.vendorQuoteRef ?? null,
+    quoteAttachmentId: input.quoteAttachmentId ?? null,
+    description: input.description ?? null,
+    overrideReason: input.overrideReason ?? null,
+    note: input.note ?? null,
+  };
+
+  const row = input.entryId
+    ? await prisma.freightEntry.update({ where: { id: input.entryId }, data })
+    : await prisma.freightEntry.create({ data: { ...data, createdById: actorId } });
+
+  await prisma.freightTrueUp.update({ where: { id: trueUp.id }, data: { status: 'STAGED' } });
   await recordAudit({
     actorId,
-    action: 'freight.trueup.stage',
-    entity: 'FreightTrueUp',
-    entityId: id,
+    action: input.entryId ? 'freight.entry.update' : 'freight.entry.create',
+    entity: 'FreightEntry',
+    entityId: row.id,
     details: {
-      thirdPartyTotalMinor: tpTotal,
-      structureFreightMinor: structure ?? null,
-      stdFreightMinor: standard ?? null,
-      vendorQuoteRef: ref || null,
+      versionId: input.versionId,
+      bucket,
+      scope: input.scope,
+      amountMinor: input.amountMinor,
+      vendorQuoteRef: input.vendorQuoteRef ?? null,
+      overrideReason: input.overrideReason ?? null,
     },
   });
-  return updated;
+  return row;
+}
+
+/** Withdraw a staged amount that was entered in error. */
+export async function deleteEntry(entryId: string, actorId: string): Promise<void> {
+  const row = await prisma.freightEntry.findUnique({ where: { id: entryId } });
+  if (!row) throw new NotFoundError('That freight amount is not on file');
+  if (row.status !== 'STAGED') {
+    throw new ConflictError(
+      'Only an amount that has not been applied can be removed. This one is on the proposal — record a correction instead.',
+    );
+  }
+  await prisma.freightEntry.delete({ where: { id: entryId } });
+  await recordAudit({
+    actorId,
+    action: 'freight.entry.delete',
+    entity: 'FreightEntry',
+    entityId: entryId,
+    details: { versionId: row.versionId, bucket: row.bucket, amountMinor: row.amountMinor },
+  });
 }
 
 /**
- * Record that this job carries no third-party freight after all.
+ * Close a bucket out as not applicable, with a reason.
  *
- * A reason is required and the record is kept. "No freight applies" is the answer
- * that most resembles a forgotten job, so it has to be a deliberate, attributable
- * act rather than a gap that quietly stops being reported.
+ * "No freight applies" is the answer that most resembles a forgotten job, so it has
+ * to be a deliberate, attributable act rather than a gap that quietly stops being
+ * reported. Recorded per bucket, because "the mats ship freight-included" is a fact
+ * about the mats and says nothing about the steel.
  */
-export async function markNoFreight(
-  id: string,
+export async function markBucketNotApplicable(
+  versionId: string,
+  bucketInput: string,
   reason: string,
   actorId: string,
-): Promise<FreightTrueUp> {
-  const row = await prisma.freightTrueUp.findUnique({ where: { id } });
-  if (!row) throw new NotFoundError('Freight entry not found');
-  if (!LIVE.includes(row.status))
-    throw new ConflictError(`This freight entry is already ${row.status.toLowerCase()}`);
+): Promise<FreightEntry> {
+  const bucket = normalizeBucket(bucketInput);
+  if (!bucket) throw new ValidationError(`"${bucketInput}" is not a freight bucket`);
   const text = String(reason ?? '').trim();
   if (text.length < 5)
-    throw new ValidationError('Say why no freight applies — one line is enough.');
+    throw new ValidationError('Say why no freight applies to this bucket — one line is enough.');
 
-  const updated = await prisma.freightTrueUp.update({
-    where: { id },
-    data: { status: 'VOID', noFreightReason: text },
+  const version = await loadVersion(versionId);
+  const trueUp = await openTrueUp(versionId, actorId);
+  const existing = await prisma.freightEntry.findFirst({
+    where: { versionId, bucket, status: { in: ['APPLIED', 'PUSHED'] } },
+  });
+  if (existing) {
+    throw new ConflictError(
+      `${BUCKETS[bucket].label} has already been applied to this proposal, so it cannot be marked as not applicable.`,
+    );
+  }
+
+  await prisma.freightEntry.deleteMany({ where: { versionId, bucket, status: 'STAGED' } });
+  const row = await prisma.freightEntry.create({
+    data: {
+      trueUpId: trueUp.id,
+      proposalId: version.proposalId,
+      versionId,
+      bucket,
+      scope: BUCKETS[bucket].scopes[0]!,
+      source: 'MANUAL',
+      status: 'VOID',
+      amountMinor: 0,
+      voidReason: text,
+      createdById: actorId,
+    },
   });
   await recordAudit({
     actorId,
-    action: 'freight.trueup.no_freight',
-    entity: 'FreightTrueUp',
-    entityId: id,
-    details: { proposalId: row.proposalId, versionId: row.versionId, reason: text },
+    action: 'freight.entry.not_applicable',
+    entity: 'FreightEntry',
+    entityId: row.id,
+    details: { versionId, bucket, reason: text, number: version.proposal.number },
   });
-  return updated;
+  return row;
 }
+
+/* ────────────────────────── applying ────────────────────────── */
 
 export interface ApplyResult {
   trueUp: FreightTrueUp;
+  entryIds: string[];
   previousTotalMinor: number;
   newTotalMinor: number;
   deltaMinor: number;
   summary: string;
   orderUpdated: boolean;
-  /** Invoices already in QuickBooks that no longer match the proposal. */
   invoicesToReconcile: Array<{
     txnId: string;
     docNumber: string | null;
@@ -259,32 +397,49 @@ export interface ApplyResult {
 }
 
 /**
- * Write the staged freight onto the frozen version.
+ * Write a batch of staged amounts onto the frozen version.
  *
  * Deliberately not wrapped around the snapshot create: a PriceSnapshot is immutable
  * and additive, so creating one that is then not adopted costs a stray row and
- * nothing else, whereas a version pointing at a snapshot that failed to commit
- * would break every document build until someone noticed.
+ * nothing else, whereas a version pointing at a snapshot that failed to commit would
+ * break every document build until someone noticed.
  */
-export async function applyTrueUp(id: string, actorId: string): Promise<ApplyResult> {
-  const row = await prisma.freightTrueUp.findUnique({ where: { id } });
-  if (!row) throw new NotFoundError('Freight entry not found');
-  if (row.status === 'APPLIED') throw new ConflictError('This freight has already been applied');
-  if (row.status === 'VOID') throw new ConflictError('This freight entry was withdrawn');
-
-  const version = await loadVersion(row.versionId);
+export async function applyEntries(
+  versionId: string,
+  entryIds: string[] | null,
+  actorId: string,
+): Promise<ApplyResult> {
+  const version = await loadVersion(versionId);
   if (version.proposal.archivedAt)
     throw new ConflictError('This proposal is archived. Restore it before amending freight.');
 
-  const amounts: TrueUpAmounts = {
-    structureFreightMinor: row.structureFreightMinor,
-    stdFreightMinor: row.stdFreightMinor,
-    thirdPartyLines: stagedLines(row).map((l) => ({
-      ref: l.ref,
-      amountMinor: Number(l.amountMinor) || 0,
-    })),
-  };
-  const applied = applyFreightAmounts(version.sections, version.items, amounts);
+  const staged = await prisma.freightEntry.findMany({
+    where: {
+      versionId,
+      status: 'STAGED',
+      ...(entryIds && entryIds.length ? { id: { in: entryIds } } : {}),
+    },
+    orderBy: { createdAt: 'asc' },
+  });
+  if (!staged.length) {
+    throw new ValidationError('There are no entered freight amounts waiting to be applied.');
+  }
+  const zeroOnly = staged.every((e) => e.amountMinor === 0);
+  if (zeroOnly) throw new ValidationError('Every amount in this batch is zero — nothing to apply.');
+
+  const inputs: FreightEntryInput[] = staged.map((e) => ({
+    bucket: normalizeBucket(e.bucket)!,
+    scope: e.scope as FreightScope,
+    amountMinor: e.amountMinor,
+    allocations: Array.isArray(e.allocations)
+      ? (e.allocations as Array<{ ref: string; amountMinor: number }>).map((a) => ({
+          ref: String(a.ref),
+          amountMinor: Number(a.amountMinor) || 0,
+        }))
+      : undefined,
+  }));
+
+  const applied = applyFreightEntries(version.sections, version.items, inputs);
   assertFreightOnlyChange(applied.before, applied.after);
   if (!applied.changes.length) {
     throw new ValidationError(
@@ -292,19 +447,21 @@ export async function applyTrueUp(id: string, actorId: string): Promise<ApplyRes
     );
   }
 
-  // Re-freeze. Same function the acceptance path uses, so the snapshot shape,
-  // the deposit percentage and the balance are computed exactly one way.
+  // Re-freeze. Same function the acceptance path uses, so the snapshot shape, the
+  // deposit percentage and the balance are computed exactly one way.
   const snapshot = await snapshotAcceptedContent(
     version.id,
     applied.sections,
     applied.items,
     actorId,
   );
-
   const order = await prisma.acceptedOrder.findUnique({ where: { proposalVersionId: version.id } });
   const summary = describeChanges(applied.changes, applied.deltaMinor);
+  const trueUpId = staged[0]!.trueUpId;
+  const evidence = [...new Set(staged.map((e) => e.vendorQuoteRef).filter(Boolean))].join(', ');
+  const now = new Date();
 
-  const updated = await prisma.$transaction(async (tx) => {
+  const trueUp = await prisma.$transaction(async (tx) => {
     await tx.proposalVersion.update({
       where: { id: version.id },
       data: {
@@ -349,33 +506,36 @@ export async function applyTrueUp(id: string, actorId: string): Promise<ApplyRes
             summary,
             previousTotalMinor: applied.before.total,
             newTotalMinor: applied.after.total,
-            vendorQuoteRef: row.vendorQuoteRef,
+            buckets: staged.map((e) => e.bucket),
+            evidence: evidence || null,
           } as object,
         },
       });
     }
 
-    // A freight figure entered after release is an override of the accepted price,
-    // and it belongs in the same log as every other one.
+    // Freight entered after release is an override of the accepted price, and it
+    // belongs in the same log as every other one.
     await tx.priceOverrideLog.create({
       data: {
         subjectRef: `proposalVersion:${version.id}`,
         field: 'freight',
         previousValue: String(applied.before.total),
         newValue: String(applied.after.total),
-        reason:
-          `Freight true-up after release — ${summary}` +
-          (row.vendorQuoteRef ? ` · vendor quote ${row.vendorQuoteRef}` : '') +
-          (row.vendorName ? ` · ${row.vendorName}` : ''),
+        reason: `Freight true-up after release — ${summary}${evidence ? ` · vendor quote ${evidence}` : ''}`,
         authorizedById: actorId,
       },
     });
 
+    await tx.freightEntry.updateMany({
+      where: { id: { in: staged.map((e) => e.id) } },
+      data: { status: 'APPLIED', appliedAt: now, appliedById: actorId },
+    });
+
     return tx.freightTrueUp.update({
-      where: { id },
+      where: { id: trueUpId },
       data: {
         status: 'APPLIED',
-        appliedAt: new Date(),
+        appliedAt: now,
         appliedById: actorId,
         previousTotalMinor: BigInt(applied.before.total),
         newTotalMinor: BigInt(applied.after.total),
@@ -386,13 +546,14 @@ export async function applyTrueUp(id: string, actorId: string): Promise<ApplyRes
         // makes the omission visible until a rep sends the revised PDF.
         customerNotifiedAt: null,
         customerNotifiedById: null,
+        // A new amendment is new news; a banner dismissed yesterday should not
+        // suppress it.
+        alertAckAt: null,
+        alertAckById: null,
       },
     });
   });
 
-  // Documents already in QuickBooks now disagree with the proposal. Reported, not
-  // repaired: what to do about a live invoice is a decision for whoever holds the
-  // customer relationship, and the QuickBooks push is a separate, authorized step.
   const created = await prisma.qboTransaction.findMany({
     where: {
       proposalId: version.proposalId,
@@ -408,7 +569,9 @@ export async function applyTrueUp(id: string, actorId: string): Promise<ApplyRes
     entity: 'ProposalVersion',
     entityId: version.id,
     details: {
-      trueUpId: id,
+      trueUpId,
+      entryIds: staged.map((e) => e.id),
+      buckets: staged.map((e) => e.bucket),
       number: version.proposal.number,
       summary,
       previousTotalMinor: applied.before.total,
@@ -420,12 +583,18 @@ export async function applyTrueUp(id: string, actorId: string): Promise<ApplyRes
     },
   });
   logger.info(
-    { versionId: version.id, trueUpId: id, deltaMinor: applied.deltaMinor },
+    {
+      versionId: version.id,
+      trueUpId,
+      deltaMinor: applied.deltaMinor,
+      buckets: staged.map((e) => e.bucket),
+    },
     'freight true-up applied',
   );
 
   return {
-    trueUp: updated,
+    trueUp,
+    entryIds: staged.map((e) => e.id),
     previousTotalMinor: applied.before.total,
     newTotalMinor: applied.after.total,
     deltaMinor: applied.deltaMinor,
@@ -462,6 +631,129 @@ export async function markCustomerNotified(id: string, actorId: string): Promise
   return updated;
 }
 
+/* ────────────────────────── the screen ────────────────────────── */
+
+/**
+ * Everything the freight panel needs, in one call.
+ *
+ * The board is read as part of this — that is the "read live when the screen opens"
+ * behaviour ops asked for — but a board failure never fails the call. `monday.error`
+ * comes back and the panel offers the manual override path instead, which is the
+ * only useful thing a screen can do when the source system is down.
+ */
+export async function freightStateForVersion(
+  versionId: string,
+  actorId: string,
+  opts: { sync?: boolean } = {},
+) {
+  const ctx = await lineContext();
+  let monday: Awaited<ReturnType<typeof syncVersion>> | null = null;
+  if (opts.sync !== false) {
+    try {
+      monday = await syncVersion(versionId, actorId);
+    } catch (err) {
+      logger.warn({ err, versionId }, 'freight state: board sync failed');
+      monday = null;
+    }
+  }
+
+  const version = await loadVersion(versionId);
+  const [entries, history] = await Promise.all([
+    prisma.freightEntry.findMany({ where: { versionId }, orderBy: { createdAt: 'asc' } }),
+    prisma.freightTrueUp.findMany({ where: { versionId }, orderBy: { createdAt: 'desc' } }),
+  ]);
+
+  const gaps = freightGaps(version.items, version.sections, ctx);
+  const { buckets, notApplicable } = await outstandingBuckets(versionId, gaps);
+  const totals = versionTotals(version.items, version.sections);
+  const live = history.find((h) => LIVE.includes(h.status)) ?? history[0] ?? null;
+
+  const byBucket = FREIGHT_BUCKETS.map((bucket) => {
+    const spec = BUCKETS[bucket];
+    const rows = entries.filter((e) => normalizeBucket(e.bucket) === bucket);
+    const voided = rows.find((e) => e.status === 'VOID') ?? null;
+    return {
+      bucket,
+      label: spec.label,
+      short: spec.short,
+      source: spec.source,
+      scopes: spec.scopes,
+      help: spec.help,
+      onProposalMinor: totals[spec.totalsKey],
+      outstanding: buckets.includes(bucket),
+      notApplicable: !!voided,
+      notApplicableReason: voided?.voidReason ?? null,
+      stagedMinor: rows.filter((e) => e.status === 'STAGED').reduce((a, e) => a + e.amountMinor, 0),
+      appliedMinor: rows
+        .filter((e) => e.status === 'APPLIED' || e.status === 'PUSHED')
+        .reduce((a, e) => a + e.amountMinor, 0),
+      pushedMinor: rows.filter((e) => e.status === 'PUSHED').reduce((a, e) => a + e.amountMinor, 0),
+      entries: rows.map(serializeEntry),
+    };
+  });
+
+  return {
+    proposalId: version.proposalId,
+    versionId,
+    number: version.proposal.number,
+    title: version.proposal.title,
+    version: version.version,
+    status: version.status,
+    frozen: version.frozen,
+    releasedAt: version.releasedAt ? version.releasedAt.toISOString() : null,
+    ageDays: ageInDays(version.releasedAt ?? version.createdAt),
+    threshold: ESCALATION_DAYS,
+    totals: {
+      totalMinor: totals.total,
+      steelMinor: totals.structureFreight,
+      matsMinor: totals.matsFreight,
+      therapeuticMinor: totals.tpFreight,
+      otherMinor: totals.stdFreight,
+    },
+    /** Every product item, so ops can see what is being shipped. */
+    lines: freightLines(version.items, ctx),
+    buckets: byBucket,
+    outstanding: buckets,
+    notApplicable,
+    gapLines: gaps.gapLines,
+    monday,
+    trueUpId: live?.id ?? null,
+    live,
+    history,
+  };
+}
+
+/** FreightEntry for the browser: allocations typed, dates as ISO strings. */
+export function serializeEntry(e: FreightEntry) {
+  return {
+    id: e.id,
+    bucket: e.bucket,
+    scope: e.scope,
+    source: e.source,
+    status: e.status,
+    amountMinor: e.amountMinor,
+    allocations: Array.isArray(e.allocations)
+      ? (e.allocations as Array<{ ref: string; sku?: string; name?: string; amountMinor: number }>)
+      : [],
+    vendorName: e.vendorName,
+    vendorQuoteRef: e.vendorQuoteRef,
+    description: e.description,
+    overrideReason: e.overrideReason,
+    note: e.note,
+    voidReason: e.voidReason,
+    mondayItemId: e.mondayItemId,
+    mondayColumnId: e.mondayColumnId,
+    mondayReadAt: e.mondayReadAt ? e.mondayReadAt.toISOString() : null,
+    appliedAt: e.appliedAt ? e.appliedAt.toISOString() : null,
+    qboDocNumber: e.qboDocNumber,
+    qboMode: e.qboMode,
+    qboPushedAt: e.qboPushedAt ? e.qboPushedAt.toISOString() : null,
+    createdAt: e.createdAt.toISOString(),
+  };
+}
+
+/* ────────────────────────── the queue ────────────────────────── */
+
 export interface QueueRow {
   proposalId: string;
   versionId: string;
@@ -470,7 +762,6 @@ export interface QueueRow {
   customer: string;
   version: number;
   status: string;
-  /** Released date — the clock the age is measured from. */
   since: string | null;
   ageDays: number;
   urgency: string;
@@ -481,8 +772,8 @@ export interface QueueRow {
   trueUpId: string | null;
   trueUpStatus: string | null;
   stagedMinor: number;
+  appliedNotPushedMinor: number;
   vendorQuoteRef: string | null;
-  /** An invoice exists in QuickBooks for this job. */
   hasInvoice: boolean;
   invoicePushed: boolean;
   customerNotified: boolean;
@@ -491,9 +782,9 @@ export interface QueueRow {
 /**
  * The freight queue — every job whose freight is outstanding, oldest first.
  *
- * Scoped to the latest RELEASED or ACCEPTED version of each live proposal, which
- * is the set where an unquoted freight bill is real money. Drafts are excluded:
- * their freight is not late, it is unfinished.
+ * Scoped to the latest RELEASED or ACCEPTED version of each live proposal, which is
+ * the set where an unquoted freight bill is real money. Drafts are excluded: their
+ * freight is not late, it is unfinished.
  */
 export async function freightQueue(
   opts: { limit?: number; includeSettled?: boolean; threshold?: number } = {},
@@ -524,8 +815,8 @@ export async function freightQueue(
   const rows = [...latest.values()];
   if (!rows.length) return { rows: [], escalated: 0, threshold };
 
-  const [tbd, orgs, trueUps, invoices, skuRows] = await Promise.all([
-    freightTbdSkus(),
+  const [ctx, orgs, trueUps, entries, invoices] = await Promise.all([
+    lineContext(),
     prisma.organization.findMany({
       where: { id: { in: [...new Set(rows.map((v) => v.proposal.organizationId))] } },
       select: { id: true, name: true },
@@ -534,6 +825,7 @@ export async function freightQueue(
       where: { versionId: { in: rows.map((v) => v.id) } },
       orderBy: { createdAt: 'desc' },
     }),
+    prisma.freightEntry.findMany({ where: { versionId: { in: rows.map((v) => v.id) } } }),
     prisma.qboTransaction.findMany({
       where: {
         proposalId: { in: rows.map((v) => v.proposalId) },
@@ -542,23 +834,37 @@ export async function freightQueue(
       },
       select: { proposalId: true },
     }),
-    prisma.sku.findMany({ select: { part: true, manufacturer: true } }),
   ]);
 
   const orgName = new Map(orgs.map((o) => [o.id, o.name]));
-  const vendorByPart = new Map(skuRows.map((r) => [r.part.trim().toUpperCase(), r.manufacturer]));
   const invoiced = new Set(invoices.map((i) => i.proposalId));
   const latestTrueUp = new Map<string, FreightTrueUp>();
   for (const t of trueUps) if (!latestTrueUp.has(t.versionId)) latestTrueUp.set(t.versionId, t);
+  const entriesByVersion = new Map<string, FreightEntry[]>();
+  for (const e of entries) {
+    const list = entriesByVersion.get(e.versionId) ?? [];
+    list.push(e);
+    entriesByVersion.set(e.versionId, list);
+  }
 
   const now = new Date();
   const out: QueueRow[] = [];
   for (const v of rows) {
-    const gaps = freightGaps(v.items, v.sections, { freightTbdSkus: tbd });
+    const gaps = freightGaps(v.items, v.sections, ctx);
+    const mine = entriesByVersion.get(v.id) ?? [];
+    const answered = new Set(
+      mine.filter((e) => e.status !== 'VOID').map((e) => normalizeBucket(e.bucket)),
+    );
+    const closed = new Set(
+      mine.filter((e) => e.status === 'VOID').map((e) => normalizeBucket(e.bucket)),
+    );
+    const openBuckets = gaps.buckets.filter((b) => !answered.has(b) && !closed.has(b));
+    const staged = mine.filter((e) => e.status === 'STAGED');
+    const appliedNotPushed = mine.filter((e) => e.status === 'APPLIED');
+
     const t = latestTrueUp.get(v.id) ?? null;
-    const settled = t?.status === 'APPLIED' || t?.status === 'VOID';
-    if (!gaps.any && !t) continue;
-    if (settled && !opts.includeSettled) continue;
+    if (!openBuckets.length && !staged.length && !appliedNotPushed.length && !opts.includeSettled)
+      continue;
 
     const since = v.releasedAt ?? v.createdAt;
     const ageDays = ageInDays(since, now);
@@ -572,24 +878,16 @@ export async function freightQueue(
       status: v.status,
       since: since ? since.toISOString() : null,
       ageDays,
-      urgency: settled ? 'NEW' : urgencyFor(ageDays, threshold),
+      urgency: openBuckets.length ? urgencyFor(ageDays, threshold) : 'NEW',
       totalMinor: versionTotals(v.items, v.sections).total,
-      gapBuckets: gaps.buckets,
-      gapLineCount: gaps.thirdParty.length,
-      vendors: [
-        ...new Set(
-          gaps.thirdParty
-            .map((l) => vendorByPart.get(l.sku.trim().toUpperCase()) ?? '')
-            .filter(Boolean) as string[],
-        ),
-      ],
+      gapBuckets: openBuckets,
+      gapLineCount: gaps.gapLines.length,
+      vendors: [...new Set(gaps.gapLines.map((l) => l.vendor).filter(Boolean) as string[])],
       trueUpId: t?.id ?? null,
       trueUpStatus: t?.status ?? null,
-      stagedMinor:
-        (t?.thirdPartyTotalMinor ?? 0) +
-        (t?.structureFreightMinor ?? 0) +
-        (t?.stdFreightMinor ?? 0),
-      vendorQuoteRef: t?.vendorQuoteRef ?? null,
+      stagedMinor: staged.reduce((a, e) => a + e.amountMinor, 0),
+      appliedNotPushedMinor: appliedNotPushed.reduce((a, e) => a + e.amountMinor, 0),
+      vendorQuoteRef: staged.find((e) => e.vendorQuoteRef)?.vendorQuoteRef ?? null,
       hasInvoice: invoiced.has(v.proposalId),
       invoicePushed: !!t?.qboPushedAt,
       customerNotified: !!t?.customerNotifiedAt,
@@ -604,37 +902,187 @@ export async function freightQueue(
   };
 }
 
-/** Everything the proposal screen needs about freight on one version. */
-export async function freightStateForVersion(versionId: string) {
-  const version = await loadVersion(versionId);
-  const [gaps, history] = await Promise.all([
-    gapsForVersion(versionId),
-    prisma.freightTrueUp.findMany({ where: { versionId }, orderBy: { createdAt: 'desc' } }),
-  ]);
-  const live = history.find((h) => LIVE.includes(h.status)) ?? null;
-  const totals = versionTotals(version.items, version.sections);
-  return {
-    proposalId: version.proposalId,
-    versionId,
-    number: version.proposal.number,
-    title: version.proposal.title,
-    version: version.version,
-    status: version.status,
-    frozen: version.frozen,
-    releasedAt: version.releasedAt ? version.releasedAt.toISOString() : null,
-    ageDays: ageInDays(version.releasedAt ?? version.createdAt),
-    threshold: ESCALATION_DAYS,
-    totals: {
-      totalMinor: totals.total,
-      tpFreightMinor: totals.tpFreight,
-      structureFreightMinor: totals.structureFreight,
-      stdFreightMinor: totals.stdFreight,
-    },
-    gaps,
-    live,
-    history,
-  };
+/* ────────────────────────── the invoice alert ────────────────────────── */
+
+export interface InvoiceAlert {
+  severity: 'BILLED_SHORT' | 'WILL_BILL_SHORT';
+  proposalId: string;
+  versionId: string;
+  trueUpId: string | null;
+  number: string;
+  title: string;
+  customer: string;
+  docNumber: string | null;
+  invoiceTotalMinor: string;
+  /** Freight on the proposal that is not on the invoice. */
+  unbilledMinor: number;
+  outstanding: string[];
+  ageDays: number;
+  headline: string;
+  detail: string;
+  acknowledgedAt: string | null;
 }
+
+/**
+ * Invoices that are short of freight.
+ *
+ * Two different failures, and they are not equally bad:
+ *
+ *   BILLED_SHORT     — the freight is known, it is on the proposal, and the invoice
+ *                      the customer holds does not include it. This is money Summit
+ *                      has decided to charge and then not charged. It is the loud one.
+ *   WILL_BILL_SHORT  — an invoice exists and a bucket is still unanswered, so
+ *                      whatever the freight turns out to be, it is not on that
+ *                      invoice either.
+ *
+ * The banner these feed can be dismissed for a day at a time and then returns, which
+ * is the honest behaviour: the alert stops when the freight is billed or somebody
+ * records that none applies, not when it is clicked away.
+ */
+export async function invoiceAlerts(
+  opts: { includeAcknowledged?: boolean; limit?: number } = {},
+): Promise<InvoiceAlert[]> {
+  const invoices = await prisma.qboTransaction.findMany({
+    where: { type: 'INVOICE', status: 'CREATED' },
+    orderBy: { createdAt: 'desc' },
+    take: 500,
+    select: {
+      proposalId: true,
+      proposalVersionId: true,
+      qboDocNumber: true,
+      amountMinor: true,
+      qboTotalMinor: true,
+      createdAt: true,
+    },
+  });
+  if (!invoices.length) return [];
+
+  const proposalIds = [...new Set(invoices.map((i) => i.proposalId).filter(Boolean) as string[])];
+  const [ctx, proposals, entries, trueUps] = await Promise.all([
+    lineContext(),
+    prisma.proposal.findMany({
+      where: { id: { in: proposalIds }, archivedAt: null },
+      select: {
+        id: true,
+        number: true,
+        title: true,
+        organization: { select: { name: true } },
+        versions: {
+          where: { status: { in: ['RELEASED', 'ACCEPTED'] } },
+          orderBy: { version: 'desc' },
+          take: 1,
+          select: { id: true, items: true, sections: true, releasedAt: true, createdAt: true },
+        },
+      },
+    }),
+    prisma.freightEntry.findMany({ where: { proposalId: { in: proposalIds } } }),
+    prisma.freightTrueUp.findMany({
+      where: { proposalId: { in: proposalIds } },
+      orderBy: { createdAt: 'desc' },
+    }),
+  ]);
+
+  const invoiceByProposal = new Map<string, (typeof invoices)[number]>();
+  for (const i of invoices)
+    if (i.proposalId && !invoiceByProposal.has(i.proposalId))
+      invoiceByProposal.set(i.proposalId, i);
+  const trueUpByVersion = new Map<string, FreightTrueUp>();
+  for (const t of trueUps)
+    if (!trueUpByVersion.has(t.versionId)) trueUpByVersion.set(t.versionId, t);
+
+  const now = new Date();
+  const out: InvoiceAlert[] = [];
+
+  for (const p of proposals) {
+    const version = p.versions[0];
+    const invoice = invoiceByProposal.get(p.id);
+    if (!version || !invoice) continue;
+
+    const mine = entries.filter((e) => e.versionId === version.id);
+    const unbilled = mine
+      .filter((e) => e.status === 'APPLIED')
+      .reduce((a, e) => a + e.amountMinor, 0);
+    const gaps = freightGaps(version.items, version.sections, ctx);
+    const answered = new Set(
+      mine.filter((e) => e.status !== 'VOID').map((e) => normalizeBucket(e.bucket)),
+    );
+    const closed = new Set(
+      mine.filter((e) => e.status === 'VOID').map((e) => normalizeBucket(e.bucket)),
+    );
+    const openBuckets = gaps.buckets.filter((b) => !answered.has(b) && !closed.has(b));
+    if (!unbilled && !openBuckets.length) continue;
+
+    const trueUp = trueUpByVersion.get(version.id) ?? null;
+    const quiet = alertIsQuiet(trueUp?.alertAckAt ?? null, now);
+    if (quiet && !opts.includeAcknowledged) continue;
+
+    const severity: InvoiceAlert['severity'] = unbilled > 0 ? 'BILLED_SHORT' : 'WILL_BILL_SHORT';
+    const dollars = `$${(unbilled / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    out.push({
+      severity,
+      proposalId: p.id,
+      versionId: version.id,
+      trueUpId: trueUp?.id ?? null,
+      number: p.number,
+      title: p.title,
+      customer: p.organization?.name ?? '—',
+      docNumber: invoice.qboDocNumber,
+      invoiceTotalMinor: (invoice.qboTotalMinor ?? invoice.amountMinor).toString(),
+      unbilledMinor: unbilled,
+      outstanding: openBuckets,
+      ageDays: ageInDays(version.releasedAt ?? version.createdAt, now),
+      headline:
+        severity === 'BILLED_SHORT'
+          ? `${p.number}: ${dollars} of freight is on the proposal and not on invoice ${invoice.qboDocNumber ?? '—'}`
+          : `${p.number}: invoice ${invoice.qboDocNumber ?? '—'} is out and freight is still outstanding`,
+      detail:
+        severity === 'BILLED_SHORT'
+          ? `Add it to the invoice from the freight panel. ${
+              openBuckets.length
+                ? `Still waiting on ${describeGaps({ ...gaps, buckets: openBuckets })}.`
+                : ''
+            }`.trim()
+          : `Waiting on ${describeGaps({ ...gaps, buckets: openBuckets })}. Whatever it comes to, it is not on that invoice.`,
+      acknowledgedAt: trueUp?.alertAckAt ? trueUp.alertAckAt.toISOString() : null,
+    });
+  }
+
+  out.sort(
+    (a, b) =>
+      Number(b.severity === 'BILLED_SHORT') - Number(a.severity === 'BILLED_SHORT') ||
+      b.unbilledMinor - a.unbilledMinor ||
+      b.ageDays - a.ageDays,
+  );
+  return out.slice(0, opts.limit ?? 50);
+}
+
+/**
+ * Quiet one job's banner for a day.
+ *
+ * Recorded with the actor, because dismissing a notice that an invoice is short of
+ * money is a decision somebody made.
+ */
+export async function acknowledgeAlert(
+  versionId: string,
+  actorId: string,
+): Promise<{ quietUntil: string }> {
+  const trueUp = await openTrueUp(versionId, actorId);
+  const now = new Date();
+  await prisma.freightTrueUp.update({
+    where: { id: trueUp.id },
+    data: { alertAckAt: now, alertAckById: actorId },
+  });
+  await recordAudit({
+    actorId,
+    action: 'freight.alert.acknowledge',
+    entity: 'FreightTrueUp',
+    entityId: trueUp.id,
+    details: { versionId },
+  });
+  return { quietUntil: new Date(now.getTime() + 24 * 3_600_000).toISOString() };
+}
+
+/* ────────────────────────── the gate ────────────────────────── */
 
 export interface FreightGate {
   settled: boolean;
@@ -647,11 +1095,11 @@ export interface FreightGate {
 /**
  * Is this job's freight settled?
  *
- * Used to stop an order being closed out and a Bill of Materials being confirmed
- * to a vendor while a freight bill is still unaccounted for. Deliberately NOT used
- * to block accepting the proposal, creating the order or raising the invoice —
- * those are the steps that get manufacturing moving, and the whole point of this
- * feature is that they must not wait on freight.
+ * Used to stop an order being closed out and a Bill of Materials being confirmed to a
+ * vendor while a freight bill is still unaccounted for. Deliberately NOT used to
+ * block accepting the proposal, creating the order or raising the invoice — those are
+ * the steps that get manufacturing moving, and the whole point of this feature is
+ * that they must not wait on freight.
  */
 export async function freightGateStatus(proposalId: string): Promise<FreightGate> {
   const version = await prisma.proposalVersion.findFirst({
@@ -662,32 +1110,19 @@ export async function freightGateStatus(proposalId: string): Promise<FreightGate
   if (!version)
     return { settled: true, reason: null, proposalId, versionId: null, outstanding: [] };
 
-  const [gaps, resolved] = await Promise.all([
-    freightGaps(version.items, version.sections, { freightTbdSkus: await freightTbdSkus() }),
-    prisma.freightTrueUp.findFirst({
-      where: { versionId: version.id, status: { in: ['APPLIED', 'VOID'] } },
-      orderBy: { createdAt: 'desc' },
-    }),
-  ]);
-  if (!gaps.any || resolved)
+  const gaps = freightGaps(version.items, version.sections, await lineContext());
+  const { buckets } = await outstandingBuckets(version.id, gaps);
+  if (!buckets.length)
     return { settled: true, reason: null, proposalId, versionId: version.id, outstanding: [] };
-
-  const parts: string[] = [];
-  if (gaps.thirdParty.length)
-    parts.push(
-      `${gaps.thirdParty.length} line${gaps.thirdParty.length === 1 ? '' : 's'} with no third-party freight`,
-    );
-  if (gaps.structureMissing) parts.push('no structure freight');
-  if (gaps.standardMissing) parts.push('standard freight switched on but zero');
 
   return {
     settled: false,
     proposalId,
     versionId: version.id,
-    outstanding: gaps.buckets,
+    outstanding: buckets,
     reason:
-      `This job still has freight outstanding — ${parts.join(', ')}. Enter the vendor's figures ` +
-      `(or record that no freight applies) on the proposal's freight panel first.`,
+      `This job still has freight outstanding — ${describeGaps({ ...gaps, buckets })}. Enter the vendor's ` +
+      `figures (or record that none applies) on the proposal's freight panel first.`,
   };
 }
 
