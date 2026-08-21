@@ -85,9 +85,9 @@ function scheduleNote(
   currency: string,
 ): string | null {
   const stages: Array<{ label: string; amount: bigint }> = [
-    { label: 'Due upfront', amount: schedule.depositMinor },
-    { label: 'Progress payment', amount: schedule.progressMinor },
-    { label: 'Due prior to shipment', amount: schedule.finalMinor },
+    { label: 'Due Upfront', amount: schedule.depositMinor },
+    { label: 'Progress Payment', amount: schedule.progressMinor },
+    { label: 'Due Prior to Shipment', amount: schedule.finalMinor },
   ].filter((s) => s.amount > 0n);
   if (!stages.length) return null;
 
@@ -98,10 +98,19 @@ function scheduleNote(
   const drift = 100 - rounded.reduce((a, b) => a + b, 0);
   if (rounded.length) rounded[rounded.length - 1] = (rounded[rounded.length - 1] ?? 0) + drift;
 
+  /**
+   * One stage per line, under a heading.
+   *
+   * This was a single run-on line joined with pipes, which is unreadable in
+   * QuickBooks' Note to customer box — it wraps mid-figure and the customer has to
+   * parse "$106.25 (50%) | Due prior to shipment: $106.25 (50%)" out of a paragraph.
+   * A heading and one line per stage is how the schedule reads on the proposal, and
+   * the invoice should not restate it differently.
+   */
   const parts = stages.map(
-    (s, i) => `${s.label}: ${formatMinor(s.amount, currency)} (${rounded[i]}%)`,
+    (s, i) => `— ${s.label}: ${formatMinor(s.amount, currency)} (${rounded[i]}%)`,
   );
-  return `PAYMENT SCHEDULE — ${parts.join('  |  ')}`;
+  return [`PAYMENT SCHEDULE:`, ...parts].join('\n');
 }
 
 export function buildInvoiceBody(input: InvoiceInput): Record<string, unknown> {
@@ -158,7 +167,8 @@ export function buildInvoiceBody(input: InvoiceInput): Record<string, unknown> {
   const note = input.schedule
     ? scheduleNote(input.schedule, input.expectedTotalMinor, input.currency)
     : null;
-  const memo = [input.memo, note].filter(Boolean).join('  ·  ');
+  // Newline, not a separator dot: the memo is now a labelled block, not a sentence.
+  const memo = [input.memo, note].filter(Boolean).join('\n');
 
   const customField = salesCustomFields([
     { name: 'Customer Purchase Order #', value: input.poNumber, definitionId: input.poFieldId },

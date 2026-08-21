@@ -688,25 +688,24 @@ export async function executeTransaction(
       );
     }
 
+    /**
+     * The Note to customer, as a labelled block.
+     *
+     * Both references are stated here unconditionally rather than only as a fallback.
+     * This company's custom fields are on Intuit's newer Custom Fields feature, which
+     * the v3 API cannot write — proven by reading back an invoice that visibly has
+     * them filled in and getting an empty CustomField array. The note is therefore not
+     * a consolation prize, it is the only place either reference can appear on the
+     * document the customer receives, so it is formatted to be read rather than
+     * scanned: one label per line, in the order accounts payable needs them.
+     */
     const memo = [
-      // Fallback when the Project ID cannot be written to a custom field. QuickBooks'
-      // v3 API can only populate the three LEGACY sales-form custom fields; the
-      // newer Custom Fields feature (Settings → Custom fields, with per-form "Print
-      // on form" toggles) is not writable through the API at all. Where that is the
-      // case the slot lookup returns null, and the Project ID would silently vanish
-      // — so it goes into the memo instead, which always prints.
-      projectId && !projectFieldId ? `Project ID ${projectId}` : null,
-      // Deliberately second, so the two references read together at the front of the
-      // memo. On a company whose custom fields the API cannot write, this line IS the
-      // PO reference on the customer's invoice, and their accounts-payable team has to
-      // find it without being told where to look.
-      // Same reasoning for the PO number. It also lands here when both fields
-      // resolve to the same slot and this one lost — see salesCustomFields.
-      poNumber && !poFieldId ? `Customer PO ${poNumber}` : null,
-      `Per accepted proposal ${version.proposal.number} v${txn.proposalVersion}`,
+      projectId ? `Project ID:  ${projectId}` : null,
+      poNumber ? `Customer PO:  ${poNumber}` : null,
+      `Per Accepted Proposal:  ${version.proposal.number} v${txn.proposalVersion}`,
     ]
       .filter(Boolean)
-      .join('  ·  ');
+      .join('\n');
     // Invoice date is today in QuickBooks terms; sent explicitly so the due date
     // can be pinned to it when no payment term governs.
     const txnDate = new Date().toISOString().slice(0, 10);
