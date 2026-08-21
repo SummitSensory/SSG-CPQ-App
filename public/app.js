@@ -783,13 +783,13 @@
           '<span style="font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:' + color + ';">' + esc(label) + ' · ' + rows.length + '</span>' +
           (note ? '<span class="muted" style="font-size:11.5px;">' + esc(note) + '</span>' : '') + '</div>' +
         '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:12px;overflow:hidden;">' +
-        rows.slice(0, 6).map(function (r, i) {
+        foldRows(rows.map(function (r, i) {
           return '<div class="dashRow" data-id="' + r.id + '" style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 14px;cursor:pointer;' + (i ? 'border-top:1px solid #f2f3ef;' : '') + '">' +
             '<div style="min-width:0;"><b style="font-weight:600;font-size:13.5px;">' + esc(r.customer) + '</b>' +
               '<div class="muted" style="font-size:12px;">' + esc(r.title) + ' · ' + esc(r.number) + '</div></div>' +
             '<div style="text-align:right;white-space:nowrap;font-size:12.5px;">' + fmt0(r.total) +
               '<div class="muted" style="font-size:11.5px;">' + (r.expiration ? 'expires ' + fmtDate(r.expiration) : r.daysOpen + ' days old') + '</div></div></div>';
-        }).join('') + '</div></div>';
+        }), 6, '#f2f3ef', color) + '</div></div>';
     }
     /**
      * Follow-ups that have come due. Customers, not proposals — the date is a promise
@@ -801,7 +801,7 @@
           '<span style="font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#8a6d1f;">Follow-Up Due · ' + rows.length + '</span>' +
           '<span class="muted" style="font-size:11.5px;">make contact</span></div>' +
         '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:12px;overflow:hidden;">' +
-        rows.slice(0, 6).map(function (r, i) {
+        foldRows(rows.map(function (r, i) {
           var win = r.decisionFrom || r.decisionTo
             ? 'decides ' + (r.decisionFrom ? fmtDate(r.decisionFrom) : '?') + ' – ' + (r.decisionTo ? fmtDate(r.decisionTo) : '?')
             : 'no decision window recorded';
@@ -810,7 +810,7 @@
               '<div class="muted" style="font-size:12px;">' + esc(win) + '</div></div>' +
             '<div style="text-align:right;white-space:nowrap;font-size:12.5px;">' + esc(fmtDate(r.followUpDate)) +
               '<div class="muted" style="font-size:11.5px;">follow-up date</div></div></div>';
-        }).join('') + '</div></div>';
+        }), 6, '#f2f3ef', '#8a6d1f') + '</div></div>';
     }
     var box = document.getElementById('dashAttention');
     var html = freightAlertGroup(freightRows) +
@@ -830,6 +830,7 @@
           rtd(statusChip(r.status) + (r.expired ? ' <span style="color:#9c3327;">⚑</span>' : '')) +
           rtd(fmt0(r.total), 'right', 1) + rtd(fmtDate(r.updatedAt)) + '</tr>';
       }).join(''), 'No proposals yet.');
+    bindFolds();
     document.querySelectorAll('.dashRow').forEach(function (el) {
       el.addEventListener('click', function () { activateNav('proposals'); openProposalDetail(el.getAttribute('data-id'), user); });
     });
@@ -854,14 +855,53 @@
         '<span style="font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#9c3327;">Freight not requested \u00b7 ' + rows.length + '</span>' +
         '<span class="muted" style="font-size:11.5px;">released proposals waiting on a vendor freight quote</span></div>' +
       '<div style="background:#fdf1ef;border:1px solid #f0ccc6;border-radius:12px;overflow:hidden;">' +
-      rows.slice(0, 8).map(function (r, i) {
+      foldRows(rows.map(function (r, i) {
         var vend = (r.vendors || []).join(', ');
         return '<div class="freightRow" data-pid="' + r.proposalId + '" data-vid="' + r.versionId + '" style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 14px;cursor:pointer;' + (i ? 'border-top:1px solid #f6dcd7;' : '') + '">' +
           '<div style="min-width:0;"><b style="font-weight:600;font-size:13.5px;">' + esc(r.customer) + '</b>' +
             '<div class="muted" style="font-size:12px;">' + esc(r.title) + ' \u00b7 ' + esc(r.number) + ' v' + r.version + '</div></div>' +
           '<div style="text-align:right;white-space:nowrap;font-size:12.5px;color:#9c3327;font-weight:600;">' + r.pendingCount + ' item' + (r.pendingCount === 1 ? '' : 's') +
             '<div class="muted" style="font-size:11.5px;font-weight:400;">' + esc(vend || 'freight outstanding') + (r.removedCount ? ' \u00b7 ' + r.removedCount + ' removed' : '') + '</div></div></div>';
-      }).join('') + '</div></div>';
+      }), 8, '#f6dcd7', '#9c3327') + '</div></div>';
+  }
+
+  /**
+   * Attention groups FOLD rather than truncate.
+   *
+   * Every row is rendered; the ones past the limit start hidden behind a footer that
+   * opens them. A group headed "30" that shows eight and ends in a dead "and 22 more"
+   * is a count nobody can act on, and these are the lists the day is worked from.
+   * Row handlers are attached by class after render, so a hidden row is wired exactly
+   * like a visible one.
+   */
+  function foldRows(rowHtmls, limit, lineColor, textColor) {
+    var extra = rowHtmls.length - limit;
+    if (extra <= 0) return rowHtmls.join('');
+    return rowHtmls.slice(0, limit).join('') +
+      rowHtmls.slice(limit).map(function (h) {
+        return '<div class="foldExtra" style="display:none;">' + h + '</div>';
+      }).join('') +
+      '<button type="button" class="foldMore" data-shown="0" data-limit="' + limit +
+      '" data-total="' + rowHtmls.length + '" data-hidden="' + extra + '" ' +
+      'style="display:block;width:100%;text-align:left;background:none;border:0;border-top:1px solid ' + lineColor +
+      ';padding:9px 14px;font:inherit;font-size:12px;color:' + textColor + ';cursor:pointer;">' +
+      'Show all ' + rowHtmls.length + ' \u00b7 ' + extra + ' more</button>';
+  }
+
+  /** Wire every fold footer on the page. Each toggles only its own group. */
+  function bindFolds() {
+    document.querySelectorAll('.foldMore').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var open = btn.getAttribute('data-shown') === '1';
+        btn.parentNode.querySelectorAll('.foldExtra').forEach(function (n) {
+          n.style.display = open ? 'none' : '';
+        });
+        btn.setAttribute('data-shown', open ? '0' : '1');
+        btn.textContent = open
+          ? 'Show all ' + btn.getAttribute('data-total') + ' \u00b7 ' + btn.getAttribute('data-hidden') + ' more'
+          : 'Show the first ' + btn.getAttribute('data-limit') + ' only';
+      });
+    });
   }
 
   /**

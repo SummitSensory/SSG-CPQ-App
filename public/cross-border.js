@@ -1041,8 +1041,111 @@
         BTN +
         '">Add</button>' +
         '</div>' +
-        '<div class="muted" style="font-size:12.5px;margin-top:9px;">A tiered tariff needs its tier table entered by an administrator with database access for now — this form covers flat, percentage and per-unit schedules.</div>'
+        /* The tier table. Hidden until the basis is tiered, because on every other
+         * basis it is not a thing an administrator has to think about. Rows are added
+         * and removed in place rather than through a re-render, so a half-typed tariff
+         * survives adding the next band. */
+        '<div data-role="tierBlock" style="display:none;margin-top:14px;border:1px solid #eef0ea;border-radius:11px;padding:13px 15px;">' +
+        '<div style="font-size:13px;font-weight:600;">Tier table</div>' +
+        '<div class="muted" style="font-size:12.5px;line-height:1.6;margin-top:4px;max-width:640px;">' +
+        'One row per band of the broker’s tariff, banded on the <b>entry value</b> in this schedule’s own currency. ' +
+        '“Up to” is the top of the band and is <b>inclusive</b>. Leave it blank for the “and above” band — only one row may be blank. ' +
+        'A band can charge a fee, a rate, or a fee plus a rate. A rate is a percent: 0.25 is a quarter of one percent.' +
+        '</div>' +
+        '<div data-role="tierRows"></div>' +
+        '<button class="link-btn" data-act="addTier" style="width:auto;padding:6px 12px;font-size:12.5px;margin-top:10px;white-space:nowrap;">Add a tier</button>' +
+        '</div>' +
+        '<div class="muted" style="font-size:12.5px;margin-top:9px;">Leave a figure blank when the basis does not use it — a percentage schedule needs no amount, a flat one no rate.</div>'
       );
+    }
+
+    function tierRowHtml() {
+      var L = 'font-size:12.5px;color:#82877d;';
+      return (
+        '<div data-role="tierRow" style="display:flex;gap:9px;flex-wrap:wrap;align-items:flex-end;margin-top:9px;">' +
+        '<label style="' +
+        L +
+        '">Up to<br>' +
+        '<input data-role="tierUpTo" placeholder="and above" style="' +
+        IN +
+        'margin-top:4px;width:118px;font-variant-numeric:tabular-nums;"></label>' +
+        '<label style="' +
+        L +
+        '">Fee<br>' +
+        '<input data-role="tierAmount" placeholder="0.00" style="' +
+        IN +
+        'margin-top:4px;width:104px;font-variant-numeric:tabular-nums;"></label>' +
+        '<label style="' +
+        L +
+        '">Rate %<br>' +
+        '<input data-role="tierPercent" placeholder="0.25" style="' +
+        IN +
+        'margin-top:4px;width:88px;font-variant-numeric:tabular-nums;"></label>' +
+        '<label style="' +
+        L +
+        'flex:1 1 200px;min-width:170px;">Label on the estimate<br>' +
+        '<input data-role="tierLabel" placeholder="Entry preparation, up to 5 lines" style="' +
+        IN +
+        'margin-top:4px;width:100%;"></label>' +
+        '<button class="link-btn" data-act="dropTier" style="width:auto;padding:6px 11px;font-size:12.5px;white-space:nowrap;">Remove</button>' +
+        '</div>'
+      );
+    }
+
+    /* The typed tier rows as the route wants them, or one plain-language reason they
+     * cannot be saved. Untouched rows are ignored rather than rejected, so an empty
+     * row left at the bottom of the form is not an error. */
+    function readTiers() {
+      var rows = [].slice.call(card.querySelectorAll('[data-role="tierRow"]'));
+      var out = [];
+      var bad = null;
+      var open = 0;
+
+      rows.forEach(function (row) {
+        function f(role) {
+          var el = row.querySelector('[data-role="' + role + '"]');
+          return el ? String(el.value || '').trim() : '';
+        }
+        var up = f('tierUpTo'),
+          amt = f('tierAmount'),
+          pct = f('tierPercent'),
+          label = f('tierLabel');
+        if (!up && !amt && !pct && !label) return;
+
+        var upMinor = up ? cents(up) : null;
+        var amtMinor = amt ? cents(amt) : null;
+        if (isNaN(upMinor) || isNaN(amtMinor)) {
+          bad = bad || 'Enter tier figures as plain dollars — 2500 or 2500.00.';
+          return;
+        }
+        if (pct && !/^\d+(\.\d{1,4})?$/.test(pct)) {
+          bad =
+            bad ||
+            '“' +
+              pct +
+              '” is not a usable rate. A rate is a percent — 0.25 is a quarter of one percent.';
+          return;
+        }
+        if (amtMinor == null && !pct) {
+          bad = bad || 'Tier ' + (out.length + 1) + ' has neither a fee nor a rate on it.';
+          return;
+        }
+        if (upMinor == null) open++;
+        out.push({
+          upToMinor: upMinor,
+          amountMinor: amtMinor,
+          percent: pct || null,
+          label: label || null,
+        });
+      });
+
+      if (bad) return { error: bad };
+      if (!out.length) return { error: 'A tiered schedule needs at least one tier.' };
+      if (open > 1)
+        return {
+          error: 'Only one tier can be open-ended. Leave “up to” blank on the top band alone.',
+        };
+      return { tiers: out };
     }
 
     function scheduleRow(x) {
@@ -1052,7 +1155,7 @@
         x.feeType === 'PERCENTAGE'
           ? esc(x.percent) + '% of entry value'
           : x.feeType === 'TIERED'
-            ? ((x.tiers && x.tiers.length) || 0) + ' tier(s)'
+            ? tierSummary(x)
             : x.feeType === 'MANUAL'
               ? 'quoted each time'
               : money(x.amountMinor, x.currency);
@@ -1110,6 +1213,31 @@
         '"></div>' +
         '</div>'
       );
+    }
+
+    /* The bands as the broker states them. Sorted for reading — the evaluator sorts
+     * for itself, so display order is not load-bearing. */
+    function tierSummary(x) {
+      var t = x.tiers && x.tiers.length ? x.tiers.slice() : null;
+      if (!t) return 'no tier table on this schedule';
+      t.sort(function (a, b) {
+        if (a.upToMinor == null) return 1;
+        if (b.upToMinor == null) return -1;
+        return a.upToMinor - b.upToMinor;
+      });
+      return t
+        .map(function (r) {
+          var band = r.upToMinor == null ? 'and above' : 'up to ' + money(r.upToMinor, x.currency);
+          var charge =
+            [
+              r.amountMinor != null ? money(r.amountMinor, x.currency) : null,
+              r.percent ? esc(r.percent) + '%' : null,
+            ]
+              .filter(Boolean)
+              .join(' + ') || '—';
+          return band + ' · ' + charge + (r.label ? ' · ' + esc(r.label) : '');
+        })
+        .join('<br>');
     }
 
     /* ── Customs queue ─────────────────────────────────────────────────────── */
@@ -1204,7 +1332,26 @@
           ? '<div class="muted" style="font-size:12.5px;margin-top:12px;">' + esc(S.busy) + '</div>'
           : '');
 
-      card.querySelectorAll('[data-act]').forEach(function (b) {
+      wire(card);
+
+      /* The tier table follows the basis. Toggled by hand rather than by re-rendering
+       * the panel, which would throw away everything else already typed into the form. */
+      var feeType = card.querySelector('#cbFeeType');
+      if (feeType) {
+        feeType.addEventListener('change', function () {
+          var block = card.querySelector('[data-role="tierBlock"]');
+          if (!block) return;
+          var tiered = feeType.value === 'TIERED';
+          block.style.display = tiered ? 'block' : 'none';
+          if (tiered && !block.querySelector('[data-role="tierRow"]')) {
+            act('addTier', feeType);
+          }
+        });
+      }
+    }
+
+    function wire(root) {
+      root.querySelectorAll('[data-act]').forEach(function (b) {
         b.addEventListener('click', function () {
           act(b.getAttribute('data-act'), b);
         });
@@ -1440,12 +1587,46 @@
         ];
       } else if (kind === 'dropOverride') {
         call = ['/cross-border/fx/override/' + id + '/deactivate', { method: 'POST', body: {} }];
+      } else if (kind === 'addTier') {
+        var rowsWrap = card.querySelector('[data-role="tierRows"]');
+        if (rowsWrap) {
+          var holder = document.createElement('div');
+          holder.innerHTML = tierRowHtml();
+          var added = holder.firstChild;
+          rowsWrap.appendChild(added);
+          wire(added);
+          var firstInput = added.querySelector('input');
+          if (firstInput) firstInput.focus();
+        }
+        return;
+      } else if (kind === 'dropTier') {
+        var doomed = btn.closest('[data-role="tierRow"]');
+        if (!doomed) return;
+        // The last row is emptied rather than removed, so the table never ends up with
+        // no way to type a tier into it.
+        if (card.querySelectorAll('[data-role="tierRow"]').length > 1) {
+          doomed.parentNode.removeChild(doomed);
+        } else {
+          doomed.querySelectorAll('input').forEach(function (i) {
+            i.value = '';
+          });
+        }
+        return;
       } else if (kind === 'addFee') {
         var amount = cents(val('cbFeeAmount'));
         var min = cents(val('cbFeeMin'));
         if (isNaN(amount) || isNaN(min)) {
           flash('Enter amounts as plain dollars — 275 or 275.00.', true);
           return;
+        }
+        var tiers = null;
+        if (val('cbFeeType') === 'TIERED') {
+          var read = readTiers();
+          if (read.error) {
+            flash(read.error, true);
+            return;
+          }
+          tiers = read.tiers;
         }
         call = [
           '/cross-border/broker-fees',
@@ -1458,6 +1639,7 @@
               amountMinor: amount,
               percent: val('cbFeePercent') || null,
               minMinor: min,
+              tiers: tiers,
               effectiveFrom: val('cbFeeFrom'),
             },
           },

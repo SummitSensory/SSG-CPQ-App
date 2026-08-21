@@ -136,6 +136,27 @@ and a converted fee round the same direction.
 registration tables, and prefers the schedule marked default. One default at a time is
 enforced on write, so there is never a tie to break.
 
+### Entering a tier table
+
+Choosing **Tiered** as the basis opens a tier table under the form. One row per band
+of the broker's tariff:
+
+| Field  | Means                                                                                                                             |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| Up to  | The top of the band, **inclusive**, in the schedule's own currency. Blank is the “and above” band, and only one row may be blank. |
+| Fee    | A flat amount for anything in the band.                                                                                           |
+| Rate % | A percent of the entry value. `0.25` is a quarter of one percent, not 25%.                                                        |
+| Label  | What the customer-facing estimate calls this band.                                                                                |
+
+A band needs a fee, a rate, or both. Rows are added and removed in place, so adding
+the next band does not discard a half-typed tariff, and a row left blank is ignored
+rather than refused. **What would it charge?** on the saved schedule itemizes the
+band that a given entry value lands in.
+
+A table with no open-ended band is allowed but reports “above every tier” on any
+value past the top ceiling, rather than charging the top band — so leave the top row
+blank unless the broker's tariff genuinely stops.
+
 ## The queue
 
 `GET /cross-border/customs-queue` lists entries at `REQUIRES_CUSTOMS_REVIEW` or
@@ -148,9 +169,6 @@ Approving still happens on the proposal. This screen is the list, not the workfl
 
 ## What it does not do
 
-- **No tier-table editor.** The form covers flat, percentage and per-unit schedules; a
-  tiered tariff still needs its `tiers` JSON entered directly. The evaluator and the
-  validator handle tiers fully, so the gap is the form only.
 - **No rate deletion.** Rates and taxability rules can be added, superseded and
   corrected, never removed — an issued proposal's snapshot references the row it was
   priced on.

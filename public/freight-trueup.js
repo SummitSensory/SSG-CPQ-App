@@ -39,6 +39,9 @@
     AMBER = '#8a6d1f',
     GREEN = '#2f7d5d';
 
+  /** Rows shown before the block folds. The rest are rendered and hidden, not dropped. */
+  var VISIBLE = 8;
+
   function can(user, roles) {
     return !!user && roles.indexOf(user.role) !== -1;
   }
@@ -127,8 +130,10 @@
       ';border:1px solid ' +
       REDLINE +
       ';border-radius:12px;overflow:hidden;">' +
+      /* Every row is rendered; the ones past the eighth start hidden. The queue is the
+       * whole point of the block, so "and 22 more" has to be a way in rather than a
+       * statement that 22 jobs exist somewhere. */
       rows
-        .slice(0, 8)
         .map(function (r, i) {
           var detail = [];
           if (r.gapLineCount)
@@ -139,13 +144,17 @@
           if (r.gapBuckets.indexOf('STANDARD') !== -1) detail.push('standard');
           if (r.vendors && r.vendors.length) detail.push(r.vendors.join(', '));
           if (r.stagedMinor) detail.push(money(r.stagedMinor) + ' entered');
+          var extra = i >= VISIBLE;
           return (
             '<div class="ftuRow" data-pid="' +
             esc(r.proposalId) +
             '" data-vid="' +
             esc(r.versionId) +
             '" ' +
-            'style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 14px;cursor:pointer;' +
+            (extra ? 'data-ftu-extra="1" ' : '') +
+            'style="display:' +
+            (extra ? 'none' : 'flex') +
+            ';justify-content:space-between;align-items:center;gap:12px;padding:10px 14px;cursor:pointer;' +
             (i ? 'border-top:1px solid #f6dcd7;' : '') +
             '">' +
             '<div style="min-width:0;"><b style="font-weight:600;font-size:13.5px;">' +
@@ -168,12 +177,20 @@
           );
         })
         .join('') +
-      (rows.length > 8
-        ? '<div style="padding:8px 14px;border-top:1px solid #f6dcd7;font-size:12px;color:' +
+      (rows.length > VISIBLE
+        ? '<button type="button" class="ftuMore" data-shown="0" data-hidden="' +
+          (rows.length - VISIBLE) +
+          '" data-total="' +
+          rows.length +
+          '" ' +
+          'style="display:block;width:100%;text-align:left;background:none;border:0;border-top:1px solid #f6dcd7;padding:9px 14px;font:inherit;font-size:12px;color:' +
           RED +
-          ';">and ' +
-          (rows.length - 8) +
-          ' more</div>'
+          ';cursor:pointer;">' +
+          'Show all ' +
+          rows.length +
+          ' · ' +
+          (rows.length - VISIBLE) +
+          ' more</button>'
         : '') +
       '</div></div>';
     return html;
@@ -184,6 +201,25 @@
     Array.prototype.forEach.call(document.querySelectorAll('.ftuRow'), function (node) {
       node.addEventListener('click', function () {
         openWorkspace(node.getAttribute('data-pid'), node.getAttribute('data-vid'), user);
+      });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('.ftuMore'), function (btn) {
+      btn.addEventListener('click', function () {
+        var open = btn.getAttribute('data-shown') === '1';
+        Array.prototype.forEach.call(
+          document.querySelectorAll('.ftuRow[data-ftu-extra]'),
+          function (row) {
+            row.style.display = open ? 'none' : 'flex';
+          },
+        );
+        btn.setAttribute('data-shown', open ? '0' : '1');
+        btn.textContent = open
+          ? 'Show all ' +
+            btn.getAttribute('data-total') +
+            ' · ' +
+            btn.getAttribute('data-hidden') +
+            ' more'
+          : 'Show the oldest ' + VISIBLE + ' only';
       });
     });
   }
