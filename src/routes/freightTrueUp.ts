@@ -28,6 +28,13 @@ import {
   syncVersion,
 } from '../integrations/monday/freightPull.js';
 import { FREIGHT_BUCKETS } from '../proposals/freightTrueUp.js';
+import {
+  BANNER_DEFAULTS,
+  BANNER_PRESETS,
+  loadBannerTheme,
+  resetBannerTheme,
+  saveBannerTheme,
+} from '../ui/bannerTheme.js';
 import { env } from '../config/env.js';
 import type { FreightTrueUp } from '@prisma/client';
 
@@ -82,6 +89,9 @@ export function registerFreightTrueUpRoutes(app: FastifyInstance): void {
   const read = { preHandler: requirePermission(Permission.PROPOSAL_READ) };
   const write = { preHandler: requirePermission(Permission.FREIGHT_COST_WRITE) };
   const push = { preHandler: requirePermission(Permission.FREIGHT_INVOICE_PUSH) };
+  // Changing what the whole company looks at all day is an administrator act, so it
+  // rides on the same permission as the other integration and appearance settings.
+  const manage = { preHandler: requirePermission(Permission.INTEGRATIONS_MANAGE) };
 
   /* ─────────────────────────── the queue and the alert ─────────────────────────── */
 
@@ -115,6 +125,35 @@ export function registerFreightTrueUpRoutes(app: FastifyInstance): void {
       unbilledMinor: alerts.reduce((sum, a) => sum + a.unbilledMinor, 0),
     };
   });
+
+  /**
+   * The banner’s colours.
+   *
+   * Read is open to anyone who can read a proposal, because everyone sees the
+   * banner and it has to paint for all of them. Writing is an administrator act
+   * — it changes what the whole company looks at all day.
+   */
+  app.get('/freight/banner-theme', read, async () => ({
+    theme: await loadBannerTheme(),
+    defaults: BANNER_DEFAULTS,
+    presets: BANNER_PRESETS,
+  }));
+
+  app.patch('/freight/banner-theme', manage, async (req) => {
+    const body = z
+      .object({
+        shortBg: z.string().trim().optional(),
+        shortText: z.string().trim().optional(),
+        pendingBg: z.string().trim().optional(),
+        pendingText: z.string().trim().optional(),
+      })
+      .parse(req.body ?? {});
+    return { theme: await saveBannerTheme(body, req.user!.sub) };
+  });
+
+  app.post('/freight/banner-theme/reset', manage, async (req) => ({
+    theme: await resetBannerTheme(req.user!.sub),
+  }));
 
   /** Quiet one job's banner for a day. It returns until the freight is billed. */
   app.post('/freight/alerts/:versionId/acknowledge', write, async (req) => {

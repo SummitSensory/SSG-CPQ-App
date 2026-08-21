@@ -12633,7 +12633,11 @@
       '<div id="futList"><div class="muted" style="padding:16px;">Loading…</div></div>' +
       '<div class="section-title" style="margin-top:26px;">Financing</div>' +
       '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">Ryan Capital quote a <b>payment factor</b> per amount band and term, not an interest rate: the monthly payment is the amount financed × the factor at that intersection. Paste their sheet or edit a cell; the published sheet is what every new financing document quotes from.</div>' +
-      '<div id="finAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>';
+      '<div id="finAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>' +
+      '<div class="section-title" style="margin-top:26px;">Freight alert banner</div>' +
+      '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">The bar that appears above every screen when an invoice is short of freight. It is the most-seen thing in the application, so its colours are yours to set: pick a preset or two exact colours per state. The preview is live.</div>' +
+      '<div id="ftuBannerAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>';
+    if (window.FreightTrueUp) window.FreightTrueUp.mountAdmin('ftuBannerAdmin', user);
     document.getElementById('admNew').addEventListener('click', openUserForm);
     document.getElementById('admMailTest').addEventListener('click', async function () {
       var bt = this, label = bt.textContent;

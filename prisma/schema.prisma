@@ -3540,3 +3540,15 @@ model CrossBorderSetting {
   createdAt                       DateTime              @default(now())
   updatedAt                       DateTime              @updatedAt
 }
+
+/// Small string-keyed store for UI choices an administrator makes.
+///
+/// FormulaSetting already covers business scalars, but its value is a Float and
+/// cannot hold "#fdecea". Rather than widen a table the pricing engine reads on
+/// every proposal, colour and layout choices live here.
+model UiSetting {
+  key         String   @id
+  value       String
+  updatedAt   DateTime @updatedAt
+  updatedById String?
+}

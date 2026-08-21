@@ -49,6 +49,7 @@
     'ACCOUNTING',
   ];
   var PUSH_ROLES = ['SYSTEM_ADMIN', 'EXECUTIVE', 'OPERATIONS', 'ACCOUNTING'];
+  var MANAGE_ROLES = ['SYSTEM_ADMIN'];
 
   var INK = '#1c4039',
     MUTED = '#6b7065',
@@ -110,7 +111,7 @@
   function stateChip(row) {
     if (row.appliedNotPushedMinor > 0 && row.hasInvoice)
       return chip('Invoice short', RED, '#fbecea');
-    if (row.invoicePushed && !row.gapBuckets.length) return chip('On invoice', GREEN, '#eef6f0');
+    if (row.invoicePushed && !row.gapBuckets.length) return chip('On invoice', BLUE, BLUEBG);
     if (row.trueUpStatus === 'APPLIED') return chip('On proposal', AMBER, '#fdf6e6');
     if (row.stagedMinor > 0) return chip('Entered', AMBER, '#fdf6e6');
     return chip('Not started', RED, '#fbecea');
@@ -334,6 +335,7 @@
       document.body.insertBefore(host, document.body.firstChild);
     }
     bannerUser = user;
+    await loadBannerTheme();
     await refreshBanner();
     if (bannerTimer) clearInterval(bannerTimer);
     // Five minutes. Freight lands during the working day and the point of the banner
@@ -342,7 +344,60 @@
   }
 
   var bannerUser = null,
-    bannerTimer = null;
+    bannerTimer = null,
+    bannerTheme = null;
+
+  var BANNER_FALLBACK = {
+    shortBg: '#fdecea',
+    shortText: '#8c2b20',
+    pendingBg: '#fdf6e6',
+    pendingText: '#7a6318',
+  };
+
+  /**
+   * Blend two hex colours. Used for the banner's border and its state pill, so an
+   * administrator picks two colours per state rather than four and the derived tones
+   * stay in keeping with whatever they chose — including a dark background, where a
+   * hard-coded pale border would look like a mistake.
+   */
+  function mix(a, b, weightOfB) {
+    var pa = hex(a),
+      pb = hex(b);
+    if (!pa || !pb) return b;
+    var w = Math.max(0, Math.min(1, weightOfB));
+    return (
+      '#' +
+      [0, 1, 2]
+        .map(function (i) {
+          var v = Math.round(pa[i] * (1 - w) + pb[i] * w);
+          return ('0' + Math.max(0, Math.min(255, v)).toString(16)).slice(-2);
+        })
+        .join('')
+    );
+  }
+  function hex(value) {
+    var m = String(value || '')
+      .trim()
+      .replace('#', '');
+    if (m.length === 3) m = m[0] + m[0] + m[1] + m[1] + m[2] + m[2];
+    if (!/^[0-9a-f]{6}$/i.test(m)) return null;
+    return [parseInt(m.slice(0, 2), 16), parseInt(m.slice(2, 4), 16), parseInt(m.slice(4, 6), 16)];
+  }
+
+  /** Read the configured colours once per page. Failure falls back to the default. */
+  async function loadBannerTheme() {
+    if (bannerTheme) return bannerTheme;
+    try {
+      var r = await H.authed('/freight/banner-theme');
+      if (r.ok) {
+        var d = await r.json();
+        bannerTheme = d.theme || BANNER_FALLBACK;
+        return bannerTheme;
+      }
+    } catch (e) {}
+    bannerTheme = BANNER_FALLBACK;
+    return bannerTheme;
+  }
 
   async function refreshBanner() {
     var host = el('ftuBanner');
@@ -364,13 +419,32 @@
     var lead = short[0] || alerts[0];
     var loud = short.length > 0;
 
+    /* Colours come from Administration → Freight alert banner.
+     *
+     * This sits above every screen all day, so where "urgent" stops and "the
+     * application looks broken" starts is a judgement about the room and the people
+     * in it. The default is light red with dark red type; the edge is derived from
+     * the text colour rather than configured separately, because a third and fourth
+     * hex code per state is more choice than anyone wants. */
+    var theme = bannerTheme || BANNER_FALLBACK;
+    var bg = loud ? theme.shortBg : theme.pendingBg;
+    var ink = loud ? theme.shortText : theme.pendingText;
+    var edge = mix(ink, bg, 0.55);
+    var pill = mix(ink, bg, 0.82);
+
     host.innerHTML =
       '<div style="background:' +
-      (loud ? '#8c2b20' : '#7a6318') +
-      ';color:#fff;padding:11px 18px;' +
+      bg +
+      ';color:' +
+      ink +
+      ';padding:11px 18px;border-bottom:1px solid ' +
+      edge +
+      ';' +
       'display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-size:13.5px;line-height:1.5;">' +
       '<span style="font-weight:700;letter-spacing:.05em;text-transform:uppercase;font-size:11px;' +
-      'background:rgba(255,255,255,.18);padding:3px 8px;border-radius:999px;white-space:nowrap;">' +
+      'background:' +
+      pill +
+      ';padding:3px 8px;border-radius:999px;white-space:nowrap;">' +
       (loud ? 'Invoice short of freight' : 'Freight outstanding on an invoiced job') +
       '</span>' +
       '<span style="min-width:0;flex:1 1 320px;">' +
@@ -384,20 +458,27 @@
           ' unbilled</span>'
         : '') +
       (alerts.length > 1
-        ? '<button type="button" id="ftuAlertList" style="background:rgba(255,255,255,.16);border:0;color:#fff;' +
+        ? '<button type="button" id="ftuAlertList" style="background:#fff;border:1px solid ' +
+          edge +
+          ';color:' +
+          ink +
+          ';' +
           'padding:7px 12px;border-radius:8px;font:inherit;font-size:12.5px;cursor:pointer;white-space:nowrap;">' +
           'All ' +
           alerts.length +
           '</button>'
         : '') +
-      '<button type="button" id="ftuAlertOpen" style="background:#fff;border:0;color:' +
-      (loud ? '#8c2b20' : '#7a6318') +
-      ';padding:7px 13px;border-radius:8px;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap;">' +
+      '<button type="button" id="ftuAlertOpen" style="background:' +
+      ink +
+      ';border:0;color:#fff;' +
+      'padding:7px 13px;border-radius:8px;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap;">' +
       (loud ? 'Add it to the invoice' : 'Open the freight panel') +
       '</button>' +
       (can(bannerUser, WRITE_ROLES)
         ? '<button type="button" id="ftuAlertAck" title="Hidden for a day, then it comes back" ' +
-          'style="background:none;border:0;color:rgba(255,255,255,.75);padding:4px;font:inherit;font-size:18px;' +
+          'style="background:none;border:0;color:' +
+          ink +
+          ';opacity:.65;padding:4px;font:inherit;font-size:18px;' +
           'line-height:1;cursor:pointer;">\u00d7</button>'
         : '') +
       '</div>';
@@ -587,7 +668,7 @@
             s.ageDays >= s.threshold ? RED : AMBER,
             s.ageDays >= s.threshold ? REDBG : '#fdf6e6',
           )
-        : chip('all four buckets answered', GREEN, '#eef6f0')) +
+        : chip('all four buckets answered', BLUE, BLUEBG)) +
       '</div>' +
       '</div>' +
       '</div>' +
@@ -772,8 +853,8 @@
     var isBoard = c.source === 'MONDAY';
     var d =
       st.draft[bucket] || (st.draft[bucket] = { scope: c.scopes[0], refs: {}, manual: false });
-    var tone = c.notApplicable ? MUTED : c.outstanding ? RED : GREEN;
-    var toneBg = c.notApplicable ? '#f4f5f2' : c.outstanding ? REDBG : '#f2f8f4';
+    var tone = c.notApplicable ? MUTED : c.outstanding ? RED : BLUE;
+    var toneBg = c.notApplicable ? '#f4f5f2' : c.outstanding ? REDBG : BLUEBG;
 
     var head =
       '<div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;flex-wrap:wrap;">' +
@@ -794,7 +875,7 @@
       (c.notApplicable
         ? chip('not applicable', MUTED, '#f4f5f2')
         : c.pushedMinor
-          ? chip('on the invoice', GREEN, '#eef6f0')
+          ? chip('on the invoice', BLUE, BLUEBG)
           : c.appliedMinor
             ? chip('on the proposal', AMBER, '#fdf6e6')
             : c.stagedMinor
@@ -917,7 +998,7 @@
               : 'whole job';
           var badge =
             e.status === 'PUSHED'
-              ? chip('billed', GREEN, '#eef6f0')
+              ? chip('billed', BLUE, BLUEBG)
               : e.status === 'APPLIED'
                 ? chip('on the proposal', AMBER, '#fdf6e6')
                 : chip('entered', MUTED, '#f2f3ef');
@@ -1098,17 +1179,32 @@
    * One amount over a selection, split pro-rata on extended price. The split is shown
    * live because a coordinator entering $1,840 over three items is entitled to see
    * what each item is about to be charged before it reaches a customer's invoice.
+   *
+   * Filtered by vendor, and by default to the vendors who quote freight separately.
+   * A structure job is mostly steel frame parts — eye bolts, hardware kits, webbing
+   * — and those ship on the steel truck under the steel figure. Listing them here
+   * buries the four or five items a therapeutic vendor actually quoted, which is the
+   * opposite of the point. The full list is one click away for the cases where a
+   * frame part genuinely ships on its own.
    */
   function itemPickerHtml(bucket, d) {
-    var lines = st.state.lines || [];
-    if (!lines.length) {
+    var all = st.state.lines || [];
+    if (!all.length) {
       return '<div class="muted" style="font-size:12.5px;">This proposal has no product items, so freight can only be entered for the whole job.</div>';
     }
+
+    var vendors = vendorFacets(all);
+    if (!d.vendors) d.vendors = defaultVendors(vendors);
+    var lines = all.filter(function (l) {
+      return d.vendors[vendorKey(l)];
+    });
+
     var chosen = lines.filter(function (l) {
       return d.refs[l.ref];
     });
     var amount = toMinor(d.amount);
     var split = amount && chosen.length ? previewSplit(amount, chosen) : null;
+    var hidden = all.length - lines.length;
 
     return (
       '<div style="border:1px solid ' +
@@ -1121,12 +1217,12 @@
       LABEL +
       'margin:0;">Which items is this freight for</span>' +
       '<span style="display:flex;gap:8px;">' +
-      '<button type="button" class="ftuPickAll" data-bucket="' +
+      '<button type="button" class="ftuPickShown" data-bucket="' +
       bucket +
       '" style="' +
       BTN_LINK +
       'font-size:12px;">' +
-      'All with vendor freight</button>' +
+      'Select all shown</button>' +
       '<button type="button" class="ftuPickNone" data-bucket="' +
       bucket +
       '" style="' +
@@ -1137,48 +1233,52 @@
       'Clear</button>' +
       '</span>' +
       '</div>' +
+      vendorFilterHtml(bucket, d, vendors) +
       '<div style="max-height:230px;overflow:auto;">' +
-      lines
-        .map(function (l, i) {
-          var on = !!d.refs[l.ref];
-          var alloc = split ? split[l.ref] : null;
-          return (
-            '<label style="display:flex;gap:10px;align-items:center;padding:8px 12px;cursor:pointer;' +
-            (i ? 'border-top:1px solid #f2f3ef;' : '') +
-            (on ? 'background:#f6faf7;' : '') +
-            '">' +
-            '<input type="checkbox" class="ftuPick" data-bucket="' +
-            bucket +
-            '" data-ref="' +
-            esc(l.ref) +
-            '"' +
-            (on ? ' checked' : '') +
-            ' style="width:16px;height:16px;flex:none;">' +
-            '<span style="min-width:0;flex:1;">' +
-            '<span style="font-size:13px;">' +
-            esc(l.name) +
-            '</span>' +
-            '<span class="muted" style="display:block;font-size:11.5px;">' +
-            esc(l.sku || '\u2014') +
-            (l.vendor ? ' \u00b7 ' + esc(l.vendor) : '') +
-            (l.quantity ? ' \u00b7 qty ' + l.quantity : '') +
-            (l.currentMinor ? ' \u00b7 ' + money(l.currentMinor) + ' freight already' : '') +
-            '</span>' +
-            '</span>' +
-            '<span style="text-align:right;white-space:nowrap;font-size:12.5px;font-variant-numeric:tabular-nums;">' +
-            money(l.extendedMinor) +
-            (alloc != null
-              ? '<span style="display:block;color:' +
-                GREEN +
-                ';font-weight:600;">+ ' +
-                money(alloc) +
-                '</span>'
-              : '') +
-            '</span>' +
-            '</label>'
-          );
-        })
-        .join('') +
+      (lines.length
+        ? lines
+            .map(function (l, i) {
+              var on = !!d.refs[l.ref];
+              var alloc = split ? split[l.ref] : null;
+              return (
+                '<label style="display:flex;gap:10px;align-items:center;padding:8px 12px;cursor:pointer;' +
+                (i ? 'border-top:1px solid #f2f3ef;' : '') +
+                (on ? 'background:' + BLUEBG + ';' : '') +
+                '">' +
+                '<input type="checkbox" class="ftuPick" data-bucket="' +
+                bucket +
+                '" data-ref="' +
+                esc(l.ref) +
+                '"' +
+                (on ? ' checked' : '') +
+                ' style="width:16px;height:16px;flex:none;">' +
+                '<span style="min-width:0;flex:1;">' +
+                '<span style="font-size:13px;">' +
+                esc(l.name) +
+                '</span>' +
+                '<span class="muted" style="display:block;font-size:11.5px;">' +
+                esc(l.sku || '\u2014') +
+                (l.vendor ? ' \u00b7 ' + esc(l.vendor) : '') +
+                (l.quantity ? ' \u00b7 qty ' + l.quantity : '') +
+                (l.currentMinor ? ' \u00b7 ' + money(l.currentMinor) + ' freight already' : '') +
+                '</span>' +
+                '</span>' +
+                '<span style="text-align:right;white-space:nowrap;font-size:12.5px;font-variant-numeric:tabular-nums;">' +
+                money(l.extendedMinor) +
+                (alloc != null
+                  ? '<span style="display:block;color:' +
+                    BLUE +
+                    ';font-weight:600;">+ ' +
+                    money(alloc) +
+                    '</span>'
+                  : '') +
+                '</span>' +
+                '</label>'
+              );
+            })
+            .join('')
+        : '<div class="muted" style="padding:14px 12px;font-size:12.5px;">' +
+          'No items from the chosen vendors. Tick a vendor above, or show every item.</div>') +
       '</div>' +
       '<div class="muted" style="padding:8px 12px;font-size:11.5px;border-top:1px solid ' +
       LINE +
@@ -1190,7 +1290,107 @@
           ' chosen' +
           (split ? ' \u00b7 split pro-rata on price' : ' \u00b7 enter an amount to see the split')
         : 'Nothing chosen yet.') +
+      (hidden > 0
+        ? ' \u00b7 ' + hidden + ' item' + (hidden === 1 ? '' : 's') + ' hidden by the vendor filter'
+        : '') +
       '</div>' +
+      '</div>'
+    );
+  }
+
+  /** The vendor a line is filed under. Unattributed parts get their own bucket. */
+  function vendorKey(line) {
+    return line.vendor || '\u2014';
+  }
+
+  /** Vendors present on this job, with a count and whether they quote freight. */
+  function vendorFacets(lines) {
+    var by = {};
+    lines.forEach(function (l) {
+      var key = vendorKey(l);
+      if (!by[key])
+        by[key] = { key: key, label: l.vendor || 'No vendor on record', count: 0, quotes: false };
+      by[key].count += 1;
+      if (l.freightQuoted) by[key].quotes = true;
+    });
+    return Object.keys(by)
+      .sort(function (a, b) {
+        // Freight-quoting vendors first — they are the ones this screen is for.
+        if (by[a].quotes !== by[b].quotes) return by[a].quotes ? -1 : 1;
+        return a.localeCompare(b);
+      })
+      .map(function (k) {
+        return by[k];
+      });
+  }
+
+  /**
+   * Which vendors start ticked: the ones who quote freight separately. If none of
+   * them do, everything is shown rather than nothing — an empty list would look like
+   * a broken screen.
+   */
+  function defaultVendors(facets) {
+    var out = {};
+    var quoting = facets.filter(function (f) {
+      return f.quotes;
+    });
+    (quoting.length ? quoting : facets).forEach(function (f) {
+      out[f.key] = true;
+    });
+    return out;
+  }
+
+  function vendorFilterHtml(bucket, d, facets) {
+    if (facets.length < 2) return '';
+    var onCount = facets.filter(function (f) {
+      return d.vendors[f.key];
+    }).length;
+    return (
+      '<div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap;padding:9px 12px;border-top:1px solid ' +
+      LINE +
+      ';">' +
+      '<span style="' +
+      LABEL +
+      'margin:0;">Vendor</span>' +
+      facets
+        .map(function (f) {
+          var on = !!d.vendors[f.key];
+          return (
+            '<button type="button" class="ftuVendorChip" data-bucket="' +
+            bucket +
+            '" data-vendor="' +
+            esc(f.key) +
+            '" ' +
+            'title="' +
+            (f.quotes ? 'Quotes freight separately' : 'Ships under another bucket') +
+            '" ' +
+            'style="padding:5px 11px;border:1px solid ' +
+            (on ? BLUE : '#dcded7') +
+            ';border-radius:999px;' +
+            'background:' +
+            (on ? BLUEBG : '#fff') +
+            ';color:' +
+            (on ? BLUE : MUTED) +
+            ';font-size:12px;cursor:pointer;' +
+            'white-space:nowrap;font-weight:' +
+            (on ? '600' : '400') +
+            ';">' +
+            esc(f.label) +
+            ' <span style="opacity:.65;">' +
+            f.count +
+            '</span>' +
+            (f.quotes ? ' \u00b7 freight' : '') +
+            '</button>'
+          );
+        })
+        .join('') +
+      '<button type="button" class="ftuVendorAll" data-bucket="' +
+      bucket +
+      '" style="' +
+      BTN_LINK +
+      'font-size:12px;margin-left:4px;">' +
+      (onCount === facets.length ? 'Freight vendors only' : 'Show every item') +
+      '</button>' +
       '</div>'
     );
   }
@@ -1394,6 +1594,17 @@
     });
   }
 
+  /** Forget any chosen item the vendor filter has just hidden. */
+  function pruneHidden(d) {
+    var visible = {};
+    (st.state.lines || []).forEach(function (l) {
+      if (d.vendors[vendorKey(l)]) visible[l.ref] = true;
+    });
+    Object.keys(d.refs || {}).forEach(function (ref) {
+      if (!visible[ref]) delete d.refs[ref];
+    });
+  }
+
   function bindPanel() {
     var toggle = el('ftuItemsToggle');
     if (toggle)
@@ -1425,11 +1636,13 @@
         render();
       });
     });
-    each('.ftuPickAll', function (b) {
+    each('.ftuPickShown', function (b) {
       b.addEventListener('click', function () {
         var d = draftOf(b);
-        (st.state.lines || []).forEach(function (l) {
-          if (l.freightQuoted) d.refs[l.ref] = true;
+        var all = st.state.lines || [];
+        if (!d.vendors) d.vendors = defaultVendors(vendorFacets(all));
+        all.forEach(function (l) {
+          if (d.vendors[vendorKey(l)]) d.refs[l.ref] = true;
         });
         render();
       });
@@ -1437,6 +1650,40 @@
     each('.ftuPickNone', function (b) {
       b.addEventListener('click', function () {
         draftOf(b).refs = {};
+        render();
+      });
+    });
+
+    // Changing the vendor filter drops any selection that is no longer visible, so a
+    // hidden item cannot be silently charged for freight.
+    each('.ftuVendorChip', function (b) {
+      b.addEventListener('click', function () {
+        var d = draftOf(b);
+        var key = b.getAttribute('data-vendor');
+        if (!d.vendors) d.vendors = defaultVendors(vendorFacets(st.state.lines || []));
+        if (d.vendors[key]) delete d.vendors[key];
+        else d.vendors[key] = true;
+        pruneHidden(d);
+        render();
+      });
+    });
+    each('.ftuVendorAll', function (b) {
+      b.addEventListener('click', function () {
+        var d = draftOf(b);
+        var facets = vendorFacets(st.state.lines || []);
+        var allOn = facets.every(function (f) {
+          return d.vendors && d.vendors[f.key];
+        });
+        d.vendors = allOn
+          ? defaultVendors(facets)
+          : (function () {
+              var out = {};
+              facets.forEach(function (f) {
+                out[f.key] = true;
+              });
+              return out;
+            })();
+        pruneHidden(d);
         render();
       });
     });
@@ -1795,6 +2042,281 @@
     }
   }
 
+  /* ══════════════════════════ the admin panel ══════════════════════════ */
+
+  /**
+   * Administration → Freight alert banner.
+   *
+   * Two colours per state and a live preview, because the only way to judge an alert
+   * colour is to look at it. Presets first: the common answer is "the light one" or
+   * "the loud one", and four hex codes is a worse way to say that. The hex fields are
+   * underneath for matching a brand exactly.
+   *
+   * Saving is immediate and applies to everyone — this is what the whole company
+   * looks at all day, which is why it is an administrator setting rather than a
+   * personal one.
+   */
+  async function mountAdmin(hostId, user) {
+    var host = typeof hostId === 'string' ? el(hostId) : hostId;
+    if (!host) return;
+    if (!can(user, MANAGE_ROLES)) {
+      host.innerHTML =
+        '<div class="muted" style="padding:14px 0;font-size:12.5px;">' +
+        'Only a system administrator can change the banner colours.</div>';
+      return;
+    }
+    host.innerHTML = '<div class="muted" style="padding:14px 0;">Loading…</div>';
+
+    var data = null;
+    try {
+      var r = await H.authed('/freight/banner-theme');
+      if (r.ok) data = await r.json();
+    } catch (e) {}
+    if (!data) {
+      host.innerHTML = '<div class="err">Could not load the banner colours.</div>';
+      return;
+    }
+
+    var draft = {
+      shortBg: data.theme.shortBg,
+      shortText: data.theme.shortText,
+      pendingBg: data.theme.pendingBg,
+      pendingText: data.theme.pendingText,
+    };
+    var presets = data.presets || [];
+
+    function field(key, label) {
+      return (
+        '<label style="display:block;">' +
+        '<span style="' +
+        LABEL +
+        '">' +
+        esc(label) +
+        '</span>' +
+        '<span style="display:flex;gap:7px;align-items:center;">' +
+        '<input type="color" class="admBanner" data-key="' +
+        key +
+        '" value="' +
+        esc(draft[key]) +
+        '" ' +
+        'style="width:44px;height:36px;padding:2px;border:1px solid #dcded7;border-radius:8px;background:#fff;cursor:pointer;">' +
+        '<input type="text" class="admBannerHex" data-key="' +
+        key +
+        '" value="' +
+        esc(draft[key]) +
+        '" ' +
+        'spellcheck="false" style="' +
+        TEXT +
+        'width:104px;font-variant-numeric:tabular-nums;">' +
+        '</span>' +
+        '</label>'
+      );
+    }
+
+    function previewBar(loud) {
+      var bg = loud ? draft.shortBg : draft.pendingBg;
+      var ink = loud ? draft.shortText : draft.pendingText;
+      var edge = mix(ink, bg, 0.55);
+      var pill = mix(ink, bg, 0.82);
+      var text = loud
+        ? 'P-2026-000066: $1,840.00 of freight is on the proposal and not on invoice 1042'
+        : 'P-2026-000071: invoice 1039 is out and freight is still outstanding';
+      return (
+        '<div style="background:' +
+        bg +
+        ';color:' +
+        ink +
+        ';padding:11px 18px;border:1px solid ' +
+        edge +
+        ';' +
+        'border-radius:9px;display:flex;align-items:center;gap:13px;flex-wrap:wrap;font-size:13.5px;line-height:1.5;">' +
+        '<span style="font-weight:700;letter-spacing:.05em;text-transform:uppercase;font-size:11px;' +
+        'background:' +
+        pill +
+        ';padding:3px 8px;border-radius:999px;white-space:nowrap;">' +
+        (loud ? 'Invoice short of freight' : 'Freight outstanding on an invoiced job') +
+        '</span>' +
+        '<span style="flex:1 1 260px;min-width:0;">' +
+        esc(text) +
+        '</span>' +
+        '<span style="background:' +
+        ink +
+        ';color:' +
+        bg +
+        ';padding:6px 12px;border-radius:8px;' +
+        'font-size:12.5px;font-weight:600;white-space:nowrap;">' +
+        (loud ? 'Add it to the invoice' : 'Open the freight panel') +
+        '</span>' +
+        '</div>'
+      );
+    }
+
+    function paint() {
+      host.innerHTML =
+        '<div style="display:grid;gap:11px;">' +
+        previewBar(true) +
+        previewBar(false) +
+        '</div>' +
+        (presets.length
+          ? '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:15px;">' +
+            '<span style="' +
+            LABEL +
+            'margin:0;">Presets</span>' +
+            presets
+              .map(function (p) {
+                var on =
+                  p.theme.shortBg === draft.shortBg &&
+                  p.theme.shortText === draft.shortText &&
+                  p.theme.pendingBg === draft.pendingBg &&
+                  p.theme.pendingText === draft.pendingText;
+                return (
+                  '<button type="button" class="admBannerPreset" data-id="' +
+                  esc(p.id) +
+                  '" ' +
+                  'style="display:flex;align-items:center;gap:7px;padding:6px 12px;border:1px solid ' +
+                  (on ? INK : '#dcded7') +
+                  ';border-radius:999px;background:#fff;font:inherit;font-size:12.5px;' +
+                  'cursor:pointer;font-weight:' +
+                  (on ? '600' : '400') +
+                  ';">' +
+                  '<span style="width:14px;height:14px;border-radius:4px;border:1px solid rgba(0,0,0,.12);' +
+                  'background:' +
+                  esc(p.theme.shortBg) +
+                  ';display:inline-block;"></span>' +
+                  esc(p.label) +
+                  '</button>'
+                );
+              })
+              .join('') +
+            '</div>'
+          : '') +
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px;margin-top:16px;">' +
+        '<div style="border:1px solid ' +
+        LINE +
+        ';border-radius:11px;padding:13px 15px;">' +
+        '<div style="font-size:13px;font-weight:600;">Invoice short of freight</div>' +
+        '<div class="muted" style="font-size:12px;margin:3px 0 11px;line-height:1.55;">The loud one. The ' +
+        'freight is known, it is on the proposal, and the invoice the customer holds does not include it.</div>' +
+        '<div style="display:flex;gap:12px;flex-wrap:wrap;">' +
+        field('shortBg', 'Background') +
+        field('shortText', 'Text') +
+        '</div>' +
+        '</div>' +
+        '<div style="border:1px solid ' +
+        LINE +
+        ';border-radius:11px;padding:13px 15px;">' +
+        '<div style="font-size:13px;font-weight:600;">Freight still outstanding</div>' +
+        '<div class="muted" style="font-size:12px;margin:3px 0 11px;line-height:1.55;">An invoice is out and a ' +
+        'bucket has not been answered. Whatever the freight turns out to be, it is not on that invoice.</div>' +
+        '<div style="display:flex;gap:12px;flex-wrap:wrap;">' +
+        field('pendingBg', 'Background') +
+        field('pendingText', 'Text') +
+        '</div>' +
+        '</div>' +
+        '</div>' +
+        '<div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-top:15px;">' +
+        '<button type="button" id="admBannerSave" style="' +
+        BTN_DARK +
+        '">Save the colours</button>' +
+        '<button type="button" id="admBannerReset" style="' +
+        BTN_PLAIN +
+        '">Back to the default</button>' +
+        '<span id="admBannerNote" class="muted" style="font-size:12.5px;"></span>' +
+        '</div>' +
+        '<div class="muted" style="font-size:12px;margin-top:9px;max-width:720px;line-height:1.6;">' +
+        'The border and the state pill are blended from the two colours you pick, so a dark background gets a ' +
+        'dark border rather than a pale one. Saving applies to everyone straight away \u2014 people already ' +
+        'looking at a screen see it on their next page load.' +
+        '</div>';
+
+      bindAdmin();
+    }
+
+    function note(text, bad) {
+      var n = el('admBannerNote');
+      if (!n) return;
+      n.textContent = text || '';
+      n.style.color = bad ? RED : MUTED;
+    }
+
+    function bindAdmin() {
+      each('.admBanner', function (input) {
+        input.addEventListener('input', function () {
+          draft[input.getAttribute('data-key')] = input.value;
+          paint();
+        });
+      });
+      each('.admBannerHex', function (input) {
+        input.addEventListener('change', function () {
+          var v = String(input.value || '').trim();
+          if (!/^#?(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(v)) {
+            note('\u201c' + v + '\u201d is not a hex colour.', true);
+            return;
+          }
+          draft[input.getAttribute('data-key')] =
+            v[0] === '#' ? v.toLowerCase() : '#' + v.toLowerCase();
+          paint();
+        });
+      });
+      each('.admBannerPreset', function (b) {
+        b.addEventListener('click', function () {
+          var id = b.getAttribute('data-id');
+          for (var i = 0; i < presets.length; i++) {
+            if (presets[i].id === id) {
+              draft = {
+                shortBg: presets[i].theme.shortBg,
+                shortText: presets[i].theme.shortText,
+                pendingBg: presets[i].theme.pendingBg,
+                pendingText: presets[i].theme.pendingText,
+              };
+              break;
+            }
+          }
+          paint();
+        });
+      });
+
+      var save = el('admBannerSave');
+      if (save)
+        save.addEventListener('click', async function () {
+          save.disabled = true;
+          note('Saving\u2026');
+          var r = await H.authed('/freight/banner-theme', {
+            method: 'PATCH',
+            body: JSON.stringify(draft),
+          });
+          save.disabled = false;
+          if (!r.ok) return note(await errorText(r), true);
+          var d = await r.json();
+          bannerTheme = d.theme;
+          note('Saved.');
+          refreshBanner();
+        });
+
+      var reset = el('admBannerReset');
+      if (reset)
+        reset.addEventListener('click', async function () {
+          reset.disabled = true;
+          var r = await H.authed('/freight/banner-theme/reset', { method: 'POST' });
+          reset.disabled = false;
+          if (!r.ok) return note(await errorText(r), true);
+          var d = await r.json();
+          bannerTheme = d.theme;
+          draft = {
+            shortBg: d.theme.shortBg,
+            shortText: d.theme.shortText,
+            pendingBg: d.theme.pendingBg,
+            pendingText: d.theme.pendingText,
+          };
+          paint();
+          note('Back to the default.');
+          refreshBanner();
+        });
+    }
+
+    paint();
+  }
+
   /* ══════════════════════════ exports ══════════════════════════ */
 
   window.FreightTrueUp = {
@@ -1811,5 +2333,6 @@
     refreshBanner: refreshBanner,
     openWorkspace: openWorkspace,
     mountPanel: mountPanel,
+    mountAdmin: mountAdmin,
   };
 })();
