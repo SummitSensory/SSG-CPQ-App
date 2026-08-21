@@ -1807,7 +1807,7 @@
         '/proposals/versions/' + encodeURIComponent(st.vid) + '/freight-entries',
         {
           method: 'POST',
-          body: JSON.stringify(payload),
+          body: payload,
         },
       );
       if (!r.ok) {
@@ -1850,7 +1850,7 @@
           '/proposals/versions/' + encodeURIComponent(st.vid) + '/freight-not-applicable',
           {
             method: 'POST',
-            body: JSON.stringify({ bucket: bucket, reason: reason }),
+            body: { bucket: bucket, reason: reason },
           },
         );
         if (!r.ok) return showErr(await errorText(r));
@@ -1917,7 +1917,7 @@
           '/proposals/versions/' + encodeURIComponent(st.vid) + '/freight-apply',
           {
             method: 'POST',
-            body: JSON.stringify({}),
+            body: {},
           },
         );
         if (!r.ok) return showErr(await errorText(r));
@@ -1950,11 +1950,11 @@
           '/proposals/versions/' + encodeURIComponent(st.vid) + '/freight-qbo-push',
           {
             method: 'POST',
-            body: JSON.stringify({
+            body: {
               entryIds: p.entryIds,
               expectedCurrentTotalMinor: p.invoice.currentTotalMinor,
               expectedNewTotalMinor: p.newTotalMinor,
-            }),
+            },
           },
         );
         if (!r.ok) return showErr(await errorText(r));
@@ -2281,10 +2281,7 @@
         save.addEventListener('click', async function () {
           save.disabled = true;
           note('Saving\u2026');
-          var r = await H.authed('/freight/banner-theme', {
-            method: 'PATCH',
-            body: JSON.stringify(draft),
-          });
+          var r = await H.authed('/freight/banner-theme', { method: 'PATCH', body: draft });
           save.disabled = false;
           if (!r.ok) return note(await errorText(r), true);
           var d = await r.json();
@@ -2323,6 +2320,12 @@
     /**
      * Borrow the shell's helpers. Everything this module needs from app.js, named
      * rather than reached for, so the coupling is one object in one place.
+     */
+    /**
+     * The shell's `authed` JSON-encodes the body itself, so every call here passes a
+     * plain object. Passing JSON.stringify(...) double-encodes it: the route then sees
+     * a string where it expects an object, which surfaces as a Zod "expected object,
+     * received string" at the far end and nothing useful nearer.
      */
     init: function (helpers) {
       H = helpers;
