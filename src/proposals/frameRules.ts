@@ -151,12 +151,38 @@ export const DEFAULT_FRAME_RULES: FormulaRule[] = [
 ].map((r, i) => ({ ...r, sortOrder: i }));
 
 /**
- * The leg count the frame actually gets. Over FOUR_LEG_MAX_FT the engineering minimum
- * wins over whatever the answer or the editable bands produced.
+ * The leg count the frame actually gets.
+ *
+ * An entered count is taken as entered, even below the engineering minimum for the
+ * length. It used to be raised silently, which is the worse failure of the two: a rep
+ * typed 4 on a 14-foot frame, the parts were generated for 6, and the discrepancy
+ * surfaced days later as a leg count on the freight board that nobody could explain.
+ * A system that quietly replaces a number a person entered is a system they stop
+ * trusting.
+ *
+ * The floor still applies to a count nobody entered — that is the case it was written
+ * for, where an edited band setting could put a 20-foot frame in the small band and
+ * derive four legs from it. Derived values get corrected; entered values get
+ * questioned, by `legsBelowMinimum` and the warning it raises.
  */
 function legsFloor(lengthFt: number, legs: number): number {
-  if (lengthFt > FOUR_LEG_MAX_FT) return Math.max(legs, MIN_LEGS_OVER_FOUR_LEG_MAX);
-  return legs;
+  const entered = Number(legs) || 0;
+  if (entered > 0) return entered;
+  if (lengthFt > FOUR_LEG_MAX_FT) return Math.max(entered, MIN_LEGS_OVER_FOUR_LEG_MAX);
+  return entered;
+}
+
+/**
+ * Is this leg count under the engineering minimum for the length?
+ *
+ * Reported rather than enforced, so the person building the proposal is told and
+ * decides. Null when there is nothing to say.
+ */
+export function legsBelowMinimum(lengthFt: number, legs: number): string | null {
+  const L = Number(lengthFt) || 0;
+  const n = Number(legs) || 0;
+  if (n <= 0 || L <= FOUR_LEG_MAX_FT || n >= MIN_LEGS_OVER_FOUR_LEG_MAX) return null;
+  return `This frame is ${L}' long and is quoted on ${n} legs. Frames over ${FOUR_LEG_MAX_FT}' normally take at least ${MIN_LEGS_OVER_FOUR_LEG_MAX}. The proposal, the parts list and the freight request all use ${n} — confirm the frame with engineering before sending it.`;
 }
 
 export interface FrameAnswers {

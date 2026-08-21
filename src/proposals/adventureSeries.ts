@@ -7,7 +7,7 @@ import {
   type HardwareBomRow,
   type FormulaRule,
 } from './hardwareRules.js';
-import { DEFAULT_FRAME_RULES, frameContext } from './frameRules.js';
+import { DEFAULT_FRAME_RULES, frameContext, legsBelowMinimum } from './frameRules.js';
 import { computeFloorPadding, type MatQuote, type MatThickness } from './matPricing.js';
 import { setting, defaultSettings, type FormulaSettings } from './formulaSettings.js';
 
@@ -1141,6 +1141,10 @@ export function explainAdventure(
   const hardware = hardwareRollup(a, LOOK, rules, frameRules, ACCESSORY_HW_PARTS);
   const spanWarning = beamSpanWarning(a);
   if (spanWarning) warnings.push(spanWarning);
+  // An entered leg count below the engineering minimum is honoured, not corrected —
+  // see legsFloor. This is the other half of that bargain: it has to be said out loud.
+  const legWarning = legsBelowMinimum(n(a.length), n(a.legs));
+  if (legWarning) warnings.push(legWarning);
   for (const m of hardware.missing)
     warnings.push(`Hardware component “${m}” has no SKU record — contributes $0.00 to H-1000.`);
   const revenueMinor = rows.reduce((s, r) => s + r.extendedMinor, 0) + hardware.priceMinor;

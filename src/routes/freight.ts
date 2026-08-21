@@ -299,12 +299,18 @@ export function registerFreightRoutes(app: FastifyInstance): void {
     let error: string | null = null;
     let stage: 'load' | 'request' = 'load';
     try {
-      if (facts.found) {
-        await writeColumns(input.itemId, {
-          [WELDED_LEGS_COLUMN]: String(facts.legs),
-          [TROLLEY_COLUMN]: { label: facts.trolley ? 'Yes' : 'No' },
-        });
-      }
+      /**
+       * Written every time, not only when there is something to say.
+       *
+       * Gating this on `found` meant a proposal with no legs and no trolley left both
+       * columns untouched — so a count from a PREVIOUS push stayed on the board,
+       * describing a load that no longer exists. A revised proposal that drops the
+       * frame is exactly when the desk most needs the row to be right.
+       */
+      await writeColumns(input.itemId, {
+        [WELDED_LEGS_COLUMN]: String(facts.legs),
+        [TROLLEY_COLUMN]: { label: facts.trolley ? 'Yes' : 'No' },
+      });
       stage = 'request';
       await writeColumns(input.itemId, {
         [WEIGHT_COLUMN]: String(Math.round(input.weightLb * 100) / 100),
