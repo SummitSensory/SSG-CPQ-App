@@ -14,6 +14,7 @@ import {
   saveCustomsEntry,
 } from '../crossborder/customsEntry.js';
 import { recordRateOverride, deactivateRateOverride } from '../crossborder/rateService.js';
+import { estimateBrokerFee, parseTiers, selectSchedule } from '../crossborder/brokerFees.js';
 
 /**
  * Cross-border (Canadian proposal) routes.
@@ -387,5 +388,297 @@ export function registerCrossBorderRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     await deactivateRateOverride(id, req.user!.sub);
     return { ok: true };
+  });
+
+  /* ── Broker fee schedules ─────────────────────────────────────────────────── */
+
+  /**
+   * The schedules on file, plus which one is in force today.
+   *
+   * Brokerage is the one border charge that is genuinely knowable in advance —
+   * it comes off the broker's own published tariff, not off a tariff classification
+   * this database does not hold. So it can be computed. It still is not APPLIED
+   * automatically: `ProposalCustomsEntry.brokerFeeMinor` stays a person's entry, and
+   * this only saves them the arithmetic.
+   */
+  app.get('/cross-border/broker-fees', manage, async () => {
+    const schedules = await prisma.customsBrokerFeeSchedule.findMany({
+      orderBy: [{ active: 'desc' }, { effectiveFrom: 'desc' }],
+    });
+    const inForce = selectSchedule(schedules, dateOnly(new Date().toISOString().slice(0, 10)));
+    return { schedules, inForceId: inForce?.id ?? null };
+  });
+
+  /**
+   * What a schedule would charge on a given entry value, itemized.
+   *
+   * A preview, on the admin screen and beside the customs form. Nothing is written.
+   */
+  app.get('/cross-border/broker-fees/:id/estimate', read, async (req) => {
+    const { id } = req.params as { id: string };
+    const q = z
+      .object({
+        valueMinor: z.coerce.number().int().min(0).max(1_000_000_000),
+        entryCount: z.coerce.number().int().min(1).max(200).optional(),
+        shipmentCount: z.coerce.number().int().min(1).max(200).optional(),
+        lineCount: z.coerce.number().int().min(0).max(5000).optional(),
+      })
+      .parse(req.query ?? {});
+    const schedule = await prisma.customsBrokerFeeSchedule.findUnique({ where: { id } });
+    if (!schedule) throw new NotFoundError('Fee schedule not found.');
+    // `percent` is a Prisma Decimal. The evaluator takes the decimal STRING, so the
+    // scale the column round-tripped is the scale the arithmetic uses — going through
+    // a JS number here would be the one float in the whole money path.
+    return estimateBrokerFee(
+      { ...schedule, percent: schedule.percent == null ? null : schedule.percent.toString() },
+      q,
+    );
+  });
+
+  app.post('/cross-border/broker-fees', manage, async (req) => {
+    const body = BrokerFeeSchema.parse(req.body ?? {});
+    validateSchedule(body);
+    const created = await prisma.customsBrokerFeeSchedule.create({
+      data: {
+        ...scheduleData(body),
+        name: body.name,
+        feeType: body.feeType,
+        effectiveFrom: dateOnly(body.effectiveFrom!),
+        reviewedById: req.user!.sub,
+        reviewedAt: new Date(),
+      },
+    });
+    if (created.isDefault) await clearOtherDefaults(created.id);
+
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'crossborder.brokerFee.create',
+      entity: 'CustomsBrokerFeeSchedule',
+      entityId: created.id,
+      details: { name: created.name, feeType: created.feeType, effectiveFrom: body.effectiveFrom },
+    });
+    return created;
+  });
+
+  app.patch('/cross-border/broker-fees/:id', manage, async (req) => {
+    const { id } = req.params as { id: string };
+    const before = await prisma.customsBrokerFeeSchedule.findUnique({ where: { id } });
+    if (!before) throw new NotFoundError('Fee schedule not found.');
+
+    const body = BrokerFeeSchema.partial().parse(req.body ?? {});
+    // Validate the MERGED row, not the patch: switching a flat schedule to a
+    // percentage in one field would otherwise pass while leaving no rate on it.
+    // Dates are normalized to YYYY-MM-DD first — the stored columns are Dates, and a
+    // Date compared against a patched string is a comparison that quietly succeeds.
+    const iso = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : null);
+    validateSchedule({
+      feeType: before.feeType,
+      amountMinor: before.amountMinor,
+      percent: before.percent == null ? null : String(before.percent),
+      minMinor: before.minMinor,
+      maxMinor: before.maxMinor,
+      tiers: (before.tiers ?? null) as never,
+      effectiveFrom: iso(before.effectiveFrom) ?? undefined,
+      effectiveTo: iso(before.effectiveTo),
+      ...body,
+    });
+
+    const updated = await prisma.customsBrokerFeeSchedule.update({
+      where: { id },
+      data: {
+        ...scheduleData(body),
+        ...(body.name ? { name: body.name } : {}),
+        ...(body.feeType ? { feeType: body.feeType } : {}),
+        ...(body.effectiveFrom ? { effectiveFrom: dateOnly(body.effectiveFrom) } : {}),
+        reviewedById: req.user!.sub,
+        reviewedAt: new Date(),
+      },
+    });
+    if (updated.isDefault) await clearOtherDefaults(updated.id);
+
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'crossborder.brokerFee.update',
+      entity: 'CustomsBrokerFeeSchedule',
+      entityId: id,
+      details: { changed: Object.keys(body) },
+    });
+    return updated;
+  });
+
+  /* ── Customs review queue ─────────────────────────────────────────────────── */
+
+  /**
+   * Every Canadian proposal waiting on a customs decision, oldest first.
+   *
+   * Without this the queue is invisible: an entry sits at REQUIRES_CUSTOMS_REVIEW on
+   * one proposal's screen, and the person who approves customs figures has no list to
+   * work from. Read permission rather than approve, so a rep can see their own job is
+   * waiting — the approve action is still gated.
+   */
+  app.get('/cross-border/customs-queue', read, async (req) => {
+    const q = z.object({ includeSettled: z.coerce.boolean().optional() }).parse(req.query ?? {});
+    const open: Array<'REQUIRES_CUSTOMS_REVIEW' | 'ESTIMATED'> = [
+      'REQUIRES_CUSTOMS_REVIEW',
+      'ESTIMATED',
+    ];
+
+    const entries = await prisma.proposalCustomsEntry.findMany({
+      where: q.includeSettled ? {} : { status: { in: open } },
+      orderBy: { updatedAt: 'asc' },
+      take: 200,
+    });
+    if (entries.length === 0) return [];
+
+    const proposals = await prisma.proposal.findMany({
+      where: { id: { in: [...new Set(entries.map((e) => e.proposalId))] } },
+      select: { id: true, number: true, title: true, organizationId: true },
+    });
+    const orgs = await prisma.organization.findMany({
+      where: { id: { in: [...new Set(proposals.map((p) => p.organizationId))] } },
+      select: { id: true, name: true },
+    });
+    const orgName = new Map(orgs.map((o) => [o.id, o.name]));
+    const byProposal = new Map(proposals.map((p) => [p.id, p]));
+
+    return entries.map((e) => {
+      const p = byProposal.get(e.proposalId);
+      return {
+        ...e,
+        proposalNumber: p?.number ?? null,
+        proposalTitle: p?.title ?? null,
+        customer: p ? (orgName.get(p.organizationId) ?? null) : null,
+        // What the entry is missing, so the queue can say why a row is not approvable
+        // without the client re-deriving the rule in customsEntry.ts.
+        missingSourceReference: !e.sourceReference?.trim(),
+        hasAnyAmount:
+          e.dutyMinor != null ||
+          e.surtaxMinor != null ||
+          e.simaMinor != null ||
+          e.otherDutyMinor != null ||
+          e.importTaxMinor != null ||
+          e.brokerFeeMinor != null,
+      };
+    });
+  });
+}
+
+/* ── Broker fee schedule validation ─────────────────────────────────────────── */
+
+const TierSchema = z.object({
+  upToMinor: z.number().int().min(0).nullable(),
+  amountMinor: z.number().int().min(0).nullable().optional(),
+  percent: z
+    .string()
+    .regex(/^\d{1,3}(\.\d{1,4})?$/)
+    .nullable()
+    .optional(),
+  label: z.string().trim().max(80).nullable().optional(),
+});
+
+const BrokerFeeSchema = z.object({
+  name: z.string().trim().min(2).max(120),
+  brokerName: z.string().trim().max(120).nullable().optional(),
+  feeType: z.enum([
+    'FLAT',
+    'PERCENTAGE',
+    'TIERED',
+    'PER_ENTRY',
+    'PER_SHIPMENT',
+    'PER_LINE',
+    'MANUAL',
+  ]),
+  currency: z.enum(['USD', 'CAD']).optional(),
+  amountMinor: Money.nullable().optional(),
+  /** A PERCENT, not a fraction: `0.25` is a quarter of one percent. */
+  percent: z
+    .string()
+    .regex(/^\d{1,3}(\.\d{1,4})?$/)
+    .nullable()
+    .optional(),
+  minMinor: Money.nullable().optional(),
+  maxMinor: Money.nullable().optional(),
+  tiers: z.array(TierSchema).max(20).nullable().optional(),
+  disbursementMinor: Money.nullable().optional(),
+  advancementMinor: Money.nullable().optional(),
+  bondMinor: Money.nullable().optional(),
+  customerPaysDirectly: z.boolean().optional(),
+  includedInSellerTotal: z.boolean().optional(),
+  active: z.boolean().optional(),
+  isDefault: z.boolean().optional(),
+  effectiveFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  effectiveTo: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .nullable()
+    .optional(),
+  notes: z.string().trim().max(1000).nullable().optional(),
+});
+
+type BrokerFeeInput = z.infer<typeof BrokerFeeSchema>;
+
+/**
+ * Refuse a schedule that cannot produce a figure.
+ *
+ * Saving a percentage schedule with no rate is not a harmless draft: it reaches the
+ * proposal screen as "this schedule has no rate on it" on a live Canadian job.
+ */
+function validateSchedule(s: Partial<BrokerFeeInput>): void {
+  const needsAmount = ['FLAT', 'PER_ENTRY', 'PER_SHIPMENT', 'PER_LINE'];
+  if (s.feeType && needsAmount.includes(s.feeType) && s.amountMinor == null) {
+    throw new ValidationError('Enter the fee amount for this schedule.');
+  }
+  if (s.feeType === 'PERCENTAGE' && !s.percent) {
+    throw new ValidationError('Enter the percentage rate for this schedule.');
+  }
+  if (s.feeType === 'TIERED') {
+    if (!parseTiers(s.tiers ?? null)) {
+      throw new ValidationError(
+        'A tiered schedule needs at least one tier, each with an amount or a rate, and at most one open-ended tier.',
+      );
+    }
+  }
+  if (s.minMinor != null && s.maxMinor != null && s.minMinor > s.maxMinor) {
+    throw new ValidationError('The minimum fee is above the maximum fee.');
+  }
+  if (s.effectiveFrom && s.effectiveTo && s.effectiveTo <= s.effectiveFrom) {
+    // effectiveTo is EXCLUSIVE, so equal dates describe a schedule that never runs.
+    throw new ValidationError('The end date must be after the start date. It is exclusive.');
+  }
+}
+
+/** Only the fields present in the patch, dates converted. */
+function scheduleData(s: Partial<BrokerFeeInput>) {
+  return {
+    ...(s.brokerName !== undefined ? { brokerName: s.brokerName } : {}),
+    ...(s.currency ? { currency: s.currency } : {}),
+    ...(s.amountMinor !== undefined ? { amountMinor: s.amountMinor } : {}),
+    ...(s.percent !== undefined ? { percent: s.percent } : {}),
+    ...(s.minMinor !== undefined ? { minMinor: s.minMinor } : {}),
+    ...(s.maxMinor !== undefined ? { maxMinor: s.maxMinor } : {}),
+    ...(s.tiers !== undefined ? { tiers: s.tiers ?? null } : {}),
+    ...(s.disbursementMinor !== undefined ? { disbursementMinor: s.disbursementMinor } : {}),
+    ...(s.advancementMinor !== undefined ? { advancementMinor: s.advancementMinor } : {}),
+    ...(s.bondMinor !== undefined ? { bondMinor: s.bondMinor } : {}),
+    ...(s.customerPaysDirectly !== undefined
+      ? { customerPaysDirectly: s.customerPaysDirectly }
+      : {}),
+    ...(s.includedInSellerTotal !== undefined
+      ? { includedInSellerTotal: s.includedInSellerTotal }
+      : {}),
+    ...(s.active !== undefined ? { active: s.active } : {}),
+    ...(s.isDefault !== undefined ? { isDefault: s.isDefault } : {}),
+    ...(s.effectiveTo !== undefined
+      ? { effectiveTo: s.effectiveTo ? dateOnly(s.effectiveTo) : null }
+      : {}),
+    ...(s.notes !== undefined ? { notes: s.notes } : {}),
+  };
+}
+
+/** One default at a time, so `selectSchedule` never has to break a tie between two. */
+async function clearOtherDefaults(keepId: string): Promise<void> {
+  await prisma.customsBrokerFeeSchedule.updateMany({
+    where: { id: { not: keepId }, isDefault: true },
+    data: { isDefault: false },
   });
 }
