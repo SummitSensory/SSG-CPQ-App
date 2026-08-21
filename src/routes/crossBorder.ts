@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import { prisma } from '../lib/prisma.js';
+import { Prisma } from '@prisma/client';
 import { recordAudit } from '../lib/audit.js';
 import { NotFoundError, ValidationError } from '../lib/errors.js';
 import { crossBorderStateFor, writeCrossBorderSnapshot } from '../crossborder/snapshot.js';
@@ -96,6 +97,71 @@ const SettingsSchema = z.object({
 });
 
 const dateOnly = (iso: string): Date => new Date(`${iso}T00:00:00Z`);
+
+/** The rows in force on a date, for the one-provincial-tax-per-province checks. */
+function sameDateLive<T extends { effectiveFrom: Date; effectiveTo: Date | null }>(
+  rows: T[],
+  on: Date,
+): T[] {
+  return rows.filter((r) => r.effectiveFrom <= on && (r.effectiveTo == null || r.effectiveTo > on));
+}
+
+/** 0 to 30 percent, up to four decimals — Quebec's 9.975 needs three. */
+const RatePercent = z
+  .string()
+  .regex(/^\d{1,2}(\.\d{1,4})?$/)
+  .refine((v) => Number(v) <= 30, 'A Canadian sales tax rate above 30% is a typo.');
+
+const TaxRateSchema = z.object({
+  province: z.string().trim().length(2),
+  taxType: z.enum(['GST', 'HST', 'PST', 'RST', 'QST']),
+  ratePercent: RatePercent,
+  effectiveFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  effectiveTo: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .nullable()
+    .optional(),
+  /**
+   * Required, not optional. A rate with no provenance cannot be checked later, and
+   * `readiness.unreviewedRateCount` reads this column to find the rows still waiting
+   * on an accountant.
+   */
+  source: z.string().trim().min(4).max(300),
+  /** Close the row this one replaces, at this row's start date. */
+  supersedePrevious: z.boolean().optional(),
+});
+
+const TaxabilitySchema = z.object({
+  category: z.enum([
+    'EQUIPMENT',
+    'PARTS',
+    'FREIGHT',
+    'INSTALLATION',
+    'DESIGN',
+    'TRAINING',
+    'TRAVEL',
+    'DISCOUNT',
+    'CUSTOMS_DUTY',
+    'TARIFF_SURTAX',
+    'SIMA',
+    'IMPORT_TAX',
+    'BROKERAGE',
+    'SALES_TAX',
+    'OTHER',
+  ]),
+  taxType: z.enum(['GST', 'HST', 'PST', 'RST', 'QST']),
+  /** Null means every province, which is how the seed data is expressed. */
+  province: z.string().trim().length(2).nullable().optional(),
+  taxable: z.boolean(),
+  effectiveFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  effectiveTo: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .nullable()
+    .optional(),
+  source: z.string().trim().min(4).max(300),
+});
 
 /**
  * A GST/HST registration that is in force TODAY.
@@ -263,11 +329,250 @@ export function registerCrossBorderRoutes(app: FastifyInstance): void {
     return updated;
   });
 
-  /** Tax rates, for the admin table. Read-only here; corrections go by migration. */
+  /**
+   * Tax rates, for the admin table.
+   *
+   * Writable. The original design said corrections go by migration, and for a
+   * SEEDED rate that is still the better route — a wrong rate misprices every
+   * Canadian job at once and should leave a commit behind. But a province with NO
+   * row at all is a different situation: the engine returns `no_rate_for_province`,
+   * the proposal cannot be released, and waiting on a deploy to enter a rate that is
+   * published on the CRA's own site is a deploy nobody should have to wait for.
+   *
+   * So: entry is allowed, a source is REQUIRED, and every write is audited with the
+   * row it replaced.
+   */
   app.get('/cross-border/tax-rates', manage, async () => {
     return prisma.canadianTaxRate.findMany({
       orderBy: [{ province: 'asc' }, { taxType: 'asc' }, { effectiveFrom: 'desc' }],
     });
+  });
+
+  /**
+   * Enter a rate.
+   *
+   * Two things this refuses, because both produce a wrong number rather than an
+   * error:
+   *
+   *   - **An overlap.** Two rows in force for the same province and tax type on the
+   *     same date means the answer depends on row order. `supersedePrevious` is the
+   *     sanctioned way through: it closes the open row at the new row's start date,
+   *     which is exactly the abutting pair the engine's exclusive `effectiveTo`
+   *     expects.
+   *   - **A second PST-family rate.** Manitoba is RST, Quebec is QST, and a province
+   *     with HST has no separate provincial line at all. Two provincial rates in one
+   *     province is not a jurisdiction that exists.
+   */
+  app.post('/cross-border/tax-rates', manage, async (req) => {
+    const body = TaxRateSchema.parse(req.body ?? {});
+    const from = dateOnly(body.effectiveFrom);
+    const to = body.effectiveTo ? dateOnly(body.effectiveTo) : null;
+    if (to && to <= from) {
+      throw new ValidationError('The end date must be after the start date. It is exclusive.');
+    }
+
+    const siblings = await prisma.canadianTaxRate.findMany({
+      where: { province: body.province },
+    });
+
+    const sameKind = siblings.filter((r) => r.taxType === body.taxType);
+    const overlapping = sameKind.filter(
+      (r) =>
+        (r.effectiveTo == null || r.effectiveTo > from) && (to == null || r.effectiveFrom < to),
+    );
+
+    if (overlapping.length && !body.supersedePrevious) {
+      const o = overlapping[0]!;
+      throw new ValidationError(
+        `${body.province} already has a ${body.taxType} rate of ${o.ratePercent}% in force from ` +
+          `${o.effectiveFrom.toISOString().slice(0, 10)}. Supersede it to close that row on ` +
+          `${body.effectiveFrom} and start this one, or correct the existing row instead.`,
+      );
+    }
+
+    // HST replaces the provincial line rather than sitting beside it, so mixing the
+    // two in one province would produce a proposal charging both.
+    const provincial = ['PST', 'RST', 'QST'];
+    const live = sameDateLive(siblings, from);
+    if (body.taxType === 'HST' && live.some((r) => provincial.includes(r.taxType))) {
+      throw new ValidationError(
+        `${body.province} has a provincial sales tax row in force. An HST province has no separate provincial line — close that row first.`,
+      );
+    }
+    if (provincial.includes(body.taxType) && live.some((r) => r.taxType === 'HST')) {
+      throw new ValidationError(
+        `${body.province} is an HST province on that date. HST is one line and is never split into federal and provincial parts.`,
+      );
+    }
+    if (
+      provincial.includes(body.taxType) &&
+      live.some((r) => provincial.includes(r.taxType) && r.taxType !== body.taxType)
+    ) {
+      throw new ValidationError(
+        `${body.province} already has a ${live.find((r) => provincial.includes(r.taxType))!.taxType} row in force. A province has one provincial sales tax, not two.`,
+      );
+    }
+
+    const created = await prisma.$transaction(async (tx) => {
+      for (const row of overlapping) {
+        // Close, never delete. The old row is what an already-issued proposal was
+        // priced on, and its snapshot references it.
+        if (row.effectiveFrom >= from) {
+          throw new ValidationError(
+            `An existing ${body.taxType} row already starts on or after ${body.effectiveFrom}. Correct that row rather than superseding it.`,
+          );
+        }
+        await tx.canadianTaxRate.update({ where: { id: row.id }, data: { effectiveTo: from } });
+      }
+      return tx.canadianTaxRate.create({
+        data: {
+          province: body.province,
+          taxType: body.taxType,
+          ratePercent: body.ratePercent,
+          effectiveFrom: from,
+          effectiveTo: to,
+          source: body.source,
+          approvedById: req.user!.sub,
+        },
+      });
+    });
+
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'crossborder.taxRate.create',
+      entity: 'CanadianTaxRate',
+      entityId: created.id,
+      details: {
+        province: created.province,
+        taxType: created.taxType,
+        ratePercent: body.ratePercent,
+        effectiveFrom: body.effectiveFrom,
+        effectiveTo: body.effectiveTo ?? null,
+        source: body.source,
+        superseded: overlapping.map((r) => ({
+          id: r.id,
+          ratePercent: String(r.ratePercent),
+          closedAt: body.effectiveFrom,
+        })),
+      },
+    });
+    return created;
+  });
+
+  /**
+   * Correct a rate.
+   *
+   * A correction is for a row entered wrongly. A rate that genuinely CHANGED is a new
+   * row with its own effective date — editing the old one in place would restate what
+   * every proposal priced on it was quoted.
+   */
+  app.patch('/cross-border/tax-rates/:id', manage, async (req) => {
+    const { id } = req.params as { id: string };
+    const before = await prisma.canadianTaxRate.findUnique({ where: { id } });
+    if (!before) throw new NotFoundError('Rate not found.');
+
+    const body = TaxRateSchema.partial().parse(req.body ?? {});
+    if (!body.source?.trim()) {
+      throw new ValidationError('Record where the corrected figure came from.');
+    }
+
+    const updated = await prisma.canadianTaxRate.update({
+      where: { id },
+      data: {
+        ...(body.ratePercent ? { ratePercent: body.ratePercent } : {}),
+        ...(body.effectiveFrom ? { effectiveFrom: dateOnly(body.effectiveFrom) } : {}),
+        ...(body.effectiveTo !== undefined
+          ? { effectiveTo: body.effectiveTo ? dateOnly(body.effectiveTo) : null }
+          : {}),
+        source: body.source,
+        approvedById: req.user!.sub,
+      },
+    });
+
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'crossborder.taxRate.update',
+      entity: 'CanadianTaxRate',
+      entityId: id,
+      details: {
+        province: before.province,
+        taxType: before.taxType,
+        from: {
+          ratePercent: String(before.ratePercent),
+          effectiveFrom: before.effectiveFrom.toISOString().slice(0, 10),
+          effectiveTo: before.effectiveTo?.toISOString().slice(0, 10) ?? null,
+        },
+        to: {
+          ratePercent: String(updated.ratePercent),
+          effectiveFrom: updated.effectiveFrom.toISOString().slice(0, 10),
+          effectiveTo: updated.effectiveTo?.toISOString().slice(0, 10) ?? null,
+        },
+        source: body.source,
+      },
+    });
+    return updated;
+  });
+
+  /**
+   * Taxability rules — whether a charge category is taxable for a tax type.
+   *
+   * Here for the same reason the rates are: a rate with no taxability rule charges
+   * nothing and blocks the proposal, so entering a rate without being able to enter
+   * the rule beside it would be half an answer. `INSTALLATION`, `DESIGN`, `TRAINING`,
+   * `TRAVEL` and `OTHER` are the unseeded ones — deliberately, because installation
+   * into real property varies by province and needs a ruling, not a guess.
+   */
+  app.get('/cross-border/taxability', manage, async () => {
+    return prisma.crossBorderTaxabilityRule.findMany({
+      orderBy: [{ category: 'asc' }, { taxType: 'asc' }, { effectiveFrom: 'desc' }],
+    });
+  });
+
+  app.post('/cross-border/taxability', manage, async (req) => {
+    const body = TaxabilitySchema.parse(req.body ?? {});
+    const from = dateOnly(body.effectiveFrom);
+
+    const existing = await prisma.crossBorderTaxabilityRule.findFirst({
+      where: {
+        category: body.category,
+        taxType: body.taxType,
+        province: body.province ?? null,
+        OR: [{ effectiveTo: null }, { effectiveTo: { gt: from } }],
+      },
+    });
+    if (existing) {
+      throw new ValidationError(
+        `${body.category} already has a ${body.taxType} rule in force${body.province ? ` in ${body.province}` : ''} — it is ${existing.taxable ? 'taxable' : 'not taxable'} from ${existing.effectiveFrom.toISOString().slice(0, 10)}. Close that rule before entering another.`,
+      );
+    }
+
+    const created = await prisma.crossBorderTaxabilityRule.create({
+      data: {
+        category: body.category,
+        taxType: body.taxType,
+        province: body.province ?? null,
+        taxable: body.taxable,
+        effectiveFrom: from,
+        effectiveTo: body.effectiveTo ? dateOnly(body.effectiveTo) : null,
+        source: body.source,
+      },
+    });
+
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'crossborder.taxability.create',
+      entity: 'CrossBorderTaxabilityRule',
+      entityId: created.id,
+      details: {
+        category: created.category,
+        taxType: created.taxType,
+        province: created.province,
+        taxable: created.taxable,
+        effectiveFrom: body.effectiveFrom,
+        source: body.source,
+      },
+    });
+    return created;
   });
 
   app.get('/cross-border/tax-registrations', manage, async () => {
@@ -656,7 +961,14 @@ function scheduleData(s: Partial<BrokerFeeInput>) {
     ...(s.percent !== undefined ? { percent: s.percent } : {}),
     ...(s.minMinor !== undefined ? { minMinor: s.minMinor } : {}),
     ...(s.maxMinor !== undefined ? { maxMinor: s.maxMinor } : {}),
-    ...(s.tiers !== undefined ? { tiers: s.tiers ?? null } : {}),
+    ...(s.tiers !== undefined
+      ? {
+          // A Prisma Json column does not take `null` — that is `Prisma.DbNull`, which
+          // clears the column, as distinct from `JsonNull`, which stores a JSON null.
+          // Clearing is what "this schedule has no tier table" means.
+          tiers: s.tiers ? (s.tiers as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
+        }
+      : {}),
     ...(s.disbursementMinor !== undefined ? { disbursementMinor: s.disbursementMinor } : {}),
     ...(s.advancementMinor !== undefined ? { advancementMinor: s.advancementMinor } : {}),
     ...(s.bondMinor !== undefined ? { bondMinor: s.bondMinor } : {}),
