@@ -48,6 +48,23 @@ export const Permission = {
   ORDERS_READ: 'orders:read',
   ORDERS_MANAGE: 'orders:manage',
   HANDOFF_MANAGE: 'handoff:manage',
+  // Cross-border (Canadian proposals). Two levels, because entering a figure and
+  // vouching for it are different acts.
+  //
+  // ENTER the customs figures reuses FREIGHT_COST_WRITE: a broker's duty quote is
+  // the same kind of work by the same person as a vendor's freight quote, and
+  // Operations already holds it.
+  //
+  // APPROVE moves a customs entry to CONFIRMED, which is what lets a proposal go
+  // out as a landed-cost quote. That is a compliance statement about duty, tariff
+  // and tax, so it sits with Accounting and above — never with the rep who is
+  // trying to close the deal.
+  CROSSBORDER_APPROVE: 'crossborder:approve',
+  // Tax rates, tax registrations, broker fee schedules, FX fallback, and the switch
+  // that turns Canadian proposals on at all. Wrong values here misprice every
+  // Canadian job at once and misstate tax to a government, so it is deliberately
+  // narrower than PROPOSAL_RELEASE.
+  CROSSBORDER_MANAGE: 'crossborder:manage',
   PRODUCTS_ADMIN: 'products:admin',
   AUDIT_READ: 'audit:read',
   USERS_MANAGE: 'users:manage',
@@ -100,6 +117,8 @@ export const ROLE_PERMISSIONS: Record<Role, readonly string[]> = {
     P.PROPOSAL_ARCHIVE,
     P.FREIGHT_COST_WRITE,
     P.FREIGHT_INVOICE_PUSH,
+    P.CROSSBORDER_APPROVE,
+    P.CROSSBORDER_MANAGE,
     P.QBO_MANAGE,
     P.ORDERS_MANAGE,
     P.HANDOFF_MANAGE,
@@ -151,6 +170,8 @@ export const ROLE_PERMISSIONS: Record<Role, readonly string[]> = {
     P.PROPOSAL_ARCHIVE,
     P.FREIGHT_COST_WRITE,
     P.FREIGHT_INVOICE_PUSH,
+    P.CROSSBORDER_APPROVE,
+    P.CROSSBORDER_MANAGE,
   ],
   INSTALLER: [P.CRM_READ, P.CATALOG_READ, P.RULES_READ, P.PROPOSAL_READ, P.ORDERS_READ],
   READ_ONLY: [
