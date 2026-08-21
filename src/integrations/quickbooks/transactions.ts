@@ -19,7 +19,7 @@ import { versionTotals } from '../../proposals/analytics.js';
 import { findLink } from './links.js';
 import { assertSkusMapped } from './skuPreflight.js';
 import { resolveSynthesizedItemId } from './synthesizedItems.js';
-import { resolveTermForProposal } from './terms.js';
+import { resolveTermForInvoice } from './terms.js';
 import { customFieldId } from './customFields.js';
 import { resolveInvoiceReferences } from '../monday/dealReferences.js';
 import type { QboTxnType, QboTxnStatus, QboEnvironment, Prisma } from '@prisma/client';
@@ -387,6 +387,21 @@ function docNumberFor(proposalNumber: string, type: QboTxnType, seq: number): st
  * about a job, so it belongs on the QuickBooks document. Stored in the same
  * sections blob the builder writes, hence the defensive read.
  */
+/**
+ * Whether the deposit applies to this deal.
+ *
+ * The same `showDeposit` flag the builder sets from "Show the 50% deposit on the
+ * customer proposal". Absent means true, matching the builder's own default — a
+ * proposal written before the flag existed had a deposit.
+ */
+function depositAppliesOf(sections: unknown): boolean {
+  if (!Array.isArray(sections)) return true;
+  const meta = sections.find(
+    (s) => s && typeof s === 'object' && (s as { id?: string }).id === 'meta',
+  ) as { data?: { showDeposit?: unknown } } | undefined;
+  return meta?.data?.showDeposit !== false;
+}
+
 function projectIdOf(sections: unknown): string {
   if (!Array.isArray(sections)) return '';
   const meta = sections.find(
@@ -622,6 +637,7 @@ export async function executeTransaction(
             })
           )?.customerApproval?.poNumber ?? null);
 
+    const depositApplies = depositAppliesOf(version.sections);
     const refs = await resolveInvoiceReferences(
       version.id,
       { projectId: projectIdOf(version.sections), poNumber: poFromAcceptance },
@@ -734,7 +750,19 @@ export async function executeTransaction(
       resource = 'invoice';
       // Resolved here rather than above so an estimate never touches the term
       // tables — the invoice is the only document a payment term applies to.
-      const term = await resolveTermForProposal(version.proposalId);
+      /**
+       * The deposit choice decides the term AND whether the schedule is stated.
+       *
+       * Unticked means there is no schedule to state: one payment, due on receipt.
+       * Printing "PAYMENT SCHEDULE — Due upfront: 50%" underneath a term of "Due upon
+       * receipt" would put two different payment arrangements on one document.
+       */
+      const term = await resolveTermForInvoice(
+        realmId,
+        version.proposalId,
+        depositApplies,
+        fetchImpl,
+      );
       body = buildInvoiceBody({
         customerQboId,
         currency: totals.currency,
@@ -757,11 +785,13 @@ export async function executeTransaction(
         // the invoice is due the day it is issued.
         dueDate: term.id ? null : txnDate,
         txnDate,
-        schedule: {
-          depositMinor: totals.deposit,
-          progressMinor: totals.progress,
-          finalMinor: totals.final,
-        },
+        schedule: depositApplies
+          ? {
+              depositMinor: totals.deposit,
+              progressMinor: totals.progress,
+              finalMinor: totals.final,
+            }
+          : null,
       });
     } else {
       // Portion invoices (deposit / progress / final): a single summary line for

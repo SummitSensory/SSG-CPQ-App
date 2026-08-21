@@ -26,7 +26,10 @@ interface RawTerm {
 }
 
 /** Every active payment term in QuickBooks, for a portal dropdown. */
-export async function listTerms(realmId: string, fetchImpl: typeof fetch = fetch): Promise<QboTerm[]> {
+export async function listTerms(
+  realmId: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<QboTerm[]> {
   // select * — the query API does not reliably return named columns.
   const res = await query<{ Term?: RawTerm[] }>(realmId, 'select * from Term', fetchImpl);
   return (res.Term ?? [])
@@ -58,7 +61,11 @@ export async function resolveTermForProposal(proposalId: string): Promise<Resolv
     select: { qboSalesTermId: true, qboSalesTermName: true, organizationId: true },
   });
   if (proposal?.qboSalesTermId) {
-    return { id: proposal.qboSalesTermId, name: proposal.qboSalesTermName ?? null, source: 'proposal' };
+    return {
+      id: proposal.qboSalesTermId,
+      name: proposal.qboSalesTermName ?? null,
+      source: 'proposal',
+    };
   }
   if (proposal?.organizationId) {
     const org = await prisma.organization.findUnique({
@@ -75,7 +82,11 @@ export async function resolveTermForProposal(proposalId: string): Promise<Resolv
 }
 
 /** Set (or clear, with null) the term on a proposal. */
-export async function setProposalTerm(proposalId: string, termId: string | null, termName: string | null) {
+export async function setProposalTerm(
+  proposalId: string,
+  termId: string | null,
+  termName: string | null,
+) {
   return prisma.proposal.update({
     where: { id: proposalId },
     data: { qboSalesTermId: termId, qboSalesTermName: termId ? termName : null },
@@ -84,10 +95,72 @@ export async function setProposalTerm(proposalId: string, termId: string | null,
 }
 
 /** Set (or clear) the default term on a client. */
-export async function setOrganizationTerm(organizationId: string, termId: string | null, termName: string | null) {
+export async function setOrganizationTerm(
+  organizationId: string,
+  termId: string | null,
+  termName: string | null,
+) {
   return prisma.organization.update({
     where: { id: organizationId },
     data: { qboSalesTermId: termId, qboSalesTermName: termId ? termName : null },
     select: { id: true, qboSalesTermId: true, qboSalesTermName: true },
   });
+}
+
+/**
+ * The two terms the deposit checkbox chooses between.
+ *
+ * "Show the 50% deposit on the customer proposal" is not a display toggle by the
+ * time an invoice is raised — it is the deal. Ticked, the customer pays half up
+ * front and half before shipment; unticked, they pay the whole thing on receipt.
+ * The QuickBooks term has to say the same thing, or the invoice contradicts the
+ * document the customer signed and the due date it derives is wrong.
+ *
+ * Matched by NAME against the terms already in QuickBooks rather than created here,
+ * because Terms is an accounting list and this application has no business writing
+ * to it. Several spellings are accepted per side: a company that calls it "Due on
+ * receipt" should not have to rename it to satisfy us. An id set in the environment
+ * wins outright, for the case where neither name matches.
+ */
+const DEPOSIT_TERM_NAMES = [
+  '50% upfront / 50% pia',
+  '50% upfront/50% pia',
+  '50% up front / 50% pia',
+  '50/50',
+];
+
+const RECEIPT_TERM_NAMES = ['due upon receipt', 'due on receipt', 'due upon reciept'];
+
+const norm = (v: string): string => v.trim().toLowerCase().replace(/\s+/g, ' ');
+
+/**
+ * The term for an invoice, given whether the deposit applies.
+ *
+ * Falls back to the ordinary resolution — proposal override, client default, system
+ * default — when the named term is not in this company’s list. That keeps a
+ * misnamed term from silently producing an invoice with no term at all, which would
+ * make it due the day it was issued regardless of what was agreed.
+ */
+export async function resolveTermForInvoice(
+  realmId: string,
+  proposalId: string,
+  depositApplies: boolean,
+  fetchImpl: typeof fetch = fetch,
+): Promise<ResolvedTerm> {
+  const envId = (
+    depositApplies ? process.env.QBO_TERM_ID_DEPOSIT : process.env.QBO_TERM_ID_ON_RECEIPT
+  )?.trim();
+  const wanted = depositApplies ? DEPOSIT_TERM_NAMES : RECEIPT_TERM_NAMES;
+
+  if (envId) {
+    return { id: envId, name: null, source: 'default' };
+  }
+  try {
+    const terms = await listTerms(realmId, fetchImpl);
+    const hit = terms.find((t) => wanted.includes(norm(t.name)));
+    if (hit) return { id: hit.id, name: hit.name, source: 'default' };
+  } catch {
+    // A term list that cannot be read is not a reason to fail an invoice.
+  }
+  return resolveTermForProposal(proposalId);
 }
