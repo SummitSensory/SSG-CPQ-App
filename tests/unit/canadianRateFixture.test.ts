@@ -107,7 +107,7 @@ describe('a rate change lands on the right day', () => {
   });
 
   it('prices the same equipment differently either side of the change', () => {
-    const charges = [{ category: 'EQUIPMENT' as const, usdMinor: 100_000 }];
+    const charges = [{ category: 'EQUIPMENT' as const, usdMinor: 100_000n }];
     for (const [asOf, expected] of [
       ['2025-03-31', 15_000n],
       ['2025-04-01', 14_000n],
@@ -137,11 +137,11 @@ describe('a rate change lands on the right day', () => {
 describe('taxability against the production table', () => {
   it('taxes equipment, freight and installation, and no border charge', () => {
     const charges = [
-      { category: 'EQUIPMENT' as const, usdMinor: 100_000 },
-      { category: 'FREIGHT' as const, usdMinor: 20_000 },
-      { category: 'INSTALLATION' as const, usdMinor: 30_000 },
-      { category: 'CUSTOMS_DUTY' as const, usdMinor: 5_000 },
-      { category: 'BROKERAGE' as const, usdMinor: 7_500 },
+      { category: 'EQUIPMENT' as const, usdMinor: 100_000n },
+      { category: 'FREIGHT' as const, usdMinor: 20_000n },
+      { category: 'INSTALLATION' as const, usdMinor: 30_000n },
+      { category: 'CUSTOMS_DUTY' as const, usdMinor: 5_000n },
+      { category: 'BROKERAGE' as const, usdMinor: 7_500n },
     ];
     const { basisMinor, missing } = taxableBasis('HST', 'ON', ASOF, charges, PRODUCTION_TAXABILITY);
     expect(missing).toEqual([]);
@@ -154,7 +154,7 @@ describe('taxability against the production table', () => {
       'HST',
       'ON',
       ASOF,
-      [{ category: 'DESIGN', usdMinor: 10_000 }],
+      [{ category: 'DESIGN', usdMinor: 10_000n }],
       PRODUCTION_TAXABILITY,
     );
     expect(missing).toEqual(['DESIGN']);
