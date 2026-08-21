@@ -65,8 +65,17 @@ export const DEAL_COL = {
   zip: 'text__1',
   /** status — country */
   country: 'status47__1',
-  /** item id column — Project ID */
+  /** item id column — Project ID. Its value IS the monday item id. */
   projectId: 'pulse_id_mm5kc9f8',
+  /**
+   * text — the customer's purchase order number.
+   *
+   * Lives on the board because it usually arrives AFTER acceptance: the customer
+   * raises the PO once they hold the signed quote, and whoever receives it puts it on
+   * the deal row. Read at invoice time so the invoice carries it, rather than trusting
+   * the field captured at signing, which is blank on exactly the jobs that need it.
+   */
+  purchaseOrder: 'text_mkv1g18z',
   /** status — Deal Phase */
   stage: 'deal_stage',
   /** numbers — Deal Value $ */

@@ -31,6 +31,8 @@ import {
 } from '../integrations/quickbooks/billing.js';
 import { compareCustomerProfile } from '../integrations/quickbooks/customerProfile.js';
 import { checkSkuMapping } from '../integrations/quickbooks/skuPreflight.js';
+import { customFieldId } from '../integrations/quickbooks/customFields.js';
+import { resolveInvoiceReferences } from '../integrations/monday/dealReferences.js';
 import type { QboEnvironment, QboTxnType } from '@prisma/client';
 
 /** QboTransaction rows carry BigInt columns — serialize to strings for JSON. */
@@ -91,6 +93,105 @@ function resultPage(title: string, detail: string, ok: boolean): string {
 export function registerQuickbooksRoutes(app: FastifyInstance): void {
   const manage = { preHandler: requirePermission(Permission.QBO_MANAGE) };
   const transact = { preHandler: requirePermission(Permission.QBO_TRANSACT) };
+
+  /**
+   * What the next push will put in Project ID and Customer Purchase Order #, and
+   * where each value comes from.
+   *
+   * Worth its own endpoint because "the field is blank in QuickBooks" has four
+   * different causes that look identical from the outside: no value anywhere, a
+   * value we hold but no writable slot to put it in, a slot collision, or a board
+   * that could not be read. Guessing between them from a blank field is hopeless;
+   * this states which one it is.
+   *
+   * The slot caveat matters most. QuickBooks' v3 API can only write the three LEGACY
+   * sales-form custom fields. The newer Custom Fields feature — Settings → Custom
+   * fields, with per-form "Print on form" toggles — is not writable through the API
+   * at all. If these two fields were created there, no push can ever populate them
+   * and the value goes in the memo instead. `writable: false` below is that case,
+   * and the fix is to recreate them as legacy sales-form fields in QuickBooks.
+   */
+  app.get('/integrations/quickbooks/references/:versionId', transact, async (req, reply) => {
+    const { versionId } = req.params as { versionId: string };
+    const version = await prisma.proposalVersion.findUnique({
+      where: { id: versionId },
+      select: { id: true, sections: true, proposal: { select: { number: true } } },
+    });
+    if (!version) return reply.status(404).send({ error: 'NOT_FOUND' });
+
+    const meta = Array.isArray(version.sections)
+      ? (version.sections as Array<{ id?: string; data?: Record<string, unknown> }>).find(
+          (s) => s?.id === 'meta',
+        )?.data
+      : undefined;
+    const order = await prisma.acceptedOrder.findUnique({
+      where: { proposalVersionId: version.id },
+      select: { customerApproval: { select: { poNumber: true } } },
+    });
+
+    const refs = await resolveInvoiceReferences(version.id, {
+      projectId: String(meta?.projectId ?? '').trim(),
+      poNumber: order?.customerApproval?.poNumber ?? null,
+    });
+
+    const environment = qboEnvironment() as QboEnvironment;
+    const conn = await prisma.qboConnection.findFirst({ where: { environment, isActive: true } });
+    let projectSlot: string | null = null;
+    let poSlot: string | null = null;
+    let slotError: string | null = null;
+    if (conn) {
+      try {
+        projectSlot = await customFieldId(
+          conn.realmId,
+          'Project ID',
+          process.env.QBO_CUSTOM_FIELD_ID_PROJECT,
+        );
+        poSlot =
+          (await customFieldId(
+            conn.realmId,
+            'Customer Purchase Order #',
+            process.env.QBO_CUSTOM_FIELD_ID_PO,
+          )) ?? '1';
+      } catch (err) {
+        slotError = err instanceof Error ? err.message : String(err);
+      }
+    }
+
+    const collision = !!projectSlot && projectSlot === poSlot;
+    return {
+      proposal: version.proposal.number,
+      boardError: refs.boardError,
+      slotError,
+      connected: !!conn,
+      projectId: {
+        value: refs.projectId || null,
+        from: refs.source.projectId,
+        slot: projectSlot,
+        writable: !!projectSlot,
+        willPrint: refs.projectId
+          ? projectSlot
+            ? 'custom field'
+            : 'memo only'
+          : 'nothing to send',
+      },
+      poNumber: {
+        value: refs.poNumber,
+        from: refs.source.poNumber,
+        slot: collision ? null : poSlot,
+        writable: !!poSlot && !collision,
+        willPrint: refs.poNumber
+          ? collision
+            ? 'memo only — both fields resolve to the same QuickBooks slot'
+            : poSlot
+              ? 'custom field'
+              : 'memo only'
+          : 'nothing to send',
+      },
+      note: collision
+        ? 'Project ID and Customer Purchase Order # resolve to the same custom-field slot. QuickBooks matches on the slot number, so one would overwrite the other — the PO is put in the memo instead. Give them different slots in QuickBooks.'
+        : null,
+    };
+  });
 
   // --- Status & connection (manage) ---
   app.get('/integrations/quickbooks/status', manage, async () => ({

@@ -21,6 +21,7 @@ import { assertSkusMapped } from './skuPreflight.js';
 import { resolveSynthesizedItemId } from './synthesizedItems.js';
 import { resolveTermForProposal } from './terms.js';
 import { customFieldId } from './customFields.js';
+import { resolveInvoiceReferences } from '../monday/dealReferences.js';
 import type { QboTxnType, QboTxnStatus, QboEnvironment, Prisma } from '@prisma/client';
 
 /**
@@ -597,7 +598,36 @@ export async function executeTransaction(
       sequenceOf(txn.idempotencyKey),
     );
 
-    const projectId = projectIdOf(version.sections);
+    /**
+     * Project ID and the customer's PO, resolved once for the whole document.
+     *
+     * Both used to come only from our own records, and both were routinely empty:
+     * the proposal's meta carries a Project ID only if somebody filled it in, and
+     * the PO captured at signing is blank whenever the customer raised it later —
+     * which is most of the time. Empty means nothing is sent, which is why these
+     * fields were arriving blank on QuickBooks invoices and being typed in by hand.
+     *
+     * The deal board is now consulted for both. See dealReferences.ts for why the
+     * precedence differs per field: the proposal wins on Project ID because that is
+     * what the customer's signed document says, and the board wins on the PO because
+     * the freshest reference the customer gave us is the right one.
+     */
+    const poFromAcceptance =
+      txn.type === 'ESTIMATE'
+        ? null
+        : ((
+            await prisma.acceptedOrder.findUnique({
+              where: { proposalVersionId: version.id },
+              select: { customerApproval: { select: { poNumber: true } } },
+            })
+          )?.customerApproval?.poNumber ?? null);
+
+    const refs = await resolveInvoiceReferences(
+      version.id,
+      { projectId: projectIdOf(version.sections), poNumber: poFromAcceptance },
+      fetchImpl,
+    );
+    const projectId = refs.projectId;
     // The custom field's slot number is read from company preferences, not
     // guessed — see customFields.ts. Env var overrides it if ever needed.
     const projectFieldId = projectId
@@ -625,23 +655,24 @@ export async function executeTransaction(
      * company, and the requirement is specifically custom field 1; a company whose
      * slot 1 is something else should set QBO_CUSTOM_FIELD_ID_PO.
      */
-    let poNumber: string | null = null;
+    /**
+     * Every invoice flavour carries the PO, not just the full one.
+     *
+     * A deposit invoice is the first document a customer's accounts-payable team
+     * sees, so it is the one most likely to be held up for want of a PO reference.
+     * Restricting this to type INVOICE meant the deposit and progress invoices went
+     * out without it.
+     */
+    let poNumber: string | null = txn.type === 'ESTIMATE' ? null : refs.poNumber;
     let poFieldId: string | null = null;
-    if (txn.type === 'INVOICE') {
-      const order = await prisma.acceptedOrder.findUnique({
-        where: { proposalVersionId: version.id },
-        select: { customerApproval: { select: { poNumber: true } } },
-      });
-      poNumber = (order?.customerApproval?.poNumber ?? '').trim() || null;
-      if (poNumber) {
-        poFieldId =
-          (await customFieldId(
-            realmId,
-            'Customer Purchase Order #',
-            process.env.QBO_CUSTOM_FIELD_ID_PO,
-            fetchImpl,
-          )) ?? '1';
-      }
+    if (poNumber) {
+      poFieldId =
+        (await customFieldId(
+          realmId,
+          'Customer Purchase Order #',
+          process.env.QBO_CUSTOM_FIELD_ID_PO,
+          fetchImpl,
+        )) ?? '1';
     }
 
     const memo = [
