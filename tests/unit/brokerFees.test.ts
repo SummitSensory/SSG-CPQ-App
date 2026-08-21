@@ -176,12 +176,20 @@ describe('parseTiers', () => {
 });
 
 describe('selectSchedule', () => {
-  const row = (over: Partial<Parameters<typeof selectSchedule>[0][number]> & { id?: string }) => ({
+  interface Dated {
+    id: string;
+    active: boolean;
+    isDefault: boolean;
+    effectiveFrom: Date;
+    effectiveTo: Date | null;
+  }
+
+  const row = (over: Partial<Dated> = {}): Dated => ({
     id: 'x',
     active: true,
     isDefault: false,
     effectiveFrom: new Date('2026-01-01'),
-    effectiveTo: null as Date | null,
+    effectiveTo: null,
     ...over,
   });
 

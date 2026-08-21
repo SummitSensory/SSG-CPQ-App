@@ -159,6 +159,11 @@ const charged = (province: ProvinceCode) =>
     .tax.lines.filter((l) => l.status === 'CHARGED')
     .map((l) => `${l.label} ${l.ratePercent}% = ${l.taxUsdMinor}`);
 
+/** One tax line by type. `find` rather than an index, so the assertion names what it
+ *  is asserting about and the compiler stays happy under noUncheckedIndexedAccess. */
+const line = (result: ReturnType<typeof run>, taxType: CanadianTaxType) =>
+  result.tax.lines.find((l) => l.taxType === taxType);
+
 /* ── The six ───────────────────────────────────────────────────────────────── */
 
 describe('city fixtures', () => {
@@ -193,7 +198,7 @@ describe('city fixtures', () => {
     expect(charged('QC')).toEqual(['GST 5% = 260000', 'QST 9.975% = 518700']);
     // 9.975% of 5,200,000 is 518,700 exactly. Of a GST-inclusive base it would be
     // 544,635 — the 2013 rule change this asserts has not been undone.
-    expect(run('QC').tax.lines[1].taxableBasisUsdMinor).toBe(BigInt(TAXABLE_BASE));
+    expect(line(run('QC'), 'QST')?.taxableBasisUsdMinor).toBe(BigInt(TAXABLE_BASE));
   });
 
   it('Calgary — GST alone, and no empty provincial line', () => {
@@ -252,14 +257,14 @@ describe('what holds a Canadian proposal up', () => {
     expect(r.readyForCustomer).toBe(false);
     // The GST line beside it is unaffected — one missing provincial registration
     // does not stop the federal tax being charged.
-    expect(r.tax.lines[0].status).toBe('CHARGED');
+    expect(line(r, 'GST')?.status).toBe('CHARGED');
   });
 
   it('accepts the federal registration in an HST province — GST and HST are one number', () => {
     // The regression this file exists to lock: matching taxType exactly meant a
     // correctly registered company failed the check in every HST province.
     const r = run('ON', { registrations: [registration('GST', null)] });
-    expect(r.tax.lines[0].status).toBe('CHARGED');
+    expect(line(r, 'HST')?.status).toBe('CHARGED');
   });
 
   it('holds the proposal when a charge category has no taxability rule at all', () => {
@@ -337,8 +342,8 @@ describe('what holds a Canadian proposal up', () => {
     });
     // Being a school or a charity is not itself an exemption, and a rebate the
     // customer claims later is not a point-of-sale one.
-    expect(unapproved.tax.lines[0].status).toBe('CHARGED');
-    expect(approved.tax.lines[0].status).toBe('EXEMPT');
+    expect(line(unapproved, 'HST')?.status).toBe('CHARGED');
+    expect(line(approved, 'HST')?.status).toBe('EXEMPT');
     expect(approved.tax.totalTaxUsdMinor).toBe(0n);
   });
 });
