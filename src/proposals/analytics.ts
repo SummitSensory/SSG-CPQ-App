@@ -115,6 +115,71 @@ export function itemsOf(items: unknown): RawItem[] {
 }
 
 /**
+ * A bundle child: the "— Obie Mobile Cart" rows the builder writes under a bundle's
+ * priced line. Identified by the em-dash prefix, which is how the builder marks them
+ * (public/app.js isBundleChild) — there is no flag on the row.
+ */
+const isBundleChild = (l: RawItem): boolean =>
+  (l.lineType ?? 'PRODUCT') === 'PRODUCT' && /^\u2014\s/.test(String(l.name ?? ''));
+
+/**
+ * Revenue per line, with a bundle counted ONCE.
+ *
+ * A bundle is one priced line followed by its component rows. The components are
+ * meant to be zero-rate — they exist to carry the real part numbers, costs and
+ * weights for the BOM — and the customer sees only the parent's price.
+ *
+ * When a rate lands on the components as well (a catalog pull, a paste, a rep typing
+ * into the wrong row), the old sum counted the parent AND its parts, so a $11,268.45
+ * bundle totalled $22,536.90. That figure reached the printed proposal, the price
+ * snapshot and QuickBooks.
+ *
+ * The rule here cannot double-count in either direction: if the parent carries a
+ * price, the parent's is the bundle's price and the component rates are ignored; if
+ * the parent is zero, the components carry it. A component with no parent above it
+ * has nothing to double with, so it counts on its own.
+ *
+ * Cost and weight are deliberately NOT treated this way. Their convention is the
+ * reverse — the parent is zero and the components carry the real figures — so summing
+ * every row is already correct for COGS and freight weight.
+ */
+function countedRevenueMinor(lines: RawItem[]): number {
+  const extended = (l: RawItem): number => Math.round(n(l.quantity) * n(l.rateMinor));
+
+  let total = 0;
+  let parentAmount = 0;
+  let childAmount = 0;
+  let inBundle = false;
+
+  const close = (): void => {
+    if (!inBundle) return;
+    total += parentAmount !== 0 ? parentAmount : childAmount;
+    inBundle = false;
+    parentAmount = 0;
+    childAmount = 0;
+  };
+
+  for (const l of lines) {
+    if ((l.lineType ?? 'PRODUCT') !== 'PRODUCT') {
+      // A heading between a parent and its parts ends the run. The builder keeps
+      // them contiguous, so this only fires on genuinely separated rows.
+      close();
+      continue;
+    }
+    if (isBundleChild(l)) {
+      if (inBundle) childAmount += extended(l);
+      else total += extended(l);
+      continue;
+    }
+    close();
+    parentAmount = extended(l);
+    inBundle = true;
+  }
+  close();
+  return total;
+}
+
+/**
  * Mirrors the builder's math exactly so reports and the printed proposal agree.
  *
  * Every accumulation is rounded to a whole minor unit. Money here is an integer
@@ -129,14 +194,15 @@ export function itemsOf(items: unknown): RawItem[] {
 export function versionTotals(items: unknown, sections: unknown): Totals {
   const lines = itemsOf(items);
   const meta = metaOf(sections);
-  let subtotal = 0,
-    cogs = 0,
+  // Revenue is bundle-aware; cost, weight and third-party freight are not, because
+  // their convention is the opposite one. See countedRevenueMinor.
+  const subtotal = countedRevenueMinor(lines);
+  let cogs = 0,
     tpFreight = 0,
     weight = 0;
   for (const l of lines) {
     if ((l.lineType ?? 'PRODUCT') !== 'PRODUCT') continue;
     const qty = n(l.quantity);
-    subtotal += Math.round(qty * n(l.rateMinor));
     cogs += Math.round(qty * n(l.costEach));
     weight += qty * n(l.weightEach);
     tpFreight += Math.round(n(l.tpFreightMinor));

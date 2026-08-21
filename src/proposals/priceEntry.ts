@@ -59,6 +59,24 @@ const isLine = (v: unknown): v is PricedLine => !!v && typeof v === 'object';
 const isPriced = (l: PricedLine): boolean => (l.lineType ?? 'PRODUCT') === 'PRODUCT';
 
 /**
+ * A bundle component — the "— Obie Mobile Cart" rows written under a bundle's priced
+ * line. Marked by the em-dash prefix, which is how the builder identifies them
+ * (public/app.js isBundleChild); there is no flag on the row.
+ *
+ * These are ZERO-RATE BY DESIGN. The customer sees the parent's single price; the
+ * components exist to carry the real part numbers, costs and weights for the Bill of
+ * Materials, the cost of goods and the freight weight.
+ *
+ * They are therefore excluded from the price audit. Including them made the release
+ * gate demand a price or a reason for every component of every bundle — and the way
+ * through that gate is to type a rate into each one, which then counted the bundle
+ * twice: an $11,268.45 bundle released at $22,536.90, on the customer's document and
+ * in the price snapshot. The gate was asking for exactly the wrong thing, and getting
+ * it.
+ */
+const isBundleComponent = (l: PricedLine): boolean => /^\u2014\s/.test(String(l.name ?? ''));
+
+/**
  * Has a price actually been entered? A number — including 0 — is an answer.
  * null, undefined, '' and NaN are not.
  */
@@ -83,7 +101,10 @@ const describe = (l: PricedLine, reason: PriceEntryReason): PriceEntryIssue => (
  * (blocking) — one function so all three agree on what counts as a problem.
  */
 export function auditPriceEntry(items: unknown): PriceEntryAudit {
-  const lines = (Array.isArray(items) ? items : []).filter(isLine).filter(isPriced);
+  const lines = (Array.isArray(items) ? items : [])
+    .filter(isLine)
+    .filter(isPriced)
+    .filter((l) => !isBundleComponent(l));
 
   const awaiting: PriceEntryIssue[] = [];
   const zeroWithoutReason: PriceEntryIssue[] = [];

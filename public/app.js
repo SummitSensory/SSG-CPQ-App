@@ -4140,10 +4140,12 @@
     var secs = (version && version.sections) || [];
     var metaSec = Array.isArray(secs) ? secs.filter(function (s) { return s && s.id === 'meta'; })[0] : null;
     var meta = (metaSec && metaSec.data) || {};
+    var vItems = (version && version.items) || [];
+    var vCounted = countedRevenueByIndex(vItems);
     var subtotal = 0, tpFreight = 0;
-    ((version && version.items) || []).forEach(function (l) {
+    vItems.forEach(function (l, i) {
       if ((l.lineType || 'PRODUCT') !== 'PRODUCT') return;
-      subtotal += (Number(l.quantity) || 0) * (Number(l.rateMinor) || 0);
+      subtotal += vCounted[i];
       tpFreight += Number(l.tpFreightMinor) || 0;
     });
     var discount = discountOf(meta, subtotal).amount;
@@ -5775,6 +5777,49 @@
   /** Bundle components are the '— ' rows that must stay under their parent line. */
   function isBundleChild(l) { return !!l && l.lineType === 'PRODUCT' && /^—\s/.test(String(l.name || '')); }
 
+  /**
+   * Extended revenue per line, with a bundle counted ONCE.
+   *
+   * A bundle is one priced line followed by its component rows, and the components
+   * are written zero-rate on purpose: they exist to carry the real part numbers,
+   * costs and weights, while the customer sees the parent's single price.
+   *
+   * When a rate lands on the components too — a catalog pull, a paste, a rep typing
+   * into the wrong row — summing every row counted the parent AND its parts, so an
+   * $11,268.45 bundle showed as $22,536.90 on the section header, the totals panel
+   * and the printed proposal.
+   *
+   * This cannot double in either direction: a priced parent owns the bundle's price
+   * and its components are ignored; a zero parent lets the components carry it. A
+   * component with no parent above it has nothing to double with, so it counts.
+   *
+   * Cost and weight are deliberately left summing every row: their convention is the
+   * reverse — parent zero, components real — so a plain sum is already right.
+   *
+   * Mirrors countedRevenueMinor in src/proposals/analytics.ts. The two must agree, or
+   * the browser and the price snapshot disagree about the total.
+   */
+  function countedRevenueByIndex(lines) {
+    lines = lines || [];
+    var ext = function (l) { return Math.round((Number(l.quantity) || 0) * (Number(l.rateMinor) || 0)); };
+    var out = lines.map(function () { return 0; });
+    var i = 0;
+    while (i < lines.length) {
+      var l = lines[i];
+      if (!l || (l.lineType || 'PRODUCT') !== 'PRODUCT') { i++; continue; }
+      if (isBundleChild(l)) { out[i] = ext(l); i++; continue; }
+      var parentAmt = ext(l);
+      var kids = [];
+      var j = i + 1;
+      while (j < lines.length && isBundleChild(lines[j])) { kids.push(j); j++; }
+      if (!kids.length) { out[i] = parentAmt; i = j; continue; }
+      if (parentAmt !== 0) out[i] = parentAmt;
+      else kids.forEach(function (k) { out[k] = ext(lines[k]); });
+      i = j;
+    }
+    return out;
+  }
+
   function isGroupHeader(l) { return !!l && l.lineType === 'GROUP'; }
   function isSubHeader(l) { return !!l && l.lineType === 'SUBGROUP'; }
   /**
@@ -6224,10 +6269,11 @@
   function builderTotals() {
     var subtotal = 0, tpFreight = 0, weight = 0, cogs = 0;
     var groups = []; var cur = null;
-    pb.lines.forEach(function (l) {
+    var counted = countedRevenueByIndex(pb.lines);
+    pb.lines.forEach(function (l, i) {
       if (l.lineType === 'GROUP') { cur = { name: l.name, optional: l.optional, subtotal: 0, cogs: 0 }; groups.push(cur); return; }
       if (l.lineType === 'PRODUCT') {
-        var amt = (Number(l.quantity) || 0) * (Number(l.rateMinor) || 0);
+        var amt = counted[i];
         var cst = (Number(l.quantity) || 0) * (Number(l.costEach) || 0);
         var tp = Number(l.tpFreightMinor) || 0;
         subtotal += amt; tpFreight += tp; cogs += cst;
@@ -7719,7 +7765,7 @@
     var secs = version.sections || []; var metaSec = Array.isArray(secs) ? secs.filter(function (s) { return s && s.id === 'meta'; })[0] : null;
     var meta = (metaSec && metaSec.data) || {};
     var lines = (version.items || []);
-    var subtotal = 0, weight = 0; lines.forEach(function (l) { if ((l.lineType || 'PRODUCT') === 'PRODUCT') { subtotal += (Number(l.quantity) || 0) * (Number(l.rateMinor) || 0); weight += (Number(l.quantity) || 0) * (Number(l.weightEach) || 0); } });
+    var subtotal = 0, weight = 0; var pCounted = countedRevenueByIndex(lines); lines.forEach(function (l, i) { if ((l.lineType || 'PRODUCT') === 'PRODUCT') { subtotal += pCounted[i]; weight += (Number(l.quantity) || 0) * (Number(l.weightEach) || 0); } });
     var tpFreight = 0; lines.forEach(function (l) { if ((l.lineType || 'PRODUCT') === 'PRODUCT') tpFreight += Number(l.tpFreightMinor) || 0; });
     var disc = discountOf(meta, subtotal); var discountPct = disc.pct, discountMode = disc.mode, discount = disc.amount;
     var tax = metaAmount(meta.taxAmountMinor, meta.tbdTax);
