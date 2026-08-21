@@ -8,7 +8,7 @@ import { prisma } from '../lib/prisma.js';
 import { authorizeUrl, exchangeCode, disconnect } from '../integrations/quickbooks/oauth.js';
 import { findOrCreateCustomer } from '../integrations/quickbooks/customers.js';
 import { syncItem, linkItemsBySku } from '../integrations/quickbooks/items.js';
-import { query } from '../integrations/quickbooks/client.js';
+import { query, readById } from '../integrations/quickbooks/client.js';
 import {
   listTerms,
   resolveTermForProposal,
@@ -190,6 +190,78 @@ export function registerQuickbooksRoutes(app: FastifyInstance): void {
       note: collision
         ? 'Project ID and Customer Purchase Order # resolve to the same custom-field slot. QuickBooks matches on the slot number, so one would overwrite the other — the PO is put in the memo instead. Give them different slots in QuickBooks.'
         : null,
+    };
+  });
+
+  /**
+   * What custom fields an invoice ALREADY IN QuickBooks actually carries.
+   *
+   * The slot lookup reads company preferences, which only ever list the three legacy
+   * sales-form fields. A company on Intuit's newer Custom Fields feature has its
+   * fields somewhere that lookup cannot see, so "no slot" is reported for a field
+   * that plainly exists on screen — which is exactly the position this company is in.
+   *
+   * The only reliable way to learn the ids the newer fields use is to read a document
+   * that has them filled in and look. This does that: hand-type the values on one
+   * invoice in QuickBooks, run this, and it returns the DefinitionId and Name of
+   * every custom field on that document. Those ids then go in
+   * QBO_CUSTOM_FIELD_ID_PROJECT and QBO_CUSTOM_FIELD_ID_PO and the push writes them
+   * directly, bypassing the preferences lookup entirely.
+   */
+  app.get('/integrations/quickbooks/invoice-fields/:versionId', transact, async (req, reply) => {
+    const { versionId } = req.params as { versionId: string };
+    const environment = qboEnvironment() as QboEnvironment;
+    const conn = await prisma.qboConnection.findFirst({ where: { environment, isActive: true } });
+    if (!conn) return reply.status(409).send({ error: 'NO_ACTIVE_CONNECTION' });
+
+    const txn = await prisma.qboTransaction.findFirst({
+      where: {
+        proposalVersionId: versionId,
+        type: 'INVOICE',
+        status: 'CREATED',
+        qboId: { not: null },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, qboId: true, qboDocNumber: true },
+    });
+    if (!txn?.qboId) {
+      return reply
+        .status(404)
+        .send({
+          error: 'NO_INVOICE',
+          message: 'No QuickBooks invoice has been created for that version.',
+        });
+    }
+
+    const read = await readById<{
+      Invoice: {
+        Id: string;
+        DocNumber?: string;
+        CustomField?: Array<{
+          DefinitionId?: string;
+          Name?: string;
+          Type?: string;
+          StringValue?: string;
+        }>;
+        CustomerMemo?: { value?: string };
+      };
+    }>(conn.realmId, 'invoice', txn.qboId);
+
+    const inv = read.Invoice;
+    return {
+      docNumber: inv?.DocNumber ?? txn.qboDocNumber,
+      qboId: inv?.Id ?? txn.qboId,
+      customFields: (inv?.CustomField ?? []).map((f) => ({
+        definitionId: f.DefinitionId ?? null,
+        name: f.Name ?? null,
+        value: f.StringValue ?? null,
+      })),
+      memo: inv?.CustomerMemo?.value ?? null,
+      hint:
+        'Put the definitionId of the Project ID row in QBO_CUSTOM_FIELD_ID_PROJECT, and the ' +
+        'Customer Purchase Order # row in QBO_CUSTOM_FIELD_ID_PO. An empty customFields array ' +
+        'means these fields are not exposed on the API at all, and the memo is the only place ' +
+        'the values can go.',
     };
   });
 
