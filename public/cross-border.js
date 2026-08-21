@@ -155,12 +155,15 @@
       rates: [],
       fx: null,
       taxability: [],
+      exemptions: [],
       schedules: [],
       inForceId: null,
       queue: [],
       busy: '',
       open: 'readiness',
       denied: false,
+      orgHits: [],
+      org: null,
     };
 
     host.innerHTML =
@@ -196,6 +199,7 @@
         authed('/cross-border/broker-fees'),
         authed('/cross-border/customs-queue'),
         authed('/cross-border/taxability'),
+        authed('/cross-border/exemptions'),
       ]);
       S.rates = results[0].ok ? (await results[0].json()) || [] : [];
       S.fx = results[1].ok ? await results[1].json() : { observations: [], overrides: [] };
@@ -206,6 +210,7 @@
       }
       S.queue = results[3].ok ? (await results[3].json()) || [] : [];
       S.taxability = results[4].ok ? (await results[4].json()) || [] : [];
+      S.exemptions = results[5].ok ? (await results[5].json()) || [] : [];
       render();
     }
 
@@ -740,6 +745,166 @@
       );
     }
 
+    /* ── Exemptions ────────────────────────────────────────────────────────── */
+
+    /* Only an APPROVED exemption suppresses tax. Being a school, a charity or a
+     * municipality is not itself an exemption, and a rebate the customer claims back
+     * later is not a point-of-sale one — so an unapproved row shows plainly as tax
+     * still being charged, rather than as a pending nicety. */
+    function exemptionsHtml() {
+      var pending = S.exemptions.filter(function (e) {
+        return !e.approvedById;
+      });
+      var live = S.exemptions.filter(function (e) {
+        return e.approvedById && inForce(e);
+      });
+      var past = S.exemptions.filter(function (e) {
+        return e.approvedById && !inForce(e);
+      });
+
+      function rowHtml(e) {
+        var approved = !!e.approvedById;
+        var on = approved && inForce(e);
+        return (
+          '<div style="border-top:1px solid #eef0ea;padding:12px 0;">' +
+          '<div style="display:flex;gap:14px;align-items:baseline;flex-wrap:wrap;">' +
+          '<div style="font-size:13.5px;font-weight:600;flex:1 1 200px;min-width:170px;">' +
+          '<span class="dot ' +
+          (on ? 'ok' : approved ? 'wait' : 'bad') +
+          '"></span>' +
+          esc(e.customer || 'unknown customer') +
+          '<div class="muted" style="font-size:12px;font-weight:400;margin-top:2px;">' +
+          esc((e.taxTypes || []).join(', ')) +
+          (e.exemptionType ? ' · ' + esc(e.exemptionType) : '') +
+          '</div></div>' +
+          '<div style="font-size:13px;flex:1 1 200px;">' +
+          esc(e.certificateNumber || 'no certificate number') +
+          '<div class="muted" style="font-size:12.5px;margin-top:2px;">' +
+          esc(e.issuingAuthority || 'no issuing authority recorded') +
+          '</div></div>' +
+          '<div class="muted" style="font-size:12.5px;flex:1 1 170px;">' +
+          day(e.effectiveFrom) +
+          ' → ' +
+          (e.effectiveTo ? day(e.effectiveTo) : 'open') +
+          '<br>' +
+          (approved
+            ? 'approved ' + esc(when(e.approvedAt))
+            : 'not approved — tax is still charged') +
+          '</div>' +
+          '<div style="display:flex;gap:7px;">' +
+          (approved
+            ? '<button class="link-btn" data-act="withdrawExemption" data-id="' +
+              esc(e.id) +
+              '" style="width:auto;padding:5px 11px;font-size:12.5px;white-space:nowrap;">Withdraw</button>' +
+              '<button class="link-btn" data-act="closeExemption" data-id="' +
+              esc(e.id) +
+              '" style="width:auto;padding:5px 11px;font-size:12.5px;white-space:nowrap;">Close</button>'
+            : '<button class="link-btn" data-act="approveExemption" data-id="' +
+              esc(e.id) +
+              '" style="width:auto;padding:5px 11px;font-size:12.5px;white-space:nowrap;">Approve</button>') +
+          '</div></div>' +
+          (e.notes
+            ? '<div class="muted" style="font-size:12.5px;line-height:1.5;margin-top:6px;white-space:pre-wrap;">' +
+              esc(e.notes) +
+              '</div>'
+            : '') +
+          '</div>'
+        );
+      }
+
+      return (
+        '<div class="muted" style="font-size:13px;line-height:1.6;max-width:680px;">' +
+        'Only an <b>approved</b> certificate suppresses tax. A customer being a school, a charity or a public body is not itself an exemption, ' +
+        'and a rebate they claim back later is not a point-of-sale one. Recording a certificate and vouching for it are two acts, ' +
+        'and the engine reads only the second.' +
+        '</div>' +
+        (pending.length
+          ? '<div class="section-title" style="margin:22px 0 2px;">Waiting on approval <span class="muted" style="font-weight:400;">(' +
+            pending.length +
+            ')</span></div>' +
+            pending.map(rowHtml).join('')
+          : '') +
+        (live.length
+          ? '<div class="section-title" style="margin:22px 0 2px;">In force</div>' +
+            live.map(rowHtml).join('')
+          : '<div class="muted" style="font-size:13px;margin-top:16px;">No approved exemption is in force. Every Canadian customer is charged tax.</div>') +
+        (past.length
+          ? '<div class="section-title" style="margin:22px 0 2px;">Closed <span class="muted" style="font-weight:400;">(' +
+            past.length +
+            ')</span></div>' +
+            past.map(rowHtml).join('')
+          : '') +
+        '<div class="section-title" style="margin:24px 0 6px;">Record a certificate</div>' +
+        '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">' +
+        '<label style="font-size:12.5px;color:#82877d;flex:1 1 240px;min-width:200px;">Customer<br>' +
+        '<input id="cbExOrgQ" placeholder="Type a name, then pick" value="' +
+        esc(S.org ? S.org.name : '') +
+        '" style="' +
+        IN +
+        'margin-top:4px;width:100%;"></label>' +
+        '<button class="link-btn" data-act="findOrg" style="' +
+        BTN +
+        '">Find</button>' +
+        '</div>' +
+        (S.orgHits.length
+          ? '<div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:9px;">' +
+            S.orgHits
+              .map(function (o) {
+                return (
+                  '<button class="link-btn" data-act="pickOrg" data-id="' +
+                  esc(o.id) +
+                  '" data-name="' +
+                  esc(o.name) +
+                  '" ' +
+                  'style="width:auto;padding:5px 11px;font-size:12.5px;white-space:nowrap;' +
+                  (S.org && S.org.id === o.id
+                    ? 'background:#2f3a2f;color:#fff;border-color:#2f3a2f;'
+                    : '') +
+                  '">' +
+                  esc(o.name) +
+                  '</button>'
+                );
+              })
+              .join('') +
+            '</div>'
+          : '') +
+        '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-top:12px;">' +
+        '<label style="font-size:12.5px;color:#82877d;">Covers<br>' +
+        '<select id="cbExTypes" multiple size="5" style="' +
+        IN +
+        'margin-top:4px;">' +
+        ['GST', 'HST', 'PST', 'RST', 'QST']
+          .map(function (t) {
+            return '<option>' + t + '</option>';
+          })
+          .join('') +
+        '</select></label>' +
+        '<label style="font-size:12.5px;color:#82877d;">Kind<br>' +
+        '<input id="cbExKind" placeholder="Provincial school board" style="' +
+        IN +
+        'margin-top:4px;width:180px;"></label>' +
+        '<label style="font-size:12.5px;color:#82877d;">Certificate number<br>' +
+        '<input id="cbExCert" style="' +
+        IN +
+        'margin-top:4px;width:170px;font-variant-numeric:tabular-nums;"></label>' +
+        '<label style="font-size:12.5px;color:#82877d;">Issued by<br>' +
+        '<input id="cbExAuth" placeholder="Ministry of Finance, Ontario" style="' +
+        IN +
+        'margin-top:4px;width:200px;"></label>' +
+        '<label style="font-size:12.5px;color:#82877d;">In force from<br>' +
+        '<input id="cbExFrom" type="date" value="' +
+        today() +
+        '" style="' +
+        IN +
+        'margin-top:4px;"></label>' +
+        '<button class="link-btn" data-act="addExemption" style="' +
+        BTN +
+        '">Record</button>' +
+        '</div>' +
+        '<div class="muted" style="font-size:12.5px;margin-top:9px;">Recorded unapproved. Tax keeps being charged until somebody with cross-border approval has read the certificate.</div>'
+      );
+    }
+
     /* ── Exchange rate ─────────────────────────────────────────────────────── */
 
     function fxHtml() {
@@ -1006,6 +1171,7 @@
       ['settings', 'Settings', settingsHtml],
       ['registrations', 'Tax registrations', registrationsHtml],
       ['rates', 'Tax rates', ratesHtml],
+      ['exemptions', 'Exemptions', exemptionsHtml],
       ['fx', 'Exchange rate', fxHtml],
       ['broker', 'Brokerage', brokerHtml],
       ['queue', 'Customs review queue', queueHtml],
@@ -1175,6 +1341,86 @@
               source: tbSrc,
             },
           },
+        ];
+      } else if (kind === 'findOrg') {
+        var q = val('cbExOrgQ');
+        if (q.length < 2) {
+          flash('Type at least two letters of the customer’s name.', true);
+          return;
+        }
+        S.busy = 'Searching…';
+        render();
+        var ro = await authed('/crm/organizations?q=' + encodeURIComponent(q) + '&pageSize=12');
+        S.busy = '';
+        S.orgHits = ro.ok ? ((await ro.json()) || {}).items || [] : [];
+        if (!S.orgHits.length) flash('No customer matched that.', true);
+        render();
+        return;
+      } else if (kind === 'pickOrg') {
+        S.org = { id: id, name: btn.getAttribute('data-name') };
+        render();
+        return;
+      } else if (kind === 'addExemption') {
+        if (!S.org) {
+          flash('Find and pick the customer first.', true);
+          return;
+        }
+        var sel = document.getElementById('cbExTypes');
+        var types = sel
+          ? Array.prototype.filter
+              .call(sel.options, function (o) {
+                return o.selected;
+              })
+              .map(function (o) {
+                return o.value;
+              })
+          : [];
+        if (!types.length) {
+          flash('Choose which taxes the certificate covers.', true);
+          return;
+        }
+        call = [
+          '/cross-border/exemptions',
+          {
+            method: 'POST',
+            body: {
+              organizationId: S.org.id,
+              taxTypes: types,
+              exemptionType: val('cbExKind') || null,
+              certificateNumber: val('cbExCert') || null,
+              issuingAuthority: val('cbExAuth') || null,
+              effectiveFrom: val('cbExFrom'),
+            },
+          },
+        ];
+      } else if (kind === 'approveExemption') {
+        if (
+          !confirm(
+            'Approving this takes sales tax off every proposal for this customer while it is in force. Continue?',
+          )
+        )
+          return;
+        call = ['/cross-border/exemptions/' + id + '/approve', { method: 'POST', body: {} }];
+      } else if (kind === 'withdrawExemption') {
+        var wWhy = prompt(
+          'Why is this approval being withdrawn? Tax starts being charged again immediately.',
+        );
+        if (!wWhy) return;
+        call = [
+          '/cross-border/exemptions/' + id + '/close',
+          { method: 'POST', body: { withdrawApproval: true, reason: wWhy } },
+        ];
+      } else if (kind === 'closeExemption') {
+        var endOn = prompt(
+          'Close this exemption on which date? The date is exclusive — it applies up to but not including it.',
+          today(),
+        );
+        if (endOn === null) return;
+        var cWhy = prompt('Why is it being closed?');
+        if (!cWhy) return;
+        call = [
+          '/cross-border/exemptions/' + id + '/close',
+          { method: 'POST', body: { effectiveTo: endOn || null, reason: cWhy } },
         ];
       } else if (kind === 'addOverride') {
         if (!val('cbFxRate') || !val('cbFxReason')) {

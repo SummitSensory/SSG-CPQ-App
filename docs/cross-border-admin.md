@@ -12,15 +12,16 @@ This adds the screen, the broker-fee arithmetic behind it, and the queue endpoin
 **Administration** → the _Canadian proposals and cross-border charges_ card, below the
 existing panels. Six tabs, in the order the work happens:
 
-| Tab                  | What it answers                                                 |
-| -------------------- | --------------------------------------------------------------- |
-| Readiness            | Why the feature cannot be switched on yet                       |
-| Settings             | The switch, the FX fallback, the release gates                  |
-| Tax registrations    | GST/HST first — one row unblocks every province                 |
-| Tax rates            | Rates by province, and what each charge category is taxable for |
-| Exchange rate        | What the Bank published; any manual override                    |
-| Brokerage            | Fee schedules, and what each would charge                       |
-| Customs review queue | Every Canadian proposal waiting on a decision                   |
+| Tab                  | What it answers                                                     |
+| -------------------- | ------------------------------------------------------------------- |
+| Readiness            | Why the feature cannot be switched on yet                           |
+| Settings             | The switch, the FX fallback, the release gates                      |
+| Tax registrations    | GST/HST first — one row unblocks every province                     |
+| Tax rates            | Rates by province, and what each charge category is taxable for     |
+| Exemptions           | Customer certificates — recorded by one person, approved by another |
+| Exchange rate        | What the Bank published; any manual override                        |
+| Brokerage            | Fee schedules, and what each would charge                           |
+| Customs review queue | Every Canadian proposal waiting on a decision                       |
 
 Gated on `CROSSBORDER_MANAGE`, except the queue and the fee estimate, which take
 `PROPOSAL_READ` so a rep can see their own job is waiting. A role without the
@@ -82,6 +83,28 @@ real property especially varies by province and needs a ruling.
 Rules are additive only here. Closing one still goes by migration, because a closed
 taxability rule changes what an issued proposal was calculated on.
 
+## Exemptions
+
+The engine already honoured `CustomerTaxExemption`, and only where `approved` is
+true. This adds the screen, and keeps that distinction visible: a customer being a
+school, a charity or a municipality is **not** itself an exemption, and a rebate they
+claim back later is not a point-of-sale one.
+
+Recording and approving are separate:
+
+- `POST /cross-border/exemptions` takes `FREIGHT_COST_WRITE` and always writes the row
+  **unapproved**, whoever calls it. Tax keeps being charged.
+- `POST .../approve` takes `CROSSBORDER_APPROVE` and refuses without a certificate
+  number _and_ an issuing authority. An approval nobody can check later is the thing
+  this refuses to produce.
+- `POST .../close` closes it on an exclusive date, so proposals already priced under it
+  keep their figures — or withdraws the approval outright, which is the immediate
+  lever for a certificate that turns out not to hold. Both require a reason, appended
+  to the notes and audited.
+
+An unapproved row reads as "not approved — tax is still charged" rather than as a
+pending nicety, because that is what it means on a live quote.
+
 ## Broker fees
 
 Brokerage is the one border charge that is genuinely knowable in advance: it comes off
@@ -131,7 +154,8 @@ Approving still happens on the proposal. This screen is the list, not the workfl
 - **No rate deletion.** Rates and taxability rules can be added, superseded and
   corrected, never removed — an issued proposal's snapshot references the row it was
   priced on.
-- **No exemption management.** `CustomerTaxExemption` has no screen yet.
+- **No exemption attachments.** `CustomerTaxExemption.attachmentId` exists; the screen
+  records the certificate's number and issuer, not a scan of it.
 
 ## Before enabling
 

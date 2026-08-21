@@ -132,6 +132,22 @@ const TaxRateSchema = z.object({
   supersedePrevious: z.boolean().optional(),
 });
 
+const ExemptionSchema = z.object({
+  organizationId: z.string().trim().min(1),
+  /** GST/HST, PST, RST, QST — a certificate may cover more than one. */
+  taxTypes: z.array(z.enum(['GST', 'HST', 'PST', 'RST', 'QST'])).min(1),
+  exemptionType: z.string().trim().max(80).nullable().optional(),
+  certificateNumber: z.string().trim().max(80).nullable().optional(),
+  issuingAuthority: z.string().trim().max(120).nullable().optional(),
+  effectiveFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  effectiveTo: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .nullable()
+    .optional(),
+  notes: z.string().trim().max(1000).nullable().optional(),
+});
+
 const TaxabilitySchema = z.object({
   category: z.enum([
     'EQUIPMENT',
@@ -807,6 +823,163 @@ export function registerCrossBorderRoutes(app: FastifyInstance): void {
       entity: 'CustomsBrokerFeeSchedule',
       entityId: id,
       details: { changed: Object.keys(body) },
+    });
+    return updated;
+  });
+
+  /* ── Customer tax exemptions ─────────────────────────────────────────────── */
+
+  /**
+   * A customer's exemption certificates.
+   *
+   * The engine already honours these, and only when `approved` is true. That is the
+   * whole reason this screen exists: being a school, a charity or a public body is
+   * NOT itself an exemption, and a rebate the customer claims back later is not a
+   * point-of-sale exemption either. Somebody has to look at the certificate.
+   *
+   * Recording and approving are deliberately different permissions. A rep can record
+   * the certificate a customer sent; deciding it removes 13% from an invoice is a
+   * compliance call.
+   */
+  app.get('/cross-border/exemptions', manage, async () => {
+    const exemptions = await prisma.customerTaxExemption.findMany({
+      orderBy: [{ effectiveFrom: 'desc' }],
+      take: 200,
+    });
+    if (exemptions.length === 0) return [];
+
+    const orgs = await prisma.organization.findMany({
+      where: { id: { in: [...new Set(exemptions.map((e) => e.organizationId))] } },
+      select: { id: true, name: true },
+    });
+    const name = new Map(orgs.map((o) => [o.id, o.name]));
+    return exemptions.map((e) => ({ ...e, customer: name.get(e.organizationId) ?? null }));
+  });
+
+  app.post('/cross-border/exemptions', enter, async (req) => {
+    const body = ExemptionSchema.parse(req.body ?? {});
+    const org = await prisma.organization.findUnique({
+      where: { id: body.organizationId },
+      select: { id: true },
+    });
+    if (!org) throw new NotFoundError('Customer not found.');
+
+    const created = await prisma.customerTaxExemption.create({
+      data: {
+        organizationId: body.organizationId,
+        taxTypes: body.taxTypes,
+        exemptionType: body.exemptionType ?? null,
+        certificateNumber: body.certificateNumber ?? null,
+        issuingAuthority: body.issuingAuthority ?? null,
+        effectiveFrom: dateOnly(body.effectiveFrom),
+        effectiveTo: body.effectiveTo ? dateOnly(body.effectiveTo) : null,
+        notes: body.notes ?? null,
+        createdById: req.user!.sub,
+        // Never approved on creation, whoever is calling. Recording a certificate and
+        // vouching for it are two acts, and the engine reads only the second.
+      },
+    });
+
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'crossborder.exemption.create',
+      entity: 'CustomerTaxExemption',
+      entityId: created.id,
+      details: {
+        organizationId: created.organizationId,
+        taxTypes: created.taxTypes,
+        certificateNumber: created.certificateNumber,
+        effectiveFrom: body.effectiveFrom,
+      },
+    });
+    return created;
+  });
+
+  /**
+   * Vouch for the certificate.
+   *
+   * Requires a certificate number and an issuing authority: an approval with neither
+   * is a decision nobody can check later, and this one takes tax off an invoice.
+   */
+  app.post('/cross-border/exemptions/:id/approve', approve, async (req) => {
+    const { id } = req.params as { id: string };
+    const before = await prisma.customerTaxExemption.findUnique({ where: { id } });
+    if (!before) throw new NotFoundError('Exemption not found.');
+    if (before.approvedById) return before;
+
+    if (!before.certificateNumber?.trim() || !before.issuingAuthority?.trim()) {
+      throw new ValidationError(
+        'Record the certificate number and who issued it before approving — this suppresses tax on every proposal for this customer.',
+      );
+    }
+
+    const updated = await prisma.customerTaxExemption.update({
+      where: { id },
+      data: { approvedById: req.user!.sub, approvedAt: new Date() },
+    });
+
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'crossborder.exemption.approve',
+      entity: 'CustomerTaxExemption',
+      entityId: id,
+      details: {
+        organizationId: updated.organizationId,
+        taxTypes: updated.taxTypes,
+        certificateNumber: updated.certificateNumber,
+        issuingAuthority: updated.issuingAuthority,
+      },
+    });
+    return updated;
+  });
+
+  /**
+   * Close an exemption, or withdraw its approval.
+   *
+   * Closing is dated and exclusive, like every other effective-dated row here, so
+   * proposals already priced under it keep their figures. Withdrawing the approval is
+   * the immediate lever for a certificate that turns out not to hold.
+   */
+  app.post('/cross-border/exemptions/:id/close', approve, async (req) => {
+    const { id } = req.params as { id: string };
+    const body = z
+      .object({
+        effectiveTo: z
+          .string()
+          .regex(/^\d{4}-\d{2}-\d{2}$/)
+          .nullable()
+          .optional(),
+        withdrawApproval: z.boolean().optional(),
+        reason: z.string().trim().min(5).max(500),
+      })
+      .parse(req.body ?? {});
+
+    const before = await prisma.customerTaxExemption.findUnique({ where: { id } });
+    if (!before) throw new NotFoundError('Exemption not found.');
+
+    const updated = await prisma.customerTaxExemption.update({
+      where: { id },
+      data: {
+        ...(body.effectiveTo !== undefined
+          ? { effectiveTo: body.effectiveTo ? dateOnly(body.effectiveTo) : null }
+          : {}),
+        ...(body.withdrawApproval ? { approvedById: null, approvedAt: null } : {}),
+        notes: [before.notes, body.reason].filter(Boolean).join('\n'),
+      },
+    });
+
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: body.withdrawApproval
+        ? 'crossborder.exemption.withdraw'
+        : 'crossborder.exemption.close',
+      entity: 'CustomerTaxExemption',
+      entityId: id,
+      details: {
+        organizationId: before.organizationId,
+        effectiveTo: body.effectiveTo ?? null,
+        reason: body.reason,
+      },
     });
     return updated;
   });
