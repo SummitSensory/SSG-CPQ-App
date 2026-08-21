@@ -749,7 +749,7 @@
                 '</div>' +
                 '</div>' +
                 '<div style="text-align:right;white-space:nowrap;font-size:12.5px;font-variant-numeric:tabular-nums;">' +
-                esc(H.fmt0 ? H.fmt0(l.extendedMinor / 100) : money(l.extendedMinor)) +
+                money(l.extendedMinor) +
                 '<div class="muted" style="font-size:11.5px;">' +
                 (l.currentMinor ? money(l.currentMinor) + ' freight' : 'no freight') +
                 '</div>' +
