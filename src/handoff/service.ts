@@ -1218,11 +1218,25 @@ export async function patchProcurementLine(
       ...quantityData,
     },
   });
+  /**
+   * A cost change gets its own action name and its own before/after.
+   *
+   * Lumping it into `bom.line.update` meant the one edit on this screen that moves
+   * the job's margin read the same as a note being retyped. Somebody asking "why is
+   * this job's margin different from the day we accepted it" has to be able to find
+   * it, and a generic action name buried among note edits is not findable.
+   */
+  const action =
+    patch.quantity !== undefined
+      ? 'bom.line.quantity'
+      : patch.unitCostMinor !== undefined
+        ? 'bom.line.cost'
+        : 'bom.line.update';
   await logEvent(
     existing.orderId,
-    patch.quantity !== undefined ? 'bom.line.quantity' : 'bom.line.update',
+    action,
     userId,
-    patch.quantity !== undefined
+    action === 'bom.line.quantity'
       ? {
           ...(patch as Record<string, unknown>),
           sku: existing.sku,
@@ -1230,7 +1244,20 @@ export async function patchProcurementLine(
           from: existing.quantity,
           to: patch.quantity,
         }
-      : (patch as Record<string, unknown>),
+      : action === 'bom.line.cost'
+        ? {
+            ...(patch as Record<string, unknown>),
+            sku: existing.sku,
+            name: existing.name,
+            vendor: existing.vendor,
+            quantity: existing.quantity,
+            fromMinor: existing.unitCostMinor ?? 0,
+            toMinor: patch.unitCostMinor ?? 0,
+            extendedDeltaMinor:
+              ((patch.unitCostMinor ?? 0) - (existing.unitCostMinor ?? 0)) *
+              (Number(existing.quantity) || 0),
+          }
+        : (patch as Record<string, unknown>),
   );
   return line;
 }

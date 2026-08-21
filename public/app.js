@@ -10113,6 +10113,26 @@
    */
   var bomAllAddresses = false;
 
+
+  /**
+   * The unit cost, editable while the section is open.
+   *
+   * Costs are copied onto the order at acceptance and never re-read, which is what
+   * keeps a sent sheet honest — but it also means a catalog typo is stuck on every
+   * job already in flight. This is the per-line correction; "Refresh costs" below
+   * does the whole section at once.
+   *
+   * Cost is internal. Changing it moves this sheet's totals and the job's margin and
+   * reaches nothing the customer has seen.
+   */
+  function costCell(p, edit) {
+    if (!edit) return money2(p.unitCostMinor);
+    return '<input class="bomLine" data-id="' + p.id + '" data-f="unitCostMinor" ' +
+      'value="' + (Number(p.unitCostMinor || 0) / 100).toFixed(2) + '" ' +
+      'inputmode="decimal" title="Unit cost. Internal — the customer never sees it." ' +
+      'style="' + bomFieldStyle('92px') + 'text-align:right;background:#fdfcf7;border-color:#e4dfd0;">';
+  }
+
   function bomFieldStyle(w, locked) {
     return 'width:' + (w || '100%') + ';padding:7px 9px;border:1px solid ' + (locked ? '#e7e8e3' : '#dcded7') +
       ';border-radius:8px;font-size:13px;background:' + (locked ? '#f6f7f4' : '#fff') +
@@ -10145,7 +10165,8 @@
         '<label style="display:flex;gap:7px;align-items:center;font-size:12.5px;color:#5c6157;cursor:pointer;white-space:nowrap;" title="Off, the ship-to list shows this order’s confirmed address and the reusable ones. On, it also shows addresses confirmed by other orders’ customers.">' +
           '<input type="checkbox" id="bomAllAddr"' + (bomAllAddresses ? ' checked' : '') + '> Show every saved address</label>' +
         (canHandoff
-          ? '<button class="link-btn" id="bomApplyBuild" title="Re-read Catalog → BOM build: explode any part declared as made of other parts, and move free-issue parts onto the vendor they ship to" style="width:auto;padding:8px 14px;white-space:nowrap;">Apply BOM build rules</button>'
+          ? '<button class="link-btn" id="bomApplyBuild" title="Re-read Catalog → BOM build: explode any part declared as made of other parts, and move free-issue parts onto the vendor they ship to" style="width:auto;padding:8px 14px;white-space:nowrap;">Apply BOM build rules</button>' +
+            '<button class="link-btn" id="bomCostRefresh" title="Compare every line against the catalog cost and pick which to bring up to date. Internal only — the customer’s proposal and invoice are untouched." style="width:auto;padding:8px 14px;white-space:nowrap;">Refresh costs from catalog</button>'
           : '') +
       '</div>' +
       bomSectionData.map(function (s, i) { return sectionCard(s, i, canHandoff); }).join('') +
@@ -10211,7 +10232,7 @@
         (showBag ? td(esc(p.packagingBag || '—')) : '') +
         (showColor ? td((p.paintGroup ? '<span class="chip" style="font-size:10.5px;margin-bottom:4px;display:inline-block;" title="Paint colour group">' + esc(p.paintGroup) + '</span> ' : '') + (edit ? colorCell(p) : esc(p.powderColor || '—'))) : '') +
         td(((Number(p.unitWeightLbs) || 0) * (Number(p.quantity) || 0)).toFixed(2)) +
-        td(free ? freeCell : money2(p.unitCostMinor)) +
+        td(free ? freeCell : costCell(p, edit)) +
         td(free ? freeCell : money2(ext)) +
         td(edit
           ? '<input class="bomLine" data-id="' + p.id + '" data-f="vendorNotes" value="' + esc(p.vendorNotes || '') + '" placeholder="—" style="' + bomFieldStyle('160px') + '">'
@@ -10605,15 +10626,17 @@
         var f = el.getAttribute('data-f'), body = {};
         if (f === 'sourced') body[f] = el.value === 'true';
         else if (f === 'quantity') body[f] = Math.round(Number(el.value));
+        else if (f === 'unitCostMinor') body[f] = d2m(el.value);
         else body[f] = el.value.trim();
         if (f === 'quantity' && !(body[f] >= 1)) { alert('Quantity must be a whole number of at least 1.'); reload(); return; }
+        if (f === 'unitCostMinor' && !(body[f] >= 0)) { alert('Enter the cost as plain dollars — 145 or 145.00.'); reload(); return; }
         el.style.borderColor = '#c9a227';
         var r = await authed('/orders/procurement/' + el.getAttribute('data-id'), { method: 'PATCH', body: body });
         el.style.borderColor = r.ok ? '#3f9d78' : '#c2452f';
         if (!r.ok) { await fail(r, 'Could not save the line'); reload(); return; }
         // A quantity change moves the section totals and the edited badge, so the
         // panel is rebuilt from the server rather than patched in place.
-        if (f === 'quantity') { refreshLines(); return; }
+        if (f === 'quantity' || f === 'unitCostMinor') { refreshLines(); return; }
         var line = (procData || []).filter(function (x) { return x.id === el.getAttribute('data-id'); })[0];
         if (line) line[f] = body[f];
         setTimeout(function () { el.style.borderColor = '#dcded7'; }, 900);
@@ -10635,6 +10658,133 @@
     if (allAddr) allAddr.addEventListener('change', function () {
       bomAllAddresses = allAddr.checked;
       reload();
+    });
+
+    /**
+     * Refresh costs from the catalog.
+     *
+     * A preview first, always. Costs were copied onto this order at acceptance and
+     * nothing has propagated since, which is deliberate — but when a catalog figure
+     * was simply wrong, every line carrying it needs correcting, and doing that
+     * silently would mean a job's margin changed with nobody able to say when or why.
+     * So: the differences in words, tick what to apply, and the whole thing lands in
+     * the order's history.
+     */
+    var costBtn = document.getElementById('bomCostRefresh');
+    if (costBtn) costBtn.addEventListener('click', async function () {
+      costBtn.disabled = true;
+      var was = costBtn.textContent;
+      costBtn.textContent = 'Comparing…';
+      var pr = await authed('/orders/' + order.id + '/bom/cost-refresh');
+      costBtn.disabled = false;
+      costBtn.textContent = was;
+      if (!pr.ok) { await fail(pr, 'Could not compare the costs'); return; }
+      var pv = await pr.json();
+
+      if (!pv.rows.length) {
+        openModal('Costs match the catalog',
+          '<p style="font-size:13.5px;line-height:1.6;">Every line on this order already carries the catalog cost.' +
+          (pv.unmatched ? ' ' + pv.unmatched + ' line' + (pv.unmatched === 1 ? ' has' : 's have') +
+            ' no catalog row to compare against — hand-added parts and generated mat numbers.' : '') +
+          '</p>', null);
+        return;
+      }
+
+      var chosen = {};
+      pv.rows.forEach(function (row) { if (!row.blocked) chosen[row.lineId] = true; });
+
+      function money(minor) {
+        var n = (Number(minor) || 0) / 100;
+        return (n < 0 ? '−$' : '$') + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      }
+      function body() {
+        var picked = pv.rows.filter(function (r) { return chosen[r.lineId]; });
+        var net = picked.reduce(function (t, r) { return t + r.extendedDeltaMinor; }, 0);
+        return '<p style="font-size:13.5px;line-height:1.6;margin:0 0 12px;">' +
+            pv.rows.length + ' line' + (pv.rows.length === 1 ? '' : 's') + ' differ from the catalog. ' +
+            'Cost is internal: this moves this sheet\u2019s totals and the job\u2019s margin, and reaches nothing ' +
+            'the customer has signed or been sent.' +
+          '</p>' +
+          '<div style="max-height:46vh;overflow:auto;border:1px solid #e7e8e3;border-radius:10px;">' +
+          '<table style="width:100%;border-collapse:collapse;font-size:12.5px;">' +
+          '<thead><tr style="background:#fbfbf9;">' +
+            '<th style="padding:8px 10px;text-align:left;width:28px;"></th>' +
+            '<th style="padding:8px 10px;text-align:left;">Part</th>' +
+            '<th style="padding:8px 10px;text-align:right;">Now</th>' +
+            '<th style="padding:8px 10px;text-align:right;">Catalog</th>' +
+            '<th style="padding:8px 10px;text-align:right;">On this job</th>' +
+          '</tr></thead><tbody>' +
+          pv.rows.map(function (r) {
+            var up = r.extendedDeltaMinor > 0;
+            return '<tr style="border-top:1px solid #f2f3ef;' + (r.blocked ? 'opacity:.55;' : '') + '">' +
+              '<td style="padding:7px 10px;">' +
+                (r.blocked
+                  ? '<span title="' + esc(r.blocked) + '" style="color:#8a8f85;">\u2014</span>'
+                  : '<input type="checkbox" class="crPick" data-id="' + esc(r.lineId) + '"' +
+                    (chosen[r.lineId] ? ' checked' : '') + ' style="width:15px;height:15px;">') +
+              '</td>' +
+              '<td style="padding:7px 10px;">' + esc(r.name) +
+                '<div class="muted" style="font-size:11.5px;">' + esc(r.sku || '\u2014') + ' \u00b7 ' +
+                esc(r.vendor) + ' \u00b7 qty ' + r.quantity +
+                (r.freeIssue ? ' \u00b7 free issue' : '') +
+                (r.blocked ? '<div style="color:#9c3327;">' + esc(r.blocked) + '</div>' : '') + '</div></td>' +
+              '<td style="padding:7px 10px;text-align:right;font-variant-numeric:tabular-nums;">' + money(r.currentMinor) + '</td>' +
+              '<td style="padding:7px 10px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600;">' + money(r.catalogMinor) + '</td>' +
+              '<td style="padding:7px 10px;text-align:right;font-variant-numeric:tabular-nums;color:' +
+                (up ? '#9c3327' : '#2f7d5d') + ';">' + (up ? '+' : '') + money(r.extendedDeltaMinor) + '</td>' +
+            '</tr>';
+          }).join('') +
+          '</tbody></table></div>' +
+          '<div style="display:flex;justify-content:space-between;gap:12px;margin-top:11px;font-size:13.5px;font-weight:600;">' +
+            '<span>' + picked.length + ' of ' + pv.rows.length + ' selected</span>' +
+            '<span style="font-variant-numeric:tabular-nums;">Job cost moves ' + (net > 0 ? '+' : '') + money(net) + '</span>' +
+          '</div>' +
+          (pv.unmatched
+            ? '<div class="muted" style="font-size:12px;margin-top:8px;">' + pv.unmatched + ' line' +
+              (pv.unmatched === 1 ? ' has' : 's have') + ' no catalog row and are left alone \u2014 hand-added parts and generated mat numbers.</div>'
+            : '') +
+          (pv.blocked
+            ? '<div style="font-size:12px;margin-top:6px;color:#9c3327;">' + pv.blocked + ' line' +
+              (pv.blocked === 1 ? '' : 's') + ' sit on a submitted sheet. Unlock that section to reprice them.</div>'
+            : '');
+      }
+
+      openModal('Refresh costs from the catalog', '<div id="crBody">' + body() + '</div>', async function (close, showErr) {
+        var ids = Object.keys(chosen).filter(function (k) { return chosen[k]; });
+        if (!ids.length) return showErr('Tick at least one line.');
+        var rr = await authed('/orders/' + order.id + '/bom/cost-refresh', {
+          method: 'POST', body: { lineIds: ids },
+        });
+        if (!rr.ok) {
+          var msg = 'Could not reprice the lines';
+          try { var j = await rr.json(); msg = j.message || j.error || msg; } catch (e2) {}
+          return showErr(msg);
+        }
+        var res = await rr.json();
+        close();
+        if (res.skipped && res.skipped.length) {
+          alert(res.applied + ' line(s) repriced. ' + res.skipped.length +
+            ' were skipped:\n\n' + res.skipped.map(function (x) { return '\u2022 ' + x.reason; }).join('\n'));
+        }
+        refreshLines();
+      }, 'Reprice the selected lines', { maxWidth: '760px' });
+
+      /* Re-tick in place. The running total at the bottom has to move as lines are
+       * ticked — a selection whose consequence you cannot see is not a review — so the
+       * container is repainted and re-wired on every change. */
+      var wirePicks = function () {
+        var host = document.getElementById('crBody');
+        if (!host) return;
+        host.querySelectorAll('.crPick').forEach(function (cb) {
+          cb.addEventListener('change', function () {
+            var id = cb.getAttribute('data-id');
+            if (cb.checked) chosen[id] = true; else delete chosen[id];
+            host.innerHTML = body();
+            wirePicks();
+          });
+        });
+      };
+      setTimeout(wirePicks, 0);
     });
 
     var applyBtn = document.getElementById('bomApplyBuild');

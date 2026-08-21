@@ -4,8 +4,15 @@ import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import { ValidationError } from '../lib/errors.js';
 import {
-  listRfqVendors, createRfq, setLineIncluded, addRfqLine, removeRfqLine,
-  setRfqNotes, startRfqRevision, buildRfqModel, listProposalRfqs,
+  listRfqVendors,
+  createRfq,
+  setLineIncluded,
+  addRfqLine,
+  removeRfqLine,
+  setRfqNotes,
+  startRfqRevision,
+  buildRfqModel,
+  listProposalRfqs,
 } from '../handoff/freightRfq.js';
 import { renderRfqHtml, rfqFilename } from '../handoff/freightRfqDocument.js';
 import { renderPdf, pdfAvailable } from '../render/pdf.js';
@@ -51,7 +58,8 @@ const SendSchema = z.object({
 
 function parse<T>(schema: z.ZodType<T>, body: unknown): T {
   const parsed = schema.safeParse(body);
-  if (!parsed.success) throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid request');
+  if (!parsed.success)
+    throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid request');
   return parsed.data;
 }
 
@@ -62,7 +70,10 @@ export function registerFreightRfqRoutes(app: FastifyInstance): void {
   /** Vendors on this version, RFQ-capable first. */
   app.get('/proposals/versions/:versionId/rfq/vendors', read, async (req) => {
     const { versionId } = req.params as { versionId: string };
-    return { vendors: await listRfqVendors(versionId) };
+    // Spread, not { vendors }: listRfqVendors also reports the parts it could not
+    // attribute to any vendor, and swallowing that here is what made a short
+    // vendor list look complete.
+    return await listRfqVendors(versionId);
   });
 
   /**
@@ -73,7 +84,7 @@ export function registerFreightRfqRoutes(app: FastifyInstance): void {
   app.post('/proposals/versions/:versionId/rfq/vendors', read, async (req) => {
     const { versionId } = req.params as { versionId: string };
     const { lines } = parse(DraftLinesSchema, req.body);
-    return { vendors: await listRfqVendors(versionId, lines) };
+    return await listRfqVendors(versionId, lines);
   });
 
   /**
@@ -82,7 +93,9 @@ export function registerFreightRfqRoutes(app: FastifyInstance): void {
    * Read-only and cheap enough to run on every dashboard load: it examines only
    * the latest released version of each proposal and batches its lookups.
    */
-  app.get('/proposals/freight-alerts', read, async () => ({ alerts: await releasedFreightAlerts() }));
+  app.get('/proposals/freight-alerts', read, async () => ({
+    alerts: await releasedFreightAlerts(),
+  }));
 
   /** Line-by-line freight state for one version, from the stored lines. */
   app.get('/proposals/versions/:versionId/freight-coverage', read, async (req) => {

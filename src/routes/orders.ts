@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import { ValidationError } from '../lib/errors.js';
+import { applyCostRefresh, previewCostRefresh } from '../handoff/costRefresh.js';
 import {
   createAcceptedOrder,
   getOrder,
@@ -318,6 +319,30 @@ export function registerOrderRoutes(app: FastifyInstance): void {
     if (!parsed.success)
       throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid line');
     return patchProcurementLine(lineId, parsed.data, req.user!.sub);
+  });
+
+  /**
+   * Costs, re-read from the catalog.
+   *
+   * The preview is a read: it states every line whose cost differs, what it would
+   * become, and what that does to the job. Applying it is a handoff act and takes an
+   * explicit list of lines — nothing is repriced that nobody looked at.
+   *
+   * Cost is internal. This moves the Bill of Materials' totals and the job's margin;
+   * it does not touch the proposal, the price snapshot or the invoice.
+   */
+  app.get('/orders/:id/bom/cost-refresh', read, async (req) => {
+    const { id } = req.params as { id: string };
+    const q = req.query as { vendor?: string };
+    return previewCostRefresh(id, { vendor: q.vendor });
+  });
+
+  app.post('/orders/:id/bom/cost-refresh', handoff, async (req) => {
+    const { id } = req.params as { id: string };
+    const b = (req.body || {}) as { lineIds?: unknown };
+    if (!Array.isArray(b.lineIds) || !b.lineIds.length)
+      throw new ValidationError('lineIds is required — pick the lines to reprice.');
+    return applyCostRefresh(id, b.lineIds.map(String), req.user!.sub);
   });
 
   /** Set one powder colour across every steel line on the order. */

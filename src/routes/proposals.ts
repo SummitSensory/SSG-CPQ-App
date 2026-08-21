@@ -29,6 +29,12 @@ import {
   type ProposalSection,
 } from '../proposals/sections.js';
 import { pushReleasedProposal } from '../integrations/monday/proposalPush.js';
+import {
+  crossBorderStateFor,
+  describeCrossBorderBlocker,
+  freezeCrossBorderSnapshot,
+  writeCrossBorderSnapshot,
+} from '../crossborder/snapshot.js';
 import { backfillProjectIdOnVersions } from '../crm/projectId.js';
 
 const SectionSchema = z.object({
@@ -424,9 +430,70 @@ export function registerProposalRoutes(app: FastifyInstance): void {
       where: { id: versionId },
       select: { priceSnapshotId: true, sections: true, items: true },
     });
+    /**
+     * A Canadian proposal cannot be released while its tax or customs figures are
+     * unresolved.
+     *
+     * Checked BEFORE changeStatus, so a refusal leaves the proposal exactly as it
+     * was — same contract as the unpriced-line gate below it. Nothing is written on
+     * the way out.
+     *
+     * The two gates are separately configurable because they fail for different
+     * reasons: customs is usually waiting on a broker, tax on a registration or an
+     * address. An administrator can release with either outstanding, but has to say
+     * so deliberately.
+     */
+    const cbState = await crossBorderStateFor(versionId);
+    if (cbState.applicable && cbState.blockers.length) {
+      const settings = await prisma.crossBorderSetting.findUnique({
+        where: { id: 'singleton' },
+      });
+      const blocking = cbState.blockers.filter((b) => {
+        if (
+          b.startsWith('customs:') ||
+          b === 'calc:customs_requires_review' ||
+          b === 'calc:broker_fee_unconfirmed'
+        ) {
+          return settings?.requireCustomsReviewBeforeFinal !== false;
+        }
+        if (b.startsWith('tax:') || b === 'calc:tax_requires_review') {
+          return settings?.requireTaxReviewBeforeFinal !== false;
+        }
+        // An address problem or a missing exchange rate is never optional: without
+        // them there is no jurisdiction and no CAD figures to print.
+        return true;
+      });
+      if (blocking.length) {
+        throw new ValidationError(
+          `This Canadian proposal cannot be released yet: ${blocking.map(describeCrossBorderBlocker).join(' ')}`,
+        );
+      }
+    }
+
     // Throws before anything is written when a line is still unpriced, or is $0.00
     // with no reason given — the proposal stays exactly as it was.
     await changeStatus(versionId, 'RELEASED', req.user!.sub, body.note);
+
+    /**
+     * Freeze the Canadian calculation at release.
+     *
+     * Same reasoning as the PriceSnapshot above: a released version is the document
+     * of record, so refreshing a tax table, correcting a broker schedule or a change
+     * in the day's exchange rate must not restate it. Written then frozen; after this
+     * the row is history and writeCrossBorderSnapshot refuses to touch it.
+     *
+     * Reported, never fatal. The proposal IS released at this point, and throwing
+     * here would leave a released version with an unfrozen calculation — worse than
+     * a released version whose snapshot needs a retry.
+     */
+    if (cbState.applicable) {
+      try {
+        await writeCrossBorderSnapshot(versionId, req.user!.sub);
+        await freezeCrossBorderSnapshot(versionId, req.user!.sub);
+      } catch (err) {
+        req.log.error({ err, versionId }, 'cross-border snapshot could not be frozen at release');
+      }
+    }
     // A released version is the price of record from here on, so it gets a
     // PriceSnapshot at release time rather than waiting for acceptance — but never
     // overwrite one a prior release or acceptance already froze.
@@ -486,6 +553,26 @@ export function registerProposalRoutes(app: FastifyInstance): void {
   app.post('/proposals/versions/:versionId/accept', review, async (req) => {
     const { versionId } = req.params as { versionId: string };
     await changeStatus(versionId, 'ACCEPTED', req.user!.sub, (req.body as { note?: string })?.note);
+
+    /**
+     * Re-lock the CAD reference amounts to the acceptance date.
+     *
+     * The business rule: the proposal is quoted on the rate published on or before
+     * the proposal date, and the accepted CAD amount uses the rate published on or
+     * before the acceptance date. Both are kept — the original is never overwritten,
+     * because that is the figure the customer was shown.
+     *
+     * freezeCrossBorderSnapshot is idempotent and returns quietly when the version
+     * has no Canadian calculation, so this costs a US proposal one indexed lookup.
+     */
+    try {
+      await freezeCrossBorderSnapshot(versionId, req.user!.sub, {
+        acceptanceDate: new Date().toISOString().slice(0, 10),
+      });
+    } catch (err) {
+      req.log.error({ err, versionId }, 'acceptance-date CAD lock failed');
+    }
+
     return { status: 'ACCEPTED' };
   });
   // Rejecting or shelving a proposal also takes any unanswered freight request back

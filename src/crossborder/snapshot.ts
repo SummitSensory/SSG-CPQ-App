@@ -420,3 +420,44 @@ export async function readCrossBorderSnapshot(versionId: string) {
     orderBy: { createdAt: 'desc' },
   });
 }
+
+/**
+ * A blocker code, in words a rep can act on.
+ *
+ * The codes are namespaced by where the problem is — `address:`, `fx:`, `tax:`,
+ * `customs:`, `calc:` — because the release path filters on that prefix to decide
+ * which are optional under the current settings. They are not written for people,
+ * so nothing should ever show a raw one: this is the one place that turns them into
+ * a sentence, and an unrecognised code falls back to the code itself rather than to
+ * silence, so a new blocker is visible the day it is added.
+ */
+export function describeCrossBorderBlocker(code: string): string {
+  const key = String(code ?? '').trim();
+  const known: Record<string, string> = {
+    'fx:review_required':
+      'No exchange rate could be resolved for this date, so the Canadian figures cannot be printed.',
+    'tax:manual_amount_present':
+      'The proposal carries a manually entered tax amount. Clear it — Canadian tax is calculated from the rate table.',
+    'calc:tax_requires_review': 'The tax calculation needs review before this goes out.',
+    'calc:customs_requires_review': 'The customs figures need review before this goes out.',
+    'calc:broker_fee_unconfirmed': 'The brokerage fee has not been confirmed.',
+    'calc:missing_taxability_rule':
+      'A charge on this proposal has no taxability rule, so nobody has said whether it is taxed.',
+    'calc:missing_tax_rate': 'The destination province has no tax rate in force on this date.',
+  };
+  if (known[key]) return known[key];
+
+  if (key.startsWith('address:')) {
+    return `The ship-to address is incomplete (${key.slice('address:'.length).replace(/_/g, ' ')}), so there is no jurisdiction to tax against.`;
+  }
+  if (key.startsWith('customs:')) {
+    return `Customs entry: ${key.slice('customs:'.length).replace(/_/g, ' ')}.`;
+  }
+  if (key.startsWith('tax:')) {
+    return `Tax: ${key.slice('tax:'.length).replace(/_/g, ' ')}.`;
+  }
+  if (key.startsWith('calc:')) {
+    return `Calculation: ${key.slice('calc:'.length).replace(/_/g, ' ')}.`;
+  }
+  return key;
+}
