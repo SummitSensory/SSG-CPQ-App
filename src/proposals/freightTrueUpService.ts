@@ -33,6 +33,7 @@ import {
   type FreightScope,
   type LineContext,
 } from './freightTrueUp.js';
+import { Prisma as PrismaRuntime } from '@prisma/client';
 import type { FreightEntry, FreightTrueUp, Prisma } from '@prisma/client';
 
 /**
@@ -85,6 +86,9 @@ async function lineContext(): Promise<LineContext> {
   const freightQuotedSkus = new Set<string>();
   for (const s of skus) {
     const key = s.part.trim().toUpperCase();
+    // Sku.manufacturer is nullable: a part can exist before anybody has said who
+    // makes it. Such a line still shows in the picker, just without a vendor name.
+    if (!s.manufacturer) continue;
     vendorBySku.set(key, s.manufacturer);
     if (quoting.has(s.manufacturer)) freightQuotedSkus.add(key);
   }
@@ -272,7 +276,10 @@ export async function saveEntry(input: SaveEntryInput, actorId: string): Promise
     source,
     status: 'STAGED' as const,
     amountMinor: input.amountMinor,
-    allocations: allocations ?? null,
+    // A nullable Json column is cleared with DbNull, not with `null` — `null` in a
+    // Prisma Json field means "the JSON value null", which is a different thing and
+    // is not accepted here. A JOB entry has no per-item split to store.
+    allocations: allocations ?? PrismaRuntime.DbNull,
     vendorName: input.vendorName ?? null,
     vendorQuoteRef: input.vendorQuoteRef ?? null,
     quoteAttachmentId: input.quoteAttachmentId ?? null,
@@ -836,7 +843,7 @@ export async function freightQueue(
     }),
   ]);
 
-  const orgName = new Map(orgs.map((o) => [o.id, o.name]));
+  const orgName = new Map<string, string>(orgs.map((o) => [o.id, o.name] as [string, string]));
   const invoiced = new Set(invoices.map((i) => i.proposalId));
   const latestTrueUp = new Map<string, FreightTrueUp>();
   for (const t of trueUps) if (!latestTrueUp.has(t.versionId)) latestTrueUp.set(t.versionId, t);
@@ -966,7 +973,7 @@ export async function invoiceAlerts(
         id: true,
         number: true,
         title: true,
-        organization: { select: { name: true } },
+        organizationId: true,
         versions: {
           where: { status: { in: ['RELEASED', 'ACCEPTED'] } },
           orderBy: { version: 'desc' },
@@ -981,6 +988,14 @@ export async function invoiceAlerts(
       orderBy: { createdAt: 'desc' },
     }),
   ]);
+
+  // Customer names in a second query rather than through a relation include: Proposal
+  // holds organizationId, not an Organization relation.
+  const orgs = await prisma.organization.findMany({
+    where: { id: { in: [...new Set(proposals.map((p) => p.organizationId))] } },
+    select: { id: true, name: true },
+  });
+  const orgName = new Map<string, string>(orgs.map((o) => [o.id, o.name] as [string, string]));
 
   const invoiceByProposal = new Map<string, (typeof invoices)[number]>();
   for (const i of invoices)
@@ -1025,7 +1040,7 @@ export async function invoiceAlerts(
       trueUpId: trueUp?.id ?? null,
       number: p.number,
       title: p.title,
-      customer: p.organization?.name ?? '—',
+      customer: orgName.get(p.organizationId) ?? '—',
       docNumber: invoice.qboDocNumber,
       invoiceTotalMinor: (invoice.qboTotalMinor ?? invoice.amountMinor).toString(),
       unbilledMinor: unbilled,

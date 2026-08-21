@@ -140,7 +140,7 @@ export function registerFreightTrueUpRoutes(app: FastifyInstance): void {
     return {
       ...state,
       live: serialize(state.live),
-      history: state.history.map((h) => serialize(h)),
+      history: state.history.map((h: FreightTrueUp) => serialize(h)),
     };
   });
 

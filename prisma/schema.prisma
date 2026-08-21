@@ -1049,6 +1049,7 @@ model Proposal {
   versions       ProposalVersion[]
   freightRfqs    FreightRfq[]
   freightTrueUps FreightTrueUp[]
+  freightEntries FreightEntry[]
 
   @@index([organizationId])
   @@index([opportunityId])
@@ -2259,15 +2260,18 @@ model FreightRfqSend {
 ///
 /// It is deliberately NOT a new proposal version. The customer signed P-2026-0117
 /// v3 and that document keeps its number, its signature and its line items; only
-/// the freight fields move, and only through this record — which carries who
-/// entered the figure, which vendor quoted it, the quote reference, the before and
-/// after totals, and what was done to the QuickBooks invoice as a result.
+/// the freight fields move, and only through this record.
+///
+/// The true-up is the FOLDER; the money lives in FreightEntry rows beneath it.
+/// That split is what lets freight arrive in instalments — steel from the
+/// fabricator this week, mats from Resilite a fortnight later — with each figure
+/// carrying its own source, evidence, and its own trip to the invoice.
 enum FreightTrueUpStatus {
   /// Raised: freight is known to be outstanding. Nothing entered yet.
   OPEN
-  /// Amounts entered and evidenced, not yet written onto the proposal.
+  /// At least one amount entered and evidenced, not all applied.
   STAGED
-  /// Written onto the proposal; the price snapshot has been re-frozen.
+  /// Everything entered has been written onto the proposal.
   APPLIED
   /// Withdrawn — including "no freight applies", which carries a reason.
   VOID
@@ -2281,6 +2285,41 @@ enum FreightInvoiceMode {
   SUPPLEMENT
 }
 
+/// The four ways freight reaches Summit. STEEL and MATS are quoted on the monday
+/// deal board and read from it; THERAPEUTIC and OTHER are entered by hand.
+enum FreightBucketKind {
+  STEEL
+  MATS
+  THERAPEUTIC
+  OTHER
+}
+
+/// Where a figure came from. A MANUAL figure in a MONDAY bucket is an override and
+/// carries a reason.
+enum FreightEntrySource {
+  MONDAY
+  MANUAL
+}
+
+/// What one entry covers.
+enum FreightEntryScope {
+  /// One amount for the job. Lands on the version's meta.
+  JOB
+  /// Apportioned across chosen product items. Lands on their lines.
+  LINES
+}
+
+enum FreightEntryStatus {
+  /// Entered and evidenced. Not yet on the proposal.
+  STAGED
+  /// Written onto the frozen version; the price snapshot has been re-frozen.
+  APPLIED
+  /// On the customer's invoice in QuickBooks.
+  PUSHED
+  /// Withdrawn before it was applied, or "no freight applies" for this bucket.
+  VOID
+}
+
 model FreightTrueUp {
   id                    String              @id @default(cuid())
   proposalId            String
@@ -2289,26 +2328,26 @@ model FreightTrueUp {
   versionId             String
   status                FreightTrueUpStatus @default(OPEN)
 
-  // ---- Staged amounts, minor units. NULL means "not answered", which is not
-  // the same as 0 ("quoted at nothing") — the same distinction priceEntry.ts
-  // makes for line prices, and for the same reason.
+  entries               FreightEntry[]
+
+  // ---- Legacy staged amounts, minor units.
+  //
+  // Superseded by FreightEntry and no longer written. Kept because rows created
+  // before the four-bucket split hold their money here, and an applied true-up is
+  // a financial record: reading it has to keep working. structureFreightMinor is
+  // steel, stdFreightMinor is other.
   structureFreightMinor Int?
   stdFreightMinor       Int?
-  /// Per-line third-party freight: [{ ref, sku, name, amountMinor }]. Keyed by the
-  /// line's `ref` because that is what survives a re-order of the proposal.
   thirdPartyLines       Json?
-  /// Sum of thirdPartyLines, cached so the queue can be listed without parsing.
   thirdPartyTotalMinor  Int?
 
-  // ---- Provenance. A freight figure with no source is a guess.
+  // ---- Provenance carried at folder level (a single-vendor job, the common case).
   vendorName            String?
   vendorQuoteRef        String?
-  /// The vendor's quote document, uploaded through the ordinary attachment flow.
   quoteAttachmentId     String?
-  /// The RFQ this quote answers, when it came back against one.
   freightRfqId          String?
   note                  String?
-  /// Set when someone records that no freight applies. Status goes VOID.
+  /// Set when someone records that no freight applies at all. Status goes VOID.
   noFreightReason       String?
 
   // ---- Application onto the proposal
@@ -2319,11 +2358,9 @@ model FreightTrueUp {
   previousSnapshotId    String?
   newSnapshotId         String?
 
-  // ---- QuickBooks
+  // ---- QuickBooks (most recent push; per-batch detail is on the entries)
   qboMode               FreightInvoiceMode?
-  /// The invoice that was amended, or the one the supplement follows.
   qboSourceTxnId        String?
-  /// The freight-only invoice, when one had to be raised.
   qboSupplementTxnId    String?
   qboPreviousTotalMinor BigInt?
   qboNewTotalMinor      BigInt?
@@ -2337,12 +2374,91 @@ model FreightTrueUp {
   customerNotifiedAt    DateTime?
   customerNotifiedById  String?
 
+  /// When the "this invoice is short of freight" banner was last dismissed, and by
+  /// whom. A dismissal is quiet for ALERT_QUIET_HOURS and then the banner returns:
+  /// an unbilled freight bill does not stop being one because it was clicked away.
+  alertAckAt            DateTime?
+  alertAckById          String?
+
   createdById           String
   createdAt             DateTime            @default(now())
   updatedAt             DateTime            @updatedAt
 
   @@index([proposalId])
   @@index([versionId])
+  @@index([status])
+}
+
+/// One freight figure, as it arrived.
+///
+/// Freight does not arrive as a form submission — it arrives as four separate
+/// answers on four separate days, from a board column, a vendor's emailed quote,
+/// and a carrier's invoice. Each is its own row so it can be evidenced, applied and
+/// billed on its own clock, and so a later correction is visibly a correction
+/// rather than an overwrite.
+model FreightEntry {
+  id                 String             @id @default(cuid())
+  trueUpId           String
+  trueUp             FreightTrueUp      @relation(fields: [trueUpId], references: [id], onDelete: Cascade)
+  /// Denormalized so the queue, the banner and the gate can be answered without
+  /// walking up to the proposal through the folder.
+  proposalId         String
+  proposal           Proposal           @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  versionId          String
+
+  bucket             FreightBucketKind
+  scope              FreightEntryScope
+  source             FreightEntrySource
+  status             FreightEntryStatus @default(STAGED)
+
+  /// Minor units. Always the amount for the WHOLE entry; the per-item split is in
+  /// `allocations`.
+  amountMinor        Int
+
+  /// For a LINES entry: [{ ref, sku, name, amountMinor }]. Keyed on the line's
+  /// `ref`, because that is what survives a re-order of the proposal.
+  allocations        Json?
+
+  // ---- Evidence. Which of these is required depends on the bucket; see
+  // assertEvidence() in src/proposals/freightTrueUp.ts.
+  vendorName         String?
+  vendorQuoteRef     String?
+  quoteAttachmentId  String?
+  /// What this freight is for. Required on a job-level OTHER entry, where it
+  /// prints on the estimate.
+  description        String?
+  /// Why a monday-sourced bucket was typed in by hand. Required in that case.
+  overrideReason     String?
+  note               String?
+
+  // ---- monday provenance, for a figure read off the board
+  mondayItemId       String?
+  mondayColumnId     String?
+  mondayRawValue     String?
+  mondayReadAt       DateTime?
+
+  // ---- Application
+  appliedAt          DateTime?
+  appliedById        String?
+
+  // ---- QuickBooks. One entry reaches the invoice exactly once; a corrected
+  // figure is a credit and a rebill, not a second push of the same row.
+  qboMode            FreightInvoiceMode?
+  qboTxnId           String?
+  qboDocNumber       String?
+  qboPushedAt        DateTime?
+  qboPushedById      String?
+
+  /// Set when this bucket is closed out as not applicable, with the reason.
+  voidReason         String?
+
+  createdById        String
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  @@index([trueUpId])
+  @@index([proposalId])
+  @@index([versionId, bucket])
   @@index([status])
 }
 
