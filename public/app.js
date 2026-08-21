@@ -8001,7 +8001,13 @@
   }
 
   function builderDoc() {
-    return { title: pb.title, number: pb.number, orgName: pb.orgName, meta: pb.meta, lines: pb.lines, totals: builderTotals() };
+    return {
+      title: pb.title, number: pb.number, orgName: pb.orgName, meta: pb.meta, lines: pb.lines,
+      totals: builderTotals(),
+      // Already loaded for the rail. Attached only when it belongs to THIS version,
+      // so a stale answer from a previously open proposal cannot reach a document.
+      crossBorder: (cbData && cbData.versionId === pb.versionId && cbData.applicable) ? cbData : null
+    };
   }
 
   /** The version payload, shared by the Save button and the quiet save below. */
@@ -8088,6 +8094,15 @@
    */
   async function proposalDocData(proposal, version) {
     var orgName = '';
+    // Fetched here rather than reused from the rail, because this path also builds
+    // the document that goes for signature and to the deal board — those must carry
+    // the Canadian content even when nobody has the builder open. A failure leaves
+    // crossBorder null, which prints the document exactly as it prints today.
+    var cb = null;
+    try {
+      var rc = await authed('/proposals/versions/' + version.id + '/cross-border');
+      if (rc.ok) { var body = await rc.json(); if (body && body.applicable) cb = body; }
+    } catch (e0) {}
     try { var ro = await authed('/crm/organizations?pageSize=100'); if (ro.ok) { var f = ((await ro.json()).items || []).filter(function (o) { return o.id === proposal.organizationId; })[0]; orgName = f ? f.name : ''; } } catch (e) {}
     var secs = version.sections || []; var metaSec = Array.isArray(secs) ? secs.filter(function (s) { return s && s.id === 'meta'; })[0] : null;
     var meta = (metaSec && metaSec.data) || {};
@@ -8102,7 +8117,7 @@
     var total = subtotal - discount + tpFreight + tax + structureFreight + matsFreight + stdFreight;
     return {
       title: proposal.title, number: proposal.number, version: version.version || 1,
-      orgName: orgName, meta: meta, lines: lines,
+      orgName: orgName, meta: meta, lines: lines, crossBorder: cb,
       totals: {
         subtotal: subtotal, discountPct: discountPct, discountMode: discountMode, discount: discount, tpFreight: tpFreight,
         tax: tax, structureFreight: structureFreight, matsFreight: matsFreight, stdFreight: stdFreight,
@@ -8118,8 +8133,170 @@
    * rendered to PDF there. Two renderers for one document is exactly how the BOM's
    * Excel export drifted away from its PDF, and I am not repeating it.
    */
+
+  /* --- Canadian content on the customer's document ------------------------
+     USD is the controlling currency and stays exactly as it was. CAD is added
+     alongside as a reference figure, always labelled "est." and always derived from
+     the USD amount — never the other way round.
+
+     Amounts the customer pays at the border are printed in their own block below
+     the Total, never folded into it. Telling a customer that money going to CBSA is
+     "payable to Summit" would be wrong on a document they sign. */
+
+  /**
+   * Is this a Canadian proposal at all? Governs the STRUCTURE — the border-charge
+   * block and the cross-border clauses.
+   */
+  function cbIsCanadian(d) {
+    var cb = d && d.crossBorder;
+    return !!(cb && cb.applicable);
+  }
+
+  /**
+   * Can CAD figures be printed? Governs only the CAD amounts.
+   *
+   * Kept separate from cbIsCanadian on purpose. When no Bank of Canada rate could be
+   * resolved there are no CAD figures, but the duties, the brokerage and the legal
+   * terms all still apply — folding the two together hid a real border charge from a
+   * customer's document because an exchange-rate lookup had failed.
+   */
+  function cbApplies(d) {
+    var cb = d && d.crossBorder;
+    return !!(cb && cb.applicable && cb.fx && cb.fx.rate);
+  }
+
+  /** USD minor → CAD minor at the document's rate. Mirrors convertUsdMinorToCad. */
+  function cbCad(usdMinor, rate) {
+    if (usdMinor == null || !rate) return null;
+    var parts = String(rate).split('.');
+    var scale = parts.length > 1 ? parts[1].length : 0;
+    var digits = Number(parts.join(''));
+    var divisor = Math.pow(10, scale);
+    var neg = usdMinor < 0;
+    var abs = Math.abs(usdMinor) * digits;
+    // Half up, away from zero — matching the server so the printed figure and the
+    // stored snapshot agree to the cent.
+    var rounded = Math.floor((abs * 2 + divisor) / (divisor * 2));
+    return neg ? -rounded : rounded;
+  }
+
+  /** "USD 1,234.56" with "CAD 1,543.20 est." beneath it. Never a bare $. */
+  function cbDocAmount(usdMinor, rate) {
+    // A null rate prints USD alone: cbCad returns null, so the document degrades to
+    // USD rather than breaking.
+    var cad = cbCad(usdMinor, rate);
+    return fmtUsd(usdMinor) +
+      (cad == null ? '' : '<span style="display:block;font-size:10px;color:#8a8f85;font-weight:400;">CAD ' + (cad / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' est.</span>');
+  }
+
+  function cbFxBanner(d) {
+    if (!cbIsCanadian(d)) return '';
+    var fx = d.crossBorder.fx || {};
+    var body = fx.rate
+      ? 'Estimated Canadian-dollar amounts are shown for reference only, calculated using the Bank of Canada daily average USD/CAD exchange rate published for ' +
+        esc(fx.observationDate || 'the proposal date') + ', at a rate of <b>1 USD = ' + esc(fx.rate) + ' CAD</b>.'
+      : 'Canadian-dollar reference amounts are not shown on this proposal.';
+    return '<div style="margin:0 0 14px;padding:8px 10px;background:#f6f7f4;border:1px solid #e7e8e3;border-radius:6px;font-size:10.5px;line-height:1.6;color:#5c6157;break-inside:avoid;">' +
+      'All prices are in <b>United States dollars (USD)</b>. ' + body + '</div>';
+  }
+
+  /**
+   * Charges the customer pays at the border. Only the ones NOT in the Summit total.
+   * An unquoted charge prints its status rather than a figure — a blank duty must
+   * not read as no duty.
+   */
+  function cbBorderBlock(d) {
+    if (!cbIsCanadian(d) || !d.crossBorder.result) return '';
+    var rate = (d.crossBorder.fx || {}).rate || null;
+    var lines = (d.crossBorder.result.lines || []).filter(function (l) {
+      return !l.includedInSellerTotal && l.category !== 'SALES_TAX' && l.status !== 'NOT_APPLICABLE';
+    });
+    if (!lines.length) return '';
+    var sep = d.crossBorder.result.separatelyPayable || { usdMinor: 0 };
+    var landed = d.crossBorder.result.estimatedLandedCost || { usdMinor: 0 };
+    var status = { TO_BE_CONFIRMED: 'To be confirmed', REQUIRES_CUSTOMS_REVIEW: 'To be confirmed', ESTIMATED: '', CONFIRMED: '' };
+
+    var rows = lines.map(function (l) {
+      var right = l.usdMinor == null
+        ? '<span style="color:#8a8f85;">' + esc(status[l.status] || 'To be confirmed') + '</span>'
+        : cbDocAmount(l.usdMinor, rate);
+      return '<div style="display:flex;justify-content:space-between;gap:12px;padding:3px 8px;font-size:11.5px;"><span style="color:#5c6157;">' + esc(l.label) + '</span><span style="text-align:right;">' + right + '</span></div>';
+    }).join('');
+
+    return '<div style="margin-top:18px;padding:10px 0 0;border-top:1px solid #d5d8d2;break-inside:avoid;">' +
+      '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#3d4a55;padding:0 8px 4px;">Estimated charges payable at import</div>' +
+      '<div style="padding:0 8px 6px;font-size:10px;color:#8a8f85;line-height:1.55;">Not payable to Summit Sensory Gym. These are estimates, assessed and collected by the Canada Border Services Agency, the customs broker or the carrier.</div>' +
+      rows +
+      (sep.usdMinor ? '<div style="display:flex;justify-content:space-between;gap:12px;padding:6px 8px 3px;margin-top:4px;border-top:1px solid #ece7d8;font-size:11.5px;font-weight:700;"><span>Estimated charges payable at import</span><span style="text-align:right;">' + cbDocAmount(sep.usdMinor, rate) + '</span></div>' : '') +
+      (sep.usdMinor ? '<div style="display:flex;justify-content:space-between;gap:12px;padding:3px 8px;font-size:11.5px;font-weight:700;"><span>Estimated total landed cost</span><span style="text-align:right;">' + cbDocAmount(landed.usdMinor, rate) + '</span></div>' : '') +
+    '</div>';
+  }
+
+  /**
+   * The Canadian clauses. Wording is fixed here for now; the requirement is for
+   * administrator-editable templates, which is a later slice — so the text lives in
+   * one place rather than being scattered through the markup.
+   */
+  function cbClauses(d) {
+    if (!cbIsCanadian(d)) return '';
+    var cb = d.crossBorder;
+    var fx = cb.fx || {};
+    var res = cb.result;
+    var ior = (res && res.lines || []).some(function (l) { return l.payableTo === 'CUSTOMS_OR_BROKER'; });
+
+    var para = function (title, text) {
+      return '<div style="margin-bottom:9px;"><b>' + esc(title) + '</b> ' + text + '</div>';
+    };
+
+    var out = [
+      para('Currency and Exchange Rate.',
+        'All quoted prices and contractual payment obligations are denominated in United States dollars (USD). Canadian-dollar (CAD) amounts are provided for reference and budgeting convenience only. ' +
+        (fx.rate
+          ? 'Estimated CAD amounts are calculated using the Bank of Canada daily average USD/CAD exchange rate published for ' +
+            esc(fx.observationDate || 'the proposal date') + ', at a rate of 1 USD = ' + esc(fx.rate) + ' CAD. '
+          : 'No CAD reference amounts are shown on this proposal. ') +
+        'If this proposal is accepted, the CAD reference amounts will be recalculated and locked using the most recently published Bank of Canada daily average rate on or before the date of acceptance. Payment remains due in USD unless Summit Sensory Gym expressly agrees in writing to accept payment in CAD. In the event of any discrepancy, the USD amounts control. The exchange rate shown may differ from the rate offered by the customer\u2019s bank or payment provider.'),
+      para('Bank and Payment Fees.',
+        'The customer is responsible for any wire-transfer fees, intermediary-bank fees, credit-card fees where permitted, foreign-exchange charges, or other payment-processing costs imposed by the customer\u2019s financial institution or payment provider. Summit Sensory Gym must receive the full invoiced amount.'),
+      para('Canadian Sales Taxes.',
+        'Applicable GST, HST, PST, RST, or QST will be determined based on the ship-to location, the nature of the goods and services supplied, Summit Sensory Gym\u2019s applicable registration obligations, the customer\u2019s documented tax status, and the laws and rates in effect at the time of invoicing or shipment. Tax amounts shown on this proposal are estimates and may be revised on the final invoice if the delivery location, applicable rate, taxability, exemption status, transaction structure, or governing law changes. Any valid exemption documentation must be provided and approved before the final invoice is issued.'),
+      para('Customs Duties and Tariffs.',
+        'Customs duties, counter-tariffs, surtaxes, safeguard measures, anti-dumping duties, countervailing duties, and other border assessments shown in this proposal are estimates based on the product information, tariff classification, country of origin, customs value, trade-agreement eligibility, exchange-rate information, and government rules available on the proposal date. Final amounts are determined by the Canada Border Services Agency or the authorized customs broker under the laws and rates in effect when the goods are imported. Unless expressly identified as fixed and included, any difference between estimated and actual border assessments is the customer\u2019s responsibility.'),
+      para('CUSMA Treatment.',
+        'Preferential tariff treatment under the Canada\u2013United States\u2013Mexico Agreement applies only when the goods satisfy the applicable rules of origin and the required origin documentation is available and accepted. Shipment from the United States does not, by itself, establish eligibility for preferential tariff treatment.')
+    ];
+
+    if (ior) {
+      out.push(para('Importer of Record.',
+        'Unless otherwise stated in this proposal, the customer will serve as the importer of record and will be responsible for customs clearance, importer registration, permits, duties, tariffs, import taxes, brokerage, disbursement fees, bond charges, inspections, storage, and other charges associated with importing the goods into Canada. Any such amounts shown in this proposal are estimates and are not included in the amount payable to Summit Sensory Gym unless expressly stated.'));
+      out.push(para('Estimated Import Taxes.',
+        'Any import GST, provincial tax, harmonized tax, or other import tax identified in this proposal is an estimate for budgeting purposes and is not collected by Summit Sensory Gym unless expressly stated otherwise. Final import taxes may be assessed and collected by the Canada Border Services Agency, the customs broker, the carrier, or another governmental authority. The customer is responsible for the final assessed amount.'));
+    } else {
+      out.push(para('Importer of Record and Reconciliation.',
+        'Summit Sensory Gym will serve as the importer of record only where expressly stated in this proposal. Estimated customs duties, tariffs, import taxes, and brokerage charges are based on information available on the proposal date. These amounts may be reconciled to the actual amounts assessed at importation. Any additional amount or credit resulting from that reconciliation will be reflected on a supplemental invoice or credit, subject to the terms of this proposal.'));
+    }
+
+    out.push(para('Customs Brokerage.',
+      'Additional disbursement, advancement, bond, inspection, storage, carrier, port, redelivery, or other accessorial charges may apply. Unless expressly included as a fixed charge, these additional third-party costs are the customer\u2019s responsibility.'));
+    out.push(para('Changes in Government Charges.',
+      'Taxes, duties, tariffs, surtaxes, trade remedies, customs requirements, and government fees are subject to change. Any new or increased governmental charge that becomes applicable after the proposal date and before importation, delivery, or invoicing may be added to the final amount payable, unless Summit Sensory Gym has expressly agreed in writing to absorb that charge.'));
+    out.push(para('Canadian Delivery Charges.',
+      'Freight is based on the delivery conditions and information available on the proposal date. Additional charges may apply for limited-access locations, appointment delivery, liftgate service, inside delivery, remote-area service, construction delays, storage, redelivery, address changes, border delays, or other services not included in the original freight quotation.'));
+    out.push(para('Customer Tax Rebates.',
+      'The customer may be eligible to apply for a tax rebate or recovery based on its own legal or organizational status. Any such rebate is the customer\u2019s responsibility and does not reduce the tax charged by Summit Sensory Gym unless a valid point-of-sale exemption applies and the required documentation has been received and approved.'));
+
+    return '<div style="margin-top:26px;padding-top:12px;border-top:1px solid #d5d8d2;font-size:9.5px;line-height:1.6;color:#5c6157;">' +
+      '<div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#3d4a55;margin-bottom:8px;">Cross-border terms</div>' +
+      out.join('') + '</div>';
+  }
+
   function proposalDocHtml(doc) {
     var d = doc, m = d.meta || {}, t = d.totals || {};
+    // On a US proposal this IS fmtUsd, so the document stays byte-identical to what
+    // it has always been. CAD only ever appears as an extra line underneath.
+    var cbAmt = cbApplies(d)
+      ? function (v) { return cbDocAmount(v, d.crossBorder.fx.rate); }
+      : fmtUsd;
     // Tax and freight are frequently unknown when a proposal goes out. An untouched
     // figure prints TBD, because a hard $0.00 there reads as "included" — the one
     // wrong answer to give a customer about freight.
@@ -8262,28 +8439,30 @@
           (m.shipTo ? '<div><div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin-bottom:4px;">Ship To</div><div style="color:#5c6157;white-space:pre-line;">' + esc(m.shipTo) + '</div></div>' : '') +
         '</div>' +
         (m.showTitle !== false && d.title ? '<div style="font-family:\'Newsreader\',serif;font-size:24px;font-weight:600;margin-bottom:14px;">' + esc(d.title) + '</div>' : '') +
+        cbFxBanner(d) +
         '<table style="width:100%;border-collapse:collapse;font-size:11px;"><thead><tr style="color:#8a8f85;font-size:10px;text-transform:uppercase;letter-spacing:.04em;"><th style="text-align:left;padding:6px 8px;border-bottom:2px solid #3d4a55;">Activity / Description</th><th style="text-align:left;padding:6px 8px;border-bottom:2px solid #3d4a55;width:90px;">SKU</th><th style="text-align:center;padding:6px 8px;border-bottom:2px solid #3d4a55;width:44px;">Qty</th><th style="text-align:right;padding:6px 8px;border-bottom:2px solid #3d4a55;width:84px;">Rate</th><th style="text-align:right;padding:6px 8px;border-bottom:2px solid #3d4a55;width:94px;">Amount</th></tr></thead><tbody>' + body + '</tbody></table>' +
-        '<div style="display:flex;justify-content:flex-end;margin-top:16px;break-inside:avoid;"><div style="min-width:260px;">' +
-          '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Subtotal</span><span>' + fmtUsd(t.subtotal) + '</span></div>' +
+        '<div style="display:flex;justify-content:flex-end;margin-top:16px;break-inside:avoid;"><div style="min-width:' + (cbApplies(d) ? '300px' : '260px') + ';">' +
+          '<div style="display:flex;justify-content:space-between;gap:12px;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Subtotal</span><span style="text-align:right;">' + cbAmt(t.subtotal) + '</span></div>' +
           // Red and bold on purpose: the one line on the totals block the customer is
           // most likely to be looking for, and the only one that moves in their favour.
-          (t.discount ? '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;color:#9c3327;font-weight:700;"><span>' + discountLabel(t) + '</span><span>− ' + fmtUsd(t.discount) + '</span></div>' +
+          (t.discount ? '<div style="display:flex;justify-content:space-between;gap:12px;padding:3px 8px;font-size:12.5px;color:#9c3327;font-weight:700;"><span>' + discountLabel(t) + '</span><span style="text-align:right;">− ' + cbAmt(t.discount) + '</span></div>' +
             '<div style="padding:0 8px 3px;font-size:10px;color:#8a8f85;text-align:right;">Discount expires ' + (m.expiration ? fmtDate(m.expiration) : 'with this proposal') + '</div>' : '') +
-          (t.tpFreight ? '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Third-Party Freight</span><span>' + fmtUsd(t.tpFreight) + '</span></div>' : '') +
+          (t.tpFreight ? '<div style="display:flex;justify-content:space-between;gap:12px;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Third-Party Freight</span><span style="text-align:right;">' + cbAmt(t.tpFreight) + '</span></div>' : '') +
           '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Mat Freight Tax Pass-Through</span><span>' + cellTax + '</span></div>' +
           '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Structure Crating &amp; Freight</span><span>' + cellStructureFreight + '</span></div>' +
           '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Mats &amp; Padding Freight</span><span>' + cellMatsFreight + '</span></div>' +
           // Standard Freight is opt-in: unticked, the customer never sees the line.
           (m.stdFreightOn ? '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Standard Freight</span><span>' + amountCell(t.stdFreight, '') + '</span></div>' : '') +
-          '<div style="display:flex;justify-content:space-between;padding:8px;margin-top:5px;border-top:2px solid #3d4a55;font-size:15px;font-weight:700;"><span>Total</span><span>' + fmtUsd(t.total) + '</span></div>' +
+          '<div style="display:flex;justify-content:space-between;gap:12px;padding:8px;margin-top:5px;border-top:2px solid #3d4a55;font-size:15px;font-weight:700;"><span>' + (cbIsCanadian(d) ? 'Total payable to Summit' : 'Total') + '</span><span style="text-align:right;">' + cbAmt(t.total) + '</span></div>' +
           (anyTbd ? '<div style="padding:2px 8px 0;font-size:10px;color:#8a8f85;text-align:right;line-height:1.5;">Total excludes items marked TBD.</div>' : '') +
           (m.showDeposit !== false ? '<div style="display:flex;justify-content:space-between;padding:6px 8px 0;font-size:13px;color:#3d4a55;font-weight:700;"><span>Deposit Due (' + depositPct() + '%)</span><span>' + fmtUsd(t.deposit) + '</span></div>' : '') +
+          cbBorderBlock(d) +
         '</div></div>' + bottomNotesHtml +
         '<div style="display:flex;gap:40px;margin-top:40px;padding-top:14px;">' +
           '<div style="flex:1;"><div style="border-bottom:1.5px solid #20241f;height:26px;"></div><div style="font-size:10.5px;color:#8a8f85;margin-top:5px;">Signer\'s Name</div></div>' +
           '<div style="flex:1;"><div style="border-bottom:1.5px solid #20241f;height:26px;"></div><div style="font-size:10.5px;color:#8a8f85;margin-top:5px;">Signer\'s Signature</div></div>' +
           '<div style="flex:0 0 150px;"><div style="border-bottom:1.5px solid #20241f;height:26px;"></div><div style="font-size:10.5px;color:#8a8f85;margin-top:5px;">Date</div></div>' +
-        '</div>' + footerNotesHtml +
+        '</div>' + footerNotesHtml + cbClauses(d) +
       '</div>';
     return html;
   }
