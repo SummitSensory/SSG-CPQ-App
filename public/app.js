@@ -8407,6 +8407,17 @@
     var cellStructureFreight = amountCell(t.structureFreight, m.tbdStructureFreight);
     var cellMatsFreight = amountCell(t.matsFreight, m.tbdMatsFreight);
     var body = '';
+    var tbodyOpen = false;
+    /**
+     * Open a section. Each group is its own <tbody data-group> carrying
+     * break-inside:avoid, which keeps a heading, its lines and its subtotal together
+     * on one sheet rather than splitting a section across the fold.
+     */
+    function openSection() {
+      var s = (tbodyOpen ? '</tbody>' : '') + '<tbody data-group style="break-inside:avoid;page-break-inside:avoid;">';
+      tbodyOpen = true;
+      return s;
+    }
     var groupOpenSub = null, groupName = '';
     // Indent depth: top-level group flush, sub-heading indented, line items
     // indented one step further than whichever heading they sit under.
@@ -8425,6 +8436,7 @@
       var lt = l.lineType || 'PRODUCT';
       if (lt === 'GROUP') {
         body += subtotalRow();
+        body += openSection();
         groupOpenSub = 0; groupName = l.name; inSub = false;
         // The section note (frame dimensions and the like) sits in the SKU column
         // rather than trailing the heading, so it lines up with the specification
@@ -8479,6 +8491,7 @@
       if (flags.length) bottomNotes.push({ name: l.name, text: flags.join(' · ') });
     });
     body += subtotalRow();
+    if (tbodyOpen) body += '</tbody>';
     var bottomNotesHtml = bottomNotes.length ? '<div style="margin-top:24px;padding-top:12px;border-top:1px solid #eceef4;font-size:10.5px;color:#5b6478;line-height:1.6;break-inside:avoid;"><div style="font-family:\'Newsreader\',Georgia,serif;font-size:15px;font-weight:700;color:#203060;letter-spacing:-.015em;margin-bottom:5px;">Delivery, Returns &amp; Freight Notes</div>' + bottomNotes.map(function (n) { return '<div><b style="font-weight:600;">' + esc(tc(n.name)) + ':</b> ' + esc(n.text) + '</div>'; }).join('') + '</div>' : '';
     var u = (pb && pb.user) || currentUser || {};
     var preparerLine2 = [u.title, u.phone].filter(Boolean).join(' · ');
@@ -8491,6 +8504,20 @@
             (fn.title ? '<div style="font-family:\'Newsreader\',Georgia,serif;font-size:15px;font-weight:700;color:#203060;letter-spacing:-.015em;margin-bottom:6px;">' + esc(fn.title) + '</div>' : '') + rt(fn.body) + '</div>';
         }).join('') + '</div>'
       : '';
+    /**
+     * A footer rule at the foot of each half of the document.
+     *
+     * Two of them, at the two places the document naturally ends: below the totals,
+     * and below the terms on the acceptance sheet. A printed proposal gets separated,
+     * initialled and re-stapled, so each half has to say what it belongs to.
+     */
+    function docFooter(left) {
+      return '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:20px;margin-top:26px;padding-top:10px;border-top:1px solid #eceef4;font-size:9.5px;color:#9aa1b0;break-inside:avoid;">' +
+        '<span>' + left + '</span>' +
+        '<span>' + esc(d.orgName || '') + '</span>' +
+      '</div>';
+    }
+    var docIdent = [esc(d.number || ''), (Number(d.version) || 1) > 1 ? 'Revision ' + (Number(d.version) - 1) : ''].filter(Boolean).join(' · ');
     var preparedBy =
       // Line rhythm matches the "Prepared For" block below it — same 12px size and
       // the same 1px / 2px steps between lines, so the two read as one system.
@@ -8540,7 +8567,7 @@
         '</div>' +
         (m.showTitle !== false && d.title ? '<div style="font-family:\'Newsreader\',serif;font-size:23px;font-weight:700;color:#203060;letter-spacing:-.015em;margin-top:14px;">' + esc(d.title) + '</div>' : '') +
         cbFxBanner(d) +
-        '<table style="width:100%;border-collapse:collapse;margin-top:16px;"><thead><tr style="color:#7b8190;font-size:9.5px;text-transform:uppercase;letter-spacing:.1em;font-weight:700;"><th style="text-align:left;padding:0 0 6px;border-bottom:1.5px solid #203060;font-weight:700;">Activity / Description</th><th style="text-align:left;padding:0 10px 6px;border-bottom:1.5px solid #203060;width:90px;font-weight:700;">SKU</th><th style="text-align:right;padding:0 10px 6px;border-bottom:1.5px solid #203060;width:44px;font-weight:700;">Qty</th><th style="text-align:right;padding:0 10px 6px;border-bottom:1.5px solid #203060;width:84px;font-weight:700;">Rate</th><th style="text-align:right;padding:0 0 6px 10px;border-bottom:1.5px solid #203060;width:94px;font-weight:700;">Amount</th></tr></thead><tbody>' + body + '</tbody></table>' +
+        '<table style="width:100%;border-collapse:collapse;margin-top:16px;"><thead><tr style="color:#7b8190;font-size:9.5px;text-transform:uppercase;letter-spacing:.1em;font-weight:700;"><th style="text-align:left;padding:0 0 6px;border-bottom:1.5px solid #203060;font-weight:700;">Activity / Description</th><th style="text-align:left;padding:0 10px 6px;border-bottom:1.5px solid #203060;width:90px;font-weight:700;">SKU</th><th style="text-align:right;padding:0 10px 6px;border-bottom:1.5px solid #203060;width:44px;font-weight:700;">Qty</th><th style="text-align:right;padding:0 10px 6px;border-bottom:1.5px solid #203060;width:84px;font-weight:700;">Rate</th><th style="text-align:right;padding:0 0 6px 10px;border-bottom:1.5px solid #203060;width:94px;font-weight:700;">Amount</th></tr></thead>' + (body.indexOf('<tbody') === 0 ? '' : '<tbody>') + body + (body.indexOf('<tbody') === 0 ? '' : '</tbody>') + '</table>' +
         '<div style="display:flex;justify-content:flex-end;margin-top:18px;break-inside:avoid;"><div style="min-width:' + (cbApplies(d) ? '340px' : '300px') + ';">' +
           '<div style="display:flex;justify-content:space-between;gap:12px;padding:2px 0;font-size:12px;"><span style="font-weight:700;color:#20241f;">Subtotal</span><span style="text-align:right;">' + cbAmt(t.subtotal) + '</span></div>' +
           // Red and bold on purpose: the one line on the totals block the customer is
@@ -8553,14 +8580,26 @@
           '<div style="display:flex;justify-content:space-between;padding:2px 0 7px;font-size:12px;"><span style="font-weight:700;color:#20241f;">Mats &amp; Padding Freight</span><span>' + cellMatsFreight + '</span></div>' +
           // Standard Freight is opt-in: unticked, the customer never sees the line.
           (m.stdFreightOn ? '<div style="display:flex;justify-content:space-between;padding:2px 0 7px;font-size:12px;"><span style="font-weight:700;color:#20241f;">Standard Freight</span><span>' + amountCell(t.stdFreight, '') + '</span></div>' : '') +
-          '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding-top:7px;border-top:1.5px solid #203060;"><span style="font-family:\'Newsreader\',serif;font-size:18px;font-weight:700;color:#203060;">' + (cbIsCanadian(d) ? 'Total payable to Summit' : 'Total') + '</span><span style="font-family:\'Newsreader\',serif;font-size:18px;font-weight:700;color:#203060;letter-spacing:-.02em;text-align:right;">' + cbAmt(t.total) + '</span></div>' +
+          '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding-top:7px;border-top:1.5px solid #203060;"><span style="font-family:\'Newsreader\',serif;font-size:18px;font-weight:700;color:#203060;">' + (cbIsCanadian(d) ? 'Total payable to Summit' : 'Total') + '</span><span style="font-size:17px;font-weight:700;color:#203060;letter-spacing:-.01em;text-align:right;">' + cbAmt(t.total) + '</span></div>' +
           (anyTbd ? '<div style="padding-top:3px;font-size:10.5px;color:#9aa1b0;text-align:right;line-height:1.5;">Total excludes items marked TBD.</div>' : '') +
           (m.showDeposit !== false ? '<div style="display:flex;justify-content:space-between;padding-top:3px;font-size:11.5px;font-weight:700;"><span style="color:#7b8190;">Deposit Due (' + depositPct() + '%)</span><span>' + money(t.deposit) + '</span></div>' : '') +
           cbBorderBlock(d) +
         '</div></div>' + bottomNotesHtml +
-        // Acceptance leads the signature lines, so what is being signed is stated
-        // immediately above where it is signed rather than left to the terms below.
-        '<div style="margin-top:34px;break-inside:avoid;">' +
+        docFooter('Summit Sensory Gym · ' + docIdent) +
+        // Acceptance and the terms always begin a fresh sheet, whatever the line count.
+        // Signing is the act the document exists for, so the page a customer signs is
+        // never a page that happens to have room left at the bottom of the pricing —
+        // and it can be printed, signed and returned on its own.
+        '<div data-page-break="acceptance" style="break-before:page;page-break-before:always;">' +
+          // A short masthead reidentifies the sheet once it is separated from page one.
+          '<div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:10px;border-bottom:2px solid #203060;">' +
+            '<div style="display:flex;gap:11px;align-items:center;">' +
+              '<img src="logo.png" alt="Summit Sensory Gym" width="34" height="34" style="width:34px;height:34px;display:block;flex:none;">' +
+              '<div style="font-family:\'Newsreader\',serif;font-size:15px;font-weight:700;color:#20241f;">Summit Sensory Gym</div>' +
+            '</div>' +
+            '<div style="font-size:10.5px;color:#7b8190;">' + [esc(d.number || ''), (Number(d.version) || 1) > 1 ? 'Revision ' + (Number(d.version) - 1) : '', esc(d.orgName || '')].filter(Boolean).join(' · ') + '</div>' +
+          '</div>' +
+        '<div style="margin-top:26px;break-inside:avoid;">' +
           '<div style="font-family:\'Newsreader\',serif;font-size:15px;font-weight:700;color:#203060;letter-spacing:-.015em;">Acceptance</div>' +
           '<div style="font-size:11.5px;color:#5b6478;line-height:1.6;margin-top:5px;max-width:620px;">Sign below to accept this proposal at a total of ' + cbAmt(t.total) +
             (m.showDeposit !== false ? ', with a deposit of ' + money(t.deposit) + ' due to initiate production' : '') + '.</div>' +
@@ -8570,6 +8609,8 @@
             '<div style="flex:1;"><div style="border-bottom:1px solid #20241f;height:40px;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Date</div></div>' +
           '</div>' +
         '</div>' + footerNotesHtml + cbClauses(d) +
+        docFooter('6150 S Geneva Ct, Englewood, CO 80111 · (720) 457-5500 · Sales@SummitSensory.com') +
+        '</div>' +
       '</div>';
     return html;
   }
@@ -8585,6 +8626,7 @@
       '<style>@page{size:letter;margin:0;}body{margin:0;font-family:-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;color:#20241f;}' +
       '#propPrintArea{padding:0.5in;box-sizing:border-box;max-width:none;}' +
       'tr{break-inside:avoid;}thead{display:table-header-group;}' +
+      'tbody[data-group]{break-inside:avoid;page-break-inside:avoid;}' +
       '.ssg-fm-page{width:8.5in;height:11in;min-height:0;margin:0;overflow:hidden;' +
         'break-inside:avoid;page-break-inside:avoid;break-after:page;page-break-after:always;}' +
       "*[style*='Newsreader']{font-family:Georgia,serif !important;}</style></head><body>" +
@@ -8680,6 +8722,11 @@
       '@media print{html,body{height:auto!important;overflow:visible!important;background:#fff!important;}' +
       'body > *{display:none!important;}body > #propPreviewOverlay{display:block!important;}' +
       '#propPreviewOverlay{position:static!important;inset:auto!important;height:auto!important;background:#fff!important;padding:0!important;overflow:visible!important;}#propPreviewOverlay .noprint{display:none!important;}' +
+      // A section (heading, lines, subtotal) is one <tbody> and stays on one sheet;
+      // where a section is taller than a sheet the engine drops the rule rather than
+      // losing content. The header row repeats on every continued sheet.
+      'tbody[data-group]{break-inside:avoid!important;page-break-inside:avoid!important;}' +
+      'thead{display:table-header-group!important;}' +
       // Keep rows, headings and the totals block from being split across sheets.
       //
       // This is deliberately CSS rather than measured-and-spaced markup. An earlier

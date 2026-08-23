@@ -69,7 +69,7 @@
     pages: [
       // 1 · cover
       function (v, art, h) {
-        return `<div class="ssg-fm-page" style="width:816px;height:1056px;flex:none;background:#fff;box-sizing:border-box;display:flex;flex-direction:column;overflow:hidden;color:#20241f;">
+        return `<div class="ssg-fm-page" style="width:816px;height:1056px;flex:none;background:#fff;border-bottom:10px solid #203060;box-sizing:border-box;display:flex;flex-direction:column;overflow:hidden;color:#20241f;">
       <div style="height:14px;background:#203060;"></div>
       <div style="flex:1;padding:60px 58px 46px;box-sizing:border-box;display:flex;flex-direction:column;">
         <div style="display:flex;gap:20px;align-items:center;">
@@ -94,7 +94,7 @@
       },
       // 2 · executive letter
       function (v, art, h) {
-        return `<div class="ssg-fm-page" style="width:816px;height:1056px;flex:none;background:#fff;box-sizing:border-box;display:flex;flex-direction:column;overflow:hidden;color:#20241f;">
+        return `<div class="ssg-fm-page" style="width:816px;height:1056px;flex:none;background:#fff;border-bottom:10px solid #203060;box-sizing:border-box;display:flex;flex-direction:column;overflow:hidden;color:#20241f;">
       <div style="flex:1;padding:46px 70px 30px;box-sizing:border-box;display:flex;flex-direction:column;">
 
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:24px;padding-bottom:18px;border-bottom:1px solid #dfe3ec;">
@@ -134,12 +134,11 @@
           <div style="font-size:12px;color:#4b5468;line-height:1.6;">President<br>Summit Sensory Gym</div>
         </div>
       </div>
-      <div style="height:10px;background:#203060;flex:none;"></div>
     </div>`;
       },
       // 3 · one system, endless possibilities
       function (v, art, h) {
-        return `<div class="ssg-fm-page" style="width:816px;height:1056px;flex:none;background:#fff;box-sizing:border-box;display:flex;flex-direction:column;overflow:hidden;color:#20241f;">
+        return `<div class="ssg-fm-page" style="width:816px;height:1056px;flex:none;background:#fff;border-bottom:10px solid #203060;box-sizing:border-box;display:flex;flex-direction:column;overflow:hidden;color:#20241f;">
       <div style="flex:1;padding:52px 62px 30px;box-sizing:border-box;display:flex;flex-direction:column;">
 
         <div style="width:54px;height:3px;background:#d02030;"></div>
@@ -201,7 +200,6 @@
 
         
       </div>
-      <div style="height:10px;background:#203060;flex:none;"></div>
     </div>`;
       },
       // 4 · give your team more than equipment
