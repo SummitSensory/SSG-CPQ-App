@@ -44,6 +44,7 @@ import { registerFollowUpRoutes } from './routes/followUps.js';
 import { registerOutlookRoutes } from './routes/outlook.js';
 import { registerFormulaRoutes } from './routes/formulas.js';
 import { registerIntroTemplateRoutes } from './routes/introTemplates.js';
+import { registerBeltShipmentRoutes } from './routes/beltShipments.js';
 import { registerCronRoutes } from './routes/cron.js';
 import { verifySchemaOnBoot } from './lib/schemaCheck.js';
 import { registerPortalRoutes } from './routes/portal.js';
@@ -110,6 +111,7 @@ export function buildApp(): FastifyInstance {
   registerProposalRoutes(app);
   registerProposalTemplateRoutes(app);
   registerIntroTemplateRoutes(app);
+  registerBeltShipmentRoutes(app);
   registerAdventureRoutes(app);
   registerSoarRoutes(app);
   registerSkuRoutes(app);

@@ -424,6 +424,7 @@
     { id: 'mock', label: 'Mock Proposal', ready: true, promoted: true, roles: ['SYSTEM_ADMIN', 'EXECUTIVE', 'SALES_MANAGER', 'SALES_REP', 'DESIGNER', 'ESTIMATOR', 'OPERATIONS', 'PROJECT_MANAGER'] },
     { id: 'reports', label: 'Reports', ready: true, roles: '*' },
     { id: 'orders', label: 'Orders & Bill of Materials', ready: true, roles: '*' },
+    { id: 'belts', label: 'Belt Shipments', ready: true, roles: '*' },
     { id: 'admin', label: 'Administration', ready: true, roles: ['SYSTEM_ADMIN'] },
     { id: 'integrations', label: 'Integrations', ready: true, roles: ['SYSTEM_ADMIN', 'EXECUTIVE', 'ACCOUNTING'] },
   ];
@@ -553,6 +554,9 @@
       else if (id === 'mock') renderMockProposal(user);
       else if (id === 'reports') renderReports(user);
       else if (id === 'orders') renderOrders(user);
+      // Belts owed to customers, and the slip that goes in the box. See
+      // public/belt-shipments.js — narrow by design: no freight, no BOM, no prices.
+      else if (id === 'belts') window.SSGBeltShipments.mount();
       else if (id === 'admin') renderAdmin(user);
       else if (id === 'integrations') renderIntegrations(user);
       else renderSoon(item.label);
@@ -596,6 +600,7 @@
       window.SSGFrontMatter.loadArt();
     }
     if (window.SSGIntroAdmin) window.SSGIntroAdmin.init({ authed: authed, esc: esc });
+    if (window.SSGBeltShipments) window.SSGBeltShipments.init({ authed: authed, esc: esc });
     renderDashboard(user);
   }
 
@@ -9083,8 +9088,8 @@
       // so it prints exactly as it always has.
       '@page{size:letter;margin:0;}' +
       '@media print{html,body{height:auto!important;overflow:visible!important;background:#fff!important;}' +
-      'body > *{display:none!important;}body > #propPreviewOverlay{display:block!important;}' +
-      '#propPreviewOverlay{position:static!important;inset:auto!important;height:auto!important;background:#fff!important;padding:0!important;overflow:visible!important;}#propPreviewOverlay .noprint{display:none!important;}' +
+      'body > *{display:none!important;}body > #propPreviewOverlay,body > #psOverlay{display:block!important;}' +
+      '#propPreviewOverlay{position:static!important;inset:auto!important;height:auto!important;background:#fff!important;padding:0!important;overflow:visible!important;}#psOverlay .noprint{display:none!important;}#propPreviewOverlay .noprint{display:none!important;}' +
       // A section (heading, lines, subtotal) is one <tbody> and stays on one sheet;
       // where a section is taller than a sheet the engine drops the rule rather than
       // losing content. The header row repeats on every continued sheet.
@@ -9108,6 +9113,10 @@
       '#propPrintArea thead{display:table-header-group;}' +
       // Proposal sheets are laid out at exactly 8.5in x 11in with their own margins
       // and a pinned footer, so print must not add padding or rescale them.
+      '#psOverlay{position:static!important;padding:0!important;background:#fff!important;overflow:visible!important;}' +
+      '#psOverlay .ssg-sheet{width:8.5in!important;height:11in!important;margin:0!important;transform:none!important;' +
+        'box-shadow:none!important;overflow:hidden!important;break-inside:avoid!important;page-break-inside:avoid!important;' +
+        'break-after:page!important;page-break-after:always!important;}' +
       '#propPreviewOverlay .ssg-sheet{width:8.5in!important;height:11in!important;margin:0!important;' +
         'box-shadow:none!important;overflow:hidden!important;break-inside:avoid!important;page-break-inside:avoid!important;' +
         'break-after:page!important;page-break-after:always!important;}' +
