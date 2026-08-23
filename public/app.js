@@ -6308,6 +6308,55 @@
    *   - the catalog HAS a price and this line does not (fixable in one click)
    *   - the catalog has no price either (someone has to go price the part)
    */
+  /**
+   * The model code this proposal is for, read off the itemized frame heading the
+   * configurator writes ("SQ-3MBL1TZ — Itemized").
+   *
+   * This heading is the single source of truth for the model: the save-as-PDF file
+   * name derives from it, the customer document prints it, and the title-mismatch
+   * warning below compares against it. A proposal with no frame has no model, and
+   * everything that reads this simply prints nothing.
+   */
+  function proposalModelCode(lines) {
+    var model = '';
+    (lines || []).forEach(function (l) {
+      if ((l.lineType || '') !== 'GROUP' || model) return;
+      if (/itemized/i.test(l.name || '')) {
+        model = String(l.name).replace(/\s*[-\u2013\u2014]\s*itemized.*$/i, '').trim();
+      }
+    });
+    return model;
+  }
+
+  /**
+   * A model-shaped token inside free text — "SQ-3MBL2TZ", "K-4000".
+   *
+   * Reps used to type the model into the proposal title. The document now prints the
+   * model itself, from the line items, so a model in the title is a second copy that
+   * nothing keeps in step: change the frame and the title silently goes stale. This
+   * finds that copy so the builder can offer to correct it.
+   */
+  function modelTokenIn(text) {
+    var m = String(text || '').match(/\b[A-Z]{1,3}-[A-Z0-9]{3,}\b/);
+    return m ? m[0] : '';
+  }
+
+  /**
+   * Warn when the title still carries a model code that disagrees with the frame.
+   *
+   * A warning rather than a silent rewrite: a rep sometimes titles a proposal
+   * deliberately, and editing their words without asking is worse than flagging it.
+   */
+  function titleModelWarningHtml() {
+    var model = proposalModelCode(pb.lines);
+    var inTitle = modelTokenIn(pb.title);
+    if (!model || !inTitle || inTitle.toUpperCase() === model.toUpperCase()) return '';
+    return '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px;padding:10px 12px;background:#fbecea;border:1px solid #e8c4bd;border-radius:9px;font-size:12.5px;color:#7d2f24;">' +
+      '<div style="flex:1;min-width:240px;"><b>The title says <code>' + esc(inTitle) + '</code> but this proposal is for <code>' + esc(model) + '</code>.</b> ' +
+        'The document prints the model from the line items, so the title does not need to repeat it.</div>' +
+      '<button class="btn" id="bFixTitleModel" style="width:auto;padding:7px 13px;white-space:nowrap;">Use ' + esc(model) + '</button></div>';
+  }
+
   function priceWarningHtml() {
     var stale = stalePricedLines(), unpriced = unpricedLines();
     if (!stale.length && !unpriced.length) return '';
@@ -6472,6 +6521,7 @@
         '<div class="field" style="margin-top:4px;"><label>Ship to</label><textarea id="mShip" rows="2" style="' + IN + 'resize:vertical;">' + esc(pb.meta.shipTo) + '</textarea></div>' +
         '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:8px;cursor:pointer;"><input type="checkbox" id="mShowTitle"' + (pb.meta.showTitle !== false ? ' checked' : '') + '> Show the proposal title on the customer proposal</label>' +
         priceWarningHtml() +
+        titleModelWarningHtml() +
         // Running shipment weight, recalculated on every edit. Read-only: it is the
         // sum of the lines, and a typed override would quietly disagree with them.
         // Lines with no weight on record contribute 0 lb.
@@ -7777,6 +7827,18 @@
     document.querySelectorAll('.grpChip').forEach(function (c) { c.addEventListener('click', function () { pb.lines.push({ ref: uid(), lineType: 'GROUP', kind: 'GROUP', name: c.getAttribute('data-g'), description: '', quantity: 0, rateMinor: 0, optional: /trolley|adventure|foundation|mat/i.test(c.getAttribute('data-g')) }); renderBuilder(); }); });
     // header/meta inputs
     var mt = document.getElementById('mTitle'); if (mt) mt.addEventListener('input', function () { pb.title = mt.value; markBuilderDirty(); });
+    // Swap the stale model in the title for the one the line items say, leaving the
+    // rest of the rep's wording alone.
+    var bFixTitle = document.getElementById('bFixTitleModel');
+    if (bFixTitle) {
+      bFixTitle.addEventListener('click', function () {
+        var model = proposalModelCode(pb.lines), stale = modelTokenIn(pb.title);
+        if (!model || !stale) return;
+        pb.title = pb.title.split(stale).join(model);
+        markBuilderDirty();
+        renderBuilder();
+      });
+    }
     var mct = document.getElementById('mContact'); if (mct) mct.addEventListener('input', function () { pb.meta.contactName = mct.value; });
     var mp = document.getElementById('mProj'); if (mp) mp.addEventListener('input', function () { pb.meta.projectId = mp.value; });
     var mpd = document.getElementById('mPropDate'); if (mpd) mpd.addEventListener('input', function () { pb.meta.proposalDate = mpd.value; pb.meta.expiration = addDays(mpd.value, 7); var me2 = document.getElementById('mExp'); if (me2) me2.value = pb.meta.expiration; });
@@ -8363,6 +8425,255 @@
       out.join('') + '</div>';
   }
 
+  /**
+   * Lay the customer proposal out onto real Letter sheets.
+   *
+   * The browser's own print pagination cannot count pages, cannot pin a footer to the
+   * foot of a sheet, and decides for itself where a table breaks. A proposal is a
+   * legal document: every sheet has to say "Page 1 of 3", the footer has to sit in the
+   * footer, and a section must not be sliced in half. So the document is measured and
+   * packed into fixed 816 x 1056 px sheets before it is ever shown or printed, and
+   * preview, print and the server PDF all render the same finished sheets.
+   *
+   * Only the proposal is paginated. The introduction pages are already fixed sheets of
+   * their own and pass through untouched — and they are deliberately left out of the
+   * page count, which numbers the legal document, not the brochure in front of it.
+   *
+   * Takes the container holding a rendered document; replaces #propPrintArea in place.
+   */
+  function paginateProposalArea(root) {
+    var PAGE_W = 816, PAGE_H = 1056;
+    var PAD_TOP = 46, PAD_SIDE = 44, PAD_BOTTOM = 64;
+    var CONTENT_H = PAGE_H - PAD_TOP - PAD_BOTTOM;
+
+    var area = root.querySelector('#propPrintArea');
+    if (!area || area.getAttribute('data-paginated')) return;
+
+    /*
+     * Fit the title to a single line before anything is measured.
+     *
+     * A proposal title is set by a rep and can be any length. Two lines of 23px serif
+     * costs a line of the sheet and reads as a paragraph rather than a heading, so the
+     * type steps down until it fits — to 14px, below which the title would be smaller
+     * than the table it introduces and shrinking further stops helping.
+     */
+    Array.prototype.forEach.call(area.querySelectorAll('[data-fit-one-line]'), function (el) {
+      var size = parseFloat(getComputedStyle(el).fontSize) || 23;
+      while (size > 14 && el.scrollWidth > el.clientWidth) {
+        size -= 0.5;
+        el.style.fontSize = size + 'px';
+      }
+    });
+
+    var footLeft = area.getAttribute('data-foot-left') || '';
+    var footRight = area.getAttribute('data-foot-right') || '';
+
+    /** Outer height including margins — what actually has to be placed. */
+    function outerH(el) {
+      var cs = getComputedStyle(el);
+      return el.getBoundingClientRect().height + parseFloat(cs.marginTop) + parseFloat(cs.marginBottom);
+    }
+
+    // Measure at the true printed content width, off-screen, so nothing flashes.
+    var gauge = document.createElement('div');
+    gauge.style.cssText = 'position:absolute;left:-10000px;top:0;width:' + (PAGE_W - PAD_SIDE * 2) + 'px;visibility:hidden;';
+    gauge.innerHTML = area.innerHTML;
+    document.body.appendChild(gauge);
+
+    // Break points: every top-level block, and inside the line-item table every
+    // section. A section that fits on a sheet is placed whole; one taller than a
+    // sheet falls back to breaking between its rows, because it has to go somewhere.
+    var atoms = [];
+    Array.prototype.forEach.call(gauge.children, function (node) {
+      if (node.tagName === 'TABLE') {
+        var head = node.querySelector('thead');
+        Array.prototype.forEach.call(node.querySelectorAll('tbody'), function (tb) {
+          var rows = Array.prototype.slice.call(tb.children);
+          var tall = rows.reduce(function (a, r) { return a + r.getBoundingClientRect().height; }, 0);
+          if (tb.hasAttribute('data-group') && tall <= CONTENT_H) {
+            atoms.push({ kind: 'section', rows: rows, h: tall, head: head });
+          } else {
+            rows.forEach(function (tr) {
+              atoms.push({ kind: 'row', node: tr, h: tr.getBoundingClientRect().height, head: head });
+            });
+          }
+        });
+        return;
+      }
+      atoms.push({ kind: 'block', node: node, h: outerH(node), brk: node.hasAttribute('data-page-break') });
+    });
+
+    var sheets = [], cur = [], used = 0;
+    function flush() { if (cur.length) { sheets.push(cur); cur = []; used = 0; } }
+    function tabular(x) { return x.kind === 'row' || x.kind === 'section'; }
+
+    atoms.forEach(function (a) {
+      var headH = a.head ? a.head.getBoundingClientRect().height : 0;
+      // A continued table repeats its header, so that height has to be reserved.
+      var need = a.h + (a.head && !cur.some(tabular) ? headH : 0);
+      if (a.brk) flush();
+      else if (used + need > CONTENT_H && used > 0) flush();
+      cur.push(a);
+      used += need;
+    });
+    flush();
+    gauge.remove();
+
+    var total = sheets.length;
+    var out = sheets.map(function (items, i) {
+      var inner = '', tableOpen = false, head = null;
+      items.forEach(function (it) {
+        if (tabular(it)) {
+          if (!tableOpen) {
+            head = it.head;
+            inner += '<table style="width:100%;table-layout:fixed;border-collapse:collapse;">' +
+              '<colgroup><col style="width:430px;"><col style="width:100px;"><col style="width:40px;"><col style="width:80px;"><col style="width:78px;"></colgroup>' +
+              (head ? head.outerHTML : '') + '<tbody>';
+            tableOpen = true;
+          }
+          inner += it.kind === 'section'
+            ? it.rows.map(function (r) { return r.outerHTML; }).join('')
+            : it.node.outerHTML;
+          return;
+        }
+        if (tableOpen) { inner += '</tbody></table>'; tableOpen = false; }
+        inner += it.node.outerHTML;
+      });
+      if (tableOpen) inner += '</tbody></table>';
+      return '<div class="ssg-sheet" style="width:' + PAGE_W + 'px;height:' + PAGE_H + 'px;box-sizing:border-box;' +
+        'padding:' + PAD_TOP + 'px ' + PAD_SIDE + 'px ' + PAD_BOTTOM + 'px;position:relative;overflow:hidden;' +
+        'background:#fff;margin:0 auto;font-family:\'IBM Plex Sans\',sans-serif;color:#20241f;">' +
+        inner +
+        // Pinned to the foot of the sheet, not to the end of the content, and carrying
+        // the page count every sheet is required to state.
+        '<div style="position:absolute;left:' + PAD_SIDE + 'px;right:' + PAD_SIDE + 'px;bottom:32px;' +
+          'display:flex;justify-content:space-between;align-items:baseline;gap:20px;' +
+          'padding-top:9px;border-top:1px solid #eceef4;font-size:9.5px;color:#9aa1b0;">' +
+          '<span>' + footLeft + '</span>' +
+          '<span>' + footRight + '</span>' +
+          '<span style="white-space:nowrap;">Page ' + (i + 1) + ' of ' + total + '</span>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+
+    var holder = document.createElement('div');
+    holder.className = 'ssg-proposal-sheets';
+    holder.setAttribute('data-paginated', '1');
+    holder.innerHTML = out;
+    area.parentNode.replaceChild(holder, area);
+  }
+
+  /**
+   * Turn a rendered document into a page viewer: centred sheets, zoom, and a grid.
+   *
+   * Both halves of what a rep reviews are already fixed sheets — the introduction
+   * pages are authored at 816 x 1056, and the proposal is packed onto sheets of the
+   * same size by paginateProposalArea — so the viewer only has to arrange them. That
+   * is the point: what is on screen is the set of printed pages, with the real breaks,
+   * not a continuous document that will break somewhere else on paper.
+   *
+   * Zoom is a transform on the stage rather than a width change, so a sheet is never
+   * re-laid-out at a different size and the page breaks cannot shift as you zoom. The
+   * scroller is given a compensating height so scrolling still reaches the last page.
+   *
+   * Returns a function that re-measures after the content changes.
+   */
+  function mountPreviewViewer(ov, sel) {
+    var LS_KEY = 'ssgPreviewView';
+    var pages = Array.prototype.slice.call(ov.querySelectorAll('.ssg-sheet, .ssg-fm-page'));
+    if (!pages.length) return function () {};
+
+    var saved = {};
+    try { saved = JSON.parse(localStorage.getItem(LS_KEY) || '{}') || {}; } catch (e) { saved = {}; }
+    var zoom = Number(saved.zoom) || 0;   // 0 = fit the window
+    var grid = !!saved.grid;
+
+    // Every page becomes a direct child of one stage. The introduction pages arrive
+    // inside a .ssg-front-matter wrapper and the proposal sheets inside the holder the
+    // paginator built; left nested, the stage would have two flex children and a grid
+    // could never place two pages side by side. The wrappers carry nothing but the
+    // pages, so they are dropped.
+    var stage = document.createElement('div');
+    stage.id = 'pvStage';
+    var bar = ov.querySelector('#pvBar');
+    pages.forEach(function (p) { stage.appendChild(p); });
+    Array.prototype.slice.call(ov.children).forEach(function (c) {
+      if (c !== bar && c !== stage) c.remove();
+    });
+
+    var frame = document.createElement('div');
+    frame.id = 'pvFrame';
+    frame.className = 'noprint-passthrough';
+    frame.style.cssText = 'position:relative;';
+    frame.appendChild(stage);
+    ov.appendChild(frame);
+
+    function fitZoom() {
+      var avail = ov.clientWidth - 48;
+      var per = grid ? 2 : 1;
+      var need = 816 * per + 28 * (per - 1) + 4;
+      return Math.min(1.5, Math.max(0.15, avail / need));
+    }
+
+    function apply() {
+      var z = zoom || fitZoom();
+      var stageW = grid ? (816 * 2 + 28 + 4) : 816;
+      stage.style.cssText = 'display:flex;flex-wrap:wrap;justify-content:center;align-items:flex-start;' +
+        'gap:28px;width:' + stageW + 'px;' +
+        // Scaled from the top left and centred by the frame instead: a stage wider
+        // than the window cannot be centred by margin:auto, which is what pushed the
+        // grid off to one side.
+        'transform:scale(' + z + ');transform-origin:top left;';
+      pages.forEach(function (p) {
+        p.style.margin = '0';
+        p.style.flex = '0 0 auto';
+        p.style.boxShadow = '0 2px 24px rgba(32,48,96,.13)';
+      });
+      // The transform does not change layout, so the frame is given the on-screen size
+      // explicitly — otherwise it would centre the unscaled width and scrolling would
+      // stop short of the last page.
+      frame.style.width = Math.ceil(stageW * z) + 'px';
+      frame.style.height = Math.ceil(stage.scrollHeight * z) + 'px';
+      frame.style.margin = '0 auto';
+      frame.style.overflow = 'hidden';
+      var pct = ov.querySelector('#pvZoomPct');
+      if (pct) pct.textContent = Math.round(z * 100) + '%';
+      var gb = ov.querySelector('#pvGrid');
+      if (gb) {
+        gb.textContent = grid ? 'Single page' : 'Grid';
+        gb.setAttribute('aria-pressed', grid ? 'true' : 'false');
+      }
+      try { localStorage.setItem(LS_KEY, JSON.stringify({ zoom: zoom, grid: grid })); } catch (e) { /* private mode */ }
+    }
+
+    function step(dir) {
+      var z = zoom || fitZoom();
+      zoom = Math.min(1.5, Math.max(0.15, Math.round((z + dir * 0.1) * 100) / 100));
+      apply();
+    }
+
+    if (sel) {
+      var out = sel.querySelector('#pvZoomOut'), inn = sel.querySelector('#pvZoomIn');
+      var fit = sel.querySelector('#pvFit'), gb2 = sel.querySelector('#pvGrid');
+      if (out) out.addEventListener('click', function () { step(-1); });
+      if (inn) inn.addEventListener('click', function () { step(1); });
+      if (fit) fit.addEventListener('click', function () { zoom = 0; apply(); });
+      if (gb2) gb2.addEventListener('click', function () { grid = !grid; if (zoom) zoom = 0; apply(); });
+    }
+    // Ctrl/Cmd + wheel zooms, as it does in every other document viewer.
+    ov.addEventListener('wheel', function (e) {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      step(e.deltaY > 0 ? -1 : 1);
+    }, { passive: false });
+    window.addEventListener('resize', apply);
+
+    apply();
+    // Fonts land after the first paint and change the measured height.
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(apply).catch(function () {});
+    return apply;
+  }
+
   function proposalDocHtml(doc) {
     var d = doc, m = d.meta || {}, t = d.totals || {};
     // On a US proposal this IS fmtUsd, so the document stays byte-identical to what
@@ -8423,13 +8734,17 @@
     // indented one step further than whichever heading they sit under.
     var inSub = false;
     var bottomNotes = [];
-    /** Indent for anything sitting inside the current heading. */
-    function lineIndent() { return groupOpenSub != null ? (inSub ? 34 : 20) : 8; }
+    /**
+     * Left edge by tier. A section heading sits flush, a sub-heading steps in once,
+     * and a product hangs off whichever heading it belongs to — so the tier of any
+     * line can be read from its indent alone.
+     */
+    function lineIndent() { return inSub ? 48 : 28; }
     function subtotalRow() {
       if (groupOpenSub == null) return '';
       var r = '<tr style="break-inside:avoid;">' +
-        '<td colspan="4" style="padding:6px 10px 6px 0;font-size:11px;text-align:right;color:#7b8190;">Subtotal</td>' +
-        '<td style="padding:6px 0 6px 10px;font-size:11px;text-align:right;font-weight:700;">' + money(groupOpenSub) + '</td></tr>';
+        '<td colspan="4" style="padding:5px 10px 7px 0;font-size:11px;text-align:right;color:#7b8190;">Subtotal</td>' +
+        '<td style="padding:5px 0 7px 10px;font-size:11px;text-align:right;font-weight:700;">' + money(groupOpenSub) + '</td></tr>';
       groupOpenSub = null; return r;
     }
     (d.lines || []).forEach(function (l) {
@@ -8442,14 +8757,14 @@
         // rather than trailing the heading, so it lines up with the specification
         // columns beneath it instead of colliding with a long section name.
         body += '<tr data-brk="head" style="break-inside:avoid;break-after:avoid;">' +
-          '<td style="padding:11px 0 5px;font-weight:700;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:#203060;">' + esc(tc(stripOptional(l.name))) + (l.optional ? ' <span style="font-weight:400;text-transform:none;letter-spacing:0;color:#9aa1b0;">· optional</span>' : '') + '</td>' +
-          '<td colspan="4" style="padding:11px 10px 5px;font-size:11px;color:#5b6478;vertical-align:bottom;">' + (l.description ? esc(l.description) : '') + '</td></tr>';
+          '<td style="padding:7px 0 4px;font-weight:700;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:#203060;">' + esc(tc(stripOptional(l.name))) + (l.optional ? ' <span style="font-weight:400;color:#9aa1b0;">· OPTIONAL</span>' : '') + '</td>' +
+          '<td colspan="4" style="padding:7px 10px 4px;font-size:11px;color:#5b6478;vertical-align:bottom;">' + (l.description ? esc(l.description) : '') + '</td></tr>';
         return;
       }
       if (lt === 'SUBGROUP') {
         inSub = true;
         var subNote = String(l.description || '').trim();
-        body += '<tr data-brk="head" style="break-inside:avoid;break-after:avoid;"><td colspan="5" style="padding:8px 0 3px 14px;font-weight:700;font-size:11.5px;color:#20241f;">' + esc(tc(l.name)) +
+        body += '<tr data-brk="head" style="break-inside:avoid;break-after:avoid;"><td colspan="5" style="padding:2px 0 2px 14px;font-weight:600;font-size:11px;color:#5b6478;letter-spacing:.03em;">' + esc(tc(l.name)) +
           (subNote ? '<div style="font-weight:400;font-size:10.5px;color:#5b6478;margin-top:2px;line-height:1.5;">' + rt(subNote) + '</div>' : '') +
           '</td></tr>';
         return;
@@ -8473,14 +8788,28 @@
       }
       var amt = (Number(l.quantity) || 0) * (Number(l.rateMinor) || 0);
       var indent = lineIndent();
+      // The freight-undetermined note is a sentence, not a product description, so it
+      // runs the width of the specification columns instead of wrapping three times
+      // inside the narrow name column. It carries the row's rule, and the line above
+      // it gives its rule up, so the note reads as part of that line.
+      var freightNote = showsFreightTbd(l);
+      var rowRule = freightNote ? '' : 'border-bottom:1px solid #eceef4;';
       if (groupOpenSub != null) groupOpenSub += amt + (Number(l.tpFreightMinor) || 0);
-      body += '<tr style="break-inside:avoid;"><td style="padding:6px 0 6px ' + indent + 'px;font-size:11px;line-height:1.4;border-bottom:1px solid #eceef4;vertical-align:top;"><b style="font-weight:600;">' + esc(tc(l.name)) + '</b>' + (l.description ? '<div style="font-size:10.5px;color:#5b6478;line-height:1.45;margin-top:2px;">' + esc(l.description) + '</div>' : '') +
-        (l.delivery ? '<div style="font-size:10px;color:#7b8190;margin-top:2px;">Delivery: ' + esc(l.delivery) + '</div>' : '') +
-        (showsFreightTbd(l) ? '<div style="font-size:10px;color:#5b6478;line-height:1.45;margin-top:3px;font-style:italic;">' + esc(FREIGHT_TBD_NOTE) + '</div>' : '') + '</td>' +
-        '<td style="padding:6px 10px;border-bottom:1px solid #eceef4;font-size:11px;color:#7b8190;vertical-align:top;font-family:ui-monospace,monospace;">' + esc(l.sku || '') + '</td>' +
-        '<td style="padding:6px 10px;border-bottom:1px solid #eceef4;font-size:11px;text-align:right;vertical-align:top;">' + (Number(l.quantity) || 0) + '</td>' +
-        '<td style="padding:6px 10px;border-bottom:1px solid #eceef4;font-size:11px;text-align:right;vertical-align:top;">' + fmtMoney(l.rateMinor, '') + '</td>' +
-        '<td style="padding:6px 0 6px 10px;border-bottom:1px solid #eceef4;font-size:11px;text-align:right;vertical-align:top;font-weight:700;color:#203060;">' + fmtMoney(amt, '') + '</td></tr>';
+      body += '<tr style="break-inside:avoid;"><td style="padding:2px 0 2px ' + indent + 'px;font-size:11px;line-height:1.25;' + rowRule + 'vertical-align:top;">' + esc(tc(l.name)) + '</td>' +
+        '<td style="padding:2px 10px;' + rowRule + 'font-size:11px;color:#7b8190;vertical-align:top;font-family:ui-monospace,monospace;overflow-wrap:anywhere;">' + esc(l.sku || '') + '</td>' +
+        '<td style="padding:2px 10px;' + rowRule + 'font-size:11px;text-align:right;vertical-align:top;">' + (Number(l.quantity) || 0) + '</td>' +
+        '<td style="padding:2px 10px;' + rowRule + 'font-size:11px;text-align:right;vertical-align:top;">' + fmtMoney(l.rateMinor, '') + '</td>' +
+        '<td style="padding:2px 0 2px 10px;' + rowRule + 'font-size:11px;text-align:right;vertical-align:top;font-weight:700;color:#203060;">' + fmtMoney(amt, '') + '</td></tr>';
+      // Prose belongs to the whole row, not to the name column: a description or a
+      // freight sentence runs the full width of the table rather than wrapping three
+      // times inside a 430px column while the numeric columns sit empty beside it.
+      var prose = '';
+      if (l.description) prose += '<div style="font-size:10.5px;color:#5b6478;line-height:1.45;">' + esc(l.description) + '</div>';
+      if (l.delivery) prose += '<div style="font-size:10px;color:#7b8190;margin-top:2px;">Delivery: ' + esc(l.delivery) + '</div>';
+      if (freightNote) prose += '<div style="font-size:10px;color:#5b6478;line-height:1.5;font-style:italic;' + (prose ? 'margin-top:2px;' : '') + '">' + esc(FREIGHT_TBD_NOTE) + '</div>';
+      if (prose) {
+        body += '<tr style="break-inside:avoid;"><td colspan="5" style="padding:0 0 5px ' + indent + 'px;border-bottom:1px solid #eceef4;">' + prose + '</td></tr>';
+      }
       if (Number(l.tpFreightMinor) > 0) {
         body += '<tr style="break-inside:avoid;"><td style="padding:2px 0 6px 20px;border-bottom:1px solid #eceef4;font-size:10.5px;color:#5b6478;font-style:italic;">+ ' + esc(tc(l.tpFreightLabel || 'Third-Party Freight')) + '</td><td style="border-bottom:1px solid #eceef4;"></td><td style="border-bottom:1px solid #eceef4;"></td><td style="border-bottom:1px solid #eceef4;"></td><td style="padding:2px 0 6px 10px;border-bottom:1px solid #eceef4;text-align:right;font-size:10.5px;color:#5b6478;">' + fmtMoney(l.tpFreightMinor, '') + '</td></tr>';
       }
@@ -8504,19 +8833,6 @@
             (fn.title ? '<div style="font-family:\'Newsreader\',Georgia,serif;font-size:15px;font-weight:700;color:#203060;letter-spacing:-.015em;margin-bottom:6px;">' + esc(fn.title) + '</div>' : '') + rt(fn.body) + '</div>';
         }).join('') + '</div>'
       : '';
-    /**
-     * A footer rule at the foot of each half of the document.
-     *
-     * Two of them, at the two places the document naturally ends: below the totals,
-     * and below the terms on the acceptance sheet. A printed proposal gets separated,
-     * initialled and re-stapled, so each half has to say what it belongs to.
-     */
-    function docFooter(left) {
-      return '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:20px;margin-top:26px;padding-top:10px;border-top:1px solid #eceef4;font-size:9.5px;color:#9aa1b0;break-inside:avoid;">' +
-        '<span>' + left + '</span>' +
-        '<span>' + esc(d.orgName || '') + '</span>' +
-      '</div>';
-    }
     var docIdent = [esc(d.number || ''), (Number(d.version) || 1) > 1 ? 'Revision ' + (Number(d.version) - 1) : ''].filter(Boolean).join(' · ');
     var preparedBy =
       // Line rhythm matches the "Prepared For" block below it — same 12px size and
@@ -8539,7 +8855,8 @@
     if (scope === 'INTRO' && frontMatter) return frontMatter;
     var html =
       frontMatter +
-      '<div id="propPrintArea" style="max-width:816px;margin:0 auto;background:#fff;padding:46px 44px 40px;box-sizing:border-box;font-family:\'IBM Plex Sans\',sans-serif;color:#20241f;">' +
+      '<div id="propPrintArea" data-foot-left="' + esc('Summit Sensory Gym · ' + docIdent) + '" data-foot-right="' + esc(d.orgName || '') + '" ' +
+        'style="max-width:816px;margin:0 auto;background:#fff;padding:46px 44px 40px;box-sizing:border-box;font-family:\'IBM Plex Sans\',sans-serif;color:#20241f;">' +
         '<div style="border-bottom:2px solid #203060;padding-bottom:15px;margin-bottom:13px;">' +
           '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:30px;">' +
           '<div style="display:flex;flex-direction:column;">' +
@@ -8553,6 +8870,10 @@
             '<div style="font-size:11.5px;color:#5b6478;margin-top:7px;line-height:1.75;">' +
               '<div>Proposal Date: <b style="color:#20241f;">' + (m.proposalDate ? fmtDate(m.proposalDate) : fmtDate(todayISO())) + '</b></div>' +
               (m.expiration ? '<div>Expiration Date: <b style="color:#20241f;">' + fmtDate(m.expiration) + '</b></div>' : '') +
+              (function () {
+                var model = proposalModelCode(d.lines);
+                return model ? '<div>Model: <b style="color:#20241f;">' + esc(model) + '</b></div>' : '';
+              })() +
               (m.showProjectId !== false && m.projectId ? '<div>Project ID: <b style="color:#20241f;">' + esc(m.projectId) + '</b></div>' : '') +
               '<div>Total Weight: <b style="color:#20241f;">' + (Number(t.weight) || 0).toLocaleString() + ' lbs</b></div>' +
             '</div>' +
@@ -8565,9 +8886,16 @@
             (m.billTo ? '<div style="font-size:12px;color:#20241f;line-height:1.2;white-space:pre-line;">' + esc(m.billTo) + '</div>' : '') + '</div>' +
           (m.shipTo ? '<div style="flex:1;"><div style="font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;">Ship To</div><div style="font-size:12px;color:#20241f;line-height:1.2;margin-top:4px;white-space:pre-line;">' + esc(m.shipTo) + '</div></div>' : '') +
         '</div>' +
-        (m.showTitle !== false && d.title ? '<div style="font-family:\'Newsreader\',serif;font-size:23px;font-weight:700;color:#203060;letter-spacing:-.015em;margin-top:14px;">' + esc(d.title) + '</div>' : '') +
+        (m.showTitle !== false && d.title ? '<div data-fit-one-line style="font-family:\'Newsreader\',serif;font-size:23px;font-weight:700;color:#203060;letter-spacing:-.015em;margin:0;padding:0 0 28px;white-space:nowrap;">' + esc(d.title) + '</div>' : '') +
         cbFxBanner(d) +
-        '<table style="width:100%;border-collapse:collapse;margin-top:16px;"><thead><tr style="color:#7b8190;font-size:9.5px;text-transform:uppercase;letter-spacing:.1em;font-weight:700;"><th style="text-align:left;padding:0 0 6px;border-bottom:1.5px solid #203060;font-weight:700;">Activity / Description</th><th style="text-align:left;padding:0 10px 6px;border-bottom:1.5px solid #203060;width:90px;font-weight:700;">SKU</th><th style="text-align:right;padding:0 10px 6px;border-bottom:1.5px solid #203060;width:44px;font-weight:700;">Qty</th><th style="text-align:right;padding:0 10px 6px;border-bottom:1.5px solid #203060;width:84px;font-weight:700;">Rate</th><th style="text-align:right;padding:0 0 6px 10px;border-bottom:1.5px solid #203060;width:94px;font-weight:700;">Amount</th></tr></thead>' + (body.indexOf('<tbody') === 0 ? '' : '<tbody>') + body + (body.indexOf('<tbody') === 0 ? '' : '</tbody>') + '</table>' +
+        // Fixed layout with an explicit colgroup: the description column keeps the
+        // width it was designed at, so a product name stays on one line and every row
+        // is the same height. Left to itself the table would rebalance the columns
+        // around the widest spanning cell — a section note or a freight sentence —
+        // and squeeze the names into wrapping.
+        '<table style="width:100%;table-layout:fixed;border-collapse:collapse;">' +
+        '<colgroup><col style="width:430px;"><col style="width:100px;"><col style="width:40px;"><col style="width:80px;"><col style="width:78px;"></colgroup>' +
+        '<thead><tr style="color:#7b8190;font-size:9.5px;text-transform:uppercase;letter-spacing:.1em;font-weight:700;"><th style="text-align:left;padding:0 0 6px;border-bottom:1.5px solid #203060;font-weight:700;">Activity / Description</th><th style="text-align:left;padding:0 10px 6px;border-bottom:1.5px solid #203060;font-weight:700;">SKU</th><th style="text-align:right;padding:0 10px 6px;border-bottom:1.5px solid #203060;font-weight:700;">Qty</th><th style="text-align:right;padding:0 10px 6px;border-bottom:1.5px solid #203060;font-weight:700;">Rate</th><th style="text-align:right;padding:0 0 6px 10px;border-bottom:1.5px solid #203060;font-weight:700;">Amount</th></tr></thead>' + (body.indexOf('<tbody') === 0 ? '' : '<tbody>') + body + (body.indexOf('<tbody') === 0 ? '' : '</tbody>') + '</table>' +
         '<div style="display:flex;justify-content:flex-end;margin-top:18px;break-inside:avoid;"><div style="min-width:' + (cbApplies(d) ? '340px' : '300px') + ';">' +
           '<div style="display:flex;justify-content:space-between;gap:12px;padding:2px 0;font-size:12px;"><span style="font-weight:700;color:#20241f;">Subtotal</span><span style="text-align:right;">' + cbAmt(t.subtotal) + '</span></div>' +
           // Red and bold on purpose: the one line on the totals block the customer is
@@ -8585,7 +8913,6 @@
           (m.showDeposit !== false ? '<div style="display:flex;justify-content:space-between;padding-top:3px;font-size:11.5px;font-weight:700;"><span style="color:#7b8190;">Deposit Due (' + depositPct() + '%)</span><span>' + money(t.deposit) + '</span></div>' : '') +
           cbBorderBlock(d) +
         '</div></div>' + bottomNotesHtml +
-        docFooter('Summit Sensory Gym · ' + docIdent) +
         // Acceptance and the terms always begin a fresh sheet, whatever the line count.
         // Signing is the act the document exists for, so the page a customer signs is
         // never a page that happens to have room left at the bottom of the pricing —
@@ -8609,28 +8936,46 @@
             '<div style="flex:1;"><div style="border-bottom:1px solid #20241f;height:40px;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Date</div></div>' +
           '</div>' +
         '</div>' + footerNotesHtml + cbClauses(d) +
-        docFooter('6150 S Geneva Ct, Englewood, CO 80111 · (720) 457-5500 · Sales@SummitSensory.com') +
         '</div>' +
       '</div>';
     return html;
   }
 
   /**
-   * A standalone document for the server renderer: the same markup, wrapped so it
-   * stands alone with no stylesheet, no fonts to fetch and no script. Georgia stands
-   * in for Newsreader — a webfont fetch inside a headless browser is the one thing
-   * that can hang a render, and the serif shape is what carries the brand here.
+   * A standalone document for the server renderer: the same markup, the same fonts and
+   * the same paginator the rep saw on screen.
+   *
+   * The fonts are fetched rather than substituted. A local serif has different metrics,
+   * which changes where lines wrap, which changes where sheets break — so a substituted
+   * PDF is not the document that was approved. render/pdf.ts waits for the faces to
+   * load and for pagination to finish before it takes the picture.
    */
   function proposalStandaloneHtml(doc) {
     return '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(doc.title || 'Proposal') + '</title>' +
-      '<style>@page{size:letter;margin:0;}body{margin:0;font-family:-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;color:#20241f;}' +
+      '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,400;6..72,600;6..72,700&display=swap">' +
+      '<style>@page{size:letter;margin:0;}body{margin:0;font-family:"IBM Plex Sans",-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;color:#20241f;}' +
       '#propPrintArea{padding:0.5in;box-sizing:border-box;max-width:none;}' +
+      // Sheets produced by the paginator below.
+      '.ssg-sheet{width:8.5in;height:11in;margin:0;overflow:hidden;box-sizing:border-box;' +
+        'break-inside:avoid;page-break-inside:avoid;break-after:page;page-break-after:always;}' +
       'tr{break-inside:avoid;}thead{display:table-header-group;}' +
       'tbody[data-group]{break-inside:avoid;page-break-inside:avoid;}' +
       '.ssg-fm-page{width:8.5in;height:11in;min-height:0;margin:0;overflow:hidden;' +
         'break-inside:avoid;page-break-inside:avoid;break-after:page;page-break-after:always;}' +
       "*[style*='Newsreader']{font-family:Georgia,serif !important;}</style></head><body>" +
-      proposalDocHtml(doc) + '</body></html>';
+      proposalDocHtml(doc) +
+      // The same pagination the rep sees, run before the renderer takes the picture:
+      // fixed sheets, a pinned footer and "Page N of M" on every one. The function is
+      // shipped as source so there is one implementation, not two that drift.
+      '<script>' + paginateProposalArea.toString() +
+        ';(function(){' +
+          'function go(){try{paginateProposalArea(document.body);}catch(e){}' +
+            'document.documentElement.setAttribute("data-paginated","1");}' +
+          // Measure with the real faces, never with the fallback: a sheet packed
+          // against fallback metrics breaks in a different place.
+          'if(document.fonts&&document.fonts.ready){document.fonts.ready.then(go).catch(go);}else{go();}' +
+        '})();<\/script>' +
+      '</body></html>';
   }
 
   function previewProposalDoc(doc, printNow) {
@@ -8643,8 +8988,22 @@
     // proposal can be pulled separately or together from any version at any time —
     // nothing here depends on the proposal's status and nothing is saved.
     function toolbarHtml() {
-      return '<div class="noprint" id="pvBar" style="max-width:900px;margin:0 auto 14px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">' +
+      function vb(id, label, title) {
+        return '<button class="link-btn" id="' + id + '" title="' + title + '" ' +
+          'style="width:auto;padding:6px 11px;background:#fff;font-size:12px;">' + label + '</button>';
+      }
+      return '<div class="noprint" id="pvBar" style="margin:0 auto 16px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">' +
         '<button class="link-btn" id="pvClose" style="width:auto;padding:9px 16px;background:#fff;">‹ Close preview</button>' +
+        // View controls: the pages are real printed sheets, so the viewer gives the
+        // same handles any document viewer does.
+        '<div style="display:flex;align-items:center;gap:6px;background:#fff;border:1px solid #dfe3ec;border-radius:9px;padding:4px;">' +
+          vb('pvZoomOut', '&minus;', 'Zoom out (Ctrl/Cmd + scroll)') +
+          '<span id="pvZoomPct" style="min-width:46px;text-align:center;font-size:12px;color:#5b6478;font-variant-numeric:tabular-nums;">100%</span>' +
+          vb('pvZoomIn', '+', 'Zoom in (Ctrl/Cmd + scroll)') +
+          '<span style="width:1px;height:20px;background:#e6e9f0;"></span>' +
+          vb('pvFit', 'Fit', 'Fit the window') +
+          vb('pvGrid', 'Grid', 'Show two pages side by side') +
+        '</div>' +
         // The what-to-generate switch sits with the print button, because it is a
         // property of the thing about to be produced.
         '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:flex-end;">' +
@@ -8655,6 +9014,8 @@
     }
     ov.innerHTML = toolbarHtml() + html;
     document.body.appendChild(ov);
+    paginateProposalArea(ov);
+    mountPreviewViewer(ov, ov);
 
     function wire() {
       document.getElementById('pvClose').addEventListener('click', function () { document.body.removeChild(ov); });
@@ -8662,6 +9023,8 @@
       if (window.SSGFrontMatter) {
         window.SSGFrontMatter.bindScopeToggle(ov, function () {
           ov.innerHTML = toolbarHtml() + proposalDocHtml(doc);
+          paginateProposalArea(ov);
+          mountPreviewViewer(ov, ov);
           ov.scrollTop = 0;
           wire();
         });
@@ -8743,6 +9106,15 @@
       '#propPrintArea tr[data-brk="head"]{break-after:avoid!important;page-break-after:avoid!important;}' +
       '#propPrintArea tr[data-brk="head"] + tr{break-before:avoid!important;page-break-before:avoid!important;}' +
       '#propPrintArea thead{display:table-header-group;}' +
+      // Proposal sheets are laid out at exactly 8.5in x 11in with their own margins
+      // and a pinned footer, so print must not add padding or rescale them.
+      '#propPreviewOverlay .ssg-sheet{width:8.5in!important;height:11in!important;margin:0!important;' +
+        'box-shadow:none!important;overflow:hidden!important;break-inside:avoid!important;page-break-inside:avoid!important;' +
+        'break-after:page!important;page-break-after:always!important;}' +
+      '#propPreviewOverlay .ssg-proposal-sheets{background:#fff!important;}' +
+      '#propPreviewOverlay #pvStage{transform:none!important;width:auto!important;display:block!important;gap:0!important;}' +
+      '#propPreviewOverlay #pvFrame{width:auto!important;height:auto!important;overflow:visible!important;margin:0!important;}' +
+      '#propPreviewOverlay .ssg-sheet,#propPreviewOverlay .ssg-fm-page{box-shadow:none!important;}' +
       '#propPrintArea{padding:0.5in!important;max-width:none!important;}' +
       // Each introduction page is one sheet, printed at the size it was designed at.
       '#propPreviewOverlay .ssg-fm-page{width:8.5in!important;height:11in!important;min-height:0!important;' +
