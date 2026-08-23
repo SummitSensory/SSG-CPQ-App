@@ -690,7 +690,10 @@ export function registerFinanceRoutes(app: FastifyInstance): void {
       );
       attachments.push({
         filename: `${name}.pdf`,
-        content: (await renderPdf(input.proposalHtml, { format: 'Letter' })).toString('base64'),
+        // edgeToEdge: the proposal document owns its own page geometry — see render/pdf.ts.
+        content: (
+          await renderPdf(input.proposalHtml, { format: 'Letter', edgeToEdge: true })
+        ).toString('base64'),
       });
     }
     if (input.includeFinancing) {

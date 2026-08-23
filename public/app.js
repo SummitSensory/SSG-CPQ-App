@@ -638,9 +638,10 @@
       meta: {
         contactName: '', shipTo: '', billTo: '', billSameAsShip: true, showTitle: true,
         projectId: '', showProjectId: false, showDeposit: true,
-        // Adventure Series cover + introduction pages, on by default. Only has any
-        // effect on an Adventure proposal — see SSGFrontMatter.applies().
-        introPages: true,
+        // Adventure Series front matter: the photos attached to this proposal, and
+        // whether the document is the introduction, the proposal, or both. Only has
+        // any effect on an Adventure proposal — see SSGFrontMatter.applies().
+        introArt: null, docScope: 'BOTH',
         tbdTax: '', tbdStructureFreight: '', tbdMatsFreight: '',
         proposalDate: today, taxAmountMinor: 0, discountPct: 0, discountMode: 'PCT', discountAmountMinor: 0,
         structureFreightMinor: 0, matsFreightMinor: 0,
@@ -5598,7 +5599,7 @@
     pb = {
       proposalId: proposal.id, versionId: version.id, user: user, orgId: proposal.organizationId, orgName: orgName, stdNotes: stdNotes, updatedAt: openedUpdatedAt,
       title: proposal.title || '', number: proposal.number || '', version: version.version || 1,
-      meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', billSameAsShip: !meta.billTo || meta.billTo === (meta.shipTo || orgShipTo || ''), showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, showDeposit: meta.showDeposit !== false, introPages: meta.introPages !== false, tbdTax: meta.tbdTax || '', tbdStructureFreight: meta.tbdStructureFreight || '', tbdMatsFreight: meta.tbdMatsFreight || '', proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, discountMode: meta.discountMode === 'AMT' ? 'AMT' : 'PCT', discountAmountMinor: meta.discountAmountMinor || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, stdFreightOn: !!meta.stdFreightOn, stdFreightMinor: meta.stdFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7), footerNotes: footerNotes, advAnswers: meta.advAnswers || null, advWarnings: meta.advWarnings || [] },
+      meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', billSameAsShip: !meta.billTo || meta.billTo === (meta.shipTo || orgShipTo || ''), showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, showDeposit: meta.showDeposit !== false, introArt: meta.introArt || null, docScope: meta.docScope || 'BOTH', tbdTax: meta.tbdTax || '', tbdStructureFreight: meta.tbdStructureFreight || '', tbdMatsFreight: meta.tbdMatsFreight || '', proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, discountMode: meta.discountMode === 'AMT' ? 'AMT' : 'PCT', discountAmountMinor: meta.discountAmountMinor || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, stdFreightOn: !!meta.stdFreightOn, stdFreightMinor: meta.stdFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7), footerNotes: footerNotes, advAnswers: meta.advAnswers || null, advWarnings: meta.advWarnings || [] },
       lines: lines,
     };
     // A new proposal starts with the billing address the same as the shipping one.
@@ -6474,12 +6475,11 @@
         // Not every job takes a deposit. Unchecked, the deposit line is left off the
         // customer proposal entirely rather than printed as $0.
         '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:6px;cursor:pointer;"><input type="checkbox" id="mShowDeposit"' + (pb.meta.showDeposit !== false ? ' checked' : '') + '> Show the ' + depositPct() + '% deposit on the customer proposal</label>' +
-        // The cover page and four introduction pages that print ahead of the itemized
-        // proposal. Offered only where there is a series cover to print.
-        (window.SSGFrontMatter && window.SSGFrontMatter.applies({ meta: pb.meta, lines: pb.lines })
-          ? '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:6px;cursor:pointer;"><input type="checkbox" id="mShowIntro"' + (pb.meta.introPages !== false ? ' checked' : '') + '> Include the Adventure Series cover and introduction pages</label>'
-          : '') +
       '</div>' +
+      // Photos for the Adventure Series introduction, and what to generate.
+      (window.SSGFrontMatter && window.SSGFrontMatter.applies({ meta: pb.meta, lines: pb.lines })
+        ? '<div id="fmPanel">' + window.SSGFrontMatter.panelHtml(pb.meta) + '</div>'
+        : '') +
       // quick add
       '<div class="card" style="margin-bottom:16px;"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin:0 0 10px;"><div class="section-title" style="margin:0;">Add to proposal</div>' +
           '<div style="display:flex;flex-direction:column;gap:6px;">' +
@@ -7768,7 +7768,12 @@
     var mp = document.getElementById('mProj'); if (mp) mp.addEventListener('input', function () { pb.meta.projectId = mp.value; });
     var mpd = document.getElementById('mPropDate'); if (mpd) mpd.addEventListener('input', function () { pb.meta.proposalDate = mpd.value; pb.meta.expiration = addDays(mpd.value, 7); var me2 = document.getElementById('mExp'); if (me2) me2.value = pb.meta.expiration; });
     var msp = document.getElementById('mShowProj'); if (msp) msp.addEventListener('change', function () { pb.meta.showProjectId = msp.checked; });
-    var mintro = document.getElementById('mShowIntro'); if (mintro) mintro.addEventListener('change', function () { pb.meta.introPages = mintro.checked; markBuilderDirty(); });
+    if (window.SSGFrontMatter) {
+      window.SSGFrontMatter.bindPanel(document.getElementById('fmPanel'), pb.meta, function () {
+        markBuilderDirty();
+        renderBuilderKeepingFocus();
+      });
+    }
     var mdep = document.getElementById('mShowDeposit'); if (mdep) mdep.addEventListener('change', function () {
       pb.meta.showDeposit = mdep.checked;
       // Wording that references the deposit is swapped for wording that does not, and
@@ -8466,13 +8471,17 @@
         (preparerLine2 ? '<div style="color:#5c6157;margin-top:1px;">' + esc(preparerLine2) + '</div>' : '') +
         (u.email ? '<div style="color:#5c6157;margin-top:2px;">' + esc(u.email) + '</div>' : '') +
       '</div>';
+    // The introduction prints ahead of the pricing document and is part of the same
+    // string, so preview, print, the PDF render and the e-sign packet all carry it
+    // without any of them having to know it exists. docScope decides which halves of
+    // the document are generated: the introduction, the proposal, or both.
+    var scope = m.docScope || 'BOTH';
+    var frontMatter = (scope !== 'PROPOSAL' && window.SSGFrontMatter && window.SSGFrontMatter.applies(d))
+      ? window.SSGFrontMatter.introHtml(d, { user: u, depositPct: depositPct() })
+      : '';
+    if (scope === 'INTRO' && frontMatter) return frontMatter;
     var html =
-      // The series front matter prints ahead of the pricing document and is part of
-      // the same string, so preview, print, the PDF render and the e-sign packet all
-      // get it without any of them having to know it exists.
-      (m.introPages !== false && window.SSGFrontMatter && window.SSGFrontMatter.applies(d)
-        ? window.SSGFrontMatter.adventureIntroHtml(d, { user: u, depositPct: depositPct() })
-        : '') +
+      frontMatter +
       '<div id="propPrintArea" style="max-width:760px;margin:0 auto;background:#fff;padding:44px 48px;font-family:\'IBM Plex Sans\',sans-serif;color:#20241f;">' +
         '<div style="border-bottom:2px solid #3d4a55;padding-bottom:16px;margin-bottom:20px;">' +
           '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;">' +
@@ -8536,10 +8545,11 @@
    */
   function proposalStandaloneHtml(doc) {
     return '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(doc.title || 'Proposal') + '</title>' +
-      '<style>@page{margin:0.5in;}body{margin:0;font-family:-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;color:#20241f;}' +
+      '<style>@page{size:letter;margin:0;}body{margin:0;font-family:-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;color:#20241f;}' +
+      '#propPrintArea{padding:0.5in;box-sizing:border-box;max-width:none;}' +
       'tr{break-inside:avoid;}thead{display:table-header-group;}' +
-      '.ssg-fm-page{width:auto !important;max-width:none !important;min-height:9.5in;box-shadow:none !important;' +
-        'margin:0 !important;break-inside:avoid;page-break-inside:avoid;break-after:page;page-break-after:always;}' +
+      '.ssg-fm-page{width:8.5in;height:11in;min-height:0;margin:0;overflow:hidden;' +
+        'break-inside:avoid;page-break-inside:avoid;break-after:page;page-break-after:always;}' +
       "*[style*='Newsreader']{font-family:Georgia,serif !important;}</style></head><body>" +
       proposalDocHtml(doc) + '</body></html>';
   }
@@ -8600,7 +8610,11 @@
   function ensurePrintStyle() {
     if (document.getElementById('propPrintStyle')) return;
     var st = document.createElement('style'); st.id = 'propPrintStyle';
-    st.textContent = '@page{margin:0.5in;}' +
+    st.textContent =
+      // Zero page margin so an introduction page prints edge to edge at its authored
+      // 8.5in x 11in. The itemized proposal takes that half inch back as padding below,
+      // so it prints exactly as it always has.
+      '@page{size:letter;margin:0;}' +
       '@media print{html,body{height:auto!important;overflow:visible!important;background:#fff!important;}' +
       'body > *{display:none!important;}body > #propPreviewOverlay{display:block!important;}' +
       '#propPreviewOverlay{position:static!important;inset:auto!important;height:auto!important;background:#fff!important;padding:0!important;overflow:visible!important;}#propPreviewOverlay .noprint{display:none!important;}' +
@@ -8620,13 +8634,12 @@
       '#propPrintArea tr[data-brk="head"]{break-after:avoid!important;page-break-after:avoid!important;}' +
       '#propPrintArea tr[data-brk="head"] + tr{break-before:avoid!important;page-break-before:avoid!important;}' +
       '#propPrintArea thead{display:table-header-group;}' +
-      '#propPrintArea{padding:0!important;max-width:none!important;}' +
-      // Each front-matter page is its own sheet. On screen it is a page-sized card;
-      // in print the sheet IS the page, so the card chrome comes off and the height
-      // is set from the paper (Letter less the 0.5in margins) rather than in pixels.
-      '#propPreviewOverlay .ssg-fm-page{width:auto!important;max-width:none!important;min-height:9.5in!important;' +
-        'box-shadow:none!important;margin:0!important;break-inside:avoid!important;page-break-inside:avoid!important;' +
-        'break-after:page!important;page-break-after:always!important;}}';
+      '#propPrintArea{padding:0.5in!important;max-width:none!important;}' +
+      // Each introduction page is one sheet, printed at the size it was designed at.
+      '#propPreviewOverlay .ssg-fm-page{width:8.5in!important;height:11in!important;min-height:0!important;' +
+        'margin:0!important;overflow:hidden!important;break-inside:avoid!important;page-break-inside:avoid!important;' +
+        'break-after:page!important;page-break-after:always!important;}' +
+      '#propPreviewOverlay .ssg-front-matter{background:#fff;}}';
     document.head.appendChild(st);
   }
 

@@ -26,7 +26,11 @@ import { env } from '../config/env.js';
  *   pnpm add playwright-core @sparticuz/chromium-min
  */
 
-type Browser = { newPage: () => Promise<Page>; close: () => Promise<void>; isConnected: () => boolean };
+type Browser = {
+  newPage: () => Promise<Page>;
+  close: () => Promise<void>;
+  isConnected: () => boolean;
+};
 type Page = {
   setContent: (html: string, opts?: Record<string, unknown>) => Promise<void>;
   emulateMedia: (opts: Record<string, unknown>) => Promise<void>;
@@ -80,6 +84,15 @@ export interface PdfOptions {
   landscape?: boolean;
   marginTop?: string;
   marginBottom?: string;
+  /**
+   * Print with no page margin at all, letting the document own its own geometry.
+   *
+   * The customer proposal needs this: its introduction pages are authored at a full
+   * 8.5in x 11in and print edge to edge, and the itemized pages carry their half inch
+   * as padding instead. A margin applied here would shrink the introduction pages onto
+   * a smaller box and spill each one onto a second sheet.
+   */
+  edgeToEdge?: boolean;
   headerHtml?: string;
   footerHtml?: string;
 }
@@ -93,7 +106,9 @@ export interface PdfOptions {
  */
 export async function renderPdf(html: string, opts: PdfOptions = {}): Promise<Buffer> {
   if (!(await pdfAvailable())) {
-    throw new Error('PDF rendering is not installed on this deployment — export as Excel, or run: pnpm add playwright-core @sparticuz/chromium-min');
+    throw new Error(
+      'PDF rendering is not installed on this deployment — export as Excel, or run: pnpm add playwright-core @sparticuz/chromium-min',
+    );
   }
   const browser = await getBrowser();
   const page = await browser.newPage();
@@ -103,6 +118,15 @@ export async function renderPdf(html: string, opts: PdfOptions = {}): Promise<Bu
     await page.setContent(html, { waitUntil: 'domcontentloaded' });
     await page.emulateMedia({ media: 'print' });
     const hasChrome = !!(opts.headerHtml || opts.footerHtml);
+    if (opts.edgeToEdge) {
+      return await page.pdf({
+        format: opts.format ?? 'Letter',
+        landscape: !!opts.landscape,
+        printBackground: true,
+        preferCSSPageSize: true,
+        margin: { top: '0', bottom: '0', left: '0', right: '0' },
+      });
+    }
     return await page.pdf({
       format: opts.format ?? 'Letter',
       landscape: !!opts.landscape,
@@ -128,5 +152,6 @@ export async function renderPdf(html: string, opts: PdfOptions = {}): Promise<Bu
 export async function closeRenderer(): Promise<void> {
   const b = browserPromise ? await browserPromise.catch(() => null) : null;
   browserPromise = null;
-  if (b) await b.close().catch((e: unknown) => logger.warn({ err: e }, 'pdf: browser close failed'));
+  if (b)
+    await b.close().catch((e: unknown) => logger.warn({ err: e }, 'pdf: browser close failed'));
 }

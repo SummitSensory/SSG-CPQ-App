@@ -219,7 +219,8 @@ export async function uploadProposalPdfToMonday(input: {
 
   const name = (input.filename || version.proposal.number).replace(/\.pdf$/i, '');
   try {
-    const pdf = await renderPdf(input.proposalHtml, { format: 'Letter' });
+    // edgeToEdge: the proposal document owns its own page geometry — see render/pdf.ts.
+    const pdf = await renderPdf(input.proposalHtml, { format: 'Letter', edgeToEdge: true });
     await uploadFileToColumn(itemId, DEAL_COLUMNS.file, `${name}.pdf`, pdf);
     await prisma.integrationSyncLog.create({
       data: {
