@@ -43,6 +43,8 @@ const Slip = z.object({
   id: z.string().trim().min(1).max(40),
   number: z.string().trim().max(40),
   customer: z.string().trim().min(1).max(160),
+  /** The person the box is addressed to, alongside the organization. */
+  contact: z.string().trim().max(160).default(''),
   date: z.string().trim().max(30),
   address: z.string().trim().max(400).default(''),
   note: z.string().trim().max(400).default(''),

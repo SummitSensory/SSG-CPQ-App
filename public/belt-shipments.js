@@ -11,17 +11,35 @@
  * owed to a customer, then it ships, and the slip is the receipt in the box.
  *
  * State lives server-side (routes/beltShipments.ts) so the list is the same list for
- * everyone. The slip prints through the shell's own print path, so it comes out on
- * the same paper as everything else.
+ * everyone. The slip owns its own print rules — it is a single fixed Letter sheet, so
+ * it needs none of the measuring and page-packing the proposal document requires.
  */
 (function () {
   'use strict';
 
   var H = null;
   var state = null;
-  /** Rows ticked for the slip being built, by owed-row id. */
+  /**
+   * Rows ticked for the slip being built: owed-row id -> quantity going in this box.
+   * Defaults to the whole amount owed; a smaller number ships part of the row and
+   * leaves the rest on the list.
+   */
   var picked = {};
   var busy = false;
+
+  /**
+   * The belts this screen ships. Seven sizes of one product, which is the entire
+   * scope — anything beyond it can be added on the screen.
+   */
+  var DEFAULT_CATALOG = [
+    { sku: 'FLEX-BELT-XXS', item: 'Flex Belt \u2014 XXS' },
+    { sku: 'FLEX-BELT-XS', item: 'Flex Belt \u2014 XS' },
+    { sku: 'FLEX-BELT-S', item: 'Flex Belt \u2014 S' },
+    { sku: 'FLEX-BELT-M', item: 'Flex Belt \u2014 M' },
+    { sku: 'FLEX-BELT-L', item: 'Flex Belt \u2014 L' },
+    { sku: 'FLEX-BELT-XL', item: 'Flex Belt \u2014 XL' },
+    { sku: 'FLEX-BELT-XXL', item: 'Flex Belt \u2014 XXL' },
+  ];
 
   var INK = '#20241f',
     NAVY = '#203060',
@@ -65,15 +83,17 @@
         return r.ok ? r.json() : null;
       })
       .then(function (d) {
-        state = d || { catalog: [], owed: [], slips: [], seq: 0 };
-        state.catalog = state.catalog || [];
+        state = d || { catalog: null, owed: [], slips: [], seq: 0 };
+        // A list that has never been saved starts with the seven Flex belts. An empty
+        // saved list is left empty — that means someone deliberately cleared it.
+        state.catalog = state.catalog || DEFAULT_CATALOG.slice();
         state.owed = state.owed || [];
         state.slips = state.slips || [];
         state.seq = state.seq || 0;
         return state;
       })
       .catch(function () {
-        state = { catalog: [], owed: [], slips: [], seq: 0 };
+        state = { catalog: DEFAULT_CATALOG.slice(), owed: [], slips: [], seq: 0 };
         return state;
       });
   }
@@ -182,6 +202,13 @@
       ';font-size:19px;font-weight:600;margin-top:6px;line-height:1.35;">' +
       esc(slip.customer) +
       '</div>' +
+      (slip.contact
+        ? '<div style="font-size:12.5px;color:' +
+          INK +
+          ';line-height:1.5;margin-top:3px;">Attn: ' +
+          esc(slip.contact) +
+          '</div>'
+        : '') +
       (slip.address
         ? '<div style="font-size:12px;color:#4b5468;line-height:1.6;margin-top:5px;white-space:pre-line;">' +
           esc(slip.address) +
@@ -363,9 +390,28 @@
                 '</div>' +
                 '</div>' +
                 '<div style="display:flex;gap:8px;align-items:center;flex:none;">' +
-                '<span style="font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;">' +
-                r.qty +
-                '</span>' +
+                // Editable only once the row is ticked, so the list reads as quantities
+                // owed until you are actually packing a box.
+                (picked[r.id]
+                  ? '<input type="number" class="bsQtyShip" data-id="' +
+                    esc(r.id) +
+                    '" min="1" max="' +
+                    r.qty +
+                    '" value="' +
+                    picked[r.id] +
+                    '" ' +
+                    'style="width:54px;padding:4px 6px;font-size:13px;font-weight:700;text-align:right;font-family:inherit;' +
+                    'border:1px solid ' +
+                    NAVY +
+                    ';border-radius:6px;font-variant-numeric:tabular-nums;">' +
+                    '<span style="font-size:11px;color:' +
+                    MUTE +
+                    ';">of ' +
+                    r.qty +
+                    '</span>'
+                  : '<span style="font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;">' +
+                    r.qty +
+                    '</span>') +
                 '<button type="button" class="link-btn bsDrop" data-id="' +
                 esc(r.id) +
                 '" title="No longer owed" ' +
@@ -497,7 +543,7 @@
           '<input id="bsNote" placeholder="Warranty replacement, colour, who asked…" style="width:100%;margin-top:4px;padding:8px 10px;font-size:12.5px;border:1px solid ' +
           LINE +
           ';border-radius:7px;font-family:inherit;box-sizing:border-box;"></label>' +
-          '<button type="button" id="bsAdd" class="primary-btn" style="grid-column:1/-1;margin-top:2px;">Add to the list</button>' +
+          '<button type="button" id="bsAdd" class="btn" style="grid-column:1/-1;margin-top:2px;">Add to the list</button>' +
           '</div>'
         : '<div class="muted" style="font-size:12.5px;line-height:1.6;">Add your belt SKUs first, on the right. Then items can be added to the list.</div>') +
       '</div>' +
@@ -515,6 +561,16 @@
             customerNames.length +
             ' customers are ticked. A slip goes in one box, so pick one customer at a time.</div>'
           : '<div class="muted" style="font-size:12px;margin-bottom:11px;">' +
+            pickedRows.reduce(function (a, r) {
+              return a + Math.min(r.qty, picked[r.id] || r.qty);
+            }, 0) +
+            ' piece' +
+            (pickedRows.reduce(function (a, r) {
+              return a + Math.min(r.qty, picked[r.id] || r.qty);
+            }, 0) === 1
+              ? ''
+              : 's') +
+            ' across ' +
             pickedRows.length +
             ' item' +
             (pickedRows.length === 1 ? '' : 's') +
@@ -522,7 +578,37 @@
             INK +
             ';">' +
             esc(customerNames[0]) +
-            '</b></div>' +
+            '</b>' +
+            (pickedRows.some(function (r) {
+              return (picked[r.id] || r.qty) < r.qty;
+            })
+              ? '<br><span style="color:' +
+                RED +
+                ';">Shipping short — the balance stays on the list.</span>'
+              : '') +
+            '</div>' +
+            '<label style="display:block;margin-bottom:9px;"><span style="font-size:11px;color:' +
+            MUTE +
+            ';">Attention</span>' +
+            '<input id="bsContact" list="bsContacts" placeholder="Who should open the box?" style="width:100%;margin-top:4px;padding:8px 10px;font-size:12.5px;border:1px solid ' +
+            LINE +
+            ';border-radius:7px;font-family:inherit;box-sizing:border-box;"></label>' +
+            '<datalist id="bsContacts">' +
+            (state.slips || [])
+              .filter(function (sl) {
+                return sl.customer === customerNames[0] && sl.contact;
+              })
+              .map(function (sl) {
+                return sl.contact;
+              })
+              .filter(function (v, i, arr) {
+                return arr.indexOf(v) === i;
+              })
+              .map(function (n) {
+                return '<option value="' + esc(n) + '">';
+              })
+              .join('') +
+            '</datalist>' +
             '<label style="display:block;margin-bottom:9px;"><span style="font-size:11px;color:' +
             MUTE +
             ';">Ship-to address</span>' +
@@ -535,7 +621,7 @@
             '<input id="bsSlipNote" placeholder="Thanks for your order…" style="width:100%;margin-top:4px;padding:8px 10px;font-size:12.5px;border:1px solid ' +
             LINE +
             ';border-radius:7px;font-family:inherit;box-sizing:border-box;"></label>' +
-            '<button type="button" id="bsPrint" class="primary-btn" style="width:100%;">Print the slip &amp; clear these items</button>') +
+            '<button type="button" id="bsPrint" class="btn">Print the slip &amp; clear these items</button>') +
       '</div>' +
       '<div class="card" style="margin-bottom:14px;">' +
       '<div class="section-title" style="margin:0 0 6px;">Recent slips</div>' +
@@ -543,7 +629,7 @@
       '</div>' +
       '<div class="card">' +
       '<div class="section-title" style="margin:0 0 4px;">Belt SKUs</div>' +
-      '<div class="muted" style="font-size:11.5px;margin-bottom:10px;">The belts offered in the picker. Ten or so is the whole list.</div>' +
+      '<div class="muted" style="font-size:11.5px;margin-bottom:10px;">The belts offered in the picker.</div>' +
       ((state.catalog || []).length
         ? (state.catalog || [])
             .map(function (c, i) {
@@ -570,7 +656,7 @@
             .join('')
         : '') +
       '<div style="display:grid;grid-template-columns:1fr 96px;gap:7px;margin-top:10px;">' +
-      '<input id="bsCatItem" placeholder="Belt name, e.g. Platform Swing Belt 48&quot;" style="padding:8px 10px;font-size:12px;border:1px solid ' +
+      '<input id="bsCatItem" placeholder="Belt name, e.g. Flex Belt &mdash; XL" style="padding:8px 10px;font-size:12px;border:1px solid ' +
       LINE +
       ';border-radius:7px;font-family:inherit;box-sizing:border-box;">' +
       '<input id="bsCatSku" placeholder="SKU" style="padding:8px 10px;font-size:12px;border:1px solid ' +
@@ -592,8 +678,28 @@
     host.querySelectorAll('.bsPick').forEach(function (cb) {
       cb.addEventListener('change', function () {
         var id = cb.getAttribute('data-id');
-        if (cb.checked) picked[id] = 1;
-        else delete picked[id];
+        if (cb.checked) {
+          var row = (state.owed || []).filter(function (o) {
+            return o.id === id;
+          })[0];
+          picked[id] = row ? row.qty : 1;
+        } else {
+          delete picked[id];
+        }
+        paint();
+      });
+    });
+
+    // Repaint on change, not on input: the quantity feeds the "N items" summary and
+    // the still-to-come block, and repainting mid-keystroke would take the focus away.
+    host.querySelectorAll('.bsQtyShip').forEach(function (inp) {
+      inp.addEventListener('change', function () {
+        var id = inp.getAttribute('data-id');
+        var row = (state.owed || []).filter(function (o) {
+          return o.id === id;
+        })[0];
+        if (!row) return;
+        picked[id] = Math.min(row.qty, Math.max(1, Number(inp.value) || 1));
         paint();
       });
     });
@@ -609,7 +715,7 @@
         });
         rows.forEach(function (r) {
           if (anyPicked) delete picked[r.id];
-          else picked[r.id] = 1;
+          else picked[r.id] = r.qty;
         });
         paint();
       });
@@ -722,26 +828,37 @@
       number: 'PS-' + String(state.seq).padStart(4, '0'),
       customer: customer,
       date: todayISO(),
+      contact: ((host.querySelector('#bsContact') || {}).value || '').trim(),
       address: (host.querySelector('#bsAddr') || {}).value || '',
       note: (host.querySelector('#bsSlipNote') || {}).value || '',
+      // What is actually going in this box, which may be fewer than the amount owed.
       lines: rows.map(function (r) {
-        return { sku: r.sku, item: r.item, qty: r.qty };
+        return { sku: r.sku, item: r.item, qty: Math.min(r.qty, picked[r.id] || r.qty) };
       }),
     };
 
-    // Anything still owed to this customer after this box goes out.
-    var shippedIds = {};
+    // Take the shipped quantity off each ticked row. A row shipped short survives with
+    // the balance and its original added date, so a partial shipment does not reset
+    // how long the customer has been waiting.
+    var shipping = {};
     rows.forEach(function (r) {
-      shippedIds[r.id] = 1;
+      shipping[r.id] = Math.min(r.qty, picked[r.id] || r.qty);
     });
+    state.owed = (state.owed || [])
+      .map(function (o) {
+        if (!shipping[o.id]) return o;
+        var left = o.qty - shipping[o.id];
+        return left > 0 ? Object.assign({}, o, { qty: left }) : null;
+      })
+      .filter(Boolean);
+
+    // Everything this customer is still owed once the box is closed — including the
+    // balance of any row that shipped short. Stated on the slip.
     var outstanding = (state.owed || []).filter(function (o) {
-      return o.customer === customer && !shippedIds[o.id];
+      return o.customer === customer;
     });
 
     state.slips.push(slip);
-    state.owed = (state.owed || []).filter(function (o) {
-      return !shippedIds[o.id];
-    });
     picked = {};
     save().then(function () {
       openSlip(slip, outstanding);
@@ -758,7 +875,7 @@
       'position:fixed;inset:0;z-index:9000;background:#e8ebf2;overflow:auto;padding:26px 16px 60px;';
     ov.innerHTML =
       '<div style="display:flex;justify-content:center;gap:10px;margin-bottom:20px;" data-noprint>' +
-      '<button type="button" id="bsSlipPrint" class="primary-btn" style="width:auto;padding:10px 20px;">Print / Save PDF</button>' +
+      '<button type="button" id="bsSlipPrint" class="btn" style="width:auto;padding:10px 20px;">Print / Save PDF</button>' +
       '<button type="button" id="bsSlipClose" class="link-btn" style="width:auto;padding:10px 20px;">Close</button>' +
       '</div>' +
       slipHtml(slip, outstanding || []);
