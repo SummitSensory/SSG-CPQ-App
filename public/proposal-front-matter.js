@@ -356,7 +356,11 @@
     var meta = (doc && doc.meta) || {};
     var detected = detect(doc);
     var active = templateFor(doc);
-    if (!detected && !active && !meta.introTemplate) return '';
+    // The card shows whenever any introduction is installed, detected or not. Hiding it
+    // on an unrecognised proposal left a rep with no way to reach a template that was
+    // sitting right there — the commonest reason to open this card is that detection
+    // got it wrong, or that the proposal was built by hand and has nothing to detect.
+    if (!TEMPLATES.length) return '';
 
     var chosen = meta.introTemplate || '';
 

@@ -19,14 +19,20 @@
     label: 'Summit Adventure Series',
 
     /**
-     * The configurator writes its answers into meta, which is the reliable signal.
-     * A hand-built proposal is recognised by its line naming instead.
+     * Recognise the product from the structure section — the first group on the
+     * proposal — not from any line anywhere.
+     *
+     * This matters in one direction specifically: a Soar proposal routinely carries an
+     * Adventure mat system, so matching on any mention of "adventure" made every Soar
+     * proposal claim the Adventure introduction, because Adventure registers first.
+     * The frame decides the template; an accessory never does.
      */
     matches: function (doc) {
       if (doc.meta && doc.meta.advAnswers) return true;
-      return (doc.lines || []).some(function (l) {
-        return /adventure/i.test(String(l.name || '') + ' ' + String(l.group || ''));
-      });
+      var first = (doc.lines || []).filter(function (l) {
+        return (l.lineType || '') === 'GROUP';
+      })[0];
+      return !!first && /adventure/i.test(String(first.name || ''));
     },
 
     slots: [
