@@ -587,6 +587,15 @@
        * same reason init is: this is where the session is known. */
       window.FreightTrueUp.mountBanner(user);
     }
+
+    /* Introduction pages: the same two helpers, and one fetch for the photographs the
+     * templates print with. Loaded here rather than per proposal so building a
+     * document is synchronous — see proposal-front-matter.js. */
+    if (window.SSGFrontMatter) {
+      window.SSGFrontMatter.init({ authed: authed, esc: esc });
+      window.SSGFrontMatter.loadArt();
+    }
+    if (window.SSGIntroAdmin) window.SSGIntroAdmin.init({ authed: authed, esc: esc });
     renderDashboard(user);
   }
 
@@ -641,7 +650,10 @@
         // Adventure Series front matter: the photos attached to this proposal, and
         // whether the document is the introduction, the proposal, or both. Only has
         // any effect on an Adventure proposal — see SSGFrontMatter.applies().
-        introArt: null, docScope: 'BOTH',
+        // Which introduction to print and how much of the document to generate.
+        // Photography belongs to the template and is managed in Admin, so nothing
+        // image-sized is ever written onto a proposal.
+        docScope: 'BOTH', introTemplate: '',
         tbdTax: '', tbdStructureFreight: '', tbdMatsFreight: '',
         proposalDate: today, taxAmountMinor: 0, discountPct: 0, discountMode: 'PCT', discountAmountMinor: 0,
         structureFreightMinor: 0, matsFreightMinor: 0,
@@ -5599,7 +5611,7 @@
     pb = {
       proposalId: proposal.id, versionId: version.id, user: user, orgId: proposal.organizationId, orgName: orgName, stdNotes: stdNotes, updatedAt: openedUpdatedAt,
       title: proposal.title || '', number: proposal.number || '', version: version.version || 1,
-      meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', billSameAsShip: !meta.billTo || meta.billTo === (meta.shipTo || orgShipTo || ''), showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, showDeposit: meta.showDeposit !== false, introArt: meta.introArt || null, docScope: meta.docScope || 'BOTH', tbdTax: meta.tbdTax || '', tbdStructureFreight: meta.tbdStructureFreight || '', tbdMatsFreight: meta.tbdMatsFreight || '', proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, discountMode: meta.discountMode === 'AMT' ? 'AMT' : 'PCT', discountAmountMinor: meta.discountAmountMinor || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, stdFreightOn: !!meta.stdFreightOn, stdFreightMinor: meta.stdFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7), footerNotes: footerNotes, advAnswers: meta.advAnswers || null, advWarnings: meta.advWarnings || [] },
+      meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', billSameAsShip: !meta.billTo || meta.billTo === (meta.shipTo || orgShipTo || ''), showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, showDeposit: meta.showDeposit !== false, docScope: meta.docScope || 'BOTH', introTemplate: meta.introTemplate || '', tbdTax: meta.tbdTax || '', tbdStructureFreight: meta.tbdStructureFreight || '', tbdMatsFreight: meta.tbdMatsFreight || '', proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, discountMode: meta.discountMode === 'AMT' ? 'AMT' : 'PCT', discountAmountMinor: meta.discountAmountMinor || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, stdFreightOn: !!meta.stdFreightOn, stdFreightMinor: meta.stdFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7), footerNotes: footerNotes, advAnswers: meta.advAnswers || null, advWarnings: meta.advWarnings || [] },
       lines: lines,
     };
     // A new proposal starts with the billing address the same as the shipping one.
@@ -6476,9 +6488,10 @@
         // customer proposal entirely rather than printed as $0.
         '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:6px;cursor:pointer;"><input type="checkbox" id="mShowDeposit"' + (pb.meta.showDeposit !== false ? ' checked' : '') + '> Show the ' + depositPct() + '% deposit on the customer proposal</label>' +
       '</div>' +
-      // Photos for the Adventure Series introduction, and what to generate.
-      (window.SSGFrontMatter && window.SSGFrontMatter.applies({ meta: pb.meta, lines: pb.lines })
-        ? '<div id="fmPanel">' + window.SSGFrontMatter.panelHtml(pb.meta) + '</div>'
+      // Which introduction, its photos, and what to generate. Empty for a product
+      // line that has no introduction registered — see proposal-front-matter.js.
+      (window.SSGFrontMatter
+        ? '<div id="fmPanel">' + window.SSGFrontMatter.panelHtml({ meta: pb.meta, lines: pb.lines }) + '</div>'
         : '') +
       // quick add
       '<div class="card" style="margin-bottom:16px;"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin:0 0 10px;"><div class="section-title" style="margin:0;">Add to proposal</div>' +
@@ -12820,10 +12833,14 @@
       '<div class="section-title" style="margin-top:26px;">Financing</div>' +
       '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">Ryan Capital quote a <b>payment factor</b> per amount band and term, not an interest rate: the monthly payment is the amount financed × the factor at that intersection. Paste their sheet or edit a cell; the published sheet is what every new financing document quotes from.</div>' +
       '<div id="finAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>' +
+      '<div class="section-title" style="margin-top:26px;">Proposal introductions</div>' +
+      '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">The pages that print ahead of the itemized proposal, one product line at a time. The photographs are set here and used by every proposal that prints that introduction &mdash; a rep picks the template on the proposal, never the pictures. Each slot names the size it prints at; anything larger is downscaled on upload. Page wording ships with the application.</div>' +
+      '<div id="introAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>' +
       '<div class="section-title" style="margin-top:26px;">Freight alert banner</div>' +
       '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">The bar that appears above every screen when an invoice is short of freight. It is the most-seen thing in the application, so its colours are yours to set: pick a preset or two exact colours per state. The preview is live.</div>' +
       '<div id="ftuBannerAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>';
     if (window.FreightTrueUp) window.FreightTrueUp.mountAdmin('ftuBannerAdmin', user);
+    if (window.SSGIntroAdmin) window.SSGIntroAdmin.mountAdmin('introAdmin');
     document.getElementById('admNew').addEventListener('click', openUserForm);
     document.getElementById('admMailTest').addEventListener('click', async function () {
       var bt = this, label = bt.textContent;
