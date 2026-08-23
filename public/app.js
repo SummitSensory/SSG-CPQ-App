@@ -650,10 +650,10 @@
         // Adventure Series front matter: the photos attached to this proposal, and
         // whether the document is the introduction, the proposal, or both. Only has
         // any effect on an Adventure proposal — see SSGFrontMatter.applies().
-        // Which introduction to print and how much of the document to generate.
-        // Photography belongs to the template and is managed in Admin, so nothing
-        // image-sized is ever written onto a proposal.
-        docScope: 'BOTH', introTemplate: '',
+        // Which introduction this proposal prints. Photography belongs to the
+        // template and is managed in Admin; what to generate is chosen at the moment
+        // of previewing or saving — see proposal-front-matter.js.
+        introTemplate: '',
         tbdTax: '', tbdStructureFreight: '', tbdMatsFreight: '',
         proposalDate: today, taxAmountMinor: 0, discountPct: 0, discountMode: 'PCT', discountAmountMinor: 0,
         structureFreightMinor: 0, matsFreightMinor: 0,
@@ -5611,7 +5611,7 @@
     pb = {
       proposalId: proposal.id, versionId: version.id, user: user, orgId: proposal.organizationId, orgName: orgName, stdNotes: stdNotes, updatedAt: openedUpdatedAt,
       title: proposal.title || '', number: proposal.number || '', version: version.version || 1,
-      meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', billSameAsShip: !meta.billTo || meta.billTo === (meta.shipTo || orgShipTo || ''), showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, showDeposit: meta.showDeposit !== false, docScope: meta.docScope || 'BOTH', introTemplate: meta.introTemplate || '', tbdTax: meta.tbdTax || '', tbdStructureFreight: meta.tbdStructureFreight || '', tbdMatsFreight: meta.tbdMatsFreight || '', proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, discountMode: meta.discountMode === 'AMT' ? 'AMT' : 'PCT', discountAmountMinor: meta.discountAmountMinor || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, stdFreightOn: !!meta.stdFreightOn, stdFreightMinor: meta.stdFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7), footerNotes: footerNotes, advAnswers: meta.advAnswers || null, advWarnings: meta.advWarnings || [] },
+      meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', billSameAsShip: !meta.billTo || meta.billTo === (meta.shipTo || orgShipTo || ''), showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, showDeposit: meta.showDeposit !== false, introTemplate: meta.introTemplate || '', tbdTax: meta.tbdTax || '', tbdStructureFreight: meta.tbdStructureFreight || '', tbdMatsFreight: meta.tbdMatsFreight || '', proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, discountMode: meta.discountMode === 'AMT' ? 'AMT' : 'PCT', discountAmountMinor: meta.discountAmountMinor || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, stdFreightOn: !!meta.stdFreightOn, stdFreightMinor: meta.stdFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7), footerNotes: footerNotes, advAnswers: meta.advAnswers || null, advWarnings: meta.advWarnings || [] },
       lines: lines,
     };
     // A new proposal starts with the billing address the same as the shipping one.
@@ -8486,9 +8486,10 @@
       '</div>';
     // The introduction prints ahead of the pricing document and is part of the same
     // string, so preview, print, the PDF render and the e-sign packet all carry it
-    // without any of them having to know it exists. docScope decides which halves of
-    // the document are generated: the introduction, the proposal, or both.
-    var scope = m.docScope || 'BOTH';
+    // without any of them having to know it exists. The scope — introduction, proposal
+    // or both — is a live choice rather than a saved field, so it works on any version
+    // at any time; see proposal-front-matter.js.
+    var scope = window.SSGFrontMatter ? window.SSGFrontMatter.scope() : 'BOTH';
     var frontMatter = (scope !== 'PROPOSAL' && window.SSGFrontMatter && window.SSGFrontMatter.applies(d))
       ? window.SSGFrontMatter.introHtml(d, { user: u, depositPct: depositPct() })
       : '';
@@ -8573,9 +8574,34 @@
     var ov = document.createElement('div');
     ov.id = 'propPreviewOverlay';
     ov.style.cssText = 'position:fixed;inset:0;background:#e7e8e3;z-index:60;overflow:auto;padding:24px 16px;';
-    ov.innerHTML = '<div class="noprint" style="max-width:760px;margin:0 auto 14px;display:flex;justify-content:space-between;gap:10px;"><button class="link-btn" id="pvClose" style="width:auto;padding:9px 16px;background:#fff;">‹ Close preview</button><button class="btn" id="pvPrint" style="width:auto;padding:9px 20px;">Print / Save PDF</button></div>' + html;
+    // The toolbar carries the what-to-generate switch, so the introduction and the
+    // proposal can be pulled separately or together from any version at any time —
+    // nothing here depends on the proposal's status and nothing is saved.
+    function toolbarHtml() {
+      return '<div class="noprint" id="pvBar" style="max-width:900px;margin:0 auto 14px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">' +
+        '<button class="link-btn" id="pvClose" style="width:auto;padding:9px 16px;background:#fff;">‹ Close preview</button>' +
+        // The what-to-generate switch sits with the print button, because it is a
+        // property of the thing about to be produced.
+        '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:flex-end;">' +
+          (window.SSGFrontMatter ? window.SSGFrontMatter.scopeToggleHtml(doc) : '') +
+          '<button class="btn" id="pvPrint" style="width:auto;padding:9px 20px;">Print / Save PDF</button>' +
+        '</div>' +
+      '</div>';
+    }
+    ov.innerHTML = toolbarHtml() + html;
     document.body.appendChild(ov);
-    document.getElementById('pvClose').addEventListener('click', function () { document.body.removeChild(ov); });
+
+    function wire() {
+      document.getElementById('pvClose').addEventListener('click', function () { document.body.removeChild(ov); });
+      document.getElementById('pvPrint').addEventListener('click', firePrint);
+      if (window.SSGFrontMatter) {
+        window.SSGFrontMatter.bindScopeToggle(ov, function () {
+          ov.innerHTML = toolbarHtml() + proposalDocHtml(doc);
+          ov.scrollTop = 0;
+          wire();
+        });
+      }
+    }
     function firePrint() {
       // Browsers name the saved PDF after the document title, so set it for the print
       // and put it back afterwards.
@@ -8586,7 +8612,7 @@
       window.print();
       setTimeout(restore, 60000);
     }
-    document.getElementById('pvPrint').addEventListener('click', firePrint);
+    wire();
     // Save as PDF goes straight through. One frame's delay so the overlay has laid
     // out — the page-break pass measures real geometry and needs it.
     if (printNow) setTimeout(firePrint, 120);

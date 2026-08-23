@@ -44,6 +44,22 @@
   var TEMPLATES = [];
   /** Host helpers borrowed from app.js — see init(). */
   var H = null;
+  /**
+   * What to generate: the introduction, the itemized proposal, or both.
+   *
+   * Deliberately NOT stored on the proposal. Pulling the introduction is something a
+   * rep does at a moment — to send the story ahead of pricing, to reprint the pages
+   * for a meeting — and it has nothing to do with the state of the record. Keeping it
+   * out of meta means it works on a sent, signed or read-only version, needs no save,
+   * and never marks a proposal dirty.
+   */
+  var SCOPE_KEY = 'ssgIntroScope';
+  var SCOPES = [
+    { id: 'BOTH', label: 'Introduction + proposal' },
+    { id: 'INTRO', label: 'Introduction only' },
+    { id: 'PROPOSAL', label: 'Proposal only' },
+  ];
+
   /** Slot id -> data URL, as managed in Admin. Loaded once per session. */
   var ART = {};
   var artLoaded = false;
@@ -57,6 +73,24 @@
    */
   var MAX_EDGE = 1400,
     JPEG_QUALITY = 0.78;
+
+  function scope() {
+    var v = '';
+    try {
+      v = localStorage.getItem(SCOPE_KEY) || '';
+    } catch (e) {
+      v = '';
+    }
+    return v === 'INTRO' || v === 'PROPOSAL' ? v : 'BOTH';
+  }
+
+  function setScope(v) {
+    try {
+      localStorage.setItem(SCOPE_KEY, v);
+    } catch (e) {
+      /* private browsing */
+    }
+  }
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
@@ -312,9 +346,11 @@
   /* ------------------------------------------------------------------ builder */
 
   /**
-   * The builder card: which introduction to use, and what to generate. Photography
-   * is deliberately absent — it belongs to the template and is managed under Admin,
-   * so a proposal cannot carry its own pictures.
+   * The builder card: which introduction this proposal uses.
+   *
+   * Only the template lives here, because only the template is a property of the
+   * proposal. Photography belongs to the product line and is managed under Admin;
+   * what to generate is chosen at the moment of generating — see scopeToggleHtml().
    */
   function panelHtml(doc) {
     var meta = (doc && doc.meta) || {};
@@ -323,7 +359,6 @@
     if (!detected && !active && !meta.introTemplate) return '';
 
     var chosen = meta.introTemplate || '';
-    var scope = meta.docScope || 'BOTH';
 
     var options = [
       '<option value=""' +
@@ -349,24 +384,6 @@
         '>No introduction pages</option>',
     );
 
-    function opt(val, label) {
-      var on = scope === val;
-      return (
-        '<label style="display:flex;align-items:center;gap:7px;font-size:12.5px;cursor:pointer;padding:7px 12px;border:1px solid ' +
-        (on ? '#3d4a55' : '#dfe3ec') +
-        ';border-radius:7px;background:' +
-        (on ? '#eef0ea' : '#fff') +
-        ';">' +
-        '<input type="radio" name="fmScope" value="' +
-        val +
-        '"' +
-        (on ? ' checked' : '') +
-        '> ' +
-        label +
-        '</label>'
-      );
-    }
-
     return (
       '<div class="card" style="margin-bottom:16px;">' +
       '<div class="section-title" style="margin:0 0 4px;">Proposal introduction</div>' +
@@ -380,15 +397,7 @@
         ? '<span class="muted" style="font-size:11.5px;">' + active.pages.length + ' pages</span>'
         : '<span class="muted" style="font-size:11.5px;">No introduction pages will be included.</span>') +
       '</div>' +
-      '<div style="margin-top:16px;padding-top:14px;border-top:1px solid #eef0ea;">' +
-      '<div style="font-size:12px;font-weight:600;color:#20241f;margin-bottom:8px;">What to generate</div>' +
-      '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
-      opt('BOTH', 'Introduction + proposal') +
-      opt('INTRO', 'Introduction only') +
-      opt('PROPOSAL', 'Proposal only') +
-      '</div>' +
-      '<div class="muted" style="font-size:11.5px;margin-top:8px;">Applies to the preview, Save as PDF, the emailed PDF and the signature packet.</div>' +
-      '</div>' +
+      '<div class="muted" style="font-size:11.5px;margin-top:10px;">Choose whether to generate the introduction, the proposal, or both when you preview or save the PDF.</div>' +
       '</div>'
     );
   }
@@ -405,12 +414,52 @@
         meta.introTemplate = sel.value;
         onChange();
       });
-    root.querySelectorAll('input[name="fmScope"]').forEach(function (r) {
-      r.addEventListener('change', function () {
-        if (r.checked) {
-          meta.docScope = r.value;
-          onChange();
-        }
+  }
+
+  /**
+   * The what-to-generate switch shown in the preview toolbar.
+   *
+   * It lives with the preview rather than with the proposal so it is reachable on any
+   * version at any time — draft, sent, signed, read-only — without touching the record.
+   */
+  function scopeToggleHtml(doc) {
+    if (!applies(doc)) return '';
+    var cur = scope();
+    return (
+      '<div id="fmScopeBar" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+      '<span style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Generate</span>' +
+      '<div style="display:flex;border:1px solid #dfe3ec;border-radius:8px;overflow:hidden;background:#fff;">' +
+      SCOPES.map(function (s, i) {
+        var on = cur === s.id;
+        return (
+          '<button type="button" data-fm-scope="' +
+          s.id +
+          '" style="border:0;' +
+          (i ? 'border-left:1px solid #dfe3ec;' : '') +
+          'padding:9px 14px;font-family:inherit;font-size:12.5px;cursor:pointer;' +
+          'background:' +
+          (on ? '#3d4a55' : '#fff') +
+          ';color:' +
+          (on ? '#fff' : '#3d4a55') +
+          ';' +
+          'font-weight:' +
+          (on ? '600' : '400') +
+          ';">' +
+          esc(s.label) +
+          '</button>'
+        );
+      }).join('') +
+      '</div></div>'
+    );
+  }
+
+  /** Wire that switch. `onChange` re-renders whatever is on screen. */
+  function bindScopeToggle(root, onChange) {
+    if (!root) return;
+    root.querySelectorAll('[data-fm-scope]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        setScope(b.getAttribute('data-fm-scope'));
+        onChange();
       });
     });
   }
@@ -428,6 +477,10 @@
     art: function () {
       return ART;
     },
+    scope: scope,
+    setScope: setScope,
+    scopeToggleHtml: scopeToggleHtml,
+    bindScopeToggle: bindScopeToggle,
     register: register,
     templates: function () {
       return TEMPLATES.slice();
