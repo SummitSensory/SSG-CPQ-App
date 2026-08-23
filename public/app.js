@@ -8367,9 +8367,18 @@
     var d = doc, m = d.meta || {}, t = d.totals || {};
     // On a US proposal this IS fmtUsd, so the document stays byte-identical to what
     // it has always been. CAD only ever appears as an extra line underneath.
+    /**
+     * Money on the customer document.
+     *
+     * A domestic proposal prints plain dollars: the customer is in the United States,
+     * every figure is USD, and prefixing forty of them states the obvious loudly. On a
+     * cross-border proposal the currency IS the question, so USD stays on every figure
+     * and the CAD conversion prints beneath it.
+     */
+    var money = cbApplies(d) || cbIsCanadian(d) ? fmtUsd : function (v) { return fmtMoney(v, ''); };
     var cbAmt = cbApplies(d)
       ? function (v) { return cbDocAmount(v, d.crossBorder.fx.rate); }
-      : fmtUsd;
+      : money;
     // Tax and freight are frequently unknown when a proposal goes out. An untouched
     // figure prints TBD, because a hard $0.00 there reads as "included" — the one
     // wrong answer to give a customer about freight.
@@ -8388,8 +8397,8 @@
      * returns 0 for both, so the numeric test is made separately.
      */
     function amountCell(value, override) {
-      if (value) return fmtUsd(value);
-      if (isNumericOverride(override)) return fmtUsd(overrideMinor(override));
+      if (value) return money(value);
+      if (isNumericOverride(override)) return money(overrideMinor(override));
       if (override) return '<span style="color:#5c6157;">' + esc(override) + '</span>';
       anyTbd = true;
       return TBD;
@@ -8407,7 +8416,9 @@
     function lineIndent() { return groupOpenSub != null ? (inSub ? 34 : 20) : 8; }
     function subtotalRow() {
       if (groupOpenSub == null) return '';
-      var r = '<tr style="break-inside:avoid;"><td colspan="5" style="padding:5px 8px;text-align:right;font-weight:600;font-size:11px;border-bottom:2px solid #d5d8d2;">Subtotal: ' + fmtUsd(groupOpenSub) + '</td></tr>';
+      var r = '<tr style="break-inside:avoid;">' +
+        '<td colspan="4" style="padding:6px 10px 6px 0;font-size:11px;text-align:right;color:#7b8190;">Subtotal</td>' +
+        '<td style="padding:6px 0 6px 10px;font-size:11px;text-align:right;font-weight:700;">' + money(groupOpenSub) + '</td></tr>';
       groupOpenSub = null; return r;
     }
     (d.lines || []).forEach(function (l) {
@@ -8415,14 +8426,19 @@
       if (lt === 'GROUP') {
         body += subtotalRow();
         groupOpenSub = 0; groupName = l.name; inSub = false;
-        body += '<tr data-brk="head" style="break-inside:avoid;break-after:avoid;"><td colspan="5" style="padding:6px 10px;font-weight:700;font-size:12px;letter-spacing:.03em;text-transform:uppercase;color:#3d4a55;background:#eef0ea;border-bottom:1px solid #d5d8d2;"><span style="display:inline-flex;align-items:baseline;gap:46px;"><span>' + esc(tc(stripOptional(l.name))) + (l.optional ? ' <span style="font-weight:400;text-transform:none;color:#8a8f85;">(Optional)</span>' : '') + '</span>' + (l.description ? '<span style="color:#20241f;">' + esc(l.description) + '</span>' : '') + '</span></td></tr>';
+        // The section note (frame dimensions and the like) sits in the SKU column
+        // rather than trailing the heading, so it lines up with the specification
+        // columns beneath it instead of colliding with a long section name.
+        body += '<tr data-brk="head" style="break-inside:avoid;break-after:avoid;">' +
+          '<td style="padding:11px 0 5px;font-weight:700;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:#203060;">' + esc(tc(stripOptional(l.name))) + (l.optional ? ' <span style="font-weight:400;text-transform:none;letter-spacing:0;color:#9aa1b0;">· optional</span>' : '') + '</td>' +
+          '<td colspan="4" style="padding:11px 10px 5px;font-size:11px;color:#5b6478;vertical-align:bottom;">' + (l.description ? esc(l.description) : '') + '</td></tr>';
         return;
       }
       if (lt === 'SUBGROUP') {
         inSub = true;
         var subNote = String(l.description || '').trim();
-        body += '<tr data-brk="head" style="break-inside:avoid;break-after:avoid;"><td colspan="5" style="padding:7px 8px 3px 22px;font-weight:600;font-size:11.5px;color:#3d4a55;border-bottom:1px solid #d5d8d2;">' + esc(tc(l.name)) +
-          (subNote ? '<div style="font-weight:400;font-size:10.5px;color:#5c6157;margin-top:2px;line-height:1.5;">' + rt(subNote) + '</div>' : '') +
+        body += '<tr data-brk="head" style="break-inside:avoid;break-after:avoid;"><td colspan="5" style="padding:8px 0 3px 14px;font-weight:700;font-size:11.5px;color:#20241f;">' + esc(tc(l.name)) +
+          (subNote ? '<div style="font-weight:400;font-size:10.5px;color:#5b6478;margin-top:2px;line-height:1.5;">' + rt(subNote) + '</div>' : '') +
           '</td></tr>';
         return;
       }
@@ -8434,11 +8450,11 @@
         // — the engineer-of-record wording, a lead time — is not skimmed past as
         // boilerplate. Everything else keeps the quiet cream background.
         var noteBox = l.emphasis
-          ? 'border:1.5px solid #3d4a55;border-radius:5px;background:#fff;padding:9px 11px;'
-          : 'background:#fbfaf4;padding:7px 8px;';
-        body += '<tr style="break-inside:avoid;"><td colspan="5" style="padding-left:' + lineIndent() + 'px;font-size:11px;color:#5c6157;line-height:1.5;">' +
+          ? 'background:#f3f6fb;border-radius:9px;padding:12px 15px;'
+          : 'background:#f7f9fc;border-radius:7px;padding:8px 11px;';
+        body += '<tr style="break-inside:avoid;"><td colspan="5" style="padding:4px 0 4px ' + lineIndent() + 'px;font-size:11px;color:#20241f;line-height:1.6;">' +
           '<div style="' + noteBox + '">' +
-            '<b style="display:block;color:#20241f;margin-bottom:2px;' + (l.emphasis ? 'font-size:11.5px;letter-spacing:.02em;' : '') + '">' + esc(tc(l.name)) + '</b>' +
+            '<b style="display:block;margin-bottom:3px;' + (l.emphasis ? 'font-size:10px;text-transform:uppercase;letter-spacing:.11em;color:#203060;' : 'color:#20241f;') + '">' + esc(tc(l.name)) + '</b>' +
             rt(l.description) +
           '</div></td></tr>';
         return;
@@ -8446,15 +8462,15 @@
       var amt = (Number(l.quantity) || 0) * (Number(l.rateMinor) || 0);
       var indent = lineIndent();
       if (groupOpenSub != null) groupOpenSub += amt + (Number(l.tpFreightMinor) || 0);
-      body += '<tr style="break-inside:avoid;"><td style="padding:5px 8px 5px ' + indent + 'px;border-bottom:1px solid #eef0ea;vertical-align:top;"><b style="font-weight:600;">' + esc(tc(l.name)) + '</b>' + (l.description ? '<div style="font-size:10.5px;color:#5c6157;line-height:1.45;margin-top:2px;">' + esc(l.description) + '</div>' : '') +
-        (l.delivery ? '<div style="font-size:10px;color:#7a7f75;margin-top:2px;">Delivery: ' + esc(l.delivery) + '</div>' : '') +
-        (showsFreightTbd(l) ? '<div style="font-size:10px;color:#5c6157;line-height:1.45;margin-top:3px;font-style:italic;">' + esc(FREIGHT_TBD_NOTE) + '</div>' : '') + '</td>' +
-        '<td style="padding:5px 8px;border-bottom:1px solid #eef0ea;font-size:10px;color:#7a7f75;vertical-align:top;font-family:ui-monospace,monospace;">' + esc(l.sku || '') + '</td>' +
-        '<td style="padding:5px 8px;border-bottom:1px solid #eef0ea;text-align:center;vertical-align:top;">' + (Number(l.quantity) || 0) + '</td>' +
-        '<td style="padding:5px 8px;border-bottom:1px solid #eef0ea;text-align:right;vertical-align:top;">' + fmtMoney(l.rateMinor, '') + '</td>' +
-        '<td style="padding:5px 8px;border-bottom:1px solid #eef0ea;text-align:right;vertical-align:top;font-weight:600;">' + fmtMoney(amt, '') + '</td></tr>';
+      body += '<tr style="break-inside:avoid;"><td style="padding:6px 0 6px ' + indent + 'px;font-size:11px;line-height:1.4;border-bottom:1px solid #eceef4;vertical-align:top;"><b style="font-weight:600;">' + esc(tc(l.name)) + '</b>' + (l.description ? '<div style="font-size:10.5px;color:#5b6478;line-height:1.45;margin-top:2px;">' + esc(l.description) + '</div>' : '') +
+        (l.delivery ? '<div style="font-size:10px;color:#7b8190;margin-top:2px;">Delivery: ' + esc(l.delivery) + '</div>' : '') +
+        (showsFreightTbd(l) ? '<div style="font-size:10px;color:#5b6478;line-height:1.45;margin-top:3px;font-style:italic;">' + esc(FREIGHT_TBD_NOTE) + '</div>' : '') + '</td>' +
+        '<td style="padding:6px 10px;border-bottom:1px solid #eceef4;font-size:11px;color:#7b8190;vertical-align:top;font-family:ui-monospace,monospace;">' + esc(l.sku || '') + '</td>' +
+        '<td style="padding:6px 10px;border-bottom:1px solid #eceef4;font-size:11px;text-align:right;vertical-align:top;">' + (Number(l.quantity) || 0) + '</td>' +
+        '<td style="padding:6px 10px;border-bottom:1px solid #eceef4;font-size:11px;text-align:right;vertical-align:top;">' + fmtMoney(l.rateMinor, '') + '</td>' +
+        '<td style="padding:6px 0 6px 10px;border-bottom:1px solid #eceef4;font-size:11px;text-align:right;vertical-align:top;font-weight:700;color:#203060;">' + fmtMoney(amt, '') + '</td></tr>';
       if (Number(l.tpFreightMinor) > 0) {
-        body += '<tr style="break-inside:avoid;"><td style="padding:2px 8px 5px 20px;border-bottom:1px solid #eef0ea;font-size:10.5px;color:#5c6157;font-style:italic;">+ ' + esc(tc(l.tpFreightLabel || 'Third-Party Freight')) + '</td><td style="border-bottom:1px solid #eef0ea;"></td><td style="border-bottom:1px solid #eef0ea;"></td><td style="border-bottom:1px solid #eef0ea;"></td><td style="padding:2px 8px 5px;border-bottom:1px solid #eef0ea;text-align:right;font-size:10.5px;color:#5c6157;">' + fmtMoney(l.tpFreightMinor, '') + '</td></tr>';
+        body += '<tr style="break-inside:avoid;"><td style="padding:2px 0 6px 20px;border-bottom:1px solid #eceef4;font-size:10.5px;color:#5b6478;font-style:italic;">+ ' + esc(tc(l.tpFreightLabel || 'Third-Party Freight')) + '</td><td style="border-bottom:1px solid #eceef4;"></td><td style="border-bottom:1px solid #eceef4;"></td><td style="border-bottom:1px solid #eceef4;"></td><td style="padding:2px 0 6px 10px;border-bottom:1px solid #eceef4;text-align:right;font-size:10.5px;color:#5b6478;">' + fmtMoney(l.tpFreightMinor, '') + '</td></tr>';
       }
       var flags = [];
       if (l.returnable) flags.push('Returnable: ' + (l.returnable === 'YES' ? 'Yes' : 'No'));
@@ -8463,26 +8479,26 @@
       if (flags.length) bottomNotes.push({ name: l.name, text: flags.join(' · ') });
     });
     body += subtotalRow();
-    var bottomNotesHtml = bottomNotes.length ? '<div style="margin-top:22px;padding-top:12px;border-top:1px solid #e7e8e3;font-size:10.5px;color:#5c6157;line-height:1.6;break-inside:avoid;"><div style="font-weight:600;color:#20241f;margin-bottom:4px;">Delivery, Returns &amp; Freight Notes</div>' + bottomNotes.map(function (n) { return '<div><b style="font-weight:600;">' + esc(tc(n.name)) + ':</b> ' + esc(n.text) + '</div>'; }).join('') + '</div>' : '';
+    var bottomNotesHtml = bottomNotes.length ? '<div style="margin-top:24px;padding-top:12px;border-top:1px solid #eceef4;font-size:10.5px;color:#5b6478;line-height:1.6;break-inside:avoid;"><div style="font-family:\'Newsreader\',Georgia,serif;font-size:15px;font-weight:700;color:#203060;letter-spacing:-.015em;margin-bottom:5px;">Delivery, Returns &amp; Freight Notes</div>' + bottomNotes.map(function (n) { return '<div><b style="font-weight:600;">' + esc(tc(n.name)) + ':</b> ' + esc(n.text) + '</div>'; }).join('') + '</div>' : '';
     var u = (pb && pb.user) || currentUser || {};
     var preparerLine2 = [u.title, u.phone].filter(Boolean).join(' · ');
     // Notes that print beneath the signature lines (terms, acceptance language).
     var footerNotes = (m.footerNotes || []).filter(function (fn) { return fn && (fn.title || fn.body); });
     var footerNotesHtml = footerNotes.length
-      ? '<div style="margin-top:24px;padding-top:13px;border-top:1px solid #e7e8e3;break-inside:avoid;">' +
+      ? '<div style="margin-top:26px;break-inside:avoid;">' +
         footerNotes.map(function (fn) {
-          return '<div style="margin-bottom:9px;font-size:10.5px;line-height:1.6;color:#5c6157;">' +
-            (fn.title ? '<div style="font-weight:700;font-size:11px;color:#20241f;margin-bottom:2px;">' + esc(fn.title) + '</div>' : '') + rt(fn.body) + '</div>';
+          return '<div style="margin-bottom:14px;font-size:11.5px;line-height:1.7;color:#20241f;text-wrap:pretty;">' +
+            (fn.title ? '<div style="font-family:\'Newsreader\',Georgia,serif;font-size:15px;font-weight:700;color:#203060;letter-spacing:-.015em;margin-bottom:6px;">' + esc(fn.title) + '</div>' : '') + rt(fn.body) + '</div>';
         }).join('') + '</div>'
       : '';
     var preparedBy =
       // Line rhythm matches the "Prepared For" block below it — same 12px size and
       // the same 1px / 2px steps between lines, so the two read as one system.
-      '<div style="margin-top:12px;font-size:12px;">' +
-        '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin-bottom:4px;">Proposal Prepared By</div>' +
-        '<div style="font-weight:600;">' + esc(u.name || u.email || '') + '</div>' +
-        (preparerLine2 ? '<div style="color:#5c6157;margin-top:1px;">' + esc(preparerLine2) + '</div>' : '') +
-        (u.email ? '<div style="color:#5c6157;margin-top:2px;">' + esc(u.email) + '</div>' : '') +
+      '<div style="margin-top:29px;">' +
+        '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;">Proposal Prepared By</div>' +
+        '<div style="font-size:12.5px;font-weight:700;color:#20241f;line-height:1.2;margin-top:3px;">' + esc(u.name || u.email || '') + '</div>' +
+        (preparerLine2 ? '<div style="font-size:12px;color:#5b6478;line-height:1.2;">' + esc(preparerLine2) + '</div>' : '') +
+        (u.email ? '<div style="font-size:12px;color:#5b6478;line-height:1.2;">' + esc(u.email) + '</div>' : '') +
       '</div>';
     // The introduction prints ahead of the pricing document and is part of the same
     // string, so preview, print, the PDF render and the e-sign packet all carry it
@@ -8496,18 +8512,18 @@
     if (scope === 'INTRO' && frontMatter) return frontMatter;
     var html =
       frontMatter +
-      '<div id="propPrintArea" style="max-width:760px;margin:0 auto;background:#fff;padding:44px 48px;font-family:\'IBM Plex Sans\',sans-serif;color:#20241f;">' +
-        '<div style="border-bottom:2px solid #3d4a55;padding-bottom:16px;margin-bottom:20px;">' +
-          '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;">' +
+      '<div id="propPrintArea" style="max-width:816px;margin:0 auto;background:#fff;padding:46px 44px 40px;box-sizing:border-box;font-family:\'IBM Plex Sans\',sans-serif;color:#20241f;">' +
+        '<div style="border-bottom:2px solid #203060;padding-bottom:15px;margin-bottom:13px;">' +
+          '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:30px;">' +
           '<div style="display:flex;flex-direction:column;">' +
-          '<div style="display:flex;gap:14px;align-items:center;"><img src="logo.png" alt="Summit Sensory Gym" width="84" height="84" style="width:84px;height:84px;display:block;"><div><div style="font-family:\'Newsreader\',serif;font-weight:600;font-size:19px;">Summit Sensory Gym</div><div style="font-size:11px;color:#8a8f85;line-height:1.5;margin-top:2px;">6150 S Geneva Ct, Englewood, CO 80111<br>(720) 457-5500 · Sales@SummitSensory.com</div></div></div>' + preparedBy + '</div>' +
-          '<div style="text-align:right;"><div style="font-family:\'Newsreader\',serif;font-size:22px;font-weight:600;">Proposal</div><div style="font-size:11.5px;color:#5c6157;margin-top:4px;">' + esc(d.number || '') +
+          '<div style="display:flex;gap:14px;align-items:flex-start;"><img src="logo.png" alt="Summit Sensory Gym" width="74" height="74" style="width:74px;height:74px;display:block;flex:none;"><div><div style="font-family:\'Newsreader\',serif;font-weight:700;font-size:23px;letter-spacing:-.015em;line-height:1.15;">Summit Sensory Gym</div><div style="font-size:11.5px;color:#5b6478;line-height:1.35;margin-top:1px;">6150 S Geneva Ct, Englewood, CO 80111<br>(720) 457-5500 · Sales@SummitSensory.com</div></div></div>' + preparedBy + '</div>' +
+          '<div style="text-align:right;flex:none;"><div style="font-family:\'Newsreader\',serif;font-size:27px;font-weight:700;letter-spacing:-.02em;line-height:1.1;">Proposal</div><div style="font-size:11.5px;color:#5b6478;margin-top:5px;">' + esc(d.number || '') +
             // The number stays constant across revisions so both sides can say "P-2026-000021"
             // and mean the project. The revision is what distinguishes the documents, so it
             // prints beside it — and only from v2, because a first proposal is not a revision
             // of anything and "Revision 1" on it just invites the question.
             ((Number(d.version) || 1) > 1 ? ' · Revision ' + (Number(d.version) - 1) : '') + '</div>' +
-            '<div style="font-size:11px;color:#5c6157;margin-top:8px;line-height:1.7;">' +
+            '<div style="font-size:11.5px;color:#5b6478;margin-top:7px;line-height:1.75;">' +
               '<div>Proposal Date: <b style="color:#20241f;">' + (m.proposalDate ? fmtDate(m.proposalDate) : fmtDate(todayISO())) + '</b></div>' +
               (m.expiration ? '<div>Expiration Date: <b style="color:#20241f;">' + fmtDate(m.expiration) + '</b></div>' : '') +
               (m.showProjectId !== false && m.projectId ? '<div>Project ID: <b style="color:#20241f;">' + esc(m.projectId) + '</b></div>' : '') +
@@ -8516,36 +8532,43 @@
           '</div>' +
         '</div>' +
         '</div>' +
-        '<div style="display:flex;justify-content:flex-start;gap:56px;margin-bottom:20px;font-size:12px;">' +
-          '<div><div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin-bottom:4px;">Prepared For</div><div style="font-weight:600;">' + esc(d.orgName || '') + '</div>' +
-            (m.contactName ? '<div style="color:#20241f;margin-top:1px;">' + esc(m.contactName) + '</div>' : '') +
-            (m.billTo ? '<div style="color:#5c6157;white-space:pre-line;margin-top:2px;">' + esc(m.billTo) + '</div>' : '') + '</div>' +
-          (m.shipTo ? '<div><div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin-bottom:4px;">Ship To</div><div style="color:#5c6157;white-space:pre-line;">' + esc(m.shipTo) + '</div></div>' : '') +
+        '<div style="display:flex;gap:36px;margin-bottom:14px;">' +
+          '<div style="flex:1;"><div style="font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;">Prepared For</div><div style="font-size:12.5px;font-weight:700;color:#20241f;line-height:1.2;margin-top:4px;">' + esc(d.orgName || '') + '</div>' +
+            (m.contactName ? '<div style="font-size:12px;color:#20241f;line-height:1.2;">' + esc(m.contactName) + '</div>' : '') +
+            (m.billTo ? '<div style="font-size:12px;color:#20241f;line-height:1.2;white-space:pre-line;">' + esc(m.billTo) + '</div>' : '') + '</div>' +
+          (m.shipTo ? '<div style="flex:1;"><div style="font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;">Ship To</div><div style="font-size:12px;color:#20241f;line-height:1.2;margin-top:4px;white-space:pre-line;">' + esc(m.shipTo) + '</div></div>' : '') +
         '</div>' +
-        (m.showTitle !== false && d.title ? '<div style="font-family:\'Newsreader\',serif;font-size:24px;font-weight:600;margin-bottom:14px;">' + esc(d.title) + '</div>' : '') +
+        (m.showTitle !== false && d.title ? '<div style="font-family:\'Newsreader\',serif;font-size:23px;font-weight:700;color:#203060;letter-spacing:-.015em;margin-top:14px;">' + esc(d.title) + '</div>' : '') +
         cbFxBanner(d) +
-        '<table style="width:100%;border-collapse:collapse;font-size:11px;"><thead><tr style="color:#8a8f85;font-size:10px;text-transform:uppercase;letter-spacing:.04em;"><th style="text-align:left;padding:6px 8px;border-bottom:2px solid #3d4a55;">Activity / Description</th><th style="text-align:left;padding:6px 8px;border-bottom:2px solid #3d4a55;width:90px;">SKU</th><th style="text-align:center;padding:6px 8px;border-bottom:2px solid #3d4a55;width:44px;">Qty</th><th style="text-align:right;padding:6px 8px;border-bottom:2px solid #3d4a55;width:84px;">Rate</th><th style="text-align:right;padding:6px 8px;border-bottom:2px solid #3d4a55;width:94px;">Amount</th></tr></thead><tbody>' + body + '</tbody></table>' +
-        '<div style="display:flex;justify-content:flex-end;margin-top:16px;break-inside:avoid;"><div style="min-width:' + (cbApplies(d) ? '300px' : '260px') + ';">' +
-          '<div style="display:flex;justify-content:space-between;gap:12px;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Subtotal</span><span style="text-align:right;">' + cbAmt(t.subtotal) + '</span></div>' +
+        '<table style="width:100%;border-collapse:collapse;margin-top:16px;"><thead><tr style="color:#7b8190;font-size:9.5px;text-transform:uppercase;letter-spacing:.1em;font-weight:700;"><th style="text-align:left;padding:0 0 6px;border-bottom:1.5px solid #203060;font-weight:700;">Activity / Description</th><th style="text-align:left;padding:0 10px 6px;border-bottom:1.5px solid #203060;width:90px;font-weight:700;">SKU</th><th style="text-align:right;padding:0 10px 6px;border-bottom:1.5px solid #203060;width:44px;font-weight:700;">Qty</th><th style="text-align:right;padding:0 10px 6px;border-bottom:1.5px solid #203060;width:84px;font-weight:700;">Rate</th><th style="text-align:right;padding:0 0 6px 10px;border-bottom:1.5px solid #203060;width:94px;font-weight:700;">Amount</th></tr></thead><tbody>' + body + '</tbody></table>' +
+        '<div style="display:flex;justify-content:flex-end;margin-top:18px;break-inside:avoid;"><div style="min-width:' + (cbApplies(d) ? '340px' : '300px') + ';">' +
+          '<div style="display:flex;justify-content:space-between;gap:12px;padding:2px 0;font-size:12px;"><span style="font-weight:700;color:#20241f;">Subtotal</span><span style="text-align:right;">' + cbAmt(t.subtotal) + '</span></div>' +
           // Red and bold on purpose: the one line on the totals block the customer is
           // most likely to be looking for, and the only one that moves in their favour.
-          (t.discount ? '<div style="display:flex;justify-content:space-between;gap:12px;padding:3px 8px;font-size:12.5px;color:#9c3327;font-weight:700;"><span>' + discountLabel(t) + '</span><span style="text-align:right;">− ' + cbAmt(t.discount) + '</span></div>' +
-            '<div style="padding:0 8px 3px;font-size:10px;color:#8a8f85;text-align:right;">Discount expires ' + (m.expiration ? fmtDate(m.expiration) : 'with this proposal') + '</div>' : '') +
-          (t.tpFreight ? '<div style="display:flex;justify-content:space-between;gap:12px;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Third-Party Freight</span><span style="text-align:right;">' + cbAmt(t.tpFreight) + '</span></div>' : '') +
-          '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Mat Freight Tax Pass-Through</span><span>' + cellTax + '</span></div>' +
-          '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Structure Crating &amp; Freight</span><span>' + cellStructureFreight + '</span></div>' +
-          '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Mats &amp; Padding Freight</span><span>' + cellMatsFreight + '</span></div>' +
+          (t.discount ? '<div style="display:flex;justify-content:space-between;gap:12px;padding:2px 0;font-size:12px;"><span style="font-weight:700;color:#20241f;">' + discountLabel(t) + '</span><span style="text-align:right;color:#d02030;font-weight:700;">− ' + cbAmt(t.discount) + '</span></div>' +
+            '<div style="font-size:10.5px;color:#9aa1b0;text-align:right;">Discount expires ' + (m.expiration ? fmtDate(m.expiration) : 'with this proposal') + '</div>' : '') +
+          (t.tpFreight ? '<div style="display:flex;justify-content:space-between;gap:12px;padding:2px 0;font-size:12px;"><span style="font-weight:700;color:#20241f;">Third-Party Freight</span><span style="text-align:right;">' + cbAmt(t.tpFreight) + '</span></div>' : '') +
+          '<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:12px;"><span style="font-weight:700;color:#20241f;">Mat Freight Tax Pass-Through</span><span>' + cellTax + '</span></div>' +
+          '<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:12px;"><span style="font-weight:700;color:#20241f;">Structure Crating &amp; Freight</span><span>' + cellStructureFreight + '</span></div>' +
+          '<div style="display:flex;justify-content:space-between;padding:2px 0 7px;font-size:12px;"><span style="font-weight:700;color:#20241f;">Mats &amp; Padding Freight</span><span>' + cellMatsFreight + '</span></div>' +
           // Standard Freight is opt-in: unticked, the customer never sees the line.
-          (m.stdFreightOn ? '<div style="display:flex;justify-content:space-between;padding:3px 8px;font-size:12.5px;"><span style="color:#5c6157;">Standard Freight</span><span>' + amountCell(t.stdFreight, '') + '</span></div>' : '') +
-          '<div style="display:flex;justify-content:space-between;gap:12px;padding:8px;margin-top:5px;border-top:2px solid #3d4a55;font-size:15px;font-weight:700;"><span>' + (cbIsCanadian(d) ? 'Total payable to Summit' : 'Total') + '</span><span style="text-align:right;">' + cbAmt(t.total) + '</span></div>' +
-          (anyTbd ? '<div style="padding:2px 8px 0;font-size:10px;color:#8a8f85;text-align:right;line-height:1.5;">Total excludes items marked TBD.</div>' : '') +
-          (m.showDeposit !== false ? '<div style="display:flex;justify-content:space-between;padding:6px 8px 0;font-size:13px;color:#3d4a55;font-weight:700;"><span>Deposit Due (' + depositPct() + '%)</span><span>' + fmtUsd(t.deposit) + '</span></div>' : '') +
+          (m.stdFreightOn ? '<div style="display:flex;justify-content:space-between;padding:2px 0 7px;font-size:12px;"><span style="font-weight:700;color:#20241f;">Standard Freight</span><span>' + amountCell(t.stdFreight, '') + '</span></div>' : '') +
+          '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding-top:7px;border-top:1.5px solid #203060;"><span style="font-family:\'Newsreader\',serif;font-size:18px;font-weight:700;color:#203060;">' + (cbIsCanadian(d) ? 'Total payable to Summit' : 'Total') + '</span><span style="font-family:\'Newsreader\',serif;font-size:18px;font-weight:700;color:#203060;letter-spacing:-.02em;text-align:right;">' + cbAmt(t.total) + '</span></div>' +
+          (anyTbd ? '<div style="padding-top:3px;font-size:10.5px;color:#9aa1b0;text-align:right;line-height:1.5;">Total excludes items marked TBD.</div>' : '') +
+          (m.showDeposit !== false ? '<div style="display:flex;justify-content:space-between;padding-top:3px;font-size:11.5px;font-weight:700;"><span style="color:#7b8190;">Deposit Due (' + depositPct() + '%)</span><span>' + money(t.deposit) + '</span></div>' : '') +
           cbBorderBlock(d) +
         '</div></div>' + bottomNotesHtml +
-        '<div style="display:flex;gap:40px;margin-top:40px;padding-top:14px;">' +
-          '<div style="flex:1;"><div style="border-bottom:1.5px solid #20241f;height:26px;"></div><div style="font-size:10.5px;color:#8a8f85;margin-top:5px;">Signer\'s Name</div></div>' +
-          '<div style="flex:1;"><div style="border-bottom:1.5px solid #20241f;height:26px;"></div><div style="font-size:10.5px;color:#8a8f85;margin-top:5px;">Signer\'s Signature</div></div>' +
-          '<div style="flex:0 0 150px;"><div style="border-bottom:1.5px solid #20241f;height:26px;"></div><div style="font-size:10.5px;color:#8a8f85;margin-top:5px;">Date</div></div>' +
+        // Acceptance leads the signature lines, so what is being signed is stated
+        // immediately above where it is signed rather than left to the terms below.
+        '<div style="margin-top:34px;break-inside:avoid;">' +
+          '<div style="font-family:\'Newsreader\',serif;font-size:15px;font-weight:700;color:#203060;letter-spacing:-.015em;">Acceptance</div>' +
+          '<div style="font-size:11.5px;color:#5b6478;line-height:1.6;margin-top:5px;max-width:620px;">Sign below to accept this proposal at a total of ' + cbAmt(t.total) +
+            (m.showDeposit !== false ? ', with a deposit of ' + money(t.deposit) + ' due to initiate production' : '') + '.</div>' +
+          '<div style="display:flex;gap:26px;margin-top:24px;">' +
+            '<div style="flex:1.35;"><div style="border-bottom:1px solid #20241f;height:40px;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Authorized Signer\'s Name</div></div>' +
+            '<div style="flex:1.35;"><div style="border-bottom:1px solid #20241f;height:40px;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Signature</div></div>' +
+            '<div style="flex:1;"><div style="border-bottom:1px solid #20241f;height:40px;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Date</div></div>' +
+          '</div>' +
         '</div>' + footerNotesHtml + cbClauses(d) +
       '</div>';
     return html;
