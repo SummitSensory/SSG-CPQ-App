@@ -118,10 +118,16 @@
         })
         .join('') +
       '<input type="file" id="iaFile" accept="image/jpeg,image/png,image/webp" style="display:none;">';
-    bind(host, art);
+    bind(host, art, templates);
   }
 
-  function bind(host, art) {
+  function bind(host, art, templates) {
+    var slotById = {};
+    (templates || []).forEach(function (t) {
+      (t.slots || []).forEach(function (s) {
+        slotById[s.id] = s;
+      });
+    });
     var file = host.querySelector('#iaFile');
     var pending = null;
 
@@ -157,32 +163,37 @@
         if (row) row.style.opacity = '.55';
         // Downscaled in the browser before it is sent: the route refuses anything
         // over 2 MB, and an un-resized phone photo is well past that.
-        window.SSGFrontMatter.prepareImage(f, function (dataUrl) {
-          if (!dataUrl) {
-            alert('That file could not be read as an image.');
-            if (row) row.style.opacity = '';
-            return;
-          }
-          save(slot, dataUrl)
-            .then(async function (r) {
-              if (!r.ok) {
-                var d = null;
-                try {
-                  d = await r.json();
-                } catch (e) {
-                  /* no body */
-                }
-                alert((d && d.message) || 'The photo could not be saved (' + r.status + ').');
-                if (row) row.style.opacity = '';
-                return;
-              }
-              reload();
-            })
-            .catch(function () {
-              alert('Could not reach the server.');
+        var spec = slotById[slot] || {};
+        window.SSGFrontMatter.prepareImage(
+          f,
+          function (dataUrl) {
+            if (!dataUrl) {
+              alert('That file could not be read as an image.');
               if (row) row.style.opacity = '';
-            });
-        });
+              return;
+            }
+            save(slot, dataUrl)
+              .then(async function (r) {
+                if (!r.ok) {
+                  var d = null;
+                  try {
+                    d = await r.json();
+                  } catch (e) {
+                    /* no body */
+                  }
+                  alert((d && d.message) || 'The photo could not be saved (' + r.status + ').');
+                  if (row) row.style.opacity = '';
+                  return;
+                }
+                reload();
+              })
+              .catch(function () {
+                alert('Could not reach the server.');
+                if (row) row.style.opacity = '';
+              });
+          },
+          { maxEdge: spec.maxEdge, quality: spec.quality },
+        );
       });
     }
 

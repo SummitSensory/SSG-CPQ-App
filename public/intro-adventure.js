@@ -35,10 +35,14 @@
         label: 'Page 3 \u2014 clinician working with a patient (wide, 1384 \u00d7 536)',
         house: '/proposal/adventure-p3-activity.jpg',
       },
+      // The tall column prints 2112 px of vertical detail, so it is stored larger and
+      // at a higher quality than the other slots.
       {
         id: 'p4-photo',
         label: 'Page 4 \u2014 mid-activity (tall column, 472 \u00d7 2112)',
         house: '/proposal/adventure-p4-vertical.jpg',
+        maxEdge: 2400,
+        quality: 0.86,
       },
       {
         id: 'p5-photo',
@@ -255,7 +259,7 @@
         <div style="font-size:10.5px;color:#9aa1b0;letter-spacing:.04em;padding-top:14px;border-top:1px solid #e6e1d5;">Summit Sensory Gym · SummitSensory.com</div>
       </div>
 
-      <div style="width:236px;flex:none;position:relative;border-radius:6px;overflow:hidden;">
+      <div style="width:236px;flex:none;position:relative;overflow:hidden;">
         ${h.img(art, 'p4-photo')}
       </div>
     </div>`;

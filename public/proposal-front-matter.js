@@ -47,9 +47,16 @@
   /** Slot id -> data URL, as managed in Admin. Loaded once per session. */
   var ART = {};
   var artLoaded = false;
-  /** Longest edge of an uploaded photo, and JPEG quality. Keeps one near 300 KB. */
+  /**
+   * Longest edge of an uploaded photo, and JPEG quality.
+   *
+   * The default suits a wide band. A slot can raise it — see slot.maxEdge — and the
+   * tall page-4 column has to: it prints 236 x 1056 px, which is 2112 px of vertical
+   * detail at print resolution, so a 1400 px cap resamples the picture upwards and it
+   * arrives on the page soft.
+   */
   var MAX_EDGE = 1400,
-    JPEG_QUALITY = 0.72;
+    JPEG_QUALITY = 0.78;
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
@@ -212,18 +219,27 @@
       });
   }
 
-  /** Downscale a picked file to a data URL. Used by the admin screen. */
-  function prepareImage(file, done) {
+  /**
+   * Downscale a picked file to a data URL. Used by the admin screen.
+   *
+   * `opts.maxEdge` and `opts.quality` come from the slot, so a page that prints a
+   * photograph large is not held to the same ceiling as a page that prints it small.
+   * Never upscales: a small original is stored as it is rather than being stretched.
+   */
+  function prepareImage(file, done, opts) {
+    opts = opts || {};
+    var maxEdge = Number(opts.maxEdge) > 0 ? Number(opts.maxEdge) : MAX_EDGE;
+    var quality = Number(opts.quality) > 0 ? Number(opts.quality) : JPEG_QUALITY;
     var reader = new FileReader();
     reader.onload = function () {
       var im = new Image();
       im.onload = function () {
-        var scale = Math.min(1, MAX_EDGE / Math.max(im.width, im.height));
+        var scale = Math.min(1, maxEdge / Math.max(im.width, im.height));
         var c = document.createElement('canvas');
         c.width = Math.max(1, Math.round(im.width * scale));
         c.height = Math.max(1, Math.round(im.height * scale));
         c.getContext('2d').drawImage(im, 0, 0, c.width, c.height);
-        done(c.toDataURL('image/jpeg', JPEG_QUALITY));
+        done(c.toDataURL('image/jpeg', quality));
       };
       im.onerror = function () {
         done(null);
