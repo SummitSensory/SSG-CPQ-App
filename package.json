@@ -4,14 +4,13 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": "22.x"
   },
-  "packageManager": "pnpm@9.12.0",
+  "packageManager": "pnpm@10.34.5+sha512.a4ee05f2f73658255bd6a89859c065a45c28a57daefae2c893a168ee2b73168c37b91e83e57ea67654ad03f03031746430e8bce38e362e042605fb8abc80192e",
   "scripts": {
     "dev": "tsx watch --env-file=.env src/server.ts",
     "dev:ci": "tsx src/server.ts",
     "build": "tsc --noCheck -p tsconfig.build.json",
-    "vercel-build": "node scripts/build-stamp.mjs && prisma generate && node scripts/migrate-deploy.mjs && pnpm build",
     "stamp": "node scripts/build-stamp.mjs",
     "start": "node dist/server.js",
     "typecheck": "prisma generate && tsc --noEmit",

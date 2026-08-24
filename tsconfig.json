@@ -4,7 +4,12 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "lib": ["ES2023"],
-    "types": ["node"],
+    // "undici-types" is what gives Node's global fetch its real shapes. Without it
+    // TypeScript resolves `Response` and `Headers` to `{}` — the source of every
+    // "Property 'ok' does not exist on type 'Response'" in the Vercel log. It ships
+    // inside @types/node; naming it here stops it being dropped when the installer
+    // hides transitive types.
+    "types": ["node", "undici-types"],
     "outDir": "dist",
     "rootDir": ".",
     "strict": true,

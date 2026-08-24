@@ -7,7 +7,6 @@
       "maxDuration": 30
     },
     "api/render.ts": {
-      "memory": 2048,
       "maxDuration": 60
     }
   },
