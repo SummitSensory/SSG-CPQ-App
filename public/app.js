@@ -10978,7 +10978,7 @@
                   : 'This vendor has no freight figure yet, so its grand total cannot be worked out. Reads the Deal Tracking board.') +
                 '" style="width:auto;padding:6px 12px;font-weight:600;border:1px solid transparent;color:#fff;background:' +
                 (dealFiguresIn(s) ? '#2f7d5d' : '#a2402f') + ';">Pull freight &amp; tax from the deal</button>' +
-              '<span class="muted" data-deal-out style="font-size:11.5px;line-height:1.5;flex:1;min-width:220px;">Reads the Deal Tracking board. Figures you have typed are kept.</span>' +
+              '<span class="muted" data-deal-out style="font-size:11.5px;line-height:1.5;flex:1;min-width:220px;">Reads the Deal Tracking board and replaces the freight and tax figures with what it holds.</span>' +
             '</div>'
           : '') +
         '<div style="margin-top:12px;"><div class="k">Notes to this vendor</div>' +
@@ -11639,7 +11639,10 @@
       bt.addEventListener('click', async function () {
         bt.disabled = true;
         say('Reading the deal…');
-        var r = await authed('/orders/' + order.id + '/deal-figures/pull', { method: 'POST', body: {} });
+        // overwrite: the board is the authority on freight and tax. Keeping a typed
+        // figure meant a re-quote never landed until someone emptied both fields by
+        // hand, and a stale "TBD" blocked the pull it was waiting for.
+        var r = await authed('/orders/' + order.id + '/deal-figures/pull', { method: 'POST', body: { overwrite: true } });
         bt.disabled = false;
         if (!r.ok) { say('Could not read the deal (' + r.status + ').', 1); return; }
         var d = await r.json();
@@ -11663,7 +11666,7 @@
         if (!d.updated) {
           var why = (!f.structureFreight && !f.matsFreight && !f.estimatedTax)
             ? 'Nothing to copy — those columns are empty on the Deal Tracking board. Fill them in there, then pull again.'
-            : 'Every section already has its figures. Clear a field first if you want the deal\u2019s number instead.';
+            : 'Every section already holds exactly what the deal says.';
           say(head + '<br>' + why, 1);
           return;
         }

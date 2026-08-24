@@ -613,8 +613,13 @@ export async function reorderSections(
  * Each section takes the freight figure its vendor quotes from — the mats vendor
  * the mats line, everyone else the structure line — and every section gets the one
  * tax figure. Submitted sections are skipped: they are the sheet the vendor already
- * holds. A figure typed by hand is only replaced when `overwrite` is set, so a
- * negotiated number is not silently undone by a refresh.
+ * holds.
+ *
+ * `overwrite` makes the BOARD the authority: each figure is set to what the deal says,
+ * and a figure the deal does not hold is CLEARED. Without it, only an empty or "TBD"
+ * field is filled, which is the right default for a scheduled refresh but was wrong for
+ * the button — a re-quote could not land until someone emptied both fields by hand, and
+ * the stale value blocked the very pull it was waiting for.
  */
 export async function pullDealFigures(
   orderId: string,
@@ -647,14 +652,24 @@ export async function pullDealFigures(
     const carriesTax = (sourceByVendor.get(sec.vendor.toLowerCase()) ?? 'STRUCTURE') === 'MATS';
     const data: Record<string, unknown> = {};
     const blank = (v: string | null) => !v || !v.trim() || v.trim().toUpperCase() === 'TBD';
-    if (freight && (opts.overwrite || blank(sec.shipmentQuote))) data.shipmentQuote = freight;
-    if (carriesTax && figures.estimatedTax && (opts.overwrite || blank(sec.estimatedTax))) {
-      data.estimatedTax = figures.estimatedTax;
+    if (opts.overwrite) {
+      // Set to the board, blank included: a figure that is no longer on the deal is no
+      // longer a figure, and leaving the old one behind is how a superseded freight
+      // quote ends up on a vendor's sheet.
+      if ((freight ?? null) !== (sec.shipmentQuote ?? null)) data.shipmentQuote = freight ?? null;
+      const wantTax = carriesTax ? (figures.estimatedTax ?? null) : null;
+      if (wantTax !== (sec.estimatedTax ?? null)) data.estimatedTax = wantTax;
+    } else {
+      if (freight && blank(sec.shipmentQuote)) data.shipmentQuote = freight;
+      if (carriesTax && figures.estimatedTax && blank(sec.estimatedTax)) {
+        data.estimatedTax = figures.estimatedTax;
+      }
     }
     // Clear a tax figure copied onto a vendor that should never have carried one. The
     // sheet already hides it, but leaving the value behind would have it reappear the
     // day someone changes which vendor quotes the mats.
     if (!carriesTax && !blank(sec.estimatedTax)) data.estimatedTax = null;
+    // Nothing to say when the board already matches the sheet.
     if (!Object.keys(data).length) {
       skipped++;
       continue;
