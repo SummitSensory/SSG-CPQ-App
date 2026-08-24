@@ -51,6 +51,14 @@
     return mo[Number(p[1]) - 1] + ' ' + Number(p[2]) + ', ' + p[0];
   }
 
+  /** A recorded moment, in the reader's own timezone. */
+  function fmtStamp(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return fmtDate(iso) + ' at ' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  }
+
   /** Whole days since a date. Drives the ageing flag. */
   function daysSince(iso) {
     var t = Date.parse(String(iso) + 'T00:00:00');
@@ -251,6 +259,13 @@
           esc(slip.note) +
           '</div>'
         : '') +
+      (slip.shippedBy
+        ? '<div style="margin-top:22px;font-size:11px;color:' +
+          MUTE +
+          ';">Packed by ' +
+          esc(slip.shippedBy) +
+          '</div>'
+        : '') +
       '<div style="position:absolute;left:72px;right:72px;bottom:34px;display:flex;justify-content:space-between;' +
       'align-items:baseline;gap:20px;padding-top:10px;border-top:1px solid ' +
       LINE +
@@ -382,45 +397,146 @@
       .join('');
   }
 
+  /**
+   * The shipping record: every slip, who printed it, when, and whether it was
+   * withdrawn. Newest first, because the question is almost always "what just went
+   * out" rather than "what went out in June".
+   */
   function slipsHtml() {
-    var recent = (data.slips || []).slice().reverse().slice(0, 12);
-    if (!recent.length)
+    var all = (data.slips || []).slice().reverse();
+    if (!all.length)
       return '<div class="muted" style="font-size:12.5px;padding:8px 0;">No slips yet.</div>';
-    return recent
-      .map(function (s) {
-        var pieces = s.lines.reduce(function (a, l) {
-          return a + l.qty;
-        }, 0);
-        return (
-          '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:9px 0;border-top:1px solid #eef0f4;">' +
-          '<div style="min-width:0;">' +
-          '<div style="font-size:12.5px;">' +
-          esc(s.customer) +
-          '</div>' +
-          '<div style="font-size:10.5px;color:' +
-          MUTE +
-          ';margin-top:2px;font-variant-numeric:tabular-nums;">' +
-          esc(s.number) +
-          ' \u00b7 ' +
-          esc(fmtDate(s.date)) +
-          ' \u00b7 ' +
-          pieces +
-          ' pc</div>' +
-          '</div>' +
-          '<div style="display:flex;gap:6px;flex:none;">' +
-          '<button type="button" class="link-btn bsReprint" data-id="' +
-          esc(s.id) +
-          '" style="width:auto;padding:4px 10px;font-size:11px;">Reprint</button>' +
-          '<button type="button" class="link-btn bsVoid" data-id="' +
-          esc(s.id) +
-          '" title="Not shipped after all \u2014 put these belts back on the list" style="width:auto;padding:4px 10px;font-size:11px;color:' +
-          RED +
-          ';">Void</button>' +
-          '</div>' +
-          '</div>'
-        );
-      })
-      .join('');
+    var recent = all.slice(0, 25);
+
+    return (
+      recent
+        .map(function (s) {
+          var pieces = s.lines.reduce(function (a, l) {
+            return a + l.qty;
+          }, 0);
+          var dead = !!s.voidedAt;
+          return (
+            '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:10px 0;border-top:1px solid #eef0f4;' +
+            (dead ? 'opacity:.62;' : '') +
+            '">' +
+            '<div style="min-width:0;">' +
+            '<div style="font-size:12.5px;' +
+            (dead ? 'text-decoration:line-through;' : '') +
+            '">' +
+            esc(s.customer) +
+            '</div>' +
+            '<div style="font-size:10.5px;color:' +
+            MUTE +
+            ';margin-top:2px;font-variant-numeric:tabular-nums;">' +
+            esc(s.number) +
+            ' \u00b7 ' +
+            pieces +
+            ' pc' +
+            (s.proposalNumber ? ' \u00b7 ' + esc(s.proposalNumber) : '') +
+            '</div>' +
+            '<div style="font-size:10.5px;color:#b0b6c2;margin-top:3px;">' +
+            (s.shippedBy ? esc(s.shippedBy) + ' \u00b7 ' : '') +
+            esc(fmtStamp(s.shippedAt) || fmtDate(s.date)) +
+            '</div>' +
+            (dead
+              ? '<div style="font-size:10.5px;color:' +
+                RED +
+                ';margin-top:3px;font-weight:600;">Voided by ' +
+                esc(s.voidedBy || 'unknown') +
+                ' \u00b7 ' +
+                esc(fmtStamp(s.voidedAt)) +
+                '</div>'
+              : '') +
+            '</div>' +
+            '<div style="display:flex;gap:6px;flex:none;">' +
+            '<button type="button" class="link-btn bsReprint" data-id="' +
+            esc(s.id) +
+            '" style="width:auto;padding:4px 10px;font-size:11px;">Reprint</button>' +
+            (dead
+              ? ''
+              : '<button type="button" class="link-btn bsVoid" data-id="' +
+                esc(s.id) +
+                '" title="Not shipped after all \u2014 put these belts back on the list" style="width:auto;padding:4px 10px;font-size:11px;color:' +
+                RED +
+                ';">Void</button>') +
+            '</div>' +
+            '</div>'
+          );
+        })
+        .join('') +
+      (all.length > recent.length
+        ? '<div class="muted" style="font-size:11px;padding-top:9px;">Showing the ' +
+          recent.length +
+          ' most recent of ' +
+          all.length +
+          '.</div>'
+        : '')
+    );
+  }
+
+  /**
+   * Who has shipped what, so the work can be managed rather than just recorded.
+   * Voided slips are excluded — a withdrawn slip is not work done.
+   */
+  function activityHtml() {
+    var live = (data.slips || []).filter(function (s) {
+      return !s.voidedAt;
+    });
+    if (!live.length) return '';
+
+    var since = Date.now() - 30 * 86400000;
+    var by = {};
+    live.forEach(function (s) {
+      var t = Date.parse(s.shippedAt || s.date);
+      if (isNaN(t) || t < since) return;
+      var who = s.shippedBy || 'Unrecorded';
+      var e = (by[who] = by[who] || { slips: 0, pieces: 0, last: 0 });
+      e.slips += 1;
+      e.pieces += s.lines.reduce(function (a, l) {
+        return a + l.qty;
+      }, 0);
+      e.last = Math.max(e.last, t);
+    });
+    var names = Object.keys(by).sort(function (a, b) {
+      return by[b].pieces - by[a].pieces;
+    });
+    if (!names.length) return '';
+
+    return (
+      '<div class="card" style="margin-bottom:14px;">' +
+      '<div class="section-title" style="margin:0 0 4px;">Who shipped what</div>' +
+      '<div class="muted" style="font-size:11.5px;margin-bottom:8px;">Last 30 days. Voided slips excluded.</div>' +
+      names
+        .map(function (n) {
+          var e = by[n];
+          return (
+            '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:7px 0;border-top:1px solid #eef0f4;">' +
+            '<div style="min-width:0;">' +
+            '<div style="font-size:12.5px;">' +
+            esc(n) +
+            '</div>' +
+            '<div style="font-size:10.5px;color:#b0b6c2;margin-top:2px;">Last ' +
+            esc(fmtStamp(new Date(e.last).toISOString())) +
+            '</div>' +
+            '</div>' +
+            '<div style="text-align:right;flex:none;font-variant-numeric:tabular-nums;">' +
+            '<div style="font-size:15px;font-weight:700;">' +
+            e.pieces +
+            '</div>' +
+            '<div style="font-size:10.5px;color:' +
+            MUTE +
+            ';">' +
+            e.slips +
+            ' slip' +
+            (e.slips === 1 ? '' : 's') +
+            '</div>' +
+            '</div>' +
+            '</div>'
+          );
+        })
+        .join('') +
+      '</div>'
+    );
   }
 
   function paint() {
@@ -489,19 +605,26 @@
                 RED +
                 ';line-height:1.55;margin-bottom:10px;">Shipping short &mdash; the balance stays on the list.</div>'
               : '') +
+            // The proposal's own contact, or failing that the customer's first
+            // contact on file — an older order may predate the snapshot that
+            // carries the proposal's. Either way it stays editable.
             '<label style="display:block;margin-bottom:9px;"><span style="font-size:11px;color:' +
             MUTE +
             ';">Attention</span>' +
             '<input id="bsAttn" list="bsContacts" placeholder="Who should open it?" value="' +
-            esc(one.contactName || '') +
+            esc(one.contactName || (one.contacts || [])[0] || '') +
             '" style="' +
             FIELD +
             '"></label>' +
+            '<div class="muted" style="font-size:11px;margin:-4px 0 9px;">' +
             (one.contactName
-              ? '<div class="muted" style="font-size:11px;margin:-4px 0 9px;">The contact on proposal ' +
-                esc(one.proposalNumber || '') +
-                '. Change it if someone else should receive the box.</div>'
-              : '') +
+              ? 'The contact on proposal ' + esc(one.proposalNumber || '') + '.'
+              : (one.contacts || [])[0]
+                ? 'From the customer record \u2014 proposal ' +
+                  esc(one.proposalNumber || '') +
+                  ' has no contact on it.'
+                : 'No contact on file. Type who should open the box.') +
+            '</div>' +
             '<datalist id="bsContacts">' +
             (one.contacts || [])
               .map(function (c) {
@@ -528,8 +651,9 @@
             '"></label>' +
             '<button type="button" id="bsPrint" class="btn" style="width:100%;">Print the slip</button>') +
       '</div>' +
+      activityHtml() +
       '<div class="card">' +
-      '<div class="section-title" style="margin:0 0 6px;">Recent slips</div>' +
+      '<div class="section-title" style="margin:0 0 6px;">Shipping record</div>' +
       slipsHtml() +
       '</div>' +
       '</div>' +
@@ -602,7 +726,7 @@
           !confirm(
             'Void ' +
               slip.number +
-              '?\n\nUse this when the box did not go out. The belts return to Belts to ship and the slip is removed from this list.',
+              '?\n\nUse this when the box did not go out. The belts return to Belts to ship, and the slip stays on the record marked voided against your name.',
           )
         )
           return;

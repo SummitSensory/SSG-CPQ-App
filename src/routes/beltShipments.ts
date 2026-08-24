@@ -46,6 +46,20 @@ const Slip = z.object({
   customer: z.string().trim().min(1).max(160),
   /** The proposal these belts were sold on. Printed on the slip. */
   proposalNumber: z.string().trim().max(40).default(''),
+  /**
+   * Who printed it and when, and who withdrew it.
+   *
+   * Set by the server from the session, never sent by the browser — an accountability
+   * record that the person being recorded can edit is not a record. shippedAt is a
+   * full timestamp rather than a date, because "who shipped what today" needs the
+   * order things happened in.
+   */
+  shippedById: z.string().trim().max(40).default(''),
+  shippedBy: z.string().trim().max(160).default(''),
+  shippedAt: z.string().trim().max(40).default(''),
+  voidedById: z.string().trim().max(40).default(''),
+  voidedBy: z.string().trim().max(160).default(''),
+  voidedAt: z.string().trim().max(40).default(''),
   attention: z.string().trim().max(160).default(''),
   date: z.string().trim().max(30),
   address: z.string().trim().max(400).default(''),
@@ -182,15 +196,19 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
         const org = orgById.get(l.order.organizationId);
         const addresses = org?.addresses || [];
         const ship = addresses.find((a) => a.type === 'SHIPPING') || addresses[0];
-        // The contact the proposal was addressed to. Read defensively: the snapshot is
-        // free-form JSON frozen at acceptance, so an older order may not carry it.
-        const snap = l.order.contentSnapshot as {
-          sections?: { meta?: { contactName?: unknown } };
-        } | null;
-        const contactName =
-          typeof snap?.sections?.meta?.contactName === 'string'
-            ? snap.sections.meta.contactName.trim()
-            : '';
+        // The contact the proposal was addressed to.
+        //
+        // sections is an ARRAY of section objects, and the proposal's meta is the one
+        // with id 'meta', under .data — the same shape app.js reads when it builds the
+        // document. Read defensively either way: the snapshot is free-form JSON frozen
+        // at acceptance, so an older order may not carry a meta section at all.
+        const snap = l.order.contentSnapshot as { sections?: unknown } | null;
+        const sections = Array.isArray(snap?.sections)
+          ? (snap!.sections as Array<Record<string, unknown>>)
+          : [];
+        const metaSection = sections.find((sec) => sec && sec.id === 'meta');
+        const meta = (metaSection?.data ?? {}) as { contactName?: unknown };
+        const contactName = typeof meta.contactName === 'string' ? meta.contactName.trim() : '';
         return {
           lineId: l.id,
           sku: l.sku || '',
@@ -225,7 +243,18 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
    * the balance owed.
    */
   app.post('/belt-shipments/ship', guard, async (req) => {
-    const Body = z.object({ slip: Slip.omit({ id: true, number: true }) });
+    const Body = z.object({
+      slip: Slip.omit({
+        id: true,
+        number: true,
+        shippedById: true,
+        shippedBy: true,
+        shippedAt: true,
+        voidedById: true,
+        voidedBy: true,
+        voidedAt: true,
+      }),
+    });
     const parsed = Body.safeParse(req.body);
     if (!parsed.success) throw new ValidationError('That shipment could not be read.');
     const { slip } = parsed.data;
@@ -253,11 +282,22 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
       ledger.shipped[line.lineId] = Math.min(cap, already + line.qty);
     }
 
+    const who = await prisma.user.findUnique({
+      where: { id: req.user!.sub },
+      select: { name: true, email: true },
+    });
+
     ledger.seq += 1;
     const record = {
       ...slip,
       id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
       number: `PS-${String(ledger.seq).padStart(4, '0')}`,
+      shippedById: req.user!.sub,
+      shippedBy: who?.name || who?.email || '',
+      shippedAt: new Date().toISOString(),
+      voidedById: '',
+      voidedBy: '',
+      voidedAt: '',
     };
     ledger.slips.push(record);
 
@@ -283,10 +323,10 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
   });
 
   /**
-   * Undo a slip: remove it and give its pieces back to the list.
+   * Void a slip: give its pieces back to the list and mark it withdrawn.
    *
-   * Printing the wrong slip is the likeliest mistake here, and without this the belt
-   * is owed forever with no way to say so.
+   * The slip is NOT deleted. It may already be in a box in the post, so the record of
+   * having printed it has to survive, along with who withdrew it and when.
    */
   app.post('/belt-shipments/void', guard, async (req) => {
     const Body = z.object({ slipId: z.string().trim().min(1).max(40) });
@@ -297,12 +337,21 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
     const slip = ledger.slips.find((s) => s.id === parsed.data.slipId);
     if (!slip) throw new ValidationError('That slip is no longer on file.');
 
+    if (slip.voidedAt) throw new ValidationError('That slip has already been voided.');
+
     for (const line of slip.lines) {
       if (!line.lineId) continue;
       ledger.shipped[line.lineId] = Math.max(0, (ledger.shipped[line.lineId] || 0) - line.qty);
       if (!ledger.shipped[line.lineId]) delete ledger.shipped[line.lineId];
     }
-    ledger.slips = ledger.slips.filter((s) => s.id !== slip.id);
+
+    const voider = await prisma.user.findUnique({
+      where: { id: req.user!.sub },
+      select: { name: true, email: true },
+    });
+    slip.voidedById = req.user!.sub;
+    slip.voidedBy = voider?.name || voider?.email || '';
+    slip.voidedAt = new Date().toISOString();
 
     const value = JSON.stringify(Ledger.parse(ledger));
     await prisma.uiSetting.upsert({
