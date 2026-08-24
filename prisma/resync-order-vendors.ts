@@ -26,14 +26,14 @@ async function main(): Promise<void> {
   const actorArg = process.argv.find((a) => a.startsWith('--actor='));
 
   // The move is written to each order's timeline, so it needs a person. An explicit
-  // --actor=email wins; otherwise the oldest admin stands in.
+  // --actor=email wins; otherwise the longest-standing SYSTEM_ADMIN stands in.
   const actor = actorArg
     ? await prisma.user.findFirst({
         where: { email: actorArg.slice(8) },
         select: { id: true, email: true },
       })
     : await prisma.user.findFirst({
-        where: { role: 'ADMIN' },
+        where: { role: 'SYSTEM_ADMIN' },
         orderBy: { createdAt: 'asc' },
         select: { id: true, email: true },
       });
