@@ -147,6 +147,13 @@
       ';margin-top:3px;font-variant-numeric:tabular-nums;">' +
       esc(slip.number) +
       '</div>' +
+      (slip.proposalNumber
+        ? '<div style="font-size:10.5px;color:' +
+          MUTE +
+          ';margin-top:6px;">Proposal ' +
+          esc(slip.proposalNumber) +
+          '</div>'
+        : '') +
       '</div>' +
       '</div>' +
       '<div style="height:2px;background:' +
@@ -279,12 +286,12 @@
         var oldest = g.rows.reduce(function (a, r) {
           return Math.max(a, daysSince(r.orderedOn));
         }, 0);
-        var orders = g.rows
+        var refs = g.rows
           .map(function (r) {
-            return r.orderNumber;
+            return r.proposalNumber || r.orderNumber;
           })
           .filter(function (v, i, arr) {
-            return arr.indexOf(v) === i;
+            return v && arr.indexOf(v) === i;
           });
 
         return (
@@ -301,7 +308,7 @@
           '<div style="font-size:10.5px;color:' +
           MUTE +
           ';margin-top:2px;">' +
-          esc(orders.join(' \u00b7 ')) +
+          esc(refs.join(' \u00b7 ')) +
           '</div>' +
           '</div>' +
           '<div style="display:flex;gap:12px;align-items:baseline;flex:none;">' +
@@ -406,7 +413,7 @@
           '" style="width:auto;padding:4px 10px;font-size:11px;">Reprint</button>' +
           '<button type="button" class="link-btn bsVoid" data-id="' +
           esc(s.id) +
-          '" title="Put these belts back on the list" style="width:auto;padding:4px 10px;font-size:11px;color:' +
+          '" title="Not shipped after all \u2014 put these belts back on the list" style="width:auto;padding:4px 10px;font-size:11px;color:' +
           RED +
           ';">Void</button>' +
           '</div>' +
@@ -484,10 +491,17 @@
               : '') +
             '<label style="display:block;margin-bottom:9px;"><span style="font-size:11px;color:' +
             MUTE +
-            ';">Attention (optional)</span>' +
-            '<input id="bsAttn" list="bsContacts" placeholder="Who should open it?" style="' +
+            ';">Attention</span>' +
+            '<input id="bsAttn" list="bsContacts" placeholder="Who should open it?" value="' +
+            esc(one.contactName || '') +
+            '" style="' +
             FIELD +
             '"></label>' +
+            (one.contactName
+              ? '<div class="muted" style="font-size:11px;margin:-4px 0 9px;">The contact on proposal ' +
+                esc(one.proposalNumber || '') +
+                '. Change it if someone else should receive the box.</div>'
+              : '') +
             '<datalist id="bsContacts">' +
             (one.contacts || [])
               .map(function (c) {
@@ -584,7 +598,14 @@
           return s.id === b.getAttribute('data-id');
         })[0];
         if (!slip) return;
-        if (!confirm('Void ' + slip.number + ' and put those belts back on the list?')) return;
+        if (
+          !confirm(
+            'Void ' +
+              slip.number +
+              '?\n\nUse this when the box did not go out. The belts return to Belts to ship and the slip is removed from this list.',
+          )
+        )
+          return;
         H.authed('/belt-shipments/void', { method: 'POST', body: { slipId: slip.id } })
           .then(function (r) {
             if (!r.ok) {
@@ -630,6 +651,7 @@
       slip: {
         orgId: orgId,
         customer: rows[0].customer,
+        proposalNumber: rows[0].proposalNumber || '',
         attention: (host.querySelector('#bsAttn') || {}).value || '',
         date: todayISO(),
         address: (host.querySelector('#bsAddr') || {}).value || '',

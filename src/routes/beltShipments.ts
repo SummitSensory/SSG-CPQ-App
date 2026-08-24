@@ -44,6 +44,8 @@ const Slip = z.object({
   number: z.string().trim().max(40),
   orgId: z.string().trim().max(40).default(''),
   customer: z.string().trim().min(1).max(160),
+  /** The proposal these belts were sold on. Printed on the slip. */
+  proposalNumber: z.string().trim().max(40).default(''),
   attention: z.string().trim().max(160).default(''),
   date: z.string().trim().max(30),
   address: z.string().trim().max(400).default(''),
@@ -129,13 +131,26 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
             number: true,
             organizationId: true,
             createdAt: true,
-            // Shipping address if the customer has one, otherwise whatever is on file.
-            // Either is better than making someone type it for every slip.
+            proposalId: true,
+            // The frozen accepted proposal. Its sections carry the meta the proposal
+            // was written with, including the contact the letter was addressed to —
+            // which is the name that should already be on the slip.
+            contentSnapshot: true,
           },
         },
       },
       orderBy: { id: 'asc' },
     });
+
+    // Proposal numbers, one query for the whole list.
+    const proposalIds = Array.from(new Set(lines.map((l) => l.order.proposalId).filter(Boolean)));
+    const proposals = proposalIds.length
+      ? await prisma.proposal.findMany({
+          where: { id: { in: proposalIds } },
+          select: { id: true, number: true },
+        })
+      : [];
+    const proposalNumberById = new Map(proposals.map((p) => [p.id, p.number]));
 
     const orgIds = Array.from(new Set(lines.map((l) => l.order.organizationId)));
     const orgs = orgIds.length
@@ -167,6 +182,15 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
         const org = orgById.get(l.order.organizationId);
         const addresses = org?.addresses || [];
         const ship = addresses.find((a) => a.type === 'SHIPPING') || addresses[0];
+        // The contact the proposal was addressed to. Read defensively: the snapshot is
+        // free-form JSON frozen at acceptance, so an older order may not carry it.
+        const snap = l.order.contentSnapshot as {
+          sections?: { meta?: { contactName?: unknown } };
+        } | null;
+        const contactName =
+          typeof snap?.sections?.meta?.contactName === 'string'
+            ? snap.sections.meta.contactName.trim()
+            : '';
         return {
           lineId: l.id,
           sku: l.sku || '',
@@ -177,6 +201,8 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
           orgId: l.order.organizationId,
           customer: org?.name || 'Unknown customer',
           orderNumber: l.order.number,
+          proposalNumber: proposalNumberById.get(l.order.proposalId) || '',
+          contactName,
           orderedOn: l.order.createdAt.toISOString().slice(0, 10),
           address: formatAddress(ship),
           contacts: (org?.contacts || []).map((c) =>
