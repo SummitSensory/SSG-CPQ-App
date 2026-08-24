@@ -15,6 +15,7 @@ import {
   type PriceSnapshotLike,
 } from './lock.js';
 import { expandBomBuild } from './bomBuild.js';
+import { rollUpProcurementLines } from './bomRollup.js';
 import { qboGateState } from './manufacturingRelease.js';
 import { versionTotals, metaOf } from '../proposals/analytics.js';
 import { createNewVersion } from '../proposals/service.js';
@@ -666,15 +667,21 @@ export async function getOrder(id: string) {
     manufacturingReleasedByName: order.manufacturingReleasedById
       ? (nameById.get(order.manufacturingReleasedById) ?? null)
       : null,
-    procurement: order.procurement.map((p) => ({
-      ...p,
-      productUrl: (p.sku && urlByPart.get(p.sku)) || null,
-      packagingBag: (p.sku && bagByPart.get(p.sku)) || null,
-      vendorPart: vendorParts.get((p.vendor && p.vendor.trim()) || 'Unassigned vendor', p.sku),
-      paintGroup: (p.sku && paintBySku.get(p.sku.toUpperCase())?.name) || null,
-      paintGroupLabel: (p.sku && paintBySku.get(p.sku.toUpperCase())?.label) || null,
-      quantityEditedBy: p.quantityEditedById ? (nameById.get(p.quantityEditedById) ?? null) : null,
-    })),
+    // Rolled-up variants collapse here, so the Bill of Materials screen shows the
+    // same single Hardware line the printed sheet does.
+    procurement: rollUpProcurementLines(
+      order.procurement.map((p) => ({
+        ...p,
+        productUrl: (p.sku && urlByPart.get(p.sku)) || null,
+        packagingBag: (p.sku && bagByPart.get(p.sku)) || null,
+        vendorPart: vendorParts.get((p.vendor && p.vendor.trim()) || 'Unassigned vendor', p.sku),
+        paintGroup: (p.sku && paintBySku.get(p.sku.toUpperCase())?.name) || null,
+        paintGroupLabel: (p.sku && paintBySku.get(p.sku.toUpperCase())?.label) || null,
+        quantityEditedBy: p.quantityEditedById
+          ? (nameById.get(p.quantityEditedById) ?? null)
+          : null,
+      })),
+    ),
     requirements: order.requirements.map((r) => ({
       ...r,
       updatedByName: r.updatedById ? (nameById.get(r.updatedById) ?? null) : null,

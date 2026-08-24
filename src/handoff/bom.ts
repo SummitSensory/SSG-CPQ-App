@@ -2,6 +2,7 @@ import { prisma } from '../lib/prisma.js';
 import { NotFoundError } from '../lib/errors.js';
 import { vendorPartLookup } from './vendorParts.js';
 import { defaultJobName } from './bomSections.js';
+import { isRollupHardwarePart, rollUpBomLines } from './bomRollup.js';
 
 /**
  * The Bill of Materials.
@@ -255,8 +256,10 @@ export async function buildBom(
       await prisma.hardwareRule.findMany({ where: { kind: 'HARDWARE' }, select: { part: true } })
     ).map((r) => r.part),
   ]);
+  // A part quoted on the proposal under its own name (the zip-line eye bolt) is
+  // still a fastener on the shop floor — bomRollup names those explicitly.
   const isHardwarePart = (sku: string, flagged: boolean): boolean =>
-    flagged || hardwareParts.has(sku);
+    flagged || hardwareParts.has(sku) || isRollupHardwarePart(sku);
 
   // A part the tree has never heard of would otherwise sort to position 0 and lead
   // the sheet. Park it after the known products but before hardware.
@@ -281,7 +284,7 @@ export async function buildBom(
     ordered.map((l) => ({ vendor: s(l.vendor).trim() || 'Unassigned vendor', sku: s(l.sku) })),
   );
 
-  const lines: BomLine[] = scoped.map((l) => {
+  const builtLines: BomLine[] = scoped.map((l) => {
     const qty = Number(l.quantity) || 0;
     // A free-issue part is already paid for. It prints at zero so it appears in the
     // shipment without asking the receiving vendor to buy it, and so it cannot land in
@@ -320,6 +323,10 @@ export async function buildBom(
       purchaseVendor: s(l.purchaseVendor),
     };
   });
+
+  // Variant part numbers collapse into the part the vendor is actually sold: two
+  // proposal lines, one purchase line. The proposal keeps both.
+  const lines: BomLine[] = rollUpBomLines(builtLines);
 
   // ---- optional zero-quantity rows: the rest of this vendor's catalogue ----
   if (opts.includeZeroQty && vendorFilter && vendorFilter !== 'Unassigned vendor') {

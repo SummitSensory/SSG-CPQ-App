@@ -1,5 +1,6 @@
 import { prisma } from '../lib/prisma.js';
 import { NotFoundError, ValidationError } from '../lib/errors.js';
+import { rollUpProcurementLines } from './bomRollup.js';
 import type { BomQuestionType, BomSectionStatus, BomShipTo } from '@prisma/client';
 import { dealFigures, freightFor } from './dealFigures.js';
 
@@ -343,7 +344,8 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
   const mfrByName = new Map(manufacturers.map((m) => [m.name.toLowerCase(), m]));
 
   return sections.map((s) => {
-    const mine = lines.filter((l) => vendorOf(l.vendor) === s.vendor);
+    // Counted after the roll-up, so the header's line count matches the rows shown.
+    const mine = rollUpProcurementLines(lines.filter((l) => vendorOf(l.vendor) === s.vendor));
     const mfr = mfrByName.get(s.vendor.toLowerCase());
     const vars = {
       vendor: s.vendor,
