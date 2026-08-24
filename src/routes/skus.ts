@@ -5,6 +5,7 @@ import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import { recordAudit } from '../lib/audit.js';
 import { ValidationError, NotFoundError } from '../lib/errors.js';
+import { reassignSkuVendor } from '../handoff/vendorReassign.js';
 
 const SkuBody = z.object({
   part: z.string().trim().min(1).max(80),
@@ -223,13 +224,24 @@ export function registerSkuRoutes(app: FastifyInstance): void {
     const existing = await prisma.sku.findUnique({ where: { id } });
     if (!existing) throw new NotFoundError('SKU not found');
     const sku = await prisma.sku.update({ where: { id }, data: parsed.data });
+
+    // Re-sourcing a part is not only a catalog fact: the orders already sold still
+    // list it under the old vendor, on a sheet nobody has sent yet. Those lines move
+    // with it; a submitted sheet is reported back instead, for someone to unlock.
+    const moved =
+      parsed.data.manufacturer !== undefined &&
+      (sku.manufacturer ?? '') !== (existing.manufacturer ?? '')
+        ? await reassignSkuVendor(sku.part, sku.manufacturer, req.user!.sub)
+        : null;
+
     await recordAudit({
       actorId: req.user!.sub,
       action: 'sku.update',
       entity: 'Sku',
       entityId: id,
+      ...(moved ? { details: { vendorReassign: moved } } : {}),
     });
-    return sku;
+    return { ...sku, vendorReassign: moved };
   });
 
   app.delete('/skus/:id', admin, async (req, reply) => {
@@ -370,10 +382,28 @@ export function registerSkuRoutes(app: FastifyInstance): void {
 
     let created = 0,
       updated = 0;
+    // Every part the file re-sourced, so the importer can say which live orders moved.
+    const reassigned: NonNullable<Awaited<ReturnType<typeof reassignSkuVendor>>>[] = [];
     for (const c of clean) {
       if (known.has(c.part)) {
-        if (Object.keys(c.data).length)
+        if (Object.keys(c.data).length) {
+          const before = await prisma.sku.findUnique({
+            where: { part: c.part },
+            select: { manufacturer: true },
+          });
           await prisma.sku.update({ where: { part: c.part }, data: c.data });
+          if (
+            c.data.manufacturer !== undefined &&
+            ((c.data.manufacturer as string | null) ?? '') !== (before?.manufacturer ?? '')
+          ) {
+            const r = await reassignSkuVendor(
+              c.part,
+              c.data.manufacturer as string | null,
+              req.user!.sub,
+            );
+            if (r) reassigned.push(r);
+          }
+        }
         updated++;
       } else {
         // A new part still needs the non-null basics, whether the file gave them or not.
@@ -408,7 +438,13 @@ export function registerSkuRoutes(app: FastifyInstance): void {
     await recordAudit({
       actorId: req.user!.sub,
       action: 'sku.import',
-      details: { created, updated, deactivated, columns: columnsSeen },
+      details: {
+        created,
+        updated,
+        deactivated,
+        columns: columnsSeen,
+        ...(reassigned.length ? { vendorReassign: reassigned } : {}),
+      },
     });
     return reply
       .status(201)

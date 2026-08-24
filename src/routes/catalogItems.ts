@@ -5,6 +5,7 @@ import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import { recordAudit } from '../lib/audit.js';
 import { ValidationError, ConflictError, NotFoundError } from '../lib/errors.js';
+import { reassignSkuVendor } from '../handoff/vendorReassign.js';
 
 /**
  * The single catalog list.
@@ -334,8 +335,13 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
 
     if (d.manufacturer !== undefined) {
       const name = (d.manufacturer || '').trim();
-      if (sku)
+      if (sku) {
+        const before = sku.manufacturer ?? '';
         await prisma.sku.update({ where: { id: sku.id }, data: { manufacturer: name || null } });
+        // Carry the change onto the open orders that still list this part under the
+        // vendor it was bought from before.
+        if (name && name !== before) await reassignSkuVendor(sku.part, name, req.user!.sub);
+      }
       if (product) {
         if (!name) {
           await prisma.productSourcing.deleteMany({ where: { productId: product.id } });
