@@ -87,9 +87,13 @@ export interface BomModel {
 async function buildModel(
   orderId: string,
   vendor: string,
-  opts: { includeZeroQty?: boolean },
+  opts: { includeZeroQty?: boolean; actorId?: string },
 ): Promise<BomModel> {
-  const doc = await buildBom(orderId, { vendor, includeZeroQty: opts.includeZeroQty });
+  const doc = await buildBom(orderId, {
+    vendor,
+    includeZeroQty: opts.includeZeroQty,
+    actorId: opts.actorId,
+  });
   const all = vendor === '*';
   const extras = all ? null : await sectionExtras(orderId, vendor);
 
@@ -311,7 +315,7 @@ const TD = 'padding:5px 8px;font-size:8.5pt;border-bottom:1px solid #e7e8e3;vert
 export async function renderBomHtml(
   orderId: string,
   vendor: string,
-  opts: { includeZeroQty?: boolean } = {},
+  opts: { includeZeroQty?: boolean; actorId?: string } = {},
 ): Promise<{ html: string; doc: BomDocument }> {
   const m = await buildModel(orderId, vendor, opts);
 
@@ -415,7 +419,7 @@ export async function renderBomHtml(
 export async function renderBomXml(
   orderId: string,
   vendor: string,
-  opts: { includeZeroQty?: boolean } = {},
+  opts: { includeZeroQty?: boolean; actorId?: string } = {},
 ): Promise<string> {
   const m = await buildModel(orderId, vendor, opts);
 

@@ -182,7 +182,7 @@ function parseMoneyMinor(v: unknown): number | null {
 
 export async function buildBom(
   orderId: string,
-  opts: { vendor?: string; includeZeroQty?: boolean } = {},
+  opts: { vendor?: string; includeZeroQty?: boolean; actorId?: string } = {},
 ): Promise<BomDocument> {
   const vendorFilter = opts.vendor && opts.vendor !== '*' ? opts.vendor : null;
 
@@ -200,8 +200,12 @@ export async function buildBom(
         contacts: { orderBy: [{ isDecisionMaker: 'desc' }, { createdAt: 'asc' }], take: 5 },
       },
     }),
+    // Whoever is PRINTING the sheet, not whoever accepted the order months ago.
+    // The footer says "Prepared by", and the person preparing it is the one the
+    // vendor should reply to. Falls back to the accepting user when the caller does
+    // not say who is asking (a scheduled render, a test).
     prisma.user.findUnique({
-      where: { id: order.acceptedById },
+      where: { id: opts.actorId || order.acceptedById },
       select: { name: true, email: true, title: true },
     }),
     prisma.manufacturer.findMany(),

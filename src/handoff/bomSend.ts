@@ -97,6 +97,8 @@ export async function sendBom(sectionId: string, input: SendInput, actorId: stri
     // our customer, not our order numbering.
     const { html, doc } = await renderBomHtml(section.orderId, section.vendor, {
       includeZeroQty: input.includeZeroQty,
+      // The sheet is prepared by whoever is sending it.
+      actorId,
     });
     const base = bomFilename(section.order.number, section.vendor, doc.customer.name);
     if (wantsPdf) {
@@ -106,6 +108,7 @@ export async function sendBom(sectionId: string, input: SendInput, actorId: stri
     if (wantsExcel) {
       const xml = await renderBomXml(section.orderId, section.vendor, {
         includeZeroQty: input.includeZeroQty,
+        actorId,
       });
       attachments.push({
         filename: `${base}.xls`,

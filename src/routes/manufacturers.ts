@@ -460,6 +460,9 @@ export function registerManufacturerRoutes(app: FastifyInstance): void {
     if (!current) throw new NotFoundError('Manufacturer not found');
     const d = clean(parsed.data);
 
+    // What a rename had to carry with it, reported on the audit row.
+    let carried: Record<string, unknown> | null = null;
+
     if (d.name && d.name !== current.name) {
       const dupe = await prisma.manufacturer.findFirst({
         where: { name: { equals: d.name, mode: 'insensitive' }, id: { not: id } },
@@ -467,10 +470,60 @@ export function registerManufacturerRoutes(app: FastifyInstance): void {
       if (dupe) throw new ConflictError(`“${d.name}” already exists`);
       // The flat SKU master stores the vendor by name, so a rename has to carry
       // there too or those parts silently lose their vendor on the next BOM.
-      await prisma.sku.updateMany({
+      const skus = await prisma.sku.updateMany({
         where: { manufacturer: current.name },
         data: { manufacturer: d.name },
       });
+
+      // An ACCEPTED order stores the vendor by name as well — the snapshot is what
+      // keeps a sent sheet honest months later. The consequence is that a rename is
+      // ours to carry: the order page, the Bill of Materials sections and every
+      // rendered sheet read those strings, so a corrected spelling has to reach them
+      // or the misspelling keeps printing on live orders.
+      //
+      // A section is unique per (order, vendor). Where an order somehow already has a
+      // section under the new name, the old one is LEFT ALONE rather than merged —
+      // that section carries its own questions, answers and send history, and
+      // throwing one away silently is worse than a name to sort out by hand. The
+      // audit row names those orders.
+      const stale = await prisma.bomVendorSection.findMany({
+        where: { vendor: current.name },
+        select: { id: true, orderId: true },
+      });
+      const clashing = new Set(
+        (
+          await prisma.bomVendorSection.findMany({
+            where: { vendor: d.name, orderId: { in: stale.map((s) => s.orderId) } },
+            select: { orderId: true },
+          })
+        ).map((s) => s.orderId),
+      );
+      const renameable = stale.filter((s) => !clashing.has(s.orderId));
+
+      const [lines, purchased] = await prisma.$transaction([
+        prisma.procurementLine.updateMany({
+          where: { vendor: current.name },
+          data: { vendor: d.name },
+        }),
+        // Free-issue parts name the vendor they were BOUGHT from, in the same way.
+        prisma.procurementLine.updateMany({
+          where: { purchaseVendor: current.name },
+          data: { purchaseVendor: d.name },
+        }),
+        ...renameable.map((s) =>
+          prisma.bomVendorSection.update({ where: { id: s.id }, data: { vendor: d.name } }),
+        ),
+      ]);
+
+      carried = {
+        from: current.name,
+        to: d.name,
+        skus: skus.count,
+        orderLines: lines.count,
+        freeIssueLines: purchased.count,
+        bomSections: renameable.length,
+        bomSectionsLeftAlone: [...clashing],
+      };
     }
     const m = await prisma.manufacturer.update({ where: { id }, data: d });
     await recordAudit({
@@ -478,7 +531,10 @@ export function registerManufacturerRoutes(app: FastifyInstance): void {
       action: 'manufacturer.update',
       entity: 'Manufacturer',
       entityId: id,
-      details: d as Record<string, unknown>,
+      details: {
+        ...(d as Record<string, unknown>),
+        ...(carried ? { renameCarriedTo: carried } : {}),
+      },
     });
     return m;
   });

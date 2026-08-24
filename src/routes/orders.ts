@@ -302,7 +302,11 @@ export function registerOrderRoutes(app: FastifyInstance): void {
     // Reading the order first backfills part numbers, vendors, cost and weight on
     // lines locked before those were resolved.
     await getOrder(id);
-    return buildBom(id, { vendor: q.vendor, includeZeroQty: q.includeZeroQty === 'true' });
+    return buildBom(id, {
+      vendor: q.vendor,
+      includeZeroQty: q.includeZeroQty === 'true',
+      actorId: req.user!.sub,
+    });
   });
 
   app.patch('/orders/:id/bom', handoff, async (req) => {

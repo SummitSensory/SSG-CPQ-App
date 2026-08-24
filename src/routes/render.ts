@@ -88,6 +88,7 @@ export function registerRenderRoutes(app: FastifyInstance): void {
 
     const { html, doc } = await renderBomHtml(id, vendor, {
       includeZeroQty: q.includeZeroQty === 'true',
+      actorId: req.user!.sub,
     });
     const pdf = await renderPdf(html, { format: 'Letter' });
     return reply
@@ -120,7 +121,10 @@ export function registerRenderRoutes(app: FastifyInstance): void {
       where: { id: order.organizationId },
       select: { name: true },
     });
-    const xml = await renderBomXml(id, vendor, { includeZeroQty: q.includeZeroQty === 'true' });
+    const xml = await renderBomXml(id, vendor, {
+      includeZeroQty: q.includeZeroQty === 'true',
+      actorId: req.user!.sub,
+    });
     return reply
       .header('Content-Type', 'application/vnd.ms-excel; charset=utf-8')
       .header(
