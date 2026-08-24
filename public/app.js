@@ -556,7 +556,7 @@
       else if (id === 'orders') renderOrders(user);
       // Belts owed to customers, and the slip that goes in the box. See
       // public/belt-shipments.js — narrow by design: no freight, no BOM, no prices.
-      else if (id === 'belts') window.SSGBeltShipments.mount();
+      else if (id === 'belts' && window.SSGBeltShipments) window.SSGBeltShipments.mount();
       else if (id === 'admin') renderAdmin(user);
       else if (id === 'integrations') renderIntegrations(user);
       else renderSoon(item.label);
