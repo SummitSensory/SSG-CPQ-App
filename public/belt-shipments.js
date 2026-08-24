@@ -1,45 +1,27 @@
 /*
  * Belt shipments.
  *
- * Two jobs, and deliberately nothing else:
+ * Answers two questions and nothing else:
  *
- *   1. A list of belts owed to customers, so nothing is forgotten.
- *   2. A slip to put in the box telling the customer what is inside it.
+ *   1. Which customers are owed a belt, and which belt?
+ *   2. What goes in the box, on a slip the customer can read?
  *
- * Scope is about ten belt SKUs shipped by hand from our own facility. This is not
- * order fulfilment: no freight, no BOM, no proposal linkage, no prices. A belt is
- * owed to a customer, then it ships, and the slip is the receipt in the box.
+ * The list is read off each customer's bill of materials — belts are already on the
+ * BOM as procurement lines, so nothing is typed twice and nothing can be missed
+ * because someone forgot to add it here. Shipping a belt credits that BOM line and
+ * takes it off the list; a partial shipment leaves the balance owed.
  *
- * State lives server-side (routes/beltShipments.ts) so the list is the same list for
- * everyone. The slip owns its own print rules — it is a single fixed Letter sheet, so
- * it needs none of the measuring and page-packing the proposal document requires.
+ * Deliberately narrow: no freight, no prices, no proposal linkage. See
+ * routes/beltShipments.ts for where the list comes from and what is stored.
  */
 (function () {
   'use strict';
 
   var H = null;
-  var state = null;
-  /**
-   * Rows ticked for the slip being built: owed-row id -> quantity going in this box.
-   * Defaults to the whole amount owed; a smaller number ships part of the row and
-   * leaves the rest on the list.
-   */
+  var data = null;
+  /** lineId -> pieces going in this box. */
   var picked = {};
   var busy = false;
-
-  /**
-   * The belts this screen ships. Seven sizes of one product, which is the entire
-   * scope — anything beyond it can be added on the screen.
-   */
-  var DEFAULT_CATALOG = [
-    { sku: 'FLEX-BELT-XXS', item: 'Flex Belt \u2014 XXS' },
-    { sku: 'FLEX-BELT-XS', item: 'Flex Belt \u2014 XS' },
-    { sku: 'FLEX-BELT-S', item: 'Flex Belt \u2014 S' },
-    { sku: 'FLEX-BELT-M', item: 'Flex Belt \u2014 M' },
-    { sku: 'FLEX-BELT-L', item: 'Flex Belt \u2014 L' },
-    { sku: 'FLEX-BELT-XL', item: 'Flex Belt \u2014 XL' },
-    { sku: 'FLEX-BELT-XXL', item: 'Flex Belt \u2014 XXL' },
-  ];
 
   var INK = '#20241f',
     NAVY = '#203060',
@@ -47,6 +29,10 @@
     LINE = '#dfe3ec',
     RED = '#d02030';
   var SERIF = "'Newsreader',Georgia,serif";
+  var FIELD =
+    'width:100%;margin-top:4px;padding:8px 10px;font-size:12.5px;border:1px solid ' +
+    LINE +
+    ';border-radius:7px;font-family:inherit;box-sizing:border-box;';
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
@@ -55,9 +41,6 @@
   }
   function todayISO() {
     return new Date().toISOString().slice(0, 10);
-  }
-  function uid() {
-    return Math.random().toString(36).slice(2, 10);
   }
 
   function fmtDate(iso) {
@@ -68,7 +51,7 @@
     return mo[Number(p[1]) - 1] + ' ' + Number(p[2]) + ', ' + p[0];
   }
 
-  /** Whole days since a row was added. Drives the ageing flag. */
+  /** Whole days since a date. Drives the ageing flag. */
   function daysSince(iso) {
     var t = Date.parse(String(iso) + 'T00:00:00');
     if (isNaN(t)) return 0;
@@ -83,34 +66,14 @@
         return r.ok ? r.json() : null;
       })
       .then(function (d) {
-        state = d || { catalog: null, owed: [], slips: [], seq: 0 };
-        // A list that has never been saved starts with the seven Flex belts. An empty
-        // saved list is left empty — that means someone deliberately cleared it.
-        state.catalog = state.catalog || DEFAULT_CATALOG.slice();
-        state.owed = state.owed || [];
-        state.slips = state.slips || [];
-        state.seq = state.seq || 0;
-        return state;
+        data = d || { owed: [], slips: [] };
+        data.owed = data.owed || [];
+        data.slips = data.slips || [];
+        return data;
       })
       .catch(function () {
-        state = { catalog: DEFAULT_CATALOG.slice(), owed: [], slips: [], seq: 0 };
-        return state;
-      });
-  }
-
-  /** Persist, then repaint. The list is small, so the whole document goes each time. */
-  function save() {
-    if (busy) return Promise.resolve();
-    busy = true;
-    return H.authed('/belt-shipments', { method: 'PUT', body: state })
-      .then(function (r) {
-        busy = false;
-        if (!r.ok) alert('That change could not be saved.');
-        paint();
-      })
-      .catch(function () {
-        busy = false;
-        alert('Could not reach the server. That change was not saved.');
+        data = { owed: [], slips: [], failed: true };
+        return data;
       });
   }
 
@@ -119,8 +82,8 @@
   /**
    * The document that goes in the box.
    *
-   * One sheet, no prices, and it says what is enclosed and what is still to come —
-   * a customer opening a short shipment should not have to phone to find out whether
+   * One sheet, no prices, and it says what is enclosed and what is still to come — a
+   * customer opening a short shipment should not have to phone to find out whether
    * the rest is coming.
    */
   function slipHtml(slip, outstanding) {
@@ -147,7 +110,6 @@
         );
       })
       .join('');
-
     var pieces = slip.lines.reduce(function (a, l) {
       return a + l.qty;
     }, 0);
@@ -190,7 +152,7 @@
       '<div style="height:2px;background:' +
       NAVY +
       ';margin:26px 0 0;"></div>' +
-      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:32px;padding:22px 0 24px;border-bottom:1px solid ' +
+      '<div style="display:grid;grid-template-columns:1fr auto;gap:32px;padding:22px 0 24px;border-bottom:1px solid ' +
       LINE +
       ';">' +
       '<div>' +
@@ -202,15 +164,15 @@
       ';font-size:19px;font-weight:600;margin-top:6px;line-height:1.35;">' +
       esc(slip.customer) +
       '</div>' +
-      (slip.contact
-        ? '<div style="font-size:12.5px;color:' +
-          INK +
-          ';line-height:1.5;margin-top:3px;">Attn: ' +
-          esc(slip.contact) +
+      (slip.attention
+        ? '<div style="font-size:12px;color:#4b5468;line-height:1.6;margin-top:4px;">Attn: ' +
+          esc(slip.attention) +
           '</div>'
         : '') +
       (slip.address
-        ? '<div style="font-size:12px;color:#4b5468;line-height:1.6;margin-top:5px;white-space:pre-line;">' +
+        ? '<div style="font-size:12px;color:#4b5468;line-height:1.6;margin-top:' +
+          (slip.attention ? '2' : '5') +
+          'px;white-space:pre-line;">' +
           esc(slip.address) +
           '</div>'
         : '') +
@@ -252,12 +214,10 @@
       ';border-bottom:1px solid ' +
       LINE +
       ';font-weight:700;">Qty</th>' +
-      '</tr></thead>' +
-      '<tbody>' +
+      '</tr></thead><tbody>' +
       rows +
       '</tbody>' +
       '</table>' +
-      // Anything still owed is stated on the slip, so a short shipment explains itself.
       (outstanding && outstanding.length
         ? '<div style="margin-top:30px;padding:18px 20px;background:#fdf3f2;border-left:3px solid ' +
           RED +
@@ -297,78 +257,77 @@
 
   /* ------------------------------------------------------------------ screen */
 
-  function catalogOptions(sel) {
-    return ['<option value="">Choose a belt…</option>']
-      .concat(
-        (state.catalog || []).map(function (c) {
-          return (
-            '<option value="' +
-            esc(c.sku) +
-            '"' +
-            (sel === c.sku ? ' selected' : '') +
-            '>' +
-            esc(c.item) +
-            (c.sku ? ' (' + esc(c.sku) + ')' : '') +
-            '</option>'
-          );
-        }),
-      )
-      .join('');
-  }
-
-  /** The owed list, grouped by customer — that is how a shipment is packed. */
+  /** Owed belts, grouped by customer — that is how a box gets packed. */
   function owedHtml() {
-    var byCustomer = {};
-    (state.owed || []).forEach(function (o) {
-      (byCustomer[o.customer] = byCustomer[o.customer] || []).push(o);
+    var groups = {};
+    (data.owed || []).forEach(function (o) {
+      (groups[o.orgId] = groups[o.orgId] || { customer: o.customer, rows: [] }).rows.push(o);
     });
-    var names = Object.keys(byCustomer).sort();
-    if (!names.length) {
-      return '<div class="muted" style="padding:22px 0;font-size:13px;">Nothing is waiting to ship.</div>';
+    var keys = Object.keys(groups).sort(function (a, b) {
+      return groups[a].customer.localeCompare(groups[b].customer);
+    });
+    if (!keys.length) {
+      return '<div class="muted" style="padding:22px 0;font-size:13px;">No belts are outstanding. Every belt on every bill of materials has shipped.</div>';
     }
-    return names
-      .map(function (name) {
-        var rows = byCustomer[name];
-        var anyPicked = rows.some(function (r) {
-          return picked[r.id];
+
+    return keys
+      .map(function (k) {
+        var g = groups[k];
+        var anyPicked = g.rows.some(function (r) {
+          return picked[r.lineId];
         });
-        var oldest = rows.reduce(function (a, r) {
-          return Math.max(a, daysSince(r.added));
+        var oldest = g.rows.reduce(function (a, r) {
+          return Math.max(a, daysSince(r.orderedOn));
         }, 0);
+        var orders = g.rows
+          .map(function (r) {
+            return r.orderNumber;
+          })
+          .filter(function (v, i, arr) {
+            return arr.indexOf(v) === i;
+          });
+
         return (
           '<div style="border:1px solid ' +
           LINE +
           ';border-radius:9px;padding:13px 15px;margin-bottom:9px;background:#fff;">' +
           '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:14px;">' +
+          '<div style="min-width:0;">' +
           '<div style="font-family:' +
           SERIF +
           ';font-size:16px;font-weight:600;">' +
-          esc(name) +
+          esc(g.customer) +
+          '</div>' +
+          '<div style="font-size:10.5px;color:' +
+          MUTE +
+          ';margin-top:2px;">' +
+          esc(orders.join(' \u00b7 ')) +
+          '</div>' +
           '</div>' +
           '<div style="display:flex;gap:12px;align-items:baseline;flex:none;">' +
-          (oldest >= 14
+          (oldest >= 30
             ? '<span style="font-size:10px;font-weight:700;color:' +
               RED +
               ';text-transform:uppercase;letter-spacing:.12em;">' +
               oldest +
               ' days</span>'
             : '') +
-          '<button type="button" class="link-btn bsPickAll" data-customer="' +
-          esc(name) +
+          '<button type="button" class="link-btn bsPickAll" data-org="' +
+          esc(k) +
           '" style="width:auto;padding:4px 10px;font-size:11px;">' +
           (anyPicked ? 'Clear' : 'Select all') +
           '</button>' +
           '</div>' +
           '</div>' +
-          rows
+          g.rows
             .map(function (r) {
-              var age = daysSince(r.added);
+              var on = picked[r.lineId] != null;
               return (
                 '<div style="display:flex;gap:11px;align-items:flex-start;padding:8px 0 0;">' +
                 '<input type="checkbox" class="bsPick" data-id="' +
-                esc(r.id) +
+                esc(r.lineId) +
                 '"' +
-                (picked[r.id] ? ' checked' : '') +
+                (on ? ' checked' : '') +
                 ' style="margin-top:3px;flex:none;">' +
                 '<div style="flex:1;min-width:0;">' +
                 '<div style="font-size:12.5px;line-height:1.5;">' +
@@ -377,47 +336,34 @@
                   ? ' <span style="color:' + MUTE + ';font-size:11px;">' + esc(r.sku) + '</span>'
                   : '') +
                 '</div>' +
-                (r.note
-                  ? '<div style="font-size:11px;color:' +
-                    MUTE +
-                    ';line-height:1.55;margin-top:2px;">' +
-                    esc(r.note) +
-                    '</div>'
-                  : '') +
-                '<div style="font-size:10.5px;color:#b0b6c2;margin-top:2px;">Added ' +
-                esc(fmtDate(r.added)) +
-                (age ? ' \u00b7 ' + age + 'd' : '') +
+                '<div style="font-size:10.5px;color:#b0b6c2;margin-top:2px;">' +
+                'Ordered ' +
+                esc(fmtDate(r.orderedOn)) +
+                (r.shipped ? ' \u00b7 ' + r.shipped + ' of ' + r.ordered + ' shipped' : '') +
                 '</div>' +
                 '</div>' +
-                '<div style="display:flex;gap:8px;align-items:center;flex:none;">' +
-                // Editable only once the row is ticked, so the list reads as quantities
-                // owed until you are actually packing a box.
-                (picked[r.id]
-                  ? '<input type="number" class="bsQtyShip" data-id="' +
-                    esc(r.id) +
+                '<div style="flex:none;text-align:right;">' +
+                (on
+                  ? '<div style="display:flex;align-items:baseline;gap:6px;">' +
+                    '<input type="number" class="bsQty" data-id="' +
+                    esc(r.lineId) +
                     '" min="1" max="' +
-                    r.qty +
+                    r.remaining +
                     '" value="' +
-                    picked[r.id] +
+                    picked[r.lineId] +
                     '" ' +
-                    'style="width:54px;padding:4px 6px;font-size:13px;font-weight:700;text-align:right;font-family:inherit;' +
-                    'border:1px solid ' +
+                    'style="width:56px;padding:4px 6px;font-size:13px;font-weight:700;text-align:right;border:1px solid ' +
                     NAVY +
-                    ';border-radius:6px;font-variant-numeric:tabular-nums;">' +
+                    ';border-radius:6px;font-family:inherit;">' +
                     '<span style="font-size:11px;color:' +
                     MUTE +
-                    ';">of ' +
-                    r.qty +
-                    '</span>'
+                    ';white-space:nowrap;">of ' +
+                    r.remaining +
+                    '</span>' +
+                    '</div>'
                   : '<span style="font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;">' +
-                    r.qty +
+                    r.remaining +
                     '</span>') +
-                '<button type="button" class="link-btn bsDrop" data-id="' +
-                esc(r.id) +
-                '" title="No longer owed" ' +
-                'style="width:auto;padding:3px 8px;font-size:11px;color:' +
-                RED +
-                ';">Remove</button>' +
                 '</div>' +
                 '</div>'
               );
@@ -430,7 +376,7 @@
   }
 
   function slipsHtml() {
-    var recent = (state.slips || []).slice().reverse().slice(0, 12);
+    var recent = (data.slips || []).slice().reverse().slice(0, 12);
     if (!recent.length)
       return '<div class="muted" style="font-size:12.5px;padding:8px 0;">No slips yet.</div>';
     return recent
@@ -439,7 +385,7 @@
           return a + l.qty;
         }, 0);
         return (
-          '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:14px;padding:9px 0;border-top:1px solid #eef0f4;">' +
+          '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:9px 0;border-top:1px solid #eef0f4;">' +
           '<div style="min-width:0;">' +
           '<div style="font-size:12.5px;">' +
           esc(s.customer) +
@@ -454,9 +400,16 @@
           pieces +
           ' pc</div>' +
           '</div>' +
+          '<div style="display:flex;gap:6px;flex:none;">' +
           '<button type="button" class="link-btn bsReprint" data-id="' +
           esc(s.id) +
-          '" style="width:auto;padding:4px 11px;font-size:11px;flex:none;">Reprint</button>' +
+          '" style="width:auto;padding:4px 10px;font-size:11px;">Reprint</button>' +
+          '<button type="button" class="link-btn bsVoid" data-id="' +
+          esc(s.id) +
+          '" title="Put these belts back on the list" style="width:auto;padding:4px 10px;font-size:11px;color:' +
+          RED +
+          ';">Void</button>' +
+          '</div>' +
           '</div>'
         );
       })
@@ -466,204 +419,104 @@
   function paint() {
     var host = document.getElementById('view');
     if (!host) return;
-    var pickedRows = (state.owed || []).filter(function (o) {
-      return picked[o.id];
+
+    var rows = (data.owed || []).filter(function (o) {
+      return picked[o.lineId] != null;
     });
-    var pickedCustomers = {};
-    pickedRows.forEach(function (r) {
-      pickedCustomers[r.customer] = 1;
+    var orgs = {};
+    rows.forEach(function (r) {
+      orgs[r.orgId] = r;
     });
-    var customerNames = Object.keys(pickedCustomers);
-    var oneCustomer = customerNames.length === 1;
+    var orgKeys = Object.keys(orgs);
+    var one = orgKeys.length === 1 ? orgs[orgKeys[0]] : null;
+    var short =
+      one &&
+      rows.some(function (r) {
+        return picked[r.lineId] < r.remaining;
+      });
 
     host.innerHTML =
+      (data.failed
+        ? '<div class="card" style="margin-bottom:14px;border-color:#f0c9c4;background:#fdf3f2;">' +
+          '<div style="font-size:12.5px;color:#8a2f24;">The shipment list could not be loaded. Reload the page to try again.</div></div>'
+        : '') +
       '<div style="display:grid;grid-template-columns:minmax(0,1.35fr) minmax(320px,.85fr);gap:18px;align-items:start;">' +
-      // Waiting to ship
-      '<div>' +
-      '<div class="card" style="margin-bottom:14px;">' +
+      '<div class="card">' +
       '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:4px;">' +
-      '<div class="section-title" style="margin:0;">Waiting to ship</div>' +
+      '<div class="section-title" style="margin:0;">Belts to ship</div>' +
       '<div class="muted" style="font-size:12px;">' +
-      (state.owed || []).length +
-      ' item' +
-      ((state.owed || []).length === 1 ? '' : 's') +
+      (data.owed || []).length +
+      ' outstanding</div>' +
       '</div>' +
-      '</div>' +
-      '<div class="muted" style="font-size:12px;margin-bottom:12px;">Tick what is going in the box, then print the slip. Anything left ticked off stays on the list.</div>' +
+      '<div class="muted" style="font-size:12px;margin-bottom:12px;">Read from each customer&rsquo;s bill of materials. Tick what is going in the box, then print the slip.</div>' +
       owedHtml() +
       '</div>' +
-      // Add an item
-      '<div class="card">' +
-      '<div class="section-title" style="margin:0 0 10px;">Add an item</div>' +
-      ((state.catalog || []).length
-        ? '<div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;">' +
-          '<label style="display:block;grid-column:1/-1;"><span style="font-size:11px;color:' +
-          MUTE +
-          ';">Customer</span>' +
-          '<input id="bsCustomer" list="bsCustomers" placeholder="Who is it going to?" style="width:100%;margin-top:4px;padding:8px 10px;font-size:12.5px;border:1px solid ' +
-          LINE +
-          ';border-radius:7px;font-family:inherit;box-sizing:border-box;"></label>' +
-          '<datalist id="bsCustomers">' +
-          Object.keys(
-            (state.owed || []).reduce(function (a, o) {
-              a[o.customer] = 1;
-              return a;
-            }, {}),
-          )
-            .concat(
-              (state.slips || []).map(function (s) {
-                return s.customer;
-              }),
-            )
-            .filter(function (v, i, arr) {
-              return arr.indexOf(v) === i;
-            })
-            .map(function (n) {
-              return '<option value="' + esc(n) + '">';
-            })
-            .join('') +
-          '</datalist>' +
-          '<label style="display:block;"><span style="font-size:11px;color:' +
-          MUTE +
-          ';">Belt</span>' +
-          '<select id="bsSku" style="width:100%;margin-top:4px;padding:8px 10px;font-size:12.5px;border:1px solid ' +
-          LINE +
-          ';border-radius:7px;font-family:inherit;background:#fff;box-sizing:border-box;">' +
-          catalogOptions('') +
-          '</select></label>' +
-          '<label style="display:block;"><span style="font-size:11px;color:' +
-          MUTE +
-          ';">Quantity</span>' +
-          '<input id="bsQty" type="number" min="1" value="1" style="width:100%;margin-top:4px;padding:8px 10px;font-size:12.5px;border:1px solid ' +
-          LINE +
-          ';border-radius:7px;font-family:inherit;box-sizing:border-box;"></label>' +
-          '<label style="display:block;grid-column:1/-1;"><span style="font-size:11px;color:' +
-          MUTE +
-          ';">Note (optional)</span>' +
-          '<input id="bsNote" placeholder="Warranty replacement, colour, who asked…" style="width:100%;margin-top:4px;padding:8px 10px;font-size:12.5px;border:1px solid ' +
-          LINE +
-          ';border-radius:7px;font-family:inherit;box-sizing:border-box;"></label>' +
-          '<button type="button" id="bsAdd" class="btn" style="grid-column:1/-1;margin-top:2px;">Add to the list</button>' +
-          '</div>'
-        : '<div class="muted" style="font-size:12.5px;line-height:1.6;">Add your belt SKUs first, on the right. Then items can be added to the list.</div>') +
-      '</div>' +
-      '</div>' +
-      // Right column: build the slip, recent slips, the SKU list
       '<div>' +
       '<div class="card" style="margin-bottom:14px;">' +
       '<div class="section-title" style="margin:0 0 4px;">Print a slip</div>' +
-      (pickedRows.length === 0
-        ? '<div class="muted" style="font-size:12.5px;line-height:1.6;">Tick items on the left to build a slip.</div>'
-        : !oneCustomer
+      (!rows.length
+        ? '<div class="muted" style="font-size:12.5px;line-height:1.6;">Tick belts on the left to build a slip.</div>'
+        : !one
           ? '<div style="font-size:12.5px;color:' +
             RED +
-            ';line-height:1.6;">Items from ' +
-            customerNames.length +
+            ';line-height:1.6;">Belts for ' +
+            orgKeys.length +
             ' customers are ticked. A slip goes in one box, so pick one customer at a time.</div>'
           : '<div class="muted" style="font-size:12px;margin-bottom:11px;">' +
-            pickedRows.reduce(function (a, r) {
-              return a + Math.min(r.qty, picked[r.id] || r.qty);
+            rows.reduce(function (a, r) {
+              return a + picked[r.lineId];
             }, 0) +
             ' piece' +
-            (pickedRows.reduce(function (a, r) {
-              return a + Math.min(r.qty, picked[r.id] || r.qty);
+            (rows.reduce(function (a, r) {
+              return a + picked[r.lineId];
             }, 0) === 1
               ? ''
               : 's') +
-            ' across ' +
-            pickedRows.length +
-            ' item' +
-            (pickedRows.length === 1 ? '' : 's') +
             ' for <b style="color:' +
             INK +
             ';">' +
-            esc(customerNames[0]) +
-            '</b>' +
-            (pickedRows.some(function (r) {
-              return (picked[r.id] || r.qty) < r.qty;
-            })
-              ? '<br><span style="color:' +
+            esc(one.customer) +
+            '</b></div>' +
+            (short
+              ? '<div style="font-size:11.5px;color:' +
                 RED +
-                ';">Shipping short — the balance stays on the list.</span>'
+                ';line-height:1.55;margin-bottom:10px;">Shipping short &mdash; the balance stays on the list.</div>'
               : '') +
-            '</div>' +
             '<label style="display:block;margin-bottom:9px;"><span style="font-size:11px;color:' +
             MUTE +
-            ';">Attention</span>' +
-            '<input id="bsContact" list="bsContacts" placeholder="Who should open the box?" style="width:100%;margin-top:4px;padding:8px 10px;font-size:12.5px;border:1px solid ' +
-            LINE +
-            ';border-radius:7px;font-family:inherit;box-sizing:border-box;"></label>' +
+            ';">Attention (optional)</span>' +
+            '<input id="bsAttn" list="bsContacts" placeholder="Who should open it?" style="' +
+            FIELD +
+            '"></label>' +
             '<datalist id="bsContacts">' +
-            (state.slips || [])
-              .filter(function (sl) {
-                return sl.customer === customerNames[0] && sl.contact;
-              })
-              .map(function (sl) {
-                return sl.contact;
-              })
-              .filter(function (v, i, arr) {
-                return arr.indexOf(v) === i;
-              })
-              .map(function (n) {
-                return '<option value="' + esc(n) + '">';
+            (one.contacts || [])
+              .map(function (c) {
+                return '<option value="' + esc(c) + '">';
               })
               .join('') +
             '</datalist>' +
             '<label style="display:block;margin-bottom:9px;"><span style="font-size:11px;color:' +
             MUTE +
             ';">Ship-to address</span>' +
-            '<textarea id="bsAddr" rows="3" placeholder="Street, city, state, ZIP" style="width:100%;margin-top:4px;padding:8px 10px;font-size:12.5px;border:1px solid ' +
-            LINE +
-            ';border-radius:7px;font-family:inherit;box-sizing:border-box;resize:vertical;"></textarea></label>' +
+            '<textarea id="bsAddr" rows="3" placeholder="Street, city, state, ZIP" style="' +
+            FIELD +
+            'resize:vertical;">' +
+            esc(one.address || '') +
+            '</textarea></label>' +
+            (one.address
+              ? '<div class="muted" style="font-size:11px;margin:-4px 0 9px;">From the customer record. Edit if this box goes elsewhere.</div>'
+              : '') +
             '<label style="display:block;margin-bottom:11px;"><span style="font-size:11px;color:' +
             MUTE +
             ';">Message on the slip (optional)</span>' +
-            '<input id="bsSlipNote" placeholder="Thanks for your order…" style="width:100%;margin-top:4px;padding:8px 10px;font-size:12.5px;border:1px solid ' +
-            LINE +
-            ';border-radius:7px;font-family:inherit;box-sizing:border-box;"></label>' +
-            '<button type="button" id="bsPrint" class="btn">Print the slip &amp; clear these items</button>') +
-      '</div>' +
-      '<div class="card" style="margin-bottom:14px;">' +
-      '<div class="section-title" style="margin:0 0 6px;">Recent slips</div>' +
-      slipsHtml() +
+            '<input id="bsSlipNote" placeholder="Thanks for your order&hellip;" style="' +
+            FIELD +
+            '"></label>' +
+            '<button type="button" id="bsPrint" class="btn" style="width:100%;">Print the slip</button>') +
       '</div>' +
       '<div class="card">' +
-      '<div class="section-title" style="margin:0 0 4px;">Belt SKUs</div>' +
-      '<div class="muted" style="font-size:11.5px;margin-bottom:10px;">The belts offered in the picker.</div>' +
-      ((state.catalog || []).length
-        ? (state.catalog || [])
-            .map(function (c, i) {
-              return (
-                '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:6px 0;border-top:1px solid #eef0f4;">' +
-                '<div style="min-width:0;font-size:12px;">' +
-                esc(c.item) +
-                (c.sku
-                  ? '<span style="color:' +
-                    MUTE +
-                    ';font-size:11px;"> &middot; ' +
-                    esc(c.sku) +
-                    '</span>'
-                  : '') +
-                '</div>' +
-                '<button type="button" class="link-btn bsCatDrop" data-i="' +
-                i +
-                '" style="width:auto;padding:2px 8px;font-size:11px;color:' +
-                RED +
-                ';flex:none;">Remove</button>' +
-                '</div>'
-              );
-            })
-            .join('')
-        : '') +
-      '<div style="display:grid;grid-template-columns:1fr 96px;gap:7px;margin-top:10px;">' +
-      '<input id="bsCatItem" placeholder="Belt name, e.g. Flex Belt &mdash; XL" style="padding:8px 10px;font-size:12px;border:1px solid ' +
-      LINE +
-      ';border-radius:7px;font-family:inherit;box-sizing:border-box;">' +
-      '<input id="bsCatSku" placeholder="SKU" style="padding:8px 10px;font-size:12px;border:1px solid ' +
-      LINE +
-      ';border-radius:7px;font-family:inherit;box-sizing:border-box;">' +
-      '<button type="button" id="bsCatAdd" class="link-btn" style="grid-column:1/-1;width:auto;padding:7px 12px;font-size:12px;">Add this belt</button>' +
-      '</div>' +
+      '<div class="section-title" style="margin:0 0 6px;">Recent slips</div>' +
+      slipsHtml() +
       '</div>' +
       '</div>' +
       '</div>';
@@ -678,191 +531,147 @@
     host.querySelectorAll('.bsPick').forEach(function (cb) {
       cb.addEventListener('change', function () {
         var id = cb.getAttribute('data-id');
-        if (cb.checked) {
-          var row = (state.owed || []).filter(function (o) {
-            return o.id === id;
-          })[0];
-          picked[id] = row ? row.qty : 1;
-        } else {
-          delete picked[id];
-        }
+        var row = (data.owed || []).filter(function (o) {
+          return o.lineId === id;
+        })[0];
+        if (cb.checked && row) picked[id] = row.remaining;
+        else delete picked[id];
         paint();
       });
     });
 
-    // Repaint on change, not on input: the quantity feeds the "N items" summary and
-    // the still-to-come block, and repainting mid-keystroke would take the focus away.
-    host.querySelectorAll('.bsQtyShip').forEach(function (inp) {
+    host.querySelectorAll('.bsQty').forEach(function (inp) {
       inp.addEventListener('change', function () {
         var id = inp.getAttribute('data-id');
-        var row = (state.owed || []).filter(function (o) {
-          return o.id === id;
+        var row = (data.owed || []).filter(function (o) {
+          return o.lineId === id;
         })[0];
         if (!row) return;
-        picked[id] = Math.min(row.qty, Math.max(1, Number(inp.value) || 1));
+        picked[id] = Math.min(row.remaining, Math.max(1, Number(inp.value) || 1));
         paint();
       });
     });
 
     host.querySelectorAll('.bsPickAll').forEach(function (b) {
       b.addEventListener('click', function () {
-        var name = b.getAttribute('data-customer');
-        var rows = (state.owed || []).filter(function (o) {
-          return o.customer === name;
+        var org = b.getAttribute('data-org');
+        var rows = (data.owed || []).filter(function (o) {
+          return o.orgId === org;
         });
         var anyPicked = rows.some(function (r) {
-          return picked[r.id];
+          return picked[r.lineId] != null;
         });
         rows.forEach(function (r) {
-          if (anyPicked) delete picked[r.id];
-          else picked[r.id] = r.qty;
+          if (anyPicked) delete picked[r.lineId];
+          else picked[r.lineId] = r.remaining;
         });
         paint();
       });
     });
 
-    host.querySelectorAll('.bsDrop').forEach(function (b) {
-      b.addEventListener('click', function () {
-        var id = b.getAttribute('data-id');
-        var row = (state.owed || []).filter(function (o) {
-          return o.id === id;
-        })[0];
-        if (!row) return;
-        if (!confirm('Remove ' + row.item + ' for ' + row.customer + ' from the list?')) return;
-        state.owed = state.owed.filter(function (o) {
-          return o.id !== id;
-        });
-        delete picked[id];
-        save();
-      });
-    });
-
-    var add = host.querySelector('#bsAdd');
-    if (add) {
-      add.addEventListener('click', function () {
-        var customer = (host.querySelector('#bsCustomer').value || '').trim();
-        var sku = host.querySelector('#bsSku').value;
-        var qty = Math.max(1, Number(host.querySelector('#bsQty').value) || 1);
-        var note = (host.querySelector('#bsNote').value || '').trim();
-        var belt = (state.catalog || []).filter(function (c) {
-          return c.sku === sku;
-        })[0];
-        if (!customer) {
-          alert('Who is it going to?');
-          return;
-        }
-        if (!belt) {
-          alert('Choose a belt.');
-          return;
-        }
-        state.owed.push({
-          id: uid(),
-          customer: customer,
-          sku: belt.sku,
-          item: belt.item,
-          qty: qty,
-          note: note,
-          added: todayISO(),
-        });
-        save();
-      });
-    }
-
-    var catAdd = host.querySelector('#bsCatAdd');
-    if (catAdd) {
-      catAdd.addEventListener('click', function () {
-        var item = (host.querySelector('#bsCatItem').value || '').trim();
-        var sku = (host.querySelector('#bsCatSku').value || '').trim();
-        if (!item) {
-          alert('Give the belt a name.');
-          return;
-        }
-        state.catalog.push({ sku: sku, item: item });
-        save();
-      });
-    }
-
-    host.querySelectorAll('.bsCatDrop').forEach(function (b) {
-      b.addEventListener('click', function () {
-        state.catalog.splice(Number(b.getAttribute('data-i')), 1);
-        save();
-      });
-    });
-
     host.querySelectorAll('.bsReprint').forEach(function (b) {
       b.addEventListener('click', function () {
-        var slip = (state.slips || []).filter(function (s) {
+        var slip = (data.slips || []).filter(function (s) {
           return s.id === b.getAttribute('data-id');
         })[0];
         if (slip) openSlip(slip, []);
       });
     });
 
+    host.querySelectorAll('.bsVoid').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var slip = (data.slips || []).filter(function (s) {
+          return s.id === b.getAttribute('data-id');
+        })[0];
+        if (!slip) return;
+        if (!confirm('Void ' + slip.number + ' and put those belts back on the list?')) return;
+        H.authed('/belt-shipments/void', { method: 'POST', body: { slipId: slip.id } })
+          .then(function (r) {
+            if (!r.ok) {
+              alert('That slip could not be voided.');
+              return;
+            }
+            picked = {};
+            load().then(paint);
+          })
+          .catch(function () {
+            alert('Could not reach the server.');
+          });
+      });
+    });
+
     var print = host.querySelector('#bsPrint');
-    if (print) print.addEventListener('click', shipPicked);
+    if (print) print.addEventListener('click', ship);
   }
 
   /**
-   * Print a slip for the ticked items and take them off the list.
+   * Record the shipment, then show the slip.
    *
-   * Order matters: the slip is shown first and the list is only cleared once it has
-   * been recorded, so a failed save leaves the work still to do rather than losing it.
+   * The server credits the BOM lines and assigns the slip number, so two people
+   * shipping at once cannot produce the same number or double-credit a line.
    */
-  function shipPicked() {
+  function ship() {
+    if (busy) return;
     var host = document.getElementById('view');
-    var rows = (state.owed || []).filter(function (o) {
-      return picked[o.id];
+    var rows = (data.owed || []).filter(function (o) {
+      return picked[o.lineId] != null;
     });
     if (!rows.length) return;
-    var customer = rows[0].customer;
+    var orgId = rows[0].orgId;
     if (
       rows.some(function (r) {
-        return r.customer !== customer;
+        return r.orgId !== orgId;
       })
     )
       return;
 
-    state.seq = (state.seq || 0) + 1;
-    var slip = {
-      id: uid(),
-      number: 'PS-' + String(state.seq).padStart(4, '0'),
-      customer: customer,
-      date: todayISO(),
-      contact: ((host.querySelector('#bsContact') || {}).value || '').trim(),
-      address: (host.querySelector('#bsAddr') || {}).value || '',
-      note: (host.querySelector('#bsSlipNote') || {}).value || '',
-      // What is actually going in this box, which may be fewer than the amount owed.
-      lines: rows.map(function (r) {
-        return { sku: r.sku, item: r.item, qty: Math.min(r.qty, picked[r.id] || r.qty) };
-      }),
+    busy = true;
+    var body = {
+      slip: {
+        orgId: orgId,
+        customer: rows[0].customer,
+        attention: (host.querySelector('#bsAttn') || {}).value || '',
+        date: todayISO(),
+        address: (host.querySelector('#bsAddr') || {}).value || '',
+        note: (host.querySelector('#bsSlipNote') || {}).value || '',
+        lines: rows.map(function (r) {
+          return { lineId: r.lineId, sku: r.sku, item: r.item, qty: picked[r.lineId] };
+        }),
+      },
     };
 
-    // Take the shipped quantity off each ticked row. A row shipped short survives with
-    // the balance and its original added date, so a partial shipment does not reset
-    // how long the customer has been waiting.
-    var shipping = {};
-    rows.forEach(function (r) {
-      shipping[r.id] = Math.min(r.qty, picked[r.id] || r.qty);
-    });
-    state.owed = (state.owed || [])
-      .map(function (o) {
-        if (!shipping[o.id]) return o;
-        var left = o.qty - shipping[o.id];
-        return left > 0 ? Object.assign({}, o, { qty: left }) : null;
+    H.authed('/belt-shipments/ship', { method: 'POST', body: body })
+      .then(async function (r) {
+        busy = false;
+        if (!r.ok) {
+          var d = null;
+          try {
+            d = await r.json();
+          } catch (e) {
+            /* no body */
+          }
+          alert((d && d.message) || 'That shipment could not be recorded.');
+          return;
+        }
+        var slip = (await r.json()).slip;
+        picked = {};
+        // Reload before showing the slip so "Still to come" is the truth after this box.
+        load().then(function () {
+          var outstanding = (data.owed || [])
+            .filter(function (o) {
+              return o.orgId === orgId;
+            })
+            .map(function (o) {
+              return { item: o.item, qty: o.remaining };
+            });
+          paint();
+          openSlip(slip, outstanding);
+        });
       })
-      .filter(Boolean);
-
-    // Everything this customer is still owed once the box is closed — including the
-    // balance of any row that shipped short. Stated on the slip.
-    var outstanding = (state.owed || []).filter(function (o) {
-      return o.customer === customer;
-    });
-
-    state.slips.push(slip);
-    picked = {};
-    save().then(function () {
-      openSlip(slip, outstanding);
-    });
+      .catch(function () {
+        busy = false;
+        alert('Could not reach the server. Nothing was recorded.');
+      });
   }
 
   /** Show one slip, ready to print. */
@@ -884,8 +693,9 @@
       ov.remove();
     });
     ov.querySelector('#bsSlipPrint').addEventListener('click', function () {
+      // One fixed sheet, so this owns its own print rules rather than borrowing the
+      // proposal's page-packing.
       var st = document.createElement('style');
-      st.id = 'bsPrintCss';
       st.textContent =
         '@media print{@page{size:letter;margin:0;}' +
         'body>*{display:none!important;}' +
@@ -900,8 +710,6 @@
     });
   }
 
-  /* -------------------------------------------------------------------- boot */
-
   window.SSGBeltShipments = {
     init: function (helpers) {
       H = helpers;
@@ -909,7 +717,7 @@
     /** Render the screen into #view. */
     mount: function () {
       var host = document.getElementById('view');
-      if (host) host.innerHTML = '<div class="muted" style="padding:18px;">Loading…</div>';
+      if (host) host.innerHTML = '<div class="muted" style="padding:18px;">Loading&hellip;</div>';
       picked = {};
       load().then(paint);
     },

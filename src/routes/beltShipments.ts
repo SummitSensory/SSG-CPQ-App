@@ -7,50 +7,52 @@ import { ValidationError } from '../lib/errors.js';
 import { recordAudit } from '../lib/audit.js';
 
 /**
- * Belt shipments — the short list of belts owed to customers, and the slips that
- * have been printed to clear it.
+ * Belt shipments — which customers are owed a belt, which belt, and the slip that
+ * goes in the box.
  *
- * Deliberately small. This covers about ten belt SKUs shipped by hand out of our own
- * facility; it is not order fulfilment and it is not tied to the BOM. The whole state
- * is one JSON document in UiSetting, for three reasons:
+ * The list is DERIVED, not kept. Belts are already on the customer's bill of
+ * materials as procurement lines, so this route reads them straight off the BOM and
+ * subtracts what has already been shipped. Nobody re-types an order, and a belt
+ * cannot be missed because someone forgot to add it to a second list.
  *
- *   1. It is a worklist of a few dozen rows, not a reporting table. Nothing queries
- *      across it, so tables and indexes would buy nothing.
- *   2. It needs no migration, so this ships as a code deploy.
- *   3. Everyone sees the same list. A browser-local list would mean one person's
- *      shipment is invisible to the next, which is the exact failure being fixed.
+ * The only thing stored is the shipping ledger: how many of each BOM line have gone
+ * out, and the slips that were printed. That lives in one UiSetting JSON document,
+ * because it is a few hundred rows that nothing queries across — and it needs no
+ * migration, so this ships as a code deploy.
  *
- * If this ever grows past a worklist — per-item history, reporting, thousands of rows
- * — it wants real tables. Until then the simplest thing that is correct wins.
+ * If belts ever need per-piece history, serial numbers or reporting, the ledger wants
+ * a real table. Until then the simplest correct thing wins.
  */
 
 const KEY = 'belt.shipments';
 
-/** One belt owed to one customer. */
-const Owed = z.object({
-  id: z.string().trim().min(1).max(40),
-  customer: z.string().trim().min(1).max(160),
-  sku: z.string().trim().max(60),
-  item: z.string().trim().min(1).max(200),
-  qty: z.number().int().min(1).max(999),
-  note: z.string().trim().max(400).default(''),
-  /** ISO date the row was added, which is what "owed for 9 days" is counted from. */
-  added: z.string().trim().max(30),
-});
+/**
+ * Belts are recognised by SKU prefix.
+ *
+ * A prefix rather than a fixed list of the seven sizes, so a new size appears here
+ * the day it is added to the catalog with no code change. Case-insensitive, since
+ * SKUs are entered by hand in places.
+ */
+const BELT_SKU_PREFIX = 'FLEX-BELT-';
+
+/** Orders that are no longer shipping anything. */
+const DEAD_STATUSES = ['CANCELLED'] as const;
 
 /** A slip that has been printed and put in a box. */
 const Slip = z.object({
   id: z.string().trim().min(1).max(40),
   number: z.string().trim().max(40),
+  orgId: z.string().trim().max(40).default(''),
   customer: z.string().trim().min(1).max(160),
-  /** The person the box is addressed to, alongside the organization. */
-  contact: z.string().trim().max(160).default(''),
+  attention: z.string().trim().max(160).default(''),
   date: z.string().trim().max(30),
   address: z.string().trim().max(400).default(''),
   note: z.string().trim().max(400).default(''),
   lines: z
     .array(
       z.object({
+        /** ProcurementLine id, so a reprint still ties back to the BOM. */
+        lineId: z.string().trim().max(40).default(''),
         sku: z.string().trim().max(60),
         item: z.string().trim().min(1).max(200),
         qty: z.number().int().min(1).max(999),
@@ -59,51 +61,181 @@ const Slip = z.object({
     .max(60),
 });
 
-const State = z.object({
-  /** The belt SKUs offered in the picker. Maintained here, not hard-coded. */
-  catalog: z
-    .array(
-      z.object({
-        sku: z.string().trim().max(60),
-        item: z.string().trim().min(1).max(200),
-      }),
-    )
-    .max(60)
-    .default([]),
-  owed: z.array(Owed).max(400).default([]),
-  slips: z.array(Slip).max(600).default([]),
-  /** Increments per printed slip, so slip numbers never repeat. */
+const Ledger = z.object({
+  /** ProcurementLine id -> total pieces shipped against it. */
+  shipped: z.record(z.string().max(40), z.number().int().min(0).max(9999)).default({}),
+  slips: z.array(Slip).max(2000).default([]),
   seq: z.number().int().min(0).max(1_000_000).default(0),
 });
 
-const EMPTY = { catalog: [], owed: [], slips: [], seq: 0 };
+type LedgerT = z.infer<typeof Ledger>;
+
+const EMPTY_LEDGER: LedgerT = { shipped: {}, slips: [], seq: 0 };
+
+async function readLedger(): Promise<LedgerT> {
+  const row = await prisma.uiSetting.findUnique({ where: { key: KEY } });
+  if (!row) return EMPTY_LEDGER;
+  try {
+    return Ledger.parse(JSON.parse(row.value));
+  } catch {
+    // A malformed document must not take the screen down with it.
+    return EMPTY_LEDGER;
+  }
+}
+
+/** One line of one address, formatted the way it prints on the slip. */
+function formatAddress(
+  a:
+    | {
+        line1: string;
+        line2: string | null;
+        city: string;
+        region: string;
+        postalCode: string;
+      }
+    | undefined,
+): string {
+  if (!a) return '';
+  const street = [a.line1, a.line2].filter(Boolean).join('\n');
+  const city = [a.city, a.region].filter(Boolean).join(', ');
+  return [street, [city, a.postalCode].filter(Boolean).join(' ')].filter(Boolean).join('\n');
+}
 
 export function registerBeltShipmentRoutes(app: FastifyInstance): void {
-  // Anyone who can work a proposal can work this list — it is a shipping worklist,
-  // not privileged data, and the person who packs the box is not always the rep.
+  // Anyone who can work an order can work this list — the person who packs the box
+  // is not always the person who sold it.
   const guard = { preHandler: requirePermission(Permission.PROPOSAL_READ) };
 
+  /**
+   * Everything the screen needs in one call: the belts still owed, grouped-ready,
+   * plus the slips already printed.
+   */
   app.get('/belt-shipments', guard, async () => {
-    const row = await prisma.uiSetting.findUnique({ where: { key: KEY } });
-    if (!row) return EMPTY;
-    try {
-      return State.parse(JSON.parse(row.value));
-    } catch {
-      // A malformed document must not take the screen down with it.
-      return EMPTY;
-    }
+    const ledger = await readLedger();
+
+    const lines = await prisma.procurementLine.findMany({
+      where: {
+        sku: { startsWith: BELT_SKU_PREFIX, mode: 'insensitive' },
+        order: { status: { notIn: DEAD_STATUSES as unknown as never[] } },
+      },
+      select: {
+        id: true,
+        sku: true,
+        name: true,
+        quantity: true,
+        order: {
+          select: {
+            id: true,
+            number: true,
+            organizationId: true,
+            createdAt: true,
+            // Shipping address if the customer has one, otherwise whatever is on file.
+            // Either is better than making someone type it for every slip.
+          },
+        },
+      },
+      orderBy: { id: 'asc' },
+    });
+
+    const orgIds = Array.from(new Set(lines.map((l) => l.order.organizationId)));
+    const orgs = orgIds.length
+      ? await prisma.organization.findMany({
+          where: { id: { in: orgIds } },
+          select: {
+            id: true,
+            name: true,
+            addresses: {
+              select: {
+                type: true,
+                line1: true,
+                line2: true,
+                city: true,
+                region: true,
+                postalCode: true,
+              },
+            },
+            contacts: { select: { firstName: true, lastName: true, title: true }, take: 4 },
+          },
+        })
+      : [];
+    const orgById = new Map(orgs.map((o) => [o.id, o]));
+
+    const owed = lines
+      .map((l) => {
+        const shipped = ledger.shipped[l.id] || 0;
+        const remaining = Math.max(0, l.quantity - shipped);
+        const org = orgById.get(l.order.organizationId);
+        const addresses = org?.addresses || [];
+        const ship = addresses.find((a) => a.type === 'SHIPPING') || addresses[0];
+        return {
+          lineId: l.id,
+          sku: l.sku || '',
+          item: l.name,
+          ordered: l.quantity,
+          shipped,
+          remaining,
+          orgId: l.order.organizationId,
+          customer: org?.name || 'Unknown customer',
+          orderNumber: l.order.number,
+          orderedOn: l.order.createdAt.toISOString().slice(0, 10),
+          address: formatAddress(ship),
+          contacts: (org?.contacts || []).map((c) =>
+            [[c.firstName, c.lastName].filter(Boolean).join(' '), c.title]
+              .filter(Boolean)
+              .join(', '),
+          ),
+        };
+      })
+      .filter((r) => r.remaining > 0);
+
+    return { owed, slips: ledger.slips, seq: ledger.seq };
   });
 
   /**
-   * Replace the whole document.
+   * Record a shipment: add a slip and credit the lines it covers.
    *
-   * Last write wins. With one or two people working a list of this size that is the
-   * right trade: no locking, no merge, and a lost edit is one row retyped.
+   * Quantities are added to the ledger rather than replacing it, so two people
+   * shipping at once cannot silently undo each other, and a partial shipment leaves
+   * the balance owed.
    */
-  app.put('/belt-shipments', guard, async (req) => {
-    const parsed = State.safeParse(req.body);
-    if (!parsed.success) throw new ValidationError('That shipment list could not be read.');
-    const value = JSON.stringify(parsed.data);
+  app.post('/belt-shipments/ship', guard, async (req) => {
+    const Body = z.object({ slip: Slip.omit({ id: true, number: true }) });
+    const parsed = Body.safeParse(req.body);
+    if (!parsed.success) throw new ValidationError('That shipment could not be read.');
+    const { slip } = parsed.data;
+    if (!slip.lines.length) throw new ValidationError('A slip needs at least one item.');
+
+    const ledger = await readLedger();
+
+    // Never credit more than the BOM says is owed: a typo must not make the belt
+    // disappear off the list for good.
+    const ids = slip.lines.map((l) => l.lineId).filter(Boolean);
+    const known = ids.length
+      ? await prisma.procurementLine.findMany({
+          where: { id: { in: ids } },
+          select: { id: true, quantity: true },
+        })
+      : [];
+    const capById = new Map(known.map((k) => [k.id, k.quantity]));
+
+    for (const line of slip.lines) {
+      if (!line.lineId) continue;
+      const cap = capById.get(line.lineId);
+      if (cap == null)
+        throw new ValidationError('One of those items is no longer on the bill of materials.');
+      const already = ledger.shipped[line.lineId] || 0;
+      ledger.shipped[line.lineId] = Math.min(cap, already + line.qty);
+    }
+
+    ledger.seq += 1;
+    const record = {
+      ...slip,
+      id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+      number: `PS-${String(ledger.seq).padStart(4, '0')}`,
+    };
+    ledger.slips.push(record);
+
+    const value = JSON.stringify(Ledger.parse(ledger));
     await prisma.uiSetting.upsert({
       where: { key: KEY },
       create: { key: KEY, value, updatedById: req.user!.sub },
@@ -111,11 +243,55 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
     });
     await recordAudit({
       actorId: req.user!.sub,
-      action: 'belt.shipments.save',
+      action: 'belt.shipment.ship',
       entity: 'UiSetting',
       entityId: KEY,
-      details: { owed: parsed.data.owed.length, slips: parsed.data.slips.length },
+      details: {
+        slip: record.number,
+        customer: record.customer,
+        pieces: record.lines.reduce((a, l) => a + l.qty, 0),
+      },
     });
-    return { saved: true };
+
+    return { slip: record };
+  });
+
+  /**
+   * Undo a slip: remove it and give its pieces back to the list.
+   *
+   * Printing the wrong slip is the likeliest mistake here, and without this the belt
+   * is owed forever with no way to say so.
+   */
+  app.post('/belt-shipments/void', guard, async (req) => {
+    const Body = z.object({ slipId: z.string().trim().min(1).max(40) });
+    const parsed = Body.safeParse(req.body);
+    if (!parsed.success) throw new ValidationError('Which slip?');
+
+    const ledger = await readLedger();
+    const slip = ledger.slips.find((s) => s.id === parsed.data.slipId);
+    if (!slip) throw new ValidationError('That slip is no longer on file.');
+
+    for (const line of slip.lines) {
+      if (!line.lineId) continue;
+      ledger.shipped[line.lineId] = Math.max(0, (ledger.shipped[line.lineId] || 0) - line.qty);
+      if (!ledger.shipped[line.lineId]) delete ledger.shipped[line.lineId];
+    }
+    ledger.slips = ledger.slips.filter((s) => s.id !== slip.id);
+
+    const value = JSON.stringify(Ledger.parse(ledger));
+    await prisma.uiSetting.upsert({
+      where: { key: KEY },
+      create: { key: KEY, value, updatedById: req.user!.sub },
+      update: { value, updatedById: req.user!.sub, updatedAt: new Date() },
+    });
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'belt.shipment.void',
+      entity: 'UiSetting',
+      entityId: KEY,
+      details: { slip: slip.number, customer: slip.customer },
+    });
+
+    return { voided: slip.number };
   });
 }
