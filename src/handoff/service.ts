@@ -624,10 +624,14 @@ export async function getOrder(id: string) {
   const skus = parts.length
     ? await prisma.sku.findMany({
         where: { part: { in: parts } },
-        select: { part: true, productUrl: true, packagingBag: true },
+        select: { part: true, productUrl: true, packagingBag: true, unitCostMinor: true },
       })
     : [];
   const urlByPart = new Map(skus.map((s) => [s.part, s.productUrl]));
+  // What the catalog says the part costs TODAY. The line's own cost is the snapshot
+  // taken at acceptance and stays the number of record — this is only so the screen
+  // can say the two have parted company, and offer to bring the line up to date.
+  const catalogCostByPart = new Map(skus.map((s) => [s.part, s.unitCostMinor ?? null]));
   // Which paint colour group each part belongs to. The BOM asks for a brand and a
   // code per group, so the screen has to know which lines fall in which.
   const paintRows = parts.length
@@ -675,6 +679,7 @@ export async function getOrder(id: string) {
         productUrl: (p.sku && urlByPart.get(p.sku)) || null,
         packagingBag: (p.sku && bagByPart.get(p.sku)) || null,
         vendorPart: vendorParts.get((p.vendor && p.vendor.trim()) || 'Unassigned vendor', p.sku),
+        catalogCostMinor: (p.sku && catalogCostByPart.get(p.sku)) ?? null,
         paintGroup: (p.sku && paintBySku.get(p.sku.toUpperCase())?.name) || null,
         paintGroupLabel: (p.sku && paintBySku.get(p.sku.toUpperCase())?.label) || null,
         quantityEditedBy: p.quantityEditedById

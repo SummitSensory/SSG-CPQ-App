@@ -5064,7 +5064,7 @@
     return ov;
   }
   /* --- Reports: company-wide proposal analytics --- */
-  var rep = { data: null, tab: 'overview', range: '365', from: '', to: '', pq: '', psort: 'proposedValue' };
+  var rep = { data: null, drift: null, driftLoading: false, tab: 'overview', range: '365', from: '', to: '', pq: '', psort: 'proposedValue' };
   var REP_TABS = [
     { id: 'overview', label: 'Overview' },
     { id: 'conversion', label: 'Conversion' },
@@ -5074,6 +5074,7 @@
     { id: 'products', label: 'Product demand' },
     { id: 'team', label: 'Team' },
     { id: 'detail', label: 'All proposals' },
+    { id: 'costdrift', label: 'Cost drift' },
   ];
   var REP_RANGES = [['30', 'Last 30 days'], ['90', 'Last 90 days'], ['180', 'Last 6 months'], ['365', 'Last 12 months'], ['ytd', 'Year to date'], ['all', 'All time'], ['custom', 'Custom…']];
   function fmt0(minor) { return '$' + Math.round((Number(minor) || 0) / 100).toLocaleString(); }
@@ -5153,8 +5154,81 @@
       '</tr></thead><tbody>' + (rows || '<tr><td colspan="' + head.length + '" style="padding:20px 14px;color:#909689;">' + esc(empty || 'No data in this period.') + '</td></tr>') + '</tbody></table></div>';
   }
   function rtd(v, align, weight) { return '<td style="padding:10px 14px;border-bottom:1px solid #f2f3ef;text-align:' + (align || 'left') + ';' + (weight ? 'font-weight:600;' : '') + 'white-space:nowrap;">' + v + '</td>'; }
+  /**
+   * Orders carrying a cost the catalog no longer agrees with.
+   *
+   * Loaded on demand rather than with the rest of the reports: it reads every order
+   * line in the database, and nobody should pay for that while looking at conversion
+   * rates. Read-only — repricing happens on the order, per line, where it is audited.
+   */
+  async function loadDrift() {
+    rep.driftLoading = true;
+    try {
+      var r = await authed('/reports/cost-drift');
+      rep.drift = r.ok ? await r.json() : { error: 'Could not load cost drift (' + r.status + ').' };
+    } catch (e) { rep.drift = { error: 'Could not reach the server.' }; }
+    rep.driftLoading = false;
+    if (rep.tab === 'costdrift') drawReports();
+  }
+
+  function drawDrift() {
+    var d = rep.drift;
+    if (!d) return '<div class="muted" style="padding:24px;">Comparing every order line against the catalog…</div>';
+    if (d.error) return '<div class="err">' + esc(d.error) + '</div>';
+    var s = d.summary;
+    if (!s.orderCount) {
+      return '<div class="placeholder"><h3>Every order matches the catalog</h3>' +
+        '<p>No accepted order is carrying a cost the catalog has since changed.</p></div>';
+    }
+    var money = function (minor) {
+      var n = (Number(minor) || 0) / 100;
+      return (n < 0 ? '−$' : '$') + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    };
+    return '<div class="grid">' +
+        kpi('Orders affected', s.orderCount.toLocaleString(), s.lineCount + ' line' + (s.lineCount === 1 ? '' : 's') + ' in total') +
+        kpi('Net cost movement', (s.netMinor > 0 ? '+' : '') + money(s.netMinor), 'if every line were brought up to date', s.netMinor > 0 ? '#9c3327' : '#2f7d5d') +
+        kpi('On submitted sheets', s.lockedCount.toLocaleString(), 'unlock that section to reprice') +
+      '</div>' +
+      '<div class="muted" style="font-size:12.5px;margin:14px 0 10px;line-height:1.6;max-width:720px;">' +
+        'Costs are copied onto an order when it is accepted and never re-read, so a sheet already sent to a vendor cannot change under them. ' +
+        'These are the jobs where the catalog has moved since. Open the order and use <b>Refresh costs from catalog</b>, or the per-line <b>Use</b> button on the Bill of Materials.' +
+      '</div>' +
+      d.orders.map(function (o) {
+        return '<div class="card" style="margin-bottom:12px;padding:0;overflow:hidden;">' +
+          '<div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:baseline;padding:13px 16px;background:#fbfbf9;border-bottom:1px solid #e7e8e3;">' +
+            '<div><b style="font-weight:650;">' + esc(o.customer || '—') + '</b>' +
+              '<span class="muted" style="font-size:12.5px;"> · ' + esc(o.number) + (o.jobName ? ' · ' + esc(o.jobName) : '') + '</span></div>' +
+            '<div style="font-size:13px;font-variant-numeric:tabular-nums;">' + o.lineCount + ' line' + (o.lineCount === 1 ? '' : 's') +
+              ' · <b style="color:' + (o.netMinor > 0 ? '#9c3327' : '#2f7d5d') + ';">' + (o.netMinor > 0 ? '+' : '') + money(o.netMinor) + '</b></div>' +
+          '</div>' +
+          '<div style="overflow:auto;"><table style="width:100%;border-collapse:collapse;font-size:12.5px;">' +
+            '<thead><tr>' +
+              ['Part', 'Vendor', 'Qty', 'On the order', 'Catalog', 'On this job'].map(function (h, i) {
+                return '<th style="padding:8px 14px;text-align:' + (i > 1 ? 'right' : 'left') + ';font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;font-weight:600;border-bottom:1px solid #e7e8e3;white-space:nowrap;">' + h + '</th>';
+              }).join('') +
+            '</tr></thead><tbody>' +
+            o.lines.map(function (l) {
+              var up = l.extendedDeltaMinor > 0;
+              return '<tr' + (l.locked ? ' style="opacity:.6;"' : '') + '>' +
+                rtd(esc(l.name) + '<div class="muted" style="font-size:11.5px;font-family:ui-monospace,monospace;">' + esc(l.sku) +
+                  (l.freeIssue ? ' · free issue' : '') + (l.locked ? ' · submitted' : '') + '</div>') +
+                rtd(esc(l.vendor)) + rtd(l.quantity, 'right') +
+                rtd(money(l.currentMinor), 'right') + rtd(money(l.catalogMinor), 'right', 1) +
+                rtd('<span style="color:' + (up ? '#9c3327' : '#2f7d5d') + ';">' + (up ? '+' : '') + money(l.extendedDeltaMinor) + '</span>', 'right') +
+              '</tr>';
+            }).join('') +
+          '</tbody></table></div></div>';
+      }).join('');
+  }
+
   function drawReports() {
-    var box = document.getElementById('repBody'); if (!box || !rep.data) return;
+    var box = document.getElementById('repBody'); if (!box) return;
+    if (rep.tab === 'costdrift') {
+      box.innerHTML = drawDrift();
+      if (!rep.drift && !rep.driftLoading) loadDrift();
+      return;
+    }
+    if (!rep.data) return;
     var d = rep.data, s = d.summary;
     if (!s.total) { box.innerHTML = '<div class="placeholder"><h3>No proposals in this period</h3><p>Widen the date range to see reporting across the company.</p></div>'; return; }
     if (rep.tab === 'overview') {
@@ -10652,11 +10726,38 @@
    * reaches nothing the customer has seen.
    */
   function costCell(p, edit) {
-    if (!edit) return money2(p.unitCostMinor);
+    var drift = catalogDrift(p);
+    var note = drift == null ? '' :
+      '<div style="margin-top:4px;font-size:11px;line-height:1.45;color:#8a6d1f;white-space:nowrap;" ' +
+        'title="This line carries the cost snapshotted when the order was accepted. The catalog has changed since.">' +
+        'Catalog ' + money2(drift) +
+        (edit
+          ? ' <button class="bomUseCat" data-id="' + p.id + '" data-cost="' + drift + '" ' +
+            'title="Put the catalog cost on this line. Internal — the proposal and invoice are untouched." ' +
+            'style="border:1px solid #e4dfd0;background:#fdfcf7;color:#6b5a24;border-radius:7px;padding:2px 7px;font-size:11px;cursor:pointer;margin-left:4px;">Use</button>'
+          : '') +
+      '</div>';
+    if (!edit) return money2(p.unitCostMinor) + note;
     return '<input class="bomLine" data-id="' + p.id + '" data-f="unitCostMinor" ' +
       'value="' + (Number(p.unitCostMinor || 0) / 100).toFixed(2) + '" ' +
       'inputmode="decimal" title="Unit cost. Internal — the customer never sees it." ' +
-      'style="' + bomFieldStyle('92px') + 'text-align:right;background:#fdfcf7;border-color:#e4dfd0;">';
+      'style="' + bomFieldStyle('92px') + 'text-align:right;background:#fdfcf7;border-color:' +
+      (drift == null ? '#e4dfd0' : '#d8b64a') + ';">' + note;
+  }
+
+  /**
+   * The catalog cost of a line, when it differs from what the line carries.
+   *
+   * Costs are snapshotted at acceptance and never re-read — that is what keeps a sent
+   * sheet honest — so a catalog correction silently misses every job already in
+   * flight. Returning the difference is what lets the screen say so while someone is
+   * building the sheet, rather than after the vendor has it.
+   */
+  function catalogDrift(p) {
+    if (!p || p.catalogCostMinor == null) return null;
+    var cat = Number(p.catalogCostMinor);
+    if (!isFinite(cat)) return null;
+    return cat === Number(p.unitCostMinor || 0) ? null : cat;
   }
 
   function bomFieldStyle(w, locked) {
@@ -10720,6 +10821,15 @@
     var statusChip = locked
       ? '<span class="chip" style="background:#eaf1ec;color:#2f6b4f;">Submitted ' + (s.submittedOn ? fmtDate(s.submittedOn) : '') + '</span>'
       : '<span class="chip">Draft</span>';
+
+    // Said at the top of the vendor's block, not only per line: the person about to
+    // email this sheet should not have to scan the table to learn it is stale.
+    var driftCount = lines.filter(function (p) { return catalogDrift(p) != null; }).length;
+    if (driftCount) {
+      statusChip += '<span class="chip" style="background:#fdf6e6;color:#6b5a24;border:1px solid #ecd9a6;" ' +
+        'title="These lines carry the cost snapshotted at acceptance; the catalog has changed since. Use the catalog figure per line, or Refresh costs from catalog.">' +
+        driftCount + ' line' + (driftCount === 1 ? '' : 's') + ' differ from catalog</span>';
+    }
 
     var confirmLine = locked && s.confirmedBy
       ? '<div class="muted" style="font-size:11.5px;margin-top:4px;">Confirmed by ' + esc(s.confirmedBy) + ' · ' + fmtDate(s.confirmedAt) + '</div>'
@@ -11144,6 +11254,21 @@
         el.style.borderColor = r.ok ? '#3f9d78' : '#c2452f';
         if (!r.ok) return fail(r, 'Could not save');
         setTimeout(function () { el.style.borderColor = '#dcded7'; }, 900);
+      });
+    });
+
+    /* One line, brought up to the catalog. The bulk dialog still covers a whole
+     * order; this is the case where you are looking at one part and can see it is
+     * wrong. Same endpoint, same audit trail. */
+    document.querySelectorAll('.bomUseCat').forEach(function (el) {
+      el.addEventListener('click', async function () {
+        el.disabled = true;
+        var rc = await authed('/orders/procurement/' + el.getAttribute('data-id'), {
+          method: 'PATCH', body: { unitCostMinor: Number(el.getAttribute('data-cost')) },
+        });
+        el.disabled = false;
+        if (!rc.ok) return fail(rc, 'Could not put the catalog cost on that line');
+        reload();
       });
     });
 

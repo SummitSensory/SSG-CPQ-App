@@ -17,6 +17,129 @@ import {
 export function registerReportRoutes(app: FastifyInstance): void {
   const read = { preHandler: requirePermission(Permission.PROPOSAL_READ) };
 
+  /**
+   * Cost drift: every order line whose cost no longer matches the catalog.
+   *
+   * Costs are snapshotted onto an order at acceptance and never re-read, which is
+   * what keeps an already-sent sheet honest. The cost of that rule is that a catalog
+   * correction never reaches the jobs already in flight, and nothing said so. This is
+   * that list — one row per order, with the lines behind it — so a drifted job is
+   * found before its Bill of Materials goes to a vendor rather than after.
+   *
+   * Read-only. Repricing stays where it was: the order's own "Refresh costs from
+   * catalog", which is per-line and audited.
+   */
+  app.get('/reports/cost-drift', read, async () => {
+    const [lines, skus, orders, sections] = await Promise.all([
+      prisma.procurementLine.findMany({
+        select: {
+          id: true,
+          orderId: true,
+          sku: true,
+          name: true,
+          vendor: true,
+          quantity: true,
+          unitCostMinor: true,
+          freeIssue: true,
+        },
+      }),
+      prisma.sku.findMany({ select: { part: true, unitCostMinor: true } }),
+      prisma.acceptedOrder.findMany({
+        select: {
+          id: true,
+          number: true,
+          status: true,
+          organizationId: true,
+          jobName: true,
+          createdAt: true,
+        },
+      }),
+      prisma.bomVendorSection.findMany({ select: { orderId: true, vendor: true, status: true } }),
+    ]);
+
+    const catalog = new Map(skus.map((k) => [k.part.trim().toUpperCase(), k.unitCostMinor ?? 0]));
+    const orgs = await prisma.organization.findMany({ select: { id: true, name: true } });
+    const orgName = new Map(orgs.map((o) => [o.id, o.name]));
+    const orderById = new Map(orders.map((o) => [o.id, o]));
+    // A submitted section is a document the vendor already holds; its lines are
+    // reported but flagged, because repricing one means unlocking that sheet.
+    const submitted = new Set(
+      sections.filter((s) => s.status === 'SUBMITTED').map((s) => `${s.orderId}::${s.vendor}`),
+    );
+
+    interface DriftLine {
+      lineId: string;
+      sku: string;
+      name: string;
+      vendor: string;
+      quantity: number;
+      currentMinor: number;
+      catalogMinor: number;
+      deltaMinor: number;
+      extendedDeltaMinor: number;
+      freeIssue: boolean;
+      locked: boolean;
+    }
+    const byOrder = new Map<string, DriftLine[]>();
+
+    for (const l of lines) {
+      const sku = (l.sku ?? '').trim();
+      if (!sku) continue;
+      const catalogMinor = catalog.get(sku.toUpperCase());
+      if (catalogMinor == null) continue;
+      const current = Number(l.unitCostMinor ?? 0);
+      if (catalogMinor === current) continue;
+      const vendor = (l.vendor && l.vendor.trim()) || 'Unassigned vendor';
+      const qty = Number(l.quantity) || 0;
+      const list = byOrder.get(l.orderId) ?? [];
+      list.push({
+        lineId: l.id,
+        sku,
+        name: l.name,
+        vendor,
+        quantity: qty,
+        currentMinor: current,
+        catalogMinor,
+        deltaMinor: catalogMinor - current,
+        extendedDeltaMinor: (catalogMinor - current) * qty,
+        freeIssue: !!l.freeIssue,
+        locked: submitted.has(`${l.orderId}::${vendor}`),
+      });
+      byOrder.set(l.orderId, list);
+    }
+
+    const rows = [...byOrder.entries()]
+      .map(([orderId, driftLines]) => {
+        const o = orderById.get(orderId);
+        return {
+          orderId,
+          number: o?.number ?? '',
+          status: o?.status ?? '',
+          jobName: o?.jobName ?? '',
+          customer: o ? (orgName.get(o.organizationId) ?? '') : '',
+          acceptedAt: o?.createdAt ?? null,
+          lineCount: driftLines.length,
+          lockedCount: driftLines.filter((l) => l.locked).length,
+          netMinor: driftLines.reduce((a, l) => a + l.extendedDeltaMinor, 0),
+          lines: driftLines.sort(
+            (a, b) => Math.abs(b.extendedDeltaMinor) - Math.abs(a.extendedDeltaMinor),
+          ),
+        };
+      })
+      // Biggest money first: that is the order someone would work the list in.
+      .sort((a, b) => Math.abs(b.netMinor) - Math.abs(a.netMinor));
+
+    return {
+      orders: rows,
+      summary: {
+        orderCount: rows.length,
+        lineCount: rows.reduce((a, r) => a + r.lineCount, 0),
+        netMinor: rows.reduce((a, r) => a + r.netMinor, 0),
+        lockedCount: rows.reduce((a, r) => a + r.lockedCount, 0),
+      },
+    };
+  });
+
   app.get('/reports/proposals', read, async (req) => {
     const q = req.query as { from?: string; to?: string };
     const from = q.from ? new Date(q.from) : null;
