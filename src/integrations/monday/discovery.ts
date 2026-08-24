@@ -26,7 +26,13 @@ export interface MondayColumn {
 export interface MondayItemSample {
   id: string;
   name: string;
-  columns: Array<{ id: string; title: string; type: string; text: string | null; value: string | null }>;
+  columns: Array<{
+    id: string;
+    title: string;
+    type: string;
+    text: string | null;
+    value: string | null;
+  }>;
 }
 
 export interface MondayBoardDetail {
@@ -123,6 +129,15 @@ export interface MondayItem {
   text: Record<string, string>;
   /** column id -> raw JSON value (needed for email/phone/location columns) */
   raw: Record<string, string | null>;
+  /**
+   * column id -> the column's TITLE on the board.
+   *
+   * Column ids are opaque and a board owner can add, hide or replace a column
+   * without telling anyone. Carrying the titles lets a reader fall back to "the
+   * column called GB Freight $" when the id it was given no longer holds the figure —
+   * a mapping that repairs itself rather than printing a blank on a vendor's sheet.
+   */
+  titles: Record<string, string>;
 }
 
 const ITEM_FIELDS = `
@@ -132,6 +147,7 @@ const ITEM_FIELDS = `
     id
     text
     value
+    column { title }
     ... on MirrorValue { display_value }
     ... on FormulaValue { display_value }
     ... on BoardRelationValue { display_value }
@@ -141,15 +157,39 @@ const ITEM_FIELDS = `
 function toItem(item: {
   id: string;
   name: string;
-  column_values: Array<{ id: string; text: string | null; value: string | null; display_value?: string | null }>;
+  column_values: Array<{
+    id: string;
+    text: string | null;
+    value: string | null;
+    display_value?: string | null;
+    column?: { title?: string | null } | null;
+  }>;
 }): MondayItem {
   const text: Record<string, string> = {};
   const raw: Record<string, string | null> = {};
+  const titles: Record<string, string> = {};
   for (const cv of item.column_values) {
     text[cv.id] = cv.text || cv.display_value || '';
     raw[cv.id] = cv.value;
+    titles[cv.id] = cv.column?.title ?? '';
   }
-  return { id: item.id, name: item.name, text, raw };
+  return { id: item.id, name: item.name, text, raw, titles };
+}
+
+/**
+ * The text of the first column whose TITLE matches, ignoring case and spacing.
+ * Used as the repair path when a mapped column id comes back empty.
+ */
+export function textByColumnTitle(
+  item: MondayItem,
+  pattern: RegExp,
+): { id: string; text: string } | null {
+  for (const [id, title] of Object.entries(item.titles)) {
+    if (!title || !pattern.test(title)) continue;
+    const t = (item.text[id] ?? '').trim();
+    if (t) return { id, text: t };
+  }
+  return null;
 }
 
 /**
@@ -254,7 +294,9 @@ export async function fetchAllItems(
         text[cv.id] = cv.text || cv.display_value || '';
         raw[cv.id] = cv.value;
       }
-      out.push({ id: item.id, name: item.name, text, raw });
+      // Titles are not queried on the board walk — nothing paging a whole board
+      // needs them, and they would repeat on every row.
+      out.push({ id: item.id, name: item.name, text, raw, titles: {} });
     }
     if (max && out.length >= max) return out.slice(0, max);
     cursor = page.cursor;

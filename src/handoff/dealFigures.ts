@@ -1,6 +1,6 @@
 import { prisma } from '../lib/prisma.js';
 import { NotFoundError } from '../lib/errors.js';
-import { fetchItemById } from '../integrations/monday/discovery.js';
+import { fetchItemById, textByColumnTitle } from '../integrations/monday/discovery.js';
 import { DEAL_COL, clean } from '../integrations/monday/crmMapping.js';
 import { dealItemIdFor } from '../integrations/monday/dealLink.js';
 import { logger } from '../lib/logger.js';
@@ -31,6 +31,21 @@ export interface DealFigures {
   /** A caveat worth showing even on success — e.g. the deal link had to be inferred. */
   note?: string | null;
 }
+
+/**
+ * Titles to look for when a mapped column id comes back empty.
+ *
+ * The structure freight figure lives in a MIRROR column on the Deal Tracking board
+ * ("GB Freight $", locked). A mirror is the fragile kind of column: it can be
+ * replaced without the id surviving, and then the vendor's sheet prints nothing and
+ * says nothing is wrong. Matching on the title as a second attempt means the figure
+ * has to be missing from the board itself before it goes missing from the sheet.
+ */
+const TITLE_FALLBACK = {
+  structureFreight: /^\s*gb[\s-]*freight|structure[\s-]*freight/i,
+  matsFreight: /^\s*r[\s-]*freight|mats?[\s-]*freight/i,
+  estimatedTax: /^\s*r[\s-]*tax|estimated[\s-]*tax/i,
+} as const;
 
 const EMPTY: DealFigures = {
   itemId: null,
@@ -98,13 +113,30 @@ export async function dealFigures(orderId: string): Promise<DealFigures> {
         error: 'That deal could not be found on the Deal Tracking board.',
       };
     }
+    // The mapped id first, always: it is the column somebody chose. The title is
+    // only consulted when that comes back empty, and the substitution is logged, so a
+    // board change shows up in the logs as a fact rather than as a silent blank.
+    const repaired: string[] = [];
+    const figure = (key: keyof typeof TITLE_FALLBACK): string | null => {
+      const mapped = clean(item.text[DEAL_COL[key]]);
+      if (mapped) return mapped;
+      const found = textByColumnTitle(item, TITLE_FALLBACK[key]);
+      if (!found) return null;
+      logger.warn(
+        { orderId, key, mappedColumn: DEAL_COL[key], foundColumn: found.id },
+        'deal figures: mapped column was empty, matched the figure by column title instead',
+      );
+      repaired.push(`${key} came from the column titled on the board, not ${DEAL_COL[key]}`);
+      return found.text;
+    };
+
     return {
       itemId: item.id,
-      structureFreight: clean(item.text[DEAL_COL.structureFreight]),
-      matsFreight: clean(item.text[DEAL_COL.matsFreight]),
-      estimatedTax: clean(item.text[DEAL_COL.estimatedTax]),
+      structureFreight: figure('structureFreight'),
+      matsFreight: figure('matsFreight'),
+      estimatedTax: figure('estimatedTax'),
       error: null,
-      note: link.note,
+      note: [link.note, ...repaired].filter(Boolean).join(' · ') || null,
     };
   } catch (err) {
     // Reported rather than thrown: the page still works with the figures typed by hand,
