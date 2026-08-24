@@ -11296,7 +11296,9 @@
         });
         el.disabled = false;
         if (!rc.ok) return fail(rc, 'Could not put the catalog cost on that line');
-        reload();
+        // refreshLines, not reload: reload repaints from the order already in memory,
+        // whose lines still carry the old cost. This re-reads the order first.
+        refreshLines();
       });
     });
 
