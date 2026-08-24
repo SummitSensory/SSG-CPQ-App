@@ -10725,19 +10725,28 @@
    * Cost is internal. Changing it moves this sheet's totals and the job's margin and
    * reaches nothing the customer has seen.
    */
+  /**
+   * Money for the cost column. `money2` inside sectionCard is out of scope here — the
+   * original only reached it on a branch that never ran, which is why the omission went
+   * unnoticed until this cell printed a second figure.
+   */
+  function costMoney(minor) {
+    return '$' + (Number(minor || 0) / 100).toFixed(2);
+  }
+
   function costCell(p, edit) {
     var drift = catalogDrift(p);
     var note = drift == null ? '' :
       '<div style="margin-top:4px;font-size:11px;line-height:1.45;color:#8a6d1f;white-space:nowrap;" ' +
         'title="This line carries the cost snapshotted when the order was accepted. The catalog has changed since.">' +
-        'Catalog ' + money2(drift) +
+        'Catalog ' + costMoney(drift) +
         (edit
           ? ' <button class="bomUseCat" data-id="' + p.id + '" data-cost="' + drift + '" ' +
             'title="Put the catalog cost on this line. Internal — the proposal and invoice are untouched." ' +
             'style="border:1px solid #e4dfd0;background:#fdfcf7;color:#6b5a24;border-radius:7px;padding:2px 7px;font-size:11px;cursor:pointer;margin-left:4px;">Use</button>'
           : '') +
       '</div>';
-    if (!edit) return money2(p.unitCostMinor) + note;
+    if (!edit) return costMoney(p.unitCostMinor) + note;
     return '<input class="bomLine" data-id="' + p.id + '" data-f="unitCostMinor" ' +
       'value="' + (Number(p.unitCostMinor || 0) / 100).toFixed(2) + '" ' +
       'inputmode="decimal" title="Unit cost. Internal — the customer never sees it." ' +
