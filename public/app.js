@@ -10813,6 +10813,20 @@
     wireBom(order, user, canHandoff);
   }
 
+  /**
+   * Whether this vendor's money from the deal has actually landed.
+   *
+   * A figure has to contain a digit to count: the freight field can hold "TBD" and the
+   * board can answer "Yes" to a freight REQUEST, and neither is a shipment total. Tax
+   * only counts where the vendor carries it — one vendor holds the job's tax, so
+   * demanding it everywhere would leave every other section looking unfinished.
+   */
+  function dealFiguresIn(s) {
+    var hasFigure = function (v) { return /\d/.test(String(v == null ? '' : v)); };
+    if (!hasFigure(s.shipmentQuote)) return false;
+    return !s.showsEstimatedTax || hasFigure(s.estimatedTax);
+  }
+
   /** One vendor's block: visually separated, greyed out once submitted. */
   function sectionCard(s, idx, canHandoff) {
     var locked = !s.editable;
@@ -10958,7 +10972,12 @@
         '</div>' +
         (edit
           ? '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;">' +
-              '<button class="link-btn" data-deal-pull="' + s.id + '" style="width:auto;padding:6px 12px;">Pull freight &amp; tax from the deal</button>' +
+              '<button class="link-btn" data-deal-pull="' + s.id + '" title="' +
+                (dealFiguresIn(s)
+                  ? 'This vendor has its freight' + (s.showsEstimatedTax ? ' and tax' : '') + ' figure. Press again to re-read the board.'
+                  : 'This vendor has no freight figure yet, so its grand total cannot be worked out. Reads the Deal Tracking board.') +
+                '" style="width:auto;padding:6px 12px;font-weight:600;border:1px solid transparent;color:#fff;background:' +
+                (dealFiguresIn(s) ? '#2f7d5d' : '#a2402f') + ';">Pull freight &amp; tax from the deal</button>' +
               '<span class="muted" data-deal-out style="font-size:11.5px;line-height:1.5;flex:1;min-width:220px;">Reads the Deal Tracking board. Figures you have typed are kept.</span>' +
             '</div>'
           : '') +

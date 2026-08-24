@@ -42,10 +42,21 @@ export interface DealFigures {
  * has to be missing from the board itself before it goes missing from the sheet.
  */
 const TITLE_FALLBACK = {
-  structureFreight: /^\s*gb[\s-]*freight|structure[\s-]*freight/i,
-  matsFreight: /^\s*r[\s-]*freight|mats?[\s-]*freight/i,
-  estimatedTax: /^\s*r[\s-]*tax|estimated[\s-]*tax/i,
+  // "Request" and "Status" twins are excluded by name: the Deal Tracking board carries
+  // "GB Freight Request" (Yes / No) and "Freight Status" (Holding Pattern) beside the
+  // figure, and either would otherwise be taken for the freight total.
+  structureFreight: /^(?!.*(request|status|rail))(?:gb[\s-]*freight|structure[\s-]*freight)/i,
+  matsFreight: /^(?!.*(request|status|rail))(?:r[\s-]*freight|mats?[\s-]*freight)/i,
+  estimatedTax: /^(?!.*(request|status))(?:r[\s-]*tax|estimated[\s-]*tax)/i,
 } as const;
+
+/**
+ * A figure, not a flag. Anything without a digit in it — "Yes", "TBD", "Holding
+ * Pattern" — is not what a freight or tax column was being read for, and printing it
+ * as a shipment total is worse than printing nothing.
+ */
+const looksLikeMoney = (text: string): boolean =>
+  /\d/.test(text) && !/^(yes|no)$/i.test(text.trim());
 
 const EMPTY: DealFigures = {
   itemId: null,
@@ -120,7 +131,7 @@ export async function dealFigures(orderId: string): Promise<DealFigures> {
     const figure = (key: keyof typeof TITLE_FALLBACK): string | null => {
       const mapped = clean(item.text[DEAL_COL[key]]);
       if (mapped) return mapped;
-      const found = textByColumnTitle(item, TITLE_FALLBACK[key]);
+      const found = textByColumnTitle(item, TITLE_FALLBACK[key], looksLikeMoney);
       if (!found) return null;
       logger.warn(
         { orderId, key, mappedColumn: DEAL_COL[key], foundColumn: found.id },

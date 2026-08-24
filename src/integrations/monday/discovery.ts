@@ -179,15 +179,24 @@ function toItem(item: {
 /**
  * The text of the first column whose TITLE matches, ignoring case and spacing.
  * Used as the repair path when a mapped column id comes back empty.
+ *
+ * `accept` is the guard that makes this safe: a board can hold several columns whose
+ * titles read alike — "GB Freight $" holds a figure, "GB Freight Request" holds Yes —
+ * and matching a title alone would put "Yes" on a vendor's sheet where the freight
+ * total belongs. A caller looking for money says so, and a column that does not carry
+ * money is passed over rather than used.
  */
 export function textByColumnTitle(
   item: MondayItem,
   pattern: RegExp,
+  accept?: (text: string) => boolean,
 ): { id: string; text: string } | null {
   for (const [id, title] of Object.entries(item.titles)) {
     if (!title || !pattern.test(title)) continue;
     const t = (item.text[id] ?? '').trim();
-    if (t) return { id, text: t };
+    if (!t) continue;
+    if (accept && !accept(t)) continue;
+    return { id, text: t };
   }
   return null;
 }
