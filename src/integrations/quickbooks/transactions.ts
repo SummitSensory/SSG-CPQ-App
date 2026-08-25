@@ -470,10 +470,22 @@ export interface PrepareInput {
  */
 export async function prepareTransaction(input: PrepareInput, userId: string) {
   const environment = qboEnvironment() as QboEnvironment;
-  const seq = input.sequence ?? 1;
-  const key = idempotencyKey(environment, input.type, input.proposalVersionId, seq);
+  let seq = input.sequence ?? 1;
+  let key = idempotencyKey(environment, input.type, input.proposalVersionId, seq);
 
-  const existing = await prisma.qboTransaction.findUnique({ where: { idempotencyKey: key } });
+  let existing = await prisma.qboTransaction.findUnique({ where: { idempotencyKey: key } });
+  // A DISCARDED document must not be handed back. The idempotency key exists to stop a
+  // retry creating a second document in QuickBooks; a discarded one was never created
+  // there, and returning it means preparing again silently reopens the abandoned row —
+  // which looks, from the screen, like the button doing nothing at all.
+  //
+  // So walk past the discarded sequences to the first one that is free. The key stays
+  // unique and a genuine retry still returns its own live row.
+  while (existing && existing.status === 'VOIDED') {
+    seq += 1;
+    key = idempotencyKey(environment, input.type, input.proposalVersionId, seq);
+    existing = await prisma.qboTransaction.findUnique({ where: { idempotencyKey: key } });
+  }
   if (existing) return existing;
 
   const totals = await loadAcceptedTotals(input.proposalVersionId);

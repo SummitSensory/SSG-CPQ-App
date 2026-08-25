@@ -13315,13 +13315,19 @@
     txns = txns || [];
     function priorOf(type) { return txns.filter(function (t) { return t.type === type; }); }
     function createdOf(type) { return priorOf(type).filter(function (t) { return t.status === 'CREATED'; }); }
+    // A discarded document is neither waiting nor created. Counted as waiting, the
+    // dialog says one is already prepared and preparing "reopens" a row that no longer
+    // exists — the button then appears to do nothing.
+    function waitingOf(type) {
+      return priorOf(type).filter(function (t) { return t.status !== 'CREATED' && t.status !== 'VOIDED'; });
+    }
     function nextSeq(type) {
       return priorOf(type).reduce(function (n, t) { return Math.max(n, qboSeqOf(t)); }, 0) + 1;
     }
     /** The panel under the type picker: what already exists, and the copy opt-in. */
     function noteHtml(type) {
       var made = createdOf(type);
-      var pending = priorOf(type).filter(function (t) { return t.status !== 'CREATED'; });
+      var pending = waitingOf(type);
       if (!made.length) {
         return pending.length
           ? '<div class="muted" style="font-size:12.5px;line-height:1.55;">A ' + esc(qboTypeLabel(type).toLowerCase()) + ' is already prepared and waiting to be created. Preparing again reopens that one rather than starting a second.</div>'
