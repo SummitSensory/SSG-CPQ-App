@@ -371,7 +371,8 @@ export function registerSkuRoutes(app: FastifyInstance): void {
         if (u && !/^https?:\/\//i.test(u))
           issues.push({
             row: i + 1,
-            message: `${d.part}: productUrl must start with http:// or https://`,
+            part: d.part.trim(),
+            message: 'productUrl must start with http:// or https://',
           });
         else {
           data.productUrl = u || null;
