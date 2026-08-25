@@ -579,7 +579,7 @@ export async function discardTransaction(txnId: string, userId: string, reason: 
       type: txn.type,
       environment: txn.environment,
       fromStatus: txn.status,
-      totalMinor: txn.totalMinor,
+      totalMinor: txn.qboTotalMinor,
       reason: why,
     },
   });
