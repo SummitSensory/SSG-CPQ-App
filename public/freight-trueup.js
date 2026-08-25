@@ -2021,9 +2021,29 @@
         if (e.status === 'STAGED') staged.push({ c: c, e: e });
       });
     });
-    var total = staged.reduce(function (a, x) {
-      return a + x.e.amountMinor;
-    }, 0);
+    /**
+     * What the proposal total becomes, worked out the way the server works it out.
+     *
+     * This used to be `current total + everything staged`, which is only right when
+     * every staged amount is an instalment. An amount that states the bucket's whole
+     * figure REPLACES what that bucket carries, so the preview promised a total the
+     * apply would never produce — and on a signed proposal that is the number somebody
+     * makes a decision on.
+     */
+    var total = 0;
+    var replaced = {};
+    staged.forEach(function (x) {
+      var absolute = x.e.absolute || x.e.source === 'MONDAY';
+      if (x.e.scope === 'JOB' && absolute) {
+        // The bucket's existing amount comes off once, however many absolute entries
+        // it has; the entries themselves then sum on top of each other.
+        if (!replaced[x.c.bucket]) {
+          replaced[x.c.bucket] = true;
+          total -= x.c.onProposalMinor || 0;
+        }
+      }
+      total += x.e.amountMinor;
+    });
 
     H.openModal(
       'Apply freight to ' + s.number,
