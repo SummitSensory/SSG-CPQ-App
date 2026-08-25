@@ -1188,10 +1188,56 @@
    * frame part genuinely ships on its own.
    */
   function itemPickerHtml(bucket, d) {
-    var all = st.state.lines || [];
-    if (!all.length) {
+    var everything = st.state.lines || [];
+    if (!everything.length) {
       return '<div class="muted" style="font-size:12.5px;">This proposal has no product items, so freight can only be entered for the whole job.</div>';
     }
+
+    /**
+     * Lines whose shipping is already covered by a board-fed bucket are kept out.
+     *
+     * Goldberg's freight is the Steel figure on the deal board; Resilite's is the Mats
+     * figure. Offering their parts here invites the same shipment being paid for twice
+     * — once from the board, once by hand — and nothing downstream would catch it.
+     * Shown anyway if somebody deliberately asks, because a genuine exception exists:
+     * a single accessory from one of those vendors travelling with another shipment.
+     */
+    var owned = everything.filter(function (l) {
+      return l.ownedByBucket;
+    });
+    var all = d.showOwned
+      ? everything
+      : everything.filter(function (l) {
+          return !l.ownedByBucket;
+        });
+    if (!all.length) all = everything;
+
+    var ownedNote =
+      owned.length && !d.showOwned
+        ? '<div style="font-size:11.5px;line-height:1.5;color:' +
+          MUTED +
+          ';padding:8px 12px;border-top:1px solid ' +
+          LINE +
+          ';">' +
+          owned.length +
+          ' item' +
+          (owned.length === 1 ? '' : 's') +
+          ' from ' +
+          Object.keys(
+            owned.reduce(function (m, l) {
+              m[l.vendor || '\u2014'] = 1;
+              return m;
+            }, {}),
+          ).join(', ') +
+          ' ' +
+          (owned.length === 1 ? 'is' : 'are') +
+          ' not listed \u2014 their freight comes from the deal board. ' +
+          '<button type="button" class="ftuShowOwned" data-bucket="' +
+          bucket +
+          '" style="' +
+          BTN_LINK +
+          'font-size:11.5px;">Show them anyway</button></div>'
+        : '';
 
     var vendors = vendorFacets(all);
     if (!d.vendors) d.vendors = defaultVendors(vendors);
@@ -1234,6 +1280,7 @@
       '</span>' +
       '</div>' +
       vendorFilterHtml(bucket, d, vendors) +
+      ownedNote +
       '<div style="max-height:230px;overflow:auto;">' +
       (lines.length
         ? lines
@@ -1644,6 +1691,16 @@
         all.forEach(function (l) {
           if (d.vendors[vendorKey(l)]) d.refs[l.ref] = true;
         });
+        render();
+      });
+    });
+    each('.ftuShowOwned', function (b) {
+      b.addEventListener('click', function () {
+        var d = draftOf(b);
+        d.showOwned = true;
+        // The vendor facets are rebuilt from a longer list, so the previous selection
+        // no longer describes what is on screen.
+        d.vendors = null;
         render();
       });
     });

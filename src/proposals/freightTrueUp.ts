@@ -165,6 +165,8 @@ export interface FreightLine {
   currentMinor: number;
   /** The vendor quotes freight separately, so this line is expected to carry some. */
   freightQuoted: boolean;
+  /** 'STEEL' | 'MATS' when a board-fed bucket already covers this line's shipping. */
+  ownedByBucket?: 'STEEL' | 'MATS' | null;
 }
 
 export interface LineContext {
@@ -174,6 +176,14 @@ export interface LineContext {
    * to carry freight — not to hide the others.
    */
   freightQuotedSkus?: Set<string>;
+  /**
+   * Vendors whose freight arrives through a board-fed bucket, by vendor name.
+   *
+   * A line belonging to one of these is not selectable in a hand-entered bucket: its
+   * shipping is already coming from the deal board, and picking it here would pay for
+   * the same shipment twice.
+   */
+  bucketByVendor?: Map<string, 'STEEL' | 'MATS'>;
   /** Part number → vendor name, so a row can say whose freight it is. */
   vendorBySku?: Map<string, string>;
 }
@@ -187,15 +197,18 @@ export function freightLines(items: unknown, ctx: LineContext = {}): FreightLine
     const key = sku.toUpperCase();
     const qty = n(l.quantity);
     const unit = n((l as RawItem & { unitPriceMinor?: unknown }).unitPriceMinor);
+    const vendorName = (sku && ctx.vendorBySku?.get(key)) || null;
     out.push({
       ref: s((l as RawItem & { ref?: string }).ref) || `line-${i}`,
       sku,
       name: s(l.name) || sku || `Line ${i + 1}`,
       quantity: qty,
-      vendor: (sku && ctx.vendorBySku?.get(key)) || null,
+      vendor: vendorName,
       extendedMinor: Math.max(0, Math.round(unit * (qty || 1))),
       currentMinor: n(l.tpFreightMinor),
       freightQuoted: !!sku && !!ctx.freightQuotedSkus?.has(key),
+      // Which bucket already owns this line's freight, if any.
+      ownedByBucket: (vendorName && ctx.bucketByVendor?.get(vendorName)) || null,
     });
   });
   return out;

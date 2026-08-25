@@ -74,25 +74,61 @@ const LIVE: Array<FreightTrueUp['status']> = ['OPEN', 'STAGED'];
  * ones are the ones that will be chased.
  */
 async function lineContext(): Promise<LineContext> {
-  const [vendors, skus] = await Promise.all([
+  const [vendors, skus, sourcing, boms] = await Promise.all([
     prisma.manufacturer.findMany({
-      where: { OR: [{ freightTbd: true }, { rfqEnabled: true }] },
-      select: { name: true },
+      select: { name: true, freightTbd: true, rfqEnabled: true, bomFreightSource: true },
     }),
     prisma.sku.findMany({ select: { part: true, manufacturer: true } }),
+    // A part's maker is recorded in TWO places, and only one of them was being read.
+    // Sku.manufacturer holds a name typed against the part; ProductSourcing holds a
+    // real relation from the catalog product to a Manufacturer, and is what the
+    // catalog screens write. A part sourced that way was reported as having no vendor
+    // on record — which is not what the catalog says, and made the vendor filters on
+    // this screen useless for most of a proposal.
+    prisma.productSourcing.findMany({
+      where: { isPrimary: true },
+      select: { product: { select: { sku: true } }, manufacturer: { select: { name: true } } },
+    }),
+    // The BOM's own vendor mapping, for parts whose maker is recorded there.
+    prisma.manufacturerPart.findMany({
+      select: { ourPart: true, manufacturer: { select: { name: true } } },
+    }),
   ]);
-  const quoting = new Set(vendors.map((v) => v.name));
+  const quoting = new Set(vendors.filter((v) => v.freightTbd || v.rfqEnabled).map((v) => v.name));
+  /**
+   * Vendors whose freight is already accounted for by a board-fed bucket.
+   *
+   * Goldberg's shipping is the Steel figure on the deal board and Resilite's is the
+   * Mats figure. Allowing their parts to be picked in a hand-entered bucket invites
+   * the same shipment being paid for twice — once from the board, once by hand — and
+   * nothing downstream would catch it.
+   */
+  const bucketByVendor = new Map<string, 'STEEL' | 'MATS'>();
+  for (const v of vendors) {
+    if (v.bomFreightSource === 'STRUCTURE') bucketByVendor.set(v.name, 'STEEL');
+    else if (v.bomFreightSource === 'MATS') bucketByVendor.set(v.name, 'MATS');
+  }
   const vendorBySku = new Map<string, string>();
   const freightQuotedSkus = new Set<string>();
-  for (const s of skus) {
-    const key = s.part.trim().toUpperCase();
-    // Sku.manufacturer is nullable: a part can exist before anybody has said who
-    // makes it. Such a line still shows in the picker, just without a vendor name.
-    if (!s.manufacturer) continue;
-    vendorBySku.set(key, s.manufacturer);
-    if (quoting.has(s.manufacturer)) freightQuotedSkus.add(key);
-  }
-  return { freightQuotedSkus, vendorBySku };
+
+  /** First writer wins, so the order below is the order of authority. */
+  const put = (part: string | null | undefined, vendor: string | null | undefined) => {
+    const key = String(part ?? '')
+      .trim()
+      .toUpperCase();
+    const name = String(vendor ?? '').trim();
+    if (!key || !name || vendorBySku.has(key)) return;
+    vendorBySku.set(key, name);
+    if (quoting.has(name)) freightQuotedSkus.add(key);
+  };
+
+  // Sku.manufacturer first: it is the most specific, set on the part itself.
+  for (const row of skus) put(row.part, row.manufacturer);
+  // Then the catalog's sourcing relation, then the BOM's part mapping.
+  for (const row of sourcing) put(row.product?.sku, row.manufacturer?.name);
+  for (const row of boms) put(row.ourPart, row.manufacturer?.name);
+
+  return { freightQuotedSkus, vendorBySku, bucketByVendor };
 }
 
 async function loadVersion(versionId: string) {
