@@ -908,6 +908,10 @@
     if (isBoard) {
       var figure = bucket === 'STEEL' ? board.steelMinor : board.matsMinor;
       var hasFigure = figure != null && figure !== undefined;
+      // Whether this bucket already carries an amount, from any source.
+      var hasEntries = (c.entries || []).some(function (e) {
+        return e.status !== 'VOID';
+      });
       var onBoard =
         (board.updated || []).filter(function (u) {
           return u.bucket === bucket;
@@ -918,6 +922,10 @@
         ';">' +
         '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">' +
         '<div style="font-size:13px;">' +
+        // What this line reports is the BOARD, not the bucket. Printed as a bare "the
+        // board has no figure for this yet" directly beneath an entered amount, it read
+        // as a contradiction — the screen appearing to deny what it had just shown. It
+        // now says which of the two is being described.
         (onBoard
           ? 'The board says <b style="font-variant-numeric:tabular-nums;">' +
             money(figure) +
@@ -926,7 +934,9 @@
             ? 'The board says <b style="font-variant-numeric:tabular-nums;">' +
               money(figure) +
               '</b>.'
-            : 'The board has no figure for this yet.') +
+            : hasEntries
+              ? 'Entered by hand \u2014 the deal board has no figure of its own for this.'
+              : 'The board has no figure for this yet.') +
         '</div>' +
         '<button type="button" class="ftuRefresh" style="' +
         BTN_PLAIN +
