@@ -283,8 +283,24 @@ export function registerSkuRoutes(app: FastifyInstance): void {
       .safeParse(req.body);
     if (!body.success) throw new ValidationError(body.error.message);
 
-    const issues: { row: number; message: string }[] = [];
-    type Row = { part: string; data: Record<string, unknown>; columns: string[] };
+    const issues: { row: number; part: string; message: string }[] = [];
+
+    /**
+     * What happened to each row, so the import can be checked afterwards.
+     *
+     * Counts alone answer "did it work" and not "did MY part go in", which is the
+     * question actually asked when a price looks wrong the week after. Every row that
+     * reaches the write loop lands here with its outcome, including the ones that
+     * failed — a row that throws no longer takes the rest of the file down with it.
+     */
+    const results: {
+      part: string;
+      row: number;
+      outcome: 'created' | 'updated' | 'unchanged' | 'failed';
+      columns: string[];
+      message?: string;
+    }[] = [];
+    type Row = { part: string; data: Record<string, unknown>; columns: string[]; row: number };
     const clean: Row[] = [];
     const has = (raw: Record<string, unknown>, ...keys: string[]) =>
       keys.some((k) => Object.prototype.hasOwnProperty.call(raw, k) && raw[k] !== undefined);
@@ -292,7 +308,14 @@ export function registerSkuRoutes(app: FastifyInstance): void {
     body.data.rows.forEach((raw, i) => {
       const p = ImportRow.safeParse(raw);
       if (!p.success) {
-        issues.push({ row: i + 1, message: p.error.issues[0]?.message || 'invalid row' });
+        // Keep whatever part number the row carried, even though the row is unusable:
+        // "row 47 failed" sends someone counting lines in Excel, "6820H-LP failed"
+        // does not.
+        issues.push({
+          row: i + 1,
+          part: typeof raw.part === 'string' ? raw.part.trim() : '',
+          message: p.error.issues[0]?.message || 'invalid row',
+        });
         return;
       }
       const d = p.data;
@@ -364,7 +387,7 @@ export function registerSkuRoutes(app: FastifyInstance): void {
             : Math.max(0, Math.round(toNum(d.defaultQty)));
         columns.push('defaultQty');
       }
-      clean.push({ part: d.part.trim(), data, columns });
+      clean.push({ part: d.part.trim(), data, columns, row: i + 1 });
     });
 
     const parts = clean.map((c) => c.part);
@@ -395,48 +418,80 @@ export function registerSkuRoutes(app: FastifyInstance): void {
     // Every part the file re-sourced, so the importer can say which live orders moved.
     const reassigned: NonNullable<Awaited<ReturnType<typeof reassignSkuVendor>>>[] = [];
     for (const c of clean) {
-      if (known.has(c.part)) {
-        if (Object.keys(c.data).length) {
-          const before = await prisma.sku.findUnique({
-            where: { part: c.part },
-            select: { manufacturer: true },
-          });
-          await prisma.sku.update({ where: { part: c.part }, data: c.data });
-          if (
-            c.data.manufacturer !== undefined &&
-            ((c.data.manufacturer as string | null) ?? '') !== (before?.manufacturer ?? '')
-          ) {
-            const r = await reassignSkuVendor(
-              c.part,
-              c.data.manufacturer as string | null,
-              req.user!.sub,
-            );
-            if (r) reassigned.push(r);
+      // Each row stands on its own. A single part that violates a constraint used to
+      // throw out of the loop, leaving the file half applied and the response an error
+      // with no account of what had already been written.
+      try {
+        if (known.has(c.part)) {
+          if (Object.keys(c.data).length) {
+            const before = await prisma.sku.findUnique({
+              where: { part: c.part },
+              select: { manufacturer: true },
+            });
+            await prisma.sku.update({ where: { part: c.part }, data: c.data });
+            if (
+              c.data.manufacturer !== undefined &&
+              ((c.data.manufacturer as string | null) ?? '') !== (before?.manufacturer ?? '')
+            ) {
+              const r = await reassignSkuVendor(
+                c.part,
+                c.data.manufacturer as string | null,
+                req.user!.sub,
+              );
+              if (r) reassigned.push(r);
+            }
+            results.push({ part: c.part, row: c.row, outcome: 'updated', columns: c.columns });
+          } else {
+            // The part matched but the file carried no column for it: nothing to write,
+            // and saying so is more honest than counting it as an update.
+            results.push({
+              part: c.part,
+              row: c.row,
+              outcome: 'unchanged',
+              columns: [],
+              message: 'The file had no columns for this part beyond the part number.',
+            });
           }
+          updated++;
+        } else {
+          // A new part still needs the non-null basics, whether the file gave them or not.
+          await prisma.sku.create({
+            data: {
+              part: c.part,
+              description: (c.data.description as string) ?? c.part,
+              category: (c.data.category as string) ?? 'OTHER',
+              unitPriceMinor: (c.data.unitPriceMinor as number) ?? 0,
+              unitCostMinor: (c.data.unitCostMinor as number) ?? 0,
+              weightLbs: (c.data.weightLbs as number) ?? 0,
+              manufacturer: (c.data.manufacturer as string | null) ?? null,
+              proposalGroup: (c.data.proposalGroup as string | null) ?? null,
+              overrideAllowed: (c.data.overrideAllowed as boolean) ?? false,
+              defaultQty: (c.data.defaultQty as number | null) ?? null,
+              productUrl: (c.data.productUrl as string | null) ?? null,
+              requiresPowderColor: (c.data.requiresPowderColor as boolean) ?? false,
+              packagingBag: (c.data.packagingBag as string | null) ?? null,
+            },
+          });
+          created++;
+          results.push({ part: c.part, row: c.row, outcome: 'created', columns: c.columns });
         }
-        updated++;
-      } else {
-        // A new part still needs the non-null basics, whether the file gave them or not.
-        await prisma.sku.create({
-          data: {
-            part: c.part,
-            description: (c.data.description as string) ?? c.part,
-            category: (c.data.category as string) ?? 'OTHER',
-            unitPriceMinor: (c.data.unitPriceMinor as number) ?? 0,
-            unitCostMinor: (c.data.unitCostMinor as number) ?? 0,
-            weightLbs: (c.data.weightLbs as number) ?? 0,
-            manufacturer: (c.data.manufacturer as string | null) ?? null,
-            proposalGroup: (c.data.proposalGroup as string | null) ?? null,
-            overrideAllowed: (c.data.overrideAllowed as boolean) ?? false,
-            defaultQty: (c.data.defaultQty as number | null) ?? null,
-            productUrl: (c.data.productUrl as string | null) ?? null,
-            requiresPowderColor: (c.data.requiresPowderColor as boolean) ?? false,
-            packagingBag: (c.data.packagingBag as string | null) ?? null,
-          },
+      } catch (err) {
+        // Constraint violations, a bad enum, a value too long. Reported against the
+        // part so it can be fixed and re-uploaded on its own.
+        results.push({
+          part: c.part,
+          row: c.row,
+          outcome: 'failed',
+          columns: c.columns,
+          message: err instanceof Error ? err.message.split('\n').pop()?.trim() : String(err),
         });
-        created++;
       }
     }
+    const failed = results.filter((r) => r.outcome === 'failed').length;
+    // The counts have to describe what actually happened, not what was attempted.
+    updated = results.filter((r) => r.outcome === 'updated' || r.outcome === 'unchanged').length;
+    created = results.filter((r) => r.outcome === 'created').length;
+
     let deactivated = 0;
     if (body.data.missingAction === 'deactivate' && absent.length) {
       const r = await prisma.sku.updateMany({
@@ -452,12 +507,21 @@ export function registerSkuRoutes(app: FastifyInstance): void {
         created,
         updated,
         deactivated,
+        failed,
         columns: columnsSeen,
         ...(reassigned.length ? { vendorReassign: reassigned } : {}),
       },
     });
-    return reply
-      .status(201)
-      .send({ valid: issues.length === 0, created, updated, deactivated, issues, plan });
+    return reply.status(201).send({
+      valid: issues.length === 0 && failed === 0,
+      created,
+      updated,
+      deactivated,
+      failed,
+      issues,
+      // Row by row, so the person who ran it can see their own part in the list.
+      results,
+      plan,
+    });
   });
 }

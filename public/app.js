@@ -2315,7 +2315,7 @@
           document.getElementById('siReview').innerHTML =
             '<div style="background:#fbe9e6;border:1px solid #f0cdc7;border-radius:10px;padding:11px 13px;font-size:12.5px;color:#9c3327;max-height:180px;overflow:auto;">' +
             '<b>' + d.issues.length + ' row(s) could not be read:</b><ul style="margin:6px 0 0;padding-left:18px;line-height:1.5;">' +
-            d.issues.slice(0, 30).map(function (i) { return '<li>Row ' + i.row + ': ' + esc(i.message) + '</li>'; }).join('') + '</ul></div>';
+            d.issues.slice(0, 30).map(function (i) { return '<li>' + esc(i.part || 'Row ' + i.row) + ': ' + esc(i.message) + '</li>'; }).join('') + '</ul></div>';
           skuImportConfirmed = false;
           return showErr('Fix those rows and try again.');
         }
@@ -2343,9 +2343,8 @@
         }
         skuImportConfirmed = false;
         close();
-        alert('Import complete: ' + (d.created || 0) + ' added, ' + (d.updated || 0) + ' updated' +
-          (d.deactivated ? ', ' + d.deactivated + ' deactivated' : '') + '.');
         refreshCatalogList(user);
+        showImportReceipt(d);
       }, 'Import');
 
     // Bound after the modal is in the document. Downloading the sheet must not close
@@ -2355,6 +2354,83 @@
       if (b) b.addEventListener('click', function (ev) { ev.preventDefault(); exportSkuPrices(); });
     }, 0);
   }
+  /**
+   * What the import actually did, part by part.
+   *
+   * The counts answer "did it work". They do not answer "did MY part go in", which is
+   * the question asked a week later when a price looks wrong — so every row is listed
+   * with its outcome, failures first, and the whole thing downloads as a CSV that can
+   * be kept beside the file that was uploaded.
+   */
+  function showImportReceipt(d) {
+    var results = d.results || [];
+    var failed = results.filter(function (r) { return r.outcome === 'failed'; });
+    var unreadable = d.issues || [];
+    var created = results.filter(function (r) { return r.outcome === 'created'; });
+    var updated = results.filter(function (r) { return r.outcome === 'updated'; });
+    var unchanged = results.filter(function (r) { return r.outcome === 'unchanged'; });
+
+    var tile = function (n, label, color) {
+      return '<div style="flex:1;min-width:96px;padding:10px 12px;border:1px solid #e7e8e3;border-radius:9px;background:#fff;">' +
+        '<div style="font-size:21px;font-weight:650;color:' + color + ';font-variant-numeric:tabular-nums;">' + n + '</div>' +
+        '<div class="muted" style="font-size:11.5px;margin-top:1px;">' + label + '</div></div>';
+    };
+    var list = function (title, rows, color, showWhy) {
+      if (!rows.length) return '';
+      return '<div style="margin-top:12px;">' +
+        '<div style="font-size:12px;font-weight:650;color:' + color + ';margin-bottom:5px;">' + title + '</div>' +
+        '<div style="max-height:190px;overflow:auto;border:1px solid #e7e8e3;border-radius:8px;">' +
+        rows.map(function (r, i) {
+          return '<div style="padding:6px 10px;font-size:12px;line-height:1.5;' +
+            (i ? 'border-top:1px solid #f0f1ed;' : '') + '">' +
+            '<span style="font-family:ui-monospace,monospace;">' + esc(r.part || ('Row ' + r.row)) + '</span>' +
+            (showWhy && r.message ? '<div style="color:#9c3327;font-size:11.5px;">' + esc(r.message) + '</div>' : '') +
+            (!showWhy && r.columns && r.columns.length
+              ? '<span class="muted" style="font-size:11px;"> \u00b7 ' + esc(r.columns.join(', ')) + '</span>' : '') +
+          '</div>';
+        }).join('') + '</div></div>';
+    };
+
+    var allClear = !failed.length && !unreadable.length;
+    openModal('Import ' + (allClear ? 'complete' : 'finished with problems'),
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px;">' +
+        tile(created.length, 'added', '#2f7d5d') +
+        tile(updated.length, 'updated', '#20241f') +
+        tile(failed.length + unreadable.length, 'not imported', (failed.length + unreadable.length) ? '#a2402f' : '#8a8f85') +
+        (d.deactivated ? tile(d.deactivated, 'deactivated', '#8a6d1f') : '') +
+      '</div>' +
+      (allClear
+        ? '<div class="muted" style="font-size:12.5px;margin-top:10px;line-height:1.6;">Every row in the file was applied. Only the columns your file carried were written; everything else on these parts is untouched.</div>'
+        : '<div style="font-size:12.5px;margin-top:10px;line-height:1.6;background:#fbe9e6;border:1px solid #f0cdc7;border-radius:9px;padding:10px 12px;color:#7d2b20;">' +
+          '<b>' + (failed.length + unreadable.length) + ' row(s) did not import.</b> Everything else did \u2014 the file was not rolled back. Fix these rows and upload them on their own.</div>') +
+      list('Not imported', unreadable.concat(failed), '#a2402f', true) +
+      list('Added', created, '#2f7d5d') +
+      list('Updated', updated, '#20241f') +
+      list('Matched, but the file carried nothing to change', unchanged, '#8a6d1f') +
+      '<div style="display:flex;gap:8px;align-items:center;margin-top:14px;">' +
+        '<button class="link-btn" id="siReceiptCsv" style="width:auto;padding:8px 13px;">Download this report</button>' +
+        '<span class="muted" style="font-size:11.5px;">Keep it beside the file you uploaded.</span>' +
+      '</div>',
+      null, 'Close', { maxWidth: '620px' });
+
+    setTimeout(function () {
+      var b = document.getElementById('siReceiptCsv');
+      if (!b) return;
+      b.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        var rows = [['part', 'row', 'outcome', 'columns written', 'message']];
+        unreadable.forEach(function (u) {
+          rows.push([u.part || '', u.row, 'not imported', '', u.message]);
+        });
+        results.forEach(function (r) {
+          rows.push([r.part, r.row, r.outcome === 'failed' ? 'not imported' : r.outcome,
+            (r.columns || []).join(' '), r.message || '']);
+        });
+        downloadCsv('import-report-' + todayISO() + '.csv', rows);
+      });
+    }, 0);
+  }
+
   function parseCsv(text) {
     var lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n').filter(function (l) { return l.trim() !== ''; });
     if (lines.length < 2) return [];
