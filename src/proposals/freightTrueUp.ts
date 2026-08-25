@@ -338,6 +338,19 @@ export interface FreightEntryInput {
   amountMinor: number;
   /** For a LINES entry: the items it covers, with the split already computed. */
   allocations?: Allocation[];
+  /**
+   * Whether this amount is the bucket's WHOLE figure or another instalment of it.
+   *
+   * Job-level amounts were always added to what the proposal already carried, on the
+   * reasoning that freight arrives in instalments and two amounts in one bucket are two
+   * shipments. That is right for a second shipment and wrong for the common case: the
+   * deal board states a total, the proposal already carries that total, and applying it
+   * again doubled the figure on a signed document.
+   *
+   * A board-fed amount is the board's current total, so it REPLACES. A hand-entered one
+   * is an instalment unless the operator says otherwise, so it adds.
+   */
+  absolute?: boolean;
 }
 
 export interface BucketChange {
@@ -411,9 +424,11 @@ export function applyFreightEntries(
   }
   const metaData = (metaSection?.data ?? {}) as Record<string, unknown>;
 
-  // Job-level buckets are SUMMED before they are written: two amounts in the same
-  // bucket are two shipments, and the meta field holds one figure.
-  const jobTotals = new Map<FreightBucket, number>();
+  // Job-level buckets collapse to one figure per bucket before they are written.
+  // `added` accumulates instalments; `absolute` is a stated total that replaces
+  // whatever the proposal already carried. A batch containing both takes the stated
+  // total as the base and adds the instalments to it.
+  const jobTotals = new Map<FreightBucket, { added: number; absolute: number | null }>();
 
   for (const entry of entries) {
     const bucket = normalizeBucket(entry.bucket);
@@ -452,16 +467,18 @@ export function applyFreightEntries(
     }
 
     if (!spec.metaField) throw new ValidationError(`${spec.label} has no job-level field`);
-    jobTotals.set(
-      bucket,
-      (jobTotals.get(bucket) ?? 0) + assertMoney(entry.amountMinor, spec.label),
-    );
+    const amount = assertMoney(entry.amountMinor, spec.label);
+    const cur = jobTotals.get(bucket) ?? { added: 0, absolute: null };
+    if (entry.absolute) cur.absolute = (cur.absolute ?? 0) + amount;
+    else cur.added += amount;
+    jobTotals.set(bucket, cur);
   }
 
-  for (const [bucket, added] of jobTotals) {
+  for (const [bucket, totals] of jobTotals) {
     const spec = BUCKETS[bucket];
     const field = spec.metaField!;
-    metaData[field] = n(metaData[field]) + added;
+    const base = totals.absolute === null ? n(metaData[field]) : totals.absolute;
+    metaData[field] = base + totals.added;
     // The wording field prints in place of the amount. Left as "TBD" it would keep
     // printing TBD next to a real figure on the customer's document.
     if (spec.tbdField && s(metaData[spec.tbdField]).trim()) metaData[spec.tbdField] = '';

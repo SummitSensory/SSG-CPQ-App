@@ -491,6 +491,11 @@ export async function applyEntries(
     bucket: normalizeBucket(e.bucket)!,
     scope: e.scope as FreightScope,
     amountMinor: e.amountMinor,
+    // A board-read amount is the board's CURRENT TOTAL for that bucket, so it replaces
+    // whatever the proposal carries. Adding it doubled a figure that was already there
+    // — the proposal had been pulled from the same column before it was accepted.
+    // A hand-entered amount stays an instalment: a second shipment is a second amount.
+    absolute: e.source === 'MONDAY',
     allocations: Array.isArray(e.allocations)
       ? (e.allocations as Array<{ ref: string; amountMinor: number }>).map((a) => ({
           ref: String(a.ref),
