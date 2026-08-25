@@ -515,7 +515,10 @@
     <script src="/intro-cover.js?v=1"></script>
     <script src="/belt-shipments.js?v=9"></script>
     <script src="/intro-admin.js?v=2"></script>
-    <script src="/app.js?v=108"></script>
+    <!-- The general release and standard terms that close a proposal. Loaded before
+         app.js so the document builder can see it on the first render. -->
+    <script src="/contract-pages.js?v=3"></script>
+    <script src="/app.js?v=112"></script>
     <!--
       Portal delivery submissions panel (Administration → Integrations).
 

@@ -53,7 +53,17 @@
     // A note written as HTML block tags supplies its own line breaks; adding <br> as
     // well double-spaces it.
     if (/<(p|ul|ol|li)>/i.test(out)) return out;
-    return out.replace(/\n/g, '<br>');
+    // A blank line between paragraphs is a paragraph break, not two line breaks. Turned
+    // into <br><br> it renders as a whole empty line at the body's line-height, which
+    // on a note of four paragraphs pushes the last one most of an inch down the page.
+    // Separated by a normal paragraph gap instead.
+    return (
+      '<span style="display:block;">' +
+      out
+        .replace(/\n{2,}/g, '</span><span style="display:block;margin-top:.6em;">')
+        .replace(/\n/g, '<br>') +
+      '</span>'
+    );
   }
   /* --- Rich-text notes ---------------------------------------------------
      Notes are stored as the same lightweight markup the printer already reads
@@ -651,6 +661,8 @@
       title: '', number: '', version: 1,
       meta: {
         contactName: '', shipTo: '', billTo: '', billSameAsShip: true, showTitle: true,
+        // Both contract documents unless someone says otherwise.
+        includeRelease: true, includeTerms: true,
         projectId: '', showProjectId: false, showDeposit: true,
         // Adventure Series front matter: the photos attached to this proposal, and
         // whether the document is the introduction, the proposal, or both. Only has
@@ -7028,8 +7040,42 @@
         '</div>' +
       '</div>' +
       footerNotesCard() +
+      contractPagesCard() +
       (isMock() ? '' : '<div id="bMarginRail" style="' + marginRailStyle() + '">' + marginCard(t) + '<div id="bCbRail"></div><div id="bRfqRail"></div><div id="bDatesRail"></div><div id="bNotesRail"></div></div>');
     wireBuilder();
+  }
+
+  /**
+   * Which contract documents close this proposal.
+   *
+   * Both by default, in the order they are listed: the release, then the terms. The
+   * order is fixed rather than settable — the release refers to the parties by the
+   * names the terms then use, and a proposal that presented them the other way round
+   * would be asking for a signature before saying what is being signed.
+   *
+   * Unchecking is per proposal and per version, so a job quoted under a customer's own
+   * master agreement can go out without ours without changing anything for anyone else.
+   */
+  function contractPagesCard() {
+    if (window.SSGContractPages && !window.SSGContractPages.applies({ meta: pb.meta })) return '';
+    var m = pb.meta;
+    var row = function (id, on, label, note) {
+      return '<label style="display:flex;gap:9px;align-items:flex-start;font-size:13px;line-height:1.5;cursor:pointer;padding:7px 0;">' +
+        '<input type="checkbox" id="' + id + '"' + (on ? ' checked' : '') + ' style="margin-top:2px;">' +
+        '<span><b style="font-weight:600;">' + label + '</b>' +
+        '<span class="muted" style="display:block;font-size:11.5px;margin-top:1px;">' + note + '</span></span></label>';
+    };
+    return '<div class="card" style="margin-top:16px;">' +
+      '<div class="section-title" style="margin:0 0 4px;">Contract documents</div>' +
+      '<div class="muted" style="font-size:12px;margin-bottom:6px;line-height:1.5;">Printed after the acceptance page, in this order.</div>' +
+      row('mIncRelease', m.includeRelease !== false, 'General release of liability',
+        (String(m.billTo || m.shipTo || '').trim()
+          ? 'The customer\u2019s company and billing address fill in from this proposal. Signed by ' +
+            (m.contactName ? esc(m.contactName) : 'the contact named above') + ' and by you.'
+          : '<span style="color:#9c3327;font-weight:600;">No billing address on this proposal yet</span> \u2014 the release would print with the address blank. Fill in Bill to above before sending.')) +
+      row('mIncTerms', m.includeTerms !== false, 'Standard terms &amp; conditions of sale',
+        'Thirteen clauses, unchanged.') +
+    '</div>';
   }
 
   /** Notes that print below the signature lines on the customer proposal. */
@@ -8364,6 +8410,10 @@
     var mp = document.getElementById('mProj'); if (mp) mp.addEventListener('input', function () { pb.meta.projectId = mp.value; });
     var mpd = document.getElementById('mPropDate'); if (mpd) mpd.addEventListener('input', function () { pb.meta.proposalDate = mpd.value; pb.meta.expiration = addDays(mpd.value, 7); var me2 = document.getElementById('mExp'); if (me2) me2.value = pb.meta.expiration; });
     var msp = document.getElementById('mShowProj'); if (msp) msp.addEventListener('change', function () { pb.meta.showProjectId = msp.checked; });
+    var mir = document.getElementById('mIncRelease');
+    if (mir) mir.addEventListener('change', function () { pb.meta.includeRelease = mir.checked; markBuilderDirty(); });
+    var mit = document.getElementById('mIncTerms');
+    if (mit) mit.addEventListener('change', function () { pb.meta.includeTerms = mit.checked; markBuilderDirty(); });
     if (window.SSGFrontMatter) {
       window.SSGFrontMatter.bindPanel(document.getElementById('fmPanel'), pb.meta, function () {
         markBuilderDirty();
@@ -9488,6 +9538,11 @@
           '</div>' +
         '</div>' + footerNotesHtml + cbClauses(d) +
         '</div>' +
+        // The general release and the standard terms, after the acceptance page. Every
+        // template carries them except the cover-only one — see contract-pages.js.
+        (window.SSGContractPages && window.SSGContractPages.applies(d)
+          ? window.SSGContractPages.html(d, { esc: esc, user: u })
+          : '') +
       '</div>';
     return html;
   }
