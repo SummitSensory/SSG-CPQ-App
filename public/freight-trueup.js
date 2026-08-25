@@ -1013,6 +1013,21 @@
                 ? chip('on the proposal', AMBER, '#fdf6e6')
                 : chip('entered', MUTED, '#f2f3ef');
           var evidence = [];
+          // What applying this entry will DO to the bucket. A staged amount beside a
+          // figure already on the proposal reads as "add another one of these", which
+          // is what it used to mean and no longer does — a board-read amount is the
+          // board's whole figure and replaces what is there. Said outright, because a
+          // reader cannot infer it and guessing wrong doubles a signed total.
+          if (e.status === 'STAGED' && (e.source === 'MONDAY' || e.absolute)) {
+            var onProp = c.onProposalMinor || 0;
+            if (onProp && onProp !== e.amountMinor) {
+              evidence.push('replaces the ' + money(onProp) + ' on the proposal');
+            } else if (!onProp) {
+              evidence.push('sets this bucket to ' + money(e.amountMinor));
+            }
+          } else if (e.status === 'STAGED' && (c.onProposalMinor || 0)) {
+            evidence.push('adds to the ' + money(c.onProposalMinor) + ' already on the proposal');
+          }
           if (e.vendorName) evidence.push(e.vendorName);
           if (e.vendorQuoteRef) evidence.push('quote ' + e.vendorQuoteRef);
           if (e.description) evidence.push(e.description);
