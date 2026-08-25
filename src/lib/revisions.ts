@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 
@@ -98,9 +99,11 @@ export async function recordRevision(input: RevisionInput): Promise<void> {
         label: input.label ?? null,
         action: input.action,
         actorId: input.actorId,
-        before,
-        after,
-        changed: changed as object,
+        // A nullable Json column does not take a bare null: Prisma distinguishes SQL
+        // NULL from the JSON value `null`, and DbNull is how the first one is written.
+        before: before ?? Prisma.DbNull,
+        after: after ?? Prisma.DbNull,
+        changed: changed as Prisma.InputJsonValue,
         note: input.note ?? null,
       },
     });
