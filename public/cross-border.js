@@ -221,9 +221,14 @@
       var fed = r.federalRegistration;
       var on = !!(S.settings && S.settings.enabled);
 
+      var simple = !!(S.settings && S.settings.allowSimpleCanadianCharges);
+
       var checks = [
         {
-          ok: !!fed,
+          // Percent entry satisfies this: the rule engine needs to know what Summit is
+          // registered for before it can decide a tax, but a typed rate needs no such
+          // thing — a person stated it, and the proposal says a person stated it.
+          ok: !!fed || simple,
           label: 'GST/HST registration on file',
           detail: fed
             ? 'Number ' +
@@ -233,7 +238,16 @@
               (fed.registrationNumber
                 ? ''
                 : ' — the number itself is still blank, and it prints on the proposal.')
-            : 'Required. Without it every Canadian proposal reports a tax review and cannot be released. One row with no province covers GST and HST in every province.',
+            : simple
+              ? 'Not on file, and not needed while percent entry is on — the rate is typed on each proposal instead. Add the registration when the number is available: the rule engine cannot work without it, and it prints on the proposal.'
+              : 'Required, unless you turn on percent entry under Settings. Without one of the two, every Canadian proposal reports a tax review and cannot be released. One row with no province covers GST and HST in every province.',
+        },
+        {
+          ok: simple,
+          label: simple ? 'Percent entry is on' : 'Percent entry is off',
+          detail: simple
+            ? 'A proposal can quote Canadian tax, tariff and brokerage from rates typed on it. The proposal states that the rates were entered by Summit and that the Canada Border Services Agency assesses the final amounts.'
+            : 'Turn this on under Settings to quote from typed rates while the registrations and tariff rulings are being obtained. Without it, this feature needs the GST/HST registration above before it will switch on.',
         },
         {
           ok: (r.rateCount || 0) > 0,
@@ -349,6 +363,15 @@
       }
 
       return (
+        row(
+          'Work Canadian charges out from percentages',
+          check(
+            'allowSimpleCanadianCharges',
+            s.allowSimpleCanadianCharges,
+            'Allow a proposal to quote tax, tariff and brokerage from rates typed on it',
+          ),
+          'The interim path while the tax registrations and tariff rulings are being obtained. With it on, this feature can be switched on without a GST/HST registration, and each proposal carries its own rates. The rule engine below is unaffected and still applies to any proposal not using percent entry.',
+        ) +
         row(
           'Importer of record, by default',
           select(
@@ -962,7 +985,13 @@
               })
               .join('') +
             '</div>'
-          : '<div class="muted" style="font-size:13px;margin-top:14px;">No observations fetched yet.</div>') +
+          : '<div class="muted" style="font-size:13px;margin-top:14px;">No observations fetched yet — the Bank is called when a Canadian proposal is priced. Use <b>Fetch the rate now</b> to test the connection before then.</div>') +
+        '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:14px;">' +
+        '<button class="link-btn" data-act="fxRefresh" style="' +
+        BTN +
+        '">Fetch the rate now</button>' +
+        '<span class="muted" style="font-size:12px;">Calls the Bank of Canada and stores what comes back.</span>' +
+        '</div>' +
         '<div class="section-title" style="margin:24px 0 6px;">Enter a manual rate</div>' +
         '<div class="muted" style="font-size:12.5px;margin-bottom:9px;max-width:660px;">Only for a Bank outage. It applies to proposals dated on or after the effective date, and every one of them prints a warning that the rate was set by hand.</div>' +
         '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">' +
@@ -1381,6 +1410,25 @@
       var id = btn.getAttribute('data-id');
       var call = null;
 
+      if (kind === 'fxRefresh') {
+        btn.disabled = true;
+        S.busy = 'Asking the Bank of Canada…';
+        render();
+        var fr = await authed('/cross-border/fx/refresh', { method: 'POST', body: {} });
+        var fout = null;
+        try {
+          fout = await fr.json();
+        } catch (e) {}
+        S.busy = '';
+        if (!fr.ok || !fout || !fout.ok) {
+          flash((fout && fout.message) || 'Could not reach the Bank of Canada.', true);
+          render();
+          return;
+        }
+        flash(fout.message);
+        return load();
+      }
+
       if (kind === 'toggleFeature') {
         var turningOn = !(S.settings && S.settings.enabled);
         if (
@@ -1390,6 +1438,20 @@
           )
         )
           return;
+        // The route refuses to switch on without either a GST/HST registration or
+        // percent entry, and the refusal is the useful part — a button that appears to
+        // do nothing is worse than one that says why it did nothing.
+        if (
+          turningOn &&
+          !(S.readiness && S.readiness.federalRegistration) &&
+          !(S.settings && S.settings.allowSimpleCanadianCharges)
+        ) {
+          flash(
+            'Add the GST/HST registration under Tax registrations, or turn on percent entry under Settings, before switching this on.',
+            true,
+          );
+          return;
+        }
         call = ['/cross-border/settings', { method: 'PATCH', body: { enabled: turningOn } }];
       } else if (kind === 'saveSettings') {
         var body = {};

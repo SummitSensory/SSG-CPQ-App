@@ -16,6 +16,7 @@ import {
 } from '../crossborder/customsEntry.js';
 import { recordRateOverride, deactivateRateOverride } from '../crossborder/rateService.js';
 import { estimateBrokerFee, parseTiers, selectSchedule } from '../crossborder/brokerFees.js';
+import { BankOfCanadaExchangeRateProvider } from '../crossborder/fx.js';
 
 /**
  * Cross-border (Canadian proposal) routes.
@@ -50,7 +51,25 @@ const CustomsPatchSchema = z.object({
   importerOfRecord: z.enum(['CUSTOMER', 'SUMMIT', 'THIRD_PARTY', 'TO_BE_DETERMINED']).optional(),
   includedInSellerTotal: z.boolean().optional(),
   notes: z.string().trim().max(2000).nullable().optional(),
+  /**
+   * Percent entry. The rates arrive as decimal percentages ("13", "9.975") and are
+   * stored as thousandths of a percent, so the arithmetic downstream is integer only —
+   * a float rate is what makes a total fail to reconcile by a cent.
+   */
+  simpleMode: z.boolean().optional(),
+  taxLabel: z.string().trim().max(60).nullable().optional(),
+  taxPercent: z.coerce.number().min(0).max(100).nullable().optional(),
+  tariffPercent: z.coerce.number().min(0).max(100).nullable().optional(),
+  tariffOnFreight: z.boolean().optional(),
+  taxOnDuty: z.boolean().optional(),
 });
+
+/** "9.975" -> 9975. Rounded, because three decimal places is the stored precision. */
+function toMilli(pct: number | null | undefined): number | null | undefined {
+  if (pct === undefined) return undefined;
+  if (pct === null) return null;
+  return Math.round(pct * 1000);
+}
 
 const ReasonSchema = z.object({ reason: z.string().trim().min(5).max(500) });
 
@@ -73,6 +92,14 @@ const RegistrationSchema = z.object({
 });
 
 const SettingsSchema = z.object({
+  /**
+   * Allow a proposal to quote Canadian charges from typed percentages.
+   *
+   * The rule engine is the destination; this is the road there. With it on, a proposal
+   * can carry an honest estimate today, worded as an estimate, instead of waiting on a
+   * registration number and a taxability ruling.
+   */
+  allowSimpleCanadianCharges: z.boolean().optional(),
   enabled: z.boolean().optional(),
   defaultImporterOfRecord: z
     .enum(['CUSTOMER', 'SUMMIT', 'THIRD_PARTY', 'TO_BE_DETERMINED'])
@@ -257,7 +284,17 @@ export function registerCrossBorderRoutes(app: FastifyInstance): void {
    */
   app.patch('/proposals/versions/:versionId/customs', enter, async (req) => {
     const { versionId } = req.params as { versionId: string };
-    return saveCustomsEntry(versionId, CustomsPatchSchema.parse(req.body ?? {}), req.user!.sub);
+    const parsed = CustomsPatchSchema.parse(req.body ?? {});
+    const { taxPercent, tariffPercent, ...rest } = parsed;
+    return saveCustomsEntry(
+      versionId,
+      {
+        ...rest,
+        ...(taxPercent === undefined ? {} : { taxPercentMilli: toMilli(taxPercent) }),
+        ...(tariffPercent === undefined ? {} : { tariffPercentMilli: toMilli(tariffPercent) }),
+      } as Parameters<typeof saveCustomsEntry>[1],
+      req.user!.sub,
+    );
   });
 
   /** Vouch for the figures. Requires a source reference — see customsEntry.ts. */
@@ -318,13 +355,21 @@ export function registerCrossBorderRoutes(app: FastifyInstance): void {
     // Turning the feature on with no GST/HST registration would put every Canadian
     // proposal into tax review the moment it is switched. Better to say so here than
     // to let it be discovered one proposal at a time.
-    if (patch.enabled === true) {
-      const federal = await prisma.canadianTaxRegistration.findFirst({
-        where: effectiveFederalRegistration(),
-      });
-      if (!federal) {
+    // The registration gate applies to the RULE ENGINE, which cannot decide what tax
+    // to charge without knowing what Summit is registered for. It does not apply to
+    // percent entry, where a person states the rate and the document says a person
+    // stated it — so requiring the registration there would block the interim path for
+    // the sake of a rule nothing is going to consult.
+    if (patch.enabled === true && patch.allowSimpleCanadianCharges !== true) {
+      const [federal, current] = await Promise.all([
+        prisma.canadianTaxRegistration.findFirst({ where: effectiveFederalRegistration() }),
+        prisma.crossBorderSetting.findUnique({ where: { id: 'singleton' } }),
+      ]);
+      const simpleAllowed = patch.allowSimpleCanadianCharges ?? current?.allowSimpleCanadianCharges;
+      if (!federal && !simpleAllowed) {
         throw new ValidationError(
-          "Enter Summit's GST/HST registration before enabling Canadian proposals — without it every Canadian proposal reports a tax review and cannot be released.",
+          "Enter Summit's GST/HST registration before enabling Canadian proposals, or turn on percent entry — " +
+            'without one of the two, every Canadian proposal reports a tax review and cannot be released.',
         );
       }
     }
@@ -689,6 +734,59 @@ export function registerCrossBorderRoutes(app: FastifyInstance): void {
       prisma.exchangeRateOverride.findMany({ orderBy: { effectiveDate: 'desc' }, take: 20 }),
     ]);
     return { observations, overrides };
+  });
+
+  /**
+   * Fetch today's rate from the Bank of Canada now, and say what happened.
+   *
+   * Until a Canadian proposal is priced, nothing has ever called the Bank, so the
+   * screen reads "no observations fetched yet" — which is indistinguishable from a
+   * connection that does not work. This makes the difference visible without having to
+   * build a proposal to find out, and the observation it stores is a real one that
+   * later proposals reuse.
+   */
+  app.post('/cross-border/fx/refresh', manage, async () => {
+    const asOf = new Date().toISOString().slice(0, 10);
+    try {
+      const observation = await new BankOfCanadaExchangeRateProvider().observationOnOrBefore(asOf);
+      if (!observation) {
+        return {
+          ok: false,
+          message:
+            'The Bank of Canada answered, but published no USD/CAD observation in the last 14 days. That is unusual enough to be worth checking their site directly.',
+        };
+      }
+      await prisma.exchangeRateObservation.upsert({
+        where: {
+          pair_observationDate: {
+            pair: observation.pair,
+            observationDate: observation.observationDate,
+          },
+        },
+        create: {
+          pair: observation.pair,
+          rate: observation.rate,
+          observationDate: observation.observationDate,
+          source: 'BANK_OF_CANADA',
+          retrievedAt: observation.retrievedAt,
+        },
+        update: { rate: observation.rate, retrievedAt: observation.retrievedAt },
+      });
+      return {
+        ok: true,
+        rate: observation.rate,
+        observationDate: observation.observationDate,
+        retrievedAt: observation.retrievedAt.toISOString(),
+        message: `1 USD = ${observation.rate} CAD, published for ${observation.observationDate}.`,
+      };
+    } catch (err) {
+      // The reason matters: a DNS failure, a blocked egress and a timeout all look the
+      // same from the screen, and only the message tells them apart.
+      return {
+        ok: false,
+        message: `Could not reach the Bank of Canada: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
   });
 
   /** A manual rate. Rate, effective date, reason and actor are all mandatory. */
