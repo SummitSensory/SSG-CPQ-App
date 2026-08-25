@@ -148,6 +148,19 @@ async function lineContext(items?: unknown): Promise<LineContext> {
   return { freightQuotedSkus, vendorBySku, bucketByVendor };
 }
 
+async function loadVersion(versionId: string) {
+  const version = await prisma.proposalVersion.findUnique({
+    where: { id: versionId },
+    include: {
+      proposal: {
+        select: { id: true, number: true, title: true, organizationId: true, archivedAt: true },
+      },
+    },
+  });
+  if (!version) throw new NotFoundError('Proposal version not found');
+  return version;
+}
+
 /** The live true-up folder for a version, created on demand. */
 export async function openTrueUp(versionId: string, actorId: string): Promise<FreightTrueUp> {
   const version = await loadVersion(versionId);
