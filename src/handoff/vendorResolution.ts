@@ -46,12 +46,14 @@ export interface VendorResolution {
 /**
  * Resolve vendors for a set of SKUs.
  *
- * The database lookups are exact on the trimmed value, so a part whose spelling
- * differs from the catalog only in letter case will come back unresolved rather
- * than matched. That is intentional for now: `Sku.part` and `Product.sku` are
- * both unique keys, matching them case-insensitively would need a scan or a
- * per-SKU OR clause, and reporting the part as unresolved makes the mismatch
- * visible instead of guessing which catalog row was meant.
+ * Matching is case-insensitive.
+ *
+ * It was exact on the trimmed value, on the reasoning that a case mismatch is a data
+ * problem worth surfacing. In practice it surfaced as "no supplier is recorded" against
+ * parts whose supplier is plainly recorded — the operator checks the catalog, finds the
+ * manufacturer sitting there, and stops trusting the screen. A part number differing
+ * only in case is the same part in every other respect, and `Sku.part` and
+ * `Product.sku` are unique, so there is no ambiguity to resolve.
  */
 export async function resolveVendors(rawSkus: string[]): Promise<VendorResolution> {
   const wanted = new Map<string, string>(); // key → original spelling
@@ -63,13 +65,15 @@ export async function resolveVendors(rawSkus: string[]): Promise<VendorResolutio
 
   const parts = [...wanted.values()];
 
+  // `mode: 'insensitive'` needs one clause per value; the alternative is a table scan.
+  // The list here is the parts on one proposal, so this stays small.
   const [skus, products] = await Promise.all([
     prisma.sku.findMany({
-      where: { part: { in: parts } },
+      where: { OR: parts.map((p) => ({ part: { equals: p, mode: 'insensitive' as const } })) },
       select: { part: true, manufacturer: true },
     }),
     prisma.product.findMany({
-      where: { sku: { in: parts } },
+      where: { OR: parts.map((p) => ({ sku: { equals: p, mode: 'insensitive' as const } })) },
       select: { id: true, sku: true },
     }),
   ]);
