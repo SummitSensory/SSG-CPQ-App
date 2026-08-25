@@ -6,6 +6,7 @@ import { Permission } from '../authz/permissions.js';
 import { recordAudit } from '../lib/audit.js';
 import { ValidationError, ConflictError, NotFoundError } from '../lib/errors.js';
 import { reassignSkuVendor } from '../handoff/vendorReassign.js';
+import { recordRevision, skuSnapshot } from '../lib/revisions.js';
 
 /**
  * The single catalog list.
@@ -405,6 +406,20 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
       });
     }
 
+    // The item editor writes across Sku, Product and ProductCost; the SKU record is
+    // the one the bill of materials prices from, so that is what the history keeps.
+    const afterSku = await prisma.sku.findUnique({ where: { part } });
+    if (afterSku) {
+      await recordRevision({
+        entity: 'Sku',
+        entityId: afterSku.id,
+        label: part,
+        action: 'update',
+        actorId: req.user!.sub,
+        before: sku ? skuSnapshot(sku as unknown as Record<string, unknown>) : null,
+        after: skuSnapshot(afterSku as unknown as Record<string, unknown>),
+      });
+    }
     await recordAudit({
       actorId: req.user!.sub,
       action: 'catalog.item.update',

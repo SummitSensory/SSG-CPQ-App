@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { prisma } from '../lib/prisma.js';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
-import { invoiceVarianceReport } from '../handoff/vendorInvoice.js';
+import { invoiceVarianceReport, actualCostForOrder } from '../handoff/vendorInvoice.js';
 import {
   buildReport,
   versionTotals,
@@ -25,6 +25,15 @@ export function registerReportRoutes(app: FastifyInstance): void {
    * the pattern only shows up if it keeps being counted.
    */
   app.get('/reports/invoice-variance', read, async () => invoiceVarianceReport());
+
+  /**
+   * What one order actually cost once its invoices were accepted, against what the
+   * Bill of Materials said. Internal: it moves margin reporting and reaches no
+   * document, no customer and no accounting system.
+   */
+  app.get('/reports/orders/:id/actual-cost', read, async (req) =>
+    actualCostForOrder((req.params as { id: string }).id),
+  );
 
   /**
    * Cost drift: every order line whose cost no longer matches the catalog.

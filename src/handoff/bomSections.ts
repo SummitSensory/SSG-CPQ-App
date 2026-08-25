@@ -305,6 +305,7 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
         quantity: true,
         unitCostMinor: true,
         invoicedUnitCostMinor: true,
+        invoiceNotBilled: true,
         powderColorCode: true,
         powderColor: true,
         isHardwareComponent: true,
@@ -456,6 +457,7 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
           quantity: l.quantity,
           unitCostMinor: l.unitCostMinor,
           invoicedUnitCostMinor: l.invoicedUnitCostMinor,
+          invoiceNotBilled: l.invoiceNotBilled,
         })),
       ),
       missingColorSkus: mine

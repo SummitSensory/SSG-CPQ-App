@@ -1393,7 +1393,16 @@
 
   function renderCatalog(user) {
     function ctab(id, label){var on=cat.tab===id;return '<button data-ctab="'+id+'" style="border:none;border-radius:8px;padding:8px 15px;font-size:13.5px;font-weight:'+(on?'600':'500')+';cursor:pointer;background:'+(on?'#fff':'transparent')+';color:'+(on?'#1c4039':'#6b7065')+';box-shadow:'+(on?'0 1px 2px rgba(0,0,0,.06)':'none')+';">'+label+'</button>';}
-    document.getElementById('view').innerHTML = '<div style="display:flex;gap:5px;background:#eef0ea;padding:4px;border-radius:10px;width:max-content;margin-bottom:18px;">'+ctab('items','Catalog')+ctab('products','Product tree')+ctab('bundles','Bundles')+ctab('manufacturers','Manufacturers')+ctab('bombuild','BOM build')+ctab('notes','Proposal notes')+'</div><div id="catBody"></div>';
+    document.getElementById('view').innerHTML = '<div style="display:flex;gap:5px;background:#eef0ea;padding:4px;border-radius:10px;width:max-content;margin-bottom:18px;">'+ctab('items','Catalog')+ctab('products','Product tree')+ctab('bundles','Bundles')+ctab('manufacturers','Manufacturers')+ctab('bombuild','BOM build')+ctab('notes','Proposal notes')+'</div>' +
+      // One History button rather than six: which screen you are on is already known,
+      // so the button asks for that screen's history and the tabs stay uncluttered.
+      '<div style="display:flex;justify-content:flex-end;margin:-8px 0 12px;"><button class="link-btn" id="catHistory" title="Who changed what on this screen, and when" style="width:auto;padding:7px 13px;font-size:13px;">History</button></div>' +
+      '<div id="catBody"></div>';
+    document.getElementById('catHistory').addEventListener('click', function () {
+      var areas = { items: 'catalog', products: 'tree', bundles: 'bundles', manufacturers: 'manufacturers', bombuild: 'bom', notes: 'notes' };
+      var titles = { items: 'Catalog history', products: 'Product tree history', bundles: 'Bundle history', manufacturers: 'Manufacturer history', bombuild: 'BOM build history', notes: 'Proposal note history' };
+      openHistory({ area: areas[cat.tab] || 'catalog', title: titles[cat.tab] || 'Change history' });
+    });
     document.querySelectorAll('[data-ctab]').forEach(function(b){b.addEventListener('click',function(){cat.tab=b.getAttribute('data-ctab');renderCatalog(user);});});
     if(cat.tab==='products') renderCatalogProducts(user);
     else if(cat.tab==='bundles') renderBundles(user);
@@ -3636,6 +3645,134 @@
     });
   }
 
+  /**
+   * The change history for one record, or for a whole screen.
+   *
+   * Everything in this application already recorded who changed what. Until now there
+   * was nowhere to read it outside Administration's global list, capped at the most
+   * recent 200 rows across the entire system — so a price changed last month was
+   * recorded and unfindable, which is why the audit trail felt absent.
+   *
+   * Where a before/after snapshot was kept, the row shows the change itself. Where only
+   * an audit row exists, it shows who and when. Both are listed together, because to
+   * the person reading it they are the same question.
+   */
+  function historyActionLabel(a) {
+    var map = {
+      create: 'Created', update: 'Changed', delete: 'Deleted', restore: 'Restored',
+      'catalog.product.update': 'Product edited',
+      'catalog.product.create': 'Product created',
+      'catalog.product.status': 'Status changed',
+      'catalog.product.delete': 'Product deleted',
+      'catalog.product.reorder': 'Products reordered',
+      'catalog.category.create': 'Category created',
+      'catalog.category.update': 'Category renamed',
+      'catalog.category.delete': 'Category deleted',
+      'catalog.category.reorder': 'Categories reordered',
+      'catalog.family.create': 'Family created',
+      'catalog.tree.import': 'Tree imported',
+      'catalog.import': 'Catalog imported',
+      'catalog.item.update': 'Item edited',
+      'catalog.bundle.create': 'Bundle created',
+      'catalog.bundle.components': 'Components changed',
+      'catalog.bundle.delete': 'Bundle deleted',
+      'sku.update': 'SKU edited',
+      'sku.import': 'SKUs imported'
+    };
+    return map[a] || a;
+  }
+
+  /** A value as it should read in a history row. Minor units are money. */
+  function histVal(k, v) {
+    if (v === null || v === undefined || v === '') return '—';
+    if (/Minor$/.test(k) && !isNaN(Number(v))) return costMoney(Number(v));
+    if (typeof v === 'boolean') return v ? 'Yes' : 'No';
+    if (Array.isArray(v)) return v.length + ' item' + (v.length === 1 ? '' : 's');
+    if (typeof v === 'object') return JSON.stringify(v);
+    return String(v);
+  }
+
+  var HIST_FIELD_LABELS = {
+    unitCostMinor: 'Cost', listPriceMinor: 'List price', manufacturer: 'Manufacturer',
+    vendorPartNumber: 'Vendor part', part: 'Part', description: 'Description',
+    name: 'Name', sku: 'SKU', status: 'Status', components: 'Components',
+    unitWeightLbs: 'Weight', active: 'Active', leadTimeDays: 'Lead time',
+    requiresPowderColor: 'Requires colour', freeIssueVendor: 'Free-issue vendor'
+  };
+
+  function historyRow(r) {
+    var when = new Date(r.createdAt);
+    var who = r.actorName || 'Unknown';
+    var head = '<div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:baseline;">' +
+      '<div style="font-size:13px;font-weight:600;color:#20241f;">' + esc(historyActionLabel(r.action)) +
+        (r.label ? ' <span style="font-family:ui-monospace,monospace;font-weight:500;color:#5c6157;">' + esc(r.label) + '</span>' : '') + '</div>' +
+      '<div class="muted" style="font-size:11.5px;">' + esc(who) + ' · ' + when.toLocaleString() + '</div>' +
+    '</div>';
+
+    // A revision knows what the value was before, which is the whole reason it exists.
+    if (r.source === 'revision' && (r.changed || []).length) {
+      var b = r.before || {}, af = r.after || {};
+      var rows = r.changed.map(function (k) {
+        return '<tr>' +
+          '<td style="padding:3px 12px 3px 0;color:#8a8f85;white-space:nowrap;">' + esc(HIST_FIELD_LABELS[k] || k) + '</td>' +
+          '<td style="padding:3px 12px 3px 0;color:#9c3327;text-decoration:line-through;">' + esc(histVal(k, b[k])) + '</td>' +
+          '<td style="padding:3px 0;color:#2f6b4f;font-weight:600;">' + esc(histVal(k, af[k])) + '</td>' +
+        '</tr>';
+      }).join('');
+      return '<div style="padding:11px 13px;border:1px solid #e7e8e3;border-radius:10px;margin-bottom:8px;background:#fff;">' +
+        head + '<table style="margin-top:6px;font-size:12.5px;border-collapse:collapse;">' + rows + '</table></div>';
+    }
+
+    // An audit row can only say what was sent. Shown plainly rather than dressed up as
+    // a before/after it does not have.
+    var det = r.details && Object.keys(r.details).length
+      ? '<div class="muted" style="font-size:11.5px;margin-top:4px;font-family:ui-monospace,monospace;word-break:break-word;">' +
+          esc(Object.keys(r.details).map(function (k) { return k + ': ' + histVal(k, r.details[k]); }).join(' · ')) + '</div>'
+      : '';
+    return '<div style="padding:11px 13px;border:1px solid #e7e8e3;border-radius:10px;margin-bottom:8px;background:#fbfbf9;">' + head + det + '</div>';
+  }
+
+  /**
+   * `opts` is { entity, entityId, area, title }. Give it an entity for one record's
+   * history, or an area for a whole screen's.
+   */
+  async function openHistory(opts) {
+    var qs = [];
+    if (opts.entity) qs.push('entity=' + encodeURIComponent(opts.entity));
+    if (opts.entityId) qs.push('entityId=' + encodeURIComponent(opts.entityId));
+    if (opts.area) qs.push('area=' + encodeURIComponent(opts.area));
+    var r = await authed('/history?' + qs.join('&'));
+    if (!r.ok) {
+      alert(r.status === 403
+        ? 'You do not have permission to read change history.'
+        : 'Could not load the history (' + r.status + ').');
+      return;
+    }
+    var d = await r.json();
+    var body = !d.rows.length
+      ? '<div class="muted" style="font-size:13.5px;line-height:1.6;">Nothing recorded yet.' +
+        (opts.entity ? ' Changes made from here on will appear in this list.' : '') + '</div>'
+      : '<input id="histQ" placeholder="Filter by what changed, or who changed it" style="' + IN + 'margin-bottom:10px;">' +
+        '<div id="histList" style="max-height:60vh;overflow:auto;">' + d.rows.map(historyRow).join('') + '</div>' +
+        '<div class="muted" style="font-size:11.5px;margin-top:8px;line-height:1.5;">' +
+          'Rows on a white ground record what the value was before the change. Rows on a grey ground come from the audit log, which records what was sent — it can say who and when, but not what it was before.' +
+        '</div>';
+    openModal(opts.title || 'Change history', body, null, null, { wide: true });
+    var q = document.getElementById('histQ');
+    if (q) {
+      q.addEventListener('input', function () {
+        var term = q.value.trim().toLowerCase();
+        var list = document.getElementById('histList');
+        list.innerHTML = (term
+          ? d.rows.filter(function (row) {
+              return JSON.stringify(row).toLowerCase().indexOf(term) >= 0;
+            })
+          : d.rows
+        ).map(historyRow).join('') || '<div class="muted" style="font-size:13px;">Nothing matches that.</div>';
+      });
+    }
+  }
+
   /** Duplicate sort orders in the live tree, with a one-click renumber. */
   async function openSortAudit(user) {
     var r = await authed('/catalog/tree/sort-audit');
@@ -5251,10 +5388,15 @@
         kpi('Undercharged', m(s.underchargedMinor), 'billed below the sheet', '#2f7d5d') +
         kpi('Net', (s.netMinor > 0 ? '+' : '') + m(s.netMinor), s.orderCount + ' order' + (s.orderCount === 1 ? '' : 's') + ' · ' + s.vendorCount + ' vendor' + (s.vendorCount === 1 ? '' : 's'), s.netMinor < 0 ? '#2f7d5d' : RED) +
         kpi('Not yet accepted', s.openCount.toLocaleString(), 'waiting on a decision', '#3d4a55') +
+        (s.notBilledLines
+          ? kpi('Never billed', s.notBilledLines.toLocaleString() + ' line' + (s.notBilledLines === 1 ? '' : 's'),
+              costMoney(s.notBilledMinor) + ' of parts — confirm they shipped', RED)
+          : '') +
       '</div>' +
       '<div class="muted" style="font-size:12.5px;margin:14px 0 10px;line-height:1.6;max-width:720px;">' +
         'One row per vendor per order. The sheet figure is what that vendor was sent; the invoiced figure is what they billed for the same lines. ' +
-        'Accepted differences stay listed — an accepted overcharge is still a fact about that vendor.' +
+        'Accepted differences stay listed — an accepted overcharge is still a fact about that vendor. ' +
+        'An accepted invoice becomes the job\u2019s true cost for margin reporting; it changes nothing on the sheet, the proposal or in QuickBooks.' +
       '</div>' +
       d.rows.map(function (o) {
         var neg = o.varianceMinor < 0;
@@ -5281,7 +5423,9 @@
                 rtd(esc(l.name) + '<div class="muted" style="font-size:11.5px;font-family:ui-monospace,monospace;">' + esc(l.sku || '—') + '</div>') +
                 rtd(l.quantity, 'right') + rtd(m(l.agreedUnitMinor), 'right') + rtd(m(l.invoicedUnitMinor), 'right', 1) +
                 rtd('<span style="color:' + (ln ? RED : '#20241f') + ';">' + ((l.extendedDeltaMinor || 0) > 0 ? '+' : '') + m(l.extendedDeltaMinor) + '</span>', 'right') +
-                rtd(l.deltaPct == null ? '—' : '<span style="color:' + (l.deltaPct < 0 ? RED : '#20241f') + ';">' + (l.deltaPct > 0 ? '+' : '') + l.deltaPct.toFixed(1) + '%</span>', 'right') +
+                rtd(l.notBilled
+                ? '<span style="color:' + RED + ';font-weight:600;">Not billed</span>'
+                : (l.deltaPct == null ? '—' : '<span style="color:' + (l.deltaPct < 0 ? RED : '#20241f') + ';">' + (l.deltaPct > 0 ? '+' : '') + l.deltaPct.toFixed(1) + '%</span>'), 'right') +
               '</tr>';
             }).join('') +
           '</tbody></table></div></div>';
@@ -7156,11 +7300,46 @@
       NOT_APPLICABLE: 'Recorded as having no customs charges.'
     }[e.status] || '';
 
+    var pct = function (id, label, v, hint) {
+      return '<div style="flex:1;min-width:130px;"><label style="' + lbl + '">' + esc(label) + '</label>' +
+        '<div style="position:relative;"><input id="' + id + '" inputmode="decimal" placeholder="blank = none" value="' +
+        esc(v == null ? '' : String(v)) + '" style="' + box + 'padding-right:26px;">' +
+        '<span style="position:absolute;right:9px;top:8px;font-size:13px;color:#8a8f85;">%</span></div>' +
+        (hint ? '<div class="muted" style="font-size:10.5px;line-height:1.45;margin-top:3px;">' + hint + '</div>' : '') + '</div>';
+    };
+    var simple = !!e.simpleMode;
+
     var body =
       '<div style="font-size:11.5px;line-height:1.6;color:#5c6157;padding:8px 10px;background:#f6f7f4;border:1px solid #e7e8e3;border-radius:9px;margin-bottom:14px;">' +
         '<b>' + esc(e.status.replace(/_/g, ' ').toLowerCase()) + '</b> \u2014 ' + esc(statusLine) +
         '<div style="margin-top:5px;">Leave a box empty when the figure is not known. An empty box is reported as outstanding; it is not treated as zero.</div>' +
       '</div>' +
+      // Percent entry, in front of the typed-amount fields because it is the path
+      // most jobs will take until the registrations and rulings are in place.
+      '<label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;line-height:1.5;margin-bottom:12px;padding:10px 12px;border:1px solid ' +
+        (simple ? '#cfe3d7' : '#e7e8e3') + ';border-radius:9px;background:' + (simple ? '#f4faf6' : '#fff') + ';">' +
+        '<input type="checkbox" id="cfSimple"' + (simple ? ' checked' : '') + ' style="margin-top:2px;">' +
+        '<span><b>Work these out from percentages</b>' +
+        '<span class="muted" style="display:block;font-size:11.5px;margin-top:3px;line-height:1.5;">Enter the tax and tariff rates and the broker\u2019s fee, and the amounts are calculated from the proposal. Use this until the tax registrations and tariff rulings are in place. The proposal states that the rates were entered by Summit and that the Canada Border Services Agency assesses the final amounts.</span></span></label>' +
+      '<div id="cfSimpleBox" style="' + (simple ? '' : 'display:none;') + 'margin-bottom:14px;padding:12px 13px;border:1px solid #e7e8e3;border-radius:10px;background:#fbfbf9;">' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">' +
+          '<div style="flex:1;min-width:150px;"><label style="' + lbl + '">What the tax is called</label>' +
+            '<input id="cfTaxLabel" placeholder="HST, GST + QST, GST + PST" value="' + esc(e.taxLabel || '') + '" style="' + box + '">' +
+            '<div class="muted" style="font-size:10.5px;margin-top:3px;">Printed on the proposal exactly as typed.</div></div>' +
+          pct('cfTaxPct', 'Tax rate', e.taxPercentMilli == null ? null : e.taxPercentMilli / 1000, 'Ontario 13 · Quebec 14.975 · Alberta 5') +
+        '</div>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">' +
+          pct('cfTariffPct', 'Tariff rate', e.tariffPercentMilli == null ? null : e.tariffPercentMilli / 1000, 'Applied to the goods. Ask your broker.') +
+          money('cfBrokerSimple', 'Broker fee', e.brokerFeeMinor) +
+        '</div>' +
+        '<label style="display:flex;gap:7px;align-items:flex-start;font-size:12px;line-height:1.5;margin-bottom:6px;">' +
+          '<input type="checkbox" id="cfTariffFreight"' + (e.tariffOnFreight ? ' checked' : '') + ' style="margin-top:2px;">' +
+          '<span>Apply the tariff to freight as well as the goods<span class="muted" style="display:block;font-size:10.5px;">Off by default: duty is assessed on what the goods are worth.</span></span></label>' +
+        '<label style="display:flex;gap:7px;align-items:flex-start;font-size:12px;line-height:1.5;">' +
+          '<input type="checkbox" id="cfTaxOnDuty"' + (e.taxOnDuty !== false ? ' checked' : '') + ' style="margin-top:2px;">' +
+          '<span>Charge tax on the tariff and the brokerage too<span class="muted" style="display:block;font-size:10.5px;">On by default: that is how GST and HST are assessed on an import.</span></span></label>' +
+      '</div>' +
+      '<div id="cfAmountBox"' + (simple ? ' style="display:none;"' : '') + '>' +
       '<div style="margin-bottom:12px;"><label style="' + lbl + '">Currency these were quoted in</label>' +
         '<select id="cfCur" style="' + box + '">' +
           '<option value="CAD"' + (e.currency === 'CAD' ? ' selected' : '') + '>CAD \u2014 as the broker quoted</option>' +
@@ -7177,6 +7356,7 @@
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
         money('cfImportTax', 'Import tax', e.importTaxMinor) +
         money('cfBroker', 'Brokerage', e.brokerFeeMinor) +
+      '</div>' +
       '</div>' +
       '<div style="margin-bottom:12px;"><label style="' + lbl + '">Where these figures came from</label>' +
         '<input id="cfSource" placeholder="Broker quote reference, ruling, or a prior entry" value="' + esc(e.sourceReference || '') + '" style="' + box + '">' +
@@ -7204,21 +7384,45 @@
 
     openModal('Customs and duties', body, async function (close) {
       var msg = document.getElementById('cfMsg');
-      var amounts = {
-        dutyMinor: cbMinorFromInput(document.getElementById('cfDuty')),
-        surtaxMinor: cbMinorFromInput(document.getElementById('cfSurtax')),
-        simaMinor: cbMinorFromInput(document.getElementById('cfSima')),
-        otherDutyMinor: cbMinorFromInput(document.getElementById('cfOther')),
-        importTaxMinor: cbMinorFromInput(document.getElementById('cfImportTax')),
-        brokerFeeMinor: cbMinorFromInput(document.getElementById('cfBroker'))
+      var isSimple = document.getElementById('cfSimple').checked;
+      // In percent mode the broker fee comes from its own box, and the typed duty
+      // fields are left exactly as they were rather than being sent as blanks — a
+      // figure someone entered before switching modes is not erased by the switch.
+      var amounts = isSimple
+        ? { brokerFeeMinor: cbMinorFromInput(document.getElementById('cfBrokerSimple')) }
+        : {
+            dutyMinor: cbMinorFromInput(document.getElementById('cfDuty')),
+            surtaxMinor: cbMinorFromInput(document.getElementById('cfSurtax')),
+            simaMinor: cbMinorFromInput(document.getElementById('cfSima')),
+            otherDutyMinor: cbMinorFromInput(document.getElementById('cfOther')),
+            importTaxMinor: cbMinorFromInput(document.getElementById('cfImportTax')),
+            brokerFeeMinor: cbMinorFromInput(document.getElementById('cfBroker'))
+          };
+      var pctOf = function (id) {
+        var el = document.getElementById(id);
+        if (!el || !el.value.trim()) return null;
+        var n = Number(el.value.replace(/[^0-9.]/g, ''));
+        return Number.isFinite(n) ? n : NaN;
       };
+      var simplePatch = {
+        simpleMode: isSimple,
+        taxLabel: (document.getElementById('cfTaxLabel').value || '').trim() || null,
+        taxPercent: pctOf('cfTaxPct'),
+        tariffPercent: pctOf('cfTariffPct'),
+        tariffOnFreight: document.getElementById('cfTariffFreight').checked,
+        taxOnDuty: document.getElementById('cfTaxOnDuty').checked
+      };
+      if (Number.isNaN(simplePatch.taxPercent) || Number.isNaN(simplePatch.tariffPercent)) {
+        msg.innerHTML = '<span style="color:#9c3327;">Enter a rate as a plain number \u2014 13, or 9.975.</span>';
+        return false;
+      }
       for (var k in amounts) {
         if (Number.isNaN(amounts[k])) {
           msg.innerHTML = '<span style="color:#9c3327;">Enter amounts as plain numbers, e.g. 250.00, or leave the box empty.</span>';
           return;
         }
       }
-      var payload = Object.assign(amounts, {
+      var payload = Object.assign(amounts, simplePatch, {
         currency: document.getElementById('cfCur').value,
         sourceReference: document.getElementById('cfSource').value.trim() || null,
         importerOfRecord: document.getElementById('cfIor').value,
@@ -7234,6 +7438,15 @@
       close();
       await loadCrossBorder(true);
     }, 'Save figures');
+
+    setTimeout(function () {
+      var sw = document.getElementById('cfSimple');
+      if (!sw) return;
+      sw.addEventListener('change', function () {
+        document.getElementById('cfSimpleBox').style.display = sw.checked ? '' : 'none';
+        document.getElementById('cfAmountBox').style.display = sw.checked ? 'none' : '';
+      });
+    }, 0);
 
     // The three lifecycle actions. Each reloads the rail, because each changes what
     // the proposal is allowed to do.
@@ -8475,6 +8688,29 @@
       (cad == null ? '' : '<span style="display:block;font-size:10px;color:#8a8f85;font-weight:400;">CAD ' + (cad / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' est.</span>');
   }
 
+  /**
+   * When the rate was taken, in words, for printing beside the CAD total.
+   *
+   * The observation date and the retrieval instant are different facts and the customer
+   * is owed both: the Bank of Canada does not publish at weekends, so a Monday proposal
+   * carries Friday's rate, and the gap between the two is the customer's exposure. Said
+   * plainly rather than left to be inferred from a single date.
+   */
+  function cbRateStamp(d) {
+    var fx = (d && d.crossBorder && d.crossBorder.fx) || {};
+    if (!fx.rate) return '';
+    var got = fx.retrievedAt ? new Date(fx.retrievedAt) : null;
+    var source = fx.source === 'MANUAL'
+      ? 'entered by Summit Sensory Gym'
+      : 'Bank of Canada daily average';
+    return '<div style="margin-top:6px;padding-top:6px;border-top:1px dotted #ccd2dd;font-size:9.5px;color:#7b8190;line-height:1.55;text-align:right;">' +
+      '1 USD = ' + esc(fx.rate) + ' CAD · ' + esc(source) +
+      (fx.observationDate ? '<br>Rate published for ' + esc(fmtDate(fx.observationDate)) : '') +
+      (got ? '<br>Retrieved ' + esc(got.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })) : '') +
+      '<br>CAD amounts are estimates and will change with the rate on the date of acceptance.' +
+    '</div>';
+  }
+
   function cbFxBanner(d) {
     if (!cbIsCanadian(d)) return '';
     var fx = d.crossBorder.fx || {};
@@ -8546,8 +8782,14 @@
         'The customer is responsible for any wire-transfer fees, intermediary-bank fees, credit-card fees where permitted, foreign-exchange charges, or other payment-processing costs imposed by the customer\u2019s financial institution or payment provider. Summit Sensory Gym must receive the full invoiced amount.'),
       para('Canadian Sales Taxes.',
         'Applicable GST, HST, PST, RST, or QST will be determined based on the ship-to location, the nature of the goods and services supplied, Summit Sensory Gym\u2019s applicable registration obligations, the customer\u2019s documented tax status, and the laws and rates in effect at the time of invoicing or shipment. Tax amounts shown on this proposal are estimates and may be revised on the final invoice if the delivery location, applicable rate, taxability, exemption status, transaction structure, or governing law changes. Any valid exemption documentation must be provided and approved before the final invoice is issued.'),
+      para('Basis of the Estimates.',
+        'The tariff and tax rates applied on this proposal were entered by Summit Sensory Gym based on the information available for goods of this kind. They are not derived from a tariff classification ruling, a country-of-origin determination or an advance ruling from the Canada Border Services Agency, and they do not constitute customs, tax or legal advice. The customer is encouraged to confirm the applicable rates with their own customs broker before relying on these figures for budgeting.'),
       para('Customs Duties and Tariffs.',
         'Customs duties, counter-tariffs, surtaxes, safeguard measures, anti-dumping duties, countervailing duties, and other border assessments shown in this proposal are estimates based on the product information, tariff classification, country of origin, customs value, trade-agreement eligibility, exchange-rate information, and government rules available on the proposal date. Final amounts are determined by the Canada Border Services Agency or the authorized customs broker under the laws and rates in effect when the goods are imported. Unless expressly identified as fixed and included, any difference between estimated and actual border assessments is the customer\u2019s responsibility.'),
+      para('Estimated Tariffs Are Dated to This Proposal.',
+        'Any tariff, duty, surtax or brokerage figure shown on this proposal is an estimate calculated on the proposal date, using the rates in effect and the information available on that date. Tariff rates, surtax orders and remission orders are set by government and change without notice, sometimes between the date a proposal is issued and the date the goods cross the border. The figures shown are not a quotation of, or a cap on, the amounts that will ultimately be assessed, and they may increase or decrease.'),
+      para('Responsibility for Border Charges.',
+        'Except for any amount expressly identified on this proposal as fixed and included in the total payable to Summit Sensory Gym, the customer is responsible for all customs duties, tariffs, surtaxes, safeguard and anti-dumping measures, import taxes, brokerage charges, storage, demurrage, examination and inspection fees, disbursements and penalties assessed on the importation of the goods, together with any increase in those amounts arising after the proposal date. Summit Sensory Gym has no control over the classification, valuation or rate applied by the Canada Border Services Agency or by the customs broker, does not act as the importer of record unless this proposal expressly states otherwise, and is not liable for any such charge, for any increase in one, or for delay, storage or additional cost arising from a customs examination, a re-determination of classification or origin, or a change in law. Where Summit Sensory Gym advances any such amount on the customer\u2019s behalf, it is reimbursable in full.'),
       para('CUSMA Treatment.',
         'Preferential tariff treatment under the Canada\u2013United States\u2013Mexico Agreement applies only when the goods satisfy the applicable rules of origin and the required origin documentation is available and accepted. Shipment from the United States does not, by itself, establish eligibility for preferential tariff treatment.')
     ];
@@ -9063,6 +9305,7 @@
           (anyTbd ? '<div style="padding-top:3px;font-size:10.5px;color:#9aa1b0;text-align:right;line-height:1.5;">Total excludes items marked TBD.</div>' : '') +
           (m.showDeposit !== false ? '<div style="display:flex;justify-content:space-between;padding-top:3px;font-size:11.5px;font-weight:700;"><span style="color:#7b8190;">Deposit Due (' + depositPct() + '%)</span><span>' + money(t.deposit) + '</span></div>' : '') +
           cbBorderBlock(d) +
+          cbRateStamp(d) +
         '</div></div>' + bottomNotesHtml +
         // Acceptance and the terms always begin a fresh sheet, whatever the line count.
         // Signing is the act the document exists for, so the page a customer signs is
@@ -10848,26 +11091,52 @@
   var RED = '#a2402f';
   function invCell(p, edit) {
     var v = p.invoicedUnitCostMinor;
+    var nb = !!p.invoiceNotBilled;
     var val = v == null ? '' : (Number(v) / 100).toFixed(2);
-    if (!edit) return v == null ? '<span class="muted">—</span>' : costMoney(v);
-    return '<input class="bomLine" data-id="' + p.id + '" data-f="invoicedUnitCostMinor" ' +
+    if (!edit) {
+      if (nb) return '<span style="color:' + RED + ';font-weight:600;font-size:11.5px;">Not billed</span>';
+      return v == null ? '<span class="muted">—</span>' : costMoney(v);
+    }
+    // The toggle is the whole point of the column: an unbilled line and an unchecked
+    // line look identical without it, and an unbilled line is usually an UNSHIPPED
+    // line — which turns up in the shop weeks later as a missing part.
+    var toggle = '<button class="link-btn bomNotBilled" data-id="' + p.id + '" data-on="' + (nb ? '1' : '0') + '" ' +
+      'title="' + (nb ? 'Marked as not on their invoice. Click to undo.' : 'They did not bill for this line at all.') + '" ' +
+      'style="width:auto;padding:2px 6px;font-size:10.5px;margin-top:3px;' +
+      (nb ? 'color:' + RED + ';font-weight:600;' : 'color:#8a8f85;') + '">' +
+      (nb ? '✓ Not billed' : 'Not billed') + '</button>';
+    if (nb) {
+      return '<div style="text-align:right;"><span style="color:' + RED + ';font-weight:600;font-size:11.5px;">Not billed</span><br>' + toggle + '</div>';
+    }
+    return '<div style="text-align:right;"><input class="bomLine" data-id="' + p.id + '" data-f="invoicedUnitCostMinor" ' +
       'value="' + val + '" inputmode="decimal" placeholder="—" ' +
       'title="What the vendor invoiced for this part, per unit. Leave empty until you have checked this line." ' +
       'style="' + bomFieldStyle('92px') + 'text-align:right;background:#fff;border-color:' +
-      (v == null ? '#dcded7' : '#cbd3c9') + ';">';
+      (v == null ? '#dcded7' : '#cbd3c9') + ';"><br>' + toggle + '</div>';
   }
 
   /** The per-unit difference across the line's quantity — the money at stake. */
   function invDelta(p) {
-    if (!p || p.invoicedUnitCostMinor == null) return null;
+    if (!p) return null;
     var qty = Number(p.quantity) || 0;
+    // Not billed is invoiced at nothing: the arithmetic is a full negative variance,
+    // which is correct, even though it reads as a saving and rarely is one.
+    if (p.invoiceNotBilled) {
+      var u = -Number(p.unitCostMinor || 0);
+      return { unit: u, ext: u * qty, notBilled: true };
+    }
+    if (p.invoicedUnitCostMinor == null) return null;
     var unit = Number(p.invoicedUnitCostMinor) - Number(p.unitCostMinor || 0);
-    return { unit: unit, ext: unit * qty };
+    return { unit: unit, ext: unit * qty, notBilled: false };
   }
 
   function invDeltaCell(p) {
     var d = invDelta(p);
     if (!d) return '<span class="muted">—</span>';
+    if (d.notBilled) {
+      return '<span style="font-variant-numeric:tabular-nums;font-weight:600;color:' + RED + ';">' + costMoney(d.ext) + '</span>' +
+        '<div style="font-size:10.5px;color:' + RED + ';line-height:1.35;">check it shipped</div>';
+    }
     if (!d.ext && !d.unit) return '<span style="color:#2f7d5d;">—</span>';
     var neg = d.ext < 0;
     return '<span style="font-variant-numeric:tabular-nums;font-weight:600;color:' + (neg ? RED : '#20241f') + ';">' +
@@ -11396,6 +11665,10 @@
       ? '<div style="display:flex;gap:18px;flex-wrap:wrap;align-items:baseline;margin-top:10px;font-size:13px;">' +
           '<span class="muted">' + inv.checkedLines + ' line' + (inv.checkedLines === 1 ? '' : 's') + ' checked' +
             (inv.uncheckedLines ? ' · <span style="color:#8a6d1f;">' + inv.uncheckedLines + ' still to check</span>' : '') + '</span>' +
+          (inv.notBilledLines
+            ? '<span style="color:' + RED + ';font-weight:600;">' + inv.notBilledLines + ' line' + (inv.notBilledLines === 1 ? '' : 's') +
+              ' not billed · ' + costMoney(inv.notBilledMinor) + '</span>'
+            : '') +
           '<span>Sheet <b>' + costMoney(inv.agreedMinor) + '</b></span>' +
           '<span>Invoiced <b>' + costMoney(inv.invoicedMinor) + '</b></span>' +
           '<span>Difference <b style="color:' + (neg ? RED : (inv.varianceMinor ? '#20241f' : '#2f7d5d')) + ';">' +
@@ -11413,6 +11686,11 @@
             : '<button class="btn" data-inv-approve="' + s.id + '" style="width:auto;padding:8px 14px;">Accept the difference</button>') +
           (!accepted && inv.needsApproval
             ? '<span class="muted" style="font-size:11.5px;">Over ' + costMoney(inv.thresholdMinor) + ' — a manager has to accept this.</span>'
+            : '') +
+          (!accepted && inv.notBilledLines
+            ? '<span style="font-size:11.5px;color:' + RED + ';line-height:1.5;">' + inv.notBilledLines + ' line' +
+              (inv.notBilledLines === 1 ? ' was' : 's were') + ' not billed. Confirm ' +
+              (inv.notBilledLines === 1 ? 'it' : 'they') + ' shipped before accepting — an unbilled part is usually one that never left.</span>'
             : '') +
         '</div>';
 
@@ -11498,6 +11776,17 @@
     /* One line, brought up to the catalog. The bulk dialog still covers a whole
      * order; this is the case where you are looking at one part and can see it is
      * wrong. Same endpoint, same audit trail. */
+    document.querySelectorAll('.bomNotBilled').forEach(function (el) {
+      el.addEventListener('click', async function () {
+        var on = el.getAttribute('data-on') === '1';
+        var r = await authed('/orders/procurement/' + el.getAttribute('data-id'), {
+          method: 'PATCH', body: { invoiceNotBilled: !on }
+        });
+        if (!r.ok) return fail(r, 'Could not mark that line');
+        refreshLines();
+      });
+    });
+
     document.querySelectorAll('[data-inv-approve]').forEach(function (el) {
       el.addEventListener('click', async function () {
         el.disabled = true;

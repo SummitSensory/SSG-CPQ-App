@@ -49,6 +49,8 @@ export interface InvoiceLineVariance {
   extendedDeltaMinor: number | null;
   /** Difference as a fraction of the agreed cost, or null when the agreed cost is 0. */
   deltaPct: number | null;
+  /** Checked against the invoice and not on it. */
+  notBilled: boolean;
 }
 
 export interface InvoiceVariance {
@@ -56,6 +58,16 @@ export interface InvoiceVariance {
   checkedLines: number;
   /** Lines still waiting to be checked against the invoice. */
   uncheckedLines: number;
+  /**
+   * Lines checked and NOT on the invoice.
+   *
+   * Counted separately from the money, because an unbilled line is rarely good news:
+   * a vendor who did not charge for a part usually did not ship it either, and that
+   * turns up in the shop weeks later as a shortage. It is a chase, not a saving.
+   */
+  notBilledLines: number;
+  /** What those unbilled lines were supposed to cost, at the sheet's figures. */
+  notBilledMinor: number;
   /** The sheet's cost for the CHECKED lines only — the honest comparison base. */
   agreedMinor: number;
   /** What the vendor invoiced for those same lines. */
@@ -75,6 +87,8 @@ interface LineLike {
   quantity: number | string | { toString(): string };
   unitCostMinor: number | null;
   invoicedUnitCostMinor: number | null;
+  /** Checked, and genuinely not on their invoice. */
+  invoiceNotBilled?: boolean | null;
   freeIssue?: boolean | null;
 }
 
@@ -97,6 +111,7 @@ export function lineVariances(lines: LineLike[]): InvoiceLineVariance[] {
       unitDeltaMinor: unitDelta,
       extendedDeltaMinor: unitDelta == null ? null : unitDelta * qty,
       deltaPct: unitDelta == null || agreed === 0 ? null : (unitDelta / agreed) * 100,
+      notBilled: !!l.invoiceNotBilled,
     };
   });
 }
@@ -113,9 +128,22 @@ export function summarize(lines: LineLike[]): InvoiceVariance {
   let invoicedMinor = 0;
   let checked = 0;
   let unchecked = 0;
+  let notBilled = 0;
+  let notBilledMinor = 0;
 
   for (const l of lines) {
     const qty = num(l.quantity);
+    // Marked as not on the invoice: counted as CHECKED and invoiced at nothing, which
+    // is the truth — they were asked for it and did not bill it. It shows as a negative
+    // variance, which is correct arithmetic and the wrong reading, so the count beside
+    // it is what the screen actually leads with.
+    if (l.invoiceNotBilled) {
+      checked += 1;
+      notBilled += 1;
+      notBilledMinor += num(l.unitCostMinor) * qty;
+      agreedMinor += num(l.unitCostMinor) * qty;
+      continue;
+    }
     if (l.invoicedUnitCostMinor == null) {
       unchecked += 1;
       continue;
@@ -129,6 +157,8 @@ export function summarize(lines: LineLike[]): InvoiceVariance {
   return {
     checkedLines: checked,
     uncheckedLines: unchecked,
+    notBilledLines: notBilled,
+    notBilledMinor,
     agreedMinor,
     invoicedMinor,
     varianceMinor,
@@ -174,6 +204,7 @@ export async function approveVendorInvoice(
       vendor: true,
       unitCostMinor: true,
       invoicedUnitCostMinor: true,
+      invoiceNotBilled: true,
     },
   });
   const mine = lines.filter(
@@ -184,6 +215,14 @@ export async function approveVendorInvoice(
   if (!totals.checkedLines) {
     throw new ValidationError(
       'No invoiced figures have been entered for this vendor yet, so there is nothing to accept.',
+    );
+  }
+  // Accepting with lines still unchecked would freeze a comparison that was never
+  // finished, and the unchecked lines are exactly where an unbilled part hides.
+  if (totals.uncheckedLines) {
+    throw new ValidationError(
+      `${totals.uncheckedLines} line${totals.uncheckedLines === 1 ? ' has' : 's have'} not been checked against this invoice yet. ` +
+        'Enter what the vendor billed, or mark the line as not billed, then accept.',
     );
   }
   if (totals.needsApproval && !canApproveAboveThreshold) {
@@ -250,7 +289,7 @@ export async function reopenVendorInvoice(sectionId: string, reason: string, act
 export async function invoiceVarianceReport() {
   const [lines, orders, sections, orgs] = await Promise.all([
     prisma.procurementLine.findMany({
-      where: { invoicedUnitCostMinor: { not: null } },
+      where: { OR: [{ invoicedUnitCostMinor: { not: null } }, { invoiceNotBilled: true }] },
       select: {
         id: true,
         orderId: true,
@@ -260,6 +299,7 @@ export async function invoiceVarianceReport() {
         quantity: true,
         unitCostMinor: true,
         invoicedUnitCostMinor: true,
+        invoiceNotBilled: true,
       },
     }),
     prisma.acceptedOrder.findMany({
@@ -325,13 +365,14 @@ export async function invoiceVarianceReport() {
           : null,
         ...totals,
         lines: lineVariances(g.lines)
-          .filter((v) => (v.extendedDeltaMinor ?? 0) !== 0)
+          .filter((v) => (v.extendedDeltaMinor ?? 0) !== 0 || v.notBilled)
           .sort(
             (a, b) => Math.abs(b.extendedDeltaMinor ?? 0) - Math.abs(a.extendedDeltaMinor ?? 0),
           ),
       };
     })
-    .filter((r) => r.varianceMinor !== 0)
+    // A vendor who billed exactly the sheet but missed a line is still a finding.
+    .filter((r) => r.varianceMinor !== 0 || r.notBilledLines > 0)
     .sort((a, b) => Math.abs(b.varianceMinor) - Math.abs(a.varianceMinor));
 
   return {
@@ -339,10 +380,97 @@ export async function invoiceVarianceReport() {
     summary: {
       vendorCount: new Set(rows.map((r) => r.vendor)).size,
       orderCount: new Set(rows.map((r) => r.orderId)).size,
+      notBilledLines: rows.reduce((a, r) => a + r.notBilledLines, 0),
+      notBilledMinor: rows.reduce((a, r) => a + r.notBilledMinor, 0),
       overchargedMinor: rows.reduce((a, r) => a + Math.max(0, r.varianceMinor), 0),
       underchargedMinor: rows.reduce((a, r) => a + Math.min(0, r.varianceMinor), 0),
       netMinor: rows.reduce((a, r) => a + r.varianceMinor, 0),
       openCount: rows.filter((r) => !r.accepted).length,
     },
+  };
+}
+
+/**
+ * What this order actually cost, once the invoices are in.
+ *
+ * The Bill of Materials figure is what was AGREED — it is the document the vendor was
+ * sent and it never changes. This is what was BILLED, which is what the job really cost.
+ * Kept internal by design: it moves margin reporting, and nothing about it reaches the
+ * customer, QuickBooks or any document.
+ *
+ * Per line, in order of what is known:
+ *   an accepted invoiced figure   -> that, it is what was charged
+ *   marked not billed             -> nothing, they did not charge for it
+ *   anything else                 -> the agreed cost, the best figure available
+ *
+ * Only ACCEPTED invoices move the number. An invoice sitting in dispute is a claim, and
+ * a claim is not a cost.
+ */
+export interface ActualCost {
+  agreedMinor: number;
+  actualMinor: number;
+  /** actual - agreed. Positive means the job cost more than the sheet said. */
+  varianceMinor: number;
+  /** Lines whose figure came from an accepted invoice. */
+  fromInvoiceLines: number;
+  /** Vendors whose invoice is entered but not yet accepted. */
+  pendingVendors: string[];
+}
+
+export async function actualCostForOrder(orderId: string): Promise<ActualCost> {
+  const [lines, sections] = await Promise.all([
+    prisma.procurementLine.findMany({
+      where: { orderId },
+      select: {
+        vendor: true,
+        quantity: true,
+        unitCostMinor: true,
+        invoicedUnitCostMinor: true,
+        invoiceNotBilled: true,
+      },
+    }),
+    prisma.bomVendorSection.findMany({
+      where: { orderId },
+      select: { vendor: true, invoiceApprovedAt: true, vendorInvoiceNumber: true },
+    }),
+  ]);
+  const accepted = new Set(
+    sections.filter((s) => s.invoiceApprovedAt).map((s) => s.vendor.toLowerCase()),
+  );
+  const pendingVendors = sections
+    .filter((s) => !s.invoiceApprovedAt && s.vendorInvoiceNumber)
+    .map((s) => s.vendor);
+
+  let agreedMinor = 0;
+  let actualMinor = 0;
+  let fromInvoiceLines = 0;
+  for (const l of lines) {
+    const qty = num(l.quantity);
+    const agreed = num(l.unitCostMinor) * qty;
+    agreedMinor += agreed;
+    const vendorAccepted = accepted.has(
+      ((l.vendor && l.vendor.trim()) || 'Unassigned vendor').toLowerCase(),
+    );
+    if (!vendorAccepted) {
+      actualMinor += agreed;
+      continue;
+    }
+    if (l.invoiceNotBilled) {
+      fromInvoiceLines += 1;
+      continue;
+    }
+    if (l.invoicedUnitCostMinor != null) {
+      fromInvoiceLines += 1;
+      actualMinor += num(l.invoicedUnitCostMinor) * qty;
+      continue;
+    }
+    actualMinor += agreed;
+  }
+  return {
+    agreedMinor,
+    actualMinor,
+    varianceMinor: actualMinor - agreedMinor,
+    fromInvoiceLines,
+    pendingVendors,
   };
 }

@@ -115,6 +115,38 @@ model AuditLog {
   @@index([entity, entityId])
 }
 
+/// A change with both sides of it kept.
+///
+/// AuditLog above records the fields that were SENT, which answers "who touched this"
+/// and cannot answer "what was it before". That second question is the one asked when
+/// a cost looks wrong six weeks later, and it is why the formula editor keeps its own
+/// revision table. This is that idea generalised, for the records where the previous
+/// value is worth having: catalog pricing and bundle components.
+///
+/// Append-only. Nothing computes from it; it exists to be read by a person.
+model EntityRevision {
+  id        String   @id @default(cuid())
+  /// 'Product' | 'Sku' | 'ProductBundle'.
+  entity    String
+  entityId  String
+  /// The SKU or name as it read AT THE TIME, so the history survives a rename.
+  label     String?
+  action    String
+  actorId   String
+  /// Complete snapshots rather than diffs: a diff stops being readable as soon as the
+  /// shape of the record changes.
+  before    Json?
+  after     Json?
+  /// Field names that actually differ, computed at write time.
+  changed   Json?
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@index([entity, entityId, createdAt(sort: Desc)])
+  @@index([createdAt(sort: Desc)])
+  @@index([actorId])
+}
+
 // ---------------- CRM ----------------
 
 enum CustomerType {
@@ -1780,6 +1812,13 @@ model ProcurementLine {
   invoicedUnitCostMinor Int?
   invoicedAt      DateTime?
   invoicedById    String?
+  /// Checked against the invoice and genuinely not on it.
+  ///
+  /// Distinct from a NULL invoiced figure, which means nobody has looked yet. The two
+  /// were the same state until this column existed, and that is the case that costs a
+  /// missing part in the shop three weeks later: an unbilled line looks exactly like an
+  /// unchecked one, so nobody chases it.
+  invoiceNotBilled Boolean @default(false)
   // Fabrication instructions that print on the BOM line.
   powderColor  String?
   /// Brand from the managed list, and the code as typed for THIS part. The printed
@@ -3490,6 +3529,23 @@ model ProposalCustomsEntry {
   importTaxMinor        Int?
   brokerFeeMinor        Int?
   brokerFeeScheduleId   String?
+  /// Percent entry instead of typed amounts.
+  ///
+  /// The full engine needs registrations, province rate rows and taxability rulings
+  /// before it will quote. Those answers have a lead time outside anyone's control, so
+  /// simple mode lets an operator type the rates and get an honest estimate now. The
+  /// proposal says plainly that these are estimates and how they were arrived at.
+  simpleMode            Boolean            @default(false)
+  /// What the tax is called on this job — "HST", "GST + QST". Printed verbatim.
+  taxLabel              String?
+  /// Thousandths of a percent, so 13% is 13000 and Quebec's 9.975% is 9975. Integer
+  /// arithmetic throughout: a float rate produces a total that fails to reconcile.
+  taxPercentMilli       Int?
+  tariffPercentMilli    Int?
+  /// Duty is assessed on the customs value of the goods, so freight is out by default.
+  tariffOnFreight       Boolean            @default(false)
+  /// GST/HST applies on top of duty and brokerage on an import, so this is on.
+  taxOnDuty             Boolean            @default(true)
   /// Why these numbers: broker quote reference, ruling number, prior entry.
   sourceReference       String?
   basis                 String?
@@ -3550,6 +3606,10 @@ model ProposalCrossBorderSnapshot {
 model CrossBorderSetting {
   id                              String                @id @default("singleton")
   enabled                         Boolean               @default(false)
+  /// Permit percent entry for Canadian charges, bypassing the rate tables and the
+  /// registration gate. The interim path while the registrations and rulings are
+  /// obtained; see simpleCharges.ts for what it does and does not claim.
+  allowSimpleCanadianCharges      Boolean               @default(false)
   defaultImporterOfRecord         ImporterOfRecord      @default(CUSTOMER)
   defaultTaxResponsibility        TaxResponsibilityMode @default(SELLER_COLLECTS)
   allowCadPayment                 Boolean               @default(false)

@@ -90,6 +90,8 @@ const BomLinePatch = z.object({
   unitCostMinor: z.number().int().nonnegative().nullish(),
   /** What the vendor invoiced for this part, per unit. Null clears the check. */
   invoicedUnitCostMinor: z.number().int().nonnegative().nullish(),
+  /** Checked against the invoice and genuinely not on it. */
+  invoiceNotBilled: z.boolean().nullish(),
   /**
    * Operational quantity override. Bounds are re-checked in the service so a
    * caller that skips this route cannot write a nonsense count onto a shop

@@ -6,6 +6,7 @@ import { Permission } from '../authz/permissions.js';
 import { recordAudit } from '../lib/audit.js';
 import { ValidationError, NotFoundError } from '../lib/errors.js';
 import { reassignSkuVendor } from '../handoff/vendorReassign.js';
+import { recordRevision, skuSnapshot } from '../lib/revisions.js';
 
 const SkuBody = z.object({
   part: z.string().trim().min(1).max(80),
@@ -234,6 +235,15 @@ export function registerSkuRoutes(app: FastifyInstance): void {
         ? await reassignSkuVendor(sku.part, sku.manufacturer, req.user!.sub)
         : null;
 
+    await recordRevision({
+      entity: 'Sku',
+      entityId: id,
+      label: sku.part,
+      action: 'update',
+      actorId: req.user!.sub,
+      before: skuSnapshot(existing as unknown as Record<string, unknown>),
+      after: skuSnapshot(sku as unknown as Record<string, unknown>),
+    });
     await recordAudit({
       actorId: req.user!.sub,
       action: 'sku.update',

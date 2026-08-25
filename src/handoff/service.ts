@@ -1123,6 +1123,8 @@ export async function patchProcurementLine(
      * a submitted section — see the freeze rule below.
      */
     invoicedUnitCostMinor?: number | null;
+    /** Checked against the invoice and genuinely not on it. */
+    invoiceNotBilled?: boolean | null;
     /** Brand from the managed list; null clears it. */
     powderBrandId?: string | null;
     /** The colour code as typed for this part. */
@@ -1162,7 +1164,7 @@ export async function patchProcurementLine(
    * Everything else — quantity, colour, notes, the agreed cost — would put the BOM
    * out of step with the vendor's copy and is refused.
    */
-  const EDITABLE_AFTER_SUBMISSION = ['sourced', 'invoicedUnitCostMinor'];
+  const EDITABLE_AFTER_SUBMISSION = ['sourced', 'invoicedUnitCostMinor', 'invoiceNotBilled'];
   if (section?.status === 'SUBMITTED') {
     const touched = Object.keys(patch).filter(
       (k) => (patch as Record<string, unknown>)[k] !== undefined,
@@ -1247,6 +1249,16 @@ export async function patchProcurementLine(
             invoicedUnitCostMinor: patch.invoicedUnitCostMinor,
             invoicedAt: patch.invoicedUnitCostMinor == null ? null : new Date(),
             invoicedById: patch.invoicedUnitCostMinor == null ? null : userId,
+            // A figure and "not billed" are mutually exclusive answers to one question.
+            ...(patch.invoicedUnitCostMinor == null ? {} : { invoiceNotBilled: false }),
+          }
+        : {}),
+      ...(patch.invoiceNotBilled !== undefined
+        ? {
+            invoiceNotBilled: !!patch.invoiceNotBilled,
+            ...(patch.invoiceNotBilled
+              ? { invoicedUnitCostMinor: null, invoicedAt: new Date(), invoicedById: userId }
+              : { invoicedAt: null, invoicedById: null }),
           }
         : {}),
       ...quantityData,
@@ -1265,7 +1277,7 @@ export async function patchProcurementLine(
       ? 'bom.line.quantity'
       : patch.unitCostMinor !== undefined
         ? 'bom.line.cost'
-        : patch.invoicedUnitCostMinor !== undefined
+        : patch.invoicedUnitCostMinor !== undefined || patch.invoiceNotBilled !== undefined
           ? 'bom.line.invoiced'
           : 'bom.line.update';
   await logEvent(

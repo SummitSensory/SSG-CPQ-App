@@ -70,6 +70,11 @@ export const Permission = {
   // variance above the threshold is a decision about money the company owes, so it
   // is its own permission rather than a role check buried in a route.
   VENDOR_INVOICE_APPROVE: 'vendor-invoice:approve',
+  // Read the change history on a catalog part, a bundle, a manufacturer or a bill of
+  // materials. Separate from AUDIT_READ, which covers the security log: knowing who
+  // changed a price is ordinary operational context, and locking it to executives is
+  // what made the existing audit trail feel like it did not exist.
+  HISTORY_READ: 'history:read',
   PRODUCTS_ADMIN: 'products:admin',
   AUDIT_READ: 'audit:read',
   USERS_MANAGE: 'users:manage',
@@ -95,6 +100,7 @@ export type Role = (typeof ROLES)[number];
 
 const P = Permission;
 const BASE = [
+  P.HISTORY_READ,
   P.CRM_READ,
   P.CRM_WRITE,
   P.CATALOG_READ,

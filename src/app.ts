@@ -34,6 +34,7 @@ import { registerRenderRoutes } from './routes/render.js';
 import { registerFreightRoutes } from './routes/freight.js';
 import { registerFreightTrueUpRoutes } from './routes/freightTrueUp.js';
 import { registerCrossBorderRoutes } from './routes/crossBorder.js';
+import { registerHistoryRoutes } from './routes/history.js';
 import { registerWebhookRoutes } from './routes/webhooks.js';
 import { registerDocusealWebhookRoutes } from './routes/esignWebhook.js';
 import { registerEsignRoutes } from './routes/esign.js';
@@ -126,6 +127,7 @@ export function buildApp(): FastifyInstance {
   registerFreightRoutes(app);
   registerFreightTrueUpRoutes(app);
   registerCrossBorderRoutes(app);
+  registerHistoryRoutes(app);
   registerReportRoutes(app);
   registerStandardNoteRoutes(app);
   registerCustomerNoteRoutes(app);
