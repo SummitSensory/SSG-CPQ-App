@@ -61,6 +61,8 @@ const EntrySchema = z.object({
   quoteAttachmentId: z.string().trim().max(60).nullable().optional(),
   description: z.string().trim().max(500).nullable().optional(),
   overrideReason: z.string().trim().max(500).nullable().optional(),
+  /** True when the amount is the bucket's whole figure rather than another instalment. */
+  absolute: z.boolean().optional(),
   note: z.string().trim().max(2000).nullable().optional(),
 });
 

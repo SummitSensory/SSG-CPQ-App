@@ -239,6 +239,13 @@ export interface SaveEntryInput {
   quoteAttachmentId?: string | null;
   description?: string | null;
   overrideReason?: string | null;
+  /**
+   * True when this amount is the bucket's WHOLE figure rather than another instalment.
+   *
+   * Also the way a wrong total is corrected: an applied entry cannot be reversed, so
+   * stating the right figure is what puts it right.
+   */
+  absolute?: boolean;
   note?: string | null;
   /** Editing an existing staged entry rather than adding one. */
   entryId?: string;
@@ -338,6 +345,10 @@ export async function saveEntry(input: SaveEntryInput, actorId: string): Promise
     quoteAttachmentId: input.quoteAttachmentId ?? null,
     description: input.description ?? null,
     overrideReason: input.overrideReason ?? null,
+    // Whether this states the bucket's whole figure rather than another instalment.
+    // Everything staged here is hand-entered — board amounts are written by the pull —
+    // so the operator's answer is the only one there is.
+    absolute: input.absolute === true,
     note: input.note ?? null,
   };
 
@@ -358,6 +369,7 @@ export async function saveEntry(input: SaveEntryInput, actorId: string): Promise
       amountMinor: input.amountMinor,
       vendorQuoteRef: input.vendorQuoteRef ?? null,
       overrideReason: input.overrideReason ?? null,
+      absolute: input.absolute === true,
     },
   });
   return row;
@@ -495,7 +507,9 @@ export async function applyEntries(
     // whatever the proposal carries. Adding it doubled a figure that was already there
     // — the proposal had been pulled from the same column before it was accepted.
     // A hand-entered amount stays an instalment: a second shipment is a second amount.
-    absolute: e.source === 'MONDAY',
+    // A board-read amount is the board's CURRENT TOTAL, so it always replaces. A
+    // hand-entered one replaces only when the operator said it was the whole figure.
+    absolute: e.source === 'MONDAY' || e.absolute === true,
     allocations: Array.isArray(e.allocations)
       ? (e.allocations as Array<{ ref: string; amountMinor: number }>).map((a) => ({
           ref: String(a.ref),
@@ -809,6 +823,7 @@ export function serializeEntry(e: FreightEntry) {
     vendorQuoteRef: e.vendorQuoteRef,
     description: e.description,
     overrideReason: e.overrideReason,
+    absolute: e.absolute,
     note: e.note,
     voidReason: e.voidReason,
     mondayItemId: e.mondayItemId,

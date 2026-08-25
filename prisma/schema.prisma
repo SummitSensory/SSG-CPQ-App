@@ -2489,6 +2489,16 @@ model FreightEntry {
   /// `allocations`.
   amountMinor        Int
 
+  /// Whether this states the bucket's WHOLE figure or another instalment of it.
+  ///
+  /// Job-level amounts add to what the proposal already carries, which is right for a
+  /// second shipment and wrong when the same total is entered twice — the board states
+  /// a figure, the proposal already carries it, and applying it doubles it on a signed
+  /// document. A board-read amount is always the board's current total, so it is
+  /// absolute. A hand-entered one is an instalment unless the operator says otherwise,
+  /// which is also how a wrong total gets corrected after the fact.
+  absolute           Boolean            @default(false)
+
   /// For a LINES entry: [{ ref, sku, name, amountMinor }]. Keyed on the line's
   /// `ref`, because that is what survives a re-order of the proposal.
   allocations        Json?

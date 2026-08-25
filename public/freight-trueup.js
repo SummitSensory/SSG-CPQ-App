@@ -1163,6 +1163,7 @@
           TEXT +
           '"></label>'
         : '') +
+      jobTotalChoiceHtml(bucket, d, c) +
       '<div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap;">' +
       '<button type="button" class="ftuSave" data-bucket="' +
       bucket +
@@ -1640,6 +1641,65 @@
   function each(selector, fn) {
     Array.prototype.forEach.call(document.querySelectorAll(selector), fn);
   }
+  /**
+   * Whole figure, or another instalment.
+   *
+   * Only worth asking when the bucket already carries an amount: with nothing there the
+   * two mean the same thing, and a question with one real answer is noise. Defaults to
+   * the whole figure, because the common case is a corrected or restated total and the
+   * other way round silently doubles a signed proposal.
+   */
+  function jobTotalChoiceHtml(bucket, d, c) {
+    // What the PROPOSAL carries, not what has been staged — that is the figure a new
+    // amount either replaces or adds to.
+    var current = c.onProposalMinor || 0;
+    if (!current || (c.scopes || []).indexOf('JOB') === -1) return '';
+    if (d.scope && d.scope !== 'JOB') return '';
+    var whole = d.absolute !== false;
+    var opt = function (on, val, title, sub) {
+      return (
+        '<label style="display:flex;gap:8px;align-items:flex-start;flex:1;min-width:210px;cursor:pointer;' +
+        'border:1px solid ' +
+        (on ? '#2f5d7d' : LINE) +
+        ';border-radius:9px;padding:9px 11px;background:' +
+        (on ? '#f2f7fb' : '#fff') +
+        ';">' +
+        '<input type="radio" name="ftuAbs-' +
+        bucket +
+        '" class="ftuAbs" data-bucket="' +
+        bucket +
+        '" data-val="' +
+        val +
+        '"' +
+        (on ? ' checked' : '') +
+        ' style="margin-top:2px;">' +
+        '<span><b style="font-weight:600;font-size:12.5px;">' +
+        title +
+        '</b>' +
+        '<span class="muted" style="display:block;font-size:11.5px;line-height:1.45;margin-top:1px;">' +
+        sub +
+        '</span></span></label>'
+      );
+    };
+    return (
+      '<div style="margin-top:11px;">' +
+      '<div style="' +
+      LABEL +
+      '">This bucket already has ' +
+      money(current) +
+      ' on it</div>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:5px;">' +
+      opt(
+        whole,
+        '1',
+        'This is the whole figure',
+        'Replaces the ' + money(current) + '. Use this to correct a total that is wrong.',
+      ) +
+      opt(!whole, '0', 'This is on top', 'A second shipment. Adds to the ' + money(current) + '.') +
+      '</div></div>'
+    );
+  }
+
   function draftOf(node) {
     var b = node.getAttribute('data-bucket');
     return st.draft[b] || (st.draft[b] = { scope: 'JOB', refs: {}, manual: false });
@@ -1787,6 +1847,12 @@
       });
     });
 
+    each('.ftuAbs', function (b) {
+      b.addEventListener('change', function () {
+        draftOf(b).absolute = b.getAttribute('data-val') === '1';
+        render();
+      });
+    });
     each('.ftuSave', function (b) {
       b.addEventListener('click', function () {
         saveBucket(b.getAttribute('data-bucket'), b);
@@ -1865,6 +1931,10 @@
       vendorQuoteRef: d.ref || null,
       description: d.desc || null,
       overrideReason: d.reason || null,
+      // Whether this states the bucket's whole figure or another instalment. Only
+      // asked for a job-level amount, and only once the bucket already carries one —
+      // with nothing there the two mean the same thing.
+      absolute: scope === 'JOB' ? d.absolute !== false : undefined,
     };
 
     button.disabled = true;
