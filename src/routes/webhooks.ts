@@ -28,9 +28,18 @@ interface SvixHeaders {
 }
 
 /** Svix signatures are `v1,<base64>`, space-separated, any of which may match. */
-function verify(secret: string, id: string, timestamp: string, body: string, header: string): boolean {
+function verify(
+  secret: string,
+  id: string,
+  timestamp: string,
+  body: string,
+  header: string,
+): boolean {
   const key = Buffer.from(secret.replace(/^whsec_/, ''), 'base64');
-  const expected = crypto.createHmac('sha256', key).update(`${id}.${timestamp}.${body}`).digest('base64');
+  const expected = crypto
+    .createHmac('sha256', key)
+    .update(`${id}.${timestamp}.${body}`)
+    .digest('base64');
   const expectedBuf = Buffer.from(expected);
   return header
     .split(' ')
@@ -58,11 +67,13 @@ export function registerWebhookRoutes(app: FastifyInstance): void {
     const id = h['svix-id'];
     const timestamp = h['svix-timestamp'];
     const signature = h['svix-signature'];
-    const raw = typeof (req as { rawBody?: string }).rawBody === 'string'
-      ? (req as { rawBody?: string }).rawBody!
-      : JSON.stringify(req.body);
+    const raw =
+      typeof (req as { rawBody?: string }).rawBody === 'string'
+        ? (req as { rawBody?: string }).rawBody!
+        : JSON.stringify(req.body);
 
-    if (!id || !timestamp || !signature) return reply.status(400).send({ message: 'Missing signature headers' });
+    if (!id || !timestamp || !signature)
+      return reply.status(400).send({ message: 'Missing signature headers' });
 
     const age = Math.abs(Date.now() / 1000 - Number(timestamp));
     if (!Number.isFinite(age) || age > MAX_AGE_SECONDS) {
@@ -73,37 +84,90 @@ export function registerWebhookRoutes(app: FastifyInstance): void {
       return reply.status(401).send({ message: 'Invalid signature' });
     }
 
-    const event = req.body as { type?: string; data?: { email_id?: string; bounce?: { message?: string } } };
+    const event = req.body as {
+      type?: string;
+      data?: { email_id?: string; bounce?: { message?: string } };
+    };
     const messageId = event.data?.email_id;
     if (!messageId) return reply.status(200).send({ ok: true });
 
-    const send = await prisma.bomSend.findFirst({ where: { providerMessageId: messageId } });
-    // Not one of ours (an invite, a password reset) — acknowledge and move on.
-    if (!send) return reply.status(200).send({ ok: true });
+    const bounceMessage =
+      event.data?.bounce?.message ?? 'The recipient’s mail server rejected the message';
 
-    if (event.type === 'email.delivered') {
-      await prisma.bomSend.update({
-        where: { id: send.id },
-        data: { status: 'DELIVERED', deliveredAt: new Date() },
-      });
-    } else if (event.type === 'email.bounced') {
-      await prisma.bomSend.update({
-        where: { id: send.id },
-        data: { status: 'BOUNCED', error: event.data?.bounce?.message ?? 'The recipient’s mail server rejected the message' },
-      });
-      // A bounce is operationally urgent — the vendor does not have the BOM and
-      // nobody would otherwise find out. Put it on the order timeline.
-      await prisma.orderEvent.create({
-        data: {
-          orderId: send.orderId,
-          action: 'bom.email.bounced',
-          actorId: send.sentById,
-          detail: { vendor: send.vendor, to: send.toEmail } as object,
-        },
-      });
-      logger.warn({ sendId: send.id, to: send.toEmail }, 'resend webhook: bounced');
+    // Two kinds of send carry a provider message id: a Bill of Materials and a freight
+    // request. Both matter for the same reason — a vendor who never received the email
+    // is not working on it, and nobody finds out until the job needs the answer.
+    const send = await prisma.bomSend.findFirst({ where: { providerMessageId: messageId } });
+    if (send) {
+      if (event.type === 'email.delivered') {
+        await prisma.bomSend.update({
+          where: { id: send.id },
+          data: { status: 'DELIVERED', deliveredAt: new Date() },
+        });
+      } else if (event.type === 'email.opened') {
+        // Only the FIRST open is recorded. Resend fires on every image load, and a
+        // timestamp that keeps moving tells you when the vendor last scrolled past the
+        // message in their inbox, not when they read it.
+        if (!send.openedAt) {
+          await prisma.bomSend.update({ where: { id: send.id }, data: { openedAt: new Date() } });
+        }
+      } else if (event.type === 'email.bounced') {
+        await prisma.bomSend.update({
+          where: { id: send.id },
+          data: { status: 'BOUNCED', error: bounceMessage },
+        });
+        // A bounce is operationally urgent — the vendor does not have the BOM and
+        // nobody would otherwise find out. Put it on the order timeline.
+        await prisma.orderEvent.create({
+          data: {
+            orderId: send.orderId,
+            action: 'bom.email.bounced',
+            actorId: send.sentById,
+            detail: { vendor: send.vendor, to: send.toEmail } as object,
+          },
+        });
+        logger.warn({ sendId: send.id, to: send.toEmail }, 'resend webhook: BOM bounced');
+      }
+      return reply.status(200).send({ ok: true });
     }
 
+    const rfqSend = await prisma.freightRfqSend.findFirst({
+      where: { providerMessageId: messageId },
+      select: {
+        id: true,
+        toEmail: true,
+        openedAt: true,
+        rfq: { select: { id: true, vendor: true } },
+      },
+    });
+    if (rfqSend) {
+      if (event.type === 'email.delivered') {
+        await prisma.freightRfqSend.update({
+          where: { id: rfqSend.id },
+          data: { status: 'DELIVERED', deliveredAt: new Date() },
+        });
+      } else if (event.type === 'email.opened') {
+        if (!rfqSend.openedAt) {
+          await prisma.freightRfqSend.update({
+            where: { id: rfqSend.id },
+            data: { openedAt: new Date() },
+          });
+        }
+      } else if (event.type === 'email.bounced') {
+        await prisma.freightRfqSend.update({
+          where: { id: rfqSend.id },
+          data: { status: 'BOUNCED', error: bounceMessage },
+        });
+        logger.warn(
+          { sendId: rfqSend.id, to: rfqSend.toEmail, vendor: rfqSend.rfq?.vendor },
+          'resend webhook: freight request bounced',
+        );
+      }
+      return reply.status(200).send({ ok: true });
+    }
+
+    // Not one of ours — an invite, a password reset, a notification. Acknowledge and
+    // move on: a 200 is what stops the provider retrying something we do not track.
     return reply.status(200).send({ ok: true });
   });
 }

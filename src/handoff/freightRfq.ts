@@ -752,7 +752,12 @@ export async function listProposalRfqs(proposalId: string) {
   const rows = await prisma.freightRfq.findMany({
     where: { proposalId },
     orderBy: [{ createdAt: 'desc' }],
-    include: { lines: { where: { included: true }, orderBy: { sortOrder: 'asc' } } },
+    include: {
+      lines: { where: { included: true }, orderBy: { sortOrder: 'asc' } },
+      // The most recent send carries the delivery answer. Earlier sends are history —
+      // a request sent three times has one current state, and that is the last one.
+      sends: { orderBy: { createdAt: 'desc' }, take: 1 },
+    },
   });
   return rows.map((r) => ({
     id: r.id,
@@ -767,5 +772,23 @@ export async function listProposalRfqs(proposalId: string) {
     totalCostMinor: r.totalCostMinor,
     itemCount: r.lines.length,
     items: r.lines.map((l) => ({ sku: l.sku, name: l.name, quantity: l.quantity })),
+    /**
+     * What the mail provider reported about the last send.
+     *
+     * Distinct from `status` above, which is where the REQUEST is in its lifecycle —
+     * sent, quoted, cancelled. A request can be SENT and undelivered at the same time,
+     * and that combination is the one worth surfacing: a vendor who never received it
+     * is not slow, they are absent, and nobody finds out until the job needs the number.
+     */
+    delivery: r.sends[0]
+      ? {
+          status: r.sends[0].status,
+          toEmail: r.sends[0].toEmail,
+          sentAt: r.sends[0].createdAt.toISOString(),
+          deliveredAt: r.sends[0].deliveredAt ? r.sends[0].deliveredAt.toISOString() : null,
+          openedAt: r.sends[0].openedAt ? r.sends[0].openedAt.toISOString() : null,
+          error: r.sends[0].error,
+        }
+      : null,
   }));
 }

@@ -6978,6 +6978,35 @@
     return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
   }
 
+  /**
+   * What the mail provider said about the last send of this request.
+   *
+   * Separate from the request's own status chip, and deliberately so: a request can be
+   * SENT and undelivered at once. That pair is the case worth showing — a vendor who
+   * never received the request is not slow to quote, they are absent, and the first
+   * anyone notices is usually when the job needs the freight number.
+   */
+  function rfqDeliveryLine(r) {
+    var d = r.delivery;
+    if (!d) return '';
+    var base = 'font-size:11px;margin-top:3px;line-height:1.45;';
+    if (d.status === 'BOUNCED') {
+      return '<div style="' + base + 'color:#9c3327;font-weight:600;">Bounced \u2014 ' + esc(d.toEmail) +
+        ' did not receive it' + (d.error ? '<div style="font-weight:400;margin-top:1px;">' + esc(d.error) + '</div>' : '') + '</div>';
+    }
+    if (d.status === 'FAILED') {
+      return '<div style="' + base + 'color:#9c3327;font-weight:600;">Not sent' +
+        (d.error ? ' \u2014 ' + esc(d.error) : '') + '</div>';
+    }
+    if (d.status === 'DELIVERED' || d.deliveredAt) {
+      return '<div style="' + base + 'color:#2f7d5d;">Delivered ' + rfqDate(d.deliveredAt) +
+        (d.openedAt ? ' \u00b7 opened ' + rfqDate(d.openedAt) : '') + '</div>';
+    }
+    // Sent, and the provider has not reported back. Said plainly rather than left to
+    // look like success: "sent" only means the provider accepted the message.
+    return '<div style="' + base + 'color:#8a6d1f;">Sent, delivery not yet confirmed</div>';
+  }
+
   function rfqStatusChip(status) {
     var map = { DRAFT: ['#8a6d1f', '#fdf6e6', 'Draft'], SENT: ['#2f7d5d', '#eaf4ef', 'Sent'], SUPERSEDED: ['#8a8f85', '#f2f3ef', 'Superseded'] };
     var m = map[status] || map.DRAFT;
@@ -7034,6 +7063,7 @@
         '<div style="display:flex;justify-content:space-between;gap:8px;font-size:11.5px;color:#5c6157;margin-top:2px;">' +
           '<span>' + esc(r.reference) + '</span><span>' + rfqDate(r.requestedAt) + '</span></div>' +
         '<div style="font-size:11px;color:#8a8f85;margin-top:3px;line-height:1.45;">' + r.itemCount + ' item' + (r.itemCount === 1 ? '' : 's') + (items ? ' \u2014 ' + esc(items) : '') + '</div>' +
+        rfqDeliveryLine(r) +
         '<div style="display:flex;gap:6px;margin-top:6px;">' +
           '<button class="link-btn rfqOpen" data-id="' + r.id + '" style="width:auto;padding:5px 10px;font-size:12px;">' + (r.status === 'DRAFT' ? 'Edit &amp; send' : 'View') + '</button>' +
           (r.status === 'SENT' ? '<button class="link-btn rfqResend" data-id="' + r.id + '" style="width:auto;padding:5px 10px;font-size:12px;">Send again</button>' : '') +

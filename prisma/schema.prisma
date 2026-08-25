@@ -2201,6 +2201,11 @@ enum FreightRfqStatus {
 enum FreightRfqSendStatus {
   QUEUED
   SENT
+  /// The recipient's mail server accepted it. Reported by Resend's webhook, not by
+  /// us: SENT only means the provider took the message.
+  DELIVERED
+  /// The recipient's mail server refused it. The vendor does not have the request.
+  BOUNCED
   FAILED
 }
 
@@ -2308,10 +2313,17 @@ model FreightRfqSend {
   status            FreightRfqSendStatus @default(QUEUED)
   providerMessageId String?
   error             String?
+  /// When the recipient's mail server accepted it, as reported by the provider.
+  /// Null against a SENT row means nobody has confirmed it landed — which is a
+  /// different thing from a failure, and is worth being able to see.
+  deliveredAt       DateTime?
+  openedAt          DateTime?
   sentById          String
   createdAt         DateTime             @default(now())
 
   @@index([rfqId])
+  /// The webhook arrives knowing only the provider's message id.
+  @@index([providerMessageId])
 }
 
 
