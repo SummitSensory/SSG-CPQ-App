@@ -5064,7 +5064,7 @@
     return ov;
   }
   /* --- Reports: company-wide proposal analytics --- */
-  var rep = { data: null, drift: null, driftLoading: false, tab: 'overview', range: '365', from: '', to: '', pq: '', psort: 'proposedValue' };
+  var rep = { data: null, drift: null, driftLoading: false, inv: null, invLoading: false, tab: 'overview', range: '365', from: '', to: '', pq: '', psort: 'proposedValue' };
   var REP_TABS = [
     { id: 'overview', label: 'Overview' },
     { id: 'conversion', label: 'Conversion' },
@@ -5075,6 +5075,7 @@
     { id: 'team', label: 'Team' },
     { id: 'detail', label: 'All proposals' },
     { id: 'costdrift', label: 'Cost drift' },
+    { id: 'invoices', label: 'Invoice variance' },
   ];
   var REP_RANGES = [['30', 'Last 30 days'], ['90', 'Last 90 days'], ['180', 'Last 6 months'], ['365', 'Last 12 months'], ['ytd', 'Year to date'], ['all', 'All time'], ['custom', 'Custom…']];
   function fmt0(minor) { return '$' + Math.round((Number(minor) || 0) / 100).toLocaleString(); }
@@ -5221,8 +5222,79 @@
       }).join('');
   }
 
+  /**
+   * Every vendor invoice that disagrees with the sheet it was checked against, across
+   * every project. Loaded on demand — it reads every invoiced line in the database.
+   */
+  async function loadInvoiceVariance() {
+    rep.invLoading = true;
+    try {
+      var r = await authed('/reports/invoice-variance');
+      rep.inv = r.ok ? await r.json() : { error: 'Could not load invoice variance (' + r.status + ').' };
+    } catch (e) { rep.inv = { error: 'Could not reach the server.' }; }
+    rep.invLoading = false;
+    if (rep.tab === 'invoices') drawReports();
+  }
+
+  function drawInvoiceVariance() {
+    var d = rep.inv;
+    if (!d) return '<div class="muted" style="padding:24px;">Comparing every invoiced line against its Bill of Materials…</div>';
+    if (d.error) return '<div class="err">' + esc(d.error) + '</div>';
+    var s = d.summary;
+    if (!s.orderCount) {
+      return '<div class="placeholder"><h3>No invoice variances</h3>' +
+        '<p>Every vendor invoice checked so far matches the sheet it was checked against.</p></div>';
+    }
+    var m = function (v) { return costMoney(v); };
+    return '<div class="grid">' +
+        kpi('Overcharged', m(s.overchargedMinor), 'billed above the sheet', s.overchargedMinor ? RED : '#20241f') +
+        kpi('Undercharged', m(s.underchargedMinor), 'billed below the sheet', '#2f7d5d') +
+        kpi('Net', (s.netMinor > 0 ? '+' : '') + m(s.netMinor), s.orderCount + ' order' + (s.orderCount === 1 ? '' : 's') + ' · ' + s.vendorCount + ' vendor' + (s.vendorCount === 1 ? '' : 's'), s.netMinor < 0 ? '#2f7d5d' : RED) +
+        kpi('Not yet accepted', s.openCount.toLocaleString(), 'waiting on a decision', '#3d4a55') +
+      '</div>' +
+      '<div class="muted" style="font-size:12.5px;margin:14px 0 10px;line-height:1.6;max-width:720px;">' +
+        'One row per vendor per order. The sheet figure is what that vendor was sent; the invoiced figure is what they billed for the same lines. ' +
+        'Accepted differences stay listed — an accepted overcharge is still a fact about that vendor.' +
+      '</div>' +
+      d.rows.map(function (o) {
+        var neg = o.varianceMinor < 0;
+        return '<div class="card" style="margin-bottom:12px;padding:0;overflow:hidden;">' +
+          '<div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:baseline;padding:13px 16px;background:#fbfbf9;border-bottom:1px solid #e7e8e3;">' +
+            '<div><b style="font-weight:650;">' + esc(o.vendor) + '</b>' +
+              '<span class="muted" style="font-size:12.5px;"> · ' + esc(o.customer || '—') + ' · ' + esc(o.number) +
+              (o.invoiceNumber ? ' · invoice ' + esc(o.invoiceNumber) : '') + '</span>' +
+              (o.accepted ? ' <span class="chip" style="background:#eaf1ec;color:#2f6b4f;">Accepted' + (o.acceptedBy ? ' · ' + esc(o.acceptedBy) : '') + '</span>' : '') +
+            '</div>' +
+            '<div style="font-size:13px;font-variant-numeric:tabular-nums;">' + o.checkedLines + ' line' + (o.checkedLines === 1 ? '' : 's') +
+              ' · <b style="color:' + (neg ? RED : '#20241f') + ';">' + (o.varianceMinor > 0 ? '+' : '') + m(o.varianceMinor) +
+              (o.variancePct == null ? '' : ' · ' + (o.variancePct > 0 ? '+' : '') + o.variancePct.toFixed(1) + '%') + '</b></div>' +
+          '</div>' +
+          '<div style="overflow:auto;"><table style="width:100%;border-collapse:collapse;font-size:12.5px;">' +
+            '<thead><tr>' +
+              ['Part', 'Qty', 'Sheet each', 'Invoiced each', 'Δ $', 'Δ %'].map(function (h, i) {
+                return '<th style="padding:8px 14px;text-align:' + (i ? 'right' : 'left') + ';font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;font-weight:600;border-bottom:1px solid #e7e8e3;white-space:nowrap;">' + h + '</th>';
+              }).join('') +
+            '</tr></thead><tbody>' +
+            o.lines.map(function (l) {
+              var ln = (l.extendedDeltaMinor || 0) < 0;
+              return '<tr>' +
+                rtd(esc(l.name) + '<div class="muted" style="font-size:11.5px;font-family:ui-monospace,monospace;">' + esc(l.sku || '—') + '</div>') +
+                rtd(l.quantity, 'right') + rtd(m(l.agreedUnitMinor), 'right') + rtd(m(l.invoicedUnitMinor), 'right', 1) +
+                rtd('<span style="color:' + (ln ? RED : '#20241f') + ';">' + ((l.extendedDeltaMinor || 0) > 0 ? '+' : '') + m(l.extendedDeltaMinor) + '</span>', 'right') +
+                rtd(l.deltaPct == null ? '—' : '<span style="color:' + (l.deltaPct < 0 ? RED : '#20241f') + ';">' + (l.deltaPct > 0 ? '+' : '') + l.deltaPct.toFixed(1) + '%</span>', 'right') +
+              '</tr>';
+            }).join('') +
+          '</tbody></table></div></div>';
+      }).join('');
+  }
+
   function drawReports() {
     var box = document.getElementById('repBody'); if (!box) return;
+    if (rep.tab === 'invoices') {
+      box.innerHTML = drawInvoiceVariance();
+      if (!rep.inv && !rep.invLoading) loadInvoiceVariance();
+      return;
+    }
     if (rep.tab === 'costdrift') {
       box.innerHTML = drawDrift();
       if (!rep.drift && !rep.driftLoading) loadDrift();
@@ -10762,6 +10834,59 @@
    * flight. Returning the difference is what lets the screen say so while someone is
    * building the sheet, rather than after the vendor has it.
    */
+  /**
+   * The invoiced cell, and the two differences beside it.
+   *
+   * One number to type: what the vendor billed per unit. The comparison is against
+   * the cost on the sheet they were sent, and both differences are shown because they
+   * answer different questions — the percentage says whether the price moved, the
+   * dollar figure says whether it matters on this job.
+   *
+   * Negative is red, always: on this screen negative means the vendor billed less than
+   * the sheet said, which is as much a discrepancy as billing more.
+   */
+  var RED = '#a2402f';
+  function invCell(p, edit) {
+    var v = p.invoicedUnitCostMinor;
+    var val = v == null ? '' : (Number(v) / 100).toFixed(2);
+    if (!edit) return v == null ? '<span class="muted">—</span>' : costMoney(v);
+    return '<input class="bomLine" data-id="' + p.id + '" data-f="invoicedUnitCostMinor" ' +
+      'value="' + val + '" inputmode="decimal" placeholder="—" ' +
+      'title="What the vendor invoiced for this part, per unit. Leave empty until you have checked this line." ' +
+      'style="' + bomFieldStyle('92px') + 'text-align:right;background:#fff;border-color:' +
+      (v == null ? '#dcded7' : '#cbd3c9') + ';">';
+  }
+
+  /** The per-unit difference across the line's quantity — the money at stake. */
+  function invDelta(p) {
+    if (!p || p.invoicedUnitCostMinor == null) return null;
+    var qty = Number(p.quantity) || 0;
+    var unit = Number(p.invoicedUnitCostMinor) - Number(p.unitCostMinor || 0);
+    return { unit: unit, ext: unit * qty };
+  }
+
+  function invDeltaCell(p) {
+    var d = invDelta(p);
+    if (!d) return '<span class="muted">—</span>';
+    if (!d.ext && !d.unit) return '<span style="color:#2f7d5d;">—</span>';
+    var neg = d.ext < 0;
+    return '<span style="font-variant-numeric:tabular-nums;font-weight:600;color:' + (neg ? RED : '#20241f') + ';">' +
+        (d.ext > 0 ? '+' : '') + costMoney(d.ext) + '</span>' +
+      '<div class="muted" style="font-size:11px;color:' + (neg ? RED : '#8a8f85') + ';">' +
+        (d.unit > 0 ? '+' : '') + costMoney(d.unit) + ' each</div>';
+  }
+
+  function invPctCell(p) {
+    var d = invDelta(p);
+    if (!d) return '<span class="muted">—</span>';
+    var base = Number(p.unitCostMinor || 0);
+    if (!base) return '<span class="muted">n/a</span>';
+    var pct = (d.unit / base) * 100;
+    if (!pct) return '<span style="color:#2f7d5d;">0%</span>';
+    return '<span style="font-variant-numeric:tabular-nums;font-weight:600;color:' +
+      (pct < 0 ? RED : '#20241f') + ';">' + (pct > 0 ? '+' : '') + pct.toFixed(1) + '%</span>';
+  }
+
   function catalogDrift(p) {
     if (!p || p.catalogCostMinor == null) return null;
     var cat = Number(p.catalogCostMinor);
@@ -10867,7 +10992,8 @@
     // Managed under Catalog → Manufacturers → Part numbers; the column only appears
     // when something on this section is mapped.
     var showVendorPart = lines.some(function (p) { return p.vendorPart; });
-    var cols = 8 + (showVendorPart ? 1 : 0) + (showColor ? 1 : 0) + (showBag ? 1 : 0) + (edit ? 1 : 0);
+    // +3 for the invoice columns: invoiced each, Δ $, Δ %.
+    var cols = 11 + (showVendorPart ? 1 : 0) + (showColor ? 1 : 0) + (showBag ? 1 : 0) + (edit ? 1 : 0);
     var rowHtmlFor = function (p) {
       // Free issue: bought elsewhere, shipped here, already paid for. The row shows
       // what is arriving and no money, matching the sheet this vendor is sent.
@@ -10893,6 +11019,9 @@
         td(((Number(p.unitWeightLbs) || 0) * (Number(p.quantity) || 0)).toFixed(2)) +
         td(free ? freeCell : costCell(p, edit)) +
         td(free ? freeCell : money2(ext)) +
+        td(free ? freeCell : invCell(p, edit)) +
+        td(free ? '' : invDeltaCell(p)) +
+        td(free ? '' : invPctCell(p)) +
         td(edit
           ? '<input class="bomLine" data-id="' + p.id + '" data-f="vendorNotes" value="' + esc(p.vendorNotes || '') + '" placeholder="—" style="' + bomFieldStyle('160px') + '">'
           : esc(p.vendorNotes || '—')) +
@@ -10919,7 +11048,7 @@
       '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;font-weight:600;">' + s.unitCount + '</td>' +
       '<td colspan="' + (2 + (showColor ? 1 : 0) + (showBag ? 1 : 0)) + '" style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td>' +
       '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;font-weight:600;">' + money2(s.extendedCostMinor) + '</td>' +
-      '<td colspan="' + (edit ? 3 : 2) + '" style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td></tr>';
+      '<td colspan="' + (edit ? 6 : 5) + '" style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td></tr>';
 
     var warn = s.missingColorSkus.length
       ? '<div style="background:#fdf6e6;border:1px solid #ecd9a6;border-radius:9px;padding:9px 12px;font-size:12.5px;color:#6b5a24;margin-bottom:10px;">' +
@@ -10981,6 +11110,7 @@
               '<span class="muted" data-deal-out style="font-size:11.5px;line-height:1.5;flex:1;min-width:220px;">Reads the Deal Tracking board and replaces the freight and tax figures with what it holds.</span>' +
             '</div>'
           : '') +
+        invoiceBlock(s, canHandoff) +
         '<div style="margin-top:12px;"><div class="k">Notes to this vendor</div>' +
           '<textarea class="secF" data-id="' + s.id + '" data-f="notes" rows="2" placeholder="Prints beneath the line items" style="' + bomFieldStyle(null, locked) + 'resize:vertical;"' + dis + '>' + esc(s.notes || '') + '</textarea></div>' +
         // Opt-in per vendor: most vendors powder coat nothing, and the column was
@@ -10999,7 +11129,7 @@
         (edit && s.showPowderColor ? colorApplyRow(s, lines) : '') +
         '<div style="margin-top:14px;overflow:auto;">' +
           tableShell(
-            ['Item', 'Part #'].concat(showVendorPart ? ['Vendor part #'] : [], ['Qty'], showBag ? ['Bag #'] : [], showColor ? ['Powder color'] : [], ['Weight (lb)', 'Cost each', 'Total cost', 'Notes', 'Status'], edit ? [''] : []),
+            ['Item', 'Part #'].concat(showVendorPart ? ['Vendor part #'] : [], ['Qty'], showBag ? ['Bag #'] : [], showColor ? ['Powder color'] : [], ['Weight (lb)', 'Cost each', 'Total cost', 'Invoiced each', 'Δ $', 'Δ %', 'Notes', 'Status'], edit ? [''] : []),
             rows, cols, '') +
         '</div>' +
         sectionMoney(s) +
@@ -11207,6 +11337,20 @@
     if (showTax) rows.push(['Estimated tax', tax == null ? s.estimatedTax : money2(tax), 0]);
     var grand = ship == null || (showTax && tax == null) ? null : items + ship + (showTax ? tax || 0 : 0);
     rows.push(['Bill of Materials grand total', grand == null ? 'Pending freight' : money2(grand), 1]);
+    // What the vendor says they are owed, against what this sheet says. Stated as its
+    // own pair of rows rather than folded into the total above: the total is what we
+    // agreed, and their figure is a claim about it.
+    if (s.vendorInvoiceTotalMinor != null) {
+      var stated = Number(s.vendorInvoiceTotalMinor) || 0;
+      var diff = stated - items;
+      rows.push(['Vendor invoice total', money2(stated), 0]);
+      rows.push([
+        'Difference from this sheet',
+        (diff > 0 ? '+' : '') + money2(diff),
+        0,
+        diff < 0 ? RED : diff > 0 ? '#20241f' : '#2f7d5d',
+      ]);
+    }
 
     return '<div style="display:flex;justify-content:flex-end;margin-top:12px;">' +
       '<table style="border-collapse:collapse;font-size:13px;min-width:280px;">' +
@@ -11214,10 +11358,75 @@
           var top = r[2] ? 'border-top:1px solid #dcded7;' : '';
           return '<tr>' +
             '<td style="padding:5px 16px 5px 0;color:' + (r[2] ? '#20241f' : '#5c6157') + ';font-weight:' + (r[2] ? '700' : '400') + ';' + top + '">' + esc(r[0]) + '</td>' +
-            '<td style="padding:5px 0;text-align:right;font-weight:' + (r[2] ? '700' : '600') + ';' + top + '">' + esc(r[1]) + '</td>' +
+            '<td style="padding:5px 0;text-align:right;font-weight:' + (r[2] ? '700' : '600') + ';' + top +
+              (r[3] ? 'color:' + r[3] + ';' : '') + '">' + esc(r[1]) + '</td>' +
           '</tr>';
         }).join('') +
       '</table></div>';
+  }
+
+  /**
+   * The vendor's invoice, beside the sheet they were sent.
+   *
+   * Only offered once the section has been submitted: an invoice for a sheet that has
+   * not gone out is a document for something nobody ordered. The fields stay writable
+   * after submission — the invoice is a fact about what happened afterwards, and
+   * recording it changes nothing about the vendor's copy.
+   */
+  function invoiceBlock(s, canHandoff) {
+    if (s.status !== 'SUBMITTED') return '';
+    var inv = s.invoice || { checkedLines: 0, uncheckedLines: 0, varianceMinor: 0, variancePct: null, needsApproval: false, thresholdMinor: 0, agreedMinor: 0, invoicedMinor: 0 };
+    var accepted = !!s.invoiceApprovedAt;
+    var neg = inv.varianceMinor < 0;
+    var chip = accepted
+      ? '<span class="chip" style="background:#eaf1ec;color:#2f6b4f;">Accepted ' + fmtDate(s.invoiceApprovedAt) +
+        (s.invoiceApprovedBy ? ' · ' + esc(s.invoiceApprovedBy) : '') + '</span>'
+      : (inv.checkedLines
+          ? '<span class="chip" style="background:#fdf6e6;color:#6b5a24;border:1px solid #ecd9a6;">Not accepted</span>'
+          : '');
+    var dis = canHandoff ? '' : ' disabled';
+    var f = function (label, field, value, w, extra) {
+      return '<div><div class="k">' + label + '</div>' +
+        '<input class="secF" data-id="' + s.id + '" data-f="' + field + '" value="' + esc(value == null ? '' : value) + '" ' +
+        (extra || '') + ' style="' + bomFieldStyle(w || null) + '"' + dis + '></div>';
+    };
+    var statedTotal = s.vendorInvoiceTotalMinor == null ? '' : (Number(s.vendorInvoiceTotalMinor) / 100).toFixed(2);
+
+    var summary = inv.checkedLines
+      ? '<div style="display:flex;gap:18px;flex-wrap:wrap;align-items:baseline;margin-top:10px;font-size:13px;">' +
+          '<span class="muted">' + inv.checkedLines + ' line' + (inv.checkedLines === 1 ? '' : 's') + ' checked' +
+            (inv.uncheckedLines ? ' · <span style="color:#8a6d1f;">' + inv.uncheckedLines + ' still to check</span>' : '') + '</span>' +
+          '<span>Sheet <b>' + costMoney(inv.agreedMinor) + '</b></span>' +
+          '<span>Invoiced <b>' + costMoney(inv.invoicedMinor) + '</b></span>' +
+          '<span>Difference <b style="color:' + (neg ? RED : (inv.varianceMinor ? '#20241f' : '#2f7d5d')) + ';">' +
+            (inv.varianceMinor > 0 ? '+' : '') + costMoney(inv.varianceMinor) +
+            (inv.variancePct == null ? '' : ' · ' + (inv.variancePct > 0 ? '+' : '') + inv.variancePct.toFixed(1) + '%') +
+          '</b></span>' +
+        '</div>'
+      : '<div class="muted" style="font-size:12.5px;margin-top:10px;">Type what the vendor billed into the <b>Invoiced each</b> column on any line. Nothing is compared until you do.</div>';
+
+    var actions = !canHandoff || !inv.checkedLines
+      ? ''
+      : '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px;">' +
+          (accepted
+            ? '<button class="link-btn" data-inv-reopen="' + s.id + '" style="width:auto;padding:7px 13px;color:#9c3327;">Reopen this invoice</button>'
+            : '<button class="btn" data-inv-approve="' + s.id + '" style="width:auto;padding:8px 14px;">Accept the difference</button>') +
+          (!accepted && inv.needsApproval
+            ? '<span class="muted" style="font-size:11.5px;">Over ' + costMoney(inv.thresholdMinor) + ' — a manager has to accept this.</span>'
+            : '') +
+        '</div>';
+
+    return '<div style="margin-top:14px;padding:13px 14px;border:1px solid #e7e8e3;border-radius:12px;background:#fbfbf9;">' +
+      '<div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">' +
+        '<div style="font-size:12.5px;font-weight:600;color:#4a4f47;">Vendor invoice</div>' + chip +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">' +
+        f('Invoice number', 'vendorInvoiceNumber', s.vendorInvoiceNumber) +
+        f('Invoice date', 'vendorInvoiceDate', s.vendorInvoiceDate ? String(s.vendorInvoiceDate).slice(0, 10) : '', null, 'type="date"') +
+        f('Total they billed', 'vendorInvoiceTotalMinor', statedTotal, null, 'inputmode="decimal" placeholder="0.00"') +
+        f('Note', 'vendorInvoiceNotes', s.vendorInvoiceNotes) +
+      '</div>' + summary + actions +
+    '</div>';
   }
 
   /** Append-only record of every BOM emailed to this vendor. */
@@ -11275,7 +11484,8 @@
     document.querySelectorAll('.secF').forEach(function (el) {
       el.addEventListener('change', async function () {
         var f = el.getAttribute('data-f'), body = {};
-        if (f === 'submittedOn') body[f] = el.value ? new Date(el.value + 'T12:00:00').toISOString() : null;
+        if (f === 'submittedOn' || f === 'vendorInvoiceDate') body[f] = el.value ? new Date(el.value + 'T12:00:00').toISOString() : null;
+        else if (f === 'vendorInvoiceTotalMinor') body[f] = el.value.trim() === '' ? null : d2m(el.value);
         else body[f] = el.value.trim ? el.value.trim() : el.value;
         el.style.borderColor = '#c9a227';
         var r = await authed('/bom/sections/' + el.getAttribute('data-id'), { method: 'PATCH', body: body });
@@ -11288,6 +11498,26 @@
     /* One line, brought up to the catalog. The bulk dialog still covers a whole
      * order; this is the case where you are looking at one part and can see it is
      * wrong. Same endpoint, same audit trail. */
+    document.querySelectorAll('[data-inv-approve]').forEach(function (el) {
+      el.addEventListener('click', async function () {
+        el.disabled = true;
+        var r = await authed('/bom/sections/' + el.getAttribute('data-inv-approve') + '/invoice/approve', { method: 'POST', body: {} });
+        el.disabled = false;
+        if (!r.ok) return fail(r, 'Could not accept this invoice');
+        reload();
+      });
+    });
+
+    document.querySelectorAll('[data-inv-reopen]').forEach(function (el) {
+      el.addEventListener('click', async function () {
+        var why = prompt('Why is this invoice being reopened?');
+        if (!why || !why.trim()) return;
+        var r = await authed('/bom/sections/' + el.getAttribute('data-inv-reopen') + '/invoice/reopen', { method: 'POST', body: { reason: why.trim() } });
+        if (!r.ok) return fail(r, 'Could not reopen this invoice');
+        reload();
+      });
+    });
+
     document.querySelectorAll('.bomUseCat').forEach(function (el) {
       el.addEventListener('click', async function () {
         el.disabled = true;
@@ -11308,16 +11538,19 @@
         if (f === 'sourced') body[f] = el.value === 'true';
         else if (f === 'quantity') body[f] = Math.round(Number(el.value));
         else if (f === 'unitCostMinor') body[f] = d2m(el.value);
+        // An emptied cell is "not checked yet", which is a different fact from zero.
+        else if (f === 'invoicedUnitCostMinor') body[f] = el.value.trim() === '' ? null : d2m(el.value);
         else body[f] = el.value.trim();
         if (f === 'quantity' && !(body[f] >= 1)) { alert('Quantity must be a whole number of at least 1.'); reload(); return; }
         if (f === 'unitCostMinor' && !(body[f] >= 0)) { alert('Enter the cost as plain dollars — 145 or 145.00.'); reload(); return; }
+        if (f === 'invoicedUnitCostMinor' && body[f] !== null && !(body[f] >= 0)) { alert('Enter what the vendor billed as plain dollars — 145 or 145.00.'); refreshLines(); return; }
         el.style.borderColor = '#c9a227';
         var r = await authed('/orders/procurement/' + el.getAttribute('data-id'), { method: 'PATCH', body: body });
         el.style.borderColor = r.ok ? '#3f9d78' : '#c2452f';
         if (!r.ok) { await fail(r, 'Could not save the line'); reload(); return; }
         // A quantity change moves the section totals and the edited badge, so the
         // panel is rebuilt from the server rather than patched in place.
-        if (f === 'quantity' || f === 'unitCostMinor') { refreshLines(); return; }
+        if (f === 'quantity' || f === 'unitCostMinor' || f === 'invoicedUnitCostMinor') { refreshLines(); return; }
         var line = (procData || []).filter(function (x) { return x.id === el.getAttribute('data-id'); })[0];
         if (line) line[f] = body[f];
         setTimeout(function () { el.style.borderColor = '#dcded7'; }, 900);

@@ -65,6 +65,11 @@ export const Permission = {
   // Canadian job at once and misstate tax to a government, so it is deliberately
   // narrower than PROPOSAL_RELEASE.
   CROSSBORDER_MANAGE: 'crossborder:manage',
+  // Accept a difference between a vendor's invoice and the Bill of Materials they
+  // were sent. Recording the invoiced figures is ordinary handoff work; ACCEPTING a
+  // variance above the threshold is a decision about money the company owes, so it
+  // is its own permission rather than a role check buried in a route.
+  VENDOR_INVOICE_APPROVE: 'vendor-invoice:approve',
   PRODUCTS_ADMIN: 'products:admin',
   AUDIT_READ: 'audit:read',
   USERS_MANAGE: 'users:manage',
@@ -122,6 +127,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly string[]> = {
     P.QBO_MANAGE,
     P.ORDERS_MANAGE,
     P.HANDOFF_MANAGE,
+    P.VENDOR_INVOICE_APPROVE,
   ],
   SALES_MANAGER: [
     ...BASE,
@@ -135,6 +141,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly string[]> = {
     P.PROPOSAL_ARCHIVE,
     P.FREIGHT_COST_WRITE,
     P.ORDERS_MANAGE,
+    P.VENDOR_INVOICE_APPROVE,
   ],
   // A rep true-ups freight on their own jobs — they are usually the one holding the
   // vendor's email. Pushing the change to a live invoice is not theirs. Sending for
@@ -151,6 +158,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly string[]> = {
     P.HANDOFF_MANAGE,
     P.FREIGHT_COST_WRITE,
     P.FREIGHT_INVOICE_PUSH,
+    P.VENDOR_INVOICE_APPROVE,
   ],
   PROJECT_MANAGER: [...BASE, P.COSTS_READ, P.ORDERS_MANAGE, P.HANDOFF_MANAGE, P.FREIGHT_COST_WRITE],
   ACCOUNTING: [

@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma.js';
 import { NotFoundError, ValidationError } from '../lib/errors.js';
 import { rollUpProcurementLines } from './bomRollup.js';
+import { summarize, type InvoiceVariance } from './vendorInvoice.js';
 import type { BomQuestionType, BomSectionStatus, BomShipTo } from '@prisma/client';
 import { dealFigures, freightFor } from './dealFigures.js';
 
@@ -203,6 +204,14 @@ export interface SectionView {
   lineCount: number;
   unitCount: number;
   extendedCostMinor: number;
+  /** The vendor's invoice for this section, and how it compares to the sheet. */
+  vendorInvoiceNumber: string | null;
+  vendorInvoiceDate: string | null;
+  vendorInvoiceTotalMinor: number | null;
+  vendorInvoiceNotes: string | null;
+  invoiceApprovedAt: string | null;
+  invoiceApprovedBy: string | null;
+  invoice: InvoiceVariance;
   /** Parts on this section that require a colour and don't have one yet. */
   missingColorSkus: string[];
   questions: Array<{
@@ -289,10 +298,13 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
     prisma.procurementLine.findMany({
       where: { orderId },
       select: {
+        id: true,
+        name: true,
         sku: true,
         vendor: true,
         quantity: true,
         unitCostMinor: true,
+        invoicedUnitCostMinor: true,
         powderColorCode: true,
         powderColor: true,
         isHardwareComponent: true,
@@ -332,7 +344,9 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
 
   const actorIds = [
     ...new Set(
-      sections.flatMap((s) => [s.confirmedById, s.unlockedById]).filter(Boolean) as string[],
+      sections
+        .flatMap((s) => [s.confirmedById, s.unlockedById, s.invoiceApprovedById])
+        .filter(Boolean) as string[],
     ),
   ];
   const senderIds = [...new Set(sections.flatMap((s) => s.sends.map((x) => x.sentById)))];
@@ -422,6 +436,28 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
         (a, l) => a + (l.freeIssue ? 0 : (l.unitCostMinor ?? 0) * (Number(l.quantity) || 0)),
         0,
       ),
+      vendorInvoiceNumber: s.vendorInvoiceNumber,
+      vendorInvoiceDate: iso(s.vendorInvoiceDate),
+      vendorInvoiceTotalMinor: s.vendorInvoiceTotalMinor,
+      vendorInvoiceNotes: s.vendorInvoiceNotes,
+      invoiceApprovedAt: iso(s.invoiceApprovedAt),
+      invoiceApprovedBy: s.invoiceApprovedById
+        ? (nameById.get(s.invoiceApprovedById) ?? null)
+        : null,
+      // Counted over this vendor's lines only, and only the ones actually checked —
+      // comparing a half-typed invoice against the whole sheet reports an underbilling
+      // that is really just work not finished. Free-issue lines are included: Summit
+      // paid for them, and being billed twice for one is exactly what this catches.
+      invoice: summarize(
+        mine.map((l) => ({
+          id: l.id,
+          sku: l.sku,
+          name: l.name,
+          quantity: l.quantity,
+          unitCostMinor: l.unitCostMinor,
+          invoicedUnitCostMinor: l.invoicedUnitCostMinor,
+        })),
+      ),
       missingColorSkus: mine
         .filter(
           (l) =>
@@ -486,6 +522,11 @@ function assertEditable(s: { status: BomSectionStatus; vendor: string }): void {
 }
 
 export interface SectionPatch {
+  /** The vendor's invoice reference, date, stated total and note. */
+  vendorInvoiceNumber?: string | null;
+  vendorInvoiceDate?: Date | null;
+  vendorInvoiceTotalMinor?: number | null;
+  vendorInvoiceNotes?: string | null;
   showPowderColor?: boolean;
   showPackagingBag?: boolean;
   jobName?: string | null;
@@ -503,9 +544,23 @@ export interface SectionPatch {
   notes?: string | null;
 }
 
+const INVOICE_FIELDS = [
+  'vendorInvoiceNumber',
+  'vendorInvoiceDate',
+  'vendorInvoiceTotalMinor',
+  'vendorInvoiceNotes',
+];
+
 export async function patchSection(sectionId: string, patch: SectionPatch, actorId: string) {
   const s = await loadSection(sectionId);
-  assertEditable(s);
+  // A submitted section is frozen, EXCEPT for the invoice record: the invoice only
+  // exists because the sheet went out, so a lock that refused it would mean unlocking
+  // the vendor's document to write down what they billed.
+  const touched = Object.keys(patch).filter(
+    (k) => (patch as Record<string, unknown>)[k] !== undefined,
+  );
+  const invoiceOnly = touched.length > 0 && touched.every((k) => INVOICE_FIELDS.includes(k));
+  if (!invoiceOnly) assertEditable(s);
   const data: Record<string, unknown> = {};
   for (const k of [
     'jobName',
@@ -522,6 +577,17 @@ export async function patchSection(sectionId: string, patch: SectionPatch, actor
     'notes',
     'showPowderColor',
     'showPackagingBag',
+  ] as const) {
+    if (patch[k] !== undefined) data[k] = patch[k];
+  }
+  // Written outside the freeze above: the invoice only exists because the sheet went
+  // out, so refusing it on a submitted section would mean unlocking the vendor's
+  // document in order to write down what they billed for it.
+  for (const k of [
+    'vendorInvoiceNumber',
+    'vendorInvoiceDate',
+    'vendorInvoiceTotalMinor',
+    'vendorInvoiceNotes',
   ] as const) {
     if (patch[k] !== undefined) data[k] = patch[k];
   }

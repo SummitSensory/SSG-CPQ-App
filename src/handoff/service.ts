@@ -1117,6 +1117,12 @@ export async function patchProcurementLine(
     sourced?: boolean;
     targetDate?: Date | null;
     unitCostMinor?: number | null;
+    /**
+     * What the vendor invoiced for this part, per unit. Typed in from their invoice
+     * AFTER the sheet went out, so unlike every other field here it stays writable on
+     * a submitted section — see the freeze rule below.
+     */
+    invoicedUnitCostMinor?: number | null;
     /** Brand from the managed list; null clears it. */
     powderBrandId?: string | null;
     /** The colour code as typed for this part. */
@@ -1147,18 +1153,25 @@ export async function patchProcurementLine(
    * submission, because it records what happened to the part AFTER the sheet went
    * out. Freezing it would mean receiving could never be tracked against the
    * document the vendor was actually sent, which is the only document worth
-   * tracking it against. Everything else — quantity, colour, notes, cost — would
-   * put the BOM out of step with the vendor's copy and is refused.
+   * tracking it against.
+   *
+   * `invoicedUnitCostMinor` is the same kind of fact, for the same reason: the
+   * invoice arrives after the sheet is sent, and it is recorded BESIDE the agreed
+   * cost rather than over it, so nothing about the vendor's copy changes.
+   *
+   * Everything else — quantity, colour, notes, the agreed cost — would put the BOM
+   * out of step with the vendor's copy and is refused.
    */
+  const EDITABLE_AFTER_SUBMISSION = ['sourced', 'invoicedUnitCostMinor'];
   if (section?.status === 'SUBMITTED') {
     const touched = Object.keys(patch).filter(
       (k) => (patch as Record<string, unknown>)[k] !== undefined,
     );
-    const frozen = touched.filter((k) => k !== 'sourced');
+    const frozen = touched.filter((k) => !EDITABLE_AFTER_SUBMISSION.includes(k));
     if (frozen.length) {
       throw new ValidationError(
         `The ${vendor} Bill of Materials is submitted. Unlock it for changes first. ` +
-          'Only the per-line status can be changed on a submitted sheet.',
+          'Only the per-line status and the invoiced figure can be changed on a submitted sheet.',
       );
     }
   }
@@ -1227,6 +1240,15 @@ export async function patchProcurementLine(
       ...(patch.sourced !== undefined ? { sourced: patch.sourced } : {}),
       ...(patch.targetDate !== undefined ? { targetDate: patch.targetDate } : {}),
       ...(patch.unitCostMinor !== undefined ? { unitCostMinor: patch.unitCostMinor } : {}),
+      // Who checked this line against the invoice, and when. Cleared with the figure,
+      // so an emptied cell reads as "not checked" rather than as checked-at-zero.
+      ...(patch.invoicedUnitCostMinor !== undefined
+        ? {
+            invoicedUnitCostMinor: patch.invoicedUnitCostMinor,
+            invoicedAt: patch.invoicedUnitCostMinor == null ? null : new Date(),
+            invoicedById: patch.invoicedUnitCostMinor == null ? null : userId,
+          }
+        : {}),
       ...quantityData,
     },
   });
@@ -1243,7 +1265,9 @@ export async function patchProcurementLine(
       ? 'bom.line.quantity'
       : patch.unitCostMinor !== undefined
         ? 'bom.line.cost'
-        : 'bom.line.update';
+        : patch.invoicedUnitCostMinor !== undefined
+          ? 'bom.line.invoiced'
+          : 'bom.line.update';
   await logEvent(
     existing.orderId,
     action,

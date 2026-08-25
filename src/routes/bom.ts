@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
+import { can } from '../authz/rbac.js';
 import { ValidationError, NotFoundError } from '../lib/errors.js';
 import {
   listSections,
@@ -19,6 +20,11 @@ import {
 } from '../handoff/bomSections.js';
 import { dealFigures } from '../handoff/dealFigures.js';
 import { sendBom } from '../handoff/bomSend.js';
+import {
+  approveVendorInvoice,
+  reopenVendorInvoice,
+  APPROVAL_THRESHOLD_MINOR,
+} from '../handoff/vendorInvoice.js';
 
 /**
  * Bill of Materials — per-vendor sections, their questions, and the powder-coat
@@ -50,6 +56,11 @@ const SectionPatchSchema = z.object({
   powderCoatBrand: z.string().trim().max(120).nullish(),
   shipmentQuote: z.string().trim().max(120).nullish(),
   estimatedTax: z.string().trim().max(120).nullish(),
+  /** The vendor's invoice: their reference, their date, the total they state. */
+  vendorInvoiceNumber: z.string().trim().max(80).nullish(),
+  vendorInvoiceDate: z.union([z.coerce.date(), z.null()]).optional(),
+  vendorInvoiceTotalMinor: z.number().int().nullish(),
+  vendorInvoiceNotes: z.string().trim().max(2000).nullish(),
   /** A named address. Null clears it and falls back to `shipTo`. */
   shipToAddressId: z.string().trim().max(40).nullish(),
   notes: z.string().trim().max(4000).nullish(),
@@ -296,6 +307,29 @@ export function registerBomRoutes(app: FastifyInstance): void {
     if (!parsed.success)
       throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid change');
     return patchSection(sectionId, parsed.data, req.user!.sub);
+  });
+
+  /**
+   * Accept the difference between this vendor's invoice and the sheet they were sent.
+   *
+   * Recording the invoiced figures is ordinary handoff work — they go on the lines
+   * through the line patch. ACCEPTING a difference over the threshold is a decision
+   * about money owed, so it takes its own permission; under the threshold whoever is
+   * receiving can accept it and get on with the job.
+   */
+  app.post('/bom/sections/:sectionId/invoice/approve', handoff, async (req) => {
+    const { sectionId } = req.params as { sectionId: string };
+    const canApprove = can(req.user!.role, Permission.VENDOR_INVOICE_APPROVE);
+    const result = await approveVendorInvoice(sectionId, req.user!.sub, canApprove);
+    return { ...result, thresholdMinor: APPROVAL_THRESHOLD_MINOR };
+  });
+
+  /** Withdraw an acceptance. Reason required — somebody relied on the first answer. */
+  app.post('/bom/sections/:sectionId/invoice/reopen', handoff, async (req) => {
+    const { sectionId } = req.params as { sectionId: string };
+    const b = (req.body || {}) as { reason?: string };
+    await reopenVendorInvoice(sectionId, b.reason ?? '', req.user!.sub);
+    return { ok: true };
   });
 
   /**

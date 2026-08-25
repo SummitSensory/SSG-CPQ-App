@@ -1772,6 +1772,14 @@ model ProcurementLine {
   // the catalog at lock time (and backfilled once for orders locked earlier).
   unitCostMinor   Int?
   unitWeightLbs   Decimal?   @db.Decimal(10, 3)
+  /// What the vendor actually invoiced for this part, per unit, typed in from their
+  /// invoice after the sheet went out. `unitCostMinor` above stays as agreed on the
+  /// sheet they were sent — the two are kept apart so a difference can be seen rather
+  /// than overwritten by the very figure it should be compared against. NULL means
+  /// this line has not been checked yet, which is not the same as invoiced at zero.
+  invoicedUnitCostMinor Int?
+  invoicedAt      DateTime?
+  invoicedById    String?
   // Fabrication instructions that print on the BOM line.
   powderColor  String?
   /// Brand from the managed list, and the code as typed for THIS part. The printed
@@ -1956,6 +1964,21 @@ model BomVendorSection {
   /// Estimated tax, pulled from the same board. Informational on the sheet: the
   /// deal carries one figure, and it is not divided between vendors.
   estimatedTax    String?
+
+  /// The vendor's invoice for this section: their reference, their date, the total
+  /// they state, and any note about it. Writable after the section is SUBMITTED,
+  /// unlike everything above — the invoice is a fact about what happened AFTER the
+  /// sheet went out, and recording it changes nothing about the vendor's copy. The
+  /// line-by-line figures live on ProcurementLine.invoicedUnitCostMinor.
+  vendorInvoiceNumber String?
+  vendorInvoiceDate   DateTime?
+  vendorInvoiceTotalMinor Int?
+  vendorInvoiceNotes  String?
+  /// Someone accepted the difference between the invoice and the sheet. Above the
+  /// approval threshold this needs the vendor-invoice approval permission.
+  invoiceApprovedAt   DateTime?
+  invoiceApprovedById String?
+
   notes           String?
 
   /// SUBMITTED freezes the section's fields; unlocking is an explicit action and

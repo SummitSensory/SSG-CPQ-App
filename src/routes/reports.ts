@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { prisma } from '../lib/prisma.js';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
+import { invoiceVarianceReport } from '../handoff/vendorInvoice.js';
 import {
   buildReport,
   versionTotals,
@@ -16,6 +17,14 @@ import {
  */
 export function registerReportRoutes(app: FastifyInstance): void {
   const read = { preHandler: requirePermission(Permission.PROPOSAL_READ) };
+
+  /**
+   * Vendor invoice variance: every vendor invoice that disagrees with the sheet it
+   * was checked against, across every project, biggest money first. Accepted ones stay
+   * listed and marked — an accepted overcharge is still a fact about that vendor, and
+   * the pattern only shows up if it keeps being counted.
+   */
+  app.get('/reports/invoice-variance', read, async () => invoiceVarianceReport());
 
   /**
    * Cost drift: every order line whose cost no longer matches the catalog.
