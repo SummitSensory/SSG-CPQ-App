@@ -204,7 +204,19 @@ export async function createNewVersion(
         status: 'DRAFT',
         sections: current.sections as object,
         items: current.items as object,
-        priceSnapshotId: current.priceSnapshotId,
+        // The price snapshot is NOT carried over.
+        //
+        // A snapshot is the frozen total of a particular set of lines at a particular
+        // moment. A clone exists precisely to have different lines, so inheriting one
+        // hands the new version a total describing content it no longer holds — and
+        // because release only writes a snapshot when the version has none, the wrong
+        // figure was never replaced. Every downstream check then compared the new
+        // version's lines against the old version's price and refused to send, with
+        // the only advice on offer being "create a new version" — which cloned the
+        // same stale snapshot again. There was no way out of it from the screen.
+        //
+        // Left null, release freezes this version's own content, which is what the
+        // customer is being asked to accept.
         ruleSnapshotId: current.ruleSnapshotId,
         expirationDate: current.expirationDate,
         createdById: userId,

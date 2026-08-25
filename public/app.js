@@ -12907,7 +12907,7 @@
   }
   async function loadQbo(order, user) {
     var box = document.getElementById('qboBox'); if (!box) return;
-    var txns = [], billing = null, conn = null;
+    var txns = [], billing = null, conn = null, drift = null;
     try {
       var rs = await authed('/integrations/quickbooks/status'); conn = rs.ok ? await rs.json() : null;
       var r = await authed('/integrations/quickbooks/transactions?proposalId=' + encodeURIComponent(order.proposalId));
@@ -12917,6 +12917,11 @@
       // round trip per document. The Refresh button is the live one.
       var rb = await authed('/integrations/quickbooks/billing/' + encodeURIComponent(order.proposalId));
       if (rb.ok) billing = await rb.json();
+      // Whether the frozen accepted price still describes this version's own lines.
+      // Read here rather than discovered at Step 1: the push refusing is the last
+      // moment anyone would want to find out, and until now it was the only one.
+      var rd = await authed('/proposals/versions/' + encodeURIComponent(order.proposalVersionId) + '/price-drift');
+      if (rd.ok) drift = await rd.json();
     } catch (e) { box.innerHTML = '<div class="err">Could not reach QuickBooks.</div>'; return; }
 
     var connected = conn && (conn.connections || 0) > 0;
@@ -13035,7 +13040,28 @@
 
     var lastSync = ((billing && billing.documents) || []).map(function (d) { return d.lastSyncedAt; }).filter(Boolean).sort().pop();
 
-    box.innerHTML =
+    /**
+     * The frozen price and the version's lines disagree.
+     *
+     * Shown with both figures and a way out. Previously this surfaced only as a refusal
+     * at Step 1, whose advice — make a new version — could not work, because a new
+     * version inherited the same frozen price and drifted identically. Re-freezing is
+     * the decision that the lines are right and the frozen figure is the stale one; it
+     * changes no line and is recorded against the order.
+     */
+    var driftHtml = (drift && drift.drifted)
+      ? '<div style="background:#fbf1ef;border:1px solid #e6c9c2;border-radius:9px;padding:12px 14px;margin-bottom:10px;font-size:13px;line-height:1.6;color:#7a3a2c;">' +
+          '<b style="font-weight:650;">The accepted price does not match this version\u2019s lines</b>' +
+          '<div style="margin-top:5px;">Frozen accepted total <b>' + fmtMoney(drift.frozenMinor, 'USD') + '</b> \u00b7 ' +
+            'the version\u2019s lines come to <b>' + fmtMoney(drift.liveMinor, 'USD') + '</b> \u00b7 ' +
+            'a difference of <b>' + fmtMoney(Math.abs(drift.driftMinor), 'USD') + '</b>.</div>' +
+          '<div style="margin-top:5px;">Nothing can be sent to QuickBooks while the two disagree. If the lines are right, re-freeze the accepted price at ' +
+            fmtMoney(drift.liveMinor, 'USD') + ' \u2014 the lines are not touched, and the change is recorded on this order.</div>' +
+          '<button class="btn" id="qboRefreeze" style="width:auto;padding:8px 14px;margin-top:9px;">Re-freeze the accepted price</button>' +
+        '</div>'
+      : '';
+
+    box.innerHTML = driftHtml +
       '<div class="muted" style="font-size:12.5px;margin:-4px 0 10px;line-height:1.55;">Pushing to QuickBooks is three deliberate steps: <b>prepare</b> freezes the totals and an idempotency key (nothing leaves this app), <b>authorize</b> is the sign-off, <b>create</b> writes the document into QuickBooks. A retry reuses the same key, so it can never duplicate a document. Invoices are emailed to the customer by Biller Genie, which reads them out of QuickBooks on its own schedule — nothing is sent from here.</div>' +
       (!connected ? '<div class="placeholder" style="padding:16px;margin-bottom:10px;"><p class="muted" style="margin:0;">QuickBooks is not connected — connect it under Integrations first.</p></div>' : '') +
       '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">' +
@@ -13061,6 +13087,16 @@
         tableShell(['Date', 'Applied', 'Method', 'Reference', 'Deposited to'], payRows, 5, '') : '') +
       (remRows ? '<div style="font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#8a8f85;margin:18px 0 6px;">Payment reminders</div>' +
         tableShell(['Sent', 'To', 'Subject', 'Balance then', 'Status'], remRows, 5, '') : '');
+
+    var rf = document.getElementById('qboRefreeze');
+    if (rf) rf.addEventListener('click', async function () {
+      if (!confirm('Re-freeze the accepted price at ' + fmtMoney(drift.liveMinor, 'USD') + '?\n\nThe proposal\u2019s lines are not changed. The frozen total, the deposit and the order\u2019s figures are restated to match them.')) return;
+      rf.disabled = true;
+      var r2 = await authed('/proposals/versions/' + encodeURIComponent(order.proposalVersionId) + '/refreeze-price', { method: 'POST', body: {} });
+      rf.disabled = false;
+      if (!r2.ok) return fail(r2, 'Could not re-freeze the accepted price');
+      loadQbo(order, user);
+    });
 
     var pb = document.getElementById('qboPrepare');
     if (pb && canTransact) pb.addEventListener('click', function () { openQboPrepare(order, user, txns); });

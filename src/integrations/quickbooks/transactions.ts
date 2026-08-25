@@ -211,19 +211,21 @@ async function fromProposalBuilder(
   const liveTotal = BigInt(Math.round(live.total));
   if (liveTotal !== snap.grandTotal) {
     const drift = snap.grandTotal - liveTotal;
+    // Stated in dollars. Minor units are how the figures are stored, not how anyone
+    // reads a price, and "2128698" in a message about money is a number the reader has
+    // to decode before they can even tell which way the difference runs.
+    const usd = (v: bigint) => '$' + (Number(v < 0n ? -v : v) / 100).toFixed(2);
     throw new ConflictError(
       "This proposal's contents no longer match the price that was accepted. The frozen " +
         'accepted total is ' +
-        snap.grandTotal +
-        " but the version's own lines now come " +
-        'to ' +
-        liveTotal +
+        usd(snap.grandTotal) +
+        " but the version's own lines come to " +
+        usd(liveTotal) +
         ', a difference of ' +
-        (drift < 0n ? -drift : drift) +
-        '. That ' +
-        'happens when a version is edited after it was released. Nothing is sent to ' +
-        'QuickBooks until the two agree: create a new version with the correct content, ' +
-        'release it and accept it, then push from that.',
+        usd(drift) +
+        '. That happens when a version is edited after its price was frozen, or when a ' +
+        'new version inherited an earlier one\u2019s frozen price. If the lines are ' +
+        'right, re-freeze the accepted price on the order page and push again.',
     );
   }
   const num = (v: unknown): number =>

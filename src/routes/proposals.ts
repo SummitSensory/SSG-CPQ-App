@@ -36,6 +36,7 @@ import {
   writeCrossBorderSnapshot,
 } from '../crossborder/snapshot.js';
 import { backfillProjectIdOnVersions } from '../crm/projectId.js';
+import { priceDrift, refreezeAcceptedPrice } from '../proposals/refreezePrice.js';
 
 const SectionSchema = z.object({
   id: z.string(),
@@ -91,6 +92,28 @@ export function registerProposalRoutes(app: FastifyInstance): void {
   const review = { preHandler: requirePermission(Permission.PROPOSAL_REVIEW) };
   const release = { preHandler: requirePermission(Permission.PROPOSAL_RELEASE) };
   const archive = { preHandler: requirePermission(Permission.PROPOSAL_ARCHIVE) };
+
+  /**
+   * Does this version's frozen price still describe its own lines?
+   *
+   * Read-only, so it sits behind PROPOSAL_READ: seeing that the two disagree is
+   * ordinary context, and hiding it is what let the disagreement go unnoticed until
+   * the QuickBooks push refused.
+   */
+  app.get('/proposals/versions/:versionId/price-drift', read, async (req) =>
+    priceDrift((req.params as { versionId: string }).versionId),
+  );
+
+  /**
+   * Restate the frozen price as the version's own content.
+   *
+   * Behind PROPOSAL_RELEASE rather than the QuickBooks permission: this is the act of
+   * declaring what the price of record is, which is the same authority as releasing a
+   * version. That it happens to unblock an invoice is a consequence, not the reason.
+   */
+  app.post('/proposals/versions/:versionId/refreeze-price', release, async (req) =>
+    refreezeAcceptedPrice((req.params as { versionId: string }).versionId, req.user!.sub),
+  );
 
   // The list view needs the customer name, the created/modified/expiration dates
   // and the version count in one round trip — the proposal record itself carries
