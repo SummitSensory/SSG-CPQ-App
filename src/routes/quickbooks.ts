@@ -20,6 +20,7 @@ import {
   authorizeTransaction,
   executeTransaction,
   retryTransaction,
+  discardTransaction,
   listTransactions,
   loadAcceptedTotals,
 } from '../integrations/quickbooks/transactions.js';
@@ -225,12 +226,10 @@ export function registerQuickbooksRoutes(app: FastifyInstance): void {
       select: { id: true, qboId: true, qboDocNumber: true },
     });
     if (!txn?.qboId) {
-      return reply
-        .status(404)
-        .send({
-          error: 'NO_INVOICE',
-          message: 'No QuickBooks invoice has been created for that version.',
-        });
+      return reply.status(404).send({
+        error: 'NO_INVOICE',
+        message: 'No QuickBooks invoice has been created for that version.',
+      });
     }
 
     const read = await readById<{
@@ -508,6 +507,19 @@ export function registerQuickbooksRoutes(app: FastifyInstance): void {
   app.post('/integrations/quickbooks/transactions/:id/execute', transact, async (req) => {
     const { id } = req.params as { id: string };
     return serializeTxn(await executeTransaction(id, req.user!.sub));
+  });
+
+  /**
+   * Discard a prepared document that was never created in QuickBooks.
+   *
+   * The totals froze when it was prepared, so a freight correction afterwards leaves it
+   * holding a figure the proposal no longer carries. Discarding releases the order to be
+   * prepared again at the current total.
+   */
+  app.post('/integrations/quickbooks/transactions/:id/discard', transact, async (req) => {
+    const { id } = req.params as { id: string };
+    const body = (req.body ?? {}) as { reason?: string };
+    return serializeTxn(await discardTransaction(id, req.user!.sub, body.reason ?? ''));
   });
 
   // Manual retry of a FAILED transaction (same idempotency key — never duplicates).

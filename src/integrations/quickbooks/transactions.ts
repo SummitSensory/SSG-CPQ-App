@@ -542,6 +542,50 @@ export async function authorizeTransaction(txnId: string, userId: string) {
   return updated;
 }
 
+/**
+ * Abandon a prepared document that was never created in QuickBooks.
+ *
+ * A prepared document freezes the totals at the moment it is prepared. When freight is
+ * corrected afterwards — which is the normal course of a job, not an edge case — that
+ * document still holds the old figure and there was no way to be rid of it: the only
+ * actions were to create it wrong or leave it sitting there. Discarding it releases the
+ * order to be prepared again at the current total.
+ *
+ * A CREATED document is never discardable here. It exists in QuickBooks, and pretending
+ * otherwise in this system would put the two out of step; that one is voided or
+ * credited in QuickBooks itself.
+ */
+export async function discardTransaction(txnId: string, userId: string, reason: string) {
+  const txn = await prisma.qboTransaction.findUnique({ where: { id: txnId } });
+  if (!txn) throw new NotFoundError('Transaction not found');
+  if (txn.status === 'CREATED')
+    throw new ConflictError(
+      'This document already exists in QuickBooks. Void or credit it there — discarding it here would leave the two systems disagreeing.',
+    );
+  if (txn.status === 'VOIDED') return txn;
+  const why = reason.trim();
+  if (!why) throw new ValidationError('Give a reason for discarding this document.');
+
+  const updated = await prisma.qboTransaction.update({
+    where: { id: txnId },
+    data: { status: 'VOIDED', error: null },
+  });
+  await recordAudit({
+    actorId: userId,
+    action: 'qbo.txn.discard',
+    entity: 'QboTransaction',
+    entityId: txnId,
+    details: {
+      type: txn.type,
+      environment: txn.environment,
+      fromStatus: txn.status,
+      totalMinor: txn.totalMinor,
+      reason: why,
+    },
+  });
+  return updated;
+}
+
 async function activeRealmId(environment: QboEnvironment): Promise<string> {
   const conn = await prisma.qboConnection.findFirst({ where: { environment, isActive: true } });
   if (!conn) throw new ConflictError(`No active QuickBooks connection for ${environment}`);

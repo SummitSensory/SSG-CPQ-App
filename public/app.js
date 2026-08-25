@@ -12955,20 +12955,39 @@
     // Two tables rather than one wide one. Before a document exists in
     // QuickBooks the only question is which of the three steps is next; after it
     // exists the question is entirely different — was it sent, has it been paid.
-    var pending = txns.filter(function (t) { return t.status !== 'CREATED'; });
+    // VOIDED is neither waiting nor live — it was prepared and then abandoned, and
+    // leaving it in the waiting list would make a discard look like it did nothing.
+    var pending = txns.filter(function (t) { return t.status !== 'CREATED' && t.status !== 'VOIDED'; });
     var live = txns.filter(function (t) { return t.status === 'CREATED'; });
 
+    // What the order is worth NOW. A prepared document freezes its total, so freight
+    // corrected afterwards leaves it holding a figure the order no longer carries —
+    // and creating it would put that stale figure in front of the customer.
+    var orderTotalMinor = (order && (order.grandTotalMinor != null ? order.grandTotalMinor : order.totalMinor)) || null;
+
     var pendingRows = pending.map(function (t) {
+      var stale = orderTotalMinor != null && t.amountMinor != null && t.amountMinor !== orderTotalMinor;
       var step = '';
       if (canTransact) {
         if (t.status === 'DRAFT' || t.status === 'PENDING_AUTHORIZATION') step = '<button class="link-btn" data-qbo="authorize" data-id="' + t.id + '" style="width:auto;padding:7px 13px;">Step 2 · Authorize</button>';
         else if (t.status === 'AUTHORIZED') step = '<button class="btn" data-qbo="execute" data-id="' + t.id + '" style="width:auto;padding:7px 13px;">Step 3 · Create in QuickBooks</button>';
         else if (t.status === 'FAILED') step = '<button class="link-btn" data-qbo="retry" data-id="' + t.id + '" style="width:auto;padding:7px 13px;color:#9c3327;">Retry</button>';
       }
-      return '<tr>' + td('<b style="font-weight:600;">' + esc(qboTypeLabel(t.type)) + '</b>' + (t.error ? '<div style="font-size:12px;color:#9c3327;">' + esc(t.error) + '</div>' : '')) +
-        td('<span class="chip">' + titleCase(t.status) + '</span>') +
+      // Discard is offered on anything not yet in QuickBooks. A created document is
+      // voided or credited in QuickBooks itself, never quietly dropped here.
+      var discard = canTransact
+        ? '<button class="link-btn" data-qbo="discard" data-id="' + t.id + '" style="width:auto;padding:7px 11px;color:#9c3327;">Discard</button>'
+        : '';
+      return '<tr>' + td('<b style="font-weight:600;">' + esc(qboTypeLabel(t.type)) + '</b>' +
+          (t.error ? '<div style="font-size:12px;color:#9c3327;">' + esc(t.error) + '</div>' : '') +
+          (stale
+            ? '<div style="font-size:12px;color:#8a6d1f;line-height:1.5;margin-top:2px;">Prepared at ' +
+              fmtMoney(t.amountMinor, t.currency) + '; this order is now ' + fmtMoney(orderTotalMinor, t.currency) +
+              '. Discard it and prepare again, or it will be created at the old figure.</div>'
+            : '')) +
+        td('<span class="chip"' + (stale ? ' style="background:#fdf6e6;color:#6b5a24;"' : '') + '>' + titleCase(t.status) + '</span>') +
         td(fmtMoney(t.amountMinor, t.currency)) +
-        td('<div style="display:flex;justify-content:flex-end;">' + (step || '<span class="muted">—</span>') + '</div>') + '</tr>';
+        td('<div style="display:flex;gap:6px;justify-content:flex-end;align-items:center;">' + (step || '<span class="muted">—</span>') + discard + '</div>') + '</tr>';
     }).join('');
 
     var liveRows = live.map(function (t) {
@@ -13067,8 +13086,16 @@
       bt.addEventListener('click', async function () {
         var act = bt.getAttribute('data-qbo');
         if (act === 'execute' && !confirm('This creates the document in QuickBooks. Continue?')) return;
+        var body = {};
+        if (act === 'discard') {
+          // A reason, because a discarded document is a decision somebody made and the
+          // audit trail is the only place it survives.
+          var why = prompt('Why is this document being discarded?\n\nIt has not been created in QuickBooks, so nothing there changes. The order can be prepared again at its current total.');
+          if (!why || !why.trim()) return;
+          body = { reason: why.trim() };
+        }
         bt.disabled = true; bt.textContent = 'Working…';
-        var r = await authed('/integrations/quickbooks/transactions/' + bt.getAttribute('data-id') + '/' + act, { method: 'POST', body: {} });
+        var r = await authed('/integrations/quickbooks/transactions/' + bt.getAttribute('data-id') + '/' + act, { method: 'POST', body: body });
         if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} alert(m || ('Step failed (' + r.status + ').')); }
         loadQbo(order, user);
       });
