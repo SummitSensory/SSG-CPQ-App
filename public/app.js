@@ -7079,19 +7079,89 @@
   }
 
   /** Notes that print below the signature lines on the customer proposal. */
+  /**
+   * The standard FOOTER notes as Administration currently has them, in its order.
+   *
+   * Matched on title, which is what every other part of the builder matches on.
+   */
+  function stdFooterNotes() {
+    return (pb.stdNotes || []).filter(function (nn) { return nn.placement === 'FOOTER'; });
+  }
+
   function footerNotesCard() {
     var fn = pb.meta.footerNotes || [];
+    // A proposal's footer notes are a SNAPSHOT, taken when the proposal was first
+    // opened. That is deliberate — a released proposal must keep the wording it went
+    // out with — but it means a note deleted or reordered in Administration afterwards
+    // does not move here on its own, which reads as the builder ignoring the change.
+    // So a note Administration no longer has is marked, rather than silently kept.
+    var known = {};
+    stdFooterNotes().forEach(function (nn) { known[String(nn.title || '').trim().toLowerCase()] = true; });
+    var orphans = 0;
+
     var rows = fn.map(function (n, i) {
-      return '<div style="display:flex;align-items:flex-start;gap:8px;background:#fbfaf4;border:1px solid #ece9db;border-radius:10px;padding:10px;margin-bottom:8px;">' +
-        '<div style="flex:1;"><input class="bFN" data-i="' + i + '" data-k="title" value="' + esc(n.title || '') + '" placeholder="Note title (optional)" style="width:100%;border:none;background:transparent;font-weight:600;font-size:13.5px;outline:none;margin-bottom:4px;">' +
+      var title = String(n.title || '').trim();
+      var orphan = title && !known[title.toLowerCase()];
+      if (orphan) orphans++;
+      var moveBtn = function (dir, label, on) {
+        return '<button class="bFNMove" data-i="' + i + '" data-d="' + dir + '"' + (on ? '' : ' disabled') +
+          ' title="Move ' + (dir < 0 ? 'up' : 'down') + '" style="border:1px solid #e0e1db;background:#fff;border-radius:7px;width:30px;height:24px;cursor:' +
+          (on ? 'pointer' : 'default') + ';color:' + (on ? '#5c6157' : '#cfd3ca') + ';line-height:1;">' + label + '</button>';
+      };
+      return '<div style="display:flex;align-items:flex-start;gap:8px;background:#fbfaf4;border:1px solid ' +
+        (orphan ? '#e6c9b8' : '#ece9db') + ';border-radius:10px;padding:10px;margin-bottom:8px;">' +
+        '<div style="display:flex;flex-direction:column;gap:4px;flex:0 0 auto;padding-top:1px;">' +
+          moveBtn(-1, '\u2191', i > 0) + moveBtn(1, '\u2193', i < fn.length - 1) +
+        '</div>' +
+        '<div style="flex:1;min-width:0;"><input class="bFN" data-i="' + i + '" data-k="title" value="' + esc(n.title || '') + '" placeholder="Note title (optional)" style="width:100%;border:none;background:transparent;font-weight:600;font-size:13.5px;outline:none;margin-bottom:4px;">' +
+        (orphan ? '<div style="font-size:11px;color:#9c3327;margin:-2px 0 5px;line-height:1.45;">Administration no longer has a standard note by this name. It stays on this proposal until you remove it.</div>' : '') +
         '<textarea class="bFN" data-i="' + i + '" data-k="body" rows="3" placeholder="Note text — **bold** supported" style="width:100%;border:1px solid #ece9db;border-radius:7px;padding:6px 8px;font-size:12.5px;font-family:inherit;resize:vertical;background:#fff;">' + esc(n.body || '') + '</textarea></div>' +
         '<button class="bFNDel" data-i="' + i + '" style="border:1px solid #e0e1db;background:#fff;border-radius:8px;width:30px;height:30px;color:#9c3327;cursor:pointer;flex:0 0 auto;">✕</button></div>';
     }).join('');
+
     return '<div class="card" style="margin-top:16px;">' +
-      '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;"><div class="section-title" style="margin:0;">Notes below the signature lines</div>' +
-        '<button class="link-btn" id="bAddFooter" style="width:auto;padding:7px 12px;">+ Add note</button></div>' +
-      '<div class="muted" style="font-size:12px;margin-bottom:10px;">Printed at the foot of the proposal, under the signature block. Standard footer notes flagged “always include” in Administration appear here automatically.</div>' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;"><div class="section-title" style="margin:0;">Notes below the signature lines</div>' +
+        '<div style="display:flex;gap:6px;">' +
+          '<button class="link-btn" id="bSyncFooter" style="width:auto;padding:7px 12px;">Match Administration</button>' +
+          '<button class="link-btn" id="bAddFooter" style="width:auto;padding:7px 12px;">+ Add note</button>' +
+        '</div></div>' +
+      '<div class="muted" style="font-size:12px;margin-bottom:10px;line-height:1.55;">Printed at the foot of the proposal, in this order — use the arrows to change it. These are a copy taken when the proposal was created, so later edits in Administration do not reach a proposal already written. <b>Match Administration</b> pulls in any new always-include note and reorders to match, keeping your own notes and any wording you have changed here.</div>' +
+      (orphans ? '<div style="font-size:12px;line-height:1.55;background:#fdf1ec;border:1px solid #f0cdc7;border-radius:9px;padding:9px 11px;margin-bottom:10px;color:#7d2b20;">' +
+        orphans + ' note' + (orphans === 1 ? '' : 's') + ' below no longer exist' + (orphans === 1 ? 's' : '') + ' in Administration. Removing ' + (orphans === 1 ? 'it' : 'them') + ' is up to you — a proposal keeps the wording it was written with.</div>' : '') +
       (rows || '<div class="muted" style="font-size:12.5px;">None yet.</div>') + '</div>';
+  }
+
+  /**
+   * Bring this proposal's footer notes into line with Administration.
+   *
+   * Adds always-include notes it does not have, and applies Administration's order to
+   * the ones it recognises. It does NOT rewrite wording and does NOT delete: an edit
+   * made here was made deliberately, and a note Administration has dropped may still
+   * belong on a proposal already quoted. Both are flagged instead.
+   */
+  function syncFooterNotesToAdmin() {
+    var std = stdFooterNotes();
+    var current = (pb.meta.footerNotes || []).slice();
+    var key = function (t) { return String(t || '').trim().toLowerCase(); };
+    var byTitle = {};
+    current.forEach(function (n) { byTitle[key(n.title)] = n; });
+
+    var ordered = [];
+    var added = 0;
+    std.forEach(function (nn) {
+      var k = key(nn.title);
+      if (byTitle[k]) { ordered.push(byTitle[k]); delete byTitle[k]; return; }
+      // Only always-include notes are pulled in. An optional one is a choice somebody
+      // makes per proposal, and adding it here would make that choice for them.
+      if (nn.autoInclude) { ordered.push({ title: nn.title, body: nn.body }); added++; }
+    });
+    // Anything Administration does not have — hand-written notes, and notes it has
+    // since dropped — keeps its relative order at the end.
+    var leftovers = current.filter(function (n) { return byTitle[key(n.title)]; });
+    pb.meta.footerNotes = ordered.concat(leftovers);
+    markBuilderDirty();
+    renderBuilder();
+    return { added: added, kept: leftovers.length };
   }
 
   /** The profitability rail floats beside the builder when there is room; otherwise it stacks. */
@@ -8386,7 +8456,27 @@
       });
     });
     document.querySelectorAll('.bFNDel').forEach(function (b) {
-      b.addEventListener('click', function () { (pb.meta.footerNotes || []).splice(+b.getAttribute('data-i'), 1); renderBuilder(); });
+      b.addEventListener('click', function () { (pb.meta.footerNotes || []).splice(+b.getAttribute('data-i'), 1); markBuilderDirty(); renderBuilder(); });
+    });
+    document.querySelectorAll('.bFNMove').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var arr = pb.meta.footerNotes || [];
+        var i = +b.getAttribute('data-i');
+        var j = i + +b.getAttribute('data-d');
+        if (j < 0 || j >= arr.length) return;
+        var tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
+        markBuilderDirty();
+        renderBuilder();
+      });
+    });
+    var bsf = document.getElementById('bSyncFooter');
+    if (bsf) bsf.addEventListener('click', function () {
+      var r = syncFooterNotesToAdmin();
+      // Said out loud: a button that reorders three notes can otherwise look like it
+      // did nothing at all.
+      alert(r.added
+        ? r.added + ' note' + (r.added === 1 ? '' : 's') + ' added, and the order now matches Administration.'
+        : 'The order now matches Administration. Nothing new to add.');
     });
     document.getElementById('bAddFooter').addEventListener('click', function () {
       pb.meta.footerNotes = (pb.meta.footerNotes || []).concat([{ title: '', body: '' }]); renderBuilder();
@@ -9100,7 +9190,32 @@
         });
         return;
       }
-      atoms.push({ kind: 'block', node: node, h: outerH(node), brk: node.hasAttribute('data-page-break') });
+      var h = outerH(node);
+      // A block taller than a sheet is broken at its own children rather than placed
+      // whole and clipped. The standard terms are one such block — twelve clauses in a
+      // single wrapper, some 18 inches of text — and placed as one atom they printed
+      // as far as the sheet allowed and silently lost the rest.
+      //
+      // Each child is re-wrapped in a copy of the parent's opening tag on the way out,
+      // because the wrapper is what carries the typeface and size for everything in it.
+      if (h > CONTENT_H && node.children.length > 1) {
+        var shell = node.cloneNode(false);
+        shell.removeAttribute('data-page-break');
+        var open = shell.outerHTML.replace(/<\/[a-z]+>$/i, '');
+        Array.prototype.forEach.call(node.children, function (kid, ki) {
+          atoms.push({
+            kind: 'block',
+            node: kid,
+            h: outerH(kid),
+            // Only the first child inherits the wrapper's forced break; the rest flow.
+            brk: ki === 0 && node.hasAttribute('data-page-break'),
+            open: open,
+            close: '</' + node.tagName.toLowerCase() + '>',
+          });
+        });
+        return;
+      }
+      atoms.push({ kind: 'block', node: node, h: h, brk: node.hasAttribute('data-page-break') });
     });
 
     var sheets = [], cur = [], used = 0;
@@ -9137,7 +9252,9 @@
           return;
         }
         if (tableOpen) { inner += '</tbody></table>'; tableOpen = false; }
-        inner += it.node.outerHTML;
+        // A child hoisted out of an oversized wrapper is put back inside a copy of it,
+        // so it keeps the font, size and colour the wrapper set.
+        inner += it.open ? it.open + it.node.outerHTML + it.close : it.node.outerHTML;
       });
       if (tableOpen) inner += '</tbody></table>';
       return '<div class="ssg-sheet" style="width:' + PAGE_W + 'px;height:' + PAGE_H + 'px;box-sizing:border-box;' +
