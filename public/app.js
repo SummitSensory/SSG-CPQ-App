@@ -2248,11 +2248,55 @@
     downloadCsv('catalog-skus-' + todayISO() + (skuState.q ? '-filtered' : '') + '.csv', rows);
   }
 
+  /**
+   * A worksheet holding only the columns a repricing touches.
+   *
+   * The full export carries every field, and repricing from it means opening a sheet
+   * of twenty columns to change one — with every other column still in the file, and
+   * so still overwritten on the way back in. A stale weight or a category someone
+   * edited in the meantime rides along silently.
+   *
+   * This is the same list, cut to part, description, cost and price. Description is
+   * included and read-only in practice: without something human beside the part number
+   * the sheet cannot be checked by eye, which is the whole point of doing it in Excel.
+   */
+  async function exportSkuPrices() {
+    var qs = skuState.q ? '?q=' + encodeURIComponent(skuState.q) : '';
+    var r = await authed('/skus/export' + qs);
+    if (!r.ok) { alert('Could not build the price sheet (' + r.status + ').'); return; }
+    var d = await r.json();
+    var cols = ['part', 'description', 'unitCost', 'unitPrice'];
+    var have = d.columns || [];
+    // Fall back to whatever the export actually names these, rather than guessing.
+    var pick = function (names) {
+      for (var i = 0; i < names.length; i++) if (have.indexOf(names[i]) >= 0) return names[i];
+      return null;
+    };
+    var costCol = pick(['unitCost', 'unitCostMinor', 'cost']);
+    var priceCol = pick(['unitPrice', 'unitPriceMinor', 'price']);
+    var descCol = pick(['description', 'name']);
+    var rows = [cols].concat((d.items || []).map(function (it) {
+      return [it.part, descCol ? it[descCol] : '', costCol ? it[costCol] : '', priceCol ? it[priceCol] : ''];
+    }));
+    downloadCsv('catalog-prices-' + todayISO() + (skuState.q ? '-filtered' : '') + '.csv', rows);
+  }
+
   var skuImportConfirmed = false;
   function openSkuImport(user) {
     skuImportConfirmed = false;
     openModal('Import products from Excel / CSV',
-      '<div class="muted" style="font-size:13px;margin-bottom:10px;line-height:1.55;">Save your sheet as <b>CSV</b> with a header row. Recognised columns: <code>part, description, unitPrice, unitCost, weightLbs, category, manufacturer, proposalGroup</code>. <b>part</b> is the match key and is required; every other column is optional — only the columns you include are overwritten.</div>' +
+      '<div class="muted" style="font-size:13px;margin-bottom:10px;line-height:1.55;">Save your sheet as <b>CSV</b> with a header row. Recognised columns: <code>part, description, unitPrice, unitCost, weightLbs, category, manufacturer, proposalGroup</code>. <b>part</b> is the match key and is required; every other column is optional.</div>' +
+      // The rule that makes a repricing safe, stated where someone is about to rely on
+      // it: a column you leave OUT is not touched, so a two-column file changes two
+      // things. A column you include but leave blank is a value, and it clears.
+      '<div style="font-size:12.5px;line-height:1.6;background:#f4faf6;border:1px solid #cfe3d7;border-radius:9px;padding:10px 12px;margin-bottom:10px;">' +
+        '<b>Only the columns in your file are changed.</b> A sheet of just <code>part,unitCost</code> reprices the catalog and leaves names, categories, weights, vendors and tier placements exactly as they are. ' +
+        'A column you include but leave <i>blank</i> is different — that clears the field.' +
+      '</div>' +
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px;">' +
+        '<button class="link-btn" id="siPriceSheet" style="width:auto;padding:8px 13px;">Download a price-only sheet</button>' +
+        '<span class="muted" style="font-size:11.5px;">part, description, cost and price. Edit the figures and upload it back.</span>' +
+      '</div>' +
       '<input type="file" id="skuFile" accept=".csv,text/csv" style="width:100%;padding:10px;border:1px dashed #cfd3ca;border-radius:9px;background:#fff;">' +
       '<div id="siReview" style="margin-top:12px;"></div>',
       async function (close, showErr) {
@@ -2303,6 +2347,13 @@
           (d.deactivated ? ', ' + d.deactivated + ' deactivated' : '') + '.');
         refreshCatalogList(user);
       }, 'Import');
+
+    // Bound after the modal is in the document. Downloading the sheet must not close
+    // the dialog — the next thing you do is upload the edited file into it.
+    setTimeout(function () {
+      var b = document.getElementById('siPriceSheet');
+      if (b) b.addEventListener('click', function (ev) { ev.preventDefault(); exportSkuPrices(); });
+    }, 0);
   }
   function parseCsv(text) {
     var lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n').filter(function (l) { return l.trim() !== ''; });
