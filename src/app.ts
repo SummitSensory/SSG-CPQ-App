@@ -43,10 +43,13 @@ import { registerStandardNoteRoutes } from './routes/standardNotes.js';
 import { registerCustomerNoteRoutes } from './routes/customerNotes.js';
 import { registerFollowUpRoutes } from './routes/followUps.js';
 import { registerOutlookRoutes } from './routes/outlook.js';
+import { registerReceivableRoutes } from './routes/receivables.js';
+import { registerReceivableRenderRoutes } from './routes/receivablesRender.js';
 import { registerFormulaRoutes } from './routes/formulas.js';
 import { registerIntroTemplateRoutes } from './routes/introTemplates.js';
 import { registerBeltShipmentRoutes } from './routes/beltShipments.js';
 import { registerCronRoutes } from './routes/cron.js';
+import { registerReceivableCronRoutes } from './routes/cronReceivables.js';
 import { verifySchemaOnBoot } from './lib/schemaCheck.js';
 import { registerPortalRoutes } from './routes/portal.js';
 import { registerWebRoutes } from './routes/web.js';
@@ -57,7 +60,9 @@ export function buildApp(): FastifyInstance {
   // expect. The instance is identical at runtime — this pins the public type.
   // 8 MB body limit, up from Fastify's 1 MB default. The proposal send posts the
   // rendered proposal HTML for server-side PDF, and a long itemized proposal with
-  // inline styles runs well past 1 MB — the default silently 413s the send.
+  // inline styles runs well past 1 MB — the default silently 413s the send. It is
+  // also what accommodates a base64 purchase-order upload (3 MB of file, a third
+  // more once encoded).
   const app = Fastify({
     loggerInstance: logger,
     bodyLimit: 8 * 1024 * 1024,
@@ -133,8 +138,16 @@ export function buildApp(): FastifyInstance {
   registerCustomerNoteRoutes(app);
   registerFollowUpRoutes(app);
   registerOutlookRoutes(app);
+  // Accounts receivable: the balance mirror, the customer's purchase order, and
+  // the payment-request composer. Split across two files because the send renders
+  // a PDF and therefore has to run on the renderer function — the /render/* half
+  // is registered here too, since both serverless entry points build this app and
+  // only the rewrite in vercel.json decides which function answers.
+  registerReceivableRoutes(app);
+  registerReceivableRenderRoutes(app);
   registerFormulaRoutes(app);
   registerCronRoutes(app);
+  registerReceivableCronRoutes(app);
   registerPortalRoutes(app);
   registerWebRoutes(app);
 

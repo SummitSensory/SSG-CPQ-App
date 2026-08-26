@@ -155,17 +155,61 @@ export async function create<T>(
 }
 
 /**
+ * Update an existing object.
+ *
+ * QuickBooks has no PATCH: an update is a POST to the same collection carrying
+ * `Id` and the CURRENT `SyncToken`. With `sparse: true` only the fields present in
+ * the body are written and everything else is left alone — without it QuickBooks
+ * treats the body as the whole object and blanks every field omitted, which on an
+ * invoice means deleting its lines.
+ *
+ * The SyncToken is QuickBooks' optimistic lock. A stale one is rejected with fault
+ * 5010 rather than silently overwriting whoever edited the document in between,
+ * which is the behaviour worth having: the caller re-reads and decides.
+ *
+ * No `requestid`. It exists to stop a retried CREATE producing a second document;
+ * on an update the SyncToken already makes a duplicate send harmless, and reusing a
+ * create key here would make QuickBooks return the original create response.
+ */
+export async function update<T>(
+  realmId: string,
+  resource: string,
+  body: Record<string, unknown> & { Id: string; SyncToken: string },
+  fetchImpl: typeof fetch = fetch,
+): Promise<T> {
+  return request<T>(
+    realmId,
+    'POST',
+    resource,
+    { body: { ...body, sparse: true }, query: { operation: 'update' } },
+    fetchImpl,
+  );
+}
+
+/**
  * Read one object by its QuickBooks id. Returns the wrapper QuickBooks sends —
  * `{ Invoice: {...} }` or `{ Estimate: {...} }` — because the caller knows which
  * key it asked for and unwrapping here would lose the distinction.
+ *
+ * `include` passes Intuit's `include` parameter through. The only current use is
+ * `invoiceLink`, which is how the shareable payment URL is obtained: it is not on
+ * an ordinary read, and asking for it on a company without online payment enabled
+ * simply returns the invoice without the field.
  */
 export async function readById<T>(
   realmId: string,
   resource: string,
   id: string,
   fetchImpl: typeof fetch = fetch,
+  include?: string,
 ): Promise<T> {
-  return request<T>(realmId, 'GET', `${resource}/${encodeURIComponent(id)}`, {}, fetchImpl);
+  return request<T>(
+    realmId,
+    'GET',
+    `${resource}/${encodeURIComponent(id)}`,
+    include ? { query: { include } } : {},
+    fetchImpl,
+  );
 }
 
 /**
