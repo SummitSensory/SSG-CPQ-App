@@ -1547,6 +1547,24 @@ model QboTransaction {
   qboStatus         String?
   qboLastSyncedAt   DateTime?
 
+  /// The invoice total as QuickBooks FIRST reported it, never overwritten.
+  /// qboTotalMinor tracks the current total and moves when accounting edits the
+  /// document; this is what the customer was originally billed, which is the figure
+  /// "initial invoice balance" means.
+  initialTotalMinor BigInt?
+  /// QuickBooks' TxnDate — the invoice date as it prints on the document.
+  invoiceDate       DateTime?
+  /// Intuit's shareable payment link, when the company has online payment switched
+  /// on. Null is normal and the merge field then renders nothing rather than a
+  /// broken link.
+  qboInvoiceLink    String?
+  /// The PO number as last written onto the QuickBooks document, and when.
+  poPushedValue     String?
+  poPushedAt        DateTime?
+  /// Set when the PO on the order no longer matches poPushedValue. Drives the
+  /// "push to QuickBooks" action on the receivables screen.
+  poNeedsPush       Boolean   @default(false)
+
   payments          QboPayment[]
   reminders         PaymentReminder[]
 
@@ -3657,3 +3675,164 @@ model UiSetting {
   updatedAt   DateTime @updatedAt
   updatedById String?
 }
+
+// ---------------------------------------------------------------------------
+// Payment requests: invoice balances, the customer's PO, and the email that
+// chases the money.
+//
+// Append these models to prisma/schema.prisma, add the SIX columns listed at the
+// bottom to `model QboTransaction`, then run migration 0070.
+//
+// Why these live here rather than being folded into PaymentReminder: a reminder
+// (see that model) was a plain-text message sent from the company domain through
+// Resend. This is a different act — an HTML letter sent from ONE person's own
+// Outlook mailbox, under their own signature, optionally carrying a letterhead
+// PDF and the customer's own purchase order. The two records answer different
+// questions and the old one is left untouched so its history stays readable.
+// ---------------------------------------------------------------------------
+
+/// EMAIL is the message body; LETTER is a page rendered on letterhead and
+/// attached as a PDF. One table because they share the merge-field engine, the
+/// admin screen and the "restore the original" behaviour.
+enum PaymentTemplateKind {
+  EMAIL
+  LETTER
+}
+
+/// An editable email body or letterhead letter, managed under
+/// Administration → Payment requests.
+///
+/// The body is HTML, not plain text: it is sent as HTML and printed as HTML, and
+/// a template language that cannot express a bold figure or an indented paragraph
+/// would have to be replaced the first time somebody wanted one. Sanitised on the
+/// way in with the same allow-list the pasted email signature uses.
+model PaymentTemplate {
+  id          String             @id @default(cuid())
+  /// Stable key. Every sent message records it, so renaming `name` never breaks
+  /// the history.
+  key         String             @unique
+  kind        PaymentTemplateKind
+  name        String
+  /// Position in the escalation order — first notice, second notice, and so on.
+  /// Load-bearing only for display: nothing stops a later letter being sent first.
+  stage       Int                @default(1)
+  /// Guidance shown to the sender in the picker. Never sent.
+  whenToUse   String?
+  /// The email subject. On a LETTER this is the heading printed above the body.
+  subject     String
+  bodyHtml    String
+  active      Boolean            @default(true)
+  /// Set on anything that shipped with the app, so a reset knows what to restore.
+  isBuiltIn   Boolean            @default(false)
+  updatedById String?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  @@index([kind, active, stage])
+}
+
+/// The customer's own purchase-order document, as they sent it to us.
+///
+/// Kept off the AcceptedOrder as its own rows because a customer can raise a
+/// revised PO mid-job, and the superseded one still has to be readable — an
+/// accounts-payable dispute is usually an argument about which PO was in force.
+///
+/// The bytes live in Vercel Blob; only the URL is stored. Downloads are proxied
+/// through the app so the blob URL is never handed to a browser: the app's own
+/// Content-Security-Policy would refuse to display it, and a public URL to a
+/// customer's commercial document is not something to leak into a referrer log.
+model CustomerPurchaseOrderFile {
+  id             String   @id @default(cuid())
+  orderId        String
+  organizationId String?
+  /// The name the customer's file arrived with, kept for the attachment name.
+  filename       String
+  contentType    String
+  byteSize       Int
+  /// Blob URL. Null when no blob store is configured, in which case the row is
+  /// not created at all — an upload that went nowhere must not look stored.
+  url            String
+  pathname       String
+  /// The PO number this document evidences, copied at upload time so the file
+  /// still explains itself after the number on the order is corrected.
+  poNumber       String?
+  uploadedById   String
+  uploadedByName String
+  createdAt      DateTime @default(now())
+
+  @@index([orderId, createdAt])
+  @@index([organizationId])
+}
+
+/// One payment-request email, as actually sent from a rep's Outlook mailbox.
+///
+/// The whole rendered body is stored rather than a template reference, for the
+/// same reason PaymentReminder stores its body: "what exactly did we say to them"
+/// has to stay answerable after the template is edited. Failures are recorded
+/// too — a log that drops them overstates how hard a balance has been chased.
+model PaymentRequestEmail {
+  id                 String   @id @default(cuid())
+  /// The invoice this was about. Not a relation, so `model QboTransaction` needs
+  /// no back-reference field added to it.
+  qboTransactionId   String
+  organizationId     String?
+  orderId            String?
+
+  /// The mailbox Microsoft actually sent from, read from the connection rather
+  /// than assumed from the user's CRM email — they are not always the same.
+  mailbox            String
+  toEmail            String
+  ccEmail            String?
+  subject            String
+  bodyHtml           String
+
+  emailTemplateKey   String?
+  letterTemplateKey  String?
+  letterTemplateName String?
+  attachedInvoicePdf Boolean  @default(false)
+  attachedLetterPdf  Boolean  @default(false)
+  /// CustomerPurchaseOrderFile ids attached to this message.
+  attachedPoFileIds  String[] @default([])
+
+  /// The balance outstanding at the moment it went out, and the figures the
+  /// merge fields resolved to. Kept so a message can be explained a year later
+  /// without re-reading QuickBooks, which by then says something else.
+  balanceMinor       BigInt
+  currency           String   @default("USD")
+  mergeValues        Json
+
+  /// Graph's id for the sent message, so it can be found in Sent Items.
+  graphMessageId     String?
+  /// sent | failed
+  status             String
+  error              String?
+  sentById           String
+  /// Cached so attribution survives the author leaving.
+  sentByName         String
+  createdAt          DateTime @default(now())
+
+  @@index([qboTransactionId, createdAt])
+  @@index([organizationId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Add to `model QboTransaction` (migration 0070 adds the columns):
+//
+//   /// The invoice total as QuickBooks FIRST reported it, never overwritten.
+//   /// qboTotalMinor tracks the current total and moves when accounting edits the
+//   /// document; this is what the customer was originally billed, which is the
+//   /// figure "initial invoice balance" means.
+//   initialTotalMinor BigInt?
+//   /// QuickBooks' TxnDate — the invoice date as it prints on the document.
+//   invoiceDate       DateTime?
+//   /// Intuit's shareable payment link for this invoice, when the company has
+//   /// online payment switched on. Null is normal and the merge field then
+//   /// renders nothing rather than a broken link.
+//   qboInvoiceLink    String?
+//   /// The PO number as last written onto the QuickBooks document, and when.
+//   poPushedValue     String?
+//   poPushedAt        DateTime?
+//   /// Set when the PO on the order no longer matches poPushedValue. Drives the
+//   /// "push to QuickBooks" action on the receivables screen.
+//   poNeedsPush       Boolean   @default(false)
+// ---------------------------------------------------------------------------
