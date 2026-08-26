@@ -1,0 +1,3659 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum Role {
+  SYSTEM_ADMIN
+  EXECUTIVE
+  SALES_REP
+  SALES_MANAGER
+  DESIGNER
+  ESTIMATOR
+  OPERATIONS
+  ACCOUNTING
+  PROJECT_MANAGER
+  INSTALLER
+  READ_ONLY
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String?
+  title        String?
+  phone        String?
+  passwordHash String
+  role         Role      @default(READ_ONLY)
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  sessions     Session[]
+  passwordResets PasswordResetToken[]
+  outlookConnection OutlookConnection?
+
+  /// The rep's email signature, as HTML, appended to any draft this app writes into
+  /// their mailbox. Stored here because Outlook signatures live in the CLIENT, not in
+  /// the mailbox: Graph cannot read one, and Outlook on the web will not insert one into
+  /// a message that already exists. Pasted by the rep, sanitized on the way in.
+  emailSignatureHtml String?
+}
+
+/// One rep's delegated consent to have drafts written into their Outlook mailbox.
+///
+/// Per user and never shared: the tokens here authorize this mailbox and no other, so
+/// there is no tenant-wide credential in this system to lose. Both tokens are
+/// AES-256-GCM encrypted with GRAPH_TOKEN_ENC_KEY before they are stored.
+///
+/// revokedAt + lastError exist so an expired grant produces a clear "connect Outlook
+/// again" instead of a retry loop that fails identically every time.
+model OutlookConnection {
+  id           String    @id @default(cuid())
+  userId       String    @unique
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// The mailbox Microsoft says these tokens belong to, asked rather than assumed.
+  mailbox      String
+  accessToken  String
+  refreshToken String
+  expiresAt    DateTime
+  scope        String
+  lastUsedAt   DateTime?
+  revokedAt    DateTime?
+  lastError    String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+/// Self-service password reset. Only the SHA-256 hash of the emailed token is
+/// stored, so a database leak cannot be used to take over an account. Single-use
+/// (usedAt) and short-lived (expiresAt).
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  requestIp String?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Session {
+  id               String    @id @default(cuid())
+  userId           String
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshTokenHash String    @unique
+  userAgent        String?
+  ip               String?
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  createdAt        DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model AuditLog {
+  id           String   @id @default(cuid())
+  actorId      String
+  action       String
+  targetUserId String?
+  entity       String?
+  entityId     String?
+  details      Json?
+  createdAt    DateTime @default(now())
+
+  @@index([targetUserId])
+  @@index([action])
+  @@index([entity, entityId])
+}
+
+/// A change with both sides of it kept.
+///
+/// AuditLog above records the fields that were SENT, which answers "who touched this"
+/// and cannot answer "what was it before". That second question is the one asked when
+/// a cost looks wrong six weeks later, and it is why the formula editor keeps its own
+/// revision table. This is that idea generalised, for the records where the previous
+/// value is worth having: catalog pricing and bundle components.
+///
+/// Append-only. Nothing computes from it; it exists to be read by a person.
+model EntityRevision {
+  id        String   @id @default(cuid())
+  /// 'Product' | 'Sku' | 'ProductBundle'.
+  entity    String
+  entityId  String
+  /// The SKU or name as it read AT THE TIME, so the history survives a rename.
+  label     String?
+  action    String
+  actorId   String
+  /// Complete snapshots rather than diffs: a diff stops being readable as soon as the
+  /// shape of the record changes.
+  before    Json?
+  after     Json?
+  /// Field names that actually differ, computed at write time.
+  changed   Json?
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@index([entity, entityId, createdAt(sort: Desc)])
+  @@index([createdAt(sort: Desc)])
+  @@index([actorId])
+}
+
+// ---------------- CRM ----------------
+
+enum CustomerType {
+  HEALTHCARE_SYSTEM
+  HOSPITAL
+  PRIVATE_PRACTICE
+  SCHOOL
+  UNIVERSITY
+  GOVERNMENT
+  NONPROFIT
+  OTHER
+}
+
+enum OpportunityStage {
+  PROSPECT
+  QUALIFICATION
+  NEEDS_ANALYSIS
+  PROPOSAL
+  NEGOTIATION
+  CLOSED_WON
+  CLOSED_LOST
+}
+
+enum FundingStatus {
+  UNFUNDED
+  BUDGETED
+  GRANT_PENDING
+  GRANT_AWARDED
+  APPROVED
+  SELF_FUNDED
+}
+
+enum TherapyDiscipline {
+  PHYSICAL
+  OCCUPATIONAL
+  SPEECH
+  ABA
+  SENSORY_INTEGRATION
+  RECREATIONAL
+  AQUATIC
+  PSYCHOLOGICAL
+}
+
+enum PatientPopulation {
+  PEDIATRIC
+  ADOLESCENT
+  ADULT
+  GERIATRIC
+  SPECIAL_NEEDS
+  VETERANS
+}
+
+enum AddressType {
+  BILLING
+  SHIPPING
+}
+
+enum FloorType {
+  CARPET
+  VINYL
+  TILE
+  CONCRETE
+  HARDWOOD
+  RUBBER
+  OTHER
+}
+
+enum WallConstruction {
+  DRYWALL
+  CONCRETE_BLOCK
+  BRICK
+  PLASTER
+  GLASS
+  MODULAR
+  OTHER
+}
+
+enum AttachmentCategory {
+  PHOTOGRAPH
+  FLOOR_PLAN
+  MEASUREMENT_DOC
+  OTHER
+}
+
+model Organization {
+  id             String         @id @default(cuid())
+  name           String
+  normalizedName String
+  customerType   CustomerType   @default(OTHER)
+  taxExempt      Boolean        @default(false)
+  taxExemptId    String?
+  notes          String?
+  /// The window the customer expects to decide in. Two dates rather than one: a
+  /// decision "sometime in the fall" is a range, and forcing it to a single day
+  /// made reps invent a date they did not have.
+  decisionFrom   DateTime?
+  decisionTo     DateTime?
+  /// When we next intend to make contact. Read by the dashboard's follow-up count.
+  followUpDate   DateTime?
+  /// Default QuickBooks payment term for this client (Settings → All lists →
+  /// Terms). A proposal may override it; neither is required.
+  qboSalesTermId   String?
+  /// Human label, cached so the portal can show the term without calling QuickBooks.
+  qboSalesTermName String?
+
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  contacts       Contact[]
+  addresses      Address[]
+  facilities     Facility[]
+  opportunities  Opportunity[]
+  attachments    Attachment[]
+  customerNotes  CustomerNote[]
+  followUpEmails  FollowUpEmailLog[]
+
+  @@unique([normalizedName])
+  @@index([customerType])
+}
+
+/// Internal notes about a customer, and about the proposals written for them.
+///
+/// A running log: entries are never edited or overwritten, so the account history
+/// survives whoever wrote it. The note belongs to the ORGANIZATION, not to the
+/// proposal — a proposal that is rejected, expired or deleted leaves its notes with
+/// the customer, which is the whole point of the section. `proposalId` only records
+/// which proposal the note was written from, and is deliberately not a foreign key
+/// for the same reason.
+///
+/// The author's name is cached alongside the id: attribution has to keep working
+/// after someone leaves and their user record is gone.
+model CustomerNote {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  proposalId     String?
+  authorId       String?
+  authorName     String
+  body           String
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId, createdAt])
+  @@index([proposalId])
+}
+
+model Contact {
+  id               String        @id @default(cuid())
+  organizationId   String
+  organization     Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  firstName        String
+  lastName         String
+  email            String?
+  phone            String?
+  title            String?
+  isDecisionMaker  Boolean       @default(false)
+  notes            String?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  stakeholderOf    OpportunityStakeholder[]
+
+  @@index([organizationId])
+  @@index([email])
+}
+
+model Address {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  type           AddressType
+  line1          String
+  line2          String?
+  city           String
+  region         String
+  postalCode     String
+  country        String       @default("US")
+
+  @@index([organizationId])
+}
+
+model Facility {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  notes          String?
+  rooms          Room[]
+
+  @@index([organizationId])
+}
+
+model Room {
+  id                       String            @id @default(cuid())
+  facilityId               String
+  facility                 Facility          @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  name                     String
+  // All dimensions in whole inches (integers) — never floats.
+  lengthIn                 Int?
+  widthIn                  Int?
+  ceilingHeightIn          Int?
+  doorWidthIn              Int?
+  doorHeightIn             Int?
+  floorType                FloorType?
+  wallConstruction         WallConstruction?
+  hasLoadingDock           Boolean           @default(false)
+  liftgateRequired         Boolean           @default(false)
+  deliveryRestrictions     String?
+  installationRestrictions String?
+  notes                    String?
+
+  @@index([facilityId])
+}
+
+model Opportunity {
+  id                 String              @id @default(cuid())
+  organizationId     String
+  organization       Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name               String
+  stage              OpportunityStage    @default(PROSPECT)
+  fundingStatus      FundingStatus       @default(UNFUNDED)
+  therapyDisciplines TherapyDiscipline[]
+  patientPopulations PatientPopulation[]
+  // Budget as integer minor units + currency — never floating point.
+  budgetAmountMinor  BigInt?
+  budgetCurrency     String?
+  desiredTimeline    String?
+  notes              String?
+  // monday.com two-way sync state
+  mondayItemId       String?             @unique
+  mondaySyncHash     String?
+  mondaySyncedAt     DateTime?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  stakeholders       OpportunityStakeholder[]
+  attachments        Attachment[]
+
+  @@index([organizationId])
+  @@index([stage])
+  @@index([fundingStatus])
+}
+
+// Decision-makers / stakeholders linked to an opportunity.
+model OpportunityStakeholder {
+  id            String      @id @default(cuid())
+  opportunityId String
+  opportunity   Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  contactId     String
+  contact       Contact     @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  role          String?
+  isPrimary     Boolean     @default(false)
+
+  @@unique([opportunityId, contactId])
+  @@index([opportunityId])
+}
+
+model Attachment {
+  id             String             @id @default(cuid())
+  organizationId String?
+  organization   Organization?      @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  opportunityId  String?
+  opportunity    Opportunity?       @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
+  category       AttachmentCategory @default(OTHER)
+  fileName       String
+  contentType    String
+  sizeBytes      Int
+  storageKey     String             @unique
+  uploadedById   String
+  createdAt      DateTime           @default(now())
+
+  @@index([opportunityId])
+  @@index([organizationId])
+}
+
+enum SyncDirection {
+  OUTBOUND
+  INBOUND
+}
+
+// Append-only log of integration sync events (idempotency + audit).
+model IntegrationSyncLog {
+  id            String        @id @default(cuid())
+  provider      String        @default("monday")
+  direction     SyncDirection
+  entity        String
+  entityId      String?
+  externalId    String?
+  eventId       String?       @unique
+  status        String
+  error         String?
+  createdAt     DateTime      @default(now())
+
+  @@index([entity, entityId])
+}
+
+// ---------------- Product Catalog ----------------
+// NOTE: catalog data is DB-managed via the admin API — no price fields here
+// (pricing is a separate future milestone) and no deployment needed to edit it.
+
+enum ProductKind {
+  PRODUCT
+  VARIANT
+  COMPONENT
+  BUNDLE
+  ACCESSORY
+  SERVICE
+}
+
+enum ProductStatus {
+  DRAFT
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+enum RelationType {
+  VARIANT_OF
+  COMPONENT_OF
+  BUNDLE_ITEM
+  ACCESSORY_OF
+}
+
+// A top-level product line (e.g. "Adventure Series"). Categories hang off a
+// line and double as its 4-tier structure: header rows and product rows.
+model ProductLine {
+  id          String            @id @default(cuid())
+  name        String            @unique
+  slug        String            @unique
+  description String?
+  sortOrder   Int               @default(0)
+  isActive    Boolean           @default(true)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  categories  ProductCategory[]
+  products    Product[]
+}
+
+model ProductCategory {
+  id        String            @id @default(cuid())
+  name      String
+  slug      String            @unique
+  parentId  String?
+  parent    ProductCategory?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children  ProductCategory[] @relation("CategoryTree")
+  sortOrder Int               @default(0)
+  isActive  Boolean           @default(true)
+  families  ProductFamily[]
+  products  Product[]
+
+  // Tier-tree fields: a category node is a HEADER when productId is null, or
+  // a PRODUCT line when it points at one. Tier 1 is always a header.
+  productLineId   String?
+  productLine     ProductLine? @relation(fields: [productLineId], references: [id], onDelete: Cascade)
+  tierLevel       Int          @default(1)
+  defaultQuantity Int?
+  productId       String?
+  product         Product?     @relation("CategoryTierProduct", fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([productLineId, tierLevel])
+  @@index([parentId, sortOrder])
+}
+
+model ProductFamily {
+  id          String          @id @default(cuid())
+  categoryId  String
+  category    ProductCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  name        String
+  slug        String
+  description String?
+  products    Product[]
+
+  @@unique([categoryId, slug])
+  @@index([categoryId])
+}
+
+model Product {
+  id                  String              @id @default(cuid())
+  sku                 String              @unique
+  name                String
+  kind                ProductKind         @default(PRODUCT)
+  status              ProductStatus       @default(DRAFT)
+  version             Int                 @default(1)
+
+  categoryId          String
+  category            ProductCategory     @relation(fields: [categoryId], references: [id])
+  familyId            String?
+  family              ProductFamily?      @relation(fields: [familyId], references: [id], onDelete: SetNull)
+
+  productLineId       String?
+  productLine         ProductLine?        @relation(fields: [productLineId], references: [id], onDelete: SetNull)
+  defaultQuantity     Int                 @default(1)
+  badge               String?
+  // Manual order of the default product list (product picker + tier listings).
+  sortOrder           Int                 @default(0)
+
+  proposalDescription String?
+  internalDescription String?
+
+  // Legacy whole-inch dimensions, superseded by the decimal columns below.
+  // Kept (not dropped) so no historical data is lost.
+  lengthInLegacy      Int?
+  widthInLegacy       Int?
+  heightInLegacy      Int?
+
+  // Dimensions in inches (fractional, e.g. 4.875), weight in whole ounces.
+  lengthIn            Decimal?            @db.Decimal(8, 3)
+  widthIn             Decimal?            @db.Decimal(8, 3)
+  heightIn            Decimal?            @db.Decimal(8, 3)
+  thicknessIn         Decimal?            @db.Decimal(8, 3)
+  // Verbatim override for shapes the L/W/H/T formula can't express (e.g.
+  // five-value U-profile mats). When set, this is printed as-is.
+  dimensionsOverride  String?
+  showDimensions      Boolean             @default(false)
+
+  weightOz            Int?
+  capacity            String?
+
+  activeFrom          DateTime?
+  activeTo            DateTime?
+  adminNotes          String?
+
+  createdById         String
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  images              ProductImage[]
+  documents           TechnicalDocument[]
+  versions            ProductVersion[]
+  statusHistory       ProductStatusHistory[]
+  parentRelations     ProductRelation[]   @relation("RelationParent")
+  childRelations      ProductRelation[]   @relation("RelationChild")
+  notes               ProductNote[]
+  sourcing            ProductSourcing[]
+  tierNodes           ProductCategory[]   @relation("CategoryTierProduct")
+
+  @@index([categoryId])
+  @@index([familyId])
+  @@index([status])
+  @@index([kind])
+  @@index([productLineId])
+  @@index([sortOrder])
+}
+
+// The asterisked lines that print beneath a product on the proposal, e.g.
+// "*OPTIONAL ADD-ON: Enhances Versatility".
+model ProductNote {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  text      String
+  sortOrder Int     @default(0)
+
+  @@index([productId])
+}
+
+// ---------------- Manufacturing & Sourcing ----------------
+// Who actually fabricates or supplies a part. The BOM groups by manufacturer,
+// which cuts across the proposal-facing tier tree — a mat section can contain
+// parts from Resilite and GreatMats, and the shop needs them grouped by vendor.
+// Cost stays in ProductCost as an effective-dated series; nothing here
+// duplicates it.
+
+model Manufacturer {
+  id                  String            @id @default(cuid())
+  name                String            @unique
+  slug                String            @unique
+  isThirdParty        Boolean           @default(true)
+  /// Every part sourced from this vendor carries the "freight to be determined"
+  /// note on its proposal line until a freight figure is entered on that line.
+  /// Southpaw and the other freight-quoted vendors are the reason this exists.
+  freightTbd          Boolean           @default(false)
+  /// Short code appended to a freight RFQ reference, so several requests on one
+  /// project are told apart: "RFQ-12414494509-SE". Blank falls back to initials
+  /// derived from the vendor name, so this never has to be filled in for it to work.
+  rfqAbbrev           String?
+  defaultLeadTimeDays Int?
+  contactName         String?
+  contactEmail        String?
+  notes               String?
+  isActive            Boolean           @default(true)
+
+  // Vendor of record: where a purchase order is sent and who is called about it.
+  // The BOM prints this block as "Ship from".
+  contactTitle        String?
+  contactPhone        String?
+  altContactName      String?
+  altContactEmail     String?
+  altContactPhone     String?
+  addressLine1        String?
+  addressLine2        String?
+  city                String?
+  region              String?
+  postalCode          String?
+  country             String?           @default("USA")
+  website             String?
+  accountNumber       String?
+  paymentTerms        String?
+  // Steel fabricators are the vendors whose lines roll into the BOM's
+  // "Total steel weight" — hardware and crating are excluded by definition.
+  isSteelFabricator   Boolean           @default(false)
+
+  // ---- Bill of Materials email defaults ----
+  // Each vendor is emailed differently: a fabricator gets the shop address and a
+  // "please confirm receipt" note, a distributor gets a purchasing inbox. These
+  // pre-fill the send dialog; the sender can still edit before sending.
+  /// Where the BOM goes by default. Comma-separated for more than one recipient.
+  bomEmailTo          String?
+  bomEmailCc          String?
+  /// Supports the tokens {{vendor}}, {{order}}, {{job}}, {{submittedOn}}.
+  bomEmailSubject     String?
+  bomEmailBody        String?
+  /// Which attachment this vendor expects: EXCEL, PDF or BOTH.
+  bomEmailFormat      BomSendFormat     @default(PDF)
+  /// Whether a new BOM section for this vendor shows the powder-colour column.
+  bomShowPowderColor  Boolean           @default(false)
+  /// Which freight figure on the deal belongs to this vendor's shipment. The mats
+  /// ship on their own freight line; everything else rides the structure figure.
+  bomFreightSource    BomFreightSource  @default(STRUCTURE)
+
+  // ---- Freight RFQ ----
+  /// Whether this vendor quotes freight for us. Off by default: an RFQ sent to a
+  /// vendor who does not handle freight is noise in their inbox, so only flagged
+  /// vendors appear as RFQ targets on a proposal.
+  rfqEnabled          Boolean           @default(false)
+  /// The freight desk, which is rarely the same person as the purchasing contact
+  /// the BOM goes to. Blank falls back to the primary contact above.
+  rfqContactName      String?
+  rfqContactEmail     String?
+  rfqContactPhone     String?
+  /// Send-dialog defaults, same pattern as the BOM's. Tokens: {{vendor}},
+  /// {{reference}}, {{customer}}, {{projectId}}, {{total}}.
+  rfqEmailTo          String?
+  rfqEmailCc          String?
+  rfqEmailSubject     String?
+  rfqEmailBody        String?
+
+  freightRfqs         FreightRfq[]
+  /// What this vendor calls the parts we number ourselves. See VendorPartNumber.
+  vendorParts         VendorPartNumber[]
+
+  /// This vendor's colour charts — the named colours it publishes, and which of
+  /// its products take how many of them. See VendorColorPalette.
+  colorPalettes       VendorColorPalette[]
+
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  sourcing            ProductSourcing[]
+}
+
+/// A vendor's own number for a part we sell under a different one.
+///
+/// The Adventure floor mat is why this exists: the pricing engine generates
+/// R-SSG-{LLWW}CLM when a mat size is chosen, that number goes on the proposal and
+/// the customer knows the pad by it, while Resilite sell the same pad as A-3204.
+/// The vendor cannot order from our number and the customer must never see theirs,
+/// so both are kept and each document prints the one it needs: proposals ours, the
+/// Bill of Materials both.
+///
+/// ourPart is a part number as it appears on a BOM line — usually a Sku.part, but
+/// deliberately NOT a foreign key, because mat numbers are generated at price time
+/// and have no catalog row. Nothing joins on vendorPart; it is printed only.
+/// A paint colour group: the sets a customer chooses a colour for.
+///
+/// Goldberg Brothers powder coat our steel, and the customer does not pick one
+/// colour for the whole structure — they pick one per group of parts (uprights
+/// one colour, rungs another). The grouping is a property of the PART, not of an
+/// order, so it is maintained once under Administration → Formulas → Paint colour
+/// and every Bill of Materials reads it.
+///
+/// Groups are seeded A–E and can be renamed; the letter is only a label.
+model PaintColorGroup {
+  id        String               @id @default(cuid())
+  /// Short name shown on the Bill of Materials — "A", "B", …
+  name      String               @unique
+  /// Optional plain-English name: "Uprights and posts".
+  label     String?
+  sortOrder Int                  @default(0)
+  skus      PaintColorGroupSku[]
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+}
+
+/// Which paint colour group a part belongs to. One group per part: two would make
+/// which colour it takes a matter of query order.
+model PaintColorGroupSku {
+  id        String          @id @default(cuid())
+  groupId   String
+  group     PaintColorGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  /// Our part number, stored as typed and matched case-insensitively. Not a foreign
+  /// key for the same reason VendorPartNumber.ourPart is not one.
+  sku       String          @unique
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  @@index([groupId])
+}
+
+model VendorPartNumber {
+  id             String       @id @default(cuid())
+  manufacturerId String
+  manufacturer   Manufacturer @relation(fields: [manufacturerId], references: [id], onDelete: Cascade)
+  /// Our part number, stored as typed and matched case-insensitively.
+  ourPart        String
+  /// What the vendor calls it. Printed on the Bill of Materials, never elsewhere.
+  vendorPart     String
+  /// Optional note — the vendor's own description, or why the numbers differ.
+  description    String?
+  active         Boolean      @default(true)
+  createdById    String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([manufacturerId, ourPart])
+  @@index([ourPart])
+}
+
+model ProductSourcing {
+  id             String       @id @default(cuid())
+  productId      String
+  product        Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  manufacturerId String
+  manufacturer   Manufacturer @relation(fields: [manufacturerId], references: [id], onDelete: Restrict)
+  vendorPartNo   String?
+  // Overrides Manufacturer.defaultLeadTimeDays for this part only.
+  leadTimeDays   Int?
+  minOrderQty    Int?
+  isPrimary      Boolean      @default(true)
+  notes          String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([productId, manufacturerId])
+  @@index([manufacturerId])
+}
+
+model ProductRelation {
+  id        String       @id @default(cuid())
+  parentId  String
+  parent    Product      @relation("RelationParent", fields: [parentId], references: [id], onDelete: Cascade)
+  childId   String
+  child     Product      @relation("RelationChild", fields: [childId], references: [id], onDelete: Restrict)
+  type      RelationType
+  quantity  Int          @default(1)
+  sortOrder Int          @default(0)
+
+  @@unique([parentId, childId, type])
+  @@index([childId])
+}
+
+model ProductImage {
+  id          String   @id @default(cuid())
+  productId   String
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  storageKey  String   @unique
+  fileName    String
+  contentType String
+  sizeBytes   Int
+  sortOrder   Int      @default(0)
+  isPrimary   Boolean  @default(false)
+
+  @@index([productId])
+}
+
+model TechnicalDocument {
+  id          String   @id @default(cuid())
+  productId   String
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  storageKey  String   @unique
+  fileName    String
+  contentType String
+  sizeBytes   Int
+  title       String?
+
+  @@index([productId])
+}
+
+// Full snapshot of a product at each revision (version history).
+model ProductVersion {
+  id          String   @id @default(cuid())
+  productId   String
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  version     Int
+  snapshot    Json
+  changeNote  String?
+  changedById String
+  createdAt   DateTime @default(now())
+
+  @@unique([productId, version])
+  @@index([productId])
+}
+
+model ProductStatusHistory {
+  id          String        @id @default(cuid())
+  productId   String
+  product     Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
+  fromStatus  ProductStatus?
+  toStatus    ProductStatus
+  reason      String?
+  changedById String
+  createdAt   DateTime      @default(now())
+
+  @@index([productId])
+}
+
+// ---------------- Configuration Rules Engine ----------------
+// Rules are structured, versioned, auditable DATA — never hard-coded in the UI.
+
+enum RuleType {
+  REQUIRES
+  EXCLUDES
+  COMPATIBLE_WITH
+  INCOMPATIBLE_WITH
+  MIN_QUANTITY
+  MAX_QUANTITY
+  MIN_ROOM_DIMENSIONS
+  MIN_CEILING_HEIGHT
+  CLEARANCE
+  STRUCTURAL
+  INSTALLATION
+  FREIGHT
+  AUTO_INCLUDE_COMPONENT
+  AUTO_CALCULATED_COMPONENT
+  SUGGESTED_ACCESSORY
+  SUGGESTED_UPGRADE
+  APPROVAL_REQUIRED
+  MISSING_INFORMATION
+}
+
+enum RuleOutcome {
+  ALLOW
+  BLOCK
+  WARN
+  REQUIRE_APPROVAL
+  AUTO_ADD
+  RECOMMEND
+  REQUEST_INFORMATION
+}
+
+enum RuleStatus {
+  DRAFT
+  ACTIVE
+  RETIRED
+}
+
+model Rule {
+  id             String        @id @default(cuid())
+  key            String        @unique
+  type           RuleType
+  outcome        RuleOutcome
+  status         RuleStatus    @default(DRAFT)
+  currentVersion Int           @default(1)
+  description    String?
+  createdById    String
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  versions       RuleVersion[]
+
+  @@index([status])
+  @@index([type])
+}
+
+// Immutable snapshot of a rule at each revision.
+model RuleVersion {
+  id           String   @id @default(cuid())
+  ruleId       String
+  rule         Rule     @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  version      Int
+  definition   Json
+  changeNote   String?
+  changedById  String
+  approvedById String?
+  createdAt    DateTime @default(now())
+
+  @@unique([ruleId, version])
+  @@index([ruleId])
+}
+
+// Immutable record of an evaluation — preserves the exact ruleset a proposal used.
+model RuleEvaluationSnapshot {
+  id            String   @id @default(cuid())
+  subjectRef    String?
+  engineVersion String
+  rulesUsed     Json
+  findings      Json
+  blocked       Boolean  @default(false)
+  createdById   String
+  createdAt     DateTime @default(now())
+
+  @@index([subjectRef])
+}
+
+// ---------------- Pricing Engine ----------------
+// All money stored as integer minor units (BigInt) — decimal-safe, never floats.
+
+enum PriceListStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+model PriceList {
+  id             String           @id @default(cuid())
+  name           String
+  currency       String
+  status         PriceListStatus  @default(DRAFT)
+  effectiveDate  DateTime
+  expirationDate DateTime?
+  createdById    String
+  createdAt      DateTime         @default(now())
+  entries        PriceListEntry[]
+
+  @@index([status])
+  @@index([effectiveDate])
+}
+
+model PriceListEntry {
+  id           String    @id @default(cuid())
+  priceListId  String
+  priceList    PriceList @relation(fields: [priceListId], references: [id], onDelete: Cascade)
+  productId    String
+  minQuantity  Int       @default(1)
+  unitPrice    BigInt
+  createdAt    DateTime  @default(now())
+
+  @@unique([priceListId, productId, minQuantity])
+  @@index([productId])
+}
+
+model CustomerPrice {
+  id             String    @id @default(cuid())
+  organizationId String
+  productId      String
+  unitPrice      BigInt
+  currency       String
+  effectiveDate  DateTime
+  expirationDate DateTime?
+
+  @@index([organizationId, productId])
+}
+
+model PromotionalPrice {
+  id             String    @id @default(cuid())
+  productId      String
+  unitPrice      BigInt
+  currency       String
+  code           String?
+  effectiveDate  DateTime
+  expirationDate DateTime?
+
+  @@index([productId])
+}
+
+model ProductCost {
+  id            String   @id @default(cuid())
+  productId     String
+  unitCost      BigInt
+  currency      String
+  effectiveDate DateTime
+  createdById   String
+  createdAt     DateTime @default(now())
+
+  @@index([productId, effectiveDate])
+}
+
+// Immutable snapshot of a computed price for a proposal (preserve historical pricing).
+model PriceSnapshot {
+  id             String   @id @default(cuid())
+  subjectRef     String?
+  currency       String
+  engineVersion  String
+  ruleSnapshotId String?
+  input          Json
+  breakdown      Json
+  grandTotal     BigInt
+  incomplete     Boolean  @default(false)
+  createdById    String
+  createdAt      DateTime @default(now())
+
+  @@index([subjectRef])
+}
+
+// Every manual override — logged with who, why, and before/after.
+model PriceOverrideLog {
+  id            String   @id @default(cuid())
+  subjectRef    String?
+  field         String
+  previousValue String?
+  newValue      String
+  reason        String
+  authorizedById String
+  createdAt     DateTime @default(now())
+
+  @@index([subjectRef])
+}
+
+// ---------------- Proposal Builder ----------------
+
+enum ProposalStatus {
+  DRAFT
+  INTERNAL_REVIEW
+  RELEASED
+  ACCEPTED
+  REJECTED
+  EXPIRED
+}
+
+model Proposal {
+  id             String            @id @default(cuid())
+  number         String            @unique
+  organizationId String
+  /// Which of the customer's deals this proposal is for. Optional, because a proposal
+  /// is often written before an opportunity exists — but when it is set, nothing
+  /// downstream has to infer the deal from the customer's other concurrent projects.
+  /// Scalar only, matching AcceptedOrder.opportunityId: the link is a recorded fact,
+  /// not a cascade path.
+  opportunityId  String?
+  title          String
+  currentVersion Int               @default(1)
+  createdById    String
+  /// Per-deal QuickBooks payment term. Overrides the organization default when
+  /// set; null means fall back to the client default, then the system default.
+  qboSalesTermId   String?
+  qboSalesTermName String?
+
+  /// Archived proposals stay on record in full — nothing is destroyed. They drop out
+  /// of every pipeline view and out of the win-rate maths, and appear only under the
+  /// Archived tab with their reason. Reversible: clearing these three columns restores
+  /// the proposal exactly as it was, statuses and versions untouched.
+  archivedAt     DateTime?
+  archivedById   String?
+  archiveReason  String?
+
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  versions       ProposalVersion[]
+  freightRfqs    FreightRfq[]
+  freightTrueUps FreightTrueUp[]
+  freightEntries FreightEntry[]
+
+  @@index([organizationId])
+  @@index([opportunityId])
+  @@index([archivedAt])
+}
+
+// A version is the unit of immutability: once RELEASED it is frozen.
+model ProposalVersion {
+  id              String                @id @default(cuid())
+  proposalId      String
+  proposal        Proposal              @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  version         Int
+  status          ProposalStatus        @default(DRAFT)
+  sections        Json
+  items           Json
+  priceSnapshotId String?
+  ruleSnapshotId  String?
+  expirationDate  DateTime?
+  releasedAt      DateTime?
+  releasedById    String?
+  frozen          Boolean               @default(false)
+  /// The financing rate sheet this version was quoted from, set the first time a
+  /// financing sheet is SENT. Null until then, and a preview uses the current card.
+  /// Loading next year’s rates therefore cannot restate a payment a customer has
+  /// already been given in writing.
+  financeRateCardId String?
+  createdById     String
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  statusHistory   ProposalStatusEvent[]
+
+  @@unique([proposalId, version])
+  @@index([proposalId])
+  @@index([status])
+}
+
+model ProposalStatusEvent {
+  id          String          @id @default(cuid())
+  versionId   String
+  version     ProposalVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  fromStatus  ProposalStatus?
+  toStatus    ProposalStatus
+  note        String?
+  changedById String
+  createdAt   DateTime        @default(now())
+
+  @@index([versionId])
+}
+
+// A reusable proposal starting point: default groups, note lines, standard
+// descriptions and ordering, saved as a JSON document the builder loads.
+model ProposalTemplate {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  data        Json
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([name])
+}
+
+// Where a standard note prints: inside the line-item table, or beneath the
+// signature lines at the foot of the proposal.
+enum NotePlacement {
+  TABLE
+  FOOTER
+}
+
+// Reusable boilerplate note blocks. autoInclude notes are added to every new
+// proposal automatically; the rest stay available in the builder's note picker.
+model StandardNote {
+  id          String        @id @default(cuid())
+  title       String
+  body        String
+  placement   NotePlacement @default(TABLE)
+  autoInclude Boolean       @default(false)
+  /// Part numbers that pull this note onto a proposal, comma-separated. When any
+  /// of them is on the proposal the note is added once, at the end of the section
+  /// that part sits in. Blank means the note is never triggered by a part — it is
+  /// either always included or picked by hand.
+  ///
+  /// Several parts share one note deliberately: the floor mat, both column wraps
+  /// and the ladder-leg wrap all pull the single "Mat System" note rather than
+  /// each carrying its own copy of the wording.
+  triggerParts String?
+  /// When this note applies. NULL means always.
+  ///
+  /// The case it exists for: two versions of the same paragraph, one that mentions
+  /// the deposit and one that does not, so unticking "show the deposit" on a proposal
+  /// swaps the wording instead of leaving a note that contradicts the totals. A pair
+  /// is two notes, one DEPOSIT_SHOWN and one DEPOSIT_HIDDEN — the builder keeps
+  /// whichever matches the proposal and takes the other one off.
+  ///
+  /// Values: DEPOSIT_SHOWN | DEPOSIT_HIDDEN. A string rather than an enum so a new
+  /// condition does not need a migration to add.
+  condition   String?
+  /// Print this note in an outlined box on the customer proposal rather than as a
+  /// plain paragraph. For the wording that has to be READ — the engineer-of-record
+  /// paragraph on the Soar frame, a lead-time warning — not for boilerplate. Kept on
+  /// the note rather than on the proposal so the same note is emphasised everywhere
+  /// it appears, and a rep cannot forget to do it.
+  emphasis    Boolean       @default(false)
+  sortOrder   Int           @default(0)
+  active      Boolean       @default(true)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@index([active, placement, sortOrder])
+  @@index([condition])
+}
+
+// Editable coefficients behind the H-1000 fastener quantities. The formula shape
+// lives in src/proposals/hardwareRules.ts; these rows override its numbers so a
+// multiplier can be corrected in the app instead of in a deploy. Absent rows fall
+// back to the workbook defaults.
+model HardwareRule {
+  id          String   @id @default(cuid())
+  kind        String   @default("HARDWARE")
+  part        String
+  name        String
+  terms       Json
+  constant    Float    @default(0)
+  factor      Float    @default(1)
+  roundMode   String   @default("NONE")
+  roundStep   Float    @default(1)
+  mode        String   @default("SUM")
+  minZero     Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  active      Boolean  @default(true)
+  when        Json?
+  group       String?
+  note        String?
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([kind, part])
+  @@index([sortOrder])
+}
+
+// Business scalars behind the proposal math (deposit %, proposal validity, leg
+// spans). Defaults live in src/proposals/formulaSettings.ts; a row here overrides
+// one of them.
+model FormulaSetting {
+  key         String   @id
+  value       Float
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+}
+
+// Pricing/SKU master — the single editable source the Adventure engine and the
+// builder product picker both read from. Fed by seed, Excel/CSV import, the
+// in-app editor, and (later) live cloud sync.
+model Sku {
+  id             String   @id @default(cuid())
+  part           String   @unique
+  description    String
+  unitPriceMinor Int      @default(0)
+  unitCostMinor  Int      @default(0)
+  weightLbs      Float    @default(0)
+  category       String   @default("OTHER")
+  manufacturer   String?
+  proposalGroup  String?
+  active         Boolean  @default(true)
+  /// Pre-approved for part-number substitution in the proposal builder. Only
+  /// flagged parts can be swapped by a rep; everything else is fixed.
+  overrideAllowed Boolean @default(false)
+  /// Default quantity the proposal builder seeds this part with. NULL = no
+  /// default (starts at 0); 0 = an explicit "none". A rep's entry always wins.
+  defaultQty     Int?
+  /// Fixed freight charge applied to this part's line automatically when it is
+  /// added to a proposal. NULL = no default; 0 = an explicit "no freight". Prints
+  /// as the line's 3rd-party freight row. A rep's entry always wins.
+  freightMinor   Int?
+  /// Wording for that freight row, e.g. "Passthrough freight — LTL". Defaults to
+  /// "Freight" when blank.
+  freightLabel   String?
+  /// Where this part is bought. Shown as a "Buy" link on the Bill of Materials so
+  /// a purchaser can go straight to the vendor's order page. Manually editable and
+  /// accepted as a `productUrl` column by the CSV importer.
+  productUrl     String?
+  /// Whether this part must carry a powder-coat colour before its BOM section can
+  /// be submitted. Off by default — most parts are not powder coated at all, and
+  /// requiring a colour on them was blocking submission.
+  requiresPowderColor Boolean @default(false)
+  /// Packaging bag this part is shipped in, e.g. "Bag 7". Set on about thirty
+  /// hardware items so the shop can tell which bag to open. NULL = not bagged.
+  packagingBag   String?
+  /// A part made of other parts. On the proposal it stays one line; on the Bill of
+  /// Materials it is REPLACED by its components (see SkuComponent). Set this to keep
+  /// the parent line beside its components instead — off by default, because a
+  /// parent's cost is the sum of its children and printing both doubles it.
+  keepParentOnBom Boolean @default(false)
+  /// Free issue: the manufacturer NAME this part is shipped to when we buy it from
+  /// somewhere else and have it delivered there. It appears on THAT vendor's Bill of
+  /// Materials at no cost — Summit has already paid for it — and is left out of their
+  /// cost total. The real cost stays on the order line, so cost of goods is unchanged.
+  freeIssueVendor String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([category])
+  @@index([active])
+}
+
+/// One line of a part's build: `parentPart` is made up of `quantity` × `childPart`.
+///
+/// Kept by part NUMBER rather than by Sku id so a component can be declared for a
+/// generated part that has no catalog row — the same choice VendorPartNumber makes.
+/// Read only when a Bill of Materials is built; a proposal never sees it.
+model SkuComponent {
+  id         String   @id @default(cuid())
+  parentPart String
+  childPart  String
+  quantity   Int      @default(1)
+  sortOrder  Int      @default(0)
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([parentPart, childPart])
+  @@index([parentPart])
+  @@index([childPart])
+}
+
+// ---------------- Internal Approval Workflow ----------------
+
+enum ApprovalType {
+  DISCOUNT
+  MARGIN_EXCEPTION
+  CUSTOM_PRICING
+  CUSTOM_PRODUCT
+  PRODUCT_RULE_OVERRIDE
+  FREIGHT_EXCEPTION
+  INSTALLATION_EXCEPTION
+  LEGAL_EXCEPTION
+  PAYMENT_TERM_EXCEPTION
+  PROPOSAL_RELEASE
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  REVISION_REQUESTED
+  ESCALATED
+  EXPIRED
+  CANCELLED
+}
+
+model ApprovalRequest {
+  id              String          @id @default(cuid())
+  type            ApprovalType
+  status          ApprovalStatus  @default(PENDING)
+  subjectRef      String?
+  proposalId      String?
+  proposalVersion Int?
+  requesterId     String
+  approverId      String?
+  reason          String
+  supportingInfo  Json?
+  originalValue   String?
+  requestedValue  String
+  decision        ApprovalStatus?
+  decisionNotes   String?
+  decidedAt       DateTime?
+  escalatedToId   String?
+  expiresAt       DateTime
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  events          ApprovalEvent[]
+
+  @@index([status])
+  @@index([type])
+  @@index([requesterId])
+  @@index([approverId])
+  @@index([proposalId, proposalVersion])
+}
+
+model ApprovalEvent {
+  id        String          @id @default(cuid())
+  requestId String
+  request   ApprovalRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  action    String
+  actorId   String
+  notes     String?
+  createdAt DateTime        @default(now())
+
+  @@index([requestId])
+}
+
+model ApprovalDelegation {
+  id          String        @id @default(cuid())
+  fromUserId  String
+  toUserId    String
+  type        ApprovalType?
+  startsAt    DateTime      @default(now())
+  endsAt      DateTime?
+  createdById String
+  createdAt   DateTime      @default(now())
+
+  @@index([toUserId])
+  @@index([fromUserId])
+}
+
+// ---------------- monday.com External Links ----------------
+
+enum SyncState {
+  LINKED
+  PENDING
+  ERROR
+  CONFLICT
+}
+
+model ExternalLink {
+  id             String    @id @default(cuid())
+  provider       String    @default("monday")
+  entity         String
+  entityId       String
+  externalId     String
+  boardId        String?
+  lastSyncedHash String?
+  lastSyncedAt   DateTime?
+  state          SyncState @default(LINKED)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([provider, entity, entityId])
+  @@unique([provider, externalId])
+  @@index([entity, entityId])
+}
+
+// ---------------- QuickBooks Online Integration ----------------
+// Financial integration. Every live transaction is authorized by a user,
+// deduplicated by an idempotency key, and preserves the accepted proposal
+// totals verbatim. Credentials NEVER live in source — OAuth tokens are stored
+// encrypted here; client id/secret come from env only.
+
+enum QboEnvironment {
+  SANDBOX
+  PRODUCTION
+}
+
+// OAuth 2.0 connection to a QuickBooks company (realm). Tokens are AES-256-GCM
+// encrypted at rest (key from env). One connection per realm per environment.
+model QboConnection {
+  id                    String         @id @default(cuid())
+  realmId               String
+  environment           QboEnvironment
+  accessTokenEnc        String
+  refreshTokenEnc       String
+  accessTokenExpiresAt  DateTime
+  refreshTokenExpiresAt DateTime
+  connectedById         String
+  isActive              Boolean        @default(true)
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+
+  @@unique([realmId, environment])
+  @@index([environment])
+}
+
+// CPQ entity <-> QuickBooks object id map (Customer, Item). Scoped by
+// environment so sandbox ids never collide with production ids. The unique
+// constraints are the duplicate-prevention backbone for find-or-create.
+model QboEntityLink {
+  id             String         @id @default(cuid())
+  environment    QboEnvironment
+  entity         String
+  entityId       String
+  qboId          String
+  qboSyncToken   String?
+  lastSyncedHash String?
+  lastSyncedAt   DateTime?
+  state          SyncState      @default(LINKED)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@unique([environment, entity, entityId])
+  @@unique([environment, entity, qboId])
+  @@index([entity, entityId])
+}
+
+enum QboTxnType {
+  ESTIMATE
+  /// Full-value itemized invoice: the whole accepted order on one document,
+  /// with the payment split expressed as terms. This is how SSG bills.
+  INVOICE
+  /// Portion invoices — retained for staged billing, unused by default.
+  DEPOSIT_INVOICE
+  PROGRESS_INVOICE
+  FINAL_INVOICE
+}
+
+// State machine: DRAFT (prepared, totals frozen) -> PENDING_AUTHORIZATION ->
+// AUTHORIZED (explicit user sign-off) -> CREATED (exists in QBO). FAILED is
+// retryable (same idempotency key). VOIDED for manual reversal records.
+enum QboTxnStatus {
+  DRAFT
+  PENDING_AUTHORIZATION
+  AUTHORIZED
+  CREATED
+  FAILED
+  VOIDED
+}
+
+// One row per intended financial transaction. The idempotencyKey is unique and
+// is also passed to QuickBooks as the request id, so a retry NEVER creates a
+// second document in either system. totalsSnapshot freezes the accepted
+// proposal totals so they can never be silently altered.
+model QboTransaction {
+  id                String         @id @default(cuid())
+  type              QboTxnType
+  environment       QboEnvironment
+  status            QboTxnStatus   @default(DRAFT)
+
+  proposalId        String
+  proposalVersionId String
+  proposalVersion   Int
+
+  // Frozen copy of the accepted proposal totals (never floats — minor units).
+  currency          String
+  proposalTotalMinor BigInt
+  amountMinor       BigInt
+  totalsSnapshot    Json
+
+  idempotencyKey    String         @unique
+  customerQboId     String?
+  qboId             String?
+  qboDocNumber      String?
+  qboSyncToken      String?
+
+  initiatedById     String
+  authorizedById    String?
+  authorizedAt      DateTime?
+  error             String?
+
+  // ---- Delivery and accounting state, mirrored FROM QuickBooks ----
+  // Everything below is QuickBooks-authoritative (source-of-truth.ts): read back
+  // for display, never pushed. sentAt in particular is Intuit's
+  // DeliveryInfo.DeliveryTime, not our clock, so an invoice emailed by hand from
+  // inside QuickBooks still reads as sent here.
+
+  /// NotSet | NeedToSend | EmailSent, verbatim from QuickBooks.
+  emailStatus       String?
+  /// When QuickBooks delivered it to the customer. Null means never sent.
+  sentAt            DateTime?
+  sentToEmail       String?
+  /// Who pressed send in this app. Null when it was sent from QuickBooks directly.
+  sentById          String?
+  lastSendAttemptAt DateTime?
+  sendError         String?
+  dueDate           DateTime?
+  /// The document total as QuickBooks holds it. Compared against the frozen
+  /// accepted total to catch an invoice edited on the accounting side.
+  qboTotalMinor     BigInt?
+  balanceMinor      BigInt?
+  paidMinor         BigInt?
+  /// OPEN | PARTIALLY_PAID | PAID | OVERDUE — derived, because QuickBooks has no
+  /// single status field on an invoice.
+  qboStatus         String?
+  qboLastSyncedAt   DateTime?
+
+  payments          QboPayment[]
+  reminders         PaymentReminder[]
+
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  @@index([proposalId, proposalVersion])
+  @@index([status])
+  @@index([type])
+  @@index([environment])
+  @@index([qboStatus])
+  @@index([sentAt])
+}
+
+// A payment recorded in QuickBooks, as applied to ONE of our invoices.
+//
+// QuickBooks models a payment as its own document whose lines link to one or
+// more invoices, so a single cheque covering three invoices produces three rows
+// here. amountMinor is the portion applied to this invoice; totalAmountMinor is
+// the whole payment, kept so the figures are explicable when a customer pays
+// several invoices at once.
+//
+// A read-only mirror: rows are created, updated and deleted purely to match
+// QuickBooks. Nothing in this app records a payment.
+model QboPayment {
+  id               String         @id @default(cuid())
+  environment      QboEnvironment
+  qboPaymentId     String
+  qboTransactionId String
+  transaction      QboTransaction @relation(fields: [qboTransactionId], references: [id], onDelete: Cascade)
+  customerQboId    String?
+
+  /// Portion of this payment applied to this invoice.
+  amountMinor      BigInt
+  /// The full payment as received.
+  totalAmountMinor BigInt
+  /// Received but not yet applied to any invoice — a credit on the account.
+  unappliedMinor   BigInt         @default(0)
+  currency         String         @default("USD")
+  method           String?
+  referenceNumber  String?
+  depositToAccount String?
+  /// The payment date as entered in QuickBooks, not when we read it.
+  txnDate          DateTime
+  qboCreatedAt     DateTime?
+  qboUpdatedAt     DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  @@unique([environment, qboPaymentId, qboTransactionId])
+  @@index([qboTransactionId])
+  @@index([customerQboId])
+}
+
+// A payment reminder emailed to a customer about an outstanding invoice.
+//
+// The full sent message is stored rather than a reference to a template: a
+// reminder is correspondence, and "what exactly did we say to them" has to stay
+// answerable after the template changes. Failures are recorded too — this log is
+// the record of how hard a balance has been chased, and dropping the failures
+// would overstate it.
+model PaymentReminder {
+  id               String         @id @default(cuid())
+  qboTransactionId String
+  transaction      QboTransaction @relation(fields: [qboTransactionId], references: [id], onDelete: Cascade)
+  organizationId   String?
+  toEmail          String
+  ccEmail          String?
+  subject          String
+  body             String
+  /// The balance outstanding at the moment the reminder went out.
+  balanceMinor     BigInt
+  currency         String         @default("USD")
+  attachedInvoice  Boolean        @default(true)
+  /// sent | failed
+  status           String
+  error            String?
+  sentById         String
+  /// Cached so attribution survives the author leaving.
+  sentByName       String
+  createdAt        DateTime       @default(now())
+
+  @@index([qboTransactionId, createdAt])
+  @@index([organizationId, createdAt])
+}
+
+// ---------------- Accepted Order & Operational Handoff ----------------
+// When a proposal version is ACCEPTED it is locked into an immutable operational
+// order. The order references the EXACT accepted version + price snapshot and
+// carries a frozen content snapshot, so later proposal edits (only possible via
+// a new version) can never silently alter what was sold. Everything downstream
+// (procurement, production, shipping, install, training, tasks) hangs off it.
+
+enum HandoffStatus {
+  NEW
+  IN_PROGRESS
+  BLOCKED
+  READY
+  COMPLETE
+  CANCELLED
+}
+
+enum CustomerApprovalMethod {
+  SIGNATURE
+  COUNTERSIGNED_PROPOSAL
+  PURCHASE_ORDER
+  EMAIL
+  VERBAL
+  PORTAL
+}
+
+enum RequirementCategory {
+  PRODUCTION
+  CUSTOM_PRODUCT
+  SHIPPING
+  INSTALLATION
+  TRAINING
+  CUSTOMER_RESPONSIBILITY
+  FACILITY_ACCESS
+  REQUIRED_DOCUMENT
+}
+
+enum RequirementStatus {
+  OPEN
+  IN_PROGRESS
+  BLOCKED
+  COMPLETE
+  WAIVED
+}
+
+// Who the bill of materials ships to: the end customer's site, or Summit's dock.
+enum BomShipTo {
+  CUSTOMER
+  SUMMIT
+}
+
+enum HandoffTaskStatus {
+  TODO
+  IN_PROGRESS
+  BLOCKED
+  DONE
+  CANCELLED
+}
+
+model AcceptedOrder {
+  id                String        @id @default(cuid())
+  number            String        @unique
+  organizationId    String
+  opportunityId     String?
+
+  // Exact accepted proposal reference — the immutability anchor.
+  proposalId        String
+  proposalVersionId String        @unique
+  acceptedVersion   Int
+  priceSnapshotId   String
+  ruleSnapshotId    String?
+
+  currency          String
+  grandTotalMinor   BigInt
+  depositRequired   Boolean       @default(false)
+  depositDueMinor   BigInt        @default(0)
+
+  // Frozen copy of the accepted content + an integrity hash for drift detection.
+  contentSnapshot   Json
+  integrityHash     String
+
+  status            HandoffStatus @default(NEW)
+  locked            Boolean       @default(true)
+
+  // ---- Bill of Materials header (operational, editable after lock) ----
+  // The BOM is a shop/vendor document, so these are entered per order rather
+  // than carried from the proposal.
+  jobName           String?
+  bomShipTo         BomShipTo     @default(CUSTOMER)
+  bomSubmittedOn    DateTime?
+  deliveryType      String?
+  powderCoatBrand   String?
+  shipmentQuote     String?
+  bomNotes          String?
+
+  // Integration cross-references (documented in QBO/monday milestones).
+  qboEstimateTxnId  String?
+  mondayProjectId   String?
+  /// The Manufacturing Process board row this order corresponds to.
+  ///
+  /// NOT the same id as `mondayProjectId`, which is the Deal Tracking row. The
+  /// customer portal lives on the manufacturing board and knows only that id, so
+  /// without this there is no join between a portal submission and a CRM order.
+  /// Recorded the first time a submission is matched to this order — by hand, or by
+  /// the customer-email ladder in portalDelivery.ts — after which every later
+  /// submission for the order resolves on this column alone.
+  portalOrderItemId String?       @unique
+
+  acceptedById      String
+  acceptedAt        DateTime      @default(now())
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  customerApproval  CustomerApproval?
+  requirements      HandoffRequirement[]
+  procurement       ProcurementLine[]
+  bomSections       BomVendorSection[]
+  portalDeliveries      PortalDeliverySubmission[]
+  portalColorSelections PortalColorSelection[]
+  tasks             HandoffTask[]
+  events            OrderEvent[]  // ---- Manufacturing release ----
+  // Creating the order and releasing it to the shop are two separate acts. The
+  // order is created when the proposal is marked signed; release is later, and is
+  // gated on a QuickBooks invoice existing — or on that requirement being waived
+  // on purpose, with a reason.
+  manufacturingReleasedAt   DateTime?
+  manufacturingReleasedById String?
+  qboInvoiceWaivedAt        DateTime?
+  qboInvoiceWaivedById      String?
+  qboInvoiceWaivedReason    String?
+
+
+
+  @@index([organizationId])
+  @@index([status])
+  @@index([proposalId])
+}
+
+// The customer's acceptance of record — who approved, how, and when.
+model CustomerApproval {
+  id             String                 @id @default(cuid())
+  orderId        String                 @unique
+  order          AcceptedOrder          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  method         CustomerApprovalMethod
+  approverName   String
+  approverTitle  String?
+  approverEmail  String?
+  poNumber       String?
+  documentRef    String?
+  ipAddress      String?
+  approvedAt     DateTime
+  notes          String?
+  recordedById   String
+  createdAt      DateTime               @default(now())
+}
+
+// Line-itemized procurement list, referencing the frozen accepted products.
+model ProcurementLine {
+  id           String        @id @default(cuid())
+  orderId      String
+  order        AcceptedOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId    String?
+  sku          String?
+  name         String
+  quantity     Int
+  vendor       String?
+  poNumber     String?
+  sourced      Boolean       @default(false)
+  // Snapshot of what we pay the vendor and what the part weighs, resolved from
+  // the catalog at lock time (and backfilled once for orders locked earlier).
+  unitCostMinor   Int?
+  unitWeightLbs   Decimal?   @db.Decimal(10, 3)
+  /// What the vendor actually invoiced for this part, per unit, typed in from their
+  /// invoice after the sheet went out. `unitCostMinor` above stays as agreed on the
+  /// sheet they were sent — the two are kept apart so a difference can be seen rather
+  /// than overwritten by the very figure it should be compared against. NULL means
+  /// this line has not been checked yet, which is not the same as invoiced at zero.
+  invoicedUnitCostMinor Int?
+  invoicedAt      DateTime?
+  invoicedById    String?
+  /// Checked against the invoice and genuinely not on it.
+  ///
+  /// Distinct from a NULL invoiced figure, which means nobody has looked yet. The two
+  /// were the same state until this column existed, and that is the case that costs a
+  /// missing part in the shop three weeks later: an unbilled line looks exactly like an
+  /// unchecked one, so nobody chases it.
+  invoiceNotBilled Boolean @default(false)
+  // Fabrication instructions that print on the BOM line.
+  powderColor  String?
+  /// Brand from the managed list, and the code as typed for THIS part. The printed
+  /// `powderColor` above is kept in step ("Cardinal 5019") so a historic BOM still
+  /// reads the same even if the brand is later renamed.
+  powderBrandId   String?
+  powderBrand     PowderColorBrand? @relation(fields: [powderBrandId], references: [id])
+  powderColorCode String?
+  /// Produced by expanding a kit (H-1000) into its fasteners. The proposal keeps the
+  /// single kit line because that is what the customer buys; the shop needs the
+  /// pieces, so the BOM lists them in their own trailing section.
+  isHardwareComponent Boolean @default(false)
+  kitSku          String?
+  /// Colours chosen for this line, in slot order, copied from the accepted proposal
+  /// item and editable on the sheet afterwards. Shape:
+  ///   [{ "slot": 1, "colorId": "…", "name": "Royal Blue", "vendorCode": "RB-124",
+  ///      "upchargeMinor": 0 }]
+  /// Denormalised on purpose: a BOM printed last year must still read the same after
+  /// the vendor renames a colour. colorId is kept for reporting only.
+  colorPicks   Json?
+  vendorNotes  String?
+  targetDate   DateTime?
+  notes        String?
+  isException  Boolean       @default(false)
+  exceptionReason String?  /// What the formula produced for this line, captured when the line was created
+  /// from the accepted proposal. `quantity` above is the operational figure and
+  /// may be overridden by hand; a difference between the two is what badges the
+  /// line as edited. NULL on lines added by hand, which have no formula figure to
+  /// differ from.
+  quantityOriginal   Int?
+  quantityEditedById String?
+  quantityEditedAt   DateTime?
+  /// Bought from `purchaseVendor` and shipped to `vendor`, who crates it with the
+  /// rest of the order. Prints at no cost on that vendor's sheet and is excluded from
+  /// their section total; `unitCostMinor` is still the real cost, so the order's cost
+  /// of goods is unaffected. Set from Sku.freeIssueVendor.
+  freeIssue      Boolean  @default(false)
+  purchaseVendor String?
+
+
+
+  @@index([orderId])
+}
+
+// Operational requirements by category (production, shipping, install, etc.).
+model HandoffRequirement {
+  id              String              @id @default(cuid())
+  orderId         String
+  order           AcceptedOrder       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  category        RequirementCategory
+  title           String
+  detail          Json?
+  status          RequirementStatus   @default(OPEN)
+  targetDate      DateTime?
+  isException     Boolean             @default(false)
+  exceptionReason String?
+  createdById     String
+  /// Who last changed this requirement, shown beside the status so the order page
+  /// reads as a history rather than an anonymous state.
+  updatedById     String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  @@index([orderId])
+  @@index([category])
+  @@index([status])
+}
+
+// Internal task assignment with owner + target date.
+model HandoffTask {
+  id              String            @id @default(cuid())
+  orderId         String
+  order           AcceptedOrder     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  title           String
+  description     String?
+  category        RequirementCategory?
+  assigneeId      String?
+  assigneeRole    Role?
+  dueDate         DateTime?
+  status          HandoffTaskStatus @default(TODO)
+  isException     Boolean           @default(false)
+  exceptionReason String?
+  createdById     String
+  /// Who last changed this task — shown beside the status on the order page.
+  updatedById     String?
+  completedAt     DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@index([orderId])
+  @@index([assigneeId])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Bill of Materials — per-vendor sections
+//
+// The BOM header used to be one record on the order, which meant every vendor
+// shared one submission date, one set of notes and one lock. A section is that
+// header scoped to a single vendor: its own dates, its own questions, its own
+// send history, and its own confirm/unlock state. The order-level header fields
+// on AcceptedOrder remain as the DEFAULTS a new section inherits.
+// ---------------------------------------------------------------------------
+
+/// Which freight figure on the deal a vendor's shipment is quoted from.
+enum BomFreightSource {
+  STRUCTURE
+  MATS
+  NONE
+}
+
+enum BomSectionStatus {
+  DRAFT
+  SUBMITTED
+}
+
+/// A place an order can be shipped to that is neither the customer's site nor
+/// Summit's dock — a job trailer, an installer's warehouse, a second facility.
+///
+/// Kept as its own record rather than typed onto the section, because the same
+/// address is used across several vendors on one order and across orders, and
+/// re-typing it is how two sheets end up disagreeing about where the truck goes.
+model ShipToAddress {
+  id           String             @id @default(cuid())
+  /// What it is called in the picker: "Denver job trailer".
+  name         String
+  line1        String?
+  line2        String?
+  city         String?
+  region       String?
+  postalCode   String?
+  country      String?            @default("USA")
+  contactName  String?
+  phone        String?
+  email        String?
+  notes        String?
+  active       Boolean            @default(true)
+  /// Where this address came from: null for one typed by hand, 'PORTAL' for one the
+  /// customer confirmed themselves. The picker shows it, because "the customer told
+  /// us this" and "someone here typed this" are not the same claim.
+  source       String?
+  createdById  String?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  sections     BomVendorSection[]
+  portalSubmissions PortalDeliverySubmission[]
+
+  @@index([name])
+}
+
+model BomVendorSection {
+  id              String           @id @default(cuid())
+  orderId         String
+  order           AcceptedOrder    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  /// Vendor name, matching ProcurementLine.vendor. 'Unassigned vendor' is a real
+  /// section so unsourced parts still get a sheet.
+  vendor          String
+  /// Print/export order of the sections, and the order they appear on screen.
+  sortOrder       Int              @default(0)
+
+  jobName         String?
+  shipTo          BomShipTo        @default(CUSTOMER)
+  /// A specific address instead of the customer's site or Summit's dock. When set
+  /// it wins over `shipTo`, which stays as the fallback for every existing section.
+  shipToAddressId String?
+  shipToAddress   ShipToAddress?   @relation(fields: [shipToAddressId], references: [id])
+  /// Null means "not submitted yet" — the UI shows today's date as the default.
+  submittedOn     DateTime?
+  deliveryType    String?
+  /// The customer's own delivery answers, applied by the portal delivery webhook to
+  /// every section that is not yet SUBMITTED. Kept apart from `deliveryType` above,
+  /// which is free text a human writes: these are distinct answers, and running them
+  /// together makes all of them unreadable and none of them reportable.
+  loadingDock     String?
+  deliveryTiming  String?
+  preferredDeliveryDate DateTime?
+  powderCoatBrand String?
+  /// Freight for this vendor's shipment. Pulled from the deal's monday board —
+  /// mats freight for the mat vendor, structure freight for everyone else — and
+  /// editable afterwards, because the pull is a starting figure, not a contract.
+  shipmentQuote   String?
+  /// Estimated tax, pulled from the same board. Informational on the sheet: the
+  /// deal carries one figure, and it is not divided between vendors.
+  estimatedTax    String?
+
+  /// The vendor's invoice for this section: their reference, their date, the total
+  /// they state, and any note about it. Writable after the section is SUBMITTED,
+  /// unlike everything above — the invoice is a fact about what happened AFTER the
+  /// sheet went out, and recording it changes nothing about the vendor's copy. The
+  /// line-by-line figures live on ProcurementLine.invoicedUnitCostMinor.
+  vendorInvoiceNumber String?
+  vendorInvoiceDate   DateTime?
+  vendorInvoiceTotalMinor Int?
+  vendorInvoiceNotes  String?
+  /// Someone accepted the difference between the invoice and the sheet. Above the
+  /// approval threshold this needs the vendor-invoice approval permission.
+  invoiceApprovedAt   DateTime?
+  invoiceApprovedById String?
+
+  notes           String?
+
+  /// SUBMITTED freezes the section's fields; unlocking is an explicit action and
+  /// is recorded on the order timeline.
+  status          BomSectionStatus @default(DRAFT)
+  /// The powder-colour column was printed on every vendor's sheet, where it was
+  /// usually a column of dashes. Opt-in per section; seeded from the vendor default.
+  showPowderColor Boolean          @default(false)
+  /// Whether this vendor's sheet prints the packaging-bag column. Opt-in, the
+  /// same way the powder-colour column is.
+  showPackagingBag Boolean         @default(false)
+  confirmedAt     DateTime?
+  confirmedById   String?
+  unlockedAt      DateTime?
+  unlockedById    String?
+
+  answers         BomVendorAnswer[]
+  sends           BomSend[]
+
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  @@unique([orderId, vendor])
+  @@index([orderId])
+}
+
+enum BomQuestionType {
+  TEXT
+  LONG_TEXT
+  NUMBER
+  DATE
+  SELECT
+  MULTI_SELECT
+  BOOLEAN
+}
+
+/// A reusable question definition, administered per vendor. Every new section for
+/// that vendor starts with a copy of these, so "what gauge?" is asked of the same
+/// fabricator on every order without re-typing it.
+model BomQuestionTemplate {
+  id        String          @id @default(cuid())
+  /// Null applies the question to EVERY vendor section.
+  vendor    String?
+  label     String
+  type      BomQuestionType @default(TEXT)
+  /// Choice list for SELECT / MULTI_SELECT, as an ordered array of strings.
+  options   Json?
+  helpText  String?
+  required  Boolean         @default(false)
+  sortOrder Int             @default(0)
+  active    Boolean         @default(true)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  @@index([vendor])
+}
+
+/// The question AND its answer on one order's section. The label/type/options are
+/// snapshotted so editing a template never rewrites history on a sent BOM.
+model BomVendorAnswer {
+  id         String           @id @default(cuid())
+  sectionId  String
+  section    BomVendorSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  templateId String?
+  label      String
+  type       BomQuestionType  @default(TEXT)
+  options    Json?
+  required   Boolean          @default(false)
+  /// Scalar answers as text; MULTI_SELECT as a JSON array of strings.
+  value      String?
+  sortOrder  Int              @default(0)
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  @@index([sectionId])
+}
+
+enum BomSendFormat {
+  EXCEL
+  PDF
+  BOTH
+}
+
+enum BomSendStatus {
+  QUEUED
+  SENT
+  FAILED
+  DELIVERED
+  BOUNCED
+}
+
+/// Audit trail for every BOM emailed to a vendor: who sent it, to whom, when, in
+/// what format, and what the provider said afterwards. Append-only.
+model BomSend {
+  id                String           @id @default(cuid())
+  sectionId         String
+  section           BomVendorSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  orderId           String
+  vendor            String
+  toEmail           String
+  ccEmails          String?
+  subject           String
+  bodyPreview       String?
+  format            BomSendFormat    @default(PDF)
+  status            BomSendStatus    @default(QUEUED)
+  /// Resend's message id, so a delivery webhook can find this row later.
+  providerMessageId String?
+  error             String?
+  sentById          String
+  sentAt            DateTime         @default(now())
+  deliveredAt       DateTime?
+  openedAt          DateTime?
+
+  @@index([sectionId])
+  @@index([orderId])
+  @@index([providerMessageId])
+}
+
+// ---------------------------------------------------------------------------
+// Powder coat colours
+//
+// A customer picks a BRAND ("Cardinal", "Prismatic") and then types the specific
+// colour CODE for each part — different parts of the same frame routinely carry
+// different codes. The brand is a managed list because that is where the spelling
+// drift was; the code is free text because the brands' catalogues change faster
+// than we could maintain a copy of them.
+// ---------------------------------------------------------------------------
+
+model PowderColorBrand {
+  id        String            @id @default(cuid())
+  name      String            @unique
+  website   String?
+  active    Boolean           @default(true)
+  sortOrder Int               @default(0)
+  lines     ProcurementLine[]
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Ryan Capital financing options
+//
+// Payments are quoted from a PAYMENT FACTOR per term, not an interest rate:
+// monthly payment = financed amount x factor. Factors are what the lessor
+// publishes, so they are the editable unit.
+// ---------------------------------------------------------------------------
+
+model FinanceFactor {
+  id          String   @id @default(cuid())
+  termMonths  Int      @unique
+  /// Payment per $1 financed, e.g. 0.032700 for 36 months.
+  factor      Decimal  @db.Decimal(10, 6)
+  active      Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// Append-only, order-scoped audit timeline (complements the global AuditLog).
+model OrderEvent {
+  id        String        @id @default(cuid())
+  orderId   String
+  order     AcceptedOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  action    String
+  actorId   String
+  detail    Json?
+  createdAt DateTime      @default(now())
+
+  @@index([orderId])
+}
+
+/// A freight RFQ is frozen the moment it is emailed. Correcting one means a new
+/// revision, so the vendor and we can always point at the same document.
+enum FreightRfqStatus {
+  DRAFT
+  SENT
+  SUPERSEDED
+}
+
+enum FreightRfqSendStatus {
+  QUEUED
+  SENT
+  /// The recipient's mail server accepted it. Reported by Resend's webhook, not by
+  /// us: SENT only means the provider took the message.
+  DELIVERED
+  /// The recipient's mail server refused it. The vendor does not have the request.
+  BOUNCED
+  FAILED
+}
+
+/// A request for freight costs, one per vendor per proposal — the same
+/// segmentation the Bill of Materials uses, for the same reason: each vendor
+/// quotes only what they ship.
+model FreightRfq {
+  id             String            @id @default(cuid())
+  proposalId     String
+  proposal       Proposal          @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  /// The proposal version the lines were taken from. Kept so a stale RFQ can be
+  /// recognised after the proposal moves on.
+  versionId      String
+  /// Vendor short code as it was when this RFQ was raised. Frozen with the row for
+  /// the same reason projectId is: the reference the vendor is holding must not
+  /// change because someone edited the vendor record afterwards.
+  vendorAbbrev   String?
+  /// How many times this request has been emailed. A revision changes the CONTENT
+  /// and increments `revision`; a submission sends the SAME content again — the
+  /// vendor mislaid it, or never replied — and increments this. Each one carries
+  /// its own reference ("… S2") so two identical documents in a vendor's inbox are
+  /// still tellable apart.
+  submission     Int               @default(1)
+  organizationId String
+  /// Vendor name as it appears on Sku.manufacturer, so lines can be grouped
+  /// without a join through the product tree.
+  vendor         String
+  manufacturerId String?
+  manufacturer   Manufacturer?     @relation(fields: [manufacturerId], references: [id], onDelete: SetNull)
+
+  /// "8050" — the monday Project ID, resolved once at creation. Stored rather
+  /// than looked up on render: the reference on a sent document must never
+  /// change, even if the board does.
+  projectId      String
+  /// "RFQ-12414494509-SE", then " R2" on a revision and " S2" on a resend.
+  reference      String
+  revision       Int               @default(1)
+
+  notes          String?
+  status         FreightRfqStatus  @default(DRAFT)
+
+  /// Ship-to, frozen at creation from the proposal's shipping address (billing
+  /// when there is no shipping one) and the rep who built the proposal.
+  shipToName     String
+  shipToLine1    String?
+  shipToLine2    String?
+  shipToCity     String?
+  shipToRegion   String?
+  shipToPostal   String?
+  shipToCountry  String?
+  /// Which address the frozen shipTo* fields above were resolved from:
+  /// PORTAL_CONFIRMED, ORG_SHIPPING, ORG_BILLING or NONE. Prints nowhere — it is
+  /// shown on the RFQ screen, so whoever sends it can see whether the ship-to is
+  /// the site the customer confirmed or the billing entity's front office.
+  shipToSource   String?
+  contactName    String?
+  contactPhone   String?
+
+  totalCostMinor Int               @default(0)
+  sentAt         DateTime?
+  sentById       String?
+  createdById    String
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  lines          FreightRfqLine[]
+  sends          FreightRfqSend[]
+
+  @@unique([proposalId, vendor, revision])
+  @@index([versionId])
+  @@index([organizationId])
+  @@index([status])
+}
+
+/// One product line on the RFQ. Included by default; a rep unticks what should
+/// not travel on this shipment. Unticked lines are kept rather than deleted so a
+/// revision can put them back.
+model FreightRfqLine {
+  id                String     @id @default(cuid())
+  rfqId             String
+  rfq               FreightRfq @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  sku               String
+  name              String
+  quantity          Int        @default(1)
+  /// What we pay the vendor for one unit, not what the customer pays us.
+  unitCostMinor     Int        @default(0)
+  extendedCostMinor Int        @default(0)
+  included          Boolean    @default(true)
+  /// True when a rep added this line by hand rather than it coming off the
+  /// proposal for this vendor.
+  addedManually     Boolean    @default(false)
+  sortOrder         Int        @default(0)
+
+  @@index([rfqId])
+}
+
+model FreightRfqSend {
+  id                String               @id @default(cuid())
+  rfqId             String
+  rfq               FreightRfq           @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  toEmail           String
+  ccEmails          String?
+  subject           String
+  bodyPreview       String
+  status            FreightRfqSendStatus @default(QUEUED)
+  providerMessageId String?
+  error             String?
+  /// When the recipient's mail server accepted it, as reported by the provider.
+  /// Null against a SENT row means nobody has confirmed it landed — which is a
+  /// different thing from a failure, and is worth being able to see.
+  deliveredAt       DateTime?
+  openedAt          DateTime?
+  sentById          String
+  createdAt         DateTime             @default(now())
+
+  @@index([rfqId])
+  /// The webhook arrives knowing only the provider's message id.
+  @@index([providerMessageId])
+}
+
+
+/// A freight true-up is the one sanctioned way a frozen proposal changes after
+/// release. It exists because SSG quotes before the vendors have quoted freight:
+/// the customer often signs, and manufacturing often starts, on a document whose
+/// freight lines are still blank.
+///
+/// It is deliberately NOT a new proposal version. The customer signed P-2026-0117
+/// v3 and that document keeps its number, its signature and its line items; only
+/// the freight fields move, and only through this record.
+///
+/// The true-up is the FOLDER; the money lives in FreightEntry rows beneath it.
+/// That split is what lets freight arrive in instalments — steel from the
+/// fabricator this week, mats from Resilite a fortnight later — with each figure
+/// carrying its own source, evidence, and its own trip to the invoice.
+enum FreightTrueUpStatus {
+  /// Raised: freight is known to be outstanding. Nothing entered yet.
+  OPEN
+  /// At least one amount entered and evidenced, not all applied.
+  STAGED
+  /// Everything entered has been written onto the proposal.
+  APPLIED
+  /// Withdrawn — including "no freight applies", which carries a reason.
+  VOID
+}
+
+/// How the freight reached an invoice that already existed in QuickBooks.
+enum FreightInvoiceMode {
+  /// Freight lines appended to the existing invoice, raising its total.
+  AMEND
+  /// A separate freight-only invoice, because the original had payments applied.
+  SUPPLEMENT
+}
+
+/// The four ways freight reaches Summit. STEEL and MATS are quoted on the monday
+/// deal board and read from it; THERAPEUTIC and OTHER are entered by hand.
+enum FreightBucketKind {
+  STEEL
+  MATS
+  THERAPEUTIC
+  OTHER
+}
+
+/// Where a figure came from. A MANUAL figure in a MONDAY bucket is an override and
+/// carries a reason.
+enum FreightEntrySource {
+  MONDAY
+  MANUAL
+}
+
+/// What one entry covers.
+enum FreightEntryScope {
+  /// One amount for the job. Lands on the version's meta.
+  JOB
+  /// Apportioned across chosen product items. Lands on their lines.
+  LINES
+}
+
+enum FreightEntryStatus {
+  /// Entered and evidenced. Not yet on the proposal.
+  STAGED
+  /// Written onto the frozen version; the price snapshot has been re-frozen.
+  APPLIED
+  /// On the customer's invoice in QuickBooks.
+  PUSHED
+  /// Withdrawn before it was applied, or "no freight applies" for this bucket.
+  VOID
+}
+
+model FreightTrueUp {
+  id                    String              @id @default(cuid())
+  proposalId            String
+  proposal              Proposal            @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  /// The frozen version the freight is being written onto.
+  versionId             String
+  status                FreightTrueUpStatus @default(OPEN)
+
+  entries               FreightEntry[]
+
+  // ---- Legacy staged amounts, minor units.
+  //
+  // Superseded by FreightEntry and no longer written. Kept because rows created
+  // before the four-bucket split hold their money here, and an applied true-up is
+  // a financial record: reading it has to keep working. structureFreightMinor is
+  // steel, stdFreightMinor is other.
+  structureFreightMinor Int?
+  stdFreightMinor       Int?
+  thirdPartyLines       Json?
+  thirdPartyTotalMinor  Int?
+
+  // ---- Provenance carried at folder level (a single-vendor job, the common case).
+  vendorName            String?
+  vendorQuoteRef        String?
+  quoteAttachmentId     String?
+  freightRfqId          String?
+  note                  String?
+  /// Set when someone records that no freight applies at all. Status goes VOID.
+  noFreightReason       String?
+
+  // ---- Application onto the proposal
+  appliedAt             DateTime?
+  appliedById           String?
+  previousTotalMinor    BigInt?
+  newTotalMinor         BigInt?
+  previousSnapshotId    String?
+  newSnapshotId         String?
+
+  // ---- QuickBooks (most recent push; per-batch detail is on the entries)
+  qboMode               FreightInvoiceMode?
+  qboSourceTxnId        String?
+  qboSupplementTxnId    String?
+  qboPreviousTotalMinor BigInt?
+  qboNewTotalMinor      BigInt?
+  qboPushedAt           DateTime?
+  qboPushedById         String?
+  qboError              String?
+
+  /// The amended total has been sent to the customer. Null after an amendment is
+  /// applied, which is what makes the "revised total, customer not notified" flag
+  /// appear — nothing is emailed automatically.
+  customerNotifiedAt    DateTime?
+  customerNotifiedById  String?
+
+  /// When the "this invoice is short of freight" banner was last dismissed, and by
+  /// whom. A dismissal is quiet for ALERT_QUIET_HOURS and then the banner returns:
+  /// an unbilled freight bill does not stop being one because it was clicked away.
+  alertAckAt            DateTime?
+  alertAckById          String?
+
+  createdById           String
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  @@index([proposalId])
+  @@index([versionId])
+  @@index([status])
+}
+
+/// One freight figure, as it arrived.
+///
+/// Freight does not arrive as a form submission — it arrives as four separate
+/// answers on four separate days, from a board column, a vendor's emailed quote,
+/// and a carrier's invoice. Each is its own row so it can be evidenced, applied and
+/// billed on its own clock, and so a later correction is visibly a correction
+/// rather than an overwrite.
+model FreightEntry {
+  id                 String             @id @default(cuid())
+  trueUpId           String
+  trueUp             FreightTrueUp      @relation(fields: [trueUpId], references: [id], onDelete: Cascade)
+  /// Denormalized so the queue, the banner and the gate can be answered without
+  /// walking up to the proposal through the folder.
+  proposalId         String
+  proposal           Proposal           @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  versionId          String
+
+  bucket             FreightBucketKind
+  scope              FreightEntryScope
+  source             FreightEntrySource
+  status             FreightEntryStatus @default(STAGED)
+
+  /// Minor units. Always the amount for the WHOLE entry; the per-item split is in
+  /// `allocations`.
+  amountMinor        Int
+
+  /// Whether this states the bucket's WHOLE figure or another instalment of it.
+  ///
+  /// Job-level amounts add to what the proposal already carries, which is right for a
+  /// second shipment and wrong when the same total is entered twice — the board states
+  /// a figure, the proposal already carries it, and applying it doubles it on a signed
+  /// document. A board-read amount is always the board's current total, so it is
+  /// absolute. A hand-entered one is an instalment unless the operator says otherwise,
+  /// which is also how a wrong total gets corrected after the fact.
+  absolute           Boolean            @default(false)
+
+  /// For a LINES entry: [{ ref, sku, name, amountMinor }]. Keyed on the line's
+  /// `ref`, because that is what survives a re-order of the proposal.
+  allocations        Json?
+
+  // ---- Evidence. Which of these is required depends on the bucket; see
+  // assertEvidence() in src/proposals/freightTrueUp.ts.
+  vendorName         String?
+  vendorQuoteRef     String?
+  quoteAttachmentId  String?
+  /// What this freight is for. Required on a job-level OTHER entry, where it
+  /// prints on the estimate.
+  description        String?
+  /// Why a monday-sourced bucket was typed in by hand. Required in that case.
+  overrideReason     String?
+  note               String?
+
+  // ---- monday provenance, for a figure read off the board
+  mondayItemId       String?
+  mondayColumnId     String?
+  mondayRawValue     String?
+  mondayReadAt       DateTime?
+
+  // ---- Application
+  appliedAt          DateTime?
+  appliedById        String?
+
+  // ---- QuickBooks. One entry reaches the invoice exactly once; a corrected
+  // figure is a credit and a rebill, not a second push of the same row.
+  qboMode            FreightInvoiceMode?
+  qboTxnId           String?
+  qboDocNumber       String?
+  qboPushedAt        DateTime?
+  qboPushedById      String?
+
+  /// Set when this bucket is closed out as not applicable, with the reason.
+  voidReason         String?
+
+  createdById        String
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  @@index([trueUpId])
+  @@index([proposalId])
+  @@index([versionId, bucket])
+  @@index([status])
+}
+
+
+/// The record of every change made to an editable formula — frame and component
+/// quantities, hardware fastener quantities, and the business numbers.
+///
+/// AuditLog already notes that a formula changed, but it stores only the fields
+/// that were SENT. That is enough to answer "who touched this" and not enough to
+/// answer "what did it used to be", which is the question actually asked when a
+/// bill of materials comes out wrong. So each revision carries a complete snapshot
+/// of the rule before and after, which is also what makes Undo possible without
+/// re-deriving anything.
+enum FormulaRevisionKind {
+  /// A frame or component quantity rule.
+  FRAME
+  /// A hardware fastener quantity rule.
+  HARDWARE
+  /// A business number (deposit %, mat rates, leg spans).
+  SETTING
+}
+
+enum FormulaRevisionAction {
+  /// A rule that had no override before now has one.
+  CREATE
+  /// An existing override changed.
+  UPDATE
+  /// An override was cleared, putting the row back on its workbook default.
+  RESET
+  /// Restore workbook defaults — one batch, one row per cleared override.
+  RESET_ALL
+  /// This revision reverses an earlier one. Recorded as a revision in its own
+  /// right, so the log reads as a history rather than as rows that vanish.
+  UNDO
+}
+
+model FormulaRevision {
+  id             String                @id @default(cuid())
+
+  /// One confirmation can move several rows — "Restore workbook defaults" moves
+  /// all of them. The batch groups those rows so the log can show the act.
+  batchId        String
+  kind           FormulaRevisionKind
+  action         FormulaRevisionAction
+
+  /// Part number for FRAME/HARDWARE, setting key for SETTING. One column rather
+  /// than two nullable ones: either way it is the row's identity.
+  target         String
+  /// The row's name as it read at the time, so an entry still makes sense after a
+  /// part is renamed or drops out of the workbook.
+  targetName     String?
+
+  /// Complete rule (or { key, value }) either side of the change. A null
+  /// `before` means no override existed; a null `after` means it was reset back
+  /// to the workbook default.
+  before         Json?
+  after          Json?
+  /// One-line description of what moved, composed when the row is written. Kept so
+  /// neither the log nor the Excel export has to re-derive wording from two JSON
+  /// blobs — and so the wording cannot drift as the formula editor changes.
+  summary        String
+
+  /// The confirmation the user typed, verbatim. Evidence the gate was met rather
+  /// than a boolean asserting it was.
+  confirmedWord  String?
+  /// Orders judged impacted at confirmation time: [{ id, number, customer }].
+  /// Snapshotted, not recomputed — which orders were open THEN is the fact worth
+  /// keeping, and it is what the notification email quoted.
+  impactedOrders Json?
+  impactedCount  Int                   @default(0)
+
+  notifiedAt     DateTime?
+  /// Why the notification did not go out. A failed email must not fail the change
+  /// that was already committed, so the failure is recorded here instead.
+  notifyError    String?
+
+  undoneAt       DateTime?
+  undoneById     String?
+  /// The revision this one reverses. Set only on action = UNDO.
+  undoesId       String?               @unique
+  undoes         FormulaRevision?      @relation("FormulaRevisionUndo", fields: [undoesId], references: [id], onDelete: SetNull)
+  undoneBy       FormulaRevision?      @relation("FormulaRevisionUndo")
+
+  actorId        String
+  createdAt      DateTime              @default(now())
+
+  @@index([kind, createdAt])
+  @@index([batchId])
+  @@index([target])
+  @@index([actorId])
+}
+
+// ---------------------------------------------------------------------------
+// Proposal e-signing (DocuSeal)
+//
+// 0050_esign migration.
+//
+// Shape of the flow, because it explains every column below:
+//
+//   1. The proposal is ASSEMBLED in the CRM — the browser's proposal HTML plus
+//      any attachment documents, rendered to one PDF by headless Chromium. That
+//      PDF is the signing package; nothing is composed inside DocuSeal.
+//   2. The package is uploaded to DocuSeal as a template (its signature block
+//      carries DocuSeal text tags, so field positions come from the document
+//      itself) and a submission is created for the signers.
+//   3. DocuSeal webhooks move the envelope forward. On completion the signed PDF
+//      is copied into our own storage so the executed contract does not live only
+//      inside a third party.
+//
+// One envelope per send. Re-sending after a change creates a NEW envelope rather
+// than mutating the old one: which document a customer signed is not a field that
+// may be edited.
+// ---------------------------------------------------------------------------
+enum EsignStatus {
+  /// Assembled and stored, not yet handed to DocuSeal.
+  DRAFT
+  SENT
+  VIEWED
+  /// Some signers done, at least one outstanding.
+  PARTIALLY_SIGNED
+  COMPLETED
+  DECLINED
+  VOIDED
+  FAILED
+}
+
+enum EsignSignerStatus {
+  PENDING
+  VIEWED
+  COMPLETED
+  DECLINED
+}
+
+enum EsignDocumentKind {
+  /// The proposal body itself — the document the customer is agreeing to.
+  PROPOSAL
+  /// Boilerplate bound into the same PDF behind the proposal: terms, liability
+  /// waiver, financing disclosure, specification pages.
+  ATTACHMENT
+}
+
+/// One of the ~10 signing document templates. `bodyHtml` is our own markup,
+/// rendered by the same Chromium that renders the proposal, so an attachment
+/// cannot drift from the proposal's typography.
+///
+/// `productLineIds` drives automatic selection and `attachRule` decides whether an
+/// ATTACHMENT rides along. Both are advisory: the send route always accepts an
+/// explicit template key and an explicit attachment list, so a rep can override.
+model EsignDocumentTemplate {
+  id          String            @id @default(cuid())
+  /// Stable key used by the API and by the auto-pick rules, e.g. `standard`,
+  /// `liability-waiver`. Renaming the display name never breaks a caller.
+  key         String            @unique
+  name        String
+  description String?
+  kind        EsignDocumentKind @default(ATTACHMENT)
+  bodyHtml    String
+  /// Product lines this template is the right one for. Empty means "any" — the
+  /// fallback used when nothing more specific matches.
+  productLineIds String[]       @default([])
+  /// When to bind this attachment in. Deliberately open-ended JSON: the real
+  /// conditions (financing present, mats on the job, install scope) are not
+  /// settled yet. `{"always": true}` is the only rule the resolver reads today;
+  /// everything else is recorded and ignored until the rules are decided.
+  attachRule  Json?
+  sortOrder   Int               @default(0)
+  active      Boolean           @default(true)
+  createdById String?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  envelopes   EsignEnvelope[]
+
+  @@index([kind, active])
+}
+
+model EsignEnvelope {
+  id         String      @id @default(cuid())
+  proposalId String
+  versionId  String
+  templateId String?
+  template   EsignDocumentTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  /// Template key as resolved at send time. Kept as text alongside the relation so
+  /// the record still reads correctly after a template is renamed or removed.
+  templateKey String?
+  /// Attachment keys bound into this package, in order. The audit answer to
+  /// "which documents did they actually sign?".
+  attachments Json?
+
+  status     EsignStatus @default(DRAFT)
+  subject    String?
+  message    String?
+
+  /// DocuSeal's ids. The template is created per send from our composed PDF.
+  docusealTemplateId   String?
+  docusealSubmissionId String?
+
+  /// SHA-256 of the composed PDF. Two sends of an unchanged proposal are provably
+  /// the same document; a tampered stored file is detectable.
+  packageSha256 String?
+  packageBytes  Int?
+  /// Our copy of the document that went out, and of the executed one.
+  packageUrl String?
+  signedUrl  String?
+
+  error        String?
+  declineReason String?
+
+  sentById    String?
+  sentAt      DateTime?
+  viewedAt    DateTime?
+  completedAt DateTime?
+  declinedAt  DateTime?
+  voidedAt    DateTime?
+  voidedById  String?
+
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  signers   EsignSigner[]
+  events    EsignEvent[]
+
+  @@index([proposalId])
+  @@index([versionId])
+  @@index([status])
+  @@index([docusealSubmissionId])
+}
+
+model EsignSigner {
+  id         String            @id @default(cuid())
+  envelopeId String
+  envelope   EsignEnvelope     @relation(fields: [envelopeId], references: [id], onDelete: Cascade)
+  /// Matches the `role=` in the document's text tags: `Customer`, `Summit`.
+  role       String
+  name       String?
+  email      String
+  /// Signing order. Equal values sign in parallel.
+  order      Int               @default(1)
+  status     EsignSignerStatus @default(PENDING)
+  docusealSubmitterId String?
+  /// DocuSeal's per-signer URL. Sent by DocuSeal's own email when
+  /// DOCUSEAL_SEND_EMAIL is on; otherwise this is the link we send or embed.
+  signingUrl  String?
+  viewedAt    DateTime?
+  completedAt DateTime?
+  declineReason String?
+  createdAt   DateTime          @default(now())
+
+  @@index([envelopeId])
+  @@index([docusealSubmitterId])
+  @@index([email])
+}
+
+/// Every DocuSeal webhook and every polled status change, append-only. The raw
+/// payload is kept: a dispute about when a document was opened is settled by what
+/// the provider said, not by our summary of it.
+model EsignEvent {
+  id         String        @id @default(cuid())
+  envelopeId String
+  envelope   EsignEnvelope @relation(fields: [envelopeId], references: [id], onDelete: Cascade)
+  eventType  String
+  /// SHA-256 of the raw body, so a retried webhook is not recorded twice.
+  payloadHash String
+  payload    Json
+  createdAt  DateTime      @default(now())
+
+  @@unique([envelopeId, payloadHash])
+  @@index([envelopeId])
+}
+
+// ---------------------------------------------------------------------------
+// Ryan Capital financing rate sheets
+//
+// A payment factor is not one number per term: it depends on how much is being
+// financed. Ryan Capital publish a grid — amount band down, term across — and the
+// monthly payment is the financed amount x the factor at that intersection.
+// Quoting one band for every amount overstates the payment on a large job, which
+// is what a single FinanceFactor row per term did.
+//
+// Sheets are VERSIONED. Ryan Capital reissue the workbook, and a proposal already
+// sent must keep the factors it was quoted on, so a new sheet is a new card with
+// its own effective date rather than an edit to the old one.
+// ---------------------------------------------------------------------------
+
+model FinanceRateCard {
+  id          String            @id @default(cuid())
+  /// What the lessor called it, e.g. "Ryan Capital 2025".
+  name        String
+  /// Where it came from — a workbook filename, an email date.
+  source      String?
+  /// The date the lessor’s sheet takes effect. The current card is the newest
+  /// active card effective on or before today.
+  effectiveOn DateTime          @db.Date
+  notes       String?
+  /// A card being built is inactive: it is not quoted from until it is published.
+  active      Boolean           @default(false)
+  createdById String?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  bands       FinanceRateBand[]
+
+  @@index([active, effectiveOn])
+}
+
+/// One amount band on a card. Bounds are in minor units, matching every other
+/// money column. maxMinor is null on the top band, which is how "and above" is
+/// expressed without inventing a ceiling.
+model FinanceRateBand {
+  id        String          @id @default(cuid())
+  cardId    String
+  card      FinanceRateCard @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  /// The lessor’s own label for the band, shown in the editor.
+  label     String
+  minMinor  Int
+  maxMinor  Int?
+  sortOrder Int             @default(0)
+  rates     FinanceRate[]
+
+  @@index([cardId, minMinor])
+}
+
+/// One factor: this band, this term. A term with NO row is a term the lessor does
+/// not offer at that amount — the 3,000–4,999 band has no 12- or 60-month option —
+/// so absence is the representation rather than a zero that would print 0.00.
+model FinanceRate {
+  id         String          @id @default(cuid())
+  bandId     String
+  band       FinanceRateBand @relation(fields: [bandId], references: [id], onDelete: Cascade)
+  termMonths Int
+  /// Payment per 1 dollar financed, e.g. 0.032700 for 36 months.
+  factor     Decimal         @db.Decimal(10, 6)
+
+  @@unique([bandId, termMonths])
+  @@index([termMonths])
+}
+
+// ---------------------------------------------------------------------------
+// Proposal follow-up emails
+//
+// Ten templates in a deliberate order (see src/email/followUpTemplates.ts). The
+// log exists for one reason: so a rep can see which of the ten a customer has
+// already received and not send the same one twice.
+//
+// Scoped to the CUSTOMER, not the proposal. The same organization may have two
+// live proposals, and a second copy of "What Are Your Initial Thoughts?" reads as
+// a mail-merge accident no matter which proposal prompted it. proposalId is kept
+// alongside so the history still says which project the email was about.
+//
+// The rep sends from their own mailbox — the CRM formats the email and puts it on
+// the clipboard — so a row here is the rep’s assertion that they sent it, not a
+// delivery receipt. copiedAt is named for what the app actually observed.
+// ---------------------------------------------------------------------------
+
+model FollowUpEmailLog {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// The proposal the follow-up was about, where there was one.
+  proposalId     String?
+  /// Template key as sent. Text rather than a relation: the templates live in code,
+  /// and the history has to stay readable after one is renamed or retired.
+  templateKey    String
+  templateName   String
+  step           Int
+  subject        String
+  toName         String?
+  toEmail        String
+  /// What the app saw: the rep copied the email. Whether it left Outlook is theirs.
+  copiedAt       DateTime     @default(now())
+  sentById       String
+  note           String?
+
+  @@index([organizationId, copiedAt])
+  @@index([organizationId, templateKey])
+  @@index([proposalId])
+}
+
+/// A follow-up email template, editable under Administration → Follow-up emails.
+///
+/// Seeded once from the ten written in src/email/followUpTemplates.ts, then owned by
+/// the database — so changing a sentence is an edit, not a deploy.
+///
+/// `body` is plain text, not HTML. A blank line starts a new paragraph and a line
+/// wrapped in **asterisks** is the one bolded question. That is a format a person can
+/// edit in a textarea without breaking the email, which HTML is not: one unclosed tag
+/// pasted into a customer-facing message is a broken send nobody notices until after.
+model FollowUpTemplate {
+  id          String   @id @default(cuid())
+  /// Stable key. The email log records it, so renaming the name never breaks history.
+  key         String   @unique
+  name        String
+  /// Position in the sequence. The order is load-bearing — financing is not raised
+  /// until budget is known to be the obstacle.
+  step        Int
+  /// Guidance shown to the rep in the picker. Never sent.
+  whenToSend  String
+  objective   String
+  angle       String
+  /// An extra warning in the picker, e.g. attach the financing sheet.
+  caution     String?
+  subject     String
+  body        String
+  active      Boolean  @default(true)
+  /// Set on the ten that shipped with the app, so a reset knows what to restore.
+  isBuiltIn   Boolean  @default(false)
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([active, step])
+}
+
+// ---------------------------------------------------------------------------
+// Vendor colour palettes — colour selection for any vendor, any finish.
+//
+// The Goldberg Brothers powder-coat chart (PaintColorGroup / PaintColorGroupSku
+// / PowderColorBrand) is deliberately left alone: it is brand + code driven,
+// because a powder coat colour IS a paint brand's code, and the grouping there
+// belongs to the PART. Nothing below changes it.
+//
+// This is the general case, and it is shaped differently on purpose:
+//
+//   * The VENDOR owns the palette. Resilite publish one vinyl chart, and every
+//     Resilite product picks from it — so the colour list hangs off Manufacturer,
+//     not off a paint brand.
+//   * A colour is a NAME from that palette, not free text. "Royal Blue" is a
+//     thing Resilite make; a typo is not.
+//   * A product takes N colours. A wall pad takes one; a shape trainer can take
+//     seven. The product says how many, and the picker asks for Colour 1…N.
+//
+// Append these models to schema.prisma, add the two Manufacturer relation fields
+// and the ProcurementLine column noted at the bottom, then run migration 0056.
+// ---------------------------------------------------------------------------
+
+/// What the colour is made of. Not a brand: vinyl has no Sherwin-Williams code.
+/// POWDER_COAT exists here for vendors who powder coat but are not Goldberg —
+/// the Goldberg chart keeps its own brand+code path.
+enum FinishType {
+  POWDER_COAT
+  VINYL
+  PAINT
+  OTHER
+}
+
+/// One vendor's colour chart for one finish.
+///
+/// A vendor may have more than one: Resilite sell vinyl-covered mats and painted
+/// steel frames, and those are different lists of colours. A product points at
+/// exactly one palette, so which chart the customer was shown is never ambiguous.
+model VendorColorPalette {
+  id             String             @id @default(cuid())
+  manufacturerId String
+  manufacturer   Manufacturer       @relation(fields: [manufacturerId], references: [id], onDelete: Cascade)
+  /// As the vendor names it — "2026 Vinyl Chart", "Standard Powder".
+  name           String
+  finishType     FinishType         @default(VINYL)
+  /// Free note for whoever maintains it: where the chart came from, when it was
+  /// last checked against the vendor's published list.
+  notes          String?
+  /// Retired palettes stop being offered on new products and keep every existing
+  /// selection readable. Never deleted while a product points at one.
+  active         Boolean            @default(true)
+  sortOrder      Int                @default(0)
+  colors         VendorColor[]
+  specs          ProductColorSpec[]
+  createdById    String?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  @@unique([manufacturerId, name])
+  @@index([manufacturerId])
+}
+
+/// One colour on a vendor's chart.
+model VendorColor {
+  id            String             @id @default(cuid())
+  paletteId     String
+  palette       VendorColorPalette @relation(fields: [paletteId], references: [id], onDelete: Cascade)
+  /// What we and the customer call it: "Royal Blue".
+  name          String
+  /// What the VENDOR calls it on a purchase order — "RB-124", "V-2201". Printed on
+  /// the Bill of Materials beside the name and never shown to a customer, same
+  /// arrangement as VendorPartNumber.
+  vendorCode    String?
+  /// Upcharge for choosing this colour, per slot it is chosen in. Null and 0 both
+  /// mean no upcharge; kept nullable so "not priced yet" is distinguishable from
+  /// "free" when a chart is half entered.
+  upchargeMinor Int?
+  /// Admin-set order, so the chart reads in the vendor's own sequence rather than
+  /// alphabetically. Ties break on name.
+  sortOrder     Int                @default(0)
+  /// Discontinued colours stay on record so an old proposal still reads correctly,
+  /// and are refused on new selections.
+  active        Boolean            @default(true)
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  @@unique([paletteId, name])
+  @@index([paletteId])
+}
+
+/// How many colours a product takes, and from which palette.
+///
+/// Keyed on productId for catalog products and on sku for part numbers that have
+/// no catalog row (generated mat numbers, flat SKU-master parts) — the same reason
+/// PaintColorGroupSku.sku is not a foreign key. Exactly one of the two is set.
+model ProductColorSpec {
+  id                String             @id @default(cuid())
+  paletteId         String
+  palette           VendorColorPalette @relation(fields: [paletteId], references: [id], onDelete: Restrict)
+  /// Catalog product this applies to. One spec per product.
+  productId         String?            @unique
+  /// Part number this applies to, stored as typed, matched case-insensitively.
+  sku               String?            @unique
+  /// How many colours the customer chooses for one unit of this product: 1–7.
+  slotCount         Int                @default(1)
+  /// Whether the product may be quoted with slots left unchosen. Off by default —
+  /// a colour is often decided after the proposal goes out.
+  required          Boolean            @default(false)
+  /// Upcharge that applies to each slot regardless of which colour is picked,
+  /// added on top of the colour's own upcharge. Multi-colour fabrication costs
+  /// more per panel, not per colour.
+  slotUpchargeMinor Int?
+  /// Optional per-slot names, in slot order: ["Top surface","Border"]. When absent
+  /// the picker labels them Colour 1…Colour N. Length need not equal slotCount;
+  /// missing entries fall back to the numbered label.
+  slotLabels        Json?
+  notes             String?
+  createdById       String?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  @@index([paletteId])
+  @@index([sku])
+}
+
+// ---------------------------------------------------------------------------
+// Portal → CRM: delivery details, and the portal colour-selection path.
+//
+// The customer portal has no database of its own. It reads and writes monday, and
+// the CRM is already upstream of the same board — so this is not a new
+// integration, it is the return leg of a loop that already runs one way. What
+// follows is what the CRM needs to RECEIVE that leg safely.
+//
+// Applied by migration 0057, together with the portalOrderItemId /
+// loadingDock / source / shipToSource columns added to the models above.
+// ---------------------------------------------------------------------------
+
+/// Where one portal delivery submission got to.
+///
+/// Deliberately not just applied/failed. A submission can arrive perfectly valid
+/// and still have nowhere to go — the order may not be in the CRM yet, or every
+/// vendor section may already be submitted — and those two cases need different
+/// handling by a human.
+enum PortalSubmissionStatus {
+  /// The submissions row exists but has no usable address yet. The portal writes
+  /// its columns one at a time after creating the row, so the create event
+  /// routinely arrives before the address does. Re-processed on the next event.
+  INCOMPLETE
+  /// A complete address with no matching AcceptedOrder. Held, retried, and
+  /// visible on the integrations screen — never dropped.
+  PARKED
+  /// Applied to at least one editable vendor section.
+  APPLIED
+  /// The order was found, but every candidate section is SUBMITTED. Nothing was
+  /// changed under a vendor who already holds the sheet; the owner was emailed.
+  CONFLICT
+  /// Read or write failed. `note` carries the reason; retryable.
+  FAILED
+}
+
+/// One portal "Delivery & Site Details" submission, as the CRM received it.
+///
+/// Three jobs in one table, which is why it exists rather than the handler
+/// writing straight through to a ShipToAddress:
+///
+///   1. **Idempotency.** `mondayItemId` is the submissions-board row, and it is
+///      unique. monday redelivers webhooks, fires one event per column write,
+///      and the portal writes ~30 columns per submission; without this the same
+///      address would be processed thirty times.
+///   2. **Parking.** The portal invite is fired by a staff member setting a status
+///      column on the manufacturing board. Nothing in that act checks whether
+///      the deal has been imported into the CRM, so an address can legitimately
+///      arrive before the order exists. Parked here and retried.
+///   3. **Provenance.** What the customer actually typed, kept verbatim and
+///      separate from what the CRM did with it. When a sheet and a customer
+///      disagree about where the truck goes, this is the record that settles it.
+model PortalDeliverySubmission {
+  id                String                 @id @default(cuid())
+  /// The row on the Delivery & Site Details Submissions board. The idempotency key.
+  mondayItemId      String                 @unique
+  /// The Manufacturing Process row the submission belongs to — the portal's
+  /// "Order Item ID" column. Joined to AcceptedOrder.portalOrderItemId.
+  mondayOrderItemId String
+  /// Resolved AcceptedOrder, once one exists. Null while PARKED.
+  orderId           String?
+  order             AcceptedOrder?         @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  /// The address this submission produced, so a resubmission updates the same
+  /// record instead of leaving a trail of near-duplicates in the picker.
+  shipToAddressId   String?
+  shipToAddress     ShipToAddress?         @relation(fields: [shipToAddressId], references: [id])
+
+  status            PortalSubmissionStatus @default(INCOMPLETE)
+  /// How many vendor sections this submission actually changed.
+  sectionsUpdated   Int                    @default(0)
+  /// Vendors whose section was already submitted and therefore left alone.
+  skippedVendors    String?
+  /// Why it is in the state it is in, in words a human can act on.
+  note              String?
+
+  // ---- What the customer said. Verbatim, never normalised. ----
+  customerEmail        String?
+  /// The customer ticked "this address is correct" rather than editing it.
+  addressConfirmed     Boolean?
+  line1                String?
+  line2                String?
+  city                 String?
+  region               String?
+  postalCode           String?
+  country              String?
+  formattedAddress     String?
+  pocName              String?
+  pocPhone             String?
+  pocEmail             String?
+  secondaryPocName     String?
+  secondaryPocPhone    String?
+  secondaryPocEmail    String?
+  loadingDock          String?
+  deliveryTiming       String?
+  preferredDeliveryDate DateTime?
+  specialInstructions  String?
+  /// Changes the portal flagged as needing staff confirmation.
+  restrictedChanges    String?
+  freightAckBy         String?
+  freightAckDate       DateTime?
+  /// Every populated column on the row as read, so a column the CRM does not yet
+  /// map is still recoverable without going back to monday.
+  raw                  Json?
+
+  /// Bumped on every processing attempt — a row with a high count and a non-final
+  /// status is the thing to look at first.
+  attempts   Int      @default(0)
+  receivedAt DateTime @default(now())
+  resolvedAt DateTime?
+  updatedAt  DateTime @updatedAt
+
+  @@index([mondayOrderItemId])
+  @@index([status])
+  @@index([orderId])
+}
+
+/// Whether the customer's colour picks have been asked for, given, or applied.
+enum PortalColorSelectionStatus {
+  /// Link minted, nothing submitted yet.
+  OPEN
+  /// The customer picked. Not yet on the order.
+  SUBMITTED
+  /// Written onto the order's procurement lines.
+  APPLIED
+  /// Recorded for comparison against the Jotform run and deliberately NOT
+  /// applied. This is the whole of shadow mode.
+  SHADOWED
+  /// Cancelled — superseded by a newer request, or abandoned.
+  VOID
+}
+
+/// A customer colour selection collected by the portal against CRM palettes.
+///
+/// This replaces the Jotform colour form, and exists as its own record rather
+/// than writing straight onto ProcurementLine.colorPicks for one reason: it has
+/// to be possible to run it alongside Jotform on a real order and compare the
+/// two before anything downstream depends on it. In shadow mode the customer's
+/// picks land here and stop.
+model PortalColorSelection {
+  id                String                     @id @default(cuid())
+  orderId           String
+  order             AcceptedOrder              @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  /// Manufacturing Process row, so the portal can find its own request without
+  /// knowing CRM ids.
+  mondayOrderItemId String?
+  /// Single-use opaque token in the customer's link. Hashed at rest.
+  tokenHash         String                     @unique
+  expiresAt         DateTime
+  status            PortalColorSelectionStatus  @default(OPEN)
+
+  /// What the customer was shown: one entry per line that takes a colour, with
+  /// the palette and slot labels as they stood when the link was minted. Frozen,
+  /// so a palette edited mid-selection cannot change the question after the fact.
+  offered   Json?
+  /// What they chose, in the same shape ProcurementLine.colorPicks uses.
+  picks     Json?
+
+  submittedAt      DateTime?
+  submittedByEmail String?
+  appliedAt        DateTime?
+  appliedById      String?
+  /// Free text for the parallel-run comparison: what Jotform said versus this.
+  note             String?
+
+  createdAt   DateTime @default(now())
+  createdById String?
+  updatedAt   DateTime @updatedAt
+
+  @@index([orderId])
+  @@index([status])
+}
+
+
+// ===========================================================================
+// Cross-border: Canadian proposals
+//
+// USD is the controlling currency. Every money column below is USD minor units
+// unless its name says otherwise, and CAD is a derived figure recomputed from the
+// authoritative USD amount and a dated exchange rate — never stored as the source
+// of truth and never converted back.
+//
+// Everything that can change over time is effective-dated with an EXCLUSIVE
+// `effectiveTo`: a rate row runs [effectiveFrom, effectiveTo). Two rows for the
+// same province and tax type must abut exactly, so one and only one is ever in
+// force on a given date.
+// ===========================================================================
+
+enum CrossBorderTaxType {
+  GST
+  HST
+  PST
+  RST
+  QST
+  /// GST assessed at the border by CBSA, not collected by SSG. Held separately
+  /// because it is never a seller-collected line.
+  IMPORT_GST
+}
+
+enum TaxRegistrationStatus {
+  REGISTERED
+  NOT_REGISTERED
+  PENDING
+  INACTIVE
+}
+
+enum TaxResponsibilityMode {
+  SELLER_COLLECTS
+  CUSTOMER_PAYS_AT_IMPORT
+  SELLER_IS_IMPORTER_OF_RECORD
+  TAX_EXEMPT
+  REQUIRES_TAX_REVIEW
+}
+
+enum ImporterOfRecord {
+  CUSTOMER
+  SUMMIT
+  THIRD_PARTY
+  TO_BE_DETERMINED
+}
+
+/// What a charge on a proposal is, for taxability. Freight, installation,
+/// brokerage and duty are taxed differently from equipment in at least one
+/// province, so they cannot share a category.
+enum CrossBorderChargeCategory {
+  EQUIPMENT
+  PARTS
+  FREIGHT
+  INSTALLATION
+  DESIGN
+  TRAINING
+  TRAVEL
+  CUSTOMS_DUTY
+  TARIFF_SURTAX
+  SIMA
+  BROKERAGE
+  BROKER_DISBURSEMENT
+  IMPORT_TAX
+  SALES_TAX
+  DISCOUNT
+  CREDIT
+  OTHER
+}
+
+/// What to do when the Bank of Canada cannot be reached.
+enum FxFallbackMode {
+  /// Use the most recent observation already stored.
+  LAST_CACHED
+  /// Use the administrator's manual rate.
+  MANUAL_RATE
+  /// Refuse to finalize. Drafts still open.
+  BLOCK_FINALIZATION
+  /// Allow a draft, labelled as needing exchange-rate review.
+  DRAFT_WITH_REVIEW
+}
+
+/// Customs on a proposal is a human-entered figure in this version. There is no
+/// tariff calculator: classifications, origin records and CUSMA certificates do
+/// not exist in this database yet, and a duty computed from absent data is a
+/// number somebody would quote.
+enum CustomsEntryStatus {
+  /// The default for every Canadian proposal until a person enters a figure.
+  REQUIRES_CUSTOMS_REVIEW
+  /// A figure has been entered and is presented as an estimate.
+  ESTIMATED
+  /// Entered and approved by an authorized reviewer.
+  CONFIRMED
+  /// No customs charges arise (e.g. SSG is not shipping across the border).
+  NOT_APPLICABLE
+}
+
+enum BrokerFeeType {
+  FLAT
+  PERCENTAGE
+  TIERED
+  PER_ENTRY
+  PER_SHIPMENT
+  PER_LINE
+  MANUAL
+}
+
+/// One published exchange-rate observation. A rate is a fact with a date, not a
+/// current value: a proposal records which observation it was quoted on, and
+/// re-reading it a year later shows the same CAD figures.
+model ExchangeRateObservation {
+  id              String   @id @default(cuid())
+  pair            String
+  observationDate DateTime @db.Date
+  /// As published, unrounded. Rounding happens once, at display.
+  rate            Decimal  @db.Decimal(12, 6)
+  source          String
+  retrievedAt     DateTime @default(now())
+
+  @@unique([pair, observationDate])
+}
+
+/// "Which observation did we decide applies to date X." Separate from the
+/// observations themselves so the answer is cached exactly rather than guessed:
+/// without this, a Monday proposal cannot tell "Friday is genuinely the latest
+/// publication" from "we have not fetched Monday yet", and would either hit the
+/// Bank of Canada on every page view or quote a stale rate. Only written when a
+/// live provider answered — a fallback is never cached, so the next attempt can
+/// still get the real rate.
+model ExchangeRateResolution {
+  id              String   @id @default(cuid())
+  pair            String
+  /// The date we needed a rate FOR (proposal date, or acceptance date).
+  forDate         DateTime @db.Date
+  /// The observation that answered it, on or before forDate.
+  observationDate DateTime @db.Date
+  rate            Decimal  @db.Decimal(12, 6)
+  source          String
+  resolvedAt      DateTime @default(now())
+
+  @@unique([pair, forDate])
+}
+
+/// A rate an administrator typed, with the reason they typed it. Never used
+/// unless the configured fallback mode says so, and always shown as a warning on
+/// the proposal.
+model ExchangeRateOverride {
+  id            String   @id @default(cuid())
+  pair          String
+  rate          Decimal  @db.Decimal(12, 6)
+  effectiveDate DateTime @db.Date
+  reason        String
+  active        Boolean  @default(true)
+  createdById   String
+  createdAt     DateTime @default(now())
+
+  @@index([pair, effectiveDate])
+}
+
+/// A provincial or federal sales-tax rate, effective-dated.
+model CanadianTaxRate {
+  id            String             @id @default(cuid())
+  /// ISO 3166-2:CA subdivision code — AB, BC, MB, NB, NL, NS, NT, NU, ON, PE,
+  /// QC, SK, YT.
+  province      String
+  taxType       CrossBorderTaxType
+  ratePercent   Decimal            @db.Decimal(7, 4)
+  effectiveFrom DateTime           @db.Date
+  /// Exclusive. Null means "still in force".
+  effectiveTo   DateTime?          @db.Date
+  /// Where the figure came from, e.g. a CRA or provincial publication.
+  source        String?
+  approvedById  String?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  @@index([province, taxType, effectiveFrom])
+}
+
+/// Whether SSG is registered to collect a given tax. A province having a rate is
+/// NOT a reason to charge it; this table is.
+///
+/// GST and HST are one federal registration: a single row with a null province
+/// covers every province. PST, RST and QST are registered province by province.
+model CanadianTaxRegistration {
+  id                 String                @id @default(cuid())
+  taxType            CrossBorderTaxType
+  /// Null for the federal GST/HST registration; set for PST, RST and QST.
+  province           String?
+  registrationNumber String?
+  status             TaxRegistrationStatus @default(NOT_REGISTERED)
+  effectiveFrom      DateTime              @db.Date
+  effectiveTo        DateTime?             @db.Date
+  notes              String?
+  approvedById       String?
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+
+  @@index([taxType, province, effectiveFrom])
+}
+
+/// Whether a charge category is taxable, per tax type, optionally per province.
+///
+/// A category with NO applicable rule does not default to taxable or exempt. The
+/// engine returns `missing_taxability_rule` and the proposal needs a human.
+/// Defaulting either way is how a freight line silently acquires or loses 13%.
+model CrossBorderTaxabilityRule {
+  id            String                    @id @default(cuid())
+  category      CrossBorderChargeCategory
+  taxType       CrossBorderTaxType
+  /// Null means every province. A province-specific row wins over it.
+  province      String?
+  taxable       Boolean
+  effectiveFrom DateTime                  @db.Date
+  effectiveTo   DateTime?                 @db.Date
+  source        String?
+  createdAt     DateTime                  @default(now())
+  updatedAt     DateTime                  @updatedAt
+
+  @@index([category, taxType])
+}
+
+/// An approved customer exemption. A customer being a school, charity or public
+/// body is not an exemption, and a rebate it can claim later is not a
+/// point-of-sale exemption — `approvedById` must be set for this to suppress
+/// anything.
+model CustomerTaxExemption {
+  id                String               @id @default(cuid())
+  organizationId    String
+  /// Which taxes this certificate exempts, e.g. ["QST"].
+  taxTypes          CrossBorderTaxType[]
+  exemptionType     String?
+  certificateNumber String?
+  issuingAuthority  String?
+  effectiveFrom     DateTime             @db.Date
+  effectiveTo       DateTime?            @db.Date
+  attachmentId      String?
+  approvedById      String?
+  approvedAt        DateTime?
+  notes             String?
+  createdById       String
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  @@index([organizationId, effectiveFrom])
+}
+
+/// A customs broker's fee schedule. Missing configuration produces "To be
+/// confirmed", never zero.
+model CustomsBrokerFeeSchedule {
+  id                    String        @id @default(cuid())
+  name                  String
+  brokerName            String?
+  feeType               BrokerFeeType
+  /// The currency the schedule is QUOTED in. A CAD-quoted fee is converted to a
+  /// USD display equivalent; the CAD figure remains the source document.
+  currency              String        @default("CAD")
+  amountMinor           Int?
+  percent               Decimal?      @db.Decimal(7, 4)
+  minMinor              Int?
+  maxMinor              Int?
+  /// Tier bands: [{ "minMinor": 0, "maxMinor": 500000, "amountMinor": 25000 }].
+  tiers                 Json?
+  disbursementMinor     Int?
+  advancementMinor      Int?
+  bondMinor             Int?
+  /// The customer pays the broker directly, so this never enters the SSG total.
+  customerPaysDirectly  Boolean       @default(true)
+  includedInSellerTotal Boolean       @default(false)
+  active                Boolean       @default(true)
+  isDefault             Boolean       @default(false)
+  effectiveFrom         DateTime      @db.Date
+  effectiveTo           DateTime?     @db.Date
+  notes                 String?
+  reviewedById          String?
+  reviewedAt            DateTime?
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  @@index([active, effectiveFrom])
+}
+
+/// The human-entered customs figures for one proposal version.
+///
+/// One row per version. Starts as REQUIRES_CUSTOMS_REVIEW with every amount null
+/// — and null is not zero. Null means "nobody has answered", which is the same
+/// distinction priceEntry.ts and FreightTrueUp make, and for the same reason: a
+/// zero duty is a claim, and this application must not make it on its own.
+model ProposalCustomsEntry {
+  id                    String             @id @default(cuid())
+  proposalId            String
+  versionId             String             @unique
+  status                CustomsEntryStatus @default(REQUIRES_CUSTOMS_REVIEW)
+  /// The currency the broker quoted these in.
+  currency              String             @default("CAD")
+  dutyMinor             Int?
+  surtaxMinor           Int?
+  simaMinor             Int?
+  otherDutyMinor        Int?
+  importTaxMinor        Int?
+  brokerFeeMinor        Int?
+  brokerFeeScheduleId   String?
+  /// Percent entry instead of typed amounts.
+  ///
+  /// The full engine needs registrations, province rate rows and taxability rulings
+  /// before it will quote. Those answers have a lead time outside anyone's control, so
+  /// simple mode lets an operator type the rates and get an honest estimate now. The
+  /// proposal says plainly that these are estimates and how they were arrived at.
+  simpleMode            Boolean            @default(false)
+  /// What the tax is called on this job — "HST", "GST + QST". Printed verbatim.
+  taxLabel              String?
+  /// Thousandths of a percent, so 13% is 13000 and Quebec's 9.975% is 9975. Integer
+  /// arithmetic throughout: a float rate produces a total that fails to reconcile.
+  taxPercentMilli       Int?
+  tariffPercentMilli    Int?
+  /// Duty is assessed on the customs value of the goods, so freight is out by default.
+  tariffOnFreight       Boolean            @default(false)
+  /// GST/HST applies on top of duty and brokerage on an import, so this is on.
+  taxOnDuty             Boolean            @default(true)
+  /// Why these numbers: broker quote reference, ruling number, prior entry.
+  sourceReference       String?
+  basis                 String?
+  importerOfRecord      ImporterOfRecord   @default(CUSTOMER)
+  /// Only true where SSG is collecting or advancing these amounts. When false
+  /// they appear in the separately-payable section and are excluded from the
+  /// amount payable to SSG.
+  includedInSellerTotal Boolean            @default(false)
+  enteredById           String?
+  enteredAt             DateTime?
+  approvedById          String?
+  approvedAt            DateTime?
+  reason                String?
+  notes                 String?
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+
+  @@index([proposalId])
+  @@index([status])
+}
+
+/// The frozen calculation for one proposal version: jurisdiction, the exchange
+/// rate used, every tax and charge line, and the statuses.
+///
+/// This is why refreshing a tax table or a broker schedule cannot restate a
+/// proposal that has already gone out. Follows the existing snapshot precedent
+/// (PriceSnapshot, RuleEvaluationSnapshot) rather than inventing a pattern.
+model ProposalCrossBorderSnapshot {
+  id            String   @id @default(cuid())
+  proposalId    String
+  versionId     String
+  /// Resolved jurisdiction: regime, country, province, issues.
+  jurisdiction  Json
+  /// { pair, rate, observationDate, source, retrievedAt, forDate, stale,
+  ///   fallbackUsed, overrideReason }
+  fx            Json
+  /// Proposal-date FX and acceptance-date FX are separate concepts and separate
+  /// keys. Customs FX is a third; it is not the commercial rate.
+  acceptanceFx  Json?
+  customsFx     Json?
+  taxLines      Json
+  chargeLines   Json
+  statuses      Json
+  totalsUsd     Json
+  totalsCad     Json
+  /// Set when the version is released or accepted. A frozen snapshot is never
+  /// updated in place; a revision creates a new version and a new snapshot.
+  frozen        Boolean  @default(false)
+  createdById   String
+  createdAt     DateTime @default(now())
+
+  @@index([proposalId])
+  @@index([versionId])
+}
+
+/// Singleton configuration row. Cross-border behaviour is OFF until switched on,
+/// so deploying this migration changes nothing about any existing proposal.
+model CrossBorderSetting {
+  id                              String                @id @default("singleton")
+  enabled                         Boolean               @default(false)
+  /// Permit percent entry for Canadian charges, bypassing the rate tables and the
+  /// registration gate. The interim path while the registrations and rulings are
+  /// obtained; see simpleCharges.ts for what it does and does not claim.
+  allowSimpleCanadianCharges      Boolean               @default(false)
+  defaultImporterOfRecord         ImporterOfRecord      @default(CUSTOMER)
+  defaultTaxResponsibility        TaxResponsibilityMode @default(SELLER_COLLECTS)
+  allowCadPayment                 Boolean               @default(false)
+  fxFallbackMode                  FxFallbackMode        @default(DRAFT_WITH_REVIEW)
+  /// Days after which a cached observation is called stale on the proposal.
+  staleRateDays                   Int                   @default(5)
+  requireCustomsReviewBeforeFinal Boolean               @default(true)
+  requireTaxReviewBeforeFinal     Boolean               @default(true)
+  proposalValidityDays            Int                   @default(30)
+  updatedById                     String?
+  createdAt                       DateTime              @default(now())
+  updatedAt                       DateTime              @updatedAt
+}
+
+/// Small string-keyed store for UI choices an administrator makes.
+///
+/// FormulaSetting already covers business scalars, but its value is a Float and
+/// cannot hold "#fdecea". Rather than widen a table the pricing engine reads on
+/// every proposal, colour and layout choices live here.
+model UiSetting {
+  key         String   @id
+  value       String
+  updatedAt   DateTime @updatedAt
+  updatedById String?
+}
