@@ -2896,6 +2896,7 @@
       '<div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">' +
         '<input id="mfSearch" placeholder="Search name, city or contact…" value="' + esc(mfrState.q) + '" style="flex:1;min-width:240px;max-width:380px;padding:10px 13px;border:1px solid #dcded7;border-radius:10px;font-size:14px;background:#fff;outline:none;">' +
         '<label style="display:flex;gap:7px;align-items:center;font-size:13px;color:#5c6157;cursor:pointer;"><input type="checkbox" id="mfInactive"' + (mfrState.showInactive ? ' checked' : '') + '> Show inactive</label>' +
+        '<button class="link-btn" id="mfExportParts" title="Every vendor part number on record, as a spreadsheet" style="width:auto;padding:10px 15px;">Export part numbers</button>' +
         (admin ? '<div style="margin-left:auto;"><button class="btn" id="mfNew" style="width:auto;padding:10px 17px;">New manufacturer</button></div>' : '') +
       '</div>' +
       '<div style="font-size:12px;color:#8a8f85;margin-bottom:10px;">Each manufacturer is the vendor of record for the parts sourced from it. The address and point of contact print as the <b>Ship from</b> block on a Bill of Materials, and vendors marked as steel fabricators are the ones whose weight rolls into a BOM’s total steel weight.</div>' +
@@ -2904,7 +2905,37 @@
     s.addEventListener('input', function () { clearTimeout(t); t = setTimeout(function () { mfrState.q = s.value.trim(); drawManufacturers(user); }, 250); });
     document.getElementById('mfInactive').addEventListener('change', function (e) { mfrState.showInactive = e.target.checked; loadManufacturers(user); });
     if (admin) document.getElementById('mfNew').addEventListener('click', function () { openManufacturerForm(null, user); });
+    document.getElementById('mfExportParts').addEventListener('click', function (e) { exportAllVendorParts(e.currentTarget); });
     loadManufacturers(user);
+  }
+
+  /** The vendor-number sheet's columns, in the order the paste importer reads them. */
+  var VENDOR_PART_COLUMNS = ['Our part', 'Vendor part', 'Description'];
+
+  /**
+   * Every vendor number on record, as one sheet.
+   *
+   * `Manufacturer` leads so a sheet spanning vendors can be read and filtered;
+   * the three columns after it are exactly what the paste importer expects, in its
+   * order, so the round trip is: export, correct it in a spreadsheet, copy one
+   * vendor's rows, paste them into that vendor's dialog. The importer is
+   * per-vendor by design — it will not read the manufacturer column — so the
+   * copy has to be of the last three, which is why they sit together at the end.
+   */
+  async function exportAllVendorParts(btn) {
+    var was = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Preparing…';
+    var r = await authed('/vendor-parts/export');
+    btn.disabled = false; btn.textContent = was;
+    if (!r.ok) { alert(await serverMessage(r, 'Could not export the part numbers (' + r.status + ').')); return; }
+    var d = await r.json();
+    var items = (d && d.items) || [];
+    if (!items.length) { alert('There are no vendor part numbers on record yet.'); return; }
+    downloadCsv('vendor-part-numbers-' + todayISO() + '.csv',
+      [['Manufacturer'].concat(VENDOR_PART_COLUMNS).concat(['Active'])].concat(
+        items.map(function (x) {
+          return [x.manufacturer, x.ourPart, x.vendorPart, x.description, x.active];
+        })));
   }
 
   async function loadManufacturers(user) {
@@ -3142,6 +3173,7 @@
           '<div style="flex:1;min-width:160px;"><div class="k">Note</div><input id="vpNewDesc" placeholder="Optional" style="' + bomFieldStyle() + '"></div>' +
           '<button type="button" class="btn" id="vpAdd" style="width:auto;padding:9px 15px;">Add</button>' +
           '<button type="button" class="link-btn" id="vpPaste" style="width:auto;padding:9px 15px;">Paste a list…</button>' +
+          '<button type="button" class="link-btn" id="vpExport" style="width:auto;padding:9px 15px;">Export…</button>' +
         '</div>' +
         '<div id="vpMsg" class="muted" style="font-size:12px;margin-top:8px;"></div>';
 
@@ -3219,6 +3251,21 @@
 
       $('#vpPaste').addEventListener('click', function () { openVendorPartPaste(m, load); });
 
+      // Built from the rows already on screen rather than a second request: this is
+      // the list the operator is looking at, and exporting something that differs
+      // from it would be worse than not offering the button.
+      $('#vpExport').addEventListener('click', function () {
+        if (!rows.length) { msg('There is nothing to export yet.', 1); return; }
+        var slug = String(m.name || 'vendor').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+        // The header is worded so the importer's own header check skips it — the
+        // sheet can be pasted back whole, without deleting the first line.
+        downloadCsv('vendor-part-numbers-' + slug + '-' + todayISO() + '.csv',
+          [VENDOR_PART_COLUMNS].concat(rows.map(function (x) {
+            return [x.ourPart, x.vendorPart, x.description || ''];
+          })));
+        msg(rows.length + ' row' + (rows.length === 1 ? '' : 's') + ' exported.');
+      });
+
       if (pendingMsg) { msg(pendingMsg); pendingMsg = ''; }
     }
 
@@ -3235,7 +3282,8 @@
     var pv = openModal('Paste part numbers — ' + m.name,
       '<div class="muted" style="font-size:12.5px;line-height:1.55;margin-bottom:10px;">' +
         'One row per part: our number, then theirs, separated by a tab or a comma. A third column is kept as a note. ' +
-        'Paste straight out of a spreadsheet.</div>' +
+        'Paste straight out of a spreadsheet — including the header row, which is skipped. ' +
+        'To correct numbers already on record, use <b>Export…</b> first and edit that sheet.</div>' +
       '<textarea id="vpText" rows="10" placeholder="R-SSG-1010CLM&#9;A-3204&#10;R-SSG-1012CLM&#9;A-3205" style="' + IN + 'resize:vertical;font-family:ui-monospace,monospace;font-size:12.5px;"></textarea>' +
       '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:10px;cursor:pointer;">' +
         '<input type="checkbox" id="vpOverwrite"> Replace numbers already on record</label>' +
@@ -3264,7 +3312,20 @@
                 '. Tick the box above to replace them.</div>'
               : '') +
             ((d.errors || []).length ? '<div style="margin-top:6px;color:#9c3327;">' + d.errors.map(esc).join('<br>') + '</div>' : '') +
-            '<div style="margin-top:6px;">Press Import again to write these.</div>';
+            '<div style="margin-top:8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">' +
+              '<button type="button" class="link-btn" id="vpReport" style="width:auto;padding:6px 12px;font-size:12.5px;">Download this check</button>' +
+              '<span>Press Import again to write these.</span>' +
+            '</div>';
+          // The counts answer "did it read my list"; the report answers "what
+          // happened to MY part", which is the question asked the week after.
+          var rep = pv.querySelector('#vpReport');
+          if (rep) rep.addEventListener('click', function () {
+            downloadCsv('vendor-part-check-' + todayISO() + '.csv',
+              [['Our part', 'Vendor part', 'Currently on record', 'Note', 'Outcome']].concat(
+                (d.rows || []).map(function (x) {
+                  return [x.ourPart, x.vendorPart, x.current, x.description, x.outcome];
+                })));
+          });
           pre.setAttribute('data-checked', '1');
           return;
         }

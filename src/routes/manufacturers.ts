@@ -230,6 +230,43 @@ export function registerManufacturerRoutes(app: FastifyInstance): void {
     });
   });
 
+  /**
+   * Every vendor number on record, across every manufacturer.
+   *
+   * The mapping could only be loaded, never read back. Checking what a vendor's
+   * numbers actually are meant opening one dialog per vendor, and correcting a
+   * batch of them meant retyping numbers that were already in the database — so
+   * the table was write-only in practice, which is how a mapping quietly drifts
+   * out of step with the vendor's own catalog.
+   *
+   * The last four columns are the ones the paste importer reads, in its order, so
+   * the round trip is: export, correct it in a spreadsheet, copy the rows for one
+   * vendor, paste them back into that vendor's dialog. `manufacturer` leads
+   * because a sheet spanning vendors is unreadable without it; it is dropped when
+   * pasting back, which is why it is first rather than mixed in.
+   *
+   * CATALOG_READ, not PRODUCTS_ADMIN: reading the mapping is how a sheet gets
+   * checked before it goes to a vendor, and that is not an admin's job alone.
+   */
+  app.get('/vendor-parts/export', read, async () => {
+    const rows = await prisma.vendorPartNumber.findMany({
+      include: { manufacturer: { select: { name: true } } },
+      orderBy: [{ manufacturer: { name: 'asc' } }, { ourPart: 'asc' }],
+    });
+    return {
+      exportedAt: new Date().toISOString(),
+      count: rows.length,
+      columns: ['manufacturer', 'ourPart', 'vendorPart', 'description', 'active'],
+      items: rows.map((r) => ({
+        manufacturer: r.manufacturer.name,
+        ourPart: r.ourPart,
+        vendorPart: r.vendorPart,
+        description: r.description ?? '',
+        active: r.active ? 'true' : 'false',
+      })),
+    };
+  });
+
   app.post('/manufacturers/:id/vendor-parts', admin, async (req, reply) => {
     const { id } = req.params as { id: string };
     const m = await requireManufacturer(id);
@@ -367,6 +404,21 @@ export function registerManufacturerRoutes(app: FastifyInstance): void {
     const unchanged = rows.length - toCreate.length - toUpdate.length;
 
     if (b.dryRun) {
+      /**
+       * What would happen to each row, not just how many rows.
+       *
+       * The counts answer "did it read my list" and not "did MY part go in",
+       * which is the question asked a week later when a Bill of Materials prints
+       * the wrong vendor number. Same reasoning as the SKU importer's row report.
+       */
+      const outcomeOf = (
+        r: (typeof rows)[number],
+      ): 'created' | 'updated' | 'unchanged' | 'skipped' => {
+        const cur = byPart.get(r.ourPart);
+        if (!cur) return 'created';
+        if (cur.vendorPart === r.vendorPart) return 'unchanged';
+        return b.overwrite ? 'updated' : 'skipped';
+      };
       return {
         dryRun: true,
         parsed: rows.length,
@@ -380,6 +432,13 @@ export function registerManufacturerRoutes(app: FastifyInstance): void {
               current: byPart.get(r.ourPart)!.vendorPart,
               incoming: r.vendorPart,
             })),
+        rows: rows.map((r) => ({
+          ourPart: r.ourPart,
+          vendorPart: r.vendorPart,
+          current: byPart.get(r.ourPart)?.vendorPart ?? '',
+          description: r.description ?? '',
+          outcome: outcomeOf(r),
+        })),
         errors,
       };
     }
