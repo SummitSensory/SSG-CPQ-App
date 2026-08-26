@@ -49,6 +49,22 @@
   var templates = null;
   var busy = false;
 
+  /* Sort order, remembered between sessions. Defaults to the order the server
+   * returns — due date, soonest first — because the question this screen is usually
+   * open to answer is what needs chasing next. */
+  var SORT_KEY = 'ssg.ar.sort';
+  var sortKey = 'dueDate';
+  var sortDir = 'asc';
+  try {
+    var savedSort = JSON.parse(localStorage.getItem(SORT_KEY) || 'null');
+    if (savedSort && savedSort.key) {
+      sortKey = savedSort.key;
+      sortDir = savedSort.dir === 'desc' ? 'desc' : 'asc';
+    }
+  } catch (e) {
+    /* private mode, or a value from an older build */
+  }
+
   /* ----------------------------------------------------------------- plumbing */
 
   function esc(s) {
@@ -319,18 +335,98 @@
 
   /* ------------------------------------------------------------------- ledger */
 
-  function th(label, right) {
-    return (
-      '<th style="text-align:' +
+  /**
+   * A sortable column heading.
+   *
+   * The whole heading is the control rather than a small caret, because the caret is
+   * a five-pixel target and the heading is not. `key` omitted leaves the heading
+   * inert — the actions column has nothing to sort by.
+   */
+  function th(label, right, key) {
+    var active = key && key === sortKey;
+    var base =
+      'text-align:' +
       (right ? 'right' : 'left') +
       ';padding:9px 14px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:' +
-      MUTE +
+      (active ? SOFT : MUTE) +
       ';font-weight:600;border-bottom:1px solid ' +
       LINE +
-      ';white-space:nowrap;">' +
+      ';white-space:nowrap;';
+    if (!key) return '<th style="' + base + '">' + label + '</th>';
+    return (
+      '<th data-ar="sort" data-key="' +
+      key +
+      '" title="Sort by ' +
+      String(label).replace(/&amp;/g, '&') +
+      '" style="' +
+      base +
+      'cursor:pointer;user-select:none;">' +
       label +
-      '</th>'
+      '<span style="display:inline-block;width:11px;color:' +
+      (active ? ACCENT : 'transparent') +
+      ';">' +
+      (active ? (sortDir === 'asc' ? '\u25b4' : '\u25be') : '\u25b4') +
+      '</span></th>'
     );
+  }
+
+  /**
+   * The value a row sorts on for a given column.
+   *
+   * Returns a number for money and dates and a lower-cased string for text, so the
+   * comparator never has to know which column it is looking at. Null means "no
+   * value", which always sorts last — in both directions. An invoice with no due
+   * date is not the most urgent thing on the screen just because someone clicked
+   * ascending.
+   */
+  function sortValue(r, key) {
+    switch (key) {
+      case 'customer':
+        return (
+          (r.organization && r.organization.name ? r.organization.name : '').toLowerCase() || null
+        );
+      case 'invoice':
+        return (r.docNumber || '').toLowerCase() || null;
+      case 'invoiced':
+        return r.initialTotalMinor == null ? null : Number(r.initialTotalMinor);
+      case 'received':
+        return r.paidMinor == null ? null : Number(r.paidMinor);
+      case 'balance':
+        return r.balanceMinor == null ? null : Number(r.balanceMinor);
+      case 'status':
+        // Most overdue first when descending. Days past due is the only ordering of
+        // OPEN / OVERDUE / PARTIALLY_PAID that means anything operationally.
+        return Number(r.daysPastDue || 0);
+      case 'invoiceDate':
+        return r.invoiceDate ? Date.parse(r.invoiceDate) : null;
+      case 'dueDate':
+        return r.dueDate ? Date.parse(r.dueDate) : null;
+      case 'po':
+        return (r.poNumber || '').toLowerCase() || null;
+      case 'lastRequest':
+        return r.lastRequest ? Date.parse(r.lastRequest.at) : null;
+      default:
+        return null;
+    }
+  }
+
+  function sortRows(rows) {
+    var dir = sortDir === 'desc' ? -1 : 1;
+    // Copied before sorting: `data.rows` is what the server sent, and mutating it
+    // would make the order depend on how many times the heading has been clicked
+    // since the last load.
+    return rows.slice().sort(function (a, b) {
+      var av = sortValue(a, sortKey);
+      var bv = sortValue(b, sortKey);
+      if (av === null && bv === null) return 0;
+      if (av === null) return 1;
+      if (bv === null) return -1;
+      if (av < bv) return -1 * dir;
+      if (av > bv) return 1 * dir;
+      // A stable tiebreak, so two invoices for the same customer do not swap places
+      // on every repaint.
+      return String(a.docNumber || '').localeCompare(String(b.docNumber || ''));
+    });
   }
 
   function td(html, right) {
@@ -387,7 +483,7 @@
       host.innerHTML = '<div style="padding:18px;color:' + RED + ';">' + esc(data.error) + '</div>';
       return;
     }
-    var rows = (data && data.rows) || [];
+    var rows = sortRows((data && data.rows) || []);
     var t = (data && data.totals) || {};
     var writable = can(WRITE_ROLES);
 
@@ -527,14 +623,14 @@
       LINE +
       ';border-radius:12px;overflow:auto;background:#fff;">' +
       '<table style="width:100%;border-collapse:collapse;min-width:1120px;"><thead><tr>' +
-      th('Customer') +
-      th('Invoice') +
-      th('Invoiced', true) +
-      th('Received', true) +
-      th('Balance', true) +
-      th('Status') +
-      th('Customer PO') +
-      th('Last request') +
+      th('Customer', false, 'customer') +
+      th('Invoice', false, 'invoice') +
+      th('Invoiced', true, 'invoiced') +
+      th('Received', true, 'received') +
+      th('Balance', true, 'balance') +
+      th('Status', false, 'status') +
+      th('Customer PO', false, 'po') +
+      th('Last request', false, 'lastRequest') +
       th('') +
       '</tr></thead><tbody>' +
       body +
@@ -1477,6 +1573,27 @@
 
     if (action === 'close') {
       closeModal();
+      return;
+    }
+    if (action === 'sort') {
+      var key = el.getAttribute('data-key');
+      if (!key) return;
+      // Clicking the active column flips it; a new column starts ascending, except
+      // for the ones where the interesting end is the top: nobody opens this screen
+      // wanting to see the smallest balance or the least overdue invoice first.
+      if (key === sortKey) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+      else
+        sortDir =
+          key === 'balance' || key === 'invoiced' || key === 'received' || key === 'status'
+            ? 'desc'
+            : 'asc';
+      sortKey = key;
+      try {
+        localStorage.setItem(SORT_KEY, JSON.stringify({ key: sortKey, dir: sortDir }));
+      } catch (e) {
+        /* private mode */
+      }
+      paint();
       return;
     }
     if (action === 'compose') {
