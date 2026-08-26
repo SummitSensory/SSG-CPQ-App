@@ -4586,9 +4586,11 @@
         var id = sel.getAttribute('data-id'), vid = sel.getAttribute('data-vid');
         sel.disabled = true;
         var path = act === 'new-version' ? '/proposals/' + id + '/versions' : '/proposals/versions/' + vid + '/' + act;
+        // No button to relabel here, so the notice carries the progress instead.
+        if (act === 'release') toast('Building the proposal document…');
         var rr = await authed(path, { method: 'POST', body: await actionBody(act, id, vid) });
-        if (!rr.ok) { alert('Could not update (' + rr.status + ').'); sel.disabled = false; sel.value = ''; return; }
-        await reportRelease(act, rr);
+        if (!rr.ok) { alert(await serverMessage(rr, 'Could not update (' + rr.status + ').')); sel.disabled = false; sel.value = ''; return; }
+        startReleaseAttachment(act, rr);
         loadProposals(user);
       });
     });
@@ -4610,44 +4612,65 @@
       var doc = await buildProposalDocForSend({ id: proposalId }, versionId);
       if (doc) {
         lastReleaseDoc = { versionId: versionId, html: doc.html, filename: doc.filename };
-        return { proposalHtml: doc.html, proposalFilename: doc.filename };
+        // The document itself is NOT sent here. pushReleasedProposal receives
+        // proposalHtml and does nothing with it but log that the document follows
+        // from the renderer — the PDF is made by the second call, against the
+        // render function. So this used to upload several megabytes of base64
+        // photographs, twice, and use them once: the first copy sat in front of
+        // the status change doing nothing but making it slower. The filename stays
+        // because it costs nothing and names the file the renderer will attach.
+        return { proposalFilename: doc.filename };
       }
     } catch (e) {}
     return {};
   }
 
-  /** Say so when a release went through but the monday push did not. */
-  async function reportRelease(act, rr) {
+  /**
+   * The document's trip to the deal board, after the release itself is finished.
+   *
+   * Deliberately NOT awaited. The release is complete the moment the status has
+   * changed; rendering the PDF and uploading it takes longer than everything
+   * before it put together, and holding the page for it made a finished release
+   * look like a stuck one.
+   *
+   * A failure here costs the attachment, never the release, so it is reported and
+   * never thrown. The notice names the file, because by the time it arrives the rep
+   * may be on an unrelated screen — an unattributed failure there reads as that
+   * screen's bug.
+   */
+  function startReleaseAttachment(act, rr) {
     if (act !== 'release') return;
-    var d = null;
-    try { d = await rr.json(); } catch (e) { return; }
-    var m = d && d.monday;
-    // Upload the document itself on the renderer function. Failing here costs the
-    // attachment, not the release, so it is reported and never thrown.
-    var fileNote = '';
-    // The render can take the better part of a minute, so this notice often arrives
-    // after the rep has moved on to another screen. It names the proposal and the
-    // reason — an unattributed failure on an unrelated page reads as that page's bug.
-    var who = (lastReleaseDoc && lastReleaseDoc.filename) || 'the proposal';
-    if (lastReleaseDoc && m && m.pushed) {
+    // Captured synchronously, before any await: releasing a second proposal while
+    // the first is still uploading would otherwise attach the wrong document.
+    var doc = lastReleaseDoc;
+    lastReleaseDoc = null;
+    (async function () {
+      var d = null;
+      try { d = await rr.json(); } catch (e) { return; }
+      var m = d && d.monday;
+      if (!m) return;
+      if (!m.pushed) {
+        toast('Released. monday.com was not updated: ' +
+          (m.skipped || m.error || 'the deal board did not respond') + '.', 1);
+        return;
+      }
+      if (!doc) return;
+      var who = doc.filename || 'the proposal';
+      toast('Released. Attaching ' + who + ' to monday…');
+      var note = '';
       try {
-        var fr = await authed('/render/proposals/versions/' + lastReleaseDoc.versionId + '/monday-file', {
+        var fr = await authed('/render/proposals/versions/' + doc.versionId + '/monday-file', {
           method: 'POST',
-          body: { proposalHtml: lastReleaseDoc.html, filename: lastReleaseDoc.filename },
+          body: { proposalHtml: doc.html, filename: doc.filename },
+          timeoutMs: RENDER_TIMEOUT_MS,
         });
         var fd = fr.ok ? await fr.json() : null;
-        if (!fr.ok) fileNote = await serverMessage(fr, 'the renderer did not respond (' + fr.status + ')');
-        else if (!fd || !fd.uploaded) fileNote = (fd && (fd.skipped || fd.error)) || 'monday did not accept the file';
-      } catch (e) { fileNote = 'the renderer could not be reached'; }
-    }
-    lastReleaseDoc = null;
-    if (m && m.pushed) {
-      if (fileNote) alert('Released. The deal row was updated, but ' + who + ' did not attach: ' + fileNote + '.');
-      return;
-    }
-    if (!m) return;
-    alert('The proposal was released, but monday.com was not updated: ' +
-      (m.skipped || m.error || 'the deal board did not respond') + '.');
+        if (!fr.ok) note = await serverMessage(fr, 'the renderer did not respond (' + fr.status + ')');
+        else if (!fd || !fd.uploaded) note = (fd && (fd.skipped || fd.error)) || 'monday did not accept the file';
+      } catch (e) { note = (e && e.message) || 'the renderer could not be reached'; }
+      if (note) toast('The deal row was updated, but ' + who + ' did not attach: ' + note + '.', 1);
+      else toast(who + ' is attached to the deal.');
+    })();
   }
 
   /**
@@ -5388,10 +5411,19 @@
         var act = bt.getAttribute('data-act'), vid = bt.getAttribute('data-vid');
         if (act === 'lock') { openLockForm(vid, user); return; }
         var path = act === 'new-version' ? '/proposals/' + id + '/versions' : '/proposals/versions/' + vid + '/' + act;
+        var stage = actionProgress(bt);
         bt.disabled = true;
-        var rr = await authed(path, { method: 'POST', body: await actionBody(act, id, vid) });
-        if (!rr.ok) { alert('Action failed (' + rr.status + ').'); bt.disabled = false; return; }
-        await reportRelease(act, rr);
+        // Two stages, because they fail differently and take different lengths of
+        // time: the document is built here in the browser before any request goes
+        // out, and on a proposal with introduction photographs that alone is
+        // several seconds of apparently nothing happening.
+        if (act === 'release') stage('Preparing…', 'Building the proposal document…');
+        var body = await actionBody(act, id, vid);
+        if (act === 'release') stage('Releasing…', 'Recording the release and updating the deal board…');
+        var rr = await authed(path, { method: 'POST', body: body });
+        if (!rr.ok) { stage(null); bt.disabled = false; alert(await serverMessage(rr, 'Action failed (' + rr.status + ').')); return; }
+        stage(null);
+        startReleaseAttachment(act, rr);
         openProposalDetail(id, user);
       });
     });
@@ -9081,7 +9113,14 @@
       var rc = await authed('/proposals/versions/' + version.id + '/cross-border');
       if (rc.ok) { var body = await rc.json(); if (body && body.applicable) cb = body; }
     } catch (e0) {}
-    try { var ro = await authed('/crm/organizations?pageSize=100'); if (ro.ok) { var f = ((await ro.json()).items || []).filter(function (o) { return o.id === proposal.organizationId; })[0]; orgName = f ? f.name : ''; } } catch (e) {}
+    // One organization, by id. This used to list a hundred of them and filter in
+    // the browser for the single name it needed — on the release path, before the
+    // document could even start building. A customer outside the first hundred also
+    // printed with no name at all.
+    try {
+      var ro = await authed('/crm/organizations/' + encodeURIComponent(proposal.organizationId));
+      if (ro.ok) { var o = await ro.json(); orgName = (o && o.name) || ''; }
+    } catch (e) {}
     var secs = version.sections || []; var metaSec = Array.isArray(secs) ? secs.filter(function (s) { return s && s.id === 'meta'; })[0] : null;
     var meta = (metaSec && metaSec.data) || {};
     var lines = (version.items || []);
@@ -13616,6 +13655,73 @@
       var box = document.getElementById('qboPrepNote');
       if (box) box.innerHTML = noteHtml(sel.value);
     });
+  }
+
+  /**
+   * A short notice that does not stop the user.
+   *
+   * alert() is right for "your document did not attach". It is wrong for "this is
+   * still working", which is most of what a release has to say — and an alert in
+   * that role means the rep cannot see the screen the notice is about. Appended to
+   * the body rather than to a panel, so it survives the repaint that follows a
+   * release. Colours are the RELEASED and REJECTED status chips.
+   */
+  function toast(text, bad) {
+    var host = document.getElementById('appToasts');
+    if (!host) {
+      host = document.createElement('div');
+      host.id = 'appToasts';
+      host.style.cssText = 'position:fixed;right:18px;bottom:18px;z-index:80;display:flex;flex-direction:column;gap:8px;align-items:flex-end;pointer-events:none;';
+      document.body.appendChild(host);
+    }
+    var el = document.createElement('div');
+    el.style.cssText = 'max-width:390px;padding:11px 14px;border-radius:10px;font-size:13px;line-height:1.5;' +
+      'box-shadow:0 14px 34px -14px rgba(32,36,31,.45);opacity:0;transform:translateY(6px);' +
+      'transition:opacity .18s ease,transform .18s ease;' +
+      'border:1px solid ' + (bad ? '#f0cdc7' : '#cfe3d7') + ';' +
+      'background:' + (bad ? '#fbe9e6' : '#eaf3ee') + ';color:' + (bad ? '#9c3327' : '#2f6b4c') + ';';
+    el.textContent = text;
+    host.appendChild(el);
+    requestAnimationFrame(function () { el.style.opacity = '1'; el.style.transform = 'none'; });
+    // A failure is read after the fact and gets longer on screen than a progress note.
+    setTimeout(function () {
+      el.style.opacity = '0'; el.style.transform = 'translateY(6px)';
+      setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 240);
+    }, bad ? 9000 : 4500);
+    return el;
+  }
+
+  /**
+   * Progress for a proposal action: the button's own label, plus a line beneath it.
+   *
+   * The only feedback used to be `disabled = true`. A greyed-out button and a hung
+   * request look identical, which is the whole reason a release that was working
+   * read as frozen — and releasing is genuinely several seconds of work, most of it
+   * before the first request is even sent.
+   *
+   * The line is appended to the button's own container (#propActions is a wrapping
+   * flex row, so flex-basis:100% puts it on its own line under the buttons).
+   * stage(null) restores the original label and removes the line.
+   */
+  function actionProgress(bt) {
+    var label = bt.textContent, line = null;
+    return function (btnLabel, note) {
+      if (btnLabel == null) {
+        bt.textContent = label;
+        if (line && line.parentNode) line.parentNode.removeChild(line);
+        line = null;
+        return;
+      }
+      bt.textContent = btnLabel;
+      if (!note) return;
+      if (!line) {
+        line = document.createElement('div');
+        line.className = 'muted';
+        line.style.cssText = 'flex-basis:100%;font-size:12px;line-height:1.5;margin-top:2px;';
+        if (bt.parentNode) bt.parentNode.appendChild(line);
+      }
+      line.textContent = note;
+    };
   }
 
   function downloadCsv(filename, rows) {
