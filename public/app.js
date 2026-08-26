@@ -251,13 +251,96 @@
   }
 
   /* --- API --- */
+
+  /**
+   * How long any one request may take before the app stops waiting.
+   *
+   * There was no ceiling at all. fetch() on its own waits as long as the browser
+   * will hold the socket open, so a request the server never answers — a
+   * serverless invocation killed mid-PDF, a connection dropped by a proxy — left
+   * the caller awaiting a promise that would never settle. Nothing timed out,
+   * nothing threw, and the button that started it kept saying "Saving…" for the
+   * rest of the session. That is the hang.
+   *
+   * RENDER_TIMEOUT_MS is deliberately longer than the 60 seconds vercel.json
+   * gives the render function: the client must not give up on a PDF the server is
+   * still legitimately building, or a document goes out while the operator is
+   * being told it failed.
+   */
+  var REQUEST_TIMEOUT_MS = 60000;
+  var RENDER_TIMEOUT_MS = 70000;
+
   function api(path, opts) {
     opts = opts || {};
     var headers = opts.headers || {};
     if (opts.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
     var at = tokens().at;
     if (at && !opts.noAuth) headers['Authorization'] = 'Bearer ' + at;
-    return fetch(path, { method: opts.method || 'GET', headers: headers, body: opts.body ? JSON.stringify(opts.body) : undefined });
+    var limit = opts.timeoutMs || REQUEST_TIMEOUT_MS;
+    var ctl = typeof AbortController === 'function' ? new AbortController() : null;
+    var timer = ctl ? setTimeout(function () { ctl.abort(); }, limit) : null;
+    var done = function () { if (timer) { clearTimeout(timer); timer = null; } };
+    return fetch(path, {
+      method: opts.method || 'GET',
+      headers: headers,
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+      signal: ctl ? ctl.signal : undefined,
+    }).then(function (r) { done(); return r; }, function (err) {
+      done();
+      // An abort and a dead network look identical to the caller unless we say
+      // which happened, and they need different advice.
+      if (err && err.name === 'AbortError') {
+        throw new Error('The server did not answer within ' + Math.round(limit / 1000) +
+          ' seconds. It may still have gone through — check before sending again.');
+      }
+      throw err;
+    });
+  }
+
+  /* --- Saving a field as it is typed -----------------------------------------
+   * Editable fields used to save on 'change', which the browser fires only when
+   * focus LEAVES the field. That is the "nothing sticks until I click something
+   * else" problem: you type a figure, look at the totals, and they are the old
+   * ones because no request has been made yet.
+   *
+   * bindLiveField saves a short pause after typing stops, and also on blur, on
+   * Enter, and on 'change' — and never saves the same value twice, so the
+   * trailing 'change' after a debounced save is a no-op rather than a second
+   * PATCH. Controls with no "still typing" state commit immediately.
+   */
+  var LIVE_SAVE_IDLE_MS = 800;
+  function bindLiveField(el, save) {
+    var timer = null, last = el.value, running = false, queued = false;
+    var fire = function () {
+      if (timer) { clearTimeout(timer); timer = null; }
+      if (el.value === last) return Promise.resolve();
+      // One save in flight at a time. A keystroke landing mid-request marks the
+      // field dirty again and is picked up when that request returns, instead of
+      // racing it and letting the older value win.
+      if (running) { queued = true; return Promise.resolve(); }
+      last = el.value; running = true;
+      return Promise.resolve()
+        .then(function () { return save(el); })
+        .catch(function (err) { alert((err && err.message) || 'Could not save that.'); })
+        .then(function () {
+          running = false;
+          if (queued) { queued = false; return fire(); }
+        });
+    };
+    var instant = el.tagName === 'SELECT' || el.type === 'checkbox' ||
+      el.type === 'radio' || el.type === 'date';
+    el.addEventListener('change', fire);
+    if (!instant) {
+      el.addEventListener('input', function () {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(fire, LIVE_SAVE_IDLE_MS);
+      });
+      el.addEventListener('blur', fire);
+      el.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' && el.tagName !== 'TEXTAREA') { e.preventDefault(); fire(); }
+      });
+    }
+    return fire;
   }
   async function refresh() {
     var rt = tokens().rt; if (!rt) return false;
@@ -1263,8 +1346,11 @@
         if (box) box.innerHTML = '<div class="err">' + esc(msg) + '</div>';
         save.disabled = false; save.textContent = label;
       };
+      // The real message, not 'Something went wrong.' A timeout, a dead network
+      // and a rejected validation all arrived here as the same four words, which
+      // is why a stuck send was indistinguishable from a typo in an address.
       try { await onSubmit(close, fail); }
-      catch (err) { fail('Something went wrong.'); }
+      catch (err) { fail((err && err.message) || 'Something went wrong.'); }
     });
     return ov;
   }
@@ -1310,6 +1396,35 @@
     var next = i === -1 ? null : list[dir === 'fwd' ? i + 1 : i - 1];
     if (next) { next.focus(); try { next.select(); } catch (e4) {} }
     else if (same) same.focus();
+  }
+
+  /**
+   * The same idea as renderKeepingTab, for a repaint that has to fetch first.
+   *
+   * renderKeepingTab assumes `render` rebuilds the DOM synchronously. A panel
+   * that re-reads the order from the server does not, so the caret restore ran
+   * against the old markup and was lost. This awaits the repaint before looking
+   * for the field again — which is what makes saving-as-you-type usable: the
+   * totals update under you without the caret jumping out of the box.
+   */
+  async function repaintKeepingFocus(repaint, host, sel) {
+    var dir = tabDir;
+    var was = document.activeElement, range = null;
+    try { range = was && was.selectionStart != null ? [was.selectionStart, was.selectionEnd] : null; } catch (e) {}
+    await repaint();
+    var root = typeof host === 'function' ? host() : host;
+    if (!root) return;
+    var same = null;
+    try { same = sel ? root.querySelector(sel) : null; } catch (e2) { same = null; }
+    if (!same) return;
+    if (dir) {
+      var list = focusablesIn(root);
+      var i = list.indexOf(same);
+      var next = i === -1 ? null : list[dir === 'fwd' ? i + 1 : i - 1];
+      if (next) { next.focus(); try { next.select(); } catch (e3) {} return; }
+    }
+    same.focus();
+    try { if (range) same.setSelectionRange(range[0], range[1]); } catch (e4) {}
   }
 
   function fieldRow(label, inner) { return '<div class="field"><label>' + esc(label) + '</label>' + inner + '</div>'; }
@@ -8242,8 +8357,14 @@
         var to = document.getElementById('rfqTo').value.trim();
         if (!to) return showErr('Give at least one recipient.');
         try {
-          await rfqApi('/rfqs/' + rfqId + '/send', {
+          // /render/*: this send builds the RFQ PDF before it can attach it, and
+          // vercel.json routes that prefix to the function with the memory and
+          // 60-second ceiling headless Chromium needs. On the main API function a
+          // cold browser start ran past 30 seconds and the request was killed,
+          // which is what left this dialog on "Sending…" indefinitely.
+          await rfqApi('/render/rfqs/' + rfqId + '/send', {
             method: 'POST',
+            timeoutMs: RENDER_TIMEOUT_MS,
             body: {
               to: to,
               cc: document.getElementById('rfqCc').value.trim(),
@@ -11216,8 +11337,14 @@
         sel.addEventListener('change', async function () {
           var kind = sel.getAttribute('data-kind'), rid = sel.getAttribute('data-id');
           var path = kind === 'req' ? '/orders/requirements/' + rid : '/orders/tasks/' + rid;
+          sel.disabled = true;
           var r = await authed(path, { method: 'PATCH', body: { status: sel.value } });
-          if (!r.ok) { alert('Could not update (' + r.status + ').'); openOrderDetail(id, user); }
+          sel.disabled = false;
+          if (!r.ok) alert(await serverMessage(r, 'Could not update (' + r.status + ').'));
+          // Repaint either way. On success the "who changed it, and when" line
+          // under the status is now wrong, and it used to stay wrong until you
+          // left the order and came back into it.
+          openOrderDetail(id, user);
         });
       });
     }
@@ -12066,7 +12193,9 @@
 
   /** Wire every control inside the section cards. */
   function wireBom(order, user, canHandoff) {
-    var reload = function () { loadBomSections(order, user, canHandoff); };
+    // Returns the promise: callers that repaint and then restore the caret have
+    // to know when the new markup exists.
+    var reload = function () { return loadBomSections(order, user, canHandoff); };
     var fail = async function (r, what) {
       var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {}
       alert(m || (what + ' (' + r.status + ').'));
@@ -12089,16 +12218,27 @@
     });
 
     document.querySelectorAll('.secF').forEach(function (el) {
-      el.addEventListener('change', async function () {
-        var f = el.getAttribute('data-f'), body = {};
+      bindLiveField(el, async function () {
+        var f = el.getAttribute('data-f'), id = el.getAttribute('data-id'), body = {};
         if (f === 'submittedOn' || f === 'vendorInvoiceDate') body[f] = el.value ? new Date(el.value + 'T12:00:00').toISOString() : null;
         else if (f === 'vendorInvoiceTotalMinor') body[f] = el.value.trim() === '' ? null : d2m(el.value);
         else body[f] = el.value.trim ? el.value.trim() : el.value;
         el.style.borderColor = '#c9a227';
-        var r = await authed('/bom/sections/' + el.getAttribute('data-id'), { method: 'PATCH', body: body });
-        el.style.borderColor = r.ok ? '#3f9d78' : '#c2452f';
-        if (!r.ok) return fail(r, 'Could not save');
-        setTimeout(function () { el.style.borderColor = '#dcded7'; }, 900);
+        var r = await authed('/bom/sections/' + id, { method: 'PATCH', body: body });
+        if (!r.ok) { el.style.borderColor = '#c2452f'; return fail(r, 'Could not save'); }
+        el.style.borderColor = '#3f9d78';
+        // The invoice figures move the section summary, the difference and the
+        // "Not accepted" chip; the dates move the vendor's status line. Those all
+        // stayed stale — the border went green and nothing else on the panel
+        // changed until you left the tab. Repaint from the server instead,
+        // keeping the caret where it was.
+        if (f === 'vendorInvoiceTotalMinor' || f === 'vendorInvoiceDate' || f === 'submittedOn') {
+          await repaintKeepingFocus(reload,
+            function () { return document.getElementById('bomBox'); },
+            '.secF[data-id="' + id + '"][data-f="' + f + '"]');
+          return;
+        }
+        setTimeout(function () { if (el.parentNode) el.style.borderColor = '#dcded7'; }, 900);
       });
     });
 
@@ -12151,8 +12291,8 @@
     });
 
     document.querySelectorAll('.bomLine').forEach(function (el) {
-      el.addEventListener('change', async function () {
-        var f = el.getAttribute('data-f'), body = {};
+      bindLiveField(el, async function () {
+        var f = el.getAttribute('data-f'), lineId = el.getAttribute('data-id'), body = {};
         if (f === 'sourced') body[f] = el.value === 'true';
         else if (f === 'quantity') body[f] = Math.round(Number(el.value));
         else if (f === 'unitCostMinor') body[f] = d2m(el.value);
@@ -12163,13 +12303,20 @@
         if (f === 'unitCostMinor' && !(body[f] >= 0)) { alert('Enter the cost as plain dollars — 145 or 145.00.'); reload(); return; }
         if (f === 'invoicedUnitCostMinor' && body[f] !== null && !(body[f] >= 0)) { alert('Enter what the vendor billed as plain dollars — 145 or 145.00.'); refreshLines(); return; }
         el.style.borderColor = '#c9a227';
-        var r = await authed('/orders/procurement/' + el.getAttribute('data-id'), { method: 'PATCH', body: body });
+        var r = await authed('/orders/procurement/' + lineId, { method: 'PATCH', body: body });
         el.style.borderColor = r.ok ? '#3f9d78' : '#c2452f';
         if (!r.ok) { await fail(r, 'Could not save the line'); reload(); return; }
         // A quantity change moves the section totals and the edited badge, so the
-        // panel is rebuilt from the server rather than patched in place.
-        if (f === 'quantity' || f === 'unitCostMinor' || f === 'invoicedUnitCostMinor') { refreshLines(); return; }
-        var line = (procData || []).filter(function (x) { return x.id === el.getAttribute('data-id'); })[0];
+        // panel is rebuilt from the server rather than patched in place. The
+        // rebuild now restores the caret, because these fields save while you are
+        // still typing in them.
+        if (f === 'quantity' || f === 'unitCostMinor' || f === 'invoicedUnitCostMinor') {
+          await repaintKeepingFocus(refreshLines,
+            function () { return document.getElementById('bomBox'); },
+            '.bomLine[data-id="' + lineId + '"][data-f="' + f + '"]');
+          return;
+        }
+        var line = (procData || []).filter(function (x) { return x.id === lineId; })[0];
         if (line) line[f] = body[f];
         setTimeout(function () { el.style.borderColor = '#dcded7'; }, 900);
       });
@@ -12181,7 +12328,7 @@
     var refreshLines = async function () {
       var rr = await authed('/orders/' + order.id);
       if (rr.ok) { var oo = await rr.json(); order.procurement = oo.procurement; }
-      reload();
+      await reload();
     };
 
     // Re-applies Catalog → BOM build to an order that is already locked, so a kit or a
@@ -12394,7 +12541,7 @@
     });
 
     document.querySelectorAll('.secQ').forEach(function (el) {
-      el.addEventListener('change', async function () {
+      bindLiveField(el, async function () {
         el.style.borderColor = '#c9a227';
         var r = await authed('/bom/questions/' + el.getAttribute('data-id'), { method: 'PATCH', body: { value: el.value } });
         el.style.borderColor = r.ok ? '#3f9d78' : '#c2452f';
@@ -14310,7 +14457,10 @@
           body.proposalFilename = doc.filename;
         }
 
-        var r = await authed('/proposals/' + p.id + '/send-documents', { method: 'POST', body: body });
+        // /render/*, for the same reason as the RFQ send: this renders the
+        // proposal and the financing sheet to PDF before it can send them.
+        var r = await authed('/render/proposals/' + p.id + '/send-documents',
+          { method: 'POST', body: body, timeoutMs: RENDER_TIMEOUT_MS });
         if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} return showErr(m || 'Could not send.'); }
         var out = await r.json();
         close();

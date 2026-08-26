@@ -195,7 +195,21 @@ export function registerFreightRfqRoutes(app: FastifyInstance): void {
     return rfqSendDefaults(id);
   });
 
-  app.post('/rfqs/:id/send', write, async (req) => {
+  /**
+   * Send the request to the vendor.
+   *
+   * Under /render/* for exactly the reason the PDF route above is: sendRfq
+   * renders the document with headless Chromium before it can attach it, and on
+   * the main API function that ran past the 30-second ceiling in vercel.json and
+   * was killed. The client got no response at all — no error, no status — so the
+   * send dialog sat on "Sending…" until the tab was reloaded, with no way to tell
+   * whether the vendor had been emailed.
+   *
+   * The rewrite in vercel.json sends this prefix to api/render.ts, which builds
+   * the same app: the route, its auth and its audit trail are unchanged, only the
+   * invocation it runs in differs.
+   */
+  app.post('/render/rfqs/:id/send', write, async (req) => {
     const { id } = req.params as { id: string };
     return sendRfq(id, parse(SendSchema, req.body), req.user!.sub);
   });

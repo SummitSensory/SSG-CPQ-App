@@ -533,7 +533,9 @@ export function registerFinanceRoutes(app: FastifyInstance): void {
    * their purchase in front of a third party — so the audit entry records who sent
    * it, to whom, and for how much.
    */
-  app.post('/proposals/:id/financing/send', read, async (req) => {
+  // Under /render/*: this renders the sheet to PDF before sending, which needs
+  // the render function's memory and 60-second ceiling. See vercel.json.
+  app.post('/render/proposals/:id/financing/send', read, async (req) => {
     const { id } = req.params as { id: string };
     const parsed = SendSchema.safeParse(req.body ?? {});
     if (!parsed.success)
@@ -657,7 +659,11 @@ export function registerFinanceRoutes(app: FastifyInstance): void {
    * ticked and who is in the To field, not a different feature. Two separate send
    * flows would drift apart and one of them would end up as the neglected one.
    */
-  app.post('/proposals/:id/send-documents', write, async (req) => {
+  // Under /render/*, same reason: up to two PDFs are rendered here before the
+  // email can be built. On the main API function a cold Chromium start alone put
+  // this past the 30-second ceiling, and the browser was left waiting on a
+  // request that had already been killed.
+  app.post('/render/proposals/:id/send-documents', write, async (req) => {
     const { id } = req.params as { id: string };
     const parsed = SendDocsSchema.safeParse(req.body ?? {});
     if (!parsed.success)
