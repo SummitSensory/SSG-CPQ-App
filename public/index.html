@@ -536,5 +536,11 @@
     <!-- Cross-border administration (Administration). Same three-part rule as above:
          the file in public/, its route in CLIENT_SCRIPTS, and this tag. -->
     <script src="/cross-border.js?v=2"></script>
+    <!-- Accounts receivable: invoice balances, the customer's purchase order, and the
+         payment-request email sent from the signed-in person's own Outlook mailbox.
+         Same three-part rule as above: the file in public/, its route in
+         CLIENT_SCRIPTS, and this tag. Loaded after app.js on purpose — it installs
+         its own nav entry once the shell exists, so it needs the shell to be there. -->
+    <script src="/accounts-receivable.js?v=1"></script>
   </body>
 </html>

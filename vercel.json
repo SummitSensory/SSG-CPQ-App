@@ -19,6 +19,10 @@
     {
       "path": "/cron/freight-pull",
       "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/cron/receivables",
+      "schedule": "0 11 * * *"
     }
   ],
   "rewrites": [

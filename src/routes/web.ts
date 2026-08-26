@@ -59,6 +59,7 @@ const CLIENT_SCRIPTS = [
   'freight-trueup.js',
   'cross-border.js',
   'contract-pages.js',
+  'accounts-receivable.js',
 ];
 
 /**
