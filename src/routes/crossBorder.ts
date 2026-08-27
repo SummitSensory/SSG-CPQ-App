@@ -756,17 +756,20 @@ export function registerCrossBorderRoutes(app: FastifyInstance): void {
             'The Bank of Canada answered, but published no USD/CAD observation in the last 14 days. That is unusual enough to be worth checking their site directly.',
         };
       }
+      // The provider speaks calendar dates ('2026-08-26'); the column is a DateTime.
+      // Prisma will not widen one into the other, so it is converted here — the same
+      // dateOnly() the rest of this file and rateService.persist() use, so a rate
+      // stored by the admin button and one stored by pricing land on the same instant
+      // and collide on the unique key as they should.
+      const observationDate = dateOnly(observation.observationDate);
       await prisma.exchangeRateObservation.upsert({
         where: {
-          pair_observationDate: {
-            pair: observation.pair,
-            observationDate: observation.observationDate,
-          },
+          pair_observationDate: { pair: observation.pair, observationDate },
         },
         create: {
           pair: observation.pair,
           rate: observation.rate,
-          observationDate: observation.observationDate,
+          observationDate,
           source: 'BANK_OF_CANADA',
           retrievedAt: observation.retrievedAt,
         },
