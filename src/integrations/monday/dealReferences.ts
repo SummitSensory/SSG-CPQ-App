@@ -13,6 +13,10 @@ import { DEAL_COL } from './crmMapping.js';
  *   Project ID   — `pulse_id_mm5kc9f8`, an Item ID column, so its value IS the
  *                  monday item id. The number the shop, the freight desk and the
  *                  customer all use to talk about the job.
+ *   Invoice link — `text_mm50nbge`. The customer-facing invoice and payment link,
+ *                  printed in the payment-request letter and email. Read here for
+ *                  the same reason as the PO: a re-issued invoice has a new link,
+ *                  and the board is where that correction is made.
  *   Customer PO  — `text_mkv1g18z`. The reference the customer's accounts-payable
  *                  team matches the invoice against. Without it an invoice can sit
  *                  unpaid for weeks pending "which PO is this?", which is the whole
@@ -34,11 +38,23 @@ export interface DealReferences {
   /** From the board, or null when it has none or could not be read. */
   projectId: string | null;
   poNumber: string | null;
+  invoiceLink: string | null;
   /** Set when the board could not be read at all. */
   error: string | null;
 }
 
-const EMPTY: DealReferences = { projectId: null, poNumber: null, error: null };
+const EMPTY: DealReferences = {
+  projectId: null,
+  poNumber: null,
+  invoiceLink: null,
+  error: null,
+};
+
+/** Only an http(s) address is a payment link. Anything else is a note in a text column. */
+const cleanLink = (v: unknown): string | null => {
+  const text = String(v ?? '').trim();
+  return /^https?:\/\//i.test(text) ? text : null;
+};
 
 const clean = (v: unknown): string | null => {
   const text = String(v ?? '').trim();
@@ -70,7 +86,7 @@ export async function readDealReferences(
       `query ($items: [ID!]) {
          items (ids: $items) {
            id
-           column_values (ids: ["${DEAL_COL.projectId}", "${DEAL_COL.purchaseOrder}"]) {
+           column_values (ids: ["${DEAL_COL.projectId}", "${DEAL_COL.purchaseOrder}", "${DEAL_COL.invoiceLink}"]) {
              id
              text
              ... on FormulaValue { display_value }
@@ -92,6 +108,7 @@ export async function readDealReferences(
     return {
       projectId: clean(raw[DEAL_COL.projectId]),
       poNumber: clean(raw[DEAL_COL.purchaseOrder]),
+      invoiceLink: cleanLink(raw[DEAL_COL.invoiceLink]),
       error: null,
     };
   } catch (err) {
@@ -134,6 +151,7 @@ export async function dealItemForVersion(versionId: string): Promise<string | nu
 export interface ResolvedReferences {
   projectId: string;
   poNumber: string | null;
+  invoiceLink: string | null;
   /** Where each value came from, for the audit line on the push. */
   source: { projectId: 'board' | 'proposal' | 'none'; poNumber: 'board' | 'acceptance' | 'none' };
   boardError: string | null;
@@ -169,6 +187,7 @@ export async function resolveInvoiceReferences(
   return {
     projectId,
     poNumber,
+    invoiceLink: board.invoiceLink,
     source: {
       projectId: ownProject ? 'proposal' : board.projectId ? 'board' : 'none',
       poNumber: board.poNumber ? 'board' : ownPo ? 'acceptance' : 'none',

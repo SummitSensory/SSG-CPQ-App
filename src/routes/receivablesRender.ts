@@ -162,7 +162,12 @@ export function registerReceivableRenderRoutes(app: FastifyInstance): void {
       const pdf = await letterPdf({
         title: title.html,
         bodyHtml: body.html,
-        addressee: [values.customer_name ?? '', values.organization_name ?? ''],
+        addressee: [
+          values.customer_name ?? '',
+          values.organization_name ?? '',
+          values.customer_address ?? '',
+          values.customer_city_state_zip ?? '',
+        ],
         sender: {
           name: values.sender_name ?? '',
           title: values.sender_title ?? '',
@@ -170,6 +175,7 @@ export function registerReceivableRenderRoutes(app: FastifyInstance): void {
           phone: values.sender_phone ?? '',
         },
         dateLine: longDate(new Date()),
+        reference: values.invoice_number ? `Invoice ${values.invoice_number}` : null,
       });
       attachments.push({
         filename: letterFilename(template.name, ctx.txn.qboDocNumber),
@@ -340,7 +346,12 @@ export function registerReceivableRenderRoutes(app: FastifyInstance): void {
     const pdf = await letterPdf({
       title: title.html,
       bodyHtml: body.html,
-      addressee: [values.customer_name ?? '', values.organization_name ?? ''],
+      addressee: [
+        values.customer_name ?? '',
+        values.organization_name ?? '',
+        values.customer_address ?? '',
+        values.customer_city_state_zip ?? '',
+      ],
       sender: {
         name: values.sender_name ?? '',
         title: values.sender_title ?? '',
@@ -348,6 +359,7 @@ export function registerReceivableRenderRoutes(app: FastifyInstance): void {
         phone: values.sender_phone ?? '',
       },
       dateLine: longDate(new Date()),
+      reference: values.invoice_number ? `Invoice ${values.invoice_number}` : null,
     });
     return reply
       .header('Content-Type', 'application/pdf')
@@ -384,6 +396,12 @@ export function registerReceivableRenderRoutes(app: FastifyInstance): void {
       invoice_date: 'March 4, 2026',
       invoice_amount: '$212,850.00',
       invoice_link: 'https://connect.intuit.com/pay/example',
+      customer_title: 'VP of Sales',
+      customer_address: '9876 NewTech Way',
+      customer_city_state_zip: 'San Jose, CA 95113',
+      payments_credits: '$18,450.00',
+      customer_service_email: 'Sales@SummitSensory.com',
+      customer_service_phone: '(720) 457-5500',
       balance_due: '$106,425.00',
       amount_paid: '$106,425.00',
       due_date: 'April 3, 2026',
@@ -406,7 +424,12 @@ export function registerReceivableRenderRoutes(app: FastifyInstance): void {
     const pdf = await letterPdf({
       title: title.html,
       bodyHtml: body.html,
-      addressee: [values.customer_name ?? '', values.organization_name ?? ''],
+      addressee: [
+        values.customer_name ?? '',
+        values.organization_name ?? '',
+        values.customer_address ?? '',
+        values.customer_city_state_zip ?? '',
+      ],
       sender: {
         name: values.sender_name ?? '',
         title: values.sender_title ?? '',
@@ -414,6 +437,7 @@ export function registerReceivableRenderRoutes(app: FastifyInstance): void {
         phone: values.sender_phone ?? '',
       },
       dateLine: longDate(new Date()),
+      reference: values.invoice_number ? `Invoice ${values.invoice_number}` : null,
     });
     return reply
       .header('Content-Type', 'application/pdf')

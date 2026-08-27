@@ -76,6 +76,16 @@ export const DEAL_COL = {
    * the field captured at signing, which is blank on exactly the jobs that need it.
    */
   purchaseOrder: 'text_mkv1g18z',
+  /**
+   * text — the customer-facing invoice and payment link.
+   *
+   * Maintained on the deal row because that is where whoever raises the invoice
+   * works, and because the link a customer should be given is not always the one
+   * QuickBooks last handed back: a re-issued or consolidated invoice gets a new
+   * link, and the board is where that correction lands. Read at compose time so a
+   * payment letter carries the current one.
+   */
+  invoiceLink: 'text_mm50nbge',
   /** status — Deal Phase */
   stage: 'deal_stage',
   /** numbers — Deal Value $ */

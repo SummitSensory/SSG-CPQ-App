@@ -14,6 +14,7 @@ import {
 } from '../integrations/quickbooks/receivables.js';
 import { pushPoToInvoice, setOrderPoNumber } from '../integrations/quickbooks/poSync.js';
 import { outlookStatusFor } from '../integrations/microsoft/graph.js';
+import { dealItemForVersion, readDealReferences } from '../integrations/monday/dealReferences.js';
 import {
   ALLOWED_UPLOAD_TYPES,
   MAX_UPLOAD_BYTES,
@@ -26,6 +27,7 @@ import {
 } from '../lib/fileStore.js';
 import {
   DEFAULT_EMAIL_TEMPLATE,
+  DEFAULT_LETTER_TEMPLATES,
   ENTERED_FIELDS,
   MERGE_FIELDS,
   expandFigures,
@@ -93,6 +95,12 @@ const SAMPLE_VALUES: MergeValues = {
   invoice_date: 'March 4, 2026',
   invoice_amount: '$212,850.00',
   invoice_link: 'https://connect.intuit.com/pay/example',
+  customer_title: 'VP of Sales',
+  customer_address: '9876 NewTech Way',
+  customer_city_state_zip: 'San Jose, CA 95113',
+  payments_credits: '$18,450.00',
+  customer_service_email: 'Sales@SummitSensory.com',
+  customer_service_phone: '(720) 457-5500',
   balance_due: '$106,425.00',
   amount_paid: '$106,425.00',
   due_date: 'April 3, 2026',
@@ -117,10 +125,11 @@ const SAMPLE_VALUES: MergeValues = {
  * cannot import the copy, and keeping the wording in two places is how it drifts.
  * `createMany` with `skipDuplicates` makes a concurrent first request harmless.
  *
- * Only the EMAIL is seeded. The letters are Summit's own correspondence and are
- * typed in under Administration → Payment requests; shipping invented letter copy
- * that then went out to a customer over somebody's signature would be worse than
- * shipping an empty list.
+ * The built-in letters are seeded the same way but counted separately, so adding a
+ * letter to DEFAULT_LETTER_TEMPLATES seeds it on the next read without disturbing
+ * an email somebody has already edited. Only Summit's own letter copy belongs
+ * there: a letter goes out over a person's signature, so none of it is invented
+ * here. Anything else is typed in under Administration → Payment requests.
  */
 async function loadTemplates(includeInactive = false) {
   const count = await prisma.paymentTemplate.count({ where: { kind: 'EMAIL' } });
@@ -141,6 +150,22 @@ async function loadTemplates(includeInactive = false) {
       skipDuplicates: true,
     });
   }
+  const letterCount = await prisma.paymentTemplate.count({ where: { kind: 'LETTER' } });
+  if (letterCount === 0) {
+    await prisma.paymentTemplate.createMany({
+      data: DEFAULT_LETTER_TEMPLATES.map((t) => ({
+        key: t.key,
+        kind: 'LETTER' as const,
+        name: t.name,
+        stage: t.stage,
+        whenToUse: t.whenToUse,
+        subject: t.subject,
+        bodyHtml: t.bodyHtml,
+        isBuiltIn: true,
+      })),
+      skipDuplicates: true,
+    });
+  }
   return prisma.paymentTemplate.findMany({
     where: includeInactive ? {} : { active: true },
     orderBy: [{ kind: 'asc' }, { stage: 'asc' }, { name: 'asc' }],
@@ -155,6 +180,18 @@ async function loadTemplates(includeInactive = false) {
  * values again at send time rather than trusting what the browser had on screen —
  * a composer left open over lunch is quoting a balance from before lunch.
  */
+/**
+ * Where a customer is told to call about an invoice.
+ *
+ * Constants rather than merge fields the sender fills in: this is one company with
+ * one accounts-receivable line, and a letter that named a different number each
+ * time it was sent would be a letter nobody could be held to. Edited here.
+ */
+const CUSTOMER_SERVICE = {
+  email: 'Sales@SummitSensory.com',
+  phone: '(720) 457-5500',
+};
+
 export async function composeContext(txnId: string, userId: string) {
   const txn = await prisma.qboTransaction.findUnique({ where: { id: txnId } });
   if (!txn) throw new NotFoundError('Invoice not found');
@@ -175,6 +212,19 @@ export async function composeContext(txnId: string, userId: string) {
         select: {
           id: true,
           name: true,
+          // The address the letter is addressed to. BILLING first: a payment letter
+          // belongs with accounts payable, which is rarely the loading dock.
+          addresses: {
+            orderBy: { type: 'asc' },
+            select: {
+              type: true,
+              line1: true,
+              line2: true,
+              city: true,
+              region: true,
+              postalCode: true,
+            },
+          },
           contacts: {
             where: { email: { not: null } },
             orderBy: [{ isDecisionMaker: 'desc' }, { createdAt: 'asc' }],
@@ -216,6 +266,30 @@ export async function composeContext(txnId: string, userId: string) {
   const defaultEmail =
     txn.sentToEmail ?? preferred?.email ?? order?.customerApproval?.approverEmail ?? '';
 
+  // The billing address, then whatever address the customer has.
+  const addresses = org?.addresses ?? [];
+  const postal = addresses.find((a) => a.type === 'BILLING') ?? addresses[0] ?? null;
+  const street = [postal?.line1, postal?.line2].filter((l) => String(l ?? '').trim()).join(', ');
+  const cityLine = postal
+    ? [[postal.city, postal.region].filter(Boolean).join(', '), postal.postalCode]
+        .filter((p) => String(p ?? '').trim())
+        .join(' ')
+        .trim()
+    : '';
+
+  // The payment link, board first. Best effort throughout: monday being unreachable
+  // must not stop a letter going out, so the QuickBooks link stands behind it.
+  let invoiceLink = txn.qboInvoiceLink ?? '';
+  try {
+    const item = await dealItemForVersion(txn.proposalVersionId);
+    if (item) {
+      const board = await readDealReferences(item);
+      if (board.invoiceLink) invoiceLink = board.invoiceLink;
+    }
+  } catch {
+    // Logged inside readDealReferences; the fallback is already in place.
+  }
+
   const balance = txn.balanceMinor ?? txn.amountMinor;
   const initialTotal = txn.initialTotalMinor ?? txn.qboTotalMinor ?? txn.amountMinor;
   const overdue = daysPastDue(txn.dueDate, balance);
@@ -228,13 +302,17 @@ export async function composeContext(txnId: string, userId: string) {
     customer_name:
       [preferred?.firstName, preferred?.lastName].filter(Boolean).join(' ').trim() ||
       (order?.customerApproval?.approverName ?? ''),
+    customer_title: preferred?.title ?? '',
     organization_name: org?.name ?? '',
+    customer_address: street,
+    customer_city_state_zip: cityLine,
     invoice_number: txn.qboDocNumber ?? '',
     invoice_date: longDate(txn.invoiceDate),
     invoice_amount: money(initialTotal, txn.currency),
-    invoice_link: txn.qboInvoiceLink ?? '',
+    invoice_link: invoiceLink,
     balance_due: money(balance, txn.currency),
     amount_paid: money(txn.paidMinor ?? 0n, txn.currency),
+    payments_credits: money(txn.paidMinor ?? 0n, txn.currency),
     due_date: longDate(txn.dueDate),
     days_past_due: String(overdue),
     po_number: order?.customerApproval?.poNumber ?? '',
@@ -244,6 +322,8 @@ export async function composeContext(txnId: string, userId: string) {
     sender_title: sender?.title ?? '',
     sender_email: sender?.email ?? '',
     sender_phone: sender?.phone ?? '',
+    customer_service_email: CUSTOMER_SERVICE.email,
+    customer_service_phone: CUSTOMER_SERVICE.phone,
     today: longDate(new Date()),
   };
 
@@ -860,12 +940,16 @@ export function registerReceivableRoutes(app: FastifyInstance): void {
     return reply.status(204).send();
   });
 
-  /** Put the built-in email back the way it shipped, for when an edit has gone wrong. */
+  /** Put a built-in template back the way it shipped, for when an edit has gone wrong. */
   app.post('/admin/payment-templates/:id/reset', manage, async (req) => {
     const { id } = req.params as { id: string };
     const existing = await prisma.paymentTemplate.findUnique({ where: { id } });
     if (!existing) throw new NotFoundError('Template not found');
-    if (existing.key !== DEFAULT_EMAIL_TEMPLATE.key) {
+    const original =
+      existing.key === DEFAULT_EMAIL_TEMPLATE.key
+        ? DEFAULT_EMAIL_TEMPLATE
+        : DEFAULT_LETTER_TEMPLATES.find((t) => t.key === existing.key);
+    if (!original) {
       throw new ValidationError(
         'This template was not one of the originals, so there is nothing to restore.',
       );
@@ -873,11 +957,11 @@ export function registerReceivableRoutes(app: FastifyInstance): void {
     const row = await prisma.paymentTemplate.update({
       where: { id },
       data: {
-        name: DEFAULT_EMAIL_TEMPLATE.name,
-        stage: DEFAULT_EMAIL_TEMPLATE.stage,
-        whenToUse: DEFAULT_EMAIL_TEMPLATE.whenToUse,
-        subject: DEFAULT_EMAIL_TEMPLATE.subject,
-        bodyHtml: DEFAULT_EMAIL_TEMPLATE.bodyHtml,
+        name: original.name,
+        stage: original.stage,
+        whenToUse: original.whenToUse,
+        subject: original.subject,
+        bodyHtml: original.bodyHtml,
         active: true,
         updatedById: req.user!.sub,
       },

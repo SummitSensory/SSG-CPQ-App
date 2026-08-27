@@ -37,13 +37,17 @@ export type TemplateKind = (typeof TEMPLATE_KINDS)[number];
 export const MERGE_FIELDS: Array<{ token: string; means: string; entered?: boolean }> = [
   { token: 'customer_first_name', means: 'The recipient’s first name' },
   { token: 'customer_name', means: 'The recipient’s full name' },
+  { token: 'customer_title', means: 'The recipient’s job title' },
   { token: 'organization_name', means: 'The customer’s organization' },
+  { token: 'customer_address', means: 'Street address, as billed' },
+  { token: 'customer_city_state_zip', means: 'City, state and postal code' },
   { token: 'invoice_number', means: 'QuickBooks invoice number' },
   { token: 'invoice_date', means: 'The date the invoice was issued' },
   { token: 'invoice_amount', means: 'The invoice total as originally issued' },
-  { token: 'invoice_link', means: 'QuickBooks payment link, when the company has one' },
+  { token: 'invoice_link', means: 'Invoice and payment link, from the monday deal row' },
   { token: 'balance_due', means: 'Outstanding now' },
   { token: 'amount_paid', means: 'Received against this invoice so far' },
+  { token: 'payments_credits', means: 'Payments and credits applied, same figure as amount_paid' },
   { token: 'due_date', means: 'The invoice due date' },
   { token: 'days_past_due', means: 'Whole days past due, or 0' },
   { token: 'po_number', means: 'The customer’s purchase-order number' },
@@ -53,6 +57,8 @@ export const MERGE_FIELDS: Array<{ token: string; means: string; entered?: boole
   { token: 'sender_title', means: 'Your title' },
   { token: 'sender_email', means: 'Your email address' },
   { token: 'sender_phone', means: 'Your phone number' },
+  { token: 'customer_service_email', means: 'The customer-service inbox' },
+  { token: 'customer_service_phone', means: 'The customer-service line' },
   { token: 'today', means: 'Today’s date' },
   { token: 'tentative_ship_date', means: 'Typed in when you send', entered: true },
   { token: 'payment_deadline', means: 'Typed in when you send', entered: true },
@@ -142,7 +148,7 @@ export function renderTemplate(template: string, values: MergeValues): RenderRes
     }
     if (name === 'invoice_link') {
       if (!/^https?:\/\//i.test(value)) return '';
-      return `<a href="${esc(value)}" style="color:#3d4a55;">${esc(value)}</a>`;
+      return `<a href="${esc(value)}" style="color:${BRAND.navy};">${esc(value)}</a>`;
     }
     return esc(value);
   });
@@ -237,6 +243,53 @@ export function expandFigures(html: string, values: MergeValues): string {
   return String(html ?? '').replace(/\{\{\s*FIGURES\s*\}\}/g, () => figuresTable(values));
 }
 
+/* --------------------------------------------------- built-in letter templates */
+
+/**
+ * The letters that ship with the app.
+ *
+ * A letter's `subject` is its heading: letterheadHtml prints it as the h1, and the
+ * date line, the addressee block and the sender's own block are printed by the
+ * letterhead itself. So a letter body starts at its reference block and ends at the
+ * sign-off — repeating any of them in the copy would print them twice on the page.
+ */
+export const DEFAULT_LETTER_TEMPLATES = [
+  {
+    key: 'tentative-ship-advance-balance',
+    kind: 'LETTER' as TemplateKind,
+    name: 'PAY-01 — Upcoming Shipment: Advance Balance Request',
+    stage: 1,
+    whenToUse:
+      'An order is nearing completion and you want the remaining balance paid before it is released for shipment.',
+    // Printed as the letter's heading, which is why it reads as a reference line: a
+    // letter that says "Re:" at the top and then again in its first paragraph has
+    // said it twice.
+    subject: 'Re: Upcoming Shipment – Balance Payment Request for Invoice {{invoice_number}}',
+    bodyHtml: [
+      '<p>Dear {{customer_first_name}},</p>',
+      '<p>Your Summit Sensory Gym order is currently tentatively scheduled to ship on or around {{tentative_ship_date}}.</p>',
+      '<p>To help ensure your order can be released without delay once it is ready, we are requesting payment of the remaining balance of {{balance_due}} at this time.</p>',
+      '<p>As outlined in the accepted proposal, unless otherwise stated, the remaining balance is due prior to shipment.</p>',
+      // Inline-styled rather than classed or headed with an <h2>: an admin who edits
+      // this letter saves it back through the signature allow-list, which keeps style
+      // attributes and drops tags it does not know. Styling that survives that round
+      // trip is styling that is still there on the tenth edit.
+      '<p style="font-family:Georgia,serif;font-size:14px;font-weight:700;color:#203060;margin:12px 0 3px;">Payment Information</p>',
+      '<table style="border-collapse:collapse;margin:0 0 8px;page-break-inside:avoid;"><tbody>',
+      '<tr><td style="padding:0 22px 0 0;color:#4b5468;white-space:nowrap;">Invoice #</td><td style="padding:0;">{{invoice_number}}</td></tr>',
+      '<tr><td style="padding:0 22px 0 0;color:#4b5468;white-space:nowrap;"><b>Balance Due</b></td><td style="padding:0;"><b>{{balance_due}}</b></td></tr>',
+      '<tr><td style="padding:0 22px 0 0;color:#4b5468;white-space:nowrap;">Tentative Ship Date</td><td style="padding:0;">{{tentative_ship_date}}</td></tr>',
+      '</tbody></table>',
+      '<p>Invoice &amp; Payment Link: {{invoice_link}}</p>',
+      '<p>If payment has already been submitted, please send the applicable remittance information so we can update your account.</p>',
+      '<p>If you have questions regarding the invoice or payment, please contact our Customer Service team at {{customer_service_email}} or {{customer_service_phone}}.</p>',
+      '<p><b>Credit Card Payments:</b> A 3.5% processing fee applies to credit card payments. ACH and wire options are also available.</p>',
+      '<p>Thank you for your prompt attention to this payment. We look forward to getting your order on its way.</p>',
+      '<p>Sincerely,</p>',
+    ].join('\n'),
+  },
+];
+
 /* ----------------------------------------------------------------- the letter */
 
 export interface LetterheadInput {
@@ -244,90 +297,152 @@ export interface LetterheadInput {
   title: string;
   /** Rendered, sanitised body HTML. */
   bodyHtml: string;
-  /** Who it is addressed to, printed as an address block. */
+  /** Who it is addressed to, printed as an address block: name, title, org, street, city line. */
   addressee: string[];
   /** The sender's own block, printed under the sign-off. */
-  sender: { name: string; title?: string | null; email?: string | null; phone?: string | null };
+  sender: {
+    name: string;
+    title?: string | null;
+    email?: string | null;
+    phone?: string | null;
+    /**
+     * The sender's handwritten signature as a data URI.
+     *
+     * A data URI and not a URL because renderPdf has no network — an <img src>
+     * pointing at the app prints a broken image on a document a customer receives.
+     * Absent when the CRM holds no signature for this person, and the space is then
+     * simply left blank rather than filled with somebody else's name.
+     */
+    signatureDataUri?: string | null;
+  };
   dateLine: string;
+  /** Printed opposite the date, where the proposal's letter prints its number. */
+  reference?: string | null;
 }
 
 /**
  * The letter, as a complete self-contained HTML document for the PDF renderer.
  *
- * Self-contained is a hard requirement, not a style: renderPdf runs headless
- * Chromium with no network access, so the mark travels as the data URI in
- * brandLogo.ts. An `<img src>` pointing at the app would print a broken image on a
- * document a customer receives.
+ * This is the letterhead the executive letter inside a proposal already prints, to
+ * the pixel: the 58px mark, the company name in Newsreader over the street line,
+ * the date and reference set opposite it, the hairline rule, the 54px red accent,
+ * and the 10px navy band closing the page. A customer who receives a proposal and
+ * then a payment letter should not be able to tell they came from two features.
  *
- * The letterhead is the one the freight RFQ and the Ryan Capital financing sheet
- * already print (see handoff/freightRfqDocument.ts) so that everything a customer
- * receives reads as one system: the 52px mark, the company name in Georgia over a
- * navy rule, the red accent bar, and body copy in the same sans the proposal uses.
- * Nothing new is invented here — a payment letter is the last document that should
- * look like it came from somewhere else.
+ * The page is 816 x 1056 CSS px, which is 8.5 x 11in at 96dpi, so the geometry is
+ * shared with the proposal's front matter rather than converted into points and
+ * rounded differently. Margins match it as well: 70px sides.
+ *
+ * Body copy is single-spaced with a 10px gap between paragraphs — single spacing
+ * inside a paragraph, a clear space between them, which is how a business letter
+ * reads. PAY-01 uses about three quarters of the page, so a long organization name or
+ * a two-line street address has room before it pushes onto a second page.
+ *
+ * A second page is nonetheless handled rather than hoped against: the navy band is
+ * position:fixed, which Chromium repeats on every printed page, and the figures block
+ * and the signature both carry page-break-inside:avoid so a sign-off can never be
+ * separated from the name under it. Continuation pages carry no letterhead, which is
+ * the convention for business correspondence.
+ *
+ * Self-contained is a hard requirement: renderPdf runs headless Chromium with no
+ * network access, so the mark travels as the data URI in brandLogo.ts and the type
+ * falls back to Georgia and the system sans rather than fetching webfonts.
  */
 export function letterheadHtml(input: LetterheadInput): string {
   const B = BRAND;
+  const SERIF = "'Newsreader',Georgia,'Times New Roman',serif";
+  const SANS = "'IBM Plex Sans','Segoe UI',Helvetica,Arial,sans-serif";
+
   const addressee = input.addressee
     .filter((l) => String(l ?? '').trim())
-    .map((l, i) => `<div${i === 0 ? ' style="font-weight:600;"' : ''}>${esc(l)}</div>`)
-    .join('');
-
-  const senderLines = [
-    input.sender.name,
-    input.sender.title ?? '',
-    input.sender.email ?? '',
-    input.sender.phone ?? '',
-  ]
-    .filter((l) => String(l ?? '').trim())
     .map(
-      (l, i) =>
-        `<div style="${
-          i === 0
-            ? `font-family:Georgia,'Times New Roman',serif;font-size:11pt;font-weight:700;color:${B.navy};`
-            : `color:${B.muted};font-size:9.5pt;`
-        }">${esc(l)}</div>`,
+      (l, k) => `<div${k === 0 ? ' style="font-weight:600;"' : ''}>${esc(String(l).trim())}</div>`,
     )
     .join('');
+
+  // Four line breaks' worth of space for a wet signature (4 x 18.6px), per the house rule, or the
+  // stored signature dropped into that same space when there is one.
+  const sig = String(input.sender.signatureDataUri ?? '').trim();
+  const signature = sig
+    ? `<img src="${esc(sig)}" alt="" style="width:90px;height:auto;display:block;margin:0 0 2px -4px;">`
+    : '<div style="height:74px;"></div>';
+
+  const senderLine = (html: string, bold = false) =>
+    `<div style="${bold ? 'font-weight:700;' : ''}">${html}</div>`;
+
+  const senderBlock = [
+    senderLine(esc(input.sender.name), true),
+    String(input.sender.title ?? '').trim()
+      ? senderLine(esc(String(input.sender.title).trim()))
+      : '',
+    senderLine('Summit Sensory Gym', true),
+    String(input.sender.phone ?? '').trim()
+      ? senderLine(esc(String(input.sender.phone).trim()))
+      : '',
+    String(input.sender.email ?? '').trim()
+      ? senderLine(esc(String(input.sender.email).trim()))
+      : '',
+  ]
+    .filter(Boolean)
+    .join('');
+
+  const reference = String(input.reference ?? '').trim();
 
   return `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>${esc(input.title)}</title>
 <style>
   @page { size: Letter; margin: 0; }
   html, body { margin: 0; padding: 0; }
-  body {
-    font-family: -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif;
-    font-size: 10.5pt; line-height: 1.6; color: ${B.ink};
-    -webkit-print-color-adjust: exact; print-color-adjust: exact;
-  }
-  .sheet { box-sizing: border-box; width: 8.5in; min-height: 11in; padding: 0.7in 0.8in 0.8in; }
-  .head { display: flex; align-items: center; gap: 13pt; padding-bottom: 11pt; border-bottom: 1.5px solid ${B.navy}; }
-  .head img { width: 52px; height: 52px; display: block; flex: none; }
-  .head .name { font-family: Georgia,'Times New Roman',serif; font-size: 14.5pt; font-weight: 700; letter-spacing: -.01em; color: ${B.navy}; line-height: 1.15; }
-  .head .sub { font-size: 8pt; letter-spacing: .16em; text-transform: uppercase; color: ${B.muted}; margin-top: 3pt; }
-  .accent { height: 3px; background: ${B.red}; margin-top: 2px; }
-  .date { margin-top: 24pt; color: ${B.muted}; font-size: 9.5pt; }
-  .to { margin-top: 14pt; line-height: 1.45; }
-  h1 { font-family: Georgia,'Times New Roman',serif; font-size: 13pt; font-weight: 700; color: ${B.navy}; letter-spacing: -.01em; margin: 22pt 0 12pt; }
-  p { margin: 0 0 10pt; }
-  b, strong { color: ${B.ink}; }
-  table { border-collapse: collapse; }
-  .sign { margin-top: 26pt; padding-top: 10pt; border-top: 1px solid ${B.navyRule}; }
-  .foot { margin-top: 30pt; border-top: 1px solid ${B.navyRule}; padding-top: 7pt; font-size: 8pt; color: ${B.faint}; }
+  body { font-family: ${SANS}; font-size: 11.5px; line-height: 1.62; color: ${B.ink};
+         -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .page { box-sizing: border-box; width: 816px; min-height: 1056px; background: #fff;
+          padding: 46px 70px 30px; }
+  /* Fixed, so Chromium paints it at the foot of every printed page, not just the last. */
+  .band { position: fixed; left: 0; right: 0; bottom: 0; height: 10px; background: ${B.navy}; }
+  .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px;
+          padding-bottom: 18px; border-bottom: 1px solid ${B.navyRule}; }
+  .head img { width: 58px; height: 58px; display: block; flex: none; }
+  .head .name { font-family: ${SERIF}; font-size: 19px; font-weight: 700; color: ${B.navy}; letter-spacing: -.01em; }
+  .head .street { font-size: 10.5px; color: ${B.muted}; line-height: 1.5; margin-top: 2px; }
+  .head .ref { text-align: right; font-size: 10.5px; color: ${B.muted}; line-height: 1.7; white-space: nowrap; }
+  .accent { width: 54px; height: 3px; background: ${B.red}; margin-top: 26px; }
+  h1 { font-family: ${SERIF}; font-size: 20px; font-weight: 700; color: ${B.navy};
+       letter-spacing: -.02em; line-height: 1.28; margin: 14px 0 0; max-width: 660px; }
+  /* The address block sits in the letter's own paragraph rhythm: a 10px space
+     before and after it, and the body's leading, so it reads as the first block of
+     the letter rather than as part of the letterhead. */
+  .to { margin-top: 10px; }
+  .body { margin-top: 10px; max-width: 676px; text-wrap: pretty; }
+  .body p { margin: 0 0 10px; }
+  /* "Sincerely," belongs to the signature, not to the body: no gap under it, so the
+     mark sits directly beneath the sign-off the way it does on a signed page. */
+  .body p:last-child { margin-bottom: 0; }
+  .body table { font-size: 11.5px; }
+  .body table td { vertical-align: top; }
+  .body a { color: ${B.navy}; }
+  .sign { margin-top: 2px; page-break-inside: avoid; }
+  .sign .who { margin-top: 9px; font-size: 11.5px; line-height: 1.6; color: ${B.ink}; }
 </style></head>
-<body><div class="sheet">
+<body><div class="page">
   <div class="head">
-    <img src="${LOGO_DATA_URI}" alt="Summit Sensory Gym">
-    <div><div class="name">Summit Sensory Gym</div><div class="sub">Accounts Receivable</div></div>
+    <div style="display:flex;gap:14px;align-items:center;">
+      <img src="${LOGO_DATA_URI}" alt="Summit Sensory Gym">
+      <div>
+        <div class="name">Summit Sensory Gym</div>
+        <div class="street">6150 S Geneva Ct, Englewood, CO 80111 &middot; SummitSensory.com</div>
+      </div>
+    </div>
+    <div class="ref">${esc(input.dateLine)}${reference ? `<br>${esc(reference)}` : ''}</div>
   </div>
   <div class="accent"></div>
-  <div class="date">${esc(input.dateLine)}</div>
-  <div class="to">${addressee}</div>
   <h1>${esc(input.title)}</h1>
-  ${input.bodyHtml}
-  <div class="sign">${senderLines}</div>
-  <div class="foot">Summit Sensory Gym &middot; This letter accompanies the invoice referenced above.</div>
-</div></body></html>`;
+  <div class="to">${addressee}</div>
+  <div class="body">${input.bodyHtml}</div>
+  <div class="sign">
+    ${signature}
+    <div class="who">${senderBlock}</div>
+  </div>
+</div><div class="band"></div></body></html>`;
 }
 
 /** Render a letter to PDF. Runs only on the renderer function — see api/render.ts. */
