@@ -29,7 +29,11 @@ export type ChargeKind =
   | 'FREIGHT_OTHER'
   | 'FREIGHT_TAX'
   | 'DISCOUNT'
-  | 'DEPOSIT';
+  | 'DEPOSIT'
+  /* Canadian border charges quoted on the proposal and collected by SSG. */
+  | 'CB_TARIFF'
+  | 'CB_BROKERAGE'
+  | 'CB_TAX';
 
 interface ChargeItemRule {
   kind: ChargeKind;
@@ -81,6 +85,34 @@ const RULES: readonly ChargeItemRule[] = [
   { kind: 'FREIGHT_TAX', label: 'Crating & freight tax', env: 'QBO_ITEM_ID_FREIGHT_TAX' },
   { kind: 'DISCOUNT', label: 'Order discount', env: 'QBO_ITEM_ID_DISCOUNT' },
   { kind: 'DEPOSIT', label: 'Deposit / portion invoice', env: 'QBO_ITEM_ID_DEPOSIT' },
+  /**
+   * Canadian border charges, each on its own item so the books can tell duty from
+   * brokerage from tax. All three fall back to one general item, for a company that
+   * would rather see 'Cross-border charges' as a single line in its reporting.
+   *
+   * CB_TAX is deliberately an ordinary charge item and NOT QuickBooks sales tax. GST or
+   * HST that SSG collects on a Canadian import is an amount quoted on the proposal;
+   * putting it through the US sales-tax engine would have QuickBooks compute a figure
+   * of its own and file it in the Sales Tax Center.
+   */
+  {
+    kind: 'CB_TARIFF',
+    label: 'Tariff / duty (Canada)',
+    env: 'QBO_ITEM_ID_CB_TARIFF',
+    fallbackEnv: 'QBO_ITEM_ID_CB',
+  },
+  {
+    kind: 'CB_BROKERAGE',
+    label: 'Customs brokerage (Canada)',
+    env: 'QBO_ITEM_ID_CB_BROKERAGE',
+    fallbackEnv: 'QBO_ITEM_ID_CB',
+  },
+  {
+    kind: 'CB_TAX',
+    label: 'Canadian sales tax collected (GST/HST/PST/QST)',
+    env: 'QBO_ITEM_ID_CB_TAX',
+    fallbackEnv: 'QBO_ITEM_ID_CB',
+  },
 ];
 
 const BY_KIND = new Map<ChargeKind, ChargeItemRule>(RULES.map((r) => [r.kind, r]));
@@ -105,6 +137,11 @@ export function chargeItemId(kind: ChargeKind): string | null {
  */
 export function feeChargeKind(label: string): ChargeKind {
   const l = label.trim().toLowerCase();
+  // Border charges are tested first: 'Mat freight tax pass-through' and 'GST' must not
+  // both land on the same item, and the freight tests below match on single words.
+  if (/tariff|duty|surtax|sima/.test(l)) return 'CB_TARIFF';
+  if (/brokerage|broker fee|customs broker/.test(l)) return 'CB_BROKERAGE';
+  if (/\bgst\b|\bhst\b|\bpst\b|\bqst\b|canadian sales tax|import tax/.test(l)) return 'CB_TAX';
   if (l === 'third-party freight' || l.includes('third-party') || l.includes('third party'))
     return 'FREIGHT_THIRD_PARTY';
   if (l === 'structure freight' || l.includes('structure')) return 'FREIGHT_STRUCTURE';

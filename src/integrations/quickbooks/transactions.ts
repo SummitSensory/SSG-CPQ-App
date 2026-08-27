@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { sellerCollectedCharges } from '../../crossborder/sellerCharges.js';
 import { prisma } from '../../lib/prisma.js';
 import { logger } from '../../lib/logger.js';
 import { recordAudit } from '../../lib/audit.js';
@@ -99,9 +100,65 @@ export async function loadAcceptedTotals(proposalVersionId: string): Promise<Acc
   // totals and keeps the line detail on the version itself. Reading a builder
   // snapshot with the pricing-engine reader yields zero lines and a zero total,
   // which the document builders then (correctly) refuse to send.
-  return Array.isArray(b.lines)
-    ? fromPricingEngine(snap, b, version.items)
-    : fromProposalBuilder(snap, b, version.items, version.sections);
+  const totals = Array.isArray(b.lines)
+    ? await fromPricingEngine(snap, b, version.items)
+    : await fromProposalBuilder(snap, b, version.items, version.sections);
+  return withCanadianCharges(proposalVersionId, totals);
+}
+
+/**
+ * Add the Canadian charges Summit collects to what QuickBooks is asked to bill.
+ *
+ * The price snapshot covers the proposal's own lines and knows nothing about tariff,
+ * brokerage or Canadian sales tax — those are quoted on the cross-border panel. Left
+ * out, an accepted Canadian proposal produced an estimate and an invoice for less than
+ * the total the customer signed, and the difference was never billed to anyone.
+ *
+ * Each charge becomes its own line, so the customer's invoice reads the way the
+ * proposal read: a tariff line, a brokerage line, a tax line. They are ordinary charge
+ * items, NOT QuickBooks sales tax — Canadian GST/HST collected by SSG on an import is
+ * an amount quoted on the proposal, and running it through QuickBooks' US sales-tax
+ * engine would compute a second figure of its own.
+ *
+ * The figures come from the frozen snapshot (see sellerCharges.ts), so the estimate,
+ * the invoice and the document the customer holds cannot disagree.
+ */
+async function withCanadianCharges(
+  proposalVersionId: string,
+  totals: AcceptedTotals,
+): Promise<AcceptedTotals> {
+  const cb = await sellerCollectedCharges(proposalVersionId);
+  if (!cb.lines.length) return totals;
+
+  const add = cb.lines.reduce((a, l) => a + BigInt(Math.round(l.usdMinor)), 0n);
+  if (add === 0n) return totals;
+
+  const grandTotalMinor = totals.grandTotalMinor + add;
+  // The deposit keeps the percentage it was quoted at: the customer agreed to a share
+  // of the total, and the total is what moved.
+  const deposit =
+    totals.deposit === 0n || totals.grandTotalMinor === 0n
+      ? totals.deposit
+      : BigInt(
+          Math.round(
+            (Number(grandTotalMinor) * Number(totals.deposit)) / Number(totals.grandTotalMinor),
+          ),
+        );
+
+  return {
+    ...totals,
+    grandTotalMinor,
+    deposit,
+    // Whatever is not deposit or progress is the final invoice, as before.
+    final: grandTotalMinor - deposit - totals.progress,
+    fees: [
+      ...totals.fees,
+      ...cb.lines.map((l) => ({
+        label: l.percent ? `${l.label} (${l.percent}%)` : l.label,
+        amountMinor: BigInt(Math.round(l.usdMinor)),
+      })),
+    ],
+  };
 }
 
 /** Pricing-engine snapshot: `lines[].net`, `fees` map, `tax`, `orderDiscount`. */

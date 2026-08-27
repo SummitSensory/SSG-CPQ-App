@@ -15,6 +15,7 @@ import {
   type PriceSnapshotLike,
 } from './lock.js';
 import { expandBomBuild } from './bomBuild.js';
+import { sellerCollectedCharges } from '../crossborder/sellerCharges.js';
 import { rollUpProcurementLines } from './bomRollup.js';
 import { qboGateState } from './manufacturingRelease.js';
 import { versionTotals, metaOf } from '../proposals/analytics.js';
@@ -352,6 +353,30 @@ export async function createAcceptedOrder(
   const contentSnapshot = buildContentSnapshot(vLike, sLike);
   const integrityHash = computeIntegrityHash(contentSnapshot);
   const depositDue = depositFromSnapshot(sLike);
+
+  /**
+   * Canadian charges Summit collects, added to what the order is worth.
+   *
+   * The price snapshot covers the proposal's own lines: equipment, discount, freight,
+   * tax typed by hand. It knows nothing about tariff, brokerage or Canadian sales tax,
+   * which are quoted on the cross-border panel — so an accepted Canadian proposal used
+   * to lock at less than the total the customer signed, and invoiced short by exactly
+   * that difference.
+   *
+   * Read from the FROZEN cross-border snapshot, so a rate change between signature and
+   * lock cannot move the figure. Zero on every US order, which is why the arithmetic
+   * below is a no-op there.
+   */
+  const cbCharges = await sellerCollectedCharges(version.id);
+  const cbAddMinor = BigInt(Math.round(cbCharges.totalMinor));
+  const orderTotal = snap.grandTotal + cbAddMinor;
+  // The deposit keeps the percentage it was quoted at rather than being recomputed from
+  // a settings value that may have moved since: the customer signed '50% of the total',
+  // and the total is what changed.
+  const orderDeposit =
+    cbAddMinor === 0n || snap.grandTotal === 0n || depositDue === 0n
+      ? depositDue
+      : BigInt(Math.round((Number(orderTotal) * Number(depositDue)) / Number(snap.grandTotal)));
   // The proposal's items, then the BOM build rules: a part declared as made of other
   // parts is replaced by them, and a free-issue part is moved onto the sheet of the
   // vendor it is shipped to. Both are configuration (Catalog → BOM build), so this is
@@ -416,9 +441,9 @@ export async function createAcceptedOrder(
             priceSnapshotId: snap.id,
             ruleSnapshotId: version.ruleSnapshotId,
             currency: snap.currency,
-            grandTotalMinor: snap.grandTotal,
-            depositRequired: depositDue > 0n,
-            depositDueMinor: depositDue,
+            grandTotalMinor: orderTotal,
+            depositRequired: orderDeposit > 0n,
+            depositDueMinor: orderDeposit,
             contentSnapshot: contentSnapshot as object,
             integrityHash,
             acceptedById: userId,
@@ -483,7 +508,20 @@ export async function createAcceptedOrder(
               create: {
                 action: 'order.locked',
                 actorId: userId,
-                detail: { number, acceptedVersion: version.version, integrityHash } as object,
+                detail: {
+                  number,
+                  acceptedVersion: version.version,
+                  integrityHash,
+                  // What the Canadian charges added, and where the figures came from, so
+                  // an order worth more than its price snapshot explains itself.
+                  ...(cbAddMinor === 0n
+                    ? {}
+                    : {
+                        crossBorderChargesMinor: Number(cbAddMinor),
+                        crossBorderChargeSource: cbCharges.source,
+                        crossBorderCharges: cbCharges.lines,
+                      }),
+                } as object,
               },
             },
           },

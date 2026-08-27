@@ -37,16 +37,20 @@ import { resolveInvoiceReferences } from '../integrations/monday/dealReferences.
 import type { QboEnvironment, QboTxnType } from '@prisma/client';
 
 /** QboTransaction rows carry BigInt columns — serialize to strings for JSON. */
-function serializeTxn(t: {
-  proposalTotalMinor: bigint;
-  amountMinor: bigint;
-  [k: string]: unknown;
-}): Record<string, unknown> {
-  return {
-    ...t,
-    proposalTotalMinor: t.proposalTotalMinor.toString(),
-    amountMinor: t.amountMinor.toString(),
-  };
+/**
+ * QboTransaction rows carry BigInt columns — serialized to strings for JSON.
+ *
+ * Every bigint on the row, not a named two. The row has nine of them and six
+ * (qboTotalMinor, balanceMinor, paidMinor, initialTotalMinor and friends) are null
+ * until QuickBooks has been read back — so naming columns one at a time produced a
+ * route that worked on every draft transaction and threw 'Do not know how to serialize
+ * a BigInt' the moment a real document synced. Listing them was the bug; walking them
+ * cannot go stale when a column is added.
+ */
+function serializeTxn(t: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(t)) out[k] = typeof v === 'bigint' ? v.toString() : v;
+  return out;
 }
 
 async function activeRealmId(): Promise<string | null> {
