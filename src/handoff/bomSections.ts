@@ -1,4 +1,5 @@
 import { prisma } from '../lib/prisma.js';
+import { parseMatSku } from '../proposals/matPricing.js';
 import { NotFoundError, ValidationError } from '../lib/errors.js';
 import { rollUpProcurementLines } from './bomRollup.js';
 import { summarize, type InvoiceVariance } from './vendorInvoice.js';
@@ -883,7 +884,13 @@ export async function submissionBlockers(sectionId: string): Promise<string[]> {
   }
   const lines = await prisma.procurementLine.findMany({
     where: { orderId: s.orderId },
-    select: { sku: true, vendor: true, powderColorCode: true, powderColor: true },
+    select: {
+      sku: true,
+      vendor: true,
+      powderColorCode: true,
+      powderColor: true,
+      kitSku: true,
+    },
   });
   const needs = new Set(
     (
@@ -899,6 +906,58 @@ export async function submissionBlockers(sectionId: string): Promise<string[]> {
       !(l.powderColor || '').trim()
     ) {
       out.push(`${l.sku} needs a powder colour`);
+    }
+  }
+
+  /**
+   * A part number no catalog knows cannot be sent to a vendor.
+   *
+   * This is the choke point the defect walked through. `resolveCatalogRefs` matches a
+   * line by DESCRIPTION when its part number finds nothing, so a stale or mistyped
+   * number still collects a real part's cost, weight and vendor and prints as an
+   * ordinary line — right money, right description, a number nobody can order against.
+   * Every figure on the row is correct, so nothing else in the system objects.
+   *
+   * Checked against BOTH catalog tables and case-insensitively, because a part may
+   * legitimately exist as a flat Sku row with no product-tree entry, and 'a-2400' and
+   * 'A-2400' are one part. Mat numbers are generated at price time and have no catalog
+   * row at all, so they are exempted by prefix rather than by guesswork.
+   */
+  /**
+   * Exempt: a part carried out of a kit breakdown (`kitSku` set) and a generated mat
+   * number. Kit fasteners legitimately arrive with their own cost and weight and may
+   * never have had a Sku row, and mats are priced from dimensions at quote time, so
+   * neither is a stale number — blocking on them would block ordinary sheets.
+   */
+  const mine = lines.filter(
+    (l) =>
+      vendorOf(l.vendor) === s.vendor && (l.sku ?? '').trim() && !l.kitSku && !parseMatSku(l.sku),
+  );
+  const parts = [...new Set(mine.map((l) => (l.sku as string).trim()))];
+  if (parts.length) {
+    const [skuRows, productRows] = await Promise.all([
+      prisma.sku.findMany({
+        where: { part: { in: parts, mode: 'insensitive' } },
+        select: { part: true },
+      }),
+      prisma.product.findMany({
+        where: { sku: { in: parts, mode: 'insensitive' } },
+        select: { sku: true },
+      }),
+    ]);
+    const known = new Set<string>();
+    for (const r of skuRows) known.add(r.part.trim().toUpperCase());
+    for (const r of productRows)
+      known.add(
+        String(r.sku ?? '')
+          .trim()
+          .toUpperCase(),
+      );
+    for (const p of parts) {
+      if (known.has(p.toUpperCase())) continue;
+      out.push(
+        `${p} is not a part number in the catalog — the cost and weight on that line came from a description match. Remove the line and add the real part.`,
+      );
     }
   }
   return out;

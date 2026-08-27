@@ -620,6 +620,106 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
     return out;
   });
 
+  /**
+   * Parts that exist in the SKU master and nowhere in the product tree.
+   *
+   * The two are separate tables joined only by the part-number string: a `Sku` row
+   * carries cost, weight and vendor, a `Product` row carries a category and a place in
+   * the tree, and nothing creates one from the other. A part with only a `Sku` row is
+   * therefore invisible where somebody would choose it and fully functional where it is
+   * purchased — it resolves cost, weight and vendor perfectly well when a component
+   * rule, a kit expansion or a hand-added line puts it on an order.
+   *
+   * Those parts are exactly the ones that can appear on a Bill of Materials without
+   * ever having appeared on a proposal, so they are worth being able to list. Each row
+   * says where the part is already being used, which is what tells a real gap (a part
+   * that should be on the tree) apart from a deliberate purchasing-only part.
+   */
+  app.get('/catalog/sku-only', read, async () => {
+    const [skus, products] = await Promise.all([
+      prisma.sku.findMany({
+        select: {
+          part: true,
+          description: true,
+          manufacturer: true,
+          unitCostMinor: true,
+          weightLbs: true,
+          active: true,
+        },
+        orderBy: { part: 'asc' },
+      }),
+      prisma.product.findMany({ select: { sku: true } }),
+    ]);
+
+    // Matched case-insensitively, the same way every other part lookup in this
+    // application does it — 'a-2207' and 'A-2207' are one part.
+    const inTree = new Set(
+      products
+        .map((p) =>
+          String(p.sku ?? '')
+            .trim()
+            .toUpperCase(),
+        )
+        .filter(Boolean),
+    );
+    const orphans = skus.filter((s) => !inTree.has(s.part.trim().toUpperCase()));
+    if (!orphans.length) return { count: 0, rows: [] };
+
+    const parts = orphans.map((s) => s.part);
+    const [asChild, asParent, onOrders] = await Promise.all([
+      prisma.skuComponent.findMany({
+        where: { childPart: { in: parts, mode: 'insensitive' } },
+        select: { parentPart: true, childPart: true, quantity: true },
+      }),
+      prisma.skuComponent.findMany({
+        where: { parentPart: { in: parts, mode: 'insensitive' } },
+        select: { parentPart: true, childPart: true },
+      }),
+      prisma.procurementLine.groupBy({
+        by: ['sku'],
+        where: { sku: { in: parts, mode: 'insensitive' } },
+        _count: { _all: true },
+      }),
+    ]);
+
+    const key = (v: unknown) =>
+      String(v ?? '')
+        .trim()
+        .toUpperCase();
+    const childOf = new Map<string, string[]>();
+    for (const r of asChild) {
+      const k = key(r.childPart);
+      childOf.set(k, (childOf.get(k) ?? []).concat(r.parentPart));
+    }
+    const parentOf = new Map<string, string[]>();
+    for (const r of asParent) {
+      const k = key(r.parentPart);
+      parentOf.set(k, (parentOf.get(k) ?? []).concat(r.childPart));
+    }
+    const orderCount = new Map<string, number>();
+    for (const r of onOrders) orderCount.set(key(r.sku), r._count._all);
+
+    return {
+      count: orphans.length,
+      rows: orphans.map((s) => {
+        const k = key(s.part);
+        return {
+          part: s.part,
+          description: s.description ?? '',
+          vendor: s.manufacturer ?? null,
+          unitCostMinor: s.unitCostMinor ?? null,
+          weightLbs: s.weightLbs == null ? null : Number(s.weightLbs),
+          active: s.active,
+          /** Part numbers whose component list pulls this part onto a sheet. */
+          componentOf: childOf.get(k) ?? [],
+          /** Parts this one is declared as being made of. */
+          explodesInto: parentOf.get(k) ?? [],
+          /** How many order lines already carry it. */
+          orderLines: orderCount.get(k) ?? 0,
+        };
+      }),
+    };
+  });
   /** What deleting this part would remove, and whether it is safe. */
   app.get('/catalog/items/:part/usage', read, async (req) => {
     const { part } = req.params as { part: string };

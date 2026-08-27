@@ -30,6 +30,9 @@ import {
   qboGateState,
 } from '../handoff/manufacturingRelease.js';
 import { buildBom } from '../handoff/bom.js';
+import { prisma } from '../lib/prisma.js';
+import { procurementFromItems } from '../handoff/lock.js';
+import { expandBomBuild } from '../handoff/bomBuild.js';
 import type {
   HandoffStatus,
   RequirementCategory,
@@ -313,6 +316,108 @@ export function registerOrderRoutes(app: FastifyInstance): void {
     });
   });
 
+  /**
+   * Does the sheet still say what the accepted proposal says?
+   *
+   * A Bill of Materials is allowed to differ from the proposal, and legitimately does:
+   * a hardware kit is replaced by its fasteners (lock.ts), a part declared as made of
+   * other parts is replaced by its components (bomBuild.ts), a variant collapses into
+   * the part it is purchased as (bomRollup.ts). Each of those is a rule, and each
+   * records what it did.
+   *
+   * What has no rule behind it is a line that simply is not what was sold. Nothing
+   * compared the two documents, so a wrong component list - one part number's children
+   * pointing at another part - reached a vendor as an ordinary-looking line, and the
+   * only way to catch it was for somebody to read both sheets side by side.
+   *
+   * This recomputes what the accepted items WOULD produce under today's rules and diffs
+   * it against the lines actually on the order. Read-only: it changes nothing and
+   * decides nothing, it reports.
+   */
+  app.get('/orders/:id/bom-reconciliation', read, async (req) => {
+    const { id } = req.params as { id: string };
+    const order = await prisma.acceptedOrder.findUnique({
+      where: { id },
+      select: {
+        proposalVersionId: true,
+        procurement: {
+          select: { sku: true, name: true, quantity: true, kitSku: true, freeIssue: true },
+        },
+      },
+    });
+    if (!order) throw new ValidationError('Order not found');
+
+    const version = await prisma.proposalVersion.findUnique({
+      where: { id: order.proposalVersionId },
+      select: { items: true },
+    });
+
+    const norm = (v: unknown): string =>
+      String(v ?? '')
+        .trim()
+        .toUpperCase();
+    const expected = await expandBomBuild(procurementFromItems(version?.items ?? []));
+
+    type Tally = { sku: string; name: string; quantity: number };
+    const sum = (
+      rows: Array<{ sku?: string | null; name?: string | null; quantity?: unknown }>,
+    ): Map<string, Tally> => {
+      const m = new Map<string, Tally>();
+      for (const r of rows) {
+        const k = norm(r.sku);
+        if (!k) continue;
+        const qty = Number(r.quantity ?? 0) || 0;
+        const prior = m.get(k);
+        if (prior) prior.quantity += qty;
+        else m.set(k, { sku: String(r.sku ?? ''), name: String(r.name ?? ''), quantity: qty });
+      }
+      return m;
+    };
+
+    const want = sum(expected);
+    const have = sum(order.procurement);
+
+    const missing: Tally[] = [];
+    const unexpected: Tally[] = [];
+    const quantity: Array<{ sku: string; name: string; proposal: number; sheet: number }> = [];
+
+    for (const [k, w] of want) {
+      const h = have.get(k);
+      if (!h) missing.push(w);
+      else if (h.quantity !== w.quantity) {
+        quantity.push({
+          sku: w.sku,
+          name: w.name || h.name,
+          proposal: w.quantity,
+          sheet: h.quantity,
+        });
+      }
+    }
+    for (const [k, h] of have) if (!want.has(k)) unexpected.push(h);
+
+    // Every replacement the rules made, parent to children, so a substituted part can
+    // be traced without reading the catalog. This is the sentence the vendor sheet was
+    // missing: A-2400 is here because P-2207 lists it as a component.
+    const substitutions = new Map<string, Array<{ sku: string; name: string; quantity: number }>>();
+    for (const p of order.procurement) {
+      if (!p.kitSku) continue;
+      const k = String(p.kitSku);
+      const list = substitutions.get(k) ?? [];
+      list.push({ sku: p.sku ?? '', name: p.name, quantity: p.quantity });
+      substitutions.set(k, list);
+    }
+
+    return {
+      clean: !missing.length && !unexpected.length && !quantity.length,
+      missing,
+      unexpected,
+      quantity,
+      substitutions: [...substitutions.entries()].map(([parent, children]) => ({
+        parent,
+        children,
+      })),
+    };
+  });
   app.patch('/orders/:id/bom', handoff, async (req) => {
     const { id } = req.params as { id: string };
     const parsed = BomHeader.safeParse(req.body);

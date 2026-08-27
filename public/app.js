@@ -2027,6 +2027,7 @@
     document.getElementById('catBody').innerHTML =
       '<div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">' +
         '<input id="itSearch" placeholder="Search part #, name, category or manufacturer…" value="' + esc(itemState.q) + '" style="flex:1;min-width:240px;max-width:420px;padding:10px 13px;border:1px solid #dcded7;border-radius:10px;font-size:14px;background:#fff;outline:none;">' +
+        '<button class="link-btn" id="itSkuOnly" title="Parts in the SKU master with no place in the product tree — purchasable, but not selectable in the builder" style="width:auto;padding:10px 15px;">SKU-only parts</button>' +
         (admin ? '<div style="margin-left:auto;display:flex;gap:8px;"><button class="link-btn" id="itImport" style="width:auto;padding:10px 15px;">Import Excel / CSV</button><button class="btn" id="itNew" style="width:auto;padding:10px 17px;">New product</button></div>' : '') +
       '</div>' +
       '<div style="font-size:12px;color:#8a8f85;margin-bottom:10px;">Every product on one line — name, category, manufacturer, cost, price and weight. Edit any cell and it saves as you leave the field. These prices and weights are what the Adventure Series engine and the proposal builder multiply against. <b>Override OK</b> lets a rep substitute that part number in the Adventure Series builder — leave it off and the part is fixed.</div>' +
@@ -2037,9 +2038,60 @@
       document.getElementById('itNew').addEventListener('click', function () { openSkuForm(user); });
       document.getElementById('itImport').addEventListener('click', function () { openSkuImport(user); });
     }
+    var so = document.getElementById('itSkuOnly');
+    if (so) so.addEventListener('click', openSkuOnlyReport);
     loadItems(user);
   }
 
+  /**
+   * Parts that live in the SKU master and nowhere in the product tree.
+   *
+   * The two lists are separate: a SKU row carries cost, weight and vendor, a product
+   * row carries a category and a place in the tree, and neither creates the other. A
+   * SKU-only part cannot be picked in the builder and can still reach a vendor sheet
+   * through a component list, a kit or a hand-added line — so this is the list of parts
+   * that can appear on a Bill of Materials without appearing on a proposal.
+   */
+  async function openSkuOnlyReport() {
+    var r = await authed('/catalog/sku-only');
+    if (!r.ok) { toast('Could not read the catalog.', true); return; }
+    var d = await r.json();
+    var rows = d.rows || [];
+    var money = function (m) { return m == null ? '—' : '$' + (Number(m) / 100).toFixed(2); };
+    var refs = function (x) {
+      var out = [];
+      if (x.componentOf.length) out.push('pulled in by ' + x.componentOf.map(esc).join(', '));
+      if (x.explodesInto.length) out.push('explodes into ' + x.explodesInto.map(esc).join(', '));
+      if (x.orderLines) out.push(x.orderLines + ' order line' + (x.orderLines === 1 ? '' : 's'));
+      return out.length ? out.join(' · ') : 'not used anywhere';
+    };
+    var body = !rows.length
+      ? '<div class="muted" style="font-size:13px;line-height:1.6;">Every part in the SKU master has a place in the product tree.</div>'
+      : '<div class="muted" style="font-size:12.5px;line-height:1.6;margin-bottom:12px;">' +
+        '<b>' + rows.length + ' part' + (rows.length === 1 ? '' : 's') + '</b> exist in the SKU master with no product-tree entry. ' +
+        'They cannot be chosen in the proposal builder, but they price, weigh and resolve a vendor normally when a component list, a kit or a hand-added line puts them on an order. ' +
+        'Anything used below that should be sellable needs a product record; anything genuinely purchasing-only is fine as it is.' +
+        '</div>' +
+        '<div style="max-height:420px;overflow:auto;border:1px solid #e7e8e3;border-radius:10px;">' +
+        '<table style="width:100%;border-collapse:collapse;font-size:12.5px;">' +
+        '<thead><tr>' +
+        ['Part #', 'Description', 'Vendor', 'Cost', 'Where it is used'].map(function (h) {
+          return '<th style="padding:8px 11px;text-align:left;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;font-weight:600;border-bottom:1px solid #e7e8e3;background:#fbfbf9;position:sticky;top:0;">' + h + '</th>';
+        }).join('') +
+        '</tr></thead><tbody>' +
+        rows.map(function (x) {
+          return '<tr>' +
+            '<td style="padding:7px 11px;border-bottom:1px solid #f0f1ec;"><code>' + esc(x.part) + '</code>' +
+              (x.active ? '' : ' <span class="muted" style="font-size:11px;">inactive</span>') + '</td>' +
+            '<td style="padding:7px 11px;border-bottom:1px solid #f0f1ec;">' + esc(x.description || '—') + '</td>' +
+            '<td style="padding:7px 11px;border-bottom:1px solid #f0f1ec;">' + esc(x.vendor || '—') + '</td>' +
+            '<td style="padding:7px 11px;border-bottom:1px solid #f0f1ec;">' + money(x.unitCostMinor) + '</td>' +
+            '<td style="padding:7px 11px;border-bottom:1px solid #f0f1ec;color:#5c6157;">' + refs(x) + '</td>' +
+          '</tr>';
+        }).join('') +
+        '</tbody></table></div>';
+    openModal('SKU-only parts', body, null, 'Done', { maxWidth: '860px' });
+  }
   /* --- column filters (shared by the catalog list and the product tree) --- */
   var FCELL = 'width:100%;padding:5px 7px;border:1px solid #e2e5dd;border-radius:6px;font-size:12px;background:#fff;color:#3d4a55;outline:none;';
   /** Numeric column filter: 250, >250, <=0, >=1.5 … */
@@ -11797,6 +11849,11 @@
    * here. Prices shown are OUR unit cost — this is a purchasing document. */
   var procData = [];
   var bomOrder = null;
+  /* What the accepted proposal would produce under today's rules, against what is
+   * actually on the sheet. A BOM is allowed to differ — kits and component lists
+   * replace parts deliberately — but a difference no rule accounts for is a wrong
+   * sheet, and until this existed nothing compared the two documents at all. */
+  var bomRecon = null;
 
   function bomFieldStyle(w) {
     return 'width:' + (w || '100%') + ';padding:7px 9px;border:1px solid #dcded7;border-radius:8px;font-size:13px;background:#fff;color:#20241f;outline:none;';
@@ -11957,6 +12014,33 @@
       ';color:' + (locked ? '#8a8f85' : '#20241f') + ';outline:none;';
   }
 
+  /** The sheet against the proposal: only what no rule explains. */
+  function bomReconHtml() {
+    var r = bomRecon;
+    if (!r || r.clean) return '';
+    var list = function (label, rows, fmt) {
+      if (!rows || !rows.length) return '';
+      return '<div style="margin-top:7px;"><b style="font-weight:600;">' + label + '</b>' +
+        '<ul style="margin:4px 0 0;padding-left:18px;">' +
+        rows.slice(0, 12).map(fmt).join('') +
+        (rows.length > 12 ? '<li>and ' + (rows.length - 12) + ' more</li>' : '') +
+        '</ul></div>';
+    };
+    var part = function (p) { return '<code>' + esc(p.sku || '—') + '</code>'; };
+    return '<div style="background:#fbecea;border:1px solid #f0ccc6;border-radius:11px;padding:12px 14px;font-size:12.5px;line-height:1.55;color:#7a2f22;margin-bottom:14px;">' +
+      '<b style="font-weight:700;">This Bill of Materials does not match the accepted proposal.</b>' +
+      '<div style="margin-top:4px;">Everything below is a difference no kit, component list or roll-up accounts for. Check it before the sheet goes to a vendor.</div>' +
+      list('On the proposal, missing from the sheet', r.missing, function (p) {
+        return '<li>' + part(p) + ' ' + esc(p.name || '') + ' \u00d7' + p.quantity + '</li>';
+      }) +
+      list('On the sheet, not on the proposal', r.unexpected, function (p) {
+        return '<li>' + part(p) + ' ' + esc(p.name || '') + ' \u00d7' + p.quantity + '</li>';
+      }) +
+      list('Quantities that disagree', r.quantity, function (p) {
+        return '<li>' + part(p) + ' ' + esc(p.name || '') + ' \u2014 proposal ' + p.proposal + ', sheet ' + p.sheet + '</li>';
+      }) +
+      '</div>';
+  }
   async function loadBomSections(order, user, canHandoff) {
     var box = document.getElementById('bomBox'); if (!box) return;
     bomOrder = order;
@@ -11969,6 +12053,8 @@
       var ra = await authed('/ship-to-addresses?orderId=' + encodeURIComponent(order.id) +
         (bomAllAddresses ? '&all=true' : ''));
       bomShipToAddresses = ra.ok ? ((await ra.json()) || []) : [];
+      var rr = await authed('/orders/' + order.id + '/bom-reconciliation');
+      bomRecon = rr.ok ? await rr.json() : null;
     } catch (e) { box.innerHTML = '<div class="err">Could not load the Bill of Materials.</div>'; return; }
 
     if (!procData.length) {
@@ -11987,6 +12073,7 @@
             '<button class="link-btn" id="bomCostRefresh" title="Compare every line against the catalog cost and pick which to bring up to date. Internal only — the customer’s proposal and invoice are untouched." style="width:auto;padding:8px 14px;white-space:nowrap;">Refresh costs from catalog</button>'
           : '') +
       '</div>' +
+      bomReconHtml() +
       bomSectionData.map(function (s, i) { return sectionCard(s, i, canHandoff); }).join('') +
       '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:6px;">' +
         '<button class="link-btn" data-proc="csv" data-vendor="*" style="width:auto;padding:8px 14px;">Export all vendors — Excel</button>' +
@@ -12061,6 +12148,13 @@
       var freeCell = '<span class="muted" title="Summit has already paid for this part. It prints on the vendor’s sheet with no cost and is left out of their total.">Free issue</span>';
       return '<tr>' +
         td('<b style="font-weight:600;">' + esc(p.name) + '</b>' + buy +
+          // A line that replaced a proposal part says so. Without this, a component
+          // list pointing at the wrong part number is indistinguishable from a part
+          // the customer actually bought.
+          (p.kitSku
+            ? '<div class="muted" style="font-size:11px;margin-top:3px;">from <code>' + esc(p.kitSku) +
+              '</code> on the proposal \u00b7 component list</div>'
+            : '') +
           (free
             ? '<div style="margin-top:3px;"><span class="chip" style="font-size:10px;background:#eef0ea;color:#5c6157;">Free issue</span>' +
               '<span class="muted" style="font-size:11px;margin-left:6px;">Paid by Summit' +
