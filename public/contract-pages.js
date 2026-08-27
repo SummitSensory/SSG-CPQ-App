@@ -169,7 +169,7 @@
         '<div style="font-weight:700;">' +
         (entity ? esc(entity) : '&nbsp;') +
         '</div>' +
-        line('By:', '', 26) +
+        line('By:', '', 46) +
         line('Name:', name) +
         line('Date:', '') +
         '</div>'
@@ -236,6 +236,9 @@
       'IN WITNESS WHEREOF, the Parties have executed this Release as of the dates written below.' +
       '</div>' +
       '<div style="display:flex;gap:44px;margin-top:12px;break-inside:avoid;page-break-inside:avoid;">' +
+      // 46px of clear height above the By: rule, not 26. A wet signature is written
+      // large and lands ON the rule rather than between the lines, so at 26px the entity
+      // name above it was being written through.
       sigBlock('Releasor', m.contactName || '', company) +
       sigBlock('Releasee', u.name || '', 'Summit Sensory Gym') +
       '</div>' +
