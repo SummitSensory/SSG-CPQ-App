@@ -238,6 +238,23 @@ export function registerCrossBorderRoutes(app: FastifyInstance): void {
   const manage = { preHandler: requirePermission(Permission.CROSSBORDER_MANAGE) };
   const propose = { preHandler: requirePermission(Permission.PROPOSAL_WRITE) };
 
+  /**
+   * BigInt-safe JSON.
+   *
+   * The tax engine counts money in bigint, deliberately — cents that must not go
+   * through a float. Fastify serializes with JSON.stringify, which throws on a bigint
+   * rather than coercing it, so the calculation has to be flattened on the way out.
+   * Minor units are integers well inside Number's safe range: a hundred million
+   * dollars is 10^10, and the limit is 9 x 10^15.
+   *
+   * Applied at the route rather than in the engine so the arithmetic upstream stays in
+   * bigint, which is the whole point of it being bigint.
+   */
+  function jsonSafe<T>(value: T): T {
+    return JSON.parse(
+      JSON.stringify(value, (_key, v) => (typeof v === 'bigint' ? Number(v) : v)),
+    ) as T;
+  }
   /* ── Per proposal ─────────────────────────────────────────────────────────── */
 
   /**
@@ -250,7 +267,7 @@ export function registerCrossBorderRoutes(app: FastifyInstance): void {
    */
   app.get('/proposals/versions/:versionId/cross-border', read, async (req) => {
     const { versionId } = req.params as { versionId: string };
-    return crossBorderStateFor(versionId);
+    return jsonSafe(await crossBorderStateFor(versionId));
   });
 
   /**
@@ -259,7 +276,7 @@ export function registerCrossBorderRoutes(app: FastifyInstance): void {
    */
   app.post('/proposals/versions/:versionId/cross-border/snapshot', enter, async (req) => {
     const { versionId } = req.params as { versionId: string };
-    return writeCrossBorderSnapshot(versionId, req.user!.sub);
+    return jsonSafe(await writeCrossBorderSnapshot(versionId, req.user!.sub));
   });
 
   /** The stored snapshot a document prints from, or null. */
