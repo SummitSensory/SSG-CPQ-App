@@ -35,6 +35,15 @@ import {
   webhookStatus,
   deleteWebhook,
 } from '../integrations/monday/webhookRegistration.js';
+import {
+  isPortalInviteConfigured,
+  manufacturingBoardId,
+  applyPortalInvite,
+  sweepPendingInvites,
+  portalInviteStatus,
+  forgetInviteLabels,
+  MFG_COL,
+} from '../integrations/monday/portalInvite.js';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 
@@ -56,6 +65,15 @@ export function registerIntegrationRoutes(app: FastifyInstance): void {
       portalDelivery: {
         configured: isPortalDeliveryConfigured(),
         boardId: deliveryBoardId(),
+      },
+      // And which board the invite half writes to. Same token again; the two
+      // columns are reported so a board rebuild is diagnosable from this screen
+      // rather than from the logs.
+      portalInvite: {
+        configured: isPortalInviteConfigured(),
+        boardId: manufacturingBoardId(),
+        triggerColumn: MFG_COL.trigger,
+        inviteColumn: MFG_COL.invite,
       },
       missing: [
         env.MONDAY_API_TOKEN ? null : 'MONDAY_API_TOKEN',
@@ -305,6 +323,58 @@ export function registerIntegrationRoutes(app: FastifyInstance): void {
     purgeAddresslessIncomplete(),
   );
 
+  // ----- Customer portal invite (Manufacturing Process board) -----
+  //
+  // monday can do trigger → invite natively. What it cannot do is tell you it did
+  // not. These three endpoints are the visible half: what the integration is
+  // pointed at, the last attempts, a manual fire, and a sweep that repairs rows a
+  // webhook never arrived for.
+
+  /** Configuration, whether the target label exists, and recent attempts. */
+  app.get('/integrations/monday/portal-invite', manage, async (req) => {
+    const { limit } = req.query as { limit?: string };
+    return portalInviteStatus(Number(limit) || 50);
+  });
+
+  /**
+   * Fire one row by monday item id — the manual version of the webhook.
+   *
+   * `?force=true` skips the trigger check, for a row whose trigger status has
+   * already moved on but whose invite never went out. It still will not rewrite a
+   * column that already carries the label.
+   */
+  app.post('/integrations/monday/portal-invite/apply/:itemId', manage, async (req, reply) => {
+    if (!isPortalInviteConfigured())
+      return reply.status(400).send({ error: 'PORTAL_INVITE_NOT_CONFIGURED' });
+    const { itemId } = req.params as { itemId: string };
+    const { force } = req.query as { force?: string };
+    const outcome = await applyPortalInvite(itemId, { force: force === 'true' });
+    if (outcome.result === 'notfound') return reply.status(404).send({ error: 'NOT_FOUND' });
+    return outcome;
+  });
+
+  /**
+   * Read the board and fix every row whose trigger says Send Invite but whose
+   * invite column does not. Safe to run on a schedule; the cron calls this.
+   */
+  app.post('/integrations/monday/portal-invite/sweep', manage, async (req, reply) => {
+    if (!isPortalInviteConfigured())
+      return reply.status(400).send({ error: 'PORTAL_INVITE_NOT_CONFIGURED' });
+    const { max, maxWrites } = req.query as { max?: string; maxWrites?: string };
+    try {
+      return await sweepPendingInvites(Number(max) || 500, Number(maxWrites) || 25);
+    } catch (err) {
+      logger.error({ err }, 'portal invite sweep failed');
+      return reply.status(502).send({ error: 'MONDAY_QUERY_FAILED', detail: String(err) });
+    }
+  });
+
+  /** Drop the cached column labels, after somebody edits them in monday. */
+  app.post('/integrations/monday/portal-invite/refresh-labels', manage, async () => {
+    forgetInviteLabels();
+    return await portalInviteStatus(1);
+  });
+
   // ----- Webhook subscriptions (registering ourselves with monday) -----
   //
   // These were the missing half of the delivery integration: portalDelivery.ts knew
@@ -369,10 +439,11 @@ export function registerIntegrationRoutes(app: FastifyInstance): void {
     /**
      * 3) Route on the board.
      *
-     * One endpoint, two boards. The deals board drives opportunity stage; the
+     * One endpoint, three boards. The deals board drives opportunity stage; the
      * portal's Delivery & Site Details Submissions board drives delivery
-     * addresses. They are different subscriptions in monday pointing at the same
-     * URL, which is why the board id — not the column — decides what happens.
+     * addresses; the Manufacturing Process board drives the customer portal
+     * invite. They are separate subscriptions in monday pointing at the same URL,
+     * which is why the board id — not the column — decides what happens.
      *
      * Every event for a submissions row is processed, not just the create: the
      * portal creates the row first and writes its ~30 columns afterwards, one
@@ -384,6 +455,25 @@ export function registerIntegrationRoutes(app: FastifyInstance): void {
       const result = await ingestDeliverySubmission(itemId);
       logger.info({ itemId, result }, 'portal delivery webhook processed');
       return reply.send({ ok: true, result });
+    }
+
+    /**
+     * The Manufacturing Process board: the customer portal invite.
+     *
+     * Returns 200 whatever happens. monday retries a failed delivery, and a retry
+     * here would re-read a row that is already correct — the outcome is in the body
+     * and in IntegrationSyncLog, and the nightly sweep is the real backstop. An
+     * event naming a column that is not the trigger costs no monday call at all.
+     */
+    if (boardId && isPortalInviteConfigured() && boardId === manufacturingBoardId()) {
+      if (!itemId) return reply.send({ ok: true, result: 'ignored' });
+      const outcome = await applyPortalInvite(itemId, {
+        columnId: (ev as { columnId?: string }).columnId,
+        eventId: (ev as { triggerUuid?: string }).triggerUuid,
+      });
+      if (outcome.result !== 'ignored' && outcome.result !== 'not-triggered')
+        logger.info({ itemId, outcome }, 'portal invite webhook processed');
+      return reply.send({ ok: true, result: outcome.result, detail: outcome.detail });
     }
 
     const result = await applyInboundChange({

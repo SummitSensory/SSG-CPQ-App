@@ -4,6 +4,7 @@ import { prisma } from '../../lib/prisma.js';
 import { env } from '../../config/env.js';
 import { logger } from '../../lib/logger.js';
 import { deliveryBoardId } from './portalDelivery.js';
+import { isPortalInviteConfigured, manufacturingBoardId } from './portalInvite.js';
 
 /**
  * Registering the CRM's own monday webhooks, from the CRM.
@@ -107,7 +108,7 @@ function claimKey(url: string, spec: Pick<WebhookSpec, 'boardId' | 'event'>): st
  */
 export function desiredWebhooks(): WebhookSpec[] {
   const delivery = deliveryBoardId();
-  return [
+  const specs: WebhookSpec[] = [
     {
       boardId: delivery,
       event: 'create_item',
@@ -119,6 +120,37 @@ export function desiredWebhooks(): WebhookSpec[] {
       purpose: "The portal is writing that submission's columns — read the address.",
     },
   ];
+
+  /**
+   * The Manufacturing Process board, for the customer portal invite. Same two
+   * events and the same reasoning: a row is created and its status is set
+   * afterwards, so `create_item` alone would never see "Send Invite".
+   *
+   * `change_column_value` rather than `change_status_column_value` on purpose. The
+   * narrower event exists, but the handler already ignores an event naming any
+   * column but the trigger without calling monday, and one subscription that covers
+   * both boards' needs is one less thing to get wrong on a board rebuild.
+   *
+   * Omitted entirely when the invite is not configured — a subscription with no
+   * handler behind it is traffic nobody reads.
+   */
+  if (isPortalInviteConfigured()) {
+    const mfg = manufacturingBoardId();
+    specs.push(
+      {
+        boardId: mfg,
+        event: 'create_item',
+        purpose: 'A new manufacturing row — it may already say Send Invite.',
+      },
+      {
+        boardId: mfg,
+        event: 'change_column_value',
+        purpose: 'The invite trigger status changed — set the portal invite column.',
+      },
+    );
+  }
+
+  return specs;
 }
 
 export async function listWebhooks(boardId: string): Promise<MondayWebhook[]> {

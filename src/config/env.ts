@@ -24,6 +24,22 @@ const EnvSchema = z
     // unset it defaults to the live board (18421779422) in portalDelivery.ts, so
     // this only needs setting if that board is ever rebuilt.
     MONDAY_DELIVERY_BOARD_ID: z.string().min(1).optional(),
+    // ---- Customer portal invite (Manufacturing Process board) ----
+    // A staff member sets the trigger status to "Send Invite"; the portal's send is
+    // driven off the invite status. The CRM closes the gap between the two, logs
+    // every attempt, and repairs a missed one on the nightly sweep. All five are
+    // optional: unset, the live board and column ids in portalInvite.ts are used.
+    MONDAY_MANUFACTURING_BOARD_ID: z.string().min(1).optional(),
+    // What a person sets (default color_mm547f1s) and what the portal watches
+    // (default color_mm5427cr). They must not be the same column — that is a loop,
+    // and isPortalInviteConfigured() refuses it rather than firing one.
+    MONDAY_MFG_TRIGGER_COLUMN: z.string().min(1).optional(),
+    MONDAY_MFG_INVITE_COLUMN: z.string().min(1).optional(),
+    // The label that means "go", and the label written when it does. Both default
+    // to "Send Invite". The written label must already exist on the invite column;
+    // the integration reports it in words rather than inventing a second one.
+    MONDAY_INVITE_TRIGGER_LABEL: z.string().min(1).optional(),
+    MONDAY_INVITE_LABEL: z.string().min(1).optional(),
 
     // ---- Customer portal ----
     // Where the portal is served, used to build the customer's colour-selection

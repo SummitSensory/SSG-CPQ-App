@@ -2,6 +2,10 @@ import type { FastifyInstance } from 'fastify';
 import { env } from '../config/env.js';
 import { logger } from '../lib/logger.js';
 import { retryPendingSubmissions } from '../integrations/monday/portalDelivery.js';
+import {
+  isPortalInviteConfigured,
+  sweepPendingInvites,
+} from '../integrations/monday/portalInvite.js';
 import { verifySchemaOnBoot } from '../lib/schemaCheck.js';
 import { syncWebhooks } from '../integrations/monday/webhookRegistration.js';
 
@@ -63,6 +67,20 @@ export function registerCronRoutes(app: FastifyInstance): void {
     } catch (err) {
       logger.error({ err }, 'cron: webhook sync failed');
       out.webhooks = { error: String(err) };
+    }
+
+    // 3. Any manufacturing row that says Send Invite but whose invite column does
+    //    not. This is the backstop for a webhook that never arrived and for a
+    //    monday automation suppressed as automation-triggered — both fail by doing
+    //    nothing, so the only way to catch them is to look. One board read on a
+    //    quiet day, no writes.
+    if (isPortalInviteConfigured()) {
+      try {
+        out.portalInvites = await sweepPendingInvites();
+      } catch (err) {
+        logger.error({ err }, 'cron: portal invite sweep failed');
+        out.portalInvites = { error: String(err) };
+      }
     }
 
     out.ms = Date.now() - started;
