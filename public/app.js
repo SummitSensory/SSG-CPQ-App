@@ -10263,6 +10263,7 @@
       // Sheets produced by the paginator below.
       '.ssg-sheet{width:8.5in;height:11in;margin:0;overflow:hidden;box-sizing:border-box;' +
         'break-inside:avoid;page-break-inside:avoid;break-after:page;page-break-after:always;}' +
+      '.ssg-sheet:last-child,.ssg-fm-page:last-child{break-after:auto;page-break-after:auto;}' +
       'tr{break-inside:avoid;}thead{display:table-header-group;}' +
       'tbody[data-group]{break-inside:avoid;page-break-inside:avoid;}' +
       '.ssg-fm-page{width:8.5in;height:11in;min-height:0;margin:0;overflow:hidden;' +
@@ -10275,6 +10276,11 @@
       '<script>' + paginateProposalArea.toString() +
         ';(function(){' +
           'function go(){try{paginateProposalArea(document.body);}catch(e){}' +
+            // A forced break after the LAST sheet opens a page with nothing on it. The
+            // rule above catches it as :last-child; this catches it by document order,
+            // which is the version that cannot be defeated by a wrapper element.
+            'try{var ss=document.querySelectorAll(".ssg-sheet,.ssg-fm-page");' +
+              'if(ss.length){var lp=ss[ss.length-1];lp.style.breakAfter="auto";lp.style.pageBreakAfter="auto";}}catch(e){}' +
             'document.documentElement.setAttribute("data-paginated","1");}' +
           // Measure with the real faces, never with the fallback: a sheet packed
           // against fallback metrics breaks in a different place.
@@ -10429,6 +10435,8 @@
       '#propPreviewOverlay .ssg-fm-page{width:8.5in!important;height:11in!important;min-height:0!important;' +
         'margin:0!important;overflow:hidden!important;break-inside:avoid!important;page-break-inside:avoid!important;' +
         'break-after:page!important;page-break-after:always!important;}' +
+      '#psOverlay .ssg-sheet:last-child,#propPreviewOverlay .ssg-sheet:last-child,' +
+        '#propPreviewOverlay .ssg-fm-page:last-child{break-after:auto!important;page-break-after:auto!important;}' +
       '#propPreviewOverlay .ssg-front-matter{background:#fff;}}';
     document.head.appendChild(st);
   }
