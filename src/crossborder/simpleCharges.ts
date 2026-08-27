@@ -122,7 +122,7 @@ export function buildSimpleChargeLines(input: SimpleInput): PipelineResult {
     c.tariffPercentMilli == null ? null : applyMilli(tariffBasis, c.tariffPercentMilli);
   if (tariffMinor != null) {
     lines.push(
-      line('TARIFF_SURTAX', 'Estimated tariff', tariffMinor, {
+      line('TARIFF_SURTAX', 'Estimated Tariff', tariffMinor, {
         ...border,
         taxableBasisUsdMinor: tariffBasis,
         percent: milliToPercent(c.tariffPercentMilli),
@@ -137,7 +137,7 @@ export function buildSimpleChargeLines(input: SimpleInput): PipelineResult {
   // A quoted amount, never a rate: the broker quotes a fee, and inventing a percentage
   // for it would put a number on the document that nobody quoted.
   if (c.brokerFeeMinor != null) {
-    lines.push(line('BROKERAGE', 'Customs brokerage', c.brokerFeeMinor, border));
+    lines.push(line('BROKERAGE', 'Customs Brokerage', c.brokerFeeMinor, border));
   }
 
   // ---- tax ----

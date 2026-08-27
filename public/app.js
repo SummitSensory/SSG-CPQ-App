@@ -9524,7 +9524,7 @@
       ? 'Estimated Canadian-dollar amounts are shown for reference only, calculated using the Bank of Canada daily average USD/CAD exchange rate published for ' +
         esc(fx.observationDate || 'the proposal date') + ', at a rate of <b>1 USD = ' + esc(fx.rate) + ' CAD</b>.'
       : 'Canadian-dollar reference amounts are not shown on this proposal.';
-    return '<div style="margin:0 0 14px;padding:8px 10px;background:#f6f7f4;border:1px solid #e7e8e3;border-radius:6px;font-size:10.5px;line-height:1.6;color:#5c6157;break-inside:avoid;">' +
+    return '<div style="margin:0 0 14px;padding:8px 10px;background:#fbfaf6;border:1px solid #203060;border-radius:6px;font-size:10.5px;line-height:1.6;color:#000;break-inside:avoid;">' +
       'All prices are in <b>United States dollars (USD)</b>. ' + body + '</div>';
   }
 
@@ -9597,7 +9597,7 @@
     var ior = (res && res.lines || []).some(function (l) { return l.payableTo === 'CUSTOMS_OR_BROKER'; });
 
     var para = function (title, text) {
-      return '<div style="margin-bottom:9px;"><b>' + esc(title) + '</b> ' + text + '</div>';
+      return '<div style="margin-bottom:6px;"><b>' + esc(title) + '</b> ' + text + '</div>';
     };
 
     var out = [
@@ -9643,8 +9643,8 @@
     out.push(para('Customer Tax Rebates.',
       'The customer may be eligible to apply for a tax rebate or recovery based on its own legal or organizational status. Any such rebate is the customer\u2019s responsibility and does not reduce the tax charged by Summit Sensory Gym unless a valid point-of-sale exemption applies and the required documentation has been received and approved.'));
 
-    return '<div style="margin-top:26px;padding-top:12px;border-top:1px solid #d5d8d2;font-size:9.5px;line-height:1.6;color:#5c6157;">' +
-      '<div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#3d4a55;margin-bottom:8px;">Cross-border terms</div>' +
+    return '<div style="margin-top:14px;padding-top:8px;border-top:1px solid #d5d8d2;font-size:9.5px;line-height:1.6;color:#5c6157;">' +
+      '<div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#3d4a55;margin-bottom:5px;">Cross-border terms</div>' +
       out.join('') + '</div>';
   }
 
@@ -10117,10 +10117,10 @@
     // Notes that print beneath the signature lines (terms, acceptance language).
     var footerNotes = (m.footerNotes || []).filter(function (fn) { return fn && (fn.title || fn.body); });
     var footerNotesHtml = footerNotes.length
-      ? '<div style="margin-top:26px;break-inside:avoid;">' +
+      ? '<div style="margin-top:14px;break-inside:avoid;">' +
         footerNotes.map(function (fn) {
-          return '<div style="margin-bottom:14px;font-size:11.5px;line-height:1.7;color:#20241f;text-wrap:pretty;">' +
-            (fn.title ? '<div style="font-family:\'Newsreader\',Georgia,serif;font-size:15px;font-weight:700;color:#203060;letter-spacing:-.015em;margin-bottom:6px;">' + esc(fn.title) + '</div>' : '') + rt(fn.body) + '</div>';
+          return '<div style="margin-bottom:8px;font-size:11.5px;line-height:1.7;color:#20241f;text-wrap:pretty;">' +
+            (fn.title ? '<div style="font-family:\'Newsreader\',Georgia,serif;font-size:15px;font-weight:700;color:#203060;letter-spacing:-.015em;margin-bottom:4px;">' + esc(fn.title) + '</div>' : '') + rt(fn.body) + '</div>';
         }).join('') + '</div>'
       : '';
     var docIdent = [esc(d.number || ''), (Number(d.version) || 1) > 1 ? 'Revision ' + (Number(d.version) - 1) : ''].filter(Boolean).join(' · ');
@@ -10228,7 +10228,7 @@
           '</div>' +
         '<div style="margin-top:26px;break-inside:avoid;">' +
           '<div style="font-family:\'Newsreader\',serif;font-size:15px;font-weight:700;color:#203060;letter-spacing:-.015em;">Acceptance</div>' +
-          '<div style="font-size:11.5px;color:#5b6478;line-height:1.6;margin-top:5px;max-width:620px;">Sign below to accept this proposal at a total of ' + cbInline(docTotal) +
+          '<div style="font-size:11.5px;color:#5b6478;line-height:1.6;margin-top:5px;font-weight:700;">Sign below to accept this proposal at a total of ' + cbInline(docTotal) +
             (m.showDeposit !== false ? ', with a deposit of ' + money(docDeposit) + ' due to initiate production' : '') + '.</div>' +
           '<div style="display:flex;gap:26px;margin-top:24px;">' +
             '<div style="flex:1.35;"><div style="border-bottom:1px solid #20241f;height:40px;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Authorized Signer\'s Name</div></div>' +
