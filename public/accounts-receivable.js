@@ -45,6 +45,9 @@
   var installed = false;
   var tab = 'ledger';
   var showPaid = false;
+  /* Which customer the ledger is narrowed to, by organization id. A name would look
+   * the same on screen and break the moment two customers share one. */
+  var custFilter = '';
   var data = null;
   var templates = null;
   var busy = false;
@@ -483,8 +486,50 @@
       host.innerHTML = '<div style="padding:18px;color:' + RED + ';">' + esc(data.error) + '</div>';
       return;
     }
-    var rows = sortRows((data && data.rows) || []);
+    var allRows = (data && data.rows) || [];
+
+    /* One entry per customer that actually has an invoice in view, so the picker can
+     * never offer a name that would empty the table. */
+    var custMap = {};
+    allRows.forEach(function (r) {
+      var o = r.organization;
+      if (!o || !o.id) return;
+      if (!custMap[o.id]) custMap[o.id] = { id: o.id, name: o.name || '—', count: 0 };
+      custMap[o.id].count++;
+    });
+    var custList = Object.keys(custMap)
+      .map(function (k) {
+        return custMap[k];
+      })
+      .sort(function (a, b) {
+        return String(a.name).localeCompare(String(b.name));
+      });
+    // A filter whose customer has dropped out of the current view (Include paid turned
+    // off, an invoice closed) is cleared rather than left showing an empty table.
+    if (custFilter && !custMap[custFilter]) custFilter = '';
+
+    var rows = sortRows(
+      custFilter
+        ? allRows.filter(function (r) {
+            return r.organization && r.organization.id === custFilter;
+          })
+        : allRows,
+    );
+
+    /* The server's totals cover the whole ledger. Under a filter they would describe
+     * invoices the table is not showing, so the four cards are recomputed from the rows
+     * in view — the numbers always add up to what is on screen. */
     var t = (data && data.totals) || {};
+    if (custFilter) {
+      var sum = { invoicedMinor: 0, paidMinor: 0, outstandingMinor: 0, pastDueMinor: 0 };
+      rows.forEach(function (r) {
+        sum.invoicedMinor += Number(r.initialTotalMinor || 0);
+        sum.paidMinor += Number(r.paidMinor || 0);
+        sum.outstandingMinor += Number(r.balanceMinor || 0);
+        if (Number(r.daysPastDue || 0) > 0) sum.pastDueMinor += Number(r.balanceMinor || 0);
+      });
+      t = sum;
+    }
     var writable = can(WRITE_ROLES);
 
     var body = rows.length
@@ -509,9 +554,19 @@
             return (
               '<tr>' +
               td(
-                '<b style="font-weight:600;">' +
-                  esc((r.organization && r.organization.name) || '—') +
-                  '</b>' +
+                (r.organization && r.organization.id
+                  ? '<button type="button" data-ar="filterCust" data-cust="' +
+                    esc(r.organization.id) +
+                    '" style="all:unset;cursor:pointer;font-weight:600;color:' +
+                    INK +
+                    ';text-decoration:underline;text-decoration-color:' +
+                    LINE +
+                    ';text-underline-offset:3px;">' +
+                    esc(r.organization.name || '—') +
+                    '</button>'
+                  : '<b style="font-weight:600;">' +
+                    esc((r.organization && r.organization.name) || '—') +
+                    '</b>') +
                   '<div style="font-size:11.5px;color:' +
                   MUTE +
                   ';margin-top:2px;">' +
@@ -606,7 +661,30 @@
         ? ' <b style="color:' + SOFT + ';">' + esc(titleCase(data.environment)) + '</b>'
         : '') +
       '</div>' +
-      '<div style="display:flex;gap:8px;align-items:center;">' +
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
+      '<select id="arCustomer" style="' +
+      FIELD +
+      'width:auto;min-width:190px;max-width:280px;font-size:12.5px;padding:7px 9px;">' +
+      '<option value="">All customers (' +
+      allRows.length +
+      ')</option>' +
+      custList
+        .map(function (c) {
+          return (
+            '<option value="' +
+            esc(c.id) +
+            '"' +
+            (custFilter === c.id ? ' selected' : '') +
+            '>' +
+            esc(c.name) +
+            ' (' +
+            c.count +
+            ')</option>'
+          );
+        })
+        .join('') +
+      '</select>' +
+      (custFilter ? btn('Clear', 'data-ar="clearCust"') : '') +
       '<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:' +
       SOFT +
       ';cursor:pointer;">' +
@@ -1400,38 +1478,137 @@
       );
     }
 
+    /* An email and the letter it goes out with are one thing to a sender and two
+     * records to the database. Two flat lists made the reader match them up by name,
+     * which is exactly the work the pairing already knows how to do — so the screen is
+     * grouped by pair, and anything unpaired says so rather than sitting silently in
+     * the wrong half of the page. */
+    function codeOf(t) {
+      var m = /^\s*([A-Za-z]{2,6}-\d+)/.exec((t && t.name) || '');
+      return m ? m[1].toUpperCase() : '';
+    }
+
+    function topicOf(t) {
+      return String((t && t.name) || '').replace(/^\s*[A-Za-z]{2,6}-\d+\s*[—:–-]?\s*/, '');
+    }
+
+    var lettersByKey = {};
+    letters.forEach(function (l) {
+      lettersByKey[l.key] = l;
+    });
+
+    var claimed = {};
+    var groups = emails.map(function (e) {
+      var l = e.pairedLetterKey ? lettersByKey[e.pairedLetterKey] : null;
+      if (l) claimed[l.key] = true;
+      return { email: e, letter: l };
+    });
+    letters.forEach(function (l) {
+      if (!claimed[l.key]) groups.push({ email: null, letter: l });
+    });
+
+    function slot(kind, note, inner) {
+      return (
+        '<div>' +
+        '<div style="font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:' +
+        MUTE +
+        ';margin-bottom:7px;display:flex;gap:8px;align-items:baseline;">' +
+        kind +
+        '<span style="letter-spacing:0;text-transform:none;font-size:11.5px;">' +
+        note +
+        '</span></div>' +
+        inner +
+        '</div>'
+      );
+    }
+
+    function emptySlot(text) {
+      return (
+        '<div style="border:1px dashed ' +
+        LINE +
+        ';border-radius:11px;padding:16px;font-size:12.5px;color:' +
+        SOFT +
+        ';line-height:1.55;background:#fff;">' +
+        text +
+        '</div>'
+      );
+    }
+
+    function groupHtml(g) {
+      var lead = g.email || g.letter;
+      var code = codeOf(lead) || codeOf(g.letter);
+      var topic = topicOf(g.email) || topicOf(g.letter) || (lead && lead.name) || '';
+      var status = g.email && g.letter ? 'Email + letter' : g.email ? 'Email only' : 'Letter only';
+      return (
+        '<section style="border:1px solid ' +
+        LINE +
+        ';border-radius:14px;padding:16px 16px 18px;background:' +
+        '#f7f7f5' +
+        ';">' +
+        '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:13px;">' +
+        '<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;">' +
+        (code
+          ? '<span style="font-size:12px;font-weight:700;letter-spacing:.04em;color:' +
+            ACCENT +
+            ';">' +
+            esc(code) +
+            '</span>'
+          : '') +
+        '<span style="font-size:14.5px;font-weight:600;color:' +
+        INK +
+        ';">' +
+        esc(topic) +
+        '</span></div>' +
+        '<span style="font-size:11.5px;color:' +
+        MUTE +
+        ';">' +
+        status +
+        '</span>' +
+        '</div>' +
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:12px;align-items:start;">' +
+        slot(
+          'Email',
+          'what the customer reads',
+          g.email
+            ? card(g.email)
+            : emptySlot(
+                'No email points to this letter yet. Open an email above, choose this letter under <b>Letter attached</b>, and the two travel together.',
+              ),
+        ) +
+        slot(
+          'Letter',
+          'attached as a PDF',
+          g.letter
+            ? card(g.letter)
+            : emptySlot('This email sends on its own. Edit it to attach a letter.'),
+        ) +
+        '</div></section>'
+      );
+    }
     host.innerHTML =
       '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px;">' +
       '<div style="font-size:12.5px;color:' +
       SOFT +
       ';max-width:680px;line-height:1.55;">' +
-      'The email body and the letters that can be attached to it. Previews below use sample figures. ' +
-      'Merge fields are written <b>{{like_this}}</b>; <b>{{FIGURES}}</b> drops in the invoice figures table.' +
+      'Each pair below is one email and the letter attached to it. Previews use sample figures; merge fields are ' +
+      'written <b>{{like_this}}</b>, and <b>{{FIGURES}}</b> drops in the invoice figures table.<br>' +
+      '<b>To send one:</b> go back to receivables, find the invoice, and press <b>Request payment</b>. Pick the email ' +
+      'there and its letter attaches itself as a PDF.' +
       '</div>' +
       '<div style="display:flex;gap:8px;">' +
       btn('Back to receivables', 'data-ar="tab-ledger"') +
       btn('New letter', 'data-ar="tplNew" data-kind="LETTER"', 'primary') +
       btn('New email', 'data-ar="tplNew" data-kind="EMAIL"') +
       '</div></div>' +
-      '<div style="font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:' +
-      MUTE +
-      ';margin:18px 0 9px;">Email body</div>' +
-      '<div style="display:grid;gap:12px;">' +
-      (emails.map(card).join('') ||
-        '<div style="font-size:12.5px;color:' + MUTE + ';">None.</div>') +
-      '</div>' +
-      '<div style="font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:' +
-      MUTE +
-      ';margin:24px 0 9px;">Letters on letterhead</div>' +
-      '<div style="display:grid;gap:12px;">' +
-      (letters.map(card).join('') ||
-        '<div style="border:1px dashed ' +
+      '<div style="display:grid;gap:14px;margin-top:18px;">' +
+      (groups.length
+        ? groups.map(groupHtml).join('')
+        : '<div style="border:1px dashed ' +
           LINE +
           ';border-radius:11px;padding:18px;font-size:12.5px;color:' +
           SOFT +
           ';line-height:1.6;">' +
-          'No letters yet. Paste each one in with <b>New letter</b> — the wording is Summit’s own, so nothing is supplied here. ' +
-          'Each letter prints on the Summit letterhead with the customer’s address block, the heading you give it, and your name and contact details underneath.' +
+          'Nothing here yet. Paste each letter in with <b>New letter</b>, then add the email it travels with using <b>New email</b> and pair the two.' +
           '</div>') +
       '</div>' +
       '<div style="margin-top:26px;border-top:1px solid ' +
@@ -1654,6 +1831,16 @@
       paint();
       return;
     }
+    if (action === 'filterCust') {
+      custFilter = el.getAttribute('data-cust') || '';
+      paint();
+      return;
+    }
+    if (action === 'clearCust') {
+      custFilter = '';
+      paint();
+      return;
+    }
     if (action === 'compose') {
       openComposer(id);
       return;
@@ -1779,6 +1966,11 @@
   });
 
   document.addEventListener('change', function (e) {
+    if (e.target && e.target.id === 'arCustomer') {
+      custFilter = e.target.value || '';
+      paint();
+      return;
+    }
     if (e.target && e.target.id === 'arShowPaid') {
       showPaid = e.target.checked;
       loadLedger().then(paint);
