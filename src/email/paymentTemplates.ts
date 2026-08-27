@@ -339,10 +339,161 @@ export const PAY02_EMAIL_TEMPLATE: BuiltInTemplate = {
   ].join('\n'),
 };
 
+/**
+ * PAY-03 — the purchase-order submission.
+ *
+ * The reader here is usually Accounts Payable rather than the person who signed, so
+ * the PO number leads and the two figures they will key in are in the body. The
+ * enclosure — a copy of the PO — is what stops the invoice bouncing back for
+ * reconciliation.
+ */
+export const PAY03_EMAIL_TEMPLATE: BuiltInTemplate = {
+  key: 'pay-03-purchase-order',
+  kind: 'EMAIL' as TemplateKind,
+  name: 'PAY-03 — Purchase Order Payment Request',
+  stage: 3,
+  whenToUse:
+    'The customer buys on a purchase order and the invoice needs to be submitted against it for payment.',
+  pairedLetterKey: 'purchase-order-payment-request',
+  subject: 'Payment Request – PO {{po_number}} / Invoice {{invoice_number}}',
+  bodyHtml: [
+    '<p>Dear {{customer_first_name}},</p>',
+    '<p>We are submitting Invoice {{invoice_number}}, associated with Purchase Order {{po_number}}, for payment.</p>',
+    '<p>Balance Due: <b>{{balance_due}}</b><br>Invoice &amp; Payment Link: {{invoice_link}}</p>',
+    '<p>For your convenience, we have attached the formal payment request along with a copy of Purchase Order {{po_number}} to assist with reconciliation and processing.</p>',
+    '<p>If your Accounts Payable team requires additional documentation or has questions regarding the invoice, please contact our Customer Service team at {{customer_service_email}} or {{customer_service_phone}}.</p>',
+    '<p>If payment has already been issued, please send the applicable remittance information so we can properly apply it to the account.</p>',
+    '<p>Thank you,</p>',
+    '<p>{{sender_name}}</p>',
+  ].join('\n'),
+};
+
+/**
+ * PAY-04 — the first follow-up after a due date has passed.
+ *
+ * Written on the assumption that nothing is wrong except a queue. Naming the cause
+ * — approval or AP processing — gives the reader a reply they can send without
+ * having to admit anything, which is what actually moves an invoice.
+ */
+export const PAY04_EMAIL_TEMPLATE: BuiltInTemplate = {
+  key: 'pay-04-friendly-reminder',
+  kind: 'EMAIL' as TemplateKind,
+  name: 'PAY-04 — Outstanding Balance: Friendly Reminder',
+  stage: 4,
+  whenToUse: 'A balance has passed its due date and no payment or reply has come back yet.',
+  pairedLetterKey: 'outstanding-balance-friendly-reminder',
+  subject: 'Friendly Payment Reminder – Invoice {{invoice_number}} – {{balance_due}} Due',
+  bodyHtml: [
+    '<p>Dear {{customer_first_name}},</p>',
+    '<p>I wanted to follow up regarding the outstanding balance of <b>{{balance_due}}</b> associated with Invoice {{invoice_number}}.</p>',
+    '<p>Invoice &amp; Payment Link: {{invoice_link}}</p>',
+    '<p>We understand that invoices can occasionally become delayed during internal approval or Accounts Payable processing. If there is anything your team needs from us to process the invoice, please contact our Customer Service team at {{customer_service_email}} or {{customer_service_phone}}.</p>',
+    '<p>The formal payment reminder is attached for your records.</p>',
+    '<p>If payment has already been submitted, please send the applicable remittance information so we can update the account.</p>',
+    '<p>Thank you,</p>',
+    '<p>{{sender_name}}</p>',
+  ].join('\n'),
+};
+
+/**
+ * PAY-05 — the second request.
+ *
+ * The change from PAY-04 is one sentence: no payment AND no date. That is the fact
+ * that justifies asking again, and it is stated rather than implied.
+ */
+export const PAY05_EMAIL_TEMPLATE: BuiltInTemplate = {
+  key: 'pay-05-second-request',
+  kind: 'EMAIL' as TemplateKind,
+  name: 'PAY-05 — Outstanding Balance: Second Payment Request',
+  stage: 5,
+  whenToUse: 'A reminder has gone out and no payment or payment date has been confirmed.',
+  pairedLetterKey: 'outstanding-balance-second-request',
+  subject: 'Second Payment Request – Invoice {{invoice_number}} – {{balance_due}} Outstanding',
+  bodyHtml: [
+    '<p>Dear {{customer_first_name}},</p>',
+    '<p>I am following up again regarding the <b>{{balance_due}}</b> outstanding balance associated with Invoice {{invoice_number}}.</p>',
+    '<p>As of today, we have not yet received payment or confirmation regarding when payment will be issued.</p>',
+    '<p>Invoice &amp; Payment Link: {{invoice_link}}</p>',
+    '<p>Please have your Accounts Payable team review the invoice and arrange for payment.</p>',
+    '<p>If there is a documentation issue, invoice discrepancy, purchase order issue, or another requirement preventing payment, please contact our Customer Service team at {{customer_service_email}} or {{customer_service_phone}} so we can address it promptly.</p>',
+    '<p>The formal second payment request is attached for your records.</p>',
+    '<p>If payment has already been submitted, please send the applicable remittance information so we can update your account.</p>',
+    '<p>Thank you,</p>',
+    '<p>{{sender_name}}</p>',
+  ].join('\n'),
+};
+
+/**
+ * PAY-06 — formal notice.
+ *
+ * The first message in the sequence that states remedies. It states them as the
+ * accepted terms provide them and nothing further: a threat the contract does not
+ * support is worse than no threat, and the letter is the document that gets quoted.
+ */
+export const PAY06_EMAIL_TEMPLATE: BuiltInTemplate = {
+  key: 'pay-06-past-due-notice',
+  kind: 'EMAIL' as TemplateKind,
+  name: 'PAY-06 — Formal Past-Due Notice',
+  stage: 6,
+  whenToUse: 'Previous requests have gone unanswered and the balance needs formal notice.',
+  pairedLetterKey: 'formal-past-due-notice',
+  subject: 'Formal Past-Due Notice – Payment Required for Invoice {{invoice_number}}',
+  bodyHtml: [
+    '<p>Dear {{customer_first_name}},</p>',
+    '<p>This email is a formal follow-up regarding Invoice {{invoice_number}}, which currently has an outstanding balance of <b>{{balance_due}}</b> and is {{days_past_due}} days past due.</p>',
+    '<p>Payment is requested no later than {{payment_deadline}}.</p>',
+    '<p>Invoice &amp; Payment Link: {{invoice_link}}</p>',
+    '<p>The accepted proposal for this order provides that past-due payments may be subject to applicable late charges, collection costs, and other remedies provided under the agreement. Summit Sensory Gym also reserves the right to suspend remaining performance while required payments remain past due.</p>',
+    '<p>If there is an issue preventing payment or you dispute a portion of the invoice, please contact our Customer Service team immediately at {{customer_service_email}} or {{customer_service_phone}}. Any undisputed portion of the invoice remains due in accordance with the accepted payment terms.</p>',
+    '<p>The formal past-due notice is attached for your records.</p>',
+    '<p>If payment has already been issued, please send the applicable remittance information immediately so we can update the account.</p>',
+    '<p>Thank you for your prompt attention to this matter.</p>',
+    '<p>{{sender_name}}</p>',
+  ].join('\n'),
+};
+
+/**
+ * PAY-07 — final notice.
+ *
+ * The last message before escalation, and the one that has to be exact. It asks for
+ * a date in writing if payment cannot be made, because a documented reason is what
+ * a dispute turns on later.
+ */
+export const PAY07_EMAIL_TEMPLATE: BuiltInTemplate = {
+  key: 'pay-07-final-notice',
+  kind: 'EMAIL' as TemplateKind,
+  name: 'PAY-07 — Final Payment Notice',
+  stage: 7,
+  whenToUse: 'The last notice before the balance is escalated beyond ordinary correspondence.',
+  pairedLetterKey: 'final-payment-notice',
+  subject:
+    'FINAL NOTICE – Immediate Payment Required – Invoice {{invoice_number}} – {{balance_due}}',
+  bodyHtml: [
+    '<p>Dear {{customer_first_name}},</p>',
+    '<p>This email serves as Summit Sensory Gym’s final payment notice regarding Invoice {{invoice_number}}.</p>',
+    '<p>The outstanding balance of <b>{{balance_due}}</b> remains unpaid and is currently {{days_past_due}} days past due.</p>',
+    '<p>Payment is required in full no later than {{final_payment_deadline}}.</p>',
+    '<p>Invoice &amp; Payment Link: {{invoice_link}}</p>',
+    '<p>The accepted proposal for this order provides for applicable remedies when required payments remain past due, including potential late charges, collection costs, and suspension of Summit Sensory Gym’s remaining performance, as permitted under the agreement and applicable law.</p>',
+    '<p>If payment cannot be completed by the deadline, please contact us immediately and provide the reason payment has not been released and the specific date payment will be issued.</p>',
+    '<p>If you dispute any portion of the invoice, please identify the disputed amount and basis for the dispute. All undisputed amounts remain due in accordance with the accepted payment terms.</p>',
+    '<p>Questions or requests for supporting documentation should be directed immediately to our Customer Service team at {{customer_service_email}} or {{customer_service_phone}}.</p>',
+    '<p>The formal final payment notice is attached for your records.</p>',
+    '<p>If payment has already been issued, please send the payment date and remittance information immediately so we can update the account.</p>',
+    '<p>Thank you,</p>',
+    '<p>{{sender_name}}</p>',
+  ].join('\n'),
+};
+
 export const DEFAULT_EMAIL_TEMPLATES: BuiltInTemplate[] = [
   DEFAULT_EMAIL_TEMPLATE,
   PAY01_EMAIL_TEMPLATE,
   PAY02_EMAIL_TEMPLATE,
+  PAY03_EMAIL_TEMPLATE,
+  PAY04_EMAIL_TEMPLATE,
+  PAY05_EMAIL_TEMPLATE,
+  PAY06_EMAIL_TEMPLATE,
+  PAY07_EMAIL_TEMPLATE,
 ];
 
 /**
@@ -424,6 +575,161 @@ export const DEFAULT_LETTER_TEMPLATES: BuiltInTemplate[] = [
       '<p>If you have any questions regarding the invoice, balance due, payment options, or supporting documentation, please contact our Customer Service team at {{customer_service_email}} or {{customer_service_phone}}.</p>',
       '<p><b>Credit Card Payments:</b> Payments made by credit card are subject to a 3.5% processing fee in accordance with the accepted proposal and payment terms. ACH and wire payment options are also available.</p>',
       '<p>Thank you for your prompt attention to this payment. We are excited to get your Summit equipment on its way to you.</p>',
+      '<p>Sincerely,</p>',
+    ].join('\n'),
+  },
+  {
+    key: 'purchase-order-payment-request',
+    kind: 'LETTER' as TemplateKind,
+    name: 'PAY-03 — Purchase Order Payment Request',
+    stage: 3,
+    whenToUse:
+      'The customer buys on a purchase order and their Accounts Payable team needs the invoice submitted against it.',
+    subject: 'Re: Purchase Order {{po_number}} – Invoice {{invoice_number}}',
+    bodyHtml: [
+      '<p>Dear {{customer_first_name}},</p>',
+      '<p>Summit Sensory Gym is submitting Invoice {{invoice_number}}, associated with Purchase Order {{po_number}}, for payment.</p>',
+      '<p>The proposal accepted in connection with this order became a binding agreement upon acceptance and confirmed the Customer’s authorization of the order, applicable payment schedule, and Summit Sensory Gym Standard Terms &amp; Conditions of Sale.</p>',
+      '<p>According to our records, a balance of {{balance_due}} is currently due. For your convenience, we have included a copy of Purchase Order {{po_number}} with this submission to assist your Accounts Payable team with reconciliation and processing.</p>',
+      '<p style="font-family:Georgia,serif;font-size:14px;font-weight:700;color:#203060;margin:12px 0 3px;">Payment Information</p>',
+      '<table style="border-collapse:collapse;margin:0 0 8px;page-break-inside:avoid;"><tbody>',
+      '<tr><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Purchase Order #</td><td style="padding:0 46px 0 0;white-space:nowrap;">{{po_number}}</td><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Invoice Date</td><td style="padding:0;white-space:nowrap;">{{invoice_date}}</td></tr>',
+      '<tr><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Invoice #</td><td style="padding:0 46px 0 0;white-space:nowrap;">{{invoice_number}}</td><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Payment Due Date</td><td style="padding:0;white-space:nowrap;">{{due_date}}</td></tr>',
+      '<tr><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Invoice Amount</td><td style="padding:0 46px 0 0;white-space:nowrap;">{{invoice_amount}}</td><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Payments / Credits Received</td><td style="padding:0;white-space:nowrap;">{{payments_credits}}</td></tr>',
+      '<tr><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;"><b>Balance Due</b></td><td style="padding:0;white-space:nowrap;"><b>{{balance_due}}</b></td><td></td><td></td></tr>',
+      '</tbody></table>',
+      '<p>Invoice &amp; Payment Link: {{invoice_link}}</p>',
+      '<p>Please process the balance in accordance with the applicable purchase order, accepted proposal, invoice, and agreed payment terms.</p>',
+      '<p>If your Accounts Payable team requires additional documentation or has questions regarding this invoice, please contact our Customer Service team at {{customer_service_email}} or {{customer_service_phone}}. We are happy to provide any information needed to facilitate payment.</p>',
+      '<p>If payment has already been issued, please provide the applicable remittance information so that we can properly reconcile the account.</p>',
+      '<p><b>Credit Card Payments:</b> A 3.5% processing fee applies to payments made by credit card. ACH and wire payment options are also available.</p>',
+      '<p>Thank you for your attention to this request and for your partnership with Summit Sensory Gym.</p>',
+      // The enclosure notation sits above the sign-off rather than below it, because
+      // letterheadHtml prints the signature block itself and nothing can be placed
+      // after it from a template body.
+      '<p style="color:#4b5468;">Enclosure: Purchase Order {{po_number}}</p>',
+      '<p>Sincerely,</p>',
+    ].join('\n'),
+  },
+  {
+    key: 'outstanding-balance-friendly-reminder',
+    kind: 'LETTER' as TemplateKind,
+    name: 'PAY-04 — Outstanding Balance: Friendly Reminder',
+    stage: 4,
+    whenToUse:
+      'A balance has passed its due date and the likely cause is an internal approval or Accounts Payable delay.',
+    subject: 'Re: Outstanding Balance – Invoice {{invoice_number}}',
+    bodyHtml: [
+      '<p>Dear {{customer_first_name}},</p>',
+      '<p>We are following up regarding the outstanding balance associated with Summit Sensory Gym Invoice {{invoice_number}}.</p>',
+      '<p>Our records currently show a balance of {{balance_due}} remaining due. As a reminder, the proposal accepted for this order established the applicable payment schedule and became a binding agreement upon acceptance.</p>',
+      '<p>We understand that invoices can occasionally become delayed during internal approval or Accounts Payable processing, so we wanted to make sure your team has everything needed to complete payment.</p>',
+      '<p style="font-family:Georgia,serif;font-size:14px;font-weight:700;color:#203060;margin:12px 0 3px;">Payment Information</p>',
+      '<table style="border-collapse:collapse;margin:0 0 8px;page-break-inside:avoid;"><tbody>',
+      '<tr><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Invoice #</td><td style="padding:0 46px 0 0;white-space:nowrap;">{{invoice_number}}</td><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Invoice Date</td><td style="padding:0;white-space:nowrap;">{{invoice_date}}</td></tr>',
+      '<tr><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Payment Due Date</td><td style="padding:0 46px 0 0;white-space:nowrap;">{{due_date}}</td><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Payments / Credits Received</td><td style="padding:0;white-space:nowrap;">{{payments_credits}}</td></tr>',
+      '<tr><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Invoice Amount</td><td style="padding:0 46px 0 0;white-space:nowrap;">{{invoice_amount}}</td><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;"><b>Balance Due</b></td><td style="padding:0;white-space:nowrap;"><b>{{balance_due}}</b></td></tr>',
+      '</tbody></table>',
+      '<p>Invoice &amp; Payment Link: {{invoice_link}}</p>',
+      '<p>If there is anything preventing the invoice from being processed, please contact our Customer Service team at {{customer_service_email}} or {{customer_service_phone}}. We are happy to provide any information or supporting documentation needed to facilitate payment.</p>',
+      '<p>If payment has already been submitted, please provide the applicable remittance information so that we can update our records.</p>',
+      '<p><b>Credit Card Payments:</b> A 3.5% processing fee applies to payments made by credit card. ACH and wire payment options are also available.</p>',
+      '<p>Thank you for your attention to this balance and for your continued partnership with Summit Sensory Gym.</p>',
+      '<p>Sincerely,</p>',
+    ].join('\n'),
+  },
+  {
+    key: 'outstanding-balance-second-request',
+    kind: 'LETTER' as TemplateKind,
+    name: 'PAY-05 — Outstanding Balance: Second Payment Request',
+    stage: 5,
+    whenToUse:
+      'A reminder has gone out, the balance is still unpaid, and no payment date has been confirmed.',
+    subject: 'Re: Second Request for Payment – Invoice {{invoice_number}}',
+    bodyHtml: [
+      '<p>Dear {{customer_first_name}},</p>',
+      '<p>We are following up again regarding the outstanding balance associated with Summit Sensory Gym Invoice {{invoice_number}}.</p>',
+      '<p>As of {{today}}, our records indicate that {{balance_due}} remains unpaid, and we have not yet received confirmation regarding when payment will be issued.</p>',
+      '<p>The proposal accepted and signed for this order became a binding agreement and confirmed the Customer’s authorization of the order, applicable payment schedule, and Summit Sensory Gym Standard Terms &amp; Conditions of Sale.</p>',
+      '<p style="font-family:Georgia,serif;font-size:14px;font-weight:700;color:#203060;margin:12px 0 3px;">Payment Information</p>',
+      '<table style="border-collapse:collapse;margin:0 0 8px;page-break-inside:avoid;"><tbody>',
+      '<tr><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Invoice #</td><td style="padding:0 46px 0 0;white-space:nowrap;">{{invoice_number}}</td><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Invoice Date</td><td style="padding:0;white-space:nowrap;">{{invoice_date}}</td></tr>',
+      '<tr><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Payment Due Date</td><td style="padding:0 46px 0 0;white-space:nowrap;">{{due_date}}</td><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Days Past Due</td><td style="padding:0;white-space:nowrap;">{{days_past_due}}</td></tr>',
+      '<tr><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Invoice Amount</td><td style="padding:0 46px 0 0;white-space:nowrap;">{{invoice_amount}}</td><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Payments / Credits Received</td><td style="padding:0;white-space:nowrap;">{{payments_credits}}</td></tr>',
+      '<tr><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;"><b>Balance Due</b></td><td style="padding:0;white-space:nowrap;"><b>{{balance_due}}</b></td><td></td><td></td></tr>',
+      '</tbody></table>',
+      '<p>Invoice &amp; Payment Link: {{invoice_link}}</p>',
+      '<p>Please arrange for payment of the outstanding balance promptly.</p>',
+      '<p>If a documentation requirement, invoice discrepancy, purchase order issue, receiving requirement, or internal approval matter is preventing payment, please contact our Customer Service team at {{customer_service_email}} or {{customer_service_phone}} so that we can work with your team to resolve it.</p>',
+      '<p>If payment has already been issued, please provide the payment date and applicable remittance information so that we can reconcile our records.</p>',
+      '<p><b>Credit Card Payments:</b> A 3.5% processing fee applies to payments made by credit card. ACH and wire payment options are also available.</p>',
+      '<p>We appreciate your prompt attention to this matter.</p>',
+      '<p>Sincerely,</p>',
+    ].join('\n'),
+  },
+  {
+    key: 'formal-past-due-notice',
+    kind: 'LETTER' as TemplateKind,
+    name: 'PAY-06 — Formal Past-Due Notice',
+    stage: 6,
+    whenToUse:
+      'Previous requests have not been answered and the balance needs to be put on formal notice with a deadline.',
+    subject: 'Re: Formal Notice of Past-Due Balance – Invoice {{invoice_number}}',
+    bodyHtml: [
+      '<p>Dear {{customer_first_name}},</p>',
+      '<p>This letter serves as a formal notice of past-due payment regarding Summit Sensory Gym Invoice {{invoice_number}}.</p>',
+      '<p>Despite our previous payment requests, the outstanding balance of {{balance_due}} remains unpaid and is currently {{days_past_due}} days past due.</p>',
+      '<p>The proposal accepted and signed for this order became a binding agreement and confirmed the Customer’s authorization of the order, applicable payment schedule, and Summit Sensory Gym Standard Terms &amp; Conditions of Sale.</p>',
+      '<p>Under the accepted payment terms, payments not received when due may be subject to late charges of 1.5% per month (18% annually), or the maximum amount permitted by applicable law, whichever is less, together with applicable collection costs and reasonable attorneys’ fees as permitted by law. Summit Sensory Gym also reserves the right to suspend production, shipment, installation, or other performance while required payments remain past due.</p>',
+      '<p style="font-family:Georgia,serif;font-size:14px;font-weight:700;color:#203060;margin:12px 0 3px;">Payment Information</p>',
+      '<table style="border-collapse:collapse;margin:0 0 8px;page-break-inside:avoid;"><tbody>',
+      '<tr><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Invoice #</td><td style="padding:0 46px 0 0;white-space:nowrap;">{{invoice_number}}</td><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Invoice Date</td><td style="padding:0;white-space:nowrap;">{{invoice_date}}</td></tr>',
+      '<tr><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Original Due Date</td><td style="padding:0 46px 0 0;white-space:nowrap;">{{due_date}}</td><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Days Past Due</td><td style="padding:0;white-space:nowrap;">{{days_past_due}}</td></tr>',
+      '<tr><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Invoice Amount</td><td style="padding:0 46px 0 0;white-space:nowrap;">{{invoice_amount}}</td><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Payments / Credits Received</td><td style="padding:0;white-space:nowrap;">{{payments_credits}}</td></tr>',
+      '<tr><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;"><b>Outstanding Balance</b></td><td style="padding:0 46px 0 0;white-space:nowrap;"><b>{{balance_due}}</b></td><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Payment Requested By</td><td style="padding:0;white-space:nowrap;">{{payment_deadline}}</td></tr>',
+      '</tbody></table>',
+      '<p>Invoice &amp; Payment Link: {{invoice_link}}</p>',
+      '<p>We request payment of the outstanding balance no later than {{payment_deadline}}.</p>',
+      '<p>If there is an issue preventing payment, please contact our Customer Service team immediately at {{customer_service_email}} or {{customer_service_phone}} and provide the reason for the delay and anticipated payment date.</p>',
+      '<p>If you dispute any portion of the invoice, please identify the specific disputed amount and basis for the dispute. As provided in the accepted payment terms, a dispute regarding any portion of an invoice does not relieve the Customer of the obligation to timely pay all undisputed amounts.</p>',
+      '<p>If payment has already been issued, please provide the payment date and remittance information immediately so that we can update your account.</p>',
+      '<p><b>Credit Card Payments:</b> A 3.5% processing fee applies to payments made by credit card. ACH and wire payment options are also available.</p>',
+      '<p>We value our relationship with {{organization_name}} and would prefer to resolve this outstanding balance promptly and administratively.</p>',
+      '<p>Thank you for your immediate attention to this matter.</p>',
+      '<p>Sincerely,</p>',
+    ].join('\n'),
+  },
+  {
+    key: 'final-payment-notice',
+    kind: 'LETTER' as TemplateKind,
+    name: 'PAY-07 — Final Payment Notice',
+    stage: 7,
+    whenToUse:
+      'The last notice before the balance is escalated beyond ordinary collection correspondence.',
+    subject: 'Re: Final Notice of Outstanding Balance – Invoice {{invoice_number}}',
+    bodyHtml: [
+      '<p>Dear {{customer_first_name}},</p>',
+      '<p>This correspondence serves as Summit Sensory Gym’s final payment notice regarding Invoice {{invoice_number}}.</p>',
+      '<p>Despite our previous payment requests, the outstanding balance of {{balance_due}} remains unpaid and is currently {{days_past_due}} days past due.</p>',
+      '<p>The proposal accepted and signed for this order became a binding agreement and confirmed the Customer’s authorization of the order, applicable payment schedule, and Summit Sensory Gym Standard Terms &amp; Conditions of Sale.</p>',
+      '<p>Under the accepted terms, payments not received when due may be subject to late charges of 1.5% per month (18% annually), or the maximum amount permitted by applicable law, whichever is less, together with applicable collection costs and reasonable attorneys’ fees as permitted by law. Summit Sensory Gym also reserves the right to suspend production, shipment, installation, or other performance while required payments remain past due.</p>',
+      '<p style="font-family:Georgia,serif;font-size:14px;font-weight:700;color:#203060;margin:12px 0 3px;">Payment Information</p>',
+      '<table style="border-collapse:collapse;margin:0 0 8px;page-break-inside:avoid;"><tbody>',
+      '<tr><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Invoice #</td><td style="padding:0 46px 0 0;white-space:nowrap;">{{invoice_number}}</td><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Invoice Date</td><td style="padding:0;white-space:nowrap;">{{invoice_date}}</td></tr>',
+      '<tr><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Original Due Date</td><td style="padding:0 46px 0 0;white-space:nowrap;">{{due_date}}</td><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Days Past Due</td><td style="padding:0;white-space:nowrap;">{{days_past_due}}</td></tr>',
+      '<tr><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Invoice Amount</td><td style="padding:0 46px 0 0;white-space:nowrap;">{{invoice_amount}}</td><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Payments / Credits Received</td><td style="padding:0;white-space:nowrap;">{{payments_credits}}</td></tr>',
+      '<tr><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;"><b>Outstanding Balance</b></td><td style="padding:0 46px 0 0;white-space:nowrap;"><b>{{balance_due}}</b></td><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Final Payment Deadline</td><td style="padding:0;white-space:nowrap;">{{final_payment_deadline}}</td></tr>',
+      '</tbody></table>',
+      '<p>Invoice &amp; Payment Link: {{invoice_link}}</p>',
+      '<p>Payment of the outstanding balance is required in full no later than {{final_payment_deadline}}.</p>',
+      '<p>If payment cannot be completed by this date, please provide written communication identifying the reason payment has not been released, any documentation or billing issue preventing payment, any amount being disputed, and the specific date payment will be issued.</p>',
+      '<p>If you dispute any portion of the invoice, please identify the specific amount and basis for the dispute. As provided in the accepted terms, a dispute regarding a portion of an invoice does not relieve the Customer of the obligation to timely pay all undisputed amounts.</p>',
+      '<p>Questions or requests for supporting documentation should be directed immediately to our Customer Service team at {{customer_service_email}} or {{customer_service_phone}}.</p>',
+      '<p>Absent payment or communication regarding a legitimate billing dispute, continued nonpayment may require Summit Sensory Gym to pursue additional steps available to recover the outstanding balance consistent with the accepted agreement and applicable law.</p>',
+      '<p>We would prefer to resolve this matter directly with your organization and avoid the need for further collection activity.</p>',
+      '<p>If payment has already been issued, please provide the payment date and remittance information immediately so that we can update our records.</p>',
+      '<p><b>Credit Card Payments:</b> A 3.5% processing fee applies to payments made by credit card. ACH and wire payment options are also available.</p>',
+      '<p>Thank you for your immediate attention to this matter.</p>',
       '<p>Sincerely,</p>',
     ].join('\n'),
   },
