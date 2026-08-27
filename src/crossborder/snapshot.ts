@@ -23,6 +23,7 @@ import { versionTotals } from '../proposals/analytics.js';
 import { resolveJurisdiction, type Jurisdiction } from './jurisdiction.js';
 import { resolveRateForDate, type FxFallbackModeValue } from './rateService.js';
 import { buildChargeLines, type CustomsEntryInput, type PipelineResult } from './chargeLines.js';
+import { buildSimpleChargeLines } from './simpleCharges.js';
 import type {
   CanadianTaxType,
   ChargeCategory,
@@ -54,6 +55,14 @@ export interface CrossBorderState {
     pair: string;
     rate: string | null;
     observationDate: string | null;
+    /**
+     * When the rate was actually read, as an ISO instant.
+     *
+     * Distinct from observationDate, which is the day the Bank of Canada published
+     * for. A customer signing against "1 USD = 1.3842 CAD" is entitled to both: over a
+     * weekend the two are three days apart, and that gap is their exposure.
+     */
+    retrievedAt: string | null;
     source: string | null;
     forDate: string;
     stale: boolean;
@@ -107,6 +116,7 @@ export async function crossBorderStateFor(versionId: string): Promise<CrossBorde
     pair: 'USD/CAD',
     rate: null,
     observationDate: null,
+    retrievedAt: null,
     source: null,
     forDate: isoDate(version.releasedAt ?? version.createdAt),
     stale: false,
@@ -143,6 +153,9 @@ export async function crossBorderStateFor(versionId: string): Promise<CrossBorde
     pair: 'USD/CAD',
     rate: rateResolution.observation?.rate ?? null,
     observationDate: rateResolution.observation?.observationDate ?? null,
+    retrievedAt: rateResolution.observation?.retrievedAt
+      ? new Date(rateResolution.observation.retrievedAt).toISOString()
+      : null,
     source: rateResolution.observation?.source ?? null,
     forDate: asOf,
     stale: rateResolution.stale,
@@ -254,6 +267,35 @@ export async function crossBorderStateFor(versionId: string): Promise<CrossBorde
       ? [{ category: 'FREIGHT' as ChargeCategory, label: 'Freight', usdMinor: freight }]
       : []),
   ];
+
+  /**
+   * Simple mode short-circuits the rule engine.
+   *
+   * The full path below needs registrations, dated province rate rows and a taxability
+   * ruling per charge category before it will produce a figure — which is correct, and
+   * is why no Canadian proposal can go out today. Simple mode takes the rates from the
+   * person doing the quoting instead. Everything downstream is unchanged: the same
+   * result shape, the same document, the same clauses about CBSA having the final say.
+   */
+  if (customsRow?.simpleMode) {
+    const simple = buildSimpleChargeLines({
+      asOf,
+      fx: { rate: rateResolution.observation.rate, observationDate: fx.observationDate as string },
+      sellerCharges,
+      customs: {
+        taxLabel: customsRow.taxLabel,
+        taxPercentMilli: customsRow.taxPercentMilli,
+        tariffPercentMilli: customsRow.tariffPercentMilli,
+        brokerFeeMinor: customsRow.brokerFeeMinor,
+        tariffOnFreight: customsRow.tariffOnFreight,
+        taxOnDuty: customsRow.taxOnDuty,
+        importerOfRecord: customsRow.importerOfRecord,
+        includedInSellerTotal: customsRow.includedInSellerTotal,
+      },
+    });
+    for (const issue of simple.issues) blockers.push(`calc:${issue}`);
+    return { applicable: true, jurisdiction, fx, result: simple, blockers };
+  }
 
   const result = buildChargeLines({
     province,

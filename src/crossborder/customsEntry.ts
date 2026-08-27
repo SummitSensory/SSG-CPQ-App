@@ -27,6 +27,14 @@ import type { ProposalCustomsEntry } from '@prisma/client';
 export type ImporterOfRecordValue = 'CUSTOMER' | 'SUMMIT' | 'THIRD_PARTY' | 'TO_BE_DETERMINED';
 
 export interface CustomsEntryPatch {
+  /** Percent entry rather than typed amounts — see simpleCharges.ts. */
+  simpleMode?: boolean;
+  taxLabel?: string | null;
+  /** Thousandths of a percent: 13% is 13000, Quebec's 9.975% is 9975. */
+  taxPercentMilli?: number | null;
+  tariffPercentMilli?: number | null;
+  tariffOnFreight?: boolean;
+  taxOnDuty?: boolean;
   currency?: 'USD' | 'CAD';
   dutyMinor?: number | null;
   surtaxMinor?: number | null;
@@ -116,8 +124,26 @@ export async function saveCustomsEntry(
     }
   }
 
+  // Percentages are thousandths of a percent — 13% is 13000, Quebec's 9.975% is 9975.
+  // Bounded rather than merely non-negative: a mistyped rate on a customer document is
+  // worse than a refused save, and nothing here is legitimately over 100%.
+  for (const field of ['taxPercentMilli', 'tariffPercentMilli'] as const) {
+    const v = (patch as Record<string, unknown>)[field];
+    if (v == null) continue;
+    if (!Number.isInteger(v) || (v as number) < 0 || (v as number) > 100000) {
+      throw new ValidationError(
+        `${field === 'taxPercentMilli' ? 'The tax rate' : 'The tariff rate'} must be between 0 and 100 percent.`,
+      );
+    }
+  }
+
   const merged = { ...before, ...patch };
-  const anyAmount = AMOUNT_FIELDS.some((f) => merged[f] != null);
+  const anyAmount =
+    AMOUNT_FIELDS.some((f) => merged[f] != null) ||
+    // In simple mode a rate IS an entered figure: a proposal quoting 13% tax and no
+    // typed amounts is answered, and leaving it at "requires review" would block it.
+    (merged as Record<string, unknown>).taxPercentMilli != null ||
+    (merged as Record<string, unknown>).tariffPercentMilli != null;
 
   // A changed figure invalidates an existing approval. Comparing only the amount
   // fields on purpose: a note or a quote reference does not.
