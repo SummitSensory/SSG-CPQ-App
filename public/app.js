@@ -1427,6 +1427,236 @@
     try { if (range) same.setSelectionRange(range[0], range[1]); } catch (e4) {}
   }
 
+  /* ---- Canadian Customer ---------------------------------------------------
+   *
+   * One switch. Ticking it makes this a Canadian job end to end: the customer's
+   * billing country becomes CA (which is the only thing the pricing engine reads —
+   * Bill to above is document text), cross-border pricing is switched on company-wide
+   * if it was off, percent entry is permitted, and this proposal gets the province's
+   * standard tax rate as a starting figure. Unticking it takes all of that back off
+   * the proposal.
+   *
+   * Everything it does is in one server call, so a half-configured Canadian proposal
+   * cannot exist because a second request failed. */
+  var canState = null;
+
+  /** 'Calgary, AB T2A5N7' out of the Bill to / Ship to box, to prefill the dialog. */
+  function guessAddressLines() {
+    var raw = String((pb && pb.meta && (pb.meta.billTo || pb.meta.shipTo)) || '').trim();
+    if (!raw) return null;
+    var lines = raw.split(/\r?\n/).map(function (l) { return l.trim(); }).filter(Boolean);
+    if (!lines.length) return null;
+    var last = lines[lines.length - 1];
+    var m = /^(.*?),\s*([A-Za-z]{2}|[A-Za-z][A-Za-z ]+?)\s+([A-Za-z0-9][A-Za-z0-9 -]{2,9})$/.exec(last);
+    return {
+      line1: lines[0] || '',
+      city: m ? m[1] : '',
+      region: m ? m[2] : '',
+      postalCode: m ? m[3] : '',
+    };
+  }
+
+  function paintCanadian() {
+    var host = document.getElementById('pbJurisRow');
+    if (!host) return;
+    // A proposal with no saved version has nothing to attach Canadian figures to yet.
+    if (!pb || !pb.versionId) {
+      host.innerHTML =
+        '<span class="muted" style="font-size:11.5px;">Save the proposal to mark this a Canadian customer.</span>';
+      return;
+    }
+    if (!canState || canState.versionId !== pb.versionId) {
+      host.innerHTML = '<span class="muted" style="font-size:12px;">Checking the customer\u2019s country\u2026</span>';
+      return;
+    }
+    var on = !!canState.canadian;
+    var note = on
+      ? 'Priced as a Canadian job \u00b7 ' +
+        esc(canState.province || 'province not set') +
+        (canState.taxPercent != null
+          ? ' \u00b7 ' + esc(canState.taxLabel || 'tax') + ' ' + esc(String(canState.taxPercent)) + '%'
+          : '') +
+        '. Tariff, brokerage and the CAD column are on the Customs and duties panel.'
+      : 'Priced as a domestic US job \u2014 no Canadian tax, tariff or CAD column.';
+    host.innerHTML =
+      '<label style="display:flex;gap:8px;align-items:center;font-size:13px;cursor:pointer;">' +
+      '<input type="checkbox" id="pbCanadian"' + (on ? ' checked' : '') + '>' +
+      '<b style="font-weight:600;">Canadian Customer</b></label>' +
+      '<span style="font-size:11.5px;color:' + (on ? '#2f6b4f' : '#8a8f85') + ';">' + note + '</span>';
+    var cb = document.getElementById('pbCanadian');
+    if (cb) cb.addEventListener('change', function () { onCanadianToggle(cb); });
+  }
+
+  async function loadCanadian(force) {
+    if (!pb || !pb.versionId || (typeof isMock === 'function' && isMock())) return;
+    if (!force && canState && canState.versionId === pb.versionId) { paintCanadian(); return; }
+    var r = await authed('/proposals/versions/' + pb.versionId + '/canadian-customer');
+    if (!r.ok) { var h = document.getElementById('pbJurisRow'); if (h) h.innerHTML = ''; return; }
+    var d = await r.json();
+    d.versionId = pb.versionId;
+    canState = d;
+    paintCanadian();
+  }
+
+  async function postCanadian(payload) {
+    var r = await authed('/proposals/versions/' + pb.versionId + '/canadian-customer', {
+      method: 'POST',
+      body: payload,
+    });
+    if (!r.ok) {
+      var msg = 'That could not be saved.';
+      try { var j = await r.json(); msg = j.message || j.error || msg; } catch (e) {}
+      return { ok: false, message: msg };
+    }
+    return { ok: true, data: await r.json() };
+  }
+
+  function canadianDoneToast(d) {
+    var extra = [];
+    if (d.enabledFeature) extra.push('cross-border pricing switched on');
+    if (d.allowedSimple) extra.push('percent entry permitted');
+    toast(
+      'Canadian customer \u00b7 ' +
+        d.province +
+        (d.taxPercent != null ? ' \u00b7 ' + (d.taxLabel || 'tax') + ' ' + d.taxPercent + '%' : '') +
+        (extra.length ? ' (' + extra.join(', ') + ')' : '') +
+        '. Check the figures on Customs and duties before this goes out.',
+    );
+  }
+
+  async function onCanadianToggle(cb) {
+    if (!pb || !pb.versionId) return;
+    cb.disabled = true;
+
+    if (!cb.checked) {
+      if (
+        !confirm(
+          'Remove the Canadian tax, tariff and brokerage figures from this proposal, and put this customer back to a US billing address?',
+        )
+      ) {
+        cb.checked = true;
+        cb.disabled = false;
+        return;
+      }
+      var off = await postCanadian({ canadian: false });
+      cb.disabled = false;
+      if (!off.ok) { cb.checked = true; toast(off.message, true); return; }
+      await loadCanadian(true);
+      await loadCrossBorder(true);
+      toast('Back to a domestic US job. The Canadian figures have been cleared.');
+      return;
+    }
+
+    // A billing address already on file with a province the engine recognizes needs no
+    // dialog — the switch is the whole interaction.
+    var st = canState || {};
+    var bl = st.billing;
+    cb.disabled = false;
+    if (st.province && bl && bl.line1 && bl.city && bl.postalCode) {
+      cb.disabled = true;
+      var direct = await postCanadian({ canadian: true });
+      cb.disabled = false;
+      if (!direct.ok) { cb.checked = false; toast(direct.message, true); return; }
+      await loadCanadian(true);
+      await loadCrossBorder(true);
+      canadianDoneToast(direct.data);
+      return;
+    }
+    cb.checked = false;
+    openCanadianDialog();
+  }
+
+  /* Asked for once, on the first Canadian proposal for this customer: the billing
+   * address the engine reads, and the tax rate to quote from. The province drives the
+   * rate, so choosing one fills the two tax boxes in. */
+  function openCanadianDialog() {
+    var st = canState || {};
+    var rates = st.provinceRates || {};
+    var b = st.billing || guessAddressLines() || {};
+    var lbl = 'font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;display:block;margin-bottom:3px;';
+    var box = 'width:100%;padding:9px 11px;border:1px solid #dcded7;border-radius:8px;font-size:13px;background:#fff;';
+    var provinces = Object.keys(rates).sort();
+    var guessProv = String(b.region || '').toUpperCase();
+
+    openModal(
+      'Canadian customer',
+      '<div class="muted" style="font-size:12.5px;line-height:1.6;margin-bottom:14px;">' +
+        'This is the billing address the pricing engine reads, and the tax rate this proposal quotes from. ' +
+        'Saved on the customer, so their next proposal is Canadian from the start.' +
+        '</div>' +
+        '<div style="margin-bottom:10px;"><label style="' + lbl + '">Street</label>' +
+        '<input id="ccLine1" style="' + box + '" value="' + esc(b.line1 || '') + '"></div>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">' +
+        '<div style="flex:2;min-width:150px;"><label style="' + lbl + '">City</label>' +
+        '<input id="ccCity" style="' + box + '" value="' + esc(b.city || '') + '"></div>' +
+        '<div style="flex:1;min-width:120px;"><label style="' + lbl + '">Province</label>' +
+        '<select id="ccProv" style="' + box + '">' +
+        '<option value="">Choose\u2026</option>' +
+        provinces
+          .map(function (p) {
+            return (
+              '<option value="' + p + '"' + (p === guessProv ? ' selected' : '') + '>' +
+              p + ' \u00b7 ' + esc(rates[p].label) + ' ' + rates[p].percent + '%</option>'
+            );
+          })
+          .join('') +
+        '</select></div>' +
+        '<div style="flex:1;min-width:110px;"><label style="' + lbl + '">Postal code</label>' +
+        '<input id="ccPostal" style="' + box + '" value="' + esc(b.postalCode || '') + '"></div>' +
+        '</div>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+        '<div style="flex:1;min-width:150px;"><label style="' + lbl + '">What the tax is called</label>' +
+        '<input id="ccTaxLabel" placeholder="HST" style="' + box + '" value="' +
+        esc((rates[guessProv] && rates[guessProv].label) || '') + '"></div>' +
+        '<div style="flex:1;min-width:110px;"><label style="' + lbl + '">Tax rate %</label>' +
+        '<input id="ccTaxPct" inputmode="decimal" style="' + box + '" value="' +
+        esc(rates[guessProv] ? String(rates[guessProv].percent) : '') + '"></div>' +
+        '</div>' +
+        '<div class="muted" style="font-size:11px;line-height:1.55;margin-top:10px;">' +
+        'The rate is Summit\u2019s own figure and the proposal says so. Tariff and brokerage are entered on ' +
+        'Customs and duties, where these can also be changed.' +
+        '</div>',
+      async function (close, showError) {
+        var prov = document.getElementById('ccProv').value;
+        var pctRaw = (document.getElementById('ccTaxPct').value || '').trim();
+        var pct = pctRaw === '' ? null : Number(pctRaw.replace(/[^0-9.]/g, ''));
+        if (!prov) { showError('Choose the province \u2014 it is what decides the tax.'); return; }
+        if (pct != null && !Number.isFinite(pct)) {
+          showError('Enter the tax rate as a plain number \u2014 13, or 14.975.');
+          return;
+        }
+        var out = await postCanadian({
+          canadian: true,
+          address: {
+            line1: (document.getElementById('ccLine1').value || '').trim(),
+            city: (document.getElementById('ccCity').value || '').trim(),
+            region: prov,
+            postalCode: (document.getElementById('ccPostal').value || '').trim(),
+          },
+          taxLabel: (document.getElementById('ccTaxLabel').value || '').trim() || null,
+          taxPercent: pct,
+        });
+        if (!out.ok) { showError(out.message); return; }
+        close();
+        await loadCanadian(true);
+        await loadCrossBorder(true);
+        canadianDoneToast(out.data);
+      },
+      'Make this a Canadian job',
+    );
+
+    // Choosing a province fills the tax boxes, unless they have been typed in.
+    setTimeout(function () {
+      var sel = document.getElementById('ccProv');
+      if (!sel) return;
+      sel.addEventListener('change', function () {
+        var r = rates[sel.value];
+        if (!r) return;
+        document.getElementById('ccTaxLabel').value = r.label;
+        document.getElementById('ccTaxPct').value = String(r.percent);
+      });
+    }, 0);
+  }
   function fieldRow(label, inner) { return '<div class="field"><label>' + esc(label) + '</label>' + inner + '</div>'; }
   var IN = 'width:100%;padding:10px 12px;border:1px solid #dcded7;border-radius:9px;font-size:14px;background:#fff;color:#20241f;outline:none;';
   function selectEl(id, opts, sel) { return '<select id="' + id + '" style="' + IN + '">' + opts.map(function (o) { return '<option value="' + o + '"' + (o === sel ? ' selected' : '') + '>' + titleCase(o) + '</option>'; }).join('') + '</select>'; }
@@ -7161,6 +7391,7 @@
           '</label>' +
           '<textarea id="mBill" rows="2" placeholder="Billing address" style="' + IN + 'resize:vertical;">' + esc(pb.meta.billTo || '') + '</textarea></div>' +
         '<div class="field" style="margin-top:4px;"><label>Ship to</label><textarea id="mShip" rows="2" style="' + IN + 'resize:vertical;">' + esc(pb.meta.shipTo) + '</textarea></div>' +
+        '<div id="pbJurisRow" style="font-size:12px;margin-top:7px;display:flex;align-items:center;gap:9px;flex-wrap:wrap;line-height:1.5;"></div>' +
         '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:8px;cursor:pointer;"><input type="checkbox" id="mShowTitle"' + (pb.meta.showTitle !== false ? ' checked' : '') + '> Show the proposal title on the customer proposal</label>' +
         priceWarningHtml() +
         titleModelWarningHtml() +
@@ -8746,6 +8977,7 @@
       pb.meta.billSameAsShip = mbs.checked;
       if (mbs.checked) { pb.meta.billTo = pb.meta.shipTo || ''; if (mb) mb.value = pb.meta.billTo; }
     });
+    if (document.getElementById('pbJurisRow')) { paintCanadian(); loadCanadian(false); }
     var me = document.getElementById('mExp'); if (me) me.addEventListener('input', function () { pb.meta.expiration = me.value; });
     var ms = document.getElementById('mShip');
     if (ms) ms.addEventListener('input', function () {

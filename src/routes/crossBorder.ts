@@ -17,6 +17,7 @@ import {
 import { recordRateOverride, deactivateRateOverride } from '../crossborder/rateService.js';
 import { estimateBrokerFee, parseTiers, selectSchedule } from '../crossborder/brokerFees.js';
 import { BankOfCanadaExchangeRateProvider } from '../crossborder/fx.js';
+import { normalizeProvince, type ProvinceCode } from '../lib/country.js';
 
 /**
  * Cross-border (Canadian proposal) routes.
@@ -235,6 +236,7 @@ export function registerCrossBorderRoutes(app: FastifyInstance): void {
   const enter = { preHandler: requirePermission(Permission.FREIGHT_COST_WRITE) };
   const approve = { preHandler: requirePermission(Permission.CROSSBORDER_APPROVE) };
   const manage = { preHandler: requirePermission(Permission.CROSSBORDER_MANAGE) };
+  const propose = { preHandler: requirePermission(Permission.PROPOSAL_WRITE) };
 
   /* ── Per proposal ─────────────────────────────────────────────────────────── */
 
@@ -318,6 +320,244 @@ export function registerCrossBorderRoutes(app: FastifyInstance): void {
     return reopenCustomsEntry(versionId, req.user!.sub, reason);
   });
 
+  /* ── "Canadian Customer" ────────────────────────────────────────────────────
+   *
+   * One switch on the proposal builder, and everything a Canadian job needs follows
+   * from it. It exists because the alternative was a rep discovering, from an empty
+   * screen, that four separate things had to be set by an administrator before a
+   * Canadian proposal would price at all: the customer's billing country, the
+   * company-wide feature switch, permission to quote from typed percentages, and the
+   * per-proposal percent entry.
+   *
+   * PROPOSAL_WRITE, not CROSSBORDER_MANAGE. That is a deliberate widening, and it is
+   * bounded: this route may turn the feature ON and permit percent entry, and it may
+   * seed one province's rate onto ONE proposal. It cannot write a tax registration, a
+   * dated rate row, an FX override or a broker schedule — the values that would
+   * misprice every Canadian job at once still need an administrator.
+   *
+   * Turning it off does not turn the feature off company-wide: another proposal may
+   * be relying on it. It clears this proposal's Canadian figures and puts the
+   * customer's billing country back to US, which is what makes the charges disappear.
+   */
+
+  /**
+   * The standard combined rate per province, as a starting point the quoter edits.
+   *
+   * Seeded, not authoritative: these are typed onto the proposal as Summit's own
+   * estimate, the document says so, and simple mode exists precisely because the
+   * registrations and rulings that WOULD be authoritative are not in place. Kept here
+   * rather than in the client so the figure that lands in the database and the figure
+   * shown to the customer come from one place.
+   */
+  const PROVINCE_TAX: Record<string, { label: string; percent: number }> = {
+    AB: { label: 'GST', percent: 5 },
+    BC: { label: 'GST + PST', percent: 12 },
+    MB: { label: 'GST + PST', percent: 12 },
+    NB: { label: 'HST', percent: 15 },
+    NL: { label: 'HST', percent: 15 },
+    NS: { label: 'HST', percent: 14 },
+    NT: { label: 'GST', percent: 5 },
+    NU: { label: 'GST', percent: 5 },
+    ON: { label: 'HST', percent: 13 },
+    PE: { label: 'HST', percent: 15 },
+    QC: { label: 'GST + QST', percent: 14.975 },
+    SK: { label: 'GST + PST', percent: 11 },
+    YT: { label: 'GST', percent: 5 },
+  };
+
+  /** What the switch would do, and what it needs, before it is thrown. */
+  app.get('/proposals/versions/:versionId/canadian-customer', read, async (req) => {
+    const { versionId } = req.params as { versionId: string };
+    const version = await prisma.proposalVersion.findUnique({
+      where: { id: versionId },
+      select: { proposal: { select: { organizationId: true } } },
+    });
+    if (!version?.proposal) throw new NotFoundError('Proposal version not found');
+
+    const [billing, entry, settings] = await Promise.all([
+      prisma.address.findFirst({
+        where: { organizationId: version.proposal.organizationId, type: 'BILLING' },
+        orderBy: { id: 'asc' },
+      }),
+      prisma.proposalCustomsEntry.findUnique({ where: { versionId } }),
+      prisma.crossBorderSetting.findUnique({ where: { id: 'singleton' } }),
+    ]);
+
+    const country = String(billing?.country ?? '').toUpperCase();
+    const province = billing ? normalizeProvince(billing.region ?? '') : null;
+    return {
+      canadian: country === 'CA',
+      featureEnabled: !!settings?.enabled,
+      simpleMode: !!entry?.simpleMode,
+      billing: billing
+        ? {
+            line1: billing.line1,
+            line2: billing.line2,
+            city: billing.city,
+            region: billing.region,
+            postalCode: billing.postalCode,
+            country,
+          }
+        : null,
+      province,
+      suggested: province ? (PROVINCE_TAX[province] ?? null) : null,
+      taxLabel: entry?.taxLabel ?? null,
+      taxPercent: entry?.taxPercentMilli == null ? null : entry.taxPercentMilli / 1000,
+      provinceRates: PROVINCE_TAX,
+    };
+  });
+
+  const CanadianCustomerSchema = z.object({
+    canadian: z.boolean(),
+    /** Required when switching on: the engine reads a province, never a city name. */
+    address: z
+      .object({
+        line1: z.string().trim().min(1).max(200),
+        line2: z.string().trim().max(200).nullish(),
+        city: z.string().trim().min(1).max(120),
+        region: z.string().trim().min(1).max(120),
+        postalCode: z.string().trim().min(1).max(20),
+      })
+      .optional(),
+    taxLabel: z.string().trim().max(60).nullish(),
+    taxPercent: z.coerce.number().min(0).max(100).nullish(),
+    tariffPercent: z.coerce.number().min(0).max(100).nullish(),
+    brokerFeeMinor: Money.nullish(),
+  });
+
+  app.post('/proposals/versions/:versionId/canadian-customer', propose, async (req) => {
+    const { versionId } = req.params as { versionId: string };
+    const body = CanadianCustomerSchema.parse(req.body ?? {});
+    const version = await prisma.proposalVersion.findUnique({
+      where: { id: versionId },
+      select: { proposal: { select: { id: true, organizationId: true } } },
+    });
+    if (!version?.proposal) throw new NotFoundError('Proposal version not found');
+    const organizationId = version.proposal.organizationId;
+
+    const existing = await prisma.address.findFirst({
+      where: { organizationId, type: 'BILLING' },
+      orderBy: { id: 'asc' },
+    });
+
+    if (!body.canadian) {
+      // Off. The customer goes back to US and this proposal's Canadian figures are
+      // cleared; the company-wide switch is left alone because other proposals use it.
+      if (existing && String(existing.country).toUpperCase() === 'CA') {
+        await prisma.address.update({ where: { id: existing.id }, data: { country: 'US' } });
+      }
+      await saveCustomsEntry(
+        versionId,
+        {
+          simpleMode: false,
+          taxLabel: null,
+          taxPercentMilli: null,
+          tariffPercentMilli: null,
+          brokerFeeMinor: null,
+        },
+        req.user!.sub,
+      );
+      await recordAudit({
+        actorId: req.user!.sub,
+        action: 'crossborder.canadian_customer.off',
+        entity: 'ProposalVersion',
+        entityId: versionId,
+        details: { organizationId },
+      });
+      return { canadian: false };
+    }
+
+    // On. The province has to resolve to a code, because a province is the tax
+    // jurisdiction — 'Alberta' typed as 'Albera' would otherwise price as no tax at all.
+    const source = body.address ?? {
+      line1: existing?.line1 ?? '',
+      line2: existing?.line2 ?? null,
+      city: existing?.city ?? '',
+      region: existing?.region ?? '',
+      postalCode: existing?.postalCode ?? '',
+    };
+    if (!source.line1 || !source.city || !source.region || !source.postalCode) {
+      throw new ValidationError(
+        'A Canadian customer needs a billing street, city, province and postal code.',
+      );
+    }
+    const province = normalizeProvince(source.region);
+    if (!province) {
+      throw new ValidationError(
+        `"${source.region}" was not recognized as a Canadian province or territory.`,
+      );
+    }
+
+    const data = {
+      line1: source.line1,
+      line2: source.line2?.trim() || null,
+      city: source.city,
+      region: province as ProvinceCode,
+      postalCode: source.postalCode,
+      country: 'CA',
+    };
+    const address = existing
+      ? await prisma.address.update({ where: { id: existing.id }, data })
+      : await prisma.address.create({ data: { ...data, organizationId, type: 'BILLING' } });
+
+    // The company-wide switch, and permission to quote from typed percentages. Both
+    // are no-ops when they are already on, which is the usual case after the first
+    // Canadian job.
+    const settingsBefore = await prisma.crossBorderSetting.findUnique({
+      where: { id: 'singleton' },
+    });
+    const settings = await prisma.crossBorderSetting.upsert({
+      where: { id: 'singleton' },
+      create: { id: 'singleton', enabled: true, allowSimpleCanadianCharges: true },
+      update: { enabled: true, allowSimpleCanadianCharges: true },
+    });
+
+    const suggested = PROVINCE_TAX[province];
+    const entry = await saveCustomsEntry(
+      versionId,
+      {
+        simpleMode: true,
+        taxLabel: (body.taxLabel ?? suggested?.label) || null,
+        taxPercentMilli:
+          body.taxPercent != null
+            ? Math.round(body.taxPercent * 1000)
+            : suggested
+              ? Math.round(suggested.percent * 1000)
+              : null,
+        ...(body.tariffPercent != null
+          ? { tariffPercentMilli: Math.round(body.tariffPercent * 1000) }
+          : {}),
+        ...(body.brokerFeeMinor != null ? { brokerFeeMinor: body.brokerFeeMinor } : {}),
+      },
+      req.user!.sub,
+    );
+
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'crossborder.canadian_customer.on',
+      entity: 'ProposalVersion',
+      entityId: versionId,
+      details: {
+        organizationId,
+        addressId: address.id,
+        province,
+        taxLabel: entry.taxLabel,
+        taxPercentMilli: entry.taxPercentMilli,
+        featureWasEnabled: !!settingsBefore?.enabled,
+        simpleWasAllowed: !!settingsBefore?.allowSimpleCanadianCharges,
+      },
+    });
+
+    return {
+      canadian: true,
+      province,
+      taxLabel: entry.taxLabel,
+      taxPercent: entry.taxPercentMilli == null ? null : entry.taxPercentMilli / 1000,
+      enabledFeature: !settingsBefore?.enabled,
+      allowedSimple: !settingsBefore?.allowSimpleCanadianCharges,
+      featureEnabled: settings.enabled,
+    };
+  });
   /* ── Administration ───────────────────────────────────────────────────────── */
 
   /**

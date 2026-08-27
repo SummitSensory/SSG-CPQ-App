@@ -189,10 +189,24 @@ export function renderTemplate(template: string, values: MergeValues): RenderRes
  * correct paragraph spacing in Outlook, which ignores most of what it is given.
  */
 export function emailShell(bodyHtml: string): string {
+  const SERIF = "Georgia,'Times New Roman',serif";
+  const SANS = "Calibri,'Segoe UI',Arial,sans-serif";
+  // Tables and inline styles only, and no logo: Outlook desktop drops data-URI images
+  // and shows a broken-image frame in their place, so the letterhead is carried
+  // typographically — the serif company name, the navy rule and the red accent that the
+  // printed letter opens with. Everything here survives Word's rendering engine.
   return (
-    '<div style="font-family:Calibri,\'Segoe UI\',Arial,sans-serif;font-size:11pt;color:#20241f;line-height:1.5;max-width:660px;">' +
-    bodyHtml +
-    '</div>'
+    `<table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;background:#ffffff;">` +
+    `<tr><td style="padding:0;">` +
+    `<table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;width:100%;max-width:660px;font-family:${SANS};font-size:11pt;color:${BRAND.ink};line-height:1.5;">` +
+    `<tr><td style="padding:0 0 10px;border-bottom:1px solid ${BRAND.navyRule};">` +
+    `<div style="font-family:${SERIF};font-size:15pt;font-weight:bold;color:${BRAND.navy};letter-spacing:-.01em;">Summit Sensory Gym</div>` +
+    `<div style="font-size:8.5pt;color:${BRAND.muted};padding-top:2px;">6150 S Geneva Ct, Englewood, CO 80111 &middot; SummitSensory.com</div>` +
+    `</td></tr>` +
+    `<tr><td style="padding:0;"><table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;"><tr><td style="width:54px;height:3px;background:${BRAND.red};font-size:0;line-height:0;">&nbsp;</td></tr></table></td></tr>` +
+    `<tr><td style="padding:16px 0 0;">${bodyHtml}</td></tr>` +
+    `<tr><td style="padding:14px 0 0;border-top:1px solid ${BRAND.navyRule};font-size:8.5pt;color:${BRAND.muted};">Summit Sensory Gym &middot; 720-457-5500 &middot; orders@summitsensory.com</td></tr>` +
+    `</table></td></tr></table>`
   );
 }
 
@@ -213,13 +227,14 @@ export function figuresTable(values: MergeValues): string {
   const rows = all.filter(([, v]) => String(v).trim());
 
   return (
-    '<table cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:14pt 0;font-size:11pt;">' +
+    `<div style="font-family:Georgia,'Times New Roman',serif;font-size:11.5pt;font-weight:bold;color:${BRAND.navy};padding:0 0 4pt;">Payment Information</div>` +
+    '<table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin:0 0 14pt;font-size:11pt;">' +
     rows
       .map(
-        ([label, value], i) =>
+        ([label, value]) =>
           '<tr>' +
-          `<td style="padding:4pt 18pt 4pt 0;color:#5c6357;${i === rows.length - 1 ? '' : ''}">${esc(label)}</td>` +
-          `<td style="padding:4pt 0;font-weight:${label === 'Balance due' ? '700' : '400'};">${esc(String(value))}</td>` +
+          `<td style="padding:2pt 22pt 2pt 0;color:#4b5468;white-space:nowrap;">${esc(label)}</td>` +
+          `<td style="padding:2pt 0;font-weight:${label === 'Balance due' ? 'bold' : 'normal'};">${esc(String(value))}</td>` +
           '</tr>',
       )
       .join('') +
@@ -292,9 +307,42 @@ export const PAY01_EMAIL_TEMPLATE: BuiltInTemplate = {
  * Seeded by key, so adding one here puts it in front of every sender on the next read
  * without touching an email somebody has already edited.
  */
+/**
+ * The PAY-02 email: the order is finished and payment is what stands between it and
+ * a truck.
+ *
+ * Shorter than PAY-01 on purpose. PAY-01 explains a schedule; this one states a
+ * condition, and the detail — invoice history, fee terms, documentation — is in the
+ * attached letter, which is the record anyone in accounts payable will ask for.
+ */
+export const PAY02_EMAIL_TEMPLATE: BuiltInTemplate = {
+  key: 'pay-02-ready-to-ship',
+  kind: 'EMAIL' as TemplateKind,
+  name: 'PAY-02 — Order Ready to Ship: Payment Required for Release',
+  stage: 2,
+  whenToUse:
+    'The order is complete and will not be released for shipment until the remaining balance is received.',
+  /** Sent with the PAY-02 letter by default. */
+  pairedLetterKey: 'ready-to-ship-payment-required',
+  subject: 'Action Required: Payment Needed to Release Your Summit Order for Shipment',
+  bodyHtml: [
+    '<p>Dear {{customer_first_name}},</p>',
+    '<p>Your Summit Sensory Gym order is ready to be released for shipment.</p>',
+    '<p>Our records currently show a remaining balance of <b>{{balance_due}}</b>. As outlined in the accepted proposal for your order, the remaining balance is due prior to shipment unless otherwise specifically stated.</p>',
+    '<p>Invoice &amp; Payment Link: {{invoice_link}}</p>',
+    '<p>Once payment has been received and applied to your account, our team can proceed with release of the order and coordinate shipment.</p>',
+    '<p>I have attached a formal payment request for your records.</p>',
+    '<p>If payment has already been submitted, please send the payment date and remittance information so that we can verify receipt and avoid delaying your shipment.</p>',
+    '<p>Questions regarding the invoice or payment can be directed to our Customer Service team at {{customer_service_email}} or {{customer_service_phone}}.</p>',
+    '<p>Thank you,</p>',
+    '<p>{{sender_name}}</p>',
+  ].join('\n'),
+};
+
 export const DEFAULT_EMAIL_TEMPLATES: BuiltInTemplate[] = [
   DEFAULT_EMAIL_TEMPLATE,
   PAY01_EMAIL_TEMPLATE,
+  PAY02_EMAIL_TEMPLATE,
 ];
 
 /**
@@ -348,6 +396,34 @@ export const DEFAULT_LETTER_TEMPLATES: BuiltInTemplate[] = [
       '<p>If you have questions regarding the invoice or payment, please contact our Customer Service team at {{customer_service_email}} or {{customer_service_phone}}.</p>',
       '<p><b>Credit Card Payments:</b> A 3.5% processing fee applies to credit card payments. ACH and wire options are also available.</p>',
       '<p>Thank you for your prompt attention to this payment. We look forward to getting your order on its way.</p>',
+      '<p>Sincerely,</p>',
+    ].join('\n'),
+  },
+  {
+    key: 'ready-to-ship-payment-required',
+    kind: 'LETTER' as TemplateKind,
+    name: 'PAY-02 — Order Ready to Ship: Payment Required for Release',
+    stage: 2,
+    whenToUse:
+      'The order has completed production and will be held until the remaining balance is received.',
+    subject: 'Re: Order Ready for Shipment – {{order_number}}',
+    bodyHtml: [
+      '<p>Dear {{customer_first_name}},</p>',
+      '<p>We are pleased to let you know that your Summit Sensory Gym order has completed the applicable production requirements and is ready to be released for shipment.</p>',
+      '<p>Our records currently show a remaining balance of {{balance_due}}.</p>',
+      '<p>As outlined in the proposal accepted and signed for this order, unless otherwise specifically stated, the remaining balance is due prior to shipment. Accordingly, payment of the required balance must be received before Summit Sensory Gym can release the order for shipment.</p>',
+      '<p style="font-family:Georgia,serif;font-size:14px;font-weight:700;color:#203060;margin:12px 0 3px;">Payment Information</p>',
+      '<table style="border-collapse:collapse;margin:0 0 8px;page-break-inside:avoid;"><tbody>',
+      '<tr><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Order / Proposal #</td><td style="padding:0 46px 0 0;white-space:nowrap;">{{order_number}}</td><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Invoice Date</td><td style="padding:0;white-space:nowrap;">{{invoice_date}}</td></tr>',
+      '<tr><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Invoice #</td><td style="padding:0 46px 0 0;white-space:nowrap;">{{invoice_number}}</td><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Payments / Credits</td><td style="padding:0;white-space:nowrap;">{{payments_credits}}</td></tr>',
+      '<tr><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;">Original Invoice Amount</td><td style="padding:0 46px 0 0;white-space:nowrap;">{{invoice_amount}}</td><td style="padding:0 14px 0 0;color:#4b5468;white-space:nowrap;"><b>Balance Due</b></td><td style="padding:0;white-space:nowrap;"><b>{{balance_due}}</b></td></tr>',
+      '</tbody></table>',
+      '<p>Invoice &amp; Payment Link: {{invoice_link}}</p>',
+      '<p>We encourage you to arrange for payment promptly so that your shipment is not unnecessarily delayed. Once payment has been received and applied to your account, our team can proceed with release of the order and coordinate the applicable freight and delivery arrangements.</p>',
+      '<p>If payment has already been submitted, please provide the payment date and remittance information so that we can verify receipt and release your order as quickly as possible.</p>',
+      '<p>If you have any questions regarding the invoice, balance due, payment options, or supporting documentation, please contact our Customer Service team at {{customer_service_email}} or {{customer_service_phone}}.</p>',
+      '<p><b>Credit Card Payments:</b> Payments made by credit card are subject to a 3.5% processing fee in accordance with the accepted proposal and payment terms. ACH and wire payment options are also available.</p>',
+      '<p>Thank you for your prompt attention to this payment. We are excited to get your Summit equipment on its way to you.</p>',
       '<p>Sincerely,</p>',
     ].join('\n'),
   },
@@ -451,12 +527,28 @@ export function letterheadHtml(input: LetterheadInput): string {
 
   const reference = String(input.reference ?? '').trim();
 
+  // Auto-fit. A payment letter is a one-page document by convention, and PAY-02 with a
+  // six-row figures block runs about 95px past the fold at PAY-01's leading. Rather than
+  // cut a sentence somebody wrote for legal reasons, a long letter is set one notch
+  // tighter: 11px on 1.5 with 7px between paragraphs, which is still comfortably above
+  // the readable floor for print. Measured on the body's plain text, so the threshold
+  // does not move when an admin edits the markup around the same words.
+  const plainLen = String(input.bodyHtml ?? '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&[a-z#0-9]+;/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim().length;
+  const dense = plainLen >= 1400;
+  const M = dense
+    ? { fs: '11px', lh: '1.5', gap: '7px', h1Top: '12px', accentTop: '20px' }
+    : { fs: '11.5px', lh: '1.62', gap: '10px', h1Top: '14px', accentTop: '26px' };
+
   return `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>${esc(input.title)}</title>
 <style>
   @page { size: Letter; margin: 0; }
   html, body { margin: 0; padding: 0; }
-  body { font-family: ${SANS}; font-size: 11.5px; line-height: 1.62; color: ${B.ink};
+  body { font-family: ${SANS}; font-size: ${M.fs}; line-height: ${M.lh}; color: ${B.ink};
          -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .page { box-sizing: border-box; width: 816px; min-height: 1056px; background: #fff;
           padding: 46px 70px 30px; }
@@ -468,23 +560,23 @@ export function letterheadHtml(input: LetterheadInput): string {
   .head .name { font-family: ${SERIF}; font-size: 19px; font-weight: 700; color: ${B.navy}; letter-spacing: -.01em; }
   .head .street { font-size: 10.5px; color: ${B.muted}; line-height: 1.5; margin-top: 2px; }
   .head .ref { text-align: right; font-size: 10.5px; color: ${B.muted}; line-height: 1.7; white-space: nowrap; }
-  .accent { width: 54px; height: 3px; background: ${B.red}; margin-top: 26px; }
+  .accent { width: 54px; height: 3px; background: ${B.red}; margin-top: ${M.accentTop}; }
   h1 { font-family: ${SERIF}; font-size: 20px; font-weight: 700; color: ${B.navy};
-       letter-spacing: -.02em; line-height: 1.28; margin: 14px 0 0; max-width: 660px; }
+       letter-spacing: -.02em; line-height: 1.28; margin: ${M.h1Top} 0 0; max-width: 660px; }
   /* The address block sits in the letter's own paragraph rhythm: a 10px space
      before and after it, and the body's leading, so it reads as the first block of
      the letter rather than as part of the letterhead. */
   .to { margin-top: 10px; }
   .body { margin-top: 10px; max-width: 676px; text-wrap: pretty; }
-  .body p { margin: 0 0 10px; }
+  .body p { margin: 0 0 ${M.gap}; }
   /* "Sincerely," belongs to the signature, not to the body: no gap under it, so the
      mark sits directly beneath the sign-off the way it does on a signed page. */
   .body p:last-child { margin-bottom: 0; }
-  .body table { font-size: 11.5px; }
+  .body table { font-size: ${M.fs}; }
   .body table td { vertical-align: top; }
   .body a { color: ${B.navy}; }
   .sign { margin-top: 2px; page-break-inside: avoid; }
-  .sign .who { margin-top: 9px; font-size: 11.5px; line-height: 1.6; color: ${B.ink}; }
+  .sign .who { margin-top: 9px; font-size: ${M.fs}; line-height: 1.6; color: ${B.ink}; }
 </style></head>
 <body><div class="page">
   <div class="head">
