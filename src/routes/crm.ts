@@ -20,6 +20,10 @@ import {
 } from '../crm/duplicates.js';
 import { ListQuery, buildOrderBy, paginate } from '../crm/query.js';
 import { pushOpportunity } from '../integrations/monday/sync.js';
+import { fetchItemById } from '../integrations/monday/discovery.js';
+import { DEAL_COL, buildAddress } from '../integrations/monday/crmMapping.js';
+import { isMondayPushConfigured } from '../config/env.js';
+import { normalizeCountry, normalizeProvince, isCanada } from '../lib/country.js';
 import { randomBytes } from 'node:crypto';
 
 const ORG_SORT = ['name', 'customerType', 'createdAt', 'updatedAt'];
@@ -164,6 +168,184 @@ export function registerCrmRoutes(app: FastifyInstance): void {
     if (!parsed.success) throw new ValidationError(parsed.error.message);
     const address = await prisma.address.create({ data: parsed.data });
     return reply.status(201).send(address);
+  });
+
+  /* ---- The billing address ----
+   *
+   * Its own endpoints, and the only ones that WRITE an organization's address,
+   * because one field on it decides how a whole proposal is priced:
+   * resolveJurisdiction() reads the BILLING address country, and a Canadian
+   * customer sitting at the imported default of "US" is quoted as a domestic job
+   * with no tax, no duty and no CAD column.
+   *
+   * Until now there was no way to correct one. The CRM import writes an address
+   * only when the organization has NONE (writeAddressIfMissing), so a customer
+   * imported before their country was filled in on the deal row could never be
+   * fixed, from anywhere.
+   *
+   * Upsert rather than create: an organization has one billing address, and a
+   * second one would leave resolveJurisdiction() picking between them.
+   */
+
+  const BillingAddressInput = z.object({
+    line1: z.string().trim().min(1).max(200),
+    line2: z.string().trim().max(200).nullish(),
+    city: z.string().trim().min(1).max(120),
+    /** State or province. Normalized to a two-letter code for Canada. */
+    region: z.string().trim().min(1).max(120),
+    postalCode: z.string().trim().min(1).max(20),
+    /** Anything normalizeCountry accepts: CA, CAN, Canada, US, USA, United States. */
+    country: z.string().trim().min(2).max(60),
+  });
+
+  /**
+   * Normalize what a person typed into what the engine reads.
+   *
+   * The country becomes ISO alpha-2 or the request is refused — a country this
+   * application does not recognize would resolve to no jurisdiction at all, which
+   * reads downstream as "not Canadian" and is exactly the silent mistake these
+   * endpoints exist to prevent. The province is normalized only for Canada; US
+   * states are stored as typed, as the import already does.
+   */
+  function normalizeBilling(input: z.infer<typeof BillingAddressInput>) {
+    const country = normalizeCountry(input.country);
+    if (!country) {
+      throw new ValidationError(
+        `"${input.country}" was not recognized as a country. Enter Canada or United States.`,
+      );
+    }
+    let region = input.region;
+    if (isCanada(country)) {
+      const province = normalizeProvince(input.region);
+      if (!province) {
+        throw new ValidationError(
+          `"${input.region}" was not recognized as a Canadian province or territory.`,
+        );
+      }
+      region = province;
+    }
+    return {
+      line1: input.line1,
+      line2: input.line2?.trim() || null,
+      city: input.city,
+      region,
+      postalCode: input.postalCode,
+      country,
+    };
+  }
+
+  async function writeBilling(
+    organizationId: string,
+    data: ReturnType<typeof normalizeBilling>,
+    actorId: string,
+    source: 'typed' | 'monday',
+  ) {
+    const existing = await prisma.address.findFirst({
+      where: { organizationId, type: 'BILLING' },
+      select: { id: true, line1: true, city: true, region: true, postalCode: true, country: true },
+    });
+    const address = existing
+      ? await prisma.address.update({ where: { id: existing.id }, data })
+      : await prisma.address.create({ data: { ...data, organizationId, type: 'BILLING' } });
+
+    await recordAudit({
+      actorId,
+      action: 'crm.org.billing_address',
+      details: {
+        entity: 'Address',
+        id: address.id,
+        organizationId,
+        source,
+        from: existing ?? null,
+        to: {
+          line1: data.line1,
+          city: data.city,
+          region: data.region,
+          postalCode: data.postalCode,
+          country: data.country,
+        },
+      },
+    });
+    return address;
+  }
+
+  app.put('/crm/organizations/:id/billing-address', write, async (req) => {
+    const { id } = req.params as { id: string };
+    const org = await prisma.organization.findUnique({ where: { id }, select: { id: true } });
+    if (!org) throw new NotFoundError();
+    const parsed = BillingAddressInput.safeParse(req.body);
+    if (!parsed.success)
+      throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid address.');
+    return writeBilling(id, normalizeBilling(parsed.data), req.user!.sub, 'typed');
+  });
+
+  /**
+   * Re-read the address off the monday deal row, overwriting what is here.
+   *
+   * The bulk-correction path: fix the Country column on the board and pull it,
+   * rather than retyping an address that is already correct somewhere else. It
+   * overwrites deliberately — the import's skip-if-present rule is what left these
+   * addresses stale, and a pull that also skipped would be a button that does
+   * nothing on every row that needs it.
+   *
+   * The deal row is found through the organization's linked opportunity, which is
+   * where the CRM import records the monday item id.
+   */
+  app.post('/crm/organizations/:id/billing-address/from-monday', write, async (req) => {
+    const { id } = req.params as { id: string };
+    if (!isMondayPushConfigured()) {
+      throw new ValidationError(
+        'monday.com is not configured on this deployment, so there is no deal row to read.',
+      );
+    }
+    const opp = await prisma.opportunity.findFirst({
+      where: { organizationId: id, mondayItemId: { not: null } },
+      orderBy: { updatedAt: 'desc' },
+      select: { mondayItemId: true },
+    });
+    if (!opp?.mondayItemId) {
+      throw new ValidationError(
+        'This customer is not linked to a monday deal row, so there is nothing to pull. Enter the address by hand.',
+      );
+    }
+    const item = await fetchItemById(opp.mondayItemId);
+    if (!item) {
+      throw new NotFoundError(
+        `monday item ${opp.mondayItemId} is not visible to this token. Check the board sharing.`,
+      );
+    }
+    const addr = buildAddress(item.text, item.raw[DEAL_COL.location]);
+    if (!addr) {
+      throw new ValidationError(
+        'The deal row has no address columns filled in. Fill in the street, city, state/province, postal code and Country on the board, then pull again.',
+      );
+    }
+    // Every split address column on the board is optional, so each one can come back
+    // null. Named individually in the message rather than reported as "incomplete":
+    // whoever reads this has to go and fill in a specific column.
+    const labels: Array<[string, string | null]> = [
+      ['street address', addr.line1],
+      ['city', addr.city],
+      ['state or province', addr.region],
+      ['postal code', addr.postalCode],
+    ];
+    const blank = labels.filter(([, v]) => !String(v ?? '').trim()).map(([label]) => label);
+    if (blank.length) {
+      throw new ValidationError(
+        `The monday deal row has no ${blank.join(', ')}. Fill those columns in on the board, then pull again.`,
+      );
+    }
+
+    const data = normalizeBilling({
+      line1: String(addr.line1),
+      line2: addr.line2 ? String(addr.line2) : null,
+      city: String(addr.city),
+      region: String(addr.region),
+      postalCode: String(addr.postalCode),
+      country: String(addr.country || 'US'),
+    });
+    const address = await writeBilling(id, data, req.user!.sub, 'monday');
+    return { address, mondayItemId: opp.mondayItemId };
   });
 
   // ---- Rooms (site survey) ----

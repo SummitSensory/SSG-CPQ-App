@@ -26,7 +26,7 @@ import {
   safeSegment,
 } from '../lib/fileStore.js';
 import {
-  DEFAULT_EMAIL_TEMPLATE,
+  DEFAULT_EMAIL_TEMPLATES,
   DEFAULT_LETTER_TEMPLATES,
   ENTERED_FIELDS,
   MERGE_FIELDS,
@@ -83,6 +83,14 @@ const TemplateInput = z.object({
   whenToUse: z.string().trim().max(300).nullish(),
   subject: z.string().trim().min(1).max(300),
   bodyHtml: z.string().trim().min(1).max(60_000),
+  /** The letter this email is normally sent with. Empty string clears the pairing. */
+  pairedLetterKey: z
+    .string()
+    .trim()
+    .max(60)
+    .regex(/^[a-z0-9][a-z0-9-]*$/, 'Use lower-case letters, numbers and hyphens.')
+    .nullish()
+    .or(z.literal('')),
   active: z.boolean().optional(),
 });
 
@@ -99,8 +107,8 @@ const SAMPLE_VALUES: MergeValues = {
   customer_address: '9876 NewTech Way',
   customer_city_state_zip: 'San Jose, CA 95113',
   payments_credits: '$18,450.00',
-  customer_service_email: 'Sales@SummitSensory.com',
-  customer_service_phone: '(720) 457-5500',
+  customer_service_email: 'orders@summitsensory.com',
+  customer_service_phone: '720-457-5500',
   balance_due: '$106,425.00',
   amount_paid: '$106,425.00',
   due_date: 'April 3, 2026',
@@ -131,40 +139,40 @@ const SAMPLE_VALUES: MergeValues = {
  * there: a letter goes out over a person's signature, so none of it is invented
  * here. Anything else is typed in under Administration → Payment requests.
  */
+let seededTemplates = false;
+
 async function loadTemplates(includeInactive = false) {
-  const count = await prisma.paymentTemplate.count({ where: { kind: 'EMAIL' } });
-  if (count === 0) {
+  if (!seededTemplates) {
+    // By key, not by count. A deployment that already has the first email must still
+    // receive the ones added since, and skipDuplicates means an edited template is
+    // never overwritten and a concurrent first request is harmless.
     await prisma.paymentTemplate.createMany({
       data: [
-        {
-          key: DEFAULT_EMAIL_TEMPLATE.key,
-          kind: 'EMAIL',
-          name: DEFAULT_EMAIL_TEMPLATE.name,
-          stage: DEFAULT_EMAIL_TEMPLATE.stage,
-          whenToUse: DEFAULT_EMAIL_TEMPLATE.whenToUse,
-          subject: DEFAULT_EMAIL_TEMPLATE.subject,
-          bodyHtml: DEFAULT_EMAIL_TEMPLATE.bodyHtml,
+        ...DEFAULT_EMAIL_TEMPLATES.map((t) => ({
+          key: t.key,
+          kind: 'EMAIL' as const,
+          name: t.name,
+          stage: t.stage,
+          whenToUse: t.whenToUse,
+          subject: t.subject,
+          bodyHtml: t.bodyHtml,
+          pairedLetterKey: t.pairedLetterKey ?? null,
           isBuiltIn: true,
-        },
+        })),
+        ...DEFAULT_LETTER_TEMPLATES.map((t) => ({
+          key: t.key,
+          kind: 'LETTER' as const,
+          name: t.name,
+          stage: t.stage,
+          whenToUse: t.whenToUse,
+          subject: t.subject,
+          bodyHtml: t.bodyHtml,
+          isBuiltIn: true,
+        })),
       ],
       skipDuplicates: true,
     });
-  }
-  const letterCount = await prisma.paymentTemplate.count({ where: { kind: 'LETTER' } });
-  if (letterCount === 0) {
-    await prisma.paymentTemplate.createMany({
-      data: DEFAULT_LETTER_TEMPLATES.map((t) => ({
-        key: t.key,
-        kind: 'LETTER' as const,
-        name: t.name,
-        stage: t.stage,
-        whenToUse: t.whenToUse,
-        subject: t.subject,
-        bodyHtml: t.bodyHtml,
-        isBuiltIn: true,
-      })),
-      skipDuplicates: true,
-    });
+    seededTemplates = true;
   }
   return prisma.paymentTemplate.findMany({
     where: includeInactive ? {} : { active: true },
@@ -188,8 +196,8 @@ async function loadTemplates(includeInactive = false) {
  * time it was sent would be a letter nobody could be held to. Edited here.
  */
 const CUSTOMER_SERVICE = {
-  email: 'Sales@SummitSensory.com',
-  phone: '(720) 457-5500',
+  email: 'orders@summitsensory.com',
+  phone: '720-457-5500',
 };
 
 export async function composeContext(txnId: string, userId: string) {
@@ -718,6 +726,7 @@ export function registerReceivableRoutes(app: FastifyInstance): void {
           whenToUse: t.whenToUse,
           subject: t.subject,
           bodyHtml: t.bodyHtml,
+          pairedLetterKey: t.pairedLetterKey,
         })),
       letterTemplates: templates
         .filter((t) => t.kind === 'LETTER')
@@ -843,6 +852,9 @@ export function registerReceivableRoutes(app: FastifyInstance): void {
         whenToUse: d.whenToUse ?? null,
         subject: d.subject,
         bodyHtml: sanitizeTemplateHtml(d.bodyHtml),
+        // Only an email can carry a letter; a letter that named another letter would
+        // be a pairing nothing reads.
+        pairedLetterKey: d.kind === 'EMAIL' ? d.pairedLetterKey || null : null,
         active: d.active ?? true,
         isBuiltIn: false,
         updatedById: req.user!.sub,
@@ -892,6 +904,7 @@ export function registerReceivableRoutes(app: FastifyInstance): void {
         ...(d.whenToUse !== undefined ? { whenToUse: d.whenToUse || null } : {}),
         ...(d.subject ? { subject: d.subject } : {}),
         ...(d.bodyHtml ? { bodyHtml: sanitizeTemplateHtml(d.bodyHtml) } : {}),
+        ...(d.pairedLetterKey !== undefined ? { pairedLetterKey: d.pairedLetterKey || null } : {}),
         ...(d.active !== undefined ? { active: d.active } : {}),
         updatedById: req.user!.sub,
       },
@@ -946,9 +959,8 @@ export function registerReceivableRoutes(app: FastifyInstance): void {
     const existing = await prisma.paymentTemplate.findUnique({ where: { id } });
     if (!existing) throw new NotFoundError('Template not found');
     const original =
-      existing.key === DEFAULT_EMAIL_TEMPLATE.key
-        ? DEFAULT_EMAIL_TEMPLATE
-        : DEFAULT_LETTER_TEMPLATES.find((t) => t.key === existing.key);
+      DEFAULT_EMAIL_TEMPLATES.find((t) => t.key === existing.key) ??
+      DEFAULT_LETTER_TEMPLATES.find((t) => t.key === existing.key);
     if (!original) {
       throw new ValidationError(
         'This template was not one of the originals, so there is nothing to restore.',
@@ -962,6 +974,7 @@ export function registerReceivableRoutes(app: FastifyInstance): void {
         whenToUse: original.whenToUse,
         subject: original.subject,
         bodyHtml: original.bodyHtml,
+        pairedLetterKey: original.pairedLetterKey ?? null,
         active: true,
         updatedById: req.user!.sub,
       },

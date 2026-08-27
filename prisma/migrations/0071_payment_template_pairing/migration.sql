@@ -1,0 +1,11 @@
+-- Pair a payment email with the letter it goes out with.
+--
+-- On the EMAIL row rather than on the letter, because the email is what a sender
+-- picks first and the letter is the attachment that follows it. Nullable: an email
+-- that stands on its own has no letter, and a letter can still be attached to any
+-- email by hand — the pairing is a default, not a constraint.
+--
+-- No foreign key to the letter's key on purpose. A letter can be retired while the
+-- emails that referenced it stay readable, and the send history already records
+-- both keys as plain text for exactly that reason.
+ALTER TABLE "PaymentTemplate" ADD COLUMN "pairedLetterKey" TEXT;

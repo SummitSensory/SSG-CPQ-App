@@ -69,6 +69,26 @@ export const ENTERED_FIELDS = MERGE_FIELDS.filter((f) => f.entered).map((f) => f
 
 export type MergeValues = Record<string, string>;
 
+/**
+ * A template that ships with the app.
+ *
+ * Declared as one shape so the seeder can iterate emails and letters together. Kept
+ * structural rather than split per kind: the only difference is pairedLetterKey,
+ * which a letter simply never carries, and two near-identical interfaces would be two
+ * places to add the next field to.
+ */
+export interface BuiltInTemplate {
+  key: string;
+  kind: TemplateKind;
+  name: string;
+  stage: number;
+  whenToUse: string;
+  subject: string;
+  bodyHtml: string;
+  /** EMAIL only — the letter this email is normally sent with. */
+  pairedLetterKey?: string | null;
+}
+
 function esc(s: string): string {
   return String(s ?? '').replace(/[&<>"]/g, (c) =>
     c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : '&quot;',
@@ -217,7 +237,7 @@ export function figuresTable(values: MergeValues): string {
  * Administration → Payment requests like everything else; this copy is only the
  * starting point.
  */
-export const DEFAULT_EMAIL_TEMPLATE = {
+export const DEFAULT_EMAIL_TEMPLATE: BuiltInTemplate = {
   key: 'balance-due',
   kind: 'EMAIL' as TemplateKind,
   name: 'Outstanding balance',
@@ -233,6 +253,49 @@ export const DEFAULT_EMAIL_TEMPLATE = {
     '<p>Thank you,</p>',
   ].join('\n'),
 };
+
+/**
+ * The PAY-01 email: the message the advance-balance letter travels with.
+ *
+ * It repeats the figures rather than pointing at the attachment. An email that says
+ * "see the attached letter" asks the reader to open a PDF before they know whether it
+ * concerns them, and the person who has to forward it to accounts payable cannot do
+ * so from what they can see. The letter is the formal record; the email is the thing
+ * that gets read.
+ */
+export const PAY01_EMAIL_TEMPLATE: BuiltInTemplate = {
+  key: 'pay-01-upcoming-shipment',
+  kind: 'EMAIL' as TemplateKind,
+  name: 'PAY-01 — Upcoming Shipment: Payment Requested',
+  stage: 1,
+  whenToUse:
+    'An order is nearing completion and the remaining balance is being requested before it ships.',
+  /** Sent with the PAY-01 letter by default. */
+  pairedLetterKey: 'tentative-ship-advance-balance',
+  subject: 'Upcoming Shipment – Payment Requested for Invoice {{invoice_number}}',
+  bodyHtml: [
+    '<p>Dear {{customer_first_name}},</p>',
+    '<p>I wanted to let you know that your Summit Sensory Gym order is progressing toward completion and is currently tentatively scheduled to ship on or around {{tentative_ship_date}}.</p>',
+    '<p>To help ensure that your order can be released without delay once it is ready, we are requesting payment of the remaining balance of <b>{{balance_due}}</b> at this time.</p>',
+    '<p>Invoice &amp; Payment Link: {{invoice_link}}</p>',
+    '<p>As outlined in the accepted proposal for your order, unless otherwise stated, the remaining balance is due prior to shipment.</p>',
+    '<p>I have attached a formal payment request for your records. If payment has already been submitted, please send us the applicable remittance information so we can confirm that it has been properly applied.</p>',
+    '<p>If you have any questions regarding the invoice or need additional documentation, please contact our Customer Service team at {{customer_service_email}} or {{customer_service_phone}}.</p>',
+    '<p>Thank You,</p>',
+    '<p>{{sender_name}}</p>',
+  ].join('\n'),
+};
+
+/**
+ * Every email that ships with the app, in the order the picker shows them.
+ *
+ * Seeded by key, so adding one here puts it in front of every sender on the next read
+ * without touching an email somebody has already edited.
+ */
+export const DEFAULT_EMAIL_TEMPLATES: BuiltInTemplate[] = [
+  DEFAULT_EMAIL_TEMPLATE,
+  PAY01_EMAIL_TEMPLATE,
+];
 
 /**
  * `{{FIGURES}}` is the one non-field placeholder: it drops in the figures table
@@ -253,7 +316,7 @@ export function expandFigures(html: string, values: MergeValues): string {
  * letterhead itself. So a letter body starts at its reference block and ends at the
  * sign-off — repeating any of them in the copy would print them twice on the page.
  */
-export const DEFAULT_LETTER_TEMPLATES = [
+export const DEFAULT_LETTER_TEMPLATES: BuiltInTemplate[] = [
   {
     key: 'tentative-ship-advance-balance',
     kind: 'LETTER' as TemplateKind,

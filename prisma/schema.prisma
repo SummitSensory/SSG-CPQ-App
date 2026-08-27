@@ -3721,6 +3721,10 @@ model PaymentTemplate {
   /// The email subject. On a LETTER this is the heading printed above the body.
   subject     String
   bodyHtml    String
+  /// On an EMAIL, the key of the letter it is normally sent with, so choosing the
+  /// email selects the letter. Plain text and not a relation: retiring a letter must
+  /// not break the emails that named it.
+  pairedLetterKey String?
   active      Boolean            @default(true)
   /// Set on anything that shipped with the app, so a reset knows what to restore.
   isBuiltIn   Boolean            @default(false)

@@ -1185,7 +1185,28 @@
    * eventually disagree, and the first anyone would know is a customer receiving the
    * disagreement.
    */
+  /**
+   * Attach the letter this email is normally sent with.
+   *
+   * A default, not a rule: the sender can change or clear it afterwards, and a
+   * pairing naming a letter that has since been retired is ignored rather than
+   * forced into a select that has no such option.
+   */
+  function applyPairedLetter(key) {
+    var chosen = (compose.emailTemplates || []).filter(function (t) {
+      return t.key === key;
+    })[0];
+    var sel = document.getElementById('arLetter');
+    if (!sel || !chosen) return;
+    var paired = chosen.pairedLetterKey || '';
+    var exists = [].some.call(sel.options, function (o) {
+      return o.value === paired;
+    });
+    sel.value = paired && exists ? paired : '';
+  }
+
   async function applyTemplate(key) {
+    applyPairedLetter(key);
     var r = await authed(
       '/receivables/' + encodeURIComponent(compose.invoice.transactionId) + '/preview',
       {
@@ -1454,6 +1475,40 @@
   function openTemplateEditor(t, kind) {
     var isNew = !t;
     var k = t ? t.kind : kind;
+
+    // Only an email carries a letter. Retired letters are left out of the list but an
+    // existing pairing to one is kept, so editing an email's subject cannot silently
+    // drop the letter it has always gone out with.
+    var pairedNow = (t && t.pairedLetterKey) || '';
+    var pairable = ((templates && templates.templates) || []).filter(function (x) {
+      return x.kind === 'LETTER' && (x.active || x.key === pairedNow);
+    });
+    var pairedField =
+      k === 'EMAIL'
+        ? '<div style="margin-top:10px;"><label style="display:block;font-size:12px;color:' +
+          SOFT +
+          ';margin-bottom:4px;">Sent with this letter</label>' +
+          '<select id="arTplPaired" style="' +
+          FIELD +
+          '"><option value="">No letter</option>' +
+          pairable
+            .map(function (x) {
+              return (
+                '<option value="' +
+                esc(x.key) +
+                '"' +
+                (x.key === pairedNow ? ' selected' : '') +
+                '>' +
+                esc(x.name) +
+                '</option>'
+              );
+            })
+            .join('') +
+          '</select>' +
+          '<div style="font-size:11.5px;color:' +
+          MUTE +
+          ';margin-top:4px;">Choosing this email in the composer attaches this letter automatically. It can still be changed before sending.</div></div>'
+        : '';
     openModal(
       (isNew ? 'New ' : 'Edit ') + (k === 'LETTER' ? 'letter' : 'email'),
       '<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px;">' +
@@ -1495,6 +1550,7 @@
         '" style="' +
         FIELD +
         '"></div>' +
+        pairedField +
         '<div style="margin-top:10px;"><label style="display:block;font-size:12px;color:' +
         SOFT +
         ';margin-bottom:4px;">' +
@@ -1533,6 +1589,8 @@
         whenToUse: document.getElementById('arTplWhen').value.trim() || null,
         subject: document.getElementById('arTplSubject').value.trim(),
         bodyHtml: document.getElementById('arTplBody').value.trim(),
+        // Always sent, including as '' — that is how a pairing is cleared.
+        pairedLetterKey: k === 'EMAIL' ? document.getElementById('arTplPaired').value || '' : '',
       };
       if (!body.name || !body.subject || !body.bodyHtml || (isNew && !body.key)) {
         toast('Name, key, subject and body are all needed.', true);
