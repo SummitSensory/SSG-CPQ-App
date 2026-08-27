@@ -186,7 +186,11 @@
   }
   function fmtMoney(minor, cur) { if (minor == null) return '—'; var n = Number(minor) / 100; return (cur ? cur + ' ' : '$') + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
   /** Money as it prints in the proposal totals block: "USD $8,662.50". */
-  function fmtUsd(minor) { return 'USD ' + fmtMoney(minor, ''); }
+  // Held together with nowrap: the totals column is 78px wide, and left to itself the
+  // browser broke 'USD' onto its own line above the figure.
+  function fmtUsd(minor) {
+    return '<span style="white-space:nowrap;">USD ' + fmtMoney(minor, '') + '</span>';
+  }
   /**
    * The "prints instead of TBD" box takes wording, but people type the amount into it
    * — it sits beside the amount box and looks like one. A plain number in there is
@@ -9487,7 +9491,7 @@
     // USD rather than breaking.
     var cad = cbCad(usdMinor, rate);
     return fmtUsd(usdMinor) +
-      (cad == null ? '' : '<span style="display:block;font-size:10px;color:#8a8f85;font-weight:400;">CAD ' + (cad / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' est.</span>');
+      (cad == null ? '' : '<span style="display:block;font-size:11.5px;color:#3f5fa8;font-weight:500;white-space:nowrap;">CAD ' + (cad / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' est.</span>');
   }
 
   /**
@@ -9912,6 +9916,30 @@
     var cbAmt = cbApplies(d)
       ? function (v) { return cbDocAmount(v, d.crossBorder.fx.rate); }
       : money;
+    /**
+     * The same pair, inside a sentence.
+     *
+     * cbDocAmount prints CAD as a block, which is right in a totals column and wrong in
+     * prose: on the acceptance line it broke one sentence into three, with the CAD
+     * figure sitting between the total and the words that follow it. Inline, in the
+     * sentence's own size and colour, because it is being read as part of the sentence.
+     */
+    var cbInline = cbApplies(d)
+      ? function (v) {
+          var cad = cbCad(v, d.crossBorder.fx.rate);
+          return (
+            fmtUsd(v) +
+            (cad == null
+              ? ''
+              : ' <span style="white-space:nowrap;">(CAD ' +
+                (cad / 100).toLocaleString(undefined, {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                }) +
+                ' est.)</span>')
+          );
+        }
+      : money;
     // Tax and freight are frequently unknown when a proposal goes out. An untouched
     // figure prints TBD, because a hard $0.00 there reads as "included" — the one
     // wrong answer to give a customer about freight.
@@ -9930,8 +9958,11 @@
      * returns 0 for both, so the numeric test is made separately.
      */
     function amountCell(value, override) {
-      if (value) return money(value);
-      if (isNumericOverride(override)) return money(overrideMinor(override));
+      // cbAmt, not money: a freight figure on a Canadian proposal gets the same CAD
+      // estimate as every other figure in the block. Printing one line in USD alone
+      // left the reader converting it themselves.
+      if (value) return cbAmt(value);
+      if (isNumericOverride(override)) return cbAmt(overrideMinor(override));
       if (override) return '<span style="color:#5c6157;">' + esc(override) + '</span>';
       anyTbd = true;
       return TBD;
@@ -10132,7 +10163,7 @@
           (m.stdFreightOn ? '<div style="display:flex;justify-content:space-between;padding:2px 0 7px;font-size:12px;"><span style="font-weight:700;color:#20241f;">Standard Freight</span><span>' + amountCell(t.stdFreight, '') + '</span></div>' : '') +
           '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding-top:7px;border-top:1.5px solid #203060;"><span style="font-family:\'Newsreader\',serif;font-size:18px;font-weight:700;color:#203060;">' + (cbIsCanadian(d) ? 'Total payable to Summit' : 'Total') + '</span><span style="font-size:17px;font-weight:700;color:#203060;letter-spacing:-.01em;text-align:right;">' + cbAmt(t.total) + '</span></div>' +
           (anyTbd ? '<div style="padding-top:3px;font-size:10.5px;color:#9aa1b0;text-align:right;line-height:1.5;">Total excludes items marked TBD.</div>' : '') +
-          (m.showDeposit !== false ? '<div style="display:flex;justify-content:space-between;padding-top:3px;font-size:11.5px;font-weight:700;"><span style="color:#7b8190;">Deposit Due (' + depositPct() + '%)</span><span>' + money(t.deposit) + '</span></div>' : '') +
+          (m.showDeposit !== false ? '<div style="display:flex;justify-content:space-between;padding-top:3px;font-size:11.5px;font-weight:700;"><span style="color:#7b8190;">Deposit Due (' + depositPct() + '%)</span><span style="text-align:right;">' + cbAmt(t.deposit) + '</span></div>' : '') +
           cbBorderBlock(d) +
           cbRateStamp(d) +
         '</div></div>' + bottomNotesHtml +
@@ -10151,7 +10182,7 @@
           '</div>' +
         '<div style="margin-top:26px;break-inside:avoid;">' +
           '<div style="font-family:\'Newsreader\',serif;font-size:15px;font-weight:700;color:#203060;letter-spacing:-.015em;">Acceptance</div>' +
-          '<div style="font-size:11.5px;color:#5b6478;line-height:1.6;margin-top:5px;max-width:620px;">Sign below to accept this proposal at a total of ' + cbAmt(t.total) +
+          '<div style="font-size:11.5px;color:#5b6478;line-height:1.6;margin-top:5px;max-width:620px;">Sign below to accept this proposal at a total of ' + cbInline(t.total) +
             (m.showDeposit !== false ? ', with a deposit of ' + money(t.deposit) + ' due to initiate production' : '') + '.</div>' +
           '<div style="display:flex;gap:26px;margin-top:24px;">' +
             '<div style="flex:1.35;"><div style="border-bottom:1px solid #20241f;height:40px;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Authorized Signer\'s Name</div></div>' +
@@ -12038,6 +12069,10 @@
       }) +
       list('Quantities that disagree', r.quantity, function (p) {
         return '<li>' + part(p) + ' ' + esc(p.name || '') + ' \u2014 proposal ' + p.proposal + ', sheet ' + p.sheet + '</li>';
+      }) +
+      list('Part numbers that are in no catalog', r.unknownParts, function (p) {
+        return '<li>' + part(p) + ' ' + esc(p.name || '') +
+          ' \u2014 the number matches nothing; the cost and weight on this line came from a description match</li>';
       }) +
       '</div>';
   }
