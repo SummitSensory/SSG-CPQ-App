@@ -1420,13 +1420,21 @@
           fout = await fr.json();
         } catch (e) {}
         S.busy = '';
+        // flash() appends its banner to the card, so it has to be the LAST thing that
+        // touches it: a render() or load() after a flash rewrites card.innerHTML and
+        // takes the message with it, which is how this button came to look like it did
+        // nothing at all — success and failure both drew a banner and then erased it.
         if (!fr.ok || !fout || !fout.ok) {
-          flash((fout && fout.message) || 'Could not reach the Bank of Canada.', true);
           render();
+          flash(
+            (fout && fout.message) || 'Could not reach the Bank of Canada (' + fr.status + ').',
+            true,
+          );
           return;
         }
+        await load();
         flash(fout.message);
-        return load();
+        return;
       }
 
       if (kind === 'toggleFeature') {
