@@ -30,8 +30,14 @@ const VALET_BASE = 'https://www.bankofcanada.ca/valet/observations';
 /** How far back to look for the last published observation. */
 const LOOKBACK_DAYS = 14;
 
-const REQUEST_TIMEOUT_MS = 6_000;
-const ATTEMPTS = 3;
+// Sized against the serverless function budget, not against patience. Three attempts
+// at six seconds is eighteen seconds worst case, which outlives the function: the
+// platform kills the request first and the screen shows a generic failure instead of
+// the reason. Two attempts at four seconds, with an overall deadline, always returns
+// its own error message.
+const REQUEST_TIMEOUT_MS = 4_000;
+const ATTEMPTS = 2;
+const TOTAL_BUDGET_MS = 8_500;
 
 export interface RateObservation {
   pair: string;
@@ -99,9 +105,11 @@ export class BankOfCanadaExchangeRateProvider implements ExchangeRateProvider {
     const url = `${VALET_BASE}/${this.series}/json?start_date=${start}&end_date=${asOf}`;
 
     let lastError: unknown = null;
+    const deadline = Date.now() + TOTAL_BUDGET_MS;
     for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+      if (Date.now() >= deadline) break;
       try {
-        const body = await this.request(url);
+        const body = await this.request(url, Math.min(REQUEST_TIMEOUT_MS, deadline - Date.now()));
         const obs = body.observations ?? [];
         // Valet returns observations in ascending date order; the last one in the
         // window is the most recent publication on or before asOf.
@@ -133,9 +141,9 @@ export class BankOfCanadaExchangeRateProvider implements ExchangeRateProvider {
     throw new ExchangeRateUnavailableError(FX_PAIR, asOf, lastError);
   }
 
-  private async request(url: string): Promise<ValetResponse> {
+  private async request(url: string, budgetMs = REQUEST_TIMEOUT_MS): Promise<ValetResponse> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), budgetMs);
     try {
       const res = await this.fetchImpl(url, {
         signal: controller.signal,
