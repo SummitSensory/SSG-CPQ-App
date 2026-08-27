@@ -545,6 +545,18 @@ export function registerCrossBorderRoutes(app: FastifyInstance): void {
           ? { tariffPercentMilli: Math.round(body.tariffPercent * 1000) }
           : {}),
         ...(body.brokerFeeMinor != null ? { brokerFeeMinor: body.brokerFeeMinor } : {}),
+        /**
+         * Summit collects these by default on a quoted Canadian job.
+         *
+         * The column defaults to false, which is the right default for a customs entry
+         * somebody is still investigating: an unconfirmed duty is not something to put
+         * in a customer's total. But a proposal being quoted through percent entry is a
+         * different act — the rates were typed in precisely so the customer can be
+         * quoted a landed price, and left false the charges printed below the total and
+         * were payable to nobody. Editable per proposal on Customs and duties, where
+         * unticking it moves them back to the payable-at-import block.
+         */
+        includedInSellerTotal: true,
       },
       req.user!.sub,
     );

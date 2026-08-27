@@ -9529,6 +9529,30 @@
   }
 
   /**
+   * The Canadian charges Summit is collecting, as totals-block rows.
+   *
+   * Tariff, brokerage and Canadian tax are entered per proposal (Customs and duties)
+   * and each carries a flag for who collects it. Where SSG is collecting, the charge is
+   * part of what the customer owes SSG — so it belongs in the totals block, above the
+   * Total and inside it. Printing it only in the border block BELOW the total, which is
+   * what happened before, understated what the customer is being asked to pay and made
+   * entering the rates pointless.
+   *
+   * The border block still prints the charges SSG is not collecting, marked as payable
+   * at import. The two sets never overlap — one flag decides which.
+   */
+  function cbSellerLines(d) {
+    if (!cbIsCanadian(d) || !d.crossBorder.result) return [];
+    return (d.crossBorder.result.lines || []).filter(function (l) {
+      return l.includedInSellerTotal && l.status !== 'NOT_APPLICABLE' && l.usdMinor != null;
+    });
+  }
+
+  /** What those charges add to the amount payable to Summit. */
+  function cbSellerAddMinor(d) {
+    return cbSellerLines(d).reduce(function (a, l) { return a + (Number(l.usdMinor) || 0); }, 0);
+  }
+  /**
    * Charges the customer pays at the border. Only the ones NOT in the Summit total.
    * An unquoted charge prints its status rather than a figure — a blank duty must
    * not read as no duty.
@@ -9967,6 +9991,19 @@
       anyTbd = true;
       return TBD;
     }
+    /**
+     * The document's own total, with the Canadian charges Summit collects added in.
+     *
+     * Built from the document's own figures rather than the engine's payableToSummit,
+     * so the block always adds up to exactly what it lists: a TBD freight line is TBD in
+     * both places, and the deposit is a percentage of the number the customer signs
+     * against. Zero charges means docTotal is t.total to the cent, so a US proposal is
+     * byte-for-byte what it was.
+     */
+    var docCbAdd = cbSellerAddMinor(d);
+    var docTotal = t.total + docCbAdd;
+    var docDeposit = docCbAdd ? depositOf(docTotal) : t.deposit;
+
     var cellTax = amountCell(t.tax, m.tbdTax);
     var cellStructureFreight = amountCell(t.structureFreight, m.tbdStructureFreight);
     var cellMatsFreight = amountCell(t.matsFreight, m.tbdMatsFreight);
@@ -10161,9 +10198,18 @@
           '<div style="display:flex;justify-content:space-between;padding:2px 0 7px;font-size:12px;"><span style="font-weight:700;color:#20241f;">Mats &amp; Padding Freight</span><span style="text-align:right;">' + cellMatsFreight + '</span></div>' +
           // Standard Freight is opt-in: unticked, the customer never sees the line.
           (m.stdFreightOn ? '<div style="display:flex;justify-content:space-between;padding:2px 0 7px;font-size:12px;"><span style="font-weight:700;color:#20241f;">Standard Freight</span><span style="text-align:right;">' + amountCell(t.stdFreight, '') + '</span></div>' : '') +
-          '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding-top:7px;border-top:1.5px solid #203060;"><span style="font-family:\'Newsreader\',serif;font-size:18px;font-weight:700;color:#203060;">' + (cbIsCanadian(d) ? 'Total payable to Summit' : 'Total') + '</span><span style="font-size:17px;font-weight:700;color:#203060;letter-spacing:-.01em;text-align:right;">' + cbAmt(t.total) + '</span></div>' +
+          // Tariff, brokerage and Canadian tax, where Summit is collecting them. The
+          // rate prints beside the label where the engine has one, so the figure can be
+          // checked against it.
+          cbSellerLines(d).map(function (l) {
+            return '<div style="display:flex;justify-content:space-between;gap:12px;padding:2px 0;font-size:12px;">' +
+              '<span style="font-weight:700;color:#20241f;">' + esc(l.label) +
+              (l.percent ? ' <span style="font-weight:400;color:#7b8190;">' + esc(l.percent) + '%</span>' : '') +
+              '</span><span style="text-align:right;">' + cbAmt(l.usdMinor) + '</span></div>';
+          }).join('') +
+          '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding-top:7px;border-top:1.5px solid #203060;"><span style="font-family:\'Newsreader\',serif;font-size:18px;font-weight:700;color:#203060;">' + (cbIsCanadian(d) ? 'Total payable to Summit' : 'Total') + '</span><span style="font-size:17px;font-weight:700;color:#203060;letter-spacing:-.01em;text-align:right;">' + cbAmt(docTotal) + '</span></div>' +
           (anyTbd ? '<div style="padding-top:3px;font-size:10.5px;color:#9aa1b0;text-align:right;line-height:1.5;">Total excludes items marked TBD.</div>' : '') +
-          (m.showDeposit !== false ? '<div style="display:flex;justify-content:space-between;padding-top:3px;font-size:11.5px;font-weight:700;"><span style="color:#7b8190;">Deposit Due (' + depositPct() + '%)</span><span style="text-align:right;">' + cbAmt(t.deposit) + '</span></div>' : '') +
+          (m.showDeposit !== false ? '<div style="display:flex;justify-content:space-between;padding-top:3px;font-size:11.5px;font-weight:700;"><span style="color:#7b8190;">Deposit Due (' + depositPct() + '%)</span><span style="text-align:right;">' + cbAmt(docDeposit) + '</span></div>' : '') +
           cbBorderBlock(d) +
           cbRateStamp(d) +
         '</div></div>' + bottomNotesHtml +
@@ -10182,8 +10228,8 @@
           '</div>' +
         '<div style="margin-top:26px;break-inside:avoid;">' +
           '<div style="font-family:\'Newsreader\',serif;font-size:15px;font-weight:700;color:#203060;letter-spacing:-.015em;">Acceptance</div>' +
-          '<div style="font-size:11.5px;color:#5b6478;line-height:1.6;margin-top:5px;max-width:620px;">Sign below to accept this proposal at a total of ' + cbInline(t.total) +
-            (m.showDeposit !== false ? ', with a deposit of ' + money(t.deposit) + ' due to initiate production' : '') + '.</div>' +
+          '<div style="font-size:11.5px;color:#5b6478;line-height:1.6;margin-top:5px;max-width:620px;">Sign below to accept this proposal at a total of ' + cbInline(docTotal) +
+            (m.showDeposit !== false ? ', with a deposit of ' + money(docDeposit) + ' due to initiate production' : '') + '.</div>' +
           '<div style="display:flex;gap:26px;margin-top:24px;">' +
             '<div style="flex:1.35;"><div style="border-bottom:1px solid #20241f;height:40px;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Authorized Signer\'s Name</div></div>' +
             '<div style="flex:1.35;"><div style="border-bottom:1px solid #20241f;height:40px;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Signature</div></div>' +
