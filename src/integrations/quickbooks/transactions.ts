@@ -631,7 +631,7 @@ export async function discardTransaction(txnId: string, userId: string, reason: 
   if (!txn) throw new NotFoundError('Transaction not found');
   if (txn.status === 'CREATED')
     throw new ConflictError(
-      'This document already exists in QuickBooks. Void or credit it there — discarding it here would leave the two systems disagreeing.',
+      'This document already exists in QuickBooks. Void or credit it there — discarding it here would leave the two systems disagreeing. Once it is voided, refreshing the billing panel picks that up and retires this row automatically.',
     );
   if (txn.status === 'VOIDED') return txn;
   const why = reason.trim();

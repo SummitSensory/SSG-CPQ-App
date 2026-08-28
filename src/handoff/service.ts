@@ -18,6 +18,7 @@ import { expandBomBuild } from './bomBuild.js';
 import { sellerCollectedCharges } from '../crossborder/sellerCharges.js';
 import { rollUpProcurementLines } from './bomRollup.js';
 import { qboGateState } from './manufacturingRelease.js';
+import { syncTransactionState } from '../integrations/quickbooks/billing.js';
 import { versionTotals, metaOf } from '../proposals/analytics.js';
 import { createNewVersion } from '../proposals/service.js';
 import { loadFormulaSettings } from '../routes/formulas.js';
@@ -576,14 +577,41 @@ export async function unlockOrder(
 
   // A financial document already exists in QuickBooks: that has to be voided
   // there first, or the books and the order would disagree.
-  const live = await prisma.qboTransaction.findFirst({
+  //
+  // Re-read it from QuickBooks before refusing. Voiding happens in QuickBooks and
+  // nothing pushes the fact back here, so a mirror row left at CREATED used to block
+  // the unlock for ever — the message said to void it in QuickBooks, the void was
+  // done, and this check never found out. Asking Intuit at the moment of the refusal
+  // is what makes that deadlock impossible: a document already voided retires itself
+  // here and the unlock proceeds.
+  let live = await prisma.qboTransaction.findFirst({
     where: { proposalId: order.proposalId, status: 'CREATED' },
     orderBy: { createdAt: 'desc' },
   });
+  if (live?.qboId) {
+    try {
+      await syncTransactionState(live.id, fetch, userId);
+      live = await prisma.qboTransaction.findFirst({
+        where: { proposalId: order.proposalId, status: 'CREATED' },
+        orderBy: { createdAt: 'desc' },
+      });
+    } catch (err) {
+      // QuickBooks unreachable, or the connection needs reauthorising. The block
+      // stands — releasing an order while unable to confirm the books is the one
+      // outcome worth avoiding — but it says which of the two problems this is.
+      logger.warn(
+        { err, orderId, txnId: live.id },
+        'unlock: could not confirm QuickBooks document state',
+      );
+      throw new ConflictError(
+        `A QuickBooks ${live.type.toLowerCase().replace(/_/g, ' ')} (${live.qboDocNumber || live.qboId}) exists for this order, and QuickBooks could not be reached to check whether it has been voided. Try again in a moment; if it keeps failing, check the QuickBooks connection on the Integrations screen.`,
+      );
+    }
+  }
   if (live) {
     const doc = live.qboDocNumber || live.qboId || 'created';
     throw new ConflictError(
-      `A QuickBooks ${live.type.toLowerCase().replace(/_/g, ' ')} (${doc}) exists for this order. Void it in QuickBooks before unlocking.`,
+      `A QuickBooks ${live.type.toLowerCase().replace(/_/g, ' ')} (${doc}) is still live for this order. Void it in QuickBooks, then unlock again — this check re-reads QuickBooks each time, so the void will be picked up automatically.`,
     );
   }
 

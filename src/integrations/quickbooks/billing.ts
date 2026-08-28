@@ -4,6 +4,7 @@ import { recordAudit } from '../../lib/audit.js';
 import { ConflictError, NotFoundError, ValidationError } from '../../lib/errors.js';
 import { qboEnvironment } from '../../config/env.js';
 import { query, readById, sendDocument, fetchPdf } from './client.js';
+import { QboApiError } from './http.js';
 import type { QboEnvironment } from '@prisma/client';
 
 /**
@@ -50,6 +51,11 @@ interface QboInvoice {
   DueDate?: string;
   TotalAmt?: number;
   Balance?: number;
+  /**
+   * Intuit stamps “Voided” into the private note when a document is voided. There is
+   * no boolean and no status field to read — see isVoidedDoc().
+   */
+  PrivateNote?: string;
   /** NotSet | NeedToSend | EmailSent */
   EmailStatus?: string;
   BillEmail?: { Address?: string };
@@ -92,10 +98,85 @@ async function activeRealmId(environment: QboEnvironment): Promise<string> {
 async function loadCreated(txnId: string) {
   const txn = await prisma.qboTransaction.findUnique({ where: { id: txnId } });
   if (!txn) throw new NotFoundError('Transaction not found');
+  // Two different situations used to share one message. A document never pushed and
+  // a document voided in QuickBooks are both “not CREATED”, and telling somebody
+  // their voided invoice “has not been created yet” sends them looking for a push
+  // button that will not help.
+  if (txn.status === 'VOIDED') {
+    throw new ConflictError(
+      'This document was voided in QuickBooks. Raise a new one rather than acting on the voided document.',
+    );
+  }
   if (txn.status !== 'CREATED' || !txn.qboId) {
     throw new ConflictError('This document has not been created in QuickBooks yet');
   }
   return txn;
+}
+
+/**
+ * Whether QuickBooks is showing us a voided document.
+ *
+ * QuickBooks does not delete a voided invoice and does not expose a void flag. It
+ * zeroes every line, sets total and balance to zero, and prepends “Voided” to the
+ * private note — that stamp is the only positive signal there is.
+ *
+ * Both signals are required. The note alone would catch an invoice somebody typed
+ * the word into; a zero total alone would catch a legitimately zero document. Calling
+ * a live invoice void is much worse than missing one, because it releases an order
+ * that QuickBooks still has money against.
+ */
+export function isVoidedDoc(doc: {
+  TotalAmt?: number;
+  Balance?: number;
+  PrivateNote?: string;
+}): boolean {
+  const zero = Number(doc.TotalAmt ?? 0) === 0 && Number(doc.Balance ?? 0) === 0;
+  return zero && /(^|\s)voided\b/i.test(String(doc.PrivateNote ?? ''));
+}
+
+/**
+ * True when QuickBooks says the document is no longer there.
+ *
+ * A hard delete answers 404, and the v3 API also reports a read of a missing object
+ * as HTTP 400 with fault code 610. Either way it is gone, which for our purposes is
+ * the same as voided: there is nothing left in the books to disagree with.
+ */
+function isGoneFromQbo(err: unknown): boolean {
+  if (!(err instanceof QboApiError)) return false;
+  return err.status === 404 || err.faultCode === '610' || err.faultCode === '6240';
+}
+
+/**
+ * Move the local mirror row to VOIDED.
+ *
+ * This is the only place a document is voided off the back of QuickBooks, and it is
+ * what releases every gate keyed on `status: 'CREATED'` — the order unlock, the
+ * manufacturing release, the freight true-up. Those heal on their own once this runs;
+ * none of them needed changing.
+ */
+async function markVoided(txnId: string, why: string, actorId = 'system') {
+  const updated = await prisma.qboTransaction.update({
+    where: { id: txnId },
+    data: {
+      status: 'VOIDED',
+      qboStatus: 'VOIDED',
+      balanceMinor: 0n,
+      qboLastSyncedAt: new Date(),
+      error: null,
+    },
+  });
+  // Payments cannot stand against a document that no longer carries a balance.
+  // Leaving them would keep the customer credited for money the books have released.
+  await prisma.qboPayment.deleteMany({ where: { qboTransactionId: txnId } });
+  await recordAudit({
+    actorId,
+    action: 'qbo.txn.voided_in_quickbooks',
+    entity: 'QboTransaction',
+    entityId: txnId,
+    details: { type: updated.type, docNumber: updated.qboDocNumber, reason: why },
+  });
+  logger.info({ txnId, docNumber: updated.qboDocNumber, why }, 'quickbooks: document voided');
+  return updated;
 }
 
 function resourceFor(type: string): 'estimate' | 'invoice' {
@@ -126,20 +207,40 @@ export function deriveStatus(
  * call. That matters: an invoice sent by hand from inside QuickBooks is just as
  * real as one sent from here, and reading Intuit's field means the CRM shows it
  * either way rather than claiming the invoice was never sent.
+ *
+ * It also detects a document voided or deleted in QuickBooks and retires the mirror
+ * row. Without that the CRM believes a live invoice exists for ever: voiding is done
+ * in QuickBooks, nothing pushes the fact back, and every gate keyed on a live
+ * document stays shut with no way to open it from inside this system.
  */
-export async function syncTransactionState(txnId: string, fetchImpl: typeof fetch = fetch) {
+export async function syncTransactionState(
+  txnId: string,
+  fetchImpl: typeof fetch = fetch,
+  actorId = 'system',
+) {
   const txn = await loadCreated(txnId);
   const realmId = await activeRealmId(txn.environment);
   const resource = resourceFor(txn.type);
 
-  const wrapper = await readById<Record<string, QboInvoice>>(
-    realmId,
-    resource,
-    txn.qboId!,
-    fetchImpl,
-  );
+  let wrapper: Record<string, QboInvoice>;
+  try {
+    wrapper = await readById<Record<string, QboInvoice>>(realmId, resource, txn.qboId!, fetchImpl);
+  } catch (err) {
+    // Deleted outright rather than voided. Retiring the row is the only honest
+    // answer: the document this row mirrors does not exist any more.
+    if (isGoneFromQbo(err)) {
+      const updated = await markVoided(txnId, 'no longer present in QuickBooks', actorId);
+      return { transaction: updated, payments: [] };
+    }
+    throw err;
+  }
   const doc = wrapper[txn.type === 'ESTIMATE' ? 'Estimate' : 'Invoice'];
   if (!doc) throw new NotFoundError(`QuickBooks returned no ${resource} for id ${txn.qboId}`);
+
+  if (isVoidedDoc(doc)) {
+    const updated = await markVoided(txnId, 'voided in QuickBooks', actorId);
+    return { transaction: updated, payments: [] };
+  }
 
   const totalMinor = toMinor(doc.TotalAmt ?? 0);
   const balanceMinor = toMinor(doc.Balance ?? 0);
@@ -334,6 +435,78 @@ export async function documentPdf(txnId: string, fetchImpl: typeof fetch = fetch
   const pdf = await fetchPdf(realmId, resourceFor(txn.type), txn.qboId!, fetchImpl);
   const label = (txn.qboDocNumber || txn.qboId || 'document').replace(/[^A-Za-z0-9._-]/g, '');
   return { pdf, filename: `${txn.type === 'ESTIMATE' ? 'Estimate' : 'Invoice'}-${label}.pdf` };
+}
+
+export interface VoidSweepResult {
+  /** Documents re-read from QuickBooks this run. */
+  checked: number;
+  /** Of those, the ones QuickBooks had voided or deleted. */
+  retired: Array<{ id: string; docNumber: string | null; proposalId: string }>;
+  /** Reads that failed. The document stays live here; it is tried again tomorrow. */
+  errors: Array<{ id: string; error: string }>;
+  /** Hit the per-run cap — more documents are waiting. */
+  truncated: boolean;
+}
+
+/**
+ * Re-read live QuickBooks documents and retire the ones that have been voided.
+ *
+ * Voiding happens in QuickBooks and nothing pushes the fact back. Every other place
+ * that notices — the billing panel's refresh, the order unlock — only looks when a
+ * person asks it to, so until someone opens the right screen the CRM goes on showing
+ * a live invoice that no longer exists and goes on blocking whatever that invoice
+ * gates. This is the sweep that closes the gap without anybody having to look.
+ *
+ * Least-recently-synced first, and capped: each document is an API read plus a
+ * payment query, and Intuit's rate limit is per-realm. A backlog drains over
+ * successive nights rather than being pushed through in one run that times out
+ * halfway with no record of where it stopped.
+ *
+ * Never throws. One unreadable document must not stop the rest of the sweep.
+ */
+export async function sweepVoidedDocuments(
+  opts: { max?: number; staleHours?: number } = {},
+  fetchImpl: typeof fetch = fetch,
+): Promise<VoidSweepResult> {
+  const max = Math.min(Math.max(opts.max ?? 40, 1), 200);
+  const staleHours = opts.staleHours ?? 6;
+  const cutoff = new Date(Date.now() - staleHours * 3_600_000);
+  const environment = qboEnvironment() as QboEnvironment;
+  const out: VoidSweepResult = { checked: 0, retired: [], errors: [], truncated: false };
+
+  const candidates = await prisma.qboTransaction.findMany({
+    where: {
+      environment,
+      status: 'CREATED',
+      qboId: { not: null },
+      OR: [{ qboLastSyncedAt: null }, { qboLastSyncedAt: { lt: cutoff } }],
+    },
+    orderBy: [{ qboLastSyncedAt: 'asc' }, { createdAt: 'asc' }],
+    take: max + 1,
+    select: { id: true, proposalId: true, qboDocNumber: true },
+  });
+  out.truncated = candidates.length > max;
+
+  for (const c of candidates.slice(0, max)) {
+    out.checked++;
+    try {
+      const { transaction } = await syncTransactionState(c.id, fetchImpl);
+      if (transaction.status === 'VOIDED')
+        out.retired.push({
+          id: c.id,
+          docNumber: transaction.qboDocNumber,
+          proposalId: c.proposalId,
+        });
+    } catch (err) {
+      out.errors.push({ id: c.id, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  logger.info(
+    { checked: out.checked, retired: out.retired.length, errors: out.errors.length },
+    'quickbooks: void sweep',
+  );
+  return out;
 }
 
 /**

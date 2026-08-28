@@ -6,6 +6,7 @@ import {
   isPortalInviteConfigured,
   sweepPendingInvites,
 } from '../integrations/monday/portalInvite.js';
+import { sweepVoidedDocuments } from '../integrations/quickbooks/billing.js';
 import { verifySchemaOnBoot } from '../lib/schemaCheck.js';
 import { syncWebhooks } from '../integrations/monday/webhookRegistration.js';
 
@@ -81,6 +82,21 @@ export function registerCronRoutes(app: FastifyInstance): void {
         logger.error({ err }, 'cron: portal invite sweep failed');
         out.portalInvites = { error: String(err) };
       }
+    }
+
+    // 4. Retire QuickBooks documents that have been voided there.
+    //
+    //    Voiding happens in QuickBooks and nothing pushes the fact back. Every other
+    //    place that notices only looks when a person asks it to, so until somebody
+    //    opens the right screen the CRM shows a live invoice that no longer exists —
+    //    and goes on blocking whatever that invoice gates, with no way out from
+    //    inside the app. Capped per run; a backlog drains over successive nights
+    //    rather than spending the whole function budget on Intuit reads.
+    try {
+      out.voidedDocuments = await sweepVoidedDocuments();
+    } catch (err) {
+      logger.error({ err }, 'cron: quickbooks void sweep failed');
+      out.voidedDocuments = { error: String(err) };
     }
 
     out.ms = Date.now() - started;

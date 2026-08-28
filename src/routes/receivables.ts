@@ -204,6 +204,13 @@ export async function composeContext(txnId: string, userId: string) {
   const txn = await prisma.qboTransaction.findUnique({ where: { id: txnId } });
   if (!txn) throw new NotFoundError('Invoice not found');
   if (txn.type === 'ESTIMATE') throw new ValidationError('An estimate has no balance to chase.');
+  // A voided invoice and an invoice never pushed are both “not CREATED”, and one
+  // message for both sends somebody looking for a push button that will not help.
+  if (txn.status === 'VOIDED') {
+    throw new ConflictError(
+      'This invoice was voided in QuickBooks. Raise a new invoice rather than chasing the voided one.',
+    );
+  }
   if (txn.status !== 'CREATED' || !txn.qboId) {
     throw new ConflictError('This invoice has not been created in QuickBooks yet.');
   }
