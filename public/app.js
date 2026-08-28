@@ -13844,52 +13844,21 @@
     } finally { bt.disabled = false; bt.textContent = label; }
   }
 
-  /**
-   * Send through QuickBooks, not from here — the customer gets the QuickBooks
-   * invoice with its pay-online link, and the send is recorded in QuickBooks'
-   * own history, which is what the bookkeeper reconciles against.
+  /*
+   * openQboSend and openQboReminder used to live here: two complete dialogs that
+   * asked QuickBooks to email a document, and composed a balance reminder.
+   *
+   * Removed, not wired up. Biller Genie owns every customer-facing email — it picks
+   * each invoice out of QuickBooks within minutes of creation and delivers it on
+   * Summit letterhead with its own payment link and follow-up schedule. A send from
+   * here would reach the customer twice, from two systems, with two ways to pay. The
+   * server refuses both anyway (see the send and reminder routes in
+   * src/routes/quickbooks.ts, which return that explanation), so all this code could
+   * do was tempt someone into wiring up a button that cannot work.
+   *
+   * The reminder HISTORY table below stays: reminders sent before Biller Genie took
+   * over are still part of the record of how a balance was chased.
    */
-  function openQboSend(txnId, doc, order, user) {
-    openModal(doc.sentAt ? 'Resend this document' : 'Send to the customer',
-      '<div class="muted" style="font-size:13px;margin-bottom:12px;line-height:1.55;">QuickBooks emails the document and records the delivery on its side. ' +
-        (doc.sentAt ? 'It was last sent ' + esc(fmtStamp(doc.sentAt)) + '.' : 'It has not been sent yet.') + '</div>' +
-      fieldRow('Send to', '<input id="qbSendTo" type="email" value="' + esc(doc.sentToEmail || '') + '" placeholder="Leave blank to use the address on the invoice" style="' + IN + '">'),
-      async function (close, showErr) {
-        var r = await authed('/integrations/quickbooks/transactions/' + txnId + '/send', { method: 'POST', body: { to: document.getElementById('qbSendTo').value.trim() || null } });
-        if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} return showErr(m || 'Could not send (' + r.status + ').'); }
-        close(); loadQbo(order, user);
-      }, doc.sentAt ? 'Resend' : 'Send');
-  }
-
-  /**
-   * Compose a reminder. The draft comes from the server, which re-reads the
-   * balance from QuickBooks first — so nobody chases a customer for money that
-   * arrived this morning.
-   */
-  async function openQboReminder(txnId, order, user) {
-    var r = await authed('/integrations/quickbooks/transactions/' + txnId + '/reminder');
-    if (!r.ok) { alert('Could not prepare a reminder (' + r.status + ').'); return; }
-    var d = await r.json();
-    if (d.blockers && d.blockers.length) { alert(d.blockers.join('\n\n')); return; }
-    openModal('Remind ' + (d.customerName || 'the customer') + ' about ' + fmtMoney(d.balanceMinor, d.currency),
-      '<div class="muted" style="font-size:13px;margin-bottom:12px;line-height:1.55;">' +
-        fmtMoney(d.balanceMinor, d.currency) + ' outstanding' + (d.daysOverdue > 0 ? ', ' + d.daysOverdue + ' day' + (d.daysOverdue === 1 ? '' : 's') + ' past due' : '') +
-        '. The invoice PDF is attached as it currently stands in QuickBooks.</div>' +
-      fieldRow('To', '<input id="qbRemTo" type="text" value="' + esc(d.toEmail || '') + '" style="' + IN + '">') +
-      fieldRow('Cc', '<input id="qbRemCc" type="text" placeholder="Optional" style="' + IN + '">') +
-      fieldRow('Subject', '<input id="qbRemSubj" type="text" value="' + esc(d.subject) + '" style="' + IN + '">') +
-      fieldRow('Message', '<textarea id="qbRemBody" rows="12" style="' + IN + 'font-family:inherit;line-height:1.6;">' + esc(d.body) + '</textarea>'),
-      async function (close, showErr) {
-        var rr = await authed('/integrations/quickbooks/transactions/' + txnId + '/reminder', { method: 'POST', body: {
-          to: document.getElementById('qbRemTo').value.trim(),
-          cc: document.getElementById('qbRemCc').value.trim() || null,
-          subject: document.getElementById('qbRemSubj').value.trim(),
-          body: document.getElementById('qbRemBody').value
-        } });
-        if (!rr.ok) { var m = ''; try { m = ((await rr.json()) || {}).message || ''; } catch (e) {} return showErr(m || 'Could not send the reminder (' + rr.status + ').'); }
-        close(); loadQbo(order, user);
-      }, 'Send reminder');
-  }
 
   /**
    * What QuickBooks holds for this customer against what we hold. Read-only:

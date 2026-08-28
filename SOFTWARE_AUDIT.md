@@ -302,10 +302,15 @@ The real gap is narrower, and is what has now been filled: the proposal **meta**
 **Problem:** Both functions are fully implemented and **never called**. Nothing references them — no listener, no id, no data attribute anywhere in `public/`.
 **Evidence:** `no-unused-vars` on both; a grep for `openQboSend`, `openQboReminder`, `qboSend` and `qboRemind` across `public/` returns only the two declarations.
 **Why it matters:** Two possibilities and they need different answers. Either these are leftovers superseded by the Accounts Receivable screen's own send and reminder flow — in which case they are dead weight in a file that is already too big — or they are a feature that was built, never wired to a button, and quietly lost. I cannot tell from the code which, and deleting a working QuickBooks send dialog on a guess would be the wrong kind of tidying.
-**Recommended fix:** Your call: delete, or wire them into the QuickBooks panel. Left in place until you say.
-**Dependencies/Risks:** If they are wired up, they send documents to customers — that path needs testing before it ships, not after.
-**Confidence:** High (that they are unreferenced); n/a (on intent)
-**Status:** Open — awaiting your decision
+**Recommended fix:** **Deleted.** My first recommendation was to wire them up, and it was wrong — reached before I had read the panel's own comment and the server routes. The correct answer was in the codebase twice over:
+
+- `public/app.js`, live-document row: "No Send or Remind button. Biller Genie owns every customer-facing email — it picks each invoice out of QuickBooks within minutes of creation and delivers it on Summit letterhead with its own payment link and follow-up schedule. A send from here would reach the customer twice, from two systems, with two ways to pay."
+- `src/routes/quickbooks.ts:619–656`: both endpoints refuse, returning that same explanation.
+
+So these were not a lost feature. They were the temptation the comment describes — a dialog that looked complete, called an endpoint that refuses, and would have double-emailed a customer if anyone had wired the button. Removed, with a comment recording why so they are not re-added. The reminder _history_ table stays: reminders sent before Biller Genie took over are part of the record of how a balance was chased.
+**Dependencies/Risks:** None. Two of the 11 dead-code warnings clear with it.
+**Confidence:** High
+**Status:** **Fixed — awaiting retest** (`pnpm lint:count`, expect 9)
 
 ---
 
@@ -314,10 +319,21 @@ The real gap is narrower, and is what has now been filled: the proposal **meta**
 **Category:** Security / authorization
 **Location:** `/portal/colors/:token`, `/webhooks/*`, `/cron/*`, the four OAuth callbacks
 **Problem:** Not a finding. A placeholder, recorded so its absence from the register is not mistaken for a clean result. The unauthenticated surface has been _enumerated_ but not _probed_.
-**What must be tested (Pass 2):** portal token expiry and single-use behaviour; whether a submitted portal selection can be replayed; whether webhook endpoints verify signatures (DocuSeal, Resend, monday) or merely accept a payload; whether OAuth callbacks validate `state`; whether `/cron/*` endpoints are reachable without the bearer in preview environments; and whether any `:id` route trusts the id without checking the caller may see that record.
-**Recommended fix:** Pending results.
-**Confidence:** n/a
-**Status:** Open — blocked on Pass 2
+**What must be tested (Pass 2):** portal token expiry and single-use behaviour; whether a submitted portal selection can be replayed; whether OAuth callbacks validate `state`; and whether any `:id` route trusts the id without checking the caller may see that record.
+
+**Webhook authenticity — CLOSED 2026-08-28, by inspection.** This was the item that could have been a CRITICAL, and it is clean. All four unauthenticated POST endpoints authenticate before they act:
+
+| Endpoint                       | Mechanism                                                                                                                                                     |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/webhooks/docuseal`           | Shared secret header **or** hex HMAC-SHA256 of the raw body, compared with `crypto.timingSafeEqual`; refuses outright when `DOCUSEAL_WEBHOOK_SECRET` is unset |
+| `/webhooks/resend`             | Svix scheme — id + timestamp + body HMAC, constant-time compare, 400 on missing headers                                                                       |
+| `/integrations/monday/webhook` | Signature verified on real events; 401 `INVALID_SIGNATURE` otherwise                                                                                          |
+| `/freight/board-changed`       | Bearer `CRON_SECRET`; 503 when unset rather than running open                                                                                                 |
+
+Not one of them fails open, and each refuses when its secret is missing — which is the failure mode that actually happens, because a missing environment variable is more likely than a forged signature.
+**Recommended fix:** Nothing for the webhooks. The remaining items still need runtime work.
+**Confidence:** High (webhooks); n/a (the rest)
+**Status:** Partially closed — webhooks clean; portal token, OAuth `state` and per-record authorization still open
 
 ---
 
@@ -433,6 +449,8 @@ pnpm build                # expect: success
 | 2026-08-28 | AUD-011 discovered **by** that retest                                   | Two QuickBooks duplicate-prevention tests were already failing, unnoticed, because the pre-push hook did not run tests                                                                                                                                                                                                                                          |
 | 2026-08-28 | AUD-011 fix                                                             | **Retested — 454 passed, 0 failed.** Mock repaired and made drift-resistant; `pnpm test:unit` added to pre-push so a red suite can no longer reach main                                                                                                                                                                                                         |
 | 2026-08-28 | AUD-004 fix: ESLint rules for `public/**/*.js`                          | Shipped. First run: 223 warnings, 0 errors — and **four real findings inside the noise**, logged as AUD-012 (a ReferenceError on the re-freeze money path), AUD-013 (two buttons sharing one `var`), AUD-014 (dead duplicate function) and AUD-015 (two unreferenced QuickBooks dialogs). Config then tuned so intentional empty catches stop drowning findings |
+| 2026-08-28 | AUD-015 resolved — **deleted, not wired**                               | My initial recommendation was reversed after reading the panel comment and `routes/quickbooks.ts`: Biller Genie owns customer email and both endpoints refuse. Wiring them would have double-emailed customers                                                                                                                                                  |
+| 2026-08-28 | AUD-010 webhook authenticity                                            | **Closed by inspection — clean.** All four unauthenticated POST endpoints verify a secret or signature, with constant-time comparison, and refuse when the secret is unset                                                                                                                                                                                      |
 | 2026-08-28 | AUD-004, 012, 013, 014                                                  | **Retested — passed.** `pnpm lint:count`: **223 → 11 warnings, 0 errors.** No `no-undef` and no `no-redeclare` remain, which is the specific evidence that AUD-012 (the ReferenceError) and AUD-013 (two buttons sharing one `var`) are gone. The 11 survivors are all unused declarations — dead code, no behaviour                                            |
 | 2026-08-28 | Node version pinned via `.nvmrc` (local was v24, production 22)         | Applied                                                                                                                                                                                                                                                                                                                                                         |
 
