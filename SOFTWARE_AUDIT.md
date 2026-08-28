@@ -134,7 +134,7 @@ The real gap is narrower, and is what has now been filled: the proposal **meta**
 
 **Dependencies/Risks:** None. The tests encode two behaviours that look like bugs and are not — proposal value deliberately over-summing at line grain, and fill capping at 1 while ratio exceeds it — so a future "fix" trips a test with an explanation attached.
 **Confidence:** High
-**Status:** **Fixed — awaiting retest** (`pnpm test:unit`)
+**Status:** **Fixed and retested** — `pnpm test:unit`: 454 tests, 46 files, all green.
 
 ---
 
@@ -163,7 +163,7 @@ The real gap is narrower, and is what has now been filled: the proposal **meta**
 **Recommended fix:** Add a `files: ['public/**/*.js']` block with `languageOptions: { globals: browser, sourceType: 'script' }` and a conservative rule set (`no-unused-vars` warn, `no-undef` error, `eqeqeq` warn, `no-redeclare` error). Expect an initial backlog of warnings in `app.js`; set them to `warn` so the gate does not block work, and fix them as files are extracted per AUD-003.
 **Dependencies/Risks:** None. Small.
 **Confidence:** High
-**Status:** Open
+**Status:** **Fixed and retested** — ESLint now covers `public/**/*.js`. First run reported 223 warnings; the backlog was worked to **0**, and the rule set caught three real defects on the way (AUD-012, 013, 017).
 
 ---
 
@@ -200,10 +200,12 @@ Worth noting the projection is conservative: it assumes cost stays linear, and `
 **Problem:** Scheduled report delivery depends on one named individual's Outlook connection. If that person's token is revoked or they leave the company, the schedule stops and the only signal is a `lastSendError` string on a card nobody has a reason to open.
 **Evidence:** `sendOutlookMail({ userId: sender, … })` where `sender = r.sendAsId ?? r.createdById`; the failure path writes `lastSendError` and returns.
 **Why it matters:** Silent cessation of a report someone relies on is worse than a visible failure, because the absence of an email reads as "nothing happened this week."
-**Recommended fix:** On failure, also alert through the existing `src/lib/alerts.ts` path, and surface a banner on the Insights screen when any shared saved report has a `lastSendError`. Longer term, a service mailbox rather than a personal one would remove the dependency entirely — but that is an Entra app-permission change, not a code change.
-**Dependencies/Risks:** Small. Reuses existing alerting.
+**Recommended fix / applied 2026-08-28:** `cronInsights.ts` now calls `sendAlert()` when a scheduled send fails, naming the report, the mailbox it tried, the recipients who did not get it, and the likely cause. Fingerprinted per report (`scheduled-report:<id>`), so a weekly schedule broken for a month sends one alert rather than four identical ones. The `lastSendError` on the card stays as the detailed record.
+
+Not done, and deliberately: a banner on the Insights screen. The alert email reaches someone who can act; a banner only reaches someone who happens to open that screen, which is the same weakness as the card. Longer term a service mailbox would remove the personal dependency entirely, but that is an Entra app-permission change rather than code.
+**Dependencies/Risks:** Requires `ALERT_EMAIL` (or `BOM_BCC_EMAIL`) and `RESEND_API_KEY` to be set — `isAlertingConfigured()` already governs that, and alerting is fire-and-forget, so an unconfigured deployment logs and carries on rather than failing the sweep.
 **Confidence:** High
-**Status:** Open
+**Status:** **Fixed — awaiting retest** (breaks only on a real failed send; verify by pointing a schedule at a user with no Outlook connection)
 
 ---
 
@@ -322,7 +324,7 @@ Worth noting the projection is conservative: it assumes cost stays linear, and `
 So these were not a lost feature. They were the temptation the comment describes — a dialog that looked complete, called an endpoint that refuses, and would have double-emailed a customer if anyone had wired the button. Removed, with a comment recording why so they are not re-added. The reminder _history_ table stays: reminders sent before Biller Genie took over are part of the record of how a balance was chased.
 **Dependencies/Risks:** None. Two of the 11 dead-code warnings clear with it.
 **Confidence:** High
-**Status:** **Fixed — awaiting retest** (`pnpm lint:count`, expect 9)
+**Status:** **Fixed and retested** — `pnpm lint:count`: 0 warnings.
 
 ---
 
@@ -376,7 +378,37 @@ Not one of them fails open, and each refuses when its secret is missing — whic
 
 **Dependencies/Risks:** The zip is hand-written, which is the kind of code that appears to work. `tests/unit/bom-xlsx.test.ts` reads the archive back the way an unzip implementation does — every entry's CRC verified against its bytes, local headers checked against the central directory, parts inflated and asserted, and byte-identical output on a rebuild. What it cannot prove is that Excel likes the styling; that needs one person opening one file.
 **Confidence:** High on the format and the ordering; the styling needs a human look.
-**Status:** **Fixed — awaiting retest** (`pnpm test:unit`, then download one BOM and open it)
+**Status:** **Fixed — code retested** (`pnpm test:unit` green, including the 15 new archive/CRC checks). Still wants one human opening one downloaded BOM in Excel to judge the styling.
+
+---
+
+**Issue ID:** AUD-018
+**Severity:** LOW today · **HIGH the day a non-admin account exists**
+**Category:** Authorization
+**Location:** `src/routes/proposals.ts` — `MANAGES_ANY_PROPOSAL` (line 87) and its two uses (651, 699)
+**Problem:** Ownership is enforced on **archive** and **unarchive** and on nothing else. A proposal's creator, or a role in `MANAGES_ANY_PROPOSAL`, is required to archive it — but editing a version, adding a version, deleting a version, submitting for review and releasing are all permission-only. So a holder of `proposal:write` can rewrite and release someone else's proposal, and cannot archive it.
+**Evidence:** Enumeration of the ownership checks in `src/`. There are exactly five, in three files:
+
+| Where                   | Rule                                                                 |
+| ----------------------- | -------------------------------------------------------------------- |
+| `customerNotes.ts:158`  | Author, or SYSTEM_ADMIN, may delete a note                           |
+| `insights.ts:243, 284`  | A private saved report is editable and deletable only by its creator |
+| `proposals.ts:651, 699` | Archive / unarchive: creator, or a managing role                     |
+
+Every other `:id` route — about 180 of them — is guarded by `requirePermission` alone, with no per-record scoping.
+**Why it matters:** For an internal CRM this is mostly correct by design: every staff role is _meant_ to see every customer, and per-customer scoping would be wrong. The defect is not the absence of ownership checks; it is that the two acts which have one are the two least destructive. Archiving is reversible and visible. Releasing a rewritten proposal to a customer is neither.
+
+Today all four accounts are SYSTEM_ADMIN, which is in `MANAGES_ANY_PROPOSAL`, so nothing is exposed. It becomes real the first time a SALES_REP account exists.
+**How to reproduce:** Create a SALES_REP user. As that user, `PATCH /proposals/versions/:versionId` on a proposal created by someone else — it succeeds. Then `POST /proposals/:id/archive` on the same proposal — it is refused.
+**Recommended fix:** **A decision first, not code.** Two defensible answers and I will not guess between them:
+
+1. _A rep may only edit their own drafts._ Apply the `MANAGES_ANY_PROPOSAL`-or-creator test to version write, version delete, submit-review and release. Correct for a growing team; friction for a small one that covers for each other.
+2. _Anyone with write may edit anything._ Drop the check from archive and unarchive so the model is consistent and the permission means what it says. Correct for a team of four who work each other's deals; wrong the day there are twelve.
+
+Whichever is chosen, the two should agree. The present state is neither.
+**Dependencies/Risks:** Option 1 needs a way for a manager to hand a proposal over, or a rep on holiday blocks the deal. Option 2 is a two-line change and loses an audit-visible guard.
+**Confidence:** High on the finding; the choice is a business call.
+**Status:** Open — **awaiting your decision**
 
 ---
 
@@ -402,7 +434,9 @@ Two checks done, both by the strongest method available. Three items remain.
 
 **Unauthenticated read surface — clean.** Nine endpoints probed against production with no token; all nine returned 401, including the two shipped the same day. A new route inherits the auth requirement rather than depending on someone remembering it.
 
-**Still open:** portal token expiry and replay; OAuth `state` validation on the four callbacks; and whether any `:id` route trusts the id without checking the caller may see that record. The last is the one worth doing properly — it is the classic finding in an internal CRM, where every staff role legitimately sees every customer and the check is therefore easy to omit without anyone noticing.
+**Per-record authorization — reviewed 2026-08-28.** All ~180 `:id` routes are guarded by `requirePermission`. Ownership scoping exists in exactly five places, and the review found the coverage inconsistent rather than absent — see **AUD-018**, which needs a decision from you rather than a patch from me. Nothing is exposed today, because every account is SYSTEM_ADMIN.
+
+**Still open:** portal token expiry and replay, and OAuth `state` validation on the four callbacks. Both need runtime work.
 
 Nothing found so far suggests exposure. That is not the same as proving there is none.
 
@@ -528,6 +562,9 @@ pnpm build                # expect: success
 | 2026-08-28 | AUD-011 discovered **by** that retest                                                                                                                                                                           | Two QuickBooks duplicate-prevention tests were already failing, unnoticed, because the pre-push hook did not run tests                                                                                                                                                                                                                                          |
 | 2026-08-28 | AUD-011 fix                                                                                                                                                                                                     | **Retested — 454 passed, 0 failed.** Mock repaired and made drift-resistant; `pnpm test:unit` added to pre-push so a red suite can no longer reach main                                                                                                                                                                                                         |
 | 2026-08-28 | AUD-004 fix: ESLint rules for `public/**/*.js`                                                                                                                                                                  | Shipped. First run: 223 warnings, 0 errors — and **four real findings inside the noise**, logged as AUD-012 (a ReferenceError on the re-freeze money path), AUD-013 (two buttons sharing one `var`), AUD-014 (dead duplicate function) and AUD-015 (two unreferenced QuickBooks dialogs). Config then tuned so intentional empty catches stop drowning findings |
+| 2026-08-28 | AUD-006 fix: alert on a failed scheduled report                                                                                                                                                                 | Shipped; retest needs a real failed send                                                                                                                                                                                                                                                                                                                        |
+| 2026-08-28 | AUD-018 **opened** — per-record authorization reviewed                                                                                                                                                          | Ownership enforced on archive/unarchive and nothing else. Latent while every account is SYSTEM_ADMIN. Awaiting a decision between two options                                                                                                                                                                                                                   |
+| 2026-08-28 | Statuses reconciled against actual test runs                                                                                                                                                                    | `pnpm test:unit` 454 green · `pnpm lint:count` 0 · `pnpm db:drift` none                                                                                                                                                                                                                                                                                         |
 | 2026-08-28 | AUD-017: abandoned catalog tab removed; catalog export restored to the live screen; both exports now honour the search; five stale tab references corrected; `src/handoff/app.js` (22k-line stale copy) deleted | Shipped; **retest pending** — `pnpm lint:count` (expect 0)                                                                                                                                                                                                                                                                                                      |
 | 2026-08-28 | AUD-016: BOM spreadsheet — real .xlsx, currency formatting, autofit widths, proposal-order sorting                                                                                                              | Shipped; **retest pending**                                                                                                                                                                                                                                                                                                                                     |
 | 2026-08-28 | **Financial reconciliation — P-2026-000060**                                                                                                                                                                    | **Passed.** Report, price snapshot, QuickBooks invoice, payment received and financing base all 22,477.81. Four independent code paths agreeing to the cent                                                                                                                                                                                                     |

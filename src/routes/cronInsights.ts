@@ -28,6 +28,7 @@ import {
   type ReportResult,
 } from '../reporting/query.js';
 import { sendOutlookMail } from '../integrations/microsoft/graph.js';
+import { sendAlert } from '../lib/alerts.js';
 
 const esc = (s: unknown): string =>
   String(s ?? '')
@@ -229,6 +230,36 @@ export function registerInsightCronRoutes(app: FastifyInstance): void {
             data: { lastSendError: message.slice(0, 500) },
           });
           logger.error({ err, report: r.name }, 'cron: scheduled report failed to send');
+
+          /*
+           * And tell somebody.
+           *
+           * A scheduled report that stops arriving is invisible: nobody notices the
+           * absence of an email, and the only other signal was a red line on a card
+           * that has no reason to be opened. The common cause is mundane and specific
+           * — the owner's Outlook grant was revoked, or they left the company — so
+           * the alert names the report, the mailbox it tried, and the reason.
+           *
+           * Fingerprinted per report, so a weekly schedule that has been broken for a
+           * month sends one alert rather than four identical ones.
+           */
+          sendAlert({
+            title: `Scheduled report "${r.name}" could not be sent`,
+            detail:
+              `It was due today and ${to.length} recipient${to.length === 1 ? '' : 's'} did not get it. ` +
+              'The usual cause is the sending mailbox no longer being connected to Outlook — ' +
+              'reconnect it under My Profile, or change the sender under Insights → Saved reports.',
+            err,
+            fingerprint: `scheduled-report:${r.id}`,
+            context: {
+              report: r.name,
+              reportId: r.id,
+              sendAsUserId: sender,
+              recipients: to.map((x) => x.email).join(', '),
+              window: win.label,
+            },
+          });
+
           results.push({ report: r.name, status: 'failed', detail: message });
         }
       }
