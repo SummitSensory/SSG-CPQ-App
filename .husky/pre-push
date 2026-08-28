@@ -18,23 +18,37 @@
 # because nothing ran them. Three seconds a push is cheap insurance against a red
 # suite becoming normal.
 #
-# Tools run through node rather than pnpm, so this works from a GUI client too:
-# see .husky/pm.sh.
+# Tools run through node rather than pnpm, so this works from a GUI client too,
+# provided node can be found — see .husky/pm.sh.
 #
 # To push anyway in an emergency: git push --no-verify
 
 . "$(dirname "$0")/pm.sh"
 
-# Unlike pre-commit, this one REFUSES rather than skipping. A missing formatter
-# costs tidiness; an unchecked push is what put type errors in main.
+# When node cannot be found, this WARNS and lets the push through rather than
+# refusing it.
+#
+# That is a deliberate reversal. Refusing was the right instinct — an unchecked push
+# is what put type errors in main — but in practice it blocked every push from the
+# desktop client, and the way people get around a hook that blocks them is
+# `--no-verify`, which then skips the checks from the terminal too. A gate that is
+# routinely bypassed protects less than one that is honest about being skipped.
+#
+# Point .husky/node-path at your node directory and the checks come back. The message
+# says so every time, which is the pressure that gets it done.
 if [ -z "$NODE_BIN" ]; then
   echo ""
-  echo "pre-push: could not find node, so nothing was checked. Push refused."
+  echo "  ────────────────────────────────────────────────────────────────"
+  echo "  pre-push: node was not found, so NOTHING WAS CHECKED."
   echo ""
-  echo "  Push from a terminal in the repo instead:  git push"
-  echo "  See .husky/pm.sh for the directories that were tried."
+  echo "  This push is going out without typecheck, lint or tests."
   echo ""
-  exit 1
+  echo "  To fix it permanently, run this in a working terminal:"
+  echo "      node -e \"console.log(require('path').dirname(process.execPath))\""
+  echo "  and put that one line in the file  .husky/node-path"
+  echo "  ────────────────────────────────────────────────────────────────"
+  echo ""
+  exit 0
 fi
 
 echo "pre-push: typecheck"
