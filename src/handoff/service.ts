@@ -589,8 +589,12 @@ export async function unlockOrder(
     orderBy: { createdAt: 'desc' },
   });
   if (live?.qboId) {
+    // Bound before the re-read. `live` is reassigned inside the try, so TypeScript
+    // widens it back to nullable in the catch — and this is the document we came in
+    // with, which is the one the message is about either way.
+    const existing = live;
     try {
-      await syncTransactionState(live.id, fetch, userId);
+      await syncTransactionState(existing.id, fetch, userId);
       live = await prisma.qboTransaction.findFirst({
         where: { proposalId: order.proposalId, status: 'CREATED' },
         orderBy: { createdAt: 'desc' },
@@ -600,11 +604,11 @@ export async function unlockOrder(
       // stands — releasing an order while unable to confirm the books is the one
       // outcome worth avoiding — but it says which of the two problems this is.
       logger.warn(
-        { err, orderId, txnId: live.id },
+        { err, orderId, txnId: existing.id },
         'unlock: could not confirm QuickBooks document state',
       );
       throw new ConflictError(
-        `A QuickBooks ${live.type.toLowerCase().replace(/_/g, ' ')} (${live.qboDocNumber || live.qboId}) exists for this order, and QuickBooks could not be reached to check whether it has been voided. Try again in a moment; if it keeps failing, check the QuickBooks connection on the Integrations screen.`,
+        `A QuickBooks ${existing.type.toLowerCase().replace(/_/g, ' ')} (${existing.qboDocNumber || existing.qboId}) exists for this order, and QuickBooks could not be reached to check whether it has been voided. Try again in a moment; if it keeps failing, check the QuickBooks connection on the Integrations screen.`,
       );
     }
   }
