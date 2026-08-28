@@ -75,6 +75,11 @@ export const Permission = {
   // changed a price is ordinary operational context, and locking it to executives is
   // what made the existing audit trail feel like it did not exist.
   HISTORY_READ: 'history:read',
+  // Set and retire sales goals — the targets the Goals screen fills a glass
+  // against. Reading a goal needs only PROPOSAL_READ: the whole point of the screen
+  // is that everyone can see the number. Setting it is a management act, so it is
+  // held by executives and sales managers rather than by whoever opens the page.
+  GOALS_MANAGE: 'goals:manage',
   PRODUCTS_ADMIN: 'products:admin',
   AUDIT_READ: 'audit:read',
   USERS_MANAGE: 'users:manage',
@@ -130,6 +135,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly string[]> = {
     P.FREIGHT_INVOICE_PUSH,
     P.CROSSBORDER_APPROVE,
     P.CROSSBORDER_MANAGE,
+    P.GOALS_MANAGE,
     P.QBO_MANAGE,
     P.ORDERS_MANAGE,
     P.HANDOFF_MANAGE,
@@ -146,6 +152,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly string[]> = {
     P.PROPOSAL_ESIGN,
     P.PROPOSAL_ARCHIVE,
     P.FREIGHT_COST_WRITE,
+    P.GOALS_MANAGE,
     P.ORDERS_MANAGE,
     P.VENDOR_INVOICE_APPROVE,
   ],

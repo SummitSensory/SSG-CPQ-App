@@ -39,6 +39,7 @@ import { registerWebhookRoutes } from './routes/webhooks.js';
 import { registerDocusealWebhookRoutes } from './routes/esignWebhook.js';
 import { registerEsignRoutes } from './routes/esign.js';
 import { registerReportRoutes } from './routes/reports.js';
+import { registerInsightRoutes } from './routes/insights.js';
 import { registerStandardNoteRoutes } from './routes/standardNotes.js';
 import { registerCustomerNoteRoutes } from './routes/customerNotes.js';
 import { registerFollowUpRoutes } from './routes/followUps.js';
@@ -50,6 +51,7 @@ import { registerIntroTemplateRoutes } from './routes/introTemplates.js';
 import { registerBeltShipmentRoutes } from './routes/beltShipments.js';
 import { registerCronRoutes } from './routes/cron.js';
 import { registerReceivableCronRoutes } from './routes/cronReceivables.js';
+import { registerInsightCronRoutes } from './routes/cronInsights.js';
 import { verifySchemaOnBoot } from './lib/schemaCheck.js';
 import { registerPortalRoutes } from './routes/portal.js';
 import { registerWebRoutes } from './routes/web.js';
@@ -134,6 +136,7 @@ export function buildApp(): FastifyInstance {
   registerCrossBorderRoutes(app);
   registerHistoryRoutes(app);
   registerReportRoutes(app);
+  registerInsightRoutes(app);
   registerStandardNoteRoutes(app);
   registerCustomerNoteRoutes(app);
   registerFollowUpRoutes(app);
@@ -148,6 +151,7 @@ export function buildApp(): FastifyInstance {
   registerFormulaRoutes(app);
   registerCronRoutes(app);
   registerReceivableCronRoutes(app);
+  registerInsightCronRoutes(app);
   registerPortalRoutes(app);
   registerWebRoutes(app);
 

@@ -1,0 +1,121 @@
+// Reporting and goals.
+//
+// Two models. Neither is read by the proposal, the order, the Bill of Materials or
+// any integration — they hold what someone asked the reports to remember:
+//
+//   SavedReport   a report definition (grouping, filters, measures) with an
+//                 optional email schedule.
+//   SalesGoal     a target and the period it has to be hit in, which the Goals
+//                 screen fills a glass against.
+//
+// Copy this file to prisma/schema.reporting.prisma and run
+// `node prisma/apply-reporting-schema.mjs` to fold it into prisma/schema.prisma.
+
+/// How often a saved report emails itself. NONE is the normal case: most reports
+/// are opened, not delivered.
+enum ReportCadence {
+  NONE
+  WEEKLY
+  MONTHLY
+}
+
+/// What a goal measures. REVENUE and DEAL_COUNT read accepted proposals;
+/// PRODUCT_UNITS reads accepted proposal lines matching a part; SAVED_REPORT takes
+/// the first numeric total of a saved report, so any report can become a goal
+/// without new code here.
+enum GoalMetric {
+  REVENUE
+  DEAL_COUNT
+  PRODUCT_UNITS
+  SAVED_REPORT
+}
+
+/// The window a goal is measured over. Nothing shorter than a month: a weekly
+/// sales target on deals this size is noise.
+enum GoalPeriod {
+  MONTH
+  QUARTER
+  YEAR
+}
+
+/// A report definition someone built and kept.
+///
+/// `definition` is the same JSON the report builder posts to /insights/query, so a
+/// saved report and an ad-hoc one run through exactly one code path. It is stored
+/// as written rather than normalised into columns: the shape of a report definition
+/// will change, and a JSON column changes with it without a migration.
+model SavedReport {
+  id          String        @id @default(cuid())
+  name        String
+  description String?
+  definition  Json
+
+  /// Visible to everyone who can read proposals. A private report is the exception
+  /// — a rep's working draft — so this defaults to shared.
+  shared      Boolean       @default(true)
+
+  // ---- Optional email schedule ----
+  /// NONE means nothing is scheduled and every field below is ignored.
+  cadence     ReportCadence @default(NONE)
+  /// WEEKLY: 1 (Monday) – 7 (Sunday). MONTHLY: 1 – 28, so February always has it.
+  scheduleDay Int?
+  /// Comma-separated addresses. Kept as typed rather than as relations: these are
+  /// often distribution lists that are not users of this app.
+  recipients  String?
+  /// The mailbox the schedule sends from — the report owner unless changed. The
+  /// send uses that person's own Outlook connection, so a schedule whose owner has
+  /// not connected Outlook reports that rather than failing silently.
+  sendAsId    String?
+  lastSentAt  DateTime?
+  lastSendError String?
+
+  createdById String
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  goals       SalesGoal[]
+
+  @@index([cadence])
+  @@index([createdById])
+}
+
+/// A target, its period, and who owns it.
+///
+/// One row per period instance: "October 2026 company revenue" and "November 2026
+/// company revenue" are two goals. That is deliberate — a target that changes month
+/// to month is the normal case, and a single recurring row would either lose the
+/// history or need a second table to keep it.
+model SalesGoal {
+  id            String       @id @default(cuid())
+  name          String
+  metric        GoalMetric
+  period        GoalPeriod
+  /// First day of the period, UTC midnight. The end is derived from `period`, so a
+  /// quarter cannot be stored as four days long by accident.
+  periodStart   DateTime
+
+  /// The target for REVENUE, in USD minor units. Ignored by the other metrics.
+  targetMinor   BigInt       @default(0)
+  /// The target for DEAL_COUNT and PRODUCT_UNITS. Ignored by REVENUE.
+  targetCount   Int?
+
+  /// Whose goal this is. Null is a company goal.
+  ownerId       String?
+  /// PRODUCT_UNITS: the part number, or a fragment of one ("SOAR" catches the
+  /// series). Matched case-insensitively against the line's SKU and name.
+  skuMatch      String?
+  /// SAVED_REPORT: the report whose first numeric total is the progress figure.
+  savedReportId String?
+  savedReport   SavedReport? @relation(fields: [savedReportId], references: [id], onDelete: SetNull)
+
+  /// A retired goal stays on record — a target that was missed is worth keeping —
+  /// but leaves the Goals screen.
+  active        Boolean      @default(true)
+  createdById   String
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([active])
+  @@index([ownerId])
+  @@index([periodStart])
+}

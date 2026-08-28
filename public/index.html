@@ -542,5 +542,11 @@
          CLIENT_SCRIPTS, and this tag. Loaded after app.js on purpose — it installs
          its own nav entry once the shell exists, so it needs the shell to be there. -->
     <script src="/accounts-receivable.js?v=3"></script>
+
+    <!-- Insights (signed-deals chart + report builder) and Goals. Both install their
+         own nav entry the way accounts-receivable.js does, so app.js needs no edit
+         and a load failure costs the tab and nothing else. -->
+    <script src="/insights.js?v=1"></script>
+    <script src="/goals.js?v=1"></script>
   </body>
 </html>
