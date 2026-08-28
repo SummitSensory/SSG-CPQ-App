@@ -42,15 +42,6 @@ model User {
   /// the mailbox: Graph cannot read one, and Outlook on the web will not insert one into
   /// a message that already exists. Pasted by the rep, sanitized on the way in.
   emailSignatureHtml String?
-
-  /// The rep's handwritten signature, as a PNG/JPEG data URI, printed above the
-  /// sender block on every letter this app generates.
-  ///
-  /// A data URI rather than a URL because renderPdf has no network: an <img src>
-  /// pointing at the app would print a broken image on a document a customer
-  /// receives. Null is normal and the letter then leaves the signature space blank
-  /// rather than filling it with somebody else's name.
-  signatureImage     String?
 }
 
 /// One rep's delegated consent to have drafts written into their Outlook mailbox.

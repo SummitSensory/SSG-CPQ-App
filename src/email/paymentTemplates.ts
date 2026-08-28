@@ -961,13 +961,40 @@ export function sanitizeTemplateHtml(html: string): string {
 }
 
 /**
- * A filename a customer can file. `Payment-Notice-INV-1042.pdf` rather than a
- * cuid — this lands in somebody's downloads folder next to nine other PDFs.
+ * The letter code at the front of a template name — “PAY-01” out of
+ * “PAY-01 — Upcoming Shipment: Advance Balance Request”.
+ *
+ * Null when a template has no code, which is true of anything an admin writes from
+ * scratch. The filename then falls back to the template's own name rather than
+ * inventing a number that means nothing.
  */
-export function letterFilename(templateName: string, docNumber: string | null): string {
-  const base = `${templateName}${docNumber ? ` ${docNumber}` : ''}`
-    .replace(/[^A-Za-z0-9 ._-]+/g, '')
-    .trim()
-    .replace(/\s+/g, '-');
+export function letterCode(templateName: string): string | null {
+  const m = /^\s*([A-Za-z]{2,6}-\d{1,3})\b/.exec(String(templateName ?? ''));
+  return m ? m[1].toUpperCase() : null;
+}
+
+/**
+ * A filename a customer can file: `Heart of Occupation - PAY-01.pdf`.
+ *
+ * Customer first because these land in a downloads folder next to nine other PDFs
+ * and get filed by who they are about, then the letter code so a second request to
+ * the same customer does not silently overwrite the first.
+ *
+ * Spaces are kept — this is a document a person hands to their accounts team, not a
+ * URL. Only the characters that break a filesystem or the Content-Disposition header
+ * are stripped, and each part is capped because a long organisation name plus a mail
+ * client's own prefix can exceed what Windows will save.
+ */
+export function letterFilename(templateName: string, customerName: string | null): string {
+  const clean = (s: string, max: number): string =>
+    String(s ?? '')
+      .replace(/[^A-Za-z0-9 &(),._-]+/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, max)
+      .replace(/[ .]+$/, '');
+  const who = clean(customerName ?? '', 80);
+  const what = clean(letterCode(templateName) ?? String(templateName ?? ''), 60);
+  const base = [who, what].filter(Boolean).join(' - ');
   return `${base || 'Letter'}.pdf`;
 }
