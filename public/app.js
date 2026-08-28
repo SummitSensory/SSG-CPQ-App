@@ -10046,8 +10046,14 @@
         // The section note (frame dimensions and the like) sits in the SKU column
         // rather than trailing the heading, so it lines up with the specification
         // columns beneath it instead of colliding with a long section name.
+        // The heading and its "· OPTIONAL" tag print as one line, never two: the tag is
+        // part of the tier name, and wrapped below it read as a second heading. The name
+        // column is a fixed width, so a long name steps the type down a size instead.
+        var headLen = (tc(stripOptional(l.name)) + (l.optional ? ' · OPTIONAL' : '')).length;
+        var headFs = headLen > 46 ? '10px' : headLen > 40 ? '11px' : '12px';
+        var headLs = headLen > 40 ? '.06em' : '.1em';
         body += '<tr data-brk="head" style="break-inside:avoid;break-after:avoid;">' +
-          '<td style="padding:7px 0 4px;font-weight:700;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:#203060;">' + esc(tc(stripOptional(l.name))) + (l.optional ? ' <span style="font-weight:400;color:#9aa1b0;">· OPTIONAL</span>' : '') + '</td>' +
+          '<td style="padding:7px 0 4px;font-weight:700;font-size:' + headFs + ';letter-spacing:' + headLs + ';text-transform:uppercase;color:#203060;white-space:nowrap;">' + esc(tc(stripOptional(l.name))) + (l.optional ? ' <span style="font-weight:400;color:#9aa1b0;">· OPTIONAL</span>' : '') + '</td>' +
           '<td colspan="4" style="padding:7px 10px 4px;font-size:11px;color:#5b6478;vertical-align:bottom;">' + (l.description ? esc(l.description) : '') + '</td></tr>';
         return;
       }
@@ -10067,9 +10073,9 @@
         // — the engineer-of-record wording, a lead time — is not skimmed past as
         // boilerplate. Everything else keeps the quiet cream background.
         var noteBox = l.emphasis
-          ? 'background:#f3f6fb;border-radius:9px;padding:12px 15px;'
-          : 'background:#f7f9fc;border-radius:7px;padding:8px 11px;';
-        body += '<tr style="break-inside:avoid;"><td colspan="5" style="padding:4px 0 4px ' + lineIndent() + 'px;font-size:11px;color:#20241f;line-height:1.6;">' +
+          ? 'background:#f3f6fb;border-radius:9px;padding:9px 12px;'
+          : 'background:#f7f9fc;border-radius:7px;padding:7px 10px;';
+        body += '<tr style="break-inside:avoid;"><td colspan="5" style="padding:3px 0 3px ' + lineIndent() + 'px;font-size:10.5px;color:#20241f;line-height:1.45;">' +
           '<div style="' + noteBox + '">' +
             '<b style="display:block;margin-bottom:3px;' + (l.emphasis ? 'font-size:10px;text-transform:uppercase;letter-spacing:.11em;color:#203060;' : 'color:#20241f;') + '">' + esc(tc(l.name)) + '</b>' +
             rt(l.description) +
@@ -10119,7 +10125,7 @@
     var footerNotesHtml = footerNotes.length
       ? '<div style="margin-top:14px;break-inside:avoid;">' +
         footerNotes.map(function (fn) {
-          return '<div style="margin-bottom:8px;font-size:11.5px;line-height:1.7;color:#20241f;text-wrap:pretty;">' +
+          return '<div style="margin-bottom:7px;font-size:11.5px;line-height:1.35;color:#20241f;text-wrap:pretty;">' +
             (fn.title ? '<div style="font-family:\'Newsreader\',Georgia,serif;font-size:15px;font-weight:700;color:#203060;letter-spacing:-.015em;margin-bottom:4px;">' + esc(fn.title) + '</div>' : '') + rt(fn.body) + '</div>';
         }).join('') + '</div>'
       : '';

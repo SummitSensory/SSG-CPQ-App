@@ -76,12 +76,26 @@ export interface CrossBorderState {
 }
 
 /**
+ * The date a version's exchange rate is resolved for.
+ *
+ * Released (or accepted) versions are frozen on their release date: the CAD figures a
+ * customer received must not move. A draft has no such obligation and no such date
+ * that means anything — it is quoted whenever someone next looks at it — so it takes
+ * the current UTC date. The resolution cache is keyed on this date, so a draft still
+ * calls the Bank of Canada at most once a day.
+ */
+function rateAsOfFor(version: { releasedAt: Date | null }): string {
+  return version.releasedAt ? isoDate(version.releasedAt) : isoDate(new Date());
+}
+
+/**
  * Assemble the Canadian calculation for a version WITHOUT writing anything.
  *
  * Used for the builder's live view and for the PDF preview. Deterministic for a
  * fixed set of inputs, so calling it twice on an unchanged proposal gives the same
  * answer — which is what makes the written snapshot meaningful.
  */
+
 export async function crossBorderStateFor(versionId: string): Promise<CrossBorderState> {
   const version = await prisma.proposalVersion.findUnique({
     where: { id: versionId },
@@ -118,7 +132,7 @@ export async function crossBorderStateFor(versionId: string): Promise<CrossBorde
     observationDate: null,
     retrievedAt: null,
     source: null,
-    forDate: isoDate(version.releasedAt ?? version.createdAt),
+    forDate: rateAsOfFor(version),
     stale: false,
     fallbackUsed: false,
     warning: null,
@@ -140,9 +154,15 @@ export async function crossBorderStateFor(versionId: string): Promise<CrossBorde
   }
   const province = jurisdiction.province;
 
-  // The proposal date. A released proposal is pinned to its release date so a
-  // draft edited later cannot drift onto a newer rate.
-  const asOf = isoDate(version.releasedAt ?? version.createdAt);
+  // The date the rate is quoted for. A released proposal is pinned to its release
+  // date, so a draft edited later cannot drift onto a newer rate and the customer's
+  // copy keeps the figures it went out with.
+  //
+  // An unreleased draft is pinned to nothing, because it has been quoted to nobody.
+  // Pinning it to the day the draft happened to be started meant a proposal opened on
+  // Friday still carried Monday's rate — a rate that was never offered to anyone and
+  // will not be honoured. So a draft always resolves today's rate; see rateAsOfFor.
+  const asOf = rateAsOfFor(version);
 
   const rateResolution = await resolveRateForDate(asOf, {
     fallbackMode: (settings.fxFallbackMode as FxFallbackModeValue) ?? 'DRAFT_WITH_REVIEW',
