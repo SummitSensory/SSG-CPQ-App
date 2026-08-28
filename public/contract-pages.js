@@ -14,20 +14,6 @@
 
   var SUMMIT_ADDRESS = '6150 S Geneva Court, Englewood, CO 80111';
 
-  /** Escaped, with paragraph breaks preserved. */
-  function paras(text, esc) {
-    return String(text)
-      .split(/\n\s*\n/)
-      .map(function (p) {
-        return (
-          '<p style="margin:0 0 8px;font-size:10.5px;line-height:1.62;color:#20241f;text-wrap:pretty;">' +
-          esc(p.trim()).replace(/\n/g, '<br>') +
-          '</p>'
-        );
-      })
-      .join('');
-  }
-
   /**
    * The release's own header.
    *

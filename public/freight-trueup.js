@@ -58,8 +58,7 @@
   var RED = '#9c3327',
     REDLINE = '#f0ccc6',
     REDBG = '#fdf1ef',
-    AMBER = '#8a6d1f',
-    GREEN = '#2f7d5d';
+    AMBER = '#8a6d1f';
   var BLUEBG = '#eef3f7',
     BLUE = '#2f5d7d';
 

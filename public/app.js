@@ -1857,7 +1857,7 @@
       var comps = (p.components || []).map(function (c) {
         return '<tr>' +
           td('<code style="font-size:12.5px;color:#4a4f47;">' + esc(c.childPart) + '</code>' +
-            (c.unknown ? ' <span class="chip" style="font-size:10px;background:#fdf6e6;color:#6b5a24;" title="Not in the SKU master, so it will cost $0.00 on the sheet. Add it under Catalog → Pricing &amp; SKUs.">Not in catalog</span>' : '')) +
+            (c.unknown ? ' <span class="chip" style="font-size:10px;background:#fdf6e6;color:#6b5a24;" title="Not in the SKU master, so it will cost $0.00 on the sheet. Add it on the Catalog tab.">Not in catalog</span>' : '')) +
           td('<span style="font-size:13px;">' + esc(c.name || '—') + '</span>') +
           td(admin
             ? '<input class="bbQty" data-id="' + c.id + '" type="number" min="1" step="1" value="' + (Number(c.quantity) || 1) + '" style="' + bomFieldStyle('80px') + '">'
@@ -2032,7 +2032,7 @@
       '<div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">' +
         '<input id="itSearch" placeholder="Search part #, name, category or manufacturer…" value="' + esc(itemState.q) + '" style="flex:1;min-width:240px;max-width:420px;padding:10px 13px;border:1px solid #dcded7;border-radius:10px;font-size:14px;background:#fff;outline:none;">' +
         '<button class="link-btn" id="itSkuOnly" title="Parts in the SKU master with no place in the product tree — purchasable, but not selectable in the builder" style="width:auto;padding:10px 15px;">SKU-only parts</button>' +
-        (admin ? '<div style="margin-left:auto;display:flex;gap:8px;"><button class="link-btn" id="itImport" style="width:auto;padding:10px 15px;">Import Excel / CSV</button><button class="btn" id="itNew" style="width:auto;padding:10px 17px;">New product</button></div>' : '') +
+        (admin ? '<div style="margin-left:auto;display:flex;gap:8px;"><button class="link-btn" id="itExport" style="width:auto;padding:10px 15px;">Export Excel / CSV</button><button class="link-btn" id="itImport" style="width:auto;padding:10px 15px;">Import Excel / CSV</button><button class="btn" id="itNew" style="width:auto;padding:10px 17px;">New product</button></div>' : '') +
       '</div>' +
       '<div style="font-size:12px;color:#8a8f85;margin-bottom:10px;">Every product on one line — name, category, manufacturer, cost, price and weight. Edit any cell and it saves as you leave the field. These prices and weights are what the Adventure Series engine and the proposal builder multiply against. <b>Override OK</b> lets a rep substitute that part number in the Adventure Series builder — leave it off and the part is fixed.</div>' +
       '<div id="itList"><div class="muted" style="padding:24px;">Loading…</div></div>';
@@ -2040,6 +2040,9 @@
     s.addEventListener('input', function () { clearTimeout(t); t = setTimeout(function () { itemState.q = s.value.trim(); itemState.page = 1; loadItems(user); }, 300); });
     if (admin) {
       document.getElementById('itNew').addEventListener('click', function () { openSkuForm(user); });
+      // Exports what the search box is filtering to, not always the whole table —
+      // repricing one manufacturer's parts should not mean opening a 3,000-row file.
+      document.getElementById('itExport').addEventListener('click', exportSkuMaster);
       document.getElementById('itImport').addEventListener('click', function () { openSkuImport(user); });
     }
     var so = document.getElementById('itSkuOnly');
@@ -2539,82 +2542,19 @@
   }
 
   /* --- SKU / Pricing manager (in-app editor + Excel/CSV import) --- */
-  var skuState = { q: '', page: 1 };
-  function renderSkus(user) {
-    var admin = canCatalogAdmin(user.role);
-    document.getElementById('catBody').innerHTML =
-      '<div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">' +
-        '<input id="skuSearch" placeholder="Search part # or description…" value="' + esc(skuState.q) + '" style="flex:1;min-width:220px;max-width:360px;padding:10px 13px;border:1px solid #dcded7;border-radius:10px;font-size:14px;background:#fff;outline:none;">' +
-        (admin ? '<div style="margin-left:auto;display:flex;gap:8px;"><button class="link-btn" id="skuExport" style="width:auto;padding:10px 15px;">Export Excel / CSV</button><button class="link-btn" id="skuImport" style="width:auto;padding:10px 15px;">Import Excel / CSV</button><button class="btn" id="skuNew" style="width:auto;padding:10px 17px;">New SKU</button></div>' : '') +
-      '</div>' +
-      '<div style="font-size:12px;color:#8a8f85;margin-bottom:10px;">These prices &amp; weights feed the Adventure Series engine and the proposal builder. Edit a price or weight inline and it saves automatically. <b>Override OK</b> lets a rep substitute that part number in the Adventure Series builder — leave it off and the part is fixed.</div>' +
-      '<div id="skuList"><div class="muted" style="padding:24px;">Loading…</div></div>';
-    var s = document.getElementById('skuSearch'), t;
-    s.addEventListener('input', function () { clearTimeout(t); t = setTimeout(function () { skuState.q = s.value.trim(); skuState.page = 1; loadSkus(user); }, 300); });
-    if (admin) {
-      document.getElementById('skuNew').addEventListener('click', function () { openSkuForm(user); });
-      document.getElementById('skuExport').addEventListener('click', exportSkuMaster);
-      document.getElementById('skuImport').addEventListener('click', function () { openSkuImport(user); });
-    }
-    loadSkus(user);
-  }
+  /*
+   * The "Pricing & SKUs" tab used to live here — renderSkus, loadSkus and their own
+   * skuState — replaced by the merged Catalog tab (renderItems / loadItems), which
+   * lists every product on one line with price, cost and weight editable in place.
+   * Nothing has dispatched to it in a long time.
+   *
+   * Its search box was the last thing writing skuState, which is why the two catalog
+   * exports below had quietly stopped honouring a typed search: they read a filter
+   * that nothing could set any more. They read itemState now.
+   */
   /** Reload whichever catalog list is showing. */
   function refreshCatalogList(user) { if (cat.tab === 'products') loadProducts(user); else { itemState.page = 1; loadItems(user); } }
 
-  async function loadSkus(user) {
-    var box = document.getElementById('skuList'); if (!box) return;
-    var admin = canCatalogAdmin(user.role);
-    try {
-      var r = await authed('/skus?page=' + skuState.page + '&pageSize=50' + (skuState.q ? '&q=' + encodeURIComponent(skuState.q) : ''));
-      if (!r.ok) { box.innerHTML = '<div class="err">Could not load (' + r.status + ').</div>'; return; }
-      var d = await r.json();
-      var rows = (d.items || []).map(function (k) {
-        var priceCell = admin
-          ? '<input class="skuEdit" data-id="' + k.id + '" data-f="unitPriceMinor" value="' + (Number(k.unitPriceMinor) / 100).toFixed(2) + '" style="width:90px;padding:5px 7px;border:1px solid #dcded7;border-radius:6px;text-align:right;font-size:13px;">'
-          : '$' + (Number(k.unitPriceMinor) / 100).toFixed(2);
-        var costCell = admin
-          ? '<input class="skuEdit" data-id="' + k.id + '" data-f="unitCostMinor" value="' + (Number(k.unitCostMinor || 0) / 100).toFixed(2) + '" style="width:90px;padding:5px 7px;border:1px solid #e4dfd0;background:#fdfcf7;border-radius:6px;text-align:right;font-size:13px;">'
-          : '$' + (Number(k.unitCostMinor || 0) / 100).toFixed(2);
-        var marginPct = Number(k.unitPriceMinor) ? Math.round(((Number(k.unitPriceMinor) - Number(k.unitCostMinor || 0)) / Number(k.unitPriceMinor)) * 1000) / 10 : 0;
-        var wtCell = admin
-          ? '<input class="skuEdit" data-id="' + k.id + '" data-f="weightLbs" value="' + k.weightLbs + '" style="width:70px;padding:5px 7px;border:1px solid #dcded7;border-radius:6px;text-align:right;font-size:13px;">'
-          : k.weightLbs;
-        // Pre-approval to substitute this part in the Adventure Series builder.
-        // Off by default: a rep can only swap what the catalog says is swappable.
-        var ovrCell = admin
-          ? '<input type="checkbox" class="skuFlag" data-id="' + k.id + '" data-f="overrideAllowed"' + (k.overrideAllowed ? ' checked' : '') + ' title="Allow reps to substitute this part number" style="width:15px;height:15px;cursor:pointer;">'
-          : (k.overrideAllowed ? '<span style="font-size:12px;color:#3f9d78;">Yes</span>' : '<span style="color:#b6bab1;">—</span>');
-        return '<tr>' + td('<code style="font-size:12.5px;color:#4a4f47;">' + esc(k.part) + '</code>') + td('<span style="font-size:13px;">' + esc(k.description) + '</span>') +
-          td(esc(k.category)) + td(priceCell) + td(costCell) + td('<span style="font-size:13px;color:' + (marginPct >= 0 ? '#2f7d5d' : '#9c3327') + ';font-weight:600;">' + marginPct + '%</span>') + td(wtCell) + td(ovrCell) +
-          td(admin ? '<button class="skuDel" data-id="' + k.id + '" style="border:1px solid #e0e1db;background:#fff;border-radius:7px;color:#9c3327;cursor:pointer;padding:4px 9px;font-size:12px;">Delete</button>' : '') + '</tr>';
-      }).join('');
-      var totalPages = Math.max(1, Math.ceil((d.total || 0) / (d.pageSize || 50)));
-      box.innerHTML = tableShell(['Part #', 'Description', 'Category', 'Unit price', 'Unit cost', 'Margin', 'Weight (lb)', 'Override OK', ''], rows, 9, 'No SKUs yet. Import a sheet or add one.') +
-        '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;color:#82877d;font-size:13px;"><span>' + (d.total || 0) + ' SKUs</span>' +
-        '<span style="display:flex;gap:8px;align-items:center;"><button id="skuPrev" ' + (skuState.page <= 1 ? 'disabled' : '') + ' class="link-btn" style="width:auto;padding:6px 12px;">Prev</button><span>Page ' + (d.page || 1) + ' of ' + totalPages + '</span><button id="skuNext" ' + (skuState.page >= totalPages ? 'disabled' : '') + ' class="link-btn" style="width:auto;padding:6px 12px;">Next</button></span></div>';
-      var pv = document.getElementById('skuPrev'), nx = document.getElementById('skuNext');
-      if (pv) pv.addEventListener('click', function () { if (skuState.page > 1) { skuState.page--; loadSkus(user); } });
-      if (nx) nx.addEventListener('click', function () { if (skuState.page < totalPages) { skuState.page++; loadSkus(user); } });
-      document.querySelectorAll('.skuEdit').forEach(function (el) {
-        el.addEventListener('change', async function () {
-          var f = el.getAttribute('data-f'); var body = {};
-          body[f] = (f === 'unitPriceMinor' || f === 'unitCostMinor') ? d2m(el.value) : (parseFloat(el.value) || 0);
-          el.style.borderColor = '#c9a227';
-          var r2 = await authed('/skus/' + el.getAttribute('data-id'), { method: 'PATCH', body: body });
-          el.style.borderColor = r2.ok ? '#3f9d78' : '#c2452f';
-          setTimeout(function () { el.style.borderColor = '#dcded7'; }, 800);
-        });
-      });
-      document.querySelectorAll('.skuFlag').forEach(function (el) {
-        el.addEventListener('change', async function () {
-          var body = {}; body[el.getAttribute('data-f')] = el.checked;
-          var r2 = await authed('/skus/' + el.getAttribute('data-id'), { method: 'PATCH', body: body });
-          if (!r2.ok) { el.checked = !el.checked; alert('Could not save that change.'); }
-        });
-      });
-      document.querySelectorAll('.skuDel').forEach(function (b) { b.addEventListener('click', async function () { if (!confirm('Delete this SKU?')) return; await authed('/skus/' + b.getAttribute('data-id'), { method: 'DELETE' }); loadSkus(user); }); });
-    } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
-  }
   function openSkuForm(user) {
     openModal('New catalog item',
       fieldRow('Part #', '<input id="kPart" style="' + IN + '" required>') +
@@ -2650,7 +2590,7 @@
    * table — repricing one manufacturer's parts should not require a 3,000-row file.
    */
   async function exportSkuMaster() {
-    var qs = skuState.q ? '?q=' + encodeURIComponent(skuState.q) : '';
+    var qs = itemState.q ? '?q=' + encodeURIComponent(itemState.q) : '';
     var r = await authed('/skus/export' + qs);
     if (!r.ok) { alert('Could not export the catalog (' + r.status + ').'); return; }
     var d = await r.json();
@@ -2658,7 +2598,7 @@
     var rows = [cols].concat((d.items || []).map(function (it) {
       return cols.map(function (c) { return it[c]; });
     }));
-    downloadCsv('catalog-skus-' + todayISO() + (skuState.q ? '-filtered' : '') + '.csv', rows);
+    downloadCsv('catalog-skus-' + todayISO() + (itemState.q ? '-filtered' : '') + '.csv', rows);
   }
 
   /**
@@ -2674,7 +2614,7 @@
    * the sheet cannot be checked by eye, which is the whole point of doing it in Excel.
    */
   async function exportSkuPrices() {
-    var qs = skuState.q ? '?q=' + encodeURIComponent(skuState.q) : '';
+    var qs = itemState.q ? '?q=' + encodeURIComponent(itemState.q) : '';
     var r = await authed('/skus/export' + qs);
     if (!r.ok) { alert('Could not build the price sheet (' + r.status + ').'); return; }
     var d = await r.json();
@@ -2691,7 +2631,7 @@
     var rows = [cols].concat((d.items || []).map(function (it) {
       return [it.part, descCol ? it[descCol] : '', costCol ? it[costCol] : '', priceCol ? it[priceCol] : ''];
     }));
-    downloadCsv('catalog-prices-' + todayISO() + (skuState.q ? '-filtered' : '') + '.csv', rows);
+    downloadCsv('catalog-prices-' + todayISO() + (itemState.q ? '-filtered' : '') + '.csv', rows);
   }
 
   var skuImportConfirmed = false;
@@ -3112,7 +3052,7 @@
         '<div class="field" style="flex:1;"><label>Weight (oz)</label><input id="ePWt" type="number" min="0" style="' + IN + '" value="' + num(p.weightOz) + '"></div>' +
       '</div>' +
       '<label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;"><input type="checkbox" id="ePShowDims"' + (p.showDimensions ? ' checked' : '') + '> Print dimensions on the proposal</label>' +
-      '<div class="muted" style="font-size:12px;margin-top:8px;">Price, cost and weight in pounds live on the SKU — edit those in Catalog → Catalog or Pricing &amp; SKUs. Status has its own dropdown in the list.</div>',
+      '<div class="muted" style="font-size:12px;margin-top:8px;">Price, cost and weight in pounds live on the SKU — edit those on the Catalog tab. Status has its own dropdown in the list.</div>',
       async function (close, showErr) {
         var body = {
           name: document.getElementById('ePName').value.trim(),
@@ -6188,7 +6128,6 @@
       return;
     }
     if (rep.tab === 'winloss') {
-      var mmax = Math.max.apply(null, d.winLossByMonth.map(function (m) { return Math.max(m.won, m.lost); }).concat([1]));
       box.innerHTML =
         '<div class="grid">' +
           kpi('Accepted', s.won, fmt0(s.wonValue), '#2f7d5d') +
@@ -7300,7 +7239,7 @@
         '<b>' + unpriced.length + ' line' + (unpriced.length === 1 ? ' has' : 's have') + ' no price in the catalog either:</b> ' +
         '<code>' + unpriced.slice(0, 8).map(function (l) { return esc(l.sku); }).join('</code>, <code>') + '</code>' +
         (unpriced.length > 8 ? ' and ' + (unpriced.length - 8) + ' more' : '') +
-        '. Price them under Catalog → Pricing &amp; SKUs, then use “Pull from catalog”.</div>';
+        '. Price them on the Catalog tab, then use “Pull from catalog”.</div>';
     }
     return out;
   }
@@ -7698,7 +7637,7 @@
       (rows ? '<div style="margin-top:12px;padding-top:10px;border-top:1px solid #ece7d8;">' +
         '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin-bottom:2px;">By section</div>' + rows + '</div>'
         : '<div class="muted" style="font-size:12px;margin-top:10px;">Add a section heading to see per-section margin.</div>') +
-      (t.cogs === 0 ? '<div style="margin-top:10px;font-size:11.5px;color:#8a6d1f;line-height:1.5;">No costs recorded yet — add unit costs in Catalog → Pricing &amp; SKUs, or type a cost on any line.</div>' : '') +
+      (t.cogs === 0 ? '<div style="margin-top:10px;font-size:11.5px;color:#8a6d1f;line-height:1.5;">No costs recorded yet — add unit costs on the Catalog tab, or type a cost on any line.</div>' : '') +
     '</div>';
   }
 
@@ -10019,7 +9958,7 @@
       tbodyOpen = true;
       return s;
     }
-    var groupOpenSub = null, groupName = '';
+    var groupOpenSub = null;
     // Indent depth: top-level group flush, sub-heading indented, line items
     // indented one step further than whichever heading they sit under.
     var inSub = false;
@@ -10042,7 +9981,7 @@
       if (lt === 'GROUP') {
         body += subtotalRow();
         body += openSection();
-        groupOpenSub = 0; groupName = l.name; inSub = false;
+        groupOpenSub = 0; inSub = false;
         // The section note (frame dimensions and the like) sits in the SKU column
         // rather than trailing the heading, so it lines up with the specification
         // columns beneath it instead of colliding with a long section name.
@@ -10463,7 +10402,6 @@
     if (!Number.isFinite(banded) || banded <= 0) banded = MIN_LEGS_OVER_FOUR_LEG_MAX;
     return len > FOUR_LEG_MAX_FT ? Math.max(banded, MIN_LEGS_OVER_FOUR_LEG_MAX) : banded;
   }
-  function _xlfnPrefix(config) { return config === 'Square' ? 'SQ-' : config === 'L-Shape' ? 'L-' : config === 'T-Shape' ? 'T-' : 'R-'; }
   var adv = null;
   function openAdventureConfigurator() {
     adv = advBlank();
@@ -10564,7 +10502,6 @@
    * are ADDED to the quantities answered under Hardware rather than becoming their own
    * lines, so the same part number never appears on a proposal twice.
    */
-  function cargoNetOn() { return !!(adv.cargoNet && (adv.cargoNet10x8 || adv.cargoNet8x6)); }
   function eyeboltSum() { var nonSwivel = Math.max(0, (Number(adv.bracketsQty) || 0) - (Number(adv.swivel360) || 0)); return (Number(adv.swivel360) || 0) + nonSwivel + (Number(adv.forged) || 0) + (Number(adv.swingHanger) || 0); }
 
   /**
@@ -11045,7 +10982,7 @@
             ? '<div style="margin-bottom:14px;padding:10px 12px;background:#fbecea;border:1px solid #f0d5d0;border-radius:9px;font-size:12px;color:#9c3327;line-height:1.6;">The rate or cost on this line no longer matches the sum of its components — someone typed over it, or catalog prices have moved since the line was generated. Re-generate the Adventure Series lines, or pull from the catalog, to bring them back in step.</div>'
             : '') +
           (noPrice && hasPrices
-            ? '<div style="margin-bottom:14px;padding:10px 12px;background:#fdf6e6;border:1px solid #ecd9a6;border-radius:9px;font-size:12px;color:#6b5a24;line-height:1.6;">' + noPrice + ' of these part numbers carried no unit price when this line was built, so they added $0.00 to the kit. Set their price in Catalog → Pricing &amp; SKUs and re-generate.</div>'
+            ? '<div style="margin-bottom:14px;padding:10px 12px;background:#fdf6e6;border:1px solid #ecd9a6;border-radius:9px;font-size:12px;color:#6b5a24;line-height:1.6;">' + noPrice + ' of these part numbers carried no unit price when this line was built, so they added $0.00 to the kit. Set their price on the Catalog tab and re-generate.</div>'
             : '') +
           (!hasPrices
             ? '<div style="margin-bottom:14px;padding:10px 12px;background:#f8f9f6;border:1px solid #e7e8e3;border-radius:9px;font-size:12px;color:#5c6157;line-height:1.6;">This line was generated before unit prices were kept on the breakdown, so only quantities, costs and weights are stored. The kit total is still the one on the line. Re-generate the Adventure Series lines to see the price side reconciled part by part.</div>'
@@ -11418,7 +11355,6 @@
    * order put XX Small after Medium. Size is the meaning behind those names, so
    * it is what breaks the tie, and plain alphabetical is the last resort.
    */
-  var SIZE_ORDER = ['xxxs', 'xxs', 'xs', 'x small', 'small', 'medium', 'large', 'x large', 'xl', 'xxl', 'xxxl'];
   function sizeRank(name) {
     var n = String(name || '').toLowerCase();
     var m = n.match(/\(\s*size\s*[-–—:]?\s*([^)]+)\)/);
@@ -12490,7 +12426,7 @@
     var qs = s.questions || [];
     if (!qs.length && !edit) return '';
     var fields = qs.map(function (q) {
-      var name = 'q_' + q.id, v = q.value || '', st = bomFieldStyle(null, !edit), dis = edit ? '' : ' disabled';
+      var v = q.value || '', st = bomFieldStyle(null, !edit), dis = edit ? '' : ' disabled';
       var input;
       if (q.type === 'SELECT') {
         input = '<select class="secQ" data-id="' + q.id + '" style="' + st + '"' + dis + '><option value="">—</option>' +
@@ -13260,9 +13196,9 @@
         if (kind === 'csv') {
           bt.textContent = 'Building…';
           try {
-            var rx = await authed('/render/orders/' + order.id + '/bom.xls' + qs);
+            var rx = await authed('/render/orders/' + order.id + '/bom.xlsx' + qs);
             if (rx.ok) {
-              downloadBlob(await rx.blob(), bomFileSlug(vendor, order) + '.xls');
+              downloadBlob(await rx.blob(), bomFileSlug(vendor, order) + '.xlsx');
               bt.disabled = false; bt.textContent = label; return;
             }
           } catch (e) {}
@@ -14138,25 +14074,11 @@
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
   }
-  /** Print-to-PDF of one table — the browser's print dialog saves it as PDF. */
-  function printTable(title, subtitle, head, rows, totalRow) {
-    var w = window.open('', '_blank', 'width=900,height=1000');
-    if (!w) { alert('Allow pop-ups to export a PDF.'); return; }
-    var cell = function (v, b) { return '<td style="padding:7px 10px;border-bottom:1px solid #e7e8e3;' + (b ? 'font-weight:600;border-top:1px solid #cfd3ca;' : '') + '">' + esc(v) + '</td>'; };
-    w.document.write('<!doctype html><meta charset="utf-8"><title>' + esc(title) + '</title>' +
-      '<body style="font-family:Georgia,serif;color:#23261f;margin:34px;">' +
-      '<div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#8a8f85;">Summit Sensory Gym</div>' +
-      '<h1 style="font-size:21px;margin:4px 0 2px;">' + esc(title) + '</h1>' +
-      '<div style="font-size:12.5px;color:#6c7266;margin-bottom:16px;">' + esc(subtitle) + '</div>' +
-      '<table style="width:100%;border-collapse:collapse;font-family:Helvetica,Arial,sans-serif;font-size:12.5px;"><thead><tr>' +
-      head.map(function (h) { return '<th style="text-align:left;padding:7px 10px;font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;border-bottom:1px solid #cfd3ca;">' + esc(h) + '</th>'; }).join('') +
-      '</tr></thead><tbody>' +
-      rows.map(function (r) { return '<tr>' + r.map(function (v) { return cell(v); }).join('') + '</tr>'; }).join('') +
-      (totalRow ? '<tr>' + totalRow.map(function (v) { return cell(v, 1); }).join('') + '</tr>' : '') +
-      '</tbody></table></body>');
-    w.document.close();
-    setTimeout(function () { w.focus(); w.print(); }, 300);
-  }
+  /*
+   * printTable used to live here: a browser print-to-PDF of one on-screen table.
+   * Every table that wanted it now has a server-rendered PDF under /render/*, which
+   * paginates properly and does not depend on the operator's pop-up settings.
+   */
   function auditRows(events) {
     if (!events || !events.length) return '<div class="placeholder" style="padding:20px;"><p class="muted" style="margin:0;">No events recorded.</p></div>';
     return '<div class="card">' + events.map(function (e, i) { return '<div style="display:flex;gap:12px;padding:' + (i ? '10px' : '0') + ' 0 0;border-top:' + (i ? '1px solid #f2f3ef;margin-top:10px;' : 'none;') + 'font-size:13.5px;"><span style="color:#8a8f85;min-width:150px;">' + fmtDate(e.at) + '</span><span style="font-weight:500;">' + esc(e.action) + '</span></div>'; }).join('') + '</div>';
