@@ -970,7 +970,10 @@ export function sanitizeTemplateHtml(html: string): string {
  */
 export function letterCode(templateName: string): string | null {
   const m = /^\s*([A-Za-z]{2,6}-\d{1,3})\b/.exec(String(templateName ?? ''));
-  return m ? m[1].toUpperCase() : null;
+  // Bound before use: noUncheckedIndexedAccess types a capture group as possibly
+  // undefined even when the regex guarantees it.
+  const code = m?.[1];
+  return code ? code.toUpperCase() : null;
 }
 
 /**
