@@ -78,6 +78,26 @@ async function getBrowser(): Promise<Browser> {
   return browserPromise;
 }
 
+/**
+ * Throw the cached browser away.
+ *
+ * `isConnected()` is not a liveness check on a serverless host. The container is
+ * frozen between invocations and Chromium is a child process of it: when the platform
+ * reclaims that process, the remote-debugging pipe is not closed in a way Playwright
+ * notices, so `isConnected()` keeps answering true for a browser that is gone. The
+ * failure then lands on the first call that actually talks to it —
+ * `browser.newPage(): Target page, context or browser has been closed` — which is
+ * what a user sees as a PDF export that fails once, apparently at random, and works on
+ * the retry they do by hand.
+ */
+function discardBrowser(): void {
+  const stale = browserPromise;
+  browserPromise = null;
+  // Best effort, and never awaited: the process is usually already gone, and waiting
+  // on a close that cannot complete would add the timeout to the retry.
+  void stale?.then((b) => b.close().catch(() => undefined)).catch(() => undefined);
+}
+
 export interface PdfOptions {
   /** Paper size. Letter for US-facing documents, which is everything here. */
   format?: 'Letter' | 'A4';
@@ -110,8 +130,27 @@ export async function renderPdf(html: string, opts: PdfOptions = {}): Promise<Bu
       'PDF rendering is not installed on this deployment — export as Excel, or run: pnpm add playwright-core @sparticuz/chromium-min',
     );
   }
-  const browser = await getBrowser();
-  const page = await browser.newPage();
+  /*
+   * One retry on a fresh browser.
+   *
+   * The first attempt may be handed a cached browser whose process the platform has
+   * since reclaimed (see discardBrowser). That is not a real failure and it is not
+   * worth showing anyone: the second attempt launches cold and succeeds. A cold start
+   * is a few seconds, which is why the cache exists at all, so this pays that cost
+   * only when it has to.
+   *
+   * Deliberately once. If a freshly launched browser cannot open a page, something is
+   * actually wrong — the chromium pack is missing, or the function is out of memory —
+   * and looping would turn a clear error into a timeout.
+   */
+  let page: Page;
+  try {
+    page = await (await getBrowser()).newPage();
+  } catch (err) {
+    logger.warn({ err }, 'pdf: cached browser was dead, relaunching');
+    discardBrowser();
+    page = await (await getBrowser()).newPage();
+  }
   try {
     // 'domcontentloaded' rather than 'networkidle': the document is self-contained,
     // so waiting on the network only adds the timeout to every render.
