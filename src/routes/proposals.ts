@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { releaseFreightRequest } from './freight.js';
@@ -85,6 +85,34 @@ const FOLLOW_UP_DAYS = 7;
  * PROPOSAL_ARCHIVE (a sales rep) is limited to the ones they created.
  */
 const MANAGES_ANY_PROPOSAL = ['SYSTEM_ADMIN', 'EXECUTIVE', 'SALES_MANAGER', 'ACCOUNTING'];
+
+/**
+ * May this caller act on somebody else's proposal?
+ *
+ * The line is drawn at irreversible and customer-facing, not at editing. Three people
+ * here touch the same deal — the president, the design engineer and the operations
+ * coordinator — and a rule that stopped one of them fixing a typo on another's draft
+ * would be worked around by handing out SALES_MANAGER, which leaves everyone with more
+ * access than they had before it was tightened.
+ *
+ * So editing, adding a version and submitting for review stay open to anyone holding
+ * proposal:write. Guarded instead:
+ *
+ *   release            the point an internal draft becomes an external commitment,
+ *                      sent under the owner's name and signature
+ *   discard version    destroys work with no undo
+ *   archive/unarchive  pulls a colleague's live deal out of the pipeline
+ *
+ * A managing role passes always; that is what the role is for.
+ */
+function assertMayActOnProposal(role: string, ownerId: string, actorId: string, act: string): void {
+  if (MANAGES_ANY_PROPOSAL.includes(role)) return;
+  if (ownerId === actorId) return;
+  throw new ValidationError(
+    `You can only ${act} proposals you own. Ask a sales manager to ${act} this one, or to ` +
+      'reassign it to you.',
+  );
+}
 
 export function registerProposalRoutes(app: FastifyInstance): void {
   const read = { preHandler: requirePermission(Permission.PROPOSAL_READ) };
@@ -408,6 +436,22 @@ export function registerProposalRoutes(app: FastifyInstance): void {
       });
   });
 
+  /**
+   * The same check, from a version id.
+   *
+   * Its own function because the three guarded acts all identify the proposal by
+   * version rather than by proposal id, and resolving that twice in two ways is how
+   * two guards end up disagreeing.
+   */
+  async function assertVersionOwner(versionId: string, req: FastifyRequest, act: string) {
+    const version = await prisma.proposalVersion.findUnique({
+      where: { id: versionId },
+      select: { proposal: { select: { createdById: true } } },
+    });
+    if (!version) throw new NotFoundError('Proposal version not found');
+    assertMayActOnProposal(req.user!.role, version.proposal.createdById, req.user!.sub, act);
+  }
+
   // Status transitions, permission-gated by target.
   /**
    * Discard a draft version. Only a draft, only when another version remains, and
@@ -415,6 +459,8 @@ export function registerProposalRoutes(app: FastifyInstance): void {
    */
   app.delete('/proposals/versions/:versionId', write, async (req) => {
     const { versionId } = req.params as { versionId: string };
+    // Destroys work with no undo, so it is the owner's or a manager's to do.
+    await assertVersionOwner(versionId, req, 'discard versions of');
     return discardDraftVersion(versionId, req.user!.sub);
   });
 
@@ -444,6 +490,8 @@ export function registerProposalRoutes(app: FastifyInstance): void {
   });
   app.post('/proposals/versions/:versionId/release', release, async (req) => {
     const { versionId } = req.params as { versionId: string };
+    // Checked before anything else: this is the act that reaches the customer.
+    await assertVersionOwner(versionId, req, 'release');
     const body = (req.body ?? {}) as {
       note?: string;
       proposalHtml?: string;
@@ -639,6 +687,73 @@ export function registerProposalRoutes(app: FastifyInstance): void {
    * archiving does NOT void an estimate or an invoice, so somebody has to say out loud
    * that they know the document is still standing in QuickBooks.
    */
+  /**
+   * Hand a proposal to someone else.
+   *
+   * The counterpart to the ownership rules above, and the reason they are safe to
+   * have. Without this, a rep on holiday blocks the release of their own deal and the
+   * workaround is to grant SALES_MANAGER — which hands out far more access than the
+   * ownership rule was protecting.
+   *
+   * Restricted to the managing roles, because reassignment is the escape hatch and an
+   * escape hatch anyone can open is not a rule. Audited with both names: this changes
+   * who may release a document to a customer.
+   *
+   * The creator of record does not move. `createdById` is history — who wrote it —
+   * and rewriting history to change a permission would make the audit trail lie. The
+   * ownership rules read `createdById`, so a reassignment sets it and the previous
+   * holder is preserved in the audit entry.
+   */
+  app.patch('/proposals/:id/owner', archive, async (req) => {
+    const { id } = req.params as { id: string };
+    const body = (req.body ?? {}) as { userId?: unknown };
+    const userId = typeof body.userId === 'string' ? body.userId.trim() : '';
+    if (!userId) throw new ValidationError('Say who the proposal should belong to.');
+
+    if (!MANAGES_ANY_PROPOSAL.includes(req.user!.role)) {
+      throw new ValidationError('Only a sales manager can reassign a proposal.');
+    }
+
+    const [proposal, next] = await Promise.all([
+      prisma.proposal.findUnique({
+        where: { id },
+        select: { id: true, number: true, createdById: true },
+      }),
+      prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true, name: true, email: true, isActive: true },
+      }),
+    ]);
+    if (!proposal) throw new NotFoundError('Proposal not found');
+    if (!next) throw new NotFoundError('That user does not exist.');
+    // A deactivated owner cannot release anything, so assigning to one would quietly
+    // freeze the proposal — the exact state this endpoint exists to resolve.
+    if (!next.isActive)
+      throw new ValidationError('That account is deactivated. Pick someone active.');
+    if (proposal.createdById === userId) {
+      return { ok: true, ownerId: userId, unchanged: true };
+    }
+
+    const previous = await prisma.user.findUnique({
+      where: { id: proposal.createdById },
+      select: { name: true, email: true },
+    });
+
+    await prisma.proposal.update({ where: { id }, data: { createdById: userId } });
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'proposal.owner.reassign',
+      entity: 'Proposal',
+      entityId: id,
+      details: {
+        number: proposal.number,
+        from: { id: proposal.createdById, name: previous?.name ?? previous?.email ?? null },
+        to: { id: next.id, name: next.name ?? next.email },
+      },
+    });
+    return { ok: true, ownerId: next.id, ownerName: next.name ?? next.email };
+  });
+
   app.post('/proposals/:id/archive', archive, async (req) => {
     const { id } = req.params as { id: string };
     const body = (req.body ?? {}) as { reason?: string; confirm?: string };
@@ -648,10 +763,7 @@ export function registerProposalRoutes(app: FastifyInstance): void {
     });
     if (!proposal) throw new NotFoundError('Proposal not found');
     if (proposal.archivedAt) return { ok: true, archivedAt: proposal.archivedAt };
-    if (!MANAGES_ANY_PROPOSAL.includes(req.user!.role) && proposal.createdById !== req.user!.sub)
-      throw new ValidationError(
-        'You can only archive proposals you created. Ask a sales manager to archive this one.',
-      );
+    assertMayActOnProposal(req.user!.role, proposal.createdById, req.user!.sub, 'archive');
 
     const live = await prisma.qboTransaction.findMany({
       where: { proposalId: id, status: 'CREATED' },
@@ -696,8 +808,7 @@ export function registerProposalRoutes(app: FastifyInstance): void {
     });
     if (!proposal) throw new NotFoundError('Proposal not found');
     if (!proposal.archivedAt) return { ok: true, archivedAt: null };
-    if (!MANAGES_ANY_PROPOSAL.includes(req.user!.role) && proposal.createdById !== req.user!.sub)
-      throw new ValidationError('You can only restore proposals you created.');
+    assertMayActOnProposal(req.user!.role, proposal.createdById, req.user!.sub, 'unarchive');
     await prisma.proposal.update({
       where: { id },
       data: { archivedAt: null, archivedById: null, archiveReason: null },
