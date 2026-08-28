@@ -74,6 +74,33 @@ function addressList(raw: string | null | undefined): Array<{ email: string }> {
     });
 }
 
+/**
+ * The signed-in user's handwritten signature, for the letter they are generating.
+ *
+ * Every letter this app prints is signed by whoever is logged in. It is their name,
+ * title and phone in the sender block already; the signature above it completes the
+ * same block rather than adding anything new to the page.
+ *
+ * Returns null when the CRM holds no signature for them, and the letterhead then
+ * leaves the space blank for a wet signature — which is what it did for everybody
+ * before this existed, and remains the right answer for somebody who has not
+ * uploaded one.
+ *
+ * Never throws. A letter that prints unsigned is a small problem; a send that fails
+ * because of a signature lookup is a larger one.
+ */
+async function senderSignature(userId: string): Promise<string | null> {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { signatureImage: true },
+    });
+    return user?.signatureImage ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function registerReceivableRenderRoutes(app: FastifyInstance): void {
   const read = { preHandler: requirePermission(Permission.ACCOUNTING_READ) };
   const write = { preHandler: requirePermission(Permission.ACCOUNTING_WRITE) };
@@ -177,13 +204,17 @@ export function registerReceivableRenderRoutes(app: FastifyInstance): void {
           title: values.sender_title ?? '',
           email: values.sender_email ?? '',
           phone: values.sender_phone ?? '',
+          signatureDataUri: await senderSignature(req.user!.sub),
         },
         dateLine: longDate(new Date()),
         reference: values.invoice_number ? `Invoice ${values.invoice_number}` : null,
         enclosureHtml: letter.enclosureHtml,
       });
       attachments.push({
-        filename: letterFilename(template.name, ctx.txn.qboDocNumber),
+        filename: letterFilename(
+          template.name,
+          values.organization_name ?? values.customer_name ?? null,
+        ),
         contentType: 'application/pdf',
         bytes: pdf,
       });
@@ -363,6 +394,7 @@ export function registerReceivableRenderRoutes(app: FastifyInstance): void {
         title: values.sender_title ?? '',
         email: values.sender_email ?? '',
         phone: values.sender_phone ?? '',
+        signatureDataUri: await senderSignature(req.user!.sub),
       },
       dateLine: longDate(new Date()),
       reference: values.invoice_number ? `Invoice ${values.invoice_number}` : null,
@@ -372,7 +404,7 @@ export function registerReceivableRenderRoutes(app: FastifyInstance): void {
       .header('Content-Type', 'application/pdf')
       .header(
         'Content-Disposition',
-        `inline; filename="${letterFilename(template.name, ctx.txn.qboDocNumber)}"`,
+        `inline; filename="${letterFilename(template.name, values.organization_name ?? values.customer_name ?? null)}"`,
       )
       .header('X-Missing-Fields', body.missing.join(',') || 'none')
       .send(pdf);
@@ -443,6 +475,7 @@ export function registerReceivableRenderRoutes(app: FastifyInstance): void {
         title: values.sender_title ?? '',
         email: values.sender_email ?? '',
         phone: values.sender_phone ?? '',
+        signatureDataUri: await senderSignature(req.user!.sub),
       },
       dateLine: longDate(new Date()),
       reference: values.invoice_number ? `Invoice ${values.invoice_number}` : null,
@@ -450,7 +483,10 @@ export function registerReceivableRenderRoutes(app: FastifyInstance): void {
     });
     return reply
       .header('Content-Type', 'application/pdf')
-      .header('Content-Disposition', `inline; filename="${letterFilename(template.name, null)}"`)
+      .header(
+        'Content-Disposition',
+        `inline; filename="${letterFilename(template.name, values.organization_name ?? null)}"`,
+      )
       .send(pdf);
   });
 }

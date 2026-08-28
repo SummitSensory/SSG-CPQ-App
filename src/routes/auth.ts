@@ -60,10 +60,33 @@ const ResetPasswordBody = z.object({
   newPassword: z.string().min(12, 'New password must be at least 12 characters'),
 });
 
+/**
+ * A handwritten signature, as a data URI.
+ *
+ * Only PNG and JPEG, and only a data URI — a remote URL would print as a broken
+ * image, because the PDF renderer has no network and the letter is a document a
+ * customer receives.
+ *
+ * 400 KB is roughly ten times what a signature needs at the 90px it prints at, and
+ * it is a long way below the point where a row becomes awkward to read back. The cap
+ * is on the encoded string because that is what gets stored.
+ */
+const SIGNATURE_MAX_CHARS = 400_000;
+const SignatureImage = z
+  .string()
+  .trim()
+  .max(SIGNATURE_MAX_CHARS, 'That image is too large — use one under about 300 KB.')
+  .refine(
+    (v) => /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(v),
+    'The signature must be a PNG or JPEG image.',
+  );
+
 const ProfileBody = z.object({
   name: z.string().trim().min(1).max(120).optional(),
   title: z.string().trim().max(120).nullish(),
   phone: z.string().trim().max(40).nullish(),
+  /** A data URI to set it, an empty string or null to remove it. */
+  signatureImage: z.union([SignatureImage, z.literal(''), z.null()]).optional(),
 });
 
 export function registerAuthRoutes(app: FastifyInstance): void {
@@ -238,10 +261,29 @@ export function registerAuthRoutes(app: FastifyInstance): void {
         phone: true,
         role: true,
         isActive: true,
+        signatureImage: true,
       },
     });
     if (!user) throw new UnauthorizedError();
-    return user;
+    // The image itself is several hundred KB and this response is fetched on every
+    // page load. The profile form only needs to know whether one is held and to be
+    // able to show it, so the bytes are served from their own endpoint below.
+    const { signatureImage, ...rest } = user;
+    return { ...rest, hasSignature: !!signatureImage };
+  });
+
+  /**
+   * The signed-in user's own signature image, for the preview in the profile form.
+   *
+   * Its own endpoint so /auth/me stays small: that response is fetched on every page
+   * load and this is the one field on the row big enough to notice.
+   */
+  app.get('/auth/me/signature', { preHandler: requireAuth }, async (req) => {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user!.sub },
+      select: { signatureImage: true },
+    });
+    return { signatureImage: user?.signatureImage ?? null };
   });
 
   /** Preparer details that appear on generated proposals. */
@@ -249,13 +291,17 @@ export function registerAuthRoutes(app: FastifyInstance): void {
     const parsed = ProfileBody.safeParse(req.body);
     if (!parsed.success)
       throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid profile');
-    const { name, title, phone } = parsed.data;
-    return prisma.user.update({
+    const { name, title, phone, signatureImage } = parsed.data;
+    const updated = await prisma.user.update({
       where: { id: req.user!.sub },
       data: {
         ...(name === undefined ? {} : { name }),
         ...(title === undefined ? {} : { title: title || null }),
         ...(phone === undefined ? {} : { phone: phone || null }),
+        // Undefined leaves it alone; an empty string or null removes it. The form
+        // sends the field only when it changed, so saving a name never disturbs a
+        // signature that took somebody three attempts to scan.
+        ...(signatureImage === undefined ? {} : { signatureImage: signatureImage || null }),
       },
       select: {
         id: true,
@@ -265,7 +311,10 @@ export function registerAuthRoutes(app: FastifyInstance): void {
         phone: true,
         role: true,
         isActive: true,
+        signatureImage: true,
       },
     });
+    const { signatureImage: saved, ...rest } = updated;
+    return { ...rest, hasSignature: !!saved };
   });
 }

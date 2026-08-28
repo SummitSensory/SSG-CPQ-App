@@ -956,11 +956,12 @@
   }
 
   /** Fetch with auth, then hand the bytes to the browser as a download. */
+  /** Returns true when the document was produced, so the caller can show it worked. */
   async function download(path, opts, filename) {
     var r = await authed(path, opts);
     if (!r.ok) {
       toast(await failureText(r, 'That document could not be produced.'), true);
-      return;
+      return false;
     }
     var blob = await r.blob();
     var url = URL.createObjectURL(blob);
@@ -973,6 +974,7 @@
     setTimeout(function () {
       URL.revokeObjectURL(url);
     }, 4000);
+    return true;
   }
 
   /* ----------------------------------------------------------------- composer */
@@ -1140,11 +1142,21 @@
         HAIR +
         ';">' +
         '<div style="font-size:13px;font-weight:600;margin-bottom:9px;">Attachments</div>' +
-        '<label style="display:flex;align-items:center;gap:8px;font-size:12.5px;padding:3px 0;cursor:pointer;">' +
+        // The wording promises a document nobody in this app has seen — QuickBooks
+        // renders it from the company's own invoice template, so it is not ours to
+        // preview from a mock-up. The button fetches the real one.
+        '<div style="display:flex;align-items:center;gap:10px;padding:3px 0;">' +
+        '<label style="display:flex;align-items:center;gap:8px;font-size:12.5px;cursor:pointer;">' +
         '<input type="checkbox" id="arAttachInvoice" checked style="width:15px;height:15px;accent-color:' +
         ACCENT +
         ';cursor:pointer;">' +
         'The invoice, as QuickBooks renders it</label>' +
+        '<button id="arInvoicePreview" style="font:inherit;font-size:12px;padding:3px 9px;border-radius:7px;cursor:pointer;border:1px solid ' +
+        LINE +
+        ';background:#fff;color:' +
+        SOFT +
+        ';">Preview</button>' +
+        '</div>' +
         '<div style="margin-top:9px;display:grid;grid-template-columns:1fr auto;gap:8px;align-items:end;">' +
         '<div><label style="display:block;font-size:12px;color:' +
         SOFT +
@@ -1243,6 +1255,11 @@
       });
     }
     document.getElementById('arLetterPreview').addEventListener('click', previewLetter);
+    document.getElementById('arInvoicePreview').addEventListener('click', previewInvoice);
+    // A different letter has not been previewed yet, whatever the button says.
+    document.getElementById('arLetter').addEventListener('change', function () {
+      resetPreviewButton(document.getElementById('arLetterPreview'), 'Preview letter');
+    });
     document.getElementById('arSend').addEventListener('click', send);
   }
 
@@ -1313,18 +1330,80 @@
     }
   }
 
+  /**
+   * Put a preview button back to its resting state.
+   *
+   * Called when the thing it previews changes, because a green tick against a letter
+   * the person has not actually looked at is worse than no tick at all.
+   */
+  function resetPreviewButton(b, label) {
+    if (!b) return;
+    b.disabled = false;
+    b.textContent = label;
+    b.style.background = '#fff';
+    b.style.color = b.dataset.restColor || INK;
+    b.style.borderColor = LINE;
+  }
+
+  /**
+   * Run a preview and show it in the button.
+   *
+   * A PDF opens in the browser's own download handling, which on some machines is a
+   * bar at the bottom of the window and on others is nothing visible at all. Without
+   * feedback here the honest reading of a click is that nothing happened, so people
+   * click again — which is exactly what this is for. Three states: working, opened,
+   * and back to resting if it failed.
+   */
+  async function runPreview(b, label, path, opts, filename) {
+    if (!b || b.disabled) return;
+    if (!b.dataset.restColor) b.dataset.restColor = b.style.color || INK;
+    b.disabled = true;
+    b.textContent = 'Preparing…';
+    b.style.background = '#f4f5f2';
+    b.style.color = SOFT;
+    var okDoc = await download(path, opts, filename);
+    if (!okDoc) {
+      resetPreviewButton(b, label);
+      return;
+    }
+    b.disabled = false;
+    b.textContent = label + ' ✓';
+    b.style.background = '#eef7f2';
+    b.style.color = GREEN;
+    b.style.borderColor = '#cfe6da';
+  }
+
   function previewLetter() {
     var key = document.getElementById('arLetter').value;
     if (!key) {
       toast('Choose a letter first.', true);
       return;
     }
-    download(
+    runPreview(
+      document.getElementById('arLetterPreview'),
+      'Preview letter',
       '/render/receivables/' +
         encodeURIComponent(compose.invoice.transactionId) +
         '/letter-preview.pdf',
       { method: 'POST', body: { letterTemplateKey: key, entered: enteredValues() } },
       'letter-preview.pdf',
+    );
+  }
+
+  /**
+   * The invoice PDF as QuickBooks renders it — fetched live from Intuit, not built
+   * here. It is drawn from the company's own invoice template in QuickBooks, so this
+   * is the only way to see what the customer will actually receive.
+   */
+  function previewInvoice() {
+    runPreview(
+      document.getElementById('arInvoicePreview'),
+      'Preview',
+      '/integrations/quickbooks/transactions/' +
+        encodeURIComponent(compose.invoice.transactionId) +
+        '/pdf',
+      null,
+      'Invoice-' + (compose.invoice.docNumber || 'quickbooks') + '.pdf',
     );
   }
 

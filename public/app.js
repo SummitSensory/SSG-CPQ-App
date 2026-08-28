@@ -16267,23 +16267,122 @@
       }, 'Reset password');
   }
 
+  /**
+   * Shrink a picked image to something a letter can use.
+   *
+   * A phone photo or a flatbed scan of a signature is several megabytes, and it
+   * prints at 90px wide. 600px is generous for that at any sensible print density and
+   * lands comfortably under the 400 KB the API accepts, so nobody has to know what a
+   * data URI is to get their signature onto a letter.
+   *
+   * PNG out, always: a signature scanned as JPEG carries grey compression fringing
+   * around the strokes that is obvious against white paper.
+   */
+  function signatureDataUri(file, maxWidth) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onerror = function () { reject(new Error('That file could not be read.')); };
+      reader.onload = function () {
+        var img = new Image();
+        img.onerror = function () { reject(new Error('That file is not an image.')); };
+        img.onload = function () {
+          var scale = Math.min(1, (maxWidth || 600) / (img.width || 1));
+          var c = document.createElement('canvas');
+          c.width = Math.max(1, Math.round(img.width * scale));
+          c.height = Math.max(1, Math.round(img.height * scale));
+          var ctx = c.getContext('2d');
+          ctx.drawImage(img, 0, 0, c.width, c.height);
+          resolve(c.toDataURL('image/png'));
+        };
+        img.src = String(reader.result || '');
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
   function openProfileForm(user) {
+    // undefined leaves the stored signature alone; '' removes it; a string sets it.
+    // Tracked rather than read off the form so that saving a phone number never
+    // rewrites a signature that took somebody three attempts to scan.
+    var sigNext;
+
     openModal('My profile',
       fieldRow('Full name', '<input id="upName" style="' + IN + '" value="' + esc(user.name || '') + '" required>') +
       fieldRow('Title', '<input id="upTitle" style="' + IN + '" placeholder="e.g. Director of Sales" value="' + esc(user.title || '') + '">') +
       fieldRow('Phone', '<input id="upPhone" style="' + IN + '" placeholder="e.g. (720) 457-5500" value="' + esc(user.phone || '') + '">') +
       fieldRow('Email', '<input style="' + IN + 'background:#f2f3ef;" value="' + esc(user.email || '') + '" disabled>') +
+      fieldRow('Signature',
+        '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">' +
+          '<div id="upSigBox" style="width:150px;height:56px;border:1px solid #dfe3ec;border-radius:7px;background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;">' +
+            '<span id="upSigEmpty" style="font-size:11.5px;color:#8a8f85;">None saved</span>' +
+            '<img id="upSigImg" alt="" style="display:none;max-width:138px;max-height:46px;">' +
+          '</div>' +
+          '<div style="display:flex;gap:8px;align-items:center;">' +
+            '<button type="button" id="upSigPick" style="font:inherit;font-size:12.5px;padding:7px 12px;border-radius:7px;border:1px solid #dfe3ec;background:#fff;cursor:pointer;">Choose image…</button>' +
+            '<button type="button" id="upSigClear" style="font:inherit;font-size:12.5px;padding:7px 12px;border-radius:7px;border:1px solid #dfe3ec;background:#fff;color:#8d2f20;cursor:pointer;display:none;">Remove</button>' +
+          '</div>' +
+          '<input type="file" id="upSigFile" accept="image/png,image/jpeg" style="display:none;">' +
+        '</div>' +
+        '<div id="upSigNote" class="muted" style="font-size:11.5px;margin-top:6px;line-height:1.5;">Signed in black ink on white paper, scanned or photographed. It prints above your name on every payment letter you generate.</div>') +
       '<div class="muted" style="font-size:12px;margin-top:2px;">These details appear in the “Proposal Prepared By” block on every proposal you generate.</div>',
       async function (close, showErr) {
         var name = document.getElementById('upName').value.trim();
         if (name.length < 2) return showErr('Enter your full name.');
-        var r = await authed('/auth/me', { method: 'PATCH', body: { name: name, title: document.getElementById('upTitle').value.trim(), phone: document.getElementById('upPhone').value.trim() } });
-        if (!r.ok) return showErr('Could not save your profile (' + r.status + ').');
+        var body = { name: name, title: document.getElementById('upTitle').value.trim(), phone: document.getElementById('upPhone').value.trim() };
+        if (sigNext !== undefined) body.signatureImage = sigNext;
+        var r = await authed('/auth/me', { method: 'PATCH', body: body });
+        if (!r.ok) return showErr(await serverMessage(r, 'Could not save your profile (' + r.status + ').'));
         var updated = await r.json();
-        user.name = updated.name; user.title = updated.title; user.phone = updated.phone;
-        if (currentUser) { currentUser.name = updated.name; currentUser.title = updated.title; currentUser.phone = updated.phone; }
+        user.name = updated.name; user.title = updated.title; user.phone = updated.phone; user.hasSignature = updated.hasSignature;
+        if (currentUser) { currentUser.name = updated.name; currentUser.title = updated.title; currentUser.phone = updated.phone; currentUser.hasSignature = updated.hasSignature; }
         close(); renderShell(user);
       }, 'Save profile');
+
+    var box = document.getElementById('upSigImg');
+    var empty = document.getElementById('upSigEmpty');
+    var clear = document.getElementById('upSigClear');
+    var file = document.getElementById('upSigFile');
+    var note = document.getElementById('upSigNote');
+
+    function show(dataUri) {
+      if (dataUri) {
+        box.src = dataUri; box.style.display = 'block';
+        empty.style.display = 'none'; clear.style.display = 'inline-block';
+      } else {
+        box.removeAttribute('src'); box.style.display = 'none';
+        empty.style.display = 'block'; clear.style.display = 'none';
+      }
+    }
+
+    // Fetched separately from /auth/me: the image is a few hundred KB and that
+    // response is read on every page load.
+    if (user.hasSignature) {
+      authed('/auth/me/signature').then(async function (r) {
+        if (!r.ok) return;
+        var d = await r.json();
+        if (sigNext === undefined && d.signatureImage) show(d.signatureImage);
+      });
+    }
+
+    document.getElementById('upSigPick').addEventListener('click', function () { file.click(); });
+    clear.addEventListener('click', function () {
+      sigNext = '';
+      show(null);
+      note.textContent = 'Your signature will be removed when you save.';
+    });
+    file.addEventListener('change', async function () {
+      var picked = file.files && file.files[0];
+      if (!picked) return;
+      try {
+        var uri = await signatureDataUri(picked, 600);
+        sigNext = uri;
+        show(uri);
+        note.textContent = 'Looks right? It prints at about this size above your name.';
+      } catch (e) {
+        note.textContent = 'That file could not be read as an image. Try a PNG or JPEG.';
+      }
+      file.value = '';
+    });
   }
 
   function openPasswordForm() {
