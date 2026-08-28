@@ -29,6 +29,36 @@ vi.mock('../../src/integrations/quickbooks/customers.js', () => ({
 vi.mock('../../src/integrations/quickbooks/links.js', () => ({
   findLink: vi.fn().mockResolvedValue(null),
 }));
+/*
+ * The rest of the execute path.
+ *
+ * executeTransaction talks to four collaborators before it calls create(): a SKU
+ * preflight against QuickBooks items, a term lookup, a custom-field slot read, and a
+ * monday board read for the project id and PO. All four are network calls. None was
+ * mocked, so this test failed inside the generic "QuickBooks transaction failed"
+ * wrapper — which is also why the failure was hard to read.
+ *
+ * They are stubbed to their benign answers: everything mapped, no term, no custom
+ * field, no references. That keeps this file about the one thing it is named for —
+ * that the same financial action cannot create two documents — and leaves the
+ * behaviour of each collaborator to its own test.
+ */
+vi.mock('../../src/integrations/quickbooks/skuPreflight.js', () => ({
+  assertSkusMapped: vi.fn().mockResolvedValue(undefined),
+  checkSkuMapping: vi.fn().mockResolvedValue({ unmapped: [] }),
+}));
+vi.mock('../../src/integrations/quickbooks/terms.js', () => ({
+  resolveTermForInvoice: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('../../src/integrations/quickbooks/customFields.js', () => ({
+  customFieldId: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('../../src/integrations/quickbooks/synthesizedItems.js', () => ({
+  resolveSynthesizedItemId: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('../../src/integrations/monday/dealReferences.js', () => ({
+  resolveInvoiceReferences: vi.fn().mockResolvedValue({ projectId: null, poNumber: null }),
+}));
 
 vi.mock('../../src/lib/prisma.js', () => {
   const s = h.store;
@@ -57,11 +87,64 @@ vi.mock('../../src/lib/prisma.js', () => {
       findUniqueOrThrow: async () => s.version,
     },
     priceSnapshot: { findUnique: async () => s.snapshot },
+    /*
+     * Cross-border, added to the mock after these tests were written.
+     *
+     * prepareTransaction now asks sellerCollectedCharges() what Summit is collecting
+     * in tariff, brokerage and Canadian tax, so the mock has to answer for three more
+     * models. Without them the test threw "Cannot read properties of undefined
+     * (reading 'findFirst')" before it reached a single assertion — which is how the
+     * duplicate-prevention guard came to be unverified while the suite still looked
+     * like it covered it.
+     *
+     * All three answer null, which is the ordinary US case: no snapshot, the feature
+     * switched off, no billing address. sellerCollectedCharges then returns no charges
+     * and the totals are the plain snapshot totals these tests assert on. A Canadian
+     * variant belongs in crossBorderCharges.test.ts, where the charge maths lives.
+     */
+    proposalCrossBorderSnapshot: { findFirst: async () => null },
+    crossBorderSetting: { findUnique: async () => null },
+    address: { findFirst: async () => null },
+    product: { findFirst: async () => null },
+    acceptedOrder: { findUnique: async () => null },
     qboConnection: { findFirst: async () => ({ realmId: 'realm-1' }) },
     integrationSyncLog: { create: async () => ({}) },
     $transaction: async (fn: (tx: unknown) => unknown) => fn(prisma),
   };
-  return { prisma };
+
+  /*
+   * Anything not listed above answers null rather than throwing.
+   *
+   * This mock had drifted behind the schema twice over: the two failures that exposed
+   * it were `prisma.proposalCrossBorderSnapshot` and `prisma.product` being undefined,
+   * both reached through code paths added long after this file was written. The
+   * failure mode is the worst kind — a TypeError before the first assertion, in a test
+   * whose name still claims to guard against double-billing a customer.
+   *
+   * So: unknown models resolve to a stub whose reads return nothing and whose writes
+   * return an empty row. A test that genuinely needs a model to answer something adds
+   * it explicitly above; a test that merely passes through one no longer breaks when
+   * the domain grows.
+   */
+  const empty = {
+    findUnique: async () => null,
+    findUniqueOrThrow: async () => null,
+    findFirst: async () => null,
+    findMany: async () => [],
+    count: async () => 0,
+    create: async () => ({}),
+    update: async () => ({}),
+    upsert: async () => ({}),
+    delete: async () => ({}),
+    deleteMany: async () => ({ count: 0 }),
+    createMany: async () => ({ count: 0 }),
+  };
+
+  return {
+    prisma: new Proxy(prisma as Record<string, unknown>, {
+      get: (target, key: string) => target[key] ?? (key.startsWith('$') ? undefined : empty),
+    }),
+  };
 });
 
 function seedAccepted() {

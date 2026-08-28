@@ -83,6 +83,18 @@ function main() {
         env: { ...process.env, DATABASE_URL: url, DIRECT_URL: url },
       });
       console.log('migrate: up to date.');
+      // Did the migrations actually produce the schema the code expects? Reported,
+      // not enforced: the deploy has already applied everything it was given, and
+      // failing here would block a release over a diff that may be a deliberate
+      // manual change. Silence, though, is how drift survives for weeks.
+      try {
+        execSync('node scripts/schema-drift-check.mjs --warn', {
+          stdio: 'inherit',
+          env: { ...process.env, DATABASE_URL: url, DIRECT_URL: url },
+        });
+      } catch {
+        console.log('migrate: drift check could not run.');
+      }
       return;
     } catch {
       const wait = BACKOFF_MS[attempt - 1];

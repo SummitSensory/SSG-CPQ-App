@@ -12,7 +12,11 @@
 # handled per-commit by lint-staged instead, on changed files only.
 #
 # No db:migrate:status either — it reaches out to Neon, and a push should not
-# fail because a laptop is offline.
+# fail because a laptop is offline. Same reason the integration suite is not here:
+# those tests need the database. The UNIT suite is, as of 2026-08-28 — two tests
+# guarding against billing a customer twice had been failing for weeks, in main,
+# because nothing ran them. Three seconds a push is cheap insurance against a red
+# suite becoming normal.
 #
 # To push anyway in an emergency: git push --no-verify
 
@@ -21,3 +25,6 @@ pnpm typecheck || exit 1
 
 echo "pre-push: lint"
 pnpm lint || exit 1
+
+echo "pre-push: unit tests"
+pnpm test:unit || exit 1
