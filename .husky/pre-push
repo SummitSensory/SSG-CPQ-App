@@ -20,11 +20,29 @@
 #
 # To push anyway in an emergency: git push --no-verify
 
+. "$(dirname "$0")/pm.sh"
+
+# Unlike pre-commit, this one REFUSES rather than skipping. A missing formatter
+# costs tidiness; an unchecked push is what put type errors in main.
+if [ -z "$PM" ]; then
+  echo ""
+  echo "pre-push: cannot find pnpm, so nothing was checked. Push refused."
+  echo ""
+  echo "  Pushing from GitHub Desktop or another GUI? It does not inherit your"
+  echo "  shell's PATH. Push from a terminal in the repo instead:"
+  echo ""
+  echo "      git push"
+  echo ""
+  echo "  See .husky/pm.sh for what was tried."
+  echo ""
+  exit 1
+fi
+
 echo "pre-push: typecheck"
-pnpm typecheck || exit 1
+$PM typecheck || exit 1
 
 echo "pre-push: lint"
-pnpm lint || exit 1
+$PM lint || exit 1
 
 echo "pre-push: unit tests"
-pnpm test:unit || exit 1
+$PM test:unit || exit 1

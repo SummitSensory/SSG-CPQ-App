@@ -10,4 +10,13 @@
 #
 # To commit anyway: git commit --no-verify
 
-pnpm exec lint-staged
+. "$(dirname "$0")/pm.sh"
+
+if [ -z "$PM" ]; then
+  echo "pre-commit: no pnpm on PATH — skipping the formatter."
+  echo "            (Committing from a GUI client? See .husky/pm.sh. The commit"
+  echo "             is allowed through; pre-push still checks everything.)"
+  exit 0
+fi
+
+$PM exec lint-staged
