@@ -3,7 +3,8 @@ import { env, isMondayPushConfigured } from '../../config/env.js';
 import { logger } from '../../lib/logger.js';
 import { setColumnValues, uploadFileToColumn } from './client.js';
 import { dealItemIdFor } from './dealLink.js';
-import { versionTotals } from '../../proposals/analytics.js';
+import { versionTotals, metaOf } from '../../proposals/analytics.js';
+import { sellerCollectedCharges } from '../../crossborder/sellerCharges.js';
 import { renderPdf } from '../../render/pdf.js';
 
 /**
@@ -19,8 +20,24 @@ export const DEAL_COLUMNS = {
   subtotal: 'deal_value',
   /** Text column — the proposal title. */
   title: 'text29__1',
-  /** Numbers column — the discount taken off the proposal, in dollars. */
+  /**
+   * Numbers column — the discount taken off the proposal, in dollars, written as a
+   * NEGATIVE number. The deal board sums its money columns, so a discount has to
+   * arrive with the sign it has in the arithmetic; a positive 4,000 there reads as
+   * four thousand dollars of additional deal value.
+   */
   discount: 'numbers4__1',
+  /**
+   * Numbers column — every tax-like charge on the proposal in one figure: sales tax,
+   * plus, on a cross-border job, the tariff, customs brokerage and Canadian tax that
+   * Summit collects. See taxesAndDutiesMinor() for why they are summed rather than
+   * given a column each.
+   */
+  taxes: 'numbers99__1',
+  /** Numbers column — Adventure frame length, in feet. */
+  frameLength: 'numeric_mm56wfja',
+  /** Numbers column — Adventure frame width, in feet. */
+  frameWidth: 'numeric_mm56f1rc',
   /** File column — the released proposal PDF. */
   file: 'file_mm5xt53s',
   /** Date column — the date this proposal stops being honoured. */
@@ -35,7 +52,13 @@ export interface ProposalPushResult {
   skipped?: string;
   itemId?: string;
   subtotalMinor?: number;
+  /** Positive here, as the amount discounted. It is the board that takes it negative. */
   discountMinor?: number;
+  /** Sales tax plus collected border charges, as written to the board. */
+  taxesMinor?: number;
+  /** The frame footprint in feet, or null on a proposal with no configured frame. */
+  frameLengthFt?: number | null;
+  frameWidthFt?: number | null;
   /** The expiration written to the board, YYYY-MM-DD, or null when the column was cleared. */
   expirationDate?: string | null;
   fileUploaded?: boolean;
@@ -60,6 +83,64 @@ function mondayDateValue(date: Date | null): { date: string } | Record<string, n
  * Materials freight pull — the rule lives in integrations/monday/dealLink.ts, because
  * three callers need the same answer and were each working it out differently.
  */
+
+/**
+ * A monday numbers column takes a plain decimal string, and an empty string clears
+ * it. `-0.00` is a real possibility out of `(-0/100).toFixed(2)` and reads as a
+ * defect on the board, so zero is normalised before it is formatted.
+ */
+function dollars(minor: number): string {
+  const cents = Math.round(minor) || 0;
+  return (cents / 100).toFixed(2);
+}
+
+/**
+ * The Adventure frame footprint, in feet, from the configurator answers stored on
+ * the version.
+ *
+ * Returns nulls for a proposal with no configured frame — a Soar order, a catalogue
+ * order, a proposal built by hand. Those columns are then left alone rather than
+ * written as zero: a zero-foot frame is a statement, and a wrong one.
+ */
+function frameFootprint(sections: unknown): { length: number | null; width: number | null } {
+  const adv = (metaOf(sections) as { advAnswers?: { length?: unknown; width?: unknown } })
+    .advAnswers;
+  if (!adv) return { length: null, width: null };
+  const ft = (v: unknown): number | null => {
+    const num = Number(v);
+    return Number.isFinite(num) && num > 0 ? num : null;
+  };
+  return { length: ft(adv.length), width: ft(adv.width) };
+}
+
+/**
+ * Everything tax-like on the proposal, as one figure in USD minor units.
+ *
+ * Sales tax and the cross-border charges are summed rather than kept apart because
+ * the board has one column for them. They cannot double-count: a Canadian proposal
+ * calculates its tax through the cross-border engine, and the release blocker
+ * `tax:manual_amount_present` refuses to release one that ALSO carries a hand-keyed
+ * tax amount. So at most one of the two terms is non-zero on any given proposal.
+ *
+ * Only charges Summit actually collects are counted. Where the customer clears the
+ * goods themselves, the tariff and brokerage are payable at the border to somebody
+ * else — they are not deal value and they are not money Summit will ever see.
+ *
+ * The snapshot wins over a live calculation, which is what sellerCollectedCharges
+ * does: the board should report the figures the customer was quoted, not what the
+ * engine would produce at today's rates.
+ */
+async function taxesAndDutiesMinor(versionId: string, salesTaxMinor: number): Promise<number> {
+  try {
+    const border = await sellerCollectedCharges(versionId);
+    return Math.round(salesTaxMinor) + Math.round(border.totalMinor);
+  } catch (err) {
+    // A border-charge read is not worth failing the push over. The rest of the row
+    // is still correct, and the tax column then carries the sales tax alone.
+    logger.warn({ err, versionId }, 'monday proposal push: border charges unavailable');
+    return Math.round(salesTaxMinor);
+  }
+}
 
 /**
  * Push a released proposal to the monday deal board. Never throws: a release must
@@ -107,24 +188,36 @@ export async function pushReleasedProposal(input: {
 
   const totals = versionTotals(version.items, version.sections);
   const subtotalMinor = totals.subtotal;
+  const frame = frameFootprint(version.sections);
+  const taxesMinor = await taxesAndDutiesMinor(version.id, totals.tax);
   const expiration = mondayDateValue(version.expirationDate ?? null);
   const expirationDate = 'date' in expiration ? expiration.date : null;
   const boardId = env.MONDAY_DEALS_BOARD_ID!;
   const fileUploaded = false;
 
   try {
-    await setColumnValues(boardId, itemId, {
-      [DEAL_COLUMNS.subtotal]: (subtotalMinor / 100).toFixed(2),
+    // Built rather than written as a literal, because the frame columns are omitted
+    // on a proposal that has no frame instead of being sent as zero.
+    const columns: Record<string, unknown> = {
+      [DEAL_COLUMNS.subtotal]: dollars(subtotalMinor),
       [DEAL_COLUMNS.title]: version.proposal.title || '',
-      // The discount as an amount, to match the subtotal beside it. The percentage is
-      // what the rep types; the dollars are what the deal board reports on.
-      [DEAL_COLUMNS.discount]: (totals.discount / 100).toFixed(2),
+      // The discount as an amount, to match the subtotal beside it, and negative:
+      // the board sums these columns, so it has to arrive with the sign it has in
+      // the arithmetic. The percentage is what the rep types; the dollars are what
+      // the deal board reports on.
+      [DEAL_COLUMNS.discount]: dollars(-totals.discount),
+      // Sales tax, or the collected border charges on a Canadian job — never both.
+      [DEAL_COLUMNS.taxes]: dollars(taxesMinor),
       // Written on every release, including as an empty value. A released version
       // with no expiration must clear whatever the previous version left behind —
       // a stale date on the board is worse than a blank one, because the team will
       // chase a deadline that no longer exists.
       [DEAL_COLUMNS.expiration]: expiration,
-    });
+    };
+    if (frame.length != null) columns[DEAL_COLUMNS.frameLength] = String(frame.length);
+    if (frame.width != null) columns[DEAL_COLUMNS.frameWidth] = String(frame.width);
+
+    await setColumnValues(boardId, itemId, columns);
 
     if (input.proposalHtml) {
       // The document itself is uploaded separately, by the renderer function.
@@ -150,6 +243,9 @@ export async function pushReleasedProposal(input: {
       itemId,
       subtotalMinor,
       discountMinor: totals.discount,
+      taxesMinor,
+      frameLengthFt: frame.length,
+      frameWidthFt: frame.width,
       expirationDate,
       fileUploaded,
     };
@@ -170,6 +266,9 @@ export async function pushReleasedProposal(input: {
       itemId,
       subtotalMinor,
       discountMinor: totals.discount,
+      taxesMinor,
+      frameLengthFt: frame.length,
+      frameWidthFt: frame.width,
       expirationDate,
       fileUploaded,
       error: String(err),
