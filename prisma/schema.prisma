@@ -51,6 +51,22 @@ model User {
   /// receives. Null is normal and the letter then leaves the signature space blank
   /// rather than filling it with somebody else's name.
   signatureImage     String?
+
+  /// The user's own postal address.
+  ///
+  /// Kept here rather than in the Address table: an Address row belongs to an
+  /// organization and carries a type (BILLING, SHIPPING) that a person does not have,
+  /// and making organizationId nullable to fit people in would weaken a constraint
+  /// every customer-facing query depends on.
+  ///
+  /// All nullable with no defaults, so an address nobody has filled in reads as absent
+  /// rather than as empty strings that print as blank lines on a letter.
+  addressLine1 String?
+  addressLine2 String?
+  city         String?
+  region       String?
+  postalCode   String?
+  country      String?
 }
 
 /// One rep's delegated consent to have drafts written into their Outlook mailbox.

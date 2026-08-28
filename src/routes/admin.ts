@@ -17,6 +17,28 @@ const CreateUserBody = z.object({
   role: z.enum(ROLES),
 });
 const RoleBody = z.object({ role: z.enum(ROLES) });
+
+/*
+ * A handwritten signature, as a data URI.
+ *
+ * Same rule and same cap as the self-service version in routes/auth.ts, deliberately
+ * repeated rather than shared: these are two different acts — signing for yourself,
+ * and an administrator setting up somebody's account — and a change to one should not
+ * silently change the other.
+ *
+ * 400 KB encoded is roughly ten times what a signature needs at the size it prints
+ * at, and well below the point where the row becomes awkward to read back. The cap is
+ * on the encoded string because that is what gets stored.
+ */
+const SIGNATURE_MAX_CHARS = 400_000;
+const SignatureImage = z
+  .string()
+  .trim()
+  .max(SIGNATURE_MAX_CHARS, 'That image is too large — use one under about 300 KB.')
+  .refine(
+    (v) => /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(v),
+    'The signature must be a PNG or JPEG image.',
+  );
 /**
  * Profile edit. Every field is optional so a caller can change one thing, but an
  * empty name/title/phone means "clear it" — hence the nullish handling below,
@@ -27,18 +49,80 @@ const ProfileBody = z.object({
   name: z.string().trim().max(120).nullish(),
   title: z.string().trim().max(120).nullish(),
   phone: z.string().trim().max(40).nullish(),
+  addressLine1: z.string().trim().max(200).nullish(),
+  addressLine2: z.string().trim().max(200).nullish(),
+  city: z.string().trim().max(120).nullish(),
+  region: z.string().trim().max(120).nullish(),
+  postalCode: z.string().trim().max(20).nullish(),
+  country: z.string().trim().max(120).nullish(),
+  /** A data URI to set it, an empty string or null to remove it. */
+  signatureImage: z.union([SignatureImage, z.literal(''), z.null()]).optional(),
 });
+
+/**
+ * The profile fields, in one place.
+ *
+ * `signatureImage` is deliberately NOT here: it is tens of kilobytes and would ride
+ * along on every user list. The list reports whether one exists; the image itself is
+ * fetched only when a form opens.
+ */
+const PROFILE_FIELDS = [
+  'name',
+  'title',
+  'phone',
+  'addressLine1',
+  'addressLine2',
+  'city',
+  'region',
+  'postalCode',
+  'country',
+] as const;
+
+const PROFILE_SELECT = {
+  id: true,
+  email: true,
+  role: true,
+  isActive: true,
+  name: true,
+  title: true,
+  phone: true,
+  addressLine1: true,
+  addressLine2: true,
+  city: true,
+  region: true,
+  postalCode: true,
+  country: true,
+} as const;
 const ResetPasswordBody = z.object({ password: z.string().min(12) });
 
 export function registerAdminRoutes(app: FastifyInstance): void {
   const guard = { preHandler: requirePermission(Permission.USERS_MANAGE) };
 
-  app.get('/admin/users', guard, async () =>
-    prisma.user.findMany({
+  app.get('/admin/users', guard, async () => {
+    const users = await prisma.user.findMany({
       orderBy: [{ isActive: 'desc' }, { name: 'asc' }],
-      select: { id: true, email: true, name: true, title: true, phone: true, role: true, isActive: true },
-    }),
-  );
+      select: { ...PROFILE_SELECT, signatureImage: true },
+    });
+    // Whether a signature exists, not the signature: a list of four users would
+    // otherwise carry a megabyte of base64 nobody on that screen looks at.
+    return users.map(({ signatureImage, ...rest }) => ({
+      ...rest,
+      hasSignature: !!signatureImage,
+    }));
+  });
+
+  /**
+   * One user's signature image.
+   *
+   * Its own endpoint for the reason above — the list stays small and the bytes are
+   * fetched only when a form opens and needs to show what is already on file.
+   */
+  app.get('/admin/users/:id/signature', guard, async (req) => {
+    const { id } = req.params as { id: string };
+    const user = await prisma.user.findUnique({ where: { id }, select: { signatureImage: true } });
+    if (!user) throw new NotFoundError('User not found');
+    return { signatureImage: user.signatureImage ?? null };
+  });
 
   /**
    * Edit another user's profile, including their email address.
@@ -54,19 +138,23 @@ export function registerAdminRoutes(app: FastifyInstance): void {
   app.patch('/admin/users/:id', guard, async (req) => {
     const { id } = req.params as { id: string };
     const parsed = ProfileBody.safeParse(req.body);
-    if (!parsed.success) throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid profile');
-    const { email, name, title, phone } = parsed.data;
+    if (!parsed.success)
+      throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid profile');
+    const { email, signatureImage, ...profile } = parsed.data;
 
     const before = await prisma.user.findUnique({
       where: { id },
-      select: { id: true, email: true, name: true, title: true, phone: true },
+      select: { ...PROFILE_SELECT, signatureImage: true },
     });
     if (!before) throw new NotFoundError('User not found');
 
     // Same unique-email trap as user creation: check first so the caller gets a
     // sentence instead of a Prisma P2002 surfacing as a bare 500.
     if (email && email !== before.email) {
-      const clash = await prisma.user.findUnique({ where: { email }, select: { id: true, isActive: true } });
+      const clash = await prisma.user.findUnique({
+        where: { email },
+        select: { id: true, isActive: true },
+      });
       if (clash && clash.id !== id) {
         throw new ConflictError(
           clash.isActive
@@ -77,16 +165,30 @@ export function registerAdminRoutes(app: FastifyInstance): void {
     }
 
     // undefined means the field was not sent; null or '' means clear it.
-    const blank = (v: string | null | undefined) => (v === undefined ? undefined : v === null || v === '' ? null : v);
-    const user = await prisma.user.update({
+    const blank = (v: string | null | undefined) =>
+      v === undefined ? undefined : v === null || v === '' ? null : v;
+    const data: Record<string, string | null | undefined> = { email: email ?? undefined };
+    for (const f of PROFILE_FIELDS) data[f] = blank(profile[f]);
+    // Absent leaves the existing signature alone; '' or null removes it. Those are
+    // three different intentions and a form that sends the field on every save would
+    // otherwise wipe a signature it never showed.
+    if (signatureImage !== undefined) data.signatureImage = signatureImage || null;
+
+    const updated = await prisma.user.update({
       where: { id },
-      data: { email: email ?? undefined, name: blank(name), title: blank(title), phone: blank(phone) },
-      select: { id: true, email: true, name: true, title: true, phone: true, role: true, isActive: true },
+      data,
+      select: { ...PROFILE_SELECT, signatureImage: true },
     });
+    const { signatureImage: savedSignature, ...user } = updated;
 
     const changed: Record<string, { from: unknown; to: unknown }> = {};
-    for (const k of ['email', 'name', 'title', 'phone'] as const) {
+    for (const k of ['email', ...PROFILE_FIELDS] as const) {
       if (user[k] !== before[k]) changed[k] = { from: before[k], to: user[k] };
+    }
+    // The image itself never goes in the audit trail — it is tens of kilobytes and
+    // the fact of the change is the part anyone reviewing this needs.
+    if (!!savedSignature !== !!before.signatureImage) {
+      changed.signatureImage = { from: !!before.signatureImage, to: !!savedSignature };
     }
     if (Object.keys(changed).length) {
       await recordAudit({
@@ -96,16 +198,20 @@ export function registerAdminRoutes(app: FastifyInstance): void {
         details: changed,
       });
     }
-    return user;
+    return { ...user, hasSignature: !!savedSignature };
   });
 
   app.post('/admin/users', guard, async (req, reply) => {
     const parsed = CreateUserBody.safeParse(req.body);
-    if (!parsed.success) throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid user');
+    if (!parsed.success)
+      throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid user');
     const { email, name, password, role } = parsed.data;
     // Email is unique, so creating a duplicate threw an unhandled Prisma P2002 and
     // surfaced as a bare 500. Check first and say what actually happened.
-    const existing = await prisma.user.findUnique({ where: { email }, select: { id: true, isActive: true } });
+    const existing = await prisma.user.findUnique({
+      where: { email },
+      select: { id: true, isActive: true },
+    });
     if (existing) {
       throw new ConflictError(
         existing.isActive
@@ -143,7 +249,9 @@ export function registerAdminRoutes(app: FastifyInstance): void {
     });
     await revokeAllForUser(user.id);
     await recordAudit({
-      actorId: req.user!.sub, action: 'user.password.reset', targetUserId: user.id,
+      actorId: req.user!.sub,
+      action: 'user.password.reset',
+      targetUserId: user.id,
       details: { email: user.email, by: 'admin' },
     });
     return reply.status(204).send();
@@ -218,7 +326,8 @@ export function registerAdminRoutes(app: FastifyInstance): void {
     }
     try {
       await resetSender.send({
-        email: me.email, name: me.name,
+        email: me.email,
+        name: me.name,
         link: `${env.APP_BASE_URL ?? 'https://example.invalid'}/?reset=test-link-not-valid`,
         expiresInMinutes: 60,
       });

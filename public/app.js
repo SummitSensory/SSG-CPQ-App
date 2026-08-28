@@ -1662,6 +1662,11 @@
     }, 0);
   }
   function fieldRow(label, inner) { return '<div class="field"><label>' + esc(label) + '</label>' + inner + '</div>'; }
+  /** A heading inside a modal form, for the forms long enough to need grouping. */
+  function formSection(label) {
+    return '<div style="font-size:10.5px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:#8a8f85;' +
+      'margin:6px 0 10px;padding-top:14px;border-top:1px solid #f2f3ef;">' + esc(label) + '</div>';
+  }
   var IN = 'width:100%;padding:10px 12px;border:1px solid #dcded7;border-radius:9px;font-size:14px;background:#fff;color:#20241f;outline:none;';
   function selectEl(id, opts, sel) { return '<select id="' + id + '" style="' + IN + '">' + opts.map(function (o) { return '<option value="' + o + '"' + (o === sel ? ' selected' : '') + '>' + titleCase(o) + '</option>'; }).join('') + '</select>'; }
 
@@ -16097,6 +16102,17 @@
   function openEditUserForm(u) {
     if (!u) return;
     var isMe = currentUser && currentUser.id === u.id;
+
+    /*
+     * What to do with the signature when Save is pressed.
+     *
+     * null  — leave whatever is on file alone. The starting state, so editing a
+     *         phone number cannot wipe a signature the form never showed.
+     * ''    — remove it.
+     * a data URI — replace it.
+     */
+    var sigPending = null;
+
     openModal('Edit ' + (u.name || u.email),
       fieldRow('Name', '<input id="eName" style="' + IN + '" value="' + esc(u.name || '') + '">') +
       fieldRow('Email', '<input id="eEmail" type="email" style="' + IN + '" value="' + esc(u.email || '') + '" required>') +
@@ -16104,16 +16120,47 @@
         (isMe ? 'This is the address you sign in with. Changing it takes effect immediately — you stay signed in here.'
               : 'This is the address they sign in with. Tell them before you change it.') + '</div>' +
       fieldRow('Title', '<input id="eTitle" style="' + IN + '" value="' + esc(u.title || '') + '" placeholder="e.g. Sales Director">') +
-      fieldRow('Phone', '<input id="ePhone" style="' + IN + '" value="' + esc(u.phone || '') + '" placeholder="720-457-5500">'),
+      fieldRow('Phone', '<input id="ePhone" style="' + IN + '" value="' + esc(u.phone || '') + '" placeholder="720-457-5500">') +
+      formSection('Address') +
+      fieldRow('Street', '<input id="eAddr1" style="' + IN + '" value="' + esc(u.addressLine1 || '') + '" placeholder="6150 S Geneva Court">') +
+      fieldRow('Suite, unit', '<input id="eAddr2" style="' + IN + '" value="' + esc(u.addressLine2 || '') + '" placeholder="Optional">') +
+      '<div style="display:flex;gap:10px;">' +
+        '<div style="flex:2;">' + fieldRow('City', '<input id="eCity" style="' + IN + '" value="' + esc(u.city || '') + '" placeholder="Englewood">') + '</div>' +
+        '<div style="flex:1;">' + fieldRow('State', '<input id="eRegion" style="' + IN + '" value="' + esc(u.region || '') + '" placeholder="CO">') + '</div>' +
+        '<div style="flex:1;">' + fieldRow('ZIP', '<input id="ePostal" style="' + IN + '" value="' + esc(u.postalCode || '') + '" placeholder="80111">') + '</div>' +
+      '</div>' +
+      fieldRow('Country', '<input id="eCountry" style="' + IN + '" value="' + esc(u.country || '') + '" placeholder="Leave blank for United States">') +
+      formSection('Electronic signature') +
+      '<div class="muted" style="font-size:12px;margin:-6px 0 10px;line-height:1.55;">' +
+        'A PNG or JPEG of their handwritten signature, under about 300 KB. It prints above the sender block on every letter this app generates for them. ' +
+        'Left empty, the letter prints the signature space blank rather than somebody else&rsquo;s name.</div>' +
+      '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:16px;">' +
+        '<div id="eSigPreview" style="width:210px;height:70px;border:1px dashed #cfd3ca;border-radius:9px;background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;flex:0 0 auto;">' +
+          '<span class="muted" style="font-size:12px;">' + (u.hasSignature ? 'Loading&hellip;' : 'Nothing on file') + '</span></div>' +
+        '<div style="display:flex;flex-direction:column;gap:7px;align-items:flex-start;">' +
+          '<input type="file" id="eSigFile" accept="image/png,image/jpeg" style="font-size:12.5px;max-width:230px;">' +
+          '<button type="button" id="eSigClear" class="link-btn" style="width:auto;padding:5px 11px;font-size:12.5px;color:#a2402f;">Remove the signature</button>' +
+        '</div>' +
+      '</div>',
       async function (close, showErr) {
         var email = document.getElementById('eEmail').value.trim();
         if (!/.+@.+\..+/.test(email)) return showErr('Enter a valid email.');
+        var val = function (id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; };
         var body = {
           email: email,
-          name: document.getElementById('eName').value.trim(),
-          title: document.getElementById('eTitle').value.trim(),
-          phone: document.getElementById('ePhone').value.trim(),
+          name: val('eName'),
+          title: val('eTitle'),
+          phone: val('ePhone'),
+          addressLine1: val('eAddr1'),
+          addressLine2: val('eAddr2'),
+          city: val('eCity'),
+          region: val('eRegion'),
+          postalCode: val('ePostal'),
+          country: val('eCountry'),
         };
+        // Only sent when it changed. Absent leaves what is on file alone, which is
+        // what saving a name edit should do; '' removes it.
+        if (sigPending !== null) body.signatureImage = sigPending;
         var r = await authed('/admin/users/' + u.id, { method: 'PATCH', body: body });
         if (!r.ok) return showErr(await serverMessage(r, 'Could not save (' + r.status + ').'));
         var updated = await r.json().catch(function () { return null; });
@@ -16129,7 +16176,63 @@
         } else {
           loadUsers();
         }
-      }, 'Save');
+      }, 'Save', { maxWidth: '560px' });
+
+    /* ---- signature: preview, pick, remove ---- */
+
+    var preview = document.getElementById('eSigPreview');
+    var showImage = function (dataUri) {
+      if (!preview) return;
+      preview.innerHTML = dataUri
+        ? '<img alt="Signature" src="' + dataUri + '" style="max-width:100%;max-height:100%;object-fit:contain;">'
+        : '<span class="muted" style="font-size:12px;">Nothing on file</span>';
+    };
+
+    // Fetched rather than carried on the user list: the image is tens of kilobytes
+    // and the list would otherwise haul every signature nobody on that screen looks at.
+    if (u.hasSignature) {
+      authed('/admin/users/' + u.id + '/signature')
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) { showImage(d && d.signatureImage); })
+        .catch(function () { showImage(null); });
+    }
+
+    var file = document.getElementById('eSigFile');
+    if (file) {
+      file.addEventListener('change', function () {
+        var f = file.files && file.files[0];
+        if (!f) return;
+        if (f.type !== 'image/png' && f.type !== 'image/jpeg') {
+          alert('Use a PNG or a JPEG.');
+          file.value = '';
+          return;
+        }
+        // Checked here as well as on the server. The base64 encoding adds about a
+        // third, so 300 KB of file is roughly the 400 KB the column accepts —
+        // catching it before the upload saves a confusing round trip.
+        if (f.size > 300 * 1024) {
+          alert('That image is ' + Math.round(f.size / 1024) + ' KB. Use one under 300 KB.');
+          file.value = '';
+          return;
+        }
+        var reader = new FileReader();
+        reader.onload = function () {
+          sigPending = String(reader.result || '');
+          showImage(sigPending);
+        };
+        reader.onerror = function () { alert('Could not read that file.'); };
+        reader.readAsDataURL(f);
+      });
+    }
+
+    var clear = document.getElementById('eSigClear');
+    if (clear) {
+      clear.addEventListener('click', function () {
+        sigPending = '';
+        if (file) file.value = '';
+        showImage(null);
+      });
+    }
   }
 
   function openUserForm() {
