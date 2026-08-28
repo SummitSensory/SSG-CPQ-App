@@ -17,6 +17,8 @@
     "typecheck:only": "tsc --noEmit",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
+    "lint:count": "eslint public",
+    "lint:strict": "eslint . --max-warnings 0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check": "pnpm typecheck && pnpm lint && pnpm db:drift && pnpm db:migrate:status",

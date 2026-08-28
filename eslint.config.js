@@ -27,5 +27,133 @@ export default [
     files: ['prisma/**/*.ts', 'scripts/**/*.ts'],
     rules: { 'no-console': 'off' },
   },
+  {
+    /*
+     * The browser code.
+     *
+     * Until now the only config block matched TypeScript files, so the browser code,
+     * which is the majority of the UI by line count including a 16,500-line app.js,
+     * was parsed
+     * and nothing more. A syntax error was caught; an accidental global, a dead
+     * variable, a stray '==' or a duplicated declaration were not. One such edit
+     * blanked the whole workspace on 2026-08-28 and was caught only by the commit
+     * hook, by luck rather than by a rule.
+     *
+     * Everything here is 'warn' rather than 'error', deliberately. `eslint .` runs in
+     * the pre-push hook, and a rule set that turns a 16,500-line file's accumulated
+     * history into a wall of errors would block every push on day one — which ends
+     * with someone deleting the block. Warnings surface the backlog without stopping
+     * work; as screens are extracted into their own files (AUD-003), each extracted
+     * file gets promoted to 'error' via its own block.
+     *
+     * Run `pnpm lint:count` to see the current warning count. It should fall, never
+     * rise.
+     */
+    files: ['public/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 2022,
+      // Classic scripts, not modules: these files are loaded with plain <script src>
+      // and communicate through window globals.
+      sourceType: 'script',
+      globals: {
+        // Browser surface these files actually use.
+        window: 'readonly',
+        document: 'readonly',
+        console: 'readonly',
+        fetch: 'readonly',
+        localStorage: 'readonly',
+        sessionStorage: 'readonly',
+        location: 'readonly',
+        history: 'readonly',
+        navigator: 'readonly',
+        alert: 'readonly',
+        confirm: 'readonly',
+        prompt: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
+        setInterval: 'readonly',
+        clearInterval: 'readonly',
+        requestAnimationFrame: 'readonly',
+        FormData: 'readonly',
+        Blob: 'readonly',
+        File: 'readonly',
+        FileReader: 'readonly',
+        URL: 'readonly',
+        URLSearchParams: 'readonly',
+        AbortController: 'readonly',
+        MutationObserver: 'readonly',
+        ResizeObserver: 'readonly',
+        IntersectionObserver: 'readonly',
+        Image: 'readonly',
+        Option: 'readonly',
+        Event: 'readonly',
+        CustomEvent: 'readonly',
+        DOMParser: 'readonly',
+        XMLHttpRequest: 'readonly',
+        btoa: 'readonly',
+        atob: 'readonly',
+        crypto: 'readonly',
+        performance: 'readonly',
+        matchMedia: 'readonly',
+        getComputedStyle: 'readonly',
+        structuredClone: 'readonly',
+        ClipboardItem: 'readonly',
+        // The screens' own cross-file contract. Each of these is a window global one
+        // file defines and another reads; listed so no-undef reports a genuine typo
+        // rather than the architecture.
+        SSGCrossBorder: 'writable',
+        SSGContractPages: 'writable',
+        SSGAccountsReceivable: 'writable',
+        SSGBeltShipments: 'writable',
+        SSGFreightTrueUp: 'writable',
+        SSGPortalDelivery: 'writable',
+        SSGVendorColors: 'writable',
+        SSGProposalFrontMatter: 'writable',
+        SSGIntroAdventure: 'writable',
+        SSGIntroSoar: 'writable',
+        SSGIntroFlex: 'writable',
+        SSGIntroCover: 'writable',
+        SSGIntroAdmin: 'writable',
+        SSGInsights: 'writable',
+        SSGGoals: 'writable',
+      },
+    },
+    rules: {
+      // A typo'd identifier is the one browser mistake that is always a bug: it
+      // throws at runtime, on a screen, in front of a customer.
+      'no-undef': 'warn',
+      /*
+       * caughtErrors: 'none' — `catch (e) {}` is this codebase's deliberate idiom for
+       * "a failure here is not worth reporting" (a JSON body that is not JSON, a
+       * localStorage read in a locked-down browser). There are roughly 200 of them and
+       * they are all intentional, so reporting each one buries the findings that
+       * matter: on the first run, three real bugs sat inside 223 warnings.
+       */
+      'no-unused-vars': ['warn', { args: 'none', caughtErrors: 'none', varsIgnorePattern: '^_' }],
+      // An accidental assignment to an undeclared name becomes a global and works
+      // until two screens use the same name.
+      'no-implicit-globals': 'off',
+      'no-redeclare': 'warn',
+      'no-dupe-keys': 'warn',
+      'no-dupe-args': 'warn',
+      'no-duplicate-case': 'warn',
+      'no-unreachable': 'warn',
+      'no-fallthrough': 'warn',
+      'no-empty': ['warn', { allowEmptyCatch: true }],
+      'no-cond-assign': 'warn',
+      'no-constant-condition': ['warn', { checkLoops: false }],
+      'no-self-assign': 'warn',
+      'no-self-compare': 'warn',
+      'no-sparse-arrays': 'warn',
+      'no-unsafe-negation': 'warn',
+      'valid-typeof': 'warn',
+      'use-isnan': 'warn',
+      eqeqeq: ['warn', 'smart'],
+      // Not 'no-console': these files log deliberately when an integration fails,
+      // and a browser console message is how a rep's problem gets diagnosed.
+      'no-console': 'off',
+    },
+  },
+
   prettier,
 ];

@@ -252,6 +252,63 @@ The real gap is narrower, and is what has now been filled: the proposal **meta**
 
 ---
 
+**Issue ID:** AUD-012
+**Severity:** MEDIUM
+**Category:** Defect — money path
+**Location:** `public/app.js`, the QuickBooks panel's "Re-freeze the accepted price" handler
+**Problem:** The failure branch called `fail(r2, …)`, but `fail` is a `var` local to `loadBomSections` — a different function. The call threw a ReferenceError.
+**Evidence:** `no-undef` at `public/app.js:13765`, the only such warning in the file. `var fail` is declared at 1348 (a different scope) and 12721 (`loadBomSections`); the call site is inside `loadQbo`.
+**Why it matters:** Re-freezing restates the accepted total, the deposit and the order's figures. When the request failed, the user was told nothing: no alert, no message, and the button had already been re-enabled — so the natural reading is that it worked. A silent failure on the one action that changes an accepted price is the worst place for one.
+**How to reproduce:** Open an order's QuickBooks panel with a price drift, make the re-freeze request fail (offline, or a 409 from the server), click Re-freeze. Console shows `ReferenceError: fail is not defined`; the screen shows nothing.
+**Recommended fix:** Applied — read the server's message inline and alert it, matching the pattern used everywhere else in that panel.
+**Dependencies/Risks:** None.
+**Confidence:** High
+**Status:** Fixed — **awaiting retest**
+
+---
+
+**Issue ID:** AUD-013
+**Severity:** MEDIUM
+**Category:** Defect — UI state
+**Location:** `public/app.js`, `loadQbo` — the `qboRefreeze` and `qboRefresh` buttons
+**Problem:** Both buttons were held in a variable named `rf`, declared twice with `var` in the same function scope. The second declaration rebinds the name for the whole scope, so the re-freeze handler's `rf.disabled = true` disabled the **refresh** button instead.
+**Evidence:** `no-redeclare` at `public/app.js:13773`; declarations at 13759 and 13773 inside one function.
+**Why it matters:** The re-freeze button stayed clickable while its own request was in flight — so a double click sends the restatement twice — and the refresh button greyed out for no visible reason. The guard was written correctly and applied to the wrong element.
+**How to reproduce:** Open the QuickBooks panel, click Re-freeze, and watch which button greys out.
+**Recommended fix:** Applied — the refresh button is now `rfr`.
+**Dependencies/Risks:** None.
+**Confidence:** High
+**Status:** Fixed — **awaiting retest**
+
+---
+
+**Issue ID:** AUD-014
+**Severity:** LOW
+**Category:** Dead code
+**Location:** `public/app.js:11949` and `:12102` — `bomFieldStyle`
+**Problem:** Declared twice. Function declarations hoist, so the later two-argument version had been serving every caller; the earlier one-argument version was unreachable.
+**Evidence:** `no-redeclare` at `public/app.js:12102`.
+**Why it matters:** No behavioural difference — the surviving version renders identically when `locked` is falsy — but a reader editing the first one would see no effect and have no idea why.
+**Recommended fix:** Applied — the dead declaration is removed, with a comment saying where the live one is.
+**Confidence:** High
+**Status:** Fixed — **awaiting retest**
+
+---
+
+**Issue ID:** AUD-015
+**Severity:** MEDIUM — needs your decision
+**Category:** Possibly unreachable feature
+**Location:** `public/app.js:13838` `openQboSend`, `:13855` `openQboReminder`
+**Problem:** Both functions are fully implemented and **never called**. Nothing references them — no listener, no id, no data attribute anywhere in `public/`.
+**Evidence:** `no-unused-vars` on both; a grep for `openQboSend`, `openQboReminder`, `qboSend` and `qboRemind` across `public/` returns only the two declarations.
+**Why it matters:** Two possibilities and they need different answers. Either these are leftovers superseded by the Accounts Receivable screen's own send and reminder flow — in which case they are dead weight in a file that is already too big — or they are a feature that was built, never wired to a button, and quietly lost. I cannot tell from the code which, and deleting a working QuickBooks send dialog on a guess would be the wrong kind of tidying.
+**Recommended fix:** Your call: delete, or wire them into the QuickBooks panel. Left in place until you say.
+**Dependencies/Risks:** If they are wired up, they send documents to customers — that path needs testing before it ships, not after.
+**Confidence:** High (that they are unreferenced); n/a (on intent)
+**Status:** Open — awaiting your decision
+
+---
+
 **Issue ID:** AUD-010
 **Severity:** UNKNOWN — requires Pass 2
 **Category:** Security / authorization
@@ -363,19 +420,43 @@ pnpm build                # expect: success
 
 ## 12. Validation history
 
-| Date       | Event                                                                   | Result                                                                                                                                                                                                                                                                                                                          |
-| ---------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 2026-08-28 | AUD-007 fix applied (draft FX)                                          | Deployed; retest pending                                                                                                                                                                                                                                                                                                        |
-| 2026-08-28 | Proposal document spacing / tier heading / EOR box                      | Applied and committed                                                                                                                                                                                                                                                                                                           |
-| 2026-08-28 | Insights, report builder, Goals added                                   | Committed; runtime verification pending                                                                                                                                                                                                                                                                                         |
-| 2026-08-28 | Pass 1 audit                                                            | Complete — 9 findings, 1 placeholder                                                                                                                                                                                                                                                                                            |
-| 2026-08-28 | AUD-001 Part 1: drift check, migration generator, disarmed `db:migrate` | Shipped                                                                                                                                                                                                                                                                                                                         |
-| 2026-08-28 | AUD-001 retest                                                          | **Passed, and immediately earned its keep** — `pnpm db:drift` caught a real mismatch in migration 0072 (`updatedAt` given a database default that Prisma's `@updatedAt` does not declare). Fixed by `0073_reporting_updated_at_defaults` rather than by editing an applied migration. First use of the new workflow end to end. |
-| 2026-08-28 | AUD-002 finding **corrected**                                           | The original claim of no coverage was wrong: 47 unit test files exist, including two for `versionTotals` and full FX coverage. Finding rewritten to the actual gap.                                                                                                                                                             |
-| 2026-08-28 | AUD-002 fix: meta-path and reporting-engine tests                       | **Retested — passed.** 38 new cases green (version-totals-meta 15, reporting-engine 23); suite 452 passed / 454                                                                                                                                                                                                                 |
-| 2026-08-28 | AUD-011 discovered **by** that retest                                   | Two QuickBooks duplicate-prevention tests were already failing, unnoticed, because the pre-push hook did not run tests                                                                                                                                                                                                          |
-| 2026-08-28 | AUD-011 fix                                                             | **Retested — 454 passed, 0 failed.** Mock repaired and made drift-resistant; `pnpm test:unit` added to pre-push so a red suite can no longer reach main                                                                                                                                                                         |
-| 2026-08-28 | Node version pinned via `.nvmrc` (local was v24, production 22)         | Applied                                                                                                                                                                                                                                                                                                                         |
+| Date       | Event                                                                   | Result                                                                                                                                                                                                                                                                                                                                                          |
+| ---------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-08-28 | AUD-007 fix applied (draft FX)                                          | Deployed; retest pending                                                                                                                                                                                                                                                                                                                                        |
+| 2026-08-28 | Proposal document spacing / tier heading / EOR box                      | Applied and committed                                                                                                                                                                                                                                                                                                                                           |
+| 2026-08-28 | Insights, report builder, Goals added                                   | Committed; runtime verification pending                                                                                                                                                                                                                                                                                                                         |
+| 2026-08-28 | Pass 1 audit                                                            | Complete — 9 findings, 1 placeholder                                                                                                                                                                                                                                                                                                                            |
+| 2026-08-28 | AUD-001 Part 1: drift check, migration generator, disarmed `db:migrate` | Shipped                                                                                                                                                                                                                                                                                                                                                         |
+| 2026-08-28 | AUD-001 retest                                                          | **Passed, and immediately earned its keep** — `pnpm db:drift` caught a real mismatch in migration 0072 (`updatedAt` given a database default that Prisma's `@updatedAt` does not declare). Fixed by `0073_reporting_updated_at_defaults` rather than by editing an applied migration. First use of the new workflow end to end.                                 |
+| 2026-08-28 | AUD-002 finding **corrected**                                           | The original claim of no coverage was wrong: 47 unit test files exist, including two for `versionTotals` and full FX coverage. Finding rewritten to the actual gap.                                                                                                                                                                                             |
+| 2026-08-28 | AUD-002 fix: meta-path and reporting-engine tests                       | **Retested — passed.** 38 new cases green (version-totals-meta 15, reporting-engine 23); suite 452 passed / 454                                                                                                                                                                                                                                                 |
+| 2026-08-28 | AUD-011 discovered **by** that retest                                   | Two QuickBooks duplicate-prevention tests were already failing, unnoticed, because the pre-push hook did not run tests                                                                                                                                                                                                                                          |
+| 2026-08-28 | AUD-011 fix                                                             | **Retested — 454 passed, 0 failed.** Mock repaired and made drift-resistant; `pnpm test:unit` added to pre-push so a red suite can no longer reach main                                                                                                                                                                                                         |
+| 2026-08-28 | AUD-004 fix: ESLint rules for `public/**/*.js`                          | Shipped. First run: 223 warnings, 0 errors — and **four real findings inside the noise**, logged as AUD-012 (a ReferenceError on the re-freeze money path), AUD-013 (two buttons sharing one `var`), AUD-014 (dead duplicate function) and AUD-015 (two unreferenced QuickBooks dialogs). Config then tuned so intentional empty catches stop drowning findings |
+| 2026-08-28 | AUD-004, 012, 013, 014                                                  | **Retested — passed.** `pnpm lint:count`: **223 → 11 warnings, 0 errors.** No `no-undef` and no `no-redeclare` remain, which is the specific evidence that AUD-012 (the ReferenceError) and AUD-013 (two buttons sharing one `var`) are gone. The 11 survivors are all unused declarations — dead code, no behaviour                                            |
+| 2026-08-28 | Node version pinned via `.nvmrc` (local was v24, production 22)         | Applied                                                                                                                                                                                                                                                                                                                                                         |
+
+---
+
+### Dead-code backlog (from AUD-004, 11 warnings)
+
+Every remaining warning is an unused declaration. None affects behaviour; all are read-once decisions rather than work.
+
+| Location               | Name              | Likely story                                             |
+| ---------------------- | ----------------- | -------------------------------------------------------- |
+| `app.js:13852`         | `openQboSend`     | See AUD-015 — needs a decision, not a deletion           |
+| `app.js:13869`         | `openQboReminder` | See AUD-015                                              |
+| `app.js:2543`          | `renderSkus`      | Superseded by the catalog screens?                       |
+| `app.js:14173`         | `printTable`      | A print helper nothing calls                             |
+| `app.js:10567`         | `cargoNetOn`      | A proposal option that may have been removed from the UI |
+| `app.js:11421`         | `SIZE_ORDER`      | An ordering constant left after a sort changed           |
+| `app.js:6191`          | `mmax`            | Local, harmless                                          |
+| `app.js:10022`         | `groupName`       | Assigned in the document renderer, never read            |
+| `app.js:12493`         | `name`            | Local, harmless                                          |
+| `contract-pages.js:18` | `paras`           | Helper left after the terms pages were rewritten         |
+| `freight-trueup.js:62` | `GREEN`           | Unused palette entry                                     |
+
+Recommendation: leave them until each file is next opened for other work, then remove as you go. Deleting nine things at once across a 16,500-line file is a diff nobody can review, for no behavioural gain. The exceptions are the two `openQbo*` functions, which are a product question rather than tidying.
 
 ---
 

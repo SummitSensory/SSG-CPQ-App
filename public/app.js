@@ -11946,9 +11946,10 @@
    * sheet, and until this existed nothing compared the two documents at all. */
   var bomRecon = null;
 
-  function bomFieldStyle(w) {
-    return 'width:' + (w || '100%') + ';padding:7px 9px;border:1px solid #dcded7;border-radius:8px;font-size:13px;background:#fff;color:#20241f;outline:none;';
-  }
+  // The one-argument bomFieldStyle that used to live here was dead: a second
+  // declaration further down (with a `locked` argument) hoisted over it, so every
+  // caller was already getting that version. Removed rather than left to mislead the
+  // next reader — the surviving one renders identically when `locked` is falsy.
 
   /* Per-vendor sections. Each vendor gets its own header, questions, colours,
    * lock and send history — a fabricator and a distributor are prepared, confirmed
@@ -13762,7 +13763,16 @@
       rf.disabled = true;
       var r2 = await authed('/proposals/versions/' + encodeURIComponent(order.proposalVersionId) + '/refreeze-price', { method: 'POST', body: {} });
       rf.disabled = false;
-      if (!r2.ok) return fail(r2, 'Could not re-freeze the accepted price');
+      if (!r2.ok) {
+        // fail() is a var local to loadBomSections, not a function in this scope, so
+        // this line threw a ReferenceError instead of reporting anything: a failed
+        // re-freeze left the panel silent, with no indication that the attempt had
+        // failed at all.
+        var m2 = '';
+        try { m2 = ((await r2.json()) || {}).message || ''; } catch (e) {}
+        alert(m2 || ('Could not re-freeze the accepted price (' + r2.status + ').'));
+        return;
+      }
       loadQbo(order, user);
     });
 
@@ -13770,9 +13780,13 @@
     if (pb && canTransact) pb.addEventListener('click', function () { openQboPrepare(order, user, txns); });
     var prof = document.getElementById('qboProfile');
     if (prof) prof.addEventListener('click', function () { openQboProfile(order, user); });
-    var rf = document.getElementById('qboRefresh');
-    if (rf) rf.addEventListener('click', async function () {
-      rf.disabled = true; rf.textContent = 'Reading QuickBooks…';
+    // Named apart from the re-freeze button above on purpose. Both were `var rf` in
+    // the same function scope, so this declaration rebound the name: the re-freeze
+    // handler's rf.disabled toggled the REFRESH button instead, leaving the button it
+    // was meant to guard clickable while its request was in flight.
+    var rfr = document.getElementById('qboRefresh');
+    if (rfr) rfr.addEventListener('click', async function () {
+      rfr.disabled = true; rfr.textContent = 'Reading QuickBooks…';
       var rr = await authed('/integrations/quickbooks/billing/' + encodeURIComponent(order.proposalId) + '?refresh=1');
       if (!rr.ok) alert('Could not read QuickBooks (' + rr.status + ').');
       else {
