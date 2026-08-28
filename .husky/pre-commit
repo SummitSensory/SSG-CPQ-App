@@ -8,15 +8,17 @@
 #
 # See .prettierignore for what stays out of this — public/app.js in particular.
 #
+# Runs lint-staged through node rather than through pnpm, so a commit from GitHub
+# Desktop works: see .husky/pm.sh.
+#
 # To commit anyway: git commit --no-verify
 
 . "$(dirname "$0")/pm.sh"
 
-if [ -z "$PM" ]; then
-  echo "pre-commit: no pnpm on PATH — skipping the formatter."
-  echo "            (Committing from a GUI client? See .husky/pm.sh. The commit"
-  echo "             is allowed through; pre-push still checks everything.)"
+if [ -z "$NODE_BIN" ]; then
+  echo "pre-commit: could not find node, so nothing was formatted."
+  echo "            The commit is allowed through; pre-push still checks everything."
   exit 0
 fi
 
-$PM exec lint-staged
+run_tool lint-staged/bin/lint-staged.js

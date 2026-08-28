@@ -18,31 +18,30 @@
 # because nothing ran them. Three seconds a push is cheap insurance against a red
 # suite becoming normal.
 #
+# Tools run through node rather than pnpm, so this works from a GUI client too:
+# see .husky/pm.sh.
+#
 # To push anyway in an emergency: git push --no-verify
 
 . "$(dirname "$0")/pm.sh"
 
 # Unlike pre-commit, this one REFUSES rather than skipping. A missing formatter
 # costs tidiness; an unchecked push is what put type errors in main.
-if [ -z "$PM" ]; then
+if [ -z "$NODE_BIN" ]; then
   echo ""
-  echo "pre-push: cannot find pnpm, so nothing was checked. Push refused."
+  echo "pre-push: could not find node, so nothing was checked. Push refused."
   echo ""
-  echo "  Pushing from GitHub Desktop or another GUI? It does not inherit your"
-  echo "  shell's PATH. Push from a terminal in the repo instead:"
-  echo ""
-  echo "      git push"
-  echo ""
-  echo "  See .husky/pm.sh for what was tried."
+  echo "  Push from a terminal in the repo instead:  git push"
+  echo "  See .husky/pm.sh for the directories that were tried."
   echo ""
   exit 1
 fi
 
 echo "pre-push: typecheck"
-$PM typecheck || exit 1
+run_tool typescript/bin/tsc --noEmit || exit 1
 
 echo "pre-push: lint"
-$PM lint || exit 1
+run_tool eslint/bin/eslint.js src api tests public || exit 1
 
 echo "pre-push: unit tests"
-$PM test:unit || exit 1
+run_tool vitest/vitest.mjs run tests/unit || exit 1

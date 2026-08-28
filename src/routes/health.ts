@@ -2,6 +2,9 @@ import type { FastifyInstance } from 'fastify';
 import { prisma } from '../lib/prisma.js';
 import { BUILD_INFO } from '../lib/buildInfo.js';
 import { checkSchemaDrift } from '../lib/schemaCheck.js';
+import { checkOrphanedReferences } from '../lib/orphanCheck.js';
+import { requirePermission } from '../plugins/authz.js';
+import { Permission } from '../authz/permissions.js';
 
 export function registerHealthRoutes(app: FastifyInstance): void {
   app.get('/health', async () => ({ status: 'ok', uptime: process.uptime() }));
@@ -61,5 +64,25 @@ export function registerHealthRoutes(app: FastifyInstance): void {
    * oddly before you can get in. Nothing here is sensitive: a commit sha and its subject
    * line say what changed, not how anything works.
    */
+  /**
+   * Dangling `*ById` references.
+   *
+   * Several id columns here are deliberately not foreign keys, so that a deactivated
+   * user does not take a customer note or a sales target with them. The cost is that
+   * orphaned ids accumulate silently and resolve to "—" on screen. This counts them.
+   *
+   * Authenticated, unlike /health/schema: that one is open because a broken deployment
+   * is exactly when you cannot log in, whereas this returns row ids and is a
+   * housekeeping question, not an outage question.
+   *
+   * Always 200. An orphan is not a fault — it is usually the correct outcome of
+   * someone being deactivated — so an uptime check must not read it as down.
+   */
+  app.get(
+    '/health/references',
+    { preHandler: requirePermission(Permission.USERS_MANAGE) },
+    async () => checkOrphanedReferences(),
+  );
+
   app.get('/build-info', async () => BUILD_INFO);
 }
