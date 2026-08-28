@@ -168,7 +168,7 @@ The real gap is narrower, and is what has now been filled: the proposal **meta**
 ---
 
 **Issue ID:** AUD-005
-**Severity:** MEDIUM
+**Severity:** ~~MEDIUM~~ → **LOW** (measured 2026-08-28)
 **Category:** Performance / scalability
 **Location:** `src/reporting/dataset.ts` (`buildDataset`), `src/routes/reports.ts` (`/reports/proposals`), `src/routes/reports.ts` (`/reports/cost-drift`)
 **Problem:** Three reporting paths read entire tables into memory with no pagination. `buildDataset` loads every proposal with every version's `sections` and `items` JSON; `/reports/proposals` does the same with full status history; `/reports/cost-drift` loads every procurement line in the database.
@@ -176,8 +176,20 @@ The real gap is narrower, and is what has now been filled: the proposal **meta**
 **Why it matters:** Cost is linear in total historical proposals, and a proposal's `items` JSON is large. At today's volume this is fine and the 60-second cache makes it cheap. At 5–10× the data it will approach the 30-second function limit and the memory ceiling, and it will do so on the reporting screens first — the ones an executive opens.
 **Recommended fix:** Two steps, in order. (1) Narrow the read: `buildDataset` only needs the _latest_ version per proposal, so fetch versions with `take: 1, orderBy: { version: 'desc' }` inside the include rather than all of them — this alone removes most of the payload for revised proposals. (2) When volume warrants, add a nightly rollup table (`ProposalFactDaily`) that the reporting screens read, refreshed by the existing cron, leaving live queries only for the current period.
 **Dependencies/Risks:** Step 1 is a small, safe change but must be verified against a proposal with several revisions, because the accepted-date logic in `dataset.ts` deliberately scans _all_ versions' status history. Keep that read separate and narrow (`select: { statusHistory }` only).
-**Confidence:** High
-**Status:** Open
+**Measured 2026-08-28** (`node scripts/report-volumes.mjs`):
+
+|                           |                                                   |
+| ------------------------- | ------------------------------------------------- |
+| Proposals / versions      | 107 (56 live) / 139                               |
+| JSON `buildDataset` reads | **1.43 MB**, avg 11 KB per version, largest 30 KB |
+| Read time                 | **512 ms**                                        |
+| Projected at 5× data      | ~2.5 s                                            |
+
+So the concern was real in shape and wrong in scale. 512 ms once per minute, absorbed by the cache, is not a problem worth code. **No optimization now.** The recommended fix above stays on record as the plan for when it matters; re-run the script when proposal count roughly doubles (~200) and revisit if the read passes ~3 s.
+
+Worth noting the projection is conservative: it assumes cost stays linear, and `take: 1` on versions would cut the payload by roughly a third the day it is needed.
+**Confidence:** High (measured)
+**Status:** **Closed — measured, not a problem at current or near-term volume.** `scripts/report-volumes.mjs` retained for re-measurement.
 
 ---
 
@@ -449,6 +461,7 @@ pnpm build                # expect: success
 | 2026-08-28 | AUD-011 discovered **by** that retest                                   | Two QuickBooks duplicate-prevention tests were already failing, unnoticed, because the pre-push hook did not run tests                                                                                                                                                                                                                                          |
 | 2026-08-28 | AUD-011 fix                                                             | **Retested — 454 passed, 0 failed.** Mock repaired and made drift-resistant; `pnpm test:unit` added to pre-push so a red suite can no longer reach main                                                                                                                                                                                                         |
 | 2026-08-28 | AUD-004 fix: ESLint rules for `public/**/*.js`                          | Shipped. First run: 223 warnings, 0 errors — and **four real findings inside the noise**, logged as AUD-012 (a ReferenceError on the re-freeze money path), AUD-013 (two buttons sharing one `var`), AUD-014 (dead duplicate function) and AUD-015 (two unreferenced QuickBooks dialogs). Config then tuned so intentional empty catches stop drowning findings |
+| 2026-08-28 | AUD-005 **measured and closed**                                         | 1.43 MB / 512 ms / ~2.5 s at 5×. Downgraded MEDIUM → LOW and closed without code. Re-measure at ~200 proposals                                                                                                                                                                                                                                                  |
 | 2026-08-28 | AUD-015 resolved — **deleted, not wired**                               | My initial recommendation was reversed after reading the panel comment and `routes/quickbooks.ts`: Biller Genie owns customer email and both endpoints refuse. Wiring them would have double-emailed customers                                                                                                                                                  |
 | 2026-08-28 | AUD-010 webhook authenticity                                            | **Closed by inspection — clean.** All four unauthenticated POST endpoints verify a secret or signature, with constant-time comparison, and refuse when the secret is unset                                                                                                                                                                                      |
 | 2026-08-28 | AUD-004, 012, 013, 014                                                  | **Retested — passed.** `pnpm lint:count`: **223 → 11 warnings, 0 errors.** No `no-undef` and no `no-redeclare` remain, which is the specific evidence that AUD-012 (the ReferenceError) and AUD-013 (two buttons sharing one `var`) are gone. The 11 survivors are all unused declarations — dead code, no behaviour                                            |
