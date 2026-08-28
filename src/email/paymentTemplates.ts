@@ -505,6 +505,34 @@ export function expandFigures(html: string, values: MergeValues): string {
   return String(html ?? '').replace(/\{\{\s*FIGURES\s*\}\}/g, () => figuresTable(values));
 }
 
+/**
+ * Pull the enclosure notation out of a letter body.
+ *
+ * An enclosure line belongs below the signature block, and a template body cannot
+ * put anything there — letterheadHtml prints the signature itself, so a body that
+ * ends with “Enclosure: …” prints it above the sign-off, which is backwards.
+ *
+ * Rather than invent a syntax for it, the paragraph is recognised by what it says.
+ * An admin writes “Enclosure: Purchase Order {{po_number}}” as ordinary copy, in the
+ * natural place at the end of the letter, and it is lifted out and printed where the
+ * convention puts it. A letter with no such paragraph is returned untouched.
+ */
+const ENCLOSURE_P_RE = /<p\b[^>]*>\s*(?:<[^>]+>\s*)*Enclosures?\s*:[\s\S]*?<\/p>/i;
+
+export function splitEnclosure(html: string): {
+  bodyHtml: string;
+  enclosureHtml: string | null;
+} {
+  const source = String(html ?? '');
+  const m = source.match(ENCLOSURE_P_RE);
+  if (!m) return { bodyHtml: source, enclosureHtml: null };
+  const inner = m[0]
+    .replace(/^<p\b[^>]*>/i, '')
+    .replace(/<\/p>\s*$/i, '')
+    .trim();
+  return { bodyHtml: source.replace(m[0], ''), enclosureHtml: inner || null };
+}
+
 /* --------------------------------------------------- built-in letter templates */
 
 /**
@@ -604,11 +632,11 @@ export const DEFAULT_LETTER_TEMPLATES: BuiltInTemplate[] = [
       '<p>If payment has already been issued, please provide the applicable remittance information so that we can properly reconcile the account.</p>',
       '<p><b>Credit Card Payments:</b> A 3.5% processing fee applies to payments made by credit card. ACH and wire payment options are also available.</p>',
       '<p>Thank you for your attention to this request and for your partnership with Summit Sensory Gym.</p>',
-      // The enclosure notation sits above the sign-off rather than below it, because
-      // letterheadHtml prints the signature block itself and nothing can be placed
-      // after it from a template body.
-      '<p style="color:#4b5468;">Enclosure: Purchase Order {{po_number}}</p>',
       '<p>Sincerely,</p>',
+      // Printed BELOW the signature block, where the convention puts it. splitEnclosure
+      // lifts this paragraph out of the body wherever it sits, so it reads in the
+      // natural place in the editor and prints in the right place on the page.
+      '<p>Enclosure: Purchase Order {{po_number}}</p>',
     ].join('\n'),
   },
   {
@@ -763,6 +791,13 @@ export interface LetterheadInput {
   dateLine: string;
   /** Printed opposite the date, where the proposal's letter prints its number. */
   reference?: string | null;
+  /**
+   * The enclosure notation, printed below the signature block — “Enclosure: Purchase
+   * Order 44821”. Rendered HTML, already merged and sanitised; use splitEnclosure to
+   * lift it out of a template body. Absent on a letter that encloses nothing, and the
+   * space is then not reserved.
+   */
+  enclosureHtml?: string | null;
 }
 
 /**
@@ -833,6 +868,11 @@ export function letterheadHtml(input: LetterheadInput): string {
 
   const reference = String(input.reference ?? '').trim();
 
+  // Only reserved when there is one — a blank enclosure line on a letter that
+  // encloses nothing invites the question of what is missing.
+  const enclosureHtml = String(input.enclosureHtml ?? '').trim();
+  const enclosure = enclosureHtml ? `\n  <div class="encl">${enclosureHtml}</div>` : '';
+
   // Auto-fit. A payment letter is a one-page document by convention, and PAY-02 with a
   // six-row figures block runs about 95px past the fold at PAY-01's leading. Rather than
   // cut a sentence somebody wrote for legal reasons, a long letter is set one notch
@@ -883,6 +923,10 @@ export function letterheadHtml(input: LetterheadInput): string {
   .body a { color: ${B.navy}; }
   .sign { margin-top: 2px; page-break-inside: avoid; }
   .sign .who { margin-top: 9px; font-size: ${M.fs}; line-height: 1.6; color: ${B.ink}; }
+  /* The enclosure notation: two lines' space under the sender's block, per the
+     convention, and never separated from it across a page break. */
+  .encl { margin-top: 18px; font-size: ${M.fs}; line-height: 1.6; color: ${B.muted};
+          page-break-inside: avoid; }
 </style></head>
 <body><div class="page">
   <div class="head">
@@ -902,7 +946,7 @@ export function letterheadHtml(input: LetterheadInput): string {
   <div class="sign">
     ${signature}
     <div class="who">${senderBlock}</div>
-  </div>
+  </div>${enclosure}
 </div><div class="band"></div></body></html>`;
 }
 

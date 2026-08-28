@@ -18,6 +18,7 @@ import { getFile } from '../lib/fileStore.js';
 import {
   emailShell,
   expandFigures,
+  splitEnclosure,
   letterFilename,
   letterPdf,
   longDate,
@@ -151,6 +152,9 @@ export function registerReceivableRenderRoutes(app: FastifyInstance): void {
 
       const title = renderTemplate(template.subject, values);
       const body = renderTemplate(expandFigures(template.bodyHtml, values), values);
+      // The enclosure notation is lifted out of the body and printed below the
+      // signature block, where the convention puts it.
+      const letter = splitEnclosure(body.html);
       if (body.missing.length) {
         // Refused rather than sent with holes. A letter reading "your balance of
         // is now due" is not a letter anybody wants to have sent under their name.
@@ -161,7 +165,7 @@ export function registerReceivableRenderRoutes(app: FastifyInstance): void {
 
       const pdf = await letterPdf({
         title: title.html,
-        bodyHtml: body.html,
+        bodyHtml: letter.bodyHtml,
         addressee: [
           values.customer_name ?? '',
           values.organization_name ?? '',
@@ -176,6 +180,7 @@ export function registerReceivableRenderRoutes(app: FastifyInstance): void {
         },
         dateLine: longDate(new Date()),
         reference: values.invoice_number ? `Invoice ${values.invoice_number}` : null,
+        enclosureHtml: letter.enclosureHtml,
       });
       attachments.push({
         filename: letterFilename(template.name, ctx.txn.qboDocNumber),
@@ -342,10 +347,11 @@ export function registerReceivableRenderRoutes(app: FastifyInstance): void {
     const values: MergeValues = { ...ctx.values, ...sanitizeEntered(b.entered) };
     const title = renderTemplate(template.subject, values);
     const body = renderTemplate(expandFigures(template.bodyHtml, values), values);
+    const letter = splitEnclosure(body.html);
 
     const pdf = await letterPdf({
       title: title.html,
-      bodyHtml: body.html,
+      bodyHtml: letter.bodyHtml,
       addressee: [
         values.customer_name ?? '',
         values.organization_name ?? '',
@@ -360,6 +366,7 @@ export function registerReceivableRenderRoutes(app: FastifyInstance): void {
       },
       dateLine: longDate(new Date()),
       reference: values.invoice_number ? `Invoice ${values.invoice_number}` : null,
+      enclosureHtml: letter.enclosureHtml,
     });
     return reply
       .header('Content-Type', 'application/pdf')
@@ -421,9 +428,10 @@ export function registerReceivableRenderRoutes(app: FastifyInstance): void {
 
     const title = renderTemplate(template.subject, values);
     const body = renderTemplate(expandFigures(template.bodyHtml, values), values);
+    const letter = splitEnclosure(body.html);
     const pdf = await letterPdf({
       title: title.html,
-      bodyHtml: body.html,
+      bodyHtml: letter.bodyHtml,
       addressee: [
         values.customer_name ?? '',
         values.organization_name ?? '',
@@ -438,6 +446,7 @@ export function registerReceivableRenderRoutes(app: FastifyInstance): void {
       },
       dateLine: longDate(new Date()),
       reference: values.invoice_number ? `Invoice ${values.invoice_number}` : null,
+      enclosureHtml: letter.enclosureHtml,
     });
     return reply
       .header('Content-Type', 'application/pdf')
