@@ -2,6 +2,22 @@
  * Proposal analytics: pure functions that turn stored proposal JSON (sections +
  * items) into money totals, then roll a list of versions up into the report
  * bundle the Reports module renders. No Prisma here — keeps it unit-testable.
+ *
+ * ONE OF TWO REPORTING STACKS. See src/reporting/dataset.ts.
+ * ---------------------------------------------------------
+ * This is the original: `buildReport` here feeds the Reports tabs through
+ * src/routes/reports.ts. The newer `runReport` engine (src/reporting/*) computes
+ * overlapping figures — win rates, product demand, per-rep totals — from the same
+ * underlying data by a different route, and feeds the Insights screens.
+ *
+ * They agree today because both go through `versionTotals()`. They will stop agreeing
+ * the first time one is changed and the other is not, and two reports disagreeing is
+ * worse than either being wrong. So: **a change to how a figure is computed here needs
+ * the same change there, or a deliberate note saying why not.**
+ *
+ * The plan (AUD-009) is to reimplement the Reports tabs on `runReport` and delete
+ * `buildReport` — but not until the new engine has had real use. Until then this
+ * duplication is accepted and signposted rather than forgotten.
  */
 
 export interface RawItem {

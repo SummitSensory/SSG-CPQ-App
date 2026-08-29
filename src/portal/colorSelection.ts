@@ -301,6 +301,27 @@ export async function applySelection(selectionId: string, actorId: string) {
     throw new ValidationError('The customer has not chosen any colours yet.');
   }
 
+  /*
+   * The version of the picks this call is acting on.
+   *
+   * The customer's link stays valid for thirty days and keeps working after they
+   * submit — deliberately, so they can come back and finish. submitSelection only
+   * refuses once the status is APPLIED, and the status does not become APPLIED until
+   * the very end of this function. So between the read above and the write below the
+   * customer can change a colour, and nothing used to notice.
+   *
+   * What that produced was not a lost update, which would at least be visible. The
+   * final update set the status but never re-wrote `picks`, so the row ended up
+   * holding the customer's NEW choice while the procurement lines the shop reads
+   * held the OLD one. The audit record and the vendor sheet disagreed, permanently
+   * and silently, and the order event recorded only line names — so there was no
+   * third copy to arbitrate between them.
+   *
+   * submittedAt changes on every submit, so it identifies the version. Claiming the
+   * row on that value below turns the race into a refusal.
+   */
+  const reviewedAt = row.submittedAt;
+
   // Prisma types a Json column as JsonValue, which does not narrow to a shape by
   // assertion — via unknown, and only reading the two fields that matter. The picks
   // are re-validated against the live palette below anyway, so a malformed entry is
@@ -312,63 +333,94 @@ export async function applySelection(selectionId: string, actorId: string) {
     where: { orderId: row.orderId, id: { in: entries.map((e) => e.lineId) } },
     select: { id: true, productId: true, sku: true, name: true, vendor: true },
   });
-  const sections = await prisma.bomVendorSection.findMany({
-    where: { orderId: row.orderId },
-    select: { vendor: true, status: true },
-  });
-  const frozenVendors = new Set(
-    sections.filter((x) => x.status === 'SUBMITTED').map((x) => (x.vendor || '').toLowerCase()),
-  );
 
+  // Outside the transaction on purpose: specsForLines reads the administered palettes
+  // through the module-level client and cannot be handed `tx`. Palette content is not
+  // racing with a customer's submit, and every pick is re-validated against it below.
   const specs = await specsForLines(lines);
-  const applied: string[] = [];
-  const skipped: string[] = [];
 
-  for (const entry of entries) {
-    const line = lines.find((l) => l.id === entry.lineId);
-    if (!line) continue;
-    if (frozenVendors.has((line.vendor ?? '').toLowerCase())) {
-      skipped.push(line.name);
-      continue;
+  return prisma.$transaction(async (tx) => {
+    /*
+     * Claim the row before writing anything.
+     *
+     * updateMany rather than update because it reports how many rows matched, which
+     * is the only way to ask "is this still the version I reviewed?" and act on the
+     * answer. count === 0 means either the customer resubmitted or somebody else
+     * applied it while this call was in flight; the throw rolls the transaction back
+     * so no procurement line is left carrying a colour nobody approved.
+     */
+    const claim = await tx.portalColorSelection.updateMany({
+      where: { id: row.id, status: { not: 'APPLIED' }, submittedAt: reviewedAt },
+      data: { status: 'APPLIED', appliedAt: new Date(), appliedById: actorId },
+    });
+    if (claim.count !== 1) {
+      throw new ValidationError(
+        'These colours changed while you were reviewing them, so nothing was applied. Open the selection again and check the picks before applying.',
+      );
     }
-    const spec =
-      specs.get(line.productId ?? '') ?? specs.get((line.sku ?? '').trim().toUpperCase());
-    if (!spec) {
-      skipped.push(line.name);
-      continue;
+
+    // Read inside the transaction: a vendor's Bill of Materials being submitted is
+    // what makes a line untouchable, and that can happen while this runs.
+    const sections = await tx.bomVendorSection.findMany({
+      where: { orderId: row.orderId },
+      select: { vendor: true, status: true },
+    });
+    const frozenVendors = new Set(
+      sections.filter((x) => x.status === 'SUBMITTED').map((x) => (x.vendor || '').toLowerCase()),
+    );
+
+    const applied: string[] = [];
+    const skipped: string[] = [];
+    // What actually reached the shop, colour by colour. The row's `picks` can still be
+    // overwritten by a customer after this point; this cannot, so it is the record
+    // that settles "what did we build against?"
+    const record: Array<{ line: string; sku: string | null; colour: string }> = [];
+
+    for (const entry of entries) {
+      const line = lines.find((l) => l.id === entry.lineId);
+      if (!line) continue;
+      if (frozenVendors.has((line.vendor ?? '').toLowerCase())) {
+        skipped.push(line.name);
+        continue;
+      }
+      const spec =
+        specs.get(line.productId ?? '') ?? specs.get((line.sku ?? '').trim().toUpperCase());
+      if (!spec) {
+        skipped.push(line.name);
+        continue;
+      }
+      // Re-validated here, against the live palette, and completeness is enforced:
+      // a line that goes to the shop half-specified comes back as a phone call.
+      const picks = normalizePicks(spec, entry.picks, { requireComplete: spec.required });
+      const colour = describePicks(picks, { withVendorCode: true, spec }) || null;
+      await tx.procurementLine.update({
+        where: { id: line.id },
+        data: {
+          colorPicks: picks as unknown as object,
+          powderColor: colour,
+        },
+      });
+      applied.push(line.name);
+      record.push({ line: line.name, sku: line.sku, colour: colour ?? '' });
     }
-    // Re-validated here, against the live palette, and completeness is enforced:
-    // a line that goes to the shop half-specified comes back as a phone call.
-    const picks = normalizePicks(spec, entry.picks, { requireComplete: spec.required });
-    await prisma.procurementLine.update({
-      where: { id: line.id },
+
+    await tx.orderEvent.create({
       data: {
-        colorPicks: picks as unknown as object,
-        powderColor: describePicks(picks, { withVendorCode: true, spec }) || null,
+        orderId: row.orderId,
+        action: 'bom.colors.portal',
+        actorId,
+        detail: { selectionId: row.id, applied, skipped, colours: record } as object,
       },
     });
-    applied.push(line.name);
-  }
 
-  await prisma.orderEvent.create({
-    data: {
-      orderId: row.orderId,
-      action: 'bom.colors.portal',
-      actorId,
-      detail: { selectionId: row.id, applied, skipped } as object,
-    },
-  });
-
-  return prisma.portalColorSelection.update({
-    where: { id: row.id },
-    data: {
-      status: 'APPLIED',
-      appliedAt: new Date(),
-      appliedById: actorId,
-      note: skipped.length
-        ? `Applied to ${applied.length} line(s). ${skipped.length} skipped — their vendor's Bill of Materials is already submitted.`
-        : `Applied to ${applied.length} line(s).`,
-    },
+    return tx.portalColorSelection.update({
+      where: { id: row.id },
+      data: {
+        note: skipped.length
+          ? `Applied to ${applied.length} line(s). ${skipped.length} skipped — their vendor's Bill of Materials is already submitted.`
+          : `Applied to ${applied.length} line(s).`,
+      },
+    });
   });
 }
 
