@@ -2,61 +2,74 @@
  * window.SSGUI self-check — paste into the browser console on a signed-in page.
  *
  * NOT a Node script and not part of the build. It is a diagnostic for the browser pass
- * after an extraction: paste, read the summary line, then go and look at screens.
+ * after an extraction: paste, read the summary, then go and look at screens.
  *
- * What it proves: the primitives module loaded, exports everything it should, and each
- * pure primitive still returns what it returned before it moved out of app.js. That is
- * the catastrophic class of regression — a missing member, a typo'd alias, a body that
+ * What it proves: the primitives module loaded, exports what it should, and every pure
+ * primitive still returns what it returned before it moved out of app.js. That is the
+ * catastrophic class of regression — a missing member, a typo'd alias, a body that
  * changed on the way across — and it takes five seconds rather than thirty minutes.
  *
  * What it does NOT prove: that any screen renders. A primitive can be perfect and a
  * screen still be broken. This narrows the browser pass; it does not replace it.
  *
  * Every assertion evaluates inside a try/catch, and that is not decoration. The first
- * draft of this file called `U.statusChip(...)` directly, so deleting that member —
- * exactly the regression it was written to catch — threw an uncaught exception and
- * printed no summary at all. A check that dies on the condition it is looking for is
- * worse than no check, because the stack trace looks like a broken tool rather than a
- * broken build. A throw is now recorded as a failure like any other.
+ * draft called `U.statusChip(...)` directly, so deleting that member — exactly the
+ * regression it exists to catch — threw and printed no summary at all. A check that
+ * dies on the condition it is looking for is worse than no check, because the stack
+ * trace reads as a broken tool rather than a broken build.
  *
- * Run it again after every later extraction (Catalog, Administration, Configurators).
+ * Run it again after every later extraction (Catalog, Configurators, Administration).
  * The point of a shared foundation is that its contract stops changing, and this is how
  * you find out that it did not.
  */
 (function () {
   'use strict';
 
+  var U = window.SSGUI;
   var pass = 0;
   var fail = [];
-  var U = window.SSGUI;
 
-  /** `thunk` is always a function; `want` is a value, or a predicate on the result. */
+  /** `thunk` is always a function; `want` is a value, or a predicate returning true. */
   function check(name, thunk, want) {
     var got;
+    var expected = typeof want === 'function' ? '(predicate)' : want;
     try {
       got = thunk();
     } catch (e) {
-      fail.push({
-        check: name,
-        got: 'THREW: ' + ((e && e.message) || e),
-        expected: describe(want),
-      });
+      fail.push({ check: name, got: 'THREW: ' + ((e && e.message) || e), expected: expected });
       return;
     }
-    var ok;
+    var ok = false;
     try {
       ok = typeof want === 'function' ? want(got) === true : got === want;
     } catch (e2) {
       ok = false;
     }
     if (ok) pass++;
-    else fail.push({ check: name, got: got, expected: describe(want) });
+    else fail.push({ check: name, got: got, expected: expected });
   }
-  function describe(want) {
-    return typeof want === 'function' ? '(predicate)' : want;
+
+  /** `[fn, args, expected]` — calls U[fn](...args) and compares exactly. */
+  function table(cases, compare) {
+    cases.forEach(function (c) {
+      var label = c[0] + '(' + c[1].map(shortly).join(', ') + ')';
+      var want = compare ? compare(c[2]) : c[2];
+      check(
+        label,
+        function () {
+          return U[c[0]].apply(null, c[1]);
+        },
+        want,
+      );
+    });
   }
-  /** Shorthand: the result must contain this substring. */
-  function has(sub) {
+  function shortly(v) {
+    if (typeof v === 'string') return JSON.stringify(v);
+    if (v instanceof Date) return 'Date';
+    return String(v);
+  }
+  /** For table rows whose expectation is "contains this". */
+  function containing(sub) {
     return function (got) {
       return typeof got === 'string' && got.indexOf(sub) !== -1;
     };
@@ -64,7 +77,8 @@
 
   if (!U) {
     console.error(
-      'SSGUI SELF-CHECK: window.SSGUI is not defined. ssg-ui.js did not load — it must be the first script tag in index.html.',
+      'SSGUI SELF-CHECK: window.SSGUI is not defined. ssg-ui.js did not load — it must ' +
+        'be the first script tag in index.html.',
     );
     return {
       passed: 0,
@@ -106,12 +120,13 @@
     'serverMessage',
   ];
   EXPECTED.forEach(function (k) {
+    var want = k === 'IN' ? 'string' : 'function';
     check(
       'typeof ' + k,
       function () {
         return typeof U[k];
       },
-      k === 'IN' ? 'string' : 'function',
+      want,
     );
   });
   check(
@@ -124,74 +139,81 @@
   check(
     'no undocumented exports',
     function () {
-      return (
-        Object.keys(U)
-          .filter(function (k) {
-            return EXPECTED.indexOf(k) === -1;
-          })
-          .join(',') || '(none)'
-      );
+      var extra = Object.keys(U).filter(function (k) {
+        return EXPECTED.indexOf(k) === -1;
+      });
+      return extra.join(',') || '(none)';
     },
     '(none)',
   );
 
-  /* ---- 2. text ---- */
+  /* ---- 2. exact returns ----
+   *
+   * Exact, not approximate. `esc` has 780 call sites and `td` has 301, so "looks about
+   * right" is not a standard either of them can be held to.
+   *
+   * Two that read as near-duplicates and are not: `money` carries no symbol and no
+   * separators because it fills form fields and CSV cells, while the freight-trueup
+   * screen has a `money` of its own that DOES add a $. `fmtMoney` returns an em dash
+   * for nothing at all; `money` returns a blank string.
+   *
+   * The apostrophe in `esc` is deliberate. app.js escaped four characters and the
+   * extracted screens five; widened to five, because app.js builds single-quoted
+   * attributes and four does not close them safely.
+   */
+  table([
+    ['esc', ['O\'Brien <b>&"'], 'O&#39;Brien &lt;b&gt;&amp;&quot;'],
+    ['esc', [null], ''],
+    ['titleCase', ['SALES_MANAGER'], 'Sales Manager'],
+    ['roleLabel', ['PROJECT_MANAGER'], 'Project Manager'],
+    ['isoLocal', [new Date(2026, 7, 4)], '2026-08-04'],
+    ['fmtDate', [null], '—'],
+    ['fmtDateTime', [null], '—'],
+    ['fmtMoney', [866250], '$8,662.50'],
+    ['fmtMoney', [866250, 'CAD'], 'CAD 8,662.50'],
+    ['fmtMoney', [null], '—'],
+    ['fmt0', [866250], '$8,663'],
+    ['money', [866250], '8662.50'],
+    ['money', [null], ''],
+    ['costMoney', [866250], '$8662.50'],
+    ['d2m', ['$1,234.56'], 123456],
+    ['d2m', ['abc'], 0],
+    ['hasRole', [['A', 'B'], 'B'], true],
+    ['hasRole', [['A'], 'B'], false],
+    ['td', ['x'], '<td style="padding:12px 16px;border-bottom:1px solid #f2f3ef;">x</td>'],
+  ]);
 
-  // Five characters, not four. app.js used to escape four and the extracted screens
-  // five; widened deliberately, because app.js builds single-quoted attributes.
-  check(
-    'esc escapes the five',
-    function () {
-      return U.esc('O\'Brien <b>&"');
-    },
-    'O&#39;Brien &lt;b&gt;&amp;&quot;',
-  );
-  check(
-    'esc of null is empty',
-    function () {
-      return U.esc(null);
-    },
-    '',
-  );
-  check(
-    'titleCase',
-    function () {
-      return U.titleCase('SALES_MANAGER');
-    },
-    'Sales Manager',
-  );
-  check(
-    'rt bolds',
-    function () {
-      return U.rt('**x**');
-    },
-    has('<b '),
-  );
-  // A stray < in a dimension must not eat the rest of the paragraph.
-  check(
-    'rt escapes a bare <',
-    function () {
-      return U.rt('<3/8 in');
-    },
-    has('&lt;3/8'),
-  );
-  check(
-    'rt keeps an allowed tag',
-    function () {
-      return U.rt('<ul><li>a</li></ul>');
-    },
-    has('<ul>'),
+  /* ---- 3. returns that must merely contain something ----
+   *
+   * Markup, where the surrounding styling is allowed to change and the content is not.
+   * RELEASED and EXPIRED are relabelled on purpose: to the business, RELEASED means the
+   * customer has the proposal and EXPIRED means it lapsed.
+   */
+  table(
+    [
+      ['rt', ['**x**'], '<b '],
+      // A stray < in a dimension ("<3/8 in") must not eat the rest of the paragraph.
+      ['rt', ['<3/8 in'], '&lt;3/8'],
+      ['rt', ['<ul><li>a</li></ul>'], '<ul>'],
+      ['tableShell', [['A'], '<tr><td>r</td></tr>', 1], '<tr><td>r</td></tr>'],
+      ['tableShell', [['A'], '', 1, 'Nothing here.'], 'Nothing here.'],
+      ['statusChip', ['RELEASED'], 'Proposal Sent'],
+      ['statusChip', ['EXPIRED'], 'No Longer Active'],
+      ['kpi', ['Label', '5'], 'Label'],
+      ['fieldRow', ['Name', '<input>'], '<label>Name</label>'],
+      ['formSection', ['Group'], 'Group'],
+      ['selectEl', ['id', ['A_B'], 'A_B'], 'selected'],
+    ],
+    containing,
   );
 
-  /* ---- 3. dates — the bug this module exists to have fixed once ---- */
-
-  check(
-    'isoLocal is the local calendar day',
-    function () {
-      return U.isoLocal(new Date(2026, 7, 4));
-    },
-    '2026-08-04',
-  );
+  /* ---- 4. the timezone, which is why this module exists ----
+   *
+   * A bare YYYY-MM-DD is a calendar date, not an instant. Read as UTC midnight it
+   * renders as the day before anywhere west of Greenwich, which is how a proposal
+   * created today came to print yesterday's date. The month name is locale-dependent;
+   * the day number is not.
+   */
   check(
     'todayISO shape',
     function () {
@@ -200,18 +222,14 @@
     true,
   );
   check(
-    'todayISO is TODAY locally',
+    'todayISO is today, locally',
     function () {
-      return U.todayISO();
+      return U.todayISO() === U.isoLocal(new Date());
     },
-    function (got) {
-      return got === U.isoLocal(new Date());
-    },
+    true,
   );
-  // A bare YYYY-MM-DD is a calendar date, not UTC midnight. If the day reads 3 rather
-  // than 4, the timezone fix is lost and proposals will print yesterday's date.
   check(
-    'fmtDate keeps the 4th (text is locale-dependent; the day must be 4)',
+    'fmtDate("2026-08-04") keeps the 4th',
     function () {
       return U.fmtDate('2026-08-04');
     },
@@ -219,192 +237,23 @@
       return /\b4\b/.test(got) && /2026/.test(got) && !/\b3\b/.test(got);
     },
   );
-  check(
-    'fmtDate of nothing',
-    function () {
-      return U.fmtDate(null);
-    },
-    '—',
-  );
-  check(
-    'fmtDateTime of nothing',
-    function () {
-      return U.fmtDateTime(null);
-    },
-    '—',
-  );
 
-  /* ---- 4. money — four functions, and not interchangeable ---- */
+  /* ---- 5. one behavioural pair ---- */
 
   check(
-    'fmtMoney',
-    function () {
-      return U.fmtMoney(866250);
-    },
-    '$8,662.50',
-  );
-  check(
-    'fmtMoney with a currency',
-    function () {
-      return U.fmtMoney(866250, 'CAD');
-    },
-    'CAD 8,662.50',
-  );
-  check(
-    'fmtMoney of nothing',
-    function () {
-      return U.fmtMoney(null);
-    },
-    '—',
-  );
-  check(
-    'fmt0 rounds to the dollar',
-    function () {
-      return U.fmt0(866250);
-    },
-    '$8,663',
-  );
-  // No symbol and no separators — this one fills form fields and CSV cells. The
-  // freight-trueup screen has a `money` that DOES add a $; they are different jobs.
-  check(
-    'money has no symbol',
-    function () {
-      return U.money(866250);
-    },
-    '8662.50',
-  );
-  check(
-    'money of nothing is blank',
-    function () {
-      return U.money(null);
-    },
-    '',
-  );
-  check(
-    'costMoney',
-    function () {
-      return U.costMoney(866250);
-    },
-    '$8662.50',
-  );
-  check(
-    'd2m strips the typing',
-    function () {
-      return U.d2m('$1,234.56');
-    },
-    123456,
-  );
-  check(
-    'd2m of nonsense is zero',
-    function () {
-      return U.d2m('abc');
-    },
-    0,
-  );
-
-  /* ---- 5. roles ---- */
-
-  check(
-    'hasRole finds',
-    function () {
-      return U.hasRole(['A', 'B'], 'B');
-    },
-    true,
-  );
-  check(
-    'hasRole misses',
-    function () {
-      return U.hasRole(['A'], 'B');
-    },
-    false,
-  );
-  check(
-    'roleLabel',
-    function () {
-      return U.roleLabel('PROJECT_MANAGER');
-    },
-    'Project Manager',
-  );
-
-  /* ---- 6. markup builders — exact, because 301 table cells depend on td ---- */
-
-  check(
-    'td',
-    function () {
-      return U.td('x');
-    },
-    '<td style="padding:12px 16px;border-bottom:1px solid #f2f3ef;">x</td>',
-  );
-  check(
-    'tableShell renders rows',
-    function () {
-      return U.tableShell(['A'], '<tr><td>r</td></tr>', 1);
-    },
-    has('<tr><td>r</td></tr>'),
-  );
-  check(
-    'tableShell empty state',
-    function () {
-      return U.tableShell(['A'], '', 1, 'Nothing here.');
-    },
-    has('Nothing here.'),
-  );
-  // RELEASED reads to the business as "the customer has it"; EXPIRED as "it lapsed".
-  check(
-    'statusChip relabels RELEASED',
-    function () {
-      return U.statusChip('RELEASED');
-    },
-    has('Proposal Sent'),
-  );
-  check(
-    'statusChip relabels EXPIRED',
-    function () {
-      return U.statusChip('EXPIRED');
-    },
-    has('No Longer Active'),
-  );
-  check(
-    'kpi',
-    function () {
-      return U.kpi('Label', '5');
-    },
-    has('Label'),
-  );
-  check(
-    'fieldRow',
-    function () {
-      return U.fieldRow('Name', '<input>');
-    },
-    has('<label>Name</label>'),
-  );
-  check(
-    'formSection',
-    function () {
-      return U.formSection('Group');
-    },
-    has('Group'),
-  );
-  check(
-    'selectEl selects',
-    function () {
-      return U.selectEl('id', ['A_B'], 'A_B');
-    },
-    has('selected'),
-  );
-  check(
-    'bomFieldStyle locked differs',
+    'bomFieldStyle locked differs from unlocked',
     function () {
       return U.bomFieldStyle('80px', true) !== U.bomFieldStyle('80px', false);
     },
     true,
   );
 
-  /* ---- 7. load order, read off the live document ---- */
+  /* ---- 6. load order, read off the live document ---- */
 
   function jsTags() {
+    var tags = document.querySelectorAll('script[src]');
     return Array.prototype.map
-      .call(document.querySelectorAll('script[src]'), function (s) {
+      .call(tags, function (s) {
         return s.getAttribute('src').replace(/^\//, '').replace(/\?.*$/, '');
       })
       .filter(function (s) {
@@ -422,10 +271,8 @@
     'proposal-document.js loads before app.js',
     function () {
       var t = jsTags();
-      return (
-        t.indexOf('proposal-document.js') !== -1 &&
-        t.indexOf('proposal-document.js') < t.indexOf('app.js')
-      );
+      var doc = t.indexOf('proposal-document.js');
+      return doc !== -1 && doc < t.indexOf('app.js');
     },
     true,
   );
@@ -441,21 +288,23 @@
 
   if (fail.length) {
     console.error('SSGUI SELF-CHECK — ' + pass + ' passed, ' + fail.length + ' FAILED');
-    if (console.table) console.table(fail);
-    else
+    if (console.table) {
+      console.table(fail);
+    } else {
       fail.forEach(function (f) {
         console.error(f.check + ': got ' + f.got + ', expected ' + f.expected);
       });
+    }
     console.error(
-      'A failure here is a regression in the primitives module. Do not go screen-hunting until it is green.',
+      'A failure here is a regression in the primitives module. Do not go screen-hunting ' +
+        'until it is green.',
     );
   } else {
+    var style = 'color:#2f7d5d;font-weight:600;';
+    console.log('%cSSGUI SELF-CHECK — all ' + pass + ' checks passed.', style);
     console.log(
-      '%cSSGUI SELF-CHECK — all ' + pass + ' checks passed.',
-      'color:#2f7d5d;font-weight:600;',
-    );
-    console.log(
-      'The primitives are intact. Now look at the screens — this cannot tell you whether one renders.',
+      'The primitives are intact. Now look at the screens — this cannot tell you ' +
+        'whether one renders.',
     );
   }
   return { passed: pass, failed: fail.length, failures: fail };
