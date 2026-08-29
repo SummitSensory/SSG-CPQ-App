@@ -54,12 +54,25 @@ const PUBLIC_PAGE = 'public, max-age=3600';
  */
 const CLIENT_SCRIPTS = [
   'app.js',
-  'vendor-colors.js',
-  'portal-delivery.js',
-  'freight-trueup.js',
-  'cross-border.js',
-  'contract-pages.js',
+  // The customer proposal document, lifted out of app.js.
+  'proposal-document.js',
+  // Screens that install their own nav entry and fail in isolation.
   'accounts-receivable.js',
+  'insights.js',
+  'goals.js',
+  'belt-shipments.js',
+  'freight-trueup.js',
+  'portal-delivery.js',
+  'vendor-colors.js',
+  'cross-border.js',
+  'intro-admin.js',
+  // Document pieces the proposal renderer reads.
+  'contract-pages.js',
+  'proposal-front-matter.js',
+  'intro-cover.js',
+  'intro-adventure.js',
+  'intro-soar.js',
+  'intro-flex.js',
 ];
 
 /**

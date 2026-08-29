@@ -518,6 +518,11 @@
     <!-- The general release and standard terms that close a proposal. Loaded before
          app.js so the document builder can see it on the first render. -->
     <script src="/contract-pages.js?v=11"></script>
+    <!--
+      The customer proposal document. Before app.js, because app.js hands it the
+      shared business rules during boot; see wireProposalDocument there.
+    -->
+    <script src="/proposal-document.js?v=1"></script>
     <script src="/app.js?v=117"></script>
     <!--
       Portal delivery submissions panel (Administration → Integrations).
