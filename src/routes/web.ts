@@ -53,6 +53,9 @@ const PUBLIC_PAGE = 'public, max-age=3600';
  * and no route, so add the file here in the same commit that adds the tag.
  */
 const CLIENT_SCRIPTS = [
+  // Shared UI primitives (window.SSGUI). First in index.html; everything else
+  // assumes it has loaded.
+  'ssg-ui.js',
   'app.js',
   // The customer proposal document, lifted out of app.js.
   'proposal-document.js',

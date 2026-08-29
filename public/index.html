@@ -501,6 +501,16 @@
     <div id="root">
       <div style="padding: 40px; text-align: center; color: #909689">Loading…</div>
     </div>
+    <!--
+      Shared UI primitives (window.SSGUI): escaping, money, dates, table cells, the
+      modal, the toast. FIRST, and not by preference — app.js and every screen script
+      alias these on load, and app.js throws on boot if SSGUI is missing rather than
+      failing later with 'esc is not a function' from three thousand lines down.
+
+      It has no dependencies of its own, so nothing can be put before it and nothing
+      needs to be.
+    -->
+    <script src="/ssg-ui.js?v=1"></script>
     <script src="/vendor-colors.js?v=1"></script>
     <!--
       Freight true-up (dashboard "Freight outstanding" block + the per-job workspace).
@@ -523,7 +533,7 @@
       shared business rules during boot; see wireProposalDocument there.
     -->
     <script src="/proposal-document.js?v=1"></script>
-    <script src="/app.js?v=117"></script>
+    <script src="/app.js?v=118"></script>
     <!--
       Portal delivery submissions panel (Administration → Integrations).
 

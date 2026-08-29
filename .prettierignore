@@ -10,6 +10,13 @@ pnpm-lock.yaml
 # someone decides to reformat it deliberately, as its own commit.
 public/app.js
 
+# The primitives lifted out of app.js under AUD-003. Every body in it is copied
+# character-for-character out of the file above, which is the only way a reviewer can
+# confirm this was a move and not a rewrite — esc has 780 call sites and td has 301.
+# Reformatting it is a fine idea and belongs in its own commit, after this one has
+# been proven on every screen.
+public/ssg-ui.js
+
 # Generated or hand-maintained data, not source.
 prisma/migrations
 src/proposals/adventure-skus.json

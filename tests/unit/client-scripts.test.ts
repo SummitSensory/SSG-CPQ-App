@@ -64,6 +64,15 @@ describe('client scripts', () => {
     expect(new Set(tagged).size).toBe(tagged.length);
   });
 
+  it('loads the shared primitives first of all', () => {
+    // window.SSGUI holds esc, td, fmtMoney, openModal and the rest — the pieces
+    // app.js and every screen script alias on load. app.js throws on boot without
+    // it, so this is not a preference about ordering: any tag placed above it is a
+    // script that runs before the primitives exist.
+    const tags = taggedScripts();
+    expect(tags[0], `ssg-ui.js must be the first <script> tag, not ${tags[0]}`).toBe('ssg-ui.js');
+  });
+
   it('keeps the proposal document loaded before app.js', () => {
     // app.js hands the renderer its shared business rules during boot. Loading it
     // after would leave the first render without a deposit rule — and the renderer
