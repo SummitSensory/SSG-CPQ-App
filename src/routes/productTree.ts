@@ -620,7 +620,8 @@ export function registerProductTreeRoutes(app: FastifyInstance): void {
      * for every part in the catalog, which is a worse version of the bug being fixed.
      */
     let skuCreated = 0,
-      skuUpdated = 0;
+      skuUpdated = 0,
+      sourcingLinked = 0;
     for (const p of d.products) {
       const pr = pricedOf(p);
       const has =
@@ -633,7 +634,8 @@ export function registerProductTreeRoutes(app: FastifyInstance): void {
       const prod = prodBySku.get(p.sku);
       if (!prod) continue;
       const existing = skuByPart.get(lower(p.sku));
-      const mfrName = pr.mfr ? mfrByName.get(lower(pr.mfr))!.name : undefined;
+      const mfr = pr.mfr ? mfrByName.get(lower(pr.mfr))! : null;
+      const mfrName = mfr ? mfr.name : undefined;
 
       if (existing) {
         // Only the fields the sheet actually gave a value for. A blank cell was dropped by
@@ -655,9 +657,10 @@ export function registerProductTreeRoutes(app: FastifyInstance): void {
           data: {
             part: p.sku,
             description: p.name ?? prod.name,
-            // Sku.category is the flat string the proposal engine groups by; Product
-            // carries the real relation. Seeded from the same row so the two agree from
-            // the outset instead of drifting from the first edit.
+            // A part TYPE code (FRAME, TROLLEY, ACCESSORY) for catalog filtering and
+            // reporting — not the proposal heading (`Sku.proposalGroup`) and not the tree
+            // position (Product.categoryId). Non-null, so a new row is seeded with the
+            // section name and meant to be edited to a real type.
             category: catName ?? '',
             manufacturer: mfrName ?? null,
             unitPriceMinor: pr.price.value ?? 0,
@@ -670,6 +673,37 @@ export function registerProductTreeRoutes(app: FastifyInstance): void {
           },
         });
         skuCreated++;
+      }
+
+      /*
+       * The OTHER record of the same fact.
+       *
+       * `Sku.manufacturer` was written above; `ProductSourcing` is the relation the
+       * vendor reports, the freight true-up and `vendorResolution.ts` read. This import
+       * used to write only the string — one of the two paths that let seven parts end up
+       * naming different companies in the two records, with the Bill of Materials
+       * following one and the catalog screen showing the other.
+       *
+       * Only when the sheet actually named a manufacturer. A blank cell means "leave the
+       * vendor alone", so it must not clear an existing link.
+       */
+      if (mfr) {
+        const link = await prisma.productSourcing.findFirst({
+          where: { productId: prod.id },
+          select: { id: true, manufacturerId: true },
+        });
+        if (!link) {
+          await prisma.productSourcing.create({
+            data: { productId: prod.id, manufacturerId: mfr.id },
+          });
+          sourcingLinked++;
+        } else if (link.manufacturerId !== mfr.id) {
+          await prisma.productSourcing.update({
+            where: { id: link.id },
+            data: { manufacturerId: mfr.id },
+          });
+          sourcingLinked++;
+        }
       }
     }
 
@@ -722,16 +756,14 @@ export function registerProductTreeRoutes(app: FastifyInstance): void {
     await recordAudit({
       actorId: req.user!.sub,
       action: 'catalog.tree.import',
-      details: { created, updated, links, deactivated, skuCreated, skuUpdated },
+      details: { created, updated, links, deactivated, skuCreated, skuUpdated, sourcingLinked },
     });
-    return reply
-      .status(200)
-      .send({
-        valid: true,
-        committed: true,
-        issues: [],
-        plan,
-        result: { created, updated, links, deactivated, skuCreated, skuUpdated },
-      });
+    return reply.status(200).send({
+      valid: true,
+      committed: true,
+      issues: [],
+      plan,
+      result: { created, updated, links, deactivated, skuCreated, skuUpdated, sourcingLinked },
+    });
   });
 }

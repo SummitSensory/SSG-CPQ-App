@@ -48,6 +48,25 @@ vi.mock('../../src/lib/prisma.js', () => {
     sku: { findMany: async () => [] },
     proposalVersion: { findUnique: async () => s.version },
     priceSnapshot: { findUnique: async () => s.snapshot },
+    /*
+     * Cross-border charges. `createAcceptedOrder` and `prepareTransaction` both reach
+     * `sellerCollectedCharges`, which queries this model first — and it was absent from
+     * this stub, so all nine tests in these two files threw
+     * "Cannot read properties of undefined (reading 'findFirst')" before reaching a
+     * single assertion.
+     *
+     * Nobody had seen it because the repo's habit was `pnpm test:unit`; these live in
+     * tests/integration. So the guards on accepted-order locking, the integrity hash and
+     * QuickBooks idempotency — the money path — were not running at all.
+     *
+     * An EMPTY snapshot rather than null: `sellerCollectedCharges` returns
+     * `{ ...EMPTY, source: 'SNAPSHOT' }` for a snapshot with no charge lines and stops
+     * there, whereas null sends it on to `crossBorderStateFor` and a chain of further
+     * models these tests have no reason to describe. Zero cross-border charge is also the
+     * right answer for these fixtures, which are US-domestic and about locking and
+     * idempotency, not customs.
+     */
+    proposalCrossBorderSnapshot: { findFirst: async () => ({ chargeLines: [] }) },
     orderEvent: { create: async () => ({}) },
     $transaction: async (fn: (tx: unknown) => unknown) => fn(prisma),
   };

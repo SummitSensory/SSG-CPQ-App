@@ -1,39 +1,38 @@
 /**
- * Align ProductSourcing with Sku.manufacturer where the two disagree.
+ * Make the primary sourcing row agree with the vendor a part is actually ordered from.
  *
- * The integrity report found 7 parts where the two vendor records name different
- * companies — the tracking-rail hardware says `Goldberg Brothers` on `Sku` and
- * `Productive Tool Products` on `ProductSourcing`.
+ * WHAT THIS SCRIPT USED TO DO, AND WHY IT WAS WRONG
+ * ------------------------------------------------
+ * The first version treated `ProductSourcing` as one vendor per part and tried to
+ * reassign the row's `manufacturerId` from the stale vendor to the one on
+ * `Sku.manufacturer`. It failed on `@@unique([productId, manufacturerId])` — because both
+ * rows already existed.
  *
- * Which one is right
- * ------------------
- * `Sku.manufacturer` is. Three independent reasons, none of them a guess:
+ * That constraint is the model telling you something: `ProductSourcing` is a
+ * MANY-TO-MANY with an `isPrimary` flag. A part legitimately lists several vendors, one
+ * preferred. The tracking-rail hardware lists both Goldberg Brothers and Productive Tool
+ * Products, which is what a second source is for. There was no disagreement to repair;
+ * the check had collapsed a list to a single value and compared against whichever row the
+ * database happened to return last.
  *
- *  1. The Bill of Materials already reads `Sku` as the override, so `Goldberg Brothers`
- *     is who these parts are ALREADY being ordered from. Whatever the intent once was,
- *     that is the operating reality, and changing it would change purchasing behaviour
- *     rather than correct a record.
+ * So the useful job is narrower and safer: make the vendor on `Sku.manufacturer` — the
+ * one the Bill of Materials orders from — the SOLE primary among a part's existing
+ * sources. Nothing is created, nothing is deleted, no vendor association changes. Only
+ * which of a part's existing sources is preferred.
  *
- *  2. `Goldberg Brothers` is one of the manufacturers carrying a full address, contact
- *     and payment terms. `Productive Tool Products` is one of the nine with none of
- *     those — the signature of a row created as a side effect of a typed name rather
- *     than set up as a vendor.
+ * "Sole" matters. `isPrimary` is `@default(true)`, so a part with two sources usually has
+ * both flagged, and an earlier version of this script checked only whether the right one
+ * was primary — found that it was, and reported nothing to do while the integrity check
+ * went on flagging the same seven parts.
  *
- *  3. `ProductSourcing` is the record nothing reads at ordering time, so it is the one
- *     that goes stale unnoticed.
+ * A part whose `Sku.manufacturer` is not a listed source at all is REPORTED, not fixed.
+ * Adding a vendor to a part is a purchasing decision, and after getting this model wrong
+ * twice I am not going to make it in a loop.
  *
- * So this makes the quiet record agree with the one that is actually in force. It changes
- * nothing about who you buy from, which is exactly why it is safe: it removes a
- * disagreement instead of picking a new winner.
- *
- * DRY RUN BY DEFAULT. It prints what it would do and exits. Pass --commit to write.
+ * DRY RUN BY DEFAULT.
  *
  *   npx tsx --env-file=.env prisma/align-vendor-sourcing.ts
  *   npx tsx --env-file=.env prisma/align-vendor-sourcing.ts --commit
- *
- * Anything it cannot resolve safely it skips and reports, rather than guessing — a part
- * whose `Sku.manufacturer` names a vendor that does not exist is left alone, because
- * creating that vendor is the very mistake this whole thread has been about.
  */
 import { PrismaClient } from '@prisma/client';
 
@@ -42,100 +41,109 @@ const COMMIT = process.argv.includes('--commit');
 const key = (v: unknown): string => (v == null ? '' : String(v)).trim().toLowerCase();
 
 async function main() {
-  const [skus, manufacturers, sourcing] = await Promise.all([
+  const [skus, sourcing] = await Promise.all([
     prisma.sku.findMany({ select: { part: true, manufacturer: true } }),
-    prisma.manufacturer.findMany({
-      select: {
-        id: true,
-        name: true,
-        addressLine1: true,
-        contactEmail: true,
-        paymentTerms: true,
-      },
-    }),
     prisma.productSourcing.findMany({
       select: {
         id: true,
-        manufacturerId: true,
+        isPrimary: true,
+        manufacturer: { select: { name: true } },
         product: { select: { id: true, sku: true } },
       },
     }),
   ]);
 
-  const mfrByName = new Map(manufacturers.map((m) => [key(m.name), m]));
-  const mfrById = new Map(manufacturers.map((m) => [m.id, m]));
   const skuByPart = new Map(skus.map((s) => [key(s.part), s]));
 
-  interface Row {
-    part: string;
-    from: string;
-    to: string;
-    sourcingId: string;
-    toId: string;
-    fromBare: boolean;
+  /** Every sourcing row for a part, so the primary flag can be judged in context. */
+  const rowsByPart = new Map<string, typeof sourcing>();
+  for (const r of sourcing) {
+    if (!r.product?.sku) continue;
+    const k = key(r.product.sku);
+    if (!rowsByPart.has(k)) rowsByPart.set(k, []);
+    rowsByPart.get(k)!.push(r);
   }
-  const fix: Row[] = [];
-  const skipped: { part: string; why: string }[] = [];
 
-  for (const row of sourcing) {
-    if (!row.product?.sku) continue;
-    const sku = skuByPart.get(key(row.product.sku));
-    if (!sku) continue;
-    const want = (sku.manufacturer ?? '').trim();
-    if (!want) continue;
+  interface Repromote {
+    part: string;
+    to: string;
+    toId: string;
+    from: string | null;
+    demote: { id: string; name: string }[];
+  }
+  const repromote: Repromote[] = [];
+  const notSourced: { part: string; named: string; listed: string[] }[] = [];
 
-    const current = mfrById.get(row.manufacturerId);
-    if (current && key(current.name) === key(want)) continue;
+  for (const [k, rows] of rowsByPart) {
+    const sku = skuByPart.get(k);
+    const named = (sku?.manufacturer ?? '').trim();
+    if (!named) continue;
 
-    const target = mfrByName.get(key(want));
-    if (!target) {
-      // Left alone on purpose. Creating the vendor here would be the exact mistake the
-      // rest of this work removed.
-      skipped.push({
-        part: row.product.sku,
-        why: `Sku says “${want}”, which is not a manufacturer on record`,
+    const match = rows.find((r) => key(r.manufacturer?.name) === key(named));
+    if (!match) {
+      notSourced.push({
+        part: rows[0]!.product!.sku,
+        named,
+        listed: rows.map((r) => r.manufacturer?.name ?? '?'),
       });
       continue;
     }
-    const from = current?.name ?? '(none)';
-    const bare =
-      !!current && !current.addressLine1 && !current.contactEmail && !current.paymentTerms;
-    fix.push({
-      part: row.product.sku,
-      from,
-      to: target.name,
-      sourcingId: row.id,
-      toId: target.id,
-      fromBare: bare,
+    /*
+     * Not "is the match primary" — "is the match the ONLY primary".
+     *
+     * `isPrimary` is `@default(true)`, so a part with two sources typically has BOTH
+     * flagged. The previous version checked `match.isPrimary` and skipped, which is why
+     * it reported nothing to do while the check was still flagging seven parts: Goldberg
+     * Brothers was primary, and so was Productive Tool Products.
+     */
+    const primaries = rows.filter((r) => r.isPrimary);
+    const alreadySolePrimary = primaries.length === 1 && primaries[0]!.id === match.id;
+    if (alreadySolePrimary) continue;
+
+    repromote.push({
+      part: rows[0]!.product!.sku,
+      to: match.manufacturer?.name ?? named,
+      toId: match.id,
+      from:
+        primaries.length > 1
+          ? `${primaries.length} rows flagged primary`
+          : (primaries[0]?.manufacturer?.name ?? null),
+      demote: primaries
+        .filter((r) => r.id !== match.id)
+        .map((r) => ({ id: r.id, name: r.manufacturer?.name ?? '?' })),
     });
   }
 
   console.log('');
-  console.log(COMMIT ? 'ALIGNING VENDOR SOURCING' : 'ALIGNING VENDOR SOURCING — DRY RUN');
+  console.log(COMMIT ? 'ALIGNING PRIMARY SOURCE' : 'ALIGNING PRIMARY SOURCE — DRY RUN');
   console.log('='.repeat(78));
-  console.log('Making the quiet record (ProductSourcing) agree with the one the Bill of');
-  console.log('Materials already reads (Sku.manufacturer). Purchasing behaviour does not');
-  console.log('change; only the record that nothing reads at ordering time.');
+  console.log('A part can list several vendors, one marked primary. Where the vendor the');
+  console.log('Bill of Materials orders from is listed but not primary, mark it primary.');
+  console.log('No vendor association is added, removed or changed.');
   console.log('');
 
-  if (!fix.length) {
-    console.log('Nothing to align. Every ProductSourcing row already agrees with its Sku.');
+  if (!repromote.length) {
+    console.log('Nothing to change. Every part is already primary-sourced from the vendor');
+    console.log('its priced record names.');
   } else {
-    console.log(`${fix.length} part(s) to align:`);
+    console.log(`${repromote.length} part(s) to re-flag:`);
     console.log('');
-    for (const f of fix) {
-      const note = f.fromBare ? '   [old vendor has no address/terms]' : '';
-      console.log(`   ${f.part.padEnd(20)} ${f.from}  ->  ${f.to}${note}`);
+    for (const r of repromote) {
+      console.log(`   ${r.part.padEnd(20)} primary: ${r.from ?? '(none)'}  ->  ${r.to}`);
     }
   }
   console.log('');
 
-  if (skipped.length) {
-    console.log('SKIPPED — not resolvable without creating a vendor:');
-    for (const s of skipped) console.log(`   ${s.part.padEnd(20)} ${s.why}`);
+  if (notSourced.length) {
+    console.log(`REPORTED, NOT CHANGED — ${notSourced.length} part(s):`);
+    console.log('   Ordered from a vendor that is not among the part\u2019s listed sources.');
+    console.log('   Adding a vendor to a part is a purchasing decision, so this asks rather');
+    console.log('   than acts. Add the source on the product, or correct the priced record.');
     console.log('');
-    console.log('   Add those vendors under Catalog → Manufacturers, with their address');
-    console.log('   and payment terms, then run this again.');
+    for (const n of notSourced) {
+      const listed = n.listed.join(', ');
+      console.log(`   ${n.part.padEnd(20)} orders from “${n.named}”; listed: ${listed}`);
+    }
     console.log('');
   }
 
@@ -147,17 +155,25 @@ async function main() {
   }
 
   let done = 0;
-  for (const f of fix) {
+  for (const r of repromote) {
+    // Demote first, so the pair never both hold isPrimary — cheap here, and it keeps the
+    // intermediate state honest if the run is interrupted.
+    for (const d of r.demote) {
+      await prisma.productSourcing.update({
+        where: { id: d.id },
+        data: { isPrimary: false },
+      });
+    }
     await prisma.productSourcing.update({
-      where: { id: f.sourcingId },
-      data: { manufacturerId: f.toId },
+      where: { id: r.toId },
+      data: { isPrimary: true },
     });
     done++;
   }
 
   console.log('='.repeat(78));
-  console.log(`${done} sourcing row(s) updated.`);
-  console.log('Re-run prisma/report-catalog-integrity.ts — section 3 should now be empty.');
+  console.log(`${done} part(s) re-flagged.`);
+  console.log('Verify with: pnpm db:check:integrity');
   console.log('');
 }
 

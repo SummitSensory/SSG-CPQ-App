@@ -407,9 +407,12 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
         data: {
           part,
           description: d.name,
-          // Sku.category is the flat string the proposal engine groups by; Product
-          // carries the real relation. Seeded from the same choice so the two agree
-          // from the outset rather than drifting from the first edit.
+          // Sku.category is a part TYPE code (FRAME, TROLLEY, ACCESSORY) used for catalog
+          // filtering and reporting — NOT the proposal heading, which is
+          // `Sku.proposalGroup`, and not the tree position, which is Product.categoryId.
+          // It is non-null, and a new part has nothing better to seed it with than the
+          // section it was filed under, so that is the starting value; it is meant to be
+          // edited to a real type afterwards.
           category: d.category,
           manufacturer: manufacturer ? manufacturer.name : null,
           unitPriceMinor: d.unitPriceMinor ?? 0,
@@ -510,6 +513,20 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
     }
 
     if (d.category !== undefined) {
+      /*
+       * The tree position, and ONLY the tree position, when a Product exists.
+       *
+       * I briefly changed this to also write `Sku.category`, believing the two held the
+       * same fact and drifted. They do not. `Product.categoryId` is where the part sits
+       * in the catalog tree; `Sku.category` is a part TYPE — FRAME, TROLLEY, ACCESSORY —
+       * used for catalog filtering and reporting, and the proposal heading is a third
+       * field again, `Sku.proposalGroup`. Writing the tree's section name over the type
+       * code destroyed a deliberate taxonomy on every section edit.
+       *
+       * The `else if` is therefore right: a part with a Product row keeps its type code,
+       * and a part with only a priced row uses `Sku.category` as the nearest thing it has
+       * to a classification.
+       */
       if (product && d.category) {
         const cat = await prisma.productCategory.findFirst({ where: { name: d.category } });
         if (!cat) throw new ValidationError(`No product category named “${d.category}”`);

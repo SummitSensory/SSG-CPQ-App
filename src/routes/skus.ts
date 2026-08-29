@@ -7,6 +7,7 @@ import { recordAudit } from '../lib/audit.js';
 import { ValidationError, NotFoundError } from '../lib/errors.js';
 import { reassignSkuVendor } from '../handoff/vendorReassign.js';
 import { recordRevision, skuSnapshot } from '../lib/revisions.js';
+import { loadVendorIndex, resolveVendor, syncPartSourcing } from '../catalog/partVendor.js';
 
 const SkuBody = z.object({
   part: z.string().trim().min(1).max(80),
@@ -284,6 +285,16 @@ export function registerSkuRoutes(app: FastifyInstance): void {
     if (!body.success) throw new ValidationError(body.error.message);
 
     const issues: { row: number; part: string; message: string }[] = [];
+    /*
+     * Loaded once for the whole sheet.
+     *
+     * A vendor name in a spreadsheet used to be written to `Sku.manufacturer` verbatim,
+     * unchecked, and never to `ProductSourcing` — so a 3,000-row import could introduce
+     * both a vendor that does not exist AND a disagreement between the two records that
+     * hold a part's vendor, silently, on every row it touched. A spreadsheet is where that
+     * mistake happens at scale.
+     */
+    const vendorIndex = await loadVendorIndex(prisma);
 
     /**
      * What happened to each row, so the import can be checked afterwards.
@@ -344,8 +355,24 @@ export function registerSkuRoutes(app: FastifyInstance): void {
         columns.push('category');
       }
       if (has(raw, 'manufacturer')) {
-        data.manufacturer = d.manufacturer ? d.manufacturer.trim() : null;
-        columns.push('manufacturer');
+        const typed = d.manufacturer ? d.manufacturer.trim() : '';
+        const vendor = resolveVendor(vendorIndex, typed);
+        if (typed && !vendor) {
+          // Reported as a row issue rather than written. Blank still clears the vendor —
+          // that is a deliberate statement, not a typo.
+          issues.push({
+            row: i + 1,
+            part: d.part.trim(),
+            message:
+              `manufacturer “${typed}” is not on record. Add the vendor under ` +
+              `Catalog → Manufacturers, with its address and payment terms, then import again.`,
+          });
+        } else {
+          // The STORED spelling, so "resilite" files under "Resilite" rather than
+          // becoming a second spelling of one company.
+          data.manufacturer = vendor ? vendor.name : null;
+          columns.push('manufacturer');
+        }
       }
       if (has(raw, 'proposalGroup')) {
         data.proposalGroup = d.proposalGroup ? d.proposalGroup.trim() : null;
@@ -440,6 +467,14 @@ export function registerSkuRoutes(app: FastifyInstance): void {
                 req.user!.sub,
               );
               if (r) reassigned.push(r);
+              // The other record of the same fact. A no-op for a priced row with no
+              // catalog row — that is a separate defect, which the integrity check
+              // reports rather than something to paper over here.
+              await syncPartSourcing(
+                prisma,
+                c.part,
+                resolveVendor(vendorIndex, c.data.manufacturer as string | null),
+              );
             }
             results.push({ part: c.part, row: c.row, outcome: 'updated', columns: c.columns });
           } else {
@@ -473,6 +508,13 @@ export function registerSkuRoutes(app: FastifyInstance): void {
               packagingBag: (c.data.packagingBag as string | null) ?? null,
             },
           });
+          if (c.data.manufacturer !== undefined) {
+            await syncPartSourcing(
+              prisma,
+              c.part,
+              resolveVendor(vendorIndex, c.data.manufacturer as string | null),
+            );
+          }
           created++;
           results.push({ part: c.part, row: c.row, outcome: 'created', columns: c.columns });
         }
