@@ -142,11 +142,28 @@
     return mo[Number(p[1]) - 1] + ' ' + Number(p[2]) + ', ' + p[0];
   }
 
+  /**
+   * A recorded moment, in the reader's own timezone — the whole thing, not half.
+   *
+   * The date used to come from `fmtDate(iso)`, which reads the first ten characters of
+   * the string, and the time from `toLocaleTimeString`, which is local. On a UTC
+   * timestamp those two disagree: at 6:30pm Mountain this printed
+   * "Aug 29, 2026 at 6:30 PM" — tomorrow's date beside tonight's time. It shows on
+   * "payment request sent" lines, which is exactly where someone counts days.
+   *
+   * Both halves now come from the parsed Date, so they describe the same instant.
+   * fmtDate is left alone: slicing the string is correct for the bare YYYY-MM-DD
+   * invoice and due dates it is otherwise given, which have no timezone to get wrong.
+   */
   function fmtStamp(iso) {
     if (!iso) return '';
     var d = new Date(iso);
     if (isNaN(d.getTime())) return '';
-    return fmtDate(iso) + ' at ' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    return (
+      window.SSGUI.fmtDate(window.SSGUI.isoLocal(d)) +
+      ' at ' +
+      d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    );
   }
 
   function fmtBytes(n) {

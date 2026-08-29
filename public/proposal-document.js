@@ -14,9 +14,17 @@
  *
  * Two kinds of dependency, handled two different ways:
  *
- *   Formatting primitives — escaping, money, dates. Pure, small, and copied in below.
+ *   Formatting primitives — escaping and money. Pure, small, and copied in below.
  *   That is the convention the other extracted screens already follow, and a copy of a
  *   pure function cannot drift in a way that reaches a customer.
+ *
+ *   Dates were on that list and have been taken off it. A copy of a pure function
+ *   cannot drift, but it can be wrong, and this one was: the copies read
+ *   `new Date('2026-08-04')` and `toISOString()`, both of which answer in UTC. Anywhere
+ *   west of Greenwich, for the last hours of every working day, that printed yesterday
+ *   on the document — which is the defect the shell had already fixed and this file had
+ *   not. Dates are injected now, for the same reason the deposit rule is: there is one
+ *   correct answer and the printed page must not have its own.
  *
  *   Business rules — the deposit percentage, the discount label, whether a line prints
  *   freight as TBD, the model code. These are PASSED IN, never copied. They are shared
@@ -55,17 +63,6 @@
   /** Explicitly USD, for a document that also states CAD. */
   function fmtUsd(minor) {
     return 'USD $' + money(minor);
-  }
-
-  function fmtDate(v) {
-    if (!v) return '';
-    var d = new Date(v);
-    if (isNaN(d.getTime())) return String(v);
-    return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-  }
-
-  function todayISO() {
-    return new Date().toISOString().slice(0, 10);
   }
 
   /** Title-case a heading. Pure, and copied for the same reason as the rest. */
@@ -109,6 +106,17 @@
     rt: null,
     freightTbdNote: null,
     documentUser: null,
+
+    /*
+     * And the dates, moved here from the copied block above.
+     *
+     * fmtDate has to read a bare YYYY-MM-DD as a calendar date rather than as an
+     * instant, and todayISO has to answer in the reader's own timezone. Both are one
+     * line to get wrong and neither is visibly wrong when it is: the document simply
+     * states a date one day early, on the page someone signs.
+     */
+    fmtDate: null,
+    todayISO: null,
   };
 
   function overrideMinor(v) {
@@ -134,6 +142,12 @@
   }
   function rt(s) {
     return rules.rt(s);
+  }
+  function fmtDate(v) {
+    return rules.fmtDate(v);
+  }
+  function todayISO() {
+    return rules.todayISO();
   }
 
   /* ---- the override parser ----

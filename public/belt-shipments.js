@@ -39,8 +39,20 @@
       return c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : '&quot;';
     });
   }
+  /**
+   * Today, as the calendar day the reader is actually in.
+   *
+   * This is the date printed on a packing slip. It used to be
+   * `new Date().toISOString().slice(0, 10)`, which is the UTC day: anywhere west of
+   * Greenwich that is yesterday's date for the last hours of every working day, so a
+   * slip made at 6pm Mountain went out dated the day before.
+   *
+   * Deferred to SSGUI rather than fixed in place. ssg-ui.js is the first script in
+   * index.html and app.js refuses to boot without it, so it is always there — and one
+   * implementation of "what day is it" is the point of having it.
+   */
   function todayISO() {
-    return new Date().toISOString().slice(0, 10);
+    return window.SSGUI.todayISO();
   }
 
   function fmtDate(iso) {
@@ -51,12 +63,27 @@
     return mo[Number(p[1]) - 1] + ' ' + Number(p[2]) + ', ' + p[0];
   }
 
-  /** A recorded moment, in the reader's own timezone. */
+  /**
+   * A recorded moment, in the reader's own timezone — the whole thing, not half.
+   *
+   * The date used to come from `fmtDate(iso)`, which reads the first ten characters of
+   * the string, and the time from `toLocaleTimeString`, which is local. On a UTC
+   * timestamp those two disagree: at 6:30pm Mountain this printed
+   * "Aug 29, 2026 at 6:30 PM" — tomorrow's date beside tonight's time.
+   *
+   * Both halves now come from the parsed Date, so they describe the same instant.
+   * fmtDate is left alone: slicing the string is correct for the bare YYYY-MM-DD
+   * calendar dates it is otherwise given, which have no timezone to get wrong.
+   */
   function fmtStamp(iso) {
     if (!iso) return '';
     var d = new Date(iso);
     if (isNaN(d.getTime())) return '';
-    return fmtDate(iso) + ' at ' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    return (
+      window.SSGUI.fmtDate(window.SSGUI.isoLocal(d)) +
+      ' at ' +
+      d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    );
   }
 
   /** Whole days since a date. Drives the ageing flag. */
@@ -516,7 +543,7 @@
             esc(n) +
             '</div>' +
             '<div style="font-size:10.5px;color:#b0b6c2;margin-top:2px;">Last ' +
-            esc(fmtStamp(new Date(e.last).toISOString())) +
+            esc(fmtStamp(e.last)) +
             '</div>' +
             '</div>' +
             '<div style="text-align:right;flex:none;font-variant-numeric:tabular-nums;">' +

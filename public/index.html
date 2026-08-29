@@ -523,7 +523,7 @@
     <script src="/intro-soar.js?v=11"></script>
     <script src="/intro-flex.js?v=1"></script>
     <script src="/intro-cover.js?v=1"></script>
-    <script src="/belt-shipments.js?v=9"></script>
+    <script src="/belt-shipments.js?v=10"></script>
     <script src="/intro-admin.js?v=2"></script>
     <!-- The general release and standard terms that close a proposal. Loaded before
          app.js so the document builder can see it on the first render. -->
@@ -532,7 +532,7 @@
       The customer proposal document. Before app.js, because app.js hands it the
       shared business rules during boot; see wireProposalDocument there.
     -->
-    <script src="/proposal-document.js?v=1"></script>
+    <script src="/proposal-document.js?v=2"></script>
     <script src="/app.js?v=118"></script>
     <!--
       Portal delivery submissions panel (Administration → Integrations).
@@ -556,7 +556,7 @@
          Same three-part rule as above: the file in public/, its route in
          CLIENT_SCRIPTS, and this tag. Loaded after app.js on purpose — it installs
          its own nav entry once the shell exists, so it needs the shell to be there. -->
-    <script src="/accounts-receivable.js?v=3"></script>
+    <script src="/accounts-receivable.js?v=4"></script>
 
     <!-- Insights (signed-deals chart + report builder) and Goals. Both install their
          own nav entry the way accounts-receivable.js does, so app.js needs no edit

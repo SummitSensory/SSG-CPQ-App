@@ -52,7 +52,23 @@
 
   /* ---- text ---- */
 
-  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  /**
+   * Text → HTML text. The apostrophe is escaped too.
+   *
+   * app.js's version escaped four characters and not `'`, while proposal-document.js,
+   * insights.js and goals.js all escaped five. That split is now resolved in favour of
+   * the wider set, because app.js builds single-quoted attributes in places
+   * (`data-part='...'`, inline handlers) and a four-character escape does not close
+   * them safely.
+   *
+   * Widening is safe in a way narrowing never is: `&#39;` renders as `'` in element
+   * text, in a `value="…"` and in a `<textarea>`, so nothing a reader sees changes. It
+   * would be visible only if escaped text were written somewhere that is not HTML — a
+   * CSV cell, a textContent, a URL. All 753 call sites in app.js were checked at
+   * statement level before this change and every one of them assembles HTML; the nine
+   * CSV exports build their rows from raw values (`col.plain(row)`), never from esc.
+   */
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function titleCase(v) { return String(v || '').toLowerCase().split('_').map(function (w) { return w.charAt(0).toUpperCase() + w.slice(1); }).join(' '); }
 
   /**

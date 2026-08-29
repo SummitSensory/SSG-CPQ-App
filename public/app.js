@@ -9609,6 +9609,11 @@
       // cannot be copied at all.
       rt: rt,
       freightTbdNote: FREIGHT_TBD_NOTE,
+      // Dates, for the same reason. The renderer's own copies answered in UTC, which
+      // printed yesterday's date on the document for part of every day west of
+      // Greenwich. These are the shell's — and now ssg-ui.js's — single versions.
+      fmtDate: fmtDate,
+      todayISO: todayISO,
       documentUser: function () {
         return (pb && pb.user) || currentUser || {};
       },
