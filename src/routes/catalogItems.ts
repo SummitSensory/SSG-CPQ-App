@@ -279,6 +279,194 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
    *   manufacturer-> ProductSourcing (creating the Manufacturer if new) + Sku.manufacturer
    *   price/cost/weight/group/active -> Sku (created on demand)
    */
+  /**
+   * Create one part, in one request, in one place.
+   *
+   * The mirror of the PATCH below, and the reason it exists: editing a part already
+   * writes across `Product`, `Sku`, `ProductSourcing` and `Manufacturer` from a single
+   * merged row, but CREATING one had no equivalent. A new part meant a POST to
+   * /catalog/products for the catalog record and a separate POST to /skus for the priced
+   * record, from two different screens — so a part could be, and routinely was, created
+   * as half of itself. A Product with no Sku carries no price and quietly totals zero on
+   * a proposal; a Sku with no Product has no category, no dimensions and no sourcing.
+   *
+   * Both rows, or neither. The whole thing is one interactive transaction, so a
+   * validation failure on the second write cannot leave the first behind.
+   *
+   * The manufacturer must ALREADY EXIST
+   * -----------------------------------
+   * Deliberately different from the PATCH, which does this:
+   *
+   *     let mfr = await prisma.manufacturer.findFirst({ where: { name } });
+   *     if (!mfr) mfr = await prisma.manufacturer.create({ data: { name, slug: ... } });
+   *
+   * — so a mistyped vendor name silently CREATES a manufacturer. The new row has no
+   * address, no contact, no payment terms and none of the Bill of Materials email
+   * defaults, and it then appears in the manufacturer list looking exactly as legitimate
+   * as the real ones. The part is now sourced from a vendor that does not exist, and the
+   * first anyone knows is a purchase order with nowhere to go.
+   *
+   * That is not a hypothetical. `src/handoff/vendorResolution.ts` exists because vendor
+   * identity was recorded in two places and only one was read; there are two repair
+   * scripts on disk (`prisma/fix-vendor-name.ts`, `prisma/resync-order-vendors.ts`); and
+   * `bomSections.ts` carries an 'Unassigned vendor' fallback for lines the catalog cannot
+   * attribute.
+   *
+   * So: a name that matches no `Manufacturer.name` is a 400 here, naming the ones that
+   * do exist. Creating a vendor is an act with an address and payment terms attached to
+   * it, and it belongs on the Manufacturers screen, not as a side effect of typing a part
+   * number.
+   *
+   * The category is resolved the same way and for the same reason — by name, against
+   * existing rows, refusing rather than inventing.
+   */
+  const ItemCreate = z.object({
+    part: z.string().trim().min(1).max(80),
+    name: z.string().trim().min(1).max(300),
+    /** An existing ProductCategory name. Required: it is Product.categoryId, non-null. */
+    category: z.string().trim().min(1).max(200),
+    /** An existing Manufacturer name, or blank for "not sourced yet". */
+    manufacturer: z.string().trim().max(200).optional(),
+    unitPriceMinor: z.number().int().nonnegative().optional(),
+    unitCostMinor: z.number().int().nonnegative().optional(),
+    weightLbs: z.number().nonnegative().optional(),
+    proposalGroup: z.string().trim().max(200).nullish(),
+    active: z.boolean().optional(),
+    /** Where it sits among its siblings in the product tree. */
+    sortOrder: z.number().int().min(0).max(999999).optional(),
+    /** Quantity the proposal builder seeds it with; null = no default. */
+    defaultQty: z.number().int().min(0).max(9999).nullable().optional(),
+  });
+
+  app.post('/catalog/items', admin, async (req, reply) => {
+    const parsed = ItemCreate.safeParse(req.body);
+    if (!parsed.success)
+      throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid part');
+    const d = parsed.data;
+    const part = d.part.trim();
+
+    // Both tables, because a part number already used by either one is taken. Checked
+    // before the transaction so the message is about the clash rather than a constraint.
+    const [dupeProduct, dupeSku] = await Promise.all([
+      prisma.product.findUnique({ where: { sku: part }, select: { id: true } }),
+      prisma.sku.findUnique({ where: { part }, select: { id: true } }),
+    ]);
+    if (dupeProduct || dupeSku)
+      throw new ConflictError(
+        `Part number ${part} already exists in the catalog. Edit it from the catalog list instead.`,
+      );
+
+    const category = await prisma.productCategory.findFirst({
+      where: { name: d.category },
+      select: { id: true },
+    });
+    if (!category) throw new ValidationError(`No product category named “${d.category}”`);
+
+    const wantsVendor = !!(d.manufacturer && d.manufacturer.trim());
+    let manufacturer: { id: string; name: string } | null = null;
+    if (wantsVendor) {
+      const name = d.manufacturer!.trim();
+      manufacturer = await prisma.manufacturer.findFirst({
+        where: { name: { equals: name, mode: 'insensitive' } },
+        select: { id: true, name: true },
+      });
+      if (!manufacturer) {
+        // Name the real ones. "Unknown manufacturer" on its own sends the operator
+        // looking for a spelling they have no way to guess.
+        const known = await prisma.manufacturer.findMany({
+          where: { isActive: true },
+          select: { name: true },
+          orderBy: { name: 'asc' },
+          take: 60,
+        });
+        throw new ValidationError(
+          `“${name}” is not a manufacturer on record, so this part would be sourced from ` +
+            `a vendor that does not exist. Pick one of: ${known.map((m) => m.name).join(', ')}. ` +
+            `To add a new vendor, use Administration → Manufacturers, where its address and ` +
+            `payment terms can be entered.`,
+        );
+      }
+    }
+
+    const created = await prisma.$transaction(async (tx) => {
+      const product = await tx.product.create({
+        data: {
+          sku: part,
+          name: d.name,
+          categoryId: category.id,
+          sortOrder: d.sortOrder ?? 0,
+          ...(d.defaultQty != null ? { defaultQuantity: d.defaultQty } : {}),
+          // ACTIVE unless told otherwise: a part created from this form is one somebody
+          // intends to quote. DRAFT would hide it from the builder with no hint why.
+          status: d.active === false ? 'INACTIVE' : 'ACTIVE',
+          createdById: req.user!.sub,
+        },
+      });
+
+      const sku = await tx.sku.create({
+        data: {
+          part,
+          description: d.name,
+          // Sku.category is the flat string the proposal engine groups by; Product
+          // carries the real relation. Seeded from the same choice so the two agree
+          // from the outset rather than drifting from the first edit.
+          category: d.category,
+          manufacturer: manufacturer ? manufacturer.name : null,
+          unitPriceMinor: d.unitPriceMinor ?? 0,
+          unitCostMinor: d.unitCostMinor ?? 0,
+          weightLbs: d.weightLbs ?? 0,
+          proposalGroup: (d.proposalGroup || '').trim() || null,
+          active: d.active !== false,
+          ...(d.defaultQty !== undefined ? { defaultQty: d.defaultQty } : {}),
+        },
+      });
+
+      if (manufacturer)
+        await tx.productSourcing.create({
+          data: { productId: product.id, manufacturerId: manufacturer.id },
+        });
+
+      // The same version row POST /catalog/products writes, so a part created here has
+      // the same history as one created there.
+      await tx.productVersion.create({
+        data: {
+          productId: product.id,
+          version: 1,
+          snapshot: { ...d, part } as object,
+          changedById: req.user!.sub,
+          changeNote: 'created from the catalog list',
+        },
+      });
+
+      return { product, sku };
+    });
+
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'catalog.item.create',
+      entity: 'Product',
+      entityId: created.product.id,
+    });
+    // Same shape the PATCH below uses, so a part created here and a part edited here
+    // produce comparable rows in the revision log. `label` carries the part number as it
+    // read at the time, which is what makes the row survive a later rename.
+    await recordRevision({
+      entity: 'Sku',
+      entityId: created.sku.id,
+      label: part,
+      action: 'create',
+      actorId: req.user!.sub,
+      after: skuSnapshot(created.sku as unknown as Record<string, unknown>),
+    });
+
+    return reply.status(201).send({
+      part,
+      productId: created.product.id,
+      skuId: created.sku.id,
+      manufacturer: manufacturer ? manufacturer.name : null,
+    });
+  });
+
   app.patch('/catalog/items/:part', admin, async (req) => {
     const { part } = req.params as { part: string };
     const parsed = ItemPatch.safeParse(req.body);

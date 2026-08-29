@@ -309,6 +309,14 @@
     },
     'function',
   );
+  // app.js calls this straight from the nav. Absent, clicking Catalog throws.
+  check(
+    'SSGCatalog registered',
+    function () {
+      return typeof (window.SSGCatalog || {}).render;
+    },
+    'function',
+  );
 
   /* ---- report ---- */
 

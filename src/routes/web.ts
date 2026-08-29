@@ -64,6 +64,8 @@ const CLIENT_SCRIPTS = [
   'ssg-standard-notes.js',
   // Opened from Catalog and Administration alike.
   'ssg-vendor-parts.js',
+  // The Catalog screen.
+  'catalog.js',
   'accounts-receivable.js',
   'insights.js',
   'goals.js',

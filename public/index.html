@@ -528,6 +528,9 @@
          so it belongs to neither. Same three-part rule: the file in public/, its route
          in CLIENT_SCRIPTS, and this tag. -->
     <script src="/ssg-vendor-parts.js?v=1"></script>
+    <!-- The Catalog screen, lifted out of app.js. Before app.js, which calls
+         window.SSGCatalog.render() from the nav and hands it `authed` during boot. -->
+    <script src="/catalog.js?v=1"></script>
     <script src="/proposal-front-matter.js?v=7"></script>
     <script src="/intro-adventure.js?v=5"></script>
     <script src="/intro-soar.js?v=11"></script>
@@ -543,7 +546,7 @@
       shared business rules during boot; see wireProposalDocument there.
     -->
     <script src="/proposal-document.js?v=2"></script>
-    <script src="/app.js?v=120"></script>
+    <script src="/app.js?v=121"></script>
     <!--
       Portal delivery submissions panel (Administration → Integrations).
 

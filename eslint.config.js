@@ -119,6 +119,8 @@ export default [
         // The shared UI primitives, read by every file in here.
         SSGUI: 'writable',
         SSGStandardNotes: 'writable',
+        SSGVendorParts: 'writable',
+        SSGCatalog: 'writable',
       },
     },
     rules: {
@@ -167,7 +169,12 @@ export default [
      * under. Everything in the app depends on this one file — esc alone has 780 call
      * sites — so it is the last place a warning should be allowed to sit unread.
      */
-    files: ['public/ssg-ui.js', 'public/ssg-standard-notes.js'],
+    files: [
+      'public/ssg-ui.js',
+      'public/ssg-standard-notes.js',
+      'public/ssg-vendor-parts.js',
+      'public/catalog.js',
+    ],
     rules: {
       'no-undef': 'error',
       'no-unused-vars': ['error', { args: 'none', caughtErrors: 'none' }],
