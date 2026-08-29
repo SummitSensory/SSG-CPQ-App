@@ -2177,7 +2177,10 @@
    * it natively; the importer reads exactly what the exporter writes. */
   var TREE_SHEETS = [
     { name: 'Categories', key: 'categories', cols: ['slug', 'name', 'parentSlug', 'tierLevel', 'sortOrder', 'isActive'] },
-    { name: 'Products', key: 'products', cols: ['sku', 'name', 'categorySlug', 'kind', 'status', 'sortOrder', 'proposalDescription'] },
+    // unitPrice / unitCost / weightLbs / manufacturer are the priced side of a part, and
+    // were absent from this list — so the workbook came out with no prices in it and the
+    // importer had none to read back. Dollars, not cents: this sheet is edited in Excel.
+    { name: 'Products', key: 'products', cols: ['sku', 'name', 'categorySlug', 'kind', 'status', 'sortOrder', 'proposalDescription', 'unitPrice', 'unitCost', 'weightLbs', 'manufacturer'] },
     { name: 'Bundles', key: 'bundles', cols: ['bundleSku', 'bundleName', 'componentSku', 'componentName', 'quantity'] }
   ];
   function xmlEsc(v) {

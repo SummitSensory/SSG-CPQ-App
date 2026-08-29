@@ -5761,6 +5761,128 @@
     return 0;
   }
 
+  function builderIsHeading(l) {
+    return !!l && (l.lineType === 'GROUP' || l.lineType === 'SUBGROUP');
+  }
+
+  /**
+   * The rows that move as one when this row moves.
+   *
+   * A heading owns everything beneath it until the next heading that ends it: a tier 1
+   * GROUP ends at the next GROUP, a tier 2 SUBGROUP ends at either. Anything else is
+   * just itself. This is the rule the drag-and-drop already used; it lives up here now
+   * so the arrows and the drag cannot drift apart, which is the sort of thing that ends
+   * with two reorder paths that disagree about what a section contains.
+   */
+  function builderBlockAt(i) {
+    var l = pb.lines[i];
+    if (!l) return { from: i, count: 1 };
+    if (!builderIsHeading(l)) return { from: i, count: 1 };
+    var end = i + 1;
+    while (end < pb.lines.length) {
+      var t = pb.lines[end].lineType;
+      if (t === 'GROUP' || (l.lineType === 'SUBGROUP' && t === 'SUBGROUP')) break;
+      end++;
+    }
+    return { from: i, count: end - i };
+  }
+
+  /**
+   * The blocks this row can trade places with, and where it currently sits among them.
+   *
+   * Siblings, not neighbours. A tier 1 heading's siblings are the other tier 1 headings;
+   * a tier 2 heading's are the other tier 2 headings INSIDE THE SAME tier 1; a product's
+   * are the products and notes in the unbroken run it sits in.
+   *
+   * The run boundary for a product is deliberate. An arrow that carried a part across a
+   * heading would silently change which section it prints under and which section's
+   * revenue it counts toward — a pricing change disguised as a nudge. Crossing sections
+   * stays a drag, where the intent is unmistakable. The arrow greys out instead.
+   */
+  function builderSiblings(i) {
+    var l = pb.lines[i];
+    if (!l) return null;
+
+    if (!builderIsHeading(l)) {
+      var s = i, e = i, k;
+      while (s - 1 >= 0 && !builderIsHeading(pb.lines[s - 1])) s--;
+      while (e + 1 < pb.lines.length && !builderIsHeading(pb.lines[e + 1])) e++;
+      var run = [];
+      for (k = s; k <= e; k++) run.push({ from: k, count: 1 });
+      return { blocks: run, at: i - s };
+    }
+
+    // Tier 1 ranges over the whole proposal; tier 2 only within its own tier 1.
+    var lo = 0, hi = pb.lines.length, j;
+    if (l.lineType === 'SUBGROUP') {
+      for (j = i - 1; j >= 0; j--) {
+        if (pb.lines[j].lineType === 'GROUP') {
+          var gb = builderBlockAt(j);
+          lo = j + 1;
+          hi = gb.from + gb.count;
+          break;
+        }
+      }
+    }
+    var blocks = [], at = -1, m = lo;
+    while (m < hi) {
+      if (pb.lines[m].lineType === l.lineType) {
+        var b = builderBlockAt(m);
+        if (m === i) at = blocks.length;
+        blocks.push(b);
+        m = b.from + b.count;
+      } else m++;
+    }
+    return at === -1 ? null : { blocks: blocks, at: at };
+  }
+
+  /**
+   * Swap this row's block with the sibling block above or below it.
+   * Returns the block's new starting index, or -1 if it could not move.
+   */
+  function builderMove(i, dir) {
+    var sib = builderSiblings(i);
+    if (!sib) return -1;
+    var to = sib.at + dir;
+    if (to < 0 || to >= sib.blocks.length) return -1;
+    var me = sib.blocks[sib.at], other = sib.blocks[to];
+    var moved = pb.lines.splice(me.from, me.count);
+    // Moving down, removing this block first shifts the target back by its length, so
+    // landing after the target means other.from - me.count + other.count.
+    var at = dir < 0 ? other.from : other.from + other.count - me.count;
+    pb.lines.splice.apply(pb.lines, [at, 0].concat(moved));
+    return at;
+  }
+
+  /** Up/down controls for one row, greyed at the ends of its own sibling run. */
+  function builderArrows(i, light) {
+    var l = pb.lines[i];
+    var sib = builderSiblings(i);
+    var canUp = !!sib && sib.at > 0;
+    var canDown = !!sib && sib.at < sib.blocks.length - 1;
+    var what = l && l.lineType === 'GROUP' ? 'this section and everything in it'
+      : l && l.lineType === 'SUBGROUP' ? 'this sub-section and its products'
+      : 'this line within its section';
+    var base = 'border-radius:7px;width:25px;height:26px;padding:0;font-size:9px;line-height:1;'
+      + 'flex:0 0 auto;display:flex;align-items:center;justify-content:center;';
+    var on = light
+      ? 'border:1px solid rgba(255,255,255,.28);background:rgba(255,255,255,.12);color:#e6ebef;cursor:pointer;'
+      : 'border:1px solid #e0e1db;background:#fff;color:#5c6157;cursor:pointer;';
+    var off = light
+      ? 'border:1px solid rgba(255,255,255,.1);background:transparent;color:rgba(255,255,255,.28);cursor:default;'
+      : 'border:1px solid #f0f1ec;background:#fbfbf9;color:#cfd2ca;cursor:default;';
+    var endNote = builderIsHeading(l) ? 'already first' : 'already at the top of its section';
+    var endNoteD = builderIsHeading(l) ? 'already last' : 'already at the bottom of its section';
+    return '<div style="display:flex;flex-direction:column;gap:2px;flex:0 0 auto;">' +
+      '<button class="bUp" data-i="' + i + '"' + (canUp ? '' : ' disabled') +
+        ' title="' + (canUp ? 'Move ' + what + ' up' : endNote) + '"' +
+        ' style="' + base + (canUp ? on : off) + '">\u25b2</button>' +
+      '<button class="bDn" data-i="' + i + '"' + (canDown ? '' : ' disabled') +
+        ' title="' + (canDown ? 'Move ' + what + ' down' : endNoteD) + '"' +
+        ' style="' + base + (canDown ? on : off) + '">\u25bc</button>' +
+    '</div>';
+  }
+
   function builderLineRow(l, i, gsub) {
     var handle = '<div class="bDrag" style="cursor:grab;color:#c2c6bd;font-size:18px;padding:0 4px;user-select:none;" title="Drag to reorder">⋮⋮</div>';
     var del = '<button class="bDel" data-i="' + i + '" style="border:1px solid #e0e1db;background:#fff;border-radius:8px;width:30px;height:30px;color:#9c3327;cursor:pointer;flex:0 0 auto;">✕</button>';
@@ -5775,7 +5897,7 @@
       var gMargin = g.rev - g.cogs;
       var gPct = g.rev ? Math.round((gMargin / g.rev) * 1000) / 10 : 0;
       return '<div class="bRow" draggable="true" data-i="' + i + '" style="background:#3d4a55;border:1px solid #33404a;border-radius:10px;padding:9px 10px;color:#fff;">' +
-        '<div style="display:flex;align-items:center;gap:8px;">' + handle.replace('#c2c6bd', '#8fa0ac') +
+        '<div style="display:flex;align-items:center;gap:8px;">' + handle.replace('#c2c6bd', '#8fa0ac') + builderArrows(i, true) +
         '<input class="bF" data-i="' + i + '" data-k="name" value="' + esc(l.name) + '" placeholder="SECTION HEADING" style="flex:1;border:none;background:transparent;font-weight:700;font-size:13px;letter-spacing:.03em;text-transform:uppercase;color:#fff;outline:none;">' +
         '<input class="bF" data-i="' + i + '" data-k="description" value="' + esc(l.description || '') + '" placeholder="Heading note (e.g. Frame Dimensions: 10\' × 10\')" style="flex:0 1 250px;border:none;background:rgba(255,255,255,.1);border-radius:7px;padding:5px 8px;font-size:11.5px;color:#e6ebef;outline:none;">' +
         '<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:#cdd6dc;white-space:nowrap;cursor:pointer;"><input type="checkbox" class="bChk" data-i="' + i + '" data-k="optional"' + (l.optional ? ' checked' : '') + '> Optional</label>' +
@@ -5789,7 +5911,7 @@
           '</div>') + '</div>';
     }
     if (l.lineType === 'SUBGROUP') {
-      return '<div class="bRow" draggable="true" data-i="' + i + '" style="display:flex;align-items:center;gap:8px;background:#eef0ea;border:1px solid #e2e5dd;border-radius:9px;padding:7px 10px;margin-left:14px;">' + handle +
+      return '<div class="bRow" draggable="true" data-i="' + i + '" style="display:flex;align-items:center;gap:8px;background:#eef0ea;border:1px solid #e2e5dd;border-radius:9px;padding:7px 10px;margin-left:14px;">' + handle + builderArrows(i, false) +
         '<input class="bF" data-i="' + i + '" data-k="name" value="' + esc(l.name) + '" placeholder="Sub-heading" style="flex:1;border:none;background:transparent;font-weight:600;font-size:13px;color:#3d4a55;outline:none;">' +
         // Matches the one-line note a GROUP heading already has, and prints the
         // same way — beneath the heading, before the first product under it.
@@ -5801,7 +5923,7 @@
       // sub-heading row uses, so a note reads as belonging to its section rather than
       // to the whole proposal.
       var noteIndent = builderDepth(i) * 14;
-      return '<div class="bRow" draggable="true" data-i="' + i + '" style="display:flex;align-items:flex-start;gap:8px;background:#fbfaf4;border:1px solid #ece9db;border-radius:10px;padding:10px;' + (noteIndent ? 'margin-left:' + noteIndent + 'px;' : '') + '">' + handle +
+      return '<div class="bRow" draggable="true" data-i="' + i + '" style="display:flex;align-items:flex-start;gap:8px;background:#fbfaf4;border:1px solid #ece9db;border-radius:10px;padding:10px;' + (noteIndent ? 'margin-left:' + noteIndent + 'px;' : '') + '">' + handle + builderArrows(i, false) +
         '<div style="flex:1;"><input class="bF" data-i="' + i + '" data-k="name" value="' + esc(l.name) + '" placeholder="Note title" style="width:100%;border:none;background:transparent;font-weight:600;font-size:13.5px;outline:none;margin-bottom:4px;">' +
         '<textarea class="bF" data-i="' + i + '" data-k="description" rows="3" placeholder="Note text" style="width:100%;border:1px solid #ece9db;border-radius:7px;padding:6px 8px;font-size:12.5px;font-family:inherit;resize:vertical;background:#fff;">' + esc(l.description) + '</textarea>' +
         '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:3px;">' +
@@ -5837,7 +5959,7 @@
         '</div>' +
       '</div>' : '';
     return '<div class="bRow" draggable="true" data-i="' + i + '" style="background:#fff;border:1px solid #e7e8e3;border-radius:10px;padding:10px;">' +
-      '<div style="display:flex;align-items:flex-start;gap:8px;">' + handle +
+      '<div style="display:flex;align-items:flex-start;gap:8px;">' + handle + builderArrows(i, false) +
         '<div style="flex:1;min-width:0;">' +
           '<div style="display:flex;gap:8px;margin-bottom:5px;">' +
             '<span class="bFreightMark" data-sku="' + esc(l.sku || '') + '" style="display:flex;align-items:center;flex:0 0 auto;">' + freightMarkHtml(l.sku) + '</span>' +
@@ -6114,19 +6236,10 @@
      * anyone means by moving a section.
      *
      * A single line still drags on its own; only headers carry their contents. */
-    function blockAt(i) {
-      var l = pb.lines[i];
-      if (!l) return { from: i, count: 1 };
-      if (l.lineType !== 'GROUP' && l.lineType !== 'SUBGROUP') return { from: i, count: 1 };
-      var end = i + 1;
-      while (end < pb.lines.length) {
-        var t = pb.lines[end].lineType;
-        // A GROUP ends at the next GROUP; a SUBGROUP ends at either.
-        if (t === 'GROUP' || (l.lineType === 'SUBGROUP' && t === 'SUBGROUP')) break;
-        end++;
-      }
-      return { from: i, count: end - i };
-    }
+    // One definition of what a section contains, shared with the up/down arrows. Two
+    // reorder paths disagreeing about a section's extent is a bug that only shows up on
+    // somebody's proposal.
+    function blockAt(i) { return builderBlockAt(i); }
 
     document.querySelectorAll('.bRow').forEach(function (row) {
       row.addEventListener('dragstart', function () { bDragFrom = +row.getAttribute('data-i'); row.style.opacity = '0.4'; });
@@ -6146,6 +6259,25 @@
         bDragFrom = null;
         markBuilderDirty();
         renderBuilder();
+      });
+    });
+
+    document.querySelectorAll('.bUp, .bDn').forEach(function (b) {
+      b.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (b.disabled) return;
+        var from = +b.getAttribute('data-i');
+        var up = b.classList.contains('bUp');
+        var to = builderMove(from, up ? -1 : 1);
+        if (to === -1) return;
+        markBuilderDirty();
+        renderBuilder();
+        // Follow the row to its new index so the same button is under the cursor for a
+        // second press. Without this a rep moving a section three places has to find the
+        // arrow again after every click, because the re-render rebuilds every row.
+        var again = document.querySelector((up ? '.bUp' : '.bDn') + '[data-i="' + to + '"]');
+        if (again && !again.disabled) again.focus();
       });
     });
   }
