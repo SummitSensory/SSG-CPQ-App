@@ -300,6 +300,15 @@
     },
     'function',
   );
+  // Opened from Catalog → Manufacturers and Administration → Orders & vendors. Absent,
+  // both buttons do nothing at all rather than reporting why.
+  check(
+    'SSGVendorParts registered',
+    function () {
+      return typeof (window.SSGVendorParts || {}).open;
+    },
+    'function',
+  );
 
   /* ---- report ---- */
 

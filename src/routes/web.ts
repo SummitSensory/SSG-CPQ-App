@@ -62,6 +62,8 @@ const CLIENT_SCRIPTS = [
   // Screens that install their own nav entry and fail in isolation.
   // Shared by Catalog and Administration, owned by neither.
   'ssg-standard-notes.js',
+  // Opened from Catalog and Administration alike.
+  'ssg-vendor-parts.js',
   'accounts-receivable.js',
   'insights.js',
   'goals.js',

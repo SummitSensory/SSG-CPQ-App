@@ -17,6 +17,12 @@ public/app.js
 # been proven on every screen.
 public/ssg-ui.js
 
+# Same reason, one step further out: the 270 lines of dialog in here moved verbatim out
+# of the file above, so the diff reads as the move it is. Prettier would rewrap 38 of
+# them on the first commit that touches this file and hide that. Reformat deliberately,
+# as its own commit, once the move has been proven.
+public/ssg-vendor-parts.js
+
 # Generated or hand-maintained data, not source.
 prisma/migrations
 src/proposals/adventure-skus.json
