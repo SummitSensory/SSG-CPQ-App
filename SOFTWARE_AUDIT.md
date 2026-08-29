@@ -147,7 +147,7 @@ The real gap is narrower, and is what has now been filled: the proposal **meta**
 **Why it matters:** Risk scales with the file. Every change to any screen carries whole-application risk, review is impractical, and two people cannot work in it without conflicts.
 **How to reproduce:** Introduce a syntax error anywhere in `public/app.js` and load the app.
 **Recommended fix:** Do not rewrite it. Extract by attrition, using the pattern the codebase already proved: `accounts-receivable.js`, `belt-shipments.js`, `freight-trueup.js`, `insights.js` and `goals.js` are self-contained screens that install their own nav entry and fail in isolation. Every _new_ screen goes in its own file (already the practice), and each time an existing screen needs substantial work, lift it out then. Highest-value first extractions: the proposal document renderer (~1,200 lines, changed most often, most business-critical) and the Administration screens (~2,500 lines, changed rarely, low risk to move).
-**Dependencies/Risks:** Extraction must preserve shared helpers (`esc`, `fmtMoney`, `authed`, `rt`). Duplicating them per file is the existing convention and is acceptable; a shared `ssg-common.js` would be better but changes load order.
+**Dependencies/Risks:** Extraction must preserve shared helpers (`esc`, `fmtMoney`, `authed`, `rt`). ~~Duplicating them per file is the existing convention and is acceptable; a shared `ssg-common.js` would be better but changes load order.~~ Superseded 2026-08-28: the shared module was built (`public/ssg-ui.js`), and the load-order concern turned out to be nothing — it has no dependencies of its own, so it simply goes first. See step 1 below.
 **Confidence:** High
 **Status:** **In Progress — first extraction done 2026-08-28.**
 
@@ -174,6 +174,72 @@ Chosen first because it is the part changed most often and both of the UI defect
 The rule I set out with (copy pure formatters, inject business rules) held; I under-counted what fell on the business side. Without `no-undef` on `public/**` these would have shipped as `ReferenceError`s the first time someone opened a Canadian proposal — the same failure mode as AUD-012. That is the fourth defect the ESLint work has caught today.
 
 **Retest:** open a proposal preview, a Canadian proposal preview, print, and the server PDF. All four must be identical to before.
+
+### Step 1 — the shared primitives module (2026-08-28)
+
+`public/ssg-ui.js`, registering `window.SSGUI`. 28 primitives, each body lifted verbatim
+out of `app.js`. `app.js` drops from 16,083 to 15,920 lines.
+
+Why this came before the next screen: every extraction after the proposal document was
+measured and they all stalled on the same thing. Catalog needs 21 things from the shell
+and **17 of them are UI primitives every other screen also needs**. Administration's 30
+contain the same 17. So do the CRM's and Reports'. The blocker was never per-screen
+coupling — there was no shared foundation to depend on. With one, Catalog drops to about
+4 needs and Administration to about 13.
+
+`esc` `titleCase` `rt` (with `rtUnescapeTags`, `RT_TAGS`) `isoLocal` `todayISO`
+`fmtDate` `fmtDateTime` `fmtMoney` `fmt0` `money` `costMoney` `d2m` `hasRole`
+`roleLabel` `td` `tableShell` `statusChip` `kpi` `fieldRow` `formSection` `IN`
+`selectEl` `bomFieldStyle` `openModal` `toast` `downloadCsv` `downloadBlob`
+`serverMessage`
+
+**Call sites were not rewritten.** `app.js` gets one `var` block aliasing all 28 names
+back to their originals rather than `SSGUI.esc(...)` at each call. `esc` has 780
+references and `td` has 301; editing roughly two thousand call sites is pure risk, and
+it would hide the only thing this commit needs to prove — that each body moved
+unchanged. The block is `var`, not hoisted declarations, so a use added above it throws
+on the spot rather than misbehaving quietly. `app.js` also refuses to boot without
+`SSGUI`, writing a plain message into `#root`, because a missing primitives module is
+not a degraded shell and `esc is not a function` from three thousand lines down says
+nothing about the cause.
+
+`ssg-ui.js` is the first `<script>` in `index.html`, first in `CLIENT_SCRIPTS`, and
+`tests/unit/client-scripts.test.ts` now asserts that position. `eslint.config.js` gains
+the `SSGUI` global and holds `public/ssg-ui.js` to `error` rather than `warn` — the
+promotion that block's own comment describes for extracted files.
+
+**A correction to the earlier note.** `hasRole` was recorded as reading `currentUser`.
+It does not, and its signature says so: `hasRole(list, role)` is pure. It was copied on
+that basis. `rt` was the one that needed a decision, and putting it in `ssg-ui.js` is
+what the caution above actually asks for — one implementation. `app.js` still hands that
+same function to the renderer through `useRules({ rt: rt, … })`.
+
+### Step 1a — the retroactive de-duplication: closed, not done
+
+The plan claimed this module would also de-duplicate the copies in
+`accounts-receivable.js`, `insights.js`, `goals.js`, `belt-shipments.js`,
+`freight-trueup.js` and `proposal-document.js`. Reading all six, **it does not, and
+should not.** Only three of those copies are behaviourally identical to the `SSGUI`
+version (`esc` and `titleCase` in `accounts-receivable.js`, `esc` in
+`belt-shipments.js`) — about twelve lines. The rest are **different functions that
+happen to share a name**:
+
+| File                     | Copy                                                     | Why it is not duplication                                                          |
+| ------------------------ | -------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `accounts-receivable.js` | `openModal(title, body, footerHtml, width)`              | Different signature; a different dialog — header bar, close X, Escape              |
+|                          | `td(html, right)`, `statusChip(s, daysPastDue)`, `toast` | Different signatures and this screen's own colour tokens                           |
+|                          | `fmtMoney(minor, cur)`                                   | Prints `$` for USD where `SSGUI` prints `USD $`; `—` for `''` as well as `null`    |
+| `insights.js`            | `kpi`, `downloadCsv()`                                   | This screen's card and Georgia face; `downloadCsv` takes no arguments              |
+| `freight-trueup.js`      | `money(minor)`                                           | Returns `'$1,234.50'`. `SSGUI.money` returns `'1234.50'`. Same name, different job |
+
+Those three screens carry their own visual language — their own `INK`/`LINE`/`MUTE`
+tokens, Georgia rather than Newsreader, a different dialog. `accounts-receivable.js`
+says so in a comment: it borrows nothing on purpose. Forcing them onto `SSGUI` is a
+redesign of three screens wearing a refactor's clothes, and the twelve identical lines
+are not worth a commit. **This part of AUD-003 is closed as not-applicable.** The point
+of the module was the next extraction, and that is banked.
+
+Two real defects surfaced while reading them, both logged below as AUD-021.
 
 ---
 
@@ -257,7 +323,7 @@ Not done, and deliberately: a banner on the Insights screen. The alert email rea
 **Recommended fix:** Keep the convention; make it explicit. Add a periodic integrity report (extend the existing `/health/schema` check) counting rows whose `*ById` no longer resolves, so orphans are visible rather than discovered.
 **Dependencies/Risks:** None.
 **Confidence:** High
-**Status:** Open
+**Status:** **Fixed — awaiting retest.** See "AUD-008 (continued)" below; this line read "Open" after the fix shipped.
 
 ---
 
@@ -271,7 +337,7 @@ Not done, and deliberately: a banner on the Insights screen. The alert email rea
 **Recommended fix:** Do not merge them now — the new engine needs a few weeks of real use first. Once it has proved itself, reimplement the Reports tabs on top of `runReport` and delete `buildReport`. Until then, add a note at the top of both files pointing at the other.
 **Dependencies/Risks:** Deferred by design.
 **Confidence:** High
-**Status:** Open — deferred
+**Status:** **Deferred, and now signposted — 2026-08-28.** The consolidation waits for the new engine to earn it. The half that should not wait is done: both `src/proposals/analytics.ts` and `src/reporting/dataset.ts` now open with a block naming the other, what overlaps, why they agree today, and the rule — a change to how a figure is computed in one needs the same change in the other, or a note saying why not. `dataset.ts` needed it most: its existing header asserts that everything reads through one function, which is true inside that engine and easy to read as true of the application.
 
 ---
 
@@ -373,7 +439,21 @@ Not one of them fails open, and each refuses when its secret is missing — whic
 
 **Recommended fix:** Nothing for the webhooks or the read surface. Three items still need runtime work: portal token expiry and replay, OAuth `state` validation, and whether any `:id` route trusts the id without checking the caller may see that record.
 **Confidence:** High (webhooks, read surface); n/a (the rest)
-**Status:** Partially closed — webhooks, unauthenticated reads, per-record authorization (AUD-018) and OAuth `state` all reviewed and clean. **Only portal token replay remains**, and it needs runtime probing.
+**Portal token replay — CLOSED BY INSPECTION 2026-08-28. Not a defect; the reading of the code found a different one.**
+
+The token is `randomBytes(32).toString('base64url')` — 256 bits — stored only as `sha256` hex in a unique `tokenHash` column and looked up by it. A plain digest is the right choice here rather than a slow KDF: the secret has full entropy, so there is no dictionary to slow down. Both `/portal/colors/:token` routes are IP rate-limited before the lookup.
+
+Against the three expected outcomes:
+
+| Probe                       | Behaviour                                                                                        |
+| --------------------------- | ------------------------------------------------------------------------------------------------ |
+| Submit once                 | Accepted — status becomes SUBMITTED (live) or SHADOWED (shadow)                                  |
+| Submit the same token again | Accepted, overwriting the picks — **by design**, and bounded: refused once the status is APPLIED |
+| Alter one character         | `hash()` misses the unique index, `findUnique` returns null, `NotFoundError` → 404               |
+
+The middle row is deliberate and the code says so: "a customer part-way through their choices should be able to save." A thirty-day link that stops working the moment someone clicks Save is a support call, and the write is terminal once the picks reach production. So replay is a feature with a stop, not a hole.
+
+**Status:** **Closed.** Webhooks, unauthenticated reads, per-record authorization (AUD-018), OAuth `state` and portal token replay all reviewed and clean. The replay review surfaced AUD-022 below, which is the real defect in that path.
 
 ---
 
@@ -468,6 +548,74 @@ Deliberately once. If a _cold_ browser cannot open a page, something is genuinel
 **Dependencies/Risks:** The retry pays one cold start when it fires, which is the cost the cache exists to avoid; it fires only when the cache was already useless.
 **Confidence:** High
 **Status:** **Fixed — awaiting retest** (watch for the warning line in the Vercel logs after deploy; the absence of the original fault is the pass)
+
+---
+
+**Issue ID:** AUD-021
+**Severity:** MEDIUM — one of the two prints on a document a customer signs
+**Category:** Correctness / timezone
+**Location:** `public/proposal-document.js` (`fmtDate`, `todayISO`) and `public/belt-shipments.js` (`todayISO`)
+**Problem:** Both files answered "what day is it" in UTC. West of Greenwich that is yesterday's date for the last hours of every working day.
+**Evidence:** Found while reading the six files AUD-003 step 1a was meant to de-duplicate. `proposal-document.js` read `new Date(v)` on a bare `YYYY-MM-DD` (parsed as UTC midnight) and `new Date().toISOString().slice(0, 10)`; `belt-shipments.js` read the same `toISOString()`. `app.js` had already fixed exactly this, and its comment records the symptom verbatim: "which is why a proposal created today printed yesterday's date."
+**Why it matters:** `proposal-document.js` renders the Proposal Date, the Expiration Date and the discount-expiry line on the page a customer signs, and the same file renders the server PDF — so screen, print and PDF were all one day early together, which is the version that is hardest to notice. A proposal made at 6pm Mountain claimed to expire a day sooner than it does. `belt-shipments.js`'s is the date printed on a packing slip.
+
+The formatters were on the _copied_ side of the extraction, under the rule that "a copy of a pure function cannot drift in a way that reaches a customer." That rule is true and was not the risk. A copy cannot drift, but it can be **wrong at the moment it is made**, and then it stays wrong while the original is fixed — which is what happened here.
+**How to reproduce:** Set the machine to US Pacific. After 5pm local, create a proposal and open the preview: the Proposal Date reads the following day. Same for a packing slip made after 5pm.
+**Recommended fix / applied 2026-08-28:** `fmtDate` and `todayISO` moved from `proposal-document.js`'s copied block to its injected `rules`, supplied by `app.js` from `SSGUI` — the same channel as the deposit rule, and `useRules()` throws if either is missing. Both were unreachable in their empty-input branch (all five call sites are guarded), so the only behavioural change is the timezone. `belt-shipments.js`'s `todayISO` now defers to `SSGUI.todayISO()`.
+
+The doctrine in `proposal-document.js`'s header is amended to match: dates are injected, not copied, because there is one correct answer and the printed page must not have its own.
+**Dependencies/Risks:** `ssg-ui.js` must load first, which `tests/unit/client-scripts.test.ts` now asserts.
+**Confidence:** High
+**Status:** **Fixed — awaiting retest.** Needs a west-of-UTC clock: set the machine to US Pacific, and after 5pm local check the Proposal Date and Expiration Date on a preview, a print and the server PDF, in both US and Canadian form, plus one packing slip.
+
+**A third instance, and a correction to my own reasoning.** `fmtStamp` in
+`belt-shipments.js` and `accounts-receivable.js` — the same function, copied — printed
+**a UTC date beside a local time**. The date came from `fmtDate(iso)`, which reads the
+first ten characters of the string; the time came from `toLocaleTimeString`, which is
+local. So at 6:30pm Mountain it rendered "Aug 29, 2026 at 6:30 PM": tomorrow's date next
+to tonight's time, in one string, under a doc comment claiming "in the reader's own
+timezone."
+
+I first logged this as screen-only and deferred it, on the grounds that fixing it meant
+touching those files' own `fmtDate` and therefore re-opening the de-duplication step 1a
+had just closed. **That was wrong on both counts.** The defect is in `fmtStamp`, not
+`fmtDate` — `fmtDate`'s string slicing is correct for the bare `YYYY-MM-DD` calendar
+dates it is otherwise given, which have no timezone to get wrong. And it is not one
+stamp: it is all six `fmtStamp` call sites across the two files, including "shipped at"
+on a belt shipment and "payment request sent" on a receivable, which is precisely where
+someone counts days.
+
+Fixed by taking both halves of the string from the parsed `Date`, in each file, without
+touching `fmtDate`. `belt-shipments.js` line 531 also round-tripped its argument through
+`new Date(e.last).toISOString()` before formatting it, which was pointless as well as
+wrong; it now passes the timestamp straight in.
+
+The lesson worth keeping: "fixing this would re-open a decision I just made" is not a
+reason to leave a wrong date on screen. It was a reason to check whether the decision
+was actually implicated. It wasn't.
+
+---
+
+**Issue ID:** AUD-022
+**Severity:** HIGH the day `PORTAL_COLOR_SELECTION=live` — currently unreachable, the flag ships `off`
+**Category:** Concurrency / data integrity
+**Location:** `src/portal/colorSelection.ts` — `applySelection`
+**Problem:** Applying a customer's colour picks raced the customer, and lost silently. The selection record and the vendor sheet could end up permanently disagreeing about what colour was ordered.
+**Evidence:** Found while reviewing portal token replay for AUD-017 — the replay probe would never have caught it. `applySelection` read the row, checked `status !== 'APPLIED'`, then performed four more awaits (`procurementLine.findMany`, `bomVendorSection.findMany`, `specsForLines`, and a write per line) before setting the status. `submitSelection` refuses only when the status is `APPLIED`. The status was not set until the final statement. So the whole apply path was an open window, with no transaction, no lock and no version check.
+**Why it matters:** The damage was not a lost update, which is at least visible. The closing `update` set `status`, `appliedAt` and `appliedById` but **never re-wrote `picks`**. So a customer changing a colour mid-apply left the row holding their NEW choice while the procurement lines the shop reads held the OLD one — two records, permanently disagreeing, with nothing to arbitrate between them: the `orderEvent` detail stored only line names, not values. Anyone later asking "what did the customer ask for, and what did we build?" gets two different answers and no way to tell which is right.
+
+The window is not theoretical. The customer's link is valid for thirty days and keeps working after they submit, the apply path holds four awaits including a network-latency-bound palette read, and the person clicking Apply is looking at a screen that told them what the picks were.
+
+A second, milder case: two staff clicking Apply at once both passed the `status` check and both wrote, producing two order events for one action.
+**How to reproduce:** With `PORTAL_COLOR_SELECTION=live`, open an order's colour selection and click Apply while resubmitting the customer form with a different colour. Before the fix: lines carry the first colour, `picks` carries the second, status APPLIED, no warning. `tests/unit/portal-color-apply.test.ts` reproduces it deterministically by resubmitting from inside the awaited palette read.
+**Recommended fix / applied 2026-08-28:** `applySelection` now **claims the row before writing anything**, inside `prisma.$transaction`. The claim is an `updateMany` filtered on both `status: { not: 'APPLIED' }` and the `submittedAt` the call reviewed — `updateMany` because it reports a match count, which is the only way to ask "is this still the version I read?" and act on the answer. `count !== 1` throws, the transaction rolls back, and the operator is told to look again. Because the claim comes first, the refusal path writes nothing at all.
+
+The `bomVendorSection` read moved inside the transaction too — a vendor's BOM being submitted is what makes a line untouchable, and that can happen mid-apply. `specsForLines` stays outside and is annotated why: it reads administered palettes through the module-level client and cannot be handed `tx`, and palette content is not racing with a customer submit.
+
+Separately, the order event now records the actual colour applied per line, not just the line name. `picks` can still be overwritten by the customer afterwards; the event cannot, so there is now a durable answer to "what did we build against?"
+**Dependencies/Risks:** No schema change — `submittedAt` already existed and changes on every submit, so it serves as the version. The new refusal is a real behaviour change: an Apply that would previously have succeeded quietly now fails loudly and asks for a second look. That is the intent.
+**Confidence:** High
+**Status:** **Fixed — awaiting retest.** `pnpm test:unit` (`tests/unit/portal-color-apply.test.ts`, 6 cases: happy path, the recorded colours, the mid-apply resubmission, a concurrent second actor, the already-applied no-op, and a frozen vendor). No browser retest is possible or needed while the flag is `off`; the test is the guard.
 
 ---
 
@@ -645,6 +793,13 @@ pnpm build                # expect: success
 | 2026-08-28 | AUD-003 first extraction: proposal document → `public/proposal-document.js` (app.js 16,268 → 15,789)                                                                                                            | Shipped; **retest pending** — preview, Canadian preview, print, server PDF                                                                                                                                                                                                                                                                                      |
 | 2026-08-28 | AUD-020: ten script tags missing from `CLIENT_SCRIPTS` (incl. `insights.js`, `goals.js`)                                                                                                                        | Fixed, and guarded — `tests/unit/client-scripts.test.ts` asserts both directions and the load order. Local-dev 404s only; production serves `public/` from the CDN                                                                                                                                                                                              |
 | 2026-08-28 | AUD-003 extraction: five more dependencies found by the new `no-undef` rule                                                                                                                                     | `rt`, `FREIGHT_TBD_NOTE`, `pb`, `currentUser`, `tc`. The first four are injected — a note renderer shared with the builder, a sentence printed on a signed document, and live shell state. Caught by tooling, not by me                                                                                                                                         |
+| 2026-08-28 | AUD-003 step 1: shared primitives module → `public/ssg-ui.js` (28 primitives; app.js 16,083 → 15,920)                                                                                                           | Shipped; **retest pending** — every screen, because `esc` has 780 references and `td` has 301. The blocker for every later extraction: Catalog drops from 21 needs to ~4, Administration from 30 to ~13                                                                                                                                                         |
+| 2026-08-28 | AUD-003 step 1a: the retroactive de-duplication of the six screen files                                                                                                                                         | **Closed as not-applicable.** Only ~12 of those lines are identical copies; the rest are different functions sharing a name, in screens that carry their own visual language on purpose. Recorded so it is not re-opened as debt                                                                                                                                |
+| 2026-08-28 | AUD-021 fix: two UTC-day date bugs found while reading those six files                                                                                                                                          | Shipped; **retest pending** — needs a west-of-UTC clock and a late-afternoon check                                                                                                                                                                                                                                                                              |
+| 2026-08-28 | AUD-017 portal token replay                                                                                                                                                                                     | **Closed by inspection — clean.** 256-bit token, stored as sha256 in a unique column, rate-limited; an altered character 404s; resubmission is deliberate and stops at APPLIED. The review surfaced AUD-022                                                                                                                                                     |
+| 2026-08-28 | AUD-022: `applySelection` raced the customer and the two records disagreed silently                                                                                                                             | Shipped; **awaiting `pnpm test:unit`.** Claim-before-write inside a transaction, gated on the reviewed `submittedAt`; the applied colours now recorded on the order event. Found by reading the replay path, not by probing it                                                                                                                                  |
+| 2026-08-28 | AUD-021 third instance: `fmtStamp` printed a UTC date beside a local time in `belt-shipments.js` and `accounts-receivable.js`                                                                                   | Shipped; **retest pending.** Six call sites across two files. Initially deferred as screen-only on reasoning that did not hold — the defect was in `fmtStamp`, not the `fmtDate` the de-duplication decision covered                                                                                                                                            |
+| 2026-08-28 | `SSGUI.esc` widened to escape `'`                                                                                                                                                                               | Shipped. Resolves a four-vs-five-character split between `app.js` and four other files, in favour of the safer set. All 753 `esc` call sites in `app.js` checked at statement level first: every one assembles HTML, and the nine CSV exports build rows from raw values                                                                                        |
 | 2026-08-28 | AUD-010 OAuth `state` review                                                                                                                                                                                    | **Closed by inspection — clean.** All three callbacks verify a signed, TTL-bounded `state` carrying the initiating user inside the payload; Entra additionally verifies the ID token signature, issuer, audience and nonce                                                                                                                                      |
 | 2026-08-28 | AUD-019 fix: PDF renderer retries once on a reclaimed browser process                                                                                                                                           | Shipped; **retest pending** — watch the Vercel logs                                                                                                                                                                                                                                                                                                             |
 | 2026-08-28 | AUD-008 fix: orphaned-reference report (`GET /health/references`)                                                                                                                                               | Shipped; **retest pending**                                                                                                                                                                                                                                                                                                                                     |

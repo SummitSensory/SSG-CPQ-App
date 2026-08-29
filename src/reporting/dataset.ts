@@ -6,6 +6,21 @@
  * the database separately eventually disagree with each other, and a disagreement
  * between two reports is worse than either being slightly out of date.
  *
+ * ONE OF TWO REPORTING STACKS. See src/proposals/analytics.ts.
+ * -----------------------------------------------------------
+ * The paragraph above is about the endpoints inside THIS engine, and within it the
+ * claim holds. It does not extend to the older stack: `buildReport` in
+ * src/proposals/analytics.ts computes overlapping figures — win rates, product demand,
+ * per-rep totals — for the Reports tabs, by a different route through the same data.
+ *
+ * They agree today because both go through `versionTotals()`. They will stop agreeing
+ * the first time one is changed and the other is not. So: **a change to how a figure is
+ * computed here needs the same change there, or a deliberate note saying why not.**
+ *
+ * The plan (AUD-009) is to reimplement the Reports tabs on `runReport` and retire
+ * `buildReport`, once this engine has had real use. Until then the duplication is
+ * accepted and signposted rather than forgotten.
+ *
  * What a fact is
  * --------------
  * One row per proposal (its latest version), carrying the milestone dates and the
