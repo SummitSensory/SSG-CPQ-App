@@ -607,11 +607,32 @@
       var v = value == null ? '' : String(value);
       return '<input class="itEdit" data-part="' + esc(part) + '" data-f="' + field + '" value="' + esc(v) + '" title="' + esc(v) + '" style="' + (style || CELL) + '">';
     }
+    /*
+     * A dropdown that cannot quietly discard the value already on the row.
+     *
+     * The manufacturer list comes from GET /catalog/manufacturers, which returns
+     * `isActive: true` ONLY. So a part sourced from a vendor that has since been
+     * deactivated holds a value the list does not contain — and a plain <select> shows
+     * the blank option for it, which means the next save writes that blank and turns a
+     * visible vendor into a missing one without anyone touching the field. Category has
+     * the same hazard against its own list.
+     *
+     * An unrecognised current value therefore gets its own option, selected and labelled,
+     * on an amber field. It survives an untouched save, and it reads as something to look
+     * at rather than something already fine.
+     */
     function sel(part, field, value, options) {
-      return '<select class="itEdit" data-part="' + esc(part) + '" data-f="' + field + '" style="' + CELL + '">' +
-        ['<option value="">—</option>'].concat(options.map(function (o) {
-          return '<option value="' + esc(o) + '"' + (String(value) === String(o) ? ' selected' : '') + '>' + esc(o) + '</option>';
-        })).join('') + '</select>';
+      var v = value == null ? '' : String(value);
+      var known = options.some(function (o) { return String(o) === v; });
+      var odd = !!v && !known;
+      return '<select class="itEdit" data-part="' + esc(part) + '" data-f="' + field + '" style="' + CELL +
+        (odd ? 'border-color:#ecd9a6;background:#fdf6e6;' : '') + '"' +
+        (odd ? ' title="“' + esc(v) + '” is not on the active list. Leave it and it stays; pick another and it changes."' : '') + '>' +
+        ['<option value="">—</option>']
+          .concat(odd ? ['<option value="' + esc(v) + '" selected>' + esc(v) + ' — not on the active list</option>'] : [])
+          .concat(options.map(function (o) {
+            return '<option value="' + esc(o) + '"' + (v === String(o) ? ' selected' : '') + '>' + esc(o) + '</option>';
+          })).join('') + '</select>';
     }
     var rows = pageRows.map(function (k) {
       var where = (k.productId ? '<span class="chip" style="font-size:10px;">Product</span>' : '') + (k.skuId ? ' <span class="chip" style="font-size:10px;background:#fdfcf7;">Priced</span>' : '');
@@ -620,7 +641,18 @@
         cell('<code style="font-size:12.5px;color:#4a4f47;white-space:nowrap;">' + esc(k.part) + '</code>') +
         cell(admin ? txt(k.part, 'name', k.name) : '<span style="font-size:13px;" title="' + esc(k.name) + '">' + esc(k.name) + '</span>') +
         cell(admin ? (k.categoryOptions && itemState.categories.length ? sel(k.part, 'category', k.category, itemState.categories) : txt(k.part, 'category', k.category)) : '<span title="' + esc(k.category) + '">' + esc(k.category) + '</span>') +
-        cell(admin ? txt(k.part, 'manufacturer', k.manufacturer) : '<span title="' + esc(k.manufacturer) + '">' + esc(k.manufacturer) + '</span>') +
+        // Picked, not typed. A mistyped vendor name here does not merely sit in a field:
+        // PATCH /catalog/items/:part CREATES a Manufacturer row for any unrecognised
+        // name — no address, no contact, no terms, no Bill of Materials defaults — and it
+        // then appears in the vendor list looking exactly as legitimate as the real ones.
+        // The part is sourced from a vendor that does not exist, and the first anyone
+        // knows is a purchase order with nowhere to send it. Same guard as the category
+        // column beside it, and the same fallback to a text box if the list failed to load.
+        cell(admin
+          ? (itemState.manufacturers.length
+              ? sel(k.part, 'manufacturer', k.manufacturer, itemState.manufacturers)
+              : txt(k.part, 'manufacturer', k.manufacturer))
+          : '<span title="' + esc(k.manufacturer) + '">' + esc(k.manufacturer) + '</span>') +
         cell(admin ? txt(k.part, 'unitCostMinor', (Number(k.unitCostMinor) / 100).toFixed(2), NUM + 'background:#fdfcf7;border-color:#e4dfd0;') : '$' + (Number(k.unitCostMinor) / 100).toFixed(2), 'text-align:right;') +
         cell(admin ? txt(k.part, 'unitPriceMinor', (Number(k.unitPriceMinor) / 100).toFixed(2), NUM) : '$' + (Number(k.unitPriceMinor) / 100).toFixed(2), 'text-align:right;') +
         cell('<span style="font-size:13px;font-weight:600;color:' + (k.margin >= 0 ? '#2f7d5d' : '#9c3327') + ';">' + k.margin + '%</span>', 'text-align:right;') +
@@ -898,20 +930,97 @@
   /** Reload whichever catalog list is showing. */
   function refreshCatalogList(user) { if (cat.tab === 'products') loadProducts(user); else { itemState.page = 1; loadItems(user); } }
 
+  /**
+   * One part, one form, one save.
+   *
+   * This used to POST /skus, which writes the PRICED row only — no Product. So a part
+   * created here had a price but no category, no tree position and no sourcing, and the
+   * rest had to be filled in on a second screen. Creating it from the tree instead gave
+   * the opposite half: a Product with no price, which the proposal builder happily offers
+   * at $0.00. Having to visit both tabs was not a workflow, it was the shape of the bug.
+   *
+   * POST /catalog/items writes both rows in one transaction — both or neither — and
+   * refuses a manufacturer that is not on record rather than inventing one.
+   *
+   * Category and manufacturer are dropdowns because the server matches them by name
+   * against existing rows: a typed name that is off by a character is not a near miss,
+   * it is a refusal (category) or, on the older edit path, a brand-new vendor with no
+   * address (manufacturer).
+   */
   function openSkuForm(user) {
-    openModal('New catalog item',
+    var cats = itemState.categories || [];
+    var mfrs = itemState.manufacturers || [];
+    function opts(list, placeholder) {
+      return ['<option value="">' + placeholder + '</option>'].concat(list.map(function (o) {
+        return '<option value="' + esc(o) + '">' + esc(o) + '</option>';
+      })).join('');
+    }
+    var catField = cats.length
+      ? '<select id="kCat" style="' + IN + '">' + opts(cats, '— pick a section —') + '</select>'
+      : '<input id="kCat" placeholder="Section name" style="' + IN + '">';
+    var mfrField = mfrs.length
+      ? '<select id="kMfr" style="' + IN + '">' + opts(mfrs, '— none yet —') + '</select>'
+      : '<input id="kMfr" placeholder="e.g. Summit Sensory Gym" style="' + IN + '">';
+
+    openModal('New part',
       fieldRow('Part #', '<input id="kPart" style="' + IN + '" required>') +
-      fieldRow('Description', '<input id="kDesc" style="' + IN + '" required>') +
-      '<div style="display:flex;gap:8px;"><div class="field" style="flex:1;"><label>Unit price ($)</label><input id="kPrice" value="0.00" style="' + IN + '"></div><div class="field" style="flex:1;"><label>Unit cost ($)</label><input id="kCost" value="0.00" style="' + IN + '"></div><div class="field" style="flex:1;"><label>Weight (lb)</label><input id="kWt" value="0" style="' + IN + '"></div></div>' +
-      fieldRow('Category', '<input id="kCat" value="OTHER" style="' + IN + '">') +
-      fieldRow('Manufacturer', '<input id="kMfr" placeholder="e.g. Summit Sensory Gym" style="' + IN + '">') +
-      fieldRow('Proposal group (optional)', '<input id="kGroup" style="' + IN + '">'),
+      fieldRow('Name', '<input id="kDesc" style="' + IN + '" required>') +
+      '<div style="display:flex;gap:8px;">' +
+        '<div class="field" style="flex:1;"><label>Unit price ($)</label><input id="kPrice" value="0.00" style="' + IN + '"></div>' +
+        '<div class="field" style="flex:1;"><label>Unit cost ($)</label><input id="kCost" value="0.00" style="' + IN + '"></div>' +
+        '<div class="field" style="flex:1;"><label>Weight (lb)</label><input id="kWt" value="0" style="' + IN + '"></div>' +
+      '</div>' +
+      fieldRow('Section', catField) +
+      fieldRow('Manufacturer', mfrField) +
+      '<div style="display:flex;gap:8px;">' +
+        // Tree placement, in the same form. This is Product.sortOrder — the position
+        // among its siblings in the section chosen above — so the part lands where it
+        // belongs instead of at the end of the list waiting to be dragged.
+        '<div class="field" style="flex:1;"><label>Position in section</label>' +
+          '<input id="kSort" type="number" min="0" value="0" style="' + IN + '"></div>' +
+        '<div class="field" style="flex:1;"><label>Default quantity</label>' +
+          '<input id="kQty" type="number" min="0" placeholder="none" style="' + IN + '"></div>' +
+      '</div>' +
+      fieldRow('Proposal group (optional)', '<input id="kGroup" style="' + IN + '">') +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#5c6157;margin-top:2px;cursor:pointer;">' +
+        '<input type="checkbox" id="kActive" checked> Available to quote straight away</label>' +
+      '<div class="muted" style="font-size:11.5px;margin-top:10px;line-height:1.55;">' +
+        'Creates the catalog record and the priced record together, and files it in the section chosen above. ' +
+        'A part is either fully created or not created at all \u2014 there is no half-made part to find later.</div>',
       async function (close, showErr) {
-        var part = document.getElementById('kPart').value.trim(); if (!part) return showErr('Part # is required.');
-        var desc = document.getElementById('kDesc').value.trim(); if (!desc) return showErr('Description is required.');
-        var body = { part: part, description: desc, unitPriceMinor: d2m(document.getElementById('kPrice').value), unitCostMinor: d2m(document.getElementById('kCost').value), weightLbs: parseFloat(document.getElementById('kWt').value) || 0, category: document.getElementById('kCat').value.trim() || 'OTHER', manufacturer: document.getElementById('kMfr').value.trim() || undefined, proposalGroup: document.getElementById('kGroup').value.trim() || undefined };
-        var r = await authed('/skus', { method: 'POST', body: body });
-        if (!r.ok) return showErr(r.status === 400 ? 'That part # may already exist.' : 'Could not create (' + r.status + ').');
+        var part = document.getElementById('kPart').value.trim();
+        if (!part) return showErr('Part # is required.');
+        var desc = document.getElementById('kDesc').value.trim();
+        if (!desc) return showErr('Name is required.');
+        var category = document.getElementById('kCat').value.trim();
+        if (!category) return showErr('Pick the section this part belongs in.');
+        var qtyRaw = document.getElementById('kQty').value.trim();
+
+        var body = {
+          part: part,
+          name: desc,
+          category: category,
+          unitPriceMinor: d2m(document.getElementById('kPrice').value),
+          unitCostMinor: d2m(document.getElementById('kCost').value),
+          weightLbs: parseFloat(document.getElementById('kWt').value) || 0,
+          sortOrder: parseInt(document.getElementById('kSort').value, 10) || 0,
+          active: !!document.getElementById('kActive').checked
+        };
+        var mfr = document.getElementById('kMfr').value.trim();
+        if (mfr) body.manufacturer = mfr;
+        var group = document.getElementById('kGroup').value.trim();
+        if (group) body.proposalGroup = group;
+        if (qtyRaw !== '') body.defaultQty = parseInt(qtyRaw, 10) || 0;
+
+        var r = await authed('/catalog/items', { method: 'POST', body: body });
+        if (!r.ok) {
+          // The server's own words. It names the manufacturers on record when the one
+          // sent is not among them, and says which part number already exists on a
+          // clash \u2014 both far more useful than a status code.
+          var msg = '';
+          try { msg = ((await r.json()) || {}).message || ''; } catch (e) {}
+          return showErr(msg || 'Could not create this part (' + r.status + ').');
+        }
         close(); refreshCatalogList(user);
       });
   }
@@ -2360,7 +2469,13 @@
         '<div class="muted" style="font-size:11.5px;margin-top:8px;line-height:1.5;">' +
           'Rows on a white ground record what the value was before the change. Rows on a grey ground come from the audit log, which records what was sent — it can say who and when, but not what it was before.' +
         '</div>';
+    if (d.rows.length) {
+      body += '<div style="display:flex;justify-content:flex-end;margin-top:10px;">' +
+        '<button class="link-btn" id="histCsv" style="width:auto;padding:8px 14px;">Export to CSV</button></div>';
+    }
     openModal(opts.title || 'Change history', body, null, null, { wide: true });
+    var xb = document.getElementById('histCsv');
+    if (xb) xb.addEventListener('click', function () { exportHistoryCsv(d.rows, opts); });
     var q = document.getElementById('histQ');
     if (q) {
       q.addEventListener('input', function () {
@@ -2374,6 +2489,44 @@
         ).map(historyRow).join('') || '<div class="muted" style="font-size:13px;">Nothing matches that.</div>';
       });
     }
+  }
+
+  /**
+   * Change history as a CSV.
+   *
+   * ONE ROW PER FIELD CHANGED, not per history entry. Tracing a mistake means asking
+   * "who put that value there", and that question is about a field — a single entry that
+   * changed price, cost and manufacturer at once is three separate answers. Flattening it
+   * here means the file sorts and filters by field in Excel, which is the whole reason to
+   * take it out of the screen.
+   *
+   * Revision rows carry a real before and after. Audit rows only know what was sent, so
+   * their Before reads "(not recorded)" rather than blank — a blank would look like an
+   * empty previous value, which is a different and misleading claim.
+   */
+  function exportHistoryCsv(rows, opts) {
+    var out = [['When', 'Who', 'Action', 'Record', 'Field', 'Before', 'After', 'Source']];
+    (rows || []).forEach(function (r) {
+      var when = r.createdAt ? new Date(r.createdAt).toLocaleString() : '';
+      var who = r.actorName || 'Unknown';
+      var action = historyActionLabel(r.action);
+      var label = r.label || '';
+      if (r.source === 'revision' && (r.changed || []).length) {
+        var b = r.before || {}, af = r.after || {};
+        r.changed.forEach(function (k) {
+          out.push([when, who, action, label, HIST_FIELD_LABELS[k] || k,
+            histVal(k, b[k]), histVal(k, af[k]), 'revision']);
+        });
+        return;
+      }
+      var det = r.details && Object.keys(r.details).length
+        ? Object.keys(r.details).map(function (k) { return k + ': ' + histVal(k, r.details[k]); }).join(' · ')
+        : '';
+      out.push([when, who, action, label, '', '(not recorded)', det, 'audit log']);
+    });
+    var name = 'history-' + String(opts && (opts.area || opts.entity) || 'catalog')
+      .toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + todayISO() + '.csv';
+    downloadCsv(name, out);
   }
 
   /** Duplicate sort orders in the live tree, with a one-click renumber. */

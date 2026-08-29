@@ -19,12 +19,12 @@ import { recordRevision, skuSnapshot } from '../lib/revisions.js';
  * whichever table owns it.
  */
 
-const slugify = (s: string) =>
-  s
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
+/*
+ * `slugify` lived here to mint a slug for a Manufacturer row created from a typed name.
+ * Nothing creates one from this route any more — an unrecognised vendor is refused — so
+ * the helper went with it. Vendors are created on the Manufacturers screen, which builds
+ * its own slug alongside the address and payment terms that make the record usable.
+ */
 
 /**
  * `overrideAllowed` arrived in migration 0024. Read it optionally so the catalog
@@ -295,16 +295,16 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
    *
    * The manufacturer must ALREADY EXIST
    * -----------------------------------
-   * Deliberately different from the PATCH, which does this:
+   * A name matching no `Manufacturer.name` is a 400 here, naming the ones that do exist.
    *
-   *     let mfr = await prisma.manufacturer.findFirst({ where: { name } });
-   *     if (!mfr) mfr = await prisma.manufacturer.create({ data: { name, slug: ... } });
-   *
-   * — so a mistyped vendor name silently CREATES a manufacturer. The new row has no
-   * address, no contact, no payment terms and none of the Bill of Materials email
-   * defaults, and it then appears in the manufacturer list looking exactly as legitimate
-   * as the real ones. The part is now sourced from a vendor that does not exist, and the
-   * first anyone knows is a purchase order with nowhere to go.
+   * The PATCH below used to do the opposite — create a Manufacturer row for any
+   * unrecognised name, with no address, no contact, no payment terms and none of the Bill
+   * of Materials email defaults, which then sat in the vendor list looking exactly as
+   * legitimate as the real ones. It no longer does; both paths refuse the same way. The
+   * history is worth keeping because the damage it caused is still on record in this repo:
+   * `src/handoff/vendorResolution.ts` was written because vendor identity lived in two
+   * places and only one was read, and `prisma/fix-vendor-name.ts` and
+   * `prisma/resync-order-vendors.ts` are both repair scripts for the aftermath.
    *
    * That is not a hypothetical. `src/handoff/vendorResolution.ts` exists because vendor
    * identity was recorded in two places and only one was read; there are two repair
@@ -524,19 +524,72 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
 
     if (d.manufacturer !== undefined) {
       const name = (d.manufacturer || '').trim();
+
+      /*
+       * Resolved BEFORE anything is written, and refused if it is not on record.
+       *
+       * This block used to do:
+       *
+       *     let mfr = await prisma.manufacturer.findFirst({ where: { name } });
+       *     if (!mfr) mfr = await prisma.manufacturer.create({ data: { name, slug } });
+       *
+       * — so a mistyped vendor name CREATED a manufacturer. The new row had no address,
+       * no contact, no payment terms and none of the Bill of Materials email defaults,
+       * and it then sat in the vendor list looking exactly as legitimate as the real
+       * ones. The part was sourced from a vendor that did not exist, and the first
+       * anyone knew was a purchase order with nowhere to send it.
+       *
+       * The catalog screen now offers a dropdown, so it cannot send an unknown name. This
+       * closes the endpoint itself, which the CSV importer and any other caller also use.
+       *
+       * The check comes FIRST, before the Sku write below, on purpose. Refusing at the
+       * sourcing step — where the old creation happened — would leave Sku.manufacturer
+       * already updated and ProductSourcing not, which is the two-records-disagreeing
+       * state that `resync-order-vendors.ts` exists to repair. Nothing is written unless
+       * the vendor is real.
+       *
+       * Matched case-insensitively, and the stored spelling wins, so "resilite" files the
+       * part under "Resilite" rather than creating a second spelling of one vendor.
+       */
+      let mfr: { id: string; name: string } | null = null;
+      if (name) {
+        mfr = await prisma.manufacturer.findFirst({
+          where: { name: { equals: name, mode: 'insensitive' } },
+          select: { id: true, name: true },
+        });
+        if (!mfr) {
+          const known = await prisma.manufacturer.findMany({
+            where: { isActive: true },
+            select: { name: true },
+            orderBy: { name: 'asc' },
+            take: 60,
+          });
+          throw new ValidationError(
+            `“${name}” is not a manufacturer on record, so this part would be sourced from ` +
+              `a vendor that does not exist. Use one of: ${known.map((m) => m.name).join(', ')}. ` +
+              `To add a new vendor, go to Catalog → Manufacturers, where its address and ` +
+              `payment terms can be entered.`,
+          );
+        }
+      }
+      const canonical = mfr ? mfr.name : '';
+
       if (sku) {
         const before = sku.manufacturer ?? '';
-        await prisma.sku.update({ where: { id: sku.id }, data: { manufacturer: name || null } });
+        await prisma.sku.update({
+          where: { id: sku.id },
+          data: { manufacturer: canonical || null },
+        });
         // Carry the change onto the open orders that still list this part under the
         // vendor it was bought from before.
-        if (name && name !== before) await reassignSkuVendor(sku.part, name, req.user!.sub);
+        if (canonical && canonical !== before) {
+          await reassignSkuVendor(sku.part, canonical, req.user!.sub);
+        }
       }
       if (product) {
-        if (!name) {
+        if (!mfr) {
           await prisma.productSourcing.deleteMany({ where: { productId: product.id } });
         } else {
-          let mfr = await prisma.manufacturer.findFirst({ where: { name } });
-          if (!mfr) mfr = await prisma.manufacturer.create({ data: { name, slug: slugify(name) } });
           const existing = await prisma.productSourcing.findFirst({
             where: { productId: product.id },
           });
