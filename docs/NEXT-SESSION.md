@@ -13,6 +13,15 @@ bad week.
 The retest needs a person and a browser. It is in `docs/AUD-003-STEP-1.md` under
 "In the browser", and it is deliberately long.
 
+**Paste `scripts/ssg-ui-selfcheck.js` into the console first.** 94 assertions that the
+primitives loaded and still return what they returned inside `app.js` — five seconds,
+and it clears the catastrophic class (a missing member, a typo'd alias, a body that
+changed on the way across) before you spend thirty minutes clicking. Proven to catch a
+narrowed `esc`, a reverted `todayISO`, a changed `td`, a deleted member and a wrong
+script order, with no false positives on the real module.
+
+It cannot tell you whether a screen renders. Nothing can except looking.
+
 ## What was done in this session, after step 1
 
 ### AUD-017 portal token replay — closed by inspection, clean
@@ -107,14 +116,43 @@ pnpm test:unit            # the 6 new portal-colour cases
 `status: { not: … }` with a nullable `submittedAt`, which is valid Prisma but is the
 kind of thing worth seeing `tsc` agree with.
 
+## Step 1 is doing its job — measured
+
+Not estimated. Every top-level declaration in the `app.js` closure (580) against every
+identifier each screen references:
+
+| Screen         | Needs from the shell | Satisfied by `SSGUI` | Still needs `app.js` | Predicted |
+| -------------- | -------------------- | -------------------- | -------------------- | --------- |
+| Catalog        | 22                   | 17                   | **4**                | 21 → ~4   |
+| Administration | 38                   | 17                   | **21**               | 30 → ~13  |
+
+Catalog is exactly what the module was built for. Administration is not, and that is the
+more useful half of the answer — the full working is in
+`docs/AUD-003-STEP-3-CATALOG.md`.
+
+Catalog also turns out to have **one** entry point: 85 of its 89 declarations are
+referenced nowhere outside its own block.
+
 ## Then, in order
 
-1. **Retest step 1 in a browser.** Everything else waits on this.
+1. **Retest step 1 in a browser.** Everything else waits on this. Self-check first.
 2. **Retest the AUD-021 dates** with the clock set to US Pacific, after 5pm local.
-3. **Catalog** — 2,559 lines, 92 functions. The largest clean win, and the thing step 1
-   was built to unblock. Should now need about 4 things from the shell rather than 21.
-4. **Administration** — 1,942 lines. About 13 needs rather than 30.
-5. **Configurators** — 1,297 lines.
+3. **Three small moves that unblock Catalog** — each independently shippable, none of
+   them the extraction:
+   - `streetLine` (7 lines) → `ssg-ui.js`. A pure address formatter sitting in Catalog's
+     workbook section by accident; its only callers are the builder and the BOM.
+   - The **standard-notes panel** (~70 lines) → its own file. Rendered by _both_ Catalog
+     and Administration; currently filed under Administration because that is where it
+     was written.
+   - The **vendor-parts dialog** (~230 lines) → its own file. The mirror: lives in
+     Catalog, called from Administration. Same defect twice, opposite directions.
+4. **Catalog** — then ~2,510 lines, one entry point, one injected dependency (`authed`),
+   one copied line (`canCatalogAdmin`, which is pure despite looking otherwise).
+5. **Configurators** — 1,297 lines. Moved ahead of Administration; see below.
+6. **Administration** — last of the four. 21 remaining needs, reaching into the proposal
+   preview, the configurator, Reports and the shell's own render and logout. The note
+   called this "low risk to move"; it is the screen most entangled with the shell,
+   because it is the screen that changes the shell.
 
 Leave the **proposal builder** (3,468 lines, 15 entry points) and **Orders / BOM /
 QuickBooks** (3,440 lines, 22 entry points) alone. Both sit on the money path.
