@@ -162,6 +162,24 @@
   /** Dollars typed by a person to minor units. Strips anything that is not a figure. */
   function d2m(v) { var n = parseFloat(String(v).replace(/[^0-9.\-]/g, '')); return isNaN(n) ? 0 : Math.round(n * 100); }
 
+  /* ---- addresses ---- */
+
+  /**
+   * Street and suite on ONE line: "10488 Centennial Road, Suite 100".
+   * They were separate rows, which printed a bare "100" under the street and read as
+   * a truncated address. A suite that already names itself keeps its own wording.
+   *
+   * Moved here from the Catalog section of app.js, where it sat by accident of where
+   * someone was working: its callers are the proposal builder and the Bill of
+   * Materials, and neither is Catalog.
+   */
+  function streetLine(l1, l2) {
+    var x = (l1 || '').trim(), y = (l2 || '').trim();
+    if (!y) return x;
+    if (!x) return y;
+    return x + ', ' + (/^(ste|suite|apt|apartment|unit|#|bldg|building|fl|floor|rm|room|dept|po box|p\.o\.)/i.test(y) ? y : 'Suite ' + y);
+  }
+
   /* ---- roles ---- */
 
   function hasRole(list, role) { return list.indexOf(role) !== -1; }
@@ -351,6 +369,8 @@
     money: money,
     costMoney: costMoney,
     d2m: d2m,
+    // addresses
+    streetLine: streetLine,
     // roles
     hasRole: hasRole,
     roleLabel: roleLabel,

@@ -1,27 +1,30 @@
-/*
- * window.SSGUI self-check — paste into the browser console on a signed-in page.
- *
- * NOT a Node script and not part of the build. It is a diagnostic for the browser pass
- * after an extraction: paste, read the summary, then go and look at screens.
- *
- * What it proves: the primitives module loaded, exports what it should, and every pure
- * primitive still returns what it returned before it moved out of app.js. That is the
- * catastrophic class of regression — a missing member, a typo'd alias, a body that
- * changed on the way across — and it takes five seconds rather than thirty minutes.
- *
- * What it does NOT prove: that any screen renders. A primitive can be perfect and a
- * screen still be broken. This narrows the browser pass; it does not replace it.
- *
- * Every assertion evaluates inside a try/catch, and that is not decoration. The first
- * draft called `U.statusChip(...)` directly, so deleting that member — exactly the
- * regression it exists to catch — threw and printed no summary at all. A check that
- * dies on the condition it is looking for is worse than no check, because the stack
- * trace reads as a broken tool rather than a broken build.
- *
- * Run it again after every later extraction (Catalog, Configurators, Administration).
- * The point of a shared foundation is that its contract stops changing, and this is how
- * you find out that it did not.
- */
+// window.SSGUI self-check — paste into the browser console on a signed-in page.
+//
+// NOT a Node script and not part of the build. It is a diagnostic for the browser pass
+// after an extraction: paste, read the summary, then go and look at screens.
+//
+// What it proves: the primitives module loaded, exports what it should, and every pure
+// primitive still returns what it returned before it moved out of app.js. That is the
+// catastrophic class of regression — a missing member, a typo'd alias, a body that
+// changed on the way across — and it takes five seconds rather than thirty minutes.
+//
+// What it does NOT prove: that any screen renders. A primitive can be perfect and a
+// screen still be broken. This narrows the browser pass; it does not replace it.
+//
+// Line comments, not a block comment, and deliberately. The first version opened with
+// /* and a paste that dropped the first line left an orphaned * at 1:1 — an
+// "Unexpected token *" that reads as a broken script rather than a short copy. Every
+// line here stands alone, so a partial paste loses documentation and still runs.
+//
+// Every assertion also evaluates inside a try/catch, for the same class of reason: the
+// first draft called U.statusChip(...) directly, so deleting that member — exactly the
+// regression it exists to catch — threw and printed no summary at all. A check that
+// dies on the condition it is looking for is worse than no check.
+//
+// Run it again after every later extraction (Catalog, Configurators, Administration).
+// The point of a shared foundation is that its contract stops changing, and this is how
+// you find out that it did not.
+
 (function () {
   'use strict';
 
@@ -102,6 +105,7 @@
     'money',
     'costMoney',
     'd2m',
+    'streetLine',
     'hasRole',
     'roleLabel',
     'td',
@@ -166,6 +170,10 @@
     ['esc', [null], ''],
     ['titleCase', ['SALES_MANAGER'], 'Sales Manager'],
     ['roleLabel', ['PROJECT_MANAGER'], 'Project Manager'],
+    // Street and suite on one line. A suite that already names itself keeps its wording.
+    ['streetLine', ['10488 Centennial Road', '100'], '10488 Centennial Road, Suite 100'],
+    ['streetLine', ['1 Main St', 'Unit 4'], '1 Main St, Unit 4'],
+    ['streetLine', ['1 Main St', ''], '1 Main St'],
     ['isoLocal', [new Date(2026, 7, 4)], '2026-08-04'],
     ['fmtDate', [null], '—'],
     ['fmtDateTime', [null], '—'],
@@ -280,6 +288,15 @@
     'SSGProposalDocument registered',
     function () {
       return typeof (window.SSGProposalDocument || {}).html;
+    },
+    'function',
+  );
+  // Shared by Catalog and Administration; if it is absent, the Proposal notes tab and
+  // the Administration panel both render an empty box rather than failing loudly.
+  check(
+    'SSGStandardNotes registered',
+    function () {
+      return typeof (window.SSGStandardNotes || {}).renderTab;
     },
     'function',
   );

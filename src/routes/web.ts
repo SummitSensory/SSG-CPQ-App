@@ -60,6 +60,8 @@ const CLIENT_SCRIPTS = [
   // The customer proposal document, lifted out of app.js.
   'proposal-document.js',
   // Screens that install their own nav entry and fail in isolation.
+  // Shared by Catalog and Administration, owned by neither.
+  'ssg-standard-notes.js',
   'accounts-receivable.js',
   'insights.js',
   'goals.js',

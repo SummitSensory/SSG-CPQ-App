@@ -214,6 +214,82 @@ that basis. `rt` was the one that needed a decision, and putting it in `ssg-ui.j
 what the caution above actually asks for — one implementation. `app.js` still hands that
 same function to the renderer through `useRules({ rt: rt, … })`.
 
+### Step 2 — clearing the way for Catalog (2026-08-28)
+
+Step 1 was retested clean on every screen, then Catalog's remaining dependencies were
+**measured** rather than estimated: every one of the 580 top-level declarations in the
+`app.js` closure against every identifier the screen references.
+
+| Screen         | Needs from the shell | Satisfied by `SSGUI` | Still needs `app.js` | Note's estimate |
+| -------------- | -------------------- | -------------------- | -------------------- | --------------- |
+| Catalog        | 22                   | 17                   | 4                    | 21 → ~4         |
+| Administration | 38                   | 17                   | 21                   | 30 → ~13        |
+
+Catalog is what step 1 was built for. Administration is not — see the correction at the
+end of this section.
+
+Catalog also turned out to have **one** entry point: 85 of its 89 top-level declarations
+are referenced nowhere outside its own block. Two apparent references were false
+positives and were checked by eye rather than trusted — `rep` inside Catalog is a local
+`var rep = pv.querySelector('#vpReport')`, and `cat` outside it is a local
+`var cat = Number(p.catalogCostMinor)` in the BOM code.
+
+Three moves followed, none of them the extraction itself. `app.js` drops from 15,920 to
+15,725 lines.
+
+**`streetLine` → `ssg-ui.js`.** Seven lines, pure, and sitting in Catalog's workbook
+section purely by accident of where someone was working. Its callers are the proposal
+builder and the Bill of Materials; neither is Catalog. Removing it also un-orphaned a
+doc comment that had been stranded above it and belonged to `pruneBlanks`.
+
+**Standard proposal notes → `public/ssg-standard-notes.js`.** The list, the editor, and
+the rich-text field the note text is typed into. This panel was rendered from **two**
+screens — Catalog → Proposal notes and Administration → Proposal content — and lived in
+the Administration half of the file because that is where it was written, so Catalog
+reached thirteen thousand lines up to call it. It is not Administration's panel that
+Catalog borrows; it is a shared panel with no home.
+
+The interesting part is what came with it. `mdToEditHtml`, `editHtmlToMd`,
+`richTextField`, `readRichText` and `wireRichText` — about a hundred lines near the top
+of `app.js` — look like general-purpose form primitives and were assumed to be. They are
+not: **the note form was their only caller**, all three entry points, and nothing else in
+the application types formatted text. So they moved into the notes module rather than
+into `ssg-ui.js`, which is both correct and a hundred lines cheaper.
+
+They also have to stay beside what reads them: the editor writes the same lightweight
+`**bold**` markup that `SSGUI.rt` prints on the customer document, and `mdToEditHtml` is
+`rt`'s inverse. Two implementations of that pair and the editor stops matching the
+printed page.
+
+That removes three of Administration's 21 remaining needs as a side effect.
+
+**Still to do: the vendor-parts dialog.** `openVendorParts` (231 lines) is the mirror
+image — it lives in **Catalog** and **Administration** calls it, at line 15060. Same
+shape, same remedy, not yet done. Catalog and Administration are coupled in both
+directions, and this is the second half.
+
+**Correction to the roadmap.** The note called Administration "changed rarely, low risk
+to move" and predicted ~13 remaining needs. Measured: 21, and the composition is the
+problem rather than the count — it reaches into the proposal preview
+(`proposalDocData`, `proposalStandaloneHtml`, `proposalFileName`), the configurator
+(`adv`), Reports (`bar`, `rep`), and the shell's own `renderShell`, `renderLogin`,
+`refresh` and `clearTokens`. That is not low risk: it is the screen most entangled with
+the shell, because it is the screen that changes the shell. **Revised order: Catalog →
+Configurators → Administration.**
+
+**A diagnostic worth keeping.** `scripts/ssg-ui-selfcheck.js` — pasted into the browser
+console, 72 assertions that the primitives loaded and still return what they returned
+inside `app.js`. Verified to catch a narrowed `esc`, a reverted `todayISO`, a UTC
+`fmtDate`, a changed `td`, a deleted member, an undocumented export, a wrong script
+order and a missing module, with no false positives. Run it after every later extraction.
+
+It is written in line comments rather than a block comment, and that is a scar: the first
+version opened with `/*`, a paste that dropped the first line left an orphaned `*` at
+1:1, and the resulting "Unexpected token \*" read as a broken script rather than a short
+copy. Every line now stands alone, so a partial paste loses documentation and still runs.
+
+---
+
 ### Step 1a — the retroactive de-duplication: closed, not done
 
 The plan claimed this module would also de-duplicate the copies in
@@ -796,6 +872,8 @@ pnpm build                # expect: success
 | 2026-08-28 | AUD-003 step 1: shared primitives module → `public/ssg-ui.js` (28 primitives; app.js 16,083 → 15,920)                                                                                                           | Shipped; **retest pending** — every screen, because `esc` has 780 references and `td` has 301. The blocker for every later extraction: Catalog drops from 21 needs to ~4, Administration from 30 to ~13                                                                                                                                                         |
 | 2026-08-28 | AUD-003 step 1a: the retroactive de-duplication of the six screen files                                                                                                                                         | **Closed as not-applicable.** Only ~12 of those lines are identical copies; the rest are different functions sharing a name, in screens that carry their own visual language on purpose. Recorded so it is not re-opened as debt                                                                                                                                |
 | 2026-08-28 | AUD-021 fix: two UTC-day date bugs found while reading those six files                                                                                                                                          | Shipped; **retest pending** — needs a west-of-UTC clock and a late-afternoon check                                                                                                                                                                                                                                                                              |
+| 2026-08-28 | AUD-003 step 1 **retested clean** — every screen, plus a 72-assertion console self-check                                                                                                                        | Passed. `scripts/ssg-ui-selfcheck.js` retained; run it after every later extraction                                                                                                                                                                                                                                                                             |
+| 2026-08-28 | AUD-003 step 2: `streetLine` → `ssg-ui.js`; standard notes + the rich-text editor → `public/ssg-standard-notes.js` (app.js 15,920 → 15,725)                                                                     | Shipped; **retest pending** — Catalog → Proposal notes and Administration → Proposal content. Measured first: Catalog needs 4 things from the shell, not 21. The rich-text editor had exactly one caller and was not a shared primitive at all                                                                                                                  |
 | 2026-08-28 | AUD-017 portal token replay                                                                                                                                                                                     | **Closed by inspection — clean.** 256-bit token, stored as sha256 in a unique column, rate-limited; an altered character 404s; resubmission is deliberate and stops at APPLIED. The review surfaced AUD-022                                                                                                                                                     |
 | 2026-08-28 | AUD-022: `applySelection` raced the customer and the two records disagreed silently                                                                                                                             | Shipped; **awaiting `pnpm test:unit`.** Claim-before-write inside a transaction, gated on the reviewed `submittedAt`; the applied colours now recorded on the order event. Found by reading the replay path, not by probing it                                                                                                                                  |
 | 2026-08-28 | AUD-021 third instance: `fmtStamp` printed a UTC date beside a local time in `belt-shipments.js` and `accounts-receivable.js`                                                                                   | Shipped; **retest pending.** Six call sites across two files. Initially deferred as screen-only on reasoning that did not hold — the defect was in `fmtStamp`, not the `fmtDate` the de-duplication decision covered                                                                                                                                            |
