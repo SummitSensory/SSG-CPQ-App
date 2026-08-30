@@ -352,6 +352,107 @@
     };
   }
 
+  /*
+   * The three block shapes a clause is built from.
+   *
+   * Module level, and shared, because the two documents are no longer different kinds of
+   * thing. They were: an "article" had sub-paragraphs and a "numbered clause" was a title
+   * and a run of prose, and the code said so by defining these inside the article renderer
+   * where nothing else could reach them. Terms and conditions now take sub-sections and
+   * trailing text on the same terms, so a second copy of each helper would be two sets of
+   * indents and margins to drift apart.
+   *
+   * `align` is passed rather than closed over, which is the only reason these could move
+   * out at all.
+   */
+  function pTag(html, first, align) {
+    return (
+      '<p style="margin:' +
+      (first ? '0' : '5px') +
+      ' 0 0;text-align:' +
+      align +
+      ';text-wrap:pretty;">' +
+      html +
+      '</p>'
+    );
+  }
+
+  /** A numbered sub-paragraph: the parties, or an enumerated list of claims. */
+  function subTag(numeral, html, align) {
+    return (
+      '<div style="display:flex;gap:8px;margin-top:4px;">' +
+      '<div style="flex:none;width:24px;">' +
+      numeral +
+      '.</div>' +
+      '<div style="flex:1;text-align:' +
+      align +
+      ';text-wrap:pretty;">' +
+      html +
+      '</div></div>'
+    );
+  }
+
+  /**
+   * A lettered sub-section: a heading of its own, then its own paragraphs.
+   *
+   * NOT wrapped in break-inside:avoid. One can legitimately run half a page, and forcing
+   * it whole would push it to a fresh sheet and leave the previous one short.
+   */
+  function subsectionTag(letter, heading, inner) {
+    return (
+      '<div style="display:flex;gap:9px;margin-top:11px;">' +
+      '<div style="flex:none;width:20px;font-weight:700;">' +
+      letter +
+      '.</div>' +
+      '<div style="flex:1;">' +
+      '<div style="font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">' +
+      heading +
+      '</div>' +
+      inner +
+      '</div></div>'
+    );
+  }
+
+  /**
+   * Everything under a clause heading, in one fixed order.
+   *
+   * paragraphs, then the numbered list, then lettered sub-sections, then trailing prose.
+   * Shared by both documents so a clause cannot be laid out one way in the acknowledgment
+   * and another in the terms.
+   *
+   * That last pass is the one that was impossible: a qualification such as "Nothing herein
+   * releases Summit from..." has to follow the list it qualifies, and with nowhere to put
+   * it, it had to be appended to the final list item where it read as part of that item.
+   */
+  function clauseBody(block, st, tokens, esc, fillFn) {
+    var out = (block.paragraphs || [])
+      .map(function (text, i) {
+        return pTag(fillFn(text, tokens, esc), i === 0, st.align);
+      })
+      .join('');
+    out += (block.subs || [])
+      .map(function (s) {
+        return subTag(esc(s.numeral), fillFn(s.text, tokens, esc), st.align);
+      })
+      .join('');
+    out += (block.subsections || [])
+      .map(function (ss) {
+        var inner = (ss.paragraphs || [])
+          .map(function (text, i) {
+            return pTag(fillFn(text, tokens, esc), i === 0, st.align);
+          })
+          .join('');
+        return subsectionTag(esc(ss.letter), esc(ss.title), inner);
+      })
+      .join('');
+    out += (block.trailing || [])
+      .map(function (text) {
+        return pTag(fillFn(text, tokens, esc), false, st.align);
+      })
+      .join('');
+    return out;
+  }
+
   /** The centred document heading and its rule. Editable text, fixed typesetting. */
   function heading(title, esc, titlePt) {
     return (
@@ -412,60 +513,16 @@
         '</div></div>'
       );
     };
+    // Thin wrappers over the shared helpers, so this renderer reads as it did while the
+    // indents and margins live in exactly one place.
     var p = function (html, first) {
-      return (
-        '<p style="margin:' +
-        (first ? '0' : '5px') +
-        ' 0 0;text-align:' +
-        st.align +
-        ';text-wrap:pretty;">' +
-        html +
-        '</p>'
-      );
+      return pTag(html, first, st.align);
     };
-    /** A lettered sub-paragraph, for the two parties under Article I. */
     var sub = function (numeral, html) {
-      return (
-        '<div style="display:flex;gap:8px;margin-top:4px;">' +
-        '<div style="flex:none;width:24px;">' +
-        numeral +
-        '.</div>' +
-        '<div style="flex:1;text-align:' +
-        st.align +
-        ';text-wrap:pretty;">' +
-        html +
-        '</div></div>'
-      );
+      return subTag(numeral, html, st.align);
     };
-
-    /**
-     * A lettered sub-section: a heading of its own, then its own paragraphs.
-     *
-     * The middle level between an article and a bare sub-paragraph. `sub()` above is a
-     * list item — a numeral and a run of text — which is right for naming the parties or
-     * enumerating released claims, but wrong for a block that needs its own title and
-     * several paragraphs under it.
-     *
-     * The letter hangs in the margin like the article numeral, one indent further in, so
-     * the three levels read as three levels rather than as differently-sized text.
-     *
-     * NOT wrapped in break-inside:avoid. A sub-section can legitimately run half a page,
-     * and forcing one whole would push it to a fresh sheet and leave the previous one
-     * short. The article-level rule handles keeping short blocks together.
-     */
-    var subsection = function (letter, heading, inner) {
-      return (
-        '<div style="display:flex;gap:9px;margin-top:11px;">' +
-        '<div style="flex:none;width:20px;font-weight:700;">' +
-        letter +
-        '.</div>' +
-        '<div style="flex:1;">' +
-        '<div style="font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">' +
-        heading +
-        '</div>' +
-        inner +
-        '</div></div>'
-      );
+    var subsection = function (letter, headingText, inner) {
+      return subsectionTag(letter, headingText, inner);
     };
 
     /**
@@ -538,36 +595,10 @@
      */
     var articles = (doc.articles || [])
       .map(function (a) {
-        var subsections = a.subsections || [];
-        var trailing = a.trailing || [];
-        var inner = (a.paragraphs || [])
-          .map(function (text, i) {
-            return p(fill(text, tokens, esc), i === 0);
-          })
-          .join('');
-        inner += (a.subs || [])
-          .map(function (s) {
-            return sub(esc(s.numeral), fill(s.text, tokens, esc));
-          })
-          .join('');
-        inner += subsections
-          .map(function (ss) {
-            var body = (ss.paragraphs || [])
-              .map(function (text, i) {
-                return p(fill(text, tokens, esc), i === 0);
-              })
-              .join('');
-            return subsection(esc(ss.letter), esc(ss.title), body);
-          })
-          .join('');
-        inner += trailing
-          .map(function (text) {
-            return p(fill(text, tokens, esc), false);
-          })
-          .join('');
+        var inner = clauseBody(a, st, tokens, esc, fill);
         // A sub-section carries its own heading and paragraphs, so an article holding any
         // is long by construction and must be allowed to break across pages.
-        return article(esc(a.numeral), esc(a.title), inner, !subsections.length);
+        return article(esc(a.numeral), esc(a.title), inner, !(a.subsections || []).length);
       })
       .join('');
 
@@ -624,36 +655,44 @@
       heading(doc.title, esc, st.titlePt) +
       (doc.sections || [])
         .map(function (sec, i) {
-          var body = String(sec.body == null ? '' : sec.body);
+          /*
+           * A clause's prose, from either shape.
+           *
+           * A numbered clause has always stored one `body` string split on blank lines.
+           * Now that these documents take sub-sections and trailing text the editor writes
+           * `paragraphs` — but only for a clause somebody has actually touched, and the two
+           * produce identical output, so an untouched terms document renders as it did.
+           */
+          var paragraphs = (sec.paragraphs || []).length
+            ? sec.paragraphs
+            : String(sec.body == null ? '' : sec.body).split(/\n\s*\n/);
+          var block = {
+            paragraphs: paragraphs,
+            subs: sec.subs || [],
+            subsections: sec.subsections || [],
+            trailing: sec.trailing || [],
+          };
+          var bulk = paragraphs.join('\n\n').length;
+          var hasParts = !!(block.subs.length || block.subsections.length || block.trailing.length);
           return (
             // Short clauses stay whole. The longest are allowed to break, because forcing
-            // them onto a fresh sheet would leave a third of a page empty ahead of them.
+            // them onto a fresh sheet would leave a third of a page empty ahead of them —
+            // and a clause carrying sub-sections is long by construction.
             '<div style="display:flex;gap:10px;margin-top:' +
             (i ? 10 : 14) +
             'px;' +
-            (body.length < 700 ? 'break-inside:avoid;page-break-inside:avoid;' : '') +
+            (bulk < 700 && !hasParts ? 'break-inside:avoid;page-break-inside:avoid;' : '') +
             '">' +
             '<div style="flex:none;width:22px;font-weight:700;">' +
+            // Positional, not stored: the number IS the position, so reordering clauses
+            // renumbers them instead of leaving "7." sitting third in the list.
             (i + 1) +
             '.</div>' +
             '<div style="flex:1;">' +
             '<div style="font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;">' +
             esc(sec.title) +
             '</div>' +
-            body
-              .split(/\n\s*\n/)
-              .map(function (para, j) {
-                return (
-                  '<p style="margin:' +
-                  (j ? '5px' : '0') +
-                  ' 0 0;text-align:' +
-                  st.align +
-                  ';text-wrap:pretty;">' +
-                  fill(para, tokens, esc) +
-                  '</p>'
-                );
-              })
-              .join('') +
+            clauseBody(block, st, tokens, esc, fill) +
             '</div></div>'
           );
         })

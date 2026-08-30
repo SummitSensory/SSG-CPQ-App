@@ -65,8 +65,11 @@
     var bodyId = 'lg_' + key + '_b_' + i;
     var numeral = isArticle ? block.numeral : String(i + 1);
 
+    // Both kinds, not only articles. A numbered clause takes a list, sub-sections and
+    // trailing text on exactly the same terms — the two documents are no longer different
+    // kinds of thing, only differently numbered.
     var subs = '';
-    if (isArticle && (block.subs || []).length) {
+    if ((block.subs || []).length) {
       subs =
         '<div style="margin-top:9px;padding-left:12px;border-left:2px solid #eceee8;">' +
         '<div class="muted" style="font-size:11px;margin-bottom:5px;">' +
@@ -113,7 +116,7 @@
      * divides itself into A, B, C.
      */
     var subsecs = '';
-    if (isArticle) {
+    if (true) {
       var list = block.subsections || [];
       subsecs =
         '<div style="margin-top:11px;padding-left:12px;border-left:2px solid #dce4d4;">' +
@@ -198,7 +201,7 @@
      * part of that item rather than as applying to all of them.
      */
     var trail = '';
-    if (isArticle) {
+    if (true) {
       var after = (block.trailing || []).join('\n\n');
       trail =
         '<div style="margin-top:10px;">' +
@@ -466,32 +469,39 @@
       if (!host) continue;
       var title = val('lg_' + doc.key + '_t_' + i, blocks[i].title);
       var body = val('lg_' + doc.key + '_b_' + i, bodyText(kind, blocks[i]));
+      /*
+       * Read for both kinds before the branch.
+       *
+       * These used to live inside the ARTICLES arm, because only an article had them.
+       * Numbered clauses now do too, and computing them in one place is what stops the
+       * two arms drifting into two slightly different readers of the same fields.
+       */
+      var subs = (blocks[i].subs || [])
+        .map(function (s, j) {
+          return {
+            numeral: val('lg_' + doc.key + '_sn_' + i + '_' + j, s.numeral),
+            text: val('lg_' + doc.key + '_sb_' + i + '_' + j, s.text),
+          };
+        })
+        .filter(function (s) {
+          return s.text;
+        });
+      var subsections = (blocks[i].subsections || [])
+        .map(function (ss, j) {
+          return {
+            letter: val('lg_' + doc.key + '_ssl_' + i + '_' + j, ss.letter),
+            title: val('lg_' + doc.key + '_sst_' + i + '_' + j, ss.title),
+            paragraphs: splitParas(
+              val('lg_' + doc.key + '_ssb_' + i + '_' + j, (ss.paragraphs || []).join('\n\n')),
+            ),
+          };
+        })
+        // A sub-section with neither heading nor text is one somebody added and thought
+        // better of. Dropped rather than saved as an empty block that fails validation.
+        .filter(function (ss) {
+          return ss.title || ss.paragraphs.length;
+        });
       if (kind === 'ARTICLES') {
-        var subs = (blocks[i].subs || [])
-          .map(function (s, j) {
-            return {
-              numeral: val('lg_' + doc.key + '_sn_' + i + '_' + j, s.numeral),
-              text: val('lg_' + doc.key + '_sb_' + i + '_' + j, s.text),
-            };
-          })
-          .filter(function (s) {
-            return s.text;
-          });
-        var subsections = (blocks[i].subsections || [])
-          .map(function (ss, j) {
-            return {
-              letter: val('lg_' + doc.key + '_ssl_' + i + '_' + j, ss.letter),
-              title: val('lg_' + doc.key + '_sst_' + i + '_' + j, ss.title),
-              paragraphs: splitParas(
-                val('lg_' + doc.key + '_ssb_' + i + '_' + j, (ss.paragraphs || []).join('\n\n')),
-              ),
-            };
-          })
-          // A sub-section with neither heading nor text is one somebody added and thought
-          // better of. Dropped rather than saved as an empty block that fails validation.
-          .filter(function (ss) {
-            return ss.title || ss.paragraphs.length;
-          });
         read.push({
           numeral: val('lg_' + doc.key + '_n_' + i, blocks[i].numeral),
           title: title,
@@ -503,7 +513,22 @@
           ),
         });
       } else {
-        read.push({ title: title, body: body });
+        /*
+         * `body` stays the prose for a numbered clause, and the new parts sit beside it.
+         *
+         * Not converted to `paragraphs`: the renderer reads `body` when `paragraphs` is
+         * absent and the two produce identical output, so leaving it alone means an
+         * untouched terms document is byte-for-byte what it was.
+         */
+        read.push({
+          title: title,
+          body: body,
+          subs: subs,
+          subsections: subsections,
+          trailing: splitParas(
+            val('lg_' + doc.key + '_tr_' + i, (blocks[i].trailing || []).join('\n\n')),
+          ),
+        });
       }
     }
     if (kind === 'ARTICLES') {
@@ -964,7 +989,7 @@
         var i = parseInt(parts[0], 10);
         var j = parseInt(parts[1], 10);
         var next = collect(doc);
-        var art = (next.articles || [])[i];
+        var art = (listOf(next) || [])[i];
         if (!art) return;
         art.subsections = art.subsections || [];
         mutate(art.subsections, j);
@@ -996,7 +1021,7 @@
         var doc = byKey(key);
         if (!doc) return;
         var next = collect(doc);
-        var art = (next.articles || [])[parseInt(raw, 10)];
+        var art = (listOf(next) || [])[parseInt(raw, 10)];
         if (!art) return;
         mutate(art);
         doc.draft = next;

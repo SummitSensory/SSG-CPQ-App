@@ -64,9 +64,20 @@ const Article = z.object({
   trailing: z.array(z.string().trim().min(1).max(20000)).default([]),
 });
 
+/*
+ * A numbered clause, which now takes the same parts an article does.
+ *
+ * `body` stays required and stays the prose. It was tempting to replace it with
+ * `paragraphs` for symmetry, and wrong: every stored terms document has `body`, the
+ * renderer produces identical output from either, and a migration of live legal wording
+ * to gain nothing but tidiness is a bad trade on a signed instrument.
+ */
 const Section = z.object({
   title: z.string().trim().min(1).max(200),
   body: z.string().trim().min(1).max(20000),
+  subs: z.array(Sub).max(40).default([]),
+  subsections: z.array(Subsection).max(26).default([]),
+  trailing: z.array(z.string().trim().min(1).max(20000)).default([]),
 });
 
 /**
@@ -118,6 +129,17 @@ const Content = z
     }
     // An article with a heading and nothing under it would print as a numeral, a title and
     // a gap. Satisfied by prose, a list or a sub-section — any of the three.
+    (v.sections ?? []).forEach((s, i) => {
+      s.subsections.forEach((ss, j) => {
+        if (!ss.paragraphs.length) {
+          const where = `${i + 1}${ss.letter || String.fromCharCode(65 + j)}`;
+          ctx.addIssue({
+            code: 'custom',
+            message: `Sub-section ${where} (${ss.title}) has a heading but no text.`,
+          });
+        }
+      });
+    });
     (v.articles ?? []).forEach((a, i) => {
       if (!a.paragraphs.length && !a.subs.length && !a.subsections.length) {
         const which = a.numeral || String(i + 1);
@@ -177,6 +199,14 @@ function unknownTokens(content: LegalDocumentContent): string[] {
   for (const s of content.sections ?? []) {
     scan(s.title);
     scan(s.body);
+    // The same scan the articles get. A typo in a merge field prints a visible gap on a
+    // signed document, and it must not be the customer who finds it.
+    (s.subs ?? []).forEach((x) => scan(x.text));
+    for (const ss of s.subsections ?? []) {
+      scan(ss.title);
+      ss.paragraphs.forEach(scan);
+    }
+    (s.trailing ?? []).forEach(scan);
   }
   return [...found];
 }

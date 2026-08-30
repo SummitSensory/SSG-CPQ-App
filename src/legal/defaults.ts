@@ -79,9 +79,21 @@ export interface LegalArticle {
 }
 
 /** A numbered clause, as the terms are built from. Blank lines split paragraphs. */
+/**
+ * A numbered clause.
+ *
+ * It now takes the same parts an article does. `body` stays the prose rather than becoming
+ * `paragraphs`: every stored terms document has `body`, the renderer produces identical
+ * output from either, and migrating live legal wording to gain nothing but symmetry is a
+ * bad trade on a signed instrument.
+ */
 export interface LegalSection {
   title: string;
   body: string;
+  subs?: LegalSub[];
+  subsections?: LegalSubsection[];
+  /** Prose printed after the lists — see the note on `LegalArticle.trailing`. */
+  trailing?: string[];
 }
 
 /**
