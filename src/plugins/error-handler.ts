@@ -54,15 +54,20 @@ export function registerErrorHandler(app: FastifyInstance): void {
      *
      * Restricted to 4xx. A 5xx from Fastify is a genuine fault and must keep falling
      * through to the alert below.
+     *
+     * Read through one narrowed view rather than casting at each use. `error` is
+     * `unknown` here — which is why every branch above reaches `.message` only after an
+     * `instanceof` check. Each field is checked for the type it is used as, so a thrown
+     * object with a numeric `code`, or a `message` that is not a string, cannot put a
+     * number or an object into a JSON error response.
      */
-    const fastifyStatus =
-      typeof (error as { statusCode?: number }).statusCode === 'number'
-        ? (error as { statusCode: number }).statusCode
-        : 0;
+    const shape = error as { statusCode?: unknown; code?: unknown; message?: unknown };
+    const fastifyStatus = typeof shape.statusCode === 'number' ? shape.statusCode : 0;
     if (fastifyStatus >= 400 && fastifyStatus < 500) {
-      const code = (error as { code?: string }).code ?? 'BAD_REQUEST';
-      req.log.warn({ code, statusCode: fastifyStatus }, error.message);
-      return reply.status(fastifyStatus).send({ error: code, message: error.message });
+      const code = typeof shape.code === 'string' ? shape.code : 'BAD_REQUEST';
+      const message = typeof shape.message === 'string' ? shape.message : 'Bad request';
+      req.log.warn({ code, statusCode: fastifyStatus }, message);
+      return reply.status(fastifyStatus).send({ error: code, message });
     }
 
     req.log.error({ err: error }, 'unhandled error');
