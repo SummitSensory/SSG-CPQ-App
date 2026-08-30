@@ -25,7 +25,12 @@ const DRY_RUN = process.argv.includes('--dry-run');
 const SEED_USER_EMAIL = process.env.SEED_ADMIN_EMAIL ?? 'admin@summitsensory.com';
 
 const slugify = (s: string): string =>
-  s.toLowerCase().replace(/[™®]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+  s
+    .toLowerCase()
+    .replace(/[™®]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
 
 /** Frames are K-40xx; everything else in this line is padding. */
 const skuCategory = (sku: string): string => (/^K-40/.test(sku) ? 'SOAR_FRAME' : 'SOAR_PADDING');
@@ -55,14 +60,26 @@ async function main(): Promise<void> {
     return;
   }
 
-  const seedUser = await prisma.user.findUnique({ where: { email: SEED_USER_EMAIL }, select: { id: true } });
-  if (!seedUser) throw new Error(`Seed user ${SEED_USER_EMAIL} not found — run pnpm db:seed first.`);
+  const seedUser = await prisma.user.findUnique({
+    where: { email: SEED_USER_EMAIL },
+    select: { id: true },
+  });
+  if (!seedUser)
+    throw new Error(`Seed user ${SEED_USER_EMAIL} not found — run pnpm db:seed first.`);
 
   const lineIdByName = new Map<string, string>();
   for (const l of data.productLines) {
-    const payload = { name: l.name, description: l.description ?? null, sortOrder: l.sortOrder, isActive: l.isActive };
+    const payload = {
+      name: l.name,
+      description: l.description ?? null,
+      sortOrder: l.sortOrder,
+      isActive: l.isActive,
+    };
     const row = await prisma.productLine.upsert({
-      where: { slug: l.slug }, update: payload, create: { slug: l.slug, ...payload }, select: { id: true },
+      where: { slug: l.slug },
+      update: payload,
+      create: { slug: l.slug, ...payload },
+      select: { id: true },
     });
     lineIdByName.set(l.name, row.id);
   }
@@ -70,12 +87,18 @@ async function main(): Promise<void> {
   const manIdByName = new Map<string, string>();
   for (const m of data.manufacturers) {
     const payload = {
-      slug: m.code ?? slugify(m.name), isThirdParty: m.isThirdParty,
-      defaultLeadTimeDays: m.defaultLeadTimeDays ?? null, contactName: m.contact ?? null,
-      notes: m.notes ?? null, isActive: m.isActive,
+      slug: m.code ?? slugify(m.name),
+      isThirdParty: m.isThirdParty,
+      defaultLeadTimeDays: m.defaultLeadTimeDays ?? null,
+      contactName: m.contact ?? null,
+      notes: m.notes ?? null,
+      isActive: m.isActive,
     };
     const row = await prisma.manufacturer.upsert({
-      where: { name: m.name }, update: payload, create: { name: m.name, ...payload }, select: { id: true },
+      where: { name: m.name },
+      update: payload,
+      create: { name: m.name, ...payload },
+      select: { id: true },
     });
     manIdByName.set(m.name, row.id);
   }
@@ -86,8 +109,16 @@ async function main(): Promise<void> {
   for (const [name, productLineId] of lineIdByName) {
     const slug = `unfiled-${slugify(name)}`;
     const cat = await prisma.productCategory.upsert({
-      where: { slug }, update: {},
-      create: { name: `Unfiled — ${name}`, slug, productLineId, tierLevel: 1, sortOrder: 9999, isActive: false },
+      where: { slug },
+      update: {},
+      create: {
+        name: `Unfiled — ${name}`,
+        slug,
+        productLineId,
+        tierLevel: 1,
+        sortOrder: 9999,
+        isActive: false,
+      },
       select: { id: true },
     });
     unfiledByLine.set(name, cat.id);
@@ -96,15 +127,28 @@ async function main(): Promise<void> {
   const productIdBySku = new Map<string, string>();
   for (const p of data.products) {
     const shared = {
-      name: p.name, productLineId: lineIdByName.get(p.productLine) ?? null,
-      defaultQuantity: p.defaultQuantity, badge: p.badge ?? null,
-      lengthIn: p.lengthIn ?? null, widthIn: p.widthIn ?? null, heightIn: p.heightIn ?? null,
-      thicknessIn: p.thicknessIn ?? null, dimensionsOverride: p.dimensionsOverride ?? null,
-      showDimensions: p.showDimensions, weightOz: p.weightOz ?? null,
+      name: p.name,
+      productLineId: lineIdByName.get(p.productLine) ?? null,
+      defaultQuantity: p.defaultQuantity,
+      badge: p.badge ?? null,
+      lengthIn: p.lengthIn ?? null,
+      widthIn: p.widthIn ?? null,
+      heightIn: p.heightIn ?? null,
+      thicknessIn: p.thicknessIn ?? null,
+      dimensionsOverride: p.dimensionsOverride ?? null,
+      showDimensions: p.showDimensions,
+      weightOz: p.weightOz ?? null,
     };
     const row = await prisma.product.upsert({
-      where: { sku: p.sku }, update: shared,
-      create: { sku: p.sku, status: 'ACTIVE', categoryId: unfiledByLine.get(p.productLine)!, createdById: seedUser.id, ...shared },
+      where: { sku: p.sku },
+      update: shared,
+      create: {
+        sku: p.sku,
+        status: 'ACTIVE',
+        categoryId: unfiledByLine.get(p.productLine)!,
+        createdById: seedUser.id,
+        ...shared,
+      },
       select: { id: true },
     });
     productIdBySku.set(p.sku, row.id);
@@ -113,13 +157,19 @@ async function main(): Promise<void> {
   const tierIdBySlug = new Map<string, string>();
   for (const t of tiersInInsertOrder(data.tiers)) {
     const payload = {
-      name: t.name, productLineId: lineIdByName.get(t.productLine) ?? null, tierLevel: t.tierLevel,
+      name: t.name,
+      productLineId: lineIdByName.get(t.productLine) ?? null,
+      tierLevel: t.tierLevel,
       parentId: t.parentSlug ? (tierIdBySlug.get(t.parentSlug) ?? null) : null,
       productId: t.sku ? (productIdBySku.get(t.sku) ?? null) : null,
-      sortOrder: t.sortOrder, isActive: true,
+      sortOrder: t.sortOrder,
+      isActive: true,
     };
     const row = await prisma.productCategory.upsert({
-      where: { slug: t.slug }, update: payload, create: { slug: t.slug, ...payload }, select: { id: true },
+      where: { slug: t.slug },
+      update: payload,
+      create: { slug: t.slug, ...payload },
+      select: { id: true },
     });
     tierIdBySlug.set(t.slug, row.id);
   }
@@ -136,12 +186,21 @@ async function main(): Promise<void> {
     const existing = await prisma.productCost.findFirst({ where: { productId, effectiveDate } });
     if (existing) {
       if (existing.unitCost !== BigInt(c.unitCostMinor)) {
-        await prisma.productCost.update({ where: { id: existing.id }, data: { unitCost: BigInt(c.unitCostMinor) } });
+        await prisma.productCost.update({
+          where: { id: existing.id },
+          data: { unitCost: BigInt(c.unitCostMinor) },
+        });
       }
       continue;
     }
     await prisma.productCost.create({
-      data: { productId, unitCost: BigInt(c.unitCostMinor), currency: c.currency, effectiveDate, createdById: seedUser.id },
+      data: {
+        productId,
+        unitCost: BigInt(c.unitCostMinor),
+        currency: c.currency,
+        effectiveDate,
+        createdById: seedUser.id,
+      },
     });
     costsInserted += 1;
   }
@@ -150,11 +209,15 @@ async function main(): Promise<void> {
     const productId = productIdBySku.get(s.sku)!;
     const manufacturerId = manIdByName.get(s.manufacturer)!;
     const payload = {
-      vendorPartNo: s.vendorPartNo ?? null, leadTimeDays: s.leadTimeDays ?? null,
-      minOrderQty: s.minOrderQty ?? null, isPrimary: s.isPrimary, notes: s.notes ?? null,
+      vendorPartNo: s.vendorPartNo ?? null,
+      leadTimeDays: s.leadTimeDays ?? null,
+      minOrderQty: s.minOrderQty ?? null,
+      isPrimary: s.isPrimary,
+      notes: s.notes ?? null,
     };
     await prisma.productSourcing.upsert({
-      where: { productId_manufacturerId: { productId, manufacturerId } }, update: payload,
+      where: { productId_manufacturerId: { productId, manufacturerId } },
+      update: payload,
       create: { productId, manufacturerId, ...payload },
     });
   }
@@ -184,8 +247,14 @@ async function main(): Promise<void> {
     });
     const seedCost = costBySku.get(p.sku) ?? 0;
     const seedWeight = p.weightOz ? p.weightOz / 16 : 0;
-    if (current && (current.unitPriceMinor !== p.unitPriceMinor || (current.unitCostMinor && current.unitCostMinor !== seedCost))) {
-      console.log(`    ${p.sku}: kept catalog price ${(current.unitPriceMinor / 100).toFixed(2)} / cost ${(current.unitCostMinor / 100).toFixed(2)} (workbook said ${(p.unitPriceMinor / 100).toFixed(2)} / ${(seedCost / 100).toFixed(2)})`);
+    if (
+      current &&
+      (current.unitPriceMinor !== p.unitPriceMinor ||
+        (current.unitCostMinor && current.unitCostMinor !== seedCost))
+    ) {
+      console.log(
+        `    ${p.sku}: kept catalog price ${(current.unitPriceMinor / 100).toFixed(2)} / cost ${(current.unitCostMinor / 100).toFixed(2)} (workbook said ${(p.unitPriceMinor / 100).toFixed(2)} / ${(seedCost / 100).toFixed(2)})`,
+      );
       skusKept += 1;
     }
     const payload = {
@@ -200,11 +269,17 @@ async function main(): Promise<void> {
       defaultQty: p.defaultQuantity,
       active: true,
     };
-    await prisma.sku.upsert({ where: { part: p.sku }, update: payload, create: { part: p.sku, ...payload } });
+    await prisma.sku.upsert({
+      where: { part: p.sku },
+      update: payload,
+      create: { part: p.sku, ...payload },
+    });
     skusWritten += 1;
   }
 
-  console.log(`\n  Applied. ${costsInserted} new cost row(s), ${skusWritten} SKU price row(s), ${skusKept} left at the catalog price.\n`);
+  console.log(
+    `\n  Applied. ${costsInserted} new cost row(s), ${skusWritten} SKU price row(s), ${skusKept} left at the catalog price.\n`,
+  );
 }
 
 main()

@@ -35,7 +35,7 @@ Commit `package.json` and `pnpm-lock.yaml`.
 
 ### Why the versions don't have to match exactly
 
-Since Playwright 1.57 the bundled browser is *Chrome for Testing*, not Chromium —
+Since Playwright 1.57 the bundled browser is _Chrome for Testing_, not Chromium —
 so strictly speaking Playwright's browser and the Sparticuz pack are different
 builds. That does not matter here, because the renderer passes an explicit
 `executablePath` and drives whatever binary it is pointed at over the DevTools
@@ -87,21 +87,21 @@ For each row: type the name, paste the value, tick **Production** and
 
 **Required:**
 
-| Name | Value |
-|---|---|
+| Name                | Value                                                      |
+| ------------------- | ---------------------------------------------------------- |
 | `CHROMIUM_PACK_URL` | the `.tar` URL from step 2 (or your Blob copy from step 3) |
 
 **Optional** — every one has a working default, so only add what you want to
 change:
 
-| Name | Default if you skip it |
-|---|---|
-| `BOM_FROM_EMAIL` | `orders@updates.summitsensory.com` |
-| `BOM_FROM_NAME` | `Summit Sensory Gym` |
-| `BOM_REPLY_TO` | `Orders@SummitSensory.com` |
-| `BOM_BCC_EMAIL` | *(none — set it to blind-copy every vendor BOM internally)* |
-| `FINANCE_PARTNER_EMAIL` | `ckinsey@ryancapital.com` |
-| `RESEND_WEBHOOK_SECRET` | *(unset — see below)* |
+| Name                    | Default if you skip it                                      |
+| ----------------------- | ----------------------------------------------------------- |
+| `BOM_FROM_EMAIL`        | `orders@updates.summitsensory.com`                          |
+| `BOM_FROM_NAME`         | `Summit Sensory Gym`                                        |
+| `BOM_REPLY_TO`          | `Orders@SummitSensory.com`                                  |
+| `BOM_BCC_EMAIL`         | _(none — set it to blind-copy every vendor BOM internally)_ |
+| `FINANCE_PARTNER_EMAIL` | `ckinsey@ryancapital.com`                                   |
+| `RESEND_WEBHOOK_SECRET` | _(unset — see below)_                                       |
 
 ### Delivery confirmation (optional, recommended)
 
@@ -138,10 +138,10 @@ just verify after the next deploy.
 
 **Deployments** → newest → **Functions** tab. You should see two:
 
-| Function | Memory | Max duration |
-|---|---|---|
-| `api/index` | default | 30 s |
-| `api/render` | 2 GB | 60 s |
+| Function     | Memory  | Max duration |
+| ------------ | ------- | ------------ |
+| `api/index`  | default | 30 s         |
+| `api/render` | 2 GB    | 60 s         |
 
 If `api/render` is missing, `vercel.json` did not get committed.
 

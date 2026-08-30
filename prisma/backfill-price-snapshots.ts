@@ -17,12 +17,16 @@ async function main() {
   const versions = await prisma.proposalVersion.findMany({
     where: { priceSnapshotId: null, status: { in: ['RELEASED', 'ACCEPTED'] } },
     select: {
-      id: true, sections: true, items: true,
+      id: true,
+      sections: true,
+      items: true,
       proposal: { select: { number: true, createdById: true } },
     },
   });
 
-  console.log(`Found ${versions.length} version${versions.length === 1 ? '' : 's'} with no price snapshot.`);
+  console.log(
+    `Found ${versions.length} version${versions.length === 1 ? '' : 's'} with no price snapshot.`,
+  );
 
   let done = 0;
   for (const v of versions) {

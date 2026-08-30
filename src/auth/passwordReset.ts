@@ -45,7 +45,10 @@ function resetHtml(m: ResetEmail): string {
 /** Development fallback: log the link instead of sending it. */
 class LogResetSender implements ResetSender {
   async send(m: ResetEmail): Promise<void> {
-    logger.warn({ email: m.email, link: m.link }, 'password reset: RESEND_API_KEY unset, link logged not sent');
+    logger.warn(
+      { email: m.email, link: m.link },
+      'password reset: RESEND_API_KEY unset, link logged not sent',
+    );
   }
 }
 
@@ -88,7 +91,11 @@ export function setResetSender(s: ResetSender): void {
  * returns the same response either way so the endpoint cannot be used to discover
  * which emails are registered. A deactivated account gets no email either.
  */
-export async function requestPasswordReset(rawEmail: string, baseUrl: string, requestIp?: string): Promise<void> {
+export async function requestPasswordReset(
+  rawEmail: string,
+  baseUrl: string,
+  requestIp?: string,
+): Promise<void> {
   const email = rawEmail.trim().toLowerCase();
   const user = await prisma.user.findUnique({
     where: { email },
@@ -110,7 +117,10 @@ export async function requestPasswordReset(rawEmail: string, baseUrl: string, re
 
   const link = `${baseUrl.replace(/\/+$/, '')}/?reset=${raw}`;
   await resetSender.send({
-    email: user.email, name: user.name, link, expiresInMinutes: TOKEN_TTL_MINUTES,
+    email: user.email,
+    name: user.name,
+    link,
+    expiresInMinutes: TOKEN_TTL_MINUTES,
   });
 }
 
@@ -129,13 +139,21 @@ export async function checkResetToken(raw: string): Promise<ResetTokenState> {
 }
 
 /** Consume a token, returning the user it belongs to. Null when unusable. */
-export async function consumeResetToken(raw: string): Promise<{ id: string; email: string } | null> {
+export async function consumeResetToken(
+  raw: string,
+): Promise<{ id: string; email: string } | null> {
   const tokenHash = hashToken(raw);
   const row = await prisma.passwordResetToken.findUnique({
     where: { tokenHash },
-    select: { id: true, usedAt: true, expiresAt: true, user: { select: { id: true, email: true, isActive: true } } },
+    select: {
+      id: true,
+      usedAt: true,
+      expiresAt: true,
+      user: { select: { id: true, email: true, isActive: true } },
+    },
   });
-  if (!row || row.usedAt || row.expiresAt.getTime() <= Date.now() || !row.user.isActive) return null;
+  if (!row || row.usedAt || row.expiresAt.getTime() <= Date.now() || !row.user.isActive)
+    return null;
   // Mark used before changing the password so a double-submit cannot reuse it.
   const claimed = await prisma.passwordResetToken.updateMany({
     where: { id: row.id, usedAt: null },

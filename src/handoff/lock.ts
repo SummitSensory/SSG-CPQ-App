@@ -49,7 +49,10 @@ export function depositFromSnapshot(snap: PriceSnapshotLike): bigint {
 }
 
 /** Build the frozen content snapshot stored on the order. */
-export function buildContentSnapshot(version: AcceptedVersionLike, snap: PriceSnapshotLike): ContentSnapshot {
+export function buildContentSnapshot(
+  version: AcceptedVersionLike,
+  snap: PriceSnapshotLike,
+): ContentSnapshot {
   return {
     proposalVersionId: version.id,
     acceptedVersion: version.version,
@@ -68,14 +71,16 @@ export function buildContentSnapshot(version: AcceptedVersionLike, snap: PriceSn
  */
 export function computeIntegrityHash(snapshot: ContentSnapshot): string {
   return createHash('sha256')
-    .update(JSON.stringify({
-      v: snapshot.proposalVersionId,
-      n: snapshot.acceptedVersion,
-      p: snapshot.priceSnapshotId,
-      g: snapshot.grandTotalMinor,
-      s: snapshot.sections,
-      i: snapshot.items,
-    }))
+    .update(
+      JSON.stringify({
+        v: snapshot.proposalVersionId,
+        n: snapshot.acceptedVersion,
+        p: snapshot.priceSnapshotId,
+        g: snapshot.grandTotalMinor,
+        s: snapshot.sections,
+        i: snapshot.items,
+      }),
+    )
     .digest('hex');
 }
 
@@ -107,10 +112,23 @@ export interface SeededTask {
 /** Baseline internal tasks seeded on every new order (owners are roles). */
 export function defaultTasks(depositRequired: boolean): SeededTask[] {
   const tasks: SeededTask[] = [];
-  if (depositRequired) tasks.push({ title: 'Create QuickBooks deposit invoice', assigneeRole: 'ACCOUNTING', category: null });
+  if (depositRequired)
+    tasks.push({
+      title: 'Create QuickBooks deposit invoice',
+      assigneeRole: 'ACCOUNTING',
+      category: null,
+    });
   tasks.push(
-    { title: 'Create or update monday.com project', assigneeRole: 'PROJECT_MANAGER', category: null },
-    { title: 'Verify Bill of Materials & order parts', assigneeRole: 'OPERATIONS', category: 'PRODUCTION' },
+    {
+      title: 'Create or update monday.com project',
+      assigneeRole: 'PROJECT_MANAGER',
+      category: null,
+    },
+    {
+      title: 'Verify Bill of Materials & order parts',
+      assigneeRole: 'OPERATIONS',
+      category: 'PRODUCTION',
+    },
     { title: 'Schedule shipping / delivery', assigneeRole: 'OPERATIONS', category: 'SHIPPING' },
     { title: 'Schedule installation', assigneeRole: 'PROJECT_MANAGER', category: 'INSTALLATION' },
     { title: 'Schedule training', assigneeRole: 'PROJECT_MANAGER', category: 'TRAINING' },
@@ -118,9 +136,20 @@ export function defaultTasks(depositRequired: boolean): SeededTask[] {
   return tasks;
 }
 
-interface KitComponent { part?: string; name?: string; qty?: number; unitCostMinor?: number; weightLbs?: number }
+interface KitComponent {
+  part?: string;
+  name?: string;
+  qty?: number;
+  unitCostMinor?: number;
+  weightLbs?: number;
+}
 interface ItemLike {
-  ref?: string; sku?: string; productId?: string; name?: string; quantity?: number; kind?: string;
+  ref?: string;
+  sku?: string;
+  productId?: string;
+  name?: string;
+  quantity?: number;
+  kind?: string;
   components?: KitComponent[] | null;
 }
 

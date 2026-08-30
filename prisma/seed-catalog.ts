@@ -68,7 +68,8 @@ async function main(): Promise<void> {
     where: { email: SEED_USER_EMAIL },
     select: { id: true },
   });
-  if (!seedUser) throw new Error(`Seed user ${SEED_USER_EMAIL} not found — run pnpm db:seed first.`);
+  if (!seedUser)
+    throw new Error(`Seed user ${SEED_USER_EMAIL} not found — run pnpm db:seed first.`);
 
   // ----- Product lines -----
   const lineIdByName = new Map<string, string>();
@@ -282,7 +283,9 @@ async function main(): Promise<void> {
     if (patch.weightLbs) skuWeightsFilled += 1;
   }
 
-  console.log(`\n  Applied. ${costsInserted} new cost row(s), ${skuCostsFilled} SKU cost(s) and ${skuWeightsFilled} SKU weight(s) filled from the workbook.\n`);
+  console.log(
+    `\n  Applied. ${costsInserted} new cost row(s), ${skuCostsFilled} SKU cost(s) and ${skuWeightsFilled} SKU weight(s) filled from the workbook.\n`,
+  );
 }
 
 main()

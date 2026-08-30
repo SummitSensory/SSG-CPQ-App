@@ -4,18 +4,18 @@ What changed, why, and what to do after deploying.
 
 ## 1. “Sourcing” is gone; the section is the Bill of Materials
 
-“Sourcing” was a per-line status meaning *someone has actually placed this order*.
+“Sourcing” was a per-line status meaning _someone has actually placed this order_.
 It printed on the vendor PDF because that PDF was a straight dump of the on-screen
 table. It is now the **Status** column (Pending / Ordered), and the whole area is
 named consistently:
 
-| Was | Now |
-| --- | --- |
-| Nav: Orders & Handoff | Nav: **Orders & Bill of Materials** |
-| Section: Procurement | Section: **Bill of Materials** |
-| PDF title: Procurement — *Vendor* | **Bill of Materials** — *Vendor* |
-| Column: Sourcing | **Status** |
-| Buttons: Export all | **Export BOM** |
+| Was                                                   | Now                                                        |
+| ----------------------------------------------------- | ---------------------------------------------------------- |
+| Nav: Orders & Handoff                                 | Nav: **Orders & Bill of Materials**                        |
+| Section: Procurement                                  | Section: **Bill of Materials**                             |
+| PDF title: Procurement — _Vendor_                     | **Bill of Materials** — _Vendor_                           |
+| Column: Sourcing                                      | **Status**                                                 |
+| Buttons: Export all                                   | **Export BOM**                                             |
 | Seeded task: “Verify procurement list & source items” | “Verify Bill of Materials & order parts” (new orders only) |
 
 The database table is still `ProcurementLine` — renaming it would break every
@@ -29,33 +29,33 @@ PDF exports can never disagree.
 
 It prints:
 
-* **Summit Sensory Gym branding** — logo, name, 6150 S Geneva Court, Englewood CO
+- **Summit Sensory Gym branding** — logo, name, 6150 S Geneva Court, Englewood CO
   80111, 720-440-7850, Orders@SummitSensory.com.
-* **Ship from (vendor)** — from the manufacturer record.
-* **Ship to** — the customer's site or Summit's dock, chosen per order.
-* **Customer of record** — organisation, primary contact, title, email, phone and
+- **Ship from (vendor)** — from the manufacturer record.
+- **Ship to** — the customer's site or Summit's dock, chosen per order.
+- **Customer of record** — organisation, primary contact, title, email, phone and
   shipping address, from CRM.
-* **Header fields** — job, submission date, delivery type, powder coat brand,
+- **Header fields** — job, submission date, delivery type, powder coat brand,
   estimated shipment quote, total steel weight, total weight, vendor terms.
-* **Lines** — Line # (part number), description, qty, powder colour, extended
+- **Lines** — Line # (part number), description, qty, powder colour, extended
   weight, cost each, total cost, vendor notes.
-* **Footer** — prepared by (the signed-in user), created date/time, order number.
+- **Footer** — prepared by (the signed-in user), created date/time, order number.
 
 Prices are **our unit cost** — this is a purchasing document, not a quote. Cost
 and unit weight are snapshotted onto each line at lock time (and backfilled once
 for orders locked before this build), so reprinting a BOM a year later reproduces
 the same document.
 
-**Total steel weight** sums only lines whose vendor is flagged *steel fabricator*
+**Total steel weight** sums only lines whose vendor is flagged _steel fabricator_
 in the Manufacturers tab, which is what excludes hardware and crating. The
 migration sets that flag on **Goldberg Brothers**; flag any other fabricator
 yourself.
 
-**Zero-quantity parts** are off by default. Tick *Include zero-quantity parts*
+**Zero-quantity parts** are off by default. Tick _Include zero-quantity parts_
 before exporting to get the full order-form style — the rest of that vendor's
 active catalogue at qty 0. It only applies to a single-vendor export.
 
-**Powder colour** is per line, and there is a one-shot *Apply to steel lines* box
+**Powder colour** is per line, and there is a one-shot _Apply to steel lines_ box
 in the header for the normal case of one colour per job.
 
 ## 3. Manufacturers (Catalog → Manufacturers)
@@ -64,9 +64,9 @@ A real vendor record: name, primary contact (name, title, email, phone),
 secondary contact, full address, website, our account number, payment terms,
 default lead time, third-party flag, steel-fabricator flag, active flag, notes.
 
-* Renaming a manufacturer also rewrites the vendor name stored on flat SKU rows,
+- Renaming a manufacturer also rewrites the vendor name stored on flat SKU rows,
   so parts never silently lose their vendor.
-* A vendor referenced by any part or order line **cannot** be deleted — deactivate
+- A vendor referenced by any part or order line **cannot** be deleted — deactivate
   it. Deactivating leaves every past order and BOM untouched.
 
 ## 4. Bundles (Catalog → Bundles)
@@ -89,21 +89,21 @@ actual parts instead of a wrapper. One level only — bundles cannot nest.
 
 ## 5. Product tree: rename, reorder, export, import
 
-* **Categories & tiers** — rename inline, change tier, show/hide, reorder with the
+- **Categories & tiers** — rename inline, change tier, show/hide, reorder with the
   arrows, delete (only when empty). Renaming never moves a product.
-* **Reorder list** — the default product order used by the proposal picker and the
+- **Reorder list** — the default product order used by the proposal picker and the
   tier listings (`Product.sortOrder`).
-* **Export tree / Import tree** — a workbook with one sheet per level:
+- **Export tree / Import tree** — a workbook with one sheet per level:
   `Categories`, `Products`, `Bundles`. Export then re-import round-trips exactly.
 
 Import rules (both the tree import and the catalog CSV import):
 
-* Matched on **slug** (categories) and **part number** (products).
-* **Only the columns present in the file are written.** A sheet of `part,unitCost`
+- Matched on **slug** (categories) and **part number** (products).
+- **Only the columns present in the file are written.** A sheet of `part,unitCost`
   reprices and touches nothing else.
-* **Nothing is ever deleted.** Parts the file leaves out are listed in a review
-  step; you choose *leave as they are* or *deactivate*.
-* Everything is previewed first — press Import a second time to commit.
+- **Nothing is ever deleted.** Parts the file leaves out are listed in a review
+  step; you choose _leave as they are_ or _deactivate_.
+- Everything is previewed first — press Import a second time to commit.
 
 ## 6. Endpoints added
 

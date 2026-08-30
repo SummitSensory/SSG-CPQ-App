@@ -17,13 +17,24 @@ const VERSION_ID = 'PASTE_ACCEPTED_PROPOSAL_VERSION_ID';
   const H = { authorization: 'Bearer ' + at, 'content-type': 'application/json' };
 
   async function call(method, url, body) {
-    const r = await fetch(url, { method, headers: H, body: body ? JSON.stringify(body) : undefined });
+    const r = await fetch(url, {
+      method,
+      headers: H,
+      body: body ? JSON.stringify(body) : undefined,
+    });
     const text = await r.text();
     let parsed;
-    try { parsed = JSON.parse(text); } catch { parsed = text; }
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = text;
+    }
     const row = { step: `${method} ${url}`, status: r.status, body: parsed };
-    console.log(row.status < 400 ? '%c✓ ' + row.step : '%c✗ ' + row.step,
-      row.status < 400 ? 'color:green' : 'color:red', row);
+    console.log(
+      row.status < 400 ? '%c✓ ' + row.step : '%c✗ ' + row.step,
+      row.status < 400 ? 'color:green' : 'color:red',
+      row,
+    );
     if (r.status >= 400) throw new Error(`${row.step} -> ${r.status} ${text}`);
     return parsed;
   }
@@ -31,8 +42,10 @@ const VERSION_ID = 'PASTE_ACCEPTED_PROPOSAL_VERSION_ID';
   const results = {};
 
   async function run(type) {
-    const prepared = await call('POST', '/integrations/quickbooks/transactions/prepare',
-      { proposalVersionId: VERSION_ID, type });
+    const prepared = await call('POST', '/integrations/quickbooks/transactions/prepare', {
+      proposalVersionId: VERSION_ID,
+      type,
+    });
     const id = prepared.id;
     await call('POST', `/integrations/quickbooks/transactions/${id}/authorize`);
     const executed = await call('POST', `/integrations/quickbooks/transactions/${id}/execute`);
@@ -57,6 +70,10 @@ const VERSION_ID = 'PASTE_ACCEPTED_PROPOSAL_VERSION_ID';
 
   const pretty = JSON.stringify(results, (_k, v) => (typeof v === 'bigint' ? String(v) : v), 2);
   console.log(pretty);
-  try { await navigator.clipboard.writeText(pretty); console.log('%c✓ copied to clipboard', 'color:green'); }
-  catch { console.log('Clipboard blocked — copy the JSON above manually.'); }
+  try {
+    await navigator.clipboard.writeText(pretty);
+    console.log('%c✓ copied to clipboard', 'color:green');
+  } catch {
+    console.log('Clipboard blocked — copy the JSON above manually.');
+  }
 })();

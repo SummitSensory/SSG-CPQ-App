@@ -1,13 +1,26 @@
 import { describe, it, expect } from 'vitest';
 import { hardwareBOM, type AdvAnswers } from '../../src/proposals/adventureSeries.js';
-import { DEFAULT_HARDWARE_RULES, mergeHardwareRules, type HardwareRule } from '../../src/proposals/hardwareRules.js';
+import {
+  DEFAULT_HARDWARE_RULES,
+  mergeHardwareRules,
+  type HardwareRule,
+} from '../../src/proposals/hardwareRules.js';
 
 // A 10' × 10' square, 4 legs, one ladder, 4 saddle brackets (2 swivel), one V-ring
 // 10-pack, no trolley or zip line. Frame BOM: A-2245 3, A-2246 1, A-2242 4,
 // P-2531 1, A-2253 1, P-2330 5, P-2028 8, P-2124 4.
 const answers: AdvAnswers = {
-  length: 10, width: 10, config: 'Square', legs: 4, ladders: 1,
-  brackets: true, bracketsQty: 4, swivel360: 2, forged: 0, swingHanger: 0, vRings: 1,
+  length: 10,
+  width: 10,
+  config: 'Square',
+  legs: 4,
+  ladders: 1,
+  brackets: true,
+  bracketsQty: 4,
+  swivel360: 2,
+  forged: 0,
+  swingHanger: 0,
+  vRings: 1,
 };
 
 const qtyOf = (part: string, rules?: HardwareRule[]): number =>
@@ -42,7 +55,21 @@ describe('hardware quantity rules (workbook defaults)', () => {
 describe('database overrides', () => {
   it('applies an edited coefficient without touching the other rules', () => {
     const rules = mergeHardwareRules([
-      { part: '6820H-LAK', name: '1/2" × 4" Titen HD Screw Anchor, Zinc', terms: [{ source: 'bom:A-2245', coefficient: 5 }, { source: 'bom:A-2246', coefficient: 5 }], constant: 1, factor: 1, roundMode: 'CEIL', roundStep: 1, mode: 'SUM', minZero: true, active: true },
+      {
+        part: '6820H-LAK',
+        name: '1/2" × 4" Titen HD Screw Anchor, Zinc',
+        terms: [
+          { source: 'bom:A-2245', coefficient: 5 },
+          { source: 'bom:A-2246', coefficient: 5 },
+        ],
+        constant: 1,
+        factor: 1,
+        roundMode: 'CEIL',
+        roundStep: 1,
+        mode: 'SUM',
+        minZero: true,
+        active: true,
+      },
     ]);
     expect(qtyOf('6820H-LAK', rules)).toBe(21); // ceil(4 × 5 + 1)
     expect(qtyOf('6820H-LA', rules)).toBe(26); // untouched

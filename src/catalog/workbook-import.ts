@@ -133,18 +133,24 @@ export function validateCatalogSeed(data: CatalogSeedData): ValidationReport {
   for (const p of data.products) {
     if (skus.has(p.sku)) err('Products', p.sku, 'duplicate SKU');
     skus.add(p.sku);
-    if (!lineNames.has(p.productLine)) err('Products', p.sku, `unknown product line "${p.productLine}"`);
+    if (!lineNames.has(p.productLine))
+      err('Products', p.sku, `unknown product line "${p.productLine}"`);
     if (p.unitPriceMinor == null) warn('Products', p.sku, 'no unit price');
   }
 
   const tierSlugs = new Set(data.tiers.map((t) => t.slug));
   const placedSkus = new Set<string>();
   for (const t of data.tiers) {
-    if (!lineNames.has(t.productLine)) err('Tier Structure', t.slug, `unknown product line "${t.productLine}"`);
-    if (t.tierLevel === 1 && t.parentSlug) err('Tier Structure', t.slug, 'tier 1 cannot have a parent');
-    if (t.tierLevel > 1 && !t.parentSlug) err('Tier Structure', t.slug, `tier ${t.tierLevel} requires a parent`);
-    if (t.parentSlug && !tierSlugs.has(t.parentSlug)) err('Tier Structure', t.slug, `parent "${t.parentSlug}" not found`);
-    if (t.tierLevel === 1 && t.sku) err('Tier Structure', t.slug, 'tier 1 must be a header, not a product');
+    if (!lineNames.has(t.productLine))
+      err('Tier Structure', t.slug, `unknown product line "${t.productLine}"`);
+    if (t.tierLevel === 1 && t.parentSlug)
+      err('Tier Structure', t.slug, 'tier 1 cannot have a parent');
+    if (t.tierLevel > 1 && !t.parentSlug)
+      err('Tier Structure', t.slug, `tier ${t.tierLevel} requires a parent`);
+    if (t.parentSlug && !tierSlugs.has(t.parentSlug))
+      err('Tier Structure', t.slug, `parent "${t.parentSlug}" not found`);
+    if (t.tierLevel === 1 && t.sku)
+      err('Tier Structure', t.slug, 'tier 1 must be a header, not a product');
     if (t.sku) {
       if (!skus.has(t.sku)) err('Tier Structure', t.slug, `SKU ${t.sku} not in Products`);
       placedSkus.add(t.sku);
@@ -161,7 +167,8 @@ export function validateCatalogSeed(data: CatalogSeedData): ValidationReport {
   const costedSkus = new Set<string>();
   for (const c of data.costs) {
     if (!skus.has(c.sku)) err('Costs', c.sku, 'SKU not in Products');
-    if (Number.isNaN(Date.parse(c.effectiveDate))) err('Costs', c.sku, `unparseable effective date "${c.effectiveDate}"`);
+    if (Number.isNaN(Date.parse(c.effectiveDate)))
+      err('Costs', c.sku, `unparseable effective date "${c.effectiveDate}"`);
     if (c.defaultedDate) warn('Costs', c.sku, 'no effective date given — defaulted to import date');
     costedSkus.add(c.sku);
   }
@@ -173,7 +180,8 @@ export function validateCatalogSeed(data: CatalogSeedData): ValidationReport {
   const primaryBySku = new Map<string, number>();
   for (const s of data.sourcing) {
     if (!skus.has(s.sku)) err('Product Sourcing', s.sku, 'SKU not in Products');
-    if (!manNames.has(s.manufacturer)) err('Product Sourcing', s.sku, `unknown manufacturer "${s.manufacturer}"`);
+    if (!manNames.has(s.manufacturer))
+      err('Product Sourcing', s.sku, `unknown manufacturer "${s.manufacturer}"`);
     if (s.isPrimary) primaryBySku.set(s.sku, (primaryBySku.get(s.sku) ?? 0) + 1);
     sourcedSkus.add(s.sku);
   }
@@ -181,7 +189,8 @@ export function validateCatalogSeed(data: CatalogSeedData): ValidationReport {
     if (n > 1) err('Product Sourcing', sku, `${n} primary manufacturers — only one allowed`);
   }
   for (const sku of skus) {
-    if (!sourcedSkus.has(sku)) warn('Product Sourcing', sku, 'no manufacturer — will not appear on the BOM');
+    if (!sourcedSkus.has(sku))
+      warn('Product Sourcing', sku, 'no manufacturer — will not appear on the BOM');
   }
 
   return {

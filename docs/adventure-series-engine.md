@@ -4,12 +4,14 @@ Source: `Summit Sensory Gym START - PSF - Single Quote - v73 (25) - Claude Test-
 Tabs: `bryan@…` (customer/freight/tax input) · `VLOOKUP` (questions+part logic) · `Calcs` (parts→price/weight) · `Adventure Series Proposal (USA)` (filtered output) · `lists` (SKU master) · `Resilite Mat Cost List`.
 
 ## Flow
+
 1. Enter customer + dims + freight/tax on input tab.
 2. `VLOOKUP` tab: D = question, E = answer. Answers drive a config code and part-quantity formulas (H:R region).
 3. `Calcs` tab: each part row computes ORDER QUANTITY (E/F) from the VLOOKUP logic, PRICE PER PART (G = `VLOOKUP(part, lists!I:L, 4)`), WEIGHT PER PART (O), TOTAL (J = qty×price). Subtotals by category: Frame, Trolley, Sensory Gym Accessories.
 4. `Proposal (USA)`: filters to qty>0 rows and lays them out in the grouped proposal.
 
 ## Questions (VLOOKUP D/E) → drive logic
+
 - Design Layout (Rectangle/Square/L Shape/T Shape) → config prefix SQ-/R-/L-/T-
 - Monkey Bars (Yes/No) → +MB; # Monkey Bar Sets
 - # Legs (4/6/8) ; # Ladders (0–4) → L0..L4
@@ -20,6 +22,7 @@ Tabs: `bryan@…` (customer/freight/tax input) · `VLOOKUP` (questions+part logi
 - Adventure Mat System: Floor / Column / Ladder Leg / Custom
 
 ## Floor padding (mats) — `src/proposals/matPricing.ts`
+
 Decision tree in the builder: **Floor Padding Yes/No** → if Yes, **thickness 3.25" or 2"**.
 
 The mat is sized off the frame footprint and priced per square foot:
@@ -39,19 +42,21 @@ with `-2` appended for the 2" pad — e.g. `R-SSG-0808CLM` and `R-SSG-0808CLM-2`
 
 Price and cost come from the formula, not the catalog, so any new frame size prices
 without a new catalog row; the catalog record (when the part exists) only supplies
-weight. The line prints under *Adventure Mat System* and flows into revenue, COGS and
+weight. The line prints under _Adventure Mat System_ and flows into revenue, COGS and
 margin on the builder and in the logic trace (`Floor Padding` rule row). Tests:
 `tests/unit/mat-pricing.test.ts`.
 
 - Accessory Brackets: # brackets, # 360 swivel (≤brackets), # 3/8" non-swivel = brackets−swivel, # 1/2" forged, # swing hanger (packs of 2), # V-rings (10pk), Auto-Locking Carabiner (4pk) = (forged+swivel)/4, Webbing Sling
 
 ## Beam quantity logic (key)
+
 - Legs from config: 4/6/8 (by length range in decision doc; here chosen directly).
 - SHORT beams (end caps) by WIDTH (6→P-2206, 7→P-2545/P-2207, 8→A-2408, 9→A-2409, 10→A-2410), qty 2 each.
 - LONG beams by LENGTH, qty = (legs-derived count) − short-beam total.
 - Interior/monkey-bar members chosen by length & config.
 
 ## SKU master (lists tab) — PART# · DESCRIPTION · price col L (Goldberg) [trolley uses col M]
+
 A-2245 Vertical Tall <80 w/Gusset — 242.5 (wt 68.25)
 A-2241 Corner Post 1-Way — 73 (11.886)
 A-2242 Corner Post 2-Way — 76.5 (14.932)
@@ -79,15 +84,19 @@ Slide: A-2216 Summit Adventure Slide 252 ; scoop slide 136 ; WS8203 Gray Upcharg
 Hardware bagged letters (per-each prices) in lists rows 52–80.
 
 ## Markups / tax (Calcs)
+
 - M1 = tax 6.5% ; M2 = markup 1.3 (30%). "Price per w Tax" = price×1.065. "PRICE PER PART" col L = ROUND(cost×1.3,2) in some rows.
 - **OPEN: confirm which number is the customer selling price** (list col L as-is, vs cost×markup, vs "Selling Price" col N).
 
 ## Freight
+
 - Total weight = SUM of (qty × weight-per-part) across all included parts (Calcs col O × F).
 - Freight determined from total weight (method/table on input tab — needs confirmation).
 
 ## Beam calculator (VLOOKUP tab H:R) — qty per part flows to Calcs via VLOOKUP!H:R col 11 (col R = TOTAL)
+
 Per part#, TOTAL qty = SUM(J:N) + SUM(O:P). Columns encode contributions:
+
 - Verticals A-2245: J = legs-based (E6=4→4, =6→6, =8→8); P = −E7 (ladders reduce). A-2246 (w/rungs): P = E7 (ladders add).
 - Corner posts A-2242 2-way = 4 if legs>0; A-2243 3-way (K = 2 if legs 6, L = 4 if legs 8); L-Shape adjustments in col M.
 - Mid Span A-2225: N = interiorBeams×2; O = 2 if monkey bars.
@@ -97,8 +106,9 @@ Per part#, TOTAL qty = SUM(J:N) + SUM(O:P). Columns encode contributions:
   - LONG BEAMS by LENGTH: member qty = (legs long-count) − short-beam total.
 - Monkey bar rungs P-2330: O = 9 if monkey bars; P = E7×5 (ladders). Zip line P-2024 = 2 if zip. Base Plate Shield P-2028 = verticals×2.
 - Trolley parts (if Trolley=Yes): P-2018 Trolley Bar 1, P-2025 Plate 2, rail by length, TRH2005 ×6, TRN2016 ×4, TRT2001 ×2.
-NOTE: port these formulas verbatim — beam count correctness is the single most critical output.
+  NOTE: port these formulas verbatim — beam count correctness is the single most critical output.
 
 ## Mat system + Resilite
+
 - Mat SKU chosen by config code (e.g. `SQ-R-SSA-1010CLM`). Detailed mat-SKU logic to be provided by user.
 - Resilite Mat Cost List tab holds mat pricing.
