@@ -12,7 +12,8 @@
 import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
-const money = (m: number | null | undefined): string => (m == null ? '—' : `$${(m / 100).toFixed(2)}`);
+const money = (m: number | null | undefined): string =>
+  m == null ? '—' : `$${(m / 100).toFixed(2)}`;
 
 async function main() {
   const tiers = await prisma.productCategory.findMany({
@@ -25,16 +26,26 @@ async function main() {
     },
   });
 
-  const byProduct = new Map<string, { sku: string; name: string; lines: Set<string>; places: string[] }>();
+  const byProduct = new Map<
+    string,
+    { sku: string; name: string; lines: Set<string>; places: string[] }
+  >();
   for (const t of tiers) {
     if (!t.product) continue;
-    const e = byProduct.get(t.productId!) ?? { sku: t.product.sku, name: t.product.name, lines: new Set<string>(), places: [] };
+    const e = byProduct.get(t.productId!) ?? {
+      sku: t.product.sku,
+      name: t.product.name,
+      lines: new Set<string>(),
+      places: [],
+    };
     if (t.productLine?.name) e.lines.add(t.productLine.name);
     e.places.push(t.name);
     byProduct.set(t.productId!, e);
   }
 
-  const shared = [...byProduct.values()].filter((e) => e.lines.size > 1).sort((a, b) => a.sku.localeCompare(b.sku));
+  const shared = [...byProduct.values()]
+    .filter((e) => e.lines.size > 1)
+    .sort((a, b) => a.sku.localeCompare(b.sku));
   if (!shared.length) {
     console.log('No part sits in more than one product line.');
     return;
@@ -46,12 +57,16 @@ async function main() {
   });
   const bySku = new Map(skus.map((s) => [s.part, s]));
 
-  console.log(`\n${shared.length} part(s) shared across product lines — catalog price is the one in force:\n`);
+  console.log(
+    `\n${shared.length} part(s) shared across product lines — catalog price is the one in force:\n`,
+  );
   const needsPrice: string[] = [];
   for (const s of shared) {
     const k = bySku.get(s.sku);
     if (!k || !k.unitPriceMinor) needsPrice.push(s.sku);
-    console.log(`  ${s.sku.padEnd(14)} ${money(k?.unitPriceMinor)} price / ${money(k?.unitCostMinor)} cost / ${Number(k?.weightLbs ?? 0).toFixed(2)} lb`);
+    console.log(
+      `  ${s.sku.padEnd(14)} ${money(k?.unitPriceMinor)} price / ${money(k?.unitCostMinor)} cost / ${Number(k?.weightLbs ?? 0).toFixed(2)} lb`,
+    );
     console.log(`  ${''.padEnd(14)} ${s.name}`);
     console.log(`  ${''.padEnd(14)} lines: ${[...s.lines].join(', ')}\n`);
   }

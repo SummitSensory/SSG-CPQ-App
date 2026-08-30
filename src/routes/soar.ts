@@ -3,7 +3,11 @@ import { prisma } from '../lib/prisma.js';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import {
-  computeSoarProposal, SOAR_FRAMES, SOAR_PAD_ROWS, type SoarAnswers, type SoarSkuRec,
+  computeSoarProposal,
+  SOAR_FRAMES,
+  SOAR_PAD_ROWS,
+  type SoarAnswers,
+  type SoarSkuRec,
 } from '../proposals/soarSeries.js';
 
 /** Server-side Summit Soar pricing engine: answers -> priced, grouped lines.
@@ -20,24 +24,40 @@ export function registerSoarRoutes(app: FastifyInstance): void {
   async function skuMap(): Promise<Record<string, SoarSkuRec>> {
     const [rows, products, costs] = await Promise.all([
       prisma.sku.findMany({
-        select: { part: true, description: true, unitPriceMinor: true, unitCostMinor: true, weightLbs: true, category: true },
+        select: {
+          part: true,
+          description: true,
+          unitPriceMinor: true,
+          unitCostMinor: true,
+          weightLbs: true,
+          category: true,
+        },
       }),
       prisma.product.findMany({ select: { id: true, sku: true, name: true, weightOz: true } }),
-      prisma.productCost.findMany({ select: { productId: true, unitCost: true, effectiveDate: true }, orderBy: { effectiveDate: 'desc' } }),
+      prisma.productCost.findMany({
+        select: { productId: true, unitCost: true, effectiveDate: true },
+        orderBy: { effectiveDate: 'desc' },
+      }),
     ]);
     const latestCost: Record<string, number> = {};
-    for (const c of costs) if (latestCost[c.productId] === undefined) latestCost[c.productId] = Number(c.unitCost);
+    for (const c of costs)
+      if (latestCost[c.productId] === undefined) latestCost[c.productId] = Number(c.unitCost);
     const map: Record<string, SoarSkuRec> = {};
     for (const p of products) {
       map[p.sku] = {
-        part: p.sku, description: p.name, unitPriceMinor: 0,
-        unitCostMinor: latestCost[p.id] || 0, weightLbs: p.weightOz ? p.weightOz / 16 : 0,
+        part: p.sku,
+        description: p.name,
+        unitPriceMinor: 0,
+        unitCostMinor: latestCost[p.id] || 0,
+        weightLbs: p.weightOz ? p.weightOz / 16 : 0,
       };
     }
     for (const r of rows) {
       const prev = map[r.part];
       map[r.part] = {
-        part: r.part, description: r.description, unitPriceMinor: r.unitPriceMinor,
+        part: r.part,
+        description: r.description,
+        unitPriceMinor: r.unitPriceMinor,
         unitCostMinor: r.unitCostMinor || (prev ? prev.unitCostMinor : 0),
         weightLbs: r.weightLbs || (prev ? prev.weightLbs : 0),
         category: r.category,

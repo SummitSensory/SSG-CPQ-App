@@ -13,16 +13,16 @@ pnpm db:seed:catalog             # apply (idempotent, upsert by natural key)
 
 ## What came in
 
-| | count |
-|---|---|
-| Product lines | 4 (Adventure Series, Summit Soar, Summit Flex, Therapy Equipment) |
-| Manufacturers | 9 |
-| Products | 322 |
-| Tier headers | 19 |
-| Tier product placements | 322 |
-| Product notes | 6 |
-| Cost rows | 320 |
-| Sourcing rows | 309 |
+|                         | count                                                             |
+| ----------------------- | ----------------------------------------------------------------- |
+| Product lines           | 4 (Adventure Series, Summit Soar, Summit Flex, Therapy Equipment) |
+| Manufacturers           | 9                                                                 |
+| Products                | 322                                                               |
+| Tier headers            | 19                                                                |
+| Tier product placements | 322                                                               |
+| Product notes           | 6                                                                 |
+| Cost rows               | 320                                                               |
+| Sourcing rows           | 309                                                               |
 
 Tier tree as imported:
 
@@ -53,10 +53,10 @@ SUMMIT SOAR MATS & ACCESSORIES
 `sortOrder` is one global sequence, unique across the whole tree. Headers and
 products share the sequence, so a header always sorts above its own children.
 
-| Band | Owns |
-|---|---|
+| Band        | Owns                                                                |
+| ----------- | ------------------------------------------------------------------- |
 | 20000–39999 | Adventure Series and everything non-Soar (incl. HARDWARE at 30010+) |
-| 40000–49999 | Summit Soar |
+| 40000–49999 | Summit Soar                                                         |
 
 Numbering steps by 10 in document order so a row can be inserted between two
 neighbours without renumbering. Ties fall back to alphabetical, which is why
@@ -125,14 +125,14 @@ the JSON is regenerated; the seed script is safe to re-run.
 ## What the Hardware Kit line prints
 
 The H-1000 line's price, cost and weight are always the sum of the 37 fastener
-rules. What it *says* is a business number:
+rules. What it _says_ is a business number:
 `hardwareRollupDetail` (Administration → Formulas → Business numbers → "List
 every fastener on the Hardware Kit line").
 
-| Value | The line reads |
-|---|---|
+| Value       | The line reads                                                                  |
+| ----------- | ------------------------------------------------------------------------------- |
 | 0 (default) | `All mounting hardware for this structure — 214 pieces across 22 part numbers.` |
-| 1 | `4× Washer 1/2 Flat (6820H-LB) · 12× Hex Bolt… (6820H-LA) · …` |
+| 1           | `4× Washer 1/2 Flat (6820H-LB) · 12× Hex Bolt… (6820H-LA) · …`                  |
 
 The full breakdown is always available in the logic trace
 (`POST /proposals/adventure-series/trace`), so switching to 0 hides it from the
@@ -147,14 +147,14 @@ and are excluded from the roll-up, so they are never double-counted.
 Migration `0029_bom_vendor_sections`. The order-level BOM header columns on
 `AcceptedOrder` are unchanged and now act as the DEFAULTS a new section inherits.
 
-| Table | Holds |
-|---|---|
-| `BomVendorSection` | one header per (order, vendor): dates, notes, ship-to, sort order, confirm/unlock state |
-| `BomQuestionTemplate` | reusable questions, per vendor or all vendors (admin) |
-| `BomVendorAnswer` | those questions + answers, snapshotted onto the order |
-| `BomSend` | append-only audit of every BOM emailed to a vendor |
-| `PowderColorBrand` | the managed brand list — seeded with Cardinal and Prismatic |
-| `FinanceFactor` | Ryan Capital payment factor per term |
+| Table                 | Holds                                                                                   |
+| --------------------- | --------------------------------------------------------------------------------------- |
+| `BomVendorSection`    | one header per (order, vendor): dates, notes, ship-to, sort order, confirm/unlock state |
+| `BomQuestionTemplate` | reusable questions, per vendor or all vendors (admin)                                   |
+| `BomVendorAnswer`     | those questions + answers, snapshotted onto the order                                   |
+| `BomSend`             | append-only audit of every BOM emailed to a vendor                                      |
+| `PowderColorBrand`    | the managed brand list — seeded with Cardinal and Prismatic                             |
+| `FinanceFactor`       | Ryan Capital payment factor per term                                                    |
 
 New columns: `ProcurementLine.powderBrandId` + `powderColorCode`, `Sku.productUrl`,
 `Sku.requiresPowderColor`, and `Manufacturer.bomEmail*` (per-vendor email

@@ -29,7 +29,9 @@ function parse(text: string): Array<{ part: string; bag: string }> {
     const line = raw.trim();
     if (!line) continue;
     const cells = line.match(/("([^"]|"")*"|[^,]*)(,|$)/g) ?? [];
-    const [a, b] = cells.map((c) => c.replace(/,$/, '').trim().replace(/^"|"$/g, '').replace(/""/g, '"'));
+    const [a, b] = cells.map((c) =>
+      c.replace(/,$/, '').trim().replace(/^"|"$/g, '').replace(/""/g, '"'),
+    );
     if (!a) continue;
     if (/^part$/i.test(a)) continue; // header
     rows.push({ part: a, bag: (b ?? '').trim() });
@@ -54,9 +56,13 @@ async function main() {
   const changed = rows.filter((r) => bagByPart.has(r.part) && bagByPart.get(r.part) !== r.bag);
   const same = rows.length - unknown.length - changed.length;
 
-  console.log(`\n${rows.length} row(s): ${changed.length} to change, ${same} already correct, ${unknown.length} not in the catalog.`);
+  console.log(
+    `\n${rows.length} row(s): ${changed.length} to change, ${same} already correct, ${unknown.length} not in the catalog.`,
+  );
   for (const r of changed) {
-    console.log(`  ${r.part.padEnd(16)} ${(bagByPart.get(r.part) || '—').padEnd(12)} →  ${r.bag || '(cleared)'}`);
+    console.log(
+      `  ${r.part.padEnd(16)} ${(bagByPart.get(r.part) || '—').padEnd(12)} →  ${r.bag || '(cleared)'}`,
+    );
   }
   for (const u of unknown) console.warn(`  ${u.part}: no such part — skipped`);
 

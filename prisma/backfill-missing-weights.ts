@@ -32,7 +32,9 @@ async function main() {
   console.log(`SKUs at 0 lb: ${zeroSkus} of ${totalSkus}.`);
 
   const left = await prisma.product.count({ where: { weightOz: null } });
-  console.log(left === 0 ? 'Done. No product is missing a weight.' : `WARNING: ${left} still null.`);
+  console.log(
+    left === 0 ? 'Done. No product is missing a weight.' : `WARNING: ${left} still null.`,
+  );
 }
 
 main()

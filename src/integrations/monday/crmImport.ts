@@ -65,7 +65,13 @@ export interface ImportOptions {
 
 export interface ImportCounts {
   deals: { seen: number; created: number; updated: number; skipped: number };
-  organizations: { seen: number; created: number; updated: number; adopted: number; skipped: number };
+  organizations: {
+    seen: number;
+    created: number;
+    updated: number;
+    adopted: number;
+    skipped: number;
+  };
   primaryContacts: { created: number; updated: number; skipped: number };
   contacts: { seen: number; created: number; updated: number; skipped: number; unlinked: number };
   addresses: { created: number };
@@ -261,13 +267,7 @@ async function importDeals(
     }
 
     const addr = buildAddress(item.text, item.raw[DEAL_COL.location]);
-    await writeAddressIfMissing(
-      addr,
-      organizationId,
-      dealName,
-      counts,
-      dryRun,
-    );
+    await writeAddressIfMissing(addr, organizationId, dealName, counts, dryRun);
     await upsertPrimaryContact(item, organizationId, counts, dryRun);
 
     // ---- Opportunity (one per deal row, keyed on the monday item id) ----
@@ -504,7 +504,14 @@ export async function importDealsMatching(
 
   const items = await searchItemsByName(DEALS_BOARD_ID, term, limit);
   if (!items.length) warnings.push(`No Deal Tracking rows match "${term}".`);
-  const processed = await importDeals(items, counts, warnings, samples, dryRun, Date.now() + 25_000);
+  const processed = await importDeals(
+    items,
+    counts,
+    warnings,
+    samples,
+    dryRun,
+    Date.now() + 25_000,
+  );
 
   return {
     ...counts,
@@ -584,13 +591,14 @@ export async function importCrmFromMonday(options: ImportOptions = {}): Promise<
     const dealItems = offset ? fetched.slice(offset) : fetched;
     processed = await importDeals(dealItems, counts, warnings, samples, dryRun, deadline);
     // More rows are left if this chunk filled up, or if the budget cut it short.
-    remaining =
-      Math.max(0, dealItems.length - processed) + (dealItems.length === chunk ? 1 : 0);
+    remaining = Math.max(0, dealItems.length - processed) + (dealItems.length === chunk ? 1 : 0);
     if (remaining > 0) {
       warnings.push(`Chunk done — re-run with ?offset=${offset + processed} to continue.`);
     }
   } else {
-    const orgItems = (await fetchAllItems(ORGANIZATIONS_BOARD_ID, 250, offset + (limit ?? 200))).slice(offset);
+    const orgItems = (
+      await fetchAllItems(ORGANIZATIONS_BOARD_ID, 250, offset + (limit ?? 200))
+    ).slice(offset);
     processed = orgItems.length;
     const orgIdByMondayId = await importOrganizations(orgItems, counts, warnings, dryRun);
     if (!organizationsOnly) {

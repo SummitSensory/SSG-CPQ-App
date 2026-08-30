@@ -24,11 +24,35 @@ const base = {
     },
   ],
   tiers: [
-    { slug: 'frame', name: 'FRAME', productLine: 'Adventure Series', tierLevel: 1, parentSlug: null, sku: null, sortOrder: 10 },
-    { slug: 'frame--a-2245', name: 'Vertical Tall', productLine: 'Adventure Series', tierLevel: 2, parentSlug: 'frame', sku: 'A-2245', sortOrder: 20 },
+    {
+      slug: 'frame',
+      name: 'FRAME',
+      productLine: 'Adventure Series',
+      tierLevel: 1,
+      parentSlug: null,
+      sku: null,
+      sortOrder: 10,
+    },
+    {
+      slug: 'frame--a-2245',
+      name: 'Vertical Tall',
+      productLine: 'Adventure Series',
+      tierLevel: 2,
+      parentSlug: 'frame',
+      sku: 'A-2245',
+      sortOrder: 20,
+    },
   ],
   notes: [],
-  costs: [{ sku: 'A-2245', unitCostMinor: 24250, currency: 'USD', uom: 'EA', effectiveDate: '2026-07-25' }],
+  costs: [
+    {
+      sku: 'A-2245',
+      unitCostMinor: 24250,
+      currency: 'USD',
+      uom: 'EA',
+      effectiveDate: '2026-07-25',
+    },
+  ],
   sourcing: [{ sku: 'A-2245', manufacturer: 'Goldberg Brothers', isPrimary: true }],
 };
 
@@ -55,8 +79,13 @@ describe('catalog seed validation', () => {
   it('rejects a product placed at tier 1', () => {
     const d = clone();
     d.tiers.push({
-      slug: 'bad', name: 'Bad', productLine: 'Adventure Series',
-      tierLevel: 1, parentSlug: null, sku: 'A-2245', sortOrder: 30,
+      slug: 'bad',
+      name: 'Bad',
+      productLine: 'Adventure Series',
+      tierLevel: 1,
+      parentSlug: null,
+      sku: 'A-2245',
+      sortOrder: 30,
     } as unknown as (typeof d.tiers)[number]);
     expect(loadCatalogSeed(d).report.ok).toBe(false);
   });
@@ -85,7 +114,9 @@ describe('catalog seed validation', () => {
     d.costs = [];
     const { report } = loadCatalogSeed(d);
     expect(report.ok).toBe(true);
-    expect(report.issues.some((i) => i.severity === 'warning' && i.message.includes('no cost'))).toBe(true);
+    expect(
+      report.issues.some((i) => i.severity === 'warning' && i.message.includes('no cost')),
+    ).toBe(true);
   });
 
   it('orders tiers parents-before-children', () => {

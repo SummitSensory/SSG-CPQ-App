@@ -11,13 +11,21 @@
 
   const text = await r.text();
   let body;
-  try { body = JSON.parse(text); } catch { body = text; }
+  try {
+    body = JSON.parse(text);
+  } catch {
+    body = text;
+  }
 
   const out = { httpStatus: r.status, ok: r.ok, body };
   console.log(out);
 
   const pretty = JSON.stringify(out, null, 2);
   console.log(pretty);
-  try { await navigator.clipboard.writeText(pretty); console.log('%c✓ copied to clipboard', 'color:green'); }
-  catch { console.log('Clipboard blocked — select the JSON above and copy manually.'); }
+  try {
+    await navigator.clipboard.writeText(pretty);
+    console.log('%c✓ copied to clipboard', 'color:green');
+  } catch {
+    console.log('Clipboard blocked — select the JSON above and copy manually.');
+  }
 })();

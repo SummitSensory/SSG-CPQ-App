@@ -82,11 +82,7 @@ export async function upsertLink(
     // P2002 on (environment, entity, qboId): another CPQ record already claims
     // this QuickBooks object. Surface it to the caller instead of aborting a
     // bulk run — the collision is data to report, not a crash.
-    if (
-      typeof err === 'object' &&
-      err !== null &&
-      (err as { code?: string }).code === 'P2002'
-    ) {
+    if (typeof err === 'object' && err !== null && (err as { code?: string }).code === 'P2002') {
       const holder = await findLinkByQboId(ref.entity, qboId);
       return { created: false, conflict: { claimedBy: holder?.entityId ?? 'unknown' } };
     }

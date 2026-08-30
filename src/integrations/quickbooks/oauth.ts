@@ -61,7 +61,9 @@ export async function endpoints(fetchImpl: typeof fetch = fetch): Promise<Endpoi
   };
 
   try {
-    const res = await fetchImpl(DISCOVERY_URL[environment], { headers: { Accept: 'application/json' } });
+    const res = await fetchImpl(DISCOVERY_URL[environment], {
+      headers: { Accept: 'application/json' },
+    });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const doc = (await res.json()) as {
       authorization_endpoint?: string;
@@ -77,15 +79,22 @@ export async function endpoints(fetchImpl: typeof fetch = fetch): Promise<Endpoi
     logger.info({ environment }, 'QuickBooks endpoints loaded from discovery document');
     return resolved;
   } catch (err) {
-    logger.warn({ err, environment }, 'QuickBooks discovery document unavailable; using pinned endpoints');
+    logger.warn(
+      { err, environment },
+      'QuickBooks discovery document unavailable; using pinned endpoints',
+    );
     endpointCache.set(environment, fallback);
     return fallback;
   }
 }
 
 /** Build the consent URL the user is redirected to. `state` is a CSRF nonce. */
-export async function authorizeUrl(state: string, fetchImpl: typeof fetch = fetch): Promise<string> {
-  if (!env.QBO_CLIENT_ID || !env.QBO_REDIRECT_URI) throw new Error('QuickBooks OAuth not configured');
+export async function authorizeUrl(
+  state: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<string> {
+  if (!env.QBO_CLIENT_ID || !env.QBO_REDIRECT_URI)
+    throw new Error('QuickBooks OAuth not configured');
   const { authorize } = await endpoints(fetchImpl);
   const p = new URLSearchParams({
     client_id: env.QBO_CLIENT_ID,
@@ -141,7 +150,10 @@ async function tokenRequest(
 
     if (res.status === 429 || res.status >= 500) {
       const wait = backoff(attempt, Number(res.headers.get('retry-after') ?? '') || undefined);
-      logger.warn({ attempt, status: res.status, wait, intuitTid: tid }, 'QuickBooks token endpoint throttled/5xx; retrying');
+      logger.warn(
+        { attempt, status: res.status, wait, intuitTid: tid },
+        'QuickBooks token endpoint throttled/5xx; retrying',
+      );
       lastErr = new Error(`QuickBooks token endpoint HTTP ${res.status}`);
       await sleep(wait);
       continue;
@@ -155,7 +167,10 @@ async function tokenRequest(
           tid,
         );
       }
-      throw new QboAuthError(`QuickBooks token endpoint HTTP ${res.status}: ${text.slice(0, 300)}`, tid);
+      throw new QboAuthError(
+        `QuickBooks token endpoint HTTP ${res.status}: ${text.slice(0, 300)}`,
+        tid,
+      );
     }
 
     return (await res.json()) as TokenResponse;
@@ -191,7 +206,10 @@ async function deactivate(realmId: string, reason: string): Promise<void> {
   await prisma.qboConnection
     .update({ where: { realmId_environment: { realmId, environment } }, data: { isActive: false } })
     .catch(() => undefined);
-  logger.warn({ realmId, environment, reason }, 'QuickBooks connection deactivated — reconnect required');
+  logger.warn(
+    { realmId, environment, reason },
+    'QuickBooks connection deactivated — reconnect required',
+  );
 }
 
 /** Exchange an authorization code for tokens and store the connection. */
@@ -202,7 +220,11 @@ export async function exchangeCode(
   fetchImpl: typeof fetch = fetch,
 ): Promise<void> {
   const t = await tokenRequest(
-    new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: env.QBO_REDIRECT_URI! }),
+    new URLSearchParams({
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: env.QBO_REDIRECT_URI!,
+    }),
     fetchImpl,
   );
   await persist(realmId, connectedById, t);
@@ -218,11 +240,18 @@ export async function exchangeCode(
  * (Intuit's are good for 100 days and die of disuse), and a grant Intuit has
  * revoked. All three raise QboAuthError, which the UI reads as "reconnect".
  */
-export async function getAccessToken(realmId: string, fetchImpl: typeof fetch = fetch): Promise<string> {
+export async function getAccessToken(
+  realmId: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<string> {
   const environment = qboEnvironment();
-  const conn = await prisma.qboConnection.findUnique({ where: { realmId_environment: { realmId, environment } } });
+  const conn = await prisma.qboConnection.findUnique({
+    where: { realmId_environment: { realmId, environment } },
+  });
   if (!conn || !conn.isActive) {
-    throw new QboAuthError(`No active QuickBooks connection for realm ${realmId}. Connect from Administration → Integrations.`);
+    throw new QboAuthError(
+      `No active QuickBooks connection for realm ${realmId}. Connect from Administration → Integrations.`,
+    );
   }
 
   if (conn.accessTokenExpiresAt.getTime() - Date.now() > 60_000) {
@@ -240,7 +269,10 @@ export async function getAccessToken(realmId: string, fetchImpl: typeof fetch = 
 
   try {
     const t = await tokenRequest(
-      new URLSearchParams({ grant_type: 'refresh_token', refresh_token: decryptToken(conn.refreshTokenEnc) }),
+      new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: decryptToken(conn.refreshTokenEnc),
+      }),
       fetchImpl,
     );
     await persist(realmId, conn.connectedById, t);
@@ -254,7 +286,9 @@ export async function getAccessToken(realmId: string, fetchImpl: typeof fetch = 
 /** Disconnect: revoke the refresh token at Intuit and deactivate the connection. */
 export async function disconnect(realmId: string, fetchImpl: typeof fetch = fetch): Promise<void> {
   const environment = qboEnvironment();
-  const conn = await prisma.qboConnection.findUnique({ where: { realmId_environment: { realmId, environment } } });
+  const conn = await prisma.qboConnection.findUnique({
+    where: { realmId_environment: { realmId, environment } },
+  });
   if (!conn) return;
   try {
     const { revoke } = await endpoints(fetchImpl);

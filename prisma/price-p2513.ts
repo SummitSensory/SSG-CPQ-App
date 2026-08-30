@@ -22,7 +22,9 @@ async function main() {
   const existing = await prisma.sku.findUnique({ where: { part: PART } });
 
   if (existing?.unitPriceMinor) {
-    console.log(`${PART} already priced at $${(existing.unitPriceMinor / 100).toFixed(2)} — left alone.`);
+    console.log(
+      `${PART} already priced at $${(existing.unitPriceMinor / 100).toFixed(2)} — left alone.`,
+    );
     return;
   }
 
@@ -52,7 +54,9 @@ async function main() {
     },
   });
 
-  console.log(`${PART} priced at $${(row.unitPriceMinor / 100).toFixed(2)} (cost $${(row.unitCostMinor / 100).toFixed(2)}).`);
+  console.log(
+    `${PART} priced at $${(row.unitPriceMinor / 100).toFixed(2)} (cost $${(row.unitCostMinor / 100).toFixed(2)}).`,
+  );
 }
 
 main()

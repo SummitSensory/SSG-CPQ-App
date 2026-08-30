@@ -4,10 +4,10 @@ Click-by-click. Do the parts in order; each one depends on the last.
 
 **What you're building**
 
-| Environment | Git branch | Address | Purpose |
-|---|---|---|---|
-| Staging | `staging` | `crm-staging.summitsensory.com` | Test everything here first |
-| Production | `main` | `crm.summitsensory.com` | The real thing |
+| Environment | Git branch | Address                         | Purpose                    |
+| ----------- | ---------- | ------------------------------- | -------------------------- |
+| Staging     | `staging`  | `crm-staging.summitsensory.com` | Test everything here first |
+| Production  | `main`     | `crm.summitsensory.com`         | The real thing             |
 
 **Time:** about 45 minutes of clicking, plus up to an hour of waiting for DNS.
 
@@ -132,39 +132,39 @@ after each one. Yes, it's tedious — there are 26.
 
 ### Production rows (tick "Production" only)
 
-| Key | Value |
-|---|---|
-| `NODE_ENV` | `production` |
-| `LOG_LEVEL` | `info` |
-| `JWT_ACCESS_SECRET` | your PROD access secret |
-| `JWT_REFRESH_SECRET` | your PROD refresh secret |
-| `JWT_ACCESS_TTL` | `900` |
-| `JWT_REFRESH_TTL` | `1209600` |
-| `SEED_ADMIN_EMAIL` | your email address |
-| `QBO_TOKEN_ENC_KEY` | your PROD hex key |
-| `QBO_ENVIRONMENT` | `sandbox` |
-| `QBO_PRODUCTION_WRITE_ENABLED` | `false` |
-| `QBO_REDIRECT_URI` | `https://crm.summitsensory.com/integrations/quickbooks/callback` |
-| `MONDAY_API_TOKEN` | leave blank |
-| `MONDAY_SIGNING_SECRET` | leave blank |
+| Key                            | Value                                                            |
+| ------------------------------ | ---------------------------------------------------------------- |
+| `NODE_ENV`                     | `production`                                                     |
+| `LOG_LEVEL`                    | `info`                                                           |
+| `JWT_ACCESS_SECRET`            | your PROD access secret                                          |
+| `JWT_REFRESH_SECRET`           | your PROD refresh secret                                         |
+| `JWT_ACCESS_TTL`               | `900`                                                            |
+| `JWT_REFRESH_TTL`              | `1209600`                                                        |
+| `SEED_ADMIN_EMAIL`             | your email address                                               |
+| `QBO_TOKEN_ENC_KEY`            | your PROD hex key                                                |
+| `QBO_ENVIRONMENT`              | `sandbox`                                                        |
+| `QBO_PRODUCTION_WRITE_ENABLED` | `false`                                                          |
+| `QBO_REDIRECT_URI`             | `https://crm.summitsensory.com/integrations/quickbooks/callback` |
+| `MONDAY_API_TOKEN`             | leave blank                                                      |
+| `MONDAY_SIGNING_SECRET`        | leave blank                                                      |
 
 ### Staging rows (tick "Preview" only)
 
-| Key | Value |
-|---|---|
-| `NODE_ENV` | `production` |
-| `LOG_LEVEL` | `debug` |
-| `JWT_ACCESS_SECRET` | your STAGE access secret |
-| `JWT_REFRESH_SECRET` | your STAGE refresh secret |
-| `JWT_ACCESS_TTL` | `900` |
-| `JWT_REFRESH_TTL` | `1209600` |
-| `SEED_ADMIN_EMAIL` | your email address |
-| `QBO_TOKEN_ENC_KEY` | your STAGE hex key |
-| `QBO_ENVIRONMENT` | `sandbox` |
-| `QBO_PRODUCTION_WRITE_ENABLED` | `false` |
-| `QBO_REDIRECT_URI` | `https://crm-staging.summitsensory.com/integrations/quickbooks/callback` |
-| `MONDAY_API_TOKEN` | leave blank |
-| `MONDAY_SIGNING_SECRET` | leave blank |
+| Key                            | Value                                                                    |
+| ------------------------------ | ------------------------------------------------------------------------ |
+| `NODE_ENV`                     | `production`                                                             |
+| `LOG_LEVEL`                    | `debug`                                                                  |
+| `JWT_ACCESS_SECRET`            | your STAGE access secret                                                 |
+| `JWT_REFRESH_SECRET`           | your STAGE refresh secret                                                |
+| `JWT_ACCESS_TTL`               | `900`                                                                    |
+| `JWT_REFRESH_TTL`              | `1209600`                                                                |
+| `SEED_ADMIN_EMAIL`             | your email address                                                       |
+| `QBO_TOKEN_ENC_KEY`            | your STAGE hex key                                                       |
+| `QBO_ENVIRONMENT`              | `sandbox`                                                                |
+| `QBO_PRODUCTION_WRITE_ENABLED` | `false`                                                                  |
+| `QBO_REDIRECT_URI`             | `https://crm-staging.summitsensory.com/integrations/quickbooks/callback` |
+| `MONDAY_API_TOKEN`             | leave blank                                                              |
+| `MONDAY_SIGNING_SECRET`        | leave blank                                                              |
 
 `NODE_ENV` is `production` on staging too — that's correct. It means "run the
 optimized build," not "this is the live site."
@@ -184,8 +184,8 @@ Go to **Settings → Domains**.
 2. Choose **Add** on the plain option (not the redirect option).
 3. Vercel shows a **Invalid Configuration** warning and a box with the record
    you need. It will say something like:
-   > Type: `CNAME`  Name: `crm`  Value: `cname.vercel-dns.com`
-4. **Copy that Value exactly.** Write it in your scratch file. Use *that* value
+   > Type: `CNAME` Name: `crm` Value: `cname.vercel-dns.com`
+4. **Copy that Value exactly.** Write it in your scratch file. Use _that_ value
    in Part G — not the one printed in this document, in case Vercel changed it.
 
 **Staging domain**
@@ -234,7 +234,7 @@ first; if the menus don't match, use the second.
 ### Five things that go wrong on Bluehost
 
 1. **Enter just `crm`, not `crm.summitsensory.com`.** Bluehost appends the
-   domain for you. After saving, the record will *display* as
+   domain for you. After saving, the record will _display_ as
    `crm.summitsensory.com.` with a trailing dot — that's correct.
 2. **Do not use the "Subdomains" tool** (Domains → Subdomains). It creates a
    folder on your hosting plan and an A record that conflicts with the CNAME.

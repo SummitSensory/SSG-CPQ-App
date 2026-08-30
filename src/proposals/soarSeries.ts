@@ -15,8 +15,12 @@
 import skuData from './adventure-skus.json' with { type: 'json' };
 
 export interface SoarSkuRec {
-  part: string; description: string; unitPriceMinor: number; unitCostMinor?: number;
-  weightLbs: number; category?: string;
+  part: string;
+  description: string;
+  unitPriceMinor: number;
+  unitCostMinor?: number;
+  weightLbs: number;
+  category?: string;
 }
 
 const SKUS: Record<string, SoarSkuRec> = {};
@@ -31,7 +35,7 @@ export const SOAR_GROUP_MATS = 'SUMMIT SOAR MATS & ACCESSORIES';
  * take the wider CLM325 mat instead of the standard SSM80100.
  */
 export const SOAR_FRAMES: Array<{ part: string; label: string; xl: boolean }> = [
-  { part: 'K-4000', label: "S1 — Single Cross Beam", xl: false },
+  { part: 'K-4000', label: 'S1 — Single Cross Beam', xl: false },
   { part: 'K-4002', label: 'S2 — Two Cross Beams', xl: false },
   { part: 'K-4003', label: 'S3 — Three Cross Beams', xl: false },
   { part: 'K-4001', label: "S1-XL — Single Cross Beam (Width 12')", xl: true },
@@ -54,7 +58,12 @@ export const SOAR_PARTS = {
  * mutually exclusive — the frame selection decides which one is quoted, which is the
  * "Auto Calculate Based on B29 Answer" note beside CLM325.
  */
-export const SOAR_PAD_ROWS: Array<{ key: string; part: string; defaultQty: number; matFor?: 'xl' | 'std' }> = [
+export const SOAR_PAD_ROWS: Array<{
+  key: string;
+  part: string;
+  defaultQty: number;
+  matFor?: 'xl' | 'std';
+}> = [
   { key: 'matXlQty', part: SOAR_PARTS.matXl, defaultQty: 0, matFor: 'xl' },
   { key: 'matStdQty', part: SOAR_PARTS.matStd, defaultQty: 1, matFor: 'std' },
   { key: 'uWrapQty', part: SOAR_PARTS.uWrap, defaultQty: 4 },
@@ -68,15 +77,26 @@ export interface SoarAnswers {
   /** The padding & column-wrap package (workbook B29 "Quick Select"). */
   padding?: boolean;
   /** Package overrides. Undefined means "use the workbook default". */
-  matXlQty?: number; matStdQty?: number; uWrapQty?: number; gussetQty?: number; colWrapQty?: number;
+  matXlQty?: number;
+  matStdQty?: number;
+  uWrapQty?: number;
+  gussetQty?: number;
+  colWrapQty?: number;
   /** Print the overview + Engineering-of-Record copy on each frame line. */
   includeOverview?: boolean;
 }
 
 export interface SoarPricedLine {
   lineType: 'GROUP' | 'SUBGROUP' | 'PRODUCT' | 'NOTE';
-  optional?: boolean; name: string; sku?: string; description?: string;
-  quantity?: number; rateMinor?: number; costEach?: number; weightEach?: number; needsPrice?: boolean;
+  optional?: boolean;
+  name: string;
+  sku?: string;
+  description?: string;
+  quantity?: number;
+  rateMinor?: number;
+  costEach?: number;
+  weightEach?: number;
+  needsPrice?: boolean;
 }
 
 const n = (v: unknown) => (typeof v === 'number' && isFinite(v) ? Math.max(0, v) : 0);
@@ -110,14 +130,19 @@ export const SOAR_OVERVIEW =
   SOAR_ENGINEERING;
 
 /** Frames actually quoted, de-duplicated and returned in workbook order. */
-export function soarFrames(a: SoarAnswers): Array<{ part: string; label: string; xl: boolean; qty: number }> {
+export function soarFrames(
+  a: SoarAnswers,
+): Array<{ part: string; label: string; xl: boolean; qty: number }> {
   const want = new Map<string, number>();
   for (const f of a.frames || []) {
     const qty = n(f && f.qty);
     if (!f || !f.part || qty <= 0) continue;
     want.set(f.part, (want.get(f.part) || 0) + qty);
   }
-  return SOAR_FRAMES.filter((f) => (want.get(f.part) || 0) > 0).map((f) => ({ ...f, qty: want.get(f.part) as number }));
+  return SOAR_FRAMES.filter((f) => (want.get(f.part) || 0) > 0).map((f) => ({
+    ...f,
+    qty: want.get(f.part) as number,
+  }));
 }
 
 /** Total frame units — what the padding package scales off. */
@@ -164,9 +189,15 @@ export function computeSoarProposal(
     const w = rec ? rec.weightLbs || 0 : 0;
     weight += qty * w;
     lines.push({
-      lineType: 'PRODUCT', name: rec ? rec.description : part, sku: part, description,
-      quantity: qty, rateMinor: rec ? rec.unitPriceMinor : 0,
-      costEach: rec ? rec.unitCostMinor ?? 0 : 0, weightEach: w, needsPrice: !rec,
+      lineType: 'PRODUCT',
+      name: rec ? rec.description : part,
+      sku: part,
+      description,
+      quantity: qty,
+      rateMinor: rec ? rec.unitPriceMinor : 0,
+      costEach: rec ? (rec.unitCostMinor ?? 0) : 0,
+      weightEach: w,
+      needsPrice: !rec,
     });
   };
 
@@ -174,19 +205,26 @@ export function computeSoarProposal(
   // rides on each frame line's own description so it travels with the product
   // through reordering and export instead of sitting in a detachable note.
   const overview = a.includeOverview !== false ? SOAR_OVERVIEW : '';
-  lines.push({ lineType: 'GROUP', name: SOAR_GROUP_FRAMES, description: `${soarModel(a)} \u00b7 Project Scope` });
+  lines.push({
+    lineType: 'GROUP',
+    name: SOAR_GROUP_FRAMES,
+    description: `${soarModel(a)} \u00b7 Project Scope`,
+  });
   for (const f of soarFrames(a)) P(f.part, f.qty, overview);
 
   if (a.padding) {
     const defs = soarPadDefaults(a);
-    const rows = SOAR_PAD_ROWS
-      .map((r) => {
-        const override = (a as Record<string, number | undefined>)[r.key];
-        return { part: r.part, qty: override == null ? (defs[r.key] ?? 0) : n(override) };
-      })
-      .filter((r) => r.qty > 0);
+    const rows = SOAR_PAD_ROWS.map((r) => {
+      const override = (a as Record<string, number | undefined>)[r.key];
+      return { part: r.part, qty: override == null ? (defs[r.key] ?? 0) : n(override) };
+    }).filter((r) => r.qty > 0);
     if (rows.length) {
-      lines.push({ lineType: 'GROUP', name: SOAR_GROUP_MATS, optional: true, description: 'Optional' });
+      lines.push({
+        lineType: 'GROUP',
+        name: SOAR_GROUP_MATS,
+        optional: true,
+        description: 'Optional',
+      });
       for (const r of rows) P(r.part, r.qty);
     }
   }
