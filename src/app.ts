@@ -85,6 +85,35 @@ export function buildApp(): FastifyInstance {
   // Keep the raw JSON body alongside the parsed one. The Resend and DocuSeal
   // webhooks are checked against the exact bytes they sent, so re-serializing the
   // parsed object would not verify — key order and whitespace differ.
+  /*
+   * A POST with no body arrives with no Content-Type, and Fastify 5 refuses it.
+   *
+   * `POST /legal-documents/TERMS/publish` takes no body — the draft to publish is already
+   * on the row, so there is nothing to send. The browser therefore sets no Content-Type
+   * (see `api()` in public/app.js: the header is added only when there is a body), and
+   * Fastify's content-type parser rejects the request with
+   * FST_ERR_CTP_INVALID_MEDIA_TYPE, 415, before the route is ever reached. Publishing a
+   * legal document failed outright in production.
+   *
+   * Every body-less POST in the API has the same problem: publish, restore-shipped, and
+   * anything added later following the same pattern. So it is fixed once, here, rather
+   * than by giving each caller a body it has no reason to send.
+   *
+   * Declaring the type is all that is needed — the parser below already turns an empty
+   * body into `{}` rather than failing on it, which is exactly the case this produces.
+   *
+   * Only for methods that can carry a body, and only when the header is absent: a request
+   * that states its own type keeps it, so multipart uploads and the signature-verified
+   * webhooks are untouched.
+   */
+  app.addHook('onRequest', (req, _reply, done) => {
+    const method = req.method.toUpperCase();
+    if (method === 'POST' || method === 'PUT' || method === 'PATCH') {
+      if (!req.headers['content-type']) req.headers['content-type'] = 'application/json';
+    }
+    done();
+  });
+
   app.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
     (req as unknown as { rawBody?: string }).rawBody = body as string;
     try {

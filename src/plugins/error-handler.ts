@@ -38,6 +38,33 @@ export function registerErrorHandler(app: FastifyInstance): void {
       });
     }
 
+    /*
+     * Errors Fastify raises itself, reported as what they are.
+     *
+     * These carry their own `statusCode` and it was being thrown away, so every one came
+     * back to the client as 500 INTERNAL. A malformed request the caller could fix read as
+     * a server fault, and the client had nothing useful to show: publishing a legal
+     * document failed with "Could not publish (500)" when the real answer was 415, the
+     * request never reached the route, and nothing was wrong with the server at all.
+     *
+     * Worse, they fell through to `sendAlert` below. A 415, a 400 on malformed JSON, a 413
+     * on an oversized upload — all caller-side, none a fault worth waking anyone for, and
+     * every one of them has been sending alert emails. Deduplication kept the volume down,
+     * which is precisely why it went unnoticed.
+     *
+     * Restricted to 4xx. A 5xx from Fastify is a genuine fault and must keep falling
+     * through to the alert below.
+     */
+    const fastifyStatus =
+      typeof (error as { statusCode?: number }).statusCode === 'number'
+        ? (error as { statusCode: number }).statusCode
+        : 0;
+    if (fastifyStatus >= 400 && fastifyStatus < 500) {
+      const code = (error as { code?: string }).code ?? 'BAD_REQUEST';
+      req.log.warn({ code, statusCode: fastifyStatus }, error.message);
+      return reply.status(fastifyStatus).send({ error: code, message: error.message });
+    }
+
     req.log.error({ err: error }, 'unhandled error');
 
     // Anything reaching here is a genuine fault rather than a handled state, so it
