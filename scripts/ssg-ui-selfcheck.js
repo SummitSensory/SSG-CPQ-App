@@ -309,6 +309,22 @@
     },
     'function',
   );
+  // Absent, the proposal still prints its legal pages from the shipped wording — the
+  // renderer falls back on purpose — but a published edit would silently not appear.
+  check(
+    'SSGContractPages registered',
+    function () {
+      return typeof (window.SSGContractPages || {}).withContent;
+    },
+    'function',
+  );
+  check(
+    'SSGLegalAdmin registered',
+    function () {
+      return typeof (window.SSGLegalAdmin || {}).render;
+    },
+    'function',
+  );
   // app.js calls this straight from the nav. Absent, clicking Catalog throws.
   check(
     'SSGCatalog registered',

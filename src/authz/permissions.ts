@@ -83,6 +83,15 @@ export const Permission = {
   PRODUCTS_ADMIN: 'products:admin',
   AUDIT_READ: 'audit:read',
   USERS_MANAGE: 'users:manage',
+  // Edit the two legal documents that close a proposal — the release and the standard
+  // terms — including their printed titles. Granted to no role but SYSTEM_ADMIN, which
+  // holds the wildcard: publishing wording that a customer then signs is an admin act,
+  // and the precedent is already here (the signing document templates sit under
+  // INTEGRATIONS_MANAGE for the same reason).
+  //
+  // Reading the text needs only PROPOSAL_READ — every rep who can open a proposal
+  // renders these pages.
+  LEGAL_MANAGE: 'legal:manage',
 } as const;
 
 export type Permission = (typeof Permission)[keyof typeof Permission];

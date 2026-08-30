@@ -582,6 +582,11 @@
     // Standard proposal notes: rendered by Catalog AND Administration, so it belongs to
     // neither. Everything else it needs it reads off window.SSGUI.
     if (window.SSGStandardNotes) window.SSGStandardNotes.init({ authed: authed });
+    // The renderer fetches the published legal wording here, once, so html() — which is
+    // synchronous, deep inside the document builder — always has it by the time anyone
+    // opens a proposal. Without this call the shipped wording prints and nothing breaks.
+    if (window.SSGContractPages) window.SSGContractPages.init({ authed: authed });
+    if (window.SSGLegalAdmin) window.SSGLegalAdmin.init({ authed: authed, esc: esc });
     // Vendor part numbers: the dialog lives here for Catalog AND Administration, which
     // is why it is no longer inside either.
     if (window.SSGVendorParts) window.SSGVendorParts.init({ authed: authed });
@@ -11744,7 +11749,10 @@
         '<div id="snList"><div class="muted" style="padding:16px;">Loading…</div></div>' +
         '<div class="section-title" style="margin-top:26px;">Proposal introductions</div>' +
         '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">The pages that print ahead of the itemized proposal, one product line at a time. The photographs are set here and used by every proposal that prints that introduction &mdash; a rep picks the template on the proposal, never the pictures. Each slot names the size it prints at; anything larger is downscaled on upload. Page wording ships with the application.</div>' +
-        '<div id="introAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+        '<div id="introAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>' +
+        '<div class="section-title" style="margin-top:26px;">Contract documents</div>' +
+        '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">The general release and the standard terms, printed after the acceptance page. Editing them here changes what future proposals print; a proposal already released keeps the wording it went out with. Saving a draft is not publishing it.</div>' +
+        '<div id="legalAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>') +
 
       sec('email',
         '<div class="section-title" style="margin:4px 0 0;">Outlook drafts</div>' +
@@ -11809,6 +11817,9 @@
     loadUsers();
     // The panel wires its own + New note button and loads its own list.
     window.SSGStandardNotes.mount();
+    // Admin-only, and the route enforces it. A non-admin sees the empty container rather
+    // than an error, which is the same thing the other admin panels do.
+    if (window.SSGLegalAdmin) window.SSGLegalAdmin.render(document.getElementById('legalAdmin'));
     loadFormulas();
     loadFollowUpTemplates();
     loadOutlookPanel();

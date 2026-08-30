@@ -8,6 +8,7 @@ import type { ProposalSection, ProposalItem } from './sections.js';
 import { sectionsWithResolvedProjectId } from '../crm/projectId.js';
 import { allocateNumbered } from '../lib/documentNumber.js';
 import type { ProposalStatus } from '@prisma/client';
+import { snapshotLegalDocuments } from '../legal/service.js';
 
 interface VersionContent {
   sections: ProposalSection[];
@@ -374,6 +375,25 @@ export async function changeStatus(
   }
 
   await prisma.$transaction(async (tx) => {
+    /*
+     * Freeze the legal text with the price.
+     *
+     * The terms say it themselves: "The version of these Terms provided with or
+     * incorporated into the accepted proposal or order governs that transaction." Without
+     * this, editing the terms in Administration would retroactively change what every
+     * past customer signed — the document on file would say one thing and the system
+     * another, with nothing to arbitrate.
+     *
+     * Same discipline the price already gets. Taken INSIDE the transaction so a release
+     * that rolls back leaves no orphan snapshot, and so a version can never end up frozen
+     * without one.
+     *
+     * Only on the transition that freezes, and only if not already pinned: re-freezing an
+     * already-released version must not silently re-date its terms.
+     */
+    const pinLegal = becomesFrozen(to) && !version.legalSnapshotId;
+    const legalSnapshotId = pinLegal ? await snapshotLegalDocuments(tx) : null;
+
     await tx.proposalVersion.update({
       where: { id: versionId },
       data: {
@@ -381,6 +401,7 @@ export async function changeStatus(
         ...(becomesFrozen(to)
           ? { frozen: true, releasedAt: new Date(), releasedById: userId }
           : {}),
+        ...(legalSnapshotId ? { legalSnapshotId } : {}),
       },
     });
     await tx.proposalStatusEvent.create({

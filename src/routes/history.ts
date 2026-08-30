@@ -30,7 +30,7 @@ const AREA_PREFIXES: Record<string, string[]> = {
   manufacturers: ['manufacturer.', 'vendorColor.', 'powder.'],
   bundles: ['catalog.bundle'],
   bom: ['bom.', 'handoff.'],
-  notes: ['note.', 'standardNote.', 'introTemplate.'],
+  notes: ['note.', 'standardNote.', 'introTemplate.', 'legalDocument.'],
   formulas: ['formula.'],
   crossborder: ['crossborder.'],
 };

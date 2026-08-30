@@ -77,6 +77,7 @@ const CLIENT_SCRIPTS = [
   'intro-admin.js',
   // Document pieces the proposal renderer reads.
   'contract-pages.js',
+  'legal-admin.js',
   'proposal-front-matter.js',
   'intro-cover.js',
   'intro-adventure.js',

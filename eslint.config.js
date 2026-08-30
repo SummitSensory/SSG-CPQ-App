@@ -120,6 +120,8 @@ export default [
         SSGUI: 'writable',
         SSGStandardNotes: 'writable',
         SSGVendorParts: 'writable',
+        SSGLegalAdmin: 'writable',
+        SSGContractPages: 'writable',
         SSGCatalog: 'writable',
       },
     },
@@ -174,6 +176,7 @@ export default [
       'public/ssg-standard-notes.js',
       'public/ssg-vendor-parts.js',
       'public/catalog.js',
+      'public/legal-admin.js',
     ],
     rules: {
       'no-undef': 'error',

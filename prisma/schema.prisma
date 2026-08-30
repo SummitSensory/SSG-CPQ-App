@@ -1133,6 +1133,14 @@ model ProposalVersion {
   /// Loading next year’s rates therefore cannot restate a payment a customer has
   /// already been given in writing.
   financeRateCardId String?
+  /// The legal text this version was released under, frozen at release. Null for a
+  /// version released before legal documents became editable — those releases were not
+  /// pinned, and backfilling today's wording onto them would assert something untrue
+  /// about what the customer was shown.
+  ///
+  /// Same discipline as priceSnapshotId and financeRateCardId above: editing the terms
+  /// cannot restate what a customer has already signed.
+  legalSnapshotId String?
   createdById     String
   createdAt       DateTime              @default(now())
   updatedAt       DateTime              @updatedAt
@@ -1179,6 +1187,56 @@ enum NotePlacement {
 
 // Reusable boilerplate note blocks. autoInclude notes are added to every new
 // proposal automatically; the rest stay available in the builder's note picker.
+/// An editable legal document printed at the close of a proposal.
+///
+/// Keyed by name (RELEASE, TERMS) rather than a generated id, because the renderer asks
+/// for them by name and the title is editable — nothing may key off what a document
+/// currently calls itself.
+///
+/// Starts empty. With no row the renderer prints src/legal/defaults.ts, which is the
+/// wording this release was built with, so output is unchanged until someone publishes.
+model LegalDocument {
+  key            String    @id
+  title          String
+  content        Json
+  /// An unpublished edit. NULL means the published copy is the only copy — a lawyer's
+  /// half-finished redline must not print on tomorrow's proposal.
+  draft          Json?
+  version        Int       @default(1)
+  publishedAt    DateTime  @default(now())
+  publishedById  String?
+  draftSavedAt   DateTime?
+  draftSavedById String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+}
+
+/// Every published revision, append-only, so a snapshot can be explained after the fact
+/// and a bad edit can be rolled back to a known wording rather than retyped.
+model LegalDocumentRevision {
+  id            String   @id @default(cuid())
+  key           String
+  version       Int
+  title         String
+  content       Json
+  publishedById String?
+  createdAt     DateTime @default(now())
+
+  @@unique([key, version])
+}
+
+/// The legal text exactly as printed when a proposal was released.
+///
+/// Content-addressed by SHA-256 of the documents, so releasing fifty proposals under one
+/// wording writes one row and fifty references — and "which proposals went out under this
+/// wording" is answerable by grouping on the id.
+model LegalSnapshot {
+  id        String   @id @default(cuid())
+  hash      String   @unique
+  documents Json
+  createdAt DateTime @default(now())
+}
+
 model StandardNote {
   id          String        @id @default(cuid())
   title       String
