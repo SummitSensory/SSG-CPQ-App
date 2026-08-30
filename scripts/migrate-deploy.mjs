@@ -2,7 +2,7 @@
 /**
  * Apply pending migrations during the build.
  *
- * Three things this does that `prisma migrate deploy` on its own does not, each
+ * Four things this does that `prisma migrate deploy` on its own does not, each
  * because of a real failure:
  *
  * 1. **Uses the direct connection, explicitly.** Neon's pooled endpoint (the host
@@ -21,14 +21,29 @@
  *    breaks every query against the affected tables, not just the new feature.
  *    Better a red build than a live 500.
  *
+ * 4. **Bootstraps a genuinely empty database.** `0000_baseline` builds the whole
+ *    schema from nothing, and several historical migrations then try to create
+ *    some of that same schema again — see docs/database-migrations.md. Against a
+ *    database that already has history (production, staging, a developer's Neon
+ *    branch) that never happens, because those migrations already ran for real,
+ *    months apart, before baseline existed. But a target that starts with zero
+ *    rows in `_prisma_migrations` — CI's throwaway Postgres container, or a
+ *    genuinely fresh preview branch database — hits it on every run. When (and
+ *    only when) migration history is empty at the start, a migration that fails
+ *    with a Postgres "already exists" error is superseded by baseline: mark it
+ *    resolved and keep going, rather than failing the build over schema baseline
+ *    already built.
+ *
  * Skipped entirely when there is no database URL, so a build without database
  * access (a preview with no branch database, a local `vercel build`) still succeeds.
  */
 
 import { execSync } from 'node:child_process';
+import { PrismaClient } from '@prisma/client';
 
 const ATTEMPTS = 4;
 const BACKOFF_MS = [2000, 5000, 10000];
+const MAX_BOOTSTRAP_RESOLUTIONS = 60; // comfortably above the current migration count
 
 /** The pooled host cannot hold advisory locks; the direct one can. */
 function isPooled(url) {
@@ -39,7 +54,81 @@ function isPooled(url) {
   }
 }
 
-function main() {
+/** True when the target has no migration history at all — a brand-new database. */
+async function isEmptyDatabase(url) {
+  const prisma = new PrismaClient({ datasources: { db: { url } } });
+  try {
+    const rows = await prisma.$queryRawUnsafe(
+      'SELECT count(*)::int AS count FROM "_prisma_migrations"',
+    );
+    return rows[0].count === 0;
+  } catch {
+    // "_prisma_migrations" itself does not exist yet — as empty as it gets.
+    return true;
+  } finally {
+    await prisma.$disconnect();
+  }
+}
+
+/** The migration `prisma migrate deploy` is currently stuck on, per its own ledger. */
+async function stuckMigrationName(url) {
+  const prisma = new PrismaClient({ datasources: { db: { url } } });
+  try {
+    const rows = await prisma.$queryRawUnsafe(
+      'SELECT migration_name FROM "_prisma_migrations" WHERE finished_at IS NULL ORDER BY started_at DESC LIMIT 1',
+    );
+    return rows[0]?.migration_name ?? null;
+  } catch {
+    return null;
+  } finally {
+    await prisma.$disconnect();
+  }
+}
+
+/**
+ * One `prisma migrate deploy`. On a database that started with no migration
+ * history, a migration that fails because its objects already exist (superseded
+ * by `0000_baseline`, which runs first and builds them) is marked resolved
+ * instead of failing the build, and deploy resumes from the next one. Bounded so
+ * a genuinely different failure still surfaces instead of looping forever.
+ */
+async function deploy(url, startedEmpty) {
+  const env = { ...process.env, DATABASE_URL: url, DIRECT_URL: url };
+  const resolved = [];
+
+  for (let i = 0; i <= MAX_BOOTSTRAP_RESOLUTIONS; i++) {
+    try {
+      // Not `stdio: 'inherit'` here: the bootstrap check below needs the actual
+      // output, not just a generic "Command failed" error. Printed manually
+      // either way, so CI logs show the same thing they always have.
+      const out = execSync('prisma migrate deploy', { env, encoding: 'utf8' });
+      process.stdout.write(out);
+      if (resolved.length) {
+        console.log(
+          `migrate: bootstrap resolved ${resolved.length} migration(s) already built by 0000_baseline: ${resolved.join(', ')}`,
+        );
+      }
+      return;
+    } catch (err) {
+      const output = String(err.stdout ?? '') + String(err.stderr ?? '');
+      process.stdout.write(output || String(err.message ?? ''));
+
+      const isAlreadyExists = /already exists/i.test(output);
+      if (!startedEmpty || !isAlreadyExists || i === MAX_BOOTSTRAP_RESOLUTIONS) throw err;
+
+      const name = await stuckMigrationName(url);
+      if (!name) throw err;
+
+      console.log(
+        `migrate: bootstrap — "${name}" conflicts with 0000_baseline (already built); marking resolved and continuing.`,
+      );
+      execSync(`prisma migrate resolve --applied ${name}`, { stdio: 'inherit', env });
+      resolved.push(name);
+    }
+  }
+}
+
+async function main() {
   const direct = process.env.DIRECT_URL;
   const pooled = process.env.DATABASE_URL;
 
@@ -76,12 +165,11 @@ function main() {
     `migrate: applying pending migrations via ${direct ? 'DIRECT_URL' : 'DATABASE_URL'}.`,
   );
 
+  const startedEmpty = await isEmptyDatabase(url);
+
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
     try {
-      execSync('prisma migrate deploy', {
-        stdio: 'inherit',
-        env: { ...process.env, DATABASE_URL: url, DIRECT_URL: url },
-      });
+      await deploy(url, startedEmpty);
       console.log('migrate: up to date.');
       // Did the migrations actually produce the schema the code expects? Reported,
       // not enforced: the deploy has already applied everything it was given, and
@@ -122,4 +210,7 @@ function main() {
   }
 }
 
-main();
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
