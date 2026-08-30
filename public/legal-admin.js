@@ -27,12 +27,14 @@
     'width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #d8dcd2;border-radius:6px;' +
     'font-family:inherit;font-size:13px;color:#20241f;background:#fff;';
   var TA = IN + 'line-height:1.55;resize:vertical;';
+  // `white-space:nowrap`: without it "Save draft" and "Add article" wrap onto two lines
+  // inside the wrapping button row, which reads as a broken control rather than a button.
   var BTN =
     'border:1px solid #d8dcd2;background:#fff;border-radius:6px;padding:7px 13px;font-family:inherit;' +
-    'font-size:12.5px;cursor:pointer;color:#3d4a55;';
+    'font-size:12.5px;cursor:pointer;color:#3d4a55;white-space:nowrap;';
   var PRIMARY =
     'border:1px solid #203060;background:#203060;color:#fff;border-radius:6px;padding:7px 15px;' +
-    'font-family:inherit;font-size:12.5px;cursor:pointer;font-weight:600;';
+    'font-family:inherit;font-size:12.5px;cursor:pointer;font-weight:600;white-space:nowrap;';
 
   function esc(s) {
     return H && H.esc ? H.esc(s) : String(s == null ? '' : s);
@@ -43,8 +45,16 @@
     return doc.draft || doc.published;
   }
 
-  function label(key) {
-    return key === 'RELEASE' ? 'General release of liability' : 'Standard terms & conditions';
+  /**
+   * What to call a document in this panel.
+   *
+   * Its own title, because the title is editable and a fixed label goes stale the moment
+   * it is used: the first slot now holds a Product Use, Safety & Responsibility
+   * Acknowledgment, and a card headed with the old name above it is simply wrong.
+   */
+  function label(doc) {
+    var w = working(doc);
+    return w.title || (doc.key === 'RELEASE' ? 'First document' : 'Second document');
   }
 
   /* ------------------------------------------------------------------ rendering */
@@ -95,6 +105,119 @@
         '</div>';
     }
 
+    /*
+     * Lettered sub-sections: a heading of its own, then its own paragraphs.
+     *
+     * The level between an article and a bare list item. A list item is a numeral and a
+     * run of text; a sub-section is a block with a title, which is how a long article
+     * divides itself into A, B, C.
+     */
+    var subsecs = '';
+    if (isArticle) {
+      var list = block.subsections || [];
+      subsecs =
+        '<div style="margin-top:11px;padding-left:12px;border-left:2px solid #dce4d4;">' +
+        '<div class="muted" style="font-size:11px;margin-bottom:6px;">' +
+        'Sub-sections &mdash; each prints its own heading, lettered A, B, C.' +
+        '</div>' +
+        list
+          .map(function (ss, j) {
+            var body = (ss.paragraphs || []).join('\n\n');
+            return (
+              '<div style="border:1px solid #e6e9e1;border-radius:7px;padding:10px;margin-top:7px;background:#fff;">' +
+              '<div style="display:flex;gap:7px;align-items:center;">' +
+              '<input value="' +
+              esc(ss.letter) +
+              '" id="lg_' +
+              key +
+              '_ssl_' +
+              i +
+              '_' +
+              j +
+              '" style="' +
+              IN +
+              'width:48px;flex:none;text-align:center;font-weight:600;">' +
+              '<input value="' +
+              esc(ss.title) +
+              '" id="lg_' +
+              key +
+              '_sst_' +
+              i +
+              '_' +
+              j +
+              '" style="' +
+              IN +
+              'font-weight:600;">' +
+              '<div style="display:flex;gap:3px;flex:none;">' +
+              ssBtn('&#9650;', 'lgssup', key, i, j, j === 0) +
+              ssBtn('&#9660;', 'lgssdown', key, i, j, j === list.length - 1) +
+              ssBtn('&#10005;', 'lgssdel', key, i, j, false) +
+              '</div></div>' +
+              '<textarea id="lg_' +
+              key +
+              '_ssb_' +
+              i +
+              '_' +
+              j +
+              '" rows="' +
+              Math.min(14, Math.max(3, Math.ceil(body.length / 95))) +
+              '" style="' +
+              TA +
+              'margin-top:7px;">' +
+              esc(body) +
+              '</textarea>' +
+              '</div>'
+            );
+          })
+          .join('') +
+        '<div style="display:flex;gap:6px;margin-top:8px;">' +
+        '<button data-lgaddsub="' +
+        i +
+        '" data-lgkey="' +
+        key +
+        '" style="' +
+        BTN +
+        'font-size:12px;">+ List item</button>' +
+        '<button data-lgaddss="' +
+        i +
+        '" data-lgkey="' +
+        key +
+        '" style="' +
+        BTN +
+        'font-size:12px;">+ Sub-section</button>' +
+        '</div>' +
+        '</div>';
+    }
+
+    /*
+     * Paragraphs that print AFTER the lists.
+     *
+     * The part that used to be impossible. A qualification such as "Nothing herein
+     * releases Summit from..." has to follow the list of claims it qualifies; with
+     * nowhere to put it, it had to be appended to the last list item, where it reads as
+     * part of that item rather than as applying to all of them.
+     */
+    var trail = '';
+    if (isArticle) {
+      var after = (block.trailing || []).join('\n\n');
+      trail =
+        '<div style="margin-top:10px;">' +
+        '<label style="display:block;font-size:12px;color:#5c6157;margin-bottom:4px;">' +
+        'Paragraphs after the list <span class="muted" style="font-weight:400;">' +
+        '&mdash; optional; prints below everything above</span></label>' +
+        '<textarea id="lg_' +
+        key +
+        '_tr_' +
+        i +
+        '" rows="' +
+        Math.min(10, Math.max(2, Math.ceil(after.length / 95))) +
+        '" style="' +
+        TA +
+        '">' +
+        esc(after) +
+        '</textarea></div>';
+    }
+
     return (
       '<div data-lgblock="' +
       i +
@@ -139,7 +262,37 @@
       'Leave a blank line between paragraphs.' +
       '</div>' +
       subs +
+      subsecs +
+      trail +
       '</div>'
+    );
+  }
+
+  /**
+   * A button that has to name both the article and the sub-section it acts on.
+   *
+   * Encoded as "i:j" in one attribute rather than two, so the click handler reads one
+   * value and cannot pick up a stale index from a redrawn sibling.
+   */
+  function ssBtn(glyph, act, key, i, j, disabled) {
+    return (
+      '<button data-' +
+      act +
+      '="' +
+      i +
+      ':' +
+      j +
+      '" data-lgkey="' +
+      key +
+      '"' +
+      (disabled ? ' disabled' : '') +
+      ' style="' +
+      BTN +
+      'padding:5px 8px;line-height:1;font-size:11px;' +
+      (disabled ? 'opacity:.32;cursor:default;' : '') +
+      '">' +
+      glyph +
+      '</button>'
     );
   }
 
@@ -177,7 +330,7 @@
     var head =
       '<div style="display:flex;align-items:baseline;gap:10px;">' +
       '<div class="section-title" style="margin:0;">' +
-      esc(label(doc.key)) +
+      esc(label(doc)) +
       '</div>' +
       (hasDraft
         ? '<span style="font-size:11px;font-weight:600;color:#8a6d1f;background:#fdf6e6;' +
@@ -195,9 +348,9 @@
 
     var meta =
       '<div class="muted" style="font-size:11.5px;margin-top:3px;line-height:1.6;">' +
-      'Prints as &ldquo;' +
-      esc(w.title) +
-      '&rdquo;. ' +
+      (doc.key === 'RELEASE'
+        ? 'Prints first, before the terms &mdash; it names the parties the terms rely on. '
+        : 'Prints last. ') +
       (doc.publishedVersion
         ? 'Published revision ' + doc.publishedVersion + '.'
         : 'Never edited &mdash; printing the wording this release shipped with.') +
@@ -246,6 +399,7 @@
           esc(w.closing || '') +
           '</textarea></div>'
         : '') +
+      layoutPanel(doc) +
       '<div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;align-items:center;">' +
       '<button data-lgadd="' +
       doc.key +
@@ -323,11 +477,30 @@
           .filter(function (s) {
             return s.text;
           });
+        var subsections = (blocks[i].subsections || [])
+          .map(function (ss, j) {
+            return {
+              letter: val('lg_' + doc.key + '_ssl_' + i + '_' + j, ss.letter),
+              title: val('lg_' + doc.key + '_sst_' + i + '_' + j, ss.title),
+              paragraphs: splitParas(
+                val('lg_' + doc.key + '_ssb_' + i + '_' + j, (ss.paragraphs || []).join('\n\n')),
+              ),
+            };
+          })
+          // A sub-section with neither heading nor text is one somebody added and thought
+          // better of. Dropped rather than saved as an empty block that fails validation.
+          .filter(function (ss) {
+            return ss.title || ss.paragraphs.length;
+          });
         read.push({
           numeral: val('lg_' + doc.key + '_n_' + i, blocks[i].numeral),
           title: title,
           paragraphs: splitParas(body),
           subs: subs,
+          subsections: subsections,
+          trailing: splitParas(
+            val('lg_' + doc.key + '_tr_' + i, (blocks[i].trailing || []).join('\n\n')),
+          ),
         });
       } else {
         read.push({ title: title, body: body });
@@ -336,9 +509,25 @@
     if (kind === 'ARTICLES') {
       out.articles = read;
       out.closing = val('lg_' + doc.key + '_closing', w.closing || '');
+      out.signature = {
+        leftRole: val('lg_' + doc.key + '_sg_left', (w.signature || {}).leftRole || 'Customer'),
+        rightRole: val(
+          'lg_' + doc.key + '_sg_right',
+          (w.signature || {}).rightRole || 'Summit Sensory Gym',
+        ),
+        title: checked('lg_' + doc.key + '_sg_title', !!(w.signature || {}).title),
+      };
     } else {
       out.sections = read;
     }
+    var st = w.style || {};
+    out.style = {
+      font: val('lg_' + doc.key + '_st_font', st.font || 'plex'),
+      sizePt: Number(val('lg_' + doc.key + '_st_size', st.sizePt || 9)),
+      lineHeight: Number(val('lg_' + doc.key + '_st_lh', st.lineHeight || 1.35)),
+      align: val('lg_' + doc.key + '_st_align', st.align || 'justify'),
+      titlePt: Number(val('lg_' + doc.key + '_st_title', st.titlePt || 15)),
+    };
     return out;
   }
 
@@ -349,12 +538,155 @@
         return p.trim();
       })
       .filter(Boolean);
-    return parts.length ? parts : [''];
+    // `[]`, not `['']`. An empty paragraph fails validation with "String must contain at
+    // least 1 character", which names neither the article nor the fix. Returning none lets
+    // the server's own refinement say "Article III has no text" instead.
+    return parts;
   }
 
   function val(id, fallback) {
     var el = document.getElementById(id);
     return el ? el.value.trim() : fallback;
+  }
+
+  /** Checkboxes report `checked`, not `value`; absent means keep what was stored. */
+  function checked(id, fallback) {
+    var el = document.getElementById(id);
+    return el ? !!el.checked : fallback;
+  }
+
+  /** A labelled select. Curated options only — see the note on the layout panel. */
+  function sel(id, options, current) {
+    return (
+      '<select id="' +
+      id +
+      '" style="' +
+      IN +
+      '">' +
+      options
+        .map(function (o) {
+          return (
+            '<option value="' +
+            esc(o[0]) +
+            '"' +
+            (String(o[0]) === String(current) ? ' selected' : '') +
+            '>' +
+            esc(o[1]) +
+            '</option>'
+          );
+        })
+        .join('') +
+      '</select>'
+    );
+  }
+
+  function field(labelText, control, hint) {
+    return (
+      '<div style="flex:1;min-width:150px;">' +
+      '<label style="display:block;font-size:12px;color:#5c6157;margin-bottom:4px;">' +
+      labelText +
+      '</label>' +
+      control +
+      (hint ? '<div class="muted" style="font-size:11px;margin-top:3px;">' + hint + '</div>' : '') +
+      '</div>'
+    );
+  }
+
+  var FONT_OPTIONS = [
+    ['plex', 'IBM Plex Sans (default) — matches the rest of the software'],
+    ['georgia', 'Georgia — serif'],
+    // Kept so a document already set to it is not silently re-typeset, but honest about
+    // why it is not the default: the render container does not ship Aptos.
+    ['aptos', 'Aptos — may not render in the PDF'],
+  ];
+  var SIZE_OPTIONS = [
+    [8, '8 pt — most text per page'],
+    [9, '9 pt (default)'],
+    [10, '10 pt'],
+    [11, '11 pt — easiest to read'],
+  ];
+  var LH_OPTIONS = [
+    [1.25, 'Tight'],
+    [1.35, 'Normal (default)'],
+    [1.5, 'Airy'],
+  ];
+  var ALIGN_OPTIONS = [
+    ['justify', 'Justified (default)'],
+    ['left', 'Left, ragged right'],
+  ];
+  var TITLE_OPTIONS = [
+    [13, '13 pt'],
+    [15, '15 pt (default)'],
+    [18, '18 pt'],
+  ];
+
+  /**
+   * Layout and signer wording.
+   *
+   * A closed set of choices, not a stylesheet field. These documents print onto a fixed
+   * 816x1056 sheet packed by the proposal paginator, and a free size or leading would let
+   * one setting push a signature block onto a page of its own with the article it belongs
+   * to two pages back. Every option here has been laid out and fits.
+   */
+  function layoutPanel(doc) {
+    var w = working(doc);
+    var st = w.style || {};
+    var sg = w.signature || {};
+    var k = doc.key;
+    var isArticles = w.kind === 'ARTICLES';
+    return (
+      '<div style="border:1px solid #e6e9e1;border-radius:8px;padding:13px;margin-top:16px;background:#fcfdfb;">' +
+      '<div style="font-weight:600;font-size:13px;margin-bottom:10px;">Layout</div>' +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap;">' +
+      field('Typeface', sel('lg_' + k + '_st_font', FONT_OPTIONS, st.font || 'plex')) +
+      field('Body size', sel('lg_' + k + '_st_size', SIZE_OPTIONS, st.sizePt || 9)) +
+      field('Line spacing', sel('lg_' + k + '_st_lh', LH_OPTIONS, st.lineHeight || 1.35)) +
+      '</div>' +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;">' +
+      field('Paragraphs', sel('lg_' + k + '_st_align', ALIGN_OPTIONS, st.align || 'justify')) +
+      field('Heading size', sel('lg_' + k + '_st_title', TITLE_OPTIONS, st.titlePt || 15)) +
+      '<div style="flex:1;min-width:150px;"></div>' +
+      '</div>' +
+      (isArticles
+        ? '<div style="font-weight:600;font-size:13px;margin:18px 0 4px;">Signature blocks</div>' +
+          '<div class="muted" style="font-size:11px;margin-bottom:9px;line-height:1.55;">' +
+          'What each party is called above its signature. These were &ldquo;Releasor&rdquo; ' +
+          'and &ldquo;Releasee&rdquo;, which suit a release and nothing else.' +
+          '</div>' +
+          '<div style="display:flex;gap:10px;flex-wrap:wrap;">' +
+          field(
+            'Customer side',
+            '<input id="lg_' +
+              k +
+              '_sg_left" value="' +
+              esc(sg.leftRole || 'Customer') +
+              '" style="' +
+              IN +
+              '">',
+          ) +
+          field(
+            'Summit side',
+            '<input id="lg_' +
+              k +
+              '_sg_right" value="' +
+              esc(sg.rightRole || 'Summit Sensory Gym') +
+              '" style="' +
+              IN +
+              '">',
+          ) +
+          '</div>' +
+          '<label style="display:flex;align-items:center;gap:8px;font-size:12.5px;' +
+          'color:#3d4a55;margin-top:10px;cursor:pointer;">' +
+          '<input type="checkbox" id="lg_' +
+          k +
+          '_sg_title"' +
+          (sg.title ? ' checked' : '') +
+          '> Include a <b>Title:</b> line &mdash; a person signs for an entity, and ' +
+          'their authority to do so is their title' +
+          '</label>'
+        : '') +
+      '</div>'
+    );
   }
 
   function say(key, text, bad) {
@@ -437,14 +769,66 @@
       esc: esc,
       user: { name: 'Preview' },
     });
+    /*
+     * Shown as the sheets a customer will actually receive.
+     *
+     * The proposal is not printed by the browser's own pagination — it is measured and
+     * packed onto fixed 816x1056 sheets by `paginateProposalArea`, each stamped with the
+     * "Page 1 of 3" footer every sheet is required to state. This preview borrows that
+     * exact function rather than approximating it, because a second implementation would
+     * be a second set of page breaks to disagree with the first.
+     *
+     * The element has to be in the document before it can be paginated: the paginator
+     * measures real rendered heights, which do not exist for a detached node.
+     */
     box.innerHTML =
-      '<div class="muted" style="font-size:11px;margin-bottom:6px;">' +
-      'Rendered by the proposal document itself, with a sample customer.' +
-      '</div>' +
-      '<div style="border:1px solid #e6e9e1;border-radius:8px;background:#fff;padding:26px 30px;' +
-      'max-height:520px;overflow:auto;">' +
+      '<div class="muted" style="font-size:11px;margin-bottom:6px;line-height:1.55;">' +
+      'The printed sheets, with a sample customer. Page numbers count this document on ' +
+      'its own &mdash; inside a proposal it continues the proposal&rsquo;s numbering.' +
+      '</div>';
+
+    var frame = document.createElement('div');
+    frame.style.cssText =
+      'background:#eef0ea;border:1px solid #e6e9e1;border-radius:8px;padding:14px;' +
+      'max-height:640px;overflow:auto;';
+    var holder = document.createElement('div');
+    holder.style.cssText = 'position:relative;';
+    var stage = document.createElement('div');
+    stage.style.cssText = 'transform-origin:top left;';
+    stage.innerHTML =
+      '<div id="propPrintArea" data-foot-left="' +
+      esc(sample.orgName) +
+      '" data-foot-right="' +
+      esc(working(doc).title) +
+      '">' +
       html +
       '</div>';
+    holder.appendChild(stage);
+    frame.appendChild(holder);
+    box.appendChild(frame);
+
+    if (window.SSGPaginate) {
+      window.SSGPaginate(stage);
+      // Sheets butt against each other in print, which is correct on paper and unreadable
+      // on screen. Separated here only, by inline style, so no rule leaks into the print.
+      Array.prototype.forEach.call(stage.querySelectorAll('.ssg-sheet'), function (sh, n) {
+        sh.style.boxShadow = '0 1px 4px rgba(20,30,20,.14)';
+        if (n) sh.style.marginTop = '16px';
+      });
+    }
+
+    /*
+     * Scaled with a transform rather than a width, so the sheet is never re-laid-out at a
+     * different size and the page breaks on screen cannot differ from the printed ones.
+     *
+     * A transform does not affect layout, so the wrapper is given the scaled height
+     * explicitly or the scroll container would reserve the full 816-wide height.
+     */
+    var avail = frame.clientWidth - 28;
+    var k = Math.min(1, avail > 0 ? avail / 816 : 1);
+    stage.style.transform = 'scale(' + k + ')';
+    holder.style.width = 816 * k + 'px';
+    holder.style.height = stage.getBoundingClientRect().height + 'px';
   }
 
   /* ------------------------------------------------------------------ mount */
@@ -562,6 +946,77 @@
     structural('lgdel', function (c, i) {
       var l = listOf(c);
       if (l.length > 1) l.splice(i, 1);
+    });
+
+    /*
+     * Sub-section moves and deletions, addressed by "article:sub-section".
+     *
+     * Same save-first discipline as the article handlers above: the edit is applied to
+     * text already read out of the form, so a reorder cannot silently discard a
+     * paragraph typed a moment earlier and not yet saved.
+     */
+    var ssStructural = function (attr, mutate) {
+      on(attr, function (raw, b) {
+        var key = b.getAttribute('data-lgkey');
+        var doc = byKey(key);
+        if (!doc) return;
+        var parts = String(raw).split(':');
+        var i = parseInt(parts[0], 10);
+        var j = parseInt(parts[1], 10);
+        var next = collect(doc);
+        var art = (next.articles || [])[i];
+        if (!art) return;
+        art.subsections = art.subsections || [];
+        mutate(art.subsections, j);
+        doc.draft = next;
+        draw(host);
+        save(key, host);
+      });
+    };
+    ssStructural('lgssup', function (l, j) {
+      if (j > 0) l.splice(j - 1, 0, l.splice(j, 1)[0]);
+    });
+    ssStructural('lgssdown', function (l, j) {
+      if (j < l.length - 1) l.splice(j + 1, 0, l.splice(j, 1)[0]);
+    });
+    ssStructural('lgssdel', function (l, j) {
+      l.splice(j, 1);
+    });
+
+    /*
+     * Adding a list item or a sub-section.
+     *
+     * Not saved immediately, unlike a reorder: a block with no text yet would fail
+     * validation, and an error the instant you press "+" reads as a fault rather than as
+     * something still to type. It saves with the rest when you press Save draft.
+     */
+    var adder = function (attr, mutate) {
+      on(attr, function (raw, b) {
+        var key = b.getAttribute('data-lgkey');
+        var doc = byKey(key);
+        if (!doc) return;
+        var next = collect(doc);
+        var art = (next.articles || [])[parseInt(raw, 10)];
+        if (!art) return;
+        mutate(art);
+        doc.draft = next;
+        open[key] = true;
+        draw(host);
+      });
+    };
+    adder('lgaddsub', function (art) {
+      art.subs = art.subs || [];
+      // Lower-case roman, matching the lists these documents already use for parties and
+      // for enumerated claims.
+      art.subs.push({ numeral: roman(art.subs.length + 1).toLowerCase(), text: '' });
+    });
+    adder('lgaddss', function (art) {
+      art.subsections = art.subsections || [];
+      art.subsections.push({
+        letter: String.fromCharCode(65 + Math.min(25, art.subsections.length)),
+        title: 'New sub-section',
+        paragraphs: [],
+      });
     });
 
     on('lgadd', function (key) {

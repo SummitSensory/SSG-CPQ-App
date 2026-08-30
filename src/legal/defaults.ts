@@ -41,18 +41,89 @@ export interface LegalSub {
   text: string;
 }
 
-/** A numbered article, as the release is built from. */
+/**
+ * A lettered sub-section: a heading of its own, then its own paragraphs.
+ *
+ * The middle level. `LegalSub` is a list ITEM — a numeral and a run of text — which suits
+ * naming the parties or enumerating released claims. A sub-section is a BLOCK, with a
+ * title and several paragraphs, which is how a long article divides itself up.
+ */
+export interface LegalSubsection {
+  /** A, B, C. Free text, because some documents letter and some number. */
+  letter: string;
+  title: string;
+  paragraphs: string[];
+}
+
+/**
+ * A numbered article.
+ *
+ * The four parts render in a fixed order: `paragraphs`, then `subs`, then
+ * `subsections`, then `trailing`. Every one is optional.
+ */
 export interface LegalArticle {
   numeral: string;
   title: string;
   paragraphs: string[];
   subs: LegalSub[];
+  subsections?: LegalSubsection[];
+  /**
+   * Prose that comes AFTER the lists.
+   *
+   * The part that used to be impossible. A qualification like "Nothing herein releases
+   * Summit from..." has to follow the list of released claims it qualifies; with nowhere
+   * to put it, it had to be appended to the final list item, where it reads as part of
+   * that item rather than as applying to all of them.
+   */
+  trailing?: string[];
 }
 
 /** A numbered clause, as the terms are built from. Blank lines split paragraphs. */
 export interface LegalSection {
   title: string;
   body: string;
+}
+
+/**
+ * Typeface and layout, as a closed set of choices.
+ *
+ * Not free-form CSS. These are signed instruments printed onto a fixed 816x1056 sheet by
+ * the proposal paginator, and an open stylesheet field would let one setting push a
+ * signature block off the foot of a page with nothing to catch it. Every value below is
+ * range-checked by the renderer and falls back to what has always printed.
+ */
+export interface LegalStyle {
+  /**
+   * 'plex' | 'georgia' | 'aptos'. An unknown name falls back to 'plex'.
+   *
+   * 'plex' is IBM Plex Sans, which the rest of the application uses and which the PDF
+   * renderer is known to have. 'aptos' depends on a font the render container does not
+   * ship, so it is offered but not the default.
+   */
+  font?: string;
+  /** Body size in points, 7 to 12. Default 9. */
+  sizePt?: number;
+  /** 1.1 to 1.9. Default 1.35. */
+  lineHeight?: number;
+  /** 'justify' | 'left'. Default justify. */
+  align?: string;
+  /** Document heading size in points, 11 to 22. Default 15. */
+  titlePt?: number;
+}
+
+/**
+ * The two signature blocks, in the document's own words.
+ *
+ * These were the literals 'Releasor' and 'Releasee' — correct for a release and wrong for
+ * anything else. An acknowledgment has a Customer and a supplier.
+ */
+export interface LegalSignature {
+  /** The customer side. Default 'Customer'. */
+  leftRole?: string;
+  /** The Summit side. Default 'Summit Sensory Gym'. */
+  rightRole?: string;
+  /** Add a Title line — a person signs FOR an entity, and their authority is a title. */
+  title?: boolean;
 }
 
 export interface LegalDocumentContent {
@@ -63,6 +134,9 @@ export interface LegalDocumentContent {
   /** Trailing line above the signature blocks. ARTICLES only. */
   closing?: string;
   sections?: LegalSection[];
+  style?: LegalStyle;
+  /** ARTICLES only — the numbered documents have no signature blocks. */
+  signature?: LegalSignature;
 }
 
 /**

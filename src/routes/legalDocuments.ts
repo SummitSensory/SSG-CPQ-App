@@ -34,11 +34,34 @@ const Sub = z.object({
   text: z.string().trim().min(1).max(8000),
 });
 
+const Subsection = z.object({
+  letter: z.string().trim().max(8),
+  title: z.string().trim().min(1).max(200),
+  // `.default([])`, not `.min(1)`. A sub-section just added in the editor has no text yet,
+  // and "Array must contain at least 1 element" tells the person nothing about which
+  // block or what to do. The refinement below names it instead.
+  paragraphs: z.array(z.string().trim().min(1).max(20000)).default([]),
+});
+
+/*
+ * `paragraphs` is no longer `.min(1)`, and `subs` is no longer capped at 12.
+ *
+ * Both limits were wrong, and a real document showed why. An article made entirely of
+ * lettered sub-sections has no prose of its own — its opening line IS sub-section A — so
+ * requiring a paragraph would have forced an empty one to be invented. And an article
+ * enumerating released claims ran to twelve items, sitting exactly on the old cap, so the
+ * thirteenth would have been refused with a validation error rather than a reason.
+ *
+ * An article must still say SOMETHING, which the refinement below enforces across all
+ * three containers rather than demanding it from one of them.
+ */
 const Article = z.object({
   numeral: z.string().trim().max(8),
   title: z.string().trim().min(1).max(200),
-  paragraphs: z.array(z.string().trim().min(1).max(20000)).min(1),
-  subs: z.array(Sub).max(12).default([]),
+  paragraphs: z.array(z.string().trim().min(1).max(20000)).default([]),
+  subs: z.array(Sub).max(40).default([]),
+  subsections: z.array(Subsection).max(26).default([]),
+  trailing: z.array(z.string().trim().min(1).max(20000)).default([]),
 });
 
 const Section = z.object({
@@ -54,6 +77,31 @@ const Section = z.object({
  * numbered clauses. Letting an editor change one into the other would produce a document
  * with signature blocks and no parties, or parties and nowhere to sign.
  */
+/*
+ * Layout, validated as a closed set.
+ *
+ * Bounded rather than free: a 40pt body or a 4.0 line height would push a signature block
+ * off the foot of a printed sheet, and the paginator would place it on a page of its own
+ * with the article it belongs to two pages back. The renderer clamps as well, so stored
+ * content from any source is safe, but refusing here means the person who typed it finds
+ * out immediately instead of discovering it on a customer's copy.
+ */
+const Style = z.object({
+  // 'plex' matches the rest of the application and is the only face guaranteed to be
+  // present in the PDF render; see the note in public/contract-pages.js.
+  font: z.enum(['aptos', 'plex', 'georgia']).default('plex'),
+  sizePt: z.coerce.number().min(7).max(12).default(9),
+  lineHeight: z.coerce.number().min(1.1).max(1.9).default(1.35),
+  align: z.enum(['justify', 'left']).default('justify'),
+  titlePt: z.coerce.number().min(11).max(22).default(15),
+});
+
+const Signature = z.object({
+  leftRole: z.string().trim().min(1).max(60).default('Customer'),
+  rightRole: z.string().trim().min(1).max(60).default('Summit Sensory Gym'),
+  title: z.boolean().default(false),
+});
+
 const Content = z
   .object({
     title: z.string().trim().min(1).max(200),
@@ -61,11 +109,35 @@ const Content = z
     articles: z.array(Article).max(40).optional(),
     closing: z.string().trim().max(4000).optional(),
     sections: z.array(Section).max(60).optional(),
+    style: Style.optional(),
+    signature: Signature.optional(),
   })
   .superRefine((v, ctx) => {
     if (v.kind === 'ARTICLES' && !v.articles?.length) {
       ctx.addIssue({ code: 'custom', message: 'This document needs at least one article.' });
     }
+    // An article with a heading and nothing under it would print as a numeral, a title and
+    // a gap. Satisfied by prose, a list or a sub-section — any of the three.
+    (v.articles ?? []).forEach((a, i) => {
+      if (!a.paragraphs.length && !a.subs.length && !a.subsections.length) {
+        const which = a.numeral || String(i + 1);
+        ctx.addIssue({
+          code: 'custom',
+          message:
+            `Article ${which} (${a.title}) has no text. ` +
+            `Add a paragraph, a list item or a sub-section.`,
+        });
+      }
+      a.subsections.forEach((ss, j) => {
+        if (!ss.paragraphs.length) {
+          const where = `${a.numeral || i + 1}${ss.letter || String.fromCharCode(65 + j)}`;
+          ctx.addIssue({
+            code: 'custom',
+            message: `Sub-section ${where} (${ss.title}) has a heading but no text.`,
+          });
+        }
+      });
+    });
     if (v.kind === 'NUMBERED' && !v.sections?.length) {
       ctx.addIssue({ code: 'custom', message: 'This document needs at least one clause.' });
     }
@@ -94,6 +166,13 @@ function unknownTokens(content: LegalDocumentContent): string[] {
     scan(a.title);
     a.paragraphs.forEach(scan);
     a.subs.forEach((s) => scan(s.text));
+    // Scanned too, or a typo in a sub-section would print a gap on a signed instrument
+    // while the save reported success.
+    for (const ss of a.subsections ?? []) {
+      scan(ss.title);
+      ss.paragraphs.forEach(scan);
+    }
+    (a.trailing ?? []).forEach(scan);
   }
   for (const s of content.sections ?? []) {
     scan(s.title);

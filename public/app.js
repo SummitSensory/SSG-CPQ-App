@@ -586,6 +586,15 @@
     // synchronous, deep inside the document builder — always has it by the time anyone
     // opens a proposal. Without this call the shipped wording prints and nothing breaks.
     if (window.SSGContractPages) window.SSGContractPages.init({ authed: authed });
+    /*
+     * The paginator, lent to the legal document editor.
+     *
+     * Its preview has to show the sheets a customer will actually receive — with the real
+     * page breaks and the "Page 1 of 3" footer every sheet is required to state. A second
+     * implementation would be a second set of page breaks to disagree with this one, so
+     * the editor borrows the real thing rather than approximating it.
+     */
+    window.SSGPaginate = paginateProposalArea;
     if (window.SSGLegalAdmin) window.SSGLegalAdmin.init({ authed: authed, esc: esc });
     // Vendor part numbers: the dialog lives here for Catalog AND Administration, which
     // is why it is no longer inside either.

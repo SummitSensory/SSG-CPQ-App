@@ -258,11 +258,107 @@
       .join(', ');
   }
 
+  /*
+   * Typeface and layout, as a closed set of choices.
+   *
+   * Not free-form CSS. These documents are signed instruments printed onto a fixed
+   * 816x1056 sheet by the proposal paginator, and a stylesheet field would let one
+   * setting push a signature block off the bottom of a page with nothing to catch it.
+   * Each option below is one that has been laid out and fits.
+   *
+   * The defaults reproduce exactly what printed before this was configurable, so a
+   * document that has never been styled is unchanged.
+   */
+  var FONTS = {
+    aptos: "Aptos,'Segoe UI',Calibri,system-ui,sans-serif",
+    plex: "'IBM Plex Sans',-apple-system,'Segoe UI',Helvetica,Arial,sans-serif",
+    georgia: "Georgia,'Times New Roman',Times,serif",
+  };
+
+  var STYLE_DEFAULTS = {
+    /*
+     * IBM Plex Sans — what the rest of the application is set in: the shell, the proposal
+     * sheets the paginator builds, and the proposal document itself.
+     *
+     * This was Aptos. Aptos is Microsoft's newer default, so it renders on a Windows
+     * machine and almost certainly NOT on the render container, which falls through to
+     * 'Segoe UI', then Calibri, then whatever the platform calls sans-serif. The PDF a
+     * customer received was therefore already not in Aptos, and not reliably in anything
+     * in particular. Plex is loaded for the proposal, so it is the one face guaranteed to
+     * be present in the render.
+     */
+    font: 'plex',
+    sizePt: 9,
+    lineHeight: 1.35,
+    align: 'justify',
+    titlePt: 15,
+  };
+
+  function styleOf(doc) {
+    var s = (doc && doc.style) || {};
+    var n = function (v, d, lo, hi) {
+      var x = parseFloat(v);
+      return isFinite(x) && x >= lo && x <= hi ? x : d;
+    };
+    return {
+      family: FONTS[s.font] || FONTS[STYLE_DEFAULTS.font],
+      sizePt: n(s.sizePt, STYLE_DEFAULTS.sizePt, 7, 12),
+      lineHeight: n(s.lineHeight, STYLE_DEFAULTS.lineHeight, 1.1, 1.9),
+      // Anything but 'left' is justified, so an unrecognised stored value falls back to
+      // the setting these documents have always printed with.
+      align: s.align === 'left' ? 'left' : 'justify',
+      titlePt: n(s.titlePt, STYLE_DEFAULTS.titlePt, 11, 22),
+    };
+  }
+
+  function bodyCss(st) {
+    return (
+      'font-family:' +
+      st.family +
+      ';font-size:' +
+      st.sizePt +
+      'pt;line-height:' +
+      st.lineHeight +
+      ';color:#20241f;'
+    );
+  }
+
+  /*
+   * Who signs, in the document's own words.
+   *
+   * These were the literals 'Releasor' and 'Releasee', which are the right words for a
+   * release and the wrong words for everything else — an acknowledgment has a Customer
+   * and a supplier, not a releasor. The labels are now the document's to set.
+   *
+   * The shipped default is deliberately neutral rather than 'Releasor': a party label
+   * should describe the party, and 'Customer' is true of both a release and an
+   * acknowledgment.
+   *
+   * `title: true` adds the Title line the signing convention expects for an entity —
+   * a person signs FOR an organisation, and their authority to do so is their title.
+   */
+  var SIGNATURE_DEFAULTS = {
+    leftRole: 'Customer',
+    rightRole: 'Summit Sensory Gym',
+    title: false,
+  };
+
+  function signatureOf(doc) {
+    var s = (doc && doc.signature) || {};
+    return {
+      leftRole: s.leftRole || SIGNATURE_DEFAULTS.leftRole,
+      rightRole: s.rightRole || SIGNATURE_DEFAULTS.rightRole,
+      title: s.title === true,
+    };
+  }
+
   /** The centred document heading and its rule. Editable text, fixed typesetting. */
-  function heading(title, esc) {
+  function heading(title, esc, titlePt) {
     return (
       '<div style="text-align:center;margin-top:18px;">' +
-      '<div style="font-size:15pt;font-weight:700;text-transform:uppercase;letter-spacing:.1em;">' +
+      '<div style="font-size:' +
+      (titlePt || 15) +
+      'pt;font-weight:700;text-transform:uppercase;letter-spacing:.1em;">' +
       esc(title) +
       '</div>' +
       '<div style="width:88px;height:1px;background:#20241f;margin:7px auto 0;"></div>' +
@@ -283,16 +379,28 @@
       contactName: m.contactName || '',
     };
 
-    var BODY =
-      "font-family:Aptos,'Segoe UI',Calibri,system-ui,sans-serif;font-size:9pt;line-height:1.35;color:#20241f;";
+    var st = styleOf(doc);
+    var sig = signatureOf(doc);
+    var BODY = bodyCss(st);
     // `blank` used to live here, rendering the grey [customer] gap when the proposal had
     // no organisation on it. That is now `fill`'s job, because a gap can appear for any
     // merge field rather than only the two the old hard-coded sentence knew about.
 
-    /** A numbered article: the numeral hangs in the margin beside its text. */
-    var article = function (numeral, heading, inner) {
+    /**
+     * A numbered article: the numeral hangs in the margin beside its text.
+     *
+     * `keepWhole` is the caller's judgement, not a fixed rule. A short article is held
+     * together, because an article split across a page boundary reads as two fragments.
+     * One carrying sub-sections routinely runs longer than a page, and holding THAT
+     * together is impossible — the browser honours it by pushing the whole block to a
+     * fresh sheet, leaving the previous page two thirds empty and the article still
+     * overflowing.
+     */
+    var article = function (numeral, heading, inner, keepWhole) {
       return (
-        '<div style="display:flex;gap:10px;margin-top:10px;break-inside:avoid;page-break-inside:avoid;">' +
+        '<div style="display:flex;gap:10px;margin-top:10px;' +
+        (keepWhole === false ? '' : 'break-inside:avoid;page-break-inside:avoid;') +
+        '">' +
         '<div style="flex:none;width:30px;font-weight:700;">' +
         numeral +
         '.</div>' +
@@ -308,7 +416,9 @@
       return (
         '<p style="margin:' +
         (first ? '0' : '5px') +
-        ' 0 0;text-align:justify;text-wrap:pretty;">' +
+        ' 0 0;text-align:' +
+        st.align +
+        ';text-wrap:pretty;">' +
         html +
         '</p>'
       );
@@ -320,8 +430,40 @@
         '<div style="flex:none;width:24px;">' +
         numeral +
         '.</div>' +
-        '<div style="flex:1;text-align:justify;text-wrap:pretty;">' +
+        '<div style="flex:1;text-align:' +
+        st.align +
+        ';text-wrap:pretty;">' +
         html +
+        '</div></div>'
+      );
+    };
+
+    /**
+     * A lettered sub-section: a heading of its own, then its own paragraphs.
+     *
+     * The middle level between an article and a bare sub-paragraph. `sub()` above is a
+     * list item — a numeral and a run of text — which is right for naming the parties or
+     * enumerating released claims, but wrong for a block that needs its own title and
+     * several paragraphs under it.
+     *
+     * The letter hangs in the margin like the article numeral, one indent further in, so
+     * the three levels read as three levels rather than as differently-sized text.
+     *
+     * NOT wrapped in break-inside:avoid. A sub-section can legitimately run half a page,
+     * and forcing one whole would push it to a fresh sheet and leave the previous one
+     * short. The article-level rule handles keeping short blocks together.
+     */
+    var subsection = function (letter, heading, inner) {
+      return (
+        '<div style="display:flex;gap:9px;margin-top:11px;">' +
+        '<div style="flex:none;width:20px;font-weight:700;">' +
+        letter +
+        '.</div>' +
+        '<div style="flex:1;">' +
+        '<div style="font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">' +
+        heading +
+        '</div>' +
+        inner +
         '</div></div>'
       );
     };
@@ -344,7 +486,7 @@
      * the proposal is written; WHEN they sign is not, and printing a date beside an
      * unsigned rule would state something that has not happened yet.
      */
-    var sigBlock = function (role, name, entity) {
+    var sigBlock = function (role, name, entity, wantTitle) {
       var line = function (label, value, depth) {
         return (
           '<div style="display:flex;gap:6px;align-items:baseline;margin-top:9px;">' +
@@ -368,13 +510,36 @@
         '</div>' +
         line('By:', '', 46) +
         line('Name:', name) +
+        // A person signs FOR an organisation, and their authority to do so is their
+        // title. Off by default because the wording that has always printed omitted it.
+        (wantTitle ? line('Title:', '') : '') +
         line('Date:', '') +
         '</div>'
       );
     };
 
+    /*
+     * An article renders in four passes, in this order:
+     *
+     *   paragraphs   the opening prose
+     *   subs         a numbered list (i, ii, iii) — the parties, released claims
+     *   subsections  lettered blocks with headings of their own (A, B, C)
+     *   trailing     prose AFTER the list, which is the part that used to be impossible
+     *
+     * That last one is not a nicety. "This Acknowledgment is incorporated into the
+     * agreement..." follows the list naming the parties, and "Nothing herein releases
+     * Summit from..." follows the list of released claims — a qualification that has to
+     * come after the thing it qualifies. Without it those sentences had to be jammed into
+     * the final list item, where they read as part of item xii rather than as applying to
+     * all twelve.
+     *
+     * Every one of the four is optional and absent means absent, so a document written
+     * before the last two existed renders exactly as it did.
+     */
     var articles = (doc.articles || [])
       .map(function (a) {
+        var subsections = a.subsections || [];
+        var trailing = a.trailing || [];
         var inner = (a.paragraphs || [])
           .map(function (text, i) {
             return p(fill(text, tokens, esc), i === 0);
@@ -385,7 +550,24 @@
             return sub(esc(s.numeral), fill(s.text, tokens, esc));
           })
           .join('');
-        return article(esc(a.numeral), esc(a.title), inner);
+        inner += subsections
+          .map(function (ss) {
+            var body = (ss.paragraphs || [])
+              .map(function (text, i) {
+                return p(fill(text, tokens, esc), i === 0);
+              })
+              .join('');
+            return subsection(esc(ss.letter), esc(ss.title), body);
+          })
+          .join('');
+        inner += trailing
+          .map(function (text) {
+            return p(fill(text, tokens, esc), false);
+          })
+          .join('');
+        // A sub-section carries its own heading and paragraphs, so an article holding any
+        // is long by construction and must be allowed to break across pages.
+        return article(esc(a.numeral), esc(a.title), inner, !subsections.length);
       })
       .join('');
 
@@ -394,16 +576,18 @@
       BODY +
       '">' +
       releaseHeader(d, esc) +
-      heading(doc.title, esc) +
+      heading(doc.title, esc, st.titlePt) +
       articles +
       (doc.closing
-        ? '<div style="margin-top:16px;padding-top:9px;border-top:1px solid #20241f;text-align:justify;break-inside:avoid;">' +
+        ? '<div style="margin-top:16px;padding-top:9px;border-top:1px solid #20241f;text-align:' +
+          st.align +
+          ';break-inside:avoid;">' +
           fill(doc.closing, tokens, esc) +
           '</div>'
         : '') +
       '<div style="display:flex;gap:44px;margin-top:12px;break-inside:avoid;page-break-inside:avoid;">' +
-      sigBlock('Releasor', m.contactName || '', company) +
-      sigBlock('Releasee', u.name || '', 'Summit Sensory Gym') +
+      sigBlock(esc(sig.leftRole), m.contactName || '', company, sig.title) +
+      sigBlock(esc(sig.rightRole), u.name || '', 'Summit Sensory Gym', sig.title) +
       '</div>' +
       '</div>'
     );
@@ -419,10 +603,10 @@
   function termsHtml(d, opts) {
     var esc = opts.esc;
     var m = (d && d.meta) || {};
-    var BODY =
-      "font-family:Aptos,'Segoe UI',Calibri,system-ui,sans-serif;font-size:9pt;line-height:1.35;color:#20241f;";
     var who = d.orgName || m.contactName || '';
     var doc = contentFor('TERMS');
+    var st = styleOf(doc);
+    var BODY = bodyCss(st);
     var tokens = {
       customer: who,
       billingAddress: flatAddress(m, who),
@@ -437,7 +621,7 @@
       '<div style="text-align:right;font-size:9pt;line-height:1.5;font-weight:700;">' +
       esc(who) +
       '</div>' +
-      heading(doc.title, esc) +
+      heading(doc.title, esc, st.titlePt) +
       (doc.sections || [])
         .map(function (sec, i) {
           var body = String(sec.body == null ? '' : sec.body);
@@ -462,7 +646,9 @@
                 return (
                   '<p style="margin:' +
                   (j ? '5px' : '0') +
-                  ' 0 0;text-align:justify;text-wrap:pretty;">' +
+                  ' 0 0;text-align:' +
+                  st.align +
+                  ';text-wrap:pretty;">' +
                   fill(para, tokens, esc) +
                   '</p>'
                 );
