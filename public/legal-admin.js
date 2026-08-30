@@ -116,82 +116,79 @@
      * divides itself into A, B, C.
      */
     var subsecs = '';
-    if (true) {
-      var list = block.subsections || [];
-      subsecs =
-        '<div style="margin-top:11px;padding-left:12px;border-left:2px solid #dce4d4;">' +
-        '<div class="muted" style="font-size:11px;margin-bottom:6px;">' +
-        'Sub-sections &mdash; each prints its own heading, lettered A, B, C.' +
-        '</div>' +
-        list
-          .map(function (ss, j) {
-            var body = (ss.paragraphs || []).join('\n\n');
-            return (
-              '<div style="border:1px solid #e6e9e1;border-radius:7px;padding:10px;margin-top:7px;background:#fff;">' +
-              '<div style="display:flex;gap:7px;align-items:center;">' +
-              '<input value="' +
-              esc(ss.letter) +
-              '" id="lg_' +
-              key +
-              '_ssl_' +
-              i +
-              '_' +
-              j +
-              '" style="' +
-              IN +
-              'width:48px;flex:none;text-align:center;font-weight:600;">' +
-              '<input value="' +
-              esc(ss.title) +
-              '" id="lg_' +
-              key +
-              '_sst_' +
-              i +
-              '_' +
-              j +
-              '" style="' +
-              IN +
-              'font-weight:600;">' +
-              '<div style="display:flex;gap:3px;flex:none;">' +
-              ssBtn('&#9650;', 'lgssup', key, i, j, j === 0) +
-              ssBtn('&#9660;', 'lgssdown', key, i, j, j === list.length - 1) +
-              ssBtn('&#10005;', 'lgssdel', key, i, j, false) +
-              '</div></div>' +
-              '<textarea id="lg_' +
-              key +
-              '_ssb_' +
-              i +
-              '_' +
-              j +
-              '" rows="' +
-              Math.min(14, Math.max(3, Math.ceil(body.length / 95))) +
-              '" style="' +
-              TA +
-              'margin-top:7px;">' +
-              esc(body) +
-              '</textarea>' +
-              '</div>'
-            );
-          })
-          .join('') +
-        '<div style="display:flex;gap:6px;margin-top:8px;">' +
-        '<button data-lgaddsub="' +
-        i +
-        '" data-lgkey="' +
-        key +
-        '" style="' +
-        BTN +
-        'font-size:12px;">+ List item</button>' +
-        '<button data-lgaddss="' +
-        i +
-        '" data-lgkey="' +
-        key +
-        '" style="' +
-        BTN +
-        'font-size:12px;">+ Sub-section</button>' +
-        '</div>' +
-        '</div>';
-    }
-
+    var list = block.subsections || [];
+    subsecs =
+      '<div style="margin-top:11px;padding-left:12px;border-left:2px solid #dce4d4;">' +
+      '<div class="muted" style="font-size:11px;margin-bottom:6px;">' +
+      'Sub-sections &mdash; each prints its own heading, lettered A, B, C.' +
+      '</div>' +
+      list
+        .map(function (ss, j) {
+          var body = (ss.paragraphs || []).join('\n\n');
+          return (
+            '<div style="border:1px solid #e6e9e1;border-radius:7px;padding:10px;margin-top:7px;background:#fff;">' +
+            '<div style="display:flex;gap:7px;align-items:center;">' +
+            '<input value="' +
+            esc(ss.letter) +
+            '" id="lg_' +
+            key +
+            '_ssl_' +
+            i +
+            '_' +
+            j +
+            '" style="' +
+            IN +
+            'width:48px;flex:none;text-align:center;font-weight:600;">' +
+            '<input value="' +
+            esc(ss.title) +
+            '" id="lg_' +
+            key +
+            '_sst_' +
+            i +
+            '_' +
+            j +
+            '" style="' +
+            IN +
+            'font-weight:600;">' +
+            '<div style="display:flex;gap:3px;flex:none;">' +
+            ssBtn('&#9650;', 'lgssup', key, i, j, j === 0) +
+            ssBtn('&#9660;', 'lgssdown', key, i, j, j === list.length - 1) +
+            ssBtn('&#10005;', 'lgssdel', key, i, j, false) +
+            '</div></div>' +
+            '<textarea id="lg_' +
+            key +
+            '_ssb_' +
+            i +
+            '_' +
+            j +
+            '" rows="' +
+            Math.min(14, Math.max(3, Math.ceil(body.length / 95))) +
+            '" style="' +
+            TA +
+            'margin-top:7px;">' +
+            esc(body) +
+            '</textarea>' +
+            '</div>'
+          );
+        })
+        .join('') +
+      '<div style="display:flex;gap:6px;margin-top:8px;">' +
+      '<button data-lgaddsub="' +
+      i +
+      '" data-lgkey="' +
+      key +
+      '" style="' +
+      BTN +
+      'font-size:12px;">+ List item</button>' +
+      '<button data-lgaddss="' +
+      i +
+      '" data-lgkey="' +
+      key +
+      '" style="' +
+      BTN +
+      'font-size:12px;">+ Sub-section</button>' +
+      '</div>' +
+      '</div>';
     /*
      * Paragraphs that print AFTER the lists.
      *
@@ -201,26 +198,23 @@
      * part of that item rather than as applying to all of them.
      */
     var trail = '';
-    if (true) {
-      var after = (block.trailing || []).join('\n\n');
-      trail =
-        '<div style="margin-top:10px;">' +
-        '<label style="display:block;font-size:12px;color:#5c6157;margin-bottom:4px;">' +
-        'Paragraphs after the list <span class="muted" style="font-weight:400;">' +
-        '&mdash; optional; prints below everything above</span></label>' +
-        '<textarea id="lg_' +
-        key +
-        '_tr_' +
-        i +
-        '" rows="' +
-        Math.min(10, Math.max(2, Math.ceil(after.length / 95))) +
-        '" style="' +
-        TA +
-        '">' +
-        esc(after) +
-        '</textarea></div>';
-    }
-
+    var after = (block.trailing || []).join('\n\n');
+    trail =
+      '<div style="margin-top:10px;">' +
+      '<label style="display:block;font-size:12px;color:#5c6157;margin-bottom:4px;">' +
+      'Paragraphs after the list <span class="muted" style="font-weight:400;">' +
+      '&mdash; optional; prints below everything above</span></label>' +
+      '<textarea id="lg_' +
+      key +
+      '_tr_' +
+      i +
+      '" rows="' +
+      Math.min(10, Math.max(2, Math.ceil(after.length / 95))) +
+      '" style="' +
+      TA +
+      '">' +
+      esc(after) +
+      '</textarea></div>';
     return (
       '<div data-lgblock="' +
       i +

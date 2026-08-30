@@ -538,18 +538,6 @@
         '</div></div>'
       );
     };
-    // Thin wrappers over the shared helpers, so this renderer reads as it did while the
-    // indents and margins live in exactly one place.
-    var p = function (html, first) {
-      return pTag(html, first, st.align);
-    };
-    var sub = function (numeral, html) {
-      return subTag(numeral, html, st.align);
-    };
-    var subsection = function (letter, headingText, inner) {
-      return subsectionTag(letter, headingText, inner);
-    };
-
     /**
      * The two signature blocks name different people on purpose.
      *
