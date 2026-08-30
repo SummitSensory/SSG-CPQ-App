@@ -23,16 +23,19 @@
  *
  * 4. **Bootstraps a genuinely empty database.** `0000_baseline` builds the whole
  *    schema from nothing, and several historical migrations then try to create
- *    some of that same schema again — see docs/database-migrations.md. Against a
- *    database that already has history (production, staging, a developer's Neon
- *    branch) that never happens, because those migrations already ran for real,
- *    months apart, before baseline existed. But a target that starts with zero
- *    rows in `_prisma_migrations` — CI's throwaway Postgres container, or a
- *    genuinely fresh preview branch database — hits it on every run. When (and
- *    only when) migration history is empty at the start, a migration that fails
- *    with a Postgres "already exists" error is superseded by baseline: mark it
- *    resolved and keep going, rather than failing the build over schema baseline
- *    already built.
+ *    (or drop and recreate) some of that same schema again — see
+ *    docs/database-migrations.md. Against a database that already has history
+ *    (production, staging, a developer's Neon branch) that never happens,
+ *    because those migrations already ran for real, months apart, before
+ *    baseline existed. But a target that starts with zero rows in
+ *    `_prisma_migrations` — CI's throwaway Postgres container, or a genuinely
+ *    fresh preview branch database — hits it on every run. When (and only when)
+ *    migration history is empty at the start, a migration that fails with a
+ *    Postgres SQLSTATE meaning "this object is already exactly what baseline
+ *    built" (a duplicate create, or a drop blocked by something baseline-built
+ *    still depending on it) is superseded by baseline: mark it resolved and
+ *    keep going, rather than failing the build over schema baseline already
+ *    built.
  *
  * Skipped entirely when there is no database URL, so a build without database
  * access (a preview with no branch database, a local `vercel build`) still succeeds.
@@ -44,6 +47,25 @@ import { PrismaClient } from '@prisma/client';
 const ATTEMPTS = 4;
 const BACKOFF_MS = [2000, 5000, 10000];
 const MAX_BOOTSTRAP_RESOLUTIONS = 60; // comfortably above the current migration count
+
+// Postgres SQLSTATE codes for "this object is already exactly what baseline
+// already built" — a duplicate create, or a drop blocked because something
+// baseline-built still depends on the object. Not `23505` (unique_violation):
+// that is a data conflict, not a structural one, and must still fail the build.
+const SUPERSEDED_BY_BASELINE_CODES = new Set([
+  '42710', // duplicate_object (types, etc.)
+  '42P07', // duplicate_table
+  '42701', // duplicate_column
+  '42723', // duplicate_function
+  '42P06', // duplicate_schema
+  '2BP01', // dependent_objects_still_exist — e.g. DROP TYPE blocked by a column baseline created
+]);
+
+/** Prisma prints the underlying Postgres SQLSTATE as "Database error code: XXXXX". */
+function supersededByBaseline(output) {
+  const match = output.match(/Database error code:\s*(\S+)/);
+  return match !== null && SUPERSEDED_BY_BASELINE_CODES.has(match[1]);
+}
 
 /** The pooled host cannot hold advisory locks; the direct one can. */
 function isPooled(url) {
@@ -113,8 +135,9 @@ async function deploy(url, startedEmpty) {
       const output = String(err.stdout ?? '') + String(err.stderr ?? '');
       process.stdout.write(output || String(err.message ?? ''));
 
-      const isAlreadyExists = /already exists/i.test(output);
-      if (!startedEmpty || !isAlreadyExists || i === MAX_BOOTSTRAP_RESOLUTIONS) throw err;
+      if (!startedEmpty || !supersededByBaseline(output) || i === MAX_BOOTSTRAP_RESOLUTIONS) {
+        throw err;
+      }
 
       const name = await stuckMigrationName(url);
       if (!name) throw err;
