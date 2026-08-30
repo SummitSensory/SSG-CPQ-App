@@ -20,7 +20,9 @@
 
   var H = null;
   var STATE = [];
-  var open = {};
+  var open = {}; /** Whether the "add a document" panel is showing. */
+  var adding = false;
+
   var previewing = {};
 
   var IN =
@@ -318,7 +320,8 @@
     return kind === 'ARTICLES' ? (block.paragraphs || []).join('\n\n') : block.body || '';
   }
 
-  function docCard(doc) {
+  function docCard(doc, idx, all) {
+    var total = (all || STATE).length;
     var w = working(doc);
     var blocks = w.kind === 'ARTICLES' ? w.articles || [] : w.sections || [];
     var preambleText = (w.preamble || []).join('\n\n');
@@ -334,7 +337,49 @@
         ? '<span style="font-size:11px;font-weight:600;color:#8a6d1f;background:#fdf6e6;' +
           'border:1px solid #ecd9a6;border-radius:99px;padding:2px 9px;">Unpublished draft</span>'
         : '') +
+      (doc.enabled === false
+        ? '<span style="font-size:11px;font-weight:600;color:#6b7280;background:#f1f3ef;' +
+          'border:1px solid #dfe3da;border-radius:99px;padding:2px 9px;">Not printing</span>'
+        : '') +
       '<div style="flex:1;"></div>' +
+      /*
+       * Placement, on the card header where the order is visible.
+       *
+       * Arrows rather than drag: this list is short, it is read as a sequence, and a
+       * mis-drop on the order of a signed instrument is a worse failure than a slow click.
+       * The first document's up arrow and the last one's down arrow are disabled rather
+       * than hidden, so the buttons do not move under the pointer as you use them.
+       */
+      '<button data-lgmove="' +
+      doc.key +
+      '" data-dir="up" title="Print earlier" style="' +
+      BTN +
+      (idx === 0 ? 'opacity:.35;cursor:default;' : '') +
+      '"' +
+      (idx === 0 ? ' disabled' : '') +
+      '>&#9650;</button>' +
+      '<button data-lgmove="' +
+      doc.key +
+      '" data-dir="down" title="Print later" style="' +
+      BTN +
+      (idx === total - 1 ? 'opacity:.35;cursor:default;' : '') +
+      '"' +
+      (idx === total - 1 ? ' disabled' : '') +
+      '>&#9660;</button>' +
+      '<button data-lgenable="' +
+      doc.key +
+      '" style="' +
+      BTN +
+      '">' +
+      (doc.enabled === false ? 'Start printing' : 'Stop printing') +
+      '</button>' +
+      (doc.canDelete
+        ? '<button data-lgdelete="' +
+          doc.key +
+          '" style="' +
+          BTN +
+          'color:#8f2f2f;">Delete</button>'
+        : '') +
       '<button data-lgtoggle="' +
       doc.key +
       '" style="' +
@@ -346,9 +391,11 @@
 
     var meta =
       '<div class="muted" style="font-size:11.5px;margin-top:3px;line-height:1.6;">' +
-      (doc.key === 'RELEASE'
-        ? 'Prints first, before the terms &mdash; it names the parties the terms rely on. '
-        : 'Prints last. ') +
+      // Stated as a position in the list rather than as "first" or "last", which stopped
+      // being true the moment a third document could exist.
+      (doc.enabled === false
+        ? 'Not printing on proposals. Its wording and history are kept. '
+        : 'Prints ' + ordinal(idx + 1) + ' of ' + total + '. ') +
       (doc.publishedVersion
         ? 'Published revision ' + doc.publishedVersion + '.'
         : 'Never edited &mdash; printing the wording this release shipped with.') +
@@ -437,11 +484,16 @@
       BTN +
       '">Preview</button>' +
       '<div style="flex:1;"></div>' +
-      '<button data-lgrestore="' +
-      doc.key +
-      '" style="' +
-      BTN +
-      '">Restore shipped wording</button>' +
+      // Only the two documents that ship with the application have wording to restore. A
+      // document you wrote has no earlier version outside its own published history, so
+      // offering the button would be offering an action that cannot work.
+      (doc.isShippedKey
+        ? '<button data-lgrestore="' +
+          doc.key +
+          '" style="' +
+          BTN +
+          '">Restore shipped wording</button>'
+        : '') +
       (hasDraft
         ? '<button data-lgdiscard="' + doc.key + '" style="' + BTN + '">Discard draft</button>'
         : '') +
@@ -880,15 +932,79 @@
 
   /* ------------------------------------------------------------------ mount */
 
+  /**
+   * The panel for adding a document.
+   *
+   * A reference is asked for rather than generated, because it appears in audit records
+   * and in URLs and someone will need to recognise it there. The kind is asked for once and
+   * never again: articles print with signature blocks at the foot, numbered clauses print
+   * with a running identification, and they are different code paths in the renderer.
+   */
+  function addPanel() {
+    if (!adding) {
+      return (
+        '<div style="margin-top:14px;">' +
+        '<button data-lgnew="1" style="' +
+        BTN +
+        '">Add a document</button>' +
+        '</div>'
+      );
+    }
+    return (
+      '<div class="card" style="margin-top:14px;">' +
+      '<div class="section-title" style="margin:0 0 10px;">Add a document</div>' +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap;">' +
+      field(
+        'Printed title',
+        '<input id="lgNewTitle" placeholder="e.g. Limited Warranty" style="' + IN + '">',
+      ) +
+      field(
+        'Reference',
+        '<input id="lgNewKey" placeholder="e.g. WARRANTY" style="' + IN + '">',
+        'Letters, digits and underscores. Appears in the audit trail.',
+      ) +
+      field(
+        'Structure',
+        '<select id="lgNewKind" style="' +
+          IN +
+          '">' +
+          '<option value="NUMBERED">Numbered clauses (1, 2, 3)</option>' +
+          '<option value="ARTICLES">Articles with signature blocks</option>' +
+          '</select>',
+        'Cannot be changed afterwards.',
+      ) +
+      '</div>' +
+      '<div class="muted" style="font-size:11.5px;margin-top:10px;line-height:1.55;">' +
+      'The document is created switched off, holding placeholder text, and goes to the end ' +
+      'of the list. Write it, publish it, then switch it on.' +
+      '</div>' +
+      '<div id="lgNewMsg" style="margin-top:8px;"></div>' +
+      '<div style="display:flex;gap:8px;margin-top:12px;">' +
+      '<button data-lgnewcancel="1" style="' +
+      BTN +
+      '">Cancel</button>' +
+      '<div style="flex:1;"></div>' +
+      '<button data-lgnewsave="1" style="' +
+      BTN +
+      '">Create</button>' +
+      '</div>' +
+      '</div>'
+    );
+  }
+
   function draw(host) {
     if (!host) return;
     host.innerHTML =
       '<div class="muted" style="font-size:12px;line-height:1.6;">' +
-      'These two documents print after the acceptance page on every proposal except the ' +
-      'cover-only template. Saving a draft changes nothing about what prints; publishing ' +
-      'does. A proposal already released keeps the wording it went out with.' +
+      'These documents print after the acceptance page, in the order shown, on every ' +
+      'proposal except the cover-only template. Saving a draft changes nothing about what ' +
+      'prints; publishing does. A proposal already released keeps the wording it went out ' +
+      'with.' +
       '</div>' +
-      STATE.map(docCard).join('');
+      STATE.map(function (d, i) {
+        return docCard(d, i, STATE);
+      }).join('') +
+      addPanel();
     bind(host);
   }
 
@@ -908,6 +1024,164 @@
     });
     on('lgpreview', function (key) {
       preview(key);
+    });
+
+    /*
+     * Reorder.
+     *
+     * The whole list is sent, not the one document that moved. Two people each nudging one
+     * document could otherwise interleave into a sequence neither chose, and the order of
+     * documents in a signed instrument is part of the instrument.
+     *
+     * The list is rebuilt locally first so the arrows respond immediately; the server's
+     * answer is authoritative and `reload` follows.
+     */
+    on('lgmove', async function (key, el) {
+      var dir = el.getAttribute('data-dir');
+      var i = STATE.findIndex(function (d) {
+        return d.key === key;
+      });
+      var j = dir === 'up' ? i - 1 : i + 1;
+      if (i < 0 || j < 0 || j >= STATE.length) return;
+      var next = STATE.slice();
+      var tmp = next[i];
+      next[i] = next[j];
+      next[j] = tmp;
+      STATE = next;
+      draw(host);
+
+      var r = await H.authed('/legal-documents/reorder', {
+        method: 'POST',
+        body: {
+          keys: STATE.map(function (d) {
+            return d.key;
+          }),
+        },
+      });
+      if (!r.ok) {
+        var msg = '';
+        try {
+          msg = ((await r.json()) || {}).message || '';
+        } catch (e) {}
+        // Put it back. A failed reorder that left the screen showing the new order would be
+        // telling the operator something untrue about a signed document.
+        await reload(host);
+        say(key, msg || 'Could not change the order (' + r.status + ').', true);
+        return;
+      }
+      await reload(host);
+      say(key, 'Order changed. New proposals print the documents in this order.');
+    });
+
+    on('lgenable', async function (key) {
+      var doc = byKey(key);
+      if (!doc) return;
+      var turningOff = doc.enabled !== false;
+      if (
+        turningOff &&
+        !confirm(
+          'Stop this document printing on new proposals?\n\nThe wording and its history are ' +
+            'kept, and proposals already released are unaffected.',
+        )
+      )
+        return;
+      var r = await H.authed('/legal-documents/' + key + '/enabled', {
+        method: 'PATCH',
+        body: { enabled: !turningOff },
+      });
+      if (!r.ok) {
+        var msg = '';
+        try {
+          msg = ((await r.json()) || {}).message || '';
+        } catch (e) {}
+        say(key, msg || 'Could not change this (' + r.status + ').', true);
+        return;
+      }
+      replace(await r.json());
+      draw(host);
+      say(
+        key,
+        turningOff
+          ? 'This document will not print on new proposals.'
+          : 'This document will print on new proposals.',
+      );
+      if (window.SSGContractPages && window.SSGContractPages.load) {
+        window.SSGContractPages.load(true);
+      }
+    });
+
+    on('lgdelete', async function (key) {
+      var doc = byKey(key);
+      if (!doc) return;
+      if (
+        !confirm(
+          'Delete "' +
+            (doc.published && doc.published.title ? doc.published.title : key) +
+            '"?\n\nThis cannot be undone. It is only offered because nothing has ever been ' +
+            'published from this document.',
+        )
+      )
+        return;
+      var r = await H.authed('/legal-documents/' + key, { method: 'DELETE' });
+      if (!r.ok) {
+        var msg = '';
+        try {
+          msg = ((await r.json()) || {}).message || '';
+        } catch (e) {}
+        say(key, msg || 'Could not delete this (' + r.status + ').', true);
+        return;
+      }
+      delete open[key];
+      delete previewing[key];
+      await reload(host);
+    });
+
+    on('lgnew', function () {
+      adding = true;
+      draw(host);
+    });
+    on('lgnewcancel', function () {
+      adding = false;
+      draw(host);
+    });
+    on('lgnewsave', async function () {
+      var title = (document.getElementById('lgNewTitle') || {}).value || '';
+      var keyRaw = (document.getElementById('lgNewKey') || {}).value || '';
+      var kind = (document.getElementById('lgNewKind') || {}).value || 'NUMBERED';
+      var box = document.getElementById('lgNewMsg');
+      var fail = function (text) {
+        if (box) {
+          box.innerHTML = '<div style="font-size:12px;color:#8f2f2f;">' + esc(text) + '</div>';
+        }
+      };
+      if (!title.trim()) return fail('Give the document a printed title.');
+      // Derived from the title when left blank, because a reference is a convenience for
+      // reading an audit record and not a decision worth blocking on.
+      var key = (keyRaw.trim() || title.trim())
+        .toUpperCase()
+        .replace(/[^A-Z0-9_]+/g, '_')
+        .replace(/^_+|_+$/g, '')
+        .slice(0, 40);
+      if (!/^[A-Z]/.test(key)) return fail('A reference must start with a letter.');
+
+      var r = await H.authed('/legal-documents', {
+        method: 'POST',
+        body: { key: key, title: title.trim(), kind: kind },
+      });
+      if (!r.ok) {
+        var msg = '';
+        try {
+          msg = ((await r.json()) || {}).message || '';
+        } catch (e) {}
+        return fail(msg || 'Could not create this document (' + r.status + ').');
+      }
+      adding = false;
+      open[key] = true;
+      await reload(host);
+      say(
+        key,
+        'Created, switched off, with placeholder text. Write it, publish it, then switch it on.',
+      );
     });
     on('lgsave', function (key) {
       save(key, host);
@@ -1087,6 +1361,11 @@
   }
 
   /** Roman numerals for a new article, so it matches the ones above it. */
+  function ordinal(n) {
+    var names = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth'];
+    return names[n - 1] || String(n) + 'th';
+  }
+
   function roman(n) {
     var map = [
       [10, 'X'],

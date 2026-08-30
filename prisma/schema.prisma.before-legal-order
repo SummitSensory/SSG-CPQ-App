@@ -1198,12 +1198,6 @@ enum NotePlacement {
 model LegalDocument {
   key            String    @id
   title          String
-  /// Where this document falls in the proposal, low to high. Ties break on key so the
-  /// order is stable rather than whatever the database happens to return.
-  sortOrder      Int       @default(0)
-  /// Whether it prints at all. Disabling is how a document is retired: the wording and
-  /// its revision history stay, so a proposal released under it can still be explained.
-  enabled        Boolean   @default(true)
   content        Json
   /// An unpublished edit. NULL means the published copy is the only copy — a lawyer's
   /// half-finished redline must not print on tomorrow's proposal.

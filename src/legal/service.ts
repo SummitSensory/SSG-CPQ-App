@@ -3,9 +3,9 @@ import type { Prisma, PrismaClient } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import {
   LEGAL_KEYS,
+  SHIPPED_ORDER,
   defaultContent,
   type LegalDocumentContent,
-  type LegalKey,
 } from './defaults.js';
 
 /**
@@ -30,34 +30,77 @@ import {
  */
 
 export interface ResolvedLegalDocument {
-  key: LegalKey;
+  /**
+   * Free text, not a union of two literals.
+   *
+   * Any number of documents can be added in Administration, so the key of one is whatever
+   * it was created as. The two shipped keys are still special — they have fallback wording
+   * in `defaults.ts` — but they are no longer the only ones that exist.
+   */
+  key: string;
   title: string;
   content: LegalDocumentContent;
   /** Which published revision this is. 0 means the shipped default, never edited. */
   version: number;
 }
 
-/** The two documents as they would print right now. */
+/**
+ * Every enabled document, in the order it prints.
+ *
+ * Three rules, and each one is load-bearing:
+ *
+ * ORDER comes from `sortOrder`, ties broken on key. Never from whatever the database
+ * happens to return: the sequence of documents in a signed instrument is part of the
+ * instrument, and "usually right" is not a property a contract can have.
+ *
+ * DISABLED documents are absent. That is how a document is retired — the wording and its
+ * revision history stay, so a proposal released under it can still be explained years
+ * later, but it stops printing on new ones.
+ *
+ * A MISSING shipped document falls back to the wording in `defaults.ts`, at its
+ * conventional position. A fresh environment, or a seed that never ran, prints the text
+ * this release was built with rather than nothing — a proposal that goes out with no terms
+ * attached is far worse than one that goes out with last month's.
+ *
+ * The fallback is keyed on the row being ABSENT, not on it being disabled. A document
+ * someone deliberately switched off must stay off; resurrecting it from the defaults
+ * because the row said `enabled: false` would be the opposite of what they asked for.
+ */
 export async function currentLegalDocuments(
   client: PrismaClient | Prisma.TransactionClient = prisma,
 ): Promise<ResolvedLegalDocument[]> {
   const rows = await client.legalDocument.findMany({
-    where: { key: { in: [...LEGAL_KEYS] } },
-    select: { key: true, content: true, version: true },
+    select: { key: true, content: true, version: true, sortOrder: true, enabled: true },
   });
-  const byKey = new Map(rows.map((r) => [r.key, r]));
+  const present = new Set(rows.map((r) => r.key));
 
-  return LEGAL_KEYS.map((key) => {
-    const row = byKey.get(key);
-    if (!row) {
-      // No row: a fresh environment, or a seed that never ran. The shipped text prints
-      // rather than nothing at all — a proposal that goes out with no terms attached is
-      // worse than one that goes out with the wording this release was built with.
-      return { key, title: defaultContent(key).title, content: defaultContent(key), version: 0 };
-    }
-    const content = row.content as unknown as LegalDocumentContent;
-    return { key, title: content.title, content, version: row.version };
-  });
+  const items: (ResolvedLegalDocument & { sortOrder: number })[] = rows
+    .filter((r) => r.enabled)
+    .map((r) => {
+      const content = r.content as unknown as LegalDocumentContent;
+      return {
+        key: r.key,
+        title: content.title,
+        content,
+        version: r.version,
+        sortOrder: r.sortOrder,
+      };
+    });
+
+  for (const key of LEGAL_KEYS) {
+    if (present.has(key)) continue;
+    const content = defaultContent(key);
+    items.push({
+      key,
+      title: content.title,
+      content,
+      version: 0,
+      sortOrder: SHIPPED_ORDER[key],
+    });
+  }
+
+  items.sort((a, b) => a.sortOrder - b.sortOrder || a.key.localeCompare(b.key));
+  return items.map(({ sortOrder: _sortOrder, ...doc }) => doc);
 }
 
 /**

@@ -130,11 +130,40 @@
 
   /** Loaded text, by key. Null until the fetch resolves. */
   var LOADED = null;
+  /**
+   * The keys in the order they print. Null until the fetch resolves.
+   *
+   * Kept beside LOADED rather than derived from it: any number of documents can now be
+   * added in Administration, and the sequence they appear in is part of the signed
+   * instrument. A map's key order would be whatever the response happened to serialise,
+   * which is fine right up until it is not.
+   */
+  var ORDER = null;
   var loading = null;
   var H = null;
 
   function contentFor(key) {
     return (LOADED && LOADED[key]) || DEFAULTS[key];
+  }
+
+  /**
+   * Every document to print, in order.
+   *
+   * Falls back to the two shipped documents when nothing has loaded — the release first,
+   * because it names the parties the terms then rely on.
+   */
+  function documentList() {
+    if (ORDER && ORDER.length) {
+      return ORDER.map(function (key) {
+        return { key: key, content: contentFor(key) };
+      }).filter(function (x) {
+        return !!x.content;
+      });
+    }
+    return [
+      { key: 'RELEASE', content: contentFor('RELEASE') },
+      { key: 'TERMS', content: contentFor('TERMS') },
+    ];
   }
 
   /**
@@ -155,10 +184,17 @@
         var docs = (d && d.documents) || [];
         if (!docs.length) return false;
         var next = {};
+        var order = [];
+        // The server sends them in print order, filtered to the enabled ones. Both facts
+        // are taken from the response rather than re-derived here.
         docs.forEach(function (x) {
-          if (x && x.key && x.content) next[x.key] = x.content;
+          if (x && x.key && x.content) {
+            next[x.key] = x.content;
+            order.push(x.key);
+          }
         });
         LOADED = next;
+        ORDER = order;
         return true;
       })
       .catch(function () {
@@ -492,12 +528,19 @@
     );
   }
 
-  function releaseHtml(d, opts) {
+  /**
+   * A document set as numbered articles, with signature blocks at the foot.
+   *
+   * Takes the key rather than assuming RELEASE. The shape of the document — articles,
+   * a closing line, signatures — is what selects this renderer, not which document it is,
+   * so any created document of that kind prints through here.
+   */
+  function articlesDocHtml(key, d, opts) {
     var esc = opts.esc;
     var m = d.meta || {};
     var u = opts.user || {};
     var company = d.orgName || m.contactName || '';
-    var doc = contentFor('RELEASE');
+    var doc = contentFor(key);
     var tokens = {
       customer: company,
       billingAddress: flatAddress(m, company),
@@ -616,7 +659,9 @@
       .join('');
 
     return (
-      '<div data-page-break="release" style="break-before:page;page-break-before:always;' +
+      '<div data-page-break="' +
+      esc(String(key).toLowerCase()) +
+      '" style="break-before:page;page-break-before:always;' +
       BODY +
       '">' +
       releaseHeader(d, esc) +
@@ -645,11 +690,16 @@
    * a page of terms that has come loose from the rest should still say what it is and
    * whose transaction it belongs to.
    */
-  function termsHtml(d, opts) {
+  /**
+   * A document set as numbered clauses, with a running identification on every page.
+   *
+   * Takes the key rather than assuming TERMS, for the same reason as above.
+   */
+  function numberedDocHtml(key, d, opts) {
     var esc = opts.esc;
     var m = (d && d.meta) || {};
     var who = d.orgName || m.contactName || '';
-    var doc = contentFor('TERMS');
+    var doc = contentFor(key);
     var st = styleOf(doc);
     var BODY = bodyCss(st);
     var tokens = {
@@ -660,7 +710,9 @@
     };
 
     return (
-      '<div data-page-break="terms" style="break-before:page;page-break-before:always;' +
+      '<div data-page-break="' +
+      esc(String(key).toLowerCase()) +
+      '" style="break-before:page;page-break-before:always;' +
       BODY +
       '">' +
       '<div style="text-align:right;font-size:9pt;line-height:1.5;font-weight:700;">' +
@@ -733,13 +785,27 @@
      * Used by the admin editor to preview a draft, and by a released proposal to print
      * the text it was pinned to.
      */
-    withContent: function (content, doc, opts) {
-      var keep = LOADED;
+    /**
+     * Render a specific wording rather than the current one.
+     *
+     * Used by the admin editor to preview a draft, and by a released proposal to print the
+     * text it was pinned to.
+     *
+     * `order` is optional and only matters when there are documents beyond the shipped
+     * two: a released proposal's snapshot is an ARRAY, already in the order it printed, and
+     * the caller passes those keys so the reprint matches the original rather than falling
+     * back to a default sequence.
+     */
+    withContent: function (content, doc, opts, order) {
+      var keepContent = LOADED;
+      var keepOrder = ORDER;
       LOADED = content || null;
+      ORDER = order && order.length ? order.slice() : content ? Object.keys(content) : null;
       try {
         return this.html(doc, opts);
       } finally {
-        LOADED = keep;
+        LOADED = keepContent;
+        ORDER = keepOrder;
       }
     },
     /**
@@ -764,11 +830,26 @@
           return String(s == null ? '' : s);
         };
       var m = (doc && doc.meta) || {};
-      // The order is fixed: the release names the parties the terms then rely on.
-      return (
-        (m.includeRelease === false ? '' : releaseHtml(doc, opts)) +
-        (m.includeTerms === false ? '' : termsHtml(doc, opts))
-      );
+      /*
+       * Every enabled document, in the order the server sent them.
+       *
+       * `includeRelease` and `includeTerms` are still honoured, and only for those two
+       * keys. They are per-proposal switches that predate this: a proposal saved before
+       * they existed carries no value, and the contract it went out under had both, so only
+       * an explicit `false` drops one. A created document has no such flag and prints
+       * whenever it is enabled — its switch is the enabled flag itself, in Administration.
+       */
+      var out = '';
+      documentList().forEach(function (item) {
+        if (item.key === 'RELEASE' && m.includeRelease === false) return;
+        if (item.key === 'TERMS' && m.includeTerms === false) return;
+        var kind = (item.content && item.content.kind) || 'NUMBERED';
+        out +=
+          kind === 'ARTICLES'
+            ? articlesDocHtml(item.key, doc, opts)
+            : numberedDocHtml(item.key, doc, opts);
+      });
+      return out;
     },
   };
 })();

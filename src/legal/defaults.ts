@@ -167,6 +167,15 @@ export interface LegalDocumentContent {
  * user-created third document would have no defined place in that order. Editing the two
  * is what was asked for; inventing new legal instruments in a CPQ screen is not.
  */
+/**
+ * The two documents that SHIP with the application.
+ *
+ * Not "the documents that exist" — any number can be added in Administration, and they
+ * are rows in `LegalDocument` with no entry here. What makes these two different is that
+ * this file carries their wording, so they have something to fall back to when the
+ * database has no row, and something to be restored to when an edit goes wrong. A
+ * document you created has neither.
+ */
 export const LEGAL_KEYS = ['RELEASE', 'TERMS'] as const;
 export type LegalKey = (typeof LEGAL_KEYS)[number];
 
@@ -272,6 +281,61 @@ export const LEGAL_DEFAULTS: Record<LegalKey, LegalDocumentContent> = {
 };
 
 /** Defensive copy — callers edit drafts, and a shared default must not be mutated. */
+/**
+ * Where the shipped documents fall when no row exists to say.
+ *
+ * The release names the parties the terms then rely on, so it prints first. Gaps of ten
+ * leave room to drop a document between them without renumbering.
+ *
+ * This matters on a fresh database: with both at 0 the tie breaks on key, which is
+ * alphabetical — putting RELEASE after TERMS and quietly reversing a signed document.
+ */
+export const SHIPPED_ORDER: Record<LegalKey, number> = { RELEASE: 10, TERMS: 20 };
+
+/** Whether this key is one of the two the application ships wording for. */
+export function isShippedKey(key: string): key is LegalKey {
+  return (LEGAL_KEYS as readonly string[]).includes(key);
+}
+
+/**
+ * The starting content for a document someone has just created.
+ *
+ * One block of obvious placeholder text, and the caller creates the document DISABLED. A
+ * new document that printed straight away would put "Replace this..." on the next
+ * proposal out of the door.
+ */
+export function starterContent(title: string, kind: 'ARTICLES' | 'NUMBERED'): LegalDocumentContent {
+  const base = { title, kind, preamble: [] as string[] };
+  if (kind === 'ARTICLES') {
+    return {
+      ...base,
+      articles: [
+        {
+          numeral: 'I',
+          title: 'First article',
+          paragraphs: ['Replace this with the first article of the document.'],
+          subs: [],
+          subsections: [],
+          trailing: [],
+        },
+      ],
+      closing: '',
+    } as LegalDocumentContent;
+  }
+  return {
+    ...base,
+    sections: [
+      {
+        title: 'First clause',
+        body: 'Replace this with the first clause of the document.',
+        subs: [],
+        subsections: [],
+        trailing: [],
+      },
+    ],
+  } as LegalDocumentContent;
+}
+
 export function defaultContent(key: LegalKey): LegalDocumentContent {
   return JSON.parse(JSON.stringify(LEGAL_DEFAULTS[key])) as LegalDocumentContent;
 }

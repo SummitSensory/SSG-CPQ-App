@@ -11,9 +11,11 @@ import { recordAudit } from '../lib/audit.js';
 import { ValidationError, NotFoundError } from '../lib/errors.js';
 import {
   LEGAL_KEYS,
+  SHIPPED_ORDER,
   defaultContent,
+  isShippedKey,
+  starterContent,
   type LegalDocumentContent,
-  type LegalKey,
 } from '../legal/defaults.js';
 import { currentLegalDocuments, legalDocumentsForVersion } from '../legal/service.js';
 
@@ -217,20 +219,53 @@ function unknownTokens(content: LegalDocumentContent): string[] {
   return [...found];
 }
 
-function assertKey(raw: string): LegalKey {
-  const key = String(raw || '').toUpperCase() as LegalKey;
-  if (!LEGAL_KEYS.includes(key)) throw new NotFoundError('Unknown legal document');
+/**
+ * A document key, normalised.
+ *
+ * This used to refuse anything but RELEASE and TERMS, which is what made two documents the
+ * limit. Any number can now exist, so the check is on the SHAPE of the key rather than on
+ * membership of a list: upper case, digits and underscores, because it goes in a URL and in
+ * an audit record and needs to be readable in both.
+ *
+ * Whether the document EXISTS is a separate question, answered where the row is read. A
+ * key that is well-formed but unknown is a 404 there, not here.
+ */
+const KEY_PATTERN = /^[A-Z][A-Z0-9_]{1,39}$/;
+
+function normalizeKey(raw: string): string {
+  const key = String(raw || '')
+    .trim()
+    .toUpperCase();
+  if (!KEY_PATTERN.test(key)) throw new NotFoundError('Unknown legal document');
   return key;
 }
 
-/** The stored row plus the shipped default, which is what "reset" means. */
-async function stateFor(key: LegalKey) {
+/**
+ * The stored row, plus the shipped wording when there is any.
+ *
+ * `shipped` is now nullable, and that is the whole difference between the two documents
+ * that come with the application and one you created. "Restore the original wording" means
+ * nothing for a document whose only wording is the wording you typed, so the editor hides
+ * that button when `shipped` is null rather than offering an action that cannot work.
+ *
+ * `kind` is read from the published content rather than from the shipped default, because
+ * a created document has no default to read it from. For the two shipped ones the answer is
+ * the same — the draft route refuses a kind change — so nothing moves.
+ */
+async function stateFor(key: string) {
   const row = await prisma.legalDocument.findUnique({ where: { key } });
-  const shipped = defaultContent(key);
-  const published = (row?.content as unknown as LegalDocumentContent) ?? shipped;
+  const shipped = isShippedKey(key) ? defaultContent(key) : null;
+  if (!row && !shipped) throw new NotFoundError('Unknown legal document');
+
+  const published = (row?.content as unknown as LegalDocumentContent) ?? shipped!;
+  // Only asked for documents that could be deleted at all, so a list of five does not cost
+  // five count queries for an answer already known.
+  const revisions =
+    shipped || !row ? 0 : await prisma.legalDocumentRevision.count({ where: { key } });
+
   return {
     key,
-    kind: shipped.kind,
+    kind: published.kind,
     published,
     publishedVersion: row?.version ?? 0,
     publishedAt: row?.publishedAt ?? null,
@@ -241,6 +276,18 @@ async function stateFor(key: LegalKey) {
     /** True while this document has never been edited, so "reset" is a no-op. */
     isShipped: !row,
     shipped,
+    sortOrder: row?.sortOrder ?? (isShippedKey(key) ? SHIPPED_ORDER[key] : 999),
+    enabled: row?.enabled ?? true,
+    /**
+     * Deletable only if nothing has ever been published from it.
+     *
+     * A published revision is the answer to "what did the customer sign", and a proposal
+     * released under this document points at a snapshot containing its wording. Deleting
+     * the row would leave that question unanswerable, so a document that has been
+     * published is retired by disabling it instead — the wording stays, it stops printing.
+     */
+    canDelete: !shipped && !!row && revisions === 0,
+    isShippedKey: !!shipped,
   };
 }
 
@@ -248,10 +295,18 @@ export function registerLegalDocumentRoutes(app: FastifyInstance): void {
   const manage = { preHandler: requirePermission(Permission.LEGAL_MANAGE) };
   const read = { preHandler: requirePermission(Permission.PROPOSAL_READ) };
 
-  /** Both documents, with draft state. The editor's only load. */
+  /**
+   * Every document, in print order, with draft state. The editor's only load.
+   *
+   * The shipped pair is unioned in whether or not a row exists for them, so a fresh
+   * environment still shows two editable documents rather than an empty screen.
+   */
   app.get('/legal-documents', manage, async () => {
+    const rows = await prisma.legalDocument.findMany({ select: { key: true } });
+    const keys = [...new Set([...rows.map((r) => r.key), ...LEGAL_KEYS])];
     const out = [];
-    for (const key of LEGAL_KEYS) out.push(await stateFor(key));
+    for (const key of keys) out.push(await stateFor(key));
+    out.sort((a, b) => a.sortOrder - b.sortOrder || a.key.localeCompare(b.key));
     return out;
   });
 
@@ -277,13 +332,17 @@ export function registerLegalDocumentRoutes(app: FastifyInstance): void {
 
   /** Save an edit without publishing it. */
   app.put<{ Params: { key: string } }>('/legal-documents/:key/draft', manage, async (req) => {
-    const key = assertKey(req.params.key);
-    const shipped = defaultContent(key);
+    const key = normalizeKey(req.params.key);
+    const state = await stateFor(key);
     const parsed = Content.safeParse(req.body);
     if (!parsed.success) {
       throw new ValidationError(parsed.error.issues[0]?.message ?? 'This document is not valid.');
     }
-    if (parsed.data.kind !== shipped.kind) {
+    // Compared against what this document already IS, not against a shipped default a
+    // created document does not have. Still refused: articles and numbered clauses print
+    // through different code paths, and switching would give a document signature blocks
+    // with no parties, or parties with nowhere to sign.
+    if (parsed.data.kind !== state.kind) {
       throw new ValidationError('A document cannot change between articles and numbered clauses.');
     }
     const bad = unknownTokens(parsed.data as LegalDocumentContent);
@@ -298,13 +357,15 @@ export function registerLegalDocumentRoutes(app: FastifyInstance): void {
     const draft = parsed.data as unknown as Prisma.InputJsonValue;
     await prisma.legalDocument.upsert({
       where: { key },
-      // A first draft on a never-edited document still needs a published copy to fall
-      // back to, so the row is created carrying the shipped text as published.
+      // A first draft on a never-edited document still needs a published copy to fall back
+      // to, so the row is created carrying the shipped text as published. Only reachable
+      // for the two shipped keys: a created document already has a row.
       create: {
         key,
-        title: shipped.title,
-        content: shipped as unknown as Prisma.InputJsonValue,
+        title: state.shipped?.title ?? parsed.data.title,
+        content: (state.shipped ?? parsed.data) as unknown as Prisma.InputJsonValue,
         version: 1,
+        sortOrder: isShippedKey(key) ? SHIPPED_ORDER[key] : 999,
         draft,
         draftSavedAt: new Date(),
         draftSavedById: req.user!.sub,
@@ -323,7 +384,7 @@ export function registerLegalDocumentRoutes(app: FastifyInstance): void {
 
   /** Discard the draft, leaving the published copy alone. */
   app.delete<{ Params: { key: string } }>('/legal-documents/:key/draft', manage, async (req) => {
-    const key = assertKey(req.params.key);
+    const key = normalizeKey(req.params.key);
     await prisma.legalDocument.updateMany({
       where: { key },
       data: { draft: Prisma.DbNull, draftSavedAt: null, draftSavedById: null },
@@ -346,7 +407,7 @@ export function registerLegalDocumentRoutes(app: FastifyInstance): void {
    * because the old one is pinned by `ProposalVersion.legalSnapshotId`.
    */
   app.post<{ Params: { key: string } }>('/legal-documents/:key/publish', manage, async (req) => {
-    const key = assertKey(req.params.key);
+    const key = normalizeKey(req.params.key);
     const row = await prisma.legalDocument.findUnique({ where: { key } });
     if (!row?.draft) throw new ValidationError('There is no draft to publish.');
 
@@ -397,7 +458,16 @@ export function registerLegalDocumentRoutes(app: FastifyInstance): void {
     '/legal-documents/:key/restore-shipped',
     manage,
     async (req) => {
-      const key = assertKey(req.params.key);
+      const key = normalizeKey(req.params.key);
+      if (!isShippedKey(key)) {
+        // There is no earlier wording to restore. The only version of a created document's
+        // text is the version someone typed, and its published revisions are reachable
+        // from the history panel.
+        throw new ValidationError(
+          'This document has no shipped wording to restore. Only the acknowledgment and the ' +
+            'terms of sale ship with the application.',
+        );
+      }
       const shipped = defaultContent(key);
       await prisma.legalDocument.upsert({
         where: { key },
@@ -426,9 +496,216 @@ export function registerLegalDocumentRoutes(app: FastifyInstance): void {
     },
   );
 
+  /**
+   * Add a document.
+   *
+   * Created DISABLED, carrying one block of placeholder text. Both halves of that are
+   * deliberate: the starter content means the row is valid the moment it exists, so the
+   * editor has something to open rather than a validation error; and disabled means
+   * "Replace this with the first clause of the document." cannot reach a customer while
+   * somebody is halfway through writing it. Enabling it is a separate, visible act.
+   *
+   * `kind` is chosen here and never again. It decides whether the document prints as
+   * numbered articles with signature blocks or as numbered clauses, and those are
+   * different code paths in the renderer.
+   */
+  app.post('/legal-documents', manage, async (req) => {
+    const body = z
+      .object({
+        key: z.string().trim().min(2).max(40),
+        title: z.string().trim().min(1).max(200),
+        kind: z.enum(['ARTICLES', 'NUMBERED']),
+      })
+      .safeParse(req.body);
+    if (!body.success) {
+      throw new ValidationError(body.error.issues[0]?.message ?? 'Fill in every field.');
+    }
+    const key = body.data.key
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9_]+/g, '_');
+    if (!KEY_PATTERN.test(key)) {
+      throw new ValidationError(
+        'A reference must start with a letter and use letters, digits or underscores.',
+      );
+    }
+    const clash = await prisma.legalDocument.findUnique({ where: { key }, select: { key: true } });
+    // Checked against the shipped keys too. They may have no row yet, and letting someone
+    // create a second RELEASE would give two documents one identity.
+    if (clash || isShippedKey(key)) {
+      throw new ValidationError(`There is already a document with the reference ${key}.`);
+    }
+
+    // At the end of the list. Gaps of ten so a document can later be dropped between two
+    // without renumbering the rest.
+    const last = await prisma.legalDocument.aggregate({ _max: { sortOrder: true } });
+    const content = starterContent(body.data.title, body.data.kind);
+
+    await prisma.legalDocument.create({
+      data: {
+        key,
+        title: body.data.title,
+        content: content as unknown as Prisma.InputJsonValue,
+        version: 1,
+        sortOrder: (last._max.sortOrder ?? 0) + 10,
+        enabled: false,
+        draft: content as unknown as Prisma.InputJsonValue,
+        draftSavedAt: new Date(),
+        draftSavedById: req.user!.sub,
+      },
+    });
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'legalDocument.create',
+      entity: 'LegalDocument',
+      entityId: key,
+      details: { title: body.data.title, kind: body.data.kind },
+    });
+    return stateFor(key);
+  });
+
+  /**
+   * Whether a document prints.
+   *
+   * Retiring a document is this, not deletion. The wording and every published revision
+   * stay, so a proposal released under it can still be explained; it simply stops being
+   * added to new ones.
+   */
+  app.patch<{ Params: { key: string } }>('/legal-documents/:key/enabled', manage, async (req) => {
+    const key = normalizeKey(req.params.key);
+    const body = z.object({ enabled: z.boolean() }).safeParse(req.body);
+    if (!body.success) throw new ValidationError('Send enabled: true or false.');
+    const state = await stateFor(key);
+
+    await prisma.legalDocument.upsert({
+      where: { key },
+      // No row yet, so this is a shipped document being switched off for the first time.
+      // It has to become a row to remember that.
+      create: {
+        key,
+        title: state.published.title,
+        content: state.published as unknown as Prisma.InputJsonValue,
+        version: 1,
+        sortOrder: state.sortOrder,
+        enabled: body.data.enabled,
+      },
+      update: { enabled: body.data.enabled },
+    });
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: body.data.enabled ? 'legalDocument.enable' : 'legalDocument.disable',
+      entity: 'LegalDocument',
+      entityId: key,
+    });
+    return stateFor(key);
+  });
+
+  /**
+   * The print order, set wholesale.
+   *
+   * The whole list rather than one document's position, because that is the only form in
+   * which the order is unambiguous. Two clients each nudging one document would otherwise
+   * be able to interleave into a sequence neither asked for — and the sequence of documents
+   * in a signed instrument is part of the instrument.
+   *
+   * Renumbered 10, 20, 30 in one transaction, so a failure leaves the previous order intact
+   * rather than half of a new one.
+   */
+  app.post('/legal-documents/reorder', manage, async (req) => {
+    const body = z
+      .object({ keys: z.array(z.string().trim().min(1).max(40)).min(1).max(40) })
+      .safeParse(req.body);
+    if (!body.success) throw new ValidationError('Send the full list of keys, in order.');
+    const keys = body.data.keys.map((k) => k.trim().toUpperCase());
+    if (new Set(keys).size !== keys.length) {
+      throw new ValidationError('The same document appears twice in the order.');
+    }
+
+    const rows = await prisma.legalDocument.findMany({ select: { key: true } });
+    const known = new Set([...rows.map((r) => r.key), ...LEGAL_KEYS]);
+    const unknown = keys.filter((k) => !known.has(k));
+    if (unknown.length) {
+      throw new ValidationError(`Unknown document: ${unknown.join(', ')}.`);
+    }
+    // Every document must be accounted for. A partial list would leave the documents left
+    // out sitting at old numbers, interleaving them into the new order at positions nobody
+    // chose.
+    if (keys.length !== known.size) {
+      throw new ValidationError('Send every document in the order, not a subset.');
+    }
+
+    await prisma.$transaction(async (tx) => {
+      for (let i = 0; i < keys.length; i++) {
+        const key = keys[i]!;
+        const sortOrder = (i + 1) * 10;
+        const existing = await tx.legalDocument.findUnique({
+          where: { key },
+          select: { key: true },
+        });
+        if (existing) {
+          await tx.legalDocument.update({ where: { key }, data: { sortOrder } });
+          continue;
+        }
+        // A shipped document with no row, being moved for the first time.
+        const content = defaultContent(key as 'RELEASE' | 'TERMS');
+        await tx.legalDocument.create({
+          data: {
+            key,
+            title: content.title,
+            content: content as unknown as Prisma.InputJsonValue,
+            version: 1,
+            sortOrder,
+          },
+        });
+      }
+    });
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'legalDocument.reorder',
+      entity: 'LegalDocument',
+      details: { order: keys },
+    });
+    return { ok: true, order: keys };
+  });
+
+  /**
+   * Remove a document that never printed anything.
+   *
+   * Refused once anything has been published from it, and refused for the two shipped
+   * documents outright. A published revision is the answer to "what did the customer sign",
+   * and a released proposal points at a snapshot containing this wording — deleting the row
+   * would leave that unanswerable. Disabling is the way to retire a document that has been
+   * in use, and the error says so.
+   */
+  app.delete<{ Params: { key: string } }>('/legal-documents/:key', manage, async (req) => {
+    const key = normalizeKey(req.params.key);
+    const state = await stateFor(key);
+    if (state.isShippedKey) {
+      throw new ValidationError(
+        'The acknowledgment and the terms of sale ship with the application and cannot be ' +
+          'removed. Switch a document off to stop it printing.',
+      );
+    }
+    if (!state.canDelete) {
+      throw new ValidationError(
+        'This document has been published, so a released proposal may rely on its wording. ' +
+          'Switch it off instead — the text and its history stay, and it stops printing.',
+      );
+    }
+    await prisma.legalDocument.delete({ where: { key } });
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'legalDocument.delete',
+      entity: 'LegalDocument',
+      entityId: key,
+      details: { title: state.published.title },
+    });
+    return { ok: true };
+  });
+
   /** Published history, newest first, for provenance beside the editor. */
   app.get<{ Params: { key: string } }>('/legal-documents/:key/revisions', manage, async (req) => {
-    const key = assertKey(req.params.key);
+    const key = normalizeKey(req.params.key);
     return prisma.legalDocumentRevision.findMany({
       where: { key },
       orderBy: { version: 'desc' },

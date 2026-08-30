@@ -167,8 +167,35 @@ export function renderTemplate(template: string, values: MergeValues): RenderRes
       return '';
     }
     if (name === 'invoice_link') {
-      if (!/^https?:\/\//i.test(value)) return '';
-      return `<a href="${esc(value)}" style="color:${BRAND.navy};">${esc(value)}</a>`;
+      /*
+       * A LABEL, not the URL.
+       *
+       * Intuit's shareable payment URL is around 160 characters of opaque token. Printed
+       * as its own link text it wrapped across three lines of the letter and read as
+       * damage — and it is not transcribable anyway, so showing it served nobody: a
+       * customer cannot type it, and the only thing they can do with it is click, which a
+       * label supports just as well.
+       *
+       * The label is the invoice number when there is one, because that is short, means
+       * something, and tells the reader which invoice they are about to pay. It falls back
+       * to a plain instruction when the number is missing rather than to the URL.
+       *
+       * `overflow-wrap` stays as a guard: if a future template ever puts a bare URL
+       * through here, it breaks inside the measure instead of running off the page.
+       */
+      if (!/^https?:\/\//i.test(value)) {
+        // Reported, not silently dropped. A stored link that is not an http(s) URL used to
+        // vanish with no warning, leaving the letter with a label and nothing after it and
+        // nobody told — the one failure mode worse than a broken link is a missing one
+        // that looks deliberate.
+        missing.push(name);
+        return '';
+      }
+      const label = String(values.invoice_number ?? '').trim() || 'View invoice and pay online';
+      return (
+        `<a href="${esc(value)}" style="color:${BRAND.navy};overflow-wrap:anywhere;">` +
+        `${esc(label)}</a>`
+      );
     }
     return esc(value);
   });
