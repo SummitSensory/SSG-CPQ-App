@@ -1,12 +1,30 @@
 repo: SummitSensory/SSG-CPQ-App
 branch: main
 
+## Workflow
+
+Claude Code has direct write access to this repository. Normal workflow:
+
+request → inspect repository → create `claude/*` feature branch → edit repository
+directly → validate (typecheck, lint, format, tests, build, db checks) →
+diagnose/fix failures → commit → push feature branch → create PR → check CI →
+correct implementation-related CI failures → human review/merge.
+
+- Claude Code may edit this repository directly — changes are no longer handed
+  over as replacement files or zip archives for Bryan to apply locally.
+- Normal work happens on `claude/<descriptive-task-name>` branches. Direct pushes
+  to `main`/`master` are prohibited.
+- PR creation (`gh pr create`) is authorized. Claude does not merge PRs — human
+  review and merge remains required.
+- Destructive git operations (force push, `git reset --hard`, `git clean`,
+  rebase without explicit authorization, history rewrites, remote branch
+  deletion) remain prohibited.
+
+See `CLAUDE.md` at the repo root for the full operating procedure.
+
 ## Last sync
 
 date: 2026-08-29T18:52:00Z
-
-Read-only access. Changes are handed over as files and applied locally; `main` is read to
-establish the committed baseline and to confirm a hand-off landed.
 
 No commit sha recorded: `github_get_tree` resolves a tree hash, not a commit, and guessing
 one is worse than omitting it.
@@ -94,14 +112,15 @@ pnpm db:align:vendors         # dry run; --commit to apply
   Jotform colour forms today — the palette is administered in the CRM but the question
   wording is code.
 
-## Notes on hand-offs
+## Notes (historical hand-off process — retired)
 
-One folder per round, containing only the files that round touches, line endings matched to
-each file's existing convention, with the expected `git diff --stat` stated up front.
-Delivery notes are never named `README.md` and never land at the repo root — an early round
-overwrote the project README that way.
+Earlier sessions had read-only repository access: changes were delivered as one folder
+per round (only the files that round touched, line endings matched to each file's
+existing convention, expected `git diff --stat` stated up front), applied locally by
+Bryan, and committed by hand. That process is retired — see the Workflow section above
+and `CLAUDE.md` for the current direct-repository-access procedure.
 
-The pre-commit hook (`prettier --write` + `eslint --fix`) caught three defects in this
-session that no amount of reading would have: an unused binding in `catalog.js`, a dead
-`slugify` in `catalogItems.ts`, and a dead `catById` in `partIntegrity.ts`. Run
-`npx tsc --noEmit` and `pnpm lint` before committing rather than after.
+One lesson from that era still applies: the pre-commit hook (`prettier --write` +
+`eslint --fix`) caught three defects no amount of reading would have — an unused
+binding in `catalog.js`, a dead `slugify` in `catalogItems.ts`, and a dead `catById` in
+`partIntegrity.ts`. Run `pnpm typecheck` and `pnpm lint` before committing, not after.
