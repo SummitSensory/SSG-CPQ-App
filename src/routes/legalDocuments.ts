@@ -120,6 +120,9 @@ const Content = z
     articles: z.array(Article).max(40).optional(),
     closing: z.string().trim().max(4000).optional(),
     sections: z.array(Section).max(60).optional(),
+    // Unnumbered opening prose. Optional, and absent means absent — a document written
+    // before this existed renders exactly as it did.
+    preamble: z.array(z.string().trim().min(1).max(20000)).max(12).default([]),
     style: Style.optional(),
     signature: Signature.optional(),
   })
@@ -184,6 +187,9 @@ function unknownTokens(content: LegalDocumentContent): string[] {
   };
   scan(content.title);
   if (content.closing) scan(content.closing);
+  // Scanned like everything else: a merge-field typo here prints a visible gap at the top
+  // of a signed instrument, which is the worst place to discover one.
+  (content.preamble ?? []).forEach(scan);
   for (const a of content.articles ?? []) {
     scan(a.title);
     a.paragraphs.forEach(scan);

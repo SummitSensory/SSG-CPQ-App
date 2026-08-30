@@ -327,6 +327,7 @@
   function docCard(doc) {
     var w = working(doc);
     var blocks = w.kind === 'ARTICLES' ? w.articles || [] : w.sections || [];
+    var preambleText = (w.preamble || []).join('\n\n');
     var isOpen = !!open[doc.key];
     var hasDraft = !!doc.draft;
 
@@ -381,6 +382,31 @@
       '<div class="muted" style="font-size:11px;margin-top:4px;">' +
       'Renaming the heading does not change the document&rsquo;s own text. If a clause ' +
       'names the document, edit that clause too.' +
+      '</div>' +
+      '</div>' +
+      /*
+       * Unnumbered opening prose.
+       *
+       * Above the clause list because that is where it prints. An opening line like "This
+       * Agreement is entered into between the parties named below" is not a term of the
+       * agreement, and before this it had to be typed as clause 1 — numbering a sentence
+       * that is not a clause and pushing every real one down by one.
+       */
+      '<div style="margin-top:14px;">' +
+      '<label style="display:block;font-size:12px;color:#5c6157;margin-bottom:4px;">' +
+      'Opening paragraphs <span class="muted" style="font-weight:400;">' +
+      '&mdash; optional; print under the title with no number</span></label>' +
+      '<textarea id="lg_' +
+      doc.key +
+      '_pre" rows="' +
+      Math.min(10, Math.max(2, Math.ceil(preambleText.length / 95))) +
+      '" style="' +
+      TA +
+      '">' +
+      esc(preambleText) +
+      '</textarea>' +
+      '<div class="muted" style="font-size:11px;margin-top:4px;">' +
+      'Leave a blank line between paragraphs.' +
       '</div>' +
       '</div>' +
       '<div style="margin-top:16px;">' +
@@ -545,6 +571,8 @@
     } else {
       out.sections = read;
     }
+    // Absent means absent: an empty box saves no preamble rather than one blank paragraph.
+    out.preamble = splitParas(val('lg_' + doc.key + '_pre', (w.preamble || []).join('\n\n')));
     var st = w.style || {};
     out.style = {
       font: val('lg_' + doc.key + '_st_font', st.font || 'plex'),

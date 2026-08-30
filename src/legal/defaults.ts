@@ -139,6 +139,14 @@ export interface LegalSignature {
 }
 
 export interface LegalDocumentContent {
+  /**
+   * Unnumbered prose between the title and the first clause.
+   *
+   * There was nowhere to put this, so an opening line that is not a term of the agreement
+   * had to become clause 1 — numbering a sentence that is not a clause and pushing every
+   * real one down by a number.
+   */
+  preamble?: string[];
   /** The printed heading. Editable — which is why nothing keys off it. */
   title: string;
   kind: 'ARTICLES' | 'NUMBERED';

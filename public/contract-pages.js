@@ -453,6 +453,31 @@
     return out;
   }
 
+  /**
+   * Unnumbered prose between the document title and the first clause.
+   *
+   * There was nowhere to put this. Everything under a title belonged to a numbered clause,
+   * so an opening line like "This Agreement is entered into between the parties named
+   * below" had to become clause 1 — which numbers a sentence that is not a term of the
+   * agreement, and pushes every real clause down by one.
+   *
+   * Full measure, no hanging indent: it is not a list item, so it should not be set like
+   * one. The clause list's own top margin follows it, so no bottom spacing is added here.
+   */
+  function preambleHtml(doc, st, tokens, esc, fillFn) {
+    var list = (doc && doc.preamble) || [];
+    if (!list.length) return '';
+    return (
+      '<div style="margin-top:12px;">' +
+      list
+        .map(function (text, i) {
+          return pTag(fillFn(text, tokens, esc), i === 0, st.align);
+        })
+        .join('') +
+      '</div>'
+    );
+  }
+
   /** The centred document heading and its rule. Editable text, fixed typesetting. */
   function heading(title, esc, titlePt) {
     return (
@@ -608,6 +633,7 @@
       '">' +
       releaseHeader(d, esc) +
       heading(doc.title, esc, st.titlePt) +
+      preambleHtml(doc, st, tokens, esc, fill) +
       articles +
       (doc.closing
         ? '<div style="margin-top:16px;padding-top:9px;border-top:1px solid #20241f;text-align:' +
@@ -653,6 +679,7 @@
       esc(who) +
       '</div>' +
       heading(doc.title, esc, st.titlePt) +
+      preambleHtml(doc, st, tokens, esc, fill) +
       (doc.sections || [])
         .map(function (sec, i) {
           /*
