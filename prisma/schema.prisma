@@ -284,7 +284,7 @@ model Organization {
   facilities     Facility[]
   opportunities  Opportunity[]
   attachments    Attachment[]
-  customerNotes  CustomerNote[]
+  customerNotes  CustomerNote[]
   followUpEmails  FollowUpEmailLog[]
 
   @@unique([normalizedName])
@@ -1149,6 +1149,7 @@ model ProposalVersion {
   @@unique([proposalId, version])
   @@index([proposalId])
   @@index([status])
+  @@index([legalSnapshotId])
 }
 
 model ProposalStatusEvent {
@@ -1214,7 +1215,12 @@ model LegalDocument {
   draftSavedAt   DateTime?
   draftSavedById String?
   createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  /// DB-level default matches createdAt: a raw write outside Prisma Client (a backfill
+  /// script, a manual fix) still gets a real timestamp instead of NULL, same as every
+  /// migration since 0075 has actually built.
+  updatedAt      DateTime  @default(now()) @updatedAt
+
+  @@index([sortOrder])
 }
 
 /// Every published revision, append-only, so a snapshot can be explained after the fact
