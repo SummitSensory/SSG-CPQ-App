@@ -595,7 +595,7 @@
       var r =
         '<tr style="break-inside:avoid;">' +
         '<td colspan="4" style="padding:5px 10px 7px 0;font-size:11px;text-align:right;color:#7b8190;">Subtotal</td>' +
-        '<td style="padding:5px 0 7px 10px;font-size:11px;text-align:right;font-weight:700;">' +
+        '<td style="padding:5px 0 7px 10px;font-size:11px;text-align:right;font-weight:700;white-space:nowrap;">' +
         money(groupOpenSub) +
         '</td></tr>';
       groupOpenSub = null;
