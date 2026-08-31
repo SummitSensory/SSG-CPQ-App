@@ -1018,7 +1018,15 @@
         : '') +
       '.</div>' +
       '<div style="display:flex;gap:26px;margin-top:24px;">' +
-      '<div style="flex:1.35;"><div style="border-bottom:1px solid #20241f;height:40px;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Authorized Signer\'s Name</div></div>' +
+      // The customer's name prints on the signer line itself. It is the one field on
+      // this page the document already knows, and printing it removes the most common
+      // reason a signed sheet comes back unusable: the wrong name, or none at all.
+      // Sized to match the acceptance and terms prose (11.5px) rather than the small
+      // caps label beneath it. Blank when no contact is on the proposal, which leaves
+      // the line exactly as it printed before.
+      '<div style="flex:1.35;"><div style="border-bottom:1px solid #20241f;height:40px;display:flex;align-items:flex-end;padding-bottom:3px;"><span style="font-size:11.5px;line-height:1.35;color:#20241f;">' +
+      esc(m.contactName || '') +
+      '</span></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Authorized Signer\'s Name</div></div>' +
       '<div style="flex:1.35;"><div style="border-bottom:1px solid #20241f;height:40px;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Signature</div></div>' +
       '<div style="flex:1;"><div style="border-bottom:1px solid #20241f;height:40px;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Date</div></div>' +
       '</div>' +
