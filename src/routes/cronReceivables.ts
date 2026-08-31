@@ -27,29 +27,35 @@ import { refreshOpenInvoices } from '../integrations/quickbooks/receivables.js';
  * what failed is reported in the body, logged, and swept again tomorrow.
  */
 export function registerReceivableCronRoutes(app: FastifyInstance): void {
-  app.post('/cron/receivables', async (req, reply) => {
-    if (!env.CRON_SECRET) {
-      return reply.status(503).send({ error: 'CRON_SECRET_NOT_SET' });
-    }
-    if ((req.headers.authorization ?? '') !== `Bearer ${env.CRON_SECRET}`) {
-      return reply.status(401).send({ error: 'UNAUTHORIZED' });
-    }
+  // Vercel Cron always invokes with GET, never POST — GET stays registered
+  // alongside POST so the manual `curl -X POST` trigger in ops docs keeps working.
+  app.route({
+    method: ['GET', 'POST'],
+    url: '/cron/receivables',
+    handler: async (req, reply) => {
+      if (!env.CRON_SECRET) {
+        return reply.status(503).send({ error: 'CRON_SECRET_NOT_SET' });
+      }
+      if ((req.headers.authorization ?? '') !== `Bearer ${env.CRON_SECRET}`) {
+        return reply.status(401).send({ error: 'UNAUTHORIZED' });
+      }
 
-    const started = Date.now();
-    const out: Record<string, unknown> = { ranAt: new Date().toISOString() };
+      const started = Date.now();
+      const out: Record<string, unknown> = { ranAt: new Date().toISOString() };
 
-    try {
-      // 200 is above the number of invoices this company has open at once, so a
-      // normal night refreshes everything. Oldest-synced first, so if there is ever
-      // more than one page the stalest figures are the ones that get corrected.
-      out.invoices = await refreshOpenInvoices(200);
-    } catch (err) {
-      logger.error({ err }, 'cron: receivables sweep failed');
-      out.invoices = { error: err instanceof Error ? err.message : String(err) };
-    }
+      try {
+        // 200 is above the number of invoices this company has open at once, so a
+        // normal night refreshes everything. Oldest-synced first, so if there is ever
+        // more than one page the stalest figures are the ones that get corrected.
+        out.invoices = await refreshOpenInvoices(200);
+      } catch (err) {
+        logger.error({ err }, 'cron: receivables sweep failed');
+        out.invoices = { error: err instanceof Error ? err.message : String(err) };
+      }
 
-    out.ms = Date.now() - started;
-    logger.info(out, 'cron: receivables sweep');
-    return reply.send(out);
+      out.ms = Date.now() - started;
+      logger.info(out, 'cron: receivables sweep');
+      return reply.send(out);
+    },
   });
 }
