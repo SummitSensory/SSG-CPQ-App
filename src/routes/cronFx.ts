@@ -38,13 +38,30 @@ const CRON_ACTOR_ID = 'system:fx-cron';
  * what failed is reported in the body, logged, and — via sendAlert — actually
  * reaches someone.
  */
+// TEMPORARY — diagnosing a manual-test 401 that shouldn't be happening. Never
+// the secret itself: length plus a few characters off each end is enough to
+// spot a copy/paste or environment-scope mismatch without exposing it.
+// Revert this once that's resolved.
+function fingerprint(s: string): { length: number; head: string; tail: string } {
+  return { length: s.length, head: s.slice(0, 4), tail: s.slice(-4) };
+}
+
 export function registerFxCronRoutes(app: FastifyInstance): void {
   app.post('/cron/fx-refresh', async (req, reply) => {
     if (!env.CRON_SECRET) {
       return reply.status(503).send({ error: 'CRON_SECRET_NOT_SET' });
     }
     if ((req.headers.authorization ?? '') !== `Bearer ${env.CRON_SECRET}`) {
-      return reply.status(401).send({ error: 'UNAUTHORIZED' });
+      const received = req.headers.authorization ?? '';
+      const receivedToken = received.startsWith('Bearer ') ? received.slice(7) : received;
+      return reply.status(401).send({
+        error: 'UNAUTHORIZED',
+        debug: {
+          expected: fingerprint(env.CRON_SECRET),
+          received: fingerprint(receivedToken),
+          receivedHadBearerPrefix: received.startsWith('Bearer '),
+        },
+      });
     }
 
     const started = Date.now();
