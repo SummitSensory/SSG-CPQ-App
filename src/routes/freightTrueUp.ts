@@ -302,15 +302,21 @@ export function registerFreightTrueUpRoutes(app: FastifyInstance): void {
    * secret is unset: an open endpoint that hammers monday's API on request is a
    * denial-of-service against the whole integration.
    */
-  app.post('/cron/freight-pull', async (req, reply) => {
-    const secret = env.CRON_SECRET;
-    if (!secret) return reply.status(503).send({ error: 'CRON_SECRET is not configured' });
-    const given = String(req.headers.authorization ?? '').replace(/^Bearer\s+/i, '');
-    if (given !== secret) return reply.status(401).send({ error: 'unauthorized' });
-    const q = req.query as { limit?: string };
-    return pullOutstanding('system:cron', {
-      limit: q.limit ? Math.min(500, Math.max(1, Number(q.limit) || 200)) : undefined,
-    });
+  // Vercel Cron always invokes with GET, never POST — GET stays registered
+  // alongside POST so the manual `curl -X POST` trigger in ops docs keeps working.
+  app.route({
+    method: ['GET', 'POST'],
+    url: '/cron/freight-pull',
+    handler: async (req, reply) => {
+      const secret = env.CRON_SECRET;
+      if (!secret) return reply.status(503).send({ error: 'CRON_SECRET is not configured' });
+      const given = String(req.headers.authorization ?? '').replace(/^Bearer\s+/i, '');
+      if (given !== secret) return reply.status(401).send({ error: 'unauthorized' });
+      const q = req.query as { limit?: string };
+      return pullOutstanding('system:cron', {
+        limit: q.limit ? Math.min(500, Math.max(1, Number(q.limit) || 200)) : undefined,
+      });
+    },
   });
 
   /**
