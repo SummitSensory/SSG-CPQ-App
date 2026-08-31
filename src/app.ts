@@ -53,6 +53,7 @@ import { registerBeltShipmentRoutes } from './routes/beltShipments.js';
 import { registerCronRoutes } from './routes/cron.js';
 import { registerReceivableCronRoutes } from './routes/cronReceivables.js';
 import { registerInsightCronRoutes } from './routes/cronInsights.js';
+import { registerFxCronRoutes } from './routes/cronFx.js';
 import { verifySchemaOnBoot } from './lib/schemaCheck.js';
 import { registerPortalRoutes } from './routes/portal.js';
 import { registerWebRoutes } from './routes/web.js';
@@ -183,6 +184,7 @@ export function buildApp(): FastifyInstance {
   registerCronRoutes(app);
   registerReceivableCronRoutes(app);
   registerInsightCronRoutes(app);
+  registerFxCronRoutes(app);
   registerPortalRoutes(app);
   registerWebRoutes(app);
 
