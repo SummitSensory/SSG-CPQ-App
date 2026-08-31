@@ -6978,7 +6978,7 @@
         return '<button class="link-btn" id="' + id + '" title="' + title + '" ' +
           'style="width:auto;padding:6px 11px;background:#fff;font-size:12px;">' + label + '</button>';
       }
-      return '<div class="noprint" id="pvBar" style="margin:0 auto 16px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">' +
+      return '<div class="noprint" id="pvBar" style="position:sticky;top:-24px;z-index:5;background:#e7e8e3;padding:24px 16px 14px;margin:-24px -16px 16px;border-bottom:1px solid #d9dad5;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">' +
         '<button class="link-btn" id="pvClose" style="width:auto;padding:9px 16px;background:#fff;">‹ Close preview</button>' +
         // View controls: the pages are real printed sheets, so the viewer gives the
         // same handles any document viewer does.
