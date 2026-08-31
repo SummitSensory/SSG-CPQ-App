@@ -1,9 +1,11 @@
 name: Migrate production database
 
 # Runs prisma migrate deploy against production AFTER code lands on main.
-# Deliberately NOT in vercel.json's buildCommand: that would let any preview
-# build migrate whatever DATABASE_URL it inherits, and a failed migration would
-# take the whole deploy down with it. Here a bad migration fails this job alone.
+# vercel.json's buildCommand also runs scripts/migrate-deploy.mjs on every
+# deploy (production and preview), so this job is a second, independent check
+# scoped to the production environment/secrets — not the only place migrations
+# are applied. A bad migration failing here is still cheaper than only finding
+# out from a broken build.
 
 on:
   push:
@@ -22,6 +24,14 @@ jobs:
   migrate:
     runs-on: ubuntu-latest
     environment: production
+    env:
+      # schema.prisma declares both url and directUrl; Prisma commands need
+      # DIRECT_URL present or schema validation fails with P1012. Both point at
+      # the same unpooled connection — the pooler cannot hold the advisory lock
+      # a migrate command takes before doing anything, so DATABASE_URL is set
+      # to the direct endpoint here too rather than the app's pooled one.
+      DATABASE_URL: ${{ secrets.DIRECT_URL }}
+      DIRECT_URL: ${{ secrets.DIRECT_URL }}
     steps:
       - uses: actions/checkout@v5
 
@@ -32,12 +42,16 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # scripts/migrate-deploy.mjs (below) imports @prisma/client to check
+      # whether the target database has any migration history — generate it
+      # before that import runs, same as ci.yml and vercel.json's buildCommand.
+      - run: pnpm db:generate
+
       - name: Show pending migrations
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: pnpm prisma migrate status || true
 
+      # scripts/migrate-deploy.mjs, not a bare `prisma migrate deploy`: the same
+      # retries-on-cold-start and pooled-endpoint detection the Vercel build
+      # gets, rather than a second, less robust way of doing the same thing.
       - name: Apply migrations
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: pnpm prisma migrate deploy
+        run: pnpm db:migrate:deploy
