@@ -60,7 +60,7 @@
   },
   "dependencies": {
     "@fastify/helmet": "^12.0.1",
-    "@prisma/client": "^5.22.0",
+    "@prisma/client": "^6.19.3",
     "@sparticuz/chromium-min": "149.0.0",
     "argon2": "^0.41.1",
     "fastify": "^5.1.0",
@@ -80,7 +80,7 @@
     "husky": "^9.1.6",
     "lint-staged": "^15.5.2",
     "prettier": "^3.3.3",
-    "prisma": "^5.22.0",
+    "prisma": "^6.19.3",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
     "vitest": "^2.1.4"
