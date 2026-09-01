@@ -6296,22 +6296,101 @@
     // somebody's proposal.
     function blockAt(i) { return builderBlockAt(i); }
 
+    /**
+     * Where a drag from `from` lands if dropped on `to`, computed against the
+     * CURRENT array (before anything moves).
+     *
+     * Returns the index the dragged block will sit immediately before once the
+     * move is complete — pb.lines.length means "at the very end" — or null for a
+     * no-op drop (nothing dragged, dropped on itself, or dropped on one of the
+     * dragged block's own lines).
+     *
+     * Used by both the drop handler and the preview line drawn while dragging, so
+     * the line is never a promise the drop then breaks — same computation, so
+     * they cannot disagree.
+     *
+     * A single line is free to land anywhere it is dropped, including into a
+     * different section — see the note on builderSiblings, which is what a
+     * cross-section product move actually is. A HEADER is different: it drags a
+     * whole section, so the drop has to resolve to a section boundary —
+     * immediately before or after a SIBLING section — never to an arbitrary line
+     * inside one. Dropping mid-section used to splice the dragged section between
+     * two of that OTHER section's own lines, which is what read as products
+     * belonging to nobody in particular. Siblings are the same list builderMove
+     * already walks a step at a time for the up/down arrows, so a drag can never
+     * land anywhere those arrows could not eventually reach.
+     */
+    function dragBoundary(from, to) {
+      if (from == null || from === to) return null;
+      var blk = blockAt(from);
+      if (to >= blk.from && to < blk.from + blk.count) return null;
+      var target;
+      if (blk.count > 1) {
+        var sib = builderSiblings(from);
+        target = null;
+        for (var k = 0; k < sib.blocks.length; k++) {
+          var b = sib.blocks[k];
+          if (to >= b.from && to < b.from + b.count) { target = b; break; }
+        }
+        if (!target) {
+          // Dropped outside every sibling's range: before the first or after the
+          // last, or — for a sub-heading — on a product with no sub-heading of
+          // its own above it. Land at whichever end is closer rather than guessing.
+          var first = sib.blocks[0], last = sib.blocks[sib.blocks.length - 1];
+          target = to < first.from
+            ? { from: first.from, count: 0 }
+            : { from: last.from + last.count, count: 0 };
+        }
+      } else {
+        target = { from: to, count: 1 };
+      }
+      return blk.from < target.from ? target.from + target.count : target.from;
+    }
+
+    /** Remove any preview line left over from a previous hover. */
+    function clearDragPreview() {
+      var el = document.getElementById('bDragLine');
+      if (el) el.remove();
+    }
+
+    /** Draw the preview line at the boundary a drop would land on right now. */
+    function showDragPreview(boundary) {
+      clearDragPreview();
+      if (boundary == null) return;
+      var rows = document.querySelectorAll('.bRow');
+      var line = document.createElement('div');
+      line.id = 'bDragLine';
+      line.style.cssText = 'height:3px;background:#2f6f4f;border-radius:2px;margin:2px 0;pointer-events:none;';
+      for (var idx = 0; idx < rows.length; idx++) {
+        if (+rows[idx].getAttribute('data-i') === boundary) {
+          rows[idx].insertAdjacentElement('beforebegin', line);
+          return;
+        }
+      }
+      // boundary is past the last row: lands at the very end of the proposal.
+      if (rows.length) rows[rows.length - 1].insertAdjacentElement('afterend', line);
+    }
+
     document.querySelectorAll('.bRow').forEach(function (row) {
       row.addEventListener('dragstart', function () { bDragFrom = +row.getAttribute('data-i'); row.style.opacity = '0.4'; });
-      row.addEventListener('dragend', function () { row.style.opacity = '1'; });
-      row.addEventListener('dragover', function (e) { e.preventDefault(); });
+      row.addEventListener('dragend', function () { row.style.opacity = '1'; clearDragPreview(); });
+      row.addEventListener('dragover', function (e) {
+        e.preventDefault();
+        showDragPreview(dragBoundary(bDragFrom, +row.getAttribute('data-i')));
+      });
       row.addEventListener('drop', function (e) {
         e.preventDefault();
         var to = +row.getAttribute('data-i');
-        if (bDragFrom == null || bDragFrom === to) return;
-        var blk = blockAt(bDragFrom);
-        // Dropping a section onto one of its own lines is a no-op, not a shuffle.
-        if (to >= blk.from && to < blk.from + blk.count) { bDragFrom = null; return; }
-        var moved = pb.lines.splice(blk.from, blk.count);
-        // Removing the block shifts everything after it back by its length.
-        var at = to > blk.from ? to - blk.count : to;
-        pb.lines.splice.apply(pb.lines, [Math.max(0, at), 0].concat(moved));
+        var from = bDragFrom;
         bDragFrom = null;
+        clearDragPreview();
+        var boundary = dragBoundary(from, to);
+        if (boundary == null) return;
+        var blk = blockAt(from);
+        // Removing the dragged block shifts everything after it back by its own length.
+        var at = boundary > blk.from ? boundary - blk.count : boundary;
+        var moved = pb.lines.splice(blk.from, blk.count);
+        pb.lines.splice.apply(pb.lines, [Math.max(0, at), 0].concat(moved));
         markBuilderDirty();
         renderBuilder();
       });
