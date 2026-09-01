@@ -200,8 +200,8 @@ async function buildModel(
     ...(showBag ? ['Bag #'] : []),
     ...(showColor ? ['Powder color'] : []),
     'Weight (lb)',
-    'Cost each',
-    'Total cost',
+    'Cost Each',
+    'Total Cost',
   ];
 
   // Weight always carries two decimals. "12.5" and "12" on the same sheet read as
@@ -258,21 +258,21 @@ async function buildModel(
   // because a total that quietly omits an unquoted freight is worse than none.
   const f = doc.financials;
   const summary: Array<{ label: string; value: string; strong?: boolean }> = [
-    { label: 'Item cost total', value: money(f.itemCostMinor) },
+    { label: 'Item Cost Total', value: money(f.itemCostMinor) },
     {
-      label: 'Estimated shipment total',
+      label: 'Estimated Shipment Total',
       value: f.shipmentMinor == null ? f.shipmentQuote || 'TBD' : money(f.shipmentMinor),
     },
   ];
   if (f.estimatedTax) {
     summary.push({
-      label: 'Estimated tax',
+      label: 'Estimated Tax',
       value: f.estimatedTaxMinor == null ? f.estimatedTax : money(f.estimatedTaxMinor),
     });
   }
   summary.push({
-    label: 'Bill of Materials grand total',
-    value: f.grandTotalMinor == null ? 'Pending freight' : money(f.grandTotalMinor),
+    label: 'Bill of Materials Grand Total',
+    value: f.grandTotalMinor == null ? 'Pending Freight' : money(f.grandTotalMinor),
     strong: true,
   });
 
@@ -454,7 +454,6 @@ export async function renderBomHtml(
 }
 
 const HEADER_FILL = 'FFF2F3EF';
-const LABEL_ARGB = 'FF5C6157';
 
 /**
  * The same document as a real .xlsx workbook — same model, so it carries the same
@@ -487,9 +486,6 @@ export async function renderBomXlsx(
     cells.forEach((c, i) => track(i + 1, c));
     return row;
   };
-  const label = (r: ExcelJS.Row, col: number) => {
-    r.getCell(col).font = { color: { argb: LABEL_ARGB } };
-  };
   const bold = (r: ExcelJS.Row, col: number) => {
     r.getCell(col).font = { ...(r.getCell(col).font ?? {}), bold: true };
   };
@@ -504,14 +500,16 @@ export async function renderBomXlsx(
   titleRow.font = { bold: true, size: 14 };
   noWrapRow(titleRow);
 
-  noWrapRow(plainRow([m.subtitle]));
+  const subtitleRow = plainRow([m.subtitle]);
+  bold(subtitleRow, 1);
+  noWrapRow(subtitleRow);
   const vendorRow = plainRow(['Vendor', m.vendorLabel]);
-  label(vendorRow, 1);
+  bold(vendorRow, 1);
   bold(vendorRow, 2);
   noWrapRow(vendorRow);
   if (m.submitted) {
     const statusRow = plainRow(['Status', 'SUBMITTED']);
-    label(statusRow, 1);
+    bold(statusRow, 1);
     bold(statusRow, 2);
     noWrapRow(statusRow);
   }
@@ -526,7 +524,7 @@ export async function renderBomXlsx(
   // Addresses side by side, as on the PDF, rather than stacked — the sheet should
   // be recognisable as the same document.
   const addrTitleRow = plainRow(m.addresses.map((a) => a.title));
-  m.addresses.forEach((_a, i) => label(addrTitleRow, i + 1));
+  m.addresses.forEach((_a, i) => bold(addrTitleRow, i + 1));
   noWrapRow(addrTitleRow);
   const depth = Math.max(...m.addresses.map((a) => a.lines.length), 0);
   for (let i = 0; i < depth; i++) {
@@ -534,12 +532,11 @@ export async function renderBomXlsx(
   }
   plainRow([]);
 
-  // Meta block: label cells in the muted grey the PDF's `lbl` style already uses,
-  // value cells bold — one pair per row, which reads more naturally in a
-  // spreadsheet than the PDF's side-by-side card layout.
+  // Meta block: label and value both bold — one pair per row, which reads more
+  // naturally in a spreadsheet than the PDF's side-by-side card layout.
   m.meta.forEach((x) => {
     const r = plainRow([x.label, x.value]);
-    label(r, 1);
+    bold(r, 1);
     bold(r, 2);
     noWrapRow(r);
   });
@@ -551,7 +548,7 @@ export async function renderBomXlsx(
     noWrapRow(h);
     m.questions.forEach((q) => {
       const r = plainRow([q.label, q.value]);
-      label(r, 1);
+      bold(r, 1);
       bold(r, 2);
       noWrapRow(r);
     });
@@ -603,6 +600,10 @@ export async function renderBomXlsx(
   m.summary.forEach((line) => {
     const r = plainRow([line.label, line.value]);
     noWrap(r, 2, 'right');
+    // Every summary label is bold; only the grand total's own VALUE joins it
+    // (with the rule above it) — item cost and estimated shipment stay plain
+    // numbers so the grand total is the only one that reads as a final figure.
+    bold(r, 1);
     if (line.strong) {
       r.eachCell((c) => {
         c.font = { ...(c.font ?? {}), bold: true };
@@ -620,7 +621,9 @@ export async function renderBomXlsx(
   }
 
   plainRow([]);
-  noWrapRow(plainRow([m.footer]));
+  // Repeated into both columns on purpose: the footer sits alone at the bottom
+  // of a two-column area, and one cell reads as if it belongs only to Part #.
+  noWrapRow(plainRow([m.footer, m.footer]));
 
   // Auto-fit: exceljs has no such feature, so this is the longest rendered string
   // seen in each column, capped so one runaway note cannot blow out the sheet.
