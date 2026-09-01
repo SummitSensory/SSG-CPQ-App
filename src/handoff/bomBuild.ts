@@ -241,12 +241,15 @@ function explode(
       name: i?.name || c.childPart,
       // The parent's quantity multiplies through: two kits means twice the pieces.
       quantity: c.quantity * (seed.quantity || 1),
-      // Hardware components keep their flag so they stay in the sheet's hardware
-      // block; a generic kit's components are ordinary lines under their own vendor.
+      // Hardware components keep their flag so the sheet can style/group them as
+      // hardware; a generic kit's components are ordinary lines under their own vendor.
       isHardwareComponent: !!seed.isHardwareComponent,
       kitSku: seed.sku ?? null,
       unitCostMinor: i?.unitCostMinor ?? null,
       unitWeightLbs: i?.weightLbs ?? null,
+      // Inherited rather than recomputed: a kit's components print at the position
+      // the kit itself held on the proposal, not scattered by part number.
+      proposalLineOrder: seed.proposalLineOrder,
     };
     rows.push(...explode(child, t, info, depth + 1, trail.concat(k)));
   }
@@ -324,6 +327,7 @@ export async function applyBomBuildToOrder(
       freeIssue: true,
       purchaseVendor: true,
       isHardwareComponent: true,
+      proposalLineOrder: true,
     },
   });
   const expandedAlready = new Set(lines.map((l) => key(l.kitSku)).filter(Boolean));
@@ -351,6 +355,9 @@ export async function applyBomBuildToOrder(
       quantity: l.quantity,
       isHardwareComponent: l.isHardwareComponent,
       kitSku: l.kitSku,
+      // A rule added after the order was locked still explodes at the parent's
+      // existing position, rather than the new fasteners losing it.
+      proposalLineOrder: l.proposalLineOrder ?? undefined,
     };
     const rows = explode(seed, t, info, 0, []).filter((r) => key(r.sku) !== k);
     if (!rows.length) continue;
@@ -375,6 +382,7 @@ export async function applyBomBuildToOrder(
           unitWeightLbs: p.unitWeightLbs ?? null,
           isHardwareComponent: !!p.isHardwareComponent,
           kitSku: p.kitSku ?? null,
+          proposalLineOrder: p.proposalLineOrder ?? null,
         };
       }),
     });

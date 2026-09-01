@@ -3,7 +3,12 @@ import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import { ValidationError } from '../lib/errors.js';
 import { prisma } from '../lib/prisma.js';
-import { renderBomHtml, renderBomXml, bomFilename } from '../handoff/bomDocuments.js';
+import {
+  renderBomHtml,
+  renderBomXlsx,
+  renderBomCsv,
+  bomFilename,
+} from '../handoff/bomDocuments.js';
 import { uploadProposalPdfToMonday } from '../integrations/monday/proposalPush.js';
 import { renderPdf, pdfAvailable } from '../render/pdf.js';
 import { checkDocumentTotal } from '../proposals/documentIntegrity.js';
@@ -101,14 +106,14 @@ export function registerRenderRoutes(app: FastifyInstance): void {
   });
 
   /**
-   * The same document as a spreadsheet. Built from the same model as the PDF, so
-   * the two carry identical content — the browser-side CSV they replace had drifted
-   * and was missing the addresses, the account and terms, the vendor questions and
-   * the notes.
+   * The same document as a real .xlsx workbook. Built from the same model as the
+   * PDF, so the two carry identical content — the browser-side CSV this and
+   * `/bom.csv` replace had drifted and was missing the addresses, the account and
+   * terms, the vendor questions and the notes.
    *
    * Needs no browser, so it lives here beside the PDF only for symmetry of URL.
    */
-  app.get('/render/orders/:id/bom.xls', read, async (req, reply) => {
+  app.get('/render/orders/:id/bom.xlsx', read, async (req, reply) => {
     const { id } = req.params as { id: string };
     const q = req.query as { vendor?: string; includeZeroQty?: string };
     const vendor = q.vendor || '*';
@@ -121,16 +126,62 @@ export function registerRenderRoutes(app: FastifyInstance): void {
       where: { id: order.organizationId },
       select: { name: true },
     });
-    const xml = await renderBomXml(id, vendor, {
+    const { buffer } = await renderBomXlsx(id, vendor, {
       includeZeroQty: q.includeZeroQty === 'true',
       actorId: req.user!.sub,
     });
     return reply
-      .header('Content-Type', 'application/vnd.ms-excel; charset=utf-8')
+      .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
       .header(
         'Content-Disposition',
-        `attachment; filename="${bomFilename(order.number, vendor, org?.name ?? '')}.xls"`,
+        `attachment; filename="${bomFilename(order.number, vendor, org?.name ?? '')}.xlsx"`,
       )
-      .send(xml);
+      .send(buffer);
+  });
+
+  /**
+   * Bookmarked-URL compatibility: the export used to be a `.xls` file (SpreadsheetML,
+   * not a real workbook). Redirected rather than removed outright, for anything that
+   * still links to the old path — drop this once nothing does.
+   */
+  app.get('/render/orders/:id/bom.xls', read, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const q = req.query as { vendor?: string; includeZeroQty?: string };
+    const qs = new URLSearchParams();
+    if (q.vendor) qs.set('vendor', q.vendor);
+    if (q.includeZeroQty) qs.set('includeZeroQty', q.includeZeroQty);
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return reply.redirect(`/render/orders/${id}/bom.xlsx${suffix}`, 308);
+  });
+
+  /**
+   * The same document as a CSV. Built from the same model as the PDF and the
+   * xlsx — unlike the browser-built CSV it replaces, it carries the addresses, the
+   * vendor questions and the notes alongside the lines.
+   */
+  app.get('/render/orders/:id/bom.csv', read, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const q = req.query as { vendor?: string; includeZeroQty?: string };
+    const vendor = q.vendor || '*';
+    const order = await prisma.acceptedOrder.findUnique({
+      where: { id },
+      select: { number: true, organizationId: true },
+    });
+    if (!order) throw new ValidationError('Order not found');
+    const org = await prisma.organization.findUnique({
+      where: { id: order.organizationId },
+      select: { name: true },
+    });
+    const { csv } = await renderBomCsv(id, vendor, {
+      includeZeroQty: q.includeZeroQty === 'true',
+      actorId: req.user!.sub,
+    });
+    return reply
+      .header('Content-Type', 'text/csv; charset=utf-8')
+      .header(
+        'Content-Disposition',
+        `attachment; filename="${bomFilename(order.number, vendor, org?.name ?? '')}.csv"`,
+      )
+      .send(csv);
   });
 }

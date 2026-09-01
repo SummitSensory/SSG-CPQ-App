@@ -89,4 +89,48 @@ describe('accepted-order lock helpers', () => {
     expect(list).toHaveLength(1);
     expect(list[0]).toMatchObject({ productId: 'prod1', name: 'Therapy Swing', quantity: 2 });
   });
+
+  it('positions each INCLUDED item by its own order, skipping past OPTIONAL/ALTERNATE ones', () => {
+    const items = [
+      { ref: 'l1', productId: 'p1', name: 'Frame', quantity: 1, kind: 'INCLUDED' },
+      { ref: 'l2', productId: 'p2', name: 'Optional Mat', quantity: 1, kind: 'OPTIONAL' },
+      { ref: 'l3', productId: 'p3', name: 'Ladder', quantity: 1, kind: 'INCLUDED' },
+      { ref: 'l4', productId: 'p4', name: 'Alt Slide', quantity: 1, kind: 'ALTERNATE' },
+      { ref: 'l5', productId: 'p5', name: 'Trolley', quantity: 1, kind: 'INCLUDED' },
+    ];
+    const list = procurementFromItems(items);
+    expect(list.map((p) => [p.name, p.proposalLineOrder])).toEqual([
+      ['Frame', 0],
+      ['Ladder', 1],
+      ['Trolley', 2],
+    ]);
+  });
+
+  it('gives every fastener out of an exploded kit its kit line’s own position', () => {
+    const items = [
+      { ref: 'l1', productId: 'p1', name: 'Frame', quantity: 1, kind: 'INCLUDED' },
+      {
+        ref: 'l2',
+        sku: 'H-1000',
+        name: 'Hardware Kit',
+        quantity: 2,
+        kind: 'INCLUDED',
+        components: [
+          { part: '6820H-LA', name: 'Hex Bolt', qty: 4 },
+          { part: '6820H-LB', name: 'Washer', qty: 8 },
+        ],
+      },
+      { ref: 'l3', productId: 'p3', name: 'Ladder', quantity: 1, kind: 'INCLUDED' },
+    ];
+    const list = procurementFromItems(items);
+    // Frame (position 0), the kit's two fasteners (both position 1, the kit's own
+    // slot), then Ladder (position 2) — the kit itself never appears as a line.
+    expect(list.map((p) => [p.sku ?? p.name, p.proposalLineOrder])).toEqual([
+      ['Frame', 0],
+      ['6820H-LA', 1],
+      ['6820H-LB', 1],
+      ['Ladder', 2],
+    ]);
+    expect(list.filter((p) => p.isHardwareComponent)).toHaveLength(2);
+  });
 });
