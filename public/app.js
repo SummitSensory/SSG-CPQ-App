@@ -3902,9 +3902,14 @@
     return pb.lines.length;
   }
 
+  /**
+   * Returns the index `line` ended up at, so a caller inserting more than one
+   * line at once (a bundle's zero-rate components) can place the rest
+   * immediately after it rather than needing their own tier placement.
+   */
   function insertLineInOrder(line) {
     var d = line && line.sku ? itemDefaults[line.sku] : null;
-    if (!d) { pb.lines.push(line); return; }
+    if (!d) { pb.lines.push(line); return pb.lines.length - 1; }
     var key = d.sortKey || '';
     var path = Array.isArray(d.path) ? d.path.filter(Boolean) : [];
     var keys = tierKeys(d);
@@ -3913,7 +3918,7 @@
     // section it belongs in, which is enough to file it. Without this fallback those
     // parts appended, which is what happened to the floor padding.
     var labels = path.length ? path : (d.category ? [String(d.category)] : []);
-    if (!labels.length) { pb.lines.push(line); return; }
+    if (!labels.length) { pb.lines.push(line); return pb.lines.length - 1; }
 
     var groupLabel = path.length ? path[0] : labels[0];
     var subLabel = path.length > 1 ? path[path.length - 1] : '';
@@ -3931,7 +3936,7 @@
     else if (found) gi = found.index;
 
     if (gi === -1 && si === -1) {
-      if (!keys) { pb.lines.push(line); return; }
+      if (!keys) { pb.lines.push(line); return pb.lines.length - 1; }
       var gAt = pb.lines.length;
       for (i = 0; i < pb.lines.length; i++) {
         if (!isGroupHeader(pb.lines[i])) continue;
@@ -3993,6 +3998,7 @@
     // Never land between a parent bundle line and its components.
     while (at < pb.lines.length && isBundleChild(pb.lines[at])) at++;
     pb.lines.splice(at, 0, line);
+    return at;
   }
 
   /**
@@ -6512,13 +6518,23 @@
       // A bundle becomes one priced line plus its components as zero-rate
       // sub-lines: the customer sees a single price, while the sub-lines carry the
       // real part numbers, cost and weight for the BOM, the COGS and freight.
+      //
+      // The parent files by its OWN catalogue tree position, the same way any
+      // other picked part does — it used to always be pushed onto the very end
+      // regardless of where the bundle actually sits in the product tree. The
+      // components are then spliced in immediately after wherever the parent
+      // landed, never through insertLineInOrder themselves: they carry their own
+      // part numbers and would otherwise be scattered to THEIR OWN tiers instead
+      // of staying under their parent, which is what every bundle-child rule
+      // elsewhere (pricing, notes, the printed proposal) depends on.
       document.querySelectorAll('.pkBundle').forEach(function (b) {
         b.addEventListener('click', function () {
           var bn = bundles.filter(function (x) { return x.id === b.getAttribute('data-id'); })[0];
           if (!bn) return;
-          pb.lines.push(applyItemDefaults({ ref: uid(), lineType: 'PRODUCT', kind: 'INCLUDED', productId: bn.id, sku: bn.sku || '', name: bn.name, description: bn.proposalDescription || '', quantity: 1, rateMinor: bn.unitPriceMinor || 0, costEach: 0, weightEach: 0, group: bn.name }));
-          (bn.components || []).forEach(function (c) {
-            pb.lines.push(applyItemDefaults({ ref: uid(), lineType: 'PRODUCT', kind: 'INCLUDED', productId: c.productId, sku: c.sku || '', name: '— ' + c.name, description: '', quantity: c.quantity || 1, rateMinor: 0, costEach: c.unitCostMinor || 0, weightEach: c.weightLbs || 0, group: bn.name }));
+          var parent = applyItemDefaults({ ref: uid(), lineType: 'PRODUCT', kind: 'INCLUDED', productId: bn.id, sku: bn.sku || '', name: bn.name, description: bn.proposalDescription || '', quantity: 1, rateMinor: bn.unitPriceMinor || 0, costEach: 0, weightEach: 0, group: bn.name });
+          var at = insertLineInOrder(parent);
+          (bn.components || []).forEach(function (c, idx) {
+            pb.lines.splice(at + 1 + idx, 0, applyItemDefaults({ ref: uid(), lineType: 'PRODUCT', kind: 'INCLUDED', productId: c.productId, sku: c.sku || '', name: '— ' + c.name, description: '', quantity: c.quantity || 1, rateMinor: 0, costEach: c.unitCostMinor || 0, weightEach: c.weightLbs || 0, group: bn.name }));
           });
           closeForm(); renderBuilder();
         });
