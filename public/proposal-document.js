@@ -72,6 +72,66 @@
     });
   }
 
+  /** Bundle components are the '— ' rows that must stay under their parent line. */
+  function isBundleChild(l) {
+    return !!l && l.lineType === 'PRODUCT' && /^—\s/.test(String(l.name || ''));
+  }
+
+  /**
+   * Extended revenue per line, with a bundle counted ONCE.
+   *
+   * A bundle is one priced line followed by its component rows, written zero-rate
+   * on purpose — the customer sees only the parent's price. When a rate lands on a
+   * component too, summing every row's own amount double-counted the bundle in the
+   * printed section subtotal, even after the same fix landed in the totals panel
+   * and the price snapshot.
+   *
+   * Mirrors countedRevenueByIndex in public/app.js and countedRevenueMinor in
+   * src/proposals/analytics.ts. All three must agree, or this document disagrees
+   * with the totals panel about the same bundle.
+   */
+  function countedRevenueByIndex(lines) {
+    lines = lines || [];
+    var ext = function (l) {
+      return Math.round((Number(l.quantity) || 0) * (Number(l.rateMinor) || 0));
+    };
+    var out = lines.map(function () {
+      return 0;
+    });
+    var i = 0;
+    while (i < lines.length) {
+      var l = lines[i];
+      if (!l || (l.lineType || 'PRODUCT') !== 'PRODUCT') {
+        i++;
+        continue;
+      }
+      if (isBundleChild(l)) {
+        out[i] = ext(l);
+        i++;
+        continue;
+      }
+      var parentAmt = ext(l);
+      var kids = [];
+      var j = i + 1;
+      while (j < lines.length && isBundleChild(lines[j])) {
+        kids.push(j);
+        j++;
+      }
+      if (!kids.length) {
+        out[i] = parentAmt;
+        i = j;
+        continue;
+      }
+      if (parentAmt !== 0) out[i] = parentAmt;
+      else
+        kids.forEach(function (k) {
+          out[k] = ext(lines[k]);
+        });
+      i = j;
+    }
+    return out;
+  }
+
   /* ---- business rules, supplied by the caller ----
    *
    * Set once by app.js on load, and deliberately not defaulted: a missing rule should
@@ -601,7 +661,8 @@
       groupOpenSub = null;
       return r;
     }
-    (d.lines || []).forEach(function (l) {
+    var counted = countedRevenueByIndex(d.lines || []);
+    (d.lines || []).forEach(function (l, idx) {
       var lt = l.lineType || 'PRODUCT';
       if (lt === 'GROUP') {
         body += subtotalRow();
@@ -682,7 +743,7 @@
       // it gives its rule up, so the note reads as part of that line.
       var freightNote = showsFreightTbd(l);
       var rowRule = freightNote ? '' : 'border-bottom:1px solid #eceef4;';
-      if (groupOpenSub != null) groupOpenSub += amt + (Number(l.tpFreightMinor) || 0);
+      if (groupOpenSub != null) groupOpenSub += counted[idx] + (Number(l.tpFreightMinor) || 0);
       body +=
         '<tr style="break-inside:avoid;"><td style="padding:2px 0 2px ' +
         indent +
