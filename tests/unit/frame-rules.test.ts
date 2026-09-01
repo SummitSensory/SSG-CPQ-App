@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { computeAdventureBOM, type AdvAnswers } from '../../src/proposals/adventureSeries.js';
+import {
+  computeAdventureBOM,
+  computeAdventureProposal,
+  type AdvAnswers,
+} from '../../src/proposals/adventureSeries.js';
 import { DEFAULT_FRAME_RULES, frameContext } from '../../src/proposals/frameRules.js';
 import { evaluateRules, mergeRules } from '../../src/proposals/hardwareRules.js';
 import {
@@ -70,6 +74,25 @@ describe('frame quantities (workbook defaults, now data-driven)', () => {
       expect(qty(part, plain)).toBe(0);
     }
     expect(qty('P-2330', plain)).toBe(0); // no monkey bars, no ladders
+  });
+
+  it('adds one ladder safety shield per ladder, only when the toggle is on', () => {
+    expect(qty('P-2501')).toBe(0); // toggle off in the base fixture
+    expect(qty('P-2501', { ...answers, ladderShield: true })).toBe(1);
+    expect(qty('P-2501', { ...answers, ladders: 3, ladderShield: true })).toBe(3);
+    expect(qty('P-2501', { ...answers, ladders: 0, ladderShield: true })).toBe(0);
+  });
+
+  it('prints the ladder safety shield as a priced line on the proposal itself', () => {
+    const { lines } = computeAdventureProposal({ ...answers, ladderShield: true });
+    const shield = lines.find((l) => l.sku === 'P-2501');
+    expect(shield).toBeTruthy();
+    expect(shield!.quantity).toBe(1);
+    expect(shield!.rateMinor).toBeGreaterThan(0);
+    expect(shield!.needsPrice).toBeFalsy();
+
+    const off = computeAdventureProposal(answers);
+    expect(off.lines.some((l) => l.sku === 'P-2501')).toBe(false);
   });
 
   it('keeps the structural pieces: beam members and the sized trolley rail', () => {

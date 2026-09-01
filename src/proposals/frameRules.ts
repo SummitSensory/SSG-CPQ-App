@@ -47,6 +47,7 @@ export const FRAME_INPUTS: { key: string; label: string; kind: 'number' | 'flag'
   { key: 'climbFrame', label: 'Frame-mounted climbing wall', kind: 'flag' },
   { key: 'climbWall', label: 'Wall-mounted climbing wall', kind: 'flag' },
   { key: 'climbShield', label: 'Climbing wall safety shield', kind: 'flag' },
+  { key: 'ladderShield', label: 'Ladder safety shield', kind: 'flag' },
   { key: 'trolley', label: 'Trolley chosen', kind: 'flag' },
 ];
 
@@ -110,6 +111,9 @@ export const DEFAULT_FRAME_RULES: FormulaRule[] = [
 
   R('Ladders', 'P-2531', 'Ladder Leg', [['in:ladders', 1]]),
   R('Ladders', 'A-2253', 'Ladder Mount', [['in:ladders', 1]]),
+  R('Ladders', 'P-2501', 'Ladder Safety Shield', [['in:ladders', 1]], {
+    when: flagOn('ladderShield'),
+  }),
 
   R('Rungs', 'P-2330', 'Rung', [
     [null, 9, flagOn('monkeyBars')],
@@ -191,6 +195,7 @@ export interface FrameAnswers {
   config?: string;
   legs?: number;
   ladders?: number;
+  ladderShield?: boolean;
   monkeyBars?: boolean;
   interiorBeams?: boolean;
   interiorBeamsQty?: number;
@@ -225,6 +230,7 @@ export function frameContext(a: FrameAnswers, bomQty: (part: string) => number):
     // answers saved while the leg-count bands were misconfigured still hold a 4.
     legs: legsFloor(n(a.length), n(a.legs)),
     ladders: n(a.ladders),
+    ladderShield: !!a.ladderShield,
     length: n(a.length),
     width: n(a.width),
     config: a.config || 'Rectangle',
