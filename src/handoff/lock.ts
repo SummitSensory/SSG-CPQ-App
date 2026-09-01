@@ -158,13 +158,20 @@ export interface ProcurementSeed {
   sku: string | null;
   name: string;
   quantity: number;
-  /** True for a line produced by expanding a kit; groups it into the BOM's hardware block. */
+  /** True for a line produced by expanding a kit; flags it as hardware on the BOM. */
   isHardwareComponent?: boolean;
   /** The kit this line came out of, e.g. 'H-1000'. */
   kitSku?: string | null;
   /** Cost/weight carried from the kit breakdown, since the fastener may not be in the SKU master. */
   unitCostMinor?: number | null;
   unitWeightLbs?: number | null;
+  /**
+   * This item's position among the accepted proposal's INCLUDED items, so the BOM
+   * can be sorted to match. Undefined for a seed with no proposal position of its
+   * own — nothing sets that here; it exists so a kit's exploded children (see
+   * bomBuild.ts) can carry their parent's position instead of losing it.
+   */
+  proposalLineOrder?: number;
 }
 
 /**
@@ -186,30 +193,45 @@ export interface ProcurementSeed {
 export function procurementFromItems(items: unknown): ProcurementSeed[] {
   if (!Array.isArray(items)) return [];
   const out: ProcurementSeed[] = [];
-  for (const i of (items as ItemLike[]).filter((x) => (x.kind ?? 'INCLUDED') === 'INCLUDED')) {
-    // `ref` is a random line id, NOT a part number — never let it into `sku`.
-    const sku = (i.sku || '').trim() || null;
-    const qty = i.quantity ?? 1;
-    const parts = (i.components ?? []).filter((c) => (c.part || '').trim() && c.qty);
+  // Position among the proposal's own INCLUDED items — the order the BOM has to
+  // match. Indexed after the filter, not before: an optional/alternate item has no
+  // BOM line at all, so it must not consume a position an included item could sit at.
+  (items as ItemLike[])
+    .filter((x) => (x.kind ?? 'INCLUDED') === 'INCLUDED')
+    .forEach((i, proposalLineOrder) => {
+      // `ref` is a random line id, NOT a part number — never let it into `sku`.
+      const sku = (i.sku || '').trim() || null;
+      const qty = i.quantity ?? 1;
+      const parts = (i.components ?? []).filter((c) => (c.part || '').trim() && c.qty);
 
-    if (!parts.length) {
-      out.push({ productId: i.productId ?? null, sku, name: i.name ?? 'Item', quantity: qty });
-      continue;
-    }
+      if (!parts.length) {
+        out.push({
+          productId: i.productId ?? null,
+          sku,
+          name: i.name ?? 'Item',
+          quantity: qty,
+          proposalLineOrder,
+        });
+        return;
+      }
 
-    for (const c of parts) {
-      out.push({
-        productId: null,
-        sku: (c.part as string).trim(),
-        name: c.name || (c.part as string).trim(),
-        // The kit's own quantity multiplies through: two kits means twice the bolts.
-        quantity: (c.qty as number) * (qty || 1),
-        isHardwareComponent: true,
-        kitSku: sku,
-        unitCostMinor: c.unitCostMinor ?? null,
-        unitWeightLbs: c.weightLbs ?? null,
-      });
-    }
-  }
+      for (const c of parts) {
+        out.push({
+          productId: null,
+          sku: (c.part as string).trim(),
+          name: c.name || (c.part as string).trim(),
+          // The kit's own quantity multiplies through: two kits means twice the bolts.
+          quantity: (c.qty as number) * (qty || 1),
+          isHardwareComponent: true,
+          kitSku: sku,
+          unitCostMinor: c.unitCostMinor ?? null,
+          unitWeightLbs: c.weightLbs ?? null,
+          // Every fastener out of this kit sits where the kit itself sat on the
+          // proposal, so the BOM prints them together at that position rather than
+          // scattering them by part number.
+          proposalLineOrder,
+        });
+      }
+    });
   return out;
 }

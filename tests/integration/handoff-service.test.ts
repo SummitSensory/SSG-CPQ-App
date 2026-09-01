@@ -141,6 +141,42 @@ describe('createAcceptedOrder', () => {
       createAcceptedOrder('v1', { ...approval, approverName: '' }, 'user-1'),
     ).rejects.toThrow(/approver/i);
   });
+
+  it('stamps each procurement line with its position on the accepted proposal, so the Bill of Materials can be sorted to match it', async () => {
+    // Deliberately not in tree or alphabetical order — proving the BOM sort has
+    // something other than SKU or product-tree position to key off.
+    h.store.version!.items = [
+      { ref: 'l1', productId: 'prod-z', name: 'Frame', quantity: 1, kind: 'INCLUDED' },
+      { ref: 'l2', productId: 'prod-opt', name: 'Optional Extra', quantity: 1, kind: 'OPTIONAL' },
+      {
+        ref: 'l3',
+        sku: 'H-1000',
+        name: 'Hardware Kit',
+        quantity: 1,
+        kind: 'INCLUDED',
+        components: [
+          { part: '6820H-LA', name: 'Hex Bolt', qty: 4 },
+          { part: '6820H-LB', name: 'Washer', qty: 8 },
+        ],
+      },
+      { ref: 'l4', productId: 'prod-a', name: 'Ladder', quantity: 1, kind: 'INCLUDED' },
+    ];
+    const { createAcceptedOrder } = await import('../../src/handoff/service.js');
+    const order = (await createAcceptedOrder('v1', approval, 'user-1')) as unknown as {
+      procurement: {
+        create: Array<{ name: string; sku: string | null; proposalLineOrder: number | null }>;
+      };
+    };
+    const lines = order.procurement.create.map((p) => [p.sku ?? p.name, p.proposalLineOrder]);
+    expect(lines).toEqual([
+      ['Frame', 0],
+      // The optional extra never became a line, so it consumed no position — the
+      // kit inherits position 1, not 2.
+      ['6820H-LA', 1],
+      ['6820H-LB', 1],
+      ['Ladder', 2],
+    ]);
+  });
 });
 
 describe('verifyIntegrity', () => {

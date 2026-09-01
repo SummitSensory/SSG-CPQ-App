@@ -54,8 +54,6 @@ export interface BomLine {
   vendorNotes: string;
   sourced: boolean;
   isSteel: boolean;
-  /** Product-tree sort order. Hardware carries Infinity so it sorts last. */
-  treeOrder: number;
   isHardware: boolean;
   /**
    * Summit bought this part elsewhere and had it shipped to this vendor, who is
@@ -227,19 +225,7 @@ export async function buildBom(
   );
 
   // ---- ordering ----
-  // The BOM follows the PRODUCT TREE, not the alphabet: the tree order is the order
-  // the shop builds in, and `Product.sortOrder` is unique across the whole tree
-  // (Adventure in the 20000s, Soar in the 40000s) which is exactly why it can be
-  // sorted on its own. Header rows are deliberately not carried over — the sheet is
-  // a parts list, and a category heading is not a part.
   const skusOnOrder = [...new Set(order.procurement.map((l) => s(l.sku)).filter(Boolean))];
-  const treeRows = skusOnOrder.length
-    ? await prisma.product.findMany({
-        where: { sku: { in: skusOnOrder } },
-        select: { sku: true, sortOrder: true },
-      })
-    : [];
-  const treeOrderBySku = new Map(treeRows.map((p) => [p.sku, p.sortOrder]));
 
   // Packaging bag per part. Lives on the SKU rather than the line, so one edit in
   // the catalog re-labels every sheet that part appears on.
@@ -251,9 +237,10 @@ export async function buildBom(
     : [];
   const bagBySku = new Map(bagRows.map((k) => [k.part, k.packagingBag ?? '']));
 
-  // Hardware sorts to the end as its own block. Membership is decided by the
-  // hardware RULES rather than a part-number pattern, so a fastener that does not
-  // happen to start with 6820H- is still filed correctly.
+  // Whether a line is hardware — no longer a sort key, only a fact carried on the
+  // line for the renderer. Membership is decided by the hardware RULES rather than
+  // a part-number pattern, so a fastener that does not happen to start with 6820H-
+  // is still identified correctly.
   const hardwareParts = new Set<string>([
     'H-1000',
     ...(
@@ -261,22 +248,29 @@ export async function buildBom(
     ).map((r) => r.part),
   ]);
   // A part quoted on the proposal under its own name (the zip-line eye bolt) is
-  // still a fastener on the shop floor — bomRollup names those explicitly.
+  // still a fastener on the shop floor — bomRollup names those explicitly. `isHardware`
+  // no longer drives where a line sits on the sheet (see the sort below); it is still
+  // carried on the line for the renderer to style or badge as it chooses.
   const isHardwarePart = (sku: string, flagged: boolean): boolean =>
     flagged || hardwareParts.has(sku) || isRollupHardwarePart(sku);
 
-  // A part the tree has never heard of would otherwise sort to position 0 and lead
-  // the sheet. Park it after the known products but before hardware.
-  const UNPLACED = 9_000_000;
-
+  // The BOM follows the PROPOSAL, not the product tree or the alphabet: a vendor
+  // reading the sheet is reading the same list the customer signed, in the same
+  // order. `proposalLineOrder` is stamped on the line at lock time (or when a kit
+  // rule explodes it later — see bomBuild.ts) from the accepted proposal's own
+  // INCLUDED item order; a kit's exploded fasteners all carry the kit's position, so
+  // they print together where the kit itself sat rather than by part number.
+  //
+  // NULL sorts last: a line with no proposal position of its own is either an order
+  // locked before this column existed, or one added to the BOM by hand afterward —
+  // neither was on the proposal, so neither can claim a place within it.
+  // `Array.prototype.sort` is stable, so lines that tie (kit siblings sharing their
+  // parent's position, or several NULLs) keep the order they were read in rather
+  // than reshuffling on every render.
   const ordered = [...order.procurement].sort((a, b) => {
-    const aHw = isHardwarePart(s(a.sku), a.isHardwareComponent);
-    const bHw = isHardwarePart(s(b.sku), b.isHardwareComponent);
-    if (aHw !== bHw) return aHw ? 1 : -1;
-    const ao = treeOrderBySku.get(s(a.sku)) ?? UNPLACED;
-    const bo = treeOrderBySku.get(s(b.sku)) ?? UNPLACED;
-    if (ao !== bo) return ao - bo;
-    return (a.sku || '').localeCompare(b.sku || '');
+    const ao = a.proposalLineOrder ?? Number.POSITIVE_INFINITY;
+    const bo = b.proposalLineOrder ?? Number.POSITIVE_INFINITY;
+    return ao - bo;
   });
   const scoped = vendorFilter
     ? ordered.filter((l) => (s(l.vendor).trim() || 'Unassigned vendor') === vendorFilter)
@@ -321,7 +315,6 @@ export async function buildBom(
       vendorNotes: notes,
       sourced: l.sourced,
       isSteel: steelVendors.has(vendorName.toLowerCase()),
-      treeOrder: treeOrderBySku.get(s(l.sku)) ?? UNPLACED,
       isHardware: isHardwarePart(s(l.sku), l.isHardwareComponent),
       freeIssue: free,
       purchaseVendor: s(l.purchaseVendor),
@@ -393,7 +386,6 @@ export async function buildBom(
         vendorNotes: '',
         sourced: false,
         isSteel: steelVendors.has(vendorFilter.toLowerCase()),
-        treeOrder: UNPLACED,
         isHardware: isHardwarePart(e.sku, false),
         freeIssue: false,
         purchaseVendor: '',

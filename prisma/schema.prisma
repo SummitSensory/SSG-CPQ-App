@@ -1978,9 +1978,18 @@ model ProcurementLine {
   powderColorCode String?
   /// Produced by expanding a kit (H-1000) into its fasteners. The proposal keeps the
   /// single kit line because that is what the customer buys; the shop needs the
-  /// pieces, so the BOM lists them in their own trailing section.
+  /// pieces, so the BOM lists them (see proposalLineOrder) at the position the kit
+  /// itself held on the proposal.
   isHardwareComponent Boolean @default(false)
   kitSku          String?
+  /// This line's position among the accepted proposal's INCLUDED items, so the BOM
+  /// can print in the same order as the proposal rather than by product tree or
+  /// SKU. A kit's exploded fasteners all carry the kit line's own position, so they
+  /// stay together where the kit itself sat rather than scattering by part number.
+  /// NULL on a line with no proposal position of its own: one added to the order by
+  /// hand after acceptance, or one locked before this column existed — both sort
+  /// after every positioned line.
+  proposalLineOrder Int?
   /// Colours chosen for this line, in slot order, copied from the accepted proposal
   /// item and editable on the sheet afterwards. Shape:
   ///   [{ "slot": 1, "colorId": "…", "name": "Royal Blue", "vendorCode": "RB-124",

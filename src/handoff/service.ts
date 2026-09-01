@@ -494,6 +494,7 @@ export async function createAcceptedOrder(
                   unitWeightLbs: ref.unitWeightLbs ?? p.unitWeightLbs ?? null,
                   isHardwareComponent: !!p.isHardwareComponent,
                   kitSku: p.kitSku ?? null,
+                  proposalLineOrder: p.proposalLineOrder ?? null,
                 };
               }),
             },
