@@ -29,7 +29,7 @@
  * for you to guard by hand.
  */
 import { execFileSync } from 'node:child_process';
-import { readdirSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { readdirSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 

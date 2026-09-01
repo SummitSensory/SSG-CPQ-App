@@ -6,6 +6,11 @@ import { dealItemIdFor } from './dealLink.js';
 import { versionTotals, metaOf } from '../../proposals/analytics.js';
 import { sellerCollectedCharges } from '../../crossborder/sellerCharges.js';
 import { renderPdf } from '../../render/pdf.js';
+import { appendPdfDocuments } from '../../lib/pdfMerge.js';
+import {
+  resolveReferenceDocuments,
+  selectedReferenceDocKeys,
+} from '../../proposals/referenceDocuments.js';
 
 /**
  * Releasing a proposal writes back to the monday deal row: the amount, the proposal
@@ -305,6 +310,7 @@ export async function uploadProposalPdfToMonday(input: {
     where: { id: input.versionId },
     select: {
       id: true,
+      sections: true,
       proposal: { select: { number: true, organizationId: true, opportunityId: true } },
     },
   });
@@ -319,7 +325,11 @@ export async function uploadProposalPdfToMonday(input: {
   const name = (input.filename || version.proposal.number).replace(/\.pdf$/i, '');
   try {
     // edgeToEdge: the proposal document owns its own page geometry — see render/pdf.ts.
-    const pdf = await renderPdf(input.proposalHtml, { format: 'Letter', edgeToEdge: true });
+    let pdf = await renderPdf(input.proposalHtml, { format: 'Letter', edgeToEdge: true });
+    const refDocKeys = selectedReferenceDocKeys(version.sections);
+    if (refDocKeys.length) {
+      pdf = await appendPdfDocuments(pdf, await resolveReferenceDocuments(refDocKeys));
+    }
     await uploadFileToColumn(itemId, DEAL_COLUMNS.file, `${name}.pdf`, pdf);
     await prisma.integrationSyncLog.create({
       data: {
