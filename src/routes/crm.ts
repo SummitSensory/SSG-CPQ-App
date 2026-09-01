@@ -19,6 +19,7 @@ import {
   findDuplicateContact,
 } from '../crm/duplicates.js';
 import { ListQuery, buildOrderBy, paginate } from '../crm/query.js';
+import { projectIdOfOpportunity } from '../crm/projectId.js';
 import { pushOpportunity } from '../integrations/monday/sync.js';
 import { fetchItemById } from '../integrations/monday/discovery.js';
 import { DEAL_COL, buildAddress } from '../integrations/monday/crmMapping.js';
@@ -357,11 +358,26 @@ export function registerCrmRoutes(app: FastifyInstance): void {
   });
 
   // ---- Opportunities ----
+  /**
+   * `q` matches the opportunity's own name, its customer's name, and its Project ID
+   * — the three things a rep might type when hunting for a specific project rather
+   * than a specific customer. `organizationName`, `projectId` and `closed` are
+   * computed onto each row for the same reason: the New Proposal picker lists one
+   * row per project (see public/app.js), and needs all three to label one.
+   */
   app.get('/crm/opportunities', read, async (req) => {
     const p = ListQuery.parse(req.query);
     const f = req.query as { stage?: string; fundingStatus?: string; organizationId?: string };
     const where = {
-      ...(p.q ? { name: { contains: p.q, mode: 'insensitive' as const } } : {}),
+      ...(p.q
+        ? {
+            OR: [
+              { name: { contains: p.q, mode: 'insensitive' as const } },
+              { notes: { contains: p.q, mode: 'insensitive' as const } },
+              { organization: { name: { contains: p.q, mode: 'insensitive' as const } } },
+            ],
+          }
+        : {}),
       ...(f.stage ? { stage: f.stage as never } : {}),
       ...(f.fundingStatus ? { fundingStatus: f.fundingStatus as never } : {}),
       ...(f.organizationId ? { organizationId: f.organizationId } : {}),
@@ -369,16 +385,23 @@ export function registerCrmRoutes(app: FastifyInstance): void {
     const [rows, total] = await Promise.all([
       prisma.opportunity.findMany({
         where,
+        include: { organization: { select: { name: true } } },
         orderBy: buildOrderBy(p.sort, p.dir, OPP_SORT, 'createdAt'),
         ...paginate(p.page, p.pageSize),
       }),
       prisma.opportunity.count({ where }),
     ]);
     // Serialize BigInt budget to string for JSON.
-    const items = rows.map((r) => ({
-      ...r,
-      budgetAmountMinor: r.budgetAmountMinor?.toString() ?? null,
-    }));
+    const items = rows.map((r) => {
+      const { organization, ...rest } = r;
+      return {
+        ...rest,
+        budgetAmountMinor: r.budgetAmountMinor?.toString() ?? null,
+        organizationName: organization.name,
+        projectId: projectIdOfOpportunity(r),
+        closed: r.stage === 'CLOSED_WON' || r.stage === 'CLOSED_LOST',
+      };
+    });
     return { items, total, page: p.page, pageSize: p.pageSize };
   });
 
