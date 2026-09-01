@@ -7460,6 +7460,7 @@
     adv.legs = Math.max(Number(a.legs) || legsFor(adv.length), adv.length > FOUR_LEG_MAX_FT ? MIN_LEGS_OVER_FOUR_LEG_MAX : 0);
     adv.monkeyBars = !!a.monkeyBars; adv.monkeyBarsQty = Number(a.monkeyBarsQty) || 1;
     adv.ladders = Number(a.ladders) > 0; adv.laddersQty = Number(a.ladders) || 1;
+    adv.ladderShield = !!a.ladderShield;
     adv.trolley = !!a.trolley; adv.trolleyType = a.trolleyType || 'Dual';
     adv.interiorBeams = !!a.interiorBeams; adv.interiorBeamsQty = Number(a.interiorBeamsQty) || 1;
     adv.zipLine = !!a.zipLine; adv.zipLineQty = Number(a.zipLineQty) || 1;
@@ -7841,6 +7842,7 @@
   function advAnswers() {
     return {
       length: Number(adv.length), width: Number(adv.width), config: adv.config, legs: Number(adv.legs), ladders: adv.ladders ? Number(adv.laddersQty) : 0,
+      ladderShield: adv.ladders ? !!adv.ladderShield : false,
       monkeyBars: !!adv.monkeyBars, monkeyBarsQty: Number(adv.monkeyBarsQty),
       interiorBeams: !!adv.interiorBeams, interiorBeamsQty: Number(adv.interiorBeamsQty),
       trolley: !!adv.trolley, trolleyType: adv.trolleyType, zipLine: !!adv.zipLine, zipLineQty: Number(adv.zipLineQty), ballRack: !!adv.ballRack,

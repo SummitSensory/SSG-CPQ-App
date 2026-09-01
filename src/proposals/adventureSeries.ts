@@ -37,6 +37,7 @@ export interface AdvAnswers {
   config: string;
   legs: number;
   ladders: number;
+  ladderShield?: boolean;
   monkeyBars?: boolean;
   monkeyBarsQty?: number;
   interiorBeams?: boolean;
@@ -476,6 +477,7 @@ export function computeAdventureProposal(
     'A-2225',
     'P-2531',
     'A-2253',
+    'P-2501',
     'P-2545',
     'P-2206',
     'P-2207',
