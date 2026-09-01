@@ -17,6 +17,8 @@ import {
 } from './client.js';
 import { buildPackageHtml, type AssemblyAttachment, type SignerSpec } from './assembly.js';
 import { envelopePath, putPdf } from './storage.js';
+import { appendPdfDocuments } from '../../lib/pdfMerge.js';
+import { resolveReferenceDocuments } from '../../proposals/referenceDocuments.js';
 
 /**
  * Proposal e-signing.
@@ -141,6 +143,14 @@ export interface SendInput {
   signers: SignerSpec[];
   templateKey?: string;
   attachmentKeys?: string[];
+  /**
+   * ReferenceDocument keys to merge in as trailing PDF pages — a W9, a certificate of
+   * insurance. Explicit from the caller, the same as attachmentKeys, rather than read
+   * from the proposal's saved builder meta the way the monday push reads them: this is
+   * itself the one "compose what goes out" step for a signature request, so there is
+   * no separate save this could drift from.
+   */
+  referenceDocumentKeys?: string[];
   subject?: string;
   message?: string;
   filename?: string;
@@ -229,7 +239,11 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
     totalMinor: totals.total,
   });
 
-  const pdf = await renderPdf(html, { format: 'Letter' });
+  let pdf = await renderPdf(html, { format: 'Letter' });
+  const referenceDocs = await resolveReferenceDocuments(input.referenceDocumentKeys ?? []);
+  // Merged in before the hash is taken, so packageSha256 answers for the document as
+  // it actually went out — pages and all — not just the HTML half of it.
+  if (referenceDocs.length) pdf = await appendPdfDocuments(pdf, referenceDocs);
   const sha256 = crypto.createHash('sha256').update(pdf).digest('hex');
   const name = (input.filename || version.proposal.number).replace(/\.pdf$/i, '');
 
@@ -242,6 +256,7 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
       templateId: template?.id ?? null,
       templateKey: template?.key ?? null,
       attachments: attachments.map((a) => a.key) as Prisma.InputJsonValue,
+      referenceDocuments: (input.referenceDocumentKeys ?? []) as Prisma.InputJsonValue,
       status: 'DRAFT',
       subject: input.subject ?? null,
       message: input.message ?? null,

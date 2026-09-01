@@ -42,6 +42,7 @@ import { registerReportRoutes } from './routes/reports.js';
 import { registerInsightRoutes } from './routes/insights.js';
 import { registerStandardNoteRoutes } from './routes/standardNotes.js';
 import { registerLegalDocumentRoutes } from './routes/legalDocuments.js';
+import { registerReferenceDocumentRoutes } from './routes/referenceDocuments.js';
 import { registerCustomerNoteRoutes } from './routes/customerNotes.js';
 import { registerFollowUpRoutes } from './routes/followUps.js';
 import { registerOutlookRoutes } from './routes/outlook.js';
@@ -170,6 +171,7 @@ export function buildApp(): FastifyInstance {
   registerInsightRoutes(app);
   registerStandardNoteRoutes(app);
   registerLegalDocumentRoutes(app);
+  registerReferenceDocumentRoutes(app);
   registerCustomerNoteRoutes(app);
   registerFollowUpRoutes(app);
   registerOutlookRoutes(app);

@@ -1237,6 +1237,42 @@ model LegalDocumentRevision {
   @@unique([key, version])
 }
 
+/// A pre-made file — a W9, a certificate of insurance, a credit application — kept in
+/// the CRM and optionally bound onto a proposal, the same way a legal document is bound
+/// in via public/contract-pages.js. The difference is what it IS: a legal document is
+/// text authored here and rendered into HTML pages; this is an uploaded file, so it
+/// rides along byte-for-byte (merged in as real PDF pages, see src/lib/pdfMerge.ts)
+/// rather than being re-typeset. Restricted to PDF for that reason — merging in an
+/// arbitrary image or Word document is not the same operation.
+///
+/// Keyed by a stable `key` rather than relying on `id`, matching LegalDocument and
+/// EsignDocumentTemplate: a proposal's builder meta stores the key, so renaming the
+/// title never orphans a proposal that already selected it.
+model ReferenceDocument {
+  id           String   @id @default(cuid())
+  key          String   @unique
+  title        String
+  filename     String
+  contentType  String
+  byteSize     Int
+  /// Blob URL. Null-store is not a supported state here, same reasoning as
+  /// CustomerPurchaseOrderFile: a row must not claim to exist when it does not.
+  url          String
+  pathname     String
+  /// Low to high, ties broken on key. Purely cosmetic ordering in the admin list and
+  /// the builder checklist — unlike LegalDocument, there is no printed sequence to
+  /// protect, since each reference document is its own trailing PDF page block.
+  sortOrder    Int      @default(0)
+  /// Whether it can be attached to a NEW proposal selection. Existing selections on
+  /// already-saved proposals are unaffected — same convention as LegalDocument.enabled.
+  active       Boolean  @default(true)
+  uploadedById String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([active, sortOrder])
+}
+
 /// The legal text exactly as printed when a proposal was released.
 ///
 /// Content-addressed by SHA-256 of the documents, so releasing fifty proposals under one
@@ -2843,6 +2879,10 @@ model EsignEnvelope {
   /// Attachment keys bound into this package, in order. The audit answer to
   /// "which documents did they actually sign?".
   attachments Json?
+  /// ReferenceDocument keys merged into the package as trailing PDF pages, in order —
+  /// the same audit answer as `attachments`, for uploaded files rather than authored
+  /// text. See src/lib/pdfMerge.ts.
+  referenceDocuments Json?
 
   status     EsignStatus @default(DRAFT)
   subject    String?

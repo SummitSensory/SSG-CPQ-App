@@ -73,6 +73,30 @@ export function purchaseOrderPath(input: {
 }
 
 /**
+ * PDF-only cap for the reference-document library (a W9, a certificate of insurance).
+ *
+ * Larger than the purchase-order cap: those come in over email and get forwarded
+ * through Outlook, which is the 3 MB ceiling in that file's own comment. These are
+ * uploaded once by staff and merged as extra PDF pages (see src/lib/pdfMerge.ts), with
+ * no email-attachment size to respect — a multi-page scanned certificate can run
+ * larger than a one-page W9.
+ */
+export const MAX_REFERENCE_DOC_BYTES = 5 * 1024 * 1024;
+
+/**
+ * PDF only. A reference document is merged into a customer-facing PDF as real pages
+ * (see src/lib/pdfMerge.ts) — an image or a Word document is not the same operation,
+ * and converting one to match would be lossy for exactly the kind of form (an IRS W9)
+ * this exists to carry unmodified.
+ */
+export const REFERENCE_DOC_CONTENT_TYPE = 'application/pdf';
+
+/** `reference-documents/<id>-<filename>`. */
+export function referenceDocumentPath(input: { fileId: string; filename: string }): string {
+  return `reference-documents/${input.fileId}-${safeSegment(input.filename)}`;
+}
+
+/**
  * Store bytes and return where they went.
  *
  * `x-add-random-suffix: 0` because the pathname already carries a cuid, so the

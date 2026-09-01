@@ -586,6 +586,9 @@
     // synchronous, deep inside the document builder — always has it by the time anyone
     // opens a proposal. Without this call the shipped wording prints and nothing breaks.
     if (window.SSGContractPages) window.SSGContractPages.init({ authed: authed });
+    // Same fetch-once-at-sign-in shape as SSGContractPages, for the builder's
+    // reference-documents checklist (a W9, a certificate of insurance).
+    if (window.SSGReferenceDocuments) window.SSGReferenceDocuments.init({ authed: authed, esc: esc });
     /*
      * The paginator, lent to the legal document editor.
      *
@@ -4545,6 +4548,7 @@
       '</div>' +
       footerNotesCard() +
       contractPagesCard() +
+      referenceDocsCard() +
       (isMock() ? '' : '<div id="bMarginRail" style="' + marginRailStyle() + '">' + marginCard(t) + '<div id="bCbRail"></div><div id="bRfqRail"></div><div id="bDatesRail"></div><div id="bNotesRail"></div></div>');
     wireBuilder();
   }
@@ -4606,6 +4610,35 @@
       '<div class="section-title" style="margin:0 0 4px;">Contract documents</div>' +
       '<div class="muted" style="font-size:12px;margin-bottom:6px;line-height:1.5;">Printed after the acceptance page, in this order.</div>' +
       (rows || '<div class="muted" style="font-size:12.5px;">None configured in Administration.</div>') +
+    '</div>';
+  }
+
+  /**
+   * Which reference documents ride along with this proposal — a W9, a certificate of
+   * insurance.
+   *
+   * Uploaded once in Administration, from window.SSGReferenceDocuments.list(), same
+   * "the label here is always the live one" rule contractPagesCard() follows. Opt-IN
+   * rather than opt-out, unlike contract documents: a W9 does not belong on every
+   * proposal the way the terms of sale do, so nothing is attached until a rep checks
+   * it. Selection is per proposal and per version, stored in pb.meta.referenceDocKeys.
+   */
+  function referenceDocsCard() {
+    var docs = (window.SSGReferenceDocuments && window.SSGReferenceDocuments.list()) || [];
+    if (!docs.length) return '';
+    var selected = Array.isArray(pb.meta.referenceDocKeys) ? pb.meta.referenceDocKeys : [];
+    var rows = docs.map(function (d) {
+      var id = 'mRefDoc_' + d.key;
+      var on = selected.indexOf(d.key) !== -1;
+      return '<label style="display:flex;gap:9px;align-items:flex-start;font-size:13px;line-height:1.5;cursor:pointer;padding:7px 0;">' +
+        '<input type="checkbox" class="bRefDoc" id="' + id + '" data-key="' + esc(d.key) + '"' + (on ? ' checked' : '') + ' style="margin-top:2px;">' +
+        '<span><b style="font-weight:600;">' + esc(d.title) + '</b>' +
+        '<span class="muted" style="display:block;font-size:11.5px;margin-top:1px;">' + esc(d.filename) + '</span></span></label>';
+    }).join('');
+    return '<div class="card" style="margin-top:16px;">' +
+      '<div class="section-title" style="margin:0 0 4px;">Reference documents</div>' +
+      '<div class="muted" style="font-size:12px;margin-bottom:6px;line-height:1.5;">Attached to the signing packet and to the copy pushed to monday, unchecked by default.</div>' +
+      rows +
     '</div>';
   }
 
@@ -6174,6 +6207,19 @@
           else if (idx === -1) excl.push(key);
           pb.meta.excludedDocKeys = excl;
         }
+        markBuilderDirty();
+      });
+    });
+    // Reference documents are opt-in, so the checked set IS the list — see
+    // referenceDocsCard().
+    document.querySelectorAll('.bRefDoc').forEach(function (cb) {
+      cb.addEventListener('change', function () {
+        var key = cb.getAttribute('data-key');
+        var sel = Array.isArray(pb.meta.referenceDocKeys) ? pb.meta.referenceDocKeys.slice() : [];
+        var idx = sel.indexOf(key);
+        if (cb.checked) { if (idx === -1) sel.push(key); }
+        else if (idx !== -1) sel.splice(idx, 1);
+        pb.meta.referenceDocKeys = sel;
         markBuilderDirty();
       });
     });
@@ -11897,7 +11943,10 @@
         '<div id="introAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>' +
         '<div class="section-title" style="margin-top:26px;">Contract documents</div>' +
         '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">The general release and the standard terms, printed after the acceptance page. Editing them here changes what future proposals print; a proposal already released keeps the wording it went out with. Saving a draft is not publishing it.</div>' +
-        '<div id="legalAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+        '<div id="legalAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>' +
+        '<div class="section-title" style="margin-top:26px;">Reference documents</div>' +
+        '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">Pre-made PDFs — a W9, a certificate of insurance — a rep can attach to an individual proposal from the builder, the same way contract documents are attached. Uploaded once here; unlike the contract documents, these print exactly as uploaded rather than being retyped.</div>' +
+        '<div id="referenceDocsAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>') +
 
       sec('email',
         '<div class="section-title" style="margin:4px 0 0;">Outlook drafts</div>' +
@@ -11965,6 +12014,8 @@
     // Admin-only, and the route enforces it. A non-admin sees the empty container rather
     // than an error, which is the same thing the other admin panels do.
     if (window.SSGLegalAdmin) window.SSGLegalAdmin.render(document.getElementById('legalAdmin'));
+    if (window.SSGReferenceDocuments)
+      window.SSGReferenceDocuments.render(document.getElementById('referenceDocsAdmin'));
     loadFormulas();
     loadFollowUpTemplates();
     loadOutlookPanel();
