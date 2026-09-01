@@ -9104,6 +9104,7 @@
       bomSectionData.map(function (s, i) { return sectionCard(s, i, canHandoff); }).join('') +
       '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:6px;">' +
         '<button class="link-btn" data-proc="csv" data-vendor="*" style="width:auto;padding:8px 14px;">Export all vendors — Excel</button>' +
+        '<button class="link-btn" data-proc="csvfile" data-vendor="*" style="width:auto;padding:8px 14px;">Export all vendors — CSV</button>' +
         '<button class="link-btn" data-proc="pdf" data-vendor="*" style="width:auto;padding:8px 14px;">Export all vendors — PDF</button>' +
       '</div>';
     wireBom(order, user, canHandoff);
@@ -9246,6 +9247,7 @@
           (canHandoff && idx > 0 ? '<button class="link-btn" data-sec-move="up" data-id="' + s.id + '" title="Move this section earlier in the export" style="width:auto;padding:6px 10px;">↑</button>' : '') +
           (canHandoff && idx < bomSectionData.length - 1 ? '<button class="link-btn" data-sec-move="down" data-id="' + s.id + '" title="Move this section later in the export" style="width:auto;padding:6px 10px;">↓</button>' : '') +
           '<button class="link-btn" data-proc="csv" data-vendor="' + esc(s.vendor) + '" style="width:auto;padding:7px 13px;">Excel</button>' +
+          '<button class="link-btn" data-proc="csvfile" data-vendor="' + esc(s.vendor) + '" style="width:auto;padding:7px 13px;">CSV</button>' +
           '<button class="link-btn" data-proc="pdf" data-vendor="' + esc(s.vendor) + '" style="width:auto;padding:7px 13px;">PDF</button>' +
           (canHandoff ? '<button class="btn" data-sec-email="' + s.id + '" title="Emails this vendor their sheet and submits the section" style="width:auto;padding:8px 14px;">Email vendor</button>' : '') +
           (canHandoff && !locked ? '<button class="link-btn" data-sec-confirm="' + s.id + '" title="Use when the sheet went out some other way" style="width:auto;padding:8px 14px;">Mark sent by hand</button>' : '') +
@@ -10178,20 +10180,22 @@
         var label = bt.textContent;
         bt.disabled = true;
 
-        // Both formats come from the server, off one shared model, so the
-        // spreadsheet and the PDF carry identical content. The browser-side CSV
-        // below is only a fallback for a deployment without the renderer.
+        // All three formats come from the server, off one shared model, so the
+        // spreadsheet, the CSV and the PDF carry identical content.
         var kind = bt.getAttribute('data-proc');
-        if (kind === 'csv') {
+        if (kind === 'csv' || kind === 'csvfile') {
+          var ext = kind === 'csv' ? 'xlsx' : 'csv';
           bt.textContent = 'Building…';
           try {
-            var rx = await authed('/render/orders/' + order.id + '/bom.xlsx' + qs);
+            var rx = await authed('/render/orders/' + order.id + '/bom.' + ext + qs);
             if (rx.ok) {
-              downloadBlob(await rx.blob(), bomFileSlug(vendor, order) + '.xlsx');
+              downloadBlob(await rx.blob(), bomFileSlug(vendor, order) + '.' + ext);
               bt.disabled = false; bt.textContent = label; return;
             }
           } catch (e) {}
-          bt.textContent = label;
+          bt.disabled = false; bt.textContent = label;
+          alert('Could not build the ' + (ext === 'xlsx' ? 'Excel' : 'CSV') + ' export.');
+          return;
         }
 
         if (kind === 'pdf') {
@@ -10207,14 +10211,13 @@
             }
           } catch (e) {}
           bt.textContent = label;
-        }
 
-        var doc = null;
-        try { var r = await authed('/orders/' + order.id + '/bom' + qs); if (r.ok) doc = await r.json(); } catch (e) {}
-        bt.disabled = false;
-        if (!doc) { alert('Could not build the Bill of Materials.'); return; }
-        if (bt.getAttribute('data-proc') === 'csv') downloadBomCsv(doc, vendor);
-        else printBom(doc, vendor);
+          var doc = null;
+          try { var r = await authed('/orders/' + order.id + '/bom' + qs); if (r.ok) doc = await r.json(); } catch (e2) {}
+          bt.disabled = false;
+          if (!doc) { alert('Could not build the Bill of Materials.'); return; }
+          printBom(doc, vendor);
+        }
       });
     });
   }
@@ -10347,29 +10350,6 @@
     var o = order || bomOrder || {};
     return [part(o.customerName || o.organizationName || ''), part(o.number || ''), part(vendor === '*' ? 'All Vendors' : vendor)]
       .filter(Boolean).join('-');
-  }
-
-  function downloadBomCsv(doc, vendor) {
-    var all = vendor === '*';
-    var head = (all ? ['Vendor'] : []).concat(['Line #', 'Description', 'Qty', 'Powder color', 'Weight (lb)', 'Cost each', 'Total cost']);
-    var body = (doc.lines || []).map(function (l) {
-      var base = [l.lineNo, l.name, String(l.quantity), l.powderColor, (Number(l.extendedWeightLbs) || 0).toFixed(2),
-        (l.unitCostMinor / 100).toFixed(2), (l.extendedCostMinor / 100).toFixed(2)];
-      return all ? [l.vendor].concat(base) : base;
-    });
-    var t = doc.totals || {};
-    var totalRow = (all ? [''] : []).concat(['Total', '', String(t.unitCount || 0), '', (Number(t.totalWeightLbs) || 0).toFixed(2), '', ((t.extendedCostMinor || 0) / 100).toFixed(2)]);
-    var meta = [
-      ['Bill of Materials', doc.order.number],
-      ['Job', doc.order.jobName], ['Vendor', all ? 'All vendors' : vendor],
-      ['Submission date', doc.order.submittedOn ? String(doc.order.submittedOn).slice(0, 10) : todayISO()],
-      ['Ship to', doc.shipTo.name], ['Delivery type', doc.order.deliveryType],
-      ['Powder coat brand', doc.order.powderCoatBrand], ['Estimated shipment quote', doc.order.shipmentQuote],
-      ['Total steel weight (lb)', (Number(t.steelWeightLbs) || 0).toFixed(2)],
-      ['Prepared by', (doc.createdBy && doc.createdBy.name) || ''], ['Prepared on', new Date(doc.createdAt).toLocaleString()],
-      []
-    ];
-    downloadCsv(bomFileSlug(vendor, { number: doc.order.number, customerName: doc.customer && doc.customer.name }) + '.csv', meta.concat([head]).concat(body).concat([totalRow]));
   }
 
   /**

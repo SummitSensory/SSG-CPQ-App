@@ -1,3 +1,4 @@
+import ExcelJS from 'exceljs';
 import { buildBom, streetLine, type BomDocument } from './bom.js';
 import { prisma } from '../lib/prisma.js';
 
@@ -56,6 +57,32 @@ async function sectionExtras(orderId: string, vendor: string) {
 }
 
 /**
+ * One table cell, carrying enough to render in either a document with laid-out
+ * text (the PDF, the CSV) or a real spreadsheet that has to sum and format its own
+ * numbers.
+ *
+ * `text` is what the PDF, the on-screen table and the CSV print — pre-formatted
+ * exactly as it always was ("$1,234.56", "12.50"), unchanged by this shape. A cell
+ * that IS a real number for Excel's purposes carries `numericValue` and `numFmt`
+ * alongside it; `renderBomXlsx` writes those so the column can be summed and reads
+ * as currency, while every other renderer keeps reading `text` and never has to
+ * know a numeric cell exists.
+ *
+ * `bold` and `align` are extensibility, not policy: nothing in `buildModel` sets
+ * `bold` today — no line or column is flagged that way — but a caller (or a later
+ * per-vendor preference) can mark specific cells without editing `renderBomXlsx`,
+ * which applies whatever the model marks and decides nothing on its own beyond its
+ * own structural defaults (the header row, the totals row, the title).
+ */
+export interface BomCell {
+  text: string;
+  numericValue?: number;
+  numFmt?: string;
+  align?: 'left' | 'right';
+  bold?: boolean;
+}
+
+/**
  * The document's CONTENT, resolved once.
  *
  * The PDF and the spreadsheet were built by separate code, and separate code
@@ -74,9 +101,14 @@ export interface BomModel {
   meta: Array<{ label: string; value: string }>;
   questions: Array<{ label: string; value: string }>;
   columns: string[];
-  /** Products in product-tree order, then a Hardware block. */
-  groups: Array<{ title: string; rows: string[][] }>;
-  totals: string[];
+  /**
+   * The part rows, in proposal order — no other organising principle. A single
+   * group with an empty title unless something someday needs more than one; kept
+   * as groups (rather than a flat row list) so that later "someday" costs nothing
+   * to add.
+   */
+  groups: Array<{ title: string; rows: BomCell[][] }>;
+  totals: BomCell[];
   /** What the sheet adds up to: items, freight, tax, grand total. */
   summary: Array<{ label: string; value: string; strong?: boolean }>;
   notes: string;
@@ -177,39 +209,48 @@ async function buildModel(
   // column has to add up visibly.
   const lbs = (n: number): string => (Number(n) || 0).toFixed(2);
 
-  const rowOf = (l: (typeof doc.lines)[number]): string[] => [
-    ...(all ? [l.vendor] : []),
-    l.sku || l.lineNo,
-    ...(showVendorPart ? [l.vendorSku || '—'] : []),
-    l.name,
-    String(l.quantity),
-    ...(showBag ? [l.packagingBag || '—'] : []),
-    ...(showColor ? [l.powderColor || '—'] : []),
-    lbs(l.extendedWeightLbs),
-    money(l.unitCostMinor),
-    money(l.extendedCostMinor),
+  const text = (v: string): BomCell => ({ text: v });
+  // A numeric column carries its own formatted text (unchanged for the PDF/CSV)
+  // alongside the real number and format Excel needs to write a summable cell.
+  const numeric = (formatted: string, value: number, numFmt: string): BomCell => ({
+    text: formatted,
+    numericValue: value,
+    numFmt,
+    align: 'right',
+  });
+
+  const rowOf = (l: (typeof doc.lines)[number]): BomCell[] => [
+    ...(all ? [text(l.vendor)] : []),
+    text(l.sku || l.lineNo),
+    ...(showVendorPart ? [text(l.vendorSku || '—')] : []),
+    text(l.name),
+    numeric(String(l.quantity), l.quantity, '0'),
+    ...(showBag ? [text(l.packagingBag || '—')] : []),
+    ...(showColor ? [text(l.powderColor || '—')] : []),
+    numeric(lbs(l.extendedWeightLbs), l.extendedWeightLbs, '#,##0.00'),
+    numeric(money(l.unitCostMinor), l.unitCostMinor / 100, '$#,##0.00'),
+    numeric(money(l.extendedCostMinor), l.extendedCostMinor / 100, '$#,##0.00'),
   ];
 
-  // Two blocks: products in tree order, then hardware. Hardware last because it is
-  // consumed last and because a hundred fasteners in the middle of the sheet buries
-  // the parts the shop is actually looking for.
-  const products = doc.lines.filter((l) => !l.isHardware);
-  const hardware = doc.lines.filter((l) => l.isHardware);
-  const groups: Array<{ title: string; rows: string[][] }> = [];
-  if (products.length) groups.push({ title: '', rows: products.map(rowOf) });
-  if (hardware.length) groups.push({ title: 'Hardware', rows: hardware.map(rowOf) });
+  // One group, in proposal order — no other organising principle. Hardware used to
+  // collect in a trailing block of its own; it now prints wherever it falls, which
+  // for a kit's exploded fasteners is the position the kit itself held on the
+  // proposal (see proposalLineOrder in bom.ts).
+  const groups: Array<{ title: string; rows: BomCell[][] }> = doc.lines.length
+    ? [{ title: '', rows: doc.lines.map(rowOf) }]
+    : [];
 
-  const totals = [
-    ...(all ? [''] : []),
-    '',
-    ...(showVendorPart ? [''] : []),
-    'Total',
-    String(t.unitCount),
-    ...(showBag ? [''] : []),
-    ...(showColor ? [''] : []),
-    lbs(t.totalWeightLbs),
-    '',
-    money(t.extendedCostMinor),
+  const totals: BomCell[] = [
+    ...(all ? [text('')] : []),
+    text(''),
+    ...(showVendorPart ? [text('')] : []),
+    text('Total'),
+    numeric(String(t.unitCount), t.unitCount, '0'),
+    ...(showBag ? [text('')] : []),
+    ...(showColor ? [text('')] : []),
+    numeric(lbs(t.totalWeightLbs), t.totalWeightLbs, '#,##0.00'),
+    text(''),
+    numeric(money(t.extendedCostMinor), t.extendedCostMinor / 100, '$#,##0.00'),
   ];
 
   // The money block. Freight and tax are quoted on the deal and typed as text, so
@@ -326,12 +367,15 @@ export async function renderBomHtml(
 
   const qtyIdx = m.columns.indexOf('Qty');
   const lineIdx = m.columns.indexOf('Line #');
-  const rowTr = (cells: string[]): string => {
+  const rowTr = (cells: BomCell[]): string => {
     // A zero-quantity row is a blank order line, not an omission — greyed so the
     // shop can see it is there to be filled in.
-    const zero = cells[qtyIdx] === '0';
+    const zero = cells[qtyIdx]?.text === '0';
     return `<tr${zero ? ' style="color:#9aa093;"' : ''}>${cells
-      .map((x, i) => `<td style="${TD}">${i === lineIdx ? `<code>${esc(x)}</code>` : esc(x)}</td>`)
+      .map(
+        (x, i) =>
+          `<td style="${TD}">${i === lineIdx ? `<code>${esc(x.text)}</code>` : esc(x.text)}</td>`,
+      )
       .join('')}</tr>`;
   };
   const rows = m.groups
@@ -393,7 +437,7 @@ export async function renderBomHtml(
     <thead><tr>${m.columns.map((h) => `<th style="${TH}">${esc(h)}</th>`).join('')}</tr></thead>
     <tbody>
       ${rows}
-      <tr style="background:#f6f7f4;">${m.totals.map((x) => `<td style="${TD}border-bottom:none;font-weight:700;">${esc(x)}</td>`).join('')}</tr>
+      <tr style="background:#f6f7f4;">${m.totals.map((x) => `<td style="${TD}border-bottom:none;font-weight:700;">${esc(x.text)}</td>`).join('')}</tr>
     </tbody>
   </table>
 
@@ -409,88 +453,250 @@ export async function renderBomHtml(
   return { html, doc: m.doc };
 }
 
+const HEADER_FILL = 'FFF2F3EF';
+const LABEL_ARGB = 'FF5C6157';
+
 /**
- * The same document as a spreadsheet — same model, so it carries the same header
- * blocks, addresses, questions, lines, totals and notes as the PDF.
+ * The same document as a real .xlsx workbook — same model, so it carries the same
+ * header blocks, addresses, questions, lines, totals and notes as the PDF.
  *
- * SpreadsheetML rather than real xlsx: it is a single XML string with no zip step
- * and no dependency, and Excel opens it natively.
+ * Replaces the old SpreadsheetML `.xls` export: that format could not set column
+ * widths, and its extension/MIME mismatch is what triggered Excel's "possible data
+ * loss" warning. This is a real workbook exceljs writes as a zip, so Excel opens it
+ * cleanly, sums its numeric columns, and never wraps a cell.
  */
-export async function renderBomXml(
+export async function renderBomXlsx(
   orderId: string,
   vendor: string,
   opts: { includeZeroQty?: boolean; actorId?: string } = {},
-): Promise<string> {
+): Promise<{ buffer: Buffer; doc: BomDocument }> {
   const m = await buildModel(orderId, vendor, opts);
+  const wb = new ExcelJS.Workbook();
+  const sheet = wb.addWorksheet('Bill of Materials');
 
-  // Money and quantities are written as text, exactly as the PDF prints them.
-  // Excel would otherwise reformat "$1,212.50" to its own locale and the two
-  // documents would no longer read the same.
-  const cell = (v: unknown, style?: string): string =>
-    `<Cell${style ? ` ss:StyleID="${style}"` : ''}><Data ss:Type="String">${esc(v)}</Data></Cell>`;
-  const row = (cells: string[]): string => `<Row>${cells.join('')}</Row>`;
-  const blank = row([]);
-  const heading = (text: string) => row([cell(text, 'h')]);
+  // Widest rendered string seen in each column, tracked as it is written rather
+  // than re-read off the cell afterward — a numeric cell's own VALUE is shorter
+  // than what actually prints ("4190.22" vs "$4,190.22"), and this is the width
+  // that has to fit the column.
+  const colWidths: number[] = [];
+  const track = (col: number, text: string) => {
+    colWidths[col - 1] = Math.max(colWidths[col - 1] ?? 0, text.length);
+  };
+  const plainRow = (cells: string[]): ExcelJS.Row => {
+    const row = sheet.addRow(cells);
+    cells.forEach((c, i) => track(i + 1, c));
+    return row;
+  };
+  const label = (r: ExcelJS.Row, col: number) => {
+    r.getCell(col).font = { color: { argb: LABEL_ARGB } };
+  };
+  const bold = (r: ExcelJS.Row, col: number) => {
+    r.getCell(col).font = { ...(r.getCell(col).font ?? {}), bold: true };
+  };
+  // Every cell gets an explicit alignment, left unless told otherwise: nothing is
+  // allowed to wrap, which is the whole point of computing widths at all.
+  const noWrap = (r: ExcelJS.Row, col: number, align: 'left' | 'right' = 'left') => {
+    r.getCell(col).alignment = { horizontal: align, wrapText: false };
+  };
+  const noWrapRow = (r: ExcelJS.Row) => r.eachCell((c) => (c.alignment = { wrapText: false }));
 
-  const body: string[] = [];
+  const titleRow = plainRow([m.title, m.doc.order.number]);
+  titleRow.font = { bold: true, size: 14 };
+  noWrapRow(titleRow);
 
-  body.push(row([cell(m.title, 'title'), cell(m.doc.order.number, 'b')]));
-  body.push(row([cell(m.subtitle)]));
-  body.push(row([cell('Vendor', 'lbl'), cell(m.vendorLabel, 'b')]));
-  if (m.submitted) body.push(row([cell('Status', 'lbl'), cell('SUBMITTED', 'b')]));
-  body.push(blank);
+  noWrapRow(plainRow([m.subtitle]));
+  const vendorRow = plainRow(['Vendor', m.vendorLabel]);
+  label(vendorRow, 1);
+  bold(vendorRow, 2);
+  noWrapRow(vendorRow);
+  if (m.submitted) {
+    const statusRow = plainRow(['Status', 'SUBMITTED']);
+    label(statusRow, 1);
+    bold(statusRow, 2);
+    noWrapRow(statusRow);
+  }
+  plainRow([]);
 
-  body.push(row([cell(m.company.name, 'b')]));
-  m.company.lines.forEach((l) => body.push(row([cell(l)])));
-  body.push(blank);
+  const companyRow = plainRow([m.company.name]);
+  bold(companyRow, 1);
+  noWrapRow(companyRow);
+  m.company.lines.forEach((l) => noWrapRow(plainRow([l])));
+  plainRow([]);
 
-  // Addresses side by side, as they appear on the PDF, rather than stacked — the
-  // sheet should be recognisable as the same document.
+  // Addresses side by side, as on the PDF, rather than stacked — the sheet should
+  // be recognisable as the same document.
+  const addrTitleRow = plainRow(m.addresses.map((a) => a.title));
+  m.addresses.forEach((_a, i) => label(addrTitleRow, i + 1));
+  noWrapRow(addrTitleRow);
   const depth = Math.max(...m.addresses.map((a) => a.lines.length), 0);
-  body.push(row(m.addresses.map((a) => cell(a.title, 'lbl'))));
-  for (let i = 0; i < depth; i++) body.push(row(m.addresses.map((a) => cell(a.lines[i] ?? ''))));
-  body.push(blank);
+  for (let i = 0; i < depth; i++) {
+    noWrapRow(plainRow(m.addresses.map((a) => a.lines[i] ?? '')));
+  }
+  plainRow([]);
 
-  m.meta.forEach((x) => body.push(row([cell(x.label, 'lbl'), cell(x.value, 'b')])));
-  body.push(blank);
+  // Meta block: label cells in the muted grey the PDF's `lbl` style already uses,
+  // value cells bold — one pair per row, which reads more naturally in a
+  // spreadsheet than the PDF's side-by-side card layout.
+  m.meta.forEach((x) => {
+    const r = plainRow([x.label, x.value]);
+    label(r, 1);
+    bold(r, 2);
+    noWrapRow(r);
+  });
+  plainRow([]);
 
   if (m.questions.length) {
-    body.push(heading('Vendor questions'));
-    m.questions.forEach((q) => body.push(row([cell(q.label, 'lbl'), cell(q.value, 'b')])));
-    body.push(blank);
+    const h = plainRow(['Vendor questions']);
+    bold(h, 1);
+    noWrapRow(h);
+    m.questions.forEach((q) => {
+      const r = plainRow([q.label, q.value]);
+      label(r, 1);
+      bold(r, 2);
+      noWrapRow(r);
+    });
+    plainRow([]);
   }
 
-  body.push(row(m.columns.map((h) => cell(h, 'th'))));
-  m.groups.forEach((g) => {
-    if (g.title) body.push(row([cell(g.title, 'h')]));
-    g.rows.forEach((r) => body.push(row(r.map((v) => cell(v)))));
+  // The table itself. Header row bold, thick rule under it, light fill — and this
+  // is where freeze panes lock, so the header stays visible under a long BOM.
+  const headerRow = plainRow(m.columns);
+  headerRow.eachCell((c) => {
+    c.font = { bold: true };
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEADER_FILL } };
+    c.border = { bottom: { style: 'medium' } };
+    c.alignment = { wrapText: false };
   });
-  body.push(row(m.totals.map((v) => cell(v, 'b'))));
-  // The money block, under the table.
-  body.push(row([]));
-  for (const line of m.summary) {
-    body.push(row([cell(line.label, line.strong ? 'b' : undefined), cell(line.value, 'b')]));
-  }
+  sheet.views = [{ state: 'frozen', ySplit: headerRow.number }];
+
+  const writeCell = (r: ExcelJS.Row, col: number, bc: BomCell) => {
+    const cell = r.getCell(col);
+    cell.value = bc.numericValue != null ? bc.numericValue : bc.text;
+    if (bc.numFmt) cell.numFmt = bc.numFmt;
+    cell.alignment = { horizontal: bc.align === 'right' ? 'right' : 'left', wrapText: false };
+    if (bc.bold) cell.font = { ...(cell.font ?? {}), bold: true };
+    track(col, bc.text);
+  };
+
+  m.groups.forEach((g) => {
+    if (g.title) {
+      const h = sheet.addRow([g.title]);
+      bold(h, 1);
+      noWrapRow(h);
+      track(1, g.title);
+    }
+    g.rows.forEach((cells) => {
+      const r = sheet.addRow([]);
+      cells.forEach((bc, i) => writeCell(r, i + 1, bc));
+    });
+  });
+
+  // Totals row: bold, with a top border, over the same columns as the table above.
+  const totalsRow = sheet.addRow([]);
+  m.totals.forEach((bc, i) => writeCell(totalsRow, i + 1, bc));
+  totalsRow.eachCell((c) => {
+    c.font = { ...(c.font ?? {}), bold: true };
+    c.border = { top: { style: 'thin' } };
+  });
+
+  plainRow([]);
+  m.summary.forEach((line) => {
+    const r = plainRow([line.label, line.value]);
+    noWrap(r, 2, 'right');
+    if (line.strong) {
+      r.eachCell((c) => {
+        c.font = { ...(c.font ?? {}), bold: true };
+        c.border = { top: { style: 'thin' } };
+      });
+    }
+  });
 
   if (m.notes) {
-    body.push(blank);
-    body.push(heading('Notes'));
-    m.notes.split('\n').forEach((line) => body.push(row([cell(line)])));
+    plainRow([]);
+    const h = plainRow(['Notes']);
+    bold(h, 1);
+    noWrapRow(h);
+    m.notes.split('\n').forEach((line) => noWrapRow(plainRow([line])));
   }
 
-  body.push(blank);
-  body.push(row([cell(m.footer)]));
+  plainRow([]);
+  noWrapRow(plainRow([m.footer]));
 
-  return `<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
-<Styles>
-  <Style ss:ID="title"><Font ss:Bold="1" ss:Size="14"/></Style>
-  <Style ss:ID="h"><Font ss:Bold="1" ss:Size="11"/></Style>
-  <Style ss:ID="th"><Font ss:Bold="1"/><Interior ss:Color="#F2F3EF" ss:Pattern="Solid"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="2"/></Borders></Style>
-  <Style ss:ID="lbl"><Font ss:Color="#5C6157"/></Style>
-  <Style ss:ID="b"><Font ss:Bold="1"/></Style>
-</Styles>
-<Worksheet ss:Name="Bill of Materials"><Table>${body.join('')}</Table></Worksheet>
-</Workbook>`;
+  // Auto-fit: exceljs has no such feature, so this is the longest rendered string
+  // seen in each column, capped so one runaway note cannot blow out the sheet.
+  // Description is the one column that should go wide rather than truncate, and
+  // capping at 60 rather than, say, 40 gives it the room to.
+  colWidths.forEach((len, i) => {
+    sheet.getColumn(i + 1).width = Math.min(len + 2, 60);
+  });
+
+  const buffer = Buffer.from(await wb.xlsx.writeBuffer());
+  return { buffer, doc: m.doc };
+}
+
+/**
+ * The same document as a CSV — same model, so unlike the old browser-built CSV it
+ * carries the addresses, the vendor questions and the notes alongside the lines.
+ *
+ * Kept alongside the xlsx for the rep who wants to paste the numbers into
+ * something else rather than open a workbook.
+ */
+export async function renderBomCsv(
+  orderId: string,
+  vendor: string,
+  opts: { includeZeroQty?: boolean; actorId?: string } = {},
+): Promise<{ csv: string; doc: BomDocument }> {
+  const m = await buildModel(orderId, vendor, opts);
+
+  const field = (v: string): string => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+  const row = (cells: string[]): string => cells.map(field).join(',');
+  const rows: string[] = [];
+
+  rows.push(row([m.title, m.doc.order.number]));
+  rows.push(row([m.subtitle]));
+  rows.push(row(['Vendor', m.vendorLabel]));
+  if (m.submitted) rows.push(row(['Status', 'SUBMITTED']));
+  rows.push('');
+
+  rows.push(row([m.company.name]));
+  m.company.lines.forEach((l) => rows.push(row([l])));
+  rows.push('');
+
+  const depth = Math.max(...m.addresses.map((a) => a.lines.length), 0);
+  rows.push(row(m.addresses.map((a) => a.title)));
+  for (let i = 0; i < depth; i++) rows.push(row(m.addresses.map((a) => a.lines[i] ?? '')));
+  rows.push('');
+
+  m.meta.forEach((x) => rows.push(row([x.label, x.value])));
+  rows.push('');
+
+  if (m.questions.length) {
+    rows.push(row(['Vendor questions']));
+    m.questions.forEach((q) => rows.push(row([q.label, q.value])));
+    rows.push('');
+  }
+
+  rows.push(row(m.columns));
+  m.groups.forEach((g) => {
+    if (g.title) rows.push(row([g.title]));
+    g.rows.forEach((cells) => rows.push(row(cells.map((c) => c.text))));
+  });
+  rows.push(row(m.totals.map((c) => c.text)));
+  rows.push('');
+
+  m.summary.forEach((line) => rows.push(row([line.label, line.value])));
+
+  if (m.notes) {
+    rows.push('');
+    rows.push(row(['Notes']));
+    m.notes.split('\n').forEach((line) => rows.push(row([line])));
+  }
+
+  rows.push('');
+  rows.push(row([m.footer]));
+
+  // The UTF-8 BOM keeps Excel from mangling the em dash in the Ship-to line.
+  return { csv: '\ufeff' + rows.join('\n'), doc: m.doc };
 }
 
 /**

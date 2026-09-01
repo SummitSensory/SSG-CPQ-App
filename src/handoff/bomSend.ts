@@ -2,7 +2,7 @@ import { prisma } from '../lib/prisma.js';
 import { env } from '../config/env.js';
 import { logger } from '../lib/logger.js';
 import { NotFoundError, ValidationError } from '../lib/errors.js';
-import { renderBomHtml, renderBomXml, bomFilename } from './bomDocuments.js';
+import { renderBomHtml, renderBomXlsx, bomFilename } from './bomDocuments.js';
 import { confirmSection, submissionBlockers } from './bomSections.js';
 import { renderPdf, pdfAvailable } from '../render/pdf.js';
 import type { BomSendFormat } from '@prisma/client';
@@ -106,13 +106,13 @@ export async function sendBom(sectionId: string, input: SendInput, actorId: stri
       attachments.push({ filename: `${base}.pdf`, content: pdf.toString('base64') });
     }
     if (wantsExcel) {
-      const xml = await renderBomXml(section.orderId, section.vendor, {
+      const { buffer } = await renderBomXlsx(section.orderId, section.vendor, {
         includeZeroQty: input.includeZeroQty,
         actorId,
       });
       attachments.push({
-        filename: `${base}.xls`,
-        content: Buffer.from(xml, 'utf8').toString('base64'),
+        filename: `${base}.xlsx`,
+        content: buffer.toString('base64'),
       });
     }
   } catch (err) {
