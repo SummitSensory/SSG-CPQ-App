@@ -7221,9 +7221,10 @@
    * respected and a proposal without a frame simply drops those segments.
    */
   function proposalFileName(d) {
-    var model = '', size = '';
+    var model = '', size = '', firstGroup = '';
     (d.lines || []).forEach(function (l) {
       if ((l.lineType || '') !== 'GROUP') return;
+      if (!firstGroup && l.name) firstGroup = String(l.name);
       if (!model && /itemized/i.test(l.name || '')) {
         model = String(l.name).replace(/\s*[-\u2013\u2014]\s*itemized.*$/i, '').trim();
       }
@@ -7232,6 +7233,13 @@
         if (sm) size = sm[1] + 'x' + sm[2];
       }
     });
+    // Only Adventure Series writes an "— Itemized" heading. Soar, Flex and anything
+    // else has no per-job model code, only a fixed catalog group name ("SUMMIT SOAR
+    // SERIES") — without this, "no model code" silently became "no product name at
+    // all" in the file name. The first group heading, title-cased, stands in for it.
+    if (!model && firstGroup) {
+      model = firstGroup.toLowerCase().replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+    }
     var now = new Date();
     var p2 = function (v) { return String(v).length < 2 ? '0' + v : String(v); };
     var today = p2(now.getMonth() + 1) + p2(now.getDate()) + now.getFullYear();
