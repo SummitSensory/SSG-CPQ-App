@@ -5,7 +5,10 @@ import { canTransition, becomesFrozen, isFrozenStatus, formatProposalNumber } fr
 import { compareVersions, type VersionSnapshot } from './compare.js';
 import { auditPriceEntry, priceEntryMessage, type PriceEntryAudit } from './priceEntry.js';
 import type { ProposalSection, ProposalItem } from './sections.js';
-import { sectionsWithResolvedProjectId } from '../crm/projectId.js';
+import {
+  sectionsWithResolvedProjectId,
+  sectionsWithOpportunityProjectId,
+} from '../crm/projectId.js';
 import { allocateNumbered } from '../lib/documentNumber.js';
 import type { ProposalStatus } from '@prisma/client';
 import { snapshotLegalDocuments } from '../legal/service.js';
@@ -44,7 +47,14 @@ export async function createProposal(
   // Resolved before the transaction because it may call monday, and it is best
   // effort — an unlinked customer or an unreachable board leaves the field blank for
   // the rep to fill, exactly as before.
-  const sections = await sectionsWithResolvedProjectId(input.sections, input.organizationId);
+  //
+  // An explicit opportunityId (the rep picked a specific project in the New Proposal
+  // dialog) answers the question directly and skips the org-wide guess entirely —
+  // the guess exists for the case this isn't: a customer with several concurrent
+  // projects and no way yet to say which one a proposal is for.
+  const sections = input.opportunityId
+    ? await sectionsWithOpportunityProjectId(input.sections, input.opportunityId)
+    : await sectionsWithResolvedProjectId(input.sections, input.organizationId);
   // Numbering is read-then-write against a unique column, so two reps creating a
   // proposal in the same second collided and the loser got a 500 with no proposal.
   // allocateNumbered re-reads the high-water mark and retries past the collision.

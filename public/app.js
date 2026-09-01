@@ -1675,7 +1675,7 @@
           versionCount: p.versionCount || 1, status: st, preparedBy: p.preparedBy || '',
           created: p.createdAt, modified: p.lastModifiedAt || p.updatedAt, expires: exp, expDays: dd,
           expired: dd != null && dd < 0 && OPEN_STATUSES.indexOf(st) !== -1,
-          organizationId: p.organizationId || '',
+          organizationId: p.organizationId || '', projectId: meta.projectId || '',
           releasedAt: v.releasedAt || null,
           // The same figure the Versions table and the customer document show. The
           // latest version is already on the wire with its sections and items, so this
@@ -1719,7 +1719,7 @@
     var box = document.getElementById('propList'); if (!box) return;
     var q = props.q.trim().toLowerCase();
     var rows = props.rows.filter(function (r) { return matchFilter(r, props.filter); })
-      .filter(function (r) { return !q || (r.customer + ' ' + r.contact + ' ' + r.title + ' ' + r.number + ' ' + r.preparedBy).toLowerCase().indexOf(q) !== -1; });
+      .filter(function (r) { return !q || (r.customer + ' ' + r.contact + ' ' + r.title + ' ' + r.number + ' ' + r.preparedBy + ' ' + r.projectId).toLowerCase().indexOf(q) !== -1; });
     var sk = props.sort.key, dir = props.sort.dir === 'asc' ? 1 : -1;
     rows.sort(function (a, b) {
       var x = a[sk], y = b[sk];
@@ -2771,34 +2771,91 @@
       return sortOrgs((await r.json()).items || []);
     } catch (e) { return []; }
   }
+  /** Opportunities carry the Project ID; see GET /crm/opportunities. */
+  async function fetchOpportunities(q) {
+    try {
+      var r = await authed('/crm/opportunities?pageSize=' + ORG_PICK_PAGE + (q ? '&q=' + encodeURIComponent(q) : ''));
+      if (!r.ok) return [];
+      return (await r.json()).items || [];
+    } catch (e) { return []; }
+  }
+  /**
+   * One row per project, the thing a rep is actually choosing when a customer has
+   * more than one running concurrently — not one row per customer, which gave no way
+   * to say which of several proposals-in-progress a new one belonged to. A customer
+   * with no opportunity yet (created by hand, or imported before one existed) still
+   * gets exactly one row, carrying the organization alone, so starting a proposal
+   * never requires creating a project first.
+   */
+  function buildPickRows(orgs, opps) {
+    // Keyed on the union of both lists' organization ids, not just `orgs` — a search
+    // that matches an opportunity by Project ID but not its customer by name (an org
+    // search and a Project ID search are two different queries against two different
+    // endpoints) must still surface that project, using the org name the opportunity
+    // itself carries rather than dropping it for not being in the other list.
+    var byOrg = {}, orgName = {};
+    orgs.forEach(function (org) { orgName[org.id] = org.name; if (!byOrg[org.id]) byOrg[org.id] = []; });
+    opps.forEach(function (o) {
+      if (!byOrg[o.organizationId]) byOrg[o.organizationId] = [];
+      byOrg[o.organizationId].push(o);
+      if (!orgName[o.organizationId]) orgName[o.organizationId] = o.organizationName;
+    });
+    var rows = [];
+    Object.keys(byOrg).forEach(function (orgId) {
+      var theirs = byOrg[orgId];
+      if (!theirs.length) {
+        rows.push({ organizationId: orgId, opportunityId: '', orgName: orgName[orgId] || '', projectId: '', closed: false });
+        return;
+      }
+      theirs.forEach(function (o) {
+        rows.push({ organizationId: orgId, opportunityId: o.id, orgName: orgName[orgId] || o.organizationName || '', projectId: o.projectId || '', closed: !!o.closed });
+      });
+    });
+    rows.sort(function (a, b) {
+      return String(a.orgName).localeCompare(String(b.orgName), undefined, { sensitivity: 'base' }) ||
+        String(a.projectId).localeCompare(String(b.projectId), undefined, { numeric: true });
+    });
+    return rows;
+  }
+  function pickRowLabel(esc, row) {
+    return esc(row.orgName) +
+      (row.projectId ? ' — Project ' + esc(row.projectId) : '') +
+      (row.closed ? ' (Closed)' : '');
+  }
   async function openProposalForm(user, preselectName) {
     var orgs = await fetchOrgs('');
+    var opps = await fetchOpportunities('');
+    var rows = buildPickRows(orgs, opps);
     var canFind = canCrmWrite(user.role);
     // With the monday lookup available, an empty CRM is no longer a dead end.
-    if (!orgs.length && !canFind) { alert('Create an organization first.'); return; }
+    if (!rows.length && !canFind) { alert('Create an organization first.'); return; }
 
-    // Only preselect when the name is unambiguous. Two organizations sharing a name
-    // (the same customer running two concurrent projects, most often) used to pick
-    // whichever came first in the list — silently attaching a new proposal to the
-    // wrong one, with nothing on screen to say a choice was even made for you.
+    // Only preselect when the name is unambiguous. A customer running two concurrent
+    // projects now has two rows here on purpose — that used to be exactly the case
+    // where a name match silently picked the wrong one, with nothing on screen to
+    // say a choice was even made for you. Left blank instead, so the rep — who came
+    // through this path specifically to tell two projects apart — picks explicitly.
     var wanted = String(preselectName || '').trim().toLowerCase();
-    var nameMatches = wanted ? orgs.filter(function (o) { return String(o.name || '').trim().toLowerCase() === wanted; }) : [];
-    var selectedId = nameMatches.length === 1 ? nameMatches[0].id : '';
+    var nameMatches = wanted ? rows.filter(function (r) { return String(r.orgName || '').trim().toLowerCase() === wanted; }) : [];
+    var selectedKey = nameMatches.length === 1 ? (nameMatches[0].opportunityId || nameMatches[0].organizationId) : '';
+    function rowKey(r) { return r.opportunityId || r.organizationId; }
 
     var ov = openModal('New proposal',
       fieldRow('Organization',
-        '<input id="fOrgFilter" style="' + IN + 'margin-bottom:7px;" placeholder="Type to search customers…" autocomplete="off">' +
+        '<input id="fOrgFilter" style="' + IN + 'margin-bottom:7px;" placeholder="Type to search customers or a project ID…" autocomplete="off">' +
         '<select id="fOrg" size="1" style="' + IN + '">' +
-          (orgs.length ? '' : '<option value="">No organizations yet — find one in monday</option>') +
-          orgs.map(function (o) { return '<option value="' + o.id + '"' + (o.id === selectedId ? ' selected' : '') + '>' + esc(o.name) + '</option>'; }).join('') +
+          (rows.length ? '' : '<option value="">No organizations yet — find one in monday</option>') +
+          rows.map(function (r) { return '<option value="' + esc(rowKey(r)) + '" data-org="' + esc(r.organizationId) + '" data-opp="' + esc(r.opportunityId) + '"' + (rowKey(r) === selectedKey ? ' selected' : '') + '>' + pickRowLabel(esc, r) + '</option>'; }).join('') +
         '</select>' +
         (canFind ? '<button type="button" class="link-btn" id="fOrgMonday" style="width:auto;padding:6px 0;margin-top:6px;font-size:12.5px;">Not listed? Find a customer in monday</button>' : '')) +
       fieldRow('Title', '<input id="fTitle" style="' + IN + '" required>'),
       async function (close, showErr) {
-        var orgId = ov.querySelector('#fOrg').value;
+        var opt = ov.querySelector('#fOrg').selectedOptions[0];
+        var orgId = opt ? opt.getAttribute('data-org') : '';
         if (!orgId) return showErr('Pick an organization, or find one in monday first.');
+        var opportunityId = opt.getAttribute('data-opp') || undefined;
         var title = ov.querySelector('#fTitle').value.trim(); if (title.length < 2) return showErr('Title must be at least 2 characters.');
-        var r = await authed('/proposals', { method: 'POST', body: { organizationId: orgId, title: title, sections: [], items: [] } });
+        var r = await authed('/proposals', { method: 'POST', body: { organizationId: orgId, opportunityId: opportunityId, title: title, sections: [], items: [] } });
         if (!r.ok) return showErr('Could not create (' + r.status + ').');
         close(); renderProposals(user);
       });
@@ -2810,36 +2867,43 @@
      *
      * The server is asked even when the local pass already found something — it used
      * to skip the lookup whenever ANY local match existed, on the assumption that a
-     * local hit meant the search was already satisfied. It does not: `orgs` is loaded
-     * once when this dialog opens, so an organization created or imported since then
-     * (most often a second one sharing a name with an org already in that snapshot,
-     * the exact case where the rep is searching hardest to tell them apart) matched
-     * nothing locally except its stale twin, and the search never went further to find
-     * it. The dropdown always ends up with the freshest answer either way, since
-     * paintOrgs runs again the moment the server responds.
+     * local hit meant the search was already satisfied. It does not: the snapshot is
+     * loaded once when this dialog opens, so an organization or project created or
+     * imported since then (most often one sharing a name with something already in
+     * that snapshot, the exact case where the rep is searching hardest to tell them
+     * apart) matched nothing locally except its stale twin, and the search never went
+     * further to find it. The dropdown always ends up with the freshest answer either
+     * way, since paintOrgs runs again the moment the server responds.
      */
     var filterEl = ov.querySelector('#fOrgFilter');
     var selEl = ov.querySelector('#fOrg');
     var lookupTimer = null;
     function paintOrgs(list, q) {
       selEl.innerHTML = list.length
-        ? list.map(function (o) { return '<option value="' + o.id + '">' + esc(o.name) + '</option>'; }).join('')
+        ? list.map(function (r) { return '<option value="' + esc(rowKey(r)) + '" data-org="' + esc(r.organizationId) + '" data-opp="' + esc(r.opportunityId) + '">' + pickRowLabel(esc, r) + '</option>'; }).join('')
         : '<option value="">No customer matches “' + esc(q || '') + '”</option>';
     }
     filterEl.addEventListener('input', function () {
       var q = filterEl.value.trim();
       var qq = q.toLowerCase();
-      var local = qq ? orgs.filter(function (o) { return String(o.name || '').toLowerCase().indexOf(qq) !== -1; }) : orgs;
+      var local = qq ? rows.filter(function (r) { return (r.orgName + ' ' + r.projectId).toLowerCase().indexOf(qq) !== -1; }) : rows;
       paintOrgs(local, q);
       if (lookupTimer) clearTimeout(lookupTimer);
       if (qq.length < 2) return;
       lookupTimer = setTimeout(async function () {
-        var found = await fetchOrgs(q);
+        var foundOrgs = await fetchOrgs(q);
+        var foundOpps = await fetchOpportunities(q);
         if (filterEl.value.trim() !== q) return; // they kept typing
         // Replace on a real answer; a failed fetch already comes back as [] from
-        // fetchOrgs, and leaving the local (if stale) results up beats wiping the
-        // list to "no matches" over what might just be a dropped request.
-        if (found.length) { orgs = found; paintOrgs(found, q); }
+        // fetchOrgs/fetchOpportunities, and leaving the local (if stale) results up
+        // beats wiping the list to "no matches" over what might just be a dropped
+        // request. Either list finding something is enough to rebuild: a search that
+        // matches only a monday deal's Project ID comes back with opportunities but
+        // no newly-matching organizations at all, and still has to show something.
+        if (foundOrgs.length || foundOpps.length) {
+          rows = buildPickRows(foundOrgs, foundOpps);
+          paintOrgs(rows, q);
+        }
       }, 250);
     });
 
