@@ -775,6 +775,17 @@
       load();
     },
     load: load,
+    /**
+     * Every document that will print, in order — {key, content} pairs, content carrying
+     * the live title from Administration.
+     *
+     * For the proposal builder's "Contract documents" checklist, so the name shown there
+     * is never a copy that can drift from what Administration actually has, and a document
+     * created after this release still shows up without a code change.
+     */
+    list: function () {
+      return documentList();
+    },
     /** The shipped wording, for the admin screen's "restore" preview. */
     defaults: function () {
       return JSON.parse(JSON.stringify(DEFAULTS));
@@ -818,10 +829,11 @@
       return chosen !== 'COVER';
     },
     /**
-     * Both documents unless the proposal turned one off.
+     * Every document unless the proposal turned it off.
      *
-     * Absent means included: a proposal saved before that flag existed carries no value,
-     * and the contract it went out under had both. Only an explicit `false` drops one.
+     * Absent means included: a proposal saved before a flag existed carries no value, and
+     * the contract it went out under had every document Administration had enabled then.
+     * Only an explicit opt-out drops one.
      */
     html: function (doc, opts) {
       opts = opts || {};
@@ -833,16 +845,20 @@
       /*
        * Every enabled document, in the order the server sent them.
        *
-       * `includeRelease` and `includeTerms` are still honoured, and only for those two
-       * keys. They are per-proposal switches that predate this: a proposal saved before
-       * they existed carries no value, and the contract it went out under had both, so only
-       * an explicit `false` drops one. A created document has no such flag and prints
-       * whenever it is enabled — its switch is the enabled flag itself, in Administration.
+       * `includeRelease` and `includeTerms` are the original per-proposal switches, kept
+       * exactly as they were for the two shipped keys. Any document created afterwards uses
+       * `excludedDocKeys` instead — a list of keys rather than one boolean per document,
+       * because the set of documents is now open-ended. Both are opt-OUT: a key with no
+       * flag and no entry in the list prints, which is what makes a document created in
+       * Administration show up on every proposal without a code change here.
        */
+      var excluded = Array.isArray(m.excludedDocKeys) ? m.excludedDocKeys : [];
       var out = '';
       documentList().forEach(function (item) {
         if (item.key === 'RELEASE' && m.includeRelease === false) return;
         if (item.key === 'TERMS' && m.includeTerms === false) return;
+        if (item.key !== 'RELEASE' && item.key !== 'TERMS' && excluded.indexOf(item.key) !== -1)
+          return;
         var kind = (item.content && item.content.kind) || 'NUMBERED';
         out +=
           kind === 'ARTICLES'
