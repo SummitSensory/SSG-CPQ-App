@@ -4546,33 +4546,60 @@
   /**
    * Which contract documents close this proposal.
    *
-   * Both by default, in the order they are listed: the release, then the terms. The
-   * order is fixed rather than settable — the release refers to the parties by the
-   * names the terms then use, and a proposal that presented them the other way round
-   * would be asking for a signature before saying what is being signed.
+   * The list itself, and every label on it, comes from window.SSGContractPages.list() —
+   * the same fetch from Administration that decides what actually prints. It used to be
+   * two hard-coded rows with hard-coded names, which meant a document renamed in
+   * Administration kept showing its old name here, and a document created there never
+   * showed up here at all: it printed on every proposal with no way to see or turn it off
+   * from the builder.
+   *
+   * All by default, in the order Administration has them: the release, then the terms,
+   * then anything created afterward. That order is not settable here — the release refers
+   * to the parties by the names the terms then use, and Administration's reordering
+   * screen is where the sequence of a signed instrument belongs.
    *
    * Unchecking is per proposal and per version, so a job quoted under a customer's own
    * master agreement can go out without ours without changing anything for anyone else.
+   * The release and the terms keep the two flags this always used
+   * (includeRelease/includeTerms, read by public/contract-pages.js); any document created
+   * since is opted out through excludedDocKeys instead, a list of keys rather than one
+   * more boolean per document, because the set of documents is open-ended.
    */
   function contractPagesCard() {
     if (window.SSGContractPages && !window.SSGContractPages.applies({ meta: pb.meta })) return '';
     var m = pb.meta;
-    var row = function (id, on, label, note) {
+    var row = function (id, key, on, label, note) {
       return '<label style="display:flex;gap:9px;align-items:flex-start;font-size:13px;line-height:1.5;cursor:pointer;padding:7px 0;">' +
-        '<input type="checkbox" id="' + id + '"' + (on ? ' checked' : '') + ' style="margin-top:2px;">' +
+        '<input type="checkbox" class="bContractDoc" id="' + id + '" data-key="' + esc(key) + '"' + (on ? ' checked' : '') + ' style="margin-top:2px;">' +
         '<span><b style="font-weight:600;">' + label + '</b>' +
         '<span class="muted" style="display:block;font-size:11.5px;margin-top:1px;">' + note + '</span></span></label>';
     };
+    var excluded = Array.isArray(m.excludedDocKeys) ? m.excludedDocKeys : [];
+    var docs = (window.SSGContractPages && window.SSGContractPages.list()) || [];
+    var rows = docs.map(function (item) {
+      var key = item.key;
+      var content = item.content || {};
+      var title = esc(content.title || key);
+      if (key === 'RELEASE') {
+        return row('mIncRelease', key, m.includeRelease !== false, title,
+          (String(m.billTo || m.shipTo || '').trim()
+            ? 'The customer\u2019s company and billing address fill in from this proposal. Signed by ' +
+              (m.contactName ? esc(m.contactName) : 'the contact named above') + ' and by you.'
+            : '<span style="color:#9c3327;font-weight:600;">No billing address on this proposal yet</span> \u2014 the document would print with the address blank. Fill in Bill to above before sending.'));
+      }
+      // The document's own current shape from Administration \u2014 a clause or article
+      // count that cannot go stale the way a hand-typed sentence describing it would.
+      var kind = content.kind || 'NUMBERED';
+      var count = kind === 'ARTICLES' ? (content.articles || []).length : (content.sections || []).length;
+      var noun = kind === 'ARTICLES' ? ' article' : ' clause';
+      var note = count + noun + (count === 1 ? '' : 's') + '.';
+      if (key === 'TERMS') return row('mIncTerms', key, m.includeTerms !== false, title, note);
+      return row('mIncDoc_' + key, key, excluded.indexOf(key) === -1, title, note);
+    }).join('');
     return '<div class="card" style="margin-top:16px;">' +
       '<div class="section-title" style="margin:0 0 4px;">Contract documents</div>' +
       '<div class="muted" style="font-size:12px;margin-bottom:6px;line-height:1.5;">Printed after the acceptance page, in this order.</div>' +
-      row('mIncRelease', m.includeRelease !== false, 'General release of liability',
-        (String(m.billTo || m.shipTo || '').trim()
-          ? 'The customer\u2019s company and billing address fill in from this proposal. Signed by ' +
-            (m.contactName ? esc(m.contactName) : 'the contact named above') + ' and by you.'
-          : '<span style="color:#9c3327;font-weight:600;">No billing address on this proposal yet</span> \u2014 the release would print with the address blank. Fill in Bill to above before sending.')) +
-      row('mIncTerms', m.includeTerms !== false, 'Standard terms &amp; conditions of sale',
-        'Thirteen clauses, unchanged.') +
+      (rows || '<div class="muted" style="font-size:12.5px;">None configured in Administration.</div>') +
     '</div>';
   }
 
@@ -6126,10 +6153,24 @@
     var mp = document.getElementById('mProj'); if (mp) mp.addEventListener('input', function () { pb.meta.projectId = mp.value; });
     var mpd = document.getElementById('mPropDate'); if (mpd) mpd.addEventListener('input', function () { pb.meta.proposalDate = mpd.value; pb.meta.expiration = addDays(mpd.value, 7); var me2 = document.getElementById('mExp'); if (me2) me2.value = pb.meta.expiration; });
     var msp = document.getElementById('mShowProj'); if (msp) msp.addEventListener('change', function () { pb.meta.showProjectId = msp.checked; });
-    var mir = document.getElementById('mIncRelease');
-    if (mir) mir.addEventListener('change', function () { pb.meta.includeRelease = mir.checked; markBuilderDirty(); });
-    var mit = document.getElementById('mIncTerms');
-    if (mit) mit.addEventListener('change', function () { pb.meta.includeTerms = mit.checked; markBuilderDirty(); });
+    // One listener for every contract-document checkbox, RELEASE and TERMS included —
+    // see contractPagesCard(). RELEASE/TERMS keep writing the two flags that always
+    // existed; anything else writes into excludedDocKeys, the open-ended list.
+    document.querySelectorAll('.bContractDoc').forEach(function (cb) {
+      cb.addEventListener('change', function () {
+        var key = cb.getAttribute('data-key');
+        if (key === 'RELEASE') pb.meta.includeRelease = cb.checked;
+        else if (key === 'TERMS') pb.meta.includeTerms = cb.checked;
+        else {
+          var excl = Array.isArray(pb.meta.excludedDocKeys) ? pb.meta.excludedDocKeys.slice() : [];
+          var idx = excl.indexOf(key);
+          if (cb.checked) { if (idx !== -1) excl.splice(idx, 1); }
+          else if (idx === -1) excl.push(key);
+          pb.meta.excludedDocKeys = excl;
+        }
+        markBuilderDirty();
+      });
+    });
     if (window.SSGFrontMatter) {
       window.SSGFrontMatter.bindPanel(document.getElementById('fmPanel'), pb.meta, function () {
         markBuilderDirty();
