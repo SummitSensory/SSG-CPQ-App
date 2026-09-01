@@ -820,13 +820,30 @@
       }
     },
     /**
-     * Both documents print on every template except the cover-only one, which exists to
-     * be a cover and nothing more. A proposal with no introduction at all still gets
-     * them — the contract does not depend on the marketing pages in front of it.
+     * Contract documents print on every proposal, including the cover-only template.
+     *
+     * This used to exclude COVER outright, on the reasoning that it "exists to be a
+     * cover and nothing more" — but that took the release and the terms away from
+     * every proposal that is a mix of things or not a series at all (COVER's own
+     * words, in public/intro-cover.js), which is exactly the shape of proposal that
+     * still needs to close on something a customer can sign. The rep still has the
+     * per-document checkboxes in the builder to leave one off a given proposal; the
+     * template picked for the introduction is not a reason to remove the choice.
+     *
+     * Restricted to DRAFT so this reads as a retroactive fix for proposals still being
+     * built, not a retroactive change to one already released: a released version is
+     * frozen (ProposalVersion.frozen), and what printed on it at release is what a
+     * customer may have already been shown or signed. Re-rendering an old released
+     * COVER proposal today still omits the documents, matching what actually went out;
+     * only proposals still in DRAFT gain the checklist and the printed pages.
      */
     applies: function (doc) {
-      var chosen = doc && doc.meta && doc.meta.introTemplate;
-      return chosen !== 'COVER';
+      var status = doc && doc.status;
+      if (status && status !== 'DRAFT') {
+        var chosen = doc && doc.meta && doc.meta.introTemplate;
+        return chosen !== 'COVER';
+      }
+      return true;
     },
     /**
      * Every document unless the proposal turned it off.
