@@ -3544,7 +3544,7 @@
     }
     pb = {
       proposalId: proposal.id, versionId: version.id, user: user, orgId: proposal.organizationId, orgName: orgName, stdNotes: stdNotes, updatedAt: openedUpdatedAt,
-      title: proposal.title || '', number: proposal.number || '', version: version.version || 1,
+      title: proposal.title || '', number: proposal.number || '', version: version.version || 1, status: version.status || 'DRAFT',
       meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', billSameAsShip: !meta.billTo || meta.billTo === (meta.shipTo || orgShipTo || ''), showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, showDeposit: meta.showDeposit !== false, introTemplate: meta.introTemplate || '', tbdTax: meta.tbdTax || '', tbdStructureFreight: meta.tbdStructureFreight || '', tbdMatsFreight: meta.tbdMatsFreight || '', proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, discountMode: meta.discountMode === 'AMT' ? 'AMT' : 'PCT', discountAmountMinor: meta.discountAmountMinor || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, stdFreightOn: !!meta.stdFreightOn, stdFreightMinor: meta.stdFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7), footerNotes: footerNotes, advAnswers: meta.advAnswers || null, advWarnings: meta.advWarnings || [] },
       lines: lines,
     };
@@ -4576,7 +4576,7 @@
    * more boolean per document, because the set of documents is open-ended.
    */
   function contractPagesCard() {
-    if (window.SSGContractPages && !window.SSGContractPages.applies({ meta: pb.meta })) return '';
+    if (window.SSGContractPages && !window.SSGContractPages.applies({ meta: pb.meta, status: pb.status })) return '';
     var m = pb.meta;
     var row = function (id, key, on, label, note) {
       return '<label style="display:flex;gap:9px;align-items:flex-start;font-size:13px;line-height:1.5;cursor:pointer;padding:7px 0;">' +
@@ -6618,6 +6618,7 @@
   function builderDoc() {
     return {
       title: pb.title, number: pb.number, orgName: pb.orgName, meta: pb.meta, lines: pb.lines,
+      status: pb.status, version: pb.version,
       totals: builderTotals(),
       // Already loaded for the rail. Attached only when it belongs to THIS version,
       // so a stale answer from a previously open proposal cannot reach a document.
@@ -6739,6 +6740,7 @@
     var total = subtotal - discount + tpFreight + tax + structureFreight + matsFreight + stdFreight;
     return {
       title: proposal.title, number: proposal.number, version: version.version || 1,
+      status: version.status || 'DRAFT',
       orgName: orgName, meta: meta, lines: lines, crossBorder: cb,
       totals: {
         subtotal: subtotal, discountPct: discountPct, discountMode: discountMode, discount: discount, tpFreight: tpFreight,
