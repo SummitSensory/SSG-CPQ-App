@@ -62,7 +62,10 @@
 
   /** Explicitly USD, for a document that also states CAD. */
   function fmtUsd(minor) {
-    return 'USD $' + money(minor);
+    // Nowrap, like every other money span here (the CAD estimate, the inline CAD
+    // parenthetical, the group subtotal): at narrow print widths the bare text wrapped
+    // between "USD" and the figure, splitting the amount across two lines.
+    return '<span style="white-space:nowrap;">USD $' + money(minor) + '</span>';
   }
 
   /** Title-case a heading. Pure, and copied for the same reason as the rest. */
