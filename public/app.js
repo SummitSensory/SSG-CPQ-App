@@ -2777,9 +2777,13 @@
     // With the monday lookup available, an empty CRM is no longer a dead end.
     if (!orgs.length && !canFind) { alert('Create an organization first.'); return; }
 
+    // Only preselect when the name is unambiguous. Two organizations sharing a name
+    // (the same customer running two concurrent projects, most often) used to pick
+    // whichever came first in the list — silently attaching a new proposal to the
+    // wrong one, with nothing on screen to say a choice was even made for you.
     var wanted = String(preselectName || '').trim().toLowerCase();
-    var selectedId = '';
-    orgs.forEach(function (o) { if (!selectedId && wanted && String(o.name || '').trim().toLowerCase() === wanted) selectedId = o.id; });
+    var nameMatches = wanted ? orgs.filter(function (o) { return String(o.name || '').trim().toLowerCase() === wanted; }) : [];
+    var selectedId = nameMatches.length === 1 ? nameMatches[0].id : '';
 
     var ov = openModal('New proposal',
       fieldRow('Organization',
@@ -2801,9 +2805,18 @@
 
     /*
      * Typing narrows the list. The first pass is local, so it responds on the
-     * keystroke; a query the loaded list cannot satisfy is then asked of the server,
-     * which is what makes a customer past the 500 loaded still reachable. The server
-     * answer replaces the working list, so selecting from it behaves the same.
+     * keystroke; the server is then always asked too, once there is enough to search
+     * on, and its answer replaces the working list.
+     *
+     * The server is asked even when the local pass already found something — it used
+     * to skip the lookup whenever ANY local match existed, on the assumption that a
+     * local hit meant the search was already satisfied. It does not: `orgs` is loaded
+     * once when this dialog opens, so an organization created or imported since then
+     * (most often a second one sharing a name with an org already in that snapshot,
+     * the exact case where the rep is searching hardest to tell them apart) matched
+     * nothing locally except its stale twin, and the search never went further to find
+     * it. The dropdown always ends up with the freshest answer either way, since
+     * paintOrgs runs again the moment the server responds.
      */
     var filterEl = ov.querySelector('#fOrgFilter');
     var selEl = ov.querySelector('#fOrg');
@@ -2819,10 +2832,13 @@
       var local = qq ? orgs.filter(function (o) { return String(o.name || '').toLowerCase().indexOf(qq) !== -1; }) : orgs;
       paintOrgs(local, q);
       if (lookupTimer) clearTimeout(lookupTimer);
-      if (qq.length < 2 || local.length) return;
+      if (qq.length < 2) return;
       lookupTimer = setTimeout(async function () {
         var found = await fetchOrgs(q);
         if (filterEl.value.trim() !== q) return; // they kept typing
+        // Replace on a real answer; a failed fetch already comes back as [] from
+        // fetchOrgs, and leaving the local (if stale) results up beats wiping the
+        // list to "no matches" over what might just be a dropped request.
         if (found.length) { orgs = found; paintOrgs(found, q); }
       }, 250);
     });
