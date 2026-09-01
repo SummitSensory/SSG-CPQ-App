@@ -72,6 +72,47 @@ export async function resolveOrgProjectId(organizationId: string): Promise<Resol
   return { projectId: '', source: 'none' };
 }
 
+/**
+ * An opportunity's own Project ID, read locally — no monday call.
+ *
+ * `resolveOrgProjectId` answers "which of this customer's several deals" by guessing
+ * the most recently updated one, which is the wrong question once a specific
+ * opportunity has already been identified — by a rep picking it in the New Proposal
+ * dialog, or a proposal already linked to one via `Proposal.opportunityId`. This is
+ * the two local sources that function falls back to, in the same order, with the
+ * live monday read skipped: the rep already saw this exact id in the picker, sourced
+ * the same way, so re-fetching it from monday could only make the two disagree.
+ */
+export function projectIdOfOpportunity(opp: {
+  notes?: string | null;
+  mondayItemId?: string | null;
+}): string {
+  const noted = /Project ID:\s*(\S+)/.exec(opp.notes ?? '');
+  if (noted?.[1]) return noted[1].trim();
+  return String(opp.mondayItemId ?? '').trim();
+}
+
+/**
+ * Stamp the Project ID of a SPECIFIC opportunity, for a proposal created against it
+ * explicitly. Takes precedence over `sectionsWithResolvedProjectId`'s org-wide guess
+ * for exactly the reason that guess exists to cover: which of several concurrent
+ * projects this proposal is for is no longer ambiguous once an opportunity id is on
+ * the request.
+ */
+export async function sectionsWithOpportunityProjectId(
+  sections: unknown,
+  opportunityId: string,
+): Promise<ProposalSection[]> {
+  const list = (Array.isArray(sections) ? sections : []) as ProposalSection[];
+  if (projectIdOfSections(list)) return list;
+  const opp = await prisma.opportunity.findUnique({
+    where: { id: opportunityId },
+    select: { notes: true, mondayItemId: true },
+  });
+  const projectId = opp ? projectIdOfOpportunity(opp) : '';
+  return projectId ? withProjectId(list, projectId) : list;
+}
+
 type MetaSection = ProposalSection & { data?: Record<string, unknown> };
 
 /** The Project ID already on a version's sections, if any. */
