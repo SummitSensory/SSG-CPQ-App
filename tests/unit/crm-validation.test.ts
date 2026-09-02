@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   OrganizationInput,
   ContactInput,
+  ContactUpdateInput,
   RoomInput,
   OpportunityInput,
 } from '../../src/crm/validation.js';
@@ -42,5 +43,36 @@ describe('crm validation', () => {
       budgetCurrency: 'USD',
     });
     expect(r.success).toBe(false);
+  });
+
+  describe('ContactUpdateInput', () => {
+    it('accepts a partial update touching only one field', () => {
+      expect(ContactUpdateInput.safeParse({ isDecisionMaker: true }).success).toBe(true);
+    });
+    it('lowercases and trims a valid email', () => {
+      const r = ContactUpdateInput.safeParse({ email: '  Person@Example.COM  ' });
+      expect(r.success).toBe(true);
+      if (r.success) expect(r.data.email).toBe('person@example.com');
+    });
+    it('rejects an invalid email', () => {
+      expect(ContactUpdateInput.safeParse({ email: 'nope' }).success).toBe(false);
+    });
+    it('treats an empty-string email as an explicit clear, not a validation error', () => {
+      const r = ContactUpdateInput.safeParse({ email: '' });
+      expect(r.success).toBe(true);
+      if (r.success) expect(r.data.email).toBeNull();
+    });
+    it('treats an empty-string phone/title/notes as an explicit clear', () => {
+      const r = ContactUpdateInput.safeParse({ phone: '', title: '', notes: '' });
+      expect(r.success).toBe(true);
+      if (r.success) {
+        expect(r.data.phone).toBeNull();
+        expect(r.data.title).toBeNull();
+        expect(r.data.notes).toBeNull();
+      }
+    });
+    it('rejects a blank first name', () => {
+      expect(ContactUpdateInput.safeParse({ firstName: '  ' }).success).toBe(false);
+    });
   });
 });
