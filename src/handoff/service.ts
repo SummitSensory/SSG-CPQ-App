@@ -792,7 +792,8 @@ export async function listOrders(filter: { status?: HandoffStatus; organizationI
 
   const orgIds = [...new Set(rows.map((r) => r.organizationId))];
   const proposalIds = [...new Set(rows.map((r) => r.proposalId))];
-  const [orgs, proposals, invoices] = await Promise.all([
+  const orderIds = rows.map((r) => r.id);
+  const [orgs, proposals, invoices, events] = await Promise.all([
     prisma.organization.findMany({
       where: { id: { in: orgIds } },
       select: { id: true, name: true },
@@ -809,9 +810,32 @@ export async function listOrders(filter: { status?: HandoffStatus; organizationI
       select: { id: true, proposalId: true, qboDocNumber: true, createdAt: true },
       orderBy: { createdAt: 'asc' },
     }),
+    // Every event across the page's orders, oldest first, so the last write for
+    // each order wins when reduced below — the "Last edit" column has to reflect
+    // ANY change on the order (a task ticked off, a status move), not just a
+    // field on AcceptedOrder itself, which is what its own updatedAt would give.
+    orderIds.length
+      ? prisma.orderEvent.findMany({
+          where: { orderId: { in: orderIds } },
+          orderBy: { createdAt: 'asc' },
+          select: { orderId: true, actorId: true, createdAt: true },
+        })
+      : Promise.resolve([] as Array<{ orderId: string; actorId: string; createdAt: Date }>),
   ]);
   const orgName = new Map(orgs.map((o) => [o.id, o.name]));
   const prop = new Map(proposals.map((p) => [p.id, p]));
+
+  const lastEventByOrder = new Map<string, { actorId: string; createdAt: Date }>();
+  for (const e of events)
+    lastEventByOrder.set(e.orderId, { actorId: e.actorId, createdAt: e.createdAt });
+  const editorIds = [...new Set([...lastEventByOrder.values()].map((e) => e.actorId))];
+  const editors = editorIds.length
+    ? await prisma.user.findMany({
+        where: { id: { in: editorIds } },
+        select: { id: true, name: true },
+      })
+    : [];
+  const editorNameById = new Map(editors.map((u) => [u.id, u.name]));
 
   // The generated date comes from the append-only audit entry, not from the
   // transaction's updatedAt — that column moves on every later billing re-sync,
@@ -843,9 +867,16 @@ export async function listOrders(filter: { status?: HandoffStatus; organizationI
   return rows.map(({ customerApproval, tasks, requirements, procurement, ...o }) => {
     const p = prop.get(o.proposalId);
     const inv = invoiceByProposal.get(o.proposalId) ?? null;
+    const lastEvent = lastEventByOrder.get(o.id) ?? null;
     return {
       ...o,
       customer: orgName.get(o.organizationId) ?? null,
+      // Derived from the order-event audit trail rather than AcceptedOrder's own
+      // updatedAt, which only moves when a field on the order row itself changes
+      // (a status move, an unlock) — not when a task or requirement underneath it
+      // does, which is most of what actually happens to an order day to day.
+      lastEditAt: lastEvent ? lastEvent.createdAt.toISOString() : null,
+      lastEditBy: lastEvent ? (editorNameById.get(lastEvent.actorId) ?? null) : null,
       signedAt: customerApproval?.approvedAt ?? null,
       approvedBy: customerApproval?.approverName ?? null,
       approvalMethod: customerApproval?.method ?? null,

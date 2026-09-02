@@ -52,6 +52,7 @@
     td = window.SSGUI.td,
     tableShell = window.SSGUI.tableShell,
     statusChip = window.SSGUI.statusChip,
+    handoffStatusChip = window.SSGUI.handoffStatusChip,
     kpi = window.SSGUI.kpi,
     fieldRow = window.SSGUI.fieldRow,
     formSection = window.SSGUI.formSection,
@@ -8627,27 +8628,29 @@
   /* --- Orders list: columns are configurable; customer + signed date lead. --- */
   var ORDER_COLS = [
     { key: 'customer', label: 'Customer', fixed: true, cell: function (o) { return '<b style="font-weight:600;">' + esc(o.customer || '—') + '</b>'; }, plain: function (o) { return o.customer || ''; } },
-    { key: 'signedAt', label: 'Signed', fixed: true, cell: function (o) { return fmtDate(o.signedAt); }, plain: function (o) { return o.signedAt || ''; } },
+    { key: 'signedAt', label: 'Signed', fixed: true, cell: function (o) { return fmtDate(o.signedAt); }, plain: function (o) { return o.signedAt || ''; }, sort: function (o) { return o.signedAt ? new Date(o.signedAt).getTime() : 0; } },
     { key: 'number', label: 'Order', cell: function (o) { return esc(o.number); }, plain: function (o) { return o.number; } },
-    { key: 'status', label: 'Status', cell: function (o) { return '<span class="chip">' + titleCase(o.status) + '</span>'; }, plain: function (o) { return titleCase(o.status); } },
-    { key: 'total', label: 'Total', cell: function (o) { return fmtMoney(o.grandTotalMinor, o.currency); }, plain: function (o) { return money(o.grandTotalMinor); } },
-    { key: 'deposit', label: 'Deposit', cell: function (o) { return o.depositRequired ? fmtMoney(o.depositDueMinor, o.currency) : '—'; }, plain: function (o) { return o.depositRequired ? money(o.depositDueMinor) : ''; } },
-    { key: 'createdAt', label: 'Created', cell: function (o) { return fmtDate(o.createdAt); }, plain: function (o) { return o.createdAt || ''; } },
-    { key: 'balance', label: 'Balance due', cell: function (o) { return fmtMoney(o.balanceDueMinor, o.currency); }, plain: function (o) { return money(o.balanceDueMinor); } },
+    { key: 'status', label: 'Status', cell: function (o) { return handoffStatusChip(o.status); }, plain: function (o) { return titleCase(o.status); } },
+    { key: 'total', label: 'Total', cell: function (o) { return fmtMoney(o.grandTotalMinor, o.currency); }, plain: function (o) { return money(o.grandTotalMinor); }, sort: function (o) { return Number(o.grandTotalMinor) || 0; } },
+    { key: 'deposit', label: 'Deposit', cell: function (o) { return o.depositRequired ? fmtMoney(o.depositDueMinor, o.currency) : '—'; }, plain: function (o) { return o.depositRequired ? money(o.depositDueMinor) : ''; }, sort: function (o) { return o.depositRequired ? (Number(o.depositDueMinor) || 0) : -1; } },
+    { key: 'createdAt', label: 'Created', cell: function (o) { return fmtDate(o.createdAt); }, plain: function (o) { return o.createdAt || ''; }, sort: function (o) { return o.createdAt ? new Date(o.createdAt).getTime() : 0; } },
+    { key: 'balance', label: 'Balance due', cell: function (o) { return fmtMoney(o.balanceDueMinor, o.currency); }, plain: function (o) { return money(o.balanceDueMinor); }, sort: function (o) { return Number(o.balanceDueMinor) || 0; } },
     { key: 'proposalNumber', label: 'Proposal #', cell: function (o) { return esc(o.proposalNumber || '—'); }, plain: function (o) { return o.proposalNumber || ''; } },
     { key: 'proposalTitle', label: 'Project', cell: function (o) { return esc(o.proposalTitle || '—'); }, plain: function (o) { return o.proposalTitle || ''; } },
-    { key: 'acceptedVersion', label: 'Accepted version', cell: function (o) { return o.acceptedVersion ? 'v' + o.acceptedVersion : '—'; }, plain: function (o) { return o.acceptedVersion || ''; } },
+    { key: 'acceptedVersion', label: 'Accepted version', cell: function (o) { return o.acceptedVersion ? 'v' + o.acceptedVersion : '—'; }, plain: function (o) { return o.acceptedVersion || ''; }, sort: function (o) { return Number(o.acceptedVersion) || 0; } },
     { key: 'approvedBy', label: 'Approved by', cell: function (o) { return esc(o.approvedBy || '—'); }, plain: function (o) { return o.approvedBy || ''; } },
     { key: 'approvalMethod', label: 'Approval method', cell: function (o) { return o.approvalMethod ? titleCase(o.approvalMethod) : '—'; }, plain: function (o) { return titleCase(o.approvalMethod || ''); } },
     { key: 'poNumber', label: 'PO number', cell: function (o) { return esc(o.poNumber || '—'); }, plain: function (o) { return o.poNumber || ''; } },
-    { key: 'tasks', label: 'Open tasks', cell: function (o) { return (o.openTasks || 0) + ' / ' + (o.taskCount || 0); }, plain: function (o) { return (o.openTasks || 0) + ' of ' + (o.taskCount || 0); } },
-    { key: 'requirements', label: 'Open requirements', cell: function (o) { return (o.openRequirements || 0) + ' / ' + (o.requirementCount || 0); }, plain: function (o) { return (o.openRequirements || 0) + ' of ' + (o.requirementCount || 0); } },
-    { key: 'procurement', label: 'Sourced', cell: function (o) { return (o.procurementSourced || 0) + ' / ' + (o.procurementCount || 0); }, plain: function (o) { return (o.procurementSourced || 0) + ' of ' + (o.procurementCount || 0); } },
+    { key: 'tasks', label: 'Open tasks', cell: function (o) { return (o.openTasks || 0) + ' / ' + (o.taskCount || 0); }, plain: function (o) { return (o.openTasks || 0) + ' of ' + (o.taskCount || 0); }, sort: function (o) { return o.openTasks || 0; } },
+    { key: 'requirements', label: 'Open requirements', cell: function (o) { return (o.openRequirements || 0) + ' / ' + (o.requirementCount || 0); }, plain: function (o) { return (o.openRequirements || 0) + ' of ' + (o.requirementCount || 0); }, sort: function (o) { return o.openRequirements || 0; } },
+    { key: 'procurement', label: 'Sourced', cell: function (o) { return (o.procurementSourced || 0) + ' / ' + (o.procurementCount || 0); }, plain: function (o) { return (o.procurementSourced || 0) + ' of ' + (o.procurementCount || 0); }, sort: function (o) { return o.procurementSourced || 0; } },
     { key: 'qbo', label: 'QuickBooks', cell: function (o) { return o.qboEstimateTxnId ? '<span class="chip">Linked</span>' : '<span class="muted">Not pushed</span>'; }, plain: function (o) { return o.qboEstimateTxnId ? 'Linked' : 'Not pushed'; } },
     { key: 'monday', label: 'monday.com', cell: function (o) { return o.mondayProjectId ? '<span class="chip">Linked</span>' : '<span class="muted">—</span>'; }, plain: function (o) { return o.mondayProjectId ? 'Linked' : ''; } },
-    { key: 'updatedAt', label: 'Last activity', cell: function (o) { return fmtDate(o.updatedAt); }, plain: function (o) { return o.updatedAt || ''; } }
+    { key: 'updatedAt', label: 'Last activity', cell: function (o) { return fmtDate(o.updatedAt); }, plain: function (o) { return o.updatedAt || ''; }, sort: function (o) { return o.updatedAt ? new Date(o.updatedAt).getTime() : 0; } },
+    { key: 'lastEditAt', label: 'Last Edit Date', cell: function (o) { return o.lastEditAt ? fmtDate(o.lastEditAt) : '—'; }, plain: function (o) { return o.lastEditAt || ''; }, sort: function (o) { return o.lastEditAt ? new Date(o.lastEditAt).getTime() : 0; } },
+    { key: 'lastEditBy', label: 'Last Edit By', cell: function (o) { return esc(o.lastEditBy || '—'); }, plain: function (o) { return o.lastEditBy || ''; } }
   ];
-  var ORDER_COLS_DEFAULT = ['customer', 'signedAt', 'number', 'status', 'total', 'deposit', 'createdAt'];
+  var ORDER_COLS_DEFAULT = ['customer', 'signedAt', 'number', 'status', 'total', 'deposit', 'createdAt', 'lastEditAt', 'lastEditBy'];
   var ORDER_COLS_KEY = 'ssg.orderColumns';
   function orderColKeys() {
     var saved = null;
@@ -8659,29 +8662,78 @@
   }
   function orderCol(key) { for (var i = 0; i < ORDER_COLS.length; i++) if (ORDER_COLS[i].key === key) return ORDER_COLS[i]; return null; }
 
+  var HANDOFF_STATUSES = ['NEW', 'IN_PROGRESS', 'BLOCKED', 'READY', 'COMPLETE', 'CANCELLED'];
+  var ords = { q: '', status: '', sort: { key: 'createdAt', dir: 'desc' } };
   var ordersData = [];
+  /** The rows currently on screen — search text, status filter and sort applied. */
+  function ordersView() {
+    var q = ords.q.trim().toLowerCase();
+    var rows = ordersData.filter(function (o) { return !ords.status || o.status === ords.status; })
+      .filter(function (o) { return !q || (String(o.customer || '') + ' ' + String(o.number || '') + ' ' + String(o.proposalTitle || '')).toLowerCase().indexOf(q) !== -1; });
+    var col = orderCol(ords.sort.key);
+    var dir = ords.sort.dir === 'asc' ? 1 : -1;
+    if (col) {
+      rows.sort(function (a, b) {
+        var x = col.sort ? col.sort(a) : col.plain(a), y = col.sort ? col.sort(b) : col.plain(b);
+        if (typeof x === 'string' || typeof y === 'string') { x = String(x || '').toLowerCase(); y = String(y || '').toLowerCase(); }
+        return x < y ? -dir : x > y ? dir : 0;
+      });
+    }
+    return rows;
+  }
   async function renderOrders(user) {
     document.getElementById('view').innerHTML =
-      '<div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:14px;">' +
-        '<button class="link-btn" id="ordCols" style="width:auto;padding:9px 15px;">Columns</button>' +
-        '<button class="link-btn" id="ordCsv" style="width:auto;padding:9px 15px;">Export Excel (CSV)</button>' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;">' +
+        '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
+          '<input id="ordSearch" placeholder="Search customer, order #, project…" value="' + esc(ords.q) + '" style="padding:9px 12px;border:1px solid #dcded7;border-radius:9px;font-size:13.5px;background:#fff;width:260px;">' +
+          '<select id="ordStatusFilter" style="padding:9px 12px;border:1px solid #dcded7;border-radius:9px;font-size:13.5px;background:#fff;">' +
+            '<option value="">All statuses</option>' +
+            HANDOFF_STATUSES.map(function (s) { return '<option value="' + s + '"' + (ords.status === s ? ' selected' : '') + '>' + titleCase(s) + '</option>'; }).join('') +
+          '</select>' +
+        '</div>' +
+        '<div style="display:flex;gap:8px;">' +
+          '<button class="link-btn" id="ordCols" style="width:auto;padding:9px 15px;">Columns</button>' +
+          '<button class="link-btn" id="ordCsv" style="width:auto;padding:9px 15px;">Export Excel (CSV)</button>' +
+        '</div>' +
       '</div><div id="ordList"><div class="muted" style="padding:24px;">Loading…</div></div>';
     document.getElementById('ordCols').addEventListener('click', function () { openOrderColumnPicker(user); });
     document.getElementById('ordCsv').addEventListener('click', function () {
       var cols = orderColKeys().map(orderCol);
       downloadCsv('orders-' + todayISO() + '.csv',
-        [cols.map(function (c) { return c.label; })].concat(ordersData.map(function (o) { return cols.map(function (c) { return c.plain(o); }); })));
+        [cols.map(function (c) { return c.label; })].concat(ordersView().map(function (o) { return cols.map(function (c) { return c.plain(o); }); })));
     });
+    var s = document.getElementById('ordSearch');
+    s.addEventListener('input', function () { ords.q = s.value; paintOrdersTable(user); });
+    document.getElementById('ordStatusFilter').addEventListener('change', function () { ords.status = this.value; paintOrdersTable(user); });
     try {
       var r = await authed('/orders'); if (!r.ok) { document.getElementById('ordList').innerHTML = '<div class="err">Could not load (' + r.status + ').</div>'; return; }
       ordersData = (await r.json()) || [];
-      var cols = orderColKeys().map(orderCol);
-      var rows = ordersData.map(function (o) {
-        return '<tr style="cursor:pointer;" data-id="' + o.id + '">' + cols.map(function (c) { return td(c.cell(o)); }).join('') + '</tr>';
-      }).join('');
-      document.getElementById('ordList').innerHTML = tableShell(cols.map(function (c) { return c.label; }), rows, cols.length, 'No operational orders yet. Lock an accepted proposal to create one.');
-      document.querySelectorAll('#ordList tr[data-id]').forEach(function (tr) { tr.addEventListener('click', function () { openOrderDetail(tr.getAttribute('data-id'), user); }); });
+      paintOrdersTable(user);
     } catch (e) { document.getElementById('ordList').innerHTML = '<div class="err">Could not reach the server.</div>'; }
+  }
+  function paintOrdersTable(user) {
+    var box = document.getElementById('ordList'); if (!box) return;
+    var cols = orderColKeys().map(orderCol);
+    var rows = ordersView();
+    var head = cols.map(function (c) {
+      var on = ords.sort.key === c.key;
+      var arrow = on ? (ords.sort.dir === 'asc' ? ' ▲' : ' ▼') : ' <span style="opacity:.3;">↕</span>';
+      return '<span class="ordSortHead" data-sk="' + c.key + '" style="cursor:pointer;' + (on ? 'color:#3d4a55;' : '') + '">' + esc(c.label) + arrow + '</span>';
+    });
+    var body = rows.map(function (o) {
+      return '<tr style="cursor:pointer;" data-id="' + o.id + '">' + cols.map(function (c) { return td(c.cell(o)); }).join('') + '</tr>';
+    }).join('');
+    box.innerHTML = tableShell(head, body, cols.length,
+      ordersData.length ? 'No orders match this search or filter.' : 'No operational orders yet. Lock an accepted proposal to create one.');
+    box.querySelectorAll('tr[data-id]').forEach(function (tr) { tr.addEventListener('click', function () { openOrderDetail(tr.getAttribute('data-id'), user); }); });
+    box.querySelectorAll('.ordSortHead').forEach(function (h) {
+      h.addEventListener('click', function () {
+        var k = h.getAttribute('data-sk');
+        if (ords.sort.key === k) ords.sort.dir = ords.sort.dir === 'asc' ? 'desc' : 'asc';
+        else { ords.sort.key = k; ords.sort.dir = 'asc'; }
+        paintOrdersTable(user);
+      });
+    });
   }
 
   function openOrderColumnPicker(user) {
@@ -8696,7 +8748,7 @@
       document.querySelectorAll('.ordColChk').forEach(function (chk) { if (chk.checked) keys.push(chk.value); });
       localStorage.setItem(ORDER_COLS_KEY, JSON.stringify(keys));
       close();
-      renderOrders(user);
+      paintOrdersTable(user);
     }, 'Apply');
   }
 
@@ -8729,7 +8781,7 @@
           ? '<button class="link-btn" id="ordUnlock" style="width:auto;padding:8px 15px;color:#9c3327;">Unlock for changes</button>' : '') +
       '</div>' +
       '<div class="card" style="margin-bottom:16px;"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;"><div><div class="k">' + esc(order.number) + '</div><h2 style="font-size:22px;margin-top:2px;">Operational order</h2><div class="muted" style="font-size:13px;margin-top:4px;">Accepted proposal v' + (order.acceptedVersion || '') + '</div></div>' +
-        '<div style="text-align:right;"><span class="chip">' + titleCase(order.status) + '</span><div style="margin-top:8px;font-size:13px;">' + (integ.ok ? '<span class="dot ok"></span>Integrity verified' : '<span class="dot bad"></span>Integrity drift') + '</div></div></div>' +
+        '<div style="text-align:right;">' + handoffStatusChip(order.status) + '<div style="margin-top:8px;font-size:13px;">' + (integ.ok ? '<span class="dot ok"></span>Integrity verified' : '<span class="dot bad"></span>Integrity drift') + '</div></div></div>' +
         '<div class="grid" style="margin-top:16px;"><div><div class="k">Total</div><div class="v small">' + fmtMoney(order.grandTotalMinor, order.currency) + '</div></div>' +
         '<div><div class="k">Deposit</div><div class="v small">' + (order.depositRequired ? fmtMoney(order.depositDueMinor, order.currency) : '—') + '</div></div>' +
         '<div><div class="k">Balance due</div><div class="v small">' + fmtMoney(order.balanceDueMinor, order.currency) + '</div></div>' +
@@ -8765,26 +8817,30 @@
   }
   function hoStatusSelect(kind, id, opts, sel) { return '<select data-kind="' + kind + '" data-id="' + id + '" class="hoStatus" style="padding:6px 9px;border:1px solid #dcded7;border-radius:8px;font-size:13px;background:#fff;">' + opts.map(function (o) { return '<option value="' + o + '"' + (o === sel ? ' selected' : '') + '>' + titleCase(o) + '</option>'; }).join('') + '</select>'; }
   /**
-   * Who last touched a row, under its status. A status on its own says what state
+   * Who last touched a row, beside its status. A status on its own says what state
    * something is in but never who put it there — which is the question actually
    * asked when a requirement is disputed.
    */
   function changedBy(row) {
     if (!row.updatedByName) return '';
-    return '<div class="muted" style="font-size:11.5px;margin-top:5px;line-height:1.4;">' +
-      esc(row.updatedByName) + ' · ' + fmtDate(row.updatedAt) + '</div>';
+    return '<span class="muted" style="font-size:11.5px;line-height:1.4;white-space:nowrap;">' +
+      esc(row.updatedByName) + ' · ' + fmtDate(row.updatedAt) + '</span>';
+  }
+  /** Status control (or read-only chip) beside who last changed it and when. */
+  function statusWithChangedBy(cell, row) {
+    return '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' + cell + changedBy(row) + '</div>';
   }
   function reqRows(reqs, edit) {
     var rows = reqs.map(function (r) {
       var cell = edit ? hoStatusSelect('req', r.id, ['OPEN', 'IN_PROGRESS', 'BLOCKED', 'COMPLETE', 'WAIVED'], r.status) : '<span class="chip">' + titleCase(r.status) + '</span>';
-      return '<tr>' + td(esc(titleCase(r.category))) + td(esc(r.title)) + td(cell + changedBy(r)) + td(r.isException ? '<span class="chip" style="background:#fbecea;color:#9c3327;">Exception</span>' : '—') + '</tr>';
+      return '<tr>' + td(esc(titleCase(r.category))) + td(esc(r.title)) + td(statusWithChangedBy(cell, r)) + td(r.isException ? '<span class="chip" style="background:#fbecea;color:#9c3327;">Exception</span>' : '—') + '</tr>';
     }).join('');
     return tableShell(['Category', 'Requirement', 'Status & last change', 'Flag'], rows, 4, 'No requirements.');
   }
   function taskRows(tasks, edit) {
     var rows = tasks.map(function (t) {
       var cell = edit ? hoStatusSelect('task', t.id, ['TODO', 'IN_PROGRESS', 'BLOCKED', 'DONE', 'CANCELLED'], t.status) : '<span class="chip">' + titleCase(t.status) + '</span>';
-      return '<tr>' + td('<b style="font-weight:600;">' + esc(t.title) + '</b>') + td(esc(t.assigneeRole ? titleCase(t.assigneeRole) : 'Unassigned')) + td(cell + changedBy(t)) + td(t.dueDate ? fmtDate(t.dueDate) : '—') + '</tr>';
+      return '<tr>' + td('<b style="font-weight:600;">' + esc(t.title) + '</b>') + td(esc(t.assigneeRole ? titleCase(t.assigneeRole) : 'Unassigned')) + td(statusWithChangedBy(cell, t)) + td(t.dueDate ? fmtDate(t.dueDate) : '—') + '</tr>';
     }).join('');
     return tableShell(['Task', 'Owner', 'Status & last change', 'Due'], rows, 4, 'No tasks.');
   }
