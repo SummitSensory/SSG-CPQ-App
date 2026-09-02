@@ -209,6 +209,19 @@
     var chipLabel = CHIP_LABELS[s] || titleCase(s);
     return '<span style="display:inline-block;background:' + c[0] + ';border:1px solid ' + c[1] + ';color:' + c[2] + ';border-radius:999px;padding:3px 10px;font-size:12px;font-weight:600;white-space:nowrap;">' + esc(chipLabel) + '</span>';
   }
+  /** A colored chip for an operational order's HandoffStatus (New/In progress/Complete/…). */
+  function handoffStatusChip(s) {
+    var map = {
+      NEW: ['#fbe9e6', '#f0cdc7', '#9c3327'],
+      IN_PROGRESS: ['#fdf6e3', '#eadfbe', '#8a6d1f'],
+      BLOCKED: ['#fdece0', '#f3cdae', '#a15c1f'],
+      READY: ['#eef2f6', '#d8e2ea', '#3d4a55'],
+      COMPLETE: ['#eaf3ee', '#cfe3d7', '#2f7d5d'],
+      CANCELLED: ['#f2f3ef', '#dcded7', '#8a8f85'],
+    };
+    var c = map[s] || map.NEW;
+    return '<span style="display:inline-block;background:' + c[0] + ';border:1px solid ' + c[1] + ';color:' + c[2] + ';border-radius:999px;padding:3px 10px;font-size:12px;font-weight:600;white-space:nowrap;">' + esc(titleCase(s)) + '</span>';
+  }
   function kpi(label, value, sub, color) {
     return '<div class="card"><div class="k">' + esc(label) + '</div>' +
       '<div style="font-family:\'Newsreader\',serif;font-size:26px;font-weight:600;margin-top:2px;color:' + (color || '#20241f') + ';">' + value + '</div>' +
@@ -378,6 +391,7 @@
     td: td,
     tableShell: tableShell,
     statusChip: statusChip,
+    handoffStatusChip: handoffStatusChip,
     kpi: kpi,
     // form fields
     fieldRow: fieldRow,
