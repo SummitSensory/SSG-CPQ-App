@@ -84,6 +84,29 @@ describe('accepted-order lock helpers', () => {
     expect(defaultTasks(false).some((t) => /deposit/i.test(t.title))).toBe(false);
   });
 
+  it('seeds Installation/Training by default, and drops each when told the job excludes it', () => {
+    expect(defaultRequirements().map((r) => r.category)).toEqual(
+      expect.arrayContaining(['INSTALLATION', 'TRAINING']),
+    );
+    expect(defaultTasks(false).map((t) => t.category)).toEqual(
+      expect.arrayContaining(['INSTALLATION', 'TRAINING']),
+    );
+
+    const noInstall = defaultRequirements({ installation: false }).map((r) => r.category);
+    expect(noInstall).not.toContain('INSTALLATION');
+    expect(noInstall).toContain('TRAINING');
+
+    const noTraining = defaultTasks(false, { training: false }).map((t) => t.category);
+    expect(noTraining).not.toContain('TRAINING');
+    expect(noTraining).toContain('INSTALLATION');
+
+    const neither = defaultRequirements({ training: false, installation: false }).map(
+      (r) => r.category,
+    );
+    expect(neither).not.toContain('INSTALLATION');
+    expect(neither).not.toContain('TRAINING');
+  });
+
   it('builds the procurement list from INCLUDED items only', () => {
     const list = procurementFromItems(version.items);
     expect(list).toHaveLength(1);

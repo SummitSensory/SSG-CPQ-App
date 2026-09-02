@@ -177,6 +177,36 @@ describe('createAcceptedOrder', () => {
       ['Ladder', 2],
     ]);
   });
+
+  it('skips seeding Installation/Training requirements and tasks when the rep says the job excludes them', async () => {
+    const { createAcceptedOrder } = await import('../../src/handoff/service.js');
+    const order = (await createAcceptedOrder(
+      'v1',
+      { ...approval, trainingIncluded: false, installationIncluded: false },
+      'user-1',
+    )) as unknown as {
+      requirements: { create: Array<{ category: string }> };
+      tasks: { create: Array<{ category: string | null }> };
+    };
+    const reqCats = order.requirements.create.map((r) => r.category);
+    const taskCats = order.tasks.create.map((t) => t.category);
+    expect(reqCats).not.toContain('TRAINING');
+    expect(reqCats).not.toContain('INSTALLATION');
+    expect(taskCats).not.toContain('TRAINING');
+    expect(taskCats).not.toContain('INSTALLATION');
+    // Every other seeded category is unaffected.
+    expect(reqCats).toContain('PRODUCTION');
+  });
+
+  it('seeds Installation/Training by default, when the approval says nothing either way', async () => {
+    const { createAcceptedOrder } = await import('../../src/handoff/service.js');
+    const order = (await createAcceptedOrder('v1', approval, 'user-1')) as unknown as {
+      requirements: { create: Array<{ category: string }> };
+    };
+    const reqCats = order.requirements.create.map((r) => r.category);
+    expect(reqCats).toContain('TRAINING');
+    expect(reqCats).toContain('INSTALLATION');
+  });
 });
 
 describe('verifyIntegrity', () => {

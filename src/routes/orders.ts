@@ -69,6 +69,8 @@ const ApprovalSchema = z.object({
   ipAddress: z.string().optional(),
   approvedAt: z.coerce.date(),
   notes: z.string().optional(),
+  trainingIncluded: z.boolean().optional(),
+  installationIncluded: z.boolean().optional(),
 });
 
 const BomHeader = z.object({

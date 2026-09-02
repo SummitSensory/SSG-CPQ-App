@@ -61,6 +61,15 @@ export interface CustomerApprovalInput {
   ipAddress?: string;
   approvedAt: Date;
   notes?: string;
+  /**
+   * Whether this job includes installation/training, so the handoff scaffold
+   * doesn't seed a requirement and a task for a service the customer didn't buy.
+   * Both default to true (the previous, unconditional behavior) when omitted —
+   * see HandoffScopeOptions in lock.ts for why this can't be derived from the
+   * proposal itself.
+   */
+  trainingIncluded?: boolean;
+  installationIncluded?: boolean;
 }
 
 /**
@@ -463,7 +472,10 @@ export async function createAcceptedOrder(
               },
             },
             requirements: {
-              create: defaultRequirements().map((r) => ({
+              create: defaultRequirements({
+                training: approval.trainingIncluded,
+                installation: approval.installationIncluded,
+              }).map((r) => ({
                 category: r.category as RequirementCategory,
                 title: r.title,
                 createdById: userId,
@@ -499,7 +511,10 @@ export async function createAcceptedOrder(
               }),
             },
             tasks: {
-              create: defaultTasks(depositDue > 0n).map((t) => ({
+              create: defaultTasks(depositDue > 0n, {
+                training: approval.trainingIncluded,
+                installation: approval.installationIncluded,
+              }).map((t) => ({
                 title: t.title,
                 assigneeRole: (t.assigneeRole as Role) ?? null,
                 category: (t.category as RequirementCategory) ?? null,
