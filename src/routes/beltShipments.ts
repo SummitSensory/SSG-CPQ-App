@@ -20,6 +20,12 @@ import { recordAudit } from '../lib/audit.js';
  * because it is a few hundred rows that nothing queries across — and it needs no
  * migration, so this ships as a code deploy.
  *
+ * A slip can also cover an item with no ProcurementLine behind it at all — a
+ * replacement, warranty, or goodwill shipment that was never on a bill of materials.
+ * Its line simply carries an empty lineId, which /ship and /void already skip when
+ * crediting/returning BOM quantities, so nothing further was needed to support it; see
+ * belt-shipments.js for where that path is built.
+ *
  * If belts ever need per-piece history, serial numbers or reporting, the ledger wants
  * a real table. Until then the simplest correct thing wins.
  */
@@ -307,15 +313,21 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
       create: { key: KEY, value, updatedById: req.user!.sub },
       update: { value, updatedById: req.user!.sub, updatedAt: new Date() },
     });
+    // A slip with no ProcurementLine behind any of its rows shipped nothing off a bill
+    // of materials — a replacement, goodwill, or otherwise off-order shipment. Tagged
+    // distinctly in the audit trail so that traffic is reviewable on its own, separate
+    // from ordinary order fulfillment.
+    const manual = record.lines.every((l) => !l.lineId);
     await recordAudit({
       actorId: req.user!.sub,
-      action: 'belt.shipment.ship',
+      action: manual ? 'belt.shipment.ship.manual' : 'belt.shipment.ship',
       entity: 'UiSetting',
       entityId: KEY,
       details: {
         slip: record.number,
         customer: record.customer,
         pieces: record.lines.reduce((a, l) => a + l.qty, 0),
+        manual,
       },
     });
 

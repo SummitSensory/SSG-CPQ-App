@@ -23,6 +23,84 @@
   var picked = {};
   var busy = false;
 
+  /**
+   * A shipment with no ProcurementLine behind it — a replacement, warranty, or
+   * goodwill item, or anything else not on a bill of materials. Its own state,
+   * entirely separate from `picked`/the owed list: this path does not read or credit
+   * any BOM line, only produces a slip.
+   */
+  var manual = {
+    open: false,
+    q: '',
+    searching: false,
+    hits: [],
+    org: null, // {id, name}, once picked from search
+    manualName: false, // true once "not in the system" is chosen instead
+    customerName: '',
+    attention: '',
+    address: '',
+    note: '',
+    contacts: [],
+    lines: [{ item: '', sku: '', qty: 1 }],
+  };
+
+  function clearManualSelection() {
+    manual.q = '';
+    manual.searching = false;
+    manual.hits = [];
+    manual.org = null;
+    manual.manualName = false;
+    manual.customerName = '';
+    manual.attention = '';
+    manual.address = '';
+    manual.note = '';
+    manual.contacts = [];
+    manual.lines = [{ item: '', sku: '', qty: 1 }];
+  }
+
+  function closeManual() {
+    clearManualSelection();
+    manual.open = false;
+  }
+
+  /** One line of one address, formatted the way it prints on the slip. */
+  function fmtAddr(a) {
+    if (!a) return '';
+    var street = [a.line1, a.line2].filter(Boolean).join('\n');
+    var city = [a.city, a.region].filter(Boolean).join(', ');
+    return [street, [city, a.postalCode].filter(Boolean).join(' ')].filter(Boolean).join('\n');
+  }
+
+  /**
+   * Pull whatever is currently typed in the open form back into `manual` before a
+   * repaint replaces the DOM — otherwise adding/removing an item row (the only things
+   * that repaint while this form is open) would silently drop anything already typed
+   * in the other fields.
+   */
+  function syncManualForm(host) {
+    if (!host) return;
+    var g = function (id) {
+      var el = host.querySelector('#' + id);
+      return el ? el.value : null;
+    };
+    if (g('msCustomerName') !== null) manual.customerName = g('msCustomerName');
+    if (g('msAttn') !== null) manual.attention = g('msAttn');
+    if (g('msAddr') !== null) manual.address = g('msAddr');
+    if (g('msNote') !== null) manual.note = g('msNote');
+    host.querySelectorAll('.msItem').forEach(function (inp) {
+      var row = manual.lines[Number(inp.getAttribute('data-idx'))];
+      if (row) row.item = inp.value;
+    });
+    host.querySelectorAll('.msSku').forEach(function (inp) {
+      var row = manual.lines[Number(inp.getAttribute('data-idx'))];
+      if (row) row.sku = inp.value;
+    });
+    host.querySelectorAll('.msQty').forEach(function (inp) {
+      var row = manual.lines[Number(inp.getAttribute('data-idx'))];
+      if (row) row.qty = Number(inp.value) || 1;
+    });
+  }
+
   var INK = '#20241f',
     NAVY = '#203060',
     MUTE = '#7b8190',
@@ -304,6 +382,166 @@
     );
   }
 
+  /* ------------------------------------------------------------- manual slip */
+
+  /**
+   * The "ship something else" card: pick a customer independent of the owed list
+   * (or type one not in the system), type what's going in the box, and print a slip.
+   * Collapsed to a single link until opened, so the common case — a belt already on
+   * an order — is unchanged.
+   */
+  function manualHtml() {
+    if (!manual.open) {
+      return (
+        '<div class="card" style="margin-bottom:14px;">' +
+        '<button type="button" id="msOpen" class="link-btn" style="width:auto;padding:2px 0;font-size:12.5px;">' +
+        '+ Ship a replacement or extra item (no order needed)</button>' +
+        '</div>'
+      );
+    }
+
+    var hasCustomer = !!(manual.org || manual.manualName);
+    var custName = manual.org ? manual.org.name : manual.customerName;
+
+    return (
+      '<div class="card" style="margin-bottom:14px;">' +
+      '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:4px;">' +
+      '<div class="section-title" style="margin:0;">Ship something else</div>' +
+      '<button type="button" id="msClose" class="link-btn" style="width:auto;padding:2px 0;font-size:11px;">Cancel</button>' +
+      '</div>' +
+      '<div class="muted" style="font-size:12px;margin-bottom:12px;">Not tied to any order &mdash; for a warranty or goodwill replacement, an extra piece, or anything else not on a bill of materials.</div>' +
+      (!hasCustomer
+        ? '<label style="display:block;margin-bottom:8px;"><span style="font-size:11px;color:' +
+          MUTE +
+          ';">Customer</span>' +
+          '<div style="display:flex;gap:8px;margin-top:4px;">' +
+          '<input id="msOrgQ" placeholder="Search customers&hellip;" value="' +
+          esc(manual.q) +
+          '" style="' +
+          FIELD +
+          'margin-top:0;flex:1;">' +
+          '<button type="button" id="msOrgFind" class="link-btn" style="width:auto;padding:8px 14px;border:1px solid ' +
+          LINE +
+          ';border-radius:7px;flex:none;">' +
+          (manual.searching ? 'Searching&hellip;' : 'Find') +
+          '</button>' +
+          '</div></label>' +
+          (manual.hits.length
+            ? '<div style="border:1px solid ' +
+              LINE +
+              ';border-radius:7px;margin-bottom:10px;max-height:160px;overflow:auto;">' +
+              manual.hits
+                .map(function (o) {
+                  return (
+                    '<button type="button" class="msPickOrg" data-id="' +
+                    esc(o.id) +
+                    '" data-name="' +
+                    esc(o.name) +
+                    '" style="display:block;width:100%;text-align:left;padding:8px 10px;font-size:12.5px;border:0;border-bottom:1px solid #f1f2f6;background:#fff;cursor:pointer;">' +
+                    esc(o.name) +
+                    '</button>'
+                  );
+                })
+                .join('') +
+              '</div>'
+            : '') +
+          '<button type="button" id="msNoOrg" class="link-btn" style="width:auto;padding:2px 0;font-size:11.5px;margin-bottom:2px;">Customer isn&rsquo;t in the system &mdash; type a name</button>'
+        : '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:9px;">' +
+          '<div style="font-size:13.5px;font-weight:600;">' +
+          esc(custName || '(no name yet)') +
+          '</div>' +
+          '<button type="button" id="msChange" class="link-btn" style="width:auto;padding:2px 0;font-size:11px;">Change</button>' +
+          '</div>' +
+          (manual.manualName
+            ? '<label style="display:block;margin-bottom:9px;"><span style="font-size:11px;color:' +
+              MUTE +
+              ';">Customer name</span>' +
+              '<input id="msCustomerName" value="' +
+              esc(manual.customerName) +
+              '" style="' +
+              FIELD +
+              '"></label>'
+            : '') +
+          '<label style="display:block;margin-bottom:9px;"><span style="font-size:11px;color:' +
+          MUTE +
+          ';">Attention</span>' +
+          '<input id="msAttn" list="msContacts" placeholder="Who should open it?" value="' +
+          esc(manual.attention || '') +
+          '" style="' +
+          FIELD +
+          '"></label>' +
+          '<datalist id="msContacts">' +
+          manual.contacts
+            .map(function (c) {
+              return '<option value="' + esc(c) + '">';
+            })
+            .join('') +
+          '</datalist>' +
+          '<label style="display:block;margin-bottom:9px;"><span style="font-size:11px;color:' +
+          MUTE +
+          ';">Ship-to address</span>' +
+          '<textarea id="msAddr" rows="3" placeholder="Street, city, state, ZIP" style="' +
+          FIELD +
+          'resize:vertical;">' +
+          esc(manual.address || '') +
+          '</textarea></label>' +
+          '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.14em;color:' +
+          MUTE +
+          ';font-weight:700;margin:14px 0 6px;">Items in the box</div>' +
+          manual.lines
+            .map(function (l, i) {
+              return (
+                '<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">' +
+                '<input class="msItem" data-idx="' +
+                i +
+                '" placeholder="Item" value="' +
+                esc(l.item) +
+                '" style="' +
+                FIELD +
+                'margin-top:0;flex:2;">' +
+                '<input class="msSku" data-idx="' +
+                i +
+                '" placeholder="SKU (optional)" value="' +
+                esc(l.sku) +
+                '" style="' +
+                FIELD +
+                'margin-top:0;flex:1;">' +
+                '<input class="msQty" data-idx="' +
+                i +
+                '" type="number" min="1" max="999" value="' +
+                l.qty +
+                '" style="' +
+                FIELD +
+                'margin-top:0;width:56px;flex:none;text-align:right;">' +
+                (manual.lines.length > 1
+                  ? '<button type="button" class="msRemoveRow" data-idx="' +
+                    i +
+                    '" title="Remove this item" style="border:0;background:none;color:' +
+                    RED +
+                    ';cursor:pointer;font-size:16px;flex:none;line-height:1;">&times;</button>'
+                  : '<span style="width:20px;flex:none;"></span>') +
+                '</div>'
+              );
+            })
+            .join('') +
+          '<button type="button" id="msAddRow" class="link-btn" style="width:auto;padding:2px 0;font-size:11.5px;margin-bottom:11px;">+ Add another item</button>' +
+          '<label style="display:block;margin-bottom:11px;"><span style="font-size:11px;color:' +
+          MUTE +
+          ';">Message on the slip (optional)</span>' +
+          '<input id="msNote" value="' +
+          esc(manual.note || '') +
+          '" style="' +
+          FIELD +
+          '"></label>' +
+          '<button type="button" id="msPrint" class="btn" style="width:100%;"' +
+          (busy ? ' disabled' : '') +
+          '>' +
+          (busy ? 'Sending&hellip;' : 'Print the slip') +
+          '</button>') +
+      '</div>'
+    );
+  }
+
   /* ------------------------------------------------------------------ screen */
 
   /** Owed belts, grouped by customer — that is how a box gets packed. */
@@ -442,6 +680,11 @@
             return a + l.qty;
           }, 0);
           var dead = !!s.voidedAt;
+          var manualSlip =
+            (s.lines || []).length &&
+            s.lines.every(function (l) {
+              return !l.lineId;
+            });
           return (
             '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:10px 0;border-top:1px solid #eef0f4;' +
             (dead ? 'opacity:.62;' : '') +
@@ -451,6 +694,13 @@
             (dead ? 'text-decoration:line-through;' : '') +
             '">' +
             esc(s.customer) +
+            (manualSlip
+              ? '<span style="font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:' +
+                MUTE +
+                ';border:1px solid ' +
+                LINE +
+                ';border-radius:4px;padding:1px 5px;margin-left:6px;">No order</span>'
+              : '') +
             '</div>' +
             '<div style="font-size:10.5px;color:' +
             MUTE +
@@ -678,6 +928,7 @@
             '"></label>' +
             '<button type="button" id="bsPrint" class="btn" style="width:100%;">Print the slip</button>') +
       '</div>' +
+      manualHtml() +
       activityHtml() +
       '<div class="card">' +
       '<div class="section-title" style="margin:0 0 6px;">Shipping record</div>' +
@@ -774,6 +1025,208 @@
 
     var print = host.querySelector('#bsPrint');
     if (print) print.addEventListener('click', ship);
+
+    var msOpen = host.querySelector('#msOpen');
+    if (msOpen)
+      msOpen.addEventListener('click', function () {
+        manual.open = true;
+        paint();
+      });
+
+    var msClose = host.querySelector('#msClose');
+    if (msClose)
+      msClose.addEventListener('click', function () {
+        closeManual();
+        paint();
+      });
+
+    var msOrgFind = host.querySelector('#msOrgFind');
+    if (msOrgFind) msOrgFind.addEventListener('click', findManualOrg);
+
+    var msOrgQ = host.querySelector('#msOrgQ');
+    if (msOrgQ)
+      msOrgQ.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          findManualOrg();
+        }
+      });
+
+    host.querySelectorAll('.msPickOrg').forEach(function (b) {
+      b.addEventListener('click', function () {
+        pickManualOrg(b.getAttribute('data-id'), b.getAttribute('data-name'));
+      });
+    });
+
+    var msNoOrg = host.querySelector('#msNoOrg');
+    if (msNoOrg)
+      msNoOrg.addEventListener('click', function () {
+        manual.manualName = true;
+        manual.org = null;
+        manual.hits = [];
+        paint();
+      });
+
+    var msChange = host.querySelector('#msChange');
+    if (msChange)
+      msChange.addEventListener('click', function () {
+        clearManualSelection();
+        paint();
+      });
+
+    var msAddRow = host.querySelector('#msAddRow');
+    if (msAddRow)
+      msAddRow.addEventListener('click', function () {
+        syncManualForm(host);
+        if (manual.lines.length < 20) manual.lines.push({ item: '', sku: '', qty: 1 });
+        paint();
+      });
+
+    host.querySelectorAll('.msRemoveRow').forEach(function (b) {
+      b.addEventListener('click', function () {
+        syncManualForm(host);
+        manual.lines.splice(Number(b.getAttribute('data-idx')), 1);
+        paint();
+      });
+    });
+
+    var msPrint = host.querySelector('#msPrint');
+    if (msPrint) msPrint.addEventListener('click', shipManual);
+  }
+
+  /** Search for a customer by name, independent of what belts they're owed. */
+  function findManualOrg() {
+    var host = document.getElementById('view');
+    var input = host && host.querySelector('#msOrgQ');
+    var q = ((input && input.value) || '').trim();
+    if (q.length < 2) {
+      alert('Type at least two letters of the customer’s name.');
+      return;
+    }
+    manual.q = q;
+    manual.searching = true;
+    paint();
+    H.authed('/crm/organizations?q=' + encodeURIComponent(q) + '&pageSize=12')
+      .then(function (r) {
+        return r.ok ? r.json() : { items: [] };
+      })
+      .then(function (d) {
+        manual.searching = false;
+        manual.hits = (d && d.items) || [];
+        if (!manual.hits.length) alert('No customer matched that.');
+        paint();
+      })
+      .catch(function () {
+        manual.searching = false;
+        manual.hits = [];
+        paint();
+      });
+  }
+
+  /** A customer was picked from search — fetch their ship-to address and contacts. */
+  function pickManualOrg(id, name) {
+    manual.org = { id: id, name: name };
+    manual.manualName = false;
+    manual.hits = [];
+    manual.contacts = [];
+    manual.attention = '';
+    manual.address = '';
+    paint();
+    H.authed('/crm/organizations/' + id)
+      .then(function (r) {
+        return r.ok ? r.json() : null;
+      })
+      .then(function (org) {
+        // The pick may have changed (or the form closed) while this was in flight.
+        if (!org || !manual.org || manual.org.id !== id) return;
+        var addrs = org.addresses || [];
+        var ship =
+          addrs.filter(function (a) {
+            return a.type === 'SHIPPING';
+          })[0] || addrs[0];
+        manual.address = fmtAddr(ship);
+        manual.contacts = (org.contacts || []).map(function (c) {
+          return [[c.firstName, c.lastName].filter(Boolean).join(' '), c.title]
+            .filter(Boolean)
+            .join(', ');
+        });
+        manual.attention = manual.contacts[0] || '';
+        paint();
+      })
+      .catch(function () {
+        /* the form still works with a typed address */
+      });
+  }
+
+  /** Record and print a slip for an item with no order behind it. */
+  function shipManual() {
+    if (busy) return;
+    var host = document.getElementById('view');
+    syncManualForm(host);
+
+    var custName = manual.org ? manual.org.name : (manual.customerName || '').trim();
+    if (!custName) {
+      alert('Who is this going to?');
+      return;
+    }
+    var lines = manual.lines
+      .map(function (l) {
+        return {
+          lineId: '',
+          sku: (l.sku || '').trim(),
+          item: (l.item || '').trim(),
+          qty: Math.max(1, Math.min(999, Number(l.qty) || 1)),
+        };
+      })
+      .filter(function (l) {
+        return l.item;
+      });
+    if (!lines.length) {
+      alert('Add at least one item.');
+      return;
+    }
+
+    busy = true;
+    paint();
+    var body = {
+      slip: {
+        orgId: (manual.org && manual.org.id) || '',
+        customer: custName,
+        proposalNumber: '',
+        attention: manual.attention || '',
+        date: todayISO(),
+        address: manual.address || '',
+        note: manual.note || '',
+        lines: lines,
+      },
+    };
+
+    H.authed('/belt-shipments/ship', { method: 'POST', body: body })
+      .then(async function (r) {
+        busy = false;
+        if (!r.ok) {
+          var d = null;
+          try {
+            d = await r.json();
+          } catch (e) {
+            /* no body */
+          }
+          alert((d && d.message) || 'That shipment could not be recorded.');
+          paint();
+          return;
+        }
+        var slip = (await r.json()).slip;
+        closeManual();
+        load().then(function () {
+          paint();
+          openSlip(slip, []);
+        });
+      })
+      .catch(function () {
+        busy = false;
+        alert('Could not reach the server. Nothing was recorded.');
+        paint();
+      });
   }
 
   /**
@@ -892,6 +1345,7 @@
       var host = document.getElementById('view');
       if (host) host.innerHTML = '<div class="muted" style="padding:18px;">Loading&hellip;</div>';
       picked = {};
+      closeManual();
       load().then(paint);
     },
   };
