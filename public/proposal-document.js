@@ -655,11 +655,21 @@
     }
     function subtotalRow() {
       if (groupOpenSub == null) return '';
+      // Plain "$X,XXX.XX", like every line item above it — never the cross-border
+      // "USD $X" (`money`, on a Canadian proposal). "USD" earns its place on the
+      // bottom totals block because a CAD estimate sits right beneath it there; a
+      // group subtotal carries no such estimate, so the prefix was pure width with
+      // no figure to disambiguate. That width is what pushed the number past the
+      // fixed 78px Amount column — table-layout:fixed does not grow the column to
+      // fit, so the wider "USD $" text overflowed the cell by a different amount on
+      // every group (however many digits happened to follow), landing each
+      // subtotal's right edge somewhere different and out of line with the
+      // Amount column above it.
       var r =
         '<tr style="break-inside:avoid;">' +
         '<td colspan="4" style="padding:5px 10px 7px 0;font-size:11px;text-align:right;color:#7b8190;">Subtotal</td>' +
         '<td style="padding:5px 0 7px 10px;font-size:11px;text-align:right;font-weight:700;white-space:nowrap;">' +
-        money(groupOpenSub) +
+        fmtMoney(groupOpenSub) +
         '</td></tr>';
       groupOpenSub = null;
       return r;
