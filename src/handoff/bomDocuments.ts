@@ -24,6 +24,24 @@ const money = (minor: number): string =>
 
 const dateOnly = (v: string | null): string => (v ? String(v).slice(0, 10) : '');
 
+/** Excel's built-in Accounting format: $ aligned left, amount aligned right, a bare dash for zero. */
+const ACCOUNTING_FMT = '_($* #,##0.00_);_($* (#,##0.00);_($* "-"??_);_(@_)';
+
+/**
+ * Reformats any 10-digit North American phone number found in a string to
+ * "(xxx) xxx-xxxx", leaving everything else untouched — including a leading
+ * "+1"/"1" country code, which this drops. Applied to whole address/company
+ * lines rather than a dedicated phone field, since the model carries an
+ * address as flat display lines; the digit-run match is specific enough
+ * (exactly 10 digits, bounded so it cannot clip a longer run) that it never
+ * touches a street number, an email, or a SKU.
+ */
+const formatPhone = (s: string): string =>
+  s.replace(
+    /(?<!\d)(?:\+?1[-.\s]?)?\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})(?!\d)/g,
+    (_m, a: string, b: string, c: string) => `(${a}) ${b}-${c}`,
+  );
+
 /** The questions and answers captured on a vendor's section, if any. */
 async function sectionExtras(orderId: string, vendor: string) {
   const section = await prisma.bomVendorSection.findUnique({
@@ -97,20 +115,37 @@ export interface BomModel {
   submitted: boolean;
   company: { name: string; lines: string[] };
   addresses: Array<{ title: string; lines: string[] }>;
-  /** Job, submission date, delivery, quote, account, terms — label/value pairs. */
-  meta: Array<{ label: string; value: string }>;
+  /**
+   * Job, submission date, delivery, quote, account, terms — label/value pairs.
+   * `numericValue`/`numFmt` are set only for a value that is genuinely a number
+   * (steel weight) — Excel writes those as real numbers; every other renderer
+   * keeps reading `value`, the pre-formatted display text.
+   */
+  meta: Array<{ label: string; value: string; numericValue?: number; numFmt?: string }>;
   questions: Array<{ label: string; value: string }>;
   columns: string[];
   /**
-   * The part rows, in proposal order — no other organising principle. A single
-   * group with an empty title unless something someday needs more than one; kept
-   * as groups (rather than a flat row list) so that later "someday" costs nothing
-   * to add.
+   * The part rows, in proposal order within each group. Parts first, then a
+   * "Hardware" group for anything `isHardware` flags — the same distinction the
+   * catalog's own hardware rules draw — so the shop can find fasteners as their
+   * own section without them being sorted out of the order the rest of the
+   * table follows (see proposalLineOrder in bom.ts).
    */
   groups: Array<{ title: string; rows: BomCell[][] }>;
   totals: BomCell[];
-  /** What the sheet adds up to: items, freight, tax, grand total. */
-  summary: Array<{ label: string; value: string; strong?: boolean }>;
+  /**
+   * What the sheet adds up to: items, freight, tax, grand total.
+   * `numericValue`/`numFmt` are set only when the value is a real computed
+   * amount — not "TBD" or "Pending Freight" — the same real-number/formatted-text
+   * split as `meta` and `BomCell`.
+   */
+  summary: Array<{
+    label: string;
+    value: string;
+    strong?: boolean;
+    numericValue?: number;
+    numFmt?: string;
+  }>;
   notes: string;
   footer: string;
   doc: BomDocument;
@@ -154,19 +189,24 @@ async function buildModel(
       .replace(/, ([^,]*)$/, ' $1')
       .trim();
 
-  const meta: Array<{ label: string; value: string }> = [
+  const meta: Array<{ label: string; value: string; numericValue?: number; numFmt?: string }> = [
     { label: 'Job', value: jobName || '—' },
-    { label: 'Submission date', value: submittedOn },
+    { label: 'Submission Date', value: submittedOn },
     { label: 'Delivery', value: deliveryType || '—' },
-    { label: 'Shipment quote', value: shipmentQuote || 'TBD' },
+    { label: 'Shipment Quote', value: shipmentQuote || 'TBD' },
   ];
   if (v?.accountNumber) meta.push({ label: 'Account', value: v.accountNumber });
   if (v?.paymentTerms) meta.push({ label: 'Terms', value: v.paymentTerms });
-  if (v?.leadTimeDays != null) meta.push({ label: 'Lead time', value: `${v.leadTimeDays} days` });
+  if (v?.leadTimeDays != null) meta.push({ label: 'Lead Time', value: `${v.leadTimeDays} days` });
   // Steel weight only means something when a steel fabricator is involved; on a
   // distributor's sheet it would always read 0 and invite the wrong conclusion.
   if (t.steelWeightLbs > 0)
-    meta.push({ label: 'Total steel weight (lb)', value: t.steelWeightLbs.toFixed(2) });
+    meta.push({
+      label: 'Total Steel Weight (lb)',
+      value: t.steelWeightLbs.toFixed(2),
+      numericValue: t.steelWeightLbs,
+      numFmt: '#,##0.00',
+    });
 
   // The powder-colour column is opt-in per vendor. It was on every sheet, where for
   // most vendors it was a column of dashes; a section that has a colour on it keeps
@@ -175,8 +215,10 @@ async function buildModel(
     ? doc.lines.some((l) => l.powderColor)
     : (extras?.showPowderColor ?? false) || doc.lines.some((l) => l.powderColor);
 
-  // Packaging bag: opt-in per section the same way, and never printed when no part
-  // on the sheet is bagged — about thirty hardware items carry one.
+  // Packaging bag: opt-in per section (defaults to on — see the
+  // showPackagingBag column default in the schema — a section can still opt
+  // out), and never printed when no part on the sheet is bagged, about thirty
+  // hardware items carry one.
   const hasBag = doc.lines.some((l) => l.packagingBag);
   const showBag = hasBag && (all || (extras?.showPackagingBag ?? false));
 
@@ -228,17 +270,21 @@ async function buildModel(
     ...(showBag ? [text(l.packagingBag || '—')] : []),
     ...(showColor ? [text(l.powderColor || '—')] : []),
     numeric(lbs(l.extendedWeightLbs), l.extendedWeightLbs, '#,##0.00'),
-    numeric(money(l.unitCostMinor), l.unitCostMinor / 100, '$#,##0.00'),
-    numeric(money(l.extendedCostMinor), l.extendedCostMinor / 100, '$#,##0.00'),
+    numeric(money(l.unitCostMinor), l.unitCostMinor / 100, ACCOUNTING_FMT),
+    numeric(money(l.extendedCostMinor), l.extendedCostMinor / 100, ACCOUNTING_FMT),
   ];
 
-  // One group, in proposal order — no other organising principle. Hardware used to
-  // collect in a trailing block of its own; it now prints wherever it falls, which
-  // for a kit's exploded fasteners is the position the kit itself held on the
-  // proposal (see proposalLineOrder in bom.ts).
-  const groups: Array<{ title: string; rows: BomCell[][] }> = doc.lines.length
-    ? [{ title: '', rows: doc.lines.map(rowOf) }]
-    : [];
+  // Parts, then a Hardware section — the same isHardware flag the catalog's
+  // hardware rules and kit expansion already set (see bom.ts), not a part-number
+  // pattern. Each group keeps the proposal order it arrived in; only the
+  // grouping is new, so a kit's exploded fasteners still cluster at the position
+  // the kit itself held on the proposal, just within the Hardware section rather
+  // than scattered through the parts above it.
+  const nonHardwareLines = doc.lines.filter((l) => !l.isHardware);
+  const hardwareLines = doc.lines.filter((l) => l.isHardware);
+  const groups: Array<{ title: string; rows: BomCell[][] }> = [];
+  if (nonHardwareLines.length) groups.push({ title: '', rows: nonHardwareLines.map(rowOf) });
+  if (hardwareLines.length) groups.push({ title: 'Hardware', rows: hardwareLines.map(rowOf) });
 
   const totals: BomCell[] = [
     ...(all ? [text('')] : []),
@@ -250,30 +296,50 @@ async function buildModel(
     ...(showColor ? [text('')] : []),
     numeric(lbs(t.totalWeightLbs), t.totalWeightLbs, '#,##0.00'),
     text(''),
-    numeric(money(t.extendedCostMinor), t.extendedCostMinor / 100, '$#,##0.00'),
+    numeric(money(t.extendedCostMinor), t.extendedCostMinor / 100, ACCOUNTING_FMT),
   ];
 
   // The money block. Freight and tax are quoted on the deal and typed as text, so
   // each prints as it reads; the grand total appears only when both are numbers,
   // because a total that quietly omits an unquoted freight is worse than none.
   const f = doc.financials;
-  const summary: Array<{ label: string; value: string; strong?: boolean }> = [
-    { label: 'Item Cost Total', value: money(f.itemCostMinor) },
+  const summary: Array<{
+    label: string;
+    value: string;
+    strong?: boolean;
+    numericValue?: number;
+    numFmt?: string;
+  }> = [
+    {
+      label: 'Item Cost Total',
+      value: money(f.itemCostMinor),
+      numericValue: f.itemCostMinor / 100,
+      numFmt: ACCOUNTING_FMT,
+    },
     {
       label: 'Estimated Shipment Total',
       value: f.shipmentMinor == null ? f.shipmentQuote || 'TBD' : money(f.shipmentMinor),
+      ...(f.shipmentMinor == null
+        ? {}
+        : { numericValue: f.shipmentMinor / 100, numFmt: ACCOUNTING_FMT }),
     },
   ];
   if (f.estimatedTax) {
     summary.push({
       label: 'Estimated Tax',
       value: f.estimatedTaxMinor == null ? f.estimatedTax : money(f.estimatedTaxMinor),
+      ...(f.estimatedTaxMinor == null
+        ? {}
+        : { numericValue: f.estimatedTaxMinor / 100, numFmt: ACCOUNTING_FMT }),
     });
   }
   summary.push({
     label: 'Bill of Materials Grand Total',
     value: f.grandTotalMinor == null ? 'Pending Freight' : money(f.grandTotalMinor),
     strong: true,
+    ...(f.grandTotalMinor == null
+      ? {}
+      : { numericValue: f.grandTotalMinor / 100, numFmt: ACCOUNTING_FMT }),
   });
 
   return {
@@ -518,27 +584,39 @@ export async function renderBomXlsx(
   const companyRow = plainRow([m.company.name]);
   bold(companyRow, 1);
   noWrapRow(companyRow);
-  m.company.lines.forEach((l) => noWrapRow(plainRow([l])));
+  m.company.lines.forEach((l) => noWrapRow(plainRow([formatPhone(l)])));
   plainRow([]);
 
   // Addresses side by side, as on the PDF, rather than stacked — the sheet should
-  // be recognisable as the same document.
+  // be recognisable as the same document. A rule under "Ship from" / "Ship to"
+  // separates the two headings from the address lines under them.
   const addrTitleRow = plainRow(m.addresses.map((a) => a.title));
-  m.addresses.forEach((_a, i) => bold(addrTitleRow, i + 1));
+  m.addresses.forEach((_a, i) => {
+    bold(addrTitleRow, i + 1);
+    addrTitleRow.getCell(i + 1).border = { bottom: { style: 'thin' } };
+  });
   noWrapRow(addrTitleRow);
   const depth = Math.max(...m.addresses.map((a) => a.lines.length), 0);
   for (let i = 0; i < depth; i++) {
-    noWrapRow(plainRow(m.addresses.map((a) => a.lines[i] ?? '')));
+    noWrapRow(plainRow(m.addresses.map((a) => formatPhone(a.lines[i] ?? ''))));
   }
   plainRow([]);
 
   // Meta block: label and value both bold — one pair per row, which reads more
-  // naturally in a spreadsheet than the PDF's side-by-side card layout.
+  // naturally in a spreadsheet than the PDF's side-by-side card layout. A value
+  // that is genuinely a number (steel weight) is written as one, right-aligned,
+  // instead of text — everything else stays exactly as it prints on the PDF.
   m.meta.forEach((x) => {
     const r = plainRow([x.label, x.value]);
     bold(r, 1);
     bold(r, 2);
     noWrapRow(r);
+    if (x.numericValue != null) {
+      const cell = r.getCell(2);
+      cell.value = x.numericValue;
+      if (x.numFmt) cell.numFmt = x.numFmt;
+      cell.alignment = { horizontal: 'right', wrapText: false };
+    }
   });
   plainRow([]);
 
@@ -575,8 +653,11 @@ export async function renderBomXlsx(
     track(col, bc.text);
   };
 
-  m.groups.forEach((g) => {
+  m.groups.forEach((g, gi) => {
     if (g.title) {
+      // Blank line ahead of the heading — Hardware reads as its own section,
+      // not a continuation of the parts table above it.
+      if (gi > 0) sheet.addRow([]);
       const h = sheet.addRow([g.title]);
       bold(h, 1);
       noWrapRow(h);
@@ -600,6 +681,13 @@ export async function renderBomXlsx(
   m.summary.forEach((line) => {
     const r = plainRow([line.label, line.value]);
     noWrap(r, 2, 'right');
+    // A real amount (not "TBD"/"Pending Freight") is written as a number in
+    // Accounting format rather than the pre-formatted "$…" text.
+    if (line.numericValue != null) {
+      const cell = r.getCell(2);
+      cell.value = line.numericValue;
+      if (line.numFmt) cell.numFmt = line.numFmt;
+    }
     // Every summary label is bold; only the grand total's own VALUE joins it
     // (with the rule above it) — item cost and estimated shipment stay plain
     // numbers so the grand total is the only one that reads as a final figure.
@@ -621,9 +709,7 @@ export async function renderBomXlsx(
   }
 
   plainRow([]);
-  // Repeated into both columns on purpose: the footer sits alone at the bottom
-  // of a two-column area, and one cell reads as if it belongs only to Part #.
-  noWrapRow(plainRow([m.footer, m.footer]));
+  noWrapRow(plainRow([m.footer]));
 
   // Auto-fit: exceljs has no such feature, so this is the longest rendered string
   // seen in each column, capped so one runaway note cannot blow out the sheet.
@@ -680,8 +766,11 @@ export async function renderBomCsv(
   }
 
   rows.push(row(m.columns));
-  m.groups.forEach((g) => {
-    if (g.title) rows.push(row([g.title]));
+  m.groups.forEach((g, gi) => {
+    if (g.title) {
+      if (gi > 0) rows.push('');
+      rows.push(row([g.title]));
+    }
     g.rows.forEach((cells) => rows.push(row(cells.map((c) => c.text))));
   });
   rows.push(row(m.totals.map((c) => c.text)));

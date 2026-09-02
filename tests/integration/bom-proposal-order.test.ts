@@ -95,11 +95,16 @@ const PROCUREMENT = [
   },
 ];
 
-// The order the parts SHOULD read in: Frame (0), then the kit's two fasteners
-// (both 1 — a stable sort keeps them in the order they were given, Washer before
-// Hex Bolt), then Ladder (2), then the hand-added bracket (no position, last).
-// Hardware sits between Frame and Ladder — proof it is no longer pushed to the end.
-const EXPECTED_SKU_ORDER = ['FRAME-1', '6820H-LB', '6820H-LA', 'LADDER-1', 'EXTRA-1'];
+// Parts first, in proposal order (Frame at 0, then Ladder at 2, then the
+// hand-added bracket with no position — sorts last), THEN a "Hardware" section
+// for the kit's two exploded fasteners (both share position 1 — a stable sort
+// keeps them in the order they were given, Washer before Hex Bolt). Hardware
+// still follows proposal order WITHIN its own section; it is grouped into that
+// section rather than scattered through the parts above it.
+const EXPECTED_SKU_ORDER = ['FRAME-1', 'LADDER-1', 'EXTRA-1', '6820H-LB', '6820H-LA'];
+
+/** Excel's built-in Accounting format — mirrors the constant in bomDocuments.ts. */
+const ACCOUNTING_FMT = '_($* #,##0.00_);_($* (#,##0.00);_($* "-"??_);_(@_)';
 
 vi.mock('../../src/lib/prisma.js', () => ({
   prisma: {
@@ -139,9 +144,18 @@ vi.mock('../../src/lib/prisma.js', () => ({
 
 describe('Bill of Materials — proposal order', () => {
   it('sorts buildBom lines to the accepted proposal position, not tree/alphabetical/hardware-last order', async () => {
+    // buildBom itself is flat and ungrouped — proposal order straight through,
+    // hardware included, no separate section. Grouping into Parts/Hardware is a
+    // display concern the model layer (buildModel) adds on top of this.
     const { buildBom } = await import('../../src/handoff/bom.js');
     const doc = await buildBom('o1', { vendor: '*' });
-    expect(doc.lines.map((l) => l.sku)).toEqual(EXPECTED_SKU_ORDER);
+    expect(doc.lines.map((l) => l.sku)).toEqual([
+      'FRAME-1',
+      '6820H-LB',
+      '6820H-LA',
+      'LADDER-1',
+      'EXTRA-1',
+    ]);
   });
 
   it('carries the same order into the printed HTML (PDF) table', async () => {
@@ -225,6 +239,20 @@ describe('Bill of Materials — proposal order', () => {
     }
     expect(skusInSheetOrder).toEqual(EXPECTED_SKU_ORDER);
     expect(qtyIsNumber).toBe(true);
-    expect(costNumFmt).toBe('$#,##0.00');
+    expect(costNumFmt).toBe(ACCOUNTING_FMT);
+
+    // A "Hardware" heading separates the two fasteners from the parts above,
+    // with a blank line ahead of it rather than running straight on.
+    let hardwareRowNumber = -1;
+    sheet.eachRow((row, rowNumber) => {
+      if (row.getCell(1).value === 'Hardware') hardwareRowNumber = rowNumber;
+    });
+    expect(hardwareRowNumber).toBeGreaterThan(0);
+    // `cellCount` reflects the widest column ever touched on the sheet, not
+    // whether THIS row has content — a genuinely blank separator row can still
+    // report it non-zero. `actualCellCount` is the real "does this row have any
+    // value" check.
+    const blankRow = sheet.getRow(hardwareRowNumber - 1);
+    expect(blankRow.actualCellCount).toBe(0);
   });
 });
