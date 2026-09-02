@@ -8818,6 +8818,26 @@
           openOrderDetail(id, user);
         });
       });
+      document.querySelectorAll('.hoFlag').forEach(function (bt) {
+        bt.addEventListener('click', function () {
+          var kind = bt.getAttribute('data-kind'), rid = bt.getAttribute('data-id');
+          var list = kind === 'req' ? (order.requirements || []) : (order.tasks || []);
+          var row = list.filter(function (x) { return x.id === rid; })[0];
+          if (row) openExceptionForm(kind, row, function () { openOrderDetail(id, user); });
+        });
+      });
+      document.querySelectorAll('.hoDueDate').forEach(function (inp) {
+        inp.addEventListener('change', async function () {
+          var rid = inp.getAttribute('data-id');
+          inp.disabled = true;
+          var r = await authed('/orders/tasks/' + rid, { method: 'PATCH', body: { dueDate: inp.value || null } });
+          inp.disabled = false;
+          if (!r.ok) alert(await serverMessage(r, 'Could not update the due date (' + r.status + ').'));
+          openOrderDetail(id, user);
+        });
+      });
+      var taskAdd = document.getElementById('taskAdd');
+      if (taskAdd) taskAdd.addEventListener('click', function () { openAddTaskForm(id, function () { openOrderDetail(id, user); }); });
     }
   }
   function hoStatusSelect(kind, id, opts, sel) { return '<select data-kind="' + kind + '" data-id="' + id + '" class="hoStatus" style="padding:6px 9px;border:1px solid #dcded7;border-radius:8px;font-size:13px;background:#fff;">' + opts.map(function (o) { return '<option value="' + o + '"' + (o === sel ? ' selected' : '') + '>' + titleCase(o) + '</option>'; }).join('') + '</select>'; }
@@ -8835,19 +8855,91 @@
   function statusWithChangedBy(cell, row) {
     return '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' + cell + changedBy(row) + '</div>';
   }
+  /**
+   * The Flag cell. Read-only, it's just the Exception chip (or a dash). Editable,
+   * the chip — or a plain "Flag…" link when nothing is flagged — opens a form for
+   * the reason, which the record requires the moment isException is set true.
+   */
+  function flagCell(kind, row, edit) {
+    var chip = row.isException ? '<span class="chip" style="background:#fbecea;color:#9c3327;">Exception</span>' : '—';
+    if (!edit) return chip;
+    return '<button type="button" class="hoFlag" data-kind="' + kind + '" data-id="' + row.id + '" style="border:none;background:none;padding:0;cursor:pointer;font:inherit;">' +
+      (row.isException ? chip : '<span class="muted" style="font-size:12.5px;text-decoration:underline;">Flag…</span>') + '</button>';
+  }
+  /** An editable due date, or a dash read-only — tasks only; requirements use targetDate elsewhere. */
+  function dueCell(t, edit) {
+    if (!edit) return t.dueDate ? fmtDate(t.dueDate) : '—';
+    return '<input type="date" class="hoDueDate" data-id="' + t.id + '" value="' + (t.dueDate ? String(t.dueDate).slice(0, 10) : '') + '" style="padding:5px 7px;border:1px solid #dcded7;border-radius:7px;font-size:12.5px;background:#fff;">';
+  }
   function reqRows(reqs, edit) {
     var rows = reqs.map(function (r) {
       var cell = edit ? hoStatusSelect('req', r.id, ['OPEN', 'IN_PROGRESS', 'BLOCKED', 'COMPLETE', 'WAIVED'], r.status) : '<span class="chip">' + titleCase(r.status) + '</span>';
-      return '<tr>' + td(esc(titleCase(r.category))) + td(esc(r.title)) + td(statusWithChangedBy(cell, r)) + td(r.isException ? '<span class="chip" style="background:#fbecea;color:#9c3327;">Exception</span>' : '—') + '</tr>';
+      return '<tr>' + td(esc(titleCase(r.category))) + td(esc(r.title)) + td(statusWithChangedBy(cell, r)) + td(flagCell('req', r, edit)) + '</tr>';
     }).join('');
     return tableShell(['Category', 'Requirement', 'Status & last change', 'Flag'], rows, 4, 'No requirements.');
   }
   function taskRows(tasks, edit) {
+    var head = edit ? '<div style="display:flex;justify-content:flex-end;margin-bottom:8px;"><button class="link-btn" id="taskAdd" style="width:auto;padding:7px 13px;">+ Add task</button></div>' : '';
     var rows = tasks.map(function (t) {
       var cell = edit ? hoStatusSelect('task', t.id, ['TODO', 'IN_PROGRESS', 'BLOCKED', 'DONE', 'CANCELLED'], t.status) : '<span class="chip">' + titleCase(t.status) + '</span>';
-      return '<tr>' + td('<b style="font-weight:600;">' + esc(t.title) + '</b>') + td(esc(t.assigneeRole ? titleCase(t.assigneeRole) : 'Unassigned')) + td(statusWithChangedBy(cell, t)) + td(t.dueDate ? fmtDate(t.dueDate) : '—') + '</tr>';
+      return '<tr>' + td('<b style="font-weight:600;">' + esc(t.title) + '</b>') + td(esc(t.assigneeRole ? titleCase(t.assigneeRole) : 'Unassigned')) + td(statusWithChangedBy(cell, t)) + td(dueCell(t, edit)) + td(flagCell('task', t, edit)) + '</tr>';
     }).join('');
-    return tableShell(['Task', 'Owner', 'Status & last change', 'Due'], rows, 4, 'No tasks.');
+    return head + tableShell(['Task', 'Owner', 'Status & last change', 'Due', 'Flag'], rows, 5, 'No tasks.');
+  }
+  /** Flag (or unflag) a requirement or task as an exception, with a required reason. */
+  function openExceptionForm(kind, row, done) {
+    var path = kind === 'req' ? '/orders/requirements/' + row.id : '/orders/tasks/' + row.id;
+    if (row.isException) {
+      openModal('Exception — ' + (row.title || (kind === 'req' ? 'Requirement' : 'Task')),
+        '<div class="muted" style="font-size:13px;margin-bottom:4px;line-height:1.55;">' + esc(row.exceptionReason || 'No reason was given.') + '</div>',
+        async function (close, showErr) {
+          var r = await authed(path, { method: 'PATCH', body: { isException: false } });
+          if (!r.ok) return showErr(await serverMessage(r, 'Could not clear the exception.'));
+          close(); done();
+        }, 'Clear exception');
+      return;
+    }
+    openModal('Flag as exception — ' + (row.title || (kind === 'req' ? 'Requirement' : 'Task')),
+      '<div class="muted" style="font-size:13px;margin-bottom:12px;line-height:1.55;">Marks this ' + (kind === 'req' ? 'requirement' : 'task') + ' as an exception. The reason is kept on the order record.</div>' +
+      fieldRow('Reason (required)', '<textarea id="excReason" rows="3" placeholder="e.g. Customer is tax-exempt, no COI on file for this job" style="' + IN + 'resize:vertical;"></textarea>'),
+      async function (close, showErr) {
+        var reason = document.getElementById('excReason').value.trim();
+        if (reason.length < 4) return showErr('Give a reason — it goes on the order record.');
+        var r = await authed(path, { method: 'PATCH', body: { isException: true, exceptionReason: reason } });
+        if (!r.ok) return showErr(await serverMessage(r, 'Could not flag as an exception.'));
+        close(); done();
+      }, 'Flag as exception');
+  }
+  var TASK_ROLES = ['SALES_REP', 'SALES_MANAGER', 'DESIGNER', 'ESTIMATOR', 'OPERATIONS', 'ACCOUNTING', 'PROJECT_MANAGER', 'INSTALLER'];
+  var TASK_CATEGORIES = ['PRODUCTION', 'CUSTOM_PRODUCT', 'SHIPPING', 'INSTALLATION', 'TRAINING', 'CUSTOMER_RESPONSIBILITY', 'FACILITY_ACCESS', 'REQUIRED_DOCUMENT'];
+  /** Add an ad-hoc internal task — the seeded checklist covers the standard eight
+   *  categories, but a job regularly needs one more that isn't on it. */
+  function openAddTaskForm(orderId, done) {
+    openModal('Add an internal task',
+      fieldRow('Task', '<input id="taskTitle" placeholder="e.g. Confirm crane rental for install day" style="' + IN + '">') +
+      fieldRow('Description', '<textarea id="taskDesc" rows="2" placeholder="Optional" style="' + IN + 'resize:vertical;"></textarea>') +
+      '<div style="display:flex;gap:10px;">' +
+        '<div style="flex:1;">' + fieldRow('Owner', '<select id="taskRole" style="' + IN + '"><option value="">Unassigned</option>' + TASK_ROLES.map(function (r) { return '<option value="' + r + '">' + titleCase(r) + '</option>'; }).join('') + '</select>') + '</div>' +
+        '<div style="flex:1;">' + fieldRow('Category', '<select id="taskCat" style="' + IN + '"><option value="">None</option>' + TASK_CATEGORIES.map(function (c) { return '<option value="' + c + '">' + titleCase(c) + '</option>'; }).join('') + '</select>') + '</div>' +
+      '</div>' +
+      fieldRow('Due date', '<input type="date" id="taskDue" style="' + IN + '">'),
+      async function (close, showErr) {
+        var title = document.getElementById('taskTitle').value.trim();
+        if (!title) return showErr('Give the task a title.');
+        var due = document.getElementById('taskDue').value;
+        var r = await authed('/orders/' + orderId + '/tasks', {
+          method: 'POST',
+          body: {
+            title: title,
+            description: document.getElementById('taskDesc').value.trim() || undefined,
+            assigneeRole: document.getElementById('taskRole').value || undefined,
+            category: document.getElementById('taskCat').value || undefined,
+            dueDate: due || undefined,
+          },
+        });
+        if (!r.ok) return showErr(await serverMessage(r, 'Could not add the task.'));
+        close(); done();
+      }, 'Add task');
   }
   /* --- Manufacturing release ---------------------------------------------
    * Pushing an order to manufacturing is the moment the shop starts spending
