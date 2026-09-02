@@ -8576,10 +8576,15 @@
       fieldRow('Approver title', '<input id="aTitle" style="' + IN + '">') +
       fieldRow('PO number (optional)', '<input id="aPo" style="' + IN + '">') +
       fieldRow('Approved on', '<input id="aDate" type="date" value="' + todayISO() + '" style="' + IN + '">') +
-      fieldRow('Notes', '<textarea id="aNotes" rows="2" style="' + IN + 'resize:vertical;"></textarea>'),
+      fieldRow('Notes', '<textarea id="aNotes" rows="2" style="' + IN + 'resize:vertical;"></textarea>') +
+      '<div class="muted" style="font-size:12px;margin:2px 0 8px;">The catalog has no reliable way to tell whether either was actually sold on this job — say so here rather than have it guess wrong.</div>' +
+      '<div style="display:flex;gap:18px;">' +
+        '<label style="display:flex;gap:7px;align-items:center;font-size:13.5px;cursor:pointer;"><input type="checkbox" id="aTraining" checked> This job includes training</label>' +
+        '<label style="display:flex;gap:7px;align-items:center;font-size:13.5px;cursor:pointer;"><input type="checkbox" id="aInstall" checked> This job includes installation</label>' +
+      '</div>',
       async function (close, showErr) {
         var name = document.getElementById('aName').value.trim(); if (!name) return showErr('Approver name is required.');
-        var body = { method: document.getElementById('aMethod').value, approverName: name, approverTitle: document.getElementById('aTitle').value.trim() || undefined, poNumber: document.getElementById('aPo').value.trim() || undefined, approvedAt: new Date(document.getElementById('aDate').value || Date.now()).toISOString(), notes: document.getElementById('aNotes').value.trim() || undefined };
+        var body = { method: document.getElementById('aMethod').value, approverName: name, approverTitle: document.getElementById('aTitle').value.trim() || undefined, poNumber: document.getElementById('aPo').value.trim() || undefined, approvedAt: new Date(document.getElementById('aDate').value || Date.now()).toISOString(), notes: document.getElementById('aNotes').value.trim() || undefined, trainingIncluded: document.getElementById('aTraining').checked, installationIncluded: document.getElementById('aInstall').checked };
         var r = await authed('/orders/from-version/' + versionId, { method: 'POST', body: body });
         if (!r.ok) {
           var msg = '';
