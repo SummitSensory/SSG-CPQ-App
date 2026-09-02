@@ -2184,9 +2184,9 @@ model BomVendorSection {
   /// The powder-colour column was printed on every vendor's sheet, where it was
   /// usually a column of dashes. Opt-in per section; seeded from the vendor default.
   showPowderColor Boolean          @default(false)
-  /// Whether this vendor's sheet prints the packaging-bag column. Opt-in, the
-  /// same way the powder-colour column is.
-  showPackagingBag Boolean         @default(false)
+  /// Whether this vendor's sheet prints the packaging-bag column. On by
+  /// default (unlike powder colour) — a rep can still opt a section out.
+  showPackagingBag Boolean         @default(true)
   confirmedAt     DateTime?
   confirmedById   String?
   unlockedAt      DateTime?
