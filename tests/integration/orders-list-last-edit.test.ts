@@ -76,7 +76,9 @@ vi.mock('../../src/lib/prisma.js', () => ({
 describe('listOrders — Last Edit Date / Last Edit By', () => {
   it('derives lastEditAt/lastEditBy from the most recent order event, not from AcceptedOrder.updatedAt', async () => {
     const { listOrders } = await import('../../src/handoff/service.js');
-    const [row] = await listOrders();
+    const rows = await listOrders();
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
     expect(row.lastEditBy).toBe('Rep Two');
     expect(row.lastEditAt).toBe(new Date('2026-01-10').toISOString());
   });
@@ -95,7 +97,9 @@ describe('listOrders — Last Edit Date / Last Edit By', () => {
       },
     }));
     const { listOrders } = await import('../../src/handoff/service.js');
-    const [row] = await listOrders();
+    const rows = await listOrders();
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
     expect(row.lastEditAt).toBeNull();
     expect(row.lastEditBy).toBeNull();
   });
