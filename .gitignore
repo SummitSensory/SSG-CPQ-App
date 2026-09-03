@@ -15,3 +15,6 @@ prisma/*.db
 # prisma/migrations/0000_baseline/migration.sql; the raw diff is not.
 baseline.sql
 next.sql
+
+.vercel
+.env*
