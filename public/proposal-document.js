@@ -718,7 +718,7 @@
         // — the engineer-of-record wording, a lead time — is not skimmed past as
         // boilerplate. Everything else keeps the quiet cream background.
         var noteBox = l.emphasis
-          ? 'background:#f3f6fb;border-radius:9px;padding:9px 12px;'
+          ? 'background:#f3f6fb;border:1px solid #203060;border-radius:9px;padding:9px 12px;'
           : 'background:#f7f9fc;border-radius:7px;padding:7px 10px;';
         body +=
           '<tr style="break-inside:avoid;"><td colspan="5" style="padding:3px 0 3px ' +
