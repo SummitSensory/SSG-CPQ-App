@@ -32,10 +32,10 @@
 
   /**
    * What each page has to say. Keyed by the NAV id in app.js (see the nav
-   * click handler and activateNav()) so a page with no entry here — Reports,
-   * Belt Shipments, Integrations, the Mock Proposal tool — simply shows no
-   * bubble rather than an empty one. Extending this to a new page is the whole
-   * job: add an id here, nothing else needs to change.
+   * click handler and activateNav()) — every entry in NAV has one, so the
+   * bubble follows a person to every screen. A future page with no entry
+   * here yet simply shows no bubble rather than an empty one, until someone
+   * adds it: that is the whole job, nothing else needs to change.
    */
   var TIPS = {
     dashboard: [
@@ -56,8 +56,21 @@
     orders: [
       'The Bill of Materials orders from whatever is set on the Sku, not from every vendor listed in its sourcing — that field is the override for what actually goes out to buy.',
     ],
+    reports: [
+      'Every tab up top — Overview, Conversion, Aging, Pipeline, Win/loss, Product demand — reads the same date range picker, so switching tabs never loses where you were looking.',
+      'Export CSV always exports exactly what the current tab is showing on screen, not the whole report.',
+    ],
+    belts: [
+      'The "no order needed" button is for exactly that — a replacement or extra belt shipped on its own, with no accepted order behind it to credit.',
+    ],
     admin: [
       'Almost everything on this screen is company-wide and takes effect the moment you save — including this guide’s own name, title and photo.',
+    ],
+    integrations: [
+      'This is the QuickBooks connection status, not a general integrations hub — the environment badge tells you whether it is pointed at sandbox or production, which is the first thing to check if a push seems to go nowhere.',
+    ],
+    mock: [
+      'Nothing typed in here gets saved — it prices a build on the spot without creating a real proposal.',
     ],
   };
 
@@ -67,13 +80,13 @@
     catalog: 'Catalog',
     proposals: 'Proposals',
     orders: 'Orders & Bill of Materials',
+    reports: 'Reports',
+    belts: 'Belt Shipments',
     admin: 'Administration',
+    integrations: 'Integrations',
+    mock: 'Mock Proposal',
   };
 
-  var LIGHTBULB_SVG =
-    '<svg viewBox="0 0 24 24" fill="none" stroke="#0d2417" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' +
-    '<path d="M9 18h6"/><path d="M10 22h4"/>' +
-    '<path d="M12 2a6 6 0 0 0-4 10.5c.6.55 1 1.4 1 2.2V16h6v-1.3c0-.8.4-1.65 1-2.2A6 6 0 0 0 12 2Z"/></svg>';
   var CLOSE_SVG =
     '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>';
   var PREV_SVG =
@@ -140,15 +153,6 @@
     wrap.innerHTML =
       '<button id="ssgTipsHit" aria-label="Open tips for this page" aria-expanded="false" ' +
       'style="position:absolute;inset:0;border:none;margin:0;padding:0;background:none;cursor:pointer;z-index:2;"></button>' +
-      '<span id="ssgTipsBadge" style="position:absolute;top:-3px;left:-3px;width:26px;height:26px;border-radius:50%;' +
-      'background:' +
-      GREEN +
-      ';display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 3px ' +
-      NAVY +
-      ';transition:opacity .2s ease,transform .2s ease;z-index:3;">' +
-      '<span style="width:12px;height:12px;display:block;">' +
-      LIGHTBULB_SVG +
-      '</span></span>' +
       '<div id="ssgTipsAvatar" style="position:absolute;left:50%;transform:translateX(-50%);top:0;width:84px;height:84px;' +
       'border-radius:32px 32px 8px 32px;overflow:hidden;box-shadow:0 0 0 3px rgba(255,255,255,.12);' +
       'transition:top .34s cubic-bezier(.4,0,.2,1),width .34s cubic-bezier(.4,0,.2,1),' +
@@ -212,7 +216,6 @@
     var wrap = el('ssgTipsWidget');
     var avatar = el('ssgTipsAvatar');
     var hit = el('ssgTipsHit');
-    var badge = el('ssgTipsBadge');
     var tail = el('ssgTipsTail');
     var close = el('ssgTipsClose');
     var content = el('ssgTipsContent');
@@ -228,8 +231,6 @@
       avatar.style.height = '120px';
       avatar.style.borderRadius = '50%';
       avatar.style.boxShadow = '0 0 0 4px rgba(255,255,255,.14),0 8px 20px -6px rgba(0,0,0,.4)';
-      badge.style.opacity = '0';
-      badge.style.transform = 'scale(.4)';
       tail.style.opacity = '0';
       tail.style.transform = 'translateY(8px)';
       close.style.opacity = '1';
@@ -248,8 +249,6 @@
       avatar.style.height = '84px';
       avatar.style.borderRadius = '32px 32px 8px 32px';
       avatar.style.boxShadow = '0 0 0 3px rgba(255,255,255,.12)';
-      badge.style.opacity = '1';
-      badge.style.transform = 'none';
       tail.style.opacity = '1';
       tail.style.transform = 'none';
       close.style.opacity = '0';
