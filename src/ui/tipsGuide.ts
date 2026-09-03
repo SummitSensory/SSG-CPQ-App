@@ -28,8 +28,8 @@ export interface TipsGuideProfile {
 }
 
 export const TIPS_GUIDE_DEFAULTS: TipsGuideProfile = {
-  name: 'Bryan',
-  title: 'Founder',
+  name: 'George',
+  title: 'Your Software Guru',
   avatarImage: null,
 };
 

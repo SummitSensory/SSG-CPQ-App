@@ -98,7 +98,7 @@
 
   /* ══════════════════════════ the bubble ══════════════════════════ */
 
-  var guide = { name: 'Bryan', title: 'Founder', avatarImage: null };
+  var guide = { name: 'George', title: 'Your Software Guru', avatarImage: null };
   var state = { built: false, enabled: true, page: null, open: false, index: 0 };
 
   function initialsAvatar() {
