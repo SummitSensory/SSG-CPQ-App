@@ -87,6 +87,9 @@ const ProfileBody = z.object({
   phone: z.string().trim().max(40).nullish(),
   /** A data URI to set it, an empty string or null to remove it. */
   signatureImage: z.union([SignatureImage, z.literal(''), z.null()]).optional(),
+  /** Show the page-by-page Tips & Tricks helper. A display preference, not a
+   *  permission — every user may turn their own on or off. */
+  tipsEnabled: z.boolean().optional(),
 });
 
 export function registerAuthRoutes(app: FastifyInstance): void {
@@ -262,6 +265,7 @@ export function registerAuthRoutes(app: FastifyInstance): void {
         role: true,
         isActive: true,
         signatureImage: true,
+        tipsEnabled: true,
       },
     });
     if (!user) throw new UnauthorizedError();
@@ -291,7 +295,7 @@ export function registerAuthRoutes(app: FastifyInstance): void {
     const parsed = ProfileBody.safeParse(req.body);
     if (!parsed.success)
       throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid profile');
-    const { name, title, phone, signatureImage } = parsed.data;
+    const { name, title, phone, signatureImage, tipsEnabled } = parsed.data;
     const updated = await prisma.user.update({
       where: { id: req.user!.sub },
       data: {
@@ -302,6 +306,7 @@ export function registerAuthRoutes(app: FastifyInstance): void {
         // sends the field only when it changed, so saving a name never disturbs a
         // signature that took somebody three attempts to scan.
         ...(signatureImage === undefined ? {} : { signatureImage: signatureImage || null }),
+        ...(tipsEnabled === undefined ? {} : { tipsEnabled }),
       },
       select: {
         id: true,
@@ -312,6 +317,7 @@ export function registerAuthRoutes(app: FastifyInstance): void {
         role: true,
         isActive: true,
         signatureImage: true,
+        tipsEnabled: true,
       },
     });
     const { signatureImage: saved, ...rest } = updated;

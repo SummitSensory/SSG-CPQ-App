@@ -67,6 +67,11 @@ model User {
   region       String?
   postalCode   String?
   country      String?
+
+  /// Whether the page-by-page Tips & Tricks helper is shown to this user. Self-service
+  /// (see PATCH /auth/me) — a personal display preference, not a permission, so
+  /// defaulting it on and letting anyone turn it off is safe.
+  tipsEnabled  Boolean   @default(true)
 }
 
 /// One rep's delegated consent to have drafts written into their Outlook mailbox.
