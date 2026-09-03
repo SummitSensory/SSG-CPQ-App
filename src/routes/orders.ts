@@ -29,6 +29,7 @@ import {
   waiveQboInvoice,
   qboGateState,
 } from '../handoff/manufacturingRelease.js';
+import { shippingReadinessForOrder } from '../handoff/shippingReadiness.js';
 import { buildBom } from '../handoff/bom.js';
 import { prisma } from '../lib/prisma.js';
 import { procurementFromItems } from '../handoff/lock.js';
@@ -471,12 +472,20 @@ export function registerOrderRoutes(app: FastifyInstance): void {
   // --- Manufacturing release ---
 
   /**
-   * The QuickBooks gate on its own, so the button can render disabled with a
-   * reason. Read-only — available to anyone who can read the order.
+   * The QuickBooks release gate, plus the monday shipping-readiness card
+   * (Manufacturing Phase, Estimated Shipment Date, outstanding balance) — the
+   * same read the Proposal detail page uses once an order exists, via
+   * `/orders/by-version/:versionId`. Read-only — available to anyone who can
+   * read the order.
    */
-  app.get('/orders/:id/manufacturing', read, async (req) =>
-    qboGateState((req.params as { id: string }).id),
-  );
+  app.get('/orders/:id/manufacturing', read, async (req) => {
+    const { id } = req.params as { id: string };
+    const [gate, shipping] = await Promise.all([qboGateState(id), shippingReadinessForOrder(id)]);
+    return {
+      ...gate,
+      shipping: { ...shipping, balanceMinor: shipping.balanceMinor?.toString() ?? null },
+    };
+  });
 
   /**
    * Release the order to manufacturing. Refused unless a QuickBooks invoice has

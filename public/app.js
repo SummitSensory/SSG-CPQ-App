@@ -2601,6 +2601,13 @@
       '</div><div style="text-align:right;"><span class="chip">' + titleCase(latest.status || 'DRAFT') + '</span>' +
         '<div style="font-size:19px;font-weight:600;margin-top:8px;">' + fmtMoney(versionTotalMinor(latest), 'USD') + '</div>' +
       '</div></div></div>' +
+      // Once there is an operational order, this is the same shipping card the
+      // order page shows — Manufacturing Phase, Estimated Ship Date and the live
+      // QuickBooks balance, so nobody has to leave the proposal to see whether
+      // this job is safe to ship.
+      (lockedOrder
+        ? sectionBlock('Shipping status', '<div id="shipBox"><div class="muted" style="padding:16px;">Loading…</div></div>')
+        : '') +
       sectionBlock('Versions', tableShell(['Version', 'Status', 'Created', 'Frozen', 'Total', ''], versions.map(function (v) {
         // A frozen version is the record of what went out — it opens read-only.
         var editable = !v.frozen && v.status === 'DRAFT' && hasRole(PROP_WRITE, user.role);
@@ -2694,6 +2701,7 @@
       }, user);
     }
     loadFinancing(p, user);
+    if (lockedOrder) loadShippingCard(lockedOrder.id, 'shipBox');
     document.querySelectorAll('[data-open]').forEach(function (bt) {
       bt.addEventListener('click', function () {
         var v = versions.filter(function (x) { return x.id === bt.getAttribute('data-vid'); })[0];
@@ -8959,6 +8967,55 @@
    * with a typed reason, and Accounting is emailed when it happens — a waiver is
    * a decision on the record, not a way around the rule.
    */
+  /**
+   * Manufacturing Phase, Estimated Shipment Date and the live QuickBooks balance,
+   * side by side — read off /orders/:id/manufacturing's `shipping` field (see
+   * src/handoff/shippingReadiness.ts). Shared between the order page's
+   * Manufacturing section and the proposal page's Shipping status section, so
+   * the two never drift into showing this differently.
+   *
+   * The ship-date box is the one this whole card exists for: highlighted when
+   * the date is still blank AND the customer owes money, which is exactly the
+   * combination that should stop a job from going out the door unnoticed.
+   */
+  function shippingCardHtml(shipping) {
+    var s = shipping || {};
+    var mfg = s.manufacturing || {};
+    var hasBalance = s.balanceMinor != null && Number(s.balanceMinor) > 0;
+    var flagged = !mfg.shipDate && hasBalance;
+    var box = function (label, value, opts) {
+      opts = opts || {};
+      return '<div style="background:' + (opts.bg || '#f2f3ef') + ';border:1px solid ' + (opts.border || '#e7e8e3') +
+        ';border-radius:9px;padding:10px 13px;">' +
+        '<div style="font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:' + (opts.labelColor || '#8a8f85') + ';">' + esc(label) + '</div>' +
+        '<div style="font-size:14px;font-weight:600;margin-top:3px;">' + value + '</div></div>';
+    };
+    var balanceValue = s.balanceMinor == null
+      ? '<span class="muted" style="font-weight:400;">Not yet invoiced</span>'
+      : '<span style="color:' + (hasBalance ? '#9c3327' : '#2f6b4f') + ';">' + fmtMoney(s.balanceMinor, s.currency || 'USD') + (hasBalance ? ' owed' : ' — paid in full') + '</span>';
+    return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;">' +
+        box('Manufacturing phase', mfg.status ? esc(mfg.status) : '<span class="muted" style="font-weight:400;">—</span>') +
+        box(flagged ? 'Ship date — missing, balance owed' : 'Estimated ship date',
+          mfg.shipDate ? esc(mfg.shipDate) : '<span class="muted" style="font-weight:400;">Not set yet</span>',
+          flagged ? { bg: '#fbecea', border: '#f0ccc6', labelColor: '#9c3327' } : {}) +
+        box('Customer balance', balanceValue) +
+      '</div>' +
+      (mfg.note ? '<div class="muted" style="font-size:11.5px;margin-top:8px;">' + esc(mfg.note) + '</div>' : '');
+  }
+
+  /** The same card, fetched standalone — used by the proposal page, which has
+   *  an order (once accepted) but no reason to load the rest of the gate. */
+  async function loadShippingCard(orderId, boxId) {
+    var box = document.getElementById(boxId);
+    if (!box) return;
+    try {
+      var r = await authed('/orders/' + orderId + '/manufacturing');
+      if (!r.ok) { box.innerHTML = '<div class="muted" style="padding:16px;">Could not read shipping status (' + r.status + ').</div>'; return; }
+      var gate = await r.json();
+      box.innerHTML = '<div style="padding:16px 18px;">' + shippingCardHtml(gate.shipping) + '</div>';
+    } catch (e) { box.innerHTML = '<div class="muted" style="padding:16px;">Could not reach the server.</div>'; }
+  }
+
   async function loadManufacturing(order, user) {
     var box = document.getElementById('mfgBox');
     if (!box) return;
@@ -9007,7 +9064,9 @@
           (gate.satisfied ? '' : '<button class="link-btn" id="mfgWaive" style="width:auto;padding:9px 16px;color:#9c3327;">Waive the invoice requirement…</button>') +
         '</div>';
 
-    box.innerHTML = '<div style="padding:16px 18px;">' + state +
+    box.innerHTML = '<div style="padding:16px 18px;">' +
+      shippingCardHtml(gate.shipping) +
+      '<div style="margin-top:14px;">' + state + '</div>' +
       '<div style="margin-top:12px;">' + gateLine + docs + '</div>' + actions + '</div>';
 
     var rel = document.getElementById('mfgRelease');
