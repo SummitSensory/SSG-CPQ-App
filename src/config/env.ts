@@ -41,6 +41,15 @@ const EnvSchema = z
     MONDAY_INVITE_TRIGGER_LABEL: z.string().min(1).optional(),
     MONDAY_INVITE_LABEL: z.string().min(1).optional(),
 
+    // The Deals-board column connecting a deal to its Manufacturing Process row
+    // (a "connect boards" column), and the two Manufacturing-board columns the
+    // shipping-readiness card reads off the connected row: Manufacturing Phase
+    // (a status column) and Estimated Shipment Date (a mirror column). See
+    // src/integrations/monday/manufacturingSnapshot.ts.
+    MONDAY_DEAL_MFG_RELATION_COLUMN: z.string().min(1).optional(),
+    MONDAY_MFG_STATUS_COLUMN: z.string().min(1).optional(),
+    MONDAY_MFG_SHIP_DATE_COLUMN: z.string().min(1).optional(),
+
     // ---- Customer portal ----
     // Where the portal is served, used to build the customer's colour-selection
     // link. Unset means the link is returned to staff as a token to paste.
