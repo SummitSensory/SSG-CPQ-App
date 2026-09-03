@@ -91,6 +91,31 @@ export const ContactInput = z.object({
   notes: z.string().max(5000).optional(),
 });
 
+/**
+ * Editing an existing contact. Unlike `ContactInput`, every field is optional
+ * (a PATCH touches only what changed) and email/phone/title accept `null` to
+ * clear a value someone typed in error — `ContactInput`'s `.optional()` alone
+ * can only omit a field, never blank one out.
+ */
+export const ContactUpdateInput = z.object({
+  firstName: z.string().trim().min(1).max(100).optional(),
+  lastName: z.string().trim().min(1).max(100).optional(),
+  email: z.preprocess(
+    (v) => (v === '' ? null : v),
+    z.string().trim().toLowerCase().email().nullable().optional(),
+  ),
+  phone: z.preprocess(
+    (v) => (v === '' ? null : v),
+    z.string().trim().max(40).nullable().optional(),
+  ),
+  title: z.preprocess(
+    (v) => (v === '' ? null : v),
+    z.string().trim().max(120).nullable().optional(),
+  ),
+  isDecisionMaker: z.boolean().optional(),
+  notes: z.preprocess((v) => (v === '' ? null : v), z.string().max(5000).nullable().optional()),
+});
+
 export const AddressInput = z.object({
   organizationId: z.string().min(1),
   type: z.enum(['BILLING', 'SHIPPING']),

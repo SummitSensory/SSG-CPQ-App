@@ -10919,9 +10919,13 @@
    */
 
   /**
-   * What QuickBooks holds for this customer against what we hold. Read-only:
-   * the CRM owns every field here, so the fix for a difference is to correct the
-   * customer record and re-sync, never to pull QuickBooks' copy back in.
+   * What QuickBooks holds for this customer against what we hold. The CRM owns
+   * every field here, so the fix for a difference is to correct the customer
+   * record and re-sync — never to pull QuickBooks' copy back in. "Correct the
+   * customer record" for the contact fields IS this panel: the Invoice contact
+   * editor below saves to the CRM and pushes to monday + QuickBooks itself,
+   * rather than sending whoever hit the "Invoice email" mismatch off to a CRM
+   * screen that (until now) had no way to edit a contact at all.
    */
   async function openQboProfile(order, user) {
     var r = await authed('/integrations/quickbooks/customers/' + encodeURIComponent(order.organizationId) + '/profile');
@@ -10930,6 +10934,141 @@
     // Only somebody who may edit a customer gets the editor; everyone else keeps the
     // read-only comparison they had.
     var canEditTax = canCrmWrite(user && user.role);
+    var org = { contacts: [] };
+    if (canEditTax) {
+      try {
+        var orgR0 = await authed('/crm/organizations/' + encodeURIComponent(order.organizationId));
+        if (orgR0.ok) org = await orgR0.json();
+      } catch (e) {}
+    }
+    var editingContactId = null;
+    var addingContact = false;
+
+    function contactRowHtml(c, editing) {
+      if (!editing) {
+        var isInvoice = !!c.isDecisionMaker;
+        var fullName = [c.firstName, c.lastName].filter(Boolean).join(' ') || '(no name)';
+        return '<div class="cxContactRow" data-id="' + esc(c.id) + '" style="display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-bottom:1px solid #eef0ea;">' +
+          '<div style="flex:1;min-width:0;">' +
+            '<div style="font-size:13.5px;font-weight:600;">' + esc(fullName) +
+              (isInvoice ? ' <span style="font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#2f7d5d;background:#e7f3ec;padding:2px 7px;border-radius:999px;margin-left:6px;">Invoice contact</span>' : '') +
+            '</div>' +
+            '<div class="muted" style="font-size:12px;margin-top:2px;">' +
+              (c.email ? esc(c.email) : '<span style="color:#b7873a;">No email on file</span>') +
+              (c.phone ? ' · ' + esc(c.phone) : '') + (c.title ? ' · ' + esc(c.title) : '') +
+            '</div>' +
+          '</div>' +
+          '<button type="button" class="link-btn cxEditContact" data-id="' + esc(c.id) + '" style="width:auto;padding:6px 10px;font-size:12px;flex-shrink:0;">Edit</button>' +
+        '</div>';
+      }
+      return '<div class="cxContactRow" data-id="' + esc(c.id || '') + '" style="padding:10px 0;border-bottom:1px solid #eef0ea;">' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:7px;">' +
+          '<input class="cxFirst" placeholder="First name" value="' + esc(c.firstName || '') + '" style="' + IN + 'flex:1 1 120px;">' +
+          '<input class="cxLast" placeholder="Last name" value="' + esc(c.lastName || '') + '" style="' + IN + 'flex:1 1 120px;">' +
+        '</div>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:7px;">' +
+          '<input class="cxEmail" placeholder="Email" value="' + esc(c.email || '') + '" style="' + IN + 'flex:2 1 200px;">' +
+          '<input class="cxPhone" placeholder="Phone" value="' + esc(c.phone || '') + '" style="' + IN + 'flex:1 1 130px;">' +
+        '</div>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:7px;">' +
+          '<input class="cxTitle" placeholder="Title" value="' + esc(c.title || '') + '" style="' + IN + 'flex:1 1 150px;">' +
+        '</div>' +
+        '<label style="display:flex;align-items:center;gap:7px;font-size:12.5px;cursor:pointer;margin-bottom:9px;">' +
+          '<input type="checkbox" class="cxInvoiceFlag"' + (c.isDecisionMaker ? ' checked' : '') + '> This is who QuickBooks sends invoices to</label>' +
+        '<div style="display:flex;gap:8px;align-items:center;">' +
+          '<button type="button" class="btn cxSaveContact" data-id="' + esc(c.id || '') + '" style="width:auto;padding:8px 14px;font-size:12.5px;">' + (c.id ? 'Save' : 'Add contact') + '</button>' +
+          '<button type="button" class="link-btn cxCancelEdit" style="width:auto;padding:8px 12px;font-size:12.5px;">Cancel</button>' +
+        '</div>' +
+        '<div class="cxRowErr" style="font-size:12px;color:#9c3327;margin-top:6px;"></div>' +
+      '</div>';
+    }
+
+    function renderContactList() {
+      var box = document.getElementById('cxContacts');
+      if (!box) return;
+      var list = org.contacts || [];
+      var html = list.length
+        ? list.map(function (c) { return contactRowHtml(c, c.id === editingContactId); }).join('')
+        : '<div class="muted" style="font-size:12.5px;padding:6px 0;">No contacts on file yet.</div>';
+      if (addingContact) {
+        html += contactRowHtml(
+          { id: null, firstName: '', lastName: '', email: '', phone: '', title: '', isDecisionMaker: !list.length },
+          true,
+        );
+      }
+      box.innerHTML = html;
+      wireContactRows(box);
+    }
+
+    async function reloadAfterContactChange() {
+      try {
+        var orgR = await authed('/crm/organizations/' + encodeURIComponent(order.organizationId));
+        if (orgR.ok) org = await orgR.json();
+      } catch (e) {}
+      renderContactList();
+      try {
+        var rr2 = await authed('/integrations/quickbooks/customers/' + encodeURIComponent(order.organizationId) + '/profile');
+        if (rr2.ok) {
+          var nd = await rr2.json();
+          var tb = document.getElementById('ctxRows');
+          if (tb) tb.innerHTML = profileRows(nd.fields);
+        }
+      } catch (e) {}
+    }
+
+    function wireContactRows(box) {
+      box.querySelectorAll('.cxEditContact').forEach(function (b) {
+        b.addEventListener('click', function () {
+          editingContactId = b.getAttribute('data-id'); addingContact = false; renderContactList();
+        });
+      });
+      box.querySelectorAll('.cxCancelEdit').forEach(function (b) {
+        b.addEventListener('click', function () {
+          editingContactId = null; addingContact = false; renderContactList();
+        });
+      });
+      box.querySelectorAll('.cxSaveContact').forEach(function (b) {
+        b.addEventListener('click', async function () {
+          var row = b.closest('.cxContactRow');
+          var errBox = row.querySelector('.cxRowErr');
+          var id = b.getAttribute('data-id');
+          var firstName = row.querySelector('.cxFirst').value.trim();
+          var lastName = row.querySelector('.cxLast').value.trim();
+          var email = row.querySelector('.cxEmail').value.trim();
+          var phone = row.querySelector('.cxPhone').value.trim();
+          var title = row.querySelector('.cxTitle').value.trim();
+          var isDecisionMaker = row.querySelector('.cxInvoiceFlag').checked;
+          if (!firstName || !lastName) { errBox.textContent = 'First and last name are required.'; return; }
+          var label = b.textContent;
+          b.disabled = true; b.textContent = 'Saving…';
+          var rr;
+          // Update sends '' through so an emptied field is explicitly cleared;
+          // create omits '' fields since ContactInput rejects an empty email
+          // rather than treating it as "no email".
+          if (id) {
+            rr = await authed('/crm/contacts/' + id, {
+              method: 'PATCH',
+              body: { firstName: firstName, lastName: lastName, email: email, phone: phone, title: title, isDecisionMaker: isDecisionMaker },
+            });
+          } else {
+            var body = { organizationId: order.organizationId, firstName: firstName, lastName: lastName, isDecisionMaker: isDecisionMaker };
+            if (email) body.email = email;
+            if (phone) body.phone = phone;
+            if (title) body.title = title;
+            rr = await authed('/crm/contacts', { method: 'POST', body: body });
+          }
+          if (!rr.ok) {
+            var em = ''; try { em = ((await rr.json()) || {}).message || ''; } catch (e) {}
+            errBox.textContent = em || ('Could not save (' + rr.status + ').');
+            b.disabled = false; b.textContent = label;
+            return;
+          }
+          editingContactId = null; addingContact = false;
+          await reloadAfterContactChange();
+        });
+      });
+    }
+
     function profileRows(fields) {
       return (fields || []).map(function (f) {
         var tone = f.differs ? '#c2452f' : f.missingInQbo ? '#b7873a' : '#82877d';
@@ -10955,6 +11094,26 @@
         '<thead><tr>' + ['', 'In this CRM', 'In QuickBooks', ''].map(function (h) {
           return '<th style="text-align:left;padding:6px 10px;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:#8a8f85;font-weight:600;border-bottom:1px solid #cfd3ca;">' + h + '</th>';
         }).join('') + '</tr></thead><tbody id="ctxRows">' + rows + '</tbody></table>' +
+      /**
+       * Invoice contact, editable here.
+       *
+       * The "Invoice email" row above is read-only because everything in this
+       * table comes from `loadCustomerSource`, which always picks the contact
+       * itself — there is no field on the comparison to type a correction into.
+       * This is that correction, one level down: edit the contact (or mark a
+       * different one as the one QuickBooks should invoice), and both the push
+       * that filled in "Invoice email" and the monday deal row it came from are
+       * brought up to date without a trip to Integrations or monday.com.
+       */
+      (canEditTax
+        ? '<div style="border:1px solid #dcded7;border-radius:10px;padding:13px 14px;margin-top:14px;">' +
+            '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px;">' +
+              '<div style="font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#8a8f85;font-weight:600;">Invoice contact</div>' +
+              '<button type="button" class="link-btn" id="cxAddContact" style="width:auto;padding:5px 10px;font-size:12px;">+ Add contact</button>' +
+            '</div>' +
+            '<div id="cxContacts"></div>' +
+          '</div>'
+        : '') +
       /**
        * Tax standing, editable here.
        *
@@ -10990,6 +11149,14 @@
           ? 'Correct anything else on the customer record, then push it with <b>Sync customer to QuickBooks</b> under Integrations. The CRM is the source of truth for every field above, so nothing here is ever pulled back the other way.'
           : 'The two records agree.') + '</div>',
       null, 'Close', { maxWidth: '760px' });
+
+    if (canEditTax) {
+      renderContactList();
+      var cxAdd = document.getElementById('cxAddContact');
+      if (cxAdd) cxAdd.addEventListener('click', function () {
+        editingContactId = null; addingContact = true; renderContactList();
+      });
+    }
 
     var ctxEx = document.getElementById('ctxExempt');
     var ctxNum = document.getElementById('ctxNum');
