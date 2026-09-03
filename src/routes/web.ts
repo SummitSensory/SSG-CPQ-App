@@ -71,6 +71,7 @@ const CLIENT_SCRIPTS = [
   'goals.js',
   'belt-shipments.js',
   'freight-trueup.js',
+  'tips-and-tricks.js',
   'portal-delivery.js',
   'vendor-colors.js',
   'cross-border.js',

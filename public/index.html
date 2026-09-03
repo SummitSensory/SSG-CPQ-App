@@ -518,6 +518,11 @@
       calls its init() with the host helpers.
     -->
     <script src="/freight-trueup.js?v=6"></script>
+    <!--
+      Tips & Tricks: the page-by-page help bubble. Loaded BEFORE app.js so
+      window.SSGTips exists when the shell boots and calls its init()/mount().
+    -->
+    <script src="/tips-and-tricks.js?v=1"></script>
     <!-- Standard proposal notes: the list, the editor and the rich-text field. Rendered
          by BOTH Catalog and Administration, so it belongs to neither; app.js hands it
          `authed` during boot and it reads the rest off window.SSGUI. Same three-part
