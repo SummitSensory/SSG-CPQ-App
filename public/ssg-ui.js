@@ -319,7 +319,11 @@
     if (!host) {
       host = document.createElement('div');
       host.id = 'appToasts';
-      host.style.cssText = 'position:fixed;right:18px;bottom:18px;z-index:80;display:flex;flex-direction:column;gap:8px;align-items:flex-end;pointer-events:none;';
+      // z-index 950, not 80: the Tips & Tricks bubble (tips-and-tricks.js) is a
+      // fixed bottom-right element at z-index:900, and a toast must always win
+      // that stack — an error toast rendering BEHIND an opaque bubble is
+      // indistinguishable from no error at all.
+      host.style.cssText = 'position:fixed;right:18px;bottom:18px;z-index:950;display:flex;flex-direction:column;gap:8px;align-items:flex-end;pointer-events:none;';
       document.body.appendChild(host);
     }
     var el = document.createElement('div');
