@@ -526,6 +526,7 @@
       btn.classList.add('active');
       var item = NAV.filter(function (n) { return n.id === id; })[0];
       document.getElementById('viewTitle').textContent = item.label;
+      if (window.SSGTips) window.SSGTips.onNavigate(id);
       if (id === 'dashboard') renderDashboard(user);
       else if (id === 'crm') renderCrm(user);
       else if (id === 'catalog') window.SSGCatalog.render(user);
@@ -569,6 +570,15 @@
        * only by whoever happens to open that panel. Mounted once, here, for the
        * same reason init is: this is where the session is known. */
       window.FreightTrueUp.mountBanner(user);
+    }
+
+    /* Tips & Tricks: the page-by-page help bubble in the bottom-right corner.
+     * Mounted once, here, for the same reason FreightTrueUp is: this is where
+     * the session — and the signed-in user's own tipsEnabled preference — is
+     * known. See public/tips-and-tricks.js. */
+    if (window.SSGTips) {
+      window.SSGTips.init({ esc: esc, authed: authed });
+      window.SSGTips.mount(user);
     }
 
     /* Introduction pages: the same two helpers, and one fetch for the photographs the
@@ -732,6 +742,7 @@
       b.classList.toggle('active', b.getAttribute('data-view') === id);
     });
     var t = document.getElementById('viewTitle'); if (t) t.textContent = item.label;
+    if (window.SSGTips) window.SSGTips.onNavigate(id);
   }
 
   async function renderDashboard(user) {
@@ -12323,7 +12334,10 @@
             '<button class="link-btn" id="admMailTest" style="width:auto;padding:10px 15px;">Send test email</button>' +
             '<button class="btn" id="admNew" style="width:auto;padding:10px 17px;">New user</button>' +
           '</div></div>' +
-        '<div id="admList"><div class="muted" style="padding:24px;">Loading…</div></div>') +
+        '<div id="admList"><div class="muted" style="padding:24px;">Loading…</div></div>' +
+        '<div class="section-title" style="margin-top:26px;">Tips &amp; Tricks guide</div>' +
+        '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">The name, title and photo on the page-by-page help bubble everyone sees in the bottom-right corner (a person can turn the bubble itself off under My Profile). Change the photo here any time — nothing about the tips themselves needs a deploy to follow.</div>' +
+        '<div id="tipsGuideAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>') +
 
       sec('proposals',
         head('Standard proposal notes',
@@ -12385,6 +12399,7 @@
 
     if (window.FreightTrueUp) window.FreightTrueUp.mountAdmin('ftuBannerAdmin', user);
     if (window.SSGIntroAdmin) window.SSGIntroAdmin.mountAdmin('introAdmin');
+    if (window.SSGTips) window.SSGTips.mountAdmin('tipsGuideAdmin', user);
     document.getElementById('admNew').addEventListener('click', openUserForm);
     document.getElementById('admMailTest').addEventListener('click', async function () {
       var bt = this, label = bt.textContent;
@@ -13517,17 +13532,25 @@
           '<input type="file" id="upSigFile" accept="image/png,image/jpeg" style="display:none;">' +
         '</div>' +
         '<div id="upSigNote" class="muted" style="font-size:11.5px;margin-top:6px;line-height:1.5;">Signed in black ink on white paper, scanned or photographed. It prints above your name on every payment letter you generate.</div>') +
-      '<div class="muted" style="font-size:12px;margin-top:2px;">These details appear in the “Proposal Prepared By” block on every proposal you generate.</div>',
+      '<div class="muted" style="font-size:12px;margin-top:2px;">These details appear in the “Proposal Prepared By” block on every proposal you generate.</div>' +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:16px;cursor:pointer;"><input type="checkbox" id="upTipsEnabled"' + (user.tipsEnabled !== false ? ' checked' : '') + '> Show the Tips &amp; Tricks help bubble while I work</label>',
       async function (close, showErr) {
         var name = document.getElementById('upName').value.trim();
         if (name.length < 2) return showErr('Enter your full name.');
-        var body = { name: name, title: document.getElementById('upTitle').value.trim(), phone: document.getElementById('upPhone').value.trim() };
+        var body = {
+          name: name,
+          title: document.getElementById('upTitle').value.trim(),
+          phone: document.getElementById('upPhone').value.trim(),
+          tipsEnabled: document.getElementById('upTipsEnabled').checked,
+        };
         if (sigNext !== undefined) body.signatureImage = sigNext;
         var r = await authed('/auth/me', { method: 'PATCH', body: body });
         if (!r.ok) return showErr(await serverMessage(r, 'Could not save your profile (' + r.status + ').'));
         var updated = await r.json();
-        user.name = updated.name; user.title = updated.title; user.phone = updated.phone; user.hasSignature = updated.hasSignature;
-        if (currentUser) { currentUser.name = updated.name; currentUser.title = updated.title; currentUser.phone = updated.phone; currentUser.hasSignature = updated.hasSignature; }
+        user.name = updated.name; user.title = updated.title; user.phone = updated.phone; user.hasSignature = updated.hasSignature; user.tipsEnabled = updated.tipsEnabled;
+        if (currentUser) { currentUser.name = updated.name; currentUser.title = updated.title; currentUser.phone = updated.phone; currentUser.hasSignature = updated.hasSignature; currentUser.tipsEnabled = updated.tipsEnabled; }
+        // renderShell re-mounts SSGTips with the updated user below, which picks up
+        // tipsEnabled — no separate call needed.
         close(); renderShell(user);
       }, 'Save profile');
 
