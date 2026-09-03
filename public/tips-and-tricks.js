@@ -143,7 +143,11 @@
     var wrap = document.createElement('div');
     wrap.id = 'ssgTipsWidget';
     wrap.style.cssText =
-      'position:fixed;right:22px;bottom:22px;width:84px;height:84px;' +
+      // Bottom offset is 110px, not the more natural-looking 22px: window.SSGUI's
+      // toast notifications (#appToasts, ssg-ui.js) anchor to bottom:18px;right:18px
+      // — almost this exact corner. At 22px an error toast rendered directly behind
+      // this opaque bubble and was invisible; 110px clears the toast stack entirely.
+      'position:fixed;right:22px;bottom:110px;width:84px;height:84px;' +
       'border-radius:32px 32px 8px 32px;background:' +
       NAVY +
       ';overflow:hidden;box-shadow:0 10px 26px -8px rgba(20,32,64,.55);' +
