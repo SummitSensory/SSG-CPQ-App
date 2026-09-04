@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { logger } from '../lib/logger.js';
 import { env } from '../config/env.js';
 
@@ -98,6 +100,56 @@ function discardBrowser(): void {
   void stale?.then((b) => b.close().catch(() => undefined)).catch(() => undefined);
 }
 
+/**
+ * A handful of proposal templates reference a small, fixed set of images by a
+ * plain relative path — `<img src="logo.png">` — because that resolves fine in
+ * a real browser tab, against the app's own origin. It does not resolve here:
+ * `page.setContent()` gives the page no base URL at all, so every one of these
+ * came out as a broken image (or, worse, silent blank space) in every
+ * server-rendered document — the monday upload, the DocuSeal signing package,
+ * anything routed through this file. Embedded as data URIs before Chromium
+ * ever sees the markup instead, matching the "self-contained" rule above.
+ *
+ * Read once per warm container and cached — these are static app assets, not
+ * anything that changes between requests.
+ */
+const INLINE_ASSET_PATHS: Record<string, string> = {
+  'logo.png': 'logo.png',
+  'proposal/engineer-of-record-badge.png': 'proposal/engineer-of-record-badge.png',
+};
+let inlineAssetsPromise: Promise<Record<string, string>> | null = null;
+
+function loadInlineAssets(): Promise<Record<string, string>> {
+  if (!inlineAssetsPromise) {
+    inlineAssetsPromise = Promise.all(
+      Object.entries(INLINE_ASSET_PATHS).map(async ([key, relPath]) => {
+        const buf = await readFile(join(process.cwd(), 'public', relPath));
+        return [key, `data:image/png;base64,${buf.toString('base64')}`] as const;
+      }),
+    ).then((entries) => Object.fromEntries(entries));
+  }
+  return inlineAssetsPromise;
+}
+
+export async function inlineKnownAssets(html: string): Promise<string> {
+  let assets: Record<string, string>;
+  try {
+    assets = await loadInlineAssets();
+  } catch (err) {
+    // Missing on disk would be a deploy problem, not a reason to fail every
+    // render — the document goes out exactly as it would have before this
+    // existed, with the same broken image it always had.
+    logger.warn({ err }, 'pdf: could not load inline assets, leaving image sources as-is');
+    return html;
+  }
+  let out = html;
+  for (const [relPath, dataUri] of Object.entries(assets)) {
+    out = out.split(`src="${relPath}"`).join(`src="${dataUri}"`);
+    out = out.split(`src='${relPath}'`).join(`src='${dataUri}'`);
+  }
+  return out;
+}
+
 export interface PdfOptions {
   /** Paper size. Letter for US-facing documents, which is everything here. */
   format?: 'Letter' | 'A4';
@@ -130,6 +182,7 @@ export async function renderPdf(html: string, opts: PdfOptions = {}): Promise<Bu
       'PDF rendering is not installed on this deployment — export as Excel, or run: pnpm add playwright-core @sparticuz/chromium-min',
     );
   }
+  html = await inlineKnownAssets(html);
   /*
    * One retry on a fresh browser.
    *
