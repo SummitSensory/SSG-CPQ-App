@@ -1091,8 +1091,12 @@
       '<div style="flex:1.35;"><div style="border-bottom:1px solid #20241f;height:40px;display:flex;align-items:flex-end;padding-bottom:3px;"><span style="font-size:11.5px;line-height:1.35;color:#20241f;">' +
       esc(m.contactName || '') +
       '</span></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Authorized Signer\'s Name</div></div>' +
-      '<div style="flex:1.35;"><div style="border-bottom:1px solid #20241f;height:40px;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Signature</div></div>' +
-      '<div style="flex:1;"><div style="border-bottom:1px solid #20241f;height:40px;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Date</div></div>' +
+      // These two ids are where the e-sign package places the customer's actual
+      // signature/date fields (see injectSignatureFields in
+      // src/integrations/docuseal/assembly.ts) — empty here for print, screen
+      // and email, exactly as they always were.
+      '<div style="flex:1.35;"><div id="ssgSigAcceptanceSignature" style="border-bottom:1px solid #20241f;height:40px;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Signature</div></div>' +
+      '<div style="flex:1;"><div id="ssgSigAcceptanceDate" style="border-bottom:1px solid #20241f;height:40px;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Date</div></div>' +
       '</div>' +
       '</div>' +
       footerNotesHtml +
