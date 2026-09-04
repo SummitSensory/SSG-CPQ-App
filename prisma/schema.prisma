@@ -2911,6 +2911,39 @@ model EsignDocumentTemplate {
   @@index([kind, active])
 }
 
+/// One of the ~10 "please sign this" emails a rep can send with a proposal —
+/// distinct from EsignDocumentTemplate, which decides the PDF's own wording.
+/// Auto-picked the same way (productLineIds, empty = fallback), independently
+/// overridable, so a Summit Flex proposal can pair its usual document template
+/// with a one-off email a rep wrote for this deal, or vice versa.
+///
+/// `bodyHtml` is raw HTML, not the plain-text-with-markdown FollowUpTemplate
+/// uses — this email needs real formatting (a signing-link button, brand
+/// styling), and unlike a follow-up it is reviewed in a live preview before
+/// sending, so a malformed tag is caught before it goes out, not after.
+model EsignEmailTemplate {
+  id          String   @id @default(cuid())
+  /// Stable key used by the API and by the auto-pick rules. Renaming the display
+  /// name never breaks a caller — same contract as EsignDocumentTemplate.key.
+  key         String   @unique
+  name        String
+  description String?
+  subject     String
+  bodyHtml    String
+  /// Product lines this email is the right one for. Empty means "any" — the
+  /// fallback used when nothing more specific matches.
+  productLineIds String[] @default([])
+  sortOrder   Int      @default(0)
+  active      Boolean  @default(true)
+  createdById String?
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  envelopes   EsignEnvelope[]
+
+  @@index([active])
+}
+
 model EsignEnvelope {
   id         String      @id @default(cuid())
   proposalId String
@@ -2920,6 +2953,17 @@ model EsignEnvelope {
   /// Template key as resolved at send time. Kept as text alongside the relation so
   /// the record still reads correctly after a template is renamed or removed.
   templateKey String?
+  /// Which of the ~10 EsignEmailTemplate rows produced `subject`/`message` below,
+  /// resolved the same way as templateId/templateKey — auto-picked by product
+  /// line, override accepted.
+  emailTemplateId  String?
+  emailTemplate    EsignEmailTemplate? @relation(fields: [emailTemplateId], references: [id], onDelete: SetNull)
+  emailTemplateKey String?
+  /// Whose mailbox actually sent the customer-facing email — usually sentById, but
+  /// the fallback sender (ESIGN_EMAIL_FALLBACK_SENDER_EMAIL) when the acting rep
+  /// has no Outlook connection. Recorded because "why did this look like it came
+  /// from someone else" needs an answer that isn't sentById.
+  emailSentFromUserId String?
   /// Attachment keys bound into this package, in order. The audit answer to
   /// "which documents did they actually sign?".
   attachments Json?
@@ -2933,6 +2977,11 @@ model EsignEnvelope {
   renderings Json?
 
   status     EsignStatus @default(DRAFT)
+  /// The rendered email as it actually went out — the CRM's own email, not a
+  /// DocuSeal one. `subject` and `message` (HTML) start as the resolved
+  /// emailTemplateKey's content, filled with this proposal's variables, and may be
+  /// edited by the rep before sending; what is stored here is what was sent, not
+  /// the template's stock wording.
   subject    String?
   message    String?
 
@@ -3001,9 +3050,15 @@ model EsignSigner {
   viewOnly   Boolean           @default(false)
   status     EsignSignerStatus @default(PENDING)
   docusealSubmitterId String?
-  /// DocuSeal's per-signer URL. Sent by DocuSeal's own email when
-  /// DOCUSEAL_SEND_EMAIL is on; otherwise this is the link we send or embed.
+  /// DocuSeal's per-signer URL, embedded in the CRM's own email — see
+  /// notifyPendingSigners in docuseal/service.ts. DocuSeal never emails this
+  /// directly; every submission is created with send_email: false.
   signingUrl  String?
+  /// Set once the CRM has emailed this recipient their turn — the initial send for
+  /// a view-only CC, or the moment a signer's order tier becomes current for a
+  /// required signer. Guards notifyPendingSigners against re-emailing someone on
+  /// every webhook/sync that touches this envelope.
+  emailedAt   DateTime?
   viewedAt    DateTime?
   completedAt DateTime?
   declineReason String?

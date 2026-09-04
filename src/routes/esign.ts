@@ -12,10 +12,18 @@ import {
   CUSTOMER_ROLE,
   resolveAttachments,
   resolveProposalTemplate,
+  resolveEmailTemplate,
   sendProposalForSignature,
   syncEnvelope,
   voidEnvelope,
 } from '../integrations/docuseal/service.js';
+import {
+  renderEsignEmail,
+  firstNameOf,
+  SAMPLE_ESIGN_EMAIL_CONTEXT,
+  ESIGN_EMAIL_PLACEHOLDERS,
+} from '../email/esignEmailTemplates.js';
+import { outlookStatusFor } from '../integrations/microsoft/graph.js';
 import { pdfAvailable } from '../render/pdf.js';
 import { checkDocumentTotal } from '../proposals/documentIntegrity.js';
 import { enforceOrReport } from '../lib/guards.js';
@@ -57,8 +65,10 @@ const SendBody = z.object({
   attachmentKeys: z.array(z.string().trim().min(1)).max(20).optional(),
   referenceDocumentKeys: z.array(z.string().trim().min(1)).max(20).optional(),
   renderingIds: z.array(z.string().trim().min(1)).max(50).optional(),
+  emailTemplateKey: z.string().trim().min(1).optional(),
+  /** The rep's final edit of the resolved email template — see SendInput. */
   subject: z.string().trim().max(300).optional(),
-  message: z.string().max(4000).optional(),
+  message: z.string().max(20_000).optional(),
   filename: z.string().trim().max(160).optional(),
 });
 
@@ -79,18 +89,39 @@ const TemplateBody = z.object({
   active: z.boolean().optional(),
 });
 
+const EmailTemplateBody = z.object({
+  key: z
+    .string()
+    .trim()
+    .min(1)
+    .max(60)
+    .regex(/^[a-z0-9][a-z0-9-]*$/, 'Use lower-case letters, numbers and hyphens.'),
+  name: z.string().trim().min(1).max(160),
+  description: z.string().max(2000).optional(),
+  subject: z.string().trim().min(1).max(300),
+  bodyHtml: z.string().min(1),
+  productLineIds: z.array(z.string().trim().min(1)).max(50).optional(),
+  sortOrder: z.number().int().min(0).max(999).optional(),
+  active: z.boolean().optional(),
+});
+
 export function registerEsignRoutes(app: FastifyInstance): void {
   const read = { preHandler: requirePermission(Permission.PROPOSAL_READ) };
   const sign = { preHandler: requirePermission(Permission.PROPOSAL_ESIGN) };
   const manage = { preHandler: requirePermission(Permission.INTEGRATIONS_MANAGE) };
 
-  /** What the UI needs to decide whether to offer the button at all. */
-  app.get('/esign/status', read, async () => ({
+  /**
+   * What the UI needs to decide whether to offer the button at all, and whether
+   * to warn the rep before they open the send form: the actual "please sign"
+   * email now goes out from their own Outlook mailbox, not DocuSeal's, so a
+   * missing connection is worth surfacing early rather than as a send-time error.
+   */
+  app.get('/esign/status', read, async (req) => ({
     configured: isDocusealConfigured(),
     pdf: await pdfAvailable(),
     storage: isBlobConfigured() ? 'blob' : 'docuseal',
-    sendsProviderEmail: env.DOCUSEAL_SEND_EMAIL,
     webhookConfigured: Boolean(env.DOCUSEAL_WEBHOOK_SECRET),
+    outlook: await outlookStatusFor(req.user!.sub),
   }));
 
   /**
@@ -133,18 +164,29 @@ export function registerEsignRoutes(app: FastifyInstance): void {
   });
 
   /**
-   * What would be sent, without sending it: the resolved template and the
-   * attachments that would be bound in. The rep sees the auto-pick before
-   * committing to it, and can override with `templateKey`.
+   * What would be sent, without sending it: the resolved document template, the
+   * attachments that would be bound in, and the resolved email — subject and
+   * rendered HTML, ready to show in an editable preview. The rep sees every
+   * auto-pick before committing to it, and can override each independently with
+   * `templateKey` / `emailTemplateKey`.
    */
   app.get('/esign/proposals/versions/:versionId/plan', read, async (req) => {
     const { versionId } = req.params as { versionId: string };
-    const q = req.query as { templateKey?: string; attachmentKeys?: string };
+    const q = req.query as {
+      templateKey?: string;
+      attachmentKeys?: string;
+      emailTemplateKey?: string;
+      firstName?: string;
+    };
     const version = await prisma.proposalVersion.findUnique({
       where: { id: versionId },
-      select: { id: true, items: true },
+      select: {
+        id: true,
+        items: true,
+        proposal: { select: { number: true, title: true, organizationId: true } },
+      },
     });
-    if (!version) throw new NotFoundError('Proposal version not found');
+    if (!version?.proposal) throw new NotFoundError('Proposal version not found');
     const keys = q.attachmentKeys
       ? q.attachmentKeys
           .split(',')
@@ -156,9 +198,44 @@ export function registerEsignRoutes(app: FastifyInstance): void {
       templateKey: q.templateKey,
     });
     const attachments = await resolveAttachments({ keys });
+
+    const emailTemplate = await resolveEmailTemplate({
+      items: version.items,
+      emailTemplateKey: q.emailTemplateKey,
+    });
+    let email: { key: string; name: string; subject: string; html: string } | null = null;
+    if (emailTemplate) {
+      const [org, sender] = await Promise.all([
+        prisma.organization.findUnique({
+          where: { id: version.proposal.organizationId },
+          select: { name: true },
+        }),
+        prisma.user.findUnique({ where: { id: req.user!.sub }, select: { name: true } }),
+      ]);
+      // `[Signing Link]` is left in place on purpose — no signing link exists
+      // until the actual send creates the DocuSeal submission. It is filled in
+      // per recipient at that point (see notifyPendingSigners).
+      const rendered = renderEsignEmail(emailTemplate, {
+        firstName: q.firstName?.trim() || 'there',
+        senderFirstName: firstNameOf(sender?.name),
+        senderName: sender?.name ?? undefined,
+        customerName: org?.name,
+        proposalNumber: version.proposal.number,
+        proposalTitle: version.proposal.title ?? undefined,
+        signingLink: '[Signing Link]',
+      });
+      email = {
+        key: emailTemplate.key,
+        name: emailTemplate.name,
+        subject: rendered.subject,
+        html: rendered.html,
+      };
+    }
+
     return {
       template: template ? { key: template.key, name: template.name } : null,
       attachments: attachments.map((a) => ({ key: a.key, name: a.name })),
+      email,
     };
   });
 
@@ -304,6 +381,109 @@ export function registerEsignRoutes(app: FastifyInstance): void {
     const existing = await prisma.esignDocumentTemplate.findUnique({ where: { id } });
     if (!existing) throw new NotFoundError('Template not found');
     await prisma.esignDocumentTemplate.update({ where: { id }, data: { active: false } });
+    return reply.status(204).send();
+  });
+
+  /* ---- The ~10 "please sign this" email templates ---- */
+
+  app.get('/esign/email-templates', read, async (req) => {
+    const q = req.query as { includeInactive?: string };
+    return prisma.esignEmailTemplate.findMany({
+      where: q.includeInactive === 'true' ? {} : { active: true },
+      orderBy: [{ sortOrder: 'asc' }, { key: 'asc' }],
+    });
+  });
+
+  /** Every template, rendered against a sample proposal — the admin editor's preview. */
+  app.get('/esign/email-templates/preview', manage, async () => {
+    const rows = await prisma.esignEmailTemplate.findMany({
+      orderBy: [{ sortOrder: 'asc' }, { key: 'asc' }],
+    });
+    const usage = await prisma.esignEnvelope.groupBy({
+      by: ['emailTemplateKey'],
+      _count: { _all: true },
+    });
+    const countOf = new Map(usage.map((u) => [u.emailTemplateKey, u._count._all]));
+    return {
+      templates: rows.map((t) => ({
+        ...t,
+        sentCount: countOf.get(t.key) ?? 0,
+        preview: renderEsignEmail(t, SAMPLE_ESIGN_EMAIL_CONTEXT),
+      })),
+      placeholders: ESIGN_EMAIL_PLACEHOLDERS,
+    };
+  });
+
+  app.post('/esign/email-templates', manage, async (req, reply) => {
+    const parsed = EmailTemplateBody.safeParse(req.body);
+    if (!parsed.success)
+      throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid request');
+    const existing = await prisma.esignEmailTemplate.findUnique({
+      where: { key: parsed.data.key },
+    });
+    if (existing)
+      throw new ValidationError(`An email template already uses the key “${parsed.data.key}”.`);
+    const created = await prisma.esignEmailTemplate.create({
+      data: {
+        key: parsed.data.key,
+        name: parsed.data.name,
+        description: parsed.data.description ?? null,
+        subject: parsed.data.subject,
+        bodyHtml: parsed.data.bodyHtml,
+        productLineIds: parsed.data.productLineIds ?? [],
+        sortOrder: parsed.data.sortOrder ?? 0,
+        active: parsed.data.active ?? true,
+        createdById: req.user!.sub,
+        updatedById: req.user!.sub,
+      },
+    });
+    return reply.status(201).send(created);
+  });
+
+  app.patch('/esign/email-templates/:id', manage, async (req) => {
+    const { id } = req.params as { id: string };
+    const parsed = EmailTemplateBody.partial().safeParse(req.body);
+    if (!parsed.success)
+      throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid request');
+    const existing = await prisma.esignEmailTemplate.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundError('Email template not found');
+    const d = parsed.data;
+    // The key is what an envelope names as emailTemplateKey, so it is fixed once
+    // this template has actually been sent — same rule as the document templates.
+    if (d.key && d.key !== existing.key) {
+      const used = await prisma.esignEnvelope.count({ where: { emailTemplateKey: existing.key } });
+      if (used) {
+        throw new ValidationError(
+          `This email has been sent ${used} time${used === 1 ? '' : 's'}, so its key is fixed — the history refers to it. Change the name instead.`,
+        );
+      }
+    }
+    return prisma.esignEmailTemplate.update({
+      where: { id },
+      data: {
+        ...(d.key ? { key: d.key } : {}),
+        ...(d.name ? { name: d.name } : {}),
+        ...(d.description !== undefined ? { description: d.description ?? null } : {}),
+        ...(d.subject ? { subject: d.subject } : {}),
+        ...(d.bodyHtml ? { bodyHtml: d.bodyHtml } : {}),
+        ...(d.productLineIds ? { productLineIds: d.productLineIds } : {}),
+        ...(d.sortOrder !== undefined ? { sortOrder: d.sortOrder } : {}),
+        ...(d.active !== undefined ? { active: d.active } : {}),
+        updatedById: req.user!.sub,
+      },
+    });
+  });
+
+  /**
+   * Switched off rather than deleted — an envelope names the email template it
+   * was built from, and the record of what a customer was actually sent must
+   * stay readable.
+   */
+  app.delete('/esign/email-templates/:id', manage, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const existing = await prisma.esignEmailTemplate.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundError('Email template not found');
+    await prisma.esignEmailTemplate.update({ where: { id }, data: { active: false } });
     return reply.status(204).send();
   });
 }
