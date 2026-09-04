@@ -2946,6 +2946,15 @@ model EsignSigner {
   email      String
   /// Signing order. Equal values sign in parallel.
   order      Int               @default(1)
+  /// True for a CC recipient who should be able to see the document but is not
+  /// asked to accept it — a second contact the customer wants kept in the loop
+  /// who isn't authorized to sign. DocuSeal itself decides this: a submitter
+  /// with no fields on the document becomes a view-only recipient
+  /// automatically. This flag's only job on our side is to keep this signer's
+  /// block off the signature page (assembly.ts) and out of the
+  /// "has everyone who needs to sign, signed" check (service.ts applyStatus) —
+  /// a viewer who never signs must never be why an envelope cannot complete.
+  viewOnly   Boolean           @default(false)
   status     EsignSignerStatus @default(PENDING)
   docusealSubmitterId String?
   /// DocuSeal's per-signer URL. Sent by DocuSeal's own email when
