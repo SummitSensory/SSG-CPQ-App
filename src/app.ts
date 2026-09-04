@@ -20,6 +20,7 @@ import { registerBundleRoutes } from './routes/bundles.js';
 import { registerRuleRoutes } from './routes/rules.js';
 import { registerPricingRoutes } from './routes/pricing.js';
 import { registerProposalRoutes } from './routes/proposals.js';
+import { registerProposalRenderingRoutes } from './routes/proposalRenderings.js';
 import { registerProposalTemplateRoutes } from './routes/templates.js';
 import { registerAdventureRoutes } from './routes/adventure.js';
 import { registerSoarRoutes } from './routes/soar.js';
@@ -150,6 +151,7 @@ export function buildApp(): FastifyInstance {
   registerRuleRoutes(app);
   registerPricingRoutes(app);
   registerProposalRoutes(app);
+  registerProposalRenderingRoutes(app);
   registerProposalTemplateRoutes(app);
   registerIntroTemplateRoutes(app);
   registerBeltShipmentRoutes(app);

@@ -2643,6 +2643,7 @@
       // Electronic signature: shown once the account is configured for it, so a
       // deployment without a DocuSeal token never shows a dead button.
       sectionBlock('Electronic signature', '<div id="esignBox"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+      sectionBlock('Design renderings', '<div id="renderingsBox"><div class="muted" style="padding:16px;">Loading…</div></div>') +
       sectionBlock('Ideal decision timeline', proposalTimelinePanel(p, latest)) +
       // QuickBooks, on the proposal, once a version has been accepted. Same three-step
       // panel the order page shows and the same endpoints behind it — the order still
@@ -2716,6 +2717,7 @@
     loadFinancing(p, user);
     if (lockedOrder) loadShippingCard(lockedOrder.id, 'shipBox');
     loadEsign(p, latest, user);
+    loadRenderings(p, user);
     document.querySelectorAll('[data-open]').forEach(function (bt) {
       bt.addEventListener('click', function () {
         var v = versions.filter(function (x) { return x.id === bt.getAttribute('data-vid'); })[0];
@@ -12471,10 +12473,29 @@
       if (rp.ok) plan = await rp.json();
     } catch (e) {}
 
+    var renderings = [];
+    try {
+      var rr = await authed('/proposals/' + p.id + '/renderings');
+      if (rr.ok) renderings = ((await rr.json()).renderings) || [];
+    } catch (e) {}
+
     var planNote = '<div class="muted" style="font-size:12px;line-height:1.6;margin-bottom:14px;padding:10px 12px;background:#f7f9fc;border-radius:8px;">' +
       'Signing template: <b>' + (plan.template ? esc(plan.template.name) : 'the proposal document itself') + '</b>' +
       ((plan.attachments || []).length ? '<br>Attached: ' + plan.attachments.map(function (a) { return esc(a.name); }).join(', ') : '') +
       '</div>';
+
+    // Renderings ride along in the order shown here, which is the same order set
+    // in the proposal's own Design renderings panel — reorder there, not here.
+    var renderingsBlock = renderings.length
+      ? '<div class="muted" style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;margin:14px 0 6px;">Design renderings to include</div>' +
+        '<div id="esRenderings">' +
+        renderings.map(function (rnd) {
+          return '<label style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13px;">' +
+            '<input type="checkbox" class="esRnd" value="' + esc(rnd.id) + '" checked> ' + esc(rnd.filename) +
+            '</label>';
+        }).join('') +
+        '</div>'
+      : '';
 
     openModal('Sign electronically',
       planNote +
@@ -12484,6 +12505,7 @@
       esignRowHtml('Summit', user.name || '', user.email || '', false) +
       '</div>' +
       '<button type="button" class="link-btn" id="esAddRow" style="width:auto;padding:7px 10px;font-size:12.5px;">+ Add signer</button>' +
+      renderingsBlock +
       fieldRow('Subject', '<input id="esSubject" placeholder="Leave blank for the default" style="' + IN + '">') +
       fieldRow('Message', '<textarea id="esMsg" rows="4" placeholder="Leave blank for a short default note" style="' + IN + 'resize:vertical;"></textarea>') +
       '<div class="muted" style="font-size:12px;margin-top:2px;">DocuSeal emails each signer in the order listed — the first signs before the next is asked to.</div>',
@@ -12505,10 +12527,13 @@
         }
         var doc = await buildProposalDocForSend(p, version.id);
         if (!doc) return showErr('Could not prepare the proposal. Open the proposal preview once, then try again.');
+        var renderingIds = Array.prototype.slice.call(document.querySelectorAll('#esRenderings .esRnd:checked'))
+          .map(function (cb) { return cb.value; });
         var body = {
           proposalHtml: doc.html,
           filename: doc.filename,
           signers: signers,
+          renderingIds: renderingIds,
           subject: document.getElementById('esSubject').value.trim(),
           message: document.getElementById('esMsg').value,
         };
@@ -12528,6 +12553,146 @@
       document.getElementById('esRows').insertAdjacentHTML('beforeend', esignRowHtml('', '', '', true));
       bindRemove();
     });
+  }
+
+  /* --- Design renderings ---
+   * Uploaded browser-to-blob directly rather than through our server — see
+   * lib/renderingStore.ts for why. The vendored client (built by
+   * scripts/build-blob-client.mjs) is loaded lazily, once, on first upload. */
+  var _blobUploaderPromise = null;
+  function loadBlobUploader() {
+    if (!_blobUploaderPromise) {
+      _blobUploaderPromise = import('/vendor/vercel-blob-client.mjs').then(function () {
+        return window.SSGBlobUpload;
+      });
+    }
+    return _blobUploaderPromise;
+  }
+
+  function fmtBytes(n) {
+    if (!n && n !== 0) return '';
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  async function uploadRendering(p, file, onProgress) {
+    var tr = await authed('/proposals/' + p.id + '/renderings/upload-token', {
+      method: 'POST', body: { filename: file.name, contentType: file.type },
+    });
+    if (!tr.ok) throw new Error(await serverMessage(tr, 'Could not start the upload.'));
+    var token = await tr.json();
+    var uploadFn = await loadBlobUploader();
+    var result = await uploadFn(token.pathname, file, {
+      access: 'private',
+      token: token.token,
+      contentType: file.type,
+      onUploadProgress: onProgress,
+    });
+    var rr = await authed('/proposals/' + p.id + '/renderings', {
+      method: 'POST',
+      body: { url: result.url, pathname: result.pathname, filename: file.name },
+    });
+    if (!rr.ok) throw new Error(await serverMessage(rr, 'The upload finished, but could not be saved.'));
+    return rr.json();
+  }
+
+  async function loadRenderings(p, user) {
+    var box = document.getElementById('renderingsBox');
+    if (!box) return;
+    var data = { configured: false, renderings: [], accept: [], maxBytes: 0 };
+    try { var r = await authed('/proposals/' + p.id + '/renderings'); if (r.ok) data = await r.json(); } catch (e) {}
+    var canWrite = hasRole(PROP_WRITE, user.role);
+
+    if (!data.configured) {
+      box.innerHTML = '<div class="muted" style="padding:16px;">File storage is not configured on this deployment.</div>';
+      return;
+    }
+
+    var rows = data.renderings || [];
+    var rowsHtml = rows.map(function (rnd, i) {
+      return '<div class="rndRow" data-id="' + esc(rnd.id) + '" style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #eceef4;font-size:13px;">' +
+        '<a href="' + esc(rnd.url) + '" target="_blank" rel="noopener" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(rnd.filename) + '</a>' +
+        '<span class="muted" style="font-size:11.5px;flex:none;">' + esc(fmtBytes(rnd.byteSize)) + '</span>' +
+        (canWrite
+          ? '<div style="display:flex;gap:4px;flex:none;">' +
+            '<button type="button" class="link-btn rndUp" style="width:auto;padding:5px 8px;"' + (i === 0 ? ' disabled' : '') + '>↑</button>' +
+            '<button type="button" class="link-btn rndDown" style="width:auto;padding:5px 8px;"' + (i === rows.length - 1 ? ' disabled' : '') + '>↓</button>' +
+            '<button type="button" class="link-btn rndDelete" style="width:auto;padding:5px 8px;color:#9c3327;">✕</button>' +
+            '</div>'
+          : '') +
+        '</div>';
+    }).join('');
+
+    box.innerHTML = '<div style="padding:16px 18px;">' +
+      (rowsHtml || '<div class="muted" style="font-size:12.5px;margin-bottom:10px;">No renderings uploaded yet.</div>') +
+      (canWrite
+        ? '<div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+          '<input type="file" id="rndFile" accept="' + esc((data.accept || []).join(',')) + '" style="display:none;">' +
+          '<button type="button" class="btn" id="rndUploadBtn" style="width:auto;padding:8px 14px;">Upload rendering…</button>' +
+          '<span class="muted" id="rndUploadStatus" style="font-size:12px;"></span>' +
+          '</div>'
+        : '') +
+      '</div>';
+
+    if (!canWrite) return;
+
+    box.querySelectorAll('.rndDelete').forEach(function (b) {
+      b.addEventListener('click', async function () {
+        var id = b.closest('.rndRow').getAttribute('data-id');
+        if (!window.confirm('Remove this rendering? This cannot be undone.')) return;
+        var r = await authed('/proposals/' + p.id + '/renderings/' + id, { method: 'DELETE' });
+        if (!r.ok) { alert(await serverMessage(r, 'Could not remove that rendering.')); return; }
+        loadRenderings(p, user);
+      });
+    });
+
+    function move(id, dir) {
+      var ids = rows.map(function (x) { return x.id; });
+      var i = ids.indexOf(id);
+      var j = i + dir;
+      if (j < 0 || j >= ids.length) return;
+      var tmp = ids[i]; ids[i] = ids[j]; ids[j] = tmp;
+      return authed('/proposals/' + p.id + '/renderings/reorder', { method: 'PATCH', body: { orderedIds: ids } })
+        .then(function () { loadRenderings(p, user); });
+    }
+    box.querySelectorAll('.rndUp').forEach(function (b) {
+      b.addEventListener('click', function () { move(b.closest('.rndRow').getAttribute('data-id'), -1); });
+    });
+    box.querySelectorAll('.rndDown').forEach(function (b) {
+      b.addEventListener('click', function () { move(b.closest('.rndRow').getAttribute('data-id'), 1); });
+    });
+
+    var upBtn = document.getElementById('rndUploadBtn');
+    var fileInput = document.getElementById('rndFile');
+    var status = document.getElementById('rndUploadStatus');
+    if (upBtn && fileInput) {
+      upBtn.addEventListener('click', function () { fileInput.click(); });
+      fileInput.addEventListener('change', async function () {
+        var file = fileInput.files[0];
+        if (!file) return;
+        if (data.maxBytes && file.size > data.maxBytes) {
+          status.style.color = '#9c3327';
+          status.textContent = 'That file is ' + fmtBytes(file.size) + '. The limit is ' + fmtBytes(data.maxBytes) + '.';
+          return;
+        }
+        upBtn.disabled = true;
+        status.style.color = '';
+        status.textContent = 'Uploading ' + file.name + '…';
+        try {
+          await uploadRendering(p, file, function (progress) {
+            status.textContent = 'Uploading ' + file.name + '… ' + Math.round(progress.percentage) + '%';
+          });
+          status.textContent = '';
+          loadRenderings(p, user);
+        } catch (err) {
+          status.style.color = '#9c3327';
+          status.textContent = err && err.message ? err.message : 'Upload failed.';
+        }
+        upBtn.disabled = false;
+        fileInput.value = '';
+      });
+    }
   }
 
   /* --- Admin --- */

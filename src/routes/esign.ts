@@ -54,6 +54,7 @@ const SendBody = z.object({
   templateKey: z.string().trim().min(1).optional(),
   attachmentKeys: z.array(z.string().trim().min(1)).max(20).optional(),
   referenceDocumentKeys: z.array(z.string().trim().min(1)).max(20).optional(),
+  renderingIds: z.array(z.string().trim().min(1)).max(50).optional(),
   subject: z.string().trim().max(300).optional(),
   message: z.string().max(4000).optional(),
   filename: z.string().trim().max(160).optional(),
