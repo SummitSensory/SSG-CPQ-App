@@ -151,13 +151,13 @@
    * nothing threw, and the button that started it kept saying "Saving…" for the
    * rest of the session. That is the hang.
    *
-   * RENDER_TIMEOUT_MS is deliberately longer than the 60 seconds vercel.json
+   * RENDER_TIMEOUT_MS is deliberately longer than the 180 seconds vercel.json
    * gives the render function: the client must not give up on a PDF the server is
    * still legitimately building, or a document goes out while the operator is
    * being told it failed.
    */
   var REQUEST_TIMEOUT_MS = 60000;
-  var RENDER_TIMEOUT_MS = 70000;
+  var RENDER_TIMEOUT_MS = 190000;
 
   function api(path, opts) {
     opts = opts || {};
@@ -5924,7 +5924,7 @@
         try {
           // /render/*: this send builds the RFQ PDF before it can attach it, and
           // vercel.json routes that prefix to the function with the memory and
-          // 60-second ceiling headless Chromium needs. On the main API function a
+          // 180-second ceiling headless Chromium needs. On the main API function a
           // cold browser start ran past 30 seconds and the request was killed,
           // which is what left this dialog on "Sending…" indefinitely.
           await rfqApi('/render/rfqs/' + rfqId + '/send', {
