@@ -101,6 +101,16 @@ export async function resolveProposalTemplate(input: {
 }
 
 /**
+ * A rep's explicit "no, not even the auto-pick" — distinct from omitting
+ * `emailTemplateKey`, which means "I have no preference, auto-pick for me".
+ * Without this, a rep who deliberately deselects the auto-picked template in
+ * the send form has no way to say so: an absent key and a rejected key look
+ * identical to resolveEmailTemplate, and the rejection would silently be
+ * overridden back to the very template it just declined.
+ */
+export const NO_EMAIL_TEMPLATE = '__none__';
+
+/**
  * Which of the ~10 "please sign this" emails should go out with this proposal.
  *
  * Same rule as resolveProposalTemplate — auto-pick by product line, explicit
@@ -112,6 +122,7 @@ export async function resolveEmailTemplate(input: {
   items: unknown;
   emailTemplateKey?: string;
 }): Promise<(EsignEmailTemplateData & { id: string }) | null> {
+  if (input.emailTemplateKey === NO_EMAIL_TEMPLATE) return null;
   if (input.emailTemplateKey) {
     const picked = await prisma.esignEmailTemplate.findUnique({
       where: { key: input.emailTemplateKey },
@@ -288,25 +299,20 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
     );
   }
 
-  const org = await prisma.organization.findUnique({
-    where: { id: version.proposal.organizationId },
-    select: { name: true },
-  });
   const totals = versionTotals(version.items, version.sections);
 
-  const template = await resolveProposalTemplate({
-    items: version.items,
-    templateKey: input.templateKey,
-  });
-  const attachments = await resolveAttachments({ keys: input.attachmentKeys });
-  const emailTemplate = await resolveEmailTemplate({
-    items: version.items,
-    emailTemplateKey: input.emailTemplateKey,
-  });
-  const sender = await prisma.user.findUnique({
-    where: { id: input.actorId },
-    select: { name: true },
-  });
+  // None of these five reads depends on another's result — run them together
+  // rather than paying for five sequential round trips on every send.
+  const [org, template, attachments, emailTemplate, sender] = await Promise.all([
+    prisma.organization.findUnique({
+      where: { id: version.proposal.organizationId },
+      select: { name: true },
+    }),
+    resolveProposalTemplate({ items: version.items, templateKey: input.templateKey }),
+    resolveAttachments({ keys: input.attachmentKeys }),
+    resolveEmailTemplate({ items: version.items, emailTemplateKey: input.emailTemplateKey }),
+    prisma.user.findUnique({ where: { id: input.actorId }, select: { name: true } }),
+  ]);
   // The rep's edit wins outright when given; otherwise the resolved template is
   // rendered here so an envelope always has a full email, even with no override
   // and no email template configured yet (falls back to a bare, functional note).
@@ -327,6 +333,14 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
       };
   const emailSubject = input.subject?.trim() || defaultEmail.subject;
   const emailHtml = input.message?.trim() || defaultEmail.html;
+  // The rep's edit is free-text HTML; the one thing it cannot lose is the one
+  // thing that makes the email functional. Checked here, not just in the send
+  // modal, because the modal's check is not the only path to this function.
+  if (!emailHtml.includes('[Signing Link]')) {
+    throw new ValidationError(
+      'The email body no longer has a [Signing Link] placeholder — the recipient would have no way to open the document. Add it back (e.g. in a link) before sending.',
+    );
+  }
 
   // Signers are ordered so the customer signs first and we countersign after —
   // countersigning a document the customer has not signed is backwards.

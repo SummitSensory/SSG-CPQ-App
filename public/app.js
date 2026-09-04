@@ -12701,7 +12701,11 @@
       ((plan.attachments || []).length ? '<br>Attached: ' + plan.attachments.map(function (a) { return esc(a.name); }).join(', ') : '') +
       '</div>';
 
-    var emailTemplateOptions = '<option value="">' + (plan.email ? 'Default note (no template)' : 'Plain default note') + '</option>' +
+    // '__none__' is a real, explicit choice — must match NO_EMAIL_TEMPLATE in
+    // src/integrations/docuseal/service.ts. An empty value here would be
+    // indistinguishable from "no preference" server-side and would silently
+    // fall right back to the auto-picked template a rep just deselected.
+    var emailTemplateOptions = '<option value="__none__">No template — plain default note</option>' +
       emailTemplates.map(function (t) {
         return '<option value="' + esc(t.key) + '"' + (plan.email && plan.email.key === t.key ? ' selected' : '') + '>' + esc(t.name) + '</option>';
       }).join('');
@@ -12751,6 +12755,9 @@
         var message = pv.querySelector('#esMsg').value;
         if (!subject) return showErr('Give the email a subject.');
         if (!message.trim()) return showErr('The email body is empty.');
+        if (message.indexOf('[Signing Link]') === -1) {
+          return showErr('The email body no longer has a [Signing Link] — the recipient would have no way to open the document. Add it back (e.g. in a link) before sending.');
+        }
         var doc = await buildProposalDocForSend(p, version.id);
         if (!doc) return showErr('Could not prepare the proposal. Open the proposal preview once, then try again.');
         var renderingIds = renderings.filter(function (rnd) { return rnd.included !== false; }).map(function (rnd) { return rnd.id; });
@@ -12826,7 +12833,10 @@
         if (i < 0 || j < 0 || j >= renderings.length) return;
         var tmp = renderings[i]; renderings[i] = renderings[j]; renderings[j] = tmp;
         renderRenderingsUI();
-        authed('/proposals/' + p.id + '/renderings/reorder', { method: 'PATCH', body: { orderedIds: renderings.map(function (r) { return r.id; }) } });
+        authed('/proposals/' + p.id + '/renderings/reorder', { method: 'PATCH', body: { orderedIds: renderings.map(function (r) { return r.id; }) } })
+          .then(function (r) {
+            if (!r.ok) { alert('Could not save the new order. Reload and try again.'); }
+          });
       }
       box.querySelectorAll('.esRndUp').forEach(function (b) {
         b.addEventListener('click', function () { move(b.closest('.esRndRow').getAttribute('data-id'), -1); });
@@ -12972,7 +12982,10 @@
       if (j < 0 || j >= ids.length) return;
       var tmp = ids[i]; ids[i] = ids[j]; ids[j] = tmp;
       return authed('/proposals/' + p.id + '/renderings/reorder', { method: 'PATCH', body: { orderedIds: ids } })
-        .then(function () { loadRenderings(p, user); });
+        .then(function (r) {
+          if (!r.ok) alert('Could not save the new order. Reload and try again.');
+          loadRenderings(p, user);
+        });
     }
     box.querySelectorAll('.rndUp').forEach(function (b) {
       b.addEventListener('click', function () { move(b.closest('.rndRow').getAttribute('data-id'), -1); });

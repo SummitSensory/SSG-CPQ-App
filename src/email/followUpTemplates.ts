@@ -19,6 +19,10 @@
  * is correct paragraph spacing and one bolded question per email.
  */
 
+import { esc, firstNameOf } from './textHelpers.js';
+
+export { firstNameOf };
+
 /** The ten as shipped. Body format: blank line between paragraphs, **the question**. */
 export const DEFAULT_FOLLOW_UP_TEMPLATES: FollowUpTemplateData[] = [
   {
@@ -160,18 +164,6 @@ export interface FollowUpTemplateData {
    */
   body: string;
 }
-
-const esc = (v: unknown): string =>
-  String(v ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-
-export const firstNameOf = (name: string | null | undefined): string =>
-  String(name ?? '')
-    .trim()
-    .split(/\s+/)[0] || 'there';
 
 /**
  * Substitute the placeholders a template may carry.

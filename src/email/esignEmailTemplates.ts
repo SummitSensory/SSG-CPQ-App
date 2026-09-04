@@ -15,6 +15,10 @@
  * created through the admin UI, same as the document templates it sits beside.
  */
 
+import { esc, firstNameOf } from './textHelpers.js';
+
+export { firstNameOf };
+
 export interface EsignEmailContext {
   /** Recipient's first name. Falls back to "there" rather than printing a blank. */
   firstName: string;
@@ -41,18 +45,6 @@ export interface RenderedEsignEmail {
   html: string;
 }
 
-const esc = (v: unknown): string =>
-  String(v ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-
-export const firstNameOf = (name: string | null | undefined): string =>
-  String(name ?? '')
-    .trim()
-    .split(/\s+/)[0] || 'there';
-
 export const ESIGN_EMAIL_PLACEHOLDERS = [
   { token: '[First Name]', means: 'The recipient’s first name' },
   { token: '[Customer]', means: 'The customer’s organization name' },
@@ -75,14 +67,19 @@ export const ESIGN_EMAIL_PLACEHOLDERS = [
  * belongs inside an `href="..."` written by the template, not as visible text.
  */
 function fill(text: string, ctx: EsignEmailContext): string {
-  return String(text ?? '')
-    .replace(/\[First Name\]/g, esc(ctx.firstName))
-    .replace(/\[Customer\]/g, esc(ctx.customerName ?? ''))
-    .replace(/\[Proposal Number\]/g, esc(ctx.proposalNumber ?? ''))
-    .replace(/\[Proposal\]/g, esc(ctx.proposalTitle ?? ''))
-    .replace(/\[Sender Full Name\]/g, esc(ctx.senderName ?? ctx.senderFirstName))
-    .replace(/\[Sender\]/g, esc(ctx.senderFirstName))
-    .replace(/\[Signing Link\]/g, ctx.signingLink);
+  return (
+    String(text ?? '')
+      .replace(/\[First Name\]/g, esc(ctx.firstName))
+      .replace(/\[Customer\]/g, esc(ctx.customerName ?? ''))
+      .replace(/\[Proposal Number\]/g, esc(ctx.proposalNumber ?? ''))
+      .replace(/\[Proposal\]/g, esc(ctx.proposalTitle ?? ''))
+      .replace(/\[Sender Full Name\]/g, esc(ctx.senderName ?? ctx.senderFirstName))
+      .replace(/\[Sender\]/g, esc(ctx.senderFirstName))
+      // A function replacer, not a string one — a future caller may pass a real,
+      // externally-sourced signing URL here, and a string replacement would
+      // misread a literal `$&`/`$1`/etc. in it as a regex replacement pattern.
+      .replace(/\[Signing Link\]/g, () => ctx.signingLink)
+  );
 }
 
 export function renderEsignEmail(

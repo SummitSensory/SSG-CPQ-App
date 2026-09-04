@@ -125,7 +125,10 @@ async function deliver(input: AlertInput): Promise<void> {
     `Time: ${new Date().toISOString()}`,
     stack ? `\n${stack}` : '',
     '',
-    'Repeats of this same fault are suppressed for an hour.',
+    // "fault" would be wrong on the business-event alerts (esign completion,
+    // countersign-needed) that reuse this same delivery path without an `err` —
+    // the dedupe itself is generic, so the wording has to be too.
+    'Repeats of this alert are suppressed for an hour.',
   ]
     .filter((l) => l !== undefined)
     .join('\n');
