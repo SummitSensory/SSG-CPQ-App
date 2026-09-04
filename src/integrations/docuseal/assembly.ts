@@ -34,6 +34,13 @@ export interface SignerSpec {
   order?: number;
   /** Ask for a printed title line as well as the signature. */
   titleField?: boolean;
+  /**
+   * A CC recipient who can see the document but is not asked to accept it —
+   * gets no signature block and no fields at all, which is what makes DocuSeal
+   * treat them as view-only rather than a signer. See the EsignSigner.viewOnly
+   * model comment for why this matters to completion, not just layout.
+   */
+  viewOnly?: boolean;
 }
 
 export interface AssemblyInput {
@@ -153,12 +160,26 @@ export function signaturePageHtml(input: AssemblyInput): string {
     input.acceptanceCopy ??
     'By signing below the client accepts this proposal, including the pricing, scope and any documents bound behind it, and authorizes Summit Sensory Gym to proceed.';
 
+  // Viewers get no block — a block would carry signature/date/name tags, and a
+  // tagged field is exactly what turns a DocuSeal submitter from a view-only
+  // CC recipient into a required signer. They're still named on the page, in
+  // words rather than fields, so the printed document itself shows who was
+  // copied even though nothing here asks them to sign.
+  const signers = input.signers.filter((s) => !s.viewOnly);
+  const viewers = input.signers.filter((s) => s.viewOnly);
+  const viewerLine = viewers.length
+    ? `<p style="font: 400 9.5pt/1.5 Georgia, 'Times New Roman', serif; color: #666; margin-top: 4px;">Copied for reference, not required to sign: ${escapeHtml(
+        viewers.map((v) => (v.name ? `${v.name} (${v.email})` : v.email)).join('; '),
+      )}.</p>`
+    : '';
+
   return `
   <section style="${PAGE_BREAK} padding-top: 8px;">
     <h2 style="font: 700 16pt/1.2 Georgia, 'Times New Roman', serif; margin: 0 0 4px;">Acceptance and signatures</h2>
     <table style="border-collapse: collapse; margin: 14px 0 20px;">${rows.join('')}</table>
     <p style="font: 400 10.5pt/1.55 Georgia, 'Times New Roman', serif; color: #333; max-width: 46em; text-wrap: pretty;">${escapeHtml(acceptance)}</p>
-    ${input.signers
+    ${viewerLine}
+    ${signers
       .slice()
       .sort((a, b) => (a.order ?? 1) - (b.order ?? 1))
       .map(signerBlock)
