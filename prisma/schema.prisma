@@ -2925,6 +2925,16 @@ model EsignEnvelope {
   voidedAt    DateTime?
   voidedById  String?
 
+  /// Set once the "customer signed, your signature is needed" staff alert has gone
+  /// out for this envelope's first transition into PARTIALLY_SIGNED. applyStatus
+  /// runs from both the webhook and the manual sync, so this is what stops the same
+  /// alert firing twice for one envelope.
+  countersignNotifiedAt DateTime?
+  /// Set once the signed document has been pushed to the monday deal row and the
+  /// "fully signed, please review" staff alert has gone out for this envelope's
+  /// completion. Same double-fire concern as countersignNotifiedAt.
+  completionNotifiedAt DateTime?
+
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt
   signers   EsignSigner[]

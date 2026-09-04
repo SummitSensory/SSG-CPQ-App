@@ -12404,6 +12404,21 @@
         return '<div class="muted" style="font-size:11.5px;padding:3px 0;">' +
           esc(fmtDateTime(ev.createdAt)) + ' — ' + esc(esignEventLabel(ev)) + '</div>';
       }).join('');
+      var countersignBanner = '';
+      if (envelope.status === 'PARTIALLY_SIGNED') {
+        var pendingSigners = (envelope.signers || []).filter(function (s) { return !s.viewOnly && s.status !== 'COMPLETED'; });
+        var mine = pendingSigners.filter(function (s) { return s.email && user.email && s.email.toLowerCase() === user.email.toLowerCase(); });
+        if (mine.length && mine[0].signingUrl) {
+          countersignBanner = '<div style="margin-top:12px;padding:12px 14px;background:#fff7e6;border:1px solid #e8c877;border-radius:6px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">' +
+            '<div style="font-size:13px;">The customer has signed — this proposal is waiting on <b>your</b> signature.</div>' +
+            '<a class="btn" href="' + esc(mine[0].signingUrl) + '" target="_blank" rel="noopener" style="width:auto;padding:8px 14px;">Sign now</a>' +
+            '</div>';
+        } else if (pendingSigners.length) {
+          countersignBanner = '<div style="margin-top:12px;padding:12px 14px;background:#fff7e6;border:1px solid #e8c877;border-radius:6px;font-size:13px;">' +
+            'The customer has signed — waiting on: ' + esc(pendingSigners.map(function (s) { return s.name || s.role; }).join(', ')) + '.' +
+            '</div>';
+        }
+      }
       box.innerHTML = '<div style="padding:16px 18px;">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">' +
         esignStatusChip(envelope.status) +
@@ -12412,6 +12427,7 @@
         (canWrite && live ? '<button class="link-btn" id="esignVoid" style="width:auto;padding:7px 12px;color:#9c3327;">Void</button>' : '') +
         (envelope.status === 'COMPLETED' ? '<button class="btn" id="esignDownload" style="width:auto;padding:7px 12px;">Download signed PDF</button>' : '') +
         '</div></div>' +
+        countersignBanner +
         '<div style="margin-top:12px;">' + signerRows + '</div>' +
         (eventRows ? '<div style="margin-top:10px;padding-top:8px;border-top:1px solid #eceef4;">' + eventRows + '</div>' : '') +
         (canWrite && !live ? '<div style="margin-top:14px;">' + sendBtn + '</div>' : '') +
