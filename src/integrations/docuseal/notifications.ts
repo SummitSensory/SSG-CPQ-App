@@ -245,8 +245,12 @@ export async function notifyPendingSigners(envelopeId: string): Promise<void> {
     // submission — this only trips if that response was somehow incomplete, in
     // which case the next sync/webhook retries with emailedAt still unset.
     if (!signer.signingUrl) continue;
-    const subject = envelope.subject.replace(/\[Signing Link\]/g, signer.signingUrl);
-    const html = envelope.message.replace(/\[Signing Link\]/g, signer.signingUrl);
+    // A function replacer, not a string one — signingUrl is DocuSeal's, not
+    // ours, and a string replacement would misread a literal `$&`/`$1`/etc. in
+    // it as a regex replacement pattern instead of splicing it in verbatim.
+    const signingUrl = signer.signingUrl;
+    const subject = envelope.subject.replace(/\[Signing Link\]/g, () => signingUrl);
+    const html = envelope.message.replace(/\[Signing Link\]/g, () => signingUrl);
     try {
       const sentFromUserId = await sendEsignEmailTo({
         actorId: envelope.sentById,
