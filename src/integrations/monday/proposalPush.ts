@@ -47,6 +47,10 @@ export const DEAL_COLUMNS = {
   file: 'file_mm5xt53s',
   /** Date column — the date this proposal stops being honoured. */
   expiration: 'date_mm5y5hxm',
+  /** File column, titled "Signed Proposal" on the board — the fully executed
+   *  e-signed document, pushed once both parties have signed. See
+   *  docuseal/notifications.ts. */
+  signedProposal: 'files3__1',
 } as const;
 
 const ENTITY = 'ProposalVersion';
