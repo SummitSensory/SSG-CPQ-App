@@ -18,8 +18,9 @@ import {
 import { buildPackageHtml, type AssemblyAttachment, type SignerSpec } from './assembly.js';
 import { envelopePath, putPdf } from './storage.js';
 import { notifyCountersignNeeded, notifyProposalCompleted } from './notifications.js';
-import { appendPdfDocuments } from '../../lib/pdfMerge.js';
+import { appendPdfDocuments, appendImagePages } from '../../lib/pdfMerge.js';
 import { resolveReferenceDocuments } from '../../proposals/referenceDocuments.js';
+import { resolveRenderings } from '../../lib/renderingStore.js';
 
 /**
  * Proposal e-signing.
@@ -152,6 +153,14 @@ export interface SendInput {
    * no separate save this could drift from.
    */
   referenceDocumentKeys?: string[];
+  /**
+   * ProposalRendering ids to bind in as trailing pages — design renderings the
+   * customer needs to see alongside what they're signing. In the order given,
+   * which is what lets a rep change page order at send time rather than being
+   * stuck with upload order. Land after the signature page and before reference
+   * documents: central, job-specific content ahead of generic boilerplate forms.
+   */
+  renderingIds?: string[];
   subject?: string;
   message?: string;
   filename?: string;
@@ -246,6 +255,21 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
   });
 
   let pdf = await renderPdf(html, { format: 'Letter' });
+  // Renderings first — central, job-specific content — then reference documents,
+  // which are generic boilerplate forms. Each rendering is merged individually,
+  // in the order given, rather than as two batched passes (all PDFs, then all
+  // images): a batched pass would silently reorder a mixed PDF/image selection.
+  const renderings = await resolveRenderings(version.proposal.id, input.renderingIds ?? []);
+  for (const rendering of renderings) {
+    pdf =
+      rendering.contentType === 'application/pdf'
+        ? await appendPdfDocuments(pdf, [rendering])
+        : await appendImagePages(pdf, [rendering]);
+  }
+  // Only the ones that actually resolved and merged — resolveRenderings drops a
+  // rendering that failed to fetch, and the audit trail should answer for what
+  // actually went out, not what was asked for.
+  const mergedRenderingIds = renderings.map((r) => r.id);
   const referenceDocs = await resolveReferenceDocuments(input.referenceDocumentKeys ?? []);
   // Merged in before the hash is taken, so packageSha256 answers for the document as
   // it actually went out — pages and all — not just the HTML half of it.
@@ -263,6 +287,7 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
       templateKey: template?.key ?? null,
       attachments: attachments.map((a) => a.key) as Prisma.InputJsonValue,
       referenceDocuments: (input.referenceDocumentKeys ?? []) as Prisma.InputJsonValue,
+      renderings: mergedRenderingIds as Prisma.InputJsonValue,
       status: 'DRAFT',
       subject: input.subject ?? null,
       message: input.message ?? null,
@@ -363,6 +388,7 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
         envelopeId: envelope.id,
         templateKey: template?.key ?? null,
         attachments: attachments.map((a) => a.key),
+        renderings: mergedRenderingIds,
         signers: signers.map((s) => s.email),
         sha256,
       },

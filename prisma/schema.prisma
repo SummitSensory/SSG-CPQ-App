@@ -1112,6 +1112,7 @@ model Proposal {
   freightRfqs    FreightRfq[]
   freightTrueUps FreightTrueUp[]
   freightEntries FreightEntry[]
+  renderings     ProposalRendering[]
 
   @@index([organizationId])
   @@index([opportunityId])
@@ -1155,6 +1156,35 @@ model ProposalVersion {
   @@index([proposalId])
   @@index([status])
   @@index([legalSnapshotId])
+}
+
+/// A design rendering (a CAD export, a photorealistic render, a scanned drawing)
+/// bound to a proposal. Deliberately attached to the Proposal, not a specific
+/// ProposalVersion: a rendering is job-specific supporting material a rep gathers
+/// over the life of a deal, not part of the priced/scoped content a released
+/// version freezes — see the Data model note in CLAUDE.md.
+///
+/// Uploaded client-to-blob directly (see src/lib/renderingStore.ts) rather than
+/// through the server, because these routinely run past the ~4.5 MB Vercel
+/// function body limit that every other upload path in this repo is bounded by.
+model ProposalRendering {
+  id          String   @id @default(cuid())
+  proposalId  String
+  proposal    Proposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  filename    String
+  contentType String
+  byteSize    Int
+  url         String
+  pathname    String
+  /// Where this rendering falls among the others when they are merged as
+  /// trailing pages onto a sent document — see renderingStore.ts / assembly.ts.
+  /// Lower sorts first. Reassigned as a dense sequence on every reorder, so gaps
+  /// never accumulate and a new upload can simply take the next integer.
+  sortOrder    Int      @default(0)
+  uploadedById String
+  createdAt    DateTime @default(now())
+
+  @@index([proposalId, sortOrder])
 }
 
 model ProposalStatusEvent {
@@ -2897,6 +2927,10 @@ model EsignEnvelope {
   /// the same audit answer as `attachments`, for uploaded files rather than authored
   /// text. See src/lib/pdfMerge.ts.
   referenceDocuments Json?
+  /// ProposalRendering ids merged in as trailing pages, in the order sent — the
+  /// same audit answer as `attachments`/`referenceDocuments`, for design
+  /// renderings. See src/lib/renderingStore.ts.
+  renderings Json?
 
   status     EsignStatus @default(DRAFT)
   subject    String?
