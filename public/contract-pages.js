@@ -598,15 +598,23 @@
      * Name is prefilled and Date is left blank on purpose. Who is signing is known when
      * the proposal is written; WHEN they sign is not, and printing a date beside an
      * unsigned rule would state something that has not happened yet.
+     *
+     * `idPrefix`, when given, marks the By:/Date: rules with stable ids
+     * (`<idPrefix>Signature`, `<idPrefix>Date`) — empty here, exactly as
+     * always, and where the e-sign package places this signer's actual
+     * fields (see injectSignatureFields in
+     * src/integrations/docuseal/assembly.ts).
      */
-    var sigBlock = function (role, name, entity, wantTitle) {
-      var line = function (label, value, depth) {
+    var sigBlock = function (role, name, entity, wantTitle, idPrefix) {
+      var line = function (label, value, depth, id) {
         return (
           '<div style="display:flex;gap:6px;align-items:baseline;margin-top:9px;">' +
           '<div style="flex:none;">' +
           label +
           '</div>' +
-          '<div style="flex:1;border-bottom:1px solid #20241f;' +
+          '<div' +
+          (id ? ' id="' + id + '"' : '') +
+          ' style="flex:1;border-bottom:1px solid #20241f;' +
           (depth ? 'height:' + depth + 'px;' : 'padding-bottom:1px;') +
           '">' +
           (value ? esc(value) : '') +
@@ -621,12 +629,12 @@
         '<div style="font-weight:700;">' +
         (entity ? esc(entity) : '&nbsp;') +
         '</div>' +
-        line('By:', '', 46) +
+        line('By:', '', 46, idPrefix ? idPrefix + 'Signature' : null) +
         line('Name:', name) +
         // A person signs FOR an organisation, and their authority to do so is their
         // title. Off by default because the wording that has always printed omitted it.
         (wantTitle ? line('Title:', '') : '') +
-        line('Date:', '') +
+        line('Date:', '', null, idPrefix ? idPrefix + 'Date' : null) +
         '</div>'
       );
     };
@@ -676,8 +684,14 @@
           '</div>'
         : '') +
       '<div style="display:flex;gap:44px;margin-top:12px;break-inside:avoid;page-break-inside:avoid;">' +
-      sigBlock(esc(sig.leftRole), m.contactName || '', company, sig.title) +
-      sigBlock(esc(sig.rightRole), u.name || '', 'Summit Sensory Gym', sig.title) +
+      sigBlock(esc(sig.leftRole), m.contactName || '', company, sig.title, 'ssgSigAckCustomer') +
+      sigBlock(
+        esc(sig.rightRole),
+        u.name || '',
+        'Summit Sensory Gym',
+        sig.title,
+        'ssgSigAckSummit',
+      ) +
       '</div>' +
       '</div>'
     );

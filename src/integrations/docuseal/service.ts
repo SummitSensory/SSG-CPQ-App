@@ -16,7 +16,17 @@ import {
   getSubmission,
   type DocusealSubmitter,
 } from './client.js';
-import { buildPackageHtml, type AssemblyAttachment, type SignerSpec } from './assembly.js';
+import {
+  buildPackageHtml,
+  CUSTOMER_ROLE,
+  SUMMIT_ROLE,
+  type AssemblyAttachment,
+  type SignerSpec,
+} from './assembly.js';
+// Re-exported: esign.ts and others import these role names from this module,
+// but Customer/Summit are the document's own concept (assembly.ts decides
+// which role's fields land where), not this file's.
+export { CUSTOMER_ROLE, SUMMIT_ROLE };
 import { envelopePath, putPdf } from './storage.js';
 import {
   notifyCountersignNeeded,
@@ -57,9 +67,6 @@ const LIVE: Array<'DRAFT' | 'SENT' | 'VIEWED' | 'PARTIALLY_SIGNED'> = [
   'VIEWED',
   'PARTIALLY_SIGNED',
 ];
-
-export const SUMMIT_ROLE = 'Summit';
-export const CUSTOMER_ROLE = 'Customer';
 
 /* -------------------------------------------------------------------------- */
 /* Template resolution                                                        */

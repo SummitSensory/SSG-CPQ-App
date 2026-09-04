@@ -9,16 +9,25 @@
  *
  * Composition order:
  *
- *   proposal body  →  attachment documents (in template sortOrder)  →  signature page
+ *   proposal body (fields placed in-line — see injectSignatureFields)
+ *     →  attachment documents (in template sortOrder)
+ *     →  fallback signature page, ONLY for whoever injectSignatureFields
+ *        could not place — a signer beyond Customer/Summit, or a template
+ *        with neither the Acceptance page nor the Acknowledgment
  *
- * The signature page carries DocuSeal TEXT TAGS. A tag is ordinary text in the PDF
- * that DocuSeal recognises and turns into a field:
+ * A field is DocuSeal TEXT TAGS — ordinary text in the PDF that DocuSeal
+ * recognises and turns into a fillable field:
  *
  *   {{Customer Signature;role=Customer;type=signature}}
  *
- * Field placement therefore lives in this layout rather than in stored coordinates,
- * which is what keeps a template edit from silently moving a signature box off the
- * page.
+ * Field placement therefore lives in this layout rather than in stored
+ * coordinates, which is what keeps a template edit from silently moving a
+ * signature box off the page. The Customer and Summit roles get their fields
+ * placed directly at the blank signature lines the proposal already prints —
+ * the Acceptance page and the Product Use, Safety & Responsibility
+ * Acknowledgment — rather than only on a page generated for the send; a
+ * customer can only actually sign where a real field exists, and a printed
+ * blank line with no field behind it is worse than no line at all.
  */
 
 export interface AssemblyAttachment {
@@ -102,6 +111,114 @@ function tag(name: string, role: string, type: string, opts: { required?: boolea
   const parts = [name, `role=${role}`, `type=${type}`];
   if (opts.required === false) parts.push('required=false');
   return `{{${parts.join(';')}}}`;
+}
+
+/**
+ * The two roles the send modal offers by default (see `esignRowHtml` in
+ * app.js). A rep can rename either — these are only the names used to WORK
+ * OUT which of the (possibly reordered, possibly renamed) signers plays which
+ * part in the document, not a constraint on what actually gets sent.
+ */
+export const CUSTOMER_ROLE = 'Customer';
+export const SUMMIT_ROLE = 'Summit';
+
+/**
+ * Where a signer's fields land directly in the proposal's own pages — the
+ * ids are added once, in public/proposal-document.js (Acceptance) and
+ * public/contract-pages.js (the Product Use, Safety & Responsibility
+ * Acknowledgment) — rather than only on a page generated for the send.
+ *
+ * Distinct field names per slot rather than one shared field repeated across
+ * both pages: accepting the commercial terms and acknowledging the safety
+ * terms are two different acts of consent, and DocuSeal should capture them
+ * as two fields, not silently treat a signature on one page as covering both.
+ */
+interface SignatureSlot {
+  sigId: string;
+  dateId: string;
+  label: string;
+}
+const CUSTOMER_SLOTS: SignatureSlot[] = [
+  { sigId: 'ssgSigAcceptanceSignature', dateId: 'ssgSigAcceptanceDate', label: 'Customer' },
+  {
+    sigId: 'ssgSigAckCustomerSignature',
+    dateId: 'ssgSigAckCustomerDate',
+    label: 'Customer Acknowledgment',
+  },
+];
+const SUMMIT_SLOTS: SignatureSlot[] = [
+  {
+    sigId: 'ssgSigAckSummitSignature',
+    dateId: 'ssgSigAckSummitDate',
+    label: 'Summit Acknowledgment',
+  },
+];
+
+/**
+ * Fills every occurrence of an empty `<div id="...">` — global, not just the
+ * first, because an administrator can add a second ARTICLES-kind legal
+ * document (see src/routes/legalDocuments.ts) that would render the same
+ * `sigBlock` markup, ids included, a second time.
+ */
+function fillSlot(
+  html: string,
+  id: string,
+  replacement: string,
+): { html: string; placed: boolean } {
+  const re = new RegExp(`(<div id="${id}"[^>]*>)(</div>)`, 'g');
+  let placed = false;
+  const out = html.replace(re, (_match, open: string, close: string) => {
+    placed = true;
+    return `${open}${replacement}${close}`;
+  });
+  return { html: out, placed };
+}
+
+/**
+ * Places each signer's actual signature/date fields at the specific spots in
+ * the proposal where the document already prints a blank signature line,
+ * instead of on a separately generated page.
+ *
+ * Matches by role, resolved the same way `firstNameOfContact` already does
+ * for the email greeting: the signer explicitly marked Customer/Summit if
+ * there is one, otherwise a positional fallback — a rep can rename or
+ * reorder the two rows the send modal starts with. Returns which roles
+ * actually found a slot in this document, so the caller knows who still
+ * needs the fallback page: a signer beyond Customer/Summit, or a proposal
+ * template that carries neither the Acceptance page nor the Acknowledgment.
+ */
+function injectSignatureFields(
+  bodyHtml: string,
+  signers: SignerSpec[],
+): { html: string; placedRoles: Set<string> } {
+  const nonViewers = signers.filter((s) => !s.viewOnly);
+  const customer = nonViewers.find((s) => s.role === CUSTOMER_ROLE) ?? nonViewers[0];
+  const summit =
+    nonViewers.find((s) => s.role === SUMMIT_ROLE && s !== customer) ??
+    nonViewers.find((s) => s !== customer);
+
+  let html = bodyHtml;
+  const placedRoles = new Set<string>();
+
+  const place = (signer: SignerSpec | undefined, slots: SignatureSlot[]): void => {
+    if (!signer) return;
+    for (const slot of slots) {
+      const sig = fillSlot(
+        html,
+        slot.sigId,
+        tag(`${slot.label} Signature`, signer.role, 'signature'),
+      );
+      html = sig.html;
+      const date = fillSlot(html, slot.dateId, tag(`${slot.label} Date`, signer.role, 'date'));
+      html = date.html;
+      if (sig.placed || date.placed) placedRoles.add(signer.role);
+    }
+  };
+
+  place(customer, CUSTOMER_SLOTS);
+  place(summit, SUMMIT_SLOTS);
+
+  return { html, placedRoles };
 }
 
 /** One signer's block: signature, printed name, optional title, date. */
@@ -238,6 +355,15 @@ export function buildPackageHtml(input: AssemblyInput): string {
     };
   });
 
+  // Field placement first: everyone whose role matches a real slot in the
+  // proposal's own pages signs there. Only whoever is left — a signer beyond
+  // Customer/Summit, or a proposal template carrying neither the Acceptance
+  // page nor the Acknowledgment — gets a page generated for them, and that
+  // page is skipped entirely when nobody needs it.
+  const { html: proposalBody, placedRoles } = injectSignatureFields(proposal.body, input.signers);
+  const unplacedSigners = input.signers.filter((s) => s.viewOnly || !placedRoles.has(s.role));
+  const needsFallbackPage = unplacedSigners.some((s) => !s.viewOnly);
+
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -253,10 +379,10 @@ ${proposal.styles ? `<style>${proposal.styles}</style>` : ''}
 ${attachments.map((a) => (a.styles ? `<style>${a.styles}</style>` : '')).join('\n')}
 </head>
 <body>
-<div id="ssgProposalBody">${proposal.body}</div>
+<div id="ssgProposalBody">${proposalBody}</div>
 ${trailingBreakFixScript()}
 ${attachments.map((a) => a.body).join('\n')}
-${signaturePageHtml(input)}
+${needsFallbackPage ? signaturePageHtml({ ...input, signers: unplacedSigners }) : ''}
 </body>
 </html>`;
 }

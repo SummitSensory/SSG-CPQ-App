@@ -61,6 +61,114 @@ describe('buildPackageHtml', () => {
   });
 });
 
+// A stand-in for the real proposal-document.js + contract-pages.js output —
+// the same three empty slots those files mark with ids, nothing else.
+const PROPOSAL_WITH_SIGNATURE_SLOTS = `<!doctype html><html><body>
+<div class="ssg-sheet">
+  Acceptance
+  <div id="ssgSigAcceptanceSignature"></div>
+  <div id="ssgSigAcceptanceDate"></div>
+</div>
+<div class="ssg-sheet">
+  Acknowledgment
+  <div id="ssgSigAckCustomerSignature"></div>
+  <div id="ssgSigAckCustomerDate"></div>
+  <div id="ssgSigAckSummitSignature"></div>
+  <div id="ssgSigAckSummitDate"></div>
+</div>
+</body></html>`;
+
+describe('buildPackageHtml — field placement', () => {
+  it('places Customer and Summit fields at their real spots in the document and never generates a fallback page for either', () => {
+    const html = buildPackageHtml({
+      proposalHtml: PROPOSAL_WITH_SIGNATURE_SLOTS,
+      signers: [
+        { role: 'Customer', name: 'Jane Doe', email: 'jane@example.com' },
+        { role: 'Summit', name: 'Bryan Shepherd', email: 'bryan@summitsensory.com' },
+      ],
+      proposalNumber: 'P-2026-000001',
+      totalMinor: 100000,
+    });
+
+    expect(html).toContain(
+      '<div id="ssgSigAcceptanceSignature">{{Customer Signature;role=Customer;type=signature}}</div>',
+    );
+    expect(html).toContain(
+      '<div id="ssgSigAcceptanceDate">{{Customer Date;role=Customer;type=date}}</div>',
+    );
+    expect(html).toContain(
+      '<div id="ssgSigAckCustomerSignature">{{Customer Acknowledgment Signature;role=Customer;type=signature}}</div>',
+    );
+    expect(html).toContain(
+      '<div id="ssgSigAckSummitSignature">{{Summit Acknowledgment Signature;role=Summit;type=signature}}</div>',
+    );
+    // No generated "Acceptance and signatures" page at all — both signers found
+    // a real spot, so there is nothing left for it to carry.
+    expect(html).not.toContain('Acceptance and signatures');
+  });
+
+  it('falls back to a generated page only for a signer who never finds a real slot', () => {
+    const html = buildPackageHtml({
+      proposalHtml: PROPOSAL_WITH_SIGNATURE_SLOTS,
+      signers: [
+        { role: 'Customer', name: 'Jane Doe', email: 'jane@example.com' },
+        { role: 'Summit', name: 'Bryan Shepherd', email: 'bryan@summitsensory.com' },
+        { role: 'Witness', name: 'Notary Public', email: 'notary@example.com' },
+      ],
+      proposalNumber: 'P-2026-000001',
+    });
+
+    expect(html).toContain('Acceptance and signatures');
+    // The fallback page carries only the signer that was not placed, not a
+    // redundant copy of Customer/Summit who already signed in the document.
+    expect(html).toContain('Witness');
+    expect(html).toContain('{{Witness Signature;role=Witness;type=signature}}');
+    const customerFallbackTag = '{{Customer Signature;role=Customer;type=signature}}';
+    expect(html.split(customerFallbackTag).length - 1).toBe(1); // only in the Acceptance slot, not duplicated on the fallback page
+  });
+
+  it('resolves Customer/Summit positionally when a rep renames the roles', () => {
+    const html = buildPackageHtml({
+      proposalHtml: PROPOSAL_WITH_SIGNATURE_SLOTS,
+      signers: [
+        { role: 'Client', name: 'Jane Doe', email: 'jane@example.com' },
+        { role: 'Vendor', name: 'Bryan Shepherd', email: 'bryan@summitsensory.com' },
+      ],
+      proposalNumber: 'P-2026-000001',
+    });
+    expect(html).toContain(
+      '<div id="ssgSigAcceptanceSignature">{{Customer Signature;role=Client;type=signature}}</div>',
+    );
+    expect(html).toContain(
+      '<div id="ssgSigAckSummitSignature">{{Summit Acknowledgment Signature;role=Vendor;type=signature}}</div>',
+    );
+    expect(html).not.toContain('Acceptance and signatures');
+  });
+
+  it('does not generate a fallback page for a lone view-only CC recipient once the real signers are placed', () => {
+    const html = buildPackageHtml({
+      proposalHtml: PROPOSAL_WITH_SIGNATURE_SLOTS,
+      signers: [
+        { role: 'Customer', name: 'Jane Doe', email: 'jane@example.com' },
+        { role: 'Summit', name: 'Bryan Shepherd', email: 'bryan@summitsensory.com' },
+        { role: 'CC', name: 'Ops', email: 'ops@example.com', viewOnly: true },
+      ],
+      proposalNumber: 'P-2026-000001',
+    });
+    expect(html).not.toContain('Acceptance and signatures');
+  });
+
+  it('falls back for everyone when the proposal template has neither known slot', () => {
+    const html = buildPackageHtml({
+      proposalHtml: PROPOSAL_WITH_TRAILING_BREAK, // no signature ids at all
+      signers: [{ role: 'Customer', name: 'Jane Doe', email: 'jane@example.com' }],
+      proposalNumber: 'P-2026-000001',
+    });
+    expect(html).toContain('Acceptance and signatures');
+    expect(html).toContain('{{Customer Signature;role=Customer;type=signature}}');
+  });
+});
+
 describe('signaturePageHtml', () => {
   it('prints the total it is given, in dollars', () => {
     const html = signaturePageHtml({
