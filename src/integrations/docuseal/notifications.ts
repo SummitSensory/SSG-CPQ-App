@@ -1,11 +1,16 @@
 import { prisma } from '../../lib/prisma.js';
 import { logger } from '../../lib/logger.js';
 import { sendAlert } from '../../lib/alerts.js';
-import { isMondayPushConfigured } from '../../config/env.js';
+import { isMondayPushConfigured, env } from '../../config/env.js';
 import { uploadFileToColumn } from '../monday/client.js';
 import { dealItemIdFor } from '../monday/dealLink.js';
 import { DEAL_COLUMNS } from '../monday/proposalPush.js';
 import { getFile } from '../../lib/fileStore.js';
+import {
+  sendOutlookMail,
+  OutlookNotConnectedError,
+  OutlookSendNotGrantedError,
+} from '../microsoft/graph.js';
 
 /**
  * What happens after a signature request reaches a milestone.
@@ -162,4 +167,105 @@ export async function notifyProposalCompleted(envelopeId: string): Promise<void>
     fingerprint: `esign-completed-${envelopeId}`,
     context: { proposalNumber: envelope.proposal.number, envelopeId },
   });
+}
+
+/**
+ * Send the customer-facing "please review and sign" email — from the acting
+ * rep's own connected Outlook mailbox, falling back to
+ * ESIGN_EMAIL_FALLBACK_SENDER_EMAIL's mailbox when the rep has none. Returns the
+ * id of whichever user's mailbox actually sent it, for emailSentFromUserId.
+ */
+async function sendEsignEmailTo(input: {
+  actorId: string;
+  to: { email: string; name?: string | null };
+  subject: string;
+  html: string;
+}): Promise<string> {
+  try {
+    await sendOutlookMail({
+      userId: input.actorId,
+      to: [input.to],
+      subject: input.subject,
+      html: input.html,
+    });
+    return input.actorId;
+  } catch (err) {
+    if (!(err instanceof OutlookNotConnectedError || err instanceof OutlookSendNotGrantedError)) {
+      throw err;
+    }
+    const fallback = await prisma.user.findUnique({
+      where: { email: env.ESIGN_EMAIL_FALLBACK_SENDER_EMAIL },
+      select: { id: true },
+    });
+    // No fallback account, or the fallback IS the rep who just failed — surface
+    // the original error rather than retrying the same failure.
+    if (!fallback || fallback.id === input.actorId) throw err;
+    await sendOutlookMail({
+      userId: fallback.id,
+      to: [input.to],
+      subject: input.subject,
+      html: input.html,
+    });
+    return fallback.id;
+  }
+}
+
+/**
+ * Email whoever's turn it is right now: every view-only CC (no turn concept, they
+ * are told about the request once, at send time) and the required signer(s) at
+ * the lowest order that is still PENDING — the ones DocuSeal would have emailed
+ * next had send_email been true.
+ *
+ * Idempotent via each signer's own `emailedAt` — safe to call from both the
+ * initial send and every `applyStatus` run, which is what lets a signer's
+ * completion unlock the next order tier's email without any status-transition
+ * bookkeeping here.
+ */
+export async function notifyPendingSigners(envelopeId: string): Promise<void> {
+  const envelope = await prisma.esignEnvelope.findUnique({
+    where: { id: envelopeId },
+    include: { signers: true },
+  });
+  if (!envelope || !envelope.sentById || !envelope.subject || !envelope.message) return;
+  if (envelope.status === 'VOIDED' || envelope.status === 'FAILED' || envelope.status === 'DRAFT') {
+    return;
+  }
+
+  const requiredPending = envelope.signers.filter(
+    (s) => !s.viewOnly && s.status === 'PENDING' && !s.emailedAt,
+  );
+  const viewers = envelope.signers.filter((s) => s.viewOnly && !s.emailedAt);
+  if (!requiredPending.length && !viewers.length) return;
+
+  const minOrder = requiredPending.length ? Math.min(...requiredPending.map((s) => s.order)) : null;
+  const due = [...requiredPending.filter((s) => s.order === minOrder), ...viewers];
+
+  for (const signer of due) {
+    // DocuSeal creates the submitter and its link synchronously with the
+    // submission — this only trips if that response was somehow incomplete, in
+    // which case the next sync/webhook retries with emailedAt still unset.
+    if (!signer.signingUrl) continue;
+    const subject = envelope.subject.replace(/\[Signing Link\]/g, signer.signingUrl);
+    const html = envelope.message.replace(/\[Signing Link\]/g, signer.signingUrl);
+    try {
+      const sentFromUserId = await sendEsignEmailTo({
+        actorId: envelope.sentById,
+        to: { email: signer.email, name: signer.name },
+        subject,
+        html,
+      });
+      await prisma.$transaction([
+        prisma.esignSigner.update({ where: { id: signer.id }, data: { emailedAt: new Date() } }),
+        prisma.esignEnvelope.update({
+          where: { id: envelopeId },
+          data: { emailSentFromUserId: sentFromUserId },
+        }),
+      ]);
+    } catch (err) {
+      logger.error(
+        { err, envelopeId, signerId: signer.id },
+        'esign: could not email signer their turn',
+      );
+    }
+  }
 }

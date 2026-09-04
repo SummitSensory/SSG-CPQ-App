@@ -17,10 +17,19 @@ import {
 } from './client.js';
 import { buildPackageHtml, type AssemblyAttachment, type SignerSpec } from './assembly.js';
 import { envelopePath, putPdf } from './storage.js';
-import { notifyCountersignNeeded, notifyProposalCompleted } from './notifications.js';
+import {
+  notifyCountersignNeeded,
+  notifyProposalCompleted,
+  notifyPendingSigners,
+} from './notifications.js';
 import { appendPdfDocuments, appendImagePages } from '../../lib/pdfMerge.js';
 import { resolveReferenceDocuments } from '../../proposals/referenceDocuments.js';
 import { resolveRenderings } from '../../lib/renderingStore.js';
+import {
+  renderEsignEmail,
+  firstNameOf,
+  type EsignEmailTemplateData,
+} from '../../email/esignEmailTemplates.js';
 
 /**
  * Proposal e-signing.
@@ -89,6 +98,49 @@ export async function resolveProposalTemplate(input: {
 
   const specific = candidates.find((t) => t.productLineIds.some((id) => lineIds.has(id)));
   return specific ?? candidates.find((t) => t.productLineIds.length === 0) ?? candidates[0]!;
+}
+
+/**
+ * Which of the ~10 "please sign this" emails should go out with this proposal.
+ *
+ * Same rule as resolveProposalTemplate — auto-pick by product line, explicit
+ * `emailTemplateKey` wins, empty-productLineIds is the fallback — but this is an
+ * independent list: a rep can pair a Summit Flex document template with a
+ * hand-picked email, or vice versa.
+ */
+export async function resolveEmailTemplate(input: {
+  items: unknown;
+  emailTemplateKey?: string;
+}): Promise<(EsignEmailTemplateData & { id: string }) | null> {
+  if (input.emailTemplateKey) {
+    const picked = await prisma.esignEmailTemplate.findUnique({
+      where: { key: input.emailTemplateKey },
+    });
+    if (!picked)
+      throw new ValidationError(`No signing email with the key “${input.emailTemplateKey}”.`);
+    if (!picked.active)
+      throw new ValidationError(`The signing email “${picked.name}” is switched off.`);
+    return picked;
+  }
+
+  const lineIds = await productLineIdsFor(input.items);
+  const candidates = await prisma.esignEmailTemplate.findMany({
+    where: { active: true },
+    orderBy: [{ sortOrder: 'asc' }, { key: 'asc' }],
+  });
+  if (!candidates.length) return null;
+
+  const specific = candidates.find((t) => t.productLineIds.some((id) => lineIds.has(id)));
+  return specific ?? candidates.find((t) => t.productLineIds.length === 0) ?? candidates[0]!;
+}
+
+/** The customer's own first name for the email greeting — the first non-view-only
+ *  signer with the Customer role, or just the first non-view-only signer. */
+function firstNameOfContact(signers: SignerSpec[]): string {
+  const primary =
+    signers.find((s) => !s.viewOnly && s.role === CUSTOMER_ROLE) ??
+    signers.find((s) => !s.viewOnly);
+  return firstNameOf(primary?.name);
 }
 
 /** Product lines represented on a version, read through the products it prices. */
@@ -161,6 +213,14 @@ export interface SendInput {
    * documents: central, job-specific content ahead of generic boilerplate forms.
    */
   renderingIds?: string[];
+  emailTemplateKey?: string;
+  /**
+   * The rep's final wording for the "please sign this" email, as edited in the
+   * send preview — defaults to the resolved template's own rendering when
+   * omitted. Both may still contain the literal token `[Signing Link]`: it is
+   * filled in per recipient, not here, because each signer gets their own
+   * DocuSeal URL. See notifyPendingSigners in notifications.ts.
+   */
   subject?: string;
   message?: string;
   filename?: string;
@@ -239,6 +299,34 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
     templateKey: input.templateKey,
   });
   const attachments = await resolveAttachments({ keys: input.attachmentKeys });
+  const emailTemplate = await resolveEmailTemplate({
+    items: version.items,
+    emailTemplateKey: input.emailTemplateKey,
+  });
+  const sender = await prisma.user.findUnique({
+    where: { id: input.actorId },
+    select: { name: true },
+  });
+  // The rep's edit wins outright when given; otherwise the resolved template is
+  // rendered here so an envelope always has a full email, even with no override
+  // and no email template configured yet (falls back to a bare, functional note).
+  // `[Signing Link]` is deliberately left in place — see notifyPendingSigners.
+  const defaultEmail = emailTemplate
+    ? renderEsignEmail(emailTemplate, {
+        firstName: firstNameOfContact(input.signers),
+        senderFirstName: firstNameOf(sender?.name),
+        senderName: sender?.name ?? undefined,
+        customerName: org?.name,
+        proposalNumber: version.proposal.number,
+        proposalTitle: version.proposal.title ?? undefined,
+        signingLink: '[Signing Link]',
+      })
+    : {
+        subject: `${version.proposal.number} — please review and sign`,
+        html: `<p>Please review and sign the attached proposal.</p><p><a href="[Signing Link]">Review &amp; sign</a></p>`,
+      };
+  const emailSubject = input.subject?.trim() || defaultEmail.subject;
+  const emailHtml = input.message?.trim() || defaultEmail.html;
 
   // Signers are ordered so the customer signs first and we countersign after —
   // countersigning a document the customer has not signed is backwards.
@@ -285,12 +373,14 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
       versionId: version.id,
       templateId: template?.id ?? null,
       templateKey: template?.key ?? null,
+      emailTemplateId: emailTemplate?.id ?? null,
+      emailTemplateKey: emailTemplate?.key ?? null,
       attachments: attachments.map((a) => a.key) as Prisma.InputJsonValue,
       referenceDocuments: (input.referenceDocumentKeys ?? []) as Prisma.InputJsonValue,
       renderings: mergedRenderingIds as Prisma.InputJsonValue,
       status: 'DRAFT',
-      subject: input.subject ?? null,
-      message: input.message ?? null,
+      subject: emailSubject,
+      message: emailHtml,
       packageSha256: sha256,
       packageBytes: pdf.length,
       sentById: input.actorId,
@@ -324,13 +414,12 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
       folderName: env.DOCUSEAL_FOLDER || undefined,
     });
 
+    // DocuSeal never emails anyone — the CRM does, from the rep's own mailbox, once
+    // the submission (and each signer's signingUrl) exists. See
+    // notifyPendingSigners below.
     const submitters = await createSubmission({
       templateId: docTemplate.id,
-      sendEmail: env.DOCUSEAL_SEND_EMAIL,
-      message:
-        input.subject || input.message
-          ? { subject: input.subject, body: input.message }
-          : undefined,
+      sendEmail: false,
       submitters: signers.map((s) => ({
         role: s.role,
         email: s.email,
@@ -397,6 +486,13 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
     logger.info(
       { envelopeId: envelope.id, submissionId: updated.docusealSubmissionId },
       'esign: sent',
+    );
+    // Emails whoever's turn it is right now — the first signer(s) in order, and
+    // every view-only CC. Best-effort: a failed email must not undo a send that
+    // DocuSeal already has, and "Refresh status" or the next webhook retries it
+    // (emailedAt is unset, so it is still due).
+    await notifyPendingSigners(envelope.id).catch((err) =>
+      logger.error({ err, envelopeId: envelope.id }, 'esign: initial signer email failed'),
     );
     return {
       envelopeId: envelope.id,
@@ -519,6 +615,13 @@ export async function applyStatus(
         : {}),
     },
   });
+
+  // Unconditional, unlike the two below: a signer completing their turn is what
+  // makes the next order tier current, and notifyPendingSigners' own emailedAt
+  // guard is what keeps this a no-op on every other status change.
+  await notifyPendingSigners(envelopeId).catch((err) =>
+    logger.error({ err, envelopeId }, 'esign: signer email failed'),
+  );
 
   // Fired after the status write above, so a failed alert or monday push can
   // never leave the envelope's own status update in doubt.

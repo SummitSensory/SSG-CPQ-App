@@ -11781,6 +11781,166 @@
     prev();
   }
 
+  /* --- Proposal e-sign emails: the ~10 "please sign this" templates --- */
+  var esetCache = null;
+  var esetProductLines = [];
+  var ESET_PLACEHOLDERS_FALLBACK = [
+    { token: '[First Name]', means: 'The recipient’s first name' },
+    { token: '[Customer]', means: 'The customer’s organization name' },
+    { token: '[Proposal Number]', means: 'e.g. P-2026-000063' },
+    { token: '[Proposal]', means: 'The proposal title' },
+    { token: '[Sender]', means: 'Your own first name' },
+    { token: '[Sender Full Name]', means: 'Your own full name' },
+    { token: '[Signing Link]', means: 'The link the recipient opens — use it inside an href' },
+  ];
+  // Mirrors SAMPLE_ESIGN_EMAIL_CONTEXT (src/email/esignEmailTemplates.ts) so the
+  // live preview here matches what the server's own preview endpoint renders.
+  var ESET_SAMPLE = {
+    '[First Name]': 'Emily',
+    '[Customer]': 'Uniquely Yours Specialized Care',
+    '[Proposal Number]': 'P-2026-000063',
+    '[Proposal]': 'Comprehensive Sensory Therapy Gym',
+    '[Sender]': 'Bryan',
+    '[Sender Full Name]': 'Bryan Shepherd',
+    '[Signing Link]': 'https://docuseal.com/s/sample',
+  };
+  function esetFillSample(text) {
+    var out = String(text || '');
+    Object.keys(ESET_SAMPLE).forEach(function (token) {
+      out = out.split(token).join(ESET_SAMPLE[token]);
+    });
+    return out;
+  }
+
+  async function loadEsignEmailTemplates() {
+    var box = document.getElementById('esetList'); if (!box) return;
+    try {
+      var r = await authed('/esign/email-templates/preview');
+      if (!r.ok) { box.innerHTML = '<div class="err">Could not load the templates (' + r.status + ').</div>'; return; }
+      esetCache = await r.json();
+    } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; return; }
+    try {
+      var rl = await authed('/catalog/product-lines');
+      if (rl.ok) esetProductLines = await rl.json();
+    } catch (e) {}
+    try {
+      renderEsignEmailTemplates(box);
+    } catch (e) {
+      console.error('esign email templates: render failed', e);
+      box.innerHTML = '<div class="err">The templates loaded but this list could not be drawn. ' + esc(String(e && e.message ? e.message : e)) + '</div>';
+    }
+  }
+
+  function renderEsignEmailTemplates(box) {
+    var rows = (esetCache.templates || []).map(function (t) {
+      return '<tr>' +
+        td('<div><b style="font-weight:600;">' + esc(t.name) + '</b>' +
+            '<div class="muted" style="font-size:12px;max-width:460px;line-height:1.45;">' + esc(t.preview ? t.preview.subject : t.subject) + '</div>' +
+            (t.productLineIds && t.productLineIds.length
+              ? '<div class="muted" style="font-size:11px;margin-top:2px;">' + t.productLineIds.length + ' product line' + (t.productLineIds.length === 1 ? '' : 's') + '</div>'
+              : '<div class="muted" style="font-size:11px;margin-top:2px;">Fallback — any product line</div>') +
+          '</div>') +
+        td(t.active ? '<span class="chip">Active</span>' : '<span class="muted">Retired</span>') +
+        td('<span class="muted" style="font-size:12.5px;">' + (t.sentCount ? t.sentCount + ' sent' : 'Never sent') + '</span>') +
+        td('<div style="display:flex;gap:6px;justify-content:flex-end;">' +
+          '<button class="link-btn esetEdit" data-id="' + t.id + '" style="width:auto;padding:6px 11px;">Edit</button>' +
+          '<button class="link-btn esetDel" data-id="' + t.id + '" style="width:auto;padding:6px 11px;color:#9c3327;">' + (t.active ? 'Retire' : 'Delete') + '</button>' +
+          '</div>') +
+        '</tr>';
+    }).join('');
+
+    box.innerHTML = tableShell(['Template', 'Status', 'Use', ''], rows, 4, 'No templates yet — add one to offer it when sending a proposal for signature.') +
+      '<div class="muted" style="font-size:12px;margin-top:8px;line-height:1.6;">Placeholders: ' +
+      (esetCache.placeholders || ESET_PLACEHOLDERS_FALLBACK).map(function (p) {
+        return '<code style="font-size:11.5px;">' + esc(p.token) + '</code> ' + esc(p.means);
+      }).join(' &nbsp;&mdash;&nbsp; ') + '</div>';
+
+    var find = function (id) {
+      return (esetCache.templates || []).filter(function (t) { return t.id === id; })[0];
+    };
+    box.querySelectorAll('.esetEdit').forEach(function (b) {
+      b.addEventListener('click', function () { openEsignEmailTemplateForm(find(b.getAttribute('data-id')), esetCache); });
+    });
+    box.querySelectorAll('.esetDel').forEach(function (b) {
+      b.addEventListener('click', async function () {
+        var t = find(b.getAttribute('data-id'));
+        var q = t.sentCount
+          ? 'Retire ' + t.name + '?\n\nIt stops appearing in the picker. It is kept rather than deleted because the send history refers to it.'
+          : 'Delete ' + t.name + '?';
+        if (!confirm(q)) return;
+        var r = await authed('/esign/email-templates/' + t.id, { method: 'DELETE' });
+        if (!r.ok && r.status !== 204) { alert(await serverMessage(r, 'Could not do that (' + r.status + ').')); return; }
+        loadEsignEmailTemplates();
+      });
+    });
+  }
+
+  function openEsignEmailTemplateForm(t, cache) {
+    var isNew = !t;
+    t = t || { key: '', name: '', description: '', subject: '', bodyHtml: '', productLineIds: [], sortOrder: 0, active: true, sentCount: 0 };
+    var v = function (k) { return esc(t[k] == null ? '' : t[k]); };
+    var lines = esetProductLines || [];
+    var lineChecks = lines.map(function (pl) {
+      var checked = (t.productLineIds || []).indexOf(pl.id) !== -1;
+      return '<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;padding:3px 0;">' +
+        '<input type="checkbox" class="esetLine" value="' + esc(pl.id) + '"' + (checked ? ' checked' : '') + '> ' + esc(pl.name) + '</label>';
+    }).join('');
+    var pv = openModal(isNew ? 'New proposal e-sign email' : 'Edit ' + t.name,
+      fieldRow('Name', '<input id="esetName" style="' + IN + '" value="' + v('name') + '">') +
+      fieldRow('Key',
+        '<input id="esetKey" style="' + IN + 'font-family:ui-monospace,monospace;" value="' + v('key') + '"' + (t.sentCount ? ' disabled' : '') + '>' +
+        '<div class="muted" style="font-size:12px;margin-top:4px;line-height:1.5;">Lower-case letters, numbers and hyphens. ' +
+          (t.sentCount ? 'Fixed now that this email has been sent — the history refers to it.' : 'Used by the send history, so pick it once.') + '</div>') +
+      fieldRow('Subject', '<input id="esetSubj" style="' + IN + '" value="' + v('subject') + '">') +
+      '<div class="field"><label>Body (HTML)</label>' +
+        '<textarea id="esetBody" rows="13" style="' + IN + 'resize:vertical;font-size:12.5px;line-height:1.5;font-family:ui-monospace,monospace;">' + esc(t.bodyHtml || '') + '</textarea>' +
+        '<div class="muted" style="font-size:12px;margin-top:5px;line-height:1.55;">Raw HTML — this is not the plain-text follow-up format. Put <code>[Signing Link]</code> inside an <code>href</code>, e.g. <code>&lt;a href="[Signing Link]"&gt;Review &amp; sign&lt;/a&gt;</code>.</div></div>' +
+      (lines.length
+        ? '<div class="field"><label>Product lines this is for</label><div style="max-height:140px;overflow:auto;border:1px solid #e7e8e3;border-radius:8px;padding:8px 10px;">' + lineChecks + '</div>' +
+          '<div class="muted" style="font-size:12px;margin-top:5px;">Leave all unchecked to make this the fallback — offered when no more specific email matches.</div></div>'
+        : '')  +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin:2px 0 4px;cursor:pointer;">' +
+        '<input type="checkbox" id="esetActive"' + (t.active !== false ? ' checked' : '') + '> Offer it when sending a proposal</label>' +
+      '<div id="esetPrev" class="muted" style="font-size:12.5px;margin-top:10px;"></div>',
+      async function (close, showErr) {
+        var body = {
+          key: pv.querySelector('#esetKey').value.trim(),
+          name: pv.querySelector('#esetName').value.trim(),
+          subject: pv.querySelector('#esetSubj').value.trim(),
+          bodyHtml: pv.querySelector('#esetBody').value,
+          productLineIds: Array.prototype.slice.call(pv.querySelectorAll('.esetLine:checked')).map(function (cb) { return cb.value; }),
+          active: pv.querySelector('#esetActive').checked,
+        };
+        if (!body.name) return showErr('Give it a name.');
+        if (!body.subject) return showErr('Give it a subject line.');
+        if (!body.bodyHtml.trim()) return showErr('The body is empty.');
+        if (isNew && !/^[a-z0-9][a-z0-9-]*$/.test(body.key)) {
+          return showErr('The key should be lower-case letters, numbers and hyphens.');
+        }
+        if (t.sentCount) delete body.key;
+        var r = isNew
+          ? await authed('/esign/email-templates', { method: 'POST', body: body })
+          : await authed('/esign/email-templates/' + t.id, { method: 'PATCH', body: body });
+        if (!r.ok) return showErr(await serverMessage(r, 'Could not save it (' + r.status + ').'));
+        close();
+        loadEsignEmailTemplates();
+      }, isNew ? 'Create' : 'Save', { maxWidth: '680px' });
+
+    var prev = function () {
+      var el = pv.querySelector('#esetPrev');
+      if (!el) return;
+      var html = esetFillSample(pv.querySelector('#esetBody').value || '');
+      var subject = esetFillSample(pv.querySelector('#esetSubj').value || '');
+      el.innerHTML = '<div class="k">Preview — sample proposal</div>' +
+        '<div class="muted" style="margin-bottom:6px;">Subject: ' + esc(subject) + '</div>' +
+        '<div style="border:1px solid #e7e8e3;border-radius:9px;padding:11px 13px;background:#fff;color:#000;font-size:13px;line-height:1.55;">' + html + '</div>';
+    };
+    var subjEl = pv.querySelector('#esetSubj'), bodyEl2 = pv.querySelector('#esetBody');
+    if (subjEl) subjEl.addEventListener('input', prev);
+    if (bodyEl2) bodyEl2.addEventListener('input', prev);
+    prev();
+  }
+
   async function loadFinancingAdmin() {
     var box = document.getElementById('finAdmin'); if (!box) return;
     var d = null;
@@ -12374,6 +12534,16 @@
       box.innerHTML = '<div class="muted" style="padding:16px;">Electronic signature is not configured on this deployment.</div>';
       return;
     }
+    var canWrite = hasRole(ESIGN_WRITE_ROLES, user.role);
+    // The signing email goes out from the rep's own Outlook mailbox, not
+    // DocuSeal's — worth flagging before they open the send form, not after.
+    var outlookBanner = canWrite && st.outlook && st.outlook.configured && !st.outlook.canSend
+      ? '<div style="padding:10px 18px;background:#fff7e6;border-bottom:1px solid #e8c877;font-size:12.5px;">' +
+        (st.outlook.connected
+          ? 'Your connected Outlook mailbox has not granted this app permission to send mail. Reconnect it in Administration → Outlook drafts, or a signing email will go out from the fallback account instead.'
+          : 'Your Outlook mailbox is not connected — a proposal you send will email from the fallback account, not your own. Connect it in Administration → Outlook drafts.') +
+        '</div>'
+      : '';
 
     var envelopes = [];
     try {
@@ -12382,13 +12552,12 @@
     } catch (e) {}
     // Newest first, per the endpoint's own ordering — this is the one that matters.
     var envelope = envelopes[0] || null;
-    var canWrite = hasRole(ESIGN_WRITE_ROLES, user.role);
     var live = envelope && ESIGN_LIVE.indexOf(envelope.status) !== -1;
     var sendBtn = '<button class="btn" id="esignSend" style="width:auto;padding:9px 16px;">' +
       (envelope ? 'Send again…' : 'Sign electronically…') + '</button>';
 
     if (!envelope) {
-      box.innerHTML = '<div style="padding:16px 18px;">' +
+      box.innerHTML = outlookBanner + '<div style="padding:16px 18px;">' +
         '<div class="muted" style="font-size:12.5px;margin-bottom:12px;">Not sent for signature yet.</div>' +
         (canWrite ? sendBtn : '') +
         '</div>';
@@ -12421,7 +12590,7 @@
             '</div>';
         }
       }
-      box.innerHTML = '<div style="padding:16px 18px;">' +
+      box.innerHTML = outlookBanner + '<div style="padding:16px 18px;">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">' +
         esignStatusChip(envelope.status) +
         '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
@@ -12482,17 +12651,35 @@
       '</div>';
   }
 
+  async function esignFetchPlan(version, opts) {
+    var qs = [];
+    if (opts.emailTemplateKey) qs.push('emailTemplateKey=' + encodeURIComponent(opts.emailTemplateKey));
+    if (opts.firstName) qs.push('firstName=' + encodeURIComponent(opts.firstName));
+    var plan = { template: null, attachments: [], email: null };
+    try {
+      var rp = await authed('/esign/proposals/versions/' + version.id + '/plan' + (qs.length ? '?' + qs.join('&') : ''));
+      if (rp.ok) plan = await rp.json();
+    } catch (e) {}
+    return plan;
+  }
+
   async function openEsignSend(p, version, user) {
     var ctx = { contacts: [] };
     try { var rc = await authed('/proposals/' + p.id + '/send-context'); if (rc.ok) ctx = await rc.json(); } catch (e) {}
     var dm = ctx.contacts.filter(function (c) { return c.isDecisionMaker; })[0] || ctx.contacts[0];
+    var firstName = dm && dm.name ? dm.name.trim().split(/\s+/)[0] : '';
 
-    var plan = { template: null, attachments: [] };
+    var emailTemplates = [];
     try {
-      var rp = await authed('/esign/proposals/versions/' + version.id + '/plan');
-      if (rp.ok) plan = await rp.json();
+      var ret = await authed('/esign/email-templates');
+      if (ret.ok) emailTemplates = await ret.json();
     } catch (e) {}
 
+    var plan = await esignFetchPlan(version, { firstName: firstName });
+
+    // Local, mutable copy — reordering and uploading here act on the proposal's
+    // real Design renderings list immediately (same list the main proposal page
+    // shows), not a draft that only takes effect on send.
     var renderings = [];
     try {
       var rr = await authed('/proposals/' + p.id + '/renderings');
@@ -12504,20 +12691,12 @@
       ((plan.attachments || []).length ? '<br>Attached: ' + plan.attachments.map(function (a) { return esc(a.name); }).join(', ') : '') +
       '</div>';
 
-    // Renderings ride along in the order shown here, which is the same order set
-    // in the proposal's own Design renderings panel — reorder there, not here.
-    var renderingsBlock = renderings.length
-      ? '<div class="muted" style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;margin:14px 0 6px;">Design renderings to include</div>' +
-        '<div id="esRenderings">' +
-        renderings.map(function (rnd) {
-          return '<label style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13px;">' +
-            '<input type="checkbox" class="esRnd" value="' + esc(rnd.id) + '" checked> ' + esc(rnd.filename) +
-            '</label>';
-        }).join('') +
-        '</div>'
-      : '';
+    var emailTemplateOptions = '<option value="">' + (plan.email ? 'Default note (no template)' : 'Plain default note') + '</option>' +
+      emailTemplates.map(function (t) {
+        return '<option value="' + esc(t.key) + '"' + (plan.email && plan.email.key === t.key ? ' selected' : '') + '>' + esc(t.name) + '</option>';
+      }).join('');
 
-    openModal('Sign electronically',
+    var pv = openModal('Sign electronically',
       planNote +
       '<div class="muted" style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;margin-bottom:6px;">Signers, in order</div>' +
       '<div id="esRows">' +
@@ -12525,10 +12704,19 @@
       esignRowHtml('Summit', user.name || '', user.email || '', false, false) +
       '</div>' +
       '<button type="button" class="link-btn" id="esAddRow" style="width:auto;padding:7px 10px;font-size:12.5px;">+ Add signer</button>' +
-      renderingsBlock +
-      fieldRow('Subject', '<input id="esSubject" placeholder="Leave blank for the default" style="' + IN + '">') +
-      fieldRow('Message', '<textarea id="esMsg" rows="4" placeholder="Leave blank for a short default note" style="' + IN + 'resize:vertical;"></textarea>') +
-      '<div class="muted" style="font-size:12px;margin-top:2px;">DocuSeal emails each signer in the order listed — the first signs before the next is asked to.</div>',
+      '<div class="muted" style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;margin:16px 0 6px;">Documents to include, in order</div>' +
+      '<div id="esRenderings"></div>' +
+      '<div style="margin-top:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+      '<input type="file" id="esRndFile" accept="application/pdf,image/png,image/jpeg" style="display:none;">' +
+      '<button type="button" class="link-btn" id="esRndUploadBtn" style="width:auto;padding:6px 10px;font-size:12.5px;">+ Add one-off document…</button>' +
+      '<span class="muted" id="esRndStatus" style="font-size:12px;"></span>' +
+      '</div>' +
+      '<div class="muted" style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;margin:16px 0 6px;">Signing email</div>' +
+      fieldRow('Template', '<select id="esEmailTemplate" style="' + IN + '">' + emailTemplateOptions + '</select>') +
+      fieldRow('Subject', '<input id="esSubject" style="' + IN + '" value="' + esc(plan.email ? plan.email.subject : '') + '">') +
+      '<div class="field"><label>Body</label><textarea id="esMsg" rows="8" style="' + IN + 'resize:vertical;font-size:12.5px;line-height:1.5;font-family:ui-monospace,monospace;">' + esc(plan.email ? plan.email.html : '') + '</textarea></div>' +
+      '<div id="esEmailPreview" class="muted" style="font-size:12.5px;margin-top:8px;"></div>' +
+      '<div class="muted" style="font-size:12px;margin-top:10px;">Sent from your own connected Outlook mailbox, in the order the signers are listed — the first signs before the next is asked to.</div>',
       async function (close, showErr) {
         var rows = Array.prototype.slice.call(document.querySelectorAll('#esRows .esRow'));
         var signers = rows.map(function (row) {
@@ -12549,24 +12737,28 @@
           }
           if (!signers[i].role) return showErr('Every signer needs a role (e.g. Customer, Summit).');
         }
+        var subject = pv.querySelector('#esSubject').value.trim();
+        var message = pv.querySelector('#esMsg').value;
+        if (!subject) return showErr('Give the email a subject.');
+        if (!message.trim()) return showErr('The email body is empty.');
         var doc = await buildProposalDocForSend(p, version.id);
         if (!doc) return showErr('Could not prepare the proposal. Open the proposal preview once, then try again.');
-        var renderingIds = Array.prototype.slice.call(document.querySelectorAll('#esRenderings .esRnd:checked'))
-          .map(function (cb) { return cb.value; });
+        var renderingIds = renderings.filter(function (rnd) { return rnd.included !== false; }).map(function (rnd) { return rnd.id; });
         var body = {
           proposalHtml: doc.html,
           filename: doc.filename,
           signers: signers,
           renderingIds: renderingIds,
-          subject: document.getElementById('esSubject').value.trim(),
-          message: document.getElementById('esMsg').value,
+          emailTemplateKey: pv.querySelector('#esEmailTemplate').value || undefined,
+          subject: subject,
+          message: message,
         };
         var r = await authed('/render/esign/proposals/versions/' + version.id + '/send',
           { method: 'POST', body: body, timeoutMs: RENDER_TIMEOUT_MS });
         if (!r.ok) return showErr(await serverMessage(r, 'Could not send.'));
         close();
         loadEsign(p, version, user);
-      }, 'Send for signature', { maxWidth: '680px' });
+      }, 'Send for signature', { maxWidth: '700px' });
 
     function bindRemove() {
       document.querySelectorAll('.esRemove').forEach(function (b) {
@@ -12576,6 +12768,98 @@
     document.getElementById('esAddRow').addEventListener('click', function () {
       document.getElementById('esRows').insertAdjacentHTML('beforeend', esignRowHtml('', '', '', true, false));
       bindRemove();
+    });
+
+    /* ---- Email template picker + live preview ---- */
+    function updateEmailPreview() {
+      var el = pv.querySelector('#esEmailPreview');
+      if (!el) return;
+      var html = pv.querySelector('#esMsg').value || '';
+      el.innerHTML = '<div class="k">Preview</div>' +
+        '<div style="border:1px solid #e7e8e3;border-radius:9px;padding:11px 13px;background:#fff;color:#000;">' + html + '</div>';
+    }
+    pv.querySelector('#esMsg').addEventListener('input', updateEmailPreview);
+    pv.querySelector('#esEmailTemplate').addEventListener('change', async function (ev) {
+      var next = await esignFetchPlan(version, { emailTemplateKey: ev.target.value || undefined, firstName: firstName });
+      pv.querySelector('#esSubject').value = next.email ? next.email.subject : '';
+      pv.querySelector('#esMsg').value = next.email ? next.email.html : '';
+      updateEmailPreview();
+    });
+    updateEmailPreview();
+
+    /* ---- Documents to include: reorder, upload, drop — acts on the proposal's
+     * real renderings list immediately, the same one the proposal page shows. */
+    function renderRenderingsUI() {
+      var box = pv.querySelector('#esRenderings');
+      if (!box) return;
+      box.innerHTML = renderings.length
+        ? renderings.map(function (rnd, i) {
+            return '<div class="esRndRow" data-id="' + esc(rnd.id) + '" style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #eceef4;font-size:13px;">' +
+              '<input type="checkbox" class="esRndInclude"' + (rnd.included !== false ? ' checked' : '') + '>' +
+              '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(rnd.filename) + '</span>' +
+              '<button type="button" class="link-btn esRndUp" style="width:auto;padding:4px 7px;"' + (i === 0 ? ' disabled' : '') + '>↑</button>' +
+              '<button type="button" class="link-btn esRndDown" style="width:auto;padding:4px 7px;"' + (i === renderings.length - 1 ? ' disabled' : '') + '>↓</button>' +
+              '<button type="button" class="link-btn esRndDel" style="width:auto;padding:4px 7px;color:#9c3327;">✕</button>' +
+              '</div>';
+          }).join('')
+        : '<div class="muted" style="font-size:12.5px;padding:6px 0;">No renderings or one-off documents yet.</div>';
+
+      box.querySelectorAll('.esRndInclude').forEach(function (cb) {
+        cb.addEventListener('change', function () {
+          var id = cb.closest('.esRndRow').getAttribute('data-id');
+          renderings.filter(function (r) { return r.id === id; }).forEach(function (r) { r.included = cb.checked; });
+        });
+      });
+      function move(id, dir) {
+        var i = renderings.map(function (r) { return r.id; }).indexOf(id);
+        var j = i + dir;
+        if (i < 0 || j < 0 || j >= renderings.length) return;
+        var tmp = renderings[i]; renderings[i] = renderings[j]; renderings[j] = tmp;
+        renderRenderingsUI();
+        authed('/proposals/' + p.id + '/renderings/reorder', { method: 'PATCH', body: { orderedIds: renderings.map(function (r) { return r.id; }) } });
+      }
+      box.querySelectorAll('.esRndUp').forEach(function (b) {
+        b.addEventListener('click', function () { move(b.closest('.esRndRow').getAttribute('data-id'), -1); });
+      });
+      box.querySelectorAll('.esRndDown').forEach(function (b) {
+        b.addEventListener('click', function () { move(b.closest('.esRndRow').getAttribute('data-id'), 1); });
+      });
+      box.querySelectorAll('.esRndDel').forEach(function (b) {
+        b.addEventListener('click', async function () {
+          var id = b.closest('.esRndRow').getAttribute('data-id');
+          if (!window.confirm('Remove this document? This cannot be undone.')) return;
+          var r = await authed('/proposals/' + p.id + '/renderings/' + id, { method: 'DELETE' });
+          if (!r.ok) { alert(await serverMessage(r, 'Could not remove that document.')); return; }
+          renderings = renderings.filter(function (rnd) { return rnd.id !== id; });
+          renderRenderingsUI();
+        });
+      });
+    }
+    renderRenderingsUI();
+
+    var rndUpBtn = pv.querySelector('#esRndUploadBtn');
+    var rndFileInput = pv.querySelector('#esRndFile');
+    var rndStatus = pv.querySelector('#esRndStatus');
+    rndUpBtn.addEventListener('click', function () { rndFileInput.click(); });
+    rndFileInput.addEventListener('change', async function () {
+      var file = rndFileInput.files[0];
+      if (!file) return;
+      rndUpBtn.disabled = true;
+      rndStatus.style.color = '';
+      rndStatus.textContent = 'Uploading ' + file.name + '…';
+      try {
+        var row = await uploadRendering(p, file, function (progress) {
+          rndStatus.textContent = 'Uploading ' + file.name + '… ' + Math.round(progress.percentage) + '%';
+        });
+        renderings.push(row);
+        rndStatus.textContent = '';
+        renderRenderingsUI();
+      } catch (err) {
+        rndStatus.style.color = '#9c3327';
+        rndStatus.textContent = err && err.message ? err.message : 'Upload failed.';
+      }
+      rndUpBtn.disabled = false;
+      rndFileInput.value = '';
     });
   }
 
@@ -12825,6 +13109,10 @@
           '<button class="btn" id="futNew" style="width:auto;padding:9px 15px;">+ New template</button></div>' +
         '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;max-width:820px;line-height:1.55;">The emails a rep can pick from on a proposal. The order matters — financing is not raised until the email before it has established that budget is the obstacle — so the step number decides the sequence. Editing here changes what everyone sends, immediately.</div>' +
         '<div id="futList"><div class="muted" style="padding:16px;">Loading…</div></div>' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:26px;"><div class="section-title" style="margin:0;">Proposal e-sign emails</div>' +
+          '<button class="btn" id="esetNew" style="width:auto;padding:9px 15px;">+ New template</button></div>' +
+        '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;max-width:820px;line-height:1.55;">The "please review and sign" email a rep sends with a proposal — separate from the follow-ups above and from the signing document itself. Auto-picked by product line the same way the signing document is, independently, so the two can be mixed and matched; a rep can always pick a different one before sending. Sent from the rep’s own connected Outlook mailbox, HTML included. <code>[Signing Link]</code> is filled in per recipient at send time, not here.</div>' +
+        '<div id="esetList"><div class="muted" style="padding:16px;">Loading…</div></div>' +
         '<div class="muted" style="font-size:12.5px;margin-top:22px;padding-top:14px;border-top:1px solid #eef0ea;line-height:1.55;max-width:820px;">Payment-request emails and the letters they carry are edited with the invoices they belong to, under <b style="font-weight:600;">Accounts Receivable → Letters &amp; email</b>.</div>') +
 
       sec('pricing',
@@ -12878,6 +13166,7 @@
     });
     document.getElementById('qtNew').addEventListener('click', function () { openQuestionTemplateForm(null); });
     document.getElementById('futNew').addEventListener('click', function () { openFollowUpTemplateForm(null, futCache); });
+    document.getElementById('esetNew').addEventListener('click', function () { openEsignEmailTemplateForm(null, esetCache); });
     loadUsers();
     // The panel wires its own + New note button and loads its own list.
     window.SSGStandardNotes.mount();
@@ -12888,6 +13177,7 @@
       window.SSGReferenceDocuments.render(document.getElementById('referenceDocsAdmin'));
     loadFormulas();
     loadFollowUpTemplates();
+    loadEsignEmailTemplates();
     loadOutlookPanel();
     loadFinancingAdmin();
     loadQuestionTemplates();

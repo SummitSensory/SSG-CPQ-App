@@ -58,6 +58,16 @@ export function registerCatalogRoutes(app: FastifyInstance): void {
     prisma.productCategory.findMany({ orderBy: { sortOrder: 'asc' } }),
   );
 
+  /** id + name only — for a picker (e.g. which product lines an e-sign template
+   *  auto-selects for), not the full tree. */
+  app.get('/catalog/product-lines', read, async () =>
+    prisma.productLine.findMany({
+      where: { isActive: true },
+      orderBy: { sortOrder: 'asc' },
+      select: { id: true, name: true },
+    }),
+  );
+
   app.get('/catalog/families', read, async (req) => {
     const { categoryId } = req.query as { categoryId?: string };
     return prisma.productFamily.findMany({
