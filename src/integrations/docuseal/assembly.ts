@@ -188,6 +188,41 @@ export function signaturePageHtml(input: AssemblyInput): string {
 }
 
 /**
+ * Clears the forced page break the proposal's own stylesheet puts after every
+ * `.ssg-sheet` / `.ssg-fm-page`, including its last one.
+ *
+ * That break is correct when the sheet really is the last thing on the page —
+ * true for the proposal on its own — and wrong here, where attachments and
+ * the signature page follow it: left in place, it opens a blank sheet between
+ * the proposal and whatever comes next.
+ *
+ * The proposal fixes this for itself with a small script, run once client-side,
+ * that finds the true last sheet at render time (by document order, not by
+ * `:last-child` — a CSS-only rule is exactly what this is not, since a wrapper
+ * or a trailing element elsewhere in the tree defeats `:last-child` silently)
+ * and clears its break with an inline style. `inlineDocument` strips every
+ * `<script>` out of what gets merged into this package — attachments are not
+ * necessarily this app's own markup, and a signing package is not where to
+ * trust one to execute — so that fix never runs here. This is the same fix,
+ * authored here rather than extracted from the input, scoped to run only
+ * inside `#ssgProposalBody` so it cannot reach into an attachment's own markup.
+ */
+function trailingBreakFixScript(): string {
+  return `<script>
+  (function () {
+    try {
+      var root = document.getElementById('ssgProposalBody');
+      var sheets = root ? root.querySelectorAll('.ssg-sheet, .ssg-fm-page') : [];
+      if (!sheets.length) return;
+      var last = sheets[sheets.length - 1];
+      last.style.breakAfter = 'auto';
+      last.style.pageBreakAfter = 'auto';
+    } catch (e) {}
+  })();
+  <\/script>`;
+}
+
+/**
  * The whole package as one self-contained HTML document, ready for `renderPdf`.
  * Nothing here fetches from the network — same rule as the other rendered
  * documents, so a broken asset URL cannot hang a send.
@@ -218,7 +253,8 @@ ${proposal.styles ? `<style>${proposal.styles}</style>` : ''}
 ${attachments.map((a) => (a.styles ? `<style>${a.styles}</style>` : '')).join('\n')}
 </head>
 <body>
-${proposal.body}
+<div id="ssgProposalBody">${proposal.body}</div>
+${trailingBreakFixScript()}
 ${attachments.map((a) => a.body).join('\n')}
 ${signaturePageHtml(input)}
 </body>

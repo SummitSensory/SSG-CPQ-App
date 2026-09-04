@@ -6,6 +6,7 @@ import { recordAudit } from '../../lib/audit.js';
 import { ValidationError, NotFoundError } from '../../lib/errors.js';
 import { renderPdf, pdfAvailable } from '../../render/pdf.js';
 import { versionTotals, type RawItem } from '../../proposals/analytics.js';
+import { sellerCollectedCharges } from '../../crossborder/sellerCharges.js';
 import { env, isDocusealConfigured } from '../../config/env.js';
 import {
   archiveSubmission,
@@ -302,9 +303,9 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
 
   const totals = versionTotals(version.items, version.sections);
 
-  // None of these five reads depends on another's result — run them together
-  // rather than paying for five sequential round trips on every send.
-  const [org, template, attachments, emailTemplate, sender] = await Promise.all([
+  // None of these six reads depends on another's result — run them together
+  // rather than paying for six sequential round trips on every send.
+  const [org, template, attachments, emailTemplate, sender, border] = await Promise.all([
     prisma.organization.findUnique({
       where: { id: version.proposal.organizationId },
       select: { name: true },
@@ -313,7 +314,14 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
     resolveAttachments({ keys: input.attachmentKeys }),
     resolveEmailTemplate({ items: version.items, emailTemplateKey: input.emailTemplateKey }),
     prisma.user.findUnique({ where: { id: input.actorId }, select: { name: true } }),
+    sellerCollectedCharges(input.versionId),
   ]);
+  // What the customer actually owes, matching the figure the proposal document
+  // itself prints as "Total payable to Summit" (see docTotal in
+  // proposal-document.js) — versionTotals() alone is the pre-cross-border figure.
+  // Signing a package that states a lower total than the document inside it would
+  // be worse than not signing at all.
+  const payableTotal = totals.total + border.totalMinor;
   // The rep's edit wins outright when given; otherwise the resolved template is
   // rendered here so an envelope always has a full email, even with no override
   // and no email template configured yet (falls back to a bare, functional note).
@@ -354,7 +362,7 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
     proposalNumber: version.proposal.number,
     proposalTitle: version.proposal.title,
     customerName: org?.name,
-    totalMinor: totals.total,
+    totalMinor: payableTotal,
   });
 
   let pdf = await renderPdf(html, { format: 'Letter' });
