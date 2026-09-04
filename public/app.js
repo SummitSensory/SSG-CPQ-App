@@ -12594,9 +12594,19 @@
         '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">' +
         esignStatusChip(envelope.status) +
         '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
-        (canWrite && live ? '<button class="link-btn" id="esignSync" style="width:auto;padding:7px 12px;">Refresh status</button>' : '') +
+        // Completed but no stored copy yet: DocuSeal assembles the certified
+        // (signed + audit log) PDF a moment after completion, not necessarily
+        // atomically with it. Refresh status is the retry, so it stays available
+        // here even though the envelope is no longer "live".
+        (canWrite && (live || (envelope.status === 'COMPLETED' && !envelope.signedUrl))
+          ? '<button class="link-btn" id="esignSync" style="width:auto;padding:7px 12px;">Refresh status</button>'
+          : '') +
         (canWrite && live ? '<button class="link-btn" id="esignVoid" style="width:auto;padding:7px 12px;color:#9c3327;">Void</button>' : '') +
-        (envelope.status === 'COMPLETED' ? '<button class="btn" id="esignDownload" style="width:auto;padding:7px 12px;">Download signed PDF</button>' : '') +
+        (envelope.status === 'COMPLETED' && envelope.signedUrl
+          ? '<button class="btn" id="esignDownload" style="width:auto;padding:7px 12px;">Download signed PDF</button>'
+          : envelope.status === 'COMPLETED'
+            ? '<span class="muted" style="font-size:12.5px;align-self:center;">Preparing the certified copy — try Refresh status in a moment.</span>'
+            : '') +
         '</div></div>' +
         countersignBanner +
         '<div style="margin-top:12px;">' + signerRows + '</div>' +
