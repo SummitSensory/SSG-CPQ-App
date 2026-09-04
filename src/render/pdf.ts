@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { extname, join, sep } from 'node:path';
 import { logger } from '../lib/logger.js';
 import { env } from '../config/env.js';
 
@@ -101,51 +101,87 @@ function discardBrowser(): void {
 }
 
 /**
- * A handful of proposal templates reference a small, fixed set of images by a
- * plain relative path — `<img src="logo.png">` — because that resolves fine in
- * a real browser tab, against the app's own origin. It does not resolve here:
- * `page.setContent()` gives the page no base URL at all, so every one of these
- * came out as a broken image (or, worse, silent blank space) in every
- * server-rendered document — the monday upload, the DocuSeal signing package,
- * anything routed through this file. Embedded as data URIs before Chromium
- * ever sees the markup instead, matching the "self-contained" rule above.
+ * Proposal templates reference images two ways: an admin-uploaded photo comes
+ * in as a `data:` URI already (see `prepareImage` in
+ * public/proposal-front-matter.js), but the company logo, the engineer-of-
+ * record badge, and every "house file" fallback photo for every product line
+ * (Adventure, Soar, Flex) are plain paths — `logo.png`, `/proposal/flex-p3-
+ * unit.jpg` — because those resolve fine in a real browser tab, against the
+ * app's own origin. None of them resolve here: `page.setContent()` gives the
+ * page no base URL at all, so every one of them came out as a broken image
+ * (or, worse, silent blank space) in every server-rendered document — the
+ * monday upload, the DocuSeal signing package, anything routed through this
+ * file. Embedded as data URIs before Chromium ever sees the markup instead,
+ * matching the "self-contained" rule above.
  *
- * Read once per warm container and cached — these are static app assets, not
- * anything that changes between requests.
+ * Deliberately not a fixed list of paths: the failure mode here (a local
+ * asset referenced by path, invisible in every server-rendered PDF, working
+ * fine on screen so nobody notices) already hit two unrelated hardcoded
+ * images and, separately, every house photo behind every product line's
+ * introduction — a fixed allowlist just repeats that mistake against the
+ * next template someone adds a picture to.
  */
-const INLINE_ASSET_PATHS: Record<string, string> = {
-  'logo.png': 'logo.png',
-  'proposal/engineer-of-record-badge.png': 'proposal/engineer-of-record-badge.png',
+const IMG_SRC_RE = /<img\b[^>]*\bsrc\s*=\s*(["'])([^"']*)\1/gi;
+const EXT_TO_MIME: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
 };
-let inlineAssetsPromise: Promise<Record<string, string>> | null = null;
 
-function loadInlineAssets(): Promise<Record<string, string>> {
-  if (!inlineAssetsPromise) {
-    inlineAssetsPromise = Promise.all(
-      Object.entries(INLINE_ASSET_PATHS).map(async ([key, relPath]) => {
-        const buf = await readFile(join(process.cwd(), 'public', relPath));
-        return [key, `data:image/png;base64,${buf.toString('base64')}`] as const;
-      }),
-    ).then((entries) => Object.fromEntries(entries));
-  }
-  return inlineAssetsPromise;
+/** Read once per warm container and cached — these are static app assets. */
+const inlineAssetCache = new Map<string, Promise<string | null>>();
+
+/**
+ * Resolve a local `<img src>` to an embeddable data URI, or null for anything
+ * that is not a local, recognised-image, in-bounds file — a `data:` URI
+ * already, an `http(s)://` URL (never fetched; this renderer promises to
+ * touch nothing on the network), or a path that does not stay inside
+ * `public/` once resolved. That last check matters because not every caller
+ * of `renderPdf` necessarily authored the HTML it passes in itself (an
+ * attachment's markup, for one) — a crafted `src="../../.env"` must not turn
+ * an `<img>` tag into a file-read of anything outside the app's own assets.
+ */
+function loadLocalImageAsset(src: string): Promise<string | null> {
+  if (src.startsWith('data:') || /^[a-z][a-z0-9+.-]*:\/\//i.test(src)) return Promise.resolve(null);
+  const cached = inlineAssetCache.get(src);
+  if (cached) return cached;
+  const promise = (async () => {
+    const mime = EXT_TO_MIME[extname(src).toLowerCase()];
+    if (!mime) return null;
+    const publicRoot = join(process.cwd(), 'public');
+    const abs = join(publicRoot, src.replace(/^\/+/, ''));
+    if (abs !== publicRoot && !abs.startsWith(publicRoot + sep)) return null;
+    try {
+      const buf = await readFile(abs);
+      return `data:${mime};base64,${buf.toString('base64')}`;
+    } catch (err) {
+      // Missing on disk is a deploy/content problem, not a reason to fail the
+      // whole render — the image goes out exactly as broken as it always was.
+      logger.warn({ err, src }, 'pdf: could not load a local image asset, leaving its src as-is');
+      return null;
+    }
+  })();
+  inlineAssetCache.set(src, promise);
+  return promise;
 }
 
 export async function inlineKnownAssets(html: string): Promise<string> {
-  let assets: Record<string, string>;
-  try {
-    assets = await loadInlineAssets();
-  } catch (err) {
-    // Missing on disk would be a deploy problem, not a reason to fail every
-    // render — the document goes out exactly as it would have before this
-    // existed, with the same broken image it always had.
-    logger.warn({ err }, 'pdf: could not load inline assets, leaving image sources as-is');
-    return html;
-  }
+  const srcs = new Set<string>();
+  for (const m of html.matchAll(IMG_SRC_RE)) if (m[2]) srcs.add(m[2]);
+  if (!srcs.size) return html;
+
+  const resolved = await Promise.all(
+    Array.from(srcs).map(async (src) => [src, await loadLocalImageAsset(src)] as const),
+  );
+
   let out = html;
-  for (const [relPath, dataUri] of Object.entries(assets)) {
-    out = out.split(`src="${relPath}"`).join(`src="${dataUri}"`);
-    out = out.split(`src='${relPath}'`).join(`src='${dataUri}'`);
+  for (const [src, dataUri] of resolved) {
+    if (!dataUri) continue;
+    out = out.split(`src="${src}"`).join(`src="${dataUri}"`);
+    out = out.split(`src='${src}'`).join(`src='${dataUri}'`);
   }
   return out;
 }
