@@ -25,6 +25,7 @@ import {
 import { appendPdfDocuments, appendImagePages } from '../../lib/pdfMerge.js';
 import { resolveReferenceDocuments } from '../../proposals/referenceDocuments.js';
 import { resolveRenderings } from '../../lib/renderingStore.js';
+import { renderCertificatePdf } from './certificate.js';
 import {
   renderEsignEmail,
   firstNameOf,
@@ -657,27 +658,56 @@ export async function applyStatus(
  * Copy the executed PDF into our own storage. Best effort by design — see the note
  * in storage.ts. The envelope is already COMPLETED; failing here would only hide
  * that fact.
+ *
+ * A branded certificate summary is appended after DocuSeal's own combined
+ * document — not in its place; see certificate.ts for why replacing it would
+ * be a compliance regression that appending never can be. Best effort on its
+ * own: a failed render must not be why the (already-fetched, already
+ * certified by DocuSeal) signed copy fails to store.
  */
 export async function storeSignedCopy(envelopeId: string): Promise<string | null> {
   const envelope = await prisma.esignEnvelope.findUnique({
     where: { id: envelopeId },
-    select: { id: true, docusealSubmissionId: true, proposalId: true },
+    include: { signers: { orderBy: { order: 'asc' } } },
   });
   if (!envelope?.docusealSubmissionId) return null;
   const proposal = await prisma.proposal.findUnique({
     where: { id: envelope.proposalId },
-    select: { number: true },
+    select: { number: true, title: true, organizationId: true },
   });
   try {
     const doc = await fetchCompletedPdf(envelope.docusealSubmissionId);
     if (!doc) return null;
+
+    let bytes = doc.bytes;
+    try {
+      const org = proposal
+        ? await prisma.organization.findUnique({
+            where: { id: proposal.organizationId },
+            select: { name: true },
+          })
+        : null;
+      const certificate = await renderCertificatePdf({
+        envelopeId: envelope.id,
+        proposalNumber: proposal?.number ?? 'proposal',
+        proposalTitle: proposal?.title,
+        customerName: org?.name,
+        sentAt: envelope.sentAt,
+        completedAt: envelope.completedAt,
+        signers: envelope.signers,
+      });
+      bytes = await appendPdfDocuments(bytes, [{ name: 'certificate', bytes: certificate }]);
+    } catch (err) {
+      logger.error({ err, envelopeId }, 'esign: certificate page render failed');
+    }
+
     const stored = await putPdf(
       envelopePath({
         proposalNumber: proposal?.number ?? 'proposal',
         envelopeId: envelope.id,
         kind: 'signed',
       }),
-      doc.bytes,
+      bytes,
     );
     const url = stored?.url ?? null;
     if (url)
