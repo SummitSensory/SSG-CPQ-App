@@ -7233,7 +7233,10 @@
   function proposalStandaloneHtml(doc) {
     return '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(doc.title || 'Proposal') + '</title>' +
       '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,400;6..72,600;6..72,700&display=swap">' +
-      '<style>@page{size:letter;margin:0;}body{margin:0;font-family:"IBM Plex Sans",-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;color:#20241f;}' +
+      // Width is pinned the same way the interactive print stylesheet pins it
+      // (see ensurePrintStyle) — a stray wide element gets clipped instead of
+      // making Chrome shrink the whole rendered page to fit it.
+      '<style>@page{size:letter;margin:0;}html,body{width:8.5in;max-width:8.5in;overflow-x:hidden;margin:0;font-family:"IBM Plex Sans",-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;color:#20241f;}' +
       '#propPrintArea{padding:0.5in;box-sizing:border-box;max-width:none;}' +
       // Sheets produced by the paginator below.
       '.ssg-sheet{width:8.5in;height:11in;margin:0;overflow:hidden;box-sizing:border-box;' +
@@ -7376,7 +7379,15 @@
       // 8.5in x 11in. The itemized proposal takes that half inch back as padding below,
       // so it prints exactly as it always has.
       '@page{size:letter;margin:0;}' +
-      '@media print{html,body{height:auto!important;overflow:visible!important;background:#fff!important;}' +
+      // Width is pinned, not just height/overflow reset. Chrome's print pipeline
+      // silently shrinks the WHOLE page (uniformly, anchored top-left) to fit
+      // whatever is widest in the print-visible tree — a leftover zoom/grid
+      // measurement on #pvFrame or #pvStage that a future change forgets to reset
+      // would otherwise produce a proposal that looks smaller than 8.5in x 11in on
+      // paper with no error and no visual cue on screen. Capping html/body to the
+      // page's own width and clipping instead of allowing overflow means a stray
+      // wide element gets cut off rather than silently rescaling the whole sheet.
+      '@media print{html,body{width:8.5in!important;max-width:8.5in!important;height:auto!important;overflow:hidden!important;background:#fff!important;}' +
       'body > *{display:none!important;}body > #propPreviewOverlay,body > #psOverlay{display:block!important;}' +
       '#propPreviewOverlay{position:static!important;inset:auto!important;height:auto!important;background:#fff!important;padding:0!important;overflow:visible!important;}#psOverlay .noprint{display:none!important;}#propPreviewOverlay .noprint{display:none!important;}' +
       // A section (heading, lines, subtotal) is one <tbody> and stays on one sheet;
