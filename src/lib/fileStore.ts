@@ -123,6 +123,11 @@ export async function putFile(
       'x-content-type': contentType,
       'x-add-random-suffix': '0',
       'x-cache-control-max-age': '31536000',
+      // The store is configured for private access (not world-readable by URL —
+      // right for a customer's purchase order or W9). Omitting this defaults to
+      // public and the API refuses the mismatch: "Cannot use public access on a
+      // private store."
+      'x-access': 'private',
     },
     body: new Uint8Array(bytes),
   });

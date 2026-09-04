@@ -60,6 +60,12 @@ export async function putPdf(
         // nothing points at.
         'x-add-random-suffix': '0',
         'x-cache-control-max-age': '31536000',
+        // Same store as src/lib/fileStore.ts, configured for private access — see
+        // the comment there. Without this an executed contract's copy failed
+        // silently (putPdf swallows storage errors) and nobody would know until
+        // this file's own doc comment's worry — DocuSeal being the only copy —
+        // came true.
+        'x-access': 'private',
       },
       body: new Uint8Array(bytes),
     });
