@@ -12396,7 +12396,9 @@
       var signerRows = (envelope.signers || []).map(function (s) {
         return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #eceef4;font-size:13px;">' +
           '<div><b style="font-weight:600;">' + esc(s.name || s.role) + '</b> ' +
-          '<span class="muted" style="font-size:12px;">' + esc(s.email) + '</span></div>' +
+          '<span class="muted" style="font-size:12px;">' + esc(s.email) + '</span>' +
+          (s.viewOnly ? ' <span class="muted" style="font-size:11px;">(view only)</span>' : '') +
+          '</div>' +
           esignStatusChip(s.status) +
           '</div>';
       }).join('');
@@ -12451,11 +12453,13 @@
 
   /** One signer row in the send form: role, name, email, and a remove button once
    *  there are more than the two defaults. */
-  function esignRowHtml(role, name, email, removable) {
-    return '<div class="esRow" style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">' +
+  function esignRowHtml(role, name, email, removable, viewOnly) {
+    return '<div class="esRow" style="display:flex;gap:8px;align-items:center;margin-bottom:6px;">' +
       '<input class="esRole" value="' + esc(role) + '" placeholder="Role" style="' + IN + 'width:110px;flex:none;">' +
       '<input class="esName" value="' + esc(name || '') + '" placeholder="Name" style="' + IN + '">' +
       '<input class="esEmail" value="' + esc(email || '') + '" placeholder="Email" style="' + IN + '">' +
+      '<label style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:#5b6478;white-space:nowrap;flex:none;" title="Can see the document but is not asked to sign it">' +
+      '<input type="checkbox" class="esViewOnly"' + (viewOnly ? ' checked' : '') + '> View only</label>' +
       (removable
         ? '<button type="button" class="link-btn esRemove" style="width:auto;padding:8px 10px;color:#9c3327;">✕</button>'
         : '<span style="width:34px;flex:none;"></span>') +
@@ -12501,8 +12505,8 @@
       planNote +
       '<div class="muted" style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;margin-bottom:6px;">Signers, in order</div>' +
       '<div id="esRows">' +
-      esignRowHtml('Customer', dm ? dm.name : '', dm ? dm.email : '', false) +
-      esignRowHtml('Summit', user.name || '', user.email || '', false) +
+      esignRowHtml('Customer', dm ? dm.name : '', dm ? dm.email : '', false, false) +
+      esignRowHtml('Summit', user.name || '', user.email || '', false, false) +
       '</div>' +
       '<button type="button" class="link-btn" id="esAddRow" style="width:auto;padding:7px 10px;font-size:12.5px;">+ Add signer</button>' +
       renderingsBlock +
@@ -12516,9 +12520,13 @@
             role: row.querySelector('.esRole').value.trim(),
             name: row.querySelector('.esName').value.trim(),
             email: row.querySelector('.esEmail').value.trim(),
+            viewOnly: row.querySelector('.esViewOnly').checked,
           };
         }).filter(function (s) { return s.email; });
         if (!signers.length) return showErr('Add at least one signer.');
+        if (!signers.some(function (s) { return !s.viewOnly; })) {
+          return showErr('At least one signer has to actually sign — mark someone as a real signer, not just view only.');
+        }
         for (var i = 0; i < signers.length; i++) {
           if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(signers[i].email)) {
             return showErr('“' + signers[i].email + '” is not a valid email address.');
@@ -12542,7 +12550,7 @@
         if (!r.ok) return showErr(await serverMessage(r, 'Could not send.'));
         close();
         loadEsign(p, version, user);
-      }, 'Send for signature', { maxWidth: '620px' });
+      }, 'Send for signature', { maxWidth: '680px' });
 
     function bindRemove() {
       document.querySelectorAll('.esRemove').forEach(function (b) {
@@ -12550,7 +12558,7 @@
       });
     }
     document.getElementById('esAddRow').addEventListener('click', function () {
-      document.getElementById('esRows').insertAdjacentHTML('beforeend', esignRowHtml('', '', '', true));
+      document.getElementById('esRows').insertAdjacentHTML('beforeend', esignRowHtml('', '', '', true, false));
       bindRemove();
     });
   }

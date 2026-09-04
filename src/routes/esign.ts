@@ -46,6 +46,8 @@ const Signer = z.object({
   email: z.string().trim().email(),
   order: z.number().int().min(1).max(10).optional(),
   titleField: z.boolean().optional(),
+  /** A CC recipient, not a required signer — see EsignSigner.viewOnly. */
+  viewOnly: z.boolean().optional(),
 });
 
 const SendBody = z.object({

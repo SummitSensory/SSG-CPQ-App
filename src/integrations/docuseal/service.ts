@@ -193,6 +193,11 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
       throw new ValidationError(`“${s.email ?? ''}” is not a valid email address.`);
     }
   }
+  if (!input.signers.some((s) => !s.viewOnly)) {
+    throw new ValidationError(
+      'At least one signer has to actually sign — mark someone as a real signer, not just view only.',
+    );
+  }
 
   const version = await prisma.proposalVersion.findUnique({
     where: { id: input.versionId },
@@ -294,6 +299,7 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
           name: s.name ?? null,
           email: s.email,
           order: s.order ?? 1,
+          viewOnly: s.viewOnly ?? false,
         })),
       },
     },
@@ -480,10 +486,15 @@ export async function applyStatus(
   }
 
   const signers = await prisma.esignSigner.findMany({ where: { envelopeId } });
-  const declined = signers.find((s) => s.status === 'DECLINED');
-  const completed = signers.length > 0 && signers.every((s) => s.status === 'COMPLETED');
-  const anyCompleted = signers.some((s) => s.status === 'COMPLETED');
-  const anyViewed = signers.some((s) => s.status === 'VIEWED' || s.viewedAt);
+  // Envelope status answers "has everyone who needs to SIGN done so" — a CC
+  // viewer has nothing to sign or decline, so one who never opens the document
+  // (or, per DocuSeal, could not meaningfully "decline" it) must never be why
+  // an otherwise-complete envelope sits at PARTIALLY_SIGNED forever.
+  const required = signers.filter((s) => !s.viewOnly);
+  const declined = required.find((s) => s.status === 'DECLINED');
+  const completed = required.length > 0 && required.every((s) => s.status === 'COMPLETED');
+  const anyCompleted = required.some((s) => s.status === 'COMPLETED');
+  const anyViewed = required.some((s) => s.status === 'VIEWED' || s.viewedAt);
 
   const next = declined
     ? 'DECLINED'
