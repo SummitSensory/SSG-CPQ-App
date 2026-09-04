@@ -17,6 +17,7 @@ import {
 } from './client.js';
 import { buildPackageHtml, type AssemblyAttachment, type SignerSpec } from './assembly.js';
 import { envelopePath, putPdf } from './storage.js';
+import { notifyCountersignNeeded, notifyProposalCompleted } from './notifications.js';
 import { appendPdfDocuments } from '../../lib/pdfMerge.js';
 import { resolveReferenceDocuments } from '../../proposals/referenceDocuments.js';
 
@@ -493,7 +494,20 @@ export async function applyStatus(
     },
   });
 
+  // Fired after the status write above, so a failed alert or monday push can
+  // never leave the envelope's own status update in doubt.
+  if (next === 'PARTIALLY_SIGNED' && envelope.status !== 'PARTIALLY_SIGNED') {
+    await notifyCountersignNeeded(envelopeId).catch((err) =>
+      logger.error({ err, envelopeId }, 'esign: countersign notification failed'),
+    );
+  }
+
   if (next === 'COMPLETED' && !envelope.signedUrl) await storeSignedCopy(envelopeId);
+  if (next === 'COMPLETED') {
+    await notifyProposalCompleted(envelopeId).catch((err) =>
+      logger.error({ err, envelopeId }, 'esign: completion notification failed'),
+    );
+  }
 }
 
 /**
