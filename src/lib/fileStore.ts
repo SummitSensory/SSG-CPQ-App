@@ -126,8 +126,11 @@ export async function putFile(
       // The store is configured for private access (not world-readable by URL —
       // right for a customer's purchase order or W9). Omitting this defaults to
       // public and the API refuses the mismatch: "Cannot use public access on a
-      // private store."
-      'x-access': 'private',
+      // private store." The header name is `x-vercel-blob-access`, not the more
+      // guessable `x-access` — confirmed against @vercel/blob's own source
+      // (packages/blob/src/put-helpers.ts), since this raw-fetch call bypasses
+      // the SDK and its public `access: 'private'` option entirely.
+      'x-vercel-blob-access': 'private',
     },
     body: new Uint8Array(bytes),
   });
