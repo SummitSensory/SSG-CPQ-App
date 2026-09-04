@@ -429,6 +429,11 @@
   // quickbooks:transact — who may authorize and create live financial documents.
   var QBO_TXN_ROLES = ['SYSTEM_ADMIN', 'ACCOUNTING'];
   var QBO_VIEW_ROLES = ['SYSTEM_ADMIN', 'EXECUTIVE', 'ACCOUNTING'];
+  // Matches Permission.PROPOSAL_ESIGN's actual grant (src/authz/permissions.ts) —
+  // narrower than PROP_WRITE, which also covers roles (Designer, Estimator,
+  // Operations, Project Manager) that can edit a proposal but do not hold
+  // permission to send it for signature, sync its status, or void it.
+  var ESIGN_WRITE_ROLES = ['SYSTEM_ADMIN', 'EXECUTIVE', 'SALES_MANAGER', 'SALES_REP'];
   function navFor(role) {
     return NAV.filter(function (n) {
       if (n.roles === '*') return true;
@@ -2627,11 +2632,17 @@
         ? sectionBlock('Send to the customer',
           '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">' +
             '<button class="btn" id="propSendDocs" style="width:auto;padding:10px 17px;">Send documents…</button>' +
+            (hasRole(ESIGN_WRITE_ROLES, user.role)
+              ? '<button class="link-btn" id="propEsignSend" style="width:auto;padding:10px 17px;">Sign electronically…</button>'
+              : '') +
             '<button class="link-btn" id="propFollowUp" style="width:auto;padding:10px 17px;">Follow-up email…</button>' +
             '<button class="link-btn" id="propEmail" style="width:auto;padding:10px 17px;">Write an email…</button>' +
-            '<div class="muted" style="font-size:12.5px;max-width:520px;line-height:1.55;">Send documents attaches the proposal or the financing sheet and records the send. Follow-up email picks from the ten templates and shows which this customer has already had. Write an email opens a plain draft in Outlook for anything else.</div>' +
+            '<div class="muted" style="font-size:12.5px;max-width:520px;line-height:1.55;">Send documents attaches the proposal or the financing sheet and records the send. Sign electronically sends it through DocuSeal for a real signature instead. Follow-up email picks from the ten templates and shows which this customer has already had. Write an email opens a plain draft in Outlook for anything else.</div>' +
           '</div>')
         : '') +
+      // Electronic signature: shown once the account is configured for it, so a
+      // deployment without a DocuSeal token never shows a dead button.
+      sectionBlock('Electronic signature', '<div id="esignBox"><div class="muted" style="padding:16px;">Loading…</div></div>') +
       sectionBlock('Ideal decision timeline', proposalTimelinePanel(p, latest)) +
       // QuickBooks, on the proposal, once a version has been accepted. Same three-step
       // panel the order page shows and the same endpoints behind it — the order still
@@ -2651,6 +2662,8 @@
     });
     var psd = document.getElementById('propSendDocs');
     if (psd) psd.addEventListener('click', function () { openSendDocuments(p, finCache, 'customer'); });
+    var pes = document.getElementById('propEsignSend');
+    if (pes) pes.addEventListener('click', function () { openEsignSend(p, latest, user); });
     var pfu = document.getElementById('propFollowUp');
     if (pfu) pfu.addEventListener('click', function () {
       openFollowUpPicker({
@@ -2702,6 +2715,7 @@
     }
     loadFinancing(p, user);
     if (lockedOrder) loadShippingCard(lockedOrder.id, 'shipBox');
+    loadEsign(p, latest, user);
     document.querySelectorAll('[data-open]').forEach(function (bt) {
       bt.addEventListener('click', function () {
         var v = versions.filter(function (x) { return x.id === bt.getAttribute('data-vid'); })[0];
@@ -12314,6 +12328,207 @@
     } catch (e) { return null; }
   }
 
+  /* --- Electronic signature (DocuSeal) ---
+   *
+   * The backend for this (src/integrations/docuseal/*, src/routes/esign.ts) has
+   * existed for a while with no screen calling any of it — this is that screen.
+   * One envelope per proposal version at a time; the API already enforces that,
+   * this just reflects it. Signers are emailed by DocuSeal itself, in the order
+   * listed, so the customer always signs before Summit countersigns.
+   */
+  var ESIGN_LIVE = ['DRAFT', 'SENT', 'VIEWED', 'PARTIALLY_SIGNED'];
+
+  function esignStatusChip(status) {
+    var tone = status === 'COMPLETED'
+      ? { bg: '#eaf1ec', fg: '#2f6b4f' }
+      : (status === 'DECLINED' || status === 'FAILED')
+        ? { bg: '#fbecea', fg: '#9c3327' }
+        : status === 'VOIDED'
+          ? { bg: '#f2f3ef', fg: '#8a8f85' }
+          : { bg: '#eef2f6', fg: '#3d4a55' };
+    return '<span class="chip" style="background:' + tone.bg + ';color:' + tone.fg + ';">' + titleCase(status) + '</span>';
+  }
+
+  /** DocuSeal's raw webhook event names, in words a rep reads without translating. */
+  function esignEventLabel(ev) {
+    var map = {
+      'form.viewed': 'opened the document',
+      'form.started': 'started signing',
+      'form.completed': 'signed',
+      'form.declined': 'declined to sign',
+      'submission.completed': 'completed the signature request',
+      'submission.expired': 'the request expired',
+      'submission.archived': 'the request was voided',
+    };
+    return map[ev.eventType] || ev.eventType;
+  }
+
+  async function loadEsign(p, version, user) {
+    var box = document.getElementById('esignBox');
+    if (!box) return;
+    var st = {};
+    try { var rs = await authed('/esign/status'); st = rs.ok ? await rs.json() : {}; } catch (e) {}
+    if (!st.configured) {
+      box.innerHTML = '<div class="muted" style="padding:16px;">Electronic signature is not configured on this deployment.</div>';
+      return;
+    }
+
+    var envelopes = [];
+    try {
+      var re = await authed('/esign/envelopes?versionId=' + encodeURIComponent(version.id));
+      envelopes = re.ok ? await re.json() : [];
+    } catch (e) {}
+    // Newest first, per the endpoint's own ordering — this is the one that matters.
+    var envelope = envelopes[0] || null;
+    var canWrite = hasRole(ESIGN_WRITE_ROLES, user.role);
+    var live = envelope && ESIGN_LIVE.indexOf(envelope.status) !== -1;
+    var sendBtn = '<button class="btn" id="esignSend" style="width:auto;padding:9px 16px;">' +
+      (envelope ? 'Send again…' : 'Sign electronically…') + '</button>';
+
+    if (!envelope) {
+      box.innerHTML = '<div style="padding:16px 18px;">' +
+        '<div class="muted" style="font-size:12.5px;margin-bottom:12px;">Not sent for signature yet.</div>' +
+        (canWrite ? sendBtn : '') +
+        '</div>';
+    } else {
+      var signerRows = (envelope.signers || []).map(function (s) {
+        return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #eceef4;font-size:13px;">' +
+          '<div><b style="font-weight:600;">' + esc(s.name || s.role) + '</b> ' +
+          '<span class="muted" style="font-size:12px;">' + esc(s.email) + '</span></div>' +
+          esignStatusChip(s.status) +
+          '</div>';
+      }).join('');
+      var eventRows = (envelope.events || []).slice(0, 8).map(function (ev) {
+        return '<div class="muted" style="font-size:11.5px;padding:3px 0;">' +
+          esc(fmtDateTime(ev.createdAt)) + ' — ' + esc(esignEventLabel(ev)) + '</div>';
+      }).join('');
+      box.innerHTML = '<div style="padding:16px 18px;">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">' +
+        esignStatusChip(envelope.status) +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+        (canWrite && live ? '<button class="link-btn" id="esignSync" style="width:auto;padding:7px 12px;">Refresh status</button>' : '') +
+        (canWrite && live ? '<button class="link-btn" id="esignVoid" style="width:auto;padding:7px 12px;color:#9c3327;">Void</button>' : '') +
+        (envelope.status === 'COMPLETED' ? '<button class="btn" id="esignDownload" style="width:auto;padding:7px 12px;">Download signed PDF</button>' : '') +
+        '</div></div>' +
+        '<div style="margin-top:12px;">' + signerRows + '</div>' +
+        (eventRows ? '<div style="margin-top:10px;padding-top:8px;border-top:1px solid #eceef4;">' + eventRows + '</div>' : '') +
+        (canWrite && !live ? '<div style="margin-top:14px;">' + sendBtn + '</div>' : '') +
+        '</div>';
+    }
+
+    var sb = document.getElementById('esignSend');
+    if (sb) sb.addEventListener('click', function () { openEsignSend(p, version, user); });
+    var sy = document.getElementById('esignSync');
+    if (sy) sy.addEventListener('click', async function () {
+      sy.disabled = true;
+      var r = await authed('/esign/envelopes/' + envelope.id + '/sync', { method: 'POST' });
+      sy.disabled = false;
+      if (!r.ok) { alert(await serverMessage(r, 'Could not refresh status.')); return; }
+      loadEsign(p, version, user);
+    });
+    var vo = document.getElementById('esignVoid');
+    if (vo) vo.addEventListener('click', async function () {
+      var reason = window.prompt('Why are you voiding this signature request?', '');
+      if (reason === null) return;
+      vo.disabled = true;
+      var r = await authed('/esign/envelopes/' + envelope.id + '/void', { method: 'POST', body: { reason: reason } });
+      vo.disabled = false;
+      if (!r.ok) { alert(await serverMessage(r, 'Could not void this request.')); return; }
+      loadEsign(p, version, user);
+    });
+    var dl = document.getElementById('esignDownload');
+    if (dl) dl.addEventListener('click', async function () {
+      var r = await authed('/esign/envelopes/' + envelope.id + '/signed-pdf');
+      if (!r.ok) { alert(await serverMessage(r, 'Could not download the signed document.')); return; }
+      var blob = await r.blob();
+      var url = URL.createObjectURL(blob);
+      window.open(url, '_blank');
+      setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+    });
+  }
+
+  /** One signer row in the send form: role, name, email, and a remove button once
+   *  there are more than the two defaults. */
+  function esignRowHtml(role, name, email, removable) {
+    return '<div class="esRow" style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">' +
+      '<input class="esRole" value="' + esc(role) + '" placeholder="Role" style="' + IN + 'width:110px;flex:none;">' +
+      '<input class="esName" value="' + esc(name || '') + '" placeholder="Name" style="' + IN + '">' +
+      '<input class="esEmail" value="' + esc(email || '') + '" placeholder="Email" style="' + IN + '">' +
+      (removable
+        ? '<button type="button" class="link-btn esRemove" style="width:auto;padding:8px 10px;color:#9c3327;">✕</button>'
+        : '<span style="width:34px;flex:none;"></span>') +
+      '</div>';
+  }
+
+  async function openEsignSend(p, version, user) {
+    var ctx = { contacts: [] };
+    try { var rc = await authed('/proposals/' + p.id + '/send-context'); if (rc.ok) ctx = await rc.json(); } catch (e) {}
+    var dm = ctx.contacts.filter(function (c) { return c.isDecisionMaker; })[0] || ctx.contacts[0];
+
+    var plan = { template: null, attachments: [] };
+    try {
+      var rp = await authed('/esign/proposals/versions/' + version.id + '/plan');
+      if (rp.ok) plan = await rp.json();
+    } catch (e) {}
+
+    var planNote = '<div class="muted" style="font-size:12px;line-height:1.6;margin-bottom:14px;padding:10px 12px;background:#f7f9fc;border-radius:8px;">' +
+      'Signing template: <b>' + (plan.template ? esc(plan.template.name) : 'the proposal document itself') + '</b>' +
+      ((plan.attachments || []).length ? '<br>Attached: ' + plan.attachments.map(function (a) { return esc(a.name); }).join(', ') : '') +
+      '</div>';
+
+    openModal('Sign electronically',
+      planNote +
+      '<div class="muted" style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;margin-bottom:6px;">Signers, in order</div>' +
+      '<div id="esRows">' +
+      esignRowHtml('Customer', dm ? dm.name : '', dm ? dm.email : '', false) +
+      esignRowHtml('Summit', user.name || '', user.email || '', false) +
+      '</div>' +
+      '<button type="button" class="link-btn" id="esAddRow" style="width:auto;padding:7px 10px;font-size:12.5px;">+ Add signer</button>' +
+      fieldRow('Subject', '<input id="esSubject" placeholder="Leave blank for the default" style="' + IN + '">') +
+      fieldRow('Message', '<textarea id="esMsg" rows="4" placeholder="Leave blank for a short default note" style="' + IN + 'resize:vertical;"></textarea>') +
+      '<div class="muted" style="font-size:12px;margin-top:2px;">DocuSeal emails each signer in the order listed — the first signs before the next is asked to.</div>',
+      async function (close, showErr) {
+        var rows = Array.prototype.slice.call(document.querySelectorAll('#esRows .esRow'));
+        var signers = rows.map(function (row) {
+          return {
+            role: row.querySelector('.esRole').value.trim(),
+            name: row.querySelector('.esName').value.trim(),
+            email: row.querySelector('.esEmail').value.trim(),
+          };
+        }).filter(function (s) { return s.email; });
+        if (!signers.length) return showErr('Add at least one signer.');
+        for (var i = 0; i < signers.length; i++) {
+          if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(signers[i].email)) {
+            return showErr('“' + signers[i].email + '” is not a valid email address.');
+          }
+          if (!signers[i].role) return showErr('Every signer needs a role (e.g. Customer, Summit).');
+        }
+        var doc = await buildProposalDocForSend(p, version.id);
+        if (!doc) return showErr('Could not prepare the proposal. Open the proposal preview once, then try again.');
+        var body = {
+          proposalHtml: doc.html,
+          filename: doc.filename,
+          signers: signers,
+          subject: document.getElementById('esSubject').value.trim(),
+          message: document.getElementById('esMsg').value,
+        };
+        var r = await authed('/render/esign/proposals/versions/' + version.id + '/send',
+          { method: 'POST', body: body, timeoutMs: RENDER_TIMEOUT_MS });
+        if (!r.ok) return showErr(await serverMessage(r, 'Could not send.'));
+        close();
+        loadEsign(p, version, user);
+      }, 'Send for signature', { maxWidth: '620px' });
+
+    function bindRemove() {
+      document.querySelectorAll('.esRemove').forEach(function (b) {
+        b.onclick = function () { b.closest('.esRow').remove(); };
+      });
+    }
+    document.getElementById('esAddRow').addEventListener('click', function () {
+      document.getElementById('esRows').insertAdjacentHTML('beforeend', esignRowHtml('', '', '', true));
+      bindRemove();
+    });
+  }
 
   /* --- Admin --- */
   /* --- Admin ---

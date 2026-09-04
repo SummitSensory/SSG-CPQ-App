@@ -7,6 +7,7 @@ import { Permission } from '../authz/permissions.js';
 import { NotFoundError, ValidationError } from '../lib/errors.js';
 import { isDocusealConfigured, env } from '../config/env.js';
 import { isBlobConfigured } from '../integrations/docuseal/storage.js';
+import { getFile } from '../lib/fileStore.js';
 import {
   CUSTOMER_ROLE,
   resolveAttachments,
@@ -197,6 +198,35 @@ export function registerEsignRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const body = (req.body ?? {}) as { reason?: string };
     return voidEnvelope({ envelopeId: id, reason: body.reason, actorId: req.user!.sub });
+  });
+
+  /**
+   * The executed PDF, once fully signed. Proxied rather than redirected to the
+   * blob URL — same reasoning as the reference-document download: the store is
+   * private, and a browser needs the bearer token this route already holds.
+   */
+  app.get('/esign/envelopes/:id/signed-pdf', read, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const envelope = await prisma.esignEnvelope.findUnique({
+      where: { id },
+      select: { signedUrl: true, proposalId: true },
+    });
+    if (!envelope) throw new NotFoundError('Signature request not found');
+    if (!envelope.signedUrl)
+      throw new ValidationError('This document has not been fully signed yet.');
+    const proposal = await prisma.proposal.findUnique({
+      where: { id: envelope.proposalId },
+      select: { number: true },
+    });
+    const bytes = await getFile(envelope.signedUrl);
+    return reply
+      .header('Content-Type', 'application/pdf')
+      .header(
+        'Content-Disposition',
+        `inline; filename="${proposal?.number ?? 'proposal'}-signed.pdf"`,
+      )
+      .header('Cache-Control', 'private, max-age=60')
+      .send(bytes);
   });
 
   /* ---- The ~10 signing document templates ---- */
