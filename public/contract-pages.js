@@ -615,7 +615,13 @@
           '<div' +
           (id ? ' id="' + id + '"' : '') +
           ' style="flex:1;border-bottom:1px solid #20241f;' +
-          (depth ? 'height:' + depth + 'px;' : 'padding-bottom:1px;') +
+          // A depth this tall is reserved for a signature — DocuSeal fills it
+          // with an image, not a line of text, and without bottom-alignment
+          // draws it at the top of the box, floating above the rule instead
+          // of resting on it.
+          (depth
+            ? 'height:' + depth + 'px;display:flex;align-items:flex-end;'
+            : 'padding-bottom:1px;') +
           '">' +
           (value ? esc(value) : '') +
           '</div></div>'
