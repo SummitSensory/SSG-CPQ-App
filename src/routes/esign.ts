@@ -42,7 +42,7 @@ const jsonOrClear = (v: Record<string, unknown> | null | undefined) =>
  *
  * The send lives under `/render/*` on purpose: it renders the signing package with
  * headless Chromium, and per vercel.json that prefix is routed to its own function
- * with 2 GB and 60 seconds. On the main API function a cold browser either never
+ * with 3 GB and 180 seconds. On the main API function a cold browser either never
  * finishes or takes the request down with it — the same reason the monday document
  * upload was moved there.
  *

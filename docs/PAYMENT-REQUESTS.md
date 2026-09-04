@@ -111,7 +111,7 @@ wants to have sent under their name.
 ## Two things worth knowing
 
 **The send runs on the renderer function.** It prints the letter with headless
-Chromium, so it is routed under `/render/*` where there are 60 seconds and 3009 MB
+Chromium, so it is routed under `/render/*` where there are 180 seconds and 3009 MB
 (`vercel.json`). The main function's thirty seconds is not enough for a Chromium
 cold start plus a QuickBooks PDF fetch plus three Graph calls, and the failure mode
 when it is not enough is a timeout halfway through sending a customer a demand for

@@ -534,7 +534,7 @@ export function registerFinanceRoutes(app: FastifyInstance): void {
    * it, to whom, and for how much.
    */
   // Under /render/*: this renders the sheet to PDF before sending, which needs
-  // the render function's memory and 60-second ceiling. See vercel.json.
+  // the render function's memory and 180-second ceiling. See vercel.json.
   app.post('/render/proposals/:id/financing/send', read, async (req) => {
     const { id } = req.params as { id: string };
     const parsed = SendSchema.safeParse(req.body ?? {});
