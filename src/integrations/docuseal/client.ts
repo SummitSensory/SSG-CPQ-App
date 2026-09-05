@@ -109,6 +109,10 @@ export interface DocusealSubmission {
   completed_at?: string | null;
   documents?: Array<{ name: string; url: string }>;
   audit_log_url?: string | null;
+  /** The signed document(s) with DocuSeal's Certificate of Signature (audit log)
+   *  appended as trailing pages — what fetchCompletedPdf stores, not `documents`
+   *  alone, so what a rep downloads is provably authenticated, not just signed. */
+  combined_document_url?: string | null;
 }
 
 /**
@@ -194,20 +198,33 @@ export async function archiveTemplate(templateId: number | string): Promise<void
 }
 
 /**
- * The executed document(s) for a completed submission. DocuSeal returns signed
- * URLs; the bytes are fetched here so the caller can put a copy in our own storage.
+ * The executed document for a completed submission — DocuSeal's combined PDF,
+ * signed pages plus its Certificate of Signature (audit log) appended, not the
+ * bare signed document. `combined_document_url` is what carries that; the plain
+ * `documents` array is only the signed pages, with no proof of who signed what,
+ * when, from where — never used here, even as a fallback: storeSignedCopy only
+ * retries fetching this while `signedUrl` is still unset, so silently falling
+ * back to the uncertified document on a rare timing gap (DocuSeal assembles the
+ * combined copy moments after completion, not necessarily atomically with it)
+ * would lock that in as the permanent "signed" record with no path to the real
+ * one. Returning null here just means "not ready yet" — the next webhook or a
+ * manual "Refresh status" tries again.
+ *
+ * The bytes are fetched here, not the URL stored, because DocuSeal's document
+ * URLs expire in ~40 minutes — the caller puts a permanent copy in our own
+ * storage.
  */
 export async function fetchCompletedPdf(
   submissionId: number | string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ filename: string; bytes: Buffer } | null> {
   const submission = await getSubmission(submissionId);
-  const doc = submission.documents?.[0];
-  if (!doc?.url) return null;
-  const res = await fetchImpl(doc.url);
+  if (!submission.combined_document_url) return null;
+  const res = await fetchImpl(submission.combined_document_url);
   if (!res.ok) throw new DocusealError(`DocuSeal document download HTTP ${res.status}`, res.status);
   const bytes = Buffer.from(await res.arrayBuffer());
-  const filename = /\.pdf$/i.test(doc.name) ? doc.name : `${doc.name}.pdf`;
+  const name = submission.documents?.[0]?.name || 'signed-document';
+  const filename = /\.pdf$/i.test(name) ? name : `${name}.pdf`;
   return { filename, bytes };
 }
 

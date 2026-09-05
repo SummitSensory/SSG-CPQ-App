@@ -5,7 +5,8 @@ import { logger } from '../../lib/logger.js';
 import { recordAudit } from '../../lib/audit.js';
 import { ValidationError, NotFoundError } from '../../lib/errors.js';
 import { renderPdf, pdfAvailable } from '../../render/pdf.js';
-import { versionTotals, type RawItem } from '../../proposals/analytics.js';
+import { versionTotals, metaOf, type RawItem } from '../../proposals/analytics.js';
+import { sellerCollectedCharges } from '../../crossborder/sellerCharges.js';
 import { env, isDocusealConfigured } from '../../config/env.js';
 import {
   archiveSubmission,
@@ -15,10 +16,34 @@ import {
   getSubmission,
   type DocusealSubmitter,
 } from './client.js';
-import { buildPackageHtml, type AssemblyAttachment, type SignerSpec } from './assembly.js';
+import {
+  buildPackageHtml,
+  CUSTOMER_ROLE,
+  SUMMIT_ROLE,
+  type AssemblyAttachment,
+  type SignerSpec,
+} from './assembly.js';
+// Re-exported: esign.ts and others import these role names from this module,
+// but Customer/Summit are the document's own concept (assembly.ts decides
+// which role's fields land where), not this file's.
+export { CUSTOMER_ROLE, SUMMIT_ROLE };
 import { envelopePath, putPdf } from './storage.js';
-import { appendPdfDocuments } from '../../lib/pdfMerge.js';
+import {
+  notifyCountersignNeeded,
+  notifyProposalCompleted,
+  notifyPendingSigners,
+} from './notifications.js';
+import { appendPdfDocuments, appendImagePages } from '../../lib/pdfMerge.js';
 import { resolveReferenceDocuments } from '../../proposals/referenceDocuments.js';
+import { resolveRenderings } from '../../lib/renderingStore.js';
+import { renderCertificatePdf } from './certificate.js';
+import {
+  renderEsignEmail,
+  firstNameOf,
+  lastNameOf,
+  type EsignEmailTemplateData,
+} from '../../email/esignEmailTemplates.js';
+import { longDate } from '../../email/paymentTemplates.js';
 
 /**
  * Proposal e-signing.
@@ -44,9 +69,6 @@ const LIVE: Array<'DRAFT' | 'SENT' | 'VIEWED' | 'PARTIALLY_SIGNED'> = [
   'VIEWED',
   'PARTIALLY_SIGNED',
 ];
-
-export const SUMMIT_ROLE = 'Summit';
-export const CUSTOMER_ROLE = 'Customer';
 
 /* -------------------------------------------------------------------------- */
 /* Template resolution                                                        */
@@ -87,6 +109,68 @@ export async function resolveProposalTemplate(input: {
 
   const specific = candidates.find((t) => t.productLineIds.some((id) => lineIds.has(id)));
   return specific ?? candidates.find((t) => t.productLineIds.length === 0) ?? candidates[0]!;
+}
+
+/**
+ * A rep's explicit "no, not even the auto-pick" — distinct from omitting
+ * `emailTemplateKey`, which means "I have no preference, auto-pick for me".
+ * Without this, a rep who deliberately deselects the auto-picked template in
+ * the send form has no way to say so: an absent key and a rejected key look
+ * identical to resolveEmailTemplate, and the rejection would silently be
+ * overridden back to the very template it just declined.
+ */
+export const NO_EMAIL_TEMPLATE = '__none__';
+
+/**
+ * Which of the ~10 "please sign this" emails should go out with this proposal.
+ *
+ * Same rule as resolveProposalTemplate — auto-pick by product line, explicit
+ * `emailTemplateKey` wins, empty-productLineIds is the fallback — but this is an
+ * independent list: a rep can pair a Summit Flex document template with a
+ * hand-picked email, or vice versa.
+ */
+export async function resolveEmailTemplate(input: {
+  items: unknown;
+  emailTemplateKey?: string;
+}): Promise<(EsignEmailTemplateData & { id: string }) | null> {
+  if (input.emailTemplateKey === NO_EMAIL_TEMPLATE) return null;
+  if (input.emailTemplateKey) {
+    const picked = await prisma.esignEmailTemplate.findUnique({
+      where: { key: input.emailTemplateKey },
+    });
+    if (!picked)
+      throw new ValidationError(`No signing email with the key “${input.emailTemplateKey}”.`);
+    if (!picked.active)
+      throw new ValidationError(`The signing email “${picked.name}” is switched off.`);
+    return picked;
+  }
+
+  const lineIds = await productLineIdsFor(input.items);
+  const candidates = await prisma.esignEmailTemplate.findMany({
+    where: { active: true },
+    orderBy: [{ sortOrder: 'asc' }, { key: 'asc' }],
+  });
+  if (!candidates.length) return null;
+
+  const specific = candidates.find((t) => t.productLineIds.some((id) => lineIds.has(id)));
+  return specific ?? candidates.find((t) => t.productLineIds.length === 0) ?? candidates[0]!;
+}
+
+/** The customer's own first name for the email greeting — the first non-view-only
+ *  signer with the Customer role, or just the first non-view-only signer. */
+function firstNameOfContact(signers: SignerSpec[]): string {
+  const primary =
+    signers.find((s) => !s.viewOnly && s.role === CUSTOMER_ROLE) ??
+    signers.find((s) => !s.viewOnly);
+  return firstNameOf(primary?.name);
+}
+
+/** The same signer firstNameOfContact resolves, split the other way. */
+function lastNameOfContact(signers: SignerSpec[]): string {
+  const primary =
+    signers.find((s) => !s.viewOnly && s.role === CUSTOMER_ROLE) ??
+    signers.find((s) => !s.viewOnly);
+  return lastNameOf(primary?.name);
 }
 
 /** Product lines represented on a version, read through the products it prices. */
@@ -151,9 +235,29 @@ export interface SendInput {
    * no separate save this could drift from.
    */
   referenceDocumentKeys?: string[];
+  /**
+   * ProposalRendering ids to bind in as trailing pages — design renderings the
+   * customer needs to see alongside what they're signing. In the order given,
+   * which is what lets a rep change page order at send time rather than being
+   * stuck with upload order. Land after the signature page and before reference
+   * documents: central, job-specific content ahead of generic boilerplate forms.
+   */
+  renderingIds?: string[];
+  emailTemplateKey?: string;
+  /**
+   * The rep's final wording for the "please sign this" email, as edited in the
+   * send preview — defaults to the resolved template's own rendering when
+   * omitted. Both may still contain the literal token `[Signing Link]`: it is
+   * filled in per recipient, not here, because each signer gets their own
+   * DocuSeal URL. See notifyPendingSigners in notifications.ts.
+   */
   subject?: string;
   message?: string;
   filename?: string;
+  /** For the {{LastName}} email placeholder — see EsignEmailContext. */
+  lastName?: string;
+  /** For the {{ProductName}} email placeholder — see EsignEmailContext. */
+  productName?: string;
   actorId: string;
 }
 
@@ -184,6 +288,11 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
       throw new ValidationError(`“${s.email ?? ''}” is not a valid email address.`);
     }
   }
+  if (!input.signers.some((s) => !s.viewOnly)) {
+    throw new ValidationError(
+      'At least one signer has to actually sign — mark someone as a real signer, not just view only.',
+    );
+  }
 
   const version = await prisma.proposalVersion.findUnique({
     where: { id: input.versionId },
@@ -192,6 +301,8 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
       status: true,
       items: true,
       sections: true,
+      version: true,
+      expirationDate: true,
       proposal: { select: { id: true, number: true, title: true, organizationId: true } },
     },
   });
@@ -213,17 +324,61 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
     );
   }
 
-  const org = await prisma.organization.findUnique({
-    where: { id: version.proposal.organizationId },
-    select: { name: true },
-  });
   const totals = versionTotals(version.items, version.sections);
 
-  const template = await resolveProposalTemplate({
-    items: version.items,
-    templateKey: input.templateKey,
-  });
-  const attachments = await resolveAttachments({ keys: input.attachmentKeys });
+  // None of these six reads depends on another's result — run them together
+  // rather than paying for six sequential round trips on every send.
+  const [org, template, attachments, emailTemplate, sender, border] = await Promise.all([
+    prisma.organization.findUnique({
+      where: { id: version.proposal.organizationId },
+      select: { name: true },
+    }),
+    resolveProposalTemplate({ items: version.items, templateKey: input.templateKey }),
+    resolveAttachments({ keys: input.attachmentKeys }),
+    resolveEmailTemplate({ items: version.items, emailTemplateKey: input.emailTemplateKey }),
+    prisma.user.findUnique({ where: { id: input.actorId }, select: { name: true } }),
+    sellerCollectedCharges(input.versionId),
+  ]);
+  // What the customer actually owes, matching the figure the proposal document
+  // itself prints as "Total payable to Summit" (see docTotal in
+  // proposal-document.js) — versionTotals() alone is the pre-cross-border figure.
+  // Signing a package that states a lower total than the document inside it would
+  // be worse than not signing at all.
+  const payableTotal = totals.total + border.totalMinor;
+  // The rep's edit wins outright when given; otherwise the resolved template is
+  // rendered here so an envelope always has a full email, even with no override
+  // and no email template configured yet (falls back to a bare, functional note).
+  // `[Signing Link]` is deliberately left in place — see notifyPendingSigners.
+  const meta = metaOf(version.sections) as { proposalDate?: string };
+  const defaultEmail = emailTemplate
+    ? renderEsignEmail(emailTemplate, {
+        firstName: firstNameOfContact(input.signers),
+        lastName: input.lastName?.trim() || lastNameOfContact(input.signers) || undefined,
+        senderFirstName: firstNameOf(sender?.name),
+        senderName: sender?.name ?? undefined,
+        customerName: org?.name,
+        proposalNumber: version.proposal.number,
+        proposalTitle: version.proposal.title ?? undefined,
+        proposalVersionLabel: `V${version.version}`,
+        proposalDateLabel: longDate(meta.proposalDate),
+        proposalExpirationLabel: longDate(version.expirationDate),
+        productName: input.productName?.trim() || undefined,
+        signingLink: '[Signing Link]',
+      })
+    : {
+        subject: `${version.proposal.number} — please review and sign`,
+        html: `<p>Please review and sign the attached proposal.</p><p><a href="[Signing Link]">Review &amp; sign</a></p>`,
+      };
+  const emailSubject = input.subject?.trim() || defaultEmail.subject;
+  const emailHtml = input.message?.trim() || defaultEmail.html;
+  // The rep's edit is free-text HTML; the one thing it cannot lose is the one
+  // thing that makes the email functional. Checked here, not just in the send
+  // modal, because the modal's check is not the only path to this function.
+  if (!emailHtml.includes('[Signing Link]')) {
+    throw new ValidationError(
+      'The email body no longer has a [Signing Link] placeholder — the recipient would have no way to open the document. Add it back (e.g. in a link) before sending.',
+    );
+  }
 
   // Signers are ordered so the customer signs first and we countersign after —
   // countersigning a document the customer has not signed is backwards.
@@ -236,10 +391,25 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
     proposalNumber: version.proposal.number,
     proposalTitle: version.proposal.title,
     customerName: org?.name,
-    totalMinor: totals.total,
+    totalMinor: payableTotal,
   });
 
   let pdf = await renderPdf(html, { format: 'Letter' });
+  // Renderings first — central, job-specific content — then reference documents,
+  // which are generic boilerplate forms. Each rendering is merged individually,
+  // in the order given, rather than as two batched passes (all PDFs, then all
+  // images): a batched pass would silently reorder a mixed PDF/image selection.
+  const renderings = await resolveRenderings(version.proposal.id, input.renderingIds ?? []);
+  for (const rendering of renderings) {
+    pdf =
+      rendering.contentType === 'application/pdf'
+        ? await appendPdfDocuments(pdf, [rendering])
+        : await appendImagePages(pdf, [rendering]);
+  }
+  // Only the ones that actually resolved and merged — resolveRenderings drops a
+  // rendering that failed to fetch, and the audit trail should answer for what
+  // actually went out, not what was asked for.
+  const mergedRenderingIds = renderings.map((r) => r.id);
   const referenceDocs = await resolveReferenceDocuments(input.referenceDocumentKeys ?? []);
   // Merged in before the hash is taken, so packageSha256 answers for the document as
   // it actually went out — pages and all — not just the HTML half of it.
@@ -255,11 +425,14 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
       versionId: version.id,
       templateId: template?.id ?? null,
       templateKey: template?.key ?? null,
+      emailTemplateId: emailTemplate?.id ?? null,
+      emailTemplateKey: emailTemplate?.key ?? null,
       attachments: attachments.map((a) => a.key) as Prisma.InputJsonValue,
       referenceDocuments: (input.referenceDocumentKeys ?? []) as Prisma.InputJsonValue,
+      renderings: mergedRenderingIds as Prisma.InputJsonValue,
       status: 'DRAFT',
-      subject: input.subject ?? null,
-      message: input.message ?? null,
+      subject: emailSubject,
+      message: emailHtml,
       packageSha256: sha256,
       packageBytes: pdf.length,
       sentById: input.actorId,
@@ -269,6 +442,7 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
           name: s.name ?? null,
           email: s.email,
           order: s.order ?? 1,
+          viewOnly: s.viewOnly ?? false,
         })),
       },
     },
@@ -292,13 +466,12 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
       folderName: env.DOCUSEAL_FOLDER || undefined,
     });
 
+    // DocuSeal never emails anyone — the CRM does, from the rep's own mailbox, once
+    // the submission (and each signer's signingUrl) exists. See
+    // notifyPendingSigners below.
     const submitters = await createSubmission({
       templateId: docTemplate.id,
-      sendEmail: env.DOCUSEAL_SEND_EMAIL,
-      message:
-        input.subject || input.message
-          ? { subject: input.subject, body: input.message }
-          : undefined,
+      sendEmail: false,
       submitters: signers.map((s) => ({
         role: s.role,
         email: s.email,
@@ -356,6 +529,7 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
         envelopeId: envelope.id,
         templateKey: template?.key ?? null,
         attachments: attachments.map((a) => a.key),
+        renderings: mergedRenderingIds,
         signers: signers.map((s) => s.email),
         sha256,
       },
@@ -364,6 +538,13 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
     logger.info(
       { envelopeId: envelope.id, submissionId: updated.docusealSubmissionId },
       'esign: sent',
+    );
+    // Emails whoever's turn it is right now — the first signer(s) in order, and
+    // every view-only CC. Best-effort: a failed email must not undo a send that
+    // DocuSeal already has, and "Refresh status" or the next webhook retries it
+    // (emailedAt is unset, so it is still due).
+    await notifyPendingSigners(envelope.id).catch((err) =>
+      logger.error({ err, envelopeId: envelope.id }, 'esign: initial signer email failed'),
     );
     return {
       envelopeId: envelope.id,
@@ -454,10 +635,15 @@ export async function applyStatus(
   }
 
   const signers = await prisma.esignSigner.findMany({ where: { envelopeId } });
-  const declined = signers.find((s) => s.status === 'DECLINED');
-  const completed = signers.length > 0 && signers.every((s) => s.status === 'COMPLETED');
-  const anyCompleted = signers.some((s) => s.status === 'COMPLETED');
-  const anyViewed = signers.some((s) => s.status === 'VIEWED' || s.viewedAt);
+  // Envelope status answers "has everyone who needs to SIGN done so" — a CC
+  // viewer has nothing to sign or decline, so one who never opens the document
+  // (or, per DocuSeal, could not meaningfully "decline" it) must never be why
+  // an otherwise-complete envelope sits at PARTIALLY_SIGNED forever.
+  const required = signers.filter((s) => !s.viewOnly);
+  const declined = required.find((s) => s.status === 'DECLINED');
+  const completed = required.length > 0 && required.every((s) => s.status === 'COMPLETED');
+  const anyCompleted = required.some((s) => s.status === 'COMPLETED');
+  const anyViewed = required.some((s) => s.status === 'VIEWED' || s.viewedAt);
 
   const next = declined
     ? 'DECLINED'
@@ -482,34 +668,83 @@ export async function applyStatus(
     },
   });
 
+  // Unconditional, unlike the two below: a signer completing their turn is what
+  // makes the next order tier current, and notifyPendingSigners' own emailedAt
+  // guard is what keeps this a no-op on every other status change.
+  await notifyPendingSigners(envelopeId).catch((err) =>
+    logger.error({ err, envelopeId }, 'esign: signer email failed'),
+  );
+
+  // Fired after the status write above, so a failed alert or monday push can
+  // never leave the envelope's own status update in doubt.
+  if (next === 'PARTIALLY_SIGNED' && envelope.status !== 'PARTIALLY_SIGNED') {
+    await notifyCountersignNeeded(envelopeId).catch((err) =>
+      logger.error({ err, envelopeId }, 'esign: countersign notification failed'),
+    );
+  }
+
   if (next === 'COMPLETED' && !envelope.signedUrl) await storeSignedCopy(envelopeId);
+  if (next === 'COMPLETED') {
+    await notifyProposalCompleted(envelopeId).catch((err) =>
+      logger.error({ err, envelopeId }, 'esign: completion notification failed'),
+    );
+  }
 }
 
 /**
  * Copy the executed PDF into our own storage. Best effort by design — see the note
  * in storage.ts. The envelope is already COMPLETED; failing here would only hide
  * that fact.
+ *
+ * A branded certificate summary is appended after DocuSeal's own combined
+ * document — not in its place; see certificate.ts for why replacing it would
+ * be a compliance regression that appending never can be. Best effort on its
+ * own: a failed render must not be why the (already-fetched, already
+ * certified by DocuSeal) signed copy fails to store.
  */
 export async function storeSignedCopy(envelopeId: string): Promise<string | null> {
   const envelope = await prisma.esignEnvelope.findUnique({
     where: { id: envelopeId },
-    select: { id: true, docusealSubmissionId: true, proposalId: true },
+    include: { signers: { orderBy: { order: 'asc' } } },
   });
   if (!envelope?.docusealSubmissionId) return null;
   const proposal = await prisma.proposal.findUnique({
     where: { id: envelope.proposalId },
-    select: { number: true },
+    select: { number: true, title: true, organizationId: true },
   });
   try {
     const doc = await fetchCompletedPdf(envelope.docusealSubmissionId);
     if (!doc) return null;
+
+    let bytes = doc.bytes;
+    try {
+      const org = proposal
+        ? await prisma.organization.findUnique({
+            where: { id: proposal.organizationId },
+            select: { name: true },
+          })
+        : null;
+      const certificate = await renderCertificatePdf({
+        envelopeId: envelope.id,
+        proposalNumber: proposal?.number ?? 'proposal',
+        proposalTitle: proposal?.title,
+        customerName: org?.name,
+        sentAt: envelope.sentAt,
+        completedAt: envelope.completedAt,
+        signers: envelope.signers,
+      });
+      bytes = await appendPdfDocuments(bytes, [{ name: 'certificate', bytes: certificate }]);
+    } catch (err) {
+      logger.error({ err, envelopeId }, 'esign: certificate page render failed');
+    }
+
     const stored = await putPdf(
       envelopePath({
         proposalNumber: proposal?.number ?? 'proposal',
         envelopeId: envelope.id,
         kind: 'signed',
       }),
-      doc.bytes,
+      bytes,
     );
     const url = stored?.url ?? null;
     if (url)

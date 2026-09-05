@@ -33,7 +33,7 @@ export function registerRenderRoutes(app: FastifyInstance): void {
    * function, which has 30 seconds and no headroom for a cold headless browser —
    * the PDF either never rendered or took the whole request down with it, and the
    * deal board ended up with the numbers but no document. Here it gets the
-   * renderer's memory and its 60-second ceiling.
+   * renderer's memory and its 180-second ceiling.
    */
   app.post('/render/proposals/versions/:versionId/monday-file', release, async (req) => {
     const { versionId } = req.params as { versionId: string };

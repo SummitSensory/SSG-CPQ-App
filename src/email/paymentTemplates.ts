@@ -5,6 +5,7 @@ import { LOGO_DATA_URI, BRAND } from '../handoff/brandLogo.js';
 // inbox and in a rendered PDF, so it gets exactly the same treatment: presentation
 // tags survive, scripts, styles, iframes, event handlers and odd URL schemes do not.
 import { sanitizeSignature } from '../routes/outlook.js';
+import { esc } from './textHelpers.js';
 
 /**
  * Payment-request emails and letterhead letters.
@@ -87,12 +88,6 @@ export interface BuiltInTemplate {
   bodyHtml: string;
   /** EMAIL only — the letter this email is normally sent with. */
   pairedLetterKey?: string | null;
-}
-
-function esc(s: string): string {
-  return String(s ?? '').replace(/[&<>"]/g, (c) =>
-    c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : '&quot;',
-  );
 }
 
 /** `$1,234.56`, from minor units. */

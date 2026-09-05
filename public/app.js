@@ -151,13 +151,13 @@
    * nothing threw, and the button that started it kept saying "Saving…" for the
    * rest of the session. That is the hang.
    *
-   * RENDER_TIMEOUT_MS is deliberately longer than the 60 seconds vercel.json
+   * RENDER_TIMEOUT_MS is deliberately longer than the 180 seconds vercel.json
    * gives the render function: the client must not give up on a PDF the server is
    * still legitimately building, or a document goes out while the operator is
    * being told it failed.
    */
   var REQUEST_TIMEOUT_MS = 60000;
-  var RENDER_TIMEOUT_MS = 70000;
+  var RENDER_TIMEOUT_MS = 190000;
 
   function api(path, opts) {
     opts = opts || {};
@@ -429,6 +429,11 @@
   // quickbooks:transact — who may authorize and create live financial documents.
   var QBO_TXN_ROLES = ['SYSTEM_ADMIN', 'ACCOUNTING'];
   var QBO_VIEW_ROLES = ['SYSTEM_ADMIN', 'EXECUTIVE', 'ACCOUNTING'];
+  // Matches Permission.PROPOSAL_ESIGN's actual grant (src/authz/permissions.ts) —
+  // narrower than PROP_WRITE, which also covers roles (Designer, Estimator,
+  // Operations, Project Manager) that can edit a proposal but do not hold
+  // permission to send it for signature, sync its status, or void it.
+  var ESIGN_WRITE_ROLES = ['SYSTEM_ADMIN', 'EXECUTIVE', 'SALES_MANAGER', 'SALES_REP'];
   function navFor(role) {
     return NAV.filter(function (n) {
       if (n.roles === '*') return true;
@@ -526,6 +531,7 @@
       btn.classList.add('active');
       var item = NAV.filter(function (n) { return n.id === id; })[0];
       document.getElementById('viewTitle').textContent = item.label;
+      if (window.SSGTips) window.SSGTips.onNavigate(id);
       if (id === 'dashboard') renderDashboard(user);
       else if (id === 'crm') renderCrm(user);
       else if (id === 'catalog') window.SSGCatalog.render(user);
@@ -569,6 +575,15 @@
        * only by whoever happens to open that panel. Mounted once, here, for the
        * same reason init is: this is where the session is known. */
       window.FreightTrueUp.mountBanner(user);
+    }
+
+    /* Tips & Tricks: the page-by-page help bubble in the bottom-right corner.
+     * Mounted once, here, for the same reason FreightTrueUp is: this is where
+     * the session — and the signed-in user's own tipsEnabled preference — is
+     * known. See public/tips-and-tricks.js. */
+    if (window.SSGTips) {
+      window.SSGTips.init({ esc: esc, authed: authed });
+      window.SSGTips.mount(user);
     }
 
     /* Introduction pages: the same two helpers, and one fetch for the photographs the
@@ -732,6 +747,7 @@
       b.classList.toggle('active', b.getAttribute('data-view') === id);
     });
     var t = document.getElementById('viewTitle'); if (t) t.textContent = item.label;
+    if (window.SSGTips) window.SSGTips.onNavigate(id);
   }
 
   async function renderDashboard(user) {
@@ -2590,6 +2606,13 @@
       '</div><div style="text-align:right;"><span class="chip">' + titleCase(latest.status || 'DRAFT') + '</span>' +
         '<div style="font-size:19px;font-weight:600;margin-top:8px;">' + fmtMoney(versionTotalMinor(latest), 'USD') + '</div>' +
       '</div></div></div>' +
+      // Once there is an operational order, this is the same shipping card the
+      // order page shows — Manufacturing Phase, Estimated Ship Date and the live
+      // QuickBooks balance, so nobody has to leave the proposal to see whether
+      // this job is safe to ship.
+      (lockedOrder
+        ? sectionBlock('Shipping status', '<div id="shipBox"><div class="muted" style="padding:16px;">Loading…</div></div>')
+        : '') +
       sectionBlock('Versions', tableShell(['Version', 'Status', 'Created', 'Frozen', 'Total', ''], versions.map(function (v) {
         // A frozen version is the record of what went out — it opens read-only.
         var editable = !v.frozen && v.status === 'DRAFT' && hasRole(PROP_WRITE, user.role);
@@ -2609,11 +2632,18 @@
         ? sectionBlock('Send to the customer',
           '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">' +
             '<button class="btn" id="propSendDocs" style="width:auto;padding:10px 17px;">Send documents…</button>' +
+            (hasRole(ESIGN_WRITE_ROLES, user.role)
+              ? '<button class="link-btn" id="propEsignSend" style="width:auto;padding:10px 17px;">Sign electronically…</button>'
+              : '') +
             '<button class="link-btn" id="propFollowUp" style="width:auto;padding:10px 17px;">Follow-up email…</button>' +
             '<button class="link-btn" id="propEmail" style="width:auto;padding:10px 17px;">Write an email…</button>' +
-            '<div class="muted" style="font-size:12.5px;max-width:520px;line-height:1.55;">Send documents attaches the proposal or the financing sheet and records the send. Follow-up email picks from the ten templates and shows which this customer has already had. Write an email opens a plain draft in Outlook for anything else.</div>' +
+            '<div class="muted" style="font-size:12.5px;max-width:520px;line-height:1.55;">Send documents attaches the proposal or the financing sheet and records the send. Sign electronically sends it through DocuSeal for a real signature instead. Follow-up email picks from the ten templates and shows which this customer has already had. Write an email opens a plain draft in Outlook for anything else.</div>' +
           '</div>')
         : '') +
+      // Electronic signature: shown once the account is configured for it, so a
+      // deployment without a DocuSeal token never shows a dead button.
+      sectionBlock('Electronic signature', '<div id="esignBox"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+      sectionBlock('Design renderings', '<div id="renderingsBox"><div class="muted" style="padding:16px;">Loading…</div></div>') +
       sectionBlock('Ideal decision timeline', proposalTimelinePanel(p, latest)) +
       // QuickBooks, on the proposal, once a version has been accepted. Same three-step
       // panel the order page shows and the same endpoints behind it — the order still
@@ -2633,6 +2663,8 @@
     });
     var psd = document.getElementById('propSendDocs');
     if (psd) psd.addEventListener('click', function () { openSendDocuments(p, finCache, 'customer'); });
+    var pes = document.getElementById('propEsignSend');
+    if (pes) pes.addEventListener('click', function () { openEsignSend(p, latest, user); });
     var pfu = document.getElementById('propFollowUp');
     if (pfu) pfu.addEventListener('click', function () {
       openFollowUpPicker({
@@ -2683,6 +2715,9 @@
       }, user);
     }
     loadFinancing(p, user);
+    if (lockedOrder) loadShippingCard(lockedOrder.id, 'shipBox');
+    loadEsign(p, latest, user);
+    loadRenderings(p, user);
     document.querySelectorAll('[data-open]').forEach(function (bt) {
       bt.addEventListener('click', function () {
         var v = versions.filter(function (x) { return x.id === bt.getAttribute('data-vid'); })[0];
@@ -5889,7 +5924,7 @@
         try {
           // /render/*: this send builds the RFQ PDF before it can attach it, and
           // vercel.json routes that prefix to the function with the memory and
-          // 60-second ceiling headless Chromium needs. On the main API function a
+          // 180-second ceiling headless Chromium needs. On the main API function a
           // cold browser start ran past 30 seconds and the request was killed,
           // which is what left this dialog on "Sending…" indefinitely.
           await rfqApi('/render/rfqs/' + rfqId + '/send', {
@@ -7198,7 +7233,10 @@
   function proposalStandaloneHtml(doc) {
     return '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(doc.title || 'Proposal') + '</title>' +
       '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,400;6..72,600;6..72,700&display=swap">' +
-      '<style>@page{size:letter;margin:0;}body{margin:0;font-family:"IBM Plex Sans",-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;color:#20241f;}' +
+      // Width is pinned the same way the interactive print stylesheet pins it
+      // (see ensurePrintStyle) — a stray wide element gets clipped instead of
+      // making Chrome shrink the whole rendered page to fit it.
+      '<style>@page{size:letter;margin:0;}html,body{width:8.5in;max-width:8.5in;overflow-x:hidden;margin:0;font-family:"IBM Plex Sans",-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;color:#20241f;}' +
       '#propPrintArea{padding:0.5in;box-sizing:border-box;max-width:none;}' +
       // Sheets produced by the paginator below.
       '.ssg-sheet{width:8.5in;height:11in;margin:0;overflow:hidden;box-sizing:border-box;' +
@@ -7341,7 +7379,15 @@
       // 8.5in x 11in. The itemized proposal takes that half inch back as padding below,
       // so it prints exactly as it always has.
       '@page{size:letter;margin:0;}' +
-      '@media print{html,body{height:auto!important;overflow:visible!important;background:#fff!important;}' +
+      // Width is pinned, not just height/overflow reset. Chrome's print pipeline
+      // silently shrinks the WHOLE page (uniformly, anchored top-left) to fit
+      // whatever is widest in the print-visible tree — a leftover zoom/grid
+      // measurement on #pvFrame or #pvStage that a future change forgets to reset
+      // would otherwise produce a proposal that looks smaller than 8.5in x 11in on
+      // paper with no error and no visual cue on screen. Capping html/body to the
+      // page's own width and clipping instead of allowing overflow means a stray
+      // wide element gets cut off rather than silently rescaling the whole sheet.
+      '@media print{html,body{width:8.5in!important;max-width:8.5in!important;height:auto!important;overflow:hidden!important;background:#fff!important;}' +
       'body > *{display:none!important;}body > #propPreviewOverlay,body > #psOverlay{display:block!important;}' +
       '#propPreviewOverlay{position:static!important;inset:auto!important;height:auto!important;background:#fff!important;padding:0!important;overflow:visible!important;}#psOverlay .noprint{display:none!important;}#propPreviewOverlay .noprint{display:none!important;}' +
       // A section (heading, lines, subtotal) is one <tbody> and stays on one sheet;
@@ -8576,10 +8622,15 @@
       fieldRow('Approver title', '<input id="aTitle" style="' + IN + '">') +
       fieldRow('PO number (optional)', '<input id="aPo" style="' + IN + '">') +
       fieldRow('Approved on', '<input id="aDate" type="date" value="' + todayISO() + '" style="' + IN + '">') +
-      fieldRow('Notes', '<textarea id="aNotes" rows="2" style="' + IN + 'resize:vertical;"></textarea>'),
+      fieldRow('Notes', '<textarea id="aNotes" rows="2" style="' + IN + 'resize:vertical;"></textarea>') +
+      '<div class="muted" style="font-size:12px;margin:2px 0 8px;">The catalog has no reliable way to tell whether either was actually sold on this job — say so here rather than have it guess wrong.</div>' +
+      '<div style="display:flex;gap:18px;">' +
+        '<label style="display:flex;gap:7px;align-items:center;font-size:13.5px;cursor:pointer;"><input type="checkbox" id="aTraining" checked> This job includes training</label>' +
+        '<label style="display:flex;gap:7px;align-items:center;font-size:13.5px;cursor:pointer;"><input type="checkbox" id="aInstall" checked> This job includes installation</label>' +
+      '</div>',
       async function (close, showErr) {
         var name = document.getElementById('aName').value.trim(); if (!name) return showErr('Approver name is required.');
-        var body = { method: document.getElementById('aMethod').value, approverName: name, approverTitle: document.getElementById('aTitle').value.trim() || undefined, poNumber: document.getElementById('aPo').value.trim() || undefined, approvedAt: new Date(document.getElementById('aDate').value || Date.now()).toISOString(), notes: document.getElementById('aNotes').value.trim() || undefined };
+        var body = { method: document.getElementById('aMethod').value, approverName: name, approverTitle: document.getElementById('aTitle').value.trim() || undefined, poNumber: document.getElementById('aPo').value.trim() || undefined, approvedAt: new Date(document.getElementById('aDate').value || Date.now()).toISOString(), notes: document.getElementById('aNotes').value.trim() || undefined, trainingIncluded: document.getElementById('aTraining').checked, installationIncluded: document.getElementById('aInstall').checked };
         var r = await authed('/orders/from-version/' + versionId, { method: 'POST', body: body });
         if (!r.ok) {
           var msg = '';
@@ -8943,6 +8994,55 @@
    * with a typed reason, and Accounting is emailed when it happens — a waiver is
    * a decision on the record, not a way around the rule.
    */
+  /**
+   * Manufacturing Phase, Estimated Shipment Date and the live QuickBooks balance,
+   * side by side — read off /orders/:id/manufacturing's `shipping` field (see
+   * src/handoff/shippingReadiness.ts). Shared between the order page's
+   * Manufacturing section and the proposal page's Shipping status section, so
+   * the two never drift into showing this differently.
+   *
+   * The ship-date box is the one this whole card exists for: highlighted when
+   * the date is still blank AND the customer owes money, which is exactly the
+   * combination that should stop a job from going out the door unnoticed.
+   */
+  function shippingCardHtml(shipping) {
+    var s = shipping || {};
+    var mfg = s.manufacturing || {};
+    var hasBalance = s.balanceMinor != null && Number(s.balanceMinor) > 0;
+    var flagged = !mfg.shipDate && hasBalance;
+    var box = function (label, value, opts) {
+      opts = opts || {};
+      return '<div style="background:' + (opts.bg || '#f2f3ef') + ';border:1px solid ' + (opts.border || '#e7e8e3') +
+        ';border-radius:9px;padding:10px 13px;">' +
+        '<div style="font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:' + (opts.labelColor || '#8a8f85') + ';">' + esc(label) + '</div>' +
+        '<div style="font-size:14px;font-weight:600;margin-top:3px;">' + value + '</div></div>';
+    };
+    var balanceValue = s.balanceMinor == null
+      ? '<span class="muted" style="font-weight:400;">Not yet invoiced</span>'
+      : '<span style="color:' + (hasBalance ? '#9c3327' : '#2f6b4f') + ';">' + fmtMoney(s.balanceMinor, s.currency || 'USD') + (hasBalance ? ' owed' : ' — paid in full') + '</span>';
+    return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;">' +
+        box('Manufacturing phase', mfg.status ? esc(mfg.status) : '<span class="muted" style="font-weight:400;">—</span>') +
+        box(flagged ? 'Ship date — missing, balance owed' : 'Estimated ship date',
+          mfg.shipDate ? esc(mfg.shipDate) : '<span class="muted" style="font-weight:400;">Not set yet</span>',
+          flagged ? { bg: '#fbecea', border: '#f0ccc6', labelColor: '#9c3327' } : {}) +
+        box('Customer balance', balanceValue) +
+      '</div>' +
+      (mfg.note ? '<div class="muted" style="font-size:11.5px;margin-top:8px;">' + esc(mfg.note) + '</div>' : '');
+  }
+
+  /** The same card, fetched standalone — used by the proposal page, which has
+   *  an order (once accepted) but no reason to load the rest of the gate. */
+  async function loadShippingCard(orderId, boxId) {
+    var box = document.getElementById(boxId);
+    if (!box) return;
+    try {
+      var r = await authed('/orders/' + orderId + '/manufacturing');
+      if (!r.ok) { box.innerHTML = '<div class="muted" style="padding:16px;">Could not read shipping status (' + r.status + ').</div>'; return; }
+      var gate = await r.json();
+      box.innerHTML = '<div style="padding:16px 18px;">' + shippingCardHtml(gate.shipping) + '</div>';
+    } catch (e) { box.innerHTML = '<div class="muted" style="padding:16px;">Could not reach the server.</div>'; }
+  }
+
   async function loadManufacturing(order, user) {
     var box = document.getElementById('mfgBox');
     if (!box) return;
@@ -8991,7 +9091,9 @@
           (gate.satisfied ? '' : '<button class="link-btn" id="mfgWaive" style="width:auto;padding:9px 16px;color:#9c3327;">Waive the invoice requirement…</button>') +
         '</div>';
 
-    box.innerHTML = '<div style="padding:16px 18px;">' + state +
+    box.innerHTML = '<div style="padding:16px 18px;">' +
+      shippingCardHtml(gate.shipping) +
+      '<div style="margin-top:14px;">' + state + '</div>' +
       '<div style="margin-top:12px;">' + gateLine + docs + '</div>' + actions + '</div>';
 
     var rel = document.getElementById('mfgRelease');
@@ -10914,9 +11016,13 @@
    */
 
   /**
-   * What QuickBooks holds for this customer against what we hold. Read-only:
-   * the CRM owns every field here, so the fix for a difference is to correct the
-   * customer record and re-sync, never to pull QuickBooks' copy back in.
+   * What QuickBooks holds for this customer against what we hold. The CRM owns
+   * every field here, so the fix for a difference is to correct the customer
+   * record and re-sync — never to pull QuickBooks' copy back in. "Correct the
+   * customer record" for the contact fields IS this panel: the Invoice contact
+   * editor below saves to the CRM and pushes to monday + QuickBooks itself,
+   * rather than sending whoever hit the "Invoice email" mismatch off to a CRM
+   * screen that (until now) had no way to edit a contact at all.
    */
   async function openQboProfile(order, user) {
     var r = await authed('/integrations/quickbooks/customers/' + encodeURIComponent(order.organizationId) + '/profile');
@@ -10925,6 +11031,141 @@
     // Only somebody who may edit a customer gets the editor; everyone else keeps the
     // read-only comparison they had.
     var canEditTax = canCrmWrite(user && user.role);
+    var org = { contacts: [] };
+    if (canEditTax) {
+      try {
+        var orgR0 = await authed('/crm/organizations/' + encodeURIComponent(order.organizationId));
+        if (orgR0.ok) org = await orgR0.json();
+      } catch (e) {}
+    }
+    var editingContactId = null;
+    var addingContact = false;
+
+    function contactRowHtml(c, editing) {
+      if (!editing) {
+        var isInvoice = !!c.isDecisionMaker;
+        var fullName = [c.firstName, c.lastName].filter(Boolean).join(' ') || '(no name)';
+        return '<div class="cxContactRow" data-id="' + esc(c.id) + '" style="display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-bottom:1px solid #eef0ea;">' +
+          '<div style="flex:1;min-width:0;">' +
+            '<div style="font-size:13.5px;font-weight:600;">' + esc(fullName) +
+              (isInvoice ? ' <span style="font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#2f7d5d;background:#e7f3ec;padding:2px 7px;border-radius:999px;margin-left:6px;">Invoice contact</span>' : '') +
+            '</div>' +
+            '<div class="muted" style="font-size:12px;margin-top:2px;">' +
+              (c.email ? esc(c.email) : '<span style="color:#b7873a;">No email on file</span>') +
+              (c.phone ? ' · ' + esc(c.phone) : '') + (c.title ? ' · ' + esc(c.title) : '') +
+            '</div>' +
+          '</div>' +
+          '<button type="button" class="link-btn cxEditContact" data-id="' + esc(c.id) + '" style="width:auto;padding:6px 10px;font-size:12px;flex-shrink:0;">Edit</button>' +
+        '</div>';
+      }
+      return '<div class="cxContactRow" data-id="' + esc(c.id || '') + '" style="padding:10px 0;border-bottom:1px solid #eef0ea;">' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:7px;">' +
+          '<input class="cxFirst" placeholder="First name" value="' + esc(c.firstName || '') + '" style="' + IN + 'flex:1 1 120px;">' +
+          '<input class="cxLast" placeholder="Last name" value="' + esc(c.lastName || '') + '" style="' + IN + 'flex:1 1 120px;">' +
+        '</div>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:7px;">' +
+          '<input class="cxEmail" placeholder="Email" value="' + esc(c.email || '') + '" style="' + IN + 'flex:2 1 200px;">' +
+          '<input class="cxPhone" placeholder="Phone" value="' + esc(c.phone || '') + '" style="' + IN + 'flex:1 1 130px;">' +
+        '</div>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:7px;">' +
+          '<input class="cxTitle" placeholder="Title" value="' + esc(c.title || '') + '" style="' + IN + 'flex:1 1 150px;">' +
+        '</div>' +
+        '<label style="display:flex;align-items:center;gap:7px;font-size:12.5px;cursor:pointer;margin-bottom:9px;">' +
+          '<input type="checkbox" class="cxInvoiceFlag"' + (c.isDecisionMaker ? ' checked' : '') + '> This is who QuickBooks sends invoices to</label>' +
+        '<div style="display:flex;gap:8px;align-items:center;">' +
+          '<button type="button" class="btn cxSaveContact" data-id="' + esc(c.id || '') + '" style="width:auto;padding:8px 14px;font-size:12.5px;">' + (c.id ? 'Save' : 'Add contact') + '</button>' +
+          '<button type="button" class="link-btn cxCancelEdit" style="width:auto;padding:8px 12px;font-size:12.5px;">Cancel</button>' +
+        '</div>' +
+        '<div class="cxRowErr" style="font-size:12px;color:#9c3327;margin-top:6px;"></div>' +
+      '</div>';
+    }
+
+    function renderContactList() {
+      var box = document.getElementById('cxContacts');
+      if (!box) return;
+      var list = org.contacts || [];
+      var html = list.length
+        ? list.map(function (c) { return contactRowHtml(c, c.id === editingContactId); }).join('')
+        : '<div class="muted" style="font-size:12.5px;padding:6px 0;">No contacts on file yet.</div>';
+      if (addingContact) {
+        html += contactRowHtml(
+          { id: null, firstName: '', lastName: '', email: '', phone: '', title: '', isDecisionMaker: !list.length },
+          true,
+        );
+      }
+      box.innerHTML = html;
+      wireContactRows(box);
+    }
+
+    async function reloadAfterContactChange() {
+      try {
+        var orgR = await authed('/crm/organizations/' + encodeURIComponent(order.organizationId));
+        if (orgR.ok) org = await orgR.json();
+      } catch (e) {}
+      renderContactList();
+      try {
+        var rr2 = await authed('/integrations/quickbooks/customers/' + encodeURIComponent(order.organizationId) + '/profile');
+        if (rr2.ok) {
+          var nd = await rr2.json();
+          var tb = document.getElementById('ctxRows');
+          if (tb) tb.innerHTML = profileRows(nd.fields);
+        }
+      } catch (e) {}
+    }
+
+    function wireContactRows(box) {
+      box.querySelectorAll('.cxEditContact').forEach(function (b) {
+        b.addEventListener('click', function () {
+          editingContactId = b.getAttribute('data-id'); addingContact = false; renderContactList();
+        });
+      });
+      box.querySelectorAll('.cxCancelEdit').forEach(function (b) {
+        b.addEventListener('click', function () {
+          editingContactId = null; addingContact = false; renderContactList();
+        });
+      });
+      box.querySelectorAll('.cxSaveContact').forEach(function (b) {
+        b.addEventListener('click', async function () {
+          var row = b.closest('.cxContactRow');
+          var errBox = row.querySelector('.cxRowErr');
+          var id = b.getAttribute('data-id');
+          var firstName = row.querySelector('.cxFirst').value.trim();
+          var lastName = row.querySelector('.cxLast').value.trim();
+          var email = row.querySelector('.cxEmail').value.trim();
+          var phone = row.querySelector('.cxPhone').value.trim();
+          var title = row.querySelector('.cxTitle').value.trim();
+          var isDecisionMaker = row.querySelector('.cxInvoiceFlag').checked;
+          if (!firstName || !lastName) { errBox.textContent = 'First and last name are required.'; return; }
+          var label = b.textContent;
+          b.disabled = true; b.textContent = 'Saving…';
+          var rr;
+          // Update sends '' through so an emptied field is explicitly cleared;
+          // create omits '' fields since ContactInput rejects an empty email
+          // rather than treating it as "no email".
+          if (id) {
+            rr = await authed('/crm/contacts/' + id, {
+              method: 'PATCH',
+              body: { firstName: firstName, lastName: lastName, email: email, phone: phone, title: title, isDecisionMaker: isDecisionMaker },
+            });
+          } else {
+            var body = { organizationId: order.organizationId, firstName: firstName, lastName: lastName, isDecisionMaker: isDecisionMaker };
+            if (email) body.email = email;
+            if (phone) body.phone = phone;
+            if (title) body.title = title;
+            rr = await authed('/crm/contacts', { method: 'POST', body: body });
+          }
+          if (!rr.ok) {
+            var em = ''; try { em = ((await rr.json()) || {}).message || ''; } catch (e) {}
+            errBox.textContent = em || ('Could not save (' + rr.status + ').');
+            b.disabled = false; b.textContent = label;
+            return;
+          }
+          editingContactId = null; addingContact = false;
+          await reloadAfterContactChange();
+        });
+      });
+    }
+
     function profileRows(fields) {
       return (fields || []).map(function (f) {
         var tone = f.differs ? '#c2452f' : f.missingInQbo ? '#b7873a' : '#82877d';
@@ -10950,6 +11191,26 @@
         '<thead><tr>' + ['', 'In this CRM', 'In QuickBooks', ''].map(function (h) {
           return '<th style="text-align:left;padding:6px 10px;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:#8a8f85;font-weight:600;border-bottom:1px solid #cfd3ca;">' + h + '</th>';
         }).join('') + '</tr></thead><tbody id="ctxRows">' + rows + '</tbody></table>' +
+      /**
+       * Invoice contact, editable here.
+       *
+       * The "Invoice email" row above is read-only because everything in this
+       * table comes from `loadCustomerSource`, which always picks the contact
+       * itself — there is no field on the comparison to type a correction into.
+       * This is that correction, one level down: edit the contact (or mark a
+       * different one as the one QuickBooks should invoice), and both the push
+       * that filled in "Invoice email" and the monday deal row it came from are
+       * brought up to date without a trip to Integrations or monday.com.
+       */
+      (canEditTax
+        ? '<div style="border:1px solid #dcded7;border-radius:10px;padding:13px 14px;margin-top:14px;">' +
+            '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px;">' +
+              '<div style="font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#8a8f85;font-weight:600;">Invoice contact</div>' +
+              '<button type="button" class="link-btn" id="cxAddContact" style="width:auto;padding:5px 10px;font-size:12px;">+ Add contact</button>' +
+            '</div>' +
+            '<div id="cxContacts"></div>' +
+          '</div>'
+        : '') +
       /**
        * Tax standing, editable here.
        *
@@ -10985,6 +11246,14 @@
           ? 'Correct anything else on the customer record, then push it with <b>Sync customer to QuickBooks</b> under Integrations. The CRM is the source of truth for every field above, so nothing here is ever pulled back the other way.'
           : 'The two records agree.') + '</div>',
       null, 'Close', { maxWidth: '760px' });
+
+    if (canEditTax) {
+      renderContactList();
+      var cxAdd = document.getElementById('cxAddContact');
+      if (cxAdd) cxAdd.addEventListener('click', function () {
+        editingContactId = null; addingContact = true; renderContactList();
+      });
+    }
 
     var ctxEx = document.getElementById('ctxExempt');
     var ctxNum = document.getElementById('ctxNum');
@@ -11520,6 +11789,184 @@
     };
     var bodyEl = pv.querySelector('#futBody');
     if (bodyEl) bodyEl.addEventListener('input', prev);
+    prev();
+  }
+
+  /* --- Proposal e-sign emails: the ~10 "please sign this" templates --- */
+  var esetCache = null;
+  var esetProductLines = [];
+  var ESET_PLACEHOLDERS_FALLBACK = [
+    { token: '[First Name]', means: 'The recipient’s first name' },
+    { token: '[Customer]', means: 'The customer’s organization name' },
+    { token: '[Proposal Number]', means: 'e.g. P-2026-000063' },
+    { token: '[Proposal]', means: 'The proposal title' },
+    { token: '[Sender]', means: 'Your own first name' },
+    { token: '[Sender Full Name]', means: 'Your own full name' },
+    { token: '[Signing Link]', means: 'The link the recipient opens — use it inside an href' },
+    { token: '{{FirstName}}', means: 'Same as [First Name]' },
+    { token: '{{LastName}}', means: 'The recipient’s last name' },
+    { token: '{{OrganizationName}}', means: 'Same as [Customer]' },
+    { token: '{{ProjectName}}', means: 'Same as [Proposal]' },
+    { token: '{{ProductName}}', means: 'The proposed model/product' },
+    { token: '{{ProposalNumber}}', means: 'Same as [Proposal Number]' },
+    { token: '{{ProposalVersion}}', means: 'e.g. V2' },
+    { token: '{{ProposalDate}}', means: 'e.g. September 4, 2026' },
+    { token: '{{ProposalExpirationDate}}', means: 'e.g. October 4, 2026' },
+  ];
+  // Mirrors SAMPLE_ESIGN_EMAIL_CONTEXT (src/email/esignEmailTemplates.ts) so the
+  // live preview here matches what the server's own preview endpoint renders.
+  var ESET_SAMPLE = {
+    '[First Name]': 'Mary',
+    '[Customer]': 'Katonah-Lewisboro School District',
+    '[Proposal Number]': 'P-2026-000063',
+    '[Proposal]': 'KLSD Sensory Therapy Room',
+    '[Sender]': 'Bryan',
+    '[Sender Full Name]': 'Bryan Shepherd',
+    '[Signing Link]': 'https://docuseal.com/s/sample',
+    '{{FirstName}}': 'Mary',
+    '{{LastName}}': 'Loughney',
+    '{{OrganizationName}}': 'Katonah-Lewisboro School District',
+    '{{ProjectName}}': 'KLSD Sensory Therapy Room',
+    '{{ProductName}}': 'Summit Soar S1',
+    '{{ProposalNumber}}': 'P-2026-000063',
+    '{{ProposalVersion}}': 'V2',
+    '{{ProposalDate}}': 'September 4, 2026',
+    '{{ProposalExpirationDate}}': 'October 4, 2026',
+  };
+  function esetFillSample(text) {
+    var out = String(text || '');
+    Object.keys(ESET_SAMPLE).forEach(function (token) {
+      out = out.split(token).join(ESET_SAMPLE[token]);
+    });
+    return out;
+  }
+
+  async function loadEsignEmailTemplates() {
+    var box = document.getElementById('esetList'); if (!box) return;
+    try {
+      var r = await authed('/esign/email-templates/preview');
+      if (!r.ok) { box.innerHTML = '<div class="err">Could not load the templates (' + r.status + ').</div>'; return; }
+      esetCache = await r.json();
+    } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; return; }
+    try {
+      var rl = await authed('/catalog/product-lines');
+      if (rl.ok) esetProductLines = await rl.json();
+    } catch (e) {}
+    try {
+      renderEsignEmailTemplates(box);
+    } catch (e) {
+      console.error('esign email templates: render failed', e);
+      box.innerHTML = '<div class="err">The templates loaded but this list could not be drawn. ' + esc(String(e && e.message ? e.message : e)) + '</div>';
+    }
+  }
+
+  function renderEsignEmailTemplates(box) {
+    var rows = (esetCache.templates || []).map(function (t) {
+      return '<tr>' +
+        td('<div><b style="font-weight:600;">' + esc(t.name) + '</b>' +
+            '<div class="muted" style="font-size:12px;max-width:460px;line-height:1.45;">' + esc(t.preview ? t.preview.subject : t.subject) + '</div>' +
+            (t.productLineIds && t.productLineIds.length
+              ? '<div class="muted" style="font-size:11px;margin-top:2px;">' + t.productLineIds.length + ' product line' + (t.productLineIds.length === 1 ? '' : 's') + '</div>'
+              : '<div class="muted" style="font-size:11px;margin-top:2px;">Fallback — any product line</div>') +
+          '</div>') +
+        td(t.active ? '<span class="chip">Active</span>' : '<span class="muted">Retired</span>') +
+        td('<span class="muted" style="font-size:12.5px;">' + (t.sentCount ? t.sentCount + ' sent' : 'Never sent') + '</span>') +
+        td('<div style="display:flex;gap:6px;justify-content:flex-end;">' +
+          '<button class="link-btn esetEdit" data-id="' + t.id + '" style="width:auto;padding:6px 11px;">Edit</button>' +
+          '<button class="link-btn esetDel" data-id="' + t.id + '" style="width:auto;padding:6px 11px;color:#9c3327;">' + (t.active ? 'Retire' : 'Delete') + '</button>' +
+          '</div>') +
+        '</tr>';
+    }).join('');
+
+    box.innerHTML = tableShell(['Template', 'Status', 'Use', ''], rows, 4, 'No templates yet — add one to offer it when sending a proposal for signature.') +
+      '<div class="muted" style="font-size:12px;margin-top:8px;line-height:1.6;">Placeholders: ' +
+      (esetCache.placeholders || ESET_PLACEHOLDERS_FALLBACK).map(function (p) {
+        return '<code style="font-size:11.5px;">' + esc(p.token) + '</code> ' + esc(p.means);
+      }).join(' &nbsp;&mdash;&nbsp; ') + '</div>';
+
+    var find = function (id) {
+      return (esetCache.templates || []).filter(function (t) { return t.id === id; })[0];
+    };
+    box.querySelectorAll('.esetEdit').forEach(function (b) {
+      b.addEventListener('click', function () { openEsignEmailTemplateForm(find(b.getAttribute('data-id')), esetCache); });
+    });
+    box.querySelectorAll('.esetDel').forEach(function (b) {
+      b.addEventListener('click', async function () {
+        var t = find(b.getAttribute('data-id'));
+        var q = t.sentCount
+          ? 'Retire ' + t.name + '?\n\nIt stops appearing in the picker. It is kept rather than deleted because the send history refers to it.'
+          : 'Delete ' + t.name + '?';
+        if (!confirm(q)) return;
+        var r = await authed('/esign/email-templates/' + t.id, { method: 'DELETE' });
+        if (!r.ok && r.status !== 204) { alert(await serverMessage(r, 'Could not do that (' + r.status + ').')); return; }
+        loadEsignEmailTemplates();
+      });
+    });
+  }
+
+  function openEsignEmailTemplateForm(t, cache) {
+    var isNew = !t;
+    t = t || { key: '', name: '', description: '', subject: '', bodyHtml: '', productLineIds: [], sortOrder: 0, active: true, sentCount: 0 };
+    var v = function (k) { return esc(t[k] == null ? '' : t[k]); };
+    var lines = esetProductLines || [];
+    var lineChecks = lines.map(function (pl) {
+      var checked = (t.productLineIds || []).indexOf(pl.id) !== -1;
+      return '<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;padding:3px 0;">' +
+        '<input type="checkbox" class="esetLine" value="' + esc(pl.id) + '"' + (checked ? ' checked' : '') + '> ' + esc(pl.name) + '</label>';
+    }).join('');
+    var pv = openModal(isNew ? 'New proposal e-sign email' : 'Edit ' + t.name,
+      fieldRow('Name', '<input id="esetName" style="' + IN + '" value="' + v('name') + '">') +
+      fieldRow('Key',
+        '<input id="esetKey" style="' + IN + 'font-family:ui-monospace,monospace;" value="' + v('key') + '"' + (t.sentCount ? ' disabled' : '') + '>' +
+        '<div class="muted" style="font-size:12px;margin-top:4px;line-height:1.5;">Lower-case letters, numbers and hyphens. ' +
+          (t.sentCount ? 'Fixed now that this email has been sent — the history refers to it.' : 'Used by the send history, so pick it once.') + '</div>') +
+      fieldRow('Subject', '<input id="esetSubj" style="' + IN + '" value="' + v('subject') + '">') +
+      '<div class="field"><label>Body (HTML)</label>' +
+        '<textarea id="esetBody" rows="13" style="' + IN + 'resize:vertical;font-size:12.5px;line-height:1.5;font-family:ui-monospace,monospace;">' + esc(t.bodyHtml || '') + '</textarea>' +
+        '<div class="muted" style="font-size:12px;margin-top:5px;line-height:1.55;">Raw HTML — this is not the plain-text follow-up format. Put <code>[Signing Link]</code> inside an <code>href</code>, e.g. <code>&lt;a href="[Signing Link]"&gt;Review &amp; sign&lt;/a&gt;</code>.</div></div>' +
+      (lines.length
+        ? '<div class="field"><label>Product lines this is for</label><div style="max-height:140px;overflow:auto;border:1px solid #e7e8e3;border-radius:8px;padding:8px 10px;">' + lineChecks + '</div>' +
+          '<div class="muted" style="font-size:12px;margin-top:5px;">Leave all unchecked to make this the fallback — offered when no more specific email matches.</div></div>'
+        : '')  +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin:2px 0 4px;cursor:pointer;">' +
+        '<input type="checkbox" id="esetActive"' + (t.active !== false ? ' checked' : '') + '> Offer it when sending a proposal</label>' +
+      '<div id="esetPrev" class="muted" style="font-size:12.5px;margin-top:10px;"></div>',
+      async function (close, showErr) {
+        var body = {
+          key: pv.querySelector('#esetKey').value.trim(),
+          name: pv.querySelector('#esetName').value.trim(),
+          subject: pv.querySelector('#esetSubj').value.trim(),
+          bodyHtml: pv.querySelector('#esetBody').value,
+          productLineIds: Array.prototype.slice.call(pv.querySelectorAll('.esetLine:checked')).map(function (cb) { return cb.value; }),
+          active: pv.querySelector('#esetActive').checked,
+        };
+        if (!body.name) return showErr('Give it a name.');
+        if (!body.subject) return showErr('Give it a subject line.');
+        if (!body.bodyHtml.trim()) return showErr('The body is empty.');
+        if (isNew && !/^[a-z0-9][a-z0-9-]*$/.test(body.key)) {
+          return showErr('The key should be lower-case letters, numbers and hyphens.');
+        }
+        if (t.sentCount) delete body.key;
+        var r = isNew
+          ? await authed('/esign/email-templates', { method: 'POST', body: body })
+          : await authed('/esign/email-templates/' + t.id, { method: 'PATCH', body: body });
+        if (!r.ok) return showErr(await serverMessage(r, 'Could not save it (' + r.status + ').'));
+        close();
+        loadEsignEmailTemplates();
+      }, isNew ? 'Create' : 'Save', { maxWidth: '680px' });
+
+    var prev = function () {
+      var el = pv.querySelector('#esetPrev');
+      if (!el) return;
+      var html = esetFillSample(pv.querySelector('#esetBody').value || '');
+      var subject = esetFillSample(pv.querySelector('#esetSubj').value || '');
+      el.innerHTML = '<div class="k">Preview — sample proposal</div>' +
+        '<div class="muted" style="margin-bottom:6px;">Subject: ' + esc(subject) + '</div>' +
+        '<div style="border:1px solid #e7e8e3;border-radius:9px;padding:11px 13px;background:#fff;color:#000;font-size:13px;line-height:1.55;">' + html + '</div>';
+    };
+    var subjEl = pv.querySelector('#esetSubj'), bodyEl2 = pv.querySelector('#esetBody');
+    if (subjEl) subjEl.addEventListener('input', prev);
+    if (bodyEl2) bodyEl2.addEventListener('input', prev);
     prev();
   }
 
@@ -12072,6 +12519,556 @@
     } catch (e) { return null; }
   }
 
+  /* --- Electronic signature (DocuSeal) ---
+   *
+   * The backend for this (src/integrations/docuseal/*, src/routes/esign.ts) has
+   * existed for a while with no screen calling any of it — this is that screen.
+   * One envelope per proposal version at a time; the API already enforces that,
+   * this just reflects it. Signers are emailed by DocuSeal itself, in the order
+   * listed, so the customer always signs before Summit countersigns.
+   */
+  var ESIGN_LIVE = ['DRAFT', 'SENT', 'VIEWED', 'PARTIALLY_SIGNED'];
+
+  function esignStatusChip(status) {
+    var tone = status === 'COMPLETED'
+      ? { bg: '#eaf1ec', fg: '#2f6b4f' }
+      : (status === 'DECLINED' || status === 'FAILED')
+        ? { bg: '#fbecea', fg: '#9c3327' }
+        : status === 'VOIDED'
+          ? { bg: '#f2f3ef', fg: '#8a8f85' }
+          : { bg: '#eef2f6', fg: '#3d4a55' };
+    return '<span class="chip" style="background:' + tone.bg + ';color:' + tone.fg + ';">' + titleCase(status) + '</span>';
+  }
+
+  /** DocuSeal's raw webhook event names, in words a rep reads without translating. */
+  function esignEventLabel(ev) {
+    var map = {
+      'form.viewed': 'opened the document',
+      'form.started': 'started signing',
+      'form.completed': 'signed',
+      'form.declined': 'declined to sign',
+      'submission.completed': 'completed the signature request',
+      'submission.expired': 'the request expired',
+      'submission.archived': 'the request was voided',
+    };
+    return map[ev.eventType] || ev.eventType;
+  }
+
+  async function loadEsign(p, version, user) {
+    var box = document.getElementById('esignBox');
+    if (!box) return;
+    var st = {};
+    try { var rs = await authed('/esign/status'); st = rs.ok ? await rs.json() : {}; } catch (e) {}
+    if (!st.configured) {
+      box.innerHTML = '<div class="muted" style="padding:16px;">Electronic signature is not configured on this deployment.</div>';
+      return;
+    }
+    var canWrite = hasRole(ESIGN_WRITE_ROLES, user.role);
+    // The signing email goes out from the rep's own Outlook mailbox, not
+    // DocuSeal's — worth flagging before they open the send form, not after.
+    var outlookBanner = canWrite && st.outlook && st.outlook.configured && !st.outlook.canSend
+      ? '<div style="padding:10px 18px;background:#fff7e6;border-bottom:1px solid #e8c877;font-size:12.5px;">' +
+        (st.outlook.connected
+          ? 'Your connected Outlook mailbox has not granted this app permission to send mail. Reconnect it in Administration → Outlook drafts, or a signing email will go out from the fallback account instead.'
+          : 'Your Outlook mailbox is not connected — a proposal you send will email from the fallback account, not your own. Connect it in Administration → Outlook drafts.') +
+        '</div>'
+      : '';
+
+    var envelopes = [];
+    try {
+      var re = await authed('/esign/envelopes?versionId=' + encodeURIComponent(version.id));
+      envelopes = re.ok ? await re.json() : [];
+    } catch (e) {}
+    // Newest first, per the endpoint's own ordering — this is the one that matters.
+    var envelope = envelopes[0] || null;
+    var live = envelope && ESIGN_LIVE.indexOf(envelope.status) !== -1;
+    var sendBtn = '<button class="btn" id="esignSend" style="width:auto;padding:9px 16px;">' +
+      (envelope ? 'Send again…' : 'Sign electronically…') + '</button>';
+
+    if (!envelope) {
+      box.innerHTML = outlookBanner + '<div style="padding:16px 18px;">' +
+        '<div class="muted" style="font-size:12.5px;margin-bottom:12px;">Not sent for signature yet.</div>' +
+        (canWrite ? sendBtn : '') +
+        '</div>';
+    } else {
+      var signerRows = (envelope.signers || []).map(function (s) {
+        return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #eceef4;font-size:13px;">' +
+          '<div><b style="font-weight:600;">' + esc(s.name || s.role) + '</b> ' +
+          '<span class="muted" style="font-size:12px;">' + esc(s.email) + '</span>' +
+          (s.viewOnly ? ' <span class="muted" style="font-size:11px;">(view only)</span>' : '') +
+          '</div>' +
+          esignStatusChip(s.status) +
+          '</div>';
+      }).join('');
+      var eventRows = (envelope.events || []).slice(0, 8).map(function (ev) {
+        return '<div class="muted" style="font-size:11.5px;padding:3px 0;">' +
+          esc(fmtDateTime(ev.createdAt)) + ' — ' + esc(esignEventLabel(ev)) + '</div>';
+      }).join('');
+      var countersignBanner = '';
+      if (envelope.status === 'PARTIALLY_SIGNED') {
+        var pendingSigners = (envelope.signers || []).filter(function (s) { return !s.viewOnly && s.status !== 'COMPLETED'; });
+        var mine = pendingSigners.filter(function (s) { return s.email && user.email && s.email.toLowerCase() === user.email.toLowerCase(); });
+        if (mine.length && mine[0].signingUrl) {
+          countersignBanner = '<div style="margin-top:12px;padding:12px 14px;background:#fff7e6;border:1px solid #e8c877;border-radius:6px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">' +
+            '<div style="font-size:13px;">The customer has signed — this proposal is waiting on <b>your</b> signature.</div>' +
+            '<a class="btn" href="' + esc(mine[0].signingUrl) + '" target="_blank" rel="noopener" style="width:auto;padding:8px 14px;">Sign now</a>' +
+            '</div>';
+        } else if (pendingSigners.length) {
+          countersignBanner = '<div style="margin-top:12px;padding:12px 14px;background:#fff7e6;border:1px solid #e8c877;border-radius:6px;font-size:13px;">' +
+            'The customer has signed — waiting on: ' + esc(pendingSigners.map(function (s) { return s.name || s.role; }).join(', ')) + '.' +
+            '</div>';
+        }
+      }
+      box.innerHTML = outlookBanner + '<div style="padding:16px 18px;">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">' +
+        esignStatusChip(envelope.status) +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+        // Completed but no stored copy yet: DocuSeal assembles the certified
+        // (signed + audit log) PDF a moment after completion, not necessarily
+        // atomically with it. Refresh status is the retry, so it stays available
+        // here even though the envelope is no longer "live".
+        (canWrite && (live || (envelope.status === 'COMPLETED' && !envelope.signedUrl))
+          ? '<button class="link-btn" id="esignSync" style="width:auto;padding:7px 12px;">Refresh status</button>'
+          : '') +
+        (canWrite && live ? '<button class="link-btn" id="esignVoid" style="width:auto;padding:7px 12px;color:#9c3327;">Void</button>' : '') +
+        (envelope.status === 'COMPLETED' && envelope.signedUrl
+          ? '<button class="btn" id="esignDownload" style="width:auto;padding:7px 12px;">Download signed PDF</button>'
+          : envelope.status === 'COMPLETED'
+            ? '<span class="muted" style="font-size:12.5px;align-self:center;">Preparing the certified copy — try Refresh status in a moment.</span>'
+            : '') +
+        '</div></div>' +
+        countersignBanner +
+        '<div style="margin-top:12px;">' + signerRows + '</div>' +
+        (eventRows ? '<div style="margin-top:10px;padding-top:8px;border-top:1px solid #eceef4;">' + eventRows + '</div>' : '') +
+        (canWrite && !live ? '<div style="margin-top:14px;">' + sendBtn + '</div>' : '') +
+        '</div>';
+    }
+
+    var sb = document.getElementById('esignSend');
+    if (sb) sb.addEventListener('click', function () { openEsignSend(p, version, user); });
+    var sy = document.getElementById('esignSync');
+    if (sy) sy.addEventListener('click', async function () {
+      sy.disabled = true;
+      var r = await authed('/esign/envelopes/' + envelope.id + '/sync', { method: 'POST' });
+      sy.disabled = false;
+      if (!r.ok) { alert(await serverMessage(r, 'Could not refresh status.')); return; }
+      loadEsign(p, version, user);
+    });
+    var vo = document.getElementById('esignVoid');
+    if (vo) vo.addEventListener('click', async function () {
+      var reason = window.prompt('Why are you voiding this signature request?', '');
+      if (reason === null) return;
+      vo.disabled = true;
+      var r = await authed('/esign/envelopes/' + envelope.id + '/void', { method: 'POST', body: { reason: reason } });
+      vo.disabled = false;
+      if (!r.ok) { alert(await serverMessage(r, 'Could not void this request.')); return; }
+      loadEsign(p, version, user);
+    });
+    var dl = document.getElementById('esignDownload');
+    if (dl) dl.addEventListener('click', async function () {
+      var r = await authed('/esign/envelopes/' + envelope.id + '/signed-pdf');
+      if (!r.ok) { alert(await serverMessage(r, 'Could not download the signed document.')); return; }
+      var blob = await r.blob();
+      var url = URL.createObjectURL(blob);
+      window.open(url, '_blank');
+      setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+    });
+  }
+
+  /** One signer row in the send form: role, name, email, and a remove button once
+   *  there are more than the two defaults. */
+  function esignRowHtml(role, name, email, removable, viewOnly) {
+    return '<div class="esRow" style="display:flex;gap:8px;align-items:center;margin-bottom:6px;">' +
+      '<input class="esRole" value="' + esc(role) + '" placeholder="Role" style="' + IN + 'width:110px;flex:none;">' +
+      '<input class="esName" value="' + esc(name || '') + '" placeholder="Name" style="' + IN + '">' +
+      '<input class="esEmail" value="' + esc(email || '') + '" placeholder="Email" style="' + IN + '">' +
+      '<label style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:#5b6478;white-space:nowrap;flex:none;" title="Can see the document but is not asked to sign it">' +
+      '<input type="checkbox" class="esViewOnly"' + (viewOnly ? ' checked' : '') + '> View only</label>' +
+      (removable
+        ? '<button type="button" class="link-btn esRemove" style="width:auto;padding:8px 10px;color:#9c3327;">✕</button>'
+        : '<span style="width:34px;flex:none;"></span>') +
+      '</div>';
+  }
+
+  async function esignFetchPlan(version, opts) {
+    var qs = [];
+    if (opts.emailTemplateKey) qs.push('emailTemplateKey=' + encodeURIComponent(opts.emailTemplateKey));
+    if (opts.firstName) qs.push('firstName=' + encodeURIComponent(opts.firstName));
+    if (opts.lastName) qs.push('lastName=' + encodeURIComponent(opts.lastName));
+    if (opts.productName) qs.push('productName=' + encodeURIComponent(opts.productName));
+    var plan = { template: null, attachments: [], email: null };
+    try {
+      var rp = await authed('/esign/proposals/versions/' + version.id + '/plan' + (qs.length ? '?' + qs.join('&') : ''));
+      if (rp.ok) plan = await rp.json();
+    } catch (e) {}
+    return plan;
+  }
+
+  async function openEsignSend(p, version, user) {
+    var ctx = { contacts: [] };
+    try { var rc = await authed('/proposals/' + p.id + '/send-context'); if (rc.ok) ctx = await rc.json(); } catch (e) {}
+    var dm = ctx.contacts.filter(function (c) { return c.isDecisionMaker; })[0] || ctx.contacts[0];
+    // firstName/lastName come straight off the Contact row now (send-context
+    // returns them split), not a re-split of the name it also concatenates —
+    // a decision maker named with a middle name or a suffix used to lose it
+    // to whichever half of the split "first word" landed on.
+    var firstName = dm && dm.firstName ? dm.firstName : (dm && dm.name ? dm.name.trim().split(/\s+/)[0] : '');
+    var lastName = dm && dm.lastName ? dm.lastName : '';
+    // Same heading proposalFileName() reads for the file name, reused here for
+    // the {{ProductName}} email placeholder so the two never disagree.
+    var productName = proposalModelCode(version.items || []);
+
+    var emailTemplates = [];
+    try {
+      var ret = await authed('/esign/email-templates');
+      if (ret.ok) emailTemplates = await ret.json();
+    } catch (e) {}
+
+    var plan = await esignFetchPlan(version, { firstName: firstName, lastName: lastName, productName: productName });
+
+    // Local, mutable copy — reordering and uploading here act on the proposal's
+    // real Design renderings list immediately (same list the main proposal page
+    // shows), not a draft that only takes effect on send.
+    var renderings = [];
+    try {
+      var rr = await authed('/proposals/' + p.id + '/renderings');
+      if (rr.ok) renderings = ((await rr.json()).renderings) || [];
+    } catch (e) {}
+
+    var planNote = '<div class="muted" style="font-size:12px;line-height:1.6;margin-bottom:14px;padding:10px 12px;background:#f7f9fc;border-radius:8px;">' +
+      'Signing template: <b>' + (plan.template ? esc(plan.template.name) : 'the proposal document itself') + '</b>' +
+      ((plan.attachments || []).length ? '<br>Attached: ' + plan.attachments.map(function (a) { return esc(a.name); }).join(', ') : '') +
+      '</div>';
+
+    // '__none__' is a real, explicit choice — must match NO_EMAIL_TEMPLATE in
+    // src/integrations/docuseal/service.ts. An empty value here would be
+    // indistinguishable from "no preference" server-side and would silently
+    // fall right back to the auto-picked template a rep just deselected.
+    var emailTemplateOptions = '<option value="__none__">No template — plain default note</option>' +
+      emailTemplates.map(function (t) {
+        return '<option value="' + esc(t.key) + '"' + (plan.email && plan.email.key === t.key ? ' selected' : '') + '>' + esc(t.name) + '</option>';
+      }).join('');
+
+    var pv = openModal('Sign electronically',
+      planNote +
+      '<div class="muted" style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;margin-bottom:6px;">Signers, in order</div>' +
+      '<div id="esRows">' +
+      esignRowHtml('Customer', dm ? dm.name : '', dm ? dm.email : '', false, false) +
+      esignRowHtml('Summit', user.name || '', user.email || '', false, false) +
+      '</div>' +
+      '<button type="button" class="link-btn" id="esAddRow" style="width:auto;padding:7px 10px;font-size:12.5px;">+ Add signer</button>' +
+      '<div class="muted" style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;margin:16px 0 6px;">Documents to include, in order</div>' +
+      '<div id="esRenderings"></div>' +
+      '<div style="margin-top:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+      '<input type="file" id="esRndFile" accept="application/pdf,image/png,image/jpeg" style="display:none;">' +
+      '<button type="button" class="link-btn" id="esRndUploadBtn" style="width:auto;padding:6px 10px;font-size:12.5px;">+ Add one-off document…</button>' +
+      '<span class="muted" id="esRndStatus" style="font-size:12px;"></span>' +
+      '</div>' +
+      '<div class="muted" style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;margin:16px 0 6px;">Signing email</div>' +
+      fieldRow('Template', '<select id="esEmailTemplate" style="' + IN + '">' + emailTemplateOptions + '</select>') +
+      fieldRow('Subject', '<input id="esSubject" style="' + IN + '" value="' + esc(plan.email ? plan.email.subject : '') + '">') +
+      '<div class="field"><label>Body</label><textarea id="esMsg" rows="8" style="' + IN + 'resize:vertical;font-size:12.5px;line-height:1.5;font-family:ui-monospace,monospace;">' + esc(plan.email ? plan.email.html : '') + '</textarea></div>' +
+      '<div id="esEmailPreview" class="muted" style="font-size:12.5px;margin-top:8px;"></div>' +
+      '<div class="muted" style="font-size:12px;margin-top:10px;">Sent from your own connected Outlook mailbox, in the order the signers are listed — the first signs before the next is asked to.</div>',
+      async function (close, showErr) {
+        var rows = Array.prototype.slice.call(document.querySelectorAll('#esRows .esRow'));
+        var signers = rows.map(function (row) {
+          return {
+            role: row.querySelector('.esRole').value.trim(),
+            name: row.querySelector('.esName').value.trim(),
+            email: row.querySelector('.esEmail').value.trim(),
+            viewOnly: row.querySelector('.esViewOnly').checked,
+          };
+        }).filter(function (s) { return s.email; });
+        if (!signers.length) return showErr('Add at least one signer.');
+        if (!signers.some(function (s) { return !s.viewOnly; })) {
+          return showErr('At least one signer has to actually sign — mark someone as a real signer, not just view only.');
+        }
+        for (var i = 0; i < signers.length; i++) {
+          if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(signers[i].email)) {
+            return showErr('“' + signers[i].email + '” is not a valid email address.');
+          }
+          if (!signers[i].role) return showErr('Every signer needs a role (e.g. Customer, Summit).');
+        }
+        var subject = pv.querySelector('#esSubject').value.trim();
+        var message = pv.querySelector('#esMsg').value;
+        if (!subject) return showErr('Give the email a subject.');
+        if (!message.trim()) return showErr('The email body is empty.');
+        if (message.indexOf('[Signing Link]') === -1) {
+          return showErr('The email body no longer has a [Signing Link] — the recipient would have no way to open the document. Add it back (e.g. in a link) before sending.');
+        }
+        var doc = await buildProposalDocForSend(p, version.id);
+        if (!doc) return showErr('Could not prepare the proposal. Open the proposal preview once, then try again.');
+        var renderingIds = renderings.filter(function (rnd) { return rnd.included !== false; }).map(function (rnd) { return rnd.id; });
+        var body = {
+          proposalHtml: doc.html,
+          filename: doc.filename,
+          signers: signers,
+          renderingIds: renderingIds,
+          emailTemplateKey: pv.querySelector('#esEmailTemplate').value || undefined,
+          subject: subject,
+          message: message,
+          // Only used if the server ever has to fall back to its own default
+          // email (no override reached it) — the text here already has every
+          // placeholder resolved from the plan preview above.
+          lastName: lastName || undefined,
+          productName: productName || undefined,
+        };
+        var r = await authed('/render/esign/proposals/versions/' + version.id + '/send',
+          { method: 'POST', body: body, timeoutMs: RENDER_TIMEOUT_MS });
+        if (!r.ok) return showErr(await serverMessage(r, 'Could not send.'));
+        close();
+        loadEsign(p, version, user);
+      }, 'Send for signature', { maxWidth: '700px' });
+
+    function bindRemove() {
+      document.querySelectorAll('.esRemove').forEach(function (b) {
+        b.onclick = function () { b.closest('.esRow').remove(); };
+      });
+    }
+    document.getElementById('esAddRow').addEventListener('click', function () {
+      document.getElementById('esRows').insertAdjacentHTML('beforeend', esignRowHtml('', '', '', true, false));
+      bindRemove();
+    });
+
+    /* ---- Email template picker + live preview ---- */
+    function updateEmailPreview() {
+      var el = pv.querySelector('#esEmailPreview');
+      if (!el) return;
+      var html = pv.querySelector('#esMsg').value || '';
+      el.innerHTML = '<div class="k">Preview</div>' +
+        '<div style="border:1px solid #e7e8e3;border-radius:9px;padding:11px 13px;background:#fff;color:#000;">' + html + '</div>';
+    }
+    pv.querySelector('#esMsg').addEventListener('input', updateEmailPreview);
+    pv.querySelector('#esEmailTemplate').addEventListener('change', async function (ev) {
+      var next = await esignFetchPlan(version, { emailTemplateKey: ev.target.value || undefined, firstName: firstName, lastName: lastName, productName: productName });
+      pv.querySelector('#esSubject').value = next.email ? next.email.subject : '';
+      pv.querySelector('#esMsg').value = next.email ? next.email.html : '';
+      updateEmailPreview();
+    });
+    updateEmailPreview();
+
+    /* ---- Documents to include: reorder, upload, drop — acts on the proposal's
+     * real renderings list immediately, the same one the proposal page shows. */
+    function renderRenderingsUI() {
+      var box = pv.querySelector('#esRenderings');
+      if (!box) return;
+      box.innerHTML = renderings.length
+        ? renderings.map(function (rnd, i) {
+            return '<div class="esRndRow" data-id="' + esc(rnd.id) + '" style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #eceef4;font-size:13px;">' +
+              '<input type="checkbox" class="esRndInclude"' + (rnd.included !== false ? ' checked' : '') + '>' +
+              '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(rnd.filename) + '</span>' +
+              '<button type="button" class="link-btn esRndUp" style="width:auto;padding:4px 7px;"' + (i === 0 ? ' disabled' : '') + '>↑</button>' +
+              '<button type="button" class="link-btn esRndDown" style="width:auto;padding:4px 7px;"' + (i === renderings.length - 1 ? ' disabled' : '') + '>↓</button>' +
+              '<button type="button" class="link-btn esRndDel" style="width:auto;padding:4px 7px;color:#9c3327;">✕</button>' +
+              '</div>';
+          }).join('')
+        : '<div class="muted" style="font-size:12.5px;padding:6px 0;">No renderings or one-off documents yet.</div>';
+
+      box.querySelectorAll('.esRndInclude').forEach(function (cb) {
+        cb.addEventListener('change', function () {
+          var id = cb.closest('.esRndRow').getAttribute('data-id');
+          renderings.filter(function (r) { return r.id === id; }).forEach(function (r) { r.included = cb.checked; });
+        });
+      });
+      function move(id, dir) {
+        var i = renderings.map(function (r) { return r.id; }).indexOf(id);
+        var j = i + dir;
+        if (i < 0 || j < 0 || j >= renderings.length) return;
+        var tmp = renderings[i]; renderings[i] = renderings[j]; renderings[j] = tmp;
+        renderRenderingsUI();
+        authed('/proposals/' + p.id + '/renderings/reorder', { method: 'PATCH', body: { orderedIds: renderings.map(function (r) { return r.id; }) } })
+          .then(function (r) {
+            if (!r.ok) { alert('Could not save the new order. Reload and try again.'); }
+          });
+      }
+      box.querySelectorAll('.esRndUp').forEach(function (b) {
+        b.addEventListener('click', function () { move(b.closest('.esRndRow').getAttribute('data-id'), -1); });
+      });
+      box.querySelectorAll('.esRndDown').forEach(function (b) {
+        b.addEventListener('click', function () { move(b.closest('.esRndRow').getAttribute('data-id'), 1); });
+      });
+      box.querySelectorAll('.esRndDel').forEach(function (b) {
+        b.addEventListener('click', async function () {
+          var id = b.closest('.esRndRow').getAttribute('data-id');
+          if (!window.confirm('Remove this document? This cannot be undone.')) return;
+          var r = await authed('/proposals/' + p.id + '/renderings/' + id, { method: 'DELETE' });
+          if (!r.ok) { alert(await serverMessage(r, 'Could not remove that document.')); return; }
+          renderings = renderings.filter(function (rnd) { return rnd.id !== id; });
+          renderRenderingsUI();
+        });
+      });
+    }
+    renderRenderingsUI();
+
+    var rndUpBtn = pv.querySelector('#esRndUploadBtn');
+    var rndFileInput = pv.querySelector('#esRndFile');
+    var rndStatus = pv.querySelector('#esRndStatus');
+    rndUpBtn.addEventListener('click', function () { rndFileInput.click(); });
+    rndFileInput.addEventListener('change', async function () {
+      var file = rndFileInput.files[0];
+      if (!file) return;
+      rndUpBtn.disabled = true;
+      rndStatus.style.color = '';
+      rndStatus.textContent = 'Uploading ' + file.name + '…';
+      try {
+        var row = await uploadRendering(p, file, function (progress) {
+          rndStatus.textContent = 'Uploading ' + file.name + '… ' + Math.round(progress.percentage) + '%';
+        });
+        renderings.push(row);
+        rndStatus.textContent = '';
+        renderRenderingsUI();
+      } catch (err) {
+        rndStatus.style.color = '#9c3327';
+        rndStatus.textContent = err && err.message ? err.message : 'Upload failed.';
+      }
+      rndUpBtn.disabled = false;
+      rndFileInput.value = '';
+    });
+  }
+
+  /* --- Design renderings ---
+   * Uploaded browser-to-blob directly rather than through our server — see
+   * lib/renderingStore.ts for why. The vendored client (built by
+   * scripts/build-blob-client.mjs) is loaded lazily, once, on first upload. */
+  var _blobUploaderPromise = null;
+  function loadBlobUploader() {
+    if (!_blobUploaderPromise) {
+      _blobUploaderPromise = import('/vendor/vercel-blob-client.mjs').then(function () {
+        return window.SSGBlobUpload;
+      });
+    }
+    return _blobUploaderPromise;
+  }
+
+  function fmtBytes(n) {
+    if (!n && n !== 0) return '';
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  async function uploadRendering(p, file, onProgress) {
+    var tr = await authed('/proposals/' + p.id + '/renderings/upload-token', {
+      method: 'POST', body: { filename: file.name, contentType: file.type },
+    });
+    if (!tr.ok) throw new Error(await serverMessage(tr, 'Could not start the upload.'));
+    var token = await tr.json();
+    var uploadFn = await loadBlobUploader();
+    var result = await uploadFn(token.pathname, file, {
+      access: 'private',
+      token: token.token,
+      contentType: file.type,
+      onUploadProgress: onProgress,
+    });
+    var rr = await authed('/proposals/' + p.id + '/renderings', {
+      method: 'POST',
+      body: { url: result.url, pathname: result.pathname, filename: file.name },
+    });
+    if (!rr.ok) throw new Error(await serverMessage(rr, 'The upload finished, but could not be saved.'));
+    return rr.json();
+  }
+
+  async function loadRenderings(p, user) {
+    var box = document.getElementById('renderingsBox');
+    if (!box) return;
+    var data = { configured: false, renderings: [], accept: [], maxBytes: 0 };
+    try { var r = await authed('/proposals/' + p.id + '/renderings'); if (r.ok) data = await r.json(); } catch (e) {}
+    var canWrite = hasRole(PROP_WRITE, user.role);
+
+    if (!data.configured) {
+      box.innerHTML = '<div class="muted" style="padding:16px;">File storage is not configured on this deployment.</div>';
+      return;
+    }
+
+    var rows = data.renderings || [];
+    var rowsHtml = rows.map(function (rnd, i) {
+      return '<div class="rndRow" data-id="' + esc(rnd.id) + '" style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #eceef4;font-size:13px;">' +
+        '<a href="' + esc(rnd.url) + '" target="_blank" rel="noopener" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(rnd.filename) + '</a>' +
+        '<span class="muted" style="font-size:11.5px;flex:none;">' + esc(fmtBytes(rnd.byteSize)) + '</span>' +
+        (canWrite
+          ? '<div style="display:flex;gap:4px;flex:none;">' +
+            '<button type="button" class="link-btn rndUp" style="width:auto;padding:5px 8px;"' + (i === 0 ? ' disabled' : '') + '>↑</button>' +
+            '<button type="button" class="link-btn rndDown" style="width:auto;padding:5px 8px;"' + (i === rows.length - 1 ? ' disabled' : '') + '>↓</button>' +
+            '<button type="button" class="link-btn rndDelete" style="width:auto;padding:5px 8px;color:#9c3327;">✕</button>' +
+            '</div>'
+          : '') +
+        '</div>';
+    }).join('');
+
+    box.innerHTML = '<div style="padding:16px 18px;">' +
+      (rowsHtml || '<div class="muted" style="font-size:12.5px;margin-bottom:10px;">No renderings uploaded yet.</div>') +
+      (canWrite
+        ? '<div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+          '<input type="file" id="rndFile" accept="' + esc((data.accept || []).join(',')) + '" style="display:none;">' +
+          '<button type="button" class="btn" id="rndUploadBtn" style="width:auto;padding:8px 14px;">Upload rendering…</button>' +
+          '<span class="muted" id="rndUploadStatus" style="font-size:12px;"></span>' +
+          '</div>'
+        : '') +
+      '</div>';
+
+    if (!canWrite) return;
+
+    box.querySelectorAll('.rndDelete').forEach(function (b) {
+      b.addEventListener('click', async function () {
+        var id = b.closest('.rndRow').getAttribute('data-id');
+        if (!window.confirm('Remove this rendering? This cannot be undone.')) return;
+        var r = await authed('/proposals/' + p.id + '/renderings/' + id, { method: 'DELETE' });
+        if (!r.ok) { alert(await serverMessage(r, 'Could not remove that rendering.')); return; }
+        loadRenderings(p, user);
+      });
+    });
+
+    function move(id, dir) {
+      var ids = rows.map(function (x) { return x.id; });
+      var i = ids.indexOf(id);
+      var j = i + dir;
+      if (j < 0 || j >= ids.length) return;
+      var tmp = ids[i]; ids[i] = ids[j]; ids[j] = tmp;
+      return authed('/proposals/' + p.id + '/renderings/reorder', { method: 'PATCH', body: { orderedIds: ids } })
+        .then(function (r) {
+          if (!r.ok) alert('Could not save the new order. Reload and try again.');
+          loadRenderings(p, user);
+        });
+    }
+    box.querySelectorAll('.rndUp').forEach(function (b) {
+      b.addEventListener('click', function () { move(b.closest('.rndRow').getAttribute('data-id'), -1); });
+    });
+    box.querySelectorAll('.rndDown').forEach(function (b) {
+      b.addEventListener('click', function () { move(b.closest('.rndRow').getAttribute('data-id'), 1); });
+    });
+
+    var upBtn = document.getElementById('rndUploadBtn');
+    var fileInput = document.getElementById('rndFile');
+    var status = document.getElementById('rndUploadStatus');
+    if (upBtn && fileInput) {
+      upBtn.addEventListener('click', function () { fileInput.click(); });
+      fileInput.addEventListener('change', async function () {
+        var file = fileInput.files[0];
+        if (!file) return;
+        if (data.maxBytes && file.size > data.maxBytes) {
+          status.style.color = '#9c3327';
+          status.textContent = 'That file is ' + fmtBytes(file.size) + '. The limit is ' + fmtBytes(data.maxBytes) + '.';
+          return;
+        }
+        upBtn.disabled = true;
+        status.style.color = '';
+        status.textContent = 'Uploading ' + file.name + '…';
+        try {
+          await uploadRendering(p, file, function (progress) {
+            status.textContent = 'Uploading ' + file.name + '… ' + Math.round(progress.percentage) + '%';
+          });
+          status.textContent = '';
+          loadRenderings(p, user);
+        } catch (err) {
+          status.style.color = '#9c3327';
+          status.textContent = err && err.message ? err.message : 'Upload failed.';
+        }
+        upBtn.disabled = false;
+        fileInput.value = '';
+      });
+    }
+  }
 
   /* --- Admin --- */
   /* --- Admin ---
@@ -12151,7 +13148,10 @@
             '<button class="link-btn" id="admMailTest" style="width:auto;padding:10px 15px;">Send test email</button>' +
             '<button class="btn" id="admNew" style="width:auto;padding:10px 17px;">New user</button>' +
           '</div></div>' +
-        '<div id="admList"><div class="muted" style="padding:24px;">Loading…</div></div>') +
+        '<div id="admList"><div class="muted" style="padding:24px;">Loading…</div></div>' +
+        '<div class="section-title" style="margin-top:26px;">Tips &amp; Tricks guide</div>' +
+        '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">The name, title and photo on the page-by-page help bubble everyone sees in the bottom-right corner (a person can turn the bubble itself off under My Profile). Change the photo here any time — nothing about the tips themselves needs a deploy to follow.</div>' +
+        '<div id="tipsGuideAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>') +
 
       sec('proposals',
         head('Standard proposal notes',
@@ -12176,6 +13176,10 @@
           '<button class="btn" id="futNew" style="width:auto;padding:9px 15px;">+ New template</button></div>' +
         '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;max-width:820px;line-height:1.55;">The emails a rep can pick from on a proposal. The order matters — financing is not raised until the email before it has established that budget is the obstacle — so the step number decides the sequence. Editing here changes what everyone sends, immediately.</div>' +
         '<div id="futList"><div class="muted" style="padding:16px;">Loading…</div></div>' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:26px;"><div class="section-title" style="margin:0;">Proposal e-sign emails</div>' +
+          '<button class="btn" id="esetNew" style="width:auto;padding:9px 15px;">+ New template</button></div>' +
+        '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;max-width:820px;line-height:1.55;">The "please review and sign" email a rep sends with a proposal — separate from the follow-ups above and from the signing document itself. Auto-picked by product line the same way the signing document is, independently, so the two can be mixed and matched; a rep can always pick a different one before sending. Sent from the rep’s own connected Outlook mailbox, HTML included. <code>[Signing Link]</code> is filled in per recipient at send time, not here.</div>' +
+        '<div id="esetList"><div class="muted" style="padding:16px;">Loading…</div></div>' +
         '<div class="muted" style="font-size:12.5px;margin-top:22px;padding-top:14px;border-top:1px solid #eef0ea;line-height:1.55;max-width:820px;">Payment-request emails and the letters they carry are edited with the invoices they belong to, under <b style="font-weight:600;">Accounts Receivable → Letters &amp; email</b>.</div>') +
 
       sec('pricing',
@@ -12213,6 +13217,7 @@
 
     if (window.FreightTrueUp) window.FreightTrueUp.mountAdmin('ftuBannerAdmin', user);
     if (window.SSGIntroAdmin) window.SSGIntroAdmin.mountAdmin('introAdmin');
+    if (window.SSGTips) window.SSGTips.mountAdmin('tipsGuideAdmin', user);
     document.getElementById('admNew').addEventListener('click', openUserForm);
     document.getElementById('admMailTest').addEventListener('click', async function () {
       var bt = this, label = bt.textContent;
@@ -12228,6 +13233,7 @@
     });
     document.getElementById('qtNew').addEventListener('click', function () { openQuestionTemplateForm(null); });
     document.getElementById('futNew').addEventListener('click', function () { openFollowUpTemplateForm(null, futCache); });
+    document.getElementById('esetNew').addEventListener('click', function () { openEsignEmailTemplateForm(null, esetCache); });
     loadUsers();
     // The panel wires its own + New note button and loads its own list.
     window.SSGStandardNotes.mount();
@@ -12238,6 +13244,7 @@
       window.SSGReferenceDocuments.render(document.getElementById('referenceDocsAdmin'));
     loadFormulas();
     loadFollowUpTemplates();
+    loadEsignEmailTemplates();
     loadOutlookPanel();
     loadFinancingAdmin();
     loadQuestionTemplates();
@@ -13345,17 +14352,25 @@
           '<input type="file" id="upSigFile" accept="image/png,image/jpeg" style="display:none;">' +
         '</div>' +
         '<div id="upSigNote" class="muted" style="font-size:11.5px;margin-top:6px;line-height:1.5;">Signed in black ink on white paper, scanned or photographed. It prints above your name on every payment letter you generate.</div>') +
-      '<div class="muted" style="font-size:12px;margin-top:2px;">These details appear in the “Proposal Prepared By” block on every proposal you generate.</div>',
+      '<div class="muted" style="font-size:12px;margin-top:2px;">These details appear in the “Proposal Prepared By” block on every proposal you generate.</div>' +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:16px;cursor:pointer;"><input type="checkbox" id="upTipsEnabled"' + (user.tipsEnabled !== false ? ' checked' : '') + '> Show the Tips &amp; Tricks help bubble while I work</label>',
       async function (close, showErr) {
         var name = document.getElementById('upName').value.trim();
         if (name.length < 2) return showErr('Enter your full name.');
-        var body = { name: name, title: document.getElementById('upTitle').value.trim(), phone: document.getElementById('upPhone').value.trim() };
+        var body = {
+          name: name,
+          title: document.getElementById('upTitle').value.trim(),
+          phone: document.getElementById('upPhone').value.trim(),
+          tipsEnabled: document.getElementById('upTipsEnabled').checked,
+        };
         if (sigNext !== undefined) body.signatureImage = sigNext;
         var r = await authed('/auth/me', { method: 'PATCH', body: body });
         if (!r.ok) return showErr(await serverMessage(r, 'Could not save your profile (' + r.status + ').'));
         var updated = await r.json();
-        user.name = updated.name; user.title = updated.title; user.phone = updated.phone; user.hasSignature = updated.hasSignature;
-        if (currentUser) { currentUser.name = updated.name; currentUser.title = updated.title; currentUser.phone = updated.phone; currentUser.hasSignature = updated.hasSignature; }
+        user.name = updated.name; user.title = updated.title; user.phone = updated.phone; user.hasSignature = updated.hasSignature; user.tipsEnabled = updated.tipsEnabled;
+        if (currentUser) { currentUser.name = updated.name; currentUser.title = updated.title; currentUser.phone = updated.phone; currentUser.hasSignature = updated.hasSignature; currentUser.tipsEnabled = updated.tipsEnabled; }
+        // renderShell re-mounts SSGTips with the updated user below, which picks up
+        // tipsEnabled — no separate call needed.
         close(); renderShell(user);
       }, 'Save profile');
 

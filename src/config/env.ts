@@ -41,6 +41,13 @@ const EnvSchema = z
     MONDAY_INVITE_TRIGGER_LABEL: z.string().min(1).optional(),
     MONDAY_INVITE_LABEL: z.string().min(1).optional(),
 
+    // The two Manufacturing-board columns the shipping-readiness card reads —
+    // Manufacturing Phase (a status column) and Estimated Shipment Date (a
+    // mirror column) — off whichever row matches the deal by name. See
+    // src/integrations/monday/manufacturingSnapshot.ts.
+    MONDAY_MFG_STATUS_COLUMN: z.string().min(1).optional(),
+    MONDAY_MFG_SHIP_DATE_COLUMN: z.string().min(1).optional(),
+
     // ---- Customer portal ----
     // Where the portal is served, used to build the customer's colour-selection
     // link. Unset means the link is returned to staff as a token to paste.
@@ -170,15 +177,15 @@ const EnvSchema = z
     // `X-Webhook-Secret` header on the DocuSeal webhook. Without it the endpoint
     // refuses every request.
     DOCUSEAL_WEBHOOK_SECRET: z.string().optional(),
-    // Whether DocuSeal emails the signers. False when the signing link should go
-    // out from the CRM instead — the envelope still records the per-signer URL.
-    DOCUSEAL_SEND_EMAIL: z
-      .enum(['true', 'false'])
-      .default('true')
-      .transform((v) => v === 'true'),
     // Optional DocuSeal folder for the per-send templates, so the account does not
     // become a flat list of every proposal ever sent.
     DOCUSEAL_FOLDER: z.string().min(1).optional(),
+    // Every submission is created with send_email: false — the CRM emails the
+    // signers itself, from the rep's own connected Outlook mailbox, so the
+    // customer sees the request came from a person rather than DocuSeal. When the
+    // acting rep has no Outlook connection, this account's mailbox sends it
+    // instead. See notifyPendingSigners in docuseal/service.ts.
+    ESIGN_EMAIL_FALLBACK_SENDER_EMAIL: z.string().trim().email().default('bryan@summitsensory.com'),
     // Vercel Blob read-write token: where the composed package and the executed PDF
     // are kept, so the signed contract does not live only inside DocuSeal. Unset is
     // supported — the envelope then keeps DocuSeal's own document URL.

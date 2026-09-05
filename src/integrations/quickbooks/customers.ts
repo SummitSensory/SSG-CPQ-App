@@ -1,9 +1,11 @@
 import { prisma } from '../../lib/prisma.js';
 import { logger } from '../../lib/logger.js';
+import { qboEnvironment } from '../../config/env.js';
 import { query, create } from './client.js';
 import { toQboCustomer, toQboCustomerUpdate, type CustomerSource } from './mapping.js';
 import { findLink, upsertLink, markLinkState } from './links.js';
 import { findQboCustomerByName, describeNameMatch } from './customerLookup.js';
+import type { QboEnvironment } from '@prisma/client';
 
 const ENTITY = 'Customer';
 
@@ -234,6 +236,29 @@ export async function findOrCreateCustomer(
     await log('OUTBOUND', ENTITY, organizationId, null, 'error', userId, String(err));
     throw err;
   }
+}
+
+/**
+ * Re-push the CRM profile onto an ALREADY-LINKED QuickBooks customer — used
+ * after a contact edit so a corrected invoice email reaches QuickBooks without
+ * anyone visiting Integrations to run the sync by hand.
+ *
+ * Deliberately does nothing for an organization that isn't a QuickBooks
+ * customer yet: `findOrCreateCustomer` would happily create one, but a
+ * customer record should come from issuing them a document, not from someone
+ * fixing a typo on a contact card.
+ */
+export async function refreshCustomerIfLinked(
+  organizationId: string,
+  userId: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  const link = await findLink({ entity: ENTITY, entityId: organizationId });
+  if (!link) return;
+  const environment = qboEnvironment() as QboEnvironment;
+  const conn = await prisma.qboConnection.findFirst({ where: { environment, isActive: true } });
+  if (!conn) return;
+  await findOrCreateCustomer(organizationId, conn.realmId, userId, fetchImpl, { refresh: true });
 }
 
 async function log(

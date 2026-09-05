@@ -728,7 +728,7 @@
         // — the engineer-of-record wording, a lead time — is not skimmed past as
         // boilerplate. Everything else keeps the quiet cream background.
         var noteBox = l.emphasis
-          ? 'background:#f3f6fb;border-radius:9px;padding:9px 12px;'
+          ? 'background:#f3f6fb;border:1px solid #203060;border-radius:9px;padding:9px 12px;'
           : 'background:#f7f9fc;border-radius:7px;padding:7px 10px;';
         body +=
           '<tr style="break-inside:avoid;"><td colspan="5" style="padding:3px 0 3px ' +
@@ -1101,8 +1101,15 @@
       '<div style="flex:1.35;"><div style="border-bottom:1px solid #20241f;height:40px;display:flex;align-items:flex-end;padding-bottom:3px;"><span style="font-size:11.5px;line-height:1.35;color:#20241f;">' +
       esc(m.contactName || '') +
       '</span></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Authorized Signer\'s Name</div></div>' +
-      '<div style="flex:1.35;"><div style="border-bottom:1px solid #20241f;height:40px;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Signature</div></div>' +
-      '<div style="flex:1;"><div style="border-bottom:1px solid #20241f;height:40px;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Date</div></div>' +
+      // These two ids are where the e-sign package places the customer's actual
+      // signature/date fields (see injectSignatureFields in
+      // src/integrations/docuseal/assembly.ts) — empty here for print, screen
+      // and email, exactly as they always were. flex/align-items/padding-bottom
+      // match the name box above: without it, DocuSeal draws the signature
+      // image at the top of this box's own line-height rather than resting on
+      // the rule at the bottom, floating it above the line instead of on it.
+      '<div style="flex:1.35;"><div id="ssgSigAcceptanceSignature" style="border-bottom:1px solid #20241f;height:40px;display:flex;align-items:flex-end;padding-bottom:3px;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Signature</div></div>' +
+      '<div style="flex:1;"><div id="ssgSigAcceptanceDate" style="border-bottom:1px solid #20241f;height:40px;display:flex;align-items:flex-end;padding-bottom:3px;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Date</div></div>' +
       '</div>' +
       '</div>' +
       footerNotesHtml +

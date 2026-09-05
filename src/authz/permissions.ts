@@ -92,6 +92,14 @@ export const Permission = {
   // Reading the text needs only PROPOSAL_READ — every rep who can open a proposal
   // renders these pages.
   LEGAL_MANAGE: 'legal:manage',
+  // The Tips & Tricks guide profile — the name, title and photo shown on the
+  // page-by-page help bubble (see src/ui/tipsGuide.ts). Granted to no role but
+  // SYSTEM_ADMIN, which holds the wildcard, same precedent as LEGAL_MANAGE:
+  // it is company-wide and cosmetic rather than tied to any one team's work, so
+  // there is no natural role to hand it to short of "whoever runs the place."
+  // Reading it needs no permission at all — every signed-in user renders the
+  // widget, the same way everyone reads the legal wording above.
+  UI_MANAGE: 'ui:manage',
 } as const;
 
 export type Permission = (typeof Permission)[keyof typeof Permission];

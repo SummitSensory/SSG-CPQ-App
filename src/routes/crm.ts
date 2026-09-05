@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
+import { logger } from '../lib/logger.js';
 import { recordAudit } from '../lib/audit.js';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
@@ -8,11 +9,14 @@ import { ValidationError, NotFoundError } from '../lib/errors.js';
 import {
   OrganizationInput,
   ContactInput,
+  ContactUpdateInput,
   AddressInput,
   RoomInput,
   OpportunityInput,
   AttachmentInput,
 } from '../crm/validation.js';
+import { pushContactToDeal } from '../integrations/monday/contactPush.js';
+import { refreshCustomerIfLinked } from '../integrations/quickbooks/customers.js';
 import {
   normalizeOrgName,
   findDuplicateOrganizations,
@@ -161,6 +165,70 @@ export function registerCrmRoutes(app: FastifyInstance): void {
       details: { id: contact.id },
     });
     return reply.status(201).send(contact);
+  });
+
+  /**
+   * Correct a contact — most importantly, the email QuickBooks invoices go to.
+   * `loadCustomerSource` (quickbooks/customers.ts) picks the org's contact by
+   * isDecisionMaker first, so promoting one here demotes every other contact on
+   * the same organization; there is exactly one "the" invoice contact at a time.
+   *
+   * Pushes the correction on to monday and QuickBooks so both stay in step with
+   * the CRM instead of drifting until someone notices at billing time — the
+   * reason this endpoint exists at all (see `customerProfile.ts`'s "Invoice
+   * email" comparison). Both pushes are best effort and fire-and-forget: a
+   * contact edit must save locally even when an external system can't be
+   * reached, and each push logs its own failure.
+   */
+  app.patch('/crm/contacts/:id', write, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const parsed = ContactUpdateInput.safeParse(req.body);
+    if (!parsed.success) throw new ValidationError(parsed.error.message);
+
+    const existing = await prisma.contact.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundError('Contact not found');
+
+    if (parsed.data.email) {
+      const dupes = await findDuplicateContact(existing.organizationId, parsed.data.email, id);
+      if (dupes.length && (req.query as { force?: string }).force !== 'true') {
+        return reply
+          .status(409)
+          .send({ error: 'DUPLICATE', message: 'Contact already exists', duplicates: dupes });
+      }
+    }
+
+    if (parsed.data.isDecisionMaker === true) {
+      await prisma.contact.updateMany({
+        where: { organizationId: existing.organizationId, id: { not: id } },
+        data: { isDecisionMaker: false },
+      });
+    }
+
+    const contact = await prisma.contact.update({ where: { id }, data: parsed.data });
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'crm.contact.update',
+      details: { id: contact.id },
+    });
+
+    // monday is fire-and-forget — nothing in this response reflects its state back
+    // to whoever is saving. QuickBooks is awaited (but still never fails the save)
+    // because the caller is typically the customer-profile comparison panel, which
+    // re-reads QuickBooks right after saving; awaiting means that re-read sees the
+    // correction instead of racing it.
+    void pushContactToDeal(existing.organizationId, contact).catch((err) =>
+      logger.error({ err, contactId: contact.id }, 'monday: contact push failed'),
+    );
+    try {
+      await refreshCustomerIfLinked(existing.organizationId, req.user!.sub);
+    } catch (err) {
+      logger.error(
+        { err, organizationId: existing.organizationId },
+        'quickbooks: contact-driven customer refresh failed',
+      );
+    }
+
+    return contact;
   });
 
   // ---- Addresses (billing & shipping) ----

@@ -172,7 +172,7 @@ export function registerFreightRfqRoutes(app: FastifyInstance): void {
    * the browser's viewer opens it and the save button is right there.
    *
    * Deliberately under /render/*. vercel.json routes that prefix to its own
-   * function with the memory and 60-second ceiling headless Chromium needs; on
+   * function with the memory and 180-second ceiling headless Chromium needs; on
    * the main API function a cold browser start runs past 30 seconds and the
    * request dies with a 504.
    */

@@ -89,14 +89,31 @@ export interface SeededRequirement {
   title: string;
 }
 
+/**
+ * Whether to seed the Installation/Training rows. Both default to on: the
+ * catalog has no reliable way to tell, from the accepted proposal, whether
+ * either was actually sold — "Installation" isn't a real line item anywhere in
+ * the catalog, and "Training" exists only as unpriced placeholder nodes under
+ * one product line. Rather than guess wrong, the rep locking the order says so
+ * directly — see openLockForm in public/app.js.
+ */
+export interface HandoffScopeOptions {
+  training?: boolean;
+  installation?: boolean;
+}
+
 /** Baseline operational requirements seeded on every new order. */
-export function defaultRequirements(): SeededRequirement[] {
+export function defaultRequirements(opts: HandoffScopeOptions = {}): SeededRequirement[] {
+  const training = opts.training !== false;
+  const installation = opts.installation !== false;
   return [
     { category: 'PRODUCTION', title: 'Confirm production requirements' },
     { category: 'CUSTOM_PRODUCT', title: 'Confirm custom product specifications' },
     { category: 'SHIPPING', title: 'Confirm shipping requirements & freight' },
-    { category: 'INSTALLATION', title: 'Confirm installation requirements' },
-    { category: 'TRAINING', title: 'Confirm training requirements' },
+    ...(installation
+      ? [{ category: 'INSTALLATION', title: 'Confirm installation requirements' }]
+      : []),
+    ...(training ? [{ category: 'TRAINING', title: 'Confirm training requirements' }] : []),
     { category: 'CUSTOMER_RESPONSIBILITY', title: 'Document customer responsibilities' },
     { category: 'FACILITY_ACCESS', title: 'Collect facility access information' },
     { category: 'REQUIRED_DOCUMENT', title: 'Collect required documents (COI, W-9, PO)' },
@@ -110,7 +127,12 @@ export interface SeededTask {
 }
 
 /** Baseline internal tasks seeded on every new order (owners are roles). */
-export function defaultTasks(depositRequired: boolean): SeededTask[] {
+export function defaultTasks(
+  depositRequired: boolean,
+  opts: HandoffScopeOptions = {},
+): SeededTask[] {
+  const training = opts.training !== false;
+  const installation = opts.installation !== false;
   const tasks: SeededTask[] = [];
   if (depositRequired)
     tasks.push({
@@ -130,9 +152,19 @@ export function defaultTasks(depositRequired: boolean): SeededTask[] {
       category: 'PRODUCTION',
     },
     { title: 'Schedule shipping / delivery', assigneeRole: 'OPERATIONS', category: 'SHIPPING' },
-    { title: 'Schedule installation', assigneeRole: 'PROJECT_MANAGER', category: 'INSTALLATION' },
-    { title: 'Schedule training', assigneeRole: 'PROJECT_MANAGER', category: 'TRAINING' },
   );
+  if (installation)
+    tasks.push({
+      title: 'Schedule installation',
+      assigneeRole: 'PROJECT_MANAGER',
+      category: 'INSTALLATION',
+    });
+  if (training)
+    tasks.push({
+      title: 'Schedule training',
+      assigneeRole: 'PROJECT_MANAGER',
+      category: 'TRAINING',
+    });
   return tasks;
 }
 
