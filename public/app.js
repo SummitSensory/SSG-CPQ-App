@@ -11803,17 +11803,35 @@
     { token: '[Sender]', means: 'Your own first name' },
     { token: '[Sender Full Name]', means: 'Your own full name' },
     { token: '[Signing Link]', means: 'The link the recipient opens — use it inside an href' },
+    { token: '{{FirstName}}', means: 'Same as [First Name]' },
+    { token: '{{LastName}}', means: 'The recipient’s last name' },
+    { token: '{{OrganizationName}}', means: 'Same as [Customer]' },
+    { token: '{{ProjectName}}', means: 'Same as [Proposal]' },
+    { token: '{{ProductName}}', means: 'The proposed model/product' },
+    { token: '{{ProposalNumber}}', means: 'Same as [Proposal Number]' },
+    { token: '{{ProposalVersion}}', means: 'e.g. V2' },
+    { token: '{{ProposalDate}}', means: 'e.g. September 4, 2026' },
+    { token: '{{ProposalExpirationDate}}', means: 'e.g. October 4, 2026' },
   ];
   // Mirrors SAMPLE_ESIGN_EMAIL_CONTEXT (src/email/esignEmailTemplates.ts) so the
   // live preview here matches what the server's own preview endpoint renders.
   var ESET_SAMPLE = {
-    '[First Name]': 'Emily',
-    '[Customer]': 'Uniquely Yours Specialized Care',
+    '[First Name]': 'Mary',
+    '[Customer]': 'Katonah-Lewisboro School District',
     '[Proposal Number]': 'P-2026-000063',
-    '[Proposal]': 'Comprehensive Sensory Therapy Gym',
+    '[Proposal]': 'KLSD Sensory Therapy Room',
     '[Sender]': 'Bryan',
     '[Sender Full Name]': 'Bryan Shepherd',
     '[Signing Link]': 'https://docuseal.com/s/sample',
+    '{{FirstName}}': 'Mary',
+    '{{LastName}}': 'Loughney',
+    '{{OrganizationName}}': 'Katonah-Lewisboro School District',
+    '{{ProjectName}}': 'KLSD Sensory Therapy Room',
+    '{{ProductName}}': 'Summit Soar S1',
+    '{{ProposalNumber}}': 'P-2026-000063',
+    '{{ProposalVersion}}': 'V2',
+    '{{ProposalDate}}': 'September 4, 2026',
+    '{{ProposalExpirationDate}}': 'October 4, 2026',
   };
   function esetFillSample(text) {
     var out = String(text || '');
@@ -12676,6 +12694,8 @@
     var qs = [];
     if (opts.emailTemplateKey) qs.push('emailTemplateKey=' + encodeURIComponent(opts.emailTemplateKey));
     if (opts.firstName) qs.push('firstName=' + encodeURIComponent(opts.firstName));
+    if (opts.lastName) qs.push('lastName=' + encodeURIComponent(opts.lastName));
+    if (opts.productName) qs.push('productName=' + encodeURIComponent(opts.productName));
     var plan = { template: null, attachments: [], email: null };
     try {
       var rp = await authed('/esign/proposals/versions/' + version.id + '/plan' + (qs.length ? '?' + qs.join('&') : ''));
@@ -12688,7 +12708,15 @@
     var ctx = { contacts: [] };
     try { var rc = await authed('/proposals/' + p.id + '/send-context'); if (rc.ok) ctx = await rc.json(); } catch (e) {}
     var dm = ctx.contacts.filter(function (c) { return c.isDecisionMaker; })[0] || ctx.contacts[0];
-    var firstName = dm && dm.name ? dm.name.trim().split(/\s+/)[0] : '';
+    // firstName/lastName come straight off the Contact row now (send-context
+    // returns them split), not a re-split of the name it also concatenates —
+    // a decision maker named with a middle name or a suffix used to lose it
+    // to whichever half of the split "first word" landed on.
+    var firstName = dm && dm.firstName ? dm.firstName : (dm && dm.name ? dm.name.trim().split(/\s+/)[0] : '');
+    var lastName = dm && dm.lastName ? dm.lastName : '';
+    // Same heading proposalFileName() reads for the file name, reused here for
+    // the {{ProductName}} email placeholder so the two never disagree.
+    var productName = proposalModelCode(version.items || []);
 
     var emailTemplates = [];
     try {
@@ -12696,7 +12724,7 @@
       if (ret.ok) emailTemplates = await ret.json();
     } catch (e) {}
 
-    var plan = await esignFetchPlan(version, { firstName: firstName });
+    var plan = await esignFetchPlan(version, { firstName: firstName, lastName: lastName, productName: productName });
 
     // Local, mutable copy — reordering and uploading here act on the proposal's
     // real Design renderings list immediately (same list the main proposal page
@@ -12780,6 +12808,11 @@
           emailTemplateKey: pv.querySelector('#esEmailTemplate').value || undefined,
           subject: subject,
           message: message,
+          // Only used if the server ever has to fall back to its own default
+          // email (no override reached it) — the text here already has every
+          // placeholder resolved from the plan preview above.
+          lastName: lastName || undefined,
+          productName: productName || undefined,
         };
         var r = await authed('/render/esign/proposals/versions/' + version.id + '/send',
           { method: 'POST', body: body, timeoutMs: RENDER_TIMEOUT_MS });
@@ -12808,7 +12841,7 @@
     }
     pv.querySelector('#esMsg').addEventListener('input', updateEmailPreview);
     pv.querySelector('#esEmailTemplate').addEventListener('change', async function (ev) {
-      var next = await esignFetchPlan(version, { emailTemplateKey: ev.target.value || undefined, firstName: firstName });
+      var next = await esignFetchPlan(version, { emailTemplateKey: ev.target.value || undefined, firstName: firstName, lastName: lastName, productName: productName });
       pv.querySelector('#esSubject').value = next.email ? next.email.subject : '';
       pv.querySelector('#esMsg').value = next.email ? next.email.html : '';
       updateEmailPreview();

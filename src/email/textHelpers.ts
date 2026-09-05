@@ -16,3 +16,16 @@ export const firstNameOf = (name: string | null | undefined): string =>
   String(name ?? '')
     .trim()
     .split(/\s+/)[0] || 'there';
+
+/**
+ * Everything after the first word — "" for a single-word or empty name,
+ * never a fallback placeholder: unlike a missing first name, a missing last
+ * name has no natural stand-in word, so a template author sees a blank
+ * rather than something that reads as intentional.
+ */
+export const lastNameOf = (name: string | null | undefined): string =>
+  String(name ?? '')
+    .trim()
+    .split(/\s+/)
+    .slice(1)
+    .join(' ');

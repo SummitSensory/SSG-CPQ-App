@@ -23,6 +23,8 @@ import {
   SAMPLE_ESIGN_EMAIL_CONTEXT,
   ESIGN_EMAIL_PLACEHOLDERS,
 } from '../email/esignEmailTemplates.js';
+import { longDate } from '../email/paymentTemplates.js';
+import { metaOf } from '../proposals/analytics.js';
 import { outlookStatusFor } from '../integrations/microsoft/graph.js';
 import { pdfAvailable } from '../render/pdf.js';
 import { checkDocumentTotal } from '../proposals/documentIntegrity.js';
@@ -70,6 +72,10 @@ const SendBody = z.object({
   subject: z.string().trim().max(300).optional(),
   message: z.string().max(20_000).optional(),
   filename: z.string().trim().max(160).optional(),
+  /** The recipient's last name, for the {{LastName}} email placeholder. */
+  lastName: z.string().trim().max(160).optional(),
+  /** The proposed model/product, for the {{ProductName}} email placeholder. */
+  productName: z.string().trim().max(200).optional(),
 });
 
 const TemplateBody = z.object({
@@ -177,12 +183,17 @@ export function registerEsignRoutes(app: FastifyInstance): void {
       attachmentKeys?: string;
       emailTemplateKey?: string;
       firstName?: string;
+      lastName?: string;
+      productName?: string;
     };
     const version = await prisma.proposalVersion.findUnique({
       where: { id: versionId },
       select: {
         id: true,
         items: true,
+        sections: true,
+        version: true,
+        expirationDate: true,
         proposal: { select: { number: true, title: true, organizationId: true } },
       },
     });
@@ -212,16 +223,22 @@ export function registerEsignRoutes(app: FastifyInstance): void {
         }),
         prisma.user.findUnique({ where: { id: req.user!.sub }, select: { name: true } }),
       ]);
+      const meta = metaOf(version.sections) as { proposalDate?: string };
       // `[Signing Link]` is left in place on purpose — no signing link exists
       // until the actual send creates the DocuSeal submission. It is filled in
       // per recipient at that point (see notifyPendingSigners).
       const rendered = renderEsignEmail(emailTemplate, {
         firstName: q.firstName?.trim() || 'there',
+        lastName: q.lastName?.trim() || undefined,
         senderFirstName: firstNameOf(sender?.name),
         senderName: sender?.name ?? undefined,
         customerName: org?.name,
         proposalNumber: version.proposal.number,
         proposalTitle: version.proposal.title ?? undefined,
+        proposalVersionLabel: `V${version.version}`,
+        proposalDateLabel: longDate(meta.proposalDate),
+        proposalExpirationLabel: longDate(version.expirationDate),
+        productName: q.productName?.trim() || undefined,
         signingLink: '[Signing Link]',
       });
       email = {
