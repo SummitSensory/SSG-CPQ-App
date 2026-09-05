@@ -11795,27 +11795,44 @@
   /* --- Proposal e-sign emails: the ~10 "please sign this" templates --- */
   var esetCache = null;
   var esetProductLines = [];
+  // Mirrors ESIGN_EMAIL_PLACEHOLDERS (src/email/esignEmailTemplates.ts) — the
+  // `{{PascalCase}}` set is the only one ever advertised to a rep. Used only
+  // when /esign/email-templates/preview (the server's own authoritative copy,
+  // fetched into esetCache.placeholders) hasn't loaded yet.
   var ESET_PLACEHOLDERS_FALLBACK = [
-    { token: '[First Name]', means: 'The recipient’s first name' },
-    { token: '[Customer]', means: 'The customer’s organization name' },
-    { token: '[Proposal Number]', means: 'e.g. P-2026-000063' },
-    { token: '[Proposal]', means: 'The proposal title' },
-    { token: '[Sender]', means: 'Your own first name' },
-    { token: '[Sender Full Name]', means: 'Your own full name' },
-    { token: '[Signing Link]', means: 'The link the recipient opens — use it inside an href' },
-    { token: '{{FirstName}}', means: 'Same as [First Name]' },
-    { token: '{{LastName}}', means: 'The recipient’s last name' },
-    { token: '{{OrganizationName}}', means: 'Same as [Customer]' },
-    { token: '{{ProjectName}}', means: 'Same as [Proposal]' },
-    { token: '{{ProductName}}', means: 'The proposed model/product' },
-    { token: '{{ProposalNumber}}', means: 'Same as [Proposal Number]' },
-    { token: '{{ProposalVersion}}', means: 'e.g. V2' },
-    { token: '{{ProposalDate}}', means: 'e.g. September 4, 2026' },
-    { token: '{{ProposalExpirationDate}}', means: 'e.g. October 4, 2026' },
+    { token: '{{FirstName}}', group: 'Recipient', means: 'The recipient’s first name' },
+    { token: '{{LastName}}', group: 'Recipient', means: 'The recipient’s last name' },
+    { token: '{{OrganizationName}}', group: 'Recipient', means: 'The customer’s organization name' },
+    { token: '{{ProjectName}}', group: 'Proposal', means: 'The proposal’s title' },
+    { token: '{{ProductName}}', group: 'Proposal', means: 'The proposed model/product, e.g. SQ-1' },
+    { token: '{{ProductLine}}', group: 'Proposal', means: 'Summit Adventure, Summit Flex or Summit Soar — blank otherwise' },
+    { token: '{{ProposalNumber}}', group: 'Proposal', means: 'e.g. P-2026-000063' },
+    { token: '{{ProposalVersion}}', group: 'Proposal', means: 'e.g. V2' },
+    { token: '{{ProposalDate}}', group: 'Proposal', means: 'e.g. September 4, 2026' },
+    { token: '{{ProposalExpirationDate}}', group: 'Proposal', means: 'e.g. October 4, 2026' },
+    { token: '{{SenderFirstName}}', group: 'You', means: 'Your own first name' },
+    { token: '{{SenderFullName}}', group: 'You', means: 'Your own full name' },
+    { token: '{{SigningLink}}', group: 'Signing', means: 'The link the recipient opens — use it inside an href' },
   ];
   // Mirrors SAMPLE_ESIGN_EMAIL_CONTEXT (src/email/esignEmailTemplates.ts) so the
   // live preview here matches what the server's own preview endpoint renders.
+  // The legacy `[Bracket Words]` entries stay in this fill-only map (never in
+  // the advertised list above) purely so a template saved before the
+  // `{{PascalCase}}` format existed still previews correctly while it's open.
   var ESET_SAMPLE = {
+    '{{FirstName}}': 'Mary',
+    '{{LastName}}': 'Loughney',
+    '{{OrganizationName}}': 'Katonah-Lewisboro School District',
+    '{{ProjectName}}': 'KLSD Sensory Therapy Room',
+    '{{ProductName}}': 'Summit Soar S1',
+    '{{ProductLine}}': 'Summit Soar',
+    '{{ProposalNumber}}': 'P-2026-000063',
+    '{{ProposalVersion}}': 'V2',
+    '{{ProposalDate}}': 'September 4, 2026',
+    '{{ProposalExpirationDate}}': 'October 4, 2026',
+    '{{SenderFirstName}}': 'Bryan',
+    '{{SenderFullName}}': 'Bryan Shepherd',
+    '{{SigningLink}}': 'https://docuseal.com/s/sample',
     '[First Name]': 'Mary',
     '[Customer]': 'Katonah-Lewisboro School District',
     '[Proposal Number]': 'P-2026-000063',
@@ -11823,15 +11840,6 @@
     '[Sender]': 'Bryan',
     '[Sender Full Name]': 'Bryan Shepherd',
     '[Signing Link]': 'https://docuseal.com/s/sample',
-    '{{FirstName}}': 'Mary',
-    '{{LastName}}': 'Loughney',
-    '{{OrganizationName}}': 'Katonah-Lewisboro School District',
-    '{{ProjectName}}': 'KLSD Sensory Therapy Room',
-    '{{ProductName}}': 'Summit Soar S1',
-    '{{ProposalNumber}}': 'P-2026-000063',
-    '{{ProposalVersion}}': 'V2',
-    '{{ProposalDate}}': 'September 4, 2026',
-    '{{ProposalExpirationDate}}': 'October 4, 2026',
   };
   function esetFillSample(text) {
     var out = String(text || '');
@@ -11839,6 +11847,47 @@
       out = out.split(token).join(ESET_SAMPLE[token]);
     });
     return out;
+  }
+
+  /**
+   * A small "Insert variable…" <select>, grouped into the same optgroups as
+   * ESIGN_EMAIL_PLACEHOLDERS. Selecting an option splices its token into the
+   * paired input/textarea at the cursor (falling back to the end) rather than
+   * appending it, so a rep can drop a variable mid-sentence — then resets to
+   * the placeholder option so the same variable can be inserted again.
+   */
+  function esetPlaceholderPickerHtml(selectId, placeholders) {
+    var order = [];
+    var byGroup = {};
+    (placeholders || []).forEach(function (p) {
+      var g = p.group || 'Other';
+      if (!byGroup[g]) { byGroup[g] = []; order.push(g); }
+      byGroup[g].push(p);
+    });
+    var opts = order.map(function (g) {
+      return '<optgroup label="' + esc(g) + '">' + byGroup[g].map(function (p) {
+        return '<option value="' + esc(p.token) + '">' + esc(p.token) + '</option>';
+      }).join('') + '</optgroup>';
+    }).join('');
+    return '<select id="' + selectId + '" style="width:auto;max-width:230px;padding:5px 8px;border:1px solid #dcded7;border-radius:7px;font-size:12px;background:#fff;color:#20241f;">' +
+      '<option value="">Insert variable…</option>' + opts + '</select>';
+  }
+  function bindPlaceholderPicker(root, selectId, targetId) {
+    var sel = root.querySelector('#' + selectId);
+    var target = root.querySelector('#' + targetId);
+    if (!sel || !target) return;
+    sel.addEventListener('change', function () {
+      var token = sel.value;
+      sel.value = '';
+      if (!token) return;
+      var start = target.selectionStart == null ? target.value.length : target.selectionStart;
+      var end = target.selectionEnd == null ? target.value.length : target.selectionEnd;
+      target.value = target.value.slice(0, start) + token + target.value.slice(end);
+      var pos = start + token.length;
+      target.focus();
+      try { target.setSelectionRange(pos, pos); } catch (e2) {}
+      target.dispatchEvent(new Event('input', { bubbles: true }));
+    });
   }
 
   async function loadEsignEmailTemplates() {
@@ -11920,10 +11969,13 @@
         '<input id="esetKey" style="' + IN + 'font-family:ui-monospace,monospace;" value="' + v('key') + '"' + (t.sentCount ? ' disabled' : '') + '>' +
         '<div class="muted" style="font-size:12px;margin-top:4px;line-height:1.5;">Lower-case letters, numbers and hyphens. ' +
           (t.sentCount ? 'Fixed now that this email has been sent — the history refers to it.' : 'Used by the send history, so pick it once.') + '</div>') +
-      fieldRow('Subject', '<input id="esetSubj" style="' + IN + '" value="' + v('subject') + '">') +
+      fieldRow('Subject', '<div style="display:flex;gap:8px;align-items:center;">' +
+        '<input id="esetSubj" style="' + IN + '" value="' + v('subject') + '">' +
+        esetPlaceholderPickerHtml('esetSubjVar', (cache && cache.placeholders) || ESET_PLACEHOLDERS_FALLBACK) + '</div>') +
       '<div class="field"><label>Body (HTML)</label>' +
+        '<div style="margin-bottom:6px;">' + esetPlaceholderPickerHtml('esetBodyVar', (cache && cache.placeholders) || ESET_PLACEHOLDERS_FALLBACK) + '</div>' +
         '<textarea id="esetBody" rows="13" style="' + IN + 'resize:vertical;font-size:12.5px;line-height:1.5;font-family:ui-monospace,monospace;">' + esc(t.bodyHtml || '') + '</textarea>' +
-        '<div class="muted" style="font-size:12px;margin-top:5px;line-height:1.55;">Raw HTML — this is not the plain-text follow-up format. Put <code>[Signing Link]</code> inside an <code>href</code>, e.g. <code>&lt;a href="[Signing Link]"&gt;Review &amp; sign&lt;/a&gt;</code>.</div></div>' +
+        '<div class="muted" style="font-size:12px;margin-top:5px;line-height:1.55;">Raw HTML — this is not the plain-text follow-up format. Put <code>{{SigningLink}}</code> inside an <code>href</code>, e.g. <code>&lt;a href="{{SigningLink}}"&gt;Review &amp; sign&lt;/a&gt;</code>.</div></div>' +
       (lines.length
         ? '<div class="field"><label>Product lines this is for</label><div style="max-height:140px;overflow:auto;border:1px solid #e7e8e3;border-radius:8px;padding:8px 10px;">' + lineChecks + '</div>' +
           '<div class="muted" style="font-size:12px;margin-top:5px;">Leave all unchecked to make this the fallback — offered when no more specific email matches.</div></div>'
@@ -11967,6 +12019,8 @@
     var subjEl = pv.querySelector('#esetSubj'), bodyEl2 = pv.querySelector('#esetBody');
     if (subjEl) subjEl.addEventListener('input', prev);
     if (bodyEl2) bodyEl2.addEventListener('input', prev);
+    bindPlaceholderPicker(pv, 'esetSubjVar', 'esetSubj');
+    bindPlaceholderPicker(pv, 'esetBodyVar', 'esetBody');
     prev();
   }
 
@@ -12696,12 +12750,38 @@
     if (opts.firstName) qs.push('firstName=' + encodeURIComponent(opts.firstName));
     if (opts.lastName) qs.push('lastName=' + encodeURIComponent(opts.lastName));
     if (opts.productName) qs.push('productName=' + encodeURIComponent(opts.productName));
+    if (opts.productLine) qs.push('productLine=' + encodeURIComponent(opts.productLine));
     var plan = { template: null, attachments: [], email: null };
     try {
       var rp = await authed('/esign/proposals/versions/' + version.id + '/plan' + (qs.length ? '?' + qs.join('&') : ''));
       if (rp.ok) plan = await rp.json();
     } catch (e) {}
     return plan;
+  }
+
+  /**
+   * The three frame product lines, named the way the {{ProductLine}} email
+   * placeholder should read — not the front-matter registry's own `label`
+   * (built for an admin dropdown: "Summit Adventure Series", "Summit Flex:
+   * Universal Exercise Unit"), and not a catalog join (no ProductFamily
+   * table row backs this). Keyed by the front-matter template's own id, so
+   * this can never name a line the introduction-page detector disagrees with.
+   */
+  var PRODUCT_LINE_NAMES = { ADVENTURE: 'Summit Adventure', SOAR: 'Summit Soar', FLEX: 'Summit Flex' };
+  /**
+   * Same detector the introduction pages use to pick which story to print
+   * (proposal-front-matter.js, templateFor()), reused here so the email and
+   * the introduction can never name two different lines for one proposal.
+   * Needs only `meta` and `lines` — the two things templateFor()'s matchers
+   * actually read — not a full doc fetch.
+   */
+  function productLineOf(version) {
+    if (!window.SSGFrontMatter || !window.SSGFrontMatter.templateFor) return '';
+    var secs = (version && version.sections) || [];
+    var metaSec = Array.isArray(secs) ? secs.filter(function (s) { return s && s.id === 'meta'; })[0] : null;
+    var meta = (metaSec && metaSec.data) || {};
+    var matched = window.SSGFrontMatter.templateFor({ meta: meta, lines: version.items || [] });
+    return (matched && PRODUCT_LINE_NAMES[matched.id]) || '';
   }
 
   async function openEsignSend(p, version, user) {
@@ -12717,6 +12797,7 @@
     // Same heading proposalFileName() reads for the file name, reused here for
     // the {{ProductName}} email placeholder so the two never disagree.
     var productName = proposalModelCode(version.items || []);
+    var productLine = productLineOf(version);
 
     var emailTemplates = [];
     try {
@@ -12724,7 +12805,7 @@
       if (ret.ok) emailTemplates = await ret.json();
     } catch (e) {}
 
-    var plan = await esignFetchPlan(version, { firstName: firstName, lastName: lastName, productName: productName });
+    var plan = await esignFetchPlan(version, { firstName: firstName, lastName: lastName, productName: productName, productLine: productLine });
 
     // Local, mutable copy — reordering and uploading here act on the proposal's
     // real Design renderings list immediately (same list the main proposal page
@@ -12794,8 +12875,8 @@
         var message = pv.querySelector('#esMsg').value;
         if (!subject) return showErr('Give the email a subject.');
         if (!message.trim()) return showErr('The email body is empty.');
-        if (message.indexOf('[Signing Link]') === -1) {
-          return showErr('The email body no longer has a [Signing Link] — the recipient would have no way to open the document. Add it back (e.g. in a link) before sending.');
+        if (message.indexOf('{{SigningLink}}') === -1 && message.indexOf('[Signing Link]') === -1) {
+          return showErr('The email body no longer has a {{SigningLink}} — the recipient would have no way to open the document. Add it back (e.g. in a link) before sending.');
         }
         var doc = await buildProposalDocForSend(p, version.id);
         if (!doc) return showErr('Could not prepare the proposal. Open the proposal preview once, then try again.');
@@ -12813,6 +12894,7 @@
           // placeholder resolved from the plan preview above.
           lastName: lastName || undefined,
           productName: productName || undefined,
+          productLine: productLine || undefined,
         };
         var r = await authed('/render/esign/proposals/versions/' + version.id + '/send',
           { method: 'POST', body: body, timeoutMs: RENDER_TIMEOUT_MS });
@@ -12841,7 +12923,7 @@
     }
     pv.querySelector('#esMsg').addEventListener('input', updateEmailPreview);
     pv.querySelector('#esEmailTemplate').addEventListener('change', async function (ev) {
-      var next = await esignFetchPlan(version, { emailTemplateKey: ev.target.value || undefined, firstName: firstName, lastName: lastName, productName: productName });
+      var next = await esignFetchPlan(version, { emailTemplateKey: ev.target.value || undefined, firstName: firstName, lastName: lastName, productName: productName, productLine: productLine });
       pv.querySelector('#esSubject').value = next.email ? next.email.subject : '';
       pv.querySelector('#esMsg').value = next.email ? next.email.html : '';
       updateEmailPreview();
@@ -13178,7 +13260,7 @@
         '<div id="futList"><div class="muted" style="padding:16px;">Loading…</div></div>' +
         '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:26px;"><div class="section-title" style="margin:0;">Proposal e-sign emails</div>' +
           '<button class="btn" id="esetNew" style="width:auto;padding:9px 15px;">+ New template</button></div>' +
-        '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;max-width:820px;line-height:1.55;">The "please review and sign" email a rep sends with a proposal — separate from the follow-ups above and from the signing document itself. Auto-picked by product line the same way the signing document is, independently, so the two can be mixed and matched; a rep can always pick a different one before sending. Sent from the rep’s own connected Outlook mailbox, HTML included. <code>[Signing Link]</code> is filled in per recipient at send time, not here.</div>' +
+        '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;max-width:820px;line-height:1.55;">The "please review and sign" email a rep sends with a proposal — separate from the follow-ups above and from the signing document itself. Auto-picked by product line the same way the signing document is, independently, so the two can be mixed and matched; a rep can always pick a different one before sending. Sent from the rep’s own connected Outlook mailbox, HTML included. <code>{{SigningLink}}</code> is filled in per recipient at send time, not here.</div>' +
         '<div id="esetList"><div class="muted" style="padding:16px;">Loading…</div></div>' +
         '<div class="muted" style="font-size:12.5px;margin-top:22px;padding-top:14px;border-top:1px solid #eef0ea;line-height:1.55;max-width:820px;">Payment-request emails and the letters they carry are edited with the invoices they belong to, under <b style="font-weight:600;">Accounts Receivable → Letters &amp; email</b>.</div>') +
 

@@ -258,6 +258,8 @@ export interface SendInput {
   lastName?: string;
   /** For the {{ProductName}} email placeholder — see EsignEmailContext. */
   productName?: string;
+  /** For the {{ProductLine}} email placeholder — see EsignEmailContext. */
+  productLine?: string;
   actorId: string;
 }
 
@@ -348,7 +350,7 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
   // The rep's edit wins outright when given; otherwise the resolved template is
   // rendered here so an envelope always has a full email, even with no override
   // and no email template configured yet (falls back to a bare, functional note).
-  // `[Signing Link]` is deliberately left in place — see notifyPendingSigners.
+  // `{{SigningLink}}` is deliberately left in place — see notifyPendingSigners.
   const meta = metaOf(version.sections) as { proposalDate?: string };
   const defaultEmail = emailTemplate
     ? renderEsignEmail(emailTemplate, {
@@ -363,20 +365,23 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
         proposalDateLabel: longDate(meta.proposalDate),
         proposalExpirationLabel: longDate(version.expirationDate),
         productName: input.productName?.trim() || undefined,
-        signingLink: '[Signing Link]',
+        productLine: input.productLine?.trim() || undefined,
+        signingLink: '{{SigningLink}}',
       })
     : {
         subject: `${version.proposal.number} — please review and sign`,
-        html: `<p>Please review and sign the attached proposal.</p><p><a href="[Signing Link]">Review &amp; sign</a></p>`,
+        html: `<p>Please review and sign the attached proposal.</p><p><a href="{{SigningLink}}">Review &amp; sign</a></p>`,
       };
   const emailSubject = input.subject?.trim() || defaultEmail.subject;
   const emailHtml = input.message?.trim() || defaultEmail.html;
   // The rep's edit is free-text HTML; the one thing it cannot lose is the one
   // thing that makes the email functional. Checked here, not just in the send
   // modal, because the modal's check is not the only path to this function.
-  if (!emailHtml.includes('[Signing Link]')) {
+  // Both spellings accepted: `[Signing Link]` is the retired form, still
+  // functional for a template saved before {{SigningLink}} existed.
+  if (!emailHtml.includes('{{SigningLink}}') && !emailHtml.includes('[Signing Link]')) {
     throw new ValidationError(
-      'The email body no longer has a [Signing Link] placeholder — the recipient would have no way to open the document. Add it back (e.g. in a link) before sending.',
+      'The email body no longer has a {{SigningLink}} placeholder — the recipient would have no way to open the document. Add it back (e.g. in a link) before sending.',
     );
   }
 

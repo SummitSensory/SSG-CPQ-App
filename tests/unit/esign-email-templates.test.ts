@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   renderEsignEmail,
   lastNameOf,
+  ESIGN_EMAIL_PLACEHOLDERS,
   type EsignEmailContext,
 } from '../../src/email/esignEmailTemplates.js';
 
@@ -17,6 +18,7 @@ const BASE_CTX: EsignEmailContext = {
   proposalDateLabel: 'September 4, 2026',
   proposalExpirationLabel: 'October 4, 2026',
   productName: 'Summit Soar S1',
+  productLine: 'Summit Soar',
   signingLink: 'https://docuseal.com/s/sample',
 };
 
@@ -84,5 +86,61 @@ describe('renderEsignEmail — {{PascalCase}} placeholders', () => {
       ctx,
     );
     expect(html).toBe('Smith &amp; Sons &lt;School&gt;');
+  });
+
+  it('substitutes {{ProductLine}}, {{SenderFirstName}}, {{SenderFullName}} and {{SigningLink}}', () => {
+    const { html } = renderEsignEmail(
+      {
+        key: 't4',
+        name: 'Line/sender/link',
+        subject: '',
+        bodyHtml:
+          '<p>{{ProductLine}}</p><p>{{SenderFirstName}} / {{SenderFullName}}</p>' +
+          '<a href="{{SigningLink}}">sign</a>',
+      },
+      BASE_CTX,
+    );
+    expect(html).toContain('<p>Summit Soar</p>');
+    expect(html).toContain('<p>Bryan / Bryan Shepherd</p>');
+    expect(html).toContain('<a href="https://docuseal.com/s/sample">sign</a>');
+  });
+
+  it('leaves {{ProductLine}} blank when the proposal is none of the three frame lines', () => {
+    const ctx: EsignEmailContext = { ...BASE_CTX, productLine: undefined };
+    const { html } = renderEsignEmail(
+      { key: 't5', name: 'No line', subject: '', bodyHtml: '[{{ProductLine}}]' },
+      ctx,
+    );
+    expect(html).toBe('[]');
+  });
+
+  it('a signing link containing "$&" is spliced in literally, not treated as a regex replacement pattern', () => {
+    const ctx: EsignEmailContext = { ...BASE_CTX, signingLink: 'https://docuseal.com/s/$&weird' };
+    const { html } = renderEsignEmail(
+      { key: 't6', name: 'Dollar-amp link', subject: '', bodyHtml: '{{SigningLink}}' },
+      ctx,
+    );
+    expect(html).toBe('https://docuseal.com/s/$&weird');
+  });
+});
+
+describe('ESIGN_EMAIL_PLACEHOLDERS — the advertised list', () => {
+  it('carries only the current {{PascalCase}} format, no legacy [Bracket Words] and no duplicates', () => {
+    const tokens = ESIGN_EMAIL_PLACEHOLDERS.map((p) => p.token);
+    expect(new Set(tokens).size).toBe(tokens.length);
+    for (const token of tokens) {
+      expect(token).toMatch(/^\{\{[A-Za-z]+\}\}$/);
+    }
+  });
+
+  it('every advertised token actually resolves via renderEsignEmail', () => {
+    const bodyHtml = ESIGN_EMAIL_PLACEHOLDERS.map((p) => p.token).join(' ');
+    const { html } = renderEsignEmail(
+      { key: 't7', name: 'All tokens', subject: '', bodyHtml },
+      BASE_CTX,
+    );
+    for (const p of ESIGN_EMAIL_PLACEHOLDERS) {
+      expect(html).not.toContain(p.token);
+    }
   });
 });
