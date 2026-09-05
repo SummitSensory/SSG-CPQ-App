@@ -622,6 +622,12 @@
           (depth
             ? 'height:' + depth + 'px;display:flex;align-items:flex-end;'
             : 'padding-bottom:1px;') +
+          // Only the ids (By:/Date:, where the e-sign package drops in a raw
+          // DocuSeal text tag before DocuSeal ever sees the page) get this —
+          // see the matching comment in proposal-document.js's Acceptance row
+          // for why an unreplaced tag needs it to stay a single, on-page,
+          // recognizable run of text rather than spilling past the margin.
+          (id ? 'overflow:hidden;white-space:nowrap;' : '') +
           '">' +
           (value ? esc(value) : '') +
           '</div></div>'

@@ -256,21 +256,21 @@ function signerBlock(signer: SignerSpec): string {
       <div style="font: 400 10pt/1.4 Georgia, 'Times New Roman', serif; color: #555; margin-top: 2px;">${escapeHtml(label)}</div>
       <div style="display: grid; grid-template-columns: 1.6fr 1fr; gap: 24px; margin-top: 16px;">
         <div>
-          <div style="min-height: 46px; font: 400 12pt/1.4 Georgia, serif;">${tag(`${role} Signature`, role, 'signature')}</div>
+          <div style="min-height: 46px; overflow: hidden; white-space: nowrap; font: 400 12pt/1.4 Georgia, serif;">${tag(`${role} Signature`, role, 'signature')}</div>
           <div style="border-top: 1px solid #333; padding-top: 4px; font: 400 9pt/1.3 Georgia, serif; color: #555;">Signature</div>
         </div>
         <div>
-          <div style="min-height: 46px; font: 400 12pt/1.4 Georgia, serif;">${tag(`${role} Date`, role, 'datenow')}</div>
+          <div style="min-height: 46px; overflow: hidden; white-space: nowrap; font: 400 12pt/1.4 Georgia, serif;">${tag(`${role} Date`, role, 'datenow')}</div>
           <div style="border-top: 1px solid #333; padding-top: 4px; font: 400 9pt/1.3 Georgia, serif; color: #555;">Date</div>
         </div>
       </div>
       <div style="display: grid; grid-template-columns: 1.6fr 1fr; gap: 24px; margin-top: 18px;">
         <div>
-          <div style="min-height: 30px; font: 400 12pt/1.4 Georgia, serif;">${tag(`${role} Name`, role, 'text')}</div>
+          <div style="min-height: 30px; overflow: hidden; white-space: nowrap; font: 400 12pt/1.4 Georgia, serif;">${tag(`${role} Name`, role, 'text')}</div>
           <div style="border-top: 1px solid #333; padding-top: 4px; font: 400 9pt/1.3 Georgia, serif; color: #555;">Printed name</div>
         </div>
         <div>
-          <div style="min-height: 30px; font: 400 12pt/1.4 Georgia, serif;">${
+          <div style="min-height: 30px; overflow: hidden; white-space: nowrap; font: 400 12pt/1.4 Georgia, serif;">${
             signer.titleField === false
               ? ''
               : tag(`${role} Title`, role, 'text', { required: false })
