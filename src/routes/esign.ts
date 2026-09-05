@@ -260,6 +260,19 @@ export function registerEsignRoutes(app: FastifyInstance): void {
     };
   });
 
+  // Shared by both routes below so the list view (what the Electronic
+  // signature panel actually queries — see loadEsign in public/app.js) and the
+  // single-envelope view carry the same shape: which document/email template
+  // was used and the event timeline, not just signer status. Both were
+  // previously included only on the single-envelope route, which nothing
+  // calls — the panel's event timeline rendered empty in practice.
+  const ENVELOPE_INCLUDE = {
+    signers: { orderBy: { order: 'asc' as const } },
+    events: { orderBy: { createdAt: 'desc' as const }, take: 50 },
+    template: { select: { key: true, name: true } },
+    emailTemplate: { select: { key: true, name: true } },
+  };
+
   app.get('/esign/envelopes', read, async (req) => {
     const q = req.query as { proposalId?: string; versionId?: string; status?: string };
     return prisma.esignEnvelope.findMany({
@@ -269,9 +282,7 @@ export function registerEsignRoutes(app: FastifyInstance): void {
         ...(q.status ? { status: q.status as never } : {}),
       },
       orderBy: { createdAt: 'desc' },
-      include: {
-        signers: { orderBy: { order: 'asc' } },
-      },
+      include: ENVELOPE_INCLUDE,
       take: 100,
     });
   });
@@ -280,10 +291,7 @@ export function registerEsignRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const envelope = await prisma.esignEnvelope.findUnique({
       where: { id },
-      include: {
-        signers: { orderBy: { order: 'asc' } },
-        events: { orderBy: { createdAt: 'desc' }, take: 50 },
-      },
+      include: ENVELOPE_INCLUDE,
     });
     if (!envelope) throw new NotFoundError('Signature request not found');
     return envelope;
