@@ -15,13 +15,15 @@
  * created through the admin UI, same as the document templates it sits beside.
  */
 
-import { esc, firstNameOf } from './textHelpers.js';
+import { esc, firstNameOf, lastNameOf } from './textHelpers.js';
 
-export { firstNameOf };
+export { firstNameOf, lastNameOf };
 
 export interface EsignEmailContext {
   /** Recipient's first name. Falls back to "there" rather than printing a blank. */
   firstName: string;
+  /** Recipient's last name. Blank, not a fallback word, when there is none. */
+  lastName?: string;
   /** The sending rep's first name, for the sign-off. */
   senderFirstName: string;
   /** The sending rep's full name, for a formal reference in the body. */
@@ -29,6 +31,19 @@ export interface EsignEmailContext {
   customerName?: string;
   proposalNumber?: string;
   proposalTitle?: string;
+  /** e.g. "V2" — one-indexed at the first released version. */
+  proposalVersionLabel?: string;
+  /** e.g. "September 4, 2026" — already formatted; see longDate() at the call site. */
+  proposalDateLabel?: string;
+  /** e.g. "October 4, 2026" — already formatted. */
+  proposalExpirationLabel?: string;
+  /**
+   * The proposed model/product, e.g. "SQ-1" or "Summit Soar Series" — read
+   * off the itemized frame heading the same way proposalFileName() does
+   * (public/app.js), so this is a display convenience, not a catalog lookup;
+   * it does not resolve to a Product or ProductFamily row.
+   */
+  productName?: string;
   /** This recipient's own DocuSeal signing/viewing URL. */
   signingLink: string;
 }
@@ -57,6 +72,21 @@ export const ESIGN_EMAIL_PLACEHOLDERS = [
     means:
       'The link the recipient opens to view or sign — put this in an href, e.g. <a href="[Signing Link]">Review &amp; sign</a>',
   },
+  // Added on request, in the {{PascalCase}} form asked for rather than
+  // renamed to match the bracket set above — both forms are substituted by
+  // the same fill(), so either can be used in the same template.
+  { token: '{{FirstName}}', means: 'Same as [First Name] — the recipient’s first name' },
+  { token: '{{LastName}}', means: 'The recipient’s last name' },
+  { token: '{{OrganizationName}}', means: 'Same as [Customer] — the customer’s organization name' },
+  { token: '{{ProjectName}}', means: 'Same as [Proposal] — the proposal’s title' },
+  {
+    token: '{{ProductName}}',
+    means: 'The proposed model/product, read off the itemized heading — e.g. SQ-1',
+  },
+  { token: '{{ProposalNumber}}', means: 'Same as [Proposal Number]' },
+  { token: '{{ProposalVersion}}', means: 'e.g. V2' },
+  { token: '{{ProposalDate}}', means: 'e.g. September 4, 2026' },
+  { token: '{{ProposalExpirationDate}}', means: 'e.g. October 4, 2026' },
 ];
 
 /**
@@ -79,6 +109,15 @@ function fill(text: string, ctx: EsignEmailContext): string {
       // externally-sourced signing URL here, and a string replacement would
       // misread a literal `$&`/`$1`/etc. in it as a regex replacement pattern.
       .replace(/\[Signing Link\]/g, () => ctx.signingLink)
+      .replace(/\{\{FirstName\}\}/g, esc(ctx.firstName))
+      .replace(/\{\{LastName\}\}/g, esc(ctx.lastName ?? ''))
+      .replace(/\{\{OrganizationName\}\}/g, esc(ctx.customerName ?? ''))
+      .replace(/\{\{ProjectName\}\}/g, esc(ctx.proposalTitle ?? ''))
+      .replace(/\{\{ProductName\}\}/g, esc(ctx.productName ?? ''))
+      .replace(/\{\{ProposalNumber\}\}/g, esc(ctx.proposalNumber ?? ''))
+      .replace(/\{\{ProposalVersion\}\}/g, esc(ctx.proposalVersionLabel ?? ''))
+      .replace(/\{\{ProposalDate\}\}/g, esc(ctx.proposalDateLabel ?? ''))
+      .replace(/\{\{ProposalExpirationDate\}\}/g, esc(ctx.proposalExpirationLabel ?? ''))
   );
 }
 
@@ -94,11 +133,16 @@ export function renderEsignEmail(
 
 /** A sample context for the admin editor's live preview — no real proposal yet. */
 export const SAMPLE_ESIGN_EMAIL_CONTEXT: EsignEmailContext = {
-  firstName: 'Emily',
+  firstName: 'Mary',
+  lastName: 'Loughney',
   senderFirstName: 'Bryan',
   senderName: 'Bryan Shepherd',
-  customerName: 'Uniquely Yours Specialized Care',
+  customerName: 'Katonah-Lewisboro School District',
   proposalNumber: 'P-2026-000063',
-  proposalTitle: 'Comprehensive Sensory Therapy Gym',
+  proposalTitle: 'KLSD Sensory Therapy Room',
+  proposalVersionLabel: 'V2',
+  proposalDateLabel: 'September 4, 2026',
+  proposalExpirationLabel: 'October 4, 2026',
+  productName: 'Summit Soar S1',
   signingLink: 'https://docuseal.com/s/sample',
 };

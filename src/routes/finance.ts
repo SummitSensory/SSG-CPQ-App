@@ -836,6 +836,8 @@ export function registerFinanceRoutes(app: FastifyInstance): void {
       partnerEmail: env.FINANCE_PARTNER_EMAIL,
       contacts: contacts.map((c) => ({
         name: `${c.firstName} ${c.lastName}`.trim(),
+        firstName: c.firstName,
+        lastName: c.lastName,
         email: c.email,
         title: c.title,
         isDecisionMaker: c.isDecisionMaker,

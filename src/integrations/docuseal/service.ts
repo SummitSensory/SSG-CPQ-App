@@ -5,7 +5,7 @@ import { logger } from '../../lib/logger.js';
 import { recordAudit } from '../../lib/audit.js';
 import { ValidationError, NotFoundError } from '../../lib/errors.js';
 import { renderPdf, pdfAvailable } from '../../render/pdf.js';
-import { versionTotals, type RawItem } from '../../proposals/analytics.js';
+import { versionTotals, metaOf, type RawItem } from '../../proposals/analytics.js';
 import { sellerCollectedCharges } from '../../crossborder/sellerCharges.js';
 import { env, isDocusealConfigured } from '../../config/env.js';
 import {
@@ -40,8 +40,10 @@ import { renderCertificatePdf } from './certificate.js';
 import {
   renderEsignEmail,
   firstNameOf,
+  lastNameOf,
   type EsignEmailTemplateData,
 } from '../../email/esignEmailTemplates.js';
+import { longDate } from '../../email/paymentTemplates.js';
 
 /**
  * Proposal e-signing.
@@ -163,6 +165,14 @@ function firstNameOfContact(signers: SignerSpec[]): string {
   return firstNameOf(primary?.name);
 }
 
+/** The same signer firstNameOfContact resolves, split the other way. */
+function lastNameOfContact(signers: SignerSpec[]): string {
+  const primary =
+    signers.find((s) => !s.viewOnly && s.role === CUSTOMER_ROLE) ??
+    signers.find((s) => !s.viewOnly);
+  return lastNameOf(primary?.name);
+}
+
 /** Product lines represented on a version, read through the products it prices. */
 async function productLineIdsFor(items: unknown): Promise<Set<string>> {
   const ids = Array.isArray(items)
@@ -244,6 +254,10 @@ export interface SendInput {
   subject?: string;
   message?: string;
   filename?: string;
+  /** For the {{LastName}} email placeholder — see EsignEmailContext. */
+  lastName?: string;
+  /** For the {{ProductName}} email placeholder — see EsignEmailContext. */
+  productName?: string;
   actorId: string;
 }
 
@@ -287,6 +301,8 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
       status: true,
       items: true,
       sections: true,
+      version: true,
+      expirationDate: true,
       proposal: { select: { id: true, number: true, title: true, organizationId: true } },
     },
   });
@@ -333,14 +349,20 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
   // rendered here so an envelope always has a full email, even with no override
   // and no email template configured yet (falls back to a bare, functional note).
   // `[Signing Link]` is deliberately left in place — see notifyPendingSigners.
+  const meta = metaOf(version.sections) as { proposalDate?: string };
   const defaultEmail = emailTemplate
     ? renderEsignEmail(emailTemplate, {
         firstName: firstNameOfContact(input.signers),
+        lastName: input.lastName?.trim() || lastNameOfContact(input.signers) || undefined,
         senderFirstName: firstNameOf(sender?.name),
         senderName: sender?.name ?? undefined,
         customerName: org?.name,
         proposalNumber: version.proposal.number,
         proposalTitle: version.proposal.title ?? undefined,
+        proposalVersionLabel: `V${version.version}`,
+        proposalDateLabel: longDate(meta.proposalDate),
+        proposalExpirationLabel: longDate(version.expirationDate),
+        productName: input.productName?.trim() || undefined,
         signingLink: '[Signing Link]',
       })
     : {
