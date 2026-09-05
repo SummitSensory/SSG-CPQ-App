@@ -18,7 +18,16 @@
  * A field is DocuSeal TEXT TAGS — ordinary text in the PDF that DocuSeal
  * recognises and turns into a fillable field:
  *
- *   {{Customer Signature;role=Customer;type=signature}}
+ *   {{Customer Signature;role=Customer;type=signature;valign=bottom}}
+ *
+ * Two choices in `tag()` (below) are there specifically for the signer, not
+ * just for correctness: every date is `type=datenow` rather than `date` — the
+ * signing date is stamped automatically when a signer completes their part,
+ * so there is one less thing to fill in per signature, with no risk of it
+ * disagreeing with when they actually signed — and every field defaults to
+ * `valign=bottom`, DocuSeal's own answer to a signature that renders inside a
+ * taller field area than the line of text it replaced: centered (DocuSeal's
+ * own default), it sits above the printed rule instead of on it.
  *
  * Field placement therefore lives in this layout rather than in stored
  * coordinates, which is what keeps a template edit from silently moving a
@@ -106,9 +115,21 @@ function money(minor: number): string {
 /**
  * A DocuSeal text tag. The role must match the submitter role sent to
  * `createSubmission`, or DocuSeal creates a second, empty submitter for it.
+ *
+ * `valign=bottom` on every field here: DocuSeal's own default is `center`,
+ * which is what put a signature only roughly on its line rather than
+ * resting on it — a signature block's field area is taller than the line
+ * of text it replaces, and centering that tall area over a short one lands
+ * above the rule. This is the field's own answer to that, on top of (not
+ * instead of) the surrounding markup's own bottom-aligned layout.
  */
-function tag(name: string, role: string, type: string, opts: { required?: boolean } = {}): string {
-  const parts = [name, `role=${role}`, `type=${type}`];
+function tag(
+  name: string,
+  role: string,
+  type: string,
+  opts: { required?: boolean; valign?: 'top' | 'center' | 'bottom' } = {},
+): string {
+  const parts = [name, `role=${role}`, `type=${type}`, `valign=${opts.valign ?? 'bottom'}`];
   if (opts.required === false) parts.push('required=false');
   return `{{${parts.join(';')}}}`;
 }
@@ -209,7 +230,11 @@ function injectSignatureFields(
         tag(`${slot.label} Signature`, signer.role, 'signature'),
       );
       html = sig.html;
-      const date = fillSlot(html, slot.dateId, tag(`${slot.label} Date`, signer.role, 'date'));
+      // `datenow`, not `date`: the signing date is stamped automatically when
+      // this signer completes their part, with nothing for them to fill in —
+      // one less required action per signature, and no risk of a date that
+      // does not match when they actually signed.
+      const date = fillSlot(html, slot.dateId, tag(`${slot.label} Date`, signer.role, 'datenow'));
       html = date.html;
       if (sig.placed || date.placed) placedRoles.add(signer.role);
     }
@@ -235,7 +260,7 @@ function signerBlock(signer: SignerSpec): string {
           <div style="border-top: 1px solid #333; padding-top: 4px; font: 400 9pt/1.3 Georgia, serif; color: #555;">Signature</div>
         </div>
         <div>
-          <div style="min-height: 46px; font: 400 12pt/1.4 Georgia, serif;">${tag(`${role} Date`, role, 'date')}</div>
+          <div style="min-height: 46px; font: 400 12pt/1.4 Georgia, serif;">${tag(`${role} Date`, role, 'datenow')}</div>
           <div style="border-top: 1px solid #333; padding-top: 4px; font: 400 9pt/1.3 Georgia, serif; color: #555;">Date</div>
         </div>
       </div>

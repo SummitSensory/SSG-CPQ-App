@@ -91,16 +91,16 @@ describe('buildPackageHtml — field placement', () => {
     });
 
     expect(html).toContain(
-      '<div id="ssgSigAcceptanceSignature">{{Customer Signature;role=Customer;type=signature}}</div>',
+      '<div id="ssgSigAcceptanceSignature">{{Customer Signature;role=Customer;type=signature;valign=bottom}}</div>',
     );
     expect(html).toContain(
-      '<div id="ssgSigAcceptanceDate">{{Customer Date;role=Customer;type=date}}</div>',
+      '<div id="ssgSigAcceptanceDate">{{Customer Date;role=Customer;type=datenow;valign=bottom}}</div>',
     );
     expect(html).toContain(
-      '<div id="ssgSigAckCustomerSignature">{{Customer Acknowledgment Signature;role=Customer;type=signature}}</div>',
+      '<div id="ssgSigAckCustomerSignature">{{Customer Acknowledgment Signature;role=Customer;type=signature;valign=bottom}}</div>',
     );
     expect(html).toContain(
-      '<div id="ssgSigAckSummitSignature">{{Summit Acknowledgment Signature;role=Summit;type=signature}}</div>',
+      '<div id="ssgSigAckSummitSignature">{{Summit Acknowledgment Signature;role=Summit;type=signature;valign=bottom}}</div>',
     );
     // No generated "Acceptance and signatures" page at all — both signers found
     // a real spot, so there is nothing left for it to carry.
@@ -122,8 +122,8 @@ describe('buildPackageHtml — field placement', () => {
     // The fallback page carries only the signer that was not placed, not a
     // redundant copy of Customer/Summit who already signed in the document.
     expect(html).toContain('Witness');
-    expect(html).toContain('{{Witness Signature;role=Witness;type=signature}}');
-    const customerFallbackTag = '{{Customer Signature;role=Customer;type=signature}}';
+    expect(html).toContain('{{Witness Signature;role=Witness;type=signature;valign=bottom}}');
+    const customerFallbackTag = '{{Customer Signature;role=Customer;type=signature;valign=bottom}}';
     expect(html.split(customerFallbackTag).length - 1).toBe(1); // only in the Acceptance slot, not duplicated on the fallback page
   });
 
@@ -137,10 +137,10 @@ describe('buildPackageHtml — field placement', () => {
       proposalNumber: 'P-2026-000001',
     });
     expect(html).toContain(
-      '<div id="ssgSigAcceptanceSignature">{{Customer Signature;role=Client;type=signature}}</div>',
+      '<div id="ssgSigAcceptanceSignature">{{Customer Signature;role=Client;type=signature;valign=bottom}}</div>',
     );
     expect(html).toContain(
-      '<div id="ssgSigAckSummitSignature">{{Summit Acknowledgment Signature;role=Vendor;type=signature}}</div>',
+      '<div id="ssgSigAckSummitSignature">{{Summit Acknowledgment Signature;role=Vendor;type=signature;valign=bottom}}</div>',
     );
     expect(html).not.toContain('Acceptance and signatures');
   });
@@ -165,7 +165,34 @@ describe('buildPackageHtml — field placement', () => {
       proposalNumber: 'P-2026-000001',
     });
     expect(html).toContain('Acceptance and signatures');
-    expect(html).toContain('{{Customer Signature;role=Customer;type=signature}}');
+    expect(html).toContain('{{Customer Signature;role=Customer;type=signature;valign=bottom}}');
+  });
+});
+
+describe('signer-facing field ergonomics', () => {
+  it('stamps every date automatically (datenow) rather than asking the signer to fill it in', () => {
+    const html = buildPackageHtml({
+      proposalHtml: PROPOSAL_WITH_SIGNATURE_SLOTS,
+      signers: [
+        { role: 'Customer', name: 'Jane Doe', email: 'jane@example.com' },
+        { role: 'Summit', name: 'Bryan Shepherd', email: 'bryan@summitsensory.com' },
+      ],
+      proposalNumber: 'P-2026-000001',
+    });
+    expect(html).not.toContain(';type=date;');
+    expect(html).not.toContain(';type=date}}');
+    expect(html.match(/type=datenow/g)?.length).toBe(3); // Acceptance + Ack customer + Ack summit
+  });
+
+  it('bottom-aligns every field so a signature rests on its printed line rather than floating above it', () => {
+    const html = buildPackageHtml({
+      proposalHtml: PROPOSAL_WITH_SIGNATURE_SLOTS,
+      signers: [{ role: 'Customer', name: 'Jane Doe', email: 'jane@example.com' }],
+      proposalNumber: 'P-2026-000001',
+    });
+    const tags = html.match(/\{\{[^}]+\}\}/g) ?? [];
+    expect(tags.length).toBeGreaterThan(0);
+    for (const t of tags) expect(t).toContain('valign=bottom');
   });
 });
 
