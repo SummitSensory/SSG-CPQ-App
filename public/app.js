@@ -12594,6 +12594,27 @@
     return '<span class="chip" style="background:' + tone.bg + ';color:' + tone.fg + ';">' + titleCase(status) + '</span>';
   }
 
+  /**
+   * A rounded, compact elapsed-time label ("8m", "2h 5m", "3d 4h") for the
+   * signer-timeline spans below. Turnaround, not attention span: DocuSeal's
+   * hosted signer view has no page-visibility/heartbeat signal, so this is
+   * elapsed calendar time between two of DocuSeal's own point-in-time
+   * timestamps (opened_at/completed_at) — it can include time the tab sat
+   * closed, not literal seconds someone spent reading.
+   */
+  function humanizeSpan(ms) {
+    if (ms == null || !isFinite(ms) || ms < 0) return null;
+    var mins = Math.floor(ms / 60000);
+    if (mins < 1) return 'under a minute';
+    if (mins < 60) return mins + 'm';
+    var hours = Math.floor(mins / 60);
+    var remMins = mins % 60;
+    if (hours < 24) return hours + 'h' + (remMins ? ' ' + remMins + 'm' : '');
+    var days = Math.floor(hours / 24);
+    var remHours = hours % 24;
+    return days + 'd' + (remHours ? ' ' + remHours + 'h' : '');
+  }
+
   /** DocuSeal's raw webhook event names, in words a rep reads without translating. */
   function esignEventLabel(ev) {
     var map = {
@@ -12649,9 +12670,38 @@
         // Viewed/completed read straight off DocuSeal's own opened_at/completed_at
         // (see applyStatus in src/integrations/docuseal/service.ts) — not derived
         // from the event log, so this still shows even if an event row is missing.
+        var sentMs = s.emailedAt ? new Date(s.emailedAt).getTime() : null;
+        var viewedMs = s.viewedAt ? new Date(s.viewedAt).getTime() : null;
+        var completedMs = s.completedAt ? new Date(s.completedAt).getTime() : null;
+
         var whenBits = [];
-        if (s.completedAt) whenBits.push('Signed ' + fmtDateTime(s.completedAt));
-        else if (s.viewedAt) whenBits.push('Viewed ' + fmtDateTime(s.viewedAt));
+        if (s.status === 'DECLINED') {
+          whenBits.push('Declined' + (envelope.declinedAt ? ' ' + fmtDateTime(envelope.declinedAt) : ''));
+        } else if (s.completedAt) {
+          whenBits.push('Signed ' + fmtDateTime(s.completedAt));
+        } else if (s.viewedAt) {
+          whenBits.push('Viewed ' + fmtDateTime(s.viewedAt));
+        } else if (s.emailedAt) {
+          whenBits.push('Sent ' + fmtDateTime(s.emailedAt));
+        }
+        // "How long" — how much elapsed time sits between two of DocuSeal's own
+        // timestamps, not a stopwatch on their attention (see humanizeSpan).
+        var span = null;
+        if (viewedMs != null && completedMs != null) {
+          span = humanizeSpan(completedMs - viewedMs);
+          if (span) span += ' from opening to signing';
+        } else if (completedMs != null && sentMs != null) {
+          span = humanizeSpan(completedMs - sentMs);
+          if (span) span += ' from send to signing';
+        } else if (viewedMs != null && s.status !== 'DECLINED') {
+          span = humanizeSpan(Date.now() - viewedMs);
+          if (span) span += ' since opening, still pending';
+        } else if (sentMs != null && viewedMs == null && completedMs == null && s.status !== 'DECLINED') {
+          span = humanizeSpan(Date.now() - sentMs);
+          if (span) span += ' since being sent, not yet opened';
+        }
+        if (span) whenBits.push(span);
+
         var when = whenBits.length
           ? '<div class="muted" style="font-size:11px;margin-top:2px;">' + esc(whenBits.join(' · ')) + '</div>'
           : '';
