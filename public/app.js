@@ -12646,14 +12646,35 @@
         '</div>';
     } else {
       var signerRows = (envelope.signers || []).map(function (s) {
+        // Viewed/completed read straight off DocuSeal's own opened_at/completed_at
+        // (see applyStatus in src/integrations/docuseal/service.ts) — not derived
+        // from the event log, so this still shows even if an event row is missing.
+        var whenBits = [];
+        if (s.completedAt) whenBits.push('Signed ' + fmtDateTime(s.completedAt));
+        else if (s.viewedAt) whenBits.push('Viewed ' + fmtDateTime(s.viewedAt));
+        var when = whenBits.length
+          ? '<div class="muted" style="font-size:11px;margin-top:2px;">' + esc(whenBits.join(' · ')) + '</div>'
+          : '';
         return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #eceef4;font-size:13px;">' +
           '<div><b style="font-weight:600;">' + esc(s.name || s.role) + '</b> ' +
           '<span class="muted" style="font-size:12px;">' + esc(s.email) + '</span>' +
           (s.viewOnly ? ' <span class="muted" style="font-size:11px;">(view only)</span>' : '') +
+          when +
           '</div>' +
           esignStatusChip(s.status) +
           '</div>';
       }).join('');
+      // What was sent and when — the same two facts PandaDoc surfaces on a
+      // document's detail view. templateKey/emailTemplateKey (kept as text
+      // alongside the relations) are what actually renders here if the
+      // template row itself was since renamed or deleted.
+      var sentSummaryBits = [];
+      sentSummaryBits.push('Signing document: ' + esc((envelope.template && envelope.template.name) || envelope.templateKey || 'the proposal document itself'));
+      if (envelope.emailTemplate || envelope.emailTemplateKey) {
+        sentSummaryBits.push('Email: ' + esc((envelope.emailTemplate && envelope.emailTemplate.name) || envelope.emailTemplateKey));
+      }
+      if (envelope.sentAt) sentSummaryBits.push('Sent ' + esc(fmtDateTime(envelope.sentAt)));
+      var sentSummary = '<div class="muted" style="font-size:12px;margin-top:6px;">' + sentSummaryBits.join(' &nbsp;·&nbsp; ') + '</div>';
       var eventRows = (envelope.events || []).slice(0, 8).map(function (ev) {
         return '<div class="muted" style="font-size:11.5px;padding:3px 0;">' +
           esc(fmtDateTime(ev.createdAt)) + ' — ' + esc(esignEventLabel(ev)) + '</div>';
@@ -12691,6 +12712,7 @@
             ? '<span class="muted" style="font-size:12.5px;align-self:center;">Preparing the certified copy — try Refresh status in a moment.</span>'
             : '') +
         '</div></div>' +
+        sentSummary +
         countersignBanner +
         '<div style="margin-top:12px;">' + signerRows + '</div>' +
         (eventRows ? '<div style="margin-top:10px;padding-top:8px;border-top:1px solid #eceef4;">' + eventRows + '</div>' : '') +
