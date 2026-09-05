@@ -76,6 +76,8 @@ const SendBody = z.object({
   lastName: z.string().trim().max(160).optional(),
   /** The proposed model/product, for the {{ProductName}} email placeholder. */
   productName: z.string().trim().max(200).optional(),
+  /** Summit Adventure/Flex/Soar, for the {{ProductLine}} email placeholder. */
+  productLine: z.string().trim().max(60).optional(),
 });
 
 const TemplateBody = z.object({
@@ -185,6 +187,7 @@ export function registerEsignRoutes(app: FastifyInstance): void {
       firstName?: string;
       lastName?: string;
       productName?: string;
+      productLine?: string;
     };
     const version = await prisma.proposalVersion.findUnique({
       where: { id: versionId },
@@ -224,7 +227,7 @@ export function registerEsignRoutes(app: FastifyInstance): void {
         prisma.user.findUnique({ where: { id: req.user!.sub }, select: { name: true } }),
       ]);
       const meta = metaOf(version.sections) as { proposalDate?: string };
-      // `[Signing Link]` is left in place on purpose — no signing link exists
+      // `{{SigningLink}}` is left in place on purpose — no signing link exists
       // until the actual send creates the DocuSeal submission. It is filled in
       // per recipient at that point (see notifyPendingSigners).
       const rendered = renderEsignEmail(emailTemplate, {
@@ -239,7 +242,8 @@ export function registerEsignRoutes(app: FastifyInstance): void {
         proposalDateLabel: longDate(meta.proposalDate),
         proposalExpirationLabel: longDate(version.expirationDate),
         productName: q.productName?.trim() || undefined,
-        signingLink: '[Signing Link]',
+        productLine: q.productLine?.trim() || undefined,
+        signingLink: '{{SigningLink}}',
       });
       email = {
         key: emailTemplate.key,

@@ -13,6 +13,21 @@
  * written, so `productLineIds` cannot be seeded from code — same reason
  * EsignDocumentTemplate ships with no seed data. Every EsignEmailTemplate is
  * created through the admin UI, same as the document templates it sits beside.
+ *
+ * PLACEHOLDER FORMAT — one rule, no exceptions: `{{PascalCase}}`, double curly
+ * braces, no space between words. That was a deliberate choice over the
+ * bracket-with-spaces form this file shipped with first (`[First Name]`):
+ * a missing or extra space inside a bracket token silently fails to match and
+ * prints nothing, which is exactly the bug this format was chosen to close off.
+ * `{{PascalCase}}` also reads unambiguously as a placeholder rather than as
+ * ordinary bracketed prose a rep might otherwise type (“see the attached
+ * drawing [Rev 2]”).
+ *
+ * The old `[Bracket Words]` tokens are still substituted below — silently,
+ * with no comment in the admin UI — purely so an already-saved
+ * EsignEmailTemplate keeps working. Nothing new should ever be written using
+ * them; `ESIGN_EMAIL_PLACEHOLDERS`, the list the admin editor and the send
+ * screen actually show, carries only the current `{{PascalCase}}` set.
  */
 
 import { esc, firstNameOf, lastNameOf } from './textHelpers.js';
@@ -24,9 +39,9 @@ export interface EsignEmailContext {
   firstName: string;
   /** Recipient's last name. Blank, not a fallback word, when there is none. */
   lastName?: string;
-  /** The sending rep's first name, for the sign-off. */
+  /** The sending rep's first name. */
   senderFirstName: string;
-  /** The sending rep's full name, for a formal reference in the body. */
+  /** The sending rep's full name. */
   senderName?: string;
   customerName?: string;
   proposalNumber?: string;
@@ -38,12 +53,23 @@ export interface EsignEmailContext {
   /** e.g. "October 4, 2026" — already formatted. */
   proposalExpirationLabel?: string;
   /**
-   * The proposed model/product, e.g. "SQ-1" or "Summit Soar Series" — read
-   * off the itemized frame heading the same way proposalFileName() does
-   * (public/app.js), so this is a display convenience, not a catalog lookup;
-   * it does not resolve to a Product or ProductFamily row.
+   * The proposed model/product, e.g. "SQ-1" — read off the itemized frame
+   * heading the same way proposalFileName() does (public/app.js), so this is
+   * a display convenience, not a catalog lookup; it does not resolve to a
+   * Product row.
    */
   productName?: string;
+  /**
+   * Which of the three frame product lines this proposal is — "Summit
+   * Adventure", "Summit Flex", "Summit Soar", or "" when the proposal is not
+   * one of them (a Basic/catalog-only order, or COVER explicitly chosen).
+   * Not a catalog join: the same product-line detector the introduction
+   * pages already use to pick which story to print (public/proposal-front-
+   * matter.js, templateFor()) decides this too, computed once client-side so
+   * the email and the introduction can never name two different lines for
+   * the same proposal.
+   */
+  productLine?: string;
   /** This recipient's own DocuSeal signing/viewing URL. */
   signingLink: string;
 }
@@ -60,64 +86,79 @@ export interface RenderedEsignEmail {
   html: string;
 }
 
+/**
+ * The current, advertised set — shown in the admin editor's reference list and
+ * the send screen's insert-variable picker. `{{PascalCase}}` only; see the file
+ * header for why. Grouped for the picker's optgroups, in the order a rep is
+ * most likely to want them.
+ */
 export const ESIGN_EMAIL_PLACEHOLDERS = [
-  { token: '[First Name]', means: 'The recipient’s first name' },
-  { token: '[Customer]', means: 'The customer’s organization name' },
-  { token: '[Proposal Number]', means: 'e.g. P-2026-000063' },
-  { token: '[Proposal]', means: 'The proposal title' },
-  { token: '[Sender]', means: 'Your own first name' },
-  { token: '[Sender Full Name]', means: 'Your own full name' },
-  {
-    token: '[Signing Link]',
-    means:
-      'The link the recipient opens to view or sign — put this in an href, e.g. <a href="[Signing Link]">Review &amp; sign</a>',
-  },
-  // Added on request, in the {{PascalCase}} form asked for rather than
-  // renamed to match the bracket set above — both forms are substituted by
-  // the same fill(), so either can be used in the same template.
-  { token: '{{FirstName}}', means: 'Same as [First Name] — the recipient’s first name' },
-  { token: '{{LastName}}', means: 'The recipient’s last name' },
-  { token: '{{OrganizationName}}', means: 'Same as [Customer] — the customer’s organization name' },
-  { token: '{{ProjectName}}', means: 'Same as [Proposal] — the proposal’s title' },
+  { token: '{{FirstName}}', group: 'Recipient', means: 'The recipient’s first name' },
+  { token: '{{LastName}}', group: 'Recipient', means: 'The recipient’s last name' },
+  { token: '{{OrganizationName}}', group: 'Recipient', means: 'The customer’s organization name' },
+  { token: '{{ProjectName}}', group: 'Proposal', means: 'The proposal’s title' },
   {
     token: '{{ProductName}}',
+    group: 'Proposal',
     means: 'The proposed model/product, read off the itemized heading — e.g. SQ-1',
   },
-  { token: '{{ProposalNumber}}', means: 'Same as [Proposal Number]' },
-  { token: '{{ProposalVersion}}', means: 'e.g. V2' },
-  { token: '{{ProposalDate}}', means: 'e.g. September 4, 2026' },
-  { token: '{{ProposalExpirationDate}}', means: 'e.g. October 4, 2026' },
+  {
+    token: '{{ProductLine}}',
+    group: 'Proposal',
+    means:
+      'Summit Adventure, Summit Flex or Summit Soar — blank if the proposal is none of the three',
+  },
+  { token: '{{ProposalNumber}}', group: 'Proposal', means: 'e.g. P-2026-000063' },
+  { token: '{{ProposalVersion}}', group: 'Proposal', means: 'e.g. V2' },
+  { token: '{{ProposalDate}}', group: 'Proposal', means: 'e.g. September 4, 2026' },
+  { token: '{{ProposalExpirationDate}}', group: 'Proposal', means: 'e.g. October 4, 2026' },
+  { token: '{{SenderFirstName}}', group: 'You', means: 'Your own first name' },
+  { token: '{{SenderFullName}}', group: 'You', means: 'Your own full name' },
+  {
+    token: '{{SigningLink}}',
+    group: 'Signing',
+    means:
+      'The link the recipient opens to view or sign — put this in an href, e.g. <a href="{{SigningLink}}">Review &amp; sign</a>',
+  },
 ];
 
 /**
  * Substitute the placeholders a template may carry. Values go in unescaped — the
- * template author is writing raw HTML on purpose, and escaping `[Customer]` would
- * turn "Smith & Sons" into "Smith &amp;amp; Sons" once the surrounding markup is
- * already HTML. The one exception is `[Signing Link]`, which is a URL and always
+ * template author is writing raw HTML on purpose, and escaping `{{OrganizationName}}`
+ * would turn "Smith & Sons" into "Smith &amp;amp; Sons" once the surrounding markup
+ * is already HTML. The one exception is the signing link, which is a URL and always
  * belongs inside an `href="..."` written by the template, not as visible text.
  */
 function fill(text: string, ctx: EsignEmailContext): string {
   return (
     String(text ?? '')
+      .replace(/\{\{FirstName\}\}/g, esc(ctx.firstName))
+      .replace(/\{\{LastName\}\}/g, esc(ctx.lastName ?? ''))
+      .replace(/\{\{OrganizationName\}\}/g, esc(ctx.customerName ?? ''))
+      .replace(/\{\{ProjectName\}\}/g, esc(ctx.proposalTitle ?? ''))
+      .replace(/\{\{ProductName\}\}/g, esc(ctx.productName ?? ''))
+      .replace(/\{\{ProductLine\}\}/g, esc(ctx.productLine ?? ''))
+      .replace(/\{\{ProposalNumber\}\}/g, esc(ctx.proposalNumber ?? ''))
+      .replace(/\{\{ProposalVersion\}\}/g, esc(ctx.proposalVersionLabel ?? ''))
+      .replace(/\{\{ProposalDate\}\}/g, esc(ctx.proposalDateLabel ?? ''))
+      .replace(/\{\{ProposalExpirationDate\}\}/g, esc(ctx.proposalExpirationLabel ?? ''))
+      .replace(/\{\{SenderFullName\}\}/g, esc(ctx.senderName ?? ctx.senderFirstName))
+      .replace(/\{\{SenderFirstName\}\}/g, esc(ctx.senderFirstName))
+      // A function replacer, not a string one, for both signing-link spellings:
+      // a future caller may pass a real, externally-sourced signing URL here,
+      // and a string replacement would misread a literal `$&`/`$1`/etc. in it
+      // as a regex replacement pattern.
+      .replace(/\{\{SigningLink\}\}/g, () => ctx.signingLink)
+      // Legacy `[Bracket Words]` forms — substituted, never advertised. See
+      // the file header. Left in place only so an EsignEmailTemplate saved
+      // before this format existed keeps resolving correctly.
       .replace(/\[First Name\]/g, esc(ctx.firstName))
       .replace(/\[Customer\]/g, esc(ctx.customerName ?? ''))
       .replace(/\[Proposal Number\]/g, esc(ctx.proposalNumber ?? ''))
       .replace(/\[Proposal\]/g, esc(ctx.proposalTitle ?? ''))
       .replace(/\[Sender Full Name\]/g, esc(ctx.senderName ?? ctx.senderFirstName))
       .replace(/\[Sender\]/g, esc(ctx.senderFirstName))
-      // A function replacer, not a string one — a future caller may pass a real,
-      // externally-sourced signing URL here, and a string replacement would
-      // misread a literal `$&`/`$1`/etc. in it as a regex replacement pattern.
       .replace(/\[Signing Link\]/g, () => ctx.signingLink)
-      .replace(/\{\{FirstName\}\}/g, esc(ctx.firstName))
-      .replace(/\{\{LastName\}\}/g, esc(ctx.lastName ?? ''))
-      .replace(/\{\{OrganizationName\}\}/g, esc(ctx.customerName ?? ''))
-      .replace(/\{\{ProjectName\}\}/g, esc(ctx.proposalTitle ?? ''))
-      .replace(/\{\{ProductName\}\}/g, esc(ctx.productName ?? ''))
-      .replace(/\{\{ProposalNumber\}\}/g, esc(ctx.proposalNumber ?? ''))
-      .replace(/\{\{ProposalVersion\}\}/g, esc(ctx.proposalVersionLabel ?? ''))
-      .replace(/\{\{ProposalDate\}\}/g, esc(ctx.proposalDateLabel ?? ''))
-      .replace(/\{\{ProposalExpirationDate\}\}/g, esc(ctx.proposalExpirationLabel ?? ''))
   );
 }
 
@@ -144,5 +185,6 @@ export const SAMPLE_ESIGN_EMAIL_CONTEXT: EsignEmailContext = {
   proposalDateLabel: 'September 4, 2026',
   proposalExpirationLabel: 'October 4, 2026',
   productName: 'Summit Soar S1',
+  productLine: 'Summit Soar',
   signingLink: 'https://docuseal.com/s/sample',
 };

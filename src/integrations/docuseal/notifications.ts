@@ -248,9 +248,15 @@ export async function notifyPendingSigners(envelopeId: string): Promise<void> {
     // A function replacer, not a string one — signingUrl is DocuSeal's, not
     // ours, and a string replacement would misread a literal `$&`/`$1`/etc. in
     // it as a regex replacement pattern instead of splicing it in verbatim.
+    // Both spellings: `{{SigningLink}}` is current, `[Signing Link]` is what
+    // an envelope sent before that format existed still has stored.
     const signingUrl = signer.signingUrl;
-    const subject = envelope.subject.replace(/\[Signing Link\]/g, () => signingUrl);
-    const html = envelope.message.replace(/\[Signing Link\]/g, () => signingUrl);
+    const fillLink = (t: string) =>
+      t
+        .replace(/\{\{SigningLink\}\}/g, () => signingUrl)
+        .replace(/\[Signing Link\]/g, () => signingUrl);
+    const subject = fillLink(envelope.subject);
+    const html = fillLink(envelope.message);
     try {
       const sentFromUserId = await sendEsignEmailTo({
         actorId: envelope.sentById,
