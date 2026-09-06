@@ -14,19 +14,22 @@ package. DocuSeal signs it; it does not build it.
 
 ## Files
 
-| File                                         | Role                                        |
-| -------------------------------------------- | ------------------------------------------- |
-| `prisma/schema.esign.prisma`                 | Models to paste into `schema.prisma`        |
-| `prisma/migrations/0050_esign/migration.sql` | The migration                               |
-| `src/integrations/docuseal/client.ts`        | REST client (`X-Auth-Token`, retry/backoff) |
-| `src/integrations/docuseal/assembly.ts`      | Package composition + signature page        |
-| `src/integrations/docuseal/storage.ts`       | Vercel Blob via REST, no new dependency     |
-| `src/integrations/docuseal/service.ts`       | Send, status, void, template resolution     |
-| `src/routes/esign.ts`                        | API                                         |
-| `src/routes/esignWebhook.ts`                 | `POST /webhooks/docuseal`                   |
-| `src/config/env.ts`                          | DocuSeal + Blob variables                   |
-| `src/app.ts`                                 | Route registration                          |
-| `src/authz/permissions.ts`                   | `proposal:esign`                            |
+| File                                                 | Role                                        |
+| ---------------------------------------------------- | ------------------------------------------- |
+| `prisma/schema.esign.prisma`                         | Models to paste into `schema.prisma`        |
+| `prisma/migrations/0050_esign/migration.sql`         | The migration                               |
+| `src/integrations/docuseal/client.ts`                | REST client (`X-Auth-Token`, retry/backoff) |
+| `src/integrations/docuseal/assembly.ts`              | Package composition + signature page        |
+| `src/integrations/docuseal/storage.ts`               | Vercel Blob via REST, no new dependency     |
+| `src/integrations/docuseal/service.ts`               | Send, status, void, template resolution     |
+| `src/integrations/docuseal/certificate.ts`           | Branded Certificate of Signature page       |
+| `src/integrations/docuseal/certificateBackground.ts` | Its background image, inlined               |
+| `src/integrations/geolocation.ts`                    | IP → city/country for the certificate       |
+| `src/routes/esign.ts`                                | API                                         |
+| `src/routes/esignWebhook.ts`                         | `POST /webhooks/docuseal`                   |
+| `src/config/env.ts`                                  | DocuSeal + Blob variables                   |
+| `src/app.ts`                                         | Route registration                          |
+| `src/authz/permissions.ts`                           | `proposal:esign`                            |
 
 `schema.prisma` and the three modified files are complete replacements; the schema
 fragment is the only thing to paste, following the `schema.freight-rfq.prisma`
@@ -66,6 +69,18 @@ with the layout and there are no stored coordinates to drift.
 a new envelope; the old one is voided explicitly. Two open signing links for the same
 job is how a customer signs the wrong price.
 
+**The Certificate of Signature is ours, appended, never a replacement.** Once an
+envelope completes, `storeSignedCopy` appends a branded, on-brand summary page
+(`certificate.ts`) after DocuSeal's own combined document (signed pages + DocuSeal's
+own audit log) — it is not a substitute for DocuSeal's certificate, which remains the
+authoritative E-SIGN Act/UETA compliance record. Per-signer IP address and drawn
+signature image are pulled fresh from DocuSeal's `GET /submissions/:id` at render
+time (never persisted); IP→location is a separate, optional lookup against
+ipinfo.io — set `IPINFO_TOKEN` or the certificate just shows the IP address.
+Best-effort throughout: a failed certificate render, geolocation lookup, or
+signature-image fetch never blocks storing the (already DocuSeal-certified) signed
+copy — it just means that one line or page shows less.
+
 ## Environment
 
     DOCUSEAL_API_TOKEN=...                 # DocuSeal → Settings → API
@@ -75,6 +90,9 @@ job is how a customer signs the wrong price.
     DOCUSEAL_FOLDER=Proposals              # optional
     DOCUSEAL_API_URL=https://api.docuseal.com          # self-hosted: your /api
     DOCUSEAL_SIGNING_BASE_URL=https://docuseal.com
+    IPINFO_TOKEN=...                       # ipinfo.io → free tier — Certificate of
+                                            # Signature "Location" line only; unset
+                                            # means it just shows the IP address
 
 In DocuSeal → Settings → Webhooks, point the URL at
 `https://crm.summitsensory.com/webhooks/docuseal`, subscribe to `form.viewed`,

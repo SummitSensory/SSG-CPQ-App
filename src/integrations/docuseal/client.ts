@@ -100,6 +100,19 @@ export interface DocusealSubmitter {
   completed_at?: string | null;
   declined_at?: string | null;
   embed_src?: string;
+  /** The signer's IP address, as DocuSeal recorded it at the time they signed —
+   *  used for the Certificate of Signature's IP/Location lines, never for
+   *  anything else. */
+  ip?: string | null;
+  /** Browser user agent string. Certificate of Signature only. */
+  ua?: string | null;
+  /**
+   * The fields this submitter actually filled, keyed by field name — this is
+   * where a `type=signature` field's drawn value lives (a base64 data URI or an
+   * image URL, per DocuSeal's own text-tag docs), which the Certificate of
+   * Signature embeds as a signature thumbnail when it can.
+   */
+  values?: Array<{ field: string; value: unknown }>;
 }
 
 export interface DocusealSubmission {
