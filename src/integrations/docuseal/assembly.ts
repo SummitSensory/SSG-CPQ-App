@@ -18,16 +18,25 @@
  * A field is DocuSeal TEXT TAGS — ordinary text in the PDF that DocuSeal
  * recognises and turns into a fillable field:
  *
- *   {{Customer Signature;role=Customer;type=signature;valign=bottom}}
+ *   {{Customer Signature;role=Customer;type=signature;valign=bottom;width=220;height=40}}
  *
- * Two choices in `tag()` (below) are there specifically for the signer, not
+ * That whole string has to reach DocuSeal as one unbroken, un-clipped run of
+ * PDF text, closing brace included, or it is not a tag at all — see
+ * `invisibleTag()` below for why it is never laid out as ordinary, visible
+ * page content.
+ *
+ * Three choices in `tag()` (below) are there specifically for the signer, not
  * just for correctness: every date is `type=datenow` rather than `date` — the
  * signing date is stamped automatically when a signer completes their part,
  * so there is one less thing to fill in per signature, with no risk of it
- * disagreeing with when they actually signed — and every field defaults to
+ * disagreeing with when they actually signed — every field defaults to
  * `valign=bottom`, DocuSeal's own answer to a signature that renders inside a
  * taller field area than the line of text it replaced: centered (DocuSeal's
- * own default), it sits above the printed rule instead of on it.
+ * own default), it sits above the printed rule instead of on it — and every
+ * field states its own `width`/`height` rather than leaving DocuSeal to size
+ * it from the tag text itself, which is what let the Acknowledgment
+ * signature field grow oversized and push Summit's block off the page (the
+ * tag text naming the field is long; the field it describes is not).
  *
  * Field placement therefore lives in this layout rather than in stored
  * coordinates, which is what keeps a template edit from silently moving a
@@ -122,16 +131,75 @@ function money(minor: number): string {
  * of text it replaces, and centering that tall area over a short one lands
  * above the rule. This is the field's own answer to that, on top of (not
  * instead of) the surrounding markup's own bottom-aligned layout.
+ *
+ * `width`/`height` are always passed now, not left to DocuSeal's default.
+ * Per DocuSeal's own docs (embedded PDF text tags), an omitted width/height
+ * falls back to "the tag text's own rendered size" — and a field name long
+ * enough to say what it is (`Summit Acknowledgment Signature`) plus its role
+ * and type attributes is a wide, unavoidably long string. That default is
+ * what grew the Acknowledgment signature field oversized and pushed Summit's
+ * block off the page: the field's size was never a layout choice, it was
+ * whatever the tag string happened to measure. Passing both explicitly makes
+ * the field's size a fact this code states, not a side effect of how long a
+ * field's own name is.
  */
 function tag(
   name: string,
   role: string,
   type: string,
-  opts: { required?: boolean; valign?: 'top' | 'center' | 'bottom' } = {},
+  opts: {
+    required?: boolean;
+    valign?: 'top' | 'center' | 'bottom';
+    width: number;
+    height: number;
+  },
 ): string {
-  const parts = [name, `role=${role}`, `type=${type}`, `valign=${opts.valign ?? 'bottom'}`];
+  const parts = [
+    name,
+    `role=${role}`,
+    `type=${type}`,
+    `valign=${opts.valign ?? 'bottom'}`,
+    `width=${opts.width}`,
+    `height=${opts.height}`,
+  ];
   if (opts.required === false) parts.push('required=false');
   return `{{${parts.join(';')}}}`;
+}
+
+/**
+ * Wrap a text tag so DocuSeal can read it in full without a human ever
+ * seeing it or its length disturbing the printed page.
+ *
+ * Two things have to be true of the same string at once: DocuSeal has to
+ * receive the COMPLETE tag — name, role, type and now width/height — as one
+ * unbroken run of PDF text, or it cannot recognize it as a tag at all; and
+ * nothing about that string may show on the document a customer reads, or
+ * change how much room anything else on the page gets.
+ *
+ * Constraining it with CSS (`overflow:hidden` on a box sized for the visible
+ * blank line, the previous approach) satisfies neither: the box is far
+ * narrower than an ~60-character tag needs, so the browser's own print
+ * rendering clips the tag before DocuSeal ever sees it — cutting it off
+ * mid-attribute, closing brace and all, exactly as happened on
+ * P-2026-000110. A regex that never finds a closing `}}` cannot match, so
+ * the field is never created and the clipped, literal `{{...}}` text is
+ * what a customer actually saw.
+ *
+ * `position:absolute` removes the tag from layout entirely — it cannot grow
+ * the box it sits in or push a sibling off the page, no matter how long the
+ * field's own name is. `color:transparent` still paints real, extractable
+ * glyphs (an invisible fill is still a fill; nothing here uses
+ * `display:none` or `visibility:hidden`, either of which a print renderer is
+ * free to skip painting altogether). The tiny font size is not about
+ * legibility — nobody is meant to read it — it is what keeps even the
+ * longest tag's rendered width well inside the page regardless of where it
+ * lands, so it is never itself clipped by a page or column boundary.
+ */
+function invisibleTag(text: string): string {
+  return (
+    '<span style="position:absolute;top:0;left:0;font-size:2px;line-height:1;' +
+    `color:transparent;white-space:nowrap;">${text}</span>`
+  );
 }
 
 /**
@@ -158,13 +226,37 @@ interface SignatureSlot {
   sigId: string;
   dateId: string;
   label: string;
+  /** The field size DocuSeal is told to use — see `tag()`'s width/height note. */
+  sigWidth: number;
+  sigHeight: number;
+  dateWidth: number;
+  dateHeight: number;
 }
 const CUSTOMER_SLOTS: SignatureSlot[] = [
-  { sigId: 'ssgSigAcceptanceSignature', dateId: 'ssgSigAcceptanceDate', label: 'Customer' },
+  // Matches the Acceptance page's own 40px-tall signature/date boxes
+  // (public/proposal-document.js) — not because DocuSeal reads that CSS, but
+  // so the field it draws sits at roughly the size the printed line already
+  // reserves for it.
+  {
+    sigId: 'ssgSigAcceptanceSignature',
+    dateId: 'ssgSigAcceptanceDate',
+    label: 'Customer',
+    sigWidth: 220,
+    sigHeight: 40,
+    dateWidth: 150,
+    dateHeight: 40,
+  },
+  // Matches the Acknowledgment's sigBlock (public/contract-pages.js): the
+  // "By:" rule is 46px tall; "Date:" has no fixed height there because a
+  // `datenow` field is a short auto-stamped line, not a drawn signature.
   {
     sigId: 'ssgSigAckCustomerSignature',
     dateId: 'ssgSigAckCustomerDate',
     label: 'Customer Acknowledgment',
+    sigWidth: 260,
+    sigHeight: 46,
+    dateWidth: 140,
+    dateHeight: 20,
   },
 ];
 const SUMMIT_SLOTS: SignatureSlot[] = [
@@ -172,6 +264,10 @@ const SUMMIT_SLOTS: SignatureSlot[] = [
     sigId: 'ssgSigAckSummitSignature',
     dateId: 'ssgSigAckSummitDate',
     label: 'Summit Acknowledgment',
+    sigWidth: 260,
+    sigHeight: 46,
+    dateWidth: 140,
+    dateHeight: 20,
   },
 ];
 
@@ -227,14 +323,28 @@ function injectSignatureFields(
       const sig = fillSlot(
         html,
         slot.sigId,
-        tag(`${slot.label} Signature`, signer.role, 'signature'),
+        invisibleTag(
+          tag(`${slot.label} Signature`, signer.role, 'signature', {
+            width: slot.sigWidth,
+            height: slot.sigHeight,
+          }),
+        ),
       );
       html = sig.html;
       // `datenow`, not `date`: the signing date is stamped automatically when
       // this signer completes their part, with nothing for them to fill in —
       // one less required action per signature, and no risk of a date that
       // does not match when they actually signed.
-      const date = fillSlot(html, slot.dateId, tag(`${slot.label} Date`, signer.role, 'datenow'));
+      const date = fillSlot(
+        html,
+        slot.dateId,
+        invisibleTag(
+          tag(`${slot.label} Date`, signer.role, 'datenow', {
+            width: slot.dateWidth,
+            height: slot.dateHeight,
+          }),
+        ),
+      );
       html = date.html;
       if (sig.placed || date.placed) placedRoles.add(signer.role);
     }
@@ -256,24 +366,30 @@ function signerBlock(signer: SignerSpec): string {
       <div style="font: 400 10pt/1.4 Georgia, 'Times New Roman', serif; color: #555; margin-top: 2px;">${escapeHtml(label)}</div>
       <div style="display: grid; grid-template-columns: 1.6fr 1fr; gap: 24px; margin-top: 16px;">
         <div>
-          <div style="min-height: 46px; overflow: hidden; white-space: nowrap; font: 400 12pt/1.4 Georgia, serif;">${tag(`${role} Signature`, role, 'signature')}</div>
+          <div style="min-height: 46px; position: relative; font: 400 12pt/1.4 Georgia, serif;">${invisibleTag(tag(`${role} Signature`, role, 'signature', { width: 260, height: 46 }))}</div>
           <div style="border-top: 1px solid #333; padding-top: 4px; font: 400 9pt/1.3 Georgia, serif; color: #555;">Signature</div>
         </div>
         <div>
-          <div style="min-height: 46px; overflow: hidden; white-space: nowrap; font: 400 12pt/1.4 Georgia, serif;">${tag(`${role} Date`, role, 'datenow')}</div>
+          <div style="min-height: 46px; position: relative; font: 400 12pt/1.4 Georgia, serif;">${invisibleTag(tag(`${role} Date`, role, 'datenow', { width: 140, height: 30 }))}</div>
           <div style="border-top: 1px solid #333; padding-top: 4px; font: 400 9pt/1.3 Georgia, serif; color: #555;">Date</div>
         </div>
       </div>
       <div style="display: grid; grid-template-columns: 1.6fr 1fr; gap: 24px; margin-top: 18px;">
         <div>
-          <div style="min-height: 30px; overflow: hidden; white-space: nowrap; font: 400 12pt/1.4 Georgia, serif;">${tag(`${role} Name`, role, 'text')}</div>
+          <div style="min-height: 30px; position: relative; font: 400 12pt/1.4 Georgia, serif;">${invisibleTag(tag(`${role} Name`, role, 'text', { width: 220, height: 24 }))}</div>
           <div style="border-top: 1px solid #333; padding-top: 4px; font: 400 9pt/1.3 Georgia, serif; color: #555;">Printed name</div>
         </div>
         <div>
-          <div style="min-height: 30px; overflow: hidden; white-space: nowrap; font: 400 12pt/1.4 Georgia, serif;">${
+          <div style="min-height: 30px; position: relative; font: 400 12pt/1.4 Georgia, serif;">${
             signer.titleField === false
               ? ''
-              : tag(`${role} Title`, role, 'text', { required: false })
+              : invisibleTag(
+                  tag(`${role} Title`, role, 'text', {
+                    required: false,
+                    width: 220,
+                    height: 24,
+                  }),
+                )
           }</div>
           <div style="border-top: 1px solid #333; padding-top: 4px; font: 400 9pt/1.3 Georgia, serif; color: #555;">Title</div>
         </div>

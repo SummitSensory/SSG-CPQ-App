@@ -623,11 +623,15 @@
             ? 'height:' + depth + 'px;display:flex;align-items:flex-end;'
             : 'padding-bottom:1px;') +
           // Only the ids (By:/Date:, where the e-sign package drops in a raw
-          // DocuSeal text tag before DocuSeal ever sees the page) get this —
-          // see the matching comment in proposal-document.js's Acceptance row
-          // for why an unreplaced tag needs it to stay a single, on-page,
-          // recognizable run of text rather than spilling past the margin.
-          (id ? 'overflow:hidden;white-space:nowrap;' : '') +
+          // DocuSeal text tag before DocuSeal ever sees the page) get this.
+          // NOT overflow:hidden — that clips the tag's own text before
+          // DocuSeal can read it complete, closing brace included, which is
+          // exactly what left literal "{{Summit Acknowledgment
+          // Signature;role=Summit;..." text on a signed proposal instead of a
+          // real field (see the postmortem in assembly.ts's invisibleTag()).
+          // position:relative just anchors that invisible, absolutely
+          // positioned tag text to this box without ever clipping it.
+          (id ? 'position:relative;' : '') +
           '">' +
           (value ? esc(value) : '') +
           '</div></div>'
