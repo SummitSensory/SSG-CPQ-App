@@ -36,7 +36,8 @@ import {
 import { appendPdfDocuments, appendImagePages } from '../../lib/pdfMerge.js';
 import { resolveReferenceDocuments } from '../../proposals/referenceDocuments.js';
 import { resolveRenderings } from '../../lib/renderingStore.js';
-import { renderCertificatePdf } from './certificate.js';
+import { renderCertificatePdf, imageUrlToDataUri, type CertificateSigner } from './certificate.js';
+import { resolveIpLocation } from '../geolocation.js';
 import {
   renderEsignEmail,
   firstNameOf,
@@ -729,6 +730,7 @@ export async function storeSignedCopy(envelopeId: string): Promise<string | null
             select: { name: true },
           })
         : null;
+      const signers = await enrichSignersForCertificate(envelope);
       const certificate = await renderCertificatePdf({
         envelopeId: envelope.id,
         proposalNumber: proposal?.number ?? 'proposal',
@@ -736,7 +738,7 @@ export async function storeSignedCopy(envelopeId: string): Promise<string | null
         customerName: org?.name,
         sentAt: envelope.sentAt,
         completedAt: envelope.completedAt,
-        signers: envelope.signers,
+        signers,
       });
       bytes = await appendPdfDocuments(bytes, [{ name: 'certificate', bytes: certificate }]);
     } catch (err) {
@@ -759,6 +761,87 @@ export async function storeSignedCopy(envelopeId: string): Promise<string | null
     logger.error({ err, envelopeId }, 'esign: storing the signed copy failed');
     return null;
   }
+}
+
+/**
+ * Pulls each signer's IP, resolved location, and drawn-signature image fresh
+ * from DocuSeal at certificate-render time — nothing here is persisted, and
+ * none of it is required: a submitter DocuSeal cannot be matched to, or a
+ * lookup that fails, just means that signer's certificate block shows less,
+ * never why the certificate (or the signed copy it rides along with) fails
+ * to store.
+ */
+async function enrichSignersForCertificate(envelope: {
+  id: string;
+  docusealSubmissionId: string | null;
+  signers: Array<{
+    role: string;
+    name: string | null;
+    email: string;
+    viewOnly: boolean;
+    status: string;
+    emailedAt: Date | null;
+    viewedAt: Date | null;
+    completedAt: Date | null;
+    declineReason: string | null;
+    docusealSubmitterId: string | null;
+  }>;
+}): Promise<CertificateSigner[]> {
+  let submitters: DocusealSubmitter[] = [];
+  if (envelope.docusealSubmissionId) {
+    try {
+      const submission = await getSubmission(envelope.docusealSubmissionId);
+      submitters = submission.submitters ?? [];
+    } catch (err) {
+      logger.warn(
+        { err, envelopeId: envelope.id },
+        'certificate: could not fetch fresh submitter detail from DocuSeal',
+      );
+    }
+  }
+
+  return Promise.all(
+    envelope.signers.map(async (row) => {
+      const sub = submitters.find(
+        (s) =>
+          (row.docusealSubmitterId && String(s.id) === row.docusealSubmitterId) ||
+          s.email?.toLowerCase() === row.email.toLowerCase(),
+      );
+      const ipAddress = sub?.ip ?? null;
+      const [location, signatureDataUri] = await Promise.all([
+        resolveIpLocation(ipAddress),
+        signatureImageFor(sub),
+      ]);
+      return {
+        role: row.role,
+        name: row.name,
+        email: row.email,
+        viewOnly: row.viewOnly,
+        status: row.status,
+        emailedAt: row.emailedAt,
+        viewedAt: row.viewedAt,
+        completedAt: row.completedAt,
+        declineReason: row.declineReason,
+        ipAddress,
+        location,
+        signatureDataUri,
+      };
+    }),
+  );
+}
+
+/**
+ * The first signature-type field value this submitter actually filled. This
+ * app's own text tags always name these "<Role> Signature" or "<Role> ...
+ * Signature" (see assembly.ts's tag()), so matching on a trailing "Signature"
+ * field name finds it without needing to know which page it came from.
+ */
+async function signatureImageFor(sub: DocusealSubmitter | undefined): Promise<string | null> {
+  const value = sub?.values?.find((v) => /signature$/i.test(v.field))?.value;
+  if (typeof value !== 'string' || !value) return null;
+  if (value.startsWith('data:image')) return value;
+  if (/^https?:\/\//i.test(value)) return imageUrlToDataUri(value);
+  return null;
 }
 
 /** Ask DocuSeal where the envelope stands. The backstop for a missed webhook. */

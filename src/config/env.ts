@@ -191,6 +191,13 @@ const EnvSchema = z
     // supported — the envelope then keeps DocuSeal's own document URL.
     BLOB_READ_WRITE_TOKEN: z.string().min(1).optional(),
 
+    // ipinfo.io token for the Certificate of Signature's per-signer "Location"
+    // line — DocuSeal reports each signer's raw IP address, not a resolved city/
+    // country, and geolocation is a distinct, optional capability layered on top.
+    // Unset means the certificate page simply omits Location and prints the IP
+    // address only. See certificate.ts / geolocation.ts.
+    IPINFO_TOKEN: z.string().min(1).optional(),
+
     // QuickBooks Online integration. Client credentials come from env ONLY —
     // never source. OAuth tokens are encrypted with QBO_TOKEN_ENC_KEY.
     QBO_CLIENT_ID: z.string().min(1).optional(),

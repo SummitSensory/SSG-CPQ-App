@@ -1,4 +1,5 @@
 import { renderPdf } from '../../render/pdf.js';
+import { logger } from '../../lib/logger.js';
 import { CERTIFICATE_BACKGROUND_DATA_URI } from './certificateBackground.js';
 
 /**
@@ -8,11 +9,12 @@ import { CERTIFICATE_BACKGROUND_DATA_URI } from './certificateBackground.js';
  * compliance record (IP addresses, device info, identity verification per
  * event); this page is deliberately a simpler, on-brand summary drawn from
  * data this app already owns and trusts (EsignSigner's own status/timestamp
- * columns, not a reconstruction from webhook payloads), pointing the reader
- * at DocuSeal's pages for the full forensic trail. Replacing DocuSeal's
- * certificate with a reconstruction of our own would be a real compliance
- * regression if a webhook were ever missed; appending ours alongside it
- * cannot be.
+ * columns, plus the signer's IP/location/drawn-signature pulled fresh from
+ * DocuSeal's own API at render time — see service.ts's storeSignedCopy),
+ * pointing the reader at DocuSeal's pages for the full forensic trail.
+ * Replacing DocuSeal's certificate with a reconstruction of our own would be
+ * a real compliance regression if a webhook were ever missed; appending ours
+ * alongside it cannot be.
  */
 
 export interface CertificateSigner {
@@ -21,9 +23,22 @@ export interface CertificateSigner {
   email: string;
   viewOnly: boolean;
   status: string;
+  /** When this app emailed this signer their turn — the certificate's "Sent". */
+  emailedAt: Date | null;
+  /** Doubles as "Email verified": opening the emailed link is the proof this
+   *  signer controls that inbox — DocuSeal has no separate verification step
+   *  unless a template explicitly adds one. */
   viewedAt: Date | null;
   completedAt: Date | null;
   declineReason: string | null;
+  /** Fetched fresh from DocuSeal at certificate-render time — not persisted,
+   *  and never used for anything but display here. */
+  ipAddress?: string | null;
+  /** "City, Country" from geolocation.ts, or null if unconfigured/unavailable. */
+  location?: string | null;
+  /** A data: URI of this signer's drawn signature, if DocuSeal returned one and
+   *  it could be fetched and inlined — null falls back to a plain text line. */
+  signatureDataUri?: string | null;
 }
 
 export interface CertificateInput {
@@ -43,53 +58,99 @@ const esc = (v: unknown): string =>
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 
-/** UTC, matching the timestamps DocuSeal's own certificate reports in. */
+/** "05 SEP 2026 12:53:04 UTC" — UTC throughout, matching the timestamps
+ *  DocuSeal's own certificate reports in. */
 function fmt(d: Date | null): string {
   if (!d) return '—';
-  return (
-    d.toLocaleString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-      timeZone: 'UTC',
-    }) + ' UTC'
-  );
+  const parts = new Intl.DateTimeFormat('en-US', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+    timeZone: 'UTC',
+  }).formatToParts(d);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '';
+  return `${get('day')} ${get('month').toUpperCase()} ${get('year')} ${get('hour')}:${get('minute')}:${get('second')} UTC`;
 }
 
-function signerRow(s: CertificateSigner): string {
-  const label = s.name ? `${esc(s.name)} — ${esc(s.email)}` : esc(s.email);
-  if (s.viewOnly) {
-    return `<tr>
-      <td><div class="role">${esc(s.role)}</div><div class="who">${label}</div></td>
-      <td class="viewer">Copied for reference, not required to sign</td>
-      <td>—</td>
-      <td>—</td>
-    </tr>`;
+function timestampLines(s: CertificateSigner): string {
+  const rows: Array<[string, Date | null]> = [
+    ['Sent', s.emailedAt],
+    ['Viewed', s.viewedAt],
+    [s.status === 'DECLINED' ? 'Declined' : 'Signed', s.completedAt],
+  ];
+  return rows
+    .filter(([, d]) => d !== null)
+    .map(
+      ([label, d]) =>
+        `<div class="ts-row"><span class="ts-label">${esc(label)}</span>${fmt(d)}</div>`,
+    )
+    .join('');
+}
+
+function signatureBox(s: CertificateSigner): string {
+  if (s.status !== 'COMPLETED') {
+    return `<div class="sig-box sig-pending">${s.status === 'DECLINED' ? 'Declined' : 'Not yet signed'}</div>`;
   }
-  const status =
-    s.status === 'COMPLETED'
-      ? { cls: 'status-completed', label: 'Signed' }
-      : s.status === 'DECLINED'
-        ? { cls: 'status-declined', label: 'Declined' }
-        : s.status === 'VIEWED'
-          ? { cls: 'status-pending', label: 'Viewed, not yet signed' }
-          : { cls: 'status-pending', label: 'Pending' };
-  return `<tr>
-    <td><div class="role">${esc(s.role)}</div><div class="who">${label}</div></td>
-    <td class="${status.cls}">${status.label}${
-      s.status === 'DECLINED' && s.declineReason
-        ? `<div class="reason">${esc(s.declineReason)}</div>`
-        : ''
-    }</td>
-    <td>${fmt(s.viewedAt)}</td>
-    <td>${fmt(s.completedAt)}</td>
-  </tr>`;
+  if (s.signatureDataUri) {
+    return `<div class="sig-box"><img src="${esc(s.signatureDataUri)}" alt="${esc(s.name ?? s.email)}'s signature"></div>`;
+  }
+  // No image could be fetched — the printed name in a script-like face reads as
+  // a signature line rather than leaving the box looking broken or empty.
+  return `<div class="sig-box sig-fallback">${esc(s.name || s.email)}</div>`;
 }
 
-function buildCertificateHtml(input: CertificateInput): string {
+function signerBlock(s: CertificateSigner): string {
+  const label = s.name ? esc(s.name) : esc(s.email);
+  if (s.viewOnly) {
+    return `
+    <div class="signer">
+      <div class="signer-grid">
+        <div>
+          <div class="signer-name">${label}</div>
+          <div class="signer-email">${esc(s.email)}</div>
+          <div class="role-tag">${esc(s.role)}</div>
+        </div>
+        <div class="viewer-note">Copied for reference — not required to sign.</div>
+        <div></div>
+      </div>
+    </div>`;
+  }
+  const emailVerified = s.viewedAt
+    ? `<div class="verify"><div class="verify-title">Recipient verification</div><div class="ts-row"><span class="ts-label">Email verified</span>${fmt(s.viewedAt)}</div></div>`
+    : '';
+  const ipLocation =
+    s.ipAddress || s.location
+      ? `<div class="ip-block">${s.ipAddress ? `<div class="ip-label">IP address</div><div>${esc(s.ipAddress)}</div>` : ''}${
+          s.location
+            ? `<div class="ip-label" style="margin-top:6pt;">Location</div><div>${esc(s.location)}</div>`
+            : ''
+        }</div>`
+      : '';
+  return `
+    <div class="signer">
+      <div class="signer-grid">
+        <div>
+          <div class="signer-name">${label}</div>
+          <div class="signer-email">${esc(s.email)}</div>
+          <div class="role-tag">${esc(s.role)}</div>
+        </div>
+        <div class="timestamps">${timestampLines(s)}</div>
+        <div>
+          ${signatureBox(s)}
+          ${ipLocation}
+        </div>
+      </div>
+      ${emailVerified}
+    </div>`;
+}
+
+/** Exported for tests — the HTML this renders to PDF, checkable without a
+ *  headless browser, same pattern as assembly.ts's buildPackageHtml. */
+export function buildCertificateHtml(input: CertificateInput): string {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -108,54 +169,88 @@ function buildCertificateHtml(input: CertificateInput): string {
     font-family: Georgia, 'Times New Roman', serif;
     color: #1a1a1a;
   }
-  .content { padding: 1.2in 1.05in 1in; box-sizing: border-box; }
+  .content { padding: 0.85in 0.8in 0.7in; box-sizing: border-box; }
   h1 {
     text-align: center;
-    font-size: 21pt;
-    letter-spacing: 0.08em;
+    font-size: 22pt;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
     color: #2c3e50;
-    margin: 0 0 4pt;
+    margin: 0 0 2pt;
   }
-  .subtitle { text-align: center; font-size: 10pt; color: #5b6478; margin-bottom: 24pt; }
+  h1 em { font-style: italic; text-transform: lowercase; font-weight: 400; letter-spacing: 0; }
+  .subtitle { text-align: center; font-size: 9.5pt; color: #5b6478; margin-bottom: 20pt; }
   .meta-row {
     display: flex;
     justify-content: space-between;
+    align-items: flex-start;
     gap: 24pt;
-    font-size: 9.5pt;
+    font-size: 8.5pt;
     line-height: 1.6;
     color: #5b6478;
     border-bottom: 1px solid #b9c2cf;
     padding-bottom: 10pt;
-    margin-bottom: 20pt;
+    margin-bottom: 6pt;
   }
-  .meta-row b { color: #1a1a1a; }
-  .meta-row > div:last-child { white-space: nowrap; }
-  table { width: 100%; border-collapse: collapse; font-size: 10pt; }
-  th {
-    text-align: left;
+  .meta-label { text-transform: uppercase; letter-spacing: 0.05em; font-size: 7.5pt; color: #8a8f8f; }
+  .meta-row b { color: #1a1a1a; font-size: 10pt; letter-spacing: 0.02em; }
+  .meta-row > div:last-child { text-align: right; }
+  .signer { border-bottom: 1px solid #e4e8ee; padding: 14pt 0; }
+  .signer:last-of-type { border-bottom: none; }
+  .signer-grid { display: grid; grid-template-columns: 1.5fr 1.2fr 1.3fr; gap: 16pt; align-items: start; }
+  .signer-name { font-size: 13pt; font-weight: 700; }
+  .signer-email { font-size: 9pt; color: #5b6478; margin-top: 1pt; }
+  .role-tag {
+    display: inline-block;
+    margin-top: 5pt;
+    font-size: 7pt;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
-    font-size: 8.5pt;
-    color: #5b6478;
-    border-bottom: 1px solid #b9c2cf;
-    padding: 0 8pt 6pt 0;
+    letter-spacing: 0.06em;
+    color: #2c3e50;
+    background: #eef1f6;
+    border-radius: 3pt;
+    padding: 2pt 6pt;
   }
-  td { padding: 9pt 8pt 9pt 0; vertical-align: top; border-bottom: 1px solid #e4e8ee; }
-  .role { font-weight: 700; }
-  .who { color: #5b6478; font-size: 9pt; margin-top: 1pt; }
-  .status-completed { color: #1f7a55; font-weight: 700; }
-  .status-declined { color: #9c3327; font-weight: 700; }
-  .status-pending { color: #8a8f8f; }
-  .viewer { color: #8a8f8f; font-style: italic; font-size: 9pt; }
-  .reason { font-weight: 400; font-size: 8.5pt; color: #5b6478; margin-top: 2pt; }
+  .viewer-note { font-size: 9pt; color: #8a8f8f; font-style: italic; align-self: center; }
+  .timestamps { font-size: 8.5pt; color: #1a1a1a; }
+  .ts-row { margin-bottom: 5pt; }
+  .ts-label {
+    display: block;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 7pt;
+    color: #8a8f8f;
+  }
+  .sig-box {
+    border: 1px solid #b9c2cf;
+    border-radius: 3pt;
+    min-height: 34pt;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4pt 8pt;
+    background: rgba(255, 255, 255, 0.55);
+  }
+  .sig-box img { max-height: 32pt; max-width: 100%; }
+  .sig-fallback { font-family: 'Segoe Script', Georgia, cursive; font-size: 14pt; color: #1a1a1a; }
+  .sig-pending { font-size: 8.5pt; color: #8a8f8f; font-style: italic; }
+  .ip-block { margin-top: 8pt; font-size: 8.5pt; }
+  .ip-label { text-transform: uppercase; letter-spacing: 0.05em; font-size: 7pt; color: #8a8f8f; }
+  .verify { margin-top: 10pt; }
+  .verify-title {
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 7.5pt;
+    color: #8a8f8f;
+    margin-bottom: 4pt;
+  }
   .footer {
-    margin-top: 30pt;
-    font-size: 8.5pt;
+    margin-top: 22pt;
+    font-size: 8pt;
     color: #5b6478;
     line-height: 1.55;
     text-align: center;
-    max-width: 5.6in;
+    max-width: 5.8in;
     margin-left: auto;
     margin-right: auto;
   }
@@ -163,23 +258,20 @@ function buildCertificateHtml(input: CertificateInput): string {
 </head>
 <body>
   <div class="content">
-    <h1>Certificate of Signature</h1>
+    <h1>Certificate <em>of</em> Signature</h1>
     <div class="subtitle">Summit Sensory Gym</div>
     <div class="meta-row">
       <div>
-        <b>Envelope</b> ${esc(input.envelopeId)}<br>
-        <b>Proposal</b> ${esc(input.proposalNumber)}${input.proposalTitle ? ' — ' + esc(input.proposalTitle) : ''}
-        ${input.customerName ? `<br><b>Client</b> ${esc(input.customerName)}` : ''}
+        <div class="meta-label">Ref. number</div>
+        <b>${esc(input.envelopeId)}</b><br>
+        <span style="font-size:8.5pt;">${esc(input.proposalNumber)}${input.proposalTitle ? ' — ' + esc(input.proposalTitle) : ''}${input.customerName ? ' · ' + esc(input.customerName) : ''}</span>
       </div>
-      <div style="text-align:right;">
-        <b>Sent</b> ${fmt(input.sentAt)}<br>
-        <b>Completed</b> ${fmt(input.completedAt)}
+      <div>
+        <div class="meta-label">Document completed by all parties on</div>
+        <b>${fmt(input.completedAt)}</b>
       </div>
     </div>
-    <table>
-      <thead><tr><th>Party</th><th>Status</th><th>Viewed</th><th>Signed</th></tr></thead>
-      <tbody>${input.signers.map(signerRow).join('')}</tbody>
-    </table>
+    ${input.signers.map(signerBlock).join('')}
     <div class="footer">
       This certificate summarizes the signing record for this document. The complete technical
       audit trail — IP addresses, device information, and identity verification for each
@@ -189,6 +281,29 @@ function buildCertificateHtml(input: CertificateInput): string {
   </div>
 </body>
 </html>`;
+}
+
+/** Fetch a remote image and inline it as a data: URI — the same rule every
+ *  other document rendered through render/pdf.ts follows (no network access
+ *  once Chromium has the HTML), applied here to a signer's drawn-signature
+ *  image, which only exists as a DocuSeal-hosted URL until this point.
+ *  Best-effort: a failed fetch just means this signer's box falls back to a
+ *  printed name instead of an image. */
+export async function imageUrlToDataUri(
+  url: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<string | null> {
+  try {
+    const res = await fetchImpl(url);
+    if (!res.ok) return null;
+    const contentType = res.headers.get('content-type') ?? 'image/png';
+    if (!contentType.startsWith('image/')) return null;
+    const bytes = Buffer.from(await res.arrayBuffer());
+    return `data:${contentType};base64,${bytes.toString('base64')}`;
+  } catch (err) {
+    logger.warn({ err, url }, 'certificate: could not fetch a signature image');
+    return null;
+  }
 }
 
 export async function renderCertificatePdf(input: CertificateInput): Promise<Buffer> {
