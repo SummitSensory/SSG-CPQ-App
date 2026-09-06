@@ -1125,8 +1125,19 @@
       // growing to fit unbreakable content) and nowrap keeps the whole tag on
       // one line, so the tag is always a single, complete, on-page run of text
       // for DocuSeal to recognize — this box just never shows it before that.
-      '<div style="flex:1.35;"><div id="ssgSigAcceptanceSignature" style="border-bottom:1px solid #20241f;height:40px;display:flex;align-items:flex-end;padding-bottom:3px;overflow:hidden;white-space:nowrap;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Signature</div></div>' +
-      '<div style="flex:1;"><div id="ssgSigAcceptanceDate" style="border-bottom:1px solid #20241f;height:40px;display:flex;align-items:flex-end;padding-bottom:3px;overflow:hidden;white-space:nowrap;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Date</div></div>' +
+      //
+      // min-width:0 on the FLEX ITEM itself (the flex:1.35/flex:1 wrapper, not
+      // just the id div nested inside it) — a first pass put overflow:hidden
+      // only on the inner id div and missed that CSS's "automatic minimum
+      // size resets to 0" rule only applies to a flex item whose OWN overflow
+      // is not visible. The inner div's overflow:hidden clipped its own
+      // content, but the outer wrapper (still overflow:visible, min-width:auto)
+      // was still sized to fit that content's min-content width — nowrap made
+      // that the FULL unbreakable tag string — so the wrapper itself still grew
+      // past its share and off the page. min-width:0 here is what actually
+      // stops that growth.
+      '<div style="flex:1.35;min-width:0;overflow:hidden;"><div id="ssgSigAcceptanceSignature" style="border-bottom:1px solid #20241f;height:40px;display:flex;align-items:flex-end;padding-bottom:3px;overflow:hidden;white-space:nowrap;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Signature</div></div>' +
+      '<div style="flex:1;min-width:0;overflow:hidden;"><div id="ssgSigAcceptanceDate" style="border-bottom:1px solid #20241f;height:40px;display:flex;align-items:flex-end;padding-bottom:3px;overflow:hidden;white-space:nowrap;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Date</div></div>' +
       '</div>' +
       '</div>' +
       footerNotesHtml +
