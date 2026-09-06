@@ -1109,35 +1109,23 @@
       // image at the top of this box's own line-height rather than resting on
       // the rule at the bottom, floating it above the line instead of on it.
       //
-      // overflow:hidden + white-space:nowrap on the field box itself, not just
-      // its text: before DocuSeal ever sees this page, the raw DocuSeal text
-      // tag (e.g. "{{Customer Date;role=Customer;type=datenow;valign=bottom}}")
-      // sits here as literal text. That string has only one breakable space,
-      // so in a narrow flex column (this Date box is the narrowest of the
-      // three on this row, and the last one before the page's right margin)
-      // the unbreakable remainder forces the flex item wider than its share —
-      // flex items don't shrink below their content's size by default — and it
-      // spilled past the printed margin and off the page edge, splitting the
-      // tag across a page boundary. DocuSeal could no longer read it as one
-      // contiguous tag, so it left the literal, truncated text baked into the
-      // signed PDF instead of replacing it with the date. overflow:hidden
-      // resets a flex item's automatic minimum size to 0 (its box stops
-      // growing to fit unbreakable content) and nowrap keeps the whole tag on
-      // one line, so the tag is always a single, complete, on-page run of text
-      // for DocuSeal to recognize — this box just never shows it before that.
-      //
-      // min-width:0 on the FLEX ITEM itself (the flex:1.35/flex:1 wrapper, not
-      // just the id div nested inside it) — a first pass put overflow:hidden
-      // only on the inner id div and missed that CSS's "automatic minimum
-      // size resets to 0" rule only applies to a flex item whose OWN overflow
-      // is not visible. The inner div's overflow:hidden clipped its own
-      // content, but the outer wrapper (still overflow:visible, min-width:auto)
-      // was still sized to fit that content's min-content width — nowrap made
-      // that the FULL unbreakable tag string — so the wrapper itself still grew
-      // past its share and off the page. min-width:0 here is what actually
-      // stops that growth.
-      '<div style="flex:1.35;min-width:0;overflow:hidden;"><div id="ssgSigAcceptanceSignature" style="border-bottom:1px solid #20241f;height:40px;display:flex;align-items:flex-end;padding-bottom:3px;overflow:hidden;white-space:nowrap;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Signature</div></div>' +
-      '<div style="flex:1;min-width:0;overflow:hidden;"><div id="ssgSigAcceptanceDate" style="border-bottom:1px solid #20241f;height:40px;display:flex;align-items:flex-end;padding-bottom:3px;overflow:hidden;white-space:nowrap;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Date</div></div>' +
+      // position:relative, not overflow:hidden. A prior fix put overflow:hidden
+      // (plus min-width:0 on the flex wrapper) directly on this box, reasoning
+      // that it would stop the box from growing to fit the raw DocuSeal tag
+      // text ("{{Customer Date;role=Customer;type=datenow;valign=bottom}}")
+      // that briefly sits here before DocuSeal ever sees this page. It did stop
+      // the box from growing — but overflow:hidden clips the tag's own text
+      // along with it, before DocuSeal ever reads it, and a tag DocuSeal
+      // receives without its closing "}}" is not a tag it can recognize at
+      // all. That is a worse failure than the one it replaced: no field is
+      // created, and the clipped, literal tag text is what a customer actually
+      // sees and is asked to sign around instead of a real signature box —
+      // exactly what reached P-2026-000110's customer. See invisibleTag() in
+      // assembly.ts for the actual fix: the tag now renders as absolutely
+      // positioned, invisible text, so it can never grow this box or get
+      // clipped by anything, and DocuSeal receives it complete.
+      '<div style="flex:1.35;"><div id="ssgSigAcceptanceSignature" style="position:relative;border-bottom:1px solid #20241f;height:40px;display:flex;align-items:flex-end;padding-bottom:3px;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Signature</div></div>' +
+      '<div style="flex:1;"><div id="ssgSigAcceptanceDate" style="position:relative;border-bottom:1px solid #20241f;height:40px;display:flex;align-items:flex-end;padding-bottom:3px;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Date</div></div>' +
       '</div>' +
       '</div>' +
       footerNotesHtml +
