@@ -2151,7 +2151,8 @@
 
     ov = openModal('Follow-up email — ' + (row.customer || 'customer'),
       '<div class="muted" style="font-size:12.5px;line-height:1.55;margin-bottom:12px;">' +
-        'Pick a template and open it in Outlook — already addressed, with the subject and body filled in. It sends from your mailbox, so the reply comes back to you. ' +
+        'Pick a template and send it — it goes straight from your own mailbox, already addressed, so the reply comes back to you. ' +
+        'Want to read it in Outlook first? Open it there instead. ' +
         'The history below each one is per customer, so a second proposal does not reset it.</div>' +
       '<div id="fuBody"><div class="muted" style="font-size:12.5px;padding:12px 0;">Loading…</div></div>',
       null, 'Done', { maxWidth: '760px' });
@@ -2209,7 +2210,8 @@
                 '<div style="border:1px solid #e7e8e3;border-radius:10px;padding:12px 14px;background:#fff;max-height:34vh;overflow:auto;font-size:12.5px;line-height:1.5;">' + chosenT.html + '</div>' +
                 '<div class="muted" style="font-size:11.5px;line-height:1.5;margin-top:8px;">' + esc(chosenT.objective) + ' · ' + esc(chosenT.angle) + '</div>' +
                 '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">' +
-                  '<button type="button" class="btn" id="fuOutlook" style="width:auto;padding:9px 16px;">Open in Outlook</button>' +
+                  '<button type="button" class="btn" id="fuSendNow" style="width:auto;padding:9px 16px;">Send now</button>' +
+                  '<button type="button" class="link-btn" id="fuOutlook" style="width:auto;padding:9px 15px;">Open in Outlook instead</button>' +
                   '<button type="button" class="link-btn" id="fuPlain" style="width:auto;padding:9px 15px;" title="Opens your mail client directly. Plain text — the bold on the question is lost.">Open as plain text</button>' +
                   '<button type="button" class="link-btn" id="fuCopy" style="width:auto;padding:9px 15px;">Copy instead</button>' +
                 '</div>' +
@@ -2332,6 +2334,28 @@
       };
 
       /**
+       * Send it now, straight from the rep's own connected mailbox — no draft, no trip
+       * to Outlook to press Send. The default action: a follow-up is a plain, already-
+       * judged note, not a document that needs a last look before it goes.
+       *
+       * A 409 here means the connection cannot send (never connected, or connected
+       * before Mail.Send was requested) — the message says which, and "Open in Outlook
+       * instead" stays right next to this button for exactly that case.
+       */
+      var sendNow = async function () {
+        msg('Sending…');
+        var to = contactOf();
+        var r = await authed(draftBase() + '/send' + draftQuery(to), { method: 'POST', body: {} });
+        if (r.status === 409) { msg(await serverMessage(r, 'Outlook is not connected.'), 1); return; }
+        if (!r.ok) { msg(await serverMessage(r, 'Could not send (' + r.status + ').'), 1); return; }
+        var out = null; try { out = await r.json(); } catch (e) {}
+        var logged = wantsLog() ? await logIt() : null;
+        if (logged === false) { msg('Sent from ' + ((out && out.mailbox) || 'your mailbox') + ', but the history line failed. Record it by hand.', 1); return; }
+        msg('Sent from ' + ((out && out.mailbox) || 'your mailbox') + '.' + (logged ? ' Logged.' : ''));
+        if (logged) await load(to && to.id ? to.id : null);
+      };
+
+      /**
        * Hand Outlook a real draft.
        *
        * First choice is Microsoft Graph: the message is written straight into the rep's
@@ -2419,6 +2443,7 @@
         if (logged) await load($('#fuTo') ? $('#fuTo').value : null);
       };
 
+      var sn = $('#fuSendNow'); if (sn) sn.addEventListener('click', sendNow);
       var ol = $('#fuOutlook'); if (ol) ol.addEventListener('click', openInOutlook);
       var pl = $('#fuPlain'); if (pl) pl.addEventListener('click', openPlain);
       var cp = $('#fuCopy'); if (cp) cp.addEventListener('click', onCopy);
