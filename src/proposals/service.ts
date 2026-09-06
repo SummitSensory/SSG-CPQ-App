@@ -5,6 +5,7 @@ import { canTransition, becomesFrozen, isFrozenStatus, formatProposalNumber } fr
 import { compareVersions, type VersionSnapshot } from './compare.js';
 import { auditPriceEntry, priceEntryMessage, type PriceEntryAudit } from './priceEntry.js';
 import type { ProposalSection, ProposalItem } from './sections.js';
+import { withProposalDate } from './sections.js';
 import {
   sectionsWithResolvedProjectId,
   sectionsWithOpportunityProjectId,
@@ -208,12 +209,16 @@ export async function createNewVersion(
     if (!current) throw new NotFoundError('Current version not found');
 
     const nextVersion = proposal.currentVersion + 1;
+    // A cloned version is a new document being started today, not a reprint of the
+    // one it was cloned from — its meta section's proposalDate is stamped with
+    // today's date rather than carried over.
+    const today = new Date().toISOString().slice(0, 10);
     const created = await tx.proposalVersion.create({
       data: {
         proposalId,
         version: nextVersion,
         status: 'DRAFT',
-        sections: current.sections as object,
+        sections: withProposalDate(current.sections, today) as object,
         items: current.items as object,
         // The price snapshot is NOT carried over.
         //
