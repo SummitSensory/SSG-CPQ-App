@@ -1108,8 +1108,25 @@
       // match the name box above: without it, DocuSeal draws the signature
       // image at the top of this box's own line-height rather than resting on
       // the rule at the bottom, floating it above the line instead of on it.
-      '<div style="flex:1.35;"><div id="ssgSigAcceptanceSignature" style="border-bottom:1px solid #20241f;height:40px;display:flex;align-items:flex-end;padding-bottom:3px;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Signature</div></div>' +
-      '<div style="flex:1;"><div id="ssgSigAcceptanceDate" style="border-bottom:1px solid #20241f;height:40px;display:flex;align-items:flex-end;padding-bottom:3px;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Date</div></div>' +
+      //
+      // overflow:hidden + white-space:nowrap on the field box itself, not just
+      // its text: before DocuSeal ever sees this page, the raw DocuSeal text
+      // tag (e.g. "{{Customer Date;role=Customer;type=datenow;valign=bottom}}")
+      // sits here as literal text. That string has only one breakable space,
+      // so in a narrow flex column (this Date box is the narrowest of the
+      // three on this row, and the last one before the page's right margin)
+      // the unbreakable remainder forces the flex item wider than its share —
+      // flex items don't shrink below their content's size by default — and it
+      // spilled past the printed margin and off the page edge, splitting the
+      // tag across a page boundary. DocuSeal could no longer read it as one
+      // contiguous tag, so it left the literal, truncated text baked into the
+      // signed PDF instead of replacing it with the date. overflow:hidden
+      // resets a flex item's automatic minimum size to 0 (its box stops
+      // growing to fit unbreakable content) and nowrap keeps the whole tag on
+      // one line, so the tag is always a single, complete, on-page run of text
+      // for DocuSeal to recognize — this box just never shows it before that.
+      '<div style="flex:1.35;"><div id="ssgSigAcceptanceSignature" style="border-bottom:1px solid #20241f;height:40px;display:flex;align-items:flex-end;padding-bottom:3px;overflow:hidden;white-space:nowrap;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Signature</div></div>' +
+      '<div style="flex:1;"><div id="ssgSigAcceptanceDate" style="border-bottom:1px solid #20241f;height:40px;display:flex;align-items:flex-end;padding-bottom:3px;overflow:hidden;white-space:nowrap;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Date</div></div>' +
       '</div>' +
       '</div>' +
       footerNotesHtml +
