@@ -4,7 +4,12 @@ import { prisma } from '../lib/prisma.js';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import { ConflictError, NotFoundError, ValidationError } from '../lib/errors.js';
-import { createOutlookDraft, OutlookNotConnectedError } from '../integrations/microsoft/graph.js';
+import {
+  createOutlookDraft,
+  sendOutlookMail,
+  OutlookNotConnectedError,
+  OutlookSendNotGrantedError,
+} from '../integrations/microsoft/graph.js';
 import { recordAudit } from '../lib/audit.js';
 import {
   DEFAULT_FOLLOW_UP_TEMPLATES,
@@ -332,6 +337,55 @@ export function registerFollowUpRoutes(app: FastifyInstance): void {
       }
     },
   );
+
+  /**
+   * Send the email now, straight from the rep's own connected mailbox — no
+   * draft, no separate trip to Outlook to press Send.
+   *
+   * Gated on `write`, not `read` like the draft route above: a draft is inert
+   * until the rep acts on it, but this one actually reaches the customer, which
+   * is the same bar the other real sends in this app (proposal documents,
+   * e-signature requests) are held to.
+   *
+   * `Mail.Send` is requested on every Outlook connection (see SCOPES in
+   * graph.ts), so this only fails for a mailbox connected before that scope
+   * existed — sendOutlookMail reports that distinctly from "not connected at
+   * all" so the client can say which is true.
+   */
+  app.post('/crm/organizations/:organizationId/follow-ups/:key/send', write, async (req) => {
+    const { organizationId, key } = req.params as { organizationId: string; key: string };
+    const q = req.query as { proposalId?: string; contactId?: string };
+    const { contact, ctx } = await contextFor(organizationId, req.user!.sub, q);
+    if (!contact?.email) throw new ValidationError('That contact has no email address.');
+
+    const templates = await loadTemplates();
+    const template = templates.find((t) => t.key === key);
+    if (!template) throw new NotFoundError('Template not found');
+
+    const rendered = renderFollowUp(template, ctx);
+    try {
+      const sent = await sendOutlookMail({
+        userId: req.user!.sub,
+        to: [
+          {
+            email: contact.email,
+            name: [contact.firstName, contact.lastName].filter(Boolean).join(' ') || null,
+          },
+        ],
+        subject: rendered.subject,
+        html: rendered.html,
+      });
+      return { sent: true, mailbox: sent.mailbox, subject: rendered.subject };
+    } catch (err) {
+      // Same fallback contract as the draft route: a lapsed or scope-short
+      // connection is not the rep's fault and has a specific remedy, so it is
+      // a 409 the client can act on rather than a bare 500.
+      if (err instanceof OutlookNotConnectedError || err instanceof OutlookSendNotGrantedError) {
+        throw new ConflictError(err.message);
+      }
+      throw err;
+    }
+  });
 
   /** Record that a template went out. Called after the draft is handed over. */
   app.post('/crm/organizations/:organizationId/follow-ups', write, async (req, reply) => {
