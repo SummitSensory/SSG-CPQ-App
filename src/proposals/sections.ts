@@ -60,6 +60,33 @@ export function resolveVisibleSections(
     .sort((a, b) => a.order - b.order);
 }
 
+/**
+ * Put `proposalDate` on the meta section, creating it when the proposal has
+ * none yet. Used when cloning a version into a new draft, so the clone shows
+ * the date it was actually created on rather than the date it was copied
+ * from. Returns a new array; the input is left alone.
+ */
+export function withProposalDate(sections: unknown, date: string): ProposalSection[] {
+  const list: ProposalSection[] = Array.isArray(sections)
+    ? ([...sections] as ProposalSection[])
+    : [];
+  const i = list.findIndex((s) => s?.id === 'meta');
+  if (i === -1) {
+    list.unshift({
+      id: 'meta',
+      type: 'CUSTOMER_INFO',
+      title: 'Proposal',
+      order: 0,
+      enabled: true,
+      data: { proposalDate: date },
+    });
+    return list;
+  }
+  const sec = list[i]!;
+  list[i] = { ...sec, data: { ...(sec.data ?? {}), proposalDate: date } };
+  return list;
+}
+
 /** Reorder sections by an explicit id order; unknown ids dropped, missing ones appended. */
 export function reorderSections(
   sections: ProposalSection[],

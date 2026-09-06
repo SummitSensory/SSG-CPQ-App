@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   resolveVisibleSections,
   reorderSections,
+  withProposalDate,
   type ProposalSection,
 } from '../../src/proposals/sections.js';
 
@@ -48,5 +49,27 @@ describe('proposal sections — layout, reorder, conditional', () => {
   it('drops unknown ids in the order list', () => {
     const out = reorderSections([s('a', 0)], ['zzz', 'a']);
     expect(out.map((x) => x.id)).toEqual(['a']);
+  });
+});
+
+describe('withProposalDate', () => {
+  it('stamps the date onto an existing meta section, leaving its other data alone', () => {
+    const meta = s('meta', 0, { data: { contactName: 'Jo', proposalDate: '2026-01-01' } });
+    const out = withProposalDate([meta], '2026-09-06');
+    const found = out.find((x) => x.id === 'meta');
+    expect(found?.data).toEqual({ contactName: 'Jo', proposalDate: '2026-09-06' });
+  });
+
+  it('creates a meta section when none exists yet', () => {
+    const out = withProposalDate([s('a', 0)], '2026-09-06');
+    const found = out.find((x) => x.id === 'meta');
+    expect(found?.data).toEqual({ proposalDate: '2026-09-06' });
+  });
+
+  it('leaves the input array untouched', () => {
+    const meta = s('meta', 0, { data: { proposalDate: '2026-01-01' } });
+    const input = [meta];
+    withProposalDate(input, '2026-09-06');
+    expect(input[0]?.data).toEqual({ proposalDate: '2026-01-01' });
   });
 });
