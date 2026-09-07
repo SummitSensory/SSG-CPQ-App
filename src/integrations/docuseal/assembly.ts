@@ -434,8 +434,11 @@ export function signaturePageHtml(input: AssemblyInput): string {
       )}.</p>`
     : '';
 
+  // A <div>, not a <section> — buildPackage already wraps every item in its
+  // sections array (this one included) in its own <section>, and a nested
+  // <section><section> would say nothing a single one doesn't.
   return `
-  <section style="padding-top: 8px;">
+  <div style="padding-top: 8px;">
     <h2 style="font: 700 16pt/1.2 Georgia, 'Times New Roman', serif; margin: 0 0 4px;">Acceptance and signatures</h2>
     <table style="border-collapse: collapse; margin: 14px 0 20px;">${rows.join('')}</table>
     <p style="font: 400 10.5pt/1.55 Georgia, 'Times New Roman', serif; color: #333; max-width: 46em; text-wrap: pretty;">${escapeHtml(acceptance)}</p>
@@ -445,7 +448,7 @@ export function signaturePageHtml(input: AssemblyInput): string {
       .sort((a, b) => (a.order ?? 1) - (b.order ?? 1))
       .map(signerBlock)
       .join('')}
-  </section>`;
+  </div>`;
 }
 
 /**
