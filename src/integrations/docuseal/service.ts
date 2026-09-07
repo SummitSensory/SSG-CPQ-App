@@ -31,8 +31,12 @@ import { envelopePath, putPdf } from './storage.js';
 import {
   notifyCountersignNeeded,
   notifyProposalCompleted,
+  notifyProposalViewed,
   notifyPendingSigners,
+  envelopeContext,
+  pushSignedProposalToMonday,
 } from './notifications.js';
+import { sendAlert } from '../../lib/alerts.js';
 import { appendPdfDocuments, appendImagePages, mergeRenderedPdfs } from '../../lib/pdfMerge.js';
 import { resolveReferenceDocuments } from '../../proposals/referenceDocuments.js';
 import { resolveRenderings } from '../../lib/renderingStore.js';
@@ -706,7 +710,17 @@ export async function applyStatus(
   );
 
   // Fired after the status write above, so a failed alert or monday push can
-  // never leave the envelope's own status update in doubt.
+  // never leave the envelope's own status update in doubt. Keyed on anyViewed
+  // rather than `next === 'VIEWED'`, because a signer can go straight from
+  // PENDING to COMPLETED without the envelope ever resting at VIEWED (next's own
+  // ternary above prefers 'PARTIALLY_SIGNED'/'COMPLETED' over 'VIEWED' once any
+  // signer has completed) — the same reasoning the viewedAt column itself uses.
+  if (anyViewed && !envelope.viewedAt) {
+    await notifyProposalViewed(envelopeId).catch((err) =>
+      logger.error({ err, envelopeId }, 'esign: view notification failed'),
+    );
+  }
+
   if (next === 'PARTIALLY_SIGNED' && envelope.status !== 'PARTIALLY_SIGNED') {
     await notifyCountersignNeeded(envelopeId).catch((err) =>
       logger.error({ err, envelopeId }, 'esign: countersign notification failed'),
@@ -744,7 +758,21 @@ export async function storeSignedCopy(envelopeId: string): Promise<string | null
   });
   try {
     const doc = await fetchCompletedPdf(envelope.docusealSubmissionId);
-    if (!doc) return null;
+    if (!doc) {
+      // DocuSeal has not finished assembling combined_document_url yet — expected
+      // right after completion, not a fault. Recorded (not just logged) so a copy
+      // that never arrives is diagnosable from the envelope itself rather than
+      // only from the UI's perpetual "Preparing…" message. See
+      // repairStuckSignedCopies for the automatic retry.
+      logger.info({ envelopeId }, 'esign: signed copy not ready yet, will retry');
+      await prisma.esignEnvelope.update({
+        where: { id: envelope.id },
+        data: {
+          signedCopyError: 'DocuSeal has not finished assembling the combined document yet.',
+        },
+      });
+      return null;
+    }
 
     let bytes = doc.bytes;
     try {
@@ -778,13 +806,98 @@ export async function storeSignedCopy(envelopeId: string): Promise<string | null
       bytes,
     );
     const url = stored?.url ?? null;
-    if (url)
-      await prisma.esignEnvelope.update({ where: { id: envelope.id }, data: { signedUrl: url } });
+    if (url) {
+      await prisma.esignEnvelope.update({
+        where: { id: envelope.id },
+        data: { signedUrl: url, signedCopyError: null },
+      });
+    } else {
+      // putPdf is designed to never throw (see storage.ts) — a null return here
+      // means Blob storage is unconfigured or rejected the upload, which would
+      // otherwise be indistinguishable from "not ready yet" above.
+      logger.error(
+        { envelopeId },
+        'esign: uploading the signed copy returned no URL (blob storage unavailable?)',
+      );
+      await prisma.esignEnvelope.update({
+        where: { id: envelope.id },
+        data: {
+          signedCopyError:
+            'Uploading the signed PDF to storage failed (check BLOB_READ_WRITE_TOKEN).',
+        },
+      });
+    }
     return url;
   } catch (err) {
     logger.error({ err, envelopeId }, 'esign: storing the signed copy failed');
+    await prisma.esignEnvelope
+      .update({ where: { id: envelopeId }, data: { signedCopyError: String(err) } })
+      .catch(() => {});
     return null;
   }
+}
+
+/**
+ * Retry storing the signed copy — and the monday.com push that depends on it —
+ * for every COMPLETED envelope still missing one. The backstop for
+ * storeSignedCopy's "not ready yet" case never getting a second try because
+ * nobody happened to click "Refresh status": meant to run daily from a cron
+ * route (see cronEsignReminders.ts).
+ */
+export async function repairStuckSignedCopies(): Promise<{
+  repaired: number;
+  stillStuck: number;
+}> {
+  const stuck = await prisma.esignEnvelope.findMany({
+    where: { status: 'COMPLETED', signedUrl: null },
+    select: { id: true },
+  });
+
+  let repaired = 0;
+  let stillStuck = 0;
+  for (const { id } of stuck) {
+    const url = await storeSignedCopy(id);
+    const envelope = await envelopeContext(id);
+    if (!envelope) continue;
+
+    if (url) {
+      repaired += 1;
+      const push = await pushSignedProposalToMonday(envelope);
+      sendAlert({
+        title: `Proposal ${envelope.proposal.number} — signed copy recovered`,
+        detail: [
+          'The signed PDF that failed to store when this proposal completed has now been captured successfully.',
+          push.uploaded
+            ? 'It has been uploaded to the deal’s Signed Proposal column on monday.com.'
+            : push.skipped
+              ? `It was not pushed to monday.com: ${push.skipped}`
+              : `The monday.com push failed: ${push.error ?? 'unknown error'}.`,
+          '',
+          'Open the proposal in the CRM and use "Download signed PDF" in the Electronic signature panel to review it.',
+        ].join('\n'),
+        fingerprint: `esign-repaired-${id}`,
+        context: { proposalNumber: envelope.proposal.number, envelopeId: id },
+      });
+    } else {
+      stillStuck += 1;
+      sendAlert({
+        title: `Proposal ${envelope.proposal.number} — signed copy still not captured`,
+        detail: [
+          `${envelope.proposal.title || 'This proposal'} completed signing but the certified copy still has not been stored.`,
+          envelope.signedCopyError ? `Last error: ${envelope.signedCopyError}` : '',
+          '',
+          'This is retried automatically once a day. If it keeps failing, check DOCUSEAL_API_TOKEN / BLOB_READ_WRITE_TOKEN and the DocuSeal submission directly.',
+        ]
+          .filter(Boolean)
+          .join('\n'),
+        // Date-suffixed for the same reason as the reminder alert — a genuine
+        // day-over-day recurrence must not be swallowed by the 1-hour dedupe.
+        fingerprint: `esign-stuck-${id}-${new Date().toISOString().slice(0, 10)}`,
+        context: { proposalNumber: envelope.proposal.number, envelopeId: id },
+      });
+    }
+  }
+  return { repaired, stillStuck };
 }
 
 /**

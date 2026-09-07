@@ -186,6 +186,10 @@ const EnvSchema = z
     // acting rep has no Outlook connection, this account's mailbox sends it
     // instead. See notifyPendingSigners in docuseal/service.ts.
     ESIGN_EMAIL_FALLBACK_SENDER_EMAIL: z.string().trim().email().default('bryan@summitsensory.com'),
+    // Who gets the "proposal viewed" / "still not signed" staff alerts once the
+    // sending rep's own first-24-hours window has passed. See
+    // escalationRecipient in docuseal/notifications.ts.
+    ESIGN_ESCALATION_EMAIL: z.string().trim().email().default('sales@summitsensory.com'),
     // Vercel Blob read-write token: where the composed package and the executed PDF
     // are kept, so the signed contract does not live only inside DocuSeal. Unset is
     // supported — the envelope then keeps DocuSeal's own document URL.
