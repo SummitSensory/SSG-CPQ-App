@@ -145,6 +145,19 @@ function money(minor: number): string {
  * whatever the tag string happened to measure. Passing both explicitly makes
  * the field's size a fact this code states, not a side effect of how long a
  * field's own name is.
+ *
+ * `fontSize` is likewise always passed now, for the same reason. DocuSeal's
+ * own docs: an omitted `font_size` "is calculated based on the field
+ * height" — and every field height here is sized to the tall row a
+ * signature needs (40-46px), not to how big its printed VALUE should look.
+ * Left to that default, a `datenow` stamp renders in a font scaled to a
+ * signature-sized box — visibly larger than the printed name right next to
+ * it on the same line — and a typed/cursive signature rendered at that same
+ * height-driven size can be wide enough to run past its own field's stated
+ * `width` into whatever sits to its right. Both were exactly what reached a
+ * customer's signed copy of P-2026-000114 Rev3. Stating the size explicitly,
+ * matched to the 11.5px the proposal already prints its signer's name at,
+ * makes it a fact this code states rather than an accident of field height.
  */
 function tag(
   name: string,
@@ -155,6 +168,7 @@ function tag(
     valign?: 'top' | 'center' | 'bottom';
     width: number;
     height: number;
+    fontSize: number;
   },
 ): string {
   const parts = [
@@ -164,6 +178,7 @@ function tag(
     `valign=${opts.valign ?? 'bottom'}`,
     `width=${opts.width}`,
     `height=${opts.height}`,
+    `font_size=${opts.fontSize}`,
   ];
   if (opts.required === false) parts.push('required=false');
   return `{{${parts.join(';')}}}`;
@@ -234,7 +249,14 @@ interface SignatureSlot {
   sigHeight: number;
   dateWidth: number;
   dateHeight: number;
+  /** Rendered value size DocuSeal is told to use — see `tag()`'s fontSize note. */
+  sigFontSize: number;
+  dateFontSize: number;
 }
+// The proposal prints the signer's own name at 11.5px (public/proposal-document.js)
+// — the date sits on the same printed line, so it is given that same size rather
+// than the larger one DocuSeal would otherwise compute from a 40-46px field height.
+const NAME_PRINT_SIZE = 12;
 const CUSTOMER_SLOTS: SignatureSlot[] = [
   // Matches the Acceptance page's own 40px-tall signature/date boxes
   // (public/proposal-document.js) — not because DocuSeal reads that CSS, but
@@ -248,6 +270,8 @@ const CUSTOMER_SLOTS: SignatureSlot[] = [
     sigHeight: 40,
     dateWidth: 150,
     dateHeight: 40,
+    sigFontSize: 18,
+    dateFontSize: NAME_PRINT_SIZE,
   },
   // Matches the Acknowledgment's sigBlock (public/contract-pages.js): the
   // "By:" rule is 46px tall; "Date:" has no fixed height there because a
@@ -260,6 +284,8 @@ const CUSTOMER_SLOTS: SignatureSlot[] = [
     sigHeight: 46,
     dateWidth: 140,
     dateHeight: 20,
+    sigFontSize: 18,
+    dateFontSize: NAME_PRINT_SIZE,
   },
 ];
 const SUMMIT_SLOTS: SignatureSlot[] = [
@@ -271,6 +297,8 @@ const SUMMIT_SLOTS: SignatureSlot[] = [
     sigHeight: 46,
     dateWidth: 140,
     dateHeight: 20,
+    sigFontSize: 18,
+    dateFontSize: NAME_PRINT_SIZE,
   },
 ];
 
@@ -330,6 +358,7 @@ function injectSignatureFields(
           tag(`${slot.label} Signature`, signer.role, 'signature', {
             width: slot.sigWidth,
             height: slot.sigHeight,
+            fontSize: slot.sigFontSize,
           }),
         ),
       );
@@ -345,6 +374,7 @@ function injectSignatureFields(
           tag(`${slot.label} Date`, signer.role, 'datenow', {
             width: slot.dateWidth,
             height: slot.dateHeight,
+            fontSize: slot.dateFontSize,
           }),
         ),
       );
@@ -369,17 +399,17 @@ function signerBlock(signer: SignerSpec): string {
       <div style="font: 400 10pt/1.4 Georgia, 'Times New Roman', serif; color: #555; margin-top: 2px;">${escapeHtml(label)}</div>
       <div style="display: grid; grid-template-columns: 1.6fr 1fr; gap: 24px; margin-top: 16px;">
         <div>
-          <div style="min-height: 46px; position: relative; font: 400 12pt/1.4 Georgia, serif;">${invisibleTag(tag(`${role} Signature`, role, 'signature', { width: 260, height: 46 }))}</div>
+          <div style="min-height: 46px; position: relative; font: 400 12pt/1.4 Georgia, serif;">${invisibleTag(tag(`${role} Signature`, role, 'signature', { width: 260, height: 46, fontSize: 18 }))}</div>
           <div style="border-top: 1px solid #333; padding-top: 4px; font: 400 9pt/1.3 Georgia, serif; color: #555;">Signature</div>
         </div>
         <div>
-          <div style="min-height: 46px; position: relative; font: 400 12pt/1.4 Georgia, serif;">${invisibleTag(tag(`${role} Date`, role, 'datenow', { width: 140, height: 30 }))}</div>
+          <div style="min-height: 46px; position: relative; font: 400 12pt/1.4 Georgia, serif;">${invisibleTag(tag(`${role} Date`, role, 'datenow', { width: 140, height: 30, fontSize: 12 }))}</div>
           <div style="border-top: 1px solid #333; padding-top: 4px; font: 400 9pt/1.3 Georgia, serif; color: #555;">Date</div>
         </div>
       </div>
       <div style="display: grid; grid-template-columns: 1.6fr 1fr; gap: 24px; margin-top: 18px;">
         <div>
-          <div style="min-height: 30px; position: relative; font: 400 12pt/1.4 Georgia, serif;">${invisibleTag(tag(`${role} Name`, role, 'text', { width: 220, height: 24 }))}</div>
+          <div style="min-height: 30px; position: relative; font: 400 12pt/1.4 Georgia, serif;">${invisibleTag(tag(`${role} Name`, role, 'text', { width: 220, height: 24, fontSize: 12 }))}</div>
           <div style="border-top: 1px solid #333; padding-top: 4px; font: 400 9pt/1.3 Georgia, serif; color: #555;">Printed name</div>
         </div>
         <div>
@@ -391,6 +421,7 @@ function signerBlock(signer: SignerSpec): string {
                     required: false,
                     width: 220,
                     height: 24,
+                    fontSize: 12,
                   }),
                 )
           }</div>

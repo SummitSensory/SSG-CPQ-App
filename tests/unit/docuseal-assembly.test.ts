@@ -119,22 +119,22 @@ describe('buildPackage — field placement', () => {
 
     expect(proposalHtml).toContain(
       `<div id="ssgSigAcceptanceSignature">${wrapped(
-        '{{Customer Signature;role=Customer;type=signature;valign=bottom;width=220;height=40}}',
+        '{{Customer Signature;role=Customer;type=signature;valign=bottom;width=220;height=40;font_size=18}}',
       )}</div>`,
     );
     expect(proposalHtml).toContain(
       `<div id="ssgSigAcceptanceDate">${wrapped(
-        '{{Customer Date;role=Customer;type=datenow;valign=bottom;width=150;height=40}}',
+        '{{Customer Date;role=Customer;type=datenow;valign=bottom;width=150;height=40;font_size=12}}',
       )}</div>`,
     );
     expect(proposalHtml).toContain(
       `<div id="ssgSigAckCustomerSignature">${wrapped(
-        '{{Customer Acknowledgment Signature;role=Customer;type=signature;valign=bottom;width=260;height=46}}',
+        '{{Customer Acknowledgment Signature;role=Customer;type=signature;valign=bottom;width=260;height=46;font_size=18}}',
       )}</div>`,
     );
     expect(proposalHtml).toContain(
       `<div id="ssgSigAckSummitSignature">${wrapped(
-        '{{Summit Acknowledgment Signature;role=Summit;type=signature;valign=bottom;width=260;height=46}}',
+        '{{Summit Acknowledgment Signature;role=Summit;type=signature;valign=bottom;width=260;height=46;font_size=18}}',
       )}</div>`,
     );
     // No generated "Acceptance and signatures" page at all — both signers found
@@ -159,11 +159,11 @@ describe('buildPackage — field placement', () => {
     expect(extraHtml).toContain('Witness');
     expect(extraHtml).toContain(
       wrapped(
-        '{{Witness Signature;role=Witness;type=signature;valign=bottom;width=260;height=46}}',
+        '{{Witness Signature;role=Witness;type=signature;valign=bottom;width=260;height=46;font_size=18}}',
       ),
     );
     const customerAcceptanceTag = wrapped(
-      '{{Customer Signature;role=Customer;type=signature;valign=bottom;width=220;height=40}}',
+      '{{Customer Signature;role=Customer;type=signature;valign=bottom;width=220;height=40;font_size=18}}',
     );
     expect((extraHtml ?? '').includes(customerAcceptanceTag)).toBe(false); // only in the Acceptance slot, not duplicated on the fallback page
   });
@@ -179,12 +179,12 @@ describe('buildPackage — field placement', () => {
     });
     expect(proposalHtml).toContain(
       `<div id="ssgSigAcceptanceSignature">${wrapped(
-        '{{Customer Signature;role=Client;type=signature;valign=bottom;width=220;height=40}}',
+        '{{Customer Signature;role=Client;type=signature;valign=bottom;width=220;height=40;font_size=18}}',
       )}</div>`,
     );
     expect(proposalHtml).toContain(
       `<div id="ssgSigAckSummitSignature">${wrapped(
-        '{{Summit Acknowledgment Signature;role=Vendor;type=signature;valign=bottom;width=260;height=46}}',
+        '{{Summit Acknowledgment Signature;role=Vendor;type=signature;valign=bottom;width=260;height=46;font_size=18}}',
       )}</div>`,
     );
     expect(extraHtml).toBeNull();
@@ -212,7 +212,7 @@ describe('buildPackage — field placement', () => {
     expect(extraHtml).toContain('Acceptance and signatures');
     expect(extraHtml).toContain(
       wrapped(
-        '{{Customer Signature;role=Customer;type=signature;valign=bottom;width=260;height=46}}',
+        '{{Customer Signature;role=Customer;type=signature;valign=bottom;width=260;height=46;font_size=18}}',
       ),
     );
   });
@@ -236,7 +236,7 @@ describe('field tags are never clipped, and never visible', () => {
     expect(tags.length).toBe(6); // Acceptance sig+date, Ack customer sig+date, Ack summit sig+date
     for (const t of tags) {
       expect(t).toMatch(
-        /^\{\{[^;]+;role=\S+;type=\S+;valign=(top|center|bottom);width=\d+;height=\d+\}\}$/,
+        /^\{\{[^;]+;role=\S+;type=\S+;valign=(top|center|bottom);width=\d+;height=\d+;font_size=\d+\}\}$/,
       );
     }
   });
@@ -304,6 +304,33 @@ describe('signer-facing field ergonomics', () => {
       expect(t).toMatch(/width=\d+/);
       expect(t).toMatch(/height=\d+/);
     }
+  });
+
+  it('gives every field an explicit font size rather than leaving DocuSeal to calculate one from the field height', () => {
+    // DocuSeal's own default (no font_size given) is calculated from the
+    // field's height — and every field here is sized to a signature-tall
+    // row (40-46px), not to how big its printed value should look. Left to
+    // that default, an auto-stamped date renders visibly larger than the
+    // signer's printed name on the same line, and a typed/cursive signature
+    // can render wide enough to run past its own field into whatever sits
+    // next to it — both reached a customer's actual signed copy.
+    const { proposalHtml } = buildPackage({
+      proposalHtml: PROPOSAL_WITH_SIGNATURE_SLOTS,
+      signers: [
+        { role: 'Customer', name: 'Jane Doe', email: 'jane@example.com' },
+        { role: 'Summit', name: 'Bryan Shepherd', email: 'bryan@summitsensory.com' },
+      ],
+      proposalNumber: 'P-2026-000001',
+    });
+    const tags = proposalHtml.match(/\{\{[^}]+\}\}/g) ?? [];
+    expect(tags.length).toBeGreaterThan(0);
+    for (const t of tags) expect(t).toMatch(/font_size=\d+/);
+
+    // The date sits on the same printed line as the signer's name, which the
+    // proposal prints at 12px — so the date is sized to match it, not to the
+    // 40px-tall field it lives in.
+    const dateTag = tags.find((t) => t.includes('type=datenow'));
+    expect(dateTag).toContain('font_size=12');
   });
 });
 
