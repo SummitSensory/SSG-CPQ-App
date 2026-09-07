@@ -38,6 +38,31 @@ export async function appendPdfDocuments(
 }
 
 /**
+ * Merge one PDF this app just rendered onto another it also just rendered —
+ * e.g. the DocuSeal package's proposal and its attachments/fallback-signature
+ * document (see buildPackage in docuseal/assembly.ts). Unlike
+ * appendPdfDocuments, a failure here THROWS instead of being logged and
+ * skipped.
+ *
+ * appendPdfDocuments' tolerate-and-skip behavior is correct for a reference
+ * document someone else produced (a W9 that turned out to be corrupt should
+ * not block sending the proposal it rides along with) — it is wrong here: a
+ * fresh Chromium render is never the "corrupt third-party PDF" that
+ * justified tolerating a merge failure, and this content is not optional
+ * supplementary material. For a signer beyond Customer/Summit, the
+ * attachments/fallback document IS their only signature field — silently
+ * dropping it would send a document DocuSeal creates a submitter for but
+ * that has nothing for them to sign, with nothing surfacing the failure.
+ */
+export async function mergeRenderedPdfs(baseBytes: Buffer, extraBytes: Buffer): Promise<Buffer> {
+  const base = await PDFDocument.load(baseBytes);
+  const extra = await PDFDocument.load(extraBytes);
+  const pages = await base.copyPages(extra, extra.getPageIndices());
+  for (const page of pages) base.addPage(page);
+  return Buffer.from(await base.save());
+}
+
+/**
  * Append images as full pages, each scaled to fit a Letter page with a half-inch
  * margin and centered — a design rendering is normally a photo or a screen
  * capture from CAD software, not something drawn at page-print proportions, so

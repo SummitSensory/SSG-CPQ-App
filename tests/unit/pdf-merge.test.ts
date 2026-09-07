@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { PDFDocument } from 'pdf-lib';
-import { appendPdfDocuments } from '../../src/lib/pdfMerge.js';
+import { appendPdfDocuments, mergeRenderedPdfs } from '../../src/lib/pdfMerge.js';
 
 async function makePdf(pageCount: number): Promise<Buffer> {
   const doc = await PDFDocument.create();
@@ -43,5 +43,24 @@ describe('appendPdfDocuments', () => {
     const original = Buffer.from(base);
     await appendPdfDocuments(base, [{ name: 'x.pdf', bytes: await makePdf(1) }]);
     expect(base.equals(original)).toBe(true);
+  });
+});
+
+describe('mergeRenderedPdfs', () => {
+  it('appends every page of the second document onto the first, in order', async () => {
+    const base = await makePdf(3);
+    const extra = await makePdf(2);
+    const merged = await mergeRenderedPdfs(base, extra);
+    const doc = await PDFDocument.load(merged);
+    expect(doc.getPageCount()).toBe(3 + 2);
+  });
+
+  it('throws instead of silently dropping the extra document when it is unusable', async () => {
+    // Unlike appendPdfDocuments, a failure here is not tolerated: this merges
+    // two documents this app just rendered itself, not a third party's PDF,
+    // and the second one is sometimes a signer's only place to actually sign
+    // (see mergeRenderedPdfs' own comment in src/lib/pdfMerge.ts).
+    const base = await makePdf(2);
+    await expect(mergeRenderedPdfs(base, Buffer.from('this is not a pdf'))).rejects.toThrow();
   });
 });
