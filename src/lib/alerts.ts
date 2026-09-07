@@ -63,6 +63,10 @@ export interface AlertInput {
   fingerprint?: string;
   /** Extra fields worth having in the email. */
   context?: Record<string, unknown>;
+  /** Overrides the default ALERT_EMAIL/BOM_BCC_EMAIL recipients — for alerts
+   * that route to a specific person (e.g. the rep who sent a proposal) rather
+   * than the general fault inbox. */
+  to?: string[];
 }
 
 /** Where alerts go. Falls back to the BOM internal copy address. */
@@ -89,7 +93,7 @@ export function sendAlert(input: AlertInput): void {
 }
 
 async function deliver(input: AlertInput): Promise<void> {
-  const to = recipients();
+  const to = input.to?.length ? input.to : recipients();
   if (!env.RESEND_API_KEY || !to.length) return;
 
   const err = input.err;

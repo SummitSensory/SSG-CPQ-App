@@ -56,6 +56,7 @@ import { registerCronRoutes } from './routes/cron.js';
 import { registerReceivableCronRoutes } from './routes/cronReceivables.js';
 import { registerInsightCronRoutes } from './routes/cronInsights.js';
 import { registerFxCronRoutes } from './routes/cronFx.js';
+import { registerEsignReminderCronRoutes } from './routes/cronEsignReminders.js';
 import { verifySchemaOnBoot } from './lib/schemaCheck.js';
 import { registerPortalRoutes } from './routes/portal.js';
 import { registerWebRoutes } from './routes/web.js';
@@ -190,6 +191,7 @@ export function buildApp(): FastifyInstance {
   registerReceivableCronRoutes(app);
   registerInsightCronRoutes(app);
   registerFxCronRoutes(app);
+  registerEsignReminderCronRoutes(app);
   registerPortalRoutes(app);
   registerWebRoutes(app);
   registerTipsRoutes(app);

@@ -3017,6 +3017,22 @@ model EsignEnvelope {
   /// "fully signed, please review" staff alert has gone out for this envelope's
   /// completion. Same double-fire concern as countersignNotifiedAt.
   completionNotifiedAt DateTime?
+  /// Set once the "customer viewed the proposal" staff alert has gone out for
+  /// this envelope's first transition into VIEWED. Same double-fire concern as
+  /// countersignNotifiedAt — applyStatus runs from both the webhook and the
+  /// manual sync.
+  viewNotifiedAt DateTime?
+  /// Last time the "still not signed" daily reminder alert went out. Null means
+  /// none has yet — see sendEsignReminders in docuseal/notifications.ts. Cleared
+  /// implicitly by the envelope leaving the LIVE status set (COMPLETED/DECLINED/
+  /// VOIDED), which is what the reminder sweep's own query excludes on.
+  lastReminderSentAt DateTime?
+  /// Why storeSignedCopy's last attempt did not produce a signedUrl — DocuSeal not
+  /// having assembled combined_document_url yet reads as "not ready", not a fault,
+  /// but this still records it so a signedUrl that never arrives is diagnosable
+  /// instead of the UI's "Preparing…" message being the only visible symptom.
+  /// Cleared (set null) the moment storeSignedCopy succeeds.
+  signedCopyError String?
 
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt

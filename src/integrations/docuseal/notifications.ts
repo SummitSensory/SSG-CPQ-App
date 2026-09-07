@@ -30,7 +30,7 @@ import {
  * EsignEnvelope carries `proposalId` as a scalar, not a relation — there is no
  * `include: { proposal }` to reach for, so it is fetched alongside.
  */
-async function envelopeContext(envelopeId: string) {
+export async function envelopeContext(envelopeId: string) {
   const envelope = await prisma.esignEnvelope.findUnique({
     where: { id: envelopeId },
     include: { signers: true },
@@ -44,7 +44,30 @@ async function envelopeContext(envelopeId: string) {
   return { ...envelope, proposal };
 }
 
-type EnvelopeContext = NonNullable<Awaited<ReturnType<typeof envelopeContext>>>;
+export type EnvelopeContext = NonNullable<Awaited<ReturnType<typeof envelopeContext>>>;
+
+/**
+ * Who gets the "viewed" / "still not signed" staff alerts. The sending rep sees
+ * it themselves for the first 24 hours after send — long enough to be the
+ * natural first responder to their own proposal — after which it escalates to
+ * ESIGN_ESCALATION_EMAIL so a stalled deal keeps surfacing even if the original
+ * rep is out or has moved on.
+ */
+async function escalationRecipient(envelope: {
+  sentById: string | null;
+  sentAt: Date | null;
+}): Promise<string[]> {
+  const withinFirstDay =
+    envelope.sentAt != null && Date.now() - envelope.sentAt.getTime() < 24 * 60 * 60 * 1000;
+  if (withinFirstDay && envelope.sentById) {
+    const rep = await prisma.user.findUnique({
+      where: { id: envelope.sentById },
+      select: { email: true },
+    });
+    if (rep?.email) return [rep.email];
+  }
+  return [env.ESIGN_ESCALATION_EMAIL];
+}
 
 /**
  * The customer has signed and at least one required signer (in the normal flow,
@@ -80,11 +103,125 @@ export async function notifyCountersignNeeded(envelopeId: string): Promise<void>
 }
 
 /**
+ * The customer just opened the proposal for the first time. Staff cannot see
+ * this moment anywhere else in the app — this is the only way "know the minute
+ * it was viewed, and by which address" reaches anyone. Fires once per envelope,
+ * the first time any required signer's viewedAt is recorded (see the
+ * `anyViewed && !envelope.viewedAt` guard in applyStatus, service.ts) — not
+ * once per signer, so a multi-signer envelope does not alert repeatedly as each
+ * party opens it.
+ */
+export async function notifyProposalViewed(envelopeId: string): Promise<void> {
+  const claimed = await prisma.esignEnvelope.updateMany({
+    where: { id: envelopeId, viewNotifiedAt: null },
+    data: { viewNotifiedAt: new Date() },
+  });
+  if (claimed.count === 0) return;
+
+  const envelope = await envelopeContext(envelopeId);
+  if (!envelope) return;
+  const viewed = envelope.signers.filter((s) => !s.viewOnly && s.viewedAt);
+  if (!viewed.length) return;
+
+  const to = await escalationRecipient(envelope);
+  sendAlert({
+    to,
+    title: `Proposal ${envelope.proposal.number} — the customer just opened it`,
+    detail: [
+      `${envelope.proposal.title || 'This proposal'} was viewed by:`,
+      ...viewed.map((s) => `  ${s.name || s.role} (${s.email}) — ${s.viewedAt?.toISOString()}`),
+      '',
+      'Open the proposal in the CRM — the Electronic signature panel shows the full timeline.',
+    ].join('\n'),
+    fingerprint: `esign-viewed-${envelopeId}`,
+    context: { proposalNumber: envelope.proposal.number, envelopeId },
+  });
+}
+
+const CHASEABLE: Array<'SENT' | 'VIEWED' | 'PARTIALLY_SIGNED'> = [
+  'SENT',
+  'VIEWED',
+  'PARTIALLY_SIGNED',
+];
+const REMINDER_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Daily "this proposal is still not signed" nudge to staff. Repeats every day,
+ * with no cap, until the envelope leaves the chaseable set (signed, declined,
+ * or voided) — a stalled deal should keep surfacing, not go quiet after some
+ * fixed number of reminders.
+ *
+ * Meant to be called once a day from a cron route (see cronEsignReminders.ts) —
+ * everything here is safe to run twice in the same day (guarded by
+ * lastReminderSentAt) and safe to run late (it looks at elapsed time, not wall
+ * clock).
+ */
+export async function sendEsignReminders(): Promise<{ reminded: number }> {
+  const cutoff = new Date(Date.now() - REMINDER_INTERVAL_MS);
+  const due = await prisma.esignEnvelope.findMany({
+    where: {
+      status: { in: CHASEABLE },
+      sentAt: { not: null },
+      OR: [{ lastReminderSentAt: null }, { lastReminderSentAt: { lt: cutoff } }],
+    },
+    select: { id: true, sentAt: true },
+  });
+
+  let reminded = 0;
+  for (const row of due) {
+    // sentAt itself must also predate the cutoff — a proposal sent an hour ago
+    // has no lastReminderSentAt yet, but is not "due" for its first reminder
+    // until it has been out a full day.
+    if (!row.sentAt || row.sentAt > cutoff) continue;
+    try {
+      await remindOne(row.id);
+      reminded += 1;
+    } catch (err) {
+      logger.error({ err, envelopeId: row.id }, 'esign: reminder failed');
+    }
+  }
+  return { reminded };
+}
+
+async function remindOne(envelopeId: string): Promise<void> {
+  const envelope = await envelopeContext(envelopeId);
+  if (!envelope?.sentAt) return;
+  const pending = envelope.signers.filter((s) => !s.viewOnly && s.status !== 'COMPLETED');
+  if (!pending.length) return;
+
+  await prisma.esignEnvelope.update({
+    where: { id: envelopeId },
+    data: { lastReminderSentAt: new Date() },
+  });
+
+  const to = await escalationRecipient(envelope);
+  const ageDays = Math.max(
+    1,
+    Math.floor((Date.now() - envelope.sentAt.getTime()) / REMINDER_INTERVAL_MS),
+  );
+  sendAlert({
+    to,
+    title: `Proposal ${envelope.proposal.number} — still not signed after ${ageDays} day${ageDays === 1 ? '' : 's'}`,
+    detail: [
+      `${envelope.proposal.title || 'This proposal'} is still waiting on: ` +
+        pending.map((s) => `${s.name || s.role} (${s.email})`).join(', ') +
+        '.',
+      '',
+      'This reminder repeats daily until the proposal is signed, declined, or voided.',
+    ].join('\n'),
+    // Date-suffixed so the cron's daily run is not swallowed by sendAlert's own
+    // 1-hour dedupe from a same-day retry, but a fresh day always gets through.
+    fingerprint: `esign-reminder-${envelopeId}-${new Date().toISOString().slice(0, 10)}`,
+    context: { proposalNumber: envelope.proposal.number, envelopeId },
+  });
+}
+
+/**
  * Copy the executed PDF into the deal's "Signed Proposal" column on monday.com.
  * Mirrors uploadProposalPdfToMonday's shape — never throws, reports outcome as
  * data, and logs the attempt either way.
  */
-async function pushSignedProposalToMonday(
+export async function pushSignedProposalToMonday(
   envelope: EnvelopeContext,
 ): Promise<{ uploaded: boolean; skipped?: string; error?: string }> {
   if (!isMondayPushConfigured()) {
