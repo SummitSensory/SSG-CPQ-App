@@ -33,7 +33,7 @@ import {
   notifyProposalCompleted,
   notifyPendingSigners,
 } from './notifications.js';
-import { appendPdfDocuments, appendImagePages } from '../../lib/pdfMerge.js';
+import { appendPdfDocuments, appendImagePages, mergeRenderedPdfs } from '../../lib/pdfMerge.js';
 import { resolveReferenceDocuments } from '../../proposals/referenceDocuments.js';
 import { resolveRenderings } from '../../lib/renderingStore.js';
 import { renderCertificatePdf, imageUrlToDataUri, type CertificateSigner } from './certificate.js';
@@ -407,10 +407,23 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
   // Chromium's own margin instead — one render pass cannot give both the
   // right margin at once, so it is a second render, merged on after. See
   // buildPackage's own comment in assembly.ts for the full story.
-  let pdf = await renderPdf(proposalHtml, { format: 'Letter', edgeToEdge: true });
+  //
+  // The two renders have no dependency on each other, so they run
+  // concurrently rather than one after the other — getBrowser() (render/pdf.ts)
+  // already caches one browser instance and opens an independent page per
+  // render. mergeRenderedPdfs, not appendPdfDocuments: a failure merging our
+  // own two Chromium renders together should abort the send, not silently
+  // drop the only page some signers get an actual field on (see its own
+  // comment in lib/pdfMerge.ts).
+  let pdf: Buffer;
   if (extraHtml) {
-    const extraPdf = await renderPdf(extraHtml, { format: 'Letter' });
-    pdf = await appendPdfDocuments(pdf, [{ name: 'signing-extras', bytes: extraPdf }]);
+    const [proposalPdf, extraPdf] = await Promise.all([
+      renderPdf(proposalHtml, { format: 'Letter', edgeToEdge: true }),
+      renderPdf(extraHtml, { format: 'Letter' }),
+    ]);
+    pdf = await mergeRenderedPdfs(proposalPdf, extraPdf);
+  } else {
+    pdf = await renderPdf(proposalHtml, { format: 'Letter', edgeToEdge: true });
   }
   // Renderings first — central, job-specific content — then reference documents,
   // which are generic boilerplate forms. Each rendering is merged individually,

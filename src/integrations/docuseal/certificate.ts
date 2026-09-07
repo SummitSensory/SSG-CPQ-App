@@ -149,7 +149,7 @@ function signerBlock(s: CertificateSigner): string {
 }
 
 /** Exported for tests — the HTML this renders to PDF, checkable without a
- *  headless browser, same pattern as assembly.ts's buildPackageHtml. */
+ *  headless browser, same pattern as assembly.ts's buildPackage. */
 export function buildCertificateHtml(input: CertificateInput): string {
   return `<!doctype html>
 <html lang="en">
