@@ -17,7 +17,7 @@ import {
   type DocusealSubmitter,
 } from './client.js';
 import {
-  buildPackageHtml,
+  buildPackage,
   CUSTOMER_ROLE,
   SUMMIT_ROLE,
   type AssemblyAttachment,
@@ -390,7 +390,7 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
   // countersigning a document the customer has not signed is backwards.
   const signers = input.signers.map((s, i) => ({ ...s, order: s.order ?? i + 1 }));
 
-  const html = buildPackageHtml({
+  const { proposalHtml, extraHtml } = buildPackage({
     proposalHtml: input.proposalHtml,
     attachments,
     signers,
@@ -400,7 +400,18 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
     totalMinor: payableTotal,
   });
 
-  let pdf = await renderPdf(html, { format: 'Letter' });
+  // edgeToEdge: the proposal is fixed 8.5x11in sheets that already carry
+  // their own margin as CSS padding — same rendering as the customer's own
+  // copy (see proposalPush.ts / finance.ts). extraHtml (attachments and/or
+  // the fallback signature page) is ordinary flowing content that needs
+  // Chromium's own margin instead — one render pass cannot give both the
+  // right margin at once, so it is a second render, merged on after. See
+  // buildPackage's own comment in assembly.ts for the full story.
+  let pdf = await renderPdf(proposalHtml, { format: 'Letter', edgeToEdge: true });
+  if (extraHtml) {
+    const extraPdf = await renderPdf(extraHtml, { format: 'Letter' });
+    pdf = await appendPdfDocuments(pdf, [{ name: 'signing-extras', bytes: extraPdf }]);
+  }
   // Renderings first — central, job-specific content — then reference documents,
   // which are generic boilerplate forms. Each rendering is merged individually,
   // in the order given, rather than as two batched passes (all PDFs, then all
