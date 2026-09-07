@@ -2,14 +2,17 @@
  * Assembly: the signing package is composed here, in the CRM, before DocuSeal ever
  * sees it.
  *
- * One PDF, produced by the same headless Chromium that renders the proposal for
- * monday and for the customer email, so the document a customer signs is byte-for-
- * byte the document they were quoted. DocuSeal is a signature service in this
+ * Two PDFs, not one, produced by the same headless Chromium that renders the
+ * proposal for monday and for the customer email, then merged with pdf-lib
+ * (see buildPackage's own comment for why two — the short version is that the
+ * proposal and everything else need two different print margins, and a
+ * single Chromium render pass can only apply one). The proposal PDF is the
+ * exact bytes a customer was quoted; DocuSeal is a signature service in this
  * design, not a document builder.
  *
  * Composition order:
  *
- *   proposal body (fields placed in-line — see injectSignatureFields)
+ *   proposal (fields placed in-line — see injectSignatureFields)
  *     →  attachment documents (in template sortOrder)
  *     →  fallback signature page, ONLY for whoever injectSignatureFields
  *        could not place — a signer beyond Customer/Summit, or a template
@@ -432,7 +435,7 @@ export function signaturePageHtml(input: AssemblyInput): string {
     : '';
 
   return `
-  <section style="${PAGE_BREAK} padding-top: 8px;">
+  <section style="padding-top: 8px;">
     <h2 style="font: 700 16pt/1.2 Georgia, 'Times New Roman', serif; margin: 0 0 4px;">Acceptance and signatures</h2>
     <table style="border-collapse: collapse; margin: 14px 0 20px;">${rows.join('')}</table>
     <p style="font: 400 10.5pt/1.55 Georgia, 'Times New Roman', serif; color: #333; max-width: 46em; text-wrap: pretty;">${escapeHtml(acceptance)}</p>
@@ -446,84 +449,88 @@ export function signaturePageHtml(input: AssemblyInput): string {
 }
 
 /**
- * Clears the forced page break the proposal's own stylesheet puts after every
- * `.ssg-sheet` / `.ssg-fm-page`, including its last one.
+ * The signing package, as two independently-correct documents ready for
+ * `renderPdf` — see `sendProposalForSignature` in service.ts for how they get
+ * merged into the one PDF DocuSeal and the customer actually see.
  *
- * That break is correct when the sheet really is the last thing on the page —
- * true for the proposal on its own — and wrong here, where attachments and
- * the signature page follow it: left in place, it opens a blank sheet between
- * the proposal and whatever comes next.
+ * Why two, not one: `input.proposalHtml` is composed of fixed 8.5in x 11in
+ * `.ssg-sheet` / `.ssg-fm-page` divs that already carry their own margin as
+ * CSS padding (see public/app.js's PAD_TOP/PAD_SIDE/PAD_BOTTOM) and its own
+ * `@page { margin: 0 }` — the same document, rendered the same way
+ * (`edgeToEdge: true`), that a customer's own copy already is (see
+ * proposalPush.ts / finance.ts). An attachment or the generated fallback
+ * signature page is ordinary flowing content with no such padding — it needs
+ * Chromium's own margin instead. A single `renderPdf` call only takes one
+ * margin, so rendering both halves in one pass forces the wrong margin onto
+ * one of them: exactly what put the Acceptance page's own fixed-size sheet
+ * through a non-zero print margin it was never authored for, spilling its
+ * signature/date fields and its footer into whatever sheet printed next and
+ * erasing what should have been blank page margin (the sheet, unable to
+ * shrink to fit the reduced printable area `break-inside:avoid` still had to
+ * respect, printed through it instead). Two renders, each at the margin its
+ * content actually assumes, merged afterward with pdf-lib, is the fix.
  *
- * The proposal fixes this for itself with a small script, run once client-side,
- * that finds the true last sheet at render time (by document order, not by
- * `:last-child` — a CSS-only rule is exactly what this is not, since a wrapper
- * or a trailing element elsewhere in the tree defeats `:last-child` silently)
- * and clears its break with an inline style. `inlineDocument` strips every
- * `<script>` out of what gets merged into this package — attachments are not
- * necessarily this app's own markup, and a signing package is not where to
- * trust one to execute — so that fix never runs here. This is the same fix,
- * authored here rather than extracted from the input, scoped to run only
- * inside `#ssgProposalBody` so it cannot reach into an attachment's own markup.
+ * `proposalHtml` is `input.proposalHtml` untouched but for the signer's
+ * actual fields filled into the ids it already prints — not re-wrapped in a
+ * new document — so it stays byte-for-byte the document behind those ids,
+ * head, stylesheet and pagination script included.
  */
-function trailingBreakFixScript(): string {
-  return `<script>
-  (function () {
-    try {
-      var root = document.getElementById('ssgProposalBody');
-      var sheets = root ? root.querySelectorAll('.ssg-sheet, .ssg-fm-page') : [];
-      if (!sheets.length) return;
-      var last = sheets[sheets.length - 1];
-      last.style.breakAfter = 'auto';
-      last.style.pageBreakAfter = 'auto';
-    } catch (e) {}
-  })();
-  <\/script>`;
+export interface AssembledPackage {
+  /** Render with `edgeToEdge: true` — see this function's own comment. */
+  proposalHtml: string;
+  /**
+   * Attachments and/or the generated fallback signature page, as their own
+   * self-contained document at ordinary (non-edge-to-edge) margins — `null`
+   * when there is nothing left over: every real signer found a slot directly
+   * in the proposal, and no attachments were selected.
+   */
+  extraHtml: string | null;
 }
 
-/**
- * The whole package as one self-contained HTML document, ready for `renderPdf`.
- * Nothing here fetches from the network — same rule as the other rendered
- * documents, so a broken asset URL cannot hang a send.
- */
-export function buildPackageHtml(input: AssemblyInput): string {
-  const proposal = inlineDocument(input.proposalHtml);
-  const attachments = (input.attachments ?? []).map((a) => {
-    const frag = inlineDocument(a.bodyHtml);
-    return {
-      ...a,
-      styles: frag.styles,
-      body: `<section style="${PAGE_BREAK}">${frag.body}</section>`,
-    };
-  });
-
+export function buildPackage(input: AssemblyInput): AssembledPackage {
   // Field placement first: everyone whose role matches a real slot in the
   // proposal's own pages signs there. Only whoever is left — a signer beyond
   // Customer/Summit, or a proposal template carrying neither the Acceptance
   // page nor the Acknowledgment — gets a page generated for them, and that
-  // page is skipped entirely when nobody needs it.
-  const { html: proposalBody, placedRoles } = injectSignatureFields(proposal.body, input.signers);
+  // page is skipped entirely when nobody needs it. Runs directly against the
+  // proposal's own full document (not an extracted fragment): the ids being
+  // matched are plain `<div id="...">` text, indifferent to what wraps them,
+  // and leaving the document otherwise untouched is the point.
+  const { html: proposalHtml, placedRoles } = injectSignatureFields(
+    input.proposalHtml,
+    input.signers,
+  );
   const unplacedSigners = input.signers.filter((s) => s.viewOnly || !placedRoles.has(s.role));
   const needsFallbackPage = unplacedSigners.some((s) => !s.viewOnly);
 
-  return `<!doctype html>
+  const sections = (input.attachments ?? []).map((a) => {
+    const frag = inlineDocument(a.bodyHtml);
+    return { styles: frag.styles, body: frag.body };
+  });
+  if (needsFallbackPage) {
+    sections.push({ styles: '', body: signaturePageHtml({ ...input, signers: unplacedSigners }) });
+  }
+
+  if (!sections.length) return { proposalHtml, extraHtml: null };
+
+  // Every section but the first opens on a fresh page — the first must not,
+  // since this document has nothing ahead of it; that break is what the
+  // merge onto the proposal PDF is for.
+  const extraHtml = `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>${escapeHtml(input.proposalNumber)}</title>
 <style>
-  @page { size: Letter; }
   html, body { margin: 0; padding: 0; }
   body { font: 400 11pt/1.5 Georgia, 'Times New Roman', serif; color: #1a1a1a; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   table { border-collapse: collapse; }
 </style>
-${proposal.styles ? `<style>${proposal.styles}</style>` : ''}
-${attachments.map((a) => (a.styles ? `<style>${a.styles}</style>` : '')).join('\n')}
+${sections.map((s) => (s.styles ? `<style>${s.styles}</style>` : '')).join('\n')}
 </head>
 <body>
-<div id="ssgProposalBody">${proposalBody}</div>
-${trailingBreakFixScript()}
-${attachments.map((a) => a.body).join('\n')}
-${needsFallbackPage ? signaturePageHtml({ ...input, signers: unplacedSigners }) : ''}
+${sections.map((s, i) => `<section${i === 0 ? '' : ` style="${PAGE_BREAK}"`}>${s.body}</section>`).join('\n')}
 </body>
 </html>`;
+
+  return { proposalHtml, extraHtml };
 }
