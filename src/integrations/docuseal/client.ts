@@ -1,5 +1,6 @@
 import { env, isDocusealConfigured } from '../../config/env.js';
 import { logger } from '../../lib/logger.js';
+import { appendPdfDocuments } from '../../lib/pdfMerge.js';
 
 /**
  * DocuSeal REST client.
@@ -120,11 +121,15 @@ export interface DocusealSubmission {
   status?: string;
   submitters?: DocusealSubmitter[];
   completed_at?: string | null;
+  /** The signed pages, no DocuSeal audit log attached — what fetchCompletedPdf
+   *  fetches and stores. See fetchCompletedPdf's own comment for why, not
+   *  `combined_document_url` below. */
   documents?: Array<{ name: string; url: string }>;
   audit_log_url?: string | null;
-  /** The signed document(s) with DocuSeal's Certificate of Signature (audit log)
-   *  appended as trailing pages — what fetchCompletedPdf stores, not `documents`
-   *  alone, so what a rep downloads is provably authenticated, not just signed. */
+  /** DocuSeal's own combined PDF: signed pages plus its Certificate of
+   *  Signature (audit log) appended. Not used by this app — see
+   *  fetchCompletedPdf — but still DocuSeal's own record, viewable in their
+   *  dashboard/API if ever needed. */
   combined_document_url?: string | null;
 }
 
@@ -211,17 +216,25 @@ export async function archiveTemplate(templateId: number | string): Promise<void
 }
 
 /**
- * The executed document for a completed submission — DocuSeal's combined PDF,
- * signed pages plus its Certificate of Signature (audit log) appended, not the
- * bare signed document. `combined_document_url` is what carries that; the plain
- * `documents` array is only the signed pages, with no proof of who signed what,
- * when, from where — never used here, even as a fallback: storeSignedCopy only
- * retries fetching this while `signedUrl` is still unset, so silently falling
- * back to the uncertified document on a rare timing gap (DocuSeal assembles the
- * combined copy moments after completion, not necessarily atomically with it)
- * would lock that in as the permanent "signed" record with no path to the real
- * one. Returning null here just means "not ready yet" — the next webhook or a
- * manual "Refresh status" tries again.
+ * The executed document for a completed submission — the plain signed pages
+ * from the submission's own `documents` array, merged in order if there is
+ * more than one. Deliberately NOT `combined_document_url`: that field bundles
+ * DocuSeal's own Certificate of Signature (audit log) onto the end of the
+ * signed pages, and storeSignedCopy appends this app's own branded
+ * "Certificate of Signature" page on top of whatever this function returns —
+ * stacking DocuSeal's plain audit log underneath that as well produced two
+ * audit/certificate pages in the final PDF a customer receives. Decided this
+ * is the one true audit record from here on; DocuSeal's own copy is still
+ * viewable in DocuSeal's own dashboard/API if ever needed, just not folded
+ * into this app's stored copy.
+ *
+ * `documents` also tends to populate immediately once a submitter completes
+ * (it is present in the completion webhook itself), where
+ * `combined_document_url` can lag well behind — a submission observed stuck
+ * with `combined_document_url` still null hours after completion already had
+ * a usable `documents` entry within seconds. Returning null here (no
+ * documents at all yet) is still possible on a very rare timing gap; the
+ * caller retries on the next webhook or a manual "Refresh status".
  *
  * The bytes are fetched here, not the URL stored, because DocuSeal's document
  * URLs expire in ~40 minutes — the caller puts a permanent copy in our own
@@ -232,11 +245,26 @@ export async function fetchCompletedPdf(
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ filename: string; bytes: Buffer } | null> {
   const submission = await getSubmission(submissionId);
-  if (!submission.combined_document_url) return null;
-  const res = await fetchImpl(submission.combined_document_url);
-  if (!res.ok) throw new DocusealError(`DocuSeal document download HTTP ${res.status}`, res.status);
-  const bytes = Buffer.from(await res.arrayBuffer());
-  const name = submission.documents?.[0]?.name || 'signed-document';
+  const documents = submission.documents ?? [];
+  if (!documents.length) return null;
+
+  const download = async (url: string): Promise<Buffer> => {
+    const res = await fetchImpl(url);
+    if (!res.ok)
+      throw new DocusealError(`DocuSeal document download HTTP ${res.status}`, res.status);
+    return Buffer.from(await res.arrayBuffer());
+  };
+
+  const [first, ...rest] = documents;
+  let bytes = await download(first!.url);
+  if (rest.length) {
+    const extras = await Promise.all(
+      rest.map(async (doc) => ({ name: doc.name, bytes: await download(doc.url) })),
+    );
+    bytes = await appendPdfDocuments(bytes, extras);
+  }
+
+  const name = first!.name || 'signed-document';
   const filename = /\.pdf$/i.test(name) ? name : `${name}.pdf`;
   return { filename, bytes };
 }
