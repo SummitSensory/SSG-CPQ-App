@@ -3,6 +3,7 @@ import {
   buildPackage,
   signaturePageHtml,
   inlineDocument,
+  SIGNATURE_FIELD_SLOT_IDS,
 } from '../../src/integrations/docuseal/assembly.js';
 
 const PROPOSAL_WITH_TRAILING_BREAK = `<!doctype html><html><head>
@@ -371,5 +372,23 @@ describe('signaturePageHtml', () => {
       proposalNumber: 'P-2026-000001',
     });
     expect(html).not.toContain('Total');
+  });
+});
+
+// src/routes/signatureFieldLayout.ts validates a saved layout's keys against this list
+// rather than its own copy, and public/proposal-document.js / public/contract-pages.js
+// are hand-authored to carry these exact ids — a rename here has to be made in three
+// places at once, so a typo or a dropped id is worth catching in a fast unit test
+// rather than only on a proposal that quietly stops taking a manual placement.
+describe('SIGNATURE_FIELD_SLOT_IDS', () => {
+  it('names exactly the six ids injectSignatureFields places fields at', () => {
+    expect(SIGNATURE_FIELD_SLOT_IDS).toEqual([
+      'ssgSigAcceptanceSignature',
+      'ssgSigAcceptanceDate',
+      'ssgSigAckCustomerSignature',
+      'ssgSigAckCustomerDate',
+      'ssgSigAckSummitSignature',
+      'ssgSigAckSummitDate',
+    ]);
   });
 });

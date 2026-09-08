@@ -303,6 +303,18 @@ const SUMMIT_SLOTS: SignatureSlot[] = [
 ];
 
 /**
+ * Every id `injectSignatureFields` matches, in the order the boxes print.
+ *
+ * The one source of truth for "what is a valid signature-field slot" —
+ * src/routes/signatureFieldLayout.ts validates a saved layout's keys against this list
+ * rather than its own copy, so a slot id can never drift between the two files.
+ */
+export const SIGNATURE_FIELD_SLOT_IDS: readonly string[] = [
+  ...CUSTOMER_SLOTS.flatMap((s) => [s.sigId, s.dateId]),
+  ...SUMMIT_SLOTS.flatMap((s) => [s.sigId, s.dateId]),
+];
+
+/**
  * Fills every occurrence of an empty `<div id="...">` — global, not just the
  * first, because an administrator can add a second ARTICLES-kind legal
  * document (see src/routes/legalDocuments.ts) that would render the same

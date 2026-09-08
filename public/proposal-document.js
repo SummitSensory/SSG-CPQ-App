@@ -50,6 +50,13 @@
     });
   }
 
+  /** The saved manual nudge for a signature/date box id, or '' when there is none —
+   *  see public/signature-field-layout.js. Spliced into the box's own inline style,
+   *  stacked on top of its own position:relative. */
+  function sigOffset(id) {
+    return window.SSGSignatureFieldLayout ? window.SSGSignatureFieldLayout.styleFor(id) : '';
+  }
+
   /** Minor units to "1,234.56" — no symbol; callers add one. */
   function money(minor) {
     var n = (Number(minor) || 0) / 100;
@@ -1124,8 +1131,12 @@
       // assembly.ts for the actual fix: the tag now renders as absolutely
       // positioned, invisible text, so it can never grow this box or get
       // clipped by anything, and DocuSeal receives it complete.
-      '<div style="flex:1.35;"><div id="ssgSigAcceptanceSignature" style="position:relative;border-bottom:1px solid #20241f;height:40px;display:flex;align-items:flex-end;padding-bottom:3px;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Signature</div></div>' +
-      '<div style="flex:1;"><div id="ssgSigAcceptanceDate" style="position:relative;border-bottom:1px solid #20241f;height:40px;display:flex;align-items:flex-end;padding-bottom:3px;"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Date</div></div>' +
+      '<div style="flex:1.35;"><div id="ssgSigAcceptanceSignature" style="position:relative;border-bottom:1px solid #20241f;height:40px;display:flex;align-items:flex-end;padding-bottom:3px;' +
+      sigOffset('ssgSigAcceptanceSignature') +
+      '"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Signature</div></div>' +
+      '<div style="flex:1;"><div id="ssgSigAcceptanceDate" style="position:relative;border-bottom:1px solid #20241f;height:40px;display:flex;align-items:flex-end;padding-bottom:3px;' +
+      sigOffset('ssgSigAcceptanceDate') +
+      '"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Date</div></div>' +
       '</div>' +
       '</div>' +
       footerNotesHtml +
