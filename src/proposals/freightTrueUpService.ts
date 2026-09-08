@@ -742,9 +742,13 @@ export async function freightStateForVersion(
   }
 
   const version = await loadVersion(versionId);
-  const [entries, history] = await Promise.all([
+  const [entries, history, invoice] = await Promise.all([
     prisma.freightEntry.findMany({ where: { versionId }, orderBy: { createdAt: 'asc' } }),
     prisma.freightTrueUp.findMany({ where: { versionId }, orderBy: { createdAt: 'desc' } }),
+    prisma.qboTransaction.findFirst({
+      where: { proposalId: version.proposalId, ...INVOICEABLE_TXN_WHERE },
+      select: { id: true },
+    }),
   ]);
 
   const gaps = freightGaps(version.items, version.sections, ctx);
@@ -800,6 +804,10 @@ export async function freightStateForVersion(
     outstanding: buckets,
     notApplicable,
     gapLines: gaps.gapLines,
+    /** Whether there is an invoice applied freight could actually be pushed onto —
+     *  see INVOICEABLE_TXN_WHERE. Gates the panel's "Add to the invoice" action:
+     *  with no invoice, invoiceForProposal refuses the push outright. */
+    hasInvoice: !!invoice,
     monday,
     trueUpId: live?.id ?? null,
     live,
@@ -865,6 +873,43 @@ export interface QueueRow {
 }
 
 /**
+ * What "there is an invoice this freight could actually be pushed onto" means —
+ * matches invoiceForProposal's own criteria exactly (src/integrations/quickbooks/
+ * freightPush.ts) so a row that reports `hasInvoice: true` here is never rejected
+ * there for a reason this app already knew about: a freight-only supplement isn't
+ * the document the next batch goes on, and a transaction QuickBooks never actually
+ * created (no qboId) isn't a real invoice yet.
+ */
+const INVOICEABLE_TXN_WHERE = {
+  type: 'INVOICE',
+  status: 'CREATED',
+  qboId: { not: null },
+  NOT: { totalsSnapshot: { path: ['kind'], equals: 'FREIGHT_SUPPLEMENT' } },
+} satisfies Prisma.QboTransactionWhereInput;
+
+/**
+ * Whether a job still belongs on the freight queue.
+ *
+ * Applied-but-not-pushed only keeps a row on the queue when there is an invoice to
+ * push it onto — with none, invoiceForProposal would refuse the push outright
+ * ("raise the invoice as normal — it will include it"), so there is nothing left to
+ * do here until an invoice exists, at which point it already carries the freight.
+ * Without this gate, an applied, uninvoiced job never left the queue.
+ */
+export function belongsOnQueue(input: {
+  openBucketCount: number;
+  stagedCount: number;
+  appliedNotPushedCount: number;
+  hasInvoice: boolean;
+  includeSettled: boolean;
+}): boolean {
+  if (input.includeSettled) return true;
+  if (input.openBucketCount > 0) return true;
+  if (input.stagedCount > 0) return true;
+  return input.appliedNotPushedCount > 0 && input.hasInvoice;
+}
+
+/**
  * The freight queue — every job whose freight is outstanding, oldest first.
  *
  * Scoped to the latest RELEASED or ACCEPTED version of each live proposal, which is
@@ -914,8 +959,7 @@ export async function freightQueue(
     prisma.qboTransaction.findMany({
       where: {
         proposalId: { in: rows.map((v) => v.proposalId) },
-        type: 'INVOICE',
-        status: 'CREATED',
+        ...INVOICEABLE_TXN_WHERE,
       },
       select: { proposalId: true },
     }),
@@ -946,9 +990,18 @@ export async function freightQueue(
     const openBuckets = gaps.buckets.filter((b) => !answered.has(b) && !closed.has(b));
     const staged = mine.filter((e) => e.status === 'STAGED');
     const appliedNotPushed = mine.filter((e) => e.status === 'APPLIED');
+    const hasInvoice = invoiced.has(v.proposalId);
 
     const t = latestTrueUp.get(v.id) ?? null;
-    if (!openBuckets.length && !staged.length && !appliedNotPushed.length && !opts.includeSettled)
+    if (
+      !belongsOnQueue({
+        openBucketCount: openBuckets.length,
+        stagedCount: staged.length,
+        appliedNotPushedCount: appliedNotPushed.length,
+        hasInvoice,
+        includeSettled: !!opts.includeSettled,
+      })
+    )
       continue;
 
     const since = v.releasedAt ?? v.createdAt;
@@ -973,7 +1026,7 @@ export async function freightQueue(
       stagedMinor: staged.reduce((a, e) => a + e.amountMinor, 0),
       appliedNotPushedMinor: appliedNotPushed.reduce((a, e) => a + e.amountMinor, 0),
       vendorQuoteRef: staged.find((e) => e.vendorQuoteRef)?.vendorQuoteRef ?? null,
-      hasInvoice: invoiced.has(v.proposalId),
+      hasInvoice,
       invoicePushed: !!t?.qboPushedAt,
       customerNotified: !!t?.customerNotifiedAt,
     });
