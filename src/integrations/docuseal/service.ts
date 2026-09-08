@@ -740,11 +740,12 @@ export async function applyStatus(
  * in storage.ts. The envelope is already COMPLETED; failing here would only hide
  * that fact.
  *
- * A branded certificate summary is appended after DocuSeal's own combined
- * document — not in its place; see certificate.ts for why replacing it would
- * be a compliance regression that appending never can be. Best effort on its
- * own: a failed render must not be why the (already-fetched, already
- * certified by DocuSeal) signed copy fails to store.
+ * This app's own branded "Certificate of Signature" page is appended after the
+ * plain signed pages (see fetchCompletedPdf for why DocuSeal's own combined
+ * document, with its own audit log baked in, is deliberately not used —
+ * stacking both produced two audit/certificate pages in the stored copy).
+ * Certificate rendering is best effort on its own: a failed render must not be
+ * why the already-fetched signed pages fail to store.
  */
 export async function storeSignedCopy(envelopeId: string): Promise<string | null> {
   const envelope = await prisma.esignEnvelope.findUnique({
@@ -759,16 +760,17 @@ export async function storeSignedCopy(envelopeId: string): Promise<string | null
   try {
     const doc = await fetchCompletedPdf(envelope.docusealSubmissionId);
     if (!doc) {
-      // DocuSeal has not finished assembling combined_document_url yet — expected
-      // right after completion, not a fault. Recorded (not just logged) so a copy
-      // that never arrives is diagnosable from the envelope itself rather than
-      // only from the UI's perpetual "Preparing…" message. See
-      // repairStuckSignedCopies for the automatic retry.
+      // DocuSeal has not attached any signed document to the submission yet —
+      // expected only in a very rare timing gap right after completion, not a
+      // fault. Recorded (not just logged) so a copy that never arrives is
+      // diagnosable from the envelope itself rather than only from the UI's
+      // perpetual "Preparing…" message. See repairStuckSignedCopies for the
+      // automatic retry.
       logger.info({ envelopeId }, 'esign: signed copy not ready yet, will retry');
       await prisma.esignEnvelope.update({
         where: { id: envelope.id },
         data: {
-          signedCopyError: 'DocuSeal has not finished assembling the combined document yet.',
+          signedCopyError: 'DocuSeal has not attached a signed document to the submission yet.',
         },
       });
       return null;

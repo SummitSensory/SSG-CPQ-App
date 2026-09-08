@@ -3,18 +3,18 @@ import { logger } from '../../lib/logger.js';
 import { CERTIFICATE_BACKGROUND_DATA_URI } from './certificateBackground.js';
 
 /**
- * A branded "Certificate of Signature" summary page, appended after DocuSeal's
- * own combined document (signed pages + DocuSeal's own audit log) — not in
- * place of it. DocuSeal's certificate is the authoritative E-SIGN Act/UETA
- * compliance record (IP addresses, device info, identity verification per
- * event); this page is deliberately a simpler, on-brand summary drawn from
- * data this app already owns and trusts (EsignSigner's own status/timestamp
- * columns, plus the signer's IP/location/drawn-signature pulled fresh from
- * DocuSeal's own API at render time — see service.ts's storeSignedCopy),
- * pointing the reader at DocuSeal's pages for the full forensic trail.
- * Replacing DocuSeal's certificate with a reconstruction of our own would be
- * a real compliance regression if a webhook were ever missed; appending ours
- * alongside it cannot be.
+ * A branded "Certificate of Signature" summary page, appended after the plain
+ * signed pages (see fetchCompletedPdf in client.ts) as this app's one audit/
+ * certificate record for the executed document — not alongside DocuSeal's own
+ * combined document, which also carries its own audit log. Stacking both
+ * produced two audit-log-shaped pages in a customer's copy, which is worse
+ * than the small risk this page alone accepts: it is drawn from data this app
+ * already owns and trusts (EsignSigner's own status/timestamp columns, plus
+ * the signer's IP/location/drawn-signature pulled fresh from DocuSeal's own
+ * API at render time — see service.ts's storeSignedCopy), which depends on
+ * every relevant webhook having actually landed. DocuSeal's own audit log
+ * remains viewable in DocuSeal's own dashboard/API for the full forensic
+ * trail if that's ever needed.
  */
 
 export interface CertificateSigner {
@@ -273,10 +273,10 @@ export function buildCertificateHtml(input: CertificateInput): string {
     </div>
     ${input.signers.map(signerBlock).join('')}
     <div class="footer">
-      This certificate summarizes the signing record for this document. The complete technical
+      This certificate summarizes the signing record for this document, collected via DocuSeal,
+      the electronic signature service used to gather these signatures. The complete technical
       audit trail — IP addresses, device information, and identity verification for each
-      event — is provided by DocuSeal, the electronic signature service used to collect these
-      signatures, on the accompanying Certificate of Signature (Audit Log) pages.
+      event — remains on file with DocuSeal and is available on request.
     </div>
   </div>
 </body>
