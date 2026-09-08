@@ -602,6 +602,11 @@
     // synchronous, deep inside the document builder — always has it by the time anyone
     // opens a proposal. Without this call the shipped wording prints and nothing breaks.
     if (window.SSGContractPages) window.SSGContractPages.init({ authed: authed });
+    // Same fetch-once-at-sign-in shape, for the manual pixel nudges on the signature/date
+    // boxes those two files both print — see signature-field-layout.js.
+    if (window.SSGSignatureFieldLayout) window.SSGSignatureFieldLayout.init({ authed: authed });
+    if (window.SSGSignatureFieldLayoutAdmin)
+      window.SSGSignatureFieldLayoutAdmin.init({ authed: authed, esc: esc });
     // Same fetch-once-at-sign-in shape as SSGContractPages, for the builder's
     // reference-documents checklist (a W9, a certificate of insurance).
     if (window.SSGReferenceDocuments) window.SSGReferenceDocuments.init({ authed: authed, esc: esc });
@@ -13343,6 +13348,9 @@
         '<div class="section-title" style="margin-top:26px;">Contract documents</div>' +
         '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">The general release and the standard terms, printed after the acceptance page. Editing them here changes what future proposals print; a proposal already released keeps the wording it went out with. Saving a draft is not publishing it.</div>' +
         '<div id="legalAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>' +
+        '<div class="section-title" style="margin-top:26px;">Signature &amp; date placement</div>' +
+        '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">Drag a signature or date box to the exact spot it should print at on the acceptance page and the acknowledgment. Saved here, every proposal from now on prints at that spot &mdash; nothing to describe by hand each time.</div>' +
+        '<div id="sigFieldLayoutAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>' +
         '<div class="section-title" style="margin-top:26px;">Reference documents</div>' +
         '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">Pre-made PDFs — a W9, a certificate of insurance — a rep can attach to an individual proposal from the builder, the same way contract documents are attached. Uploaded once here; unlike the contract documents, these print exactly as uploaded rather than being retyped.</div>' +
         '<div id="referenceDocsAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>') +
@@ -13419,6 +13427,8 @@
     // Admin-only, and the route enforces it. A non-admin sees the empty container rather
     // than an error, which is the same thing the other admin panels do.
     if (window.SSGLegalAdmin) window.SSGLegalAdmin.render(document.getElementById('legalAdmin'));
+    if (window.SSGSignatureFieldLayoutAdmin)
+      window.SSGSignatureFieldLayoutAdmin.render(document.getElementById('sigFieldLayoutAdmin'));
     if (window.SSGReferenceDocuments)
       window.SSGReferenceDocuments.render(document.getElementById('referenceDocsAdmin'));
     loadFormulas();

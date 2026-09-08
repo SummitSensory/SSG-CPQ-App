@@ -631,7 +631,12 @@
           // real field (see the postmortem in assembly.ts's invisibleTag()).
           // position:relative just anchors that invisible, absolutely
           // positioned tag text to this box without ever clipping it.
-          (id ? 'position:relative;' : '') +
+          // The saved manual nudge for this box, if any — see
+          // public/signature-field-layout.js — stacked on top of position:relative.
+          (id
+            ? 'position:relative;' +
+              (window.SSGSignatureFieldLayout ? window.SSGSignatureFieldLayout.styleFor(id) : '')
+            : '') +
           '">' +
           (value ? esc(value) : '') +
           '</div></div>'

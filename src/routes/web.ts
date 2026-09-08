@@ -57,6 +57,10 @@ const CLIENT_SCRIPTS = [
   // assumes it has loaded.
   'ssg-ui.js',
   'app.js',
+  // Manual pixel nudges for the proposal's signature/date boxes — read by
+  // proposal-document.js and contract-pages.js, so it has to be listed (and loaded)
+  // ahead of both.
+  'signature-field-layout.js',
   // The customer proposal document, lifted out of app.js.
   'proposal-document.js',
   // Screens that install their own nav entry and fail in isolation.
@@ -79,6 +83,8 @@ const CLIENT_SCRIPTS = [
   // Document pieces the proposal renderer reads.
   'contract-pages.js',
   'legal-admin.js',
+  // Drag-to-place admin editor for signature-field-layout.js's saved offsets.
+  'signature-field-layout-admin.js',
   'reference-documents.js',
   'proposal-front-matter.js',
   'intro-cover.js',

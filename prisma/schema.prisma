@@ -1272,6 +1272,27 @@ model LegalDocumentRevision {
   @@unique([key, version])
 }
 
+/// Manual pixel nudges for the six signature/date field boxes the proposal and
+/// acknowledgment pages already print (the ids `injectSignatureFields` matches in
+/// src/integrations/docuseal/assembly.ts, authored in public/proposal-document.js and
+/// public/contract-pages.js). One singleton row: these boxes are not per-proposal or
+/// per-template, they are typesetting choices for the whole application, the same way
+/// LegalDocument's `style` fields are.
+///
+/// `offsets` is a JSON map of slot id -> `{ top, left }` in pixels, applied as an inline
+/// CSS offset stacked on top of the box's own `position:relative` — it nudges a box
+/// from where the surrounding layout already places it, it does not relocate one onto a
+/// different page or out of the flow that keeps it from overlapping its own label.
+/// Missing keys mean "no nudge", so a fresh environment (or an unset slot) renders
+/// exactly as it did before this table existed.
+model SignatureFieldLayout {
+  /// Always "default" — see the singleton note above.
+  key         String   @id @default("default")
+  offsets     Json     @default("{}")
+  updatedAt   DateTime @default(now()) @updatedAt
+  updatedById String?
+}
+
 /// A pre-made file — a W9, a certificate of insurance, a credit application — kept in
 /// the CRM and optionally bound onto a proposal, the same way a legal document is bound
 /// in via public/contract-pages.js. The difference is what it IS: a legal document is
