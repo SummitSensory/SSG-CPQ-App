@@ -273,10 +273,10 @@ export function buildCertificateHtml(input: CertificateInput): string {
     </div>
     ${input.signers.map(signerBlock).join('')}
     <div class="footer">
-      This certificate summarizes the signing record for this document. The complete technical
+      This certificate summarizes the signing record for this document, collected via DocuSeal,
+      the electronic signature service used to gather these signatures. The complete technical
       audit trail — IP addresses, device information, and identity verification for each
-      event — is provided by DocuSeal, the electronic signature service used to collect these
-      signatures, on the accompanying Certificate of Signature (Audit Log) pages.
+      event — remains on file with DocuSeal and is available on request.
     </div>
   </div>
 </body>
