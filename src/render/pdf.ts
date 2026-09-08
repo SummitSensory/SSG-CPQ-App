@@ -38,7 +38,19 @@ type Page = {
   emulateMedia: (opts: Record<string, unknown>) => Promise<void>;
   pdf: (opts: Record<string, unknown>) => Promise<Buffer>;
   close: () => Promise<void>;
+  waitForFunction: (fn: string, arg?: unknown, opts?: Record<string, unknown>) => Promise<unknown>;
 };
+
+/**
+ * `public/app.js`'s `proposalStandaloneHtml` ships its own pagination as an inline
+ * `<script>` — the exact function the rep's own browser runs, so there is one
+ * implementation rather than two that drift (see that function's own comment). It
+ * marks `document.documentElement` with `data-paginated="1"` once the real page
+ * breaks, margins and "Page N of M" footer are actually in the DOM — but only after
+ * `document.fonts.ready` resolves, which is asynchronous and has no relationship to
+ * `domcontentloaded` at all. A page can be captured before that promise settles.
+ */
+const PAGINATION_MARKER = 'paginateProposalArea';
 
 let browserPromise: Promise<Browser> | null = null;
 
@@ -244,6 +256,32 @@ export async function renderPdf(html: string, opts: PdfOptions = {}): Promise<Bu
     // 'domcontentloaded' rather than 'networkidle': the document is self-contained,
     // so waiting on the network only adds the timeout to every render.
     await page.setContent(html, { waitUntil: 'domcontentloaded' });
+    // Only for documents that actually ship the inline pagination script (see
+    // PAGINATION_MARKER's own comment) — everything else (an attachment, the
+    // certificate page, a financing sheet) has no `data-paginated` attribute to
+    // wait for, and waiting on one would just burn the full timeout on every
+    // render that doesn't use it. Best-effort: a font/pagination bug that never
+    // signals completion should still produce a PDF — an imperfectly paginated
+    // page is a smaller problem than no document at all.
+    if (html.includes(PAGINATION_MARKER)) {
+      // A string, not a function reference: this file has no DOM lib (it is a
+      // server-side module), and the expression below runs inside the PAGE, not
+      // here — Playwright accepts either form for exactly this reason.
+      await page
+        .waitForFunction(
+          'document.documentElement.getAttribute("data-paginated") === "1"',
+          undefined,
+          {
+            timeout: 10_000,
+          },
+        )
+        .catch((err: unknown) => {
+          logger.warn(
+            { err },
+            'pdf: pagination did not signal completion in time; rendering as-is',
+          );
+        });
+    }
     await page.emulateMedia({ media: 'print' });
     const hasChrome = !!(opts.headerHtml || opts.footerHtml);
     if (opts.edgeToEdge) {
