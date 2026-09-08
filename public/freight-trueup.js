@@ -1541,7 +1541,7 @@
           ' to the proposal</button>',
       );
     }
-    if (applied > 0 && can(st.user, PUSH_ROLES)) {
+    if (applied > 0 && s.hasInvoice && can(st.user, PUSH_ROLES)) {
       bits.push(
         '<button type="button" id="ftuPush" style="' +
           BTN_DARK +
@@ -1577,12 +1577,18 @@
       '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">' +
       bits.join('') +
       '</div>' +
-      (applied > 0
+      (applied > 0 && s.hasInvoice
         ? '<div class="muted" style="font-size:12px;margin-top:9px;max-width:620px;line-height:1.6;">' +
           money(applied) +
           ' of freight is on the proposal and not on the customer\u2019s invoice. ' +
           'Billing it appends to the existing invoice if nothing has been paid, or raises a freight-only ' +
           'invoice if a payment has landed \u2014 you confirm the before and after totals either way.</div>'
+        : '') +
+      (applied > 0 && !s.hasInvoice
+        ? '<div class="muted" style="font-size:12px;margin-top:9px;max-width:620px;line-height:1.6;">' +
+          money(applied) +
+          ' of freight is on the proposal. There is no invoice for this job yet, so there is nothing to bill it ' +
+          'onto \u2014 raise the invoice as normal when it\u2019s time and it will already include this amount.</div>'
         : '') +
       (live && live.status === 'APPLIED' && !live.customerNotifiedAt
         ? '<div style="font-size:12px;margin-top:9px;color:' +
@@ -2004,7 +2010,11 @@
             body: { bucket: bucket, reason: reason },
           },
         );
-        if (!r.ok) return showErr(await errorText(r));
+        if (!r.ok) {
+          var msg = await errorText(r);
+          await reload({ sync: false });
+          return showErr(msg);
+        }
         close();
         await reload({ sync: false });
       },
@@ -2091,7 +2101,16 @@
             body: {},
           },
         );
-        if (!r.ok) return showErr(await errorText(r));
+        if (!r.ok) {
+          // Someone or something else (the nightly board sync, a monday webhook,
+          // another rep) may have already applied this batch since the panel last
+          // loaded — reload so the screen behind this modal shows the current true
+          // state instead of leaving a stale "still waiting" view up alongside the
+          // error.
+          var msg = await errorText(r);
+          await reload({ sync: false });
+          return showErr(msg);
+        }
         close();
         await reload({ sync: false });
       },
@@ -2128,7 +2147,11 @@
             },
           },
         );
-        if (!r.ok) return showErr(await errorText(r));
+        if (!r.ok) {
+          var msg = await errorText(r);
+          await reload({ sync: false });
+          return showErr(msg);
+        }
         close();
         await reload({ sync: false });
       },
