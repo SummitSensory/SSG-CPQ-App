@@ -3,15 +3,17 @@
  * acceptance page and the acknowledgment: Administration -> Proposal content ->
  * "Signature & date placement".
  *
- * The two blocks of markup below (`acceptanceRowHtml` and `ackBlockHtml`) are kept
- * byte-for-byte identical to the real boxes in public/proposal-document.js and
- * public/contract-pages.js — same ids, same flex ratios, same border and label
- * styling. That is deliberate: the box a rep drags/resizes here IS the exact box that
- * prints, not a facsimile that could quietly drift out of sync with it. If either
- * source file's box markup ever changes, this preview needs the same edit made here by
- * hand — there is no shared function to keep the two in lock-step, because
- * proposal-document.js and contract-pages.js build those boxes inline, deep inside
- * much larger documents that are not meant to be called from here.
+ * Renders a REAL proposal, picked from a dropdown, through the exact same
+ * proposalDocData/proposalDocHtml/paginateProposalArea pipeline the proposal
+ * preview and PDF/DocuSeal send paths use (handed in via init() — see
+ * app.js's own comment at the call site). That is deliberate, and replaces an
+ * earlier version of this file that hand-copied the six boxes' markup into a
+ * standalone mockup: a byte-for-byte copy had no way to stay in sync with
+ * proposal-document.js/contract-pages.js except a human remembering to edit
+ * both, and — more importantly — showed the boxes in isolation, with no
+ * header, pricing table, or surrounding page for a rep to judge placement
+ * against. Rendering the real document means the six boxes ARE exactly what
+ * will print, on exactly the page they print on, every time.
  *
  * Position (top/left) and size (width/height/font size) are saved the same way but
  * apply in two different places — see public/signature-field-layout.js's own comment
@@ -22,7 +24,8 @@
  * its current width/height/font size, so a size decision is judged against what a
  * signature or date will actually look like — not an empty rectangle.
  *
- * Registers on window.SSGSignatureFieldLayoutAdmin. Needs authed and esc from the shell.
+ * Registers on window.SSGSignatureFieldLayoutAdmin. Needs authed, esc, proposalDocData,
+ * proposalDocHtml and paginateProposalArea from the shell.
  */
 (function () {
   'use strict';
@@ -40,9 +43,14 @@
    *  SIGNATURE_FIELD_DEFAULTS (assembly.ts), never a hand-kept copy of it. */
   var DEFAULTS = {};
   /** slot id -> a saved subset of { top, left, width, height, fontSize }, in memory.
-   *  Loaded fresh on every render(). */
+   *  Loaded fresh on every render(). Persists across a proposal-preview switch —
+   *  this setting is global, not per-proposal. */
   var OFFSETS = {};
   var host = null;
+
+  /** Proposals available to preview against, loaded once per render(). */
+  var PROPOSALS = [];
+  var currentProposalId = null;
 
   var LABELS = {
     ssgSigAcceptanceSignature: 'Acceptance — Signature',
@@ -83,6 +91,9 @@
   var NUM =
     'width:52px;box-sizing:border-box;padding:4px 5px;border:1px solid #d8dcd2;border-radius:5px;' +
     'font-family:inherit;font-size:12px;color:#20241f;';
+  var SEL =
+    'padding:6px 8px;border:1px solid #d8dcd2;border-radius:6px;font-family:inherit;font-size:12.5px;' +
+    'color:#20241f;max-width:420px;';
 
   function esc(s) {
     return H && H.esc ? H.esc(s) : String(s == null ? '' : s);
@@ -124,76 +135,147 @@
     else delete OFFSETS[id];
   }
 
-  /* ------------------------------------------------------------------ markup */
+  /* ------------------------------------------------------------------ live preview */
 
-  function fieldBoxHtml(id, extraOuterStyle) {
-    return (
-      '<div id="' +
-      id +
-      '" tabindex="0" style="position:relative;border-bottom:1px solid #20241f;' +
-      'display:flex;align-items:flex-end;justify-content:flex-start;overflow:visible;' +
-      extraOuterStyle +
-      '">' +
-      '<span data-placeholder="' +
-      id +
-      '" style="white-space:nowrap;color:#1a1a1a;line-height:1;"></span>' +
-      '<div data-resize="' +
-      id +
-      '" title="Drag to resize" style="position:absolute;right:-5px;bottom:-5px;width:11px;height:11px;' +
-      'border:1px solid #203060;background:#fff;border-radius:2px;cursor:nwse-resize;"></div>' +
-      '</div>'
-    );
+  /** proposal.versions is already fully populated by GET /proposals (see app.js's own
+   *  loadProposals) — no per-selection fetch needed. The most-recently-touched one is
+   *  the most useful default: whatever a rep is actively working on right now. */
+  function sortedProposals() {
+    return PROPOSALS.slice().sort(function (a, b) {
+      var ta = new Date(a.lastModifiedAt || a.updatedAt || a.createdAt || 0).getTime();
+      var tb = new Date(b.lastModifiedAt || b.updatedAt || b.createdAt || 0).getTime();
+      return tb - ta;
+    });
   }
 
-  // Same three-column row as proposal-document.js's Acceptance page: printed name
-  // (not a field, not draggable — context only), then Signature, then Date.
-  function acceptanceRowHtml() {
-    return (
-      '<div style="display:flex;gap:26px;margin-top:6px;">' +
-      '<div style="flex:1.35;"><div style="border-bottom:1px solid #20241f;height:40px;display:flex;align-items:flex-end;padding-bottom:3px;"><span style="font-size:11.5px;line-height:1.35;color:#20241f;">Donnica Nicholas</span></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Authorized Signer&rsquo;s Name</div></div>' +
-      '<div style="flex:1.35;">' +
-      fieldBoxHtml('ssgSigAcceptanceSignature', 'padding-bottom:3px;') +
-      '<div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Signature</div></div>' +
-      '<div style="flex:1;">' +
-      fieldBoxHtml('ssgSigAcceptanceDate', 'padding-bottom:3px;') +
-      '<div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Date</div></div>' +
-      '</div>'
-    );
-  }
-
-  // Exact copy of contract-pages.js's sigBlock(), reduced to the two rows that carry an
-  // id (By:/Date:) — Name: and Title: take no field and are not draggable/resizable.
-  function ackBlockHtml(role, entity, sigId, dateId) {
-    var line = function (label, id) {
+  function proposalPickerHtml() {
+    if (!PROPOSALS.length) {
       return (
-        '<div style="display:flex;gap:6px;align-items:baseline;margin-top:9px;">' +
-        '<div style="flex:none;">' +
-        label +
-        '</div>' +
-        fieldBoxHtml(id, 'flex:1;') +
-        '</div>'
+        '<div class="muted" style="font-size:12.5px;">' +
+        'No proposals to preview against yet — the table below still works.</div>'
       );
-    };
+    }
+    var opts = sortedProposals()
+      .slice(0, 60)
+      .map(function (p) {
+        return (
+          '<option value="' +
+          esc(p.id) +
+          '"' +
+          (p.id === currentProposalId ? ' selected' : '') +
+          '>' +
+          esc((p.number || '') + ' — ' + (p.title || 'Untitled')) +
+          '</option>'
+        );
+      })
+      .join('');
     return (
-      '<div style="flex:1;">' +
-      '<div style="font-size:7.5pt;text-transform:uppercase;letter-spacing:.09em;color:#5b6478;margin-bottom:5px;">' +
-      esc(role) +
-      '</div>' +
-      '<div style="font-weight:700;">' +
-      esc(entity) +
-      '</div>' +
-      line('By:', sigId) +
-      line('Date:', dateId) +
-      '</div>'
+      '<label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#5b6478;">' +
+      'Preview against<select id="sflProposal" style="' +
+      SEL +
+      '">' +
+      opts +
+      '</select></label>'
     );
   }
+
+  /** Injects the drag handle + a realistic placeholder value into an already-rendered
+   *  REAL box (an actual element the real document just produced), then wires the same
+   *  drag/resize/keyboard behavior this file has always used. Idempotent per element —
+   *  a proposal switch re-renders the whole preview from scratch, so there is never a
+   *  stale handle left over from a previous mount. */
+  function mountBox(id) {
+    var box = document.getElementById(id);
+    if (!box) return false;
+    box.setAttribute('tabindex', '0');
+    box.style.position = 'relative';
+    box.style.overflow = 'visible';
+    box.style.outline = '1px dashed #9aa0c8';
+    box.style.outlineOffset = '1px';
+    var span = document.createElement('span');
+    span.setAttribute('data-placeholder', id);
+    span.style.whiteSpace = 'nowrap';
+    span.style.color = '#1a1a1a';
+    span.style.lineHeight = '1';
+    box.appendChild(span);
+    var handle = document.createElement('div');
+    handle.setAttribute('data-resize', id);
+    handle.title = 'Drag to resize';
+    handle.style.cssText =
+      'position:absolute;right:-5px;bottom:-5px;width:11px;height:11px;' +
+      'border:1px solid #203060;background:#fff;border-radius:2px;cursor:nwse-resize;';
+    box.appendChild(handle);
+    applyBox(id);
+    attachDrag(box, id);
+    attachResize(handle, id);
+    return true;
+  }
+
+  /** Fetches the picked proposal's real document, renders and paginates it exactly as
+   *  the proposal preview does, then mounts drag/resize onto whichever of the six real
+   *  boxes that document's own template actually produced (a cover-only template has
+   *  no acknowledgment page, so those four ids legitimately will not exist). */
+  async function loadPreview(proposalId) {
+    var canvas = document.getElementById('sflCanvas');
+    if (!canvas) return;
+    var p = PROPOSALS.filter(function (x) {
+      return x.id === proposalId;
+    })[0];
+    if (!p) {
+      canvas.innerHTML =
+        '<div class="muted" style="padding:16px;">Could not find that proposal.</div>';
+      return;
+    }
+    var v = (p.versions || [])[(p.versions || []).length - 1];
+    if (!v) {
+      canvas.innerHTML =
+        '<div class="muted" style="padding:16px;">That proposal has no version to preview.</div>';
+      return;
+    }
+    currentProposalId = proposalId;
+    canvas.innerHTML = '<div class="muted" style="padding:16px;">Loading proposal…</div>';
+    var doc;
+    try {
+      doc = await H.proposalDocData(p, v);
+    } catch (e) {
+      canvas.innerHTML =
+        '<div class="err" style="padding:16px;">Could not load that proposal.</div>';
+      return;
+    }
+    canvas.innerHTML = H.proposalDocHtml(doc);
+    H.paginateProposalArea(canvas);
+    if (document.fonts && document.fonts.ready) {
+      try {
+        await document.fonts.ready;
+      } catch (e) {}
+    }
+    var mounted = {};
+    SLOT_IDS.forEach(function (id) {
+      mounted[id] = mountBox(id);
+    });
+    document.querySelectorAll('[data-missing]').forEach(function (el) {
+      el.remove();
+    });
+    SLOT_IDS.filter(function (id) {
+      return !mounted[id];
+    }).forEach(function (id) {
+      var note = document.createElement('div');
+      note.setAttribute('data-missing', '1');
+      note.className = 'muted';
+      note.style.cssText = 'font-size:12px;margin-top:6px;';
+      note.textContent = (LABELS[id] || id) + ' does not appear on this proposal’s template.';
+      canvas.appendChild(note);
+    });
+  }
+
+  /* ------------------------------------------------------------------ table markup */
 
   function draw() {
     if (!host) return;
     host.innerHTML =
-      '<div style="border:1px solid #e7e8e3;border-radius:8px;padding:18px 20px;max-width:860px;background:#fff;">' +
+      '<div style="border:1px solid #e7e8e3;border-radius:8px;padding:18px 20px;max-width:900px;background:#fff;">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">' +
-      '<div class="muted" style="font-size:12px;max-width:520px;">Drag a box to move it, or its bottom-right corner to resize it — the placeholder name/date shows roughly how it will look once signed. Focus a box and use the arrow keys to nudge position (hold Shift for 10px steps). Nothing prints differently until you save.</div>' +
+      '<div class="muted" style="font-size:12px;max-width:520px;">Drag a box to move it, or its bottom-right corner to resize it — shown on a real proposal, at full page size, so the printed name, the pricing table and the rest of the page are the same reference you would judge placement against on paper. Focus a box and use the arrow keys to nudge position (hold Shift for 10px steps). Nothing prints differently until you save.</div>' +
       '<div style="display:flex;gap:8px;">' +
       '<button type="button" id="sflReset" style="' +
       BTN +
@@ -203,25 +285,11 @@
       '">Save placement</button>' +
       '</div></div>' +
       '<div id="sflStatus" style="margin-top:8px;font-size:12px;min-height:16px;"></div>' +
-      '<div style="margin-top:16px;font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:#7b8190;font-weight:700;">Acceptance page</div>' +
-      '<div style="margin-top:10px;padding:14px 16px 26px;border:1px dashed #d8dcd2;border-radius:6px;font-family:Georgia,\'Times New Roman\',serif;overflow:visible;">' +
-      acceptanceRowHtml() +
+      '<div style="margin-top:16px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">' +
+      proposalPickerHtml() +
       '</div>' +
-      '<div style="margin-top:22px;font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:#7b8190;font-weight:700;">Product Use, Safety &amp; Responsibility Acknowledgment</div>' +
-      '<div style="margin-top:10px;padding:14px 16px 26px;border:1px dashed #d8dcd2;border-radius:6px;font-family:Georgia,\'Times New Roman\',serif;display:flex;gap:44px;overflow:visible;">' +
-      ackBlockHtml(
-        'Customer',
-        'Jane Customer',
-        'ssgSigAckCustomerSignature',
-        'ssgSigAckCustomerDate',
-      ) +
-      ackBlockHtml(
-        'Summit',
-        'Summit Sensory Gym',
-        'ssgSigAckSummitSignature',
-        'ssgSigAckSummitDate',
-      ) +
-      '</div>' +
+      '<div id="sflCanvas" style="margin-top:12px;border:1px solid #d8dcd2;border-radius:6px;' +
+      'max-height:70vh;overflow:auto;background:#e7e8e3;padding:16px;"></div>' +
       '<div style="margin-top:22px;overflow-x:auto;">' +
       '<table style="border-collapse:collapse;width:100%;font-size:12px;">' +
       '<thead><tr style="text-align:left;color:#7b8190;font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;">' +
@@ -235,14 +303,14 @@
       '</div>' +
       '</div>';
 
-    SLOT_IDS.forEach(function (id) {
-      var box = document.getElementById(id);
-      if (!box) return;
-      applyBox(id);
-      attachDrag(box, id);
-      var handle = box.querySelector('[data-resize]');
-      if (handle) attachResize(handle, id);
-    });
+    var picker = document.getElementById('sflProposal');
+    if (picker) {
+      picker.addEventListener('change', function () {
+        loadPreview(picker.value);
+      });
+    }
+    if (currentProposalId) loadPreview(currentProposalId);
+
     document.getElementById('sflSave').addEventListener('click', save);
     document.getElementById('sflReset').addEventListener('click', function () {
       SLOT_IDS.forEach(function (id) {
@@ -486,6 +554,20 @@
     OFFSETS = (d && d.offsets) || {};
     DEFAULTS = (d && d.defaults) || {};
     if (d && d.slotIds && d.slotIds.length) SLOT_IDS = d.slotIds;
+
+    PROPOSALS = [];
+    try {
+      var rp = await H.authed('/proposals');
+      if (rp.ok) PROPOSALS = (await rp.json()) || [];
+    } catch (e) {}
+    // Not archived, has at least one version to render — a bare draft with nothing
+    // saved yet has no pricing table or contact to show, which defeats the point of
+    // previewing against a real page. The most recently touched one is the most
+    // useful default: whatever a rep is actively working on right now.
+    var candidates = sortedProposals().filter(function (p) {
+      return !p.archivedAt && p.versions && p.versions.length;
+    });
+    currentProposalId = candidates.length ? candidates[0].id : null;
   }
 
   async function save() {
