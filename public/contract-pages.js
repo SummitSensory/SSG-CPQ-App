@@ -619,9 +619,25 @@
           // with an image, not a line of text, and without bottom-alignment
           // draws it at the top of the box, floating above the rule instead
           // of resting on it.
+          //
+          // A Date row (depth falsy) needs the same explicit height/bottom-
+          // alignment whenever it carries an id: with neither, this div has no
+          // in-flow content of its own (the e-sign package's invisible tag is
+          // position:absolute, so it does not establish the div's height) and
+          // collapses to ~1px, which left DocuSeal's own anchor for this field
+          // floating with no defined relationship to the "Date:" label or its
+          // rule — measured landing roughly 14-15pt below the label's own
+          // baseline on a real signed copy, not beside it. 20 matches the
+          // dateHeight assembly.ts declares for this same field (see
+          // SignatureSlot in assembly.ts) so the visible box and the field
+          // DocuSeal is told to draw agree on the same geometry. A plain
+          // Date row with no id (nothing for DocuSeal to fill) keeps the old,
+          // unboxed rendering — there is no field whose anchor depends on it.
           (depth
             ? 'height:' + depth + 'px;display:flex;align-items:flex-end;'
-            : 'padding-bottom:1px;') +
+            : id
+              ? 'height:20px;display:flex;align-items:flex-end;'
+              : 'padding-bottom:1px;') +
           // Only the ids (By:/Date:, where the e-sign package drops in a raw
           // DocuSeal text tag before DocuSeal ever sees the page) get this.
           // NOT overflow:hidden — that clips the tag's own text before
