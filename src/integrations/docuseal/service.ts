@@ -535,18 +535,25 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
     });
 
     const updated = await prisma.$transaction(async (tx) => {
-      for (const row of envelope.signers) {
-        const match = submitters.find(
-          (sub) =>
-            (sub.role && sub.role === row.role) ||
-            sub.email?.toLowerCase() === row.email.toLowerCase(),
-        );
-        if (!match) continue;
+      // resolveSignerRow, not a bespoke `role === row.role || email === row.email`
+      // find — that OR, checked per row with no claimed set, let a submitter's EMAIL
+      // match win over another submitter's correct ROLE match whenever two signers
+      // share an email (this app's own Customer/Summit test setup does), assigning
+      // the wrong docusealSubmitterId to each row from the very first send. That
+      // wrong id then satisfied resolveSignerRow's own id-priority rule on every
+      // later sync, permanently swapping the two signers' signature images on the
+      // Certificate of Signature — see signatureImageFor's own comment for the
+      // incident this caused on a real, completed envelope.
+      const claimed = new Set<string>();
+      for (const sub of submitters) {
+        const row = resolveSignerRow(envelope.signers, claimed, sub);
+        if (!row) continue;
+        claimed.add(row.id);
         await tx.esignSigner.update({
           where: { id: row.id },
           data: {
-            docusealSubmitterId: String(match.id),
-            signingUrl: match.embed_src ?? (match.slug ? signingUrlFor(match.slug) : null),
+            docusealSubmitterId: String(sub.id),
+            signingUrl: sub.embed_src ?? (sub.slug ? signingUrlFor(sub.slug) : null),
           },
         });
       }
