@@ -39,7 +39,12 @@ import {
   pushSignedProposalToMonday,
 } from './notifications.js';
 import { sendAlert } from '../../lib/alerts.js';
-import { appendPdfDocuments, appendImagePages, mergeRenderedPdfs } from '../../lib/pdfMerge.js';
+import {
+  appendPdfDocuments,
+  appendImagePages,
+  mergeRenderedPdfs,
+  stampPageReferences,
+} from '../../lib/pdfMerge.js';
 import { resolveReferenceDocuments } from '../../proposals/referenceDocuments.js';
 import { resolveRenderings } from '../../lib/renderingStore.js';
 import { renderCertificatePdf, imageUrlToDataUri, type CertificateSigner } from './certificate.js';
@@ -857,6 +862,20 @@ export async function storeSignedCopy(envelopeId: string): Promise<string | null
       logger.error({ err, envelopeId }, 'esign: certificate page render failed');
     }
 
+    // Last step, after every merge above, so the stamp reaches every page —
+    // the signed proposal, the certificate, and any attachment — regardless
+    // of which renderer produced it. Best-effort like the certificate: a
+    // stamping failure must not be why an otherwise-good signed copy fails
+    // to store.
+    try {
+      bytes = await stampPageReferences(
+        bytes,
+        `${proposal?.number ?? 'proposal'} · Envelope ${envelope.docusealSubmissionId}`,
+      );
+    } catch (err) {
+      logger.error({ err, envelopeId }, 'esign: page reference stamp failed');
+    }
+
     const stored = await putPdf(
       envelopePath({
         proposalNumber: proposal?.number ?? 'proposal',
@@ -972,6 +991,7 @@ async function enrichSignersForCertificate(envelope: {
   id: string;
   docusealSubmissionId: string | null;
   signers: Array<{
+    id: string;
     role: string;
     name: string | null;
     email: string;
@@ -997,13 +1017,26 @@ async function enrichSignersForCertificate(envelope: {
     }
   }
 
+  // Resolved the same unambiguous way applyStatus resolves a webhook's submitter
+  // list — NOT a `.find()` per row with `id-match || email-match` as its own
+  // condition, which is what let two submitters sharing an email (this app's own
+  // test setup uses one address for both Customer and Summit) attach to the
+  // wrong row: an OR checked separately for each candidate lets a WRONG
+  // candidate's email match win over the RIGHT candidate's id match, if the
+  // wrong one simply comes first in DocuSeal's own list order. See
+  // resolveSignerRow's own comment for the incident this class of bug caused.
+  const claimed = new Set<string>();
+  const subForRowId = new Map<string, DocusealSubmitter>();
+  for (const sub of submitters) {
+    const row = resolveSignerRow(envelope.signers, claimed, sub);
+    if (!row) continue;
+    claimed.add(row.id);
+    subForRowId.set(row.id, sub);
+  }
+
   return Promise.all(
     envelope.signers.map(async (row) => {
-      const sub = submitters.find(
-        (s) =>
-          (row.docusealSubmitterId && String(s.id) === row.docusealSubmitterId) ||
-          s.email?.toLowerCase() === row.email.toLowerCase(),
-      );
+      const sub = subForRowId.get(row.id);
       const ipAddress = sub?.ip ?? null;
       const [location, signatureDataUri] = await Promise.all([
         resolveIpLocation(ipAddress),

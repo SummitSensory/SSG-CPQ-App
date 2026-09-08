@@ -1,4 +1,4 @@
-import { PDFDocument, PageSizes } from 'pdf-lib';
+import { PDFDocument, PageSizes, StandardFonts, rgb } from 'pdf-lib';
 import { logger } from './logger.js';
 
 /**
@@ -35,6 +35,45 @@ export async function appendPdfDocuments(
   }
 
   return Buffer.from(await base.save());
+}
+
+/**
+ * Stamp a small reference line in the bottom-left corner of every page of the
+ * fully-assembled signed package — proof a customer received every page of
+ * what they signed, not just the ones a signature field happened to land on.
+ *
+ * Deliberately the LAST step in storeSignedCopy, after every merge (the
+ * signed proposal pages, then the Certificate of Signature): stamping the
+ * already-finished PDF's own page tree reaches every page regardless of
+ * which renderer produced it, including a third-party reference document (a
+ * W9, a certificate of insurance) that carries no branding of its own and
+ * that HTML-level footer logic could never reach.
+ *
+ * A page a stamp fails to draw on is skipped and logged rather than failing
+ * the whole store — the signed copy itself existing matters far more than
+ * every one of its pages carrying this mark.
+ */
+export async function stampPageReferences(bytes: Buffer, reference: string): Promise<Buffer> {
+  const doc = await PDFDocument.load(bytes);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const fontSize = 6.5;
+  for (const page of doc.getPages()) {
+    try {
+      page.drawText(reference, {
+        x: 18,
+        y: 14,
+        size: fontSize,
+        font,
+        // Dark enough to actually read once printed or scanned — the whole
+        // point of this stamp is to be checkable, not merely present — but
+        // still visually secondary to the page's own real content.
+        color: rgb(0.3, 0.3, 0.3),
+      });
+    } catch (err) {
+      logger.warn({ err }, 'pdfMerge: could not stamp a page reference');
+    }
+  }
+  return Buffer.from(await doc.save());
 }
 
 /**

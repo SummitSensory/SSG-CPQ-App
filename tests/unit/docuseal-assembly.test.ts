@@ -121,7 +121,7 @@ describe('buildPackage — field placement', () => {
 
     expect(proposalHtml).toContain(
       `<div id="ssgSigAcceptanceSignature">${wrapped(
-        '{{Customer Signature;role=Customer;type=signature;valign=bottom;width=220;height=40;font_size=18}}',
+        '{{Customer Signature;role=Customer;type=signature;valign=bottom;width=180;height=40;font_size=14}}',
       )}</div>`,
     );
     expect(proposalHtml).toContain(
@@ -131,12 +131,12 @@ describe('buildPackage — field placement', () => {
     );
     expect(proposalHtml).toContain(
       `<div id="ssgSigAckCustomerSignature">${wrapped(
-        '{{Customer Acknowledgment Signature;role=Customer;type=signature;valign=bottom;width=260;height=46;font_size=18}}',
+        '{{Customer Acknowledgment Signature;role=Customer;type=signature;valign=bottom;width=220;height=46;font_size=14}}',
       )}</div>`,
     );
     expect(proposalHtml).toContain(
       `<div id="ssgSigAckSummitSignature">${wrapped(
-        '{{Summit Acknowledgment Signature;role=Summit;type=signature;valign=bottom;width=260;height=46;font_size=18}}',
+        '{{Summit Acknowledgment Signature;role=Summit;type=signature;valign=bottom;width=220;height=46;font_size=14}}',
       )}</div>`,
     );
     // No generated "Acceptance and signatures" page at all — both signers found
@@ -165,7 +165,7 @@ describe('buildPackage — field placement', () => {
       ),
     );
     const customerAcceptanceTag = wrapped(
-      '{{Customer Signature;role=Customer;type=signature;valign=bottom;width=220;height=40;font_size=18}}',
+      '{{Customer Signature;role=Customer;type=signature;valign=bottom;width=180;height=40;font_size=14}}',
     );
     expect((extraHtml ?? '').includes(customerAcceptanceTag)).toBe(false); // only in the Acceptance slot, not duplicated on the fallback page
   });
@@ -181,12 +181,12 @@ describe('buildPackage — field placement', () => {
     });
     expect(proposalHtml).toContain(
       `<div id="ssgSigAcceptanceSignature">${wrapped(
-        '{{Customer Signature;role=Client;type=signature;valign=bottom;width=220;height=40;font_size=18}}',
+        '{{Customer Signature;role=Client;type=signature;valign=bottom;width=180;height=40;font_size=14}}',
       )}</div>`,
     );
     expect(proposalHtml).toContain(
       `<div id="ssgSigAckSummitSignature">${wrapped(
-        '{{Summit Acknowledgment Signature;role=Vendor;type=signature;valign=bottom;width=260;height=46;font_size=18}}',
+        '{{Summit Acknowledgment Signature;role=Vendor;type=signature;valign=bottom;width=220;height=46;font_size=14}}',
       )}</div>`,
     );
     expect(extraHtml).toBeNull();
@@ -245,7 +245,7 @@ describe('buildPackage — fieldSizeOverrides', () => {
     // feature existed.
     expect(proposalHtml).toContain(
       `<div id="ssgSigAcceptanceSignature">${wrapped(
-        '{{Customer Signature;role=Customer;type=signature;valign=bottom;width=220;height=40;font_size=18}}',
+        '{{Customer Signature;role=Customer;type=signature;valign=bottom;width=180;height=40;font_size=14}}',
       )}</div>`,
     );
   });
@@ -260,7 +260,7 @@ describe('buildPackage — fieldSizeOverrides', () => {
     });
     expect(proposalHtml).toContain(
       `<div id="ssgSigAcceptanceSignature">${wrapped(
-        '{{Customer Signature;role=Customer;type=signature;valign=bottom;width=300;height=40;font_size=18}}',
+        '{{Customer Signature;role=Customer;type=signature;valign=bottom;width=300;height=40;font_size=14}}',
       )}</div>`,
     );
   });

@@ -167,7 +167,12 @@ export function buildCertificateHtml(input: CertificateInput): string {
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
     font-family: Georgia, 'Times New Roman', serif;
-    color: #1a1a1a;
+    /* Every color below is solid black, deliberately, with exactly one named
+       exception: the "Certificate of Signature" title. This certificate is a
+       legal/compliance record, not a marketing page — a lighter gray reads as
+       "design polish" in a browser and as "hard to read" once actually
+       printed or scanned, which is what this page is for. */
+    color: #000;
   }
   .content { padding: 0.85in 0.8in 0.7in; box-sizing: border-box; }
   h1 {
@@ -179,7 +184,7 @@ export function buildCertificateHtml(input: CertificateInput): string {
     margin: 0 0 2pt;
   }
   h1 em { font-style: italic; text-transform: lowercase; font-weight: 400; letter-spacing: 0; }
-  .subtitle { text-align: center; font-size: 9.5pt; color: #5b6478; margin-bottom: 20pt; }
+  .subtitle { text-align: center; font-size: 9.5pt; color: #000; margin-bottom: 20pt; }
   .meta-row {
     display: flex;
     justify-content: space-between;
@@ -187,39 +192,39 @@ export function buildCertificateHtml(input: CertificateInput): string {
     gap: 24pt;
     font-size: 8.5pt;
     line-height: 1.6;
-    color: #5b6478;
+    color: #000;
     border-bottom: 1px solid #b9c2cf;
     padding-bottom: 10pt;
     margin-bottom: 6pt;
   }
-  .meta-label { text-transform: uppercase; letter-spacing: 0.05em; font-size: 7.5pt; color: #8a8f8f; }
-  .meta-row b { color: #1a1a1a; font-size: 10pt; letter-spacing: 0.02em; }
+  .meta-label { text-transform: uppercase; letter-spacing: 0.05em; font-size: 7.5pt; color: #000; }
+  .meta-row b { color: #000; font-size: 10pt; letter-spacing: 0.02em; }
   .meta-row > div:last-child { text-align: right; }
   .signer { border-bottom: 1px solid #e4e8ee; padding: 14pt 0; }
   .signer:last-of-type { border-bottom: none; }
   .signer-grid { display: grid; grid-template-columns: 1.5fr 1.2fr 1.3fr; gap: 16pt; align-items: start; }
-  .signer-name { font-size: 13pt; font-weight: 700; }
-  .signer-email { font-size: 9pt; color: #5b6478; margin-top: 1pt; }
+  .signer-name { font-size: 13pt; font-weight: 700; color: #000; }
+  .signer-email { font-size: 9pt; color: #000; margin-top: 1pt; }
   .role-tag {
     display: inline-block;
     margin-top: 5pt;
     font-size: 7pt;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    color: #2c3e50;
+    color: #000;
     background: #eef1f6;
     border-radius: 3pt;
     padding: 2pt 6pt;
   }
-  .viewer-note { font-size: 9pt; color: #8a8f8f; font-style: italic; align-self: center; }
-  .timestamps { font-size: 8.5pt; color: #1a1a1a; }
+  .viewer-note { font-size: 9pt; color: #000; font-style: italic; align-self: center; }
+  .timestamps { font-size: 8.5pt; color: #000; }
   .ts-row { margin-bottom: 5pt; }
   .ts-label {
     display: block;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     font-size: 7pt;
-    color: #8a8f8f;
+    color: #000;
   }
   .sig-box {
     border: 1px solid #b9c2cf;
@@ -232,22 +237,22 @@ export function buildCertificateHtml(input: CertificateInput): string {
     background: rgba(255, 255, 255, 0.55);
   }
   .sig-box img { max-height: 32pt; max-width: 100%; }
-  .sig-fallback { font-family: 'Segoe Script', Georgia, cursive; font-size: 14pt; color: #1a1a1a; }
-  .sig-pending { font-size: 8.5pt; color: #8a8f8f; font-style: italic; }
+  .sig-fallback { font-family: 'Segoe Script', Georgia, cursive; font-size: 14pt; color: #000; }
+  .sig-pending { font-size: 8.5pt; color: #000; font-style: italic; }
   .ip-block { margin-top: 8pt; font-size: 8.5pt; }
-  .ip-label { text-transform: uppercase; letter-spacing: 0.05em; font-size: 7pt; color: #8a8f8f; }
+  .ip-label { text-transform: uppercase; letter-spacing: 0.05em; font-size: 7pt; color: #000; }
   .verify { margin-top: 10pt; }
   .verify-title {
     text-transform: uppercase;
     letter-spacing: 0.05em;
     font-size: 7.5pt;
-    color: #8a8f8f;
+    color: #000;
     margin-bottom: 4pt;
   }
   .footer {
     margin-top: 22pt;
     font-size: 8pt;
-    color: #5b6478;
+    color: #000;
     line-height: 1.55;
     text-align: center;
     max-width: 5.8in;
