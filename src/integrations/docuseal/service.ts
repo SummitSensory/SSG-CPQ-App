@@ -647,6 +647,41 @@ const SIGNER_STATUS: Record<string, 'PENDING' | 'VIEWED' | 'COMPLETED' | 'DECLIN
   declined: 'DECLINED',
 };
 
+/** The one local-row shape resolveSignerRow needs — a structural subset of
+ *  EsignSigner, so it can be unit-tested with plain objects and no database. */
+export interface SignerRowRef {
+  id: string;
+  role: string;
+  email: string;
+  docusealSubmitterId: string | null;
+}
+
+/**
+ * Which local signer row one DocuSeal submitter belongs to, out of the rows this
+ * same pass has not already claimed.
+ *
+ * `docusealSubmitterId` first (exact and authoritative once a previous pass has set
+ * it correctly), then `role` (unique per envelope by construction — every envelope
+ * has exactly one Customer and one Summit signer), then `email` last, because email
+ * is the one key that is NOT guaranteed unique: the same person testing both roles,
+ * or two roles at one company, share an email, and matching on it alone is exactly
+ * what let two distinct DocuSeal submitters resolve to the same local row — see
+ * applyStatus's own comment for the incident this fixed.
+ */
+export function resolveSignerRow<T extends SignerRowRef>(
+  signers: readonly T[],
+  claimed: ReadonlySet<string>,
+  sub: Pick<DocusealSubmitter, 'id' | 'role' | 'email'>,
+): T | undefined {
+  return (
+    signers.find((s) => !claimed.has(s.id) && s.docusealSubmitterId === String(sub.id)) ??
+    signers.find((s) => !claimed.has(s.id) && sub.role && s.role === sub.role) ??
+    signers.find(
+      (s) => !claimed.has(s.id) && s.email.toLowerCase() === (sub.email ?? '').toLowerCase(),
+    )
+  );
+}
+
 /**
  * Fold DocuSeal's submitter list into our envelope. The single place that decides
  * envelope status, so a webhook and a poll cannot reach different conclusions from
@@ -665,17 +700,25 @@ export async function applyStatus(
   // not resurrect it.
   if (envelope.status === 'VOIDED') return;
 
+  // Which local rows this pass has already resolved a DocuSeal submitter onto.
+  // Without this, two submitters in the same `submitters` array could fold onto the
+  // SAME row (see resolveSignerRow's own comment) — whichever this loop reaches
+  // second would overwrite the first one's status/docusealSubmitterId, permanently
+  // stranding the other real local row at whatever it last was, and an envelope
+  // that can never satisfy "every required signer is COMPLETED" is an envelope
+  // that can never leave PARTIALLY_SIGNED no matter how many times a rep clicks
+  // "Refresh status".
+  const claimed = new Set<string>();
   for (const sub of submitters) {
-    const row =
-      envelope.signers.find((s) => s.docusealSubmitterId === String(sub.id)) ??
-      envelope.signers.find((s) => s.email.toLowerCase() === (sub.email ?? '').toLowerCase());
+    const row = resolveSignerRow(envelope.signers, claimed, sub);
     if (!row) continue;
+    claimed.add(row.id);
     const status = SIGNER_STATUS[(sub.status ?? '').toLowerCase()] ?? row.status;
     await prisma.esignSigner.update({
       where: { id: row.id },
       data: {
         status,
-        docusealSubmitterId: row.docusealSubmitterId ?? String(sub.id),
+        docusealSubmitterId: String(sub.id),
         ...(sub.opened_at ? { viewedAt: new Date(sub.opened_at) } : {}),
         ...(sub.completed_at ? { completedAt: new Date(sub.completed_at) } : {}),
         ...(sub.embed_src && !row.signingUrl ? { signingUrl: sub.embed_src } : {}),
