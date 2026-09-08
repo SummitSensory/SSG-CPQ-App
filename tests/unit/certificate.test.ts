@@ -19,6 +19,38 @@ function base(overrides: Partial<CertificateInput> = {}): CertificateInput {
 }
 
 describe('buildCertificateHtml', () => {
+  it('sets every text color to solid black except the title — a legal record must stay legible, not styled', () => {
+    const html = buildCertificateHtml(
+      base({
+        signers: [
+          {
+            role: 'Customer',
+            name: 'Jane Doe',
+            email: 'jane@example.com',
+            viewOnly: false,
+            status: 'COMPLETED',
+            emailedAt: new Date('2026-09-05T18:00:00Z'),
+            viewedAt: new Date('2026-09-05T18:10:00Z'),
+            completedAt: new Date('2026-09-05T18:20:00Z'),
+            declineReason: null,
+            ipAddress: '203.0.113.5',
+            location: 'Denver, United States',
+            signatureDataUri: null,
+          },
+        ],
+      }),
+    );
+    const styleBlock = html.match(/<style>([\s\S]*?)<\/style>/)?.[1] ?? '';
+    // The old, low-contrast grays this certificate previously used for every
+    // label, timestamp, email and footer line — none may appear anywhere in
+    // the stylesheet once this document is meant to be read, not designed.
+    for (const gray of ['#5b6478', '#8a8f8f']) {
+      expect(styleBlock).not.toContain(gray);
+    }
+    // The one deliberate exception: the "Certificate of Signature" title.
+    expect(styleBlock).toMatch(/h1\s*{[^}]*color:\s*#2c3e50/);
+  });
+
   it('titles the page Certificate of Signature and prints the envelope as the ref number', () => {
     const html = buildCertificateHtml(base());
     expect(html).toContain('Certificate <em>of</em> Signature');

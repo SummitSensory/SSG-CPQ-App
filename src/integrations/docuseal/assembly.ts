@@ -268,11 +268,16 @@ const CUSTOMER_SLOTS: SignatureSlot[] = [
     sigId: 'ssgSigAcceptanceSignature',
     dateId: 'ssgSigAcceptanceDate',
     label: 'Customer',
-    sigWidth: 220,
+    // Height stays 40 — matching the printed-name and date boxes sharing this
+    // same row (public/proposal-document.js), which are not independently
+    // adjustable, so shrinking only this one would visibly misalign the row.
+    // Width and font size are the two levers that actually make the drawn
+    // signature read smaller without doing that.
+    sigWidth: 180,
     sigHeight: 40,
     dateWidth: 150,
     dateHeight: 40,
-    sigFontSize: 18,
+    sigFontSize: 14,
     dateFontSize: NAME_PRINT_SIZE,
   },
   // Matches the Acknowledgment's sigBlock (public/contract-pages.js): the
@@ -282,11 +287,11 @@ const CUSTOMER_SLOTS: SignatureSlot[] = [
     sigId: 'ssgSigAckCustomerSignature',
     dateId: 'ssgSigAckCustomerDate',
     label: 'Customer Acknowledgment',
-    sigWidth: 260,
+    sigWidth: 220,
     sigHeight: 46,
     dateWidth: 140,
     dateHeight: 20,
-    sigFontSize: 18,
+    sigFontSize: 14,
     dateFontSize: NAME_PRINT_SIZE,
   },
 ];
@@ -295,11 +300,11 @@ const SUMMIT_SLOTS: SignatureSlot[] = [
     sigId: 'ssgSigAckSummitSignature',
     dateId: 'ssgSigAckSummitDate',
     label: 'Summit Acknowledgment',
-    sigWidth: 260,
+    sigWidth: 220,
     sigHeight: 46,
     dateWidth: 140,
     dateHeight: 20,
-    sigFontSize: 18,
+    sigFontSize: 14,
     dateFontSize: NAME_PRINT_SIZE,
   },
 ];

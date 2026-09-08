@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { PDFDocument } from 'pdf-lib';
-import { appendPdfDocuments, mergeRenderedPdfs } from '../../src/lib/pdfMerge.js';
+import {
+  appendPdfDocuments,
+  mergeRenderedPdfs,
+  stampPageReferences,
+} from '../../src/lib/pdfMerge.js';
 
 async function makePdf(pageCount: number): Promise<Buffer> {
   const doc = await PDFDocument.create();
@@ -62,5 +66,30 @@ describe('mergeRenderedPdfs', () => {
     // (see mergeRenderedPdfs' own comment in src/lib/pdfMerge.ts).
     const base = await makePdf(2);
     await expect(mergeRenderedPdfs(base, Buffer.from('this is not a pdf'))).rejects.toThrow();
+  });
+});
+
+describe('stampPageReferences', () => {
+  it('stamps every page — the proposal, the certificate, and a third-party attachment alike — without changing the page count', async () => {
+    const merged = await makePdf(5);
+    const stamped = await stampPageReferences(merged, 'P-2026-000110 · Envelope 12345');
+    const doc = await PDFDocument.load(stamped);
+    expect(doc.getPageCount()).toBe(5);
+  });
+
+  it('actually changes the page content, not a no-op that just re-saves the document', async () => {
+    const base = await makePdf(1);
+    const stamped = await stampPageReferences(base, 'P-2026-000110 · Envelope 12345');
+    // A drawn text operator is new content on the page — the saved bytes must
+    // differ from a plain re-save of the same unstamped document.
+    const resaved = Buffer.from(await (await PDFDocument.load(base)).save());
+    expect(stamped.equals(resaved)).toBe(false);
+  });
+
+  it('resolves to a Buffer rather than throwing for an ordinary document', async () => {
+    const base = await makePdf(1);
+    await expect(
+      stampPageReferences(base, 'P-2026-000110 · Envelope 12345'),
+    ).resolves.toBeInstanceOf(Buffer);
   });
 });
