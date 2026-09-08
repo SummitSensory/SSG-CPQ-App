@@ -980,12 +980,13 @@ export async function repairStuckSignedCopies(): Promise<{
 }
 
 /**
- * Pulls each signer's IP, resolved location, and drawn-signature image fresh
- * from DocuSeal at certificate-render time — nothing here is persisted, and
- * none of it is required: a submitter DocuSeal cannot be matched to, or a
- * lookup that fails, just means that signer's certificate block shows less,
- * never why the certificate (or the signed copy it rides along with) fails
- * to store.
+ * Builds each signer's certificate block at render time — nothing here is
+ * persisted, and none of it is required: a submitter DocuSeal cannot be
+ * matched to, or a lookup that fails, just means that signer's certificate
+ * block shows less, never why the certificate (or the signed copy it rides
+ * along with) fails to store. The drawn-signature image and resolved
+ * location come from a fresh DocuSeal submission fetch; the IP address does
+ * not (DocuSeal's REST response never carries it — see ipInfoFromEvents).
  */
 async function enrichSignersForCertificate(envelope: {
   id: string;
@@ -1034,13 +1035,21 @@ async function enrichSignersForCertificate(envelope: {
     subForRowId.set(row.id, sub);
   }
 
+  // DocuSeal's own "Get a submission" API — what `submitters` above came from —
+  // has no `ip`/`ua` field on a submitter at all; those only ever exist in the
+  // WEBHOOK payload for a form.viewed/started/completed/declined event (see
+  // ipInfoFromEvents' own comment). `sub?.ip` here was always undefined for a
+  // real submitter, which is why the certificate never showed an IP or
+  // location for anyone, ever, regardless of geolocation.ts or IPINFO_TOKEN.
+  const eventIp = await ipInfoFromEvents(envelope.id);
+
   return Promise.all(
     envelope.signers.map(async (row) => {
       const sub = subForRowId.get(row.id);
-      const ipAddress = sub?.ip ?? null;
+      const ipAddress = (row.docusealSubmitterId && eventIp.get(row.docusealSubmitterId)) || null;
       const [location, signatureDataUri] = await Promise.all([
         resolveIpLocation(ipAddress),
-        signatureImageFor(sub),
+        signatureImageFor(sub, row.role),
       ]);
       return {
         role: row.role,
@@ -1061,13 +1070,55 @@ async function enrichSignersForCertificate(envelope: {
 }
 
 /**
- * The first signature-type field value this submitter actually filled. This
- * app's own text tags always name these "<Role> Signature" or "<Role> ...
- * Signature" (see assembly.ts's tag()), so matching on a trailing "Signature"
- * field name finds it without needing to know which page it came from.
+ * The IP address each submitter signed from, keyed by their DocuSeal
+ * submitter id — recovered from this envelope's own stored webhook events
+ * (EsignEvent.payload, saved verbatim in esignWebhook.ts), the only place
+ * DocuSeal's `ip` ever actually appears; see this function's caller for why
+ * the REST "Get a submission" response can never supply it. Takes the most
+ * recent event per submitter that actually carries an `ip`, which in
+ * practice is whichever form.* event landed last for them.
  */
-async function signatureImageFor(sub: DocusealSubmitter | undefined): Promise<string | null> {
-  const value = sub?.values?.find((v) => /signature$/i.test(v.field))?.value;
+export async function ipInfoFromEvents(envelopeId: string): Promise<Map<string, string>> {
+  const events = await prisma.esignEvent.findMany({
+    where: { envelopeId },
+    orderBy: { createdAt: 'desc' },
+    select: { payload: true },
+  });
+  const ipBySubmitterId = new Map<string, string>();
+  for (const { payload } of events) {
+    const data = (payload as { data?: { id?: number | string; ip?: string | null } } | null)?.data;
+    const submitterId = data?.id !== undefined ? String(data.id) : null;
+    // Events are ordered most-recent-first, and only the first ip seen per
+    // submitter is kept — a later (older, since we're iterating in reverse)
+    // event for the same submitter must not overwrite it.
+    if (submitterId && data?.ip && !ipBySubmitterId.has(submitterId)) {
+      ipBySubmitterId.set(submitterId, data.ip);
+    }
+  }
+  return ipBySubmitterId;
+}
+
+/**
+ * The first signature-type field value THIS ROLE actually filled. This app's
+ * own text tags always name these "<Role> Signature" or "<Role> ...
+ * Signature" (see assembly.ts's tag()) — matching only a trailing
+ * "Signature" was not enough on its own: when two submitters share an email
+ * (this app's own test setup uses one address for both Customer and
+ * Summit), DocuSeal's own `values` array is not reliably scoped to only the
+ * one submitter it is attached to, so a bare suffix match could pick up the
+ * OTHER signer's drawn signature — which is exactly what put the customer's
+ * signature under Summit's name on a real certificate. Requiring the field
+ * name to also start with this signer's own role closes that regardless of
+ * whether `values` is properly scoped.
+ */
+export async function signatureImageFor(
+  sub: DocusealSubmitter | undefined,
+  role: string,
+): Promise<string | null> {
+  const roleLower = role.toLowerCase();
+  const value = sub?.values?.find(
+    (v) => v.field.toLowerCase().startsWith(roleLower) && /signature$/i.test(v.field),
+  )?.value;
   if (typeof value !== 'string' || !value) return null;
   if (value.startsWith('data:image')) return value;
   if (/^https?:\/\//i.test(value)) return imageUrlToDataUri(value);

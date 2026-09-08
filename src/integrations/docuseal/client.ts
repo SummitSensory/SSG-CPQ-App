@@ -101,11 +101,15 @@ export interface DocusealSubmitter {
   completed_at?: string | null;
   declined_at?: string | null;
   embed_src?: string;
-  /** The signer's IP address, as DocuSeal recorded it at the time they signed —
-   *  used for the Certificate of Signature's IP/Location lines, never for
-   *  anything else. */
+  /**
+   * Typed here for completeness, but DocuSeal's "Get a submission" REST
+   * response — what this interface actually models — never populates it; the
+   * signer's IP only ever appears in a form.viewed/started/completed/declined
+   * WEBHOOK payload. The certificate's IP/Location lines are sourced from
+   * those stored webhook events instead — see ipInfoFromEvents in service.ts.
+   */
   ip?: string | null;
-  /** Browser user agent string. Certificate of Signature only. */
+  /** Browser user agent string. Never populated on this REST response either; see `ip` above. */
   ua?: string | null;
   /**
    * The fields this submitter actually filled, keyed by field name — this is
