@@ -606,7 +606,10 @@
     // boxes those two files both print — see signature-field-layout.js.
     if (window.SSGSignatureFieldLayout) window.SSGSignatureFieldLayout.init({ authed: authed });
     if (window.SSGSignatureFieldLayoutAdmin)
-      window.SSGSignatureFieldLayoutAdmin.init({ authed: authed, esc: esc });
+      // proposalDocData/proposalDocHtml/paginateProposalArea, so the admin editor can
+      // render a REAL proposal's full pages (see that file's own comment) instead of a
+      // hand-copied mockup of just the signature rows.
+      window.SSGSignatureFieldLayoutAdmin.init({ authed: authed, esc: esc, proposalDocData: proposalDocData, proposalDocHtml: proposalDocHtml, paginateProposalArea: paginateProposalArea });
     // Same fetch-once-at-sign-in shape as SSGContractPages, for the builder's
     // reference-documents checklist (a W9, a certificate of insurance).
     if (window.SSGReferenceDocuments) window.SSGReferenceDocuments.init({ authed: authed, esc: esc });
