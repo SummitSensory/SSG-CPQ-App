@@ -22,7 +22,9 @@ import {
   SUMMIT_ROLE,
   type AssemblyAttachment,
   type SignerSpec,
+  type FieldSize,
 } from './assembly.js';
+import { getSavedFieldLayout } from './fieldLayoutStore.js';
 // Re-exported: esign.ts and others import these role names from this module,
 // but Customer/Summit are the document's own concept (assembly.ts decides
 // which role's fields land where), not this file's.
@@ -333,19 +335,31 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
 
   const totals = versionTotals(version.items, version.sections);
 
-  // None of these six reads depends on another's result — run them together
-  // rather than paying for six sequential round trips on every send.
-  const [org, template, attachments, emailTemplate, sender, border] = await Promise.all([
-    prisma.organization.findUnique({
-      where: { id: version.proposal.organizationId },
-      select: { name: true },
-    }),
-    resolveProposalTemplate({ items: version.items, templateKey: input.templateKey }),
-    resolveAttachments({ keys: input.attachmentKeys }),
-    resolveEmailTemplate({ items: version.items, emailTemplateKey: input.emailTemplateKey }),
-    prisma.user.findUnique({ where: { id: input.actorId }, select: { name: true } }),
-    sellerCollectedCharges(input.versionId),
-  ]);
+  // None of these seven reads depends on another's result — run them together
+  // rather than paying for seven sequential round trips on every send.
+  const [org, template, attachments, emailTemplate, sender, border, fieldLayout] =
+    await Promise.all([
+      prisma.organization.findUnique({
+        where: { id: version.proposal.organizationId },
+        select: { name: true },
+      }),
+      resolveProposalTemplate({ items: version.items, templateKey: input.templateKey }),
+      resolveAttachments({ keys: input.attachmentKeys }),
+      resolveEmailTemplate({ items: version.items, emailTemplateKey: input.emailTemplateKey }),
+      prisma.user.findUnique({ where: { id: input.actorId }, select: { name: true } }),
+      sellerCollectedCharges(input.versionId),
+      getSavedFieldLayout(),
+    ]);
+  // Only width/height/fontSize matter to the signed field — position is a purely
+  // client-side cosmetic nudge on the blank line (see signatureFieldLayout.ts's own
+  // comment on why the two are read in two different places).
+  const fieldSizeOverrides: Record<string, Partial<FieldSize>> = {};
+  for (const [id, saved] of Object.entries(fieldLayout)) {
+    const { width, height, fontSize } = saved;
+    if (width !== undefined || height !== undefined || fontSize !== undefined) {
+      fieldSizeOverrides[id] = { width, height, fontSize };
+    }
+  }
   // What the customer actually owes, matching the figure the proposal document
   // itself prints as "Total payable to Summit" (see docTotal in
   // proposal-document.js) — versionTotals() alone is the pre-cross-border figure.
@@ -402,6 +416,7 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
     proposalTitle: version.proposal.title,
     customerName: org?.name,
     totalMinor: payableTotal,
+    fieldSizeOverrides,
   });
 
   // edgeToEdge: the proposal is fixed 8.5x11in sheets that already carry

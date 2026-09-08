@@ -4,6 +4,7 @@ import {
   signaturePageHtml,
   inlineDocument,
   SIGNATURE_FIELD_SLOT_IDS,
+  SIGNATURE_FIELD_DEFAULTS,
 } from '../../src/integrations/docuseal/assembly.js';
 
 const PROPOSAL_WITH_TRAILING_BREAK = `<!doctype html><html><head>
@@ -216,6 +217,79 @@ describe('buildPackage — field placement', () => {
         '{{Customer Signature;role=Customer;type=signature;valign=bottom;width=260;height=46;font_size=18}}',
       ),
     );
+  });
+});
+
+describe('buildPackage — fieldSizeOverrides', () => {
+  const SIGNERS = [
+    { role: 'Customer', name: 'Jane Doe', email: 'jane@example.com' },
+    { role: 'Summit', name: 'Bryan Shepherd', email: 'bryan@summitsensory.com' },
+  ];
+
+  it('applies a saved width/height/font size to the one slot it names, leaving every other slot at its shipped default', () => {
+    const { proposalHtml } = buildPackage({
+      proposalHtml: PROPOSAL_WITH_SIGNATURE_SLOTS,
+      signers: SIGNERS,
+      proposalNumber: 'P-2026-000001',
+      fieldSizeOverrides: {
+        ssgSigAcceptanceDate: { width: 200, height: 30, fontSize: 16 },
+      },
+    });
+
+    expect(proposalHtml).toContain(
+      `<div id="ssgSigAcceptanceDate">${wrapped(
+        '{{Customer Date;role=Customer;type=datenow;valign=bottom;width=200;height=30;font_size=16}}',
+      )}</div>`,
+    );
+    // Untouched by the override above — the shipped default, exactly as before this
+    // feature existed.
+    expect(proposalHtml).toContain(
+      `<div id="ssgSigAcceptanceSignature">${wrapped(
+        '{{Customer Signature;role=Customer;type=signature;valign=bottom;width=220;height=40;font_size=18}}',
+      )}</div>`,
+    );
+  });
+
+  it('fills in only the properties a saved override actually names, defaulting the rest', () => {
+    const { proposalHtml } = buildPackage({
+      proposalHtml: PROPOSAL_WITH_SIGNATURE_SLOTS,
+      signers: SIGNERS,
+      proposalNumber: 'P-2026-000001',
+      // width only — height and font size were never resized, and must stay shipped.
+      fieldSizeOverrides: { ssgSigAcceptanceSignature: { width: 300 } },
+    });
+    expect(proposalHtml).toContain(
+      `<div id="ssgSigAcceptanceSignature">${wrapped(
+        '{{Customer Signature;role=Customer;type=signature;valign=bottom;width=300;height=40;font_size=18}}',
+      )}</div>`,
+    );
+  });
+
+  it('leaves every field at its shipped default when no override is given at all', () => {
+    const withOverrides = buildPackage({
+      proposalHtml: PROPOSAL_WITH_SIGNATURE_SLOTS,
+      signers: SIGNERS,
+      proposalNumber: 'P-2026-000001',
+    });
+    const withEmptyOverrides = buildPackage({
+      proposalHtml: PROPOSAL_WITH_SIGNATURE_SLOTS,
+      signers: SIGNERS,
+      proposalNumber: 'P-2026-000001',
+      fieldSizeOverrides: {},
+    });
+    expect(withEmptyOverrides.proposalHtml).toBe(withOverrides.proposalHtml);
+  });
+});
+
+describe('SIGNATURE_FIELD_DEFAULTS', () => {
+  it('has an entry, with a positive width/height/fontSize, for every known slot id', () => {
+    for (const id of SIGNATURE_FIELD_SLOT_IDS) {
+      const size = SIGNATURE_FIELD_DEFAULTS[id];
+      expect(size, `missing SIGNATURE_FIELD_DEFAULTS entry for ${id}`).toBeTruthy();
+      expect(size!.width).toBeGreaterThan(0);
+      expect(size!.height).toBeGreaterThan(0);
+      expect(size!.fontSize).toBeGreaterThan(0);
+    }
   });
 });
 

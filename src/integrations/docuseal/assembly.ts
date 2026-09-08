@@ -85,6 +85,8 @@ export interface AssemblyInput {
   totalMinor?: number;
   /** Extra sentence above the signature blocks — terms of acceptance, dates. */
   acceptanceCopy?: string;
+  /** A rep's saved per-box width/height/font-size — see injectSignatureFields. */
+  fieldSizeOverrides?: Readonly<Record<string, Partial<FieldSize>>>;
 }
 
 const PAGE_BREAK = 'page-break-before: always; break-before: page;';
@@ -314,6 +316,27 @@ export const SIGNATURE_FIELD_SLOT_IDS: readonly string[] = [
   ...SUMMIT_SLOTS.flatMap((s) => [s.sigId, s.dateId]),
 ];
 
+/** A DocuSeal field's own width/height/font size, independent of position. */
+export interface FieldSize {
+  width: number;
+  height: number;
+  fontSize: number;
+}
+
+/**
+ * The as-shipped width/height/font size DocuSeal is told to use for each of the six
+ * slots, derived from CUSTOMER_SLOTS/SUMMIT_SLOTS rather than retyped — the one source
+ * of truth src/routes/signatureFieldLayout.ts's `/effective` route re-exports so
+ * public/signature-field-layout-admin.js never carries its own copy to drift out of
+ * sync with these.
+ */
+export const SIGNATURE_FIELD_DEFAULTS: Readonly<Record<string, FieldSize>> = Object.fromEntries(
+  [...CUSTOMER_SLOTS, ...SUMMIT_SLOTS].flatMap((s) => [
+    [s.sigId, { width: s.sigWidth, height: s.sigHeight, fontSize: s.sigFontSize }],
+    [s.dateId, { width: s.dateWidth, height: s.dateHeight, fontSize: s.dateFontSize }],
+  ]),
+);
+
 /**
  * Fills every occurrence of an empty `<div id="...">` — global, not just the
  * first, because an administrator can add a second ARTICLES-kind legal
@@ -346,10 +369,17 @@ function fillSlot(
  * actually found a slot in this document, so the caller knows who still
  * needs the fallback page: a signer beyond Customer/Summit, or a proposal
  * template that carries neither the Acceptance page nor the Acknowledgment.
+ *
+ * `fieldSizeOverrides` is a rep's saved per-slot width/height/font-size, keyed by the
+ * same slot id (see SIGNATURE_FIELD_DEFAULTS) — a field this rep resized in the
+ * placement editor. Any property left out of a slot's override falls back to that
+ * slot's own shipped default, so resizing only the signature leaves its date's size
+ * untouched, and a slot nobody has ever touched behaves exactly as it always did.
  */
 function injectSignatureFields(
   bodyHtml: string,
   signers: SignerSpec[],
+  fieldSizeOverrides?: Readonly<Record<string, Partial<FieldSize>>>,
 ): { html: string; placedRoles: Set<string> } {
   const nonViewers = signers.filter((s) => !s.viewOnly);
   const customer = nonViewers.find((s) => s.role === CUSTOMER_ROLE) ?? nonViewers[0];
@@ -360,35 +390,38 @@ function injectSignatureFields(
   let html = bodyHtml;
   const placedRoles = new Set<string>();
 
+  const sizeOf = (id: string, shipped: FieldSize): FieldSize => ({
+    ...shipped,
+    ...fieldSizeOverrides?.[id],
+  });
+
   const place = (signer: SignerSpec | undefined, slots: SignatureSlot[]): void => {
     if (!signer) return;
     for (const slot of slots) {
+      const sigSize = sizeOf(slot.sigId, {
+        width: slot.sigWidth,
+        height: slot.sigHeight,
+        fontSize: slot.sigFontSize,
+      });
       const sig = fillSlot(
         html,
         slot.sigId,
-        invisibleTag(
-          tag(`${slot.label} Signature`, signer.role, 'signature', {
-            width: slot.sigWidth,
-            height: slot.sigHeight,
-            fontSize: slot.sigFontSize,
-          }),
-        ),
+        invisibleTag(tag(`${slot.label} Signature`, signer.role, 'signature', sigSize)),
       );
       html = sig.html;
       // `datenow`, not `date`: the signing date is stamped automatically when
       // this signer completes their part, with nothing for them to fill in —
       // one less required action per signature, and no risk of a date that
       // does not match when they actually signed.
+      const dateSize = sizeOf(slot.dateId, {
+        width: slot.dateWidth,
+        height: slot.dateHeight,
+        fontSize: slot.dateFontSize,
+      });
       const date = fillSlot(
         html,
         slot.dateId,
-        invisibleTag(
-          tag(`${slot.label} Date`, signer.role, 'datenow', {
-            width: slot.dateWidth,
-            height: slot.dateHeight,
-            fontSize: slot.dateFontSize,
-          }),
-        ),
+        invisibleTag(tag(`${slot.label} Date`, signer.role, 'datenow', dateSize)),
       );
       html = date.html;
       if (sig.placed || date.placed) placedRoles.add(signer.role);
@@ -545,6 +578,7 @@ export function buildPackage(input: AssemblyInput): AssembledPackage {
   const { html: proposalHtml, placedRoles } = injectSignatureFields(
     input.proposalHtml,
     input.signers,
+    input.fieldSizeOverrides,
   );
   const unplacedSigners = input.signers.filter((s) => s.viewOnly || !placedRoles.has(s.role));
   const needsFallbackPage = unplacedSigners.some((s) => !s.viewOnly);
