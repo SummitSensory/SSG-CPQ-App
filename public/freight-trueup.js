@@ -5,7 +5,8 @@
  * person who manages vendor freight pricing), and it needs to be readable and
  * replaceable without touching the 10,000-line application shell. It borrows the
  * shell's helpers rather than reimplementing them — see init() — so the styling,
- * auth, modals and money formatting stay identical to everything around it.
+ * auth and modals stay identical to everything around it. Money formatting is the
+ * one exception: `money()` below is its own copy, not borrowed — see its own comment.
  *
  * FOUR buckets, because freight reaches Summit four different ways:
  *
@@ -73,6 +74,11 @@
   function esc(s) {
     return H.esc(String(s == null ? '' : s));
   }
+  // NOT borrowed from SSGUI.fmtMoney, despite this file's header — init() is never
+  // handed fmtMoney, so this is a real, second implementation. Currently byte-identical
+  // output (including the same $-before-minus-sign quirk on a negative amount) because
+  // this screen has no currency field to format differently, but a future change to
+  // SSGUI.fmtMoney's rounding, locale or sign placement will not reach here.
   function money(minor) {
     var v = (Number(minor) || 0) / 100;
     return '$' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });

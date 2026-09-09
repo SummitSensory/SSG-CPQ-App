@@ -198,14 +198,21 @@ export function registerCrmRoutes(app: FastifyInstance): void {
       }
     }
 
-    if (parsed.data.isDecisionMaker === true) {
-      await prisma.contact.updateMany({
-        where: { organizationId: existing.organizationId, id: { not: id } },
-        data: { isDecisionMaker: false },
-      });
-    }
-
-    const contact = await prisma.contact.update({ where: { id }, data: parsed.data });
+    // There is no unique constraint enforcing a single decision maker, and demoting
+    // everyone else then promoting this one were two separate statements — two
+    // concurrent promotions on the same organization could both pass, leaving two
+    // contacts flagged decision-maker and QuickBooks invoicing (loadCustomerSource)
+    // ordering ties arbitrarily by createdAt. One transaction makes the pair atomic.
+    const contact =
+      parsed.data.isDecisionMaker === true
+        ? await prisma.$transaction(async (tx) => {
+            await tx.contact.updateMany({
+              where: { organizationId: existing.organizationId, id: { not: id } },
+              data: { isDecisionMaker: false },
+            });
+            return tx.contact.update({ where: { id }, data: parsed.data });
+          })
+        : await prisma.contact.update({ where: { id }, data: parsed.data });
     await recordAudit({
       actorId: req.user!.sub,
       action: 'crm.contact.update',

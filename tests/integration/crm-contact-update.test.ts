@@ -47,8 +47,13 @@ const CONTACTS = new Map<string, Record<string, unknown>>([
   ],
 ]);
 
-vi.mock('../../src/lib/prisma.js', () => ({
-  prisma: {
+vi.mock('../../src/lib/prisma.js', () => {
+  const prisma = {
+    // The demote-others/promote-this-one pair now runs inside $transaction — the mock
+    // doesn't need real atomicity to prove the route's own logic, just the same shape
+    // real Prisma exposes: the callback receives a client and its return value is
+    // $transaction's own.
+    $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(prisma),
     user: {
       findUnique: async ({ where }: { where: { id: string } }) => ({
         isActive: true,
@@ -84,8 +89,9 @@ vi.mock('../../src/lib/prisma.js', () => ({
       },
     },
     auditLog: { create: async () => ({}) },
-  },
-}));
+  };
+  return { prisma };
+});
 
 vi.mock('../../src/integrations/monday/contactPush.js', () => ({
   pushContactToDeal: async () => ({ pushed: false, reason: 'not linked to a monday deal row' }),

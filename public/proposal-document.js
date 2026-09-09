@@ -886,8 +886,11 @@
           .join('') +
         '</div>'
       : '';
+    // Not escaped here — its only use (below) wraps it in a larger string that gets
+    // escaped as a whole; escaping twice turned a literal "&" in a proposal number
+    // into "&amp;amp;" on the printed footer.
     var docIdent = [
-      esc(d.number || ''),
+      d.number || '',
       (Number(d.version) || 1) > 1 ? 'Revision ' + (Number(d.version) - 1) : '',
     ]
       .filter(Boolean)
