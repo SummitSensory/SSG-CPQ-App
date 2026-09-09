@@ -1233,9 +1233,11 @@ writes every column explicitly, including empty ones.
 - **Belt-shipment ship/void write actions are gated by `PROPOSAL_READ`**, a read
   permission, with no dedicated write/manage permission — inconsistent with comparable
   write actions elsewhere (`FREIGHT_COST_WRITE`, `LEGAL_MANAGE`). Not exploited today
-  (every account is `SYSTEM_ADMIN`, per AUD-018's own precedent), and which permission
-  model to apply is a decision, not a bug fix — recorded for the same reason AUD-018 was.
-  **Needs Bryan's decision**: add a dedicated permission, or leave as-is.
+  (every account is `SYSTEM_ADMIN`, per AUD-018's own precedent). **Decided, 2026-09-09:
+  leave as-is.** Bryan's call — the inconsistency is real but not worth a new permission
+  for a small team where the person shipping the box is not always the person who sold
+  it, per the route's own comment. Revisit if a non-admin role is ever introduced for
+  someone who should not also be able to ship/void.
 
 ### Fixed in a follow-up pass (2026-09-09, same day)
 
