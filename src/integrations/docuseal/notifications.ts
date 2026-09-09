@@ -217,6 +217,38 @@ async function remindOne(envelopeId: string): Promise<void> {
 }
 
 /**
+ * A required signer declined. There is no path back from here in the app —
+ * the customer cannot see this state either — so an email is the only way
+ * staff learn a deal just stalled, and the only place declineReason (the
+ * customer's own stated objection, when DocuSeal collected one) surfaces.
+ */
+export async function notifyProposalDeclined(envelopeId: string): Promise<void> {
+  const claimed = await prisma.esignEnvelope.updateMany({
+    where: { id: envelopeId, declineNotifiedAt: null },
+    data: { declineNotifiedAt: new Date() },
+  });
+  if (claimed.count === 0) return;
+
+  const envelope = await envelopeContext(envelopeId);
+  if (!envelope) return;
+  const decliner = envelope.signers.find((s) => !s.viewOnly && s.status === 'DECLINED');
+
+  const to = await escalationRecipient(envelope);
+  sendAlert({
+    to,
+    title: `Proposal ${envelope.proposal.number} — declined`,
+    detail: [
+      `${envelope.proposal.title || 'This proposal'} was declined${decliner ? ` by ${decliner.name || decliner.role} (${decliner.email})` : ''}.`,
+      envelope.declineReason ? `\nReason given: ${envelope.declineReason}` : '',
+      '',
+      'Open the proposal in the CRM — the Electronic signature panel shows the full timeline.',
+    ].join('\n'),
+    fingerprint: `esign-declined-${envelopeId}`,
+    context: { proposalNumber: envelope.proposal.number, envelopeId },
+  });
+}
+
+/**
  * Copy the executed PDF into the deal's "Signed Proposal" column on monday.com.
  * Mirrors uploadProposalPdfToMonday's shape — never throws, reports outcome as
  * data, and logs the attempt either way.

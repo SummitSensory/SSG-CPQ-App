@@ -3043,6 +3043,10 @@ model EsignEnvelope {
   /// countersignNotifiedAt — applyStatus runs from both the webhook and the
   /// manual sync.
   viewNotifiedAt DateTime?
+  /// Set once the "customer declined to sign" staff alert has gone out for this
+  /// envelope's first transition into DECLINED. Same double-fire concern as
+  /// countersignNotifiedAt.
+  declineNotifiedAt DateTime?
   /// Last time the "still not signed" daily reminder alert went out. Null means
   /// none has yet — see sendEsignReminders in docuseal/notifications.ts. Cleared
   /// implicitly by the envelope leaving the LIVE status set (COMPLETED/DECLINED/

@@ -141,7 +141,7 @@ async function deliver(input: AlertInput): Promise<void> {
     method: 'POST',
     headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      from: `${env.BOM_FROM_NAME} <${env.BOM_FROM_EMAIL}>`,
+      from: `${env.ALERT_FROM_NAME} <${env.ALERT_FROM_EMAIL}>`,
       to,
       subject: `[CRM${env.NODE_ENV === 'production' ? '' : ' ' + env.NODE_ENV}] ${input.title}`,
       text: body,

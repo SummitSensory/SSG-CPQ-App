@@ -33,6 +33,7 @@ import { envelopePath, putPdf } from './storage.js';
 import {
   notifyCountersignNeeded,
   notifyProposalCompleted,
+  notifyProposalDeclined,
   notifyProposalViewed,
   notifyPendingSigners,
   envelopeContext,
@@ -794,6 +795,12 @@ export async function applyStatus(
   if (next === 'PARTIALLY_SIGNED' && envelope.status !== 'PARTIALLY_SIGNED') {
     await notifyCountersignNeeded(envelopeId).catch((err) =>
       logger.error({ err, envelopeId }, 'esign: countersign notification failed'),
+    );
+  }
+
+  if (next === 'DECLINED' && envelope.status !== 'DECLINED') {
+    await notifyProposalDeclined(envelopeId).catch((err) =>
+      logger.error({ err, envelopeId }, 'esign: decline notification failed'),
     );
   }
 

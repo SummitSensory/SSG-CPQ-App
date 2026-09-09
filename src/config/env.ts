@@ -149,6 +149,14 @@ const EnvSchema = z
     // Falls back to BOM_BCC_EMAIL; with neither set, faults are logged only — which
     // means the first report of an outage is somebody noticing.
     ALERT_EMAIL: z.string().min(3).optional(),
+    // Sender for staff alerts (fault alerts + esign business events: viewed,
+    // declined, countersign-needed, completed). Deliberately separate from
+    // BOM_FROM_EMAIL — that address's "Summit Sensory Gym" identity belongs on
+    // vendor/customer-facing mail (BOM sends, freight RFQs, invoice reminders),
+    // not on an internal "the app noticed something" email. Must be on a domain
+    // verified in Resend.
+    ALERT_FROM_EMAIL: z.string().email().default('notifications@crm.summitsensory.com'),
+    ALERT_FROM_NAME: z.string().min(1).default('Summit Sensory CRM'),
     // Where a financing request goes. Ryan Capital's contact of record.
     FINANCE_PARTNER_EMAIL: z.string().email().default('ckinsey@ryancapital.com'),
 
