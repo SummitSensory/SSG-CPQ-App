@@ -50,11 +50,19 @@
     });
   }
 
-  /** The saved manual nudge for a signature/date box id, or '' when there is none —
-   *  see public/signature-field-layout.js. Spliced into the box's own inline style,
-   *  stacked on top of its own position:relative. */
-  function sigOffset(id) {
+  /** The saved size for a signature/date box id, or '' when there is none — see
+   *  public/signature-field-layout.js. Spliced into the OUTER, line-owning box's own
+   *  inline style, stacked on top of its own position:relative. */
+  function sigSize(id) {
     return window.SSGSignatureFieldLayout ? window.SSGSignatureFieldLayout.styleFor(id) : '';
+  }
+
+  /** The saved position nudge for a signature/date box id, or '' when there is none.
+   *  Spliced into the INNER box's own inline style, stacked on top of its own
+   *  position:absolute;top:0;left:0 — never onto the outer box, so a nudge here can
+   *  never move the border-bottom line the outer box owns. */
+  function sigPosition(id) {
+    return window.SSGSignatureFieldLayout ? window.SSGSignatureFieldLayout.offsetStyleFor(id) : '';
   }
 
   /** Minor units to "1,234.56" — no symbol; callers add one. */
@@ -1131,12 +1139,24 @@
       // assembly.ts for the actual fix: the tag now renders as absolutely
       // positioned, invisible text, so it can never grow this box or get
       // clipped by anything, and DocuSeal receives it complete.
-      '<div style="flex:1.35;"><div id="ssgSigAcceptanceSignature" style="position:relative;border-bottom:1px solid #20241f;height:40px;display:flex;align-items:flex-end;padding-bottom:3px;' +
-      sigOffset('ssgSigAcceptanceSignature') +
-      '"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Signature</div></div>' +
-      '<div style="flex:1;"><div id="ssgSigAcceptanceDate" style="position:relative;border-bottom:1px solid #20241f;height:40px;display:flex;align-items:flex-end;padding-bottom:3px;' +
-      sigOffset('ssgSigAcceptanceDate') +
-      '"></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Date</div></div>' +
+      //
+      // Two nested boxes, not one: the OUTER box owns the border-bottom line and the
+      // saved SIZE — it never moves. The INNER box (the actual "ssgSig..." id
+      // injectSignatureFields matches) owns only the saved POSITION nudge, absolutely
+      // positioned within the outer box. A saved nudge used to be applied to this same
+      // single box, which moved the line right along with the field — see
+      // public/signature-field-layout.js's own comment for the real proposal that
+      // exposed it.
+      '<div style="flex:1.35;"><div style="position:relative;border-bottom:1px solid #20241f;height:40px;display:flex;align-items:flex-end;padding-bottom:3px;' +
+      sigSize('ssgSigAcceptanceSignature') +
+      '"><div id="ssgSigAcceptanceSignature" style="position:absolute;top:0;left:0;' +
+      sigPosition('ssgSigAcceptanceSignature') +
+      '"></div></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Signature</div></div>' +
+      '<div style="flex:1;"><div style="position:relative;border-bottom:1px solid #20241f;height:40px;display:flex;align-items:flex-end;padding-bottom:3px;' +
+      sigSize('ssgSigAcceptanceDate') +
+      '"><div id="ssgSigAcceptanceDate" style="position:absolute;top:0;left:0;' +
+      sigPosition('ssgSigAcceptanceDate') +
+      '"></div></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Date</div></div>' +
       '</div>' +
       '</div>' +
       footerNotesHtml +

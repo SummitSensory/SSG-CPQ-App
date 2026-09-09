@@ -20,20 +20,29 @@ import {
  * schema.prisma and SIGNATURE_FIELD_SLOT_IDS/SIGNATURE_FIELD_DEFAULTS in assembly.ts for
  * what the six ids are and what an unsaved property falls back to.
  *
- * Position (`top`/`left`) and size (`width`/`height`/`fontSize`) are two independent
- * things applied in two different places, not one setting read two ways:
+ * Position (`top`/`left`), size (`width`/`height`) and `fontSize` are three
+ * independent things applied in three different places, not one setting read three
+ * ways:
  *
- *   - Position is a purely cosmetic CSS nudge on the printed BLANK line — read by
- *     `public/signature-field-layout.js` at sign-in (fire-and-forget, same pattern as
- *     `public/contract-pages.js`'s legal-text fetch) so `public/proposal-document.js`
- *     and `public/contract-pages.js` can apply it the moment they build each box,
- *     everywhere a proposal renders (screen preview, customer PDF, monday push,
- *     DocuSeal package) — all four build from the same generated HTML.
- *   - Size is the actual DocuSeal FIELD dimensions/font — the thing a signature or
- *     date renders INTO once signed — read only at send time, server-side, by
+ *   - Position is a purely cosmetic CSS nudge — but applied to an INNER box nested
+ *     inside the printed line's own box, never to that outer box itself. It used to be
+ *     the same box: nudging a signature or date up to clear the printed line dragged
+ *     the line up right along with it, so the field landed exactly as misaligned as
+ *     before, just against a line that had also moved — see
+ *     `public/signature-field-layout.js`'s own comment for the real proposal
+ *     (P-2026-000084) that exposed it. Read by that file at sign-in (fire-and-forget,
+ *     same pattern as `public/contract-pages.js`'s legal-text fetch) so
+ *     `public/proposal-document.js` and `public/contract-pages.js` can apply it the
+ *     moment they build each box, everywhere a proposal renders (screen preview,
+ *     customer PDF, monday push, DocuSeal package) — all four build from the same
+ *     generated HTML.
+ *   - Size is applied to that OUTER, line-owning box by the same client-side fetch —
+ *     so the unsigned template's reserved space always matches what DocuSeal will
+ *     actually create — and separately read again at send time, server-side, by
  *     `sendProposalForSignature` (service.ts) and threaded into `buildPackage`'s
- *     `fieldSizeOverrides`. It never touches the printed blank line's own box, which is
- *     what keeps a size change from being able to break today's unsigned template.
+ *     `fieldSizeOverrides` to size the actual DocuSeal field.
+ *   - `fontSize` only ever reaches DocuSeal's own tag at send time: the printed blank
+ *     box has no visible text before signing, so a font size has nothing to size yet.
  *
  * Written only from the drag-to-place, drag-to-resize admin editor
  * (`public/signature-field-layout-admin.js`).

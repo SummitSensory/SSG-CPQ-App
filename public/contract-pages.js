@@ -612,9 +612,7 @@
           '<div style="flex:none;">' +
           label +
           '</div>' +
-          '<div' +
-          (id ? ' id="' + id + '"' : '') +
-          ' style="flex:1;border-bottom:1px solid #20241f;' +
+          '<div style="flex:1;border-bottom:1px solid #20241f;' +
           // A depth this tall is reserved for a signature — DocuSeal fills it
           // with an image, not a line of text, and without bottom-alignment
           // draws it at the top of the box, floating above the rule instead
@@ -638,23 +636,35 @@
             : id
               ? 'height:20px;display:flex;align-items:flex-end;'
               : 'padding-bottom:1px;') +
-          // Only the ids (By:/Date:, where the e-sign package drops in a raw
-          // DocuSeal text tag before DocuSeal ever sees the page) get this.
-          // NOT overflow:hidden — that clips the tag's own text before
-          // DocuSeal can read it complete, closing brace included, which is
-          // exactly what left literal "{{Summit Acknowledgment
-          // Signature;role=Summit;..." text on a signed proposal instead of a
-          // real field (see the postmortem in assembly.ts's invisibleTag()).
-          // position:relative just anchors that invisible, absolutely
-          // positioned tag text to this box without ever clipping it.
-          // The saved manual nudge for this box, if any — see
-          // public/signature-field-layout.js — stacked on top of position:relative.
+          // This OUTER box owns the line (border-bottom) and the saved SIZE —
+          // it never moves. position:relative anchors the INNER, id'd box
+          // below, not an invisible tag directly: a saved position nudge used
+          // to be applied to this same box, which moved the line right along
+          // with the field — see public/signature-field-layout.js's own
+          // comment for the real proposal (P-2026-000084) that exposed it.
           (id
             ? 'position:relative;' +
               (window.SSGSignatureFieldLayout ? window.SSGSignatureFieldLayout.styleFor(id) : '')
             : '') +
           '">' +
           (value ? esc(value) : '') +
+          // The INNER box: where the e-sign package actually drops a raw
+          // DocuSeal text tag (see injectSignatureFields in assembly.ts) and
+          // the only thing a saved position nudge ever moves. NOT
+          // overflow:hidden on either box — that clips the tag's own text
+          // before DocuSeal can read it complete, closing brace included,
+          // which is exactly what left literal "{{Summit Acknowledgment
+          // Signature;role=Summit;..." text on a signed proposal instead of a
+          // real field (see the postmortem in assembly.ts's invisibleTag()).
+          (id
+            ? '<div id="' +
+              id +
+              '" style="position:absolute;top:0;left:0;' +
+              (window.SSGSignatureFieldLayout
+                ? window.SSGSignatureFieldLayout.offsetStyleFor(id)
+                : '') +
+              '"></div>'
+            : '') +
           '</div></div>'
         );
       };
