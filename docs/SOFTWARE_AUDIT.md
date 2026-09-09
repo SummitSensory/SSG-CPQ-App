@@ -1222,10 +1222,10 @@ writes every column explicitly, including empty ones.
   the page. Not fixed: `signatureFieldLayout.ts`'s own header comment states the design
   intent explicitly — bounds are deliberately generous, and "the live preview in the admin
   editor makes the same clamp visible before it is ever saved" is the actual safety net for
-  exactly this class of value (unlike the width bug above, which broke that same net for
-  one page). Tightening bounds without rendering and measuring the real column widths risks
-  being confidently wrong in a different direction. Recommend a human pass with the admin
-  editor open before touching these numbers.
+  exactly this class of value (unlike the width bug fixed above, which broke that same net
+  for one page). Tightening bounds without rendering and measuring the real column widths
+  risks being confidently wrong in a different direction. **Needs a human pass with the
+  admin editor open** before touching these numbers.
 - **Row height misalignment**: resizing one field's height on the Acceptance page's shared
   signature row can misalign it against untouched siblings on the same line (a CSS
   `align-items` consequence). Same reasoning as above — the live preview shows it, and a
@@ -1235,32 +1235,47 @@ writes every column explicitly, including empty ones.
   write actions elsewhere (`FREIGHT_COST_WRITE`, `LEGAL_MANAGE`). Not exploited today
   (every account is `SYSTEM_ADMIN`, per AUD-018's own precedent), and which permission
   model to apply is a decision, not a bug fix — recorded for the same reason AUD-018 was.
-- **Follow-up "Send now" has no double-send guard** (`POST
-/crm/organizations/:organizationId/follow-ups/:key/send`) — no button-disable client-side,
-  no idempotency key server-side. A double-click or retry sends the same follow-up to a
-  customer twice.
-- **`isDecisionMaker` promotion is two non-transactional statements** with no unique
-  constraint — concurrent promotions on one organization can leave two contacts flagged
-  decision-maker, changing which one QuickBooks invoicing picks.
-- **Bundle revenue math is hand-duplicated in three places** (`src/proposals/analytics.ts`,
-  `public/app.js`, `public/proposal-document.js`) with a "must mirror" comment in each but
-  no test asserting they agree — a future edit to the bundle rule applied to only one or two
-  copies would silently reintroduce the exact double-count defect `bundle-totals.test.ts`
-  was written to catch, in whichever copy wasn't updated.
-- **`contract-pages.js`/`legal-admin.js`'s local `esc()` wrapper fails open** (falls back to
-  an unescaping pass-through) when its dependency is missing, the opposite of
-  `proposal-document.js`'s documented "throw, don't print wrong" doctrine for exactly this
-  class of legal-document helper. No live XSS today — both current call sites do supply
-  `esc` — but the fail-open shape is a standing risk the codebase's own stated doctrine
-  exists to prevent.
-- Minor, low-risk items not fixed: double-escaped proposal number in
-  `proposal-document.js`'s print footer; `belt-shipments.js`'s local `esc()` missing the
-  documented single-quote widening (currently no live risk — this file only builds
-  double-quoted attributes); `freight-trueup.js`'s header comment overstating what it
-  actually shares with the shell (money formatting is a real, harmless, already-reviewed
-  duplicate per AUD-003 step 1a); belt-shipment's "manual" audit tag not firing for a slip
-  mixing one real and one off-order line; belt-shipment's cap-lookup accepting any
-  `procurementLine` id rather than scoping to belt SKUs.
+  **Needs Bryan's decision**: add a dedicated permission, or leave as-is.
+
+### Fixed in a follow-up pass (2026-09-09, same day)
+
+Everything else recorded above as "genuinely low-risk" was fixed rather than left, since
+each had a contained, unambiguous fix that didn't require guessing at product intent:
+
+- **Follow-up "Send now" had no double-send guard.** No button-disable client-side, unlike
+  every other send button in `public/app.js`. Fixed: `sendNow()` disables `#fuSendNow` for
+  the duration of the request, re-enabling in a `finally` so a failed send doesn't leave the
+  button stuck.
+- **`isDecisionMaker` promotion was two non-transactional statements.** Fixed: the
+  demote-others/promote-this-one pair in `PATCH /crm/contacts/:id` (`src/routes/crm.ts`) now
+  runs inside `prisma.$transaction`.
+- **Bundle revenue math had no cross-implementation test.** Fixed:
+  `tests/unit/bundle-revenue-cross-check.test.ts` runs the real Obie Pro fixture through all
+  three implementations — `analytics.ts`'s `countedRevenueMinor` directly, `app.js`'s and
+  `proposal-document.js`'s `countedRevenueByIndex` extracted from source and executed (both
+  files self-boot against browser globals and cannot be `require`d as-is), plus a render
+  through `SSGProposalDocument.html()` confirming the printed group subtotal itself reads
+  `$11,268.45`, not `$22,536.90`. A future edit applied to only one or two copies now fails
+  this test instead of silently reintroducing the double-count.
+- **`contract-pages.js`/`legal-admin.js`'s local `esc()` fell back to an unescaping
+  pass-through when its dependency was missing.** Fixed: both now throw, matching
+  `proposal-document.js`'s documented doctrine for the same class of legal-document helper.
+- Double-escaped proposal number in `proposal-document.js`'s print footer — fixed by
+  escaping the assembled footer string once, not the number twice.
+- `belt-shipments.js`'s local `esc()` was missing the documented single-quote widening —
+  fixed to match `SSGUI.esc`'s character set.
+- `freight-trueup.js`'s header comment overstated what it borrows from the shell (money
+  formatting is a real, harmless, already-reviewed duplicate per AUD-003 step 1a) — comment
+  corrected in place, next to the function it was misdescribing.
+- Belt-shipment's "manual" audit tag used `every` where it needed `some` — a slip mixing one
+  real BOM line with one off-order line passed as ordinary, defeating the tag's purpose.
+  Fixed, with a test.
+- Belt-shipment's cap-lookup accepted any `procurementLine` id in the database, not just
+  belt SKUs — scoped to match the screen's own GET list query.
+
+Validated with the same loop as the rest of this pass: typecheck clean, lint 0
+warnings/errors, build clean, `pnpm test` 710/710 (5 new cases across
+`bundle-revenue-cross-check.test.ts` and two existing integration suites).
 
 ### Validation
 

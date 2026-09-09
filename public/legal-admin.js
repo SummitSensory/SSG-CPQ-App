@@ -38,8 +38,13 @@
     'border:1px solid #203060;background:#203060;color:#fff;border-radius:6px;padding:7px 15px;' +
     'font-family:inherit;font-size:12.5px;cursor:pointer;font-weight:600;white-space:nowrap;';
 
+  // Fail loud, not open: this renders onto the same legal-document text
+  // proposal-document.js's useRules() protects with the identical rule — a missing
+  // escaper must never quietly become a pass-through that prints unescaped text into
+  // a legal document's HTML. H is assigned once at bootstrap, before any render.
   function esc(s) {
-    return H && H.esc ? H.esc(s) : String(s == null ? '' : s);
+    if (!H || !H.esc) throw new Error('legal-admin: H.esc is required');
+    return H.esc(s);
   }
 
   /** The copy being edited: the draft if there is one, otherwise the published text. */

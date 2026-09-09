@@ -2349,18 +2349,33 @@
        * A 409 here means the connection cannot send (never connected, or connected
        * before Mail.Send was requested) — the message says which, and "Open in Outlook
        * instead" stays right next to this button for exactly that case.
+       *
+       * Disabled for the duration of the request — there is no draft, no review step,
+       * nothing between a click and Outlook actually sending, so a second click (or an
+       * impatient double-click) while the first is still in flight would send the same
+       * follow-up twice with no way to undo it. Same pattern as every other send button
+       * in this file; this one was missing it.
        */
       var sendNow = async function () {
+        var btn = document.getElementById('fuSendNow');
+        if (btn && btn.disabled) return;
+        if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
         msg('Sending…');
-        var to = contactOf();
-        var r = await authed(draftBase() + '/send' + draftQuery(to), { method: 'POST', body: {} });
-        if (r.status === 409) { msg(await serverMessage(r, 'Outlook is not connected.'), 1); return; }
-        if (!r.ok) { msg(await serverMessage(r, 'Could not send (' + r.status + ').'), 1); return; }
-        var out = null; try { out = await r.json(); } catch (e) {}
-        var logged = wantsLog() ? await logIt() : null;
-        if (logged === false) { msg('Sent from ' + ((out && out.mailbox) || 'your mailbox') + ', but the history line failed. Record it by hand.', 1); return; }
-        msg('Sent from ' + ((out && out.mailbox) || 'your mailbox') + '.' + (logged ? ' Logged.' : ''));
-        if (logged) await load(to && to.id ? to.id : null);
+        try {
+          var to = contactOf();
+          var r = await authed(draftBase() + '/send' + draftQuery(to), { method: 'POST', body: {} });
+          if (r.status === 409) { msg(await serverMessage(r, 'Outlook is not connected.'), 1); return; }
+          if (!r.ok) { msg(await serverMessage(r, 'Could not send (' + r.status + ').'), 1); return; }
+          var out = null; try { out = await r.json(); } catch (e) {}
+          var logged = wantsLog() ? await logIt() : null;
+          if (logged === false) { msg('Sent from ' + ((out && out.mailbox) || 'your mailbox') + ', but the history line failed. Record it by hand.', 1); return; }
+          msg('Sent from ' + ((out && out.mailbox) || 'your mailbox') + '.' + (logged ? ' Logged.' : ''));
+          if (logged) await load(to && to.id ? to.id : null);
+        } finally {
+          // A truthy `logged` re-rendered the panel above, replacing this button with a
+          // fresh, already-enabled one — resetting the old, now-detached node is a no-op.
+          if (btn) { btn.disabled = false; btn.textContent = 'Send now'; }
+        }
       };
 
       /**

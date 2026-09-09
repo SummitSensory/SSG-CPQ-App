@@ -112,9 +112,13 @@
     LINE +
     ';border-radius:7px;font-family:inherit;box-sizing:border-box;';
 
+  // Matches SSGUI.esc's widened character set (ssg-ui.js) even though this file keeps
+  // its own copy on purpose (AUD-003 step 1a) — a narrower escaper is a security gap,
+  // not a stylistic difference, and this file builds attributes elsewhere in the app
+  // that a single-quote breakout could reach.
   function esc(s) {
-    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
-      return c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : '&quot;';
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   }
   /**

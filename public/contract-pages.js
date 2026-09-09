@@ -915,10 +915,11 @@
      */
     html: function (doc, opts) {
       opts = opts || {};
-      if (!opts.esc)
-        opts.esc = function (s) {
-          return String(s == null ? '' : s);
-        };
+      // Fail loud, not open: this renders onto the same signed/legal documents
+      // proposal-document.js's useRules() protects with the identical rule — a missing
+      // escaper must never quietly become a pass-through that prints unescaped
+      // customer/company text into a legal document's HTML.
+      if (!opts.esc) throw new Error('ContractPages.html: opts.esc is required');
       var m = (doc && doc.meta) || {};
       /*
        * Every enabled document, in the order the server sent them.

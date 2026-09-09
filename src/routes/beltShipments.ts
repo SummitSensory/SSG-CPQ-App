@@ -320,9 +320,11 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
     // Never credit more than the BOM says is owed: a typo must not make the belt
     // disappear off the list for good.
     const ids = slip.lines.map((l) => l.lineId).filter(Boolean);
+    // Scoped to belt SKUs, matching the GET list above — an id for any other
+    // procurement line is not a belt this screen has any business crediting.
     const known = ids.length
       ? await prisma.procurementLine.findMany({
-          where: { id: { in: ids } },
+          where: { id: { in: ids }, sku: { startsWith: BELT_SKU_PREFIX, mode: 'insensitive' } },
           select: { id: true, quantity: true },
         })
       : [];
@@ -357,11 +359,13 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
     ledger.slips.push(record);
 
     await writeLedger(ledger, updatedAt, req.user!.sub);
-    // A slip with no ProcurementLine behind any of its rows shipped nothing off a bill
+    // A slip with no ProcurementLine behind ANY of its rows shipped nothing off a bill
     // of materials — a replacement, goodwill, or otherwise off-order shipment. Tagged
     // distinctly in the audit trail so that traffic is reviewable on its own, separate
-    // from ordinary order fulfillment.
-    const manual = record.lines.every((l) => !l.lineId);
+    // from ordinary order fulfillment. `some`, not `every`: a slip mixing one real BOM
+    // line with one off-order line still contains off-order traffic that needs the same
+    // review — `every` let a mixed slip pass as ordinary and defeated the whole point.
+    const manual = record.lines.some((l) => !l.lineId);
     await recordAudit({
       actorId: req.user!.sub,
       action: manual ? 'belt.shipment.ship.manual' : 'belt.shipment.ship',

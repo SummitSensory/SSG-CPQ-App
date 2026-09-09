@@ -153,6 +153,40 @@ describe('belt shipments — an item with no order behind it', () => {
     await app.close();
   });
 
+  it('tags a slip mixing one real line and one off-order line as manual, not ordinary', async () => {
+    // `manual` used to require EVERY line to lack a lineId, so a slip mixing one real
+    // BOM line with one goodwill/replacement line passed as ordinary — defeating the
+    // whole point of flagging off-order traffic for separate review.
+    h.settings.clear();
+    recordAudit.mockClear();
+    const app = await makeApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/belt-shipments/ship',
+      headers: { authorization: 'Bearer ' + (await tokenFor('SALES_REP')) },
+      payload: {
+        slip: {
+          orgId: '',
+          customer: 'Mixed Order',
+          proposalNumber: '',
+          attention: '',
+          date: '2026-09-01',
+          address: '',
+          note: '',
+          lines: [
+            { lineId: 'line-1', sku: 'FLEX-BELT-M', item: 'Belt', qty: 1 },
+            { lineId: '', sku: 'FLEX-BELT-M', item: 'Goodwill replacement belt', qty: 1 },
+          ],
+        },
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'belt.shipment.ship.manual' }),
+    );
+    await app.close();
+  });
+
   it('refuses a ship whose read is stale, rather than silently discarding a concurrent one', async () => {
     // The bug this guards: both requests used to read the same base ledger, compute
     // their own slip in memory, and blind-upsert the whole document back —
