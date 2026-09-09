@@ -101,6 +101,7 @@ export function registerApprovalRoutes(app: FastifyInstance): void {
         : null;
     const result = await createDelegation(
       req.user!.sub,
+      req.user!.role as never,
       body.toUserId,
       type,
       body.endsAt ? new Date(body.endsAt) : null,

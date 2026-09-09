@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
-import { ValidationError } from '../lib/errors.js';
+import { ValidationError, ConflictError } from '../lib/errors.js';
 import { recordAudit } from '../lib/audit.js';
 
 /**
@@ -94,14 +94,63 @@ type LedgerT = z.infer<typeof Ledger>;
 
 const EMPTY_LEDGER: LedgerT = { shipped: {}, slips: [], seq: 0 };
 
-async function readLedger(): Promise<LedgerT> {
+/**
+ * The whole ledger lives in one JSON blob (`UiSetting`), read in full and written
+ * back in full — there is no per-slip row to lock. `updatedAt` (row) is the version
+ * this read was made at; `ship`/`void` must pass it back to `writeLedger` so a second
+ * write from a stale read is refused instead of silently overwriting the first —
+ * see writeLedger's own comment.
+ */
+async function readLedgerRow(): Promise<{ ledger: LedgerT; updatedAt: Date | null }> {
   const row = await prisma.uiSetting.findUnique({ where: { key: KEY } });
-  if (!row) return EMPTY_LEDGER;
+  if (!row) return { ledger: EMPTY_LEDGER, updatedAt: null };
   try {
-    return Ledger.parse(JSON.parse(row.value));
+    return { ledger: Ledger.parse(JSON.parse(row.value)), updatedAt: row.updatedAt };
   } catch {
     // A malformed document must not take the screen down with it.
-    return EMPTY_LEDGER;
+    return { ledger: EMPTY_LEDGER, updatedAt: row.updatedAt };
+  }
+}
+
+async function readLedger(): Promise<LedgerT> {
+  return (await readLedgerRow()).ledger;
+}
+
+/**
+ * Write the ledger back, claimed on the `updatedAt` the caller read it at.
+ *
+ * Two staff printing shipment slips (or one shipping while another voids) within the
+ * same window both used to read the same base ledger, compute their own change in
+ * memory, and blind-`upsert` the whole document back — whichever request's write
+ * landed second silently erased the first slip from history and reverted its
+ * quantity credit, a real double-ship risk despite the comment above `ship` claiming
+ * "two people shipping at once cannot silently undo each other" (true only within a
+ * single request). Refused rather than merged: there is no per-slip row to merge,
+ * only a JSON blob computed from a point-in-time read.
+ */
+async function writeLedger(
+  ledger: LedgerT,
+  expectedUpdatedAt: Date | null,
+  actorId: string,
+): Promise<void> {
+  const value = JSON.stringify(Ledger.parse(ledger));
+  if (expectedUpdatedAt === null) {
+    try {
+      await prisma.uiSetting.create({ data: { key: KEY, value, updatedById: actorId } });
+    } catch (err) {
+      if ((err as { code?: string } | null)?.code === 'P2002') {
+        throw new ConflictError('Someone else just recorded a shipment. Reload and try again.');
+      }
+      throw err;
+    }
+    return;
+  }
+  const claim = await prisma.uiSetting.updateMany({
+    where: { key: KEY, updatedAt: expectedUpdatedAt },
+    data: { value, updatedById: actorId },
+  });
+  if (claim.count !== 1) {
+    throw new ConflictError('Someone else just recorded a shipment. Reload and try again.');
   }
 }
 
@@ -266,7 +315,7 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
     const { slip } = parsed.data;
     if (!slip.lines.length) throw new ValidationError('A slip needs at least one item.');
 
-    const ledger = await readLedger();
+    const { ledger, updatedAt } = await readLedgerRow();
 
     // Never credit more than the BOM says is owed: a typo must not make the belt
     // disappear off the list for good.
@@ -307,12 +356,7 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
     };
     ledger.slips.push(record);
 
-    const value = JSON.stringify(Ledger.parse(ledger));
-    await prisma.uiSetting.upsert({
-      where: { key: KEY },
-      create: { key: KEY, value, updatedById: req.user!.sub },
-      update: { value, updatedById: req.user!.sub, updatedAt: new Date() },
-    });
+    await writeLedger(ledger, updatedAt, req.user!.sub);
     // A slip with no ProcurementLine behind any of its rows shipped nothing off a bill
     // of materials — a replacement, goodwill, or otherwise off-order shipment. Tagged
     // distinctly in the audit trail so that traffic is reviewable on its own, separate
@@ -345,7 +389,7 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
     const parsed = Body.safeParse(req.body);
     if (!parsed.success) throw new ValidationError('Which slip?');
 
-    const ledger = await readLedger();
+    const { ledger, updatedAt } = await readLedgerRow();
     const slip = ledger.slips.find((s) => s.id === parsed.data.slipId);
     if (!slip) throw new ValidationError('That slip is no longer on file.');
 
@@ -365,12 +409,7 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
     slip.voidedBy = voider?.name || voider?.email || '';
     slip.voidedAt = new Date().toISOString();
 
-    const value = JSON.stringify(Ledger.parse(ledger));
-    await prisma.uiSetting.upsert({
-      where: { key: KEY },
-      create: { key: KEY, value, updatedById: req.user!.sub },
-      update: { value, updatedById: req.user!.sub, updatedAt: new Date() },
-    });
+    await writeLedger(ledger, updatedAt, req.user!.sub);
     await recordAudit({
       actorId: req.user!.sub,
       action: 'belt.shipment.void',

@@ -541,14 +541,29 @@ export async function applyEntries(
   const now = new Date();
 
   const trueUp = await prisma.$transaction(async (tx) => {
-    await tx.proposalVersion.update({
-      where: { id: version.id },
+    // Claim before writing, gated on the version's own updatedAt as read by
+    // loadVersion above: applyFreightEntries computed `applied.sections`/`.items`
+    // from that exact snapshot, and two staff applying different freight batches
+    // (a STEEL quote and a MATS quote — the normal case per this module's own
+    // docs) within the same window would otherwise both compute their own delta
+    // from the same stale base and the second write would blindly overwrite the
+    // first's — while BOTH FreightEntry batches still get marked APPLIED below,
+    // so the audit trail would claim a charge was applied that the frozen version
+    // never actually reflects. Same failure shape AUD-022 (color selection)
+    // fixed with claim-before-write; that discipline was missing here.
+    const claim = await tx.proposalVersion.updateMany({
+      where: { id: version.id, updatedAt: version.updatedAt },
       data: {
         sections: applied.sections as object,
         items: applied.items as object,
         priceSnapshotId: snapshot.id,
       },
     });
+    if (claim.count !== 1) {
+      throw new ConflictError(
+        'This proposal changed while your freight amounts were being applied. Reload and try again.',
+      );
+    }
 
     if (order) {
       const content = buildContentSnapshot(

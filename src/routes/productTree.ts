@@ -5,6 +5,7 @@ import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import { recordAudit } from '../lib/audit.js';
 import { ValidationError, ConflictError, NotFoundError } from '../lib/errors.js';
+import { syncPartSourcing } from '../catalog/partVendor.js';
 
 /**
  * The product tree: category names, the order things appear in, and a round-trip
@@ -621,7 +622,8 @@ export function registerProductTreeRoutes(app: FastifyInstance): void {
      */
     let skuCreated = 0,
       skuUpdated = 0,
-      sourcingLinked = 0;
+      sourcingLinked = 0,
+      sourcingAmbiguous = 0;
     for (const p of d.products) {
       const pr = pricedOf(p);
       const has =
@@ -688,22 +690,14 @@ export function registerProductTreeRoutes(app: FastifyInstance): void {
        * vendor alone", so it must not clear an existing link.
        */
       if (mfr) {
-        const link = await prisma.productSourcing.findFirst({
-          where: { productId: prod.id },
-          select: { id: true, manufacturerId: true },
-        });
-        if (!link) {
-          await prisma.productSourcing.create({
-            data: { productId: prod.id, manufacturerId: mfr.id },
-          });
-          sourcingLinked++;
-        } else if (link.manufacturerId !== mfr.id) {
-          await prisma.productSourcing.update({
-            where: { id: link.id },
-            data: { manufacturerId: mfr.id },
-          });
-          sourcingLinked++;
-        }
+        // Shared with the SKU CSV importer and the catalog item editor
+        // (src/catalog/partVendor.ts) — a bare findFirst here used to pick an
+        // arbitrary ProductSourcing row to overwrite on a part already sourced from
+        // more than one vendor (many-to-many by design; schema.prisma). Skipped
+        // rather than guessed, and counted so the import summary shows it.
+        const outcome = await syncPartSourcing(prisma, p.sku, mfr);
+        if (outcome === 'linked' || outcome === 'relinked') sourcingLinked++;
+        else if (outcome === 'ambiguous') sourcingAmbiguous++;
       }
     }
 
@@ -756,14 +750,32 @@ export function registerProductTreeRoutes(app: FastifyInstance): void {
     await recordAudit({
       actorId: req.user!.sub,
       action: 'catalog.tree.import',
-      details: { created, updated, links, deactivated, skuCreated, skuUpdated, sourcingLinked },
+      details: {
+        created,
+        updated,
+        links,
+        deactivated,
+        skuCreated,
+        skuUpdated,
+        sourcingLinked,
+        sourcingAmbiguous,
+      },
     });
     return reply.status(200).send({
       valid: true,
       committed: true,
       issues: [],
       plan,
-      result: { created, updated, links, deactivated, skuCreated, skuUpdated, sourcingLinked },
+      result: {
+        created,
+        updated,
+        links,
+        deactivated,
+        skuCreated,
+        skuUpdated,
+        sourcingLinked,
+        sourcingAmbiguous,
+      },
     });
   });
 }

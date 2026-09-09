@@ -426,6 +426,16 @@ export async function notifyPendingSigners(envelopeId: string): Promise<void> {
         .replace(/\[Signing Link\]/g, () => signingUrl);
     const subject = fillLink(envelope.subject);
     const html = fillLink(envelope.message);
+    // Claim before sending, unlike the read above — applyStatus runs from both the
+    // webhook and a manual "Refresh status" sync, and without this a signer could
+    // be emailed twice if both land while the first send is still in flight. The
+    // claim is released on a failed send (below) so the next sync/webhook still
+    // retries it, preserving the original retry-on-failure behavior.
+    const claimed = await prisma.esignSigner.updateMany({
+      where: { id: signer.id, emailedAt: null },
+      data: { emailedAt: new Date() },
+    });
+    if (claimed.count === 0) continue;
     try {
       const sentFromUserId = await sendEsignEmailTo({
         actorId: envelope.sentById,
@@ -433,14 +443,14 @@ export async function notifyPendingSigners(envelopeId: string): Promise<void> {
         subject,
         html,
       });
-      await prisma.$transaction([
-        prisma.esignSigner.update({ where: { id: signer.id }, data: { emailedAt: new Date() } }),
-        prisma.esignEnvelope.update({
-          where: { id: envelopeId },
-          data: { emailSentFromUserId: sentFromUserId },
-        }),
-      ]);
+      await prisma.esignEnvelope.update({
+        where: { id: envelopeId },
+        data: { emailSentFromUserId: sentFromUserId },
+      });
     } catch (err) {
+      await prisma.esignSigner
+        .update({ where: { id: signer.id }, data: { emailedAt: null } })
+        .catch(() => {});
       logger.error(
         { err, envelopeId, signerId: signer.id },
         'esign: could not email signer their turn',

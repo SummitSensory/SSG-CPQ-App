@@ -53,7 +53,17 @@
     var o = overrideFor(id);
     if (!o) return '';
     var css = '';
-    if (typeof o.width === 'number') css += 'width:' + o.width + 'px;';
+    // `flex:0 0 auto` before `width` — every line-owning box this splices into sits
+    // inside a `display:flex` row (see contract-pages.js's `line()`), most of them
+    // `flex:1`/`flex:1.35` by default. A flex item's explicit `width` is ignored for
+    // main-axis sizing while its flex-basis is non-auto (flex:1's basis is 0%), so
+    // without this override a saved width silently had NO visible effect on the
+    // Acknowledgment page — while still being baked into the actual DocuSeal field at
+    // send time (assembly.ts reads the same saved width). That defeated the one thing
+    // this override system exists to guarantee: the live preview shows what ships.
+    // Harmless on boxes that are not flex items (the Acceptance page's) — `flex` has
+    // no effect there.
+    if (typeof o.width === 'number') css += 'flex:0 0 auto;width:' + o.width + 'px;';
     if (typeof o.height === 'number') css += 'height:' + o.height + 'px;';
     return css;
   }

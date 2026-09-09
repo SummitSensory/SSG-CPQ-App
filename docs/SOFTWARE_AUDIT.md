@@ -2,7 +2,11 @@
 
 **Application:** Summit Sensory Gym — Proposal Management Software (SSG-CPQ-App)
 **Audit opened:** 2026-08-28
-**Status:** Pass 1 complete (static + architectural). Runtime, security-probe and performance passes NOT yet executed.
+**Status:** Pass 1 complete (static + architectural). Pass 2 executed against catalog data
+integrity (2026-08-29, §14). Pass 4 (2026-09-09, §15) re-audited everything shipped since —
+101 commits, mostly the DocuSeal e-sign subsystem — and fixed 6 HIGH findings same-day.
+Runtime/browser verification of UI-layer changes and a general performance pass are still
+outstanding.
 
 ---
 
@@ -1065,3 +1069,208 @@ meaning.**
 - **AUD-011 discrepancy.** Its status claims the QuickBooks mock was repaired with a Proxy
   fallback. That code was not present. A status field that overstates is worse than one
   that is missing.
+
+---
+
+## 15. Pass 4 — full codebase audit, focused on the unaudited surface (2026-09-09)
+
+Prompted by a direct request for a complete audit with critical issues fixed immediately,
+not queued. 101 commits had shipped since Pass 1/2 (2026-08-28/29) — almost entirely a
+DocuSeal e-signature subsystem built from scratch — none of it previously reviewed. Seven
+parallel reviews covered: the DocuSeal/e-sign backend; every other feature shipped since
+Pass 2 (follow-ups, CRM↔monday/QuickBooks sync, belt shipments, freight true-up, catalog
+imports); the app-wide authorization surface re-checked against everything new; dependency
+vulnerabilities; migrations 0074–0088; the signature-field drag-to-place editor; and the
+remaining new `public/*.js` files. Findings below were re-verified by direct code reading
+before any fix — several initial agent claims about exact mechanism were corrected in the
+process, the same discipline Pass 1 established.
+
+**Nothing CRITICAL.** Six HIGH findings, all fixed same-day with tests. Several MEDIUM/LOW
+findings are recorded but deliberately not fixed — either genuinely low-risk, or a product
+decision rather than a bug, per the standing house rule (AUD-018): a defensible business
+call is not guessed at.
+
+### Fixed — HIGH
+
+**AUD-027 — Approval delegation had no authority check at all.**
+`POST /approvals/delegations` (`src/routes/approvals.ts`) required only `requireAuth` — any
+authenticated role, including `READ_ONLY`. `createDelegation` never checked that the
+delegator actually held the approver permission for the type being delegated, and a
+delegation with no `type` is read by `activeDelegateIds` as covering **every** approval
+type (`OR: [{ type }, { type: null }]`). Two low-privilege accounts could delegate to each
+other with no type and fully defeat separation of duties for every category, including
+`PROPOSAL_RELEASE` — self-approve a release with no permission held at all. Fixed:
+`assertMayDelegate` (`src/approvals/service.ts`) requires the delegator to hold the specific
+type's approver permission, or — for a blanket, no-type delegation — every approver
+permission that exists. Tests: `tests/unit/approvals-delegation.test.ts` (6 cases).
+
+**AUD-028 — Two required e-sign signers could share a role or email.**
+`sendProposalForSignature` never checked signer uniqueness. `injectSignatureFields` places
+one field per distinct role, so a second signer sharing a role got no field placed for
+them at all, and `resolveSignerRow` could resolve DocuSeal's submitter onto the wrong local
+row. Fixed: required signers with a duplicate role or email are refused before DocuSeal is
+ever called (`src/integrations/docuseal/service.ts`).
+
+**AUD-029 — `ProductSourcing` (many-to-many by design) was being collapsed to one vendor.**
+Three code paths — `PATCH /catalog/items/:part`, the product-tree workbook import, and the
+shared `syncPartSourcing` helper itself (`src/catalog/partVendor.ts`) that two of them
+should have been using — picked an arbitrary row via a bare `findFirst` and either
+overwrote it or, on clearing the field, `deleteMany`'d **every** sourcing row for the part.
+A part deliberately sourced from two vendors (the schema's own example: tracking-rail
+hardware) could have one silently dropped or both wiped by an unrelated single-vendor edit.
+Fixed: `syncPartSourcing` now reads every row, refuses (`'ambiguous'`) rather than guesses
+when a part already has more than one, and only ever touches the one row it can be certain
+about. `catalogItems.ts` and `productTree.ts` now call the shared, fixed helper instead of
+reimplementing it a third and fourth time.
+
+**AUD-030 — Freight true-up `applyEntries` had no compare-and-swap.**
+Two staff applying different freight batches (the file's own docs call this the normal
+case — a STEEL quote and a MATS quote) within the same window both read the same base
+version, computed their own delta, and the second write silently discarded the first's —
+while **both** batches of `FreightEntry` rows were still marked `APPLIED` and logged as
+successful. Same failure shape as AUD-022 (color selection), whose claim-before-write
+discipline was not applied here. Fixed: `applyEntries`'s transaction now claims the version
+on the `updatedAt` it was read at (`src/proposals/freightTrueUpService.ts`) and refuses with
+a clear "reload and try again" rather than silently overwriting.
+
+**AUD-031 — Belt-shipment ledger was a whole-document blind read-modify-write.**
+The entire ship/void ledger lives in one `UiSetting` JSON row, read in full and
+`upsert`'d back in full with no concurrency check — two staff shipping or voiding within
+the same window could have one's write erase the other's slip from history and revert its
+quantity credit, despite a code comment claiming this was already safe. Fixed:
+`readLedgerRow`/`writeLedger` (`src/routes/beltShipments.ts`) claim the row on the
+`updatedAt` they read, refusing with 409 on a stale write. Test:
+`tests/integration/belt-shipments-manual.test.ts` reproduces the race deterministically via
+a read/write seam, the same technique `portal-color-apply.test.ts` used for AUD-022.
+
+**AUD-032 — Editing any CRM contact could overwrite monday's deal-row contact with the
+wrong person's information.** `pushContactToDeal` pushed whichever contact was just edited,
+with no regard for `isDecisionMaker` — QuickBooks invoicing (`loadCustomerSource`) already
+resolves the org's "the" contact by `isDecisionMaker` first; monday was not. Fixing a
+secondary contact's phone number could silently overwrite the deal row's name/email with
+the secondary contact's, clobbering the real decision maker. A second, smaller defect in
+the same function: a column was only ever set when the new value was truthy, so clearing a
+mistyped email or phone through the CRM never propagated — monday kept showing the old
+value forever while the endpoint reported success. Fixed: `pushContactToDeal`
+(`src/integrations/monday/contactPush.ts`) now takes only the organization id, resolves the
+current decision-maker contact itself (identical ordering to `loadCustomerSource`), and
+writes every column explicitly, including empty ones.
+
+### Fixed — MEDIUM / LOW
+
+- **e-sign document-total guard omitted cross-border charges** (`checkDocumentTotal`,
+  `src/proposals/documentIntegrity.ts`, called from `src/routes/esign.ts` and
+  `src/routes/render.ts`): the expected total was `versionTotals().total` alone, not
+  `+ sellerCollectedCharges().totalMinor` — the actual "total payable to Summit" printed on
+  a Canadian proposal. Currently monitor-mode only (`STRICT_PROPOSAL_GUARDS`, unset in
+  `.env.example`) so nothing was refused, but every legitimate Canadian send would have
+  logged as a false mismatch, and the day someone enables enforcement based on clean-looking
+  logs, every Canadian send would have been wrongly blocked. Fixed now, before that happens.
+- **Signature image lookup could cross-attribute by role prefix**
+  (`signatureImageFor`, `src/integrations/docuseal/service.ts`): matched a field by
+  `startsWith(role)`, so a generic multi-signer envelope with roles like "Witness" and
+  "Witness2" could pick up the wrong signer's drawn signature on the Certificate of
+  Signature — the same failure class already fixed once for exact-role collisions,
+  reopened for prefix collisions. Now requires an exact match. Test added.
+- **`notifyPendingSigners` could double-email a signer** their "please sign" notice under
+  the same webhook/manual-sync race every sibling notifier in that file already guards
+  against — it wrote its guard column (`emailedAt`) only after the send succeeded instead
+  of claiming it first. Fixed to claim-then-send, with the claim released on a failed send
+  so retry-on-failure still works.
+- **The Acknowledgment page's signature/date field width silently had no visible effect**
+  when resized in the admin editor (`public/signature-field-layout.js`'s `styleFor`), while
+  still being baked into the real DocuSeal field at send time — a flex item's explicit
+  `width` is ignored while its flex-basis is non-auto (`flex:1`), so the one thing this
+  override system exists to guarantee — the live preview shows what ships — was silently
+  false for these four fields. Fixed by pinning `flex:0 0 auto` alongside a saved width.
+  **Not independently verified in a browser** — e2e coverage for this feature
+  (`e2e/signature-field-layout.spec.ts`) only exercises the save/read API, not rendering;
+  recommend a human spot-check of the Acknowledgment page preview after deploy.
+- Unsanitized filename building a storage key (`POST /crm/attachments`,
+  `src/routes/crm.ts`) — no character restriction unlike every other path-builder in
+  `src/lib/fileStore.ts`. Currently inert (nothing reads the key back), fixed via
+  `safeSegment()` as defense-in-depth before the upload flow is ever wired up.
+- Two eslint-tier files (`public/signature-field-layout.js`,
+  `public/signature-field-layout-admin.js`) were covered only at `warn`, unlike every other
+  file extracted clean under AUD-003/AUD-004's policy. Promoted to `error`.
+- Deleted `src/routes/error-handler.ts`, a dead near-duplicate of the actually-wired
+  `src/plugins/error-handler.ts`, left behind when the real one was rebuilt at the correct
+  path. Nothing imported it.
+- `docs/SOFTWARE_AUDIT.md` §AUD-016 claimed a hand-written `src/handoff/xlsx.ts` replaced
+  `exceljs`. That file does not exist; `exceljs` is what `src/handoff/bomDocuments.ts`
+  actually uses. Corrected here rather than left to mislead the next reader.
+
+### Recorded, not fixed — needs a decision or is genuinely low-risk
+
+- **`uuid` (via `exceljs@4.4.0`) and `vitest`/`@vitest/mocker` moderate advisories**
+  (`pnpm audit`). `exceljs` has never moved off `uuid@^8.3.0` — no version bump fixes this
+  on our side, and the vulnerable code path (`uuid` given an external buffer) is not one
+  application code triggers. `vitest` 4.x is a major bump with a rewritten mocker 24 test
+  files depend on; devDependency only, no untrusted contributors run tests here. Both
+  deferred; track `exceljs` upstream, bump `vitest` in its own dedicated PR.
+- **`prisma/migrations/0075_legal_documents`** has 7 statements without `IF NOT EXISTS`
+  guards (3 `CREATE TABLE`, 2 `CREATE UNIQUE INDEX`, 1 `CREATE INDEX`, 1 unguarded
+  `ADD COLUMN`, the last three all on nullable columns so no data-loss risk). Already
+  applied and Prisma-checksummed — per house rule, an applied migration file is never
+  edited. Recorded so a future rerun-from-partial-apply scenario against this one specific
+  migration is diagnosable rather than a surprise.
+- **Signature field width/position bounds are wider than the real column budget** on the
+  Acceptance page (500px max vs. a ~183–247px real budget by hand-calculation from the
+  declared flex ratios), and position nudges (±300px) are not checked against the printed
+  page's own 816×1056px geometry — a badly-offset field is recorded as "placed" purely from
+  a text-match on the assembled HTML, with no notion of whether it actually renders inside
+  the page. Not fixed: `signatureFieldLayout.ts`'s own header comment states the design
+  intent explicitly — bounds are deliberately generous, and "the live preview in the admin
+  editor makes the same clamp visible before it is ever saved" is the actual safety net for
+  exactly this class of value (unlike the width bug above, which broke that same net for
+  one page). Tightening bounds without rendering and measuring the real column widths risks
+  being confidently wrong in a different direction. Recommend a human pass with the admin
+  editor open before touching these numbers.
+- **Row height misalignment**: resizing one field's height on the Acceptance page's shared
+  signature row can misalign it against untouched siblings on the same line (a CSS
+  `align-items` consequence). Same reasoning as above — the live preview shows it, and a
+  confident CSS fix needs visual verification this environment cannot perform.
+- **Belt-shipment ship/void write actions are gated by `PROPOSAL_READ`**, a read
+  permission, with no dedicated write/manage permission — inconsistent with comparable
+  write actions elsewhere (`FREIGHT_COST_WRITE`, `LEGAL_MANAGE`). Not exploited today
+  (every account is `SYSTEM_ADMIN`, per AUD-018's own precedent), and which permission
+  model to apply is a decision, not a bug fix — recorded for the same reason AUD-018 was.
+- **Follow-up "Send now" has no double-send guard** (`POST
+/crm/organizations/:organizationId/follow-ups/:key/send`) — no button-disable client-side,
+  no idempotency key server-side. A double-click or retry sends the same follow-up to a
+  customer twice.
+- **`isDecisionMaker` promotion is two non-transactional statements** with no unique
+  constraint — concurrent promotions on one organization can leave two contacts flagged
+  decision-maker, changing which one QuickBooks invoicing picks.
+- **Bundle revenue math is hand-duplicated in three places** (`src/proposals/analytics.ts`,
+  `public/app.js`, `public/proposal-document.js`) with a "must mirror" comment in each but
+  no test asserting they agree — a future edit to the bundle rule applied to only one or two
+  copies would silently reintroduce the exact double-count defect `bundle-totals.test.ts`
+  was written to catch, in whichever copy wasn't updated.
+- **`contract-pages.js`/`legal-admin.js`'s local `esc()` wrapper fails open** (falls back to
+  an unescaping pass-through) when its dependency is missing, the opposite of
+  `proposal-document.js`'s documented "throw, don't print wrong" doctrine for exactly this
+  class of legal-document helper. No live XSS today — both current call sites do supply
+  `esc` — but the fail-open shape is a standing risk the codebase's own stated doctrine
+  exists to prevent.
+- Minor, low-risk items not fixed: double-escaped proposal number in
+  `proposal-document.js`'s print footer; `belt-shipments.js`'s local `esc()` missing the
+  documented single-quote widening (currently no live risk — this file only builds
+  double-quoted attributes); `freight-trueup.js`'s header comment overstating what it
+  actually shares with the shell (money formatting is a real, harmless, already-reviewed
+  duplicate per AUD-003 step 1a); belt-shipment's "manual" audit tag not firing for a slip
+  mixing one real and one off-order line; belt-shipment's cap-lookup accepting any
+  `procurementLine` id rather than scoping to belt SKUs.
+
+### Validation
+
+`pnpm typecheck` clean · `pnpm lint` 0 warnings/errors · `pnpm build` clean ·
+`pnpm db:migrate:status` up to date · `pnpm db:check:integrity` pass (pre-existing warnings
+only) · `pnpm test`: **705 passed, 0 failed** (7 new cases: `approvals-delegation.test.ts`
+×6, one added to `docuseal-certificate-enrichment.test.ts`, one added to
+`belt-shipments-manual.test.ts`) · `pnpm test:e2e`: 1 passed (health), 4 skipped (no
+`E2E_TOKEN` / live stack in this environment — signature-field-layout and CRM e2e specs
+were not exercised).
+
+**Not verified in a browser**: the signature-field-layout CSS fix (AUD's own recommendation
+above), and nothing else in this pass touched rendered UI beyond that one file.

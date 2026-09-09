@@ -6,6 +6,7 @@ import { Permission } from '../authz/permissions.js';
 import { recordAudit } from '../lib/audit.js';
 import { ValidationError, ConflictError, NotFoundError } from '../lib/errors.js';
 import { reassignSkuVendor } from '../handoff/vendorReassign.js';
+import { syncPartSourcing } from '../catalog/partVendor.js';
 import { recordRevision, skuSnapshot } from '../lib/revisions.js';
 
 /**
@@ -591,6 +592,26 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
       }
       const canonical = mfr ? mfr.name : '';
 
+      // Checked BEFORE either write, same reasoning as the unknown-vendor check
+      // above: refusing after Sku.manufacturer already changed would leave it and
+      // ProductSourcing disagreeing, which is the two-records-out-of-step state
+      // resync-order-vendors.ts exists to repair, not something to create fresh.
+      // ProductSourcing is many-to-many by design (schema.prisma); a part already
+      // sourced from more than one vendor has no single row this field could mean,
+      // so it's refused rather than silently collapsed to one.
+      if (product) {
+        const sourcingRows = await prisma.productSourcing.count({
+          where: { productId: product.id },
+        });
+        if (sourcingRows > 1) {
+          throw new ValidationError(
+            `${part} is sourced from more than one vendor already — this field can't ` +
+              `tell which one to change. Leave it as-is; multi-vendor parts aren't ` +
+              `editable here yet.`,
+          );
+        }
+      }
+
       if (sku) {
         const before = sku.manufacturer ?? '';
         await prisma.sku.update({
@@ -604,22 +625,8 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
         }
       }
       if (product) {
-        if (!mfr) {
-          await prisma.productSourcing.deleteMany({ where: { productId: product.id } });
-        } else {
-          const existing = await prisma.productSourcing.findFirst({
-            where: { productId: product.id },
-          });
-          if (existing)
-            await prisma.productSourcing.update({
-              where: { id: existing.id },
-              data: { manufacturerId: mfr.id },
-            });
-          else
-            await prisma.productSourcing.create({
-              data: { productId: product.id, manufacturerId: mfr.id },
-            });
-        }
+        // Shared with the SKU CSV importer (src/catalog/partVendor.ts).
+        await syncPartSourcing(prisma, part, mfr);
       }
     }
 
