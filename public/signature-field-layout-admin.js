@@ -15,14 +15,16 @@
  * against. Rendering the real document means the six boxes ARE exactly what
  * will print, on exactly the page they print on, every time.
  *
- * Position (top/left) and size (width/height/font size) are saved the same way but
- * apply in two different places — see public/signature-field-layout.js's own comment
- * for why: position and width/height are applied to the printed BLANK box (so the
- * unsigned template always matches what DocuSeal will actually create), while font
- * size only ever reaches DocuSeal's own tag at send time, since a blank box has no
- * text yet to size. This editor shows a realistic placeholder value in every box, at
- * its current width/height/font size, so a size decision is judged against what a
- * signature or date will actually look like — not an empty rectangle.
+ * Position (top/left), size (width/height) and font size are saved together per slot,
+ * but apply to three different things — see public/signature-field-layout.js's own
+ * comment for why: size is applied to the outer, LINE-owning box (so the unsigned
+ * template always reserves the same space DocuSeal will actually use), position is
+ * applied only to an inner box nested inside it (so a nudge can never drag the line
+ * itself out of place — see that file's own comment for the real proposal this broke),
+ * and font size only ever reaches DocuSeal's own tag at send time, since a blank box
+ * has no text yet to size. This editor shows a realistic placeholder value in every
+ * box, at its current width/height/font size, so a size decision is judged against
+ * what a signature or date will actually look like — not an empty rectangle.
  *
  * Registers on window.SSGSignatureFieldLayoutAdmin. Needs authed, esc, proposalDocData,
  * proposalDocHtml and paginateProposalArea from the shell.
@@ -183,15 +185,26 @@
    *  REAL box (an actual element the real document just produced), then wires the same
    *  drag/resize/keyboard behavior this file has always used. Idempotent per element —
    *  a proposal switch re-renders the whole preview from scratch, so there is never a
-   *  stale handle left over from a previous mount. */
+   *  stale handle left over from a previous mount.
+   *
+   *  The real markup is now two nested boxes (see proposal-document.js/
+   *  contract-pages.js): an OUTER box that owns the line (border-bottom) and the saved
+   *  SIZE, and an INNER box — the one `id` actually names — that owns only the saved
+   *  POSITION. Dragging moves the inner box; resizing (the corner handle) resizes the
+   *  outer one, so the admin canvas shows exactly what each control actually does in
+   *  production: a position nudge moves the signature/date away from a line that stays
+   *  put, and a resize changes the reserved space the line itself sits in. */
   function mountBox(id) {
     var box = document.getElementById(id);
     if (!box) return false;
+    var line = box.parentElement;
+    if (!line) return false;
     box.setAttribute('tabindex', '0');
-    box.style.position = 'relative';
     box.style.overflow = 'visible';
     box.style.outline = '1px dashed #9aa0c8';
     box.style.outlineOffset = '1px';
+    box.style.cursor = 'move';
+    line.style.outline = '1px solid #b7c6ee';
     var span = document.createElement('span');
     span.setAttribute('data-placeholder', id);
     span.style.whiteSpace = 'nowrap';
@@ -200,11 +213,12 @@
     box.appendChild(span);
     var handle = document.createElement('div');
     handle.setAttribute('data-resize', id);
-    handle.title = 'Drag to resize';
+    handle.title =
+      'Drag to resize the line — the field itself is sized independently of its position.';
     handle.style.cssText =
       'position:absolute;right:-5px;bottom:-5px;width:11px;height:11px;' +
       'border:1px solid #203060;background:#fff;border-radius:2px;cursor:nwse-resize;';
-    box.appendChild(handle);
+    line.appendChild(handle);
     applyBox(id);
     attachDrag(box, id);
     attachResize(handle, id);
@@ -415,15 +429,20 @@
     set('f', e.fontSize);
   }
 
-  /** Applies the current effective placement/size/placeholder to a box's own DOM. */
+  /** Applies the current effective placement/size/placeholder to a box's own DOM —
+   *  position to the inner (id'd) box, size to the outer (line-owning) box, matching
+   *  where production actually applies each. */
   function applyBox(id) {
     var box = document.getElementById(id);
     if (!box) return;
+    var line = box.parentElement;
     var e = effective(id);
-    box.style.top = e.top ? e.top + 'px' : '';
-    box.style.left = e.left ? e.left + 'px' : '';
-    box.style.width = e.width + 'px';
-    box.style.height = e.height + 'px';
+    box.style.top = e.top ? e.top + 'px' : '0';
+    box.style.left = e.left ? e.left + 'px' : '0';
+    if (line) {
+      line.style.width = e.width + 'px';
+      line.style.height = e.height + 'px';
+    }
     var span = box.querySelector('[data-placeholder]');
     var ph = PLACEHOLDERS[id] || { text: '', cursive: false };
     if (span) {
