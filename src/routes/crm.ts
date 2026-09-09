@@ -30,6 +30,7 @@ import { DEAL_COL, buildAddress } from '../integrations/monday/crmMapping.js';
 import { isMondayPushConfigured } from '../config/env.js';
 import { normalizeCountry, normalizeProvince, isCanada } from '../lib/country.js';
 import { randomBytes } from 'node:crypto';
+import { safeSegment } from '../lib/fileStore.js';
 
 const ORG_SORT = ['name', 'customerType', 'createdAt', 'updatedAt'];
 const OPP_SORT = ['name', 'stage', 'fundingStatus', 'createdAt', 'updatedAt'];
@@ -216,7 +217,7 @@ export function registerCrmRoutes(app: FastifyInstance): void {
     // because the caller is typically the customer-profile comparison panel, which
     // re-reads QuickBooks right after saving; awaiting means that re-read sees the
     // correction instead of racing it.
-    void pushContactToDeal(existing.organizationId, contact).catch((err) =>
+    void pushContactToDeal(existing.organizationId).catch((err) =>
       logger.error({ err, contactId: contact.id }, 'monday: contact push failed'),
     );
     try {
@@ -502,7 +503,8 @@ export function registerCrmRoutes(app: FastifyInstance): void {
   app.post('/crm/attachments', write, async (req, reply) => {
     const parsed = AttachmentInput.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(parsed.error.message);
-    const storageKey = 'uploads/' + randomBytes(16).toString('hex') + '/' + parsed.data.fileName;
+    const storageKey =
+      'uploads/' + randomBytes(16).toString('hex') + '/' + safeSegment(parsed.data.fileName);
     const attachment = await prisma.attachment.create({
       data: {
         category: parsed.data.category,

@@ -177,6 +177,8 @@ export default [
       'public/ssg-vendor-parts.js',
       'public/catalog.js',
       'public/legal-admin.js',
+      'public/signature-field-layout.js',
+      'public/signature-field-layout-admin.js',
     ],
     rules: {
       'no-undef': 'error',

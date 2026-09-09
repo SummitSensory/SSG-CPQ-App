@@ -79,33 +79,51 @@ export async function syncPartSourcing(
   prisma: PrismaClient,
   part: string,
   vendor: Vendor | null,
-): Promise<'linked' | 'relinked' | 'cleared' | 'no-product' | 'unchanged'> {
+): Promise<'linked' | 'relinked' | 'cleared' | 'no-product' | 'unchanged' | 'ambiguous'> {
   const product = await prisma.product.findUnique({
     where: { sku: part },
     select: { id: true },
   });
   if (!product) return 'no-product';
 
-  const existing = await prisma.productSourcing.findFirst({
+  // Every row, not just one: ProductSourcing is many-to-many by design (schema.prisma —
+  // a part can have several vendors, several flagged primary; see the tracking-rail
+  // hardware example). A bare `findFirst` here used to pick an arbitrary row to
+  // overwrite, and `deleteMany` on clear used to remove EVERY vendor a part had, not
+  // just the one this single-vendor field represents — silently destroying deliberate
+  // multi-vendor sourcing that nothing else in the app would ever restore.
+  const rows = await prisma.productSourcing.findMany({
     where: { productId: product.id },
     select: { id: true, manufacturerId: true },
+    orderBy: { id: 'asc' },
   });
 
   if (!vendor) {
-    if (!existing) return 'unchanged';
-    await prisma.productSourcing.deleteMany({ where: { productId: product.id } });
+    if (!rows.length) return 'unchanged';
+    // Which of several vendors "clear the vendor" should remove is genuinely
+    // ambiguous — refuse rather than guess-delete all of them.
+    if (rows.length > 1) return 'ambiguous';
+    await prisma.productSourcing.delete({ where: { id: rows[0]!.id } });
     return 'cleared';
   }
-  if (!existing) {
+
+  if (rows.some((r) => r.manufacturerId === vendor.id)) return 'unchanged';
+  if (rows.length === 0) {
     await prisma.productSourcing.create({
       data: { productId: product.id, manufacturerId: vendor.id },
     });
     return 'linked';
   }
-  if (existing.manufacturerId === vendor.id) return 'unchanged';
-  await prisma.productSourcing.update({
-    where: { id: existing.id },
-    data: { manufacturerId: vendor.id },
-  });
-  return 'relinked';
+  if (rows.length === 1) {
+    await prisma.productSourcing.update({
+      where: { id: rows[0]!.id },
+      data: { manufacturerId: vendor.id },
+    });
+    return 'relinked';
+  }
+  // Already sourced from two or more different vendors — overwriting one of them
+  // would be a guess, and adding this as a third is not what "change the vendor"
+  // means either. Refuse; a multi-vendor part needs its own management surface,
+  // not this single-field one.
+  return 'ambiguous';
 }

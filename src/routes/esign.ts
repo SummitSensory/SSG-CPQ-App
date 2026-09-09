@@ -29,6 +29,7 @@ import { outlookStatusFor } from '../integrations/microsoft/graph.js';
 import { pdfAvailable } from '../render/pdf.js';
 import { checkDocumentTotal } from '../proposals/documentIntegrity.js';
 import { enforceOrReport } from '../lib/guards.js';
+import { sellerCollectedCharges } from '../crossborder/sellerCharges.js';
 
 /**
  * A nullable Json column does not take `null` — Prisma distinguishes clearing the
@@ -150,7 +151,13 @@ export function registerEsignRoutes(app: FastifyInstance): void {
       select: { items: true, sections: true },
     });
     if (!version) throw new NotFoundError('Proposal version not found');
-    const check = checkDocumentTotal(parsed.data.proposalHtml, version.items, version.sections);
+    const border = await sellerCollectedCharges(versionId);
+    const check = checkDocumentTotal(
+      parsed.data.proposalHtml,
+      version.items,
+      version.sections,
+      border.totalMinor,
+    );
     if (!check.ok) {
       // Monitor mode by default. A wrongly-refused send stops a deal, so until the logs
       // confirm this only fires on a genuine mismatch it reports instead of refusing.

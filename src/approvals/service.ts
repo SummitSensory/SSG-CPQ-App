@@ -3,7 +3,13 @@ import { ConflictError, ForbiddenError, ValidationError, NotFoundError } from '.
 import { recordAudit } from '../lib/audit.js';
 import { can } from '../authz/rbac.js';
 import type { Role } from '../authz/permissions.js';
-import { approverPermissionFor, canDecide, DEFAULT_EXPIRY_HOURS } from './policy.js';
+import {
+  APPROVAL_TYPES,
+  APPROVER_PERMISSION,
+  approverPermissionFor,
+  canDecide,
+  DEFAULT_EXPIRY_HOURS,
+} from './policy.js';
 import { notifier } from './notify.js';
 import type { ApprovalType, ApprovalStatus } from '@prisma/client';
 
@@ -330,14 +336,49 @@ function loadWithEvents(requestId: string) {
   });
 }
 
+/**
+ * A delegation hands away decision authority — it must never grant more than
+ * `fromRole` actually holds today. Without this check, any two authenticated
+ * accounts (any role) could delegate to each other with no `type`, which
+ * `activeDelegateIds`'s `OR: [{ type }, { type: null }]` treats as matching
+ * every approval type, defeating separation of duties for every category —
+ * DISCOUNT, PROPOSAL_RELEASE included — for accounts holding none of the
+ * underlying approver permissions.
+ */
+function assertMayDelegate(fromRole: Role, type: ApprovalType | null): void {
+  if (type !== null) {
+    if (!can(fromRole, approverPermissionFor(type))) {
+      throw new ForbiddenError(
+        `Role ${fromRole} cannot delegate ${type} — it lacks that authority`,
+      );
+    }
+    return;
+  }
+  // A blanket (no-type) delegation must only be offered by someone who could
+  // already decide every approval type themselves — otherwise it would grant
+  // the delegate authority the delegator never had.
+  const allPermissions = new Set(Object.values(APPROVER_PERMISSION));
+  const missing = [...allPermissions].filter((perm) => !can(fromRole, perm));
+  if (missing.length) {
+    throw new ForbiddenError(
+      `Role ${fromRole} cannot create a blanket delegation — it lacks ${missing.join(', ')}. Delegate a specific type instead.`,
+    );
+  }
+}
+
 export async function createDelegation(
   fromUserId: string,
+  fromRole: Role,
   toUserId: string,
   type: ApprovalType | null,
   endsAt: Date | null,
   createdById: string,
 ): Promise<{ id: string }> {
   if (fromUserId === toUserId) throw new ValidationError('Cannot delegate to yourself');
+  if (type !== null && !(APPROVAL_TYPES as readonly string[]).includes(type)) {
+    throw new ValidationError(`Unknown approval type: ${type}`);
+  }
+  assertMayDelegate(fromRole, type);
   const d = await prisma.approvalDelegation.create({
     data: { fromUserId, toUserId, type, endsAt, createdById },
   });

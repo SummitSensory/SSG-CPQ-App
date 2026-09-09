@@ -70,10 +70,22 @@ export interface TotalCheck {
  * A zero total is exempt: a proposal with no priced lines is a legitimate document
  * (a specification, an options sheet) and "0.00" appears in too many places for the
  * match to mean anything.
+ *
+ * `borderChargesMinor` is the seller-collected cross-border charge total
+ * (`sellerCollectedCharges().totalMinor`) — a Canadian proposal's printed "Total
+ * payable to Summit" is `versionTotals().total + borderChargesMinor`, not
+ * `versionTotals().total` alone. Omitting it here would make every legitimate
+ * Canadian send look like a mismatch. Defaults to 0 for callers with nothing to
+ * add (a US proposal, or a caller that hasn't computed it).
  */
-export function checkDocumentTotal(html: string, items: unknown, sections: unknown): TotalCheck {
+export function checkDocumentTotal(
+  html: string,
+  items: unknown,
+  sections: unknown,
+  borderChargesMinor = 0,
+): TotalCheck {
   const totals = versionTotals(items, sections);
-  const expectedMinor = Math.round(totals.total);
+  const expectedMinor = Math.round(totals.total + borderChargesMinor);
   const expected = formatMinor(expectedMinor);
   if (expectedMinor === 0) return { ok: true, expectedMinor, expected };
   const forms = variants(String(html ?? ''));

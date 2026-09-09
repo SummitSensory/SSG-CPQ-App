@@ -13,6 +13,7 @@ import { uploadProposalPdfToMonday } from '../integrations/monday/proposalPush.j
 import { renderPdf, pdfAvailable } from '../render/pdf.js';
 import { checkDocumentTotal } from '../proposals/documentIntegrity.js';
 import { enforceOrReport } from '../lib/guards.js';
+import { sellerCollectedCharges } from '../crossborder/sellerCharges.js';
 
 /**
  * Server-rendered PDFs.
@@ -51,7 +52,13 @@ export function registerRenderRoutes(app: FastifyInstance): void {
       select: { items: true, sections: true },
     });
     if (!version) throw new ValidationError('Proposal version not found');
-    const check = checkDocumentTotal(body.proposalHtml, version.items, version.sections);
+    const border = await sellerCollectedCharges(versionId);
+    const check = checkDocumentTotal(
+      body.proposalHtml,
+      version.items,
+      version.sections,
+      border.totalMinor,
+    );
     if (!check.ok) {
       enforceOrReport(
         'monday-document-total',

@@ -86,4 +86,14 @@ describe('signatureImageFor', () => {
     ]);
     expect(await signatureImageFor(sub, 'Summit')).toBe('data:image/png;base64,c3VtbWl0');
   });
+
+  it("does not match a role that is a prefix of another signer's role", async () => {
+    // A generic multi-signer envelope can have roles like "Witness" and "Witness2" —
+    // a bare `startsWith` previously matched "Witness" against "Witness2 Signature".
+    const sub = submitterWithValues([
+      { field: 'Witness2 Signature', value: 'data:image/png;base64,d2l0bmVzczI=' },
+    ]);
+    expect(await signatureImageFor(sub, 'Witness')).toBeNull();
+    expect(await signatureImageFor(sub, 'Witness2')).toBe('data:image/png;base64,d2l0bmVzczI=');
+  });
 });

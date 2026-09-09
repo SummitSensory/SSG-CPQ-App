@@ -308,6 +308,30 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
       'At least one signer has to actually sign — mark someone as a real signer, not just view only.',
     );
   }
+  // resolveSignerRow and injectSignatureFields both assume role is unique per
+  // required signer — "every envelope has exactly one Customer and one Summit
+  // signer" per resolveSignerRow's own comment. A second required signer sharing
+  // a role gets no field placed for them in the assembled PDF (injectSignatureFields
+  // places one field per distinct role) and can have DocuSeal's submitter resolved
+  // onto the wrong local row. Duplicate emails among required signers are the
+  // same hazard from the other direction and are refused for the same reason.
+  const requiredSigners = input.signers.filter((s) => !s.viewOnly);
+  const seenRoles = new Set<string>();
+  const seenEmails = new Set<string>();
+  for (const s of requiredSigners) {
+    const role = s.role.trim().toLowerCase();
+    const email = (s.email ?? '').trim().toLowerCase();
+    if (seenRoles.has(role)) {
+      throw new ValidationError(
+        `Two signers can't share the role "${s.role}" — give the second signer a distinct role.`,
+      );
+    }
+    if (seenEmails.has(email)) {
+      throw new ValidationError(`Two signers can't share the email address "${s.email}".`);
+    }
+    seenRoles.add(role);
+    seenEmails.add(email);
+  }
 
   const version = await prisma.proposalVersion.findUnique({
     where: { id: input.versionId },
@@ -1129,10 +1153,12 @@ export async function signatureImageFor(
   sub: DocusealSubmitter | undefined,
   role: string,
 ): Promise<string | null> {
-  const roleLower = role.toLowerCase();
-  const value = sub?.values?.find(
-    (v) => v.field.toLowerCase().startsWith(roleLower) && /signature$/i.test(v.field),
-  )?.value;
+  // Exact match, not a prefix: fields are named "${role} Signature" (assembly.ts),
+  // and a `startsWith` here previously matched "Witness" against a field actually
+  // named "Witness2 Signature" — the same signer-swap failure mode fixed for exact
+  // role collisions, reopened for role-is-a-prefix-of-another-role collisions.
+  const wanted = `${role.trim().toLowerCase()} signature`;
+  const value = sub?.values?.find((v) => v.field.trim().toLowerCase() === wanted)?.value;
   if (typeof value !== 'string' || !value) return null;
   if (value.startsWith('data:image')) return value;
   if (/^https?:\/\//i.test(value)) return imageUrlToDataUri(value);
