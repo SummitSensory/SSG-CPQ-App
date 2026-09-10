@@ -195,6 +195,36 @@ export async function renameProposalForVersion(
   });
 }
 
+/** The builder's own default offer window — see addDays(propDate, 7) in public/app.js,
+ *  applied there whenever a proposal has no expiration date of its own yet. */
+export const DEFAULT_EXPIRATION_DAYS = 7;
+
+/**
+ * The expiration date a cloned version should carry, given the OLD version's
+ * expiration date and the NEW version's (today's) proposal date.
+ *
+ * A clone is a new document being started today, not a reprint of the one it was
+ * cloned from — its proposal date is stamped with today's date (withProposalDate),
+ * and its expiration date must move with it: offered as N days from the proposal
+ * date, not a fixed calendar date. Carrying the old version's expirationDate
+ * unchanged could hand a customer a document already expired the day it was
+ * created. A version with no expiration policy (`null`) stays that way rather than
+ * acquiring one.
+ *
+ * `todayIso` is a plain `YYYY-MM-DD` string (as stamped onto the cloned version's
+ * proposalDate) rather than a `Date`, so a caller cannot accidentally pass a
+ * timestamp with a time-of-day component that would shift the result by a day
+ * depending on timezone.
+ */
+export function clonedVersionExpiration(
+  oldExpirationDate: Date | null,
+  todayIso: string,
+  days: number = DEFAULT_EXPIRATION_DAYS,
+): Date | null {
+  if (!oldExpirationDate) return null;
+  return new Date(new Date(`${todayIso}T00:00:00.000Z`).getTime() + days * 86_400_000);
+}
+
 /** Create a new editable DRAFT version by cloning the current one (the only way to change a released proposal). */
 export async function createNewVersion(
   proposalId: string,
@@ -213,6 +243,7 @@ export async function createNewVersion(
     // one it was cloned from — its meta section's proposalDate is stamped with
     // today's date rather than carried over.
     const today = new Date().toISOString().slice(0, 10);
+    const expirationDate = clonedVersionExpiration(current.expirationDate, today);
     const created = await tx.proposalVersion.create({
       data: {
         proposalId,
@@ -234,7 +265,7 @@ export async function createNewVersion(
         // Left null, release freezes this version's own content, which is what the
         // customer is being asked to accept.
         ruleSnapshotId: current.ruleSnapshotId,
-        expirationDate: current.expirationDate,
+        expirationDate,
         createdById: userId,
       },
     });
