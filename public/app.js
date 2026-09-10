@@ -12473,11 +12473,26 @@
     });
     document.getElementById('finPdf').addEventListener('click', async function () {
       var bt = this; bt.disabled = true; bt.textContent = 'Rendering…';
-      try {
-        var r = await authed('/render/proposals/' + p.id + '/financing.pdf');
-        if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} alert(m || 'Could not render the PDF.'); }
-        else downloadBlob(await r.blob(), d.proposal.number + '-financing.pdf');
-      } catch (e) { alert('Could not reach the renderer.'); }
+      // One silent retry: the PDF renderer keeps a headless browser alive between
+      // requests to skip a cold start on every export, and the serverless platform
+      // can reclaim that process between invocations with no warning — the first
+      // request after that either fails outright or is slow enough to drop the
+      // connection client-side, and a second attempt against a freshly-launched
+      // browser succeeds. Mirrors the server's own one-time relaunch-and-retry
+      // (src/render/pdf.ts), for the one failure shape that still reaches here.
+      for (var attempt = 0; attempt < 2; attempt++) {
+        try {
+          var r = await authed('/render/proposals/' + p.id + '/financing.pdf');
+          if (r.ok) { downloadBlob(await r.blob(), d.proposal.number + '-financing.pdf'); break; }
+          if (attempt === 1) {
+            var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {}
+            alert(m || 'Could not render the PDF.');
+          } else { bt.textContent = 'Retrying…'; }
+        } catch (e) {
+          if (attempt === 1) alert('Could not reach the renderer.');
+          else bt.textContent = 'Retrying…';
+        }
+      }
       bt.disabled = false; bt.textContent = 'Download PDF';
     });
     var sb = document.getElementById('finSend');
