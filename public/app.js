@@ -1595,53 +1595,90 @@
 
   /* --- Proposals --- */
   var OPEN_STATUSES = ['DRAFT', 'INTERNAL_REVIEW', 'RELEASED'];
+  // 'grouped' is retired — every tab but Needs Attention groups by customer now,
+  // unconditionally. A leftover key from before this redesign is just noise.
+  localStorage.removeItem('ssg.props.grouped');
+  var PROP_FILTERS = [
+    { id: 'open', label: 'Open' },
+    // Flat and cross-customer on purpose — see the 'attention' branch below. Anything
+    // this tab counts also gets the colored left bar everywhere else it appears.
+    { id: 'attention', label: 'Needs Attention' },
+    // Won and Deal Closed partition the won work rather than overlapping: a deal
+    // leaves Won the moment its invoice exists in QuickBooks, so Won reads as
+    // "won, still to bill" — which is the list somebody actually acts on.
+    { id: 'won', label: 'Won' },
+    { id: 'closed', label: 'Deal Closed' },
+    // Rejected and lapsed-while-open are both "did not convert" — merged into one tab.
+    { id: 'lost', label: 'Lost' },
+    // Withdrawn proposals. Out of every other tab and out of the win rate, kept in full.
+    { id: 'archived', label: 'Archived' },
+    { id: 'all', label: 'All' },
+  ];
   var props = {
-    rows: [], sort: { key: 'modified', dir: 'desc' },
-    // Grouped and filtered to Active out of the box: the open work is what someone
-    // opens this page to see, and the twenty-row flat list buries it. Both are
-    // remembered per browser once changed, so a preference sticks.
-    filter: localStorage.getItem('ssg.props.filter') || 'active',
+    rows: [], sort: {
+      key: localStorage.getItem('ssg.props.sortKey') || 'modified',
+      dir: localStorage.getItem('ssg.props.sortDir') || 'desc',
+    },
+    // A filter id retired by this redesign (both/active/expired/inactive) falls back
+    // to Open rather than rendering a blank/broken bar on first load after deploy.
+    filter: (function () {
+      var saved = localStorage.getItem('ssg.props.filter');
+      var ok = false;
+      PROP_FILTERS.forEach(function (f) { if (f.id === saved) ok = true; });
+      return ok ? saved : 'open';
+    })(),
     q: '',
-    grouped: localStorage.getItem('ssg.props.grouped') !== '0',
     collapsed: (function () {
       try { return JSON.parse(localStorage.getItem('ssg.props.collapsed') || '[]'); } catch (e) { return []; }
     })(),
   };
   function propsPersist() {
-    localStorage.setItem('ssg.props.grouped', props.grouped ? '1' : '0');
     localStorage.setItem('ssg.props.filter', props.filter);
     localStorage.setItem('ssg.props.collapsed', JSON.stringify(props.collapsed));
+    localStorage.setItem('ssg.props.sortKey', props.sort.key);
+    localStorage.setItem('ssg.props.sortDir', props.sort.dir);
   }
-  var PROP_FILTERS = [
-    { id: 'all', label: 'All' },
-    // One page carrying the whole live pipeline: proposals still inside their
-    // expiration window on top, the ones that have run past it underneath. Both bands
-    // are open proposals — the lower one is the work, not an archive.
-    { id: 'both', label: 'Active & past expiration' },
-    { id: 'active', label: 'Active' },
-    { id: 'expired', label: 'Past expiration' },
-    { id: 'inactive', label: 'Inactive' },
-    // Accepted and Deal Closed partition the won work rather than overlapping: a deal
-    // leaves Accepted the moment its invoice exists in QuickBooks, so Accepted reads as
-    // "won, still to bill" — which is the list somebody actually acts on.
-    { id: 'won', label: 'Accepted' },
-    { id: 'closed', label: 'Deal Closed' },
-    { id: 'lost', label: 'Rejected' },
-    // Withdrawn proposals. Out of every other tab and out of the win rate, kept in full.
-    { id: 'archived', label: 'Archived' },
+  // Five labeled choices alongside the existing column-header click-to-sort — both
+  // drive the same props.sort state, so picking one updates the other's arrow too.
+  var PROP_SORTS = [
+    { key: 'modified', dir: 'desc', label: 'Most recently modified' },
+    { key: 'customer', dir: 'asc', label: 'Customer A–Z' },
+    { key: 'expires', dir: 'asc', label: 'Expiring soonest' },
+    { key: 'totalMinor', dir: 'desc', label: 'Total: high to low' },
+    { key: 'totalMinor', dir: 'asc', label: 'Total: low to high' },
   ];
   function today0() { var d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); }
   function dayDiff(v) { if (!v) return null; var d = new Date(v); if (isNaN(d)) return null; d.setHours(0, 0, 0, 0); return Math.round((d.getTime() - today0()) / 86400000); }
   function metaOfVersion(v) { var secs = (v && v.sections) || []; var m = (Array.isArray(secs) ? secs : []).filter(function (s) { return s && s.id === 'meta'; })[0]; return (m && m.data) || {}; }
+  // One urgency per row, computed once at load and reused for both the Needs
+  // Attention tab membership and every row's left accent bar, so the two can never
+  // disagree about what counts as urgent.
+  var URGENCY_COLOR = { attention: '#c2452f', soon: '#c9a227', won: '#3f9d78', onTrack: '#3d4a55', inactive: '#c7cbc2' };
+  var URGENCY_RANK = { attention: 0, soon: 1, onTrack: 2, won: 3, inactive: 4 };
+  function rowUrgency(r) {
+    if (r.archivedAt) return 'inactive';
+    if (r.status === 'ACCEPTED') return 'won';
+    if (r.status === 'REJECTED' || r.status === 'EXPIRED') return 'inactive';
+    if (r.expired) return 'attention';
+    if (r.expDays != null && r.expDays <= 7) return 'soon';
+    // No expiration pressure yet — a stalled draft/review is its own kind of urgent.
+    if (r.status !== 'RELEASED') {
+      var staleDays = r.modified ? -dayDiff(r.modified) : 0;
+      if (staleDays > 30) return 'attention';
+      if (staleDays > 14) return 'soon';
+    }
+    return 'onTrack';
+  }
 
   async function renderProposals(user) {
     document.getElementById('view').innerHTML =
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;">' +
         '<div id="propFilters" style="display:flex;gap:6px;flex-wrap:wrap;"></div>' +
         '<div style="display:flex;gap:8px;align-items:center;">' +
-          '<label style="display:flex;gap:7px;align-items:center;font-size:12.5px;color:#5c6157;cursor:pointer;white-space:nowrap;" title="One collapsible block per customer, with its open value">' +
-            '<input type="checkbox" id="propGroup"' + (props.grouped ? ' checked' : '') + '> Group by customer</label>' +
-          '<input id="propSearch" placeholder="Search customer, title, number…" value="' + esc(props.q) + '" style="padding:9px 12px;border:1px solid #dcded7;border-radius:9px;font-size:13.5px;background:#fff;width:240px;">' +
+          '<select id="propSort" title="Sort" style="padding:9px 10px;border:1px solid #dcded7;border-radius:9px;font-size:12.5px;background:#fff;color:#3d4a55;">' +
+            PROP_SORTS.map(function (s, i) { return '<option value="' + i + '">' + esc(s.label) + '</option>'; }).join('') +
+          '</select>' +
+          '<input id="propSearch" placeholder="Search customer, title, number…" value="' + esc(props.q) + '" style="padding:9px 12px;border:1px solid #dcded7;border-radius:9px;font-size:13.5px;background:#fff;width:260px;">' +
           (hasRole(PROP_WRITE, user.role) ? '<button class="btn" id="propNew" style="width:auto;padding:10px 17px;white-space:nowrap;">New proposal</button>' : '') +
         '</div></div>' +
       '<div id="propList"><div class="muted" style="padding:24px;">Loading…</div></div>';
@@ -1649,8 +1686,14 @@
     if (hasRole(PROP_WRITE, user.role)) document.getElementById('propNew').addEventListener('click', function () { openProposalForm(user); });
     var s = document.getElementById('propSearch');
     s.addEventListener('input', function () { props.q = s.value; drawProposals(user); });
-    document.getElementById('propGroup').addEventListener('change', function () {
-      props.grouped = this.checked; propsPersist(); drawProposals(user);
+    var sortSel = document.getElementById('propSort');
+    var curIdx = 0;
+    PROP_SORTS.forEach(function (opt, i) { if (opt.key === props.sort.key && opt.dir === props.sort.dir) curIdx = i; });
+    sortSel.value = String(curIdx);
+    sortSel.addEventListener('change', function () {
+      var picked = PROP_SORTS[Number(sortSel.value)];
+      props.sort.key = picked.key; props.sort.dir = picked.dir;
+      propsPersist(); drawProposals(user);
     });
     loadProposals(user);
   }
@@ -1672,15 +1715,15 @@
     if (f === 'archived') return !!r.archivedAt;
     if (r.archivedAt) return false;
     if (f === 'all') return true;
-    // Every open proposal, in or out of date. `expired` is only ever set on an open
-    // status, so this one test covers both bands the view then splits them into.
-    if (f === 'both') return OPEN_STATUSES.indexOf(r.status) !== -1;
-    if (f === 'active') return OPEN_STATUSES.indexOf(r.status) !== -1 && !r.expired;
-    if (f === 'expired') return r.expired;
-    if (f === 'inactive') return r.status === 'EXPIRED';
+    if (f === 'open') return OPEN_STATUSES.indexOf(r.status) !== -1;
+    // Same formula that colors the row's left bar — this tab is just that filter
+    // applied across every customer at once, regardless of whose deal it is.
+    if (f === 'attention') return OPEN_STATUSES.indexOf(r.status) !== -1 && (r.urgency === 'attention' || r.urgency === 'soon');
     if (f === 'won') return r.status === 'ACCEPTED' && !r.invoiced;
     if (f === 'closed') return r.status === 'ACCEPTED' && !!r.invoiced;
-    if (f === 'lost') return r.status === 'REJECTED';
+    // Rejected outright, or an offer that lapsed without ever converting — both read
+    // as "did not convert."
+    if (f === 'lost') return r.status === 'REJECTED' || r.status === 'EXPIRED';
     return true;
   }
   async function loadProposals(user) {
@@ -1714,6 +1757,7 @@
           invoiced: !!p.invoiced, invoiceDocNumber: p.invoiceDocNumber || '', invoicedAt: p.invoicedAt || null,
         };
       });
+      props.rows.forEach(function (r) { r.urgency = rowUrgency(r); });
       drawPropFilters(user);
       drawProposals(user);
     } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
@@ -1759,12 +1803,12 @@
         'text-align:' + (c.align || 'left') + ';padding:11px 14px;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:' + (on ? '#3d4a55' : '#8a8f85') + ';font-weight:600;border-bottom:1px solid #e7e8e3;white-space:nowrap;">' + esc(c.label) + arrow + '</th>';
     }).join('');
     function rowHtml(r) {
+      // The left accent bar already carries the urgency signal, so this column stays
+      // plain text — just the overdue flag, not a second competing color system.
       var expCell = r.expires
         ? (r.expired
-          ? '<span style="display:inline-flex;align-items:center;gap:5px;background:#fbe9e6;border:1px solid #f0cdc7;color:#9c3327;border-radius:999px;padding:3px 9px;font-size:12px;font-weight:600;" title="Expired ' + Math.abs(r.expDays) + ' day(s) ago">⚑ ' + fmtDate(r.expires) + '</span>'
-          : (r.expDays != null && r.expDays <= 7 && OPEN_STATUSES.indexOf(r.status) !== -1
-            ? '<span style="display:inline-flex;align-items:center;gap:5px;background:#fdf6e3;border:1px solid #eadfbe;color:#8a6d1f;border-radius:999px;padding:3px 9px;font-size:12px;font-weight:600;" title="Expires in ' + r.expDays + ' day(s)">' + fmtDate(r.expires) + '</span>'
-            : fmtDate(r.expires)))
+          ? '<span style="display:inline-flex;align-items:center;gap:5px;color:#9c3327;font-weight:600;" title="Expired ' + Math.abs(r.expDays) + ' day(s) ago">⚑ ' + fmtDate(r.expires) + '</span>'
+          : fmtDate(r.expires))
         : '<span class="muted">—</span>';
       var acts = r.archivedAt ? [] : quickActions(r, user);
       var quick = acts.length
@@ -1793,10 +1837,13 @@
           : '<button class="pArchive" data-id="' + r.id + '" title="Withdraw from the pipeline. Nothing is deleted and it can be restored." style="border:1px solid #dcded7;background:#fff;border-radius:8px;padding:6px 9px;font-size:12px;color:#8a8f85;cursor:pointer;white-space:nowrap;">Archive</button>')
         : '';
       return '<tr style="cursor:pointer;" data-id="' + r.id + '">' +
-        ptdWrap('<b style="font-weight:600;">' + esc(r.customer) + '</b>' + (r.contact ? '<div class="muted" style="font-size:12px;">' + esc(r.contact) + '</div>' : '')) +
+        ptdWrap('<b style="font-weight:600;">' + esc(r.customer) + '</b>' + (r.contact ? '<div class="muted" style="font-size:12px;">' + esc(r.contact) + '</div>' : ''),
+          'box-shadow:inset 4px 0 0 ' + (URGENCY_COLOR[r.urgency] || URGENCY_COLOR.inactive) + ';padding-left:15px;') +
         ptdWrap('<b style="font-weight:600;">' + esc(r.title) + '</b><div class="muted" style="font-size:12px;">' + esc(r.number) +
           ' · v' + r.version + (r.versionCount > 1 ? ' of ' + r.versionCount : '') +
           (r.preparedBy ? ' · ' + esc(r.preparedBy) : '') + '</div>' +
+          // Archived rows only ever appear on the Archived tab, so this one muted line
+          // is the whole story there — no separate badge needed alongside it.
           (r.archivedAt
             ? '<div class="muted" style="font-size:11.5px;margin-top:3px;">Archived ' + esc(fmtDate(r.archivedAt)) +
               (r.archivedBy ? ' by ' + esc(r.archivedBy) : '') +
@@ -1804,10 +1851,7 @@
             : '')) +
         ptd(statusChip(r.status) +
           (r.invoiced && r.status === 'ACCEPTED'
-            ? '<div style="margin-top:4px;font-size:11.5px;color:#2f7d5d;">Invoiced' + (r.invoiceDocNumber ? ' · ' + esc(r.invoiceDocNumber) : '') + '</div>'
-            : '') +
-          (r.archivedAt
-            ? '<div style="margin-top:4px;"><span style="display:inline-block;background:#f2f3ef;border:1px dashed #cbcec5;color:#8a8f85;border-radius:999px;padding:2px 9px;font-size:11.5px;font-weight:600;">Archived</span></div>'
+            ? '<span style="margin-left:6px;display:inline-block;background:#eaf3ee;border:1px solid #cfe3d7;color:#2f7d5d;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:600;vertical-align:middle;">Invoiced' + (r.invoiceDocNumber ? ' · ' + esc(r.invoiceDocNumber) : '') + '</span>'
             : '')) +
         ptd('<b style="font-weight:600;">' + fmtMoney(r.totalMinor, 'USD') + '</b>', 'right') +
         ptd(fmtDate(r.modified) + '<div class="muted" style="font-size:11px;">made ' + esc(fmtDate(r.created)) + '</div>') +
@@ -1816,35 +1860,27 @@
     }
     var body = rows.map(rowHtml).join('');
 
-    /** A full-width banner row introducing a block of rows, with that block's total. */
-    function bandRow(label, list, tone) {
-      var sum = list.reduce(function (n, r) { return n + (Number(r.totalMinor) || 0); }, 0);
-      return '<tr><td colspan="7" style="padding:12px 11px 9px;border-bottom:1px solid #e7e8e3;background:' + tone + ';">' +
-        '<b style="font-weight:650;font-size:13px;letter-spacing:.02em;">' + esc(label) + '</b>' +
-        '<span class="muted" style="font-size:12.5px;margin-left:9px;">' + list.length + ' proposal' + (list.length === 1 ? '' : 's') +
-        (sum ? ' · ' + fmtMoney(sum, 'USD') : '') + '</span></td></tr>';
-    }
-
-    // The combined view is one page in two bands: still inside the expiration window,
-    // then past it. Grouping by customer is suppressed here — two nestings deep (band,
-    // then customer) stops being a list anyone can scan.
-    var banded = props.filter === 'both' && rows.length;
-    if (banded) {
-      var liveRows = rows.filter(function (r) { return !r.expired; });
-      var lateRows = rows.filter(function (r) { return r.expired; });
-      body =
-        (liveRows.length ? bandRow('Active', liveRows, '#f1f6f2') + liveRows.map(rowHtml).join('') : '') +
-        (lateRows.length ? bandRow('Past expiration', lateRows, '#fdf1ef') + lateRows.map(rowHtml).join('') : '');
-    }
-    // Grouped view: one collapsible header per customer, carrying the count and the
-    // open value — the two numbers you actually want when scanning an account.
-    if (!banded && props.grouped && rows.length) {
+    // Every tab groups by customer except Needs Attention, which is deliberately flat
+    // and cross-customer — the point of that view is triage regardless of whose deal
+    // it is. Groups are ordered by their most urgent proposal (attention > soon >
+    // onTrack > won > inactive), tied by most-recently-modified, so accounts needing
+    // attention float to the top. Rows within a group keep the chosen sort.
+    var grouped = props.filter !== 'attention';
+    if (grouped && rows.length) {
       var order = [], byCust = {};
       rows.forEach(function (r) {
         if (!byCust[r.customer]) { byCust[r.customer] = []; order.push(r.customer); }
         byCust[r.customer].push(r);
       });
-      order.sort(function (x, y) { return x.toLowerCase() < y.toLowerCase() ? -1 : 1; });
+      order.sort(function (x, y) {
+        var mx = byCust[x], my = byCust[y];
+        var rx = Math.min.apply(null, mx.map(function (r) { return URGENCY_RANK[r.urgency]; }));
+        var ry = Math.min.apply(null, my.map(function (r) { return URGENCY_RANK[r.urgency]; }));
+        if (rx !== ry) return rx - ry;
+        var lx = Math.max.apply(null, mx.map(function (r) { return r.modified ? new Date(r.modified).getTime() : 0; }));
+        var ly = Math.max.apply(null, my.map(function (r) { return r.modified ? new Date(r.modified).getTime() : 0; }));
+        return ly - lx;
+      });
       body = order.map(function (cust) {
         var mine = byCust[cust];
         var open = mine.filter(function (r) { return OPEN_STATUSES.indexOf(r.status) !== -1 && !r.expired; }).length;
@@ -1867,8 +1903,10 @@
     var lead = props.filter === 'archived'
       ? '<div style="margin-bottom:10px;font-size:12.5px;color:#5c6157;background:#f4f5f1;border:1px solid #e7e8e3;border-radius:10px;padding:10px 13px;">Withdrawn proposals. They are kept in full and left out of every other tab and of the win rate. Restore puts one back exactly as it was — any QuickBooks documents were never touched.</div>'
       : props.filter === 'closed'
-        ? '<div style="margin-bottom:10px;font-size:12.5px;color:#5c6157;background:#f1f6f2;border:1px solid #cfe3d7;border-radius:10px;padding:10px 13px;">Accepted and invoiced in QuickBooks. A deal lands here on its own the moment its invoice is created, and leaves the Accepted tab.</div>'
-        : '';
+        ? '<div style="margin-bottom:10px;font-size:12.5px;color:#5c6157;background:#f1f6f2;border:1px solid #cfe3d7;border-radius:10px;padding:10px 13px;">Accepted and invoiced in QuickBooks. A deal lands here on its own the moment its invoice is created, and leaves the Won tab.</div>'
+        : props.filter === 'attention'
+          ? '<div style="margin-bottom:10px;font-size:12.5px;color:#5c6157;background:#fdf6e3;border:1px solid #eadfbe;border-radius:10px;padding:10px 13px;">Open proposals that need a decision soon — past their own expiration date, expiring within 7 days, or stalled without movement. Flat and cross-customer on purpose, so nothing needing attention gets buried inside a customer group.</div>'
+          : '';
     box.innerHTML = lead + '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:14px;overflow:hidden;"><table style="width:100%;border-collapse:collapse;font-size:13.5px;table-layout:auto;"><thead><tr>' + head + '</tr></thead><tbody>' +
       (body || '<tr><td style="padding:22px 16px;color:#909689;" colspan="7">' + (props.rows.length ? (props.filter === 'archived' ? 'Nothing archived.' : props.filter === 'closed' ? 'No invoiced deals yet.' : 'No proposals match this view.') : 'No proposals yet.') + '</td></tr>') + '</tbody></table></div>' +
       (props.rows.filter(function (r) { return r.expired && !r.archivedAt; }).length ? '<div style="margin-top:10px;font-size:12.5px;color:#9c3327;">⚑ Flagged rows are past their expiration date and still open — re-date them or mark them no longer active.</div>' : '');
