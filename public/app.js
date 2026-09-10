@@ -4930,11 +4930,22 @@
     return { added: added, kept: leftovers.length };
   }
 
-  /** The profitability rail floats beside the builder when there is room; otherwise it stacks. */
+  /**
+   * The profitability rail floats beside the builder when there is room; otherwise it
+   * stacks. "Room" means the actual gap between the content column's own right edge
+   * and the browser's — not raw window width. #view caps out at max-width:1680px, so
+   * on most window sizes (anywhere the window isn't dramatically wider than that cap)
+   * the content column already reaches the edge of the viewport with nothing to
+   * spare, and a naive width check would float the rail directly on top of it instead
+   * of beside it.
+   */
   /** Internal figures, so a mock never renders the rail at all — see isMock(). */
   function marginRailStyle() {
-    return window.innerWidth >= 1680
-      ? 'position:fixed;top:92px;right:22px;width:342px;max-height:calc(100vh - 116px);overflow:auto;z-index:20;'
+    var railWidth = 342, gutter = 22;
+    var view = document.getElementById('view');
+    var gap = view ? window.innerWidth - view.getBoundingClientRect().right : 0;
+    return gap >= railWidth + gutter
+      ? 'position:fixed;top:92px;right:22px;width:' + railWidth + 'px;max-height:calc(100vh - 116px);overflow:auto;z-index:20;'
       : 'margin-top:16px;';
   }
 
