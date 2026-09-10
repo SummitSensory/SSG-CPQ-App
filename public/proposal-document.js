@@ -1113,10 +1113,12 @@
       // The customer's name prints on the signer line itself. It is the one field on
       // this page the document already knows, and printing it removes the most common
       // reason a signed sheet comes back unusable: the wrong name, or none at all.
-      // Sized to match the acceptance and terms prose (11.5px) rather than the small
-      // caps label beneath it. Blank when no contact is on the proposal, which leaves
-      // the line exactly as it printed before.
-      '<div style="flex:1.35;"><div style="border-bottom:1px solid #20241f;height:40px;display:flex;align-items:flex-end;padding-bottom:3px;"><span style="font-size:11.5px;line-height:1.35;color:#20241f;">' +
+      // Sized larger and bold, like the "Proposal Prepared By" name elsewhere on this
+      // document, so the printed name reads as a name on a signature line rather than
+      // blending into the surrounding prose (it was 11.5px/normal-weight, sized to
+      // match the acceptance/terms prose instead). Blank when no contact is on the
+      // proposal, which leaves the line exactly as it printed before.
+      '<div style="flex:1.35;"><div style="border-bottom:1px solid #20241f;height:40px;display:flex;align-items:flex-end;padding-bottom:3px;"><span style="font-size:14px;font-weight:600;line-height:1.3;color:#20241f;">' +
       esc(m.contactName || '') +
       '</span></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Authorized Signer\'s Name</div></div>' +
       // These two ids are where the e-sign package places the customer's actual
@@ -1155,7 +1157,11 @@
       '"><div id="ssgSigAcceptanceSignature" style="position:absolute;top:0;left:0;' +
       sigPosition('ssgSigAcceptanceSignature') +
       '"></div></div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#7b8190;font-weight:700;margin-top:5px;">Signature</div></div>' +
-      '<div style="flex:1;"><div style="position:relative;border-bottom:1px solid #20241f;height:40px;display:flex;align-items:flex-end;padding-bottom:3px;' +
+      // flex:1.35, matching Name and Signature — this used to be flex:1 (a plain 1/3.7
+      // share against the other two columns' 1.35 each), which made the Date line
+      // visibly shorter than the other two on a printed/signed proposal. All three
+      // are equal-length now.
+      '<div style="flex:1.35;"><div style="position:relative;border-bottom:1px solid #20241f;height:40px;display:flex;align-items:flex-end;padding-bottom:3px;' +
       sigSize('ssgSigAcceptanceDate') +
       '"><div id="ssgSigAcceptanceDate" style="position:absolute;top:0;left:0;' +
       sigPosition('ssgSigAcceptanceDate') +
