@@ -521,7 +521,7 @@ export function registerFinanceRoutes(app: FastifyInstance): void {
       .header('Content-Type', 'application/pdf')
       .header(
         'Content-Disposition',
-        `attachment; filename="${financeFilename(doc.customerName, doc.proposalNumber)}.pdf"`,
+        `attachment; filename="${financeFilename(doc.customerName, doc.proposalNumber, doc.versionNumber, doc.createdAt)}.pdf"`,
       )
       .send(pdf);
   });
@@ -569,7 +569,7 @@ export function registerFinanceRoutes(app: FastifyInstance): void {
     // otherwise would send an email that says "proposal attached" with no proposal.
     const attachments = [
       {
-        filename: `${financeFilename(doc.customerName, doc.proposalNumber)}.pdf`,
+        filename: `${financeFilename(doc.customerName, doc.proposalNumber, doc.versionNumber, doc.createdAt)}.pdf`,
         content: (await renderPdf(renderFinanceHtml(doc), { format: 'Letter' })).toString('base64'),
       },
     ];
@@ -714,7 +714,7 @@ export function registerFinanceRoutes(app: FastifyInstance): void {
         });
       }
       attachments.push({
-        filename: `${financeFilename(doc.customerName, doc.proposalNumber)}.pdf`,
+        filename: `${financeFilename(doc.customerName, doc.proposalNumber, doc.versionNumber, doc.createdAt)}.pdf`,
         content: (await renderPdf(renderFinanceHtml(doc), { format: 'Letter' })).toString('base64'),
       });
     }

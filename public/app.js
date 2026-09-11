@@ -12952,6 +12952,28 @@
    * factor per amount band and term, loaded under Administration → Financing — and a
    * sheet that has been sent keeps the rates it was quoted on. */
   var finCache = null;
+  /**
+   * Customer_Name-Proposal_Number-Version#-Date, matching the server's own
+   * `financeFilename` (src/handoff/financeDocument.ts) — the two must stay in step
+   * since this is the name used for the same PDF, whether it's downloaded here or
+   * attached to an email the server sends.
+   */
+  function financingFileName(customerName, proposalNumber, versionNumber) {
+    var part = function (v) {
+      return String(v || '')
+        .trim()
+        .replace(/[\\/:*?"<>|]+/g, '')
+        .replace(/\s+/g, '_')
+        .replace(/_+/g, '_')
+        .replace(/^_|_$/g, '');
+    };
+    var now = new Date();
+    var p2 = function (v) { return String(v).length < 2 ? '0' + v : String(v); };
+    var dateStr = p2(now.getMonth() + 1) + p2(now.getDate()) + now.getFullYear();
+    return [part(customerName), part(proposalNumber), 'v' + versionNumber, dateStr]
+      .filter(Boolean)
+      .join('-');
+  }
   async function loadFinancing(p, user) {
     var box = document.getElementById('finBox'); if (!box) return;
     var d = null;
@@ -13015,7 +13037,7 @@
       for (var attempt = 0; attempt < 2; attempt++) {
         try {
           var r = await authed('/render/proposals/' + p.id + '/financing.pdf');
-          if (r.ok) { downloadBlob(await r.blob(), d.proposal.number + '-financing.pdf'); break; }
+          if (r.ok) { downloadBlob(await r.blob(), financingFileName(d.customerName, d.proposal.number, d.proposal.version) + '.pdf'); break; }
           if (attempt === 1) {
             var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {}
             alert(m || 'Could not render the PDF.');
