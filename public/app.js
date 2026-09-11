@@ -758,57 +758,185 @@
     if (window.SSGTips) window.SSGTips.onNavigate(id);
   }
 
-  async function renderDashboard(user) {
-    var canWrite = hasRole(PROP_WRITE, user.role);
-    document.getElementById('view').innerHTML =
-      '<div id="dashKpis" class="grid"><div class="card"><div class="k">Loading…</div></div></div>' +
-      '<div id="ftuDash"></div>' +
-      '<div class="section-title">Needs your attention</div>' +
-      '<div id="dashAttention"><div class="muted" style="padding:18px;">Loading…</div></div>' +
-      '<div class="section-title">Recently updated proposals</div>' +
-      '<div id="dashRecent"><div class="muted" style="padding:18px;">Loading…</div></div>' +
-      '<div class="section-title">Quick actions</div>' +
-      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px;">' +
-        (canWrite ? '<button class="btn" id="dqNew" style="width:auto;padding:10px 16px;">New proposal</button>' : '') +
-        (canCrmWrite(user.role) ? '<button class="link-btn" id="dqMonday" style="width:auto;padding:10px 15px;">Import a customer from monday</button>' : '') +
-        '<button class="link-btn" id="dqReports" style="width:auto;padding:10px 15px;">Open reports</button>' +
-        '<button class="link-btn" id="dqCatalog" style="width:auto;padding:10px 15px;">Catalog &amp; pricing</button>' +
-      '</div>' +
-      '<div class="grid">' +
-        '<div class="card"><div class="k">Signed in as</div><div class="v small">' + esc(user.name || user.email) + '</div><div class="muted" style="font-size:12.5px;margin-top:4px;">' + esc(user.email) + ' · ' + esc(roleLabel(user.role)) + '</div></div>' +
-        '<div class="card"><div class="k">API status</div><div class="v small" id="apiStatus"><span class="dot wait"></span>Checking…</div></div>' +
-        '<div class="card"><div class="k">Workspace</div><div class="v small">Summit Sensory Gym</div><div class="muted" style="font-size:12.5px;margin-top:4px;" id="dashScale">Proposal Management Software</div></div>' +
-      '</div>';
-    var nb = document.getElementById('dqNew'); if (nb) nb.addEventListener('click', function () { openProposalForm(user); });
-    var mb = document.getElementById('dqMonday'); if (mb) mb.addEventListener('click', function () { openMondayLookup(user); });
-    document.getElementById('dqReports').addEventListener('click', function () { activateNav('reports'); renderReports(user); });
-    document.getElementById('dqCatalog').addEventListener('click', function () { activateNav('catalog'); window.SSGCatalog.render(user); });
-    try { var r = await fetch('/health'); var el = document.getElementById('apiStatus'); if (el) el.innerHTML = r.ok ? '<span class="dot ok"></span>Online' : '<span class="dot bad"></span>Error ' + r.status; }
-    catch (e) { var el2 = document.getElementById('apiStatus'); if (el2) el2.innerHTML = '<span class="dot bad"></span>Offline'; }
-    loadDashboard(user);
-    /* Freight outstanding — jobs that went out without final freight costs. Filled
-     * after loadDashboard is kicked off, so a slow /freight/queue never holds up the
-     * rest of the dashboard, and left empty when nothing is outstanding:
-     * dashboardSection returns '' rather than an empty card, so the block disappears
-     * instead of sitting there saying nothing. Clicking a row opens the workspace. */
-    if (window.FreightTrueUp) {
-      try {
-        var ftuHtml = await window.FreightTrueUp.dashboardSection(user);
-        var ftuHost = document.getElementById('ftuDash');
-        if (ftuHost && ftuHtml) {
-          ftuHost.innerHTML = ftuHtml;
-          window.FreightTrueUp.bindDashboard(user);
-        }
-      } catch (e) {}
-    }
+  /* --- Dashboard: a fixed set of widgets, in whatever order and visibility the user
+     has chosen. The choice is saved to the account (PATCH /auth/me) rather than just
+     the browser, since a dashboard is exactly the kind of thing worth having look the
+     same wherever someone signs in. */
+  var DASH_WIDGETS = [
+    { id: 'kpi_open', label: 'Open proposals', span: 'quarter' },
+    { id: 'kpi_released', label: 'Out with customers', span: 'quarter' },
+    { id: 'kpi_accepted', label: 'Accepted to date', span: 'quarter' },
+    { id: 'kpi_attention', label: 'Needs attention (count)', span: 'quarter' },
+    { id: 'freight_trueup', label: 'Freight true-up', span: 'full' },
+    { id: 'needs_attention', label: 'Needs your attention (list)', span: 'full' },
+    { id: 'recently_updated', label: 'Recently updated proposals', span: 'full' },
+    { id: 'quick_actions', label: 'Quick actions', span: 'full' },
+    { id: 'workspace_info', label: 'Workspace info', span: 'full' },
+  ];
+  var DASH_WIDGET_MAP = {};
+  DASH_WIDGETS.forEach(function (w) { DASH_WIDGET_MAP[w.id] = w; });
+  var DEFAULT_DASH_LAYOUT = DASH_WIDGETS.map(function (w) { return w.id; });
+  var dashLayout = DEFAULT_DASH_LAYOUT.slice();
+  var dashEditing = false;
+  var dashData = null;
+
+  /** Drops anything not in the widget vocabulary, and any duplicate — a stale or
+   *  tampered value falls all the way back to the default rather than rendering half
+   *  a dashboard. */
+  function sanitizeDashLayout(raw) {
+    if (!Array.isArray(raw)) return DEFAULT_DASH_LAYOUT.slice();
+    var seen = {}, out = [];
+    raw.forEach(function (id) {
+      if (DASH_WIDGET_MAP[id] && !seen[id]) { seen[id] = true; out.push(id); }
+    });
+    return out.length ? out : DEFAULT_DASH_LAYOUT.slice();
   }
 
-  async function loadDashboard(user) {
+  function hiddenDashWidgets() {
+    return DASH_WIDGETS.filter(function (w) { return dashLayout.indexOf(w.id) === -1; });
+  }
+
+  /** Fire-and-forget: a layout choice is a display preference, not data anyone is
+   *  waiting on, so this never blocks the UI that triggered it. */
+  function saveDashLayout(user) {
+    user.dashboardLayout = dashLayout.slice();
+    authed('/auth/me', { method: 'PATCH', body: { dashboardLayout: dashLayout } }).catch(function () {});
+  }
+
+  async function renderDashboard(user) {
+    dashLayout = sanitizeDashLayout(user.dashboardLayout);
+    dashEditing = false;
+    dashData = null;
+    drawDashboardShell(user);
+    loadDashboardData(user);
+  }
+
+  /** The "Customize dashboard" toggle, and — only while editing — the strip of
+   *  hidden widgets one click away from coming back. Everything below it is
+   *  drawDashboardBody's job, so toggling edit mode never re-fetches data. */
+  function drawDashboardShell(user) {
+    var html = '<div style="display:flex;justify-content:flex-end;margin-bottom:10px;">' +
+        '<button class="link-btn" id="dashEditBtn" style="width:auto;padding:8px 14px;">' + (dashEditing ? 'Done editing' : 'Customize dashboard') + '</button></div>';
+    if (dashEditing) {
+      var hidden = hiddenDashWidgets();
+      html += '<div class="card" style="margin-bottom:16px;background:#f7f8f4;">' +
+          '<div class="section-title" style="margin:0 0 8px;">Customize dashboard</div>' +
+          '<div class="muted" style="font-size:12.5px;margin-bottom:10px;">Drag a block by its handle to reorder it, or hide one with the ×. Saved to your account, so it follows you to any computer.</div>' +
+          (hidden.length
+            ? '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">' +
+                hidden.map(function (w) { return '<button type="button" class="dashAddW" data-wid="' + w.id + '" style="border:1px dashed #cdd6dc;background:#fff;border-radius:999px;padding:6px 12px;font-size:12px;color:#20241f;cursor:pointer;">+ ' + esc(w.label) + '</button>'; }).join('') +
+              '</div>'
+            : '<div class="muted" style="font-size:12px;margin-bottom:8px;">Everything is showing.</div>') +
+          '<button type="button" class="link-btn" id="dashResetBtn" style="width:auto;padding:7px 12px;font-size:12.5px;">Reset to default layout</button>' +
+        '</div>';
+    }
+    html += '<div id="dashBody"></div>';
+    document.getElementById('view').innerHTML = html;
+    document.getElementById('dashEditBtn').addEventListener('click', function () {
+      dashEditing = !dashEditing;
+      drawDashboardShell(user);
+    });
+    if (dashEditing) {
+      var resetBtn = document.getElementById('dashResetBtn');
+      if (resetBtn) resetBtn.addEventListener('click', function () {
+        dashLayout = DEFAULT_DASH_LAYOUT.slice();
+        saveDashLayout(user);
+        drawDashboardShell(user);
+      });
+      document.querySelectorAll('.dashAddW').forEach(function (b) {
+        b.addEventListener('click', function () {
+          dashLayout.push(b.getAttribute('data-wid'));
+          saveDashLayout(user);
+          drawDashboardShell(user);
+        });
+      });
+    }
+    drawDashboardBody(user);
+  }
+
+  /** One wrapper per configured widget, consecutive 'quarter' ones sharing a single
+   *  .grid row exactly like the four KPI cards always have — the point of the span is
+   *  that a widget's own size is fixed, only its visibility and place in line move. */
+  function drawDashboardBody(user) {
+    var body = document.getElementById('dashBody'); if (!body) return;
+    var html = '', i = 0;
+    while (i < dashLayout.length) {
+      var id = dashLayout[i], w = DASH_WIDGET_MAP[id];
+      if (!w) { i++; continue; }
+      if (w.span === 'quarter') {
+        var group = [];
+        while (i < dashLayout.length && DASH_WIDGET_MAP[dashLayout[i]] && DASH_WIDGET_MAP[dashLayout[i]].span === 'quarter') {
+          group.push(dashLayout[i]); i++;
+        }
+        html += '<div class="grid" style="margin-bottom:18px;">' + group.map(function (gid) { return dashWidgetWrapper(gid); }).join('') + '</div>';
+      } else {
+        html += dashWidgetWrapper(id);
+        i++;
+      }
+    }
+    body.innerHTML = html || '<div class="placeholder" style="padding:26px;"><p class="muted" style="margin:0;">Nothing to show — add a widget above.</p></div>';
+    fillDashboardWidgets(user);
+    wireDashboardEditHandlers(user);
+  }
+
+  function dashWidgetWrapper(id) {
+    var w = DASH_WIDGET_MAP[id];
+    var toolbar = dashEditing
+      ? '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;padding:4px 8px;background:#eef0ea;border-radius:8px;font-size:11.5px;color:#20241f;">' +
+          '<span style="cursor:grab;" title="Drag to reorder">⠿⠿</span>' +
+          '<b style="flex:1;font-weight:600;">' + esc(w.label) + '</b>' +
+          '<button type="button" class="dashHideW" data-wid="' + id + '" title="Hide this" style="border:none;background:none;color:#9c3327;cursor:pointer;font-size:14px;line-height:1;">×</button>' +
+        '</div>'
+      : '';
+    var wrapStyle = dashEditing
+      ? 'border:1px dashed #cdd6dc;border-radius:12px;padding:8px;' + (w.span === 'full' ? 'margin-bottom:16px;' : '')
+      : (w.span === 'full' ? 'margin-bottom:16px;' : '');
+    return '<div class="dashW" data-wid="' + id + '"' + (dashEditing ? ' draggable="true"' : '') + ' style="' + wrapStyle + '">' + toolbar +
+      '<div class="dashWInner" id="dashWInner-' + id + '"><div class="muted" style="padding:16px;">Loading…</div></div></div>';
+  }
+
+  function wireDashboardEditHandlers(user) {
+    document.querySelectorAll('.dashHideW').forEach(function (b) {
+      b.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var i = dashLayout.indexOf(b.getAttribute('data-wid'));
+        if (i !== -1) dashLayout.splice(i, 1);
+        saveDashLayout(user);
+        drawDashboardShell(user);
+      });
+    });
+    if (!dashEditing) return;
+    var dragFrom = null;
+    document.querySelectorAll('.dashW[draggable="true"]').forEach(function (elx) {
+      elx.addEventListener('dragstart', function () { dragFrom = elx.getAttribute('data-wid'); elx.style.opacity = '0.4'; });
+      elx.addEventListener('dragend', function () { elx.style.opacity = '1'; });
+      elx.addEventListener('dragover', function (e) { e.preventDefault(); });
+      elx.addEventListener('drop', function (e) {
+        e.preventDefault();
+        var toId = elx.getAttribute('data-wid'), fromId = dragFrom;
+        dragFrom = null;
+        if (!fromId || fromId === toId) return;
+        var from = dashLayout.indexOf(fromId), to = dashLayout.indexOf(toId);
+        if (from === -1 || to === -1) return;
+        // The classic array-move: splice out, then insert at the ORIGINAL target
+        // index. Recomputing the target's index after removal is the bug this
+        // replaced — for two adjacent widgets it cancels out to a no-op, since
+        // removing the one right before its neighbor shifts that neighbor back into
+        // the exact slot just vacated.
+        dashLayout.splice(from, 1);
+        dashLayout.splice(to, 0, fromId);
+        saveDashLayout(user);
+        drawDashboardShell(user);
+      });
+    });
+  }
+
+  /** Released proposals whose freight nobody has asked a vendor about, drafts
+   *  untouched 14+ days, expirations — everything that goes into "needs attention",
+   *  fetched once and cached so toggling edit mode or reordering never re-fetches. */
+  async function loadDashboardData(user) {
     var data = null, orgTotal = null;
-    try {
-      var rr = await authed('/reports/proposals');
-      if (rr.ok) data = await rr.json();
-    } catch (e) {}
+    try { var rr = await authed('/reports/proposals'); if (rr.ok) data = await rr.json(); } catch (e) {}
     try { var ro = await authed('/crm/organizations?pageSize=1'); if (ro.ok) orgTotal = (await ro.json()).total; } catch (e2) {}
     // Released proposals whose freight nobody has asked a vendor about. Its own
     // endpoint rather than part of the reporting payload: it reads the freight
@@ -820,74 +948,149 @@
     // than the proposals.
     var followRows = [];
     try { var rfu = await authed('/crm/follow-ups'); if (rfu.ok) followRows = (await rfu.json()).rows || []; } catch (e4) {}
-    var kpis = document.getElementById('dashKpis'); if (!kpis) return;
-    if (!data) { kpis.innerHTML = '<div class="card"><div class="k">Proposals</div><div class="v small">Unavailable</div><div class="muted" style="font-size:12.5px;margin-top:4px;">Could not load reporting data.</div></div>'; return; }
-    var s = data.summary;
-    var released = (data.pipeline.filter(function (p) { return p.status === 'RELEASED'; })[0] || { count: 0, value: 0 });
-    var review = (data.pipeline.filter(function (p) { return p.status === 'INTERNAL_REVIEW'; })[0] || { count: 0, value: 0 });
-    var stale = data.rows.filter(function (r) { return r.status === 'DRAFT' && r.daysOpen >= 14; });
-    var attn = data.expiredOpen.length + data.expiringSoon.length + review.count + stale.length + freightRows.length + followRows.length;
-    kpis.innerHTML =
-      kpi('Open proposals', s.open.toLocaleString(), fmt0(s.openValue) + ' in flight · avg ' + s.avgDaysOpen + ' days old', '#3d4a55') +
-      kpi('Out with customers', released.count.toLocaleString(), fmt0(released.value) + ' awaiting a decision') +
-      kpi('Accepted to date', fmt0(s.wonValue), s.won + ' proposals · ' + s.conversionRate + '% conversion', '#2f7d5d') +
-      kpi('Needs attention', attn.toLocaleString(), attn ? 'expiring, stalled or awaiting review' : 'nothing waiting on you', attn ? '#9c3327' : '#2f7d5d');
-    var scale = document.getElementById('dashScale');
-    if (scale) scale.textContent = s.total.toLocaleString() + ' proposals · ' + (orgTotal == null ? data.byCustomer.length : orgTotal) + ' customers · ' + data.products.length.toLocaleString() + ' products proposed';
-
-    function attnGroup(label, rows, color, note) {
-      if (!rows.length) return '';
-      return '<div style="margin-bottom:10px;"><div style="display:flex;align-items:baseline;gap:8px;margin-bottom:5px;">' +
-          '<span style="font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:' + color + ';">' + esc(label) + ' · ' + rows.length + '</span>' +
-          (note ? '<span class="muted" style="font-size:11.5px;">' + esc(note) + '</span>' : '') + '</div>' +
-        '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:12px;overflow:hidden;">' +
-        foldRows(rows.map(function (r, i) {
-          return '<div class="dashRow" data-id="' + r.id + '" style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 14px;cursor:pointer;' + (i ? 'border-top:1px solid #f2f3ef;' : '') + '">' +
-            '<div style="min-width:0;"><b style="font-weight:600;font-size:13.5px;">' + esc(r.customer) + '</b>' +
-              '<div class="muted" style="font-size:12px;">' + esc(r.title) + ' · ' + esc(r.number) + '</div></div>' +
-            '<div style="text-align:right;white-space:nowrap;font-size:12.5px;">' + fmt0(r.total) +
-              '<div class="muted" style="font-size:11.5px;">' + (r.expiration ? 'expires ' + fmtDate(r.expiration) : r.daysOpen + ' days old') + '</div></div></div>';
-        }), 6, '#f2f3ef', color) + '</div></div>';
+    dashData = { data: data, orgTotal: orgTotal, freightRows: freightRows, followRows: followRows, ftuHtml: dashData ? dashData.ftuHtml : '' };
+    fillDashboardWidgets(user);
+    // Its own fetch, kicked off after everything above: a slow /freight/queue should
+    // never hold up the rest of the dashboard. Left empty when nothing is
+    // outstanding — dashboardSection returns '' rather than an empty card, so the
+    // widget just has nothing to show instead of sitting there saying nothing.
+    if (window.FreightTrueUp) {
+      try {
+        var ftuHtml = await window.FreightTrueUp.dashboardSection(user);
+        dashData.ftuHtml = ftuHtml || '';
+        var el = document.getElementById('dashWInner-freight_trueup');
+        if (el) {
+          el.innerHTML = dashData.ftuHtml;
+          if (dashData.ftuHtml) window.FreightTrueUp.bindDashboard(user);
+        }
+      } catch (e) {}
     }
-    /**
-     * Follow-ups that have come due. Customers, not proposals — the date is a promise
-     * to make contact, and it stands whether or not the quote behind it is still live.
-     */
-    function followUpGroup(rows) {
-      if (!rows.length) return '';
-      return '<div style="margin-bottom:10px;"><div style="display:flex;align-items:baseline;gap:8px;margin-bottom:5px;">' +
-          '<span style="font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#8a6d1f;">Follow-Up Due · ' + rows.length + '</span>' +
-          '<span class="muted" style="font-size:11.5px;">make contact</span></div>' +
-        '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:12px;overflow:hidden;">' +
-        foldRows(rows.map(function (r, i) {
-          var win = r.decisionFrom || r.decisionTo
-            ? 'decides ' + (r.decisionFrom ? fmtDate(r.decisionFrom) : '?') + ' – ' + (r.decisionTo ? fmtDate(r.decisionTo) : '?')
-            : 'no decision window recorded';
-          return '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 14px;' + (i ? 'border-top:1px solid #f2f3ef;' : '') + '">' +
-            '<div style="min-width:0;"><b style="font-weight:600;font-size:13.5px;">' + esc(r.customer) + '</b>' +
-              '<div class="muted" style="font-size:12px;">' + esc(win) + '</div></div>' +
-            '<div style="text-align:right;white-space:nowrap;font-size:12.5px;">' + esc(fmtDate(r.followUpDate)) +
-              '<div class="muted" style="font-size:11.5px;">follow-up date</div></div></div>';
-        }), 6, '#f2f3ef', '#8a6d1f') + '</div></div>';
-    }
-    var box = document.getElementById('dashAttention');
-    var html = freightAlertGroup(freightRows) +
-      followUpGroup(followRows) +
-      attnGroup('Past expiration', data.expiredOpen, '#9c3327', 're-date or mark inactive') +
-      attnGroup('Expiring within 14 days', data.expiringSoon, '#8a6d1f', 'follow up') +
-      attnGroup('Awaiting internal review', data.rows.filter(function (r) { return r.status === 'INTERNAL_REVIEW'; }), '#3d4a55', '') +
-      attnGroup('Drafts untouched 14+ days', stale, '#5c6157', 'stalled');
-    box.innerHTML = html || '<div class="placeholder" style="padding:22px;"><p class="muted" style="margin:0;">Nothing needs attention — no expiring, stalled or unreviewed proposals.</p></div>';
+  }
 
-    var recent = document.getElementById('dashRecent');
-    recent.innerHTML = repTable([['Customer'], ['Proposal'], ['Status'], ['Value', 'right'], ['Last modified']],
-      data.rows.slice(0, 6).map(function (r) {
-        return '<tr class="dashRow" data-id="' + r.id + '" style="cursor:pointer;">' +
-          rtd('<b style="font-weight:600;">' + esc(r.customer) + '</b>', 'left') +
-          rtd(esc(r.title) + '<div class="muted" style="font-size:11.5px;">' + esc(r.number) + '</div>') +
-          rtd(statusChip(r.status) + (r.expired ? ' <span style="color:#9c3327;">⚑</span>' : '')) +
-          rtd(fmt0(r.total), 'right', 1) + rtd(fmtDate(r.updatedAt)) + '</tr>';
-      }).join(''), 'No proposals yet.');
+  /** Every configured widget's container, filled from the cached fetch — or the
+   *  static ones (quick actions, workspace info) filled immediately regardless of
+   *  whether that fetch has landed yet, exactly as they always rendered before this
+   *  was customizable. */
+  function fillDashboardWidgets(user) {
+    dashLayout.forEach(function (id) {
+      var el = document.getElementById('dashWInner-' + id);
+      if (el) el.innerHTML = dashWidgetHtml(id, user);
+    });
+    wireDashboardWidgetContent(user);
+  }
+
+  function dashWidgetHtml(id, user) {
+    if (id === 'quick_actions') return quickActionsWidgetHtml(user);
+    if (id === 'workspace_info') return workspaceInfoWidgetHtml(user);
+    if (id === 'freight_trueup') return dashData ? (dashData.ftuHtml || '') : '<div class="muted" style="padding:16px;">Loading…</div>';
+    if (!dashData) return '<div class="muted" style="padding:16px;">Loading…</div>';
+    var d = dashData.data;
+    if (!d) {
+      if (id === 'needs_attention' || id === 'recently_updated') return '<div class="err">Could not load reporting data.</div>';
+      return '<div class="card"><div class="k">' + esc((DASH_WIDGET_MAP[id] || {}).label || '') + '</div><div class="v small">Unavailable</div></div>';
+    }
+    var s = d.summary;
+    var released = (d.pipeline.filter(function (p) { return p.status === 'RELEASED'; })[0] || { count: 0, value: 0 });
+    var review = (d.pipeline.filter(function (p) { return p.status === 'INTERNAL_REVIEW'; })[0] || { count: 0, value: 0 });
+    var stale = d.rows.filter(function (r) { return r.status === 'DRAFT' && r.daysOpen >= 14; });
+    var attn = d.expiredOpen.length + d.expiringSoon.length + review.count + stale.length + dashData.freightRows.length + dashData.followRows.length;
+    if (id === 'kpi_open') return kpi('Open proposals', s.open.toLocaleString(), fmt0(s.openValue) + ' in flight · avg ' + s.avgDaysOpen + ' days old', '#3d4a55');
+    if (id === 'kpi_released') return kpi('Out with customers', released.count.toLocaleString(), fmt0(released.value) + ' awaiting a decision');
+    if (id === 'kpi_accepted') return kpi('Accepted to date', fmt0(s.wonValue), s.won + ' proposals · ' + s.conversionRate + '% conversion', '#2f7d5d');
+    if (id === 'kpi_attention') return kpi('Needs attention', attn.toLocaleString(), attn ? 'expiring, stalled or awaiting review' : 'nothing waiting on you', attn ? '#9c3327' : '#2f7d5d');
+    if (id === 'needs_attention') {
+      var html = freightAlertGroup(dashData.freightRows) +
+        followUpGroup(dashData.followRows) +
+        attnGroup('Past expiration', d.expiredOpen, '#9c3327', 're-date or mark inactive') +
+        attnGroup('Expiring within 14 days', d.expiringSoon, '#8a6d1f', 'follow up') +
+        attnGroup('Awaiting internal review', d.rows.filter(function (r) { return r.status === 'INTERNAL_REVIEW'; }), '#3d4a55', '') +
+        attnGroup('Drafts untouched 14+ days', stale, '#5c6157', 'stalled');
+      return '<div class="section-title">Needs your attention</div>' + (html || '<div class="placeholder" style="padding:22px;"><p class="muted" style="margin:0;">Nothing needs attention — no expiring, stalled or unreviewed proposals.</p></div>');
+    }
+    if (id === 'recently_updated') {
+      return '<div class="section-title">Recently updated proposals</div>' +
+        repTable([['Customer'], ['Proposal'], ['Status'], ['Value', 'right'], ['Last modified']],
+          d.rows.slice(0, 6).map(function (r) {
+            return '<tr class="dashRow" data-id="' + r.id + '" style="cursor:pointer;">' +
+              rtd('<b style="font-weight:600;">' + esc(r.customer) + '</b>', 'left') +
+              rtd(esc(r.title) + '<div class="muted" style="font-size:11.5px;">' + esc(r.number) + '</div>') +
+              rtd(statusChip(r.status) + (r.expired ? ' <span style="color:#9c3327;">⚑</span>' : '')) +
+              rtd(fmt0(r.total), 'right', 1) + rtd(fmtDate(r.updatedAt)) + '</tr>';
+          }).join(''), 'No proposals yet.');
+    }
+    return '';
+  }
+
+  /** Past expiration, expiring soon, awaiting review, or a stalled draft — one row
+   *  format shared by every "needs attention" bucket the widget above lists. */
+  function attnGroup(label, rows, color, note) {
+    if (!rows.length) return '';
+    return '<div style="margin-bottom:10px;"><div style="display:flex;align-items:baseline;gap:8px;margin-bottom:5px;">' +
+        '<span style="font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:' + color + ';">' + esc(label) + ' · ' + rows.length + '</span>' +
+        (note ? '<span class="muted" style="font-size:11.5px;">' + esc(note) + '</span>' : '') + '</div>' +
+      '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:12px;overflow:hidden;">' +
+      foldRows(rows.map(function (r, i) {
+        return '<div class="dashRow" data-id="' + r.id + '" style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 14px;cursor:pointer;' + (i ? 'border-top:1px solid #f2f3ef;' : '') + '">' +
+          '<div style="min-width:0;"><b style="font-weight:600;font-size:13.5px;">' + esc(r.customer) + '</b>' +
+            '<div class="muted" style="font-size:12px;">' + esc(r.title) + ' · ' + esc(r.number) + '</div></div>' +
+          '<div style="text-align:right;white-space:nowrap;font-size:12.5px;">' + fmt0(r.total) +
+            '<div class="muted" style="font-size:11.5px;">' + (r.expiration ? 'expires ' + fmtDate(r.expiration) : r.daysOpen + ' days old') + '</div></div></div>';
+      }), 6, '#f2f3ef', color) + '</div></div>';
+  }
+  /**
+   * Follow-ups that have come due. Customers, not proposals — the date is a promise
+   * to make contact, and it stands whether or not the quote behind it is still live.
+   */
+  function followUpGroup(rows) {
+    if (!rows.length) return '';
+    return '<div style="margin-bottom:10px;"><div style="display:flex;align-items:baseline;gap:8px;margin-bottom:5px;">' +
+        '<span style="font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#8a6d1f;">Follow-Up Due · ' + rows.length + '</span>' +
+        '<span class="muted" style="font-size:11.5px;">make contact</span></div>' +
+      '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:12px;overflow:hidden;">' +
+      foldRows(rows.map(function (r, i) {
+        var win = r.decisionFrom || r.decisionTo
+          ? 'decides ' + (r.decisionFrom ? fmtDate(r.decisionFrom) : '?') + ' – ' + (r.decisionTo ? fmtDate(r.decisionTo) : '?')
+          : 'no decision window recorded';
+        return '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 14px;' + (i ? 'border-top:1px solid #f2f3ef;' : '') + '">' +
+          '<div style="min-width:0;"><b style="font-weight:600;font-size:13.5px;">' + esc(r.customer) + '</b>' +
+            '<div class="muted" style="font-size:12px;">' + esc(win) + '</div></div>' +
+          '<div style="text-align:right;white-space:nowrap;font-size:12.5px;">' + esc(fmtDate(r.followUpDate)) +
+            '<div class="muted" style="font-size:11.5px;">follow-up date</div></div></div>';
+      }), 6, '#f2f3ef', '#8a6d1f') + '</div></div>';
+  }
+
+  function quickActionsWidgetHtml(user) {
+    var canWrite = hasRole(PROP_WRITE, user.role);
+    return '<div class="section-title">Quick actions</div>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+        (canWrite ? '<button class="btn" id="dqNew" style="width:auto;padding:10px 16px;">New proposal</button>' : '') +
+        (canCrmWrite(user.role) ? '<button class="link-btn" id="dqMonday" style="width:auto;padding:10px 15px;">Import a customer from monday</button>' : '') +
+        '<button class="link-btn" id="dqReports" style="width:auto;padding:10px 15px;">Open reports</button>' +
+        '<button class="link-btn" id="dqCatalog" style="width:auto;padding:10px 15px;">Catalog &amp; pricing</button>' +
+      '</div>';
+  }
+
+  function workspaceInfoWidgetHtml(user) {
+    return '<div class="grid">' +
+      '<div class="card"><div class="k">Signed in as</div><div class="v small">' + esc(user.name || user.email) + '</div><div class="muted" style="font-size:12.5px;margin-top:4px;">' + esc(user.email) + ' · ' + esc(roleLabel(user.role)) + '</div></div>' +
+      '<div class="card"><div class="k">API status</div><div class="v small" id="apiStatus"><span class="dot wait"></span>Checking…</div></div>' +
+      '<div class="card"><div class="k">Workspace</div><div class="v small">Summit Sensory Gym</div><div class="muted" style="font-size:12.5px;margin-top:4px;" id="dashScale">' + (dashData && dashData.data ? dashData.data.summary.total.toLocaleString() + ' proposals · ' + (dashData.orgTotal == null ? dashData.data.byCustomer.length : dashData.orgTotal) + ' customers · ' + dashData.data.products.length.toLocaleString() + ' products proposed' : 'Proposal Management Software') + '</div></div>' +
+    '</div>';
+  }
+
+  /** Wires whatever just landed in the DOM. Idempotent to call after every widget
+   *  refill: fresh elements each time, so nothing double-binds. */
+  function wireDashboardWidgetContent(user) {
+    var nb = document.getElementById('dqNew'); if (nb) nb.addEventListener('click', function () { openProposalForm(user); });
+    var mb = document.getElementById('dqMonday'); if (mb) mb.addEventListener('click', function () { openMondayLookup(user); });
+    var rb = document.getElementById('dqReports'); if (rb) rb.addEventListener('click', function () { activateNav('reports'); renderReports(user); });
+    var cb = document.getElementById('dqCatalog'); if (cb) cb.addEventListener('click', function () { activateNav('catalog'); window.SSGCatalog.render(user); });
+    var apiEl = document.getElementById('apiStatus');
+    if (apiEl) {
+      fetch('/health')
+        .then(function (r) { apiEl.innerHTML = r.ok ? '<span class="dot ok"></span>Online' : '<span class="dot bad"></span>Error ' + r.status; })
+        .catch(function () { apiEl.innerHTML = '<span class="dot bad"></span>Offline'; });
+    }
     bindFolds();
     document.querySelectorAll('.dashRow').forEach(function (el) {
       el.addEventListener('click', function () { activateNav('proposals'); openProposalDetail(el.getAttribute('data-id'), user); });
