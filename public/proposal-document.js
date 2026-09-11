@@ -660,6 +660,15 @@
     // indented one step further than whichever heading they sit under.
     var inSub = false;
     var bottomNotes = [];
+    // A vendor-sourced part is often returnable, just on the vendor's own terms
+    // rather than Summit's — the one place that maps the builder's returnable
+    // select (public/app.js, returnableSelect()) to what prints here, so the two
+    // can't drift into disagreement.
+    var RETURNABLE_LABEL = {
+      YES: 'Yes',
+      NO: 'No',
+      VENDOR_POLICY: "Yes, per the vendor's return policy",
+    };
     /**
      * Left edge by tier. A section heading sits flush, a sub-heading steps in once,
      * and a product hangs off whichever heading it belongs to — so the tier of any
@@ -838,7 +847,8 @@
           '</td></tr>';
       }
       var flags = [];
-      if (l.returnable) flags.push('Returnable: ' + (l.returnable === 'YES' ? 'Yes' : 'No'));
+      if (l.returnable)
+        flags.push('Returnable: ' + (RETURNABLE_LABEL[l.returnable] || l.returnable));
       if (l.addlFreight)
         flags.push('Additional freight: ' + (l.addlFreight === 'YES' ? 'Yes' : 'No'));
       if (l.freightCalc)
