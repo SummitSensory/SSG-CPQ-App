@@ -33,12 +33,29 @@ type Browser = {
   close: () => Promise<void>;
   isConnected: () => boolean;
 };
+/** A Playwright request, narrowed to what a route handler here needs. */
+export type RouteRequest = { url: () => string };
+/** A Playwright route, narrowed to what a route handler here needs. */
+export type Route = {
+  request: () => RouteRequest;
+  fulfill: (opts: { status?: number; contentType?: string; body: string }) => Promise<void>;
+  abort: () => Promise<void>;
+};
 type Page = {
   setContent: (html: string, opts?: Record<string, unknown>) => Promise<void>;
   emulateMedia: (opts: Record<string, unknown>) => Promise<void>;
   pdf: (opts: Record<string, unknown>) => Promise<Buffer>;
   close: () => Promise<void>;
   waitForFunction: (fn: string, arg?: unknown, opts?: Record<string, unknown>) => Promise<unknown>;
+  goto: (url: string, opts?: Record<string, unknown>) => Promise<unknown>;
+  route: (pattern: string, handler: (route: Route) => unknown) => Promise<void>;
+  /**
+   * A source-code STRING, not a function reference — same reason waitForFunction
+   * takes one above: this file has no DOM lib (it is a server-side module), and
+   * the expression runs inside the PAGE, not here. See lib/pdfRaster.ts, the one
+   * caller, for how arguments are passed in (JSON-embedded in the string).
+   */
+  evaluate: <T>(script: string) => Promise<T>;
 };
 
 /**
@@ -110,6 +127,29 @@ function discardBrowser(): void {
   // Best effort, and never awaited: the process is usually already gone, and waiting
   // on a close that cannot complete would add the timeout to the retry.
   void stale?.then((b) => b.close().catch(() => undefined)).catch(() => undefined);
+}
+
+/**
+ * A page on the shared, cached browser — one retry on a fresh browser if the
+ * cached one turned out to be dead (see discardBrowser's own comment on why
+ * `isConnected()` cannot catch this itself). Shared by every caller that needs a
+ * Chromium page rather than a full `renderPdf`, so a second consumer of headless
+ * Chromium (see lib/pdfRaster.ts) reuses the same warm browser instead of paying
+ * a second cold start.
+ */
+export async function acquirePage(): Promise<Page> {
+  if (!(await pdfAvailable())) {
+    throw new Error(
+      'PDF rendering is not installed on this deployment — run: pnpm add playwright-core @sparticuz/chromium-min',
+    );
+  }
+  try {
+    return await (await getBrowser()).newPage();
+  } catch (err) {
+    logger.warn({ err }, 'pdf: cached browser was dead, relaunching');
+    discardBrowser();
+    return await (await getBrowser()).newPage();
+  }
 }
 
 /**
@@ -232,7 +272,7 @@ export async function renderPdf(html: string, opts: PdfOptions = {}): Promise<Bu
   }
   html = await inlineKnownAssets(html);
   /*
-   * One retry on a fresh browser.
+   * One retry on a fresh browser, via acquirePage().
    *
    * The first attempt may be handed a cached browser whose process the platform has
    * since reclaimed (see discardBrowser). That is not a real failure and it is not
@@ -244,14 +284,7 @@ export async function renderPdf(html: string, opts: PdfOptions = {}): Promise<Bu
    * actually wrong — the chromium pack is missing, or the function is out of memory —
    * and looping would turn a clear error into a timeout.
    */
-  let page: Page;
-  try {
-    page = await (await getBrowser()).newPage();
-  } catch (err) {
-    logger.warn({ err }, 'pdf: cached browser was dead, relaunching');
-    discardBrowser();
-    page = await (await getBrowser()).newPage();
-  }
+  const page = await acquirePage();
   try {
     // 'domcontentloaded' rather than 'networkidle': the document is self-contained,
     // so waiting on the network only adds the timeout to every render.

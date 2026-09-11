@@ -1907,6 +1907,26 @@
   function today0() { var d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); }
   function dayDiff(v) { if (!v) return null; var d = new Date(v); if (isNaN(d)) return null; d.setHours(0, 0, 0, 0); return Math.round((d.getTime() - today0()) / 86400000); }
   function metaOfVersion(v) { var secs = (v && v.sections) || []; var m = (Array.isArray(secs) ? secs : []).filter(function (s) { return s && s.id === 'meta'; })[0]; return (m && m.data) || {}; }
+  /**
+   * "Reference docs: W-9" — the only place a rep can see, without opening the
+   * builder's settings panel, whether a W-9 or a certificate of insurance rides
+   * along with a given version. Titled from window.SSGReferenceDocuments.list(),
+   * same live-catalog lookup referenceDocsCard() uses in the builder, so a
+   * document renamed in Administration reads the same way here; a key the
+   * catalog no longer has (retired or deleted since this version was saved)
+   * still shows, title-cased from the key, rather than silently vanishing —
+   * unlike resolveReferenceDocuments server-side, this is just a status label,
+   * not a merge, so there is no reason to hide a selection that exists.
+   */
+  function referenceDocLabelFor(v) {
+    var keys = metaOfVersion(v).referenceDocKeys;
+    if (!Array.isArray(keys) || !keys.length) return '';
+    var docs = (window.SSGReferenceDocuments && window.SSGReferenceDocuments.list()) || [];
+    var byKey = {};
+    docs.forEach(function (d) { byKey[d.key] = d.title; });
+    var titles = keys.map(function (k) { return byKey[k] || titleCase(String(k).replace(/_/g, ' ')); });
+    return '<div class="muted" style="font-size:11px;margin-top:3px;">Reference docs: ' + esc(titles.join(', ')) + '</div>';
+  }
   // One urgency per row, computed once at load and reused for both the Needs
   // Attention tab membership and every row's left accent bar, so the two can never
   // disagree about what counts as urgent.
@@ -2996,7 +3016,7 @@
         var discardBtn = (editable && versions.length > 1)
           ? '<button class="link-btn" data-discard="' + v.id + '" data-v="' + v.version + '" style="width:auto;padding:8px 13px;color:#9c3327;">Discard draft</button>'
           : '';
-        return '<tr>' + td('v' + v.version) + td('<span class="chip">' + titleCase(v.status) + '</span>') + td(fmtDate(v.createdAt)) + td(v.frozen ? 'Yes' : 'No') + td('<b style="font-weight:600;">' + fmtMoney(versionTotalMinor(v), 'USD') + '</b>') + td('<div style="display:flex;justify-content:flex-end;gap:8px;">' + freightBtn + discardBtn + action + '</div>') + '</tr>';
+        return '<tr>' + td('v' + v.version) + td('<span class="chip">' + titleCase(v.status) + '</span>' + referenceDocLabelFor(v)) + td(fmtDate(v.createdAt)) + td(v.frozen ? 'Yes' : 'No') + td('<b style="font-weight:600;">' + fmtMoney(versionTotalMinor(v), 'USD') + '</b>') + td('<div style="display:flex;justify-content:flex-end;gap:8px;">' + freightBtn + discardBtn + action + '</div>') + '</tr>';
       }).join(''), 6, '')) +
       (hasRole(PROP_WRITE, user.role)
         ? sectionBlock('Send to the customer',
@@ -4031,7 +4051,16 @@
     pb = {
       proposalId: proposal.id, versionId: version.id, user: user, orgId: proposal.organizationId, orgName: orgName, stdNotes: stdNotes, updatedAt: openedUpdatedAt,
       title: proposal.title || '', number: proposal.number || '', version: version.version || 1, status: version.status || 'DRAFT',
-      meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', billSameAsShip: !meta.billTo || meta.billTo === (meta.shipTo || orgShipTo || ''), showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, showDeposit: meta.showDeposit !== false, introTemplate: meta.introTemplate || '', tbdTax: meta.tbdTax || '', tbdStructureFreight: meta.tbdStructureFreight || '', tbdMatsFreight: meta.tbdMatsFreight || '', proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, discountMode: meta.discountMode === 'AMT' ? 'AMT' : 'PCT', discountAmountMinor: meta.discountAmountMinor || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, stdFreightOn: !!meta.stdFreightOn, stdFreightMinor: meta.stdFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7), footerNotes: footerNotes, advAnswers: meta.advAnswers || null, advWarnings: meta.advWarnings || [] },
+      meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', billSameAsShip: !meta.billTo || meta.billTo === (meta.shipTo || orgShipTo || ''), showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, showDeposit: meta.showDeposit !== false, introTemplate: meta.introTemplate || '', tbdTax: meta.tbdTax || '', tbdStructureFreight: meta.tbdStructureFreight || '', tbdMatsFreight: meta.tbdMatsFreight || '', proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, discountMode: meta.discountMode === 'AMT' ? 'AMT' : 'PCT', discountAmountMinor: meta.discountAmountMinor || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, stdFreightOn: !!meta.stdFreightOn, stdFreightMinor: meta.stdFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7), footerNotes: footerNotes, advAnswers: meta.advAnswers || null, advWarnings: meta.advWarnings || [],
+        // Carried over from the saved meta, same as every other field here — its
+        // absence from this allowlist was a real bug found while building the
+        // reference-doc preview/print feature: reopening the builder for a
+        // version that already had a reference document checked silently
+        // dropped it from pb.meta, so the checklist rendered unchecked and the
+        // very next Save (for any unrelated edit) overwrote the saved selection
+        // with nothing. referenceDocsCard() already defaults a missing array to
+        // [], so this only needed to stop discarding what was actually saved.
+        referenceDocKeys: Array.isArray(meta.referenceDocKeys) ? meta.referenceDocKeys.slice() : [] },
       lines: lines,
     };
     // A new proposal starts with the billing address the same as the shipping one.
@@ -7847,9 +7876,85 @@
       '</body></html>';
   }
 
-  function previewProposalDoc(doc, printNow) {
+  /**
+   * Extra fixed sheets for whichever reference documents (a W9, a certificate of
+   * insurance) this version's builder settings had checked — one `.ssg-fm-page`
+   * per PDF page of each selected document, in the library's own print order
+   * (window.SSGReferenceDocuments.list() is already sorted by sortOrder, the
+   * same order resolveReferenceDocuments queries server-side, so the preview
+   * never disagrees with the emailed/e-signed/monday copy about ordering).
+   *
+   * `.ssg-fm-page` is reused rather than inventing a parallel mechanism: it is
+   * already exactly what this needs — a fixed 816x1056 sheet that passes
+   * through paginateProposalArea untouched (see that function's own comment),
+   * already picked up by mountPreviewViewer's page list, and already styled for
+   * both the on-screen viewer and the print stylesheet. Placed after the
+   * itemized proposal, matching the one place this already worked end-to-end
+   * before this change (appendPdfDocuments always adds a reference document as
+   * TRAILING pages — see lib/pdfMerge.ts) — so a rep sees the same order here
+   * that the customer sees in the emailed, e-signed or monday copy.
+   *
+   * Rendered PDF pages are fetched once per document (cached server-side, see
+   * proposals/referenceDocuments.ts) and are pure image content — this is
+   * deliberately NOT part of the proposal's own pagination/measurement pass;
+   * see paginateProposalArea's comment on why the introduction pages are left
+   * out of that too.
+   *
+   * Resolves to '' with zero requests when nothing is selected — the common
+   * case for most proposals.
+   */
+  async function referenceDocSheetsHtml(meta) {
+    var keys = Array.isArray(meta && meta.referenceDocKeys) ? meta.referenceDocKeys : [];
+    if (!keys.length) return '';
+    var catalog = (window.SSGReferenceDocuments && window.SSGReferenceDocuments.list()) || [];
+    var ordered = catalog.filter(function (d) { return keys.indexOf(d.key) !== -1; });
+    if (!ordered.length) return '';
+    var results = await Promise.all(ordered.map(function (d) {
+      return authed('/reference-documents/' + encodeURIComponent(d.key) + '/pages')
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .catch(function () { return null; });
+    }));
+    var html = '';
+    results.forEach(function (res) {
+      var pages = (res && Array.isArray(res.pages)) ? res.pages : [];
+      pages.forEach(function (pg) {
+        html += '<div class="ssg-fm-page" style="width:816px;height:1056px;flex:none;background:#fff;' +
+          'box-sizing:border-box;display:flex;align-items:center;justify-content:center;overflow:hidden;">' +
+          '<img src="' + esc(pg.dataUri) + '" style="max-width:100%;max-height:100%;object-fit:contain;display:block;">' +
+          '</div>';
+      });
+    });
+    return html;
+  }
+
+  /**
+   * Force the page-break-after of every sheet/introduction-page/reference-doc
+   * page by true DOCUMENT order, overriding ensurePrintStyle's CSS `:last-child`
+   * rules with an inline `!important` — those rules are written per-parent
+   * (`.ssg-sheet:last-child` inside the `.ssg-proposal-sheets` wrapper
+   * paginateProposalArea builds; a reference-doc `.ssg-fm-page` sits OUTSIDE
+   * that wrapper, as a direct child of the preview root, so it has a different
+   * parent and CSS's own `:last-child` evaluates each independently). Without
+   * this, the true last proposal sheet always matched `:last-child` on its own
+   * wrapper and printed with no break after it, running straight into the first
+   * reference-doc page on the same sheet of paper whenever one was selected.
+   * Same fix `proposalStandaloneHtml`'s inline pagination script applies for
+   * its own single always-last-sheet case; this generalises it to every sheet,
+   * since here more than one element can be a wrongly-matched "last child".
+   */
+  function fixSheetPageBreaks(root) {
+    var pages = root.querySelectorAll('.ssg-sheet, .ssg-fm-page');
+    for (var i = 0; i < pages.length; i++) {
+      var last = i === pages.length - 1;
+      pages[i].style.setProperty('break-after', last ? 'auto' : 'page', 'important');
+      pages[i].style.setProperty('page-break-after', last ? 'auto' : 'always', 'important');
+    }
+  }
+
+  async function previewProposalDoc(doc, printNow) {
     ensurePrintStyle();
     var html = proposalDocHtml(doc);
+    var refDocHtml = await referenceDocSheetsHtml(doc.meta);
     var ov = document.createElement('div');
     ov.id = 'propPreviewOverlay';
     ov.style.cssText = 'position:fixed;inset:0;background:#e7e8e3;z-index:60;overflow:auto;padding:24px 16px;';
@@ -7881,9 +7986,10 @@
         '</div>' +
       '</div>';
     }
-    ov.innerHTML = toolbarHtml() + html;
+    ov.innerHTML = toolbarHtml() + html + refDocHtml;
     document.body.appendChild(ov);
     paginateProposalArea(ov);
+    fixSheetPageBreaks(ov);
     mountPreviewViewer(ov, ov);
 
     function wire() {
@@ -7891,8 +7997,14 @@
       document.getElementById('pvPrint').addEventListener('click', firePrint);
       if (window.SSGFrontMatter) {
         window.SSGFrontMatter.bindScopeToggle(ov, function () {
-          ov.innerHTML = toolbarHtml() + proposalDocHtml(doc);
+          // The introduction/proposal scope toggle only decides which of THOSE
+          // sections print — a selected reference document is separate
+          // collateral, not part of that choice, so it stays attached (using
+          // the same html already fetched above, not refetched) no matter
+          // which scope is picked.
+          ov.innerHTML = toolbarHtml() + proposalDocHtml(doc) + refDocHtml;
           paginateProposalArea(ov);
+          fixSheetPageBreaks(ov);
           mountPreviewViewer(ov, ov);
           ov.scrollTop = 0;
           wire();
@@ -13570,11 +13682,19 @@
         var doc = await buildProposalDocForSend(p, version.id);
         if (!doc) return showErr('Could not prepare the proposal. Open the proposal preview once, then try again.');
         var renderingIds = renderings.filter(function (rnd) { return rnd.included !== false; }).map(function (rnd) { return rnd.id; });
+        // Whichever reference documents (a W9, a certificate of insurance) this
+        // version's builder settings had checked — read from the version's own
+        // saved meta, the same source referenceDocLabelFor() reads for the
+        // proposal-detail indicator, so what a rep sees checked is exactly what
+        // goes out. Server-side merging already exists (resolveReferenceDocuments
+        // in docuseal/service.ts); this was the only send path not forwarding it.
+        var referenceDocKeys = metaOfVersion(version).referenceDocKeys;
         var body = {
           proposalHtml: doc.html,
           filename: doc.filename,
           signers: signers,
           renderingIds: renderingIds,
+          referenceDocumentKeys: (Array.isArray(referenceDocKeys) && referenceDocKeys.length) ? referenceDocKeys : undefined,
           emailTemplateKey: pv.querySelector('#esEmailTemplate').value || undefined,
           subject: subject,
           message: message,
