@@ -669,6 +669,10 @@
       NO: 'No',
       VENDOR_POLICY: "Yes, per the vendor's return policy",
     };
+    // Per-item descriptions, relocated out of the line-items table (see the
+    // `if (l.description)` handling below) into their own full-width block under
+    // the returnable/freight grid, instead of printing inline under each row.
+    var bottomDescs = [];
     /**
      * Left edge by tier. A section heading sits flush, a sub-heading steps in once,
      * and a product hangs off whichever heading it belongs to — so the tier of any
@@ -809,15 +813,14 @@
         'font-size:11px;text-align:right;vertical-align:top;font-weight:700;color:#203060;">' +
         fmtMoney(amt, '') +
         '</td></tr>';
-      // Prose belongs to the whole row, not to the name column: a description or a
+      // Prose belongs to the whole row, not to the name column: a delivery note or a
       // freight sentence runs the full width of the table rather than wrapping three
       // times inside a 430px column while the numeric columns sit empty beside it.
+      // A per-item description is the exception: it now prints in the "Delivery,
+      // Returns & Freight Notes" block below, alongside the returnable/freight flags
+      // it visually sits next to on the page, rather than inline under this row.
       var prose = '';
-      if (l.description)
-        prose +=
-          '<div style="font-size:10.5px;color:#5b6478;line-height:1.45;">' +
-          esc(l.description) +
-          '</div>';
+      if (l.description) bottomDescs.push({ name: l.name, text: l.description });
       if (l.delivery)
         prose +=
           '<div style="font-size:10px;color:#7b8190;margin-top:2px;">Delivery: ' +
@@ -846,32 +849,109 @@
           fmtMoney(l.tpFreightMinor, '') +
           '</td></tr>';
       }
-      var flags = [];
-      if (l.returnable)
-        flags.push('Returnable: ' + (RETURNABLE_LABEL[l.returnable] || l.returnable));
-      if (l.addlFreight)
-        flags.push('Additional freight: ' + (l.addlFreight === 'YES' ? 'Yes' : 'No'));
-      if (l.freightCalc)
-        flags.push('Freight calculated: ' + (l.freightCalc === 'YES' ? 'Yes' : 'No'));
-      if (flags.length) bottomNotes.push({ name: l.name, text: flags.join(' · ') });
+      // Raw flag values per item, keyed the same way the grid columns are — a
+      // column only exists if at least one item in the proposal sets that flag
+      // (checked below via bottomFlagCols), so a blank cell here just means this
+      // particular item didn't set a flag that some other item did.
+      var itemFlags = {};
+      var hasAnyFlag = false;
+      if (l.returnable) {
+        itemFlags.returnable = RETURNABLE_LABEL[l.returnable] || l.returnable;
+        hasAnyFlag = true;
+      }
+      if (l.addlFreight) {
+        itemFlags.addlFreight = l.addlFreight === 'YES' ? 'Yes' : 'No';
+        hasAnyFlag = true;
+      }
+      if (l.freightCalc) {
+        itemFlags.freightCalc = l.freightCalc === 'YES' ? 'Yes' : 'No';
+        hasAnyFlag = true;
+      }
+      if (hasAnyFlag) bottomNotes.push({ name: l.name, flags: itemFlags });
     });
     body += subtotalRow();
     if (tbodyOpen) body += '</tbody>';
-    var bottomNotesHtml = bottomNotes.length
-      ? '<div style="margin-top:24px;padding-top:12px;border-top:1px solid #eceef4;font-size:10.5px;color:#5b6478;line-height:1.6;break-inside:avoid;"><div style="font-family:\'Newsreader\',Georgia,serif;font-size:15px;font-weight:700;color:#203060;letter-spacing:-.015em;margin-bottom:5px;">Delivery, Returns &amp; Freight Notes</div>' +
+    // Columns for the flag grid below: a column only prints if at least one line
+    // item actually set that flag, same condition the code used per-item before
+    // this became a grid (`if (l.returnable)` / `if (l.addlFreight)` /
+    // `if (l.freightCalc)`).
+    var bottomFlagCols = [
+      { key: 'returnable', label: tc('Returnable') },
+      { key: 'addlFreight', label: tc('Additional Freight') },
+      { key: 'freightCalc', label: tc('Freight Calculated') },
+    ].filter(function (c) {
+      return bottomNotes.some(function (n) {
+        return Object.prototype.hasOwnProperty.call(n.flags, c.key);
+      });
+    });
+    // Plain HTML table, matching the same fixed/border-collapse technique the
+    // line-items table above uses — this file builds print/PDF-safe HTML for a
+    // headless-Chromium renderer, so the grid sticks with a layout mechanism
+    // that renderer already handles rather than reaching for CSS Grid. No cell
+    // or row borders anywhere in it, per Bryan's request.
+    var bottomGridHtml = bottomNotes.length
+      ? '<table style="width:100%;border-collapse:collapse;margin-top:8px;">' +
+        '<thead><tr>' +
+        '<th style="text-align:left;padding:0 10px 4px 0;font-size:9.5px;text-transform:uppercase;letter-spacing:.08em;color:#7b8190;font-weight:700;">Item</th>' +
+        bottomFlagCols
+          .map(function (c) {
+            return (
+              '<th style="text-align:left;padding:0 10px 4px;font-size:9.5px;text-transform:uppercase;letter-spacing:.08em;color:#7b8190;font-weight:700;">' +
+              esc(c.label) +
+              '</th>'
+            );
+          })
+          .join('') +
+        '</tr></thead><tbody>' +
         bottomNotes
           .map(function (n) {
             return (
-              '<div><b style="font-weight:600;">' +
+              '<tr><td style="padding:2px 10px 2px 0;font-size:10.5px;color:#20241f;">' +
               esc(tc(n.name)) +
-              ':</b> ' +
+              '</td>' +
+              bottomFlagCols
+                .map(function (c) {
+                  return (
+                    '<td style="padding:2px 10px;font-size:10.5px;color:#5b6478;">' +
+                    esc(n.flags[c.key] || '') +
+                    '</td>'
+                  );
+                })
+                .join('') +
+              '</tr>'
+            );
+          })
+          .join('') +
+        '</tbody></table>'
+      : '';
+    // Per-item descriptions print below the grid, full width, one block per item —
+    // never mixed into the grid's own columns.
+    var bottomDescsHtml = bottomDescs.length
+      ? '<div style="margin-top:' +
+        (bottomGridHtml ? '14px' : '8px') +
+        ';">' +
+        bottomDescs
+          .map(function (n) {
+            return (
+              '<div style="margin-top:6px;font-size:10.5px;line-height:1.45;">' +
+              '<b style="font-weight:600;color:#20241f;">' +
+              esc(tc(n.name)) +
+              ':</b> <span style="color:#5b6478;">' +
               esc(n.text) +
-              '</div>'
+              '</span></div>'
             );
           })
           .join('') +
         '</div>'
       : '';
+    var bottomNotesHtml =
+      bottomGridHtml || bottomDescsHtml
+        ? '<div style="margin-top:24px;padding-top:12px;border-top:1px solid #eceef4;font-size:10.5px;color:#5b6478;line-height:1.6;break-inside:avoid;">' +
+          '<div style="font-family:\'Newsreader\',Georgia,serif;font-size:15px;font-weight:700;color:#203060;letter-spacing:-.015em;margin-bottom:5px;">Delivery, Returns &amp; Freight Notes</div>' +
+          bottomGridHtml +
+          bottomDescsHtml +
+          '</div>'
+        : '';
     var u = rules.documentUser();
     var preparerLine2 = [u.title, u.phone].filter(Boolean).join(' · ');
     // Notes that print beneath the signature lines (terms, acceptance language).

@@ -4835,13 +4835,24 @@
       revenue: revenue, cogs: cogs, margin: revenue - cogs, marginPct: revenue ? Math.round(((revenue - cogs) / revenue) * 1000) / 10 : 0 };
   }
   // subtotal + cost per GROUP line index, for inline display in the builder
+  /**
+   * A subgroup's products count twice on purpose: once into the subgroup's own
+   * bucket (so a subgroup heading can show its own Revenue/COGS/Margin, same as a
+   * GROUP heading does) and once into the enclosing GROUP's bucket, which already
+   * had to include them — a GROUP's total was never meant to exclude its
+   * subgroups. `curSubIdx` resets at every GROUP boundary so a subgroup's tally
+   * can never leak into a later section it isn't actually part of.
+   */
   function groupSubtotalMap() {
-    var map = {}, curIdx = null;
+    var map = {}, curIdx = null, curSubIdx = null;
     pb.lines.forEach(function (l, i) {
-      if (l.lineType === 'GROUP') { curIdx = i; map[i] = { rev: 0, cogs: 0 }; return; }
-      if (l.lineType === 'PRODUCT' && curIdx != null) {
-        map[curIdx].rev += (Number(l.quantity) || 0) * (Number(l.rateMinor) || 0) + (Number(l.tpFreightMinor) || 0);
-        map[curIdx].cogs += (Number(l.quantity) || 0) * (Number(l.costEach) || 0);
+      if (l.lineType === 'GROUP') { curIdx = i; curSubIdx = null; map[i] = { rev: 0, cogs: 0 }; return; }
+      if (l.lineType === 'SUBGROUP') { curSubIdx = i; map[i] = { rev: 0, cogs: 0 }; return; }
+      if (l.lineType === 'PRODUCT') {
+        var rev = (Number(l.quantity) || 0) * (Number(l.rateMinor) || 0) + (Number(l.tpFreightMinor) || 0);
+        var cogs = (Number(l.quantity) || 0) * (Number(l.costEach) || 0);
+        if (curIdx != null) { map[curIdx].rev += rev; map[curIdx].cogs += cogs; }
+        if (curSubIdx != null) { map[curSubIdx].rev += rev; map[curSubIdx].cogs += cogs; }
       }
     });
     return map;
@@ -4892,10 +4903,32 @@
   }
 
   function renderBuilder() {
+    // The bulk-move checkbox selection (bSelected, declared near builderLineRow)
+    // is meant to survive a re-render of THIS proposal but not carry over to a
+    // different one — a rep who moves on to another job should never find lines
+    // silently pre-checked. bSelectedFor tracks which pb object the selection
+    // belongs to; pb is reassigned to a fresh object every time a proposal or
+    // mock is (re)loaded, so an identity mismatch here means "this is a new
+    // proposal", not just "the same one re-rendering after an edit."
+    if (bSelectedFor !== pb) { bSelected = {}; bSelectedFor = pb; }
     var t = builderTotals();
     var gsub = groupSubtotalMap();
     var view = document.getElementById('view');
     var lineRows = pb.lines.map(function (l, i) { return builderLineRow(l, i, gsub); }).join('');
+    var selRefs = builderSelectedRefs();
+    var bulkBar = selRefs.length >= 2
+      ? '<div id="bBulkBar" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:#f7f8f4;border:1px solid #eef0ea;border-radius:9px;padding:9px 12px;margin-bottom:8px;">' +
+          '<span style="font-size:13px;font-weight:600;color:#3d4a55;">' + selRefs.length + ' selected</span>' +
+          '<select id="bBulkTarget" style="padding:7px 9px;border:1px solid #dcded7;border-radius:7px;font-size:13px;background:#fff;">' +
+            '<option value="__end">End of proposal</option>' +
+            pb.lines.filter(function (l) { return l.lineType === 'GROUP'; })
+              .map(function (l) { return '<option value="' + esc(l.ref) + '">' + esc(l.name || '(untitled section)') + '</option>'; })
+              .join('') +
+          '</select>' +
+          '<button class="btn" id="bBulkMove" style="width:auto;padding:7px 14px;">Move</button>' +
+          '<button class="link-btn" id="bBulkClear" style="width:auto;padding:7px 12px;">Clear selection</button>' +
+        '</div>'
+      : '';
     view.innerHTML =
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap;">' +
         '<button class="link-btn" id="bBack" style="width:auto;padding:7px 13px;">‹ Cancel</button>' +
@@ -4999,7 +5032,8 @@
             (pb.meta.advWarnings || []).map(function (w) { return '<div style="font-size:12.5px;color:#7d2a20;line-height:1.6;">' + esc(w) + '</div>'; }).join('') +
           '</div>'
         : '') +
-      '<div class="section-title">Line items <span class="muted" style="font-weight:400;font-size:12px;">— drag rows to reorder</span></div>' +
+      '<div class="section-title">Line items <span class="muted" style="font-weight:400;font-size:12px;">— drag rows to reorder, or check two or more products to move them together</span></div>' +
+      bulkBar +
       '<div id="bLines" style="display:flex;flex-direction:column;gap:8px;">' + (lineRows || '<div class="placeholder" style="padding:26px;"><p class="muted" style="margin:0;">No lines yet. Add a product line or load a template.</p></div>') + '</div>' +
       // totals
       '<div class="card" style="margin-top:16px;max-width:390px;margin-left:auto;">' +
@@ -6488,12 +6522,24 @@
           '</div>') + '</div>';
     }
     if (l.lineType === 'SUBGROUP') {
-      return '<div class="bRow" draggable="true" data-i="' + i + '" style="display:flex;align-items:center;gap:8px;background:#eef0ea;border:1px solid #e2e5dd;border-radius:9px;padding:7px 10px;margin-left:14px;">' + handle + builderArrows(i, false) +
+      var gs = (gsub && gsub[i]) || { rev: 0, cogs: 0 };
+      var gsMargin = gs.rev - gs.cogs;
+      var gsPct = gs.rev ? Math.round((gsMargin / gs.rev) * 1000) / 10 : 0;
+      return '<div class="bRow" draggable="true" data-i="' + i + '" style="background:#eef0ea;border:1px solid #e2e5dd;border-radius:9px;padding:7px 10px;margin-left:14px;">' +
+        '<div style="display:flex;align-items:center;gap:8px;">' + handle + builderArrows(i, false) +
         '<input class="bF" data-i="' + i + '" data-k="name" value="' + esc(l.name) + '" placeholder="Sub-heading" style="flex:1;border:none;background:transparent;font-weight:600;font-size:13px;color:#3d4a55;outline:none;">' +
         // Matches the one-line note a GROUP heading already has, and prints the
         // same way — beneath the heading, before the first product under it.
         '<input class="bF" data-i="' + i + '" data-k="description" value="' + esc(l.description || '') + '" placeholder="Sub-heading note" style="flex:0 1 260px;border:1px solid #dfe3da;background:#fff;border-radius:7px;padding:5px 8px;font-size:11.5px;color:#3d4a55;outline:none;">' +
-        noteBtn + del + '</div>';
+        noteBtn + del + '</div>' +
+        // Same Revenue/COGS/Margin a GROUP heading shows, so a subgroup reads as its
+        // own section rather than a plain label with no figures of its own.
+        (isMock() ? '' :
+          '<div style="display:flex;gap:16px;justify-content:flex-end;font-size:11px;color:#5c6157;padding:6px 40px 0 0;">' +
+            '<span>Revenue <b style="color:#3d4a55;font-weight:600;">' + fmtMoney(gs.rev, '') + '</b></span>' +
+            '<span>COGS <b style="color:#3d4a55;font-weight:600;">' + fmtMoney(gs.cogs, '') + '</b></span>' +
+            '<span>Margin <b style="color:' + (gsMargin >= 0 ? '#2f7d5d' : '#9c3327') + ';font-weight:600;">' + fmtMoney(gsMargin, '') + ' · ' + gsPct + '%</b></span>' +
+          '</div>') + '</div>';
     }
     if (l.lineType === 'NOTE') {
       // Lines up with the heading it was added under, on the same 14px step the
@@ -6512,6 +6558,12 @@
         '</div></div>' + del + '</div>';
     }
     // PRODUCT
+    // Bulk-move checkbox — see bSelected above builderLineRow's caller for why this
+    // exists only on PRODUCT lines. A checked row gets a green-tinted border so a
+    // long list of selections is still readable at a glance, matching the accent
+    // colour the drag-preview line already uses.
+    var isSelected = !!bSelected[l.ref];
+    var selChk = '<input type="checkbox" class="bRowChk" data-ref="' + esc(l.ref) + '"' + (isSelected ? ' checked' : '') + ' title="Select for a bulk move" style="width:16px;height:16px;margin-top:7px;cursor:pointer;flex:0 0 auto;">';
     var amt = (Number(l.quantity) || 0) * (Number(l.rateMinor) || 0);
     var hasNotes = l.delivery || l.returnable || l.addlFreight || l.freightCalc || l.tpFreightMinor || showsFreightTbd(l);
     var freightTbdBlock = showsFreightTbd(l)
@@ -6535,8 +6587,8 @@
           '<div style="width:120px;"><label style="font-size:10px;color:#20241f;text-transform:uppercase;">Freight $</label><input class="bF" data-i="' + i + '" data-k="tpFreight" value="' + m2d(l.tpFreightMinor) + '" style="' + IN + 'padding:7px 9px;text-align:right;"></div>' +
         '</div>' +
       '</div>' : '';
-    return '<div class="bRow" draggable="true" data-i="' + i + '" style="background:#fff;border:1px solid #e7e8e3;border-radius:10px;padding:10px;">' +
-      '<div style="display:flex;align-items:flex-start;gap:8px;">' + handle + builderArrows(i, false) +
+    return '<div class="bRow" draggable="true" data-i="' + i + '" style="background:' + (isSelected ? '#f2faf5' : '#fff') + ';border:1px solid ' + (isSelected ? '#bfe3cd' : '#e7e8e3') + ';border-radius:10px;padding:10px;">' +
+      '<div style="display:flex;align-items:flex-start;gap:8px;">' + selChk + handle + builderArrows(i, false) +
         '<div style="flex:1;min-width:0;">' +
           '<div style="display:flex;gap:8px;margin-bottom:5px;">' +
             '<span class="bFreightMark" data-sku="' + esc(l.sku || '') + '" style="display:flex;align-items:center;flex:0 0 auto;">' + freightMarkHtml(l.sku) + '</span>' +
@@ -6600,10 +6652,84 @@
   }
 
   var bDragFrom = null;
+  // Last clientY seen from a dragover while a .bRow drag is in progress, and the
+  // requestAnimationFrame handle for the loop that reads it — see
+  // startBuilderAutoScroll below. Module-level, same as bDragFrom, for the same
+  // reason: they need to be visible to every row's dragstart/dragover/dragend/drop
+  // handler, which are set up fresh on every render.
+  var bDragY = null;
+  var bDragRAF = null;
+
+  /**
+   * Checkbox multi-select for bulk-moving PRODUCT lines between sections.
+   *
+   * Keyed by each line's stable `ref`, never its index — every other mutation in
+   * this file (drag, the up/down arrows, add, delete) shifts indices, so an
+   * index-keyed selection would silently point at the wrong line the moment
+   * anything else changed. Module-level, like bDragFrom, so it survives a
+   * renderBuilder() redraw; renderBuilder() resets it only when `pb` itself has
+   * been swapped for a different proposal/mock (see bSelectedFor below).
+   *
+   * Only PRODUCT lines carry the checkbox. A GROUP or SUBGROUP already has a
+   * well-defined "move" of its own — it carries its whole section with it, see
+   * builderBlockAt — and folding that into a flat multi-select would raise a
+   * question with no obvious answer: do the section's own products come along,
+   * get left behind, or does the header simply refuse to be selected? Ordinary
+   * product lines have none of that ambiguity and are the case Bryan described
+   * ("move several products at once").
+   */
+  var bSelected = {};
+  var bSelectedFor = null;
+
+  /** Selected refs, in the order they currently sit in pb.lines. */
+  function builderSelectedRefs() {
+    return pb.lines.filter(function (l) { return l.lineType === 'PRODUCT' && bSelected[l.ref]; }).map(function (l) { return l.ref; });
+  }
+
+  /**
+   * Move every selected PRODUCT line to immediately after the end of `targetRef`'s
+   * section — the same place a single line lands if dragged there — or to the very
+   * end of the proposal for the sentinel target '__end'. Keeps the selected lines'
+   * own relative order.
+   *
+   * One bulk splice — remove every selected line in a single pass, then reinsert
+   * the whole block at the target — rather than repeating the single-line drag
+   * move once per line. Repeating it would have to recompute the target index
+   * after every line landed, since each move shifts every index after it, and
+   * still could not keep a run of non-contiguous lines together in one place.
+   */
+  function builderBulkMoveSelected(targetRef) {
+    var moving = pb.lines.filter(function (l) { return l.lineType === 'PRODUCT' && bSelected[l.ref]; });
+    if (moving.length < 2) return;
+    // Reassign pb.lines to the post-removal array BEFORE looking up the target's
+    // position — builderBlockAt reads pb.lines directly, so it has to see the
+    // lines actually still there, not the original array with the ones about to
+    // move still counted inside whatever section they used to sit in.
+    pb.lines = pb.lines.filter(function (l) { return !(l.lineType === 'PRODUCT' && bSelected[l.ref]); });
+    var at = pb.lines.length;
+    if (targetRef !== '__end') {
+      var gi = pb.lines.findIndex(function (l) { return l.ref === targetRef; });
+      if (gi !== -1) { var blk = builderBlockAt(gi); at = blk.from + blk.count; }
+    }
+    pb.lines.splice.apply(pb.lines, [at, 0].concat(moving));
+    bSelected = {};
+    markBuilderDirty();
+    renderBuilder();
+  }
+
   function wireBuilder() {
     if (!wireBuilder._rail) {
       wireBuilder._rail = true;
       window.addEventListener('resize', function () { var el = document.getElementById('bMarginRail'); if (el) el.setAttribute('style', marginRailStyle()); });
+    }
+    if (!wireBuilder._autoScrollWired) {
+      wireBuilder._autoScrollWired = true;
+      // A .bRow's own dragover only fires while the pointer is over a row, but a
+      // drag near the very top or bottom of the window is often over the header
+      // card or the totals card instead. This keeps bDragY current everywhere
+      // while a builder drag is in progress. No preventDefault here — it does not
+      // make document a drop target, it only tracks the pointer.
+      document.addEventListener('dragover', function (e) { if (bDragFrom != null) bDragY = e.clientY; });
     }
     document.getElementById('bBack').addEventListener('click', function () {
       // A mock has no proposal behind it, so there is nothing to go back TO — and
@@ -6828,6 +6954,24 @@
       if (k === 'rate' || k === 'cost' || k === 'quantity' || k === 'tpFreight' || el.tagName === 'SELECT') el.addEventListener('change', renderBuilderKeepingFocus);
     });
     document.querySelectorAll('.bChk').forEach(function (el) { el.addEventListener('change', function () { markBuilderDirty(); var l = pb.lines[+el.getAttribute('data-i')]; if (l) { l[el.getAttribute('data-k')] = el.checked; } }); });
+    // Bulk-move checkboxes and the action bar they surface once 2+ are checked —
+    // see bSelected/builderBulkMoveSelected above builderLineRow's caller.
+    document.querySelectorAll('.bRowChk').forEach(function (cb) {
+      cb.addEventListener('change', function () {
+        var ref = cb.getAttribute('data-ref');
+        if (cb.checked) bSelected[ref] = true; else delete bSelected[ref];
+        renderBuilder();
+      });
+    });
+    var bulkMoveBtn = document.getElementById('bBulkMove');
+    if (bulkMoveBtn) {
+      bulkMoveBtn.addEventListener('click', function () {
+        var sel = document.getElementById('bBulkTarget');
+        builderBulkMoveSelected(sel ? sel.value : '__end');
+      });
+    }
+    var bulkClearBtn = document.getElementById('bBulkClear');
+    if (bulkClearBtn) bulkClearBtn.addEventListener('click', function () { bSelected = {}; renderBuilder(); });
     document.querySelectorAll('.bToggleNotes').forEach(function (b) { b.addEventListener('click', function () { var l = pb.lines[+b.getAttribute('data-i')]; if (l) { l.showNotes = !l.showNotes; renderBuilder(); } }); });
     document.querySelectorAll('.bHwLogic').forEach(function (b) { b.addEventListener('click', function () { openHardwareAudit(pb.lines[+b.getAttribute('data-i')]); }); });
     document.querySelectorAll('.bDel').forEach(function (b) { b.addEventListener('click', function () { markBuilderDirty(); pb.lines.splice(+b.getAttribute('data-i'), 1); renderBuilder(); }); });
@@ -6912,6 +7056,42 @@
       return blk.from < target.from ? target.from + target.count : target.from;
     }
 
+    /**
+     * Auto-scroll the page while a .bRow drag is near the top or bottom edge of
+     * the viewport, so moving a line into a section that is currently off-screen
+     * does not require letting go of the drag to scroll manually first.
+     *
+     * dragover fires continuously, with a live clientY, for as long as the pointer
+     * moves during a native drag — the document-level listener above (and each
+     * row's own dragover below) uses that to keep bDragY current, and this
+     * requestAnimationFrame loop reads it once a frame to decide whether, and how
+     * fast, to scroll. Speed ramps up linearly the closer the pointer is to the
+     * very edge, and drops to zero the moment it moves away from the edge again.
+     *
+     * Started on dragstart and explicitly cancelled on both dragend and drop
+     * (dragend also fires after a drop, so that second cancel is a harmless no-op,
+     * not a double-stop). The loop also self-terminates the instant it finds
+     * bDragFrom already cleared, so if a second drag somehow started before this
+     * one's teardown ran, there is still only ever one loop alive.
+     */
+    function stopBuilderAutoScroll() {
+      if (bDragRAF != null) { cancelAnimationFrame(bDragRAF); bDragRAF = null; }
+    }
+    function startBuilderAutoScroll() {
+      stopBuilderAutoScroll();
+      var EDGE_PX = 90, MAX_SCROLL_PX = 22;
+      function tick() {
+        if (bDragFrom == null) { bDragRAF = null; return; }
+        var y = bDragY, vh = window.innerHeight;
+        if (y != null) {
+          if (y < EDGE_PX) window.scrollBy(0, -Math.ceil(((EDGE_PX - y) / EDGE_PX) * MAX_SCROLL_PX));
+          else if (y > vh - EDGE_PX) window.scrollBy(0, Math.ceil(((y - (vh - EDGE_PX)) / EDGE_PX) * MAX_SCROLL_PX));
+        }
+        bDragRAF = requestAnimationFrame(tick);
+      }
+      bDragRAF = requestAnimationFrame(tick);
+    }
+
     /** Remove any preview line left over from a previous hover. */
     function clearDragPreview() {
       var el = document.getElementById('bDragLine');
@@ -6937,10 +7117,11 @@
     }
 
     document.querySelectorAll('.bRow').forEach(function (row) {
-      row.addEventListener('dragstart', function () { bDragFrom = +row.getAttribute('data-i'); row.style.opacity = '0.4'; });
-      row.addEventListener('dragend', function () { row.style.opacity = '1'; clearDragPreview(); });
+      row.addEventListener('dragstart', function () { bDragFrom = +row.getAttribute('data-i'); row.style.opacity = '0.4'; startBuilderAutoScroll(); });
+      row.addEventListener('dragend', function () { row.style.opacity = '1'; clearDragPreview(); stopBuilderAutoScroll(); bDragY = null; });
       row.addEventListener('dragover', function (e) {
         e.preventDefault();
+        bDragY = e.clientY;
         showDragPreview(dragBoundary(bDragFrom, +row.getAttribute('data-i')));
       });
       row.addEventListener('drop', function (e) {
@@ -6949,6 +7130,8 @@
         var from = bDragFrom;
         bDragFrom = null;
         clearDragPreview();
+        stopBuilderAutoScroll();
+        bDragY = null;
         var boundary = dragBoundary(from, to);
         if (boundary == null) return;
         var blk = blockAt(from);
