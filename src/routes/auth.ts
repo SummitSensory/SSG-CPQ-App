@@ -91,10 +91,27 @@ const ProfileBody = z.object({
   /** Show the page-by-page Tips & Tricks helper. A display preference, not a
    *  permission — every user may turn their own on or off. */
   tipsEnabled: z.boolean().optional(),
-  /** An ordered list of dashboard widget ids to show. The widget vocabulary is a
-   *  client concern — this only checks the JSON's shape, not the values, the same
-   *  way an unknown id is harmlessly dropped by the client's own sanitizer. */
-  dashboardLayout: z.array(z.string().trim().min(1).max(60)).max(40).optional(),
+  /**
+   * An ordered list of dashboard widgets to show. Each entry is either a bare id
+   * (the original shape, before per-widget width existed — still accepted so a
+   * layout saved before this was added keeps working) or `{id, size}` for a
+   * resizable widget's chosen width. The widget vocabulary and the set of valid
+   * sizes are a client concern — this only checks the JSON's shape, not the
+   * values, the same way an unrecognized id or size is harmlessly dropped by the
+   * client's own sanitizer.
+   */
+  dashboardLayout: z
+    .array(
+      z.union([
+        z.string().trim().min(1).max(60),
+        z.object({
+          id: z.string().trim().min(1).max(60),
+          size: z.string().trim().min(1).max(20).optional(),
+        }),
+      ]),
+    )
+    .max(40)
+    .optional(),
 });
 
 export function registerAuthRoutes(app: FastifyInstance): void {

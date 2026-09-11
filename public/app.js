@@ -767,33 +767,61 @@
     { id: 'kpi_released', label: 'Out with customers', span: 'quarter' },
     { id: 'kpi_accepted', label: 'Accepted to date', span: 'quarter' },
     { id: 'kpi_attention', label: 'Needs attention (count)', span: 'quarter' },
-    { id: 'freight_trueup', label: 'Freight true-up', span: 'full' },
-    { id: 'needs_attention', label: 'Needs your attention (list)', span: 'full' },
-    { id: 'recently_updated', label: 'Recently updated proposals', span: 'full' },
-    { id: 'quick_actions', label: 'Quick actions', span: 'full' },
-    { id: 'workspace_info', label: 'Workspace info', span: 'full' },
+    { id: 'freight_trueup', label: 'Freight true-up', span: 'full', resizable: true },
+    { id: 'needs_attention', label: 'Needs your attention (list)', span: 'full', resizable: true },
+    { id: 'recently_updated', label: 'Recently updated proposals', span: 'full', resizable: true },
+    { id: 'quick_actions', label: 'Quick actions', span: 'full', resizable: true },
+    { id: 'workspace_info', label: 'Workspace info', span: 'full', resizable: true },
   ];
   var DASH_WIDGET_MAP = {};
   DASH_WIDGETS.forEach(function (w) { DASH_WIDGET_MAP[w.id] = w; });
-  var DEFAULT_DASH_LAYOUT = DASH_WIDGETS.map(function (w) { return w.id; });
-  var dashLayout = DEFAULT_DASH_LAYOUT.slice();
+  /** A fresh array of fresh entry objects every call — dashLayout entries are
+   *  mutated in place (the size toggle), so handing out a shared object here would
+   *  let editing the live layout quietly edit the default too. */
+  function defaultDashLayout() {
+    return DASH_WIDGETS.map(function (w) { return { id: w.id, size: w.span }; });
+  }
+  var dashLayout = defaultDashLayout();
   var dashEditing = false;
   var dashData = null;
 
-  /** Drops anything not in the widget vocabulary, and any duplicate — a stale or
-   *  tampered value falls all the way back to the default rather than rendering half
-   *  a dashboard. */
+  /** A widget's effective width: 'quarter' is fixed (the KPI cards never resize),
+   *  everything else is 'full' unless the entry says 'half'. This is the single
+   *  place that decides how wide a widget renders, so the grid and the toggle
+   *  button can never disagree about which state a widget is in. */
+  function widgetSize(entry) {
+    var w = DASH_WIDGET_MAP[entry.id];
+    if (!w) return 'full';
+    if (!w.resizable) return w.span;
+    return entry.size === 'half' ? 'half' : 'full';
+  }
+
+  /**
+   * Drops anything not in the widget vocabulary, and any duplicate — a stale or
+   * tampered value falls all the way back to the default rather than rendering half
+   * a dashboard. Accepts a bare id (the shape saved before per-widget width
+   * existed) alongside the current `{id, size}` shape, so a layout saved by an
+   * earlier version of this screen keeps working rather than silently resetting.
+   */
   function sanitizeDashLayout(raw) {
-    if (!Array.isArray(raw)) return DEFAULT_DASH_LAYOUT.slice();
+    if (!Array.isArray(raw)) return defaultDashLayout();
     var seen = {}, out = [];
-    raw.forEach(function (id) {
-      if (DASH_WIDGET_MAP[id] && !seen[id]) { seen[id] = true; out.push(id); }
+    raw.forEach(function (entry) {
+      var id = typeof entry === 'string' ? entry : entry && entry.id;
+      var size = entry && typeof entry === 'object' ? entry.size : undefined;
+      var w = DASH_WIDGET_MAP[id];
+      if (w && !seen[id]) {
+        seen[id] = true;
+        out.push({ id: id, size: size === 'half' ? 'half' : w.span });
+      }
     });
-    return out.length ? out : DEFAULT_DASH_LAYOUT.slice();
+    return out.length ? out : defaultDashLayout();
   }
 
   function hiddenDashWidgets() {
-    return DASH_WIDGETS.filter(function (w) { return dashLayout.indexOf(w.id) === -1; });
+    return DASH_WIDGETS.filter(function (w) {
+      return !dashLayout.some(function (e) { return e.id === w.id; });
+    });
   }
 
   /** Fire-and-forget: a layout choice is a display preference, not data anyone is
@@ -839,13 +867,14 @@
     if (dashEditing) {
       var resetBtn = document.getElementById('dashResetBtn');
       if (resetBtn) resetBtn.addEventListener('click', function () {
-        dashLayout = DEFAULT_DASH_LAYOUT.slice();
+        dashLayout = defaultDashLayout();
         saveDashLayout(user);
         drawDashboardShell(user);
       });
       document.querySelectorAll('.dashAddW').forEach(function (b) {
         b.addEventListener('click', function () {
-          dashLayout.push(b.getAttribute('data-wid'));
+          var id = b.getAttribute('data-wid');
+          dashLayout.push({ id: id, size: (DASH_WIDGET_MAP[id] || {}).span });
           saveDashLayout(user);
           drawDashboardShell(user);
         });
@@ -854,24 +883,27 @@
     drawDashboardBody(user);
   }
 
-  /** One wrapper per configured widget, consecutive 'quarter' ones sharing a single
-   *  .grid row exactly like the four KPI cards always have — the point of the span is
-   *  that a widget's own size is fixed, only its visibility and place in line move. */
+  /** One wrapper per configured widget, consecutive widgets of the SAME effective
+   *  size sharing a single .grid row — the four KPI cards ('quarter', fixed) group
+   *  with each other exactly as before, and now any run of adjacent 'half' widgets
+   *  does too, which is what actually turns this into a grid instead of a list. A
+   *  'full' widget always gets a row to itself. */
   function drawDashboardBody(user) {
     var body = document.getElementById('dashBody'); if (!body) return;
     var html = '', i = 0;
     while (i < dashLayout.length) {
-      var id = dashLayout[i], w = DASH_WIDGET_MAP[id];
+      var entry = dashLayout[i], w = DASH_WIDGET_MAP[entry.id];
       if (!w) { i++; continue; }
-      if (w.span === 'quarter') {
+      var size = widgetSize(entry);
+      if (size === 'full') {
+        html += dashWidgetWrapper(entry);
+        i++;
+      } else {
         var group = [];
-        while (i < dashLayout.length && DASH_WIDGET_MAP[dashLayout[i]] && DASH_WIDGET_MAP[dashLayout[i]].span === 'quarter') {
+        while (i < dashLayout.length && DASH_WIDGET_MAP[dashLayout[i].id] && widgetSize(dashLayout[i]) === size) {
           group.push(dashLayout[i]); i++;
         }
-        html += '<div class="grid" style="margin-bottom:18px;">' + group.map(function (gid) { return dashWidgetWrapper(gid); }).join('') + '</div>';
-      } else {
-        html += dashWidgetWrapper(id);
-        i++;
+        html += '<div class="grid" style="margin-bottom:18px;">' + group.map(dashWidgetWrapper).join('') + '</div>';
       }
     }
     body.innerHTML = html || '<div class="placeholder" style="padding:26px;"><p class="muted" style="margin:0;">Nothing to show — add a widget above.</p></div>';
@@ -879,18 +911,22 @@
     wireDashboardEditHandlers(user);
   }
 
-  function dashWidgetWrapper(id) {
-    var w = DASH_WIDGET_MAP[id];
+  function dashWidgetWrapper(entry) {
+    var id = entry.id, w = DASH_WIDGET_MAP[id], size = widgetSize(entry);
+    var sizeToggle = (dashEditing && w.resizable)
+      ? '<button type="button" class="dashSizeW" data-wid="' + id + '" title="Toggle between full and half width" style="border:1px solid #cdd6dc;background:#fff;border-radius:999px;padding:2px 10px;font-size:11px;color:#3d4a55;cursor:pointer;white-space:nowrap;">' + (size === 'half' ? 'Half width' : 'Full width') + '</button>'
+      : '';
     var toolbar = dashEditing
       ? '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;padding:4px 8px;background:#eef0ea;border-radius:8px;font-size:11.5px;color:#20241f;">' +
           '<span style="cursor:grab;" title="Drag to reorder">⠿⠿</span>' +
           '<b style="flex:1;font-weight:600;">' + esc(w.label) + '</b>' +
+          sizeToggle +
           '<button type="button" class="dashHideW" data-wid="' + id + '" title="Hide this" style="border:none;background:none;color:#9c3327;cursor:pointer;font-size:14px;line-height:1;">×</button>' +
         '</div>'
       : '';
     var wrapStyle = dashEditing
-      ? 'border:1px dashed #cdd6dc;border-radius:12px;padding:8px;' + (w.span === 'full' ? 'margin-bottom:16px;' : '')
-      : (w.span === 'full' ? 'margin-bottom:16px;' : '');
+      ? 'border:1px dashed #cdd6dc;border-radius:12px;padding:8px;' + (size === 'full' ? 'margin-bottom:16px;' : '')
+      : (size === 'full' ? 'margin-bottom:16px;' : '');
     return '<div class="dashW" data-wid="' + id + '"' + (dashEditing ? ' draggable="true"' : '') + ' style="' + wrapStyle + '">' + toolbar +
       '<div class="dashWInner" id="dashWInner-' + id + '"><div class="muted" style="padding:16px;">Loading…</div></div></div>';
   }
@@ -899,8 +935,18 @@
     document.querySelectorAll('.dashHideW').forEach(function (b) {
       b.addEventListener('click', function (e) {
         e.stopPropagation();
-        var i = dashLayout.indexOf(b.getAttribute('data-wid'));
+        var i = dashLayout.findIndex(function (en) { return en.id === b.getAttribute('data-wid'); });
         if (i !== -1) dashLayout.splice(i, 1);
+        saveDashLayout(user);
+        drawDashboardShell(user);
+      });
+    });
+    document.querySelectorAll('.dashSizeW').forEach(function (b) {
+      b.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var entry = dashLayout.find(function (en) { return en.id === b.getAttribute('data-wid'); });
+        if (!entry) return;
+        entry.size = widgetSize(entry) === 'half' ? 'full' : 'half';
         saveDashLayout(user);
         drawDashboardShell(user);
       });
@@ -916,15 +962,16 @@
         var toId = elx.getAttribute('data-wid'), fromId = dragFrom;
         dragFrom = null;
         if (!fromId || fromId === toId) return;
-        var from = dashLayout.indexOf(fromId), to = dashLayout.indexOf(toId);
+        var from = dashLayout.findIndex(function (en) { return en.id === fromId; });
+        var to = dashLayout.findIndex(function (en) { return en.id === toId; });
         if (from === -1 || to === -1) return;
         // The classic array-move: splice out, then insert at the ORIGINAL target
         // index. Recomputing the target's index after removal is the bug this
         // replaced — for two adjacent widgets it cancels out to a no-op, since
         // removing the one right before its neighbor shifts that neighbor back into
         // the exact slot just vacated.
-        dashLayout.splice(from, 1);
-        dashLayout.splice(to, 0, fromId);
+        var moved = dashLayout.splice(from, 1)[0];
+        dashLayout.splice(to, 0, moved);
         saveDashLayout(user);
         drawDashboardShell(user);
       });
@@ -972,9 +1019,9 @@
    *  whether that fetch has landed yet, exactly as they always rendered before this
    *  was customizable. */
   function fillDashboardWidgets(user) {
-    dashLayout.forEach(function (id) {
-      var el = document.getElementById('dashWInner-' + id);
-      if (el) el.innerHTML = dashWidgetHtml(id, user);
+    dashLayout.forEach(function (entry) {
+      var el = document.getElementById('dashWInner-' + entry.id);
+      if (el) el.innerHTML = dashWidgetHtml(entry.id, user);
     });
     wireDashboardWidgetContent(user);
   }
