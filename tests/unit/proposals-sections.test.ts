@@ -3,6 +3,7 @@ import {
   resolveVisibleSections,
   reorderSections,
   withProposalDate,
+  withExpiration,
   type ProposalSection,
 } from '../../src/proposals/sections.js';
 
@@ -71,5 +72,39 @@ describe('withProposalDate', () => {
     const input = [meta];
     withProposalDate(input, '2026-09-06');
     expect(input[0]?.data).toEqual({ proposalDate: '2026-01-01' });
+  });
+});
+
+describe('withExpiration', () => {
+  it('stamps the date onto an existing meta section, leaving its other data alone', () => {
+    const meta = s('meta', 0, { data: { proposalDate: '2026-09-11', expiration: '2026-09-10' } });
+    const out = withExpiration([meta], '2026-09-18');
+    const found = out.find((x) => x.id === 'meta');
+    expect(found?.data).toEqual({ proposalDate: '2026-09-11', expiration: '2026-09-18' });
+  });
+
+  it('creates a meta section when none exists yet', () => {
+    const out = withExpiration([s('a', 0)], '2026-09-18');
+    const found = out.find((x) => x.id === 'meta');
+    expect(found?.data).toEqual({ expiration: '2026-09-18' });
+  });
+
+  it('clears a stale expiration rather than leaving it when the new one is null', () => {
+    const meta = s('meta', 0, { data: { proposalDate: '2026-09-11', expiration: '2026-09-10' } });
+    const out = withExpiration([meta], null);
+    const found = out.find((x) => x.id === 'meta');
+    expect(found?.data).toEqual({ proposalDate: '2026-09-11' });
+  });
+
+  it('creates no meta section for a null expiration when none exists', () => {
+    const out = withExpiration([s('a', 0)], null);
+    expect(out.find((x) => x.id === 'meta')).toBeUndefined();
+  });
+
+  it('leaves the input array untouched', () => {
+    const meta = s('meta', 0, { data: { expiration: '2026-09-10' } });
+    const input = [meta];
+    withExpiration(input, '2026-09-18');
+    expect(input[0]?.data).toEqual({ expiration: '2026-09-10' });
   });
 });

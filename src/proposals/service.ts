@@ -5,7 +5,7 @@ import { canTransition, becomesFrozen, isFrozenStatus, formatProposalNumber } fr
 import { compareVersions, type VersionSnapshot } from './compare.js';
 import { auditPriceEntry, priceEntryMessage, type PriceEntryAudit } from './priceEntry.js';
 import type { ProposalSection, ProposalItem } from './sections.js';
-import { withProposalDate } from './sections.js';
+import { withProposalDate, withExpiration } from './sections.js';
 import {
   sectionsWithResolvedProjectId,
   sectionsWithOpportunityProjectId,
@@ -244,12 +244,18 @@ export async function createNewVersion(
     // today's date rather than carried over.
     const today = new Date().toISOString().slice(0, 10);
     const expirationDate = clonedVersionExpiration(current.expirationDate, today);
+    // The builder reads and re-saves meta.expiration, not this column — stamping
+    // only the column here left the two disagreeing (see withExpiration's comment).
+    const expirationIso = expirationDate ? expirationDate.toISOString().slice(0, 10) : null;
     const created = await tx.proposalVersion.create({
       data: {
         proposalId,
         version: nextVersion,
         status: 'DRAFT',
-        sections: withProposalDate(current.sections, today) as object,
+        sections: withExpiration(
+          withProposalDate(current.sections, today),
+          expirationIso,
+        ) as object,
         items: current.items as object,
         // The price snapshot is NOT carried over.
         //
