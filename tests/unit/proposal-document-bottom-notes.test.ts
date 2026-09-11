@@ -7,14 +7,17 @@ import vm from 'node:vm';
  * The "Delivery, Returns & Freight Notes" block used to print one run-on sentence
  * per item ("Item: Returnable: No · Additional freight: No · Freight calculated:
  * Yes"), with only the first word of a multi-word label capitalized ("Additional
- * freight", not "Additional Freight") and each item's free-text `description`
- * printing inline under its own row in the line-items table above, mixed in with
- * the delivery/freight-TBD prose.
+ * freight", not "Additional Freight").
  *
- * Fixed to: Title Case every flag label, lay the flags out as a borderless grid
- * (one column per flag that at least one item actually sets) instead of a
- * sentence, and move any item's `description` into its own full-width block
- * below that grid rather than inline in the line-items table.
+ * Fixed to: Title Case every flag label, and lay the flags out as a borderless
+ * grid (one column per flag that at least one item actually sets) instead of a
+ * sentence.
+ *
+ * A line's free-text `description` is a different thing from these flags — it's
+ * spec/context that reads as part of the product itself (frame dimensions,
+ * "Floor padding 2" thick", "All mounting hardware — 634 pieces...") and has
+ * always printed inline under that product's own row. An earlier version of this
+ * grid redesign mistakenly relocated it down here too; it stays inline.
  */
 
 interface Doc {
@@ -137,7 +140,7 @@ describe('proposal document — Delivery, Returns & Freight Notes', () => {
     expect(section).not.toContain('Additional Freight');
   });
 
-  it('moves an item description into its own full-width block below the grid, not mixed into the grid columns', () => {
+  it('keeps an item description printing inline under its own row, not in the bottom grid', () => {
     const html = SSGProposalDocument.html(
       baseDoc([
         { lineType: 'GROUP', name: 'Swings' },
@@ -153,22 +156,17 @@ describe('proposal document — Delivery, Returns & Freight Notes', () => {
         },
       ]),
     );
-    // No longer printed inline in the line-items table.
-    const tableSectionEnd = html.indexOf('Delivery, Returns &amp; Freight Notes');
-    expect(html.slice(0, tableSectionEnd)).not.toContain(
-      'Ships fully assembled in a single crate.',
-    );
+    // Printed inline, before the "Delivery, Returns & Freight Notes" section starts.
+    const bottomStart = html.indexOf('Delivery, Returns &amp; Freight Notes');
+    expect(bottomStart).toBeGreaterThan(-1);
+    expect(html.slice(0, bottomStart)).toContain('Ships fully assembled in a single crate.');
 
+    // Not duplicated into the bottom grid/notes section.
     const section = bottomSection(html);
-    expect(section).toContain('Ships fully assembled in a single crate.');
-    // The description block sits after the closing </table> of the grid, i.e. below it.
-    const tableClose = section.indexOf('</table>');
-    const descIdx = section.indexOf('Ships fully assembled in a single crate.');
-    expect(tableClose).toBeGreaterThan(-1);
-    expect(descIdx).toBeGreaterThan(tableClose);
+    expect(section).not.toContain('Ships fully assembled in a single crate.');
   });
 
-  it('has no border styling inside the grid or the description block', () => {
+  it('has no border styling inside the grid', () => {
     const html = SSGProposalDocument.html(
       baseDoc([
         { lineType: 'GROUP', name: 'Swings' },
@@ -180,24 +178,30 @@ describe('proposal document — Delivery, Returns & Freight Notes', () => {
           rateMinor: 100000,
           returnable: 'NO',
           freightCalc: 'YES',
-          description: 'Ships fully assembled in a single crate.',
         },
       ]),
     );
     const section = bottomSection(html);
     // Strip the section's own outer wrapper (which legitimately carries the
     // divider separating this whole section from the pricing summary above)
-    // before checking the grid/description content for stray borders.
+    // before checking the grid content for stray borders.
     const innerStart = section.indexOf('<table');
     const inner = section.slice(innerStart);
     expect(inner).not.toMatch(/border(?!-collapse)/);
   });
 
-  it('still omits the whole section when no line has a flag or a description', () => {
+  it('still omits the whole section when no line has a flag, even if it has a description', () => {
     const html = SSGProposalDocument.html(
       baseDoc([
         { lineType: 'GROUP', name: 'Swings' },
-        { lineType: 'PRODUCT', name: 'Cuddle Swing', sku: 'CS-1', quantity: 1, rateMinor: 100000 },
+        {
+          lineType: 'PRODUCT',
+          name: 'Cuddle Swing',
+          sku: 'CS-1',
+          quantity: 1,
+          rateMinor: 100000,
+          description: 'Ships fully assembled in a single crate.',
+        },
       ]),
     );
     expect(html).not.toContain('Delivery, Returns &amp; Freight Notes');
