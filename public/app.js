@@ -6477,8 +6477,8 @@
         '<div style="display:flex;align-items:center;gap:8px;">' + handle.replace('#c2c6bd', '#8fa0ac') + builderArrows(i, true) +
         '<input class="bF" data-i="' + i + '" data-k="name" value="' + esc(l.name) + '" placeholder="SECTION HEADING" style="flex:1;border:none;background:transparent;font-weight:700;font-size:13px;letter-spacing:.03em;text-transform:uppercase;color:#fff;outline:none;">' +
         '<input class="bF" data-i="' + i + '" data-k="description" value="' + esc(l.description || '') + '" placeholder="Heading note (e.g. Frame Dimensions: 10\' × 10\')" style="flex:0 1 250px;border:none;background:rgba(255,255,255,.1);border-radius:7px;padding:5px 8px;font-size:11.5px;color:#e6ebef;outline:none;">' +
-        '<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:#20241f;white-space:nowrap;cursor:pointer;"><input type="checkbox" class="bChk" data-i="' + i + '" data-k="optional"' + (l.optional ? ' checked' : '') + '> Optional</label>' +
-        '<span style="font-size:12.5px;font-weight:600;color:#20241f;min-width:90px;text-align:right;">' + fmtMoney(g.rev, 'USD') + '</span>' + noteBtnLight + del.replace('#9c3327', '#f0b8ae').replace('background:#fff', 'background:rgba(255,255,255,.12)').replace('border:1px solid #e0e1db', 'border:1px solid rgba(255,255,255,.25)') +
+        '<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:#cdd6dc;white-space:nowrap;cursor:pointer;"><input type="checkbox" class="bChk" data-i="' + i + '" data-k="optional"' + (l.optional ? ' checked' : '') + '> Optional</label>' +
+        '<span style="font-size:12.5px;font-weight:600;color:#cdd6dc;min-width:90px;text-align:right;">' + fmtMoney(g.rev, 'USD') + '</span>' + noteBtnLight + del.replace('#9c3327', '#f0b8ae').replace('background:#fff', 'background:rgba(255,255,255,.12)').replace('border:1px solid #e0e1db', 'border:1px solid rgba(255,255,255,.25)') +
         '</div>' +
         (isMock() ? '' :
           '<div style="display:flex;gap:16px;justify-content:flex-end;font-size:11px;color:#a9bac6;padding:6px 40px 0 0;">' +
@@ -8097,7 +8097,7 @@
     var html =
       '<div style="max-width:720px;margin:0 auto;background:#fbfbf9;border-radius:16px;box-shadow:0 24px 60px -20px rgba(32,36,31,.5);overflow:hidden;">' +
         '<div style="background:#3d4a55;color:#fff;padding:18px 24px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:2;">' +
-          '<div><div style="font-family:\'Newsreader\',serif;font-size:20px;font-weight:600;">Summit Adventure Series</div><div style="font-size:12px;color:#20241f;">Answer the questions — the proposal builds itself</div></div>' +
+          '<div><div style="font-family:\'Newsreader\',serif;font-size:20px;font-weight:600;">Summit Adventure Series</div><div style="font-size:12px;color:#cdd6dc;">Answer the questions — the proposal builds itself</div></div>' +
           '<button id="advX" style="border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.12);color:#fff;border-radius:8px;padding:7px 12px;cursor:pointer;">Cancel</button>' +
         '</div>' +
         '<div style="padding:22px 24px;">' +
@@ -8323,7 +8323,7 @@
       '<div style="max-width:1080px;margin:0 auto;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 24px 60px -20px rgba(32,36,31,.55);">' +
         '<div style="background:#3d4a55;color:#fff;padding:16px 22px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">' +
           '<div><div style="font-family:\'Newsreader\',serif;font-size:19px;font-weight:600;">Calculation trace — ' + esc(t.model) + '</div>' +
-            '<div style="font-size:12px;color:#20241f;">Frame Dimensions: ' + esc(t.dimensions) + ' · every quantity, formula and catalog price behind this configuration</div></div>' +
+            '<div style="font-size:12px;color:#cdd6dc;">Frame Dimensions: ' + esc(t.dimensions) + ' · every quantity, formula and catalog price behind this configuration</div></div>' +
           '<button id="trClose" style="border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.12);color:#fff;border-radius:8px;padding:7px 14px;cursor:pointer;">Close</button>' +
         '</div>' +
         '<div style="padding:18px 22px;">' +
@@ -8396,7 +8396,7 @@
       '<div style="max-width:1120px;margin:0 auto;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 24px 60px -20px rgba(32,36,31,.55);">' +
         '<div style="background:#3d4a55;color:#fff;padding:16px 22px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">' +
           '<div><div style="font-family:\'Newsreader\',serif;font-size:19px;font-weight:600;">' + esc(line.sku || 'Kit') + ' — how this line was calculated</div>' +
-            '<div style="font-size:12px;color:#20241f;">' + esc(line.name || '') + ' · ' + comps.length + ' part numbers · ' + pieces + ' pieces</div></div>' +
+            '<div style="font-size:12px;color:#cdd6dc;">' + esc(line.name || '') + ' · ' + comps.length + ' part numbers · ' + pieces + ' pieces</div></div>' +
           '<div style="display:flex;gap:8px;align-items:center;">' +
             (hasAnswers ? '<button id="hwLive" style="border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.12);color:#fff;border-radius:8px;padding:7px 14px;cursor:pointer;">Re-run the live logic →</button>' : '') +
             '<button id="hwClose" style="border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.12);color:#fff;border-radius:8px;padding:7px 14px;cursor:pointer;">Close</button>' +
@@ -8640,7 +8640,7 @@
       '<div style="max-width:720px;margin:0 auto;background:#fbfbf9;border-radius:16px;box-shadow:0 24px 60px -20px rgba(32,36,31,.5);overflow:hidden;">' +
         '<div style="background:#3d4a55;color:#fff;padding:18px 24px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:2;">' +
           '<div><div style="font-family:\'Newsreader\',serif;font-size:20px;font-weight:600;">Summit Soar Series</div>' +
-          '<div style="font-size:12px;color:#20241f;">Pick the frame, choose padding — the proposal builds itself</div></div>' +
+          '<div style="font-size:12px;color:#cdd6dc;">Pick the frame, choose padding — the proposal builds itself</div></div>' +
           '<button id="soarX" style="border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.12);color:#fff;border-radius:8px;padding:7px 12px;cursor:pointer;">Cancel</button>' +
         '</div>' +
         '<div style="padding:22px 24px;">' +
@@ -8929,7 +8929,7 @@
       '<div style="max-width:640px;margin:0 auto;background:#fbfbf9;border-radius:16px;box-shadow:0 24px 60px -20px rgba(32,36,31,.5);overflow:hidden;">' +
         '<div style="background:#3d4a55;color:#fff;padding:18px 24px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:2;">' +
           '<div><div style="font-family:\'Newsreader\',serif;font-size:20px;font-weight:600;">' + esc(linePicker.lineName) + '</div>' +
-          '<div style="font-size:12px;color:#20241f;">Check the items to add, set quantities, then insert</div></div>' +
+          '<div style="font-size:12px;color:#cdd6dc;">Check the items to add, set quantities, then insert</div></div>' +
           '<button id="lpX" style="border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.12);color:#fff;border-radius:8px;padding:7px 12px;cursor:pointer;">Cancel</button>' +
         '</div>' +
         '<div style="padding:22px 24px;max-height:60vh;overflow:auto;">' + body + '</div>' +
