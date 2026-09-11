@@ -331,7 +331,25 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
     unitPriceMinor: z.number().int().nonnegative().optional(),
     unitCostMinor: z.number().int().nonnegative().optional(),
     weightLbs: z.number().nonnegative().optional(),
-    proposalGroup: z.string().trim().max(200).nullish(),
+    /**
+     * The proposal heading this part defaults to — required on create. A part with
+     * no `proposalGroup` has nowhere to print when it lands on a proposal; the
+     * builder either drops it or leaves it under whatever heading happened to be
+     * open, neither of which is a decision anyone made. Editing an existing part
+     * that predates this rule is unaffected — see `ItemPatch` above, which leaves
+     * `proposalGroup` optional so old rows stay readable and editable.
+     */
+    proposalGroup: z
+      .string({
+        required_error:
+          'Choose a proposal group — every new product needs a default section to appear under on the proposal.',
+      })
+      .trim()
+      .min(
+        1,
+        'Choose a proposal group — every new product needs a default section to appear under on the proposal.',
+      )
+      .max(200),
     active: z.boolean().optional(),
     /** Where it sits among its siblings in the product tree. */
     sortOrder: z.number().int().min(0).max(999999).optional(),
@@ -419,7 +437,8 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
           unitPriceMinor: d.unitPriceMinor ?? 0,
           unitCostMinor: d.unitCostMinor ?? 0,
           weightLbs: d.weightLbs ?? 0,
-          proposalGroup: (d.proposalGroup || '').trim() || null,
+          // Guaranteed non-blank by ItemCreate's Zod schema above.
+          proposalGroup: d.proposalGroup,
           active: d.active !== false,
           ...(d.defaultQty !== undefined ? { defaultQty: d.defaultQty } : {}),
         },

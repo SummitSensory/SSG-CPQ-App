@@ -176,8 +176,9 @@
     var rows = data.rows;
 
     return (
-      '<div style="margin-bottom:18px;">' +
+      '<div id="ftuDashSection" style="margin-bottom:18px;">' +
       '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:8px;">' +
+      '<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;">' +
       '<div style="font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:' +
       RED +
       ';">' +
@@ -191,6 +192,16 @@
           data.threshold +
           ' days</span>'
         : '') +
+      '</div>' +
+      // Reads the deal board again for every job in this list, right now, instead of
+      // waiting for the nightly sweep \u2014 the same read the Refresh button on a single
+      // job's panel does, run across all of them at once.
+      '<button type="button" class="ftuSyncAll" title="Read the deal board again for every job below" ' +
+      'style="border:1px solid ' +
+      REDLINE +
+      ';background:#fff;color:' +
+      RED +
+      ';border-radius:8px;padding:5px 10px;font-size:11.5px;cursor:pointer;white-space:nowrap;">Sync all now</button>' +
       '</div>' +
       '<div style="background:' +
       REDBG +
@@ -316,6 +327,43 @@
             btn.getAttribute('data-hidden') +
             ' more'
           : 'Show the oldest ' + btn.getAttribute('data-limit') + ' only';
+      });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('.ftuSyncAll'), function (btn) {
+      btn.addEventListener('click', async function (ev) {
+        ev.stopPropagation();
+        btn.disabled = true;
+        btn.textContent = 'Syncing\u2026';
+        var result = null;
+        try {
+          var r = await H.authed('/freight/sync-outstanding', { method: 'POST' });
+          if (r.ok) result = await r.json();
+        } catch (e) {}
+        if (!result) {
+          btn.disabled = false;
+          btn.textContent = 'Sync all now';
+          return;
+        }
+        var parts = [];
+        if (result.updated) parts.push(result.updated + ' updated');
+        if (result.conflicts)
+          parts.push(result.conflicts + ' conflict' + (result.conflicts === 1 ? '' : 's'));
+        if (result.failed && result.failed.length) parts.push(result.failed.length + ' failed');
+        btn.textContent = parts.length ? parts.join(', ') : 'Nothing new';
+        // A moment to actually read the outcome, then the section redraws itself \u2014
+        // fewer rows if the sync settled some of them, gone entirely if it settled
+        // all of them.
+        setTimeout(async function () {
+          var host = el('ftuDashSection');
+          if (!host) return;
+          var html = await dashboardSection(user);
+          if (html) {
+            host.outerHTML = html;
+            bindDashboard(user);
+          } else {
+            host.remove();
+          }
+        }, 1600);
       });
     });
   }

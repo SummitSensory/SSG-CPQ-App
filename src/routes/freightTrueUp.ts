@@ -295,6 +295,18 @@ export function registerFreightTrueUpRoutes(app: FastifyInstance): void {
   app.get('/freight/monday-status', read, async () => freightPullStatus());
 
   /**
+   * The "Sync all now" button on the freight queue: the same sweep the nightly
+   * cron runs, run immediately by request instead of waiting for tonight. Session-
+   * authenticated rather than CRON_SECRET-gated, since a person asking for it is
+   * exactly the case the cron secret's "no open endpoint" reasoning doesn't apply
+   * to — monday still rate-limits by account, so this is the same sequential,
+   * one-job-at-a-time sweep either path runs.
+   */
+  app.post('/freight/sync-outstanding', write, async (req) => {
+    return pullOutstanding(req.user!.sub, { limit: 200 });
+  });
+
+  /**
    * The nightly sweep. Reads the board for every job still waiting on steel or mats
    * — the Friday-afternoon column fill that nobody saw over the weekend.
    *
