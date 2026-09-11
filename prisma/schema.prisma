@@ -72,6 +72,12 @@ model User {
   /// (see PATCH /auth/me) — a personal display preference, not a permission, so
   /// defaulting it on and letting anyone turn it off is safe.
   tipsEnabled  Boolean   @default(true)
+
+  /// The dashboard's own layout: an ordered array of widget ids to show, in that
+  /// order. Null means "use the default layout." Self-service like tipsEnabled — a
+  /// display preference, not a permission. The widget-id vocabulary lives in the
+  /// client, not here; the route validates only the JSON's shape, not the values.
+  dashboardLayout Json?
 }
 
 /// One rep's delegated consent to have drafts written into their Outlook mailbox.

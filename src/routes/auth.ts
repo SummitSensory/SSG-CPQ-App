@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { verifyPassword } from '../auth/password.js';
 import { signAccessToken } from '../auth/tokens.js';
@@ -90,6 +91,10 @@ const ProfileBody = z.object({
   /** Show the page-by-page Tips & Tricks helper. A display preference, not a
    *  permission — every user may turn their own on or off. */
   tipsEnabled: z.boolean().optional(),
+  /** An ordered list of dashboard widget ids to show. The widget vocabulary is a
+   *  client concern — this only checks the JSON's shape, not the values, the same
+   *  way an unknown id is harmlessly dropped by the client's own sanitizer. */
+  dashboardLayout: z.array(z.string().trim().min(1).max(60)).max(40).optional(),
 });
 
 export function registerAuthRoutes(app: FastifyInstance): void {
@@ -266,6 +271,7 @@ export function registerAuthRoutes(app: FastifyInstance): void {
         isActive: true,
         signatureImage: true,
         tipsEnabled: true,
+        dashboardLayout: true,
       },
     });
     if (!user) throw new UnauthorizedError();
@@ -295,7 +301,7 @@ export function registerAuthRoutes(app: FastifyInstance): void {
     const parsed = ProfileBody.safeParse(req.body);
     if (!parsed.success)
       throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid profile');
-    const { name, title, phone, signatureImage, tipsEnabled } = parsed.data;
+    const { name, title, phone, signatureImage, tipsEnabled, dashboardLayout } = parsed.data;
     const updated = await prisma.user.update({
       where: { id: req.user!.sub },
       data: {
@@ -307,6 +313,9 @@ export function registerAuthRoutes(app: FastifyInstance): void {
         // signature that took somebody three attempts to scan.
         ...(signatureImage === undefined ? {} : { signatureImage: signatureImage || null }),
         ...(tipsEnabled === undefined ? {} : { tipsEnabled }),
+        ...(dashboardLayout === undefined
+          ? {}
+          : { dashboardLayout: dashboardLayout as unknown as Prisma.InputJsonValue }),
       },
       select: {
         id: true,
@@ -318,6 +327,7 @@ export function registerAuthRoutes(app: FastifyInstance): void {
         isActive: true,
         signatureImage: true,
         tipsEnabled: true,
+        dashboardLayout: true,
       },
     });
     const { signatureImage: saved, ...rest } = updated;
