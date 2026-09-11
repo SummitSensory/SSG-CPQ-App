@@ -57,6 +57,18 @@ const LEG_PARTS = new Set(['A-2245', 'A-2246']);
  */
 const TROLLEY_PARTS = new Set(['TR2000-A07', 'TR2000-A08', 'TR2000-A09', 'TR2000-A10']);
 
+/**
+ * A Summit Flex Pro Pack proposal has no welded legs at all — it isn't an Adventure
+ * Series frame — but Goldberg still reads the `# of Welded Legs` column to know what
+ * they're crating, so a Flex Pro Pack writes a label there instead of a leg count.
+ * `FLEX-PRO-DISCOUNT` is the one part number unique to this pack (the bundle
+ * discount line off the "Summit Flex: Pro Pack" proposal template) — the shared
+ * structural part, A-2200, is the general-purpose Flex frame and isn't specific to
+ * this particular pack, so it isn't a safe signal on its own.
+ */
+const FLEX_PRO_PACK_SKU = 'FLEX-PRO-DISCOUNT';
+const FLEX_PRO_PACK_LABEL = 'Summit Flex: Pro Pack';
+
 /** The monday item id — the proposal header's Project ID. */
 const ItemIdSchema = z
   .string()
@@ -97,12 +109,15 @@ interface ProposalLineish {
 export interface AdventureFacts {
   legs: number;
   trolley: boolean;
+  /** A Summit Flex Pro Pack proposal — see FLEX_PRO_PACK_SKU above. */
+  flexProPack: boolean;
   /** False when the proposal has no Adventure Series content at all. */
   found: boolean;
 }
 
 /**
- * Count the welded legs and spot a trolley rail in a set of proposal lines.
+ * Count the welded legs, spot a trolley rail, and detect a Summit Flex Pro Pack in a
+ * set of proposal lines.
  *
  * Parts arrive two ways and both are counted: as a line in their own right, and as a
  * component of a kit line (an Adventure frame is one customer-facing line carrying
@@ -116,6 +131,7 @@ export function adventureFacts(items: unknown): AdventureFacts {
   const lines: ProposalLineish[] = Array.isArray(items) ? (items as ProposalLineish[]) : [];
   let legs = 0;
   let trolley = false;
+  let flexProPack = false;
 
   for (const line of lines) {
     if (line?.optional) continue;
@@ -125,6 +141,7 @@ export function adventureFacts(items: unknown): AdventureFacts {
       .toUpperCase();
     if (LEG_PARTS.has(sku)) legs += qty;
     if (TROLLEY_PARTS.has(sku)) trolley = true;
+    if (sku === FLEX_PRO_PACK_SKU) flexProPack = true;
 
     for (const c of line?.components ?? []) {
       const part = String(c?.part ?? '')
@@ -136,7 +153,7 @@ export function adventureFacts(items: unknown): AdventureFacts {
     }
   }
 
-  return { legs, trolley, found: legs > 0 || trolley };
+  return { legs, trolley, flexProPack, found: legs > 0 || trolley || flexProPack };
 }
 
 /** The same count from the version on file, for a client that did not send one. */
@@ -286,14 +303,19 @@ export function registerFreightRoutes(app: FastifyInstance): void {
 
     // The builder counts from the same lines it weighed. Without those numbers (an
     // older client), count the version on file rather than leaving the row silent.
+    // The Flex Pro Pack signal always comes from the version on file regardless —
+    // the client's legs/trolley count has no way to carry it, since a Flex proposal
+    // has neither.
+    const versionFacts = await adventureFactsFromVersion(id);
     const facts: AdventureFacts =
       input.weldedLegs != null || input.trolley != null
         ? {
             legs: input.weldedLegs ?? 0,
             trolley: !!input.trolley,
-            found: (input.weldedLegs ?? 0) > 0 || !!input.trolley,
+            flexProPack: versionFacts.flexProPack,
+            found: (input.weldedLegs ?? 0) > 0 || !!input.trolley || versionFacts.flexProPack,
           }
-        : await adventureFactsFromVersion(id);
+        : versionFacts;
 
     let ok = false;
     let error: string | null = null;
@@ -308,7 +330,7 @@ export function registerFreightRoutes(app: FastifyInstance): void {
        * frame is exactly when the desk most needs the row to be right.
        */
       await writeColumns(input.itemId, {
-        [WELDED_LEGS_COLUMN]: String(facts.legs),
+        [WELDED_LEGS_COLUMN]: facts.flexProPack ? FLEX_PRO_PACK_LABEL : String(facts.legs),
         [TROLLEY_COLUMN]: { label: facts.trolley ? 'Yes' : 'No' },
       });
       stage = 'request';
