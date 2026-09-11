@@ -74,6 +74,7 @@ export default [
         setInterval: 'readonly',
         clearInterval: 'readonly',
         requestAnimationFrame: 'readonly',
+        cancelAnimationFrame: 'readonly',
         FormData: 'readonly',
         Blob: 'readonly',
         File: 'readonly',
