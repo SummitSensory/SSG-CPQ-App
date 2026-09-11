@@ -14791,7 +14791,8 @@
       '</div>' +
       '<div class="placeholder"><h3>What connecting does</h3><p>Sends you to Intuit to approve access, then stores an encrypted token. ' +
         'In the ' + esc(envLabel.toLowerCase()) + ' environment nothing touches your real books.</p></div>' +
-      '<div id="portalDeliveryPanel"></div>';
+      '<div id="portalDeliveryPanel"></div>' +
+      '<div id="mondayWebhookPanel" style="margin-top:16px;"></div>';
 
     // Portal delivery submissions. The panel lives in public/portal-delivery.js —
     // this file only says where it goes and hands it the authed() wrapper. Guarded so
@@ -14799,6 +14800,7 @@
     if (window.SSGPortalDelivery) {
       window.SSGPortalDelivery.mount(document.getElementById('portalDeliveryPanel'), { authed: authed });
     }
+    loadMondayWebhookPanel(user);
 
     var btn = document.getElementById('qboConnect');
     if (btn) {
@@ -14814,6 +14816,127 @@
         location.href = d.url;
       });
     }
+  }
+
+  /**
+   * What monday.com actually has subscribed right now, cross-referenced against what
+   * this app's daily cron declares it needs (see webhookRegistration.ts) — the
+   * question "why did monday say a webhook is failing" starts here rather than in
+   * monday's own Integrate panel, which cannot tell you whether a subscription is
+   * this deployment's or a leftover from an old one.
+   *
+   * `ownership` is the load-bearing column: `adopted` means a subscription exists for
+   * that board and event but this app did not create it and cannot ask monday what
+   * URL it points at (monday's webhooks query omits it) — an adopted row that is
+   * quietly failing on monday's side is invisible to the daily sync too, since sync
+   * only re-creates a webhook that was deleted outright, never one that exists but
+   * points at a stale URL. The fix for a suspect adopted row is Delete, then Sync —
+   * that guarantees a fresh subscription this app just created and therefore knows
+   * points here.
+   */
+  var MONDAY_WEBHOOK_BOARD_NAMES = {
+    '18421779422': 'Delivery & Site Details Submissions',
+    '6533700776': 'Manufacturing Process',
+  };
+  function mondayBoardLabel(boardId) {
+    return MONDAY_WEBHOOK_BOARD_NAMES[boardId] || ('Board ' + boardId);
+  }
+  var MONDAY_OWNERSHIP_CHIP = {
+    confirmed: { color: '#2f7d5d', bg: '#eaf3ee', border: '#cfe3d7', label: 'Confirmed', title: "monday's own record names this app's URL." },
+    recorded: { color: '#3d4a55', bg: '#e8ebef', border: '#cdd6dc', label: 'Recorded', title: 'Created by this app and still present on monday.' },
+    adopted: { color: '#8a6d1f', bg: '#fdf6e3', border: '#eadfbe', label: 'Unverified', title: "Exists for this board and event, but this app did not create it and cannot confirm it points here. If monday reports this one failing, Delete it, then Sync — that replaces it with a subscription this app just created." },
+  };
+  async function loadMondayWebhookPanel(user) {
+    var host = document.getElementById('mondayWebhookPanel'); if (!host) return;
+    host.innerHTML = '<div class="card"><div class="k">Automation</div><h2 style="font-size:19px;margin:2px 0 6px;">Monday.com Webhooks</h2><div class="muted" style="padding:10px 0;">Loading…</div></div>';
+    var r = await authed('/integrations/monday/webhooks');
+    if (!r.ok) {
+      host.innerHTML = '<div class="card"><div class="k">Automation</div><h2 style="font-size:19px;margin:2px 0 6px;">Monday.com Webhooks</h2>' +
+        '<div class="err">Could not read webhook status (' + r.status + ').</div></div>';
+      return;
+    }
+    var s = await r.json();
+    drawMondayWebhookPanel(user, s);
+  }
+  function drawMondayWebhookPanel(user, s) {
+    var host = document.getElementById('mondayWebhookPanel'); if (!host) return;
+    var rows = s.subscriptions || [];
+    host.innerHTML =
+      '<div class="card">' +
+        '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;">' +
+          '<div>' +
+            '<div class="k">Automation</div>' +
+            '<h2 style="font-size:19px;margin:2px 0 6px;">Monday.com Webhooks</h2>' +
+            '<div style="font-size:13.5px;color:#82877d;">' +
+              (s.error
+                ? '<span class="dot bad"></span>' + esc(s.error)
+                : s.ready
+                  ? '<span class="dot ok"></span>Every subscription this app expects is present, once each.'
+                  : '<span class="dot wait"></span>Missing or duplicated — see below.') +
+            '</div>' +
+          '</div>' +
+          '<button class="link-btn" id="mondayWebhookSync" style="width:auto;padding:9px 15px;">Sync now</button>' +
+        '</div>' +
+        (rows.length
+          ? '<div style="margin-top:16px;overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:13.5px;"><thead><tr>' +
+              ['Board', 'Event', 'Purpose', 'Status', 'Ownership', ''].map(function (h) {
+                return '<th style="text-align:left;padding:9px 11px;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;font-weight:600;border-bottom:1px solid #e7e8e3;white-space:nowrap;">' + h + '</th>';
+              }).join('') +
+            '</tr></thead><tbody>' +
+            rows.map(function (row) {
+              var chip = row.ownership ? MONDAY_OWNERSHIP_CHIP[row.ownership] : null;
+              var dupCount = (row.duplicateIds || []).length;
+              return '<tr>' +
+                '<td style="padding:9px 11px;border-bottom:1px solid #f2f3ef;white-space:nowrap;">' + esc(mondayBoardLabel(row.boardId)) + '</td>' +
+                '<td style="padding:9px 11px;border-bottom:1px solid #f2f3ef;white-space:nowrap;font-family:monospace;font-size:12.5px;">' + esc(row.event) + '</td>' +
+                '<td style="padding:9px 11px;border-bottom:1px solid #f2f3ef;max-width:320px;">' + esc(row.purpose) + '</td>' +
+                '<td style="padding:9px 11px;border-bottom:1px solid #f2f3ef;white-space:nowrap;">' +
+                  (row.registered
+                    ? '<span class="dot ok"></span>Registered'
+                    : '<span class="dot bad"></span>Missing') +
+                '</td>' +
+                '<td style="padding:9px 11px;border-bottom:1px solid #f2f3ef;white-space:nowrap;">' +
+                  (chip
+                    ? '<span title="' + esc(chip.title) + '" style="display:inline-block;background:' + chip.bg + ';border:1px solid ' + chip.border + ';color:' + chip.color + ';border-radius:999px;padding:2px 10px;font-size:11.5px;font-weight:600;cursor:help;">' + chip.label + '</span>'
+                    : '<span class="muted">—</span>') +
+                  (dupCount
+                    ? '<div style="margin-top:4px;font-size:11.5px;color:#9c3327;">' + dupCount + ' duplicate' + (dupCount === 1 ? '' : 's') + ' — every event posts twice</div>'
+                    : '') +
+                '</td>' +
+                '<td style="padding:9px 11px;border-bottom:1px solid #f2f3ef;text-align:right;white-space:nowrap;">' +
+                  (row.id ? '<button class="link-btn mondayWebhookDel" data-id="' + esc(row.id) + '" data-label="' + esc(mondayBoardLabel(row.boardId) + ' — ' + row.event) + '" style="width:auto;padding:6px 11px;font-size:12px;color:#9c3327;">Delete</button>' : '') +
+                  (row.duplicateIds || []).map(function (id) {
+                    return '<button class="link-btn mondayWebhookDel" data-id="' + esc(id) + '" data-label="' + esc(mondayBoardLabel(row.boardId) + ' — ' + row.event + ' (duplicate)') + '" style="width:auto;padding:6px 11px;font-size:12px;color:#9c3327;margin-left:6px;">Delete dup.</button>';
+                  }).join('') +
+                '</td></tr>';
+            }).join('') +
+            '</tbody></table></div>'
+          : '<div class="muted" style="margin-top:12px;">No monday integration is configured on this deployment.</div>') +
+        '<div class="muted" style="font-size:12px;margin-top:12px;line-height:1.5;">' +
+          'Delete removes the subscription from monday, not just this record — the next Sync (or tomorrow\'s automatic one) creates a fresh one this app knows points here. ' +
+          'Only the Delivery and Manufacturing boards are tracked here. The Deals board\'s webhook (opportunity stage sync) was set up directly in monday and is not managed by this screen.' +
+        '</div>' +
+      '</div>';
+    var syncBtn = document.getElementById('mondayWebhookSync');
+    if (syncBtn) syncBtn.addEventListener('click', async function () {
+      syncBtn.disabled = true; syncBtn.textContent = 'Syncing…';
+      try {
+        var rr = await authed('/integrations/monday/webhooks/sync', { method: 'POST' });
+        if (!rr.ok) { alert('Sync failed (' + rr.status + ').'); return; }
+        await loadMondayWebhookPanel(user);
+      } finally {
+        if (syncBtn.isConnected) { syncBtn.disabled = false; syncBtn.textContent = 'Sync now'; }
+      }
+    });
+    host.querySelectorAll('.mondayWebhookDel').forEach(function (b) {
+      b.addEventListener('click', async function () {
+        if (!confirm('Delete the ' + b.getAttribute('data-label') + ' webhook from monday.com? This may be a subscription somebody else set up — only delete one you have confirmed is stale or a duplicate. Sync afterward to create a fresh one this app knows points here.')) return;
+        b.disabled = true; b.textContent = 'Deleting…';
+        var rr = await authed('/integrations/monday/webhooks/' + b.getAttribute('data-id'), { method: 'DELETE' });
+        if (!rr.ok) { alert('Delete failed (' + rr.status + ').'); b.disabled = false; b.textContent = 'Delete'; return; }
+        await loadMondayWebhookPanel(user);
+      });
+    });
   }
 
   /**
