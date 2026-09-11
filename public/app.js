@@ -4835,13 +4835,24 @@
       revenue: revenue, cogs: cogs, margin: revenue - cogs, marginPct: revenue ? Math.round(((revenue - cogs) / revenue) * 1000) / 10 : 0 };
   }
   // subtotal + cost per GROUP line index, for inline display in the builder
+  /**
+   * A subgroup's products count twice on purpose: once into the subgroup's own
+   * bucket (so a subgroup heading can show its own Revenue/COGS/Margin, same as a
+   * GROUP heading does) and once into the enclosing GROUP's bucket, which already
+   * had to include them — a GROUP's total was never meant to exclude its
+   * subgroups. `curSubIdx` resets at every GROUP boundary so a subgroup's tally
+   * can never leak into a later section it isn't actually part of.
+   */
   function groupSubtotalMap() {
-    var map = {}, curIdx = null;
+    var map = {}, curIdx = null, curSubIdx = null;
     pb.lines.forEach(function (l, i) {
-      if (l.lineType === 'GROUP') { curIdx = i; map[i] = { rev: 0, cogs: 0 }; return; }
-      if (l.lineType === 'PRODUCT' && curIdx != null) {
-        map[curIdx].rev += (Number(l.quantity) || 0) * (Number(l.rateMinor) || 0) + (Number(l.tpFreightMinor) || 0);
-        map[curIdx].cogs += (Number(l.quantity) || 0) * (Number(l.costEach) || 0);
+      if (l.lineType === 'GROUP') { curIdx = i; curSubIdx = null; map[i] = { rev: 0, cogs: 0 }; return; }
+      if (l.lineType === 'SUBGROUP') { curSubIdx = i; map[i] = { rev: 0, cogs: 0 }; return; }
+      if (l.lineType === 'PRODUCT') {
+        var rev = (Number(l.quantity) || 0) * (Number(l.rateMinor) || 0) + (Number(l.tpFreightMinor) || 0);
+        var cogs = (Number(l.quantity) || 0) * (Number(l.costEach) || 0);
+        if (curIdx != null) { map[curIdx].rev += rev; map[curIdx].cogs += cogs; }
+        if (curSubIdx != null) { map[curSubIdx].rev += rev; map[curSubIdx].cogs += cogs; }
       }
     });
     return map;
@@ -6488,12 +6499,24 @@
           '</div>') + '</div>';
     }
     if (l.lineType === 'SUBGROUP') {
-      return '<div class="bRow" draggable="true" data-i="' + i + '" style="display:flex;align-items:center;gap:8px;background:#eef0ea;border:1px solid #e2e5dd;border-radius:9px;padding:7px 10px;margin-left:14px;">' + handle + builderArrows(i, false) +
+      var gs = (gsub && gsub[i]) || { rev: 0, cogs: 0 };
+      var gsMargin = gs.rev - gs.cogs;
+      var gsPct = gs.rev ? Math.round((gsMargin / gs.rev) * 1000) / 10 : 0;
+      return '<div class="bRow" draggable="true" data-i="' + i + '" style="background:#eef0ea;border:1px solid #e2e5dd;border-radius:9px;padding:7px 10px;margin-left:14px;">' +
+        '<div style="display:flex;align-items:center;gap:8px;">' + handle + builderArrows(i, false) +
         '<input class="bF" data-i="' + i + '" data-k="name" value="' + esc(l.name) + '" placeholder="Sub-heading" style="flex:1;border:none;background:transparent;font-weight:600;font-size:13px;color:#3d4a55;outline:none;">' +
         // Matches the one-line note a GROUP heading already has, and prints the
         // same way — beneath the heading, before the first product under it.
         '<input class="bF" data-i="' + i + '" data-k="description" value="' + esc(l.description || '') + '" placeholder="Sub-heading note" style="flex:0 1 260px;border:1px solid #dfe3da;background:#fff;border-radius:7px;padding:5px 8px;font-size:11.5px;color:#3d4a55;outline:none;">' +
-        noteBtn + del + '</div>';
+        noteBtn + del + '</div>' +
+        // Same Revenue/COGS/Margin a GROUP heading shows, so a subgroup reads as its
+        // own section rather than a plain label with no figures of its own.
+        (isMock() ? '' :
+          '<div style="display:flex;gap:16px;justify-content:flex-end;font-size:11px;color:#5c6157;padding:6px 40px 0 0;">' +
+            '<span>Revenue <b style="color:#3d4a55;font-weight:600;">' + fmtMoney(gs.rev, '') + '</b></span>' +
+            '<span>COGS <b style="color:#3d4a55;font-weight:600;">' + fmtMoney(gs.cogs, '') + '</b></span>' +
+            '<span>Margin <b style="color:' + (gsMargin >= 0 ? '#2f7d5d' : '#9c3327') + ';font-weight:600;">' + fmtMoney(gsMargin, '') + ' · ' + gsPct + '%</b></span>' +
+          '</div>') + '</div>';
     }
     if (l.lineType === 'NOTE') {
       // Lines up with the heading it was added under, on the same 14px step the
