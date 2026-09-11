@@ -981,7 +981,7 @@
         '<div class="field" style="flex:1;"><label>Default quantity</label>' +
           '<input id="kQty" type="number" min="0" placeholder="none" style="' + IN + '"></div>' +
       '</div>' +
-      fieldRow('Proposal group (optional)', '<input id="kGroup" style="' + IN + '">') +
+      fieldRow('Proposal group', '<input id="kGroup" style="' + IN + '" required>') +
       '<label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#5c6157;margin-top:2px;cursor:pointer;">' +
         '<input type="checkbox" id="kActive" checked> Available to quote straight away</label>' +
       '<div class="muted" style="font-size:11.5px;margin-top:10px;line-height:1.55;">' +
@@ -994,12 +994,15 @@
         if (!desc) return showErr('Name is required.');
         var category = document.getElementById('kCat').value.trim();
         if (!category) return showErr('Pick the section this part belongs in.');
+        var group = document.getElementById('kGroup').value.trim();
+        if (!group) return showErr('Choose a proposal group — every new product needs a default section to appear under on the proposal.');
         var qtyRaw = document.getElementById('kQty').value.trim();
 
         var body = {
           part: part,
           name: desc,
           category: category,
+          proposalGroup: group,
           unitPriceMinor: d2m(document.getElementById('kPrice').value),
           unitCostMinor: d2m(document.getElementById('kCost').value),
           weightLbs: parseFloat(document.getElementById('kWt').value) || 0,
@@ -1008,8 +1011,6 @@
         };
         var mfr = document.getElementById('kMfr').value.trim();
         if (mfr) body.manufacturer = mfr;
-        var group = document.getElementById('kGroup').value.trim();
-        if (group) body.proposalGroup = group;
         if (qtyRaw !== '') body.defaultQty = parseInt(qtyRaw, 10) || 0;
 
         var r = await authed('/catalog/items', { method: 'POST', body: body });

@@ -17,7 +17,23 @@ const SkuBody = z.object({
   weightLbs: z.number().nonnegative().default(0),
   category: z.string().trim().max(60).default('OTHER'),
   manufacturer: z.string().trim().max(160).nullish(),
-  proposalGroup: z.string().trim().max(120).optional(),
+  /**
+   * The proposal heading this part defaults to. Required on create — see
+   * `PATCH /skus/:id` below, which parses this same schema through `.partial()`
+   * and so leaves an existing SKU's blank `proposalGroup` untouched rather than
+   * retroactively locking it out.
+   */
+  proposalGroup: z
+    .string({
+      required_error:
+        'Choose a proposal group — every new product needs a default section to appear under on the proposal.',
+    })
+    .trim()
+    .min(
+      1,
+      'Choose a proposal group — every new product needs a default section to appear under on the proposal.',
+    )
+    .max(120),
   active: z.boolean().default(true),
   overrideAllowed: z.boolean().default(false),
   /** Builder default quantity; null = no default. */
@@ -207,9 +223,8 @@ export function registerSkuRoutes(app: FastifyInstance): void {
     if (!parsed.success) throw new ValidationError(parsed.error.message);
     const existing = await prisma.sku.findUnique({ where: { part: parsed.data.part } });
     if (existing) throw new ValidationError('A SKU with that part number already exists.');
-    const sku = await prisma.sku.create({
-      data: { ...parsed.data, proposalGroup: parsed.data.proposalGroup ?? null },
-    });
+    // proposalGroup is guaranteed non-blank by SkuBody's Zod schema above.
+    const sku = await prisma.sku.create({ data: parsed.data });
     await recordAudit({
       actorId: req.user!.sub,
       action: 'sku.create',
