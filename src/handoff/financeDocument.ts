@@ -116,8 +116,17 @@ export async function financeDocFor(proposalId: string): Promise<FinanceDoc> {
   };
 }
 
-/** Filesystem-safe basename, matching the BOM convention. */
-export function financeFilename(customerName: string, proposalNumber: string): string {
+/**
+ * Filesystem-safe basename: Customer_Name-Proposal_Number-Version#-Date, so every
+ * financing PDF saved from anywhere (the builder's download button, an emailed
+ * attachment) sorts and reads the same way as the proposal PDFs it accompanies.
+ */
+export function financeFilename(
+  customerName: string,
+  proposalNumber: string,
+  versionNumber: number,
+  date: Date,
+): string {
   const part = (v: string) =>
     v
       .trim()
@@ -125,7 +134,11 @@ export function financeFilename(customerName: string, proposalNumber: string): s
       .replace(/\s+/g, '_')
       .replace(/_+/g, '_')
       .replace(/^_|_$/g, '');
-  return [part(customerName), part(proposalNumber), 'Financing_Options'].filter(Boolean).join('-');
+  const p2 = (v: number) => String(v).padStart(2, '0');
+  const dateStr = `${p2(date.getMonth() + 1)}${p2(date.getDate())}${date.getFullYear()}`;
+  return [part(customerName), part(proposalNumber), `v${versionNumber}`, dateStr]
+    .filter(Boolean)
+    .join('-');
 }
 
 /**
