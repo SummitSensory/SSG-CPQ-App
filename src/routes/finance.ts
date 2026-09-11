@@ -20,6 +20,11 @@ import {
   RYAN_CAPITAL_2025,
 } from '../proposals/financeRates.js';
 import { quoteFinancing, financeSettingsFrom } from '../proposals/financing.js';
+import { appendPdfDocuments } from '../lib/pdfMerge.js';
+import {
+  resolveReferenceDocuments,
+  selectedReferenceDocKeys,
+} from '../proposals/referenceDocuments.js';
 
 /**
  * Ryan Capital financing: the rate sheets, the payment sheet, and sending it.
@@ -694,12 +699,27 @@ export function registerFinanceRoutes(app: FastifyInstance): void {
         /\.pdf$/i,
         '',
       );
+      // edgeToEdge: the proposal document owns its own page geometry — see render/pdf.ts.
+      let proposalPdf = await renderPdf(input.proposalHtml, { format: 'Letter', edgeToEdge: true });
+      // Whichever reference documents (a W9, a certificate of insurance) this
+      // version's builder settings had checked, appended as trailing pages —
+      // same merge appendPdfDocuments already does for the e-sign package
+      // (esign/service.ts) and the monday upload (proposalPush.ts); this email
+      // send was the one path still leaving them off an emailed proposal PDF.
+      const version = await prisma.proposalVersion.findUnique({
+        where: { id: doc.versionId },
+        select: { sections: true },
+      });
+      const refDocKeys = version ? selectedReferenceDocKeys(version.sections) : [];
+      if (refDocKeys.length) {
+        proposalPdf = await appendPdfDocuments(
+          proposalPdf,
+          await resolveReferenceDocuments(refDocKeys),
+        );
+      }
       attachments.push({
         filename: `${name}.pdf`,
-        // edgeToEdge: the proposal document owns its own page geometry — see render/pdf.ts.
-        content: (
-          await renderPdf(input.proposalHtml, { format: 'Letter', edgeToEdge: true })
-        ).toString('base64'),
+        content: proposalPdf.toString('base64'),
       });
     }
     if (input.includeFinancing) {

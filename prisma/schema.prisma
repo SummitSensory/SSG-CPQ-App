@@ -1331,6 +1331,16 @@ model ReferenceDocument {
   uploadedById String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+  /// Cached rasterized pages (one PNG data URI per PDF page), computed once so the
+  /// client-side preview/print pipeline — which has no PDF-page-merging mechanism of
+  /// its own, unlike the email/e-sign/monday paths that merge real PDF pages — can
+  /// show this document as ordinary image "sheets" without re-rasterizing it on every
+  /// proposal preview. Same url/pathname pair as the document's own blob; null until
+  /// the first preview that needed it renders and caches them. Content here is
+  /// immutable once uploaded (there is no "replace file" route, only upload-anew), so
+  /// unlike `url` this never needs invalidating for the life of the row.
+  pagesUrl      String?
+  pagesPathname String?
 
   @@index([active, sortOrder])
 }

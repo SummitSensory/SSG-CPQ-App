@@ -15,6 +15,7 @@ import {
   referenceDocumentPath,
   safeSegment,
 } from '../lib/fileStore.js';
+import { referenceDocumentPages } from '../proposals/referenceDocuments.js';
 
 /**
  * The reference-document library: pre-made PDFs (a W9, a certificate of insurance)
@@ -233,6 +234,23 @@ export function registerReferenceDocumentRoutes(app: FastifyInstance): void {
       details: { title: row.title },
     });
     return { ok: true };
+  });
+
+  /**
+   * A reference document's pages, pre-rendered to PNGs — read-permission gated
+   * like `/reference-documents/active`, because this is what the proposal
+   * preview/print pipeline (public/app.js) needs for anyone who can open a
+   * proposal, not just Administration. Keyed by `key` (what a proposal's saved
+   * selection actually stores), not `id`.
+   *
+   * Empty `pages` covers "no such key", "retired", and "could not be
+   * rendered" alike — see referenceDocumentPages' own comment for why that is
+   * deliberate rather than a 404: a broken reference document should silently
+   * drop out of a proposal preview, not break it.
+   */
+  app.get<{ Params: { key: string } }>('/reference-documents/:key/pages', read, async (req) => {
+    const pages = await referenceDocumentPages(req.params.key);
+    return { key: req.params.key, pages };
   });
 
   /** Proxied, not redirected to the blob URL — same reasoning as the purchase-order download: CSP and not handing a public URL to the browser. */
