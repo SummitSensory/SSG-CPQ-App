@@ -87,6 +87,43 @@ export function withProposalDate(sections: unknown, date: string): ProposalSecti
   return list;
 }
 
+/**
+ * Put `expiration` on the meta section, creating it when the proposal has none yet.
+ *
+ * The builder reads and re-saves `meta.expiration` (a plain `YYYY-MM-DD` string) as
+ * the source of truth for what it displays and edits — NOT the version's own
+ * `expirationDate` column, which only the server otherwise reads. Recomputing
+ * `expirationDate` when a version is cloned (see `clonedVersionExpiration`) without
+ * also stamping this field left the two disagreeing: the column held the correct,
+ * recomputed date while the builder kept showing (and would re-save, clobbering the
+ * column right back) the old version's stale one. `null` clears the field rather
+ * than writing a false value, matching a version with no expiration policy at all.
+ */
+export function withExpiration(sections: unknown, expirationIso: string | null): ProposalSection[] {
+  const list: ProposalSection[] = Array.isArray(sections)
+    ? ([...sections] as ProposalSection[])
+    : [];
+  const i = list.findIndex((s) => s?.id === 'meta');
+  if (i === -1) {
+    if (expirationIso == null) return list;
+    list.unshift({
+      id: 'meta',
+      type: 'CUSTOMER_INFO',
+      title: 'Proposal',
+      order: 0,
+      enabled: true,
+      data: { expiration: expirationIso },
+    });
+    return list;
+  }
+  const sec = list[i]!;
+  const data = { ...(sec.data ?? {}) };
+  if (expirationIso == null) delete data.expiration;
+  else data.expiration = expirationIso;
+  list[i] = { ...sec, data };
+  return list;
+}
+
 /** Reorder sections by an explicit id order; unknown ids dropped, missing ones appended. */
 export function reorderSections(
   sections: ProposalSection[],
