@@ -6578,7 +6578,7 @@
         freightTbdBlock +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">' +
           '<div><label style="font-size:10px;color:#20241f;text-transform:uppercase;">Delivery timeline</label><input class="bF" data-i="' + i + '" data-k="delivery" value="' + esc(l.delivery) + '" placeholder="e.g. 8–10 weeks" style="' + IN + 'padding:7px 9px;"></div>' +
-          '<div><label style="font-size:10px;color:#20241f;text-transform:uppercase;">Returnable</label>' + ynSelect(i, 'returnable', l.returnable) + '</div>' +
+          '<div><label style="font-size:10px;color:#20241f;text-transform:uppercase;">Returnable</label>' + returnableSelect(i, l.returnable) + '</div>' +
           '<div><label style="font-size:10px;color:#20241f;text-transform:uppercase;">Additional freight charges apply</label>' + ynSelect(i, 'addlFreight', l.addlFreight) + '</div>' +
           '<div><label style="font-size:10px;color:#20241f;text-transform:uppercase;">Freight charges calculated</label>' + ynSelect(i, 'freightCalc', l.freightCalc) + '</div>' +
         '</div>' +
@@ -6633,6 +6633,22 @@
   }
   function ynSelect(i, k, val) {
     return '<select class="bF" data-i="' + i + '" data-k="' + k + '" style="' + IN + 'padding:7px 9px;"><option value="">—</option><option value="YES"' + (val === 'YES' ? ' selected' : '') + '>Yes</option><option value="NO"' + (val === 'NO' ? ' selected' : '') + '>No</option></select>';
+  }
+  /**
+   * Returnable gets a third answer the plain Yes/No fields don't: a part sourced
+   * from a vendor is often returnable, just on THEIR terms rather than Summit's own
+   * — see RETURNABLE_LABEL in proposal-document.js for how this prints. A dedicated
+   * select rather than a third ynSelect() parameter, since addlFreight and
+   * freightCalc are genuinely binary and adding an unused option to their dropdowns
+   * would be confusing.
+   */
+  function returnableSelect(i, val) {
+    return '<select class="bF" data-i="' + i + '" data-k="returnable" style="' + IN + 'padding:7px 9px;">' +
+      '<option value="">—</option>' +
+      '<option value="YES"' + (val === 'YES' ? ' selected' : '') + '>Yes</option>' +
+      '<option value="NO"' + (val === 'NO' ? ' selected' : '') + '>No</option>' +
+      '<option value="VENDOR_POLICY"' + (val === 'VENDOR_POLICY' ? ' selected' : '') + '>Per vendor’s return policy</option>' +
+      '</select>';
   }
 
   var bDragFrom = null;

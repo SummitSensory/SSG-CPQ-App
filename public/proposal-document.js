@@ -660,6 +660,15 @@
     // indented one step further than whichever heading they sit under.
     var inSub = false;
     var bottomNotes = [];
+    // A vendor-sourced part is often returnable, just on the vendor's own terms
+    // rather than Summit's — the one place that maps the builder's returnable
+    // select (public/app.js, returnableSelect()) to what prints here, so the two
+    // can't drift into disagreement.
+    var RETURNABLE_LABEL = {
+      YES: 'Yes',
+      NO: 'No',
+      VENDOR_POLICY: "Yes, per the vendor's return policy",
+    };
     // Per-item descriptions, relocated out of the line-items table (see the
     // `if (l.description)` handling below) into their own full-width block under
     // the returnable/freight grid, instead of printing inline under each row.
@@ -847,7 +856,7 @@
       var itemFlags = {};
       var hasAnyFlag = false;
       if (l.returnable) {
-        itemFlags.returnable = l.returnable === 'YES' ? 'Yes' : 'No';
+        itemFlags.returnable = RETURNABLE_LABEL[l.returnable] || l.returnable;
         hasAnyFlag = true;
       }
       if (l.addlFreight) {
