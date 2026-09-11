@@ -1,9 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import { recordAudit } from '../lib/audit.js';
+import { logger } from '../lib/logger.js';
 import { ValidationError, NotFoundError, ConflictError } from '../lib/errors.js';
 import {
   MAX_REFERENCE_DOC_BYTES,
@@ -13,8 +15,10 @@ import {
   isFileStoreConfigured,
   putFile,
   referenceDocumentPath,
+  referenceDocumentPagePath,
   safeSegment,
 } from '../lib/fileStore.js';
+import { pdfRasterAvailable, rasterizePdfPages } from '../render/pdfRaster.js';
 
 /**
  * The reference-document library: pre-made PDFs (a W9, a certificate of insurance)
@@ -87,6 +91,110 @@ function summary(row: {
   };
 }
 
+interface StoredPageImage {
+  pathname: string;
+  url: string;
+  width: number;
+  height: number;
+}
+
+function parseStoredPages(value: unknown): StoredPageImage[] | null {
+  if (!Array.isArray(value) || !value.length) return null;
+  const out: StoredPageImage[] = [];
+  for (const item of value) {
+    if (
+      !item ||
+      typeof item !== 'object' ||
+      typeof (item as Record<string, unknown>).url !== 'string' ||
+      typeof (item as Record<string, unknown>).pathname !== 'string' ||
+      typeof (item as Record<string, unknown>).width !== 'number' ||
+      typeof (item as Record<string, unknown>).height !== 'number'
+    ) {
+      return null;
+    }
+    out.push(item as unknown as StoredPageImage);
+  }
+  return out;
+}
+
+/**
+ * A reference document's pages, as data URIs ready to embed in an `<img src>` — the
+ * proposal preview and the standalone document sent for PDF rendering are both
+ * self-contained HTML with no fetch of their own, the same rule render/pdf.ts's own
+ * doc comment states for every image in that pipeline.
+ *
+ * Cached in ReferenceDocument.pageImages after the first render (see the model
+ * comment); every call after that only re-reads the cached PNGs from blob storage
+ * rather than re-rasterizing. Never throws — a document that fails to render (a
+ * corrupt upload, rasterization unavailable on this deployment) logs and returns no
+ * pages, so one bad reference document cannot break the rest of a proposal's preview.
+ */
+async function pagesFor(row: {
+  id: string;
+  key: string;
+  url: string;
+  pageImages: unknown;
+}): Promise<string[]> {
+  const cached = parseStoredPages(row.pageImages);
+  if (cached) {
+    try {
+      const pages = await Promise.all(
+        cached.map(async (p) => {
+          const bytes = await getFile(p.url);
+          return `data:image/png;base64,${bytes.toString('base64')}`;
+        }),
+      );
+      return pages;
+    } catch (err) {
+      logger.warn(
+        { err, key: row.key },
+        'referenceDocuments: could not read cached page images, re-rendering',
+      );
+      // Fall through and re-render below.
+    }
+  }
+
+  if (!(await pdfRasterAvailable())) return [];
+
+  let rendered;
+  try {
+    const bytes = await getFile(row.url);
+    rendered = await rasterizePdfPages(bytes);
+  } catch (err) {
+    logger.error({ err, key: row.key }, 'referenceDocuments: could not rasterize document');
+    return [];
+  }
+  if (!rendered.length) return [];
+
+  const dataUris = rendered.map((p) => `data:image/png;base64,${p.png.toString('base64')}`);
+
+  // Best-effort cache write. A failure here (store not configured, one upload fails)
+  // just means the next preview re-renders — it must not fail a preview that already
+  // has its images in hand.
+  if (isFileStoreConfigured()) {
+    try {
+      const stored: StoredPageImage[] = [];
+      for (let i = 0; i < rendered.length; i++) {
+        const page = rendered[i]!;
+        const path = referenceDocumentPagePath({ fileId: row.id, page: i + 1 });
+        const up = await putFile(path, page.png, 'image/png');
+        stored.push({ pathname: up.pathname, url: up.url, width: page.width, height: page.height });
+      }
+      await prisma.referenceDocument.update({
+        where: { id: row.id },
+        data: { pageImages: stored as unknown as Prisma.InputJsonValue },
+      });
+    } catch (err) {
+      logger.warn(
+        { err, key: row.key },
+        'referenceDocuments: could not cache rendered page images',
+      );
+    }
+  }
+
+  return dataUris;
+}
+
 export function registerReferenceDocumentRoutes(app: FastifyInstance): void {
   const manage = { preHandler: requirePermission(Permission.LEGAL_MANAGE) };
   const read = { preHandler: requirePermission(Permission.PROPOSAL_READ) };
@@ -110,6 +218,44 @@ export function registerReferenceDocumentRoutes(app: FastifyInstance): void {
       select: { key: true, title: true, filename: true, byteSize: true },
     });
     return { documents: rows };
+  });
+
+  /**
+   * Page images for a set of selected documents, for the proposal preview overlay and
+   * the browser's own Print / Save PDF — see pagesFor's doc comment and
+   * src/render/pdfRaster.ts for why a PDF page becomes an image here rather than a
+   * real merged PDF page (the emailed/e-signed copy takes that route instead, via
+   * resolveReferenceDocuments + appendPdfDocuments).
+   *
+   * `?keys=A,B,C`, comma-separated, capped and de-duplicated. Returned in the
+   * library's own print order — the same `sortOrder` then `title` order
+   * resolveReferenceDocuments uses — so the preview and the emailed copy agree on
+   * sequence. A key that does not resolve to an active document (retired, deleted,
+   * or simply wrong) drops out silently rather than erroring, the same rule
+   * resolveReferenceDocuments applies: a document retired after a proposal selected
+   * it should not break that proposal's preview.
+   */
+  app.get<{ Querystring: { keys?: string } }>('/reference-documents/pages', read, async (req) => {
+    const keys = Array.from(
+      new Set(
+        String(req.query.keys || '')
+          .split(',')
+          .map((k) => k.trim())
+          .filter(Boolean),
+      ),
+    ).slice(0, 25);
+    if (!keys.length) return { documents: [] };
+
+    const rows = await prisma.referenceDocument.findMany({
+      where: { key: { in: keys }, active: true },
+      orderBy: [{ sortOrder: 'asc' }, { title: 'asc' }],
+    });
+
+    const documents: Array<{ key: string; title: string; pages: string[] }> = [];
+    for (const row of rows) {
+      documents.push({ key: row.key, title: row.title, pages: await pagesFor(row) });
+    }
+    return { documents };
   });
 
   /**

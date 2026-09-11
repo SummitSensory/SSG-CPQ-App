@@ -4031,7 +4031,7 @@
     pb = {
       proposalId: proposal.id, versionId: version.id, user: user, orgId: proposal.organizationId, orgName: orgName, stdNotes: stdNotes, updatedAt: openedUpdatedAt,
       title: proposal.title || '', number: proposal.number || '', version: version.version || 1, status: version.status || 'DRAFT',
-      meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', billSameAsShip: !meta.billTo || meta.billTo === (meta.shipTo || orgShipTo || ''), showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, showDeposit: meta.showDeposit !== false, introTemplate: meta.introTemplate || '', tbdTax: meta.tbdTax || '', tbdStructureFreight: meta.tbdStructureFreight || '', tbdMatsFreight: meta.tbdMatsFreight || '', proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, discountMode: meta.discountMode === 'AMT' ? 'AMT' : 'PCT', discountAmountMinor: meta.discountAmountMinor || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, stdFreightOn: !!meta.stdFreightOn, stdFreightMinor: meta.stdFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7), footerNotes: footerNotes, advAnswers: meta.advAnswers || null, advWarnings: meta.advWarnings || [] },
+      meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', billSameAsShip: !meta.billTo || meta.billTo === (meta.shipTo || orgShipTo || ''), showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, showDeposit: meta.showDeposit !== false, introTemplate: meta.introTemplate || '', tbdTax: meta.tbdTax || '', tbdStructureFreight: meta.tbdStructureFreight || '', tbdMatsFreight: meta.tbdMatsFreight || '', proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, discountMode: meta.discountMode === 'AMT' ? 'AMT' : 'PCT', discountAmountMinor: meta.discountAmountMinor || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, stdFreightOn: !!meta.stdFreightOn, stdFreightMinor: meta.stdFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7), footerNotes: footerNotes, advAnswers: meta.advAnswers || null, advWarnings: meta.advWarnings || [], referenceDocKeys: Array.isArray(meta.referenceDocKeys) ? meta.referenceDocKeys.filter(function (k) { return typeof k === 'string' && k; }) : [] },
       lines: lines,
     };
     // A new proposal starts with the billing address the same as the shipping one.
@@ -6741,10 +6741,10 @@
       document.getElementById('bMkReal').addEventListener('click', function () { convertMockToProposal(pb.user); });
     } else {
       document.getElementById('bSave').addEventListener('click', saveBuilder);
-      document.getElementById('bPreview').addEventListener('click', function () { previewProposalDoc(builderDoc()); });
+      document.getElementById('bPreview').addEventListener('click', async function () { previewProposalDoc(await builderDoc()); });
     // Straight to the print dialog. The preview still opens behind it, so cancelling
     // the print leaves the document on screen rather than dumping you back.
-      document.getElementById('bPdf').addEventListener('click', function () { previewProposalDoc(builderDoc(), true); });
+      document.getElementById('bPdf').addEventListener('click', async function () { previewProposalDoc(await builderDoc(), true); });
     // Leaves the builder. Identical to "‹ Cancel" — both honour the unsaved-changes
     // guard — and it is here because the exit belongs beside Save, not only in the
     // top-left corner.
@@ -7311,14 +7311,30 @@
     }, 50);
   }
 
-  function builderDoc() {
+  async function builderDoc() {
+    // Selected reference documents (a W9, a certificate of insurance), as page images
+    // for the live "Preview"/"Print" buttons — same fetch proposalDocData makes for
+    // the saved-version preview and the send path, so a rep sees them before ever
+    // saving. A no-op (no request at all) on the overwhelming majority of proposals,
+    // which select none.
+    var refDocKeys = Array.isArray(pb.meta.referenceDocKeys)
+      ? pb.meta.referenceDocKeys.filter(function (k) { return typeof k === 'string' && k; })
+      : [];
+    var refDocPages = [];
+    if (refDocKeys.length) {
+      try {
+        var rr = await authed('/reference-documents/pages?keys=' + encodeURIComponent(refDocKeys.join(',')));
+        if (rr.ok) { var rd = await rr.json(); refDocPages = (rd && rd.documents) || []; }
+      } catch (e3) {}
+    }
     return {
       title: pb.title, number: pb.number, orgName: pb.orgName, meta: pb.meta, lines: pb.lines,
       status: pb.status, version: pb.version,
       totals: builderTotals(),
       // Already loaded for the rail. Attached only when it belongs to THIS version,
       // so a stale answer from a previously open proposal cannot reach a document.
-      crossBorder: (cbData && cbData.versionId === pb.versionId && cbData.applicable) ? cbData : null
+      crossBorder: (cbData && cbData.versionId === pb.versionId && cbData.applicable) ? cbData : null,
+      refDocPages: refDocPages,
     };
   }
 
@@ -7425,6 +7441,20 @@
     } catch (e) {}
     var secs = version.sections || []; var metaSec = Array.isArray(secs) ? secs.filter(function (s) { return s && s.id === 'meta'; })[0] : null;
     var meta = (metaSec && metaSec.data) || {};
+    // Selected reference documents (a W9, a certificate of insurance), as page images
+    // for the preview overlay and the browser's own Print/Save PDF — see
+    // proposal-document.js's refDocPagesHtml. A no-op (no request at all) on the
+    // overwhelming majority of proposals, which select none.
+    var refDocKeys = Array.isArray(meta.referenceDocKeys)
+      ? meta.referenceDocKeys.filter(function (k) { return typeof k === 'string' && k; })
+      : [];
+    var refDocPages = [];
+    if (refDocKeys.length) {
+      try {
+        var rr = await authed('/reference-documents/pages?keys=' + encodeURIComponent(refDocKeys.join(',')));
+        if (rr.ok) { var rd = await rr.json(); refDocPages = (rd && rd.documents) || []; }
+      } catch (e2) {}
+    }
     var lines = (version.items || []);
     var subtotal = 0, weight = 0; var pCounted = countedRevenueByIndex(lines); lines.forEach(function (l, i) { if ((l.lineType || 'PRODUCT') === 'PRODUCT') { subtotal += pCounted[i]; weight += (Number(l.quantity) || 0) * (Number(l.weightEach) || 0); } });
     var tpFreight = 0; lines.forEach(function (l) { if ((l.lineType || 'PRODUCT') === 'PRODUCT') tpFreight += Number(l.tpFreightMinor) || 0; });
@@ -7437,7 +7467,7 @@
     return {
       title: proposal.title, number: proposal.number, version: version.version || 1,
       status: version.status || 'DRAFT',
-      orgName: orgName, meta: meta, lines: lines, crossBorder: cb,
+      orgName: orgName, meta: meta, lines: lines, crossBorder: cb, refDocPages: refDocPages,
       totals: {
         subtotal: subtotal, discountPct: discountPct, discountMode: discountMode, discount: discount, tpFreight: tpFreight,
         tax: tax, structureFreight: structureFreight, matsFreight: matsFreight, stdFreight: stdFreight,

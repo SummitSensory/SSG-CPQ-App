@@ -1331,6 +1331,16 @@ model ReferenceDocument {
   uploadedById String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+  /// Cached page-image renders used by the proposal preview overlay and the browser's
+  /// own Print/Save-PDF path (see src/render/pdfRaster.ts) — an array of
+  /// `{ pathname, url, width, height }`, one per PDF page, stored in the same blob
+  /// store as the original upload. Null until first requested by a proposal preview.
+  /// Safe to cache forever: this row has no "replace the file" path (see the upload
+  /// route above — PATCH only ever touches title/active/sortOrder), so the underlying
+  /// PDF bytes never change after creation. A document swapped out gets a new row (new
+  /// id) under the delete-then-reupload flow, which naturally gets an uncollided cache
+  /// path rather than reusing a stale one.
+  pageImages   Json?
 
   @@index([active, sortOrder])
 }

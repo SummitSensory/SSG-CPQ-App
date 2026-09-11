@@ -50,6 +50,46 @@
     });
   }
 
+  /**
+   * The selected reference documents (a W9, a certificate of insurance) as extra
+   * pages — one per PDF page, already rasterized to an image by the server (see
+   * routes/referenceDocuments.ts's /reference-documents/pages route) and fetched
+   * once per proposal load by proposalDocData in app.js, which hands them in as
+   * `doc.refDocPages`: `[{ key, title, pages: ["data:image/png;base64,...", ...] }]`.
+   *
+   * Reuses the introduction's own .ssg-fm-page sheet exactly — same fixed 816x1056
+   * size, and therefore already covered by ensurePrintStyle's print-time pinning and
+   * mountPreviewViewer's zoom/grid with no changes to either — rather than inventing
+   * a third sheet type. A reference document's page is usually already US Letter and
+   * fills the sheet edge to edge; object-fit:contain guards the rare page that is not,
+   * instead of cropping or distorting it.
+   *
+   * Called independently of the introduction's own BOTH/INTRO/PROPOSAL scope switch
+   * (see the call site in proposalDocHtml) — a W9 is reference material a rep is
+   * attaching to send along, not sales narrative, so it has to appear whether or not
+   * a product-line introduction is even in play, and whichever of the three scopes is
+   * chosen. An image that fails to load (a stale cached URL, a transient store error)
+   * removes its own sheet rather than leaving a broken-image icon in front of a
+   * customer, the same rule proposal-front-matter.js's img() applies to a house photo.
+   */
+  function refDocPagesHtml(docs) {
+    if (!Array.isArray(docs) || !docs.length) return '';
+    var out = '';
+    docs.forEach(function (d) {
+      (d && Array.isArray(d.pages) ? d.pages : []).forEach(function (src) {
+        out +=
+          '<div class="ssg-fm-page" style="width:816px;height:1056px;flex:none;background:#fff;' +
+          'box-sizing:border-box;overflow:hidden;display:flex;align-items:center;justify-content:center;">' +
+          '<img src="' +
+          esc(src) +
+          '" alt="" onerror="this.parentNode.style.display=\'none\'" ' +
+          'style="max-width:100%;max-height:100%;object-fit:contain;display:block;">' +
+          '</div>';
+      });
+    });
+    return out;
+  }
+
   /** The saved size for a signature/date box id, or '' when there is none — see
    *  public/signature-field-layout.js. Spliced into the OUTER, line-owning box's own
    *  inline style, stacked on top of its own position:relative. */
@@ -987,9 +1027,15 @@
       scope !== 'PROPOSAL' && window.SSGFrontMatter && window.SSGFrontMatter.applies(d)
         ? window.SSGFrontMatter.introHtml(d, { user: u, depositPct: depositPct() })
         : '';
-    if (scope === 'INTRO' && frontMatter) return frontMatter;
+    // Selected reference documents (a W9, a certificate of insurance) print as their
+    // own trailing pages of the introduction/front-matter sequence — see
+    // refDocPagesHtml's own comment for why this is independent of the scope switch
+    // above and of whether an introduction template even applies.
+    var refDocPages = refDocPagesHtml(d.refDocPages);
+    if (scope === 'INTRO' && frontMatter) return frontMatter + refDocPages;
     var html =
       frontMatter +
+      refDocPages +
       '<div id="propPrintArea" data-foot-left="' +
       esc('Summit Sensory Gym · ' + docIdent) +
       '" data-foot-right="' +

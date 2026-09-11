@@ -97,6 +97,17 @@ export function referenceDocumentPath(input: { fileId: string; filename: string 
 }
 
 /**
+ * `reference-documents/pages/<id>/page-<n>.png` — a cached page-image render of a
+ * reference document, one per PDF page. See src/render/pdfRaster.ts and
+ * ReferenceDocument.pageImages for why this exists: the proposal preview overlay and
+ * the browser's own Print/Save-PDF need images, not a real merged PDF page, and this
+ * is rendered once and cached here rather than on every proposal load.
+ */
+export function referenceDocumentPagePath(input: { fileId: string; page: number }): string {
+  return `reference-documents/pages/${input.fileId}/page-${input.page}.png`;
+}
+
+/**
  * Store bytes and return where they went.
  *
  * `x-add-random-suffix: 0` because the pathname already carries a cuid, so the
