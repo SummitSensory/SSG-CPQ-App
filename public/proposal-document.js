@@ -669,10 +669,6 @@
       NO: 'No',
       VENDOR_POLICY: "Yes, per the vendor's return policy",
     };
-    // Per-item descriptions, relocated out of the line-items table (see the
-    // `if (l.description)` handling below) into their own full-width block under
-    // the returnable/freight grid, instead of printing inline under each row.
-    var bottomDescs = [];
     /**
      * Left edge by tier. A section heading sits flush, a sub-heading steps in once,
      * and a product hangs off whichever heading it belongs to — so the tier of any
@@ -813,14 +809,15 @@
         'font-size:11px;text-align:right;vertical-align:top;font-weight:700;color:#203060;">' +
         fmtMoney(amt, '') +
         '</td></tr>';
-      // Prose belongs to the whole row, not to the name column: a delivery note or a
+      // Prose belongs to the whole row, not to the name column: a description or a
       // freight sentence runs the full width of the table rather than wrapping three
       // times inside a 430px column while the numeric columns sit empty beside it.
-      // A per-item description is the exception: it now prints in the "Delivery,
-      // Returns & Freight Notes" block below, alongside the returnable/freight flags
-      // it visually sits next to on the page, rather than inline under this row.
       var prose = '';
-      if (l.description) bottomDescs.push({ name: l.name, text: l.description });
+      if (l.description)
+        prose +=
+          '<div style="font-size:10.5px;color:#5b6478;line-height:1.45;">' +
+          esc(l.description) +
+          '</div>';
       if (l.delivery)
         prose +=
           '<div style="font-size:10px;color:#7b8190;margin-top:2px;">Delivery: ' +
@@ -924,34 +921,12 @@
           .join('') +
         '</tbody></table>'
       : '';
-    // Per-item descriptions print below the grid, full width, one block per item —
-    // never mixed into the grid's own columns.
-    var bottomDescsHtml = bottomDescs.length
-      ? '<div style="margin-top:' +
-        (bottomGridHtml ? '14px' : '8px') +
-        ';">' +
-        bottomDescs
-          .map(function (n) {
-            return (
-              '<div style="margin-top:6px;font-size:10.5px;line-height:1.45;">' +
-              '<b style="font-weight:600;color:#20241f;">' +
-              esc(tc(n.name)) +
-              ':</b> <span style="color:#5b6478;">' +
-              esc(n.text) +
-              '</span></div>'
-            );
-          })
-          .join('') +
+    var bottomNotesHtml = bottomGridHtml
+      ? '<div style="margin-top:24px;padding-top:12px;border-top:1px solid #eceef4;font-size:10.5px;color:#5b6478;line-height:1.6;break-inside:avoid;">' +
+        '<div style="font-family:\'Newsreader\',Georgia,serif;font-size:15px;font-weight:700;color:#203060;letter-spacing:-.015em;margin-bottom:5px;">Delivery, Returns &amp; Freight Notes</div>' +
+        bottomGridHtml +
         '</div>'
       : '';
-    var bottomNotesHtml =
-      bottomGridHtml || bottomDescsHtml
-        ? '<div style="margin-top:24px;padding-top:12px;border-top:1px solid #eceef4;font-size:10.5px;color:#5b6478;line-height:1.6;break-inside:avoid;">' +
-          '<div style="font-family:\'Newsreader\',Georgia,serif;font-size:15px;font-weight:700;color:#203060;letter-spacing:-.015em;margin-bottom:5px;">Delivery, Returns &amp; Freight Notes</div>' +
-          bottomGridHtml +
-          bottomDescsHtml +
-          '</div>'
-        : '';
     var u = rules.documentUser();
     var preparerLine2 = [u.title, u.phone].filter(Boolean).join(' · ');
     // Notes that print beneath the signature lines (terms, acceptance language).
