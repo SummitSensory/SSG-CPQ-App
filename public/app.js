@@ -264,7 +264,7 @@
         '<button class="btn" type="submit" id="submitBtn">Sign in</button>' +
         '<button type="button" class="link-btn" id="forgotBtn" style="margin-top:10px;text-align:center;padding:9px 16px;font-size:13px;">Forgot your password?</button>' +
         '<div id="ssoBlock" class="hidden">' +
-          '<div style="display:flex;align-items:center;gap:10px;margin:18px 0 14px;color:#a0a49a;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;">' +
+          '<div style="display:flex;align-items:center;gap:10px;margin:18px 0 14px;color:#20241f;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;">' +
             '<span style="flex:1;height:1px;background:#e7e8e3;"></span>or<span style="flex:1;height:1px;background:#e7e8e3;"></span>' +
           '</div>' +
           '<button type="button" class="link-btn" id="ssoBtn" style="text-align:center;padding:11px 16px;font-size:14px;">Sign in with Microsoft</button>' +
@@ -486,7 +486,7 @@
       '</label>' +
       '<span style="display:flex;align-items:center;gap:6px;">' +
         '<input id="mStdFreight" value="' + (on ? m2d(pb.meta.stdFreightMinor || 0) : '') + '" placeholder="0.00"' + (on ? '' : ' disabled') +
-          ' title="Enter the freight amount by hand" style="width:104px;' + box + 'text-align:right;' + (on ? '' : 'background:#f4f5f1;color:#a0a49a;') + '">' +
+          ' title="Enter the freight amount by hand" style="width:104px;' + box + 'text-align:right;' + (on ? '' : 'background:#f4f5f1;color:#20241f;') + '">' +
         '<span style="width:100px;flex:0 0 auto;" aria-hidden="true"></span>' +
       '</span></div>';
   }
@@ -1197,10 +1197,10 @@
     var totalPages = Math.max(1, Math.ceil((d.total || 0) / (d.pageSize || 20)));
     return '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:14px;overflow:hidden;">' +
       '<table style="width:100%;border-collapse:collapse;font-size:14px;"><thead><tr>' +
-      headCols.map(function (h) { return '<th style="text-align:left;padding:11px 16px;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;font-weight:600;border-bottom:1px solid #eef0ea;background:#f7f8f4;">' + h + '</th>'; }).join('') +
-      '</tr></thead><tbody>' + (rows || '<tr><td style="padding:22px 16px;color:#909689;" colspan="' + headCols.length + '">No records yet.</td></tr>') + '</tbody></table>' +
+      headCols.map(function (h) { return '<th style="text-align:left;padding:11px 16px;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:#20241f;font-weight:600;border-bottom:1px solid #eef0ea;background:#f7f8f4;">' + h + '</th>'; }).join('') +
+      '</tr></thead><tbody>' + (rows || '<tr><td style="padding:22px 16px;color:#20241f;" colspan="' + headCols.length + '">No records yet.</td></tr>') + '</tbody></table>' +
       '</div>' +
-      '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;color:#82877d;font-size:13px;">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;color:#20241f;font-size:13px;">' +
         '<span>' + (d.total || 0) + ' total</span>' +
         '<span style="display:flex;gap:8px;align-items:center;"><button id="prevPg" ' + (crm.page <= 1 ? 'disabled' : '') + ' class="link-btn" style="width:auto;padding:6px 12px;">Prev</button>' +
         '<span>Page ' + (d.page || 1) + ' of ' + totalPages + '</span>' +
@@ -1449,7 +1449,7 @@
     var st = canState || {};
     var rates = st.provinceRates || {};
     var b = st.billing || guessAddressLines() || {};
-    var lbl = 'font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;display:block;margin-bottom:3px;';
+    var lbl = 'font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:#20241f;display:block;margin-bottom:3px;';
     var box = 'width:100%;padding:9px 11px;border:1px solid #dcded7;border-radius:8px;font-size:13px;background:#fff;';
     var provinces = Object.keys(rates).sort();
     var guessProv = String(b.region || '').toUpperCase();
@@ -1595,9 +1595,6 @@
 
   /* --- Proposals --- */
   var OPEN_STATUSES = ['DRAFT', 'INTERNAL_REVIEW', 'RELEASED'];
-  // 'grouped' is retired — every tab but Needs Attention groups by customer now,
-  // unconditionally. A leftover key from before this redesign is just noise.
-  localStorage.removeItem('ssg.props.grouped');
   var PROP_FILTERS = [
     { id: 'open', label: 'Open' },
     // Flat and cross-customer on purpose — see the 'attention' branch below. Anything
@@ -1628,6 +1625,11 @@
       return ok ? saved : 'open';
     })(),
     q: '',
+    // Reps asked for this back: with one or two proposals per customer, a group-first
+    // order buries the sort — turning grouping off is the only way "sort by total" (or
+    // anything else) actually reads as a straight, single ordered list top to bottom.
+    grouped: localStorage.getItem('ssg.props.grouped') !== '0',
+    prepBy: '',
     collapsed: (function () {
       try { return JSON.parse(localStorage.getItem('ssg.props.collapsed') || '[]'); } catch (e) { return []; }
     })(),
@@ -1637,15 +1639,20 @@
     localStorage.setItem('ssg.props.collapsed', JSON.stringify(props.collapsed));
     localStorage.setItem('ssg.props.sortKey', props.sort.key);
     localStorage.setItem('ssg.props.sortDir', props.sort.dir);
+    localStorage.setItem('ssg.props.grouped', props.grouped ? '1' : '0');
   }
-  // Five labeled choices alongside the existing column-header click-to-sort — both
-  // drive the same props.sort state, so picking one updates the other's arrow too.
+  // Labeled choices alongside the existing column-header click-to-sort — both drive
+  // the same props.sort state, so picking one updates the other's arrow too.
   var PROP_SORTS = [
     { key: 'modified', dir: 'desc', label: 'Most recently modified' },
     { key: 'customer', dir: 'asc', label: 'Customer A–Z' },
+    { key: 'customer', dir: 'desc', label: 'Customer Z–A' },
     { key: 'expires', dir: 'asc', label: 'Expiring soonest' },
     { key: 'totalMinor', dir: 'desc', label: 'Total: high to low' },
     { key: 'totalMinor', dir: 'asc', label: 'Total: low to high' },
+    { key: 'created', dir: 'desc', label: 'Newest created' },
+    { key: 'created', dir: 'asc', label: 'Oldest created' },
+    { key: 'number', dir: 'asc', label: 'Proposal number' },
   ];
   function today0() { var d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); }
   function dayDiff(v) { if (!v) return null; var d = new Date(v); if (isNaN(d)) return null; d.setHours(0, 0, 0, 0); return Math.round((d.getTime() - today0()) / 86400000); }
@@ -1672,7 +1679,7 @@
 
   async function renderProposals(user) {
     document.getElementById('view').innerHTML =
-      '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px;">' +
         '<div id="propFilters" style="display:flex;gap:6px;flex-wrap:wrap;"></div>' +
         '<div style="display:flex;gap:8px;align-items:center;">' +
           '<select id="propSort" title="Sort" style="padding:9px 10px;border:1px solid #dcded7;border-radius:9px;font-size:12.5px;background:#fff;color:#3d4a55;">' +
@@ -1681,6 +1688,11 @@
           '<input id="propSearch" placeholder="Search customer, title, number…" value="' + esc(props.q) + '" style="padding:9px 12px;border:1px solid #dcded7;border-radius:9px;font-size:13.5px;background:#fff;width:260px;">' +
           (hasRole(PROP_WRITE, user.role) ? '<button class="btn" id="propNew" style="width:auto;padding:10px 17px;white-space:nowrap;">New proposal</button>' : '') +
         '</div></div>' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;">' +
+        '<label style="display:flex;gap:7px;align-items:center;font-size:12.5px;color:#20241f;cursor:pointer;white-space:nowrap;" title="Off shows one flat list in the exact order the sort picks, instead of bucketed one customer at a time">' +
+          '<input type="checkbox" id="propGroup"' + (props.grouped ? ' checked' : '') + '> Group by customer</label>' +
+        '<select id="propPrepBy" title="Prepared by" style="padding:8px 10px;border:1px solid #dcded7;border-radius:9px;font-size:12.5px;background:#fff;color:#20241f;"><option value="">All preparers</option></select>' +
+      '</div>' +
       '<div id="propList"><div class="muted" style="padding:24px;">Loading…</div></div>';
     drawPropFilters(user);
     if (hasRole(PROP_WRITE, user.role)) document.getElementById('propNew').addEventListener('click', function () { openProposalForm(user); });
@@ -1695,6 +1707,12 @@
       props.sort.key = picked.key; props.sort.dir = picked.dir;
       propsPersist(); drawProposals(user);
     });
+    document.getElementById('propGroup').addEventListener('change', function () {
+      props.grouped = this.checked; propsPersist(); drawProposals(user);
+    });
+    document.getElementById('propPrepBy').addEventListener('change', function () {
+      props.prepBy = this.value; drawProposals(user);
+    });
     loadProposals(user);
   }
   function drawPropFilters(user) {
@@ -1708,6 +1726,16 @@
     box.querySelectorAll('[data-f]').forEach(function (b) {
       b.addEventListener('click', function () { props.filter = b.getAttribute('data-f'); propsPersist(); drawPropFilters(user); drawProposals(user); });
     });
+  }
+  /** Rebuilds the "Prepared by" options from whoever actually has a proposal on record, keeping the current pick selected if it is still one of them. */
+  function drawPrepByOptions() {
+    var sel = document.getElementById('propPrepBy'); if (!sel) return;
+    var names = [];
+    props.rows.forEach(function (r) { if (r.preparedBy && names.indexOf(r.preparedBy) === -1) names.push(r.preparedBy); });
+    names.sort(function (a, b) { return a.toLowerCase() < b.toLowerCase() ? -1 : 1; });
+    if (props.prepBy && names.indexOf(props.prepBy) === -1) props.prepBy = '';
+    sel.innerHTML = '<option value="">All preparers</option>' +
+      names.map(function (n) { return '<option value="' + esc(n) + '"' + (n === props.prepBy ? ' selected' : '') + '>' + esc(n) + '</option>'; }).join('');
   }
   function matchFilter(r, f) {
     // Archived is a separate world: its own tab, and absent from every other one,
@@ -1759,6 +1787,7 @@
       });
       props.rows.forEach(function (r) { r.urgency = rowUrgency(r); });
       drawPropFilters(user);
+      drawPrepByOptions();
       drawProposals(user);
     } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
   }
@@ -1786,8 +1815,13 @@
   function ptdWrap(v, extra) { return '<td style="padding:10px 11px;border-bottom:1px solid #f2f3ef;white-space:normal;overflow-wrap:anywhere;' + (extra || '') + '">' + v + '</td>'; }
   function drawProposals(user) {
     var box = document.getElementById('propList'); if (!box) return;
+    // Needs Attention is always flat, whatever the checkbox says — grey it out there
+    // rather than let it sit checked and appear to do nothing.
+    var groupToggle = document.getElementById('propGroup');
+    if (groupToggle) groupToggle.disabled = props.filter === 'attention';
     var q = props.q.trim().toLowerCase();
     var rows = props.rows.filter(function (r) { return matchFilter(r, props.filter); })
+      .filter(function (r) { return !props.prepBy || r.preparedBy === props.prepBy; })
       .filter(function (r) { return !q || (r.customer + ' ' + r.contact + ' ' + r.title + ' ' + r.number + ' ' + r.preparedBy + ' ' + r.projectId).toLowerCase().indexOf(q) !== -1; });
     var sk = props.sort.key, dir = props.sort.dir === 'asc' ? 1 : -1;
     rows.sort(function (a, b) {
@@ -1834,7 +1868,7 @@
       var arch = canArchive(r, user)
         ? (r.archivedAt
           ? '<button class="pRestore" data-id="' + r.id + '" title="Put this proposal back in the pipeline" style="border:1px solid #cfe3d7;background:#eaf3ee;border-radius:8px;padding:6px 9px;font-size:12px;color:#2f7d5d;cursor:pointer;white-space:nowrap;">Restore</button>'
-          : '<button class="pArchive" data-id="' + r.id + '" title="Withdraw from the pipeline. Nothing is deleted and it can be restored." style="border:1px solid #dcded7;background:#fff;border-radius:8px;padding:6px 9px;font-size:12px;color:#8a8f85;cursor:pointer;white-space:nowrap;">Archive</button>')
+          : '<button class="pArchive" data-id="' + r.id + '" title="Withdraw from the pipeline. Nothing is deleted and it can be restored." style="border:1px solid #dcded7;background:#fff;border-radius:8px;padding:6px 9px;font-size:12px;color:#20241f;cursor:pointer;white-space:nowrap;">Archive</button>')
         : '';
       return '<tr style="cursor:pointer;" data-id="' + r.id + '">' +
         ptdWrap('<b style="font-weight:600;">' + esc(r.customer) + '</b>' + (r.contact ? '<div class="muted" style="font-size:12px;">' + esc(r.contact) + '</div>' : ''),
@@ -1860,12 +1894,12 @@
     }
     var body = rows.map(rowHtml).join('');
 
-    // Every tab groups by customer except Needs Attention, which is deliberately flat
-    // and cross-customer — the point of that view is triage regardless of whose deal
-    // it is. Groups are ordered by their most urgent proposal (attention > soon >
-    // onTrack > won > inactive), tied by most-recently-modified, so accounts needing
-    // attention float to the top. Rows within a group keep the chosen sort.
-    var grouped = props.filter !== 'attention';
+    // Needs Attention is always flat and cross-customer — the point of that view is
+    // triage regardless of whose deal it is. Every other tab groups by customer only
+    // when the checkbox is on; turned off, the chosen sort runs straight down the
+    // whole list instead of being reset to "most urgent customer first" at every
+    // group boundary.
+    var grouped = props.filter !== 'attention' && props.grouped;
     if (grouped && rows.length) {
       var order = [], byCust = {};
       rows.forEach(function (r) {
@@ -1888,7 +1922,7 @@
         var isOpen = props.collapsed.indexOf(cust) === -1;
         return '<tr class="pGroup" data-cust="' + esc(cust) + '" style="cursor:pointer;background:#f4f5f1;">' +
             '<td colspan="7" style="padding:11px 14px;border-bottom:1px solid #e7e8e3;">' +
-              '<span style="display:inline-block;width:14px;color:#8a8f85;">' + (isOpen ? '▾' : '▸') + '</span>' +
+              '<span style="display:inline-block;width:14px;color:#20241f;">' + (isOpen ? '▾' : '▸') + '</span>' +
               '<b style="font-weight:650;font-size:13.5px;">' + esc(cust) + '</b>' +
               '<span class="muted" style="font-size:12.5px;margin-left:10px;">' + mine.length + ' proposal' + (mine.length === 1 ? '' : 's') +
                 (open ? ' · ' + open + ' open' : '') + '</span>' +
@@ -1908,7 +1942,7 @@
           ? '<div style="margin-bottom:10px;font-size:12.5px;color:#5c6157;background:#fdf6e3;border:1px solid #eadfbe;border-radius:10px;padding:10px 13px;">Open proposals that need a decision soon — past their own expiration date, expiring within 7 days, or stalled without movement. Flat and cross-customer on purpose, so nothing needing attention gets buried inside a customer group.</div>'
           : '';
     box.innerHTML = lead + '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:14px;overflow:hidden;"><table style="width:100%;border-collapse:collapse;font-size:13.5px;table-layout:auto;"><thead><tr>' + head + '</tr></thead><tbody>' +
-      (body || '<tr><td style="padding:22px 16px;color:#909689;" colspan="7">' + (props.rows.length ? (props.filter === 'archived' ? 'Nothing archived.' : props.filter === 'closed' ? 'No invoiced deals yet.' : 'No proposals match this view.') : 'No proposals yet.') + '</td></tr>') + '</tbody></table></div>' +
+      (body || '<tr><td style="padding:22px 16px;color:#20241f;" colspan="7">' + (props.rows.length ? (props.filter === 'archived' ? 'Nothing archived.' : props.filter === 'closed' ? 'No invoiced deals yet.' : 'No proposals match this view.') : 'No proposals yet.') + '</td></tr>') + '</tbody></table></div>' +
       (props.rows.filter(function (r) { return r.expired && !r.archivedAt; }).length ? '<div style="margin-top:10px;font-size:12.5px;color:#9c3327;">⚑ Flagged rows are past their expiration date and still open — re-date them or mark them no longer active.</div>' : '');
     box.querySelectorAll('th[data-sk]').forEach(function (th) {
       th.addEventListener('click', function () {
@@ -2227,7 +2261,7 @@
             '<div style="font-family:Georgia,serif;font-size:12px;font-weight:700;color:' + (sent ? '#9aa1b0' : '#d02030') + ';flex:none;width:16px;">' + String(t.step < 10 ? '0' + t.step : t.step) + '</div>' +
             '<div style="flex:1;min-width:0;">' +
               '<div style="font-size:13.5px;font-weight:600;color:#203060;">' + esc(t.name) +
-                (sent ? ' <span class="chip" style="font-size:10.5px;background:#f2f3ef;color:#7b8190;">Sent ' + esc(fmtWhen(sent.copiedAt)) + '</span>' : '') +
+                (sent ? ' <span class="chip" style="font-size:10.5px;background:#f2f3ef;color:#20241f;">Sent ' + esc(fmtWhen(sent.copiedAt)) + '</span>' : '') +
                 (t.sentCount > 1 ? ' <span class="muted" style="font-size:11px;">×' + t.sentCount + '</span>' : '') + '</div>' +
               '<div class="muted" style="font-size:11.5px;line-height:1.45;margin-top:1px;">' + esc(t.whenToSend) + '</div>' +
               (sent ? '<div class="muted" style="font-size:11.5px;">Last to ' + esc(sent.toName || sent.toEmail) + (sent.by ? ' by ' + esc(sent.by) : '') + '</div>' : '') +
@@ -2437,7 +2471,7 @@
         if (tab) {
           try {
             tab.document.write('<title>Opening your draft…</title>' +
-              '<body style="font-family:system-ui;padding:40px;color:#82877d;">Opening your draft…</body>');
+              '<body style="font-family:system-ui;padding:40px;color:#20241f;">Opening your draft…</body>');
             tab.document.close();
           } catch (e) {}
         }
@@ -2637,7 +2671,7 @@
       var d = new Date(latest.releasedAt);
       if (!isNaN(d)) { d.setDate(d.getDate() + 7); suggested = d.toISOString().slice(0, 10); }
     }
-    var lbl = 'font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;font-weight:600;margin-bottom:5px;';
+    var lbl = 'font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:#20241f;font-weight:600;margin-bottom:5px;';
     return '<div class="card">' +
       '<div class="muted" style="font-size:12.5px;line-height:1.55;margin-bottom:14px;">Kept on <b style="color:#20241f;font-weight:600;">' + esc(p.organizationName || 'the customer') + '</b>, so every proposal for this account reads the same window. Changing it here changes it in CRM.</div>' +
       '<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end;">' +
@@ -3131,8 +3165,8 @@
   }
   function repTable(head, rows, empty) {
     return '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:14px;overflow:auto;"><table style="width:100%;border-collapse:collapse;font-size:13.5px;"><thead><tr>' +
-      head.map(function (h) { return '<th style="text-align:' + (h[1] || 'left') + ';padding:10px 14px;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;font-weight:600;border-bottom:1px solid #e7e8e3;white-space:nowrap;">' + esc(h[0]) + '</th>'; }).join('') +
-      '</tr></thead><tbody>' + (rows || '<tr><td colspan="' + head.length + '" style="padding:20px 14px;color:#909689;">' + esc(empty || 'No data in this period.') + '</td></tr>') + '</tbody></table></div>';
+      head.map(function (h) { return '<th style="text-align:' + (h[1] || 'left') + ';padding:10px 14px;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:#20241f;font-weight:600;border-bottom:1px solid #e7e8e3;white-space:nowrap;">' + esc(h[0]) + '</th>'; }).join('') +
+      '</tr></thead><tbody>' + (rows || '<tr><td colspan="' + head.length + '" style="padding:20px 14px;color:#20241f;">' + esc(empty || 'No data in this period.') + '</td></tr>') + '</tbody></table></div>';
   }
   function rtd(v, align, weight) { return '<td style="padding:10px 14px;border-bottom:1px solid #f2f3ef;text-align:' + (align || 'left') + ';' + (weight ? 'font-weight:600;' : '') + 'white-space:nowrap;">' + v + '</td>'; }
   /**
@@ -3185,7 +3219,7 @@
           '<div style="overflow:auto;"><table style="width:100%;border-collapse:collapse;font-size:12.5px;">' +
             '<thead><tr>' +
               ['Part', 'Vendor', 'Qty', 'On the order', 'Catalog', 'On this job'].map(function (h, i) {
-                return '<th style="padding:8px 14px;text-align:' + (i > 1 ? 'right' : 'left') + ';font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;font-weight:600;border-bottom:1px solid #e7e8e3;white-space:nowrap;">' + h + '</th>';
+                return '<th style="padding:8px 14px;text-align:' + (i > 1 ? 'right' : 'left') + ';font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:#20241f;font-weight:600;border-bottom:1px solid #e7e8e3;white-space:nowrap;">' + h + '</th>';
               }).join('') +
             '</tr></thead><tbody>' +
             o.lines.map(function (l) {
@@ -3257,7 +3291,7 @@
           '<div style="overflow:auto;"><table style="width:100%;border-collapse:collapse;font-size:12.5px;">' +
             '<thead><tr>' +
               ['Part', 'Qty', 'Sheet each', 'Invoiced each', 'Δ $', 'Δ %'].map(function (h, i) {
-                return '<th style="padding:8px 14px;text-align:' + (i ? 'right' : 'left') + ';font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;font-weight:600;border-bottom:1px solid #e7e8e3;white-space:nowrap;">' + h + '</th>';
+                return '<th style="padding:8px 14px;text-align:' + (i ? 'right' : 'left') + ';font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:#20241f;font-weight:600;border-bottom:1px solid #e7e8e3;white-space:nowrap;">' + h + '</th>';
               }).join('') +
             '</tr></thead><tbody>' +
             o.lines.map(function (l) {
@@ -4285,19 +4319,19 @@
         (busy === 'amt' ? 'Syncing\u2026' : 'Sync Request') +
       '</button>' +
       '<div style="padding:6px 14px;text-align:left;line-height:1.25;">' +
-        '<span style="display:block;font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Structure Crating &amp; Freight $</span>' +
+        '<span style="display:block;font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:#20241f;">Structure Crating &amp; Freight $</span>' +
         '<span style="display:block;font-size:' + (quote == null && !sent ? '12px' : '14px') + ';font-weight:600;color:' + (quote != null ? '#20241f' : (sent ? '#8a8f85' : '#9c3327')) + ';">' +
           (busy === 'amt' ? 'Checking\u2026' : esc(amtLabel)) +
         '</span>' +
       '</div>' +
       '<div style="padding:6px 14px;text-align:left;line-height:1.25;">' +
-        '<span style="display:block;font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Mats &amp; Padding Freight $</span>' +
+        '<span style="display:block;font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:#20241f;">Mats &amp; Padding Freight $</span>' +
         '<span style="display:block;font-size:14px;font-weight:600;color:' + (matsFreight != null ? '#20241f' : '#8a8f85') + ';">' +
           (busy === 'amt' ? 'Checking…' : esc(matsFreightLabel)) +
         '</span>' +
       '</div>' +
       '<div style="padding:6px 14px;text-align:left;line-height:1.25;">' +
-        '<span style="display:block;font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Mats &amp; Padding Tax $</span>' +
+        '<span style="display:block;font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:#20241f;">Mats &amp; Padding Tax $</span>' +
         '<span style="display:block;font-size:14px;font-weight:600;color:' + (matsTax != null ? '#20241f' : '#8a8f85') + ';">' +
           (busy === 'amt' ? 'Checking…' : esc(matsTaxLabel)) +
         '</span>' +
@@ -4633,12 +4667,12 @@
       // otherwise identical for every customer, and a rep with two tabs open has
       // no way to tell them apart.
       '<div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:0 0 16px;padding:12px 16px;background:#f7f8f4;border:1px solid #eef0ea;border-radius:10px;">' +
-        '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">' + (isMock() ? 'Mock proposal' : 'Prepared for') + '</div>' +
+        '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#20241f;">' + (isMock() ? 'Mock proposal' : 'Prepared for') + '</div>' +
         '<div style="font-size:17px;font-weight:600;color:#26303a;">' + esc(isMock() ? 'No customer — nothing is saved' : (pb.orgName || '—')) + '</div>' +
         (pb.number ? '<div class="muted" style="font-size:12.5px;">' + esc(pb.number) + '</div>' : '') +
         '<div style="margin-left:auto;display:flex;align-items:baseline;gap:8px;">' +
           (isMock() ? '' :
-            '<span style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Version</span>' +
+            '<span style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#20241f;">Version</span>' +
             '<span style="font-size:13px;font-weight:600;color:#3d4a55;">v' + (pb.version || 1) + '</span>') +
           (pb.readOnly ? '<span class="muted" style="font-size:12px;">read only</span>' : '') +
         '</div>' +
@@ -4655,7 +4689,7 @@
         '</div>' +
         '<div class="field" style="margin-top:4px;">' +
           '<label style="display:flex;align-items:baseline;gap:10px;">Bill to' +
-            '<span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:12px;color:#8a8f85;display:flex;align-items:center;gap:5px;cursor:pointer;">' +
+            '<span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:12px;color:#20241f;display:flex;align-items:center;gap:5px;cursor:pointer;">' +
               '<input type="checkbox" id="mBillSame"' + (pb.meta.billSameAsShip ? ' checked' : '') + '> same as ship to' +
             '</span>' +
           '</label>' +
@@ -4670,7 +4704,7 @@
         // Lines with no weight on record contribute 0 lb.
         '<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:14px;padding:10px 12px;background:#f7f8f4;border:1px solid #eef0ea;border-radius:9px;">' +
           '<div style="display:flex;align-items:baseline;gap:10px;flex:1;min-width:260px;">' +
-            '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;">Estimated shipment weight</div>' +
+            '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#20241f;">Estimated shipment weight</div>' +
             '<div style="font-size:16px;font-weight:600;">' + (Number(t.weight) || 0).toFixed(2) + ' lb</div>' +
             '<div class="muted" style="font-size:11.5px;">Sum of all included lines</div>' +
           '</div>' +
@@ -4704,7 +4738,7 @@
             : '') +
           '<select id="bAddNote" style="padding:9px 12px;border:1px solid #dcded7;border-radius:9px;font-size:13.5px;background:#fff;"><option value="">+ Standard Note…</option>' + (pb.stdNotes || []).map(function (nn, ni) { return '<option value="' + ni + '">' + esc(nn.title) + (nn.placement === 'FOOTER' ? ' — footer' : '') + '</option>'; }).join('') + '<option value="__custom">Custom Note…</option></select>' +
         '</div>' +
-        '<div style="font-size:12px;color:#8a8f85;margin-bottom:6px;">Optional product groups (click to add a section heading):</div>' +
+        '<div style="font-size:12px;color:#20241f;margin-bottom:6px;">Optional product groups (click to add a section heading):</div>' +
         '<div style="display:flex;gap:6px;flex-wrap:wrap;">' + STD_GROUPS.map(function (g) { return '<button class="grpChip" data-g="' + esc(g) + '" style="border:1px solid #dcded7;background:#fff;border-radius:999px;padding:6px 12px;font-size:12.5px;cursor:pointer;color:#3d4a55;">' + esc(g) + '</button>'; }).join('') + '</div>' +
       '</div>' +
       // lines
@@ -4729,18 +4763,18 @@
             '<input id="mDisc" style="width:80px;padding:5px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;" value="' + esc(pb.meta.discountMode === 'AMT' ? ((Number(pb.meta.discountAmountMinor) || 0) / 100).toFixed(2) : pb.meta.discountPct) + '">' +
           '</div></div>' +
         (t.discount ? '<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:14px;color:#9c3327;font-weight:700;"><span>' + discountLabel(t) + '</span><span>− ' + fmtMoney(t.discount, 'USD') + '</span></div>' +
-          '<div style="font-size:11px;color:#8a8f85;text-align:right;margin-bottom:2px;">Discount expires ' + (pb.meta.expiration ? fmtDate(pb.meta.expiration) : 'with the proposal') + '</div>' : '') +
+          '<div style="font-size:11px;color:#20241f;text-align:right;margin-bottom:2px;">Discount expires ' + (pb.meta.expiration ? fmtDate(pb.meta.expiration) : 'with the proposal') + '</div>' : '') +
         optionalAmountRow('Mat Freight Tax Pass-Through', 'mTax', pb.meta.taxAmountMinor, 'mTaxTbd', pb.meta.tbdTax) +
         // Crating and freight are quoted by the desk against a real shipment. A mock has
         // no shipment, so it quotes product retail and says so rather than showing $0.
         (isMock() ? '' :
           optionalAmountRow('Structure Crating &amp; Freight $', 'mStructFreight', pb.meta.structureFreightMinor, 'mStructFreightTbd', pb.meta.tbdStructureFreight) +
           optionalAmountRow('Mats &amp; Padding Freight $', 'mMatsFreight', pb.meta.matsFreightMinor, 'mMatsFreightTbd', pb.meta.tbdMatsFreight) +
-          '<div style="font-size:11px;color:#8a8f85;text-align:right;margin:-2px 0 2px;">When the amount is 0 the proposal says TBD. Type <b>0</b> in the left box to print USD $0.00 instead, or any wording to print that.</div>' +
+          '<div style="font-size:11px;color:#20241f;text-align:right;margin:-2px 0 2px;">When the amount is 0 the proposal says TBD. Type <b>0</b> in the left box to print USD $0.00 instead, or any wording to print that.</div>' +
           stdFreightRow()) +
         '<div style="display:flex;justify-content:space-between;padding:8px 0 0;margin-top:6px;border-top:1px solid #e7e8e3;font-size:16px;font-weight:600;font-family:\'Newsreader\',serif;"><span>Total</span><span>' + fmtUsd(t.total) + '</span></div>' +
         (isMock() ? '<div class="muted" style="font-size:11.5px;text-align:right;margin-top:4px;line-height:1.5;">Product retail only. Crating, freight and tax are quoted on a real proposal.</div>' : '') +
-        (pb.meta.showDeposit !== false ? '<div style="display:flex;justify-content:space-between;padding:6px 0 0;font-size:14px;color:#3d4a55;font-weight:600;"><span>Deposit due (' + depositPct() + '%)</span><span>' + fmtUsd(t.deposit) + '</span></div>' : '<div style="display:flex;justify-content:space-between;padding:6px 0 0;font-size:12.5px;color:#8a8f85;"><span>Deposit</span><span>Not shown on the proposal</span></div>') +
+        (pb.meta.showDeposit !== false ? '<div style="display:flex;justify-content:space-between;padding:6px 0 0;font-size:14px;color:#3d4a55;font-weight:600;"><span>Deposit due (' + depositPct() + '%)</span><span>' + fmtUsd(t.deposit) + '</span></div>' : '<div style="display:flex;justify-content:space-between;padding:6px 0 0;font-size:12.5px;color:#20241f;"><span>Deposit</span><span>Not shown on the proposal</span></div>') +
         // Read-only: the sum of quantity × per-unit weight across product lines. Drives
         // crating and freight, so it is worth seeing before those numbers are entered.
         '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0 0;margin-top:6px;border-top:1px solid #e7e8e3;font-size:14px;">' +
@@ -4953,14 +4987,14 @@
   function marginCard(t) {
     function stat(label, value, color, big) {
       return '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:5px 0;">' +
-        '<span style="font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;">' + label + '</span>' +
+        '<span style="font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:#20241f;">' + label + '</span>' +
         '<span style="font-size:' + (big ? '19px' : '15px') + ';font-weight:600;font-family:\'Newsreader\',serif;color:' + (color || '#20241f') + ';">' + value + '</span></div>';
     }
     var mColor = t.margin >= 0 ? '#2f7d5d' : '#9c3327';
     var rows = t.groups.map(function (g) {
       var c = g.margin >= 0 ? '#2f7d5d' : '#9c3327';
       return '<div style="padding:8px 0;border-bottom:1px solid #ece7d8;">' +
-        '<div style="font-size:12px;font-weight:600;line-height:1.35;">' + esc(tc(stripOptional(g.name || 'Untitled section'))) + (g.optional ? ' <span style="font-weight:400;color:#8a8f85;">(Optional)</span>' : '') + '</div>' +
+        '<div style="font-size:12px;font-weight:600;line-height:1.35;">' + esc(tc(stripOptional(g.name || 'Untitled section'))) + (g.optional ? ' <span style="font-weight:400;color:#20241f;">(Optional)</span>' : '') + '</div>' +
         '<div style="display:flex;justify-content:space-between;gap:8px;font-size:11.5px;color:#5c6157;margin-top:3px;">' +
           '<span>Rev ' + fmtMoney(g.subtotal, '') + '</span>' +
           '<span>COGS ' + fmtMoney(g.cogs, '') + '</span>' +
@@ -4978,7 +5012,7 @@
       stat('Margin', fmtMoney(t.margin, 'USD'), mColor, 1) +
       stat('Margin %', t.marginPct + '%', mColor) +
       (rows ? '<div style="margin-top:12px;padding-top:10px;border-top:1px solid #ece7d8;">' +
-        '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin-bottom:2px;">By section</div>' + rows + '</div>'
+        '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#20241f;margin-bottom:2px;">By section</div>' + rows + '</div>'
         : '<div class="muted" style="font-size:12px;margin-top:10px;">Add a section heading to see per-section margin.</div>') +
       (t.cogs === 0 ? '<div style="margin-top:10px;font-size:11.5px;color:#8a6d1f;line-height:1.5;">No costs recorded yet — add unit costs on the Catalog tab, or type a cost on any line.</div>' : '') +
     '</div>';
@@ -5082,7 +5116,7 @@
           '<span style="font-size:12.5px;font-weight:600;">' + esc(r.vendor) + '</span>' + rfqStatusChip(r.status) + '</div>' +
         '<div style="display:flex;justify-content:space-between;gap:8px;font-size:11.5px;color:#5c6157;margin-top:2px;">' +
           '<span>' + esc(r.reference) + '</span><span>' + rfqDate(r.requestedAt) + '</span></div>' +
-        '<div style="font-size:11px;color:#8a8f85;margin-top:3px;line-height:1.45;">' + r.itemCount + ' item' + (r.itemCount === 1 ? '' : 's') + (items ? ' \u2014 ' + esc(items) : '') + '</div>' +
+        '<div style="font-size:11px;color:#20241f;margin-top:3px;line-height:1.45;">' + r.itemCount + ' item' + (r.itemCount === 1 ? '' : 's') + (items ? ' \u2014 ' + esc(items) : '') + '</div>' +
         rfqDeliveryLine(r) +
         '<div style="display:flex;gap:6px;margin-top:6px;">' +
           '<button class="link-btn rfqOpen" data-id="' + r.id + '" style="width:auto;padding:5px 10px;font-size:12px;">' + (r.status === 'DRAFT' ? 'Edit &amp; send' : 'View') + '</button>' +
@@ -5190,7 +5224,7 @@
   /** USD and estimated CAD side by side. Never a bare dollar sign. */
   function cbPair(usdMinor, cadMinor) {
     if (usdMinor == null) return '<span class="muted">—</span>';
-    var cad = cadMinor == null ? '' : '<span style="display:block;font-size:11px;color:#8a8f85;">' + fmtMoney(cadMinor, 'CAD') + ' est.</span>';
+    var cad = cadMinor == null ? '' : '<span style="display:block;font-size:11px;color:#20241f;">' + fmtMoney(cadMinor, 'CAD') + ' est.</span>';
     return '<span style="font-variant-numeric:tabular-nums;">' + fmtMoney(usdMinor, 'USD') + '</span>' + cad;
   }
 
@@ -5270,7 +5304,7 @@
       return '<tr>' +
         '<td style="padding:4px 0;font-size:12px;vertical-align:top;">' + esc(l.label) + cbStatusChip(l.status) +
           (l.percent ? '<span class="muted" style="font-size:10.5px;"> ' + esc(l.percent) + '%</span>' : '') +
-          (l.payableTo === 'CUSTOMS_OR_BROKER' ? '<span style="display:block;font-size:10px;color:#8a8f85;">payable at the border</span>' : '') +
+          (l.payableTo === 'CUSTOMS_OR_BROKER' ? '<span style="display:block;font-size:10px;color:#20241f;">payable at the border</span>' : '') +
         '</td>' +
         '<td style="padding:4px 0;text-align:right;font-size:12px;vertical-align:top;">' + cbPair(l.usdMinor, l.cadMinor) + '</td>' +
       '</tr>';
@@ -5335,7 +5369,7 @@
       e = await r.json();
     } catch (err) { alert('Could not load the customs entry.'); return; }
 
-    var lbl = 'font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;display:block;margin-bottom:3px;';
+    var lbl = 'font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:#20241f;display:block;margin-bottom:3px;';
     var box = 'width:100%;padding:8px 10px;border:1px solid #dcded7;border-radius:8px;font-size:13px;background:#fff;';
 
     var money = function (id, label, v) {
@@ -5354,7 +5388,7 @@
       return '<div style="flex:1;min-width:130px;"><label style="' + lbl + '">' + esc(label) + '</label>' +
         '<div style="position:relative;"><input id="' + id + '" inputmode="decimal" placeholder="blank = none" value="' +
         esc(v == null ? '' : String(v)) + '" style="' + box + 'padding-right:26px;">' +
-        '<span style="position:absolute;right:9px;top:8px;font-size:13px;color:#8a8f85;">%</span></div>' +
+        '<span style="position:absolute;right:9px;top:8px;font-size:13px;color:#20241f;">%</span></div>' +
         (hint ? '<div class="muted" style="font-size:10.5px;line-height:1.45;margin-top:3px;">' + hint + '</div>' : '') + '</div>';
     };
     var simple = !!e.simpleMode;
@@ -5588,7 +5622,7 @@
   function cnDatesCardHtml() {
     var d = (cnData && cnData.dates) || {};
     var box = 'width:100%;padding:6px 8px;border:1px solid #dcded7;border-radius:7px;font-size:13px;background:#fff;';
-    var lbl = 'font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;';
+    var lbl = 'font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:#20241f;';
     return '<div class="card" style="margin-top:14px;border:1px solid #e4dfd0;background:#fdfcf7;">' +
       '<div class="section-title" style="margin:0 0 2px;">Ideal Decision Timeline</div>' +
       '<div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:9px;">Kept On The Customer</div>' +
@@ -5612,7 +5646,7 @@
     return '<div style="padding:9px 0;border-bottom:1px solid #ece7d8;">' +
       '<div style="font-size:12.5px;line-height:1.55;white-space:pre-wrap;color:#20241f;">' + esc(n.body) + '</div>' +
       '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-top:4px;">' +
-        '<span style="font-size:11px;color:#8a8f85;">' + esc(n.authorName || 'Unknown') + ' · ' + esc(cnStamp(n.createdAt)) +
+        '<span style="font-size:11px;color:#20241f;">' + esc(n.authorName || 'Unknown') + ' · ' + esc(cnStamp(n.createdAt)) +
           (n.proposalNumber ? ' · ' + esc(n.proposalNumber) : '') + '</span>' +
         (mine || admin ? '<button class="cnDel" data-id="' + n.id + '" title="Remove this note" style="border:none;background:transparent;color:#9c3327;font-size:11px;cursor:pointer;padding:0;">Remove</button>' : '') +
       '</div></div>';
@@ -5627,7 +5661,7 @@
 
     var me = (pb.user && pb.user.id) || '';
     var admin = pb.user && pb.user.role === 'SYSTEM_ADMIN';
-    var sub = 'font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;margin:12px 0 2px;';
+    var sub = 'font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#20241f;margin:12px 0 2px;';
 
     return head +
       '<textarea id="cnBody" rows="3" placeholder="What should the next person to open this know?" style="width:100%;border:1px solid #dcded7;border-radius:9px;padding:8px 9px;font-size:12.5px;font-family:inherit;resize:vertical;background:#fff;"></textarea>' +
@@ -5806,7 +5840,7 @@
       cov.removed.map(function (r) {
         return '<div style="font-size:12px;line-height:1.5;color:#9c3327;text-decoration:line-through;text-decoration-color:#c8483a;">' +
             (Number(r.quantity) || 0) + '\u00d7 ' + esc(r.sku) + ' \u2014 ' + esc(r.name) + '</div>' +
-          '<div style="font-size:11px;color:#8a8f85;margin:1px 0 6px;">' + esc(r.reference) + ' \u00b7 ' + esc(r.vendor) + '</div>';
+          '<div style="font-size:11px;color:#20241f;margin:1px 0 6px;">' + esc(r.reference) + ' \u00b7 ' + esc(r.vendor) + '</div>';
       }).join('') +
       '<div style="font-size:11.5px;color:#7d2a20;line-height:1.5;">Revise the request so the vendor quotes what is actually shipping.</div></div>';
   }
@@ -5926,11 +5960,11 @@
       '<table style="width:100%;border-collapse:collapse;">' +
         '<thead><tr style="border-bottom:1.5px solid #20241f;">' +
           '<th style="width:28px;"></th>' +
-          '<th style="padding:6px 8px;text-align:left;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;">SKU</th>' +
-          '<th style="padding:6px 8px;text-align:left;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;">Product name</th>' +
-          '<th style="padding:6px 8px;text-align:right;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;">Qty</th>' +
-          '<th style="padding:6px 8px;text-align:right;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;">Unit price</th>' +
-          '<th style="padding:6px 8px;text-align:right;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;">Total</th>' +
+          '<th style="padding:6px 8px;text-align:left;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:#20241f;">SKU</th>' +
+          '<th style="padding:6px 8px;text-align:left;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:#20241f;">Product name</th>' +
+          '<th style="padding:6px 8px;text-align:right;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:#20241f;">Qty</th>' +
+          '<th style="padding:6px 8px;text-align:right;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:#20241f;">Unit price</th>' +
+          '<th style="padding:6px 8px;text-align:right;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:#20241f;">Total</th>' +
         '</tr></thead><tbody id="rfqLines">' + lineRows() + '</tbody></table>' +
       '<div style="display:flex;justify-content:flex-end;gap:10px;padding:10px 8px 0;font-size:14px;font-weight:600;"><span>Total</span><span id="rfqTotal" style="font-variant-numeric:tabular-nums;min-width:110px;text-align:right;">' + fmtMoney(m.totalCostMinor, 'USD') + '</span></div>' +
       '<div class="field" style="margin-top:14px;"><label>Special notes for this request</label>' +
@@ -6163,7 +6197,7 @@
       : 'border:1px solid #e0e1db;background:#fff;color:#5c6157;cursor:pointer;';
     var off = light
       ? 'border:1px solid rgba(255,255,255,.1);background:transparent;color:rgba(255,255,255,.28);cursor:default;'
-      : 'border:1px solid #f0f1ec;background:#fbfbf9;color:#cfd2ca;cursor:default;';
+      : 'border:1px solid #f0f1ec;background:#fbfbf9;color:#20241f;cursor:default;';
     var endNote = builderIsHeading(l) ? 'already first' : 'already at the top of its section';
     var endNoteD = builderIsHeading(l) ? 'already last' : 'already at the bottom of its section';
     return '<div style="display:flex;flex-direction:column;gap:2px;flex:0 0 auto;">' +
@@ -6177,7 +6211,7 @@
   }
 
   function builderLineRow(l, i, gsub) {
-    var handle = '<div class="bDrag" style="cursor:grab;color:#c2c6bd;font-size:18px;padding:0 4px;user-select:none;" title="Drag to reorder">⋮⋮</div>';
+    var handle = '<div class="bDrag" style="cursor:grab;color:#20241f;font-size:18px;padding:0 4px;user-select:none;" title="Drag to reorder">⋮⋮</div>';
     var del = '<button class="bDel" data-i="' + i + '" style="border:1px solid #e0e1db;background:#fff;border-radius:8px;width:30px;height:30px;color:#9c3327;cursor:pointer;flex:0 0 auto;">✕</button>';
     /* Adds a note directly beneath this row rather than at the bottom of the
      * proposal. The old "+ Standard note…" picker appended to the end and left the
@@ -6193,8 +6227,8 @@
         '<div style="display:flex;align-items:center;gap:8px;">' + handle.replace('#c2c6bd', '#8fa0ac') + builderArrows(i, true) +
         '<input class="bF" data-i="' + i + '" data-k="name" value="' + esc(l.name) + '" placeholder="SECTION HEADING" style="flex:1;border:none;background:transparent;font-weight:700;font-size:13px;letter-spacing:.03em;text-transform:uppercase;color:#fff;outline:none;">' +
         '<input class="bF" data-i="' + i + '" data-k="description" value="' + esc(l.description || '') + '" placeholder="Heading note (e.g. Frame Dimensions: 10\' × 10\')" style="flex:0 1 250px;border:none;background:rgba(255,255,255,.1);border-radius:7px;padding:5px 8px;font-size:11.5px;color:#e6ebef;outline:none;">' +
-        '<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:#cdd6dc;white-space:nowrap;cursor:pointer;"><input type="checkbox" class="bChk" data-i="' + i + '" data-k="optional"' + (l.optional ? ' checked' : '') + '> Optional</label>' +
-        '<span style="font-size:12.5px;font-weight:600;color:#cdd6dc;min-width:90px;text-align:right;">' + fmtMoney(g.rev, 'USD') + '</span>' + noteBtnLight + del.replace('#9c3327', '#f0b8ae').replace('background:#fff', 'background:rgba(255,255,255,.12)').replace('border:1px solid #e0e1db', 'border:1px solid rgba(255,255,255,.25)') +
+        '<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:#20241f;white-space:nowrap;cursor:pointer;"><input type="checkbox" class="bChk" data-i="' + i + '" data-k="optional"' + (l.optional ? ' checked' : '') + '> Optional</label>' +
+        '<span style="font-size:12.5px;font-weight:600;color:#20241f;min-width:90px;text-align:right;">' + fmtMoney(g.rev, 'USD') + '</span>' + noteBtnLight + del.replace('#9c3327', '#f0b8ae').replace('background:#fff', 'background:rgba(255,255,255,.12)').replace('border:1px solid #e0e1db', 'border:1px solid rgba(255,255,255,.25)') +
         '</div>' +
         (isMock() ? '' :
           '<div style="display:flex;gap:16px;justify-content:flex-end;font-size:11px;color:#a9bac6;padding:6px 40px 0 0;">' +
@@ -6220,7 +6254,7 @@
         '<div style="flex:1;"><input class="bF" data-i="' + i + '" data-k="name" value="' + esc(l.name) + '" placeholder="Note title" style="width:100%;border:none;background:transparent;font-weight:600;font-size:13.5px;outline:none;margin-bottom:4px;">' +
         '<textarea class="bF" data-i="' + i + '" data-k="description" rows="3" placeholder="Note text" style="width:100%;border:1px solid #ece9db;border-radius:7px;padding:6px 8px;font-size:12.5px;font-family:inherit;resize:vertical;background:#fff;">' + esc(l.description) + '</textarea>' +
         '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:3px;">' +
-          '<div style="font-size:10.5px;color:#8a8f85;">Formatting: <b>**bold**</b> · <i>*italic*</i> · line breaks are kept · HTML: &lt;ul&gt;&lt;li&gt; &lt;b&gt; &lt;i&gt; &lt;a href&gt;</div>' +
+          '<div style="font-size:10.5px;color:#20241f;">Formatting: <b>**bold**</b> · <i>*italic*</i> · line breaks are kept · HTML: &lt;ul&gt;&lt;li&gt; &lt;b&gt; &lt;i&gt; &lt;a href&gt;</div>' +
           // Shown here because the box is invisible until the proposal is previewed, and
           // because a rep sometimes wants this one note boxed on this one proposal.
           '<label style="display:flex;align-items:center;gap:6px;font-size:10.5px;color:#5c6157;cursor:pointer;white-space:nowrap;" title="Prints this note inside a ruled box on the customer proposal">' +
@@ -6234,21 +6268,21 @@
       ? '<div style="background:#fdf6e6;border:1px solid #ecd9a6;border-radius:8px;padding:9px 11px;margin-bottom:10px;">' +
           '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:#8a6d1f;font-weight:700;margin-bottom:4px;">Freight to be determined · prints on the proposal</div>' +
           '<div style="font-size:12px;color:#6b5a24;line-height:1.55;">' + esc(FREIGHT_TBD_NOTE) + '</div>' +
-          '<div style="font-size:10.5px;color:#8a8f85;margin-top:5px;">Added automatically because this part’s vendor quotes freight after approval. Enter a freight amount below, or set “Freight charges calculated” to Yes, and it is removed.</div>' +
+          '<div style="font-size:10.5px;color:#20241f;margin-top:5px;">Added automatically because this part’s vendor quotes freight after approval. Enter a freight amount below, or set “Freight charges calculated” to Yes, and it is removed.</div>' +
         '</div>'
       : '';
     var notesPanel = l.showNotes ?
       '<div style="margin-top:10px;padding:10px;background:#f7f8f4;border:1px solid #eef0ea;border-radius:9px;">' +
         freightTbdBlock +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">' +
-          '<div><label style="font-size:10px;color:#8a8f85;text-transform:uppercase;">Delivery timeline</label><input class="bF" data-i="' + i + '" data-k="delivery" value="' + esc(l.delivery) + '" placeholder="e.g. 8–10 weeks" style="' + IN + 'padding:7px 9px;"></div>' +
-          '<div><label style="font-size:10px;color:#8a8f85;text-transform:uppercase;">Returnable</label>' + ynSelect(i, 'returnable', l.returnable) + '</div>' +
-          '<div><label style="font-size:10px;color:#8a8f85;text-transform:uppercase;">Additional freight charges apply</label>' + ynSelect(i, 'addlFreight', l.addlFreight) + '</div>' +
-          '<div><label style="font-size:10px;color:#8a8f85;text-transform:uppercase;">Freight charges calculated</label>' + ynSelect(i, 'freightCalc', l.freightCalc) + '</div>' +
+          '<div><label style="font-size:10px;color:#20241f;text-transform:uppercase;">Delivery timeline</label><input class="bF" data-i="' + i + '" data-k="delivery" value="' + esc(l.delivery) + '" placeholder="e.g. 8–10 weeks" style="' + IN + 'padding:7px 9px;"></div>' +
+          '<div><label style="font-size:10px;color:#20241f;text-transform:uppercase;">Returnable</label>' + ynSelect(i, 'returnable', l.returnable) + '</div>' +
+          '<div><label style="font-size:10px;color:#20241f;text-transform:uppercase;">Additional freight charges apply</label>' + ynSelect(i, 'addlFreight', l.addlFreight) + '</div>' +
+          '<div><label style="font-size:10px;color:#20241f;text-transform:uppercase;">Freight charges calculated</label>' + ynSelect(i, 'freightCalc', l.freightCalc) + '</div>' +
         '</div>' +
         '<div style="display:flex;gap:8px;margin-top:8px;align-items:flex-end;">' +
-          '<div style="flex:1;"><label style="font-size:10px;color:#8a8f85;text-transform:uppercase;">3rd-party freight line (shown under item)</label><input class="bF" data-i="' + i + '" data-k="tpFreightLabel" value="' + esc(l.tpFreightLabel) + '" placeholder="e.g. Steamroller Ramp freight" style="' + IN + 'padding:7px 9px;"></div>' +
-          '<div style="width:120px;"><label style="font-size:10px;color:#8a8f85;text-transform:uppercase;">Freight $</label><input class="bF" data-i="' + i + '" data-k="tpFreight" value="' + m2d(l.tpFreightMinor) + '" style="' + IN + 'padding:7px 9px;text-align:right;"></div>' +
+          '<div style="flex:1;"><label style="font-size:10px;color:#20241f;text-transform:uppercase;">3rd-party freight line (shown under item)</label><input class="bF" data-i="' + i + '" data-k="tpFreightLabel" value="' + esc(l.tpFreightLabel) + '" placeholder="e.g. Steamroller Ramp freight" style="' + IN + 'padding:7px 9px;"></div>' +
+          '<div style="width:120px;"><label style="font-size:10px;color:#20241f;text-transform:uppercase;">Freight $</label><input class="bF" data-i="' + i + '" data-k="tpFreight" value="' + m2d(l.tpFreightMinor) + '" style="' + IN + 'padding:7px 9px;text-align:right;"></div>' +
         '</div>' +
       '</div>' : '';
     return '<div class="bRow" draggable="true" data-i="' + i + '" style="background:#fff;border:1px solid #e7e8e3;border-radius:10px;padding:10px;">' +
@@ -6289,9 +6323,9 @@
                   : ' — and no price in the catalog for ' + esc(l.sku) + '.') + '</div>'
             : '') +
         '</div>' +
-        '<div style="display:flex;flex-direction:column;gap:5px;width:74px;flex:0 0 auto;"><label style="font-size:10px;color:#8a8f85;text-transform:uppercase;">Qty</label><input class="bF" data-i="' + i + '" data-k="quantity" value="' + esc(l.quantity) + '" style="width:100%;padding:6px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;"></div>' +
-        '<div style="display:flex;flex-direction:column;gap:5px;width:104px;flex:0 0 auto;"><label style="font-size:10px;color:#8a8f85;text-transform:uppercase;">Rate</label><input class="bF" data-i="' + i + '" data-k="rate" value="' + m2d(l.rateMinor) + '" style="width:100%;padding:6px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;"></div>' +
-        (isMock() ? '' : '<div style="display:flex;flex-direction:column;gap:5px;width:96px;flex:0 0 auto;"><label style="font-size:10px;color:#8a8f85;text-transform:uppercase;" title="Internal only — never printed">Cost</label><input class="bF" data-i="' + i + '" data-k="cost" value="' + m2d(l.costEach) + '" style="width:100%;padding:6px 8px;border:1px solid #e4dfd0;background:#fdfcf7;border-radius:7px;text-align:right;"></div>') +
+        '<div style="display:flex;flex-direction:column;gap:5px;width:74px;flex:0 0 auto;"><label style="font-size:10px;color:#20241f;text-transform:uppercase;">Qty</label><input class="bF" data-i="' + i + '" data-k="quantity" value="' + esc(l.quantity) + '" style="width:100%;padding:6px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;"></div>' +
+        '<div style="display:flex;flex-direction:column;gap:5px;width:104px;flex:0 0 auto;"><label style="font-size:10px;color:#20241f;text-transform:uppercase;">Rate</label><input class="bF" data-i="' + i + '" data-k="rate" value="' + m2d(l.rateMinor) + '" style="width:100%;padding:6px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;"></div>' +
+        (isMock() ? '' : '<div style="display:flex;flex-direction:column;gap:5px;width:96px;flex:0 0 auto;"><label style="font-size:10px;color:#20241f;text-transform:uppercase;" title="Internal only — never printed">Cost</label><input class="bF" data-i="' + i + '" data-k="cost" value="' + m2d(l.costEach) + '" style="width:100%;padding:6px 8px;border:1px solid #e4dfd0;background:#fdfcf7;border-radius:7px;text-align:right;"></div>') +
         '<div style="width:96px;flex:0 0 auto;text-align:right;padding-top:20px;font-weight:600;font-size:14px;">' + fmtMoney(amt, 'USD') + '</div>' + del +
       '</div></div>';
   }
@@ -6733,13 +6767,13 @@
         return !t || ((b.name || '') + ' ' + (b.sku || '')).toLowerCase().indexOf(t) !== -1;
       });
       if (bnd.length) {
-        out += '<div style="padding:6px 12px;background:#f7f8f4;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:#8a8f85;">Bundles</div>' +
+        out += '<div style="padding:6px 12px;background:#f7f8f4;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:#20241f;">Bundles</div>' +
           bnd.map(function (b) {
             return '<button type="button" class="pkBundle" data-id="' + b.id + '" style="display:block;width:100%;text-align:left;border:none;border-bottom:1px solid #f2f3ef;background:#fff;padding:10px 12px;cursor:pointer;font-size:13.5px;">' +
               '<b style="font-weight:600;">' + esc(b.name) + '</b> <span class="muted" style="font-size:12px;">' + esc(b.sku) + '</span>' +
               '<div class="muted" style="font-size:11.5px;">' + (b.componentCount || 0) + ' parts · $' + (Number(b.unitPriceMinor) / 100).toFixed(2) + '</div></button>';
           }).join('') +
-          '<div style="padding:6px 12px;background:#f7f8f4;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:#8a8f85;">Products</div>';
+          '<div style="padding:6px 12px;background:#f7f8f4;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:#20241f;">Products</div>';
       }
       out += items.map(function (p) {
         var price = Number(p.unitPriceMinor) || 0;
@@ -7138,7 +7172,7 @@
         // the page count every sheet is required to state.
         '<div style="position:absolute;left:' + PAD_SIDE + 'px;right:' + PAD_SIDE + 'px;bottom:32px;' +
           'display:flex;justify-content:space-between;align-items:baseline;gap:20px;' +
-          'padding-top:9px;border-top:1px solid #eceef4;font-size:9.5px;color:#9aa1b0;">' +
+          'padding-top:9px;border-top:1px solid #eceef4;font-size:9.5px;color:#20241f;">' +
           '<span>' + footLeft + '</span>' +
           '<span>' + footRight + '</span>' +
           '<span style="white-space:nowrap;">Page ' + (i + 1) + ' of ' + total + '</span>' +
@@ -7384,7 +7418,7 @@
         // same handles any document viewer does.
         '<div style="display:flex;align-items:center;gap:6px;background:#fff;border:1px solid #dfe3ec;border-radius:9px;padding:4px;">' +
           vb('pvZoomOut', '&minus;', 'Zoom out (Ctrl/Cmd + scroll)') +
-          '<span id="pvZoomPct" style="min-width:46px;text-align:center;font-size:12px;color:#5b6478;font-variant-numeric:tabular-nums;">100%</span>' +
+          '<span id="pvZoomPct" style="min-width:46px;text-align:center;font-size:12px;color:#20241f;font-variant-numeric:tabular-nums;">100%</span>' +
           vb('pvZoomIn', '+', 'Zoom in (Ctrl/Cmd + scroll)') +
           '<span style="width:1px;height:20px;background:#e6e9f0;"></span>' +
           vb('pvFit', 'Fit', 'Fit the window') +
@@ -7750,7 +7784,7 @@
     // Sell rate, not cost. The configurator is opened in front of customers, so no
     // part of it quotes what we pay or the markup applied to it.
     var per = function (v) { return '$' + (matRate(v) * matMarkup()).toFixed(2) + ' / sq ft'; };
-    return '<div style="font-size:11px;color:#8a8f85;text-transform:uppercase;letter-spacing:.03em;margin-bottom:6px;">Padding thickness</div>' +
+    return '<div style="font-size:11px;color:#20241f;text-transform:uppercase;letter-spacing:.03em;margin-bottom:6px;">Padding thickness</div>' +
       '<div style="display:flex;gap:10px;">' + opt('3.25', '3.25" thick', per('3.25')) + opt('2', '2" thick', per('2')) + '</div>';
   }
   function padQuoteHint() {
@@ -7767,13 +7801,13 @@
     var nonSwivel = Math.max(0, (Number(adv.bracketsQty) || 0) - (Number(adv.swivel360) || 0));
     var carabRec = Math.ceil(eyeboltSum() / 4);
     function sec(title, inner) { return '<div style="margin-bottom:18px;"><div style="font-family:\'Newsreader\',serif;font-size:16px;font-weight:600;color:#3d4a55;border-bottom:1px solid #e7e8e3;padding-bottom:6px;margin-bottom:12px;">' + title + '</div>' + inner + '</div>'; }
-    function num(key, label, min, max, extra, hint) { return '<div class="af" style="' + (extra || '') + '"><label style="display:block;font-size:11px;color:#8a8f85;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">' + label + '</label><input type="number" data-ak="' + key + '" value="' + adv[key] + '"' + (min != null ? ' min="' + min + '"' : '') + (max != null ? ' max="' + max + '"' : '') + ' style="width:100%;padding:8px 10px;border:1px solid #dcded7;border-radius:8px;font-size:14px;">' + (hint ? '<span class="muted" style="font-size:11px;">' + hint + '</span>' : '') + '</div>'; }
+    function num(key, label, min, max, extra, hint) { return '<div class="af" style="' + (extra || '') + '"><label style="display:block;font-size:11px;color:#20241f;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">' + label + '</label><input type="number" data-ak="' + key + '" value="' + adv[key] + '"' + (min != null ? ' min="' + min + '"' : '') + (max != null ? ' max="' + max + '"' : '') + ' style="width:100%;padding:8px 10px;border:1px solid #dcded7;border-radius:8px;font-size:14px;">' + (hint ? '<span class="muted" style="font-size:11px;">' + hint + '</span>' : '') + '</div>'; }
     function tog(key, label, hint) { return '<label style="display:flex;align-items:center;gap:9px;padding:8px 0;cursor:pointer;font-size:14px;border-bottom:1px solid #f2f3ef;"><input type="checkbox" data-ak="' + key + '"' + (adv[key] ? ' checked' : '') + ' style="width:17px;height:17px;flex:0 0 auto;"><span style="flex:1;"><b style="font-weight:600;">' + label + '</b>' + (hint ? '<span class="muted" style="font-size:12px;display:block;">' + hint + '</span>' : '') + '</span></label>'; }
-    function sel(key, label, opts) { return '<div class="af"><label style="display:block;font-size:11px;color:#8a8f85;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">' + label + '</label><select data-ak="' + key + '" style="width:100%;padding:8px 10px;border:1px solid #dcded7;border-radius:8px;font-size:14px;background:#fff;">' + opts.map(function (op) { return '<option value="' + op + '"' + (String(adv[key]) === String(op) ? ' selected' : '') + '>' + op + '</option>'; }).join('') + '</select></div>'; }
+    function sel(key, label, opts) { return '<div class="af"><label style="display:block;font-size:11px;color:#20241f;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">' + label + '</label><select data-ak="' + key + '" style="width:100%;padding:8px 10px;border:1px solid #dcded7;border-radius:8px;font-size:14px;background:#fff;">' + opts.map(function (op) { return '<option value="' + op + '"' + (String(adv[key]) === String(op) ? ' selected' : '') + '>' + op + '</option>'; }).join('') + '</select></div>'; }
     /** The part number under a hardware quantity — editable only when pre-approved. */
     function hwPartRow(key) {
       var p = ADV_HW_PARTS[key]; if (!p) return '';
-      var lab = 'font-size:10.5px;color:#8a8f85;letter-spacing:.02em;';
+      var lab = 'font-size:10.5px;color:#20241f;letter-spacing:.02em;';
       if (Array.isArray(p)) return '<div style="' + lab + 'margin-top:5px;">Part ' + p.map(function (x) { return '<code>' + esc(x) + '</code>'; }).join(' + ') + '</div>';
       if (!advOverridable) return '<div style="' + lab + 'margin-top:5px;">Part <code>' + esc(p) + '</code></div>';
       if (!(p in advOverridable)) return '<div style="' + lab + 'margin-top:5px;">Part <code>' + esc(p) + '</code> · fixed</div>';
@@ -7782,7 +7816,7 @@
         '<span style="' + lab + 'flex:0 0 auto;">Part</span>' +
         '<input data-ovr="' + esc(p) + '" value="' + esc(cur) + '" style="flex:1;min-width:0;padding:4px 7px;border:1px solid ' + (swapped ? '#c9a227' : '#dcded7') + ';border-radius:6px;font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">' +
         (swapped
-          ? '<button data-ovrclear="' + esc(p) + '" style="border:none;background:none;color:#8a8f85;cursor:pointer;font-size:11px;padding:2px 3px;flex:0 0 auto;">reset</button>'
+          ? '<button data-ovrclear="' + esc(p) + '" style="border:none;background:none;color:#20241f;cursor:pointer;font-size:11px;padding:2px 3px;flex:0 0 auto;">reset</button>'
           : '<span style="font-size:10px;color:#3f9d78;flex:0 0 auto;">pre-approved</span>') +
       '</div>';
     }
@@ -7792,7 +7826,7 @@
       var def = advDefaults[p];
       if (def == null) return '';
       var cur = Number(adv[key]) || 0;
-      return '<div style="font-size:10.5px;color:#8a8f85;margin-top:4px;">Catalog default ' + def +
+      return '<div style="font-size:10.5px;color:#20241f;margin-top:4px;">Catalog default ' + def +
         (cur !== def
           ? ' · <button data-hwdef="' + key + '" style="border:none;background:none;padding:0;color:#3d4a55;text-decoration:underline;cursor:pointer;font-size:10.5px;">use default</button>'
           : ' · applied') +
@@ -7802,7 +7836,7 @@
     function hwRollRow(key) {
       var r = ADV_HW_ROLLUP[key]; if (!r) return '';
       var q = Number(adv[key]) || 0; if (q <= 0) return '';
-      return '<div style="font-size:10.5px;color:#8a8f85;margin-top:3px;">Also adds ' +
+      return '<div style="font-size:10.5px;color:#20241f;margin-top:3px;">Also adds ' +
         r.map(function (x) { return (q * x.per) + '× <code>' + esc(x.part) + '</code>'; }).join(' + ') +
         ' into the H-1000 hardware kit</div>';
     }
@@ -7813,7 +7847,7 @@
     var html =
       '<div style="max-width:720px;margin:0 auto;background:#fbfbf9;border-radius:16px;box-shadow:0 24px 60px -20px rgba(32,36,31,.5);overflow:hidden;">' +
         '<div style="background:#3d4a55;color:#fff;padding:18px 24px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:2;">' +
-          '<div><div style="font-family:\'Newsreader\',serif;font-size:20px;font-weight:600;">Summit Adventure Series</div><div style="font-size:12px;color:#cdd6dc;">Answer the questions — the proposal builds itself</div></div>' +
+          '<div><div style="font-family:\'Newsreader\',serif;font-size:20px;font-weight:600;">Summit Adventure Series</div><div style="font-size:12px;color:#20241f;">Answer the questions — the proposal builds itself</div></div>' +
           '<button id="advX" style="border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.12);color:#fff;border-radius:8px;padding:7px 12px;cursor:pointer;">Cancel</button>' +
         '</div>' +
         '<div style="padding:22px 24px;">' +
@@ -7844,7 +7878,7 @@
               (adv.cargoNet8x6 ? '<div style="' + grid + 'margin:8px 0 4px;">' + num('cargoNet8x6Qty', "# of 8' x 6' nets", 1, 20) + '</div>' : '') +
               (adv.cargoNet10x8 || adv.cargoNet8x6
                 ? '<div style="margin-top:10px;padding:10px 12px;background:#f8f9f6;border:1px solid #e7e8e3;border-radius:9px;">' +
-                    '<div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:#8a8f85;margin-bottom:2px;">Comes with the net · prints under Cargo Net</div>' +
+                    '<div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:#20241f;margin-bottom:2px;">Comes with the net · prints under Cargo Net</div>' +
                     tog('cargoHwCarabiner', 'Heavy Duty Carabiners — 5/16" Spring Snap (50 Pack)', 'Part ' + CARGO_NET_CARABINER_PART) +
                     (adv.cargoHwCarabiner !== false ? '<div style="' + grid + 'margin:8px 0 4px;">' + num('cargoHwCarabinerQty', '# of carabiner packs', 1, 40) + '</div>' : '') +
                     tog('cargoHwVRing', 'V-Ring Bolt', 'Part ' + ADV_HW_PARTS.vRings) +
@@ -7878,7 +7912,7 @@
             (adv.brackets ? '<div style="' + stack + 'margin:10px 0 4px;">' +
               num('bracketsQty', '# of Saddle Brackets', 0, 8) +
               num('swivel360', '# of 360 Swivel / 180 Eye Bolts (≤ brackets)', 0, 8) +
-              '<div class="af"><label style="display:block;font-size:11px;color:#8a8f85;text-transform:uppercase;margin-bottom:4px;"># of 3/8" Non-Swivel Eye Bolts (auto)</label><input value="' + nonSwivel + '" disabled style="width:100%;padding:8px 10px;border:1px solid #eef0ea;border-radius:8px;font-size:14px;background:#f2f3ef;"></div>' +
+              '<div class="af"><label style="display:block;font-size:11px;color:#20241f;text-transform:uppercase;margin-bottom:4px;"># of 3/8" Non-Swivel Eye Bolts (auto)</label><input value="' + nonSwivel + '" disabled style="width:100%;padding:8px 10px;border:1px solid #eef0ea;border-radius:8px;font-size:14px;background:#f2f3ef;"></div>' +
             '</div>' : '') +
             '<div style="' + stack + 'margin-top:14px;border-top:1px solid #f2f3ef;padding-top:14px;">' +
               hwNum('forged', '# 1/2" Forged Eye Bolts (×6)', 0, 36) +
@@ -8013,7 +8047,7 @@
     if (!t) { alert('Could not reach the logic engine. Is the server running the latest build?'); return; }
     var ov = document.createElement('div');
     ov.style.cssText = 'position:fixed;inset:0;background:rgba(32,36,31,.5);z-index:80;overflow:auto;padding:24px 16px;';
-    function th(label, right) { return '<th style="text-align:' + (right ? 'right' : 'left') + ';padding:6px 8px;border-bottom:2px solid #3d4a55;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:#8a8f85;white-space:nowrap;">' + label + '</th>'; }
+    function th(label, right) { return '<th style="text-align:' + (right ? 'right' : 'left') + ';padding:6px 8px;border-bottom:2px solid #3d4a55;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:#20241f;white-space:nowrap;">' + label + '</th>'; }
     var rows = (t.rows || []).map(function (r) {
       return '<tr style="' + (r.rolledIntoH1000 ? 'background:#fdfcf7;' : '') + '">' +
         '<td style="padding:5px 8px;border-bottom:1px solid #eef0ea;font-size:11.5px;color:#5c6157;">' + esc(r.rule) + '</td>' +
@@ -8039,15 +8073,15 @@
       '<div style="max-width:1080px;margin:0 auto;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 24px 60px -20px rgba(32,36,31,.55);">' +
         '<div style="background:#3d4a55;color:#fff;padding:16px 22px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">' +
           '<div><div style="font-family:\'Newsreader\',serif;font-size:19px;font-weight:600;">Calculation trace — ' + esc(t.model) + '</div>' +
-            '<div style="font-size:12px;color:#cdd6dc;">Frame Dimensions: ' + esc(t.dimensions) + ' · every quantity, formula and catalog price behind this configuration</div></div>' +
+            '<div style="font-size:12px;color:#20241f;">Frame Dimensions: ' + esc(t.dimensions) + ' · every quantity, formula and catalog price behind this configuration</div></div>' +
           '<button id="trClose" style="border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.12);color:#fff;border-radius:8px;padding:7px 14px;cursor:pointer;">Close</button>' +
         '</div>' +
         '<div style="padding:18px 22px;">' +
           '<div style="display:flex;gap:22px;flex-wrap:wrap;padding-bottom:14px;border-bottom:1px solid #eef0ea;margin-bottom:14px;">' +
-            '<div><div style="font-size:10px;text-transform:uppercase;color:#8a8f85;letter-spacing:.05em;">Revenue</div><div style="font-size:17px;font-weight:600;">' + fmtMoney(t.totals.revenueMinor, 'USD') + '</div></div>' +
-            '<div><div style="font-size:10px;text-transform:uppercase;color:#8a8f85;letter-spacing:.05em;">COGS</div><div style="font-size:17px;font-weight:600;">' + fmtMoney(t.totals.cogsMinor, 'USD') + '</div></div>' +
-            '<div><div style="font-size:10px;text-transform:uppercase;color:#8a8f85;letter-spacing:.05em;">Margin</div><div style="font-size:17px;font-weight:600;color:' + (t.totals.marginMinor >= 0 ? '#2f7d5d' : '#9c3327') + ';">' + fmtMoney(t.totals.marginMinor, 'USD') + ' · ' + t.totals.marginPct + '%</div></div>' +
-            '<div><div style="font-size:10px;text-transform:uppercase;color:#8a8f85;letter-spacing:.05em;">Weight</div><div style="font-size:17px;font-weight:600;">' + (t.totals.weightLbs || 0).toLocaleString() + ' lbs</div></div>' +
+            '<div><div style="font-size:10px;text-transform:uppercase;color:#20241f;letter-spacing:.05em;">Revenue</div><div style="font-size:17px;font-weight:600;">' + fmtMoney(t.totals.revenueMinor, 'USD') + '</div></div>' +
+            '<div><div style="font-size:10px;text-transform:uppercase;color:#20241f;letter-spacing:.05em;">COGS</div><div style="font-size:17px;font-weight:600;">' + fmtMoney(t.totals.cogsMinor, 'USD') + '</div></div>' +
+            '<div><div style="font-size:10px;text-transform:uppercase;color:#20241f;letter-spacing:.05em;">Margin</div><div style="font-size:17px;font-weight:600;color:' + (t.totals.marginMinor >= 0 ? '#2f7d5d' : '#9c3327') + ';">' + fmtMoney(t.totals.marginMinor, 'USD') + ' · ' + t.totals.marginPct + '%</div></div>' +
+            '<div><div style="font-size:10px;text-transform:uppercase;color:#20241f;letter-spacing:.05em;">Weight</div><div style="font-size:17px;font-weight:600;">' + (t.totals.weightLbs || 0).toLocaleString() + ' lbs</div></div>' +
           '</div>' +
           warn +
           '<div style="font-weight:600;font-size:13.5px;margin:14px 0 6px;">Bill of materials</div>' +
@@ -8087,10 +8121,10 @@
     var hasAnswers = !!(pb && pb.meta && pb.meta.advAnswers);
     var ov = document.createElement('div');
     ov.style.cssText = 'position:fixed;inset:0;background:rgba(32,36,31,.5);z-index:80;overflow:auto;padding:24px 16px;';
-    function th(label, right) { return '<th style="text-align:' + (right ? 'right' : 'left') + ';padding:6px 8px;border-bottom:2px solid #3d4a55;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:#8a8f85;white-space:nowrap;">' + label + '</th>'; }
+    function th(label, right) { return '<th style="text-align:' + (right ? 'right' : 'left') + ';padding:6px 8px;border-bottom:2px solid #3d4a55;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:#20241f;white-space:nowrap;">' + label + '</th>'; }
     function td(v, right, mono) { return '<td style="padding:5px 8px;border-bottom:1px solid #eef0ea;font-size:11.5px;' + (right ? 'text-align:right;' : '') + (mono ? 'font-family:ui-monospace,monospace;font-size:11px;' : '') + '">' + v + '</td>'; }
     function stat(label, value, color) {
-      return '<div><div style="font-size:10px;text-transform:uppercase;color:#8a8f85;letter-spacing:.05em;">' + label + '</div>' +
+      return '<div><div style="font-size:10px;text-transform:uppercase;color:#20241f;letter-spacing:.05em;">' + label + '</div>' +
         '<div style="font-size:17px;font-weight:600;' + (color ? 'color:' + color + ';' : '') + '">' + value + '</div></div>';
     }
     var rows = comps.map(function (c) {
@@ -8112,7 +8146,7 @@
       '<div style="max-width:1120px;margin:0 auto;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 24px 60px -20px rgba(32,36,31,.55);">' +
         '<div style="background:#3d4a55;color:#fff;padding:16px 22px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">' +
           '<div><div style="font-family:\'Newsreader\',serif;font-size:19px;font-weight:600;">' + esc(line.sku || 'Kit') + ' — how this line was calculated</div>' +
-            '<div style="font-size:12px;color:#cdd6dc;">' + esc(line.name || '') + ' · ' + comps.length + ' part numbers · ' + pieces + ' pieces</div></div>' +
+            '<div style="font-size:12px;color:#20241f;">' + esc(line.name || '') + ' · ' + comps.length + ' part numbers · ' + pieces + ' pieces</div></div>' +
           '<div style="display:flex;gap:8px;align-items:center;">' +
             (hasAnswers ? '<button id="hwLive" style="border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.12);color:#fff;border-radius:8px;padding:7px 14px;cursor:pointer;">Re-run the live logic →</button>' : '') +
             '<button id="hwClose" style="border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.12);color:#fff;border-radius:8px;padding:7px 14px;cursor:pointer;">Close</button>' +
@@ -8326,12 +8360,12 @@
           '</select>' +
           '<input type="number" min="0" data-sfqty="' + i + '" value="' + r.qty + '" title="Quantity" style="width:74px;flex:0 0 auto;padding:8px 10px;border:1px solid #dcded7;border-radius:8px;font-size:14px;text-align:right;">' +
           (soar.rows.length > 1
-            ? '<button data-sfdel="' + i + '" style="border:none;background:none;color:#8a8f85;cursor:pointer;font-size:18px;line-height:1;padding:0 4px;flex:0 0 auto;" title="Remove">×</button>'
+            ? '<button data-sfdel="' + i + '" style="border:none;background:none;color:#20241f;cursor:pointer;font-size:18px;line-height:1;padding:0 4px;flex:0 0 auto;" title="Remove">×</button>'
             : '<span style="width:22px;flex:0 0 auto;"></span>') +
         '</div>' +
         (missing
           ? '<div style="font-size:11px;color:#b4522e;margin-top:3px;">Not in the catalog yet — import the Soar workbook so this prices.</div>'
-          : (price ? '<div style="font-size:11px;color:#8a8f85;margin-top:3px;">' + fmtMoney(price * (Number(r.qty) || 0), 'USD') + ' extended</div>' : '')) +
+          : (price ? '<div style="font-size:11px;color:#20241f;margin-top:3px;">' + fmtMoney(price * (Number(r.qty) || 0), 'USD') + ' extended</div>' : '')) +
       '</div>';
     }).join('');
 
@@ -8342,7 +8376,7 @@
         return '<div style="display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid #f2f3ef;' + (v <= 0 ? 'opacity:.55;' : '') + '">' +
           '<div style="flex:1;min-width:0;">' +
             '<div style="font-size:13.5px;font-weight:600;">' + esc(p.description || p.part) + '</div>' +
-            '<div style="font-size:11px;color:#8a8f85;margin-top:2px;"><code>' + esc(p.part) + '</code>' +
+            '<div style="font-size:11px;color:#20241f;margin-top:2px;"><code>' + esc(p.part) + '</code>' +
               (p.unitPriceMinor ? ' · ' + fmtMoney(p.unitPriceMinor, 'USD') + ' each' : '') +
               (p.matFor ? ' · mat for ' + (p.matFor === 'xl' ? "12' frames" : 'standard frames') : '') +
               (isDef ? ' · <span style="color:#3f9d78;">workbook default</span>' : ' · <span style="color:#b4522e;">overridden</span>') +
@@ -8356,7 +8390,7 @@
       '<div style="max-width:720px;margin:0 auto;background:#fbfbf9;border-radius:16px;box-shadow:0 24px 60px -20px rgba(32,36,31,.5);overflow:hidden;">' +
         '<div style="background:#3d4a55;color:#fff;padding:18px 24px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:2;">' +
           '<div><div style="font-family:\'Newsreader\',serif;font-size:20px;font-weight:600;">Summit Soar Series</div>' +
-          '<div style="font-size:12px;color:#cdd6dc;">Pick the frame, choose padding — the proposal builds itself</div></div>' +
+          '<div style="font-size:12px;color:#20241f;">Pick the frame, choose padding — the proposal builds itself</div></div>' +
           '<button id="soarX" style="border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.12);color:#fff;border-radius:8px;padding:7px 12px;cursor:pointer;">Cancel</button>' +
         '</div>' +
         '<div style="padding:22px 24px;">' +
@@ -8620,7 +8654,7 @@
           rows += '<div style="display:flex;align-items:center;margin-left:' + indent + 'px;padding:' + (isTier1 ? '14px 0 6px' : '8px 0 4px') + ';' + (isTier1 ? 'border-top:1px solid #e7e8e3;' : '') + '">' +
             headerCheck +
             '<span style="font-weight:600;font-size:' + (isTier1 ? '14.5px' : '13px') + ';color:#3d4a55;">' + esc(n.name) + '</span>' +
-            (kit ? '<span style="margin-left:8px;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;border:1px solid #dcded7;border-radius:999px;padding:2px 8px;">All parts required</span>' : '') +
+            (kit ? '<span style="margin-left:8px;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:#20241f;border:1px solid #dcded7;border-radius:999px;padding:2px 8px;">All parts required</span>' : '') +
           '</div>';
           return;
         }
@@ -8645,7 +8679,7 @@
       '<div style="max-width:640px;margin:0 auto;background:#fbfbf9;border-radius:16px;box-shadow:0 24px 60px -20px rgba(32,36,31,.5);overflow:hidden;">' +
         '<div style="background:#3d4a55;color:#fff;padding:18px 24px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:2;">' +
           '<div><div style="font-family:\'Newsreader\',serif;font-size:20px;font-weight:600;">' + esc(linePicker.lineName) + '</div>' +
-          '<div style="font-size:12px;color:#cdd6dc;">Check the items to add, set quantities, then insert</div></div>' +
+          '<div style="font-size:12px;color:#20241f;">Check the items to add, set quantities, then insert</div></div>' +
           '<button id="lpX" style="border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.12);color:#fff;border-radius:8px;padding:7px 12px;cursor:pointer;">Cancel</button>' +
         '</div>' +
         '<div style="padding:22px 24px;max-height:60vh;overflow:auto;">' + body + '</div>' +
@@ -9323,7 +9357,7 @@
     var toggle = '<button class="link-btn bomNotBilled" data-id="' + p.id + '" data-on="' + (nb ? '1' : '0') + '" ' +
       'title="' + (nb ? 'Marked as not on their invoice. Click to undo.' : 'They did not bill for this line at all.') + '" ' +
       'style="width:auto;padding:2px 6px;font-size:10.5px;margin-top:3px;' +
-      (nb ? 'color:' + RED + ';font-weight:600;' : 'color:#8a8f85;') + '">' +
+      (nb ? 'color:' + RED + ';font-weight:600;' : 'color:#20241f;') + '">' +
       (nb ? '✓ Not billed' : 'Not billed') + '</button>';
     if (nb) {
       return '<div style="text-align:right;"><span style="color:' + RED + ';font-weight:600;font-size:11.5px;">Not billed</span><br>' + toggle + '</div>';
@@ -9609,7 +9643,7 @@
             (s.shipToAddress
               ? '<div class="muted" style="font-size:11px;margin-top:4px;line-height:1.45;">' + esc(shipToAddressLines(s.shipToAddress).join(' · ')) + '</div>'
               : '') + '</div>' +
-          '<div><div class="k">Submission date</div><input class="secF" data-id="' + s.id + '" data-f="submittedOn" type="date" value="' + esc(dateVal) + '" style="' + bomFieldStyle(null, locked) + (placeholderDate ? 'color:#8a8f85;' : '') + '"' + dis + '>' +
+          '<div><div class="k">Submission date</div><input class="secF" data-id="' + s.id + '" data-f="submittedOn" type="date" value="' + esc(dateVal) + '" style="' + bomFieldStyle(null, locked) + (placeholderDate ? 'color:#20241f;' : '') + '"' + dis + '>' +
             (placeholderDate ? '<div class="muted" style="font-size:11px;margin-top:3px;">Today, until you confirm or change it</div>' : '') + '</div>' +
           '<div><div class="k">Delivery type</div><input class="secF" data-id="' + s.id + '" data-f="deliveryType" value="' + esc(s.deliveryType || '') + '" placeholder="e.g. Lift Gate" style="' + bomFieldStyle(null, locked) + '"' + dis + '></div>' +
           '<div><div class="k">Estimated shipment quote</div><input class="secF" data-id="' + s.id + '" data-f="shipmentQuote" value="' + esc(s.shipmentQuote || '') + '" placeholder="TBD" style="' + bomFieldStyle(null, locked) + '"' + dis + '>' +
@@ -10194,7 +10228,7 @@
             return '<tr style="border-top:1px solid #f2f3ef;' + (r.blocked ? 'opacity:.55;' : '') + '">' +
               '<td style="padding:7px 10px;">' +
                 (r.blocked
-                  ? '<span title="' + esc(r.blocked) + '" style="color:#8a8f85;">\u2014</span>'
+                  ? '<span title="' + esc(r.blocked) + '" style="color:#20241f;">\u2014</span>'
                   : '<input type="checkbox" class="crPick" data-id="' + esc(r.lineId) + '"' +
                     (chosen[r.lineId] ? ' checked' : '') + ' style="width:15px;height:15px;">') +
               '</td>' +
@@ -10714,7 +10748,7 @@
     var dateStr = function (v) { return v ? new Date(v).toLocaleDateString() : '—'; };
     var block = function (label, name, lines, contact, phone, email) {
       return '<div style="flex:1;min-width:200px;">' +
-        '<div style="font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;color:#8a8f85;margin-bottom:3px;">' + esc(label) + '</div>' +
+        '<div style="font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;color:#20241f;margin-bottom:3px;">' + esc(label) + '</div>' +
         '<div style="font-size:12.5px;line-height:1.5;">' +
           '<b>' + esc(name || '—') + '</b>' +
           (lines || []).map(function (l) { return '<br>' + esc(l); }).join('') +
@@ -10724,7 +10758,7 @@
         '</div></div>';
     };
     var field = function (label, value) {
-      return '<div><div style="font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;color:#8a8f85;">' + esc(label) + '</div>' +
+      return '<div><div style="font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;color:#20241f;">' + esc(label) + '</div>' +
         '<div style="font-size:12.5px;font-weight:600;">' + esc(value == null || value === '' ? '—' : value) + '</div></div>';
     };
     var cols = (all ? ['Vendor'] : []).concat(['Line #', 'Description', 'Qty', 'Powder color', 'Weight (lb)', 'Cost each', 'Total cost', 'Notes']);
@@ -10738,7 +10772,7 @@
         esc(l.powderColor || '—'), (Number(l.extendedWeightLbs) || 0).toFixed(2), money2(l.unitCostMinor), money2(l.extendedCostMinor), esc(l.vendorNotes || '')
       ]);
       var zeroed = l.quantity === 0;
-      return '<tr style="' + (zeroed ? 'color:#9a9f95;' : '') + '">' + cells.map(function (v, i) {
+      return '<tr style="' + (zeroed ? 'color:#20241f;' : '') + '">' + cells.map(function (v, i) {
         return '<td style="padding:5px 8px;border-bottom:1px solid #e7e8e3;font-size:10.5px;text-align:' + (i > rightFrom ? 'right' : 'left') + ';">' + v + '</td>';
       }).join('') + '</tr>';
     }).join('');
@@ -10783,7 +10817,7 @@
         field('Estimated shipment quote', doc.order.shipmentQuote || 'TBD') +
         field('Vendor terms', doc.vendor ? (doc.vendor.paymentTerms || '—') : '—') +
       '</div>' +
-      '<div style="font-size:9.5px;color:#8a8f85;margin:5px 0 0;">Total steel weight is fabricated steel only — it excludes hardware and crating.</div>' +
+      '<div style="font-size:9.5px;color:#20241f;margin:5px 0 0;">Total steel weight is fabricated steel only — it excludes hardware and crating.</div>' +
       // Lines
       '<table style="width:100%;border-collapse:collapse;margin-top:12px;"><thead><tr>' + thead + '</tr></thead><tbody>' + tbody +
       '<tr>' + totalCells.map(function (v, i) {
@@ -10920,7 +10954,7 @@
       var d = billByTxn[t.id] || {};
       var isEstimate = t.type === 'ESTIMATE';
       var sent = d.sentAt
-        ? '<b style="font-weight:600;color:#3f9d78;">Sent</b><div style="font-size:12px;color:#82877d;">' + esc(fmtStamp(d.sentAt)) +
+        ? '<b style="font-weight:600;color:#3f9d78;">Sent</b><div style="font-size:12px;color:#20241f;">' + esc(fmtStamp(d.sentAt)) +
           (d.sentToEmail ? '<br>' + esc(d.sentToEmail) : '') + (d.sentBy ? '<br>by ' + esc(d.sentBy) : '') + '</div>'
         : (isEstimate
             ? '<span class="muted">Not sent</span>'
@@ -10930,7 +10964,7 @@
         : (d.balanceMinor == null
             ? '<span class="muted">Not synced yet</span>'
             : qboStatusChip(d.qboStatus) +
-              '<div style="font-size:12px;color:#82877d;margin-top:3px;">' +
+              '<div style="font-size:12px;color:#20241f;margin-top:3px;">' +
               fmtMoney(d.paidMinor || '0', t.currency) + ' paid of ' + fmtMoney(d.qboTotalMinor || t.amountMinor, t.currency) +
               (Number(d.balanceMinor) > 0 ? '<br><b style="color:#20241f;">' + fmtMoney(d.balanceMinor, t.currency) + ' outstanding</b>' : '') +
               (d.dueDate ? '<br>Due ' + esc(fmtDate(d.dueDate)) : '') + '</div>');
@@ -10940,7 +10974,7 @@
       // it on Summit letterhead with its own payment link and follow-up schedule. A
       // send from here would reach the customer twice, from two systems, with two ways
       // to pay. The endpoints refuse it too; this only removes the temptation.
-      return '<tr>' + td('<b style="font-weight:600;">' + esc(qboTypeLabel(t.type)) + '</b><div style="font-size:12px;color:#82877d;">' + esc(t.qboDocNumber || t.qboId || '') + '</div>') +
+      return '<tr>' + td('<b style="font-weight:600;">' + esc(qboTypeLabel(t.type)) + '</b><div style="font-size:12px;color:#20241f;">' + esc(t.qboDocNumber || t.qboId || '') + '</div>') +
         td(sent) + td(moneyCell) +
         td('<div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;">' + acts.join('') + '</div>') + '</tr>';
     }).join('');
@@ -10948,7 +10982,7 @@
     var payRows = ((billing && billing.payments) || []).map(function (p) {
       return '<tr>' + td(esc(fmtDate(p.txnDate))) +
         td('<b style="font-weight:600;">' + fmtMoney(p.amountMinor, p.currency) + '</b>' +
-          (p.totalAmountMinor !== p.amountMinor ? '<div style="font-size:12px;color:#82877d;">of a ' + fmtMoney(p.totalAmountMinor, p.currency) + ' payment</div>' : '')) +
+          (p.totalAmountMinor !== p.amountMinor ? '<div style="font-size:12px;color:#20241f;">of a ' + fmtMoney(p.totalAmountMinor, p.currency) + ' payment</div>' : '')) +
         td(esc(p.method || '—')) + td(esc(p.referenceNumber || '—')) + td(esc(p.depositToAccount || '—')) + '</tr>';
     }).join('');
 
@@ -11000,13 +11034,13 @@
       (writeGate
         ? '<div style="background:#fdf6e3;border:1px solid #eadfbe;border-radius:10px;padding:11px 13px;font-size:12.5px;color:#8a6d1f;line-height:1.55;margin-bottom:10px;">' + writeGate + '</div>'
         : '') +
-      (pending.length ? '<div style="font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#8a8f85;margin:14px 0 6px;">Waiting to be created</div>' +
+      (pending.length ? '<div style="font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#20241f;margin:14px 0 6px;">Waiting to be created</div>' +
         tableShell(['Document', 'Status', 'Amount', ''], pendingRows, 4, '') : '') +
-      '<div style="font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#8a8f85;margin:16px 0 6px;">In QuickBooks</div>' +
+      '<div style="font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#20241f;margin:16px 0 6px;">In QuickBooks</div>' +
       tableShell(['Document', 'Delivery', 'Payment', ''], liveRows, 4, 'Nothing has been created in QuickBooks for this order yet.') +
-      (payRows ? '<div style="font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#8a8f85;margin:18px 0 6px;">Payments received</div>' +
+      (payRows ? '<div style="font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#20241f;margin:18px 0 6px;">Payments received</div>' +
         tableShell(['Date', 'Applied', 'Method', 'Reference', 'Deposited to'], payRows, 5, '') : '') +
-      (remRows ? '<div style="font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#8a8f85;margin:18px 0 6px;">Payment reminders</div>' +
+      (remRows ? '<div style="font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#20241f;margin:18px 0 6px;">Payment reminders</div>' +
         tableShell(['Sent', 'To', 'Subject', 'Balance then', 'Status'], remRows, 5, '') : '');
 
     var rf = document.getElementById('qboRefreeze');
@@ -11286,7 +11320,7 @@
         d.warnings.map(function (w) { return esc(w); }).join('<br>') + '</div>' : '') +
       '<table style="width:100%;border-collapse:collapse;font-size:13.5px;">' +
         '<thead><tr>' + ['', 'In this CRM', 'In QuickBooks', ''].map(function (h) {
-          return '<th style="text-align:left;padding:6px 10px;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:#8a8f85;font-weight:600;border-bottom:1px solid #cfd3ca;">' + h + '</th>';
+          return '<th style="text-align:left;padding:6px 10px;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:#20241f;font-weight:600;border-bottom:1px solid #cfd3ca;">' + h + '</th>';
         }).join('') + '</tr></thead><tbody id="ctxRows">' + rows + '</tbody></table>' +
       /**
        * Invoice contact, editable here.
@@ -11302,7 +11336,7 @@
       (canEditTax
         ? '<div style="border:1px solid #dcded7;border-radius:10px;padding:13px 14px;margin-top:14px;">' +
             '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px;">' +
-              '<div style="font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#8a8f85;font-weight:600;">Invoice contact</div>' +
+              '<div style="font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#20241f;font-weight:600;">Invoice contact</div>' +
               '<button type="button" class="link-btn" id="cxAddContact" style="width:auto;padding:5px 10px;font-size:12px;">+ Add contact</button>' +
             '</div>' +
             '<div id="cxContacts"></div>' +
@@ -11324,13 +11358,13 @@
        */
       (canEditTax
         ? '<div style="border:1px solid #dcded7;border-radius:10px;padding:13px 14px;margin-top:14px;">' +
-            '<div style="font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#8a8f85;font-weight:600;margin-bottom:9px;">Tax standing</div>' +
+            '<div style="font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#20241f;font-weight:600;margin-bottom:9px;">Tax standing</div>' +
             '<label style="display:flex;align-items:center;gap:8px;font-size:13.5px;cursor:pointer;">' +
               '<input type="checkbox" id="ctxExempt"' + (d.taxExempt ? ' checked' : '') + '>' +
               ' This customer is exempt from sales tax</label>' +
             '<div style="display:flex;gap:9px;align-items:flex-end;margin-top:11px;flex-wrap:wrap;">' +
               '<div style="flex:1 1 220px;">' +
-                '<div style="font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;font-weight:600;margin-bottom:5px;">Exemption / resale certificate no.</div>' +
+                '<div style="font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:#20241f;font-weight:600;margin-bottom:5px;">Exemption / resale certificate no.</div>' +
                 '<input id="ctxNum" value="' + esc(d.taxExemptId || '') + '" placeholder="As printed on the certificate" style="' + IN + '"' + (d.taxExempt ? '' : ' disabled') + '>' +
               '</div>' +
               '<button class="btn" id="ctxSave" style="width:auto;padding:10px 16px;">Save &amp; push to QuickBooks</button>' +
@@ -11530,7 +11564,7 @@
    */
   function auditRows(events) {
     if (!events || !events.length) return '<div class="placeholder" style="padding:20px;"><p class="muted" style="margin:0;">No events recorded.</p></div>';
-    return '<div class="card">' + events.map(function (e, i) { return '<div style="display:flex;gap:12px;padding:' + (i ? '10px' : '0') + ' 0 0;border-top:' + (i ? '1px solid #f2f3ef;margin-top:10px;' : 'none;') + 'font-size:13.5px;"><span style="color:#8a8f85;min-width:150px;">' + fmtDate(e.at) + '</span><span style="font-weight:500;">' + esc(e.action) + '</span></div>'; }).join('') + '</div>';
+    return '<div class="card">' + events.map(function (e, i) { return '<div style="display:flex;gap:12px;padding:' + (i ? '10px' : '0') + ' 0 0;border-top:' + (i ? '1px solid #f2f3ef;margin-top:10px;' : 'none;') + 'font-size:13.5px;"><span style="color:#20241f;min-width:150px;">' + fmtDate(e.at) + '</span><span style="font-weight:500;">' + esc(e.action) + '</span></div>'; }).join('') + '</div>';
   }
 
   /* --- Reusable Bill of Materials questions --- */
@@ -11752,7 +11786,7 @@
     var rows = (futCache.templates || []).map(function (t) {
       return '<tr>' +
         td('<div style="display:flex;gap:9px;align-items:baseline;">' +
-            '<span style="font-family:Georgia,serif;font-size:12px;font-weight:700;color:#8a8f85;">' + (t.step < 10 ? '0' + t.step : t.step) + '</span>' +
+            '<span style="font-family:Georgia,serif;font-size:12px;font-weight:700;color:#20241f;">' + (t.step < 10 ? '0' + t.step : t.step) + '</span>' +
             '<div><b style="font-weight:600;">' + esc(t.name) + '</b>' +
               (t.isBuiltIn ? '' : ' <span class="chip" style="font-size:10.5px;">Custom</span>') +
               '<div class="muted" style="font-size:12px;max-width:460px;line-height:1.45;">' + esc(t.subject) + '</div>' +
@@ -11824,7 +11858,7 @@
       '<div class="field"><label>Body</label>' +
         '<textarea id="futBody" rows="13" style="' + IN + 'resize:vertical;font-size:13px;line-height:1.6;">' + esc(t.body || '') + '</textarea>' +
         '<div class="muted" style="font-size:12px;margin-top:5px;line-height:1.55;">Blank line between paragraphs. Wrap the one question you want answered in <code>**double asterisks**</code> and it prints bold on its own line. The greeting and sign-off are added for you.</div></div>' +
-      '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin:14px 0 6px;">Guidance for the rep — never sent to the customer</div>' +
+      '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#20241f;margin:14px 0 6px;">Guidance for the rep — never sent to the customer</div>' +
       fieldRow('When to send', '<input id="futWhen" style="' + IN + '" value="' + v('whenToSend') + '">') +
       '<div style="display:flex;gap:8px;">' +
         '<div style="flex:1;">' + fieldRow('Objective', '<input id="futObj" style="' + IN + '" value="' + v('objective') + '">') + '</div>' +
@@ -12920,7 +12954,7 @@
       '<input class="esRole" value="' + esc(role) + '" placeholder="Role" style="' + IN + 'width:110px;flex:none;">' +
       '<input class="esName" value="' + esc(name || '') + '" placeholder="Name" style="' + IN + '">' +
       '<input class="esEmail" value="' + esc(email || '') + '" placeholder="Email" style="' + IN + '">' +
-      '<label style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:#5b6478;white-space:nowrap;flex:none;" title="Can see the document but is not asked to sign it">' +
+      '<label style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:#20241f;white-space:nowrap;flex:none;" title="Can see the document but is not asked to sign it">' +
       '<input type="checkbox" class="esViewOnly"' + (viewOnly ? ' checked' : '') + '> View only</label>' +
       (removable
         ? '<button type="button" class="link-btn esRemove" style="width:auto;padding:8px 10px;color:#9c3327;">✕</button>'
@@ -13016,20 +13050,20 @@
 
     var pv = openModal('Sign electronically',
       planNote +
-      '<div class="muted" style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;margin-bottom:6px;">Signers, in order</div>' +
+      '<div class="muted" style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#20241f;margin-bottom:6px;">Signers, in order</div>' +
       '<div id="esRows">' +
       esignRowHtml('Customer', dm ? dm.name : '', dm ? dm.email : '', false, false) +
       esignRowHtml('Summit', user.name || '', user.email || '', false, false) +
       '</div>' +
       '<button type="button" class="link-btn" id="esAddRow" style="width:auto;padding:7px 10px;font-size:12.5px;">+ Add signer</button>' +
-      '<div class="muted" style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;margin:16px 0 6px;">Documents to include, in order</div>' +
+      '<div class="muted" style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#20241f;margin:16px 0 6px;">Documents to include, in order</div>' +
       '<div id="esRenderings"></div>' +
       '<div style="margin-top:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
       '<input type="file" id="esRndFile" accept="application/pdf,image/png,image/jpeg" style="display:none;">' +
       '<button type="button" class="link-btn" id="esRndUploadBtn" style="width:auto;padding:6px 10px;font-size:12.5px;">+ Add one-off document…</button>' +
       '<span class="muted" id="esRndStatus" style="font-size:12px;"></span>' +
       '</div>' +
-      '<div class="muted" style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#8a8f85;margin:16px 0 6px;">Signing email</div>' +
+      '<div class="muted" style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#20241f;margin:16px 0 6px;">Signing email</div>' +
       fieldRow('Template', '<select id="esEmailTemplate" style="' + IN + '">' + emailTemplateOptions + '</select>') +
       fieldRow('Subject', '<input id="esSubject" style="' + IN + '" value="' + esc(plan.email ? plan.email.subject : '') + '">') +
       '<div class="field"><label>Body</label><textarea id="esMsg" rows="8" style="' + IN + 'resize:vertical;font-size:12.5px;line-height:1.5;font-family:ui-monospace,monospace;">' + esc(plan.email ? plan.email.html : '') + '</textarea></div>' +
@@ -13619,7 +13653,7 @@
         return '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:14px;padding:8px 0;border-top:1px solid #f2f3ef;font-size:13.5px;">' +
           '<span>' + esc(String(c.label)) + '</span>' +
           '<span style="font-family:ui-monospace,monospace;font-size:12.5px;white-space:nowrap;">' +
-            '<span style="color:#8a8f85;text-decoration:line-through;">' + esc(String(c.from)) + '</span>' +
+            '<span style="color:#20241f;text-decoration:line-through;">' + esc(String(c.from)) + '</span>' +
             ' &rarr; <b style="color:#9c3327;">' + esc(String(c.to)) + '</b>' +
             ' <span class="muted">' + esc(String(c.unit || '')) + '</span></span></div>';
       }).join('');
@@ -13632,7 +13666,7 @@
         '<input id="fxcWord" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="' + esc(word) + '" style="width:100%;margin-top:14px;padding:11px 13px;border:1px solid #dcded7;border-radius:9px;font-size:15px;font-family:ui-monospace,monospace;letter-spacing:.1em;">' +
         '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:20px;">' +
           '<button id="fxcCancel" style="border:1px solid #dcded7;background:#fff;border-radius:9px;padding:9px 16px;font-size:13px;color:#3d4a55;cursor:pointer;">Cancel</button>' +
-          '<button id="fxcGo" disabled style="border:1px solid #dcded7;background:#eef0ea;color:#9aa093;border-radius:9px;padding:9px 16px;font-size:13px;cursor:not-allowed;">Save change</button></div>';
+          '<button id="fxcGo" disabled style="border:1px solid #dcded7;background:#eef0ea;color:#20241f;border-radius:9px;padding:9px 16px;font-size:13px;cursor:not-allowed;">Save change</button></div>';
 
       // The same list the server records and emails, read before anything is written
       // so the warning and the record cannot disagree.
@@ -13967,7 +14001,7 @@
       var n = counts[m.id] || 0;
       return '<tr>' +
         td('<b style="font-weight:600;">' + esc(m.name) + '</b>' +
-          (m.isActive === false ? ' <span class="chip" style="font-size:10.5px;background:#f2f3ef;color:#8a8f85;">Inactive</span>' : '')) +
+          (m.isActive === false ? ' <span class="chip" style="font-size:10.5px;background:#f2f3ef;color:#20241f;">Inactive</span>' : '')) +
         td(n ? n + ' mapped part' + (n === 1 ? '' : 's') : '<span class="muted">None</span>') +
         td('<div style="display:flex;justify-content:flex-end;"><button class="vpOpen link-btn" data-id="' + m.id + '" style="width:auto;padding:6px 12px;">' + (n ? 'Edit' : 'Add') + '</button></div>') +
         '</tr>';
@@ -14613,7 +14647,7 @@
       fieldRow('Signature',
         '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">' +
           '<div id="upSigBox" style="width:150px;height:56px;border:1px solid #dfe3ec;border-radius:7px;background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;">' +
-            '<span id="upSigEmpty" style="font-size:11.5px;color:#8a8f85;">None saved</span>' +
+            '<span id="upSigEmpty" style="font-size:11.5px;color:#20241f;">None saved</span>' +
             '<img id="upSigImg" alt="" style="display:none;max-width:138px;max-height:46px;">' +
           '</div>' +
           '<div style="display:flex;gap:8px;align-items:center;">' +
@@ -14697,7 +14731,7 @@
       fieldRow('Current password', '<input id="pwCur" type="password" autocomplete="current-password" style="' + IN + '" required>') +
       fieldRow('New password', '<input id="pwNew" type="password" autocomplete="new-password" minlength="12" style="' + IN + '" required>') +
       fieldRow('Confirm new password', '<input id="pwNew2" type="password" autocomplete="new-password" minlength="12" style="' + IN + '" required>') +
-      '<div style="font-size:12px;color:#8a8f85;line-height:1.5;">At least 12 characters. Signing you out of every device once changed.</div>',
+      '<div style="font-size:12px;color:#20241f;line-height:1.5;">At least 12 characters. Signing you out of every device once changed.</div>',
       async function (close, fail) {
         var cur = document.getElementById('pwCur').value;
         var next = document.getElementById('pwNew').value;
@@ -14735,7 +14769,7 @@
           '<div>' +
             '<div class="k">Accounting</div>' +
             '<h2 style="font-size:19px;margin:2px 0 6px;">QuickBooks Online</h2>' +
-            '<div style="font-size:13.5px;color:#82877d;">' +
+            '<div style="font-size:13.5px;color:#20241f;">' +
               (s.configured
                 ? (connected
                   ? '<span class="dot ok"></span>Connected to the ' + esc(envLabel.toLowerCase()) + ' company.'
@@ -14747,7 +14781,7 @@
             '<span class="chip">' + esc(envLabel) + '</span>' +
             (s.productionWritesEnabled
               ? '<div style="margin-top:8px;font-size:12.5px;color:#c2452f;font-weight:600;">Live financial writes ENABLED</div>'
-              : '<div style="margin-top:8px;font-size:12.5px;color:#82877d;">Live writes disabled</div>') +
+              : '<div style="margin-top:8px;font-size:12.5px;color:#20241f;">Live writes disabled</div>') +
           '</div>' +
         '</div>' +
         (s.configured
