@@ -7909,8 +7909,13 @@
     var catalog = (window.SSGReferenceDocuments && window.SSGReferenceDocuments.list()) || [];
     var ordered = catalog.filter(function (d) { return keys.indexOf(d.key) !== -1; });
     if (!ordered.length) return '';
+    // Capped well under the default 60s request timeout: the first preview of a
+    // freshly-uploaded document pays a cold Chromium start server-side (see
+    // pdfRaster.ts) and this fetch runs before the preview overlay is shown at
+    // all (see previewProposalDoc), so a slow render must fail open quickly
+    // rather than leave Preview/Save-as-PDF looking like it did nothing.
     var results = await Promise.all(ordered.map(function (d) {
-      return authed('/reference-documents/' + encodeURIComponent(d.key) + '/pages')
+      return authed('/reference-documents/' + encodeURIComponent(d.key) + '/pages', { timeoutMs: 8000 })
         .then(function (r) { return r.ok ? r.json() : null; })
         .catch(function () { return null; });
     }));
@@ -7951,10 +7956,40 @@
     }
   }
 
-  async function previewProposalDoc(doc, printNow) {
+  /**
+   * A house/customer photo that 404s is meant to remove itself — see the
+   * `onerror="this.style.display='none'"` markup `img()` in
+   * proposal-front-matter.js writes — but that attribute is inert in this live
+   * page: the app's own Content-Security-Policy sends `script-src-attr 'none'`
+   * (src/app.ts), so the browser refuses to run it here and leaves a
+   * broken-image icon in the preview and in whatever gets printed from it
+   * instead. The exact same markup works unmodified in the server-rendered copy
+   * (render/pdf.ts's `page.setContent` has no CSP to enforce), so this only
+   * needs to run where CSP actually applies: the interactive preview. Handles
+   * an image that already failed before this ran (`complete` with no natural
+   * size) as well as one that fails later.
+   */
+  function hideBrokenPhotos(root) {
+    root.querySelectorAll('img[onerror]').forEach(function (im) {
+      if (im.complete && im.naturalWidth === 0) { im.style.display = 'none'; return; }
+      im.addEventListener('error', function () { im.style.display = 'none'; });
+    });
+  }
+
+  function previewProposalDoc(doc, printNow) {
     ensurePrintStyle();
     var html = proposalDocHtml(doc);
-    var refDocHtml = await referenceDocSheetsHtml(doc.meta);
+    // Filled in once referenceDocSheetsHtml resolves, in the background, below —
+    // NOT awaited here. This used to await it before the overlay was even
+    // created, so clicking Preview or Save as PDF opened nothing at all for
+    // however long that fetch took, worst case the browser's own request
+    // timeout (see `authed`'s REQUEST_TIMEOUT_MS): a proposal with a reference
+    // document selected pays a cold Chromium start server-side the first time
+    // (pdfRaster.ts) and could easily run several seconds — indistinguishable,
+    // from the button, from the feature not working at all. The proposal itself
+    // has nothing to do with whether a reference document is attached, so there
+    // is no reason to make it wait.
+    var refDocHtml = '';
     var ov = document.createElement('div');
     ov.id = 'propPreviewOverlay';
     ov.style.cssText = 'position:fixed;inset:0;background:#e7e8e3;z-index:60;overflow:auto;padding:24px 16px;';
@@ -7990,6 +8025,7 @@
     document.body.appendChild(ov);
     paginateProposalArea(ov);
     fixSheetPageBreaks(ov);
+    hideBrokenPhotos(ov);
     mountPreviewViewer(ov, ov);
 
     function wire() {
@@ -8005,6 +8041,7 @@
           ov.innerHTML = toolbarHtml() + proposalDocHtml(doc) + refDocHtml;
           paginateProposalArea(ov);
           fixSheetPageBreaks(ov);
+          hideBrokenPhotos(ov);
           mountPreviewViewer(ov, ov);
           ov.scrollTop = 0;
           wire();
@@ -8022,9 +8059,25 @@
       setTimeout(restore, 60000);
     }
     wire();
-    // Save as PDF goes straight through. One frame's delay so the overlay has laid
-    // out — the page-break pass measures real geometry and needs it.
-    if (printNow) setTimeout(firePrint, 120);
+    // Whichever reference documents (a W9, a certificate of insurance) this
+    // version has checked, fetched and appended in the background — see the
+    // comment on `refDocHtml` above for why this runs after the overlay is
+    // already open rather than before it exists. Re-runs the same pagination
+    // pass the initial render just did; both calls are cheap and idempotent
+    // (paginateProposalArea/fixSheetPageBreaks/mountPreviewViewer already run
+    // this way on every scope-toggle above).
+    var refDocsReady = referenceDocSheetsHtml(doc.meta).then(function (extra) {
+      if (!extra) return;
+      refDocHtml = extra;
+      ov.insertAdjacentHTML('beforeend', extra);
+      paginateProposalArea(ov);
+      fixSheetPageBreaks(ov);
+      mountPreviewViewer(ov, ov);
+    }).catch(function () {});
+    // Save as PDF waits for that (bounded to a few seconds — see
+    // referenceDocSheetsHtml's own timeout) so a selected reference document is
+    // actually part of what gets printed, not just of what to load next.
+    if (printNow) refDocsReady.then(function () { setTimeout(firePrint, 120); });
   }
 
   /**
