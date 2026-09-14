@@ -4624,39 +4624,13 @@
   }
 
   /**
-   * What Goldberg needs to price the crate, counted from the same lines the weight
-   * comes from.
-   *
-   * A welded leg is a vertical post: the frame rules make A-2245 the plain posts and
-   * A-2246 the ladder-bay ones, so the count is both together. The trolley tell is the
-   * rail — TR2000-A07 through A10 — which exists only when a trolley system is in the
-   * order.
-   *
-   * Parts arrive either as their own line or as a component under a kit line (an
-   * Adventure frame is one customer line carrying its real part numbers beneath it), so
-   * both are counted, and a component quantity is per parent unit. Optional lines are
-   * skipped for the same reason they are left out of the weight: nobody has bought them.
+   * # of Welded Legs and Trolley are no longer sent from here — the server derives
+   * both from the SAVED proposal version (see adventureFactsFromVersion in
+   * src/routes/freight.ts), never from whatever is live in this builder tab. A
+   * live tab can hold lines that were never saved or have since been edited away;
+   * trusting that snapshot is how a proposal on file with 4 legs put 6 on the
+   * board. Only the weight and the Project ID travel from here now.
    */
-  var FREIGHT_LEG_PARTS = { 'A-2245': 1, 'A-2246': 1 };
-  var FREIGHT_TROLLEY_PARTS = { 'TR2000-A07': 1, 'TR2000-A08': 1, 'TR2000-A09': 1, 'TR2000-A10': 1 };
-
-  function adventureFreightFacts(lines) {
-    var legs = 0, trolley = false;
-    (lines || []).forEach(function (l) {
-      if (!l || l.optional) return;
-      var qty = Number(l.quantity) || 0;
-      var sku = String(l.sku || '').trim().toUpperCase();
-      if (FREIGHT_LEG_PARTS[sku]) legs += qty;
-      if (FREIGHT_TROLLEY_PARTS[sku]) trolley = true;
-      (l.components || []).forEach(function (c) {
-        var part = String((c && c.part) || '').trim().toUpperCase();
-        var per = Number(c && c.qty) || 0;
-        if (FREIGHT_LEG_PARTS[part]) legs += per * (qty || 1);
-        if (FREIGHT_TROLLEY_PARTS[part]) trolley = true;
-      });
-    });
-    return { legs: legs, trolley: trolley, found: legs > 0 || trolley };
-  }
   async function requestFreight() {
     var item = freightItemId();
     if (!item) return alert('This proposal needs its Project ID — that is the monday.com deal item the weight is written to.');
@@ -4664,14 +4638,7 @@
     pb.meta.freightBusy = 'req'; renderBuilderKeepingFocus();
     var r = await authed('/proposals/' + pb.proposalId + '/freight-request', {
       method: 'POST',
-      body: (function () {
-        var f = adventureFreightFacts(pb.lines);
-        var b = { itemId: item, weightLb: Math.round((Number(t.weight) || 0) * 100) / 100 };
-        // Omitted entirely on a proposal with no Adventure content, so the server
-        // leaves both board columns alone rather than writing a 0 and a "No".
-        if (f.found) { b.weldedLegs = f.legs; b.trolley = f.trolley; }
-        return b;
-      })(),
+      body: { itemId: item, weightLb: Math.round((Number(t.weight) || 0) * 100) / 100 },
     });
     pb.meta.freightBusy = '';
     if (!r.ok) { renderBuilderKeepingFocus(); return alert('monday.com did not accept the request (' + r.status + '). The button stays red — nothing was written.'); }

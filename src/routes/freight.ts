@@ -80,13 +80,6 @@ const RequestSchema = z.object({
   weightLb: z.number().finite().min(0).max(1_000_000),
   /** Lines with no catalog weight — recorded so a low number is explainable later. */
   linesMissingWeight: z.number().int().min(0).optional(),
-  /**
-   * Legs and trolley as the builder counts them, from the same line list the weight
-   * comes from. Optional: an older client sends neither, and the version on file is
-   * counted instead.
-   */
-  weldedLegs: z.number().int().min(0).max(1000).optional(),
-  trolley: z.boolean().optional(),
 });
 
 /** "$1,234.56" / "1234.56" / "" → minor units, or null when there is no number. */
@@ -301,21 +294,13 @@ export function registerFreightRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const input = RequestSchema.parse(req.body ?? {});
 
-    // The builder counts from the same lines it weighed. Without those numbers (an
-    // older client), count the version on file rather than leaving the row silent.
-    // The Flex Pro Pack signal always comes from the version on file regardless —
-    // the client's legs/trolley count has no way to carry it, since a Flex proposal
-    // has neither.
-    const versionFacts = await adventureFactsFromVersion(id);
-    const facts: AdventureFacts =
-      input.weldedLegs != null || input.trolley != null
-        ? {
-            legs: input.weldedLegs ?? 0,
-            trolley: !!input.trolley,
-            flexProPack: versionFacts.flexProPack,
-            found: (input.weldedLegs ?? 0) > 0 || !!input.trolley || versionFacts.flexProPack,
-          }
-        : versionFacts;
+    // Always counted from the saved proposal version, never from whatever the
+    // builder happens to have in memory. A live builder tab can hold lines that
+    // were never saved, or have since been edited away — trusting that snapshot
+    // put 6 legs on the board for a proposal on file with 4. The version is the
+    // one thing Goldberg's request can actually be checked against later, so it
+    // is the only source this reads.
+    const facts: AdventureFacts = await adventureFactsFromVersion(id);
 
     let ok = false;
     let error: string | null = null;
