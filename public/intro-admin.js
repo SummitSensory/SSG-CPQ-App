@@ -118,6 +118,20 @@
         })
         .join('') +
       '<input type="file" id="iaFile" accept="image/jpeg,image/png,image/webp" style="display:none;">';
+    // The `onerror="this.style.display='none'"` markup in slotRow() is inert
+    // here: the app's Content-Security-Policy sends `script-src-attr 'none'`
+    // (src/app.ts), so the browser refuses to run an inline handler and a
+    // thumbnail whose file has since gone missing shows a broken-image icon
+    // instead of hiding.
+    host.querySelectorAll('img[onerror]').forEach(function (im) {
+      if (im.complete && im.naturalWidth === 0) {
+        im.style.display = 'none';
+        return;
+      }
+      im.addEventListener('error', function () {
+        im.style.display = 'none';
+      });
+    });
     bind(host, art, templates);
   }
 
