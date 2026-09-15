@@ -59,6 +59,18 @@
     TO_BE_DETERMINED: 'To be determined',
   };
 
+  var GST_HST_LABEL = {
+    '': 'No default (undetermined)',
+    STANDARD_RATE: 'Standard rate applies',
+    MEDICAL_DEVICE_RELIEF_CLAIMED: 'Relief as medical/assistive device',
+  };
+
+  var TARIFF_9979_LABEL = {
+    '': 'No default (undetermined)',
+    true: 'Claim by default',
+    false: "Don't claim by default",
+  };
+
   var FEE_TYPE_LABEL = {
     FLAT: 'Flat fee',
     PERCENTAGE: 'Percentage of entry value',
@@ -382,6 +394,28 @@
             s.defaultImporterOfRecord,
           ),
           'Recorded on each proposal when its customs entry is created, so a later change here does not restate an old quote.',
+        ) +
+        row(
+          'GST/HST treatment, by default',
+          select(
+            'defaultGstHstTreatment',
+            Object.keys(GST_HST_LABEL).map(function (k) {
+              return [k, GST_HST_LABEL[k]];
+            }),
+            s.defaultGstHstTreatment == null ? '' : s.defaultGstHstTreatment,
+          ),
+          'Whether Summit’s equipment qualifies for GST/HST relief as a medical or assistive device is a tax-advisor determination, not something this application calculates. Recorded on each proposal when its customs entry is created, so a later change here does not restate an old quote.',
+        ) +
+        row(
+          'Tariff item 9979.00.00 claim, by default',
+          select(
+            'defaultTariff9979Claimed',
+            Object.keys(TARIFF_9979_LABEL).map(function (k) {
+              return [k, TARIFF_9979_LABEL[k]];
+            }),
+            s.defaultTariff9979Claimed == null ? '' : String(s.defaultTariff9979Claimed),
+          ),
+          'Whether these goods qualify for relief under tariff item 9979.00.00 (goods for persons with disabilities) is a classification decision for Summit and its customs broker. Recorded on each proposal when its customs entry is created, so a later change here does not restate an old quote.',
         ) +
         row(
           'When the exchange rate cannot be fetched',
