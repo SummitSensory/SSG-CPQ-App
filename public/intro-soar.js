@@ -343,7 +343,10 @@
             'Engineer of Record',
             'Designed, load-analyzed, and sealed by a licensed professional engineer against recognized structural standards.',
           ],
-        ];
+          // No Engineer-of-Record certification claim on a Canadian proposal.
+        ].filter(function (sp) {
+          return !(v.canadian && sp[1] === 'Engineer of Record');
+        });
         var ways = [
           'Reposition the equipment as needs change',
           'Adapt spaces for different programs',
@@ -454,7 +457,12 @@
             '04',
             'Engineered for confidence',
             'Designed to support the activities happening beneath it &mdash; with engineering documentation to support the structure itself.',
-            'Every Summit Soar carries an <b style="font-weight:700;">Engineer of Record</b>, with powder-coated steel construction and a <b style="font-weight:700;">rated capacity of 2,000 pounds</b>.',
+            // Numbered 01-06 by literal, not by array position, so the Engineer-of-Record
+            // sentence is dropped from this entry rather than the entry being removed —
+            // removing it would leave the printed sequence skipping straight from 03 to 05.
+            v.canadian
+              ? 'Powder-coated steel construction with a <b style="font-weight:700;">rated capacity of 2,000 pounds</b>.'
+              : 'Every Summit Soar carries an <b style="font-weight:700;">Engineer of Record</b>, with powder-coated steel construction and a <b style="font-weight:700;">rated capacity of 2,000 pounds</b>.',
           ],
           [
             '05',

@@ -2971,6 +2971,17 @@
     }
     // The accepted version is what QuickBooks can be pointed at; there is at most one.
     var acceptedVersion = versions.filter(function (v) { return v.status === 'ACCEPTED'; })[0] || null;
+    // Canadian proposals drop financing entirely (no financing panel, no financing
+    // option in the send-documents dialog) — see the cross-border state on the
+    // latest version, the same shape proposal-document.js reads as d.crossBorder.
+    var cbState = null;
+    if (latest.id) {
+      try {
+        var rcb = await authed('/proposals/versions/' + latest.id + '/cross-border');
+        if (rcb.ok) cbState = await rcb.json();
+      } catch (e) {}
+    }
+    var isCanadian = !!(cbState && cbState.applicable);
     var actions = proposalActions(latest, user, lockedOrder);
     view.innerHTML =
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;"><button class="link-btn" id="propBack" style="width:auto;padding:7px 13px;">‹ Back to proposals</button>' +
@@ -3042,7 +3053,9 @@
       (acceptedVersion && hasRole(QBO_VIEW_ROLES, user.role)
         ? sectionBlock('QuickBooks', '<div id="qboBox"><div class="muted" style="padding:16px;">Loading…</div></div>')
         : '') +
-      sectionBlock('Financing options', '<div id="finBox"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+      (!isCanadian
+        ? sectionBlock('Financing options', '<div id="finBox"><div class="muted" style="padding:16px;">Loading…</div></div>')
+        : '') +
       (actions ? sectionBlock('Next Steps', '<div style="display:flex;gap:8px;flex-wrap:wrap;" id="propActions">' + actions + '</div>') : '');
     document.getElementById('propBack').addEventListener('click', function () { renderProposals(user); });
     var prst = document.getElementById('propRestore');
@@ -3052,7 +3065,7 @@
       });
     });
     var psd = document.getElementById('propSendDocs');
-    if (psd) psd.addEventListener('click', function () { openSendDocuments(p, finCache, 'customer'); });
+    if (psd) psd.addEventListener('click', function () { openSendDocuments(p, finCache, 'customer', isCanadian); });
     var pes = document.getElementById('propEsignSend');
     if (pes) pes.addEventListener('click', function () { openEsignSend(p, latest, user); });
     var pfu = document.getElementById('propFollowUp');
@@ -3104,7 +3117,7 @@
         status: 'ACCEPTED',
       }, user);
     }
-    loadFinancing(p, user);
+    if (!isCanadian) loadFinancing(p, user);
     if (lockedOrder) loadShippingCard(lockedOrder.id, 'shipBox');
     loadEsign(p, latest, user);
     loadRenderings(p, user);
@@ -5722,6 +5735,9 @@
         money('cfBroker', 'Brokerage', e.brokerFeeMinor) +
       '</div>' +
       '</div>' +
+      '<div style="margin-bottom:12px;"><label style="' + lbl + '">Tariff / customs classification code</label>' +
+        '<input id="cfTariffCode" placeholder="e.g. from a broker or a classification ruling" value="' + esc(e.tariffClassificationCode || '') + '" style="' + box + '">' +
+        '<div class="muted" style="font-size:11px;line-height:1.5;margin-top:4px;">Typed in, never inferred \u2014 this application does not classify goods or calculate duty from it. Enter the code your broker or a classification ruling gives you. Leave blank if it isn\u2019t known yet; a blank prints nothing.</div></div>' +
       '<div style="margin-bottom:12px;"><label style="' + lbl + '">Where these figures came from</label>' +
         '<input id="cfSource" placeholder="Broker quote reference, ruling, or a prior entry" value="' + esc(e.sourceReference || '') + '" style="' + box + '">' +
         '<div class="muted" style="font-size:11px;line-height:1.5;margin-top:4px;">Required before these can be approved \u2014 without it there is nothing to check them against later.</div></div>' +
@@ -5788,6 +5804,7 @@
       }
       var payload = Object.assign(amounts, simplePatch, {
         currency: document.getElementById('cfCur').value,
+        tariffClassificationCode: document.getElementById('cfTariffCode').value.trim() || null,
         sourceReference: document.getElementById('cfSource').value.trim() || null,
         importerOfRecord: document.getElementById('cfIor').value,
         includedInSellerTotal: document.getElementById('cfIncl').checked,
@@ -9034,7 +9051,11 @@
       frames: soar.rows.filter(function (r) { return (Number(r.qty) || 0) > 0; })
         .map(function (r) { return { part: r.part, qty: Number(r.qty) || 0 }; }),
       padding: !!soar.padding,
-      includeOverview: !!soar.includeOverview
+      includeOverview: !!soar.includeOverview,
+      // Drives whether the server appends the Engineer-of-Record copy to the Soar
+      // overview text (src/proposals/soarSeries.ts) — same signal the Canadian
+      // Customer toggle (~line 1567) already drives everywhere else.
+      canadian: !!(canState && canState.canadian)
     };
     // Only send a quantity the rep actually typed, so the server applies its own
     // workbook default otherwise and the two can never drift apart.
@@ -13199,14 +13220,19 @@
    *
    * `preset` chooses what it opens with — 'customer', 'financing' (customer, sheet
    * only) or 'partner' (Ryan Capital).
+   *
+   * `canadian` (only ever true from the main "Send documents…" button on a Canadian
+   * proposal — the other two call sites are unreachable there, since loadFinancing
+   * never runs) drops financing from the dialog entirely: no financing option to
+   * pick, checked or not.
    */
-  async function openSendDocuments(p, fin, preset) {
+  async function openSendDocuments(p, fin, preset, canadian) {
     var ctx = { contacts: [], partnerEmail: 'ckinsey@ryancapital.com', history: [] };
     try { var rc = await authed('/proposals/' + p.id + '/send-context'); if (rc.ok) ctx = await rc.json(); } catch (e) {}
 
     var toPartner = preset === 'partner';
     var wantProposal = preset !== 'financing';
-    var wantFinancing = preset === 'financing' || preset === 'partner';
+    var wantFinancing = (preset === 'financing' || preset === 'partner') && !canadian;
     var hasFinancing = !!(fin && fin.quote && fin.quote.terms && fin.quote.terms.length);
     var dm = ctx.contacts.filter(function (c) { return c.isDecisionMaker; })[0] || ctx.contacts[0];
     var defaultTo = toPartner ? ctx.partnerEmail : (dm ? dm.email : '');
@@ -13249,9 +13275,11 @@
         'Attaches the documents as PDFs. Replies come back to your orders inbox.</div>' +
       '<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px;">' +
         check('sdProp', wantProposal, 'Proposal', 'The customer document, exactly as the preview shows it.') +
-        check('sdFin', wantFinancing && hasFinancing, 'Financing options',
-          hasFinancing ? 'Monthly payments and the Section 179 position, calculated from this proposal.' : 'Not available until the proposal has a saved price.',
-          !hasFinancing) +
+        (!canadian
+          ? check('sdFin', wantFinancing && hasFinancing, 'Financing options',
+              hasFinancing ? 'Monthly payments and the Section 179 position, calculated from this proposal.' : 'Not available until the proposal has a saved price.',
+              !hasFinancing)
+          : '') +
       '</div>' +
       fieldRow('To', '<input id="sdTo" value="' + esc(defaultTo) + '" placeholder="name@company.com" style="' + IN + '">' + contactChips) +
       fieldRow('Cc', '<input id="sdCc" placeholder="Optional — comma separated" style="' + IN + '">') +
@@ -13260,7 +13288,8 @@
       histHtml,
       async function (close, showErr) {
         var wantP = document.getElementById('sdProp').checked;
-        var wantF = document.getElementById('sdFin').checked;
+        var sdFinEl = document.getElementById('sdFin');
+        var wantF = !!(sdFinEl && sdFinEl.checked);
         if (!wantP && !wantF) return showErr('Choose at least one document to send.');
         var to = document.getElementById('sdTo').value.trim();
         if (!to) return showErr('Give a recipient.');

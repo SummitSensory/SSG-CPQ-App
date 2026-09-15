@@ -85,7 +85,11 @@
         <div style="flex:1;"></div>
         <div style="width:54px;height:3px;background:#d02030;"></div>
         <div style="font-family:'Newsreader',Georgia,serif;font-size:40px;font-weight:700;color:#203060;letter-spacing:-.025em;line-height:1.22;margin-top:20px;max-width:620px;">Engineered for Movement. Designed for Limitless Possibilities.</div>
-        <div style="font-size:15px;color:#4b5468;line-height:1.65;margin-top:16px;max-width:560px;">Every Summit structure is free-standing and carries an Engineer of Record — designed and load-analyzed by a licensed professional engineer, and sealed against recognized structural design standards.</div>
+        ${
+          v.canadian
+            ? ''
+            : `<div style="font-size:15px;color:#4b5468;line-height:1.65;margin-top:16px;max-width:560px;">Every Summit structure is free-standing and carries an Engineer of Record — designed and load-analyzed by a licensed professional engineer, and sealed against recognized structural design standards.</div>`
+        }
         <div style="height:32px;"></div>
         <div style="font-family:'Newsreader',Georgia,serif;font-size:29px;font-weight:600;color:#20241f;letter-spacing:.02em;">${v.model}</div>
         <div style="font-size:17px;color:#4b5468;margin-top:4px;">${v.org}</div>
@@ -326,7 +330,10 @@
         return `<div class="ssg-fm-page" style="width:816px;height:1056px;flex:none;background:#fff;border-bottom:10px solid #203060;box-sizing:border-box;display:flex;flex-direction:column;overflow:hidden;color:#20241f;">
       <div style="flex:1;padding:52px 58px 30px;box-sizing:border-box;display:flex;flex-direction:column;">
 
-        <div style="display:flex;gap:34px;align-items:flex-start;">
+        ${
+          v.canadian
+            ? ''
+            : `<div style="display:flex;gap:34px;align-items:flex-start;">
           <div style="flex:1;min-width:0;">
             <div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.16em;color:#d02030;font-weight:700;">Engineering</div>
             <div style="font-family:'Newsreader',Georgia,serif;font-size:32px;font-weight:700;color:#203060;letter-spacing:-.026em;line-height:1.16;margin-top:12px;">Amazing Therapy Starts With a Strong Foundation.</div>
@@ -336,7 +343,8 @@
             <div style="font-size:12px;color:#20241f;line-height:1.7;margin-top:8px;">But when an organization invests in a large therapy structure, versatility alone is not enough. The system also needs to inspire confidence in the people responsible for approving, installing, maintaining, and using it.</div>
             <div style="font-size:12px;color:#203060;font-weight:600;line-height:1.7;margin-top:8px;">That is why engineering is an integral part of the Summit Adventure Series.</div>
           </div>
-        </div>
+        </div>`
+        }
 
         <div style="display:flex;gap:16px;margin-top:30px;align-items:stretch;">
 
@@ -355,10 +363,14 @@
           </div>
 
           <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:16px;">
-            <div style="border:1px solid #dfe3ec;border-top:2.5px solid #203060;padding:16px 18px;box-sizing:border-box;">
+            ${
+              v.canadian
+                ? ''
+                : `<div style="border:1px solid #dfe3ec;border-top:2.5px solid #203060;padding:16px 18px;box-sizing:border-box;">
               <div style="font-family:'Newsreader',Georgia,serif;font-size:16px;font-weight:700;color:#203060;line-height:1.3;">Third-Party Engineering</div>
               <div style="font-size:11.5px;color:#20241f;line-height:1.68;margin-top:7px;text-wrap:pretty;">Summit Sensory Gym incorporates third-party engineering review/approval into the Adventure Series program where applicable, providing another level of professional confidence in the structural system.</div>
-            </div>
+            </div>`
+            }
             <div style="border:1px solid #dfe3ec;border-top:2.5px solid #203060;padding:16px 18px;box-sizing:border-box;flex:1;">
               <div style="font-family:'Newsreader',Georgia,serif;font-size:16px;font-weight:700;color:#203060;line-height:1.3;">Designed for Professional Environments</div>
               <div style="font-size:11.5px;color:#20241f;line-height:1.68;margin-top:7px;text-wrap:pretty;">The system is intended for frequent use within:</div>

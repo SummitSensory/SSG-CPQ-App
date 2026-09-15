@@ -53,6 +53,12 @@ const CustomsPatchSchema = z.object({
   includedInSellerTotal: z.boolean().optional(),
   notes: z.string().trim().max(2000).nullable().optional(),
   /**
+   * Free text only — no format/pattern validation. This application does not
+   * classify goods or compute a duty from it (see the header comment on
+   * customsEntry.ts), and validating a format would be a step toward asserting one.
+   */
+  tariffClassificationCode: z.string().trim().max(100).nullable().optional(),
+  /**
    * Percent entry. The rates arrive as decimal percentages ("13", "9.975") and are
    * stored as thousandths of a percent, so the arithmetic downstream is integer only —
    * a float rate is what makes a total fail to reconcile by a cent.
@@ -122,6 +128,14 @@ const SettingsSchema = z.object({
   requireCustomsReviewBeforeFinal: z.boolean().optional(),
   requireTaxReviewBeforeFinal: z.boolean().optional(),
   proposalValidityDays: z.number().int().min(1).max(365).optional(),
+  /**
+   * Section B offerings on a Canadian proposal — admin-configurable per directive 8
+   * of the Canadian-proposal redesign, default off, matching today's business
+   * decision not to offer these on a Canadian job.
+   */
+  offerOnSiteAssembly: z.boolean().optional(),
+  offerClinicalTraining: z.boolean().optional(),
+  offerAnnualInspectionAgreement: z.boolean().optional(),
 });
 
 const dateOnly = (iso: string): Date => new Date(`${iso}T00:00:00Z`);
