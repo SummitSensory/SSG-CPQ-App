@@ -3908,6 +3908,14 @@ model ProposalCustomsEntry {
   /// they appear in the separately-payable section and are excluded from the
   /// amount payable to SSG.
   includedInSellerTotal Boolean            @default(false)
+  /// The customs/tariff classification code for the goods on this proposal, typed in
+  /// by a person. There is no tariff calculator in this application — see the header
+  /// comment on customsEntry.ts — so this field is never inferred, parsed, validated
+  /// against a tariff schedule, or used to compute a duty. It exists only so the code
+  /// Summit was given can travel with the proposal and print on the document. Entering,
+  /// and standing behind, the correct code is Summit's responsibility, not the
+  /// software's.
+  tariffClassificationCode String?
   enteredById           String?
   enteredAt             DateTime?
   approvedById          String?
@@ -3973,6 +3981,16 @@ model CrossBorderSetting {
   requireCustomsReviewBeforeFinal Boolean               @default(true)
   requireTaxReviewBeforeFinal     Boolean               @default(true)
   proposalValidityDays            Int                   @default(30)
+  /// Whether Summit offers on-site assembly on a Canadian proposal. Default off,
+  /// matching today's business decision — see directive 8 of the Canadian-proposal
+  /// redesign: items with multiple choices or logic belong in the admin tab, not
+  /// hardcoded into the document.
+  offerOnSiteAssembly             Boolean               @default(false)
+  /// Whether Summit offers clinical training on a Canadian proposal. Default off.
+  offerClinicalTraining           Boolean               @default(false)
+  /// Whether Summit offers an annual inspection/service agreement on a Canadian
+  /// proposal. Default off.
+  offerAnnualInspectionAgreement  Boolean               @default(false)
   updatedById                     String?
   createdAt                       DateTime              @default(now())
   updatedAt                       DateTime              @updatedAt

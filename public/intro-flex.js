@@ -198,7 +198,11 @@
           '<div style="font-family:' +
           SERIF +
           ';font-size:19px;font-weight:600;color:#20241f;line-height:1.4;margin-top:14px;max-width:600px;">Summit Flex: Universal Exercise Unit</div>' +
-          '<div style="font-size:14.5px;color:#4b5468;line-height:1.68;margin-top:12px;max-width:596px;text-wrap:pretty;">Unleash your patient&rsquo;s potential, one movement at a time. The Summit Flex is a versatile therapy tool designed to help individuals build strength, improve mobility, and develop functional movement skills &mdash; professionally designed, load-analyzed, and carrying an Engineer of Record.</div>' +
+          '<div style="font-size:14.5px;color:#4b5468;line-height:1.68;margin-top:12px;max-width:596px;text-wrap:pretty;">Unleash your patient&rsquo;s potential, one movement at a time. The Summit Flex is a versatile therapy tool designed to help individuals build strength, improve mobility, and develop functional movement skills' +
+          (v.canadian
+            ? '.'
+            : ' &mdash; professionally designed, load-analyzed, and carrying an Engineer of Record.') +
+          '</div>' +
           '<div style="height:28px;"></div>' +
           // The customer name, in the same treatment the other templates use.
           '<div style="font-size:17px;color:#4b5468;">' +
@@ -273,7 +277,9 @@
           ';font-size:15px;line-height:1.44;color:#203060;">The structure stays the same. What the clinician can create within it continually changes.</div>' +
           '<p style="' +
           p +
-          '">When patients are being supported from a structure, the engineering behind that structure matters. Summit Flex is not simply fabricated equipment accompanied by a manufacturer&rsquo;s load claim. The system has been professionally designed and load-analyzed, carries an Engineer of Record, and is fabricated in accordance with the engineered drawing set. Clinical versatility should never come at the expense of structural confidence.</p>' +
+          '">When patients are being supported from a structure, the engineering behind that structure matters. Summit Flex is not simply fabricated equipment accompanied by a manufacturer&rsquo;s load claim. The system has been professionally designed and load-analyzed, ' +
+          (v.canadian ? '' : 'carries an Engineer of Record, ') +
+          'and is fabricated in accordance with the engineered drawing set. Clinical versatility should never come at the expense of structural confidence.</p>' +
           '<p style="' +
           p +
           '">The Summit Flex proposed for ' +
@@ -362,7 +368,13 @@
       },
 
       // 4 · the engineering — a navy band, then the review record and a detail photo
+      //
+      // The whole page makes the Engineer-of-Record certification claim (the facts
+      // grid, the badge image, the banner copy), so on a Canadian proposal it is
+      // dropped as a unit rather than edited piecemeal — an empty page contributes
+      // nothing to the merged intro, one page shorter than usual.
       function (v, art, h) {
+        if (v.canadian) return '';
         var facts = [
           [
             'Engineer of Record',

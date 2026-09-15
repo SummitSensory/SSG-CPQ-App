@@ -440,10 +440,6 @@
     if (!cbIsCanadian(d)) return '';
     var cb = d.crossBorder;
     var fx = cb.fx || {};
-    var res = cb.result;
-    var ior = ((res && res.lines) || []).some(function (l) {
-      return l.payableTo === 'CUSTOMS_OR_BROKER';
-    });
 
     var para = function (title, text) {
       return '<div style="margin-bottom:6px;"><b>' + esc(title) + '</b> ' + text + '</div>';
@@ -484,35 +480,13 @@
       ),
       para(
         'Responsibility for Border Charges.',
-        'Except for any amount expressly identified on this proposal as fixed and included in the total payable to Summit Sensory Gym, the customer is responsible for all customs duties, tariffs, surtaxes, safeguard and anti-dumping measures, import taxes, brokerage charges, storage, demurrage, examination and inspection fees, disbursements and penalties assessed on the importation of the goods, together with any increase in those amounts arising after the proposal date. Summit Sensory Gym has no control over the classification, valuation or rate applied by the Canada Border Services Agency or by the customs broker, does not act as the importer of record unless this proposal expressly states otherwise, and is not liable for any such charge, for any increase in one, or for delay, storage or additional cost arising from a customs examination, a re-determination of classification or origin, or a change in law. Where Summit Sensory Gym advances any such amount on the customer\u2019s behalf, it is reimbursable in full.',
+        'Except for any amount expressly identified on this proposal as fixed and included in the total payable to Summit Sensory Gym, the customer is responsible for all customs duties, tariffs, surtaxes, safeguard and anti-dumping measures, import taxes, brokerage charges, storage, demurrage, examination and inspection fees, disbursements and penalties assessed on the importation of the goods, together with any increase in those amounts arising after the proposal date. Summit Sensory Gym has no control over the classification, valuation or rate applied by the Canada Border Services Agency or by the customs broker and is not liable for any such charge, for any increase in one, or for delay, storage or additional cost arising from a customs examination, a re-determination of classification or origin, or a change in law. Where Summit Sensory Gym advances any such amount on the customer\u2019s behalf, it is reimbursable in full.',
       ),
       para(
         'CUSMA Treatment.',
         'Preferential tariff treatment under the Canada\u2013United States\u2013Mexico Agreement applies only when the goods satisfy the applicable rules of origin and the required origin documentation is available and accepted. Shipment from the United States does not, by itself, establish eligibility for preferential tariff treatment.',
       ),
     ];
-
-    if (ior) {
-      out.push(
-        para(
-          'Importer of Record.',
-          'Unless otherwise stated in this proposal, the customer will serve as the importer of record and will be responsible for customs clearance, importer registration, permits, duties, tariffs, import taxes, brokerage, disbursement fees, bond charges, inspections, storage, and other charges associated with importing the goods into Canada. Any such amounts shown in this proposal are estimates and are not included in the amount payable to Summit Sensory Gym unless expressly stated.',
-        ),
-      );
-      out.push(
-        para(
-          'Estimated Import Taxes.',
-          'Any import GST, provincial tax, harmonized tax, or other import tax identified in this proposal is an estimate for budgeting purposes and is not collected by Summit Sensory Gym unless expressly stated otherwise. Final import taxes may be assessed and collected by the Canada Border Services Agency, the customs broker, the carrier, or another governmental authority. The customer is responsible for the final assessed amount.',
-        ),
-      );
-    } else {
-      out.push(
-        para(
-          'Importer of Record and Reconciliation.',
-          'Summit Sensory Gym will serve as the importer of record only where expressly stated in this proposal. Estimated customs duties, tariffs, import taxes, and brokerage charges are based on information available on the proposal date. These amounts may be reconciled to the actual amounts assessed at importation. Any additional amount or credit resulting from that reconciliation will be reflected on a supplemental invoice or credit, subject to the terms of this proposal.',
-        ),
-      );
-    }
 
     out.push(
       para(
@@ -712,7 +686,11 @@
         // The heading and its "· OPTIONAL" tag print as one line, never two: the tag is
         // part of the tier name, and wrapped below it read as a second heading. The name
         // column is a fixed width, so a long name steps the type down a size instead.
-        var headLen = (tc(stripOptional(l.name)) + (l.optional ? ' · OPTIONAL' : '')).length;
+        // A Canadian proposal drops the tag entirely — Summit does not present the
+        // customer a configuration choice on those documents. `l.optional` itself is
+        // untouched; only the printed tag is suppressed.
+        var showOptional = l.optional && !cbIsCanadian(d);
+        var headLen = (tc(stripOptional(l.name)) + (showOptional ? ' · OPTIONAL' : '')).length;
         var headFs = headLen > 46 ? '10px' : headLen > 40 ? '11px' : '12px';
         var headLs = headLen > 40 ? '.06em' : '.1em';
         body +=
@@ -723,7 +701,7 @@
           headLs +
           ';text-transform:uppercase;color:#203060;white-space:nowrap;">' +
           esc(tc(stripOptional(l.name))) +
-          (l.optional ? ' <span style="font-weight:400;color:#9aa1b0;">· OPTIONAL</span>' : '') +
+          (showOptional ? ' <span style="font-weight:400;color:#9aa1b0;">· OPTIONAL</span>' : '') +
           '</td>' +
           '<td colspan="4" style="padding:7px 10px 4px;font-size:11px;color:#5b6478;vertical-align:bottom;">' +
           (l.description ? esc(l.description) : '') +
@@ -773,6 +751,13 @@
         return;
       }
       var amt = (Number(l.quantity) || 0) * (Number(l.rateMinor) || 0);
+      // On a Canadian proposal a bundle-child row (the '— ' component lines under a
+      // priced parent, see isBundleChild) prints "Included" instead of its own
+      // Rate/Amount figures, mirroring the reference template's Configuration
+      // Schedule. The parent's own priced line, and the group subtotal, are
+      // untouched — only the bundle's zero-rated component rows change how they
+      // print, not what they're worth.
+      var isIncluded = cbIsCanadian(d) && isBundleChild(l);
       var indent = lineIndent();
       // The freight-undetermined note is a sentence, not a product description, so it
       // runs the width of the specification columns instead of wrapping three times
@@ -802,12 +787,12 @@
         '<td style="padding:2px 10px;' +
         rowRule +
         'font-size:11px;text-align:right;vertical-align:top;">' +
-        fmtMoney(l.rateMinor, '') +
+        (isIncluded ? '' : fmtMoney(l.rateMinor, '')) +
         '</td>' +
         '<td style="padding:2px 0 2px 10px;' +
         rowRule +
         'font-size:11px;text-align:right;vertical-align:top;font-weight:700;color:#203060;">' +
-        fmtMoney(amt, '') +
+        (isIncluded ? 'Included' : fmtMoney(amt, '')) +
         '</td></tr>';
       // Prose belongs to the whole row, not to the name column: a description or a
       // freight sentence runs the full width of the table rather than wrapping three
@@ -1024,9 +1009,20 @@
       (m.showProjectId !== false && m.projectId
         ? '<div>Project ID: <b style="color:#20241f;">' + esc(m.projectId) + '</b></div>'
         : '') +
-      '<div>Total Weight: <b style="color:#20241f;">' +
-      (Number(t.weight) || 0).toLocaleString() +
-      ' lbs</b></div>' +
+      // Weight is not shown to a Canadian customer (a pure presentation
+      // suppression — internal/BOM/freight weight data is untouched). The same
+      // header slot instead prints the human-entered tariff classification code,
+      // when one has been entered — see tariffClassificationCode on
+      // ProposalCustomsEntry / CrossBorderState. Never inferred or computed here.
+      (cbIsCanadian(d)
+        ? d.crossBorder.tariffClassificationCode
+          ? '<div>Tariff Classification: <b style="color:#20241f;">' +
+            esc(d.crossBorder.tariffClassificationCode) +
+            '</b></div>'
+          : ''
+        : '<div>Total Weight: <b style="color:#20241f;">' +
+          (Number(t.weight) || 0).toLocaleString() +
+          ' lbs</b></div>') +
       '</div>' +
       '</div>' +
       '</div>' +

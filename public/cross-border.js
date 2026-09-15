@@ -429,6 +429,19 @@
             check('allowCadPayment', s.allowCadPayment, 'Accept payment in CAD'),
           'Turning a gate off lets a Canadian proposal go out with unconfirmed border charges on it.',
         ) +
+        row(
+          'Services offered on Canadian proposals',
+          check('offerOnSiteAssembly', s.offerOnSiteAssembly, 'On-site assembly') +
+            '<div style="height:8px;"></div>' +
+            check('offerClinicalTraining', s.offerClinicalTraining, 'Clinical training') +
+            '<div style="height:8px;"></div>' +
+            check(
+              'offerAnnualInspectionAgreement',
+              s.offerAnnualInspectionAgreement,
+              'Annual inspection / service agreement',
+            ),
+          'Off by default. Summit does not currently offer these on a Canadian job — switch one on only once there is a real, priced way to put it on the proposal.',
+        ) +
         '<div style="display:flex;gap:8px;align-items:center;margin-top:16px;">' +
         '<button class="link-btn" data-act="saveSettings" style="' +
         BTN +

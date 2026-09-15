@@ -51,6 +51,13 @@ export function normalizePercent(v: unknown): string {
 export interface CrossBorderState {
   applicable: boolean;
   jurisdiction: Jurisdiction;
+  /**
+   * The customs/tariff classification code, typed in by a person on the customs
+   * entry. Never inferred, parsed, or computed — see the header comment on
+   * customsEntry.ts. Carried here so the document can print it without a second
+   * fetch; null when nobody has entered one yet.
+   */
+  tariffClassificationCode: string | null;
   fx: {
     pair: string;
     rate: string | null;
@@ -142,15 +149,36 @@ export async function crossBorderStateFor(versionId: string): Promise<CrossBorde
   // Not Canada, or the feature is off: nothing happens. This is the branch that
   // guarantees no existing US proposal changes because this code exists.
   if (!settings?.enabled || !jurisdiction.isCanadian) {
-    return { applicable: false, jurisdiction, fx: emptyFx, result: null, blockers: [] };
+    return {
+      applicable: false,
+      jurisdiction,
+      tariffClassificationCode: null,
+      fx: emptyFx,
+      result: null,
+      blockers: [],
+    };
   }
+
+  // Fetched once, up front, so every `applicable: true` return below — including the
+  // early ones for an incomplete address or a missing FX rate — can carry the
+  // tariff classification code. It is reused at the Promise.all further down rather
+  // than fetched a second time.
+  const customsRow = await prisma.proposalCustomsEntry.findUnique({ where: { versionId } });
+  const tariffClassificationCode = customsRow?.tariffClassificationCode ?? null;
 
   const blockers: string[] = [];
   if (!jurisdiction.complete || !jurisdiction.province) {
     // Without a province there is no tax jurisdiction and nothing to calculate.
     // A draft may still be saved; it simply carries the address problem.
     for (const issue of jurisdiction.issues) blockers.push(`address:${issue}`);
-    return { applicable: true, jurisdiction, fx: emptyFx, result: null, blockers };
+    return {
+      applicable: true,
+      jurisdiction,
+      tariffClassificationCode,
+      fx: emptyFx,
+      result: null,
+      blockers,
+    };
   }
   const province = jurisdiction.province;
 
@@ -187,20 +215,24 @@ export async function crossBorderStateFor(versionId: string): Promise<CrossBorde
 
   if (!rateResolution.observation) {
     // No rate at all: USD still stands, there is simply no CAD column.
-    return { applicable: true, jurisdiction, fx, result: null, blockers };
+    return {
+      applicable: true,
+      jurisdiction,
+      tariffClassificationCode,
+      fx,
+      result: null,
+      blockers,
+    };
   }
 
-  const [rateRows, registrationRows, taxabilityRows, exemptionRows, customsRow] = await Promise.all(
-    [
-      prisma.canadianTaxRate.findMany({ where: { province } }),
-      prisma.canadianTaxRegistration.findMany(),
-      prisma.crossBorderTaxabilityRule.findMany(),
-      prisma.customerTaxExemption.findMany({
-        where: { organizationId: version.proposal.organizationId },
-      }),
-      prisma.proposalCustomsEntry.findUnique({ where: { versionId } }),
-    ],
-  );
+  const [rateRows, registrationRows, taxabilityRows, exemptionRows] = await Promise.all([
+    prisma.canadianTaxRate.findMany({ where: { province } }),
+    prisma.canadianTaxRegistration.findMany(),
+    prisma.crossBorderTaxabilityRule.findMany(),
+    prisma.customerTaxExemption.findMany({
+      where: { organizationId: version.proposal.organizationId },
+    }),
+  ]);
 
   const rates: TaxRateRule[] = rateRows.map((r) => ({
     id: r.id,
@@ -314,7 +346,14 @@ export async function crossBorderStateFor(versionId: string): Promise<CrossBorde
       },
     });
     for (const issue of simple.issues) blockers.push(`calc:${issue}`);
-    return { applicable: true, jurisdiction, fx, result: simple, blockers };
+    return {
+      applicable: true,
+      jurisdiction,
+      tariffClassificationCode,
+      fx,
+      result: simple,
+      blockers,
+    };
   }
 
   const result = buildChargeLines({
@@ -332,7 +371,7 @@ export async function crossBorderStateFor(versionId: string): Promise<CrossBorde
 
   for (const issue of result.issues) blockers.push(`calc:${issue}`);
 
-  return { applicable: true, jurisdiction, fx, result, blockers };
+  return { applicable: true, jurisdiction, tariffClassificationCode, fx, result, blockers };
 }
 
 /**

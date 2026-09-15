@@ -48,6 +48,14 @@ export interface CustomsEntryPatch {
   importerOfRecord?: ImporterOfRecordValue;
   includedInSellerTotal?: boolean;
   notes?: string | null;
+  /**
+   * The customs/tariff classification code, typed in by a person. Never inferred,
+   * parsed, validated against a tariff schedule, or used to compute a duty — see the
+   * header comment on this file. Travels with the proposal so it can print on the
+   * document; entering and standing behind the correct code is Summit's
+   * responsibility, not the software's.
+   */
+  tariffClassificationCode?: string | null;
 }
 
 const AMOUNT_FIELDS = [
