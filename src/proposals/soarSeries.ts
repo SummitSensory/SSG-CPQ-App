@@ -84,6 +84,13 @@ export interface SoarAnswers {
   colWrapQty?: number;
   /** Print the overview + Engineering-of-Record copy on each frame line. */
   includeOverview?: boolean;
+  /**
+   * True on a Canadian proposal. Summit does not make the Engineer-of-Record
+   * certification claim there, and does not present the padding/mats group as an
+   * optional choice — see SOAR_OVERVIEW_BASE and SOAR_GROUP_MATS's description
+   * below. Does not affect pricing, frames or padding quantities.
+   */
+  canadian?: boolean;
 }
 
 export interface SoarPricedLine {
@@ -114,7 +121,13 @@ export const SOAR_ENGINEERING =
   'of design intent, rated load capacity and material strength \u2014 verified engineering, not a manufacturer\u2019s claim \u2014 so ' +
   'the frame can be reviewed, submitted and approved like any other engineered building component.';
 
-export const SOAR_OVERVIEW =
+/**
+ * The overview copy without the Engineer-of-Record claim, for a Canadian proposal
+ * (directive: no "Engineered and Certified — Engineer of Record" language there).
+ * SOAR_OVERVIEW below is this same text with SOAR_ENGINEERING appended, for every
+ * other proposal.
+ */
+export const SOAR_OVERVIEW_BASE =
   'The Summit Soar Series Sensory Swing Frame is a freestanding therapeutic swing frame that is perfect for indoor use. ' +
   'It is designed specifically for multisensory gyms that have low ceilings or are smaller in size. The compact swing ' +
   'frame is constructed of durable and non-corrosive powder-coated steel with safety padding on the uprights and bases. ' +
@@ -126,8 +139,9 @@ export const SOAR_OVERVIEW =
   'gyms, special ed classrooms, and homes.\n\n' +
   'Occupational therapists use the Summit Soar to administer vestibular, neuro-developmental, and sensory integration ' +
   'swing therapy to clients with ADHD, Autism, and other Sensory Processing Disorders. The Summit Soar Sensory Swing ' +
-  'Frame is a responsive, reliable, and transparent partner that stands out from the competition.\n\n' +
-  SOAR_ENGINEERING;
+  'Frame is a responsive, reliable, and transparent partner that stands out from the competition.';
+
+export const SOAR_OVERVIEW = SOAR_OVERVIEW_BASE + '\n\n' + SOAR_ENGINEERING;
 
 /** Frames actually quoted, de-duplicated and returned in workbook order. */
 export function soarFrames(
@@ -204,7 +218,8 @@ export function computeSoarProposal(
   // Product-line heading, then the frames. The overview + Engineering-of-Record copy
   // rides on each frame line's own description so it travels with the product
   // through reordering and export instead of sitting in a detachable note.
-  const overview = a.includeOverview !== false ? SOAR_OVERVIEW : '';
+  const overview =
+    a.includeOverview === false ? '' : a.canadian ? SOAR_OVERVIEW_BASE : SOAR_OVERVIEW;
   lines.push({
     lineType: 'GROUP',
     name: SOAR_GROUP_FRAMES,
@@ -223,7 +238,10 @@ export function computeSoarProposal(
         lineType: 'GROUP',
         name: SOAR_GROUP_MATS,
         optional: true,
-        description: 'Optional',
+        // Canadian proposals do not present a configuration choice to the customer
+        // (directive 4) — the group's own optional flag stays for internal/other
+        // use, but this one direct "this is a choice" statement is dropped.
+        description: a.canadian ? '' : 'Optional',
       });
       for (const r of rows) P(r.part, r.qty);
     }

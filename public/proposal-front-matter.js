@@ -320,6 +320,10 @@
       letterDate: esc(fmtDate(m.proposalDate)),
       repName: esc([u.name || u.email || '', u.title].filter(Boolean).join(', ')),
       repContact: esc([u.phone, u.email].filter(Boolean).join(' \u00b7 ')),
+      // Mirrors cbIsCanadian(d) in proposal-document.js exactly \u2014 the intro decks
+      // (intro-adventure.js, intro-flex.js, intro-soar.js) gate Engineer-of-Record
+      // content on this flag.
+      canadian: !!(doc && doc.crossBorder && doc.crossBorder.applicable),
     };
   }
 
