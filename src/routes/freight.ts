@@ -69,6 +69,16 @@ const TROLLEY_PARTS = new Set(['TR2000-A07', 'TR2000-A08', 'TR2000-A09', 'TR2000
 const FLEX_PRO_PACK_SKU = 'FLEX-PRO-DISCOUNT';
 const FLEX_PRO_PACK_LABEL = 'Summit Flex: Pro Pack';
 
+/**
+ * A-2200 is the general-purpose Summit Flex frame, shared across Flex proposal
+ * templates (see the FLEX_PRO_PACK_SKU comment above) — so it isn't a Pro Pack tell on
+ * its own. But when it is the ONLY part in the freight, it's a plain Summit Flex
+ * shipment: still not an Adventure Series frame, so still no legs to count, and
+ * Goldberg still needs a label instead of a bare "0".
+ */
+const FLEX_FRAME_SKU = 'A-2200';
+const FLEX_ONLY_LABEL = 'Summit Flex';
+
 /** The monday item id — the proposal header's Project ID. */
 const ItemIdSchema = z
   .string()
@@ -104,6 +114,8 @@ export interface AdventureFacts {
   trolley: boolean;
   /** A Summit Flex Pro Pack proposal — see FLEX_PRO_PACK_SKU above. */
   flexProPack: boolean;
+  /** The freight is nothing but the Summit Flex frame — see FLEX_FRAME_SKU above. */
+  flexOnly: boolean;
   /** False when the proposal has no Adventure Series content at all. */
   found: boolean;
 }
@@ -125,6 +137,8 @@ export function adventureFacts(items: unknown): AdventureFacts {
   let legs = 0;
   let trolley = false;
   let flexProPack = false;
+  let flexFramePresent = false;
+  let otherPartsPresent = false;
 
   for (const line of lines) {
     if (line?.optional) continue;
@@ -135,6 +149,11 @@ export function adventureFacts(items: unknown): AdventureFacts {
     if (LEG_PARTS.has(sku)) legs += qty;
     if (TROLLEY_PARTS.has(sku)) trolley = true;
     if (sku === FLEX_PRO_PACK_SKU) flexProPack = true;
+    // Unlike the leg/trolley parts above, A-2200 is checked only as a line in its own
+    // right, never inside a kit's components — it's sold as its own catalog line, and
+    // "only" is about what's on the order, not what a kit happens to be built from.
+    if (sku === FLEX_FRAME_SKU) flexFramePresent = true;
+    else if (sku) otherPartsPresent = true;
 
     for (const c of line?.components ?? []) {
       const part = String(c?.part ?? '')
@@ -146,7 +165,15 @@ export function adventureFacts(items: unknown): AdventureFacts {
     }
   }
 
-  return { legs, trolley, flexProPack, found: legs > 0 || trolley || flexProPack };
+  const flexOnly = flexFramePresent && !otherPartsPresent;
+
+  return {
+    legs,
+    trolley,
+    flexProPack,
+    flexOnly,
+    found: legs > 0 || trolley || flexProPack || flexOnly,
+  };
 }
 
 /** The same count from the version on file, for a client that did not send one. */
@@ -315,7 +342,11 @@ export function registerFreightRoutes(app: FastifyInstance): void {
        * frame is exactly when the desk most needs the row to be right.
        */
       await writeColumns(input.itemId, {
-        [WELDED_LEGS_COLUMN]: facts.flexProPack ? FLEX_PRO_PACK_LABEL : String(facts.legs),
+        [WELDED_LEGS_COLUMN]: facts.flexProPack
+          ? FLEX_PRO_PACK_LABEL
+          : facts.flexOnly
+            ? FLEX_ONLY_LABEL
+            : String(facts.legs),
         [TROLLEY_COLUMN]: { label: facts.trolley ? 'Yes' : 'No' },
       });
       stage = 'request';

@@ -29,3 +29,48 @@ describe('adventureFacts — Summit Flex Pro Pack detection', () => {
     expect(facts.found).toBe(false);
   });
 });
+
+describe('adventureFacts — plain Summit Flex frame detection', () => {
+  it('flags flexOnly when A-2200 is the only part in the freight', () => {
+    const facts = adventureFacts([
+      { lineType: 'GROUP', name: 'SUMMIT FLEX SERIES' },
+      { sku: 'A-2200', quantity: 1 },
+    ]);
+    expect(facts.flexOnly).toBe(true);
+    expect(facts.flexProPack).toBe(false);
+    expect(facts.legs).toBe(0);
+    expect(facts.found).toBe(true);
+  });
+
+  it('does not flag flexOnly when the Pro Pack discount line is also present', () => {
+    const facts = adventureFacts([
+      { sku: 'A-2200', quantity: 1 },
+      { sku: 'FLEX-PRO-DISCOUNT', quantity: -1 },
+    ]);
+    expect(facts.flexOnly).toBe(false);
+    expect(facts.flexProPack).toBe(true);
+  });
+
+  it('does not flag flexOnly when another part rides alongside A-2200', () => {
+    const facts = adventureFacts([
+      { sku: 'A-2200', quantity: 1 },
+      { sku: 'TR2000-A07', quantity: 1 },
+    ]);
+    expect(facts.flexOnly).toBe(false);
+  });
+
+  it('does not flag flexOnly when A-2200 is only a component of another line', () => {
+    const facts = adventureFacts([
+      { sku: 'BUNDLE-1', quantity: 1, components: [{ part: 'A-2200', qty: 1 }] },
+    ]);
+    expect(facts.flexOnly).toBe(false);
+  });
+
+  it('ignores an optional line that would otherwise disqualify flexOnly', () => {
+    const facts = adventureFacts([
+      { sku: 'A-2200', quantity: 1 },
+      { sku: 'TR2000-A07', quantity: 1, optional: true },
+    ]);
+    expect(facts.flexOnly).toBe(true);
+  });
+});
