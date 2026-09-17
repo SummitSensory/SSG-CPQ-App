@@ -549,8 +549,15 @@
     <!-- The general release and standard terms that close a proposal. Loaded before
          app.js so the document builder can see it on the first render. -->
     <script src="/contract-pages.js?v=20"></script>
+    <!-- The Customer Project Media Rebate program. Same fetch-once-at-sign-in shape
+         as contract-pages.js, and loaded before app.js for the same reason: the
+         builder and document renderer need it on the first render. -->
+    <script src="/media-rebate-program.js?v=1"></script>
     <!-- The legal document editor. Admin-only; its route refuses anyone else. -->
     <script src="/legal-admin.js?v=7"></script>
+    <!-- The Media Partnership Program (Customer Project Media Rebate) editor.
+         Admin-only; its route refuses anyone else. -->
+    <script src="/media-partnership-admin.js?v=1"></script>
     <!-- The drag-to-place editor for signature-field-layout.js's saved offsets.
          Admin-only; its route refuses anyone else. -->
     <script src="/signature-field-layout-admin.js?v=1"></script>

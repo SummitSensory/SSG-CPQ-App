@@ -1153,6 +1153,12 @@ model ProposalVersion {
   /// Same discipline as priceSnapshotId and financeRateCardId above: editing the terms
   /// cannot restate what a customer has already signed.
   legalSnapshotId String?
+  /// The Customer Project Media Rebate program terms this version was released under,
+  /// frozen at release — same discipline as legalSnapshotId, but only set when this
+  /// version's meta actually offered the program (sections.meta.mediaRebate.offered).
+  /// Null for every version that never offered it, which is most of them, and for one
+  /// released before this feature existed.
+  mediaRebateSnapshotId String?
   createdById     String
   createdAt       DateTime              @default(now())
   updatedAt       DateTime              @updatedAt
@@ -1162,6 +1168,7 @@ model ProposalVersion {
   @@index([proposalId])
   @@index([status])
   @@index([legalSnapshotId])
+  @@index([mediaRebateSnapshotId])
 }
 
 /// A design rendering (a CAD export, a photorealistic render, a scanned drawing)
@@ -1354,6 +1361,49 @@ model LegalSnapshot {
   id        String   @id @default(cuid())
   hash      String   @unique
   documents Json
+  createdAt DateTime @default(now())
+}
+
+/// Global defaults for the optional "Customer Project Media Rebate" a proposal can
+/// offer — a post-installation rebate for customer-submitted photos/video. Singleton
+/// row (`key` fixed to "default"), same shape as SignatureFieldLayout: this is a
+/// typesetting/policy choice for the whole application, not per-proposal or per-template.
+///
+/// `active` gates whether NEW proposals may offer the program — see
+/// src/mediaRebate/service.ts. Disabling it must never affect a proposal that already
+/// offered the program (that state lives on the proposal itself, in
+/// ProposalVersion.sections meta, not here). Starts inactive: the spec requires the
+/// program to never be enabled by default.
+///
+/// `content` bundles the long-form editable program language (intro, media
+/// requirements, acceptance standards, usage rights, privacy restrictions,
+/// participation language, signature acknowledgment language, payment terms) plus the
+/// four configurable timeframe day-counts (submission/review/correction/payment
+/// periods) — see src/mediaRebate/defaults.ts for the shape and shipped wording.
+///
+/// Never read directly by a released/signed proposal: see MediaRebateSnapshot below.
+model MediaPartnershipProgram {
+  key                String   @id @default("default")
+  active             Boolean  @default(false)
+  customerFacingName String   @default("Customer Project Media Rebate")
+  internalName       String   @default("Media Partnership Program")
+  /// Integer minor units (cents), matching Sku.unitPriceMinor's existing convention.
+  rebateAmountMinor  Int      @default(25000)
+  content            Json
+  version            Int      @default(1)
+  updatedAt          DateTime @default(now()) @updatedAt
+  updatedById        String?
+}
+
+/// Immutable, content-addressed snapshot of the Media Partnership Program, frozen the
+/// first time a proposal version that offered the program is released — see
+/// ProposalVersion.mediaRebateSnapshotId and src/mediaRebate/service.ts. Same pattern
+/// as LegalSnapshot above: releasing many proposals under one wording writes one row
+/// and many references, deduped on hash.
+model MediaRebateSnapshot {
+  id        String   @id @default(cuid())
+  hash      String   @unique
+  payload   Json
   createdAt DateTime @default(now())
 }
 
