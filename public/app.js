@@ -5802,9 +5802,26 @@
         money('cfBroker', 'Brokerage', e.brokerFeeMinor) +
       '</div>' +
       '</div>' +
+      '<div style="margin-bottom:12px;"><label style="' + lbl + '">Tariff item 9979.00.00 (disability-relief) claim</label>' +
+        '<select id="cfTariff9979" style="' + box + '">' +
+          '<option value=""' + (e.tariff9979Claimed == null ? ' selected' : '') + '>Not yet determined</option>' +
+          '<option value="true"' + (e.tariff9979Claimed === true ? ' selected' : '') + '>Claimed</option>' +
+          '<option value="false"' + (e.tariff9979Claimed === false ? ' selected' : '') + '>Not claimed</option>' +
+        '</select>' +
+        '<div class="muted" style="font-size:11px;line-height:1.5;margin-top:4px;">Whether these goods qualify for relief under tariff item 9979.00.00 (goods for persons with disabilities) is a classification decision for Summit and its customs broker, not something this application determines. Leave \u201cNot yet determined\u201d until that decision is made.</div></div>' +
       '<div style="margin-bottom:12px;"><label style="' + lbl + '">Tariff / customs classification code</label>' +
         '<input id="cfTariffCode" placeholder="e.g. from a broker or a classification ruling" value="' + esc(e.tariffClassificationCode || '') + '" style="' + box + '">' +
         '<div class="muted" style="font-size:11px;line-height:1.5;margin-top:4px;">Typed in, never inferred \u2014 this application does not classify goods or calculate duty from it. Enter the code your broker or a classification ruling gives you. Leave blank if it isn\u2019t known yet; a blank prints nothing.</div></div>' +
+      '<div style="margin-bottom:12px;"><label style="' + lbl + '">GST/HST treatment</label>' +
+        '<select id="cfGstHst" style="' + box + '">' +
+          '<option value=""' + (e.gstHstTreatment == null ? ' selected' : '') + '>Not yet determined</option>' +
+          '<option value="STANDARD_RATE"' + (e.gstHstTreatment === 'STANDARD_RATE' ? ' selected' : '') + '>Standard rate applies</option>' +
+          '<option value="MEDICAL_DEVICE_RELIEF_CLAIMED"' + (e.gstHstTreatment === 'MEDICAL_DEVICE_RELIEF_CLAIMED' ? ' selected' : '') + '>Relief claimed as medical/assistive device</option>' +
+        '</select>' +
+        '<div class="muted" style="font-size:11px;line-height:1.5;margin-top:4px;">Whether the goods on this proposal qualify for GST/HST relief as medical and assistive devices under CBSA Memorandum 4.2 is a judgment call, not something this application calculates. Leave \u201cNot yet determined\u201d until you or your tax advisor has decided; a blank prints nothing beyond the standard tax clause.</div></div>' +
+      '<div style="margin-bottom:12px;"><label style="' + lbl + '">Host system model (if this is for replacement/expansion parts)</label>' +
+        '<input id="cfHostSystem" placeholder="e.g. the model/serial of the existing system these parts replace or expand" value="' + esc(e.hostSystemModel || '') + '" style="' + box + '">' +
+        '<div class="muted" style="font-size:11px;line-height:1.5;margin-top:4px;">Only needed when this proposal is for replacement or expansion components for a system Summit already sold, not a new complete system. Leave blank otherwise \u2014 a blank prints nothing extra.</div></div>' +
       '<div style="margin-bottom:12px;"><label style="' + lbl + '">Where these figures came from</label>' +
         '<input id="cfSource" placeholder="Broker quote reference, ruling, or a prior entry" value="' + esc(e.sourceReference || '') + '" style="' + box + '">' +
         '<div class="muted" style="font-size:11px;line-height:1.5;margin-top:4px;">Required before these can be approved \u2014 without it there is nothing to check them against later.</div></div>' +
@@ -5872,6 +5889,9 @@
       var payload = Object.assign(amounts, simplePatch, {
         currency: document.getElementById('cfCur').value,
         tariffClassificationCode: document.getElementById('cfTariffCode').value.trim() || null,
+        tariff9979Claimed: (function () { var v = document.getElementById('cfTariff9979').value; return v === '' ? null : v === 'true'; })(),
+        gstHstTreatment: document.getElementById('cfGstHst').value || null,
+        hostSystemModel: document.getElementById('cfHostSystem').value.trim() || null,
         sourceReference: document.getElementById('cfSource').value.trim() || null,
         importerOfRecord: document.getElementById('cfIor').value,
         includedInSellerTotal: document.getElementById('cfIncl').checked,

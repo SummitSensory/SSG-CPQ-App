@@ -59,6 +59,23 @@ const CustomsPatchSchema = z.object({
    */
   tariffClassificationCode: z.string().trim().max(100).nullable().optional(),
   /**
+   * Whether these goods are entered under tariff item 9979.00.00 (disability-relief).
+   * Free boolean, never validated against anything — a classification decision for
+   * Summit and its broker, not this application. Null is "not yet determined".
+   */
+  tariff9979Claimed: z.boolean().nullable().optional(),
+  /**
+   * A human-entered STATUS about whether medical/assistive-device GST/HST relief is
+   * being claimed — distinct from the tax-rate calculation engine and from taxLabel.
+   * No format validation beyond the enum itself; never computed.
+   */
+  gstHstTreatment: z.enum(['STANDARD_RATE', 'MEDICAL_DEVICE_RELIEF_CLAIMED']).nullable().optional(),
+  /**
+   * The Summit system model these components belong to, when this proposal is for
+   * replacement/expansion parts. Free text, never inferred or looked up.
+   */
+  hostSystemModel: z.string().trim().max(200).nullable().optional(),
+  /**
    * Percent entry. The rates arrive as decimal percentages ("13", "9.975") and are
    * stored as thousandths of a percent, so the arithmetic downstream is integer only —
    * a float rate is what makes a total fail to reconcile by a cent.
@@ -111,6 +128,26 @@ const SettingsSchema = z.object({
   defaultImporterOfRecord: z
     .enum(['CUSTOMER', 'SUMMIT', 'THIRD_PARTY', 'TO_BE_DETERMINED'])
     .optional(),
+  /**
+   * The default GST/HST treatment posture for a brand-new customs entry. A <select>'s
+   * value always arrives as a string, so the blank ("no default") option must be
+   * accepted as the literal empty string and translated to a real null — the enum
+   * itself has no undetermined member.
+   */
+  defaultGstHstTreatment: z
+    .union([z.literal(''), z.enum(['STANDARD_RATE', 'MEDICAL_DEVICE_RELIEF_CLAIMED'])])
+    .optional()
+    .transform((v) => (v === '' ? null : v)),
+  /**
+   * The default posture for a brand-new customs entry's tariff9979Claimed. A true
+   * tri-state: the empty string is "no default (undetermined)", distinct from the
+   * strings 'true'/'false' — raw <select> values are always strings, never JSON
+   * booleans, so they are translated here.
+   */
+  defaultTariff9979Claimed: z
+    .enum(['', 'true', 'false'])
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v === '' ? null : v === 'true')),
   defaultTaxResponsibility: z
     .enum([
       'SELLER_COLLECTS',

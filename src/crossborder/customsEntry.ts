@@ -56,6 +56,25 @@ export interface CustomsEntryPatch {
    * responsibility, not the software's.
    */
   tariffClassificationCode?: string | null;
+  /**
+   * Whether these goods are entered under tariff item 9979.00.00 (disability-relief).
+   * Never computed or inferred — a judgment call for Summit and its broker, not this
+   * software. true = claimed, false = affirmatively not claimed, null = not yet
+   * answered.
+   */
+  tariff9979Claimed?: boolean | null;
+  /**
+   * A human-entered STATUS about whether medical/assistive-device GST/HST relief is
+   * being claimed — distinct from the tax-rate calculation engine and from taxLabel.
+   * Never inferred; null means undetermined.
+   */
+  gstHstTreatment?: 'STANDARD_RATE' | 'MEDICAL_DEVICE_RELIEF_CLAIMED' | null;
+  /**
+   * The Summit system model this proposal's components belong to, when this proposal
+   * is for replacement/expansion parts rather than a new complete system. Typed in by
+   * a person, never inferred or looked up against a prior order.
+   */
+  hostSystemModel?: string | null;
 }
 
 const AMOUNT_FIELDS = [
@@ -102,9 +121,12 @@ export async function customsEntryFor(versionId: string): Promise<ProposalCustom
       proposalId: version.proposalId,
       versionId,
       // Everything null, status REQUIRES_CUSTOMS_REVIEW by column default. The row
-      // exists so the importer-of-record default is recorded against this version
-      // rather than read from settings that may change later.
+      // exists so the importer-of-record default (and the two newer default postures
+      // below) are recorded against this version rather than read from settings that
+      // may change later.
       importerOfRecord: settings?.defaultImporterOfRecord ?? 'CUSTOMER',
+      gstHstTreatment: settings?.defaultGstHstTreatment ?? null,
+      tariff9979Claimed: settings?.defaultTariff9979Claimed ?? null,
     },
   });
 }

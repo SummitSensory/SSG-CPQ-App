@@ -3693,6 +3693,15 @@ enum ImporterOfRecord {
   TO_BE_DETERMINED
 }
 
+/// A human-entered STATUS about whether medical/assistive-device GST/HST relief is
+/// being claimed for a shipment — distinct from CanadianTaxRate/CrossBorderTaxabilityRule
+/// (which compute an actual tax amount) and from the pre-existing free-text `taxLabel`
+/// (which only labels a computed tax line, e.g. "HST"). See ProposalCustomsEntry.gstHstTreatment.
+enum GstHstTreatment {
+  STANDARD_RATE
+  MEDICAL_DEVICE_RELIEF_CLAIMED
+}
+
 /// What a charge on a proposal is, for taxability. Freight, installation,
 /// brokerage and duty are taxed differently from equipment in at least one
 /// province, so they cannot share a category.
@@ -3981,6 +3990,32 @@ model ProposalCustomsEntry {
   /// and standing behind, the correct code is Summit's responsibility, not the
   /// software's.
   tariffClassificationCode String?
+  /// Whether this proposal's goods are being entered under tariff item 9979.00.00 of
+  /// the Canadian Customs Tariff (Canada's conditional duty-relief item for goods
+  /// designed to alleviate the effects of a disability). Never computed or inferred
+  /// from the goods on the proposal, from tariffClassificationCode, or from anything
+  /// else in this database — the same "no tariff calculator" philosophy documented on
+  /// customsEntry.ts's header comment and on tariffClassificationCode above applies
+  /// here: classifying goods under 9979 is a judgment call for Summit and its broker,
+  /// not this software. true = claimed, false = affirmatively not claimed (standard
+  /// duty treatment), null = nobody has answered yet — null is not zero.
+  tariff9979Claimed     Boolean?
+  /// A human-entered STATUS about whether medical/assistive-device GST/HST relief is
+  /// being claimed for this shipment — distinct from CanadianTaxRate/
+  /// CrossBorderTaxabilityRule (which compute an actual tax amount) and from taxLabel
+  /// (which only labels a computed tax line, e.g. "HST"). This field never feeds the
+  /// tax-rate calculation engine and is never inferred from it. Null means nobody has
+  /// determined a treatment yet for this shipment — null is not "standard rate", it is
+  /// "undetermined."
+  gstHstTreatment       GstHstTreatment?
+  /// The Summit system model this proposal's components belong to, when the proposal
+  /// is for replacement or expansion parts rather than a new, complete system — typed
+  /// in by a person, never inferred or looked up against a prior order. Canada's
+  /// tariff item 9979.00.00 "Part Two" relief for parts depends on the original
+  /// ("host") system having qualified under "Part One," so this travels with the
+  /// proposal so that fact can be stated on the document. Null/blank means either this
+  /// proposal is for a complete new system, or nobody has recorded the host system yet.
+  hostSystemModel       String?
   enteredById           String?
   enteredAt             DateTime?
   approvedById          String?
@@ -4039,6 +4074,18 @@ model CrossBorderSetting {
   allowSimpleCanadianCharges      Boolean               @default(false)
   defaultImporterOfRecord         ImporterOfRecord      @default(CUSTOMER)
   defaultTaxResponsibility        TaxResponsibilityMode @default(SELLER_COLLECTS)
+  /// The default GST/HST treatment posture for a brand-new ProposalCustomsEntry — see
+  /// ProposalCustomsEntry.gstHstTreatment. No @default, so null ("no posture set")
+  /// until an administrator picks one. Seeds only a new entry's initial value, exactly
+  /// like defaultImporterOfRecord does for importerOfRecord; changing this afterward
+  /// never retroactively rewrites an already-created entry.
+  defaultGstHstTreatment          GstHstTreatment?
+  /// The default posture for a brand-new ProposalCustomsEntry's tariff9979Claimed — see
+  /// that field's comment. No @default, so null (undetermined) until an administrator
+  /// sets a posture. Seeds only a new entry's initial value, exactly like
+  /// defaultImporterOfRecord; changing this afterward never retroactively rewrites an
+  /// already-created entry.
+  defaultTariff9979Claimed        Boolean?
   allowCadPayment                 Boolean               @default(false)
   fxFallbackMode                  FxFallbackMode        @default(DRAFT_WITH_REVIEW)
   /// Days after which a cached observation is called stale on the proposal.
