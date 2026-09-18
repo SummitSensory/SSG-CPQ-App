@@ -100,6 +100,15 @@ export const Permission = {
   // Reading it needs no permission at all — every signed-in user renders the
   // widget, the same way everyone reads the legal wording above.
   UI_MANAGE: 'ui:manage',
+  // Edit the global Media Partnership Program defaults (the $250 Customer Project
+  // Media Rebate: program name, rebate amount, and its long-form terms). Granted to
+  // no role but SYSTEM_ADMIN, same precedent as LEGAL_MANAGE — publishing wording a
+  // customer is offered, and a dollar figure tied to it, is an admin act.
+  //
+  // Offering the program on a proposal, and reading the effective terms to render
+  // one, needs only PROPOSAL_WRITE / PROPOSAL_READ — every rep who can build a
+  // proposal can offer this the same way they can add any other optional section.
+  MEDIA_PARTNERSHIP_MANAGE: 'media-partnership:manage',
 } as const;
 
 export type Permission = (typeof Permission)[keyof typeof Permission];

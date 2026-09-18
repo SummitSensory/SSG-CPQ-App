@@ -521,6 +521,133 @@
     );
   }
 
+  /**
+   * Text → paragraphs/bullets for the Media Program's admin-edited prose. Mirrors
+   * the plain blank-line-paragraph / one-bullet-per-line convention
+   * src/mediaRebate/defaults.ts ships, so an admin typing into a plain textarea in
+   * Administration does not need to learn any markup.
+   */
+  function mediaProgramTextHtml(text) {
+    var blocks = String(text || '')
+      .split(/\n\n+/)
+      .filter(function (b) {
+        return b.trim();
+      });
+    return blocks
+      .map(function (b) {
+        var lines = b.split('\n').filter(function (l) {
+          return l.trim();
+        });
+        if (
+          lines.length > 1 &&
+          lines.every(function (l) {
+            return /^•/.test(l.trim());
+          })
+        ) {
+          return (
+            '<ul style="margin:2px 0 8px 18px;padding:0;">' +
+            lines
+              .map(function (l) {
+                return (
+                  '<li style="margin-bottom:2px;">' + esc(l.trim().replace(/^•\s*/, '')) + '</li>'
+                );
+              })
+              .join('') +
+            '</ul>'
+          );
+        }
+        return '<p style="margin:0 0 8px;">' + esc(b) + '</p>';
+      })
+      .join('');
+  }
+
+  /**
+   * The one sentence added to the acceptance acknowledgment when Summit offered the
+   * Media Program on this proposal — see spec section 7. The existing single
+   * signature already covers it; no second signature field is added.
+   */
+  function mediaRebateAcknowledgmentHtml(d) {
+    var mr = (d.meta || {}).mediaRebate;
+    if (!mr || !mr.offered) return '';
+    var program = (window.SSGMediaRebateProgram && window.SSGMediaRebateProgram.current()) || null;
+    var text =
+      (program && program.content && program.content.signatureAcknowledgment) ||
+      'By signing this Proposal, Customer agrees to all selected options, programs, terms, and conditions contained in this Proposal, including the Customer Project Media Rebate Program where elected above.';
+    return (
+      '<div style="font-size:10.5px;color:#5b6478;line-height:1.55;margin-top:8px;">' +
+      esc(text) +
+      '</div>'
+    );
+  }
+
+  /**
+   * The full Customer Project Media Rebate section: requirements, acceptance
+   * standards, usage rights, privacy, payment terms, and the customer's
+   * (pre-determined) election — printed as its own page, alongside the legal
+   * documents, when Summit offered the program on this proposal. Empty string
+   * otherwise, so a proposal that never touches this feature renders byte-identical
+   * to before this feature existed.
+   *
+   * Always the LIVE program (window.SSGMediaRebateProgram), never a pinned snapshot —
+   * same as the legal documents above. The pinned, audit-truth answer for a released
+   * version lives server-side (src/mediaRebate/service.ts, GET
+   * /proposals/versions/:id/media-rebate); the real immutability guarantee for
+   * anything actually signed comes from the e-sign PDF freeze, not from re-rendering
+   * this page from a snapshot.
+   */
+  function mediaRebateSectionHtml(d) {
+    var mr = (d.meta || {}).mediaRebate;
+    if (!mr || !mr.offered) return '';
+    var program = (window.SSGMediaRebateProgram && window.SSGMediaRebateProgram.current()) || null;
+    var name = (program && program.customerFacingName) || 'Customer Project Media Rebate';
+    var amountMinor = (program && program.rebateAmountMinor) || 25000;
+    var content = (program && program.content) || {};
+
+    var section = function (title, text) {
+      if (!text) return '';
+      return (
+        '<div style="margin-top:14px;">' +
+        '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#3d4a55;margin-bottom:4px;">' +
+        esc(title) +
+        '</div>' +
+        mediaProgramTextHtml(text) +
+        '</div>'
+      );
+    };
+
+    return (
+      '<div data-page-break="media-rebate" style="break-before:page;page-break-before:always;">' +
+      '<div style="font-family:\'Newsreader\',serif;font-size:19px;font-weight:700;color:#203060;letter-spacing:-.015em;margin-bottom:4px;">' +
+      esc(name) +
+      '</div>' +
+      '<div style="font-size:11.5px;color:#5b6478;line-height:1.6;margin-bottom:10px;">Rebate Available: <b>' +
+      fmtUsd(amountMinor) +
+      '</b> — does not reduce the Project Price or any amount due before shipment.</div>' +
+      '<div style="font-size:11px;line-height:1.6;color:#20241f;">' +
+      mediaProgramTextHtml(content.introduction) +
+      '</div>' +
+      section('Media Requirements', content.mediaRequirements) +
+      section('Media Acceptance Standards', content.acceptanceStandards) +
+      section('Media Usage Rights', content.usageRights) +
+      section('Privacy / Identifiable Individuals', content.privacyRestrictions) +
+      section('Rebate Payment Terms', content.paymentTerms) +
+      '<div style="margin-top:16px;padding-top:10px;border-top:1px solid #d5d8d2;">' +
+      '<label style="display:flex;gap:9px;align-items:flex-start;font-size:11.5px;line-height:1.55;">' +
+      '<span style="display:inline-block;width:13px;height:13px;border:1px solid #20241f;flex:none;margin-top:1px;text-align:center;line-height:12px;font-size:11px;">' +
+      (mr.participate ? '✓' : '') +
+      '</span>' +
+      '<span>' +
+      esc(
+        content.participationLanguage ||
+          'Yes, we elect to participate in Summit Sensory Gym’s Customer Project Media Rebate Program and agree to the Media Program terms contained in this Proposal.',
+      ) +
+      '</span>' +
+      '</label>' +
+      '</div>' +
+      '</div>'
+    );
+  }
+
   /* ---- the document ---- */
 
   function proposalDocHtml(doc) {
@@ -1170,6 +1297,7 @@
         ? ', with a deposit of ' + money(docDeposit) + ' due to initiate production'
         : '') +
       '.</div>' +
+      mediaRebateAcknowledgmentHtml(d) +
       '<div style="display:flex;gap:26px;margin-top:24px;">' +
       // The customer's name prints on the signer line itself. It is the one field on
       // this page the document already knows, and printing it removes the most common
@@ -1237,6 +1365,10 @@
       (window.SSGContractPages && window.SSGContractPages.applies(d)
         ? window.SSGContractPages.html(d, { esc: esc, user: u })
         : '') +
+      // The Customer Project Media Rebate program, when Summit offered it on this
+      // proposal — see mediaRebateSectionHtml(). Empty string when not offered, so
+      // this is fully inert for the vast majority of proposals.
+      mediaRebateSectionHtml(d) +
       '</div>';
     return html;
   }

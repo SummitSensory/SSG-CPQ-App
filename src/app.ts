@@ -43,6 +43,7 @@ import { registerReportRoutes } from './routes/reports.js';
 import { registerInsightRoutes } from './routes/insights.js';
 import { registerStandardNoteRoutes } from './routes/standardNotes.js';
 import { registerLegalDocumentRoutes } from './routes/legalDocuments.js';
+import { registerMediaPartnershipProgramRoutes } from './routes/mediaPartnershipProgram.js';
 import { registerSignatureFieldLayoutRoutes } from './routes/signatureFieldLayout.js';
 import { registerReferenceDocumentRoutes } from './routes/referenceDocuments.js';
 import { registerCustomerNoteRoutes } from './routes/customerNotes.js';
@@ -176,6 +177,7 @@ export function buildApp(): FastifyInstance {
   registerInsightRoutes(app);
   registerStandardNoteRoutes(app);
   registerLegalDocumentRoutes(app);
+  registerMediaPartnershipProgramRoutes(app);
   registerSignatureFieldLayoutRoutes(app);
   registerReferenceDocumentRoutes(app);
   registerCustomerNoteRoutes(app);

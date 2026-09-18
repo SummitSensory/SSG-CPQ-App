@@ -602,6 +602,9 @@
     // synchronous, deep inside the document builder — always has it by the time anyone
     // opens a proposal. Without this call the shipped wording prints and nothing breaks.
     if (window.SSGContractPages) window.SSGContractPages.init({ authed: authed });
+    // Same fetch-once-at-sign-in shape, for the optional Customer Project Media
+    // Rebate the builder and document renderer both read synchronously.
+    if (window.SSGMediaRebateProgram) window.SSGMediaRebateProgram.init({ authed: authed });
     // Same fetch-once-at-sign-in shape, for the manual pixel nudges on the signature/date
     // boxes those two files both print — see signature-field-layout.js.
     if (window.SSGSignatureFieldLayout) window.SSGSignatureFieldLayout.init({ authed: authed });
@@ -623,6 +626,8 @@
      */
     window.SSGPaginate = paginateProposalArea;
     if (window.SSGLegalAdmin) window.SSGLegalAdmin.init({ authed: authed, esc: esc });
+    if (window.SSGMediaPartnershipAdmin)
+      window.SSGMediaPartnershipAdmin.init({ authed: authed, esc: esc });
     // Vendor part numbers: the dialog lives here for Catalog AND Administration, which
     // is why it is no longer inside either.
     if (window.SSGVendorParts) window.SSGVendorParts.init({ authed: authed });
@@ -682,6 +687,9 @@
         // Both contract documents unless someone says otherwise.
         includeRelease: true, includeTerms: true,
         projectId: '', showProjectId: false, showDeposit: true,
+        // The optional Customer Project Media Rebate. Off by default — see
+        // mediaRebateCard() and mediaRebateSectionHtml() in proposal-document.js.
+        mediaRebate: { offered: false, participate: false, participationAt: null },
         // Adventure Series front matter: the photos attached to this proposal, and
         // whether the document is the introduction, the proposal, or both. Only has
         // any effect on an Adventure proposal — see SSGFrontMatter.applies().
@@ -4073,7 +4081,13 @@
         // very next Save (for any unrelated edit) overwrote the saved selection
         // with nothing. referenceDocsCard() already defaults a missing array to
         // [], so this only needed to stop discarding what was actually saved.
-        referenceDocKeys: Array.isArray(meta.referenceDocKeys) ? meta.referenceDocKeys.slice() : [] },
+        referenceDocKeys: Array.isArray(meta.referenceDocKeys) ? meta.referenceDocKeys.slice() : [],
+        // Same carry-over discipline as referenceDocKeys just above, and for the same
+        // reason: absent from this allowlist would silently drop an existing offer/
+        // election the next time this version is saved.
+        mediaRebate: (meta.mediaRebate && typeof meta.mediaRebate === 'object')
+          ? { offered: !!meta.mediaRebate.offered, participate: !!meta.mediaRebate.participate, participationAt: meta.mediaRebate.participationAt || null }
+          : { offered: false, participate: false, participationAt: null } },
       lines: lines,
     };
     // A new proposal starts with the billing address the same as the shipping one.
@@ -5067,6 +5081,7 @@
           stdFreightRow()) +
         '<div style="display:flex;justify-content:space-between;padding:8px 0 0;margin-top:6px;border-top:1px solid #e7e8e3;font-size:16px;font-weight:600;font-family:\'Newsreader\',serif;"><span>Total</span><span>' + fmtUsd(t.total) + '</span></div>' +
         (isMock() ? '<div class="muted" style="font-size:11.5px;text-align:right;margin-top:4px;line-height:1.5;">Product retail only. Crating, freight and tax are quoted on a real proposal.</div>' : '') +
+        mediaRebateAvailableRow() +
         (pb.meta.showDeposit !== false ? '<div style="display:flex;justify-content:space-between;padding:6px 0 0;font-size:14px;color:#3d4a55;font-weight:600;"><span>Deposit due (' + depositPct() + '%)</span><span>' + fmtUsd(t.deposit) + '</span></div>' : '<div style="display:flex;justify-content:space-between;padding:6px 0 0;font-size:12.5px;color:#20241f;"><span>Deposit</span><span>Not shown on the proposal</span></div>') +
         // Read-only: the sum of quantity × per-unit weight across product lines. Drives
         // crating and freight, so it is worth seeing before those numbers are entered.
@@ -5078,6 +5093,7 @@
       footerNotesCard() +
       contractPagesCard() +
       referenceDocsCard() +
+      mediaRebateCard() +
       (isMock() ? '' : '<div id="bMarginRail" style="' + marginRailStyle() + '">' + marginCard(t) + '<div id="bCbRail"></div><div id="bRfqRail"></div><div id="bDatesRail"></div><div id="bNotesRail"></div></div>');
     wireBuilder();
   }
@@ -5139,6 +5155,57 @@
       '<div class="section-title" style="margin:0 0 4px;">Contract documents</div>' +
       '<div class="muted" style="font-size:12px;margin-bottom:6px;line-height:1.5;">Printed after the acceptance page, in this order.</div>' +
       (rows || '<div class="muted" style="font-size:12.5px;">None configured in Administration.</div>') +
+    '</div>';
+  }
+
+  /**
+   * "Customer Project Media Rebate Available: $250.00" — purely informational, printed
+   * in the totals card right after Total but never folded into it. Empty string when
+   * the program is not offered on this proposal, so the row is fully inert for the
+   * vast majority of proposals that never touch this feature.
+   */
+  function mediaRebateAvailableRow() {
+    var mr = pb.meta.mediaRebate;
+    if (!mr || !mr.offered) return '';
+    var program = (window.SSGMediaRebateProgram && window.SSGMediaRebateProgram.current()) || null;
+    var amountMinor = (program && program.rebateAmountMinor) || 25000;
+    var name = (program && program.customerFacingName) || 'Customer Project Media Rebate';
+    return '<div style="margin-top:8px;padding:8px 10px;background:#f4f8f2;border:1px solid #dde8d6;border-radius:8px;font-size:12.5px;line-height:1.5;">' +
+      '<div style="font-weight:600;color:#2f6d3f;">' + esc(name) + ' Available: ' + fmtUsd(amountMinor) + '</div>' +
+      '<div class="muted" style="margin-top:2px;">Informational only — does not reduce the Project Price or any amount due before shipment.</div>' +
+    '</div>';
+  }
+
+  /**
+   * The optional Customer Project Media Rebate: the internal "offer it" toggle and,
+   * once offered, the customer's pre-determined participation election. Empty when
+   * the global program is inactive AND this proposal has never offered it, so a
+   * proposal that never touches this feature renders identically to before this
+   * feature existed. See src/mediaRebate/service.ts and public/media-rebate-program.js.
+   */
+  function mediaRebateCard() {
+    var mr = pb.meta.mediaRebate || { offered: false, participate: false, participationAt: null };
+    var program = (window.SSGMediaRebateProgram && window.SSGMediaRebateProgram.current()) || null;
+    var active = !!(program && program.active);
+    if (!active && !mr.offered) return '';
+    var name = (program && program.customerFacingName) || 'Customer Project Media Rebate';
+    var amountMinor = (program && program.rebateAmountMinor) || 25000;
+    return '<div class="card" style="margin-top:16px;">' +
+      '<div class="section-title" style="margin:0 0 4px;">' + esc(name) + '</div>' +
+      '<label style="display:flex;gap:9px;align-items:flex-start;font-size:13px;line-height:1.5;cursor:pointer;padding:7px 0;">' +
+        '<input type="checkbox" id="mMediaOffer"' + (mr.offered ? ' checked' : '') + ' style="margin-top:2px;">' +
+        '<span><b style="font-weight:600;">Offer ' + esc(name) + '</b>' +
+        '<span class="muted" style="display:block;font-size:11.5px;margin-top:1px;">Offers the customer a post-installation media rebate of ' + fmtUsd(amountMinor) + '. This does not reduce the proposal total or the amount due before shipment.</span></span>' +
+      '</label>' +
+      (mr.offered
+        ? '<label style="display:flex;gap:9px;align-items:flex-start;font-size:13px;line-height:1.5;cursor:pointer;padding:7px 0;border-top:1px solid #eef0ea;margin-top:2px;">' +
+            '<input type="checkbox" id="mMediaParticipate"' + (mr.participate ? ' checked' : '') + ' style="margin-top:2px;">' +
+            '<span><b style="font-weight:600;">Customer elects to participate</b>' +
+            '<span class="muted" style="display:block;font-size:11.5px;margin-top:1px;">Set once the customer has confirmed they want to participate — this prints on the proposal as their election.' +
+            (mr.participationAt ? ' Recorded ' + fmtDate(mr.participationAt) + '.' : '') +
+            '</span></span>' +
+          '</label>'
+        : '') +
     '</div>';
   }
 
@@ -6844,6 +6911,28 @@
     var mp = document.getElementById('mProj'); if (mp) mp.addEventListener('input', function () { pb.meta.projectId = mp.value; });
     var mpd = document.getElementById('mPropDate'); if (mpd) mpd.addEventListener('input', function () { pb.meta.proposalDate = mpd.value; pb.meta.expiration = addDays(mpd.value, 7); var me2 = document.getElementById('mExp'); if (me2) me2.value = pb.meta.expiration; });
     var msp = document.getElementById('mShowProj'); if (msp) msp.addEventListener('change', function () { pb.meta.showProjectId = msp.checked; });
+    // Customer Project Media Rebate — see mediaRebateCard(). Un-offering clears the
+    // customer's election too: there is nothing left to elect into once the program
+    // is not being offered on this proposal.
+    var mMediaOffer = document.getElementById('mMediaOffer');
+    if (mMediaOffer) mMediaOffer.addEventListener('change', function () {
+      var mr = pb.meta.mediaRebate = pb.meta.mediaRebate || { offered: false, participate: false, participationAt: null };
+      mr.offered = mMediaOffer.checked;
+      if (!mr.offered) { mr.participate = false; mr.participationAt = null; }
+      markBuilderDirty();
+      renderBuilderKeepingFocus();
+    });
+    var mMediaParticipate = document.getElementById('mMediaParticipate');
+    if (mMediaParticipate) mMediaParticipate.addEventListener('change', function () {
+      var mr = pb.meta.mediaRebate = pb.meta.mediaRebate || { offered: false, participate: false, participationAt: null };
+      mr.participate = mMediaParticipate.checked;
+      // Stamped once and never restated by a later toggle-off/on, so re-checking the
+      // box after an accidental uncheck does not misreport a later "decision" time —
+      // the timestamp is cleared with the election and set fresh only when absent.
+      mr.participationAt = mr.participate ? (mr.participationAt || new Date().toISOString()) : null;
+      markBuilderDirty();
+      renderBuilderKeepingFocus();
+    });
     // One listener for every contract-document checkbox, RELEASE and TERMS included —
     // see contractPagesCard(). RELEASE/TERMS keep writing the two flags that always
     // existed; anything else writes into excludedDocKeys, the open-ended list.
@@ -14109,7 +14198,10 @@
         '<div id="sigFieldLayoutAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>' +
         '<div class="section-title" style="margin-top:26px;">Reference documents</div>' +
         '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">Pre-made PDFs — a W9, a certificate of insurance — a rep can attach to an individual proposal from the builder, the same way contract documents are attached. Uploaded once here; unlike the contract documents, these print exactly as uploaded rather than being retyped.</div>' +
-        '<div id="referenceDocsAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+        '<div id="referenceDocsAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>' +
+        '<div class="section-title" style="margin-top:26px;">Media Partnership Program</div>' +
+        '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">The optional Customer Project Media Rebate a rep can offer on a proposal. Off by default and never reduces the Project Price. Editing here changes what a proposal offers going forward; a proposal already released keeps the terms it was released under.</div>' +
+        '<div id="mediaPartnershipAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>') +
 
       sec('email',
         '<div class="section-title" style="margin:4px 0 0;">Outlook drafts</div>' +
@@ -14187,6 +14279,8 @@
       window.SSGSignatureFieldLayoutAdmin.render(document.getElementById('sigFieldLayoutAdmin'));
     if (window.SSGReferenceDocuments)
       window.SSGReferenceDocuments.render(document.getElementById('referenceDocsAdmin'));
+    if (window.SSGMediaPartnershipAdmin)
+      window.SSGMediaPartnershipAdmin.render(document.getElementById('mediaPartnershipAdmin'));
     loadFormulas();
     loadFollowUpTemplates();
     loadEsignEmailTemplates();
