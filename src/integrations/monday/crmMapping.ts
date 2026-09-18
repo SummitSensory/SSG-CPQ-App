@@ -18,8 +18,18 @@
  */
 
 import type { CustomerType, OpportunityStage } from '@prisma/client';
+import { env } from '../../config/env.js';
 
-export const DEALS_BOARD_ID = '6527740233';
+/**
+ * The real Deal Tracking board id, defaulting to production's — but overridable via
+ * MONDAY_DEALS_BOARD_ID, same as sync.ts/proposalPush.ts already read it. This used
+ * to be a bare literal here, which meant contactPush.ts and routes/freight.ts (the
+ * only two importers of this constant) kept writing to the real production board
+ * even when an operator followed docs/MONDAY-INTEGRATION.md's own sandbox-testing
+ * procedure and pointed MONDAY_DEALS_BOARD_ID at a test board — silently defeating
+ * the one env var that procedure says makes every monday write safe to test.
+ */
+export const DEALS_BOARD_ID = env.MONDAY_DEALS_BOARD_ID || '6527740233';
 export const ORGANIZATIONS_BOARD_ID = '6527740311';
 export const CONTACTS_BOARD_ID = '6527740281';
 

@@ -629,7 +629,15 @@ export function registerQuickbooksRoutes(app: FastifyInstance): void {
    * customer and a misapplied payment.
    *
    * To re-enable: delete these three handlers and restore the originals from git
-   * history — sendTransaction, draftReminder and sendReminder are all still intact.
+   * history. `sendTransaction` (billing.ts) is still live and callable; the
+   * Resend-based `draftReminder`/`sendReminder` (formerly
+   * src/integrations/quickbooks/reminders.ts) were deleted as confirmed-dead code
+   * (Pass 5 audit, 2026-09-18) — zero callers anywhere, and doubly superseded: this
+   * refusal, and the live Outlook-based payment-request composer in
+   * routes/receivables.ts. Both are recoverable from git history if this decision
+   * is ever reversed. The reminder-history table (`paymentReminder`, read in
+   * billing.ts) is untouched — it is the record of reminders sent before Biller
+   * Genie took over, not part of the send path.
    */
   const DELIVERY_IS_EXTERNAL = {
     error: 'DELIVERY_HANDLED_EXTERNALLY',

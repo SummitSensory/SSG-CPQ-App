@@ -498,35 +498,55 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
 
   // The envelope row exists before DocuSeal is called, so a failed send leaves a
   // record of the attempt with the document that was going to go out.
-  const envelope = await prisma.esignEnvelope.create({
-    data: {
-      proposalId: version.proposal.id,
-      versionId: version.id,
-      templateId: template?.id ?? null,
-      templateKey: template?.key ?? null,
-      emailTemplateId: emailTemplate?.id ?? null,
-      emailTemplateKey: emailTemplate?.key ?? null,
-      attachments: attachments.map((a) => a.key) as Prisma.InputJsonValue,
-      referenceDocuments: (input.referenceDocumentKeys ?? []) as Prisma.InputJsonValue,
-      renderings: mergedRenderingIds as Prisma.InputJsonValue,
-      status: 'DRAFT',
-      subject: emailSubject,
-      message: emailHtml,
-      packageSha256: sha256,
-      packageBytes: pdf.length,
-      sentById: input.actorId,
-      signers: {
-        create: signers.map((s) => ({
-          role: s.role,
-          name: s.name ?? null,
-          email: s.email,
-          order: s.order ?? 1,
-          viewOnly: s.viewOnly ?? false,
-        })),
-      },
-    },
-    include: { signers: true },
-  });
+  //
+  // The `open` check above and this create are not atomic — everything between them
+  // (org/template/attachment reads, PDF rendering, merges) takes seconds, a real
+  // window for two concurrent sends of the same version. migration
+  // 0094_esign_envelope_live_unique adds a partial unique index on (versionId) for
+  // the LIVE statuses, so the database — not just this read-then-write check — is
+  // what actually makes "only one envelope is live per version" true. A P2002 here
+  // means we lost that race, not that anything about this send was invalid, so it
+  // gets the same message a caller who failed the earlier check would see.
+  const envelope = await (async () => {
+    try {
+      return await prisma.esignEnvelope.create({
+        data: {
+          proposalId: version.proposal.id,
+          versionId: version.id,
+          templateId: template?.id ?? null,
+          templateKey: template?.key ?? null,
+          emailTemplateId: emailTemplate?.id ?? null,
+          emailTemplateKey: emailTemplate?.key ?? null,
+          attachments: attachments.map((a) => a.key) as Prisma.InputJsonValue,
+          referenceDocuments: (input.referenceDocumentKeys ?? []) as Prisma.InputJsonValue,
+          renderings: mergedRenderingIds as Prisma.InputJsonValue,
+          status: 'DRAFT',
+          subject: emailSubject,
+          message: emailHtml,
+          packageSha256: sha256,
+          packageBytes: pdf.length,
+          sentById: input.actorId,
+          signers: {
+            create: signers.map((s) => ({
+              role: s.role,
+              name: s.name ?? null,
+              email: s.email,
+              order: s.order ?? 1,
+              viewOnly: s.viewOnly ?? false,
+            })),
+          },
+        },
+        include: { signers: true },
+      });
+    } catch (err) {
+      if (typeof err === 'object' && err !== null && (err as { code?: string }).code === 'P2002') {
+        throw new ValidationError(
+          'This proposal version already has a signature request out. Void it before sending another.',
+        );
+      }
+      throw err;
+    }
+  })();
 
   const stored = await putPdf(
     envelopePath({

@@ -1,17 +1,39 @@
 import type { OpportunityStage } from '@prisma/client';
+import { DEAL_COL } from './crmMapping.js';
 
 /**
- * Column-id mapping for the monday "deal tracking" board. monday column ids are
- * board-specific; override via env if they differ from these defaults.
+ * Column-id mapping for the monday "Deal Tracking" board (6527740233).
+ *
+ * `stage` is sourced from crmMapping.ts's `DEAL_COL`, whose ids were read off the
+ * live board rather than assumed (see that file's own header comment) — this file
+ * used to hardcode its own, different value ('status') here, which disagreed with
+ * DEAL_COL.stage ('deal_stage') and, being unverified, was very likely wrong.
+ *
+ * `fundingStatus` and `budget` have no verified equivalent in DEAL_COL and could
+ * not be confirmed against the live board from code alone (no MONDAY_API_TOKEN in
+ * this environment) — left as originally scaffolded rather than guessed at a
+ * different id, which risks silently writing to an unrelated real column. Confirm
+ * both against the live board (GET /integrations/monday/boards/6527740233) before
+ * relying on them.
  */
 export const COLUMN = {
-  stage: 'status',
+  stage: DEAL_COL.stage,
   fundingStatus: 'status_1',
   budget: 'numbers',
-  organization: 'text',
 } as const;
 
-/** Local stage → monday status label. */
+/**
+ * Local stage → monday status label.
+ *
+ * UNVERIFIED against the live board: crmMapping.ts's own `toStage()` (the inbound
+ * counterpart of this same Deal Phase column) matches on free-form keywords rather
+ * than an exact label list, with the comment "Deal Phase is a free-form status
+ * column that changes as the sales process changes" — meaning the board's real
+ * labels likely do not exactly match these 7 fixed strings. An outbound write here
+ * (STAGE_TO_STATUS[stage]) can silently fail to match any real option, and an
+ * inbound label (STATUS_TO_STAGE[label]) can silently fail to match any of these
+ * keys. Confirm the board's actual Deal Phase options before trusting this table.
+ */
 export const STAGE_TO_STATUS: Record<OpportunityStage, string> = {
   PROSPECT: 'Prospect',
   QUALIFICATION: 'Qualification',

@@ -52,7 +52,20 @@ const jsonOrClear = (v: Record<string, unknown> | null | undefined) =>
  * Everything else here is cheap and stays on the main function.
  */
 const Signer = z.object({
-  role: z.string().trim().min(1).max(40).default(CUSTOMER_ROLE),
+  // Charset-restricted, not just length-bounded: this value is spliced into a `;`-
+  // delimited DocuSeal field tag (assembly.ts's tag()) before it is HTML-escaped —
+  // a `;` injects an extra attribute into that tag and a `}}` closes it early,
+  // neither of which escaping alone (defense in depth, applied separately) prevents.
+  role: z
+    .string()
+    .trim()
+    .min(1)
+    .max(40)
+    .regex(
+      /^[A-Za-z0-9 .,'&()/-]+$/,
+      'Role can only contain letters, numbers, spaces and basic punctuation.',
+    )
+    .default(CUSTOMER_ROLE),
   name: z.string().trim().max(160).optional(),
   email: z.string().trim().email(),
   order: z.number().int().min(1).max(10).optional(),

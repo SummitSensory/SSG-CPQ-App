@@ -5,6 +5,11 @@
 **Status:** Pass 1 complete (static + architectural). Pass 2 executed against catalog data
 integrity (2026-08-29, §14). Pass 4 (2026-09-09, §15) re-audited everything shipped since —
 101 commits, mostly the DocuSeal e-sign subsystem — and fixed 6 HIGH findings same-day.
+Pass 5 (2026-09-18, §16), prompted by a direct request for a complete process-flow and
+coding audit of monday.com and every other integration, found and fixed a live column-id
+mismatch in the outbound monday.com opportunity push, a cross-field corruption path in
+inbound monday.com sync, and a financial data-corruption path in the just-merged
+secondary-vendor BOM feature, among others.
 Runtime/browser verification of UI-layer changes and a general performance pass are still
 outstanding.
 
@@ -1291,3 +1296,296 @@ were not exercised).
 
 **Not verified in a browser**: the signature-field-layout CSS fix (AUD's own recommendation
 above), and nothing else in this pass touched rendered UI beyond that one file.
+
+---
+
+## 16. Pass 5 — monday.com and every other integration, full audit (2026-09-18)
+
+Prompted by a direct request for a detailed process-flow and coding audit of the entire
+application, with particular emphasis on monday.com: "ensure every connection to monday.com
+and the various columns works and all of the other integrated software applications work
+without issue." Four parallel reviews covered, respectively: every monday.com column id and
+sync path end to end; the QuickBooks integration in full (last fully audited in Pass 1); the
+DocuSeal, Microsoft Graph and IPInfo integrations (re-checked for regression since Pass 4);
+and the 28 commits shipped since Pass 4 (2026-09-09), none of which had been through any
+audit pass. Every finding below was independently re-verified by direct code reading —
+several by querying the live database's own `IntegrationSyncLog`/`ExternalLink` tables and
+by empirically testing a proposed database fix against this environment's Neon database
+before writing it into a migration — before any fix, the same discipline established in
+Passes 1 and 4. No monday.com/QuickBooks/DocuSeal credentials are configured in this local
+environment, so live-API verification was not possible for anything that needed it; those
+items are recorded as open below rather than guessed at.
+
+**Four HIGH findings, all fixed same-day.** No CRITICAL. Several LOW findings fixed
+alongside them; a handful of items are recorded but deliberately not fixed, per the standing
+house rule (AUD-018) — a defensible business call or a live-board-only fact is not guessed
+at.
+
+### Fixed — HIGH
+
+**AUD-033 — The outbound monday.com Opportunity push used a different, unverified,
+almost-certainly-wrong column id for "stage" than every other file in the same integration.**
+`src/integrations/monday/mapping.ts`'s `COLUMN.stage` was hardcoded to `'status'` — a
+generic scaffold value from when this file was written, per its own now-corrected header
+comment and `docs/MONDAY-INTEGRATION.md`'s "design + scaffold... not executed here" status.
+`src/integrations/monday/crmMapping.ts`'s `DEAL_COL.stage = 'deal_stage'`, by contrast, was
+"read off the live boards... rather than assumed" (that file's own header comment), and
+`proposalPush.ts` independently corroborates the real money column is `deal_value`, not
+`mapping.ts`'s `'numbers'`. `sync.ts`'s `pushOpportunity` — wired live at
+`src/routes/crm.ts:502` on every `POST /crm/opportunities` — used the unverified value.
+Querying this environment's own `IntegrationSyncLog` table found **zero** OUTBOUND rows for
+entity `Opportunity` ever, despite `ExternalLink` rows existing from a bulk import — meaning
+this specific write path has left no evidence of ever running successfully or
+unsuccessfully in this database, consistent with either very low usage of "create Opportunity
+in the CPQ CRM UI directly" or the wrong column id causing every attempt to fail silently
+(caught, logged, but nothing here to log against). Either way, an internally disagreeing
+column id for the same conceptual column is a defect regardless of how it currently fails.
+**Fixed:** `mapping.ts`'s `COLUMN.stage` now imports and reuses `crmMapping.ts`'s
+`DEAL_COL.stage`, so there is one source of truth for this id instead of two disagreeing
+ones. `COLUMN.fundingStatus` and `COLUMN.budget` have no verified equivalent in `DEAL_COL`
+and were **left unchanged** rather than guessed at a different value — guessing wrong here
+risks silently writing opportunity data into an unrelated real column, which is worse than
+the current failure mode. Flagged in a code comment: confirm both against the live board
+(`GET /integrations/monday/boards/6527740233`) before relying on them.
+**Also flagged, not fixed:** `STAGE_TO_STATUS`'s 7 fixed English labels are unverified
+against the real board — `crmMapping.ts`'s own inbound counterpart for the same column
+(`toStage()`) matches free-form keywords specifically because "Deal Phase is a free-form
+status column that changes as the sales process changes," which means the real labels very
+likely do not exactly equal these 7 strings in either direction. This needs a live look at
+the board's actual Deal Phase options, not a guess from this codebase.
+**Confidence:** High on the internal inconsistency and the fix; the exact right values for
+the two remaining fields need Bryan or live board access to confirm.
+
+**AUD-034 — Any column change on a linked monday.com deal item was evaluated as if it
+might be an Opportunity stage change, not just changes to the actual stage column.**
+`src/integrations/monday/sync.ts`'s `applyInboundChange` defaulted `field` to
+`'opportunity.stage'` whenever a caller didn't pass it explicitly — and the only real
+caller, the webhook route (`src/routes/integrations.ts:479`), never does; it passes
+`columnId` and `newStatusLabel` but not `field`. So a webhook event for the amount column,
+the owner column, or any other status-type column on the same deal row (e.g. "Type of
+Customer") was run through the exact same `field === 'opportunity.stage'` branch as a real
+stage change. Concretely: a different status column whose label happened to also be "Won"
+or "Lost" (a real possibility — `customerTypeLabel`/status5\_\_1 is one such column) would
+silently overwrite `Opportunity.stage` with a completely unrelated fact. This also meant a
+genuine CPQ-authoritative field change (the amount column, specifically) never reached the
+"refuse and log as conflict" branch `docs/MONDAY-INTEGRATION.md`'s own manual test procedure
+(§5 step 6) requires — it fell through to `'ignored'` instead, because a numbers column's
+webhook payload has no `.label.text` shape to satisfy the stage branch's guard. **Fixed:**
+`field` is now derived from whether `change.columnId` actually equals the (now-corrected,
+per AUD-033) real stage column id; an unrecognized column returns `'ignored'` rather than
+being evaluated as a stage change. Full conflict-logging for every other CPQ-authoritative
+column (amount, owner, close date) still needs those columns' real ids confirmed against the
+live board before it can be wired the same way — recorded as open, not guessed at.
+**Tests:** `tests/unit/monday-inbound-field-detection.test.ts` (3 cases: a real stage-column
+event applies; an unrelated column with a label that WOULD match `STATUS_TO_STAGE` if
+wrongly evaluated is ignored, proving the columnId check gates it rather than the label
+shape; a numbers-column-shaped event with no label is ignored).
+**Confidence:** High.
+
+**AUD-035 — Two of monday.com's write paths bypassed `MONDAY_DEALS_BOARD_ID`, silently
+defeating the documented sandbox-testing procedure.** `docs/MONDAY-INTEGRATION.md` §5
+instructs testers to "set `MONDAY_DEALS_BOARD_ID` to the sandbox board id" so every monday
+write is safe to test before touching production. `sync.ts` and `proposalPush.ts` correctly
+read `env.MONDAY_DEALS_BOARD_ID`, but `src/integrations/monday/contactPush.ts` and
+`src/routes/freight.ts` imported the board id as a bare literal
+(`crmMapping.ts`'s `DEALS_BOARD_ID = '6527740233'`) — so a rep editing a CRM contact, or a
+freight request/release, would have kept writing to the **real production board** even
+while an operator believed the documented sandbox procedure had isolated every monday
+write. `routes/freight.ts`'s writes were also found to have no `isMondayConfigured()` /
+`isMondayPushConfigured()` gate at all — a deployment with `MONDAY_API_TOKEN` but no
+`MONDAY_DEALS_BOARD_ID` set would still attempt a freight-request push straight to the
+literal production board id while `pushOpportunity` correctly no-ops. **Fixed:**
+`crmMapping.ts`'s `DEALS_BOARD_ID` now reads `env.MONDAY_DEALS_BOARD_ID`, falling back to
+the same production literal — a single-point fix that corrects every importer at once,
+including the two live-writing files above, with no behavior change in a normal deployment
+(production's env var, when set, already equals the same value).
+**Confidence:** High.
+
+**AUD-036 — The pre-existing "Refresh costs from the catalog" feature silently corrupts
+the brand-new secondary-vendor Bill of Materials cost, the moment both are used together.**
+`src/handoff/bomBuild.ts`'s `withSecondaryVendor` (merged same day as this audit, PR #119)
+creates a **second** procurement line sharing its `sku` with the part's own line, forced to
+a deliberately different cost — what a second vendor charges for an extra step (e.g. a
+powder-coating fee), not what the part's own vendor charges for the part itself.
+`src/handoff/costRefresh.ts`'s `previewCostRefresh`, which predates this feature and was
+not updated by it, matched every procurement line to the catalog purely by `sku`, with no
+awareness of the new `secondaryOfSku` column. Since a secondary line's real cost is
+essentially never equal to the primary vendor's catalog cost for the same part number, it
+was **always** reported as "differing from the catalog," pre-checked by default in the UI
+modal (`app.js`'s "Refresh costs" dialog checks every unblocked differing row), and — with
+nothing distinguishing it visually from an ordinary drift correction — clicking Apply
+silently overwrote the second vendor's genuine agreed cost with the first vendor's catalog
+price. **Failure scenario, concretely:** a part is bought raw for $10 and sent to a second
+vendor for a $5/unit finishing step; running the catalog refresh shows the finishing line as
+"differing" from the $10 catalog cost, pre-checked, and Apply changes it to $10 — silently
+overstating that vendor's cost and misstating the job's margin, indistinguishable from a
+routine price correction. **Fixed:** `previewCostRefresh` now reads each line's
+`secondaryOfSku` and, for a secondary line, compares (and — on Apply — writes) against
+`Sku.secondaryVendorCostMinor` for that part instead of `Sku.unitCostMinor`. Each row in the
+preview now also carries a `secondaryVendor` flag, surfaced in the modal as a plain-language
+tag ("secondary vendor (catalog = what this vendor charges, not the part's own vendor
+cost)") next to the free-issue tag it already showed, so an approver can see what kind of
+line they are repricing even when it does show real drift.
+**Tests:** `tests/unit/cost-refresh-secondary-vendor.test.ts` (4 cases: a matching secondary
+line reports no drift; a genuinely stale secondary cost reports drift against the correct
+reference value, not the primary catalog cost; applying it writes the secondary reference
+value; an ordinary line is unaffected and still compares against the primary catalog cost).
+**Confidence:** High — traced end to end from schema through `bomBuild.ts`'s seed creation,
+`service.ts`'s persistence, and `costRefresh.ts`'s query/apply, and reproduced deterministically
+in the new tests.
+
+### Fixed — MEDIUM
+
+**AUD-037 — A rep-supplied e-sign signer role was spliced unescaped into the invisible
+DocuSeal field tag, while the visible label right next to it was already escaped.**
+`src/integrations/docuseal/assembly.ts`'s `signerBlock()` escaped `role` for the visible
+label (`escapeHtml(role)`) but passed the same, raw value into `tag()` → `invisibleTag()`,
+which splices it directly into real HTML (`<span style="...">${text}</span>`) rendered by a
+script-enabled headless Chromium page (`src/render/pdf.ts`) — DocuSeal only ever sees the
+resulting PDF bytes, so nothing downstream of this app's own render defangs it.
+`src/routes/esign.ts`'s `Signer.role` schema constrained only length (`.max(40)`), not
+charset, so an authenticated user with `proposal:esign` could set a role containing
+`<`/`>`/`&` (HTML breakout) or `;`/`}}` (which corrupts or prematurely closes the tag's own
+`{{...;role=...;type=...}}` grammar). **Fixed, two layers:** `esign.ts`'s schema now
+restricts `role` to a letters/numbers/basic-punctuation charset (the authoritative fix,
+closing both the HTML-breakout and the tag-corruption vector at the source); `assembly.ts`'s
+`tag()` now escapes both `name` and `role` before composing the tag (defense in depth,
+matching the visible half of the same block, so a future caller reaching `buildPackage`
+some other way is still covered). **Tests:** two new cases in
+`tests/unit/docuseal-assembly.test.ts` — a `<script>` role is escaped in both the visible
+label and the tag itself; a role containing `;type=text}}<b>injected</b>{{X` cannot break
+out of the tag once escaped.
+**Confidence:** High on the defect and the fix; the real-world blast radius depends on
+Chromium's own sandboxing in `render/pdf.ts`, which this pass did not separately re-audit.
+
+**AUD-038 — "Only one envelope is live per proposal version" was an application-level
+read-then-write check with no lock and no database constraint, unlike every other
+concurrency fix Pass 4 shipped for the same failure shape.**
+`src/integrations/docuseal/service.ts`'s `sendProposalForSignature` reads for an open
+envelope (`esignEnvelope.findFirst`), then — after several seconds of org/template reads,
+headless-Chromium PDF rendering and merging — creates one. Two concurrent sends for the same
+version could both pass the check and both create a live envelope: exactly the "two open
+signing links for the same job is how a customer signs the wrong price" failure the module's
+own header comment says must never happen, and the same failure class already fixed twice
+before in this codebase (AUD-030 freight true-up, AUD-031 belt-shipment ledger) — just not
+applied here. **Fixed:** migration `0094_esign_envelope_live_unique` adds a **partial**
+unique index on `EsignEnvelope(versionId)` scoped to the LIVE statuses (DRAFT/SENT/
+VIEWED/PARTIALLY_SIGNED) — a plain unique index would be wrong, since a version legitimately
+accumulates several envelopes over time (voided, declined, completed, then a new one sent).
+Prisma's schema DSL cannot express a partial index, so it has no `schema.prisma`
+counterpart — verified empirically against this environment's database (`pnpm db:drift`
+before and after creating a throwaway copy of the index reports identically, with or
+without it) before writing the real migration, rather than assumed. `service.ts` now
+catches the resulting unique violation (P2002) and raises the same "already has a signature
+request out" message a caller who failed the earlier check would see, instead of an
+unhandled 500.
+**Confidence:** High — the race was reproduced by inspection (this pass's independent
+verifier traced the exact call sequence and line numbers) and the index closes it at the
+one layer that is actually atomic.
+
+### Fixed — LOW
+
+- **QuickBooks `customFields.ts` permanently disabled custom-field placement after one
+  transient failure.** `loadSlots()` cached an empty slot map on a Preferences-read
+  failure exactly as it cached a genuine "no custom fields configured" result — so one
+  network hiccup or throttle disabled Project ID / PO custom-field placement (soft-falling
+  back to the invoice memo) for the rest of that server process's life, with nothing
+  retrying until a restart. Fixed: the cache is now only written on a successful read; a
+  failure returns an empty map for that call without memoizing it, so the next call tries
+  again.
+- **QuickBooks `freightPush.ts`'s SUPPLEMENT-mode concurrent double-push reported a
+  misleading "QuickBooks did not accept the freight update" when QuickBooks had in fact
+  accepted it fine.** Two concurrent pushes for the same freight batch are already
+  deduplicated at the QuickBooks layer (the `requestid` idempotency key on the invoice
+  `create()` call), but the second push's own `QboTransaction` row — keyed by the same
+  `idempotencyKey` — then hit a DB-level unique violation, which fell into the function's
+  generic catch and reported a QuickBooks failure that never happened. Fixed: that specific
+  create is now caught and reported as a `ConflictError` naming what actually occurred —
+  "This freight was already pushed to QuickBooks by another request just now."
+- **monday.com `freightRequestPush.ts` dropped the `inferred` caveat `dealLink.ts` provides
+  for exactly this situation** (the deal row was guessed from "this customer's most recent
+  linked deal" rather than a named opportunity) — `dealFigures.ts` and `proposalPush.ts`
+  already surface this same caveat; freight-request pushes silently did not. Fixed: the
+  result now carries the same wording dealFigures.ts uses ("Check the freight subitems
+  landed on the right job.") when the link was inferred.
+- **Dead code / stale claims corrected.** `src/integrations/quickbooks/reminders.ts`
+  (`draftReminder`/`sendReminder`, a Resend-based reminder implementation) had zero callers
+  anywhere in the repository — confirmed dead, and doubly superseded: the QBO-native
+  send/reminder endpoints already refuse per AUD-015, and the actual live "chase a
+  customer" feature is the Outlook-based payment-request composer in
+  `routes/receivables.ts`/`routes/receivablesRender.ts`. Deleted, matching the AUD-017/015
+  precedent for confirmed-dead, potentially-confusing code; the reminder-history table
+  (`paymentReminder`, read separately in `billing.ts`) is untouched. The stale comment in
+  `src/routes/quickbooks.ts` claiming these functions were "still intact" is corrected.
+  Separately, `docs/QUICKBOOKS-INTEGRATION.md` claimed the CPQ/QBO source-of-truth table is
+  "enforced by `canWriteFromQbo()`" — grep confirmed **zero** production call sites for that
+  function; every actual QBO→CPQ write path (`billing.ts`, `receivables.ts`, `reconcile.ts`,
+  `poSync.ts`) is safe today because each independently only ever writes QBO-owned mirror
+  columns, not because of a checked gate. Doc corrected to say so plainly, so the next
+  reader (or the next new inbound write path) doesn't inherit an overstated safety claim.
+
+### Recorded, not fixed — needs live monday.com/QuickBooks access or a business decision
+
+- **monday.com `fundingStatus`/`budget` column ids (mapping.ts) and the `STAGE_TO_STATUS`
+  label vocabulary** — see AUD-033. Cannot be verified from code; needs
+  `GET /integrations/monday/boards/6527740233` against the live board (no
+  `MONDAY_API_TOKEN` configured in this environment) or Bryan's direct confirmation.
+- **monday.com "Summit Flex" welded-legs label — one narrow edge case.**
+  `src/routes/freight.ts`'s `flexOnly` requires the A-2200 frame with no other non-leg,
+  non-trolley SKU present; if a Flex frame ships alongside one unrelated accessory line,
+  the code falls through to the numeric leg count ("0") instead of the "Summit Flex" label.
+  Whether that combination happens in practice is a business-rule question, not a code
+  question — recorded for confirmation, not guessed at. Everything else about this
+  feature (the label strings, the priority order, reading from the saved proposal rather
+  than the live builder) was independently verified correct and matches the three commits
+  that shipped it (#109, #114, #115).
+- **QuickBooks `POST /render/receivables/:txnId/payment-request/send` has no server-side
+  idempotency guard.** Confirmed real in isolation, but the only caller
+  (`public/accounts-receivable.js`) already has the same `if (busy) return; busy = true;`
+  double-click guard used by every other send button in that file — checked directly, not
+  assumed. A raw API retry outside that UI (a client network layer retrying a slow POST, or
+  a direct API call) could still double-send; not fixed here because a server-side
+  idempotency key for this multi-step Chromium-render-plus-Graph-send pipeline is a real
+  design change this pass could not validate end to end against a live Outlook mailbox.
+- **QuickBooks HTTP-200-with-a-`Fault`-body and the `create()`-vs-`update()`
+  `operation=update` query parameter** — the QuickBooks integration reviewer flagged both
+  as plausible-but-unconfirmable from code alone (existing tests pass and the code's own
+  comments describe the intended production behavior); recorded rather than guessed at,
+  per this pass's own no-guessing rule. Would need a deliberate sandbox probe (a malformed
+  create; an explicit check of whether `operation=update` is actually required) to close.
+- **Financing-PDF client-side retry (`public/app.js`, PR #91) retries once on ANY failure**,
+  including a definite one (403/404/422), not just the transient browser-reclaim symptom it
+  was built for. Bounded (max 2 attempts, matching AUD-019's "retry exactly once"
+  discipline) and low-cost (a doubled wait plus a "Retrying…" flash before the same
+  deterministic error is shown) — deferred rather than fixed, consistent with this
+  codebase's general caution around editing `public/app.js` for low-value changes.
+
+### Validation
+
+`pnpm typecheck` clean · `pnpm lint` 0 warnings/errors · `pnpm db:migrate:status` up to date
+(95 migrations) · `pnpm db:drift` reports only the same pre-existing, already-documented
+drift from an unrelated in-flight branch (migration 0092's own header explains it; this
+pass's new migration 0094 was verified empirically, before writing it, to add nothing to
+that drift) · `pnpm db:check:integrity` pass, 25 warnings (unchanged baseline) ·
+`pnpm test`: **778 passed, 0 failed** (74 unit files / 660 tests, 22 integration files / 118
+tests — 10 new cases across three new/extended files) · `pnpm build` clean · `pnpm test:e2e`:
+1 passed (health), 4 skipped (no `E2E_TOKEN` / live stack in this environment — unchanged
+from Pass 4's baseline).
+
+`pnpm format:check` reports 159 files needing reformatting in this environment —
+investigated and confirmed to be a **local-environment false positive**: this Windows
+checkout has `core.autocrlf=true`, so every file not explicitly forced to LF in
+`.gitattributes` is checked out as CRLF, and Prettier (LF by default) flags the line
+endings on files whose actual content is untouched. `git status` before any edit in this
+pass showed a clean working tree, and GitHub Actions' CI (Linux runners, LF checkout) is
+green on `main`'s latest commit — confirming this is not a real formatting defect. Not
+acted on, per this repository's own standing rule against a repo-wide `pnpm format`.
+
+**Not verified against a live monday.com/QuickBooks/DocuSeal account**: this environment has
+no API credentials configured for any of the three (consistent with prior passes — DocuSeal
+and IPInfo credentials are known to live in Vercel production only). Every finding above was
+verified by reading the actual code paths, cross-referencing independently-verified sibling
+files within the same integration, and — for the monday.com opportunity-push finding —
+querying this environment's live database directly, rather than by exercising a live API
+call. The monday.com column-id items recorded above as open specifically need that live
+access, which this pass did not have.
