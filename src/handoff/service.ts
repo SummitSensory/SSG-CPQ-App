@@ -502,11 +502,18 @@ export async function createAcceptedOrder(
                   vendor: p.vendorOverride ?? ref.vendor,
                   purchaseVendor: p.vendorOverride ? (p.purchaseVendor ?? ref.vendor) : null,
                   freeIssue: !!p.freeIssue,
-                  unitCostMinor: ref.unitCostMinor ?? p.unitCostMinor ?? null,
+                  // forcedUnitCostMinor wins unconditionally — set only by the
+                  // secondaryVendor rule, whose line's cost is what the SECOND vendor
+                  // charges, which has nothing to do with what the catalog resolves for
+                  // this part number's own (first) vendor. Every other seed shape leaves
+                  // it unset, so this changes nothing for kit components or free issue.
+                  unitCostMinor:
+                    p.forcedUnitCostMinor ?? ref.unitCostMinor ?? p.unitCostMinor ?? null,
                   unitWeightLbs: ref.unitWeightLbs ?? p.unitWeightLbs ?? null,
                   isHardwareComponent: !!p.isHardwareComponent,
                   kitSku: p.kitSku ?? null,
                   proposalLineOrder: p.proposalLineOrder ?? null,
+                  secondaryOfSku: p.secondaryOfSku ?? null,
                 };
               }),
             },

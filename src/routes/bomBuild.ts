@@ -48,6 +48,13 @@ const SettingsInput = z.object({
    * Empty string clears it — the part goes back to its own vendor at full cost.
    */
   freeIssueVendor: z.union([z.string().trim().max(160), z.null()]).optional(),
+  /**
+   * A SECOND manufacturer NAME whose sheet this part also gets its own line on, in
+   * addition to (not instead of) its own vendor. Empty string clears it.
+   */
+  secondaryVendor: z.union([z.string().trim().max(160), z.null()]).optional(),
+  /** What secondaryVendor charges per unit. Null/0 = a receiving note, no charge. */
+  secondaryVendorCostMinor: z.union([z.number().int().min(0), z.null()]).optional(),
 });
 
 export function registerBomBuildRoutes(app: FastifyInstance): void {
@@ -133,8 +140,20 @@ export function registerBomBuildRoutes(app: FastifyInstance): void {
         orderBy: [{ parentPart: 'asc' }, { sortOrder: 'asc' }, { childPart: 'asc' }],
       }),
       prisma.sku.findMany({
-        where: { OR: [{ keepParentOnBom: true }, { NOT: { freeIssueVendor: null } }] },
-        select: { part: true, keepParentOnBom: true, freeIssueVendor: true },
+        where: {
+          OR: [
+            { keepParentOnBom: true },
+            { NOT: { freeIssueVendor: null } },
+            { NOT: { secondaryVendor: null } },
+          ],
+        },
+        select: {
+          part: true,
+          keepParentOnBom: true,
+          freeIssueVendor: true,
+          secondaryVendor: true,
+          secondaryVendorCostMinor: true,
+        },
       }),
     ]);
 
@@ -145,6 +164,8 @@ export function registerBomBuildRoutes(app: FastifyInstance): void {
         name: string;
         keepParentOnBom: boolean;
         freeIssueVendor: string | null;
+        secondaryVendor: string | null;
+        secondaryVendorCostMinor: number | null;
         components: Array<{
           id: string;
           childPart: string;
@@ -178,6 +199,8 @@ export function registerBomBuildRoutes(app: FastifyInstance): void {
           name: info.get(k)?.description ?? '',
           keepParentOnBom: !!s?.keepParentOnBom,
           freeIssueVendor: s?.freeIssueVendor ?? null,
+          secondaryVendor: s?.secondaryVendor ?? null,
+          secondaryVendorCostMinor: s?.secondaryVendorCostMinor ?? null,
           components: [],
         };
         parents.set(k, row);
@@ -330,7 +353,12 @@ export function registerBomBuildRoutes(app: FastifyInstance): void {
       });
     }
 
-    const data: { keepParentOnBom?: boolean; freeIssueVendor?: string | null } = {};
+    const data: {
+      keepParentOnBom?: boolean;
+      freeIssueVendor?: string | null;
+      secondaryVendor?: string | null;
+      secondaryVendorCostMinor?: number | null;
+    } = {};
     if (parsed.data.keepParentOnBom !== undefined)
       data.keepParentOnBom = parsed.data.keepParentOnBom;
     if (parsed.data.freeIssueVendor !== undefined) {
@@ -347,10 +375,31 @@ export function registerBomBuildRoutes(app: FastifyInstance): void {
       }
       data.freeIssueVendor = v || null;
     }
+    if (parsed.data.secondaryVendor !== undefined) {
+      const v = (parsed.data.secondaryVendor || '').trim();
+      if (v) {
+        const mfr = await prisma.manufacturer.findFirst({ where: { name: v } });
+        if (!mfr)
+          throw new ValidationError(
+            `"${v}" is not a manufacturer on record. Add the vendor first under Catalog → Manufacturers.`,
+          );
+      }
+      data.secondaryVendor = v || null;
+    }
+    if (parsed.data.secondaryVendorCostMinor !== undefined)
+      data.secondaryVendorCostMinor = parsed.data.secondaryVendorCostMinor;
+
     const row = await prisma.sku.update({
       where: { part },
       data,
-      select: { part: true, description: true, keepParentOnBom: true, freeIssueVendor: true },
+      select: {
+        part: true,
+        description: true,
+        keepParentOnBom: true,
+        freeIssueVendor: true,
+        secondaryVendor: true,
+        secondaryVendorCostMinor: true,
+      },
     });
     await recordAudit({
       actorId: req.user!.sub,

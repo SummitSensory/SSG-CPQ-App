@@ -1535,6 +1535,16 @@ model Sku {
   /// Materials at no cost — Summit has already paid for it — and is left out of their
   /// cost total. The real cost stays on the order line, so cost of goods is unchanged.
   freeIssueVendor String?
+  /// A SECOND vendor NAME this part also needs its own Bill of Materials line on, in
+  /// ADDITION to its own vendor — not instead of it, which is what freeIssueVendor
+  /// above does. The standing example: bought raw from one vendor, then sent to
+  /// Goldberg Brothers for powder-coating, who needs to see it on their own sheet
+  /// under their own part number. That printed number comes from the existing
+  /// VendorPartNumber mapping for this vendor — nothing new to look up.
+  secondaryVendor String?
+  /// What secondaryVendor charges per unit for this step. NULL/0 when it is a
+  /// receiving/processing note rather than a separate purchase.
+  secondaryVendorCostMinor Int?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -2137,8 +2147,13 @@ model ProcurementLine {
   /// of goods is unaffected. Set from Sku.freeIssueVendor.
   freeIssue      Boolean  @default(false)
   purchaseVendor String?
-
-
+  /// Set on a line CREATED BY the secondaryVendor rule (see Sku.secondaryVendor):
+  /// the part number the rule fired on. Null on every ordinary line, including the
+  /// original line that rule was fired FROM — that one is untouched, unlike free
+  /// issue, which moves the original. Lets re-applying the rule to an order that
+  /// already has this vendor's line skip it, the same way kitSku above does for
+  /// components.
+  secondaryOfSku String?
 
   @@index([orderId])
 }

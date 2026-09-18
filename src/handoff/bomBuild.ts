@@ -37,6 +37,17 @@ export interface BomBuildSeed extends ProcurementSeed {
   /** Who we bought it from, kept once `vendor` has been redirected. */
   purchaseVendor?: string | null;
   freeIssue?: boolean;
+  /**
+   * Wins over the catalog-resolved cost unconditionally (see
+   * src/handoff/service.ts's procurement-create map). Free issue and kit components
+   * never set this — the catalog cost is correct for them. Only a line created by
+   * the secondaryVendor rule sets it, because that line's cost is what the SECOND
+   * vendor charges, which has nothing to do with what the catalog says the part's
+   * own (first) vendor charges for the same part number.
+   */
+  forcedUnitCostMinor?: number | null;
+  /** Set on a line created by the secondaryVendor rule: the part it fired on. */
+  secondaryOfSku?: string | null;
 }
 
 /** Deep enough for a kit of kits; shallow enough that a bad cycle cannot run away. */
@@ -57,6 +68,11 @@ interface PartInfo {
   vendor: string | null;
 }
 
+interface SecondaryVendorRule {
+  vendor: string;
+  costMinor: number | null;
+}
+
 export interface BuildTables {
   /** Parent part → the parts it explodes into. */
   children: Map<string, ChildRow[]>;
@@ -64,6 +80,8 @@ export interface BuildTables {
   keepParent: Set<string>;
   /** Part → the vendor it is shipped to at no charge. */
   freeIssueVendor: Map<string, string>;
+  /** Part → the second vendor whose sheet it ALSO appears on, and what they charge. */
+  secondaryVendor: Map<string, SecondaryVendorRule>;
 }
 
 /** Nothing configured: every caller treats this as "leave the order alone". */
@@ -71,6 +89,7 @@ const EMPTY_TABLES: BuildTables = {
   children: new Map(),
   keepParent: new Set(),
   freeIssueVendor: new Map(),
+  secondaryVendor: new Map(),
 };
 
 /**
@@ -94,11 +113,23 @@ export async function loadBuildTables(): Promise<BuildTables> {
       orderBy: [{ parentPart: 'asc' }, { sortOrder: 'asc' }, { childPart: 'asc' }],
       select: { parentPart: true, childPart: true, quantity: true },
     }),
-    // Both flags are rare, so this reads the handful of rows that carry one rather
-    // than the whole SKU master.
+    // All three flags are rare, so this reads the handful of rows that carry one
+    // rather than the whole SKU master.
     prisma.sku.findMany({
-      where: { OR: [{ keepParentOnBom: true }, { NOT: { freeIssueVendor: null } }] },
-      select: { part: true, keepParentOnBom: true, freeIssueVendor: true },
+      where: {
+        OR: [
+          { keepParentOnBom: true },
+          { NOT: { freeIssueVendor: null } },
+          { NOT: { secondaryVendor: null } },
+        ],
+      },
+      select: {
+        part: true,
+        keepParentOnBom: true,
+        freeIssueVendor: true,
+        secondaryVendor: true,
+        secondaryVendorCostMinor: true,
+      },
     }),
   ]);
 
@@ -114,12 +145,15 @@ export async function loadBuildTables(): Promise<BuildTables> {
 
   const keepParent = new Set<string>();
   const freeIssueVendor = new Map<string, string>();
+  const secondaryVendor = new Map<string, SecondaryVendorRule>();
   for (const s of skus) {
     if (s.keepParentOnBom) keepParent.add(key(s.part));
     const v = (s.freeIssueVendor || '').trim();
     if (v) freeIssueVendor.set(key(s.part), v);
+    const sv = (s.secondaryVendor || '').trim();
+    if (sv) secondaryVendor.set(key(s.part), { vendor: sv, costMinor: s.secondaryVendorCostMinor });
   }
-  return { children, keepParent, freeIssueVendor };
+  return { children, keepParent, freeIssueVendor, secondaryVendor };
 }
 
 /** Every part reachable from `roots` through the component table, roots included. */
@@ -263,13 +297,43 @@ function withFreeIssue(s: BomBuildSeed, t: BuildTables): BomBuildSeed {
 }
 
 /**
- * Apply both rules to the seeds `procurementFromItems` produced. Returns the seeds
- * unchanged when no rule exists, so an order on a database with an empty component
- * table behaves exactly as before.
+ * A part with a secondaryVendor rule gets a SECOND line on that vendor's sheet, in
+ * addition to (not instead of) its own line — the opposite of withFreeIssue above,
+ * which redirects. The new line's cost is forced to what the second vendor charges
+ * (possibly $0, a receiving note) regardless of what the catalog says the part's own
+ * vendor charges for the same part number; see BomBuildSeed.forcedUnitCostMinor.
+ */
+function withSecondaryVendor(seeds: BomBuildSeed[], t: BuildTables): BomBuildSeed[] {
+  if (!t.secondaryVendor.size) return seeds;
+  const out: BomBuildSeed[] = [];
+  for (const s of seeds) {
+    out.push(s);
+    const rule = t.secondaryVendor.get(key(s.sku));
+    if (!rule) continue;
+    out.push({
+      productId: null,
+      sku: s.sku,
+      name: s.name,
+      quantity: s.quantity,
+      isHardwareComponent: false,
+      kitSku: null,
+      proposalLineOrder: s.proposalLineOrder,
+      vendorOverride: rule.vendor,
+      forcedUnitCostMinor: rule.costMinor ?? 0,
+      secondaryOfSku: key(s.sku),
+    });
+  }
+  return out;
+}
+
+/**
+ * Apply all three rules to the seeds `procurementFromItems` produced. Returns the
+ * seeds unchanged when no rule exists, so an order on a database with empty rule
+ * tables behaves exactly as before.
  */
 export async function expandBomBuild(seeds: ProcurementSeed[]): Promise<BomBuildSeed[]> {
   const t = await loadBuildTables();
-  if (!t.children.size && !t.freeIssueVendor.size) return seeds;
+  if (!t.children.size && !t.freeIssueVendor.size && !t.secondaryVendor.size) return seeds;
   const info = await partInfo(
     reachable(
       seeds.map((s) => s.sku ?? ''),
@@ -278,7 +342,10 @@ export async function expandBomBuild(seeds: ProcurementSeed[]): Promise<BomBuild
   );
   const out: BomBuildSeed[] = [];
   for (const seed of seeds) out.push(...explode(seed, t, info, 0, []));
-  return out.map((s) => withFreeIssue(s, t));
+  return withSecondaryVendor(
+    out.map((s) => withFreeIssue(s, t)),
+    t,
+  );
 }
 
 export interface ApplyBuildResult {
@@ -290,6 +357,8 @@ export interface ApplyBuildResult {
   redirected: number;
   /** Parts with a rule that were skipped because the order already has them expanded. */
   alreadyExpanded: string[];
+  /** New lines created on a second vendor's sheet by the secondaryVendor rule. */
+  secondaryAdded: number;
 }
 
 /**
@@ -312,8 +381,9 @@ export async function applyBomBuildToOrder(
     componentsAdded: 0,
     redirected: 0,
     alreadyExpanded: [],
+    secondaryAdded: 0,
   };
-  if (!t.children.size && !t.freeIssueVendor.size) return result;
+  if (!t.children.size && !t.freeIssueVendor.size && !t.secondaryVendor.size) return result;
 
   const lines = await prisma.procurementLine.findMany({
     where: { orderId },
@@ -415,7 +485,50 @@ export async function applyBomBuildToOrder(
     }
   }
 
-  if (result.exploded.length || result.redirected) {
+  // Secondary vendor runs over the order as it now stands too, for the same reason
+  // free issue does above — a component that just came out of a kit may itself carry
+  // the rule. ADDITIVE, not a redirect: the matched line is left exactly as it is,
+  // and a new line is created for the second vendor unless one already exists
+  // (secondaryOfSku), so re-running this is safe.
+  if (t.secondaryVendor.size) {
+    const current = await prisma.procurementLine.findMany({
+      where: { orderId },
+      select: {
+        sku: true,
+        name: true,
+        quantity: true,
+        proposalLineOrder: true,
+        secondaryOfSku: true,
+      },
+    });
+    const alreadySecondary = new Set(current.map((l) => l.secondaryOfSku).filter(Boolean));
+    const secondaryToCreate = current
+      .filter((l) => !l.secondaryOfSku)
+      .map((l) => ({ line: l, rule: t.secondaryVendor.get(key(l.sku)) }))
+      .filter(
+        (x): x is { line: (typeof current)[number]; rule: SecondaryVendorRule } =>
+          !!x.rule && !alreadySecondary.has(key(x.line.sku)),
+      );
+    if (secondaryToCreate.length) {
+      await prisma.procurementLine.createMany({
+        data: secondaryToCreate.map(({ line, rule }) => ({
+          orderId,
+          productId: null,
+          sku: line.sku,
+          name: line.name,
+          quantity: line.quantity,
+          quantityOriginal: line.quantity,
+          vendor: rule.vendor,
+          unitCostMinor: rule.costMinor ?? 0,
+          proposalLineOrder: line.proposalLineOrder ?? null,
+          secondaryOfSku: key(line.sku),
+        })),
+      });
+      result.secondaryAdded = secondaryToCreate.length;
+    }
+  }
+
+  if (result.exploded.length || result.redirected || result.secondaryAdded) {
     await prisma.orderEvent.create({
       data: {
         orderId,
@@ -425,6 +538,7 @@ export async function applyBomBuildToOrder(
           exploded: result.exploded,
           componentsAdded: result.componentsAdded,
           redirected: result.redirected,
+          secondaryAdded: result.secondaryAdded,
         } as object,
       },
     });

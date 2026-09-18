@@ -155,8 +155,9 @@
         (admin ? '<div style="margin-left:auto;"><button class="btn" id="bbNew" style="width:auto;padding:10px 17px;">Add a part rule</button></div>' : '') +
       '</div>' +
       '<div style="font-size:12px;color:#8a8f85;margin-bottom:14px;line-height:1.6;max-width:860px;">' +
-        'Two rules per part, both read only when a Bill of Materials is built. <b>Components</b> replace a part with the parts it is made of, so one proposal line becomes the several parts we order. ' +
+        'Three rules per part, all read only when a Bill of Materials is built. <b>Components</b> replace a part with the parts it is made of, so one proposal line becomes the several parts we order. ' +
         '<b>Free issue</b> moves a part onto the sheet of the vendor it is shipped to, at no cost, for parts Summit buys elsewhere and has delivered there. ' +
+        '<b>Also appears on vendor</b> is for a part that goes through a second vendor after the first — bought raw, then sent out for powder coating, say — and needs its own line, at its own cost, on that second vendor’s sheet too, without leaving the first vendor’s sheet. ' +
         'A proposal, a price and a deal total are never affected.</div>' +
       '<div id="bbList"><div class="muted" style="padding:24px;">Loading…</div></div>';
     var s = document.getElementById('bbSearch'), t;
@@ -192,6 +193,17 @@
         return '<option value="' + esc(v.name) + '"' + (v.name === current ? ' selected' : '') + '>' + esc(v.name) + '</option>';
       }).join('');
     return '<select class="bbFree" data-part="' + esc(part) + '" style="' + bomFieldStyle('280px') + '">' + opts + '</select>';
+  }
+
+  // Also appears on vendor — a SECOND line, in addition to the part's own, on a
+  // second vendor's sheet (e.g. sent out for powder coating). Unlike free issue
+  // above, this never moves the original line.
+  function bbSecondaryVendorSelect(part, current) {
+    var opts = '<option value="">Does not also go to a second vendor</option>' +
+      bbState.vendors.map(function (v) {
+        return '<option value="' + esc(v.name) + '"' + (v.name === current ? ' selected' : '') + '>' + esc(v.name) + '</option>';
+      }).join('');
+    return '<select class="bbSecondary" data-part="' + esc(part) + '" style="' + bomFieldStyle('280px') + '">' + opts + '</select>';
   }
 
   function drawBomBuild(user) {
@@ -230,6 +242,7 @@
             '<div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap;">' +
               '<code style="font-size:14px;font-weight:600;color:#1c4039;">' + esc(p.parentPart) + '</code>' +
               (p.freeIssueVendor ? '<span class="chip" style="font-size:10.5px;background:#eef0ea;">Free issue → ' + esc(p.freeIssueVendor) + '</span>' : '') +
+              (p.secondaryVendor ? '<span class="chip" style="font-size:10.5px;background:#eef0ea;">Also → ' + esc(p.secondaryVendor) + '</span>' : '') +
               (p.keepParentOnBom ? '<span class="chip" style="font-size:10.5px;background:#eef0ea;">Parent kept on sheet</span>' : '') +
             '</div>' +
             '<div class="muted" style="font-size:12.5px;margin-top:3px;">' + esc(p.name || 'Not in the SKU master') + '</div>' +
@@ -254,6 +267,11 @@
               '<div class="muted" style="font-size:11px;margin-top:4px;max-width:300px;line-height:1.45;">Prints on that vendor’s sheet with no cost and stays out of their total.</div></div>' +
             '<label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#5c6157;cursor:pointer;padding-bottom:20px;">' +
               '<input type="checkbox" class="bbKeep" data-part="' + esc(p.parentPart) + '"' + (p.keepParentOnBom ? ' checked' : '') + (admin ? '' : ' disabled') + '> Keep the parent line on the sheet beside its components</label>' +
+          '</div>' +
+          '<div style="display:flex;gap:18px;align-items:flex-end;margin-top:14px;padding-top:14px;border-top:1px solid #f2f3ef;flex-wrap:wrap;">' +
+            '<div><div class="k">Also appears on vendor</div>' + bbSecondaryVendorSelect(p.parentPart, p.secondaryVendor || '') +
+              '<div class="muted" style="font-size:11px;margin-top:4px;max-width:300px;line-height:1.45;">Bought from its own vendor above, and ALSO gets its own line on this vendor’s sheet — e.g. sent out for powder coating. The part number they see comes from Manufacturers → Parts for this vendor, if one is on file.</div></div>' +
+            '<div><div class="k">What they charge, per unit</div><input class="bbSecondaryCost" data-part="' + esc(p.parentPart) + '" type="number" min="0" step="0.01" value="' + (p.secondaryVendorCostMinor == null ? '' : (Number(p.secondaryVendorCostMinor) / 100).toFixed(2)) + '" placeholder="0.00" style="' + bomFieldStyle('120px') + '"></div>' +
           '</div>' +
         '</div>' +
       '</div>';
@@ -334,6 +352,18 @@
         saveSetting(cb.getAttribute('data-part'), { keepParentOnBom: cb.checked }, cb);
       });
     });
+    box.querySelectorAll('.bbSecondary').forEach(function (sel) {
+      sel.addEventListener('change', function () {
+        saveSetting(sel.getAttribute('data-part'), { secondaryVendor: sel.value || null }, sel);
+      });
+    });
+    box.querySelectorAll('.bbSecondaryCost').forEach(function (inp) {
+      inp.addEventListener('change', function () {
+        var dollars = parseFloat(inp.value);
+        var minor = isFinite(dollars) && dollars >= 0 ? Math.round(dollars * 100) : null;
+        saveSetting(inp.getAttribute('data-part'), { secondaryVendorCostMinor: minor }, inp);
+      });
+    });
   }
 
   /**
@@ -359,7 +389,7 @@
         }
         if (!hit) return showErr(part + ' is not in the catalog. Add it under Catalog first.');
         if (!bbState.draft.some(function (x) { return x.parentPart === part; }))
-          bbState.draft.push({ parentPart: part, name: hit.name || hit.description || '', components: [], keepParentOnBom: false, freeIssueVendor: null });
+          bbState.draft.push({ parentPart: part, name: hit.name || hit.description || '', components: [], keepParentOnBom: false, freeIssueVendor: null, secondaryVendor: null, secondaryVendorCostMinor: null });
         close();
         bbState.q = '';
         renderBomBuild(user);
