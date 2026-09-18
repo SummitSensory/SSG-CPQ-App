@@ -10927,6 +10927,7 @@
                 '<div class="muted" style="font-size:11.5px;">' + esc(r.sku || '\u2014') + ' \u00b7 ' +
                 esc(r.vendor) + ' \u00b7 qty ' + r.quantity +
                 (r.freeIssue ? ' \u00b7 free issue' : '') +
+                (r.secondaryVendor ? ' \u00b7 secondary vendor (catalog = what this vendor charges, not the part\u2019s own vendor cost)' : '') +
                 (r.blocked ? '<div style="color:#9c3327;">' + esc(r.blocked) + '</div>' : '') + '</div></td>' +
               '<td style="padding:7px 10px;text-align:right;font-variant-numeric:tabular-nums;">' + money(r.currentMinor) + '</td>' +
               '<td style="padding:7px 10px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600;">' + money(r.catalogMinor) + '</td>' +

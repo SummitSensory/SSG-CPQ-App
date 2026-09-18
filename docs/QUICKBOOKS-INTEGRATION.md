@@ -47,8 +47,15 @@ Links are scoped by `environment` so sandbox ids never collide with production.
 
 ## 3. Field mapping & source-of-truth matrix
 
-Encoded in `src/integrations/quickbooks/source-of-truth.ts` and enforced by
-`canWriteFromQbo()` (unit-tested).
+Encoded in `src/integrations/quickbooks/source-of-truth.ts`. `canWriteFromQbo()` is
+unit-tested and available for any inbound (QBO → CPQ) write path to consult, but
+**no production code path currently calls it** (verified by grep, Pass 5 audit,
+2026-09-18) — the every-write-path-independently-correct claim below is achieved by
+each of `billing.ts`, `receivables.ts`, `reconcile.ts` and `poSync.ts` only ever
+writing QBO-owned mirror columns (id, sync token, balance, status), never a
+CPQ-authoritative field, not by a checked gate. Call `canWriteFromQbo()` before any
+future QBO → CPQ write path lands a new field, rather than trusting the same
+discipline to hold by inspection a third time.
 
 | Field                      | CPQ location                               | QuickBooks field                 | Source of truth         | Sync                  |
 | -------------------------- | ------------------------------------------ | -------------------------------- | ----------------------- | --------------------- |

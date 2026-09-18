@@ -173,9 +173,15 @@ function tag(
     fontSize: number;
   },
 ): string {
+  // name/role can carry a rep-supplied signer role (see esign.ts's Signer schema).
+  // This tag is spliced into HTML `invisibleTag()` renders in a real, script-enabled
+  // Chromium page (src/render/pdf.ts) — escaped here the same way the VISIBLE label
+  // beside it already is (signerBlock's escapeHtml(role)), so an unescaped role can
+  // never break out of the invisible span into live markup. escapeHtml only touches
+  // `& < > "`, so it does not interfere with the `{ } ; =` this tag's own grammar uses.
   const parts = [
-    name,
-    `role=${role}`,
+    escapeHtml(name),
+    `role=${escapeHtml(role)}`,
     `type=${type}`,
     `valign=${opts.valign ?? 'bottom'}`,
     `width=${opts.width}`,

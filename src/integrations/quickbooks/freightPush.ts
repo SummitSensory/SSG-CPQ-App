@@ -529,40 +529,61 @@ export async function pushFreightToQbo(
       // billing list, syncs its own payments, and can be emailed from here like any
       // other. Written directly rather than through prepare/execute: those build a
       // document from the accepted totals, and this one bills a slice of them.
-      const supplement = await prisma.qboTransaction.create({
-        data: {
-          type: 'INVOICE',
-          environment,
-          status: 'CREATED',
-          proposalId: version.proposalId,
-          proposalVersionId: version.id,
-          proposalVersion: version.version,
-          currency: txn.currency,
-          proposalTotalMinor: batch.totalMinor,
-          amountMinor: batch.totalMinor,
-          totalsSnapshot: {
-            kind: 'FREIGHT_SUPPLEMENT',
-            trueUpId,
-            entryIds: batch.entries.map((e) => e.id),
-            followsTxnId: txn.id,
-            followsDocNumber: txn.qboDocNumber,
-            sequence: preview.priorSupplements + 1,
-            buckets: FREIGHT_BUCKETS.filter((b) => batch.amounts[b] > 0n).map((b) => ({
-              bucket: b,
-              amountMinor: batch.amounts[b].toString(),
-              reference: batch.references[b] ?? null,
-            })),
-          } as object,
-          idempotencyKey: `qbo:${environment}:INVOICE:${version.id}:freight:${batchKey}`,
-          customerQboId,
-          qboId: obj.Id,
-          qboSyncToken: obj.SyncToken,
-          qboDocNumber: obj.DocNumber ?? docNo,
-          initiatedById: userId,
-          authorizedById: userId,
-          authorizedAt: new Date(),
-        },
-      });
+      let supplement: QboTransaction;
+      try {
+        supplement = await prisma.qboTransaction.create({
+          data: {
+            type: 'INVOICE',
+            environment,
+            status: 'CREATED',
+            proposalId: version.proposalId,
+            proposalVersionId: version.id,
+            proposalVersion: version.version,
+            currency: txn.currency,
+            proposalTotalMinor: batch.totalMinor,
+            amountMinor: batch.totalMinor,
+            totalsSnapshot: {
+              kind: 'FREIGHT_SUPPLEMENT',
+              trueUpId,
+              entryIds: batch.entries.map((e) => e.id),
+              followsTxnId: txn.id,
+              followsDocNumber: txn.qboDocNumber,
+              sequence: preview.priorSupplements + 1,
+              buckets: FREIGHT_BUCKETS.filter((b) => batch.amounts[b] > 0n).map((b) => ({
+                bucket: b,
+                amountMinor: batch.amounts[b].toString(),
+                reference: batch.references[b] ?? null,
+              })),
+            } as object,
+            idempotencyKey: `qbo:${environment}:INVOICE:${version.id}:freight:${batchKey}`,
+            customerQboId,
+            qboId: obj.Id,
+            qboSyncToken: obj.SyncToken,
+            qboDocNumber: obj.DocNumber ?? docNo,
+            initiatedById: userId,
+            authorizedById: userId,
+            authorizedAt: new Date(),
+          },
+        });
+      } catch (err) {
+        // QuickBooks itself already deduped the invoice create by requestid (the
+        // `qbo:freight:supplement:${batchKey}` idempotency key passed to create()
+        // above) — this second, DB-level unique violation means another concurrent
+        // push for the same batch WON the QBO create and already recorded it; the
+        // freight was billed exactly once. Say so plainly instead of falling into
+        // the generic catch below, which reports "QuickBooks did not accept the
+        // freight update" — misleading, since QuickBooks accepted it fine.
+        if (
+          typeof err === 'object' &&
+          err !== null &&
+          (err as { code?: string }).code === 'P2002'
+        ) {
+          throw new ConflictError(
+            'This freight was already pushed to QuickBooks by another request just now. Refresh the true-up before trying again.',
+          );
+        }
+        throw err;
+      }
       supplementTxnId = supplement.id;
       await prisma.integrationSyncLog.create({
         data: {

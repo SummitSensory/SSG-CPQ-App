@@ -67,13 +67,18 @@ async function loadSlots(
         if (name && enabled.get(slot) !== false) slots.set(name.toLowerCase(), slot);
       }
     }
+    // Cache only a genuine read, not a failure — see the catch branch below.
+    cache.set(realmId, slots);
   } catch (err) {
-    // A preferences read failure must never stop a document being created. The
-    // field is simply omitted, and the env override remains available.
+    // A preferences read failure must never stop a document being created, so this
+    // call still returns an empty map — but it must NOT be cached as one: a single
+    // transient network hiccup or throttle would otherwise disable custom-field
+    // placement (Project ID, PO #) for every document created for the rest of this
+    // process's lifetime, with nothing retrying until a restart. Leaving the cache
+    // unset means the next call simply tries the read again.
     logger.warn({ err, realmId }, 'QuickBooks custom field preferences could not be read');
   }
 
-  cache.set(realmId, slots);
   return slots;
 }
 

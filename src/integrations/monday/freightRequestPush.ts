@@ -83,6 +83,11 @@ export interface FreightRequestPushResult {
   /** Why nothing was pushed, in words a rep can act on. */
   skipped?: string;
   error?: string;
+  /**
+   * A caveat worth showing even on success — e.g. the deal row was inferred rather
+   * than named, same wording dealFigures.ts uses for the same situation.
+   */
+  note?: string;
 }
 
 /** Has this request already been pushed? Idempotency, per rule 2. */
@@ -153,8 +158,17 @@ export async function pushFreightRequestToMonday(rfqId: string): Promise<Freight
     return { pushed: false, skipped: `${rfq.reference} has already been pushed to the deal board` };
   }
 
-  const { itemId, note } = await dealItemIdFor(rfq.organizationId, rfq.proposal.opportunityId);
+  const { itemId, note, inferred } = await dealItemIdFor(
+    rfq.organizationId,
+    rfq.proposal.opportunityId,
+  );
   if (!itemId) return { pushed: false, skipped: note };
+  // Same caveat dealFigures.ts surfaces for the same situation: the deal row came
+  // from "this customer's most recent linked deal" rather than a named opportunity,
+  // so a customer running two concurrent jobs could have this pushed to the wrong one.
+  const inferredNote = inferred
+    ? 'The deal row was inferred from this customer’s most recent monday deal, not a named opportunity. Check the freight subitems landed on the right job.'
+    : undefined;
 
   const requestDate = dateValue(rfq.sentAt ?? rfq.createdAt);
 
@@ -194,7 +208,7 @@ export async function pushFreightRequestToMonday(rfqId: string): Promise<Freight
       { rfqId, itemId, vendor: rfq.vendor, rows: subitemIds.length },
       'monday freight request push: subitems created',
     );
-    return { pushed: true, itemId, subitemIds };
+    return { pushed: true, itemId, subitemIds, note: inferredNote };
   } catch (err) {
     logger.error({ err, rfqId, itemId }, 'monday freight request push failed');
     await prisma.integrationSyncLog.create({
