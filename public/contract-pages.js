@@ -172,10 +172,17 @@
    * Fire-and-forget by design: `html()` is called synchronously deep inside the document
    * builder and cannot await anything. In practice the fetch resolves at sign-in, long
    * before anyone opens a proposal. If it has not, or it fails, the shipped text prints.
+   *
+   * `force` bypasses the cached promise — legal-admin.js calls `load(true)` after
+   * toggling a document's enabled state or publishing new wording. Without it, this
+   * function's own cached `loading` promise made those calls no-ops: `load(true)` and
+   * `load()` returned the exact same, already-settled promise, so a publish never
+   * actually refreshed what the builder/renderer had cached for the rest of the
+   * session (the same bug public/media-rebate-program.js's `load()` had).
    */
-  function load() {
+  function load(force) {
     if (!H || !H.authed) return Promise.resolve(false);
-    if (loading) return loading;
+    if (loading && !force) return loading;
     loading = H.authed('/legal-documents/effective')
       .then(function (r) {
         return r && r.ok ? r.json() : null;
