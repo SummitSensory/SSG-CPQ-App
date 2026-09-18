@@ -1237,10 +1237,12 @@
       replace(await r.json());
       draw(host);
       say(key, 'Published. New proposals will print this wording.');
-      // The renderer caches the fetched text; refresh it so a preview elsewhere in this
-      // session does not keep showing the superseded wording.
+      // The renderer caches the fetched text; force a refresh so a preview elsewhere
+      // in this session does not keep showing the superseded wording. load(true), not
+      // init() — init() calls load() with no force flag, which contract-pages.js's own
+      // cached promise then just returns unchanged.
       if (window.SSGContractPages && window.SSGContractPages.load) {
-        window.SSGContractPages.init({ authed: H.authed });
+        window.SSGContractPages.load(true);
       }
     });
 
