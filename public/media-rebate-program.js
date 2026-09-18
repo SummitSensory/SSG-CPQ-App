@@ -14,6 +14,13 @@
  * Registers itself on window.SSGMediaRebateProgram. app.js calls init({ authed })
  * alongside the other modules; without that call `current()` returns null and every
  * caller already treats that the same as "program not configured/inactive".
+ *
+ * `load(true)` forces a re-fetch past the cached promise — called by
+ * public/media-partnership-admin.js right after a save, the same way
+ * public/legal-admin.js calls `SSGContractPages.load(true)` after publishing. Without
+ * it, an admin who turns the program on (or edits its wording) would keep seeing the
+ * stale pre-save answer in this same browser tab until the next full sign-in, because
+ * `CURRENT` is otherwise fetched once and cached for the session.
  */
 (function () {
   'use strict';
@@ -22,9 +29,9 @@
   var CURRENT = null;
   var loading = null;
 
-  function load() {
+  function load(force) {
     if (!H || !H.authed) return Promise.resolve(false);
-    if (loading) return loading;
+    if (loading && !force) return loading;
     loading = H.authed('/media-partnership-program/effective')
       .then(function (r) {
         return r && r.ok ? r.json() : null;
