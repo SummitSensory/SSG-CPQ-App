@@ -522,12 +522,65 @@
   }
 
   /**
+   * `{{customer}}` merge token in Media Program prose — same token, same bracket
+   * placeholder fallback when the proposal has no organization/contact yet, as
+   * `{{customer}}` in the release and terms (public/contract-pages.js's `fill()`/
+   * `TOKEN_LABELS`). Applied AFTER escaping, same order as contract-pages.js, so a
+   * customer name typed into the token cannot inject markup through the escaper.
+   */
+  function fillMediaCustomerToken(escapedHtml, customer) {
+    return escapedHtml.replace(/\{\{\s*customer\s*\}\}/g, function () {
+      return customer ? esc(customer) : '<span style="color:#8a91a0;">[customer]</span>';
+    });
+  }
+
+  /**
+   * Typeface and layout for the Media Program page — the identical closed set, same
+   * clamps, as public/contract-pages.js's styleOf()/bodyCss(), read from
+   * `program.content.style` (`MediaProgramStyle` in src/mediaRebate/defaults.ts)
+   * instead of a legal document's `style`. Copied rather than shared, per this file's
+   * own header comment on formatting primitives.
+   */
+  var MEDIA_FONTS = {
+    aptos: "Aptos,'Segoe UI',Calibri,system-ui,sans-serif",
+    plex: "'IBM Plex Sans',-apple-system,'Segoe UI',Helvetica,Arial,sans-serif",
+    georgia: "Georgia,'Times New Roman',Times,serif",
+  };
+
+  function mediaStyleOf(style) {
+    var s = style || {};
+    var n = function (v, d, lo, hi) {
+      var x = parseFloat(v);
+      return isFinite(x) && x >= lo && x <= hi ? x : d;
+    };
+    return {
+      family: MEDIA_FONTS[s.font] || MEDIA_FONTS.plex,
+      sizePt: n(s.sizePt, 9, 7, 12),
+      lineHeight: n(s.lineHeight, 1.35, 1.1, 1.9),
+      align: s.align === 'left' ? 'left' : 'justify',
+      titlePt: n(s.titlePt, 15, 11, 22),
+    };
+  }
+
+  function mediaBodyCss(st) {
+    return (
+      'font-family:' +
+      st.family +
+      ';font-size:' +
+      st.sizePt +
+      'pt;line-height:' +
+      st.lineHeight +
+      ';color:#20241f;'
+    );
+  }
+
+  /**
    * Text → paragraphs/bullets for the Media Program's admin-edited prose. Mirrors
    * the plain blank-line-paragraph / one-bullet-per-line convention
    * src/mediaRebate/defaults.ts ships, so an admin typing into a plain textarea in
-   * Administration does not need to learn any markup.
+   * Administration does not need to learn any markup beyond the {{customer}} token.
    */
-  function mediaProgramTextHtml(text) {
+  function mediaProgramTextHtml(text, customer, align) {
     var blocks = String(text || '')
       .split(/\n\n+/)
       .filter(function (b) {
@@ -549,14 +602,22 @@
             lines
               .map(function (l) {
                 return (
-                  '<li style="margin-bottom:2px;">' + esc(l.trim().replace(/^•\s*/, '')) + '</li>'
+                  '<li style="margin-bottom:2px;">' +
+                  fillMediaCustomerToken(esc(l.trim().replace(/^•\s*/, '')), customer) +
+                  '</li>'
                 );
               })
               .join('') +
             '</ul>'
           );
         }
-        return '<p style="margin:0 0 8px;">' + esc(b) + '</p>';
+        return (
+          '<p style="margin:0 0 8px;text-align:' +
+          (align || 'justify') +
+          ';text-wrap:pretty;">' +
+          fillMediaCustomerToken(esc(b), customer) +
+          '</p>'
+        );
       })
       .join('');
   }
@@ -569,13 +630,15 @@
   function mediaRebateAcknowledgmentHtml(d) {
     var mr = (d.meta || {}).mediaRebate;
     if (!mr || !mr.offered) return '';
+    var m = d.meta || {};
+    var customer = d.orgName || m.contactName || '';
     var program = (window.SSGMediaRebateProgram && window.SSGMediaRebateProgram.current()) || null;
     var text =
       (program && program.content && program.content.signatureAcknowledgment) ||
-      'By signing this Proposal, Customer agrees to all selected options, programs, terms, and conditions contained in this Proposal, including the Customer Project Media Rebate Program where elected above.';
+      'By signing this Proposal, {{customer}} agrees to all selected options, programs, terms, and conditions contained in this Proposal, including the Customer Project Media Rebate Program where elected above.';
     return (
       '<div style="font-size:10.5px;color:#5b6478;line-height:1.55;margin-top:8px;">' +
-      esc(text) +
+      fillMediaCustomerToken(esc(text), customer) +
       '</div>'
     );
   }
@@ -598,33 +661,41 @@
   function mediaRebateSectionHtml(d) {
     var mr = (d.meta || {}).mediaRebate;
     if (!mr || !mr.offered) return '';
+    var m = d.meta || {};
+    var customer = d.orgName || m.contactName || '';
     var program = (window.SSGMediaRebateProgram && window.SSGMediaRebateProgram.current()) || null;
     var name = (program && program.customerFacingName) || 'Customer Project Media Rebate';
     var amountMinor = (program && program.rebateAmountMinor) || 25000;
     var content = (program && program.content) || {};
+    var st = mediaStyleOf(content.style);
+    var BODY = mediaBodyCss(st);
 
     var section = function (title, text) {
       if (!text) return '';
       return (
         '<div style="margin-top:14px;">' +
-        '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#3d4a55;margin-bottom:4px;">' +
+        '<div style="font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#3d4a55;margin-bottom:4px;">' +
         esc(title) +
         '</div>' +
-        mediaProgramTextHtml(text) +
+        mediaProgramTextHtml(text, customer, st.align) +
         '</div>'
       );
     };
 
     return (
-      '<div data-page-break="media-rebate" style="break-before:page;page-break-before:always;">' +
-      '<div style="font-family:\'Newsreader\',serif;font-size:19px;font-weight:700;color:#203060;letter-spacing:-.015em;margin-bottom:4px;">' +
+      '<div data-page-break="media-rebate" style="break-before:page;page-break-before:always;' +
+      BODY +
+      '">' +
+      "<div style=\"font-family:'Newsreader',serif;font-size:" +
+      st.titlePt +
+      'pt;font-weight:700;color:#203060;letter-spacing:-.015em;margin-bottom:4px;">' +
       esc(name) +
       '</div>' +
       '<div style="font-size:11.5px;color:#5b6478;line-height:1.6;margin-bottom:10px;">Rebate Available: <b>' +
       fmtUsd(amountMinor) +
       '</b> — does not reduce the Project Price or any amount due before shipment.</div>' +
-      '<div style="font-size:11px;line-height:1.6;color:#20241f;">' +
-      mediaProgramTextHtml(content.introduction) +
+      '<div>' +
+      mediaProgramTextHtml(content.introduction, customer, st.align) +
       '</div>' +
       section('Media Requirements', content.mediaRequirements) +
       section('Media Acceptance Standards', content.acceptanceStandards) +
@@ -637,9 +708,12 @@
       (mr.participate ? '✓' : '') +
       '</span>' +
       '<span>' +
-      esc(
-        content.participationLanguage ||
-          'Yes, we elect to participate in Summit Sensory Gym’s Customer Project Media Rebate Program and agree to the Media Program terms contained in this Proposal.',
+      fillMediaCustomerToken(
+        esc(
+          content.participationLanguage ||
+            'Yes, we elect to participate in Summit Sensory Gym’s Customer Project Media Rebate Program and agree to the Media Program terms contained in this Proposal.',
+        ),
+        customer,
       ) +
       '</span>' +
       '</label>' +

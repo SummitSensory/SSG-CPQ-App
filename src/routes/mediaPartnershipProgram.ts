@@ -27,6 +27,20 @@ const Timeframes = z.object({
   paymentDays: z.number().int().min(1).max(365),
 });
 
+/**
+ * Layout, validated as the identical closed set `src/routes/legalDocuments.ts` uses
+ * for the release and terms — same fonts, same bounds. This document prints onto the
+ * same fixed 816x1056 sheet the proposal paginator builds, so the same reasoning
+ * applies: bounded rather than free-form CSS, and the renderer clamps again besides.
+ */
+const Style = z.object({
+  font: z.enum(['aptos', 'plex', 'georgia']).default('plex'),
+  sizePt: z.coerce.number().min(7).max(12).default(9),
+  lineHeight: z.coerce.number().min(1.1).max(1.9).default(1.35),
+  align: z.enum(['justify', 'left']).default('justify'),
+  titlePt: z.coerce.number().min(11).max(22).default(15),
+});
+
 const Content = z.object({
   introduction: z.string().trim().min(1).max(20000),
   mediaRequirements: z.string().trim().min(1).max(20000),
@@ -37,6 +51,7 @@ const Content = z.object({
   participationLanguage: z.string().trim().min(1).max(2000),
   signatureAcknowledgment: z.string().trim().min(1).max(2000),
   timeframes: Timeframes,
+  style: Style.optional(),
 });
 
 const UpdateBody = z.object({
