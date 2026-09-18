@@ -14219,99 +14219,167 @@
     });
   }
 
+  /**
+   * Each admin tab is itself a stack of configuration blocks — Proposal content alone
+   * has six. Left all open, that stack is the same "long list" problem the tabs above
+   * were built to solve, one level down. Every block renders via admAcc() below as a
+   * closed accordion; opening one collapses every other block IN THAT SAME TAB (scoped
+   * to the nearest [data-adm] ancestor, so opening something under Proposal content
+   * never touches what is open under Orders & vendors) and clicking an open block
+   * closes it again.
+   *
+   * Wired once, after renderAdmin() sets #view's HTML — the accordions don't get
+   * rebuilt when a tab button is clicked (showAdmTab() only toggles display), so this
+   * only needs to run once per admin screen load.
+   */
+  function wireAdmAccordions() {
+    document.querySelectorAll('[data-admacctoggle]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var acc = btn.closest('.admAcc');
+        if (!acc) return;
+        var scope = btn.closest('[data-adm]') || document;
+        var wasOpen = acc.getAttribute('data-admaccopen') === '1';
+        scope.querySelectorAll('.admAcc').forEach(function (other) {
+          var body = other.querySelector('.admAccBody');
+          var chevron = other.querySelector('.admAccChevron');
+          var header = other.querySelector('[data-admacctoggle]');
+          other.setAttribute('data-admaccopen', '0');
+          if (body) body.style.display = 'none';
+          if (chevron) chevron.style.transform = '';
+          if (header) header.style.background = '#fafbf9';
+        });
+        if (!wasOpen) {
+          var body = acc.querySelector('.admAccBody');
+          var chevron = acc.querySelector('.admAccChevron');
+          acc.setAttribute('data-admaccopen', '1');
+          if (body) body.style.display = '';
+          if (chevron) chevron.style.transform = 'rotate(90deg)';
+          btn.style.background = '#eef1ea';
+        }
+      });
+    });
+  }
+
+  /**
+   * One collapsible configuration block. `button`, when given, is an action (New
+   * user, +New note…) that sits beside the header rather than inside the toggle —
+   * a sibling, not a descendant, so clicking it can never also collapse the section
+   * it belongs to. Collapsed by default: every admAccBody below ships with
+   * display:none inline, and wireAdmAccordions() is what opens one.
+   */
+  function admAcc(id, title, note, button, bodyHtml) {
+    return (
+      '<div class="admAcc" data-admacc="' + id + '" style="border:1px solid #e7e8e3;border-radius:8px;margin-bottom:12px;overflow:hidden;background:#fff;">' +
+        '<div style="display:flex;align-items:stretch;">' +
+          '<button type="button" data-admacctoggle="' + id + '" style="flex:1;display:flex;align-items:center;gap:9px;background:#fafbf9;border:none;padding:14px 16px;cursor:pointer;text-align:left;font-family:inherit;">' +
+            '<span class="admAccChevron" style="color:#8a8f85;font-size:11px;display:inline-block;transition:transform .15s ease;">▸</span>' +
+            '<span style="font-family:\'Newsreader\',serif;font-size:15.5px;font-weight:600;color:#3d4a55;">' + title + '</span>' +
+          '</button>' +
+          (button ? '<div style="display:flex;align-items:center;gap:8px;background:#fafbf9;padding:0 14px;">' + button + '</div>' : '') +
+        '</div>' +
+        '<div class="admAccBody" style="display:none;padding:16px;border-top:1px solid #e7e8e3;">' +
+          (note ? '<div class="muted" style="font-size:12.5px;margin:0 0 12px;max-width:820px;line-height:1.55;">' + note + '</div>' : '') +
+          bodyHtml +
+        '</div>' +
+      '</div>'
+    );
+  }
+
   async function renderAdmin(user) {
     var sec = function (id, inner) {
       return '<section data-adm="' + id + '">' + inner + '</section>';
-    };
-    var head = function (title, note, button) {
-      return '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;' +
-          'margin-top:4px;"><div class="section-title" style="margin:0;">' + title + '</div>' +
-          (button || '') + '</div>' +
-        (note ? '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;max-width:820px;line-height:1.55;">' + note + '</div>' : '');
     };
 
     document.getElementById('view').innerHTML =
       '<div id="admTabs" style="display:flex;flex-wrap:wrap;border-bottom:1px solid #e7e8e3;margin-bottom:20px;"></div>' +
 
       sec('users',
-        '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:16px;">' +
-          '<div class="section-title" style="margin:0;">People with access</div>' +
-          '<div style="display:flex;gap:8px;">' +
-            '<button class="link-btn" id="admMailTest" style="width:auto;padding:10px 15px;">Send test email</button>' +
-            '<button class="btn" id="admNew" style="width:auto;padding:10px 17px;">New user</button>' +
-          '</div></div>' +
-        '<div id="admList"><div class="muted" style="padding:24px;">Loading…</div></div>' +
-        '<div class="section-title" style="margin-top:26px;">Tips &amp; Tricks guide</div>' +
-        '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">The name, title and photo on the page-by-page help bubble everyone sees in the bottom-right corner (a person can turn the bubble itself off under My Profile). Change the photo here any time — nothing about the tips themselves needs a deploy to follow.</div>' +
-        '<div id="tipsGuideAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+        admAcc('usersPeople', 'People with access', '',
+          '<button class="link-btn" id="admMailTest" style="width:auto;padding:10px 15px;">Send test email</button>' +
+          '<button class="btn" id="admNew" style="width:auto;padding:10px 17px;">New user</button>',
+          '<div id="admList"><div class="muted" style="padding:24px;">Loading…</div></div>') +
+        admAcc('usersTips', 'Tips &amp; Tricks guide',
+          'The name, title and photo on the page-by-page help bubble everyone sees in the bottom-right corner (a person can turn the bubble itself off under My Profile). Change the photo here any time — nothing about the tips themselves needs a deploy to follow.',
+          '',
+          '<div id="tipsGuideAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>')) +
 
       sec('proposals',
-        head('Standard proposal notes',
+        admAcc('propNotes', 'Standard proposal notes',
           'Reusable note blocks for proposals. “Always include” notes are added to every new proposal automatically, and a note can name the parts that pull it in. Table notes print inside the line items; footer notes print below the signature lines. Also editable under Catalog → Proposal notes.',
-          '<button class="btn" id="snNew" style="width:auto;padding:9px 15px;">+ New note</button>') +
-        '<div id="snList"><div class="muted" style="padding:16px;">Loading…</div></div>' +
-        '<div class="section-title" style="margin-top:26px;">Proposal introductions</div>' +
-        '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">The pages that print ahead of the itemized proposal, one product line at a time. The photographs are set here and used by every proposal that prints that introduction &mdash; a rep picks the template on the proposal, never the pictures. Each slot names the size it prints at; anything larger is downscaled on upload. Page wording ships with the application.</div>' +
-        '<div id="introAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>' +
-        '<div class="section-title" style="margin-top:26px;">Contract documents</div>' +
-        '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">The general release and the standard terms, printed after the acceptance page. Editing them here changes what future proposals print; a proposal already released keeps the wording it went out with. Saving a draft is not publishing it.</div>' +
-        '<div id="legalAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>' +
-        '<div class="section-title" style="margin-top:26px;">Signature &amp; date placement</div>' +
-        '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">Drag a signature or date box to the exact spot it should print at on the acceptance page and the acknowledgment. Saved here, every proposal from now on prints at that spot &mdash; nothing to describe by hand each time.</div>' +
-        '<div id="sigFieldLayoutAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>' +
-        '<div class="section-title" style="margin-top:26px;">Reference documents</div>' +
-        '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">Pre-made PDFs — a W9, a certificate of insurance — a rep can attach to an individual proposal from the builder, the same way contract documents are attached. Uploaded once here; unlike the contract documents, these print exactly as uploaded rather than being retyped.</div>' +
-        '<div id="referenceDocsAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>' +
-        '<div class="section-title" style="margin-top:26px;">Media Partnership Program</div>' +
-        '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">The optional Customer Project Media Rebate a rep can offer on a proposal. Off by default and never reduces the Project Price. Editing here changes what a proposal offers going forward; a proposal already released keeps the terms it was released under.</div>' +
-        '<div id="mediaPartnershipAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+          '<button class="btn" id="snNew" style="width:auto;padding:9px 15px;">+ New note</button>',
+          '<div id="snList"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+        admAcc('propIntros', 'Proposal introductions',
+          'The pages that print ahead of the itemized proposal, one product line at a time. The photographs are set here and used by every proposal that prints that introduction &mdash; a rep picks the template on the proposal, never the pictures. Each slot names the size it prints at; anything larger is downscaled on upload. Page wording ships with the application.',
+          '',
+          '<div id="introAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+        admAcc('propContracts', 'Contract documents',
+          'The general release and the standard terms, printed after the acceptance page. Editing them here changes what future proposals print; a proposal already released keeps the wording it went out with. Saving a draft is not publishing it.',
+          '',
+          '<div id="legalAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+        admAcc('propSig', 'Signature &amp; date placement',
+          'Drag a signature or date box to the exact spot it should print at on the acceptance page and the acknowledgment. Saved here, every proposal from now on prints at that spot &mdash; nothing to describe by hand each time.',
+          '',
+          '<div id="sigFieldLayoutAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+        admAcc('propRefDocs', 'Reference documents',
+          'Pre-made PDFs — a W9, a certificate of insurance — a rep can attach to an individual proposal from the builder, the same way contract documents are attached. Uploaded once here; unlike the contract documents, these print exactly as uploaded rather than being retyped.',
+          '',
+          '<div id="referenceDocsAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+        admAcc('propMedia', 'Media Partnership Program',
+          'The optional Customer Project Media Rebate a rep can offer on a proposal. Off by default and never reduces the Project Price. Editing here changes what a proposal offers going forward; a proposal already released keeps the terms it was released under.',
+          '',
+          '<div id="mediaPartnershipAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>')) +
 
       sec('email',
-        '<div class="section-title" style="margin:4px 0 0;">Outlook drafts</div>' +
-        '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;max-width:820px;line-height:1.55;">Connect your own mailbox and a follow-up opens as a draft in Outlook instead of downloading a file. Each person connects their own — consent is per mailbox, so nobody can connect on your behalf and this app can never read anyone else&rsquo;s mail. Your signature is pasted here because Outlook keeps signatures in the app on your machine, where nothing on the server can reach them.</div>' +
-        '<div id="olPanel"><div class="muted" style="padding:16px;">Loading…</div></div>' +
-        '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:26px;"><div class="section-title" style="margin:0;">Follow-up emails</div>' +
-          '<button class="btn" id="futNew" style="width:auto;padding:9px 15px;">+ New template</button></div>' +
-        '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;max-width:820px;line-height:1.55;">The emails a rep can pick from on a proposal. The order matters — financing is not raised until the email before it has established that budget is the obstacle — so the step number decides the sequence. Editing here changes what everyone sends, immediately.</div>' +
-        '<div id="futList"><div class="muted" style="padding:16px;">Loading…</div></div>' +
-        '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:26px;"><div class="section-title" style="margin:0;">Proposal e-sign emails</div>' +
-          '<button class="btn" id="esetNew" style="width:auto;padding:9px 15px;">+ New template</button></div>' +
-        '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;max-width:820px;line-height:1.55;">The "please review and sign" email a rep sends with a proposal — separate from the follow-ups above and from the signing document itself. Auto-picked by product line the same way the signing document is, independently, so the two can be mixed and matched; a rep can always pick a different one before sending. Sent from the rep’s own connected Outlook mailbox, HTML included. <code>{{SigningLink}}</code> is filled in per recipient at send time, not here.</div>' +
-        '<div id="esetList"><div class="muted" style="padding:16px;">Loading…</div></div>' +
-        '<div class="muted" style="font-size:12.5px;margin-top:22px;padding-top:14px;border-top:1px solid #eef0ea;line-height:1.55;max-width:820px;">Payment-request emails and the letters they carry are edited with the invoices they belong to, under <b style="font-weight:600;">Accounts Receivable → Letters &amp; email</b>.</div>') +
+        admAcc('emailOutlook', 'Outlook drafts',
+          'Connect your own mailbox and a follow-up opens as a draft in Outlook instead of downloading a file. Each person connects their own — consent is per mailbox, so nobody can connect on your behalf and this app can never read anyone else&rsquo;s mail. Your signature is pasted here because Outlook keeps signatures in the app on your machine, where nothing on the server can reach them.',
+          '',
+          '<div id="olPanel"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+        admAcc('emailFollowups', 'Follow-up emails',
+          'The emails a rep can pick from on a proposal. The order matters — financing is not raised until the email before it has established that budget is the obstacle — so the step number decides the sequence. Editing here changes what everyone sends, immediately.',
+          '<button class="btn" id="futNew" style="width:auto;padding:9px 15px;">+ New template</button>',
+          '<div id="futList"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+        admAcc('emailEsign', 'Proposal e-sign emails',
+          'The "please review and sign" email a rep sends with a proposal — separate from the follow-ups above and from the signing document itself. Auto-picked by product line the same way the signing document is, independently, so the two can be mixed and matched; a rep can always pick a different one before sending. Sent from the rep’s own connected Outlook mailbox, HTML included. <code>{{SigningLink}}</code> is filled in per recipient at send time, not here.',
+          '<button class="btn" id="esetNew" style="width:auto;padding:9px 15px;">+ New template</button>',
+          '<div id="esetList"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+        '<div class="muted" style="font-size:12.5px;margin-top:6px;padding-top:14px;border-top:1px solid #eef0ea;line-height:1.55;max-width:820px;">Payment-request emails and the letters they carry are edited with the invoices they belong to, under <b style="font-weight:600;">Accounts Receivable → Letters &amp; email</b>.</div>') +
 
       sec('pricing',
-        '<div class="section-title" style="margin:4px 0 0;">Formulas</div>' +
-        '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;max-width:820px;line-height:1.55;">Every calculation the pricing engine runs. Frame and hardware quantities are editable coefficients; business numbers are the scalars the proposal math uses; the last tab lists what is fixed in code and why.</div>' +
-        '<div id="fxTabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;"></div>' +
-        // The log sits beside the formulas, not behind a tab: the question it answers
-        // is "what does this rule say now versus what it said before", and that needs
-        // both on screen at once.
-        '<div style="display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:18px;align-items:start;">' +
-          '<div id="fxBody"><div class="muted" style="padding:16px;">Loading…</div></div>' +
-          '<aside id="fxLog" style="position:sticky;top:16px;"></aside>' +
-        '</div>' +
-        '<div class="section-title" style="margin-top:26px;">Financing</div>' +
-        '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">Ryan Capital quote a <b>payment factor</b> per amount band and term, not an interest rate: the monthly payment is the amount financed × the factor at that intersection. Paste their sheet or edit a cell; the published sheet is what every new financing document quotes from.</div>' +
-        '<div id="finAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+        admAcc('pricingFormulas', 'Formulas',
+          'Every calculation the pricing engine runs. Frame and hardware quantities are editable coefficients; business numbers are the scalars the proposal math uses; the last tab lists what is fixed in code and why.',
+          '',
+          '<div id="fxTabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;"></div>' +
+          // The log sits beside the formulas, not behind a tab: the question it answers
+          // is "what does this rule say now versus what it said before", and that needs
+          // both on screen at once.
+          '<div style="display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:18px;align-items:start;">' +
+            '<div id="fxBody"><div class="muted" style="padding:16px;">Loading…</div></div>' +
+            '<aside id="fxLog" style="position:sticky;top:16px;"></aside>' +
+          '</div>') +
+        admAcc('pricingFinancing', 'Financing',
+          'Ryan Capital quote a <b>payment factor</b> per amount band and term, not an interest rate: the monthly payment is the amount financed × the factor at that intersection. Paste their sheet or edit a cell; the published sheet is what every new financing document quotes from.',
+          '',
+          '<div id="finAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>')) +
 
       sec('orders',
-        head('Vendor questions',
+        admAcc('ordersVendorQ', 'Vendor questions',
           'Questions asked on a Bill of Materials section. A question with no vendor is asked of <b>every</b> vendor; one with a vendor is asked only of theirs. Each new section starts with a copy, so editing a question here never rewrites an answer already given on an order.',
-          '<button class="btn" id="qtNew" style="width:auto;padding:9px 15px;">+ New question</button>') +
-        '<div id="qtList"><div class="muted" style="padding:16px;">Loading…</div></div>' +
-        '<div class="section-title" style="margin-top:26px;">Freight alert banner</div>' +
-        '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">The bar that appears above every screen when an invoice is short of freight. It is the most-seen thing in the application, so its colours are yours to set: pick a preset or two exact colours per state. The preview is live.</div>' +
-        '<div id="ftuBannerAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+          '<button class="btn" id="qtNew" style="width:auto;padding:9px 15px;">+ New question</button>',
+          '<div id="qtList"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+        admAcc('ordersFreightBanner', 'Freight alert banner',
+          'The bar that appears above every screen when an invoice is short of freight. It is the most-seen thing in the application, so its colours are yours to set: pick a preset or two exact colours per state. The preview is live.',
+          '',
+          '<div id="ftuBannerAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>')) +
 
       // cross-border.js appends #crossBorderPanel to #view when it cannot find it.
       // Giving it a home inside this tab is what keeps it from landing at the foot of
       // whichever tab happens to be open.
       sec('canada',
-        '<div id="crossBorderPanel"></div>');
+        admAcc('canadaCrossBorder', 'Cross-border', '', '', '<div id="crossBorderPanel"></div>'));
 
     drawAdmTabs();
     showAdmTab();
+    wireAdmAccordions();
 
     if (window.FreightTrueUp) window.FreightTrueUp.mountAdmin('ftuBannerAdmin', user);
     if (window.SSGIntroAdmin) window.SSGIntroAdmin.mountAdmin('introAdmin');
