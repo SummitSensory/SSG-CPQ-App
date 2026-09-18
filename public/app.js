@@ -2296,23 +2296,27 @@
    * a headless browser.
    */
   var lastReleaseDoc = null;
+  var lastReleaseDocError = null;
   async function actionBody(act, proposalId, versionId) {
     lastReleaseDoc = null;
+    lastReleaseDocError = null;
     if (act !== 'release') return {};
-    try {
-      var doc = await buildProposalDocForSend({ id: proposalId }, versionId);
-      if (doc) {
-        lastReleaseDoc = { versionId: versionId, html: doc.html, filename: doc.filename };
-        // The document itself is NOT sent here. pushReleasedProposal receives
-        // proposalHtml and does nothing with it but log that the document follows
-        // from the renderer — the PDF is made by the second call, against the
-        // render function. So this used to upload several megabytes of base64
-        // photographs, twice, and use them once: the first copy sat in front of
-        // the status change doing nothing but making it slower. The filename stays
-        // because it costs nothing and names the file the renderer will attach.
-        return { proposalFilename: doc.filename };
-      }
-    } catch (e) {}
+    var doc = await buildProposalDocForSend({ id: proposalId }, versionId);
+    if (doc) {
+      lastReleaseDoc = { versionId: versionId, html: doc.html, filename: doc.filename };
+      // The document itself is NOT sent here. pushReleasedProposal receives
+      // proposalHtml and does nothing with it but log that the document follows
+      // from the renderer — the PDF is made by the second call, against the
+      // render function. So this used to upload several megabytes of base64
+      // photographs, twice, and use them once: the first copy sat in front of
+      // the status change doing nothing but making it slower. The filename stays
+      // because it costs nothing and names the file the renderer will attach.
+      return { proposalFilename: doc.filename };
+    }
+    // Captured so startReleaseAttachment can tell the rep the attachment never
+    // even started, instead of the release finishing with no monday file and no
+    // explanation — see lastDocBuildError.
+    lastReleaseDocError = lastDocBuildError || 'the proposal document could not be built';
     return {};
   }
 
@@ -2329,12 +2333,34 @@
    * may be on an unrelated screen — an unattributed failure there reads as that
    * screen's bug.
    */
+  /**
+   * Render `doc` and PUT it on the deal row's file column. Shared by the automatic
+   * post-release attach and the manual "Attach to monday.com" retry — the two differ
+   * only in how `doc` was built and how they report the outcome, not in the upload
+   * itself. Returns '' on success, or a note in words a rep can act on.
+   */
+  async function uploadDocToMonday(versionId, doc) {
+    try {
+      var fr = await authed('/render/proposals/versions/' + versionId + '/monday-file', {
+        method: 'POST',
+        body: { proposalHtml: doc.html, filename: doc.filename },
+        timeoutMs: RENDER_TIMEOUT_MS,
+      });
+      var fd = fr.ok ? await fr.json() : null;
+      if (!fr.ok) return await serverMessage(fr, 'the renderer did not respond (' + fr.status + ')');
+      if (!fd || !fd.uploaded) return (fd && (fd.skipped || fd.error)) || 'monday did not accept the file';
+      return '';
+    } catch (e) { return (e && e.message) || 'the renderer could not be reached'; }
+  }
+
   function startReleaseAttachment(act, rr) {
     if (act !== 'release') return;
     // Captured synchronously, before any await: releasing a second proposal while
     // the first is still uploading would otherwise attach the wrong document.
     var doc = lastReleaseDoc;
+    var docError = lastReleaseDocError;
     lastReleaseDoc = null;
+    lastReleaseDocError = null;
     (async function () {
       var d = null;
       try { d = await rr.json(); } catch (e) { return; }
@@ -2345,23 +2371,45 @@
           (m.skipped || m.error || 'the deal board did not respond') + '.', 1);
         return;
       }
-      if (!doc) return;
+      if (!doc) {
+        // The deal figures made it to monday; the document build in the browser
+        // failed before it could. Reported rather than swallowed — this used to
+        // return here with no toast at all, so a rep would see a normal release
+        // and never learn the file was missing until a customer or monday asked.
+        toast('Released, and the deal board was updated, but the proposal document ' +
+          'could not be prepared for monday: ' + (docError || 'unknown error') +
+          '. Open the proposal and use "Attach to monday.com" to try again.', 1);
+        return;
+      }
       var who = doc.filename || 'the proposal';
       toast('Released. Attaching ' + who + ' to monday…');
-      var note = '';
-      try {
-        var fr = await authed('/render/proposals/versions/' + doc.versionId + '/monday-file', {
-          method: 'POST',
-          body: { proposalHtml: doc.html, filename: doc.filename },
-          timeoutMs: RENDER_TIMEOUT_MS,
-        });
-        var fd = fr.ok ? await fr.json() : null;
-        if (!fr.ok) note = await serverMessage(fr, 'the renderer did not respond (' + fr.status + ')');
-        else if (!fd || !fd.uploaded) note = (fd && (fd.skipped || fd.error)) || 'monday did not accept the file';
-      } catch (e) { note = (e && e.message) || 'the renderer could not be reached'; }
+      var note = await uploadDocToMonday(doc.versionId, doc);
       if (note) toast('The deal row was updated, but ' + who + ' did not attach: ' + note + '.', 1);
       else toast(who + ' is attached to the deal.');
     })();
+  }
+
+  /**
+   * Manual recovery for a released version whose document never made it to the
+   * deal row's file column. The automatic attempt in startReleaseAttachment runs
+   * once, right after release, and has no automatic retry — this is that retry,
+   * available any time from the proposal detail view.
+   */
+  async function retryMondayAttachment(proposalId, versionId, bt) {
+    bt.disabled = true;
+    toast('Building the proposal document…');
+    var doc = await buildProposalDocForSend({ id: proposalId }, versionId);
+    if (!doc) {
+      bt.disabled = false;
+      toast('Could not prepare the document: ' + (lastDocBuildError || 'unknown error') + '.', 1);
+      return;
+    }
+    var who = doc.filename || 'the proposal';
+    toast('Attaching ' + who + ' to monday…');
+    var note = await uploadDocToMonday(versionId, doc);
+    bt.disabled = false;
+    if (note) toast(who + ' did not attach: ' + note + '.', 1);
+    else toast(who + ' is attached to the deal.');
   }
 
   /**
@@ -3157,6 +3205,7 @@
       bt.addEventListener('click', async function () {
         var act = bt.getAttribute('data-act'), vid = bt.getAttribute('data-vid');
         if (act === 'lock') { openLockForm(vid, user); return; }
+        if (act === 'attach-monday') { retryMondayAttachment(id, vid, bt); return; }
         var path = act === 'new-version' ? '/proposals/' + id + '/versions' : '/proposals/versions/' + vid + '/' + act;
         var stage = actionProgress(bt);
         bt.disabled = true;
@@ -3180,7 +3229,12 @@
     function btn(act, label, primary) { return '<button class="' + (primary ? 'btn' : 'link-btn') + '" data-act="' + act + '" data-vid="' + v.id + '" style="width:auto;padding:9px 15px;">' + label + '</button>'; }
     if (s === 'DRAFT') { if (hasRole(PROP_WRITE, user.role)) b.push(btn('submit-review', 'Submit for review')); if (hasRole(PROP_RELEASE, user.role)) b.push(btn('release', 'Ready to Send to Customer', 1)); }
     else if (s === 'INTERNAL_REVIEW') { if (hasRole(PROP_REVIEW, user.role)) b.push(btn('return-draft', 'Return to draft')); if (hasRole(PROP_RELEASE, user.role)) b.push(btn('release', 'Ready to Send to Customer', 1)); }
-    else if (s === 'RELEASED') { if (hasRole(PROP_REVIEW, user.role)) { b.push(btn('accept', 'Proposal Signed', 1)); b.push(btn('reject', 'Reject')); b.push(btn('expire', 'Expire')); } }
+    else if (s === 'RELEASED') {
+      if (hasRole(PROP_REVIEW, user.role)) { b.push(btn('accept', 'Proposal Signed', 1)); b.push(btn('reject', 'Reject')); b.push(btn('expire', 'Expire')); }
+      // Recovery for the case above: release succeeded but the document never
+      // reached the deal row's file column. Same role as releasing itself.
+      if (hasRole(PROP_RELEASE, user.role)) b.push(btn('attach-monday', 'Attach to monday.com'));
+    }
     else if (s === 'ACCEPTED') {
       if (lockedOrder && lockedOrder.id && lockedOrder.status !== 'CANCELLED') {
         b.push('<span class="chip" style="align-self:center;">Locked to ' + esc(lockedOrder.number || 'order') + '</span>');
@@ -13427,18 +13481,26 @@
   /**
    * Build the proposal document for sending: load the current version, assemble the
    * same markup the preview uses, and wrap it to stand alone.
+   *
+   * Returns null on any failure — callers that show their own error (the send-email
+   * and e-sign dialogs) just check for that. `lastDocBuildError` carries the reason
+   * alongside it, for the one caller (the release action) that has no dialog open to
+   * show an error in and has to report the failure asynchronously, after the fact —
+   * see startReleaseAttachment.
    */
+  var lastDocBuildError = null;
   async function buildProposalDocForSend(p, versionId) {
+    lastDocBuildError = null;
     try {
       var rv = await authed('/proposals/' + p.id);
-      if (!rv.ok) return null;
+      if (!rv.ok) { lastDocBuildError = 'could not load the proposal (' + rv.status + ')'; return null; }
       var full = await rv.json();
       var versions = (full.versions || []).slice().sort(function (x, y) { return y.version - x.version; });
       var v = versionId ? (versions.filter(function (x) { return x.id === versionId; })[0] || versions[0]) : versions[0];
-      if (!v) return null;
+      if (!v) { lastDocBuildError = 'this version could not be found'; return null; }
       var doc = await proposalDocData(full, v);
       return { html: proposalStandaloneHtml(doc), filename: proposalFileName(doc) };
-    } catch (e) { return null; }
+    } catch (e) { lastDocBuildError = (e && e.message) || 'the document could not be built'; return null; }
   }
 
   /* --- Electronic signature (DocuSeal) ---
