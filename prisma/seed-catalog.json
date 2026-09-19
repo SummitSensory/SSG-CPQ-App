@@ -4956,6 +4956,36 @@
       "weightOz": null
     },
     {
+      "sku": "SSG-SS-OUTRIGGER-SWIVEL-EYE",
+      "name": "Swivel Eye Bolt (Outrigger — S1/S3 Frames)",
+      "productLine": "Summit Soar",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 0,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": 0
+    },
+    {
+      "sku": "SSG-SS-NON-OUTRIGGER-SWIVEL-EYE",
+      "name": "Swivel Eye Bolt (Non-Outrigger — S2 Frames)",
+      "productLine": "Summit Soar",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 0,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": 0
+    },
+    {
       "sku": "A-2200",
       "name": "Summit Flex: Universial Excerise Unit (Spider Cage) w/ Hardware",
       "productLine": "Summit Flex",
@@ -8391,6 +8421,24 @@
       "parentSlug": "soar--summit-soar-mats-accessories",
       "sku": "COLW2812",
       "sortOrder": 40150
+    },
+    {
+      "slug": "soar--ssg-ss-outrigger-swivel-eye",
+      "name": "Swivel Eye Bolt (Outrigger — S1/S3 Frames)",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar--summit-soar-mats-accessories",
+      "sku": "SSG-SS-OUTRIGGER-SWIVEL-EYE",
+      "sortOrder": 40160
+    },
+    {
+      "slug": "soar--ssg-ss-non-outrigger-swivel-eye",
+      "name": "Swivel Eye Bolt (Non-Outrigger — S2 Frames)",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar--summit-soar-mats-accessories",
+      "sku": "SSG-SS-NON-OUTRIGGER-SWIVEL-EYE",
+      "sortOrder": 40170
     },
     {
       "slug": "flex--summit-flex-series",

@@ -6,6 +6,7 @@ import {
   computeSoarProposal,
   SOAR_FRAMES,
   SOAR_PAD_ROWS,
+  SOAR_EYE_BOLT_ROWS,
   type SoarAnswers,
   type SoarSkuRec,
 } from '../proposals/soarSeries.js';
@@ -82,6 +83,7 @@ export function registerSoarRoutes(app: FastifyInstance): void {
     return {
       frames: SOAR_FRAMES.map((f) => ({ ...f, ...decorate(f.part) })),
       padRows: SOAR_PAD_ROWS.map((r) => ({ ...r, ...decorate(r.part) })),
+      eyeBoltRows: SOAR_EYE_BOLT_ROWS.map((r) => ({ ...r, ...decorate(r.part) })),
     };
   });
 
