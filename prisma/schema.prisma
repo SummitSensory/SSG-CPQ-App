@@ -1285,7 +1285,7 @@ model LegalDocumentRevision {
   @@unique([key, version])
 }
 
-/// Manual pixel nudges for the ten signature/date field boxes the proposal,
+/// Manual pixel nudges for the eight signature/date field boxes the proposal,
 /// acknowledgment and Media Rebate pages already print (the ids
 /// `injectSignatureFields` matches in src/integrations/docuseal/assembly.ts, authored
 /// in public/proposal-document.js and public/contract-pages.js). One singleton row:

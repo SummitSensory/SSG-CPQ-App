@@ -1,5 +1,5 @@
 /**
- * Drag-to-place, drag-to-resize editor for the ten signature/date boxes on the
+ * Drag-to-place, drag-to-resize editor for the eight signature/date boxes on the
  * acceptance page, the acknowledgment and the Media Rebate page: Administration ->
  * Proposal content -> "Signature & date placement".
  *
@@ -44,8 +44,6 @@
     'ssgSigAckSummitDate',
     'ssgSigMediaCustomerSignature',
     'ssgSigMediaCustomerDate',
-    'ssgSigMediaSummitSignature',
-    'ssgSigMediaSummitDate',
   ];
   /** slot id -> { width, height, fontSize }, as shipped — from the server's own
    *  SIGNATURE_FIELD_DEFAULTS (assembly.ts), never a hand-kept copy of it. */
@@ -69,8 +67,6 @@
     ssgSigAckSummitDate: 'Acknowledgment — Summit date',
     ssgSigMediaCustomerSignature: 'Media Rebate — Customer signature',
     ssgSigMediaCustomerDate: 'Media Rebate — Customer date',
-    ssgSigMediaSummitSignature: 'Media Rebate — Summit signature',
-    ssgSigMediaSummitDate: 'Media Rebate — Summit date',
   };
   /** Realistic placeholder VALUE shown inside each box, at its current font size, so
    *  resizing is judged against what a signed value actually looks like. */
@@ -83,8 +79,6 @@
     ssgSigAckSummitDate: { text: '09/07/2026', cursive: false },
     ssgSigMediaCustomerSignature: { text: 'Jane Customer', cursive: true },
     ssgSigMediaCustomerDate: { text: '09/07/2026', cursive: false },
-    ssgSigMediaSummitSignature: { text: 'Bryan Shepherd', cursive: true },
-    ssgSigMediaSummitDate: { text: '09/07/2026', cursive: false },
   };
   var FALLBACK_DEFAULT = { width: 150, height: 30, fontSize: 12 };
 
@@ -240,7 +234,7 @@
   }
 
   /** Fetches the picked proposal's real document, renders and paginates it exactly as
-   *  the proposal preview does, then mounts drag/resize onto whichever of the ten real
+   *  the proposal preview does, then mounts drag/resize onto whichever of the eight real
    *  boxes that document's own template/settings actually produced (a cover-only
    *  template has no acknowledgment page, and a proposal that never offered the
    *  Media Rebate has no ssgSigMedia* boxes, so those ids legitimately will not

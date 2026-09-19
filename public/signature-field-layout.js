@@ -1,8 +1,8 @@
 /**
- * Manual placement AND size for the ten signature/date boxes the proposal,
+ * Manual placement AND size for the eight signature/date boxes the proposal,
  * acknowledgment and Media Rebate pages print — see src/routes/signatureFieldLayout.ts
  * and SIGNATURE_FIELD_SLOT_IDS in src/integrations/docuseal/assembly.ts for what the
- * ten ids are and why.
+ * eight ids are and why.
  *
  * `width`/`height` (size) and `top`/`left` (position) are applied to two DIFFERENT
  * elements, not the same box's style twice — see proposal-document.js/

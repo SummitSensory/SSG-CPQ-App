@@ -709,16 +709,16 @@
   }
 
   /**
-   * One party's Media Rebate signature block. `idPrefix + 'Signature'/'Date'` must
-   * match a slot pair registered in src/integrations/docuseal/assembly.ts's
-   * CUSTOMER_SLOTS/SUMMIT_SLOTS (`ssgSigMediaCustomer*`/`ssgSigMediaSummit*`), or
-   * DocuSeal never places a real field behind the printed blank line — a printed
+   * The Media Rebate signature block — Customer only, called once. `idPrefix +
+   * 'Signature'/'Date'` must match the slot pair registered in
+   * src/integrations/docuseal/assembly.ts's CUSTOMER_SLOTS (`ssgSigMediaCustomer*`),
+   * or DocuSeal never places a real field behind the printed blank line — a printed
    * line with no field behind it is worse than no line at all (assembly.ts's own
    * header comment).
    */
   function mediaSigBlock(role, name, entity, idPrefix) {
     return (
-      '<div style="flex:1;">' +
+      '<div>' +
       '<div style="font-size:7.5pt;text-transform:uppercase;letter-spacing:.09em;color:#5b6478;margin-bottom:5px;">' +
       esc(role) +
       '</div>' +
@@ -738,24 +738,27 @@
    * signature (mediaRebateAcknowledgmentHtml above) — but the Product Use, Safety &
    * Responsibility Acknowledgment gets its OWN dedicated signature too, despite
    * being referenced the same way by that same sentence, because a program with its
-   * own obligations (Customer submits media and grants usage rights; Summit pays a
-   * rebate) is its own act of consent, not a footnote on a different one. Same
-   * "IN WITNESS WHEREOF" convention as the Acknowledgment (contract-pages.js's
-   * articlesDocHtml), both parties signing.
+   * own obligations (Customer submits media and grants usage rights) is its own act
+   * of consent, not a footnote on a different one.
+   *
+   * Customer only, unlike the Acknowledgment's dual blocks: Customer is the one
+   * agreeing to the program's terms here; Summit has no separate act of consent to
+   * countersign on this page. Same "IN WITNESS WHEREOF" convention as the
+   * Acknowledgment (contract-pages.js's articlesDocHtml) otherwise, and the same
+   * "Customer" defined-term wording that line uses rather than the company's actual
+   * name — the signature block right below it is what names the actual signer.
    */
   function mediaSignatureHtml(d, name) {
     var m = d.meta || {};
     var company = d.orgName || m.contactName || '';
-    var u = rules.documentUser();
     return (
       '<div style="margin-top:16px;padding-top:9px;border-top:1px solid #20241f;break-inside:avoid;">' +
-      'IN WITNESS WHEREOF, the parties have executed this ' +
+      'IN WITNESS WHEREOF, Customer has executed this ' +
       esc(name) +
       ' election as of the date written below.' +
       '</div>' +
-      '<div style="display:flex;gap:44px;margin-top:12px;break-inside:avoid;page-break-inside:avoid;">' +
+      '<div style="margin-top:12px;max-width:320px;break-inside:avoid;page-break-inside:avoid;">' +
       mediaSigBlock('Customer', m.contactName || '', company, 'ssgSigMediaCustomer') +
-      mediaSigBlock('Summit', u.name || '', 'Summit Sensory Gym', 'ssgSigMediaSummit') +
       '</div>'
     );
   }
