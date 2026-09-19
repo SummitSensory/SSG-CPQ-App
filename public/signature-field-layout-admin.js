@@ -1,19 +1,21 @@
 /**
- * Drag-to-place, drag-to-resize editor for the six signature/date boxes on the
- * acceptance page and the acknowledgment: Administration -> Proposal content ->
- * "Signature & date placement".
+ * Drag-to-place, drag-to-resize editor for the eight signature/date boxes on the
+ * acceptance page, the acknowledgment and the Media Rebate page: Administration ->
+ * Proposal content -> "Signature & date placement".
  *
  * Renders a REAL proposal, picked from a dropdown, through the exact same
  * proposalDocData/proposalDocHtml/paginateProposalArea pipeline the proposal
  * preview and PDF/DocuSeal send paths use (handed in via init() — see
  * app.js's own comment at the call site). That is deliberate, and replaces an
- * earlier version of this file that hand-copied the six boxes' markup into a
+ * earlier version of this file that hand-copied the boxes' markup into a
  * standalone mockup: a byte-for-byte copy had no way to stay in sync with
  * proposal-document.js/contract-pages.js except a human remembering to edit
  * both, and — more importantly — showed the boxes in isolation, with no
  * header, pricing table, or surrounding page for a rep to judge placement
- * against. Rendering the real document means the six boxes ARE exactly what
- * will print, on exactly the page they print on, every time.
+ * against. Rendering the real document means the boxes ARE exactly what
+ * will print, on exactly the page they print on, every time. A proposal that
+ * never offered the Media Rebate simply has no ssgSigMedia* boxes to place —
+ * see the "does not appear on this proposal's template" note below.
  *
  * Position (top/left), size (width/height) and font size are saved together per slot,
  * but apply to three different things — see public/signature-field-layout.js's own
@@ -40,6 +42,8 @@
     'ssgSigAckCustomerDate',
     'ssgSigAckSummitSignature',
     'ssgSigAckSummitDate',
+    'ssgSigMediaCustomerSignature',
+    'ssgSigMediaCustomerDate',
   ];
   /** slot id -> { width, height, fontSize }, as shipped — from the server's own
    *  SIGNATURE_FIELD_DEFAULTS (assembly.ts), never a hand-kept copy of it. */
@@ -61,6 +65,8 @@
     ssgSigAckCustomerDate: 'Acknowledgment — Customer date',
     ssgSigAckSummitSignature: 'Acknowledgment — Summit signature',
     ssgSigAckSummitDate: 'Acknowledgment — Summit date',
+    ssgSigMediaCustomerSignature: 'Media Rebate — Customer signature',
+    ssgSigMediaCustomerDate: 'Media Rebate — Customer date',
   };
   /** Realistic placeholder VALUE shown inside each box, at its current font size, so
    *  resizing is judged against what a signed value actually looks like. */
@@ -71,6 +77,8 @@
     ssgSigAckCustomerDate: { text: '09/07/2026', cursive: false },
     ssgSigAckSummitSignature: { text: 'Bryan Shepherd', cursive: true },
     ssgSigAckSummitDate: { text: '09/07/2026', cursive: false },
+    ssgSigMediaCustomerSignature: { text: 'Jane Customer', cursive: true },
+    ssgSigMediaCustomerDate: { text: '09/07/2026', cursive: false },
   };
   var FALLBACK_DEFAULT = { width: 150, height: 30, fontSize: 12 };
 
@@ -226,9 +234,11 @@
   }
 
   /** Fetches the picked proposal's real document, renders and paginates it exactly as
-   *  the proposal preview does, then mounts drag/resize onto whichever of the six real
-   *  boxes that document's own template actually produced (a cover-only template has
-   *  no acknowledgment page, so those four ids legitimately will not exist). */
+   *  the proposal preview does, then mounts drag/resize onto whichever of the eight real
+   *  boxes that document's own template/settings actually produced (a cover-only
+   *  template has no acknowledgment page, and a proposal that never offered the
+   *  Media Rebate has no ssgSigMedia* boxes, so those ids legitimately will not
+   *  exist on every proposal). */
   async function loadPreview(proposalId) {
     var canvas = document.getElementById('sflCanvas');
     if (!canvas) return;

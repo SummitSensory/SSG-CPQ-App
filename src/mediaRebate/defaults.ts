@@ -86,16 +86,26 @@ export const DEFAULT_MEDIA_PROGRAM_STYLE: MediaProgramStyle = {
 };
 
 /**
- * `{{customer}}` is a merge token, filled in by the renderer (`public/proposal-
- * document.js`) with the proposal's organization/contact name — same token, same
- * fallback bracket placeholder when neither is set yet, as `{{customer}}` in the
- * release and terms (`public/contract-pages.js`). "Customer Project Media Rebate" and
- * "Customer Media Capture Guide" are left as literal proper nouns — they name the
- * program and the guide, not the party.
+ * Two merge tokens, filled in by the renderer (`public/proposal-document.js`):
+ *
+ *   `{{customer}}` — the proposal's organization/contact name, same token and same
+ *   fallback bracket placeholder when neither is set yet, as `{{customer}}` in the
+ *   release and terms (`public/contract-pages.js`).
+ *
+ *   `{{amount}}` — the resolved rebate amount (a proposal's own override, when a
+ *   rep set one in the builder, otherwise this program's own `rebateAmountMinor`),
+ *   printed IN BOLD so the figure is called out inline rather than only in the
+ *   "Rebate Available" line above the text. Never a literal "$250" in this content:
+ *   a hand-typed figure goes stale the moment the amount is changed here or
+ *   overridden on a proposal, which is exactly the defect this token replaces.
+ *
+ * "Customer Project Media Rebate" and "Customer Media Capture Guide" are left as
+ * literal proper nouns — they name the program and the guide, not the party or
+ * the amount.
  */
 export const DEFAULT_MEDIA_PROGRAM_CONTENT: MediaProgramContent = {
   introduction:
-    '{{customer}} has the opportunity to receive a $250 Customer Project Media Rebate by participating in Summit Sensory Gym’s post-installation media program.\n\nThe Media Rebate is separate from the Project Price and does not reduce {{customer}}’s deposit, final payment, or any other amount due under this Proposal.\n\n{{customer}} remains responsible for payment of the full Project Price in accordance with Summit Sensory Gym’s standard payment terms.',
+    '{{customer}} has the opportunity to receive a {{amount}} Customer Project Media Rebate by participating in Summit Sensory Gym’s post-installation media program.\n\nThe Media Rebate is separate from the Project Price and does not reduce {{customer}}’s deposit, final payment, or any other amount due under this Proposal.\n\n{{customer}} remains responsible for payment of the full Project Price in accordance with Summit Sensory Gym’s standard payment terms.',
   mediaRequirements:
     'Within thirty (30) calendar days following completion of installation, {{customer}} will provide Summit Sensory Gym with photographs and video documenting the completed sensory therapy gym.\n\nUnless otherwise stated in this Proposal, {{customer}} will provide:\n\n• A minimum of ten (10) high-resolution photographs showing the completed sensory therapy gym from multiple perspectives;\n• Overall photographs showing the completed sensory therapy environment;\n• Closer photographs showing important Summit equipment or design details;\n• A reasonable combination of horizontal and vertical photographs;\n• A minimum of four (4) short video clips showing the completed sensory therapy gym and surrounding environment; and\n• Original or highest reasonably available resolution files without filters, watermarks, graphics, music, or other material modifications.\n\n{{customer}} agrees to make reasonable efforts to have the room clean, uncluttered, appropriately illuminated, free of installation materials, boxes, tools, and unnecessary visual obstruction, and presentation-ready at the time the media is captured.\n\nMedia should reasonably follow Summit Sensory Gym’s Customer Media Capture Guide. Photographs and video must be reasonably clear, in focus, adequately illuminated, and provide sufficient visual coverage of the completed Summit Sensory Gym installation.',
   acceptanceStandards:

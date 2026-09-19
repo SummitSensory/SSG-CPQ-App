@@ -15,10 +15,10 @@ import {
 } from '../integrations/docuseal/fieldLayoutStore.js';
 
 /**
- * Manual placement AND size for the six signature/date boxes the proposal and
- * acknowledgment pages already print — see the SignatureFieldLayout model comment in
- * schema.prisma and SIGNATURE_FIELD_SLOT_IDS/SIGNATURE_FIELD_DEFAULTS in assembly.ts for
- * what the six ids are and what an unsaved property falls back to.
+ * Manual placement AND size for the eight signature/date boxes the proposal,
+ * acknowledgment and Media Rebate pages already print — see the SignatureFieldLayout
+ * model comment in schema.prisma and SIGNATURE_FIELD_SLOT_IDS/SIGNATURE_FIELD_DEFAULTS
+ * in assembly.ts for what the eight ids are and what an unsaved property falls back to.
  *
  * Position (`top`/`left`), size (`width`/`height`) and `fontSize` are three
  * independent things applied in three different places, not one setting read three

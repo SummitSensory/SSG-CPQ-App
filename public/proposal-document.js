@@ -522,16 +522,39 @@
   }
 
   /**
-   * `{{customer}}` merge token in Media Program prose — same token, same bracket
-   * placeholder fallback when the proposal has no organization/contact yet, as
-   * `{{customer}}` in the release and terms (public/contract-pages.js's `fill()`/
-   * `TOKEN_LABELS`). Applied AFTER escaping, same order as contract-pages.js, so a
-   * customer name typed into the token cannot inject markup through the escaper.
+   * `{{customer}}` and `{{amount}}` merge tokens in Media Program prose.
+   * `{{customer}}` is the same token, same bracket placeholder fallback when the
+   * proposal has no organization/contact yet, as `{{customer}}` in the release and
+   * terms (public/contract-pages.js's `fill()`/`TOKEN_LABELS`). `{{amount}}` prints
+   * the resolved rebate amount (per-proposal override, or the Administration
+   * default) IN BOLD — the dollar figure called out inline in the paragraph itself,
+   * not only in the "Rebate Available" line above it. Both are applied AFTER
+   * escaping, same order as contract-pages.js, so a customer name typed into the
+   * token cannot inject markup through the escaper.
    */
-  function fillMediaCustomerToken(escapedHtml, customer) {
-    return escapedHtml.replace(/\{\{\s*customer\s*\}\}/g, function () {
-      return customer ? esc(customer) : '<span style="color:#8a91a0;">[customer]</span>';
-    });
+  function fillMediaTokens(escapedHtml, tokens) {
+    return escapedHtml
+      .replace(/\{\{\s*customer\s*\}\}/g, function () {
+        return tokens.customer
+          ? esc(tokens.customer)
+          : '<span style="color:#8a91a0;">[customer]</span>';
+      })
+      .replace(/\{\{\s*amount\s*\}\}/g, function () {
+        return '<b>' + fmtUsd(tokens.amountMinor) + '</b>';
+      });
+  }
+
+  /**
+   * The rebate amount that actually applies to this proposal: a per-proposal
+   * override (`meta.mediaRebate.amountOverrideMinor`, set in the builder's
+   * mediaRebateCard()) when one is set, otherwise the Administration default. The
+   * override lives on the proposal's own meta — like `offered`/`participate` — so it
+   * freezes with the rest of the version at release with no separate snapshot needed.
+   */
+  function mediaAmountMinor(mr, program) {
+    var override = mr && mr.amountOverrideMinor;
+    if (typeof override === 'number' && isFinite(override) && override >= 0) return override;
+    return (program && program.rebateAmountMinor) || 25000;
   }
 
   /**
@@ -580,7 +603,7 @@
    * src/mediaRebate/defaults.ts ships, so an admin typing into a plain textarea in
    * Administration does not need to learn any markup beyond the {{customer}} token.
    */
-  function mediaProgramTextHtml(text, customer, align) {
+  function mediaProgramTextHtml(text, tokens, align) {
     var blocks = String(text || '')
       .split(/\n\n+/)
       .filter(function (b) {
@@ -603,7 +626,7 @@
               .map(function (l) {
                 return (
                   '<li style="margin-bottom:2px;">' +
-                  fillMediaCustomerToken(esc(l.trim().replace(/^•\s*/, '')), customer) +
+                  fillMediaTokens(esc(l.trim().replace(/^•\s*/, '')), tokens) +
                   '</li>'
                 );
               })
@@ -615,7 +638,7 @@
           '<p style="margin:0 0 8px;text-align:' +
           (align || 'justify') +
           ';text-wrap:pretty;">' +
-          fillMediaCustomerToken(esc(b), customer) +
+          fillMediaTokens(esc(b), tokens) +
           '</p>'
         );
       })
@@ -631,25 +654,131 @@
     var mr = (d.meta || {}).mediaRebate;
     if (!mr || !mr.offered) return '';
     var m = d.meta || {};
-    var customer = d.orgName || m.contactName || '';
     var program = (window.SSGMediaRebateProgram && window.SSGMediaRebateProgram.current()) || null;
+    var tokens = {
+      customer: d.orgName || m.contactName || '',
+      amountMinor: mediaAmountMinor(mr, program),
+    };
     var text =
       (program && program.content && program.content.signatureAcknowledgment) ||
       'By signing this Proposal, {{customer}} agrees to all selected options, programs, terms, and conditions contained in this Proposal, including the Customer Project Media Rebate Program where elected above.';
     return (
       '<div style="font-size:10.5px;color:#5b6478;line-height:1.55;margin-top:8px;">' +
-      fillMediaCustomerToken(esc(text), customer) +
+      fillMediaTokens(esc(text), tokens) +
+      '</div>'
+    );
+  }
+
+  /**
+   * One signature line: a label, a ruled box, and — for the two that carry an
+   * `id` — the empty, position:relative anchor `injectSignatureFields` (assembly.ts)
+   * fills with a real DocuSeal field at send time. Byte-for-byte the same shape as
+   * contract-pages.js's `sigBlock`'s inner `line()`, copied rather than shared per
+   * this file's own convention on formatting primitives — see that function's own
+   * comment for why depth/id are handled the way they are.
+   */
+  function mediaSigLine(label, value, depth, id) {
+    return (
+      '<div style="display:flex;gap:6px;align-items:baseline;margin-top:9px;">' +
+      '<div style="flex:none;">' +
+      label +
+      '</div>' +
+      '<div style="flex:1;border-bottom:1px solid #20241f;' +
+      (depth
+        ? 'height:' + depth + 'px;display:flex;align-items:flex-end;'
+        : id
+          ? 'height:20px;display:flex;align-items:flex-end;'
+          : 'padding-bottom:1px;') +
+      (id
+        ? 'position:relative;' +
+          (window.SSGSignatureFieldLayout ? window.SSGSignatureFieldLayout.styleFor(id) : '')
+        : '') +
+      '">' +
+      (value ? esc(value) : '') +
+      (id
+        ? '<div id="' +
+          id +
+          '" style="position:absolute;top:0;left:0;' +
+          (window.SSGSignatureFieldLayout
+            ? window.SSGSignatureFieldLayout.offsetStyleFor(id)
+            : '') +
+          '"></div>'
+        : '') +
+      '</div></div>'
+    );
+  }
+
+  /**
+   * The Media Rebate signature block — Customer only, called once. `idPrefix +
+   * 'Signature'/'Date'` must match the slot pair registered in
+   * src/integrations/docuseal/assembly.ts's CUSTOMER_SLOTS (`ssgSigMediaCustomer*`),
+   * or DocuSeal never places a real field behind the printed blank line — a printed
+   * line with no field behind it is worse than no line at all (assembly.ts's own
+   * header comment).
+   */
+  function mediaSigBlock(role, name, entity, idPrefix) {
+    return (
+      '<div>' +
+      '<div style="font-size:7.5pt;text-transform:uppercase;letter-spacing:.09em;color:#5b6478;margin-bottom:5px;">' +
+      esc(role) +
+      '</div>' +
+      '<div style="font-weight:700;">' +
+      (entity ? esc(entity) : '&nbsp;') +
+      '</div>' +
+      mediaSigLine('By:', '', 46, idPrefix + 'Signature') +
+      mediaSigLine('Name:', name) +
+      mediaSigLine('Date:', '', null, idPrefix + 'Date') +
+      '</div>'
+    );
+  }
+
+  /**
+   * Why this page needs its own signature at all: the main Acceptance page carries
+   * one sentence folding the Media Rebate election into the general proposal
+   * signature (mediaRebateAcknowledgmentHtml above) — but the Product Use, Safety &
+   * Responsibility Acknowledgment gets its OWN dedicated signature too, despite
+   * being referenced the same way by that same sentence, because a program with its
+   * own obligations (Customer submits media and grants usage rights) is its own act
+   * of consent, not a footnote on a different one.
+   *
+   * Customer only, unlike the Acknowledgment's dual blocks: Customer is the one
+   * agreeing to the program's terms here; Summit has no separate act of consent to
+   * countersign on this page. Same "IN WITNESS WHEREOF" convention as the
+   * Acknowledgment (contract-pages.js's articlesDocHtml) otherwise, and the same
+   * "Customer" defined-term wording that line uses rather than the company's actual
+   * name — the signature block right below it is what names the actual signer.
+   */
+  function mediaSignatureHtml(d, name) {
+    var m = d.meta || {};
+    var company = d.orgName || m.contactName || '';
+    return (
+      '<div style="margin-top:16px;padding-top:9px;border-top:1px solid #20241f;break-inside:avoid;">' +
+      'IN WITNESS WHEREOF, Customer has executed this ' +
+      esc(name) +
+      ' election as of the date written below.' +
+      '</div>' +
+      '<div style="margin-top:12px;max-width:320px;break-inside:avoid;page-break-inside:avoid;">' +
+      mediaSigBlock('Customer', m.contactName || '', company, 'ssgSigMediaCustomer') +
       '</div>'
     );
   }
 
   /**
    * The full Customer Project Media Rebate section: requirements, acceptance
-   * standards, usage rights, privacy, payment terms, and the customer's
-   * (pre-determined) election — printed as its own page, alongside the legal
-   * documents, when Summit offered the program on this proposal. Empty string
-   * otherwise, so a proposal that never touches this feature renders byte-identical
-   * to before this feature existed.
+   * standards, usage rights, privacy, payment terms, the customer's
+   * (pre-determined) election, and a dedicated signature block — printed as its own
+   * page, alongside the legal documents, when Summit offered the program on this
+   * proposal. Empty string otherwise, so a proposal that never touches this feature
+   * renders byte-identical to before this feature existed.
+   *
+   * Laid out the same way the release and terms are (public/contract-pages.js): a
+   * running header naming the customer, a centered uppercase heading under a rule,
+   * and numbered clauses with the numeral hanging in the margin — not because this
+   * is a legal document (LegalDocument's draft/publish/versioning does not apply
+   * here; see src/mediaRebate/service.ts's own note on why a mutable settings row
+   * plus a snapshot is the right shape for THIS content), but because a customer
+   * reading five printed pages in a row should not be able to tell, by look alone,
+   * which one is "the real contract" and which is not.
    *
    * Always the LIVE program (window.SSGMediaRebateProgram), never a pinned snapshot —
    * same as the legal documents above. The pinned, audit-truth answer for a released
@@ -665,59 +794,83 @@
     var customer = d.orgName || m.contactName || '';
     var program = (window.SSGMediaRebateProgram && window.SSGMediaRebateProgram.current()) || null;
     var name = (program && program.customerFacingName) || 'Customer Project Media Rebate';
-    var amountMinor = (program && program.rebateAmountMinor) || 25000;
     var content = (program && program.content) || {};
     var st = mediaStyleOf(content.style);
     var BODY = mediaBodyCss(st);
+    var tokens = { customer: customer, amountMinor: mediaAmountMinor(mr, program) };
 
-    var section = function (title, text) {
-      if (!text) return '';
-      return (
-        '<div style="margin-top:14px;">' +
-        '<div style="font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#3d4a55;margin-bottom:4px;">' +
-        esc(title) +
-        '</div>' +
-        mediaProgramTextHtml(text, customer, st.align) +
-        '</div>'
-      );
-    };
+    // Numbered clauses, same shape as contract-pages.js's numberedDocHtml — the
+    // numeral IS the position, so a clause with no text (an admin left a box blank)
+    // is skipped rather than printing an empty numbered heading.
+    var clauses = [
+      ['Media Requirements', content.mediaRequirements],
+      ['Media Acceptance Standards', content.acceptanceStandards],
+      ['Media Usage Rights', content.usageRights],
+      ['Privacy / Identifiable Individuals', content.privacyRestrictions],
+      ['Rebate Payment Terms', content.paymentTerms],
+    ].filter(function (c) {
+      return !!c[1];
+    });
+    var clausesHtml = clauses
+      .map(function (c, i) {
+        return (
+          '<div style="display:flex;gap:10px;margin-top:' +
+          (i ? 10 : 14) +
+          'px;">' +
+          '<div style="flex:none;width:22px;font-weight:700;">' +
+          (i + 1) +
+          '.</div>' +
+          '<div style="flex:1;">' +
+          '<div style="font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;">' +
+          esc(c[0]) +
+          '</div>' +
+          mediaProgramTextHtml(c[1], tokens, st.align) +
+          '</div></div>'
+        );
+      })
+      .join('');
 
     return (
       '<div data-page-break="media-rebate" style="break-before:page;page-break-before:always;' +
       BODY +
       '">' +
-      "<div style=\"font-family:'Newsreader',serif;font-size:" +
+      // Running header — same convention as contract-pages.js's numberedDocHtml.
+      '<div style="text-align:right;font-size:9pt;line-height:1.5;font-weight:700;">' +
+      esc(customer) +
+      '</div>' +
+      // Centered, uppercase, letter-spaced heading under a rule — contract-pages.js's
+      // heading(), copied rather than shared.
+      '<div style="text-align:center;margin-top:18px;">' +
+      '<div style="font-size:' +
       st.titlePt +
-      'pt;font-weight:700;color:#203060;letter-spacing:-.015em;margin-bottom:4px;">' +
+      'pt;font-weight:700;text-transform:uppercase;letter-spacing:.1em;">' +
       esc(name) +
       '</div>' +
-      '<div style="font-size:11.5px;color:#5b6478;line-height:1.6;margin-bottom:10px;">Rebate Available: <b>' +
-      fmtUsd(amountMinor) +
-      '</b> — does not reduce the Project Price or any amount due before shipment.</div>' +
-      '<div>' +
-      mediaProgramTextHtml(content.introduction, customer, st.align) +
+      '<div style="width:88px;height:1px;background:#20241f;margin:7px auto 0;"></div>' +
       '</div>' +
-      section('Media Requirements', content.mediaRequirements) +
-      section('Media Acceptance Standards', content.acceptanceStandards) +
-      section('Media Usage Rights', content.usageRights) +
-      section('Privacy / Identifiable Individuals', content.privacyRestrictions) +
-      section('Rebate Payment Terms', content.paymentTerms) +
+      '<div style="font-size:11.5px;color:#5b6478;line-height:1.6;margin:10px 0 14px;text-align:center;">Rebate Available: <b>' +
+      fmtUsd(tokens.amountMinor) +
+      '</b> — does not reduce the Project Price or any amount due before shipment.</div>' +
+      // Unnumbered preamble — contract-pages.js's preambleHtml convention.
+      mediaProgramTextHtml(content.introduction, tokens, st.align) +
+      clausesHtml +
       '<div style="margin-top:16px;padding-top:10px;border-top:1px solid #d5d8d2;">' +
       '<label style="display:flex;gap:9px;align-items:flex-start;font-size:11.5px;line-height:1.55;">' +
       '<span style="display:inline-block;width:13px;height:13px;border:1px solid #20241f;flex:none;margin-top:1px;text-align:center;line-height:12px;font-size:11px;">' +
       (mr.participate ? '✓' : '') +
       '</span>' +
       '<span>' +
-      fillMediaCustomerToken(
+      fillMediaTokens(
         esc(
           content.participationLanguage ||
             'Yes, we elect to participate in Summit Sensory Gym’s Customer Project Media Rebate Program and agree to the Media Program terms contained in this Proposal.',
         ),
-        customer,
+        tokens,
       ) +
       '</span>' +
       '</label>' +
       '</div>' +
+      mediaSignatureHtml(d, name) +
       '</div>'
     );
   }

@@ -54,6 +54,9 @@ export interface RawMeta {
     offered?: boolean;
     participate?: boolean;
     participationAt?: string | null;
+    /** A per-proposal override of the Administration default, in minor units. Null
+     *  or absent means "use the Administration amount". */
+    amountOverrideMinor?: number | null;
   };
 }
 
