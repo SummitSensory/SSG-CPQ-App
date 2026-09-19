@@ -4960,7 +4960,7 @@
       "name": "Swivel Eye Bolt (Outrigger — S1/S3 Frames)",
       "productLine": "Summit Soar",
       "defaultQuantity": 1,
-      "unitPriceMinor": 0,
+      "unitPriceMinor": 19612,
       "badge": null,
       "lengthIn": null,
       "widthIn": null,
@@ -4975,7 +4975,7 @@
       "name": "Swivel Eye Bolt (Non-Outrigger — S2 Frames)",
       "productLine": "Summit Soar",
       "defaultQuantity": 1,
-      "unitPriceMinor": 0,
+      "unitPriceMinor": 19612,
       "badge": null,
       "lengthIn": null,
       "widthIn": null,
@@ -11995,6 +11995,24 @@
       "effectiveDate": "2026-07-31",
       "defaultedDate": true,
       "sourceRef": null
+    },
+    {
+      "sku": "SSG-SS-OUTRIGGER-SWIVEL-EYE",
+      "unitCostMinor": 1900,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-09-19",
+      "defaultedDate": false,
+      "sourceRef": null
+    },
+    {
+      "sku": "SSG-SS-NON-OUTRIGGER-SWIVEL-EYE",
+      "unitCostMinor": 1760,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-09-19",
+      "defaultedDate": false,
+      "sourceRef": null
     }
   ],
   "sourcing": [
@@ -14988,6 +15006,24 @@
     },
     {
       "sku": "FULL",
+      "manufacturer": "Goldberg Brothers",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "SSG-SS-OUTRIGGER-SWIVEL-EYE",
+      "manufacturer": "Goldberg Brothers",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "SSG-SS-NON-OUTRIGGER-SWIVEL-EYE",
       "manufacturer": "Goldberg Brothers",
       "vendorPartNo": null,
       "leadTimeDays": null,
