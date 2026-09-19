@@ -1211,16 +1211,16 @@
   {
     "part": "SSG-SS-OUTRIGGER-SWIVEL-EYE",
     "description": "Swivel Eye Bolt (Outrigger — S1/S3 Frames)",
-    "unitPriceMinor": 0,
-    "unitCostMinor": 0,
+    "unitPriceMinor": 19612,
+    "unitCostMinor": 1900,
     "weightLbs": 0,
     "category": "SOAR_ACCESSORY"
   },
   {
     "part": "SSG-SS-NON-OUTRIGGER-SWIVEL-EYE",
     "description": "Swivel Eye Bolt (Non-Outrigger — S2 Frames)",
-    "unitPriceMinor": 0,
-    "unitCostMinor": 0,
+    "unitPriceMinor": 19612,
+    "unitCostMinor": 1760,
     "weightLbs": 0,
     "category": "SOAR_ACCESSORY"
   },
