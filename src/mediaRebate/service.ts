@@ -106,15 +106,33 @@ export interface MediaRebateForVersion {
   offered: boolean;
   participate: boolean;
   participationAt: string | null;
+  /** A per-proposal override of the program's own rebateAmountMinor, or null when
+   *  this version never set one. Already folded into `program.rebateAmountMinor`
+   *  below — surfaced separately too, so a caller can tell whether the printed
+   *  figure is this proposal's own choice or the Administration default. */
+  amountOverrideMinor: number | null;
   program: ResolvedMediaProgram | null;
 }
 
 /**
- * What a given proposal version's Media Program says: offered/participate/timestamp
- * always come from that version's own stored meta (immutable once the version is
- * frozen, like every other field on a released version), and the program terms
- * themselves come from the pinned snapshot when there is one, or the live program when
- * there is not (an unreleased draft, or a version that never offered the program).
+ * A per-proposal override, when it's a valid non-negative amount; the program's own
+ * amount otherwise. The override lives on the proposal's own meta (like
+ * offered/participate), never in the snapshot — so it applies the same way whether
+ * this version's terms are pinned or live.
+ */
+function resolvedAmountMinor(program: ResolvedMediaProgram, overrideMinor: number | null): number {
+  return overrideMinor != null && Number.isFinite(overrideMinor) && overrideMinor >= 0
+    ? overrideMinor
+    : program.rebateAmountMinor;
+}
+
+/**
+ * What a given proposal version's Media Program says: offered/participate/timestamp/
+ * amountOverrideMinor always come from that version's own stored meta (immutable once
+ * the version is frozen, like every other field on a released version), and the
+ * program terms themselves come from the pinned snapshot when there is one, or the
+ * live program when there is not (an unreleased draft, or a version that never
+ * offered the program).
  */
 export async function mediaRebateForVersion(versionId: string): Promise<MediaRebateForVersion> {
   const version = await prisma.proposalVersion.findUnique({
@@ -127,6 +145,7 @@ export async function mediaRebateForVersion(versionId: string): Promise<MediaReb
       offered: false,
       participate: false,
       participationAt: null,
+      amountOverrideMinor: null,
       program: null,
     };
   }
@@ -135,6 +154,7 @@ export async function mediaRebateForVersion(versionId: string): Promise<MediaReb
   const offered = !!meta.mediaRebate?.offered;
   const participate = !!meta.mediaRebate?.participate;
   const participationAt = meta.mediaRebate?.participationAt ?? null;
+  const amountOverrideMinor = meta.mediaRebate?.amountOverrideMinor ?? null;
 
   if (!offered) {
     return {
@@ -142,6 +162,7 @@ export async function mediaRebateForVersion(versionId: string): Promise<MediaReb
       offered: false,
       participate: false,
       participationAt: null,
+      amountOverrideMinor: null,
       program: null,
     };
   }
@@ -153,21 +174,28 @@ export async function mediaRebateForVersion(versionId: string): Promise<MediaReb
     });
     if (snap) {
       const payload = snap.payload as unknown as Omit<ResolvedMediaProgram, 'active'>;
+      const program = { ...payload, active: true };
       return {
         pinned: true,
         offered,
         participate,
         participationAt,
-        program: { ...payload, active: true },
+        amountOverrideMinor,
+        program: {
+          ...program,
+          rebateAmountMinor: resolvedAmountMinor(program, amountOverrideMinor),
+        },
       };
     }
   }
 
+  const live = await currentMediaProgram();
   return {
     pinned: false,
     offered,
     participate,
     participationAt,
-    program: await currentMediaProgram(),
+    amountOverrideMinor,
+    program: { ...live, rebateAmountMinor: resolvedAmountMinor(live, amountOverrideMinor) },
   };
 }

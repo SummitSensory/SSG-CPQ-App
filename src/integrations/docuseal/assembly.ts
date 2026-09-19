@@ -300,12 +300,41 @@ const CUSTOMER_SLOTS: SignatureSlot[] = [
     sigFontSize: 14,
     dateFontSize: NAME_PRINT_SIZE,
   },
+  // The optional Customer Project Media Rebate page (public/proposal-document.js's
+  // mediaSigBlock) — same dual-party "IN WITNESS WHEREOF" shape as the
+  // Acknowledgment, same box sizes, because it is laid out the same way. Only ever
+  // placed when a proposal offers the program; otherwise mediaSigBlock's ids never
+  // appear in the document and injectSignatureFields' fillSlot is simply a no-op
+  // for these two, same as it already is for every other proposal that never
+  // touches the Acknowledgment either.
+  {
+    sigId: 'ssgSigMediaCustomerSignature',
+    dateId: 'ssgSigMediaCustomerDate',
+    label: 'Customer Media Rebate',
+    sigWidth: 220,
+    sigHeight: 46,
+    dateWidth: 140,
+    dateHeight: 20,
+    sigFontSize: 14,
+    dateFontSize: NAME_PRINT_SIZE,
+  },
 ];
 const SUMMIT_SLOTS: SignatureSlot[] = [
   {
     sigId: 'ssgSigAckSummitSignature',
     dateId: 'ssgSigAckSummitDate',
     label: 'Summit Acknowledgment',
+    sigWidth: 220,
+    sigHeight: 46,
+    dateWidth: 140,
+    dateHeight: 20,
+    sigFontSize: 14,
+    dateFontSize: NAME_PRINT_SIZE,
+  },
+  {
+    sigId: 'ssgSigMediaSummitSignature',
+    dateId: 'ssgSigMediaSummitDate',
+    label: 'Summit Media Rebate',
     sigWidth: 220,
     sigHeight: 46,
     dateWidth: 140,
@@ -335,7 +364,7 @@ export interface FieldSize {
 }
 
 /**
- * The as-shipped width/height/font size DocuSeal is told to use for each of the six
+ * The as-shipped width/height/font size DocuSeal is told to use for each of the ten
  * slots, derived from CUSTOMER_SLOTS/SUMMIT_SLOTS rather than retyped — the one source
  * of truth src/routes/signatureFieldLayout.ts's `/effective` route re-exports so
  * public/signature-field-layout-admin.js never carries its own copy to drift out of

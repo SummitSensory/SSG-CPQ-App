@@ -1285,12 +1285,12 @@ model LegalDocumentRevision {
   @@unique([key, version])
 }
 
-/// Manual pixel nudges for the six signature/date field boxes the proposal and
-/// acknowledgment pages already print (the ids `injectSignatureFields` matches in
-/// src/integrations/docuseal/assembly.ts, authored in public/proposal-document.js and
-/// public/contract-pages.js). One singleton row: these boxes are not per-proposal or
-/// per-template, they are typesetting choices for the whole application, the same way
-/// LegalDocument's `style` fields are.
+/// Manual pixel nudges for the ten signature/date field boxes the proposal,
+/// acknowledgment and Media Rebate pages already print (the ids
+/// `injectSignatureFields` matches in src/integrations/docuseal/assembly.ts, authored
+/// in public/proposal-document.js and public/contract-pages.js). One singleton row:
+/// these boxes are not per-proposal or per-template, they are typesetting choices for
+/// the whole application, the same way LegalDocument's `style` fields are.
 ///
 /// `offsets` is a JSON map of slot id -> `{ top, left }` in pixels, applied as an inline
 /// CSS offset stacked on top of the box's own `position:relative` — it nudges a box

@@ -198,8 +198,10 @@
       'changes the Project Price or any amount due before shipment. Off by default.' +
       '</div>' +
       '<div class="muted" style="font-size:11.5px;line-height:1.6;margin-bottom:8px;">' +
-      'The merge field <b>{{customer}}</b> works in every text box below and is replaced with ' +
-      'the proposal’s customer name when printed — the same token the release and terms use.' +
+      'Two merge fields work in every text box below: <b>{{customer}}</b> is replaced with the ' +
+      'proposal’s customer name — the same token the release and terms use — and ' +
+      '<b>{{amount}}</b> is replaced, in bold, with the rebate amount that applies to that ' +
+      'proposal (its own override, when a rep set one, otherwise the amount below).' +
       '</div>' +
       '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin:10px 0 4px;">' +
       '<input id="mpActive" type="checkbox" ' +

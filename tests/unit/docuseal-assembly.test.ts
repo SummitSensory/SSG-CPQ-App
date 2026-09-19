@@ -487,14 +487,18 @@ describe('signaturePageHtml', () => {
 // places at once, so a typo or a dropped id is worth catching in a fast unit test
 // rather than only on a proposal that quietly stops taking a manual placement.
 describe('SIGNATURE_FIELD_SLOT_IDS', () => {
-  it('names exactly the six ids injectSignatureFields places fields at', () => {
+  it('names exactly the ten ids injectSignatureFields places fields at', () => {
     expect(SIGNATURE_FIELD_SLOT_IDS).toEqual([
       'ssgSigAcceptanceSignature',
       'ssgSigAcceptanceDate',
       'ssgSigAckCustomerSignature',
       'ssgSigAckCustomerDate',
+      'ssgSigMediaCustomerSignature',
+      'ssgSigMediaCustomerDate',
       'ssgSigAckSummitSignature',
       'ssgSigAckSummitDate',
+      'ssgSigMediaSummitSignature',
+      'ssgSigMediaSummitDate',
     ]);
   });
 });

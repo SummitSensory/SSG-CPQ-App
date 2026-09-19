@@ -5213,6 +5213,18 @@
   }
 
   /**
+   * The rebate amount that actually applies to THIS proposal: a per-proposal
+   * override, set in mediaRebateCard() below, when one exists; the Administration
+   * default otherwise. Shared by both functions in this section so the totals-card
+   * row and the offer card's own helper text never disagree about the number.
+   */
+  function mediaRebateAmountMinor(mr, program) {
+    var override = mr && mr.amountOverrideMinor;
+    if (typeof override === 'number' && isFinite(override) && override >= 0) return override;
+    return (program && program.rebateAmountMinor) || 25000;
+  }
+
+  /**
    * "Customer Project Media Rebate Available: $250.00" — purely informational, printed
    * in the totals card right after Total but never folded into it. Empty string when
    * the program is not offered on this proposal, so the row is fully inert for the
@@ -5222,7 +5234,7 @@
     var mr = pb.meta.mediaRebate;
     if (!mr || !mr.offered) return '';
     var program = (window.SSGMediaRebateProgram && window.SSGMediaRebateProgram.current()) || null;
-    var amountMinor = (program && program.rebateAmountMinor) || 25000;
+    var amountMinor = mediaRebateAmountMinor(mr, program);
     var name = (program && program.customerFacingName) || 'Customer Project Media Rebate';
     return '<div style="margin-top:8px;padding:8px 10px;background:#f4f8f2;border:1px solid #dde8d6;border-radius:8px;font-size:12.5px;line-height:1.5;">' +
       '<div style="font-weight:600;color:#2f6d3f;">' + esc(name) + ' Available: ' + fmtUsd(amountMinor) + '</div>' +
@@ -5231,11 +5243,12 @@
   }
 
   /**
-   * The optional Customer Project Media Rebate: the internal "offer it" toggle and,
-   * once offered, the customer's pre-determined participation election. Empty when
-   * the global program is inactive AND this proposal has never offered it, so a
-   * proposal that never touches this feature renders identically to before this
-   * feature existed. See src/mediaRebate/service.ts and public/media-rebate-program.js.
+   * The optional Customer Project Media Rebate: the internal "offer it" toggle, a
+   * per-proposal override of the rebate amount, and, once offered, the customer's
+   * pre-determined participation election. Empty when the global program is
+   * inactive AND this proposal has never offered it, so a proposal that never
+   * touches this feature renders identically to before this feature existed. See
+   * src/mediaRebate/service.ts and public/media-rebate-program.js.
    */
   function mediaRebateCard() {
     var mr = pb.meta.mediaRebate || { offered: false, participate: false, participationAt: null };
@@ -5243,7 +5256,8 @@
     var active = !!(program && program.active);
     if (!active && !mr.offered) return '';
     var name = (program && program.customerFacingName) || 'Customer Project Media Rebate';
-    var amountMinor = (program && program.rebateAmountMinor) || 25000;
+    var defaultAmountMinor = (program && program.rebateAmountMinor) || 25000;
+    var amountMinor = mediaRebateAmountMinor(mr, program);
     return '<div class="card" style="margin-top:16px;">' +
       '<div class="section-title" style="margin:0 0 4px;">' + esc(name) + '</div>' +
       '<label style="display:flex;gap:9px;align-items:flex-start;font-size:13px;line-height:1.5;cursor:pointer;padding:7px 0;">' +
@@ -5252,7 +5266,12 @@
         '<span class="muted" style="display:block;font-size:11.5px;margin-top:1px;">Offers the customer a post-installation media rebate of ' + fmtUsd(amountMinor) + '. This does not reduce the proposal total or the amount due before shipment.</span></span>' +
       '</label>' +
       (mr.offered
-        ? '<label style="display:flex;gap:9px;align-items:flex-start;font-size:13px;line-height:1.5;cursor:pointer;padding:7px 0;border-top:1px solid #eef0ea;margin-top:2px;">' +
+        ? '<label style="display:flex;align-items:center;justify-content:space-between;gap:9px;font-size:13px;padding:7px 0;border-top:1px solid #eef0ea;margin-top:2px;">' +
+            '<span><b style="font-weight:600;">Rebate amount for this proposal</b>' +
+            '<span class="muted" style="display:block;font-size:11.5px;margin-top:1px;">Defaults to the Administration amount (' + fmtUsd(defaultAmountMinor) + '). Change it to offer a different amount on this proposal only.</span></span>' +
+            '<input id="mMediaAmount" value="' + m2d(amountMinor) + '" style="width:100px;padding:5px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;flex:0 0 auto;">' +
+          '</label>' +
+          '<label style="display:flex;gap:9px;align-items:flex-start;font-size:13px;line-height:1.5;cursor:pointer;padding:7px 0;border-top:1px solid #eef0ea;">' +
             '<input type="checkbox" id="mMediaParticipate"' + (mr.participate ? ' checked' : '') + ' style="margin-top:2px;">' +
             '<span><b style="font-weight:600;">Customer elects to participate</b>' +
             '<span class="muted" style="display:block;font-size:11.5px;margin-top:1px;">Set once the customer has confirmed they want to participate — this prints on the proposal as their election.' +
@@ -6973,6 +6992,21 @@
       var mr = pb.meta.mediaRebate = pb.meta.mediaRebate || { offered: false, participate: false, participationAt: null };
       mr.offered = mMediaOffer.checked;
       if (!mr.offered) { mr.participate = false; mr.participationAt = null; }
+      markBuilderDirty();
+      renderBuilderKeepingFocus();
+    });
+    // Per-proposal rebate-amount override — see mediaRebateCard(). Cleared back to
+    // null (not just left equal to the default) whenever it's typed back to match
+    // the Administration amount, so a proposal that has never actually diverged
+    // from the default keeps no override at all — same "absent means default"
+    // convention signature-field-layout-admin.js's setField() already follows.
+    var mMediaAmount = document.getElementById('mMediaAmount');
+    if (mMediaAmount) mMediaAmount.addEventListener('change', function () {
+      var mr = pb.meta.mediaRebate = pb.meta.mediaRebate || { offered: false, participate: false, participationAt: null };
+      var program = (window.SSGMediaRebateProgram && window.SSGMediaRebateProgram.current()) || null;
+      var defaultAmountMinor = (program && program.rebateAmountMinor) || 25000;
+      var minor = d2m(mMediaAmount.value);
+      mr.amountOverrideMinor = minor === defaultAmountMinor ? null : minor;
       markBuilderDirty();
       renderBuilderKeepingFocus();
     });
