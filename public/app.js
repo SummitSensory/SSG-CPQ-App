@@ -9053,14 +9053,14 @@
    */
   var soar = null, soarCat = null;
   var SOAR_FRAME_FALLBACK = [
-    { part: 'K-4000', label: 'S1 — Single Cross Beam', xl: false },
-    { part: 'K-4002', label: 'S2 — Two Cross Beams', xl: false },
-    { part: 'K-4003', label: 'S3 — Three Cross Beams', xl: false },
-    { part: 'K-4001', label: "S1-XL — Single Cross Beam (Width 12')", xl: true },
-    { part: 'K-4006', label: "S2-XL — Two Cross Beams (Width 12')", xl: true },
-    { part: 'K-4007', label: "S3-XL — Three Cross Beams (Width 12')", xl: true },
-    { part: 'K-4004', label: "S1 — Single Cross Beam (Height 7')", xl: false },
-    { part: 'K-4005', label: "S2 — Single Cross Beam (Height 7')", xl: false }
+    { part: 'K-4000', label: 'S1 — Single Cross Beam', xl: false, outrigger: true },
+    { part: 'K-4002', label: 'S2 — Two Cross Beams', xl: false, outrigger: false },
+    { part: 'K-4003', label: 'S3 — Three Cross Beams', xl: false, outrigger: true },
+    { part: 'K-4001', label: "S1-XL — Single Cross Beam (Width 12')", xl: true, outrigger: true },
+    { part: 'K-4006', label: "S2-XL — Two Cross Beams (Width 12')", xl: true, outrigger: false },
+    { part: 'K-4007', label: "S3-XL — Three Cross Beams (Width 12')", xl: true, outrigger: true },
+    { part: 'K-4004', label: "S1 — Single Cross Beam (Height 7')", xl: false, outrigger: true },
+    { part: 'K-4005', label: "S2 — Single Cross Beam (Height 7')", xl: false, outrigger: false }
   ];
   var SOAR_PAD_FALLBACK = [
     { key: 'matXlQty', part: 'CLM325', defaultQty: 0, matFor: 'xl', description: 'Soar-XL Floor Mat System (138" x 80" x 3.25") - Single Fold' },
@@ -9069,14 +9069,21 @@
     { key: 'gussetQty', part: 'SFGPC', defaultQty: 2, description: 'Gusset Plate Padding' },
     { key: 'colWrapQty', part: 'COLW2812', defaultQty: 2, description: 'Soar Column Wrap' }
   ];
+  var SOAR_EYE_BOLT_FALLBACK = [
+    { key: 'swivelEyeOutriggerQty', part: 'SSG-SS-OUTRIGGER-SWIVEL-EYE', frameFor: 'outrigger', description: 'Swivel Eye Bolt (Outrigger — S1/S3 Frames)' },
+    { key: 'swivelEyeNonOutriggerQty', part: 'SSG-SS-NON-OUTRIGGER-SWIVEL-EYE', frameFor: 'nonOutrigger', description: 'Swivel Eye Bolt (Non-Outrigger — S2 Frames)' }
+  ];
   function soarFrameList() { return soarCat && soarCat.frames && soarCat.frames.length ? soarCat.frames : SOAR_FRAME_FALLBACK; }
   function soarPadList() { return soarCat && soarCat.padRows && soarCat.padRows.length ? soarCat.padRows : SOAR_PAD_FALLBACK; }
+  function soarEyeBoltList() { return soarCat && soarCat.eyeBoltRows && soarCat.eyeBoltRows.length ? soarCat.eyeBoltRows : SOAR_EYE_BOLT_FALLBACK; }
 
   function openSoarConfigurator() {
     soar = {
       rows: [{ part: 'K-4000', qty: 1 }],
       padding: false,
       matXlQty: null, matStdQty: null, uWrapQty: null, gussetQty: null, colWrapQty: null,
+      swivelEye: false,
+      swivelEyeOutriggerQty: null, swivelEyeNonOutriggerQty: null,
       includeOverview: true
     };
     var ov = document.createElement('div');
@@ -9110,11 +9117,29 @@
     });
     return out;
   }
+  /** Swivel Eye Bolt defaults for the current frame mix — mirrors soarEyeBoltDefaults() server-side.
+   *  One bolt per frame, routed to the outrigger (S1/S3) or non-outrigger (S2) SKU by that frame's
+   *  own flag — the rep only ever picks a quantity, never the SKU. */
+  function soarEyeBoltDefaults() {
+    var byPart = {};
+    soarFrameList().forEach(function (f) { byPart[f.part] = f; });
+    var outrigger = 0, nonOutrigger = 0;
+    soar.rows.forEach(function (r) {
+      var q = Number(r.qty) || 0; if (q <= 0) return;
+      if (byPart[r.part] && byPart[r.part].outrigger) outrigger += q; else nonOutrigger += q;
+    });
+    var out = {};
+    soarEyeBoltList().forEach(function (p) {
+      out[p.key] = p.frameFor === 'outrigger' ? outrigger : nonOutrigger;
+    });
+    return out;
+  }
   function soarVal(key, fallback) { return soar[key] == null || soar[key] === '' ? fallback : Math.max(0, Number(soar[key]) || 0); }
 
   function renderSoar() {
     var o = document.getElementById('soarOverlay'); if (!o) return;
     var frames = soarFrameList(), pads = soarPadList(), defs = soarPadDefaults();
+    var eyeBolts = soarEyeBoltList(), eyeDefs = soarEyeBoltDefaults();
     function sec(title, inner, note) {
       return '<div style="margin-bottom:18px;">' +
         '<div style="font-family:\'Newsreader\',serif;font-size:16px;font-weight:600;color:#3d4a55;border-bottom:1px solid #e7e8e3;padding-bottom:6px;margin-bottom:12px;">' + title + '</div>' +
@@ -9161,6 +9186,23 @@
         '</div>';
       }).join('') + '</div>';
 
+    var eyeBody = !soar.swivelEye ? '' : '<div style="margin-top:4px;">' +
+      eyeBolts.map(function (p) {
+        var isDef = soar[p.key] == null || soar[p.key] === '';
+        var v = soarVal(p.key, eyeDefs[p.key]);
+        return '<div style="display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid #f2f3ef;' + (v <= 0 ? 'opacity:.55;' : '') + '">' +
+          '<div style="flex:1;min-width:0;">' +
+            '<div style="font-size:13.5px;font-weight:600;">' + esc(p.description || p.part) + '</div>' +
+            '<div style="font-size:11px;color:#20241f;margin-top:2px;"><code>' + esc(p.part) + '</code>' +
+              (p.unitPriceMinor ? ' · ' + fmtMoney(p.unitPriceMinor, 'USD') + ' each' : '') +
+              ' · for ' + (p.frameFor === 'outrigger' ? 'S1/S3 frames' : 'S2 frames') +
+              (isDef ? ' · <span style="color:#3f9d78;">1 per matching frame</span>' : ' · <span style="color:#b4522e;">overridden</span>') +
+            '</div>' +
+          '</div>' +
+          '<input type="number" min="0" data-sk="' + p.key + '" value="' + v + '" style="width:82px;flex:0 0 auto;padding:8px 10px;border:1px solid #dcded7;border-radius:8px;font-size:14px;text-align:right;">' +
+        '</div>';
+      }).join('') + '</div>';
+
     o.innerHTML =
       '<div style="max-width:720px;margin:0 auto;background:#fbfbf9;border-radius:16px;box-shadow:0 24px 60px -20px rgba(32,36,31,.5);overflow:hidden;">' +
         '<div style="background:#3d4a55;color:#fff;padding:18px 24px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:2;">' +
@@ -9179,6 +9221,13 @@
               '<span class="muted" style="font-size:12px;display:block;">Floor mat, base beam U wraps, gusset plate padding and column wraps</span></span>' +
             '</label>' + padBody,
             soar.padding ? 'Quantities are the workbook defaults (4 / 2 / 2 per frame). The mat follows frame width — XL frames take CLM325, everything else SSM80100. Edit any number to override.' : '') +
+          sec('Swivel Eye Bolt',
+            '<label style="display:flex;align-items:center;gap:9px;padding:6px 0;cursor:pointer;font-size:14px;">' +
+              '<input type="checkbox" data-sk="swivelEye"' + (soar.swivelEye ? ' checked' : '') + ' style="width:17px;height:17px;flex:0 0 auto;">' +
+              '<span><b style="font-weight:600;">Add Swivel Eye Bolt</b>' +
+              '<span class="muted" style="font-size:12px;display:block;">SKU is picked automatically from the frames above — S1/S3 frames take the outrigger bolt, S2 frames take the non-outrigger bolt</span></span>' +
+            '</label>' + eyeBody,
+            soar.swivelEye ? 'Quantity defaults to one bolt per matching frame. Edit either number to override.' : '') +
           '<label style="display:flex;align-items:center;gap:9px;font-size:13px;color:#5c6157;cursor:pointer;padding:6px 0;">' +
             '<input type="checkbox" data-sk="includeOverview"' + (soar.includeOverview ? ' checked' : '') + '> Print the Summit Soar overview &amp; Engineer-of-Record copy on each frame line' +
           '</label>' +
@@ -9228,6 +9277,7 @@
       frames: soar.rows.filter(function (r) { return (Number(r.qty) || 0) > 0; })
         .map(function (r) { return { part: r.part, qty: Number(r.qty) || 0 }; }),
       padding: !!soar.padding,
+      swivelEye: !!soar.swivelEye,
       includeOverview: !!soar.includeOverview,
       // Drives whether the server appends the Engineer-of-Record copy to the Soar
       // overview text (src/proposals/soarSeries.ts) — same signal the Canadian
@@ -9237,6 +9287,9 @@
     // Only send a quantity the rep actually typed, so the server applies its own
     // workbook default otherwise and the two can never drift apart.
     soarPadList().forEach(function (p) {
+      if (soar[p.key] != null && soar[p.key] !== '') a[p.key] = Math.max(0, Number(soar[p.key]) || 0);
+    });
+    soarEyeBoltList().forEach(function (p) {
       if (soar[p.key] != null && soar[p.key] !== '') a[p.key] = Math.max(0, Number(soar[p.key]) || 0);
     });
     return a;
