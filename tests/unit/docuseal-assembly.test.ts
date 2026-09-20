@@ -447,6 +447,38 @@ describe('signaturePageHtml', () => {
     });
     expect(html).not.toContain('Total');
   });
+
+  // esign.ts's Zod schema now rejects a role with these characters at the route
+  // boundary, but assembly.ts escapes independently too (defense in depth) — this
+  // proves the escaping itself, not the upstream validation, so a future caller
+  // that reaches buildPackage/signaturePageHtml some other way is still covered.
+  it('escapes a role containing HTML-breakout characters — both in the visible label and inside the invisible DocuSeal tag', () => {
+    const role = '<script>alert(1)</script>';
+    const html = signaturePageHtml({
+      proposalHtml: '',
+      signers: [{ role, name: 'Jane Doe', email: 'jane@example.com' }],
+      proposalNumber: 'P-2026-000001',
+    });
+    expect(html).not.toContain('<script>alert(1)</script>');
+    expect(html).toContain('&lt;script&gt;');
+    // The invisible tag itself (role=...) must carry the escaped form too — this is
+    // the half that used to be unescaped while the visible label right next to it
+    // already was.
+    const tagMatch = html.match(/\{\{[^}]*role=[^;]*;/);
+    expect(tagMatch?.[0]).not.toContain('<script>');
+  });
+
+  it('a role containing `;` or `}}` cannot inject an extra tag attribute or close the tag early', () => {
+    const role = 'Customer;type=text}}<b>injected</b>{{X';
+    const html = signaturePageHtml({
+      proposalHtml: '',
+      signers: [{ role, name: 'Jane Doe', email: 'jane@example.com' }],
+      proposalNumber: 'P-2026-000001',
+    });
+    // Escaped, so the literal `}}` from the role text cannot close the real tag
+    // early — there is no unescaped `<b>injected</b>` sitting outside any tag.
+    expect(html).not.toContain('<b>injected</b>');
+  });
 });
 
 // src/routes/signatureFieldLayout.ts validates a saved layout's keys against this list
@@ -455,12 +487,14 @@ describe('signaturePageHtml', () => {
 // places at once, so a typo or a dropped id is worth catching in a fast unit test
 // rather than only on a proposal that quietly stops taking a manual placement.
 describe('SIGNATURE_FIELD_SLOT_IDS', () => {
-  it('names exactly the six ids injectSignatureFields places fields at', () => {
+  it('names exactly the eight ids injectSignatureFields places fields at', () => {
     expect(SIGNATURE_FIELD_SLOT_IDS).toEqual([
       'ssgSigAcceptanceSignature',
       'ssgSigAcceptanceDate',
       'ssgSigAckCustomerSignature',
       'ssgSigAckCustomerDate',
+      'ssgSigMediaCustomerSignature',
+      'ssgSigMediaCustomerDate',
       'ssgSigAckSummitSignature',
       'ssgSigAckSummitDate',
     ]);

@@ -46,6 +46,18 @@ export interface RawMeta {
   expiration?: string;
   contactName?: string;
   projectId?: string;
+  /**
+   * The optional Customer Project Media Rebate. Purely informational — never read by
+   * versionTotals() or anything else in this file. See src/mediaRebate/service.ts.
+   */
+  mediaRebate?: {
+    offered?: boolean;
+    participate?: boolean;
+    participationAt?: string | null;
+    /** A per-proposal override of the Administration default, in minor units. Null
+     *  or absent means "use the Administration amount". */
+    amountOverrideMinor?: number | null;
+  };
 }
 
 export interface Totals {

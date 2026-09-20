@@ -32,18 +32,23 @@ export const SOAR_GROUP_MATS = 'SUMMIT SOAR MATS & ACCESSORIES';
 
 /**
  * The eight frames in workbook sort order. `xl` marks the 12'-wide models, which
- * take the wider CLM325 mat instead of the standard SSM80100.
+ * take the wider CLM325 mat instead of the standard SSM80100. `outrigger` marks the
+ * S1/S3 models, which ship on the wider outrigger base — S2 models don't have one.
+ * This is what picks the correct Swivel Eye Bolt SKU (see SOAR_EYE_BOLT_ROWS): the
+ * two bolts are mechanically different parts for the two base styles, not a quality
+ * tier the rep chooses.
  */
-export const SOAR_FRAMES: Array<{ part: string; label: string; xl: boolean }> = [
-  { part: 'K-4000', label: 'S1 — Single Cross Beam', xl: false },
-  { part: 'K-4002', label: 'S2 — Two Cross Beams', xl: false },
-  { part: 'K-4003', label: 'S3 — Three Cross Beams', xl: false },
-  { part: 'K-4001', label: "S1-XL — Single Cross Beam (Width 12')", xl: true },
-  { part: 'K-4006', label: "S2-XL — Two Cross Beams (Width 12')", xl: true },
-  { part: 'K-4007', label: "S3-XL — Three Cross Beams (Width 12')", xl: true },
-  { part: 'K-4004', label: "S1 — Single Cross Beam (Height 7')", xl: false },
-  { part: 'K-4005', label: "S2 — Single Cross Beam (Height 7')", xl: false },
-];
+export const SOAR_FRAMES: Array<{ part: string; label: string; xl: boolean; outrigger: boolean }> =
+  [
+    { part: 'K-4000', label: 'S1 — Single Cross Beam', xl: false, outrigger: true },
+    { part: 'K-4002', label: 'S2 — Two Cross Beams', xl: false, outrigger: false },
+    { part: 'K-4003', label: 'S3 — Three Cross Beams', xl: false, outrigger: true },
+    { part: 'K-4001', label: "S1-XL — Single Cross Beam (Width 12')", xl: true, outrigger: true },
+    { part: 'K-4006', label: "S2-XL — Two Cross Beams (Width 12')", xl: true, outrigger: false },
+    { part: 'K-4007', label: "S3-XL — Three Cross Beams (Width 12')", xl: true, outrigger: true },
+    { part: 'K-4004', label: "S1 — Single Cross Beam (Height 7')", xl: false, outrigger: true },
+    { part: 'K-4005', label: "S2 — Single Cross Beam (Height 7')", xl: false, outrigger: false },
+  ];
 
 export const SOAR_PARTS = {
   matXl: 'CLM325',
@@ -51,6 +56,8 @@ export const SOAR_PARTS = {
   uWrap: 'COLU2812',
   gusset: 'SFGPC',
   colWrap: 'COLW2812',
+  eyeBoltOutrigger: 'SSG-SS-OUTRIGGER-SWIVEL-EYE',
+  eyeBoltNonOutrigger: 'SSG-SS-NON-OUTRIGGER-SWIVEL-EYE',
 } as const;
 
 /**
@@ -71,6 +78,25 @@ export const SOAR_PAD_ROWS: Array<{
   { key: 'colWrapQty', part: SOAR_PARTS.colWrap, defaultQty: 2 },
 ];
 
+/**
+ * The Swivel Eye Bolt add-on. Which of the two SKUs applies is picked automatically
+ * from the outrigger/non-outrigger split of the frames already on the proposal
+ * (SOAR_FRAMES.outrigger) — the rep only chooses a quantity, never the SKU. A
+ * proposal that mixes S1/S3 and S2 frames can carry both rows at once.
+ */
+export const SOAR_EYE_BOLT_ROWS: Array<{
+  key: string;
+  part: string;
+  frameFor: 'outrigger' | 'nonOutrigger';
+}> = [
+  { key: 'swivelEyeOutriggerQty', part: SOAR_PARTS.eyeBoltOutrigger, frameFor: 'outrigger' },
+  {
+    key: 'swivelEyeNonOutriggerQty',
+    part: SOAR_PARTS.eyeBoltNonOutrigger,
+    frameFor: 'nonOutrigger',
+  },
+];
+
 export interface SoarAnswers {
   /** One entry per frame quoted, keyed by SKU. A proposal may carry several models. */
   frames?: Array<{ part: string; qty: number }>;
@@ -82,6 +108,11 @@ export interface SoarAnswers {
   uWrapQty?: number;
   gussetQty?: number;
   colWrapQty?: number;
+  /** Add the Swivel Eye Bolt option. SKU is resolved from the frame mix, not chosen. */
+  swivelEye?: boolean;
+  /** Quantity overrides. Undefined means "one per matching frame". */
+  swivelEyeOutriggerQty?: number;
+  swivelEyeNonOutriggerQty?: number;
   /** Print the overview + Engineering-of-Record copy on each frame line. */
   includeOverview?: boolean;
   /**
@@ -146,7 +177,7 @@ export const SOAR_OVERVIEW = SOAR_OVERVIEW_BASE + '\n\n' + SOAR_ENGINEERING;
 /** Frames actually quoted, de-duplicated and returned in workbook order. */
 export function soarFrames(
   a: SoarAnswers,
-): Array<{ part: string; label: string; xl: boolean; qty: number }> {
+): Array<{ part: string; label: string; xl: boolean; outrigger: boolean; qty: number }> {
   const want = new Map<string, number>();
   for (const f of a.frames || []) {
     const qty = n(f && f.qty);
@@ -178,6 +209,22 @@ export function soarPadDefaults(a: SoarAnswers): Record<string, number> {
     if (row.matFor === 'xl') out[row.key] = xl;
     else if (row.matFor === 'std') out[row.key] = std;
     else out[row.key] = row.defaultQty * units;
+  }
+  return out;
+}
+
+/**
+ * Swivel Eye Bolt quantities for the current frame selection: one bolt per frame,
+ * routed to the outrigger or non-outrigger SKU by that frame's `outrigger` flag. A
+ * proposal with no frames yet defaults both to zero rather than guessing a count.
+ */
+export function soarEyeBoltDefaults(a: SoarAnswers): Record<string, number> {
+  const fr = soarFrames(a);
+  const outrigger = fr.filter((f) => f.outrigger).reduce((s, f) => s + f.qty, 0);
+  const nonOutrigger = fr.filter((f) => !f.outrigger).reduce((s, f) => s + f.qty, 0);
+  const out: Record<string, number> = {};
+  for (const row of SOAR_EYE_BOLT_ROWS) {
+    out[row.key] = row.frameFor === 'outrigger' ? outrigger : nonOutrigger;
   }
   return out;
 }
@@ -227,12 +274,22 @@ export function computeSoarProposal(
   });
   for (const f of soarFrames(a)) P(f.part, f.qty, overview);
 
-  if (a.padding) {
-    const defs = soarPadDefaults(a);
-    const rows = SOAR_PAD_ROWS.map((r) => {
-      const override = (a as Record<string, number | undefined>)[r.key];
-      return { part: r.part, qty: override == null ? (defs[r.key] ?? 0) : n(override) };
-    }).filter((r) => r.qty > 0);
+  if (a.padding || a.swivelEye) {
+    const padDefs = soarPadDefaults(a);
+    const padRows = a.padding
+      ? SOAR_PAD_ROWS.map((r) => {
+          const override = (a as Record<string, number | undefined>)[r.key];
+          return { part: r.part, qty: override == null ? (padDefs[r.key] ?? 0) : n(override) };
+        }).filter((r) => r.qty > 0)
+      : [];
+    const eyeDefs = soarEyeBoltDefaults(a);
+    const eyeRows = a.swivelEye
+      ? SOAR_EYE_BOLT_ROWS.map((r) => {
+          const override = (a as Record<string, number | undefined>)[r.key];
+          return { part: r.part, qty: override == null ? (eyeDefs[r.key] ?? 0) : n(override) };
+        }).filter((r) => r.qty > 0)
+      : [];
+    const rows = [...padRows, ...eyeRows];
     if (rows.length) {
       lines.push({
         lineType: 'GROUP',

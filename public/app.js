@@ -602,6 +602,9 @@
     // synchronous, deep inside the document builder — always has it by the time anyone
     // opens a proposal. Without this call the shipped wording prints and nothing breaks.
     if (window.SSGContractPages) window.SSGContractPages.init({ authed: authed });
+    // Same fetch-once-at-sign-in shape, for the optional Customer Project Media
+    // Rebate the builder and document renderer both read synchronously.
+    if (window.SSGMediaRebateProgram) window.SSGMediaRebateProgram.init({ authed: authed });
     // Same fetch-once-at-sign-in shape, for the manual pixel nudges on the signature/date
     // boxes those two files both print — see signature-field-layout.js.
     if (window.SSGSignatureFieldLayout) window.SSGSignatureFieldLayout.init({ authed: authed });
@@ -623,6 +626,8 @@
      */
     window.SSGPaginate = paginateProposalArea;
     if (window.SSGLegalAdmin) window.SSGLegalAdmin.init({ authed: authed, esc: esc });
+    if (window.SSGMediaPartnershipAdmin)
+      window.SSGMediaPartnershipAdmin.init({ authed: authed, esc: esc });
     // Vendor part numbers: the dialog lives here for Catalog AND Administration, which
     // is why it is no longer inside either.
     if (window.SSGVendorParts) window.SSGVendorParts.init({ authed: authed });
@@ -682,6 +687,9 @@
         // Both contract documents unless someone says otherwise.
         includeRelease: true, includeTerms: true,
         projectId: '', showProjectId: false, showDeposit: true,
+        // The optional Customer Project Media Rebate. Off by default — see
+        // mediaRebateCard() and mediaRebateSectionHtml() in proposal-document.js.
+        mediaRebate: { offered: false, participate: false, participationAt: null },
         // Adventure Series front matter: the photos attached to this proposal, and
         // whether the document is the introduction, the proposal, or both. Only has
         // any effect on an Adventure proposal — see SSGFrontMatter.applies().
@@ -2288,23 +2296,27 @@
    * a headless browser.
    */
   var lastReleaseDoc = null;
+  var lastReleaseDocError = null;
   async function actionBody(act, proposalId, versionId) {
     lastReleaseDoc = null;
+    lastReleaseDocError = null;
     if (act !== 'release') return {};
-    try {
-      var doc = await buildProposalDocForSend({ id: proposalId }, versionId);
-      if (doc) {
-        lastReleaseDoc = { versionId: versionId, html: doc.html, filename: doc.filename };
-        // The document itself is NOT sent here. pushReleasedProposal receives
-        // proposalHtml and does nothing with it but log that the document follows
-        // from the renderer — the PDF is made by the second call, against the
-        // render function. So this used to upload several megabytes of base64
-        // photographs, twice, and use them once: the first copy sat in front of
-        // the status change doing nothing but making it slower. The filename stays
-        // because it costs nothing and names the file the renderer will attach.
-        return { proposalFilename: doc.filename };
-      }
-    } catch (e) {}
+    var doc = await buildProposalDocForSend({ id: proposalId }, versionId);
+    if (doc) {
+      lastReleaseDoc = { versionId: versionId, html: doc.html, filename: doc.filename };
+      // The document itself is NOT sent here. pushReleasedProposal receives
+      // proposalHtml and does nothing with it but log that the document follows
+      // from the renderer — the PDF is made by the second call, against the
+      // render function. So this used to upload several megabytes of base64
+      // photographs, twice, and use them once: the first copy sat in front of
+      // the status change doing nothing but making it slower. The filename stays
+      // because it costs nothing and names the file the renderer will attach.
+      return { proposalFilename: doc.filename };
+    }
+    // Captured so startReleaseAttachment can tell the rep the attachment never
+    // even started, instead of the release finishing with no monday file and no
+    // explanation — see lastDocBuildError.
+    lastReleaseDocError = lastDocBuildError || 'the proposal document could not be built';
     return {};
   }
 
@@ -2321,12 +2333,34 @@
    * may be on an unrelated screen — an unattributed failure there reads as that
    * screen's bug.
    */
+  /**
+   * Render `doc` and PUT it on the deal row's file column. Shared by the automatic
+   * post-release attach and the manual "Attach to monday.com" retry — the two differ
+   * only in how `doc` was built and how they report the outcome, not in the upload
+   * itself. Returns '' on success, or a note in words a rep can act on.
+   */
+  async function uploadDocToMonday(versionId, doc) {
+    try {
+      var fr = await authed('/render/proposals/versions/' + versionId + '/monday-file', {
+        method: 'POST',
+        body: { proposalHtml: doc.html, filename: doc.filename },
+        timeoutMs: RENDER_TIMEOUT_MS,
+      });
+      var fd = fr.ok ? await fr.json() : null;
+      if (!fr.ok) return await serverMessage(fr, 'the renderer did not respond (' + fr.status + ')');
+      if (!fd || !fd.uploaded) return (fd && (fd.skipped || fd.error)) || 'monday did not accept the file';
+      return '';
+    } catch (e) { return (e && e.message) || 'the renderer could not be reached'; }
+  }
+
   function startReleaseAttachment(act, rr) {
     if (act !== 'release') return;
     // Captured synchronously, before any await: releasing a second proposal while
     // the first is still uploading would otherwise attach the wrong document.
     var doc = lastReleaseDoc;
+    var docError = lastReleaseDocError;
     lastReleaseDoc = null;
+    lastReleaseDocError = null;
     (async function () {
       var d = null;
       try { d = await rr.json(); } catch (e) { return; }
@@ -2337,23 +2371,45 @@
           (m.skipped || m.error || 'the deal board did not respond') + '.', 1);
         return;
       }
-      if (!doc) return;
+      if (!doc) {
+        // The deal figures made it to monday; the document build in the browser
+        // failed before it could. Reported rather than swallowed — this used to
+        // return here with no toast at all, so a rep would see a normal release
+        // and never learn the file was missing until a customer or monday asked.
+        toast('Released, and the deal board was updated, but the proposal document ' +
+          'could not be prepared for monday: ' + (docError || 'unknown error') +
+          '. Open the proposal and use "Attach to monday.com" to try again.', 1);
+        return;
+      }
       var who = doc.filename || 'the proposal';
       toast('Released. Attaching ' + who + ' to monday…');
-      var note = '';
-      try {
-        var fr = await authed('/render/proposals/versions/' + doc.versionId + '/monday-file', {
-          method: 'POST',
-          body: { proposalHtml: doc.html, filename: doc.filename },
-          timeoutMs: RENDER_TIMEOUT_MS,
-        });
-        var fd = fr.ok ? await fr.json() : null;
-        if (!fr.ok) note = await serverMessage(fr, 'the renderer did not respond (' + fr.status + ')');
-        else if (!fd || !fd.uploaded) note = (fd && (fd.skipped || fd.error)) || 'monday did not accept the file';
-      } catch (e) { note = (e && e.message) || 'the renderer could not be reached'; }
+      var note = await uploadDocToMonday(doc.versionId, doc);
       if (note) toast('The deal row was updated, but ' + who + ' did not attach: ' + note + '.', 1);
       else toast(who + ' is attached to the deal.');
     })();
+  }
+
+  /**
+   * Manual recovery for a released version whose document never made it to the
+   * deal row's file column. The automatic attempt in startReleaseAttachment runs
+   * once, right after release, and has no automatic retry — this is that retry,
+   * available any time from the proposal detail view.
+   */
+  async function retryMondayAttachment(proposalId, versionId, bt) {
+    bt.disabled = true;
+    toast('Building the proposal document…');
+    var doc = await buildProposalDocForSend({ id: proposalId }, versionId);
+    if (!doc) {
+      bt.disabled = false;
+      toast('Could not prepare the document: ' + (lastDocBuildError || 'unknown error') + '.', 1);
+      return;
+    }
+    var who = doc.filename || 'the proposal';
+    toast('Attaching ' + who + ' to monday…');
+    var note = await uploadDocToMonday(versionId, doc);
+    bt.disabled = false;
+    if (note) toast(who + ' did not attach: ' + note + '.', 1);
+    else toast(who + ' is attached to the deal.');
   }
 
   /**
@@ -3149,6 +3205,7 @@
       bt.addEventListener('click', async function () {
         var act = bt.getAttribute('data-act'), vid = bt.getAttribute('data-vid');
         if (act === 'lock') { openLockForm(vid, user); return; }
+        if (act === 'attach-monday') { retryMondayAttachment(id, vid, bt); return; }
         var path = act === 'new-version' ? '/proposals/' + id + '/versions' : '/proposals/versions/' + vid + '/' + act;
         var stage = actionProgress(bt);
         bt.disabled = true;
@@ -3172,7 +3229,12 @@
     function btn(act, label, primary) { return '<button class="' + (primary ? 'btn' : 'link-btn') + '" data-act="' + act + '" data-vid="' + v.id + '" style="width:auto;padding:9px 15px;">' + label + '</button>'; }
     if (s === 'DRAFT') { if (hasRole(PROP_WRITE, user.role)) b.push(btn('submit-review', 'Submit for review')); if (hasRole(PROP_RELEASE, user.role)) b.push(btn('release', 'Ready to Send to Customer', 1)); }
     else if (s === 'INTERNAL_REVIEW') { if (hasRole(PROP_REVIEW, user.role)) b.push(btn('return-draft', 'Return to draft')); if (hasRole(PROP_RELEASE, user.role)) b.push(btn('release', 'Ready to Send to Customer', 1)); }
-    else if (s === 'RELEASED') { if (hasRole(PROP_REVIEW, user.role)) { b.push(btn('accept', 'Proposal Signed', 1)); b.push(btn('reject', 'Reject')); b.push(btn('expire', 'Expire')); } }
+    else if (s === 'RELEASED') {
+      if (hasRole(PROP_REVIEW, user.role)) { b.push(btn('accept', 'Proposal Signed', 1)); b.push(btn('reject', 'Reject')); b.push(btn('expire', 'Expire')); }
+      // Recovery for the case above: release succeeded but the document never
+      // reached the deal row's file column. Same role as releasing itself.
+      if (hasRole(PROP_RELEASE, user.role)) b.push(btn('attach-monday', 'Attach to monday.com'));
+    }
     else if (s === 'ACCEPTED') {
       if (lockedOrder && lockedOrder.id && lockedOrder.status !== 'CANCELLED') {
         b.push('<span class="chip" style="align-self:center;">Locked to ' + esc(lockedOrder.number || 'order') + '</span>');
@@ -4073,7 +4135,13 @@
         // very next Save (for any unrelated edit) overwrote the saved selection
         // with nothing. referenceDocsCard() already defaults a missing array to
         // [], so this only needed to stop discarding what was actually saved.
-        referenceDocKeys: Array.isArray(meta.referenceDocKeys) ? meta.referenceDocKeys.slice() : [] },
+        referenceDocKeys: Array.isArray(meta.referenceDocKeys) ? meta.referenceDocKeys.slice() : [],
+        // Same carry-over discipline as referenceDocKeys just above, and for the same
+        // reason: absent from this allowlist would silently drop an existing offer/
+        // election the next time this version is saved.
+        mediaRebate: (meta.mediaRebate && typeof meta.mediaRebate === 'object')
+          ? { offered: !!meta.mediaRebate.offered, participate: !!meta.mediaRebate.participate, participationAt: meta.mediaRebate.participationAt || null }
+          : { offered: false, participate: false, participationAt: null } },
       lines: lines,
     };
     // A new proposal starts with the billing address the same as the shipping one.
@@ -5067,6 +5135,7 @@
           stdFreightRow()) +
         '<div style="display:flex;justify-content:space-between;padding:8px 0 0;margin-top:6px;border-top:1px solid #e7e8e3;font-size:16px;font-weight:600;font-family:\'Newsreader\',serif;"><span>Total</span><span>' + fmtUsd(t.total) + '</span></div>' +
         (isMock() ? '<div class="muted" style="font-size:11.5px;text-align:right;margin-top:4px;line-height:1.5;">Product retail only. Crating, freight and tax are quoted on a real proposal.</div>' : '') +
+        mediaRebateAvailableRow() +
         (pb.meta.showDeposit !== false ? '<div style="display:flex;justify-content:space-between;padding:6px 0 0;font-size:14px;color:#3d4a55;font-weight:600;"><span>Deposit due (' + depositPct() + '%)</span><span>' + fmtUsd(t.deposit) + '</span></div>' : '<div style="display:flex;justify-content:space-between;padding:6px 0 0;font-size:12.5px;color:#20241f;"><span>Deposit</span><span>Not shown on the proposal</span></div>') +
         // Read-only: the sum of quantity × per-unit weight across product lines. Drives
         // crating and freight, so it is worth seeing before those numbers are entered.
@@ -5078,6 +5147,7 @@
       footerNotesCard() +
       contractPagesCard() +
       referenceDocsCard() +
+      mediaRebateCard() +
       (isMock() ? '' : '<div id="bMarginRail" style="' + marginRailStyle() + '">' + marginCard(t) + '<div id="bCbRail"></div><div id="bRfqRail"></div><div id="bDatesRail"></div><div id="bNotesRail"></div></div>');
     wireBuilder();
   }
@@ -5139,6 +5209,76 @@
       '<div class="section-title" style="margin:0 0 4px;">Contract documents</div>' +
       '<div class="muted" style="font-size:12px;margin-bottom:6px;line-height:1.5;">Printed after the acceptance page, in this order.</div>' +
       (rows || '<div class="muted" style="font-size:12.5px;">None configured in Administration.</div>') +
+    '</div>';
+  }
+
+  /**
+   * The rebate amount that actually applies to THIS proposal: a per-proposal
+   * override, set in mediaRebateCard() below, when one exists; the Administration
+   * default otherwise. Shared by both functions in this section so the totals-card
+   * row and the offer card's own helper text never disagree about the number.
+   */
+  function mediaRebateAmountMinor(mr, program) {
+    var override = mr && mr.amountOverrideMinor;
+    if (typeof override === 'number' && isFinite(override) && override >= 0) return override;
+    return (program && program.rebateAmountMinor) || 25000;
+  }
+
+  /**
+   * "Customer Project Media Rebate Available: $250.00" — purely informational, printed
+   * in the totals card right after Total but never folded into it. Empty string when
+   * the program is not offered on this proposal, so the row is fully inert for the
+   * vast majority of proposals that never touch this feature.
+   */
+  function mediaRebateAvailableRow() {
+    var mr = pb.meta.mediaRebate;
+    if (!mr || !mr.offered) return '';
+    var program = (window.SSGMediaRebateProgram && window.SSGMediaRebateProgram.current()) || null;
+    var amountMinor = mediaRebateAmountMinor(mr, program);
+    var name = (program && program.customerFacingName) || 'Customer Project Media Rebate';
+    return '<div style="margin-top:8px;padding:8px 10px;background:#f4f8f2;border:1px solid #dde8d6;border-radius:8px;font-size:12.5px;line-height:1.5;">' +
+      '<div style="font-weight:600;color:#2f6d3f;">' + esc(name) + ' Available: ' + fmtUsd(amountMinor) + '</div>' +
+      '<div class="muted" style="margin-top:2px;">Informational only — does not reduce the Project Price or any amount due before shipment.</div>' +
+    '</div>';
+  }
+
+  /**
+   * The optional Customer Project Media Rebate: the internal "offer it" toggle, a
+   * per-proposal override of the rebate amount, and, once offered, the customer's
+   * pre-determined participation election. Empty when the global program is
+   * inactive AND this proposal has never offered it, so a proposal that never
+   * touches this feature renders identically to before this feature existed. See
+   * src/mediaRebate/service.ts and public/media-rebate-program.js.
+   */
+  function mediaRebateCard() {
+    var mr = pb.meta.mediaRebate || { offered: false, participate: false, participationAt: null };
+    var program = (window.SSGMediaRebateProgram && window.SSGMediaRebateProgram.current()) || null;
+    var active = !!(program && program.active);
+    if (!active && !mr.offered) return '';
+    var name = (program && program.customerFacingName) || 'Customer Project Media Rebate';
+    var defaultAmountMinor = (program && program.rebateAmountMinor) || 25000;
+    var amountMinor = mediaRebateAmountMinor(mr, program);
+    return '<div class="card" style="margin-top:16px;">' +
+      '<div class="section-title" style="margin:0 0 4px;">' + esc(name) + '</div>' +
+      '<label style="display:flex;gap:9px;align-items:flex-start;font-size:13px;line-height:1.5;cursor:pointer;padding:7px 0;">' +
+        '<input type="checkbox" id="mMediaOffer"' + (mr.offered ? ' checked' : '') + ' style="margin-top:2px;">' +
+        '<span><b style="font-weight:600;">Offer ' + esc(name) + '</b>' +
+        '<span class="muted" style="display:block;font-size:11.5px;margin-top:1px;">Offers the customer a post-installation media rebate of ' + fmtUsd(amountMinor) + '. This does not reduce the proposal total or the amount due before shipment.</span></span>' +
+      '</label>' +
+      (mr.offered
+        ? '<label style="display:flex;align-items:center;justify-content:space-between;gap:9px;font-size:13px;padding:7px 0;border-top:1px solid #eef0ea;margin-top:2px;">' +
+            '<span><b style="font-weight:600;">Rebate amount for this proposal</b>' +
+            '<span class="muted" style="display:block;font-size:11.5px;margin-top:1px;">Defaults to the Administration amount (' + fmtUsd(defaultAmountMinor) + '). Change it to offer a different amount on this proposal only.</span></span>' +
+            '<input id="mMediaAmount" value="' + m2d(amountMinor) + '" style="width:100px;padding:5px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;flex:0 0 auto;">' +
+          '</label>' +
+          '<label style="display:flex;gap:9px;align-items:flex-start;font-size:13px;line-height:1.5;cursor:pointer;padding:7px 0;border-top:1px solid #eef0ea;">' +
+            '<input type="checkbox" id="mMediaParticipate"' + (mr.participate ? ' checked' : '') + ' style="margin-top:2px;">' +
+            '<span><b style="font-weight:600;">Customer elects to participate</b>' +
+            '<span class="muted" style="display:block;font-size:11.5px;margin-top:1px;">Set once the customer has confirmed they want to participate — this prints on the proposal as their election.' +
+            (mr.participationAt ? ' Recorded ' + fmtDate(mr.participationAt) + '.' : '') +
+            '</span></span>' +
+          '</label>'
+        : '') +
     '</div>';
   }
 
@@ -6864,6 +7004,43 @@
     var mp = document.getElementById('mProj'); if (mp) mp.addEventListener('input', function () { pb.meta.projectId = mp.value; });
     var mpd = document.getElementById('mPropDate'); if (mpd) mpd.addEventListener('input', function () { pb.meta.proposalDate = mpd.value; pb.meta.expiration = addDays(mpd.value, 7); var me2 = document.getElementById('mExp'); if (me2) me2.value = pb.meta.expiration; });
     var msp = document.getElementById('mShowProj'); if (msp) msp.addEventListener('change', function () { pb.meta.showProjectId = msp.checked; });
+    // Customer Project Media Rebate — see mediaRebateCard(). Un-offering clears the
+    // customer's election too: there is nothing left to elect into once the program
+    // is not being offered on this proposal.
+    var mMediaOffer = document.getElementById('mMediaOffer');
+    if (mMediaOffer) mMediaOffer.addEventListener('change', function () {
+      var mr = pb.meta.mediaRebate = pb.meta.mediaRebate || { offered: false, participate: false, participationAt: null };
+      mr.offered = mMediaOffer.checked;
+      if (!mr.offered) { mr.participate = false; mr.participationAt = null; }
+      markBuilderDirty();
+      renderBuilderKeepingFocus();
+    });
+    // Per-proposal rebate-amount override — see mediaRebateCard(). Cleared back to
+    // null (not just left equal to the default) whenever it's typed back to match
+    // the Administration amount, so a proposal that has never actually diverged
+    // from the default keeps no override at all — same "absent means default"
+    // convention signature-field-layout-admin.js's setField() already follows.
+    var mMediaAmount = document.getElementById('mMediaAmount');
+    if (mMediaAmount) mMediaAmount.addEventListener('change', function () {
+      var mr = pb.meta.mediaRebate = pb.meta.mediaRebate || { offered: false, participate: false, participationAt: null };
+      var program = (window.SSGMediaRebateProgram && window.SSGMediaRebateProgram.current()) || null;
+      var defaultAmountMinor = (program && program.rebateAmountMinor) || 25000;
+      var minor = d2m(mMediaAmount.value);
+      mr.amountOverrideMinor = minor === defaultAmountMinor ? null : minor;
+      markBuilderDirty();
+      renderBuilderKeepingFocus();
+    });
+    var mMediaParticipate = document.getElementById('mMediaParticipate');
+    if (mMediaParticipate) mMediaParticipate.addEventListener('change', function () {
+      var mr = pb.meta.mediaRebate = pb.meta.mediaRebate || { offered: false, participate: false, participationAt: null };
+      mr.participate = mMediaParticipate.checked;
+      // Stamped once and never restated by a later toggle-off/on, so re-checking the
+      // box after an accidental uncheck does not misreport a later "decision" time —
+      // the timestamp is cleared with the election and set fresh only when absent.
+      mr.participationAt = mr.participate ? (mr.participationAt || new Date().toISOString()) : null;
+      markBuilderDirty();
+      renderBuilderKeepingFocus();
+    });
     // One listener for every contract-document checkbox, RELEASE and TERMS included —
     // see contractPagesCard(). RELEASE/TERMS keep writing the two flags that always
     // existed; anything else writes into excludedDocKeys, the open-ended list.
@@ -8896,14 +9073,14 @@
    */
   var soar = null, soarCat = null;
   var SOAR_FRAME_FALLBACK = [
-    { part: 'K-4000', label: 'S1 — Single Cross Beam', xl: false },
-    { part: 'K-4002', label: 'S2 — Two Cross Beams', xl: false },
-    { part: 'K-4003', label: 'S3 — Three Cross Beams', xl: false },
-    { part: 'K-4001', label: "S1-XL — Single Cross Beam (Width 12')", xl: true },
-    { part: 'K-4006', label: "S2-XL — Two Cross Beams (Width 12')", xl: true },
-    { part: 'K-4007', label: "S3-XL — Three Cross Beams (Width 12')", xl: true },
-    { part: 'K-4004', label: "S1 — Single Cross Beam (Height 7')", xl: false },
-    { part: 'K-4005', label: "S2 — Single Cross Beam (Height 7')", xl: false }
+    { part: 'K-4000', label: 'S1 — Single Cross Beam', xl: false, outrigger: true },
+    { part: 'K-4002', label: 'S2 — Two Cross Beams', xl: false, outrigger: false },
+    { part: 'K-4003', label: 'S3 — Three Cross Beams', xl: false, outrigger: true },
+    { part: 'K-4001', label: "S1-XL — Single Cross Beam (Width 12')", xl: true, outrigger: true },
+    { part: 'K-4006', label: "S2-XL — Two Cross Beams (Width 12')", xl: true, outrigger: false },
+    { part: 'K-4007', label: "S3-XL — Three Cross Beams (Width 12')", xl: true, outrigger: true },
+    { part: 'K-4004', label: "S1 — Single Cross Beam (Height 7')", xl: false, outrigger: true },
+    { part: 'K-4005', label: "S2 — Single Cross Beam (Height 7')", xl: false, outrigger: false }
   ];
   var SOAR_PAD_FALLBACK = [
     { key: 'matXlQty', part: 'CLM325', defaultQty: 0, matFor: 'xl', description: 'Soar-XL Floor Mat System (138" x 80" x 3.25") - Single Fold' },
@@ -8912,14 +9089,21 @@
     { key: 'gussetQty', part: 'SFGPC', defaultQty: 2, description: 'Gusset Plate Padding' },
     { key: 'colWrapQty', part: 'COLW2812', defaultQty: 2, description: 'Soar Column Wrap' }
   ];
+  var SOAR_EYE_BOLT_FALLBACK = [
+    { key: 'swivelEyeOutriggerQty', part: 'SSG-SS-OUTRIGGER-SWIVEL-EYE', frameFor: 'outrigger', description: 'Swivel Eye Bolt (Outrigger — S1/S3 Frames)' },
+    { key: 'swivelEyeNonOutriggerQty', part: 'SSG-SS-NON-OUTRIGGER-SWIVEL-EYE', frameFor: 'nonOutrigger', description: 'Swivel Eye Bolt (Non-Outrigger — S2 Frames)' }
+  ];
   function soarFrameList() { return soarCat && soarCat.frames && soarCat.frames.length ? soarCat.frames : SOAR_FRAME_FALLBACK; }
   function soarPadList() { return soarCat && soarCat.padRows && soarCat.padRows.length ? soarCat.padRows : SOAR_PAD_FALLBACK; }
+  function soarEyeBoltList() { return soarCat && soarCat.eyeBoltRows && soarCat.eyeBoltRows.length ? soarCat.eyeBoltRows : SOAR_EYE_BOLT_FALLBACK; }
 
   function openSoarConfigurator() {
     soar = {
       rows: [{ part: 'K-4000', qty: 1 }],
       padding: false,
       matXlQty: null, matStdQty: null, uWrapQty: null, gussetQty: null, colWrapQty: null,
+      swivelEye: false,
+      swivelEyeOutriggerQty: null, swivelEyeNonOutriggerQty: null,
       includeOverview: true
     };
     var ov = document.createElement('div');
@@ -8953,11 +9137,29 @@
     });
     return out;
   }
+  /** Swivel Eye Bolt defaults for the current frame mix — mirrors soarEyeBoltDefaults() server-side.
+   *  One bolt per frame, routed to the outrigger (S1/S3) or non-outrigger (S2) SKU by that frame's
+   *  own flag — the rep only ever picks a quantity, never the SKU. */
+  function soarEyeBoltDefaults() {
+    var byPart = {};
+    soarFrameList().forEach(function (f) { byPart[f.part] = f; });
+    var outrigger = 0, nonOutrigger = 0;
+    soar.rows.forEach(function (r) {
+      var q = Number(r.qty) || 0; if (q <= 0) return;
+      if (byPart[r.part] && byPart[r.part].outrigger) outrigger += q; else nonOutrigger += q;
+    });
+    var out = {};
+    soarEyeBoltList().forEach(function (p) {
+      out[p.key] = p.frameFor === 'outrigger' ? outrigger : nonOutrigger;
+    });
+    return out;
+  }
   function soarVal(key, fallback) { return soar[key] == null || soar[key] === '' ? fallback : Math.max(0, Number(soar[key]) || 0); }
 
   function renderSoar() {
     var o = document.getElementById('soarOverlay'); if (!o) return;
     var frames = soarFrameList(), pads = soarPadList(), defs = soarPadDefaults();
+    var eyeBolts = soarEyeBoltList(), eyeDefs = soarEyeBoltDefaults();
     function sec(title, inner, note) {
       return '<div style="margin-bottom:18px;">' +
         '<div style="font-family:\'Newsreader\',serif;font-size:16px;font-weight:600;color:#3d4a55;border-bottom:1px solid #e7e8e3;padding-bottom:6px;margin-bottom:12px;">' + title + '</div>' +
@@ -9004,6 +9206,23 @@
         '</div>';
       }).join('') + '</div>';
 
+    var eyeBody = !soar.swivelEye ? '' : '<div style="margin-top:4px;">' +
+      eyeBolts.map(function (p) {
+        var isDef = soar[p.key] == null || soar[p.key] === '';
+        var v = soarVal(p.key, eyeDefs[p.key]);
+        return '<div style="display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid #f2f3ef;' + (v <= 0 ? 'opacity:.55;' : '') + '">' +
+          '<div style="flex:1;min-width:0;">' +
+            '<div style="font-size:13.5px;font-weight:600;">' + esc(p.description || p.part) + '</div>' +
+            '<div style="font-size:11px;color:#20241f;margin-top:2px;"><code>' + esc(p.part) + '</code>' +
+              (p.unitPriceMinor ? ' · ' + fmtMoney(p.unitPriceMinor, 'USD') + ' each' : '') +
+              ' · for ' + (p.frameFor === 'outrigger' ? 'S1/S3 frames' : 'S2 frames') +
+              (isDef ? ' · <span style="color:#3f9d78;">1 per matching frame</span>' : ' · <span style="color:#b4522e;">overridden</span>') +
+            '</div>' +
+          '</div>' +
+          '<input type="number" min="0" data-sk="' + p.key + '" value="' + v + '" style="width:82px;flex:0 0 auto;padding:8px 10px;border:1px solid #dcded7;border-radius:8px;font-size:14px;text-align:right;">' +
+        '</div>';
+      }).join('') + '</div>';
+
     o.innerHTML =
       '<div style="max-width:720px;margin:0 auto;background:#fbfbf9;border-radius:16px;box-shadow:0 24px 60px -20px rgba(32,36,31,.5);overflow:hidden;">' +
         '<div style="background:#3d4a55;color:#fff;padding:18px 24px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:2;">' +
@@ -9022,6 +9241,13 @@
               '<span class="muted" style="font-size:12px;display:block;">Floor mat, base beam U wraps, gusset plate padding and column wraps</span></span>' +
             '</label>' + padBody,
             soar.padding ? 'Quantities are the workbook defaults (4 / 2 / 2 per frame). The mat follows frame width — XL frames take CLM325, everything else SSM80100. Edit any number to override.' : '') +
+          sec('Swivel Eye Bolt',
+            '<label style="display:flex;align-items:center;gap:9px;padding:6px 0;cursor:pointer;font-size:14px;">' +
+              '<input type="checkbox" data-sk="swivelEye"' + (soar.swivelEye ? ' checked' : '') + ' style="width:17px;height:17px;flex:0 0 auto;">' +
+              '<span><b style="font-weight:600;">Add Swivel Eye Bolt</b>' +
+              '<span class="muted" style="font-size:12px;display:block;">SKU is picked automatically from the frames above — S1/S3 frames take the outrigger bolt, S2 frames take the non-outrigger bolt</span></span>' +
+            '</label>' + eyeBody,
+            soar.swivelEye ? 'Quantity defaults to one bolt per matching frame. Edit either number to override.' : '') +
           '<label style="display:flex;align-items:center;gap:9px;font-size:13px;color:#5c6157;cursor:pointer;padding:6px 0;">' +
             '<input type="checkbox" data-sk="includeOverview"' + (soar.includeOverview ? ' checked' : '') + '> Print the Summit Soar overview &amp; Engineer-of-Record copy on each frame line' +
           '</label>' +
@@ -9071,6 +9297,7 @@
       frames: soar.rows.filter(function (r) { return (Number(r.qty) || 0) > 0; })
         .map(function (r) { return { part: r.part, qty: Number(r.qty) || 0 }; }),
       padding: !!soar.padding,
+      swivelEye: !!soar.swivelEye,
       includeOverview: !!soar.includeOverview,
       // Drives whether the server appends the Engineer-of-Record copy to the Soar
       // overview text (src/proposals/soarSeries.ts) — same signal the Canadian
@@ -9080,6 +9307,9 @@
     // Only send a quantity the rep actually typed, so the server applies its own
     // workbook default otherwise and the two can never drift apart.
     soarPadList().forEach(function (p) {
+      if (soar[p.key] != null && soar[p.key] !== '') a[p.key] = Math.max(0, Number(soar[p.key]) || 0);
+    });
+    soarEyeBoltList().forEach(function (p) {
       if (soar[p.key] != null && soar[p.key] !== '') a[p.key] = Math.max(0, Number(soar[p.key]) || 0);
     });
     return a;
@@ -10858,6 +11088,7 @@
                 '<div class="muted" style="font-size:11.5px;">' + esc(r.sku || '\u2014') + ' \u00b7 ' +
                 esc(r.vendor) + ' \u00b7 qty ' + r.quantity +
                 (r.freeIssue ? ' \u00b7 free issue' : '') +
+                (r.secondaryVendor ? ' \u00b7 secondary vendor (catalog = what this vendor charges, not the part\u2019s own vendor cost)' : '') +
                 (r.blocked ? '<div style="color:#9c3327;">' + esc(r.blocked) + '</div>' : '') + '</div></td>' +
               '<td style="padding:7px 10px;text-align:right;font-variant-numeric:tabular-nums;">' + money(r.currentMinor) + '</td>' +
               '<td style="padding:7px 10px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600;">' + money(r.catalogMinor) + '</td>' +
@@ -13357,18 +13588,26 @@
   /**
    * Build the proposal document for sending: load the current version, assemble the
    * same markup the preview uses, and wrap it to stand alone.
+   *
+   * Returns null on any failure — callers that show their own error (the send-email
+   * and e-sign dialogs) just check for that. `lastDocBuildError` carries the reason
+   * alongside it, for the one caller (the release action) that has no dialog open to
+   * show an error in and has to report the failure asynchronously, after the fact —
+   * see startReleaseAttachment.
    */
+  var lastDocBuildError = null;
   async function buildProposalDocForSend(p, versionId) {
+    lastDocBuildError = null;
     try {
       var rv = await authed('/proposals/' + p.id);
-      if (!rv.ok) return null;
+      if (!rv.ok) { lastDocBuildError = 'could not load the proposal (' + rv.status + ')'; return null; }
       var full = await rv.json();
       var versions = (full.versions || []).slice().sort(function (x, y) { return y.version - x.version; });
       var v = versionId ? (versions.filter(function (x) { return x.id === versionId; })[0] || versions[0]) : versions[0];
-      if (!v) return null;
+      if (!v) { lastDocBuildError = 'this version could not be found'; return null; }
       var doc = await proposalDocData(full, v);
       return { html: proposalStandaloneHtml(doc), filename: proposalFileName(doc) };
-    } catch (e) { return null; }
+    } catch (e) { lastDocBuildError = (e && e.message) || 'the document could not be built'; return null; }
   }
 
   /* --- Electronic signature (DocuSeal) ---
@@ -14087,96 +14326,167 @@
     });
   }
 
+  /**
+   * Each admin tab is itself a stack of configuration blocks — Proposal content alone
+   * has six. Left all open, that stack is the same "long list" problem the tabs above
+   * were built to solve, one level down. Every block renders via admAcc() below as a
+   * closed accordion; opening one collapses every other block IN THAT SAME TAB (scoped
+   * to the nearest [data-adm] ancestor, so opening something under Proposal content
+   * never touches what is open under Orders & vendors) and clicking an open block
+   * closes it again.
+   *
+   * Wired once, after renderAdmin() sets #view's HTML — the accordions don't get
+   * rebuilt when a tab button is clicked (showAdmTab() only toggles display), so this
+   * only needs to run once per admin screen load.
+   */
+  function wireAdmAccordions() {
+    document.querySelectorAll('[data-admacctoggle]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var acc = btn.closest('.admAcc');
+        if (!acc) return;
+        var scope = btn.closest('[data-adm]') || document;
+        var wasOpen = acc.getAttribute('data-admaccopen') === '1';
+        scope.querySelectorAll('.admAcc').forEach(function (other) {
+          var body = other.querySelector('.admAccBody');
+          var chevron = other.querySelector('.admAccChevron');
+          var header = other.querySelector('[data-admacctoggle]');
+          other.setAttribute('data-admaccopen', '0');
+          if (body) body.style.display = 'none';
+          if (chevron) chevron.style.transform = '';
+          if (header) header.style.background = '#fafbf9';
+        });
+        if (!wasOpen) {
+          var body = acc.querySelector('.admAccBody');
+          var chevron = acc.querySelector('.admAccChevron');
+          acc.setAttribute('data-admaccopen', '1');
+          if (body) body.style.display = '';
+          if (chevron) chevron.style.transform = 'rotate(90deg)';
+          btn.style.background = '#eef1ea';
+        }
+      });
+    });
+  }
+
+  /**
+   * One collapsible configuration block. `button`, when given, is an action (New
+   * user, +New note…) that sits beside the header rather than inside the toggle —
+   * a sibling, not a descendant, so clicking it can never also collapse the section
+   * it belongs to. Collapsed by default: every admAccBody below ships with
+   * display:none inline, and wireAdmAccordions() is what opens one.
+   */
+  function admAcc(id, title, note, button, bodyHtml) {
+    return (
+      '<div class="admAcc" data-admacc="' + id + '" style="border:1px solid #e7e8e3;border-radius:8px;margin-bottom:12px;overflow:hidden;background:#fff;">' +
+        '<div style="display:flex;align-items:stretch;">' +
+          '<button type="button" data-admacctoggle="' + id + '" style="flex:1;display:flex;align-items:center;gap:9px;background:#fafbf9;border:none;padding:14px 16px;cursor:pointer;text-align:left;font-family:inherit;">' +
+            '<span class="admAccChevron" style="color:#8a8f85;font-size:11px;display:inline-block;transition:transform .15s ease;">▸</span>' +
+            '<span style="font-family:\'Newsreader\',serif;font-size:15.5px;font-weight:600;color:#3d4a55;">' + title + '</span>' +
+          '</button>' +
+          (button ? '<div style="display:flex;align-items:center;gap:8px;background:#fafbf9;padding:0 14px;">' + button + '</div>' : '') +
+        '</div>' +
+        '<div class="admAccBody" style="display:none;padding:16px;border-top:1px solid #e7e8e3;">' +
+          (note ? '<div class="muted" style="font-size:12.5px;margin:0 0 12px;max-width:820px;line-height:1.55;">' + note + '</div>' : '') +
+          bodyHtml +
+        '</div>' +
+      '</div>'
+    );
+  }
+
   async function renderAdmin(user) {
     var sec = function (id, inner) {
       return '<section data-adm="' + id + '">' + inner + '</section>';
-    };
-    var head = function (title, note, button) {
-      return '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;' +
-          'margin-top:4px;"><div class="section-title" style="margin:0;">' + title + '</div>' +
-          (button || '') + '</div>' +
-        (note ? '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;max-width:820px;line-height:1.55;">' + note + '</div>' : '');
     };
 
     document.getElementById('view').innerHTML =
       '<div id="admTabs" style="display:flex;flex-wrap:wrap;border-bottom:1px solid #e7e8e3;margin-bottom:20px;"></div>' +
 
       sec('users',
-        '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:16px;">' +
-          '<div class="section-title" style="margin:0;">People with access</div>' +
-          '<div style="display:flex;gap:8px;">' +
-            '<button class="link-btn" id="admMailTest" style="width:auto;padding:10px 15px;">Send test email</button>' +
-            '<button class="btn" id="admNew" style="width:auto;padding:10px 17px;">New user</button>' +
-          '</div></div>' +
-        '<div id="admList"><div class="muted" style="padding:24px;">Loading…</div></div>' +
-        '<div class="section-title" style="margin-top:26px;">Tips &amp; Tricks guide</div>' +
-        '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">The name, title and photo on the page-by-page help bubble everyone sees in the bottom-right corner (a person can turn the bubble itself off under My Profile). Change the photo here any time — nothing about the tips themselves needs a deploy to follow.</div>' +
-        '<div id="tipsGuideAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+        admAcc('usersPeople', 'People with access', '',
+          '<button class="link-btn" id="admMailTest" style="width:auto;padding:10px 15px;">Send test email</button>' +
+          '<button class="btn" id="admNew" style="width:auto;padding:10px 17px;">New user</button>',
+          '<div id="admList"><div class="muted" style="padding:24px;">Loading…</div></div>') +
+        admAcc('usersTips', 'Tips &amp; Tricks guide',
+          'The name, title and photo on the page-by-page help bubble everyone sees in the bottom-right corner (a person can turn the bubble itself off under My Profile). Change the photo here any time — nothing about the tips themselves needs a deploy to follow.',
+          '',
+          '<div id="tipsGuideAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>')) +
 
       sec('proposals',
-        head('Standard proposal notes',
+        admAcc('propNotes', 'Standard proposal notes',
           'Reusable note blocks for proposals. “Always include” notes are added to every new proposal automatically, and a note can name the parts that pull it in. Table notes print inside the line items; footer notes print below the signature lines. Also editable under Catalog → Proposal notes.',
-          '<button class="btn" id="snNew" style="width:auto;padding:9px 15px;">+ New note</button>') +
-        '<div id="snList"><div class="muted" style="padding:16px;">Loading…</div></div>' +
-        '<div class="section-title" style="margin-top:26px;">Proposal introductions</div>' +
-        '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">The pages that print ahead of the itemized proposal, one product line at a time. The photographs are set here and used by every proposal that prints that introduction &mdash; a rep picks the template on the proposal, never the pictures. Each slot names the size it prints at; anything larger is downscaled on upload. Page wording ships with the application.</div>' +
-        '<div id="introAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>' +
-        '<div class="section-title" style="margin-top:26px;">Contract documents</div>' +
-        '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">The general release and the standard terms, printed after the acceptance page. Editing them here changes what future proposals print; a proposal already released keeps the wording it went out with. Saving a draft is not publishing it.</div>' +
-        '<div id="legalAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>' +
-        '<div class="section-title" style="margin-top:26px;">Signature &amp; date placement</div>' +
-        '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">Drag a signature or date box to the exact spot it should print at on the acceptance page and the acknowledgment. Saved here, every proposal from now on prints at that spot &mdash; nothing to describe by hand each time.</div>' +
-        '<div id="sigFieldLayoutAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>' +
-        '<div class="section-title" style="margin-top:26px;">Reference documents</div>' +
-        '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">Pre-made PDFs — a W9, a certificate of insurance — a rep can attach to an individual proposal from the builder, the same way contract documents are attached. Uploaded once here; unlike the contract documents, these print exactly as uploaded rather than being retyped.</div>' +
-        '<div id="referenceDocsAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+          '<button class="btn" id="snNew" style="width:auto;padding:9px 15px;">+ New note</button>',
+          '<div id="snList"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+        admAcc('propIntros', 'Proposal introductions',
+          'The pages that print ahead of the itemized proposal, one product line at a time. The photographs are set here and used by every proposal that prints that introduction &mdash; a rep picks the template on the proposal, never the pictures. Each slot names the size it prints at; anything larger is downscaled on upload. Page wording ships with the application.',
+          '',
+          '<div id="introAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+        admAcc('propContracts', 'Contract documents',
+          'The general release and the standard terms, printed after the acceptance page. Editing them here changes what future proposals print; a proposal already released keeps the wording it went out with. Saving a draft is not publishing it.',
+          '',
+          '<div id="legalAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+        admAcc('propSig', 'Signature &amp; date placement',
+          'Drag a signature or date box to the exact spot it should print at on the acceptance page and the acknowledgment. Saved here, every proposal from now on prints at that spot &mdash; nothing to describe by hand each time.',
+          '',
+          '<div id="sigFieldLayoutAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+        admAcc('propRefDocs', 'Reference documents',
+          'Pre-made PDFs — a W9, a certificate of insurance — a rep can attach to an individual proposal from the builder, the same way contract documents are attached. Uploaded once here; unlike the contract documents, these print exactly as uploaded rather than being retyped.',
+          '',
+          '<div id="referenceDocsAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+        admAcc('propMedia', 'Media Partnership Program',
+          'The optional Customer Project Media Rebate a rep can offer on a proposal. Off by default and never reduces the Project Price. Editing here changes what a proposal offers going forward; a proposal already released keeps the terms it was released under.',
+          '',
+          '<div id="mediaPartnershipAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>')) +
 
       sec('email',
-        '<div class="section-title" style="margin:4px 0 0;">Outlook drafts</div>' +
-        '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;max-width:820px;line-height:1.55;">Connect your own mailbox and a follow-up opens as a draft in Outlook instead of downloading a file. Each person connects their own — consent is per mailbox, so nobody can connect on your behalf and this app can never read anyone else&rsquo;s mail. Your signature is pasted here because Outlook keeps signatures in the app on your machine, where nothing on the server can reach them.</div>' +
-        '<div id="olPanel"><div class="muted" style="padding:16px;">Loading…</div></div>' +
-        '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:26px;"><div class="section-title" style="margin:0;">Follow-up emails</div>' +
-          '<button class="btn" id="futNew" style="width:auto;padding:9px 15px;">+ New template</button></div>' +
-        '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;max-width:820px;line-height:1.55;">The emails a rep can pick from on a proposal. The order matters — financing is not raised until the email before it has established that budget is the obstacle — so the step number decides the sequence. Editing here changes what everyone sends, immediately.</div>' +
-        '<div id="futList"><div class="muted" style="padding:16px;">Loading…</div></div>' +
-        '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:26px;"><div class="section-title" style="margin:0;">Proposal e-sign emails</div>' +
-          '<button class="btn" id="esetNew" style="width:auto;padding:9px 15px;">+ New template</button></div>' +
-        '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;max-width:820px;line-height:1.55;">The "please review and sign" email a rep sends with a proposal — separate from the follow-ups above and from the signing document itself. Auto-picked by product line the same way the signing document is, independently, so the two can be mixed and matched; a rep can always pick a different one before sending. Sent from the rep’s own connected Outlook mailbox, HTML included. <code>{{SigningLink}}</code> is filled in per recipient at send time, not here.</div>' +
-        '<div id="esetList"><div class="muted" style="padding:16px;">Loading…</div></div>' +
-        '<div class="muted" style="font-size:12.5px;margin-top:22px;padding-top:14px;border-top:1px solid #eef0ea;line-height:1.55;max-width:820px;">Payment-request emails and the letters they carry are edited with the invoices they belong to, under <b style="font-weight:600;">Accounts Receivable → Letters &amp; email</b>.</div>') +
+        admAcc('emailOutlook', 'Outlook drafts',
+          'Connect your own mailbox and a follow-up opens as a draft in Outlook instead of downloading a file. Each person connects their own — consent is per mailbox, so nobody can connect on your behalf and this app can never read anyone else&rsquo;s mail. Your signature is pasted here because Outlook keeps signatures in the app on your machine, where nothing on the server can reach them.',
+          '',
+          '<div id="olPanel"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+        admAcc('emailFollowups', 'Follow-up emails',
+          'The emails a rep can pick from on a proposal. The order matters — financing is not raised until the email before it has established that budget is the obstacle — so the step number decides the sequence. Editing here changes what everyone sends, immediately.',
+          '<button class="btn" id="futNew" style="width:auto;padding:9px 15px;">+ New template</button>',
+          '<div id="futList"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+        admAcc('emailEsign', 'Proposal e-sign emails',
+          'The "please review and sign" email a rep sends with a proposal — separate from the follow-ups above and from the signing document itself. Auto-picked by product line the same way the signing document is, independently, so the two can be mixed and matched; a rep can always pick a different one before sending. Sent from the rep’s own connected Outlook mailbox, HTML included. <code>{{SigningLink}}</code> is filled in per recipient at send time, not here.',
+          '<button class="btn" id="esetNew" style="width:auto;padding:9px 15px;">+ New template</button>',
+          '<div id="esetList"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+        '<div class="muted" style="font-size:12.5px;margin-top:6px;padding-top:14px;border-top:1px solid #eef0ea;line-height:1.55;max-width:820px;">Payment-request emails and the letters they carry are edited with the invoices they belong to, under <b style="font-weight:600;">Accounts Receivable → Letters &amp; email</b>.</div>') +
 
       sec('pricing',
-        '<div class="section-title" style="margin:4px 0 0;">Formulas</div>' +
-        '<div class="muted" style="font-size:12.5px;margin:6px 0 10px;max-width:820px;line-height:1.55;">Every calculation the pricing engine runs. Frame and hardware quantities are editable coefficients; business numbers are the scalars the proposal math uses; the last tab lists what is fixed in code and why.</div>' +
-        '<div id="fxTabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;"></div>' +
-        // The log sits beside the formulas, not behind a tab: the question it answers
-        // is "what does this rule say now versus what it said before", and that needs
-        // both on screen at once.
-        '<div style="display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:18px;align-items:start;">' +
-          '<div id="fxBody"><div class="muted" style="padding:16px;">Loading…</div></div>' +
-          '<aside id="fxLog" style="position:sticky;top:16px;"></aside>' +
-        '</div>' +
-        '<div class="section-title" style="margin-top:26px;">Financing</div>' +
-        '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">Ryan Capital quote a <b>payment factor</b> per amount band and term, not an interest rate: the monthly payment is the amount financed × the factor at that intersection. Paste their sheet or edit a cell; the published sheet is what every new financing document quotes from.</div>' +
-        '<div id="finAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+        admAcc('pricingFormulas', 'Formulas',
+          'Every calculation the pricing engine runs. Frame and hardware quantities are editable coefficients; business numbers are the scalars the proposal math uses; the last tab lists what is fixed in code and why.',
+          '',
+          '<div id="fxTabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;"></div>' +
+          // The log sits beside the formulas, not behind a tab: the question it answers
+          // is "what does this rule say now versus what it said before", and that needs
+          // both on screen at once.
+          '<div style="display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:18px;align-items:start;">' +
+            '<div id="fxBody"><div class="muted" style="padding:16px;">Loading…</div></div>' +
+            '<aside id="fxLog" style="position:sticky;top:16px;"></aside>' +
+          '</div>') +
+        admAcc('pricingFinancing', 'Financing',
+          'Ryan Capital quote a <b>payment factor</b> per amount band and term, not an interest rate: the monthly payment is the amount financed × the factor at that intersection. Paste their sheet or edit a cell; the published sheet is what every new financing document quotes from.',
+          '',
+          '<div id="finAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>')) +
 
       sec('orders',
-        head('Vendor questions',
+        admAcc('ordersVendorQ', 'Vendor questions',
           'Questions asked on a Bill of Materials section. A question with no vendor is asked of <b>every</b> vendor; one with a vendor is asked only of theirs. Each new section starts with a copy, so editing a question here never rewrites an answer already given on an order.',
-          '<button class="btn" id="qtNew" style="width:auto;padding:9px 15px;">+ New question</button>') +
-        '<div id="qtList"><div class="muted" style="padding:16px;">Loading…</div></div>' +
-        '<div class="section-title" style="margin-top:26px;">Freight alert banner</div>' +
-        '<div class="muted" style="font-size:12.5px;margin:0 0 10px;max-width:820px;line-height:1.55;">The bar that appears above every screen when an invoice is short of freight. It is the most-seen thing in the application, so its colours are yours to set: pick a preset or two exact colours per state. The preview is live.</div>' +
-        '<div id="ftuBannerAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+          '<button class="btn" id="qtNew" style="width:auto;padding:9px 15px;">+ New question</button>',
+          '<div id="qtList"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+        admAcc('ordersFreightBanner', 'Freight alert banner',
+          'The bar that appears above every screen when an invoice is short of freight. It is the most-seen thing in the application, so its colours are yours to set: pick a preset or two exact colours per state. The preview is live.',
+          '',
+          '<div id="ftuBannerAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>')) +
 
       // cross-border.js appends #crossBorderPanel to #view when it cannot find it.
       // Giving it a home inside this tab is what keeps it from landing at the foot of
       // whichever tab happens to be open.
       sec('canada',
-        '<div id="crossBorderPanel"></div>');
+        admAcc('canadaCrossBorder', 'Cross-border', '', '', '<div id="crossBorderPanel"></div>'));
 
     drawAdmTabs();
     showAdmTab();
+    wireAdmAccordions();
 
     if (window.FreightTrueUp) window.FreightTrueUp.mountAdmin('ftuBannerAdmin', user);
     if (window.SSGIntroAdmin) window.SSGIntroAdmin.mountAdmin('introAdmin');
@@ -14207,6 +14517,8 @@
       window.SSGSignatureFieldLayoutAdmin.render(document.getElementById('sigFieldLayoutAdmin'));
     if (window.SSGReferenceDocuments)
       window.SSGReferenceDocuments.render(document.getElementById('referenceDocsAdmin'));
+    if (window.SSGMediaPartnershipAdmin)
+      window.SSGMediaPartnershipAdmin.render(document.getElementById('mediaPartnershipAdmin'));
     loadFormulas();
     loadFollowUpTemplates();
     loadEsignEmailTemplates();

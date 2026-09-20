@@ -13,6 +13,8 @@ import {
 import { allocateNumbered } from '../lib/documentNumber.js';
 import type { ProposalStatus } from '@prisma/client';
 import { snapshotLegalDocuments } from '../legal/service.js';
+import { snapshotMediaRebateProgram } from '../mediaRebate/service.js';
+import { metaOf } from './analytics.js';
 
 interface VersionContent {
   sections: ProposalSection[];
@@ -446,6 +448,16 @@ export async function changeStatus(
     const pinLegal = becomesFrozen(to) && !version.legalSnapshotId;
     const legalSnapshotId = pinLegal ? await snapshotLegalDocuments(tx) : null;
 
+    /*
+     * Freeze the Media Partnership Program terms with the price and the legal text —
+     * same discipline, same reason (see snapshotMediaRebateProgram's docblock). Only
+     * when this version actually offered the program: most proposals never touch this
+     * feature and must never gain a snapshot row for it.
+     */
+    const offersMediaRebate = !!metaOf(version.sections).mediaRebate?.offered;
+    const pinMediaRebate = becomesFrozen(to) && offersMediaRebate && !version.mediaRebateSnapshotId;
+    const mediaRebateSnapshotId = pinMediaRebate ? await snapshotMediaRebateProgram(tx) : null;
+
     await tx.proposalVersion.update({
       where: { id: versionId },
       data: {
@@ -454,6 +466,7 @@ export async function changeStatus(
           ? { frozen: true, releasedAt: new Date(), releasedById: userId }
           : {}),
         ...(legalSnapshotId ? { legalSnapshotId } : {}),
+        ...(mediaRebateSnapshotId ? { mediaRebateSnapshotId } : {}),
       },
     });
     await tx.proposalStatusEvent.create({

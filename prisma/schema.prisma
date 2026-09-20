@@ -1153,6 +1153,12 @@ model ProposalVersion {
   /// Same discipline as priceSnapshotId and financeRateCardId above: editing the terms
   /// cannot restate what a customer has already signed.
   legalSnapshotId String?
+  /// The Customer Project Media Rebate program terms this version was released under,
+  /// frozen at release — same discipline as legalSnapshotId, but only set when this
+  /// version's meta actually offered the program (sections.meta.mediaRebate.offered).
+  /// Null for every version that never offered it, which is most of them, and for one
+  /// released before this feature existed.
+  mediaRebateSnapshotId String?
   createdById     String
   createdAt       DateTime              @default(now())
   updatedAt       DateTime              @updatedAt
@@ -1162,6 +1168,7 @@ model ProposalVersion {
   @@index([proposalId])
   @@index([status])
   @@index([legalSnapshotId])
+  @@index([mediaRebateSnapshotId])
 }
 
 /// A design rendering (a CAD export, a photorealistic render, a scanned drawing)
@@ -1278,12 +1285,12 @@ model LegalDocumentRevision {
   @@unique([key, version])
 }
 
-/// Manual pixel nudges for the six signature/date field boxes the proposal and
-/// acknowledgment pages already print (the ids `injectSignatureFields` matches in
-/// src/integrations/docuseal/assembly.ts, authored in public/proposal-document.js and
-/// public/contract-pages.js). One singleton row: these boxes are not per-proposal or
-/// per-template, they are typesetting choices for the whole application, the same way
-/// LegalDocument's `style` fields are.
+/// Manual pixel nudges for the eight signature/date field boxes the proposal,
+/// acknowledgment and Media Rebate pages already print (the ids
+/// `injectSignatureFields` matches in src/integrations/docuseal/assembly.ts, authored
+/// in public/proposal-document.js and public/contract-pages.js). One singleton row:
+/// these boxes are not per-proposal or per-template, they are typesetting choices for
+/// the whole application, the same way LegalDocument's `style` fields are.
 ///
 /// `offsets` is a JSON map of slot id -> `{ top, left }` in pixels, applied as an inline
 /// CSS offset stacked on top of the box's own `position:relative` — it nudges a box
@@ -1354,6 +1361,49 @@ model LegalSnapshot {
   id        String   @id @default(cuid())
   hash      String   @unique
   documents Json
+  createdAt DateTime @default(now())
+}
+
+/// Global defaults for the optional "Customer Project Media Rebate" a proposal can
+/// offer — a post-installation rebate for customer-submitted photos/video. Singleton
+/// row (`key` fixed to "default"), same shape as SignatureFieldLayout: this is a
+/// typesetting/policy choice for the whole application, not per-proposal or per-template.
+///
+/// `active` gates whether NEW proposals may offer the program — see
+/// src/mediaRebate/service.ts. Disabling it must never affect a proposal that already
+/// offered the program (that state lives on the proposal itself, in
+/// ProposalVersion.sections meta, not here). Starts inactive: the spec requires the
+/// program to never be enabled by default.
+///
+/// `content` bundles the long-form editable program language (intro, media
+/// requirements, acceptance standards, usage rights, privacy restrictions,
+/// participation language, signature acknowledgment language, payment terms) plus the
+/// four configurable timeframe day-counts (submission/review/correction/payment
+/// periods) — see src/mediaRebate/defaults.ts for the shape and shipped wording.
+///
+/// Never read directly by a released/signed proposal: see MediaRebateSnapshot below.
+model MediaPartnershipProgram {
+  key                String   @id @default("default")
+  active             Boolean  @default(false)
+  customerFacingName String   @default("Customer Project Media Rebate")
+  internalName       String   @default("Media Partnership Program")
+  /// Integer minor units (cents), matching Sku.unitPriceMinor's existing convention.
+  rebateAmountMinor  Int      @default(25000)
+  content            Json
+  version            Int      @default(1)
+  updatedAt          DateTime @default(now()) @updatedAt
+  updatedById        String?
+}
+
+/// Immutable, content-addressed snapshot of the Media Partnership Program, frozen the
+/// first time a proposal version that offered the program is released — see
+/// ProposalVersion.mediaRebateSnapshotId and src/mediaRebate/service.ts. Same pattern
+/// as LegalSnapshot above: releasing many proposals under one wording writes one row
+/// and many references, deduped on hash.
+model MediaRebateSnapshot {
+  id        String   @id @default(cuid())
+  hash      String   @unique
+  payload   Json
   createdAt DateTime @default(now())
 }
 
@@ -1485,6 +1535,16 @@ model Sku {
   /// Materials at no cost — Summit has already paid for it — and is left out of their
   /// cost total. The real cost stays on the order line, so cost of goods is unchanged.
   freeIssueVendor String?
+  /// A SECOND vendor NAME this part also needs its own Bill of Materials line on, in
+  /// ADDITION to its own vendor — not instead of it, which is what freeIssueVendor
+  /// above does. The standing example: bought raw from one vendor, then sent to
+  /// Goldberg Brothers for powder-coating, who needs to see it on their own sheet
+  /// under their own part number. That printed number comes from the existing
+  /// VendorPartNumber mapping for this vendor — nothing new to look up.
+  secondaryVendor String?
+  /// What secondaryVendor charges per unit for this step. NULL/0 when it is a
+  /// receiving/processing note rather than a separate purchase.
+  secondaryVendorCostMinor Int?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -2087,8 +2147,13 @@ model ProcurementLine {
   /// of goods is unaffected. Set from Sku.freeIssueVendor.
   freeIssue      Boolean  @default(false)
   purchaseVendor String?
-
-
+  /// Set on a line CREATED BY the secondaryVendor rule (see Sku.secondaryVendor):
+  /// the part number the rule fired on. Null on every ordinary line, including the
+  /// original line that rule was fired FROM — that one is untouched, unlike free
+  /// issue, which moves the original. Lets re-applying the rule to an order that
+  /// already has this vendor's line skip it, the same way kitSku above does for
+  /// components.
+  secondaryOfSku String?
 
   @@index([orderId])
 }

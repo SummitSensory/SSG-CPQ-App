@@ -18,6 +18,23 @@ const h = vi.hoisted(() => ({
 
 vi.mock('../../src/lib/audit.js', () => ({ recordAudit: vi.fn() }));
 
+/**
+ * Only populated by the secondaryVendor test below — every other test in this file
+ * relies on this staying empty, which keeps `sku.findMany` returning `[]` for them
+ * exactly as the old unconditional stub did.
+ */
+let SKU_ROWS: Array<{
+  part: string;
+  description?: string;
+  manufacturer?: string | null;
+  unitCostMinor?: number | null;
+  weightLbs?: number | null;
+  keepParentOnBom?: boolean;
+  freeIssueVendor?: string | null;
+  secondaryVendor?: string | null;
+  secondaryVendorCostMinor?: number | null;
+}> = [];
+
 vi.mock('../../src/lib/prisma.js', () => {
   const s = h.store;
   const prisma = {
@@ -43,9 +60,47 @@ vi.mock('../../src/lib/prisma.js', () => {
     // resolveCatalogRefs() looks up procurement identity (part number, vendor,
     // cost, weight) for every order line. These tests assert on version locking
     // and integrity hashing, not catalog resolution, so no matches is the right
-    // neutral input — the service falls back to nulls.
+    // neutral input — the service falls back to nulls, EXCEPT for the
+    // secondaryVendor test, which populates SKU_ROWS deliberately.
     product: { findMany: async () => [] },
-    sku: { findMany: async () => [] },
+    // Serves both resolveCatalogRefs' `{ OR: [{ part: { in } }, { description: { in } }] }`
+    // shape and bomBuild.ts's `loadBuildTables`/`partInfo` shapes (`{ OR: [...rule flags] }`
+    // and plain `{ part: { in } }`) — the three shapes these two files actually query with.
+    sku: {
+      findMany: async ({
+        where,
+      }: {
+        where?: {
+          part?: { in: string[] };
+          OR?: Array<Record<string, unknown>>;
+        };
+      } = {}) => {
+        let rows = SKU_ROWS.slice();
+        if (where?.part?.in) {
+          const set = new Set(where.part.in);
+          rows = rows.filter((r) => set.has(r.part));
+        }
+        if (where?.OR) {
+          rows = rows.filter((r) =>
+            where.OR!.some((cond) => {
+              const partIn = (cond.part as { in?: string[] } | undefined)?.in;
+              if (partIn) return partIn.includes(r.part);
+              const descIn = (cond.description as { in?: string[] } | undefined)?.in;
+              if (descIn) return !!r.description && descIn.includes(r.description);
+              if ('keepParentOnBom' in cond) return r.keepParentOnBom === true;
+              if ('NOT' in cond) {
+                const not = cond.NOT as Record<string, unknown>;
+                if ('freeIssueVendor' in not) return !!r.freeIssueVendor;
+                if ('secondaryVendor' in not) return !!r.secondaryVendor;
+              }
+              return false;
+            }),
+          );
+        }
+        return rows;
+      },
+    },
+    skuComponent: { findMany: async () => [] },
     proposalVersion: { findUnique: async () => s.version },
     priceSnapshot: { findUnique: async () => s.snapshot },
     /*
@@ -104,6 +159,7 @@ beforeEach(() => {
   h.store.orders.clear();
   h.store.byVersion.clear();
   h.store.seq = 1;
+  SKU_ROWS = [];
   seed();
 });
 
@@ -196,6 +252,48 @@ describe('createAcceptedOrder', () => {
     expect(taskCats).not.toContain('INSTALLATION');
     // Every other seeded category is unaffected.
     expect(reqCats).toContain('PRODUCTION');
+  });
+
+  it("gives a part with a secondaryVendor rule its own second procurement line, at the SECOND vendor's cost — not the catalog cost of the part's own vendor", async () => {
+    SKU_ROWS = [
+      {
+        part: 'ABC',
+        description: 'Product A',
+        manufacturer: 'Amazon',
+        unitCostMinor: 5000,
+        weightLbs: 2,
+        secondaryVendor: 'Goldberg Brothers',
+        secondaryVendorCostMinor: 750,
+      },
+    ];
+    h.store.version!.items = [
+      { ref: 'l1', sku: 'ABC', name: 'Product A', quantity: 2, kind: 'INCLUDED' },
+    ];
+    const { createAcceptedOrder } = await import('../../src/handoff/service.js');
+    const order = (await createAcceptedOrder('v1', approval, 'user-1')) as unknown as {
+      procurement: {
+        create: Array<{
+          sku: string | null;
+          vendor: string | null;
+          unitCostMinor: number | null;
+          secondaryOfSku: string | null;
+        }>;
+      };
+    };
+    const lines = order.procurement.create;
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatchObject({
+      sku: 'ABC',
+      vendor: 'Amazon',
+      unitCostMinor: 5000,
+      secondaryOfSku: null,
+    });
+    expect(lines[1]).toMatchObject({
+      sku: 'ABC',
+      vendor: 'Goldberg Brothers',
+      unitCostMinor: 750,
+      secondaryOfSku: 'ABC',
+    });
   });
 
   it('seeds Installation/Training by default, when the approval says nothing either way', async () => {

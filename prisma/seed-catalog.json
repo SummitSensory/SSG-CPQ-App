@@ -52,7 +52,7 @@
       "isActive": true
     },
     {
-      "name": "Southpaw",
+      "name": "Southpaw Enterprises",
       "code": "southpaw",
       "isThirdParty": true,
       "defaultLeadTimeDays": null,
@@ -97,7 +97,7 @@
       "isActive": true
     },
     {
-      "name": "TFH",
+      "name": "TFH Special Needs Toys",
       "code": "tfh",
       "isThirdParty": true,
       "defaultLeadTimeDays": null,
@@ -106,7 +106,7 @@
       "isActive": true
     },
     {
-      "name": "Mazello",
+      "name": "Mazzella",
       "code": "mazello",
       "isThirdParty": true,
       "defaultLeadTimeDays": null,
@@ -4956,6 +4956,36 @@
       "weightOz": null
     },
     {
+      "sku": "SSG-SS-OUTRIGGER-SWIVEL-EYE",
+      "name": "Swivel Eye Bolt (Outrigger — S1/S3 Frames)",
+      "productLine": "Summit Soar",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 19612,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": 0
+    },
+    {
+      "sku": "SSG-SS-NON-OUTRIGGER-SWIVEL-EYE",
+      "name": "Swivel Eye Bolt (Non-Outrigger — S2 Frames)",
+      "productLine": "Summit Soar",
+      "defaultQuantity": 1,
+      "unitPriceMinor": 19612,
+      "badge": null,
+      "lengthIn": null,
+      "widthIn": null,
+      "heightIn": null,
+      "thicknessIn": null,
+      "showDimensions": false,
+      "dimensionsOverride": null,
+      "weightOz": 0
+    },
+    {
       "sku": "A-2200",
       "name": "Summit Flex: Universial Excerise Unit (Spider Cage) w/ Hardware",
       "productLine": "Summit Flex",
@@ -8391,6 +8421,24 @@
       "parentSlug": "soar--summit-soar-mats-accessories",
       "sku": "COLW2812",
       "sortOrder": 40150
+    },
+    {
+      "slug": "soar--ssg-ss-outrigger-swivel-eye",
+      "name": "Swivel Eye Bolt (Outrigger — S1/S3 Frames)",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar--summit-soar-mats-accessories",
+      "sku": "SSG-SS-OUTRIGGER-SWIVEL-EYE",
+      "sortOrder": 40160
+    },
+    {
+      "slug": "soar--ssg-ss-non-outrigger-swivel-eye",
+      "name": "Swivel Eye Bolt (Non-Outrigger — S2 Frames)",
+      "productLine": "Summit Soar",
+      "tierLevel": 2,
+      "parentSlug": "soar--summit-soar-mats-accessories",
+      "sku": "SSG-SS-NON-OUTRIGGER-SWIVEL-EYE",
+      "sortOrder": 40170
     },
     {
       "slug": "flex--summit-flex-series",
@@ -11947,6 +11995,24 @@
       "effectiveDate": "2026-07-31",
       "defaultedDate": true,
       "sourceRef": null
+    },
+    {
+      "sku": "SSG-SS-OUTRIGGER-SWIVEL-EYE",
+      "unitCostMinor": 1900,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-09-19",
+      "defaultedDate": false,
+      "sourceRef": null
+    },
+    {
+      "sku": "SSG-SS-NON-OUTRIGGER-SWIVEL-EYE",
+      "unitCostMinor": 1760,
+      "currency": "USD",
+      "uom": "EA",
+      "effectiveDate": "2026-09-19",
+      "defaultedDate": false,
+      "sourceRef": null
     }
   ],
   "sourcing": [
@@ -13032,7 +13098,7 @@
     },
     {
       "sku": "ZIPLINE-WIRE",
-      "manufacturer": "Mazello",
+      "manufacturer": "Mazzella",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13068,7 +13134,7 @@
     },
     {
       "sku": "120040",
-      "manufacturer": "Southpaw",
+      "manufacturer": "Southpaw Enterprises",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13077,7 +13143,7 @@
     },
     {
       "sku": "120050",
-      "manufacturer": "Southpaw",
+      "manufacturer": "Southpaw Enterprises",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13086,7 +13152,7 @@
     },
     {
       "sku": "120077",
-      "manufacturer": "Southpaw",
+      "manufacturer": "Southpaw Enterprises",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13095,7 +13161,7 @@
     },
     {
       "sku": "1909",
-      "manufacturer": "Southpaw",
+      "manufacturer": "Southpaw Enterprises",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13104,7 +13170,7 @@
     },
     {
       "sku": "120145",
-      "manufacturer": "Southpaw",
+      "manufacturer": "Southpaw Enterprises",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13149,7 +13215,7 @@
     },
     {
       "sku": "8SQMC",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13158,7 +13224,7 @@
     },
     {
       "sku": "1001",
-      "manufacturer": "Southpaw",
+      "manufacturer": "Southpaw Enterprises",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13167,7 +13233,7 @@
     },
     {
       "sku": "4602",
-      "manufacturer": "Southpaw",
+      "manufacturer": "Southpaw Enterprises",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13212,7 +13278,7 @@
     },
     {
       "sku": "3A0RD",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13221,7 +13287,7 @@
     },
     {
       "sku": "3BCSST",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13230,7 +13296,7 @@
     },
     {
       "sku": "3BRWP",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13239,7 +13305,7 @@
     },
     {
       "sku": "3CRWP",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13248,7 +13314,7 @@
     },
     {
       "sku": "3CTWP",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13257,7 +13323,7 @@
     },
     {
       "sku": "3GLMB",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13266,7 +13332,7 @@
     },
     {
       "sku": "3HCSST",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13275,7 +13341,7 @@
     },
     {
       "sku": "3KLDL",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13284,7 +13350,7 @@
     },
     {
       "sku": "3KVBC",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13293,7 +13359,7 @@
     },
     {
       "sku": "3KVPLR",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13302,7 +13368,7 @@
     },
     {
       "sku": "3KVPLU",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13311,7 +13377,7 @@
     },
     {
       "sku": "3MAPL",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13320,7 +13386,7 @@
     },
     {
       "sku": "3SLMP",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13329,7 +13395,7 @@
     },
     {
       "sku": "3SOLD",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13338,7 +13404,7 @@
     },
     {
       "sku": "3SOLDF",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13347,7 +13413,7 @@
     },
     {
       "sku": "3SOLDP",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13356,7 +13422,7 @@
     },
     {
       "sku": "3STVS",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13365,7 +13431,7 @@
     },
     {
       "sku": "3STVSB",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13374,7 +13440,7 @@
     },
     {
       "sku": "3STVSG",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13383,7 +13449,7 @@
     },
     {
       "sku": "3TBSW",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13392,7 +13458,7 @@
     },
     {
       "sku": "4HEFT",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13401,7 +13467,7 @@
     },
     {
       "sku": "4WDPD",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13410,7 +13476,7 @@
     },
     {
       "sku": "4WDPI",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13419,7 +13485,7 @@
     },
     {
       "sku": "4WDSG",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13428,7 +13494,7 @@
     },
     {
       "sku": "4WDSO",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13437,7 +13503,7 @@
     },
     {
       "sku": "4WDSY",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13446,7 +13512,7 @@
     },
     {
       "sku": "4WTMD20",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13455,7 +13521,7 @@
     },
     {
       "sku": "4WTMD8",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13464,7 +13530,7 @@
     },
     {
       "sku": "61TTL",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13473,7 +13539,7 @@
     },
     {
       "sku": "6BALA",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13482,7 +13548,7 @@
     },
     {
       "sku": "6FTMS",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13491,7 +13557,7 @@
     },
     {
       "sku": "6NKMG",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13500,7 +13566,7 @@
     },
     {
       "sku": "6SSHT",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13509,7 +13575,7 @@
     },
     {
       "sku": "6TBLC",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13518,7 +13584,7 @@
     },
     {
       "sku": "6TBLS",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13527,7 +13593,7 @@
     },
     {
       "sku": "6TCXW",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13536,7 +13602,7 @@
     },
     {
       "sku": "6TTTB",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13545,7 +13611,7 @@
     },
     {
       "sku": "71ASS",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13554,7 +13620,7 @@
     },
     {
       "sku": "7ARFL",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13563,7 +13629,7 @@
     },
     {
       "sku": "7LFLT5",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13572,7 +13638,7 @@
     },
     {
       "sku": "7MPTP",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13581,7 +13647,7 @@
     },
     {
       "sku": "7SLMD",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13590,7 +13656,7 @@
     },
     {
       "sku": "7SLTR",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13599,7 +13665,7 @@
     },
     {
       "sku": "7TSPS",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13608,7 +13674,7 @@
     },
     {
       "sku": "7TTSS",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13617,7 +13683,7 @@
     },
     {
       "sku": "8$0MC",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13626,7 +13692,7 @@
     },
     {
       "sku": "8BDRK",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13635,7 +13701,7 @@
     },
     {
       "sku": "8BDRKUK",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13644,7 +13710,7 @@
     },
     {
       "sku": "8BOCH",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13653,7 +13719,7 @@
     },
     {
       "sku": "8BOCHD",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13662,7 +13728,7 @@
     },
     {
       "sku": "8BOCHL",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13671,7 +13737,7 @@
     },
     {
       "sku": "8BOCHX",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13680,7 +13746,7 @@
     },
     {
       "sku": "8BRFM",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13689,7 +13755,7 @@
     },
     {
       "sku": "8BRNS",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13698,7 +13764,7 @@
     },
     {
       "sku": "8EMBLQ",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13707,7 +13773,7 @@
     },
     {
       "sku": "8EMCC",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13716,7 +13782,7 @@
     },
     {
       "sku": "8EMDT",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13725,7 +13791,7 @@
     },
     {
       "sku": "8EMFC",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13734,7 +13800,7 @@
     },
     {
       "sku": "8EMFR",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13743,7 +13809,7 @@
     },
     {
       "sku": "8EMHL",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13752,7 +13818,7 @@
     },
     {
       "sku": "8EMTC",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13761,7 +13827,7 @@
     },
     {
       "sku": "8FSCS",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13770,7 +13836,7 @@
     },
     {
       "sku": "8FSTS",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13779,7 +13845,7 @@
     },
     {
       "sku": "8GAAT",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13788,7 +13854,7 @@
     },
     {
       "sku": "8GTCT",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13797,7 +13863,7 @@
     },
     {
       "sku": "8GTMT",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13806,7 +13872,7 @@
     },
     {
       "sku": "8HGSW",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13815,7 +13881,7 @@
     },
     {
       "sku": "8RCKC",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13824,7 +13890,7 @@
     },
     {
       "sku": "8ROLCN",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13833,7 +13899,7 @@
     },
     {
       "sku": "8RORX",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13842,7 +13908,7 @@
     },
     {
       "sku": "8ROTC",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13851,7 +13917,7 @@
     },
     {
       "sku": "8ROTCJ",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13860,7 +13926,7 @@
     },
     {
       "sku": "8ROWBUK1",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13869,7 +13935,7 @@
     },
     {
       "sku": "8ROWBUK2",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13878,7 +13944,7 @@
     },
     {
       "sku": "8TACT",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13887,7 +13953,7 @@
     },
     {
       "sku": "8TASS",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13896,7 +13962,7 @@
     },
     {
       "sku": "8TCHNA",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13905,7 +13971,7 @@
     },
     {
       "sku": "8TLFS",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13914,7 +13980,7 @@
     },
     {
       "sku": "8TSAA",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13923,7 +13989,7 @@
     },
     {
       "sku": "8TSFD",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13932,7 +13998,7 @@
     },
     {
       "sku": "8TSFS",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13941,7 +14007,7 @@
     },
     {
       "sku": "8TSHD",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13950,7 +14016,7 @@
     },
     {
       "sku": "8TSPSIN",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13959,7 +14025,7 @@
     },
     {
       "sku": "8TSPSR",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13968,7 +14034,7 @@
     },
     {
       "sku": "8TTAC",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13977,7 +14043,7 @@
     },
     {
       "sku": "8WHSW",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13986,7 +14052,7 @@
     },
     {
       "sku": "9BC200N",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -13995,7 +14061,7 @@
     },
     {
       "sku": "9KKHH",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14004,7 +14070,7 @@
     },
     {
       "sku": "9KKHHK",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14013,7 +14079,7 @@
     },
     {
       "sku": "9MATW",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14022,7 +14088,7 @@
     },
     {
       "sku": "9MATWBG",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14031,7 +14097,7 @@
     },
     {
       "sku": "9MATWUV",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14040,7 +14106,7 @@
     },
     {
       "sku": "9MAWT",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14049,7 +14115,7 @@
     },
     {
       "sku": "9MSQR",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14058,7 +14124,7 @@
     },
     {
       "sku": "9NCAM",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14067,7 +14133,7 @@
     },
     {
       "sku": "9NDPW",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14076,7 +14142,7 @@
     },
     {
       "sku": "9NFWW",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14085,7 +14151,7 @@
     },
     {
       "sku": "9NLIP",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14094,7 +14160,7 @@
     },
     {
       "sku": "9NLLL",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14103,7 +14169,7 @@
     },
     {
       "sku": "9NLLM",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14112,7 +14178,7 @@
     },
     {
       "sku": "9NLQW",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14121,7 +14187,7 @@
     },
     {
       "sku": "9NLST",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14130,7 +14196,7 @@
     },
     {
       "sku": "9NMRS22",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14139,7 +14205,7 @@
     },
     {
       "sku": "9NMRS22A",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14148,7 +14214,7 @@
     },
     {
       "sku": "9NPRFX",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14157,7 +14223,7 @@
     },
     {
       "sku": "9NTPF",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14166,7 +14232,7 @@
     },
     {
       "sku": "9NW150A",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14175,7 +14241,7 @@
     },
     {
       "sku": "9NWHW",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14184,7 +14250,7 @@
     },
     {
       "sku": "9PD0W15",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14193,7 +14259,7 @@
     },
     {
       "sku": "9PDQW",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14202,7 +14268,7 @@
     },
     {
       "sku": "9PDW",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14211,7 +14277,7 @@
     },
     {
       "sku": "9PJSH",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14220,7 +14286,7 @@
     },
     {
       "sku": "9PJTU",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14229,7 +14295,7 @@
     },
     {
       "sku": "9PWCA",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14238,7 +14304,7 @@
     },
     {
       "sku": "9PWDG",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14247,7 +14313,7 @@
     },
     {
       "sku": "9PWFX",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14256,7 +14322,7 @@
     },
     {
       "sku": "9PWSP",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14265,7 +14331,7 @@
     },
     {
       "sku": "9PXLS",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14274,7 +14340,7 @@
     },
     {
       "sku": "9RDWL",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14283,7 +14349,7 @@
     },
     {
       "sku": "9RORX",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14292,7 +14358,7 @@
     },
     {
       "sku": "9ROTC",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14301,7 +14367,7 @@
     },
     {
       "sku": "9ROTCJ",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14310,7 +14376,7 @@
     },
     {
       "sku": "9RSCCUS",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14319,7 +14385,7 @@
     },
     {
       "sku": "9RSXSN",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14328,7 +14394,7 @@
     },
     {
       "sku": "9SLPL",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14337,7 +14403,7 @@
     },
     {
       "sku": "9SPSL",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14346,7 +14412,7 @@
     },
     {
       "sku": "9TCLB",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14355,7 +14421,7 @@
     },
     {
       "sku": "9TCLG",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14364,7 +14430,7 @@
     },
     {
       "sku": "9TCLR",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14373,7 +14439,7 @@
     },
     {
       "sku": "9TWGV",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14382,7 +14448,7 @@
     },
     {
       "sku": "9TWKK",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14391,7 +14457,7 @@
     },
     {
       "sku": "9UVCC2",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14400,7 +14466,7 @@
     },
     {
       "sku": "9VCJR",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14409,7 +14475,7 @@
     },
     {
       "sku": "9VCTAD",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14418,7 +14484,7 @@
     },
     {
       "sku": "9VCTAH",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14427,7 +14493,7 @@
     },
     {
       "sku": "9VCTBH",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14436,7 +14502,7 @@
     },
     {
       "sku": "9VFPD",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14445,7 +14511,7 @@
     },
     {
       "sku": "9VLWTBL",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14454,7 +14520,7 @@
     },
     {
       "sku": "9WBSF",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14463,7 +14529,7 @@
     },
     {
       "sku": "9WFOC",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14472,7 +14538,7 @@
     },
     {
       "sku": "9WFOCB",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14481,7 +14547,7 @@
     },
     {
       "sku": "9WFOCCL",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14490,7 +14556,7 @@
     },
     {
       "sku": "9WFOCN",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14499,7 +14565,7 @@
     },
     {
       "sku": "9WIGIL",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14508,7 +14574,7 @@
     },
     {
       "sku": "B2HPC",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14517,7 +14583,7 @@
     },
     {
       "sku": "B2HPF",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14526,7 +14592,7 @@
     },
     {
       "sku": "lFSSBX",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14535,7 +14601,7 @@
     },
     {
       "sku": "SILPL",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14544,7 +14610,7 @@
     },
     {
       "sku": "SLKTBC",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14553,7 +14619,7 @@
     },
     {
       "sku": "SMDEG",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14562,7 +14628,7 @@
     },
     {
       "sku": "SMDSP",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14571,7 +14637,7 @@
     },
     {
       "sku": "SMDST",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14580,7 +14646,7 @@
     },
     {
       "sku": "SRGPM",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14589,7 +14655,7 @@
     },
     {
       "sku": "SSSPO",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14598,7 +14664,7 @@
     },
     {
       "sku": "SVBAL",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14607,7 +14673,7 @@
     },
     {
       "sku": "SVROL",
-      "manufacturer": "TFH",
+      "manufacturer": "TFH Special Needs Toys",
       "vendorPartNo": null,
       "leadTimeDays": null,
       "minOrderQty": null,
@@ -14940,6 +15006,24 @@
     },
     {
       "sku": "FULL",
+      "manufacturer": "Goldberg Brothers",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "SSG-SS-OUTRIGGER-SWIVEL-EYE",
+      "manufacturer": "Goldberg Brothers",
+      "vendorPartNo": null,
+      "leadTimeDays": null,
+      "minOrderQty": null,
+      "isPrimary": true,
+      "notes": null
+    },
+    {
+      "sku": "SSG-SS-NON-OUTRIGGER-SWIVEL-EYE",
       "manufacturer": "Goldberg Brothers",
       "vendorPartNo": null,
       "leadTimeDays": null,

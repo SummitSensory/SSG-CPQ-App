@@ -82,7 +82,9 @@ const CLIENT_SCRIPTS = [
   'intro-admin.js',
   // Document pieces the proposal renderer reads.
   'contract-pages.js',
+  'media-rebate-program.js',
   'legal-admin.js',
+  'media-partnership-admin.js',
   // Drag-to-place admin editor for signature-field-layout.js's saved offsets.
   'signature-field-layout-admin.js',
   'reference-documents.js',

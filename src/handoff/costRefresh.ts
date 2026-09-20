@@ -42,6 +42,12 @@ export interface CostRefreshRow {
   deltaMinor: number;
   extendedDeltaMinor: number;
   freeIssue: boolean;
+  /**
+   * True when this is a second-vendor line (bomBuild.ts's withSecondaryVendor) —
+   * `catalogMinor` here is Sku.secondaryVendorCostMinor, not the part's own vendor cost,
+   * since the two are deliberately different for the same part number.
+   */
+  secondaryVendor: boolean;
   /** Why this line cannot be refreshed, or null when it can. */
   blocked: string | null;
 }
@@ -88,6 +94,7 @@ export async function previewCostRefresh(
       quantity: true,
       unitCostMinor: true,
       freeIssue: true,
+      secondaryOfSku: true,
     },
     orderBy: [{ vendor: 'asc' }, { sku: 'asc' }],
   });
@@ -100,7 +107,7 @@ export async function previewCostRefresh(
     parts.length
       ? prisma.sku.findMany({
           where: { part: { in: parts, mode: 'insensitive' } },
-          select: { part: true, unitCostMinor: true },
+          select: { part: true, unitCostMinor: true, secondaryVendorCostMinor: true },
         })
       : Promise.resolve([]),
     prisma.bomVendorSection.findMany({
@@ -110,6 +117,15 @@ export async function previewCostRefresh(
   ]);
 
   const catalog = new Map(skus.map((k) => [k.part.trim().toUpperCase(), k.unitCostMinor ?? 0]));
+  // A secondary-vendor line (bomBuild.ts's withSecondaryVendor) shares its sku with the
+  // part's own line but is forced to a deliberately different cost — what the SECOND
+  // vendor charges (e.g. a powder-coating fee), not what the part's own vendor pays for
+  // it. Comparing it against Sku.unitCostMinor would report every such line as "drift"
+  // and, if applied, silently overwrite the second vendor's real agreed cost with the
+  // first vendor's catalog price.
+  const secondaryVendorCatalog = new Map(
+    skus.map((k) => [k.part.trim().toUpperCase(), k.secondaryVendorCostMinor ?? 0]),
+  );
   const submitted = new Set(sections.filter((x) => x.status === 'SUBMITTED').map((x) => x.vendor));
 
   const rows: CostRefreshRow[] = [];
@@ -119,7 +135,12 @@ export async function previewCostRefresh(
     const sku = s(l.sku).trim();
     const vendor = s(l.vendor).trim() || 'Unassigned vendor';
     const current = Number(l.unitCostMinor ?? 0);
-    const catalogMinor = sku ? (catalog.get(sku.toUpperCase()) ?? null) : null;
+    const isSecondary = !!l.secondaryOfSku;
+    const catalogMinor = !sku
+      ? null
+      : isSecondary
+        ? (secondaryVendorCatalog.get(sku.toUpperCase()) ?? null)
+        : (catalog.get(sku.toUpperCase()) ?? null);
 
     if (catalogMinor == null) {
       // No catalog row: a hand-added part, or a generated mat number that has never
@@ -141,6 +162,7 @@ export async function previewCostRefresh(
       deltaMinor: catalogMinor - current,
       extendedDeltaMinor: (catalogMinor - current) * qty,
       freeIssue: !!l.freeIssue,
+      secondaryVendor: isSecondary,
       blocked: submitted.has(vendor)
         ? `The ${vendor} sheet has been submitted. Unlock that section to reprice its lines.`
         : null,

@@ -1209,6 +1209,22 @@
     "category": "SOAR_PADDING"
   },
   {
+    "part": "SSG-SS-OUTRIGGER-SWIVEL-EYE",
+    "description": "Swivel Eye Bolt (Outrigger — S1/S3 Frames)",
+    "unitPriceMinor": 19612,
+    "unitCostMinor": 1900,
+    "weightLbs": 0,
+    "category": "SOAR_ACCESSORY"
+  },
+  {
+    "part": "SSG-SS-NON-OUTRIGGER-SWIVEL-EYE",
+    "description": "Swivel Eye Bolt (Non-Outrigger — S2 Frames)",
+    "unitPriceMinor": 19612,
+    "unitCostMinor": 1760,
+    "weightLbs": 0,
+    "category": "SOAR_ACCESSORY"
+  },
+  {
     "part": "A-2200",
     "description": "Summit Flex: Universial Excerise Unit (Spider Cage) w/ Hardware",
     "unitPriceMinor": 541440,

@@ -3,7 +3,7 @@ import { prisma } from '../../lib/prisma.js';
 import { env, isMondayPushConfigured } from '../../config/env.js';
 import { logger } from '../../lib/logger.js';
 import { createItem, updateItem } from './client.js';
-import { toColumnValues, STATUS_TO_STAGE, type SyncableOpportunity } from './mapping.js';
+import { toColumnValues, STATUS_TO_STAGE, COLUMN, type SyncableOpportunity } from './mapping.js';
 import { findLink, findByExternalId, upsertLink, markLinkState } from './links.js';
 import { decideInbound } from './conflict.js';
 
@@ -89,7 +89,19 @@ export async function applyInboundChange(
   const link = await findByExternalId(change.itemId);
   if (!link || link.entity !== ENTITY) return 'ignored';
 
-  const field = change.field ?? 'opportunity.stage';
+  // `field` must be derived from which column the event actually names, not assumed —
+  // this used to default to 'opportunity.stage' unconditionally whenever a caller
+  // didn't pass `field` explicitly (the only caller, the webhook route, never does),
+  // so ANY column change on a linked deal item — the amount, the owner, an unrelated
+  // note — was evaluated as if it might be a stage change. A change to a genuinely
+  // CPQ-authoritative column (amount, owner, close date) must be refused and logged
+  // as a conflict per docs/MONDAY-INTEGRATION.md, not silently ignored because its
+  // columnId happened not to match — but only the stage column's id is verified
+  // here, so an unrecognized column is treated as not-synced (ignored) rather than
+  // guessed at.
+  const field =
+    change.field ?? (change.columnId === COLUMN.stage ? 'opportunity.stage' : undefined);
+  if (!field) return 'ignored';
   const decision = decideInbound(field);
   if (!decision.allowed) {
     await markLinkState({ entity: link.entity, entityId: link.entityId }, 'CONFLICT');
