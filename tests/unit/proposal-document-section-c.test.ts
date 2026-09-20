@@ -22,7 +22,7 @@ interface CrossBorder {
   applicable: boolean;
   fx?: { rate?: string | null };
   result?: {
-    lines?: Array<{ usdMinor: number | null }>;
+    lines?: Array<{ usdMinor: number | null; category?: string }>;
     separatelyPayable?: { usdMinor: number };
   } | null;
   importerOfRecord?: string | null;
