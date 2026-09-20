@@ -530,6 +530,13 @@ export function registerProposalRoutes(app: FastifyInstance): void {
         if (b.startsWith('tax:') || b === 'calc:tax_requires_review') {
           return settings?.requireTaxReviewBeforeFinal !== false;
         }
+        // Section A's functional description and Section C's row completeness —
+        // separately configurable from the customs/tax gates above for the same
+        // reason they are: this one is waiting on whoever writes the proposal, not
+        // on a broker or a registration.
+        if (b.startsWith('content:')) {
+          return settings?.requireSectionCCompleteBeforeFinal !== false;
+        }
         // An address problem or a missing exchange rate is never optional: without
         // them there is no jurisdiction and no CAD figures to print.
         return true;

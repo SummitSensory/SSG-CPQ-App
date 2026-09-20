@@ -414,6 +414,31 @@
    * (this proposal's own list, or Summit's live standard list). This function knows
    * how to print a row; it does not know, and never hardcodes, what the rows are.
    */
+  /**
+   * A row/section's optional clarifying subtext, via rt() — the same bold/italic
+   * markup convention (double asterisks for bold, single for italic) every other
+   * note field in this app uses, sized 7-12pt (clamped here too, defensively, even
+   * though the server already clamps on save). Never printed as an empty block;
+   * never part of the Section A/C completion gate — see
+   * requireSectionCCompleteBeforeFinal's own comment.
+   */
+  function cbSubtextHtml(subtext, sizePt) {
+    if (!subtext || !String(subtext).trim()) return '';
+    var size = Number(sizePt);
+    if (!size || isNaN(size)) size = 9;
+    size = Math.min(12, Math.max(7, size));
+    // data-role, not a class the print stylesheet uses for anything — a stable hook
+    // so a test (or a future reader) can find this block without depending on the
+    // exact inline CSS, which is free to change for cosmetic reasons.
+    return (
+      '<div data-role="cb-subtext" style="margin-top:3px;font-size:' +
+      size +
+      'px;color:#5c6157;line-height:1.5;">' +
+      rt(subtext) +
+      '</div>'
+    );
+  }
+
   function cbSectionCTable(d) {
     if (!cbIsCanadian(d)) return '';
     var items = (d.crossBorder && d.crossBorder.sectionCItems) || [];
@@ -430,12 +455,15 @@
         // print an empty block" rule the rest of this module follows.
         if (value == null) return '';
         return (
-          '<div style="display:flex;gap:14px;padding:5px 8px;font-size:11px;line-height:1.5;border-bottom:1px dotted #ece7d8;">' +
+          '<div style="padding:5px 8px;border-bottom:1px dotted #ece7d8;">' +
+          '<div style="display:flex;gap:14px;font-size:11px;line-height:1.5;">' +
           '<span style="font-weight:700;color:#3d4a55;flex:0 0 170px;">' +
-          esc(item.label || '') +
+          esc(tc(item.label || '')) +
           '</span><span style="color:#20241f;flex:1;min-width:0;">' +
           value +
-          '</span></div>'
+          '</span></div>' +
+          cbSubtextHtml(item.subtext, item.subtextSizePt) +
+          '</div>'
         );
       })
       .join('');
@@ -461,6 +489,18 @@
       esc(text) +
       '</div>'
     );
+  }
+
+  /**
+   * Section B's optional clarifying subtext — resolved server-side
+   * (d.crossBorder.sectionBSubtext, override-then-live-default) exactly like
+   * acceptanceText/auditLanguageText. Blank prints nothing. Never part of the
+   * completion gate — clarifying text is optional by design.
+   */
+  function cbSectionBSubtext(d) {
+    if (!cbIsCanadian(d)) return '';
+    var cb = d.crossBorder || {};
+    return cbSubtextHtml(cb.sectionBSubtext, cb.sectionBSubtextSizePt);
   }
 
   function cbFxBanner(d) {
@@ -1244,6 +1284,14 @@
       return r;
     }
     var counted = countedRevenueByIndex(d.lines || []);
+    // Printed once per GROUP section (reset in the GROUP branch below), the first
+    // time that section reaches a bundle-child ("Included") row, on a Canadian
+    // proposal — labels the rows that already render this way as the reference
+    // template's "Configuration Schedule -- components of the system above." A
+    // proposal with two separately bundled systems gets one heading per system, not
+    // one for the whole document. Purely an inserted heading row; changes nothing
+    // about which rows print "Included" or how the subtotal is computed.
+    var configScheduleHeadingPrinted = false;
     (d.lines || []).forEach(function (l, idx) {
       var lt = l.lineType || 'PRODUCT';
       if (lt === 'GROUP') {
@@ -1251,6 +1299,11 @@
         body += openSection();
         groupOpenSub = 0;
         inSub = false;
+        // Reset per GROUP, not once for the whole document: a proposal with two
+        // separately bundled systems (two GROUP sections each with their own
+        // "Included" bundle-child rows) gets its own Configuration Schedule heading
+        // above each one, rather than only the first.
+        configScheduleHeadingPrinted = false;
         // The section note (frame dimensions and the like) sits in the SKU column
         // rather than trailing the heading, so it lines up with the specification
         // columns beneath it instead of colliding with a long section name.
@@ -1329,6 +1382,15 @@
       // untouched — only the bundle's zero-rated component rows change how they
       // print, not what they're worth.
       var isIncluded = cbIsCanadian(d) && isBundleChild(l);
+      if (isIncluded && !configScheduleHeadingPrinted) {
+        configScheduleHeadingPrinted = true;
+        body +=
+          '<tr data-brk="head" style="break-inside:avoid;break-after:avoid;"><td colspan="5" style="padding:6px 0 3px ' +
+          lineIndent() +
+          'px;font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#3d4a55;">' +
+          'Configuration Schedule — Components of the System Above' +
+          '</td></tr>';
+      }
       var indent = lineIndent();
       // The freight-undetermined note is a sentence, not a product description, so it
       // runs the width of the specification columns instead of wrapping three times
@@ -1677,6 +1739,7 @@
           amountCell(t.stdFreight, '') +
           '</span></div>'
         : '') +
+      cbSectionBSubtext(d) +
       // Tariff, brokerage and Canadian tax, where Summit is collecting them. The
       // rate prints beside the label where the engine has one, so the figure can be
       // checked against it.

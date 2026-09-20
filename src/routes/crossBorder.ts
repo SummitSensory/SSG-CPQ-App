@@ -18,7 +18,12 @@ import { recordRateOverride, deactivateRateOverride } from '../crossborder/rateS
 import { estimateBrokerFee, parseTiers, selectSchedule } from '../crossborder/brokerFees.js';
 import { BankOfCanadaExchangeRateProvider } from '../crossborder/fx.js';
 import { normalizeProvince, type ProvinceCode } from '../lib/country.js';
-import { SECTION_C_BOUND_FIELDS, normalizeSectionCItems } from '../crossborder/sectionC.js';
+import {
+  SECTION_C_BOUND_FIELDS,
+  normalizeSectionCItems,
+  SUBTEXT_SIZE_MIN,
+  SUBTEXT_SIZE_MAX,
+} from '../crossborder/sectionC.js';
 
 /**
  * Cross-border (Canadian proposal) routes.
@@ -53,6 +58,12 @@ const SectionCItemSchema = z
     label: z.string().trim().min(1).max(120),
     text: z.string().trim().max(4000).nullable().optional(),
     order: z.number().int().min(0).max(9999),
+    /** Optional clarifying text under this row's own value — never gated for release
+     *  (see requireSectionCCompleteBeforeFinal); no separate bold/italic flags, the
+     *  same bold/italic markup convention rt() renders everywhere else in this app
+     *  applies (double asterisks for bold, single asterisks for italic). */
+    subtext: z.string().trim().max(2000).nullable().optional(),
+    subtextSizePt: z.number().min(SUBTEXT_SIZE_MIN).max(SUBTEXT_SIZE_MAX).optional(),
   })
   // A BOUND row with no boundField would resolve to nothing at render time and
   // silently vanish (see normalizeSectionCItems), with no error shown to whoever
@@ -117,6 +128,14 @@ const CustomsPatchSchema = z.object({
   acceptanceTextOverride: z.string().trim().max(4000).nullable().optional(),
   /** Per-proposal replacement for CrossBorderSetting.defaultAuditLanguageText. */
   auditLanguageOverride: z.string().trim().max(4000).nullable().optional(),
+  /** Per-proposal replacement for CrossBorderSetting.defaultSectionBSubtext. */
+  sectionBSubtextOverride: z.string().trim().max(2000).nullable().optional(),
+  sectionBSubtextSizePtOverride: z
+    .number()
+    .min(SUBTEXT_SIZE_MIN)
+    .max(SUBTEXT_SIZE_MAX)
+    .nullable()
+    .optional(),
   /**
    * Percent entry. The rates arrive as decimal percentages ("13", "9.975") and are
    * stored as thousandths of a percent, so the arithmetic downstream is integer only —
@@ -230,6 +249,19 @@ const SettingsSchema = z.object({
   defaultAcceptanceText: z.string().trim().max(4000).nullable().optional(),
   /** Org-wide default text for the tariff/duty-audit clause. Same blank rule. */
   defaultAuditLanguageText: z.string().trim().max(4000).nullable().optional(),
+  /** Org-wide default clarifying text printed under Section B. Same blank rule. */
+  defaultSectionBSubtext: z.string().trim().max(2000).nullable().optional(),
+  defaultSectionBSubtextSizePt: z
+    .number()
+    .min(SUBTEXT_SIZE_MIN)
+    .max(SUBTEXT_SIZE_MAX)
+    .nullable()
+    .optional(),
+  /**
+   * Whether a Canadian proposal must have a complete Section A description and Section
+   * C before it can be released — see the field's comment on CrossBorderSetting.
+   */
+  requireSectionCCompleteBeforeFinal: z.boolean().optional(),
 });
 
 const dateOnly = (iso: string): Date => new Date(`${iso}T00:00:00Z`);

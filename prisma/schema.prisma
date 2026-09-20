@@ -4052,6 +4052,16 @@ model ProposalCustomsEntry {
   /// as a cross-border clause. Same null-means-live-default, blank-prints-nothing rules
   /// as acceptanceTextOverride.
   auditLanguageOverride  String?
+  /// Per-proposal replacement for CrossBorderSetting.defaultSectionBSubtext — clarifying
+  /// text printed under Section B (Delivery and Post-Importation Services). Same
+  /// null-means-live-default, blank-prints-nothing rules as acceptanceTextOverride.
+  /// Accepts the same **bold** / *italic* markup rt() renders everywhere else in this
+  /// app — no separate bold/italic flags.
+  sectionBSubtextOverride String?
+  /// Font size (points) for sectionBSubtextOverride when it's set. Null means "use
+  /// CrossBorderSetting.defaultSectionBSubtextSizePt," matching the text override's own
+  /// null-means-live-default rule — the two travel together.
+  sectionBSubtextSizePtOverride Float?
   enteredById           String?
   enteredAt             DateTime?
   approvedById          String?
@@ -4167,6 +4177,23 @@ model CrossBorderSetting {
   /// Whether Summit offers an annual inspection/service agreement on a Canadian
   /// proposal. Default off.
   offerAnnualInspectionAgreement  Boolean               @default(false)
+  /// Org-wide default clarifying text printed under Section B (Delivery and
+  /// Post-Importation Services). Null/blank means nothing prints. Accepts the same
+  /// **bold** / *italic* markup rt() renders everywhere else in this app — no separate
+  /// bold/italic flags. Read live (not seeded/frozen) by every proposal that has not
+  /// set its own ProposalCustomsEntry.sectionBSubtextOverride.
+  defaultSectionBSubtext          String?
+  /// Font size (points) for defaultSectionBSubtext, clamped 7-12 at the point it's
+  /// read/saved — same range as MediaProgramStyle.sizePt (proposal-document.js's
+  /// mediaStyleOf) for consistency across this app's few user-adjustable text sizes.
+  defaultSectionBSubtextSizePt    Float?
+  /// Whether a Canadian proposal must have a complete Section A description and a
+  /// complete Section C (every row in its resolved list answered — see
+  /// crossBorderStateFor's `content:*` blockers) before it can be released. Default
+  /// true: matches requireCustomsReviewBeforeFinal/requireTaxReviewBeforeFinal's
+  /// existing "on by default" posture for what leaves this building. Section B/C
+  /// subtext is never part of this gate — clarifying text is optional by design.
+  requireSectionCCompleteBeforeFinal Boolean            @default(true)
   updatedById                     String?
   createdAt                       DateTime              @default(now())
   updatedAt                       DateTime              @updatedAt

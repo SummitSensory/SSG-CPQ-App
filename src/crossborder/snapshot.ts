@@ -34,7 +34,125 @@ import type {
   TaxResponsibility,
 } from './tax.js';
 import type { ProvinceCode } from '../lib/country.js';
-import { resolveSectionCItems, type SectionCItem } from './sectionC.js';
+import {
+  resolveSectionCItems,
+  clampSubtextSizePt,
+  SUBTEXT_SIZE_DEFAULT,
+  type SectionCItem,
+} from './sectionC.js';
+
+/**
+ * Section A's functional-description sentence lives on the first GROUP line's
+ * `description` — the same field the builder already lets a rep type into, already
+ * printed in Section A (proposal-document.js), and the same "first GROUP is the
+ * system" convention `proposalFileName()` already uses client-side. No new field.
+ */
+function firstGroupDescription(items: unknown): string | null {
+  if (!Array.isArray(items)) return null;
+  for (const raw of items) {
+    if (!raw || typeof raw !== 'object') continue;
+    const l = raw as Record<string, unknown>;
+    if ((l.lineType as string | undefined) !== 'GROUP') continue;
+    const desc = typeof l.description === 'string' ? l.description.trim() : '';
+    return desc || null;
+  }
+  return null;
+}
+
+/**
+ * Whether a Canadian proposal has a real answer everywhere it claims one — a pure
+ * function of already-resolved facts, so it can be unit-tested without a database.
+ * See computeContentBlockers's one call site (crossBorderStateFor) for what feeds it
+ * and requireSectionCCompleteBeforeFinal for how the release check gates it.
+ */
+export function computeContentBlockers(input: {
+  sectionADescription: string | null;
+  sectionCItems: SectionCItem[];
+  customsBrokerName: string | null;
+  countryOfOrigin: string | null;
+  tariffClassificationCode: string | null;
+  tariff9979Claimed: boolean | null;
+  gstHstTreatment: string | null;
+}): string[] {
+  const blockers: string[] = [];
+  if (!input.sectionADescription) {
+    blockers.push('content:section_a_description_missing');
+  }
+  for (const item of input.sectionCItems) {
+    if (item.kind === 'TEXT') {
+      if (!item.text || !item.text.trim()) blockers.push('content:section_c_text_missing');
+      continue;
+    }
+    // A switch over every SectionCBoundField, not if/else-if, and on purpose: the
+    // `default` branch below fails to typecheck if SECTION_C_BOUND_FIELDS ever gains
+    // a 9th member without this switch being updated to say, explicitly, whether it
+    // gates release — closing the exact gap an if-chain leaves, where a new field
+    // would silently ship un-gated because nothing forces anyone back to this file.
+    switch (item.boundField) {
+      case 'customsBroker':
+        if (!input.customsBrokerName) blockers.push('content:section_c_customsBroker_missing');
+        break;
+      case 'countryOfOrigin':
+        if (!input.countryOfOrigin) blockers.push('content:section_c_countryOfOrigin_missing');
+        break;
+      case 'tariffClassificationCode':
+        if (!input.tariffClassificationCode) {
+          blockers.push('content:section_c_tariffClassificationCode_missing');
+        }
+        break;
+      case 'tariff9979Claimed':
+        if (input.tariff9979Claimed == null) {
+          blockers.push('content:section_c_tariff9979Claimed_missing');
+        }
+        break;
+      case 'gstHstTreatment':
+        if (input.gstHstTreatment == null)
+          blockers.push('content:section_c_gstHstTreatment_missing');
+        break;
+      case 'importerOfRecord':
+      case 'hostSystemModel':
+      case 'dutiesEstimate':
+        // importerOfRecord always has a default, hostSystemModel's blank is a valid
+        // final answer ("new complete system"), and dutiesEstimate is already
+        // covered by the existing customs-review gate — explicitly, not by omission.
+        break;
+      case undefined:
+        break;
+      default: {
+        const exhaustiveCheck: never = item.boundField;
+        throw new Error(
+          `computeContentBlockers: unhandled Section C bound field ${exhaustiveCheck}`,
+        );
+      }
+    }
+  }
+  return blockers;
+}
+
+/**
+ * Resolves a default-plus-per-proposal-override text block AND its font size from
+ * the SAME tier together — override-text with override-size, or default-text with
+ * default-size, never a mix. A pure function so it's unit-testable without a
+ * database, and so this rule (override-text cleared back to null must not leave a
+ * stale per-proposal size paired with the org's live default text) can never quietly
+ * regress by being reimplemented ad hoc at a second call site. Used today for
+ * Section B subtext; the acceptance/audit text fields don't have a size to keep in
+ * sync, so they resolve with a plain `??` instead.
+ */
+export function resolveTieredSubtext(input: {
+  overrideText: string | null;
+  overrideSizePt: number | null;
+  defaultText: string | null;
+  defaultSizePt: number | null;
+}): { text: string | null; sizePt: number | null } {
+  const usesOverride = input.overrideText != null;
+  const text = usesOverride ? input.overrideText : input.defaultText;
+  const sizePt = text
+    ? (clampSubtextSizePt(usesOverride ? input.overrideSizePt : input.defaultSizePt) ??
+      SUBTEXT_SIZE_DEFAULT)
+    : null;
+  return { text, sizePt };
+}
 
 /** YYYY-MM-DD from a DATE column, in UTC. Rate and rule dates are calendar dates. */
 const isoDate = (d: Date): string => d.toISOString().slice(0, 10);
@@ -99,6 +217,11 @@ export interface CrossBorderState {
   acceptanceText: string | null;
   /** Resolved tariff/duty-audit clause text — same override-then-live-default rule. */
   auditLanguageText: string | null;
+  /** Resolved Section B clarifying text — same override-then-live-default rule. */
+  sectionBSubtext: string | null;
+  /** Font size (points) for sectionBSubtext when it's set; null when there's no
+   *  subtext to size. */
+  sectionBSubtextSizePt: number | null;
   fx: {
     pair: string;
     rate: string | null;
@@ -204,6 +327,8 @@ export async function crossBorderStateFor(versionId: string): Promise<CrossBorde
       sectionCItems: [],
       acceptanceText: null,
       auditLanguageText: null,
+      sectionBSubtext: null,
+      sectionBSubtextSizePt: null,
       fx: emptyFx,
       result: null,
       blockers: [],
@@ -222,6 +347,12 @@ export async function crossBorderStateFor(versionId: string): Promise<CrossBorde
   // Section C / acceptance / audit text resolution is shared across every
   // `applicable: true` return below, same reasoning as the block above: computed
   // once here rather than repeated at each return point.
+  const sectionBSubtext = resolveTieredSubtext({
+    overrideText: customsRow?.sectionBSubtextOverride ?? null,
+    overrideSizePt: customsRow?.sectionBSubtextSizePtOverride ?? null,
+    defaultText: settings?.defaultSectionBSubtext ?? null,
+    defaultSizePt: settings?.defaultSectionBSubtextSizePt ?? null,
+  });
   const sectionCFields = {
     importerOfRecord: customsRow?.importerOfRecord ?? null,
     customsBrokerName: customsRow?.customsBrokerName ?? null,
@@ -231,9 +362,29 @@ export async function crossBorderStateFor(versionId: string): Promise<CrossBorde
     acceptanceText: customsRow?.acceptanceTextOverride ?? settings?.defaultAcceptanceText ?? null,
     auditLanguageText:
       customsRow?.auditLanguageOverride ?? settings?.defaultAuditLanguageText ?? null,
+    sectionBSubtext: sectionBSubtext.text,
+    sectionBSubtextSizePt: sectionBSubtext.sizePt,
   };
 
-  const blockers: string[] = [];
+  // Whether a Canadian proposal must have a real answer everywhere it claims one —
+  // Section A's functional-description sentence, and every row currently in the
+  // resolved Section C list — before it can be released. Computed unconditionally
+  // (independent of jurisdiction/FX resolution succeeding) so it appears in every
+  // `applicable: true` return below, gated at release time by
+  // requireSectionCCompleteBeforeFinal (src/routes/proposals.ts), same pattern as the
+  // existing customs/tax gates. Subtext is deliberately never checked here — it's
+  // optional clarifying text, not a fact the document claims to state.
+  const contentBlockers = computeContentBlockers({
+    sectionADescription: firstGroupDescription(version.items),
+    sectionCItems: sectionCFields.sectionCItems,
+    customsBrokerName: sectionCFields.customsBrokerName,
+    countryOfOrigin: sectionCFields.countryOfOrigin,
+    tariffClassificationCode,
+    tariff9979Claimed,
+    gstHstTreatment,
+  });
+
+  const blockers: string[] = [...contentBlockers];
   if (!jurisdiction.complete || !jurisdiction.province) {
     // Without a province there is no tax jurisdiction and nothing to calculate.
     // A draft may still be saved; it simply carries the address problem.
@@ -635,6 +786,20 @@ export function describeCrossBorderBlocker(code: string): string {
     'calc:missing_taxability_rule':
       'A charge on this proposal has no taxability rule, so nobody has said whether it is taxed.',
     'calc:missing_tax_rate': 'The destination province has no tax rate in force on this date.',
+    'content:section_a_description_missing':
+      'Section A has no functional-description sentence yet — add one to the system’s line item.',
+    'content:section_c_text_missing':
+      'A Section C row has no text yet — fill it in, or remove the row from Canadian Import Terms.',
+    'content:section_c_customsBroker_missing':
+      'Section C lists a customs broker row, but no broker name has been entered.',
+    'content:section_c_countryOfOrigin_missing':
+      'Section C lists a country-of-origin row, but none has been entered.',
+    'content:section_c_tariffClassificationCode_missing':
+      'Section C lists a tariff classification row, but no code has been entered.',
+    'content:section_c_tariff9979Claimed_missing':
+      'Section C lists a tariff item 9979.00.00 row, but whether it’s claimed hasn’t been decided.',
+    'content:section_c_gstHstTreatment_missing':
+      'Section C lists a GST/HST row, but its treatment hasn’t been decided.',
   };
   if (known[key]) return known[key];
 
@@ -649,6 +814,9 @@ export function describeCrossBorderBlocker(code: string): string {
   }
   if (key.startsWith('calc:')) {
     return `Calculation: ${key.slice('calc:'.length).replace(/_/g, ' ')}.`;
+  }
+  if (key.startsWith('content:')) {
+    return `Proposal content: ${key.slice('content:'.length).replace(/_/g, ' ')}.`;
   }
   return key;
 }

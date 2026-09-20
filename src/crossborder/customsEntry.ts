@@ -94,6 +94,11 @@ export interface CustomsEntryPatch {
   acceptanceTextOverride?: string | null;
   /** Per-proposal replacement for CrossBorderSetting.defaultAuditLanguageText. */
   auditLanguageOverride?: string | null;
+  /** Per-proposal replacement for CrossBorderSetting.defaultSectionBSubtext. */
+  sectionBSubtextOverride?: string | null;
+  /** Font size (points) for sectionBSubtextOverride — travels with it, see the schema
+   *  field's comment. Clamped 7-12 by the route before it reaches this function. */
+  sectionBSubtextSizePtOverride?: number | null;
 }
 
 const AMOUNT_FIELDS = [
