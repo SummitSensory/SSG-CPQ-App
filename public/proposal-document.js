@@ -327,6 +327,142 @@
     );
   }
 
+  /**
+   * The printed value for one Section C "BOUND" row — see src/crossborder/sectionC.ts.
+   * A row's label, presence and order are fully admin/per-proposal editable
+   * (d.crossBorder.sectionCItems), but this switch is the one place a bound field's
+   * VALUE is resolved, always from the real structured data, never hand-typed or
+   * frozen into the row itself.
+   */
+  function cbSectionCBoundValue(d, field) {
+    var cb = (d && d.crossBorder) || {};
+    var NOT_YET = '<span style="color:#8a8f85;">Not yet determined</span>';
+    switch (field) {
+      case 'importerOfRecord': {
+        var IOR = {
+          CUSTOMER: 'The customer',
+          SUMMIT: 'Summit Sensory Gym',
+          THIRD_PARTY: 'A third party',
+          TO_BE_DETERMINED: 'To be determined',
+        };
+        return cb.importerOfRecord && IOR[cb.importerOfRecord]
+          ? esc(IOR[cb.importerOfRecord])
+          : NOT_YET;
+      }
+      case 'customsBroker': {
+        var parts = [cb.customsBrokerName, cb.customsBrokerAddress].filter(Boolean);
+        return parts.length ? esc(parts.join(', ')) : NOT_YET;
+      }
+      case 'countryOfOrigin':
+        return cb.countryOfOrigin ? esc(cb.countryOfOrigin) : NOT_YET;
+      case 'tariffClassificationCode':
+        return cb.tariffClassificationCode ? esc(cb.tariffClassificationCode) : NOT_YET;
+      case 'tariff9979Claimed':
+        return cb.tariff9979Claimed === true
+          ? 'Claimed'
+          : cb.tariff9979Claimed === false
+            ? 'Not claimed'
+            : NOT_YET;
+      case 'gstHstTreatment':
+        return cb.gstHstTreatment === 'STANDARD_RATE'
+          ? 'Standard rate applies'
+          : cb.gstHstTreatment === 'MEDICAL_DEVICE_RELIEF_CLAIMED'
+            ? 'Relief claimed as medical/assistive device'
+            : NOT_YET;
+      case 'dutiesEstimate': {
+        // Sums the SAME per-line figures cbSellerLines/cbBorderBlock already compute
+        // and print elsewhere on this page — no new arithmetic — but only the duty,
+        // surtax and brokerage categories. cbSellerAddMinor(d) is deliberately NOT
+        // reused here: it totals every seller-collected line regardless of category,
+        // which would fold the separate GST/HST sales-tax line into a row labeled
+        // "Duties, surtax and brokerage" and overstate it.
+        var res = cb.result;
+        if (!res) return NOT_YET;
+        var DUTY_CATEGORIES = {
+          CUSTOMS_DUTY: true,
+          TARIFF_SURTAX: true,
+          SIMA: true,
+          BROKERAGE: true,
+          BROKER_DISBURSEMENT: true,
+          IMPORT_TAX: true,
+        };
+        var dutyLines = (res.lines || []).filter(function (l) {
+          return DUTY_CATEGORIES[l.category] && l.status !== 'NOT_APPLICABLE';
+        });
+        if (!dutyLines.length) return NOT_YET;
+        var anyPriced = dutyLines.some(function (l) {
+          return l.usdMinor != null;
+        });
+        if (!anyPriced) return '<span style="color:#8a8f85;">To be confirmed</span>';
+        var rate = (cb.fx || {}).rate || null;
+        var totalMinor = dutyLines.reduce(function (a, l) {
+          return a + (l.usdMinor != null ? Number(l.usdMinor) : 0);
+        }, 0);
+        return cbDocAmount(totalMinor, rate);
+      }
+      case 'hostSystemModel':
+        return cb.hostSystemModel ? esc(cb.hostSystemModel) : 'New complete system';
+      default:
+        return NOT_YET;
+    }
+  }
+
+  /**
+   * Section C — "Canadian Import Terms." A fully data-driven, ordered, admin- and
+   * per-proposal-editable list, not a fixed table — see src/crossborder/sectionC.ts
+   * for why. `d.crossBorder.sectionCItems` already arrives resolved and order-sorted
+   * (this proposal's own list, or Summit's live standard list). This function knows
+   * how to print a row; it does not know, and never hardcodes, what the rows are.
+   */
+  function cbSectionCTable(d) {
+    if (!cbIsCanadian(d)) return '';
+    var items = (d.crossBorder && d.crossBorder.sectionCItems) || [];
+    if (!items.length) return '';
+    var rows = items
+      .map(function (item) {
+        var value =
+          item.kind === 'TEXT'
+            ? item.text && String(item.text).trim()
+              ? esc(item.text)
+              : null
+            : cbSectionCBoundValue(d, item.boundField);
+        // A blank TEXT row is skipped, not printed with an empty value — same "never
+        // print an empty block" rule the rest of this module follows.
+        if (value == null) return '';
+        return (
+          '<div style="display:flex;gap:14px;padding:5px 8px;font-size:11px;line-height:1.5;border-bottom:1px dotted #ece7d8;">' +
+          '<span style="font-weight:700;color:#3d4a55;flex:0 0 170px;">' +
+          esc(item.label || '') +
+          '</span><span style="color:#20241f;flex:1;min-width:0;">' +
+          value +
+          '</span></div>'
+        );
+      })
+      .join('');
+    if (!rows) return '';
+    return (
+      '<div style="margin-top:14px;padding-top:10px;border-top:1px solid #d5d8d2;break-inside:avoid;">' +
+      '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#3d4a55;padding:0 8px 6px;">Section C — Canadian Import Terms</div>' +
+      rows +
+      '</div>'
+    );
+  }
+
+  /**
+   * A plain "Section A" / "Section B" heading, Canadian proposals only, matching the
+   * reference template's labeled structure. Purely a printed label around content
+   * that already exists and already renders the same way — it changes no column, no
+   * break rule, no subtotal math, and nothing about a domestic proposal.
+   */
+  function cbSectionLabel(d, text) {
+    if (!cbIsCanadian(d)) return '';
+    return (
+      '<div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#3d4a55;margin:14px 0 6px;">' +
+      esc(text) +
+      '</div>'
+    );
+  }
+
   function cbFxBanner(d) {
     if (!cbIsCanadian(d)) return '';
     var fx = d.crossBorder.fx || {};
@@ -568,6 +704,13 @@
         'The customer may be eligible to apply for a tax rebate or recovery based on its own legal or organizational status. Any such rebate is the customer\u2019s responsibility and does not reduce the tax charged by Summit Sensory Gym unless a valid point-of-sale exemption applies and the required documentation has been received and approved.',
       ),
     );
+    // Bryan's own tariff-audit wording \u2014 never hardcoded here. `cb.auditLanguageText`
+    // already arrives resolved server-side (this proposal's own override, or Summit's
+    // current admin default). A blank/unset default prints no clause at all, rather
+    // than an empty heading.
+    if (cb.auditLanguageText && String(cb.auditLanguageText).trim()) {
+      out.push(para('In the Event of a CBSA Reassessment.', esc(cb.auditLanguageText)));
+    }
 
     return (
       '<div style="margin-top:14px;padding-top:8px;border-top:1px solid #d5d8d2;font-size:9.5px;line-height:1.6;color:#5c6157;">' +
@@ -721,6 +864,24 @@
     return (
       '<div style="font-size:10.5px;color:#5b6478;line-height:1.55;margin-top:8px;">' +
       fillMediaTokens(esc(text), tokens) +
+      '</div>'
+    );
+  }
+
+  /**
+   * Canadian Acceptance-page addendum — Bryan's own text, never hardcoded here.
+   * `d.crossBorder.acceptanceText` already arrives resolved server-side (this
+   * proposal's own override if it set one, otherwise Summit's current admin default
+   * — see CrossBorderState.acceptanceText in src/crossborder/snapshot.ts). Printed in
+   * the identical slot and style mediaRebateAcknowledgmentHtml uses right above it, so
+   * the Acceptance page's format is unchanged by this addition.
+   */
+  function cbAcceptanceTextHtml(d) {
+    var text = d && d.crossBorder && d.crossBorder.acceptanceText;
+    if (!text || !String(text).trim()) return '';
+    return (
+      '<div style="font-size:10.5px;color:#5b6478;line-height:1.55;margin-top:8px;">' +
+      esc(text) +
       '</div>'
     );
   }
@@ -1464,6 +1625,7 @@
           '</div>'
         : '') +
       cbFxBanner(d) +
+      cbSectionLabel(d, 'Section A — Therapeutic Apparatus') +
       // Fixed layout with an explicit colgroup: the description column keeps the
       // width it was designed at, so a product name stays on one line and every row
       // is the same height. Left to itself the table would rebalance the columns
@@ -1494,6 +1656,7 @@
           (m.expiration ? fmtDate(m.expiration) : 'with this proposal') +
           '</div>'
         : '') +
+      cbSectionLabel(d, 'Section B — Delivery and Post-Importation Services') +
       (t.tpFreight
         ? '<div style="display:flex;justify-content:space-between;gap:12px;padding:2px 0;font-size:12px;"><span style="font-weight:700;color:#20241f;">Third-Party Freight</span><span style="text-align:right;">' +
           cbAmt(t.tpFreight) +
@@ -1549,6 +1712,7 @@
         : '') +
       cbBorderBlock(d) +
       cbRateStamp(d) +
+      cbSectionCTable(d) +
       '</div></div>' +
       bottomNotesHtml +
       // Acceptance and the terms always begin a fresh sheet, whatever the line count.
@@ -1581,6 +1745,7 @@
         : '') +
       '.</div>' +
       mediaRebateAcknowledgmentHtml(d) +
+      cbAcceptanceTextHtml(d) +
       '<div style="display:flex;gap:26px;margin-top:24px;">' +
       // The customer's name prints on the signer line itself. It is the one field on
       // this page the document already knows, and printing it removes the most common

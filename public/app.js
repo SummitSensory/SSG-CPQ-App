@@ -5759,12 +5759,15 @@
       '<table style="width:100%;border-collapse:collapse;">' + rows + '</table>' +
       totals +
       '<button class="link-btn" id="cbCustoms" style="width:auto;padding:6px 11px;font-size:12px;margin-top:11px;">Customs and duties\u2026</button>' +
+      '<button class="link-btn" id="cbSectionC" style="width:auto;padding:6px 11px;font-size:12px;margin-top:11px;margin-left:6px;">Canadian Import Terms (Section C)\u2026</button>' +
     '</div>';
   }
 
   function wireCrossBorderCard() {
     var b = document.getElementById('cbCustoms');
     if (b) b.addEventListener('click', openCustomsForm);
+    var c = document.getElementById('cbSectionC');
+    if (c) c.addEventListener('click', openSectionCForm);
   }
 
 
@@ -5905,6 +5908,18 @@
             return '<option value="' + p[0] + '"' + (e.importerOfRecord === p[0] ? ' selected' : '') + '>' + esc(p[1]) + '</option>';
           }).join('') +
         '</select></div>' +
+      '<div style="margin-bottom:12px;"><label style="' + lbl + '">Customs broker name</label>' +
+        '<input id="cfBrokerName" placeholder="e.g. BorderBuddy Customs Brokers" value="' + esc(e.customsBrokerName || '') + '" style="' + box + '">' +
+        '<div class="muted" style="font-size:11px;line-height:1.5;margin-top:4px;">Leave blank to use Summit’s standard broker, set under Administration.</div></div>' +
+      '<div style="margin-bottom:12px;"><label style="' + lbl + '">Customs broker address</label>' +
+        '<input id="cfBrokerAddr" placeholder="e.g. Vancouver, BC" value="' + esc(e.customsBrokerAddress || '') + '" style="' + box + '"></div>' +
+      '<div style="margin-bottom:12px;"><label style="' + lbl + '">Country of origin</label>' +
+        '<input id="cfCountryOfOrigin" placeholder="e.g. United States of America" value="' + esc(e.countryOfOrigin || '') + '" style="' + box + '">' +
+        '<div class="muted" style="font-size:11px;line-height:1.5;margin-top:4px;">Leave blank to use Summit’s standard default, set under Administration.</div></div>' +
+      '<div style="margin-bottom:12px;"><label style="' + lbl + '">Acceptance page text for this proposal</label>' +
+        '<textarea id="cfAcceptanceText" rows="3" placeholder="Leave blank to use Summit’s standard text" style="' + box + 'resize:vertical;">' + esc(e.acceptanceTextOverride || '') + '</textarea></div>' +
+      '<div style="margin-bottom:12px;"><label style="' + lbl + '">Tariff-audit language for this proposal</label>' +
+        '<textarea id="cfAuditText" rows="3" placeholder="Leave blank to use Summit’s standard text" style="' + box + 'resize:vertical;">' + esc(e.auditLanguageOverride || '') + '</textarea></div>' +
       '<label style="display:flex;gap:8px;align-items:flex-start;font-size:12.5px;line-height:1.5;margin-bottom:12px;">' +
         '<input type="checkbox" id="cfIncl"' + (e.includedInSellerTotal ? ' checked' : '') + ' style="margin-top:2px;">' +
         '<span>Summit is collecting these amounts, so add them to the amount payable to Summit.' +
@@ -5965,6 +5980,11 @@
         tariff9979Claimed: (function () { var v = document.getElementById('cfTariff9979').value; return v === '' ? null : v === 'true'; })(),
         gstHstTreatment: document.getElementById('cfGstHst').value || null,
         hostSystemModel: document.getElementById('cfHostSystem').value.trim() || null,
+        customsBrokerName: document.getElementById('cfBrokerName').value.trim() || null,
+        customsBrokerAddress: document.getElementById('cfBrokerAddr').value.trim() || null,
+        countryOfOrigin: document.getElementById('cfCountryOfOrigin').value.trim() || null,
+        acceptanceTextOverride: document.getElementById('cfAcceptanceText').value.trim() || null,
+        auditLanguageOverride: document.getElementById('cfAuditText').value.trim() || null,
         sourceReference: document.getElementById('cfSource').value.trim() || null,
         importerOfRecord: document.getElementById('cfIor').value,
         includedInSellerTotal: document.getElementById('cfIncl').checked,
@@ -6027,6 +6047,165 @@
         if (await act('reopen', { reason: why.trim() }, re)) { closeAllModals(); await loadCrossBorder(true); }
       });
     }, 0);
+  }
+
+  /**
+   * The known Section C "BOUND" fields a row can point at — must match
+   * SECTION_C_BOUND_FIELDS in src/crossborder/sectionC.ts. Only the label here is UI
+   * copy; the printed value always comes from the real field, never from this map.
+   */
+  var SECTION_C_BOUND_FIELD_LABEL = {
+    importerOfRecord: 'Importer of record',
+    customsBroker: 'Customs broker',
+    countryOfOrigin: 'Country of origin',
+    tariffClassificationCode: 'Tariff classification declared',
+    tariff9979Claimed: 'Tariff item 9979.00.00',
+    gstHstTreatment: 'GST/HST',
+    dutiesEstimate: 'Duties, surtax and brokerage',
+    hostSystemModel: 'Host system identification',
+  };
+
+  function newSectionCItemId() {
+    return 'sc-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+  }
+
+  /**
+   * This proposal's Section C ("Canadian Import Terms") list — the same
+   * admin-default-plus-per-record-override shape as footerNotesCard() above, applied
+   * to Canadian Import Terms instead of footer notes. `cbData.sectionCItems` already
+   * arrives resolved (this proposal's own list if it set one, otherwise Summit's live
+   * standard list) — see src/crossborder/sectionC.ts.
+   */
+  async function openSectionCForm() {
+    if (!pb || !pb.versionId || !cbData) return;
+    var items = (cbData.sectionCItems || []).map(function (it) { return Object.assign({}, it); });
+
+    var box = 'width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #dcded7;border-radius:8px;font-size:13px;background:#fff;font-family:inherit;';
+
+    function rowsHtml() {
+      var boundInUse = {};
+      items.forEach(function (it) { if (it.kind === 'BOUND' && it.boundField) boundInUse[it.boundField] = true; });
+      var moveBtn = function (i, dir, label, on) {
+        return '<button type="button" class="scMove" data-i="' + i + '" data-d="' + dir + '"' + (on ? '' : ' disabled') +
+          ' style="border:1px solid #e0e1db;background:#fff;border-radius:7px;width:28px;height:24px;cursor:' + (on ? 'pointer' : 'default') +
+          ';color:' + (on ? '#5c6157' : '#cfd3ca') + ';line-height:1;">' + label + '</button>';
+      };
+      var rows = items.map(function (it, i) {
+        var boundLabel = it.kind === 'BOUND' ? (SECTION_C_BOUND_FIELD_LABEL[it.boundField] || it.boundField) : null;
+        return '<div style="display:flex;align-items:flex-start;gap:8px;background:#fbfaf4;border:1px solid #ece9db;border-radius:10px;padding:9px;margin-bottom:7px;">' +
+          '<div style="display:flex;flex-direction:column;gap:4px;flex:0 0 auto;padding-top:1px;">' + moveBtn(i, -1, '↑', i > 0) + moveBtn(i, 1, '↓', i < items.length - 1) + '</div>' +
+          '<div style="flex:1;min-width:0;">' +
+          (it.kind === 'BOUND'
+            ? '<div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px;">Bound to: ' + esc(boundLabel) + ' — value always prints live</div>'
+            : '<div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px;">Custom text</div>') +
+          '<input class="scLabel" data-i="' + i + '" value="' + esc(it.label || '') + '" placeholder="Row label" style="width:100%;border:none;background:transparent;font-weight:600;font-size:13px;outline:none;margin-bottom:4px;">' +
+          (it.kind === 'TEXT'
+            ? '<textarea class="scText" data-i="' + i + '" rows="2" placeholder="What prints for this row" style="width:100%;border:1px solid #ece9db;border-radius:7px;padding:6px 8px;font-size:12px;font-family:inherit;resize:vertical;background:#fff;">' + esc(it.text || '') + '</textarea>'
+            : '') +
+          '</div>' +
+          '<button type="button" class="scDel" data-i="' + i + '" style="border:1px solid #e0e1db;background:#fff;border-radius:8px;width:28px;height:28px;color:#9c3327;cursor:pointer;flex:0 0 auto;">✕</button></div>';
+      }).join('');
+      var boundAvailable = Object.keys(SECTION_C_BOUND_FIELD_LABEL).filter(function (f) { return !boundInUse[f]; });
+      return { rows: rows, boundAvailable: boundAvailable };
+    }
+
+    // Controls (add-a-fact / add custom text / reset) and the rows both live inside
+    // ONE container that is wholly replaced on every add/remove/reorder, and wired
+    // fresh each time. Wiring only ever a just-replaced subtree — never the static
+    // outer form — is what keeps a rerender() from stacking a second listener onto a
+    // button that was already there before the replacement.
+    function containerHtml() {
+      var rr = rowsHtml();
+      return (
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">' +
+          (rr.boundAvailable.length
+            ? '<select id="scAddBound" style="' + box + 'width:auto;"><option value="">+ Add a fact…</option>' +
+              rr.boundAvailable.map(function (f) { return '<option value="' + f + '">' + esc(SECTION_C_BOUND_FIELD_LABEL[f]) + '</option>'; }).join('') +
+              '</select>'
+            : '') +
+          '<button type="button" class="link-btn" id="scAddText" style="width:auto;padding:7px 12px;">+ Add custom text</button>' +
+          '<button type="button" class="link-btn" id="scReset" style="width:auto;padding:7px 12px;">Use Summit’s standard list</button>' +
+        '</div>' +
+        (rr.rows || '<div class="muted" style="font-size:12px;">None yet.</div>')
+      );
+    }
+
+    function bodyHtml() {
+      return '<div class="muted" style="font-size:12px;line-height:1.55;margin-bottom:10px;">' +
+          'The Canadian Import Terms table for this proposal, in this order. Starts from Summit’s standard list; add, remove, reword or reorder freely — it only affects this proposal.</div>' +
+        '<div id="scContainer">' + containerHtml() + '</div>' +
+        '<div id="scMsg" style="font-size:11.5px;line-height:1.5;margin-top:6px;"></div>';
+    }
+
+    function wireContainer(root) {
+      if (!root) return;
+      root.querySelectorAll('.scLabel').forEach(function (el) {
+        el.addEventListener('input', function () { var it = items[+el.getAttribute('data-i')]; if (it) it.label = el.value; });
+      });
+      root.querySelectorAll('.scText').forEach(function (el) {
+        el.addEventListener('input', function () { var it = items[+el.getAttribute('data-i')]; if (it) it.text = el.value; });
+      });
+      root.querySelectorAll('.scDel').forEach(function (b) {
+        b.addEventListener('click', function () { items.splice(+b.getAttribute('data-i'), 1); rerender(); });
+      });
+      root.querySelectorAll('.scMove').forEach(function (b) {
+        b.addEventListener('click', function () {
+          var i = +b.getAttribute('data-i'), j = i + +b.getAttribute('data-d');
+          if (j < 0 || j >= items.length) return;
+          var tmp = items[i]; items[i] = items[j]; items[j] = tmp;
+          rerender();
+        });
+      });
+      var addBound = root.querySelector('#scAddBound');
+      if (addBound) addBound.addEventListener('change', function () {
+        var f = addBound.value; if (!f) return;
+        items.push({ id: newSectionCItemId(), kind: 'BOUND', boundField: f, label: SECTION_C_BOUND_FIELD_LABEL[f] || f });
+        rerender();
+      });
+      var addText = root.querySelector('#scAddText');
+      if (addText) addText.addEventListener('click', function () {
+        items.push({ id: newSectionCItemId(), kind: 'TEXT', label: '', text: '' });
+        rerender();
+      });
+      var reset = root.querySelector('#scReset');
+      if (reset) reset.addEventListener('click', async function () {
+        reset.disabled = true;
+        var r = await authed('/proposals/versions/' + pb.versionId + '/customs', { method: 'PATCH', body: { sectionCItems: null } });
+        if (r.ok) { closeAllModals(); await loadCrossBorder(true); }
+        else { reset.disabled = false; var m = document.getElementById('scMsg'); if (m) m.innerHTML = '<span style="color:#9c3327;">Could not reset (' + r.status + ').</span>'; }
+      });
+    }
+
+    function rerender() {
+      var container = document.getElementById('scContainer');
+      if (!container) return;
+      container.innerHTML = containerHtml();
+      wireContainer(container);
+    }
+
+    openModal('Canadian Import Terms (Section C)', bodyHtml(), async function (close) {
+      var msg = document.getElementById('scMsg');
+      // A blank label is refused here rather than left for the server to reject: an
+      // uncaught ZodError there returns a bare 500, not a message this modal can show.
+      var blankLabel = items.some(function (it) { return !String(it.label || '').trim(); });
+      if (blankLabel) {
+        if (msg) msg.innerHTML = '<span style="color:#9c3327;">Every row needs a label before this can be saved.</span>';
+        return false;
+      }
+      var payload = { sectionCItems: items.map(function (it, i) {
+        return { id: it.id || newSectionCItemId(), kind: it.kind, boundField: it.kind === 'BOUND' ? it.boundField : undefined, label: it.label || '', text: it.kind === 'TEXT' ? (it.text || '') : undefined, order: i };
+      }) };
+      var r = await authed('/proposals/versions/' + pb.versionId + '/customs', { method: 'PATCH', body: payload });
+      if (!r.ok) {
+        var j = null; try { j = await r.json(); } catch (e) {}
+        if (msg) msg.innerHTML = '<span style="color:#9c3327;">' + esc((j && j.message) || 'Could not save (' + r.status + ').') + '</span>';
+        return false;
+      }
+      close();
+      await loadCrossBorder(true);
+    }, 'Save Section C');
+
+    setTimeout(function () { wireContainer(document.getElementById('scContainer')); }, 0);
   }
 
   /** Dismiss any open overlay. The lifecycle buttons live inside one. */

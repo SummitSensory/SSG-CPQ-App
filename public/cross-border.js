@@ -59,6 +59,23 @@
     TO_BE_DETERMINED: 'To be determined',
   };
 
+  /**
+   * The known Section C "BOUND" fields — see src/crossborder/sectionC.ts. Only the
+   * label and description here are UI copy; the printed value always comes from the
+   * real field, never from this map. Adding a new bound field is a code change (real
+   * data has to back it); adding a custom TEXT row to Section C never is.
+   */
+  var SECTION_C_BOUND_FIELD_LABEL = {
+    importerOfRecord: 'Importer of record',
+    customsBroker: 'Customs broker',
+    countryOfOrigin: 'Country of origin',
+    tariffClassificationCode: 'Tariff classification declared',
+    tariff9979Claimed: 'Tariff item 9979.00.00',
+    gstHstTreatment: 'GST/HST',
+    dutiesEstimate: 'Duties, surtax and brokerage',
+    hostSystemModel: 'Host system identification',
+  };
+
   var GST_HST_LABEL = {
     '': 'No default (undetermined)',
     STANDARD_RATE: 'Standard rate applies',
@@ -176,6 +193,10 @@
       denied: false,
       orgHits: [],
       org: null,
+      /** Working copy of CrossBorderSetting.sectionCTemplate — see sectionCTemplateHtml()
+       *  below. Array position IS the order; an explicit order number is assigned only
+       *  when this is sent to the server. */
+      sectionCTemplate: [],
     };
 
     host.innerHTML =
@@ -204,6 +225,13 @@
       var d = await s.json();
       S.settings = d.settings || {};
       S.readiness = d.readiness || {};
+      S.sectionCTemplate = (
+        Array.isArray(S.settings.sectionCTemplate) ? S.settings.sectionCTemplate : []
+      )
+        .slice()
+        .sort(function (a, b) {
+          return (a.order || 0) - (b.order || 0);
+        });
 
       var results = await Promise.all([
         authed('/cross-border/tax-rates'),
@@ -360,6 +388,32 @@
           '</select>'
         );
       }
+      function text(field, value, placeholder) {
+        return (
+          '<input data-setting="' +
+          field +
+          '" value="' +
+          esc(value || '') +
+          '" placeholder="' +
+          esc(placeholder || '') +
+          '" style="' +
+          IN +
+          'width:100%;">'
+        );
+      }
+      function textarea(field, value, placeholder) {
+        return (
+          '<textarea data-setting="' +
+          field +
+          '" rows="3" placeholder="' +
+          esc(placeholder || '') +
+          '" style="' +
+          IN +
+          'width:100%;resize:vertical;font-family:inherit;">' +
+          esc(value || '') +
+          '</textarea>'
+        );
+      }
       function check(field, value, label) {
         return (
           '<label style="display:flex;gap:9px;align-items:flex-start;font-size:13px;cursor:pointer;">' +
@@ -476,10 +530,162 @@
             ),
           'Off by default. Summit does not currently offer these on a Canadian job — switch one on only once there is a real, priced way to put it on the proposal.',
         ) +
+        row(
+          'Customs broker, by default',
+          text(
+            'defaultCustomsBrokerName',
+            s.defaultCustomsBrokerName,
+            'e.g. BorderBuddy Customs Brokers',
+          ) +
+            '<div style="height:8px;"></div>' +
+            text(
+              'defaultCustomsBrokerAddress',
+              s.defaultCustomsBrokerAddress,
+              'e.g. Vancouver, BC',
+            ),
+          'Seeded onto a brand-new customs entry only — see the Section C row for it below. A later change here never rewrites an already-created entry.',
+        ) +
+        row(
+          'Country of origin, by default',
+          text('defaultCountryOfOrigin', s.defaultCountryOfOrigin, 'e.g. United States of America'),
+          'Same seed-once rule as the customs broker above.',
+        ) +
+        row(
+          'Acceptance page text, by default',
+          textarea(
+            'defaultAcceptanceText',
+            s.defaultAcceptanceText,
+            'Prints on every Canadian proposal’s Acceptance page unless a proposal sets its own text. Leave blank to print nothing.',
+          ),
+          'Read live, not seeded — an edit here reaches every proposal that has never set its own text under Canadian Import Terms.',
+        ) +
+        row(
+          'Tariff-audit language, by default',
+          textarea(
+            'defaultAuditLanguageText',
+            s.defaultAuditLanguageText,
+            'What happens if CBSA later assesses more duty or tax than this proposal estimated. Leave blank to print nothing.',
+          ),
+          'Same live-read rule as the Acceptance page text above.',
+        ) +
         '<div style="display:flex;gap:8px;align-items:center;margin-top:16px;">' +
         '<button class="link-btn" data-act="saveSettings" style="' +
         BTN +
         '">Save settings</button>' +
+        '</div>'
+      );
+    }
+
+    /* ── Section C template ────────────────────────────────────────────────── */
+
+    /**
+     * The admin-managed, ordered Section C ("Canadian Import Terms") row list — see
+     * src/crossborder/sectionC.ts. Nothing about which rows exist, their labels, their
+     * order, or a TEXT row's wording is hardcoded anywhere in this app: this screen IS
+     * where that content lives and is edited. A BOUND row's own printed value still
+     * always comes from the real field (Importer of Record, Customs Broker, etc.) —
+     * only its label, presence and position are editable here.
+     *
+     * Follows the same "edit locally, save explicitly" shape as the rest of this admin
+     * screen (see settingsHtml's [data-setting] scan), plus the add/remove/reorder
+     * pattern public/app.js's footerNotesCard() already established for exactly this
+     * kind of admin-default, per-record-overridable list.
+     */
+    function sectionCTemplateHtml() {
+      var items = S.sectionCTemplate;
+      var boundInUse = {};
+      items.forEach(function (it) {
+        if (it.kind === 'BOUND' && it.boundField) boundInUse[it.boundField] = true;
+      });
+      var boundAvailable = Object.keys(SECTION_C_BOUND_FIELD_LABEL).filter(function (f) {
+        return !boundInUse[f];
+      });
+
+      var moveBtn = function (i, dir, label, on) {
+        return (
+          '<button class="cbSecMove" data-i="' +
+          i +
+          '" data-d="' +
+          dir +
+          '"' +
+          (on ? '' : ' disabled') +
+          ' title="Move ' +
+          (dir < 0 ? 'up' : 'down') +
+          '" style="border:1px solid #e0e1db;background:#fff;border-radius:7px;width:30px;height:24px;cursor:' +
+          (on ? 'pointer' : 'default') +
+          ';color:' +
+          (on ? '#5c6157' : '#cfd3ca') +
+          ';line-height:1;">' +
+          label +
+          '</button>'
+        );
+      };
+
+      var rows = items
+        .map(function (it, i) {
+          var boundLabel =
+            it.kind === 'BOUND'
+              ? SECTION_C_BOUND_FIELD_LABEL[it.boundField] || it.boundField
+              : null;
+          return (
+            '<div style="display:flex;align-items:flex-start;gap:8px;background:#fbfaf4;border:1px solid #ece9db;border-radius:10px;padding:10px;margin-bottom:8px;">' +
+            '<div style="display:flex;flex-direction:column;gap:4px;flex:0 0 auto;padding-top:1px;">' +
+            moveBtn(i, -1, '↑', i > 0) +
+            moveBtn(i, 1, '↓', i < items.length - 1) +
+            '</div>' +
+            '<div style="flex:1;min-width:0;">' +
+            (it.kind === 'BOUND'
+              ? '<div class="muted" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px;">Bound to: ' +
+                esc(boundLabel) +
+                ' — the value below always prints live, this only edits the label</div>'
+              : '<div class="muted" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px;">Custom text</div>') +
+            '<input class="cbSecLabel" data-i="' +
+            i +
+            '" value="' +
+            esc(it.label || '') +
+            '" placeholder="Row label" style="width:100%;border:none;background:transparent;font-weight:600;font-size:13.5px;outline:none;margin-bottom:4px;">' +
+            (it.kind === 'TEXT'
+              ? '<textarea class="cbSecText" data-i="' +
+                i +
+                '" rows="3" placeholder="What prints for this row" style="width:100%;border:1px solid #ece9db;border-radius:7px;padding:6px 8px;font-size:12.5px;font-family:inherit;resize:vertical;background:#fff;">' +
+                esc(it.text || '') +
+                '</textarea>'
+              : '') +
+            '</div>' +
+            '<button class="cbSecDel" data-i="' +
+            i +
+            '" style="border:1px solid #e0e1db;background:#fff;border-radius:8px;width:30px;height:30px;color:#9c3327;cursor:pointer;flex:0 0 auto;">✕</button></div>'
+          );
+        })
+        .join('');
+
+      return (
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">' +
+        '<div class="muted" style="font-size:12px;line-height:1.55;max-width:520px;">' +
+        'The Canadian Import Terms table printed on every Canadian proposal, in this order — use the arrows to reorder, or add/remove rows entirely. A proposal that has never customized its own list follows this one live.' +
+        '</div></div>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
+        (boundAvailable.length
+          ? '<select id="cbSecAddBound" style="' +
+            IN +
+            'width:auto;"><option value="">+ Add a fact…</option>' +
+            boundAvailable
+              .map(function (f) {
+                return (
+                  '<option value="' + f + '">' + esc(SECTION_C_BOUND_FIELD_LABEL[f]) + '</option>'
+                );
+              })
+              .join('') +
+            '</select>'
+          : '') +
+        '<button class="link-btn" data-act="addSectionCText" style="width:auto;padding:7px 12px;">+ Add custom text</button>' +
+        '</div>' +
+        (rows ||
+          '<div class="muted" style="font-size:12.5px;margin-bottom:10px;">None yet — every Canadian proposal prints an empty Section C until a row is added.</div>') +
+        '<div style="display:flex;gap:8px;align-items:center;margin-top:16px;">' +
+        '<button class="link-btn" data-act="saveSectionCTemplate" style="' +
+        BTN +
+        '">Save Section C template</button>' +
         '</div>'
       );
     }
@@ -1379,7 +1585,12 @@
       ['fx', 'Exchange rate', fxHtml],
       ['broker', 'Brokerage', brokerHtml],
       ['queue', 'Customs review queue', queueHtml],
+      ['sectionC', 'Section C template', sectionCTemplateHtml],
     ];
+
+    function newSectionCItemId() {
+      return 'sc-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+    }
 
     function render() {
       var queueCount = S.queue.length;
@@ -1422,6 +1633,53 @@
           if (tiered && !block.querySelector('[data-role="tierRow"]')) {
             act('addTier', feeType);
           }
+        });
+      }
+
+      /* Section C template editing — same shape as footerNotesCard() in app.js:
+       * label/text edits write straight into S.sectionCTemplate so add/remove/reorder
+       * (which re-render from that array) never lose an in-progress edit. */
+      card.querySelectorAll('.cbSecLabel').forEach(function (el) {
+        el.addEventListener('input', function () {
+          var it = S.sectionCTemplate[+el.getAttribute('data-i')];
+          if (it) it.label = el.value;
+        });
+      });
+      card.querySelectorAll('.cbSecText').forEach(function (el) {
+        el.addEventListener('input', function () {
+          var it = S.sectionCTemplate[+el.getAttribute('data-i')];
+          if (it) it.text = el.value;
+        });
+      });
+      card.querySelectorAll('.cbSecDel').forEach(function (b) {
+        b.addEventListener('click', function () {
+          S.sectionCTemplate.splice(+b.getAttribute('data-i'), 1);
+          render();
+        });
+      });
+      card.querySelectorAll('.cbSecMove').forEach(function (b) {
+        b.addEventListener('click', function () {
+          var i = +b.getAttribute('data-i');
+          var j = i + +b.getAttribute('data-d');
+          if (j < 0 || j >= S.sectionCTemplate.length) return;
+          var tmp = S.sectionCTemplate[i];
+          S.sectionCTemplate[i] = S.sectionCTemplate[j];
+          S.sectionCTemplate[j] = tmp;
+          render();
+        });
+      });
+      var addBound = card.querySelector('#cbSecAddBound');
+      if (addBound) {
+        addBound.addEventListener('change', function () {
+          var f = addBound.value;
+          if (!f) return;
+          S.sectionCTemplate.push({
+            id: newSectionCItemId(),
+            kind: 'BOUND',
+            boundField: f,
+            label: SECTION_C_BOUND_FIELD_LABEL[f] || f,
+          });
+          render();
         });
       }
     }
@@ -1517,6 +1775,29 @@
           else body[f] = el.value;
         });
         call = ['/cross-border/settings', { method: 'PATCH', body: body }];
+      } else if (kind === 'addSectionCText') {
+        S.sectionCTemplate.push({ id: newSectionCItemId(), kind: 'TEXT', label: '', text: '' });
+        render();
+        return;
+      } else if (kind === 'saveSectionCTemplate') {
+        call = [
+          '/cross-border/settings',
+          {
+            method: 'PATCH',
+            body: {
+              sectionCTemplate: S.sectionCTemplate.map(function (it, i) {
+                return {
+                  id: it.id || newSectionCItemId(),
+                  kind: it.kind,
+                  boundField: it.kind === 'BOUND' ? it.boundField : undefined,
+                  label: it.label || '',
+                  text: it.kind === 'TEXT' ? it.text || '' : undefined,
+                  order: i,
+                };
+              }),
+            },
+          },
+        ];
       } else if (kind === 'addReg') {
         var prov = val('cbRegProv');
         call = [
