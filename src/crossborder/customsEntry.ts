@@ -22,7 +22,9 @@
 import { prisma } from '../lib/prisma.js';
 import { recordAudit } from '../lib/audit.js';
 import { NotFoundError, ValidationError } from '../lib/errors.js';
+import { Prisma } from '@prisma/client';
 import type { ProposalCustomsEntry } from '@prisma/client';
+import { normalizeSectionCItems, type SectionCItem } from './sectionC.js';
 
 export type ImporterOfRecordValue = 'CUSTOMER' | 'SUMMIT' | 'THIRD_PARTY' | 'TO_BE_DETERMINED';
 
@@ -75,6 +77,23 @@ export interface CustomsEntryPatch {
    * a person, never inferred or looked up against a prior order.
    */
   hostSystemModel?: string | null;
+  /** The customs broker's name/address as they should print on the document. */
+  customsBrokerName?: string | null;
+  customsBrokerAddress?: string | null;
+  /** Country of origin of the goods, as it should print on the document. */
+  countryOfOrigin?: string | null;
+  /**
+   * This proposal's own Section C row list, once customized — see sectionC.ts for the
+   * shape and the null-means-"use the live admin template" resolution rule. `null`
+   * explicitly un-customizes the proposal back to following the admin template; an
+   * empty array is a deliberate "show no Section C rows on this proposal," distinct
+   * from null — see resolveSectionCItems's header comment.
+   */
+  sectionCItems?: SectionCItem[] | null;
+  /** Per-proposal replacement for CrossBorderSetting.defaultAcceptanceText. */
+  acceptanceTextOverride?: string | null;
+  /** Per-proposal replacement for CrossBorderSetting.defaultAuditLanguageText. */
+  auditLanguageOverride?: string | null;
 }
 
 const AMOUNT_FIELDS = [
@@ -127,6 +146,14 @@ export async function customsEntryFor(versionId: string): Promise<ProposalCustom
       importerOfRecord: settings?.defaultImporterOfRecord ?? 'CUSTOMER',
       gstHstTreatment: settings?.defaultGstHstTreatment ?? null,
       tariff9979Claimed: settings?.defaultTariff9979Claimed ?? null,
+      customsBrokerName: settings?.defaultCustomsBrokerName ?? null,
+      customsBrokerAddress: settings?.defaultCustomsBrokerAddress ?? null,
+      countryOfOrigin: settings?.defaultCountryOfOrigin ?? null,
+      // sectionCItems, acceptanceTextOverride and auditLanguageOverride are left null
+      // (the column default) on purpose, not seeded from a settings snapshot: unlike
+      // the postures above, these are meant to keep tracking the LIVE admin template/
+      // default text for as long as nobody customizes this specific proposal — see
+      // sectionC.ts and CrossBorderState's acceptanceText/auditLanguageText resolution.
     },
   });
 }
@@ -185,10 +212,28 @@ export async function saveCustomsEntry(
   if (amountsChanged && before.status === 'CONFIRMED') status = 'ESTIMATED';
   else if (anyAmount && before.status === 'REQUIRES_CUSTOMS_REVIEW') status = 'ESTIMATED';
 
+  // A nullable Json column needs Prisma's DbNull sentinel to clear it to SQL NULL —
+  // a plain JS `null` spread into `data` is ambiguous between "set to NULL" and "set
+  // to the JSON value null" and Prisma refuses it. Normalizing here also means
+  // whatever the route accepted is stored in the same well-formed, order-sorted shape
+  // the resolver expects back out.
+  const { sectionCItems, ...restPatch } = patch;
+  const sectionCItemsData =
+    sectionCItems === undefined
+      ? {}
+      : sectionCItems === null
+        ? { sectionCItems: Prisma.DbNull }
+        : {
+            sectionCItems: normalizeSectionCItems(
+              sectionCItems,
+            ) as unknown as Prisma.InputJsonValue,
+          };
+
   const updated = await prisma.proposalCustomsEntry.update({
     where: { versionId },
     data: {
-      ...patch,
+      ...restPatch,
+      ...sectionCItemsData,
       status,
       enteredById: actorId,
       enteredAt: new Date(),
@@ -211,10 +256,24 @@ export async function saveCustomsEntry(
       statusTo: updated.status,
       changed: Object.fromEntries(
         (Object.keys(patch) as Array<keyof CustomsEntryPatch>)
-          .filter((k) => patch[k] !== before[k as keyof ProposalCustomsEntry])
+          .filter((k) => {
+            // sectionCItems is an array: patch[k] !== before[k] is always true by
+            // reference, which would log every save as "changed" even when nothing
+            // moved. Compared by value instead, against what was actually written
+            // (updated), not the raw, un-normalized patch input.
+            if (k === 'sectionCItems') {
+              return (
+                JSON.stringify(before.sectionCItems ?? null) !==
+                JSON.stringify(updated.sectionCItems ?? null)
+              );
+            }
+            return patch[k] !== before[k as keyof ProposalCustomsEntry];
+          })
           .map((k) => [
             k,
-            { from: before[k as keyof ProposalCustomsEntry] ?? null, to: patch[k] ?? null },
+            k === 'sectionCItems'
+              ? { from: before.sectionCItems ?? null, to: updated.sectionCItems ?? null }
+              : { from: before[k as keyof ProposalCustomsEntry] ?? null, to: patch[k] ?? null },
           ]),
       ),
     },

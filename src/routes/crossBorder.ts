@@ -18,6 +18,7 @@ import { recordRateOverride, deactivateRateOverride } from '../crossborder/rateS
 import { estimateBrokerFee, parseTiers, selectSchedule } from '../crossborder/brokerFees.js';
 import { BankOfCanadaExchangeRateProvider } from '../crossborder/fx.js';
 import { normalizeProvince, type ProvinceCode } from '../lib/country.js';
+import { SECTION_C_BOUND_FIELDS, normalizeSectionCItems } from '../crossborder/sectionC.js';
 
 /**
  * Cross-border (Canadian proposal) routes.
@@ -37,6 +38,29 @@ import { normalizeProvince, type ProvinceCode } from '../lib/country.js';
 
 const Money = z.number().int().min(0).max(1_000_000_000);
 const Currency = z.enum(['USD', 'CAD']);
+
+/**
+ * One Section C row — see src/crossborder/sectionC.ts for the design (an
+ * admin-editable, reorderable list, not a fixed table). Structure is validated;
+ * content never is, the same "we don't classify goods, we don't review wording"
+ * stance the rest of this module takes toward tariffClassificationCode/notes/basis.
+ */
+const SectionCItemSchema = z
+  .object({
+    id: z.string().trim().min(1).max(60),
+    kind: z.enum(['BOUND', 'TEXT']),
+    boundField: z.enum(SECTION_C_BOUND_FIELDS as [string, ...string[]]).optional(),
+    label: z.string().trim().min(1).max(120),
+    text: z.string().trim().max(4000).nullable().optional(),
+    order: z.number().int().min(0).max(9999),
+  })
+  // A BOUND row with no boundField would resolve to nothing at render time and
+  // silently vanish (see normalizeSectionCItems), with no error shown to whoever
+  // saved it — refused here instead, at the point someone can still see why.
+  .refine((v) => v.kind !== 'BOUND' || !!v.boundField, {
+    message: 'A row bound to a fact needs to say which one.',
+    path: ['boundField'],
+  });
 
 const CustomsPatchSchema = z.object({
   currency: Currency.optional(),
@@ -75,6 +99,24 @@ const CustomsPatchSchema = z.object({
    * replacement/expansion parts. Free text, never inferred or looked up.
    */
   hostSystemModel: z.string().trim().max(200).nullable().optional(),
+  /** The customs broker's name/address as they should print on the document. */
+  customsBrokerName: z.string().trim().max(200).nullable().optional(),
+  customsBrokerAddress: z.string().trim().max(500).nullable().optional(),
+  /**
+   * Country of origin of the goods, as it should print on the document. Free text,
+   * never inferred — same "no tariff calculator" stance as tariffClassificationCode.
+   */
+  countryOfOrigin: z.string().trim().max(200).nullable().optional(),
+  /**
+   * This proposal's own Section C list, once customized. `null` explicitly reverts
+   * to following the live admin template; an empty array is a deliberate "show no
+   * Section C rows on this proposal" — see resolveSectionCItems's header comment.
+   */
+  sectionCItems: z.array(SectionCItemSchema).max(100).nullable().optional(),
+  /** Per-proposal replacement for CrossBorderSetting.defaultAcceptanceText. */
+  acceptanceTextOverride: z.string().trim().max(4000).nullable().optional(),
+  /** Per-proposal replacement for CrossBorderSetting.defaultAuditLanguageText. */
+  auditLanguageOverride: z.string().trim().max(4000).nullable().optional(),
   /**
    * Percent entry. The rates arrive as decimal percentages ("13", "9.975") and are
    * stored as thousandths of a percent, so the arithmetic downstream is integer only —
@@ -173,6 +215,21 @@ const SettingsSchema = z.object({
   offerOnSiteAssembly: z.boolean().optional(),
   offerClinicalTraining: z.boolean().optional(),
   offerAnnualInspectionAgreement: z.boolean().optional(),
+  /** Default customs-broker identity seeded onto a brand-new customs entry. */
+  defaultCustomsBrokerName: z.string().trim().max(200).nullable().optional(),
+  defaultCustomsBrokerAddress: z.string().trim().max(500).nullable().optional(),
+  /** Default country-of-origin text seeded onto a brand-new customs entry. */
+  defaultCountryOfOrigin: z.string().trim().max(200).nullable().optional(),
+  /**
+   * The admin-managed, ordered Section C row template — see sectionC.ts. Read live by
+   * every proposal that has not set its own ProposalCustomsEntry.sectionCItems.
+   */
+  sectionCTemplate: z.array(SectionCItemSchema).max(100).nullable().optional(),
+  /** Org-wide default text for the Canadian Acceptance-page addendum. Blank/null
+   *  means nothing prints — this application never ships invented legal text. */
+  defaultAcceptanceText: z.string().trim().max(4000).nullable().optional(),
+  /** Org-wide default text for the tariff/duty-audit clause. Same blank rule. */
+  defaultAuditLanguageText: z.string().trim().max(4000).nullable().optional(),
 });
 
 const dateOnly = (iso: string): Date => new Date(`${iso}T00:00:00Z`);
@@ -694,10 +751,30 @@ export function registerCrossBorderRoutes(app: FastifyInstance): void {
       }
     }
 
+    // A nullable Json column needs Prisma's DbNull sentinel to clear it to SQL NULL —
+    // a plain JS `null` spread into `create`/`update` is ambiguous between "set to
+    // NULL" and "set to the JSON value null" and Prisma refuses it.
+    const { sectionCTemplate, ...restPatch } = patch;
+    const sectionCTemplateData =
+      sectionCTemplate === undefined
+        ? {}
+        : sectionCTemplate === null
+          ? { sectionCTemplate: Prisma.DbNull }
+          : {
+              sectionCTemplate: normalizeSectionCItems(
+                sectionCTemplate,
+              ) as unknown as Prisma.InputJsonValue,
+            };
+
     const updated = await prisma.crossBorderSetting.upsert({
       where: { id: 'singleton' },
-      create: { id: 'singleton', ...patch, updatedById: req.user!.sub },
-      update: { ...patch, updatedById: req.user!.sub },
+      create: {
+        id: 'singleton',
+        ...restPatch,
+        ...sectionCTemplateData,
+        updatedById: req.user!.sub,
+      },
+      update: { ...restPatch, ...sectionCTemplateData, updatedById: req.user!.sub },
     });
 
     await recordAudit({

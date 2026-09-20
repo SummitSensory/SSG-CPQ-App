@@ -34,6 +34,7 @@ import type {
   TaxResponsibility,
 } from './tax.js';
 import type { ProvinceCode } from '../lib/country.js';
+import { resolveSectionCItems, type SectionCItem } from './sectionC.js';
 
 /** YYYY-MM-DD from a DATE column, in UTC. Rate and rule dates are calendar dates. */
 const isoDate = (d: Date): string => d.toISOString().slice(0, 10);
@@ -76,6 +77,28 @@ export interface CrossBorderState {
    * means either a new complete system, or nobody has recorded it yet.
    */
   hostSystemModel: string | null;
+  /** Who this proposal's importer of record is — already existed as data; now carried
+   *  here so the document can print it (see ProposalCustomsEntry.importerOfRecord). */
+  importerOfRecord: 'CUSTOMER' | 'SUMMIT' | 'THIRD_PARTY' | 'TO_BE_DETERMINED' | null;
+  /** The customs broker's name/address as they should print on the document. */
+  customsBrokerName: string | null;
+  customsBrokerAddress: string | null;
+  /** Country of origin of the goods, as it should print on the document. */
+  countryOfOrigin: string | null;
+  /**
+   * This proposal's Section C ("Canadian Import Terms") row list, already resolved —
+   * the proposal's own customized list if it has one, otherwise the live admin
+   * template — and already order-sorted. See sectionC.ts.
+   */
+  sectionCItems: SectionCItem[];
+  /**
+   * Resolved Acceptance-page addendum text: this proposal's own override if set,
+   * otherwise the current org default (read live, not frozen). Null/blank means the
+   * document prints nothing.
+   */
+  acceptanceText: string | null;
+  /** Resolved tariff/duty-audit clause text — same override-then-live-default rule. */
+  auditLanguageText: string | null;
   fx: {
     pair: string;
     rate: string | null;
@@ -174,6 +197,13 @@ export async function crossBorderStateFor(versionId: string): Promise<CrossBorde
       tariff9979Claimed: null,
       gstHstTreatment: null,
       hostSystemModel: null,
+      importerOfRecord: null,
+      customsBrokerName: null,
+      customsBrokerAddress: null,
+      countryOfOrigin: null,
+      sectionCItems: [],
+      acceptanceText: null,
+      auditLanguageText: null,
       fx: emptyFx,
       result: null,
       blockers: [],
@@ -189,6 +219,19 @@ export async function crossBorderStateFor(versionId: string): Promise<CrossBorde
   const tariff9979Claimed = customsRow?.tariff9979Claimed ?? null;
   const gstHstTreatment = customsRow?.gstHstTreatment ?? null;
   const hostSystemModel = customsRow?.hostSystemModel ?? null;
+  // Section C / acceptance / audit text resolution is shared across every
+  // `applicable: true` return below, same reasoning as the block above: computed
+  // once here rather than repeated at each return point.
+  const sectionCFields = {
+    importerOfRecord: customsRow?.importerOfRecord ?? null,
+    customsBrokerName: customsRow?.customsBrokerName ?? null,
+    customsBrokerAddress: customsRow?.customsBrokerAddress ?? null,
+    countryOfOrigin: customsRow?.countryOfOrigin ?? null,
+    sectionCItems: resolveSectionCItems(customsRow?.sectionCItems, settings?.sectionCTemplate),
+    acceptanceText: customsRow?.acceptanceTextOverride ?? settings?.defaultAcceptanceText ?? null,
+    auditLanguageText:
+      customsRow?.auditLanguageOverride ?? settings?.defaultAuditLanguageText ?? null,
+  };
 
   const blockers: string[] = [];
   if (!jurisdiction.complete || !jurisdiction.province) {
@@ -202,6 +245,7 @@ export async function crossBorderStateFor(versionId: string): Promise<CrossBorde
       tariff9979Claimed,
       gstHstTreatment,
       hostSystemModel,
+      ...sectionCFields,
       fx: emptyFx,
       result: null,
       blockers,
@@ -249,6 +293,7 @@ export async function crossBorderStateFor(versionId: string): Promise<CrossBorde
       tariff9979Claimed,
       gstHstTreatment,
       hostSystemModel,
+      ...sectionCFields,
       fx,
       result: null,
       blockers,
@@ -383,6 +428,7 @@ export async function crossBorderStateFor(versionId: string): Promise<CrossBorde
       tariff9979Claimed,
       gstHstTreatment,
       hostSystemModel,
+      ...sectionCFields,
       fx,
       result: simple,
       blockers,
@@ -411,6 +457,7 @@ export async function crossBorderStateFor(versionId: string): Promise<CrossBorde
     tariff9979Claimed,
     gstHstTreatment,
     hostSystemModel,
+    ...sectionCFields,
     fx,
     result,
     blockers,

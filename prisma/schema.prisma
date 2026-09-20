@@ -4016,6 +4016,42 @@ model ProposalCustomsEntry {
   /// proposal so that fact can be stated on the document. Null/blank means either this
   /// proposal is for a complete new system, or nobody has recorded the host system yet.
   hostSystemModel       String?
+  /// The customs broker's name, as it should print on the document — e.g. "BorderBuddy
+  /// Customs Brokers". Free text, never inferred. Distinct from
+  /// CustomsBrokerFeeSchedule.brokerName: that field identifies which fee tariff was
+  /// used to quote brokerFeeMinor, not who to print as the broker of record, and a
+  /// proposal can have this printed identity without a linked fee schedule (e.g. simple
+  /// percent mode).
+  customsBrokerName     String?
+  /// The customs broker's address, as it should print on the document. Free text,
+  /// typically multi-line ("Vancouver, BC" up to a full mailing address) — kept
+  /// separate from customsBrokerName so the document can lay them out as a name line
+  /// and an address line rather than one run-on string.
+  customsBrokerAddress  String?
+  /// Country of origin of the goods on this proposal, as it should print on the
+  /// document — e.g. "United States of America (all goods)". Free text, never
+  /// inferred from the SKUs, the vendor, or anything else in this database; the same
+  /// "no tariff calculator" philosophy as tariffClassificationCode applies here.
+  countryOfOrigin       String?
+  /// This proposal's own Section C ("Canadian Import Terms") row list, once an operator
+  /// has customized it — added a row, removed one, reordered, or edited a TEXT row's
+  /// wording. Null means "use the live admin template (CrossBorderSetting.
+  /// sectionCTemplate) as-is," so an admin wording change keeps propagating to every
+  /// proposal nobody has touched yet. Once set, this array is this proposal's Section C,
+  /// full stop — see src/crossborder/sectionC.ts for the shape and resolution order.
+  /// A BOUND row's own printed value is still always resolved live from the real
+  /// field (never frozen into this JSON) — only a row's label, presence and order are
+  /// what this array controls.
+  sectionCItems         Json?
+  /// Per-proposal replacement for CrossBorderSetting.defaultAcceptanceText, printed on
+  /// this proposal's Acceptance page. Null means "use the current admin default text as-
+  /// is" (live, not frozen); a later change to the admin default keeps applying to any
+  /// proposal that has never set its own. Blank prints nothing — never an empty block.
+  acceptanceTextOverride String?
+  /// Per-proposal replacement for CrossBorderSetting.defaultAuditLanguageText, printed
+  /// as a cross-border clause. Same null-means-live-default, blank-prints-nothing rules
+  /// as acceptanceTextOverride.
+  auditLanguageOverride  String?
   enteredById           String?
   enteredAt             DateTime?
   approvedById          String?
@@ -4086,6 +4122,34 @@ model CrossBorderSetting {
   /// defaultImporterOfRecord; changing this afterward never retroactively rewrites an
   /// already-created entry.
   defaultTariff9979Claimed        Boolean?
+  /// The default customs-broker identity seeded onto a brand-new ProposalCustomsEntry
+  /// — see ProposalCustomsEntry.customsBrokerName/.customsBrokerAddress. No @default;
+  /// null until an administrator sets one. Seeds only a new entry's initial value;
+  /// changing this afterward never retroactively rewrites an already-created entry.
+  defaultCustomsBrokerName        String?
+  defaultCustomsBrokerAddress     String?
+  /// The default country-of-origin text seeded onto a brand-new ProposalCustomsEntry —
+  /// see ProposalCustomsEntry.countryOfOrigin. Same seed-only, never-retroactive rule.
+  defaultCountryOfOrigin          String?
+  /// The admin-managed, ordered Section C ("Canadian Import Terms") row template — an
+  /// array of { id, kind: 'BOUND' | 'TEXT', boundField?, label, text?, order }. Read
+  /// live by every proposal that has not set its own ProposalCustomsEntry.sectionCItems,
+  /// so an edit here (reword a label, reorder rows, add a brand-new TEXT row) applies
+  /// immediately to every not-yet-customized proposal without a code change. See
+  /// src/crossborder/sectionC.ts for the shape and the known BOUND fields. No
+  /// @default and no seed data ships with this column — null until an administrator
+  /// adds the first row via the Section C template screen, consistent with this
+  /// application's rule that nothing about Section C's content is hardcoded.
+  sectionCTemplate                Json?
+  /// Org-wide default text for the Canadian Acceptance-page addendum. Null/blank means
+  /// nothing prints — this application never ships invented legal text; an
+  /// administrator writes this once it exists. Read live (not seeded/frozen) by every
+  /// proposal that has not set its own acceptanceTextOverride.
+  defaultAcceptanceText           String?
+  /// Org-wide default text for the tariff/duty-audit clause (e.g. what happens if CBSA
+  /// later assesses more than this proposal estimated). Same live-read, blank-means-
+  /// nothing-prints rules as defaultAcceptanceText.
+  defaultAuditLanguageText        String?
   allowCadPayment                 Boolean               @default(false)
   fxFallbackMode                  FxFallbackMode        @default(DRAFT_WITH_REVIEW)
   /// Days after which a cached observation is called stale on the proposal.
