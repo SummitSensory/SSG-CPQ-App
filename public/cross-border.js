@@ -204,6 +204,128 @@
       '<div class="card" id="cbCard"><div class="muted" style="font-size:13.5px;">Loading…</div></div>';
     var card = host.querySelector('#cbCard');
 
+    /* ── Shared form primitives ────────────────────────────────────────────
+     * Used by every settings-style panel (Settings, Section B, Section C,
+     * Acceptance Page) — hoisted here rather than copied per panel, since these
+     * four are now genuinely identical across panels, not merely similar. */
+    function row(label, control, note) {
+      return (
+        '<div style="border-top:1px solid #eef0ea;padding:12px 0;display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;">' +
+        '<div style="flex:1 1 260px;min-width:200px;"><div style="font-size:13.5px;font-weight:600;">' +
+        esc(label) +
+        '</div>' +
+        (note
+          ? '<div class="muted" style="font-size:12.5px;line-height:1.55;margin-top:3px;">' +
+            note +
+            '</div>'
+          : '') +
+        '</div><div style="flex:0 1 300px;">' +
+        control +
+        '</div></div>'
+      );
+    }
+    function select(field, options, value) {
+      return (
+        '<select data-setting="' +
+        field +
+        '" style="' +
+        IN +
+        'width:100%;">' +
+        options
+          .map(function (o) {
+            return (
+              '<option value="' +
+              esc(o[0]) +
+              '"' +
+              (o[0] === value ? ' selected' : '') +
+              '>' +
+              esc(o[1]) +
+              '</option>'
+            );
+          })
+          .join('') +
+        '</select>'
+      );
+    }
+    function text(field, value, placeholder) {
+      return (
+        '<input data-setting="' +
+        field +
+        '" value="' +
+        esc(value || '') +
+        '" placeholder="' +
+        esc(placeholder || '') +
+        '" style="' +
+        IN +
+        'width:100%;">'
+      );
+    }
+    function textarea(field, value, placeholder) {
+      return (
+        '<textarea data-setting="' +
+        field +
+        '" rows="3" placeholder="' +
+        esc(placeholder || '') +
+        '" style="' +
+        IN +
+        'width:100%;resize:vertical;font-family:inherit;">' +
+        esc(value || '') +
+        '</textarea>'
+      );
+    }
+    function check(field, value, label) {
+      return (
+        '<label style="display:flex;gap:9px;align-items:flex-start;font-size:13px;cursor:pointer;">' +
+        '<input type="checkbox" data-setting="' +
+        field +
+        '"' +
+        (value ? ' checked' : '') +
+        ' style="margin-top:2px;">' +
+        '<span>' +
+        esc(label) +
+        '</span></label>'
+      );
+    }
+    /**
+     * Every [data-setting] input currently in the DOM — i.e. on whichever panel is
+     * open, since render() only puts one panel's markup in the card at a time. Reused
+     * by "Save settings" on every panel and by "Save Section C template," since the
+     * Section C tab carries its own [data-setting] default-posture fields alongside
+     * its row list.
+     *
+     * parseInt by default — staleRateDays/proposalValidityDays are validated
+     * server-side as integers (z.number().int()), and a stray decimal a browser lets
+     * through would otherwise fail the whole save with a 400. parseFloat only for a
+     * field whose own `step` says it takes one (defaultSectionBSubtextSizePt's
+     * step="0.5") — a plain <input type=number> with no step attribute reports
+     * el.step as "" (the DOM default), not "1", so this is the reliable signal, not
+     * el.step === '1'.
+     */
+    function settingFieldsFromCard() {
+      var body = {};
+      card.querySelectorAll('[data-setting]').forEach(function (el) {
+        var f = el.getAttribute('data-setting');
+        if (el.type === 'checkbox') body[f] = el.checked;
+        else if (el.type === 'number') {
+          var isFloatField = el.step && el.step !== '1';
+          body[f] =
+            el.value === '' ? null : isFloatField ? parseFloat(el.value) : parseInt(el.value, 10);
+        } else body[f] = el.value;
+      });
+      return body;
+    }
+
+    /** One line under a panel's own controls, stating exactly where its content
+     *  prints — the whole point of this reorganization. */
+    function printsWhereHtml(whereText) {
+      return (
+        '<div style="font-size:11.5px;line-height:1.5;color:#5c6157;background:#f6f7f4;border:1px solid #e7e8e3;border-radius:8px;padding:8px 10px;margin-bottom:14px;">' +
+        '<b>Prints:</b> ' +
+        whereText +
+        '</div>'
+      );
+    }
+
     load();
 
     async function load() {
@@ -347,88 +469,18 @@
 
     /* ── Settings ──────────────────────────────────────────────────────────── */
 
+    /**
+     * Engine and release-gate behavior only — nothing here determines a word or a
+     * figure printed on a proposal. Content that prints somewhere specific (Section
+     * B, Section C, the Acceptance page) lives on that section's own tab instead, so
+     * that tab's name already answers "where does this show up."
+     */
     function settingsHtml() {
       var s = S.settings || {};
-      function row(label, control, note) {
-        return (
-          '<div style="border-top:1px solid #eef0ea;padding:12px 0;display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;">' +
-          '<div style="flex:1 1 260px;min-width:200px;"><div style="font-size:13.5px;font-weight:600;">' +
-          esc(label) +
-          '</div>' +
-          (note
-            ? '<div class="muted" style="font-size:12.5px;line-height:1.55;margin-top:3px;">' +
-              note +
-              '</div>'
-            : '') +
-          '</div><div style="flex:0 1 300px;">' +
-          control +
-          '</div></div>'
-        );
-      }
-      function select(field, options, value) {
-        return (
-          '<select data-setting="' +
-          field +
-          '" style="' +
-          IN +
-          'width:100%;">' +
-          options
-            .map(function (o) {
-              return (
-                '<option value="' +
-                esc(o[0]) +
-                '"' +
-                (o[0] === value ? ' selected' : '') +
-                '>' +
-                esc(o[1]) +
-                '</option>'
-              );
-            })
-            .join('') +
-          '</select>'
-        );
-      }
-      function text(field, value, placeholder) {
-        return (
-          '<input data-setting="' +
-          field +
-          '" value="' +
-          esc(value || '') +
-          '" placeholder="' +
-          esc(placeholder || '') +
-          '" style="' +
-          IN +
-          'width:100%;">'
-        );
-      }
-      function textarea(field, value, placeholder) {
-        return (
-          '<textarea data-setting="' +
-          field +
-          '" rows="3" placeholder="' +
-          esc(placeholder || '') +
-          '" style="' +
-          IN +
-          'width:100%;resize:vertical;font-family:inherit;">' +
-          esc(value || '') +
-          '</textarea>'
-        );
-      }
-      function check(field, value, label) {
-        return (
-          '<label style="display:flex;gap:9px;align-items:flex-start;font-size:13px;cursor:pointer;">' +
-          '<input type="checkbox" data-setting="' +
-          field +
-          '"' +
-          (value ? ' checked' : '') +
-          ' style="margin-top:2px;">' +
-          '<span>' +
-          esc(label) +
-          '</span></label>'
-        );
-      }
-
       return (
+        printsWhereHtml(
+          'nowhere on the document — these control the calculation engine and what blocks a release.',
+        ) +
         row(
           'Work Canadian charges out from percentages',
           check(
@@ -437,39 +489,6 @@
             'Allow a proposal to quote tax, tariff and brokerage from rates typed on it',
           ),
           'The interim path while the tax registrations and tariff rulings are being obtained. With it on, this feature can be switched on without a GST/HST registration, and each proposal carries its own rates. The rule engine below is unaffected and still applies to any proposal not using percent entry.',
-        ) +
-        row(
-          'Importer of record, by default',
-          select(
-            'defaultImporterOfRecord',
-            Object.keys(IOR_LABEL).map(function (k) {
-              return [k, IOR_LABEL[k]];
-            }),
-            s.defaultImporterOfRecord,
-          ),
-          'Recorded on each proposal when its customs entry is created, so a later change here does not restate an old quote.',
-        ) +
-        row(
-          'GST/HST treatment, by default',
-          select(
-            'defaultGstHstTreatment',
-            Object.keys(GST_HST_LABEL).map(function (k) {
-              return [k, GST_HST_LABEL[k]];
-            }),
-            s.defaultGstHstTreatment == null ? '' : s.defaultGstHstTreatment,
-          ),
-          'Whether Summit’s equipment qualifies for GST/HST relief as a medical or assistive device is a tax-advisor determination, not something this application calculates. Recorded on each proposal when its customs entry is created, so a later change here does not restate an old quote.',
-        ) +
-        row(
-          'Tariff item 9979.00.00 claim, by default',
-          select(
-            'defaultTariff9979Claimed',
-            Object.keys(TARIFF_9979_LABEL).map(function (k) {
-              return [k, TARIFF_9979_LABEL[k]];
-            }),
-            s.defaultTariff9979Claimed == null ? '' : String(s.defaultTariff9979Claimed),
-          ),
-          'Whether these goods qualify for relief under tariff item 9979.00.00 (goods for persons with disabilities) is a classification decision for Summit and its customs broker. Recorded on each proposal when its customs entry is created, so a later change here does not restate an old quote.',
         ) +
         row(
           'When the exchange rate cannot be fetched',
@@ -514,8 +533,30 @@
               'Customs figures must be approved',
             ) +
             '<div style="height:8px;"></div>' +
+            check(
+              'requireSectionCCompleteBeforeFinal',
+              s.requireSectionCCompleteBeforeFinal,
+              'Section A’s description and every Section C row must be filled in',
+            ) +
+            '<div style="height:8px;"></div>' +
             check('allowCadPayment', s.allowCadPayment, 'Accept payment in CAD'),
-          'Turning a gate off lets a Canadian proposal go out with unconfirmed border charges on it.',
+          'Turning a gate off lets a Canadian proposal go out with unconfirmed border charges, or an incomplete Section A/C, on it.',
+        ) +
+        '<div style="display:flex;gap:8px;align-items:center;margin-top:16px;">' +
+        '<button class="link-btn" data-act="saveSettings" style="' +
+        BTN +
+        '">Save settings</button>' +
+        '</div>'
+      );
+    }
+
+    /* ── Section B ──────────────────────────────────────────────────────────── */
+
+    function sectionBHtml() {
+      var s = S.settings || {};
+      return (
+        printsWhereHtml(
+          'Section B — Delivery and Post-Importation Services, on Canadian proposals.',
         ) +
         row(
           'Services offered on Canadian proposals',
@@ -531,24 +572,35 @@
           'Off by default. Summit does not currently offer these on a Canadian job — switch one on only once there is a real, priced way to put it on the proposal.',
         ) +
         row(
-          'Customs broker, by default',
-          text(
-            'defaultCustomsBrokerName',
-            s.defaultCustomsBrokerName,
-            'e.g. BorderBuddy Customs Brokers',
+          'Section B subtext, by default',
+          textarea(
+            'defaultSectionBSubtext',
+            s.defaultSectionBSubtext,
+            'Clarifying text under Section B. Use **bold** and *italic* for emphasis. Leave blank to print nothing.',
           ) +
-            '<div style="height:8px;"></div>' +
-            text(
-              'defaultCustomsBrokerAddress',
-              s.defaultCustomsBrokerAddress,
-              'e.g. Vancouver, BC',
-            ),
-          'Seeded onto a brand-new customs entry only — see the Section C row for it below. A later change here never rewrites an already-created entry.',
+            '<div style="height:8px;">' +
+            '</div><input type="number" min="7" max="12" step="0.5" data-setting="defaultSectionBSubtextSizePt" value="' +
+            esc(s.defaultSectionBSubtextSizePt == null ? '' : s.defaultSectionBSubtextSizePt) +
+            '" placeholder="9" style="' +
+            IN +
+            'width:110px;"> <span class="muted" style="font-size:12.5px;">pt (7–12, default 9)</span>',
+          'Read live, not seeded — an edit here reaches every proposal that has never set its own Section B text. Optional: never blocks release.',
         ) +
-        row(
-          'Country of origin, by default',
-          text('defaultCountryOfOrigin', s.defaultCountryOfOrigin, 'e.g. United States of America'),
-          'Same seed-once rule as the customs broker above.',
+        '<div style="display:flex;gap:8px;align-items:center;margin-top:16px;">' +
+        '<button class="link-btn" data-act="saveSettings" style="' +
+        BTN +
+        '">Save settings</button>' +
+        '</div>'
+      );
+    }
+
+    /* ── Acceptance Page ───────────────────────────────────────────────────── */
+
+    function acceptancePageHtml() {
+      var s = S.settings || {};
+      return (
+        printsWhereHtml(
+          'The Acceptance page, on Canadian proposals — right below the signature block.',
         ) +
         row(
           'Acceptance page text, by default',
@@ -557,16 +609,7 @@
             s.defaultAcceptanceText,
             'Prints on every Canadian proposal’s Acceptance page unless a proposal sets its own text. Leave blank to print nothing.',
           ),
-          'Read live, not seeded — an edit here reaches every proposal that has never set its own text under Canadian Import Terms.',
-        ) +
-        row(
-          'Tariff-audit language, by default',
-          textarea(
-            'defaultAuditLanguageText',
-            s.defaultAuditLanguageText,
-            'What happens if CBSA later assesses more duty or tax than this proposal estimated. Leave blank to print nothing.',
-          ),
-          'Same live-read rule as the Acceptance page text above.',
+          'Read live, not seeded — an edit here reaches every proposal that has never set its own text.',
         ) +
         '<div style="display:flex;gap:8px;align-items:center;margin-top:16px;">' +
         '<button class="link-btn" data-act="saveSettings" style="' +
@@ -651,6 +694,21 @@
                 esc(it.text || '') +
                 '</textarea>'
               : '') +
+            '<div style="margin-top:7px;padding-top:7px;border-top:1px dotted #e7e8e3;">' +
+            '<textarea class="cbSecSubtext" data-i="' +
+            i +
+            '" rows="2" placeholder="Optional clarifying subtext — **bold**, *italic*. Never required." style="width:100%;border:1px solid #ece9db;border-radius:7px;padding:5px 7px;font-size:11.5px;font-family:inherit;resize:vertical;background:#fff;">' +
+            esc(it.subtext || '') +
+            '</textarea>' +
+            '<div style="display:flex;align-items:center;gap:6px;margin-top:4px;">' +
+            '<span class="muted" style="font-size:10.5px;">Size</span>' +
+            '<input type="number" class="cbSecSubtextSize" data-i="' +
+            i +
+            '" min="7" max="12" step="0.5" value="' +
+            esc(it.subtextSizePt || 9) +
+            '" style="width:60px;padding:3px 6px;border:1px solid #dcded7;border-radius:6px;font-size:11px;">' +
+            '<span class="muted" style="font-size:10.5px;">pt</span>' +
+            '</div></div>' +
             '</div>' +
             '<button class="cbSecDel" data-i="' +
             i +
@@ -659,8 +717,72 @@
         })
         .join('');
 
+      var s = S.settings || {};
       return (
-        '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">' +
+        printsWhereHtml('Section C — Canadian Import Terms, on Canadian proposals.') +
+        row(
+          'Importer of record, by default',
+          select(
+            'defaultImporterOfRecord',
+            Object.keys(IOR_LABEL).map(function (k) {
+              return [k, IOR_LABEL[k]];
+            }),
+            s.defaultImporterOfRecord,
+          ),
+          'Fills the Importer of Record row. Recorded on each proposal when its customs entry is created, so a later change here does not restate an old quote.',
+        ) +
+        row(
+          'GST/HST treatment, by default',
+          select(
+            'defaultGstHstTreatment',
+            Object.keys(GST_HST_LABEL).map(function (k) {
+              return [k, GST_HST_LABEL[k]];
+            }),
+            s.defaultGstHstTreatment == null ? '' : s.defaultGstHstTreatment,
+          ),
+          'Fills the GST/HST row. A tax-advisor determination, not something this application calculates. Recorded on each proposal when its customs entry is created.',
+        ) +
+        row(
+          'Tariff item 9979.00.00 claim, by default',
+          select(
+            'defaultTariff9979Claimed',
+            Object.keys(TARIFF_9979_LABEL).map(function (k) {
+              return [k, TARIFF_9979_LABEL[k]];
+            }),
+            s.defaultTariff9979Claimed == null ? '' : String(s.defaultTariff9979Claimed),
+          ),
+          'Fills the Tariff Item 9979.00.00 row. A classification decision for Summit and its customs broker, recorded per proposal.',
+        ) +
+        row(
+          'Customs broker, by default',
+          text(
+            'defaultCustomsBrokerName',
+            s.defaultCustomsBrokerName,
+            'e.g. BorderBuddy Customs Brokers',
+          ) +
+            '<div style="height:8px;"></div>' +
+            text(
+              'defaultCustomsBrokerAddress',
+              s.defaultCustomsBrokerAddress,
+              'e.g. Vancouver, BC',
+            ),
+          'Fills the Customs Broker row. Seeded onto a brand-new customs entry only — a later change here never rewrites an already-created entry.',
+        ) +
+        row(
+          'Country of origin, by default',
+          text('defaultCountryOfOrigin', s.defaultCountryOfOrigin, 'e.g. United States of America'),
+          'Fills the Country of Origin row. Same seed-once rule as the customs broker above.',
+        ) +
+        row(
+          'Tariff-audit language, by default',
+          textarea(
+            'defaultAuditLanguageText',
+            s.defaultAuditLanguageText,
+            'What happens if CBSA later assesses more duty or tax than this proposal estimated. Leave blank to print nothing.',
+          ),
+          'Not a Section C row — this prints as a clause in the “Cross-border terms” section that follows Section C. Read live, not seeded.',
+        ) +
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin:18px 0 6px;padding-top:14px;border-top:1px solid #eef0ea;">' +
         '<div class="muted" style="font-size:12px;line-height:1.55;max-width:520px;">' +
         'The Canadian Import Terms table printed on every Canadian proposal, in this order — use the arrows to reorder, or add/remove rows entirely. A proposal that has never customized its own list follows this one live.' +
         '</div></div>' +
@@ -1576,16 +1698,22 @@
 
     /* ── Frame ─────────────────────────────────────────────────────────────── */
 
+    // Grouped, deliberately, so the tab bar itself answers "where does this print":
+    // Readiness/Settings first (nothing here prints), then one tab per place content
+    // actually shows up on the document (Section B, Section C, Acceptance Page), then
+    // the calculation-engine/compliance tabs that were already here.
     var PANELS = [
       ['readiness', 'Readiness', readinessHtml],
       ['settings', 'Settings', settingsHtml],
+      ['sectionB', 'Section B', sectionBHtml],
+      ['sectionC', 'Section C', sectionCTemplateHtml],
+      ['acceptance', 'Acceptance Page', acceptancePageHtml],
       ['registrations', 'Tax registrations', registrationsHtml],
       ['rates', 'Tax rates', ratesHtml],
       ['exemptions', 'Exemptions', exemptionsHtml],
       ['fx', 'Exchange rate', fxHtml],
       ['broker', 'Brokerage', brokerHtml],
       ['queue', 'Customs review queue', queueHtml],
-      ['sectionC', 'Section C template', sectionCTemplateHtml],
     ];
 
     function newSectionCItemId() {
@@ -1649,6 +1777,18 @@
         el.addEventListener('input', function () {
           var it = S.sectionCTemplate[+el.getAttribute('data-i')];
           if (it) it.text = el.value;
+        });
+      });
+      card.querySelectorAll('.cbSecSubtext').forEach(function (el) {
+        el.addEventListener('input', function () {
+          var it = S.sectionCTemplate[+el.getAttribute('data-i')];
+          if (it) it.subtext = el.value;
+        });
+      });
+      card.querySelectorAll('.cbSecSubtextSize').forEach(function (el) {
+        el.addEventListener('input', function () {
+          var it = S.sectionCTemplate[+el.getAttribute('data-i')];
+          if (it) it.subtextSizePt = el.value === '' ? undefined : parseFloat(el.value);
         });
       });
       card.querySelectorAll('.cbSecDel').forEach(function (b) {
@@ -1767,24 +1907,20 @@
         }
         call = ['/cross-border/settings', { method: 'PATCH', body: { enabled: turningOn } }];
       } else if (kind === 'saveSettings') {
-        var body = {};
-        card.querySelectorAll('[data-setting]').forEach(function (el) {
-          var f = el.getAttribute('data-setting');
-          if (el.type === 'checkbox') body[f] = el.checked;
-          else if (el.type === 'number') body[f] = parseInt(el.value, 10);
-          else body[f] = el.value;
-        });
-        call = ['/cross-border/settings', { method: 'PATCH', body: body }];
+        call = ['/cross-border/settings', { method: 'PATCH', body: settingFieldsFromCard() }];
       } else if (kind === 'addSectionCText') {
         S.sectionCTemplate.push({ id: newSectionCItemId(), kind: 'TEXT', label: '', text: '' });
         render();
         return;
       } else if (kind === 'saveSectionCTemplate') {
+        // One save covers both this tab's own default-posture fields ([data-setting],
+        // e.g. Importer of Record by default) and the row list — they're edited on the
+        // same screen and belong in the same PATCH.
         call = [
           '/cross-border/settings',
           {
             method: 'PATCH',
-            body: {
+            body: Object.assign(settingFieldsFromCard(), {
               sectionCTemplate: S.sectionCTemplate.map(function (it, i) {
                 return {
                   id: it.id || newSectionCItemId(),
@@ -1793,9 +1929,11 @@
                   label: it.label || '',
                   text: it.kind === 'TEXT' ? it.text || '' : undefined,
                   order: i,
+                  subtext: it.subtext || undefined,
+                  subtextSizePt: it.subtext ? it.subtextSizePt || 9 : undefined,
                 };
               }),
-            },
+            }),
           },
         ];
       } else if (kind === 'addReg') {

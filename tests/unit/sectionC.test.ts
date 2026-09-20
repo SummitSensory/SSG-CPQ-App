@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeSectionCItems, resolveSectionCItems } from '../../src/crossborder/sectionC.js';
+import {
+  normalizeSectionCItems,
+  resolveSectionCItems,
+  clampSubtextSizePt,
+  SUBTEXT_SIZE_MIN,
+  SUBTEXT_SIZE_MAX,
+  SUBTEXT_SIZE_DEFAULT,
+} from '../../src/crossborder/sectionC.js';
 
 describe('normalizeSectionCItems', () => {
   it('drops malformed entries rather than throwing', () => {
@@ -28,6 +35,47 @@ describe('normalizeSectionCItems', () => {
     expect(normalizeSectionCItems(null)).toEqual([]);
     expect(normalizeSectionCItems(undefined)).toEqual([]);
     expect(normalizeSectionCItems('nope')).toEqual([]);
+  });
+});
+
+describe('normalizeSectionCItems — subtext', () => {
+  it('carries subtext and clamps its font size to the 7-12pt range', () => {
+    const out = normalizeSectionCItems([
+      { kind: 'TEXT', label: 'Row', order: 0, subtext: 'A clarifying note', subtextSizePt: 20 },
+    ]);
+    expect(out[0]?.subtext).toBe('A clarifying note');
+    expect(out[0]?.subtextSizePt).toBe(SUBTEXT_SIZE_MAX);
+  });
+
+  it('drops a blank subtext rather than keeping an empty string', () => {
+    const out = normalizeSectionCItems([{ kind: 'TEXT', label: 'Row', order: 0, subtext: '   ' }]);
+    expect(out[0]?.subtext).toBeNull();
+    expect(out[0]?.subtextSizePt).toBeUndefined();
+  });
+
+  it('defaults the size when subtext is set but no size was given', () => {
+    const out = normalizeSectionCItems([{ kind: 'TEXT', label: 'Row', order: 0, subtext: 'Note' }]);
+    expect(out[0]?.subtextSizePt).toBe(SUBTEXT_SIZE_DEFAULT);
+  });
+});
+
+describe('clampSubtextSizePt', () => {
+  it('clamps below the minimum up to SUBTEXT_SIZE_MIN', () => {
+    expect(clampSubtextSizePt(1)).toBe(SUBTEXT_SIZE_MIN);
+  });
+  it('clamps above the maximum down to SUBTEXT_SIZE_MAX', () => {
+    expect(clampSubtextSizePt(99)).toBe(SUBTEXT_SIZE_MAX);
+  });
+  it('passes through an in-range value unchanged', () => {
+    expect(clampSubtextSizePt(10)).toBe(10);
+  });
+  it('returns undefined for non-numeric input', () => {
+    expect(clampSubtextSizePt('abc')).toBeUndefined();
+    expect(clampSubtextSizePt(undefined)).toBeUndefined();
+    expect(clampSubtextSizePt(null)).toBeUndefined();
+  });
+  it('coerces a numeric string', () => {
+    expect(clampSubtextSizePt('9.5')).toBe(9.5);
   });
 });
 

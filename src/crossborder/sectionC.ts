@@ -58,6 +58,30 @@ export interface SectionCItem {
   /** Required when kind is 'TEXT'; ignored when kind is 'BOUND' (the value is live). */
   text?: string | null;
   order: number;
+  /**
+   * Optional clarifying text printed beneath this row's own value — e.g. "confirmed
+   * with broker 2026-09-15" under a Tariff Classification row. Applies to a BOUND row
+   * exactly as it does to a TEXT row; both a row's main value and its subtext are
+   * independent of each other. Accepts the same **bold** / *italic* markup rt()
+   * renders everywhere else in this app — no separate bold/italic flags. Always
+   * optional: never part of the Section C completion gate (requireSectionCCompleteBeforeFinal
+   * checks a row's own value/text, never its subtext).
+   */
+  subtext?: string | null;
+  /** Font size (points) for subtext, clamped to SUBTEXT_SIZE_MIN..SUBTEXT_SIZE_MAX. */
+  subtextSizePt?: number;
+}
+
+/** Same 7-12pt range as MediaProgramStyle.sizePt (proposal-document.js's mediaStyleOf)
+ *  — the one other place this app lets an admin size a block of printed text. */
+export const SUBTEXT_SIZE_MIN = 7;
+export const SUBTEXT_SIZE_MAX = 12;
+export const SUBTEXT_SIZE_DEFAULT = 9;
+
+export function clampSubtextSizePt(v: unknown): number | undefined {
+  const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
+  if (!Number.isFinite(n)) return undefined;
+  return Math.min(SUBTEXT_SIZE_MAX, Math.max(SUBTEXT_SIZE_MIN, n));
 }
 
 function isSectionCBoundField(v: unknown): v is SectionCBoundField {
@@ -81,6 +105,7 @@ export function normalizeSectionCItems(raw: unknown): SectionCItem[] {
     const label = typeof e.label === 'string' ? e.label.trim() : '';
     if (!label) return;
     if (kind === 'BOUND' && !isSectionCBoundField(e.boundField)) return;
+    const subtext = typeof e.subtext === 'string' && e.subtext.trim() ? e.subtext : null;
     items.push({
       id: typeof e.id === 'string' && e.id ? e.id : `item-${idx}`,
       kind,
@@ -88,6 +113,10 @@ export function normalizeSectionCItems(raw: unknown): SectionCItem[] {
       label,
       text: kind === 'TEXT' ? (typeof e.text === 'string' ? e.text : null) : undefined,
       order: typeof e.order === 'number' && Number.isFinite(e.order) ? e.order : idx,
+      subtext,
+      subtextSizePt: subtext
+        ? (clampSubtextSizePt(e.subtextSizePt) ?? SUBTEXT_SIZE_DEFAULT)
+        : undefined,
     });
   });
   return items.sort((a, b) => a.order - b.order);

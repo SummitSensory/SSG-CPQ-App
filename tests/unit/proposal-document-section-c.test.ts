@@ -36,6 +36,8 @@ interface CrossBorder {
   sectionCItems?: Array<Record<string, unknown>>;
   acceptanceText?: string | null;
   auditLanguageText?: string | null;
+  sectionBSubtext?: string | null;
+  sectionBSubtextSizePt?: number | null;
 }
 
 interface Doc {
@@ -142,7 +144,8 @@ describe('proposal document — Section C (Canadian Import Terms)', () => {
       }),
     );
     expect(html).toContain('Section C — Canadian Import Terms');
-    const iorIdx = html.indexOf('Importer of record');
+    // Row labels print title-cased (tc()) regardless of how they were typed in.
+    const iorIdx = html.indexOf('Importer Of Record');
     const iorValIdx = html.indexOf('Summit Sensory Gym', iorIdx);
     const cusmaIdx = html.indexOf('CUSMA');
     expect(iorIdx).toBeGreaterThan(-1);
@@ -212,7 +215,9 @@ describe('proposal document — Section C (Canadian Import Terms)', () => {
       }),
     );
     expect(html).not.toContain('Special note');
-    expect(html).toContain('Design intent documentation');
+    expect(html).not.toContain('Special Note');
+    // Title-cased (tc()) on the way out, like every other row label.
+    expect(html).toContain('Design Intent Documentation');
   });
 
   it('renders a renamed BOUND row’s label while still tracking the live value', () => {
@@ -230,7 +235,8 @@ describe('proposal document — Section C (Canadian Import Terms)', () => {
         ],
       }),
     );
-    expect(html).toContain('This is a totally custom label');
+    // Title-cased (tc()) on the way out — the admin's own wording, capitalized.
+    expect(html).toContain('This Is A Totally Custom Label');
     expect(html).toContain('Summit Soar S2');
   });
 
@@ -283,5 +289,168 @@ describe('proposal document — Acceptance-page text and the tariff-audit clause
     );
     expect(html).not.toContain('<script>alert(1)</script>');
     expect(html).toContain('&lt;script&gt;');
+  });
+});
+
+describe('proposal document — Section B and Section C subtext', () => {
+  it('prints nothing under a Section C row when it has no subtext', () => {
+    const html = SSGProposalDocument.html(
+      canadianDoc({
+        sectionCItems: [{ id: '1', kind: 'TEXT', label: 'CUSMA', text: 'Certified.', order: 0 }],
+      }),
+    );
+    // The subtext block's own font-size-in-px signature never appears at all.
+    // Checks the subtext block's own stable marker, not its inline CSS — a cosmetic
+    // style change to cbSubtextHtml must not make this negative assertion vacuous.
+    expect(html).not.toContain('data-role="cb-subtext"');
+  });
+
+  it('renders a Section C row’s subtext through rt() (the shared bold/italic renderer) at the requested size', () => {
+    // useRules() mocks rt() as an identity passthrough in this harness (its own
+    // markup processing is exercised elsewhere) — this asserts cbSubtextHtml
+    // actually routes subtext through rt(), sized, not that rt() itself works.
+    const html = SSGProposalDocument.html(
+      canadianDoc({
+        sectionCItems: [
+          {
+            id: '1',
+            kind: 'TEXT',
+            label: 'CUSMA',
+            text: 'Certified.',
+            order: 0,
+            subtext: 'Confirmed with **broker** on *2026-09-15*.',
+            subtextSizePt: 11,
+          },
+        ],
+      }),
+    );
+    expect(html).toContain('font-size:11px;color:#5c6157;line-height:1.5;');
+    expect(html).toContain('Confirmed with **broker** on *2026-09-15*.');
+  });
+
+  it('clamps a Section C row subtext size to 12pt even if a stray value slipped through', () => {
+    const html = SSGProposalDocument.html(
+      canadianDoc({
+        sectionCItems: [
+          {
+            id: '1',
+            kind: 'TEXT',
+            label: 'CUSMA',
+            text: 'Certified.',
+            order: 0,
+            subtext: 'Oversized on purpose.',
+            subtextSizePt: 40,
+          },
+        ],
+      }),
+    );
+    expect(html).toContain('font-size:12px;color:#5c6157;line-height:1.5;');
+  });
+
+  it('prints nothing for Section B subtext when unset', () => {
+    const html = SSGProposalDocument.html(canadianDoc({ sectionBSubtext: null }));
+    // Checks the subtext block's own stable marker, not its inline CSS — a cosmetic
+    // style change to cbSubtextHtml must not make this negative assertion vacuous.
+    expect(html).not.toContain('data-role="cb-subtext"');
+  });
+
+  it('prints the resolved Section B subtext at its resolved size', () => {
+    const html = SSGProposalDocument.html(
+      canadianDoc({
+        sectionBSubtext: 'Freight excludes appointment delivery.',
+        sectionBSubtextSizePt: 8,
+      }),
+    );
+    expect(html).toContain('font-size:8px;color:#5c6157;line-height:1.5;');
+    expect(html).toContain('Freight excludes appointment delivery.');
+  });
+
+  it('never renders Section B subtext on a domestic proposal', () => {
+    const html = SSGProposalDocument.html(domesticDoc());
+    // Checks the subtext block's own stable marker, not its inline CSS — a cosmetic
+    // style change to cbSubtextHtml must not make this negative assertion vacuous.
+    expect(html).not.toContain('data-role="cb-subtext"');
+  });
+});
+
+describe('proposal document — Configuration Schedule heading', () => {
+  function bundleDoc(canadian: boolean): Doc {
+    return {
+      meta: {},
+      totals: baseTotals(),
+      crossBorder: canadian ? { applicable: true, fx: { rate: '1.35' } } : null,
+      lines: [
+        { lineType: 'GROUP', name: 'Summit Flex Series' },
+        {
+          lineType: 'PRODUCT',
+          name: 'Complete System',
+          sku: 'FLEX-1',
+          quantity: 1,
+          rateMinor: 500000,
+        },
+        {
+          lineType: 'PRODUCT',
+          name: '— Suspension Frame',
+          sku: 'FLEX-1A',
+          quantity: 1,
+          rateMinor: 0,
+        },
+        { lineType: 'PRODUCT', name: '— Impact Floor', sku: 'FLEX-1B', quantity: 1, rateMinor: 0 },
+      ],
+    };
+  }
+
+  it('prints the Configuration Schedule heading once, before the bundle-child rows, on a Canadian proposal', () => {
+    const html = SSGProposalDocument.html(bundleDoc(true));
+    const headingIdx = html.indexOf('Configuration Schedule — Components of the System Above');
+    const firstChildIdx = html.indexOf('Suspension Frame');
+    expect(headingIdx).toBeGreaterThan(-1);
+    expect(firstChildIdx).toBeGreaterThan(headingIdx);
+    // Printed exactly once even though there are two bundle-child rows.
+    expect(html.split('Configuration Schedule — Components of the System Above').length - 1).toBe(
+      1,
+    );
+  });
+
+  it('never prints the Configuration Schedule heading on a domestic proposal', () => {
+    const html = SSGProposalDocument.html(bundleDoc(false));
+    expect(html).not.toContain('Configuration Schedule');
+  });
+
+  it('prints one heading per bundled system, not one for the whole document', () => {
+    const html = SSGProposalDocument.html({
+      meta: {},
+      totals: baseTotals(),
+      crossBorder: { applicable: true, fx: { rate: '1.35' } },
+      lines: [
+        { lineType: 'GROUP', name: 'Summit Flex Series' },
+        {
+          lineType: 'PRODUCT',
+          name: 'Complete System',
+          sku: 'FLEX-1',
+          quantity: 1,
+          rateMinor: 500000,
+        },
+        {
+          lineType: 'PRODUCT',
+          name: '— Suspension Frame',
+          sku: 'FLEX-1A',
+          quantity: 1,
+          rateMinor: 0,
+        },
+        { lineType: 'GROUP', name: 'Summit Foundation System' },
+        {
+          lineType: 'PRODUCT',
+          name: 'Complete System',
+          sku: 'FND-1',
+          quantity: 1,
+          rateMinor: 300000,
+        },
+        { lineType: 'PRODUCT', name: '— Base Plate', sku: 'FND-1A', quantity: 1, rateMinor: 0 },
+      ],
+    });
+    expect(html.split('Configuration Schedule — Components of the System Above').length - 1).toBe(
+      2,
+    );
   });
 });

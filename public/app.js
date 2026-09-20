@@ -4832,6 +4832,35 @@
   }
 
   /**
+   * "{Category} Complete Therapeutic System \u2014 Model {code}" \u2014 the reference proposal
+   * template's title convention (Standard Proposal Template v1.1: "Document title:
+   * Complete Therapeutic System Proposal. System title: Summit [Series] Complete
+   * Therapeutic System \u2014 Model [___]."). Reuses the exact category(=first GROUP
+   * line's name)/model(=proposalModelCode's itemized-heading split) proposalFileName
+   * already established, rather than inventing new derivation. Soar/Flex proposals
+   * have no separate per-job model code today (see proposalModelCode's own comment),
+   * so those get no "\u2014 Model" segment \u2014 a redundant repeat of the category reads
+   * worse in a document TITLE than it does in a filename. Only a suggestion: never
+   * writes to pb.title itself, so a rep's own wording is never silently overwritten.
+   */
+  function titleSuggestion(lines) {
+    var category = '';
+    (lines || []).forEach(function (l) {
+      if (category || (l.lineType || '') !== 'GROUP' || !l.name) return;
+      // Skip the itemized/model heading itself ("SQ-3MBL1TZ — Itemized") if it
+      // happens to be the first GROUP line — that's the model, extracted separately
+      // below, not a category name. Picking it here would print it twice, mangled
+      // ("Sq-3Mbl1Tz — Itemized Complete Therapeutic System — Model SQ-3MBL1TZ").
+      if (/itemized/i.test(l.name)) return;
+      category = String(l.name);
+    });
+    if (!category) return '';
+    var categoryTitled = category.toLowerCase().replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+    var model = proposalModelCode(lines);
+    return categoryTitled + ' Complete Therapeutic System' + (model ? ' \u2014 Model ' + model : '');
+  }
+
+  /**
    * A model-shaped token inside free text — "SQ-3MBL2TZ", "K-4000".
    *
    * Reps used to type the model into the proposal title. The document now prints the
@@ -5040,7 +5069,12 @@
       // header card
       '<div class="card" style="margin-bottom:16px;"><div class="section-title" style="margin:0 0 12px;">Proposal header</div>' +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' +
-          fieldRow('Title', '<input id="mTitle" style="' + IN + '" value="' + esc(pb.title) + '">') +
+          fieldRow('Title',
+            '<input id="mTitle" style="' + IN + '" value="' + esc(pb.title) + '"' +
+              (pb.title ? '' : ' placeholder="' + esc(titleSuggestion(pb.lines)) + '"') + '>' +
+            (!pb.title && titleSuggestion(pb.lines)
+              ? '<button type="button" id="mUseTitleSuggestion" class="link-btn" style="width:auto;padding:4px 9px;font-size:11px;margin-top:5px;">Use suggested title</button>'
+              : '')) +
           fieldRow('Prepared for', '<input style="' + IN + 'background:#f2f3ef;" value="' + esc(pb.orgName) + '" disabled>') +
           fieldRow('Contact name', '<input id="mContact" style="' + IN + '" placeholder="Full name of the customer contact" value="' + esc(pb.meta.contactName || '') + '">') +
           fieldRow('Proposal date', '<input id="mPropDate" type="date" style="' + IN + '" value="' + esc(pb.meta.proposalDate) + '">') +
@@ -5690,7 +5724,14 @@
     'calc:customs_requires_review': 'Nobody has entered the customs figures yet.',
     'calc:broker_fee_unconfirmed': 'The customs brokerage fee has not been confirmed.',
     'calc:importer_of_record_undetermined': 'Who is the importer of record has not been decided.',
-    'calc:tax_requires_review': 'Canadian sales tax needs review before this can be released.'
+    'calc:tax_requires_review': 'Canadian sales tax needs review before this can be released.',
+    'content:section_a_description_missing': 'Section A has no functional-description sentence yet — add one to the system’s line item.',
+    'content:section_c_text_missing': 'A Section C row has no text yet — fill it in, or remove the row from Canadian Import Terms.',
+    'content:section_c_customsBroker_missing': 'Section C lists a customs broker row, but no broker name has been entered.',
+    'content:section_c_countryOfOrigin_missing': 'Section C lists a country-of-origin row, but none has been entered.',
+    'content:section_c_tariffClassificationCode_missing': 'Section C lists a tariff classification row, but no code has been entered.',
+    'content:section_c_tariff9979Claimed_missing': 'Section C lists a tariff item 9979.00.00 row, but whether it’s claimed hasn’t been decided.',
+    'content:section_c_gstHstTreatment_missing': 'Section C lists a GST/HST row, but its treatment hasn’t been decided.'
   };
 
   function cbCardHtml() {
@@ -5920,6 +5961,13 @@
         '<textarea id="cfAcceptanceText" rows="3" placeholder="Leave blank to use Summit’s standard text" style="' + box + 'resize:vertical;">' + esc(e.acceptanceTextOverride || '') + '</textarea></div>' +
       '<div style="margin-bottom:12px;"><label style="' + lbl + '">Tariff-audit language for this proposal</label>' +
         '<textarea id="cfAuditText" rows="3" placeholder="Leave blank to use Summit’s standard text" style="' + box + 'resize:vertical;">' + esc(e.auditLanguageOverride || '') + '</textarea></div>' +
+      '<div style="margin-bottom:12px;"><label style="' + lbl + '">Section B subtext for this proposal</label>' +
+        '<textarea id="cfSectionBSubtext" rows="2" placeholder="Leave blank to use Summit’s standard text. Use **bold** and *italic* for emphasis." style="' + box + 'resize:vertical;">' + esc(e.sectionBSubtextOverride || '') + '</textarea>' +
+        '<div style="display:flex;align-items:center;gap:6px;margin-top:5px;">' +
+          '<span class="muted" style="font-size:11px;">Size</span>' +
+          '<input type="number" id="cfSectionBSubtextSize" min="7" max="12" step="0.5" value="' + esc(e.sectionBSubtextSizePtOverride || '') + '" placeholder="9" style="width:70px;padding:5px 7px;border:1px solid #dcded7;border-radius:6px;font-size:11px;">' +
+          '<span class="muted" style="font-size:11px;">pt (7–12)</span>' +
+        '</div></div>' +
       '<label style="display:flex;gap:8px;align-items:flex-start;font-size:12.5px;line-height:1.5;margin-bottom:12px;">' +
         '<input type="checkbox" id="cfIncl"' + (e.includedInSellerTotal ? ' checked' : '') + ' style="margin-top:2px;">' +
         '<span>Summit is collecting these amounts, so add them to the amount payable to Summit.' +
@@ -5985,6 +6033,11 @@
         countryOfOrigin: document.getElementById('cfCountryOfOrigin').value.trim() || null,
         acceptanceTextOverride: document.getElementById('cfAcceptanceText').value.trim() || null,
         auditLanguageOverride: document.getElementById('cfAuditText').value.trim() || null,
+        sectionBSubtextOverride: document.getElementById('cfSectionBSubtext').value.trim() || null,
+        sectionBSubtextSizePtOverride: (function () {
+          var v = document.getElementById('cfSectionBSubtextSize').value;
+          return v === '' ? null : parseFloat(v);
+        })(),
         sourceReference: document.getElementById('cfSource').value.trim() || null,
         importerOfRecord: document.getElementById('cfIor').value,
         includedInSellerTotal: document.getElementById('cfIncl').checked,
@@ -6102,6 +6155,13 @@
           (it.kind === 'TEXT'
             ? '<textarea class="scText" data-i="' + i + '" rows="2" placeholder="What prints for this row" style="width:100%;border:1px solid #ece9db;border-radius:7px;padding:6px 8px;font-size:12px;font-family:inherit;resize:vertical;background:#fff;">' + esc(it.text || '') + '</textarea>'
             : '') +
+          '<div style="margin-top:6px;padding-top:6px;border-top:1px dotted #e7e8e3;">' +
+          '<textarea class="scSubtext" data-i="' + i + '" rows="2" placeholder="Optional clarifying subtext — **bold**, *italic*. Never required." style="width:100%;border:1px solid #ece9db;border-radius:7px;padding:5px 7px;font-size:11px;font-family:inherit;resize:vertical;background:#fff;">' + esc(it.subtext || '') + '</textarea>' +
+          '<div style="display:flex;align-items:center;gap:6px;margin-top:3px;">' +
+          '<span class="muted" style="font-size:10px;">Size</span>' +
+          '<input type="number" class="scSubtextSize" data-i="' + i + '" min="7" max="12" step="0.5" value="' + esc(it.subtextSizePt || 9) + '" style="width:56px;padding:3px 5px;border:1px solid #dcded7;border-radius:6px;font-size:10.5px;">' +
+          '<span class="muted" style="font-size:10px;">pt</span>' +
+          '</div></div>' +
           '</div>' +
           '<button type="button" class="scDel" data-i="' + i + '" style="border:1px solid #e0e1db;background:#fff;border-radius:8px;width:28px;height:28px;color:#9c3327;cursor:pointer;flex:0 0 auto;">✕</button></div>';
       }).join('');
@@ -6144,6 +6204,15 @@
       });
       root.querySelectorAll('.scText').forEach(function (el) {
         el.addEventListener('input', function () { var it = items[+el.getAttribute('data-i')]; if (it) it.text = el.value; });
+      });
+      root.querySelectorAll('.scSubtext').forEach(function (el) {
+        el.addEventListener('input', function () { var it = items[+el.getAttribute('data-i')]; if (it) it.subtext = el.value; });
+      });
+      root.querySelectorAll('.scSubtextSize').forEach(function (el) {
+        el.addEventListener('input', function () {
+          var it = items[+el.getAttribute('data-i')];
+          if (it) it.subtextSizePt = el.value === '' ? undefined : parseFloat(el.value);
+        });
       });
       root.querySelectorAll('.scDel').forEach(function (b) {
         b.addEventListener('click', function () { items.splice(+b.getAttribute('data-i'), 1); rerender(); });
@@ -6193,7 +6262,16 @@
         return false;
       }
       var payload = { sectionCItems: items.map(function (it, i) {
-        return { id: it.id || newSectionCItemId(), kind: it.kind, boundField: it.kind === 'BOUND' ? it.boundField : undefined, label: it.label || '', text: it.kind === 'TEXT' ? (it.text || '') : undefined, order: i };
+        return {
+          id: it.id || newSectionCItemId(),
+          kind: it.kind,
+          boundField: it.kind === 'BOUND' ? it.boundField : undefined,
+          label: it.label || '',
+          text: it.kind === 'TEXT' ? (it.text || '') : undefined,
+          order: i,
+          subtext: it.subtext || undefined,
+          subtextSizePt: it.subtext ? (it.subtextSizePt || 9) : undefined,
+        };
       }) };
       var r = await authed('/proposals/versions/' + pb.versionId + '/customs', { method: 'PATCH', body: payload });
       if (!r.ok) {
@@ -7167,6 +7245,12 @@
     document.querySelectorAll('.grpChip').forEach(function (c) { c.addEventListener('click', function () { pb.lines.push({ ref: uid(), lineType: 'GROUP', kind: 'GROUP', name: c.getAttribute('data-g'), description: '', quantity: 0, rateMinor: 0, optional: /trolley|adventure|foundation|mat/i.test(c.getAttribute('data-g')) }); renderBuilder(); }); });
     // header/meta inputs
     var mt = document.getElementById('mTitle'); if (mt) mt.addEventListener('input', function () { pb.title = mt.value; markBuilderDirty(); });
+    var mUseTitle = document.getElementById('mUseTitleSuggestion');
+    if (mUseTitle) mUseTitle.addEventListener('click', function () {
+      pb.title = titleSuggestion(pb.lines);
+      markBuilderDirty();
+      renderBuilder();
+    });
     // Swap the stale model in the title for the one the line items say, leaving the
     // rest of the rep's wording alone.
     var bFixTitle = document.getElementById('bFixTitleModel');
