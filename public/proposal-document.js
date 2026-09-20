@@ -445,6 +445,38 @@
       return '<div style="margin-bottom:6px;"><b>' + esc(title) + '</b> ' + text + '</div>';
     };
 
+    /**
+     * GST/HST relief status, tariff 9979.00.00 claim status and host-system
+     * identification are all human-entered STATUSES on ProposalCustomsEntry, never
+     * computed or inferred. Each one always prints something on a Canadian proposal
+     * (including an honest "not yet determined" sentence when null) so the document
+     * never silently omits a required disclosure just because nobody has answered yet.
+     */
+    var gstHstText =
+      cb.gstHstTreatment === 'STANDARD_RATE'
+        ? 'Standard rate applies.'
+        : cb.gstHstTreatment === 'MEDICAL_DEVICE_RELIEF_CLAIMED'
+          ? 'Goods qualify for relief as medical and assistive devices — confirm with broker.'
+          : 'Whether these goods qualify for GST/HST relief as medical and assistive devices has not yet been determined for this proposal. Standard tax treatment is assumed on this estimate until confirmed otherwise; confirm the applicable treatment with your customs broker or tax advisor before relying on this proposal for tax planning.';
+
+    var tariff9979Title = 'Tariff Item 9979.00.00 (Goods for Persons with Disabilities).';
+    var tariff9979Text =
+      cb.tariff9979Claimed === true
+        ? 'Summit Sensory Gym has identified the goods on this proposal as eligible for classification under tariff item 9979.00.00 of the Canadian Customs Tariff, which provides relief from customs duty for goods designed to assist persons with disabilities. This classification is subject to review and final determination by the Canada Border Services Agency at the time of importation.'
+        : cb.tariff9979Claimed === false
+          ? 'The goods on this proposal are not being entered under tariff item 9979.00.00 of the Canadian Customs Tariff. Standard customs duty treatment applies, subject to the classification determined by the Canada Border Services Agency at the time of importation.'
+          : 'Whether the goods on this proposal will be entered under tariff item 9979.00.00 of the Canadian Customs Tariff has not yet been determined. This proposal does not assume relief under that item; confirm eligibility and classification with your customs broker before relying on it.';
+
+    var hostSystemBaseText =
+      'Where any component on this proposal is a replacement or expansion part for an existing Summit Sensory Gym system rather than part of a new, complete system, it is identified to the host system it belongs to, consistent with the Canada Border Services Agency’s treatment of parts for equipment previously qualifying under tariff item 9979.00.00.';
+    var hostSystemText =
+      hostSystemBaseText +
+      (cb.hostSystemModel
+        ? ' This proposal is for replacement or expansion components for the customer’s existing system: ' +
+          esc(cb.hostSystemModel) +
+          '.'
+        : '');
+
     var out = [
       para(
         'Currency and Exchange Rate.',
@@ -466,6 +498,7 @@
         'Canadian Sales Taxes.',
         'Applicable GST, HST, PST, RST, or QST will be determined based on the ship-to location, the nature of the goods and services supplied, Summit Sensory Gym\u2019s applicable registration obligations, the customer\u2019s documented tax status, and the laws and rates in effect at the time of invoicing or shipment. Tax amounts shown on this proposal are estimates and may be revised on the final invoice if the delivery location, applicable rate, taxability, exemption status, transaction structure, or governing law changes. Any valid exemption documentation must be provided and approved before the final invoice is issued.',
       ),
+      para('GST/HST Treatment.', gstHstText),
       para(
         'Basis of the Estimates.',
         'The tariff and tax rates applied on this proposal were entered by Summit Sensory Gym based on the information available for goods of this kind. They are not derived from a tariff classification ruling, a country-of-origin determination or an advance ruling from the Canada Border Services Agency, and they do not constitute customs, tax or legal advice. The customer is encouraged to confirm the applicable rates with their own customs broker before relying on these figures for budgeting.',
@@ -478,15 +511,38 @@
         'Estimated Tariffs Are Dated to This Proposal.',
         'Any tariff, duty, surtax or brokerage figure shown on this proposal is an estimate calculated on the proposal date, using the rates in effect and the information available on that date. Tariff rates, surtax orders and remission orders are set by government and change without notice, sometimes between the date a proposal is issued and the date the goods cross the border. The figures shown are not a quotation of, or a cap on, the amounts that will ultimately be assessed, and they may increase or decrease.',
       ),
+      para(tariff9979Title, tariff9979Text),
+    ];
+
+    if (cb.tariff9979Claimed === true) {
+      out.push(
+        para(
+          'Diversion of Goods Entered Under Tariff Item 9979.00.00.',
+          'If any good entered into Canada under tariff item 9979.00.00 of the Canadian Customs Tariff is later sold, leased, or otherwise diverted to a use that does not qualify for that tariff item, the party responsible for the customs accounting on this shipment must correct that accounting and pay any customs duty and other charges that become owing as a result, in accordance with the Canadian Customs Tariff and the Accounting for Imported Goods and Payment of Duties Regulations.',
+        ),
+      );
+    }
+
+    out.push(
+      para(
+        'Design and Engineering Documentation.',
+        'Summit Sensory Gym maintains design, engineering and clinical documentation supporting the intended use of this equipment by persons with disabilities. That documentation is available on request to whoever is handling customs clearance for this shipment, or directly to the Canada Border Services Agency.',
+      ),
+    );
+    out.push(para('Host System Identification.', hostSystemText));
+
+    out.push(
       para(
         'Responsibility for Border Charges.',
         'Except for any amount expressly identified on this proposal as fixed and included in the total payable to Summit Sensory Gym, the customer is responsible for all customs duties, tariffs, surtaxes, safeguard and anti-dumping measures, import taxes, brokerage charges, storage, demurrage, examination and inspection fees, disbursements and penalties assessed on the importation of the goods, together with any increase in those amounts arising after the proposal date. Summit Sensory Gym has no control over the classification, valuation or rate applied by the Canada Border Services Agency or by the customs broker and is not liable for any such charge, for any increase in one, or for delay, storage or additional cost arising from a customs examination, a re-determination of classification or origin, or a change in law. Where Summit Sensory Gym advances any such amount on the customer\u2019s behalf, it is reimbursable in full.',
       ),
+    );
+    out.push(
       para(
         'CUSMA Treatment.',
         'Preferential tariff treatment under the Canada\u2013United States\u2013Mexico Agreement applies only when the goods satisfy the applicable rules of origin and the required origin documentation is available and accepted. Shipment from the United States does not, by itself, establish eligibility for preferential tariff treatment.',
       ),
-    ];
+    );
 
     out.push(
       para(

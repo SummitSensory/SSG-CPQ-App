@@ -58,6 +58,24 @@ export interface CrossBorderState {
    * fetch; null when nobody has entered one yet.
    */
   tariffClassificationCode: string | null;
+  /**
+   * Whether these goods are entered under tariff item 9979.00.00 (disability-relief),
+   * typed in by a person on the customs entry. Never computed or inferred — see the
+   * field's comment on ProposalCustomsEntry. null = not yet determined.
+   */
+  tariff9979Claimed: boolean | null;
+  /**
+   * A human-entered STATUS about whether medical/assistive-device GST/HST relief is
+   * being claimed for this shipment. Distinct from the tax-rate calculation engine.
+   * null = not yet determined.
+   */
+  gstHstTreatment: 'STANDARD_RATE' | 'MEDICAL_DEVICE_RELIEF_CLAIMED' | null;
+  /**
+   * The Summit system model this proposal's components belong to, when the proposal
+   * is for replacement/expansion parts. Typed in by a person, never inferred. Null
+   * means either a new complete system, or nobody has recorded it yet.
+   */
+  hostSystemModel: string | null;
   fx: {
     pair: string;
     rate: string | null;
@@ -153,6 +171,9 @@ export async function crossBorderStateFor(versionId: string): Promise<CrossBorde
       applicable: false,
       jurisdiction,
       tariffClassificationCode: null,
+      tariff9979Claimed: null,
+      gstHstTreatment: null,
+      hostSystemModel: null,
       fx: emptyFx,
       result: null,
       blockers: [],
@@ -161,10 +182,13 @@ export async function crossBorderStateFor(versionId: string): Promise<CrossBorde
 
   // Fetched once, up front, so every `applicable: true` return below — including the
   // early ones for an incomplete address or a missing FX rate — can carry the
-  // tariff classification code. It is reused at the Promise.all further down rather
-  // than fetched a second time.
+  // tariff classification code (and the newer 9979/GST-HST/host-system fields). It is
+  // reused at the Promise.all further down rather than fetched a second time.
   const customsRow = await prisma.proposalCustomsEntry.findUnique({ where: { versionId } });
   const tariffClassificationCode = customsRow?.tariffClassificationCode ?? null;
+  const tariff9979Claimed = customsRow?.tariff9979Claimed ?? null;
+  const gstHstTreatment = customsRow?.gstHstTreatment ?? null;
+  const hostSystemModel = customsRow?.hostSystemModel ?? null;
 
   const blockers: string[] = [];
   if (!jurisdiction.complete || !jurisdiction.province) {
@@ -175,6 +199,9 @@ export async function crossBorderStateFor(versionId: string): Promise<CrossBorde
       applicable: true,
       jurisdiction,
       tariffClassificationCode,
+      tariff9979Claimed,
+      gstHstTreatment,
+      hostSystemModel,
       fx: emptyFx,
       result: null,
       blockers,
@@ -219,6 +246,9 @@ export async function crossBorderStateFor(versionId: string): Promise<CrossBorde
       applicable: true,
       jurisdiction,
       tariffClassificationCode,
+      tariff9979Claimed,
+      gstHstTreatment,
+      hostSystemModel,
       fx,
       result: null,
       blockers,
@@ -350,6 +380,9 @@ export async function crossBorderStateFor(versionId: string): Promise<CrossBorde
       applicable: true,
       jurisdiction,
       tariffClassificationCode,
+      tariff9979Claimed,
+      gstHstTreatment,
+      hostSystemModel,
       fx,
       result: simple,
       blockers,
@@ -371,7 +404,17 @@ export async function crossBorderStateFor(versionId: string): Promise<CrossBorde
 
   for (const issue of result.issues) blockers.push(`calc:${issue}`);
 
-  return { applicable: true, jurisdiction, tariffClassificationCode, fx, result, blockers };
+  return {
+    applicable: true,
+    jurisdiction,
+    tariffClassificationCode,
+    tariff9979Claimed,
+    gstHstTreatment,
+    hostSystemModel,
+    fx,
+    result,
+    blockers,
+  };
 }
 
 /**
