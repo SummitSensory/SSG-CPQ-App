@@ -2275,6 +2275,8 @@
         var act = sel.value; if (!act) return;
         if (act === 'expire' && !confirm('Mark this proposal no longer active? It stays on record and can be revived as a new version.')) { sel.value = ''; return; }
         var id = sel.getAttribute('data-id'), vid = sel.getAttribute('data-vid');
+        // Signing also locks the order, which needs the approval details first.
+        if (act === 'accept') { sel.value = ''; openLockForm(vid, user, { sign: true, after: function () { loadProposals(user); } }); return; }
         sel.disabled = true;
         var path = act === 'new-version' ? '/proposals/' + id + '/versions' : '/proposals/versions/' + vid + '/' + act;
         // No button to relabel here, so the notice carries the progress instead.
@@ -3205,6 +3207,7 @@
       bt.addEventListener('click', async function () {
         var act = bt.getAttribute('data-act'), vid = bt.getAttribute('data-vid');
         if (act === 'lock') { openLockForm(vid, user); return; }
+        if (act === 'accept') { openLockForm(vid, user, { sign: true, after: function () { openProposalDetail(id, user); } }); return; }
         if (act === 'attach-monday') { retryMondayAttachment(id, vid, bt); return; }
         var path = act === 'new-version' ? '/proposals/' + id + '/versions' : '/proposals/versions/' + vid + '/' + act;
         var stage = actionProgress(bt);
@@ -3242,6 +3245,9 @@
           b.push('<button class="link-btn" id="propUnlock" style="width:auto;padding:9px 15px;color:#9c3327;">Unlock for changes</button>');
         }
       } else if (hasRole(ORDERS_MANAGE_ROLES, user.role)) {
+        // Only reachable when signing did not finish the lock (or the order was
+        // unlocked and cancelled) — "Proposal Signed" locks in the same step.
+        if (!(lockedOrder && lockedOrder.id)) b.push('<span class="chip" style="align-self:center;background:#fdf6e3;border-color:#eadfbe;color:#8a6d1f;">Signed — not locked</span>');
         b.push('<button class="btn" data-act="lock" data-vid="' + v.id + '" style="width:auto;padding:9px 15px;">Lock to operational order</button>');
       }
     }
@@ -9992,8 +9998,22 @@
     renderBuilder();
   }
 
-  function openLockForm(versionId, user) {
-    openModal('Lock to operational order',
+  /**
+   * The customer-approval form behind both "Proposal Signed" and "Lock to
+   * operational order".
+   *
+   * `opts.sign` is the normal path: the proposal is marked signed AND locked into
+   * its order in one request, so a signed proposal can never be left unlocked. The
+   * plain lock (no `sign`) is only offered on a proposal already accepted without an
+   * order — the recovery path when the lock half did not complete. `opts.after` runs
+   * on success instead of jumping to the Orders screen.
+   */
+  function openLockForm(versionId, user, opts) {
+    opts = opts || {};
+    openModal(opts.sign ? 'Proposal signed — lock to operational order' : 'Lock to operational order',
+      (opts.sign
+        ? '<div class="muted" style="font-size:12.5px;line-height:1.5;margin-bottom:10px;">Marking the proposal signed also locks it into an operational order. Record who approved it.</div>'
+        : '') +
       fieldRow('Approval method', selectEl('aMethod', ['SIGNATURE', 'COUNTERSIGNED_PROPOSAL', 'PURCHASE_ORDER', 'EMAIL', 'VERBAL', 'PORTAL'], 'COUNTERSIGNED_PROPOSAL')) +
       fieldRow('Approver name', '<input id="aName" style="' + IN + '" required>') +
       fieldRow('Approver title', '<input id="aTitle" style="' + IN + '">') +
@@ -10008,15 +10028,27 @@
       async function (close, showErr) {
         var name = document.getElementById('aName').value.trim(); if (!name) return showErr('Approver name is required.');
         var body = { method: document.getElementById('aMethod').value, approverName: name, approverTitle: document.getElementById('aTitle').value.trim() || undefined, poNumber: document.getElementById('aPo').value.trim() || undefined, approvedAt: new Date(document.getElementById('aDate').value || Date.now()).toISOString(), notes: document.getElementById('aNotes').value.trim() || undefined, trainingIncluded: document.getElementById('aTraining').checked, installationIncluded: document.getElementById('aInstall').checked };
-        var r = await authed('/orders/from-version/' + versionId, { method: 'POST', body: body });
+        var r = opts.sign
+          ? await authed('/proposals/versions/' + versionId + '/accept', { method: 'POST', body: { approval: body } })
+          : await authed('/orders/from-version/' + versionId, { method: 'POST', body: body });
         if (!r.ok) {
           var msg = '';
           try { msg = ((await r.json()) || {}).message || ''; } catch (e) {}
-          return showErr(msg || 'Could not lock order (' + r.status + ').');
+          return showErr(msg || (opts.sign ? 'Could not mark the proposal signed (' + r.status + ').' : 'Could not lock order (' + r.status + ').'));
         }
-        close(); alert('Operational order created.');
+        var res = opts.sign ? await r.json().catch(function () { return {}; }) : null;
+        close();
+        if (res && res.locked === false) {
+          // Signed, but the order was not created. Said plainly, because the proposal
+          // page is where it gets fixed and the rep must not assume it is done.
+          alert('The proposal is marked signed, but it could not be locked to an operational order' +
+            (res.lockError ? ': ' + res.lockError : '.') + '\n\nOpen the proposal and use “Lock to operational order” to finish.');
+        } else {
+          toast(opts.sign ? 'Proposal signed and locked to ' + ((res && res.order && res.order.number) || 'its operational order') + '.' : 'Operational order created.');
+        }
+        if (opts.after) { opts.after(); return; }
         var nb = document.querySelector('[data-view="orders"]'); if (nb) nb.click();
-      }, 'Lock order');
+      }, opts.sign ? 'Mark signed & lock' : 'Lock order');
   }
 
   /* --- Orders & Bill of Materials --- */
