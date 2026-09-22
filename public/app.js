@@ -5800,6 +5800,7 @@
       '<table style="width:100%;border-collapse:collapse;">' + rows + '</table>' +
       totals +
       '<button class="link-btn" id="cbCustoms" style="width:auto;padding:6px 11px;font-size:12px;margin-top:11px;">Customs and duties\u2026</button>' +
+      '<button class="link-btn" id="cbSectionB" style="width:auto;padding:6px 11px;font-size:12px;margin-top:11px;margin-left:6px;">Section B Notes\u2026</button>' +
       '<button class="link-btn" id="cbSectionC" style="width:auto;padding:6px 11px;font-size:12px;margin-top:11px;margin-left:6px;">Canadian Import Terms (Section C)\u2026</button>' +
     '</div>';
   }
@@ -5807,6 +5808,8 @@
   function wireCrossBorderCard() {
     var b = document.getElementById('cbCustoms');
     if (b) b.addEventListener('click', openCustomsForm);
+    var sb = document.getElementById('cbSectionB');
+    if (sb) sb.addEventListener('click', openSectionBForm);
     var c = document.getElementById('cbSectionC');
     if (c) c.addEventListener('click', openSectionCForm);
   }
@@ -5961,13 +5964,6 @@
         '<textarea id="cfAcceptanceText" rows="3" placeholder="Leave blank to use Summit’s standard text" style="' + box + 'resize:vertical;">' + esc(e.acceptanceTextOverride || '') + '</textarea></div>' +
       '<div style="margin-bottom:12px;"><label style="' + lbl + '">Tariff-audit language for this proposal</label>' +
         '<textarea id="cfAuditText" rows="3" placeholder="Leave blank to use Summit’s standard text" style="' + box + 'resize:vertical;">' + esc(e.auditLanguageOverride || '') + '</textarea></div>' +
-      '<div style="margin-bottom:12px;"><label style="' + lbl + '">Section B subtext for this proposal</label>' +
-        '<textarea id="cfSectionBSubtext" rows="2" placeholder="Leave blank to use Summit’s standard text. Use **bold** and *italic* for emphasis." style="' + box + 'resize:vertical;">' + esc(e.sectionBSubtextOverride || '') + '</textarea>' +
-        '<div style="display:flex;align-items:center;gap:6px;margin-top:5px;">' +
-          '<span class="muted" style="font-size:11px;">Size</span>' +
-          '<input type="number" id="cfSectionBSubtextSize" min="7" max="12" step="0.5" value="' + esc(e.sectionBSubtextSizePtOverride || '') + '" placeholder="9" style="width:70px;padding:5px 7px;border:1px solid #dcded7;border-radius:6px;font-size:11px;">' +
-          '<span class="muted" style="font-size:11px;">pt (7–12)</span>' +
-        '</div></div>' +
       '<label style="display:flex;gap:8px;align-items:flex-start;font-size:12.5px;line-height:1.5;margin-bottom:12px;">' +
         '<input type="checkbox" id="cfIncl"' + (e.includedInSellerTotal ? ' checked' : '') + ' style="margin-top:2px;">' +
         '<span>Summit is collecting these amounts, so add them to the amount payable to Summit.' +
@@ -6033,11 +6029,6 @@
         countryOfOrigin: document.getElementById('cfCountryOfOrigin').value.trim() || null,
         acceptanceTextOverride: document.getElementById('cfAcceptanceText').value.trim() || null,
         auditLanguageOverride: document.getElementById('cfAuditText').value.trim() || null,
-        sectionBSubtextOverride: document.getElementById('cfSectionBSubtext').value.trim() || null,
-        sectionBSubtextSizePtOverride: (function () {
-          var v = document.getElementById('cfSectionBSubtextSize').value;
-          return v === '' ? null : parseFloat(v);
-        })(),
         sourceReference: document.getElementById('cfSource').value.trim() || null,
         importerOfRecord: document.getElementById('cfIor').value,
         includedInSellerTotal: document.getElementById('cfIncl').checked,
@@ -6118,8 +6109,10 @@
     hostSystemModel: 'Host system identification',
   };
 
-  function newSectionCItemId() {
-    return 'sc-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+  /** A fresh id for a new Section C row or Section B item — same generator, both
+   *  lists' ids are opaque strings, never parsed for meaning. */
+  function newListItemId() {
+    return 'item-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
   }
 
   /**
@@ -6213,6 +6206,16 @@
           var it = items[+el.getAttribute('data-i')];
           if (it) it.subtextSizePt = el.value === '' ? undefined : parseFloat(el.value);
         });
+        // Clamps to the 7-12pt range the server enforces on blur, not on every
+        // keystroke, so an out-of-range value can't reach the PATCH and surface a raw
+        // Zod error instead of just being corrected in place.
+        el.addEventListener('change', function () {
+          var it = items[+el.getAttribute('data-i')];
+          if (!it || el.value === '') return;
+          var clamped = Math.min(12, Math.max(7, parseFloat(el.value)));
+          el.value = String(clamped);
+          it.subtextSizePt = clamped;
+        });
       });
       root.querySelectorAll('.scDel').forEach(function (b) {
         b.addEventListener('click', function () { items.splice(+b.getAttribute('data-i'), 1); rerender(); });
@@ -6228,12 +6231,12 @@
       var addBound = root.querySelector('#scAddBound');
       if (addBound) addBound.addEventListener('change', function () {
         var f = addBound.value; if (!f) return;
-        items.push({ id: newSectionCItemId(), kind: 'BOUND', boundField: f, label: SECTION_C_BOUND_FIELD_LABEL[f] || f });
+        items.push({ id: newListItemId(), kind: 'BOUND', boundField: f, label: SECTION_C_BOUND_FIELD_LABEL[f] || f });
         rerender();
       });
       var addText = root.querySelector('#scAddText');
       if (addText) addText.addEventListener('click', function () {
-        items.push({ id: newSectionCItemId(), kind: 'TEXT', label: '', text: '' });
+        items.push({ id: newListItemId(), kind: 'TEXT', label: '', text: '' });
         rerender();
       });
       var reset = root.querySelector('#scReset');
@@ -6263,7 +6266,7 @@
       }
       var payload = { sectionCItems: items.map(function (it, i) {
         return {
-          id: it.id || newSectionCItemId(),
+          id: it.id || newListItemId(),
           kind: it.kind,
           boundField: it.kind === 'BOUND' ? it.boundField : undefined,
           label: it.label || '',
@@ -6284,6 +6287,134 @@
     }, 'Save Section C');
 
     setTimeout(function () { wireContainer(document.getElementById('scContainer')); }, 0);
+  }
+
+  /**
+   * This proposal's Section B ("Delivery and Post-Importation Services") notes —
+   * openSectionCForm's own shape, minus the BOUND/"add a fact" concept: every
+   * Section B item is free text. See src/crossborder/sectionB.ts.
+   */
+  async function openSectionBForm() {
+    if (!pb || !pb.versionId || !cbData) return;
+    var items = (cbData.sectionBItems || []).map(function (it) { return Object.assign({}, it); });
+
+    function rowsHtml() {
+      var moveBtn = function (i, dir, label, on) {
+        return '<button type="button" class="sbMove" data-i="' + i + '" data-d="' + dir + '"' + (on ? '' : ' disabled') +
+          ' style="border:1px solid #e0e1db;background:#fff;border-radius:7px;width:28px;height:24px;cursor:' + (on ? 'pointer' : 'default') +
+          ';color:' + (on ? '#5c6157' : '#cfd3ca') + ';line-height:1;">' + label + '</button>';
+      };
+      return items.map(function (it, i) {
+        return '<div style="display:flex;align-items:flex-start;gap:8px;background:#fbfaf4;border:1px solid #ece9db;border-radius:10px;padding:9px;margin-bottom:7px;">' +
+          '<div style="display:flex;flex-direction:column;gap:4px;flex:0 0 auto;padding-top:1px;">' + moveBtn(i, -1, '↑', i > 0) + moveBtn(i, 1, '↓', i < items.length - 1) + '</div>' +
+          '<div style="flex:1;min-width:0;">' +
+          '<input class="sbLabel" data-i="' + i + '" value="' + esc(it.label || '') + '" placeholder="Item label" style="width:100%;border:none;background:transparent;font-weight:600;font-size:13px;outline:none;margin-bottom:4px;">' +
+          '<textarea class="sbText" data-i="' + i + '" rows="2" placeholder="What prints for this item — **bold**, *italic*" style="width:100%;border:1px solid #ece9db;border-radius:7px;padding:6px 8px;font-size:12px;font-family:inherit;resize:vertical;background:#fff;">' + esc(it.text || '') + '</textarea>' +
+          '<div style="display:flex;align-items:center;gap:6px;margin-top:4px;">' +
+          '<span class="muted" style="font-size:10px;">Size</span>' +
+          '<input type="number" class="sbSize" data-i="' + i + '" min="7" max="12" step="0.5" value="' + esc(it.sizePt || 9) + '" style="width:56px;padding:3px 5px;border:1px solid #dcded7;border-radius:6px;font-size:10.5px;">' +
+          '<span class="muted" style="font-size:10px;">pt</span>' +
+          '</div>' +
+          '</div>' +
+          '<button type="button" class="sbDel" data-i="' + i + '" style="border:1px solid #e0e1db;background:#fff;border-radius:8px;width:28px;height:28px;color:#9c3327;cursor:pointer;flex:0 0 auto;">✕</button></div>';
+      }).join('');
+    }
+
+    // Same container-replace-and-rewire pattern as openSectionCForm — wiring only
+    // ever a just-replaced subtree, never the static outer form, is what keeps a
+    // rerender() from stacking a second listener onto a persistent button.
+    function containerHtml() {
+      return (
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">' +
+          '<button type="button" class="link-btn" id="sbAddItem" style="width:auto;padding:7px 12px;">+ Add item</button>' +
+          '<button type="button" class="link-btn" id="sbReset" style="width:auto;padding:7px 12px;">Use Summit’s standard list</button>' +
+        '</div>' +
+        (rowsHtml() || '<div class="muted" style="font-size:12px;">None yet.</div>')
+      );
+    }
+
+    function bodyHtml() {
+      return '<div class="muted" style="font-size:12px;line-height:1.55;margin-bottom:10px;">' +
+          'Clarifying notes for Section B on this proposal, in this order. Starts from Summit’s standard list; add, remove, reword or reorder freely — it only affects this proposal.</div>' +
+        '<div id="sbContainer">' + containerHtml() + '</div>' +
+        '<div id="sbMsg" style="font-size:11.5px;line-height:1.5;margin-top:6px;"></div>';
+    }
+
+    function wireContainer(root) {
+      if (!root) return;
+      root.querySelectorAll('.sbLabel').forEach(function (el) {
+        el.addEventListener('input', function () { var it = items[+el.getAttribute('data-i')]; if (it) it.label = el.value; });
+      });
+      root.querySelectorAll('.sbText').forEach(function (el) {
+        el.addEventListener('input', function () { var it = items[+el.getAttribute('data-i')]; if (it) it.text = el.value; });
+      });
+      root.querySelectorAll('.sbSize').forEach(function (el) {
+        el.addEventListener('input', function () {
+          var it = items[+el.getAttribute('data-i')];
+          if (it) it.sizePt = el.value === '' ? undefined : parseFloat(el.value);
+        });
+        // Same 7-12pt clamp-on-blur as Section C's scSubtextSize above.
+        el.addEventListener('change', function () {
+          var it = items[+el.getAttribute('data-i')];
+          if (!it || el.value === '') return;
+          var clamped = Math.min(12, Math.max(7, parseFloat(el.value)));
+          el.value = String(clamped);
+          it.sizePt = clamped;
+        });
+      });
+      root.querySelectorAll('.sbDel').forEach(function (b) {
+        b.addEventListener('click', function () { items.splice(+b.getAttribute('data-i'), 1); rerender(); });
+      });
+      root.querySelectorAll('.sbMove').forEach(function (b) {
+        b.addEventListener('click', function () {
+          var i = +b.getAttribute('data-i'), j = i + +b.getAttribute('data-d');
+          if (j < 0 || j >= items.length) return;
+          var tmp = items[i]; items[i] = items[j]; items[j] = tmp;
+          rerender();
+        });
+      });
+      var addItem = root.querySelector('#sbAddItem');
+      if (addItem) addItem.addEventListener('click', function () {
+        items.push({ id: newListItemId(), label: '', text: '' });
+        rerender();
+      });
+      var reset = root.querySelector('#sbReset');
+      if (reset) reset.addEventListener('click', async function () {
+        reset.disabled = true;
+        var r = await authed('/proposals/versions/' + pb.versionId + '/customs', { method: 'PATCH', body: { sectionBItems: null } });
+        if (r.ok) { closeAllModals(); await loadCrossBorder(true); }
+        else { reset.disabled = false; var m = document.getElementById('sbMsg'); if (m) m.innerHTML = '<span style="color:#9c3327;">Could not reset (' + r.status + ').</span>'; }
+      });
+    }
+
+    function rerender() {
+      var container = document.getElementById('sbContainer');
+      if (!container) return;
+      container.innerHTML = containerHtml();
+      wireContainer(container);
+    }
+
+    openModal('Section B Notes (Delivery and Post-Importation Services)', bodyHtml(), async function (close) {
+      var msg = document.getElementById('sbMsg');
+      var blankLabel = items.some(function (it) { return !String(it.label || '').trim(); });
+      if (blankLabel) {
+        if (msg) msg.innerHTML = '<span style="color:#9c3327;">Every item needs a label before this can be saved.</span>';
+        return false;
+      }
+      var payload = { sectionBItems: items.map(function (it, i) {
+        return { id: it.id || newListItemId(), label: it.label || '', text: it.text || '', order: i, sizePt: it.sizePt || 9 };
+      }) };
+      var r = await authed('/proposals/versions/' + pb.versionId + '/customs', { method: 'PATCH', body: payload });
+      if (!r.ok) {
+        var j = null; try { j = await r.json(); } catch (e) {}
+        if (msg) msg.innerHTML = '<span style="color:#9c3327;">' + esc((j && j.message) || 'Could not save (' + r.status + ').') + '</span>';
+        return false;
+      }
+      close();
+      await loadCrossBorder(true);
+    }, 'Save Section B');
+
+    setTimeout(function () { wireContainer(document.getElementById('sbContainer')); }, 0);
   }
 
   /** Dismiss any open overlay. The lifecycle buttons live inside one. */

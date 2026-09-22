@@ -4052,16 +4052,16 @@ model ProposalCustomsEntry {
   /// as a cross-border clause. Same null-means-live-default, blank-prints-nothing rules
   /// as acceptanceTextOverride.
   auditLanguageOverride  String?
-  /// Per-proposal replacement for CrossBorderSetting.defaultSectionBSubtext — clarifying
-  /// text printed under Section B (Delivery and Post-Importation Services). Same
-  /// null-means-live-default, blank-prints-nothing rules as acceptanceTextOverride.
-  /// Accepts the same **bold** / *italic* markup rt() renders everywhere else in this
-  /// app — no separate bold/italic flags.
-  sectionBSubtextOverride String?
-  /// Font size (points) for sectionBSubtextOverride when it's set. Null means "use
-  /// CrossBorderSetting.defaultSectionBSubtextSizePt," matching the text override's own
-  /// null-means-live-default rule — the two travel together.
-  sectionBSubtextSizePtOverride Float?
+  /// This proposal's own Section B ("Delivery and Post-Importation Services") row
+  /// list, once customized — the exact same shape and resolution rule as
+  /// sectionCItems: null means "use the live admin template
+  /// (CrossBorderSetting.sectionBTemplate) as-is," an empty array is a deliberate
+  /// "show no Section B notes on this proposal," distinct from null. See
+  /// src/crossborder/sectionB.ts. Every item is free text (bold/italic via rt()'s
+  /// existing markup convention) — Section B has no BOUND-row concept the way
+  /// Section C does, because its dollar lines are fixed, computed rows, not
+  /// candidates for an admin-editable list.
+  sectionBItems         Json?
   enteredById           String?
   enteredAt             DateTime?
   approvedById          String?
@@ -4177,16 +4177,14 @@ model CrossBorderSetting {
   /// Whether Summit offers an annual inspection/service agreement on a Canadian
   /// proposal. Default off.
   offerAnnualInspectionAgreement  Boolean               @default(false)
-  /// Org-wide default clarifying text printed under Section B (Delivery and
-  /// Post-Importation Services). Null/blank means nothing prints. Accepts the same
-  /// **bold** / *italic* markup rt() renders everywhere else in this app — no separate
-  /// bold/italic flags. Read live (not seeded/frozen) by every proposal that has not
-  /// set its own ProposalCustomsEntry.sectionBSubtextOverride.
-  defaultSectionBSubtext          String?
-  /// Font size (points) for defaultSectionBSubtext, clamped 7-12 at the point it's
-  /// read/saved — same range as MediaProgramStyle.sizePt (proposal-document.js's
-  /// mediaStyleOf) for consistency across this app's few user-adjustable text sizes.
-  defaultSectionBSubtextSizePt    Float?
+  /// The admin-managed, ordered Section B ("Delivery and Post-Importation Services")
+  /// row template — the exact same shape and resolution rule as sectionCTemplate. An
+  /// array of { id, label, text, order, sizePt? }; every item is free text (no
+  /// BOUND-row concept — see ProposalCustomsEntry.sectionBItems). No @default and no
+  /// seed data ships with this column — null until an administrator adds the first
+  /// item via the Section B screen. Read live by every proposal that has not set its
+  /// own ProposalCustomsEntry.sectionBItems. See src/crossborder/sectionB.ts.
+  sectionBTemplate                Json?
   /// Whether a Canadian proposal must have a complete Section A description and a
   /// complete Section C (every row in its resolved list answered — see
   /// crossBorderStateFor's `content:*` blockers) before it can be released. Default

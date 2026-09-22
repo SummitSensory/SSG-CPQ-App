@@ -492,15 +492,43 @@
   }
 
   /**
-   * Section B's optional clarifying subtext — resolved server-side
-   * (d.crossBorder.sectionBSubtext, override-then-live-default) exactly like
-   * acceptanceText/auditLanguageText. Blank prints nothing. Never part of the
-   * completion gate — clarifying text is optional by design.
+   * Section B's clarifying notes — d.crossBorder.sectionBItems already arrives
+   * resolved and order-sorted from crossBorderStateFor() (this proposal's own list
+   * if it has one, otherwise Summit's live standard list — see
+   * src/crossborder/sectionB.ts). Each item is a title-cased (tc()) label followed by
+   * its rt()-rendered, sized body — the same bold-label-then-body shape the NOTE
+   * line type already uses elsewhere in this file, not Section C's inline
+   * label/value row, since these read as notes rather than short facts. A blank list
+   * prints nothing. Never part of the completion gate — clarifying text is optional
+   * by design.
    */
-  function cbSectionBSubtext(d) {
+  function cbSectionBItems(d) {
     if (!cbIsCanadian(d)) return '';
-    var cb = d.crossBorder || {};
-    return cbSubtextHtml(cb.sectionBSubtext, cb.sectionBSubtextSizePt);
+    var items = (d.crossBorder && d.crossBorder.sectionBItems) || [];
+    if (!items.length) return '';
+    return items
+      .map(function (item) {
+        if (!item.text || !String(item.text).trim()) return '';
+        var size = Number(item.sizePt);
+        if (!size || isNaN(size)) size = 9;
+        size = Math.min(12, Math.max(7, size));
+        // data-role, not a class the print stylesheet uses for anything — a stable
+        // hook so a test (or a future reader) can find this block without depending
+        // on the exact inline CSS or fixture text, same convention cbSubtextHtml
+        // already uses for Section C's row subtext.
+        return (
+          '<div data-role="cb-section-b-item" style="margin-top:6px;">' +
+          '<b style="font-size:11px;color:#20241f;">' +
+          esc(tc(item.label || '')) +
+          '</b>' +
+          '<div style="margin-top:2px;font-size:' +
+          size +
+          'px;color:#5c6157;line-height:1.5;">' +
+          rt(item.text) +
+          '</div></div>'
+        );
+      })
+      .join('');
   }
 
   function cbFxBanner(d) {
@@ -1739,7 +1767,7 @@
           amountCell(t.stdFreight, '') +
           '</span></div>'
         : '') +
-      cbSectionBSubtext(d) +
+      cbSectionBItems(d) +
       // Tariff, brokerage and Canadian tax, where Summit is collecting them. The
       // rate prints beside the label where the engine has one, so the figure can be
       // checked against it.

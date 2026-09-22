@@ -25,6 +25,7 @@ import { NotFoundError, ValidationError } from '../lib/errors.js';
 import { Prisma } from '@prisma/client';
 import type { ProposalCustomsEntry } from '@prisma/client';
 import { normalizeSectionCItems, type SectionCItem } from './sectionC.js';
+import { normalizeSectionBItems, type SectionBItem } from './sectionB.js';
 
 export type ImporterOfRecordValue = 'CUSTOMER' | 'SUMMIT' | 'THIRD_PARTY' | 'TO_BE_DETERMINED';
 
@@ -94,11 +95,12 @@ export interface CustomsEntryPatch {
   acceptanceTextOverride?: string | null;
   /** Per-proposal replacement for CrossBorderSetting.defaultAuditLanguageText. */
   auditLanguageOverride?: string | null;
-  /** Per-proposal replacement for CrossBorderSetting.defaultSectionBSubtext. */
-  sectionBSubtextOverride?: string | null;
-  /** Font size (points) for sectionBSubtextOverride — travels with it, see the schema
-   *  field's comment. Clamped 7-12 by the route before it reaches this function. */
-  sectionBSubtextSizePtOverride?: number | null;
+  /**
+   * This proposal's own Section B row list, once customized — see sectionB.ts for
+   * the shape and the null-means-"use the live admin template" resolution rule.
+   * Same null-vs-empty-array distinction as sectionCItems.
+   */
+  sectionBItems?: SectionBItem[] | null;
 }
 
 const AMOUNT_FIELDS = [
@@ -222,7 +224,7 @@ export async function saveCustomsEntry(
   // to the JSON value null" and Prisma refuses it. Normalizing here also means
   // whatever the route accepted is stored in the same well-formed, order-sorted shape
   // the resolver expects back out.
-  const { sectionCItems, ...restPatch } = patch;
+  const { sectionCItems, sectionBItems, ...restPatch } = patch;
   const sectionCItemsData =
     sectionCItems === undefined
       ? {}
@@ -233,12 +235,23 @@ export async function saveCustomsEntry(
               sectionCItems,
             ) as unknown as Prisma.InputJsonValue,
           };
+  const sectionBItemsData =
+    sectionBItems === undefined
+      ? {}
+      : sectionBItems === null
+        ? { sectionBItems: Prisma.DbNull }
+        : {
+            sectionBItems: normalizeSectionBItems(
+              sectionBItems,
+            ) as unknown as Prisma.InputJsonValue,
+          };
 
   const updated = await prisma.proposalCustomsEntry.update({
     where: { versionId },
     data: {
       ...restPatch,
       ...sectionCItemsData,
+      ...sectionBItemsData,
       status,
       enteredById: actorId,
       enteredAt: new Date(),
@@ -262,22 +275,19 @@ export async function saveCustomsEntry(
       changed: Object.fromEntries(
         (Object.keys(patch) as Array<keyof CustomsEntryPatch>)
           .filter((k) => {
-            // sectionCItems is an array: patch[k] !== before[k] is always true by
-            // reference, which would log every save as "changed" even when nothing
-            // moved. Compared by value instead, against what was actually written
-            // (updated), not the raw, un-normalized patch input.
-            if (k === 'sectionCItems') {
-              return (
-                JSON.stringify(before.sectionCItems ?? null) !==
-                JSON.stringify(updated.sectionCItems ?? null)
-              );
+            // sectionCItems/sectionBItems are arrays: patch[k] !== before[k] is
+            // always true by reference, which would log every save as "changed" even
+            // when nothing moved. Compared by value instead, against what was
+            // actually written (updated), not the raw, un-normalized patch input.
+            if (k === 'sectionCItems' || k === 'sectionBItems') {
+              return JSON.stringify(before[k] ?? null) !== JSON.stringify(updated[k] ?? null);
             }
             return patch[k] !== before[k as keyof ProposalCustomsEntry];
           })
           .map((k) => [
             k,
-            k === 'sectionCItems'
-              ? { from: before.sectionCItems ?? null, to: updated.sectionCItems ?? null }
+            k === 'sectionCItems' || k === 'sectionBItems'
+              ? { from: before[k] ?? null, to: updated[k] ?? null }
               : { from: before[k as keyof ProposalCustomsEntry] ?? null, to: patch[k] ?? null },
           ]),
       ),

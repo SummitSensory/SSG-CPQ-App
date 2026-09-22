@@ -197,6 +197,9 @@
        *  below. Array position IS the order; an explicit order number is assigned only
        *  when this is sent to the server. */
       sectionCTemplate: [],
+      /** Working copy of CrossBorderSetting.sectionBTemplate — same shape/rules as
+       *  sectionCTemplate above, see sectionBTemplateHtml(). */
+      sectionBTemplate: [],
     };
 
     host.innerHTML =
@@ -296,10 +299,11 @@
      * parseInt by default — staleRateDays/proposalValidityDays are validated
      * server-side as integers (z.number().int()), and a stray decimal a browser lets
      * through would otherwise fail the whole save with a 400. parseFloat only for a
-     * field whose own `step` says it takes one (defaultSectionBSubtextSizePt's
-     * step="0.5") — a plain <input type=number> with no step attribute reports
-     * el.step as "" (the DOM default), not "1", so this is the reliable signal, not
-     * el.step === '1'.
+     * field whose own `step` says it takes one — every per-item font-size input
+     * (Section C's cbSecSubtextSize, Section B's cbSecBSize) sets step="0.5" for
+     * exactly this reason. A plain <input type=number> with no step attribute
+     * reports el.step as "" (the DOM default), not "1", so this is the reliable
+     * signal, not el.step === '1'.
      */
     function settingFieldsFromCard() {
       var body = {};
@@ -349,6 +353,13 @@
       S.readiness = d.readiness || {};
       S.sectionCTemplate = (
         Array.isArray(S.settings.sectionCTemplate) ? S.settings.sectionCTemplate : []
+      )
+        .slice()
+        .sort(function (a, b) {
+          return (a.order || 0) - (b.order || 0);
+        });
+      S.sectionBTemplate = (
+        Array.isArray(S.settings.sectionBTemplate) ? S.settings.sectionBTemplate : []
       )
         .slice()
         .sort(function (a, b) {
@@ -552,7 +563,71 @@
 
     /* ── Section B ──────────────────────────────────────────────────────────── */
 
-    function sectionBHtml() {
+    /**
+     * The admin-managed, ordered Section B ("Delivery and Post-Importation
+     * Services") item list — see src/crossborder/sectionB.ts. Same add/remove/
+     * reorder shape as Section C's row list (sectionCTemplateHtml below), minus the
+     * BOUND/"add a fact" concept: every Section B item is free text.
+     */
+    function sectionBTemplateHtml() {
+      var items = S.sectionBTemplate;
+
+      var moveBtn = function (i, dir, label, on) {
+        return (
+          '<button class="cbSecBMove" data-i="' +
+          i +
+          '" data-d="' +
+          dir +
+          '"' +
+          (on ? '' : ' disabled') +
+          ' title="Move ' +
+          (dir < 0 ? 'up' : 'down') +
+          '" style="border:1px solid #e0e1db;background:#fff;border-radius:7px;width:30px;height:24px;cursor:' +
+          (on ? 'pointer' : 'default') +
+          ';color:' +
+          (on ? '#5c6157' : '#cfd3ca') +
+          ';line-height:1;">' +
+          label +
+          '</button>'
+        );
+      };
+
+      var itemRows = items
+        .map(function (it, i) {
+          return (
+            '<div style="display:flex;align-items:flex-start;gap:8px;background:#fbfaf4;border:1px solid #ece9db;border-radius:10px;padding:10px;margin-bottom:8px;">' +
+            '<div style="display:flex;flex-direction:column;gap:4px;flex:0 0 auto;padding-top:1px;">' +
+            moveBtn(i, -1, '↑', i > 0) +
+            moveBtn(i, 1, '↓', i < items.length - 1) +
+            '</div>' +
+            '<div style="flex:1;min-width:0;">' +
+            '<input class="cbSecBLabel" data-i="' +
+            i +
+            '" value="' +
+            esc(it.label || '') +
+            '" placeholder="Item label" style="width:100%;border:none;background:transparent;font-weight:600;font-size:13.5px;outline:none;margin-bottom:4px;">' +
+            '<textarea class="cbSecBText" data-i="' +
+            i +
+            '" rows="3" placeholder="What prints for this item — **bold**, *italic*" style="width:100%;border:1px solid #ece9db;border-radius:7px;padding:6px 8px;font-size:12.5px;font-family:inherit;resize:vertical;background:#fff;">' +
+            esc(it.text || '') +
+            '</textarea>' +
+            '<div style="display:flex;align-items:center;gap:6px;margin-top:4px;">' +
+            '<span class="muted" style="font-size:10.5px;">Size</span>' +
+            '<input type="number" class="cbSecBSize" data-i="' +
+            i +
+            '" min="7" max="12" step="0.5" value="' +
+            esc(it.sizePt || 9) +
+            '" style="width:60px;padding:3px 6px;border:1px solid #dcded7;border-radius:6px;font-size:11px;">' +
+            '<span class="muted" style="font-size:10.5px;">pt</span>' +
+            '</div>' +
+            '</div>' +
+            '<button class="cbSecBDel" data-i="' +
+            i +
+            '" style="border:1px solid #e0e1db;background:#fff;border-radius:8px;width:30px;height:30px;color:#9c3327;cursor:pointer;flex:0 0 auto;">✕</button></div>'
+          );
+        })
+        .join('');
+
       var s = S.settings || {};
       return (
         printsWhereHtml(
@@ -571,25 +646,19 @@
             ),
           'Off by default. Summit does not currently offer these on a Canadian job — switch one on only once there is a real, priced way to put it on the proposal.',
         ) +
-        row(
-          'Section B subtext, by default',
-          textarea(
-            'defaultSectionBSubtext',
-            s.defaultSectionBSubtext,
-            'Clarifying text under Section B. Use **bold** and *italic* for emphasis. Leave blank to print nothing.',
-          ) +
-            '<div style="height:8px;">' +
-            '</div><input type="number" min="7" max="12" step="0.5" data-setting="defaultSectionBSubtextSizePt" value="' +
-            esc(s.defaultSectionBSubtextSizePt == null ? '' : s.defaultSectionBSubtextSizePt) +
-            '" placeholder="9" style="' +
-            IN +
-            'width:110px;"> <span class="muted" style="font-size:12.5px;">pt (7–12, default 9)</span>',
-          'Read live, not seeded — an edit here reaches every proposal that has never set its own Section B text. Optional: never blocks release.',
-        ) +
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin:18px 0 6px;padding-top:14px;border-top:1px solid #eef0ea;">' +
+        '<div class="muted" style="font-size:12px;line-height:1.55;max-width:520px;">' +
+        'Clarifying notes printed under Section B, in this order — use the arrows to reorder, or add/remove items entirely. A proposal that has never customized its own list follows this one live.' +
+        '</div></div>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
+        '<button class="link-btn" data-act="addSectionBItem" style="width:auto;padding:7px 12px;">+ Add item</button>' +
+        '</div>' +
+        (itemRows ||
+          '<div class="muted" style="font-size:12.5px;margin-bottom:10px;">None yet — Section B prints no extra notes until an item is added.</div>') +
         '<div style="display:flex;gap:8px;align-items:center;margin-top:16px;">' +
-        '<button class="link-btn" data-act="saveSettings" style="' +
+        '<button class="link-btn" data-act="saveSectionBTemplate" style="' +
         BTN +
-        '">Save settings</button>' +
+        '">Save Section B</button>' +
         '</div>'
       );
     }
@@ -1705,7 +1774,7 @@
     var PANELS = [
       ['readiness', 'Readiness', readinessHtml],
       ['settings', 'Settings', settingsHtml],
-      ['sectionB', 'Section B', sectionBHtml],
+      ['sectionB', 'Section B', sectionBTemplateHtml],
       ['sectionC', 'Section C', sectionCTemplateHtml],
       ['acceptance', 'Acceptance Page', acceptancePageHtml],
       ['registrations', 'Tax registrations', registrationsHtml],
@@ -1716,8 +1785,10 @@
       ['queue', 'Customs review queue', queueHtml],
     ];
 
-    function newSectionCItemId() {
-      return 'sc-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+    /** A fresh id for a new Section C row or Section B item — same generator, both
+     *  lists' ids are opaque strings, never parsed for meaning. */
+    function newListItemId() {
+      return 'item-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
     }
 
     function render() {
@@ -1790,6 +1861,16 @@
           var it = S.sectionCTemplate[+el.getAttribute('data-i')];
           if (it) it.subtextSizePt = el.value === '' ? undefined : parseFloat(el.value);
         });
+        // Clamps to the 7-12pt range the server enforces (SUBTEXT_SIZE_MIN/MAX) on
+        // blur, not on every keystroke, so an out-of-range value can't reach the PATCH
+        // and surface a raw Zod error instead of just being corrected in place.
+        el.addEventListener('change', function () {
+          var it = S.sectionCTemplate[+el.getAttribute('data-i')];
+          if (!it || el.value === '') return;
+          var clamped = Math.min(12, Math.max(7, parseFloat(el.value)));
+          el.value = String(clamped);
+          it.subtextSizePt = clamped;
+        });
       });
       card.querySelectorAll('.cbSecDel').forEach(function (b) {
         b.addEventListener('click', function () {
@@ -1814,7 +1895,7 @@
           var f = addBound.value;
           if (!f) return;
           S.sectionCTemplate.push({
-            id: newSectionCItemId(),
+            id: newListItemId(),
             kind: 'BOUND',
             boundField: f,
             label: SECTION_C_BOUND_FIELD_LABEL[f] || f,
@@ -1822,6 +1903,52 @@
           render();
         });
       }
+
+      /* Section B template editing — identical shape to Section C's above, minus
+       * the BOUND/"add a fact" concept. */
+      card.querySelectorAll('.cbSecBLabel').forEach(function (el) {
+        el.addEventListener('input', function () {
+          var it = S.sectionBTemplate[+el.getAttribute('data-i')];
+          if (it) it.label = el.value;
+        });
+      });
+      card.querySelectorAll('.cbSecBText').forEach(function (el) {
+        el.addEventListener('input', function () {
+          var it = S.sectionBTemplate[+el.getAttribute('data-i')];
+          if (it) it.text = el.value;
+        });
+      });
+      card.querySelectorAll('.cbSecBSize').forEach(function (el) {
+        el.addEventListener('input', function () {
+          var it = S.sectionBTemplate[+el.getAttribute('data-i')];
+          if (it) it.sizePt = el.value === '' ? undefined : parseFloat(el.value);
+        });
+        // Same 7-12pt clamp-on-blur as Section C's cbSecSubtextSize above.
+        el.addEventListener('change', function () {
+          var it = S.sectionBTemplate[+el.getAttribute('data-i')];
+          if (!it || el.value === '') return;
+          var clamped = Math.min(12, Math.max(7, parseFloat(el.value)));
+          el.value = String(clamped);
+          it.sizePt = clamped;
+        });
+      });
+      card.querySelectorAll('.cbSecBDel').forEach(function (b) {
+        b.addEventListener('click', function () {
+          S.sectionBTemplate.splice(+b.getAttribute('data-i'), 1);
+          render();
+        });
+      });
+      card.querySelectorAll('.cbSecBMove').forEach(function (b) {
+        b.addEventListener('click', function () {
+          var i = +b.getAttribute('data-i');
+          var j = i + +b.getAttribute('data-d');
+          if (j < 0 || j >= S.sectionBTemplate.length) return;
+          var tmp = S.sectionBTemplate[i];
+          S.sectionBTemplate[i] = S.sectionBTemplate[j];
+          S.sectionBTemplate[j] = tmp;
+          render();
+        });
+      });
     }
 
     function wire(root) {
@@ -1909,7 +2036,7 @@
       } else if (kind === 'saveSettings') {
         call = ['/cross-border/settings', { method: 'PATCH', body: settingFieldsFromCard() }];
       } else if (kind === 'addSectionCText') {
-        S.sectionCTemplate.push({ id: newSectionCItemId(), kind: 'TEXT', label: '', text: '' });
+        S.sectionCTemplate.push({ id: newListItemId(), kind: 'TEXT', label: '', text: '' });
         render();
         return;
       } else if (kind === 'saveSectionCTemplate') {
@@ -1923,7 +2050,7 @@
             body: Object.assign(settingFieldsFromCard(), {
               sectionCTemplate: S.sectionCTemplate.map(function (it, i) {
                 return {
-                  id: it.id || newSectionCItemId(),
+                  id: it.id || newListItemId(),
                   kind: it.kind,
                   boundField: it.kind === 'BOUND' ? it.boundField : undefined,
                   label: it.label || '',
@@ -1931,6 +2058,31 @@
                   order: i,
                   subtext: it.subtext || undefined,
                   subtextSizePt: it.subtext ? it.subtextSizePt || 9 : undefined,
+                };
+              }),
+            }),
+          },
+        ];
+      } else if (kind === 'addSectionBItem') {
+        S.sectionBTemplate.push({ id: newListItemId(), label: '', text: '' });
+        render();
+        return;
+      } else if (kind === 'saveSectionBTemplate') {
+        // Same reasoning as saveSectionCTemplate: this tab's own [data-setting]
+        // fields (the services-offered checkboxes) and the item list are edited on
+        // the same screen and belong in the same PATCH.
+        call = [
+          '/cross-border/settings',
+          {
+            method: 'PATCH',
+            body: Object.assign(settingFieldsFromCard(), {
+              sectionBTemplate: S.sectionBTemplate.map(function (it, i) {
+                return {
+                  id: it.id || newListItemId(),
+                  label: it.label || '',
+                  text: it.text || '',
+                  order: i,
+                  sizePt: it.sizePt || 9,
                 };
               }),
             }),
