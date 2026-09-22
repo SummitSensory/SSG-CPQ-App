@@ -34,6 +34,7 @@ import { buildBom } from '../handoff/bom.js';
 import { prisma } from '../lib/prisma.js';
 import { procurementFromItems } from '../handoff/lock.js';
 import { expandBomBuild } from '../handoff/bomBuild.js';
+import { ApprovalSchema } from '../handoff/approvalSchema.js';
 import type {
   HandoffStatus,
   RequirementCategory,
@@ -52,27 +53,6 @@ function serializeOrder<T extends { grandTotalMinor: bigint; depositDueMinor: bi
     depositDueMinor: o.depositDueMinor.toString(),
   };
 }
-
-const ApprovalSchema = z.object({
-  method: z.enum([
-    'SIGNATURE',
-    'COUNTERSIGNED_PROPOSAL',
-    'PURCHASE_ORDER',
-    'EMAIL',
-    'VERBAL',
-    'PORTAL',
-  ]),
-  approverName: z.string().min(1),
-  approverTitle: z.string().optional(),
-  approverEmail: z.string().email().optional(),
-  poNumber: z.string().optional(),
-  documentRef: z.string().optional(),
-  ipAddress: z.string().optional(),
-  approvedAt: z.coerce.date(),
-  notes: z.string().optional(),
-  trainingIncluded: z.boolean().optional(),
-  installationIncluded: z.boolean().optional(),
-});
 
 const BomHeader = z.object({
   jobName: z.string().trim().max(240).nullish(),

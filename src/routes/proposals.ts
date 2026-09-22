@@ -16,7 +16,9 @@ import {
   renameProposalForVersion,
   priceEntryStatus,
 } from '../proposals/service.js';
-import { snapshotAcceptedContent } from '../handoff/service.js';
+import { snapshotAcceptedContent, createAcceptedOrder } from '../handoff/service.js';
+import { ApprovalSchema } from '../handoff/approvalSchema.js';
+import { assertCan } from '../authz/rbac.js';
 import {
   VersionContentPatchSchema,
   assertMetaSectionsValid,
@@ -628,9 +630,35 @@ export function registerProposalRoutes(app: FastifyInstance): void {
     });
     return { status: 'RELEASED', monday };
   });
+  /**
+   * Proposal Signed — marks the version ACCEPTED and locks it into its operational
+   * order in the same request.
+   *
+   * These used to be two buttons, and the second was easy to forget: a signed
+   * proposal sat accepted with no order behind it, so there was nothing to invoice,
+   * release or build a Bill of Materials from until someone noticed. The customer
+   * approval details the lock records are therefore required here, and checked —
+   * along with the permission to lock — BEFORE the status changes, so a missing
+   * approver name can never leave a proposal signed but unlocked.
+   *
+   * If the lock itself fails after the status has changed (a database error, say),
+   * the acceptance stands — the customer did sign — and the response says the lock
+   * did not happen. The proposal page then offers "Lock to operational order" with a
+   * warning, which is the recovery path.
+   */
   app.post('/proposals/versions/:versionId/accept', review, async (req) => {
     const { versionId } = req.params as { versionId: string };
-    await changeStatus(versionId, 'ACCEPTED', req.user!.sub, (req.body as { note?: string })?.note);
+    const body = (req.body ?? {}) as { note?: string; approval?: unknown };
+    assertCan(req.user!.role, Permission.ORDERS_MANAGE);
+    const approval = ApprovalSchema.safeParse(body.approval);
+    if (!approval.success) {
+      throw new ValidationError(
+        approval.error.issues.some((i) => i.path[0] === 'approverName')
+          ? 'Enter the name of the customer who approved the proposal.'
+          : `The customer approval details are incomplete: ${approval.error.message}`,
+      );
+    }
+    await changeStatus(versionId, 'ACCEPTED', req.user!.sub, body.note);
 
     /**
      * Re-lock the CAD reference amounts to the acceptance date.
@@ -651,7 +679,19 @@ export function registerProposalRoutes(app: FastifyInstance): void {
       req.log.error({ err, versionId }, 'acceptance-date CAD lock failed');
     }
 
-    return { status: 'ACCEPTED' };
+    // After the CAD freeze on purpose: the order reads Canadian charges from the
+    // frozen snapshot, so it must be taken at the acceptance-date rate.
+    try {
+      const order = await createAcceptedOrder(versionId, approval.data, req.user!.sub);
+      return { status: 'ACCEPTED', locked: true, order: { id: order.id, number: order.number } };
+    } catch (err) {
+      req.log.error({ err, versionId }, 'proposal signed, but locking the order failed');
+      return {
+        status: 'ACCEPTED',
+        locked: false,
+        lockError: err instanceof Error ? err.message : 'the order could not be created',
+      };
+    }
   });
   // Rejecting or shelving a proposal also takes any unanswered freight request back
   // off the monday.com board — the desk works a queue of flagged items and a dead
