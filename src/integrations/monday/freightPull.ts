@@ -5,6 +5,9 @@ import { ValidationError } from '../../lib/errors.js';
 import { env, isMondayPushConfigured } from '../../config/env.js';
 import { mondayQuery } from './client.js';
 import { DEAL_COL } from './crmMapping.js';
+import { parseBoardMoney } from './boardMoney.js';
+import { subitemFreightForProposal, FREIGHT_AFTER_MARKUP_COL } from './subitemFreight.js';
+import { freightLines, apportion } from '../../proposals/freightTrueUp.js';
 import type { FreightEntry } from '@prisma/client';
 
 /**
@@ -68,23 +71,7 @@ export interface BoardFreight {
   readAt: Date;
 }
 
-/**
- * Money out of a board cell.
- *
- * Board cells are typed by whoever built the column, so the same figure arrives as
- * "$4,250.00", "4250", "4,250.00 USD" or "". Anything that is not a number after the
- * currency furniture is stripped returns null — "not answered" — which is different
- * from 0, and the difference is the entire point of the queue.
- */
-export function parseBoardMoney(value: string | null | undefined): number | null {
-  const text = String(value ?? '').trim();
-  if (!text) return null;
-  const cleaned = text.replace(/[$,\s]/g, '').replace(/[A-Za-z]+$/, '');
-  if (!/^-?\d+(\.\d{1,2})?$/.test(cleaned)) return null;
-  const amount = Math.round(Number(cleaned) * 100);
-  if (!Number.isFinite(amount) || amount < 0) return null;
-  return amount;
-}
+export { parseBoardMoney };
 
 /**
  * Read the freight columns off one deal row.
@@ -225,6 +212,227 @@ export interface SyncResult {
   /** Set when the board could not be read. The panel still opens. */
   error: string | null;
   readAt: string | null;
+  /**
+   * Third-party freight from the freight-request subitems. Null when the proposal
+   * never sent a freight request, or the version is not frozen yet (a draft reads
+   * the same figures straight into the builder instead).
+   */
+  thirdParty?: ThirdPartySync | null;
+}
+
+/** What the freight-request subitems said, and what was done about it. */
+export interface ThirdPartySync {
+  error: string | null;
+  readAt: string | null;
+  /** SKUs whose quote was staged (or re-staged) as a THERAPEUTIC entry. */
+  staged: Array<{
+    sku: string;
+    entryId: string;
+    amountMinor: number;
+    lines: number;
+    changed: boolean;
+  }>;
+  /** Already on the proposal at the board's figure — nothing to do. */
+  onProposal: string[];
+  /** Requested and not answered yet. */
+  pending: string[];
+  /** Answered with no separate freight. */
+  zero: string[];
+  /** Marked "No Longer Interested". */
+  dropped: string[];
+  /** On a freight request but no longer on this version's lines. */
+  notOnProposal: string[];
+  /** Staged earlier, withdrawn because the board no longer quotes a figure. */
+  withdrawn: string[];
+  /**
+   * The line already carries a different freight figure — typed in the builder, or
+   * a catalog default. Never overwritten: which figure is right is a person's call.
+   */
+  differs: Array<{ sku: string; boardMinor: number; onProposalMinor: number }>;
+  /** The board changed after the figure was applied or invoiced. Reported only. */
+  conflicts: Array<{ sku: string; boardMinor: number; recordedMinor: number; status: string }>;
+}
+
+/** The SKU a board-read THERAPEUTIC entry is for — every allocation carries it. */
+function entrySku(allocations: unknown): string {
+  const first = Array.isArray(allocations) ? (allocations[0] as { sku?: unknown }) : null;
+  return String(first?.sku ?? '')
+    .trim()
+    .toUpperCase();
+}
+
+/**
+ * Stage third-party freight from the freight-request subitems.
+ *
+ * One THERAPEUTIC entry per quoted SKU, split across that SKU's lines. Deliberately
+ * cautious about what it will touch, because this is money on a document a customer
+ * may already have signed:
+ *
+ *   - Only lines carrying NO freight get a figure. A line entry adds to what the line
+ *     holds, so staging onto a line the rep already priced freight for would double
+ *     it; that case is reported in `differs` for a person to settle.
+ *   - An applied or invoiced figure is never moved. A board that disagrees later is a
+ *     `conflict`, the same rule steel and mats follow.
+ *   - A staged figure the board no longer supports (the cost was cleared, the item
+ *     was dropped) is withdrawn, so a stale number cannot be applied by accident.
+ */
+async function syncThirdParty(
+  versionId: string,
+  itemId: string | null,
+  actorId: string,
+  trueUpId: () => Promise<string>,
+  fetchImpl?: typeof fetch,
+): Promise<ThirdPartySync | null> {
+  const version = await prisma.proposalVersion.findUnique({
+    where: { id: versionId },
+    select: { proposalId: true, items: true, frozen: true },
+  });
+  if (!version?.frozen) return null;
+
+  const board = await subitemFreightForProposal(version.proposalId, itemId, fetchImpl);
+  if (!board.requested) return null;
+
+  const out: ThirdPartySync = {
+    error: board.error,
+    readAt: board.readAt,
+    staged: [],
+    onProposal: [],
+    pending: [],
+    zero: [],
+    dropped: [],
+    notOnProposal: [],
+    withdrawn: [],
+    differs: [],
+    conflicts: [],
+  };
+  if (board.error) return out;
+
+  const lines = freightLines(version.items);
+  const existing = await prisma.freightEntry.findMany({
+    where: { versionId, bucket: 'THERAPEUTIC', source: 'MONDAY', status: { not: 'VOID' } },
+    orderBy: { createdAt: 'desc' },
+  });
+  const now = new Date(board.readAt ?? Date.now());
+
+  const withdraw = async (id: string, sku: string) => {
+    await prisma.freightEntry.delete({ where: { id } });
+    out.withdrawn.push(sku);
+  };
+
+  for (const q of board.skus) {
+    const mine = existing.filter((e) => entrySku(e.allocations) === q.sku);
+    const settled = mine.find((e) => e.status === 'APPLIED' || e.status === 'PUSHED');
+    const staged = mine.find((e) => e.status === 'STAGED');
+    const matching = lines.filter((l) => l.sku.trim().toUpperCase() === q.sku);
+
+    if (settled) {
+      if (q.state === 'QUOTED' && q.amountMinor !== settled.amountMinor) {
+        out.conflicts.push({
+          sku: q.sku,
+          boardMinor: q.amountMinor!,
+          recordedMinor: settled.amountMinor,
+          status: settled.status,
+        });
+      }
+      continue;
+    }
+
+    if (q.state !== 'QUOTED' || !matching.length) {
+      if (staged) await withdraw(staged.id, q.sku);
+      if (!matching.length) out.notOnProposal.push(q.sku);
+      else if (q.state === 'PENDING') out.pending.push(q.sku);
+      else if (q.state === 'ZERO') out.zero.push(q.sku);
+      else if (q.state === 'DROPPED') out.dropped.push(q.sku);
+      continue;
+    }
+
+    const amountMinor = q.amountMinor!;
+    const current = matching.reduce((a, l) => a + l.currentMinor, 0);
+    if (current > 0) {
+      if (staged) await withdraw(staged.id, q.sku);
+      if (current === amountMinor) out.onProposal.push(q.sku);
+      else out.differs.push({ sku: q.sku, boardMinor: amountMinor, onProposalMinor: current });
+      continue;
+    }
+
+    const allocations = apportion(amountMinor, matching).map((a) => {
+      const line = matching.find((l) => l.ref === a.ref)!;
+      return { ref: a.ref, sku: q.sku, name: line.name, amountMinor: a.amountMinor };
+    });
+    const data = {
+      amountMinor,
+      allocations,
+      absolute: true,
+      vendorName: q.vendor || null,
+      vendorQuoteRef: q.quoteRef || q.rfqRef || null,
+      note: `Freight quote for ${q.sku} (${q.rfqRef || 'freight request'}), monday subitem ${q.subitemId}`,
+      mondayItemId: itemId,
+      mondayColumnId: FREIGHT_AFTER_MARKUP_COL,
+      mondayRawValue: (amountMinor / 100).toFixed(2),
+      mondayReadAt: now,
+    };
+
+    if (staged) {
+      const changed =
+        staged.amountMinor !== amountMinor ||
+        JSON.stringify(staged.allocations) !== JSON.stringify(allocations);
+      if (changed) await prisma.freightEntry.update({ where: { id: staged.id }, data });
+      out.staged.push({
+        sku: q.sku,
+        entryId: staged.id,
+        amountMinor,
+        lines: matching.length,
+        changed,
+      });
+      continue;
+    }
+
+    const created = await prisma.freightEntry.create({
+      data: {
+        ...data,
+        trueUpId: await trueUpId(),
+        proposalId: version.proposalId,
+        versionId,
+        bucket: 'THERAPEUTIC',
+        scope: 'LINES',
+        source: 'MONDAY',
+        status: 'STAGED',
+        createdById: actorId,
+      },
+    });
+    out.staged.push({
+      sku: q.sku,
+      entryId: created.id,
+      amountMinor,
+      lines: matching.length,
+      changed: true,
+    });
+  }
+
+  // A staged figure whose subitem is gone from the board altogether (deleted by hand)
+  // has nothing behind it any more.
+  const onBoard = new Set(board.skus.map((q) => q.sku));
+  for (const e of existing) {
+    const sku = entrySku(e.allocations);
+    if (e.status === 'STAGED' && !onBoard.has(sku)) await withdraw(e.id, sku);
+  }
+
+  if (out.staged.some((s) => s.changed) || out.withdrawn.length || out.conflicts.length) {
+    await recordAudit({
+      actorId,
+      action: 'freight.monday.thirdParty',
+      entity: 'ProposalVersion',
+      entityId: versionId,
+      details: {
+        itemId,
+        staged: out.staged,
+        withdrawn: out.withdrawn,
+        differs: out.differs,
+        conflicts: out.conflicts,
+      },
+    });
+  }
+  return out;
 }
 
 /**
@@ -235,6 +443,43 @@ export interface SyncResult {
  * requires a reason — is what ops uses in the meantime.
  */
 export async function syncVersion(
+  versionId: string,
+  actorId: string,
+  opts: { trueUpId?: string; fetchImpl?: typeof fetch } = {},
+): Promise<SyncResult> {
+  const result = await syncBoardBuckets(versionId, actorId, opts);
+  // Third-party freight comes off the freight-request subitems, which are found by
+  // their own ids — so it is read even when the deal row itself could not be.
+  let folder: string | undefined = opts.trueUpId;
+  try {
+    result.thirdParty = await syncThirdParty(
+      versionId,
+      result.itemId,
+      actorId,
+      async () => (folder ??= await liveTrueUpId(versionId, actorId)),
+      opts.fetchImpl,
+    );
+  } catch (err) {
+    logger.warn({ err, versionId }, 'freight pull: third-party subitem sync failed');
+    result.thirdParty = {
+      error: err instanceof Error ? err.message : String(err),
+      readAt: null,
+      staged: [],
+      onProposal: [],
+      pending: [],
+      zero: [],
+      dropped: [],
+      notOnProposal: [],
+      withdrawn: [],
+      differs: [],
+      conflicts: [],
+    };
+  }
+  return result;
+}
+
+/** Steel and mats, off the deal row itself. */
+async function syncBoardBuckets(
   versionId: string,
   actorId: string,
   opts: { trueUpId?: string; fetchImpl?: typeof fetch } = {},
@@ -422,7 +667,7 @@ export async function pullOutstanding(
     where: { status: { in: ['RELEASED', 'ACCEPTED'] }, proposal: { archivedAt: null } },
     orderBy: { releasedAt: 'asc' },
     take: opts.limit ?? 200,
-    select: { id: true },
+    select: { id: true, proposalId: true },
   });
 
   for (const v of candidates) {
@@ -433,14 +678,23 @@ export async function pullOutstanding(
         status: { in: ['APPLIED', 'PUSHED'] },
       },
     });
-    if (settled >= 2) continue; // both board buckets already answered and on the proposal
+    // Both board buckets answered and on the proposal. Still read when the proposal
+    // sent freight requests: those quotes arrive on the subitems, on their own clock.
+    if (settled >= 2) {
+      const requested = await prisma.freightRfq.count({
+        where: { proposalId: v.proposalId, status: { not: 'DRAFT' } },
+      });
+      if (!requested) continue;
+    }
 
     out.scanned += 1;
     try {
       const r = await syncVersion(v.id, actorId, { fetchImpl: opts.fetchImpl });
       if (r.error) out.failed.push({ versionId: v.id, error: r.error });
+      if (r.thirdParty?.error) out.failed.push({ versionId: v.id, error: r.thirdParty.error });
       out.updated += r.updated.filter((u) => u.changed).length;
-      out.conflicts += r.conflicts.length;
+      out.updated += r.thirdParty?.staged.filter((s) => s.changed).length ?? 0;
+      out.conflicts += r.conflicts.length + (r.thirdParty?.conflicts.length ?? 0);
     } catch (err) {
       out.failed.push({ versionId: v.id, error: err instanceof Error ? err.message : String(err) });
     }
@@ -513,6 +767,7 @@ export function freightPullStatus(): {
       mats: COLUMNS.MATS.primary,
       matsFallback: COLUMNS.MATS.fallback ?? '',
       matsTax: MATS_TAX_COLUMN,
+      thirdPartyAfterMarkup: FREIGHT_AFTER_MARKUP_COL,
     },
   };
 }

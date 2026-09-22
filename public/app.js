@@ -4160,6 +4160,7 @@
     loadItemDefaults().then(renderBuilder);
     renderBuilder();
     autoSyncFreightOnOpen();
+    syncThirdPartyFreight(false);
   }
 
   /**
@@ -4758,6 +4759,7 @@
     if (!pb.meta.matsFreightTouched) pb.meta.matsFreightMinor = pb.meta.mondayMatsFreightMinor;
     if (!pb.meta.taxTouched) pb.meta.taxAmountMinor = pb.meta.mondayMatsTaxMinor;
     renderBuilderKeepingFocus();
+    syncThirdPartyFreight(true);
   }
 
   /**
@@ -4793,6 +4795,67 @@
       if (!pb.meta.taxTouched && d.matsTaxMinor != null) pb.meta.taxAmountMinor = d.matsTaxMinor;
       renderBuilderKeepingFocus();
     } catch (e) { /* silent on open — see above */ }
+  }
+
+  /**
+   * Third-party freight quotes onto a draft's lines.
+   *
+   * The freight desk types each vendor's quote into the freight-request subitems on
+   * monday, and the board marks it up ("Freight After Markup"). This reads those
+   * figures and fills each line's Freight $ — only where the line has none, so a
+   * figure the rep typed is never replaced. A SKU on several lines is split across
+   * them by value, the same way the freight true-up splits it once the proposal is
+   * frozen (a frozen version is handled there, not here).
+   *
+   * `loud` is the manual pull: it reports what it did and what is still waiting. On
+   * open it stays quiet unless it actually filled something — that needs saving.
+   */
+  async function syncThirdPartyFreight(loud) {
+    if (!pb || pb.readOnly || !pb.proposalId) return;
+    var pid = pb.proposalId, item = freightItemId();
+    var d;
+    try {
+      var r = await authed('/proposals/' + pid + '/third-party-freight' + (item ? '?itemId=' + encodeURIComponent(item) : ''));
+      if (!r.ok) { if (loud) alert('Could not read third-party freight quotes from monday.com (' + r.status + ').'); return; }
+      d = await r.json();
+    } catch (e) { if (loud) alert('Could not reach monday.com for third-party freight quotes.'); return; }
+    if (!pb || pb.proposalId !== pid) return;
+    if (!d || !d.requested) return;
+    if (d.error) { if (loud) alert('Third-party freight quotes could not be read: ' + d.error); return; }
+
+    var filled = [], kept = [], pending = [];
+    (d.skus || []).forEach(function (q) {
+      var mine = pb.lines.filter(function (l) {
+        return (l.lineType || 'PRODUCT') === 'PRODUCT' && String(l.sku || '').trim().toUpperCase() === q.sku;
+      });
+      if (!mine.length) return;
+      if (q.state === 'PENDING') { pending.push(q.sku); return; }
+      if (q.state !== 'QUOTED' || !q.amountMinor) return;
+      var current = mine.reduce(function (a, l) { return a + (Number(l.tpFreightMinor) || 0); }, 0);
+      if (current > 0) { if (current !== q.amountMinor) kept.push(q.sku); return; }
+      // Pro-rata on line value, remainder to the last line so the parts sum exactly.
+      var weights = mine.map(function (l) { return Math.max(0, (Number(l.quantity) || 0) * (Number(l.rateMinor) || 0)); });
+      var sum = weights.reduce(function (a, w) { return a + w; }, 0);
+      var left = q.amountMinor;
+      mine.forEach(function (l, i) {
+        var part = i === mine.length - 1 ? left : Math.floor(q.amountMinor * (sum ? weights[i] / sum : 1 / mine.length));
+        left -= part;
+        l.tpFreightMinor = part;
+        l.tpFreightLabel = l.tpFreightLabel || 'Freight';
+        l.showNotes = true;
+      });
+      filled.push(q.sku + ' ' + fmtMoney(q.amountMinor, 'USD'));
+    });
+
+    if (filled.length) { markBuilderDirty(); renderBuilderKeepingFocus(); }
+    if (filled.length) toast('Freight quotes from monday added to ' + filled.length + ' item' + (filled.length === 1 ? '' : 's') + ' — save the proposal to keep them.');
+    if (loud) {
+      var msg = [];
+      msg.push(filled.length ? 'Added freight from monday.com:\n' + filled.join('\n') : 'No new third-party freight quotes to add.');
+      if (kept.length) msg.push('Left as typed (the board has a different figure): ' + kept.join(', '));
+      if (pending.length) msg.push('Still waiting on the vendor: ' + pending.join(', '));
+      alert(msg.join('\n\n'));
+    }
   }
 
   /** Pull catalog price, cost and weight onto the lines that are missing them. */
