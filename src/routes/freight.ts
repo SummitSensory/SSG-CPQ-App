@@ -7,6 +7,7 @@ import { recordAudit } from '../lib/audit.js';
 import { logger } from '../lib/logger.js';
 import { mondayQuery } from '../integrations/monday/client.js';
 import { DEALS_BOARD_ID } from '../integrations/monday/crmMapping.js';
+import { subitemFreightForProposal } from '../integrations/monday/subitemFreight.js';
 import { prisma } from '../lib/prisma.js';
 
 /**
@@ -396,6 +397,22 @@ export function registerFreightRoutes(app: FastifyInstance): void {
       trolley: facts.found ? facts.trolley : null,
       requestedAt: new Date().toISOString(),
     };
+  });
+
+  /**
+   * Third-party freight quotes, off the freight-request subitems.
+   *
+   * For the builder: a draft is not frozen, so the true-up does not stage anything on
+   * it, and the rep's own screen fills each empty line's freight from these figures
+   * instead. Read-only — what reaches the draft is whatever the rep then saves.
+   * `itemId` is the Project ID, used only when no push was recorded (see
+   * subitemFreightForProposal).
+   */
+  app.get('/proposals/:id/third-party-freight', read, async (req) => {
+    const { id } = req.params as { id: string };
+    const { itemId } = req.query as { itemId?: string };
+    const item = itemId && /^\d+$/.test(itemId.trim()) ? itemId.trim() : null;
+    return subitemFreightForProposal(id, item);
   });
 
   /**

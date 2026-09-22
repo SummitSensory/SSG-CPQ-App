@@ -775,6 +775,88 @@
    * mats freight, and a freight true-up may not move tax — so it is reported here
    * rather than silently dropped, and somebody decides what to do about it.
    */
+  /**
+   * What the freight-request subitems said. Quotes that were staged show up as
+   * entries in the therapeutic bucket; this says what was NOT staged and why, since
+   * a quote the screen quietly declined looks exactly like one that never arrived.
+   */
+  function thirdPartyNoteBits(tp) {
+    if (!tp) return [];
+    var out = [];
+    var list = function (a) {
+      return esc((a || []).join(', '));
+    };
+    if (tp.error) {
+      out.push(
+        '<div style="color:' +
+          AMBER +
+          ';">Third-party freight quotes could not be read from the freight requests: ' +
+          esc(tp.error) +
+          '</div>',
+      );
+      return out;
+    }
+    var staged = tp.staged || [];
+    if (staged.length) {
+      out.push(
+        '<div class="muted">Freight-request quotes read from monday for ' +
+          staged.length +
+          ' item' +
+          (staged.length === 1 ? '' : 's') +
+          ' — see Therapeutic below.</div>',
+      );
+    }
+    if ((tp.pending || []).length)
+      out.push('<div class="muted">Still waiting on the vendor: ' + list(tp.pending) + '.</div>');
+    if ((tp.withdrawn || []).length)
+      out.push(
+        '<div style="color:' +
+          AMBER +
+          ';">The board no longer quotes ' +
+          list(tp.withdrawn) +
+          ', so ' +
+          (tp.withdrawn.length === 1
+            ? 'the amount staged for it was'
+            : 'the amounts staged for them were') +
+          ' withdrawn.</div>',
+      );
+    (tp.differs || []).forEach(function (x) {
+      out.push(
+        '<div style="color:' +
+          AMBER +
+          ';"><b>' +
+          esc(x.sku) +
+          ':</b> the freight request quotes ' +
+          money(x.boardMinor) +
+          ', but the proposal already carries ' +
+          money(x.onProposalMinor) +
+          ' of freight on it. Nothing was changed — enter the difference by hand if the quote is right.</div>',
+      );
+    });
+    (tp.conflicts || []).forEach(function (x) {
+      out.push(
+        '<div style="color:' +
+          RED +
+          ';"><b>' +
+          esc(x.sku) +
+          ' freight disagrees with the board.</b> The freight request now says ' +
+          money(x.boardMinor) +
+          '; ' +
+          money(x.recordedMinor) +
+          ' is already ' +
+          (x.status === 'PUSHED' ? 'on the customer’s invoice' : 'on the proposal') +
+          '. Nothing was changed.</div>',
+      );
+    });
+    if ((tp.notOnProposal || []).length)
+      out.push(
+        '<div class="muted">Quoted on monday but no longer on this version: ' +
+          list(tp.notOnProposal) +
+          '.</div>',
+      );
+    return out;
+  }
+
   function mondayNoteHtml(s) {
     var m = s.monday;
     if (!m) return '';
@@ -822,6 +904,7 @@
           'Nothing was changed. If the board is right, bill the difference as a new amount.</div>',
       );
     });
+    bits = bits.concat(thirdPartyNoteBits(m.thirdParty));
     if (!bits.length) return '';
     return (
       '<div style="margin-top:12px;background:' +
@@ -1071,7 +1154,11 @@
           // is what it used to mean and no longer does — a board-read amount is the
           // board's whole figure and replaces what is there. Said outright, because a
           // reader cannot infer it and guessing wrong doubles a signed total.
-          if (e.status === 'STAGED' && (e.source === 'MONDAY' || e.absolute)) {
+          if (e.status === 'STAGED' && e.scope === 'LINES' && e.source === 'MONDAY') {
+            // A freight-request quote. Staged only onto items carrying no freight, so
+            // it neither replaces nor adds to anything — it fills those items.
+            evidence.push('from the freight request on monday');
+          } else if (e.status === 'STAGED' && (e.source === 'MONDAY' || e.absolute)) {
             var onProp = c.onProposalMinor || 0;
             if (onProp && onProp !== e.amountMinor) {
               evidence.push('replaces the ' + money(onProp) + ' on the proposal');
