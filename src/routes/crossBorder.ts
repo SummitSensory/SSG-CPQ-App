@@ -24,6 +24,7 @@ import {
   SUBTEXT_SIZE_MIN,
   SUBTEXT_SIZE_MAX,
 } from '../crossborder/sectionC.js';
+import { normalizeSectionBItems } from '../crossborder/sectionB.js';
 
 /**
  * Cross-border (Canadian proposal) routes.
@@ -72,6 +73,18 @@ const SectionCItemSchema = z
     message: 'A row bound to a fact needs to say which one.',
     path: ['boundField'],
   });
+
+/**
+ * One Section B item — see src/crossborder/sectionB.ts. Simpler than a Section C
+ * row: no BOUND/TEXT split, since every Section B item is free text.
+ */
+const SectionBItemSchema = z.object({
+  id: z.string().trim().min(1).max(60),
+  label: z.string().trim().min(1).max(120),
+  text: z.string().trim().max(4000).nullable().optional(),
+  order: z.number().int().min(0).max(9999),
+  sizePt: z.number().min(SUBTEXT_SIZE_MIN).max(SUBTEXT_SIZE_MAX).optional(),
+});
 
 const CustomsPatchSchema = z.object({
   currency: Currency.optional(),
@@ -128,14 +141,12 @@ const CustomsPatchSchema = z.object({
   acceptanceTextOverride: z.string().trim().max(4000).nullable().optional(),
   /** Per-proposal replacement for CrossBorderSetting.defaultAuditLanguageText. */
   auditLanguageOverride: z.string().trim().max(4000).nullable().optional(),
-  /** Per-proposal replacement for CrossBorderSetting.defaultSectionBSubtext. */
-  sectionBSubtextOverride: z.string().trim().max(2000).nullable().optional(),
-  sectionBSubtextSizePtOverride: z
-    .number()
-    .min(SUBTEXT_SIZE_MIN)
-    .max(SUBTEXT_SIZE_MAX)
-    .nullable()
-    .optional(),
+  /**
+   * This proposal's own Section B item list, once customized. `null` explicitly
+   * reverts to following the live admin template; an empty array is a deliberate
+   * "show no Section B notes on this proposal" — same rule as sectionCItems.
+   */
+  sectionBItems: z.array(SectionBItemSchema).max(100).nullable().optional(),
   /**
    * Percent entry. The rates arrive as decimal percentages ("13", "9.975") and are
    * stored as thousandths of a percent, so the arithmetic downstream is integer only —
@@ -249,14 +260,11 @@ const SettingsSchema = z.object({
   defaultAcceptanceText: z.string().trim().max(4000).nullable().optional(),
   /** Org-wide default text for the tariff/duty-audit clause. Same blank rule. */
   defaultAuditLanguageText: z.string().trim().max(4000).nullable().optional(),
-  /** Org-wide default clarifying text printed under Section B. Same blank rule. */
-  defaultSectionBSubtext: z.string().trim().max(2000).nullable().optional(),
-  defaultSectionBSubtextSizePt: z
-    .number()
-    .min(SUBTEXT_SIZE_MIN)
-    .max(SUBTEXT_SIZE_MAX)
-    .nullable()
-    .optional(),
+  /**
+   * The admin-managed, ordered Section B row template — see sectionB.ts. Read live by
+   * every proposal that has not set its own ProposalCustomsEntry.sectionBItems.
+   */
+  sectionBTemplate: z.array(SectionBItemSchema).max(100).nullable().optional(),
   /**
    * Whether a Canadian proposal must have a complete Section A description and Section
    * C before it can be released — see the field's comment on CrossBorderSetting.
@@ -786,7 +794,7 @@ export function registerCrossBorderRoutes(app: FastifyInstance): void {
     // A nullable Json column needs Prisma's DbNull sentinel to clear it to SQL NULL —
     // a plain JS `null` spread into `create`/`update` is ambiguous between "set to
     // NULL" and "set to the JSON value null" and Prisma refuses it.
-    const { sectionCTemplate, ...restPatch } = patch;
+    const { sectionCTemplate, sectionBTemplate, ...restPatch } = patch;
     const sectionCTemplateData =
       sectionCTemplate === undefined
         ? {}
@@ -797,6 +805,16 @@ export function registerCrossBorderRoutes(app: FastifyInstance): void {
                 sectionCTemplate,
               ) as unknown as Prisma.InputJsonValue,
             };
+    const sectionBTemplateData =
+      sectionBTemplate === undefined
+        ? {}
+        : sectionBTemplate === null
+          ? { sectionBTemplate: Prisma.DbNull }
+          : {
+              sectionBTemplate: normalizeSectionBItems(
+                sectionBTemplate,
+              ) as unknown as Prisma.InputJsonValue,
+            };
 
     const updated = await prisma.crossBorderSetting.upsert({
       where: { id: 'singleton' },
@@ -804,9 +822,15 @@ export function registerCrossBorderRoutes(app: FastifyInstance): void {
         id: 'singleton',
         ...restPatch,
         ...sectionCTemplateData,
+        ...sectionBTemplateData,
         updatedById: req.user!.sub,
       },
-      update: { ...restPatch, ...sectionCTemplateData, updatedById: req.user!.sub },
+      update: {
+        ...restPatch,
+        ...sectionCTemplateData,
+        ...sectionBTemplateData,
+        updatedById: req.user!.sub,
+      },
     });
 
     await recordAudit({

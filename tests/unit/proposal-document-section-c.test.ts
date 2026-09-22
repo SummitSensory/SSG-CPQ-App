@@ -36,8 +36,7 @@ interface CrossBorder {
   sectionCItems?: Array<Record<string, unknown>>;
   acceptanceText?: string | null;
   auditLanguageText?: string | null;
-  sectionBSubtext?: string | null;
-  sectionBSubtextSizePt?: number | null;
+  sectionBItems?: Array<Record<string, unknown>>;
 }
 
 interface Doc {
@@ -292,7 +291,7 @@ describe('proposal document — Acceptance-page text and the tariff-audit clause
   });
 });
 
-describe('proposal document — Section B and Section C subtext', () => {
+describe('proposal document — Section C row subtext', () => {
   it('prints nothing under a Section C row when it has no subtext', () => {
     const html = SSGProposalDocument.html(
       canadianDoc({
@@ -346,30 +345,64 @@ describe('proposal document — Section B and Section C subtext', () => {
     );
     expect(html).toContain('font-size:12px;color:#5c6157;line-height:1.5;');
   });
+});
 
-  it('prints nothing for Section B subtext when unset', () => {
-    const html = SSGProposalDocument.html(canadianDoc({ sectionBSubtext: null }));
-    // Checks the subtext block's own stable marker, not its inline CSS — a cosmetic
-    // style change to cbSubtextHtml must not make this negative assertion vacuous.
-    expect(html).not.toContain('data-role="cb-subtext"');
+describe('proposal document — Section B items', () => {
+  it('prints nothing when there are no Section B items at all', () => {
+    const html = SSGProposalDocument.html(canadianDoc({ sectionBItems: [] }));
+    // Checks the item block's own stable marker, not fixture text or inline CSS —
+    // a cosmetic style change, or another section's fixture text ever coinciding
+    // with this test's copy, must not make this negative assertion vacuous.
+    expect(html).not.toContain('data-role="cb-section-b-item"');
   });
 
-  it('prints the resolved Section B subtext at its resolved size', () => {
+  it('skips an item whose text is blank, even if it has a label', () => {
     const html = SSGProposalDocument.html(
       canadianDoc({
-        sectionBSubtext: 'Freight excludes appointment delivery.',
-        sectionBSubtextSizePt: 8,
+        sectionBItems: [
+          { id: '1', label: 'Empty note', text: '  ', order: 0 },
+          { id: '2', label: 'Real note', text: 'Freight excludes appointment delivery.', order: 1 },
+        ],
       }),
     );
-    expect(html).toContain('font-size:8px;color:#5c6157;line-height:1.5;');
+    expect(html).not.toContain('Empty Note');
+    expect(html).toContain('Real Note');
     expect(html).toContain('Freight excludes appointment delivery.');
   });
 
-  it('never renders Section B subtext on a domestic proposal', () => {
+  it('renders items in order, each with its own title-cased label and sized body', () => {
+    const html = SSGProposalDocument.html(
+      canadianDoc({
+        sectionBItems: [
+          { id: '1', label: 'first note', text: 'Comes first.', order: 0, sizePt: 8 },
+          { id: '2', label: 'second note', text: 'Comes **second**.', order: 1, sizePt: 11 },
+        ],
+      }),
+    );
+    const firstLabelIdx = html.indexOf('First Note');
+    const secondLabelIdx = html.indexOf('Second Note');
+    expect(firstLabelIdx).toBeGreaterThan(-1);
+    expect(secondLabelIdx).toBeGreaterThan(firstLabelIdx);
+    expect(html).toContain('font-size:8px;color:#5c6157;line-height:1.5;');
+    expect(html).toContain('font-size:11px;color:#5c6157;line-height:1.5;');
+    // rt() is mocked as identity in this harness — asserts the raw markup is routed
+    // through it, not that rt() itself renders bold.
+    expect(html).toContain('Comes **second**.');
+  });
+
+  it('clamps an out-of-range size to 12pt', () => {
+    const html = SSGProposalDocument.html(
+      canadianDoc({
+        sectionBItems: [{ id: '1', label: 'Note', text: 'Oversized.', order: 0, sizePt: 40 }],
+      }),
+    );
+    expect(html).toContain('font-size:12px;color:#5c6157;line-height:1.5;');
+  });
+
+  it('never renders Section B items on a domestic proposal', () => {
     const html = SSGProposalDocument.html(domesticDoc());
-    // Checks the subtext block's own stable marker, not its inline CSS — a cosmetic
-    // style change to cbSubtextHtml must not make this negative assertion vacuous.
-    expect(html).not.toContain('data-role="cb-subtext"');
+    // Checks the item block's own stable marker, not fixture text or inline CSS.
+    expect(html).not.toContain('data-role="cb-section-b-item"');
   });
 });
 

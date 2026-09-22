@@ -34,12 +34,8 @@ import type {
   TaxResponsibility,
 } from './tax.js';
 import type { ProvinceCode } from '../lib/country.js';
-import {
-  resolveSectionCItems,
-  clampSubtextSizePt,
-  SUBTEXT_SIZE_DEFAULT,
-  type SectionCItem,
-} from './sectionC.js';
+import { resolveSectionCItems, type SectionCItem } from './sectionC.js';
+import { resolveSectionBItems, type SectionBItem } from './sectionB.js';
 
 /**
  * Section A's functional-description sentence lives on the first GROUP line's
@@ -129,31 +125,6 @@ export function computeContentBlockers(input: {
   return blockers;
 }
 
-/**
- * Resolves a default-plus-per-proposal-override text block AND its font size from
- * the SAME tier together — override-text with override-size, or default-text with
- * default-size, never a mix. A pure function so it's unit-testable without a
- * database, and so this rule (override-text cleared back to null must not leave a
- * stale per-proposal size paired with the org's live default text) can never quietly
- * regress by being reimplemented ad hoc at a second call site. Used today for
- * Section B subtext; the acceptance/audit text fields don't have a size to keep in
- * sync, so they resolve with a plain `??` instead.
- */
-export function resolveTieredSubtext(input: {
-  overrideText: string | null;
-  overrideSizePt: number | null;
-  defaultText: string | null;
-  defaultSizePt: number | null;
-}): { text: string | null; sizePt: number | null } {
-  const usesOverride = input.overrideText != null;
-  const text = usesOverride ? input.overrideText : input.defaultText;
-  const sizePt = text
-    ? (clampSubtextSizePt(usesOverride ? input.overrideSizePt : input.defaultSizePt) ??
-      SUBTEXT_SIZE_DEFAULT)
-    : null;
-  return { text, sizePt };
-}
-
 /** YYYY-MM-DD from a DATE column, in UTC. Rate and rule dates are calendar dates. */
 const isoDate = (d: Date): string => d.toISOString().slice(0, 10);
 
@@ -217,11 +188,13 @@ export interface CrossBorderState {
   acceptanceText: string | null;
   /** Resolved tariff/duty-audit clause text — same override-then-live-default rule. */
   auditLanguageText: string | null;
-  /** Resolved Section B clarifying text — same override-then-live-default rule. */
-  sectionBSubtext: string | null;
-  /** Font size (points) for sectionBSubtext when it's set; null when there's no
-   *  subtext to size. */
-  sectionBSubtextSizePt: number | null;
+  /**
+   * This proposal's Section B ("Delivery and Post-Importation Services") clarifying
+   * notes, already resolved and order-sorted — the proposal's own customized list if
+   * it has one, otherwise the live admin template. Same shape/resolution rule as
+   * sectionCItems, minus the BOUND-row concept. See sectionB.ts.
+   */
+  sectionBItems: SectionBItem[];
   fx: {
     pair: string;
     rate: string | null;
@@ -327,8 +300,7 @@ export async function crossBorderStateFor(versionId: string): Promise<CrossBorde
       sectionCItems: [],
       acceptanceText: null,
       auditLanguageText: null,
-      sectionBSubtext: null,
-      sectionBSubtextSizePt: null,
+      sectionBItems: [],
       fx: emptyFx,
       result: null,
       blockers: [],
@@ -344,15 +316,9 @@ export async function crossBorderStateFor(versionId: string): Promise<CrossBorde
   const tariff9979Claimed = customsRow?.tariff9979Claimed ?? null;
   const gstHstTreatment = customsRow?.gstHstTreatment ?? null;
   const hostSystemModel = customsRow?.hostSystemModel ?? null;
-  // Section C / acceptance / audit text resolution is shared across every
-  // `applicable: true` return below, same reasoning as the block above: computed
-  // once here rather than repeated at each return point.
-  const sectionBSubtext = resolveTieredSubtext({
-    overrideText: customsRow?.sectionBSubtextOverride ?? null,
-    overrideSizePt: customsRow?.sectionBSubtextSizePtOverride ?? null,
-    defaultText: settings?.defaultSectionBSubtext ?? null,
-    defaultSizePt: settings?.defaultSectionBSubtextSizePt ?? null,
-  });
+  // Section C / Section B / acceptance / audit text resolution is shared across
+  // every `applicable: true` return below, same reasoning as the block above:
+  // computed once here rather than repeated at each return point.
   const sectionCFields = {
     importerOfRecord: customsRow?.importerOfRecord ?? null,
     customsBrokerName: customsRow?.customsBrokerName ?? null,
@@ -362,8 +328,7 @@ export async function crossBorderStateFor(versionId: string): Promise<CrossBorde
     acceptanceText: customsRow?.acceptanceTextOverride ?? settings?.defaultAcceptanceText ?? null,
     auditLanguageText:
       customsRow?.auditLanguageOverride ?? settings?.defaultAuditLanguageText ?? null,
-    sectionBSubtext: sectionBSubtext.text,
-    sectionBSubtextSizePt: sectionBSubtext.sizePt,
+    sectionBItems: resolveSectionBItems(customsRow?.sectionBItems, settings?.sectionBTemplate),
   };
 
   // Whether a Canadian proposal must have a real answer everywhere it claims one —

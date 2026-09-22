@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeContentBlockers, resolveTieredSubtext } from '../../src/crossborder/snapshot.js';
+import { computeContentBlockers } from '../../src/crossborder/snapshot.js';
 import type { SectionCItem } from '../../src/crossborder/sectionC.js';
 
 /**
@@ -152,60 +152,5 @@ describe('computeContentBlockers', () => {
       'content:section_c_tariff9979Claimed_missing',
       'content:section_c_text_missing',
     ]);
-  });
-});
-
-describe('resolveTieredSubtext', () => {
-  it('resolves override text with override size, never mixed with the org default', () => {
-    const out = resolveTieredSubtext({
-      overrideText: 'Per-proposal note',
-      overrideSizePt: 11,
-      defaultText: 'Org default note',
-      defaultSizePt: 8,
-    });
-    expect(out).toEqual({ text: 'Per-proposal note', sizePt: 11 });
-  });
-
-  it('resolves default text with default size when there is no override', () => {
-    const out = resolveTieredSubtext({
-      overrideText: null,
-      overrideSizePt: null,
-      defaultText: 'Org default note',
-      defaultSizePt: 8,
-    });
-    expect(out).toEqual({ text: 'Org default note', sizePt: 8 });
-  });
-
-  it('never pairs a cleared override text with a stale per-proposal override size — the bug this function exists to prevent', () => {
-    // A proposal set a custom size, then cleared just the text back to null (still
-    // following the admin default). The resolved size must come from the SAME tier
-    // as the resolved text — the org's default size, not the stale 11pt leftover.
-    const out = resolveTieredSubtext({
-      overrideText: null,
-      overrideSizePt: 11,
-      defaultText: 'Org default note',
-      defaultSizePt: 8,
-    });
-    expect(out).toEqual({ text: 'Org default note', sizePt: 8 });
-  });
-
-  it('falls back to SUBTEXT_SIZE_DEFAULT when the resolved tier has text but no size', () => {
-    const out = resolveTieredSubtext({
-      overrideText: 'Per-proposal note',
-      overrideSizePt: null,
-      defaultText: null,
-      defaultSizePt: null,
-    });
-    expect(out).toEqual({ text: 'Per-proposal note', sizePt: 9 });
-  });
-
-  it('returns a null size when there is no text at all', () => {
-    const out = resolveTieredSubtext({
-      overrideText: null,
-      overrideSizePt: null,
-      defaultText: null,
-      defaultSizePt: null,
-    });
-    expect(out).toEqual({ text: null, sizePt: null });
   });
 });
