@@ -187,23 +187,23 @@
     }
   }
 
-  function bbVendorSelect(part, current) {
+  function bbVendorSelect(part, current, admin) {
     var opts = '<option value="">Not free issue — bought and billed normally</option>' +
       bbState.vendors.map(function (v) {
         return '<option value="' + esc(v.name) + '"' + (v.name === current ? ' selected' : '') + '>' + esc(v.name) + '</option>';
       }).join('');
-    return '<select class="bbFree" data-part="' + esc(part) + '" style="' + bomFieldStyle('280px') + '">' + opts + '</select>';
+    return '<select class="bbFree" data-part="' + esc(part) + '"' + (admin ? '' : ' disabled') + ' style="' + bomFieldStyle('280px') + '">' + opts + '</select>';
   }
 
   // Also appears on vendor — a SECOND line, in addition to the part's own, on a
   // second vendor's sheet (e.g. sent out for powder coating). Unlike free issue
   // above, this never moves the original line.
-  function bbSecondaryVendorSelect(part, current) {
+  function bbSecondaryVendorSelect(part, current, admin) {
     var opts = '<option value="">Does not also go to a second vendor</option>' +
       bbState.vendors.map(function (v) {
         return '<option value="' + esc(v.name) + '"' + (v.name === current ? ' selected' : '') + '>' + esc(v.name) + '</option>';
       }).join('');
-    return '<select class="bbSecondary" data-part="' + esc(part) + '" style="' + bomFieldStyle('280px') + '">' + opts + '</select>';
+    return '<select class="bbSecondary" data-part="' + esc(part) + '"' + (admin ? '' : ' disabled') + ' style="' + bomFieldStyle('280px') + '">' + opts + '</select>';
   }
 
   function drawBomBuild(user) {
@@ -247,7 +247,11 @@
             '</div>' +
             '<div class="muted" style="font-size:12.5px;margin-top:3px;">' + esc(p.name || 'Not in the SKU master') + '</div>' +
           '</div>' +
-          '<div class="muted" style="font-size:12px;">' + ((p.components || []).length || 'No') + ' component' + ((p.components || []).length === 1 ? '' : 's') + '</div>' +
+          '<div style="display:flex;gap:12px;align-items:center;">' +
+            '<div class="muted" style="font-size:12px;">' + ((p.components || []).length || 'No') + ' component' + ((p.components || []).length === 1 ? '' : 's') +
+              (admin ? ' · changes save as you make them' : '') + '</div>' +
+            (admin ? '<button class="bbDelRule link-btn" data-part="' + esc(p.parentPart) + '" title="Remove every component and setting on this part" style="width:auto;padding:5px 11px;font-size:12px;color:#a2402f;">Delete rule</button>' : '') +
+          '</div>' +
         '</div>' +
         '<div style="padding:14px 18px;">' +
           '<div style="overflow:auto;">' +
@@ -263,15 +267,15 @@
               '</div>'
             : '') +
           '<div style="display:flex;gap:18px;align-items:flex-end;margin-top:14px;padding-top:14px;border-top:1px solid #f2f3ef;flex-wrap:wrap;">' +
-            '<div><div class="k">Shipped to (free issue)</div>' + bbVendorSelect(p.parentPart, p.freeIssueVendor || '') +
+            '<div><div class="k">Shipped to (free issue)</div>' + bbVendorSelect(p.parentPart, p.freeIssueVendor || '', admin) +
               '<div class="muted" style="font-size:11px;margin-top:4px;max-width:300px;line-height:1.45;">Prints on that vendor’s sheet with no cost and stays out of their total.</div></div>' +
             '<label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#5c6157;cursor:pointer;padding-bottom:20px;">' +
               '<input type="checkbox" class="bbKeep" data-part="' + esc(p.parentPart) + '"' + (p.keepParentOnBom ? ' checked' : '') + (admin ? '' : ' disabled') + '> Keep the parent line on the sheet beside its components</label>' +
           '</div>' +
           '<div style="display:flex;gap:18px;align-items:flex-end;margin-top:14px;padding-top:14px;border-top:1px solid #f2f3ef;flex-wrap:wrap;">' +
-            '<div><div class="k">Also appears on vendor</div>' + bbSecondaryVendorSelect(p.parentPart, p.secondaryVendor || '') +
+            '<div><div class="k">Also appears on vendor</div>' + bbSecondaryVendorSelect(p.parentPart, p.secondaryVendor || '', admin) +
               '<div class="muted" style="font-size:11px;margin-top:4px;max-width:300px;line-height:1.45;">Bought from its own vendor above, and ALSO gets its own line on this vendor’s sheet — e.g. sent out for powder coating. The part number they see comes from Manufacturers → Parts for this vendor, if one is on file.</div></div>' +
-            '<div><div class="k">What they charge, per unit</div><input class="bbSecondaryCost" data-part="' + esc(p.parentPart) + '" type="number" min="0" step="0.01" value="' + (p.secondaryVendorCostMinor == null ? '' : (Number(p.secondaryVendorCostMinor) / 100).toFixed(2)) + '" placeholder="0.00" style="' + bomFieldStyle('120px') + '"></div>' +
+            '<div><div class="k">What they charge, per unit</div><input class="bbSecondaryCost" data-part="' + esc(p.parentPart) + '"' + (admin ? '' : ' disabled') + ' type="number" min="0" step="0.01" value="' + (p.secondaryVendorCostMinor == null ? '' : (Number(p.secondaryVendorCostMinor) / 100).toFixed(2)) + '" placeholder="0.00" style="' + bomFieldStyle('120px') + '"></div>' +
           '</div>' +
         '</div>' +
       '</div>';
@@ -326,6 +330,30 @@
         b.disabled = true;
         var r = await authed('/bom-build/components/' + b.getAttribute('data-id'), { method: 'DELETE' });
         if (!r.ok) { b.disabled = false; return; }
+        loadBomBuild(user);
+      });
+    });
+
+    box.querySelectorAll('.bbDelRule').forEach(function (b) {
+      b.addEventListener('click', async function () {
+        var part = b.getAttribute('data-part');
+        // A draft card holds nothing on the server yet; closing it is all there is to do.
+        if (!bbState.parents.some(function (p) { return p.parentPart === part; })) {
+          bbState.draft = bbState.draft.filter(function (d) { return d.parentPart !== part; });
+          drawBomBuild(user);
+          return;
+        }
+        if (!confirm('Delete the BOM build rule for ' + part + '?\n\nIts components, free-issue vendor and second-vendor settings are all removed. The part itself stays in the catalog.\n\nOrders locked from now on are affected. An order that is already locked keeps the Bill of Materials it has.')) return;
+        b.disabled = true;
+        var r = await authed('/bom-build/rules/' + encodeURIComponent(part), { method: 'DELETE' });
+        if (!r.ok) {
+          b.disabled = false;
+          var m = '';
+          try { m = ((await r.json()) || {}).message || ''; } catch (e) {}
+          alert(m || 'Could not delete that rule (' + r.status + ').');
+          return;
+        }
+        bbState.draft = bbState.draft.filter(function (d) { return d.parentPart !== part; });
         loadBomBuild(user);
       });
     });

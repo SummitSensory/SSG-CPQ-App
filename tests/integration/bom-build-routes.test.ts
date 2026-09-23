@@ -23,6 +23,7 @@ const SKUS = new Map<string, Record<string, unknown>>([
     },
   ],
 ]);
+const COMPONENTS: Array<{ parentPart: string; childPart: string }> = [];
 const MANUFACTURERS = new Set(['Goldberg Brothers', 'Amazon']);
 
 vi.mock('../../src/lib/prisma.js', () => ({
@@ -39,6 +40,19 @@ vi.mock('../../src/lib/prisma.js', () => ({
         [...SKUS.values()].filter(
           (s) => s.secondaryVendor || s.freeIssueVendor || s.keepParentOnBom,
         ),
+      updateMany: async ({
+        where,
+        data,
+      }: {
+        where: { part: { equals: string } };
+        data: Record<string, unknown>;
+      }) => {
+        const key = where.part.equals.toUpperCase();
+        const current = SKUS.get(key);
+        if (!current) return { count: 0 };
+        SKUS.set(key, { ...current, ...data });
+        return { count: 1 };
+      },
       update: async ({
         where,
         data,
@@ -52,7 +66,17 @@ vi.mock('../../src/lib/prisma.js', () => ({
         return next;
       },
     },
-    skuComponent: { findMany: async () => [] },
+    skuComponent: {
+      findMany: async () => [],
+      deleteMany: async ({ where }: { where: { parentPart: { equals: string } } }) => {
+        const before = COMPONENTS.length;
+        for (let i = COMPONENTS.length - 1; i >= 0; i--)
+          if (COMPONENTS[i]!.parentPart.toUpperCase() === where.parentPart.equals.toUpperCase())
+            COMPONENTS.splice(i, 1);
+        return { count: before - COMPONENTS.length };
+      },
+    },
+    $transaction: async (ops: Promise<unknown>[]) => Promise.all(ops),
     manufacturer: {
       findFirst: async ({ where }: { where: { name: string } }) =>
         MANUFACTURERS.has(where.name) ? { id: 'm-' + where.name, name: where.name } : null,
@@ -167,6 +191,52 @@ describe('PATCH /bom-build/settings/:part — secondary vendor round-trip', () =
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().secondaryVendor).toBeNull();
+    await app.close();
+  });
+});
+
+describe('DELETE /bom-build/rules/:part', () => {
+  it('removes every component and clears every setting, leaving the Sku itself', async () => {
+    const app = await makeApp();
+    const admin = { authorization: 'Bearer ' + (await tokenFor('SYSTEM_ADMIN')) };
+    COMPONENTS.push(
+      { parentPart: 'ABC', childPart: 'KID-1' },
+      { parentPart: 'ABC', childPart: 'KID-2' },
+      { parentPart: 'OTHER', childPart: 'KID-1' },
+    );
+    await app.inject({
+      method: 'PATCH',
+      url: '/bom-build/settings/ABC',
+      headers: admin,
+      payload: {
+        freeIssueVendor: 'Goldberg Brothers',
+        keepParentOnBom: true,
+        secondaryVendor: 'Amazon',
+        secondaryVendorCostMinor: 500,
+      },
+    });
+    const res = await app.inject({ method: 'DELETE', url: '/bom-build/rules/abc', headers: admin });
+    expect(res.statusCode).toBe(204);
+    expect(COMPONENTS).toEqual([{ parentPart: 'OTHER', childPart: 'KID-1' }]);
+    expect(SKUS.get('ABC')).toMatchObject({
+      part: 'ABC',
+      description: 'Product A',
+      keepParentOnBom: false,
+      freeIssueVendor: null,
+      secondaryVendor: null,
+      secondaryVendorCostMinor: null,
+    });
+    await app.close();
+  });
+
+  it('rejects a non-admin (SALES_REP) with 403', async () => {
+    const app = await makeApp();
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/bom-build/rules/ABC',
+      headers: { authorization: 'Bearer ' + (await tokenFor('SALES_REP')) },
+    });
+    expect(res.statusCode).toBe(403);
     await app.close();
   });
 });

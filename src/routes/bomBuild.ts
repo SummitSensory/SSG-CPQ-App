@@ -412,6 +412,44 @@ export function registerBomBuildRoutes(app: FastifyInstance): void {
   });
 
   /**
+   * Delete a part's whole rule: every component row under it, and the free-issue,
+   * keep-parent and also-appears-on-vendor settings on its Sku. The Sku itself — its
+   * price, cost, vendor — is catalog data and is left alone.
+   *
+   * Like every rule change, this affects orders locked from now on. An order already
+   * locked keeps the lines the rule already produced; re-applying the rules to it does
+   * not undo them.
+   */
+  app.delete('/bom-build/rules/:part', admin, async (req, reply) => {
+    const part = String((req.params as { part: string }).part || '')
+      .trim()
+      .toUpperCase();
+    if (!part) throw new ValidationError('Part number required');
+    const [removed, cleared] = await prisma.$transaction([
+      prisma.skuComponent.deleteMany({
+        where: { parentPart: { equals: part, mode: 'insensitive' } },
+      }),
+      prisma.sku.updateMany({
+        where: { part: { equals: part, mode: 'insensitive' } },
+        data: {
+          keepParentOnBom: false,
+          freeIssueVendor: null,
+          secondaryVendor: null,
+          secondaryVendorCostMinor: null,
+        },
+      }),
+    ]);
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'bomBuild.rule.delete',
+      entity: 'Sku',
+      entityId: part,
+      details: { componentsRemoved: removed.count, settingsCleared: cleared.count > 0 },
+    });
+    reply.code(204);
+  });
+
+  /**
    * Re-apply the rules to an order that is already locked, so a kit declared today
    * reaches an order locked last week. Idempotent; leaves the proposal alone.
    */
