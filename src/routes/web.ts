@@ -77,6 +77,8 @@ const CLIENT_SCRIPTS = [
   'freight-trueup.js',
   'tips-and-tricks.js',
   'portal-delivery.js',
+  // Administration → Orders → Portal colour areas: which parts each portal colour area paints.
+  'portal-color-areas.js',
   'vendor-colors.js',
   'cross-border.js',
   'intro-admin.js',

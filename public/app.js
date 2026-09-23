@@ -14965,7 +14965,11 @@
         admAcc('ordersFreightBanner', 'Freight alert banner',
           'The bar that appears above every screen when an invoice is short of freight. It is the most-seen thing in the application, so its colours are yours to set: pick a preset or two exact colours per state. The preview is live.',
           '',
-          '<div id="ftuBannerAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>')) +
+          '<div id="ftuBannerAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+        admAcc('ordersPortalColors', 'Portal colour areas',
+          'The customer portal asks for colours by area (the legs, the slide, the zip-line mat); the Bill of Materials holds a colour per part. Map each area to the catalog parts it paints, and marking an order&rsquo;s colour step reviewed writes the customer&rsquo;s picks onto those parts &mdash; except on a vendor sheet already submitted. Areas appear here the first time a customer answers them; one flagged <b>Unmapped</b> is listed on every review until it is mapped.',
+          '',
+          '<div id="portalColorAreasAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>')) +
 
       // cross-border.js appends #crossBorderPanel to #view when it cannot find it.
       // Giving it a home inside this tab is what keeps it from landing at the foot of
@@ -14978,6 +14982,8 @@
     wireAdmAccordions();
 
     if (window.FreightTrueUp) window.FreightTrueUp.mountAdmin('ftuBannerAdmin', user);
+    // Portal colour areas: its own file (public/portal-color-areas.js); the route enforces PRODUCTS_ADMIN.
+    if (window.SSGPortalColorAreas) window.SSGPortalColorAreas.render(document.getElementById('portalColorAreasAdmin'), { authed: authed });
     if (window.SSGIntroAdmin) window.SSGIntroAdmin.mountAdmin('introAdmin');
     if (window.SSGTips) window.SSGTips.mountAdmin('tipsGuideAdmin', user);
     document.getElementById('admNew').addEventListener('click', openUserForm);
