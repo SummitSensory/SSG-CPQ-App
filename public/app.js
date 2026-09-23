@@ -11458,6 +11458,22 @@
   }
 
   /**
+   * Dates on the Bill of Materials print MM/DD/YYYY — the same rule as usDate and
+   * usDatesInText in src/handoff/bomDelivery.ts. bomUsDate takes a bare YYYY-MM-DD;
+   * bomUsDatesInText rewrites every one inside free text, such as the portal's
+   * "Schedule delivery on or after 2026-11-06".
+   */
+  function bomUsDate(iso) {
+    var v = String(iso == null ? '' : iso).trim();
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+    return m ? m[2] + '/' + m[3] + '/' + m[1] : v;
+  }
+  function bomUsDatesInText(text) {
+    // A real date standing on its own only — see usDatesInText for why.
+    return String(text == null ? '' : text).trim().replace(/(^|[^\w-])(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])(?![\w-])/g, '$1$3/$4/$2');
+  }
+
+  /**
    * The rows of the sheet's delivery block, shared by the on-screen card and the
    * browser print: [label, primary, secondary] for the points of contact, then
    * [label, value] for instructions, preferred date and timing. Empty answers stay
@@ -11476,8 +11492,8 @@
       ],
       details: [
         ['Special Delivery Instructions', dl.specialInstructions || ''],
-        ['Preferred Delivery Date', dl.preferredDeliveryDate || ''],
-        ['Preferred Delivery Timing', dl.deliveryTiming || '']
+        ['Preferred Delivery Date', bomUsDate(dl.preferredDeliveryDate)],
+        ['Preferred Delivery Timing', bomUsDatesInText(dl.deliveryTiming)]
       ]
     };
   }
@@ -12383,7 +12399,7 @@
           '<img src="' + location.origin + '/logo.png" alt="" style="height:52px;width:auto;">' +
           '<div><div style="font-family:Georgia,serif;font-size:20px;font-weight:700;letter-spacing:-.01em;">' + esc(c.name) + '</div>' +
             '<div style="font-size:10.5px;color:#5c6157;line-height:1.45;">' + esc(c.addressLine1) + ' · ' + esc(c.city + ', ' + c.region + ' ' + c.postalCode) +
-            '<br>' + esc(c.phone) + ' · ' + esc(c.email) + '</div></div>' +
+            '<br>' + esc(bomPhoneText(c.phone)) + ' · ' + esc(c.email) + '</div></div>' +
         '</div>' +
         '<div style="text-align:right;">' +
           '<div style="font-family:Georgia,serif;font-size:17px;font-weight:700;">Bill of Materials</div>' +
@@ -12396,14 +12412,20 @@
         block('Ship from (vendor)',
           doc.vendor ? doc.vendor.name : (all ? 'Multiple vendors — see line items' : vendor),
           doc.vendor ? [streetLine(doc.vendor.addressLine1, doc.vendor.addressLine2), [doc.vendor.city, [doc.vendor.region, doc.vendor.postalCode].filter(Boolean).join(' ')].filter(Boolean).join(', ')].filter(Boolean) : [],
-          doc.vendor ? [doc.vendor.contactName, doc.vendor.contactTitle].filter(Boolean).join(', ') : '',
-          doc.vendor ? doc.vendor.contactPhone : '', doc.vendor ? doc.vendor.contactEmail : '') +
-        block('Ship to (' + doc.shipTo.label + ')', doc.shipTo.name, doc.shipTo.lines, doc.shipTo.contactName, doc.shipTo.phone, doc.shipTo.email) +
+          doc.vendor ? doc.vendor.contactName : '', // name only, as the Excel, PDF and CSV print it
+          doc.vendor ? bomPhoneText(doc.vendor.contactPhone) : '', doc.vendor ? doc.vendor.contactEmail : '') +
+        // printLines is the server's own layout of the block (ATTN, street, city, PH),
+        // so this fallback prints exactly what the Excel and the server PDF print.
+        (doc.shipTo.printLines
+          ? block('Ship to (' + doc.shipTo.label + ')', doc.shipTo.name, doc.shipTo.printLines, '', '', '')
+          : block('Ship to (' + doc.shipTo.label + ')', doc.shipTo.name, doc.shipTo.lines, doc.shipTo.contactName, doc.shipTo.phone, doc.shipTo.email)) +
       '</div>' +
       // Fabrication header
       '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px 18px;margin-top:14px;padding:11px 13px;background:#f7f8f4;border:1px solid #e7e8e3;border-radius:8px;">' +
         field('Job', doc.order.jobName) +
-        field('Submission date', dateStr(doc.order.submittedOn)) +
+        // The server resolves this once (section date, else order date, else Summit's
+        // today) so the fallback prints the same date as every other format.
+        field('Submission date', doc.submissionDate || dateStr(doc.order.submittedOn)) +
         field('Delivery Type', doc.delivery && doc.delivery.deliveryType) +
         field('Delivery', doc.order.deliveryType) +
         field('Powder coat brand', doc.order.powderCoatBrand) +

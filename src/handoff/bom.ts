@@ -4,7 +4,7 @@ import { NotFoundError } from '../lib/errors.js';
 import { vendorPartLookup } from './vendorParts.js';
 import { defaultJobName } from './bomSections.js';
 import { isRollupHardwarePart, rollUpBomLines } from './bomRollup.js';
-import { deliveryDetails, type BomDelivery } from './bomDelivery.js';
+import { bomPhone, bomToday, deliveryDetails, usDate, type BomDelivery } from './bomDelivery.js';
 import { latestDeliveryForOrder } from '../integrations/monday/portalDelivery.js';
 
 /**
@@ -107,12 +107,23 @@ export interface BomDocument {
    */
   shipTo: {
     label: string;
+    /** True when the truck goes to the customer's own site (portal-confirmed or not). */
+    customerSite: boolean;
     name: string;
     lines: string[];
     contactName: string;
     phone: string;
     email: string;
+    /**
+     * Every row under the name, exactly as each format prints it: "ATTN: …", the
+     * street, the city line, "PH: (XXX) XXX-XXXX", then the email for any ship-to that
+     * is not the customer's site. Built once here so the Excel, PDF, CSV and the
+     * browser's print fallback cannot lay the block out differently.
+     */
+    printLines: string[];
   };
+  /** The Submission Date row, as printed: MM/DD/YYYY, Summit's today when unset. */
+  submissionDate: string;
   /** Delivery answers and points of contact from the customer portal. See bomDelivery.ts. */
   delivery: BomDelivery;
   vendors: string[];
@@ -175,6 +186,36 @@ export const streetLine = (line1: unknown, line2: unknown): string => {
     /^(ste|suite|apt|apartment|unit|#|bldg|building|fl|floor|rm|room|dept|po box|p\.o\.)/i.test(b);
   return `${a}, ${labelled ? b : `Suite ${b}`}`;
 };
+
+/**
+ * The rows under the ship-to name, as every BOM format prints them (Bryan's template):
+ *
+ *   ATTN: <receiving contact>
+ *   <street, suite>
+ *   <City, ST Zip>
+ *   PH: (XXX) XXX-XXXX
+ *   <email>   — only when the ship-to is NOT the customer's site; the customer's email
+ *               is already in the Point of Contact block.
+ *
+ * No row is dropped when it is blank: an unconfirmed address or an unanswered contact
+ * leaves its row empty, so nothing slides up into the wrong row on a vendor's sheet.
+ */
+export function shipToPrintLines(st: {
+  customerSite: boolean;
+  lines: string[];
+  contactName: string;
+  phone: string;
+  email: string;
+}): string[] {
+  const contact = s(st.contactName).trim();
+  const phone = bomPhone(st.phone).text;
+  return [
+    contact ? `ATTN: ${contact}` : '',
+    ...st.lines,
+    phone ? `PH: ${phone}` : '',
+    ...(st.customerSite || !s(st.email).trim() ? [] : [s(st.email).trim()]),
+  ];
+}
 
 /**
  * Build one BOM. `vendor` is a vendor name, or '*' for every vendor combined.
@@ -434,6 +475,11 @@ export async function buildBom(
     country: s(ship?.country ?? 'USA'),
   };
 
+  // What the customer told the portal. Read here, ahead of the ship-to block, because
+  // the portal's Primary POC is who the truck is addressed to (see customerShipTo).
+  const delivery = deliveryDetails(section, submission);
+  const portalPoc = !!(delivery.primary.name || delivery.primary.phone || delivery.primary.email);
+
   // ---- ship-to block: the customer's site, or Summit's dock ----
   const cityLine = (city: string, region: string, zip: string) =>
     [city, [region, zip].filter(Boolean).join(' ')].filter(Boolean).join(', ');
@@ -446,6 +492,7 @@ export async function buildBom(
   // in the picker, and its POC now prints in the Point of Contact block below.
   const customerShipTo = (address: typeof named) => ({
     label: 'Customer site',
+    customerSite: true,
     name: customer.name,
     // Exactly two rows, kept even when empty. The customer's CRM shipping (or first)
     // address used to be the fallback here, but that is whatever the CRM last held,
@@ -457,21 +504,37 @@ export async function buildBom(
           cityLine(s(address.city), s(address.region), s(address.postalCode)),
         ]
       : ['', ''],
-    contactName: customer.contactName,
-    phone: customer.contactPhone,
-    email: customer.contactEmail,
+    // The portal's Primary POC is the person the customer named to receive this
+    // delivery, so the sheet prints "ATTN:"/"PH:" for them. The CRM's first contact is
+    // whoever signed the deal — only the fallback when the portal was never answered.
+    // All-or-nothing: falling back field by field could print one person's name over
+    // another person's phone number.
+    ...(portalPoc
+      ? {
+          contactName: delivery.primary.name,
+          phone: delivery.primary.phone,
+          email: delivery.primary.email,
+        }
+      : {
+          contactName: customer.contactName,
+          phone: customer.contactPhone,
+          email: customer.contactEmail,
+        }),
   });
-  const shipTo =
+  const shipToBase =
     named?.source === 'PORTAL'
       ? customerShipTo(named)
       : named
         ? {
             label: named.name,
+            customerSite: false,
             name: named.name,
+            // Both rows kept even when one is blank, like the customer site: filtering
+            // them moved "PH:" up into the city row on a vendor's sheet.
             lines: [
               streetLine(named.line1, named.line2),
               cityLine(s(named.city), s(named.region), s(named.postalCode)),
-            ].filter(Boolean),
+            ],
             contactName: s(named.contactName),
             phone: s(named.phone),
             email: s(named.email),
@@ -483,6 +546,7 @@ export async function buildBom(
           (section?.shipTo ?? order.bomShipTo) === 'SUMMIT'
           ? {
               label: 'Summit Sensory Gym',
+              customerSite: false,
               name: COMPANY.name,
               lines: [
                 COMPANY.addressLine1,
@@ -493,6 +557,15 @@ export async function buildBom(
               email: COMPANY.email,
             }
           : customerShipTo(null);
+  const shipTo = { ...shipToBase, printLines: shipToPrintLines(shipToBase) };
+
+  // The Submission Date row: the vendor section's own date once one exists (the
+  // section is the document of record), else the order-level one, else Summit's today
+  // — an unsubmitted sheet is being sent today. Every writer stores a date at midday
+  // (the section editor saves local noon; confirming stamps bomDateStamp, 18:00 UTC),
+  // so its UTC calendar day is the day that was picked.
+  const submittedAt = vendorFilter && section ? section.submittedOn : order.bomSubmittedOn;
+  const submissionDate = usDate(submittedAt ? submittedAt.toISOString().slice(0, 10) : bomToday());
 
   // ---- vendor block (only for a single-vendor BOM) ----
   const mfr = vendorFilter ? mfrByName.get(vendorFilter.toLowerCase()) : undefined;
@@ -560,7 +633,8 @@ export async function buildBom(
     createdAt: new Date().toISOString(),
     customer,
     shipTo,
-    delivery: deliveryDetails(section, submission),
+    submissionDate,
+    delivery,
     vendors,
     vendor,
     lines,

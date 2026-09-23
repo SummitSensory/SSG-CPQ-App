@@ -1,6 +1,6 @@
 import ExcelJS from 'exceljs';
 import { buildBom, streetLine, type BomDocument } from './bom.js';
-import { bomPhone, PHONE_NUMFMT } from './bomDelivery.js';
+import { bomPhone, bomToday, PHONE_NUMFMT, usDate, usDatesInText } from './bomDelivery.js';
 import { prisma } from '../lib/prisma.js';
 
 /**
@@ -23,25 +23,8 @@ const esc = (v: unknown): string =>
 const money = (minor: number): string =>
   `$${(Number(minor || 0) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-const dateOnly = (v: string | null): string => (v ? String(v).slice(0, 10) : '');
-
 /** Excel's built-in Accounting format: $ aligned left, amount aligned right, a bare dash for zero. */
 const ACCOUNTING_FMT = '_($* #,##0.00_);_($* (#,##0.00);_($* "-"??_);_(@_)';
-
-/**
- * Reformats any 10-digit North American phone number found in a string to
- * "(xxx) xxx-xxxx", leaving everything else untouched — including a leading
- * "+1"/"1" country code, which this drops. Applied to whole address/company
- * lines rather than a dedicated phone field, since the model carries an
- * address as flat display lines; the digit-run match is specific enough
- * (exactly 10 digits, bounded so it cannot clip a longer run) that it never
- * touches a street number, an email, or a SKU.
- */
-const formatPhone = (s: string): string =>
-  s.replace(
-    /(?<!\d)(?:\+?1[-.\s]?)?\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})(?!\d)/g,
-    (_m, a: string, b: string, c: string) => `(${a}) ${b}-${c}`,
-  );
 
 /** The questions and answers captured on a vendor's section, if any. */
 async function sectionExtras(orderId: string, vendor: string) {
@@ -184,12 +167,10 @@ async function buildModel(
   // A vendor section is the document of record once one exists; the order-level
   // header is only the default it was seeded from.
   const jobName = extras?.jobName || doc.order.jobName;
-  // An unsubmitted section prints TODAY. It was printing an em dash, which on a
-  // vendor's desk reads as "no date given" — the sheet is being sent today, so
-  // today is the honest answer. Confirming the section is what persists it.
-  const submittedOn =
-    dateOnly(extras ? extras.submittedOn : doc.order.submittedOn) ||
-    new Date().toISOString().slice(0, 10);
+  // The Submission Date is resolved once, in buildBom (doc.submissionDate), so the
+  // browser's print fallback prints the same date as every format built here. An
+  // unsubmitted section prints Summit's TODAY rather than an em dash, which on a
+  // vendor's desk reads as "no date given".
   const deliveryType = extras?.deliveryType || doc.order.deliveryType;
   const shipmentQuote = extras?.shipmentQuote || doc.order.shipmentQuote;
   const notes = extras?.notes || doc.order.notes;
@@ -209,7 +190,7 @@ async function buildModel(
   const d = doc.delivery;
   const meta: Array<{ label: string; value: string; numericValue?: number; numFmt?: string }> = [
     { label: 'Job', value: jobName || '—' },
-    { label: 'Submission Date', value: submittedOn },
+    { label: 'Submission Date', value: doc.submissionDate },
     // The customer's loading-dock answer ("No, I need liftgate delivery"). Kept apart
     // from "Delivery" below, which is the free text a rep types on the section.
     { label: 'Delivery Type', value: d.deliveryType },
@@ -266,8 +247,8 @@ async function buildModel(
   };
   const delivery: BomModel['delivery'] = [
     { label: 'Special Delivery Instructions', value: d.specialInstructions, wide: true },
-    { label: 'Preferred Delivery Date', value: d.preferredDeliveryDate },
-    { label: 'Preferred Delivery Timing', value: d.deliveryTiming },
+    { label: 'Preferred Delivery Date', value: usDate(d.preferredDeliveryDate) },
+    { label: 'Preferred Delivery Timing', value: usDatesInText(d.deliveryTiming) },
   ];
 
   // The powder-colour column is opt-in per vendor. It was on every sheet, where for
@@ -414,7 +395,7 @@ async function buildModel(
       lines: addr(
         c.addressLine1,
         cityLine(c.city, c.region, c.postalCode),
-        [c.phone, c.email].filter(Boolean).join(' · '),
+        [bomPhone(c.phone).text, c.email].filter(Boolean).join(' · '),
       ),
     },
     // Ship from / ship to only. Bill-to was removed: it repeated the ship-to block
@@ -430,21 +411,23 @@ async function buildModel(
               streetLine(v.addressLine1, v.addressLine2),
               cityLine(v.city, v.region, v.postalCode),
               v.contactName,
-              v.contactPhone,
+              bomPhone(v.contactPhone).text,
               v.contactEmail,
             )
           : ['All vendors'],
       },
       {
         title: 'Ship to',
-        // The street and city rows are NOT filtered: when the customer has not
-        // confirmed an address they are blank on purpose (see BomDocument.shipTo),
-        // and closing the gap would push the contact up into the address rows.
-        lines: [
-          ...addr(doc.shipTo.name),
-          ...doc.shipTo.lines,
-          ...addr(doc.shipTo.contactName, doc.shipTo.phone, doc.shipTo.email),
-        ],
+        // Bryan's template: name, "ATTN:" the receiving contact, the street (Address
+        // Line 1 + Line 2), city / state / zip, then "PH:" their phone as (XXX) XXX-XXXX.
+        // No row is filtered out: an unconfirmed address or an unanswered contact
+        // prints blank in its own row, so nothing slides up into the wrong one. The
+        // customer's email is already in the Point of Contact block below, so a
+        // customer-site sheet stops at the phone; any other ship-to keeps its email.
+        // Laid out once, in bom.ts (shipToPrintLines), and shared with the browser's
+        // print fallback, so no two formats can disagree.
+        // The name row is kept even when blank, so ATTN never moves up into row 1.
+        lines: [String(doc.shipTo.name ?? ''), ...doc.shipTo.printLines],
       },
     ],
     meta,
@@ -465,7 +448,7 @@ async function buildModel(
     ]
       .filter(Boolean)
       .join('\n'),
-    footer: `Prepared ${dateOnly(doc.createdAt)}${doc.createdBy ? ` by ${doc.createdBy.name}` : ''} · ${c.name}`,
+    footer: `Prepared ${usDate(bomToday(new Date(doc.createdAt)))}${doc.createdBy ? ` by ${doc.createdBy.name}` : ''} · ${c.name}`,
     doc,
   };
 }
@@ -686,7 +669,10 @@ export async function renderBomXlsx(
   const companyRow = plainRow([m.company.name]);
   bold(companyRow, 1);
   noWrapRow(companyRow);
-  m.company.lines.forEach((l) => noWrapRow(plainRow([formatPhone(l)])));
+  // Phones in these lines are already formatted by bomPhone in the model, exactly as
+  // the PDF and CSV print them. (A regex here used to re-format every 10-digit run a
+  // second time, so the Excel alone rewrote extensions and international numbers.)
+  m.company.lines.forEach((l) => noWrapRow(plainRow([l])));
   plainRow([]);
 
   // Addresses side by side, as on the PDF, rather than stacked — the sheet should
@@ -700,7 +686,7 @@ export async function renderBomXlsx(
   noWrapRow(addrTitleRow);
   const depth = Math.max(...m.addresses.map((a) => a.lines.length), 0);
   for (let i = 0; i < depth; i++) {
-    noWrapRow(plainRow(m.addresses.map((a) => formatPhone(a.lines[i] ?? ''))));
+    noWrapRow(plainRow(m.addresses.map((a) => a.lines[i] ?? '')));
   }
   plainRow([]);
 

@@ -34,9 +34,11 @@ const PORTAL_ADDRESS = {
 const SUBMISSION = {
   id: 'sub1',
   shipToAddressId: 'addr-portal',
-  pocName: 'Jennifer Fattal',
+  // Deliberately NOT the CRM contact (Jennifer Fattal, below), so a test can tell
+  // which one the ship-to block printed.
+  pocName: 'Kamilla Eliezer',
   pocPhone: '1 (303) 748-8082',
-  pocEmail: 'jenny@wiggleroomtherapy.com',
+  pocEmail: 'studio@kamillaeliezer.com',
   preferredComm: 'Email',
   textNumber: '3035551212',
   secondaryPocName: 'Sam Second',
@@ -200,10 +202,47 @@ describe('BOM ship-to block', () => {
     expect(cellText(head, 2)).toBe('Ship to');
     const n = head.number;
     expect(cellText(sheet.getRow(n + 1), 2)).toBe('Wiggle Room Therapy and Play');
-    expect(cellText(sheet.getRow(n + 2), 2)).toBe('');
+    // No portal answer, so ATTN falls back to the CRM contact; the CRM has no phone
+    // for her, so PH stays blank in its own row rather than closing the gap.
+    expect(cellText(sheet.getRow(n + 2), 2)).toBe('ATTN: Jennifer Fattal');
     expect(cellText(sheet.getRow(n + 3), 2)).toBe('');
-    expect(cellText(sheet.getRow(n + 4), 2)).toBe('Jennifer Fattal');
-    expect(cellText(sheet.getRow(n + 5), 2)).toBe('jenny@wiggleroomtherapy.com');
+    expect(cellText(sheet.getRow(n + 4), 2)).toBe('');
+    expect(cellText(sheet.getRow(n + 5), 2)).toBe('');
+  });
+
+  it('lays a portal ship-to out as name, ATTN, street, city, PH — Bryan’s template', async () => {
+    state.section = section({
+      shipToAddressId: 'addr-portal',
+      shipToAddress: { ...PORTAL_ADDRESS, line2: 'Suite 4' },
+    });
+    state.submission = SUBMISSION;
+    const sheet = await loadSheet('Acme Fab');
+    const n = rowOf(sheet, 'Ship from').number;
+    expect([1, 2, 3, 4, 5, 6].map((i) => cellText(sheet.getRow(n + i), 2))).toEqual([
+      'Wiggle Room Therapy and Play',
+      'ATTN: Kamilla Eliezer',
+      '17233 Ventura Boulevard, Suite 4',
+      'Los Angeles, CA 91316',
+      'PH: (303) 748-8082',
+      // The email is in the Point of Contact block; the ship-to stops at the phone.
+      '',
+    ]);
+  });
+
+  it('never mixes the portal POC with the CRM contact field by field', async () => {
+    state.section = section({ shipToAddressId: 'addr-portal', shipToAddress: PORTAL_ADDRESS });
+    // Portal named someone but gave no phone or email: the CRM contact's details must
+    // not be borrowed to fill the gaps under the portal POC's name.
+    state.submission = { ...SUBMISSION, pocPhone: null, pocEmail: null };
+    const { buildBom } = await import('../../src/handoff/bom.js');
+    const doc = await buildBom('o1', { vendor: 'Acme Fab' });
+    expect(doc.shipTo).toMatchObject({ contactName: 'Kamilla Eliezer', phone: '', email: '' });
+  });
+
+  it('prints the Submission Date as MM/DD/YYYY', async () => {
+    state.section = section({ submittedOn: new Date('2026-09-22T00:00:00Z') });
+    const sheet = await loadSheet('Acme Fab');
+    expect(cellText(rowOf(sheet, 'Submission Date'), 2)).toBe('09/22/2026');
   });
 
   it('prints a portal address under the customer’s own name and contact', async () => {
@@ -214,8 +253,10 @@ describe('BOM ship-to block', () => {
     expect(doc.shipTo).toMatchObject({
       name: 'Wiggle Room Therapy and Play',
       lines: ['17233 Ventura Boulevard', 'Los Angeles, CA 91316'],
-      contactName: 'Jennifer Fattal',
-      email: 'jenny@wiggleroomtherapy.com',
+      // The portal's Primary POC, not the CRM contact.
+      contactName: 'Kamilla Eliezer',
+      phone: '1 (303) 748-8082',
+      email: 'studio@kamillaeliezer.com',
     });
   });
 
@@ -231,6 +272,30 @@ describe('BOM ship-to block', () => {
       contactName: 'Portal POC',
       phone: '999-999-9999',
     });
+  });
+
+  it('keeps every row of a hand-picked address in place when its street is blank', async () => {
+    state.section = section({
+      shipToAddressId: 'addr-trailer',
+      shipToAddress: {
+        ...PORTAL_ADDRESS,
+        name: 'Job trailer',
+        source: null,
+        line1: null,
+        phone: '303-748-8082 ext 12',
+      },
+    });
+    const sheet = await loadSheet('Acme Fab');
+    const n = rowOf(sheet, 'Ship from').number;
+    expect([1, 2, 3, 4, 5, 6].map((i) => cellText(sheet.getRow(n + i), 2))).toEqual([
+      'Job trailer',
+      'ATTN: Portal POC',
+      '', // no street: the row stays, empty
+      'Los Angeles, CA 91316',
+      // An extension is printed exactly as typed — the Excel no longer re-formats it.
+      'PH: 303-748-8082 ext 12',
+      'portal@example.com',
+    ]);
   });
 
   it('honours the section’s own "Summit Sensory Gym" choice over the order default', async () => {
@@ -304,7 +369,7 @@ describe('BOM delivery block', () => {
     expect(name.number).toBe(head.number + 1);
     expect(name.getCell(1).font?.bold).toBe(true);
     expect(name.getCell(2).font?.bold).toBeFalsy();
-    expect(cellText(name, 2)).toBe('Jennifer Fattal');
+    expect(cellText(name, 2)).toBe('Kamilla Eliezer');
     expect(cellText(name, 3)).toBe('Sam Second');
 
     // A 10-digit phone is a number under the template's format; an international
@@ -329,7 +394,7 @@ describe('BOM delivery block', () => {
 
     const date = rowOf(sheet, 'Preferred Delivery Date');
     expect(date.number).toBe(instr.number + 1);
-    expect(cellText(date, 2)).toBe('2026-10-05');
+    expect(cellText(date, 2)).toBe('10/05/2026');
     const timing = rowOf(sheet, 'Preferred Delivery Timing');
     expect(timing.number).toBe(instr.number + 2);
     expect(cellText(timing, 2)).toBe('Weekday mornings');
@@ -362,7 +427,7 @@ describe('BOM delivery block', () => {
     expect(lines).toContain('Ship to Point of Contact(s),Primary POC,Secondary POC');
     expect(lines).toContain('Primary Phone Number,(303) 748-8082,+44 20 7946 0958');
     expect(lines).toContain('Text #,(303) 555-1212,');
-    expect(lines).toContain('Preferred Delivery Date,2026-10-05');
+    expect(lines).toContain('Preferred Delivery Date,10/05/2026');
     expect(lines).toContain('Delivery Type,"No, I need liftgate delivery"');
   });
 
