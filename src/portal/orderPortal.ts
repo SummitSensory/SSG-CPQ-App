@@ -12,6 +12,8 @@ import {
   isPortalDeliveryConfigured,
   latestDeliveryForOrder,
   linkOrderByDeal,
+  ordersForProjectIds,
+  processSubmission,
   manufacturingBoardId,
   markSubmissionReviewedOnBoard,
   MFG_DEAL_LINK_COL,
@@ -220,17 +222,14 @@ async function linkRows(rows: MfgRow[]): Promise<Map<string, MfgRow>> {
   const uniqueDeals = [
     ...new Set(unlinked.flatMap((r) => r.dealIds.filter((d) => rowsPerDeal.get(d) === 1))),
   ];
-  const candidates = uniqueDeals.length
-    ? await prisma.acceptedOrder.findMany({
-        where: { mondayProjectId: { in: uniqueDeals }, status: { not: 'CANCELLED' } },
-        select: { id: true, mondayProjectId: true, portalOrderItemId: true },
-      })
-    : [];
+  // The order's Project ID, or the one on its accepted proposal when the order's own
+  // copy was never recorded — see ordersForProjectIds.
+  const candidates = await ordersForProjectIds(uniqueDeals);
   const ordersPerDeal = new Map<string, typeof candidates>();
   for (const c of candidates) {
-    const list = ordersPerDeal.get(c.mondayProjectId!) ?? [];
+    const list = ordersPerDeal.get(c.projectId) ?? [];
     list.push(c);
-    ordersPerDeal.set(c.mondayProjectId!, list);
+    ordersPerDeal.set(c.projectId, list);
   }
 
   for (const r of rows) {
@@ -241,7 +240,7 @@ async function linkRows(rows: MfgRow[]): Promise<Map<string, MfgRow>> {
         .flatMap((d) => ordersPerDeal.get(d) ?? []);
       // Exactly one order, not already claimed by a different Manufacturing row.
       if (matches.length === 1 && !matches[0]!.portalOrderItemId) {
-        orderId = await linkOrderByDeal(r.id, [matches[0]!.mondayProjectId!]);
+        orderId = await linkOrderByDeal(r.id, [matches[0]!.projectId]);
       }
     }
     if (orderId && !byOrder.has(orderId)) byOrder.set(orderId, r);
@@ -498,6 +497,22 @@ export async function refreshPortal(
     // 2. Manufacturing rows → orders → steps, with every read batched.
     const mfg = await readManufacturingBoard(opts.fetchImpl);
     const byOrder = await linkRows(mfg);
+
+    // A submission parked because its order could not be found is matchable the
+    // moment its Manufacturing row is linked — which the step above may just have
+    // done. Finish those now (database only, no monday reads) rather than leaving
+    // the delivery details off the order until tomorrow's retry sweep.
+    const linkedItemIds = [...byOrder.values()].map((r) => r.id);
+    if (linkedItemIds.length) {
+      const waiting = await prisma.portalDeliverySubmission.findMany({
+        where: { status: 'PARKED', mondayOrderItemId: { in: linkedItemIds } },
+        select: { id: true },
+      });
+      for (const w of waiting) {
+        const r = await processSubmission(w.id);
+        submissions[`retried:${r}`] = (submissions[`retried:${r}`] ?? 0) + 1;
+      }
+    }
     const subs = await prisma.portalDeliverySubmission.findMany({
       where: { orderId: { not: null }, status: { in: ['APPLIED', 'CONFLICT'] } },
       orderBy: [{ submittedDate: { sort: 'desc', nulls: 'last' } }, { receivedAt: 'desc' }],

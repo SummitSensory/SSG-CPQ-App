@@ -11499,7 +11499,7 @@
     };
     return '<div style="margin-top:12px;padding:12px 14px;background:#fbfbf9;border:1px solid #e7e8e3;border-radius:9px;">' +
       '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:baseline;">' +
-        '<div class="k" style="margin:0;">Delivery details from the customer portal</div>' +
+        '<div class="k" style="margin:0;">Delivery details from monday.com (Delivery &amp; Site Details board)</div>' +
         '<span class="muted" style="font-size:11px;">Prints on this vendor’s sheet</span>' +
       '</div>' +
       '<div style="font-size:12.5px;margin-top:6px;"><b style="font-weight:600;">Delivery Type:</b> ' +
