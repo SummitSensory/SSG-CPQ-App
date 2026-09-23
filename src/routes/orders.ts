@@ -35,11 +35,19 @@ import { prisma } from '../lib/prisma.js';
 import { procurementFromItems } from '../handoff/lock.js';
 import { expandBomBuild } from '../handoff/bomBuild.js';
 import { ApprovalSchema } from '../handoff/approvalSchema.js';
+import {
+  PORTAL_KINDS,
+  portalItemsForOrder,
+  portalSummaryForOrders,
+  refreshPortal,
+  reviewPortalItem,
+} from '../portal/orderPortal.js';
 import type {
   HandoffStatus,
   RequirementCategory,
   RequirementStatus,
   HandoffTaskStatus,
+  PortalItemKind,
   Role,
 } from '@prisma/client';
 
@@ -103,7 +111,46 @@ export function registerOrderRoutes(app: FastifyInstance): void {
   app.get('/orders', read, async (req) => {
     const q = req.query as { status?: HandoffStatus; organizationId?: string };
     const rows = await listOrders({ status: q.status, organizationId: q.organizationId });
-    return rows.map(serializeOrder);
+    // Each row carries where its customer-portal steps stand — the Delivery / Color /
+    // Billing / Contact / Required columns on the Orders page.
+    const portal = await portalSummaryForOrders(rows.map((r) => r.id));
+    return rows.map((r) => ({ ...serializeOrder(r), portal: portal.get(r.id) ?? null }));
+  });
+
+  /**
+   * Refresh every order's portal steps from monday. Called by the Orders page on
+   * every open (throttled to once a minute across all users) and by its Refresh
+   * button (`force`, which ignores the throttle).
+   */
+  app.post('/orders/portal/refresh', read, async (req) => {
+    const body = (req.body ?? {}) as { force?: boolean };
+    return refreshPortal({ force: body.force === true, actorId: req.user!.sub });
+  });
+
+  /** One order's portal steps, with the customer's answers. */
+  app.get('/orders/:id/portal', read, async (req) =>
+    portalItemsForOrder((req.params as { id: string }).id),
+  );
+
+  /**
+   * Sync from the portal, for one order: runs the refresh (throttled when the order
+   * opens, forced by the Sync button) and returns this order's steps.
+   */
+  app.post('/orders/:id/portal/sync', read, async (req) => {
+    const { id } = req.params as { id: string };
+    const body = (req.body ?? {}) as { force?: boolean };
+    const refresh = await refreshPortal({ force: body.force === true, actorId: req.user!.sub });
+    return { refresh, items: await portalItemsForOrder(id) };
+  });
+
+  /** Mark one portal step reviewed. */
+  app.post('/orders/:id/portal/:kind/review', manage, async (req) => {
+    const { id, kind } = req.params as { id: string; kind: string };
+    const k = kind.toUpperCase();
+    if (!(PORTAL_KINDS as string[]).includes(k)) {
+      throw new ValidationError(`"${kind}" is not a portal step`);
+    }
+    return reviewPortalItem(id, k as PortalItemKind, req.user!.sub);
   });
 
   app.get('/orders/:id', read, async (req) =>
