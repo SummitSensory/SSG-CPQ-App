@@ -10986,7 +10986,9 @@
               : '') + '</div>' +
           '<div><div class="k">Submission date</div><input class="secF" data-id="' + s.id + '" data-f="submittedOn" type="date" value="' + esc(dateVal) + '" style="' + bomFieldStyle(null, locked) + (placeholderDate ? 'color:#20241f;' : '') + '"' + dis + '>' +
             (placeholderDate ? '<div class="muted" style="font-size:11px;margin-top:3px;">Today, until you confirm or change it</div>' : '') + '</div>' +
-          '<div><div class="k">Delivery type</div><input class="secF" data-id="' + s.id + '" data-f="deliveryType" value="' + esc(s.deliveryType || '') + '" placeholder="e.g. Lift Gate" style="' + bomFieldStyle(null, locked) + '"' + dis + '></div>' +
+          // Labelled "Delivery", as the sheet prints it: "Delivery Type" is now the
+          // customer's loading-dock answer, shown read-only in the block below.
+          '<div><div class="k">Delivery</div><input class="secF" data-id="' + s.id + '" data-f="deliveryType" value="' + esc(s.deliveryType || '') + '" placeholder="e.g. Lift Gate" style="' + bomFieldStyle(null, locked) + '"' + dis + '></div>' +
           '<div><div class="k">Estimated shipment quote</div><input class="secF" data-id="' + s.id + '" data-f="shipmentQuote" value="' + esc(s.shipmentQuote || '') + '" placeholder="TBD" style="' + bomFieldStyle(null, locked) + '"' + dis + '>' +
             '<div class="muted" style="font-size:11px;margin-top:3px;">' +
               (s.freightSource === 'MATS' ? 'Mats freight from the deal' : s.freightSource === 'NONE' ? 'This vendor quotes no freight' : 'Structure freight from the deal') +
@@ -11012,6 +11014,7 @@
               '<span class="muted" data-deal-out style="font-size:11.5px;line-height:1.5;flex:1;min-width:220px;">Reads the Deal Tracking board and replaces the freight and tax figures with what it holds.</span>' +
             '</div>'
           : '') +
+        sectionDeliveryBlock(s) +
         invoiceBlock(s, canHandoff) +
         '<div style="margin-top:12px;"><div class="k">Notes to this vendor</div>' +
           '<textarea class="secF" data-id="' + s.id + '" data-f="notes" rows="2" placeholder="Prints beneath the line items" style="' + bomFieldStyle(null, locked) + 'resize:vertical;"' + dis + '>' + esc(s.notes || '') + '</textarea></div>' +
@@ -11265,6 +11268,82 @@
           '</tr>';
         }).join('') +
       '</table></div>';
+  }
+
+  /**
+   * One phone number as the Bill of Materials prints it — the same rule as bomPhone in
+   * src/handoff/bomDelivery.ts. Ten digits (after dropping a leading US 1) prints
+   * "(303) 748-8082"; anything else — international, an extension, a word — prints
+   * exactly as the customer typed it.
+   */
+  function bomPhoneText(raw) {
+    var text = String(raw == null ? '' : raw).trim();
+    if (!text || /[^\d\s().+\-]/.test(text)) return text;
+    var digits = text.replace(/\D/g, '');
+    if (text.charAt(0) === '+' && digits.charAt(0) !== '1') return text;
+    if (digits.length === 11 && digits.charAt(0) === '1') digits = digits.slice(1);
+    if (digits.length !== 10) return text;
+    return '(' + digits.slice(0, 3) + ') ' + digits.slice(3, 6) + '-' + digits.slice(6);
+  }
+
+  /**
+   * The rows of the sheet's delivery block, shared by the on-screen card and the
+   * browser print: [label, primary, secondary] for the points of contact, then
+   * [label, value] for instructions, preferred date and timing. Empty answers stay
+   * empty — the rows are always there, as on the sheet itself.
+   */
+  function bomDeliveryRows(dl) {
+    dl = dl || {};
+    var p = dl.primary || {}, s2 = dl.secondary || {};
+    return {
+      contacts: [
+        ['Full Name', p.name || '', s2.name || ''],
+        ['Primary Phone Number', bomPhoneText(p.phone), bomPhoneText(s2.phone)],
+        ['Primary Email Address', p.email || '', s2.email || ''],
+        ['Preferred Communication Type', p.preferredComm || '', s2.preferredComm || ''],
+        ['Text #', bomPhoneText(p.textNumber), bomPhoneText(s2.textNumber)]
+      ],
+      details: [
+        ['Special Delivery Instructions', dl.specialInstructions || ''],
+        ['Preferred Delivery Date', dl.preferredDeliveryDate || ''],
+        ['Preferred Delivery Timing', dl.deliveryTiming || '']
+      ]
+    };
+  }
+
+  /**
+   * Read-only: what the customer told the portal, as this vendor's sheet will print it.
+   * Not editable here — the points of contact and instructions are the customer's
+   * words, and the loading-dock / timing / date answers are applied by the portal.
+   */
+  function sectionDeliveryBlock(s) {
+    var dl = s.delivery || {};
+    var rows = bomDeliveryRows(dl);
+    var cell = function (v, strong) {
+      return '<td style="padding:4px 14px 4px 0;font-size:12.5px;vertical-align:top;' + (strong ? 'font-weight:600;white-space:nowrap;' : '') + '">' +
+        (v ? esc(v) : '<span class="muted">—</span>') + '</td>';
+    };
+    var th = function (v) {
+      return '<th style="padding:4px 14px 4px 0;font-size:12px;font-weight:650;text-align:left;border-bottom:1px solid #cfd2c9;white-space:nowrap;">' + esc(v) + '</th>';
+    };
+    return '<div style="margin-top:12px;padding:12px 14px;background:#fbfbf9;border:1px solid #e7e8e3;border-radius:9px;">' +
+      '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:baseline;">' +
+        '<div class="k" style="margin:0;">Delivery details from the customer portal</div>' +
+        '<span class="muted" style="font-size:11px;">Prints on this vendor’s sheet</span>' +
+      '</div>' +
+      '<div style="font-size:12.5px;margin-top:6px;"><b style="font-weight:600;">Delivery Type:</b> ' +
+        (dl.deliveryType ? esc(dl.deliveryType) : '<span class="muted">—</span>') + '</div>' +
+      '<div style="overflow:auto;margin-top:8px;"><table style="border-collapse:collapse;">' +
+        '<tr>' + th('Ship to Point of Contact(s)') + th('Primary POC') + th('Secondary POC') + '</tr>' +
+        rows.contacts.map(function (r) { return '<tr>' + cell(r[0], true) + cell(r[1]) + cell(r[2]) + '</tr>'; }).join('') +
+      '</table></div>' +
+      '<table style="border-collapse:collapse;margin-top:8px;width:100%;">' +
+        rows.details.map(function (r) {
+          return '<tr><td style="padding:4px 14px 4px 0;font-size:12.5px;vertical-align:top;font-weight:600;white-space:nowrap;width:1%;">' + esc(r[0]) + '</td>' +
+            '<td style="padding:4px 0;font-size:12.5px;vertical-align:top;white-space:pre-wrap;">' + (r[1] ? esc(r[1]) : '<span class="muted">—</span>') + '</td></tr>';
+        }).join('') +
+      '</table>' +
+    '</div>';
   }
 
   /**
@@ -12093,7 +12172,9 @@
         '<div style="font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;color:#20241f;margin-bottom:3px;">' + esc(label) + '</div>' +
         '<div style="font-size:12.5px;line-height:1.5;">' +
           '<b>' + esc(name || '—') + '</b>' +
-          (lines || []).map(function (l) { return '<br>' + esc(l); }).join('') +
+          // A blank ship-to street/city line is deliberate (no confirmed address yet)
+          // and keeps its row, so the contact under it is not read as the address.
+          (lines || []).map(function (l) { return '<br>' + (l ? esc(l) : '&nbsp;'); }).join('') +
           (contact ? '<br>' + esc(contact) : '') +
           (phone ? '<br>' + esc(phone) : '') +
           (email ? '<br>' + esc(email) : '') +
@@ -12152,7 +12233,8 @@
       '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px 18px;margin-top:14px;padding:11px 13px;background:#f7f8f4;border:1px solid #e7e8e3;border-radius:8px;">' +
         field('Job', doc.order.jobName) +
         field('Submission date', dateStr(doc.order.submittedOn)) +
-        field('Delivery type', doc.order.deliveryType) +
+        field('Delivery Type', doc.delivery && doc.delivery.deliveryType) +
+        field('Delivery', doc.order.deliveryType) +
         field('Powder coat brand', doc.order.powderCoatBrand) +
         field('Total steel weight', (Number(t.steelWeightLbs) || 0).toFixed(2) + ' lb') +
         field('Total weight', (Number(t.totalWeightLbs) || 0).toFixed(2) + ' lb') +
@@ -12160,6 +12242,18 @@
         field('Vendor terms', doc.vendor ? (doc.vendor.paymentTerms || '—') : '—') +
       '</div>' +
       '<div style="font-size:9.5px;color:#20241f;margin:5px 0 0;">Total steel weight is fabricated steel only — it excludes hardware and crating.</div>' +
+      // Ship-to points of contact, then instructions / preferred date / timing — the
+      // same rows every server-rendered format prints, blanks included.
+      (function () {
+        var dr = bomDeliveryRows(doc.delivery);
+        var th = function (v) { return '<th style="text-align:left;padding:4px 14px 4px 0;font-size:11px;font-weight:700;border-bottom:1px solid #20241f;white-space:nowrap;">' + esc(v) + '</th>'; };
+        var lab = function (v) { return '<td style="padding:3px 14px 3px 0;font-size:11px;font-weight:700;white-space:nowrap;vertical-align:top;">' + esc(v) + '</td>'; };
+        var val = function (v) { return '<td style="padding:3px 14px 3px 0;font-size:11px;vertical-align:top;white-space:pre-wrap;">' + esc(v) + '</td>'; };
+        return '<table style="border-collapse:collapse;margin-top:12px;"><tr>' + th('Ship to Point of Contact(s)') + th('Primary POC') + th('Secondary POC') + '</tr>' +
+            dr.contacts.map(function (r) { return '<tr>' + lab(r[0]) + val(r[1]) + val(r[2]) + '</tr>'; }).join('') + '</table>' +
+          '<table style="border-collapse:collapse;margin-top:10px;width:100%;">' +
+            dr.details.map(function (r) { return '<tr>' + lab(r[0]).replace('white-space:nowrap;', 'white-space:nowrap;width:1%;') + val(r[1]) + '</tr>'; }).join('') + '</table>';
+      })() +
       // Lines
       '<table style="width:100%;border-collapse:collapse;margin-top:12px;"><thead><tr>' + thead + '</tr></thead><tbody>' + tbody +
       '<tr>' + totalCells.map(function (v, i) {

@@ -5,6 +5,8 @@ import { rollUpProcurementLines } from './bomRollup.js';
 import { summarize, type InvoiceVariance } from './vendorInvoice.js';
 import type { BomQuestionType, BomSectionStatus, BomShipTo } from '@prisma/client';
 import { dealFigures, freightFor } from './dealFigures.js';
+import { deliveryDetails, type BomDelivery } from './bomDelivery.js';
+import { latestDeliveryForOrder } from '../integrations/monday/portalDelivery.js';
 
 /**
  * Bill of Materials — per-vendor sections.
@@ -168,6 +170,13 @@ export interface SectionView {
   loadingDock: string | null;
   deliveryTiming: string | null;
   preferredDeliveryDate: string | null;
+  /**
+   * What this vendor's sheet prints in its delivery block — the section's answers
+   * above, falling back to the customer's, plus the points of contact and special
+   * instructions from the latest portal submission. The same resolution buildBom
+   * uses, so the card on screen and the sheet cannot disagree.
+   */
+  delivery: BomDelivery;
   powderCoatBrand: string | null;
   shipmentQuote: string | null;
   /** Informational: the deal's tax figure. Only the mats vendor's sheet carries it. */
@@ -282,7 +291,7 @@ const DEFAULT_BODY = [
 export async function listSections(orderId: string, actorId?: string): Promise<SectionView[]> {
   await ensureSections(orderId, actorId);
 
-  const [order, sections, lines, manufacturers] = await Promise.all([
+  const [order, sections, lines, manufacturers, submission] = await Promise.all([
     prisma.acceptedOrder.findUnique({
       where: { id: orderId },
       select: { number: true, jobName: true, organizationId: true },
@@ -325,6 +334,7 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
         bomFreightSource: true,
       },
     }),
+    latestDeliveryForOrder(orderId),
   ]);
   if (!order) throw new NotFoundError('Order not found');
 
@@ -387,6 +397,7 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
       preferredDeliveryDate: s.preferredDeliveryDate
         ? s.preferredDeliveryDate.toISOString().slice(0, 10)
         : null,
+      delivery: deliveryDetails(s, submission),
       powderCoatBrand: s.powderCoatBrand,
       shipmentQuote: s.shipmentQuote,
       estimatedTax: s.estimatedTax,
