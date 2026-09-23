@@ -42,6 +42,7 @@ import { registerEsignRoutes } from './routes/esign.js';
 import { registerReportRoutes } from './routes/reports.js';
 import { registerInsightRoutes } from './routes/insights.js';
 import { registerStandardNoteRoutes } from './routes/standardNotes.js';
+import { registerPortalColorAreaRoutes } from './routes/portalColorAreas.js';
 import { registerLegalDocumentRoutes } from './routes/legalDocuments.js';
 import { registerMediaPartnershipProgramRoutes } from './routes/mediaPartnershipProgram.js';
 import { registerSignatureFieldLayoutRoutes } from './routes/signatureFieldLayout.js';
@@ -176,6 +177,7 @@ export function buildApp(): FastifyInstance {
   registerReportRoutes(app);
   registerInsightRoutes(app);
   registerStandardNoteRoutes(app);
+  registerPortalColorAreaRoutes(app);
   registerLegalDocumentRoutes(app);
   registerMediaPartnershipProgramRoutes(app);
   registerSignatureFieldLayoutRoutes(app);
