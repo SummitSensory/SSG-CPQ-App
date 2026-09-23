@@ -606,13 +606,15 @@
   async function loadItems(user) {
     var box = document.getElementById('itList'); if (!box) return;
     try {
-      if (!itemState.manufacturers.length) {
-        try { var rm = await authed('/catalog/manufacturers'); if (rm.ok) itemState.manufacturers = ((await rm.json()) || []).map(function (m) { return m.name; }); } catch (e0) {}
-      }
       // The whole catalog is loaded once so the column filters and sorting apply
-      // across every part, not just the page you happen to be looking at.
+      // across every part, not just the page you happen to be looking at. The vendor
+      // list is fetched alongside it, not before it.
       var qs = itemState.q ? '&q=' + encodeURIComponent(itemState.q) : '';
+      var mfrs = itemState.manufacturers.length ? null : authed('/catalog/manufacturers').then(async function (rm) {
+        if (rm.ok) itemState.manufacturers = ((await rm.json()) || []).map(function (m) { return m.name; });
+      }).catch(function () {});
       var r = await authed('/catalog/items?page=1&pageSize=500' + qs);
+      if (mfrs) await mfrs;
       if (!r.ok) { box.innerHTML = '<div class="err">Could not load (' + r.status + ').</div>'; return; }
       var d = await r.json();
       itemState.categories = (d.categories || []).map(function (c) { return c.name; });
@@ -679,18 +681,22 @@
      * on an amber field. It survives an untouched save, and it reads as something to look
      * at rather than something already fine.
      */
+    /*
+     * Rendered with ONLY the current value; the full list is filled in the first time
+     * the dropdown is focused or pressed (fillLazySelect, wired below). The category
+     * list is every ProductCategory — nearly 500 — so building it eagerly into all 100
+     * rows put ~50,000 <option> elements on the page, rebuilt on every page flip and
+     * every filter keystroke. That was the Catalog tab's multi-second freeze.
+     */
     function sel(part, field, value, options) {
       var v = value == null ? '' : String(value);
       var known = options.some(function (o) { return String(o) === v; });
       var odd = !!v && !known;
-      return '<select class="itEdit" data-part="' + esc(part) + '" data-f="' + field + '" style="' + CELL +
+      return '<select class="itEdit" data-lazy="' + field + '" data-part="' + esc(part) + '" data-f="' + field + '" style="' + CELL +
         (odd ? 'border-color:#ecd9a6;background:#fdf6e6;' : '') + '"' +
         (odd ? ' title="“' + esc(v) + '” is not on the active list. Leave it and it stays; pick another and it changes."' : '') + '>' +
-        ['<option value="">—</option>']
-          .concat(odd ? ['<option value="' + esc(v) + '" selected>' + esc(v) + ' — not on the active list</option>'] : [])
-          .concat(options.map(function (o) {
-            return '<option value="' + esc(o) + '"' + (v === String(o) ? ' selected' : '') + '>' + esc(o) + '</option>';
-          })).join('') + '</select>';
+        (v ? '<option value="' + esc(v) + '" selected>' + esc(v) + (odd ? ' — not on the active list' : '') + '</option>' : '<option value="">—</option>') +
+        '</select>';
     }
     var rows = pageRows.map(function (k) {
       var where = (k.productId ? '<span class="chip" style="font-size:10px;">Product</span>' : '') + (k.skuId ? ' <span class="chip" style="font-size:10px;background:#fdfcf7;">Priced</span>' : '');
@@ -770,6 +776,26 @@
     var cf = document.getElementById('itClearF');
     if (cf) cf.addEventListener('click', function () { itemState.filters = {}; itemState.page = 1; drawItems(user); });
     wireColTable(box, IT_COLS, itemState, function (key) { drawItems(user, key); });
+    // The full option list for a row's dropdown, built once, on first use — see sel().
+    var lazyLists = { category: itemState.categories, manufacturer: itemState.manufacturers };
+    function fillLazySelect(el) {
+      if (!el.hasAttribute('data-lazy')) return;
+      var list = lazyLists[el.getAttribute('data-lazy')] || [];
+      el.removeAttribute('data-lazy');
+      var v = el.value;
+      var odd = !!v && !list.some(function (o) { return String(o) === v; });
+      el.innerHTML = ['<option value="">—</option>']
+        .concat(odd ? ['<option value="' + esc(v) + '">' + esc(v) + ' — not on the active list</option>'] : [])
+        .concat(list.map(function (o) { return '<option value="' + esc(o) + '">' + esc(o) + '</option>'; }))
+        .join('');
+      el.value = v;
+    }
+    box.querySelectorAll('select[data-lazy]').forEach(function (el) {
+      var fill = function () { fillLazySelect(el); };
+      el.addEventListener('mousedown', fill);
+      el.addEventListener('focus', fill);
+      el.addEventListener('keydown', fill);
+    });
     if (focusKey) {
       var back = box.querySelector('.colFilter[data-k="' + focusKey + '"]');
       if (back && back.tagName === 'INPUT') { back.focus(); back.setSelectionRange(back.value.length, back.value.length); }
@@ -946,7 +972,9 @@
   }
   async function renderCatalogProducts(user) {
     var admin = canCatalogAdmin(user.role);
-    try { var rc = await authed('/catalog/categories'); catCategories = rc.ok ? await rc.json() : []; } catch (e) { catCategories = []; }
+    // Started, not awaited: the toolbar and "Loading…" paint at once, and loadProducts
+    // waits for the categories alongside the products instead of after them.
+    catCategoriesReq = loadCatCategories();
     var statusOpts = '<option value="">All statuses</option>' + STATUSES.map(function (s) { return '<option value="' + s + '"' + (cat.status === s ? ' selected' : '') + '>' + titleCase(s) + '</option>'; }).join('');
     document.getElementById('catBody').innerHTML =
       '<div style="display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap;">' +
@@ -1335,23 +1363,34 @@
     } catch (e) { qboItemLinks = {}; }
   }
 
+  /** In flight or settled; loadProducts needs it before it can label the tree. */
+  var catCategoriesReq = null;
+  async function loadCatCategories() {
+    try { var rc = await authed('/catalog/categories'); catCategories = rc.ok ? await rc.json() : []; } catch (e) { catCategories = []; }
+  }
+
   async function loadProducts(user) {
     var box = document.getElementById('catList'); if (!box) return;
     try {
       // Load the whole tree (100 per request) so column filters and sorting cover
       // every product rather than the current page.
+      // 500 per request (the server's ceiling) — one round trip for today's catalog,
+      // with any further pages fetched together rather than one after another.
       var qs = (cat.q ? '&q=' + encodeURIComponent(cat.q) : '');
-      var all = [], page = 0, total = 1;
-      while (all.length < total && page < 20) {
-        page++;
-        var r = await authed('/catalog/products?page=' + page + '&pageSize=100' + qs);
-        if (!r.ok) { box.innerHTML = '<div class="err">Could not load (' + r.status + ').</div>'; return; }
-        var d = await r.json();
-        total = d.total || 0;
-        var got = d.items || [];
-        all = all.concat(got);
-        if (!got.length) break;
+      var PAGE = 500;
+      var first = authed('/catalog/products?page=1&pageSize=' + PAGE + qs);
+      if (!catCategoriesReq) catCategoriesReq = loadCatCategories();
+      var r = await first;
+      if (!r.ok) { box.innerHTML = '<div class="err">Could not load (' + r.status + ').</div>'; return; }
+      var d = await r.json();
+      var all = d.items || [], total = d.total || 0, rest = [];
+      for (var page = 2; (page - 1) * PAGE < total && page <= 10; page++) rest.push(authed('/catalog/products?page=' + page + '&pageSize=' + PAGE + qs));
+      var more = await Promise.all(rest);
+      for (var i = 0; i < more.length; i++) {
+        if (!more[i].ok) { box.innerHTML = '<div class="err">Could not load (' + more[i].status + ').</div>'; return; }
+        all = all.concat(((await more[i].json()) || {}).items || []);
       }
+      await catCategoriesReq;
       cat.rows = all.map(function (p) {
         var row = {}; for (var k in p) row[k] = p[k];
         row.categoryName = catName(p.categoryId) || '';
