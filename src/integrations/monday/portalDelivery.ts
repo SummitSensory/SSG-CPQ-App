@@ -336,7 +336,7 @@ function withFormattedFallback<
  * ("7086 N. Maple Avenue Suite 105") or a formatted line that repeats it parses to a
  * different street, and is left alone rather than doubled.
  */
-function withSuiteFromFormatted<
+export function withSuiteFromFormatted<
   T extends { line1: string | null; line2: string | null; formattedAddress: string | null },
 >(fields: T): T {
   if (fields.line2 || !fields.line1) return fields;
