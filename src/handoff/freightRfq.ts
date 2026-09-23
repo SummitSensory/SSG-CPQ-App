@@ -1,3 +1,4 @@
+import { primaryShippingAddress } from '../crm/addresses.js';
 import { prisma } from '../lib/prisma.js';
 import { env } from '../config/env.js';
 import { NotFoundError, ValidationError } from '../lib/errors.js';
@@ -344,7 +345,7 @@ async function shipToFor(organizationId: string, proposalId?: string) {
     }
   }
 
-  const shipping = org.addresses.find((a) => a.type === 'SHIPPING');
+  const shipping = primaryShippingAddress(org.addresses);
   const ship = shipping ?? org.addresses.find((a) => a.type === 'BILLING');
   return {
     shipToName: org.name,

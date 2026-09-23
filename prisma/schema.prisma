@@ -358,8 +358,15 @@ model Address {
   region         String
   postalCode     String
   country        String       @default("US")
+  /// Null for an address typed or imported into the CRM; 'PORTAL' for one the
+  /// customer confirmed through the delivery portal.
+  source         String?
+  /// For a PORTAL address, the order it was confirmed for — so a resubmission
+  /// updates this address instead of adding another copy.
+  sourceOrderId  String?
 
   @@index([organizationId])
+  @@index([sourceOrderId])
 }
 
 model Facility {
@@ -2034,8 +2041,10 @@ model AcceptedOrder {
   bomSections       BomVendorSection[]
   portalDeliveries      PortalDeliverySubmission[]
   portalColorSelections PortalColorSelection[]
+  portalItems               OrderPortalItem[]
   tasks             HandoffTask[]
-  events            OrderEvent[]  // ---- Manufacturing release ----
+  events                    OrderEvent[]
+  // ---- Manufacturing release ----
   // Creating the order and releasing it to the shop are two separate acts. The
   // order is created when the proposal is marked signed; release is later, and is
   // gated on a QuickBooks invoice existing — or on that requirement being waived
@@ -2045,8 +2054,6 @@ model AcceptedOrder {
   qboInvoiceWaivedAt        DateTime?
   qboInvoiceWaivedById      String?
   qboInvoiceWaivedReason    String?
-
-
 
   @@index([organizationId])
   @@index([status])
@@ -2136,7 +2143,8 @@ model ProcurementLine {
   targetDate   DateTime?
   notes        String?
   isException  Boolean       @default(false)
-  exceptionReason String?  /// What the formula produced for this line, captured when the line was created
+  exceptionReason       String?
+  /// What the formula produced for this line, captured when the line was created
   /// from the accepted proposal. `quantity` above is the operational figure and
   /// may be overridden by hand; a difference between the two is what badges the
   /// line as edited. NULL on lines added by hand, which have no formula figure to
@@ -2625,7 +2633,6 @@ model FreightRfqSend {
   @@index([providerMessageId])
 }
 
-
 /// A freight true-up is the one sanctioned way a frozen proposal changes after
 /// release. It exists because SSG quotes before the vendors have quoted freight:
 /// the customer often signs, and manufacturing often starts, on a document whose
@@ -2844,7 +2851,6 @@ model FreightEntry {
   @@index([versionId, bucket])
   @@index([status])
 }
-
 
 /// The record of every change made to an editable formula — frame and component
 /// quantities, hardware fastener quantities, and the business numbers.
@@ -3577,6 +3583,16 @@ model PortalDeliverySubmission {
   restrictedChanges    String?
   freightAckBy         String?
   freightAckDate       DateTime?
+  /// The portal's own "Submitted Date" column — what the customer did, as opposed
+  /// to `receivedAt`, which is when the CRM first heard about it.
+  submittedDate          DateTime?
+  preferredComm          String?
+  /// "Mobile Number for Texts" — the primary POC's text number.
+  textNumber             String?
+  secondaryPreferredComm String?
+  secondaryMobile        String?
+  /// The CRM SHIPPING Address this submission wrote onto the customer.
+  crmAddressId           String?
   /// Every populated column on the row as read, so a column the CRM does not yet
   /// map is still recoverable without going back to monday.
   raw                  Json?
@@ -3591,6 +3607,79 @@ model PortalDeliverySubmission {
   @@index([mondayOrderItemId])
   @@index([status])
   @@index([orderId])
+}
+
+/// One customer-portal step for an order, as the Orders page tracks it.
+enum PortalItemKind {
+  DELIVERY
+  COLOR
+  BILLING
+  CONTACT
+  REQUIRED
+}
+
+/// What monday says about the step. Whether it has been REVIEWED is not a state
+/// here — it is `reviewedHash === contentHash`, so new answers un-review it.
+enum PortalItemState {
+  /// Not given yet (monday shows 🚫 or blank).
+  NOT_PROVIDED
+  /// Not needed for this order (monday shows N/A).
+  NA
+  /// Given (monday shows ✅, or a delivery submission exists).
+  PROVIDED
+}
+
+/// Where one portal step stands for one order, refreshed from monday.
+///
+/// Delivery comes from the Delivery & Site Details Submissions board; the other
+/// steps from the Manufacturing Process board's "Portal: …" status columns and
+/// their answers JSON. A change of answers stamps a new `obtainedAt` and, because
+/// `contentHash` moves, reverts a reviewed item to unreviewed.
+model OrderPortalItem {
+  id           String          @id @default(cuid())
+  orderId      String
+  order        AcceptedOrder   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  kind         PortalItemKind
+  state        PortalItemState @default(NOT_PROVIDED)
+  /// The label monday shows (✅, 🚫, N/A…), kept verbatim for the order page.
+  mondayStatus String?
+  /// The customer's answers for this step, as read.
+  answers      Json?
+  /// Hash of `answers` + state — what "reviewed" is measured against.
+  contentHash  String?
+  /// When the CRM first saw this version of the answers.
+  obtainedAt   DateTime?
+  reviewedAt   DateTime?
+  reviewedById String?
+  /// The `contentHash` that was reviewed.
+  reviewedHash String?
+  /// The monday row it was read from (Manufacturing item or submission row).
+  sourceItemId String?
+  lastSyncedAt DateTime        @default(now())
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  @@unique([orderId, kind])
+  @@index([kind, state])
+}
+
+/// Which catalog parts a portal colour area paints.
+///
+/// The portal answers colours by area ("structure_frame_paint.legs") and the Bill
+/// of Materials carries one colour per part line; this is the join, maintained in
+/// Administration. A reviewed colour selection applies each area's pick to the
+/// procurement lines whose part number is mapped here.
+model PortalColorAreaMapping {
+  id          String   @id @default(cuid())
+  /// "<group>.<area>", exactly as the portal writes it.
+  areaKey     String
+  /// Catalog part number (Product.sku / Sku.part).
+  sku         String
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  @@unique([areaKey, sku])
+  @@index([areaKey])
 }
 
 /// Whether the customer's colour picks have been asked for, given, or applied.
@@ -3648,7 +3737,6 @@ model PortalColorSelection {
   @@index([orderId])
   @@index([status])
 }
-
 
 // ===========================================================================
 // Cross-border: Canadian proposals

@@ -351,3 +351,51 @@ blocking the send.
 
 **The rule to hold.** Templates live in exactly one place. The expensive outcome was
 never either database — it is two, with the same template half-maintained in both.
+
+---
+
+## 9. Portal steps on the Orders page (migration 0098)
+
+Files: `src/portal/orderPortal.ts`, `src/portal/colorAreas.ts`,
+`src/integrations/monday/portalDelivery.ts`, `src/routes/orders.ts`,
+`prisma/migrations/0098_portal_order_items`.
+
+**What it tracks.** One `OrderPortalItem` per order per portal step — DELIVERY,
+COLOR, BILLING, CONTACT, REQUIRED. The state comes from the Manufacturing Process
+board's "Portal: …" status columns (✅ provided, 🚫 not yet, N/A not needed); a
+delivery submission matched to the order counts as provided whatever the status
+says, because it is what the Bill of Materials prints. Each item keeps the
+customer's answers and the date that version was obtained.
+
+**Reviewed.** Staff mark each step reviewed from the order page. The item stores the
+hash of the answers that were reviewed; new answers move the hash, so a resubmission
+makes the item new again, with its new date, without anything having to un-review it.
+Reviewing DELIVERY also ticks "Staff Reviewed" on the monday submission row; reviewing
+COLOR applies the picks to the Bill of Materials through the colour-area mapping in
+Administration (never onto a vendor sheet already submitted).
+
+**The Project ID link.** A Manufacturing Process row's Deals connection
+(`link_to_deals__1`) names the Deal Tracking row, and that row id is the order's
+Project ID (`AcceptedOrder.mondayProjectId`). That is now the primary match for a
+submission, after a recorded `portalOrderItemId`; the customer-email ladder is the
+fallback for rows with no Deal link. A link is only made when it is unambiguous — one
+Manufacturing row for the deal and one live order carrying its Project ID.
+
+**CRM shipping address.** An applied submission adds its address to the customer as a
+SHIPPING `Address` with `source = 'PORTAL'` and `sourceOrderId`, one per order and
+corrected in place on resubmission. Addresses typed or imported into the CRM, and the
+bill-to, are never touched.
+
+**Refreshing.** `refreshPortal` reads each board once (not once per order). The Orders
+page runs it on every open and the order page on every open; both are throttled to one
+run a minute across all users and instances (the throttle is a row in
+`IntegrationSyncLog`, not process memory). The Refresh / Sync from portal buttons force.
+
+### Future build — bill-to from the portal's billing answers
+
+The Manufacturing Process board also carries the customer's portal billing answers
+(`long_text_mm6ancsh`: billing address, suite, city, state, ZIP, country, and a billing
+contact). This build only SHOWS them for review on the order page. Updating the CRM
+bill-to address (and QuickBooks) from those answers was agreed as a separate, future
+build — it touches invoicing, and deserves its own decision about precedence and
+QuickBooks sync.

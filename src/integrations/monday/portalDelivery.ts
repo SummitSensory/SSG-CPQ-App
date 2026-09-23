@@ -3,6 +3,7 @@ import { env } from '../../config/env.js';
 import { logger } from '../../lib/logger.js';
 import { NotFoundError, ValidationError } from '../../lib/errors.js';
 import { fetchAllItems, fetchItemById } from './discovery.js';
+import { mondayQuery, setColumnValues } from './client.js';
 import { ensureSections } from '../../handoff/bomSections.js';
 
 /**
@@ -77,6 +78,12 @@ export const DELIVERY_COL = {
   freightAckBy: 'text_mm57nnck',
   freightAckDate: 'date_mm578gmh',
   restrictedChanges: 'long_text_mm57r7b1',
+  preferredComm: 'text_mm57t33w',
+  textNumber: 'text_mm5778hh',
+  secondaryPreferredComm: 'text_mm572ns5',
+  secondaryMobile: 'text_mm57wdc2',
+  /** Checkbox staff tick once they have read the submission. Written, never read. */
+  staffReviewed: 'boolean_mm576c3b',
 } as const;
 
 /** Inbound delivery details need a token to read the row and a board to read it from. */
@@ -127,6 +134,11 @@ export interface DeliveryFields {
   restrictedChanges: string | null;
   freightAckBy: string | null;
   freightAckDate: Date | null;
+  submittedDate: Date | null;
+  preferredComm: string | null;
+  textNumber: string | null;
+  secondaryPreferredComm: string | null;
+  secondaryMobile: string | null;
   raw: Record<string, string>;
 }
 
@@ -158,6 +170,11 @@ function readFields(text: Record<string, string | null | undefined>): DeliveryFi
     restrictedChanges: orNull(text[c.restrictedChanges]),
     freightAckBy: orNull(text[c.freightAckBy]),
     freightAckDate: asDate(text[c.freightAckDate]),
+    submittedDate: asDate(text[c.submittedDate]),
+    preferredComm: orNull(text[c.preferredComm]),
+    textNumber: orNull(text[c.textNumber]),
+    secondaryPreferredComm: orNull(text[c.secondaryPreferredComm]),
+    secondaryMobile: orNull(text[c.secondaryMobile]),
     raw,
   };
 }
@@ -293,7 +310,8 @@ function withFormattedFallback<
     raw?: Record<string, string>;
   },
 >(fields: T): T {
-  if (fields.line1 || !fields.formattedAddress) return fields;
+  if (!fields.formattedAddress) return fields;
+  if (fields.line1) return withSuiteFromFormatted(fields);
   const p = parseFormattedAddress(fields.formattedAddress);
   const line1 = p.line1;
   const city = fields.city ?? p.city;
@@ -308,6 +326,25 @@ function withFormattedFallback<
     country: fields.country ?? p.country,
     raw: { ...(fields.raw ?? {}), [PARSED_FLAG]: 'true' },
   };
+}
+
+/**
+ * The portal often writes the street to Address Line 1 but leaves the suite only in
+ * the formatted line — "7205 E. Southern Ave." in the column, "…, Suite 115, Mesa…"
+ * in the formatted address. Fill Line 2 from it, but only when the formatted street
+ * is the SAME street as the column: a line 1 that already carries the suite
+ * ("7086 N. Maple Avenue Suite 105") or a formatted line that repeats it parses to a
+ * different street, and is left alone rather than doubled.
+ */
+export function withSuiteFromFormatted<
+  T extends { line1: string | null; line2: string | null; formattedAddress: string | null },
+>(fields: T): T {
+  if (fields.line2 || !fields.line1) return fields;
+  const p = parseFormattedAddress(fields.formattedAddress);
+  const norm = (v: string | null) => s(v).toLowerCase().replace(/\s+/g, ' ').replace(/\.$/, '');
+  if (!p.line1 || !p.line2 || norm(p.line1) !== norm(fields.line1)) return fields;
+  if (norm(fields.line1).includes(norm(p.line2))) return fields;
+  return { ...fields, line2: p.line2 };
 }
 
 /** Did this submission's street come out of the formatted column? */
@@ -348,13 +385,20 @@ export type IngestResult =
  * has something new to say: an APPLIED submission whose address has not changed
  * returns 'unchanged' without touching the order.
  */
-export async function ingestDeliverySubmission(mondayItemId: string): Promise<IngestResult> {
+export async function ingestDeliverySubmission(
+  mondayItemId: string,
+  /** The row, when the caller has already read it (the board-wide refresh). */
+  preRead?: { name: string; text: Record<string, string | null | undefined> } | null,
+  opts: { skipUnchangedPending?: boolean } = {},
+): Promise<IngestResult> {
   if (!isPortalDeliveryConfigured()) return 'failed';
 
-  const item = await fetchItemById(mondayItemId).catch((err) => {
-    logger.error({ err, mondayItemId }, 'portal delivery: could not read the submissions row');
-    return null;
-  });
+  const item =
+    preRead ??
+    (await fetchItemById(mondayItemId).catch((err) => {
+      logger.error({ err, mondayItemId }, 'portal delivery: could not read the submissions row');
+      return null;
+    }));
   if (!item) return 'notfound';
 
   // The salvage runs here, before the change comparison, so a row whose street was
@@ -369,56 +413,55 @@ export async function ingestDeliverySubmission(mondayItemId: string): Promise<In
   }
   const existing = await prisma.portalDeliverySubmission.findUnique({ where: { mondayItemId } });
 
-  const sameAddress =
-    existing &&
-    existing.line1 === fields.line1 &&
-    existing.line2 === fields.line2 &&
-    existing.city === fields.city &&
-    existing.region === fields.region &&
-    existing.postalCode === fields.postalCode &&
-    existing.country === fields.country;
+  const sameAnswers = !!existing && answersUnchanged(existing, fields);
+  const sameAddress = !!existing && ADDRESS_FIELDS.every((k) => existing[k] === fields[k]);
 
-  // Nothing new, and the last run finished the job. This is the common path: 29 of
-  // the 30 column events for a submission end here.
-  if (existing && existing.status === 'APPLIED' && sameAddress) {
-    // Nothing to redo — but if this row was stored before the name was captured,
-    // take it now. A backfill is then enough to label every historical row.
-    const priorRaw = (existing.raw as Record<string, string> | null) ?? {};
-    if (item.name && priorRaw[ITEM_NAME] !== item.name) {
-      await prisma.portalDeliverySubmission.update({
-        where: { id: existing.id },
-        data: { raw: { ...priorRaw, [ITEM_NAME]: item.name } as object },
-      });
+  if (existing) {
+    // Already applied (or already reported as a conflict) and the ADDRESS has not
+    // moved: nothing about the ship-to needs redoing, and nobody needs another email.
+    // Only an address change re-runs the apply — re-pointing sections, re-notifying
+    // the owner. That rule matters twice over:
+    //   - the first refresh after new columns were added finds every stored row
+    //     "different" (the new columns are NULL), and re-applying all of them would
+    //     overwrite ship-to choices and delivery fields staff corrected by hand;
+    //   - a board-wide refresh runs every minute, and a CONFLICT row re-applied on
+    //     each one emailed the order owner every minute.
+    // Other answers (contacts, instructions, new columns) are stored quietly — the
+    // Bill of Materials reads them from the submission — and a change to the three
+    // delivery preferences is carried to the sections still following this address.
+    const settled = existing.status === 'APPLIED' || existing.status === 'CONFLICT';
+    if (settled && sameAddress) {
+      const priorRaw = (existing.raw as Record<string, string> | null) ?? {};
+      if (!sameAnswers) {
+        // Compared against the stored row BEFORE it is overwritten.
+        await carryDeliveryPreferences(existing, fields);
+        await prisma.portalDeliverySubmission.update({
+          where: { id: existing.id },
+          data: { ...storedAnswers(fields), raw: { ...fields.raw } as object },
+        });
+      } else if (item.name && priorRaw[ITEM_NAME] !== item.name) {
+        // Stored before the name was captured: take it now, so a backfill labels
+        // every historical row.
+        await prisma.portalDeliverySubmission.update({
+          where: { id: existing.id },
+          data: { raw: { ...priorRaw, [ITEM_NAME]: item.name } as object },
+        });
+      }
+      return 'unchanged';
     }
-    return 'unchanged';
+    // Waiting on something (an order to exist, the rest of the columns) and the
+    // row itself has not changed: the retry sweep owns these. A board-wide refresh
+    // skips them rather than re-processing — and re-querying monday — every minute.
+    if (opts.skipUnchangedPending && sameAnswers) {
+      return existing.status === 'PARKED'
+        ? 'parked'
+        : existing.status === 'INCOMPLETE'
+          ? 'incomplete'
+          : 'failed';
+    }
   }
 
-  const data = {
-    mondayOrderItemId: fields.mondayOrderItemId,
-    customerEmail: fields.customerEmail,
-    addressConfirmed: fields.addressConfirmed,
-    line1: fields.line1,
-    line2: fields.line2,
-    city: fields.city,
-    region: fields.region,
-    postalCode: fields.postalCode,
-    country: fields.country,
-    formattedAddress: fields.formattedAddress,
-    pocName: fields.pocName,
-    pocPhone: fields.pocPhone,
-    pocEmail: fields.pocEmail,
-    secondaryPocName: fields.secondaryPocName,
-    secondaryPocPhone: fields.secondaryPocPhone,
-    secondaryPocEmail: fields.secondaryPocEmail,
-    loadingDock: fields.loadingDock,
-    deliveryTiming: fields.deliveryTiming,
-    preferredDeliveryDate: fields.preferredDeliveryDate,
-    specialInstructions: fields.specialInstructions,
-    restrictedChanges: fields.restrictedChanges,
-    freightAckBy: fields.freightAckBy,
-    freightAckDate: fields.freightAckDate,
-    raw: fields.raw as object,
-  };
+  const data = { ...storedAnswers(fields), raw: fields.raw as object };
 
   const sub = await prisma.portalDeliverySubmission.upsert({
     where: { mondayItemId },
@@ -427,6 +470,134 @@ export async function ingestDeliverySubmission(mondayItemId: string): Promise<In
   });
 
   return processSubmission(sub.id);
+}
+
+/** The stored columns an ingest compares — everything the customer can change. */
+const COMPARED = [
+  'mondayOrderItemId',
+  'customerEmail',
+  'addressConfirmed',
+  'line1',
+  'line2',
+  'city',
+  'region',
+  'postalCode',
+  'country',
+  'formattedAddress',
+  'pocName',
+  'pocPhone',
+  'pocEmail',
+  'secondaryPocName',
+  'secondaryPocPhone',
+  'secondaryPocEmail',
+  'loadingDock',
+  'deliveryTiming',
+  'preferredDeliveryDate',
+  'specialInstructions',
+  'restrictedChanges',
+  'freightAckBy',
+  'freightAckDate',
+  'submittedDate',
+  'preferredComm',
+  'textNumber',
+  'secondaryPreferredComm',
+  'secondaryMobile',
+] as const;
+
+function answersUnchanged(
+  existing: Record<(typeof COMPARED)[number], unknown>,
+  fields: Record<(typeof COMPARED)[number], unknown>,
+): boolean {
+  const norm = (v: unknown) => (v instanceof Date ? v.toISOString() : v == null ? null : v);
+  return COMPARED.every((k) => norm(existing[k]) === norm(fields[k]));
+}
+
+/** The fields that make up the ship-to itself — the only ones that re-run the apply. */
+const ADDRESS_FIELDS = ['line1', 'line2', 'city', 'region', 'postalCode', 'country'] as const;
+
+/** Every stored answer, from a row as read. One shape for create, update and quiet store. */
+function storedAnswers(f: DeliveryFields): Pick<DeliveryFields, (typeof COMPARED)[number]> {
+  return {
+    mondayOrderItemId: f.mondayOrderItemId,
+    customerEmail: f.customerEmail,
+    addressConfirmed: f.addressConfirmed,
+    line1: f.line1,
+    line2: f.line2,
+    city: f.city,
+    region: f.region,
+    postalCode: f.postalCode,
+    country: f.country,
+    formattedAddress: f.formattedAddress,
+    pocName: f.pocName,
+    pocPhone: f.pocPhone,
+    pocEmail: f.pocEmail,
+    secondaryPocName: f.secondaryPocName,
+    secondaryPocPhone: f.secondaryPocPhone,
+    secondaryPocEmail: f.secondaryPocEmail,
+    loadingDock: f.loadingDock,
+    deliveryTiming: f.deliveryTiming,
+    preferredDeliveryDate: f.preferredDeliveryDate,
+    specialInstructions: f.specialInstructions,
+    restrictedChanges: f.restrictedChanges,
+    freightAckBy: f.freightAckBy,
+    freightAckDate: f.freightAckDate,
+    submittedDate: f.submittedDate,
+    preferredComm: f.preferredComm,
+    textNumber: f.textNumber,
+    secondaryPreferredComm: f.secondaryPreferredComm,
+    secondaryMobile: f.secondaryMobile,
+  };
+}
+
+/**
+ * The customer changed a delivery preference (loading dock, timing, preferred
+ * date) on a submission that is already applied. Carry exactly the fields that
+ * changed onto the editable sections still pointing at this submission's address —
+ * never onto a submitted sheet, and never the fields that did not change, so a
+ * value staff corrected by hand survives an unrelated edit.
+ */
+async function carryDeliveryPreferences(
+  existing: {
+    orderId: string | null;
+    shipToAddressId: string | null;
+    loadingDock: string | null;
+    deliveryTiming: string | null;
+    preferredDeliveryDate: Date | null;
+  },
+  fields: DeliveryFields,
+): Promise<void> {
+  if (!existing.orderId || !existing.shipToAddressId) return;
+  const t = (d: Date | null) => (d ? d.toISOString() : null);
+  const data: {
+    loadingDock?: string | null;
+    deliveryTiming?: string | null;
+    preferredDeliveryDate?: Date | null;
+  } = {};
+  if (existing.loadingDock !== fields.loadingDock) data.loadingDock = fields.loadingDock;
+  if (existing.deliveryTiming !== fields.deliveryTiming)
+    data.deliveryTiming = fields.deliveryTiming;
+  if (t(existing.preferredDeliveryDate) !== t(fields.preferredDeliveryDate)) {
+    data.preferredDeliveryDate = fields.preferredDeliveryDate;
+  }
+  if (!Object.keys(data).length) return;
+  const res = await prisma.bomVendorSection.updateMany({
+    where: {
+      orderId: existing.orderId,
+      shipToAddressId: existing.shipToAddressId,
+      status: { not: 'SUBMITTED' },
+    },
+    data,
+  });
+  if (res.count) {
+    await prisma.orderEvent.create({
+      data: {
+        orderId: existing.orderId,
+        action: 'bom.delivery.portal',
+        actorId: PORTAL_ACTOR,
+        detail: { changed: Object.keys(data), sections: res.count } as object,
+      },
+    });
+  }
 }
 
 /**
@@ -535,6 +706,15 @@ async function resolveOrderId(
       select: { id: true },
     });
     if (linked) return linked.id;
+
+    // The Project ID link: the Manufacturing Process row names its Deal Tracking
+    // row, and the Deal Tracking row id IS the order's Project ID
+    // (AcceptedOrder.mondayProjectId). Exact where it is set, so it outranks email.
+    const viaDeal = await orderForManufacturingItem(mondayOrderItemId).catch((err) => {
+      logger.warn({ err, mondayOrderItemId }, 'portal delivery: deal-link lookup failed');
+      return null;
+    });
+    if (viaDeal) return viaDeal;
   }
 
   const email = (customerEmail ?? '').trim().toLowerCase();
@@ -588,6 +768,65 @@ async function resolveOrderId(
   return orderId;
 }
 
+/** The Manufacturing Process board — the row the portal's Order Item ID names. */
+export function manufacturingBoardId(): string {
+  return env.MONDAY_MANUFACTURING_BOARD_ID ?? '6533700776';
+}
+
+/** Manufacturing Process → Deal Tracking connection. Its linked id is the Project ID. */
+export const MFG_DEAL_LINK_COL = 'link_to_deals__1';
+
+/**
+ * The order a Manufacturing Process row belongs to, through its Deal link.
+ *
+ * Only an unambiguous answer counts: exactly one live order carrying that deal's
+ * Project ID, and no other order already claiming this manufacturing row. The
+ * link is recorded on the order (`portalOrderItemId`) so the next submission for
+ * it resolves without a monday read.
+ */
+export async function orderForManufacturingItem(mfgItemId: string): Promise<string | null> {
+  if (!/^\d+$/.test(mfgItemId)) return null;
+  const data = await mondayQuery<{
+    items: Array<{ column_values: Array<{ id: string; linked_item_ids?: string[] | null }> }>;
+  }>(
+    `query ($items: [ID!]) { items (ids: $items) { column_values (ids: ["${MFG_DEAL_LINK_COL}"]) { id ... on BoardRelationValue { linked_item_ids } } } }`,
+    { items: [mfgItemId] },
+  );
+  const dealIds = (data.items?.[0]?.column_values?.[0]?.linked_item_ids ?? []).map(String);
+  return linkOrderByDeal(mfgItemId, dealIds);
+}
+
+/**
+ * Record `mfgItemId` on the one order whose Project ID is among `dealIds`.
+ * Shared by the single-row lookup above and the board-wide portal refresh.
+ */
+export async function linkOrderByDeal(
+  mfgItemId: string,
+  dealIds: string[],
+): Promise<string | null> {
+  if (!dealIds.length) return null;
+  const candidates = await prisma.acceptedOrder.findMany({
+    where: { mondayProjectId: { in: dealIds }, status: { not: 'CANCELLED' } },
+    select: { id: true, portalOrderItemId: true },
+  });
+  if (candidates.length !== 1) return null;
+  const order = candidates[0]!;
+  if (order.portalOrderItemId && order.portalOrderItemId !== mfgItemId) return null;
+  if (!order.portalOrderItemId) {
+    try {
+      await prisma.acceptedOrder.update({
+        where: { id: order.id },
+        data: { portalOrderItemId: mfgItemId },
+      });
+    } catch (err) {
+      // Another order already claims this manufacturing row — not ours to decide.
+      logger.warn({ err, orderId: order.id, mfgItemId }, 'portal: could not record deal link');
+      return null;
+    }
+  }
+  return order.id;
+}
+
 /** A stable name for the address in the picker, so it reads as what it is. */
 function addressName(orderNumber: string, customerName: string): string {
   return `${customerName} — confirmed by customer (${orderNumber})`;
@@ -621,6 +860,21 @@ async function applyToOrder(submissionId: string, orderId: string): Promise<Inge
 
   // A vendor added to procurement after lock still needs a section to write to.
   await ensureSections(orderId, PORTAL_ACTOR);
+
+  // The customer's CRM record gets the address too, as a SHIPPING address of its
+  // own — never overwriting one already there, and never the bill-to.
+  const crmAddressId = await upsertCrmShippingAddress(sub, order.organizationId, orderId).catch(
+    (err) => {
+      logger.warn({ err, submissionId: sub.id }, 'portal delivery: CRM shipping address failed');
+      return null;
+    },
+  );
+  if (crmAddressId && crmAddressId !== sub.crmAddressId) {
+    await prisma.portalDeliverySubmission.update({
+      where: { id: sub.id },
+      data: { crmAddressId },
+    });
+  }
 
   const addressData = {
     line1: sub.line1,
@@ -753,6 +1007,78 @@ async function applyToOrder(submissionId: string, orderId: string): Promise<Inge
     );
   }
   return 'applied';
+}
+
+/**
+ * The submitted address as a SHIPPING Address on the customer.
+ *
+ * One per order: marked `source: 'PORTAL'` with the order it was confirmed for, so
+ * a resubmission corrects that same record instead of adding a copy each time.
+ * Addresses typed or imported into the CRM are never touched, and neither is the
+ * bill-to. The CRM columns for region and postal code are required, so a portal
+ * row without them stores an empty string rather than failing.
+ */
+async function upsertCrmShippingAddress(
+  sub: {
+    line1: string | null;
+    line2: string | null;
+    city: string | null;
+    region: string | null;
+    postalCode: string | null;
+    country: string | null;
+  },
+  organizationId: string,
+  orderId: string,
+): Promise<string | null> {
+  if (!sub.line1 || !sub.city) return null;
+  const data = {
+    type: 'SHIPPING' as const,
+    line1: sub.line1,
+    line2: sub.line2,
+    city: sub.city,
+    region: sub.region ?? '',
+    postalCode: sub.postalCode ?? '',
+    country: sub.country ?? 'US',
+  };
+  const prior = await prisma.address.findFirst({
+    where: { organizationId, source: 'PORTAL', sourceOrderId: orderId },
+    select: { id: true },
+  });
+  const row = prior
+    ? await prisma.address.update({ where: { id: prior.id }, data })
+    : await prisma.address.create({
+        data: { ...data, organizationId, source: 'PORTAL', sourceOrderId: orderId },
+      });
+  return row.id;
+}
+
+/**
+ * The customer's latest delivery submission for an order — what the Bill of
+ * Materials prints as the delivery contacts and instructions. Newest by the
+ * portal's own submitted date, then by when the CRM received it.
+ */
+export async function latestDeliveryForOrder(orderId: string) {
+  return prisma.portalDeliverySubmission.findFirst({
+    where: { orderId, status: { in: ['APPLIED', 'CONFLICT'] } },
+    orderBy: [{ submittedDate: { sort: 'desc', nulls: 'last' } }, { receivedAt: 'desc' }],
+  });
+}
+
+/**
+ * Tick "Staff Reviewed" on the submissions-board row. Reported, never thrown:
+ * the review is recorded in the CRM whether or not monday accepts the write.
+ */
+export async function markSubmissionReviewedOnBoard(mondayItemId: string): Promise<string | null> {
+  if (!isPortalDeliveryConfigured()) return 'monday.com is not configured on this deployment.';
+  try {
+    await setColumnValues(deliveryBoardId(), mondayItemId, {
+      [DELIVERY_COL.staffReviewed]: { checked: 'true' },
+    });
+    return null;
+  } catch (err) {
+    logger.warn({ err, mondayItemId }, 'portal delivery: could not tick Staff Reviewed');
+    return err instanceof Error ? err.message : String(err);
+  }
 }
 
 /** Link a parked submission to an order by hand, and finish the job. */

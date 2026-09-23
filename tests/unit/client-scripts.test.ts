@@ -84,4 +84,15 @@ describe('client scripts', () => {
     expect(app).toBeGreaterThanOrEqual(0);
     expect(doc).toBeLessThan(app);
   });
+
+  it('keeps the order-portal script loaded before app.js', () => {
+    // app.js builds its Orders-list columns from window.SSGOrderPortal while it
+    // loads. After app.js, the Delivery / Color / Billing columns, the filters and
+    // the order page's Customer Portal card would silently not exist.
+    const tags = taggedScripts();
+    const portal = tags.indexOf('order-portal.js');
+    const app = tags.indexOf('app.js');
+    expect(portal).toBeGreaterThanOrEqual(0);
+    expect(portal).toBeLessThan(app);
+  });
 });

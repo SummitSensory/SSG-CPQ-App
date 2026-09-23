@@ -10148,37 +10148,60 @@
       }, 'Unlock order');
   }
 
-  /* --- Orders list: columns are configurable; customer + signed date lead. --- */
+  /* --- Orders list: columns are configurable; customer + signed date lead. ---
+   *
+   * Each column says how to draw its cell, its CSV value (`plain`), optionally a sort
+   * key, and what kind of filter it takes in the filter row under the headers:
+   * 'text' (the default — contains, or >1000 for a number), 'date', 'status',
+   * 'choice' (a dropdown of the values present) or 'portal'. The customer-portal
+   * columns come from order-portal.js, which owns their chips; `defaultOn` marks a
+   * column shown without anyone choosing it. */
   var ORDER_COLS = [
     { key: 'customer', label: 'Customer', fixed: true, cell: function (o) { return '<b style="font-weight:600;">' + esc(o.customer || '—') + '</b>'; }, plain: function (o) { return o.customer || ''; } },
-    { key: 'signedAt', label: 'Signed', fixed: true, cell: function (o) { return fmtDate(o.signedAt); }, plain: function (o) { return o.signedAt || ''; }, sort: function (o) { return o.signedAt ? new Date(o.signedAt).getTime() : 0; } },
+    { key: 'signedAt', label: 'Signed', fixed: true, filter: 'date', cell: function (o) { return fmtDate(o.signedAt); }, plain: function (o) { return o.signedAt || ''; }, sort: function (o) { return o.signedAt ? new Date(o.signedAt).getTime() : 0; } },
     { key: 'number', label: 'Order', cell: function (o) { return esc(o.number); }, plain: function (o) { return o.number; } },
-    { key: 'status', label: 'Status', cell: function (o) { return handoffStatusChip(o.status); }, plain: function (o) { return titleCase(o.status); } },
+    { key: 'status', label: 'Status', filter: 'status', cell: function (o) { return handoffStatusChip(o.status); }, plain: function (o) { return titleCase(o.status); } },
     { key: 'total', label: 'Total', cell: function (o) { return fmtMoney(o.grandTotalMinor, o.currency); }, plain: function (o) { return money(o.grandTotalMinor); }, sort: function (o) { return Number(o.grandTotalMinor) || 0; } },
     { key: 'deposit', label: 'Deposit', cell: function (o) { return o.depositRequired ? fmtMoney(o.depositDueMinor, o.currency) : '—'; }, plain: function (o) { return o.depositRequired ? money(o.depositDueMinor) : ''; }, sort: function (o) { return o.depositRequired ? (Number(o.depositDueMinor) || 0) : -1; } },
-    { key: 'createdAt', label: 'Created', cell: function (o) { return fmtDate(o.createdAt); }, plain: function (o) { return o.createdAt || ''; }, sort: function (o) { return o.createdAt ? new Date(o.createdAt).getTime() : 0; } },
+    { key: 'createdAt', label: 'Created', filter: 'date', cell: function (o) { return fmtDate(o.createdAt); }, plain: function (o) { return o.createdAt || ''; }, sort: function (o) { return o.createdAt ? new Date(o.createdAt).getTime() : 0; } },
     { key: 'balance', label: 'Balance due', cell: function (o) { return fmtMoney(o.balanceDueMinor, o.currency); }, plain: function (o) { return money(o.balanceDueMinor); }, sort: function (o) { return Number(o.balanceDueMinor) || 0; } },
     { key: 'proposalNumber', label: 'Proposal #', cell: function (o) { return esc(o.proposalNumber || '—'); }, plain: function (o) { return o.proposalNumber || ''; } },
     { key: 'proposalTitle', label: 'Project', cell: function (o) { return esc(o.proposalTitle || '—'); }, plain: function (o) { return o.proposalTitle || ''; } },
     { key: 'acceptedVersion', label: 'Accepted version', cell: function (o) { return o.acceptedVersion ? 'v' + o.acceptedVersion : '—'; }, plain: function (o) { return o.acceptedVersion || ''; }, sort: function (o) { return Number(o.acceptedVersion) || 0; } },
     { key: 'approvedBy', label: 'Approved by', cell: function (o) { return esc(o.approvedBy || '—'); }, plain: function (o) { return o.approvedBy || ''; } },
-    { key: 'approvalMethod', label: 'Approval method', cell: function (o) { return o.approvalMethod ? titleCase(o.approvalMethod) : '—'; }, plain: function (o) { return titleCase(o.approvalMethod || ''); } },
+    { key: 'approvalMethod', label: 'Approval method', filter: 'choice', cell: function (o) { return o.approvalMethod ? titleCase(o.approvalMethod) : '—'; }, plain: function (o) { return titleCase(o.approvalMethod || ''); } },
     { key: 'poNumber', label: 'PO number', cell: function (o) { return esc(o.poNumber || '—'); }, plain: function (o) { return o.poNumber || ''; } },
     { key: 'tasks', label: 'Open tasks', cell: function (o) { return (o.openTasks || 0) + ' / ' + (o.taskCount || 0); }, plain: function (o) { return (o.openTasks || 0) + ' of ' + (o.taskCount || 0); }, sort: function (o) { return o.openTasks || 0; } },
     { key: 'requirements', label: 'Open requirements', cell: function (o) { return (o.openRequirements || 0) + ' / ' + (o.requirementCount || 0); }, plain: function (o) { return (o.openRequirements || 0) + ' of ' + (o.requirementCount || 0); }, sort: function (o) { return o.openRequirements || 0; } },
     { key: 'procurement', label: 'Sourced', cell: function (o) { return (o.procurementSourced || 0) + ' / ' + (o.procurementCount || 0); }, plain: function (o) { return (o.procurementSourced || 0) + ' of ' + (o.procurementCount || 0); }, sort: function (o) { return o.procurementSourced || 0; } },
-    { key: 'qbo', label: 'QuickBooks', cell: function (o) { return o.qboEstimateTxnId ? '<span class="chip">Linked</span>' : '<span class="muted">Not pushed</span>'; }, plain: function (o) { return o.qboEstimateTxnId ? 'Linked' : 'Not pushed'; } },
-    { key: 'monday', label: 'monday.com', cell: function (o) { return o.mondayProjectId ? '<span class="chip">Linked</span>' : '<span class="muted">—</span>'; }, plain: function (o) { return o.mondayProjectId ? 'Linked' : ''; } },
-    { key: 'updatedAt', label: 'Last activity', cell: function (o) { return fmtDate(o.updatedAt); }, plain: function (o) { return o.updatedAt || ''; }, sort: function (o) { return o.updatedAt ? new Date(o.updatedAt).getTime() : 0; } },
-    { key: 'lastEditAt', label: 'Last Edit Date', cell: function (o) { return o.lastEditAt ? fmtDate(o.lastEditAt) : '—'; }, plain: function (o) { return o.lastEditAt || ''; }, sort: function (o) { return o.lastEditAt ? new Date(o.lastEditAt).getTime() : 0; } },
+    { key: 'qbo', label: 'QuickBooks', filter: 'choice', cell: function (o) { return o.qboEstimateTxnId ? '<span class="chip">Linked</span>' : '<span class="muted">Not pushed</span>'; }, plain: function (o) { return o.qboEstimateTxnId ? 'Linked' : 'Not pushed'; } },
+    { key: 'monday', label: 'monday.com', filter: 'choice', cell: function (o) { return o.mondayProjectId ? '<span class="chip">Linked</span>' : '<span class="muted">—</span>'; }, plain: function (o) { return o.mondayProjectId ? 'Linked' : ''; } },
+    { key: 'updatedAt', label: 'Last activity', filter: 'date', cell: function (o) { return fmtDate(o.updatedAt); }, plain: function (o) { return o.updatedAt || ''; }, sort: function (o) { return o.updatedAt ? new Date(o.updatedAt).getTime() : 0; } },
+    { key: 'lastEditAt', label: 'Last Edit Date', filter: 'date', cell: function (o) { return o.lastEditAt ? fmtDate(o.lastEditAt) : '—'; }, plain: function (o) { return o.lastEditAt || ''; }, sort: function (o) { return o.lastEditAt ? new Date(o.lastEditAt).getTime() : 0; } },
     { key: 'lastEditBy', label: 'Last Edit By', cell: function (o) { return esc(o.lastEditBy || '—'); }, plain: function (o) { return o.lastEditBy || ''; } }
-  ];
-  var ORDER_COLS_DEFAULT = ['customer', 'signedAt', 'number', 'status', 'total', 'deposit', 'createdAt', 'lastEditAt', 'lastEditBy'];
+  ].concat(window.SSGOrderPortal ? window.SSGOrderPortal.columns() : []);
+  var ORDER_COLS_DEFAULT = ['customer', 'signedAt', 'number', 'status', 'total', 'deposit', 'createdAt', 'lastEditAt', 'lastEditBy']
+    .concat(ORDER_COLS.filter(function (c) { return c.defaultOn; }).map(function (c) { return c.key; }));
   var ORDER_COLS_KEY = 'ssg.orderColumns';
+  /** Every column key the chooser offered when someone last saved it. A column added
+   *  since (and marked defaultOn) then shows up for them too, instead of staying
+   *  hidden forever behind a choice made before it existed. */
+  var ORDER_COLS_SEEN_KEY = 'ssg.orderColumnsSeen';
+  /** The columns every saved choice predates. A choice saved before the seen-list
+   *  existed was made from exactly these. */
+  var ORDER_COLS_LEGACY = ['customer', 'signedAt', 'number', 'status', 'total', 'deposit', 'createdAt', 'balance', 'proposalNumber', 'proposalTitle', 'acceptedVersion', 'approvedBy', 'approvalMethod', 'poNumber', 'tasks', 'requirements', 'procurement', 'qbo', 'monday', 'updatedAt', 'lastEditAt', 'lastEditBy'];
+  /** This page-load's choice, for a browser whose storage refuses writes. */
+  var ordColsMem = null;
   function orderColKeys() {
-    var saved = null;
+    var saved = null, seen = null;
     try { saved = JSON.parse(localStorage.getItem(ORDER_COLS_KEY) || 'null'); } catch (e) {}
-    var keys = Array.isArray(saved) && saved.length ? saved : ORDER_COLS_DEFAULT.slice();
+    try { seen = JSON.parse(localStorage.getItem(ORDER_COLS_SEEN_KEY) || 'null'); } catch (e) {}
+    if (ordColsMem) { saved = ordColsMem; seen = ORDER_COLS.map(function (c) { return c.key; }); }
+    var keys = Array.isArray(saved) && saved.length ? saved.slice() : ORDER_COLS_DEFAULT.slice();
+    if (Array.isArray(saved) && saved.length) {
+      var known = Array.isArray(seen) ? seen : ORDER_COLS_LEGACY;
+      ORDER_COLS.forEach(function (c) { if (c.defaultOn && known.indexOf(c.key) === -1 && keys.indexOf(c.key) === -1) keys.push(c.key); });
+    }
     // Customer then signed date always lead, whatever else is chosen.
     keys = keys.filter(function (k) { return k !== 'customer' && k !== 'signedAt' && ORDER_COLS.some(function (c) { return c.key === k; }); });
     return ['customer', 'signedAt'].concat(keys);
@@ -10186,27 +10209,64 @@
   function orderCol(key) { for (var i = 0; i < ORDER_COLS.length; i++) if (ORDER_COLS[i].key === key) return ORDER_COLS[i]; return null; }
 
   var HANDOFF_STATUSES = ['NEW', 'IN_PROGRESS', 'BLOCKED', 'READY', 'COMPLETE', 'CANCELLED'];
-  var ords = { q: '', status: '', sort: { key: 'createdAt', dir: 'desc' } };
+  /**
+   * The list's view state. `sort` null is the default order: orders with new
+   * customer-portal information first (the work to do next), newest first within
+   * each group. A header click sets an explicit sort, which wins; a third click on
+   * the same header goes back to the default.
+   *
+   * Filters, the status pick and the sort are remembered per browser (a convenience,
+   * nothing more — it can come back empty and the page must not care). The search
+   * text is not: it is a one-off lookup, and a remembered one hides rows on the next
+   * visit for no visible reason.
+   */
+  var ORDER_VIEW_KEY = 'ssg.orderListView';
+  var ords = { q: '', status: '', sort: null, f: { cols: {}, unreviewed: false } };
+  (function () {
+    try {
+      var v = JSON.parse(localStorage.getItem(ORDER_VIEW_KEY) || 'null');
+      if (!v || typeof v !== 'object') return;
+      if (typeof v.status === 'string') ords.status = v.status;
+      if (v.sort && typeof v.sort.key === 'string') ords.sort = { key: v.sort.key, dir: v.sort.dir === 'desc' ? 'desc' : 'asc' };
+      if (v.f && typeof v.f === 'object') ords.f = { cols: v.f.cols && typeof v.f.cols === 'object' ? v.f.cols : {}, unreviewed: !!v.f.unreviewed };
+    } catch (e) {}
+  })();
+  function saveOrdersView() {
+    try { localStorage.setItem(ORDER_VIEW_KEY, JSON.stringify({ status: ords.status, sort: ords.sort, f: ords.f })); } catch (e) {}
+  }
   var ordersData = [];
-  /** The rows currently on screen — search text, status filter and sort applied. */
+  var OP = window.SSGOrderPortal || null;
+  function orderHasNew(o) { return OP ? OP.hasNew(o) : false; }
+  /** Everything filtering the list: search, the status pick, the filter row / panel. */
+  function ordersFilterCount() {
+    return (ords.q.trim() ? 1 : 0) + (ords.status ? 1 : 0) + (OP ? OP.activeCount(ORDER_COLS, ords.f) : 0);
+  }
+  /** The rows currently on screen — search text, status filter, column filters and sort applied. */
   function ordersView() {
     var q = ords.q.trim().toLowerCase();
+    var now = Date.now();
     var rows = ordersData.filter(function (o) { return !ords.status || o.status === ords.status; })
-      .filter(function (o) { return !q || (String(o.customer || '') + ' ' + String(o.number || '') + ' ' + String(o.proposalTitle || '')).toLowerCase().indexOf(q) !== -1; });
-    var col = orderCol(ords.sort.key);
-    var dir = ords.sort.dir === 'asc' ? 1 : -1;
-    if (col) {
-      rows.sort(function (a, b) {
-        var x = col.sort ? col.sort(a) : col.plain(a), y = col.sort ? col.sort(b) : col.plain(b);
-        if (typeof x === 'string' || typeof y === 'string') { x = String(x || '').toLowerCase(); y = String(y || '').toLowerCase(); }
-        return x < y ? -dir : x > y ? dir : 0;
-      });
-    }
+      .filter(function (o) { return !q || (String(o.customer || '') + ' ' + String(o.number || '') + ' ' + String(o.proposalTitle || '')).toLowerCase().indexOf(q) !== -1; })
+      .filter(function (o) { return !OP || OP.rowPasses(ORDER_COLS, ords.f, o, now); });
+    var col = ords.sort ? orderCol(ords.sort.key) : null;
+    var dir = ords.sort && ords.sort.dir === 'asc' ? 1 : -1;
+    var created = function (o) { return o.createdAt ? new Date(o.createdAt).getTime() : 0; };
+    rows.sort(function (a, b) {
+      if (!col) {
+        // Default: anything new from the customer portal first, then newest order.
+        var na = orderHasNew(a) ? 0 : 1, nb = orderHasNew(b) ? 0 : 1;
+        if (na !== nb) return na - nb;
+        return created(b) - created(a);
+      }
+      var x = col.sort ? col.sort(a) : col.plain(a), y = col.sort ? col.sort(b) : col.plain(b);
+      if (typeof x === 'string' || typeof y === 'string') { x = String(x || '').toLowerCase(); y = String(y || '').toLowerCase(); }
+      return x < y ? -dir : x > y ? dir : 0;
+    });
     return rows;
   }
   async function renderOrders(user) {
     document.getElementById('view').innerHTML =
-      '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px;">' +
         '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
           '<input id="ordSearch" placeholder="Search customer, order #, project…" value="' + esc(ords.q) + '" style="padding:9px 12px;border:1px solid #dcded7;border-radius:9px;font-size:13.5px;background:#fff;width:260px;">' +
           '<select id="ordStatusFilter" style="padding:9px 12px;border:1px solid #dcded7;border-radius:9px;font-size:13.5px;background:#fff;">' +
@@ -10215,48 +10275,142 @@
           '</select>' +
         '</div>' +
         '<div style="display:flex;gap:8px;">' +
+          (OP ? '<button class="link-btn" id="ordFilters" style="width:auto;padding:9px 15px;">Filters</button>' : '') +
           '<button class="link-btn" id="ordCols" style="width:auto;padding:9px 15px;">Columns</button>' +
           '<button class="link-btn" id="ordCsv" style="width:auto;padding:9px 15px;">Export Excel (CSV)</button>' +
         '</div>' +
-      '</div><div id="ordList"><div class="muted" style="padding:24px;">Loading…</div></div>';
+      '</div>' +
+      // The thin line under the toolbar: what's filtered and how to undo it on the
+      // left; how fresh the customer-portal columns are, and Refresh, on the right.
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px;font-size:12.5px;">' +
+        '<div id="ordFilterInfo" class="muted" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;"></div>' +
+        (OP
+          ? '<div id="ordPortalBar" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">' +
+              '<span id="ordPortalErr" style="display:none;color:#8a6d1f;background:#fdf6e3;border:1px solid #eadfbe;border-radius:8px;padding:3px 9px;"></span>' +
+              '<span id="ordPortalAt" class="muted"></span>' +
+              '<button class="link-btn" id="ordPortalRefresh" title="Read every order’s customer-portal steps from monday.com now" style="width:auto;padding:6px 12px;font-size:12.5px;">Refresh</button>' +
+            '</div>'
+          : '') +
+      '</div>' +
+      '<div id="ordList"><div class="muted" style="padding:24px;">Loading…</div></div>';
     document.getElementById('ordCols').addEventListener('click', function () { openOrderColumnPicker(user); });
+    var fb = document.getElementById('ordFilters');
+    if (fb) fb.addEventListener('click', function () {
+      OP.openFiltersPanel({ allCols: ORDER_COLS, state: ords.f, statuses: HANDOFF_STATUSES, onApply: function () { saveOrdersView(); paintOrdersTable(user); } });
+    });
     document.getElementById('ordCsv').addEventListener('click', function () {
       var cols = orderColKeys().map(orderCol);
       downloadCsv('orders-' + todayISO() + '.csv',
         [cols.map(function (c) { return c.label; })].concat(ordersView().map(function (o) { return cols.map(function (c) { return c.plain(o); }); })));
     });
     var s = document.getElementById('ordSearch');
-    s.addEventListener('input', function () { ords.q = s.value; paintOrdersTable(user); });
-    document.getElementById('ordStatusFilter').addEventListener('change', function () { ords.status = this.value; paintOrdersTable(user); });
+    s.addEventListener('input', function () { ords.q = s.value; paintOrdersBody(user); });
+    document.getElementById('ordStatusFilter').addEventListener('change', function () { ords.status = this.value; saveOrdersView(); paintOrdersBody(user); });
+    paintOrdersFilterInfo(user);
+    var bar = document.getElementById('ordPortalBar');
+    var reload = async function () {
+      try {
+        var rr = await authed('/orders');
+        if (rr.ok && document.getElementById('ordList')) { ordersData = (await rr.json()) || []; paintOrdersTable(user); }
+      } catch (e) { /* the rows on screen stay; the next open tries again */ }
+    };
+    if (bar) {
+      document.getElementById('ordPortalRefresh').addEventListener('click', function () {
+        OP.refreshList({ authed: authed, bar: bar, force: true, onChanged: reload });
+      });
+    }
     try {
       var r = await authed('/orders'); if (!r.ok) { document.getElementById('ordList').innerHTML = '<div class="err">Could not load (' + r.status + ').</div>'; return; }
       ordersData = (await r.json()) || [];
       paintOrdersTable(user);
-    } catch (e) { document.getElementById('ordList').innerHTML = '<div class="err">Could not reach the server.</div>'; }
+    } catch (e) { document.getElementById('ordList').innerHTML = '<div class="err">Could not reach the server.</div>'; return; }
+    // Every open of the page asks for a portal refresh after the rows are already on
+    // screen — the server throttles it to once a minute across everyone, and reloads
+    // the rows here only if it actually changed something.
+    if (bar) OP.refreshList({ authed: authed, bar: bar, force: false, onChanged: reload });
+  }
+  /** "Showing 4 of 31 · 2 filters · Clear" and the new-portal-info legend. */
+  function paintOrdersFilterInfo(user, shown) {
+    var info = document.getElementById('ordFilterInfo'); if (!info) return;
+    var n = ordersFilterCount();
+    var fb = document.getElementById('ordFilters');
+    if (fb) fb.innerHTML = 'Filters' + (n ? ' <span style="display:inline-block;min-width:18px;padding:0 6px;border-radius:999px;background:#3d4a55;color:#fff;font-size:11px;line-height:18px;text-align:center;">' + n + '</span>' : '');
+    var anyNew = ordersData.some(orderHasNew);
+    info.innerHTML =
+      (anyNew
+        ? '<span title="Rows with a portal step nobody has reviewed yet' + (ords.sort ? '' : ' — listed first') + '"><span style="display:inline-block;width:4px;height:13px;background:' + (OP ? OP.NEW_MARKER : '#c9a227') + ';vertical-align:-2px;margin-right:6px;border-radius:1px;"></span>New portal information' + (ords.sort ? '' : ', shown first') + '</span>'
+        : '') +
+      (ordersData.length && shown != null && shown !== ordersData.length ? '<span>Showing ' + shown + ' of ' + ordersData.length + '</span>' : '') +
+      (n ? '<span>' + n + ' filter' + (n === 1 ? '' : 's') + ' on</span><button class="link-btn" id="ordClearFilters" style="width:auto;padding:3px 10px;font-size:12px;">Clear</button>' : '') +
+      (ords.sort ? '<button class="link-btn" id="ordDefaultSort" title="New portal information first, then newest order" style="width:auto;padding:3px 10px;font-size:12px;">Default order</button>' : '');
+    var clr = document.getElementById('ordClearFilters');
+    if (clr) clr.addEventListener('click', function () {
+      ords.q = ''; ords.status = ''; ords.f = { cols: {}, unreviewed: false };
+      var s = document.getElementById('ordSearch'); if (s) s.value = '';
+      var sf = document.getElementById('ordStatusFilter'); if (sf) sf.value = '';
+      saveOrdersView(); paintOrdersTable(user);
+    });
+    var ds = document.getElementById('ordDefaultSort');
+    if (ds) ds.addEventListener('click', function () { ords.sort = null; saveOrdersView(); paintOrdersTable(user); });
+  }
+  /** The table rows alone. The filter row calls this so the box being typed into keeps focus. */
+  function ordersBodyHtml(cols, rows) {
+    return rows.map(function (o) {
+      // New portal information: the same inset bar the proposals list uses, amber.
+      var mark = orderHasNew(o) ? 'box-shadow:inset 4px 0 0 ' + OP.NEW_MARKER + ';' : '';
+      return '<tr style="cursor:pointer;" data-id="' + o.id + '">' + cols.map(function (c, i) {
+        return i === 0 && mark ? '<td style="padding:12px 16px;border-bottom:1px solid #f2f3ef;' + mark + '">' + c.cell(o) + '</td>' : td(c.cell(o));
+      }).join('') + '</tr>';
+    }).join('');
+  }
+  function wireOrderRows(box, user) {
+    box.querySelectorAll('tbody tr[data-id]').forEach(function (tr) { tr.addEventListener('click', function () { openOrderDetail(tr.getAttribute('data-id'), user); }); });
+  }
+  function paintOrdersBody(user) {
+    var box = document.getElementById('ordList'); if (!box) return;
+    var tbody = box.querySelector('tbody');
+    if (!tbody) { paintOrdersTable(user); return; }
+    var cols = orderColKeys().map(orderCol);
+    var rows = ordersView();
+    tbody.innerHTML = ordersBodyHtml(cols, rows) ||
+      '<tr><td style="padding:22px 16px;color:#909689;" colspan="' + cols.length + '">' + esc(ordersData.length ? 'No orders match this search or filter.' : 'No operational orders yet. Lock an accepted proposal to create one.') + '</td></tr>';
+    wireOrderRows(box, user);
+    paintOrdersFilterInfo(user, rows.length);
   }
   function paintOrdersTable(user) {
     var box = document.getElementById('ordList'); if (!box) return;
     var cols = orderColKeys().map(orderCol);
     var rows = ordersView();
     var head = cols.map(function (c) {
-      var on = ords.sort.key === c.key;
+      var on = !!ords.sort && ords.sort.key === c.key;
       var arrow = on ? (ords.sort.dir === 'asc' ? ' ▲' : ' ▼') : ' <span style="opacity:.3;">↕</span>';
-      return '<span class="ordSortHead" data-sk="' + c.key + '" style="cursor:pointer;' + (on ? 'color:#3d4a55;' : '') + '">' + esc(c.label) + arrow + '</span>';
+      return '<span class="ordSortHead" data-sk="' + c.key + '" style="cursor:pointer;white-space:nowrap;' + (on ? 'color:#3d4a55;' : '') + '">' + esc(c.label) + arrow + '</span>';
     });
-    var body = rows.map(function (o) {
-      return '<tr style="cursor:pointer;" data-id="' + o.id + '">' + cols.map(function (c) { return td(c.cell(o)); }).join('') + '</tr>';
-    }).join('');
-    box.innerHTML = tableShell(head, body, cols.length,
+    box.innerHTML = tableShell(head, ordersBodyHtml(cols, rows), cols.length,
       ordersData.length ? 'No orders match this search or filter.' : 'No operational orders yet. Lock an accepted proposal to create one.');
-    box.querySelectorAll('tr[data-id]').forEach(function (tr) { tr.addEventListener('click', function () { openOrderDetail(tr.getAttribute('data-id'), user); }); });
+    // tableShell clips its overflow (for the rounded corners). With the portal
+    // columns and the filter row the table is often wider than the screen, and
+    // clipping would silently hide the right-hand columns — scroll sideways instead.
+    var shell = box.firstElementChild;
+    if (shell) shell.style.overflowX = 'auto';
+    if (OP) {
+      OP.mountFilterRow({
+        table: box.querySelector('table'), cols: cols, state: ords.f, statuses: HANDOFF_STATUSES, rows: ordersData,
+        onChange: function () { saveOrdersView(); paintOrdersBody(user); },
+      });
+    }
+    wireOrderRows(box, user);
     box.querySelectorAll('.ordSortHead').forEach(function (h) {
       h.addEventListener('click', function () {
         var k = h.getAttribute('data-sk');
-        if (ords.sort.key === k) ords.sort.dir = ords.sort.dir === 'asc' ? 'desc' : 'asc';
-        else { ords.sort.key = k; ords.sort.dir = 'asc'; }
+        // asc → desc → back to the default order.
+        if (ords.sort && ords.sort.key === k) ords.sort = ords.sort.dir === 'asc' ? { key: k, dir: 'desc' } : null;
+        else ords.sort = { key: k, dir: 'asc' };
+        saveOrdersView();
         paintOrdersTable(user);
       });
     });
+    paintOrdersFilterInfo(user, rows.length);
   }
 
   function openOrderColumnPicker(user) {
@@ -10269,10 +10423,14 @@
     openModal('Table columns', body, function (close) {
       var keys = [];
       document.querySelectorAll('.ordColChk').forEach(function (chk) { if (chk.checked) keys.push(chk.value); });
-      localStorage.setItem(ORDER_COLS_KEY, JSON.stringify(keys));
+      ordColsMem = keys;
+      try {
+        localStorage.setItem(ORDER_COLS_KEY, JSON.stringify(keys));
+        localStorage.setItem(ORDER_COLS_SEEN_KEY, JSON.stringify(ORDER_COLS.map(function (c) { return c.key; })));
+      } catch (e) { /* private window: the choice lasts until the page reloads */ }
       close();
       paintOrdersTable(user);
-    }, 'Apply');
+    }, 'Apply', { maxWidth: '520px' });
   }
 
   async function openOrderDetail(id, user) {
@@ -10309,6 +10467,7 @@
         '<div><div class="k">Deposit</div><div class="v small">' + (order.depositRequired ? fmtMoney(order.depositDueMinor, order.currency) : '—') + '</div></div>' +
         '<div><div class="k">Balance due</div><div class="v small">' + fmtMoney(order.balanceDueMinor, order.currency) + '</div></div>' +
         '<div><div class="k">Customer approval</div><div class="v small">' + (order.customerApproval ? esc(order.customerApproval.approverName) : '—') + '</div></div></div></div>' +
+      (OP ? sectionBlock('Customer Portal', '<div id="portalBox"></div>') : '') +
       (hasRole(ORDERS_MANAGE_ROLES, user.role) ? sectionBlock('Manufacturing', '<div id="mfgBox"><div class="muted" style="padding:16px;">Loading…</div></div>') : '') +
       sectionBlock('Requirements', reqRows(order.requirements || [], canHandoff)) +
       sectionBlock('Internal tasks', taskRows(order.tasks || [], canHandoff)) +
@@ -10317,6 +10476,18 @@
       sectionBlock('Audit timeline', auditRows(audit));
     document.getElementById('ordBack').addEventListener('click', function () { renderOrders(user); });
     loadBomSections(order, user, canHandoff);
+    // The customer's portal steps. It syncs on open (throttled server-side); when the
+    // delivery step changes, or a colour review changes lines, the Bill of Materials
+    // reloads so the new ship-to / colours show without leaving the page.
+    var portalBox = document.getElementById('portalBox');
+    if (OP && portalBox) {
+      var reloadBom = function () { loadBomSections(order, user, canHandoff); };
+      OP.mountCard({
+        el: portalBox, orderId: order.id, authed: authed,
+        canReview: hasRole(ORDERS_MANAGE_ROLES, user.role),
+        onDeliveryChanged: reloadBom, onBomChanged: reloadBom,
+      });
+    }
     if (hasRole(QBO_VIEW_ROLES, user.role)) loadQbo(order, user);
     if (hasRole(ORDERS_MANAGE_ROLES, user.role)) loadManufacturing(order, user);
     var unl = document.getElementById('ordUnlock');
@@ -10986,7 +11157,9 @@
               : '') + '</div>' +
           '<div><div class="k">Submission date</div><input class="secF" data-id="' + s.id + '" data-f="submittedOn" type="date" value="' + esc(dateVal) + '" style="' + bomFieldStyle(null, locked) + (placeholderDate ? 'color:#20241f;' : '') + '"' + dis + '>' +
             (placeholderDate ? '<div class="muted" style="font-size:11px;margin-top:3px;">Today, until you confirm or change it</div>' : '') + '</div>' +
-          '<div><div class="k">Delivery type</div><input class="secF" data-id="' + s.id + '" data-f="deliveryType" value="' + esc(s.deliveryType || '') + '" placeholder="e.g. Lift Gate" style="' + bomFieldStyle(null, locked) + '"' + dis + '></div>' +
+          // Labelled "Delivery", as the sheet prints it: "Delivery Type" is now the
+          // customer's loading-dock answer, shown read-only in the block below.
+          '<div><div class="k">Delivery</div><input class="secF" data-id="' + s.id + '" data-f="deliveryType" value="' + esc(s.deliveryType || '') + '" placeholder="e.g. Lift Gate" style="' + bomFieldStyle(null, locked) + '"' + dis + '></div>' +
           '<div><div class="k">Estimated shipment quote</div><input class="secF" data-id="' + s.id + '" data-f="shipmentQuote" value="' + esc(s.shipmentQuote || '') + '" placeholder="TBD" style="' + bomFieldStyle(null, locked) + '"' + dis + '>' +
             '<div class="muted" style="font-size:11px;margin-top:3px;">' +
               (s.freightSource === 'MATS' ? 'Mats freight from the deal' : s.freightSource === 'NONE' ? 'This vendor quotes no freight' : 'Structure freight from the deal') +
@@ -11012,6 +11185,7 @@
               '<span class="muted" data-deal-out style="font-size:11.5px;line-height:1.5;flex:1;min-width:220px;">Reads the Deal Tracking board and replaces the freight and tax figures with what it holds.</span>' +
             '</div>'
           : '') +
+        sectionDeliveryBlock(s) +
         invoiceBlock(s, canHandoff) +
         '<div style="margin-top:12px;"><div class="k">Notes to this vendor</div>' +
           '<textarea class="secF" data-id="' + s.id + '" data-f="notes" rows="2" placeholder="Prints beneath the line items" style="' + bomFieldStyle(null, locked) + 'resize:vertical;"' + dis + '>' + esc(s.notes || '') + '</textarea></div>' +
@@ -11265,6 +11439,82 @@
           '</tr>';
         }).join('') +
       '</table></div>';
+  }
+
+  /**
+   * One phone number as the Bill of Materials prints it — the same rule as bomPhone in
+   * src/handoff/bomDelivery.ts. Ten digits (after dropping a leading US 1) prints
+   * "(303) 748-8082"; anything else — international, an extension, a word — prints
+   * exactly as the customer typed it.
+   */
+  function bomPhoneText(raw) {
+    var text = String(raw == null ? '' : raw).trim();
+    if (!text || /[^\d\s().+\-]/.test(text)) return text;
+    var digits = text.replace(/\D/g, '');
+    if (text.charAt(0) === '+' && digits.charAt(0) !== '1') return text;
+    if (digits.length === 11 && digits.charAt(0) === '1') digits = digits.slice(1);
+    if (digits.length !== 10) return text;
+    return '(' + digits.slice(0, 3) + ') ' + digits.slice(3, 6) + '-' + digits.slice(6);
+  }
+
+  /**
+   * The rows of the sheet's delivery block, shared by the on-screen card and the
+   * browser print: [label, primary, secondary] for the points of contact, then
+   * [label, value] for instructions, preferred date and timing. Empty answers stay
+   * empty — the rows are always there, as on the sheet itself.
+   */
+  function bomDeliveryRows(dl) {
+    dl = dl || {};
+    var p = dl.primary || {}, s2 = dl.secondary || {};
+    return {
+      contacts: [
+        ['Full Name', p.name || '', s2.name || ''],
+        ['Primary Phone Number', bomPhoneText(p.phone), bomPhoneText(s2.phone)],
+        ['Primary Email Address', p.email || '', s2.email || ''],
+        ['Preferred Communication Type', p.preferredComm || '', s2.preferredComm || ''],
+        ['Text #', bomPhoneText(p.textNumber), bomPhoneText(s2.textNumber)]
+      ],
+      details: [
+        ['Special Delivery Instructions', dl.specialInstructions || ''],
+        ['Preferred Delivery Date', dl.preferredDeliveryDate || ''],
+        ['Preferred Delivery Timing', dl.deliveryTiming || '']
+      ]
+    };
+  }
+
+  /**
+   * Read-only: what the customer told the portal, as this vendor's sheet will print it.
+   * Not editable here — the points of contact and instructions are the customer's
+   * words, and the loading-dock / timing / date answers are applied by the portal.
+   */
+  function sectionDeliveryBlock(s) {
+    var dl = s.delivery || {};
+    var rows = bomDeliveryRows(dl);
+    var cell = function (v, strong) {
+      return '<td style="padding:4px 14px 4px 0;font-size:12.5px;vertical-align:top;' + (strong ? 'font-weight:600;white-space:nowrap;' : '') + '">' +
+        (v ? esc(v) : '<span class="muted">—</span>') + '</td>';
+    };
+    var th = function (v) {
+      return '<th style="padding:4px 14px 4px 0;font-size:12px;font-weight:650;text-align:left;border-bottom:1px solid #cfd2c9;white-space:nowrap;">' + esc(v) + '</th>';
+    };
+    return '<div style="margin-top:12px;padding:12px 14px;background:#fbfbf9;border:1px solid #e7e8e3;border-radius:9px;">' +
+      '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:baseline;">' +
+        '<div class="k" style="margin:0;">Delivery details from the customer portal</div>' +
+        '<span class="muted" style="font-size:11px;">Prints on this vendor’s sheet</span>' +
+      '</div>' +
+      '<div style="font-size:12.5px;margin-top:6px;"><b style="font-weight:600;">Delivery Type:</b> ' +
+        (dl.deliveryType ? esc(dl.deliveryType) : '<span class="muted">—</span>') + '</div>' +
+      '<div style="overflow:auto;margin-top:8px;"><table style="border-collapse:collapse;">' +
+        '<tr>' + th('Ship to Point of Contact(s)') + th('Primary POC') + th('Secondary POC') + '</tr>' +
+        rows.contacts.map(function (r) { return '<tr>' + cell(r[0], true) + cell(r[1]) + cell(r[2]) + '</tr>'; }).join('') +
+      '</table></div>' +
+      '<table style="border-collapse:collapse;margin-top:8px;width:100%;">' +
+        rows.details.map(function (r) {
+          return '<tr><td style="padding:4px 14px 4px 0;font-size:12.5px;vertical-align:top;font-weight:600;white-space:nowrap;width:1%;">' + esc(r[0]) + '</td>' +
+            '<td style="padding:4px 0;font-size:12.5px;vertical-align:top;white-space:pre-wrap;">' + (r[1] ? esc(r[1]) : '<span class="muted">—</span>') + '</td></tr>';
+        }).join('') +
+      '</table>' +
+    '</div>';
   }
 
   /**
@@ -12093,7 +12343,9 @@
         '<div style="font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;color:#20241f;margin-bottom:3px;">' + esc(label) + '</div>' +
         '<div style="font-size:12.5px;line-height:1.5;">' +
           '<b>' + esc(name || '—') + '</b>' +
-          (lines || []).map(function (l) { return '<br>' + esc(l); }).join('') +
+          // A blank ship-to street/city line is deliberate (no confirmed address yet)
+          // and keeps its row, so the contact under it is not read as the address.
+          (lines || []).map(function (l) { return '<br>' + (l ? esc(l) : '&nbsp;'); }).join('') +
           (contact ? '<br>' + esc(contact) : '') +
           (phone ? '<br>' + esc(phone) : '') +
           (email ? '<br>' + esc(email) : '') +
@@ -12152,7 +12404,8 @@
       '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px 18px;margin-top:14px;padding:11px 13px;background:#f7f8f4;border:1px solid #e7e8e3;border-radius:8px;">' +
         field('Job', doc.order.jobName) +
         field('Submission date', dateStr(doc.order.submittedOn)) +
-        field('Delivery type', doc.order.deliveryType) +
+        field('Delivery Type', doc.delivery && doc.delivery.deliveryType) +
+        field('Delivery', doc.order.deliveryType) +
         field('Powder coat brand', doc.order.powderCoatBrand) +
         field('Total steel weight', (Number(t.steelWeightLbs) || 0).toFixed(2) + ' lb') +
         field('Total weight', (Number(t.totalWeightLbs) || 0).toFixed(2) + ' lb') +
@@ -12160,6 +12413,18 @@
         field('Vendor terms', doc.vendor ? (doc.vendor.paymentTerms || '—') : '—') +
       '</div>' +
       '<div style="font-size:9.5px;color:#20241f;margin:5px 0 0;">Total steel weight is fabricated steel only — it excludes hardware and crating.</div>' +
+      // Ship-to points of contact, then instructions / preferred date / timing — the
+      // same rows every server-rendered format prints, blanks included.
+      (function () {
+        var dr = bomDeliveryRows(doc.delivery);
+        var th = function (v) { return '<th style="text-align:left;padding:4px 14px 4px 0;font-size:11px;font-weight:700;border-bottom:1px solid #20241f;white-space:nowrap;">' + esc(v) + '</th>'; };
+        var lab = function (v) { return '<td style="padding:3px 14px 3px 0;font-size:11px;font-weight:700;white-space:nowrap;vertical-align:top;">' + esc(v) + '</td>'; };
+        var val = function (v) { return '<td style="padding:3px 14px 3px 0;font-size:11px;vertical-align:top;white-space:pre-wrap;">' + esc(v) + '</td>'; };
+        return '<table style="border-collapse:collapse;margin-top:12px;"><tr>' + th('Ship to Point of Contact(s)') + th('Primary POC') + th('Secondary POC') + '</tr>' +
+            dr.contacts.map(function (r) { return '<tr>' + lab(r[0]) + val(r[1]) + val(r[2]) + '</tr>'; }).join('') + '</table>' +
+          '<table style="border-collapse:collapse;margin-top:10px;width:100%;">' +
+            dr.details.map(function (r) { return '<tr>' + lab(r[0]).replace('white-space:nowrap;', 'white-space:nowrap;width:1%;') + val(r[1]) + '</tr>'; }).join('') + '</table>';
+      })() +
       // Lines
       '<table style="width:100%;border-collapse:collapse;margin-top:12px;"><thead><tr>' + thead + '</tr></thead><tbody>' + tbody +
       '<tr>' + totalCells.map(function (v, i) {
@@ -14965,7 +15230,11 @@
         admAcc('ordersFreightBanner', 'Freight alert banner',
           'The bar that appears above every screen when an invoice is short of freight. It is the most-seen thing in the application, so its colours are yours to set: pick a preset or two exact colours per state. The preview is live.',
           '',
-          '<div id="ftuBannerAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>')) +
+          '<div id="ftuBannerAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+        admAcc('ordersPortalColors', 'Portal colour areas',
+          'The customer portal asks for colours by area (the legs, the slide, the zip-line mat); the Bill of Materials holds a colour per part. Map each area to the catalog parts it paints, and marking an order&rsquo;s colour step reviewed writes the customer&rsquo;s picks onto those parts &mdash; except on a vendor sheet already submitted. Areas appear here the first time a customer answers them; one flagged <b>Unmapped</b> is listed on every review until it is mapped.',
+          '',
+          '<div id="portalColorAreasAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>')) +
 
       // cross-border.js appends #crossBorderPanel to #view when it cannot find it.
       // Giving it a home inside this tab is what keeps it from landing at the foot of
@@ -14978,6 +15247,8 @@
     wireAdmAccordions();
 
     if (window.FreightTrueUp) window.FreightTrueUp.mountAdmin('ftuBannerAdmin', user);
+    // Portal colour areas: its own file (public/portal-color-areas.js); the route enforces PRODUCTS_ADMIN.
+    if (window.SSGPortalColorAreas) window.SSGPortalColorAreas.render(document.getElementById('portalColorAreasAdmin'), { authed: authed });
     if (window.SSGIntroAdmin) window.SSGIntroAdmin.mountAdmin('introAdmin');
     if (window.SSGTips) window.SSGTips.mountAdmin('tipsGuideAdmin', user);
     document.getElementById('admNew').addEventListener('click', openUserForm);

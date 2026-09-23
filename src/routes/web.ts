@@ -63,6 +63,9 @@ const CLIENT_SCRIPTS = [
   'signature-field-layout.js',
   // The customer proposal document, lifted out of app.js.
   'proposal-document.js',
+  // The Orders pages' customer-portal columns, filters and Customer Portal card.
+  // Before app.js in index.html: app.js reads it while building ORDER_COLS.
+  'order-portal.js',
   // Screens that install their own nav entry and fail in isolation.
   // Shared by Catalog and Administration, owned by neither.
   'ssg-standard-notes.js',
@@ -77,6 +80,8 @@ const CLIENT_SCRIPTS = [
   'freight-trueup.js',
   'tips-and-tricks.js',
   'portal-delivery.js',
+  // Administration → Orders → Portal colour areas: which parts each portal colour area paints.
+  'portal-color-areas.js',
   'vendor-colors.js',
   'cross-border.js',
   'intro-admin.js',

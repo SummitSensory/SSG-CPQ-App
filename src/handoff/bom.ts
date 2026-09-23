@@ -1,8 +1,11 @@
+import { primaryShippingAddress } from '../crm/addresses.js';
 import { prisma } from '../lib/prisma.js';
 import { NotFoundError } from '../lib/errors.js';
 import { vendorPartLookup } from './vendorParts.js';
 import { defaultJobName } from './bomSections.js';
 import { isRollupHardwarePart, rollUpBomLines } from './bomRollup.js';
+import { deliveryDetails, type BomDelivery } from './bomDelivery.js';
+import { latestDeliveryForOrder } from '../integrations/monday/portalDelivery.js';
 
 /**
  * The Bill of Materials.
@@ -95,6 +98,13 @@ export interface BomDocument {
     postalCode: string;
     country: string;
   };
+  /**
+   * When the sheet ships to the customer, `lines` is always exactly the street line
+   * then the city/state/zip line — both BLANK when no address has been confirmed in
+   * the portal or picked for the section, so every format prints two empty rows to
+   * be filled in rather than closing the gap and letting the contact read as the
+   * address.
+   */
   shipTo: {
     label: string;
     name: string;
@@ -103,6 +113,8 @@ export interface BomDocument {
     phone: string;
     email: string;
   };
+  /** Delivery answers and points of contact from the customer portal. See bomDelivery.ts. */
+  delivery: BomDelivery;
   vendors: string[];
   vendor: {
     name: string;
@@ -218,6 +230,16 @@ export async function buildBom(
         include: { shipToAddress: true },
       })
     : null;
+
+  // What the customer told the portal: points of contact, instructions, and the
+  // delivery answers a section falls back to (see bomDelivery.ts).
+  const submission = await latestDeliveryForOrder(orderId);
+  // The all-vendors sheet has no section to carry an address, so it prints the one
+  // the customer confirmed — the same address the portal put on every open section.
+  const allVendorsAddress =
+    !vendorFilter && submission?.shipToAddressId
+      ? await prisma.shipToAddress.findUnique({ where: { id: submission.shipToAddressId } })
+      : null;
 
   const mfrByName = new Map(manufacturers.map((m) => [m.name.toLowerCase(), m]));
   const steelVendors = new Set(
@@ -394,7 +416,7 @@ export async function buildBom(
   }
 
   // ---- customer block ----
-  const ship = org?.addresses.find((a) => a.type === 'SHIPPING') ?? org?.addresses[0] ?? null;
+  const ship = primaryShippingAddress(org?.addresses) ?? org?.addresses[0] ?? null;
   const contact = org?.contacts[0] ?? null;
   const customer = {
     name: org?.name ?? '',
@@ -415,42 +437,62 @@ export async function buildBom(
   // ---- ship-to block: the customer's site, or Summit's dock ----
   const cityLine = (city: string, region: string, zip: string) =>
     [city, [region, zip].filter(Boolean).join(' ')].filter(Boolean).join(', ');
-  const named = section?.shipToAddress ?? null;
-  const shipTo = named
-    ? {
-        label: named.name,
-        name: named.name,
-        lines: [
-          streetLine(named.line1, named.line2),
-          cityLine(s(named.city), s(named.region), s(named.postalCode)),
-        ].filter(Boolean),
-        contactName: s(named.contactName),
-        phone: s(named.phone),
-        email: s(named.email),
-      }
-    : order.bomShipTo === 'SUMMIT'
-      ? {
-          label: 'Summit Sensory Gym',
-          name: COMPANY.name,
-          lines: [
-            COMPANY.addressLine1,
-            cityLine(COMPANY.city, COMPANY.region, COMPANY.postalCode),
-          ].filter(Boolean),
-          contactName: creator?.name ?? '',
-          phone: COMPANY.phone,
-          email: COMPANY.email,
-        }
-      : {
-          label: 'Customer site',
-          name: customer.name,
-          lines: [
-            streetLine(customer.addressLine1, customer.addressLine2),
-            cityLine(customer.city, customer.region, customer.postalCode),
-          ].filter(Boolean),
-          contactName: customer.contactName,
-          phone: customer.contactPhone,
-          email: customer.contactEmail,
-        };
+  // The all-vendors sheet has no section, so it borrows the customer's confirmed
+  // address — unless the order ships to Summit's dock, which it must keep saying.
+  const named = section?.shipToAddress ?? (order.bomShipTo === 'SUMMIT' ? null : allVendorsAddress);
+  // The customer's own name and CRM contact head the block whenever the truck is
+  // going to the customer. A portal-confirmed address is the customer's site, so it
+  // supplies only the street and city rows — its own name is just what it is called
+  // in the picker, and its POC now prints in the Point of Contact block below.
+  const customerShipTo = (address: typeof named) => ({
+    label: 'Customer site',
+    name: customer.name,
+    // Exactly two rows, kept even when empty. The customer's CRM shipping (or first)
+    // address used to be the fallback here, but that is whatever the CRM last held,
+    // not where the customer said the truck should go; two blank rows ask the question
+    // instead of answering it wrongly on a document a vendor ships against.
+    lines: address
+      ? [
+          streetLine(address.line1, address.line2),
+          cityLine(s(address.city), s(address.region), s(address.postalCode)),
+        ]
+      : ['', ''],
+    contactName: customer.contactName,
+    phone: customer.contactPhone,
+    email: customer.contactEmail,
+  });
+  const shipTo =
+    named?.source === 'PORTAL'
+      ? customerShipTo(named)
+      : named
+        ? {
+            label: named.name,
+            name: named.name,
+            lines: [
+              streetLine(named.line1, named.line2),
+              cityLine(s(named.city), s(named.region), s(named.postalCode)),
+            ].filter(Boolean),
+            contactName: s(named.contactName),
+            phone: s(named.phone),
+            email: s(named.email),
+          }
+        : // The section's own choice in the Ship-to picker. This read the order-level
+          // default only, so choosing "Summit Sensory Gym" on one vendor's section
+          // still printed the customer's site; the order's value is now just what a
+          // sheet with no section (all vendors) falls back to.
+          (section?.shipTo ?? order.bomShipTo) === 'SUMMIT'
+          ? {
+              label: 'Summit Sensory Gym',
+              name: COMPANY.name,
+              lines: [
+                COMPANY.addressLine1,
+                cityLine(COMPANY.city, COMPANY.region, COMPANY.postalCode),
+              ].filter(Boolean),
+              contactName: creator?.name ?? '',
+              phone: COMPANY.phone,
+              email: COMPANY.email,
+            }
+          : customerShipTo(null);
 
   // ---- vendor block (only for a single-vendor BOM) ----
   const mfr = vendorFilter ? mfrByName.get(vendorFilter.toLowerCase()) : undefined;
@@ -518,6 +560,7 @@ export async function buildBom(
     createdAt: new Date().toISOString(),
     customer,
     shipTo,
+    delivery: deliveryDetails(section, submission),
     vendors,
     vendor,
     lines,
