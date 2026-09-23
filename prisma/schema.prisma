@@ -300,6 +300,7 @@ model Organization {
 
   @@unique([normalizedName])
   @@index([customerType])
+  @@index([followUpDate])
 }
 
 /// Internal notes about a customer, and about the proposals written for them.
@@ -1550,6 +1551,7 @@ model Sku {
 
   @@index([category])
   @@index([active])
+  @@index([overrideAllowed])
 }
 
 /// One line of a part's build: `parentPart` is made up of `quantity` × `childPart`.
@@ -2049,6 +2051,7 @@ model AcceptedOrder {
   @@index([organizationId])
   @@index([status])
   @@index([proposalId])
+  @@index([manufacturingReleasedAt])
 }
 
 // The customer's acceptance of record — who approved, how, and when.
@@ -2156,6 +2159,7 @@ model ProcurementLine {
   secondaryOfSku String?
 
   @@index([orderId])
+  @@index([invoicedAt])
 }
 
 // Operational requirements by category (production, shipping, install, etc.).
@@ -2833,7 +2837,7 @@ model FreightEntry {
 
   createdById        String
   createdAt          DateTime           @default(now())
-  updatedAt          DateTime           @updatedAt
+  updatedAt          DateTime           @default(now()) @updatedAt
 
   @@index([trueUpId])
   @@index([proposalId])
@@ -3582,7 +3586,7 @@ model PortalDeliverySubmission {
   attempts   Int      @default(0)
   receivedAt DateTime @default(now())
   resolvedAt DateTime?
-  updatedAt  DateTime @updatedAt
+  updatedAt  DateTime @default(now()) @updatedAt
 
   @@index([mondayOrderItemId])
   @@index([status])
@@ -3639,7 +3643,7 @@ model PortalColorSelection {
 
   createdAt   DateTime @default(now())
   createdById String?
-  updatedAt   DateTime @updatedAt
+  updatedAt   DateTime @default(now()) @updatedAt
 
   @@index([orderId])
   @@index([status])
@@ -4205,7 +4209,7 @@ model CrossBorderSetting {
 model UiSetting {
   key         String   @id
   value       String
-  updatedAt   DateTime @updatedAt
+  updatedAt   DateTime @default(now()) @updatedAt
   updatedById String?
 }
 
@@ -4263,7 +4267,7 @@ model PaymentTemplate {
   isBuiltIn   Boolean            @default(false)
   updatedById String?
   createdAt   DateTime           @default(now())
-  updatedAt   DateTime           @updatedAt
+  updatedAt   DateTime           @default(now()) @updatedAt
 
   @@index([kind, active, stage])
 }
