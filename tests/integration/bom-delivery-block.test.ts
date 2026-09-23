@@ -274,6 +274,30 @@ describe('BOM ship-to block', () => {
     });
   });
 
+  it('keeps every row of a hand-picked address in place when its street is blank', async () => {
+    state.section = section({
+      shipToAddressId: 'addr-trailer',
+      shipToAddress: {
+        ...PORTAL_ADDRESS,
+        name: 'Job trailer',
+        source: null,
+        line1: null,
+        phone: '303-748-8082 ext 12',
+      },
+    });
+    const sheet = await loadSheet('Acme Fab');
+    const n = rowOf(sheet, 'Ship from').number;
+    expect([1, 2, 3, 4, 5, 6].map((i) => cellText(sheet.getRow(n + i), 2))).toEqual([
+      'Job trailer',
+      'ATTN: Portal POC',
+      '', // no street: the row stays, empty
+      'Los Angeles, CA 91316',
+      // An extension is printed exactly as typed — the Excel no longer re-formats it.
+      'PH: 303-748-8082 ext 12',
+      'portal@example.com',
+    ]);
+  });
+
   it('honours the section’s own "Summit Sensory Gym" choice over the order default', async () => {
     state.section = section({ shipTo: 'SUMMIT' });
     const { buildBom } = await import('../../src/handoff/bom.js');
@@ -370,7 +394,7 @@ describe('BOM delivery block', () => {
 
     const date = rowOf(sheet, 'Preferred Delivery Date');
     expect(date.number).toBe(instr.number + 1);
-    expect(cellText(date, 2)).toBe('2026-10-05');
+    expect(cellText(date, 2)).toBe('10/05/2026');
     const timing = rowOf(sheet, 'Preferred Delivery Timing');
     expect(timing.number).toBe(instr.number + 2);
     expect(cellText(timing, 2)).toBe('Weekday mornings');
@@ -403,7 +427,7 @@ describe('BOM delivery block', () => {
     expect(lines).toContain('Ship to Point of Contact(s),Primary POC,Secondary POC');
     expect(lines).toContain('Primary Phone Number,(303) 748-8082,+44 20 7946 0958');
     expect(lines).toContain('Text #,(303) 555-1212,');
-    expect(lines).toContain('Preferred Delivery Date,2026-10-05');
+    expect(lines).toContain('Preferred Delivery Date,10/05/2026');
     expect(lines).toContain('Delivery Type,"No, I need liftgate delivery"');
   });
 

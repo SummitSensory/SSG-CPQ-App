@@ -5,7 +5,13 @@ import { rollUpProcurementLines } from './bomRollup.js';
 import { summarize, type InvoiceVariance } from './vendorInvoice.js';
 import type { BomQuestionType, BomSectionStatus, BomShipTo } from '@prisma/client';
 import { dealFigures, freightFor } from './dealFigures.js';
-import { deliveryDetails, type BomDelivery } from './bomDelivery.js';
+import {
+  bomDateStamp,
+  bomToday,
+  deliveryDetails,
+  usDate,
+  type BomDelivery,
+} from './bomDelivery.js';
 import { latestDeliveryForOrder } from '../integrations/monday/portalDelivery.js';
 
 /**
@@ -259,7 +265,8 @@ export interface SectionView {
 }
 
 const iso = (d: Date | null | undefined): string | null => (d ? d.toISOString() : null);
-const today = (): string => new Date().toISOString().slice(0, 10);
+// Summit's today (America/Denver), not UTC's: after ~6 pm Mountain UTC is tomorrow.
+const today = (): string => bomToday();
 
 /** Fill {{token}} placeholders in a vendor's saved email defaults. */
 export function renderTemplate(text: string, vars: Record<string, string>): string {
@@ -378,7 +385,9 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
       customer: customerName,
       order: order.number,
       job: s.jobName || order.jobName || defaultJob,
-      submittedOn: s.submittedOn ? s.submittedOn.toISOString().slice(0, 10) : today(),
+      // Printed the way the sheet prints it (MM/DD/YYYY) — {{submittedOn}} lands in the
+      // vendor's email alongside the attachment.
+      submittedOn: usDate(s.submittedOn ? s.submittedOn.toISOString().slice(0, 10) : today()),
     };
     const to = (mfr?.bomEmailTo || mfr?.contactEmail || '').trim();
     return {
@@ -636,7 +645,10 @@ export async function confirmSection(sectionId: string, actorId: string) {
       status: 'SUBMITTED',
       confirmedAt: new Date(),
       confirmedById: actorId,
-      submittedOn: s.submittedOn ?? new Date(),
+      // Summit's today, stamped at midday. `new Date()` stored the instant, and every
+      // reader takes the UTC calendar day — so a section confirmed after ~6 pm Mountain
+      // was permanently dated tomorrow, on the sheet and in the vendor's email.
+      submittedOn: s.submittedOn ?? bomDateStamp(bomToday()),
     },
   });
   await logEvent(s.orderId, 'bom.section.confirmed', actorId, {

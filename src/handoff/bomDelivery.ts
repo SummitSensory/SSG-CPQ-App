@@ -26,7 +26,7 @@ export interface BomPoc {
 export interface BomDelivery {
   /** The loading-dock answer, e.g. "No, I need liftgate delivery". Prints as "Delivery Type". */
   deliveryType: string;
-  /** YYYY-MM-DD. Blank when unanswered. (Submission Date prints MM/DD/YYYY; this row does not.) */
+  /** YYYY-MM-DD as stored; every format prints it MM/DD/YYYY (usDate). Blank when unanswered. */
   preferredDeliveryDate: string;
   deliveryTiming: string;
   specialInstructions: string;
@@ -60,6 +60,74 @@ export interface SubmissionDeliveryAnswers {
 }
 
 const t = (v: string | null | undefined): string => (v ?? '').trim();
+
+/**
+ * Summit's own time zone (Englewood, CO). "Today" on a sheet is Summit's today: in UTC
+ * an export made after about 6 pm Mountain was dated the next day.
+ */
+export const BOM_TIME_ZONE = 'America/Denver';
+
+/** Today's date in Summit's time zone, as YYYY-MM-DD. */
+export function bomToday(now: Date = new Date()): string {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: BOM_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '';
+  return `${get('year')}-${get('month')}-${get('day')}`;
+}
+
+/**
+ * A calendar day (YYYY-MM-DD) as the instant to STORE for it: 18:00 UTC, which is
+ * midday in Denver (11:00 MST / 12:00 MDT) and still the same day in UTC. Every
+ * reader takes `toISOString().slice(0, 10)`, so a day stored this way reads back as
+ * itself — the same convention as the section editor, which saves local noon.
+ */
+export function bomDateStamp(day: string): Date {
+  return new Date(`${day}T18:00:00.000Z`);
+}
+
+/** "2026-09-22" → "09/22/2026", how every date on a BOM prints. Anything else as-is. */
+export function usDate(iso: string | null | undefined): string {
+  const v = t(iso);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  return m ? `${m[2]}/${m[3]}/${m[1]}` : v;
+}
+
+/**
+ * Every YYYY-MM-DD inside free text as MM/DD/YYYY — the portal writes its timing
+ * answer as "Schedule delivery on or after 2026-11-06", which would otherwise print a
+ * second date format on the same sheet.
+ *
+ * Only a real calendar date standing on its own is touched: the month must be 01–12
+ * and the day 01–31, and it may not touch a letter, digit, underscore or hyphen on
+ * either side. So "Part 1234-56-78", "Suite 2026-01-15B", "SO-2026-000036" and a
+ * timestamp like "2026-11-06T10:00" are all left exactly as written.
+ */
+export function usDatesInText(text: string | null | undefined): string {
+  return t(text).replace(
+    /(?<![\w-])(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])(?![\w-])/g,
+    '$2/$3/$1',
+  );
+}
+
+/**
+ * A person's name as the sheet prints it. A name typed entirely in lowercase
+ * ("kamilla eliezer") is capitalised word by word, including after a hyphen or an
+ * apostrophe ("o'neil-smith" → "O'Neil-Smith"). A name with ANY capital letter is left
+ * exactly as typed: "McDonald", "DeAndre" or "van der Berg" are the customer's own
+ * spelling, and guessing at them would be worse than lowercase.
+ */
+export function personName(raw: string | null | undefined): string {
+  const v = t(raw);
+  // Unicode-aware, so "élodie ñuñez" becomes "Élodie Ñuñez", and a name holding any
+  // capital — "Á" included — is the customer's own spelling and left alone.
+  // Not a name at all — an email, "n/a", a phone typed into the name box: as typed.
+  if (!v || /\p{Lu}/u.test(v) || /[@/\d]/.test(v)) return v;
+  return v.replace(/(^|[\s\-'’.])(\p{Ll})/gu, (_m, p: string, c: string) => p + c.toUpperCase());
+}
 const day = (d: Date | null | undefined): string => (d ? d.toISOString().slice(0, 10) : '');
 
 /**
@@ -79,14 +147,14 @@ export function deliveryDetails(
     deliveryTiming: t(section?.deliveryTiming) || t(sub?.deliveryTiming),
     specialInstructions: t(sub?.specialInstructions),
     primary: {
-      name: t(sub?.pocName),
+      name: personName(sub?.pocName),
       phone: t(sub?.pocPhone),
       email: t(sub?.pocEmail),
       preferredComm: t(sub?.preferredComm),
       textNumber: t(sub?.textNumber),
     },
     secondary: {
-      name: t(sub?.secondaryPocName),
+      name: personName(sub?.secondaryPocName),
       phone: t(sub?.secondaryPocPhone),
       email: t(sub?.secondaryPocEmail),
       preferredComm: t(sub?.secondaryPreferredComm),
