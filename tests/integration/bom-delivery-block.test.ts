@@ -365,4 +365,12 @@ describe('BOM delivery block', () => {
     expect(lines).toContain('Preferred Delivery Date,2026-10-05');
     expect(lines).toContain('Delivery Type,"No, I need liftgate delivery"');
   });
+
+  it('neutralises customer text that would run as a spreadsheet formula in the CSV', async () => {
+    const { renderBomCsv } = await import('../../src/handoff/bomDocuments.js');
+    state.submission = { ...SUBMISSION, specialInstructions: '=HYPERLINK("http://x","click")' };
+    const { csv } = await renderBomCsv('o1', 'Acme Fab', {});
+    expect(csv).toContain(`"'=HYPERLINK(""http://x"",""click"")"`);
+    expect(csv).not.toMatch(/,=HYPERLINK/);
+  });
 });

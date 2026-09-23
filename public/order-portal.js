@@ -1269,16 +1269,31 @@
       delete st.errors[kind];
       delete st.notes[kind];
       paint();
+      // The version on screen goes with the click, so the server marks THAT version
+      // reviewed and refuses if the customer's answers changed since the page loaded.
+      var shown = (st.items || []).filter(function (i) {
+        return i.kind === kind;
+      })[0];
       try {
         var r = await opts.authed(
           '/orders/' + opts.orderId + '/portal/' + kind.toLowerCase() + '/review',
-          { method: 'POST', body: {} },
+          { method: 'POST', body: { contentHash: (shown && shown.contentHash) || '' } },
         );
         if (!r.ok) {
           st.errors[kind] = await serverMessage(
             r,
             'Could not mark it reviewed (' + r.status + ').',
           );
+          // 409: the answers moved since the page loaded, or someone else already
+          // reviewed them. Show the current version so the next click is on it.
+          if (r.status === 409) {
+            try {
+              var fresh = await opts.authed('/orders/' + opts.orderId + '/portal');
+              if (fresh.ok) st.items = await fresh.json();
+            } catch (e) {
+              /* the error above already says what to do */
+            }
+          }
         } else {
           var res = await r.json();
           st.items = (st.items || []).map(function (i) {

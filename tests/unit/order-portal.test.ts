@@ -127,3 +127,16 @@ describe('withSuiteFromFormatted — the suite only the formatted line carries',
     ).toBe('Bldg B');
   });
 });
+
+describe('primaryShippingAddress — a portal delivery site never displaces the CRM address', () => {
+  it('prefers an address typed or imported into the CRM', async () => {
+    const { primaryShippingAddress } = await import('../../src/crm/addresses.js');
+    const portal = { id: 'p', type: 'SHIPPING', source: 'PORTAL' };
+    const own = { id: 'o', type: 'SHIPPING', source: null };
+    const bill = { id: 'b', type: 'BILLING', source: null };
+    expect(primaryShippingAddress([portal, own, bill])?.id).toBe('o');
+    expect(primaryShippingAddress([portal, bill])?.id).toBe('p');
+    // QuickBooks' bill-to fallback: never the portal site.
+    expect(primaryShippingAddress([portal, bill], { allowPortal: false })).toBeNull();
+  });
+});

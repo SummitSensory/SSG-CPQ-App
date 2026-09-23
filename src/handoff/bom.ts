@@ -1,3 +1,4 @@
+import { primaryShippingAddress } from '../crm/addresses.js';
 import { prisma } from '../lib/prisma.js';
 import { NotFoundError } from '../lib/errors.js';
 import { vendorPartLookup } from './vendorParts.js';
@@ -415,7 +416,7 @@ export async function buildBom(
   }
 
   // ---- customer block ----
-  const ship = org?.addresses.find((a) => a.type === 'SHIPPING') ?? org?.addresses[0] ?? null;
+  const ship = primaryShippingAddress(org?.addresses) ?? org?.addresses[0] ?? null;
   const contact = org?.contacts[0] ?? null;
   const customer = {
     name: org?.name ?? '',
@@ -436,7 +437,9 @@ export async function buildBom(
   // ---- ship-to block: the customer's site, or Summit's dock ----
   const cityLine = (city: string, region: string, zip: string) =>
     [city, [region, zip].filter(Boolean).join(' ')].filter(Boolean).join(', ');
-  const named = section?.shipToAddress ?? allVendorsAddress;
+  // The all-vendors sheet has no section, so it borrows the customer's confirmed
+  // address — unless the order ships to Summit's dock, which it must keep saying.
+  const named = section?.shipToAddress ?? (order.bomShipTo === 'SUMMIT' ? null : allVendorsAddress);
   // The customer's own name and CRM contact head the block whenever the truck is
   // going to the customer. A portal-confirmed address is the customer's site, so it
   // supplies only the street and city rows — its own name is just what it is called

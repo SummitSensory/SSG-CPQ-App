@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { PortalItemKind, PortalItemState, Prisma } from '@prisma/client';
+import { Prisma, type PortalItemKind, type PortalItemState } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { recordAudit } from '../lib/audit.js';
@@ -199,6 +199,10 @@ async function readManufacturingBoard(fetchImpl?: typeof fetch): Promise<MfgRow[
  * Manufacturing row → order. A recorded `portalOrderItemId` answers first; an
  * unlinked row is linked through its Deal only when that is unambiguous — one
  * Manufacturing row for the deal, and one live order carrying its Project ID.
+ *
+ * Two queries for the whole board, not one per row: most of the ~380 rows are
+ * historic jobs that never link, and asking the database about each of them on
+ * every refresh is how a refresh outlives a serverless time limit.
  */
 async function linkRows(rows: MfgRow[]): Promise<Map<string, MfgRow>> {
   const byOrder = new Map<string, MfgRow>();
@@ -212,19 +216,43 @@ async function linkRows(rows: MfgRow[]): Promise<Map<string, MfgRow>> {
   for (const r of rows)
     for (const d of r.dealIds) rowsPerDeal.set(d, (rowsPerDeal.get(d) ?? 0) + 1);
 
+  const unlinked = rows.filter((r) => !orderOfItem.has(r.id));
+  const uniqueDeals = [
+    ...new Set(unlinked.flatMap((r) => r.dealIds.filter((d) => rowsPerDeal.get(d) === 1))),
+  ];
+  const candidates = uniqueDeals.length
+    ? await prisma.acceptedOrder.findMany({
+        where: { mondayProjectId: { in: uniqueDeals }, status: { not: 'CANCELLED' } },
+        select: { id: true, mondayProjectId: true, portalOrderItemId: true },
+      })
+    : [];
+  const ordersPerDeal = new Map<string, typeof candidates>();
+  for (const c of candidates) {
+    const list = ordersPerDeal.get(c.mondayProjectId!) ?? [];
+    list.push(c);
+    ordersPerDeal.set(c.mondayProjectId!, list);
+  }
+
   for (const r of rows) {
     let orderId = orderOfItem.get(r.id) ?? null;
     if (!orderId) {
-      const unique = r.dealIds.filter((d) => rowsPerDeal.get(d) === 1);
-      if (unique.length) orderId = await linkOrderByDeal(r.id, unique);
+      const matches = r.dealIds
+        .filter((d) => rowsPerDeal.get(d) === 1)
+        .flatMap((d) => ordersPerDeal.get(d) ?? []);
+      // Exactly one order, not already claimed by a different Manufacturing row.
+      if (matches.length === 1 && !matches[0]!.portalOrderItemId) {
+        orderId = await linkOrderByDeal(r.id, [matches[0]!.mondayProjectId!]);
+      }
     }
     if (orderId && !byOrder.has(orderId)) byOrder.set(orderId, r);
   }
   return byOrder;
 }
 
+type Submission = NonNullable<Awaited<ReturnType<typeof latestDeliveryForOrder>>>;
+
 /** The delivery step's answers, as the order page shows them. */
-function deliveryAnswers(sub: NonNullable<Awaited<ReturnType<typeof latestDeliveryForOrder>>>) {
+function deliveryAnswers(sub: Submission) {
   const d = (v: Date | null) => (v ? v.toISOString().slice(0, 10) : null);
   return {
     submittedDate: d(sub.submittedDate),
@@ -255,20 +283,29 @@ function deliveryAnswers(sub: NonNullable<Awaited<ReturnType<typeof latestDelive
   };
 }
 
+/** Marks a step read from a submission row — the only kind that takes "Staff Reviewed". */
+export const SUBMISSION_SOURCE = 'submission:';
+
 interface Observation {
   state: PortalItemState;
   label: string | null;
   answers: unknown;
   sourceItemId: string | null;
-  /** When the customer gave it, if the source says; otherwise "now". */
+  /** When the customer gave it, if the source says. */
   givenAt: Date | null;
 }
 
+/**
+ * A monday date column is a calendar date, stored as UTC midnight. Shown in a US
+ * time zone, midnight UTC is the previous evening, so the chip read a day early.
+ * Noon UTC is the same calendar day everywhere from Hawaii to New Zealand.
+ */
+export function calendarDate(d: Date): Date {
+  return new Date(d.toISOString().slice(0, 10) + 'T12:00:00.000Z');
+}
+
 /** What each step looks like for one order right now. */
-async function observe(
-  orderId: string,
-  row: MfgRow | null,
-): Promise<Map<PortalItemKind, Observation>> {
+function observe(row: MfgRow | null, sub: Submission | null): Map<PortalItemKind, Observation> {
   const out = new Map<PortalItemKind, Observation>();
   for (const k of PORTAL_KINDS) {
     if (!row) continue;
@@ -283,50 +320,81 @@ async function observe(
   }
   // Delivery: a matched submission is the authority — it is what the BOM prints —
   // whatever the Manufacturing status says. Without one, the status decides.
-  const sub = await latestDeliveryForOrder(orderId);
   if (sub) {
     out.set('DELIVERY', {
       state: 'PROVIDED',
       label: row?.labels.DELIVERY || '✅',
       answers: deliveryAnswers(sub),
-      sourceItemId: sub.mondayItemId,
-      givenAt: sub.submittedDate ?? sub.receivedAt,
+      sourceItemId: SUBMISSION_SOURCE + sub.mondayItemId,
+      givenAt: sub.submittedDate ? calendarDate(sub.submittedDate) : sub.receivedAt,
     });
   }
   return out;
 }
 
-/** Upsert one order's steps. Returns how many changed. */
-async function record(orderId: string, obs: Map<PortalItemKind, Observation>): Promise<number> {
-  const existing = await prisma.orderPortalItem.findMany({ where: { orderId } });
+/**
+ * When this version of a step's answers was obtained. The first time a step is
+ * seen, that is when the customer gave it (the portal's Submitted Date) if the
+ * source says. After that, a change is dated when the CRM saw it, unless the
+ * source gives a newer date: an edit to the same submission keeps its Submitted
+ * Date, and "New" beside an old date reads as though nothing happened. A step that
+ * is not PROVIDED has no date.
+ */
+export function obtainedAtFor(
+  state: PortalItemState,
+  givenAt: Date | null,
+  prior: { contentHash: string | null; obtainedAt: Date | null } | null,
+  now: Date,
+): Date | null {
+  if (state !== 'PROVIDED') return null;
+  if (!prior?.contentHash) return givenAt ?? now;
+  if (givenAt && prior.obtainedAt && givenAt > prior.obtainedAt) return givenAt;
+  return now;
+}
+
+type ItemRow = Awaited<ReturnType<typeof prisma.orderPortalItem.findMany>>[number];
+
+/**
+ * Upsert one order's steps against what is already stored. Returns how many
+ * changed; unchanged items go into `touched` for one batched `lastSyncedAt`
+ * update rather than an update each.
+ */
+async function record(
+  orderId: string,
+  obs: Map<PortalItemKind, Observation>,
+  existing: ItemRow[],
+  touched: string[],
+): Promise<number> {
   const byKind = new Map(existing.map((e) => [e.kind, e]));
   const now = new Date();
   let changed = 0;
   for (const [kind, o] of obs) {
     const hash = contentHashOf(o.state, o.answers);
-    const prior = byKind.get(kind);
+    const prior = byKind.get(kind) ?? null;
     if (prior && prior.contentHash === hash && prior.mondayStatus === o.label) {
-      await prisma.orderPortalItem.update({
-        where: { id: prior.id },
-        data: { lastSyncedAt: now },
-      });
+      touched.push(prior.id);
       continue;
     }
     changed += 1;
     const moved = !prior || prior.contentHash !== hash;
+    const obtainedAt = obtainedAtFor(o.state, o.givenAt, prior, now);
     const data = {
       state: o.state,
       mondayStatus: o.label,
-      answers: (o.answers ?? undefined) as Prisma.InputJsonValue | undefined,
+      // Cleared, not left behind, when a step goes back to 🚫 or N/A.
+      answers: o.answers == null ? Prisma.JsonNull : (o.answers as Prisma.InputJsonValue),
       contentHash: hash,
       sourceItemId: o.sourceItemId,
       lastSyncedAt: now,
-      // The date this version of the answers was obtained. Only a PROVIDED step
-      // has one; a step going back to 🚫 keeps no date.
-      ...(moved ? { obtainedAt: o.state === 'PROVIDED' ? (o.givenAt ?? now) : null } : {}),
+      ...(moved ? { obtainedAt } : {}),
     };
-    if (prior) await prisma.orderPortalItem.update({ where: { id: prior.id }, data });
-    else await prisma.orderPortalItem.create({ data: { orderId, kind, ...data } });
+    // Upsert, not find-then-create: two refreshes overlapping on one order must not
+    // abort each other on the (orderId, kind) unique key.
+    await prisma.orderPortalItem.upsert({
+      where: { orderId_kind: { orderId, kind } },
+      create: { orderId, kind, ...data, obtainedAt },
+      update: data,
+    });
   }
   return changed;
 }
@@ -344,6 +412,10 @@ export interface PortalRefreshResult {
   error: string | null;
 }
 
+/** A forced refresh still waits this long after the last one started. */
+export const FORCED_MIN_INTERVAL_MS = 10_000;
+
+/** The last refresh that finished. */
 async function lastRefreshAt(): Promise<Date | null> {
   const row = await prisma.integrationSyncLog.findFirst({
     where: { entity: REFRESH_LOG_ENTITY, status: 'ok' },
@@ -354,11 +426,33 @@ async function lastRefreshAt(): Promise<Date | null> {
 }
 
 /**
+ * Claim this time window. `IntegrationSyncLog.eventId` is unique, so of two
+ * refreshes starting in the same window exactly one insert succeeds — an atomic
+ * claim across every server instance, which a read-then-write check is not. A
+ * forced refresh claims a 10-second window, an automatic one a one-minute window.
+ */
+async function claimWindow(force: boolean): Promise<string | null> {
+  const size = force ? FORCED_MIN_INTERVAL_MS : REFRESH_THROTTLE_MS;
+  const eventId = `${REFRESH_LOG_ENTITY}:${force ? 'force' : 'auto'}:${Math.floor(Date.now() / size)}`;
+  try {
+    const row = await prisma.integrationSyncLog.create({
+      data: { direction: 'INBOUND', entity: REFRESH_LOG_ENTITY, status: 'running', eventId },
+      select: { id: true },
+    });
+    return row.id;
+  } catch {
+    return null; // another refresh holds this window
+  }
+}
+
+/**
  * Refresh every order's portal steps from monday.
  *
- * Throttled to once a minute across every user and every server instance — the
- * throttle lives in the database, not in memory, because a serverless deployment
- * has many processes. `force` is the manual Refresh / Sync button.
+ * Throttled across every user and every server instance: an automatic refresh
+ * runs only when the last successful one finished over a minute ago, and at most
+ * one starts per minute; a forced one (the Refresh / Sync buttons) at most one per
+ * ten seconds. A run that fails is recorded as failed and does not hold the
+ * throttle, so the next page open tries again.
  */
 export async function refreshPortal(
   opts: { force?: boolean; actorId?: string; fetchImpl?: typeof fetch } = {},
@@ -375,51 +469,79 @@ export async function refreshPortal(
   if (!isPortalDeliveryConfigured()) {
     return { ...blank, error: 'monday.com is not configured on this deployment.' };
   }
+  const force = opts.force === true;
   const last = await lastRefreshAt();
-  if (!opts.force && last && Date.now() - last.getTime() < REFRESH_THROTTLE_MS) {
+  if (!force && last && Date.now() - last.getTime() < REFRESH_THROTTLE_MS) {
     return { ...blank, throttled: true, at: last.toISOString() };
   }
-  // Claimed before the reads, so a second tab opening the page mid-refresh is
-  // throttled rather than starting its own.
-  await prisma.integrationSyncLog.create({
-    data: { direction: 'INBOUND', entity: REFRESH_LOG_ENTITY, status: 'ok' },
-  });
+  const claim = await claimWindow(force);
+  if (!claim) return { ...blank, throttled: true, at: last ? last.toISOString() : null };
 
   try {
-    // 1. Delivery submissions, through the ordinary ingest.
+    // 1. Delivery submissions, through the ordinary ingest. Same filter as the
+    // backfill: a row with no street and nothing to read one out of is an invite
+    // nobody has filled in, and storing it would leave a permanent INCOMPLETE row
+    // for the retry sweep to re-read from monday forever. Rows already waiting on
+    // something, and unchanged, are left to the retry sweep.
     const submissions: Record<string, number> = {};
     const rows = await fetchAllItems(deliveryBoardId(), 250, 500);
     for (const item of rows) {
-      const hasAddress = item.text['text_mm57sf21'] || item.text['long_text_mm57vhh3'];
-      const hasOrder = item.text['text_mm571ym4'];
-      if (!hasAddress && !hasOrder) continue; // an invite row nobody has filled in
-      const r = await ingestDeliverySubmission(item.id, { name: item.name, text: item.text });
+      if (!item.text['text_mm57sf21'] && !item.text['long_text_mm57vhh3']) continue;
+      const r = await ingestDeliverySubmission(
+        item.id,
+        { name: item.name, text: item.text },
+        { skipUnchangedPending: true },
+      );
       submissions[r] = (submissions[r] ?? 0) + 1;
     }
 
-    // 2. Manufacturing rows → orders → steps.
+    // 2. Manufacturing rows → orders → steps, with every read batched.
     const mfg = await readManufacturingBoard(opts.fetchImpl);
     const byOrder = await linkRows(mfg);
-    const withDelivery = await prisma.portalDeliverySubmission.findMany({
+    const subs = await prisma.portalDeliverySubmission.findMany({
       where: { orderId: { not: null }, status: { in: ['APPLIED', 'CONFLICT'] } },
-      select: { orderId: true },
-      distinct: ['orderId'],
+      orderBy: [{ submittedDate: { sort: 'desc', nulls: 'last' } }, { receivedAt: 'desc' }],
     });
-    const orderIds = new Set<string>([
-      ...byOrder.keys(),
-      ...withDelivery.map((d) => d.orderId!).filter(Boolean),
-    ]);
-    let itemsChanged = 0;
-    for (const orderId of orderIds) {
-      itemsChanged += await record(orderId, await observe(orderId, byOrder.get(orderId) ?? null));
+    const latestSub = new Map<string, Submission>();
+    for (const s of subs) if (!latestSub.has(s.orderId!)) latestSub.set(s.orderId!, s);
+
+    const orderIds = [...new Set<string>([...byOrder.keys(), ...latestSub.keys()])];
+    const stored = orderIds.length
+      ? await prisma.orderPortalItem.findMany({ where: { orderId: { in: orderIds } } })
+      : [];
+    const storedByOrder = new Map<string, ItemRow[]>();
+    for (const s of stored) {
+      const list = storedByOrder.get(s.orderId) ?? [];
+      list.push(s);
+      storedByOrder.set(s.orderId, list);
     }
 
-    const at = new Date().toISOString();
-    logger.info({ orders: orderIds.size, itemsChanged, submissions }, 'portal refresh: complete');
+    let itemsChanged = 0;
+    const touched: string[] = [];
+    for (const orderId of orderIds) {
+      itemsChanged += await record(
+        orderId,
+        observe(byOrder.get(orderId) ?? null, latestSub.get(orderId) ?? null),
+        storedByOrder.get(orderId) ?? [],
+        touched,
+      );
+    }
+    if (touched.length) {
+      await prisma.orderPortalItem.updateMany({
+        where: { id: { in: touched } },
+        data: { lastSyncedAt: new Date() },
+      });
+    }
+
+    await prisma.integrationSyncLog.update({ where: { id: claim }, data: { status: 'ok' } });
+    logger.info(
+      { orders: orderIds.length, itemsChanged, submissions, actorId: opts.actorId },
+      'portal refresh: complete',
+    );
     return {
       refreshed: true,
       throttled: false,
-      at,
+      at: new Date().toISOString(),
       ordersLinked: byOrder.size,
       itemsChanged,
       submissions,
@@ -427,7 +549,11 @@ export async function refreshPortal(
     };
   } catch (err) {
     logger.error({ err }, 'portal refresh failed');
-    return { ...blank, error: err instanceof Error ? err.message : String(err) };
+    const message = err instanceof Error ? err.message : String(err);
+    await prisma.integrationSyncLog
+      .update({ where: { id: claim }, data: { status: 'error', error: message } })
+      .catch(() => undefined);
+    return { ...blank, error: message };
   }
 }
 
@@ -442,6 +568,8 @@ export interface PortalItemView {
   reviewedAt: string | null;
   reviewedBy: string | null;
   lastSyncedAt: string | null;
+  /** The version on screen. Sent back with "Mark reviewed" so only that version is marked. */
+  contentHash: string | null;
 }
 
 /** Every step for one order, in column order, including steps never seen ("-"). */
@@ -467,6 +595,7 @@ export async function portalItemsForOrder(orderId: string): Promise<PortalItemVi
       reviewedAt: r?.reviewedAt ? r.reviewedAt.toISOString() : null,
       reviewedBy: r?.reviewedById ? (nameOf.get(r.reviewedById) ?? null) : null,
       lastSyncedAt: r?.lastSyncedAt ? r.lastSyncedAt.toISOString() : null,
+      contentHash: r?.contentHash ?? null,
     };
   });
 }
@@ -526,11 +655,16 @@ export interface ReviewResult {
  * Mark one step reviewed. Records WHICH version was reviewed (the hash), so new
  * answers make it new again. Delivery also ticks Staff Reviewed on monday; colour
  * also applies the picks to the Bill of Materials through the area mapping.
+ *
+ * `seenHash` is the version the person was looking at. A refresh in another tab
+ * can replace the answers after the page loaded; without this, clicking Mark
+ * reviewed would approve — and for colour, apply to the BOM — answers nobody saw.
  */
 export async function reviewPortalItem(
   orderId: string,
   kind: PortalItemKind,
   actorId: string,
+  seenHash: string,
 ): Promise<ReviewResult> {
   if (!PORTAL_KINDS.includes(kind)) throw new ValidationError(`"${kind}" is not a portal step`);
   const item = await prisma.orderPortalItem.findUnique({
@@ -541,24 +675,47 @@ export async function reviewPortalItem(
     throw new ConflictError('Only information the customer has provided can be marked reviewed.');
   }
 
-  let colors: ColorApplyResult | null = null;
-  if (kind === 'COLOR') colors = await applyColorPicksToOrder(orderId, item.answers, actorId);
-
-  // Claimed on the hash that was read: answers that changed between the page
-  // loading and this click are NOT marked reviewed.
-  const claim = await prisma.orderPortalItem.updateMany({
-    where: { id: item.id, contentHash: item.contentHash },
-    data: { reviewedAt: new Date(), reviewedById: actorId, reviewedHash: item.contentHash },
-  });
-  if (!claim.count) {
-    throw new ConflictError(
-      'The customer changed this while you were reviewing it. Reload and review the new version.',
-    );
+  const stale = new ConflictError(
+    'The customer changed this since the page loaded. Reload and review the new version.',
+  );
+  if (!seenHash || item.contentHash !== seenHash) throw stale;
+  if (item.reviewedHash === item.contentHash) {
+    // Already reviewed — by someone else, or in another tab. Reviewing again would
+    // re-apply colours over corrections made since the first review.
+    throw new ConflictError('This version has already been marked reviewed. Reload to see it.');
   }
 
+  // Claim FIRST, on the version that was seen and while it is still unreviewed, so
+  // two clicks cannot both win and nothing is applied for a version that lost.
+  const prior = {
+    reviewedAt: item.reviewedAt,
+    reviewedById: item.reviewedById,
+    reviewedHash: item.reviewedHash,
+  };
+  const claim = await prisma.orderPortalItem.updateMany({
+    where: { id: item.id, contentHash: seenHash, reviewedHash: item.reviewedHash },
+    data: { reviewedAt: new Date(), reviewedById: actorId, reviewedHash: seenHash },
+  });
+  if (!claim.count) throw stale;
+
+  let colors: ColorApplyResult | null = null;
+  if (kind === 'COLOR') {
+    try {
+      colors = await applyColorPicksToOrder(orderId, item.answers, actorId);
+    } catch (err) {
+      // The picks did not reach the BOM, so the review does not stand either.
+      await prisma.orderPortalItem.update({ where: { id: item.id }, data: prior });
+      throw err;
+    }
+  }
+
+  // Only a delivery SUBMISSION row takes "Staff Reviewed"; a delivery step read from
+  // the Manufacturing status has no submission to tick.
   let mondayNote: string | null = null;
-  if (kind === 'DELIVERY' && item.sourceItemId) {
-    mondayNote = await markSubmissionReviewedOnBoard(item.sourceItemId);
+  if (kind === 'DELIVERY' && item.sourceItemId?.startsWith(SUBMISSION_SOURCE)) {
+    mondayNote = await markSubmissionReviewedOnBoard(
+      item.sourceItemId.slice(SUBMISSION_SOURCE.length),
+    );
   }
 
   await prisma.orderEvent.create({

@@ -1,3 +1,4 @@
+import { primaryShippingAddress } from '../crm/addresses.js';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
@@ -250,7 +251,7 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
         const remaining = Math.max(0, l.quantity - shipped);
         const org = orgById.get(l.order.organizationId);
         const addresses = org?.addresses || [];
-        const ship = addresses.find((a) => a.type === 'SHIPPING') || addresses[0];
+        const ship = primaryShippingAddress(addresses) || addresses[0];
         // The contact the proposal was addressed to.
         //
         // sections is an ARRAY of section objects, and the proposal's meta is the one

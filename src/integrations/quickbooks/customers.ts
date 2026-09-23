@@ -1,3 +1,4 @@
+import { primaryShippingAddress } from '../../crm/addresses.js';
 import { prisma } from '../../lib/prisma.js';
 import { logger } from '../../lib/logger.js';
 import { qboEnvironment } from '../../config/env.js';
@@ -54,7 +55,8 @@ export async function loadCustomerSource(
 
   const contact = org.contacts.find((c) => c.email) ?? org.contacts[0] ?? null;
   const billingRow = org.addresses.find((a) => a.type === 'BILLING') ?? null;
-  const shipping = org.addresses.find((a) => a.type === 'SHIPPING') ?? null;
+  // Never a portal delivery site: it is per-order and must not become the bill-to.
+  const shipping = primaryShippingAddress(org.addresses, { allowPortal: false });
 
   // Most customers are billed where they are shipped, and the proposal already
   // works that way ("bill to same as ship to"). So a customer with one address on

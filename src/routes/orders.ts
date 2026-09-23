@@ -1,4 +1,5 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { can } from '../authz/rbac.js';
 import { z } from 'zod';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
@@ -94,6 +95,15 @@ const BomLinePatch = z.object({
   quantity: z.number().int().min(1).max(100000).optional(),
 });
 
+/**
+ * A forced refresh (the Refresh / Sync buttons) skips the one-a-minute throttle and
+ * writes to the CRM and the Bill of Materials, so it takes the permission to manage
+ * orders. Anyone else asking to force gets the ordinary, throttled refresh.
+ */
+function mayForce(req: FastifyRequest, force: unknown): boolean {
+  return force === true && !!req.user && can(req.user.role, Permission.ORDERS_MANAGE);
+}
+
 export function registerOrderRoutes(app: FastifyInstance): void {
   const read = { preHandler: requirePermission(Permission.ORDERS_READ) };
   const manage = { preHandler: requirePermission(Permission.ORDERS_MANAGE) };
@@ -124,7 +134,7 @@ export function registerOrderRoutes(app: FastifyInstance): void {
    */
   app.post('/orders/portal/refresh', read, async (req) => {
     const body = (req.body ?? {}) as { force?: boolean };
-    return refreshPortal({ force: body.force === true, actorId: req.user!.sub });
+    return refreshPortal({ force: mayForce(req, body.force), actorId: req.user!.sub });
   });
 
   /** One order's portal steps, with the customer's answers. */
@@ -139,7 +149,10 @@ export function registerOrderRoutes(app: FastifyInstance): void {
   app.post('/orders/:id/portal/sync', read, async (req) => {
     const { id } = req.params as { id: string };
     const body = (req.body ?? {}) as { force?: boolean };
-    const refresh = await refreshPortal({ force: body.force === true, actorId: req.user!.sub });
+    const refresh = await refreshPortal({
+      force: mayForce(req, body.force),
+      actorId: req.user!.sub,
+    });
     return { refresh, items: await portalItemsForOrder(id) };
   });
 
@@ -150,7 +163,11 @@ export function registerOrderRoutes(app: FastifyInstance): void {
     if (!(PORTAL_KINDS as string[]).includes(k)) {
       throw new ValidationError(`"${kind}" is not a portal step`);
     }
-    return reviewPortalItem(id, k as PortalItemKind, req.user!.sub);
+    const body = (req.body ?? {}) as { contentHash?: unknown };
+    const seen = typeof body.contentHash === 'string' ? body.contentHash : '';
+    if (!seen)
+      throw new ValidationError('Reload the order — the version being reviewed was not sent.');
+    return reviewPortalItem(id, k as PortalItemKind, req.user!.sub, seen);
   });
 
   app.get('/orders/:id', read, async (req) =>

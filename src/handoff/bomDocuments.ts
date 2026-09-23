@@ -883,7 +883,17 @@ export async function renderBomCsv(
 ): Promise<{ csv: string; doc: BomDocument }> {
   const m = await buildModel(orderId, vendor, opts);
 
-  const field = (v: string): string => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+  // Customer-typed text (delivery instructions, contact names) reaches this sheet
+  // from the portal. A cell starting with = + - @ runs as a formula when the CSV is
+  // opened in Excel, so it is prefixed with an apostrophe — except a value made only
+  // of digits and number/phone punctuation ("-12.50", "+44 20 7946 0958"), which
+  // cannot carry a formula and must print as typed.
+  const neutral = (v: string): string =>
+    /^[=+\-@\t\r]/.test(v) && /[^\d\s().+\-,]/.test(v) ? `'${v}` : v;
+  const field = (raw: string): string => {
+    const v = neutral(raw);
+    return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+  };
   const row = (cells: string[]): string => cells.map(field).join(',');
   const rows: string[] = [];
 
