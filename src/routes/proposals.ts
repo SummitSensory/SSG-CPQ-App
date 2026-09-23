@@ -650,6 +650,15 @@ export function registerProposalRoutes(app: FastifyInstance): void {
     const { versionId } = req.params as { versionId: string };
     const body = (req.body ?? {}) as { note?: string; approval?: unknown };
     assertCan(req.user!.role, Permission.ORDERS_MANAGE);
+    // No approval block at all is not a half-filled form — it is a browser tab
+    // still running the app from before signing and locking became one step,
+    // whose "Proposal Signed" button posts a bare status change. Scripts are
+    // served no-store, so a reload is the whole fix; say that, not a schema dump.
+    if (body.approval === undefined || body.approval === null) {
+      throw new ValidationError(
+        'This page is running an older version of the app. Reload the page (Ctrl+F5), then click “Proposal Signed” again — it will ask for the customer approval details and lock the order in the same step.',
+      );
+    }
     const approval = ApprovalSchema.safeParse(body.approval);
     if (!approval.success) {
       throw new ValidationError(

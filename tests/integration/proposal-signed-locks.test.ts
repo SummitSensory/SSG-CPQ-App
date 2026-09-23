@@ -117,6 +117,13 @@ describe('Proposal Signed locks the order', () => {
     expect(createAcceptedOrder).not.toHaveBeenCalled();
   });
 
+  it('tells a stale tab (no approval block at all) to reload, without changing status', async () => {
+    const res = await sign('SALES_MANAGER', {});
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toMatch(/older version of the app\. Reload the page/);
+    expect(changeStatus).not.toHaveBeenCalled();
+  });
+
   it('refuses a blank approver name with a readable message', async () => {
     const res = await sign('SALES_MANAGER', { approval: { ...approval, approverName: '   ' } });
     expect(res.statusCode).toBe(400);
