@@ -29,7 +29,9 @@ const AREA_PREFIXES: Record<string, string[]> = {
   tree: ['catalog.category', 'catalog.family', 'catalog.tree', 'catalog.product.reorder'],
   manufacturers: ['manufacturer.', 'vendorColor.', 'powder.'],
   bundles: ['catalog.bundle'],
-  bom: ['bom.', 'handoff.'],
+  // 'bomBuild.' is the Catalog → BOM build screen's own rules; without it that tab's
+  // History button listed Bill of Materials activity but none of its own changes.
+  bom: ['bom.', 'bomBuild.', 'handoff.'],
   notes: ['note.', 'standardNote.', 'introTemplate.', 'legalDocument.'],
   formulas: ['formula.'],
   crossborder: ['crossborder.'],
