@@ -805,10 +805,7 @@ export async function linkOrderByDeal(
   dealIds: string[],
 ): Promise<string | null> {
   if (!dealIds.length) return null;
-  const candidates = await prisma.acceptedOrder.findMany({
-    where: { mondayProjectId: { in: dealIds }, status: { not: 'CANCELLED' } },
-    select: { id: true, portalOrderItemId: true },
-  });
+  const candidates = await ordersForProjectIds(dealIds);
   if (candidates.length !== 1) return null;
   const order = candidates[0]!;
   if (order.portalOrderItemId && order.portalOrderItemId !== mfgItemId) return null;
@@ -825,6 +822,58 @@ export async function linkOrderByDeal(
     }
   }
   return order.id;
+}
+
+/**
+ * Live orders whose Project ID is one of `projectIds`.
+ *
+ * An order's Project ID is `AcceptedOrder.mondayProjectId` when it was recorded at
+ * accept time — and otherwise the Project ID on the accepted proposal version itself
+ * (the Item ID in the proposal header, which is the Deal Tracking row id and what
+ * printed on the document the customer signed). Accept only records the order's
+ * copy when the proposal names an opportunity, so a third of orders carried the
+ * Project ID on the proposal alone, and matching on the order field missed every
+ * one of them — their portal steps and delivery submissions never reached them.
+ * The two never disagree where both are set; the order's own copy is preferred.
+ */
+export async function ordersForProjectIds(
+  projectIds: string[],
+): Promise<Array<{ id: string; projectId: string; portalOrderItemId: string | null }>> {
+  const wanted = new Set(projectIds.map((p) => String(p).trim()).filter(Boolean));
+  if (!wanted.size) return [];
+  const live = await prisma.acceptedOrder.findMany({
+    where: {
+      status: { not: 'CANCELLED' },
+      OR: [{ mondayProjectId: { in: [...wanted] } }, { mondayProjectId: null }],
+    },
+    select: { id: true, mondayProjectId: true, proposalVersionId: true, portalOrderItemId: true },
+  });
+  const unrecorded = live.filter((o) => !o.mondayProjectId);
+  const versions = unrecorded.length
+    ? await prisma.proposalVersion.findMany({
+        where: { id: { in: unrecorded.map((o) => o.proposalVersionId) } },
+        select: { id: true, sections: true },
+      })
+    : [];
+  const fromProposal = new Map(versions.map((v) => [v.id, metaProjectId(v.sections)]));
+  const out: Array<{ id: string; projectId: string; portalOrderItemId: string | null }> = [];
+  for (const o of live) {
+    const pid = o.mondayProjectId ?? fromProposal.get(o.proposalVersionId) ?? '';
+    if (pid && wanted.has(pid)) {
+      out.push({ id: o.id, projectId: pid, portalOrderItemId: o.portalOrderItemId });
+    }
+  }
+  return out;
+}
+
+/** The Project ID in a proposal version's header (its meta section), if it is an item id. */
+function metaProjectId(sections: unknown): string {
+  if (!Array.isArray(sections)) return '';
+  const meta = (sections as Array<{ id?: unknown; data?: { projectId?: unknown } }>).find(
+    (x) => x?.id === 'meta',
+  );
+  const pid = s(meta?.data?.projectId);
+  return /^\d+$/.test(pid) ? pid : '';
 }
 
 /** A stable name for the address in the picker, so it reads as what it is. */
