@@ -570,7 +570,12 @@
       shared business rules during boot; see wireProposalDocument there.
     -->
     <script src="/proposal-document.js?v=2"></script>
-    <script src="/app.js?v=130"></script>
+    <!-- Customer-portal steps on the Orders pages: the list's Delivery / Color / Billing
+         columns and its filters, and the order page's Customer Portal card. Before
+         app.js, which builds its ORDER_COLS from window.SSGOrderPortal as it loads.
+         Same three-part rule: the file in public/, its route in CLIENT_SCRIPTS, this tag. -->
+    <script src="/order-portal.js?v=1"></script>
+    <script src="/app.js?v=131"></script>
     <!--
       Portal delivery submissions panel (Administration → Integrations).
 
