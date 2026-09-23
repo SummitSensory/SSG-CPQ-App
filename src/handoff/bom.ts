@@ -434,6 +434,11 @@ export async function buildBom(
     country: s(ship?.country ?? 'USA'),
   };
 
+  // What the customer told the portal. Read here, ahead of the ship-to block, because
+  // the portal's Primary POC is who the truck is addressed to (see customerShipTo).
+  const delivery = deliveryDetails(section, submission);
+  const portalPoc = !!(delivery.primary.name || delivery.primary.phone || delivery.primary.email);
+
   // ---- ship-to block: the customer's site, or Summit's dock ----
   const cityLine = (city: string, region: string, zip: string) =>
     [city, [region, zip].filter(Boolean).join(' ')].filter(Boolean).join(', ');
@@ -457,9 +462,22 @@ export async function buildBom(
           cityLine(s(address.city), s(address.region), s(address.postalCode)),
         ]
       : ['', ''],
-    contactName: customer.contactName,
-    phone: customer.contactPhone,
-    email: customer.contactEmail,
+    // The portal's Primary POC is the person the customer named to receive this
+    // delivery, so the sheet prints "ATTN:"/"PH:" for them. The CRM's first contact is
+    // whoever signed the deal — only the fallback when the portal was never answered.
+    // All-or-nothing: falling back field by field could print one person's name over
+    // another person's phone number.
+    ...(portalPoc
+      ? {
+          contactName: delivery.primary.name,
+          phone: delivery.primary.phone,
+          email: delivery.primary.email,
+        }
+      : {
+          contactName: customer.contactName,
+          phone: customer.contactPhone,
+          email: customer.contactEmail,
+        }),
   });
   const shipTo =
     named?.source === 'PORTAL'
@@ -560,7 +578,7 @@ export async function buildBom(
     createdAt: new Date().toISOString(),
     customer,
     shipTo,
-    delivery: deliveryDetails(section, submission),
+    delivery,
     vendors,
     vendor,
     lines,

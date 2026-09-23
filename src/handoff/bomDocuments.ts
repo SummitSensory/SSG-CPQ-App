@@ -24,6 +24,11 @@ const money = (minor: number): string =>
   `$${(Number(minor || 0) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const dateOnly = (v: string | null): string => (v ? String(v).slice(0, 10) : '');
+/** "2026-09-22" as "09/22/2026" — how the Submission Date row prints. Anything else as-is. */
+const usDate = (iso: string): string => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  return m ? `${m[2]}/${m[3]}/${m[1]}` : iso;
+};
 
 /** Excel's built-in Accounting format: $ aligned left, amount aligned right, a bare dash for zero. */
 const ACCOUNTING_FMT = '_($* #,##0.00_);_($* (#,##0.00);_($* "-"??_);_(@_)';
@@ -209,7 +214,7 @@ async function buildModel(
   const d = doc.delivery;
   const meta: Array<{ label: string; value: string; numericValue?: number; numFmt?: string }> = [
     { label: 'Job', value: jobName || '—' },
-    { label: 'Submission Date', value: submittedOn },
+    { label: 'Submission Date', value: usDate(submittedOn) },
     // The customer's loading-dock answer ("No, I need liftgate delivery"). Kept apart
     // from "Delivery" below, which is the free text a rep types on the section.
     { label: 'Delivery Type', value: d.deliveryType },
@@ -437,13 +442,18 @@ async function buildModel(
       },
       {
         title: 'Ship to',
-        // The street and city rows are NOT filtered: when the customer has not
-        // confirmed an address they are blank on purpose (see BomDocument.shipTo),
-        // and closing the gap would push the contact up into the address rows.
+        // Bryan's template: name, "ATTN:" the receiving contact, the street (Address
+        // Line 1 + Line 2), city / state / zip, then "PH:" their phone as (XXX) XXX-XXXX.
+        // No row is filtered out: an unconfirmed address or an unanswered contact
+        // prints blank in its own row, so nothing slides up into the wrong one. The
+        // customer's email is already in the Point of Contact block below, so a
+        // customer-site sheet stops at the phone; any other ship-to keeps its email.
         lines: [
           ...addr(doc.shipTo.name),
+          doc.shipTo.contactName ? `ATTN: ${doc.shipTo.contactName}` : '',
           ...doc.shipTo.lines,
-          ...addr(doc.shipTo.contactName, doc.shipTo.phone, doc.shipTo.email),
+          doc.shipTo.phone ? `PH: ${bomPhone(doc.shipTo.phone).text}` : '',
+          ...(doc.shipTo.label === 'Customer site' ? [] : addr(doc.shipTo.email)),
         ],
       },
     ],

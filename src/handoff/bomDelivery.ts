@@ -26,7 +26,7 @@ export interface BomPoc {
 export interface BomDelivery {
   /** The loading-dock answer, e.g. "No, I need liftgate delivery". Prints as "Delivery Type". */
   deliveryType: string;
-  /** YYYY-MM-DD — the same text form the Submission Date row prints. Blank when unanswered. */
+  /** YYYY-MM-DD. Blank when unanswered. (Submission Date prints MM/DD/YYYY; this row does not.) */
   preferredDeliveryDate: string;
   deliveryTiming: string;
   specialInstructions: string;
