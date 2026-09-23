@@ -1,5 +1,6 @@
 import ExcelJS from 'exceljs';
 import { buildBom, streetLine, type BomDocument } from './bom.js';
+import { bomPhone, PHONE_NUMFMT } from './bomDelivery.js';
 import { prisma } from '../lib/prisma.js';
 
 /**
@@ -122,6 +123,22 @@ export interface BomModel {
    * keeps reading `value`, the pre-formatted display text.
    */
   meta: Array<{ label: string; value: string; numericValue?: number; numFmt?: string }>;
+  /**
+   * The ship-to point(s) of contact, primary and secondary side by side. Always
+   * present, every row, even when the customer has not answered — the vendor's
+   * driver needs to see that there is no one to call, not wonder whether the block
+   * was dropped. A phone cell carries `numericValue`/`numFmt` when it is a plain
+   * 10-digit number (see bomPhone), like any other BomCell.
+   */
+  contacts: {
+    headers: [string, string, string];
+    rows: Array<{ label: string; primary: BomCell; secondary: BomCell }>;
+  };
+  /**
+   * Special instructions, preferred date and timing. `wide` marks the instructions:
+   * free text that spans the sheet (merged B:H in Excel) rather than one column.
+   */
+  delivery: Array<{ label: string; value: string; wide?: boolean }>;
   questions: Array<{ label: string; value: string }>;
   columns: string[];
   /**
@@ -189,9 +206,13 @@ async function buildModel(
       .replace(/, ([^,]*)$/, ' $1')
       .trim();
 
+  const d = doc.delivery;
   const meta: Array<{ label: string; value: string; numericValue?: number; numFmt?: string }> = [
     { label: 'Job', value: jobName || '—' },
     { label: 'Submission Date', value: submittedOn },
+    // The customer's loading-dock answer ("No, I need liftgate delivery"). Kept apart
+    // from "Delivery" below, which is the free text a rep types on the section.
+    { label: 'Delivery Type', value: d.deliveryType },
     { label: 'Delivery', value: deliveryType || '—' },
     { label: 'Shipment Quote', value: shipmentQuote || 'TBD' },
   ];
@@ -207,6 +228,47 @@ async function buildModel(
       numericValue: t.steelWeightLbs,
       numFmt: '#,##0.00',
     });
+
+  // A phone is a real number in Excel when it is a plain 10-digit one, so the sheet's
+  // own phone format draws it; anything else stays exactly as the customer typed it.
+  const phoneCell = (raw: string): BomCell => {
+    const p = bomPhone(raw);
+    return p.numeric == null
+      ? { text: p.text, align: 'left' }
+      : { text: p.text, numericValue: p.numeric, numFmt: PHONE_NUMFMT, align: 'left' };
+  };
+  const plain = (v: string): BomCell => ({ text: v, align: 'left' });
+  const contacts: BomModel['contacts'] = {
+    headers: ['Ship to Point of Contact(s)', 'Primary POC', 'Secondary POC'],
+    rows: [
+      { label: 'Full Name', primary: plain(d.primary.name), secondary: plain(d.secondary.name) },
+      {
+        label: 'Primary Phone Number',
+        primary: phoneCell(d.primary.phone),
+        secondary: phoneCell(d.secondary.phone),
+      },
+      {
+        label: 'Primary Email Address',
+        primary: plain(d.primary.email),
+        secondary: plain(d.secondary.email),
+      },
+      {
+        label: 'Preferred Communication Type',
+        primary: plain(d.primary.preferredComm),
+        secondary: plain(d.secondary.preferredComm),
+      },
+      {
+        label: 'Text #',
+        primary: phoneCell(d.primary.textNumber),
+        secondary: phoneCell(d.secondary.textNumber),
+      },
+    ],
+  };
+  const delivery: BomModel['delivery'] = [
+    { label: 'Special Delivery Instructions', value: d.specialInstructions, wide: true },
+    { label: 'Preferred Delivery Date', value: d.preferredDeliveryDate },
+    { label: 'Preferred Delivery Timing', value: d.deliveryTiming },
+  ];
 
   // The powder-colour column is opt-in per vendor. It was on every sheet, where for
   // most vendors it was a column of dashes; a section that has a colour on it keeps
@@ -375,16 +437,19 @@ async function buildModel(
       },
       {
         title: 'Ship to',
-        lines: addr(
-          doc.shipTo.name,
+        // The street and city rows are NOT filtered: when the customer has not
+        // confirmed an address they are blank on purpose (see BomDocument.shipTo),
+        // and closing the gap would push the contact up into the address rows.
+        lines: [
+          ...addr(doc.shipTo.name),
           ...doc.shipTo.lines,
-          doc.shipTo.contactName,
-          doc.shipTo.phone,
-          doc.shipTo.email,
-        ),
+          ...addr(doc.shipTo.contactName, doc.shipTo.phone, doc.shipTo.email),
+        ],
       },
     ],
     meta,
+    contacts,
+    delivery,
     questions: extras?.answers ?? [],
     columns,
     groups,
@@ -462,6 +527,32 @@ export async function renderBomHtml(
     )
     .join('');
 
+  // Points of contact: label, primary, secondary — the spreadsheet's three columns.
+  // Empty answers print as empty cells; the rows themselves are always there.
+  const [pocTitle, pocPrimary, pocSecondary] = m.contacts.headers;
+  const POC_TH =
+    'padding:4px 14px 4px 0;font-size:8.5pt;font-weight:700;text-align:left;border-bottom:1px solid #20241f;white-space:nowrap;';
+  const POC_LABEL =
+    'padding:4px 14px 4px 0;font-size:9pt;font-weight:700;white-space:nowrap;vertical-align:top;';
+  const POC_VALUE = 'padding:4px 14px 4px 0;font-size:9pt;vertical-align:top;';
+  const contactTable = `<table style="border-collapse:collapse;margin-bottom:12px;">
+    <tr><th style="${POC_TH}">${esc(pocTitle)}</th><th style="${POC_TH}">${esc(pocPrimary)}</th><th style="${POC_TH}">${esc(pocSecondary)}</th></tr>
+    ${m.contacts.rows
+      .map(
+        (r) =>
+          `<tr><td style="${POC_LABEL}">${esc(r.label)}</td><td style="${POC_VALUE}">${esc(r.primary.text)}</td><td style="${POC_VALUE}">${esc(r.secondary.text)}</td></tr>`,
+      )
+      .join('')}
+  </table>`;
+  const deliveryTable = `<table style="border-collapse:collapse;margin-bottom:14px;width:100%;">
+    ${m.delivery
+      .map(
+        (r) =>
+          `<tr><td style="${POC_LABEL}width:1%;">${esc(r.label)}</td><td style="${POC_VALUE}${r.wide ? 'white-space:pre-wrap;' : ''}">${esc(r.value)}</td></tr>`,
+      )
+      .join('')}
+  </table>`;
+
   const html = `<!doctype html>
 <html><head><meta charset="utf-8">
 <title>${esc(m.title)} — ${esc(m.doc.order.number)}</title>
@@ -496,6 +587,9 @@ export async function renderBomHtml(
       )
       .join('')}</tr>
   </table>
+
+  ${contactTable}
+  ${deliveryTable}
 
   ${questionRows ? `<table style="border-collapse:collapse;margin-bottom:14px;">${questionRows}</table>` : ''}
 
@@ -561,6 +655,14 @@ export async function renderBomXlsx(
     r.getCell(col).alignment = { horizontal: align, wrapText: false };
   };
   const noWrapRow = (r: ExcelJS.Row) => r.eachCell((c) => (c.alignment = { wrapText: false }));
+  const writeCell = (r: ExcelJS.Row, col: number, bc: BomCell) => {
+    const cell = r.getCell(col);
+    cell.value = bc.numericValue != null ? bc.numericValue : bc.text;
+    if (bc.numFmt) cell.numFmt = bc.numFmt;
+    cell.alignment = { horizontal: bc.align === 'right' ? 'right' : 'left', wrapText: false };
+    if (bc.bold) cell.font = { ...(cell.font ?? {}), bold: true };
+    track(col, bc.text);
+  };
 
   const titleRow = plainRow([m.title, m.doc.order.number]);
   titleRow.font = { bold: true, size: 14 };
@@ -620,6 +722,47 @@ export async function renderBomXlsx(
   });
   plainRow([]);
 
+  // Ship-to points of contact. Headings bold with a rule under them, like the Ship
+  // from / Ship to row; labels bold, values plain and left-aligned — a phone written
+  // as a number would otherwise sit right-aligned against the text above it. Column C
+  // is also the Qty column; it widens to fit the secondary contact through track(),
+  // which writeCell already feeds.
+  const pocHead = plainRow([...m.contacts.headers]);
+  [1, 2, 3].forEach((col) => {
+    bold(pocHead, col);
+    pocHead.getCell(col).border = { bottom: { style: 'thin' } };
+  });
+  noWrapRow(pocHead);
+  m.contacts.rows.forEach((row) => {
+    const r = plainRow([row.label]);
+    bold(r, 1);
+    noWrap(r, 1);
+    writeCell(r, 2, row.primary);
+    writeCell(r, 3, row.secondary);
+  });
+  plainRow([]);
+
+  // Special instructions span B:H and wrap — they are a paragraph, not a cell value,
+  // and are deliberately NOT tracked: a long note would otherwise widen column B to
+  // the 60-character cap. The row is heightened once the column widths are known.
+  const instructionRows: Array<{ row: ExcelJS.Row; text: string }> = [];
+  m.delivery.forEach((x) => {
+    const r = sheet.addRow([x.label, x.value]);
+    track(1, x.label);
+    bold(r, 1);
+    noWrap(r, 1);
+    if (x.wide) {
+      sheet.mergeCells(r.number, 2, r.number, 8);
+      r.getCell(2).alignment = { horizontal: 'left', vertical: 'top', wrapText: true };
+      r.getCell(1).alignment = { horizontal: 'left', vertical: 'top', wrapText: false };
+      instructionRows.push({ row: r, text: x.value });
+    } else {
+      track(2, x.value);
+      noWrap(r, 2);
+    }
+  });
+  plainRow([]);
+
   if (m.questions.length) {
     const h = plainRow(['Vendor questions']);
     bold(h, 1);
@@ -643,15 +786,6 @@ export async function renderBomXlsx(
     c.alignment = { wrapText: false };
   });
   sheet.views = [{ state: 'frozen', ySplit: headerRow.number }];
-
-  const writeCell = (r: ExcelJS.Row, col: number, bc: BomCell) => {
-    const cell = r.getCell(col);
-    cell.value = bc.numericValue != null ? bc.numericValue : bc.text;
-    if (bc.numFmt) cell.numFmt = bc.numFmt;
-    cell.alignment = { horizontal: bc.align === 'right' ? 'right' : 'left', wrapText: false };
-    if (bc.bold) cell.font = { ...(cell.font ?? {}), bold: true };
-    track(col, bc.text);
-  };
 
   m.groups.forEach((g, gi) => {
     if (g.title) {
@@ -719,6 +853,18 @@ export async function renderBomXlsx(
     sheet.getColumn(i + 1).width = Math.min(len + 2, 60);
   });
 
+  // Excel does not grow a merged cell's row to fit wrapped text, so a long
+  // instruction would show one line and hide the rest. Estimate the lines from the
+  // merged B:H width (column widths are in characters) and size the row to them.
+  instructionRows.forEach(({ row, text }) => {
+    let span = 0;
+    for (let col = 2; col <= 8; col++) span += sheet.getColumn(col).width ?? 9;
+    const lines = text
+      .split('\n')
+      .reduce((n, para) => n + Math.max(1, Math.ceil(para.length / Math.max(span, 1))), 0);
+    if (lines > 1) row.height = lines * 15;
+  });
+
   const buffer = Buffer.from(await wb.xlsx.writeBuffer());
   return { buffer, doc: m.doc };
 }
@@ -757,6 +903,12 @@ export async function renderBomCsv(
   rows.push('');
 
   m.meta.forEach((x) => rows.push(row([x.label, x.value])));
+  rows.push('');
+
+  rows.push(row([...m.contacts.headers]));
+  m.contacts.rows.forEach((r) => rows.push(row([r.label, r.primary.text, r.secondary.text])));
+  rows.push('');
+  m.delivery.forEach((x) => rows.push(row([x.label, x.value])));
   rows.push('');
 
   if (m.questions.length) {

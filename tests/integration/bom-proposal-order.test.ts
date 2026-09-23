@@ -139,6 +139,9 @@ vi.mock('../../src/lib/prisma.js', () => ({
     sku: { findMany: async () => [] },
     hardwareRule: { findMany: async () => [] },
     vendorPartNumber: { findMany: async () => [] },
+    // No customer-portal submission on this order: the delivery block prints blank.
+    portalDeliverySubmission: { findFirst: async () => null },
+    shipToAddress: { findUnique: async () => null },
   },
 }));
 
