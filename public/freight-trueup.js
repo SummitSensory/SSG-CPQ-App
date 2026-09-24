@@ -877,14 +877,61 @@
           '.</div>',
       );
     }
-    if (m.matsTaxMinor) {
+    // The Mat Freight Tax Pass-Through (formula_mkzde17n). Synced with the freight:
+    // staged here, applied with the Apply button, billed as the increase only.
+    var tax = s.matsTax;
+    if (tax && tax.boardMinor != null) {
+      var taxStaged = stagedTaxEntry(s);
+      if (tax.state === 'conflict' && tax.conflict) {
+        bits.push(
+          '<div style="color:' +
+            RED +
+            ';"><b>Mats freight tax disagrees with the board.</b> The board now says ' +
+            money(tax.conflict.boardMinor) +
+            '; ' +
+            money(tax.conflict.recordedMinor) +
+            ' is already ' +
+            (tax.conflict.status === 'PUSHED'
+              ? 'on the customer\u2019s invoice'
+              : 'on the proposal') +
+            '. Nothing was changed. If the board is right, correct the invoice in QuickBooks.</div>',
+        );
+      } else if (taxStaged) {
+        var up = taxStaged.amountMinor - (tax.onProposalMinor || 0);
+        bits.push(
+          '<div style="color:' +
+            BLUE +
+            ';"><b>Mats freight tax</b> on the board is ' +
+            money(taxStaged.amountMinor) +
+            '; the proposal carries ' +
+            money(tax.onProposalMinor || 0) +
+            '. It is staged \u2014 Apply puts it on the proposal' +
+            (up > 0
+              ? s.hasInvoice
+                ? ', and adding to the invoice bills the ' + money(up) + ' increase.'
+                : '. There is no invoice yet, so the invoice raised later will carry it.'
+              : up < 0
+                ? '. It is lower, so nothing more is billed \u2014 if the invoice already carries the old figure, credit the ' +
+                  money(-up) +
+                  ' in QuickBooks.'
+                : '.') +
+            '</div>',
+        );
+      } else {
+        bits.push(
+          '<div class="muted">Mats freight tax ' +
+            money(tax.boardMinor) +
+            ' \u2014 the proposal already carries it.</div>',
+        );
+      }
+    }
+    if (tax && tax.creditDueMinor > 0) {
       bits.push(
         '<div style="color:' +
-          BLUE +
-          ';">The board also holds ' +
-          money(m.matsTaxMinor) +
-          ' of mats freight <b>tax</b>. That is a tax pass-through, not freight, so it is not one of these ' +
-          'buckets \u2014 changing it needs a new proposal version.</div>',
+          RED +
+          ';"><b>Mats freight tax went down after the invoice was raised.</b> The invoice carries ' +
+          money(tax.creditDueMinor) +
+          ' more tax than the proposal now does. Nothing is credited automatically \u2014 issue the credit in QuickBooks.</div>',
       );
     }
     (m.conflicts || []).forEach(function (c) {
@@ -1662,6 +1709,13 @@
 
   /* ─────────────────────────── footer ─────────────────────────── */
 
+  /** The staged mats freight tax figure, if the last board read staged one. */
+  function stagedTaxEntry(s) {
+    var rows = (s.matsTax && s.matsTax.entries) || [];
+    for (var i = rows.length - 1; i >= 0; i--) if (rows[i].status === 'STAGED') return rows[i];
+    return null;
+  }
+
   function footerHtml(s, writeable) {
     var staged = 0,
       applied = 0;
@@ -1669,16 +1723,22 @@
       staged += c.stagedMinor;
       applied += c.appliedMinor - c.pushedMinor;
     });
+    var taxStaged = stagedTaxEntry(s);
+    // The server's own figure: applied, not already on the invoice (a figure applied
+    // before the invoice was raised is on it), and for the mats freight tax only the
+    // increase. Summing the buckets here offered those twice.
+    if (s.billable) applied = s.billable.totalMinor;
     var live = s.live;
     var bits = [];
 
-    if (staged > 0) {
+    if (staged > 0 || taxStaged) {
       bits.push(
         '<button type="button" id="ftuApply" style="' +
           BTN_DARK +
           '">' +
-          'Apply ' +
-          money(staged) +
+          (staged > 0
+            ? 'Apply ' + money(staged) + (taxStaged ? ' and the mats freight tax' : '')
+            : 'Apply the mats freight tax') +
           ' to the proposal</button>',
       );
     }
@@ -2182,6 +2242,10 @@
      */
     var total = 0;
     var replaced = {};
+    // The mats freight tax replaces the proposal's Tax field.
+    var taxStaged = stagedTaxEntry(s);
+    var taxOnProposal = (s.matsTax && s.matsTax.onProposalMinor) || 0;
+    if (taxStaged) total += taxStaged.amountMinor - taxOnProposal;
     staged.forEach(function (x) {
       var absolute = x.e.absolute || x.e.source === 'MONDAY';
       if (x.e.scope === 'JOB' && absolute) {
@@ -2197,9 +2261,13 @@
 
     H.openModal(
       'Apply freight to ' + s.number,
-      '<p style="font-size:13.5px;line-height:1.6;">This writes the freight onto the frozen version. The line items, ' +
-        'the discount and the tax stay exactly as the customer received them \u2014 the amendment is refused if any of ' +
-        'them moves by a cent.</p>' +
+      '<p style="font-size:13.5px;line-height:1.6;">This writes the freight onto the frozen version. The line items ' +
+        'and the discount stay exactly as the customer received them \u2014 the amendment is refused if either moves ' +
+        'by a cent. ' +
+        (taxStaged
+          ? 'The mats freight tax is replaced with the deal board\u2019s figure.'
+          : 'The tax stays as it is.') +
+        '</p>' +
         '<div style="margin-top:12px;border:1px solid ' +
         LINE +
         ';border-radius:10px;overflow:hidden;">' +
@@ -2221,6 +2289,15 @@
             );
           })
           .join('') +
+        (taxStaged
+          ? '<div style="display:flex;justify-content:space-between;gap:10px;padding:9px 12px;font-size:13px;' +
+            (staged.length ? 'border-top:1px solid #f2f3ef;' : '') +
+            '"><span>Mats freight tax pass-through<span class="muted"> \u00b7 replaces ' +
+            money(taxOnProposal) +
+            '</span></span><b style="font-variant-numeric:tabular-nums;">' +
+            money(taxStaged.amountMinor) +
+            '</b></div>'
+          : '') +
         '<div style="display:flex;justify-content:space-between;gap:10px;padding:10px 12px;background:' +
         SURFACE +
         ';border-top:1px solid ' +
@@ -2239,7 +2316,15 @@
           '/proposals/versions/' + encodeURIComponent(st.vid) + '/freight-apply',
           {
             method: 'POST',
-            body: {},
+            // Exactly what this dialog listed: a figure the board sync staged after the
+            // panel loaded must not land on a signed proposal unseen.
+            body: {
+              entryIds: staged
+                .map(function (x) {
+                  return x.e.id;
+                })
+                .concat(taxStaged ? [taxStaged.id] : []),
+            },
           },
         );
         if (!r.ok) {

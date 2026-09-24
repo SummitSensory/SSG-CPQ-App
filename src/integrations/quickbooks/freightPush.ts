@@ -20,9 +20,13 @@ import {
 import {
   BUCKETS,
   FREIGHT_BUCKETS,
+  MATS_TAX,
+  MATS_TAX_LABEL,
+  billableMinor,
   normalizeBucket,
   type FreightBucket,
 } from '../../proposals/freightTrueUp.js';
+import { INVOICE_CANDIDATE_WHERE, isFreightSupplement, stillToBill } from './freightInvoiced.js';
 import type { FreightEntry, QboEnvironment, QboTransaction } from '@prisma/client';
 
 /**
@@ -87,10 +91,14 @@ export interface FreightBatch {
  * whole feature exists to stop losing.
  */
 export async function pushableEntries(versionId: string): Promise<FreightEntry[]> {
-  return prisma.freightEntry.findMany({
+  const rows = await prisma.freightEntry.findMany({
     where: { versionId, status: 'APPLIED', amountMinor: { gt: 0 } },
     orderBy: { appliedAt: 'asc' },
   });
+  // Not a figure the invoice already carries (applied before the invoice was raised,
+  // so the invoice was built with it — see freightInvoiced.ts), and not a mats freight
+  // tax that did not go UP (a lower figure is a credit, a person's call in QuickBooks).
+  return stillToBill(rows);
 }
 
 /**
@@ -116,7 +124,9 @@ export async function buildBatch(
       if (pushed) {
         throw new ConflictError(
           `${
-            BUCKETS[normalizeBucket(pushed.bucket) ?? 'OTHER'].label
+            pushed.bucket === MATS_TAX
+              ? MATS_TAX_LABEL
+              : BUCKETS[normalizeBucket(pushed.bucket) ?? 'OTHER'].label
           } from ${pushed.qboPushedAt?.toISOString().slice(0, 10) ?? 'an earlier batch'} is already on invoice ${
             pushed.qboDocNumber ?? '—'
           }. To correct it, credit that invoice and bill the difference as a new amount — pushing it again would charge the customer twice.`,
@@ -143,6 +153,11 @@ export async function buildBatch(
   const references: Partial<Record<FreightBucket, string | null>> = {};
   const descriptions: Partial<Record<FreightBucket, string | null>> = {};
   for (const e of entries) {
+    if (e.bucket === MATS_TAX) {
+      // The difference only: the tax the proposal carried before is already billed.
+      amounts.MATS_TAX += BigInt(billableMinor(e));
+      continue;
+    }
     const bucket = normalizeBucket(e.bucket);
     if (!bucket) continue;
     amounts[bucket] += BigInt(e.amountMinor);
@@ -166,19 +181,15 @@ export async function buildBatch(
 
 /** The invoice this job's freight belongs on: the newest full invoice we created. */
 async function invoiceForProposal(proposalId: string): Promise<QboTransaction> {
-  const txn = await prisma.qboTransaction.findFirst({
-    where: {
-      proposalId,
-      type: 'INVOICE',
-      status: 'CREATED',
-      qboId: { not: null },
-      // A freight-only supplement is not the document the next batch of freight goes
-      // on: appending to it would bury the second shipment inside the first
-      // shipment's invoice.
-      NOT: { totalsSnapshot: { path: ['kind'], equals: 'FREIGHT_SUPPLEMENT' } },
-    },
+  // A freight-only supplement is not the document the next batch of freight goes on:
+  // appending to it would bury the second shipment inside the first shipment's
+  // invoice. Excluded in code — the JSON-path NOT this used to carry excluded every
+  // real invoice too (see INVOICE_CANDIDATE_WHERE), so no invoice was ever found.
+  const candidates = await prisma.qboTransaction.findMany({
+    where: { proposalId, ...INVOICE_CANDIDATE_WHERE },
     orderBy: { createdAt: 'desc' },
   });
+  const txn = candidates.find((t) => !isFreightSupplement(t.totalsSnapshot)) ?? null;
   if (!txn) {
     throw new ValidationError(
       'There is no QuickBooks invoice for this job yet. The freight is already on the proposal, so raise the invoice as normal — it will include it.',
@@ -205,7 +216,7 @@ export interface FreightPushPreview {
     sentAt: string | null;
   };
   freight: Array<{
-    bucket: FreightBucket;
+    bucket: FreightBucket | typeof MATS_TAX;
     label: string;
     amountMinor: string;
     reference: string | null;
@@ -286,12 +297,23 @@ export async function freightPushPreview(
     );
   }
 
-  const freight = FREIGHT_BUCKETS.filter((b) => (batch.amounts[b] ?? 0n) > 0n).map((bucket) => ({
+  const freight: FreightPushPreview['freight'] = FREIGHT_BUCKETS.filter(
+    (b) => (batch.amounts[b] ?? 0n) > 0n,
+  ).map((bucket) => ({
     bucket,
     label: BUCKETS[bucket].label,
     amountMinor: batch.amounts[bucket].toString(),
     reference: batch.references[bucket] ?? null,
   }));
+  // Shown like any other row, so the person confirming sees exactly what is billed.
+  if (batch.amounts.MATS_TAX > 0n) {
+    freight.push({
+      bucket: MATS_TAX,
+      label: `${MATS_TAX_LABEL} (increase)`,
+      amountMinor: batch.amounts.MATS_TAX.toString(),
+      reference: null,
+    });
+  }
 
   const next = mode === 'AMEND' ? current + batch.totalMinor : batch.totalMinor;
   return {
@@ -549,11 +571,22 @@ export async function pushFreightToQbo(
               followsTxnId: txn.id,
               followsDocNumber: txn.qboDocNumber,
               sequence: preview.priorSupplements + 1,
-              buckets: FREIGHT_BUCKETS.filter((b) => batch.amounts[b] > 0n).map((b) => ({
-                bucket: b,
-                amountMinor: batch.amounts[b].toString(),
-                reference: batch.references[b] ?? null,
-              })),
+              buckets: [
+                ...FREIGHT_BUCKETS.filter((b) => batch.amounts[b] > 0n).map((b) => ({
+                  bucket: b as string,
+                  amountMinor: batch.amounts[b].toString(),
+                  reference: batch.references[b] ?? null,
+                })),
+                ...(batch.amounts.MATS_TAX > 0n
+                  ? [
+                      {
+                        bucket: MATS_TAX as string,
+                        amountMinor: batch.amounts.MATS_TAX.toString(),
+                        reference: null,
+                      },
+                    ]
+                  : []),
+              ],
             } as object,
             idempotencyKey: `qbo:${environment}:INVOICE:${version.id}:freight:${batchKey}`,
             customerQboId,
@@ -624,7 +657,7 @@ export async function pushFreightToQbo(
     });
 
     const remaining = await pushableEntries(versionId);
-    const remainingMinor = remaining.reduce((a, e) => a + BigInt(e.amountMinor), 0n);
+    const remainingMinor = remaining.reduce((a, e) => a + BigInt(billableMinor(e)), 0n);
 
     const notifyError = await notifyAccounting(
       `${version.proposal.number}: freight ${preview.formatted.freight} added — ${

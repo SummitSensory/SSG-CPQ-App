@@ -12,6 +12,12 @@ import {
 } from '../handoff/lock.js';
 import { syncVersion } from '../integrations/monday/freightPull.js';
 import {
+  INVOICE_CANDIDATE_WHERE,
+  entriesOnInvoice,
+  isFreightSupplement,
+  stillToBill,
+} from '../integrations/quickbooks/freightInvoiced.js';
+import {
   BUCKETS,
   FREIGHT_BUCKETS,
   alertIsQuiet,
@@ -19,6 +25,9 @@ import {
   apportion,
   applyFreightEntries,
   assertEvidence,
+  billableMinor,
+  MATS_TAX,
+  MATS_TAX_LABEL,
   assertFreightOnlyChange,
   describeChanges,
   describeGaps,
@@ -496,10 +505,16 @@ export async function applyEntries(
   if (!staged.length) {
     throw new ValidationError('There are no entered freight amounts waiting to be applied.');
   }
-  const zeroOnly = staged.every((e) => e.amountMinor === 0);
+  // The Mat Freight Tax Pass-Through travels with the freight but is not freight: it
+  // replaces the Tax field instead of a bucket. Newest first, so if two were ever
+  // staged the most recent board read is the one that lands.
+  const taxEntries = staged.filter((e) => e.bucket === MATS_TAX);
+  const freightStaged = staged.filter((e) => e.bucket !== MATS_TAX);
+  const taxEntry = [...taxEntries].sort((a, b) => +b.createdAt - +a.createdAt)[0] ?? null;
+  const zeroOnly = !taxEntry && freightStaged.every((e) => e.amountMinor === 0);
   if (zeroOnly) throw new ValidationError('Every amount in this batch is zero — nothing to apply.');
 
-  const inputs: FreightEntryInput[] = staged.map((e) => ({
+  const inputs: FreightEntryInput[] = freightStaged.map((e) => ({
     bucket: normalizeBucket(e.bucket)!,
     scope: e.scope as FreightScope,
     amountMinor: e.amountMinor,
@@ -518,9 +533,11 @@ export async function applyEntries(
       : undefined,
   }));
 
-  const applied = applyFreightEntries(version.sections, version.items, inputs);
-  assertFreightOnlyChange(applied.before, applied.after);
-  if (!applied.changes.length) {
+  const applied = applyFreightEntries(version.sections, version.items, inputs, {
+    taxMinor: taxEntry ? taxEntry.amountMinor : null,
+  });
+  assertFreightOnlyChange(applied.before, applied.after, { allowTax: !!taxEntry });
+  if (!applied.changes.length && !applied.taxChange) {
     throw new ValidationError(
       'Nothing to apply — the entered freight matches what is already on the proposal.',
     );
@@ -535,7 +552,7 @@ export async function applyEntries(
     actorId,
   );
   const order = await prisma.acceptedOrder.findUnique({ where: { proposalVersionId: version.id } });
-  const summary = describeChanges(applied.changes, applied.deltaMinor);
+  const summary = describeChanges(applied.changes, applied.deltaMinor, applied.taxChange);
   const trueUpId = staged[0]!.trueUpId;
   const evidence = [...new Set(staged.map((e) => e.vendorQuoteRef).filter(Boolean))].join(', ');
   const now = new Date();
@@ -624,6 +641,27 @@ export async function applyEntries(
       where: { id: { in: staged.map((e) => e.id) } },
       data: { status: 'APPLIED', appliedAt: now, appliedById: actorId },
     });
+    // What the invoice already carries is the tax the proposal carried until now, so
+    // that is what the push bills the difference against — recorded at the moment of
+    // applying, not at staging, in case the Tax field moved in between.
+    if (taxEntry) {
+      await tx.freightEntry.update({
+        where: { id: taxEntry.id },
+        data: { priorAmountMinor: applied.before.tax },
+      });
+      const superseded = taxEntries.filter((e) => e.id !== taxEntry.id).map((e) => e.id);
+      if (superseded.length) {
+        // Older reads of the same figure. Only the newest one's value landed, so these
+        // are closed out with their own figures intact, and bill nothing.
+        await tx.freightEntry.updateMany({
+          where: { id: { in: superseded } },
+          data: {
+            status: 'VOID',
+            voidReason: 'Superseded by a newer read of the deal board applied in the same batch',
+          },
+        });
+      }
+    }
 
     return tx.freightTrueUp.update({
       where: { id: trueUpId },
@@ -760,10 +798,13 @@ export async function freightStateForVersion(
   const [entries, history, invoice] = await Promise.all([
     prisma.freightEntry.findMany({ where: { versionId }, orderBy: { createdAt: 'asc' } }),
     prisma.freightTrueUp.findMany({ where: { versionId }, orderBy: { createdAt: 'desc' } }),
-    prisma.qboTransaction.findFirst({
-      where: { proposalId: version.proposalId, ...INVOICEABLE_TXN_WHERE },
-      select: { id: true },
-    }),
+    prisma.qboTransaction
+      .findMany({
+        where: { proposalId: version.proposalId, ...INVOICEABLE_TXN_WHERE },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true, totalsSnapshot: true },
+      })
+      .then((rows) => rows.find((t) => !isFreightSupplement(t.totalsSnapshot)) ?? null),
   ]);
 
   const gaps = freightGaps(version.items, version.sections, ctx);
@@ -795,6 +836,43 @@ export async function freightStateForVersion(
     };
   });
 
+  // What "Add to the invoice" would actually bill: applied, not already on the
+  // invoice (raised after the apply, so built with it), and adding something.
+  const toBill = await stillToBill(entries);
+  const onInvoice = await entriesOnInvoice(entries);
+
+  // The Mat Freight Tax Pass-Through, beside the buckets rather than one of them.
+  const taxRows = entries.filter((e) => e.bucket === MATS_TAX && e.status !== 'VOID');
+  // A tax that went DOWN after the invoice carried the old figure: the customer is owed
+  // the difference. Nothing here issues credits, so the panel says so plainly.
+  const taxCreditDueMinor = invoice
+    ? taxRows
+        .filter(
+          (e) =>
+            (e.status === 'APPLIED' || e.status === 'PUSHED') &&
+            !onInvoice.has(e.id) &&
+            e.priorAmountMinor != null &&
+            e.amountMinor < e.priorAmountMinor,
+        )
+        .reduce((a, e) => a + (e.priorAmountMinor! - e.amountMinor), 0)
+    : 0;
+  const matsTax = {
+    label: MATS_TAX_LABEL,
+    onProposalMinor: totals.tax,
+    boardMinor: monday?.matsTax?.boardMinor ?? monday?.matsTaxMinor ?? null,
+    state: monday?.matsTax?.state ?? null,
+    conflict:
+      monday?.matsTax?.state === 'conflict'
+        ? {
+            boardMinor: monday.matsTax.boardMinor,
+            recordedMinor: monday.matsTax.recordedMinor ?? null,
+            status: monday.matsTax.recordedStatus ?? null,
+          }
+        : null,
+    entries: taxRows.map(serializeEntry),
+    creditDueMinor: taxCreditDueMinor,
+  };
+
   return {
     proposalId: version.proposalId,
     versionId,
@@ -816,6 +894,12 @@ export async function freightStateForVersion(
     /** Every product item, so ops can see what is being shipped. */
     lines: freightLines(version.items, ctx),
     buckets: byBucket,
+    matsTax,
+    /** What "Add to the invoice" bills now — see freightInvoiced.ts. */
+    billable: {
+      totalMinor: toBill.reduce((a, e) => a + billableMinor(e), 0),
+      entryIds: toBill.map((e) => e.id),
+    },
     outstanding: buckets,
     notApplicable,
     gapLines: gaps.gapLines,
@@ -847,6 +931,9 @@ export function serializeEntry(e: FreightEntry) {
     description: e.description,
     overrideReason: e.overrideReason,
     absolute: e.absolute,
+    priorAmountMinor: e.priorAmountMinor,
+    /** What this entry would add to the invoice — see billableMinor. */
+    billableMinor: billableMinor(e),
     note: e.note,
     voidReason: e.voidReason,
     mondayItemId: e.mondayItemId,
@@ -895,12 +982,9 @@ export interface QueueRow {
  * the document the next batch goes on, and a transaction QuickBooks never actually
  * created (no qboId) isn't a real invoice yet.
  */
-const INVOICEABLE_TXN_WHERE = {
-  type: 'INVOICE',
-  status: 'CREATED',
-  qboId: { not: null },
-  NOT: { totalsSnapshot: { path: ['kind'], equals: 'FREIGHT_SUPPLEMENT' } },
-} satisfies Prisma.QboTransactionWhereInput;
+// Freight-only supplements are removed in code with isFreightSupplement: the JSON-path
+// NOT this used to carry also removed every ordinary invoice (see freightInvoiced.ts).
+const INVOICEABLE_TXN_WHERE = INVOICE_CANDIDATE_WHERE satisfies Prisma.QboTransactionWhereInput;
 
 /**
  * Whether a job still belongs on the freight queue.
@@ -976,12 +1060,15 @@ export async function freightQueue(
         proposalId: { in: rows.map((v) => v.proposalId) },
         ...INVOICEABLE_TXN_WHERE,
       },
-      select: { proposalId: true },
+      select: { proposalId: true, totalsSnapshot: true },
     }),
   ]);
 
   const orgName = new Map<string, string>(orgs.map((o) => [o.id, o.name] as [string, string]));
-  const invoiced = new Set(invoices.map((i) => i.proposalId));
+  const invoiced = new Set(
+    invoices.filter((i) => !isFreightSupplement(i.totalsSnapshot)).map((i) => i.proposalId),
+  );
+  const toBill = await stillToBill(entries);
   const latestTrueUp = new Map<string, FreightTrueUp>();
   for (const t of trueUps) if (!latestTrueUp.has(t.versionId)) latestTrueUp.set(t.versionId, t);
   const entriesByVersion = new Map<string, FreightEntry[]>();
@@ -1004,7 +1091,10 @@ export async function freightQueue(
     );
     const openBuckets = gaps.buckets.filter((b) => !answered.has(b) && !closed.has(b));
     const staged = mine.filter((e) => e.status === 'STAGED');
-    const appliedNotPushed = mine.filter((e) => e.status === 'APPLIED');
+    // Only what the invoice does not already carry: a figure applied before the
+    // invoice was raised is on it, and counting it again kept the job on the queue
+    // and offered it to be billed a second time.
+    const appliedNotPushed = toBill.filter((e) => e.versionId === v.id);
     const hasInvoice = invoiced.has(v.proposalId);
 
     const t = latestTrueUp.get(v.id) ?? null;
@@ -1038,8 +1128,10 @@ export async function freightQueue(
       vendors: [...new Set(gaps.gapLines.map((l) => l.vendor).filter(Boolean) as string[])],
       trueUpId: t?.id ?? null,
       trueUpStatus: t?.status ?? null,
-      stagedMinor: staged.reduce((a, e) => a + e.amountMinor, 0),
-      appliedNotPushedMinor: appliedNotPushed.reduce((a, e) => a + e.amountMinor, 0),
+      // billableMinor: a staged or applied mats freight tax counts only the difference
+      // it would add to the invoice, never the whole figure again.
+      stagedMinor: staged.reduce((a, e) => a + billableMinor(e), 0),
+      appliedNotPushedMinor: appliedNotPushed.reduce((a, e) => a + billableMinor(e), 0),
       vendorQuoteRef: staged.find((e) => e.vendorQuoteRef)?.vendorQuoteRef ?? null,
       hasInvoice,
       invoicePushed: !!t?.qboPushedAt,
@@ -1135,6 +1227,8 @@ export async function invoiceAlerts(
     }),
   ]);
 
+  const toBill = await stillToBill(entries);
+
   // Customer names in a second query rather than through a relation include: Proposal
   // holds organizationId, not an Organization relation.
   const orgs = await prisma.organization.findMany({
@@ -1160,9 +1254,10 @@ export async function invoiceAlerts(
     if (!version || !invoice) continue;
 
     const mine = entries.filter((e) => e.versionId === version.id);
-    const unbilled = mine
-      .filter((e) => e.status === 'APPLIED')
-      .reduce((a, e) => a + e.amountMinor, 0);
+    // Applied and NOT already on the invoice — see freightInvoiced.ts.
+    const unbilled = toBill
+      .filter((e) => e.versionId === version.id)
+      .reduce((a, e) => a + billableMinor(e), 0);
     const gaps = freightGaps(version.items, version.sections, ctx);
     const answered = new Set(
       mine.filter((e) => e.status !== 'VOID').map((e) => normalizeBucket(e.bucket)),

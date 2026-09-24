@@ -7,7 +7,8 @@ import { mondayQuery } from './client.js';
 import { DEAL_COL } from './crmMapping.js';
 import { parseBoardMoney } from './boardMoney.js';
 import { subitemFreightForProposal, FREIGHT_AFTER_MARKUP_COL } from './subitemFreight.js';
-import { freightLines, apportion } from '../../proposals/freightTrueUp.js';
+import { freightLines, apportion, MATS_TAX } from '../../proposals/freightTrueUp.js';
+import { versionTotals } from '../../proposals/analytics.js';
 import type { FreightEntry } from '@prisma/client';
 
 /**
@@ -50,12 +51,11 @@ const COLUMNS = {
 } as const;
 
 /**
- * The mats freight TAX column.
+ * The mats freight TAX column — the Mat Freight Tax Pass-Through.
  *
- * Read and reported, never written to a bucket. It is tax the carrier charged, it
- * belongs to the signed document's tax line, and a freight true-up may not move tax
- * (see assertFreightOnlyChange). Surfacing it stops the figure from being invisible
- * — somebody has to decide what to do about it — without letting this path decide.
+ * Staged as a MATS_TAX entry (see syncMatsTax), never written to a freight bucket. A
+ * person applies it with the freight, which puts it on the proposal's Tax field, and
+ * the invoice push bills the difference to the R-TAX item.
  */
 const MATS_TAX_COLUMN = 'formula_mkzde17n';
 
@@ -209,6 +209,8 @@ export interface SyncResult {
     status: string;
   }>;
   matsTaxMinor: number | null;
+  /** What happened to the mats freight tax on this read. See syncMatsTax. */
+  matsTax?: MatsTaxSync | null;
   /** Set when the board could not be read. The panel still opens. */
   error: string | null;
   readAt: string | null;
@@ -218,6 +220,29 @@ export interface SyncResult {
    * the same figures straight into the builder instead).
    */
   thirdParty?: ThirdPartySync | null;
+}
+
+/** The Mat Freight Tax Pass-Through, board against proposal. */
+export interface MatsTaxSync {
+  /** The board's figure (formula_mkzde17n), or null when the column is blank. */
+  boardMinor: number | null;
+  /** What the proposal's Tax field carries now. */
+  onProposalMinor: number;
+  /**
+   *   'none'       — the board has no figure; nothing to do.
+   *   'onProposal' — the proposal already carries the board's figure.
+   *   'staged'     — staged (or re-staged) as a MATS_TAX entry, waiting to be applied.
+   *   'conflict'   — the board changed after the tax was applied or billed. Reported
+   *                  only: a billed tax is corrected with a credit, not a rewrite.
+   */
+  state: 'none' | 'onProposal' | 'staged' | 'conflict';
+  /** Why nothing was staged although the board has a figure. */
+  skipped?: 'cross-border';
+  entryId: string | null;
+  /** For a conflict: the figure already applied, and whether it is on an invoice. */
+  recordedMinor?: number;
+  recordedStatus?: string;
+  changed: boolean;
 }
 
 /** What the freight-request subitems said, and what was done about it. */
@@ -595,7 +620,14 @@ async function syncBoardBuckets(
     result.updated.push({ bucket, entryId: created.id, amountMinor: boardMinor, changed: true });
   }
 
-  if (result.updated.some((u) => u.changed) || result.conflicts.length) {
+  result.matsTax = await syncMatsTax(versionId, itemId, board, trueUpId, actorId);
+
+  if (
+    result.updated.some((u) => u.changed) ||
+    result.conflicts.length ||
+    result.matsTax?.changed ||
+    result.matsTax?.state === 'conflict'
+  ) {
     await recordAudit({
       actorId,
       action: 'freight.monday.pull',
@@ -607,6 +639,7 @@ async function syncBoardBuckets(
         conflicts: result.conflicts,
         outstanding: result.outstanding,
         matsTaxMinor: result.matsTaxMinor,
+        matsTax: result.matsTax,
       },
     });
   }
@@ -617,6 +650,126 @@ async function syncBoardBuckets(
     );
   }
   return result;
+}
+
+/**
+ * Stage the Mat Freight Tax Pass-Through off the deal board.
+ *
+ * The board's figure is the proposal's WHOLE tax, so a staged entry replaces the Tax
+ * field when applied. Same discipline as steel and mats:
+ *
+ *   - a figure already APPLIED or PUSHED is never moved; a board that disagrees later
+ *     is a conflict for a person (a billed tax is corrected with a credit);
+ *   - a figure the proposal already carries needs nothing, and a stale staged one is
+ *     withdrawn so it cannot be applied by accident;
+ *   - a blank board column changes nothing — blank is "not quoted yet", not zero.
+ *
+ * priorAmountMinor is the proposal's tax at staging, so the screens can say what the
+ * invoice will be billed; applyEntries re-records it at the moment it applies.
+ */
+async function syncMatsTax(
+  versionId: string,
+  itemId: string,
+  board: BoardFreight,
+  trueUpId: string,
+  actorId: string,
+): Promise<MatsTaxSync> {
+  const version = await prisma.proposalVersion.findUniqueOrThrow({
+    where: { id: versionId },
+    select: { proposalId: true, items: true, sections: true },
+  });
+  const onProposalMinor = versionTotals(version.items, version.sections).tax;
+  const boardMinor = board.matsTaxMinor;
+  const out: MatsTaxSync = {
+    boardMinor,
+    onProposalMinor,
+    state: 'none',
+    entryId: null,
+    changed: false,
+  };
+  const existing = await prisma.freightEntry.findMany({
+    where: { versionId, bucket: MATS_TAX, source: 'MONDAY', status: { not: 'VOID' } },
+    orderBy: { createdAt: 'desc' },
+  });
+  const withdrawStaged = async () => {
+    const stale = existing.find((e) => e.status === 'STAGED');
+    if (stale) await prisma.freightEntry.delete({ where: { id: stale.id } });
+    return !!stale;
+  };
+
+  // Blank — and 0. The board's formula is
+  //   if({R-Tax} > 1, round({R-Tax} × 1.15, 2), 0)
+  // so an R-Tax nobody has filled in reads as 0, not as blank. Taking that 0 at its
+  // word would stage "cut the tax to $0" on every deal the carrier has not quoted
+  // yet, so 0 is "not quoted", exactly like a blank column. A tax is never lowered
+  // to zero from the board; a genuine zero is a person's change to the proposal.
+  if (boardMinor == null || boardMinor === 0) {
+    return { ...out, boardMinor: null, changed: await withdrawStaged() };
+  }
+
+  // A Canadian job's tax is the cross-border engine's, and a hand-keyed Tax figure
+  // beside it taxes the customer twice — the release blocker
+  // `tax:manual_amount_present` refuses exactly that. So the board's figure is never
+  // staged onto a cross-border version.
+  const crossBorder = await prisma.proposalCrossBorderSnapshot.count({ where: { versionId } });
+  if (crossBorder > 0) {
+    return { ...out, state: 'none', skipped: 'cross-border', changed: await withdrawStaged() };
+  }
+  const settled = existing.find((e) => e.status === 'APPLIED' || e.status === 'PUSHED');
+  const staged = existing.find((e) => e.status === 'STAGED');
+
+  if (settled) {
+    if (settled.amountMinor !== boardMinor) {
+      if (staged) await prisma.freightEntry.delete({ where: { id: staged.id } });
+      return {
+        ...out,
+        state: 'conflict',
+        entryId: settled.id,
+        recordedMinor: settled.amountMinor,
+        recordedStatus: settled.status,
+      };
+    }
+    return { ...out, state: 'onProposal', entryId: settled.id };
+  }
+
+  if (boardMinor === onProposalMinor) {
+    if (staged) {
+      await prisma.freightEntry.delete({ where: { id: staged.id } });
+      out.changed = true;
+    }
+    return { ...out, state: 'onProposal' };
+  }
+
+  const rawValue = board.raw[MATS_TAX_COLUMN] ?? null;
+  const data = {
+    amountMinor: boardMinor,
+    priorAmountMinor: onProposalMinor,
+    absolute: true,
+    mondayItemId: itemId,
+    mondayColumnId: MATS_TAX_COLUMN,
+    mondayRawValue: rawValue,
+    mondayReadAt: board.readAt,
+  };
+  if (staged) {
+    const changed =
+      staged.amountMinor !== boardMinor || staged.priorAmountMinor !== onProposalMinor;
+    if (changed) await prisma.freightEntry.update({ where: { id: staged.id }, data });
+    return { ...out, state: 'staged', entryId: staged.id, changed };
+  }
+  const created = await prisma.freightEntry.create({
+    data: {
+      ...data,
+      trueUpId,
+      proposalId: version.proposalId,
+      versionId,
+      bucket: MATS_TAX,
+      scope: 'JOB',
+      source: 'MONDAY',
+      status: 'STAGED',
+      createdById: actorId,
+    },
+  });
+  return { ...out, state: 'staged', entryId: created.id, changed: true };
 }
 
 /** The live true-up folder for a version, opened if there is not one yet. */
@@ -694,7 +847,9 @@ export async function pullOutstanding(
       if (r.thirdParty?.error) out.failed.push({ versionId: v.id, error: r.thirdParty.error });
       out.updated += r.updated.filter((u) => u.changed).length;
       out.updated += r.thirdParty?.staged.filter((s) => s.changed).length ?? 0;
+      out.updated += r.matsTax?.changed ? 1 : 0;
       out.conflicts += r.conflicts.length + (r.thirdParty?.conflicts.length ?? 0);
+      out.conflicts += r.matsTax?.state === 'conflict' ? 1 : 0;
     } catch (err) {
       out.failed.push({ versionId: v.id, error: err instanceof Error ? err.message : String(err) });
     }
@@ -744,7 +899,7 @@ export async function handleBoardChange(
   for (const versionId of versionIds) {
     try {
       const r = await syncVersion(versionId, actorId, { fetchImpl: opts.fetchImpl });
-      if (r.updated.some((u) => u.changed)) updated += 1;
+      if (r.updated.some((u) => u.changed) || r.matsTax?.changed) updated += 1;
     } catch (err) {
       logger.warn({ err, versionId, item }, 'freight pull: webhook sync failed');
     }
