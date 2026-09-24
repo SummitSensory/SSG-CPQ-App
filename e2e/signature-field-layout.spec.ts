@@ -25,11 +25,12 @@ test.describe('signature field layout', () => {
     expect(body.offsets).toMatchObject({ ssgSigAcceptanceDate: { top: -6, left: 4 } });
     expect(body.slotIds).toContain('ssgSigAcceptanceDate');
     // The shipped default size for every slot, so the admin editor never needs its
-    // own hardcoded copy of these numbers.
+    // own hardcoded copy of these numbers. 180 x 40 at 14pt since #82 made the
+    // customer signature default smaller (src/integrations/docuseal/assembly.ts).
     expect(body.defaults.ssgSigAcceptanceSignature).toMatchObject({
-      width: 220,
+      width: 180,
       height: 40,
-      fontSize: 18,
+      fontSize: 14,
     });
 
     // Leave the shared singleton the way this suite found it.
