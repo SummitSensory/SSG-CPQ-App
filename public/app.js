@@ -8676,7 +8676,8 @@
         // property of the thing about to be produced.
         '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:flex-end;">' +
           (window.SSGFrontMatter ? window.SSGFrontMatter.scopeToggleHtml(doc) : '') +
-          '<button class="btn" id="pvPrint" style="width:auto;padding:9px 20px;">Print / Save PDF</button>' +
+          '<button class="link-btn" id="pvPrintBrowser" title="Print on paper through the browser" style="width:auto;padding:9px 16px;background:#fff;">Print</button>' +
+          '<button class="btn" id="pvPrint" title="Download the PDF exactly as the customer receives it" style="width:auto;padding:9px 20px;">Save PDF</button>' +
         '</div>' +
       '</div>';
     }
@@ -8689,7 +8690,8 @@
 
     function wire() {
       document.getElementById('pvClose').addEventListener('click', function () { document.body.removeChild(ov); });
-      document.getElementById('pvPrint').addEventListener('click', firePrint);
+      document.getElementById('pvPrint').addEventListener('click', savePdf);
+      document.getElementById('pvPrintBrowser').addEventListener('click', firePrint);
       if (window.SSGFrontMatter) {
         window.SSGFrontMatter.bindScopeToggle(ov, function () {
           // The introduction/proposal scope toggle only decides which of THOSE
@@ -8705,6 +8707,45 @@
           ov.scrollTop = 0;
           wire();
         });
+      }
+    }
+    /**
+     * Save PDF: render the document on the SERVER and download it.
+     *
+     * The browser's own Save as PDF depends on the print dialog's settings, which Chrome
+     * remembers between prints. Left on Scale "Fit to page width", it lays the page out
+     * at the WINDOW's width and scales that onto the paper — P-2026-000160 came out at
+     * 76%, every page shrunk into the top-left corner. The server renderer has no such
+     * setting, and it is the same render, page geometry and reference-document merge
+     * that DocuSeal and the monday file get, so the downloaded copy is the one the
+     * customer receives. The browser dialog stays as the fallback, and as "Print".
+     */
+    async function savePdf() {
+      var bt = document.getElementById('pvPrint');
+      var label = bt ? bt.textContent : '';
+      if (bt) { bt.disabled = true; bt.textContent = 'Preparing PDF\u2026'; }
+      try {
+        var name = proposalFileName(doc);
+        var r = await authed('/render/proposals/document.pdf', {
+          method: 'POST',
+          body: {
+            proposalHtml: proposalStandaloneHtml(doc),
+            filename: name,
+            referenceDocKeys: (doc.meta && Array.isArray(doc.meta.referenceDocKeys)) ? doc.meta.referenceDocKeys : [],
+          },
+          timeoutMs: RENDER_TIMEOUT_MS,
+        });
+        if (!r.ok) throw new Error(await serverMessage(r, 'the PDF renderer did not respond (' + r.status + ')'));
+        downloadBlob(await r.blob(), name + '.pdf');
+        if (r.headers.get('X-Reference-Docs-Missing')) {
+          toast('The PDF is saved, but the attached reference documents (e.g. the W-9) could not be read and are not in it. Try again in a moment.', 1);
+        }
+      } catch (e) {
+        toast('Could not build the PDF on the server (' + ((e && e.message) || 'unknown error') +
+          '). Opening the print dialog instead \u2014 in it, set Scale to "Default" so the pages print full size.', 1);
+        firePrint();
+      } finally {
+        if (bt) { bt.disabled = false; bt.textContent = label || 'Save PDF'; }
       }
     }
     function firePrint() {
@@ -8733,10 +8774,10 @@
       fixSheetPageBreaks(ov);
       mountPreviewViewer(ov, ov);
     }).catch(function () {});
-    // Save as PDF waits for that (bounded to a few seconds — see
-    // referenceDocSheetsHtml's own timeout) so a selected reference document is
-    // actually part of what gets printed, not just of what to load next.
-    if (printNow) refDocsReady.then(function () { setTimeout(firePrint, 120); });
+    // The builder's Save PDF: rendered on the server (see savePdf), which merges the
+    // selected reference documents as real PDF pages itself — so, unlike the browser
+    // print this replaced, it does not wait for the preview's picture of them.
+    if (printNow) savePdf();
   }
 
   /**

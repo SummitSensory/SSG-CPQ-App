@@ -6,7 +6,11 @@ import {
 } from './mapping.js';
 import { sumLineAmounts } from './estimates.js';
 import { chargeDetail, type ChargeKind } from './chargeItems.js';
-import { FREIGHT_BUCKETS, type FreightBucket } from '../../proposals/freightTrueUp.js';
+import {
+  FREIGHT_BUCKETS,
+  MATS_TAX_LABEL,
+  type FreightBucket,
+} from '../../proposals/freightTrueUp.js';
 
 /**
  * QuickBooks bodies for freight that arrives after the invoice.
@@ -32,11 +36,16 @@ import { FREIGHT_BUCKETS, type FreightBucket } from '../../proposals/freightTrue
  * builders already are.
  */
 
-/** One freight row per bucket, so QuickBooks reporting keeps them apart. */
-export type FreightAmounts = Record<FreightBucket, bigint>;
+/**
+ * One freight row per bucket, so QuickBooks reporting keeps them apart — plus the
+ * Mat Freight Tax Pass-Through (MATS_TAX), billed as its own row on the R-TAX item.
+ * MATS_TAX here is already the DIFFERENCE to bill (see billableMinor), never the
+ * proposal's whole tax figure.
+ */
+export type FreightAmounts = Record<FreightBucket, bigint> & { MATS_TAX: bigint };
 
 export function emptyFreightAmounts(): FreightAmounts {
-  return { STEEL: 0n, MATS: 0n, THERAPEUTIC: 0n, OTHER: 0n };
+  return { STEEL: 0n, MATS: 0n, THERAPEUTIC: 0n, OTHER: 0n, MATS_TAX: 0n };
 }
 
 /**
@@ -58,7 +67,7 @@ const KIND: Record<FreightBucket, { kind: ChargeKind; label: string }> = {
 };
 
 export function freightTotal(a: FreightAmounts): bigint {
-  return FREIGHT_BUCKETS.reduce((sum, b) => sum + (a[b] ?? 0n), 0n);
+  return FREIGHT_BUCKETS.reduce((sum, b) => sum + (a[b] ?? 0n), 0n) + (a.MATS_TAX ?? 0n);
 }
 
 export interface FreightLineInput {
@@ -94,6 +103,18 @@ export function buildFreightLines(input: FreightLineInput): Array<Record<string,
       Amount: minorToQboAmount(amount),
       Description: description,
       SalesItemLineDetail: chargeDetail(kind),
+    });
+  }
+  // The tax pass-through bills to FREIGHT_TAX — QBO_ITEM_ID_FREIGHT_TAX, item 207
+  // "Crating & Freight - Tax (Mats)", SKU R-TAX — the item every tax pass-through line
+  // on an original invoice already uses. Not QuickBooks sales tax: see chargeItems.ts.
+  const tax = input.amounts.MATS_TAX ?? 0n;
+  if (tax > 0n) {
+    lines.push({
+      DetailType: 'SalesItemLineDetail',
+      Amount: minorToQboAmount(tax),
+      Description: `${MATS_TAX_LABEL} pass-through — change from the deal board`,
+      SalesItemLineDetail: chargeDetail('FREIGHT_TAX'),
     });
   }
   return lines;

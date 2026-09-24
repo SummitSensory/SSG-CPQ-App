@@ -30,10 +30,12 @@ import { versionTotals, metaOf, itemsOf, type Totals, type RawItem } from './ana
  * and a change in any of them aborts the amendment. That is what stops "add the
  * freight" from becoming a back door into a signed price.
  *
- * The mats TAX pass-through is deliberately outside every bucket. monday quotes it
- * next to the mats freight and this module reports it so nobody has to go looking,
- * but it is a tax figure: moving it would make the guard above meaningless. It needs
- * a new proposal version.
+ * The mats TAX pass-through is deliberately outside every bucket, and until
+ * 2026-09-24 it could not move at all. Bryan then decided that a freight sync on a
+ * released proposal carries it too, so it now travels as its own entry kind
+ * (MATS_TAX, below): read off the deal board, staged, applied to the Tax field by a
+ * person, and billed to the invoice as the difference only. The guard still holds
+ * everything else — a batch with no MATS_TAX entry may not move the tax by a cent.
  *
  * No Prisma — the same contract as analytics.ts and priceEntry.ts.
  */
@@ -367,6 +369,44 @@ export interface AppliedContent {
   after: Totals;
   deltaMinor: number;
   changes: BucketChange[];
+  /** Set when a MATS_TAX figure moved the proposal's Tax field. */
+  taxChange: { fromMinor: number; toMinor: number } | null;
+}
+
+/* ────────────────────────── mats freight tax ────────────────────────── */
+
+/**
+ * The Mat Freight Tax Pass-Through, as a FreightEntry kind.
+ *
+ * monday quotes it beside the mats freight (formula_mkzde17n, "Billed R Tax (fx)"),
+ * and Bryan asked for a freight sync on a released proposal to carry it too. It is
+ * NOT one of the four freight buckets — it is not in FREIGHT_BUCKETS, has no panel of
+ * its own, and nothing that counts buckets sees it — because it lands on the
+ * proposal's Tax field and bills to the QuickBooks R-TAX item (item 207, "Crating &
+ * Freight - Tax (Mats)"), the same item every tax pass-through line already uses.
+ *
+ * It follows the same rules as board-read freight: staged by the sync, applied by a
+ * person, never moved once applied or billed (a later board change is reported).
+ */
+export const MATS_TAX = 'MATS_TAX' as const;
+export const MATS_TAX_LABEL = 'Mats freight tax';
+
+/**
+ * What an entry would add to the customer's invoice.
+ *
+ * Freight entries bill their amount. A MATS_TAX entry states the proposal's WHOLE tax
+ * figure, and the figure it replaced is already on the invoice, so it bills only the
+ * difference — $250 → $310 bills $60, never $310. A lower figure bills nothing; the
+ * customer is owed a credit, which is a person's call in QuickBooks, not an automatic
+ * one here.
+ */
+export function billableMinor(e: {
+  bucket: string;
+  amountMinor: number;
+  priorAmountMinor?: number | null;
+}): number {
+  if (e.bucket !== MATS_TAX) return e.amountMinor;
+  return Math.max(0, e.amountMinor - (e.priorAmountMinor ?? 0));
 }
 
 const isMoney = (v: unknown): boolean =>
@@ -394,6 +434,11 @@ export function applyFreightEntries(
   sections: unknown,
   items: unknown,
   entries: FreightEntryInput[],
+  /**
+   * The Mat Freight Tax Pass-Through to write, when a MATS_TAX entry is in the batch.
+   * It is the board's WHOLE figure, so it replaces the Tax field rather than adding.
+   */
+  opts: { taxMinor?: number | null } = {},
 ): AppliedContent {
   const before = versionTotals(items, sections);
   const nextSections = clone(sections) as unknown;
@@ -413,7 +458,8 @@ export function applyFreightEntries(
   const metaSection = (nextSections as Array<Record<string, unknown>>).find(
     (x) => x && typeof x === 'object' && x.id === 'meta',
   );
-  const needsMeta = entries.some((e) => e.scope === 'JOB');
+  const taxMinor = opts.taxMinor ?? null;
+  const needsMeta = taxMinor !== null || entries.some((e) => e.scope === 'JOB');
   if (
     needsMeta &&
     (!metaSection || typeof metaSection.data !== 'object' || metaSection.data == null)
@@ -487,6 +533,14 @@ export function applyFreightEntries(
     if (bucket === 'OTHER') metaData.stdFreightOn = true;
   }
 
+  // The Mat Freight Tax Pass-Through: the board's whole figure replaces the Tax field.
+  // Its wording override is cleared for the same reason a freight bucket's is — left
+  // as "TBD" it keeps printing, and a figure typed there would still be counted.
+  if (taxMinor !== null) {
+    metaData.taxAmountMinor = assertMoney(taxMinor, MATS_TAX_LABEL);
+    if (s(metaData.tbdTax).trim()) metaData.tbdTax = '';
+  }
+
   const after = versionTotals(nextItems, nextSections);
   const changes: BucketChange[] = [];
   for (const bucket of FREIGHT_BUCKETS) {
@@ -508,6 +562,7 @@ export function applyFreightEntries(
     after,
     deltaMinor: after.total - before.total,
     changes,
+    taxChange: after.tax !== before.tax ? { fromMinor: before.tax, toMinor: after.tax } : null,
   };
 }
 
@@ -519,16 +574,28 @@ export function applyFreightEntries(
  * arriving by any route — a stale form posted from a second tab, a line quantity
  * that moved underneath, a discount that recalculated.
  *
- * The freight TAX pass-through is on this list even though monday quotes it beside
- * the mats freight. It is tax: it belongs to the document the customer signed, and
- * a freight true-up that could move it would be a price editor wearing a freight
- * label.
+ * The freight TAX pass-through is on this list unless the batch carries a MATS_TAX
+ * figure read off the deal board (see `opts.allowTax`). Anything else that moved it
+ * would be a price editor wearing a freight label.
  */
-export function assertFreightOnlyChange(before: Totals, after: Totals): void {
+export function assertFreightOnlyChange(
+  before: Totals,
+  after: Totals,
+  /**
+   * True only when the batch carries a MATS_TAX figure read off the deal board. Bryan
+   * decided (2026-09-24) that a freight sync on a released proposal carries the mats
+   * freight tax too, so in that one case the Tax field may move — and only by the
+   * board's own figure, which applyFreightEntries writes. Nothing else changes: the
+   * subtotal, the discount and the cost of goods are still held to the cent.
+   */
+  opts: { allowTax?: boolean } = {},
+): void {
   const fields: Array<[keyof Totals, string]> = [
     ['subtotal', 'the product subtotal'],
     ['discount', 'the discount'],
-    ['tax', 'the freight tax pass-through'],
+    ...(opts.allowTax
+      ? []
+      : ([['tax', 'the freight tax pass-through']] as Array<[keyof Totals, string]>)),
     ['cogs', 'the cost of goods'],
   ];
   const moved = fields.filter(([k]) => before[k] !== after[k]);
@@ -640,8 +707,14 @@ export function alertIsQuiet(
 }
 
 /** One-line summary of a true-up's money movement, for audit details and email. */
-export function describeChanges(changes: BucketChange[], deltaMinor: number): string {
+export function describeChanges(
+  changes: BucketChange[],
+  deltaMinor: number,
+  taxChange: { fromMinor: number; toMinor: number } | null = null,
+): string {
   const parts = changes.map((c) => `${c.label} ${money(c.fromMinor)} → ${money(c.toMinor)}`);
+  if (taxChange)
+    parts.push(`${MATS_TAX_LABEL} ${money(taxChange.fromMinor)} → ${money(taxChange.toMinor)}`);
   return `${parts.join('; ')} (total ${deltaMinor >= 0 ? '+' : '−'}${money(Math.abs(deltaMinor))})`;
 }
 

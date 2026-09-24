@@ -33,10 +33,12 @@ export const DEAL_COLUMNS = {
    */
   discount: 'numbers4__1',
   /**
-   * Numbers column — every tax-like charge on the proposal in one figure: sales tax,
-   * plus, on a cross-border job, the tariff, customs brokerage and Canadian tax that
-   * Summit collects. See taxesAndDutiesMinor() for why they are summed rather than
-   * given a column each.
+   * Numbers column — the cross-border charges Summit collects on a Canadian job (the
+   * tariff, customs brokerage and Canadian tax), summed. See collectedBorderChargesMinor().
+   *
+   * NEVER the proposal's Tax field. That field is the Mat Freight Tax Pass-Through,
+   * which the deal board computes itself in formula_mkzde17n ("Billed R Tax (fx)");
+   * pushing it here too put the same money on the deal twice.
    */
   taxes: 'numbers99__1',
   /** Numbers column — Adventure frame length, in feet. */
@@ -63,8 +65,8 @@ export interface ProposalPushResult {
   subtotalMinor?: number;
   /** Positive here, as the amount discounted. It is the board that takes it negative. */
   discountMinor?: number;
-  /** Sales tax plus collected border charges, as written to the board. */
-  taxesMinor?: number;
+  /** Collected border charges, as written to numbers99__1. Never the mat freight tax. */
+  taxesMinor?: number | null;
   /** The frame footprint in feet, or null on a proposal with no configured frame. */
   frameLengthFt?: number | null;
   frameWidthFt?: number | null;
@@ -123,13 +125,14 @@ function frameFootprint(sections: unknown): { length: number | null; width: numb
 }
 
 /**
- * Everything tax-like on the proposal, as one figure in USD minor units.
+ * The cross-border charges Summit collects, as one figure in USD minor units — what
+ * the board's Taxes column (numbers99__1) holds.
  *
- * Sales tax and the cross-border charges are summed rather than kept apart because
- * the board has one column for them. They cannot double-count: a Canadian proposal
- * calculates its tax through the cross-border engine, and the release blocker
- * `tax:manual_amount_present` refuses to release one that ALSO carries a hand-keyed
- * tax amount. So at most one of the two terms is non-zero on any given proposal.
+ * The proposal's own Tax field is deliberately NOT part of it. It is not sales tax:
+ * it is the Mat Freight Tax Pass-Through, and the deal board already carries it in
+ * its own formula column, formula_mkzde17n. Adding it here as well put the same money
+ * on the deal twice. So a domestic job writes 0, which also clears a pass-through an
+ * earlier release left in the column.
  *
  * Only charges Summit actually collects are counted. Where the customer clears the
  * goods themselves, the tariff and brokerage are payable at the border to somebody
@@ -139,15 +142,15 @@ function frameFootprint(sections: unknown): { length: number | null; width: numb
  * does: the board should report the figures the customer was quoted, not what the
  * engine would produce at today's rates.
  */
-async function taxesAndDutiesMinor(versionId: string, salesTaxMinor: number): Promise<number> {
+export async function collectedBorderChargesMinor(versionId: string): Promise<number | null> {
   try {
     const border = await sellerCollectedCharges(versionId);
-    return Math.round(salesTaxMinor) + Math.round(border.totalMinor);
+    return Math.round(border.totalMinor);
   } catch (err) {
-    // A border-charge read is not worth failing the push over. The rest of the row
-    // is still correct, and the tax column then carries the sales tax alone.
+    // A border-charge read is not worth failing the push over. Null, so the column is
+    // left as it is: writing 0 on a Canadian job would wipe a correct figure.
     logger.warn({ err, versionId }, 'monday proposal push: border charges unavailable');
-    return Math.round(salesTaxMinor);
+    return null;
   }
 }
 
@@ -198,7 +201,9 @@ export async function pushReleasedProposal(input: {
   const totals = versionTotals(version.items, version.sections);
   const subtotalMinor = totals.subtotal;
   const frame = frameFootprint(version.sections);
-  const taxesMinor = await taxesAndDutiesMinor(version.id, totals.tax);
+  // Border charges only — never totals.tax, the mat freight tax pass-through (see
+  // collectedBorderChargesMinor).
+  const taxesMinor = await collectedBorderChargesMinor(version.id);
   const expiration = mondayDateValue(version.expirationDate ?? null);
   const expirationDate = 'date' in expiration ? expiration.date : null;
   const boardId = env.MONDAY_DEALS_BOARD_ID!;
@@ -215,14 +220,15 @@ export async function pushReleasedProposal(input: {
       // the arithmetic. The percentage is what the rep types; the dollars are what
       // the deal board reports on.
       [DEAL_COLUMNS.discount]: dollars(-totals.discount),
-      // Sales tax, or the collected border charges on a Canadian job — never both.
-      [DEAL_COLUMNS.taxes]: dollars(taxesMinor),
       // Written on every release, including as an empty value. A released version
       // with no expiration must clear whatever the previous version left behind —
       // a stale date on the board is worse than a blank one, because the team will
       // chase a deadline that no longer exists.
       [DEAL_COLUMNS.expiration]: expiration,
     };
+    // Collected border charges on a Canadian job; 0 otherwise. Never the pass-through.
+    // Left untouched when the border charges could not be read.
+    if (taxesMinor != null) columns[DEAL_COLUMNS.taxes] = dollars(taxesMinor);
     if (frame.length != null) columns[DEAL_COLUMNS.frameLength] = String(frame.length);
     if (frame.width != null) columns[DEAL_COLUMNS.frameWidth] = String(frame.width);
 
