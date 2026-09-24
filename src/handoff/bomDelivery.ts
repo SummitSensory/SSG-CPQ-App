@@ -24,7 +24,10 @@ export interface BomPoc {
 }
 
 export interface BomDelivery {
-  /** The loading-dock answer, e.g. "No, I need liftgate delivery". Prints as "Delivery Type". */
+  /**
+   * Prints as "Delivery Type": "Loading Dock" or "Lift Gate", from monday's
+   * formula_mm7fhgy9 — blank when the customer has not answered. See bomDeliveryType.
+   */
   deliveryType: string;
   /** YYYY-MM-DD as stored; every format prints it MM/DD/YYYY (usDate). Blank when unanswered. */
   preferredDeliveryDate: string;
@@ -57,9 +60,60 @@ export interface SubmissionDeliveryAnswers {
   deliveryTiming: string | null;
   preferredDeliveryDate: Date | null;
   specialInstructions: string | null;
+  /** Every monday column on the submissions row, id → text, as stored at ingest. */
+  raw?: unknown;
 }
 
 const t = (v: string | null | undefined): string => (v ?? '').trim();
+
+/**
+ * "Loading Dock/Lift Gate" — a monday FORMULA column on the Delivery & Site Details
+ * Submissions board that reduces the customer's loading-dock answer (text_mm5712dx)
+ * to the two words a carrier books against:
+ *
+ *   if({text_mm5712dx} = "Yes, No need for lift gate delivery", "Loading Dock", "Lift Gate")
+ *
+ * It is what the sheet's Delivery Type row prints (see bomDeliveryType).
+ */
+export const LOADING_DOCK_TYPE_COL = 'formula_mm7fhgy9';
+
+/** One column's stored text off a submission's `raw`, or ''. */
+function rawText(raw: unknown, col: string): string {
+  if (!raw || typeof raw !== 'object') return '';
+  const v = (raw as Record<string, unknown>)[col];
+  return typeof v === 'string' ? v.trim() : '';
+}
+
+/**
+ * The Delivery Type row: monday's Loading Dock/Lift Gate formula value.
+ *
+ * - The customer has not answered the loading-dock question → BLANK. The formula
+ *   says "Lift Gate" for anything but the one "Yes" answer, blank included, and a
+ *   vendor must never book a liftgate nobody asked for.
+ * - Staff corrected the answer on this vendor's section (it differs from what the
+ *   customer submitted) → the corrected text. The formula only ever saw the
+ *   customer's original answer, so printing it would undo the correction.
+ * - The formula has not been read for this submission yet (stored before the column
+ *   existed, refreshed on the next portal sync) → the answer's own text, as before.
+ */
+export function bomDeliveryType(
+  answerInEffect: string,
+  customerAnswer: string,
+  formula: string,
+): string {
+  if (!answerInEffect) return '';
+  if (answerInEffect !== customerAnswer) return answerInEffect;
+  if (!formula) return answerInEffect;
+  // Trusted only when it agrees with the answer. The formula is an exact, case-
+  // sensitive match on one sentence, so a reworded or re-spaced "Yes" in the portal
+  // would come back "Lift Gate" and a vendor would book a liftgate for a customer
+  // with a dock. When the two disagree, the customer's own words print instead.
+  const said = answerInEffect.toLowerCase();
+  const agrees =
+    (formula === 'Loading Dock' && said.startsWith('yes')) ||
+    (formula === 'Lift Gate' && said.startsWith('no'));
+  return agrees ? formula : answerInEffect;
+}
 
 /**
  * Summit's own time zone (Englewood, CO). "Today" on a sheet is Summit's today: in UTC
@@ -141,7 +195,11 @@ export function deliveryDetails(
   return {
     // `||` rather than `??`: a section cleared to an empty string has no answer of its
     // own, and the customer's is better than a blank.
-    deliveryType: t(section?.loadingDock) || t(sub?.loadingDock),
+    deliveryType: bomDeliveryType(
+      t(section?.loadingDock) || t(sub?.loadingDock),
+      t(sub?.loadingDock),
+      rawText(sub?.raw, LOADING_DOCK_TYPE_COL),
+    ),
     preferredDeliveryDate:
       day(section?.preferredDeliveryDate) || day(sub?.preferredDeliveryDate ?? null),
     deliveryTiming: t(section?.deliveryTiming) || t(sub?.deliveryTiming),

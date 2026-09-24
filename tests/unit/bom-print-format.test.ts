@@ -184,3 +184,99 @@ describe('shipToPrintLines', () => {
     ]);
   });
 });
+
+describe('Delivery Type (B19) — monday formula_mm7fhgy9', () => {
+  const sub = (over: Record<string, unknown> = {}) => ({
+    pocName: null,
+    pocPhone: null,
+    pocEmail: null,
+    preferredComm: null,
+    textNumber: null,
+    secondaryPocName: null,
+    secondaryPocPhone: null,
+    secondaryPocEmail: null,
+    secondaryPreferredComm: null,
+    secondaryMobile: null,
+    loadingDock: 'No, I need liftgate delivery',
+    deliveryTiming: null,
+    preferredDeliveryDate: null,
+    specialInstructions: null,
+    raw: { text_mm5712dx: 'No, I need liftgate delivery', formula_mm7fhgy9: 'Lift Gate' },
+    ...over,
+  });
+
+  it('prints the formula value', () => {
+    expect(deliveryDetails(null, sub()).deliveryType).toBe('Lift Gate');
+    expect(
+      deliveryDetails(
+        null,
+        sub({
+          loadingDock: 'Yes, No need for lift gate delivery',
+          raw: { formula_mm7fhgy9: 'Loading Dock' },
+        }),
+      ).deliveryType,
+    ).toBe('Loading Dock');
+  });
+
+  it('prints it on a vendor section that carries the customer’s own answer', () => {
+    const section = {
+      loadingDock: 'No, I need liftgate delivery',
+      deliveryTiming: null,
+      preferredDeliveryDate: null,
+    };
+    expect(deliveryDetails(section, sub()).deliveryType).toBe('Lift Gate');
+  });
+
+  it('is BLANK when the customer has not answered, though the formula says Lift Gate', () => {
+    expect(
+      deliveryDetails(null, sub({ loadingDock: null, raw: { formula_mm7fhgy9: 'Lift Gate' } }))
+        .deliveryType,
+    ).toBe('');
+    expect(deliveryDetails(null, null).deliveryType).toBe('');
+  });
+
+  it('keeps a correction staff made on the section over the customer’s formula', () => {
+    const section = {
+      loadingDock: 'Dock at rear of building',
+      deliveryTiming: null,
+      preferredDeliveryDate: null,
+    };
+    expect(deliveryDetails(section, sub()).deliveryType).toBe('Dock at rear of building');
+  });
+
+  it('prints the customer’s own words when the formula disagrees with the answer', () => {
+    // A reworded "Yes" the exact-match formula does not recognise comes back
+    // "Lift Gate" — which must never reach a vendor for a customer with a dock.
+    expect(
+      deliveryDetails(
+        null,
+        sub({
+          loadingDock: 'Yes, we have a loading dock',
+          raw: { formula_mm7fhgy9: 'Lift Gate' },
+        }),
+      ).deliveryType,
+    ).toBe('Yes, we have a loading dock');
+    expect(
+      deliveryDetails(
+        null,
+        sub({
+          loadingDock: 'No, I need liftgate delivery',
+          raw: { formula_mm7fhgy9: 'Loading Dock' },
+        }),
+      ).deliveryType,
+    ).toBe('No, I need liftgate delivery');
+    // Something else entirely in the formula column.
+    expect(deliveryDetails(null, sub({ raw: { formula_mm7fhgy9: 'TBD' } })).deliveryType).toBe(
+      'No, I need liftgate delivery',
+    );
+  });
+
+  it('falls back to the answer’s own text until the formula has been read', () => {
+    expect(deliveryDetails(null, sub({ raw: {} })).deliveryType).toBe(
+      'No, I need liftgate delivery',
+    );
+    expect(deliveryDetails(null, sub({ raw: null })).deliveryType).toBe(
+      'No, I need liftgate delivery',
+    );
+  });
+});

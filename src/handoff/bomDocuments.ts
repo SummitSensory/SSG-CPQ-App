@@ -191,7 +191,8 @@ async function buildModel(
   const meta: Array<{ label: string; value: string; numericValue?: number; numFmt?: string }> = [
     { label: 'Job', value: jobName || '—' },
     { label: 'Submission Date', value: doc.submissionDate },
-    // The customer's loading-dock answer ("No, I need liftgate delivery"). Kept apart
+    // "Loading Dock" or "Lift Gate" — monday's formula_mm7fhgy9 over the customer's
+    // loading-dock answer, blank when unanswered (see bomDeliveryType). Kept apart
     // from "Delivery" below, which is the free text a rep types on the section.
     { label: 'Delivery Type', value: d.deliveryType },
     { label: 'Delivery', value: deliveryType || '—' },
