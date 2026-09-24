@@ -159,3 +159,26 @@ describe('PR #143 review fixes', () => {
     expect(result.skippedVendors).toEqual(['Frozen Co']);
   });
 });
+
+describe('vendor code that repeats the colour name', () => {
+  it('prints the name once, and still prints a real code', () => {
+    const named: ResolvedColorSpec = {
+      ...spec,
+      colors: [
+        { id: 'c-rb', name: 'Royal Blue', vendorCode: 'Royal Blue', upchargeMinor: 0 },
+        { id: 'c-or', name: 'Orange', vendorCode: 'OR', upchargeMinor: 0 },
+      ],
+    };
+    const { updates } = planColorApplication({
+      ...base,
+      picks: [
+        pick('climb_slide_mat.climb_slide_piece_1', 'vinyl', 'Royal Blue'),
+        pick('climb_slide_mat.climb_slide_piece_2', 'vinyl', 'Orange'),
+      ],
+      mapping,
+      lines: [planLine('l1', 'CS-90')],
+      specs: new Map([['l1', named]]),
+    });
+    expect(updates[0]!.to.powderColor).toBe('Top platform: Royal Blue · Slide: Orange (OR)');
+  });
+});

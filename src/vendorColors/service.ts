@@ -290,7 +290,13 @@ export function describePicks(
   return picks
     .map((p) => {
       const label = opts.spec ? slotLabel(opts.spec, p.slot) : `Colour ${p.slot}`;
-      const code = opts.withVendorCode && p.vendorCode ? ` (${p.vendorCode})` : '';
+      // A vendor code that just repeats the name (Resilite's chart uses the names
+      // as codes) would print "Royal Blue (Royal Blue)" — show it only when it adds something.
+      const vc = (p.vendorCode ?? '').trim();
+      const code =
+        opts.withVendorCode && vc && vc.toLowerCase() !== p.name.trim().toLowerCase()
+          ? ` (${vc})`
+          : '';
       return `${label}: ${p.name}${code}`;
     })
     .join(' · ');
