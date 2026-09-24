@@ -163,7 +163,9 @@ describe('multi-piece parts', () => {
     expect(result.conflicts).toHaveLength(1);
   });
 
-  it("reports a colour that is not on the part's vendor chart and keeps that slot as it was", () => {
+  // Review 2026-09-24 (H2): writing the other pieces would keep piece 2's OLD colour
+  // (Lime) printed on the vendor sheet as if the customer had chosen it.
+  it("a colour not on the part's vendor chart leaves the WHOLE line untouched and is reported", () => {
     const { updates, result } = planColorApplication({
       ...base,
       picks: [
@@ -183,10 +185,7 @@ describe('multi-piece parts', () => {
     expect(result.offChart).toEqual([
       'climb_slide_mat.climb_slide_piece_2: vinyl Mauve — not on Resilite Vinyl',
     ]);
-    expect(updates[0]!.to.colorPicks?.map((p) => [p.slot, p.name])).toEqual([
-      [1, 'Royal Blue'],
-      [2, 'Lime'],
-    ]);
+    expect(updates).toEqual([]);
   });
 
   it('a piece beyond what the spec takes is reported, not written', () => {

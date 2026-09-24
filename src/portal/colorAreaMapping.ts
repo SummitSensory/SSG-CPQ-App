@@ -36,7 +36,7 @@ export interface PartInput {
   piece?: number | null;
 }
 
-export const MAX_PIECE = 20;
+export const MAX_PIECE = 7; // a colour spec takes at most 7 colours (MAX_COLOR_SLOTS)
 
 export interface ColorAreaRow {
   areaKey: string;
@@ -138,14 +138,23 @@ function normalizeParts(input: readonly (string | PartInput)[]): PartInput[] {
     const k = sku.toUpperCase();
     if (seen.has(k)) continue;
     seen.add(k);
-    const pieceRaw = typeof raw === 'string' ? null : raw.piece;
-    const piece = pieceRaw == null || (pieceRaw as unknown) === '' ? null : Number(pieceRaw);
+    // A bare part number (an older screen) says nothing about pieces: undefined
+    // means "keep whatever piece is stored", never "clear it".
+    const pieceRaw = typeof raw === 'string' ? undefined : raw.piece;
+    const piece =
+      pieceRaw === undefined
+        ? undefined
+        : pieceRaw == null || (pieceRaw as unknown) === ''
+          ? null
+          : Number(pieceRaw);
     if (piece != null && (!Number.isInteger(piece) || piece < 1 || piece > MAX_PIECE)) {
       throw new ValidationError(`Piece for ${sku} must be a whole number from 1 to ${MAX_PIECE}.`);
     }
-    if (isPartPattern(sku) && !/[A-Za-z0-9]/.test(sku.replace(/\*/g, ''))) {
+    // A pattern must start with a real prefix (at least 3 characters before the
+    // first *), so it can't sweep in unrelated parts the way "R*" or "*A*" would.
+    if (isPartPattern(sku) && !/^[^*]{3,}/.test(sku)) {
       throw new ValidationError(
-        `"${sku}" would match every part. Give a pattern such as R-SSG-*CLM*.`,
+        `"${sku}" is too broad. A pattern must start with at least 3 characters, e.g. R-SSG-*CLM*.`,
       );
     }
     out.push({ sku, piece });
@@ -176,7 +185,7 @@ export async function saveColorArea(
     sku: isPartPattern(p.sku)
       ? p.sku.toUpperCase()
       : (names.get(p.sku.toUpperCase())?.part ?? p.sku),
-    piece: p.piece ?? null,
+    piece: p.piece,
   }));
   // normalizeSkus is still the single rule for "same part number".
   const canonicalSkus = normalizeSkus(canonical.map((p) => p.sku));
@@ -191,7 +200,9 @@ export async function saveColorArea(
   const added = canonical.filter((p) => !had.has(p.sku.toUpperCase()));
   const repieced = existing.filter((e) => {
     const next = keep.get(e.sku.toUpperCase());
-    return next !== undefined && (next.piece ?? null) !== (e.piece ?? null);
+    return (
+      next !== undefined && next.piece !== undefined && (next.piece ?? null) !== (e.piece ?? null)
+    );
   });
 
   if (removedRows.length || added.length || repieced.length) {
@@ -200,7 +211,12 @@ export async function saveColorArea(
         where: { id: { in: removedRows.map((r) => r.id) } },
       }),
       prisma.portalColorAreaMapping.createMany({
-        data: added.map((p) => ({ areaKey, sku: p.sku, piece: p.piece, createdById: actorId })),
+        data: added.map((p) => ({
+          areaKey,
+          sku: p.sku,
+          piece: p.piece ?? null,
+          createdById: actorId,
+        })),
         skipDuplicates: true,
       }),
       ...repieced.map((e) =>
@@ -232,7 +248,7 @@ export async function saveColorArea(
     parts: canonical.map((p) => ({
       sku: p.sku,
       name: names.get(p.sku.toUpperCase())?.name ?? null,
-      piece: p.piece,
+      piece: p.piece !== undefined ? p.piece : (had.get(p.sku.toUpperCase())?.piece ?? null),
     })),
     added: added.map((p) => p.sku),
     removed: removedRows.map((r) => r.sku),

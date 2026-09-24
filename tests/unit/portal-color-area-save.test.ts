@@ -91,8 +91,19 @@ describe('saveColorArea', () => {
     ]);
   });
 
-  it('refuses a pattern that would match every part, and a bad piece', async () => {
-    await expect(saveColorArea('a.b', [{ sku: '*' }], 'u1')).rejects.toThrow(/every part/);
+  // Review 2026-09-24 (M2): a tab still running the old screen sends bare part
+  // numbers; saving from it must not wipe the pieces.
+  it('bare part numbers keep the pieces already stored', async () => {
+    await saveColorArea('a.b', [{ sku: 'CS-90', piece: 2 }], 'u1');
+    const r = await saveColorArea('a.b', ['CS-90'], 'u1');
+    expect(db.rows.map((x) => [x.sku, x.piece])).toEqual([['CS-90', 2]]);
+    expect(r.parts[0]!.piece).toBe(2);
+  });
+
+  it('refuses a pattern that is too broad, and a bad piece', async () => {
+    await expect(saveColorArea('a.b', [{ sku: '*' }], 'u1')).rejects.toThrow(/too broad/);
+    await expect(saveColorArea('a.b', [{ sku: 'R*' }], 'u1')).rejects.toThrow(/too broad/);
     await expect(saveColorArea('a.b', [{ sku: 'CS-90', piece: 0 }], 'u1')).rejects.toThrow(/Piece/);
+    await expect(saveColorArea('a.b', [{ sku: 'CS-90', piece: 8 }], 'u1')).rejects.toThrow(/Piece/);
   });
 });

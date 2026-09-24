@@ -161,7 +161,7 @@
    */
   function pieceSelect(i, j, piece) {
     var opts = '<option value="">whole part</option>';
-    for (var n = 1; n <= 12; n += 1) {
+    for (var n = 1; n <= 7; n += 1) {
       opts +=
         '<option value="' +
         n +

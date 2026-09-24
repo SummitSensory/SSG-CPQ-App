@@ -25,7 +25,7 @@ import { listColorAreas, saveColorArea } from '../portal/colorAreaMapping.js';
 // accepted from an older screen.
 const PartBody = z.object({
   sku: z.string().trim().min(1).max(80),
-  piece: z.number().int().min(1).max(20).nullable().optional(),
+  piece: z.number().int().min(1).max(7).nullable().optional(),
 });
 const SaveBody = z
   .object({
