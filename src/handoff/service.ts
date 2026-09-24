@@ -34,6 +34,7 @@ import type {
   BomShipTo,
 } from '@prisma/client';
 import { allocateNumbered } from '../lib/documentNumber.js';
+import { sendOrderLockedNotice } from './orderLockedNotice.js';
 
 /** A catalog ref with nothing resolved — the parallel-array fallback. */
 const EMPTY_REF = { sku: null, vendor: null, unitCostMinor: null, unitWeightLbs: null } as const;
@@ -563,6 +564,10 @@ export async function createAcceptedOrder(
     entityId: order.id,
     details: { number, proposalVersionId: version.id, integrityHash },
   });
+  // Tell the people on the order-locked list (Settings → Email). Awaited, because a
+  // serverless function can be frozen the moment it responds; never throws, so a mail
+  // problem cannot make a committed lock look like it failed.
+  await sendOrderLockedNotice(order.id, userId);
   return order;
 }
 

@@ -65,6 +65,7 @@ import { verifySchemaOnBoot } from './lib/schemaCheck.js';
 import { registerPortalRoutes } from './routes/portal.js';
 import { registerWebRoutes } from './routes/web.js';
 import { registerTipsRoutes } from './routes/tips.js';
+import { registerOrderNotificationRoutes } from './routes/orderNotifications.js';
 
 export function buildApp(): FastifyInstance {
   // Fastify infers pino's concrete Logger from `loggerInstance`, which is not
@@ -203,6 +204,7 @@ export function buildApp(): FastifyInstance {
   registerPortalRoutes(app);
   registerWebRoutes(app);
   registerTipsRoutes(app);
+  registerOrderNotificationRoutes(app);
 
   // Is the database shaped the way this build expects? Not awaited — a slow or
   // failing check must not delay the server accepting requests — and it never

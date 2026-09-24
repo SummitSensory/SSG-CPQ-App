@@ -13445,6 +13445,41 @@
     if (cl) cl.addEventListener('click', function () { if (sig) sig.innerHTML = ''; saveSig(''); });
   }
 
+  /** Settings → Email → Order locked email. See src/handoff/orderLockedNotice.ts. */
+  async function loadOrderLockedEmail() {
+    var box = document.getElementById('olkPanel'); if (!box) return;
+    var d;
+    try {
+      var r = await authed('/admin/order-locked-email');
+      if (r.status === 403) { box.innerHTML = '<div class="muted" style="font-size:13px;">Changing who is told about new orders needs the Orders manage permission.</div>'; return; }
+      if (!r.ok) { box.innerHTML = '<div class="err">Could not load the list (' + r.status + ').</div>'; return; }
+      d = await r.json();
+    } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; return; }
+    box.innerHTML =
+      '<label style="display:block;font-size:12px;font-weight:600;color:#5a6152;margin-bottom:6px;" for="olkTo">Send to (one address per line, or separated by commas)</label>' +
+      '<textarea id="olkTo" rows="4" placeholder="operations@summitsensory.com" style="width:100%;max-width:560px;font:inherit;font-size:13.5px;padding:9px 11px;border:1px solid #d9dcd3;border-radius:8px;">' +
+        esc((d.recipients || []).join('\n')) + '</textarea>' +
+      (d.deliveryConfigured ? '' : '<div class="err" style="margin-top:8px;max-width:560px;">Email delivery (RESEND_API_KEY) is not set up on this deployment, so nothing will be sent until it is.</div>') +
+      '<div style="display:flex;align-items:center;gap:10px;margin-top:10px;">' +
+        '<button class="btn" id="olkSave" style="width:auto;padding:9px 16px;">Save</button>' +
+        '<span id="olkNote" class="muted" style="font-size:12.5px;"></span></div>';
+    document.getElementById('olkSave').addEventListener('click', async function () {
+      var note = document.getElementById('olkNote');
+      var bt = this; bt.disabled = true;
+      try {
+        var r2 = await authed('/admin/order-locked-email', { method: 'PUT', body: { recipients: document.getElementById('olkTo').value } });
+        if (!r2.ok) { note.textContent = await serverMessage(r2, 'Could not save (' + r2.status + ').'); note.style.color = '#a3322a'; return; }
+        var out = await r2.json();
+        document.getElementById('olkTo').value = (out.recipients || []).join('\n');
+        note.style.color = '';
+        note.textContent = out.recipients && out.recipients.length
+          ? 'Saved. ' + out.recipients.length + (out.recipients.length === 1 ? ' person' : ' people') + ' will be emailed when an order is locked.'
+          : 'Saved. Nobody will be emailed.';
+      } catch (e) { note.textContent = 'Could not reach the server.'; note.style.color = '#a3322a'; }
+      finally { bt.disabled = false; }
+    });
+  }
+
   var futCache = null;
   async function loadFollowUpTemplates() {
     var box = document.getElementById('futList'); if (!box) return;
@@ -15281,6 +15316,10 @@
           'The "please review and sign" email a rep sends with a proposal — separate from the follow-ups above and from the signing document itself. Auto-picked by product line the same way the signing document is, independently, so the two can be mixed and matched; a rep can always pick a different one before sending. Sent from the rep’s own connected Outlook mailbox, HTML included. <code>{{SigningLink}}</code> is filled in per recipient at send time, not here.',
           '<button class="btn" id="esetNew" style="width:auto;padding:9px 15px;">+ New template</button>',
           '<div id="esetList"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+        admAcc('emailOrderLocked', 'Order locked email',
+          'Everyone on this list is emailed the moment a signed proposal is locked into an order &mdash; the order number, customer, project, total, deposit due, who locked it, and a link that opens the order. Internal only: the customer is never sent this. Leave it empty and nobody is emailed.',
+          '',
+          '<div id="olkPanel"><div class="muted" style="padding:16px;">Loading…</div></div>') +
         '<div class="muted" style="font-size:12.5px;margin-top:6px;padding-top:14px;border-top:1px solid #eef0ea;line-height:1.55;max-width:820px;">Payment-request emails and the letters they carry are edited with the invoices they belong to, under <b style="font-weight:600;">Accounts Receivable → Letters &amp; email</b>.</div>') +
 
       sec('pricing',
@@ -15361,6 +15400,7 @@
     loadFollowUpTemplates();
     loadEsignEmailTemplates();
     loadOutlookPanel();
+    loadOrderLockedEmail();
     loadFinancingAdmin();
     loadQuestionTemplates();
   }
@@ -16800,6 +16840,20 @@
     clearTokens(); renderLogin();
   }
 
+  /** An emailed "Open the order" link (see src/handoff/orderLockedNotice.ts). */
+  function openLinkedOrder(user) {
+    var id = null;
+    try { id = new URLSearchParams(location.search).get('order'); } catch (e) {}
+    if (!id) return;
+    try { history.replaceState(null, '', location.pathname + location.hash); } catch (e) {}
+    var btn = document.querySelector('.nav-item[data-view="orders"]');
+    if (!btn) return;
+    Array.prototype.forEach.call(document.querySelectorAll('.nav-item'), function (b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    var t = document.getElementById('viewTitle'); if (t) t.textContent = btn.textContent;
+    openOrderDetail(id, user);
+  }
+
   async function boot() {
     // Hand the shared rules to the document renderer before any screen can ask for a
     // document. Cheap, and it throws here rather than mid-render if the file is stale.
@@ -16810,7 +16864,11 @@
     try { resetToken = new URLSearchParams(location.search).get('reset'); } catch (e) {}
     if (resetToken) { renderResetPassword(resetToken); return; }
     if (!tokens().at && !tokens().rt) { renderLogin(); return; }
-    try { var r = await authed('/auth/me'); if (r.ok) { renderShell(await r.json()); return; } clearTokens(); renderLogin(); }
+    try {
+      var r = await authed('/auth/me');
+      if (r.ok) { var me = await r.json(); renderShell(me); openLinkedOrder(me); return; }
+      clearTokens(); renderLogin();
+    }
     catch (e) { renderLogin('Could not reach the server. Is it running?'); }
   }
   boot();
