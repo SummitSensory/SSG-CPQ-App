@@ -16,6 +16,11 @@
  * any area already mapped. An area nobody has mapped yet is flagged, because its
  * picks will be listed as "unmapped" on every review until someone maps it.
  *
+ * "Add an area" lets an area be mapped BEFORE any customer answers it — e.g. when the
+ * portal starts asking a new question, so the first order that answers it already
+ * lands on the right parts. The server has always kept mapped keys on this list
+ * (src/portal/colorAreaMapping.ts); the added row only persists once parts are saved.
+ *
  * Entry point: window.SSGPortalColorAreas.render(container, { authed: authed })
  */
 (function () {
@@ -32,6 +37,8 @@
     LINE = '#eceee8',
     RED = '#9c3327',
     RED_BG = '#fbeeec';
+
+  var AREA_KEY_RE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 
   var H = null; // { authed } from app.js
   var state = { el: null, areas: [], drafts: {}, onlyUnmapped: false };
@@ -74,6 +81,76 @@
         })
         .join('|') !== saved
     );
+  }
+
+  function humanizePart(x) {
+    var w = String(x || '')
+      .replace(/[_-]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+    return w ? w.charAt(0).toUpperCase() + w.slice(1) : '';
+  }
+
+  function areaLabel(key) {
+    var dot = key.indexOf('.');
+    if (dot < 0) return humanizePart(key);
+    return [humanizePart(key.slice(0, dot)), humanizePart(key.slice(dot + 1))]
+      .filter(Boolean)
+      .join(' — ');
+  }
+
+  function addAreaHtml() {
+    return (
+      '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;font-size:12.5px;">' +
+      '<input type="text" id="pcaNewArea" placeholder="Add an area — e.g. adventure_mat.adventure_mat_system" autocomplete="off" style="' +
+      bomFieldStyle('360px') +
+      'font-family:monospace;">' +
+      '<button class="btn" type="button" id="pcaAddArea" style="width:auto;padding:7px 13px;">Add area</button>' +
+      '<span class="muted" style="font-size:11.5px;">For an area the portal asks about that no customer has answered yet. Add its parts and Save to keep it.</span>' +
+      '</div>'
+    );
+  }
+
+  function addArea() {
+    var input = state.el.querySelector('#pcaNewArea');
+    if (!input) return;
+    var key = input.value.trim();
+    if (!key) return;
+    if (!AREA_KEY_RE.test(key)) {
+      toast(
+        '"' + key + '" is not an area key. Area keys look like structure_frame_paint.legs.',
+        true,
+      );
+      return;
+    }
+    var existing = state.areas.filter(function (a) {
+      return a.areaKey === key;
+    })[0];
+    if (!existing) {
+      state.areas.push({
+        areaKey: key,
+        label: areaLabel(key),
+        orderCount: 0,
+        samples: [],
+        parts: [],
+      });
+      state.areas.sort(function (a, b) {
+        return a.areaKey.localeCompare(b.areaKey);
+      });
+    } else {
+      toast(key + ' is already listed.');
+    }
+    // Keep the new (unmapped) row visible even with "Unmapped only" off or on.
+    draw();
+    var idx = state.areas.indexOf(
+      existing ||
+        state.areas.filter(function (a) {
+          return a.areaKey === key;
+        })[0],
+    );
+    var search = state.el.querySelector('[data-pca-search="' + idx + '"]');
+    if (search) search.focus();
   }
 
   function pickText(s) {
@@ -194,6 +271,7 @@
       if (!state.onlyUnmapped || !a.parts.length) shown.push(rowHtml(a, i));
     });
     el.innerHTML =
+      addAreaHtml() +
       '<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:10px;font-size:12.5px;">' +
       '<span><b>' +
       areas.length +
@@ -226,7 +304,7 @@
           '</tbody>' +
           '</table>' +
           '</div>'
-        : '<div class="muted" style="padding:16px;">No customer has answered the portal colour step yet. Areas appear here the first time one is answered.</div>');
+        : '<div class="muted" style="padding:16px;">No customer has answered the portal colour step yet. Areas appear here the first time one is answered, or add one above.</div>');
     wire();
   }
 
@@ -319,6 +397,16 @@
 
   function wire() {
     var el = state.el;
+    var addBtn = el.querySelector('#pcaAddArea');
+    var addInput = el.querySelector('#pcaNewArea');
+    if (addBtn) addBtn.addEventListener('click', addArea);
+    if (addInput)
+      addInput.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter') {
+          ev.preventDefault();
+          addArea();
+        }
+      });
     var only = el.querySelector('#pcaOnlyUnmapped');
     if (only)
       only.addEventListener('change', function () {
