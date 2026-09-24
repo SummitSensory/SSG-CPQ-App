@@ -427,10 +427,16 @@ export function registerVendorColorRoutes(app: FastifyInstance): void {
     for (const line of parsed.data.text.split(/\r?\n/)) {
       const raw = line.trim();
       if (!raw) continue;
-      const cells = raw
-        .split(/\t|,/)
-        .map((c) => c.trim())
-        .filter((c, i) => i === 0 || c !== '');
+      // Cells are positional: name, vendor code, upcharge. A spreadsheet paste is
+      // tab-separated and keeps its blank cells, so "Royal Blue<TAB><TAB>25" is a
+      // colour with no code, not code "25". Typed lines use commas; everything after
+      // the second comma is the upcharge, so "1,250.00" stays $1,250.00.
+      let cells: string[];
+      if (raw.includes('\t')) cells = raw.split('\t').map((c) => c.trim());
+      else {
+        const parts = raw.split(',').map((c) => c.trim());
+        cells = [parts[0] ?? '', parts[1] ?? '', parts.slice(2).join(',')];
+      }
       const name = cells[0];
       if (!name || name.length > 120) {
         skipped.push(raw.slice(0, 80));
@@ -447,6 +453,18 @@ export function registerVendorColorRoutes(app: FastifyInstance): void {
         continue;
       }
       rows.push({ name, vendorCode: cells[1] ? cells[1].slice(0, 60) : null, upchargeMinor });
+    }
+
+    // Discontinuing is inferred from what the paste leaves out, so it is only safe
+    // from a paste that read cleanly: an unreadable line, or nothing readable at all,
+    // would otherwise retire colours that are still offered. Checked before any
+    // write, so a refused paste changes nothing.
+    if (parsed.data.retireMissing && !parsed.data.dryRun && (skipped.length || !rows.length)) {
+      throw new ValidationError(
+        rows.length
+          ? 'Some lines could not be read. Fix them before discontinuing colours missing from the paste.'
+          : 'Nothing in the paste could be read, so nothing was discontinued.',
+      );
     }
 
     const byName = new Map(palette.colors.map((c) => [c.name.toLowerCase(), c]));

@@ -631,6 +631,21 @@
     // Vendor part numbers: the dialog lives here for Catalog AND Administration, which
     // is why it is no longer inside either.
     if (window.SSGVendorParts) window.SSGVendorParts.init({ authed: authed });
+    // Vendor colour charts (Catalog → Manufacturers → Colours). Built with the charts in
+    // August but never given a door: nothing called init() or openVendorColors().
+    if (window.VendorColors) {
+      var UI = window.SSGUI;
+      window.VendorColors.init({
+        authed: authed,
+        esc: UI.esc,
+        td: UI.td,
+        tableShell: UI.tableShell,
+        openModal: UI.openModal,
+        bomFieldStyle: UI.bomFieldStyle,
+        // The same test as the Catalog screen that opens it; the routes enforce PRODUCTS_ADMIN.
+        canAdmin: function (role) { return role === 'SYSTEM_ADMIN'; },
+      });
+    }
     // The Catalog screen. One entry point, one injected dependency; everything else it
     // needs it reads off window.SSGUI.
     if (window.SSGCatalog) window.SSGCatalog.init({ authed: authed });

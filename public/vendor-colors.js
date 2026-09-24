@@ -154,7 +154,30 @@
         '<div id="vcBody"><div class="muted" style="font-size:12.5px;padding:12px 0;">Loading…</div></div>',
       null,
       null,
+      // Colour rows and the product table are several columns wide; 460px wraps them.
+      { maxWidth: '920px' },
     );
+
+    // The dialog is a read-only openModal, so its body sits in a form whose only submit
+    // is "Done": Enter in any field here submitted it and closed the dialog, dropping
+    // whatever was being typed. Enter instead adds (the new-colour and attach rows) or
+    // commits the field (the inline edits save on change/blur).
+    ov.addEventListener('keydown', function (e) {
+      var t = e.target;
+      if (e.key !== 'Enter' || !t || t.tagName !== 'INPUT') return;
+      var body = ov.querySelector('#vcBody');
+      if (!body || !body.contains(t)) return;
+      e.preventDefault();
+      var id = t.id || '';
+      var btn =
+        id === 'vcNewName' || id === 'vcNewCode' || id === 'vcNewUp'
+          ? $('#vcAddColour')
+          : id === 'vcSpecSku' || id === 'vcSpecUp'
+            ? $('#vcAddSpec')
+            : null;
+      if (btn) btn.click();
+      else t.blur();
+    });
 
     // ---------------- colour rows ----------------
 
@@ -535,7 +558,7 @@
     var lastError = '';
 
     async function send(path, method, body, okMsg) {
-      if (busy) return null;
+      while (busy) await new Promise((res) => setTimeout(res, 40));
       busy = true;
       lastError = '';
       try {
@@ -588,8 +611,10 @@
           var body = {};
           body[field] = el.value.trim();
           if (field === 'name' && !body.name) return;
-          await sendLoud('/color-palettes/' + el.getAttribute('data-id'), 'PATCH', body);
-          await load();
+          if (el.value === el.defaultValue) return;
+          var ok = await sendLoud('/color-palettes/' + el.getAttribute('data-id'), 'PATCH', body);
+          if (ok) el.defaultValue = el.value;
+          else await load();
         });
       });
       box.querySelectorAll('.vcPFinish').forEach(function (el) {
@@ -628,8 +653,25 @@
         el.addEventListener('blur', async function () {
           var id = el.getAttribute('data-id');
           var body = {};
+          if (el.value === el.defaultValue) return;
           if (el.classList.contains('vcCName')) {
             if (!el.value.trim()) return;
+            // The customer portal sends a vinyl pick as its NAME and it is matched
+            // against this chart by name, so a renamed colour stops matching.
+            if (
+              !confirm(
+                'Rename “' +
+                  el.defaultValue +
+                  '” to “' +
+                  el.value.trim() +
+                  '”?\n\nThe customer portal matches colours by name. Portal picks of “' +
+                  el.defaultValue +
+                  '” will no longer reach the Bill of Materials unless the portal uses the new name too.',
+              )
+            ) {
+              el.value = el.defaultValue;
+              return;
+            }
             body.name = el.value.trim();
           } else if (el.classList.contains('vcCCode')) {
             body.vendorCode = el.value.trim();
@@ -643,12 +685,22 @@
             }
             body.upchargeMinor = minor;
           }
-          await sendLoud('/vendor-colors/' + id, 'PATCH', body);
-          await load();
+          var ok = await sendLoud('/vendor-colors/' + id, 'PATCH', body);
+          if (ok && !el.classList.contains('vcCOrd')) el.defaultValue = el.value;
+          else await load(); // a failure restores the stored value; a new order re-sorts
         });
       });
       box.querySelectorAll('.vcCAct').forEach(function (el) {
         el.addEventListener('change', async function () {
+          if (
+            !el.checked &&
+            !confirm(
+              'Take this colour off the chart? A customer who picks it in the portal will no longer have it applied to the Bill of Materials.',
+            )
+          ) {
+            el.checked = true;
+            return;
+          }
           await sendLoud('/vendor-colors/' + el.getAttribute('data-id'), 'PATCH', {
             active: el.checked,
           });
@@ -901,6 +953,7 @@
     function openPaste() {
       var paletteId = openId;
       var confirmed = false;
+      var bound = false;
       var sub = H.openModal(
         'Paste a colour chart',
         '<div class="muted" style="font-size:12.5px;line-height:1.55;margin-bottom:10px;">' +
@@ -915,6 +968,18 @@
           '<input type="checkbox" id="vcPasteRetire"> Mark colours missing from this paste as discontinued</label>' +
           '<div id="vcPastePreview" style="margin-top:10px;"></div>',
         async function (close, fail) {
+          if (!bound) {
+            // A preview only speaks for the text and box it was run on.
+            bound = true;
+            var stale = function () {
+              if (!confirmed) return;
+              confirmed = false;
+              sub.querySelector('#vcPastePreview').innerHTML =
+                '<div class="muted" style="font-size:12px;">Changed — press Import to preview again.</div>';
+            };
+            sub.querySelector('#vcPasteText').addEventListener('input', stale);
+            sub.querySelector('#vcPasteRetire').addEventListener('change', stale);
+          }
           var text = sub.querySelector('#vcPasteText').value || '';
           if (!text.trim()) return fail('Paste the chart first.');
           var retire = !!sub.querySelector('#vcPasteRetire').checked;
@@ -939,6 +1004,16 @@
               dry.updated.length +
               '</b> updated' +
               (retire ? ', <b>' + dry.retired.length + '</b> to discontinue' : '') +
+              (dry.created.length
+                ? '<div style="margin-top:5px;">New: ' + esc(dry.created.join(', ')) + '</div>'
+                : '') +
+              (retire && dry.retired.length
+                ? '<div style="color:' +
+                  RED +
+                  ';margin-top:5px;">Discontinue: ' +
+                  esc(dry.retired.join(', ')) +
+                  '</div>'
+                : '') +
               (dry.skipped.length
                 ? '<div style="color:' +
                   RED +

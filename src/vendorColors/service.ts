@@ -136,12 +136,13 @@ export async function specForLine(line: {
       where: { productId: line.productId },
       include: SPEC_INCLUDE,
     })) as SpecRow | null;
-    if (byProduct) return shape(byProduct);
+    // A chart unticked as "Offered" is withdrawn: its rules no longer ask for colours.
+    if (byProduct && byProduct.palette.active) return shape(byProduct);
   }
   const sku = (line.sku ?? '').trim();
   if (!sku) return null;
   const bySku = (await prisma.productColorSpec.findFirst({
-    where: { sku: { equals: sku, mode: 'insensitive' } },
+    where: { sku: { equals: sku, mode: 'insensitive' }, palette: { active: true } },
     include: SPEC_INCLUDE,
   })) as SpecRow | null;
   return bySku ? shape(bySku) : null;
@@ -172,6 +173,7 @@ export async function specsForLines(
   })) as SpecRow[];
 
   for (const row of rows) {
+    if (!row.palette.active) continue; // withdrawn chart — see specForLine
     const spec = shape(row);
     const r = row as SpecRow & { productId: string | null; sku: string | null };
     if (r.productId) out.set(r.productId, spec);
