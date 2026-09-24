@@ -17,6 +17,8 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('../../src/lib/audit.js', () => ({ recordAudit: vi.fn() }));
+const sendOrderLockedNotice = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('../../src/handoff/orderLockedNotice.js', () => ({ sendOrderLockedNotice }));
 
 /**
  * Only populated by the secondaryVendor test below — every other test in this file
@@ -160,6 +162,7 @@ beforeEach(() => {
   h.store.byVersion.clear();
   h.store.seq = 1;
   SKU_ROWS = [];
+  sendOrderLockedNotice.mockClear();
   seed();
 });
 
@@ -183,6 +186,21 @@ describe('createAcceptedOrder', () => {
     const b = (await createAcceptedOrder('v1', approval, 'user-1')) as Record<string, unknown>;
     expect(b.id).toBe(a.id);
     expect(h.store.orders.size).toBe(1);
+  });
+
+  it('sends the order-locked email once, for the lock that created the order', async () => {
+    const { createAcceptedOrder } = await import('../../src/handoff/service.js');
+    const a = (await createAcceptedOrder('v1', approval, 'user-1')) as Record<string, unknown>;
+    await createAcceptedOrder('v1', approval, 'user-1');
+    expect(sendOrderLockedNotice).toHaveBeenCalledTimes(1);
+    expect(sendOrderLockedNotice).toHaveBeenCalledWith(a.id, 'user-1');
+  });
+
+  it('sends nothing when the lock is refused', async () => {
+    seed('RELEASED');
+    const { createAcceptedOrder } = await import('../../src/handoff/service.js');
+    await expect(createAcceptedOrder('v1', approval, 'user-1')).rejects.toThrow();
+    expect(sendOrderLockedNotice).not.toHaveBeenCalled();
   });
 
   it('refuses to lock a version that is not ACCEPTED', async () => {
