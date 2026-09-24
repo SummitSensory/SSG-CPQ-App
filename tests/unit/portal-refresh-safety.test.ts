@@ -217,6 +217,31 @@ describe('ingest never re-applies an unchanged address', () => {
     expect(db.events).toHaveLength(0);
   });
 
+  it('picks up a column added to the board later (the Loading Dock/Lift Gate formula) on an otherwise unchanged row', async () => {
+    storedApplied();
+    await ingestDeliverySubmission('m-1', boardRow()); // settles the stored answers
+    expect((db.subs[0]!.raw as Record<string, string>).formula_mm7fhgy9).toBeUndefined();
+
+    const r = await ingestDeliverySubmission('m-1', boardRow({ formula_mm7fhgy9: 'Lift Gate' }));
+    expect(r).toBe('unchanged');
+    expect((db.subs[0]!.raw as Record<string, string>).formula_mm7fhgy9).toBe('Lift Gate');
+    // The name on file is kept, and nothing on the order moved.
+    expect((db.subs[0]!.raw as Record<string, string>)._mondayItemName).toBe(
+      'Wiggle Room Therapy and Play',
+    );
+    expect(db.sections.find((s) => s.id === 'sec-draft')!.loadingDock).toBe('Hand-corrected');
+    expect(db.subs[0]!.status).toBe('APPLIED');
+    expect(db.events).toHaveLength(0);
+  });
+
+  it('does not rewrite raw when nothing on the row changed', async () => {
+    storedApplied();
+    await ingestDeliverySubmission('m-1', boardRow({ formula_mm7fhgy9: 'Lift Gate' }));
+    const before = db.subs[0]!.raw;
+    await ingestDeliverySubmission('m-1', boardRow({ formula_mm7fhgy9: 'Lift Gate' }));
+    expect(db.subs[0]!.raw).toBe(before); // same object: no update was written
+  });
+
   it('carries a changed delivery preference to editable sections only', async () => {
     storedApplied();
     await ingestDeliverySubmission('m-1', boardRow({ text_mm5712dx: 'Yes, we have a dock' }));

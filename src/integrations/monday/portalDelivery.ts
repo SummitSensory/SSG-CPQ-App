@@ -5,6 +5,7 @@ import { NotFoundError, ValidationError } from '../../lib/errors.js';
 import { fetchAllItems, fetchItemById } from './discovery.js';
 import { mondayQuery, setColumnValues } from './client.js';
 import { ensureSections } from '../../handoff/bomSections.js';
+import { LOADING_DOCK_TYPE_COL } from '../../handoff/bomDelivery.js';
 
 /**
  * Portal delivery details → the Bill of Materials.
@@ -65,6 +66,8 @@ export const DELIVERY_COL = {
   secondaryPocPhone: 'text_mm576cps',
   secondaryPocEmail: 'text_mm57kmfe',
   loadingDock: 'text_mm5712dx',
+  /** Formula over loadingDock: "Loading Dock" / "Lift Gate". Read off `raw` by the BOM. */
+  loadingDockType: LOADING_DOCK_TYPE_COL,
   deliveryTiming: 'text_mm57q2s6',
   preferredDeliveryDate: 'date_mm57m9rp',
   addressConfirmed: 'text_mm572geh',
@@ -439,13 +442,21 @@ export async function ingestDeliverySubmission(
           where: { id: existing.id },
           data: { ...storedAnswers(fields), raw: { ...fields.raw } as object },
         });
-      } else if (item.name && priorRaw[ITEM_NAME] !== item.name) {
-        // Stored before the name was captured: take it now, so a backfill labels
-        // every historical row.
-        await prisma.portalDeliverySubmission.update({
-          where: { id: existing.id },
-          data: { raw: { ...priorRaw, [ITEM_NAME]: item.name } as object },
-        });
+      } else {
+        // The answers are the same, but a column the Bill of Materials reads straight
+        // off `raw` may not be — a column added to the board after this row was stored
+        // (the Loading Dock/Lift Gate formula, formula_mm7fhgy9, printed as Delivery
+        // Type), a formula monday re-computed, or the row's name, stored before names
+        // were captured. Keep `raw` in step with what monday shows now; a name already
+        // on file is kept when this read did not carry one.
+        const nextRaw: Record<string, string> = { ...fields.raw };
+        if (!nextRaw[ITEM_NAME] && priorRaw[ITEM_NAME]) nextRaw[ITEM_NAME] = priorRaw[ITEM_NAME];
+        if (!sameRaw(priorRaw, nextRaw)) {
+          await prisma.portalDeliverySubmission.update({
+            where: { id: existing.id },
+            data: { raw: nextRaw as object },
+          });
+        }
       }
       return 'unchanged';
     }
@@ -503,6 +514,13 @@ const COMPARED = [
   'secondaryPreferredComm',
   'secondaryMobile',
 ] as const;
+
+/** Two stored `raw` maps hold the same columns with the same text. */
+export function sameRaw(a: Record<string, string>, b: Record<string, string>): boolean {
+  const ka = Object.keys(a);
+  if (ka.length !== Object.keys(b).length) return false;
+  return ka.every((k) => Object.prototype.hasOwnProperty.call(b, k) && a[k] === b[k]);
+}
 
 function answersUnchanged(
   existing: Record<(typeof COMPARED)[number], unknown>,
