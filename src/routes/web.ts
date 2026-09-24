@@ -76,6 +76,7 @@ const CLIENT_SCRIPTS = [
   'accounts-receivable.js',
   'insights.js',
   'goals.js',
+  'strategic-partnerships.js',
   'belt-shipments.js',
   'freight-trueup.js',
   'tips-and-tricks.js',

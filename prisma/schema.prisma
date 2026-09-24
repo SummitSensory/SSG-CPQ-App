@@ -297,6 +297,7 @@ model Organization {
   attachments    Attachment[]
   customerNotes  CustomerNote[]
   followUpEmails  FollowUpEmailLog[]
+  strategicPartnershipProposals StrategicPartnershipProposal[]
 
   @@unique([normalizedName])
   @@index([customerType])
@@ -4587,4 +4588,155 @@ model SalesGoal {
   @@index([active])
   @@index([ownerId])
   @@index([periodStart])
+}
+
+// ---------------- Strategic Partnership Proposal ----------------
+
+/// Where a Strategic Partnership Proposal is in its life. The first two are derived
+/// from the inputs (a record with every required input is READY_TO_GENERATE); the
+/// next two are a generation run in flight; READY_FOR_REVIEW, APPROVED and SENT are
+/// people's decisions; ERROR is a failed run, with the reason in errorMessage.
+enum StrategicPartnershipStatus {
+  DRAFT
+  READY_TO_GENERATE
+  CALCULATING
+  GENERATING_CANVA
+  READY_FOR_REVIEW
+  APPROVED
+  SENT
+  ERROR
+}
+
+/// A multi-site partnership proposal for one customer: the commercial assumptions a
+/// rep enters, the economics the backend calculates from them, and the Canva
+/// document generated from both.
+///
+/// Its own record rather than fields on Organization, because each proposal can carry
+/// different terms (a different discount, a different rollout plan) and the old ones
+/// must survive being superseded.
+///
+/// Money is integer minor units (cents) throughout, rates are basis points, and PM
+/// hours are hundredths of an hour — no floating point is stored or used in the
+/// calculation (src/strategicPartnership/calculate.ts).
+///
+/// The calculated outputs are stored columns, not derived on read: they are what the
+/// Canva document printed, and "3-Year Equipment Savings" in particular is a
+/// first-class metric the CRM reports on. They are recomputed by the backend on every
+/// save of the inputs — never accepted from a client — and `calculationVersion`
+/// records which formula produced them.
+model StrategicPartnershipProposal {
+  id                                 String                     @id @default(cuid())
+  /// Human reference, `SPP-2026-0001`.
+  number                             String                     @unique
+  organizationId                     String
+  organization                       Organization               @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  /// The deal this was written for, when there is one. Scalar only, like Proposal.opportunityId.
+  opportunityId                      String?
+  status                             StrategicPartnershipStatus @default(DRAFT)
+
+  // ---- Inputs (the CRM is authoritative) ----
+  customerShortName                  String
+  customerFullName                   String
+  executiveName                      String
+  executiveTitle                     String
+  industry                           String
+  /// 17.5% = 1750. Null until entered.
+  partnerDiscountBps                 Int?
+  standardProjectValueMinor          BigInt?
+  /// 41 hours = 4100.
+  pmHoursReturnedPerCenterHundredths Int?
+  pmHourValueMinor                   BigInt?
+  /// Optional sensitivity input carried over from the financial model. Stored, but no
+  /// output formula uses it — the model does not use it either.
+  contributionMarginPerHourMinor     BigInt?
+  year1PlannedCenters                Int?
+  year2PlannedCenters                Int?
+  year3PlannedCenters                Int?
+  /// Null means "same as year 3", the financial model's rule for an omitted year.
+  year4PlannedCenters                Int?
+  year5PlannedCenters                Int?
+  /// A stored file (lib/fileStore.ts): { url, pathname, filename, contentType, bytes }.
+  customerLogo                       Json?
+  /// Up to five stored files, in order: PROJECT_IMAGE_1..5.
+  projectImages                      Json                       @default("[]")
+
+  // ---- Calculated outputs (backend-owned) ----
+  partnerProjectValueMinor           BigInt?
+  savingsPerCenterMinor              BigInt?
+  threeYearEquipmentSavingsMinor     BigInt?
+  fiveYearEquipmentSavingsMinor      BigInt?
+  pmCapacityValuePerCenterMinor      BigInt?
+  threeYearPmCapacityValueMinor      BigInt?
+  fiveYearPmCapacityValueMinor       BigInt?
+  threeYearCombinedValueMinor        BigInt?
+  fiveYearCombinedValueMinor         BigInt?
+  threeYearCumulativeCenters         Int?
+  fiveYearCumulativeCenters          Int?
+  calculatedAt                       DateTime?
+  calculationVersion                 Int?
+
+  // ---- Generation ----
+  /// The current or last generation run. Also the idempotency key: a second click
+  /// while a run is in flight returns this run instead of starting another.
+  automationRunId                    String?
+  /// Run progress: phase, Canva job ids, uploaded asset ids. See service.ts.
+  generation                         Json?
+  /// Exactly what was sent to Canva for the last run — inputs, outputs and the
+  /// rendered text — so the record keeps what the document said.
+  generatedSnapshot                  Json?
+  errorMessage                       String?
+  canvaDesignId                      String?
+  canvaDesignUrl                     String?
+  canvaViewUrl                       String?
+  pdfUrl                             String?
+  pdfPathname                        String?
+  generatedAt                        DateTime?
+
+  approvedAt                         DateTime?
+  approvedById                       String?
+  sentAt                             DateTime?
+  createdById                        String
+  createdAt                          DateTime                   @default(now())
+  updatedAt                          DateTime                   @updatedAt
+
+  @@index([organizationId])
+  @@index([status])
+  @@index([opportunityId])
+}
+
+/// Org-wide settings for Strategic Partnership Proposals: which Canva brand template
+/// is the master, and the customer-facing copy its text fields are filled with. One
+/// row (key "default"), edited from Administration. The copy lives here rather than in
+/// source so it can be reworded without a deploy; src/strategicPartnership/copy.ts
+/// holds the shipped defaults.
+model StrategicPartnershipSettings {
+  key             String   @id @default("default")
+  /// Canva brand template id of the US Letter portrait master. Autofill takes a
+  /// brand template id, not a plain design id.
+  brandTemplateId String?
+  /// { fields: [{ field, template }], scaleCenters: number[], chartField?: string }
+  content         Json
+  version         Int      @default(1)
+  updatedById     String?
+  updatedAt       DateTime @default(now()) @updatedAt
+}
+
+/// The one Canva account the CRM acts as — the account that owns the brand template.
+/// Tokens are AES-256-GCM encrypted with CANVA_TOKEN_ENC_KEY. Canva rotates the
+/// refresh token on every use, so the row is rewritten on each refresh.
+model CanvaConnection {
+  key              String    @id @default("default")
+  accessToken      String?
+  refreshToken     String?
+  expiresAt        DateTime?
+  scope            String?
+  connectedById    String?
+  connectedAt      DateTime?
+  /// PKCE verifier (encrypted) and the state it belongs to, held between the connect
+  /// redirect and Canva's callback. Cleared once used.
+  pendingState     String?
+  pendingVerifier  String?
+  pendingExpiresAt DateTime?
+  lastError        String?
+  updatedAt        DateTime  @default(now()) @updatedAt
 }
