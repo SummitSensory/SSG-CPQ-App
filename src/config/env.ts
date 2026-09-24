@@ -210,6 +210,22 @@ const EnvSchema = z
     // address only. See certificate.ts / geolocation.ts.
     IPINFO_TOKEN: z.string().min(1).optional(),
 
+    // ---- Canva Connect (Strategic Partnership Proposals) ----
+    // The CRM fills the US Letter master brand template through Canva's Autofill
+    // API and exports the PDF itself — no Power Automate, no Excel. Canva Connect
+    // has no service-account flow: one Canva user (the account that owns the brand
+    // template) authorizes the integration once from Administration, and the
+    // resulting tokens are stored encrypted with CANVA_TOKEN_ENC_KEY. All four or
+    // none — a half-configured integration refuses to boot, like QuickBooks.
+    CANVA_CLIENT_ID: z.string().min(1).optional(),
+    CANVA_CLIENT_SECRET: z.string().min(1).optional(),
+    // e.g. https://crm.summitsensory.com/integrations/canva/callback — must match a
+    // redirect URL on the Canva integration exactly.
+    CANVA_REDIRECT_URI: z.string().url().optional(),
+    CANVA_TOKEN_ENC_KEY: z.string().min(32).optional(),
+    // Override for tests or a proxy. Defaults to Canva's production REST API.
+    CANVA_API_URL: z.string().url().default('https://api.canva.com/rest'),
+
     // QuickBooks Online integration. Client credentials come from env ONLY —
     // never source. OAuth tokens are encrypted with QBO_TOKEN_ENC_KEY.
     QBO_CLIENT_ID: z.string().min(1).optional(),
@@ -244,6 +260,22 @@ const EnvSchema = z
             code: z.ZodIssueCode.custom,
             path: [key],
             message: 'required when QuickBooks is configured',
+          });
+      }
+    }
+    const canvaKeys = [
+      'CANVA_CLIENT_ID',
+      'CANVA_CLIENT_SECRET',
+      'CANVA_REDIRECT_URI',
+      'CANVA_TOKEN_ENC_KEY',
+    ] as const;
+    if (canvaKeys.some((k) => v[k])) {
+      for (const key of canvaKeys) {
+        if (!v[key])
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [key],
+            message: 'required when Canva is configured',
           });
       }
     }
@@ -426,6 +458,13 @@ export function entraAllowedDomains(e: Env = env): string[] {
  */
 export function isDocusealConfigured(e: Env = env): boolean {
   return Boolean(e.DOCUSEAL_API_TOKEN);
+}
+
+/** True only when every Canva Connect credential + token encryption key is present. */
+export function isCanvaConfigured(e: Env = env): boolean {
+  return Boolean(
+    e.CANVA_CLIENT_ID && e.CANVA_CLIENT_SECRET && e.CANVA_REDIRECT_URI && e.CANVA_TOKEN_ENC_KEY,
+  );
 }
 
 /** Inbound DocuSeal webhooks need the shared secret as well as the token. */

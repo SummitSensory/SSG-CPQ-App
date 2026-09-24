@@ -45,6 +45,7 @@ import { registerStandardNoteRoutes } from './routes/standardNotes.js';
 import { registerPortalColorAreaRoutes } from './routes/portalColorAreas.js';
 import { registerLegalDocumentRoutes } from './routes/legalDocuments.js';
 import { registerMediaPartnershipProgramRoutes } from './routes/mediaPartnershipProgram.js';
+import { registerStrategicPartnershipRoutes } from './routes/strategicPartnership.js';
 import { registerSignatureFieldLayoutRoutes } from './routes/signatureFieldLayout.js';
 import { registerReferenceDocumentRoutes } from './routes/referenceDocuments.js';
 import { registerCustomerNoteRoutes } from './routes/customerNotes.js';
@@ -180,6 +181,7 @@ export function buildApp(): FastifyInstance {
   registerPortalColorAreaRoutes(app);
   registerLegalDocumentRoutes(app);
   registerMediaPartnershipProgramRoutes(app);
+  registerStrategicPartnershipRoutes(app);
   registerSignatureFieldLayoutRoutes(app);
   registerReferenceDocumentRoutes(app);
   registerCustomerNoteRoutes(app);
