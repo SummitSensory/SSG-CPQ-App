@@ -14,6 +14,8 @@ import { renderPdf, pdfAvailable } from '../render/pdf.js';
 import { checkDocumentTotal } from '../proposals/documentIntegrity.js';
 import { enforceOrReport } from '../lib/guards.js';
 import { sellerCollectedCharges } from '../crossborder/sellerCharges.js';
+import { appendPdfDocuments } from '../lib/pdfMerge.js';
+import { resolveReferenceDocuments } from '../proposals/referenceDocuments.js';
 
 /**
  * Server-rendered PDFs.
@@ -25,6 +27,7 @@ import { sellerCollectedCharges } from '../crossborder/sellerCharges.js';
 export function registerRenderRoutes(app: FastifyInstance): void {
   const read = { preHandler: requirePermission(Permission.ORDERS_READ) };
   const release = { preHandler: requirePermission(Permission.PROPOSAL_RELEASE) };
+  const proposalRead = { preHandler: requirePermission(Permission.PROPOSAL_READ) };
 
   /**
    * The released proposal, rendered and dropped into the monday deal row's file
@@ -74,6 +77,66 @@ export function registerRenderRoutes(app: FastifyInstance): void {
       proposalHtml: body.proposalHtml,
       filename: body.filename,
     });
+  });
+
+  /**
+   * "Save PDF" from the proposal preview and the builder: the document on screen,
+   * rendered HERE and returned as a download.
+   *
+   * It used to be the browser's own print dialog (window.print → Save as PDF), and
+   * that made the PDF depend on the rep's print settings. Chrome remembers its Scale
+   * choice between prints; left on "Fit to page width" it lays the page out at the
+   * browser window's width and scales that onto the paper, so a proposal pinned to
+   * 8.5in came out shrunk into the top-left corner by (816 / window width) — e.g.
+   * P-2026-000160 on 2026-09-24, printed at 76%. Nothing the document's CSS does can
+   * override that setting. The server renderer has no such setting: this is the same
+   * render, geometry and reference-document merge the monday file and the DocuSeal
+   * package use, so every copy of a proposal is the same document.
+   *
+   * No total check against the saved version, unlike monday-file: this is also the
+   * builder's download of unsaved work, and it goes to the person who asked for it,
+   * not to a customer or the deal board.
+   */
+  app.post('/render/proposals/document.pdf', proposalRead, async (req, reply) => {
+    const body = (req.body ?? {}) as {
+      proposalHtml?: unknown;
+      filename?: unknown;
+      referenceDocKeys?: unknown;
+    };
+    if (typeof body.proposalHtml !== 'string' || !body.proposalHtml)
+      throw new ValidationError('The rendered proposal is missing from the request.');
+    if (!(await pdfAvailable())) {
+      throw new ValidationError('PDF rendering is not available on this deployment.');
+    }
+    const keys = Array.isArray(body.referenceDocKeys)
+      ? body.referenceDocKeys.filter((k): k is string => typeof k === 'string').slice(0, 20)
+      : [];
+    let pdf = await renderPdf(body.proposalHtml, { format: 'Letter', edgeToEdge: true });
+    // Only active documents from the library resolve — a key from the page cannot
+    // pull in anything else. A document that cannot be read (storage unreachable)
+    // does not cost the rep the proposal itself: it goes out without it and the
+    // response says so, and the page tells them — rather than failing the download
+    // and dropping them back into the browser print this route exists to replace.
+    let missingReferenceDocs = false;
+    if (keys.length) {
+      try {
+        pdf = await appendPdfDocuments(pdf, await resolveReferenceDocuments(keys));
+      } catch (err) {
+        missingReferenceDocs = true;
+        req.log.warn({ err, keys }, 'proposal pdf: reference documents could not be attached');
+      }
+    }
+    if (missingReferenceDocs) reply.header('X-Reference-Docs-Missing', '1');
+    const name =
+      String(typeof body.filename === 'string' ? body.filename : 'Proposal')
+        .replace(/\.pdf$/i, '')
+        .replace(/[^\w .,()&'-]+/g, '')
+        .trim()
+        .slice(0, 150) || 'Proposal';
+    return reply
+      .header('Content-Type', 'application/pdf')
+      .header('Content-Disposition', `attachment; filename="${name}.pdf"`)
+      .send(pdf);
   });
 
   /** Is the renderer installed? The UI uses this to hide PDF options when not. */
