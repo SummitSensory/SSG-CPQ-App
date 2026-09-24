@@ -3675,6 +3675,11 @@ model PortalColorAreaMapping {
   areaKey     String
   /// Catalog part number (Product.sku / Sku.part).
   sku         String
+  /// Which piece of a multi-piece part this area colours (1 = first). Null for a
+  /// part the area colours whole. Several areas mapping to one part at different
+  /// pieces (e.g. a Palisades or 90° Climb & Slide mat system, one colour per piece)
+  /// combine into one colour line in piece order instead of conflicting.
+  piece       Int?
   createdById String?
   createdAt   DateTime @default(now())
 

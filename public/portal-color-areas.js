@@ -16,6 +16,10 @@
  * any area already mapped. An area nobody has mapped yet is flagged, because its
  * picks will be listed as "unmapped" on every review until someone maps it.
  *
+ * A part may be a PATTERN with * (e.g. R-SSG-*CLM* — the Adventure floor padding's
+ * number changes with the mat size), and may name a PIECE (one part number that takes
+ * a colour per piece, like a Palisades or 90° Climb & Slide mat system).
+ *
  * "Add an area" lets an area be mapped BEFORE any customer answers it — e.g. when the
  * portal starts asking a new question, so the first order that answers it already
  * lands on the right parts. The server has always kept mapped keys on this list
@@ -69,18 +73,10 @@
   function isDirty(a) {
     var d = state.drafts[a.areaKey];
     if (!d) return false;
-    var saved = a.parts
-      .map(function (p) {
-        return p.sku.toUpperCase();
-      })
-      .join('|');
-    return (
-      d
-        .map(function (p) {
-          return p.sku.toUpperCase();
-        })
-        .join('|') !== saved
-    );
+    var sig = function (p) {
+      return p.sku.toUpperCase() + '#' + (p.piece || '');
+    };
+    return d.map(sig).join('|') !== a.parts.map(sig).join('|');
   }
 
   function humanizePart(x) {
@@ -157,6 +153,37 @@
     return [s.brand, s.code].filter(Boolean).join(' ');
   }
 
+  /**
+   * Which piece of the part this area colours. "Whole part" for an ordinary part;
+   * "Piece 2" when one part number takes a colour per piece (a Palisades or 90°
+   * Climb & Slide mat system) — the piece is that part's colour-spec slot under
+   * Administration → Manufacturers → Colours.
+   */
+  function pieceSelect(i, j, piece) {
+    var opts = '<option value="">whole part</option>';
+    for (var n = 1; n <= 7; n += 1) {
+      opts +=
+        '<option value="' +
+        n +
+        '"' +
+        (piece === n ? ' selected' : '') +
+        '>piece ' +
+        n +
+        '</option>';
+    }
+    return (
+      '<select data-pca-piece="' +
+      i +
+      ':' +
+      j +
+      '" title="Which piece of this part the area colours" style="font-size:10.5px;border:1px solid #e1e3dc;border-radius:5px;padding:1px 3px;background:#fff;color:' +
+      INK +
+      ';">' +
+      opts +
+      '</select>'
+    );
+  }
+
   function rowHtml(a, i) {
     var parts = partsOf(a);
     var unmapped = !a.parts.length;
@@ -209,14 +236,21 @@
       (parts.length
         ? parts
             .map(function (p, j) {
+              var pattern = p.sku.indexOf('*') !== -1;
               return (
                 '<span class="chip" style="font-size:11px;color:' +
-                (p.name ? INK : RED) +
+                (p.name || pattern ? INK : RED) +
                 ';background:#f2f3ef;display:inline-flex;align-items:center;gap:5px;"' +
                 ' title="' +
-                esc(p.name || 'Not in the catalog — check the part number') +
+                esc(
+                  pattern
+                    ? 'Pattern — every part number it matches, e.g. each mat size'
+                    : p.name || 'Not in the catalog — check the part number',
+                ) +
                 '">' +
                 esc(p.sku) +
+                (pattern ? ' <span class="muted">(pattern)</span>' : '') +
+                pieceSelect(i, j, p.piece) +
                 '<button type="button" data-pca-remove="' +
                 i +
                 ':' +
@@ -235,7 +269,7 @@
       '<div style="position:relative;display:flex;gap:6px;align-items:center;">' +
       '<input type="text" data-pca-search="' +
       i +
-      '" placeholder="Add a part — number or name" autocomplete="off" style="' +
+      '" placeholder="Add a part — number, name, or pattern like R-SSG-*CLM*" autocomplete="off" style="' +
       bomFieldStyle('220px') +
       '">' +
       '<button class="btn" type="button" data-pca-save="' +
@@ -370,7 +404,9 @@
         ';">' +
         'Add “' +
         esc(term) +
-        '” (not in the catalog)' +
+        (term.indexOf('*') !== -1
+          ? '” as a pattern (every matching part number)'
+          : '” (not in the catalog)') +
         '</button>';
     }
     box.innerHTML =
@@ -386,6 +422,7 @@
         next.push({
           sku: b.getAttribute('data-pca-add'),
           name: b.getAttribute('data-pca-name') || null,
+          piece: null,
         });
         state.drafts[a.areaKey] = next;
         draw();
@@ -437,6 +474,20 @@
       });
     });
 
+    el.querySelectorAll('[data-pca-piece]').forEach(function (sel) {
+      sel.addEventListener('change', function () {
+        var ij = sel.getAttribute('data-pca-piece').split(':');
+        var a = state.areas[Number(ij[0])];
+        var next = partsOf(a).map(function (p) {
+          return { sku: p.sku, name: p.name, piece: p.piece || null };
+        });
+        var n = sel.value ? Number(sel.value) : null;
+        next[Number(ij[1])].piece = n;
+        state.drafts[a.areaKey] = next;
+        draw();
+      });
+    });
+
     el.querySelectorAll('[data-pca-remove]').forEach(function (b) {
       b.addEventListener('click', function () {
         var ij = b.getAttribute('data-pca-remove').split(':');
@@ -458,15 +509,15 @@
     el.querySelectorAll('[data-pca-save]').forEach(function (b) {
       b.addEventListener('click', async function () {
         var a = state.areas[Number(b.getAttribute('data-pca-save'))];
-        var skus = partsOf(a).map(function (p) {
-          return p.sku;
+        var parts = partsOf(a).map(function (p) {
+          return { sku: p.sku, piece: p.piece || null };
         });
         b.disabled = true;
         b.textContent = 'Saving…';
         try {
           var r = await authed('/admin/portal-color-areas/' + encodeURIComponent(a.areaKey), {
             method: 'PUT',
-            body: { skus: skus },
+            body: { parts: parts },
           });
           if (!r.ok) {
             toast(await serverMessage(r, 'Could not save (' + r.status + ').'), true);

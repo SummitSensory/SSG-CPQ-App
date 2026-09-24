@@ -1,5 +1,12 @@
 import { prisma } from '../lib/prisma.js';
 import { UNASSIGNED } from '../handoff/bomSections.js';
+import {
+  describePicks,
+  readPicks,
+  specsForLines,
+  type ColorPick,
+  type ResolvedColorSpec,
+} from '../vendorColors/service.js';
 
 /**
  * Portal colour areas → Bill of Materials lines.
@@ -10,6 +17,15 @@ import { UNASSIGNED } from '../handoff/bomSections.js';
  * Bill of Materials carries one colour per part line. PortalColorAreaMapping (kept
  * in Administration → Orders → Portal colour areas) says which catalog parts each
  * area paints.
+ *
+ * Two refinements on "area → parts":
+ *   - A mapped part may be a PATTERN with `*` (e.g. R-SSG-*CLM*), for parts whose
+ *     number is generated per job — the Adventure floor padding is R-SSG-{LLWW}CLM[-2],
+ *     one number per mat size, with no catalog row.
+ *   - A mapped part may name a PIECE: one part number that takes a colour per piece
+ *     (a Palisades or 90° Climb & Slide mat system). The piece is the slot of that
+ *     part's colour spec (Administration → Manufacturers → Colours); the customer's
+ *     colour is looked up on the spec's vendor chart so the vendor code prints too.
  *
  * The file is split into pure pieces (labels, brand resolution, the plan of what
  * to write) and one function that loads the order and writes the plan. The plan is
@@ -53,6 +69,46 @@ export interface ColorApplyResult {
   conflicts?: ColorConflict[];
   /** Lines the picks matched that already carried exactly that colour — a re-review. */
   linesAlreadyCurrent?: number;
+  /**
+   * Pieces whose colour is not on the part's vendor chart ("palisades_mat.palisades_mat_2:
+   * vinyl Lime — not on Resilite Vinyl"). That piece is left as it was, never guessed.
+   */
+  offChart?: string[];
+}
+
+/**
+ * One part an area colours. `sku` may be a pattern with `*`. `piece` names which
+ * piece (colour-spec slot) of a multi-piece part; null means the whole part.
+ */
+export interface MappedPartRef {
+  sku: string;
+  piece: number | null;
+}
+
+/** A mapping entry as given: a bare part number (whole part) or a part + piece. */
+export type MappingEntry = string | MappedPartRef;
+
+const toRef = (e: MappingEntry): MappedPartRef =>
+  typeof e === 'string' ? { sku: e, piece: null } : { sku: e.sku, piece: e.piece ?? null };
+
+/** Whether a mapped part number is a pattern rather than one part. */
+export function isPartPattern(sku: string): boolean {
+  return sku.includes('*');
+}
+
+/** Case-insensitive matcher for a mapped part number or `*` pattern. */
+export function partMatcher(sku: string): (lineSku: string) => boolean {
+  const t = sku.trim().toUpperCase();
+  if (!isPartPattern(t)) return (x) => x.trim().toUpperCase() === t;
+  const re = new RegExp(
+    '^' +
+      t
+        .split('*')
+        .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+        .join('.*') +
+      '$',
+  );
+  return (x) => re.test(x.trim().toUpperCase());
 }
 
 /** Every area the customer answered, in a stable order. Tolerates any shape. */
@@ -163,6 +219,8 @@ export interface LineColor {
   powderBrandId: string | null;
   powderColorCode: string | null;
   powderColor: string | null;
+  /** Colour-spec slot picks — only set for a multi-piece part. */
+  colorPicks?: ColorPick[];
 }
 
 /**
@@ -216,6 +274,8 @@ export interface PlanLine {
   powderBrandId: string | null;
   powderColorCode: string | null;
   powderColor: string | null;
+  /** What the line's colour-spec slots already hold (ProcurementLine.colorPicks). */
+  colorPicks?: unknown;
 }
 
 export interface ColorPlanUpdate {
@@ -236,7 +296,9 @@ const vendorOf = (v: string | null) => (v && v.trim()) || UNASSIGNED;
 const sameColor = (a: LineColor, b: LineColor) =>
   a.powderBrandId === b.powderBrandId &&
   a.powderColorCode === b.powderColorCode &&
-  a.powderColor === b.powderColor;
+  a.powderColor === b.powderColor &&
+  (b.colorPicks === undefined ||
+    JSON.stringify(a.colorPicks ?? []) === JSON.stringify(b.colorPicks));
 
 /**
  * Decide what applying the picks would write, without writing it.
@@ -255,14 +317,18 @@ const sameColor = (a: LineColor, b: LineColor) =>
  */
 export function planColorApplication(input: {
   picks: readonly ColorAreaPick[];
-  /** areaKey → mapped part numbers. */
-  mapping: ReadonlyMap<string, readonly string[]>;
+  /** areaKey → mapped parts (a bare part number means the whole part). */
+  mapping: ReadonlyMap<string, readonly MappingEntry[]>;
   lines: readonly PlanLine[];
+  /** lineId → that line's colour spec, for multi-piece parts. */
+  specs?: ReadonlyMap<string, ResolvedColorSpec>;
   submittedVendors: ReadonlySet<string>;
   brands: readonly ManagedBrand[];
   chart: readonly PowderChartColor[];
 }): ColorPlan {
   const { picks, mapping, lines, submittedVendors, brands, chart } = input;
+  const specs = input.specs ?? new Map<string, ResolvedColorSpec>();
+  const offChart: string[] = [];
   const result: ColorApplyResult = {
     linesUpdated: 0,
     unmappedAreas: [],
@@ -272,30 +338,37 @@ export function planColorApplication(input: {
     linesAlreadyCurrent: 0,
   };
 
-  // Non-hardware lines by part number, case-insensitively.
-  const bySku = new Map<string, PlanLine[]>();
-  for (const l of lines) {
-    const s = (l.sku || '').trim().toUpperCase();
-    if (!s || l.isHardwareComponent) continue;
-    const list = bySku.get(s) ?? [];
-    list.push(l);
-    bySku.set(s, list);
-  }
+  // Non-hardware lines with a part number.
+  const paintable = lines.filter((l) => (l.sku || '').trim() && !l.isHardwareComponent);
 
-  // Every pick that claims each line.
-  const claims = new Map<string, { line: PlanLine; picks: ColorAreaPick[] }>();
+  // Every pick that claims each line, with the piece it claims (null = whole part).
+  type Claim = { pick: ColorAreaPick; piece: number | null };
+  const claims = new Map<
+    string,
+    { line: PlanLine; picks: ColorAreaPick[]; claims: Claim[]; ambiguous: boolean }
+  >();
   for (const pick of picks) {
-    const skus = mapping.get(pick.areaKey) ?? [];
-    if (!skus.length) {
+    const refs = (mapping.get(pick.areaKey) ?? []).map(toRef);
+    if (!refs.length) {
       result.unmappedAreas.push(pick.areaKey);
       continue;
     }
     let matched = false;
-    for (const sku of skus) {
-      for (const line of bySku.get(sku.trim().toUpperCase()) ?? []) {
+    for (const ref of refs) {
+      const matches = partMatcher(ref.sku);
+      for (const line of paintable) {
+        if (!matches(line.sku as string)) continue;
         matched = true;
-        const c = claims.get(line.id) ?? { line, picks: [] };
-        if (!c.picks.some((p) => p.areaKey === pick.areaKey)) c.picks.push(pick);
+        const c = claims.get(line.id) ?? { line, picks: [], claims: [], ambiguous: false };
+        const prior = c.claims.find((x) => x.pick.areaKey === pick.areaKey);
+        if (!prior) {
+          c.picks.push(pick);
+          c.claims.push({ pick, piece: ref.piece });
+        } else if ((prior.piece ?? null) !== (ref.piece ?? null)) {
+          // One area mapped twice onto the same line (say an exact part and a
+          // pattern) with different pieces: which piece it means is a guess.
+          c.ambiguous = true;
+        }
         claims.set(line.id, c);
       }
     }
@@ -305,27 +378,152 @@ export function planColorApplication(input: {
   const skipped = new Set<string>();
   const conflictBySku = new Map<string, Set<string>>();
   const updates: ColorPlanUpdate[] = [];
-  for (const { line, picks: linePicks } of claims.values()) {
+  for (const { line, picks: linePicks, claims: lineClaims, ambiguous } of claims.values()) {
     const vendor = vendorOf(line.vendor);
     if (submittedVendors.has(vendor)) {
       skipped.add(vendor);
       continue;
     }
-    const distinct = new Set(linePicks.map(pickSig));
     const sku = (line.sku || '').trim();
-    if (distinct.size > 1) {
+    const addConflict = (list: readonly ColorAreaPick[]) => {
       const set = conflictBySku.get(sku.toUpperCase()) ?? new Set<string>();
-      for (const p of linePicks)
-        set.add(`${p.areaKey}: ${[p.brand, p.code].filter(Boolean).join(' ')}`);
+      for (const p of list) set.add(`${p.areaKey}: ${[p.brand, p.code].filter(Boolean).join(' ')}`);
       conflictBySku.set(sku.toUpperCase(), set);
-      continue;
-    }
-    const pick = linePicks[0]!;
-    const to = lineColorFor(pick, brands, chart);
+    };
     const from: LineColor = {
       powderBrandId: line.powderBrandId,
       powderColorCode: line.powderColorCode,
       powderColor: line.powderColor,
+      colorPicks: readPicks(line.colorPicks),
+    };
+
+    // A multi-piece part: each area colours one piece. Only two DIFFERENT picks for
+    // the SAME piece conflict — or an area colouring the whole part alongside areas
+    // colouring its pieces, which is ambiguous.
+    if (ambiguous) {
+      addConflict(linePicks);
+      continue;
+    }
+
+    if (lineClaims.some((c) => c.piece != null)) {
+      if (lineClaims.some((c) => c.piece == null)) {
+        addConflict(linePicks);
+        continue;
+      }
+      const byPiece = new Map<number, ColorAreaPick[]>();
+      for (const c of lineClaims) {
+        const list = byPiece.get(c.piece as number) ?? [];
+        list.push(c.pick);
+        byPiece.set(c.piece as number, list);
+      }
+      const clashing = [...byPiece.values()].filter((l) => new Set(l.map(pickSig)).size > 1);
+      if (clashing.length) {
+        addConflict(clashing.flat());
+        continue;
+      }
+
+      const spec = specs.get(line.id);
+      let to: LineColor;
+      if (spec) {
+        // Slots of the part's colour spec, the customer's colour found on its vendor
+        // chart — by NAME first, then by vendor code, so a name never loses to another
+        // colour whose code happens to spell it. Slots nobody answered keep what they
+        // had, but only picks that still fit the current spec: a slot beyond its
+        // slotCount, or a colour no longer on its chart, is dropped (and said so)
+        // rather than printed on a vendor sheet from an old spec.
+        const onChart = new Set(spec.colors.map((c) => c.id));
+        const bySlot = new Map<number, ColorPick>();
+        const stale: string[] = [];
+        for (const pk of from.colorPicks ?? []) {
+          if (pk.slot >= 1 && pk.slot <= spec.slotCount && onChart.has(pk.colorId))
+            bySlot.set(pk.slot, pk);
+          else
+            stale.push(`${sku}: ${pk.name} in slot ${pk.slot} is not on the current colour spec`);
+        }
+        let unresolved = false;
+        for (const [slot, list] of byPiece) {
+          const pick = list[0]!;
+          const code = pick.code.trim().toLowerCase();
+          const inRange = slot >= 1 && slot <= spec.slotCount;
+          const color = inRange
+            ? (spec.colors.find((c) => c.name.trim().toLowerCase() === code) ??
+              spec.colors.find((c) => (c.vendorCode ?? '').trim().toLowerCase() === code))
+            : undefined;
+          if (!color) {
+            unresolved = true;
+            offChart.push(
+              `${pick.areaKey}: ${[pick.brand, pick.code].filter(Boolean).join(' ')} — ${
+                slot > spec.slotCount
+                  ? `${sku} takes ${spec.slotCount} colour${spec.slotCount === 1 ? '' : 's'}, not a piece ${slot}`
+                  : `not on ${spec.palette.name}`
+              }`,
+            );
+            continue;
+          }
+          bySlot.set(slot, {
+            slot,
+            colorId: color.id,
+            name: color.name,
+            vendorCode: color.vendorCode,
+            upchargeMinor: color.upchargeMinor,
+          });
+        }
+        // A piece the chart can't resolve leaves the WHOLE line untouched. Writing the
+        // rest would either drop that piece from the line's colour text or keep its
+        // previous colour printed as if the customer had chosen it — both read as a
+        // final instruction on a vendor sheet. Staff set it by hand from the report.
+        if (unresolved) continue;
+        offChart.push(...stale);
+        const merged = [...bySlot.values()].sort((a, b) => a.slot - b.slot);
+        to = {
+          powderBrandId: null,
+          powderColorCode: null,
+          powderColor: describePicks(merged, { withVendorCode: true, spec }) || null,
+          colorPicks: merged,
+        };
+      } else {
+        // No colour spec on this part yet: still record every piece, in order, as text.
+        to = {
+          powderBrandId: null,
+          powderColorCode: null,
+          powderColor:
+            [...byPiece.entries()]
+              .sort((a, b) => a[0] - b[0])
+              .map(
+                ([n, l]) =>
+                  `Piece ${n}: ${lineColorFor(l[0]!, brands, chart).powderColor ?? l[0]!.code}`,
+              )
+              .join(' · ') || null,
+        };
+      }
+      if (sameColor(from, to)) {
+        result.linesAlreadyCurrent = (result.linesAlreadyCurrent ?? 0) + 1;
+        continue;
+      }
+      updates.push({
+        lineId: line.id,
+        sku,
+        areaKey: lineClaims
+          .map((c) => c.pick.areaKey)
+          .sort()
+          .join(', '),
+        from,
+        to,
+      });
+      continue;
+    }
+
+    const distinct = new Set(linePicks.map(pickSig));
+    if (distinct.size > 1) {
+      addConflict(linePicks);
+      continue;
+    }
+    const pick = linePicks[0]!;
+    const to: LineColor = {
+      ...lineColorFor(pick, brands, chart),
+      // A whole-part colour replaces any per-slot picks the line carried, so the
+      // line never says one thing in its colour text and another in its slots.
+      ...((from.colorPicks ?? []).length ? { colorPicks: [] } : {}),
     };
     if (sameColor(from, to)) {
       result.linesAlreadyCurrent = (result.linesAlreadyCurrent ?? 0) + 1;
@@ -344,6 +542,7 @@ export function planColorApplication(input: {
     .map(([k, areas]) => ({ sku: skuSpelling.get(k) ?? k, areas: [...areas].sort() }))
     .sort((a, b) => a.sku.localeCompare(b.sku));
   result.skippedVendors = [...skipped].sort();
+  result.offChart = [...new Set(offChart)];
   result.linesUpdated = updates.length;
   return { updates, result };
 }
@@ -380,12 +579,15 @@ export async function applyColorPicksToOrder(
   const [mappings, lines, sections, brands, chartRows] = await Promise.all([
     prisma.portalColorAreaMapping.findMany({
       where: { areaKey: { in: [...new Set(picks.map((p) => p.areaKey))] } },
-      select: { areaKey: true, sku: true },
+      select: { areaKey: true, sku: true, piece: true },
+      orderBy: [{ areaKey: 'asc' }, { sku: 'asc' }],
     }),
     prisma.procurementLine.findMany({
       where: { orderId },
       select: {
         id: true,
+        productId: true,
+        colorPicks: true,
         sku: true,
         vendor: true,
         isHardwareComponent: true,
@@ -411,11 +613,23 @@ export async function applyColorPicksToOrder(
     }),
   ]);
 
-  const mapping = new Map<string, string[]>();
+  const mapping = new Map<string, MappedPartRef[]>();
   for (const m of mappings) {
     const list = mapping.get(m.areaKey) ?? [];
-    list.push(m.sku);
+    list.push({ sku: m.sku, piece: m.piece ?? null });
     mapping.set(m.areaKey, list);
+  }
+
+  // Colour specs, only needed when some area colours a piece of a part.
+  const specs = new Map<string, ResolvedColorSpec>();
+  if (mappings.some((m) => m.piece != null)) {
+    const byKey = await specsForLines(lines);
+    for (const l of lines) {
+      const spec =
+        (l.productId ? byKey.get(l.productId) : undefined) ??
+        byKey.get((l.sku ?? '').trim().toUpperCase());
+      if (spec) specs.set(l.id, spec);
+    }
   }
   const chart: PowderChartColor[] = chartRows.map((c) => ({
     vendor: c.palette.manufacturer.name,
@@ -427,6 +641,7 @@ export async function applyColorPicksToOrder(
     picks,
     mapping,
     lines,
+    specs,
     submittedVendors: new Set(sections.map((s) => vendorOf(s.vendor))),
     brands,
     chart,
@@ -434,7 +649,19 @@ export async function applyColorPicksToOrder(
 
   if (updates.length) {
     await prisma.$transaction([
-      ...updates.map((u) => prisma.procurementLine.update({ where: { id: u.lineId }, data: u.to })),
+      ...updates.map((u) =>
+        prisma.procurementLine.update({
+          where: { id: u.lineId },
+          data: {
+            powderBrandId: u.to.powderBrandId,
+            powderColorCode: u.to.powderColorCode,
+            powderColor: u.to.powderColor,
+            ...(u.to.colorPicks !== undefined
+              ? { colorPicks: u.to.colorPicks as unknown as object }
+              : {}),
+          },
+        }),
+      ),
       prisma.orderEvent.create({
         data: {
           orderId,
@@ -452,6 +679,7 @@ export async function applyColorPicksToOrder(
             noMatchingLines: result.noMatchingLines,
             skippedVendors: result.skippedVendors,
             conflicts: result.conflicts ?? [],
+            offChart: result.offChart ?? [],
           } as object,
         },
       }),
