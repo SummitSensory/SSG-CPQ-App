@@ -2673,6 +2673,10 @@ enum FreightBucketKind {
   MATS
   THERAPEUTIC
   OTHER
+  /// The Mat Freight Tax Pass-Through, read off the deal board (formula_mkzde17n).
+  /// Not a freight bucket: it lands on the proposal's Tax field and bills to the
+  /// QuickBooks R-TAX item. See src/proposals/freightTrueUp.ts (MATS_TAX).
+  MATS_TAX
 }
 
 /// Where a figure came from. A MANUAL figure in a MONDAY bucket is an override and
@@ -2805,6 +2809,11 @@ model FreightEntry {
   /// absolute. A hand-entered one is an instalment unless the operator says otherwise,
   /// which is also how a wrong total gets corrected after the fact.
   absolute           Boolean            @default(false)
+
+  /// For a MATS_TAX entry: the tax the proposal carried before this figure replaced
+  /// it. The invoice is billed only the difference (amountMinor − priorAmountMinor),
+  /// because the earlier figure is already on it. Null on every other entry.
+  priorAmountMinor   Int?
 
   /// For a LINES entry: [{ ref, sku, name, amountMinor }]. Keyed on the line's
   /// `ref`, because that is what survives a re-order of the proposal.

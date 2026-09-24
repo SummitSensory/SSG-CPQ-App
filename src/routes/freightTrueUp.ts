@@ -27,7 +27,7 @@ import {
   pullOutstanding,
   syncVersion,
 } from '../integrations/monday/freightPull.js';
-import { FREIGHT_BUCKETS } from '../proposals/freightTrueUp.js';
+import { FREIGHT_BUCKETS, billableMinor } from '../proposals/freightTrueUp.js';
 import {
   BANNER_DEFAULTS,
   BANNER_PRESETS,
@@ -258,7 +258,8 @@ export function registerFreightTrueUpRoutes(app: FastifyInstance): void {
     const rows = await pushableEntries(versionId);
     return {
       entries: rows.map(serializeEntry),
-      totalMinor: rows.reduce((a, e) => a + e.amountMinor, 0),
+      // What the invoice would actually rise by: a mats freight tax counts its increase only.
+      totalMinor: rows.reduce((a, e) => a + billableMinor(e), 0),
     };
   });
 
