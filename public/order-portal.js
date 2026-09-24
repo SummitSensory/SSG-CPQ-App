@@ -1057,6 +1057,23 @@
         ),
       );
       parts.push(list('Areas whose parts are not on this order', c.noMatchingLines, ''));
+      // Shown so a line left alone is never mistaken for one that was coloured.
+      parts.push(
+        list(
+          'Parts left unchanged — two areas asked for different colours',
+          (c.conflicts || []).map(function (x) {
+            return x.sku + ': ' + (x.areas || []).join('; ');
+          }),
+          '— set these lines by hand:',
+        ),
+      );
+      parts.push(
+        list(
+          "Pieces whose colour is not on the part's vendor chart",
+          c.offChart || [],
+          '— add the colour to the chart, or set the piece by hand:',
+        ),
+      );
       parts.push(
         list(
           'Vendors already submitted, left unchanged',
@@ -1069,7 +1086,12 @@
     if (!html) return '';
     var warn = !!(
       res.mondayNote ||
-      (c && (c.unmappedAreas.length || c.noMatchingLines.length || c.skippedVendors.length))
+      (c &&
+        (c.unmappedAreas.length ||
+          c.noMatchingLines.length ||
+          c.skippedVendors.length ||
+          (c.conflicts || []).length ||
+          (c.offChart || []).length))
     );
     return (
       '<div style="margin-top:10px;padding:9px 12px;border-radius:9px;font-size:12.5px;line-height:1.5;border:1px solid ' +

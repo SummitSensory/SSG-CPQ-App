@@ -21,9 +21,18 @@ import { listColorAreas, saveColorArea } from '../portal/colorAreaMapping.js';
  * Administration needs.
  */
 
-const SaveBody = z.object({
-  skus: z.array(z.string().trim().max(80)).max(500),
+// `parts` carries an optional piece per part; `skus` (bare part numbers) is still
+// accepted from an older screen.
+const PartBody = z.object({
+  sku: z.string().trim().min(1).max(80),
+  piece: z.number().int().min(1).max(20).nullable().optional(),
 });
+const SaveBody = z
+  .object({
+    parts: z.array(PartBody).max(500).optional(),
+    skus: z.array(z.string().trim().max(80)).max(500).optional(),
+  })
+  .refine((b) => b.parts !== undefined || b.skus !== undefined, 'parts is required');
 
 const Params = z.object({
   areaKey: z
@@ -45,6 +54,10 @@ export function registerPortalColorAreaRoutes(app: FastifyInstance): void {
     const body = SaveBody.safeParse(req.body);
     if (!body.success)
       throw new ValidationError(body.error.issues[0]?.message ?? 'Invalid part list');
-    return saveColorArea(params.data.areaKey, body.data.skus, req.user!.sub);
+    return saveColorArea(
+      params.data.areaKey,
+      body.data.parts ?? body.data.skus ?? [],
+      req.user!.sub,
+    );
   });
 }
