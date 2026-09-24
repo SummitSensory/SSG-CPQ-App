@@ -1729,6 +1729,7 @@
           : '<span class="muted">0</span>') +
         td(admin ? '<div style="display:flex;gap:6px;justify-content:flex-end;">' +
           '<button class="mfParts link-btn" data-id="' + m.id + '" title="What this vendor calls parts we number ourselves" style="width:auto;padding:6px 12px;">Part numbers</button>' +
+          '<button class="mfColours link-btn" data-id="' + m.id + '" title="This vendor&rsquo;s colour charts, and which parts take how many colours" style="width:auto;padding:6px 12px;">Colours</button>' +
           '<button class="mfEdit link-btn" data-id="' + m.id + '" style="width:auto;padding:6px 12px;">Edit</button>' +
           '<button class="mfDel link-btn" data-id="' + m.id + '" style="width:auto;padding:6px 10px;color:#9c3327;">Remove</button></div>' : '') +
         '</tr>';
@@ -1746,6 +1747,11 @@
     box.querySelectorAll('.mfParts').forEach(function (b) {
       b.addEventListener('click', function () {
         window.SSGVendorParts.open((mfrState.rows || []).filter(function (x) { return x.id === b.getAttribute('data-id'); })[0], user);
+      });
+    });
+    box.querySelectorAll('.mfColours').forEach(function (b) {
+      b.addEventListener('click', function () {
+        window.VendorColors.openVendorColors((mfrState.rows || []).filter(function (x) { return x.id === b.getAttribute('data-id'); })[0], user);
       });
     });
     box.querySelectorAll('.mfPartsList').forEach(function (b) {
