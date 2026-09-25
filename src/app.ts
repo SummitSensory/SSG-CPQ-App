@@ -89,6 +89,10 @@ export function buildApp(): FastifyInstance {
         fontSrc: ["'self'", 'https://fonts.gstatic.com'],
         imgSrc: ["'self'", 'data:'],
         connectSrc: ["'self'"],
+        // The proposal preview's Print loads the server-rendered PDF into a hidden
+        // frame as a blob: URL and prints that frame (see printPdf in public/app.js).
+        // Without this, frame-src falls back to default-src and the frame is refused.
+        frameSrc: ["'self'", 'blob:'],
       },
     },
   });
