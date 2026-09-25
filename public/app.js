@@ -8514,7 +8514,11 @@
       'tbody[data-group]{break-inside:avoid;page-break-inside:avoid;}' +
       '.ssg-fm-page{width:8.5in;height:11in;min-height:0;margin:0;overflow:hidden;' +
         'break-inside:avoid;page-break-inside:avoid;break-after:page;page-break-after:always;}' +
-      "*[style*='Newsreader']{font-family:Georgia,serif !important;}</style></head><body>" +
+      // No font override here. There used to be one — every Newsreader heading forced
+      // to Georgia — which the server's Linux Chromium does not have, so every
+      // server-rendered copy (the monday file, the DocuSeal package, Save PDF) set the
+      // headings in its fallback sans. Newsreader is loaded by the link above.
+      '</style></head><body>' +
       proposalDocHtml(doc) +
       // The same pagination the rep sees, run before the renderer takes the picture:
       // fixed sheets, a pinned footer and "Page N of M" on every one. The function is
@@ -8676,7 +8680,7 @@
         // property of the thing about to be produced.
         '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:flex-end;">' +
           (window.SSGFrontMatter ? window.SSGFrontMatter.scopeToggleHtml(doc) : '') +
-          '<button class="link-btn" id="pvPrintBrowser" title="Print on paper through the browser" style="width:auto;padding:9px 16px;background:#fff;">Print</button>' +
+          '<button class="link-btn" id="pvPrintBrowser" title="Print the PDF exactly as the customer receives it" style="width:auto;padding:9px 16px;background:#fff;">Print</button>' +
           '<button class="btn" id="pvPrint" title="Download the PDF exactly as the customer receives it" style="width:auto;padding:9px 20px;">Save PDF</button>' +
         '</div>' +
       '</div>';
@@ -8691,7 +8695,7 @@
     function wire() {
       document.getElementById('pvClose').addEventListener('click', function () { document.body.removeChild(ov); });
       document.getElementById('pvPrint').addEventListener('click', savePdf);
-      document.getElementById('pvPrintBrowser').addEventListener('click', firePrint);
+      document.getElementById('pvPrintBrowser').addEventListener('click', printPdf);
       if (window.SSGFrontMatter) {
         window.SSGFrontMatter.bindScopeToggle(ov, function () {
           // The introduction/proposal scope toggle only decides which of THOSE
@@ -8720,8 +8724,8 @@
      * that DocuSeal and the monday file get, so the downloaded copy is the one the
      * customer receives. The browser dialog stays as the fallback, and as "Print".
      */
-    async function savePdf() {
-      var bt = document.getElementById('pvPrint');
+    async function serverPdf(buttonId) {
+      var bt = document.getElementById(buttonId);
       var label = bt ? bt.textContent : '';
       if (bt) { bt.disabled = true; bt.textContent = 'Preparing PDF\u2026'; }
       try {
@@ -8736,17 +8740,71 @@
           timeoutMs: RENDER_TIMEOUT_MS,
         });
         if (!r.ok) throw new Error(await serverMessage(r, 'the PDF renderer did not respond (' + r.status + ')'));
-        downloadBlob(await r.blob(), name + '.pdf');
         if (r.headers.get('X-Reference-Docs-Missing')) {
-          toast('The PDF is saved, but the attached reference documents (e.g. the W-9) could not be read and are not in it. Try again in a moment.', 1);
+          toast('The attached reference documents (e.g. the W-9) could not be read and are not in this PDF. Try again in a moment.', 1);
         }
-      } catch (e) {
-        toast('Could not build the PDF on the server (' + ((e && e.message) || 'unknown error') +
-          '). Opening the print dialog instead \u2014 in it, set Scale to "Default" so the pages print full size.', 1);
-        firePrint();
+        return { blob: await r.blob(), name: name };
       } finally {
-        if (bt) { bt.disabled = false; bt.textContent = label || 'Save PDF'; }
+        if (bt) { bt.disabled = false; bt.textContent = label; }
       }
+    }
+    function fallBackToBrowserPrint(e) {
+      toast('Could not build the PDF on the server (' + ((e && e.message) || 'unknown error') +
+        '). Opening the print dialog instead \u2014 in it, set Scale to "Default" so the pages print full size.', 1);
+      firePrint();
+    }
+    async function savePdf() {
+      try {
+        var pdf = await serverPdf('pvPrint');
+        downloadBlob(pdf.blob, pdf.name + '.pdf');
+      } catch (e) { fallBackToBrowserPrint(e); }
+    }
+    /**
+     * Print: the print dialog opened on the SERVER's PDF, not on this page.
+     *
+     * Printing the page itself hands the layout to Chrome's print settings, and its
+     * remembered Scale ("Fit to page width") shrank P-2026-000164 to 76% on 2026-09-24,
+     * a day after Save PDF was moved to the server for the same reason. A PDF is already
+     * fixed Letter pages: whatever the Scale, Letter onto Letter is one to one. It is
+     * loaded into a hidden frame (the CSP's frame-src allows blob: for this) and that
+     * frame's print() opens Chrome's ordinary dialog, so paper and Save as PDF both work.
+     */
+    async function printPdf() {
+      // Save as PDF names the file after the TAB's title, which Chrome picks up a
+      // moment after it changes — set at print() time it arrives too late. Set now,
+      // while the server renders, and put back once the dialog has had its chance.
+      var prevTitle = document.title;
+      document.title = proposalFileName(doc);
+      setTimeout(function () { document.title = prevTitle; }, 90000);
+      var pdf;
+      try { pdf = await serverPdf('pvPrintBrowser'); } catch (e) { document.title = prevTitle; fallBackToBrowserPrint(e); return; }
+      var url = URL.createObjectURL(pdf.blob);
+      var old = document.getElementById('pvPdfFrame');
+      if (old) old.parentNode.removeChild(old);
+      var f = document.createElement('iframe');
+      f.id = 'pvPdfFrame';
+      f.title = pdf.name;
+      // Not display:none — Chrome does not load the PDF viewer into a frame it is not laying out.
+      f.style.cssText = 'position:fixed;right:0;bottom:0;width:1px;height:1px;border:0;opacity:0;pointer-events:none;';
+      var printed = false;
+      f.addEventListener('load', function () {
+        // The viewer inside the frame needs a moment after load before print() reaches it.
+        setTimeout(function () {
+          // Marked first: print() can hold until the dialog closes, and the backup
+          // below must not open a second copy while the rep is still in the dialog.
+          printed = true;
+          try { f.contentWindow.focus(); f.contentWindow.print(); }
+          catch (e) { fallBackToBrowserPrint(e); }
+        }, 600);
+      });
+      document.body.appendChild(f);
+      f.src = url;
+      // If the viewer never loads (a blocked frame, a browser without one), open the
+      // PDF on its own so it can be printed from there.
+      setTimeout(function () {
+        if (!printed) { window.open(url, '_blank'); }
+      }, 15000);
+      setTimeout(function () { URL.revokeObjectURL(url); if (f.parentNode) f.parentNode.removeChild(f); }, 10 * 60 * 1000);
     }
     function firePrint() {
       // Browsers name the saved PDF after the document title, so set it for the print
@@ -8759,6 +8817,14 @@
       setTimeout(restore, 60000);
     }
     wire();
+    function onPrintKey(e) {
+      if (!document.body.contains(ov)) { window.removeEventListener('keydown', onPrintKey, true); return; }
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === 'p' || e.key === 'P')) {
+        e.preventDefault();
+        printPdf();
+      }
+    }
+    window.addEventListener('keydown', onPrintKey, true);
     // Whichever reference documents (a W9, a certificate of insurance) this
     // version has checked, fetched and appended in the background — see the
     // comment on `refDocHtml` above for why this runs after the overlay is
@@ -8766,7 +8832,7 @@
     // pass the initial render just did; both calls are cheap and idempotent
     // (paginateProposalArea/fixSheetPageBreaks/mountPreviewViewer already run
     // this way on every scope-toggle above).
-    var refDocsReady = referenceDocSheetsHtml(doc.meta).then(function (extra) {
+    referenceDocSheetsHtml(doc.meta).then(function (extra) {
       if (!extra) return;
       refDocHtml = extra;
       ov.insertAdjacentHTML('beforeend', extra);
