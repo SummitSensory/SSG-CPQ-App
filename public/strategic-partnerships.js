@@ -790,22 +790,22 @@
       '">' +
       input('sppDiscount', 'Partner discount (%)', i.partnerDiscountPercent, {
         required: true,
-        placeholder: '17.5',
+        placeholder: 'Enter the discount, e.g. 17.5',
         inputmode: 'decimal',
       }) +
       input('sppSpv', 'Standard project value ($)', i.standardProjectValue, {
         required: true,
-        placeholder: '16514',
+        placeholder: 'Enter the dollar value',
         inputmode: 'decimal',
       }) +
       input('sppHours', 'PM hours returned / center', i.pmHoursReturnedPerCenter, {
         required: true,
-        placeholder: '41',
+        placeholder: 'Enter hours',
         inputmode: 'decimal',
       }) +
       input('sppRate', 'Internal PM hourly value ($)', i.pmHourValue, {
         required: true,
-        placeholder: '75',
+        placeholder: 'Enter dollars per hour',
         inputmode: 'decimal',
       }) +
       input(
