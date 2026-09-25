@@ -27,11 +27,15 @@ vi.mock('../../src/lib/prisma.js', () => ({
   },
 }));
 
-beforeAll(() => {
+// The first import of the render routes pulls in the whole renderer module graph —
+// over a second on its own, and past the 5s test timeout when the full suite runs in
+// parallel. Loaded once here, with room for it, so no single test pays for it.
+beforeAll(async () => {
   process.env.JWT_ACCESS_SECRET ??= 'test-access-secret-xxxxxx';
   process.env.JWT_REFRESH_SECRET ??= 'test-refresh-secret-xxxxx';
   process.env.DATABASE_URL ??= 'postgresql://a:b@localhost:5432/db';
-});
+  await (await makeApp()).close();
+}, 30_000);
 
 beforeEach(() => {
   renderPdf.mockClear();

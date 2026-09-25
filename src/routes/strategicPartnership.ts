@@ -25,6 +25,7 @@ import {
   serializeForClient,
 } from '../strategicPartnership/calculate.js';
 import { tokenCatalog, IMAGE_FIELDS } from '../strategicPartnership/copy.js';
+import { searchPartnershipOrganizations } from '../strategicPartnership/orgSearch.js';
 import {
   getPartnershipSettings,
   savePartnershipSettings,
@@ -347,6 +348,20 @@ export function registerStrategicPartnershipRoutes(app: FastifyInstance): void {
       throw err;
     }
   });
+
+  /**
+   * The new-proposal picker: anyone in the CRM, found by organization, contact name or
+   * email, or deal name. CRM_READ, because it reads the CRM — the same gate as the
+   * /crm/organizations search it replaces here.
+   */
+  app.get(
+    '/strategic-partnerships/organization-search',
+    { preHandler: requirePermission(Permission.CRM_READ) },
+    async (req) => {
+      const { q } = req.query as { q?: unknown };
+      return { items: await searchPartnershipOrganizations(typeof q === 'string' ? q : '') };
+    },
+  );
 
   app.get('/strategic-partnerships', read, async (req) => {
     const q = parseBody(ListQuery, req.query);
