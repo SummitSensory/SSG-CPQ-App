@@ -367,7 +367,10 @@
       '<div style="' +
       CARD +
       '"><div style="font-weight:600;margin-bottom:8px;">Which customer is this for?</div>' +
-      '<input id="sppOrgQ" placeholder="Search customers" style="' +
+      '<div style="color:' +
+      MUTE +
+      ';font-size:12.5px;margin-bottom:8px;">Anyone in the CRM, customer or prospect. Search by organization, a contact’s name or email, or a deal name.</div>' +
+      '<input id="sppOrgQ" placeholder="Organization, contact, email or deal" style="' +
       FIELD +
       'max-width:420px;"><div id="sppOrgResults" style="margin-top:8px;"></div></div>';
     var t = null;
@@ -389,7 +392,7 @@
       out.innerHTML = '';
       return;
     }
-    var r = await authed('/crm/organizations?pageSize=10&q=' + encodeURIComponent(q));
+    var r = await authed('/strategic-partnerships/organization-search?q=' + encodeURIComponent(q));
     if (!r.ok) {
       out.innerHTML =
         '<div style="color:' + RED + ';">' + esc(await failureText(r, 'Search failed.')) + '</div>';
@@ -407,13 +410,23 @@
               LINE +
               ';border-radius:8px;background:#fff;cursor:pointer;">' +
               esc(o.name) +
+              // A match on a contact or a deal says so, so the rep can see why an
+              // organization they did not type is in the list.
+              (o.via
+                ? '<span style="display:block;color:' +
+                  MUTE +
+                  ';font-size:12px;margin-top:2px;">' +
+                  (o.via.kind === 'contact' ? 'Contact: ' : 'Deal: ') +
+                  esc(o.via.label) +
+                  '</span>'
+                : '') +
               '</button>'
             );
           })
           .join('')
       : '<div style="color:' +
         MUTE +
-        ';font-size:13px;">No customer matches. Add the customer in CRM first.</div>';
+        ';font-size:13px;">Nothing in the CRM matches. Check the spelling, or add the organization in CRM first.</div>';
     Array.prototype.forEach.call(out.querySelectorAll('[data-org]'), function (b) {
       b.addEventListener('click', async function () {
         var res = await authed('/strategic-partnerships', {
