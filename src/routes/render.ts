@@ -10,11 +10,11 @@ import {
   bomFilename,
 } from '../handoff/bomDocuments.js';
 import { uploadProposalPdfToMonday } from '../integrations/monday/proposalPush.js';
-import { renderPdf, pdfAvailable } from '../render/pdf.js';
+import { renderPdf, pdfAvailable, warmRenderer } from '../render/pdf.js';
 import { checkDocumentTotal } from '../proposals/documentIntegrity.js';
 import { enforceOrReport } from '../lib/guards.js';
 import { sellerCollectedCharges } from '../crossborder/sellerCharges.js';
-import { appendPdfDocuments } from '../lib/pdfMerge.js';
+import { appendPdfDocuments, setPdfTitle } from '../lib/pdfMerge.js';
 import { resolveReferenceDocuments } from '../proposals/referenceDocuments.js';
 
 /**
@@ -133,11 +133,22 @@ export function registerRenderRoutes(app: FastifyInstance): void {
         .replace(/[^\w .,()&'-]+/g, '')
         .trim()
         .slice(0, 150) || 'Proposal';
+    // The preview's Print prints this same PDF, and Chrome's print dialog names a
+    // printed PDF after its Title — so the Title is the file name Save PDF downloads
+    // under. See setPdfTitle.
+    pdf = await setPdfTitle(pdf, name);
     return reply
       .header('Content-Type', 'application/pdf')
       .header('Content-Disposition', `attachment; filename="${name}.pdf"`)
       .send(pdf);
   });
+
+  /**
+   * Start Chromium in this function before it is needed. The proposal preview calls
+   * it the moment it opens, so the cold start (several seconds on a fresh container)
+   * is paid while the rep is still reading, not after they press Save PDF or Print.
+   */
+  app.get('/render/warm', proposalRead, async () => warmRenderer());
 
   /** Is the renderer installed? The UI uses this to hide PDF options when not. */
   app.get('/render/status', async () => ({ pdf: await pdfAvailable() }));

@@ -16,6 +16,22 @@ import { logger } from './logger.js';
  * and a reference document that turned out to be corrupt should not block sending
  * the proposal itself.
  */
+/**
+ * Set the PDF's document Title.
+ *
+ * Chromium writes the HTML <title> into the PDF — for a proposal, the proposal's own
+ * title. Chrome's print dialog offers a printed PDF's Title as the file name for Save
+ * as PDF, so the preview's Print (which prints the server's PDF) came out named
+ * "Interactive Therapy & Sensory Environment — EyeClick BEAM Mobile" while Save PDF,
+ * named by the download header, was "Box Butte …-P-2026-000164-09242026". Stamping the
+ * file name here makes the two the same.
+ */
+export async function setPdfTitle(bytes: Buffer, title: string): Promise<Buffer> {
+  const doc = await PDFDocument.load(bytes, { updateMetadata: false });
+  doc.setTitle(title, { showInWindowTitleBar: true });
+  return Buffer.from(await doc.save());
+}
+
 export async function appendPdfDocuments(
   baseBytes: Buffer,
   extras: Array<{ name: string; bytes: Buffer }>,
