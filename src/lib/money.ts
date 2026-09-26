@@ -46,3 +46,30 @@ export class Money {
     return `${neg ? '-' : ''}${whole}.${frac} ${this.currency}`;
   }
 }
+
+/** Largest value the catalog's Int price column holds (cents). */
+const MAX_INT_MINOR = 2_147_483_647n;
+
+/**
+ * The sales price that earns `marginPercent` GROSS MARGIN on `costMinor`:
+ * price = cost / (1 − margin). Margin is profit as a share of the PRICE, not of the
+ * cost (that would be markup): a $60 part at 40% margin sells for $100, not $84.
+ *
+ * Integer arithmetic throughout. The margin is taken to two decimals (basis points)
+ * and the price rounded half-up to the cent. Throws on a margin outside 0–99.99%,
+ * a negative cost, or a price too large to store.
+ */
+export function priceForMarginMinor(costMinor: number | bigint, marginPercent: number): bigint {
+  if (!Number.isFinite(marginPercent) || marginPercent < 0 || marginPercent >= 100) {
+    throw new RangeError('Margin must be at least 0% and less than 100%.');
+  }
+  const cost = BigInt(costMinor);
+  if (cost < 0n) throw new RangeError('Cost cannot be negative.');
+  const bps = BigInt(Math.round(marginPercent * 100));
+  if (bps >= 10_000n) throw new RangeError('Margin must be at least 0% and less than 100%.');
+  const denom = 10_000n - bps;
+  // Half-up: (2·cost·10000 + denom) / (2·denom).
+  const price = (2n * cost * 10_000n + denom) / (2n * denom);
+  if (price > MAX_INT_MINOR) throw new RangeError('That price is too large to store.');
+  return price;
+}

@@ -90,6 +90,15 @@
    * Draft on an inactive product just earned a bare 409.
    */
   var STATUS_NEXT = { DRAFT: ['ACTIVE', 'ARCHIVED'], ACTIVE: ['INACTIVE', 'ARCHIVED'], INACTIVE: ['ACTIVE', 'ARCHIVED'], ARCHIVED: [] };
+  /**
+   * Gross margin: profit as a share of the PRICE (not markup on cost). A $60 part at
+   * 40% sells for $100. The same integer arithmetic as priceForMarginMinor in
+   * src/lib/money.ts, which is what actually sets the price when a margin is saved;
+   * this copy only previews it while typing.
+   */
+  function priceForMargin(costMinor, pct) { var bps = Math.round(pct * 100); var d = 10000 - bps; return Math.floor((2 * costMinor * 10000 + d) / (2 * d)); }
+  function marginOf(priceMinor, costMinor) { return priceMinor ? Math.round(((priceMinor - costMinor) / priceMinor) * 1000) / 10 : 0; }
+  function validMargin(v) { return v !== '' && isFinite(v) && Number(v) >= 0 && Number(v) < 100; }
   function statusChoices(current) { return STATUSES.filter(function (st) { return st === current || (STATUS_NEXT[current] || []).indexOf(st) !== -1; }); }
   function catById(id) { return catCategories.filter(function (x) { return x.id === id; })[0] || null; }
   function catName(id) { var c = catById(id); return c ? c.name : '—'; }
@@ -635,7 +644,7 @@
         all = all.concat(((await rn.json()) || {}).items || []);
       }
       itemState.rows = all.map(function (k) {
-        var margin = k.unitPriceMinor ? Math.round(((k.unitPriceMinor - k.unitCostMinor) / k.unitPriceMinor) * 1000) / 10 : 0;
+        var margin = marginOf(k.unitPriceMinor, k.unitCostMinor);
         var rec = k.productId ? (k.skuId ? 'Product + priced' : 'Product only') : 'Priced only';
         var row = {}; for (var kk in k) row[kk] = k[kk];
         row.margin = margin; row.record = rec;
@@ -728,7 +737,9 @@
           : '<span title="' + esc(k.manufacturer) + '">' + esc(k.manufacturer) + '</span>') +
         cell(admin ? txt(k.part, 'unitCostMinor', (Number(k.unitCostMinor) / 100).toFixed(2), NUM + 'background:#fdfcf7;border-color:#e4dfd0;') : '$' + (Number(k.unitCostMinor) / 100).toFixed(2), 'text-align:right;') +
         cell(admin ? txt(k.part, 'unitPriceMinor', (Number(k.unitPriceMinor) / 100).toFixed(2), NUM) : '$' + (Number(k.unitPriceMinor) / 100).toFixed(2), 'text-align:right;') +
-        cell('<span style="font-size:13px;font-weight:600;color:' + (k.margin >= 0 ? '#2f7d5d' : '#9c3327') + ';">' + k.margin + '%</span>', 'text-align:right;') +
+        cell(admin
+          ? '<div style="display:flex;align-items:center;gap:3px;"><input class="itMargin" data-part="' + esc(k.part) + '" value="' + k.margin + '" title="Type a margin and the unit price is worked out from the unit cost: price = cost \u00f7 (1 \u2212 margin)." style="' + NUM + 'font-weight:600;color:' + (k.margin >= 0 ? '#2f7d5d' : '#9c3327') + ';"><span style="font-size:12px;color:#8a8f85;">%</span></div>'
+          : '<span style="font-size:13px;font-weight:600;color:' + (k.margin >= 0 ? '#2f7d5d' : '#9c3327') + ';">' + k.margin + '%</span>', 'text-align:right;') +
         cell(admin ? txt(k.part, 'weightLbs', k.weightLbs, NUM) : String(k.weightLbs), 'text-align:right;') +
         cell(where, 'white-space:nowrap;') +
         cell('<span style="display:inline-block;background:' + (k.isActive ? '#eaf3ee' : '#f2f3ef') + ';border:1px solid ' + (k.isActive ? '#cfe3d7' : '#dcded7') + ';color:' + (k.isActive ? '#2f7d5d' : '#8a8f85') + ';border-radius:999px;padding:2px 9px;font-size:11.5px;font-weight:600;white-space:nowrap;">' + esc(k.statusLabel) + '</span>', 'white-space:nowrap;') +
@@ -823,10 +834,30 @@
         var row = (itemState.rows || []).filter(function (x) { return x.part === part; })[0];
         if (row) {
           row[f] = body[f];
-          row.margin = row.unitPriceMinor ? Math.round(((row.unitPriceMinor - row.unitCostMinor) / row.unitPriceMinor) * 1000) / 10 : 0;
+          row.margin = marginOf(row.unitPriceMinor, row.unitCostMinor);
         }
         if (f === 'unitCostMinor' || f === 'unitPriceMinor') drawItems(user);
         setTimeout(function () { el.style.borderColor = f === 'unitCostMinor' ? '#e4dfd0' : '#dcded7'; }, 900);
+      });
+    });
+    // A margin sets the price from the cost on record (server-side, in whole cents).
+    box.querySelectorAll('.itMargin').forEach(function (el) {
+      el.addEventListener('change', async function () {
+        var part = el.getAttribute('data-part');
+        var row = (itemState.rows || []).filter(function (x) { return x.part === part; })[0];
+        var raw = el.value.replace('%', '').trim();
+        if (!validMargin(raw)) { alert('Enter a margin from 0 to 99.99%.'); el.value = row ? row.margin : ''; return; }
+        if (row && !row.unitCostMinor) { alert('Enter the unit cost first \u2014 the price is worked out from it.'); el.value = row.margin; return; }
+        el.style.borderColor = '#c9a227';
+        var rm = await authed('/catalog/items/' + encodeURIComponent(part), { method: 'PATCH', body: { marginPercent: Number(raw) } });
+        el.style.borderColor = rm.ok ? '#3f9d78' : '#c2452f';
+        if (!rm.ok) { var mm = ''; try { mm = ((await rm.json()) || {}).message || ''; } catch (em) {} alert('Could not save' + (mm ? ': ' + mm : ' (' + rm.status + ').')); if (row) el.value = row.margin; return; }
+        var saved = {}; try { saved = (await rm.json()) || {}; } catch (es) {}
+        if (row && saved.unitPriceMinor != null) {
+          row.unitPriceMinor = saved.unitPriceMinor;
+          row.margin = marginOf(row.unitPriceMinor, row.unitCostMinor);
+        }
+        drawItems(user);
       });
     });
     box.querySelectorAll('.itFreight').forEach(function (el) {
@@ -1057,14 +1088,18 @@
       ? '<select id="kMfr" style="' + IN + '">' + opts(mfrs, '— none yet —') + '</select>'
       : '<input id="kMfr" placeholder="e.g. Summit Sensory Gym" style="' + IN + '">';
 
+    // Which of margin and price the rep set last: that one is what gets saved.
+    var kPricedBy = 'price';
     openModal('New part',
       fieldRow('Part #', '<input id="kPart" style="' + IN + '" required>') +
       fieldRow('Name', '<input id="kDesc" style="' + IN + '" required>') +
       '<div style="display:flex;gap:8px;">' +
-        '<div class="field" style="flex:1;"><label>Unit price ($)</label><input id="kPrice" value="0.00" style="' + IN + '"></div>' +
         '<div class="field" style="flex:1;"><label>Unit cost ($)</label><input id="kCost" value="0.00" style="' + IN + '"></div>' +
+        '<div class="field" style="flex:1;"><label>Margin (%)</label><input id="kMargin" placeholder="e.g. 40" style="' + IN + '"></div>' +
+        '<div class="field" style="flex:1;"><label>Unit price ($)</label><input id="kPrice" value="0.00" style="' + IN + '"></div>' +
         '<div class="field" style="flex:1;"><label>Weight (lb)</label><input id="kWt" value="0" style="' + IN + '"></div>' +
       '</div>' +
+      '<div id="kMarginNote" class="muted" style="font-size:11.5px;margin:-4px 0 10px;line-height:1.5;">Enter the cost and a margin and the price is worked out: price = cost \u00f7 (1 \u2212 margin). Or type the price and the margin follows.</div>' +
       fieldRow('Section', catField) +
       fieldRow('Manufacturer', mfrField) +
       '<div style="display:flex;gap:8px;">' +
@@ -1098,12 +1133,20 @@
           name: desc,
           category: category,
           proposalGroup: group,
-          unitPriceMinor: d2m(document.getElementById('kPrice').value),
           unitCostMinor: d2m(document.getElementById('kCost').value),
           weightLbs: parseFloat(document.getElementById('kWt').value) || 0,
           sortOrder: parseInt(document.getElementById('kSort').value, 10) || 0,
           active: !!document.getElementById('kActive').checked
         };
+        // Priced by margin: send the margin, so the server's exact figure is the one saved.
+        var mRaw = document.getElementById('kMargin').value.replace('%', '').trim();
+        if (kPricedBy === 'margin' && mRaw !== '') {
+          if (!validMargin(mRaw)) return showErr('Enter a margin from 0 to 99.99%.');
+          if (!body.unitCostMinor) return showErr('Enter the unit cost first \u2014 the price is worked out from it.');
+          body.marginPercent = Number(mRaw);
+        } else {
+          body.unitPriceMinor = d2m(document.getElementById('kPrice').value);
+        }
         var mfr = document.getElementById('kMfr').value.trim();
         if (mfr) body.manufacturer = mfr;
         if (qtyRaw !== '') body.defaultQty = parseInt(qtyRaw, 10) || 0;
@@ -1119,6 +1162,22 @@
         }
         close(); refreshCatalogList(user);
       });
+    var kCostEl = document.getElementById('kCost'), kMarginEl = document.getElementById('kMargin'), kPriceEl = document.getElementById('kPrice');
+    function kFromMargin() {
+      var mRaw = kMarginEl.value.replace('%', '').trim();
+      var cost = d2m(kCostEl.value);
+      if (validMargin(mRaw) && cost) { kPricedBy = 'margin'; kPriceEl.value = (priceForMargin(cost, Number(mRaw)) / 100).toFixed(2); }
+    }
+    if (kCostEl && kMarginEl && kPriceEl) {
+      kMarginEl.addEventListener('input', kFromMargin);
+      // A cost typed after the margin keeps the margin and reprices, while the form is open.
+      kCostEl.addEventListener('input', function () { if (kPricedBy === 'margin') kFromMargin(); });
+      kPriceEl.addEventListener('input', function () {
+        kPricedBy = 'price';
+        var cost = d2m(kCostEl.value), price = d2m(kPriceEl.value);
+        kMarginEl.value = price ? String(marginOf(price, cost)) : '';
+      });
+    }
   }
   /**
    * Import prices and catalog columns from a sheet. Two passes: the first is a
