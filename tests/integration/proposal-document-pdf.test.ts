@@ -12,9 +12,15 @@ import type { FastifyInstance } from 'fastify';
 const renderPdf = vi.fn(async () => Buffer.from('%PDF-proposal'));
 const appendPdfDocuments = vi.fn(async (pdf: Buffer) => Buffer.concat([pdf, Buffer.from('+ref')]));
 const resolveReferenceDocuments = vi.fn(async (keys: string[]) => keys.map(() => Buffer.from('')));
+const setPdfTitle = vi.fn(async (pdf: Buffer, _title: string) => pdf);
+const warmRenderer = vi.fn(async () => ({ ok: true, reused: false, ms: 5 }));
 
-vi.mock('../../src/render/pdf.js', () => ({ renderPdf, pdfAvailable: async () => true }));
-vi.mock('../../src/lib/pdfMerge.js', () => ({ appendPdfDocuments }));
+vi.mock('../../src/render/pdf.js', () => ({
+  renderPdf,
+  warmRenderer,
+  pdfAvailable: async () => true,
+}));
+vi.mock('../../src/lib/pdfMerge.js', () => ({ appendPdfDocuments, setPdfTitle }));
 vi.mock('../../src/proposals/referenceDocuments.js', () => ({ resolveReferenceDocuments }));
 vi.mock('../../src/lib/prisma.js', () => ({
   prisma: {
@@ -41,6 +47,8 @@ beforeEach(() => {
   renderPdf.mockClear();
   appendPdfDocuments.mockClear();
   resolveReferenceDocuments.mockClear();
+  setPdfTitle.mockClear();
+  warmRenderer.mockClear();
 });
 
 async function auth(role = 'SALES_REP'): Promise<Record<string, string>> {
@@ -102,6 +110,11 @@ describe('POST /render/proposals/document.pdf', () => {
       'attachment; filename="Firefly Autism-Summit Foundation System-P-2026-000160-09242026.pdf"',
     );
     expect(res.rawPayload.toString()).toBe('%PDF-proposal');
+    // Print prints this same PDF, and the print dialog names it after its Title.
+    expect(setPdfTitle).toHaveBeenCalledWith(
+      expect.any(Buffer),
+      'Firefly Autism-Summit Foundation System-P-2026-000160-09242026',
+    );
     expect(resolveReferenceDocuments).not.toHaveBeenCalled();
     expect(res.headers['x-reference-docs-missing']).toBeUndefined();
     await app.close();
@@ -147,6 +160,37 @@ describe('POST /render/proposals/document.pdf', () => {
     expect(res.statusCode).toBe(200);
     expect(res.rawPayload.toString()).toBe('%PDF-proposal');
     expect(res.headers['x-reference-docs-missing']).toBe('1');
+    await app.close();
+  });
+
+  it('stamps the Title after the reference documents are attached, so it survives the merge', async () => {
+    const app = await makeApp();
+    await app.inject({
+      method: 'POST',
+      url: URL,
+      headers: await auth(),
+      payload: { proposalHtml: '<p>x</p>', filename: 'Name', referenceDocKeys: ['w9'] },
+    });
+    expect(setPdfTitle).toHaveBeenCalledWith(Buffer.from('%PDF-proposal+ref'), 'Name');
+    await app.close();
+  });
+});
+
+describe('GET /render/warm', () => {
+  it('starts the renderer for a signed-in rep', async () => {
+    const app = await makeApp();
+    const res = await app.inject({ method: 'GET', url: '/render/warm', headers: await auth() });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, reused: false, ms: 5 });
+    expect(warmRenderer).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
+  it('refuses an unauthenticated request', async () => {
+    const app = await makeApp();
+    const res = await app.inject({ method: 'GET', url: '/render/warm' });
+    expect(res.statusCode).toBe(401);
+    expect(warmRenderer).not.toHaveBeenCalled();
     await app.close();
   });
 });
