@@ -176,21 +176,24 @@ export async function setPartActiveTx(
 }
 
 /**
- * The history row for a part that is BORN live. Parts created ACTIVE (the catalog
- * list's New part form, the tree import) never went through changeStatus, so they
- * had no status history — and "was it ever active" was answered from that history
- * alone, which is how a live part could be hard-deleted.
+ * The history row for a part that is BORN live, as a nested write for
+ * `product.create` — so it lands in the same statement as the product itself.
+ *
+ * Parts created ACTIVE (the catalog list's New part form, the tree import) never
+ * went through changeStatus, so they had no status history — and "was it ever
+ * active" was answered from that history alone, which is how a live part could be
+ * hard-deleted.
  */
-export async function recordCreatedStatus(
-  db: Db,
-  productId: string,
+export function bornStatusHistory(
   status: ProductStatus,
   userId: string,
-): Promise<void> {
-  if (status === 'DRAFT') return;
-  await db.productStatusHistory.create({
-    data: { productId, fromStatus: null, toStatus: status, reason: 'created', changedById: userId },
-  });
+): Pick<Prisma.ProductUncheckedCreateInput, 'statusHistory'> {
+  if (status === 'DRAFT') return {};
+  return {
+    statusHistory: {
+      create: { fromStatus: null, toStatus: status, reason: 'created', changedById: userId },
+    },
+  };
 }
 
 /**
@@ -211,18 +214,21 @@ export async function resolveCategoryRef(
     return c;
   }
   const name = (ref.name ?? '').trim();
-  const found = await db.productCategory.findMany({
+  const found = await db.productCategory.findFirst({
     where: { name },
     select: { id: true, name: true },
-    take: 2,
   });
-  if (!found.length) throw new ValidationError(`No product category named “${name}”`);
-  if (found.length > 1)
+  if (!found) throw new ValidationError(`No product category named “${name}”`);
+  const another = await db.productCategory.findFirst({
+    where: { name, NOT: { id: found.id } },
+    select: { id: true },
+  });
+  if (another && another.id !== found.id)
     throw new ValidationError(
       `More than one product category is named “${name}”, so the name alone cannot say ` +
         `which one is meant. Pick the category from the list (it sends the category's id).`,
     );
-  return found[0]!;
+  return found;
 }
 
 /**

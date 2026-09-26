@@ -22,11 +22,7 @@ vi.mock('../../src/lib/prisma.js', () => ({
     },
     product: { findUnique: async () => null },
     sku: { findUnique: async () => null },
-    productCategory: {
-      findFirst: async () => ({ id: 'cat-1' }),
-      // Resolved by name with an ambiguity check (resolveCategoryRef), so a list.
-      findMany: async () => [{ id: 'cat-1', name: 'Frames' }],
-    },
+    productCategory: { findFirst: async () => ({ id: 'cat-1' }) },
     manufacturer: { findFirst: async () => null, findMany: async () => [] },
     auditLog: { create: async () => ({}) },
     entityRevision: { create: async () => ({}) },
@@ -46,8 +42,6 @@ vi.mock('../../src/lib/prisma.js', () => ({
         },
         productSourcing: { create: async () => ({}) },
         productVersion: { create: async () => ({}) },
-        // A part created ACTIVE gets its status history row in the same transaction.
-        productStatusHistory: { create: async () => ({}) },
       }),
   },
 }));

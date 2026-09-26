@@ -6,7 +6,7 @@ import { Permission } from '../authz/permissions.js';
 import {
   deletePartRecords,
   partDeletion,
-  recordCreatedStatus,
+  bornStatusHistory,
   resolveCategoryRef,
   setPartActiveTx,
 } from '../catalog/service.js';
@@ -421,6 +421,9 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
       }
     }
 
+    // ACTIVE unless told otherwise: a part created from this form is one somebody
+    // intends to quote. DRAFT would hide it from the builder with no hint why.
+    const status = d.active === false ? 'INACTIVE' : 'ACTIVE';
     const created = await prisma.$transaction(async (tx) => {
       const product = await tx.product.create({
         data: {
@@ -429,14 +432,12 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
           categoryId: category.id,
           sortOrder: d.sortOrder ?? 0,
           ...(d.defaultQty != null ? { defaultQuantity: d.defaultQty } : {}),
-          // ACTIVE unless told otherwise: a part created from this form is one somebody
-          // intends to quote. DRAFT would hide it from the builder with no hint why.
-          status: d.active === false ? 'INACTIVE' : 'ACTIVE',
+          status,
           createdById: req.user!.sub,
+          // Born live, so it has a status history from the start — see bornStatusHistory.
+          ...bornStatusHistory(status, req.user!.sub),
         },
       });
-      // Born live, so it has a status history from the start — see recordCreatedStatus.
-      await recordCreatedStatus(tx, product.id, product.status, req.user!.sub);
 
       const sku = await tx.sku.create({
         data: {

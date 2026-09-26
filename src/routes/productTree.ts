@@ -11,7 +11,7 @@ import {
   changeStatusTx,
   deriveTiers,
   descendantIds,
-  recordCreatedStatus,
+  bornStatusHistory,
   resolveCategoryTier,
   wouldCreateCycle,
 } from '../catalog/service.js';
@@ -998,9 +998,9 @@ export function registerProductTreeRoutes(app: FastifyInstance): void {
                 sortOrder: p.sortOrder ?? 0,
                 proposalDescription: p.proposalDescription || null,
                 createdById: req.user!.sub,
+                ...bornStatusHistory(status ?? 'DRAFT', req.user!.sub),
               },
             });
-            await recordCreatedStatus(tx, np.id, np.status, req.user!.sub);
             prodBySku.set(np.sku, {
               id: np.id,
               sku: np.sku,
