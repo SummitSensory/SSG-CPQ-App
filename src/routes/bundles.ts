@@ -202,6 +202,19 @@ export function registerBundleRoutes(app: FastifyInstance): void {
       select: { id: true, kind: true, sku: true },
     });
     if (!bundle) throw new NotFoundError('Bundle not found');
+    // Only a bundle's contents are edited here. This used to accept any product id and
+    // quietly flip its kind to BUNDLE — including a part that is itself inside another
+    // bundle, which made a nested bundle the one-level rule below exists to prevent.
+    if (bundle.kind !== 'BUNDLE')
+      throw new ConflictError(`“${bundle.sku}” is not a bundle. Create a bundle first.`);
+    const insideAnother = await prisma.productRelation.findFirst({
+      where: { childId: id, type: 'BUNDLE_ITEM' },
+      select: { parent: { select: { sku: true } } },
+    });
+    if (insideAnother)
+      throw new ConflictError(
+        `“${bundle.sku}” is itself a component of “${insideAnother.parent.sku}”, so it cannot hold parts of its own — bundles do not nest.`,
+      );
     // Read the component list BEFORE it is replaced. A bundle is rewritten wholesale
     // on every save, so without this the previous contents are simply gone — which is
     // exactly the case where someone needs to know what a part was dropped from.
@@ -219,7 +232,7 @@ export function registerBundleRoutes(app: FastifyInstance): void {
       throw new ValidationError('The same part is listed twice — set its quantity instead');
     const found = await prisma.product.findMany({
       where: { id: { in: ids } },
-      select: { id: true, kind: true, name: true },
+      select: { id: true, kind: true, name: true, sku: true },
     });
     if (found.length !== ids.length)
       throw new ValidationError('One of those parts no longer exists');
@@ -244,8 +257,6 @@ export function registerBundleRoutes(app: FastifyInstance): void {
           },
         }),
       ),
-      // A bundle is only a bundle once it is marked one.
-      prisma.product.update({ where: { id }, data: { kind: 'BUNDLE' } }),
     ]);
     await recordAudit({
       actorId: req.user!.sub,
@@ -255,6 +266,9 @@ export function registerBundleRoutes(app: FastifyInstance): void {
       details: { count: comps.length },
     });
     const nameById = new Map(found.map((p) => [p.id, p.name]));
+    // The part number, not the product id: the "before" side already records sku, and
+    // an id in the history is unreadable and does not survive the part being deleted.
+    const skuById = new Map(found.map((p) => [p.id, p.sku]));
     await recordRevision({
       entity: 'ProductBundle',
       entityId: id,
@@ -270,7 +284,7 @@ export function registerBundleRoutes(app: FastifyInstance): void {
       },
       after: {
         components: comps.map((cp) => ({
-          sku: cp.productId,
+          sku: skuById.get(cp.productId) ?? cp.productId,
           name: nameById.get(cp.productId) ?? '',
           quantity: cp.quantity,
         })),
@@ -287,9 +301,20 @@ export function registerBundleRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const bundle = await prisma.product.findUnique({
       where: { id },
-      select: { id: true, sku: true, status: true },
+      select: { id: true, sku: true, status: true, kind: true },
     });
     if (!bundle) throw new NotFoundError('Bundle not found');
+    // This route deletes a bundle wrapper, nothing else. It used to delete any product
+    // id it was given, skipping the catalog's own delete rules and orphaning the Sku.
+    if (bundle.kind !== 'BUNDLE')
+      throw new ConflictError(
+        `“${bundle.sku}” is not a bundle. Delete catalog parts from the catalog list.`,
+      );
+    const listedIn = await prisma.productRelation.count({ where: { childId: id } });
+    if (listedIn)
+      throw new ConflictError(
+        `“${bundle.sku}” is listed as a part of another product. Remove it from there first.`,
+      );
     const versions = await prisma.proposalVersion.findMany({
       select: { items: true, proposal: { select: { number: true } } },
     });
@@ -306,8 +331,13 @@ export function registerBundleRoutes(app: FastifyInstance): void {
           .join(', ')}). Deactivate it instead.`,
       );
     }
+    // A priced row for the bundle's part number (if one was ever made) goes with it, so
+    // no Sku is left behind with nothing in the tree to own it.
     await prisma.$transaction([
       prisma.productRelation.deleteMany({ where: { parentId: id, type: 'BUNDLE_ITEM' } }),
+      prisma.sku.deleteMany({ where: { part: bundle.sku } }),
+      prisma.productCost.deleteMany({ where: { productId: id } }),
+      prisma.productSourcing.deleteMany({ where: { productId: id } }),
       prisma.product.delete({ where: { id } }),
     ]);
     await recordAudit({

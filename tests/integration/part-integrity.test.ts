@@ -289,6 +289,37 @@ describe('catalog integrity rules', () => {
       );
       expect(rules(r)).toEqual(['active-mismatch']);
     });
+
+    it('warns (not blocks) when a part is retired in the tree but still active in the price list', async () => {
+      // What every status change made before changeStatusTx carried the flag left
+      // behind. No longer quotable — defaults and the item list also require an ACTIVE
+      // Product — so a warning, and production data is expected to hold some.
+      for (const status of ['INACTIVE', 'ARCHIVED', 'DRAFT']) {
+        const r = await checkPartIntegrity(
+          db({
+            products: [product('P-1', { status })],
+            skus: [priced('P-1', { active: true })],
+            sourcing: [link('P-1', 'Resilite')],
+            categories: cats,
+          }),
+        );
+        expect(rules(r)).toEqual(['active-mismatch']);
+        expect(r.blocking).toBe(0);
+        expect(r.violations[0]!.detail).toContain(status);
+      }
+    });
+
+    it('passes a retired part whose priced record is retired too', async () => {
+      const r = await checkPartIntegrity(
+        db({
+          products: [product('P-1', { status: 'ARCHIVED' })],
+          skus: [priced('P-1', { active: false })],
+          sourcing: [link('P-1', 'Resilite')],
+          categories: cats,
+        }),
+      );
+      expect(r.violations).toEqual([]);
+    });
   });
 
   it('reports every violation on a part, not just the first', async () => {

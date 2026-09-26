@@ -12,7 +12,12 @@ import {
   StatusEnum,
 } from '../catalog/validation.js';
 import { validateImportBatch, ImportEnvelope } from '../catalog/import.js';
-import { changeStatus, assertDeletable } from '../catalog/service.js';
+import {
+  changeStatus,
+  deletePartRecords,
+  partDeletion,
+  resolveCategoryTier,
+} from '../catalog/service.js';
 import { ListQuery, buildOrderBy, paginate } from '../crm/query.js';
 import { recordRevision, productSnapshot } from '../lib/revisions.js';
 
@@ -28,7 +33,17 @@ export function registerCatalogRoutes(app: FastifyInstance): void {
     if (!parsed.success) throw new ValidationError(parsed.error.message);
     const exists = await prisma.productCategory.findUnique({ where: { slug: parsed.data.slug } });
     if (exists) throw new ConflictError('Category slug already exists');
-    const cat = await prisma.productCategory.create({ data: parsed.data });
+    // The tier is where the node sits, so it comes from the parent: tier 1 at the top,
+    // parent + 1 below, never deeper than 4. Sending a parent used to store tier 1
+    // regardless, and a child of a tier-4 node was accepted as a fifth level.
+    const parent = parsed.data.parentId
+      ? await prisma.productCategory.findUnique({ where: { id: parsed.data.parentId } })
+      : null;
+    if (parsed.data.parentId && !parent) throw new ValidationError('Parent category not found');
+    const placed = resolveCategoryTier(parsed.data, parent);
+    const cat = await prisma.productCategory.create({
+      data: { ...parsed.data, tierLevel: placed.tierLevel, productLineId: placed.productLineId },
+    });
     await recordAudit({
       actorId: req.user!.sub,
       action: 'catalog.category.create',
@@ -158,31 +173,37 @@ export function registerCatalogRoutes(app: FastifyInstance): void {
     const current = await prisma.product.findUnique({ where: { id } });
     if (!current) throw new NotFoundError();
     const { activeFrom, activeTo, notes, ...rest } = parsed.data;
-    const product = await prisma.product.update({
-      where: { id },
-      data: {
-        ...rest,
-        ...(activeFrom === undefined ? {} : { activeFrom: activeFrom ?? null }),
-        ...(activeTo === undefined ? {} : { activeTo: activeTo ?? null }),
-        version: current.version + 1,
-      },
-    });
-    if (notes) {
-      await prisma.productNote.deleteMany({ where: { productId: id } });
-      if (notes.length) {
-        await prisma.productNote.createMany({
-          data: notes.map((n, i) => ({ productId: id, text: n.text, sortOrder: i })),
-        });
+    // One transaction: the field edit, the notes (replaced wholesale) and the version
+    // row either all land or none do — a failure after the notes were deleted used to
+    // leave a product with its notes gone and no version recording the edit.
+    const product = await prisma.$transaction(async (tx) => {
+      const updated = await tx.product.update({
+        where: { id },
+        data: {
+          ...rest,
+          ...(activeFrom === undefined ? {} : { activeFrom: activeFrom ?? null }),
+          ...(activeTo === undefined ? {} : { activeTo: activeTo ?? null }),
+          version: current.version + 1,
+        },
+      });
+      if (notes) {
+        await tx.productNote.deleteMany({ where: { productId: id } });
+        if (notes.length) {
+          await tx.productNote.createMany({
+            data: notes.map((n, i) => ({ productId: id, text: n.text, sortOrder: i })),
+          });
+        }
       }
-    }
-    await prisma.productVersion.create({
-      data: {
-        productId: id,
-        version: product.version,
-        snapshot: product as object,
-        changedById: req.user!.sub,
-        changeNote: 'edited',
-      },
+      await tx.productVersion.create({
+        data: {
+          productId: id,
+          version: updated.version,
+          snapshot: updated as object,
+          changedById: req.user!.sub,
+          changeNote: 'edited',
+        },
+      });
+      return updated;
     });
     await recordAudit({
       actorId: req.user!.sub,
@@ -220,18 +241,23 @@ export function registerCatalogRoutes(app: FastifyInstance): void {
     return product;
   });
 
-  // Hard delete is guarded; ever-active or referenced products must be archived.
+  // Hard delete is guarded; ever-active, proposal-referenced or component products
+  // must be archived. The same rules and the same delete as DELETE
+  // /catalog/items/:part: this route used to skip the proposal check and delete only
+  // the Product, leaving its Sku (and cost history) behind as an orphaned priced row.
   app.delete('/catalog/products/:id', admin, async (req, reply) => {
     const { id } = req.params as { id: string };
-    const product = await prisma.product.findUnique({ where: { id } });
+    const product = await prisma.product.findUnique({ where: { id }, select: { sku: true } });
     if (!product) throw new NotFoundError();
-    await assertDeletable(id);
-    await prisma.product.delete({ where: { id } });
+    const d = await partDeletion(prisma, product.sku);
+    if (d.reason) throw new ConflictError(`Product cannot be deleted. ${d.reason}`);
+    await prisma.$transaction((tx) => deletePartRecords(tx, { product: d.product, sku: d.sku }));
     await recordAudit({
       actorId: req.user!.sub,
       action: 'catalog.product.delete',
       entity: 'Product',
       entityId: id,
+      details: { sku: product.sku, hadSku: !!d.sku },
     });
     return reply.status(204).send();
   });

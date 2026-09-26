@@ -90,6 +90,17 @@ function clean<T extends Record<string, unknown>>(d: T): T {
   return out as T;
 }
 
+/**
+ * Priced parts that name this vendor in any of the three places a Sku can: its own
+ * vendor, the vendor a free-issue part ships to, or the second vendor it also needs a
+ * Bill of Materials line with. All three are read by name, so all three block a delete.
+ */
+function skuNamesVendor(name: string) {
+  return {
+    OR: [{ manufacturer: name }, { freeIssueVendor: name }, { secondaryVendor: name }],
+  };
+}
+
 export function registerManufacturerRoutes(app: FastifyInstance): void {
   const read = { preHandler: requirePermission(Permission.CATALOG_READ) };
   const admin = { preHandler: requirePermission(Permission.PRODUCTS_ADMIN) };
@@ -559,7 +570,19 @@ export function registerManufacturerRoutes(app: FastifyInstance): void {
       );
       const renameable = stale.filter((s) => !clashing.has(s.orderId));
 
-      const [lines, purchased] = await prisma.$transaction([
+      const [freeIssue, secondary, lines, purchased] = await prisma.$transaction([
+        // The two OTHER vendor names a Sku carries, which the Bill of Materials build
+        // (src/handoff/bomBuild.ts) reads as-is: free-issue parts ship to this vendor,
+        // secondary-vendor parts get a line on its sheet. Left behind, a rename silently
+        // dropped those lines from the renamed vendor's BOM.
+        prisma.sku.updateMany({
+          where: { freeIssueVendor: current.name },
+          data: { freeIssueVendor: d.name },
+        }),
+        prisma.sku.updateMany({
+          where: { secondaryVendor: current.name },
+          data: { secondaryVendor: d.name },
+        }),
         prisma.procurementLine.updateMany({
           where: { vendor: current.name },
           data: { vendor: d.name },
@@ -578,6 +601,8 @@ export function registerManufacturerRoutes(app: FastifyInstance): void {
         from: current.name,
         to: d.name,
         skus: skus.count,
+        freeIssueSkus: freeIssue.count,
+        secondaryVendorSkus: secondary.count,
         orderLines: lines.count,
         freeIssueLines: purchased.count,
         bomSections: renameable.length,
@@ -605,7 +630,7 @@ export function registerManufacturerRoutes(app: FastifyInstance): void {
     if (!m) throw new NotFoundError('Manufacturer not found');
     const [sourcing, skus, procurement] = await Promise.all([
       prisma.productSourcing.count({ where: { manufacturerId: id } }),
-      prisma.sku.count({ where: { manufacturer: m.name } }),
+      prisma.sku.count({ where: skuNamesVendor(m.name) }),
       prisma.procurementLine.count({ where: { vendor: m.name } }),
     ]);
     const deletable = sourcing === 0 && skus === 0 && procurement === 0;
@@ -628,7 +653,7 @@ export function registerManufacturerRoutes(app: FastifyInstance): void {
     if (!m) throw new NotFoundError('Manufacturer not found');
     const [sourcing, skus, procurement] = await Promise.all([
       prisma.productSourcing.count({ where: { manufacturerId: id } }),
-      prisma.sku.count({ where: { manufacturer: m.name } }),
+      prisma.sku.count({ where: skuNamesVendor(m.name) }),
       prisma.procurementLine.count({ where: { vendor: m.name } }),
     ]);
     if (sourcing || skus || procurement) {

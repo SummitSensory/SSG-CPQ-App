@@ -8,6 +8,13 @@ import { ValidationError, ConflictError, NotFoundError } from '../lib/errors.js'
 import { reassignSkuVendor } from '../handoff/vendorReassign.js';
 import { syncPartSourcing } from '../catalog/partVendor.js';
 import { recordRevision, skuSnapshot } from '../lib/revisions.js';
+import {
+  deletePartRecords,
+  partDeletion,
+  recordCreatedStatus,
+  resolveCategoryRef,
+  setPartActiveTx,
+} from '../catalog/service.js';
 
 /**
  * The single catalog list.
@@ -107,6 +114,8 @@ const ItemPatch = z.object({
   requiresPowderColor: z.boolean().optional(),
   /** Packaging bag the part ships in, e.g. "Bag 7". Blank clears it. */
   packagingBag: z.string().trim().max(60).nullish(),
+  /** The tree section by id — names are not unique. Wins over `category` when sent. */
+  categoryId: z.string().min(1).optional(),
 });
 
 export interface CatalogItem {
@@ -224,6 +233,10 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
           existing.weightLbs = Math.round((p.weightOz / 16) * 1000) / 1000;
         existing.productId = p.id;
         existing.productStatus = p.status;
+        // Quotable only when BOTH halves say so. The builder's part picker keeps rows
+        // marked active, and a part archived in the tree before status changes carried
+        // to the Sku still has an active priced row.
+        existing.active = existing.active && p.status === 'ACTIVE';
       } else {
         byPart.set(p.sku, {
           part: p.sku,
@@ -326,6 +339,8 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
     name: z.string().trim().min(1).max(300),
     /** An existing ProductCategory name. Required: it is Product.categoryId, non-null. */
     category: z.string().trim().min(1).max(200),
+    /** That category's id. Names are not unique, so the id wins when both are sent. */
+    categoryId: z.string().min(1).optional(),
     /** An existing Manufacturer name, or blank for "not sourced yet". */
     manufacturer: z.string().trim().max(200).optional(),
     unitPriceMinor: z.number().int().nonnegative().optional(),
@@ -375,11 +390,10 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
         `Part number ${part} already exists in the catalog. Edit it from the catalog list instead.`,
       );
 
-    const category = await prisma.productCategory.findFirst({
-      where: { name: d.category },
-      select: { id: true },
+    const category = await resolveCategoryRef(prisma, {
+      categoryId: d.categoryId,
+      name: d.category,
     });
-    if (!category) throw new ValidationError(`No product category named “${d.category}”`);
 
     const wantsVendor = !!(d.manufacturer && d.manufacturer.trim());
     let manufacturer: { id: string; name: string } | null = null;
@@ -421,6 +435,8 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
           createdById: req.user!.sub,
         },
       });
+      // Born live, so it has a status history from the start — see recordCreatedStatus.
+      await recordCreatedStatus(tx, product.id, product.status, req.user!.sub);
 
       const sku = await tx.sku.create({
         data: {
@@ -516,12 +532,20 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
       d.packagingBag !== undefined ||
       (d.name !== undefined && !product) ||
       (d.category !== undefined && !product);
+    // A move the state machine refuses (ARCHIVED -> ACTIVE) is refused before any
+    // field is written, not halfway through the save.
+    if (d.active === true && product && product.status === 'ARCHIVED')
+      throw new ConflictError(
+        `${part} is archived, and an archived part cannot be made active again. Create a new part instead.`,
+      );
     if (!sku && needsSku) {
       sku = await prisma.sku.create({
         data: {
           part,
           description: d.name || product?.name || part,
           category: (!product && d.category) || 'OTHER',
+          // A new priced row starts out agreeing with the catalog status.
+          active: !product || product.status === 'ACTIVE',
         },
       });
     }
@@ -532,7 +556,7 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
       if (sku) await prisma.sku.update({ where: { id: sku.id }, data: { description: d.name } });
     }
 
-    if (d.category !== undefined) {
+    if (d.category !== undefined || d.categoryId !== undefined) {
       /*
        * The tree position, and ONLY the tree position, when a Product exists.
        *
@@ -547,11 +571,13 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
        * and a part with only a priced row uses `Sku.category` as the nearest thing it has
        * to a classification.
        */
-      if (product && d.category) {
-        const cat = await prisma.productCategory.findFirst({ where: { name: d.category } });
-        if (!cat) throw new ValidationError(`No product category named “${d.category}”`);
+      if (product && (d.categoryId || d.category)) {
+        const cat = await resolveCategoryRef(prisma, {
+          categoryId: d.categoryId,
+          name: d.category,
+        });
         await prisma.product.update({ where: { id: product.id }, data: { categoryId: cat.id } });
-      } else if (sku) {
+      } else if (sku && d.category !== undefined) {
         await prisma.sku.update({
           where: { id: sku.id },
           data: { category: d.category || 'OTHER' },
@@ -655,7 +681,9 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
       if (d.unitCostMinor !== undefined) money.unitCostMinor = d.unitCostMinor;
       if (d.weightLbs !== undefined) money.weightLbs = d.weightLbs;
       if (d.proposalGroup !== undefined) money.proposalGroup = d.proposalGroup || null;
-      if (d.active !== undefined) money.active = d.active;
+      // With a catalog record, `active` is a status change and goes through the state
+      // machine below; only a priced-only row has a bare flag to set.
+      if (d.active !== undefined && !product) money.active = d.active;
       if (d.overrideAllowed !== undefined) money.overrideAllowed = d.overrideAllowed;
       if (d.defaultQty !== undefined) money.defaultQty = d.defaultQty;
       if (d.freightMinor !== undefined) money.freightMinor = d.freightMinor;
@@ -674,6 +702,12 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
       if (d.packagingBag !== undefined) money.packagingBag = (d.packagingBag || '').trim() || null;
       if (Object.keys(money).length)
         await prisma.sku.update({ where: { id: sku.id }, data: money });
+    }
+    if (d.active !== undefined && product) {
+      const to = d.active;
+      await prisma.$transaction((tx) =>
+        setPartActiveTx(tx, product, part, to, req.user!.sub, 'catalog list'),
+      );
     }
 
     // A cost edit also lands in the dated cost history, so pricing/service.ts and
@@ -713,23 +747,6 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
     });
     return { ok: true, part };
   });
-
-  /**
-   * How many saved proposals reference this part. Proposal items are JSON, so this
-   * scans them — the volume is small and the answer is what makes a delete safe.
-   */
-  async function proposalUsage(part: string): Promise<{ count: number; numbers: string[] }> {
-    const versions = await prisma.proposalVersion.findMany({
-      select: { items: true, proposal: { select: { number: true } } },
-    });
-    const numbers = new Set<string>();
-    for (const v of versions) {
-      const items = Array.isArray(v.items) ? (v.items as { sku?: string; name?: string }[]) : [];
-      if (items.some((i) => i && (i.sku === part || i.name === part)))
-        numbers.add(v.proposal.number);
-    }
-    return { count: numbers.size, numbers: [...numbers].slice(0, 5) };
-  }
 
   /**
    * Part → its builder defaults, for the proposal builder to apply on add. A small
@@ -867,6 +884,9 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
     for (const s of rows) {
       if (!s.active) continue;
       const p = productByPart.get(s.part);
+      // The catalog status decides too: a part deactivated or archived in the tree is
+      // not quotable, whatever its priced row still says.
+      if (p && p.status !== 'ACTIVE') continue;
       const entry: Entry = {};
       if (s.defaultQty != null) entry.qty = s.defaultQty;
       if (s.freightMinor != null) entry.freightMinor = s.freightMinor;
@@ -1007,69 +1027,35 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
   /** What deleting this part would remove, and whether it is safe. */
   app.get('/catalog/items/:part/usage', read, async (req) => {
     const { part } = req.params as { part: string };
-    const [product, sku, usage] = await Promise.all([
-      prisma.product.findUnique({ where: { sku: part }, select: { id: true, status: true } }),
-      prisma.sku.findUnique({ where: { part }, select: { id: true, active: true } }),
-      proposalUsage(part),
-    ]);
-    const everActive = product
-      ? (await prisma.productStatusHistory.count({
-          where: { productId: product.id, toStatus: 'ACTIVE' },
-        })) > 0
-      : false;
+    const d = await partDeletion(prisma, part);
+    const { product, sku } = d;
     return {
       part,
       hasProduct: !!product,
       hasSku: !!sku,
       productStatus: product?.status ?? null,
-      active: sku ? sku.active : product?.status === 'ACTIVE',
-      proposalCount: usage.count,
-      proposalNumbers: usage.numbers,
-      deletable: usage.count === 0 && !everActive,
-      reason:
-        usage.count > 0
-          ? `Used on ${usage.count} proposal${usage.count === 1 ? '' : 's'} (${usage.numbers.join(', ')}${usage.count > usage.numbers.length ? '…' : ''}) — deactivate it instead so historical proposals keep their pricing.`
-          : everActive
-            ? 'This product has been active, so its history is kept — deactivate or archive it instead.'
-            : null,
+      active: product ? product.status === 'ACTIVE' && (!sku || sku.active) : !!sku?.active,
+      proposalCount: d.proposalCount,
+      proposalNumbers: d.proposalNumbers,
+      deletable: !d.reason,
+      reason: d.reason,
     };
   });
 
   /**
    * Delete a catalog part outright — both the Product record and the flat Sku row.
-   * Refused when a proposal references the part or the product was ever ACTIVE:
-   * deleting then would silently change historical documents. Deactivate instead.
+   * Refused when a proposal references the part, the product was ever live, or
+   * another product lists it as a part: deleting then would silently change
+   * historical documents. Deactivate instead. The same rules, and the same delete,
+   * as DELETE /catalog/products/:id — see partDeletion in src/catalog/service.ts.
    */
   app.delete('/catalog/items/:part', admin, async (req, reply) => {
     const { part } = req.params as { part: string };
-    const [product, sku, usage] = await Promise.all([
-      prisma.product.findUnique({ where: { sku: part } }),
-      prisma.sku.findUnique({ where: { part } }),
-      proposalUsage(part),
-    ]);
+    const d = await partDeletion(prisma, part);
+    const { product, sku } = d;
     if (!product && !sku) throw new NotFoundError('No catalog part with that number');
-    if (usage.count > 0) {
-      throw new ConflictError(
-        `“${part}” is used on ${usage.count} proposal${usage.count === 1 ? '' : 's'} (${usage.numbers.join(', ')}). Deactivate it instead — deleting would change what those proposals priced.`,
-      );
-    }
-    if (product) {
-      const everActive = await prisma.productStatusHistory.count({
-        where: { productId: product.id, toStatus: 'ACTIVE' },
-      });
-      if (everActive > 0)
-        throw new ConflictError(
-          `“${part}” has been an active product, so its record is kept for history. Archive or deactivate it instead.`,
-        );
-    }
-    await prisma.$transaction(async (tx) => {
-      if (sku) await tx.sku.delete({ where: { id: sku.id } });
-      if (product) {
-        await tx.productCost.deleteMany({ where: { productId: product.id } });
-        await tx.productSourcing.deleteMany({ where: { productId: product.id } });
-        await tx.product.delete({ where: { id: product.id } });
-      }
-    });
+    if (d.reason) throw new ConflictError(`“${part}”: ${d.reason}`);
+    await prisma.$transaction((tx) => deletePartRecords(tx, { product, sku }));
     await recordAudit({
       actorId: req.user!.sub,
       action: 'catalog.item.delete',
@@ -1085,38 +1071,30 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
    * Deactivate / reactivate a part in one call: the flat Sku row's `active` flag and
    * the Product status workflow move together, so an inactive part stops being
    * offered in the builder while every existing proposal keeps its pricing.
+   *
+   * The status half goes through the state machine (setPartActiveTx), in one
+   * transaction with the Sku: this used to write the status directly, so an
+   * ARCHIVED part could be reactivated and a DRAFT one made INACTIVE.
    */
   app.post('/catalog/items/:part/active', admin, async (req) => {
     const { part } = req.params as { part: string };
     const body = (req.body || {}) as { active?: boolean };
     if (typeof body.active !== 'boolean') throw new ValidationError('active must be true or false');
+    const active = body.active;
     const [product, sku] = await Promise.all([
       prisma.product.findUnique({ where: { sku: part } }),
       prisma.sku.findUnique({ where: { part } }),
     ]);
     if (!product && !sku) throw new NotFoundError('No catalog part with that number');
-    if (sku) await prisma.sku.update({ where: { id: sku.id }, data: { active: body.active } });
-    if (product) {
-      const to = body.active ? 'ACTIVE' : 'INACTIVE';
-      if (product.status !== to) {
-        await prisma.product.update({ where: { id: product.id }, data: { status: to } });
-        await prisma.productStatusHistory.create({
-          data: {
-            productId: product.id,
-            fromStatus: product.status,
-            toStatus: to,
-            reason: 'catalog list',
-            changedById: req.user!.sub,
-          },
-        });
-      }
-    }
+    const status = await prisma.$transaction((tx) =>
+      setPartActiveTx(tx, product, part, active, req.user!.sub, 'catalog list'),
+    );
     await recordAudit({
       actorId: req.user!.sub,
-      action: body.active ? 'catalog.item.activate' : 'catalog.item.deactivate',
+      action: active ? 'catalog.item.activate' : 'catalog.item.deactivate',
       entity: 'Sku',
       entityId: part,
     });
-    return { part, active: body.active };
+    return { part, active, productStatus: status };
   });
 }

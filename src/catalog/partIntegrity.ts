@@ -244,6 +244,27 @@ export async function checkPartIntegrity(prisma: PrismaClient): Promise<Integrit
         part: p.sku,
         detail: 'live in the tree but inactive in the price list',
       });
+    } else if (p.status !== 'ACTIVE' && sku.active) {
+      /*
+       * The reverse, and the one that used to matter: status changes wrote only the
+       * Product, so a part archived or deactivated in the tree kept an active priced
+       * row, and `/catalog/items/defaults` — which read only `Sku.active` — kept
+       * offering it to the builder at its old price.
+       *
+       * A WARNING, not blocking, and deliberately so. Every status change made before
+       * `changeStatusTx` started carrying the flag to the Sku left exactly this state
+       * behind, so production is expected to hold some; a blocking rule would fail
+       * `pnpm check` on history rather than on anything new. It is also no longer
+       * quotable: both the defaults endpoint and `GET /catalog/items` now require the
+       * Product to be ACTIVE as well. "Deactivate" on the part in the catalog list
+       * brings the Sku into line without changing the status.
+       */
+      v.push({
+        rule: 'active-mismatch',
+        severity: 'warning',
+        part: p.sku,
+        detail: `${p.status} in the tree but still active in the price list`,
+      });
     }
   }
 
