@@ -6,6 +6,16 @@ import { Permission } from '../authz/permissions.js';
 import { recordAudit } from '../lib/audit.js';
 import { ValidationError, ConflictError, NotFoundError } from '../lib/errors.js';
 import { syncPartSourcing } from '../catalog/partVendor.js';
+import {
+  canTransition,
+  changeStatusTx,
+  deriveTiers,
+  descendantIds,
+  bornStatusHistory,
+  resolveCategoryTier,
+  wouldCreateCycle,
+} from '../catalog/service.js';
+import type { ProductKind, ProductStatus } from '@prisma/client';
 
 /**
  * The product tree: category names, the order things appear in, and a round-trip
@@ -88,6 +98,26 @@ function parseWeight(raw: unknown): Parsed {
   return { ok: true, value: n };
 }
 
+/**
+ * A yes/no cell. `z.coerce.boolean()` is `Boolean(value)`, so the string "false" — which
+ * is exactly what the export writes for a hidden category — came back as true, and
+ * re-importing an exported file un-hid every hidden category. A blank cell is "leave it
+ * alone", like every other column here; anything unrecognisable is refused.
+ */
+const BoolCell = z.preprocess(
+  (v) => {
+    if (typeof v === 'string') {
+      const s = v.trim().toLowerCase();
+      if (!s) return undefined;
+      if (['true', 'yes', 'y', '1'].includes(s)) return true;
+      if (['false', 'no', 'n', '0'].includes(s)) return false;
+    }
+    if (typeof v === 'number') return v === 1 ? true : v === 0 ? false : v;
+    return v;
+  },
+  z.boolean({ invalid_type_error: 'isActive must be true or false' }).optional(),
+);
+
 const ImportBody = z.object({
   dryRun: z.boolean().default(true),
   missingAction: z.enum(['leave', 'deactivate']).default('leave'),
@@ -99,7 +129,7 @@ const ImportBody = z.object({
         parentSlug: z.string().trim().nullish(),
         tierLevel: z.coerce.number().int().min(1).max(4).optional(),
         sortOrder: z.coerce.number().int().optional(),
-        isActive: z.coerce.boolean().optional(),
+        isActive: BoolCell,
       }),
     )
     .default([]),
@@ -136,8 +166,28 @@ const ImportBody = z.object({
     .default([]),
 });
 
-const KINDS = ['PRODUCT', 'VARIANT', 'COMPONENT', 'BUNDLE', 'ACCESSORY', 'SERVICE', 'FREIGHT'];
-const STATUSES = ['DRAFT', 'ACTIVE', 'INACTIVE', 'ARCHIVED'];
+/*
+ * Exactly the ProductKind / ProductStatus enums in schema.prisma. 'FREIGHT' used to be
+ * listed here without being a ProductKind, so a row saying FREIGHT passed validation and
+ * then failed the database write halfway through the commit.
+ */
+const KINDS: readonly ProductKind[] = [
+  'PRODUCT',
+  'VARIANT',
+  'COMPONENT',
+  'BUNDLE',
+  'ACCESSORY',
+  'SERVICE',
+];
+const STATUSES: readonly ProductStatus[] = ['DRAFT', 'ACTIVE', 'INACTIVE', 'ARCHIVED'];
+const asKind = (v: string | undefined): ProductKind | undefined => {
+  const u = (v ?? '').trim().toUpperCase();
+  return KINDS.find((k) => k === u);
+};
+const asStatus = (v: string | undefined): ProductStatus | undefined => {
+  const u = (v ?? '').trim().toUpperCase();
+  return STATUSES.find((s) => s === u);
+};
 
 export function registerProductTreeRoutes(app: FastifyInstance): void {
   const read = { preHandler: requirePermission(Permission.CATALOG_READ) };
@@ -153,30 +203,101 @@ export function registerProductTreeRoutes(app: FastifyInstance): void {
     if (!current) throw new NotFoundError('Category not found');
     const d = parsed.data;
 
-    // A category cannot become its own ancestor, or the tree stops terminating.
-    if (d.parentId) {
-      let walk: string | null = d.parentId;
-      const seen = new Set<string>([id]);
-      while (walk) {
-        if (seen.has(walk)) throw new ConflictError('That would make the category its own parent');
-        seen.add(walk);
-        const p: { parentId: string | null } | null = await prisma.productCategory.findUnique({
-          where: { id: walk },
-          select: { parentId: true },
-        });
-        walk = p?.parentId ?? null;
-      }
+    /*
+     * Placement — parent, tier and product line — is validated as one thing, because
+     * it is one thing: the tier is the depth under the parent, and a subtree belongs to
+     * its parent's line. Only when the request touches placement; a rename of a node
+     * whose stored tier predates these rules is not refused for it.
+     */
+    const placementTouched =
+      d.parentId !== undefined || d.tierLevel !== undefined || d.productLineId !== undefined;
+    let placement: {
+      parentId: string | null;
+      tierLevel: number;
+      productLineId: string | null;
+      descendants: Array<{ id: string; tierLevel: number }>;
+      lineChanged: boolean;
+    } | null = null;
+    if (placementTouched) {
+      const all = await prisma.productCategory.findMany({
+        select: { id: true, parentId: true, tierLevel: true, productLineId: true },
+      });
+      const parentId = d.parentId !== undefined ? d.parentId || null : current.parentId;
+      // A category cannot become its own ancestor, or the tree stops terminating.
+      if (parentId && wouldCreateCycle(all, id, parentId))
+        throw new ConflictError('That would make the category its own parent');
+      const parent = parentId
+        ? await prisma.productCategory.findUnique({ where: { id: parentId } })
+        : null;
+      if (parentId && !parent) throw new ValidationError('Parent category not found');
+      // An explicit line wins; otherwise a node under a lined parent takes the
+      // parent's, and any other node keeps its own.
+      const lineIn =
+        d.productLineId !== undefined
+          ? d.productLineId || undefined
+          : parent?.productLineId
+            ? undefined
+            : (current.productLineId ?? undefined);
+      const placed = resolveCategoryTier(
+        {
+          ...(d.tierLevel !== undefined ? { tierLevel: d.tierLevel } : {}),
+          ...(lineIn ? { productLineId: lineIn } : {}),
+          ...(current.productId ? { productId: current.productId } : {}),
+        },
+        parent,
+      );
+      // Everything below moves with it. Re-derive each descendant's tier from its new
+      // depth, and refuse the move if that would push any of them past tier 4 — the
+      // alternative is a node that silently stops being reachable in a 4-tier picker.
+      const moved = all.map((c) => (c.id === id ? { ...c, parentId } : c));
+      const below = descendantIds(moved, id);
+      const tiers = deriveTiers(moved);
+      const offset = placed.tierLevel - (tiers.get(id) ?? placed.tierLevel);
+      const descendants = below.map((cid) => ({
+        id: cid,
+        tierLevel: (tiers.get(cid) ?? 0) + offset,
+      }));
+      const tooDeep = descendants.find((x) => x.tierLevel > 4);
+      if (tooDeep)
+        throw new ValidationError(
+          `Moving “${current.name}” there would put the categories beneath it below tier 4 (the deepest the tree goes). Move or flatten those first.`,
+        );
+      placement = {
+        parentId,
+        tierLevel: placed.tierLevel,
+        productLineId: placed.productLineId,
+        descendants,
+        lineChanged: (placed.productLineId ?? null) !== (current.productLineId ?? null),
+      };
     }
-    const cat = await prisma.productCategory.update({
-      where: { id },
-      data: {
-        ...(d.name !== undefined ? { name: d.name } : {}),
-        ...(d.sortOrder !== undefined ? { sortOrder: d.sortOrder } : {}),
-        ...(d.isActive !== undefined ? { isActive: d.isActive } : {}),
-        ...(d.parentId !== undefined ? { parentId: d.parentId || null } : {}),
-        ...(d.tierLevel !== undefined ? { tierLevel: d.tierLevel } : {}),
-        ...(d.productLineId !== undefined ? { productLineId: d.productLineId || null } : {}),
-      },
+
+    const cat = await prisma.$transaction(async (tx) => {
+      const updated = await tx.productCategory.update({
+        where: { id },
+        data: {
+          ...(d.name !== undefined ? { name: d.name } : {}),
+          ...(d.sortOrder !== undefined ? { sortOrder: d.sortOrder } : {}),
+          ...(d.isActive !== undefined ? { isActive: d.isActive } : {}),
+          ...(placement
+            ? {
+                parentId: placement.parentId,
+                tierLevel: placement.tierLevel,
+                productLineId: placement.productLineId,
+              }
+            : {}),
+        },
+      });
+      if (placement) {
+        for (const x of placement.descendants)
+          await tx.productCategory.update({
+            where: { id: x.id },
+            data: {
+              tierLevel: x.tierLevel,
+              ...(placement.lineChanged ? { productLineId: placement.productLineId } : {}),
+            },
+          });
+      }
+      return updated;
     });
     await recordAudit({
       actorId: req.user!.sub,
@@ -343,6 +464,147 @@ export function registerProductTreeRoutes(app: FastifyInstance): void {
     };
   });
 
+  // ---------- Sort-order audit and renumber ----------
+  /*
+   * The Product tree's "Sort order" button has called these two routes for a long time;
+   * neither existed, so it answered 404. Ties in `sortOrder` between siblings break
+   * alphabetically, so a collision prints in an order nobody chose — which is what the
+   * audit lists and the renumber removes.
+   *
+   * "Siblings" means what the tree and the builder compare: categories under the same
+   * parent, and products in the same category. `sortKeyFor` in catalogItems.ts orders a
+   * part by its category path, then its own sortOrder, so a number only ever competes
+   * with its siblings' numbers.
+   */
+  type SortNode = { id: string; name: string; sortOrder: number };
+  const bySortThenName = (a: SortNode, b: SortNode): number =>
+    a.sortOrder - b.sortOrder || a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
+
+  async function loadSortTree() {
+    const [cats, products] = await Promise.all([
+      prisma.productCategory.findMany({
+        select: { id: true, name: true, parentId: true, tierLevel: true, sortOrder: true },
+      }),
+      prisma.product.findMany({
+        select: { id: true, sku: true, name: true, categoryId: true, sortOrder: true },
+      }),
+    ]);
+    const catById = new Map(cats.map((c) => [c.id, c]));
+    const pathOf = (id: string | null): string => {
+      const names: string[] = [];
+      let node = id ? catById.get(id) : undefined;
+      for (let hops = 0; node && hops < 12; hops++) {
+        names.unshift(node.name);
+        node = node.parentId ? catById.get(node.parentId) : undefined;
+      }
+      return names.join(' › ');
+    };
+    const group = <T extends SortNode>(rows: T[], keyOf: (r: T) => string): Map<string, T[]> => {
+      const out = new Map<string, T[]>();
+      for (const r of rows) out.set(keyOf(r), (out.get(keyOf(r)) ?? []).concat(r));
+      for (const list of out.values()) list.sort(bySortThenName);
+      return out;
+    };
+    return {
+      cats,
+      pathOf,
+      catGroups: group(cats, (c) => c.parentId ?? ''),
+      productGroups: group(products, (p) => p.categoryId),
+      productLabel: new Map(products.map((p) => [p.id, `${p.sku} — ${p.name}`])),
+    };
+  }
+
+  app.get('/catalog/tree/sort-audit', admin, async () => {
+    const t = await loadSortTree();
+    type Clash = {
+      scope: string;
+      sortOrder: number;
+      members: Array<{ id: string; label: string }>;
+    };
+    const clashesIn = (
+      groups: Map<string, SortNode[]>,
+      scopeOf: (key: string) => string,
+      labelOf: (n: SortNode) => string,
+    ): Clash[] => {
+      const out: Clash[] = [];
+      for (const [k, list] of groups) {
+        const bySort = new Map<number, SortNode[]>();
+        for (const n of list) bySort.set(n.sortOrder, (bySort.get(n.sortOrder) ?? []).concat(n));
+        for (const [sortOrder, members] of bySort)
+          if (members.length > 1)
+            out.push({
+              scope: scopeOf(k),
+              sortOrder,
+              members: members.map((m) => ({ id: m.id, label: labelOf(m) })),
+            });
+      }
+      return out.sort((a, b) => a.scope.localeCompare(b.scope) || a.sortOrder - b.sortOrder);
+    };
+    const categoryClashes = clashesIn(
+      t.catGroups,
+      (k) => (k ? t.pathOf(k) : 'Top level'),
+      (n) => n.name,
+    );
+    const productClashes = clashesIn(
+      t.productGroups,
+      (k) => t.pathOf(k) || 'Uncategorised',
+      (n) => t.productLabel.get(n.id) ?? n.name,
+    );
+    const all = [...categoryClashes, ...productClashes];
+    return {
+      clashCount: all.length,
+      affected: all.reduce((n, c) => n + c.members.length, 0),
+      categoryClashes,
+      productClashes,
+    };
+  });
+
+  /**
+   * Rewrite every sibling group to 10, 20, 30… in its current order (sortOrder, then
+   * name — the order the tree shows), tier by tier, in one transaction. Gaps of 10
+   * leave room to slot one item in by hand later. Only rows whose number changes are
+   * written, and those are what the counts report.
+   */
+  app.post('/catalog/tree/renumber', admin, async (req) => {
+    const t = await loadSortTree();
+    const tierOfParent = new Map(t.cats.map((c) => [c.id, c.tierLevel]));
+    const catGroupKeys = [...t.catGroups.keys()].sort(
+      (a, b) => (a ? (tierOfParent.get(a) ?? 0) : 0) - (b ? (tierOfParent.get(b) ?? 0) : 0),
+    );
+    const writes: Array<{ table: 'category' | 'product'; id: string; sortOrder: number }> = [];
+    for (const k of catGroupKeys)
+      (t.catGroups.get(k) ?? []).forEach((c, i) => {
+        if (c.sortOrder !== (i + 1) * 10)
+          writes.push({ table: 'category', id: c.id, sortOrder: (i + 1) * 10 });
+      });
+    for (const list of t.productGroups.values())
+      list.forEach((p, i) => {
+        if (p.sortOrder !== (i + 1) * 10)
+          writes.push({ table: 'product', id: p.id, sortOrder: (i + 1) * 10 });
+      });
+    await prisma.$transaction(
+      async (tx) => {
+        for (const w of writes) {
+          if (w.table === 'category')
+            await tx.productCategory.update({
+              where: { id: w.id },
+              data: { sortOrder: w.sortOrder },
+            });
+          else await tx.product.update({ where: { id: w.id }, data: { sortOrder: w.sortOrder } });
+        }
+      },
+      { timeout: 120_000, maxWait: 10_000 },
+    );
+    const categories = writes.filter((w) => w.table === 'category').length;
+    const products = writes.length - categories;
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'catalog.tree.renumber',
+      details: { categories, products },
+    });
+    return { ok: true, categories, products };
+  });
+
   // ---------- Import (validate, review, then commit) ----------
   /**
    * Partial upsert of the tree. Only columns present in a row are written, so a
@@ -377,6 +639,7 @@ export function registerProductTreeRoutes(app: FastifyInstance): void {
           sku: true,
           name: true,
           status: true,
+          kind: true,
           sortOrder: true,
           categoryId: true,
         },
@@ -384,6 +647,10 @@ export function registerProductTreeRoutes(app: FastifyInstance): void {
       prisma.sku.findMany({ select: { id: true, part: true } }),
       prisma.manufacturer.findMany({ where: { isActive: true }, select: { id: true, name: true } }),
     ]);
+    const existingLinks = await prisma.productRelation.findMany({
+      where: { type: 'BUNDLE_ITEM' },
+      select: { parent: { select: { sku: true } }, child: { select: { sku: true } } },
+    });
     const catBySlug = new Map(existingCats.map((c) => [c.slug, c]));
     const prodBySku = new Map(existingProducts.map((p) => [p.sku, p]));
     const lower = (v: string) => v.trim().toLowerCase();
@@ -413,11 +680,80 @@ export function registerProductTreeRoutes(app: FastifyInstance): void {
       if (!catBySlug.has(c.slug) && !c.name)
         issues.push({ sheet: 'Categories', key: c.slug, message: 'new category needs a name' });
     }
+
+    /*
+     * The tree as it will stand after the import, checked BEFORE anything is written.
+     *
+     * The parent pass used to apply each row's parentSlug with no check at all, so a
+     * sheet could make two categories each other's parent (a cycle the builder's tree
+     * walk then spins on) or hang a fifth level under a tier-4 node. The tier column was
+     * written as given, independent of where the row actually ended up.
+     *
+     * The tier is derived from the final parent chain — tier 1 at the top, parent + 1
+     * below — and written for every category the file places, plus everything beneath a
+     * category the file moves. A tierLevel cell that disagrees is reported in the plan
+     * and corrected, not trusted.
+     */
+    const idToSlug = new Map(existingCats.map((c) => [c.id, c.slug]));
+    const finalParent = new Map<string, string | null>(
+      existingCats.map((c) => [c.slug, c.parentId ? (idToSlug.get(c.parentId) ?? null) : null]),
+    );
+    for (const c of d.categories) {
+      if (c.parentSlug !== undefined) finalParent.set(c.slug, c.parentSlug || null);
+      else if (!finalParent.has(c.slug)) finalParent.set(c.slug, null);
+    }
+    const treeNodes = [...finalParent].map(([slug, parentSlug]) => ({
+      id: slug,
+      parentId: parentSlug,
+    }));
+    const finalTier = deriveTiers(treeNodes);
+    const tierTargets = new Set<string>();
+    for (const c of d.categories) {
+      tierTargets.add(c.slug);
+      if (c.parentSlug !== undefined)
+        for (const below of descendantIds(treeNodes, c.slug)) tierTargets.add(below);
+    }
+    const tierCorrected: string[] = [];
+    for (const slug of tierTargets) {
+      const parentSlug = finalParent.get(slug) ?? null;
+      if (parentSlug && !finalParent.has(parentSlug)) continue; // reported above
+      const tier = finalTier.get(slug);
+      if (tier == null) {
+        issues.push({
+          sheet: 'Categories',
+          key: slug,
+          message: 'its parent chain loops back on itself — a category cannot be its own ancestor',
+        });
+      } else if (tier > 4) {
+        issues.push({
+          sheet: 'Categories',
+          key: slug,
+          message: `would sit at tier ${tier}; the tree is at most 4 tiers deep`,
+        });
+      } else {
+        const given = d.categories.find((c) => c.slug === slug)?.tierLevel;
+        const stored = catBySlug.get(slug)?.tierLevel;
+        if ((given !== undefined && given !== tier) || (given === undefined && stored !== tier))
+          tierCorrected.push(slug);
+      }
+    }
+
+    const fileProductBySku = new Map(d.products.map((p) => [p.sku, p]));
     for (const p of d.products) {
-      if (p.kind && !KINDS.includes(p.kind.toUpperCase()))
+      if (p.kind && !asKind(p.kind))
         issues.push({ sheet: 'Products', key: p.sku, message: `unknown kind “${p.kind}”` });
-      if (p.status && !STATUSES.includes(p.status.toUpperCase()))
+      if (p.status && !asStatus(p.status))
         issues.push({ sheet: 'Products', key: p.sku, message: `unknown status “${p.status}”` });
+      // A status change goes through the same state machine as the status control
+      // (src/catalog/service.ts), refused here rather than halfway through the commit.
+      const was = prodBySku.get(p.sku);
+      const to = asStatus(p.status);
+      if (was && to && was.status !== to && !canTransition(was.status, to))
+        issues.push({
+          sheet: 'Products',
+          key: p.sku,
+          message: `status cannot go from ${was.status} to ${to}${was.status === 'ARCHIVED' ? ' — an archived part stays archived' : ''}`,
+        });
       if (p.categorySlug && !catBySlug.has(p.categorySlug) && !fileCatSlugs.has(p.categorySlug)) {
         issues.push({
           sheet: 'Products',
@@ -476,6 +812,44 @@ export function registerProductTreeRoutes(app: FastifyInstance): void {
           message: 'a bundle cannot contain itself',
         });
     }
+    /*
+     * Bundles are one level deep — the same rule PUT /catalog/bundles/:id/components
+     * enforces. A bundle's parent is marked kind BUNDLE on commit (it is only a bundle
+     * once it is marked one), so a row that says otherwise is a contradiction, and a
+     * part that is a bundle cannot also be listed as a component of one.
+     */
+    const kindAfter = (sku: string): ProductKind | undefined =>
+      asKind(fileProductBySku.get(sku)?.kind) ?? prodBySku.get(sku)?.kind;
+    const bundleParents = new Set(d.bundles.map((b) => b.bundleSku));
+    const componentsAfter = new Set([
+      ...d.bundles.map((b) => b.componentSku),
+      ...existingLinks.map((l) => l.child.sku),
+    ]);
+    const parentsAfter = new Set([...bundleParents, ...existingLinks.map((l) => l.parent.sku)]);
+    for (const sku of bundleParents) {
+      const k = asKind(fileProductBySku.get(sku)?.kind);
+      if (k && k !== 'BUNDLE')
+        issues.push({
+          sheet: 'Bundles',
+          key: sku,
+          message: `listed as a bundle, but its Products row sets kind ${k} — a bundle's kind is BUNDLE`,
+        });
+      if (componentsAfter.has(sku))
+        issues.push({
+          sheet: 'Bundles',
+          key: sku,
+          message:
+            'is a component of another bundle, so it cannot be a bundle itself — bundles do not nest',
+        });
+    }
+    for (const b of d.bundles) {
+      if (parentsAfter.has(b.componentSku) || kindAfter(b.componentSku) === 'BUNDLE')
+        issues.push({
+          sheet: 'Bundles',
+          key: b.componentSku,
+          message: `is itself a bundle, so it cannot go inside “${b.bundleSku}” — add its parts directly instead`,
+        });
+    }
 
     const missing = existingProducts
       .filter((p) => !d.products.some((x) => x.sku === p.sku) && p.status !== 'ARCHIVED')
@@ -485,6 +859,8 @@ export function registerProductTreeRoutes(app: FastifyInstance): void {
       categories: {
         create: d.categories.filter((c) => !catBySlug.has(c.slug)).length,
         update: d.categories.filter((c) => catBySlug.has(c.slug)).length,
+        /** Categories whose tier will be written as their position says, not as given. */
+        tierCorrected,
       },
       products: {
         create: d.products.filter((p) => !prodBySku.has(p.sku)).length,
@@ -518,234 +894,275 @@ export function registerProductTreeRoutes(app: FastifyInstance): void {
     }
 
     // ---- commit ----
-    // Categories first (two passes: rows, then parents, so order in the file
-    // never matters), then products, then bundle links.
-    for (const c of d.categories) {
-      const existing = catBySlug.get(c.slug);
-      if (existing) {
-        await prisma.productCategory.update({
-          where: { id: existing.id },
-          data: {
-            ...(c.name !== undefined ? { name: c.name } : {}),
-            ...(c.tierLevel !== undefined ? { tierLevel: c.tierLevel } : {}),
-            ...(c.sortOrder !== undefined ? { sortOrder: c.sortOrder } : {}),
-            ...(c.isActive !== undefined ? { isActive: c.isActive } : {}),
-          },
-        });
-      } else {
-        const created = await prisma.productCategory.create({
-          data: {
-            slug: c.slug || slugify(c.name as string),
-            name: c.name as string,
-            tierLevel: c.tierLevel ?? 1,
-            sortOrder: c.sortOrder ?? 0,
-            isActive: c.isActive ?? true,
-          },
-        });
-        catBySlug.set(created.slug, {
-          id: created.id,
-          slug: created.slug,
-          name: created.name,
-          sortOrder: created.sortOrder,
-          tierLevel: created.tierLevel,
-          parentId: created.parentId,
-        });
-      }
-    }
-    for (const c of d.categories) {
-      if (c.parentSlug === undefined) continue;
-      const self = catBySlug.get(c.slug);
-      const parent = c.parentSlug ? catBySlug.get(c.parentSlug) : null;
-      if (self)
-        await prisma.productCategory.update({
-          where: { id: self.id },
-          data: { parentId: parent?.id ?? null },
-        });
-    }
-
-    let created = 0,
-      updated = 0;
-    for (const p of d.products) {
-      const existing = prodBySku.get(p.sku);
-      const catId = p.categorySlug ? catBySlug.get(p.categorySlug)?.id : undefined;
-      if (existing) {
-        await prisma.product.update({
-          where: { id: existing.id },
-          data: {
-            ...(p.name !== undefined ? { name: p.name } : {}),
-            ...(catId ? { categoryId: catId } : {}),
-            ...(p.kind ? { kind: p.kind.toUpperCase() as never } : {}),
-            ...(p.status ? { status: p.status.toUpperCase() as never } : {}),
-            ...(p.sortOrder !== undefined ? { sortOrder: p.sortOrder } : {}),
-            ...(p.proposalDescription !== undefined
-              ? { proposalDescription: p.proposalDescription || null }
-              : {}),
-          },
-        });
-        updated++;
-      } else {
-        const np = await prisma.product.create({
-          data: {
-            sku: p.sku,
-            name: p.name as string,
-            categoryId: catId as string,
-            kind: (p.kind ? p.kind.toUpperCase() : 'PRODUCT') as never,
-            status: (p.status ? p.status.toUpperCase() : 'DRAFT') as never,
-            sortOrder: p.sortOrder ?? 0,
-            proposalDescription: p.proposalDescription || null,
-            createdById: req.user!.sub,
-          },
-        });
-        prodBySku.set(np.sku, {
-          id: np.id,
-          sku: np.sku,
-          name: np.name,
-          status: np.status,
-          sortOrder: np.sortOrder,
-          categoryId: np.categoryId,
-        });
-        created++;
-      }
-    }
-
     /*
-     * The priced counterpart, written in its own pass now that every Product exists.
+     * ONE transaction. This used to be a hundred-odd separate awaits, so anything that
+     * failed partway — a kind the database rejects, a constraint, a dropped connection —
+     * left whatever had been written so far committed: a new part ACTIVE in the tree with
+     * no priced record was exactly that. Now the file lands whole or not at all.
      *
-     * A separate loop rather than folded into the one above: the products pass needs no
-     * change at all this way, so the diff for it stays empty and the two concerns stay
-     * legible.
-     *
-     * THE GUARD THAT MATTERS: a Sku is only created for a row that actually supplies a
-     * priced field. Without that, a plain tree re-import — the normal, everyday use of
-     * this importer, with no price columns filled in — would manufacture an empty $0 Sku
-     * for every part in the catalog, which is a worse version of the bug being fixed.
+     * Categories first (two passes: rows, then parents, so order in the file never
+     * matters), then products, then priced records, then bundle links.
      */
-    let skuCreated = 0,
-      skuUpdated = 0,
-      sourcingLinked = 0,
-      sourcingAmbiguous = 0;
-    for (const p of d.products) {
-      const pr = pricedOf(p);
-      const has =
-        pr.price.value !== undefined ||
-        pr.cost.value !== undefined ||
-        pr.weight.value !== undefined ||
-        !!pr.mfr;
-      if (!has) continue;
+    const result = await prisma.$transaction(
+      async (tx) => {
+        for (const c of d.categories) {
+          const existing = catBySlug.get(c.slug);
+          const tier = finalTier.get(c.slug) ?? 1;
+          if (existing) {
+            await tx.productCategory.update({
+              where: { id: existing.id },
+              data: {
+                ...(c.name !== undefined ? { name: c.name } : {}),
+                tierLevel: tier,
+                ...(c.sortOrder !== undefined ? { sortOrder: c.sortOrder } : {}),
+                ...(c.isActive !== undefined ? { isActive: c.isActive } : {}),
+              },
+            });
+          } else {
+            const made = await tx.productCategory.create({
+              data: {
+                slug: c.slug || slugify(c.name as string),
+                name: c.name as string,
+                tierLevel: tier,
+                sortOrder: c.sortOrder ?? 0,
+                isActive: c.isActive ?? true,
+              },
+            });
+            catBySlug.set(made.slug, {
+              id: made.id,
+              slug: made.slug,
+              name: made.name,
+              sortOrder: made.sortOrder,
+              tierLevel: made.tierLevel,
+              parentId: made.parentId,
+            });
+          }
+        }
+        for (const c of d.categories) {
+          if (c.parentSlug === undefined) continue;
+          const self = catBySlug.get(c.slug);
+          const parent = c.parentSlug ? catBySlug.get(c.parentSlug) : null;
+          if (self)
+            await tx.productCategory.update({
+              where: { id: self.id },
+              data: { parentId: parent?.id ?? null },
+            });
+        }
+        // Everything beneath a category the file moved takes its new depth too.
+        const fileSlugs = new Set(d.categories.map((c) => c.slug));
+        for (const slug of tierTargets) {
+          if (fileSlugs.has(slug)) continue;
+          const node = catBySlug.get(slug);
+          const tier = finalTier.get(slug);
+          if (node && tier != null && node.tierLevel !== tier)
+            await tx.productCategory.update({ where: { id: node.id }, data: { tierLevel: tier } });
+        }
 
-      const prod = prodBySku.get(p.sku);
-      if (!prod) continue;
-      const existing = skuByPart.get(lower(p.sku));
-      const mfr = pr.mfr ? mfrByName.get(lower(pr.mfr))! : null;
-      const mfrName = mfr ? mfr.name : undefined;
+        let created = 0,
+          updated = 0;
+        for (const p of d.products) {
+          const existing = prodBySku.get(p.sku);
+          const catId = p.categorySlug ? catBySlug.get(p.categorySlug)?.id : undefined;
+          const kind = asKind(p.kind);
+          const status = asStatus(p.status);
+          if (existing) {
+            await tx.product.update({
+              where: { id: existing.id },
+              data: {
+                ...(p.name !== undefined ? { name: p.name } : {}),
+                ...(catId ? { categoryId: catId } : {}),
+                ...(kind ? { kind } : {}),
+                ...(p.sortOrder !== undefined ? { sortOrder: p.sortOrder } : {}),
+                ...(p.proposalDescription !== undefined
+                  ? { proposalDescription: p.proposalDescription || null }
+                  : {}),
+              },
+            });
+            // Status through the state machine: history row, active window, and the
+            // priced record's active flag, all in this transaction. Transitions were
+            // validated above, so this cannot refuse.
+            if (status && status !== existing.status) {
+              await changeStatusTx(tx, existing.id, status, req.user!.sub, 'tree import');
+              existing.status = status;
+            }
+            if (kind) existing.kind = kind;
+            updated++;
+          } else {
+            const np = await tx.product.create({
+              data: {
+                sku: p.sku,
+                name: p.name as string,
+                categoryId: catId as string,
+                kind: kind ?? 'PRODUCT',
+                status: status ?? 'DRAFT',
+                sortOrder: p.sortOrder ?? 0,
+                proposalDescription: p.proposalDescription || null,
+                createdById: req.user!.sub,
+                ...bornStatusHistory(status ?? 'DRAFT', req.user!.sub),
+              },
+            });
+            prodBySku.set(np.sku, {
+              id: np.id,
+              sku: np.sku,
+              name: np.name,
+              status: np.status,
+              kind: np.kind,
+              sortOrder: np.sortOrder,
+              categoryId: np.categoryId,
+            });
+            created++;
+          }
+        }
 
-      if (existing) {
-        // Only the fields the sheet actually gave a value for. A blank cell was dropped by
-        // the client and parses to undefined here, so an untouched column cannot zero a
-        // price that is already right.
-        await prisma.sku.update({
-          where: { id: existing.id },
-          data: {
-            ...(pr.price.value !== undefined ? { unitPriceMinor: pr.price.value } : {}),
-            ...(pr.cost.value !== undefined ? { unitCostMinor: pr.cost.value } : {}),
-            ...(pr.weight.value !== undefined ? { weightLbs: pr.weight.value } : {}),
-            ...(mfrName ? { manufacturer: mfrName } : {}),
-          },
-        });
-        skuUpdated++;
-      } else {
-        const catName = p.categorySlug ? catBySlug.get(p.categorySlug)?.name : undefined;
-        await prisma.sku.create({
-          data: {
-            part: p.sku,
-            description: p.name ?? prod.name,
-            // A part TYPE code (FRAME, TROLLEY, ACCESSORY) for catalog filtering and
-            // reporting — not the proposal heading (`Sku.proposalGroup`) and not the tree
-            // position (Product.categoryId). Non-null, so a new row is seeded with the
-            // section name and meant to be edited to a real type.
-            category: catName ?? '',
-            manufacturer: mfrName ?? null,
-            unitPriceMinor: pr.price.value ?? 0,
-            unitCostMinor: pr.cost.value ?? 0,
-            weightLbs: pr.weight.value ?? 0,
-            // Mirrors the Product, so a part that is live in the tree is live in the
-            // price list. The two going out of step is what put 192 ACTIVE products in
-            // the builder's part picker at $0.00.
-            active: prod.status === 'ACTIVE',
-          },
-        });
-        skuCreated++;
-      }
+        /*
+         * The priced counterpart, written in its own pass now that every Product exists.
+         *
+         * THE GUARD THAT MATTERS: a Sku is only created for a row that actually supplies a
+         * priced field. Without that, a plain tree re-import — the normal, everyday use of
+         * this importer, with no price columns filled in — would manufacture an empty $0
+         * Sku for every part in the catalog, which is a worse version of the bug being
+         * fixed.
+         */
+        let skuCreated = 0,
+          skuUpdated = 0,
+          sourcingLinked = 0,
+          sourcingAmbiguous = 0;
+        for (const p of d.products) {
+          const pr = pricedOf(p);
+          const has =
+            pr.price.value !== undefined ||
+            pr.cost.value !== undefined ||
+            pr.weight.value !== undefined ||
+            !!pr.mfr;
+          if (!has) continue;
 
-      /*
-       * The OTHER record of the same fact.
-       *
-       * `Sku.manufacturer` was written above; `ProductSourcing` is the relation the
-       * vendor reports, the freight true-up and `vendorResolution.ts` read. This import
-       * used to write only the string — one of the two paths that let seven parts end up
-       * naming different companies in the two records, with the Bill of Materials
-       * following one and the catalog screen showing the other.
-       *
-       * Only when the sheet actually named a manufacturer. A blank cell means "leave the
-       * vendor alone", so it must not clear an existing link.
-       */
-      if (mfr) {
-        // Shared with the SKU CSV importer and the catalog item editor
-        // (src/catalog/partVendor.ts) — a bare findFirst here used to pick an
-        // arbitrary ProductSourcing row to overwrite on a part already sourced from
-        // more than one vendor (many-to-many by design; schema.prisma). Skipped
-        // rather than guessed, and counted so the import summary shows it.
-        const outcome = await syncPartSourcing(prisma, p.sku, mfr);
-        if (outcome === 'linked' || outcome === 'relinked') sourcingLinked++;
-        else if (outcome === 'ambiguous') sourcingAmbiguous++;
-      }
-    }
+          const prod = prodBySku.get(p.sku);
+          if (!prod) continue;
+          const existing = skuByPart.get(lower(p.sku));
+          const mfr = pr.mfr ? mfrByName.get(lower(pr.mfr))! : null;
+          const mfrName = mfr ? mfr.name : undefined;
 
-    let links = 0;
-    for (const b of d.bundles) {
-      const parent = prodBySku.get(b.bundleSku),
-        child = prodBySku.get(b.componentSku);
-      if (!parent || !child) continue;
-      const existing = await prisma.productRelation.findFirst({
-        where: { parentId: parent.id, childId: child.id, type: 'BUNDLE_ITEM' },
-      });
-      if (existing)
-        await prisma.productRelation.update({
-          where: { id: existing.id },
-          data: { quantity: b.quantity },
-        });
-      else
-        await prisma.productRelation.create({
-          data: {
-            parentId: parent.id,
-            childId: child.id,
-            type: 'BUNDLE_ITEM',
-            quantity: b.quantity,
-            sortOrder: links,
-          },
-        });
-      links++;
-    }
+          if (existing) {
+            // Only the fields the sheet actually gave a value for. A blank cell was
+            // dropped by the client and parses to undefined here, so an untouched column
+            // cannot zero a price that is already right.
+            await tx.sku.update({
+              where: { id: existing.id },
+              data: {
+                ...(pr.price.value !== undefined ? { unitPriceMinor: pr.price.value } : {}),
+                ...(pr.cost.value !== undefined ? { unitCostMinor: pr.cost.value } : {}),
+                ...(pr.weight.value !== undefined ? { weightLbs: pr.weight.value } : {}),
+                ...(mfrName ? { manufacturer: mfrName } : {}),
+              },
+            });
+            skuUpdated++;
+          } else {
+            const catName = p.categorySlug ? catBySlug.get(p.categorySlug)?.name : undefined;
+            await tx.sku.create({
+              data: {
+                part: p.sku,
+                description: p.name ?? prod.name,
+                // A part TYPE code (FRAME, TROLLEY, ACCESSORY) for catalog filtering and
+                // reporting — not the proposal heading (`Sku.proposalGroup`) and not the
+                // tree position (Product.categoryId). Non-null, so a new row is seeded
+                // with the section name and meant to be edited to a real type.
+                category: catName ?? '',
+                manufacturer: mfrName ?? null,
+                unitPriceMinor: pr.price.value ?? 0,
+                unitCostMinor: pr.cost.value ?? 0,
+                weightLbs: pr.weight.value ?? 0,
+                // Mirrors the Product's status AFTER this import's own change, so a part
+                // that is live in the tree is live in the price list.
+                active: prod.status === 'ACTIVE',
+              },
+            });
+            skuCreated++;
+          }
 
-    let deactivated = 0;
-    if (d.missingAction === 'deactivate') {
-      for (const m of missing) {
-        const p = prodBySku.get(m.sku);
-        if (!p || p.status === 'INACTIVE') continue;
-        await prisma.product.update({ where: { id: p.id }, data: { status: 'INACTIVE' } });
-        await prisma.productStatusHistory.create({
-          data: {
-            productId: p.id,
-            fromStatus: p.status as never,
-            toStatus: 'INACTIVE',
-            reason: 'absent from tree import',
-            changedById: req.user!.sub,
-          },
-        });
-        await prisma.sku.updateMany({ where: { part: m.sku }, data: { active: false } });
-        deactivated++;
-      }
-    }
+          /*
+           * The OTHER record of the same fact: `ProductSourcing`, which the vendor
+           * reports, the freight true-up and `vendorResolution.ts` read. Only when the
+           * sheet actually named a manufacturer — a blank cell means "leave the vendor
+           * alone". Shared with the SKU CSV importer and the catalog item editor
+           * (src/catalog/partVendor.ts); a multi-vendor part is skipped, not guessed.
+           */
+          if (mfr) {
+            const outcome = await syncPartSourcing(tx, p.sku, mfr);
+            if (outcome === 'linked' || outcome === 'relinked') sourcingLinked++;
+            else if (outcome === 'ambiguous') sourcingAmbiguous++;
+          }
+        }
+
+        let links = 0;
+        for (const b of d.bundles) {
+          const parent = prodBySku.get(b.bundleSku),
+            child = prodBySku.get(b.componentSku);
+          if (!parent || !child) continue;
+          // A bundle is only a bundle once it is marked one — the same step
+          // PUT /catalog/bundles/:id/components takes.
+          if (parent.kind !== 'BUNDLE') {
+            await tx.product.update({ where: { id: parent.id }, data: { kind: 'BUNDLE' } });
+            parent.kind = 'BUNDLE';
+          }
+          const existing = await tx.productRelation.findFirst({
+            where: { parentId: parent.id, childId: child.id, type: 'BUNDLE_ITEM' },
+          });
+          if (existing)
+            await tx.productRelation.update({
+              where: { id: existing.id },
+              data: { quantity: b.quantity },
+            });
+          else
+            await tx.productRelation.create({
+              data: {
+                parentId: parent.id,
+                childId: child.id,
+                type: 'BUNDLE_ITEM',
+                quantity: b.quantity,
+                sortOrder: links,
+              },
+            });
+          links++;
+        }
+
+        /*
+         * Parts absent from the file, when asked to deactivate them. Only ACTIVE ones:
+         * INACTIVE already is, and DRAFT → INACTIVE is not a legal move (a draft is
+         * already not quotable). Through the state machine, so the Sku follows.
+         */
+        let deactivated = 0;
+        if (d.missingAction === 'deactivate') {
+          for (const m of missing) {
+            const p = prodBySku.get(m.sku);
+            if (!p || p.status !== 'ACTIVE') continue;
+            await changeStatusTx(tx, p.id, 'INACTIVE', req.user!.sub, 'absent from tree import');
+            p.status = 'INACTIVE';
+            deactivated++;
+          }
+        }
+        return {
+          created,
+          updated,
+          links,
+          deactivated,
+          skuCreated,
+          skuUpdated,
+          sourcingLinked,
+          sourcingAmbiguous,
+        };
+      },
+      { timeout: 120_000, maxWait: 10_000 },
+    );
+    const {
+      created,
+      updated,
+      links,
+      deactivated,
+      skuCreated,
+      skuUpdated,
+      sourcingLinked,
+      sourcingAmbiguous,
+    } = result;
 
     await recordAudit({
       actorId: req.user!.sub,

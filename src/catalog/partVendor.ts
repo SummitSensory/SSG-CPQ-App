@@ -26,7 +26,7 @@
  * `src/catalog/partIntegrity.ts`: any drift, from any source including the three
  * middleware could never see, fails `pnpm check` and the test suite.
  */
-import type { PrismaClient } from '@prisma/client';
+import type { Prisma, PrismaClient } from '@prisma/client';
 
 const key = (v: unknown): string => (v == null ? '' : String(v)).trim().toLowerCase();
 
@@ -76,7 +76,8 @@ export function resolveVendor(
  * vendor" and matches what `PATCH /catalog/items/:part` does.
  */
 export async function syncPartSourcing(
-  prisma: PrismaClient,
+  // A transaction client too, so the tree import can run it inside its commit.
+  prisma: PrismaClient | Prisma.TransactionClient,
   part: string,
   vendor: Vendor | null,
 ): Promise<'linked' | 'relinked' | 'cleared' | 'no-product' | 'unchanged' | 'ambiguous'> {
