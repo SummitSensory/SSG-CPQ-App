@@ -15,6 +15,34 @@ import { ValidationError, ConflictError, NotFoundError } from '../lib/errors.js'
 import { reassignSkuVendor } from '../handoff/vendorReassign.js';
 import { syncPartSourcing } from '../catalog/partVendor.js';
 import { recordRevision, skuSnapshot } from '../lib/revisions.js';
+import { priceForMarginMinor } from '../lib/money.js';
+
+/**
+ * "Enter the cost and a margin, and the software works out the sales price."
+ *
+ * `marginPercent` is gross margin (profit as a share of the price): the price is
+ * cost / (1 − margin), computed in integer cents by priceForMarginMinor. It is an
+ * input, not a stored field — the margin a part earns is always derivable from the
+ * price and cost it is saved with, which is what the Catalog's Margin column shows.
+ * A later cost change therefore does NOT move the price on its own: the rep sees
+ * the margin it now earns and re-enters a margin to reprice. Sending both a price
+ * and a margin is refused, since only one of them can win.
+ */
+const MarginPercent = z
+  .number({ invalid_type_error: 'Margin must be a number.' })
+  .min(0, 'Margin must be at least 0%.')
+  .lt(100, 'Margin must be less than 100%.');
+
+function priceFromMargin(costMinor: number, marginPercent: number): number {
+  if (!costMinor) {
+    throw new ValidationError('Enter the unit cost first: the price is worked out from it.');
+  }
+  try {
+    return Number(priceForMarginMinor(costMinor, marginPercent));
+  } catch (err) {
+    throw new ValidationError(err instanceof Error ? err.message : 'Invalid margin.');
+  }
+}
 
 /**
  * The single catalog list.
@@ -97,6 +125,8 @@ async function listSkus(): Promise<SkuRow[]> {
 
 const ItemPatch = z.object({
   name: z.string().trim().min(1).max(400).optional(),
+  /** Sets unitPriceMinor from the cost — see MarginPercent. */
+  marginPercent: MarginPercent.optional(),
   category: z.string().trim().max(120).nullish(),
   manufacturer: z.string().trim().max(160).nullish(),
   unitPriceMinor: z.number().int().nonnegative().optional(),
@@ -345,6 +375,8 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
     manufacturer: z.string().trim().max(200).optional(),
     unitPriceMinor: z.number().int().nonnegative().optional(),
     unitCostMinor: z.number().int().nonnegative().optional(),
+    /** Sets unitPriceMinor from unitCostMinor — see MarginPercent. */
+    marginPercent: MarginPercent.optional(),
     weightLbs: z.number().nonnegative().optional(),
     /**
      * The proposal heading this part defaults to — required on create. A part with
@@ -377,6 +409,11 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
     if (!parsed.success)
       throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid part');
     const d = parsed.data;
+    if (d.marginPercent !== undefined) {
+      if (d.unitPriceMinor !== undefined)
+        throw new ValidationError('Send a price or a margin, not both.');
+      d.unitPriceMinor = priceFromMargin(d.unitCostMinor ?? 0, d.marginPercent);
+    }
     const part = d.part.trim();
 
     // Both tables, because a part number already used by either one is taken. Checked
@@ -516,6 +553,15 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
 
     const product = await prisma.product.findUnique({ where: { sku: part } });
     let sku = await prisma.sku.findUnique({ where: { part } });
+    if (d.marginPercent !== undefined) {
+      if (d.unitPriceMinor !== undefined)
+        throw new ValidationError('Send a price or a margin, not both.');
+      // The cost being saved in the same request, else the one on record.
+      d.unitPriceMinor = priceFromMargin(
+        d.unitCostMinor ?? sku?.unitCostMinor ?? 0,
+        d.marginPercent,
+      );
+    }
 
     const needsSku =
       d.unitPriceMinor !== undefined ||
@@ -746,7 +792,14 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
       entityId: part,
       details: d as Record<string, unknown>,
     });
-    return { ok: true, part };
+    // The saved price and cost, so a margin edit shows the price the SERVER worked out
+    // rather than the screen repeating the arithmetic.
+    return {
+      ok: true,
+      part,
+      unitPriceMinor: afterSku?.unitPriceMinor ?? null,
+      unitCostMinor: afterSku?.unitCostMinor ?? null,
+    };
   });
 
   /**

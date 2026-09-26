@@ -4082,6 +4082,10 @@
     return [c.firstName, c.lastName].filter(Boolean).join(' ').trim();
   }
   async function openBuilder(proposal, version, user) {
+    // Start the PDF renderer while the rep works, so the builder's Save PDF does not
+    // pay its cold start (several seconds) on the click. Fire-and-forget; see
+    // GET /render/warm in src/routes/render.ts.
+    authed('/render/warm', { timeoutMs: RENDER_TIMEOUT_MS }).catch(function () {});
     var orgName = '', orgShipTo = '', orgContact = '';
     var openedUpdatedAt = version.updatedAt || null;
     try { var rd = await authed('/crm/organizations/' + proposal.organizationId); if (rd.ok) { var org = await rd.json(); orgName = org.name || ''; orgShipTo = formatOrgShipTo(org); orgContact = primaryContactName(org); } } catch (e) {}
@@ -8724,26 +8728,48 @@
      * that DocuSeal and the monday file get, so the downloaded copy is the one the
      * customer receives. The browser dialog stays as the fallback, and as "Print".
      */
+    /**
+     * The server's PDF of the document as it stands, started as soon as the preview
+     * opens and reused by Save PDF and Print.
+     *
+     * A server render is ~2 s on a warm renderer and ~6 s on a cold one, nearly all of
+     * it before the rep has finished reading the preview. So it starts in the background
+     * the moment the preview is up (which also warms the renderer), and a click that
+     * comes after it finishes gets the file at once. Keyed by the exact HTML, file name
+     * and attached documents: switching the introduction/proposal scope changes the
+     * HTML, so the next click renders the new scope rather than handing back the old.
+     * A failed render is dropped so the click tries again instead of repeating it.
+     */
+    var pdfJob = null;
+    function pdfForCurrentDoc() {
+      var html = proposalStandaloneHtml(doc);
+      var name = proposalFileName(doc);
+      var keys = (doc.meta && Array.isArray(doc.meta.referenceDocKeys)) ? doc.meta.referenceDocKeys : [];
+      var key = name + '\u0000' + keys.join(',') + '\u0000' + html;
+      if (pdfJob && pdfJob.key === key) return pdfJob.promise;
+      var promise = (async function () {
+        var r = await authed('/render/proposals/document.pdf', {
+          method: 'POST',
+          body: { proposalHtml: html, filename: name, referenceDocKeys: keys },
+          timeoutMs: RENDER_TIMEOUT_MS,
+        });
+        if (!r.ok) throw new Error(await serverMessage(r, 'the PDF renderer did not respond (' + r.status + ')'));
+        return { blob: await r.blob(), name: name, missingReferenceDocs: !!r.headers.get('X-Reference-Docs-Missing') };
+      })();
+      pdfJob = { key: key, promise: promise };
+      promise.catch(function () { if (pdfJob && pdfJob.promise === promise) pdfJob = null; });
+      return promise;
+    }
     async function serverPdf(buttonId) {
       var bt = document.getElementById(buttonId);
       var label = bt ? bt.textContent : '';
       if (bt) { bt.disabled = true; bt.textContent = 'Preparing PDF\u2026'; }
       try {
-        var name = proposalFileName(doc);
-        var r = await authed('/render/proposals/document.pdf', {
-          method: 'POST',
-          body: {
-            proposalHtml: proposalStandaloneHtml(doc),
-            filename: name,
-            referenceDocKeys: (doc.meta && Array.isArray(doc.meta.referenceDocKeys)) ? doc.meta.referenceDocKeys : [],
-          },
-          timeoutMs: RENDER_TIMEOUT_MS,
-        });
-        if (!r.ok) throw new Error(await serverMessage(r, 'the PDF renderer did not respond (' + r.status + ')'));
-        if (r.headers.get('X-Reference-Docs-Missing')) {
+        var pdf = await pdfForCurrentDoc();
+        if (pdf.missingReferenceDocs) {
           toast('The attached reference documents (e.g. the W-9) could not be read and are not in this PDF. Try again in a moment.', 1);
         }
-        return { blob: await r.blob(), name: name };
+        return pdf;
       } finally {
         if (bt) { bt.disabled = false; bt.textContent = label; }
       }
@@ -8844,6 +8870,7 @@
     // selected reference documents as real PDF pages itself — so, unlike the browser
     // print this replaced, it does not wait for the preview's picture of them.
     if (printNow) savePdf();
+    else pdfForCurrentDoc().catch(function () {});
   }
 
   /**

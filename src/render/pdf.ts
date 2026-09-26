@@ -102,11 +102,71 @@ async function launch(): Promise<Browser> {
   return chromium.launch({ args, ...(executablePath ? { executablePath } : {}), headless: true });
 }
 
+/**
+ * Time limits on every call into Chromium.
+ *
+ * A cached browser the platform reclaimed while the container was frozen does not
+ * always FAIL — sometimes its pipe just never answers. Without a limit, `newPage()` or
+ * `page.pdf()` then waited out the function's whole 180 s and the request died with a
+ * 504: in production on 2026-09-24/26 that was a Save PDF and three monday-file uploads,
+ * every one of them a later request (req-2, req-4) on an already-warm container, while
+ * the first request on each fresh one rendered in ~6 s. A limit turns the hang into an
+ * error, and the error into one retry on a fresh browser (see renderPdf).
+ */
+const DEFAULT_LIMITS = { launchMs: 60_000, newPageMs: 10_000, renderMs: 45_000 };
+let limits = { ...DEFAULT_LIMITS };
+
+/** Tests only: shrink the limits so a hang can be exercised in milliseconds. */
+export function setRenderLimitsForTests(next: Partial<typeof DEFAULT_LIMITS> | null): void {
+  limits = next ? { ...DEFAULT_LIMITS, ...next } : { ...DEFAULT_LIMITS };
+}
+
+export class RenderTimeoutError extends Error {}
+
+function withTimeout<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const limit = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new RenderTimeoutError(`pdf: ${what} took over ${ms} ms`)), ms);
+  });
+  return Promise.race([work, limit]).finally(() => clearTimeout(timer));
+}
+
+/** True while the cached browser is one this container has already used. */
+let browserReused = false;
+
 async function getBrowser(): Promise<Browser> {
   const existing = browserPromise ? await browserPromise.catch(() => null) : null;
-  if (existing && existing.isConnected()) return existing;
-  browserPromise = launch();
-  return browserPromise;
+  if (existing && existing.isConnected()) {
+    browserReused = true;
+    return existing;
+  }
+  browserReused = false;
+  const launching = withTimeout(launch(), limits.launchMs, 'launching Chromium');
+  browserPromise = launching;
+  // A launch that failed must not be handed to the next caller as "the browser".
+  launching.catch(() => {
+    if (browserPromise === launching) browserPromise = null;
+  });
+  return launching;
+}
+
+/**
+ * Start Chromium now, so the next render does not pay the cold start. Called when a
+ * rep opens a proposal preview (GET /render/warm), a few seconds before they are
+ * likely to press Save PDF or Print. Never throws.
+ */
+export async function warmRenderer(): Promise<{ ok: boolean; reused: boolean; ms: number }> {
+  const t0 = Date.now();
+  if (!(await pdfAvailable())) return { ok: false, reused: false, ms: 0 };
+  try {
+    const page = await acquirePage();
+    const reused = browserReused;
+    await page.close().catch(() => undefined);
+    return { ok: true, reused, ms: Date.now() - t0 };
+  } catch (err) {
+    logger.warn({ err }, 'pdf: warm-up failed');
+    return { ok: false, reused: false, ms: Date.now() - t0 };
+  }
 }
 
 /**
@@ -144,11 +204,15 @@ export async function acquirePage(): Promise<Page> {
     );
   }
   try {
-    return await (await getBrowser()).newPage();
+    return await withTimeout((await getBrowser()).newPage(), limits.newPageMs, 'opening a page');
   } catch (err) {
     logger.warn({ err }, 'pdf: cached browser was dead, relaunching');
     discardBrowser();
-    return await (await getBrowser()).newPage();
+    return await withTimeout(
+      (await getBrowser()).newPage(),
+      limits.newPageMs,
+      'opening a page on a fresh browser',
+    );
   }
 }
 
@@ -272,79 +336,102 @@ export async function renderPdf(html: string, opts: PdfOptions = {}): Promise<Bu
   }
   html = await inlineKnownAssets(html);
   /*
-   * One retry on a fresh browser, via acquirePage().
+   * One retry on a fresh browser.
    *
    * The first attempt may be handed a cached browser whose process the platform has
-   * since reclaimed (see discardBrowser). That is not a real failure and it is not
+   * since reclaimed (see discardBrowser) — it either fails outright or never answers,
+   * which the time limits turn into an error. That is not a real failure and it is not
    * worth showing anyone: the second attempt launches cold and succeeds. A cold start
    * is a few seconds, which is why the cache exists at all, so this pays that cost
    * only when it has to.
    *
-   * Deliberately once. If a freshly launched browser cannot open a page, something is
-   * actually wrong — the chromium pack is missing, or the function is out of memory —
-   * and looping would turn a clear error into a timeout.
+   * Deliberately once, and only when the failed attempt was on a REUSED browser. If a
+   * freshly launched browser cannot render, something is actually wrong — the chromium
+   * pack is missing, the function is out of memory, the document is broken — and a
+   * retry would only double the wait before the same error.
    */
-  const page = await acquirePage();
-  try {
-    // 'domcontentloaded' rather than 'networkidle': the document is self-contained,
-    // so waiting on the network only adds the timeout to every render.
-    await page.setContent(html, { waitUntil: 'domcontentloaded' });
-    // Only for documents that actually ship the inline pagination script (see
-    // PAGINATION_MARKER's own comment) — everything else (an attachment, the
-    // certificate page, a financing sheet) has no `data-paginated` attribute to
-    // wait for, and waiting on one would just burn the full timeout on every
-    // render that doesn't use it. Best-effort: a font/pagination bug that never
-    // signals completion should still produce a PDF — an imperfectly paginated
-    // page is a smaller problem than no document at all.
-    if (html.includes(PAGINATION_MARKER)) {
-      // A string, not a function reference: this file has no DOM lib (it is a
-      // server-side module), and the expression below runs inside the PAGE, not
-      // here — Playwright accepts either form for exactly this reason.
-      await page
-        .waitForFunction(
-          'document.documentElement.getAttribute("data-paginated") === "1"',
-          undefined,
-          {
-            timeout: 10_000,
-          },
-        )
-        .catch((err: unknown) => {
-          logger.warn(
-            { err },
-            'pdf: pagination did not signal completion in time; rendering as-is',
-          );
-        });
+  const attempt = async (): Promise<{ pdf?: Buffer; err?: unknown; reused: boolean }> => {
+    const page = await acquirePage();
+    const reused = browserReused;
+    try {
+      return {
+        pdf: await withTimeout(renderOnPage(page, html, opts), limits.renderMs, 'rendering'),
+        reused,
+      };
+    } catch (err) {
+      return { err, reused };
+    } finally {
+      // Close the page but keep the browser: the next export in this container skips
+      // the cold start entirely. Not awaited past a moment — a close on a dead browser
+      // can hang exactly like the render did.
+      await withTimeout(page.close(), 5_000, 'closing the page').catch(() => undefined);
     }
-    await page.emulateMedia({ media: 'print' });
-    const hasChrome = !!(opts.headerHtml || opts.footerHtml);
-    if (opts.edgeToEdge) {
-      return await page.pdf({
-        format: opts.format ?? 'Letter',
-        landscape: !!opts.landscape,
-        printBackground: true,
-        preferCSSPageSize: true,
-        margin: { top: '0', bottom: '0', left: '0', right: '0' },
+  };
+  const first = await attempt();
+  if (first.pdf) return first.pdf;
+  if (!first.reused) throw first.err;
+  logger.warn(
+    { err: first.err },
+    'pdf: render failed on a reused browser; retrying on a fresh one',
+  );
+  discardBrowser();
+  const second = await attempt();
+  if (second.pdf) return second.pdf;
+  throw second.err;
+}
+
+async function renderOnPage(page: Page, html: string, opts: PdfOptions): Promise<Buffer> {
+  // 'domcontentloaded' rather than 'networkidle': the document is self-contained,
+  // so waiting on the network only adds the timeout to every render.
+  await page.setContent(html, { waitUntil: 'domcontentloaded' });
+  // Only for documents that actually ship the inline pagination script (see
+  // PAGINATION_MARKER's own comment) — everything else (an attachment, the
+  // certificate page, a financing sheet) has no `data-paginated` attribute to
+  // wait for, and waiting on one would just burn the full timeout on every
+  // render that doesn't use it. Best-effort: a font/pagination bug that never
+  // signals completion should still produce a PDF — an imperfectly paginated
+  // page is a smaller problem than no document at all.
+  if (html.includes(PAGINATION_MARKER)) {
+    // A string, not a function reference: this file has no DOM lib (it is a
+    // server-side module), and the expression below runs inside the PAGE, not
+    // here — Playwright accepts either form for exactly this reason.
+    await page
+      .waitForFunction(
+        'document.documentElement.getAttribute("data-paginated") === "1"',
+        undefined,
+        {
+          timeout: 10_000,
+        },
+      )
+      .catch((err: unknown) => {
+        logger.warn({ err }, 'pdf: pagination did not signal completion in time; rendering as-is');
       });
-    }
+  }
+  await page.emulateMedia({ media: 'print' });
+  const hasChrome = !!(opts.headerHtml || opts.footerHtml);
+  if (opts.edgeToEdge) {
     return await page.pdf({
       format: opts.format ?? 'Letter',
       landscape: !!opts.landscape,
       printBackground: true,
-      displayHeaderFooter: hasChrome,
-      ...(opts.headerHtml ? { headerTemplate: opts.headerHtml } : {}),
-      ...(opts.footerHtml ? { footerTemplate: opts.footerHtml } : {}),
-      margin: {
-        top: opts.marginTop ?? (hasChrome ? '0.7in' : '0.5in'),
-        bottom: opts.marginBottom ?? (hasChrome ? '0.6in' : '0.5in'),
-        left: '0.45in',
-        right: '0.45in',
-      },
+      preferCSSPageSize: true,
+      margin: { top: '0', bottom: '0', left: '0', right: '0' },
     });
-  } finally {
-    // Close the page but keep the browser: the next export in this container skips
-    // the cold start entirely.
-    await page.close().catch(() => undefined);
   }
+  return await page.pdf({
+    format: opts.format ?? 'Letter',
+    landscape: !!opts.landscape,
+    printBackground: true,
+    displayHeaderFooter: hasChrome,
+    ...(opts.headerHtml ? { headerTemplate: opts.headerHtml } : {}),
+    ...(opts.footerHtml ? { footerTemplate: opts.footerHtml } : {}),
+    margin: {
+      top: opts.marginTop ?? (hasChrome ? '0.7in' : '0.5in'),
+      bottom: opts.marginBottom ?? (hasChrome ? '0.6in' : '0.5in'),
+      left: '0.45in',
+      right: '0.45in',
+    },
+  });
 }
 
 /** Release the cached browser. Called on shutdown; safe to call twice. */
