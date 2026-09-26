@@ -52,7 +52,6 @@
     td = U.td,
     tableShell = U.tableShell,
     fieldRow = U.fieldRow,
-    selectEl = U.selectEl,
     IN = U.IN,
     bomFieldStyle = U.bomFieldStyle,
     openModal = U.openModal,
@@ -636,6 +635,7 @@
       if (!r.ok) { box.innerHTML = '<div class="err">Could not load (' + r.status + ').</div>'; return; }
       var d = await r.json();
       itemState.categories = (d.categories || []).map(function (c) { return c.name; });
+      itemState.categoryRows = d.categories || [];
       var all = (d.items || []).slice(), total = d.total || all.length, page = 1;
       while (all.length < total && page < 8) {
         page++;
@@ -959,10 +959,13 @@
         b.disabled = true;
         var r = await authed('/catalog/items/' + encodeURIComponent(part) + '/active', { method: 'POST', body: { active: to } });
         if (!r.ok) { var m1 = ''; try { m1 = ((await r.json()) || {}).message || ''; } catch (e1) {} alert(m1 || 'Could not change status (' + r.status + ').'); b.disabled = false; return; }
+        // The status the server actually moved it to: switching a DRAFT off leaves it a
+        // draft (DRAFT -> INACTIVE is not a legal move), so "Inactive" is not assumed.
+        var res = {}; try { res = (await r.json()) || {}; } catch (e3) {}
         var row = (itemState.rows || []).filter(function (x) { return x.part === part; })[0];
         if (row) {
           row.isActive = to;
-          if (row.productStatus) { row.productStatus = to ? 'ACTIVE' : 'INACTIVE'; row.statusLabel = to ? 'Active' : 'Inactive'; }
+          if (row.productStatus) { row.productStatus = res.productStatus || (to ? 'ACTIVE' : 'INACTIVE'); row.statusLabel = titleCase(row.productStatus); }
           else { row.active = to; row.statusLabel = to ? 'Active' : 'Inactive'; }
         }
         drawItems(user);
@@ -1004,7 +1007,7 @@
     var da = document.getElementById('idDeact');
     if (da) da.addEventListener('click', async function () {
       var rr = await authed('/catalog/items/' + encodeURIComponent(part) + '/active', { method: 'POST', body: { active: false } });
-      if (!rr.ok) { alert('Could not deactivate (' + rr.status + ').'); return; }
+      if (!rr.ok) { var md = ''; try { md = ((await rr.json()) || {}).message || ''; } catch (e4) {} alert(md || 'Could not deactivate (' + rr.status + ').'); return; }
       var form = document.getElementById('mForm');
       if (form && form.parentNode && form.parentNode.parentNode) form.parentNode.parentNode.removeChild(form.parentNode);
       loadItems(user);
@@ -1031,7 +1034,17 @@
       if ((cat.rows || []).length) drawProductTree(user); else loadProducts(user);
     });
     if (admin) {
-      document.getElementById('catNew').addEventListener('click', function () { openProductForm(user); });
+      // The same one-form, both-records create as the Catalog tab. This used to POST
+      // /catalog/products, which makes a Product with no priced record — a part the
+      // builder then offers at $0.00. The form's dropdowns need the vendor list and the
+      // categories, which this tab may not have loaded yet.
+      document.getElementById('catNew').addEventListener('click', async function () {
+        if (!itemState.manufacturers.length) {
+          try { var rm = await authed('/catalog/manufacturers'); if (rm.ok) itemState.manufacturers = ((await rm.json()) || []).map(function (m) { return m.name; }); } catch (e) {}
+        }
+        if (!catCategories.length) await loadCatCategories();
+        openSkuForm(user);
+      });
       document.getElementById('catCats').addEventListener('click', function () { openCategoryManager(user); });
       document.getElementById('catOrder').addEventListener('click', function () { openProductReorder(user); });
       document.getElementById('catExport').addEventListener('click', exportProductTree);
@@ -1074,15 +1087,20 @@
    * address (manufacturer).
    */
   function openSkuForm(user) {
-    var cats = itemState.categories || [];
+    // Categories WITH their ids: names are not unique, so the option carries the id and
+    // the server files the part under exactly the one picked. Labelled by full path
+    // when the tree is loaded, which is what tells two same-named sections apart.
+    var catRows = catCategories.length ? catCategories : (itemState.categoryRows || []);
     var mfrs = itemState.manufacturers || [];
     function opts(list, placeholder) {
       return ['<option value="">' + placeholder + '</option>'].concat(list.map(function (o) {
         return '<option value="' + esc(o) + '">' + esc(o) + '</option>';
       })).join('');
     }
-    var catField = cats.length
-      ? '<select id="kCat" style="' + IN + '">' + opts(cats, '— pick a section —') + '</select>'
+    var catField = catRows.length
+      ? '<select id="kCat" style="' + IN + '"><option value="">— pick a section —</option>' + catRows.map(function (c) { return { id: c.id, name: c.name, label: catCategories.length ? catPathLabel(c.id) : c.name }; })
+          .sort(function (a, b) { return a.label.localeCompare(b.label); })
+          .map(function (o) { return '<option value="' + esc(o.name) + '" data-id="' + esc(o.id) + '">' + esc(o.label) + '</option>'; }).join('') + '</select>'
       : '<input id="kCat" placeholder="Section name" style="' + IN + '">';
     var mfrField = mfrs.length
       ? '<select id="kMfr" style="' + IN + '">' + opts(mfrs, '— none yet —') + '</select>'
@@ -1150,6 +1168,8 @@
         var mfr = document.getElementById('kMfr').value.trim();
         if (mfr) body.manufacturer = mfr;
         if (qtyRaw !== '') body.defaultQty = parseInt(qtyRaw, 10) || 0;
+        var kCatEl = document.getElementById('kCat'), kCatOpt = kCatEl.options ? kCatEl.options[kCatEl.selectedIndex] : null;
+        if (kCatOpt && kCatOpt.getAttribute('data-id')) body.categoryId = kCatOpt.getAttribute('data-id');
 
         var r = await authed('/catalog/items', { method: 'POST', body: body });
         if (!r.ok) {
@@ -1710,32 +1730,13 @@
     });
   }
 
-  function openProductForm(user) {
-    if (!catCategories.length) { alert('Create a category first — products must belong to one.'); return; }
-    var catOpts = catCategories.map(function (c) { return '<option value="' + c.id + '">' + esc(c.name) + '</option>'; }).join('');
-    openModal('New product',
-      fieldRow('SKU', '<input id="pSku" placeholder="ABC-001" style="' + IN + 'text-transform:uppercase;" required>') +
-      fieldRow('Name', '<input id="pName" style="' + IN + '" required>') +
-      fieldRow('Kind', selectEl('pKind', KINDS, 'PRODUCT')) +
-      fieldRow('Category', '<select id="pCat" style="' + IN + '">' + catOpts + '</select>') +
-      fieldRow('Proposal description', '<textarea id="pDesc" rows="3" style="' + IN + 'resize:vertical;"></textarea>') +
-      '<div style="display:flex;gap:8px;"><div class="field" style="flex:1;"><label>Length (in)</label><input id="pL" type="number" min="0" style="' + IN + '"></div>' +
-      '<div class="field" style="flex:1;"><label>Width (in)</label><input id="pW" type="number" min="0" style="' + IN + '"></div>' +
-      '<div class="field" style="flex:1;"><label>Height (in)</label><input id="pH" type="number" min="0" style="' + IN + '"></div></div>',
-      async function (close, showErr) {
-        var sku = document.getElementById('pSku').value.trim().toUpperCase();
-        if (!/^[A-Z0-9][A-Z0-9-]{2,39}$/.test(sku)) return showErr('SKU must be 3–40 chars: letters, numbers, hyphens.');
-        var name = document.getElementById('pName').value.trim();
-        if (name.length < 2) return showErr('Name must be at least 2 characters.');
-        var body = { sku: sku, name: name, kind: document.getElementById('pKind').value, categoryId: document.getElementById('pCat').value };
-        var desc = document.getElementById('pDesc').value.trim(); if (desc) body.proposalDescription = desc;
-        ['L', 'W', 'H'].forEach(function (k) { var v = document.getElementById('p' + k).value; if (v !== '') body[{ L: 'lengthIn', W: 'widthIn', H: 'heightIn' }[k]] = parseInt(v, 10); });
-        var r = await authed('/catalog/products', { method: 'POST', body: body });
-        if (r.status === 409) return showErr('That SKU already exists.');
-        if (!r.ok) return showErr('Could not create (' + r.status + ').');
-        close(); cat.page = 1; loadProducts(user);
-      });
-  }
+  /*
+   * openProductForm — the tree tab's own "New product" dialog — was removed. It posted
+   * /catalog/products, so every part made from it had no priced record, and it read the
+   * dimension boxes with parseInt, turning 4.875 in into 4. The tab now opens the same
+   * form as the Catalog tab (openSkuForm); dimensions are set on the product's Edit
+   * dialog, which reads them with Number().
+   */
 
   /* ==================== Manufacturers ====================
    * The vendor of record: where a purchase order goes, who is called about it,
@@ -2206,12 +2207,21 @@
   async function openBundleComponents(bundle, user) {
     if (!bundle) return;
     var picked = (bundle.components || []).map(function (c) { return { productId: c.productId, sku: c.sku, name: c.name, quantity: c.quantity, unitPriceMinor: c.unitPriceMinor }; });
+    // Every page, by part number. One newest-first page of 500 used to be the whole
+    // search space, so older parts could never be added once the catalogue outgrew it.
+    // Retired parts are left out: an archived or inactive part is not offered on a new
+    // proposal, and it should not come back in by way of a bundle either.
     var products = [];
     try {
-      var r = await authed('/catalog/products?pageSize=500');
-      if (r.ok) products = ((await r.json()) || {}).items || [];
+      for (var pg = 1, total = 1; (pg - 1) * 500 < total && pg <= 20; pg++) {
+        var r = await authed('/catalog/products?page=' + pg + '&pageSize=500&sort=sku&dir=asc');
+        if (!r.ok) break;
+        var dp = (await r.json()) || {};
+        products = products.concat(dp.items || []);
+        total = dp.total || 0;
+      }
     } catch (e) {}
-    products = products.filter(function (p) { return p.kind !== 'BUNDLE'; });
+    products = products.filter(function (p) { return p.kind !== 'BUNDLE' && p.status !== 'ARCHIVED' && p.status !== 'INACTIVE'; });
 
     function pickedHtml() {
       if (!picked.length) return '<div class="muted" style="padding:12px;font-size:13px;">Nothing added yet — search below.</div>';
@@ -2297,6 +2307,28 @@
     var counts = {};
     (cat.rows || []).forEach(function (p) { counts[p.categoryId] = (counts[p.categoryId] || 0) + 1; });
 
+    /*
+     * A category's tier is where it sits — 1 at the top, one more for each parent — and
+     * the server now derives it that way and refuses anything else. The row used to offer
+     * Tier 1–4 on every category, so it showed a choice that was never really one; it
+     * shows the tier the position gives. New categories pick a PARENT, and the tier
+     * follows from it.
+     */
+    function tierOf(c) {
+      var byId = {}; list.forEach(function (x) { byId[x.id] = x; });
+      var n = 0, seen = {}, cur = c;
+      while (cur && !seen[cur.id] && n < 12) { seen[cur.id] = 1; n++; cur = cur.parentId ? byId[cur.parentId] : null; }
+      return n;
+    }
+    // A new child is placed at its parent's stored tier + 1, the rule the server checks.
+    function parentTier(p) { return p.tierLevel || tierOf(p); }
+    function parentOpts() {
+      return '<option value="">Top level</option>' + list.filter(function (c) { return parentTier(c) < 4; })
+        .map(function (c) { return { id: c.id, label: catPathLabel(c.id) }; })
+        .sort(function (a, b) { return a.label.localeCompare(b.label); })
+        .map(function (o) { return '<option value="' + o.id + '">' + esc(o.label) + '</option>'; }).join('');
+    }
+
     function rowHtml(c, i) {
       return '<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid #f2f3ef;">' +
         '<div style="display:flex;flex-direction:column;gap:2px;">' +
@@ -2304,29 +2336,30 @@
           '<button type="button" class="cmDown" data-i="' + i + '" title="Move down" style="border:1px solid #dcded7;background:#fff;border-radius:5px;cursor:pointer;font-size:10px;line-height:1;padding:2px 5px;">▼</button>' +
         '</div>' +
         '<input class="cmName" data-id="' + c.id + '" value="' + esc(c.name) + '" style="flex:1;padding:6px 8px;border:1px solid #dcded7;border-radius:6px;font-size:13px;">' +
-        '<select class="cmTier" data-id="' + c.id + '" style="padding:6px 7px;border:1px solid #dcded7;border-radius:6px;font-size:12.5px;background:#fff;">' +
-          [1, 2, 3, 4].map(function (t) { return '<option value="' + t + '"' + ((c.tierLevel || 1) === t ? ' selected' : '') + '>Tier ' + t + '</option>'; }).join('') +
-        '</select>' +
+        '<span class="cmTier muted" data-id="' + c.id + '" title="' + esc(c.parentId ? 'Under ' + catPathLabel(c.parentId) : 'Top level') + '" style="font-size:12px;white-space:nowrap;">Tier ' + tierOf(c) + '</span>' +
         '<span class="muted" style="font-size:11.5px;width:74px;text-align:right;">' + (counts[c.id] || 0) + ' part' + ((counts[c.id] || 0) === 1 ? '' : 's') + '</span>' +
         '<label style="display:flex;gap:5px;align-items:center;font-size:11.5px;color:#5c6157;"><input type="checkbox" class="cmActive" data-id="' + c.id + '"' + (c.isActive === false ? '' : ' checked') + '> shown</label>' +
         '<button type="button" class="cmDel" data-id="' + c.id + '" style="border:1px solid #e0e1db;background:#fff;border-radius:7px;color:#9c3327;cursor:pointer;padding:4px 8px;font-size:12px;">✕</button>' +
       '</div>';
     }
     openModal('Categories & tiers',
-      '<div class="muted" style="font-size:12.5px;margin-bottom:10px;line-height:1.55;">Renaming a category never moves a product — the name is only a label. The arrows set the order categories appear in; the tier is the level it sits at in the tree.</div>' +
+      '<div class="muted" style="font-size:12.5px;margin-bottom:10px;line-height:1.55;">Renaming a category never moves a product — the name is only a label. The arrows set the order categories appear in; the tier is the level it sits at in the tree, and follows from its parent (the tree is at most four tiers deep).</div>' +
       '<div id="cmList" style="border:1px solid #e7e8e3;border-radius:10px;max-height:380px;overflow:auto;">' + list.map(rowHtml).join('') + '</div>' +
-      '<div style="display:flex;justify-content:flex-end;margin-top:10px;"><button type="button" class="link-btn" id="cmAdd" style="width:auto;padding:8px 14px;">+ New category</button></div>',
+      '<div style="display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:10px;flex-wrap:wrap;">' +
+        '<input id="cmNewName" placeholder="New category name" style="flex:1;min-width:160px;padding:7px 9px;border:1px solid #dcded7;border-radius:6px;font-size:13px;">' +
+        '<select id="cmNewParent" title="Parent category" style="max-width:280px;padding:7px 8px;border:1px solid #dcded7;border-radius:6px;font-size:12.5px;background:#fff;">' + parentOpts() + '</select>' +
+        '<span id="cmNewTier" class="muted" style="font-size:12px;">Tier 1</span>' +
+        '<button type="button" class="link-btn" id="cmAdd" style="width:auto;padding:8px 14px;">+ Add category</button>' +
+      '</div>',
       async function (close, showErr) {
         // Names, tiers and visibility first, then one reorder call for the lot.
         for (var i = 0; i < list.length; i++) {
           var c = list[i];
           var nameEl = document.querySelector('.cmName[data-id="' + c.id + '"]');
-          var tierEl = document.querySelector('.cmTier[data-id="' + c.id + '"]');
           var actEl = document.querySelector('.cmActive[data-id="' + c.id + '"]');
           if (!nameEl) continue;
           var body = {};
           if (nameEl.value.trim() && nameEl.value.trim() !== c.name) body.name = nameEl.value.trim();
-          if (tierEl && Number(tierEl.value) !== (c.tierLevel || 1)) body.tierLevel = Number(tierEl.value);
           if (actEl && actEl.checked !== (c.isActive !== false)) body.isActive = actEl.checked;
           if (!Object.keys(body).length) continue;
           var r = await authed('/catalog/categories/' + c.id, { method: 'PATCH', body: body });
@@ -2366,14 +2399,27 @@
     }
     setTimeout(function () {
       wire();
-      var add = document.getElementById('cmAdd');
+      var add = document.getElementById('cmAdd'), parentSel = document.getElementById('cmNewParent'), tierLbl = document.getElementById('cmNewTier');
+      function parentPicked() { return parentSel && parentSel.value ? list.filter(function (c) { return c.id === parentSel.value; })[0] || null : null; }
+      function showNewTier() { var p = parentPicked(); if (tierLbl) tierLbl.textContent = 'Tier ' + (p ? parentTier(p) + 1 : 1); }
+      if (parentSel) parentSel.addEventListener('change', showNewTier);
       if (add) add.addEventListener('click', async function () {
-        var name = prompt('New category name');
-        if (!name || name.trim().length < 2) return;
-        var r = await authed('/catalog/categories', { method: 'POST', body: { name: name.trim(), slug: slugify(name), sortOrder: list.length, isActive: true } });
-        if (!r.ok) { alert('Could not create (' + r.status + ').'); return; }
+        var nameEl = document.getElementById('cmNewName'), name = nameEl ? nameEl.value.trim() : '';
+        if (name.length < 2) { alert('Type a name for the new category (at least 2 characters).'); return; }
+        var parent = parentPicked();
+        // Slugs are unique; two sections can share a name under different parents.
+        var slug = slugify(name);
+        if (list.some(function (c) { return c.slug === slug; })) slug = slugify((parent ? parent.name + ' ' : '') + name);
+        if (list.some(function (c) { return c.slug === slug; })) slug += '-' + Date.now().toString(36).slice(-4);
+        var body = { name: name, slug: slug, sortOrder: list.length, isActive: true, tierLevel: parent ? parentTier(parent) + 1 : 1 };
+        if (parent) body.parentId = parent.id;
+        var r = await authed('/catalog/categories', { method: 'POST', body: body });
+        if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} alert(m || 'Could not create (' + r.status + ').'); return; }
         var created = await r.json();
         list.push(created); catCategories.push(created); repaint();
+        if (nameEl) nameEl.value = '';
+        if (parentSel) { var keep = parentSel.value; parentSel.innerHTML = parentOpts(); parentSel.value = keep; }
+        showNewTier();
       });
     }, 50);
   }
@@ -2383,6 +2429,10 @@
    * saving writes the order the proposal picker and the tier listings read.
    */
   function openProductReorder(user) {
+    // A typed search means cat.rows holds only the matching parts, and saving numbers
+    // the rows it was given from 0 — so the matches jumped ahead of every other part
+    // in the catalogue. Refused rather than guessed at: clear the search first.
+    if (cat.q) { alert('Clear the search box first. The sort order is saved for the whole catalogue, and with a search active only the matching parts are loaded.'); return; }
     // The whole catalogue, in its current order, is always what gets saved. The
     // tier filter narrows what is SHOWN; moving a row swaps it with its neighbour in
     // the same tier, and every other product keeps the number it has. Saving a
