@@ -2277,7 +2277,7 @@
           '<button type="button" class="cmDown" data-i="' + i + '" title="Move down" style="border:1px solid #dcded7;background:#fff;border-radius:5px;cursor:pointer;font-size:10px;line-height:1;padding:2px 5px;">▼</button>' +
         '</div>' +
         '<input class="cmName" data-id="' + c.id + '" value="' + esc(c.name) + '" style="flex:1;padding:6px 8px;border:1px solid #dcded7;border-radius:6px;font-size:13px;">' +
-        '<span class="cmTier muted" data-id="' + c.id + '" title="' + esc(c.parentId ? 'Under ' + catPathLabel(c.parentId) : 'Top level') + '" style="font-size:12px;width:44px;">Tier ' + tierOf(c) + '</span>' +
+        '<span class="cmTier muted" data-id="' + c.id + '" title="' + esc(c.parentId ? 'Under ' + catPathLabel(c.parentId) : 'Top level') + '" style="font-size:12px;white-space:nowrap;">Tier ' + tierOf(c) + '</span>' +
         '<span class="muted" style="font-size:11.5px;width:74px;text-align:right;">' + (counts[c.id] || 0) + ' part' + ((counts[c.id] || 0) === 1 ? '' : 's') + '</span>' +
         '<label style="display:flex;gap:5px;align-items:center;font-size:11.5px;color:#5c6157;"><input type="checkbox" class="cmActive" data-id="' + c.id + '"' + (c.isActive === false ? '' : ' checked') + '> shown</label>' +
         '<button type="button" class="cmDel" data-id="' + c.id + '" style="border:1px solid #e0e1db;background:#fff;border-radius:7px;color:#9c3327;cursor:pointer;padding:4px 8px;font-size:12px;">✕</button>' +
