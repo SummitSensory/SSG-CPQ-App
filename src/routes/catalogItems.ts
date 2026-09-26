@@ -3,11 +3,6 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
-import { recordAudit } from '../lib/audit.js';
-import { ValidationError, ConflictError, NotFoundError } from '../lib/errors.js';
-import { reassignSkuVendor } from '../handoff/vendorReassign.js';
-import { syncPartSourcing } from '../catalog/partVendor.js';
-import { recordRevision, skuSnapshot } from '../lib/revisions.js';
 import {
   deletePartRecords,
   partDeletion,
@@ -15,6 +10,11 @@ import {
   resolveCategoryRef,
   setPartActiveTx,
 } from '../catalog/service.js';
+import { recordAudit } from '../lib/audit.js';
+import { ValidationError, ConflictError, NotFoundError } from '../lib/errors.js';
+import { reassignSkuVendor } from '../handoff/vendorReassign.js';
+import { syncPartSourcing } from '../catalog/partVendor.js';
+import { recordRevision, skuSnapshot } from '../lib/revisions.js';
 
 /**
  * The single catalog list.
