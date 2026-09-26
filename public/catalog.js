@@ -82,6 +82,15 @@
   var catCategories = [];
   var KINDS = ['PRODUCT', 'VARIANT', 'COMPONENT', 'BUNDLE', 'ACCESSORY', 'SERVICE'];
   var STATUSES = ['DRAFT', 'ACTIVE', 'INACTIVE', 'ARCHIVED'];
+  /**
+   * Where a product's status can go from here — the same map the server enforces
+   * (TRANSITIONS in src/catalog/service.ts). DRAFT means "never live", which is what
+   * lets a product be hard-deleted, so nothing that has been active goes back to it;
+   * ARCHIVED is final. The row dropdown used to offer all four statuses, so picking
+   * Draft on an inactive product just earned a bare 409.
+   */
+  var STATUS_NEXT = { DRAFT: ['ACTIVE', 'ARCHIVED'], ACTIVE: ['INACTIVE', 'ARCHIVED'], INACTIVE: ['ACTIVE', 'ARCHIVED'], ARCHIVED: [] };
+  function statusChoices(current) { return STATUSES.filter(function (st) { return st === current || (STATUS_NEXT[current] || []).indexOf(st) !== -1; }); }
   function catById(id) { return catCategories.filter(function (x) { return x.id === id; })[0] || null; }
   function catName(id) { var c = catById(id); return c ? c.name : '—'; }
   /** Full tier path for a category, e.g. ["Adventure Series", "Zip Line", "Complete Zip Line Kit"]. */
@@ -1423,7 +1432,7 @@
 
     var rows = pageRows.map(function (p) {
       var statusCell = admin
-        ? '<select data-pid="' + p.id + '" class="rowStatus" style="padding:6px 9px;border:1px solid #dcded7;border-radius:8px;font-size:13px;background:#fff;width:100%;">' + STATUSES.map(function (st) { return '<option value="' + st + '"' + (p.status === st ? ' selected' : '') + '>' + titleCase(st) + '</option>'; }).join('') + '</select>'
+        ? '<select data-pid="' + p.id + '" data-was="' + p.status + '" class="rowStatus"' + (p.status === 'ARCHIVED' ? ' disabled title="Archived is final — the product stays on past proposals but cannot be reactivated."' : '') + ' style="padding:6px 9px;border:1px solid #dcded7;border-radius:8px;font-size:13px;background:#fff;width:100%;">' + statusChoices(p.status).map(function (st) { return '<option value="' + st + '"' + (p.status === st ? ' selected' : '') + '>' + titleCase(st) + '</option>'; }).join('') + '</select>'
         : '<span class="chip">' + titleCase(p.status) + '</span>';
       return '<tr>' + td('<code style="font-size:13px;color:#4a4f47;">' + esc(p.sku) + '</code>') +
         td('<b style="font-weight:600;">' + esc(p.name) + '</b>' + (p.proposalDescription ? '<div class="muted" style="font-size:12px;max-width:420px;line-height:1.45;">' + esc(String(p.proposalDescription).slice(0, 120)) + (String(p.proposalDescription).length > 120 ? '…' : '') + '</div>' : '')) +
@@ -1466,10 +1475,18 @@
     }
     Array.prototype.forEach.call(box.querySelectorAll('.rowStatus'), function (sel) {
       sel.addEventListener('change', async function () {
+        var was = sel.getAttribute('data-was');
+        if (sel.value === 'ARCHIVED' && !confirm('Archive this product? Archiving is final: it stays on past proposals but cannot be made active again.')) { sel.value = was; return; }
         var r2 = await authed('/catalog/products/' + sel.getAttribute('data-pid') + '/status', { method: 'PATCH', body: { status: sel.value, reason: 'changed from workspace' } });
-        if (!r2.ok) { alert('Could not change status (' + r2.status + ').'); loadProducts(user); return; }
+        if (!r2.ok) {
+          var msg = ''; try { msg = ((await r2.json()) || {}).message || ''; } catch (e) {}
+          alert('Could not change status (' + r2.status + ')' + (msg ? ': ' + msg : '') + '.');
+          loadProducts(user); return;
+        }
         var row = (cat.rows || []).filter(function (x) { return x.id === sel.getAttribute('data-pid'); })[0];
         if (row) row.status = sel.value;
+        // The choices depend on the status, so redraw rather than leave stale options.
+        drawProductTree(user);
       });
     });
     Array.prototype.forEach.call(box.querySelectorAll('.qboSync'), function (b) {
