@@ -4161,6 +4161,9 @@
         // with nothing. referenceDocsCard() already defaults a missing array to
         // [], so this only needed to stop discarding what was actually saved.
         referenceDocKeys: Array.isArray(meta.referenceDocKeys) ? meta.referenceDocKeys.slice() : [],
+        // The Canadian Section A line name (see sectionANameFor). Same carry-over rule:
+        // left off this list, the next save would silently erase it.
+        sectionAName: typeof meta.sectionAName === 'string' ? meta.sectionAName : '',
         // Same carry-over discipline as referenceDocKeys just above, and for the same
         // reason: absent from this allowlist would silently drop an existing offer/
         // election the next time this version is saved.
@@ -4949,6 +4952,20 @@
   }
 
   /**
+   * The name printed on a Canadian proposal's single Section A line.
+   *
+   * What the rep typed into "Section A name" (the Canadian proposal panel), otherwise
+   * the suggested "{Category} Complete Therapeutic System — Model {code}" above, otherwise
+   * the proposal title. Resolved here, where titleSuggestion lives, and handed to the
+   * document on its model, so preview, print, PDF and the signing package all print the
+   * same name.
+   */
+  function sectionANameFor(meta, lines, title) {
+    var typed = String((meta && meta.sectionAName) || '').trim();
+    return typed || titleSuggestion(lines) || String(title || '').trim();
+  }
+
+  /**
    * A model-shaped token inside free text — "SQ-3MBL2TZ", "K-4000".
    *
    * Reps used to type the model into the proposal title. The document now prints the
@@ -5195,7 +5212,12 @@
         '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:8px;cursor:pointer;"><input type="checkbox" id="mShowProj"' + (pb.meta.showProjectId ? ' checked' : '') + '> Show Project ID on the customer proposal</label>' +
         // Not every job takes a deposit. Unchecked, the deposit line is left off the
         // customer proposal entirely rather than printed as $0.
-        '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:6px;cursor:pointer;"><input type="checkbox" id="mShowDeposit"' + (pb.meta.showDeposit !== false ? ' checked' : '') + '> Show the ' + depositPct() + '% deposit on the customer proposal</label>' +
+        // A Canadian proposal never shows a deposit (see showDeposit in
+        // proposal-document.js), so the box is locked off rather than left to be
+        // remembered — enforceCanadianNoDeposit keeps pb.meta in step with it.
+        (cbIsCanadianOpen()
+          ? '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:6px;color:#7b8190;"><input type="checkbox" id="mShowDeposit" disabled> No deposit is shown on a Canadian proposal</label>'
+          : '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:6px;cursor:pointer;"><input type="checkbox" id="mShowDeposit"' + (pb.meta.showDeposit !== false ? ' checked' : '') + '> Show the ' + depositPct() + '% deposit on the customer proposal</label>') +
       '</div>' +
       // Which introduction, its photos, and what to generate. Empty for a product
       // line that has no introduction registered — see proposal-front-matter.js.
@@ -5753,9 +5775,14 @@
      first two would tell a customer they owe SSG money that goes to the government. */
   var cbData = null;
 
+  /** Is the proposal open in the builder a Canadian one (as far as we know yet)? */
+  function cbIsCanadianOpen() {
+    return !!(pb && cbData && cbData.versionId === pb.versionId && cbData.applicable);
+  }
+
   async function loadCrossBorder(force) {
     if (!pb || isMock() || !pb.versionId) return;
-    if (!force && cbData && cbData.versionId === pb.versionId) { renderCrossBorderRail(); return; }
+    if (!force && cbData && cbData.versionId === pb.versionId) { renderCrossBorderRail(); enforceCanadianNoDeposit(); return; }
     if (force) cbData = null;
     renderCrossBorderRail();
     var versionId = pb.versionId;
@@ -5767,6 +5794,46 @@
       cbData = { versionId: versionId, applicable: false, error: 'Could not load the Canadian calculation.' };
     }
     renderCrossBorderRail();
+    enforceCanadianNoDeposit();
+  }
+
+  /**
+   * A Canadian proposal carries no deposit. Turns the flag off the first time the
+   * builder learns the proposal is Canadian, and swaps any deposit-conditional notes
+   * for their no-deposit counterparts (applyConditionalNotes), exactly as unticking the
+   * box by hand would. Re-renders once so the header shows the locked checkbox; after
+   * that both conditions below are false and it does nothing.
+   */
+  function enforceCanadianNoDeposit() {
+    if (!cbIsCanadianOpen()) return;
+    var box = document.getElementById('mShowDeposit');
+    if (pb.meta.showDeposit !== false && !pb.readOnly) {
+      pb.meta.showDeposit = false;
+      applyConditionalNotes();
+      markBuilderDirty();
+      renderBuilderKeepingFocus();
+    } else if (box && !box.disabled) {
+      renderBuilderKeepingFocus();
+    }
+  }
+
+  /**
+   * Bring the Canadian figures up to date before a document is built from them.
+   *
+   * The tariff, tax and landed cost come from the server, which works them out from
+   * the SAVED version — so figures fetched before the line items were saved describe a
+   * proposal with no equipment in it. P-2026-000171 printed exactly that: its customs
+   * rates were entered before its lines were saved, and its document showed a $0.00
+   * tariff and tax on the brokerage fee alone. Unsaved edits are saved first, then the
+   * figures are fetched again. A domestic proposal is untouched.
+   */
+  async function refreshCanadianBeforeDoc() {
+    if (!cbIsCanadianOpen()) return true;
+    if (pbDirty && !pb.readOnly) {
+      try { await saveBuilderQuiet('recalculating the Canadian charges'); } catch (e) { alert(e.message); return false; }
+    }
+    await loadCrossBorder(true);
+    return true;
   }
 
   function renderCrossBorderRail() {
@@ -5858,8 +5925,18 @@
           '</ul></div>'
       : '';
 
+    // The name of Section A's single priced line on the customer document. Blank
+    // prints the suggestion shown as the placeholder (sectionANameFor).
+    var saField =
+      '<div style="margin:0 0 10px;">' +
+        '<label for="cbSectionAName" style="font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:#20241f;display:block;margin-bottom:3px;">Section A name</label>' +
+        '<input id="cbSectionAName" value="' + esc(pb.meta.sectionAName || '') + '" placeholder="' + esc(sectionANameFor({}, pb.lines, pb.title)) + '"' + (pb.readOnly ? ' disabled' : '') +
+          ' style="width:100%;padding:7px 9px;border:1px solid #dcded7;border-radius:8px;font-size:12.5px;background:#fff;box-sizing:border-box;">' +
+        '<div class="muted" style="font-size:10.5px;line-height:1.45;margin-top:3px;">Prints as the one priced line in Section A, at the Section A total. Every item on the proposal is listed beneath it as Included. Leave blank to use the suggestion.</div>' +
+      '</div>';
+
     if (!res) {
-      return '<div class="card" style="margin-top:14px;border:1px solid #e4dfd0;background:#fdfcf7;">' + head + fxBlock + blockBlock + '</div>';
+      return '<div class="card" style="margin-top:14px;border:1px solid #e4dfd0;background:#fdfcf7;">' + head + saField + fxBlock + blockBlock + '</div>';
     }
 
     var rows = (res.lines || []).map(function (l) {
@@ -5884,7 +5961,7 @@
       '</table>';
 
     return '<div class="card" style="margin-top:14px;border:1px solid #e4dfd0;background:#fdfcf7;">' +
-      head + fxBlock + blockBlock +
+      head + saField + fxBlock + blockBlock +
       '<table style="width:100%;border-collapse:collapse;">' + rows + '</table>' +
       totals +
       '<button class="link-btn" id="cbCustoms" style="width:auto;padding:6px 11px;font-size:12px;margin-top:11px;">Customs and duties\u2026</button>' +
@@ -5900,6 +5977,8 @@
     if (sb) sb.addEventListener('click', openSectionBForm);
     var c = document.getElementById('cbSectionC');
     if (c) c.addEventListener('click', openSectionCForm);
+    var sa = document.getElementById('cbSectionAName');
+    if (sa) sa.addEventListener('input', function () { pb.meta.sectionAName = sa.value; markBuilderDirty(); });
   }
 
 
@@ -6238,11 +6317,9 @@
             : '') +
           '<div style="margin-top:6px;padding-top:6px;border-top:1px dotted #e7e8e3;">' +
           '<textarea class="scSubtext" data-i="' + i + '" rows="2" placeholder="Optional clarifying subtext — **bold**, *italic*. Never required." style="width:100%;border:1px solid #ece9db;border-radius:7px;padding:5px 7px;font-size:11px;font-family:inherit;resize:vertical;background:#fff;">' + esc(it.subtext || '') + '</textarea>' +
-          '<div style="display:flex;align-items:center;gap:6px;margin-top:3px;">' +
-          '<span class="muted" style="font-size:10px;">Size</span>' +
-          '<input type="number" class="scSubtextSize" data-i="' + i + '" min="7" max="12" step="0.5" value="' + esc(it.subtextSizePt || 9) + '" style="width:56px;padding:3px 5px;border:1px solid #dcded7;border-radius:6px;font-size:10.5px;">' +
-          '<span class="muted" style="font-size:10px;">pt</span>' +
-          '</div></div>' +
+          // No size box: every Canadian section prints its text at one size, set by
+          // the document (CB_BODY_PX in proposal-document.js), not per row.
+          '</div>' +
           '</div>' +
           '<button type="button" class="scDel" data-i="' + i + '" style="border:1px solid #e0e1db;background:#fff;border-radius:8px;width:28px;height:28px;color:#9c3327;cursor:pointer;flex:0 0 auto;">✕</button></div>';
       }).join('');
@@ -6288,22 +6365,6 @@
       });
       root.querySelectorAll('.scSubtext').forEach(function (el) {
         el.addEventListener('input', function () { var it = items[+el.getAttribute('data-i')]; if (it) it.subtext = el.value; });
-      });
-      root.querySelectorAll('.scSubtextSize').forEach(function (el) {
-        el.addEventListener('input', function () {
-          var it = items[+el.getAttribute('data-i')];
-          if (it) it.subtextSizePt = el.value === '' ? undefined : parseFloat(el.value);
-        });
-        // Clamps to the 7-12pt range the server enforces on blur, not on every
-        // keystroke, so an out-of-range value can't reach the PATCH and surface a raw
-        // Zod error instead of just being corrected in place.
-        el.addEventListener('change', function () {
-          var it = items[+el.getAttribute('data-i')];
-          if (!it || el.value === '') return;
-          var clamped = Math.min(12, Math.max(7, parseFloat(el.value)));
-          el.value = String(clamped);
-          it.subtextSizePt = clamped;
-        });
       });
       root.querySelectorAll('.scDel').forEach(function (b) {
         b.addEventListener('click', function () { items.splice(+b.getAttribute('data-i'), 1); rerender(); });
@@ -6398,11 +6459,6 @@
           '<div style="flex:1;min-width:0;">' +
           '<input class="sbLabel" data-i="' + i + '" value="' + esc(it.label || '') + '" placeholder="Item label" style="width:100%;border:none;background:transparent;font-weight:600;font-size:13px;outline:none;margin-bottom:4px;">' +
           '<textarea class="sbText" data-i="' + i + '" rows="2" placeholder="What prints for this item — **bold**, *italic*" style="width:100%;border:1px solid #ece9db;border-radius:7px;padding:6px 8px;font-size:12px;font-family:inherit;resize:vertical;background:#fff;">' + esc(it.text || '') + '</textarea>' +
-          '<div style="display:flex;align-items:center;gap:6px;margin-top:4px;">' +
-          '<span class="muted" style="font-size:10px;">Size</span>' +
-          '<input type="number" class="sbSize" data-i="' + i + '" min="7" max="12" step="0.5" value="' + esc(it.sizePt || 9) + '" style="width:56px;padding:3px 5px;border:1px solid #dcded7;border-radius:6px;font-size:10.5px;">' +
-          '<span class="muted" style="font-size:10px;">pt</span>' +
-          '</div>' +
           '</div>' +
           '<button type="button" class="sbDel" data-i="' + i + '" style="border:1px solid #e0e1db;background:#fff;border-radius:8px;width:28px;height:28px;color:#9c3327;cursor:pointer;flex:0 0 auto;">✕</button></div>';
       }).join('');
@@ -6435,20 +6491,6 @@
       });
       root.querySelectorAll('.sbText').forEach(function (el) {
         el.addEventListener('input', function () { var it = items[+el.getAttribute('data-i')]; if (it) it.text = el.value; });
-      });
-      root.querySelectorAll('.sbSize').forEach(function (el) {
-        el.addEventListener('input', function () {
-          var it = items[+el.getAttribute('data-i')];
-          if (it) it.sizePt = el.value === '' ? undefined : parseFloat(el.value);
-        });
-        // Same 7-12pt clamp-on-blur as Section C's scSubtextSize above.
-        el.addEventListener('change', function () {
-          var it = items[+el.getAttribute('data-i')];
-          if (!it || el.value === '') return;
-          var clamped = Math.min(12, Math.max(7, parseFloat(el.value)));
-          el.value = String(clamped);
-          it.sizePt = clamped;
-        });
       });
       root.querySelectorAll('.sbDel').forEach(function (b) {
         b.addEventListener('click', function () { items.splice(+b.getAttribute('data-i'), 1); rerender(); });
@@ -7390,10 +7432,10 @@
       document.getElementById('bMkReal').addEventListener('click', function () { convertMockToProposal(pb.user); });
     } else {
       document.getElementById('bSave').addEventListener('click', saveBuilder);
-      document.getElementById('bPreview').addEventListener('click', function () { previewProposalDoc(builderDoc()); });
+      document.getElementById('bPreview').addEventListener('click', async function () { if (await refreshCanadianBeforeDoc()) previewProposalDoc(builderDoc()); });
     // Straight to the print dialog. The preview still opens behind it, so cancelling
     // the print leaves the document on screen rather than dumping you back.
-      document.getElementById('bPdf').addEventListener('click', function () { previewProposalDoc(builderDoc(), true); });
+      document.getElementById('bPdf').addEventListener('click', async function () { if (await refreshCanadianBeforeDoc()) previewProposalDoc(builderDoc(), true); });
     // Leaves the builder. Identical to "‹ Cancel" — both honour the unsaved-changes
     // guard — and it is here because the exit belongs beside Save, not only in the
     // top-left corner.
@@ -8007,6 +8049,7 @@
     return {
       title: pb.title, number: pb.number, orgName: pb.orgName, meta: pb.meta, lines: pb.lines,
       status: pb.status, version: pb.version,
+      sectionAName: sectionANameFor(pb.meta, pb.lines, pb.title),
       totals: builderTotals(),
       // Already loaded for the rail. Attached only when it belongs to THIS version,
       // so a stale answer from a previously open proposal cannot reach a document.
@@ -8026,13 +8069,14 @@
    * server-side from the stored version and would otherwise miss a line the rep
    * added a moment ago.
    */
-  async function saveBuilderQuiet() {
+  async function saveBuilderQuiet(purpose) {
+    var why = purpose || 'raising the request';
     // The freight review opens a frozen version in the same state shape, and a mock has
     // no version at all. Nothing to save either way, and the API would refuse it.
     if (pb && (pb.readOnly || pb.mock)) return;
     var r = await authed('/proposals/versions/' + pb.versionId, { method: 'PATCH', body: builderVersionPayload() });
-    if (r.status === 409) throw new Error('Someone else saved this proposal while you were editing it. Reload before raising the request.');
-    if (!r.ok) throw new Error('Could not save the proposal before raising the request (' + r.status + ').');
+    if (r.status === 409) throw new Error('Someone else saved this proposal while you were editing it. Reload before ' + why + '.');
+    if (!r.ok) throw new Error('Could not save the proposal before ' + why + ' (' + r.status + ').');
     var qj = null; try { qj = await r.json(); } catch (e) {}
     if (qj && qj.updatedAt) pb.updatedAt = qj.updatedAt;
     clearBuilderDirty();
@@ -8048,6 +8092,9 @@
       if (sj && sj.updatedAt) pb.updatedAt = sj.updatedAt;
       btn.textContent = 'Saved ✓';
       clearBuilderDirty();
+      // The Canadian tariff, tax and landed cost are worked out from the saved version,
+      // so what the rail (and the next preview) shows is only current after a save.
+      if (cbIsCanadianOpen()) loadCrossBorder(true);
       // Stay in the builder. Saving mid-edit is the common case; bouncing back to
       // the detail page forced a re-entry for every save. "‹ Cancel" is the way out.
       setTimeout(function () { var b = document.getElementById('bSave'); if (b) { b.disabled = false; b.textContent = 'Save'; } }, 1200);
@@ -8130,6 +8177,7 @@
       title: proposal.title, number: proposal.number, version: version.version || 1,
       status: version.status || 'DRAFT',
       orgName: orgName, meta: meta, lines: lines, crossBorder: cb,
+      sectionAName: sectionANameFor(meta, lines, proposal.title),
       totals: {
         subtotal: subtotal, discountPct: discountPct, discountMode: discountMode, discount: discount, tpFreight: tpFreight,
         tax: tax, structureFreight: structureFreight, matsFreight: matsFreight, stdFreight: stdFreight,
@@ -8238,44 +8286,75 @@
         });
         return;
       }
+      pushBlock(node, '', '', node.hasAttribute('data-page-break'));
+    });
+
+    /*
+     * A block is placed whole unless it has to be broken, and then it is broken at its
+     * own children — recursively, however deep the content sits.
+     *
+     * It has to be broken when it is taller than a sheet: placed as one atom it printed
+     * as far as the sheet allowed and silently lost the rest. The standard terms were
+     * the first case (twelve clauses in one wrapper). A Canadian proposal had two more
+     * that were one level deeper than this used to look — the cross-border terms inside
+     * the acceptance page, and Section C inside the totals column — so their last
+     * clause ran under the footer and whatever followed it never printed at all.
+     *
+     * It is also broken, whatever its height, when it is marked data-flow: running
+     * text such as Section C or the cross-border terms should continue on the next
+     * sheet, not jump there whole and leave the bottom of this one empty.
+     *
+     * Each child is re-wrapped in copies of every wrapper above it on the way out,
+     * because the wrappers are what carry the typeface, size and indentation for
+     * everything inside them. Only the first child inherits a forced page break. A
+     * child marked data-keep-next (a heading) is kept on the same sheet as the atom
+     * after it.
+     */
+    function pushBlock(node, open, close, brk) {
       var h = outerH(node);
-      // A block taller than a sheet is broken at its own children rather than placed
-      // whole and clipped. The standard terms are one such block — twelve clauses in a
-      // single wrapper, some 18 inches of text — and placed as one atom they printed
-      // as far as the sheet allowed and silently lost the rest.
-      //
-      // Each child is re-wrapped in a copy of the parent's opening tag on the way out,
-      // because the wrapper is what carries the typeface and size for everything in it.
-      if (h > CONTENT_H && node.children.length > 1) {
+      var kids = node.children;
+      var split = kids.length > 0 && (node.hasAttribute('data-flow') ? true : h > CONTENT_H && kids.length > 1);
+      if (split) {
         var shell = node.cloneNode(false);
         shell.removeAttribute('data-page-break');
-        var open = shell.outerHTML.replace(/<\/[a-z]+>$/i, '');
-        Array.prototype.forEach.call(node.children, function (kid, ki) {
-          atoms.push({
-            kind: 'block',
-            node: kid,
-            h: outerH(kid),
-            // Only the first child inherits the wrapper's forced break; the rest flow.
-            brk: ki === 0 && node.hasAttribute('data-page-break'),
-            open: open,
-            close: '</' + node.tagName.toLowerCase() + '>',
-          });
+        shell.removeAttribute('data-flow');
+        // The forced break belongs to the first child's sheet, which the packer already
+        // starts fresh; a copy of it on every re-wrapped child is at best redundant.
+        shell.style.breakBefore = '';
+        shell.style.pageBreakBefore = '';
+        var shellOpen = shell.outerHTML.replace(/<\/[a-z0-9]+>$/i, '');
+        var shellClose = '</' + node.tagName.toLowerCase() + '>';
+        Array.prototype.forEach.call(kids, function (kid, ki) {
+          pushBlock(kid, open + shellOpen, shellClose + close, brk && ki === 0);
         });
         return;
       }
-      atoms.push({ kind: 'block', node: node, h: h, brk: node.hasAttribute('data-page-break') });
-    });
+      atoms.push({
+        kind: 'block',
+        node: node,
+        h: h,
+        brk: brk,
+        keepNext: node.hasAttribute('data-keep-next'),
+        open: open,
+        close: close,
+      });
+    }
 
     var sheets = [], cur = [], used = 0;
     function flush() { if (cur.length) { sheets.push(cur); cur = []; used = 0; } }
     function tabular(x) { return x.kind === 'row' || x.kind === 'section'; }
 
-    atoms.forEach(function (a) {
+    atoms.forEach(function (a, ai) {
       var headH = a.head ? a.head.getBoundingClientRect().height : 0;
       // A continued table repeats its header, so that height has to be reserved.
       var need = a.h + (a.head && !cur.some(tabular) ? headH : 0);
+      // A heading asks for room for itself AND what it introduces, so it is never the
+      // last thing on a sheet. Only the space is reserved; the next atom is still
+      // placed by its own turn of this loop.
+      var next = atoms[ai + 1];
+      var fit = need + (a.keepNext && next && !next.brk ? next.h : 0);
       if (a.brk) flush();
-      else if (used + need > CONTENT_H && used > 0) flush();
+      else if (used + fit > CONTENT_H && used > 0) flush();
       cur.push(a);
       used += need;
     });

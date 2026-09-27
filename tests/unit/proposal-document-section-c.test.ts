@@ -304,10 +304,10 @@ describe('proposal document — Section C row subtext', () => {
     expect(html).not.toContain('data-role="cb-subtext"');
   });
 
-  it('renders a Section C row’s subtext through rt() (the shared bold/italic renderer) at the requested size', () => {
+  it('renders a Section C row’s subtext through rt() at the one Canadian body size, ignoring a stored size', () => {
     // useRules() mocks rt() as an identity passthrough in this harness (its own
     // markup processing is exercised elsewhere) — this asserts cbSubtextHtml
-    // actually routes subtext through rt(), sized, not that rt() itself works.
+    // actually routes subtext through rt(), not that rt() itself works.
     const html = SSGProposalDocument.html(
       canadianDoc({
         sectionCItems: [
@@ -318,32 +318,14 @@ describe('proposal document — Section C row subtext', () => {
             text: 'Certified.',
             order: 0,
             subtext: 'Confirmed with **broker** on *2026-09-15*.',
-            subtextSizePt: 11,
+            subtextSizePt: 7,
           },
         ],
       }),
     );
-    expect(html).toContain('font-size:11px;color:#5c6157;line-height:1.5;');
+    expect(html).toContain('data-role="cb-subtext" style="margin-top:3px;font-size:11px;');
+    expect(html).not.toContain('font-size:7px');
     expect(html).toContain('Confirmed with **broker** on *2026-09-15*.');
-  });
-
-  it('clamps a Section C row subtext size to 12pt even if a stray value slipped through', () => {
-    const html = SSGProposalDocument.html(
-      canadianDoc({
-        sectionCItems: [
-          {
-            id: '1',
-            kind: 'TEXT',
-            label: 'CUSMA',
-            text: 'Certified.',
-            order: 0,
-            subtext: 'Oversized on purpose.',
-            subtextSizePt: 40,
-          },
-        ],
-      }),
-    );
-    expect(html).toContain('font-size:12px;color:#5c6157;line-height:1.5;');
   });
 });
 
@@ -370,12 +352,12 @@ describe('proposal document — Section B items', () => {
     expect(html).toContain('Freight excludes appointment delivery.');
   });
 
-  it('renders items in order, each with its own title-cased label and sized body', () => {
+  it('renders items in order, each with its own title-cased label, at the one Canadian body size', () => {
     const html = SSGProposalDocument.html(
       canadianDoc({
         sectionBItems: [
           { id: '1', label: 'first note', text: 'Comes first.', order: 0, sizePt: 8 },
-          { id: '2', label: 'second note', text: 'Comes **second**.', order: 1, sizePt: 11 },
+          { id: '2', label: 'second note', text: 'Comes **second**.', order: 1, sizePt: 12 },
         ],
       }),
     );
@@ -383,20 +365,14 @@ describe('proposal document — Section B items', () => {
     const secondLabelIdx = html.indexOf('Second Note');
     expect(firstLabelIdx).toBeGreaterThan(-1);
     expect(secondLabelIdx).toBeGreaterThan(firstLabelIdx);
-    expect(html).toContain('font-size:8px;color:#5c6157;line-height:1.5;');
-    expect(html).toContain('font-size:11px;color:#5c6157;line-height:1.5;');
+    // A stored per-item size no longer changes the printed size.
+    expect(html).not.toContain('font-size:8px');
+    expect(
+      html.split('font-size:11px;color:#20241f;line-height:1.5;').length - 1,
+    ).toBeGreaterThanOrEqual(2);
     // rt() is mocked as identity in this harness — asserts the raw markup is routed
     // through it, not that rt() itself renders bold.
     expect(html).toContain('Comes **second**.');
-  });
-
-  it('clamps an out-of-range size to 12pt', () => {
-    const html = SSGProposalDocument.html(
-      canadianDoc({
-        sectionBItems: [{ id: '1', label: 'Note', text: 'Oversized.', order: 0, sizePt: 40 }],
-      }),
-    );
-    expect(html).toContain('font-size:12px;color:#5c6157;line-height:1.5;');
   });
 
   it('never renders Section B items on a domestic proposal', () => {
@@ -450,7 +426,7 @@ describe('proposal document — Configuration Schedule heading', () => {
     expect(html).not.toContain('Configuration Schedule');
   });
 
-  it('prints one heading per bundled system, not one for the whole document', () => {
+  it('prints the heading once for the whole document, even with two bundled systems', () => {
     const html = SSGProposalDocument.html({
       meta: {},
       totals: baseTotals(),
@@ -483,7 +459,7 @@ describe('proposal document — Configuration Schedule heading', () => {
       ],
     });
     expect(html.split('Configuration Schedule — Components of the System Above').length - 1).toBe(
-      2,
+      1,
     );
   });
 });

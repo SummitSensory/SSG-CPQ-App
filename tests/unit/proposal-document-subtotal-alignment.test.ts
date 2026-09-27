@@ -97,9 +97,28 @@ function subtotalCellText(html: string): string {
   return m![1]!;
 }
 
-describe('proposal document — group subtotal formatting on a cross-border proposal', () => {
-  it('prints the group subtotal as plain "$X,XXX.XX", not "USD $X,XXX.XX"', () => {
+describe('proposal document — Section A amount formatting on a cross-border proposal', () => {
+  // A Canadian proposal no longer prints a subtotal per group (its components print
+  // "Included" under one priced Section A line), so the fixed-width Amount column's
+  // one figure is that line — and it must be the same plain "$X,XXX.XX" for the
+  // reason above.
+  it('prints the Section A line amount as plain "$X,XXX.XX", not "USD $X,XXX.XX"', () => {
     const html = SSGProposalDocument.html(crossBorderDoc());
+    const m =
+      /<tr data-role="cb-section-a-line"[^>]*>(?:<td[^>]*>[^<]*<\/td>){4}<td[^>]*>([^<]*)<\/td>/.exec(
+        html,
+      );
+    expect(m, 'no Section A line found').toBeTruthy();
+    expect(m![1]).toBe('$5,414.40');
+  });
+
+  it('prints no per-group Subtotal row on a Canadian proposal', () => {
+    const html = SSGProposalDocument.html(crossBorderDoc());
+    expect(/<td colspan="4"[^>]*>Subtotal<\/td>/.test(html)).toBe(false);
+  });
+
+  it('still prints the plain group subtotal on a domestic proposal', () => {
+    const html = SSGProposalDocument.html({ ...crossBorderDoc(), crossBorder: null });
     expect(subtotalCellText(html)).toBe('$5,414.40');
   });
 

@@ -299,11 +299,9 @@
      * parseInt by default — staleRateDays/proposalValidityDays are validated
      * server-side as integers (z.number().int()), and a stray decimal a browser lets
      * through would otherwise fail the whole save with a 400. parseFloat only for a
-     * field whose own `step` says it takes one — every per-item font-size input
-     * (Section C's cbSecSubtextSize, Section B's cbSecBSize) sets step="0.5" for
-     * exactly this reason. A plain <input type=number> with no step attribute
-     * reports el.step as "" (the DOM default), not "1", so this is the reliable
-     * signal, not el.step === '1'.
+     * field whose own `step` says it takes one (step="0.5" or similar). A plain
+     * <input type=number> with no step attribute reports el.step as "" (the DOM
+     * default), not "1", so this is the reliable signal, not el.step === '1'.
      */
     function settingFieldsFromCard() {
       var body = {};
@@ -611,15 +609,7 @@
             '" rows="3" placeholder="What prints for this item — **bold**, *italic*" style="width:100%;border:1px solid #ece9db;border-radius:7px;padding:6px 8px;font-size:12.5px;font-family:inherit;resize:vertical;background:#fff;">' +
             esc(it.text || '') +
             '</textarea>' +
-            '<div style="display:flex;align-items:center;gap:6px;margin-top:4px;">' +
-            '<span class="muted" style="font-size:10.5px;">Size</span>' +
-            '<input type="number" class="cbSecBSize" data-i="' +
-            i +
-            '" min="7" max="12" step="0.5" value="' +
-            esc(it.sizePt || 9) +
-            '" style="width:60px;padding:3px 6px;border:1px solid #dcded7;border-radius:6px;font-size:11px;">' +
-            '<span class="muted" style="font-size:10.5px;">pt</span>' +
-            '</div>' +
+            // No size box: the proposal prints every Canadian section at one text size.
             '</div>' +
             '<button class="cbSecBDel" data-i="' +
             i +
@@ -769,15 +759,7 @@
             '" rows="2" placeholder="Optional clarifying subtext — **bold**, *italic*. Never required." style="width:100%;border:1px solid #ece9db;border-radius:7px;padding:5px 7px;font-size:11.5px;font-family:inherit;resize:vertical;background:#fff;">' +
             esc(it.subtext || '') +
             '</textarea>' +
-            '<div style="display:flex;align-items:center;gap:6px;margin-top:4px;">' +
-            '<span class="muted" style="font-size:10.5px;">Size</span>' +
-            '<input type="number" class="cbSecSubtextSize" data-i="' +
-            i +
-            '" min="7" max="12" step="0.5" value="' +
-            esc(it.subtextSizePt || 9) +
-            '" style="width:60px;padding:3px 6px;border:1px solid #dcded7;border-radius:6px;font-size:11px;">' +
-            '<span class="muted" style="font-size:10.5px;">pt</span>' +
-            '</div></div>' +
+            '</div>' +
             '</div>' +
             '<button class="cbSecDel" data-i="' +
             i +
@@ -1856,22 +1838,6 @@
           if (it) it.subtext = el.value;
         });
       });
-      card.querySelectorAll('.cbSecSubtextSize').forEach(function (el) {
-        el.addEventListener('input', function () {
-          var it = S.sectionCTemplate[+el.getAttribute('data-i')];
-          if (it) it.subtextSizePt = el.value === '' ? undefined : parseFloat(el.value);
-        });
-        // Clamps to the 7-12pt range the server enforces (SUBTEXT_SIZE_MIN/MAX) on
-        // blur, not on every keystroke, so an out-of-range value can't reach the PATCH
-        // and surface a raw Zod error instead of just being corrected in place.
-        el.addEventListener('change', function () {
-          var it = S.sectionCTemplate[+el.getAttribute('data-i')];
-          if (!it || el.value === '') return;
-          var clamped = Math.min(12, Math.max(7, parseFloat(el.value)));
-          el.value = String(clamped);
-          it.subtextSizePt = clamped;
-        });
-      });
       card.querySelectorAll('.cbSecDel').forEach(function (b) {
         b.addEventListener('click', function () {
           S.sectionCTemplate.splice(+b.getAttribute('data-i'), 1);
@@ -1916,20 +1882,6 @@
         el.addEventListener('input', function () {
           var it = S.sectionBTemplate[+el.getAttribute('data-i')];
           if (it) it.text = el.value;
-        });
-      });
-      card.querySelectorAll('.cbSecBSize').forEach(function (el) {
-        el.addEventListener('input', function () {
-          var it = S.sectionBTemplate[+el.getAttribute('data-i')];
-          if (it) it.sizePt = el.value === '' ? undefined : parseFloat(el.value);
-        });
-        // Same 7-12pt clamp-on-blur as Section C's cbSecSubtextSize above.
-        el.addEventListener('change', function () {
-          var it = S.sectionBTemplate[+el.getAttribute('data-i')];
-          if (!it || el.value === '') return;
-          var clamped = Math.min(12, Math.max(7, parseFloat(el.value)));
-          el.value = String(clamped);
-          it.sizePt = clamped;
         });
       });
       card.querySelectorAll('.cbSecBDel').forEach(function (b) {
