@@ -8564,6 +8564,45 @@
   }
 
   /**
+   * Preview a saved proposal exactly as it prints, but with a given Cross-Border Terms
+   * list in place of the live one. Used by Administration → Canada → Cross-Border
+   * Terms → "Preview draft" (public/cross-border.js), so draft legal wording can be
+   * read in the real document before it is published. Nothing is saved or sent; the
+   * proposal's own figures, Section C and facts are its real ones.
+   *
+   * Resolves { ok: true } or { error: 'why' }.
+   */
+  window.SSGPreviewProposalWithTerms = async function (number, terms, opts) {
+    var want = String(number || '').trim().toUpperCase();
+    if (!want) return { error: 'Enter a proposal number.' };
+    try {
+      var rl = await authed('/proposals');
+      if (!rl.ok) return { error: 'Could not load proposals (' + rl.status + ').' };
+      var hit = ((await rl.json()) || []).filter(function (p) { return String(p.number || '').toUpperCase() === want; })[0];
+      if (!hit) return { error: 'No proposal numbered ' + want + '.' };
+      var rp = await authed('/proposals/' + encodeURIComponent(hit.id));
+      if (!rp.ok) return { error: 'Could not load ' + want + ' (' + rp.status + ').' };
+      var full = await rp.json();
+      var versions = (full.versions || []).slice().sort(function (a, b) { return (a.version || 0) - (b.version || 0); });
+      var v = versions[versions.length - 1];
+      if (!v) return { error: want + ' has no version to preview.' };
+      var doc = await proposalDocData(full, v);
+      if (!doc.crossBorder) return { error: want + ' is not a Canadian proposal, so it prints no Cross-Border Terms.' };
+      var cbOver = { crossBorderTerms: terms || [] };
+      // Show Section C as it will be once a draft that absorbs its custom-text rows is
+      // published with "also remove Section C's custom-text rows" ticked.
+      if (opts && opts.hideSectionCText) {
+        cbOver.sectionCItems = (doc.crossBorder.sectionCItems || []).filter(function (it) { return it.kind !== 'TEXT'; });
+      }
+      doc.crossBorder = Object.assign({}, doc.crossBorder, cbOver);
+      previewProposalDoc(doc);
+      return { ok: true };
+    } catch (e) {
+      return { error: 'Could not build the preview.' };
+    }
+  };
+
+  /**
    * Hand the shared business rules to the document renderer.
    *
    * Called once, from boot. These are the functions the builder and the document must
