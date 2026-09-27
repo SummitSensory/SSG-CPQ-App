@@ -4267,7 +4267,15 @@ model CrossBorderSetting {
   /// later assesses more than this proposal estimated). Same live-read, blank-means-
   /// nothing-prints rules as defaultAcceptanceText.
   defaultAuditLanguageText        String?
-  allowCadPayment                 Boolean               @default(false)
+  /// The "Cross-Border Terms" clauses printed on every Canadian proposal, as an
+  /// admin-edited, ordered list — see src/crossborder/crossBorderTerms.ts. An array of
+  /// { id, title, text, order, condition }; `condition` decides which proposals a
+  /// clause prints on (e.g. only when tariff item 9979.00.00 is claimed), and the text
+  /// may carry {{token}} fields filled from the proposal's own customs entry. Seeded by
+  /// migration 0103 with the wording that used to be hard-coded in
+  /// public/proposal-document.js. Null or empty prints no clauses.
+  crossBorderTerms                Json?
+  allowCadPayment                Boolean               @default(false)
   fxFallbackMode                  FxFallbackMode        @default(DRAFT_WITH_REVIEW)
   /// Days after which a cached observation is called stale on the proposal.
   staleRateDays                   Int                   @default(5)

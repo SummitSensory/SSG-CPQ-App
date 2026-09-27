@@ -36,6 +36,7 @@ import type {
 import type { ProvinceCode } from '../lib/country.js';
 import { resolveSectionCItems, type SectionCItem } from './sectionC.js';
 import { resolveSectionBItems, type SectionBItem } from './sectionB.js';
+import { normalizeCrossBorderTerms, type CrossBorderTerm } from './crossBorderTerms.js';
 
 /**
  * Section A's functional-description sentence lives on the first GROUP line's
@@ -195,6 +196,12 @@ export interface CrossBorderState {
    * sectionCItems, minus the BOUND-row concept. See sectionB.ts.
    */
   sectionBItems: SectionBItem[];
+  /**
+   * The Cross-Border Terms clauses, order-sorted, UNFILTERED — the document keeps the
+   * ones whose condition holds for this proposal and fills their {{token}} fields.
+   * See crossBorderTerms.ts.
+   */
+  crossBorderTerms: CrossBorderTerm[];
   fx: {
     pair: string;
     rate: string | null;
@@ -301,6 +308,7 @@ export async function crossBorderStateFor(versionId: string): Promise<CrossBorde
       acceptanceText: null,
       auditLanguageText: null,
       sectionBItems: [],
+      crossBorderTerms: [],
       fx: emptyFx,
       result: null,
       blockers: [],
@@ -329,6 +337,7 @@ export async function crossBorderStateFor(versionId: string): Promise<CrossBorde
     auditLanguageText:
       customsRow?.auditLanguageOverride ?? settings?.defaultAuditLanguageText ?? null,
     sectionBItems: resolveSectionBItems(customsRow?.sectionBItems, settings?.sectionBTemplate),
+    crossBorderTerms: normalizeCrossBorderTerms(settings?.crossBorderTerms),
   };
 
   // Whether a Canadian proposal must have a real answer everywhere it claims one —

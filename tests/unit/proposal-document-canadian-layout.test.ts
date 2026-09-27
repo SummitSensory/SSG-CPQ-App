@@ -256,28 +256,21 @@ describe('Canadian proposal — estimated charges payable at import', () => {
 });
 
 describe('Canadian proposal — pagination hints and one body size', () => {
+  const withTerms = {
+    sectionCItems: [{ id: '1', kind: 'TEXT', label: 'Classification', text: 'X.', order: 0 }],
+    crossBorderTerms: [
+      { id: 't1', title: 'Currency', text: 'USD controls.', order: 0, condition: 'ALWAYS' },
+    ],
+  };
+
   it('marks Section C and the cross-border terms data-flow, headings data-keep-next', () => {
-    const html = SSGProposalDocument.html(
-      canadian(
-        {},
-        {
-          sectionCItems: [{ id: '1', kind: 'TEXT', label: 'Classification', text: 'X.', order: 0 }],
-        },
-      ),
-    );
+    const html = SSGProposalDocument.html(canadian({}, withTerms));
     expect(html.split('<div data-flow').length - 1).toBe(2);
     expect(html).toMatch(/<div data-keep-next[^>]*>Cross-Border Terms<\/div>/);
   });
 
   it('prints Section C rows and the cross-border terms at the same 11px body size', () => {
-    const html = SSGProposalDocument.html(
-      canadian(
-        {},
-        {
-          sectionCItems: [{ id: '1', kind: 'TEXT', label: 'Classification', text: 'X.', order: 0 }],
-        },
-      ),
-    );
+    const html = SSGProposalDocument.html(canadian({}, withTerms));
     expect(html).toContain('<div data-flow style="font-size:11px;');
     expect(html).toContain('<div style="display:flex;gap:14px;font-size:11px;');
     expect(html).not.toContain('font-size:9.5px;line-height:1.6;color:#5c6157;');

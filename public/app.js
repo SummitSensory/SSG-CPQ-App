@@ -4299,15 +4299,6 @@
     return true;
   }
 
-  /** A note already on the proposal, matched to the standard note it came from. */
-  function stdNoteFor(line) {
-    var t = String((line && line.name) || '').trim().toLowerCase();
-    if (!t) return null;
-    return ((pb && pb.stdNotes) || []).filter(function (nn) {
-      return String(nn.title || '').trim().toLowerCase() === t;
-    })[0] || null;
-  }
-
   /**
    * Keep the conditional notes in step with the proposal.
    *
@@ -4323,17 +4314,51 @@
   function applyConditionalNotes() {
     if (!pb || !pb.stdNotes) return 0;
     var changed = 0;
+    var norm = function (v) { return String(v || '').trim().toLowerCase(); };
+
+    /*
+     * Which standard note a note on the proposal came from, and which note replaces it.
+     *
+     * A pair is normally two notes with the SAME title — "Proposal Acceptance & Payment
+     * Terms" with the deposit sentence (DEPOSIT_SHOWN) and without it (DEPOSIT_HIDDEN)
+     * — so the source is matched on title AND wording, and the replacement prefers the
+     * note with the same title. Matching on the condition alone picked whichever
+     * opposite-condition note came first: with "Prepayment Requirement" also marked
+     * DEPOSIT_HIDDEN, the acceptance terms could be swapped for the prepayment note.
+     * A replacement with a different title is still taken when no same-title one
+     * exists, which is how a pair with two titles has always worked.
+     */
+    var sourceOf = function (title, body, footer) {
+      var same = pb.stdNotes.filter(function (nn) {
+        return norm(nn.title) === norm(title) && ((nn.placement === 'FOOTER') === footer);
+      });
+      if (same.length <= 1) return same[0] || null;
+      return same.filter(function (nn) { return String(nn.body || '') === String(body || ''); })[0] || same[0];
+    };
+    var alternativeTo = function (src, footer) {
+      var cands = pb.stdNotes.filter(function (nn) {
+        return ((nn.placement === 'FOOTER') === footer) && nn.condition && nn.condition !== src.condition && noteConditionHolds(nn);
+      });
+      return cands.filter(function (nn) { return norm(nn.title) === norm(src.title); })[0] || cands[0] || null;
+    };
+    // Present ELSEWHERE on the proposal — the same wording under the same title, not
+    // counting the note being replaced (which, in a same-title pair, shares the title).
+    var presentElsewhere = function (alt, skipLine, skipFooter) {
+      return (pb.lines || []).some(function (l, k) {
+        return k !== skipLine && l.lineType === 'NOTE' && norm(l.name) === norm(alt.title) && String(l.description || '') === String(alt.body || '');
+      }) || (pb.meta.footerNotes || []).some(function (fn, k) {
+        return k !== skipFooter && norm(fn.title) === norm(alt.title) && String(fn.body || '') === String(alt.body || '');
+      });
+    };
 
     // Table notes: swap in place.
     for (var i = pb.lines.length - 1; i >= 0; i--) {
       var l = pb.lines[i];
       if (!l || l.lineType !== 'NOTE') continue;
-      var src = stdNoteFor(l);
+      var src = sourceOf(l.name, l.description, false);
       if (!src || !src.condition || noteConditionHolds(src)) continue;
-      var alt = pb.stdNotes.filter(function (nn) {
-        return nn.placement !== 'FOOTER' && nn.condition && nn.condition !== src.condition && noteConditionHolds(nn);
-      })[0];
-      if (alt && !noteAlreadyPresent(alt)) {
+      var alt = alternativeTo(src, false);
+      if (alt && !presentElsewhere(alt, i, -1)) {
         pb.lines[i] = normalizeLine({ lineType: 'NOTE', kind: 'NOTE', name: alt.title, description: alt.body, quantity: 0, rateMinor: 0, emphasis: !!alt.emphasis });
       } else {
         pb.lines.splice(i, 1);
@@ -4344,14 +4369,10 @@
     // Footer notes: the same swap over pb.meta.footerNotes.
     var footer = pb.meta.footerNotes || [];
     for (var j = footer.length - 1; j >= 0; j--) {
-      var fsrc = ((pb.stdNotes) || []).filter(function (nn) {
-        return String(nn.title || '').trim().toLowerCase() === String(footer[j].title || '').trim().toLowerCase();
-      })[0];
+      var fsrc = sourceOf(footer[j].title, footer[j].body, true);
       if (!fsrc || !fsrc.condition || noteConditionHolds(fsrc)) continue;
-      var falt = pb.stdNotes.filter(function (nn) {
-        return nn.placement === 'FOOTER' && nn.condition && nn.condition !== fsrc.condition && noteConditionHolds(nn);
-      })[0];
-      if (falt && !noteAlreadyPresent(falt)) footer[j] = { title: falt.title, body: falt.body };
+      var falt = alternativeTo(fsrc, true);
+      if (falt && !presentElsewhere(falt, -1, j)) footer[j] = { title: falt.title, body: falt.body };
       else footer.splice(j, 1);
       changed++;
     }
@@ -6350,7 +6371,10 @@
 
     function bodyHtml() {
       return '<div class="muted" style="font-size:12px;line-height:1.55;margin-bottom:10px;">' +
-          'The Canadian Import Terms table for this proposal, in this order. Starts from Summit’s standard list; add, remove, reword or reorder freely — it only affects this proposal.</div>' +
+          'The Canadian Import Terms table for this proposal, in this order. Starts from Summit’s standard list; add, remove, reword or reorder freely — it only affects this proposal.' +
+          // The same fill-in fields cbFillTokens (proposal-document.js) resolves, so
+          // custom text can name the tariff item or importer without restating it.
+          '<br>Custom text can use <code>{{tariffClassification}}</code>, <code>{{importerOfRecord}}</code>, <code>{{customsBroker}}</code>, <code>{{countryOfOrigin}}</code> and <code>{{hostSystem}}</code> — each prints this proposal’s own value from Customs and duties.</div>' +
         '<div id="scContainer">' + containerHtml() + '</div>' +
         '<div id="scMsg" style="font-size:11.5px;line-height:1.5;margin-top:6px;"></div>';
     }
