@@ -4275,7 +4275,13 @@ model CrossBorderSetting {
   /// migration 0103 with the wording that used to be hard-coded in
   /// public/proposal-document.js. Null or empty prints no clauses.
   crossBorderTerms                Json?
-  allowCadPayment                Boolean               @default(false)
+  /// A working DRAFT of crossBorderTerms, same shape. Never read when a proposal
+  /// prints — it exists so legal wording can be written, previewed on a real proposal
+  /// and reviewed before anyone publishes it over the live list (Administration ->
+  /// Canada -> Cross-Border Terms -> Draft). Null means no draft in progress. Seeded
+  /// by migration 0104 with a reconciled draft for review.
+  crossBorderTermsDraft           Json?
+  allowCadPayment               Boolean               @default(false)
   fxFallbackMode                  FxFallbackMode        @default(DRAFT_WITH_REVIEW)
   /// Days after which a cached observation is called stale on the proposal.
   staleRateDays                   Int                   @default(5)

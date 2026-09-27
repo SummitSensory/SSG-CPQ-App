@@ -283,6 +283,8 @@ const SettingsSchema = z.object({
   sectionBTemplate: z.array(SectionBItemSchema).max(100).nullable().optional(),
   /** The Cross-Border Terms clause list — see crossBorderTerms.ts. */
   crossBorderTerms: z.array(CrossBorderTermSchema).max(200).nullable().optional(),
+  /** A working draft of the same list — never printed; see the schema comment. */
+  crossBorderTermsDraft: z.array(CrossBorderTermSchema).max(200).nullable().optional(),
   /**
    * Whether a Canadian proposal must have a complete Section A description and Section
    * C before it can be released — see the field's comment on CrossBorderSetting.
@@ -812,7 +814,13 @@ export function registerCrossBorderRoutes(app: FastifyInstance): void {
     // A nullable Json column needs Prisma's DbNull sentinel to clear it to SQL NULL —
     // a plain JS `null` spread into `create`/`update` is ambiguous between "set to
     // NULL" and "set to the JSON value null" and Prisma refuses it.
-    const { sectionCTemplate, sectionBTemplate, crossBorderTerms, ...restPatch } = patch;
+    const {
+      sectionCTemplate,
+      sectionBTemplate,
+      crossBorderTerms,
+      crossBorderTermsDraft,
+      ...restPatch
+    } = patch;
     const sectionCTemplateData =
       sectionCTemplate === undefined
         ? {}
@@ -845,6 +853,17 @@ export function registerCrossBorderRoutes(app: FastifyInstance): void {
               ) as unknown as Prisma.InputJsonValue,
             };
 
+    const crossBorderTermsDraftData =
+      crossBorderTermsDraft === undefined
+        ? {}
+        : crossBorderTermsDraft === null
+          ? { crossBorderTermsDraft: Prisma.DbNull }
+          : {
+              crossBorderTermsDraft: normalizeCrossBorderTerms(
+                crossBorderTermsDraft,
+              ) as unknown as Prisma.InputJsonValue,
+            };
+
     const updated = await prisma.crossBorderSetting.upsert({
       where: { id: 'singleton' },
       create: {
@@ -853,6 +872,7 @@ export function registerCrossBorderRoutes(app: FastifyInstance): void {
         ...sectionCTemplateData,
         ...sectionBTemplateData,
         ...crossBorderTermsData,
+        ...crossBorderTermsDraftData,
         updatedById: req.user!.sub,
       },
       update: {
@@ -860,6 +880,7 @@ export function registerCrossBorderRoutes(app: FastifyInstance): void {
         ...sectionCTemplateData,
         ...sectionBTemplateData,
         ...crossBorderTermsData,
+        ...crossBorderTermsDraftData,
         updatedById: req.user!.sub,
       },
     });

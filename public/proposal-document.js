@@ -648,24 +648,42 @@
       })
       .join('');
 
+    // Who the customer pays these to depends on who imports. "Not payable to Summit"
+    // is true when the customer (or a third party) clears the goods, and false when
+    // Summit is importer of record, pays them at the border and bills them at actual —
+    // so the explanation follows the customs entry instead of always claiming the first.
+    var summitImports = d.crossBorder.importerOfRecord === 'SUMMIT';
+    var borderNote = summitImports
+      ? 'Estimates. As importer of record, Summit Sensory Gym pays these at importation and bills them to the customer at actual cost. They are not included in the total payable above.'
+      : 'Not payable to Summit Sensory Gym. These are estimates, assessed and collected by the Canada Border Services Agency, the customs broker or the carrier.';
     return (
       '<div style="margin-top:18px;padding:10px 0 0;border-top:1px solid #d5d8d2;break-inside:avoid;">' +
-      '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#3d4a55;padding:0 0 4px;">Estimated charges payable at import</div>' +
+      '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#3d4a55;padding:0 0 4px;">' +
+      (summitImports
+        ? 'Estimated import charges, billed at actual'
+        : 'Estimated charges payable at import') +
+      '</div>' +
       '<div style="padding:0 0 6px;font-size:' +
       CB_BODY_PX +
-      'px;color:#5c6157;line-height:1.55;">Not payable to Summit Sensory Gym. These are estimates, assessed and collected by the Canada Border Services Agency, the customs broker or the carrier.</div>' +
+      'px;color:#5c6157;line-height:1.55;">' +
+      borderNote +
+      '</div>' +
       rows +
       (sep.usdMinor
         ? '<div style="display:flex;justify-content:space-between;gap:12px;padding:6px 0 3px;margin-top:4px;border-top:1px solid #ece7d8;font-size:' +
           CB_BODY_PX +
-          'px;font-weight:700;"><span>Estimated charges payable at import</span><span style="text-align:right;">' +
+          'px;font-weight:700;"><span>' +
+          (summitImports ? 'Estimated import charges' : 'Estimated charges payable at import') +
+          '</span><span style="text-align:right;">' +
           cbDocAmount(sep.usdMinor, rate) +
           '</span></div>'
         : '') +
       (sep.usdMinor
         ? '<div style="display:flex;justify-content:space-between;gap:12px;padding:3px 0;font-size:' +
           CB_BODY_PX +
-          'px;font-weight:700;"><span>Estimated total landed cost <span style="font-weight:400;color:#7b8190;">(total payable to Summit + charges payable at import)</span></span><span style="text-align:right;">' +
+          'px;font-weight:700;"><span>Estimated total landed cost <span style="font-weight:400;color:#7b8190;">(total payable to Summit + ' +
+          (summitImports ? 'import charges' : 'charges payable at import') +
+          ')</span></span><span style="text-align:right;">' +
           cbDocAmount(landedMinor, rate) +
           '</span></div>'
         : '') +

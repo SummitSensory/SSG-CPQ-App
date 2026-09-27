@@ -245,6 +245,14 @@
       sectionBTemplate: [],
       /** Working copy of CrossBorderSetting.crossBorderTerms — see crossBorderTermsHtml(). */
       crossBorderTerms: [],
+      /** Working copy of CrossBorderSetting.crossBorderTermsDraft — null when no draft is
+       *  in progress. Never printed; see crossBorderTermsHtml(). */
+      crossBorderTermsDraft: null,
+      /** Which list the Cross-Border Terms tab is editing: 'live' or 'draft'. */
+      termsMode: 'live',
+      termsPreviewNumber: '',
+      /** "Also remove Section C's custom-text rows" on the draft panel; on unless unticked. */
+      termsDropSecC: true,
     };
 
     host.innerHTML =
@@ -417,6 +425,15 @@
         .sort(function (a, b) {
           return (a.order || 0) - (b.order || 0);
         });
+      S.crossBorderTermsDraft = Array.isArray(S.settings.crossBorderTermsDraft)
+        ? S.settings.crossBorderTermsDraft
+            .map(function (t) {
+              return Object.assign({}, t);
+            })
+            .sort(function (a, b) {
+              return (a.order || 0) - (b.order || 0);
+            })
+        : null;
 
       var results = await Promise.all([
         authed('/cross-border/tax-rates'),
@@ -959,8 +976,31 @@
      * Section C — see src/crossborder/crossBorderTerms.ts. Edit, reorder, add or
      * remove; the condition decides which proposals a clause prints on.
      */
+    /** The list the Cross-Border Terms editor is working on right now. */
+    function termsList() {
+      return S.termsMode === 'draft' ? S.crossBorderTermsDraft || [] : S.crossBorderTerms;
+    }
+
+    /** A clause list as the settings PATCH takes it — blank clauses left out. */
+    function termsPayload(list) {
+      return (list || [])
+        .filter(function (it) {
+          return it.text && String(it.text).trim();
+        })
+        .map(function (it, i) {
+          return {
+            id: it.id || newListItemId(),
+            title: it.title || '',
+            text: String(it.text).trim(),
+            order: i,
+            condition: it.condition || 'ALWAYS',
+          };
+        });
+    }
+
     function crossBorderTermsHtml() {
-      var items = S.crossBorderTerms;
+      var draft = S.termsMode === 'draft';
+      var items = termsList();
       var moveBtn = function (i, dir, label, on) {
         return (
           '<button class="cbTermMove" data-i="' +
@@ -1030,19 +1070,104 @@
         printsWhereHtml(
           'Cross-Border Terms — on the Canadian terms page, right after Section C, before the Acceptance page.',
         ) +
+        termsModeHtml() +
         '<div class="muted" style="font-size:12px;line-height:1.55;max-width:680px;margin-bottom:10px;">' +
         'Printed in this order. Each clause prints only on the proposals its condition matches — for example, the three versions of the tariff item 9979.00.00 clause each match one answer on the proposal’s Customs and duties form, so exactly one of them prints. A proposal follows this list live; the copy a customer signed is kept in the signed PDF.' +
         '</div>' +
         tokenHelpHtml() +
-        '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
-        '<button class="link-btn" data-act="addCrossBorderTerm" style="width:auto;padding:7px 12px;">+ Add clause</button>' +
+        (draft && !S.crossBorderTermsDraft
+          ? '<div class="muted" style="font-size:12.5px;margin-bottom:10px;">No draft in progress.</div>' +
+            '<button class="link-btn" data-act="startTermsDraft" style="' +
+            BTN +
+            '">Start a draft from the live terms</button>'
+          : '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
+            '<button class="link-btn" data-act="addCrossBorderTerm" style="width:auto;padding:7px 12px;">+ Add clause</button>' +
+            '</div>' +
+            (rows ||
+              '<div class="muted" style="font-size:12.5px;margin-bottom:10px;">' +
+                (draft
+                  ? 'This draft has no clauses.'
+                  : 'None — Canadian proposals print no Cross-Border Terms until a clause is added.') +
+                '</div>') +
+            (draft
+              ? draftActionsHtml()
+              : '<div style="display:flex;gap:8px;align-items:center;margin-top:16px;">' +
+                '<button class="link-btn" data-act="saveCrossBorderTerms" style="' +
+                BTN +
+                '">Save Cross-Border Terms</button>' +
+                '</div>'))
+      );
+    }
+
+    /** Live / Draft switch at the top of the Cross-Border Terms tab. */
+    function termsModeHtml() {
+      var tab = function (mode, label) {
+        var on = S.termsMode === mode;
+        return (
+          '<button class="link-btn" data-act="termsMode" data-mode="' +
+          mode +
+          '" style="width:auto;padding:6px 12px;font-size:12.5px;' +
+          (on ? 'background:#2f3a2f;color:#fff;border-color:#2f3a2f;' : '') +
+          '">' +
+          esc(label) +
+          '</button>'
+        );
+      };
+      var n = S.crossBorderTermsDraft ? S.crossBorderTermsDraft.length : 0;
+      return (
+        '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:0 0 10px;">' +
+        tab('live', 'Live — printing now (' + S.crossBorderTerms.length + ')') +
+        tab('draft', S.crossBorderTermsDraft ? 'Draft — not printed (' + n + ')' : 'Draft') +
         '</div>' +
-        (rows ||
-          '<div class="muted" style="font-size:12.5px;margin-bottom:10px;">None — Canadian proposals print no Cross-Border Terms until a clause is added.</div>') +
-        '<div style="display:flex;gap:8px;align-items:center;margin-top:16px;">' +
-        '<button class="link-btn" data-act="saveCrossBorderTerms" style="' +
+        (S.termsMode === 'draft'
+          ? '<div style="font-size:12.5px;line-height:1.6;color:#7a5c1e;padding:9px 11px;background:#fdf6e7;border:1px solid #e8d9ae;border-radius:9px;margin-bottom:12px;">' +
+            '<b>Draft.</b> Nothing here prints on any proposal until you publish it, which replaces the live list. Preview it on a real proposal first, and have it reviewed before publishing — this is contract wording.' +
+            '</div>'
+          : '')
+      );
+    }
+
+    /** Save / preview / publish / discard, under the draft list. */
+    /** Section C's custom-text rows — the wording a reconciled draft moves into the terms. */
+    function sectionCTextRows() {
+      return S.sectionCTemplate.filter(function (it) {
+        return it.kind === 'TEXT';
+      });
+    }
+
+    function draftActionsHtml() {
+      var textRows = sectionCTextRows();
+      return (
+        (textRows.length
+          ? '<label style="display:flex;gap:8px;align-items:flex-start;font-size:12.5px;line-height:1.55;margin-top:14px;padding:9px 11px;border:1px solid #e7e8e3;border-radius:9px;background:#fff;cursor:pointer;">' +
+            '<input type="checkbox" id="cbTermsDropSecC"' +
+            (S.termsDropSecC === false ? '' : ' checked') +
+            ' style="margin-top:3px;">' +
+            '<span>Also remove Section C’s custom-text rows when publishing, and leave them out of the preview: <b>' +
+            textRows
+              .map(function (it) {
+                return esc(it.label || 'Untitled');
+              })
+              .join('</b>, <b>') +
+            '</b>. Leave this on when the draft already contains that wording, so it does not print twice. Section C’s fact rows (importer of record, broker and so on) stay. A proposal that has its own customized Section C list keeps its own rows.</span>' +
+            '</label>'
+          : '') +
+        '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:16px;">' +
+        '<button class="link-btn" data-act="saveTermsDraft" style="' +
         BTN +
-        '">Save Cross-Border Terms</button>' +
+        '">Save draft</button>' +
+        '<input id="cbTermsPreviewNo" placeholder="Proposal number, e.g. P-2026-000171" value="' +
+        esc(S.termsPreviewNumber || '') +
+        '" style="' +
+        IN +
+        'width:250px;">' +
+        '<button class="link-btn" data-act="previewTermsDraft" style="width:auto;padding:8px 12px;">Preview draft on this proposal</button>' +
+        '</div>' +
+        '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid #eef0ea;">' +
+        '<button class="link-btn" data-act="publishTermsDraft" style="' +
+        BTN +
+        'background:#2f3a2f;color:#fff;border-color:#2f3a2f;">Publish draft — replace the live terms</button>' +
+        '<button class="link-btn" data-act="discardTermsDraft" style="width:auto;padding:8px 12px;color:#9c3327;">Discard draft</button>' +
         '</div>'
       );
     }
@@ -2090,25 +2215,25 @@
       /* Cross-Border Terms editing — same shape as Section B above, plus a condition. */
       card.querySelectorAll('.cbTermTitle').forEach(function (el) {
         el.addEventListener('input', function () {
-          var it = S.crossBorderTerms[+el.getAttribute('data-i')];
+          var it = termsList()[+el.getAttribute('data-i')];
           if (it) it.title = el.value;
         });
       });
       card.querySelectorAll('.cbTermText').forEach(function (el) {
         el.addEventListener('input', function () {
-          var it = S.crossBorderTerms[+el.getAttribute('data-i')];
+          var it = termsList()[+el.getAttribute('data-i')];
           if (it) it.text = el.value;
         });
       });
       card.querySelectorAll('.cbTermCond').forEach(function (el) {
         el.addEventListener('change', function () {
-          var it = S.crossBorderTerms[+el.getAttribute('data-i')];
+          var it = termsList()[+el.getAttribute('data-i')];
           if (it) it.condition = el.value;
         });
       });
       card.querySelectorAll('.cbTermDel').forEach(function (b) {
         b.addEventListener('click', function () {
-          S.crossBorderTerms.splice(+b.getAttribute('data-i'), 1);
+          termsList().splice(+b.getAttribute('data-i'), 1);
           render();
         });
       });
@@ -2116,10 +2241,11 @@
         b.addEventListener('click', function () {
           var i = +b.getAttribute('data-i');
           var j = i + +b.getAttribute('data-d');
-          if (j < 0 || j >= S.crossBorderTerms.length) return;
-          var tmp = S.crossBorderTerms[i];
-          S.crossBorderTerms[i] = S.crossBorderTerms[j];
-          S.crossBorderTerms[j] = tmp;
+          var list = termsList();
+          if (j < 0 || j >= list.length) return;
+          var tmp = list[i];
+          list[i] = list[j];
+          list[j] = tmp;
           render();
         });
       });
@@ -2265,7 +2391,17 @@
         render();
         return;
       } else if (kind === 'addCrossBorderTerm') {
-        S.crossBorderTerms.push({ id: newListItemId(), title: '', text: '', condition: 'ALWAYS' });
+        termsList().push({ id: newListItemId(), title: '', text: '', condition: 'ALWAYS' });
+        render();
+        return;
+      } else if (kind === 'termsMode') {
+        S.termsMode = btn && btn.getAttribute('data-mode') === 'draft' ? 'draft' : 'live';
+        render();
+        return;
+      } else if (kind === 'startTermsDraft') {
+        S.crossBorderTermsDraft = S.crossBorderTerms.map(function (t) {
+          return Object.assign({}, t, { id: newListItemId() });
+        });
         render();
         return;
       } else if (kind === 'saveCrossBorderTerms') {
@@ -2273,24 +2409,72 @@
         // it is left out of the save rather than failing the whole list.
         call = [
           '/cross-border/settings',
+          { method: 'PATCH', body: { crossBorderTerms: termsPayload(S.crossBorderTerms) } },
+        ];
+      } else if (kind === 'saveTermsDraft') {
+        call = [
+          '/cross-border/settings',
           {
             method: 'PATCH',
-            body: {
-              crossBorderTerms: S.crossBorderTerms
-                .filter(function (it) {
-                  return it.text && String(it.text).trim();
-                })
-                .map(function (it, i) {
-                  return {
-                    id: it.id || newListItemId(),
-                    title: it.title || '',
-                    text: String(it.text).trim(),
-                    order: i,
-                    condition: it.condition || 'ALWAYS',
-                  };
-                }),
-            },
+            body: { crossBorderTermsDraft: termsPayload(S.crossBorderTermsDraft) },
           },
+        ];
+      } else if (kind === 'previewTermsDraft') {
+        var noEl = card.querySelector('#cbTermsPreviewNo');
+        S.termsPreviewNumber = noEl ? noEl.value.trim() : '';
+        if (!window.SSGPreviewProposalWithTerms) {
+          alert('The proposal preview is not available on this page.');
+          return;
+        }
+        var dropEl = card.querySelector('#cbTermsDropSecC');
+        S.termsDropSecC = dropEl ? dropEl.checked : false;
+        // The draft as it is on screen, saved or not — previewing is how it gets checked.
+        var res = await window.SSGPreviewProposalWithTerms(
+          S.termsPreviewNumber,
+          termsPayload(S.crossBorderTermsDraft),
+          { hideSectionCText: S.termsDropSecC },
+        );
+        if (res && res.error) alert(res.error);
+        return;
+      } else if (kind === 'publishTermsDraft') {
+        if (
+          !confirm(
+            'Publish this draft? It replaces the live Cross-Border Terms on every Canadian proposal that is previewed, printed or sent from now on. Documents already signed are not changed.',
+          )
+        )
+          return;
+        var dropSecC = card.querySelector('#cbTermsDropSecC');
+        var publishBody = {
+          crossBorderTerms: termsPayload(S.crossBorderTermsDraft),
+          crossBorderTermsDraft: null,
+        };
+        if (dropSecC && dropSecC.checked) {
+          publishBody.sectionCTemplate = S.sectionCTemplate
+            .filter(function (it) {
+              return it.kind !== 'TEXT';
+            })
+            .map(function (it, i) {
+              return {
+                id: it.id || newListItemId(),
+                kind: it.kind,
+                boundField: it.boundField,
+                label: it.label || '',
+                order: i,
+                subtext: it.subtext || undefined,
+                subtextSizePt: it.subtext ? it.subtextSizePt || 9 : undefined,
+              };
+            });
+        }
+        // One PATCH: the draft becomes the live list, the draft is cleared and (when
+        // ticked) Section C loses the wording the draft replaces — all together, so no
+        // proposal ever prints the same clause twice or not at all.
+        call = ['/cross-border/settings', { method: 'PATCH', body: publishBody }];
+        S.termsMode = 'live';
+      } else if (kind === 'discardTermsDraft') {
+        if (!confirm('Discard this draft? The live terms are not affected.')) return;
+        call = [
+          '/cross-border/settings',
+          { method: 'PATCH', body: { crossBorderTermsDraft: null } },
         ];
       } else if (kind === 'addSectionBItem') {
         S.sectionBTemplate.push({ id: newListItemId(), label: '', text: '' });
