@@ -25,6 +25,11 @@ import {
   SUBTEXT_SIZE_MAX,
 } from '../crossborder/sectionC.js';
 import { normalizeSectionBItems } from '../crossborder/sectionB.js';
+import {
+  CROSS_BORDER_TERM_CONDITIONS,
+  normalizeCrossBorderTerms,
+  type CrossBorderTermCondition,
+} from '../crossborder/crossBorderTerms.js';
 
 /**
  * Cross-border (Canadian proposal) routes.
@@ -78,6 +83,17 @@ const SectionCItemSchema = z
  * One Section B item — see src/crossborder/sectionB.ts. Simpler than a Section C
  * row: no BOUND/TEXT split, since every Section B item is free text.
  */
+/** One Cross-Border Terms clause — see src/crossborder/crossBorderTerms.ts. */
+const CrossBorderTermSchema = z.object({
+  id: z.string().trim().min(1).max(60),
+  title: z.string().trim().max(200).default(''),
+  text: z.string().trim().min(1).max(6000),
+  order: z.number().int().min(0).max(9999),
+  condition: z
+    .enum(CROSS_BORDER_TERM_CONDITIONS as [CrossBorderTermCondition, ...CrossBorderTermCondition[]])
+    .default('ALWAYS'),
+});
+
 const SectionBItemSchema = z.object({
   id: z.string().trim().min(1).max(60),
   label: z.string().trim().min(1).max(120),
@@ -265,6 +281,8 @@ const SettingsSchema = z.object({
    * every proposal that has not set its own ProposalCustomsEntry.sectionBItems.
    */
   sectionBTemplate: z.array(SectionBItemSchema).max(100).nullable().optional(),
+  /** The Cross-Border Terms clause list — see crossBorderTerms.ts. */
+  crossBorderTerms: z.array(CrossBorderTermSchema).max(200).nullable().optional(),
   /**
    * Whether a Canadian proposal must have a complete Section A description and Section
    * C before it can be released — see the field's comment on CrossBorderSetting.
@@ -794,7 +812,7 @@ export function registerCrossBorderRoutes(app: FastifyInstance): void {
     // A nullable Json column needs Prisma's DbNull sentinel to clear it to SQL NULL —
     // a plain JS `null` spread into `create`/`update` is ambiguous between "set to
     // NULL" and "set to the JSON value null" and Prisma refuses it.
-    const { sectionCTemplate, sectionBTemplate, ...restPatch } = patch;
+    const { sectionCTemplate, sectionBTemplate, crossBorderTerms, ...restPatch } = patch;
     const sectionCTemplateData =
       sectionCTemplate === undefined
         ? {}
@@ -816,6 +834,17 @@ export function registerCrossBorderRoutes(app: FastifyInstance): void {
               ) as unknown as Prisma.InputJsonValue,
             };
 
+    const crossBorderTermsData =
+      crossBorderTerms === undefined
+        ? {}
+        : crossBorderTerms === null
+          ? { crossBorderTerms: Prisma.DbNull }
+          : {
+              crossBorderTerms: normalizeCrossBorderTerms(
+                crossBorderTerms,
+              ) as unknown as Prisma.InputJsonValue,
+            };
+
     const updated = await prisma.crossBorderSetting.upsert({
       where: { id: 'singleton' },
       create: {
@@ -823,12 +852,14 @@ export function registerCrossBorderRoutes(app: FastifyInstance): void {
         ...restPatch,
         ...sectionCTemplateData,
         ...sectionBTemplateData,
+        ...crossBorderTermsData,
         updatedById: req.user!.sub,
       },
       update: {
         ...restPatch,
         ...sectionCTemplateData,
         ...sectionBTemplateData,
+        ...crossBorderTermsData,
         updatedById: req.user!.sub,
       },
     });

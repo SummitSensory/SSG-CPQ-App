@@ -76,6 +76,49 @@
     hostSystemModel: 'Host system identification',
   };
 
+  /**
+   * When a Cross-Border Terms clause prints — must match CROSS_BORDER_TERM_CONDITIONS
+   * in src/crossborder/crossBorderTerms.ts. The label is UI copy only.
+   */
+  var CROSS_BORDER_TERM_CONDITION_LABEL = {
+    ALWAYS: 'Every Canadian proposal',
+    TARIFF_9979_CLAIMED: 'Only when tariff item 9979.00.00 is claimed',
+    TARIFF_9979_NOT_CLAIMED: 'Only when 9979.00.00 is NOT claimed',
+    TARIFF_9979_UNDETERMINED: 'Only while the 9979.00.00 claim is undetermined',
+    GST_STANDARD: 'Only when GST/HST is at the standard rate',
+    GST_RELIEF: 'Only when medical/assistive-device GST/HST relief is claimed',
+    GST_UNDETERMINED: 'Only while GST/HST treatment is undetermined',
+    IOR_SUMMIT: 'Only when Summit is the importer of record',
+    IOR_NOT_SUMMIT: 'Only when Summit is NOT the importer of record',
+    HOST_SYSTEM_PRESENT: 'Only when a host system is named (replacement/expansion parts)',
+  };
+
+  /**
+   * The {{fields}} a Cross-Border Terms clause or a Section C custom-text row can use —
+   * filled from the proposal's customs entry when it prints (cbFillTokens in
+   * public/proposal-document.js). Shown on both tabs so nobody has to guess them.
+   */
+  var TERM_TOKENS = [
+    ['tariffClassification', 'Tariff classification (Customs and duties)'],
+    ['importerOfRecord', 'Importer of record'],
+    ['customsBroker', 'Customs broker name and address'],
+    ['countryOfOrigin', 'Country of origin'],
+    ['hostSystem', 'Host system model'],
+    ['fxRate', 'USD/CAD rate used on the proposal'],
+    ['fxDate', 'Date that rate was published'],
+  ];
+
+  function tokenHelpHtml() {
+    return (
+      '<div class="muted" style="font-size:12px;line-height:1.6;margin:0 0 12px;padding:8px 10px;background:#f6f7f4;border:1px solid #e7e8e3;border-radius:9px;">' +
+      '<b>Fill-in fields.</b> Type one of these into the text and the proposal prints its own value there, so the wording can never disagree with what the proposal records:<br>' +
+      TERM_TOKENS.map(function (t) {
+        return '<code>{{' + t[0] + '}}</code> ' + esc(t[1]);
+      }).join(' · ') +
+      '</div>'
+    );
+  }
+
   var GST_HST_LABEL = {
     '': 'No default (undetermined)',
     STANDARD_RATE: 'Standard rate applies',
@@ -200,6 +243,8 @@
       /** Working copy of CrossBorderSetting.sectionBTemplate — same shape/rules as
        *  sectionCTemplate above, see sectionBTemplateHtml(). */
       sectionBTemplate: [],
+      /** Working copy of CrossBorderSetting.crossBorderTerms — see crossBorderTermsHtml(). */
+      crossBorderTerms: [],
     };
 
     host.innerHTML =
@@ -299,11 +344,9 @@
      * parseInt by default — staleRateDays/proposalValidityDays are validated
      * server-side as integers (z.number().int()), and a stray decimal a browser lets
      * through would otherwise fail the whole save with a 400. parseFloat only for a
-     * field whose own `step` says it takes one — every per-item font-size input
-     * (Section C's cbSecSubtextSize, Section B's cbSecBSize) sets step="0.5" for
-     * exactly this reason. A plain <input type=number> with no step attribute
-     * reports el.step as "" (the DOM default), not "1", so this is the reliable
-     * signal, not el.step === '1'.
+     * field whose own `step` says it takes one (step="0.5" or similar). A plain
+     * <input type=number> with no step attribute reports el.step as "" (the DOM
+     * default), not "1", so this is the reliable signal, not el.step === '1'.
      */
     function settingFieldsFromCard() {
       var body = {};
@@ -362,6 +405,15 @@
         Array.isArray(S.settings.sectionBTemplate) ? S.settings.sectionBTemplate : []
       )
         .slice()
+        .sort(function (a, b) {
+          return (a.order || 0) - (b.order || 0);
+        });
+      S.crossBorderTerms = (
+        Array.isArray(S.settings.crossBorderTerms) ? S.settings.crossBorderTerms : []
+      )
+        .map(function (t) {
+          return Object.assign({}, t);
+        })
         .sort(function (a, b) {
           return (a.order || 0) - (b.order || 0);
         });
@@ -611,15 +663,7 @@
             '" rows="3" placeholder="What prints for this item — **bold**, *italic*" style="width:100%;border:1px solid #ece9db;border-radius:7px;padding:6px 8px;font-size:12.5px;font-family:inherit;resize:vertical;background:#fff;">' +
             esc(it.text || '') +
             '</textarea>' +
-            '<div style="display:flex;align-items:center;gap:6px;margin-top:4px;">' +
-            '<span class="muted" style="font-size:10.5px;">Size</span>' +
-            '<input type="number" class="cbSecBSize" data-i="' +
-            i +
-            '" min="7" max="12" step="0.5" value="' +
-            esc(it.sizePt || 9) +
-            '" style="width:60px;padding:3px 6px;border:1px solid #dcded7;border-radius:6px;font-size:11px;">' +
-            '<span class="muted" style="font-size:10.5px;">pt</span>' +
-            '</div>' +
+            // No size box: the proposal prints every Canadian section at one text size.
             '</div>' +
             '<button class="cbSecBDel" data-i="' +
             i +
@@ -769,15 +813,7 @@
             '" rows="2" placeholder="Optional clarifying subtext — **bold**, *italic*. Never required." style="width:100%;border:1px solid #ece9db;border-radius:7px;padding:5px 7px;font-size:11.5px;font-family:inherit;resize:vertical;background:#fff;">' +
             esc(it.subtext || '') +
             '</textarea>' +
-            '<div style="display:flex;align-items:center;gap:6px;margin-top:4px;">' +
-            '<span class="muted" style="font-size:10.5px;">Size</span>' +
-            '<input type="number" class="cbSecSubtextSize" data-i="' +
-            i +
-            '" min="7" max="12" step="0.5" value="' +
-            esc(it.subtextSizePt || 9) +
-            '" style="width:60px;padding:3px 6px;border:1px solid #dcded7;border-radius:6px;font-size:11px;">' +
-            '<span class="muted" style="font-size:10.5px;">pt</span>' +
-            '</div></div>' +
+            '</div>' +
             '</div>' +
             '<button class="cbSecDel" data-i="' +
             i +
@@ -851,6 +887,7 @@
           ),
           'Not a Section C row — this prints as a clause in the “Cross-border terms” section that follows Section C. Read live, not seeded.',
         ) +
+        missingFactsHtml(boundInUse) +
         '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin:18px 0 6px;padding-top:14px;border-top:1px solid #eef0ea;">' +
         '<div class="muted" style="font-size:12px;line-height:1.55;max-width:520px;">' +
         'The Canadian Import Terms table printed on every Canadian proposal, in this order — use the arrows to reorder, or add/remove rows entirely. A proposal that has never customized its own list follows this one live.' +
@@ -871,12 +908,141 @@
           : '') +
         '<button class="link-btn" data-act="addSectionCText" style="width:auto;padding:7px 12px;">+ Add custom text</button>' +
         '</div>' +
+        tokenHelpHtml() +
         (rows ||
           '<div class="muted" style="font-size:12.5px;margin-bottom:10px;">None yet — every Canadian proposal prints an empty Section C until a row is added.</div>') +
         '<div style="display:flex;gap:8px;align-items:center;margin-top:16px;">' +
         '<button class="link-btn" data-act="saveSectionCTemplate" style="' +
         BTN +
         '">Save Section C template</button>' +
+        '</div>'
+      );
+    }
+
+    /**
+     * The defaults on the Section C tab only print where the list below has a row for
+     * them — a value with no row is recorded on every proposal and printed on none.
+     * That is how P-2026-000171 carried a country of origin, a broker and an importer
+     * of record that never reached its Section C. Says so, and offers the one-click
+     * fix, instead of leaving the screen to imply otherwise.
+     */
+    function missingFactsHtml(boundInUse) {
+      var missing = [
+        'importerOfRecord',
+        'customsBroker',
+        'countryOfOrigin',
+        'tariffClassificationCode',
+        'tariff9979Claimed',
+        'gstHstTreatment',
+      ].filter(function (f) {
+        return !boundInUse[f];
+      });
+      if (!missing.length) return '';
+      return (
+        '<div style="font-size:12.5px;line-height:1.6;color:#7a5c1e;padding:9px 11px;background:#fdf6e7;border:1px solid #e8d9ae;border-radius:9px;margin-top:14px;">' +
+        '<b>Not printed on proposals:</b> ' +
+        missing
+          .map(function (f) {
+            return esc(SECTION_C_BOUND_FIELD_LABEL[f]);
+          })
+          .join(', ') +
+        '. A value above only prints where the list below has a row for it.' +
+        '<div style="margin-top:6px;"><button class="link-btn" data-act="addMissingSectionCFacts" style="width:auto;padding:5px 11px;font-size:12px;">Add these rows to the top of the list</button></div>' +
+        '</div>'
+      );
+    }
+
+    /* ── Cross-Border Terms ──────────────────────────────────────────────────── */
+
+    /**
+     * The clauses printed as "Cross-Border Terms" on every Canadian proposal, after
+     * Section C — see src/crossborder/crossBorderTerms.ts. Edit, reorder, add or
+     * remove; the condition decides which proposals a clause prints on.
+     */
+    function crossBorderTermsHtml() {
+      var items = S.crossBorderTerms;
+      var moveBtn = function (i, dir, label, on) {
+        return (
+          '<button class="cbTermMove" data-i="' +
+          i +
+          '" data-d="' +
+          dir +
+          '"' +
+          (on ? '' : ' disabled') +
+          ' title="Move ' +
+          (dir < 0 ? 'up' : 'down') +
+          '" style="border:1px solid #e0e1db;background:#fff;border-radius:7px;width:30px;height:24px;cursor:' +
+          (on ? 'pointer' : 'default') +
+          ';color:' +
+          (on ? '#5c6157' : '#cfd3ca') +
+          ';line-height:1;">' +
+          label +
+          '</button>'
+        );
+      };
+      var rows = items
+        .map(function (it, i) {
+          return (
+            '<div style="display:flex;align-items:flex-start;gap:8px;background:#fbfaf4;border:1px solid #ece9db;border-radius:10px;padding:10px;margin-bottom:8px;">' +
+            '<div style="display:flex;flex-direction:column;gap:4px;flex:0 0 auto;padding-top:1px;">' +
+            moveBtn(i, -1, '↑', i > 0) +
+            moveBtn(i, 1, '↓', i < items.length - 1) +
+            '</div>' +
+            '<div style="flex:1;min-width:0;">' +
+            '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:5px;">' +
+            '<input class="cbTermTitle" data-i="' +
+            i +
+            '" value="' +
+            esc(it.title || '') +
+            '" placeholder="Clause heading" style="flex:1 1 260px;min-width:200px;border:none;background:transparent;font-weight:600;font-size:13.5px;outline:none;">' +
+            '<select class="cbTermCond" data-i="' +
+            i +
+            '" style="' +
+            IN +
+            'width:auto;flex:0 1 auto;font-size:12px;padding:5px 8px;">' +
+            Object.keys(CROSS_BORDER_TERM_CONDITION_LABEL)
+              .map(function (k) {
+                return (
+                  '<option value="' +
+                  k +
+                  '"' +
+                  ((it.condition || 'ALWAYS') === k ? ' selected' : '') +
+                  '>' +
+                  esc(CROSS_BORDER_TERM_CONDITION_LABEL[k]) +
+                  '</option>'
+                );
+              })
+              .join('') +
+            '</select></div>' +
+            '<textarea class="cbTermText" data-i="' +
+            i +
+            '" rows="4" placeholder="What prints for this clause — **bold**, *italic*, {{fields}}" style="width:100%;border:1px solid #ece9db;border-radius:7px;padding:6px 8px;font-size:12.5px;font-family:inherit;resize:vertical;background:#fff;">' +
+            esc(it.text || '') +
+            '</textarea>' +
+            '</div>' +
+            '<button class="cbTermDel" data-i="' +
+            i +
+            '" title="Remove this clause" style="border:1px solid #e0e1db;background:#fff;border-radius:8px;width:30px;height:30px;color:#9c3327;cursor:pointer;flex:0 0 auto;">✕</button></div>'
+          );
+        })
+        .join('');
+      return (
+        printsWhereHtml(
+          'Cross-Border Terms — on the Canadian terms page, right after Section C, before the Acceptance page.',
+        ) +
+        '<div class="muted" style="font-size:12px;line-height:1.55;max-width:680px;margin-bottom:10px;">' +
+        'Printed in this order. Each clause prints only on the proposals its condition matches — for example, the three versions of the tariff item 9979.00.00 clause each match one answer on the proposal’s Customs and duties form, so exactly one of them prints. A proposal follows this list live; the copy a customer signed is kept in the signed PDF.' +
+        '</div>' +
+        tokenHelpHtml() +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
+        '<button class="link-btn" data-act="addCrossBorderTerm" style="width:auto;padding:7px 12px;">+ Add clause</button>' +
+        '</div>' +
+        (rows ||
+          '<div class="muted" style="font-size:12.5px;margin-bottom:10px;">None — Canadian proposals print no Cross-Border Terms until a clause is added.</div>') +
+        '<div style="display:flex;gap:8px;align-items:center;margin-top:16px;">' +
+        '<button class="link-btn" data-act="saveCrossBorderTerms" style="' +
+        BTN +
+        '">Save Cross-Border Terms</button>' +
         '</div>'
       );
     }
@@ -1776,6 +1942,7 @@
       ['settings', 'Settings', settingsHtml],
       ['sectionB', 'Section B', sectionBTemplateHtml],
       ['sectionC', 'Section C', sectionCTemplateHtml],
+      ['terms', 'Cross-Border Terms', crossBorderTermsHtml],
       ['acceptance', 'Acceptance Page', acceptancePageHtml],
       ['registrations', 'Tax registrations', registrationsHtml],
       ['rates', 'Tax rates', ratesHtml],
@@ -1856,22 +2023,6 @@
           if (it) it.subtext = el.value;
         });
       });
-      card.querySelectorAll('.cbSecSubtextSize').forEach(function (el) {
-        el.addEventListener('input', function () {
-          var it = S.sectionCTemplate[+el.getAttribute('data-i')];
-          if (it) it.subtextSizePt = el.value === '' ? undefined : parseFloat(el.value);
-        });
-        // Clamps to the 7-12pt range the server enforces (SUBTEXT_SIZE_MIN/MAX) on
-        // blur, not on every keystroke, so an out-of-range value can't reach the PATCH
-        // and surface a raw Zod error instead of just being corrected in place.
-        el.addEventListener('change', function () {
-          var it = S.sectionCTemplate[+el.getAttribute('data-i')];
-          if (!it || el.value === '') return;
-          var clamped = Math.min(12, Math.max(7, parseFloat(el.value)));
-          el.value = String(clamped);
-          it.subtextSizePt = clamped;
-        });
-      });
       card.querySelectorAll('.cbSecDel').forEach(function (b) {
         b.addEventListener('click', function () {
           S.sectionCTemplate.splice(+b.getAttribute('data-i'), 1);
@@ -1918,20 +2069,6 @@
           if (it) it.text = el.value;
         });
       });
-      card.querySelectorAll('.cbSecBSize').forEach(function (el) {
-        el.addEventListener('input', function () {
-          var it = S.sectionBTemplate[+el.getAttribute('data-i')];
-          if (it) it.sizePt = el.value === '' ? undefined : parseFloat(el.value);
-        });
-        // Same 7-12pt clamp-on-blur as Section C's cbSecSubtextSize above.
-        el.addEventListener('change', function () {
-          var it = S.sectionBTemplate[+el.getAttribute('data-i')];
-          if (!it || el.value === '') return;
-          var clamped = Math.min(12, Math.max(7, parseFloat(el.value)));
-          el.value = String(clamped);
-          it.sizePt = clamped;
-        });
-      });
       card.querySelectorAll('.cbSecBDel').forEach(function (b) {
         b.addEventListener('click', function () {
           S.sectionBTemplate.splice(+b.getAttribute('data-i'), 1);
@@ -1946,6 +2083,43 @@
           var tmp = S.sectionBTemplate[i];
           S.sectionBTemplate[i] = S.sectionBTemplate[j];
           S.sectionBTemplate[j] = tmp;
+          render();
+        });
+      });
+
+      /* Cross-Border Terms editing — same shape as Section B above, plus a condition. */
+      card.querySelectorAll('.cbTermTitle').forEach(function (el) {
+        el.addEventListener('input', function () {
+          var it = S.crossBorderTerms[+el.getAttribute('data-i')];
+          if (it) it.title = el.value;
+        });
+      });
+      card.querySelectorAll('.cbTermText').forEach(function (el) {
+        el.addEventListener('input', function () {
+          var it = S.crossBorderTerms[+el.getAttribute('data-i')];
+          if (it) it.text = el.value;
+        });
+      });
+      card.querySelectorAll('.cbTermCond').forEach(function (el) {
+        el.addEventListener('change', function () {
+          var it = S.crossBorderTerms[+el.getAttribute('data-i')];
+          if (it) it.condition = el.value;
+        });
+      });
+      card.querySelectorAll('.cbTermDel').forEach(function (b) {
+        b.addEventListener('click', function () {
+          S.crossBorderTerms.splice(+b.getAttribute('data-i'), 1);
+          render();
+        });
+      });
+      card.querySelectorAll('.cbTermMove').forEach(function (b) {
+        b.addEventListener('click', function () {
+          var i = +b.getAttribute('data-i');
+          var j = i + +b.getAttribute('data-d');
+          if (j < 0 || j >= S.crossBorderTerms.length) return;
+          var tmp = S.crossBorderTerms[i];
+          S.crossBorderTerms[i] = S.crossBorderTerms[j];
+          S.crossBorderTerms[j] = tmp;
           render();
         });
       });
@@ -2061,6 +2235,61 @@
                 };
               }),
             }),
+          },
+        ];
+      } else if (kind === 'addMissingSectionCFacts') {
+        var have = {};
+        S.sectionCTemplate.forEach(function (it) {
+          if (it.kind === 'BOUND' && it.boundField) have[it.boundField] = true;
+        });
+        var add = [
+          'importerOfRecord',
+          'customsBroker',
+          'countryOfOrigin',
+          'tariffClassificationCode',
+          'tariff9979Claimed',
+          'gstHstTreatment',
+        ]
+          .filter(function (fld) {
+            return !have[fld];
+          })
+          .map(function (fld) {
+            return {
+              id: newListItemId(),
+              kind: 'BOUND',
+              boundField: fld,
+              label: SECTION_C_BOUND_FIELD_LABEL[fld] || fld,
+            };
+          });
+        S.sectionCTemplate = add.concat(S.sectionCTemplate);
+        render();
+        return;
+      } else if (kind === 'addCrossBorderTerm') {
+        S.crossBorderTerms.push({ id: newListItemId(), title: '', text: '', condition: 'ALWAYS' });
+        render();
+        return;
+      } else if (kind === 'saveCrossBorderTerms') {
+        // A clause with no text would print a bare heading, and the server refuses it;
+        // it is left out of the save rather than failing the whole list.
+        call = [
+          '/cross-border/settings',
+          {
+            method: 'PATCH',
+            body: {
+              crossBorderTerms: S.crossBorderTerms
+                .filter(function (it) {
+                  return it.text && String(it.text).trim();
+                })
+                .map(function (it, i) {
+                  return {
+                    id: it.id || newListItemId(),
+                    title: it.title || '',
+                    text: String(it.text).trim(),
+                    order: i,
+                    condition: it.condition || 'ALWAYS',
+                  };
+                }),
+            },
           },
         ];
       } else if (kind === 'addSectionBItem') {

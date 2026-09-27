@@ -264,6 +264,16 @@
     return !!(cb && cb.applicable && cb.fx && cb.fx.rate);
   }
 
+  /**
+   * One text size for the body of every Canadian section — the Section A line items,
+   * Section B's lines and notes, the import-charges block, Section C and the
+   * cross-border terms. They were set independently (9.5 to 12px, and Section B/C
+   * notes at whatever size a row had been given), so the same kind of sentence changed
+   * size from one section to the next. The section headings sit one clear step above.
+   */
+  var CB_BODY_PX = 11;
+  var CB_SECTION_HEAD_PX = 15;
+
   /** USD minor → CAD minor at the document's rate. Mirrors convertUsdMinorToCad. */
   function cbCad(usdMinor, rate) {
     if (usdMinor == null || !rate) return null;
@@ -338,17 +348,10 @@
     var cb = (d && d.crossBorder) || {};
     var NOT_YET = '<span style="color:#8a8f85;">Not yet determined</span>';
     switch (field) {
-      case 'importerOfRecord': {
-        var IOR = {
-          CUSTOMER: 'The customer',
-          SUMMIT: 'Summit Sensory Gym',
-          THIRD_PARTY: 'A third party',
-          TO_BE_DETERMINED: 'To be determined',
-        };
-        return cb.importerOfRecord && IOR[cb.importerOfRecord]
-          ? esc(IOR[cb.importerOfRecord])
+      case 'importerOfRecord':
+        return cb.importerOfRecord && CB_IOR_LABEL[cb.importerOfRecord]
+          ? esc(CB_IOR_LABEL[cb.importerOfRecord])
           : NOT_YET;
-      }
       case 'customsBroker': {
         var parts = [cb.customsBrokerName, cb.customsBrokerAddress].filter(Boolean);
         return parts.length ? esc(parts.join(', ')) : NOT_YET;
@@ -422,17 +425,19 @@
    * never part of the Section A/C completion gate — see
    * requireSectionCCompleteBeforeFinal's own comment.
    */
-  function cbSubtextHtml(subtext, sizePt) {
+  function cbSubtextHtml(subtext) {
     if (!subtext || !String(subtext).trim()) return '';
-    var size = Number(sizePt);
-    if (!size || isNaN(size)) size = 9;
-    size = Math.min(12, Math.max(7, size));
     // data-role, not a class the print stylesheet uses for anything — a stable hook
     // so a test (or a future reader) can find this block without depending on the
     // exact inline CSS, which is free to change for cosmetic reasons.
+    //
+    // Printed at the one Canadian body size (CB_BODY_PX), not a per-row size. The
+    // row's stored subtextSizePt is ignored: every section's text is meant to read at
+    // the same size, and a size picked row by row is how Section C came out at three
+    // different sizes on one page.
     return (
       '<div data-role="cb-subtext" style="margin-top:3px;font-size:' +
-      size +
+      CB_BODY_PX +
       'px;color:#5c6157;line-height:1.5;">' +
       rt(subtext) +
       '</div>'
@@ -448,31 +453,38 @@
         var value =
           item.kind === 'TEXT'
             ? item.text && String(item.text).trim()
-              ? esc(item.text)
+              ? cbFillTokens(esc(item.text), d)
               : null
             : cbSectionCBoundValue(d, item.boundField);
         // A blank TEXT row is skipped, not printed with an empty value — same "never
         // print an empty block" rule the rest of this module follows.
         if (value == null) return '';
+        // A multi-paragraph TEXT row keeps its paragraphs: esc() leaves the blank
+        // lines in, and pre-line is what turns them back into breaks.
         return (
-          '<div style="padding:5px 8px;border-bottom:1px dotted #ece7d8;">' +
-          '<div style="display:flex;gap:14px;font-size:11px;line-height:1.5;">' +
-          '<span style="font-weight:700;color:#3d4a55;flex:0 0 170px;">' +
+          '<div style="padding:5px 0;border-bottom:1px dotted #ece7d8;break-inside:avoid;">' +
+          '<div style="display:flex;gap:14px;font-size:' +
+          CB_BODY_PX +
+          'px;line-height:1.5;">' +
+          '<span style="font-weight:700;color:#20241f;flex:0 0 170px;">' +
           esc(tc(item.label || '')) +
-          '</span><span style="color:#20241f;flex:1;min-width:0;">' +
+          '</span><span style="color:#20241f;flex:1;min-width:0;white-space:pre-line;">' +
           value +
           '</span></div>' +
-          cbSubtextHtml(item.subtext, item.subtextSizePt) +
+          cbSubtextHtml(item.subtext) +
           '</div>'
         );
       })
       .join('');
     if (!rows) return '';
+    // data-flow: the paginator breaks between these rows rather than moving the whole
+    // section to a new sheet (and clipping it there when it is taller than one). The
+    // heading is kept with the first row by its own data-keep-next. The wrapper carries
+    // no margin or rule, because the paginator re-wraps every row in a copy of it.
+    // Section C opens the Canadian terms page (see proposalDocHtml), so it needs no
+    // divider above it.
     return (
-      '<div style="margin-top:14px;padding-top:10px;border-top:1px solid #d5d8d2;break-inside:avoid;">' +
-      '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#3d4a55;padding:0 8px 6px;">Section C — Canadian Import Terms</div>' +
-      rows +
-      '</div>'
+      '<div data-flow>' + cbSectionLabel(d, 'Section C — Canadian Import Terms') + rows + '</div>'
     );
   }
 
@@ -484,8 +496,15 @@
    */
   function cbSectionLabel(d, text) {
     if (!cbIsCanadian(d)) return '';
+    // The top tier of a Canadian document: black, bold and larger than anything it
+    // contains — a group heading inside Section A is 12px navy, and a sub-block such as
+    // "Estimated charges payable at import" is 11px — so the three sections read as
+    // the structure of the page rather than as one more label in it. data-keep-next
+    // keeps a heading from being left alone at the foot of a sheet.
     return (
-      '<div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#3d4a55;margin:14px 0 6px;">' +
+      '<div data-role="cb-section-heading" data-keep-next style="font-size:' +
+      CB_SECTION_HEAD_PX +
+      'px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#000;margin:18px 0 8px;line-height:1.3;">' +
       esc(text) +
       '</div>'
     );
@@ -509,21 +528,22 @@
     return items
       .map(function (item) {
         if (!item.text || !String(item.text).trim()) return '';
-        var size = Number(item.sizePt);
-        if (!size || isNaN(size)) size = 9;
-        size = Math.min(12, Math.max(7, size));
         // data-role, not a class the print stylesheet uses for anything — a stable
         // hook so a test (or a future reader) can find this block without depending
         // on the exact inline CSS or fixture text, same convention cbSubtextHtml
-        // already uses for Section C's row subtext.
+        // already uses for Section C's row subtext. Label and body both print at the
+        // one Canadian body size; the item's stored sizePt is ignored (see
+        // cbSubtextHtml).
         return (
           '<div data-role="cb-section-b-item" style="margin-top:6px;">' +
-          '<b style="font-size:11px;color:#20241f;">' +
+          '<b style="font-size:' +
+          CB_BODY_PX +
+          'px;color:#20241f;">' +
           esc(tc(item.label || '')) +
           '</b>' +
           '<div style="margin-top:2px;font-size:' +
-          size +
-          'px;color:#5c6157;line-height:1.5;">' +
+          CB_BODY_PX +
+          'px;color:#20241f;line-height:1.5;">' +
           rt(item.text) +
           '</div></div>'
         );
@@ -580,17 +600,26 @@
    * An unquoted charge prints its status rather than a figure — a blank duty must
    * not read as no duty.
    */
-  function cbBorderBlock(d) {
+  function cbBorderBlock(d, payableToSummitMinor) {
     if (!cbIsCanadian(d) || !d.crossBorder.result) return '';
     var rate = (d.crossBorder.fx || {}).rate || null;
+    // Every charge the customer pays at the border, INCLUDING the import GST/HST/QST.
+    // The sales-tax line used to be filtered out here while still being counted in the
+    // separately-payable total beneath, so the block did not add up: Tariff $0 and
+    // Brokerage $400 over a total of $459.90, with the $59.90 of tax nowhere on the
+    // page. A tax line Summit collects is includedInSellerTotal and never reaches this
+    // filter, so nothing prints twice.
     var lines = (d.crossBorder.result.lines || []).filter(function (l) {
-      return (
-        !l.includedInSellerTotal && l.category !== 'SALES_TAX' && l.status !== 'NOT_APPLICABLE'
-      );
+      return !l.includedInSellerTotal && l.status !== 'NOT_APPLICABLE';
     });
     if (!lines.length) return '';
     var sep = d.crossBorder.result.separatelyPayable || { usdMinor: 0 };
-    var landed = d.crossBorder.result.estimatedLandedCost || { usdMinor: 0 };
+    // Landed cost is what the customer signs for plus what they pay at the border, from
+    // the document's OWN total. The engine's estimatedLandedCost is built from its own
+    // payable figure, which leaves out anything the engine does not model (the mat
+    // freight tax pass-through, a TBD line) — and which is computed from the SAVED
+    // version, so it could disagree with the total printed a few lines above it.
+    var landedMinor = (Number(payableToSummitMinor) || 0) + (Number(sep.usdMinor) || 0);
     var status = {
       TO_BE_CONFIRMED: 'To be confirmed',
       REQUIRES_CUSTOMS_REVIEW: 'To be confirmed',
@@ -607,8 +636,11 @@
               '</span>'
             : cbDocAmount(l.usdMinor, rate);
         return (
-          '<div style="display:flex;justify-content:space-between;gap:12px;padding:3px 8px;font-size:11.5px;"><span style="color:#5c6157;">' +
+          '<div style="display:flex;justify-content:space-between;gap:12px;padding:3px 0;font-size:' +
+          CB_BODY_PX +
+          'px;"><span style="color:#20241f;">' +
           esc(l.label) +
+          (l.percent ? ' <span style="color:#7b8190;">' + esc(l.percent) + '%</span>' : '') +
           '</span><span style="text-align:right;">' +
           right +
           '</span></div>'
@@ -618,17 +650,23 @@
 
     return (
       '<div style="margin-top:18px;padding:10px 0 0;border-top:1px solid #d5d8d2;break-inside:avoid;">' +
-      '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#3d4a55;padding:0 8px 4px;">Estimated charges payable at import</div>' +
-      '<div style="padding:0 8px 6px;font-size:10px;color:#8a8f85;line-height:1.55;">Not payable to Summit Sensory Gym. These are estimates, assessed and collected by the Canada Border Services Agency, the customs broker or the carrier.</div>' +
+      '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#3d4a55;padding:0 0 4px;">Estimated charges payable at import</div>' +
+      '<div style="padding:0 0 6px;font-size:' +
+      CB_BODY_PX +
+      'px;color:#5c6157;line-height:1.55;">Not payable to Summit Sensory Gym. These are estimates, assessed and collected by the Canada Border Services Agency, the customs broker or the carrier.</div>' +
       rows +
       (sep.usdMinor
-        ? '<div style="display:flex;justify-content:space-between;gap:12px;padding:6px 8px 3px;margin-top:4px;border-top:1px solid #ece7d8;font-size:11.5px;font-weight:700;"><span>Estimated charges payable at import</span><span style="text-align:right;">' +
+        ? '<div style="display:flex;justify-content:space-between;gap:12px;padding:6px 0 3px;margin-top:4px;border-top:1px solid #ece7d8;font-size:' +
+          CB_BODY_PX +
+          'px;font-weight:700;"><span>Estimated charges payable at import</span><span style="text-align:right;">' +
           cbDocAmount(sep.usdMinor, rate) +
           '</span></div>'
         : '') +
       (sep.usdMinor
-        ? '<div style="display:flex;justify-content:space-between;gap:12px;padding:3px 8px;font-size:11.5px;font-weight:700;"><span>Estimated total landed cost</span><span style="text-align:right;">' +
-          cbDocAmount(landed.usdMinor, rate) +
+        ? '<div style="display:flex;justify-content:space-between;gap:12px;padding:3px 0;font-size:' +
+          CB_BODY_PX +
+          'px;font-weight:700;"><span>Estimated total landed cost <span style="font-weight:400;color:#7b8190;">(total payable to Summit + charges payable at import)</span></span><span style="text-align:right;">' +
+          cbDocAmount(landedMinor, rate) +
           '</span></div>'
         : '') +
       '</div>'
@@ -636,156 +674,130 @@
   }
 
   /**
-   * The Canadian clauses. Wording is fixed here for now; the requirement is for
-   * administrator-editable templates, which is a later slice — so the text lives in
-   * one place rather than being scattered through the markup.
+   * The Cross-Border Terms — Summit's editable clause list (Administration → Canada →
+   * Cross-Border Terms; src/crossborder/crossBorderTerms.ts). This function holds no
+   * legal wording of its own. It keeps the clauses whose condition holds for this
+   * proposal, fills their {{token}} fields from the proposal's customs entry, and
+   * prints them in order.
+   *
+   * The tariff-audit clause (Section C tab → "Tariff-audit language") still prints
+   * last, as it did.
    */
   function cbClauses(d) {
     if (!cbIsCanadian(d)) return '';
     var cb = d.crossBorder;
-    var fx = cb.fx || {};
-
-    var para = function (title, text) {
-      return '<div style="margin-bottom:6px;"><b>' + esc(title) + '</b> ' + text + '</div>';
-    };
-
-    /**
-     * GST/HST relief status, tariff 9979.00.00 claim status and host-system
-     * identification are all human-entered STATUSES on ProposalCustomsEntry, never
-     * computed or inferred. Each one always prints something on a Canadian proposal
-     * (including an honest "not yet determined" sentence when null) so the document
-     * never silently omits a required disclosure just because nobody has answered yet.
-     */
-    var gstHstText =
-      cb.gstHstTreatment === 'STANDARD_RATE'
-        ? 'Standard rate applies.'
-        : cb.gstHstTreatment === 'MEDICAL_DEVICE_RELIEF_CLAIMED'
-          ? 'Goods qualify for relief as medical and assistive devices — confirm with broker.'
-          : 'Whether these goods qualify for GST/HST relief as medical and assistive devices has not yet been determined for this proposal. Standard tax treatment is assumed on this estimate until confirmed otherwise; confirm the applicable treatment with your customs broker or tax advisor before relying on this proposal for tax planning.';
-
-    var tariff9979Title = 'Tariff Item 9979.00.00 (Goods for Persons with Disabilities).';
-    var tariff9979Text =
-      cb.tariff9979Claimed === true
-        ? 'Summit Sensory Gym has identified the goods on this proposal as eligible for classification under tariff item 9979.00.00 of the Canadian Customs Tariff, which provides relief from customs duty for goods designed to assist persons with disabilities. This classification is subject to review and final determination by the Canada Border Services Agency at the time of importation.'
-        : cb.tariff9979Claimed === false
-          ? 'The goods on this proposal are not being entered under tariff item 9979.00.00 of the Canadian Customs Tariff. Standard customs duty treatment applies, subject to the classification determined by the Canada Border Services Agency at the time of importation.'
-          : 'Whether the goods on this proposal will be entered under tariff item 9979.00.00 of the Canadian Customs Tariff has not yet been determined. This proposal does not assume relief under that item; confirm eligibility and classification with your customs broker before relying on it.';
-
-    var hostSystemBaseText =
-      'Where any component on this proposal is a replacement or expansion part for an existing Summit Sensory Gym system rather than part of a new, complete system, it is identified to the host system it belongs to, consistent with the Canada Border Services Agency’s treatment of parts for equipment previously qualifying under tariff item 9979.00.00.';
-    var hostSystemText =
-      hostSystemBaseText +
-      (cb.hostSystemModel
-        ? ' This proposal is for replacement or expansion components for the customer’s existing system: ' +
-          esc(cb.hostSystemModel) +
-          '.'
-        : '');
-
-    var out = [
-      para(
-        'Currency and Exchange Rate.',
-        'All quoted prices and contractual payment obligations are denominated in United States dollars (USD). Canadian-dollar (CAD) amounts are provided for reference and budgeting convenience only. ' +
-          (fx.rate
-            ? 'Estimated CAD amounts are calculated using the Bank of Canada daily average USD/CAD exchange rate published for ' +
-              esc(fx.observationDate || 'the proposal date') +
-              ', at a rate of 1 USD = ' +
-              esc(fx.rate) +
-              ' CAD. '
-            : 'No CAD reference amounts are shown on this proposal. ') +
-          'If this proposal is accepted, the CAD reference amounts will be recalculated and locked using the most recently published Bank of Canada daily average rate on or before the date of acceptance. Payment remains due in USD unless Summit Sensory Gym expressly agrees in writing to accept payment in CAD. In the event of any discrepancy, the USD amounts control. The exchange rate shown may differ from the rate offered by the customer\u2019s bank or payment provider.',
-      ),
-      para(
-        'Bank and Payment Fees.',
-        'The customer is responsible for any wire-transfer fees, intermediary-bank fees, credit-card fees where permitted, foreign-exchange charges, or other payment-processing costs imposed by the customer\u2019s financial institution or payment provider. Summit Sensory Gym must receive the full invoiced amount.',
-      ),
-      para(
-        'Canadian Sales Taxes.',
-        'Applicable GST, HST, PST, RST, or QST will be determined based on the ship-to location, the nature of the goods and services supplied, Summit Sensory Gym\u2019s applicable registration obligations, the customer\u2019s documented tax status, and the laws and rates in effect at the time of invoicing or shipment. Tax amounts shown on this proposal are estimates and may be revised on the final invoice if the delivery location, applicable rate, taxability, exemption status, transaction structure, or governing law changes. Any valid exemption documentation must be provided and approved before the final invoice is issued.',
-      ),
-      para('GST/HST Treatment.', gstHstText),
-      para(
-        'Basis of the Estimates.',
-        'The tariff and tax rates applied on this proposal were entered by Summit Sensory Gym based on the information available for goods of this kind. They are not derived from a tariff classification ruling, a country-of-origin determination or an advance ruling from the Canada Border Services Agency, and they do not constitute customs, tax or legal advice. The customer is encouraged to confirm the applicable rates with their own customs broker before relying on these figures for budgeting.',
-      ),
-      para(
-        'Customs Duties and Tariffs.',
-        'Customs duties, counter-tariffs, surtaxes, safeguard measures, anti-dumping duties, countervailing duties, and other border assessments shown in this proposal are estimates based on the product information, tariff classification, country of origin, customs value, trade-agreement eligibility, exchange-rate information, and government rules available on the proposal date. Final amounts are determined by the Canada Border Services Agency or the authorized customs broker under the laws and rates in effect when the goods are imported. Unless expressly identified as fixed and included, any difference between estimated and actual border assessments is the customer\u2019s responsibility.',
-      ),
-      para(
-        'Estimated Tariffs Are Dated to This Proposal.',
-        'Any tariff, duty, surtax or brokerage figure shown on this proposal is an estimate calculated on the proposal date, using the rates in effect and the information available on that date. Tariff rates, surtax orders and remission orders are set by government and change without notice, sometimes between the date a proposal is issued and the date the goods cross the border. The figures shown are not a quotation of, or a cap on, the amounts that will ultimately be assessed, and they may increase or decrease.',
-      ),
-      para(tariff9979Title, tariff9979Text),
-    ];
-
-    if (cb.tariff9979Claimed === true) {
-      out.push(
-        para(
-          'Diversion of Goods Entered Under Tariff Item 9979.00.00.',
-          'If any good entered into Canada under tariff item 9979.00.00 of the Canadian Customs Tariff is later sold, leased, or otherwise diverted to a use that does not qualify for that tariff item, the party responsible for the customs accounting on this shipment must correct that accounting and pay any customs duty and other charges that become owing as a result, in accordance with the Canadian Customs Tariff and the Accounting for Imported Goods and Payment of Duties Regulations.',
-        ),
+    var terms = (cb.crossBorderTerms || []).filter(function (t) {
+      return t && t.text && String(t.text).trim() && cbConditionHolds(cb, t.condition);
+    });
+    var paras = terms.map(function (t) {
+      var title = String(t.title || '').trim();
+      // Titles are entered without a closing stop; one is added so every clause reads
+      // "Heading. Text…", unless the title already ends in punctuation.
+      if (title && !/[.:?!]$/.test(title)) title += '.';
+      return (
+        '<div style="margin-bottom:6px;">' +
+        (title ? '<b>' + esc(title) + '</b> ' : '') +
+        cbFillTokens(esc(t.text), d) +
+        '</div>'
+      );
+    });
+    if (cb.auditLanguageText && String(cb.auditLanguageText).trim()) {
+      paras.push(
+        '<div style="margin-bottom:6px;"><b>In the Event of a CBSA Reassessment.</b> ' +
+          cbFillTokens(esc(cb.auditLanguageText), d) +
+          '</div>',
       );
     }
+    if (!paras.length) return '';
 
-    out.push(
-      para(
-        'Design and Engineering Documentation.',
-        'Summit Sensory Gym maintains design, engineering and clinical documentation supporting the intended use of this equipment by persons with disabilities. That documentation is available on request to whoever is handling customs clearance for this shipment, or directly to the Canada Border Services Agency.',
-      ),
-    );
-    out.push(para('Host System Identification.', hostSystemText));
-
-    out.push(
-      para(
-        'Responsibility for Border Charges.',
-        'Except for any amount expressly identified on this proposal as fixed and included in the total payable to Summit Sensory Gym, the customer is responsible for all customs duties, tariffs, surtaxes, safeguard and anti-dumping measures, import taxes, brokerage charges, storage, demurrage, examination and inspection fees, disbursements and penalties assessed on the importation of the goods, together with any increase in those amounts arising after the proposal date. Summit Sensory Gym has no control over the classification, valuation or rate applied by the Canada Border Services Agency or by the customs broker and is not liable for any such charge, for any increase in one, or for delay, storage or additional cost arising from a customs examination, a re-determination of classification or origin, or a change in law. Where Summit Sensory Gym advances any such amount on the customer\u2019s behalf, it is reimbursable in full.',
-      ),
-    );
-    out.push(
-      para(
-        'CUSMA Treatment.',
-        'Preferential tariff treatment under the Canada\u2013United States\u2013Mexico Agreement applies only when the goods satisfy the applicable rules of origin and the required origin documentation is available and accepted. Shipment from the United States does not, by itself, establish eligibility for preferential tariff treatment.',
-      ),
-    );
-
-    out.push(
-      para(
-        'Customs Brokerage.',
-        'Additional disbursement, advancement, bond, inspection, storage, carrier, port, redelivery, or other accessorial charges may apply. Unless expressly included as a fixed charge, these additional third-party costs are the customer\u2019s responsibility.',
-      ),
-    );
-    out.push(
-      para(
-        'Changes in Government Charges.',
-        'Taxes, duties, tariffs, surtaxes, trade remedies, customs requirements, and government fees are subject to change. Any new or increased governmental charge that becomes applicable after the proposal date and before importation, delivery, or invoicing may be added to the final amount payable, unless Summit Sensory Gym has expressly agreed in writing to absorb that charge.',
-      ),
-    );
-    out.push(
-      para(
-        'Canadian Delivery Charges.',
-        'Freight is based on the delivery conditions and information available on the proposal date. Additional charges may apply for limited-access locations, appointment delivery, liftgate service, inside delivery, remote-area service, construction delays, storage, redelivery, address changes, border delays, or other services not included in the original freight quotation.',
-      ),
-    );
-    out.push(
-      para(
-        'Customer Tax Rebates.',
-        'The customer may be eligible to apply for a tax rebate or recovery based on its own legal or organizational status. Any such rebate is the customer\u2019s responsibility and does not reduce the tax charged by Summit Sensory Gym unless a valid point-of-sale exemption applies and the required documentation has been received and approved.',
-      ),
-    );
-    // Bryan's own tariff-audit wording \u2014 never hardcoded here. `cb.auditLanguageText`
-    // already arrives resolved server-side (this proposal's own override, or Summit's
-    // current admin default). A blank/unset default prints no clause at all, rather
-    // than an empty heading.
-    if (cb.auditLanguageText && String(cb.auditLanguageText).trim()) {
-      out.push(para('In the Event of a CBSA Reassessment.', esc(cb.auditLanguageText)));
-    }
-
+    // Typography only on the wrapper — the paginator repeats it around every clause it
+    // moves to a new sheet, so a margin here would be repeated too. data-flow lets the
+    // paginator break between clauses. The heading is a sub-heading of the Canadian
+    // terms page, one step below the Section A/B/C headings.
     return (
-      '<div style="margin-top:14px;padding-top:8px;border-top:1px solid #d5d8d2;font-size:9.5px;line-height:1.6;color:#5c6157;">' +
-      '<div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#3d4a55;margin-bottom:5px;">Cross-border terms</div>' +
-      out.join('') +
+      '<div data-flow style="font-size:' +
+      CB_BODY_PX +
+      'px;line-height:1.5;color:#20241f;">' +
+      '<div data-keep-next data-role="cb-terms-heading" style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#203060;margin:18px 0 6px;">Cross-Border Terms</div>' +
+      paras.join('') +
       '</div>'
     );
+  }
+
+  /**
+   * Does a Cross-Border Terms condition hold for this proposal? The vocabulary is
+   * CROSS_BORDER_TERM_CONDITIONS in src/crossborder/crossBorderTerms.ts. Each reads a
+   * human-entered status on the customs entry; "undetermined" is its own answer, not
+   * a default to one side. An unknown condition prints the clause — hiding a clause
+   * from every proposal because of a typo is the worse failure.
+   */
+  function cbConditionHolds(cb, condition) {
+    switch (condition || 'ALWAYS') {
+      case 'ALWAYS':
+        return true;
+      case 'TARIFF_9979_CLAIMED':
+        return cb.tariff9979Claimed === true;
+      case 'TARIFF_9979_NOT_CLAIMED':
+        return cb.tariff9979Claimed === false;
+      case 'TARIFF_9979_UNDETERMINED':
+        return cb.tariff9979Claimed !== true && cb.tariff9979Claimed !== false;
+      case 'GST_STANDARD':
+        return cb.gstHstTreatment === 'STANDARD_RATE';
+      case 'GST_RELIEF':
+        return cb.gstHstTreatment === 'MEDICAL_DEVICE_RELIEF_CLAIMED';
+      case 'GST_UNDETERMINED':
+        return (
+          cb.gstHstTreatment !== 'STANDARD_RATE' &&
+          cb.gstHstTreatment !== 'MEDICAL_DEVICE_RELIEF_CLAIMED'
+        );
+      case 'IOR_SUMMIT':
+        return cb.importerOfRecord === 'SUMMIT';
+      case 'IOR_NOT_SUMMIT':
+        return cb.importerOfRecord !== 'SUMMIT';
+      case 'HOST_SYSTEM_PRESENT':
+        return !!(cb.hostSystemModel && String(cb.hostSystemModel).trim());
+      default:
+        return true;
+    }
+  }
+
+  var CB_IOR_LABEL = {
+    CUSTOMER: 'The customer',
+    SUMMIT: 'Summit Sensory Gym',
+    THIRD_PARTY: 'A third party',
+    TO_BE_DETERMINED: 'To be determined',
+  };
+
+  /**
+   * Fill {{token}} fields in ALREADY-ESCAPED admin text with the proposal's own values,
+   * escaping each value as it goes in — the same after-escaping order as
+   * fillMediaTokens, so nothing typed into a customs entry can inject markup.
+   *
+   * The point is consistency: a clause or Section C row that says
+   * {{tariffClassification}} prints whatever the customs entry records, so the terms
+   * cannot name one tariff item while the proposal records another. An unanswered
+   * field prints "[not yet determined]", never a blank. An unknown token is left as
+   * typed, so a misspelling is visible on the preview rather than silently dropped.
+   */
+  function cbFillTokens(escapedText, d) {
+    var cb = (d && d.crossBorder) || {};
+    var fx = cb.fx || {};
+    var values = {
+      tariffClassification: cb.tariffClassificationCode,
+      importerOfRecord: cb.importerOfRecord ? CB_IOR_LABEL[cb.importerOfRecord] : null,
+      customsBroker: [cb.customsBrokerName, cb.customsBrokerAddress].filter(Boolean).join(', '),
+      countryOfOrigin: cb.countryOfOrigin,
+      hostSystem: cb.hostSystemModel,
+      fxRate: fx.rate,
+      fxDate: fx.observationDate,
+    };
+    return String(escapedText).replace(/\{\{\s*([A-Za-z]+)\s*\}\}/g, function (whole, name) {
+      if (!Object.prototype.hasOwnProperty.call(values, name)) return whole;
+      var v = values[name];
+      return v != null && String(v).trim()
+        ? esc(v)
+        : '<span style="color:#8a8f85;">[not yet determined]</span>';
+    });
   }
 
   /**
@@ -1250,6 +1262,16 @@
     var docCbAdd = cbSellerAddMinor(d);
     var docTotal = t.total + docCbAdd;
     var docDeposit = docCbAdd ? depositOf(docTotal) : t.deposit;
+    var isCa = cbIsCanadian(d);
+    /**
+     * A Canadian proposal never prints a deposit — not the "Deposit Due" line and not
+     * the deposit clause on the acceptance line — whatever the checkbox says. Canadian
+     * payment terms are not the domestic 50%-to-start terms, and a box a rep has to
+     * remember to untick is how the domestic terms reached a Canadian customer. The
+     * builder enforces the same thing (the checkbox is locked off there), so the screen
+     * and the document agree.
+     */
+    var showDeposit = m.showDeposit !== false && !isCa;
 
     var cellTax = amountCell(t.tax, m.tbdTax);
     var cellStructureFreight = amountCell(t.structureFreight, m.tbdStructureFreight);
@@ -1312,26 +1334,71 @@
       return r;
     }
     var counted = countedRevenueByIndex(d.lines || []);
-    // Printed once per GROUP section (reset in the GROUP branch below), the first
-    // time that section reaches a bundle-child ("Included") row, on a Canadian
-    // proposal — labels the rows that already render this way as the reference
-    // template's "Configuration Schedule -- components of the system above." A
-    // proposal with two separately bundled systems gets one heading per system, not
-    // one for the whole document. Purely an inserted heading row; changes nothing
-    // about which rows print "Included" or how the subtotal is computed.
-    var configScheduleHeadingPrinted = false;
+    /**
+     * Section A on a Canadian proposal is ONE priced line: the complete therapeutic
+     * system, quantity 1, at the Section A total — with every component listed under it
+     * as the Configuration Schedule, priced "Included". That is how the system is
+     * presented for import (one apparatus, not a list of separately priced parts), and
+     * it is what the reference template shows.
+     *
+     * The line's name is the proposal's "Section A name" (builder → Canadian proposal
+     * panel), falling back to the suggested "… Complete Therapeutic System — Model …"
+     * title the builder computes, then the proposal title. The functional-description
+     * sentence the release gate asks for — the first section's description — prints
+     * beneath it.
+     *
+     * Nothing about the figures changes: the amount is t.subtotal, the same figure the
+     * Subtotal row below prints, and per-line third-party freight is still carried in
+     * Section B's Third-Party Freight line.
+     */
+    var firstGroupDescPrinted = false;
+    if (isCa) {
+      var saName = String(d.sectionAName || m.sectionAName || d.title || '').trim();
+      if (!saName) saName = 'Therapeutic System';
+      var saModel = proposalModelCode(d.lines) || '';
+      var saDesc = '';
+      (d.lines || []).some(function (l) {
+        if ((l.lineType || 'PRODUCT') !== 'GROUP') return false;
+        saDesc = String(l.description || '').trim();
+        return true;
+      });
+      body += openSection();
+      body +=
+        '<tr data-role="cb-section-a-line" style="break-inside:avoid;">' +
+        '<td style="padding:7px 0 4px;font-size:12px;font-weight:700;color:#203060;line-height:1.3;vertical-align:top;">' +
+        esc(saName) +
+        '</td>' +
+        '<td style="padding:7px 10px 4px;font-size:11px;color:#7b8190;vertical-align:top;font-family:ui-monospace,monospace;overflow-wrap:anywhere;">' +
+        esc(saModel) +
+        '</td>' +
+        '<td style="padding:7px 10px 4px;font-size:11px;text-align:right;vertical-align:top;">1</td>' +
+        '<td style="padding:7px 10px 4px;font-size:11px;text-align:right;vertical-align:top;white-space:nowrap;">' +
+        fmtMoney(t.subtotal, '') +
+        '</td>' +
+        '<td style="padding:7px 0 4px 10px;font-size:11px;text-align:right;vertical-align:top;font-weight:700;color:#203060;white-space:nowrap;">' +
+        fmtMoney(t.subtotal, '') +
+        '</td></tr>' +
+        (saDesc
+          ? '<tr style="break-inside:avoid;"><td colspan="5" style="padding:0 0 6px;font-size:' +
+            CB_BODY_PX +
+            'px;color:#20241f;line-height:1.5;">' +
+            esc(saDesc) +
+            '</td></tr>'
+          : '') +
+        '<tr data-brk="head" style="break-inside:avoid;break-after:avoid;"><td colspan="5" style="padding:8px 0 3px;border-top:1px solid #eceef4;font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#3d4a55;">' +
+        'Configuration Schedule — Components of the System Above' +
+        '</td></tr>';
+      firstGroupDescPrinted = !!saDesc;
+    }
     (d.lines || []).forEach(function (l, idx) {
       var lt = l.lineType || 'PRODUCT';
       if (lt === 'GROUP') {
         body += subtotalRow();
         body += openSection();
-        groupOpenSub = 0;
+        // No per-section subtotal on a Canadian proposal: the components are not
+        // priced individually there, so a subtotal of "Included" rows means nothing.
+        groupOpenSub = isCa ? null : 0;
         inSub = false;
-        // Reset per GROUP, not once for the whole document: a proposal with two
-        // separately bundled systems (two GROUP sections each with their own
-        // "Included" bundle-child rows) gets its own Configuration Schedule heading
-        // above each one, rather than only the first.
-        configScheduleHeadingPrinted = false;
         // The section note (frame dimensions and the like) sits in the SKU column
         // rather than trailing the heading, so it lines up with the specification
         // columns beneath it instead of colliding with a long section name.
@@ -1341,7 +1408,13 @@
         // A Canadian proposal drops the tag entirely — Summit does not present the
         // customer a configuration choice on those documents. `l.optional` itself is
         // untouched; only the printed tag is suppressed.
-        var showOptional = l.optional && !cbIsCanadian(d);
+        var showOptional = l.optional && !isCa;
+        // The first section's description already printed under the Section A line.
+        var groupDesc = l.description || '';
+        if (firstGroupDescPrinted) {
+          groupDesc = '';
+          firstGroupDescPrinted = false;
+        }
         var headLen = (tc(stripOptional(l.name)) + (showOptional ? ' · OPTIONAL' : '')).length;
         var headFs = headLen > 46 ? '10px' : headLen > 40 ? '11px' : '12px';
         var headLs = headLen > 40 ? '.06em' : '.1em';
@@ -1356,7 +1429,7 @@
           (showOptional ? ' <span style="font-weight:400;color:#9aa1b0;">· OPTIONAL</span>' : '') +
           '</td>' +
           '<td colspan="4" style="padding:7px 10px 4px;font-size:11px;color:#5b6478;vertical-align:bottom;">' +
-          (l.description ? esc(l.description) : '') +
+          (groupDesc ? esc(groupDesc) : '') +
           '</td></tr>';
         return;
       }
@@ -1403,22 +1476,11 @@
         return;
       }
       var amt = (Number(l.quantity) || 0) * (Number(l.rateMinor) || 0);
-      // On a Canadian proposal a bundle-child row (the '— ' component lines under a
-      // priced parent, see isBundleChild) prints "Included" instead of its own
-      // Rate/Amount figures, mirroring the reference template's Configuration
-      // Schedule. The parent's own priced line, and the group subtotal, are
-      // untouched — only the bundle's zero-rated component rows change how they
-      // print, not what they're worth.
-      var isIncluded = cbIsCanadian(d) && isBundleChild(l);
-      if (isIncluded && !configScheduleHeadingPrinted) {
-        configScheduleHeadingPrinted = true;
-        body +=
-          '<tr data-brk="head" style="break-inside:avoid;break-after:avoid;"><td colspan="5" style="padding:6px 0 3px ' +
-          lineIndent() +
-          'px;font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#3d4a55;">' +
-          'Configuration Schedule — Components of the System Above' +
-          '</td></tr>';
-      }
+      // On a Canadian proposal every component row prints "Included" instead of its
+      // own Rate/Amount: the system is priced once, on the Section A line above, and
+      // these rows are its Configuration Schedule (see the Section A block before
+      // this loop). What each line is worth is untouched — only how it prints.
+      var isIncluded = isCa;
       var indent = lineIndent();
       // The freight-undetermined note is a sentence, not a product description, so it
       // runs the width of the specification columns instead of wrapping three times
@@ -1484,7 +1546,9 @@
           prose +
           '</td></tr>';
       }
-      if (Number(l.tpFreightMinor) > 0) {
+      // Not on a Canadian proposal: its components carry no prices, and the same
+      // freight already prints in Section B's Third-Party Freight line.
+      if (Number(l.tpFreightMinor) > 0 && !isCa) {
         body +=
           '<tr style="break-inside:avoid;"><td style="padding:2px 0 6px 20px;border-bottom:1px solid #eceef4;font-size:10.5px;color:#5b6478;font-style:italic;">+ ' +
           esc(tc(l.tpFreightLabel || 'Third-Party Freight')) +
@@ -1573,6 +1637,120 @@
         bottomGridHtml +
         '</div>'
       : '';
+    /*
+     * The totals, and on a Canadian proposal everything that follows them.
+     *
+     * A domestic proposal prints one right-aligned totals column, exactly as it always
+     * has. A Canadian one used to print Section B, the import charges, the rate stamp
+     * and the whole of Section C INSIDE that same column — one block, which the
+     * paginator could not break. When it did not fit under Section A it moved to the
+     * next sheet whole (leaving half of page one empty), and when it was taller than a
+     * sheet the sheet clipped it: the end of Section C ran under the footer and
+     * anything after it never printed. Each part is now its own block, so the page
+     * breaks between them, and Section C breaks between its rows.
+     */
+    var rowFs = isCa ? CB_BODY_PX + 'px' : '12px';
+    var subtotalRowsHtml =
+      '<div style="display:flex;justify-content:space-between;gap:12px;padding:2px 0;font-size:12px;"><span style="font-weight:700;color:#20241f;">Subtotal</span><span style="text-align:right;">' +
+      cbAmt(t.subtotal) +
+      '</span></div>' +
+      // Red and bold on purpose: the one line on the totals block the customer is
+      // most likely to be looking for, and the only one that moves in their favour.
+      (t.discount
+        ? '<div style="display:flex;justify-content:space-between;gap:12px;padding:2px 0;font-size:12px;"><span style="font-weight:700;color:#20241f;">' +
+          discountLabel(t) +
+          '</span><span style="text-align:right;color:#d02030;font-weight:700;">− ' +
+          cbAmt(t.discount) +
+          '</span></div>' +
+          '<div style="font-size:10.5px;color:#9aa1b0;text-align:right;">Discount expires ' +
+          (m.expiration ? fmtDate(m.expiration) : 'with this proposal') +
+          '</div>'
+        : '');
+    var chargeRowsHtml =
+      (t.tpFreight
+        ? '<div style="display:flex;justify-content:space-between;gap:12px;padding:2px 0;font-size:' +
+          rowFs +
+          ';"><span style="font-weight:700;color:#20241f;">Third-Party Freight</span><span style="text-align:right;">' +
+          cbAmt(t.tpFreight) +
+          '</span></div>'
+        : '') +
+      '<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:' +
+      rowFs +
+      ';"><span style="font-weight:700;color:#20241f;">Mat Freight Tax Pass-Through</span><span style="text-align:right;">' +
+      cellTax +
+      '</span></div>' +
+      '<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:' +
+      rowFs +
+      ';"><span style="font-weight:700;color:#20241f;">Structure Crating &amp; Freight</span><span style="text-align:right;">' +
+      cellStructureFreight +
+      '</span></div>' +
+      '<div style="display:flex;justify-content:space-between;padding:2px 0 7px;font-size:' +
+      rowFs +
+      ';"><span style="font-weight:700;color:#20241f;">Mats &amp; Padding Freight</span><span style="text-align:right;">' +
+      cellMatsFreight +
+      '</span></div>' +
+      // Standard Freight is opt-in: unticked, the customer never sees the line.
+      (m.stdFreightOn
+        ? '<div style="display:flex;justify-content:space-between;padding:2px 0 7px;font-size:' +
+          rowFs +
+          ';"><span style="font-weight:700;color:#20241f;">Standard Freight</span><span style="text-align:right;">' +
+          amountCell(t.stdFreight, '') +
+          '</span></div>'
+        : '') +
+      cbSectionBItems(d) +
+      // Tariff, brokerage and Canadian tax, where Summit is collecting them. The
+      // rate prints beside the label where the engine has one, so the figure can be
+      // checked against it.
+      cbSellerLines(d)
+        .map(function (l) {
+          return (
+            '<div style="display:flex;justify-content:space-between;gap:12px;padding:2px 0;font-size:' +
+            rowFs +
+            ';">' +
+            '<span style="font-weight:700;color:#20241f;">' +
+            esc(l.label) +
+            (l.percent
+              ? ' <span style="font-weight:400;color:#7b8190;">' + esc(l.percent) + '%</span>'
+              : '') +
+            '</span><span style="text-align:right;">' +
+            cbAmt(l.usdMinor) +
+            '</span></div>'
+          );
+        })
+        .join('') +
+      '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding-top:7px;border-top:1.5px solid #203060;"><span style="font-family:\'Newsreader\',serif;font-size:18px;font-weight:700;color:#203060;">' +
+      (isCa ? 'Total payable to Summit' : 'Total') +
+      '</span><span style="font-size:17px;font-weight:700;color:#203060;letter-spacing:-.01em;text-align:right;">' +
+      cbAmt(docTotal) +
+      '</span></div>' +
+      (anyTbd
+        ? '<div style="padding-top:3px;font-size:10.5px;color:#9aa1b0;text-align:right;line-height:1.5;">Total excludes items marked TBD.</div>'
+        : '') +
+      (showDeposit
+        ? '<div style="display:flex;justify-content:space-between;padding-top:3px;font-size:11.5px;font-weight:700;"><span style="color:#7b8190;">Deposit Due (' +
+          depositPct() +
+          '%)</span><span style="text-align:right;">' +
+          cbAmt(docDeposit) +
+          '</span></div>'
+        : '');
+    var totalsHtml = isCa
+      ? '<div style="display:flex;justify-content:flex-end;margin-top:18px;break-inside:avoid;"><div style="min-width:' +
+        (cbApplies(d) ? '340px' : '300px') +
+        ';">' +
+        subtotalRowsHtml +
+        '</div></div>' +
+        cbSectionLabel(d, 'Section B — Delivery and Post-Importation Services') +
+        '<div style="break-inside:avoid;">' +
+        chargeRowsHtml +
+        '</div>' +
+        cbBorderBlock(d, docTotal) +
+        cbRateStamp(d)
+      : '<div style="display:flex;justify-content:flex-end;margin-top:18px;break-inside:avoid;"><div style="min-width:' +
+        (cbApplies(d) ? '340px' : '300px') +
+        ';">' +
+        subtotalRowsHtml +
+        chargeRowsHtml +
+        '</div></div>';
     var u = rules.documentUser();
     var preparerLine2 = [u.title, u.phone].filter(Boolean).join(' · ');
     // Notes that print beneath the signature lines (terms, acceptance language).
@@ -1634,6 +1812,43 @@
         ? window.SSGFrontMatter.introHtml(d, { user: u, depositPct: depositPct() })
         : '';
     if (scope === 'INTRO' && frontMatter) return frontMatter;
+    // A short masthead that reidentifies a sheet once it is separated from page one.
+    var mastheadHtml =
+      '<div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:10px;border-bottom:2px solid #203060;">' +
+      '<div style="display:flex;gap:11px;align-items:center;">' +
+      '<img src="logo.png" alt="Summit Sensory Gym" width="34" height="34" style="width:34px;height:34px;display:block;flex:none;">' +
+      '<div style="font-family:\'Newsreader\',serif;font-size:15px;font-weight:700;color:#20241f;">Summit Sensory Gym</div>' +
+      '</div>' +
+      '<div style="font-size:10.5px;color:#7b8190;">' +
+      [
+        esc(d.number || ''),
+        (Number(d.version) || 1) > 1 ? 'Revision ' + (Number(d.version) - 1) : '',
+        esc(d.orgName || ''),
+      ]
+        .filter(Boolean)
+        .join(' · ') +
+      '</div>' +
+      '</div>';
+    /*
+     * The Canadian terms page: Section C, then the Cross-Border Terms, on sheets of
+     * their own between the pricing and the Acceptance page.
+     *
+     * Pricing (Sections A and B, and the import-charge estimate) stays together, so
+     * the total sits on the same page as what it totals. The terms the customer is
+     * agreeing to are read as one block BEFORE the signature, rather than trailing off
+     * the acceptance sheet underneath it as the cross-border terms used to. The
+     * Acceptance page is then the page that is signed, on its own.
+     */
+    var cbSecC = cbSectionCTable(d);
+    var cbTerms = cbClauses(d);
+    var canadianTermsPageHtml =
+      cbSecC || cbTerms
+        ? '<div data-page-break="canadian-terms" style="break-before:page;page-break-before:always;">' +
+          mastheadHtml +
+          cbSecC +
+          cbTerms +
+          '</div>'
+        : '';
     var html =
       frontMatter +
       '<div id="propPrintArea" data-foot-left="' +
@@ -1728,110 +1943,21 @@
       body +
       (body.indexOf('<tbody') === 0 ? '' : '</tbody>') +
       '</table>' +
-      '<div style="display:flex;justify-content:flex-end;margin-top:18px;break-inside:avoid;"><div style="min-width:' +
-      (cbApplies(d) ? '340px' : '300px') +
-      ';">' +
-      '<div style="display:flex;justify-content:space-between;gap:12px;padding:2px 0;font-size:12px;"><span style="font-weight:700;color:#20241f;">Subtotal</span><span style="text-align:right;">' +
-      cbAmt(t.subtotal) +
-      '</span></div>' +
-      // Red and bold on purpose: the one line on the totals block the customer is
-      // most likely to be looking for, and the only one that moves in their favour.
-      (t.discount
-        ? '<div style="display:flex;justify-content:space-between;gap:12px;padding:2px 0;font-size:12px;"><span style="font-weight:700;color:#20241f;">' +
-          discountLabel(t) +
-          '</span><span style="text-align:right;color:#d02030;font-weight:700;">− ' +
-          cbAmt(t.discount) +
-          '</span></div>' +
-          '<div style="font-size:10.5px;color:#9aa1b0;text-align:right;">Discount expires ' +
-          (m.expiration ? fmtDate(m.expiration) : 'with this proposal') +
-          '</div>'
-        : '') +
-      cbSectionLabel(d, 'Section B — Delivery and Post-Importation Services') +
-      (t.tpFreight
-        ? '<div style="display:flex;justify-content:space-between;gap:12px;padding:2px 0;font-size:12px;"><span style="font-weight:700;color:#20241f;">Third-Party Freight</span><span style="text-align:right;">' +
-          cbAmt(t.tpFreight) +
-          '</span></div>'
-        : '') +
-      '<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:12px;"><span style="font-weight:700;color:#20241f;">Mat Freight Tax Pass-Through</span><span style="text-align:right;">' +
-      cellTax +
-      '</span></div>' +
-      '<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:12px;"><span style="font-weight:700;color:#20241f;">Structure Crating &amp; Freight</span><span style="text-align:right;">' +
-      cellStructureFreight +
-      '</span></div>' +
-      '<div style="display:flex;justify-content:space-between;padding:2px 0 7px;font-size:12px;"><span style="font-weight:700;color:#20241f;">Mats &amp; Padding Freight</span><span style="text-align:right;">' +
-      cellMatsFreight +
-      '</span></div>' +
-      // Standard Freight is opt-in: unticked, the customer never sees the line.
-      (m.stdFreightOn
-        ? '<div style="display:flex;justify-content:space-between;padding:2px 0 7px;font-size:12px;"><span style="font-weight:700;color:#20241f;">Standard Freight</span><span style="text-align:right;">' +
-          amountCell(t.stdFreight, '') +
-          '</span></div>'
-        : '') +
-      cbSectionBItems(d) +
-      // Tariff, brokerage and Canadian tax, where Summit is collecting them. The
-      // rate prints beside the label where the engine has one, so the figure can be
-      // checked against it.
-      cbSellerLines(d)
-        .map(function (l) {
-          return (
-            '<div style="display:flex;justify-content:space-between;gap:12px;padding:2px 0;font-size:12px;">' +
-            '<span style="font-weight:700;color:#20241f;">' +
-            esc(l.label) +
-            (l.percent
-              ? ' <span style="font-weight:400;color:#7b8190;">' + esc(l.percent) + '%</span>'
-              : '') +
-            '</span><span style="text-align:right;">' +
-            cbAmt(l.usdMinor) +
-            '</span></div>'
-          );
-        })
-        .join('') +
-      '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding-top:7px;border-top:1.5px solid #203060;"><span style="font-family:\'Newsreader\',serif;font-size:18px;font-weight:700;color:#203060;">' +
-      (cbIsCanadian(d) ? 'Total payable to Summit' : 'Total') +
-      '</span><span style="font-size:17px;font-weight:700;color:#203060;letter-spacing:-.01em;text-align:right;">' +
-      cbAmt(docTotal) +
-      '</span></div>' +
-      (anyTbd
-        ? '<div style="padding-top:3px;font-size:10.5px;color:#9aa1b0;text-align:right;line-height:1.5;">Total excludes items marked TBD.</div>'
-        : '') +
-      (m.showDeposit !== false
-        ? '<div style="display:flex;justify-content:space-between;padding-top:3px;font-size:11.5px;font-weight:700;"><span style="color:#7b8190;">Deposit Due (' +
-          depositPct() +
-          '%)</span><span style="text-align:right;">' +
-          cbAmt(docDeposit) +
-          '</span></div>'
-        : '') +
-      cbBorderBlock(d) +
-      cbRateStamp(d) +
-      cbSectionCTable(d) +
-      '</div></div>' +
+      totalsHtml +
       bottomNotesHtml +
+      canadianTermsPageHtml +
       // Acceptance and the terms always begin a fresh sheet, whatever the line count.
       // Signing is the act the document exists for, so the page a customer signs is
       // never a page that happens to have room left at the bottom of the pricing —
       // and it can be printed, signed and returned on its own.
       '<div data-page-break="acceptance" style="break-before:page;page-break-before:always;">' +
       // A short masthead reidentifies the sheet once it is separated from page one.
-      '<div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:10px;border-bottom:2px solid #203060;">' +
-      '<div style="display:flex;gap:11px;align-items:center;">' +
-      '<img src="logo.png" alt="Summit Sensory Gym" width="34" height="34" style="width:34px;height:34px;display:block;flex:none;">' +
-      '<div style="font-family:\'Newsreader\',serif;font-size:15px;font-weight:700;color:#20241f;">Summit Sensory Gym</div>' +
-      '</div>' +
-      '<div style="font-size:10.5px;color:#7b8190;">' +
-      [
-        esc(d.number || ''),
-        (Number(d.version) || 1) > 1 ? 'Revision ' + (Number(d.version) - 1) : '',
-        esc(d.orgName || ''),
-      ]
-        .filter(Boolean)
-        .join(' · ') +
-      '</div>' +
-      '</div>' +
+      mastheadHtml +
       '<div style="margin-top:26px;break-inside:avoid;">' +
       '<div style="font-family:\'Newsreader\',serif;font-size:15px;font-weight:700;color:#203060;letter-spacing:-.015em;">Acceptance</div>' +
       '<div style="font-size:11.5px;color:#5b6478;line-height:1.6;margin-top:5px;font-weight:700;">Sign below to accept this proposal at a total of ' +
       cbInline(docTotal) +
-      (m.showDeposit !== false
+      (showDeposit
         ? ', with a deposit of ' + money(docDeposit) + ' due to initiate production'
         : '') +
       '.</div>' +
@@ -1897,7 +2023,6 @@
       '</div>' +
       '</div>' +
       footerNotesHtml +
-      cbClauses(d) +
       '</div>' +
       // The general release and the standard terms, after the acceptance page. Every
       // template carries them except the cover-only one — see contract-pages.js.
