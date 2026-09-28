@@ -9,7 +9,8 @@ import { ValidationError } from '../lib/errors.js';
  * Sent to an internal list an administrator keeps under Settings → Email, the moment
  * a signed proposal becomes an order — whichever screen locked it. The list lives in
  * UiSetting rather than an environment variable so changing who hears about new
- * orders is a settings change, not a redeploy.
+ * orders is a settings change, not a redeploy. The subject and body are editable
+ * there too (see "the wording" below).
  *
  * Not sendAlert (lib/alerts.ts): that path is for faults — fire-and-forget, a stack
  * trace in the body, and repeats suppressed for an hour. This is a business notice:
@@ -90,8 +91,185 @@ export interface OrderLockedEmail {
   text: string;
 }
 
-/** The email itself, from the order as it was just written. */
-export async function buildOrderLockedEmail(orderId: string): Promise<OrderLockedEmail | null> {
+/* ------------------------------------------------------------ the wording */
+
+/**
+ * The subject and body are templates an administrator edits under Settings → Email,
+ * stored in UiSetting beside the recipient list. Nothing saved means the defaults
+ * below, which are the wording this email shipped with.
+ *
+ * Merge fields are `{{snake_case}}`, the same convention as the payment letters
+ * (email/paymentTemplates.ts), and deliberately not a template language: no
+ * conditionals. The one piece of logic the old hard-coded email had — leave out a
+ * line for something this order does not have, e.g. no customer PO — is kept as a
+ * rule instead: a body line whose merge fields are ALL empty is dropped. Plain text,
+ * so there is nothing to escape.
+ */
+export const ORDER_LOCKED_SUBJECT_KEY = 'notify.orderLocked.subject';
+export const ORDER_LOCKED_BODY_KEY = 'notify.orderLocked.body';
+const MAX_SUBJECT = 300;
+const MAX_BODY = 10_000;
+
+export const ORDER_LOCKED_FIELDS: Array<{ token: string; means: string }> = [
+  { token: 'order_number', means: 'Order number, e.g. SO-2026-000042' },
+  { token: 'customer', means: 'The customer organization' },
+  { token: 'project', means: 'The project (opportunity) name' },
+  { token: 'proposal', means: 'Proposal, version and title together' },
+  { token: 'proposal_number', means: 'Proposal number' },
+  { token: 'proposal_version', means: 'Accepted proposal version' },
+  { token: 'proposal_title', means: 'Proposal title' },
+  { token: 'order_total', means: 'Order total, with currency' },
+  { token: 'deposit_due', means: 'Deposit due, or "None"' },
+  { token: 'approved_by', means: 'Who approved it for the customer' },
+  { token: 'customer_po', means: 'The customer’s PO number' },
+  { token: 'locked_by', means: 'Who locked the order' },
+  { token: 'locked_at', means: 'When it was locked (Mountain time)' },
+  { token: 'order_link', means: 'Link to the order in the app' },
+];
+
+export const DEFAULT_ORDER_LOCKED_SUBJECT = 'Order locked: {{order_number}} — {{customer}}';
+export const DEFAULT_ORDER_LOCKED_BODY = [
+  'Order {{order_number}} has been locked for {{customer}}.',
+  '',
+  'Order:        {{order_number}}',
+  'Customer:     {{customer}}',
+  'Project:      {{project}}',
+  'Proposal:     {{proposal}}',
+  'Order total:  {{order_total}}',
+  'Deposit due:  {{deposit_due}}',
+  'Approved by:  {{approved_by}}',
+  'Customer PO:  {{customer_po}}',
+  'Locked by:    {{locked_by}}',
+  'Locked at:    {{locked_at}} (Mountain)',
+  '',
+  'Open the order: {{order_link}}',
+].join('\n');
+
+export interface OrderLockedTemplate {
+  subject: string;
+  body: string;
+}
+
+const TOKEN_RE = /\{\{\s*([a-z0-9_]+)\s*\}\}/gi;
+const KNOWN = new Set(ORDER_LOCKED_FIELDS.map((f) => f.token));
+
+/** Fields a template uses that do not exist — almost always a typo. */
+export function unknownFields(template: string): string[] {
+  const out = new Set<string>();
+  for (const m of template.matchAll(TOKEN_RE)) {
+    const name = m[1]!.toLowerCase();
+    if (!KNOWN.has(name)) out.add(name);
+  }
+  return [...out];
+}
+
+function fill(line: string, values: Record<string, string>): string {
+  return line.replace(TOKEN_RE, (_all, name: string) => values[name.toLowerCase()] ?? '');
+}
+
+/** Render a template against one order's values. */
+export function renderOrderLockedEmail(
+  template: OrderLockedTemplate,
+  values: Record<string, string>,
+): OrderLockedEmail {
+  // Blank means "the default", the same as saving it blank.
+  const body = template.body.trim() ? template.body : DEFAULT_ORDER_LOCKED_BODY;
+  const lines: string[] = [];
+  for (const line of body.replace(/\r\n?/g, '\n').split('\n')) {
+    const tokens = [...line.matchAll(TOKEN_RE)].map((m) => m[1]!.toLowerCase());
+    // A line built only around fields this order does not have is left out, not
+    // printed as "Customer PO:" with nothing after it.
+    if (tokens.length && tokens.every((t) => !values[t])) continue;
+    lines.push(fill(line, values).trimEnd());
+  }
+  const text =
+    lines
+      .join('\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim() + '\n';
+  const subject =
+    fill(template.subject, values).replace(/\s+/g, ' ').trim() ||
+    fill(DEFAULT_ORDER_LOCKED_SUBJECT, values);
+  return { subject, text };
+}
+
+/** The saved wording, or the default for whichever part has not been changed. */
+export async function loadOrderLockedTemplate(): Promise<OrderLockedTemplate> {
+  const rows = await prisma.uiSetting.findMany({
+    where: { key: { in: [ORDER_LOCKED_SUBJECT_KEY, ORDER_LOCKED_BODY_KEY] } },
+  });
+  const saved = (key: string) => rows.find((r) => r.key === key)?.value?.trim() || null;
+  return {
+    subject: saved(ORDER_LOCKED_SUBJECT_KEY) ?? DEFAULT_ORDER_LOCKED_SUBJECT,
+    body: saved(ORDER_LOCKED_BODY_KEY) ?? DEFAULT_ORDER_LOCKED_BODY,
+  };
+}
+
+/** Check a subject/body pair; throws a message an administrator can act on. */
+export function validateOrderLockedTemplate(input: unknown): OrderLockedTemplate {
+  const o = (input ?? {}) as { subject?: unknown; body?: unknown };
+  if (typeof o.subject !== 'string' || typeof o.body !== 'string')
+    throw new ValidationError('Subject and body must both be text.');
+  const subject = o.subject.replace(/[\r\n]+/g, ' ').trim();
+  const body = o.body.replace(/\r\n?/g, '\n').trim();
+  if (subject.length > MAX_SUBJECT)
+    throw new ValidationError(`The subject can be at most ${MAX_SUBJECT} characters.`);
+  if (body.length > MAX_BODY)
+    throw new ValidationError(`The body can be at most ${MAX_BODY} characters.`);
+  const unknown = unknownFields(subject + '\n' + body);
+  if (unknown.length)
+    throw new ValidationError(
+      `Unknown merge field${unknown.length === 1 ? '' : 's'}: ${unknown
+        .map((u) => `{{${u}}}`)
+        .join(', ')}. Use one from the list.`,
+    );
+  return { subject, body };
+}
+
+/**
+ * Save the wording. A blank part — or one identical to the default — is stored as
+ * nothing, so it keeps following the default if that is ever improved.
+ */
+export async function saveOrderLockedTemplate(
+  input: unknown,
+  actorId: string,
+): Promise<OrderLockedTemplate> {
+  const t = validateOrderLockedTemplate(input);
+  const parts: Array<[string, string, string]> = [
+    [ORDER_LOCKED_SUBJECT_KEY, t.subject, DEFAULT_ORDER_LOCKED_SUBJECT],
+    [ORDER_LOCKED_BODY_KEY, t.body, DEFAULT_ORDER_LOCKED_BODY],
+  ];
+  for (const [key, value, fallback] of parts) {
+    if (!value || value === fallback) {
+      await prisma.uiSetting.deleteMany({ where: { key } });
+    } else {
+      await prisma.uiSetting.upsert({
+        where: { key },
+        create: { key, value, updatedById: actorId },
+        update: { value, updatedById: actorId },
+      });
+    }
+  }
+  return loadOrderLockedTemplate();
+}
+
+/* ------------------------------------------------------------ the email */
+
+/**
+ * The email itself, from the order as it was just written. `template` overrides
+ * the saved wording — the Settings preview renders an unsaved draft this way.
+ */
+export async function buildOrderLockedEmail(
+  orderId: string,
+  template?: OrderLockedTemplate,
+): Promise<OrderLockedEmail | null> {
+  const values = await orderLockedValues(orderId);
+  if (!values) return null;
+  return renderOrderLockedEmail(template ?? (await loadOrderLockedTemplate()), values);
+}
+
+/** The merge-field values for one order. Empty string = this order has none. */
+async function orderLockedValues(orderId: string): Promise<Record<string, string> | null> {
   const order = await prisma.acceptedOrder.findUnique({
     where: { id: orderId },
     select: {
@@ -139,27 +317,23 @@ export async function buildOrderLockedEmail(orderId: string): Promise<OrderLocke
     timeStyle: 'short',
   });
   const approval = order.customerApproval;
-  // null = a field this order does not have; the line is left out, not left blank.
-  const lines: Array<string | null> = [
-    `Order ${order.number} has been locked for ${customer}.`,
-    '',
-    `Order:        ${order.number}`,
-    `Customer:     ${customer}`,
-    opportunity?.name ? `Project:      ${opportunity.name}` : null,
-    proposal
-      ? `Proposal:     ${proposal.number} (version ${order.acceptedVersion})${proposal.title ? ` — ${proposal.title}` : ''}`
-      : null,
-    `Order total:  ${money(order.grandTotalMinor, order.currency)}`,
-    `Deposit due:  ${order.depositRequired ? money(order.depositDueMinor, order.currency) : 'None'}`,
-    approval?.approverName ? `Approved by:  ${approval.approverName}` : null,
-    approval?.poNumber ? `Customer PO:  ${approval.poNumber}` : null,
-    `Locked by:    ${actor?.name || actor?.email || 'Unknown user'}`,
-    `Locked at:    ${when} (Mountain)`,
-    ...(base ? ['', `Open the order: ${base}/?order=${encodeURIComponent(order.id)}`] : []),
-  ];
   return {
-    subject: `Order locked: ${order.number} — ${customer}`,
-    text: lines.filter((l): l is string => l !== null).join('\n') + '\n',
+    order_number: order.number,
+    customer,
+    project: opportunity?.name ?? '',
+    proposal: proposal
+      ? `${proposal.number} (version ${order.acceptedVersion})${proposal.title ? ` — ${proposal.title}` : ''}`
+      : '',
+    proposal_number: proposal?.number ?? '',
+    proposal_version: proposal ? String(order.acceptedVersion) : '',
+    proposal_title: proposal?.title ?? '',
+    order_total: money(order.grandTotalMinor, order.currency),
+    deposit_due: order.depositRequired ? money(order.depositDueMinor, order.currency) : 'None',
+    approved_by: approval?.approverName ?? '',
+    customer_po: approval?.poNumber ?? '',
+    locked_by: actor?.name || actor?.email || 'Unknown user',
+    locked_at: when,
+    order_link: base ? `${base}/?order=${encodeURIComponent(order.id)}` : '',
   };
 }
 
@@ -276,21 +450,54 @@ export async function sendOrderLockedTestEmail(): Promise<{
     to = await loadOrderLockedRecipients();
     if (!to.length)
       return { to, error: 'No order-locked recipients are set — save the list first.' };
-    const latest = await prisma.acceptedOrder.findFirst({
-      orderBy: { createdAt: 'desc' },
-      select: { id: true },
-    });
-    const sample = latest ? await buildOrderLockedEmail(latest.id) : null;
+    const { email: sample } = await previewOrderLockedEmail(await loadOrderLockedTemplate());
     const note =
       'TEST — a test of the order-locked email, sent from Settings → Email. ' +
       'No order was locked.\n\n';
-    const email: OrderLockedEmail = sample
-      ? { subject: `[TEST] ${sample.subject}`, text: note + sample.text }
-      : { subject: '[TEST] Order locked email', text: note };
+    const email: OrderLockedEmail = {
+      subject: `[TEST] ${sample.subject}`,
+      text: note + sample.text,
+    };
     return { to, error: await deliver({ to, email }) };
   } catch (err) {
     return { to, error: err instanceof Error ? err.message : 'the test could not be sent' };
   }
+}
+
+/** Stand-in values for a preview when no order has been locked yet. */
+export const SAMPLE_ORDER_LOCKED_VALUES: Record<string, string> = {
+  order_number: 'SO-2026-000000',
+  customer: 'Sample Customer',
+  project: 'Sample Project',
+  proposal: 'P-2026-000000 (version 1) — Sample Proposal',
+  proposal_number: 'P-2026-000000',
+  proposal_version: '1',
+  proposal_title: 'Sample Proposal',
+  order_total: 'USD 10,000.00',
+  deposit_due: 'USD 5,000.00',
+  approved_by: 'Jane Customer',
+  customer_po: 'PO-1234',
+  locked_by: 'A. User',
+  locked_at: 'Jan 1, 2026, 9:00 AM',
+  order_link: 'https://example.com/?order=sample',
+};
+
+/**
+ * A template rendered against the most recently locked order (sample values when
+ * there is none), for the Settings preview and the test send.
+ */
+export async function previewOrderLockedEmail(
+  template: OrderLockedTemplate,
+): Promise<{ email: OrderLockedEmail; basedOn: string | null }> {
+  const latest = await prisma.acceptedOrder.findFirst({
+    orderBy: { createdAt: 'desc' },
+    select: { id: true, number: true },
+  });
+  const values = latest ? await orderLockedValues(latest.id) : null;
+  return {
+    email: renderOrderLockedEmail(template, values ?? SAMPLE_ORDER_LOCKED_VALUES),
+    basedOn: values && latest ? latest.number : null,
+  };
 }
 
 /** An order by its number (SO-2026-000042) or id, for the hand re-send. */

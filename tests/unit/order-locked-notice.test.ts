@@ -31,6 +31,10 @@ vi.mock('../../src/lib/prisma.js', () => ({
     uiSetting: {
       findUnique: async ({ where }: { where: { key: string } }) =>
         settings.has(where.key) ? { key: where.key, value: settings.get(where.key) } : null,
+      findMany: async ({ where }: { where: { key: { in: string[] } } }) =>
+        where.key.in
+          .filter((k) => settings.has(k))
+          .map((k) => ({ key: k, value: settings.get(k) })),
       upsert: async ({ where, create }: { where: { key: string }; create: { value: string } }) => {
         settings.set(where.key, create.value);
         return {};
@@ -250,14 +254,28 @@ describe('sendOrderLockedTestEmail', () => {
     expect(events).toEqual([]);
   });
 
-  it('still sends a placeholder when there are no orders yet', async () => {
+  it('uses sample values when there are no orders yet', async () => {
     order = null;
     const { saveOrderLockedRecipients, sendOrderLockedTestEmail } = await mod();
     await saveOrderLockedRecipients('ops@example.com', 'user_1');
     expect((await sendOrderLockedTestEmail()).error).toBeNull();
     expect(JSON.parse(String(fetchMock.mock.calls[0]![1].body)).subject).toBe(
-      '[TEST] Order locked email',
+      '[TEST] Order locked: SO-2026-000000 — Sample Customer',
     );
+  });
+
+  it('sends the saved wording, not the default', async () => {
+    const { saveOrderLockedRecipients, saveOrderLockedTemplate, sendOrderLockedTestEmail } =
+      await mod();
+    await saveOrderLockedRecipients('ops@example.com', 'user_1');
+    await saveOrderLockedTemplate(
+      { subject: 'New order {{order_number}}', body: 'Heads up: {{customer}}.' },
+      'user_1',
+    );
+    await sendOrderLockedTestEmail();
+    const body = JSON.parse(String(fetchMock.mock.calls[0]![1].body));
+    expect(body.subject).toBe('[TEST] New order SO-2026-000050');
+    expect(body.text).toMatch(/Heads up: Firefly Autism\.\n$/);
   });
 
   it("reports the failure as Resend worded it, and what's missing", async () => {
@@ -275,5 +293,71 @@ describe('sendOrderLockedTestEmail', () => {
 
     envStub.RESEND_API_KEY = undefined;
     expect((await sendOrderLockedTestEmail()).error).toMatch(/RESEND_API_KEY/);
+  });
+});
+
+describe('the editable wording', () => {
+  it('follows the default until something is saved, and after a reset', async () => {
+    const {
+      loadOrderLockedTemplate,
+      saveOrderLockedTemplate,
+      DEFAULT_ORDER_LOCKED_SUBJECT,
+      DEFAULT_ORDER_LOCKED_BODY,
+      ORDER_LOCKED_SUBJECT_KEY,
+      ORDER_LOCKED_BODY_KEY,
+    } = await mod();
+    const defaults = { subject: DEFAULT_ORDER_LOCKED_SUBJECT, body: DEFAULT_ORDER_LOCKED_BODY };
+    expect(await loadOrderLockedTemplate()).toEqual(defaults);
+
+    await saveOrderLockedTemplate({ subject: 'Locked {{order_number}}', body: '' }, 'user_1');
+    expect(await loadOrderLockedTemplate()).toEqual({
+      ...defaults,
+      subject: 'Locked {{order_number}}',
+    });
+    expect(settings.has(ORDER_LOCKED_BODY_KEY)).toBe(false); // blank = default, not stored
+
+    // Saving the default text back stores nothing, so it keeps following the default.
+    await saveOrderLockedTemplate(defaults, 'user_1');
+    expect(settings.has(ORDER_LOCKED_SUBJECT_KEY)).toBe(false);
+    expect(await loadOrderLockedTemplate()).toEqual(defaults);
+  });
+
+  it('refuses a merge field that does not exist, and saves nothing', async () => {
+    const { saveOrderLockedTemplate, loadOrderLockedTemplate, DEFAULT_ORDER_LOCKED_SUBJECT } =
+      await mod();
+    await expect(
+      saveOrderLockedTemplate({ subject: 'Order {{order_numbr}}', body: 'x' }, 'user_1'),
+    ).rejects.toThrow(/{{order_numbr}}/);
+    expect((await loadOrderLockedTemplate()).subject).toBe(DEFAULT_ORDER_LOCKED_SUBJECT);
+    await expect(saveOrderLockedTemplate({ subject: 1, body: 'x' }, 'user_1')).rejects.toThrow(
+      /text/,
+    );
+    await expect(
+      saveOrderLockedTemplate({ subject: 'x'.repeat(301), body: '' }, 'user_1'),
+    ).rejects.toThrow(/300/);
+  });
+
+  it('drops a line only when every field on it is empty, and keeps one-line subjects', async () => {
+    const { renderOrderLockedEmail } = await mod();
+    const out = renderOrderLockedEmail(
+      {
+        subject: 'Order {{order_number}}\nfor {{customer}}',
+        body: 'PO: {{customer_po}}\nFor {{customer}}, PO {{customer_po}}\nStatic line\n\n\n\nEnd',
+      },
+      { order_number: 'SO-1', customer: 'Acme', customer_po: '' },
+    );
+    expect(out.subject).toBe('Order SO-1 for Acme');
+    expect(out.text).toBe('For Acme, PO\nStatic line\n\nEnd\n');
+  });
+
+  it('previews an unsaved draft against the latest order', async () => {
+    const { previewOrderLockedEmail } = await mod();
+    const { email, basedOn } = await previewOrderLockedEmail({
+      subject: 'Draft {{order_number}}',
+      body: 'Total {{order_total}}',
+    });
+    expect(basedOn).toBe('SO-2026-000050');
+    expect(email).toEqual({ subject: 'Draft SO-2026-000050', text: 'Total USD 16,226.64\n' });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
