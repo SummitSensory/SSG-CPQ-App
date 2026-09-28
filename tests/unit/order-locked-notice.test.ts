@@ -40,7 +40,10 @@ vi.mock('../../src/lib/prisma.js', () => ({
         return { count: 1 };
       },
     },
-    acceptedOrder: { findUnique: async () => order },
+    acceptedOrder: {
+      findUnique: async () => order,
+      findFirst: async () => (order ? { id: order.id, number: order.number } : null),
+    },
     organization: { findUnique: async () => ({ name: 'Firefly Autism' }) },
     proposal: {
       findUnique: async () => ({ number: 'P-2026-000148', title: 'Foundation System' }),
@@ -48,6 +51,7 @@ vi.mock('../../src/lib/prisma.js', () => ({
     opportunity: { findUnique: async () => ({ name: 'Firefly Lakewood Gym' }) },
     user: { findUnique: async () => ({ name: 'Bryan Shepherd', email: 'b@example.com' }) },
     orderEvent: {
+      count: async () => events.length,
       create: async ({ data }: { data: { action: string; detail: unknown } }) => {
         if (failEventWrite) throw new Error('db down');
         events.push({ action: data.action, detail: data.detail });
@@ -197,5 +201,79 @@ describe('sendOrderLockedNotice', () => {
 
     failEventWrite = true;
     await expect(sendOrderLockedNotice('ord_1', 'user_1')).resolves.toBeNull();
+  });
+
+  it("records Resend's own reason, not just the status", async () => {
+    const { saveOrderLockedRecipients, sendOrderLockedNotice } = await mod();
+    await saveOrderLockedRecipients('ops@example.com', 'user_1');
+    const reason = 'This API key is not authorized to send emails from crm.example.com';
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ message: reason }), { status: 403 }),
+    );
+    const outcome = await sendOrderLockedNotice('ord_1', 'user_1');
+    expect(outcome).toBe(`Resend rejected the notice (403): ${reason}`);
+    expect(events.at(-1)).toEqual({
+      action: 'order.locked.notice_failed',
+      detail: { to: ['ops@example.com'], error: outcome },
+    });
+  });
+
+  it('a hand re-send gets its own idempotency key, numbered by earlier attempts', async () => {
+    const { saveOrderLockedRecipients, sendOrderLockedNotice } = await mod();
+    await saveOrderLockedRecipients('ops@example.com', 'user_1');
+    fetchMock.mockResolvedValueOnce(new Response('{}', { status: 403 }));
+    await sendOrderLockedNotice('ord_1', 'user_1'); // the automatic send, failed
+    expect(await sendOrderLockedNotice('ord_1', 'user_2', { resend: true })).toBeNull();
+    const [, init] = fetchMock.mock.calls[1]!;
+    expect((init.headers as Record<string, string>)['Idempotency-Key']).toBe(
+      'order-locked-ord_1-resend-1',
+    );
+    expect(events.at(-1)).toEqual({
+      action: 'order.locked.notice_sent',
+      detail: { to: ['ops@example.com'], resend: true },
+    });
+  });
+});
+
+describe('sendOrderLockedTestEmail', () => {
+  it('sends a marked sample of the latest order through the real sender, off the timeline', async () => {
+    const { saveOrderLockedRecipients, sendOrderLockedTestEmail } = await mod();
+    await saveOrderLockedRecipients('ops@example.com', 'user_1');
+    expect(await sendOrderLockedTestEmail()).toEqual({ to: ['ops@example.com'], error: null });
+    const [, init] = fetchMock.mock.calls[0]!;
+    expect((init.headers as Record<string, string>)['Idempotency-Key']).toBeUndefined();
+    const body = JSON.parse(String(init.body));
+    expect(body.from).toBe('Summit Sensory CRM <notifications@crm.example.com>');
+    expect(body.to).toEqual(['ops@example.com']);
+    expect(body.subject).toBe('[TEST] Order locked: SO-2026-000050 — Firefly Autism');
+    expect(body.text).toMatch(/^TEST — .*No order was locked\.\n\nOrder SO-2026-000050/);
+    expect(events).toEqual([]);
+  });
+
+  it('still sends a placeholder when there are no orders yet', async () => {
+    order = null;
+    const { saveOrderLockedRecipients, sendOrderLockedTestEmail } = await mod();
+    await saveOrderLockedRecipients('ops@example.com', 'user_1');
+    expect((await sendOrderLockedTestEmail()).error).toBeNull();
+    expect(JSON.parse(String(fetchMock.mock.calls[0]![1].body)).subject).toBe(
+      '[TEST] Order locked email',
+    );
+  });
+
+  it("reports the failure as Resend worded it, and what's missing", async () => {
+    const { saveOrderLockedRecipients, sendOrderLockedTestEmail } = await mod();
+    expect((await sendOrderLockedTestEmail()).error).toMatch(/save the list first/);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await saveOrderLockedRecipients('ops@example.com', 'user_1');
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ message: 'domain not allowed' }), { status: 403 }),
+    );
+    expect((await sendOrderLockedTestEmail()).error).toBe(
+      'Resend rejected the notice (403): domain not allowed',
+    );
+
+    envStub.RESEND_API_KEY = undefined;
+    expect((await sendOrderLockedTestEmail()).error).toMatch(/RESEND_API_KEY/);
   });
 });
