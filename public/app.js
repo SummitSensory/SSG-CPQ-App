@@ -13697,7 +13697,36 @@
       (d.deliveryConfigured ? '' : '<div class="err" style="margin-top:8px;max-width:560px;">Email delivery (RESEND_API_KEY) is not set up on this deployment, so nothing will be sent until it is.</div>') +
       '<div style="display:flex;align-items:center;gap:10px;margin-top:10px;">' +
         '<button class="btn" id="olkSave" style="width:auto;padding:9px 16px;">Save</button>' +
-        '<span id="olkNote" class="muted" style="font-size:12.5px;"></span></div>';
+        '<button class="btn" id="olkTest" style="width:auto;padding:9px 16px;" title="Send a sample notice to the saved list, through the real sender">Send test</button>' +
+        '<span id="olkNote" class="muted" style="font-size:12.5px;"></span></div>' +
+      '<div style="margin-top:16px;max-width:560px;">' +
+        '<label style="display:block;font-size:12px;font-weight:600;color:#5a6152;margin-bottom:6px;" for="olkOrder">Send an order\'s notice again (e.g. one that failed)</label>' +
+        '<div style="display:flex;align-items:center;gap:10px;">' +
+          '<input id="olkOrder" placeholder="SO-2026-000042" style="width:200px;font:inherit;font-size:13.5px;padding:8px 10px;border:1px solid #d9dcd3;border-radius:8px;">' +
+          '<button class="btn" id="olkResend" style="width:auto;padding:9px 16px;">Send again</button>' +
+          '<span id="olkResendNote" class="muted" style="font-size:12.5px;"></span></div></div>';
+    var olkPost = async function (btn, note, path, body, ok) {
+      btn.disabled = true; note.style.color = ''; note.textContent = 'Sending…';
+      try {
+        var r3 = await authed(path, { method: 'POST', body: body });
+        if (!r3.ok) { note.textContent = await serverMessage(r3, 'Could not send (' + r3.status + ').'); note.style.color = '#a3322a'; return; }
+        var o = await r3.json();
+        if (o.sent) note.textContent = ok(o);
+        else { note.textContent = 'Not sent: ' + (o.error || 'unknown error'); note.style.color = '#a3322a'; }
+      } catch (e) { note.textContent = 'Could not reach the server.'; note.style.color = '#a3322a'; }
+      finally { btn.disabled = false; }
+    };
+    document.getElementById('olkTest').addEventListener('click', function () {
+      olkPost(this, document.getElementById('olkNote'), '/admin/order-locked-email/test', {},
+        function (o) { return 'Test sent to ' + (o.to || []).join(', ') + '.'; });
+    });
+    document.getElementById('olkResend').addEventListener('click', function () {
+      var ref = document.getElementById('olkOrder').value.trim();
+      var n = document.getElementById('olkResendNote');
+      if (!ref) { n.textContent = 'Enter an order number.'; n.style.color = '#a3322a'; return; }
+      olkPost(this, n, '/admin/order-locked-email/resend', { order: ref },
+        function (o) { return 'Sent the notice for ' + o.number + '.'; });
+    });
     document.getElementById('olkSave').addEventListener('click', async function () {
       var note = document.getElementById('olkNote');
       var bt = this; bt.disabled = true;

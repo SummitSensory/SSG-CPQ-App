@@ -163,13 +163,58 @@ export async function buildOrderLockedEmail(orderId: string): Promise<OrderLocke
   };
 }
 
+interface Delivery {
+  to: string[];
+  email: OrderLockedEmail;
+  idempotencyKey?: string;
+}
+
 /**
- * Send the notice for an order that has just been locked, and record the outcome on
- * the order's timeline. Returns null when it was sent, or why it was not.
+ * One POST to Resend. Returns null when it was accepted, or why not — including
+ * Resend's own explanation, since a bare status ("403") does not say whether the
+ * key, the sending domain or an address is at fault.
+ */
+async function deliver({ to, email, idempotencyKey }: Delivery): Promise<string | null> {
+  if (!env.RESEND_API_KEY) return 'RESEND_API_KEY is not set — nobody was emailed.';
+  const res = await fetch(RESEND_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json',
+      ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+    },
+    body: JSON.stringify({
+      from: `${env.ALERT_FROM_NAME} <${env.ALERT_FROM_EMAIL}>`,
+      to,
+      reply_to: env.BOM_REPLY_TO,
+      subject: email.subject,
+      text: email.text,
+    }),
+  });
+  if (res.ok) return null;
+  let reason = '';
+  try {
+    const body = (await res.json()) as { message?: unknown };
+    if (typeof body.message === 'string') reason = body.message;
+  } catch {
+    // Not JSON — the status is all there is.
+  }
+  return `Resend rejected the notice (${res.status})${reason ? `: ${reason}` : '.'}`;
+}
+
+/**
+ * Send the notice for an order and record the outcome on the order's timeline.
+ * Returns null when it was sent, or why it was not.
+ *
+ * `resend` is an administrator sending it again by hand (Settings → Email), e.g.
+ * after a delivery fault is fixed. It needs its own idempotency key so the automatic
+ * send's key cannot swallow it; the key is numbered by the attempts already on the
+ * order, so a double click still sends once.
  */
 export async function sendOrderLockedNotice(
   orderId: string,
   actorId: string,
+  opts: { resend?: boolean } = {},
 ): Promise<string | null> {
   let outcome: string | null;
   let to: string[] = [];
@@ -184,23 +229,14 @@ export async function sendOrderLockedNotice(
     } else {
       const email = await buildOrderLockedEmail(orderId);
       if (!email) return 'Order not found.';
-      const res = await fetch(RESEND_URL, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${env.RESEND_API_KEY}`,
-          'Content-Type': 'application/json',
-          // One notice per order, even if a retry reaches here twice.
-          'Idempotency-Key': `order-locked-${orderId}`,
-        },
-        body: JSON.stringify({
-          from: `${env.ALERT_FROM_NAME} <${env.ALERT_FROM_EMAIL}>`,
-          to,
-          reply_to: env.BOM_REPLY_TO,
-          subject: email.subject,
-          text: email.text,
-        }),
-      });
-      outcome = res.ok ? null : `Resend rejected the notice (${res.status}).`;
+      let idempotencyKey = `order-locked-${orderId}`;
+      if (opts.resend) {
+        const attempts = await prisma.orderEvent.count({
+          where: { orderId, action: { startsWith: 'order.locked.notice' } },
+        });
+        idempotencyKey += `-resend-${attempts}`;
+      }
+      outcome = await deliver({ to, email, idempotencyKey });
     }
   } catch (err) {
     outcome = err instanceof Error ? err.message : 'the notice could not be sent';
@@ -212,11 +248,57 @@ export async function sendOrderLockedNotice(
         orderId,
         action: outcome ? 'order.locked.notice_failed' : 'order.locked.notice_sent',
         actorId,
-        detail: (outcome ? { to, error: outcome } : { to }) as object,
+        detail: {
+          to,
+          ...(opts.resend ? { resend: true } : {}),
+          ...(outcome ? { error: outcome } : {}),
+        } as object,
       },
     });
   } catch (err) {
     logger.warn({ err, orderId }, 'order locked notice: event not recorded');
   }
   return outcome;
+}
+
+/**
+ * Settings → Email → "Send test": the same sender, key and recipients as the real
+ * notice, so a pass here means the next locked order will be announced. The body is
+ * the most recent order's, marked as a test (a placeholder when there are no orders
+ * yet). Nothing is written to any order's timeline.
+ */
+export async function sendOrderLockedTestEmail(): Promise<{
+  to: string[];
+  error: string | null;
+}> {
+  let to: string[] = [];
+  try {
+    to = await loadOrderLockedRecipients();
+    if (!to.length)
+      return { to, error: 'No order-locked recipients are set — save the list first.' };
+    const latest = await prisma.acceptedOrder.findFirst({
+      orderBy: { createdAt: 'desc' },
+      select: { id: true },
+    });
+    const sample = latest ? await buildOrderLockedEmail(latest.id) : null;
+    const note =
+      'TEST — a test of the order-locked email, sent from Settings → Email. ' +
+      'No order was locked.\n\n';
+    const email: OrderLockedEmail = sample
+      ? { subject: `[TEST] ${sample.subject}`, text: note + sample.text }
+      : { subject: '[TEST] Order locked email', text: note };
+    return { to, error: await deliver({ to, email }) };
+  } catch (err) {
+    return { to, error: err instanceof Error ? err.message : 'the test could not be sent' };
+  }
+}
+
+/** An order by its number (SO-2026-000042) or id, for the hand re-send. */
+export async function findOrderForNotice(ref: string) {
+  const r = ref.trim();
+  if (!r) return null;
+  return prisma.acceptedOrder.findFirst({
+    where: { OR: [{ number: { equals: r, mode: 'insensitive' } }, { id: r }] },
+    select: { id: true, number: true },
+  });
 }
