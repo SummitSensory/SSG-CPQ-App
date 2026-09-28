@@ -13699,6 +13699,7 @@
         '<button class="btn" id="olkSave" style="width:auto;padding:9px 16px;">Save</button>' +
         '<button class="btn" id="olkTest" style="width:auto;padding:9px 16px;" title="Send a sample notice to the saved list, through the real sender">Send test</button>' +
         '<span id="olkNote" class="muted" style="font-size:12.5px;"></span></div>' +
+      '<div id="olkWording" style="margin-top:22px;max-width:680px;"><div class="muted" style="font-size:13px;">Loading the wording…</div></div>' +
       '<div style="margin-top:16px;max-width:560px;">' +
         '<label style="display:block;font-size:12px;font-weight:600;color:#5a6152;margin-bottom:6px;" for="olkOrder">Send an order\'s notice again (e.g. one that failed)</label>' +
         '<div style="display:flex;align-items:center;gap:10px;">' +
@@ -13740,6 +13741,90 @@
           ? 'Saved. ' + out.recipients.length + (out.recipients.length === 1 ? ' person' : ' people') + ' will be emailed when an order is locked.'
           : 'Saved. Nobody will be emailed.';
       } catch (e) { note.textContent = 'Could not reach the server.'; note.style.color = '#a3322a'; }
+      finally { bt.disabled = false; }
+    });
+    loadOrderLockedWording();
+  }
+
+  /* The subject and body of the order-locked email. Plain text with {{merge_fields}};
+   * a body line whose fields are all empty for an order is left out. Preview renders
+   * the draft as typed (saved or not) against the latest order. */
+  async function loadOrderLockedWording() {
+    var box = document.getElementById('olkWording'); if (!box) return;
+    var t;
+    try {
+      var r = await authed('/admin/order-locked-email/template');
+      if (!r.ok) { box.innerHTML = '<div class="err">Could not load the wording (' + r.status + ').</div>'; return; }
+      t = await r.json();
+    } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; return; }
+    var lbl = 'display:block;font-size:12px;font-weight:600;color:#5a6152;margin-bottom:6px;';
+    var fld = 'width:100%;font:inherit;font-size:13.5px;padding:9px 11px;border:1px solid #d9dcd3;border-radius:8px;';
+    box.innerHTML =
+      '<div style="font-size:14px;font-weight:600;margin-bottom:4px;">Email wording</div>' +
+      '<div class="muted" style="font-size:12.5px;margin-bottom:10px;">Click a field to insert it where the cursor is. A line whose fields are all empty for an order (for example, no customer PO) is left out of that order\'s email.</div>' +
+      '<label style="' + lbl + '" for="olkSubj">Subject</label>' +
+      '<input id="olkSubj" style="' + fld + '" value="' + esc(t.subject) + '">' +
+      '<label style="' + lbl + 'margin-top:10px;" for="olkBody">Body</label>' +
+      '<textarea id="olkBody" rows="15" style="' + fld + 'font-family:ui-monospace,Consolas,monospace;font-size:12.5px;">' + esc(t.body) + '</textarea>' +
+      '<div id="olkFields" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">' +
+        (t.fields || []).map(function (f) {
+          return '<button type="button" class="link-btn" data-tok="' + esc(f.token) + '" title="' + esc(f.means) + '" style="width:auto;font-size:12px;padding:3px 9px;border-radius:999px;">{{' + esc(f.token) + '}}</button>';
+        }).join('') + '</div>' +
+      '<div style="display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap;">' +
+        '<button class="btn" id="olkWSave" style="width:auto;padding:9px 16px;">Save wording</button>' +
+        '<button class="btn" id="olkWPrev" style="width:auto;padding:9px 16px;">Preview</button>' +
+        '<button class="link-btn" id="olkWReset" type="button" style="width:auto;padding:8px 13px;">Reset to default</button>' +
+        '<span id="olkWNote" class="muted" style="font-size:12.5px;"></span></div>' +
+      '<div id="olkWOut" style="display:none;margin-top:12px;border:1px solid #d9dcd3;border-radius:8px;padding:12px 14px;background:#fafaf7;">' +
+        '<div class="muted" id="olkWBased" style="font-size:12px;margin-bottom:6px;"></div>' +
+        '<div id="olkWSubjOut" style="font-weight:600;font-size:13.5px;margin-bottom:8px;"></div>' +
+        '<pre id="olkWTextOut" style="margin:0;white-space:pre-wrap;font-family:ui-monospace,Consolas,monospace;font-size:12.5px;"></pre></div>';
+
+    var subj = document.getElementById('olkSubj'), bodyEl = document.getElementById('olkBody');
+    var note = document.getElementById('olkWNote');
+    var lastFocus = bodyEl;
+    subj.addEventListener('focus', function () { lastFocus = subj; });
+    bodyEl.addEventListener('focus', function () { lastFocus = bodyEl; });
+    var say = function (msg, bad) { note.textContent = msg; note.style.color = bad ? '#a3322a' : ''; };
+    var draft = function () { return { subject: subj.value, body: bodyEl.value }; };
+
+    document.getElementById('olkFields').addEventListener('click', function (ev) {
+      var b = ev.target.closest('[data-tok]'); if (!b) return;
+      var el = lastFocus, ins = '{{' + b.getAttribute('data-tok') + '}}';
+      var s = el.selectionStart == null ? el.value.length : el.selectionStart;
+      var e2 = el.selectionEnd == null ? s : el.selectionEnd;
+      el.value = el.value.slice(0, s) + ins + el.value.slice(e2);
+      el.focus(); el.selectionStart = el.selectionEnd = s + ins.length;
+    });
+    document.getElementById('olkWReset').addEventListener('click', function () {
+      subj.value = t.defaults.subject; bodyEl.value = t.defaults.body;
+      say('Default wording restored — Save wording to keep it.');
+    });
+    document.getElementById('olkWPrev').addEventListener('click', async function () {
+      var bt = this; bt.disabled = true; say('');
+      try {
+        var r2 = await authed('/admin/order-locked-email/preview', { method: 'POST', body: draft() });
+        if (!r2.ok) { say(await serverMessage(r2, 'Could not preview (' + r2.status + ').'), true); return; }
+        var p = await r2.json();
+        document.getElementById('olkWBased').textContent = p.basedOn
+          ? 'Preview using order ' + p.basedOn + ' (the most recent).'
+          : 'Preview using sample values — no order has been locked yet.';
+        document.getElementById('olkWSubjOut').textContent = 'Subject: ' + p.subject;
+        document.getElementById('olkWTextOut').textContent = p.text;
+        document.getElementById('olkWOut').style.display = '';
+      } catch (e) { say('Could not reach the server.', true); }
+      finally { bt.disabled = false; }
+    });
+    document.getElementById('olkWSave').addEventListener('click', async function () {
+      var bt = this; bt.disabled = true; say('Saving…');
+      try {
+        var r3 = await authed('/admin/order-locked-email/template', { method: 'PUT', body: draft() });
+        if (!r3.ok) { say(await serverMessage(r3, 'Could not save (' + r3.status + ').'), true); return; }
+        var saved = await r3.json();
+        subj.value = saved.subject; bodyEl.value = saved.body;
+        t.subject = saved.subject; t.body = saved.body;
+        say('Saved. The next order-locked email will use this wording.');
+      } catch (e) { say('Could not reach the server.', true); }
       finally { bt.disabled = false; }
     });
   }
@@ -15581,7 +15666,7 @@
           '<button class="btn" id="esetNew" style="width:auto;padding:9px 15px;">+ New template</button>',
           '<div id="esetList"><div class="muted" style="padding:16px;">Loading…</div></div>') +
         admAcc('emailOrderLocked', 'Order locked email',
-          'Everyone on this list is emailed the moment a signed proposal is locked into an order &mdash; the order number, customer, project, total, deposit due, who locked it, and a link that opens the order. Internal only: the customer is never sent this. Leave it empty and nobody is emailed.',
+          'Everyone on this list is emailed the moment a signed proposal is locked into an order &mdash; the order number, customer, project, total, deposit due, who locked it, and a link that opens the order. The subject and body can be reworded below. Internal only: the customer is never sent this. Leave it empty and nobody is emailed.',
           '',
           '<div id="olkPanel"><div class="muted" style="padding:16px;">Loading…</div></div>') +
         '<div class="muted" style="font-size:12.5px;margin-top:6px;padding-top:14px;border-top:1px solid #eef0ea;line-height:1.55;max-width:820px;">Payment-request emails and the letters they carry are edited with the invoices they belong to, under <b style="font-weight:600;">Accounts Receivable → Letters &amp; email</b>.</div>') +
