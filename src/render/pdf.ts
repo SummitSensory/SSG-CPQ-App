@@ -1,4 +1,5 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir, rm, statfs } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { extname, join, sep } from 'node:path';
 import { logger } from '../lib/logger.js';
 import { env } from '../config/env.js';
@@ -91,15 +92,88 @@ async function launch(): Promise<Browser> {
   let executablePath: string | undefined;
   let args: string[] = ['--no-sandbox', '--disable-dev-shm-usage'];
   if (env.CHROMIUM_PACK_URL) {
+    await freeServerlessTmp();
     const mod = (await import('@sparticuz/chromium-min')) as unknown as {
       default: { executablePath: (url: string) => Promise<string>; args: string[] };
     };
     const sparticuz = mod.default;
     executablePath = await sparticuz.executablePath(env.CHROMIUM_PACK_URL);
-    args = sparticuz.args;
+    // The downloaded pack is only the compressed source of what was just unpacked to
+    // /tmp/chromium (and executablePath() returns that copy whenever it exists), so
+    // keeping it only spends ~65 MB of the 512 MB /tmp.
+    await rm(join(tmpdir(), 'chromium-pack'), { recursive: true, force: true }).catch(
+      () => undefined,
+    );
+    args = sparticuz.args.map((a) =>
+      a.startsWith('--disk-cache-size=') ? `--disk-cache-size=${DISK_CACHE_BYTES}` : a,
+    );
   }
 
-  return chromium.launch({ args, ...(executablePath ? { executablePath } : {}), headless: true });
+  try {
+    return await chromium.launch({
+      args,
+      ...(executablePath ? { executablePath } : {}),
+      headless: true,
+    });
+  } catch (err) {
+    if (err instanceof Error && err.message.includes('ENOSPC')) {
+      logger.error({ err, tmp: await tmpUsage() }, 'pdf: /tmp is full, Chromium could not launch');
+    }
+    throw err;
+  }
+}
+
+/**
+ * Every document here is set with `setContent` and has its images inlined as data
+ * URIs (see inlineKnownAssets), so there is nothing for Chromium's HTTP cache to
+ * cache. Its default on the serverless pack is 32 MB per profile, all of it in /tmp.
+ */
+const DISK_CACHE_BYTES = 1024 * 1024;
+
+/**
+ * What a previous Chromium in this container left in /tmp.
+ *
+ * Vercel's /tmp is 512 MB and lives as long as the warm container does. Each launch
+ * gives Chromium a fresh profile directory there, which Playwright deletes only when
+ * IT closes the browser. A browser the platform killed while the container was frozen
+ * (see discardBrowser) is never closed that way, so its profile — disk cache included
+ * — stays behind, and every relaunch adds another. On 2026-09-28 that filled /tmp:
+ * `browserType.launch: ENOSPC: no space left on device, mkdtemp
+ * '/tmp/playwright_chromiumdev_profile-…'` — Save PDF failed, fell back to the browser
+ * print dialog, and the rep got the 76%-scaled copy the server renderer exists to
+ * prevent.
+ *
+ * Only called on the serverless host, and only right before a launch: one browser per
+ * container, and a launch means the previous one is gone, so nothing live owns these.
+ * Never locally — the machine's temp directory is shared with the developer's own
+ * Playwright runs.
+ */
+const STALE_TMP_PREFIXES = ['playwright_chromiumdev_profile-', 'playwright-artifacts-'];
+
+async function freeServerlessTmp(): Promise<void> {
+  const root = tmpdir();
+  let names: string[];
+  try {
+    names = await readdir(root);
+  } catch {
+    return;
+  }
+  const stale = names.filter((n) => STALE_TMP_PREFIXES.some((p) => n.startsWith(p)));
+  if (!stale.length) return;
+  await Promise.all(
+    stale.map((n) => rm(join(root, n), { recursive: true, force: true }).catch(() => undefined)),
+  );
+  logger.info({ removed: stale.length }, 'pdf: removed profiles left by earlier browsers');
+}
+
+/** Free/total bytes of /tmp, for the log line when it fills up anyway. */
+async function tmpUsage(): Promise<{ freeBytes: number; totalBytes: number } | null> {
+  try {
+    const s = await statfs(tmpdir());
+    return { freeBytes: s.bavail * s.bsize, totalBytes: s.blocks * s.bsize };
+  } catch {
+    return null;
+  }
 }
 
 /**
