@@ -77,6 +77,14 @@ const MfrInput = z.object({
   rfqEmailCc: str(400),
   rfqEmailSubject: str(300),
   rfqEmailBody: z.string().max(8000).nullish(),
+  // ---- Purchase orders ----
+  // Whether a PO can be raised to this vendor from a locked order's BOM, and the
+  // send-dialog defaults for it.
+  poEnabled: z.boolean().optional(),
+  poEmailTo: str(300),
+  poEmailCc: str(400),
+  poEmailSubject: str(300),
+  poEmailBody: z.string().max(8000).nullish(),
   isActive: z.boolean().optional(),
   notes: str(2000),
 });

@@ -11078,6 +11078,8 @@
    * lock and send history — a fabricator and a distributor are prepared, confirmed
    * and sent independently, so one shared header could never be right. */
   var bomSectionData = [];
+  /** Vendor purchase orders on the open order, from GET /orders/:id/vendor-pos. */
+  var bomPurchaseOrders = [];
   var bomBrands = [];
   /** The ship-to address book, loaded with the sections that offer it. */
   var bomShipToAddresses = [];
@@ -11266,6 +11268,8 @@
       bomShipToAddresses = ra.ok ? ((await ra.json()) || []) : [];
       var rr = await authed('/orders/' + order.id + '/bom-reconciliation');
       bomRecon = rr.ok ? await rr.json() : null;
+      var rpo = await authed('/orders/' + order.id + '/vendor-pos');
+      bomPurchaseOrders = rpo.ok ? ((await rpo.json()).purchaseOrders || []) : [];
     } catch (e) { box.innerHTML = '<div class="err">Could not load the Bill of Materials.</div>'; return; }
 
     if (!procData.length) {
@@ -11309,6 +11313,267 @@
   }
 
   /** One vendor's block: visually separated, greyed out once submitted. */
+  /* --- Purchase orders -------------------------------------------------------
+     Raised from a vendor's section of a locked order, for vendors whose profile has
+     "Can receive purchase orders" on. The window picks products off this vendor's
+     sheet and confirms the freight; sending emails the PO (built like the Request for
+     Freight) and marks each part on the Manufacturing Process board as PO Sent to
+     Mfg / Not Paid with the PO number. See src/handoff/purchaseOrder.ts. */
+
+  function poStatusChip(status) {
+    return status === 'SENT'
+      ? '<span style="font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#2f7d5d;background:#eaf4ef;padding:2px 7px;border-radius:999px;">Sent</span>'
+      : '<span style="font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#8a6d1f;background:#fdf6e6;padding:2px 7px;border-radius:999px;">Draft</span>';
+  }
+
+  /** The vendor's purchase orders, listed at the top of their section. */
+  function poListHtml(s, canHandoff) {
+    var mine = (bomPurchaseOrders || []).filter(function (p) { return p.vendor === s.vendor; });
+    if (!mine.length) return '';
+    return '<div style="border:1px solid #e7e8e3;border-radius:10px;background:#fff;margin-bottom:12px;">' +
+      '<div style="padding:8px 12px;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#5c6157;border-bottom:1px solid #eef0ea;">Purchase orders</div>' +
+      mine.map(function (p) {
+        var push = p.mondayResult || null;
+        var mondayNote = p.status !== 'SENT' ? ''
+          : push && push.pushed
+            ? '<span class="muted" style="font-size:11.5px;">monday updated — ' + ((push.updated || []).length + (push.created || []).length) + ' part' + (((push.updated || []).length + (push.created || []).length) === 1 ? '' : 's') + '</span>'
+            : '<span style="font-size:11.5px;color:#9c3327;" title="' + esc((push && (push.error || push.skipped)) || '') + '">Not recorded on monday</span>';
+        var last = p.lastSend && p.lastSend.status !== 'SENT' && p.lastSend.status !== 'DELIVERED'
+          ? '<span style="font-size:11.5px;color:#9c3327;" title="' + esc(p.lastSend.error || '') + '">Last send ' + esc(String(p.lastSend.status).toLowerCase()) + '</span>' : '';
+        return '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 12px;border-top:1px solid #f2f3ef;">' +
+          '<b style="font-size:13px;font-variant-numeric:tabular-nums;">' + esc(p.reference) + '</b>' + poStatusChip(p.status) +
+          '<span class="muted" style="font-size:12px;">' + p.lineCount + ' item' + (p.lineCount === 1 ? '' : 's') + ' · ' + fmtMoney(p.totalMinor, '') +
+            (p.sentAt ? ' · sent ' + fmtDate(p.sentAt) : '') + '</span>' +
+          mondayNote + last +
+          '<span style="flex:1;"></span>' +
+          '<button class="link-btn" data-po-pdf="' + p.id + '" style="width:auto;padding:5px 10px;font-size:12px;">PDF</button>' +
+          (canHandoff && p.status === 'DRAFT'
+            ? '<button class="link-btn" data-po-open="' + p.id + '" data-vendor="' + esc(p.vendor) + '" style="width:auto;padding:5px 10px;font-size:12px;">Edit</button>' +
+              '<button class="link-btn" data-po-del="' + p.id + '" data-ref="' + esc(p.reference) + '" style="width:auto;padding:5px 10px;font-size:12px;color:#a2402f;">Discard</button>' +
+              '<button class="btn" data-po-send="' + p.id + '" style="width:auto;padding:5px 12px;font-size:12px;">Send</button>'
+            : '') +
+          (canHandoff && p.status === 'SENT'
+            ? '<button class="link-btn" data-po-send="' + p.id + '" style="width:auto;padding:5px 10px;font-size:12px;">Send again</button>' : '') +
+        '</div>';
+      }).join('') +
+    '</div>';
+  }
+
+  /** The PO as the vendor will receive it, fetched with auth and opened as a blob. */
+  async function openPurchaseOrderPdf(poId, onError) {
+    // Opened now, while the click is still the reason this code runs — after the
+    // await the popup blocker kills it silently (see the RFQ preview).
+    var win = window.open('', '_blank');
+    try {
+      var r = await authed('/render/vendor-pos/' + poId + '.pdf', { timeoutMs: RENDER_TIMEOUT_MS });
+      if (!r.ok) throw new Error('Could not build the PDF (' + r.status + ').');
+      var url = URL.createObjectURL(new Blob([await r.blob()], { type: 'application/pdf' }));
+      if (win) win.location = url;
+      else {
+        var a = document.createElement('a');
+        a.href = url; a.download = 'Purchase Order.pdf';
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      }
+      setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+    } catch (e) {
+      if (win) win.close();
+      (onError || alert)(e.message);
+    }
+  }
+
+  /**
+   * The "Create Purchase Order" window: this vendor's products to choose from, the
+   * freight, and notes. With `poId`, the same window edits that draft.
+   */
+  async function openPurchaseOrderWindow(order, vendor, poId, reload) {
+    var src, existing = null;
+    try {
+      src = await rfqApi('/orders/' + order.id + '/vendor-pos/source?vendor=' + encodeURIComponent(vendor));
+      if (poId) existing = await rfqApi('/vendor-pos/' + poId);
+    } catch (e) { alert(e.message); return; }
+    if (!src.poEnabled) {
+      alert(vendor + ' is not set up to receive purchase orders. Turn on “Can receive purchase orders” on the vendor’s profile first.');
+      return;
+    }
+    if (!src.lines.length) { alert('There are no orderable products for ' + vendor + ' on this order.'); return; }
+
+    // Editing a draft: tick what is on it. New: tick everything not already on a sent PO.
+    var onDraft = existing ? existing.lines.map(function (l) { return l.sku; }) : null;
+    var checked = function (l) { return onDraft ? onDraft.indexOf(l.sku) >= 0 : !l.onPurchaseOrder; };
+    var freightMinor = existing ? existing.freightMinor : (src.freight.minor != null ? src.freight.minor : null);
+    var noFreight = existing ? !!existing.noFreightCharge : false;
+
+    var th = function (label, right) {
+      return '<th style="padding:6px 8px;text-align:' + (right ? 'right' : 'left') + ';font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:#20241f;">' + label + '</th>';
+    };
+    var rows = src.lines.map(function (l) {
+      return '<tr style="border-bottom:1px solid #eef0ea;">' +
+        '<td style="padding:7px 8px;"><input type="checkbox" class="poL" data-id="' + esc(l.id) + '" data-ext="' + l.extendedCostMinor + '"' + (checked(l) ? ' checked' : '') + '></td>' +
+        '<td style="padding:7px 8px;font-family:ui-monospace,monospace;font-size:11.5px;white-space:nowrap;">' + esc(l.sku) +
+          (l.vendorSku && l.vendorSku !== l.sku ? '<div class="muted" style="font-size:10.5px;">Their #: ' + esc(l.vendorSku) + '</div>' : '') + '</td>' +
+        '<td style="padding:7px 8px;font-size:12.5px;">' + esc(l.name) +
+          (l.onPurchaseOrder ? '<div style="font-size:11px;color:#8a6d1f;margin-top:2px;">Already on ' + esc(l.onPurchaseOrder) + '</div>' : '') + '</td>' +
+        '<td style="padding:7px 8px;text-align:right;font-size:12.5px;">' + l.quantity + '</td>' +
+        '<td style="padding:7px 8px;text-align:right;font-size:12.5px;">' + fmtMoney(l.unitCostMinor, '') + '</td>' +
+        '<td style="padding:7px 8px;text-align:right;font-size:12.5px;font-variant-numeric:tabular-nums;">' + fmtMoney(l.extendedCostMinor, '') + '</td>' +
+      '</tr>';
+    }).join('');
+
+    var freightHint = src.freight.text
+      ? 'From this vendor’s BOM shipment quote: <b>' + esc(src.freight.text) + '</b>' + (src.freight.minor == null ? ' — not a number, so enter the amount.' : '.')
+      : 'No shipment quote on this vendor’s BOM section yet — enter the freight Summit pays for this shipment.';
+
+    var body =
+      '<div class="muted" style="font-size:12.5px;line-height:1.55;margin-bottom:12px;">' + esc(vendor) + ' · ' + (existing ? esc(existing.reference) + ' (draft)' : 'new purchase order') +
+        '. Choose the products to order. Prices are Summit’s purchase prices from this order’s Bill of Materials.</div>' +
+      '<table style="width:100%;border-collapse:collapse;">' +
+        '<thead><tr style="border-bottom:1.5px solid #20241f;"><th style="width:28px;"><input type="checkbox" id="poAll" title="Select all"></th>' +
+          th('SKU') + th('Description') + th('Qty', 1) + th('Unit price', 1) + th('Total', 1) + '</tr></thead>' +
+        '<tbody>' + rows + '</tbody></table>' +
+      '<div style="display:grid;grid-template-columns:1fr auto;gap:4px 18px;justify-content:end;margin:12px 8px 0 auto;max-width:360px;font-size:13.5px;">' +
+        '<span>Subtotal</span><span id="poSub" style="text-align:right;font-variant-numeric:tabular-nums;"></span>' +
+        '<span>Shipping / freight</span><span id="poFr" style="text-align:right;font-variant-numeric:tabular-nums;"></span>' +
+        '<b>Total</b><b id="poTot" style="text-align:right;font-variant-numeric:tabular-nums;"></b>' +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:200px 1fr;gap:12px;align-items:start;margin-top:14px;">' +
+        '<div class="field" style="margin:0;"><label>Shipping / freight ($)</label>' +
+          '<input id="poFreight" inputmode="decimal" style="' + IN + '" value="' + (freightMinor == null ? '' : (freightMinor / 100).toFixed(2)) + '" placeholder="0.00"' + (noFreight ? ' disabled' : '') + '></div>' +
+        '<div style="padding-top:24px;">' +
+          '<label style="display:flex;gap:7px;align-items:center;font-size:13px;cursor:pointer;"><input type="checkbox" id="poNoFreight"' + (noFreight ? ' checked' : '') + '> No freight charge on this order</label>' +
+          '<div class="muted" style="font-size:11.5px;line-height:1.5;margin-top:4px;">' + freightHint + '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="field" style="margin-top:12px;"><label>Special notes for the vendor</label>' +
+        '<textarea id="poNotes" rows="3" style="' + IN + 'resize:vertical;" placeholder="Anything the vendor needs to know — required ship date, packing, labelling.">' + esc((existing && existing.notes) || '') + '</textarea></div>';
+
+    var foot = '<button class="link-btn" id="poCancel" style="width:auto;padding:10px 16px;">Cancel</button>' +
+      '<button class="link-btn" id="poSave" style="width:auto;padding:10px 16px;">' + (existing ? 'Save draft' : 'Save as draft') + '</button>' +
+      '<button class="btn" id="poNext" style="width:auto;padding:10px 20px;">Preview &amp; send…</button>';
+
+    var ov = rfqOverlay(existing ? 'Edit ' + existing.reference : 'Create Purchase Order', body, foot);
+
+    var parseFreight = function () {
+      var raw = ov.querySelector('#poFreight').value.replace(/[$,\s]/g, '');
+      if (raw === '') return null;
+      var n = Number(raw);
+      return isFinite(n) && n >= 0 ? Math.round(n * 100) : NaN;
+    };
+    var boxes = function () { return Array.prototype.slice.call(ov.querySelectorAll('.poL')); };
+    var retotal = function () {
+      var sub = boxes().filter(function (c) { return c.checked; })
+        .reduce(function (t, c) { return t + Number(c.getAttribute('data-ext') || 0); }, 0);
+      var none = ov.querySelector('#poNoFreight').checked;
+      var fr = none ? 0 : parseFreight();
+      ov.querySelector('#poSub').textContent = fmtMoney(sub, '');
+      ov.querySelector('#poFr').textContent = none ? 'No charge' : (fr == null || isNaN(fr) ? 'Required' : fmtMoney(fr, ''));
+      ov.querySelector('#poFr').style.color = !none && (fr == null || isNaN(fr)) ? '#9c3327' : '';
+      ov.querySelector('#poTot').textContent = fmtMoney(sub + (fr && !isNaN(fr) ? fr : 0), '');
+      var all = boxes();
+      ov.querySelector('#poAll').checked = all.length > 0 && all.every(function (c) { return c.checked; });
+    };
+    boxes().forEach(function (c) { c.addEventListener('change', retotal); });
+    ov.querySelector('#poAll').addEventListener('change', function (e) {
+      boxes().forEach(function (c) { c.checked = e.target.checked; });
+      retotal();
+    });
+    ov.querySelector('#poFreight').addEventListener('input', retotal);
+    ov.querySelector('#poNoFreight').addEventListener('change', function (e) {
+      ov.querySelector('#poFreight').disabled = e.target.checked;
+      retotal();
+    });
+    retotal();
+    ov.querySelector('#poCancel').addEventListener('click', ov.close);
+
+    // Saves the draft (creating it the first time) and resolves to it, or null when
+    // the form is not complete — the freight above all: a PO does not go out without it.
+    var save = async function (requireFreight) {
+      var lineIds = boxes().filter(function (c) { return c.checked; }).map(function (c) { return c.getAttribute('data-id'); });
+      if (!lineIds.length) { ov.err('Select at least one product for the purchase order.'); return null; }
+      var none = ov.querySelector('#poNoFreight').checked;
+      var fr = parseFreight();
+      if (!none && fr != null && isNaN(fr)) { ov.err('Enter the freight as an amount, e.g. 245.00.'); return null; }
+      if (requireFreight && !none && fr == null) {
+        ov.err('Add the shipping / freight cost for this order, or tick “No freight charge”.');
+        ov.querySelector('#poFreight').focus();
+        return null;
+      }
+      var payload = {
+        lineIds: lineIds,
+        freightMinor: none ? 0 : fr,
+        noFreightCharge: none,
+        notes: ov.querySelector('#poNotes').value,
+      };
+      try {
+        existing = existing
+          ? await rfqApi('/vendor-pos/' + existing.id, { method: 'PATCH', body: payload })
+          : await rfqApi('/orders/' + order.id + '/vendor-pos', { method: 'POST', body: Object.assign({ vendor: vendor }, payload) });
+        return existing;
+      } catch (e) { ov.err(e.message); return null; }
+    };
+    ov.querySelector('#poSave').addEventListener('click', async function () {
+      var po = await save(false);
+      if (!po) return;
+      ov.close();
+      if (reload) await reload();
+    });
+    ov.querySelector('#poNext').addEventListener('click', async function () {
+      var btn = ov.querySelector('#poNext');
+      btn.disabled = true;
+      var po = await save(true);
+      btn.disabled = false;
+      if (!po) return;
+      ov.close();
+      if (reload) await reload();
+      openPurchaseOrderSend(po.id, reload);
+    });
+  }
+
+  /** Step two: check the document, then email it. */
+  async function openPurchaseOrderSend(poId, reload) {
+    var d;
+    try { d = await rfqApi('/vendor-pos/' + poId + '/send-defaults'); } catch (e) { alert(e.message); return; }
+    var again = d.status === 'SENT';
+    openModal((again ? 'Send again: ' : 'Send ') + d.reference,
+      '<div class="muted" style="font-size:12.5px;line-height:1.55;margin-bottom:10px;">' +
+        'The purchase order is attached as a PDF. Replies come back to the orders desk. ' +
+        (again ? 'This emails the same PO again under the same number.' : 'Sending locks it, and marks each part on the Manufacturing Process board as <b>PO Sent to Mfg</b> with this PO number and <b>Not Paid</b>.') + '</div>' +
+      '<div style="margin-bottom:12px;"><button type="button" class="link-btn" id="poPreviewPdf" style="width:auto;padding:7px 13px;">Preview the PDF</button></div>' +
+      fieldRow('To', '<input id="poTo" type="text" style="' + IN + '" value="' + esc(d.to) + '" placeholder="orders@vendor.com">') +
+      fieldRow('Cc', '<input id="poCc" type="text" style="' + IN + '" value="' + esc(d.cc) + '" placeholder="Optional">') +
+      fieldRow('Subject', '<input id="poSubj" style="' + IN + '" value="' + esc(d.subject) + '">') +
+      '<div class="field"><label>Message</label><textarea id="poBodyTxt" rows="8" style="' + IN + 'resize:vertical;">' + esc(d.body) + '</textarea></div>' +
+      (d.to ? '' : '<div class="muted" style="font-size:11.5px;line-height:1.5;">No address is stored for this vendor. Add a purchase-order address on their profile and it will be filled in next time.</div>'),
+      async function (close, showErr) {
+        var to = document.getElementById('poTo').value.trim();
+        if (!to) return showErr('Give at least one recipient.');
+        var res;
+        try {
+          // /render/*: the send builds the PDF first — see the RFQ send for why that
+          // prefix matters on Vercel.
+          res = await rfqApi('/render/vendor-pos/' + poId + '/send', {
+            method: 'POST',
+            timeoutMs: RENDER_TIMEOUT_MS,
+            body: {
+              to: to,
+              cc: document.getElementById('poCc').value.trim(),
+              subject: document.getElementById('poSubj').value.trim(),
+              body: document.getElementById('poBodyTxt').value,
+            },
+          });
+        } catch (e) { return showErr(e.message); }
+        close();
+        if (reload) await reload();
+        var push = res && res.mondayPush;
+        if (push && !push.pushed) {
+          alert(res.reference + ' was emailed to the vendor, but it was not recorded on monday: ' + (push.error || push.skipped || 'unknown reason') + '\n\nUpdate the Manufacturing Process subitems by hand for this PO.');
+        } else if (typeof toast === 'function') {
+          toast(res.reference + ' sent to ' + d.vendor + (push && push.pushed ? ' — monday updated.' : '.'));
+        }
+      }, again ? 'Send again' : 'Send purchase order');
+    var pv = document.getElementById('poPreviewPdf');
+    if (pv) pv.addEventListener('click', function () { openPurchaseOrderPdf(poId); });
+  }
+
   function sectionCard(s, idx, canHandoff) {
     var locked = !s.editable;
     var edit = canHandoff && !locked;
@@ -11434,11 +11699,15 @@
           '<button class="link-btn" data-proc="csvfile" data-vendor="' + esc(s.vendor) + '" style="width:auto;padding:7px 13px;">CSV</button>' +
           '<button class="link-btn" data-proc="pdf" data-vendor="' + esc(s.vendor) + '" style="width:auto;padding:7px 13px;">PDF</button>' +
           (canHandoff ? '<button class="btn" data-sec-email="' + s.id + '" title="Emails this vendor their sheet and submits the section" style="width:auto;padding:8px 14px;">Email vendor</button>' : '') +
+          (canHandoff && s.poEnabled && bomOrder && bomOrder.locked !== false
+            ? '<button class="btn" data-sec-po="' + esc(s.vendor) + '" title="Choose products from this vendor’s sheet and send them a purchase order" style="width:auto;padding:8px 14px;">Create Purchase Order</button>'
+            : '') +
           (canHandoff && !locked ? '<button class="link-btn" data-sec-confirm="' + s.id + '" title="Use when the sheet went out some other way" style="width:auto;padding:8px 14px;">Mark sent by hand</button>' : '') +
           (canHandoff && locked ? '<button class="link-btn" data-sec-unlock="' + s.id + '" style="width:auto;padding:8px 14px;color:#9c3327;">Unlock for revisions</button>' : '') +
         '</div>' +
       '</div>' +
       '<div style="padding:16px 18px;">' +
+        poListHtml(s, canHandoff) +
         warn +
         '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;">' +
           '<div><div class="k">Job name</div><input class="secF" data-id="' + s.id + '" data-f="jobName" value="' + esc(s.jobName || '') + '" placeholder="' + esc(s.jobNameDefault || '') + '" style="' + bomFieldStyle(null, locked) + '"' + dis + '></div>' +
@@ -11928,6 +12197,28 @@
       var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {}
       alert(m || (what + ' (' + r.status + ').'));
     };
+
+    // Purchase orders — see openPurchaseOrderWindow.
+    document.querySelectorAll('[data-sec-po]').forEach(function (bt) {
+      bt.addEventListener('click', function () { openPurchaseOrderWindow(order, bt.getAttribute('data-sec-po'), null, reload); });
+    });
+    document.querySelectorAll('[data-po-open]').forEach(function (bt) {
+      bt.addEventListener('click', function () { openPurchaseOrderWindow(order, bt.getAttribute('data-vendor'), bt.getAttribute('data-po-open'), reload); });
+    });
+    document.querySelectorAll('[data-po-pdf]').forEach(function (bt) {
+      bt.addEventListener('click', function () { openPurchaseOrderPdf(bt.getAttribute('data-po-pdf')); });
+    });
+    document.querySelectorAll('[data-po-send]').forEach(function (bt) {
+      bt.addEventListener('click', function () { openPurchaseOrderSend(bt.getAttribute('data-po-send'), reload); });
+    });
+    document.querySelectorAll('[data-po-del]').forEach(function (bt) {
+      bt.addEventListener('click', async function () {
+        if (!confirm('Discard draft ' + bt.getAttribute('data-ref') + '? Nothing has been sent to the vendor.')) return;
+        var r = await authed('/vendor-pos/' + bt.getAttribute('data-po-del'), { method: 'DELETE' });
+        if (!r.ok) return fail(r, 'Could not discard the draft');
+        await reload();
+      });
+    });
 
     document.querySelectorAll('.secColorCol').forEach(function (el) {
       el.addEventListener('change', async function () {

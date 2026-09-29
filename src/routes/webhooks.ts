@@ -166,6 +166,48 @@ export function registerWebhookRoutes(app: FastifyInstance): void {
       return reply.status(200).send({ ok: true });
     }
 
+    // A purchase order. A bounce means the vendor is not building anything, so it goes
+    // on the order timeline like a bounced Bill of Materials.
+    const poSend = await prisma.purchaseOrderSend.findFirst({
+      where: { providerMessageId: messageId },
+      select: {
+        id: true,
+        toEmail: true,
+        sentById: true,
+        po: { select: { orderId: true, vendor: true, reference: true } },
+      },
+    });
+    if (poSend) {
+      if (event.type === 'email.delivered') {
+        await prisma.purchaseOrderSend.update({
+          where: { id: poSend.id },
+          data: { status: 'DELIVERED' },
+        });
+      } else if (event.type === 'email.bounced') {
+        await prisma.purchaseOrderSend.update({
+          where: { id: poSend.id },
+          data: { status: 'BOUNCED', error: bounceMessage },
+        });
+        await prisma.orderEvent.create({
+          data: {
+            orderId: poSend.po.orderId,
+            action: 'po.email.bounced',
+            actorId: poSend.sentById,
+            detail: {
+              vendor: poSend.po.vendor,
+              reference: poSend.po.reference,
+              to: poSend.toEmail,
+            } as object,
+          },
+        });
+        logger.warn(
+          { sendId: poSend.id, to: poSend.toEmail, reference: poSend.po.reference },
+          'resend webhook: purchase order bounced',
+        );
+      }
+      return reply.status(200).send({ ok: true });
+    }
+
     // Not one of ours — an invite, a password reset, a notification. Acknowledge and
     // move on: a 200 is what stops the provider retrying something we do not track.
     return reply.status(200).send({ ok: true });

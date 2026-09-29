@@ -1998,6 +1998,13 @@
           '<option value="NONE"' + (m.bomFreightSource === 'NONE' ? ' selected' : '') + '>None — this vendor quotes no freight</option>' +
         '</select>' +
         '<div class="muted" style="font-size:12px;margin-top:5px;line-height:1.5;">The structure and the mats ship as two loads and are quoted separately on the deal. This says which figure lands on this vendor&rsquo;s sheet.</div>') +
+      '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin:16px 0 6px;">Purchase orders</div>' +
+      '<label style="display:flex;align-items:flex-start;gap:8px;font-size:14px;cursor:pointer;"><input type="checkbox" id="mfPo" style="margin-top:3px;"' + (m.poEnabled ? ' checked' : '') + '><span>Can receive purchase orders<span class="muted" style="display:block;font-size:11.5px;line-height:1.5;">Shows a <b>Create Purchase Order</b> button on this vendor’s section of a locked order’s Bill of Materials. The PO is numbered <b>PO-12414494509-' + esc(derivedAbbrev(m.name) || 'SE') + '</b> — the monday Project ID and the vendor code above.</span></span></label>' +
+      '<div class="muted" style="font-size:12px;margin:10px 0 8px;line-height:1.5;">Send-dialog defaults. Left blank, a PO goes to the Bill of Materials address, then the primary contact. Tokens: <code>{{customer}}</code> <code>{{vendor}}</code> <code>{{reference}}</code> <code>{{projectId}}</code> <code>{{total}}</code>.</div>' +
+      two(fieldRow('Send POs to', '<input id="mfPoTo" type="email" placeholder="Falls back to the BOM address" style="' + IN + '" value="' + v('poEmailTo') + '">'),
+          fieldRow('Cc', '<input id="mfPoCc" placeholder="Optional" style="' + IN + '" value="' + v('poEmailCc') + '">')) +
+      fieldRow('Subject', '<input id="mfPoSubject" placeholder="Purchase Order {{reference}} — {{customer}}" style="' + IN + '" value="' + v('poEmailSubject') + '">') +
+      '<div class="field"><label>Default message</label><textarea id="mfPoBody" rows="4" placeholder="Left blank, a standard covering note is used." style="' + IN + 'resize:vertical;">' + esc(m.poEmailBody || '') + '</textarea></div>' +
       '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin:16px 0 6px;">Bill of Materials email</div>' +
       '<div class="muted" style="font-size:12px;margin-bottom:8px;line-height:1.5;">Pre-fills the send dialog for this vendor — a fabricator and a distributor rarely want the same note or the same format. Tokens: <code>{{customer}}</code> <code>{{vendor}}</code> <code>{{order}}</code> <code>{{job}}</code> <code>{{submittedOn}}</code>. Left blank, the subject matches the attachment name: <code>{{customer}}-{{order}}-{{vendor}}</code>.</div>' +
       two(fieldRow('Send BOMs to', '<input id="mfBomTo" type="email" placeholder="Falls back to the contact email" style="' + IN + '" value="' + v('bomEmailTo') + '">'),
@@ -2034,6 +2041,11 @@
           rfqEmailCc: document.getElementById('mfRfqCc').value.trim(),
           rfqEmailSubject: document.getElementById('mfRfqSubject').value.trim(),
           rfqEmailBody: document.getElementById('mfRfqBody').value,
+          poEnabled: document.getElementById('mfPo').checked,
+          poEmailTo: document.getElementById('mfPoTo').value.trim(),
+          poEmailCc: document.getElementById('mfPoCc').value.trim(),
+          poEmailSubject: document.getElementById('mfPoSubject').value.trim(),
+          poEmailBody: document.getElementById('mfPoBody').value,
           addressLine1: document.getElementById('mfAddr1').value.trim(),
           addressLine2: document.getElementById('mfAddr2').value.trim(),
           city: document.getElementById('mfCity').value.trim(),

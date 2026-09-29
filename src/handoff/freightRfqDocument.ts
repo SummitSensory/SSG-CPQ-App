@@ -28,10 +28,10 @@ const B = BRAND;
  */
 const RFQ_CONTACT_EMAIL = 'sales@summitsensory.com';
 
-const money = (minor: number): string =>
+export const money = (minor: number): string =>
   (minor / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 
-const esc = (v: unknown): string =>
+export const esc = (v: unknown): string =>
   String(v ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -49,7 +49,7 @@ const POST_NOMINALS: Record<string, string> = {
 };
 
 /** "Bryan Shepherd" → "Bryan Shepherd, MBA". Unknown names pass through. */
-function displayName(name: string): string {
+export function displayName(name: string): string {
   const clean = String(name ?? '').trim();
   if (!clean) return '';
   const suffix = POST_NOMINALS[clean.toLowerCase()];
@@ -63,7 +63,7 @@ function displayName(name: string): string {
  * clickable in the PDF a vendor opens as well as in the browser preview —
  * clicking it opens a new message already addressed.
  */
-function mailto(email: string, opts: { color?: string; weight?: number } = {}): string {
+export function mailto(email: string, opts: { color?: string; weight?: number } = {}): string {
   const clean = String(email ?? '').trim();
   if (!clean) return '&mdash;';
   const color = opts.color ?? B.navy;
@@ -82,7 +82,7 @@ export function rfqFilename(reference: string, vendor: string, customer = ''): s
 }
 
 /** One label/value pair inside a detail column. */
-function detail(label: string, value: string): string {
+export function detail(label: string, value: string): string {
   return `<div style="margin-top:7px;">
     <div style="font-size:7pt;text-transform:uppercase;letter-spacing:.1em;color:${B.muted};font-weight:700;">${esc(label)}</div>
     <div style="font-size:9.5pt;color:${B.ink};line-height:1.4;margin-top:1px;">${value}</div>
@@ -95,14 +95,14 @@ function detail(label: string, value: string): string {
  * Summit rep behind the request are one set of facts, and stacking them as three
  * separate tables pushed them a third of a page apart.
  */
-function column(title: string, rows: string, first = false): string {
+export function column(title: string, rows: string, first = false): string {
   return `<div style="flex:1;padding:0 14px;${first ? '' : `border-left:1px solid ${B.navyRule};`}min-width:0;">
     <div style="font-family:Georgia,'Times New Roman',serif;font-size:10pt;font-weight:700;color:${B.navy};letter-spacing:-.01em;line-height:1.2;">${esc(title)}</div>
     ${rows}
   </div>`;
 }
 
-const th = (label: string, align: 'left' | 'right'): string =>
+export const th = (label: string, align: 'left' | 'right'): string =>
   `<th style="padding:0 10px 5px;text-align:${align};font-size:7.5pt;text-transform:uppercase;letter-spacing:.08em;color:${B.muted};font-weight:700;border-bottom:1.5px solid ${B.navy};white-space:nowrap;">${esc(label)}</th>`;
 
 export function renderRfqDocument(m: RfqModel): string {

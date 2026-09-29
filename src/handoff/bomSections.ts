@@ -339,6 +339,7 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
         bomEmailFormat: true,
         contactEmail: true,
         bomFreightSource: true,
+        poEnabled: true,
       },
     }),
     latestDeliveryForOrder(orderId),
@@ -428,6 +429,8 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
           }
         : null,
       freightSource: mfr?.bomFreightSource ?? 'STRUCTURE',
+      /** Whether a purchase order can be raised to this vendor (their profile's switch). */
+      poEnabled: !!mfr?.poEnabled,
       /**
        * Whether the deal's tax figure belongs on this vendor's sheet.
        *
