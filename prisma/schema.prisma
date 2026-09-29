@@ -726,6 +726,20 @@ model Manufacturer {
   rfqEmailBody        String?
 
   freightRfqs         FreightRfq[]
+
+  // ---- Purchase orders ----
+  /// Whether a purchase order can be raised to this vendor from a locked order's
+  /// Bill of Materials. Off by default: most vendors are ordered from by BOM alone.
+  poEnabled           Boolean           @default(false)
+  /// Send-dialog defaults, same pattern as the BOM's and the RFQ's. Blank falls
+  /// back to the BOM address, then the primary contact. Tokens: {{vendor}},
+  /// {{reference}}, {{customer}}, {{projectId}}, {{total}}.
+  poEmailTo           String?
+  poEmailCc           String?
+  poEmailSubject      String?
+  poEmailBody         String?
+  purchaseOrders      PurchaseOrder[]
+
   /// What this vendor calls the parts we number ourselves. See VendorPartNumber.
   vendorParts         VendorPartNumber[]
 
@@ -2040,6 +2054,7 @@ model AcceptedOrder {
   requirements      HandoffRequirement[]
   procurement       ProcurementLine[]
   bomSections       BomVendorSection[]
+  purchaseOrders    PurchaseOrder[]
   portalDeliveries      PortalDeliverySubmission[]
   portalColorSelections PortalColorSelection[]
   portalItems               OrderPortalItem[]
@@ -2496,6 +2511,105 @@ model OrderEvent {
   createdAt DateTime      @default(now())
 
   @@index([orderId])
+}
+
+/// A purchase order is frozen the moment it is emailed: the vendor builds against
+/// it, and monday carries its number. A draft can be edited or discarded.
+enum PurchaseOrderStatus {
+  DRAFT
+  SENT
+}
+
+/// A purchase order to one vendor for products on a locked order, raised from that
+/// vendor's Bill of Materials section. Lines and prices are snapshotted from the
+/// order's procurement lines — the same frozen costs the BOM prints — so re-printing
+/// a sent PO months later gives the same document.
+model PurchaseOrder {
+  id              String              @id @default(cuid())
+  orderId         String
+  order           AcceptedOrder       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  /// Vendor name as it appears on the BOM section and Sku.manufacturer.
+  vendor          String
+  manufacturerId  String?
+  manufacturer    Manufacturer?       @relation(fields: [manufacturerId], references: [id], onDelete: SetNull)
+
+  /// The monday Project ID and vendor code, frozen at creation for the same reason
+  /// the RFQ freezes them: the number the vendor is holding must never change.
+  projectId       String
+  vendorAbbrev    String
+  /// Which PO this is to this vendor on this order, from 1. The second and later
+  /// carry a suffix: "PO-12414494509-TFH-2".
+  sequence        Int                 @default(1)
+  /// "PO-12414494509-TFH". Written to the monday subitems as the Purchase Order ID.
+  reference       String              @unique
+
+  status          PurchaseOrderStatus @default(DRAFT)
+  notes           String?
+
+  /// Freight on this shipment, in minor units — what Summit pays the vendor to ship
+  /// it. Null until someone decides; a PO cannot be sent while it is null unless
+  /// `noFreightCharge` says there is none.
+  freightMinor    Int?
+  noFreightCharge Boolean             @default(false)
+  subtotalMinor   Int                 @default(0)
+  totalMinor      Int                 @default(0)
+
+  /// Ship-to and receiving contact, frozen from the vendor's BOM section when the
+  /// PO is created: the customer's site, Summit's dock, or a saved address.
+  shipToName      String
+  shipToLines     String[]
+  contactName     String?
+  contactPhone    String?
+
+  sentAt          DateTime?
+  sentById        String?
+  /// What the monday write after the send did — which subitems were updated or
+  /// created, and any error. Informational; the send never depends on it.
+  mondayResult    Json?
+  createdById     String
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  lines           PurchaseOrderLine[]
+  sends           PurchaseOrderSend[]
+
+  @@unique([orderId, vendor, sequence])
+  @@index([orderId])
+}
+
+model PurchaseOrderLine {
+  id                String        @id @default(cuid())
+  poId              String
+  po                PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
+  /// Our part number, and the vendor's where they number it differently.
+  sku               String
+  vendorSku         String?
+  name              String
+  quantity          Int
+  /// Summit's purchase price, from the procurement line snapshot.
+  unitCostMinor     Int
+  extendedCostMinor Int
+  sortOrder         Int           @default(0)
+
+  @@index([poId])
+}
+
+model PurchaseOrderSend {
+  id                String               @id @default(cuid())
+  poId              String
+  po                PurchaseOrder        @relation(fields: [poId], references: [id], onDelete: Cascade)
+  toEmail           String
+  ccEmails          String?
+  subject           String
+  bodyPreview       String
+  status            FreightRfqSendStatus @default(QUEUED)
+  providerMessageId String?
+  error             String?
+  sentById          String
+  createdAt         DateTime             @default(now())
+
+  @@index([poId])
+  @@index([providerMessageId])
 }
 
 /// A freight RFQ is frozen the moment it is emailed. Correcting one means a new
