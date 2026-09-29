@@ -1,7 +1,7 @@
 import { prisma } from '../../lib/prisma.js';
 import { env } from '../../config/env.js';
 import { logger } from '../../lib/logger.js';
-import { createSubitem, mondayQuery, setColumnValues } from './client.js';
+import { mondayQuery, setColumnValues } from './client.js';
 import {
   linkOrderByDeal,
   manufacturingBoardId,
@@ -20,9 +20,10 @@ import {
  *   Purchase Order ID  → the PO number, e.g. "PO-12414494509-TFH"
  *   Payment Status     → "Not Paid"
  *
- * Parts are matched to subitems by SKU. A part with no subitem yet gets one, so every
- * part that was ordered is tracked on the board — named the way the board names them
- * and carrying its SKU.
+ * Parts are matched to subitems by SKU, and only EXISTING subitems are updated — the
+ * subitems are created on the board as part of the manufacturing process, and a PO
+ * never adds rows of its own. A part with no matching subitem is reported back
+ * (notFound) so the rep can fix the board by hand; nothing is created for it.
  *
  * Never fatal, exactly like the freight-request push: the vendor has the PO by the
  * time this runs, so an unreachable board is reported back as data and logged, never
@@ -48,7 +49,8 @@ export interface PurchaseOrderPushResult {
   pushed: boolean;
   itemId?: string;
   updated?: string[];
-  created?: string[];
+  /** SKUs on the PO with no subitem of that SKU on the row. Nothing is created for them. */
+  notFound?: string[];
   skipped?: string;
   error?: string;
 }
@@ -151,7 +153,7 @@ export async function pushPurchaseOrderToMonday(poId: string): Promise<PurchaseO
   };
 
   const updated: string[] = [];
-  const created: string[] = [];
+  const notFound: string[] = [];
   const done = new Set<string>();
   for (const line of po.lines) {
     const key = norm(line.sku);
@@ -163,12 +165,22 @@ export async function pushPurchaseOrderToMonday(poId: string): Promise<PurchaseO
       for (const m of matches) await setColumnValues(m.boardId, m.id, values);
       updated.push(line.sku);
     } else {
-      // Named the way the board names its subitems: the product, with the SKU in its column.
-      const name = (line.name || line.sku).slice(0, 250);
-      await createSubitem(itemId, name, { ...values, [MFG_SUBITEM_COL.sku]: line.sku });
-      created.push(line.sku);
+      notFound.push(line.sku);
     }
   }
-  logger.info({ poId, itemId, updated, created }, 'purchase order: recorded on monday');
-  return { pushed: true, itemId, updated, created };
+  if (notFound.length) {
+    logger.warn({ poId, itemId, notFound }, 'purchase order: no subitem on monday for some parts');
+  }
+  logger.info({ poId, itemId, updated, notFound }, 'purchase order: recorded on monday');
+  if (!updated.length) {
+    return {
+      pushed: false,
+      itemId,
+      updated,
+      notFound,
+      skipped:
+        'None of the parts on this PO matched a subitem SKU on the Manufacturing Process row.',
+    };
+  }
+  return { pushed: true, itemId, updated, notFound };
 }
