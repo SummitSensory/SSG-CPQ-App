@@ -16,7 +16,7 @@ import { acquirePage, type Route } from '../render/pdf.js';
  * feeds.
  *
  * Runs pdf.js (`pdfjs-dist`) INSIDE the same headless Chromium already used for
- * HTML → PDF rendering (render/pdf.ts's shared browser, via `acquirePage`),
+ * HTML → PDF rendering (a browser of its own from render/pdf.ts's `acquirePage`),
  * rather than either of the two more obvious options:
  *
  *   - Chromium's own built-in PDF viewer cannot be used: Playwright's bundled
