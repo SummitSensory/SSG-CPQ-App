@@ -361,6 +361,11 @@
       case 'tariffClassificationCode':
         return cb.tariffClassificationCode ? esc(cb.tariffClassificationCode) : NOT_YET;
       case 'tariff9979Claimed':
+        // Admin/per-proposal wording when set (resolved server-side, see
+        // resolveTariff9979Text); the built-in wording otherwise.
+        if (cb.tariff9979Text && String(cb.tariff9979Text).trim()) {
+          return esc(String(cb.tariff9979Text).trim());
+        }
         return cb.tariff9979Claimed === true
           ? 'Claimed'
           : cb.tariff9979Claimed === false

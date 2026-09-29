@@ -129,6 +129,12 @@ const CustomsPatchSchema = z.object({
    */
   tariff9979Claimed: z.boolean().nullable().optional(),
   /**
+   * Hand-typed wording for this proposal's tariff item 9979.00.00 row, replacing the
+   * admin wording for its answer. Wording only — tariff9979Claimed still decides
+   * which clauses print. Blank/null follows the admin wording.
+   */
+  tariff9979TextOverride: z.string().trim().max(1000).nullable().optional(),
+  /**
    * A human-entered STATUS about whether medical/assistive-device GST/HST relief is
    * being claimed — distinct from the tax-rate calculation engine and from taxLabel.
    * No format validation beyond the enum itself; never computed.
@@ -236,6 +242,14 @@ const SettingsSchema = z.object({
     .enum(['', 'true', 'false'])
     .optional()
     .transform((v) => (v === undefined ? undefined : v === '' ? null : v === 'true')),
+  /**
+   * The wording the Section C tariff item 9979.00.00 row prints for each answer.
+   * Blank/null prints the built-in wording ("Claimed", "Not claimed", "Not yet
+   * determined").
+   */
+  tariff9979ClaimedText: z.string().trim().max(1000).nullable().optional(),
+  tariff9979NotClaimedText: z.string().trim().max(1000).nullable().optional(),
+  tariff9979UndeterminedText: z.string().trim().max(1000).nullable().optional(),
   defaultTaxResponsibility: z
     .enum([
       'SELLER_COLLECTS',

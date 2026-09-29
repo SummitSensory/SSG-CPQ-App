@@ -31,6 +31,7 @@ interface CrossBorder {
   countryOfOrigin?: string | null;
   tariffClassificationCode?: string | null;
   tariff9979Claimed?: boolean | null;
+  tariff9979Text?: string | null;
   gstHstTreatment?: string | null;
   hostSystemModel?: string | null;
   sectionCItems?: Array<Record<string, unknown>>;
@@ -169,6 +170,37 @@ describe('proposal document — Section C (Canadian Import Terms)', () => {
       }),
     );
     expect(html).toContain('Not yet determined');
+  });
+
+  it('prints the resolved tariff 9979.00.00 wording in place of the built-in wording, escaped', () => {
+    const row = [
+      {
+        id: '1',
+        kind: 'BOUND',
+        boundField: 'tariff9979Claimed',
+        label: 'Tariff item 9979.00.00',
+        order: 0,
+      },
+    ];
+    const standard = SSGProposalDocument.html(
+      canadianDoc({ tariff9979Claimed: true, sectionCItems: row }),
+    );
+    expect(standard).toContain('>Claimed<');
+
+    const custom = SSGProposalDocument.html(
+      canadianDoc({
+        tariff9979Claimed: true,
+        tariff9979Text: 'Claimed — goods for persons with disabilities <b>',
+        sectionCItems: row,
+      }),
+    );
+    expect(custom).toContain('Claimed — goods for persons with disabilities &lt;b&gt;');
+    expect(custom).not.toContain('>Claimed<');
+
+    const blank = SSGProposalDocument.html(
+      canadianDoc({ tariff9979Claimed: false, tariff9979Text: '   ', sectionCItems: row }),
+    );
+    expect(blank).toContain('Not claimed');
   });
 
   it('sums only duty/surtax/brokerage categories for the "Duties, surtax and brokerage" row, never the separate GST/HST sales-tax line', () => {
