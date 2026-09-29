@@ -62,3 +62,34 @@ describe('monday client rate-limit handling', () => {
     expect(backoff(0, 3)).toBe(3000); // honors Retry-After seconds
   });
 });
+
+describe('monday client request timeout', () => {
+  it('passes every request a time limit', async () => {
+    const { mondayQuery } = await import('../../src/integrations/monday/client.js');
+    let signal: AbortSignal | undefined;
+    const fn = (async (_url: string, init?: RequestInit) => {
+      signal = init?.signal ?? undefined;
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({ data: { ok: true } }),
+      } as unknown as Response;
+    }) as unknown as typeof fetch;
+    await mondayQuery('query {}', {}, fn);
+    expect(signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('reports a timed-out request plainly and does not retry it (it may have been a mutation)', async () => {
+    const { mondayQuery } = await import('../../src/integrations/monday/client.js');
+    let calls = 0;
+    const fn = (async () => {
+      calls++;
+      throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    }) as unknown as typeof fetch;
+    await expect(mondayQuery('mutation {}', {}, fn)).rejects.toThrow(
+      /monday API did not answer within 20 s/,
+    );
+    expect(calls).toBe(1);
+  });
+});

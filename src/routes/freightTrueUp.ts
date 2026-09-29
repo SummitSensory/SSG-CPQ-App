@@ -304,7 +304,9 @@ export function registerFreightTrueUpRoutes(app: FastifyInstance): void {
    * one-job-at-a-time sweep either path runs.
    */
   app.post('/freight/sync-outstanding', write, async (req) => {
-    return pullOutstanding(req.user!.sub, { limit: 200 });
+    // This runs on the main API function (30 s), not api/cron — stop with time left
+    // to answer instead of being killed mid-sweep with nothing reported.
+    return pullOutstanding(req.user!.sub, { limit: 200, budgetMs: 20_000 });
   });
 
   /**

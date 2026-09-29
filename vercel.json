@@ -9,6 +9,9 @@
     "api/render.ts": {
       "maxDuration": 180,
       "memory": 3009
+    },
+    "api/cron.ts": {
+      "maxDuration": 300
     }
   },
   "crons": [
@@ -37,6 +40,10 @@
     {
       "source": "/render/(.*)",
       "destination": "/api/render"
+    },
+    {
+      "source": "/cron/(.*)",
+      "destination": "/api/cron"
     },
     {
       "source": "/(.*)",
