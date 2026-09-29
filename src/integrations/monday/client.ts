@@ -5,6 +5,13 @@ const API_URL = 'https://api.monday.com/v2';
 const MAX_ATTEMPTS = 5;
 const BASE_BACKOFF_MS = 500;
 const MAX_BACKOFF_MS = 15_000;
+/**
+ * One request to monday, not the whole call with its retries. Without it a stalled
+ * connection held the caller until the platform killed the function — a nightly
+ * sweep lost every job after the stuck one. Not retried: this client also runs
+ * mutations, and one that timed out may still have been applied.
+ */
+const REQUEST_TIMEOUT_MS = 20_000;
 
 interface GraphQLResponse<T> {
   data?: T;
@@ -37,12 +44,18 @@ export async function mondayQuery<T>(
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const res = await fetchImpl(API_URL, {
       method: 'POST',
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       headers: {
         'Content-Type': 'application/json',
         Authorization: env.MONDAY_API_TOKEN,
         'API-Version': '2024-01',
       },
       body: JSON.stringify({ query, variables }),
+    }).catch((err: unknown) => {
+      if (err instanceof Error && err.name === 'TimeoutError') {
+        throw new Error(`monday API did not answer within ${REQUEST_TIMEOUT_MS / 1000} s`);
+      }
+      throw err;
     });
 
     if (res.status === 429) {

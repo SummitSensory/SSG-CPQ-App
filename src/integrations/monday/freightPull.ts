@@ -795,7 +795,18 @@ export interface PullSweepResult {
   updated: number;
   conflicts: number;
   failed: Array<{ versionId: string; error: string }>;
+  /** Jobs left unread because the time budget ran out. */
+  notReached?: number;
 }
+
+/**
+ * How long one sweep may spend before it stops and reports what it did not reach.
+ * The nightly cron runs on api/cron (300 s); the manual "Sync all now" runs on the
+ * main API function (30 s) and passes a smaller budget. Stopping itself, rather than
+ * being killed by the platform, is what keeps the result — and the log line saying
+ * how far it got.
+ */
+const DEFAULT_SWEEP_BUDGET_MS = 240_000;
 
 /**
  * Nightly sweep: read the board for every job still waiting on steel or mats.
@@ -811,8 +822,9 @@ export interface PullSweepResult {
  */
 export async function pullOutstanding(
   actorId: string,
-  opts: { limit?: number; fetchImpl?: typeof fetch } = {},
+  opts: { limit?: number; fetchImpl?: typeof fetch; budgetMs?: number } = {},
 ): Promise<PullSweepResult> {
+  const deadline = Date.now() + (opts.budgetMs ?? DEFAULT_SWEEP_BUDGET_MS);
   const out: PullSweepResult = { scanned: 0, updated: 0, conflicts: 0, failed: [] };
   if (!isMondayPushConfigured()) return out;
 
@@ -823,7 +835,15 @@ export async function pullOutstanding(
     select: { id: true, proposalId: true },
   });
 
-  for (const v of candidates) {
+  for (const [i, v] of candidates.entries()) {
+    if (Date.now() >= deadline) {
+      out.notReached = candidates.length - i;
+      logger.warn(
+        { notReached: out.notReached, scanned: out.scanned },
+        'freight pull: time budget spent; stopping before the end of the list',
+      );
+      break;
+    }
     const settled = await prisma.freightEntry.count({
       where: {
         versionId: v.id,

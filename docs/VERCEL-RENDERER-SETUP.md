@@ -136,12 +136,13 @@ key sends vendor BOMs — nothing to add.
 Vercel reads this from the committed `vercel.json`, so there is nothing to click —
 just verify after the next deploy.
 
-**Deployments** → newest → **Functions** tab. You should see two:
+**Deployments** → newest → **Functions** tab. You should see three:
 
 | Function     | Memory  | Max duration |
 | ------------ | ------- | ------------ |
 | `api/index`  | default | 30 s         |
-| `api/render` | 2 GB    | 60 s         |
+| `api/render` | 3 GB    | 180 s        |
+| `api/cron`   | default | 300 s        |
 
 If `api/render` is missing, `vercel.json` did not get committed.
 
