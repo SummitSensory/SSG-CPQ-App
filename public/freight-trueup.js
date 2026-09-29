@@ -396,6 +396,20 @@
     bannerTimer = setInterval(refreshBanner, 300000);
   }
 
+  /**
+   * Stop polling and take the banner down. Called by the shell when the session ends
+   * (sign-out, or a refresh that fails). Left running, the next poll 401s with no
+   * refresh token, and the shell's authed() answers that by redrawing the login
+   * screen — every five minutes, wiping whatever was being typed into it.
+   */
+  function unmountBanner() {
+    if (bannerTimer) clearInterval(bannerTimer);
+    bannerTimer = null;
+    bannerUser = null;
+    var host = el('ftuBanner');
+    if (host) host.innerHTML = '';
+  }
+
   var bannerUser = null,
     bannerTimer = null,
     bannerTheme = null;
@@ -2753,6 +2767,7 @@
     dashboardSection: dashboardSection,
     bindDashboard: bindDashboard,
     mountBanner: mountBanner,
+    unmountBanner: unmountBanner,
     refreshBanner: refreshBanner,
     openWorkspace: openWorkspace,
     mountPanel: mountPanel,
