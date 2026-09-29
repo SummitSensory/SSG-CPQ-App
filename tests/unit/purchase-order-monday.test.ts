@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * A sent PO marks each of its parts on the order's Manufacturing Process row: Order
  * Status (color_mm58wahg) "PO Sent to Mfg", Purchase Order ID (text_mm7na5v3) the PO
  * number, Payment Status (color_mm7nc8d1) "Not Paid". Parts are matched to subitems by
- * SKU; a part with no subitem gets one.
+ * SKU; only existing subitems are updated, and a part with none is reported, never created.
  */
 
 vi.mock('../../src/lib/logger.js', () => ({
@@ -83,22 +83,31 @@ beforeEach(() => {
 });
 
 describe('pushPurchaseOrderToMonday', () => {
-  it('updates the matching subitem and creates one for a part that has none', async () => {
+  it('updates existing subitems only, and reports a part that has none', async () => {
     const out = await pushPurchaseOrderToMonday('po1');
     expect(out).toEqual(
       expect.objectContaining({
         pushed: true,
         itemId: 'mfg1',
         updated: ['8EMBLQ'],
-        created: ['NEW-1'],
+        notFound: ['NEW-1'],
       }),
     );
     expect(setColumnValues).toHaveBeenCalledWith('6533701061', 'sub1', EXPECTED);
     expect(setColumnValues).toHaveBeenCalledWith('6533701061', 'sub2', EXPECTED);
-    expect(createSubitem).toHaveBeenCalledWith('mfg1', 'Part with no subitem yet', {
-      ...EXPECTED,
-      text_mm587ez0: 'NEW-1',
-    });
+    expect(setColumnValues).toHaveBeenCalledTimes(2);
+    // A PO never adds rows to the board.
+    expect(createSubitem).not.toHaveBeenCalled();
+  });
+
+  it('reports when no part on the PO matches a subitem, and writes nothing', async () => {
+    mondayQuery.mockResolvedValueOnce({ items: [{ subitems: [] }] });
+    const out = await pushPurchaseOrderToMonday('po1');
+    expect(out.pushed).toBe(false);
+    expect(out.notFound).toEqual(['8EMBLQ', 'NEW-1']);
+    expect(out.skipped).toMatch(/matched a subitem/);
+    expect(setColumnValues).not.toHaveBeenCalled();
+    expect(createSubitem).not.toHaveBeenCalled();
   });
 
   it('reports, rather than throws, when the order has no Manufacturing Process row', async () => {

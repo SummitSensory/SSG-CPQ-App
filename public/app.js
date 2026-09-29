@@ -11336,8 +11336,12 @@
         var push = p.mondayResult || null;
         var mondayNote = p.status !== 'SENT' ? ''
           : push && push.pushed
-            ? '<span class="muted" style="font-size:11.5px;">monday updated — ' + ((push.updated || []).length + (push.created || []).length) + ' part' + (((push.updated || []).length + (push.created || []).length) === 1 ? '' : 's') + '</span>'
+            ? '<span class="muted" style="font-size:11.5px;">monday updated — ' + (push.updated || []).length + ' part' + ((push.updated || []).length === 1 ? '' : 's') + '</span>'
             : '<span style="font-size:11.5px;color:#9c3327;" title="' + esc((push && (push.error || push.skipped)) || '') + '">Not recorded on monday</span>';
+        // Only existing subitems are updated; a SKU with none on the row is named here.
+        if (p.status === 'SENT' && push && push.notFound && push.notFound.length) {
+          mondayNote += '<span style="font-size:11.5px;color:#9c3327;">No subitem for ' + push.notFound.map(esc).join(', ') + '</span>';
+        }
         var last = p.lastSend && p.lastSend.status !== 'SENT' && p.lastSend.status !== 'DELIVERED'
           ? '<span style="font-size:11.5px;color:#9c3327;" title="' + esc(p.lastSend.error || '') + '">Last send ' + esc(String(p.lastSend.status).toLowerCase()) + '</span>' : '';
         return '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 12px;border-top:1px solid #f2f3ef;">' +
@@ -11564,7 +11568,10 @@
         close();
         if (reload) await reload();
         var push = res && res.mondayPush;
-        if (push && !push.pushed) {
+        var missing = (push && push.notFound) || [];
+        if (push && push.pushed && missing.length) {
+          alert(res.reference + ' was emailed and monday was updated, but these parts have no subitem on the Manufacturing Process row, so they were not marked: ' + missing.join(', ') + '\n\nCheck the SKU on those subitems and update them by hand.');
+        } else if (push && !push.pushed) {
           alert(res.reference + ' was emailed to the vendor, but it was not recorded on monday: ' + (push.error || push.skipped || 'unknown reason') + '\n\nUpdate the Manufacturing Process subitems by hand for this PO.');
         } else if (typeof toast === 'function') {
           toast(res.reference + ' sent to ' + d.vendor + (push && push.pushed ? ' — monday updated.' : '.'));
