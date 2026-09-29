@@ -244,7 +244,7 @@
     var r = await api(path, opts);
     if (r.status === 401) {
       if (await refresh()) r = await api(path, opts);
-      else { clearTokens(); renderLogin('Your session expired. Please sign in again.'); return r; }
+      else { endSession(); renderLogin('Your session expired. Please sign in again.'); return r; }
     }
     return r;
   }
@@ -17487,7 +17487,13 @@
   async function logout() {
     var rt = tokens().rt;
     try { if (rt) await api('/auth/logout', { method: 'POST', noAuth: true, body: { refreshToken: rt } }); } catch (e) {}
-    clearTokens(); renderLogin();
+    endSession(); renderLogin();
+  }
+
+  /** Drop the tokens and stop anything still polling on the old session's behalf. */
+  function endSession() {
+    clearTokens();
+    if (window.FreightTrueUp && window.FreightTrueUp.unmountBanner) window.FreightTrueUp.unmountBanner();
   }
 
   /** An emailed "Open the order" link (see src/handoff/orderLockedNotice.ts). */
