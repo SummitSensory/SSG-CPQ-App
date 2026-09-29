@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 /**
- * A cached Chromium the platform reclaimed while the container was frozen does not
- * always throw — sometimes it just never answers. Production 2026-09-24/26: a Save PDF
- * and three monday-file uploads, each a later request on an already-warm container,
- * waited out the function's whole 180 s and died with a 504. renderPdf must turn that
- * hang into a bounded wait and one retry on a fresh browser — and must NOT retry a
- * failure on a browser it has only just launched.
+ * One browser per render (see acquirePage in src/render/pdf.ts): the serverless
+ * Chromium runs `--single-process`, where closing a page kills the whole browser, so a
+ * cached one was dead after every render — and one request closing a page could take
+ * down another's print (`Page.printToPDF: Printing failed`, production 2026-09-29).
+ * These pin the contract: every render gets its own browser, it is closed afterwards,
+ * a Chromium failure is retried once, and nothing waits out the function's 180 s.
  *
  * `vi.mock` (hoisted), for the reason tests/unit/pdf-pagination-wait.test.ts gives.
  */
@@ -21,9 +21,15 @@ function makePage(pdf: () => Promise<Buffer>) {
     waitForFunction: vi.fn().mockResolvedValue(undefined),
   };
 }
-function makeBrowser(newPage: () => Promise<unknown>) {
+function makeBrowser(newPage: () => Promise<ReturnType<typeof makePage>>) {
+  const pages: Array<ReturnType<typeof makePage>> = [];
   return {
-    newPage: vi.fn(newPage),
+    pages,
+    newPage: vi.fn(async () => {
+      const p = await newPage();
+      pages.push(p);
+      return p;
+    }),
     close: vi.fn().mockResolvedValue(undefined),
     isConnected: vi.fn().mockReturnValue(true),
   };
@@ -41,7 +47,7 @@ vi.mock('playwright-core', () => ({
   },
 }));
 
-const { renderPdf, closeRenderer, setRenderLimitsForTests } =
+const { renderPdf, acquirePage, warmRenderer, closeRenderer, setRenderLimitsForTests } =
   await import('../../src/render/pdf.js');
 
 const good = () => makeBrowser(async () => makePage(async () => Buffer.from('fresh-pdf')));
@@ -56,50 +62,79 @@ beforeEach(async () => {
 });
 afterEach(() => setRenderLimitsForTests(null));
 
-/** Render once so the next call is handed the cached (reused) browser. */
-async function warmWith(browser: ReturnType<typeof makeBrowser>) {
-  nextBrowser = () => browser;
-  await renderPdf('<p>first</p>');
-  nextBrowser = good;
-}
-
-describe('renderPdf on a hung browser', () => {
-  it('a reused browser that never opens a page is replaced within seconds, not 180', async () => {
-    let calls = 0;
-    const stale = makeBrowser(async () => {
-      calls += 1;
-      return calls === 1 ? makePage(async () => Buffer.from('warm-pdf')) : never();
-    });
-    await warmWith(stale);
-
-    const out = renderPdf('<p>second</p>');
-    await expect(out).resolves.toEqual(Buffer.from('fresh-pdf'));
+describe('renderPdf browser lifecycle', () => {
+  it('gives every render its own browser and closes it — never the page on its own', async () => {
+    await expect(renderPdf('<p>one</p>')).resolves.toEqual(Buffer.from('fresh-pdf'));
+    await expect(renderPdf('<p>two</p>')).resolves.toEqual(Buffer.from('fresh-pdf'));
     expect(launched).toHaveLength(2);
+    for (const b of launched) {
+      expect(b.close).toHaveBeenCalledTimes(1);
+      // Closing a page is what crashes a single-process Chromium.
+      expect(b.pages[0]?.close).not.toHaveBeenCalled();
+    }
   });
 
-  it('a render that hangs on a reused browser is retried once on a fresh one', async () => {
+  it('keeps concurrent renders on separate browsers', async () => {
+    let release: (() => void) | undefined;
+    setRenderLimitsForTests({ launchMs: 500, newPageMs: 10, renderMs: 5_000 });
+    const gate = new Promise<void>((r) => (release = r));
+    nextBrowser = () =>
+      makeBrowser(async () =>
+        makePage(async () => {
+          await gate;
+          return Buffer.from('slow-pdf');
+        }),
+      );
+    const a = renderPdf('<p>a</p>');
+    const b = renderPdf('<p>b</p>');
+    await vi.waitFor(() => expect(launched).toHaveLength(2));
+    // One finishing (and closing its browser) must not touch the other's.
+    expect(launched[0]?.close).not.toHaveBeenCalled();
+    expect(launched[1]?.close).not.toHaveBeenCalled();
+    release?.();
+    await expect(Promise.all([a, b])).resolves.toHaveLength(2);
+  });
+
+  it('retries a Chromium failure once, on another fresh browser', async () => {
     let n = 0;
-    const stale = makeBrowser(async () =>
-      makePage(async () => (++n === 1 ? Buffer.from('warm-pdf') : never<Buffer>())),
-    );
-    await warmWith(stale);
-
-    const out = renderPdf('<p>second</p>');
-    await expect(out).resolves.toEqual(Buffer.from('fresh-pdf'));
+    nextBrowser = () =>
+      makeBrowser(async () =>
+        makePage(async () =>
+          ++n === 1
+            ? Promise.reject(
+                new Error('page.pdf: Protocol error (Page.printToPDF): Printing failed'),
+              )
+            : Buffer.from('retried-pdf'),
+        ),
+      );
+    await expect(renderPdf('<p>x</p>')).resolves.toEqual(Buffer.from('retried-pdf'));
     expect(launched).toHaveLength(2);
+    expect(launched[0]?.close).toHaveBeenCalledTimes(1);
   });
 
-  it('does not retry a failure on a browser it has just launched', async () => {
+  it('reports a failure that repeats instead of retrying forever', async () => {
     nextBrowser = () =>
       makeBrowser(async () => makePage(async () => Promise.reject(new Error('document broken'))));
     await expect(renderPdf('<p>x</p>')).rejects.toThrow('document broken');
-    expect(launched).toHaveLength(1);
+    expect(launched).toHaveLength(2);
   });
 
-  it('gives up with an error, not a 180-second hang, when a fresh browser hangs too', async () => {
+  it('gives up with an error, not a 180-second hang, and does not retry a timeout', async () => {
     nextBrowser = () => makeBrowser(async () => makePage(() => never<Buffer>()));
-    const out = renderPdf('<p>x</p>');
-    const settled = expect(out).rejects.toThrow(/took over 45 ms/);
-    await settled;
+    await expect(renderPdf('<p>x</p>')).rejects.toThrow(/took over 45 ms/);
+    expect(launched).toHaveLength(1);
+    expect(launched[0]?.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes a browser that never opens a page, within the limit', async () => {
+    nextBrowser = () => makeBrowser(() => never());
+    await expect(acquirePage()).rejects.toThrow(/opening a page took over 10 ms/);
+    expect(launched[0]?.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('warm-up prepares Chromium without leaving a browser running', async () => {
+    const out = await warmRenderer();
+    expect(out.ok).toBe(true);
+    expect(launched).toHaveLength(0);
   });
 });

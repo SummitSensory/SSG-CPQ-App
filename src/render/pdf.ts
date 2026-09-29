@@ -1,4 +1,4 @@
-import { readFile, readdir, rm, statfs } from 'node:fs/promises';
+import { readFile, readdir, rm, stat, statfs } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { extname, join, sep } from 'node:path';
 import { logger } from '../lib/logger.js';
@@ -17,9 +17,10 @@ import { env } from '../config/env.js';
  *      are heavy and only needed when someone actually exports. A deployment
  *      without them installed still boots; the export just reports that PDF is
  *      unavailable and Excel keeps working.
- *   2. **The browser is reused across invocations.** Cold start dominates the
- *      cost (~2-4s), so the instance is cached on the module for the life of the
- *      warm serverless container.
+ *   2. **One browser per render, never shared.** See acquirePage for why a cached
+ *      browser cannot work with the serverless build of Chromium. What is expensive
+ *      on a cold container is fetching and unpacking the pack, not launching the
+ *      browser, and the unpacked copy is what stays warm (see chromiumExecutable).
  *
  * Vercel: fits inside Pro's limits (3 GB memory, 300 s duration). The full
  * Playwright browser exceeds the 250 MB bundle cap, so `@sparticuz/chromium-min`
@@ -70,8 +71,6 @@ type Page = {
  */
 const PAGINATION_MARKER = 'paginateProposalArea';
 
-let browserPromise: Promise<Browser> | null = null;
-
 /** True when the renderer's optional dependencies are installed. */
 export async function pdfAvailable(): Promise<boolean> {
   try {
@@ -82,45 +81,44 @@ export async function pdfAvailable(): Promise<boolean> {
   }
 }
 
-async function launch(): Promise<Browser> {
-  const { chromium } = (await import('playwright-core')) as unknown as {
-    chromium: { launch: (o: Record<string, unknown>) => Promise<Browser> };
-  };
+type LaunchConfig = { executablePath?: string; args: string[] };
+let executablePromise: Promise<LaunchConfig> | null = null;
 
-  // Locally, Playwright's own Chromium is on the machine and no pack is needed.
-  // On a serverless host the pack has to be fetched and unpacked to /tmp first.
-  let executablePath: string | undefined;
-  let args: string[] = ['--no-sandbox', '--disable-dev-shm-usage'];
-  if (env.CHROMIUM_PACK_URL) {
-    await freeServerlessTmp();
-    const mod = (await import('@sparticuz/chromium-min')) as unknown as {
-      default: { executablePath: (url: string) => Promise<string>; args: string[] };
-    };
-    const sparticuz = mod.default;
-    executablePath = await sparticuz.executablePath(env.CHROMIUM_PACK_URL);
-    // The downloaded pack is only the compressed source of what was just unpacked to
-    // /tmp/chromium (and executablePath() returns that copy whenever it exists), so
-    // keeping it only spends ~65 MB of the 512 MB /tmp.
-    await rm(join(tmpdir(), 'chromium-pack'), { recursive: true, force: true }).catch(
-      () => undefined,
-    );
-    args = sparticuz.args.map((a) =>
-      a.startsWith('--disk-cache-size=') ? `--disk-cache-size=${DISK_CACHE_BYTES}` : a,
-    );
-  }
-
-  try {
-    return await chromium.launch({
-      args,
-      ...(executablePath ? { executablePath } : {}),
-      headless: true,
+/**
+ * Where Chromium is and how to start it — resolved once per container.
+ *
+ * Locally, Playwright's own Chromium is on the machine and no pack is needed. On the
+ * serverless host the pack is fetched and unpacked to /tmp: that is the several-second
+ * cold start, and it is the part worth keeping warm. Launching the unpacked binary
+ * afterwards takes milliseconds.
+ */
+function chromiumExecutable(): Promise<LaunchConfig> {
+  if (!executablePromise) {
+    const resolving = (async (): Promise<LaunchConfig> => {
+      if (!env.CHROMIUM_PACK_URL) return { args: ['--no-sandbox', '--disable-dev-shm-usage'] };
+      const mod = (await import('@sparticuz/chromium-min')) as unknown as {
+        default: { executablePath: (url: string) => Promise<string>; args: string[] };
+      };
+      const sparticuz = mod.default;
+      const executablePath = await sparticuz.executablePath(env.CHROMIUM_PACK_URL);
+      // The downloaded pack is only the compressed source of what was just unpacked to
+      // /tmp/chromium (and executablePath() returns that copy whenever it exists), so
+      // keeping it only spends ~65 MB of the 512 MB /tmp.
+      await rm(join(tmpdir(), 'chromium-pack'), { recursive: true, force: true }).catch(
+        () => undefined,
+      );
+      const args = sparticuz.args.map((a) =>
+        a.startsWith('--disk-cache-size=') ? `--disk-cache-size=${DISK_CACHE_BYTES}` : a,
+      );
+      return { executablePath, args };
+    })();
+    executablePromise = resolving;
+    // A failed fetch must not be handed to the next caller as the answer.
+    resolving.catch(() => {
+      if (executablePromise === resolving) executablePromise = null;
     });
-  } catch (err) {
-    if (err instanceof Error && err.message.includes('ENOSPC')) {
-      logger.error({ err, tmp: await tmpUsage() }, 'pdf: /tmp is full, Chromium could not launch');
-    }
-    throw err;
   }
+  return executablePromise;
 }
 
 /**
@@ -130,25 +128,50 @@ async function launch(): Promise<Browser> {
  */
 const DISK_CACHE_BYTES = 1024 * 1024;
 
+/** Every browser this module has launched and not yet closed. */
+const openBrowsers = new Set<Browser>();
+
+async function launch(): Promise<Browser> {
+  const { chromium } = (await import('playwright-core')) as unknown as {
+    chromium: { launch: (o: Record<string, unknown>) => Promise<Browser> };
+  };
+  const { executablePath, args } = await chromiumExecutable();
+  if (env.CHROMIUM_PACK_URL) await freeServerlessTmp();
+  try {
+    const browser = await chromium.launch({
+      args,
+      ...(executablePath ? { executablePath } : {}),
+      headless: true,
+    });
+    openBrowsers.add(browser);
+    return browser;
+  } catch (err) {
+    if (err instanceof Error && err.message.includes('ENOSPC')) {
+      logger.error({ err, tmp: await tmpUsage() }, 'pdf: /tmp is full, Chromium could not launch');
+    }
+    throw err;
+  }
+}
+
 /**
- * What a previous Chromium in this container left in /tmp.
+ * Profiles a previous browser in this container failed to clean up.
  *
  * Vercel's /tmp is 512 MB and lives as long as the warm container does. Each launch
- * gives Chromium a fresh profile directory there, which Playwright deletes only when
- * IT closes the browser. A browser the platform killed while the container was frozen
- * (see discardBrowser) is never closed that way, so its profile — disk cache included
- * — stays behind, and every relaunch adds another. On 2026-09-28 that filled /tmp:
+ * gives Chromium a profile directory there, which Playwright deletes when the browser
+ * exits. One that never exits cleanly leaves it behind. On 2026-09-28 the old cached
+ * browser (which died on every page close — see acquirePage) filled /tmp that way:
  * `browserType.launch: ENOSPC: no space left on device, mkdtemp
  * '/tmp/playwright_chromiumdev_profile-…'` — Save PDF failed, fell back to the browser
  * print dialog, and the rep got the 76%-scaled copy the server renderer exists to
  * prevent.
  *
- * Only called on the serverless host, and only right before a launch: one browser per
- * container, and a launch means the previous one is gone, so nothing live owns these.
- * Never locally — the machine's temp directory is shared with the developer's own
- * Playwright runs.
+ * Only directories older than any render can be: several requests can render at once
+ * in one container, each with its own live profile, and none of them outlives the
+ * function's 180 s limit. Never locally — the machine's temp directory is shared with
+ * the developer's own Playwright runs.
  */
 const STALE_TMP_PREFIXES = ['playwright_chromiumdev_profile-', 'playwright-artifacts-'];
+const STALE_TMP_AGE_MS = 10 * 60_000;
 
 async function freeServerlessTmp(): Promise<void> {
   const root = tmpdir();
@@ -158,7 +181,16 @@ async function freeServerlessTmp(): Promise<void> {
   } catch {
     return;
   }
-  const stale = names.filter((n) => STALE_TMP_PREFIXES.some((p) => n.startsWith(p)));
+  const cutoff = Date.now() - STALE_TMP_AGE_MS;
+  const candidates = names.filter((n) => STALE_TMP_PREFIXES.some((p) => n.startsWith(p)));
+  const stale = (
+    await Promise.all(
+      candidates.map(async (n) => {
+        const s = await stat(join(root, n)).catch(() => null);
+        return s && s.mtimeMs < cutoff ? n : null;
+      }),
+    )
+  ).filter((n): n is string => n !== null);
   if (!stale.length) return;
   await Promise.all(
     stale.map((n) => rm(join(root, n), { recursive: true, force: true }).catch(() => undefined)),
@@ -177,15 +209,10 @@ async function tmpUsage(): Promise<{ freeBytes: number; totalBytes: number } | n
 }
 
 /**
- * Time limits on every call into Chromium.
- *
- * A cached browser the platform reclaimed while the container was frozen does not
- * always FAIL — sometimes its pipe just never answers. Without a limit, `newPage()` or
- * `page.pdf()` then waited out the function's whole 180 s and the request died with a
- * 504: in production on 2026-09-24/26 that was a Save PDF and three monday-file uploads,
- * every one of them a later request (req-2, req-4) on an already-warm container, while
- * the first request on each fresh one rendered in ~6 s. A limit turns the hang into an
- * error, and the error into one retry on a fresh browser (see renderPdf).
+ * Time limits on every call into Chromium. A browser that stops answering would
+ * otherwise wait out the function's whole 180 s and the request would die with a 504
+ * (production, 2026-09-24/26: a Save PDF and three monday-file uploads). A limit turns
+ * the hang into an error the caller can report, or retry (see renderPdf).
  */
 const DEFAULT_LIMITS = { launchMs: 60_000, newPageMs: 10_000, renderMs: 45_000 };
 let limits = { ...DEFAULT_LIMITS };
@@ -205,37 +232,29 @@ function withTimeout<T>(work: Promise<T>, ms: number, what: string): Promise<T> 
   return Promise.race([work, limit]).finally(() => clearTimeout(timer));
 }
 
-/** True while the cached browser is one this container has already used. */
-let browserReused = false;
-
-async function getBrowser(): Promise<Browser> {
-  const existing = browserPromise ? await browserPromise.catch(() => null) : null;
-  if (existing && existing.isConnected()) {
-    browserReused = true;
-    return existing;
-  }
-  browserReused = false;
-  const launching = withTimeout(launch(), limits.launchMs, 'launching Chromium');
-  browserPromise = launching;
-  // A launch that failed must not be handed to the next caller as "the browser".
-  launching.catch(() => {
-    if (browserPromise === launching) browserPromise = null;
-  });
-  return launching;
+/**
+ * Close a browser without letting a stuck one hold the request. Playwright removes the
+ * profile directory once the process exits; one that never exits is swept later (see
+ * freeServerlessTmp).
+ */
+async function closeBrowser(browser: Browser): Promise<void> {
+  openBrowsers.delete(browser);
+  await withTimeout(browser.close(), 5_000, 'closing the browser').catch(() => undefined);
 }
 
 /**
- * Start Chromium now, so the next render does not pay the cold start. Called when a
- * rep opens a proposal preview (GET /render/warm), a few seconds before they are
+ * Fetch and unpack Chromium now, so the next render does not pay the cold start.
+ * Called when a rep opens a proposal (GET /render/warm), a few seconds before they are
  * likely to press Save PDF or Print. Never throws.
+ *
+ * `reused` is true when this container had already unpacked it.
  */
 export async function warmRenderer(): Promise<{ ok: boolean; reused: boolean; ms: number }> {
   const t0 = Date.now();
   if (!(await pdfAvailable())) return { ok: false, reused: false, ms: 0 };
+  const reused = executablePromise !== null;
   try {
-    const page = await acquirePage();
-    const reused = browserReused;
-    await page.close().catch(() => undefined);
+    await withTimeout(chromiumExecutable(), limits.launchMs, 'preparing Chromium');
     return { ok: true, reused, ms: Date.now() - t0 };
   } catch (err) {
     logger.warn({ err }, 'pdf: warm-up failed');
@@ -244,32 +263,20 @@ export async function warmRenderer(): Promise<{ ok: boolean; reused: boolean; ms
 }
 
 /**
- * Throw the cached browser away.
+ * A page on a browser of its own. Closing the page closes that browser.
  *
- * `isConnected()` is not a liveness check on a serverless host. The container is
- * frozen between invocations and Chromium is a child process of it: when the platform
- * reclaims that process, the remote-debugging pipe is not closed in a way Playwright
- * notices, so `isConnected()` keeps answering true for a browser that is gone. The
- * failure then lands on the first call that actually talks to it —
- * `browser.newPage(): Target page, context or browser has been closed` — which is
- * what a user sees as a PDF export that fails once, apparently at random, and works on
- * the retry they do by hand.
- */
-function discardBrowser(): void {
-  const stale = browserPromise;
-  browserPromise = null;
-  // Best effort, and never awaited: the process is usually already gone, and waiting
-  // on a close that cannot complete would add the timeout to the retry.
-  void stale?.then((b) => b.close().catch(() => undefined)).catch(() => undefined);
-}
-
-/**
- * A page on the shared, cached browser — one retry on a fresh browser if the
- * cached one turned out to be dead (see discardBrowser's own comment on why
- * `isConnected()` cannot catch this itself). Shared by every caller that needs a
- * Chromium page rather than a full `renderPdf`, so a second consumer of headless
- * Chromium (see lib/pdfRaster.ts) reuses the same warm browser instead of paying
- * a second cold start.
+ * Why not one cached browser per container, which is what this used to be: the
+ * serverless build runs Chromium with `--single-process`, and in that mode closing a
+ * page kills the whole browser (SIGTRAP) — reproduced on Amazon Linux 2023 with the
+ * same pack, even for an empty page. So the cached browser was dead after every
+ * render: the next request on a warm container waited out the new-page limit and
+ * relaunched, each dead browser could leave its profile in /tmp (the ENOSPC above),
+ * and a request that closed a page while another was still printing on the shared
+ * browser took that render down with it (`Page.printToPDF: Printing failed`, on
+ * 2026-09-29). A browser of its own per render costs ~15 ms to launch once the pack
+ * is unpacked, and nothing one request does can reach another.
+ *
+ * Shared with lib/pdfRaster.ts, which needs a page rather than a full renderPdf.
  */
 export async function acquirePage(): Promise<Page> {
   if (!(await pdfAvailable())) {
@@ -277,17 +284,26 @@ export async function acquirePage(): Promise<Page> {
       'PDF rendering is not installed on this deployment — run: pnpm add playwright-core @sparticuz/chromium-min',
     );
   }
+  const browser = await withTimeout(launch(), limits.launchMs, 'launching Chromium');
+  let page: Page;
   try {
-    return await withTimeout((await getBrowser()).newPage(), limits.newPageMs, 'opening a page');
+    page = await withTimeout(browser.newPage(), limits.newPageMs, 'opening a page');
   } catch (err) {
-    logger.warn({ err }, 'pdf: cached browser was dead, relaunching');
-    discardBrowser();
-    return await withTimeout(
-      (await getBrowser()).newPage(),
-      limits.newPageMs,
-      'opening a page on a fresh browser',
-    );
+    await closeBrowser(browser);
+    throw err;
   }
+  // Only `close` changes: the caller's close is the end of this browser's one job, and
+  // closing the page itself first is exactly what crashes a single-process Chromium.
+  return {
+    setContent: (html, opts) => page.setContent(html, opts),
+    emulateMedia: (opts) => page.emulateMedia(opts),
+    pdf: (opts) => page.pdf(opts),
+    waitForFunction: (fn, arg, opts) => page.waitForFunction(fn, arg, opts),
+    goto: (url, opts) => page.goto(url, opts),
+    route: (pattern, handler) => page.route(pattern, handler),
+    evaluate: <T>(script: string) => page.evaluate<T>(script),
+    close: () => closeBrowser(browser),
+  };
 }
 
 /**
@@ -410,48 +426,27 @@ export async function renderPdf(html: string, opts: PdfOptions = {}): Promise<Bu
   }
   html = await inlineKnownAssets(html);
   /*
-   * One retry on a fresh browser.
-   *
-   * The first attempt may be handed a cached browser whose process the platform has
-   * since reclaimed (see discardBrowser) — it either fails outright or never answers,
-   * which the time limits turn into an error. That is not a real failure and it is not
-   * worth showing anyone: the second attempt launches cold and succeeds. A cold start
-   * is a few seconds, which is why the cache exists at all, so this pays that cost
-   * only when it has to.
-   *
-   * Deliberately once, and only when the failed attempt was on a REUSED browser. If a
-   * freshly launched browser cannot render, something is actually wrong — the chromium
-   * pack is missing, the function is out of memory, the document is broken — and a
-   * retry would only double the wait before the same error.
+   * One retry, on another fresh browser, when Chromium itself failed — a crash or a
+   * protocol error such as `Page.printToPDF: Printing failed`. Never after a render
+   * that timed out: that already cost the rep 45 s, and a document that hangs one
+   * browser hangs the next. A launch that fails (no pack, /tmp full) is not retried
+   * either — it throws from acquirePage before an attempt starts.
    */
-  const attempt = async (): Promise<{ pdf?: Buffer; err?: unknown; reused: boolean }> => {
+  const attempt = async (): Promise<Buffer> => {
     const page = await acquirePage();
-    const reused = browserReused;
     try {
-      return {
-        pdf: await withTimeout(renderOnPage(page, html, opts), limits.renderMs, 'rendering'),
-        reused,
-      };
-    } catch (err) {
-      return { err, reused };
+      return await withTimeout(renderOnPage(page, html, opts), limits.renderMs, 'rendering');
     } finally {
-      // Close the page but keep the browser: the next export in this container skips
-      // the cold start entirely. Not awaited past a moment — a close on a dead browser
-      // can hang exactly like the render did.
-      await withTimeout(page.close(), 5_000, 'closing the page').catch(() => undefined);
+      await page.close();
     }
   };
-  const first = await attempt();
-  if (first.pdf) return first.pdf;
-  if (!first.reused) throw first.err;
-  logger.warn(
-    { err: first.err },
-    'pdf: render failed on a reused browser; retrying on a fresh one',
-  );
-  discardBrowser();
-  const second = await attempt();
-  if (second.pdf) return second.pdf;
-  throw second.err;
+  try {
+    return await attempt();
+  } catch (err) {
+    if (err instanceof RenderTimeoutError) throw err;
+    logger.warn({ err }, 'pdf: render failed; retrying once on a fresh browser');
+    return await attempt();
+  }
 }
 
 async function renderOnPage(page: Page, html: string, opts: PdfOptions): Promise<Buffer> {
@@ -508,10 +503,7 @@ async function renderOnPage(page: Page, html: string, opts: PdfOptions): Promise
   });
 }
 
-/** Release the cached browser. Called on shutdown; safe to call twice. */
+/** Close every browser still open. Called on shutdown; safe to call twice. */
 export async function closeRenderer(): Promise<void> {
-  const b = browserPromise ? await browserPromise.catch(() => null) : null;
-  browserPromise = null;
-  if (b)
-    await b.close().catch((e: unknown) => logger.warn({ err: e }, 'pdf: browser close failed'));
+  await Promise.all(Array.from(openBrowsers, (b) => closeBrowser(b)));
 }

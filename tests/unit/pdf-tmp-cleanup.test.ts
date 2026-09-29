@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -70,15 +70,19 @@ afterEach(async () => {
 });
 
 describe('renderPdf on the serverless host', () => {
-  it("clears dead browsers' profiles and the spent pack before launching", async () => {
+  it("clears dead browsers' profiles and the spent pack, sparing live ones", async () => {
+    const anHourAgo = new Date(Date.now() - 60 * 60_000);
     for (const d of [
       'playwright_chromiumdev_profile-aaaa',
       'playwright_chromiumdev_profile-bbbb',
       'playwright-artifacts-cccc',
+      // Another request rendering in this container right now.
+      'playwright_chromiumdev_profile-live',
       'chromium-pack',
     ]) {
       mkdirSync(join(fakeTmp, d));
       writeFileSync(join(fakeTmp, d, 'Cache'), 'x'.repeat(1024));
+      if (!d.endsWith('-live')) utimesSync(join(fakeTmp, d), anHourAgo, anHourAgo);
     }
     writeFileSync(join(fakeTmp, 'chromium'), 'binary');
     writeFileSync(join(fakeTmp, 'unrelated.txt'), 'keep me');
@@ -89,6 +93,7 @@ describe('renderPdf on the serverless host', () => {
     expect(existsSync(join(fakeTmp, 'playwright_chromiumdev_profile-bbbb'))).toBe(false);
     expect(existsSync(join(fakeTmp, 'playwright-artifacts-cccc'))).toBe(false);
     expect(existsSync(join(fakeTmp, 'chromium-pack'))).toBe(false);
+    expect(existsSync(join(fakeTmp, 'playwright_chromiumdev_profile-live'))).toBe(true);
     // The unpacked browser and anything that is not Chromium's own leftovers stay.
     expect(existsSync(join(fakeTmp, 'chromium'))).toBe(true);
     expect(existsSync(join(fakeTmp, 'unrelated.txt'))).toBe(true);
