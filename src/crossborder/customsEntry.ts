@@ -67,6 +67,11 @@ export interface CustomsEntryPatch {
    */
   tariff9979Claimed?: boolean | null;
   /**
+   * Hand-typed wording for this proposal's Section C tariff item 9979.00.00 row —
+   * replaces CrossBorderSetting's wording for the answer above. Wording only.
+   */
+  tariff9979TextOverride?: string | null;
+  /**
    * A human-entered STATUS about whether medical/assistive-device GST/HST relief is
    * being claimed — distinct from the tax-rate calculation engine and from taxLabel.
    * Never inferred; null means undetermined.

@@ -4221,6 +4221,12 @@ model ProposalCustomsEntry {
   /// not this software. true = claimed, false = affirmatively not claimed (standard
   /// duty treatment), null = nobody has answered yet — null is not zero.
   tariff9979Claimed     Boolean?
+  /// Hand-typed wording printed for this proposal's Section C tariff item 9979.00.00
+  /// row, in place of the admin wording for its answer (CrossBorderSetting
+  /// .tariff9979*Text). Wording only — tariff9979Claimed still decides which
+  /// Cross-Border Terms clauses print and whether Section C is complete. Null/blank
+  /// follows the admin wording.
+  tariff9979TextOverride String?
   /// A human-entered STATUS about whether medical/assistive-device GST/HST relief is
   /// being claimed for this shipment — distinct from CanadianTaxRate/
   /// CrossBorderTaxabilityRule (which compute an actual tax amount) and from taxLabel
@@ -4353,6 +4359,13 @@ model CrossBorderSetting {
   /// defaultImporterOfRecord; changing this afterward never retroactively rewrites an
   /// already-created entry.
   defaultTariff9979Claimed        Boolean?
+  /// The wording printed in the Section C tariff item 9979.00.00 row for each answer
+  /// to tariff9979Claimed — claimed, not claimed, and not yet determined. Read live;
+  /// null/blank prints the built-in wording ("Claimed", "Not claimed", "Not yet
+  /// determined"). A proposal's own tariff9979TextOverride replaces all three.
+  tariff9979ClaimedText           String?
+  tariff9979NotClaimedText        String?
+  tariff9979UndeterminedText      String?
   /// The default customs-broker identity seeded onto a brand-new ProposalCustomsEntry
   /// — see ProposalCustomsEntry.customsBrokerName/.customsBrokerAddress. No @default;
   /// null until an administrator sets one. Seeds only a new entry's initial value;

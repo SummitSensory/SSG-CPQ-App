@@ -126,6 +126,31 @@ export function computeContentBlockers(input: {
   return blockers;
 }
 
+/**
+ * The wording the Section C tariff item 9979.00.00 row prints: the proposal's own
+ * hand-typed override, else the admin wording for its answer, else null (the
+ * document prints its built-in wording). Blank counts as unset at every level, so
+ * clearing a box falls back rather than printing an empty cell.
+ */
+export function resolveTariff9979Text(
+  override: string | null | undefined,
+  claimed: boolean | null,
+  settings: {
+    tariff9979ClaimedText?: string | null;
+    tariff9979NotClaimedText?: string | null;
+    tariff9979UndeterminedText?: string | null;
+  } | null,
+): string | null {
+  const pick = (v: string | null | undefined): string | null => v?.trim() || null;
+  const admin =
+    claimed === true
+      ? settings?.tariff9979ClaimedText
+      : claimed === false
+        ? settings?.tariff9979NotClaimedText
+        : settings?.tariff9979UndeterminedText;
+  return pick(override) ?? pick(admin);
+}
+
 /** YYYY-MM-DD from a DATE column, in UTC. Rate and rule dates are calendar dates. */
 const isoDate = (d: Date): string => d.toISOString().slice(0, 10);
 
@@ -155,6 +180,13 @@ export interface CrossBorderState {
    * field's comment on ProposalCustomsEntry. null = not yet determined.
    */
   tariff9979Claimed: boolean | null;
+  /**
+   * The wording the Section C tariff item 9979.00.00 row prints, already resolved:
+   * this proposal's hand-typed override if set, otherwise the admin wording for its
+   * answer (read live). Null means print the built-in wording for the answer. Wording
+   * only — conditions and the content gate read tariff9979Claimed, never this.
+   */
+  tariff9979Text: string | null;
   /**
    * A human-entered STATUS about whether medical/assistive-device GST/HST relief is
    * being claimed for this shipment. Distinct from the tax-rate calculation engine.
@@ -298,6 +330,7 @@ export async function crossBorderStateFor(versionId: string): Promise<CrossBorde
       jurisdiction,
       tariffClassificationCode: null,
       tariff9979Claimed: null,
+      tariff9979Text: null,
       gstHstTreatment: null,
       hostSystemModel: null,
       importerOfRecord: null,
@@ -328,6 +361,11 @@ export async function crossBorderStateFor(versionId: string): Promise<CrossBorde
   // every `applicable: true` return below, same reasoning as the block above:
   // computed once here rather than repeated at each return point.
   const sectionCFields = {
+    tariff9979Text: resolveTariff9979Text(
+      customsRow?.tariff9979TextOverride,
+      tariff9979Claimed,
+      settings,
+    ),
     importerOfRecord: customsRow?.importerOfRecord ?? null,
     customsBrokerName: customsRow?.customsBrokerName ?? null,
     customsBrokerAddress: customsRow?.customsBrokerAddress ?? null,

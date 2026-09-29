@@ -6116,7 +6116,9 @@
           '<option value="true"' + (e.tariff9979Claimed === true ? ' selected' : '') + '>Claimed</option>' +
           '<option value="false"' + (e.tariff9979Claimed === false ? ' selected' : '') + '>Not claimed</option>' +
         '</select>' +
-        '<div class="muted" style="font-size:11px;line-height:1.5;margin-top:4px;">Whether these goods qualify for relief under tariff item 9979.00.00 (goods for persons with disabilities) is a classification decision for Summit and its customs broker, not something this application determines. Leave \u201cNot yet determined\u201d until that decision is made.</div></div>' +
+        '<div class="muted" style="font-size:11px;line-height:1.5;margin-top:4px;">Whether these goods qualify for relief under tariff item 9979.00.00 (goods for persons with disabilities) is a classification decision for Summit and its customs broker, not something this application determines. Leave \u201cNot yet determined\u201d until that decision is made.</div>' +
+        '<textarea id="cfTariff9979Text" rows="2" placeholder="Optional \u2014 type the exact wording to print for this row on this proposal" style="' + box + 'margin-top:8px;resize:vertical;font-family:inherit;">' + esc(e.tariff9979TextOverride || '') + '</textarea>' +
+        '<div class="muted" style="font-size:11px;line-height:1.5;margin-top:4px;">Prints in the Section C tariff item 9979.00.00 row instead of the standard wording for the answer above. Leave blank to use the wording set under Administration \u2192 Canada \u2192 Section C. The answer above still decides which cross-border terms print.</div></div>' +
       '<div style="margin-bottom:12px;"><label style="' + lbl + '">Tariff / customs classification code</label>' +
         '<input id="cfTariffCode" placeholder="e.g. from a broker or a classification ruling" value="' + esc(e.tariffClassificationCode || '') + '" style="' + box + '">' +
         '<div class="muted" style="font-size:11px;line-height:1.5;margin-top:4px;">Typed in, never inferred \u2014 this application does not classify goods or calculate duty from it. Enter the code your broker or a classification ruling gives you. Leave blank if it isn\u2019t known yet; a blank prints nothing.</div></div>' +
@@ -6210,6 +6212,7 @@
         currency: document.getElementById('cfCur').value,
         tariffClassificationCode: document.getElementById('cfTariffCode').value.trim() || null,
         tariff9979Claimed: (function () { var v = document.getElementById('cfTariff9979').value; return v === '' ? null : v === 'true'; })(),
+        tariff9979TextOverride: document.getElementById('cfTariff9979Text').value.trim() || null,
         gstHstTreatment: document.getElementById('cfGstHst').value || null,
         hostSystemModel: document.getElementById('cfHostSystem').value.trim() || null,
         customsBrokerName: document.getElementById('cfBrokerName').value.trim() || null,

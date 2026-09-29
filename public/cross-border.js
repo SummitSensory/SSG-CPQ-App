@@ -876,6 +876,20 @@
           'Fills the Tariff Item 9979.00.00 row. A classification decision for Summit and its customs broker, recorded per proposal.',
         ) +
         row(
+          'Tariff item 9979.00.00 wording',
+          '<div class="muted" style="font-size:11.5px;margin-bottom:3px;">When claimed</div>' +
+            textarea('tariff9979ClaimedText', s.tariff9979ClaimedText, 'Claimed') +
+            '<div class="muted" style="font-size:11.5px;margin:8px 0 3px;">When not claimed</div>' +
+            textarea('tariff9979NotClaimedText', s.tariff9979NotClaimedText, 'Not claimed') +
+            '<div class="muted" style="font-size:11.5px;margin:8px 0 3px;">While not yet determined</div>' +
+            textarea(
+              'tariff9979UndeterminedText',
+              s.tariff9979UndeterminedText,
+              'Not yet determined',
+            ),
+          'What the Tariff Item 9979.00.00 row prints for each answer. Type your own wording, or leave a box blank to print the standard wording shown in it. Read live, so a change applies to every proposal that hasn’t typed its own wording on its Customs and duties form.',
+        ) +
+        row(
           'Customs broker, by default',
           text(
             'defaultCustomsBrokerName',
