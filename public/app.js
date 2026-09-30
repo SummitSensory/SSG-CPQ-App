@@ -2388,6 +2388,13 @@
           (m.skipped || m.error || 'the deal board did not respond') + '.', 1);
         return;
       }
+      // The figures landed but the Deal Phase did not move to "Proposal Sent" (a
+      // label renamed on the board, say). Said once here; the document upload below
+      // still goes ahead.
+      if (m.dealStageError) {
+        toast('Released, but the deal\'s Deal Phase could not be set to "Proposal Sent": ' +
+          m.dealStageError + '. Set it on the deal board by hand.', 1);
+      }
       if (!doc) {
         // The deal figures made it to monday; the document build in the browser
         // failed before it could. Reported rather than swallowed — this used to
