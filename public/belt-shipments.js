@@ -39,6 +39,8 @@
     customerName: '',
     attention: '',
     address: '',
+    email: '',
+    phone: '',
     note: '',
     contacts: [],
     lines: [{ item: '', sku: '', qty: 1 }],
@@ -53,6 +55,8 @@
     manual.customerName = '';
     manual.attention = '';
     manual.address = '';
+    manual.email = '';
+    manual.phone = '';
     manual.note = '';
     manual.contacts = [];
     manual.lines = [{ item: '', sku: '', qty: 1 }];
@@ -61,6 +65,25 @@
   function closeManual() {
     clearManualSelection();
     manual.open = false;
+  }
+
+  /**
+   * xxx-xxx-xxxx for a ten-digit North American number (eleven with a leading 1),
+   * keeping an extension; anything else exactly as typed. The same rule as the
+   * server's formatUsPhone (src/lib/phone.ts), applied again here because the field
+   * is editable before the slip prints.
+   */
+  function fmtPhone(v) {
+    var str = String(v == null ? '' : v).trim();
+    if (!str) return '';
+    var ext = /\s*(?:ext\.?|x|#)\s*(\d{1,6})\s*$/i.exec(str);
+    var main = ext ? str.slice(0, ext.index) : str;
+    if (/[a-z]/i.test(main)) return str;
+    var digits = main.replace(/\D/g, '');
+    if (digits.length === 11 && digits.charAt(0) === '1') digits = digits.slice(1);
+    if (digits.length !== 10) return str;
+    var out = digits.slice(0, 3) + '-' + digits.slice(3, 6) + '-' + digits.slice(6);
+    return ext ? out + ' x' + ext[1] : out;
   }
 
   /** One line of one address, formatted the way it prints on the slip. */
@@ -86,6 +109,8 @@
     if (g('msCustomerName') !== null) manual.customerName = g('msCustomerName');
     if (g('msAttn') !== null) manual.attention = g('msAttn');
     if (g('msAddr') !== null) manual.address = g('msAddr');
+    if (g('msEmail') !== null) manual.email = g('msEmail');
+    if (g('msPhone') !== null) manual.phone = g('msPhone');
     if (g('msNote') !== null) manual.note = g('msNote');
     host.querySelectorAll('.msItem').forEach(function (inp) {
       var row = manual.lines[Number(inp.getAttribute('data-idx'))];
@@ -300,6 +325,18 @@
           esc(slip.address) +
           '</div>'
         : '') +
+      // Below the address, so the carrier and whoever opens the box can reach the
+      // customer. Older slips carry neither and print exactly as they did.
+      (slip.email || slip.phone
+        ? '<div style="font-size:12px;color:#4b5468;line-height:1.6;margin-top:6px;">' +
+          (slip.email ? '<div>' + esc(slip.email) + '</div>' : '') +
+          (slip.phone
+            ? '<div style="font-variant-numeric:tabular-nums;">' +
+              esc(fmtPhone(slip.phone)) +
+              '</div>'
+            : '') +
+          '</div>'
+        : '') +
       '</div>' +
       '<div style="text-align:right;">' +
       '<div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.18em;color:' +
@@ -489,6 +526,7 @@
           'resize:vertical;">' +
           esc(manual.address || '') +
           '</textarea></label>' +
+          contactFieldsHtml('ms', manual.email, manual.phone) +
           '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.14em;color:' +
           MUTE +
           ';font-weight:700;margin:14px 0 6px;">Items in the box</div>' +
@@ -606,7 +644,7 @@
           '<button type="button" class="link-btn bsPickAll" data-org="' +
           esc(k) +
           '" style="width:auto;padding:4px 10px;font-size:11px;">' +
-          (anyPicked ? 'Clear' : 'Select all') +
+          (anyPicked ? 'Deselect' : 'Select all') +
           '</button>' +
           '</div>' +
           '</div>' +
@@ -655,6 +693,11 @@
                   : '<span style="font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;">' +
                     r.remaining +
                     '</span>') +
+                '<div><button type="button" class="link-btn bsClear" data-id="' +
+                esc(r.lineId) +
+                '" title="Take this belt off the list without printing a slip" style="width:auto;padding:2px 6px;margin-top:3px;font-size:10.5px;color:' +
+                MUTE +
+                ';">Clear from queue</button></div>' +
                 '</div>' +
                 '</div>'
               );
@@ -664,6 +707,142 @@
         );
       })
       .join('');
+  }
+
+  /** Email and phone inputs, shared by the order slip (bs) and the manual slip (ms). */
+  function contactFieldsHtml(prefix, email, phone) {
+    return (
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:9px;">' +
+      '<label style="display:block;"><span style="font-size:11px;color:' +
+      MUTE +
+      ';">Email</span>' +
+      '<input id="' +
+      prefix +
+      'Email" type="email" placeholder="name@example.com" value="' +
+      esc(email || '') +
+      '" style="' +
+      FIELD +
+      '"></label>' +
+      '<label style="display:block;"><span style="font-size:11px;color:' +
+      MUTE +
+      ';">Phone</span>' +
+      '<input id="' +
+      prefix +
+      'Phone" type="tel" placeholder="555-555-5555" value="' +
+      esc(fmtPhone(phone || '')) +
+      '" style="' +
+      FIELD +
+      '"></label>' +
+      '</div>'
+    );
+  }
+
+  /**
+   * Belts cleared from the queue without a slip, newest first, each with who cleared
+   * it and why — and Restore, which puts it back on Belts to ship.
+   */
+  function clearedHtml() {
+    var all = data.cleared || [];
+    if (!all.length) return '';
+    var recent = all.slice(0, 25);
+    return (
+      '<div class="card" style="margin-top:14px;">' +
+      '<div class="section-title" style="margin:0 0 6px;">Cleared from the queue</div>' +
+      recent
+        .map(function (c) {
+          return (
+            '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:10px 0;border-top:1px solid #eef0f4;">' +
+            '<div style="min-width:0;">' +
+            '<div style="font-size:12.5px;">' +
+            esc(c.customer || 'Unknown customer') +
+            '</div>' +
+            '<div style="font-size:10.5px;color:' +
+            MUTE +
+            ';margin-top:2px;">' +
+            esc(c.item) +
+            ' \u00b7 ' +
+            c.qty +
+            ' pc' +
+            (c.proposalNumber || c.orderNumber
+              ? ' \u00b7 ' + esc(c.proposalNumber || c.orderNumber)
+              : '') +
+            '</div>' +
+            '<div style="font-size:10.5px;color:#b0b6c2;margin-top:3px;">' +
+            (c.clearedBy ? esc(c.clearedBy) + ' \u00b7 ' : '') +
+            esc(fmtStamp(c.clearedAt)) +
+            (c.reason ? ' \u00b7 ' + esc(c.reason) : '') +
+            '</div>' +
+            '</div>' +
+            '<button type="button" class="link-btn bsRestore" data-id="' +
+            esc(c.lineId) +
+            '" title="Put this belt back on Belts to ship" style="width:auto;padding:4px 10px;font-size:11px;flex:none;">Restore</button>' +
+            '</div>'
+          );
+        })
+        .join('') +
+      (all.length > recent.length
+        ? '<div class="muted" style="font-size:11px;padding-top:9px;">Showing the ' +
+          recent.length +
+          ' most recent of ' +
+          all.length +
+          '.</div>'
+        : '') +
+      '</div>'
+    );
+  }
+
+  /**
+   * Take belts off the queue without printing a slip. Asks first, and for a reason,
+   * which is kept with the entry; the belts can be restored from the Cleared list.
+   */
+  function clearLines(lineIds) {
+    if (busy || !lineIds.length) return;
+    var rows = (data.owed || []).filter(function (o) {
+      return lineIds.indexOf(o.lineId) !== -1;
+    });
+    if (!rows.length) return;
+    var pieces = rows.reduce(function (a, r) {
+      return a + r.remaining;
+    }, 0);
+    var what =
+      rows.length === 1
+        ? rows[0].item + ' for ' + rows[0].customer
+        : rows.length + ' belts (' + pieces + ' pieces)';
+    var reason = prompt(
+      'Clear ' +
+        what +
+        ' from the queue without printing a slip?\n\n' +
+        'Use this when it went out another way or is no longer needed. ' +
+        'It can be restored from "Cleared from the queue".\n\nReason (optional):',
+      '',
+    );
+    if (reason === null) return;
+    busy = true;
+    H.authed('/belt-shipments/clear', {
+      method: 'POST',
+      body: { lineIds: lineIds, reason: reason.trim().slice(0, 300) },
+    })
+      .then(async function (r) {
+        busy = false;
+        if (!r.ok) {
+          var d = null;
+          try {
+            d = await r.json();
+          } catch (e) {
+            /* no body */
+          }
+          alert((d && d.message) || 'Those belts could not be cleared.');
+          return;
+        }
+        lineIds.forEach(function (id) {
+          delete picked[id];
+        });
+        load().then(paint);
+      })
+      .catch(function () {
+        busy = false;
+        alert('Could not reach the server. Nothing was cleared.');
+      });
   }
 
   /**
@@ -924,13 +1103,22 @@
             (one.address
               ? '<div class="muted" style="font-size:11px;margin:-4px 0 9px;">From the customer record. Edit if this box goes elsewhere.</div>'
               : '') +
+            contactFieldsHtml('bs', one.email, one.phone) +
+            '<div class="muted" style="font-size:11px;margin:-4px 0 9px;">' +
+            (one.email || one.phone
+              ? 'From the customer&rsquo;s monday deal (or their contact on file). Printed below the address.'
+              : 'No email or phone on the monday deal or the customer record. Type them to print them.') +
+            '</div>' +
             '<label style="display:block;margin-bottom:11px;"><span style="font-size:11px;color:' +
             MUTE +
             ';">Message on the slip (optional)</span>' +
             '<input id="bsSlipNote" placeholder="Thanks for your order&hellip;" style="' +
             FIELD +
             '"></label>' +
-            '<button type="button" id="bsPrint" class="btn" style="width:100%;">Print the slip</button>') +
+            '<button type="button" id="bsPrint" class="btn" style="width:100%;">Print the slip</button>' +
+            '<button type="button" id="bsClearPicked" class="link-btn" style="width:100%;margin-top:8px;font-size:12px;color:' +
+            RED +
+            ';" title="Take these off the list without printing a slip">Clear from the queue instead</button>') +
       '</div>' +
       manualHtml() +
       activityHtml() +
@@ -938,6 +1126,7 @@
       '<div class="section-title" style="margin:0 0 6px;">Shipping record</div>' +
       slipsHtml() +
       '</div>' +
+      clearedHtml() +
       '</div>' +
       '</div>';
 
@@ -1029,6 +1218,39 @@
 
     var print = host.querySelector('#bsPrint');
     if (print) print.addEventListener('click', ship);
+
+    host.querySelectorAll('.bsClear').forEach(function (b) {
+      b.addEventListener('click', function () {
+        clearLines([b.getAttribute('data-id')]);
+      });
+    });
+
+    var clearPicked = host.querySelector('#bsClearPicked');
+    if (clearPicked)
+      clearPicked.addEventListener('click', function () {
+        clearLines(Object.keys(picked));
+      });
+
+    host.querySelectorAll('.bsRestore').forEach(function (b) {
+      b.addEventListener('click', function () {
+        if (busy) return;
+        var id = b.getAttribute('data-id');
+        busy = true;
+        H.authed('/belt-shipments/restore', { method: 'POST', body: { lineId: id } })
+          .then(function (r) {
+            busy = false;
+            if (!r.ok) {
+              alert('That belt could not be restored.');
+              return;
+            }
+            load().then(paint);
+          })
+          .catch(function () {
+            busy = false;
+            alert('Could not reach the server.');
+          });
+      });
+    });
 
     var msOpen = host.querySelector('#msOpen');
     if (msOpen)
@@ -1135,6 +1357,8 @@
     manual.contacts = [];
     manual.attention = '';
     manual.address = '';
+    manual.email = '';
+    manual.phone = '';
     paint();
     H.authed('/crm/organizations/' + id)
       .then(function (r) {
@@ -1155,6 +1379,14 @@
             .join(', ');
         });
         manual.attention = manual.contacts[0] || '';
+        var withEmail = (org.contacts || []).filter(function (c) {
+          return c.email;
+        })[0];
+        var withPhone = (org.contacts || []).filter(function (c) {
+          return c.phone;
+        })[0];
+        manual.email = (withEmail && withEmail.email) || '';
+        manual.phone = fmtPhone((withPhone && withPhone.phone) || '');
         paint();
       })
       .catch(function () {
@@ -1200,6 +1432,8 @@
         attention: manual.attention || '',
         date: todayISO(),
         address: manual.address || '',
+        email: (manual.email || '').trim(),
+        phone: fmtPhone(manual.phone || ''),
         note: manual.note || '',
         lines: lines,
       },
@@ -1263,6 +1497,8 @@
         attention: (host.querySelector('#bsAttn') || {}).value || '',
         date: todayISO(),
         address: (host.querySelector('#bsAddr') || {}).value || '',
+        email: ((host.querySelector('#bsEmail') || {}).value || '').trim(),
+        phone: fmtPhone((host.querySelector('#bsPhone') || {}).value || ''),
         note: (host.querySelector('#bsSlipNote') || {}).value || '',
         lines: rows.map(function (r) {
           return { lineId: r.lineId, sku: r.sku, item: r.item, qty: picked[r.lineId] };

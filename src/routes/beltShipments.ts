@@ -6,6 +6,8 @@ import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import { ValidationError, ConflictError } from '../lib/errors.js';
 import { recordAudit } from '../lib/audit.js';
+import { formatUsPhone } from '../lib/phone.js';
+import { readDealContacts } from '../integrations/monday/dealContacts.js';
 
 /**
  * Belt shipments — which customers are owed a belt, which belt, and the slip that
@@ -17,7 +19,8 @@ import { recordAudit } from '../lib/audit.js';
  * cannot be missed because someone forgot to add it to a second list.
  *
  * The only thing stored is the shipping ledger: how many of each BOM line have gone
- * out, and the slips that were printed. That lives in one UiSetting JSON document,
+ * out, which were cleared from the queue without a slip, and the slips that were
+ * printed. That lives in one UiSetting JSON document,
  * because it is a few hundred rows that nothing queries across — and it needs no
  * migration, so this ships as a code deploy.
  *
@@ -70,6 +73,13 @@ const Slip = z.object({
   attention: z.string().trim().max(160).default(''),
   date: z.string().trim().max(30),
   address: z.string().trim().max(400).default(''),
+  /**
+   * The customer's email and phone, printed below the address. Pre-filled from the
+   * order's monday deal (email_1__1 / phone__1), editable before printing, and kept
+   * on the slip so a reprint shows what went in the box.
+   */
+  email: z.string().trim().max(160).default(''),
+  phone: z.string().trim().max(60).default(''),
   note: z.string().trim().max(400).default(''),
   lines: z
     .array(
@@ -84,16 +94,36 @@ const Slip = z.object({
     .max(60),
 });
 
+/**
+ * Pieces taken off the queue without a slip — a belt that went out some other way, or
+ * one the customer no longer needs. Written off, not deleted: the BOM line is untouched,
+ * the entry records who cleared it and why, and Restore puts it back on the list.
+ */
+const Cleared = z.object({
+  qty: z.number().int().min(1).max(9999),
+  customer: z.string().trim().max(160).default(''),
+  item: z.string().trim().max(200).default(''),
+  sku: z.string().trim().max(60).default(''),
+  orderNumber: z.string().trim().max(40).default(''),
+  proposalNumber: z.string().trim().max(40).default(''),
+  reason: z.string().trim().max(300).default(''),
+  clearedById: z.string().trim().max(40).default(''),
+  clearedBy: z.string().trim().max(160).default(''),
+  clearedAt: z.string().trim().max(40).default(''),
+});
+
 const Ledger = z.object({
   /** ProcurementLine id -> total pieces shipped against it. */
   shipped: z.record(z.string().max(40), z.number().int().min(0).max(9999)).default({}),
+  /** ProcurementLine id -> pieces cleared from the queue without shipping. */
+  cleared: z.record(z.string().max(40), Cleared).default({}),
   slips: z.array(Slip).max(2000).default([]),
   seq: z.number().int().min(0).max(1_000_000).default(0),
 });
 
 type LedgerT = z.infer<typeof Ledger>;
 
-const EMPTY_LEDGER: LedgerT = { shipped: {}, slips: [], seq: 0 };
+const EMPTY_LEDGER: LedgerT = { shipped: {}, cleared: {}, slips: [], seq: 0 };
 
 /**
  * The whole ledger lives in one JSON blob (`UiSetting`), read in full and written
@@ -104,12 +134,12 @@ const EMPTY_LEDGER: LedgerT = { shipped: {}, slips: [], seq: 0 };
  */
 async function readLedgerRow(): Promise<{ ledger: LedgerT; updatedAt: Date | null }> {
   const row = await prisma.uiSetting.findUnique({ where: { key: KEY } });
-  if (!row) return { ledger: EMPTY_LEDGER, updatedAt: null };
+  if (!row) return { ledger: structuredClone(EMPTY_LEDGER), updatedAt: null };
   try {
     return { ledger: Ledger.parse(JSON.parse(row.value)), updatedAt: row.updatedAt };
   } catch {
     // A malformed document must not take the screen down with it.
-    return { ledger: EMPTY_LEDGER, updatedAt: row.updatedAt };
+    return { ledger: structuredClone(EMPTY_LEDGER), updatedAt: row.updatedAt };
   }
 }
 
@@ -153,6 +183,21 @@ async function writeLedger(
   if (claim.count !== 1) {
     throw new ConflictError('Someone else just recorded a shipment. Reload and try again.');
   }
+}
+
+/**
+ * The proposal meta frozen on an order. `sections` is an ARRAY of section objects, and
+ * the meta is the one with id 'meta', under .data — the same shape app.js reads when it
+ * builds the document. Read defensively: the snapshot is free-form JSON frozen at
+ * acceptance, so an older order may not carry a meta section at all.
+ */
+function snapshotMeta(snapshot: unknown): Record<string, unknown> {
+  const snap = snapshot as { sections?: unknown } | null;
+  const sections = Array.isArray(snap?.sections)
+    ? (snap.sections as Array<Record<string, unknown>>)
+    : [];
+  const metaSection = sections.find((sec) => sec && sec.id === 'meta');
+  return (metaSection?.data ?? {}) as Record<string, unknown>;
 }
 
 /** One line of one address, formatted the way it prints on the slip. */
@@ -202,6 +247,10 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
             organizationId: true,
             createdAt: true,
             proposalId: true,
+            // The Deal Tracking row, for the customer email and phone. Often null (it
+            // is only recorded when the proposal named a deal) — the proposal's own
+            // Project ID is the fallback, below.
+            mondayProjectId: true,
             // The frozen accepted proposal. Its sections carry the meta the proposal
             // was written with, including the contact the letter was addressed to —
             // which is the name that should already be on the slip.
@@ -239,16 +288,47 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
                 postalCode: true,
               },
             },
-            contacts: { select: { firstName: true, lastName: true, title: true }, take: 4 },
+            contacts: {
+              select: { firstName: true, lastName: true, title: true, email: true, phone: true },
+              take: 4,
+            },
           },
         })
       : [];
     const orgById = new Map(orgs.map((o) => [o.id, o]));
 
+    /**
+     * Which monday deal each order belongs to, for its customer email and phone: the
+     * order's own Deal Tracking id, else the Project ID on the accepted proposal (which
+     * IS the deal item id), else the customer's most recently updated linked deal.
+     */
+    const opps = orgIds.length
+      ? await prisma.opportunity.findMany({
+          where: { organizationId: { in: orgIds }, mondayItemId: { not: null } },
+          orderBy: { updatedAt: 'desc' },
+          select: { organizationId: true, mondayItemId: true },
+        })
+      : [];
+    const latestDealByOrg = new Map<string, string>();
+    for (const o of opps) {
+      if (o.mondayItemId && !latestDealByOrg.has(o.organizationId)) {
+        latestDealByOrg.set(o.organizationId, o.mondayItemId);
+      }
+    }
+    const dealItemFor = (order: (typeof lines)[number]['order']): string => {
+      const own = String(order.mondayProjectId ?? '').trim();
+      if (/^\d+$/.test(own)) return own;
+      const fromProposal = String(snapshotMeta(order.contentSnapshot).projectId ?? '').trim();
+      if (/^\d+$/.test(fromProposal)) return fromProposal;
+      return latestDealByOrg.get(order.organizationId) ?? '';
+    };
+    const dealContacts = await readDealContacts(lines.map((l) => dealItemFor(l.order)));
+
     const owed = lines
       .map((l) => {
         const shipped = ledger.shipped[l.id] || 0;
-        const remaining = Math.max(0, l.quantity - shipped);
+        const cleared = ledger.cleared[l.id]?.qty || 0;
+        const remaining = Math.max(0, l.quantity - shipped - cleared);
         const org = orgById.get(l.order.organizationId);
         const addresses = org?.addresses || [];
         const ship = primaryShippingAddress(addresses) || addresses[0];
@@ -258,13 +338,22 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
         // with id 'meta', under .data — the same shape app.js reads when it builds the
         // document. Read defensively either way: the snapshot is free-form JSON frozen
         // at acceptance, so an older order may not carry a meta section at all.
-        const snap = l.order.contentSnapshot as { sections?: unknown } | null;
-        const sections = Array.isArray(snap?.sections)
-          ? (snap!.sections as Array<Record<string, unknown>>)
-          : [];
-        const metaSection = sections.find((sec) => sec && sec.id === 'meta');
-        const meta = (metaSection?.data ?? {}) as { contactName?: unknown };
+        const meta = snapshotMeta(l.order.contentSnapshot) as { contactName?: unknown };
         const contactName = typeof meta.contactName === 'string' ? meta.contactName.trim() : '';
+        // Email and phone: the monday deal's own columns first — the ones the team
+        // keeps current — and the CRM contact (the proposal's, else the first with
+        // one) when the deal has none or monday could not be read.
+        const deal = dealContacts.get(dealItemFor(l.order));
+        const crm = org?.contacts || [];
+        const named = contactName
+          ? crm.find(
+              (c) =>
+                [c.firstName, c.lastName].filter(Boolean).join(' ').toLowerCase() ===
+                contactName.toLowerCase(),
+            )
+          : undefined;
+        const email = deal?.email || named?.email || crm.find((c) => c.email)?.email || '';
+        const phone = deal?.phone || named?.phone || crm.find((c) => c.phone)?.phone || '';
         return {
           lineId: l.id,
           sku: l.sku || '',
@@ -279,6 +368,8 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
           contactName,
           orderedOn: l.order.createdAt.toISOString().slice(0, 10),
           address: formatAddress(ship),
+          email,
+          phone: formatUsPhone(phone),
           contacts: (org?.contacts || []).map((c) =>
             [[c.firstName, c.lastName].filter(Boolean).join(' '), c.title]
               .filter(Boolean)
@@ -288,7 +379,11 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
       })
       .filter((r) => r.remaining > 0);
 
-    return { owed, slips: ledger.slips, seq: ledger.seq };
+    const cleared = Object.entries(ledger.cleared)
+      .map(([lineId, c]) => ({ lineId, ...c }))
+      .sort((a, b) => b.clearedAt.localeCompare(a.clearedAt));
+
+    return { owed, cleared, slips: ledger.slips, seq: ledger.seq };
   });
 
   /**
@@ -329,7 +424,10 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
           select: { id: true, quantity: true },
         })
       : [];
-    const capById = new Map(known.map((k) => [k.id, k.quantity]));
+    // A cleared line's written-off pieces are not available to ship.
+    const capById = new Map(
+      known.map((k) => [k.id, Math.max(0, k.quantity - (ledger.cleared[k.id]?.qty || 0))]),
+    );
 
     for (const line of slip.lines) {
       if (!line.lineId) continue;
@@ -424,5 +522,117 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
     });
 
     return { voided: slip.number };
+  });
+
+  /**
+   * Clear belts from the queue without printing a slip: whatever is still owed on
+   * each line is written off in the ledger, with who did it, when and why. The bill
+   * of materials is not touched, and Restore (below) undoes it. A line whose BOM
+   * quantity later goes up reappears with only the new pieces.
+   */
+  app.post('/belt-shipments/clear', guard, async (req) => {
+    const Body = z.object({
+      lineIds: z.array(z.string().trim().min(1).max(40)).min(1).max(200),
+      reason: z.string().trim().max(300).default(''),
+    });
+    const parsed = Body.safeParse(req.body);
+    if (!parsed.success) throw new ValidationError('Which belts should be cleared?');
+    const { reason } = parsed.data;
+    const ids = Array.from(new Set(parsed.data.lineIds));
+
+    const { ledger, updatedAt } = await readLedgerRow();
+    const lines = await prisma.procurementLine.findMany({
+      where: { id: { in: ids }, sku: { startsWith: BELT_SKU_PREFIX, mode: 'insensitive' } },
+      select: {
+        id: true,
+        sku: true,
+        name: true,
+        quantity: true,
+        order: { select: { number: true, organizationId: true, proposalId: true } },
+      },
+    });
+    if (lines.length !== ids.length) {
+      throw new ValidationError('One of those items is no longer on the bill of materials.');
+    }
+    const orgs = await prisma.organization.findMany({
+      where: { id: { in: Array.from(new Set(lines.map((l) => l.order.organizationId))) } },
+      select: { id: true, name: true },
+    });
+    const orgName = new Map(orgs.map((o) => [o.id, o.name]));
+    const proposals = await prisma.proposal.findMany({
+      where: { id: { in: Array.from(new Set(lines.map((l) => l.order.proposalId))) } },
+      select: { id: true, number: true },
+    });
+    const proposalNumber = new Map(proposals.map((p) => [p.id, p.number]));
+    const who = await prisma.user.findUnique({
+      where: { id: req.user!.sub },
+      select: { name: true, email: true },
+    });
+    const now = new Date().toISOString();
+
+    const done: Array<{ lineId: string; qty: number }> = [];
+    for (const l of lines) {
+      const prior = ledger.cleared[l.id];
+      const remaining = l.quantity - (ledger.shipped[l.id] || 0) - (prior?.qty || 0);
+      if (remaining <= 0) continue;
+      ledger.cleared[l.id] = {
+        qty: (prior?.qty || 0) + remaining,
+        customer: orgName.get(l.order.organizationId) || '',
+        item: l.name,
+        sku: l.sku || '',
+        orderNumber: l.order.number,
+        proposalNumber: proposalNumber.get(l.order.proposalId) || '',
+        reason,
+        clearedById: req.user!.sub,
+        clearedBy: who?.name || who?.email || '',
+        clearedAt: now,
+      };
+      done.push({ lineId: l.id, qty: remaining });
+    }
+    if (!done.length) throw new ValidationError('Nothing on those lines is still owed.');
+
+    await writeLedger(ledger, updatedAt, req.user!.sub);
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'belt.shipment.clear',
+      entity: 'UiSetting',
+      entityId: KEY,
+      details: {
+        lines: done.map((d) => ({
+          ...d,
+          customer: ledger.cleared[d.lineId]?.customer ?? '',
+          item: ledger.cleared[d.lineId]?.item ?? '',
+        })),
+        pieces: done.reduce((a, d) => a + d.qty, 0),
+        reason,
+      },
+    });
+    return { cleared: done };
+  });
+
+  /** Put a cleared line back on the queue. */
+  app.post('/belt-shipments/restore', guard, async (req) => {
+    const Body = z.object({ lineId: z.string().trim().min(1).max(40) });
+    const parsed = Body.safeParse(req.body);
+    if (!parsed.success) throw new ValidationError('Which belt?');
+    const { ledger, updatedAt } = await readLedgerRow();
+    const entry = ledger.cleared[parsed.data.lineId];
+    if (!entry) throw new ValidationError('That belt is not cleared.');
+    delete ledger.cleared[parsed.data.lineId];
+
+    await writeLedger(ledger, updatedAt, req.user!.sub);
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'belt.shipment.restore',
+      entity: 'UiSetting',
+      entityId: KEY,
+      details: {
+        lineId: parsed.data.lineId,
+        customer: entry.customer,
+        item: entry.item,
+        qty: entry.qty,
+      },
+    });
+    return { restored: parsed.data.lineId };
   });
 }
