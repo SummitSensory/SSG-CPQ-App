@@ -94,6 +94,8 @@ const CLIENT_SCRIPTS = [
   // Drag-to-place admin editor for signature-field-layout.js's saved offsets.
   'signature-field-layout-admin.js',
   'reference-documents.js',
+  // The New proposal form's prebuilt-title dropdown and its Administration editor.
+  'proposal-titles.js',
   'proposal-front-matter.js',
   'intro-cover.js',
   'intro-adventure.js',

@@ -616,6 +616,7 @@
     // Same fetch-once-at-sign-in shape as SSGContractPages, for the builder's
     // reference-documents checklist (a W9, a certificate of insurance).
     if (window.SSGReferenceDocuments) window.SSGReferenceDocuments.init({ authed: authed, esc: esc });
+    if (window.SSGProposalTitles) window.SSGProposalTitles.init({ authed: authed, esc: esc });
     /*
      * The paginator, lent to the legal document editor.
      *
@@ -3354,6 +3355,9 @@
   async function openProposalForm(user, preselectName) {
     var orgs = await fetchOrgs('');
     var opps = await fetchOpportunities('');
+    // Prebuilt titles from Administration → Proposal content → Proposal titles. An
+    // empty list (none set up, or the fetch failed) leaves just the typed title.
+    var presetTitles = window.SSGProposalTitles ? await window.SSGProposalTitles.fetchActive() : [];
     var rows = buildPickRows(orgs, opps);
     var canFind = canCrmWrite(user.role);
     // With the monday lookup available, an empty CRM is no longer a dead end.
@@ -3377,7 +3381,17 @@
           rows.map(function (r) { return '<option value="' + esc(rowKey(r)) + '" data-org="' + esc(r.organizationId) + '" data-opp="' + esc(r.opportunityId) + '"' + (rowKey(r) === selectedKey ? ' selected' : '') + '>' + pickRowLabel(esc, r) + '</option>'; }).join('') +
         '</select>' +
         (canFind ? '<button type="button" class="link-btn" id="fOrgMonday" style="width:auto;padding:6px 0;margin-top:6px;font-size:12.5px;">Not listed? Find a customer in monday</button>' : '')) +
-      fieldRow('Title', '<input id="fTitle" style="' + IN + '" required>'),
+      fieldRow('Title',
+        (presetTitles.length
+          ? '<select id="fTitlePick" style="' + IN + 'margin-bottom:7px;">' +
+              '<option value="">Choose a prebuilt title…</option>' +
+              presetTitles.map(function (t, i) { return '<option value="' + i + '">' + esc(t) + '</option>'; }).join('') +
+              '<option value="__custom">Type my own title</option>' +
+            '</select>'
+          : '') +
+        '<input id="fTitle" style="' + IN + '" required placeholder="' +
+          (presetTitles.length ? 'Pick one above, or type a title' : 'Proposal title') + '">' +
+        (presetTitles.length ? '<div class="muted" style="font-size:11.5px;margin-top:5px;">A prebuilt title can still be edited here before you create the proposal.</div>' : '')),
       async function (close, showErr) {
         var opt = ov.querySelector('#fOrg').selectedOptions[0];
         var orgId = opt ? opt.getAttribute('data-org') : '';
@@ -3386,8 +3400,32 @@
         var title = ov.querySelector('#fTitle').value.trim(); if (title.length < 2) return showErr('Title must be at least 2 characters.');
         var r = await authed('/proposals', { method: 'POST', body: { organizationId: orgId, opportunityId: opportunityId, title: title, sections: [], items: [] } });
         if (!r.ok) return showErr('Could not create (' + r.status + ').');
-        close(); renderProposals(user);
+        var created = null;
+        try { created = await r.json(); } catch (e) {}
+        close();
+        // Straight into the new proposal: the builder on its first version, which is
+        // what the rep creates a proposal to do next. Falls back to the proposal's
+        // page, then the list, if it cannot be loaded.
+        if (created && created.id) await openCreatedProposal(created.id, user);
+        else renderProposals(user);
       });
+
+    var pickEl = ov.querySelector('#fTitlePick');
+    if (pickEl) {
+      pickEl.addEventListener('change', function () {
+        var input = ov.querySelector('#fTitle');
+        var v = pickEl.value;
+        if (v === '__custom') { input.value = ''; input.focus(); return; }
+        if (v === '') return;
+        var chosen = presetTitles[Number(v)];
+        if (chosen != null) input.value = chosen;
+      });
+      // Typing over a picked title makes it the rep's own; the dropdown says so.
+      ov.querySelector('#fTitle').addEventListener('input', function () {
+        var chosen = pickEl.value !== '' && pickEl.value !== '__custom' ? presetTitles[Number(pickEl.value)] : null;
+        if (chosen != null && ov.querySelector('#fTitle').value !== chosen) pickEl.value = '__custom';
+      });
+    }
 
     /*
      * Typing narrows the list. The first pass is local, so it responds on the
@@ -3455,6 +3493,29 @@
       });
     }
     return ov;
+  }
+  /**
+   * Open a proposal that was just created, in the builder on its latest (first)
+   * version. The sidebar is moved to Proposals, since New proposal is also offered
+   * from the dashboard and the builder belongs to the Proposals screen.
+   */
+  async function openCreatedProposal(id, user) {
+    Array.prototype.forEach.call(document.querySelectorAll('.nav-item'), function (b) {
+      b.classList.toggle('active', b.getAttribute('data-view') === 'proposals');
+    });
+    var vt = document.getElementById('viewTitle');
+    var navItem = NAV.filter(function (n) { return n.id === 'proposals'; })[0];
+    if (vt && navItem) vt.textContent = navItem.label;
+    try {
+      var r = await authed('/proposals/' + id);
+      if (r.ok) {
+        var p = await r.json();
+        var versions = p.versions || [];
+        var v = versions[versions.length - 1];
+        if (v) { await openBuilder(p, v, user); return; }
+      }
+    } catch (e) {}
+    openProposalDetail(id, user);
   }
   /* --- Reports: company-wide proposal analytics --- */
   var rep = { data: null, drift: null, driftLoading: false, inv: null, invLoading: false, tab: 'overview', range: '365', from: '', to: '', pq: '', psort: 'proposedValue' };
@@ -15939,6 +16000,10 @@
           'Reusable note blocks for proposals. “Always include” notes are added to every new proposal automatically, and a note can name the parts that pull it in. Table notes print inside the line items; footer notes print below the signature lines. Also editable under Catalog → Proposal notes.',
           '<button class="btn" id="snNew" style="width:auto;padding:9px 15px;">+ New note</button>',
           '<div id="snList"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+        admAcc('propTitles', 'Proposal titles',
+          'The prebuilt titles offered in a dropdown on the New proposal form, in the order listed here. A rep can pick one (and still edit it) or type their own. Untick Active to take a title off the dropdown without deleting it; proposals already created keep the title they were given.',
+          '',
+          '<div id="proposalTitlesAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>') +
         admAcc('propIntros', 'Proposal introductions',
           'The pages that print ahead of the itemized proposal, one product line at a time. The photographs are set here and used by every proposal that prints that introduction &mdash; a rep picks the template on the proposal, never the pictures. Each slot names the size it prints at; anything larger is downscaled on upload. Page wording ships with the application.',
           '',
@@ -16051,6 +16116,8 @@
       window.SSGSignatureFieldLayoutAdmin.render(document.getElementById('sigFieldLayoutAdmin'));
     if (window.SSGReferenceDocuments)
       window.SSGReferenceDocuments.render(document.getElementById('referenceDocsAdmin'));
+    if (window.SSGProposalTitles)
+      window.SSGProposalTitles.render(document.getElementById('proposalTitlesAdmin'));
     if (window.SSGMediaPartnershipAdmin)
       window.SSGMediaPartnershipAdmin.render(document.getElementById('mediaPartnershipAdmin'));
     loadFormulas();
