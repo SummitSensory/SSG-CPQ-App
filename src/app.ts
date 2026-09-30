@@ -66,6 +66,7 @@ import { verifySchemaOnBoot } from './lib/schemaCheck.js';
 import { registerPortalRoutes } from './routes/portal.js';
 import { registerWebRoutes } from './routes/web.js';
 import { registerTipsRoutes } from './routes/tips.js';
+import { registerProposalTitleRoutes } from './routes/proposalTitles.js';
 import { registerOrderNotificationRoutes } from './routes/orderNotifications.js';
 
 export function buildApp(): FastifyInstance {
@@ -210,6 +211,7 @@ export function buildApp(): FastifyInstance {
   registerPortalRoutes(app);
   registerWebRoutes(app);
   registerTipsRoutes(app);
+  registerProposalTitleRoutes(app);
   registerOrderNotificationRoutes(app);
 
   // Is the database shaped the way this build expects? Not awaited — a slow or
