@@ -3,6 +3,7 @@ import { env, isMondayPushConfigured } from '../../config/env.js';
 import { logger } from '../../lib/logger.js';
 import { setColumnValues, uploadFileToColumn } from './client.js';
 import { dealItemIdFor } from './dealLink.js';
+import { DEAL_COL } from './crmMapping.js';
 import { versionTotals, metaOf } from '../../proposals/analytics.js';
 import { sellerCollectedCharges } from '../../crossborder/sellerCharges.js';
 import { renderPdf } from '../../render/pdf.js';
@@ -14,7 +15,7 @@ import {
 
 /**
  * Releasing a proposal writes back to the monday deal row: the amount, the proposal
- * title, and the proposal document itself.
+ * title, the Deal Phase ("Proposal Sent"), and the proposal document itself.
  *
  * The column ids are monday's own, not ours — they are the board's internal keys and
  * cannot be derived, so they live here as named constants. Change a column on the
@@ -53,7 +54,17 @@ export const DEAL_COLUMNS = {
    *  e-signed document, pushed once both parties have signed. See
    *  docuseal/notifications.ts. */
   signedProposal: 'files3__1',
+  /** Status column, titled "Deal Phase" on the board. See RELEASED_DEAL_STAGE. */
+  stage: DEAL_COL.stage,
 } as const;
+
+/**
+ * The Deal Phase a deal moves to when its proposal is released ("Ready to Send to
+ * Customer"). Must match a label on the board's deal_stage column exactly — it was
+ * read off the live board (label id 0) on 2026-09-30. Rename it there and this has
+ * to follow, or the stage write fails (the rest of the push still lands; see below).
+ */
+export const RELEASED_DEAL_STAGE = 'Proposal Sent';
 
 const ENTITY = 'ProposalVersion';
 
@@ -73,6 +84,10 @@ export interface ProposalPushResult {
   /** The expiration written to the board, YYYY-MM-DD, or null when the column was cleared. */
   expirationDate?: string | null;
   fileUploaded?: boolean;
+  /** The Deal Phase label written, when the stage write landed. */
+  dealStage?: string;
+  /** Why the Deal Phase was not set, when the rest of the push landed but it did not. */
+  dealStageError?: string;
   error?: string;
 }
 
@@ -234,6 +249,26 @@ export async function pushReleasedProposal(input: {
 
     await setColumnValues(boardId, itemId, columns);
 
+    // The Deal Phase moves to "Proposal Sent". A call of its own rather than one more
+    // key above: monday rejects the whole mutation over a status label the column does
+    // not have, so a label renamed on the board would otherwise cost the deal its
+    // subtotal, title and expiration too. Written on every release, a re-release of a
+    // revised version included — that is a proposal sent again.
+    let dealStage: string | undefined;
+    let dealStageError: string | undefined;
+    try {
+      await setColumnValues(boardId, itemId, {
+        [DEAL_COLUMNS.stage]: { label: RELEASED_DEAL_STAGE },
+      });
+      dealStage = RELEASED_DEAL_STAGE;
+    } catch (err) {
+      dealStageError = String(err);
+      logger.error(
+        { err, versionId: input.versionId, itemId },
+        'monday proposal push: Deal Phase could not be set',
+      );
+    }
+
     if (input.proposalHtml) {
       // The document itself is uploaded separately, by the renderer function.
       // Rendering a PDF here would need a headless browser on the main API
@@ -250,7 +285,8 @@ export async function pushReleasedProposal(input: {
         entity: ENTITY,
         entityId: version.id,
         externalId: itemId,
-        status: 'ok',
+        status: dealStageError ? 'error' : 'ok',
+        ...(dealStageError ? { error: `Deal Phase not set: ${dealStageError}` } : {}),
       },
     });
     return {
@@ -263,6 +299,8 @@ export async function pushReleasedProposal(input: {
       frameWidthFt: frame.width,
       expirationDate,
       fileUploaded,
+      ...(dealStage ? { dealStage } : {}),
+      ...(dealStageError ? { dealStageError } : {}),
     };
   } catch (err) {
     logger.error({ err, versionId: input.versionId, itemId }, 'monday proposal push failed');
