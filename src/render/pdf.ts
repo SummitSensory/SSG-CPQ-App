@@ -1,4 +1,4 @@
-import { readFile, readdir, rm, stat, statfs } from 'node:fs/promises';
+import { lstat, readFile, readdir, rm, stat, statfs } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { extname, join, sep } from 'node:path';
 import { logger } from '../lib/logger.js';
@@ -136,8 +136,11 @@ async function launch(): Promise<Browser> {
     chromium: { launch: (o: Record<string, unknown>) => Promise<Browser> };
   };
   const { executablePath, args } = await chromiumExecutable();
-  if (env.CHROMIUM_PACK_URL) await freeServerlessTmp();
+  // Counted before the space check, so two renders starting together each see the
+  // other and neither sweeps the profile the other is about to create.
+  launching++;
   try {
+    if (env.CHROMIUM_PACK_URL) await ensureTmpSpace();
     const browser = await chromium.launch({
       args,
       ...(executablePath ? { executablePath } : {}),
@@ -150,7 +153,86 @@ async function launch(): Promise<Browser> {
       logger.error({ err, tmp: await tmpUsage() }, 'pdf: /tmp is full, Chromium could not launch');
     }
     throw err;
+  } finally {
+    launching--;
   }
+}
+
+/** Launches in flight in this process, whose profile directories may not be in openBrowsers yet. */
+let launching = 0;
+
+/**
+ * Free space in /tmp below which a render is not attempted.
+ *
+ * Production 2026-09-30 16:59: POST /render/proposals/document.pdf failed twice with
+ * `page.pdf: Target page, context or browser has been closed`, and Chromium's own log
+ * said why — `Less than 64MB of free space in temporary directory for shared memory
+ * files: 2`. The serverless pack runs `--disable-dev-shm-usage`, so the shared memory
+ * a render paints and prints through is files in /tmp; with 2 MB left the browser died
+ * mid-print, and the retry died the same way on the same full disk. 64 MB is the
+ * threshold Chromium warns at; a render measured on Amazon Linux 2023 dips /tmp by
+ * 13-40 MB (a 60-page image-heavy document, three at once).
+ */
+const LOW_TMP_BYTES = 64 * 1024 * 1024;
+
+/** A render refused because /tmp is full. Not retried: another browser has the same disk. */
+export class RendererTmpFullError extends Error {}
+
+/**
+ * Sweep what earlier browsers left, then make sure there is room to render.
+ *
+ * When /tmp is low and nothing in this process is rendering, every profile and
+ * Chromium shared-memory file there is an orphan whatever its age, so all of them go.
+ * If that still does not make room, the render is refused with the space report in the
+ * error itself: the unhandled-error alert carries the message, and it is the one place
+ * the next occurrence can say what is filling /tmp. On 2026-09-30 it could not be
+ * said: renders reproduced on Amazon Linux 2023 left nothing behind (profiles ~1 MB,
+ * removed on close; free space flat across sequential and concurrent renders).
+ */
+async function ensureTmpSpace(): Promise<void> {
+  await freeServerlessTmp(STALE_TMP_AGE_MS);
+  const before = await tmpUsage();
+  if (!before || before.freeBytes >= LOW_TMP_BYTES) return;
+  // This launch is the only one in flight and no browser is open.
+  if (launching === 1 && openBrowsers.size === 0) {
+    await freeServerlessTmp(0, [...STALE_TMP_PREFIXES, ...SHM_TMP_PREFIXES]);
+  }
+  const after = await tmpUsage();
+  if (!after || after.freeBytes >= LOW_TMP_BYTES) {
+    logger.warn({ before, after }, 'pdf: /tmp was nearly full; orphaned browser files removed');
+    return;
+  }
+  const largest = await largestTmpEntries();
+  logger.error({ tmp: after, largest }, 'pdf: /tmp is full, not starting a render');
+  const listed = largest.map((e) => `${e.name} ${mb(e.bytes)}`).join(', ') || 'nothing readable';
+  throw new RendererTmpFullError(
+    `pdf: the renderer's temporary space is full (${mb(after.freeBytes)} free of ${mb(after.totalBytes)}); largest in ${tmpdir()}: ${listed}`,
+  );
+}
+
+const mb = (bytes: number): string => `${Math.round(bytes / (1024 * 1024))} MB`;
+
+/** The biggest top-level entries in /tmp, sized recursively (symlinks not followed). */
+async function largestTmpEntries(limit = 8): Promise<Array<{ name: string; bytes: number }>> {
+  const root = tmpdir();
+  // Entries visited, so a huge tree cannot hold the request.
+  let budget = 20_000;
+  const sizeOf = async (path: string): Promise<number> => {
+    if (--budget < 0) return 0;
+    const s = await lstat(path).catch(() => null);
+    if (!s) return 0;
+    if (!s.isDirectory()) return s.size;
+    let total = 0;
+    for (const k of await readdir(path).catch(() => [] as string[])) {
+      total += await sizeOf(join(path, k));
+    }
+    return total;
+  };
+  const sized: Array<{ name: string; bytes: number }> = [];
+  for (const name of await readdir(root).catch(() => [] as string[])) {
+    sized.push({ name, bytes: await sizeOf(join(root, name)) });
+  }
+  return sized.sort((a, b) => b.bytes - a.bytes).slice(0, limit);
 }
 
 /**
@@ -172,8 +254,17 @@ async function launch(): Promise<Browser> {
  */
 const STALE_TMP_PREFIXES = ['playwright_chromiumdev_profile-', 'playwright-artifacts-'];
 const STALE_TMP_AGE_MS = 10 * 60_000;
+/**
+ * Chromium's shared-memory files under `--disable-dev-shm-usage`. Normally unlinked as
+ * soon as they are opened; one still listed belongs to a browser that died first. Only
+ * swept when nothing in this process is rendering (see ensureTmpSpace).
+ */
+const SHM_TMP_PREFIXES = ['.org.chromium.Chromium.', '.com.google.Chrome.'];
 
-async function freeServerlessTmp(): Promise<void> {
+async function freeServerlessTmp(
+  maxAgeMs: number,
+  prefixes: readonly string[] = STALE_TMP_PREFIXES,
+): Promise<void> {
   const root = tmpdir();
   let names: string[];
   try {
@@ -181,13 +272,13 @@ async function freeServerlessTmp(): Promise<void> {
   } catch {
     return;
   }
-  const cutoff = Date.now() - STALE_TMP_AGE_MS;
-  const candidates = names.filter((n) => STALE_TMP_PREFIXES.some((p) => n.startsWith(p)));
+  const cutoff = Date.now() - maxAgeMs;
+  const candidates = names.filter((n) => prefixes.some((p) => n.startsWith(p)));
   const stale = (
     await Promise.all(
       candidates.map(async (n) => {
         const s = await stat(join(root, n)).catch(() => null);
-        return s && s.mtimeMs < cutoff ? n : null;
+        return s && s.mtimeMs <= cutoff ? n : null;
       }),
     )
   ).filter((n): n is string => n !== null);
@@ -429,8 +520,10 @@ export async function renderPdf(html: string, opts: PdfOptions = {}): Promise<Bu
    * One retry, on another fresh browser, when Chromium itself failed — a crash or a
    * protocol error such as `Page.printToPDF: Printing failed`. Never after a render
    * that timed out: that already cost the rep 45 s, and a document that hangs one
-   * browser hangs the next. A launch that fails (no pack, /tmp full) is not retried
-   * either — it throws from acquirePage before an attempt starts.
+   * browser hangs the next. Nor when /tmp is full (RendererTmpFullError): the next
+   * browser has the same disk. The retry's own launch re-checks the space, so a first
+   * attempt that crashed because /tmp filled up ends with the space report rather than
+   * a second "Target page, context or browser has been closed".
    */
   const attempt = async (): Promise<Buffer> => {
     const page = await acquirePage();
@@ -443,7 +536,7 @@ export async function renderPdf(html: string, opts: PdfOptions = {}): Promise<Bu
   try {
     return await attempt();
   } catch (err) {
-    if (err instanceof RenderTimeoutError) throw err;
+    if (err instanceof RenderTimeoutError || err instanceof RendererTmpFullError) throw err;
     logger.warn({ err }, 'pdf: render failed; retrying once on a fresh browser');
     return await attempt();
   }
