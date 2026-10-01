@@ -8,6 +8,28 @@ import {
   type FormulaRule,
 } from './hardwareRules.js';
 import { DEFAULT_FRAME_RULES, frameContext, legsBelowMinimum } from './frameRules.js';
+import {
+  CARGO_NET_10X8_PART,
+  CARGO_NET_8X6_PART,
+  CARGO_NET_8X8_PART,
+  CARGO_NET_PARTS,
+  cargoNetForFrame,
+  cargoNetLines,
+  cargoNetPartFor,
+  cargoNetQtyOf,
+  isLegacyCargoNet,
+} from './cargoNets.js';
+
+export {
+  CARGO_NET_10X8_PART,
+  CARGO_NET_8X6_PART,
+  CARGO_NET_8X8_PART,
+  CARGO_NET_PARTS,
+  cargoNetForFrame,
+  cargoNetLines,
+  cargoNetPartFor,
+  cargoNetQtyOf,
+};
 import { computeFloorPadding, type MatQuote, type MatThickness } from './matPricing.js';
 import { setting, defaultSettings, type FormulaSettings } from './formulaSettings.js';
 
@@ -66,10 +88,17 @@ export interface AdvAnswers {
    */
   slideA2216?: boolean;
   /**
-   * Climbing cargo nets, each with its own quantity. Two sizes are stocked and a job
-   * can take either or both.
+   * Climbing cargo nets. The net is decided by the frame (see cargoNetForFrame): the
+   * rep answers only how many. `cargoNetPart` is the rep's pick where no rule covers
+   * the frame (wider than 10'), and is ignored where one does.
+   *
+   * The 10x8 / 8x6 pairs are the answers from before the rule existed, when the rep
+   * ticked a size by hand. A proposal carrying them (and no `cargoNetQty`) is priced
+   * exactly as it was quoted.
    */
   cargoNet?: boolean;
+  cargoNetQty?: number;
+  cargoNetPart?: string;
   cargoNet10x8?: boolean;
   cargoNet10x8Qty?: number;
   cargoNet8x6?: boolean;
@@ -88,6 +117,10 @@ export interface AdvAnswers {
   climbWall?: boolean;
   climbShield?: boolean;
   climbMat?: boolean;
+  /** Summit Foundation System: interlocking floor tiles and border ramps, by quantity. */
+  foundation?: boolean;
+  foundationTilesQty?: number;
+  foundationRampsQty?: number;
   matFloor?: boolean;
   matColumn?: boolean;
   uShaped?: number;
@@ -605,8 +638,7 @@ export function computeAdventureProposal(
     }
     if (cargoNetPicked(a)) {
       SG('Cargo Net');
-      if (a.cargoNet10x8) P(CARGO_NET_10X8_PART, Math.max(1, n(a.cargoNet10x8Qty) || 1));
-      if (a.cargoNet8x6) P(CARGO_NET_8X6_PART, Math.max(1, n(a.cargoNet8x6Qty) || 1));
+      for (const net of cargoNetLines(a)) P(net.part, net.qty);
       // The net's fixings print here, under Cargo Net, rather than being folded into
       // the fastener totals further down. They belong to the net: a rep reading the
       // proposal should see what hangs it without cross-referencing Hardware.
@@ -670,6 +702,14 @@ export function computeAdventureProposal(
       'Mat System',
       '*Please allow 8–10 weeks for manufacturing & delivery of all mat systems. *All column wraps & floor padding colors will be determined after proposal is signed.',
     );
+  }
+
+  const tiles = foundationTilesQty(a);
+  const ramps = foundationRampsQty(a);
+  if (tiles || ramps) {
+    G('Summit Foundation System', true);
+    if (tiles) P(FOUNDATION_TILE_PART, tiles);
+    if (ramps) P(FOUNDATION_RAMP_PART, ramps);
   }
 
   // Anything still unplaced but filed under some OTHER catalog group prints under
@@ -789,7 +829,6 @@ export const LADDER_LEG_WRAP_PART = 'SSUSP72';
 export const V_RING_PART = 'B07MB985GW';
 export const CARABINER_PART = 'B0CDVDZSB1';
 export const WEBBING_SLING_PART = '6820H-LAN';
-export const CARGO_NET_10X8_PART = 'B07V3J9S2R';
 /**
  * The net's own carabiner: B0937DRYYF, "50 Pack Heavy Duty Snap Hooks M8 5/16\" Carabiner
  * Clips". Deliberately NOT CARABINER_PART — that is B0CDVDZSB1, the 4-pack auto-locking
@@ -798,14 +837,23 @@ export const CARGO_NET_10X8_PART = 'B07V3J9S2R';
  * instead of under Cargo Net.
  */
 export const CARGO_NET_CARABINER_PART = 'B0937DRYYF';
-export const CARGO_NET_8X6_PART = 'B07TSDMPNQ';
 /** Carabiner packs and V-ring packs one cargo net brings with it. */
 export const CARGO_NET_CARABINER_PER_NET = 1;
 export const CARGO_NET_VRING_PER_NET = 2;
 
-/** Is either cargo net on the job? */
+/** Summit Foundation System parts. */
+export const FOUNDATION_TILE_PART = 'GRPMAT158';
+export const FOUNDATION_RAMP_PART = 'BR158';
+export function foundationTilesQty(a: AdvAnswers): number {
+  return a.foundation ? Math.max(0, Math.floor(n(a.foundationTilesQty))) : 0;
+}
+export function foundationRampsQty(a: AdvAnswers): number {
+  return a.foundation ? Math.max(0, Math.floor(n(a.foundationRampsQty))) : 0;
+}
+
+/** Is a cargo net on the job? */
 export function cargoNetPicked(a: AdvAnswers): boolean {
-  return !!(a.cargoNet && (a.cargoNet10x8 || a.cargoNet8x6));
+  return cargoNetLines(a).length > 0;
 }
 /**
  * The conversion kit follows the ramp unless the rep has said otherwise. Reading an
@@ -1007,6 +1055,10 @@ export function explainAdventure(
   const rows: TraceRow[] = [];
   const warnings: string[] = [];
   for (const b of computeAdventureBOM(a, frameRules)) {
+    // Cargo nets are traced once, below, from the answers that price them on the
+    // proposal. The frame rules carry them too (so hardware formulas can count nets),
+    // and tracing both listed every net twice and doubled its cost in the totals.
+    if (CARGO_NET_PARTS.includes(b.part)) continue;
     const rec = LOOK[b.part];
     if (!rec) warnings.push(`${b.part} is not in the SKU table — priced at $0.00.`);
     const unitPriceMinor = rec ? rec.unitPriceMinor : 0;
@@ -1086,17 +1138,28 @@ export function explainAdventure(
     qty: cargoCarabinerQty(a),
     formula: '# snap-hook packs answered with the cargo net',
   });
+  const ruledNet = cargoNetForFrame(a.width, a.ladders);
+  const netFormula = isLegacyCargoNet(a)
+    ? '# of nets of this size answered'
+    : ruledNet
+      ? `# of nets answered · net chosen by frame: ${n(a.width)}' wide, ${
+          n(a.ladders) >= 1 ? `${n(a.ladders)} ladder(s)` : 'no ladder'
+        }`
+      : "# of nets answered · rep's pick (no rule for a frame wider than 10')";
+  for (const part of CARGO_NET_PARTS) {
+    picked.push({ rule: 'Cargo net', part, qty: cargoNetQtyOf(a, part), formula: netFormula });
+  }
   picked.push({
-    rule: 'Cargo net',
-    part: CARGO_NET_10X8_PART,
-    qty: a.cargoNet && a.cargoNet10x8 ? Math.max(1, n(a.cargoNet10x8Qty) || 1) : 0,
-    formula: "# of 10' x 8' nets",
+    rule: 'Summit Foundation System',
+    part: FOUNDATION_TILE_PART,
+    qty: foundationTilesQty(a),
+    formula: '# of interlocking floor tiles answered',
   });
   picked.push({
-    rule: 'Cargo net',
-    part: CARGO_NET_8X6_PART,
-    qty: a.cargoNet && a.cargoNet8x6 ? Math.max(1, n(a.cargoNet8x6Qty) || 1) : 0,
-    formula: "# of 8' x 6' nets",
+    rule: 'Summit Foundation System',
+    part: FOUNDATION_RAMP_PART,
+    qty: foundationRampsQty(a),
+    formula: '# of border ramp packs answered',
   });
   picked.push({
     rule: 'Accessories',
