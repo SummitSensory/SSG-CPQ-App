@@ -1,4 +1,4 @@
-import { lstat, readFile, readdir, rm, stat, statfs } from 'node:fs/promises';
+import { lstat, readFile, readdir, rm, stat, statfs, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { extname, join, sep } from 'node:path';
 import { logger } from '../lib/logger.js';
@@ -110,7 +110,7 @@ function chromiumExecutable(): Promise<LaunchConfig> {
       const args = sparticuz.args.map((a) =>
         a.startsWith('--disk-cache-size=') ? `--disk-cache-size=${DISK_CACHE_BYTES}` : a,
       );
-      return { executablePath, args };
+      return { executablePath: await noCoreDumpLauncher(executablePath), args };
     })();
     executablePromise = resolving;
     // A failed fetch must not be handed to the next caller as the answer.
@@ -119,6 +119,41 @@ function chromiumExecutable(): Promise<LaunchConfig> {
     });
   }
   return executablePromise;
+}
+
+/**
+ * A launcher that starts Chromium with core dumps switched off.
+ *
+ * Production 2026-10-01 00:19: the /tmp report on a refused render read
+ * `core.chromium.114 941 MB, core.chromium.150 908 MB, … core.chromium.182 133 MB`.
+ * The serverless host lets a crashing process dump its whole memory image, and
+ * Chromium's working directory is /tmp — so a single Chromium crash filled the 512 MB
+ * disk, the next render crashed for want of shared-memory space and dumped again, and
+ * every render after that failed (the 2026-09-30 "Target page, context or browser has
+ * been closed" alerts). Docker, where this was reproduced, disables core dumps by
+ * default, which is why the reproduction left /tmp clean.
+ *
+ * Node cannot lower a child's RLIMIT_CORE itself, so Playwright is pointed at this
+ * script, which does it and then execs the real binary — same process, same pipes
+ * (Playwright talks to it over --remote-debugging-pipe on fds 3 and 4, which exec
+ * keeps). If the script cannot be written, the binary is used directly and the sweep
+ * in removeCoreDumps still keeps /tmp clear between renders.
+ */
+const NO_CORE_LAUNCHER = 'chromium-nocore.sh';
+
+async function noCoreDumpLauncher(executablePath: string): Promise<string> {
+  const launcher = join(tmpdir(), NO_CORE_LAUNCHER);
+  const quoted = `'${executablePath.replace(/'/g, `'\\''`)}'`;
+  try {
+    await writeFile(launcher, `#!/bin/sh\nulimit -c 0\nexec ${quoted} "$@"\n`, { mode: 0o755 });
+    return launcher;
+  } catch (err) {
+    logger.warn(
+      { err },
+      'pdf: could not write the no-core-dump launcher; starting Chromium directly',
+    );
+    return executablePath;
+  }
 }
 
 /**
@@ -185,11 +220,12 @@ export class RendererTmpFullError extends Error {}
  * Chromium shared-memory file there is an orphan whatever its age, so all of them go.
  * If that still does not make room, the render is refused with the space report in the
  * error itself: the unhandled-error alert carries the message, and it is the one place
- * the next occurrence can say what is filling /tmp. On 2026-09-30 it could not be
- * said: renders reproduced on Amazon Linux 2023 left nothing behind (profiles ~1 MB,
- * removed on close; free space flat across sequential and concurrent renders).
+ * the next occurrence can say what is filling /tmp. It did: the first report
+ * (2026-10-01) named Chromium core dumps, now prevented and swept — see
+ * noCoreDumpLauncher and removeCoreDumps.
  */
 async function ensureTmpSpace(): Promise<void> {
+  await removeCoreDumps();
   await freeServerlessTmp(STALE_TMP_AGE_MS);
   const before = await tmpUsage();
   if (!before || before.freeBytes >= LOW_TMP_BYTES) return;
@@ -210,6 +246,43 @@ async function ensureTmpSpace(): Promise<void> {
   );
 }
 
+/**
+ * Core dumps in /tmp (`core`, `core.<pid>`, `core.chromium.<pid>`), removed before
+ * every serverless launch whatever their age: a dump is written by a process that has
+ * already died, so nothing is ever still using one. See noCoreDumpLauncher for why
+ * they appeared at all; this clears the ones a container already has, and any a
+ * crash still manages to write.
+ */
+const CORE_DUMP_RE = /^core(\.[\w-]+)*$/;
+
+async function removeCoreDumps(): Promise<void> {
+  const root = tmpdir();
+  const names = await readdir(root).catch(() => [] as string[]);
+  let removed = 0;
+  let bytes = 0;
+  for (const n of names) {
+    if (!CORE_DUMP_RE.test(n)) continue;
+    const s = await lstat(join(root, n)).catch(() => null);
+    if (!s?.isFile()) continue;
+    await rm(join(root, n), { force: true })
+      .then(() => {
+        removed += 1;
+        bytes += allocatedBytes(s);
+      })
+      .catch(() => undefined);
+  }
+  if (removed) logger.warn({ removed, bytes }, 'pdf: removed Chromium core dumps from /tmp');
+}
+
+/**
+ * Disk actually used, not the apparent size: a core dump is sparse, which is how two
+ * of them read 941 MB and 908 MB on a 525 MB disk. Falls back to the apparent size
+ * where the filesystem reports no block count.
+ */
+function allocatedBytes(s: { size: number; blocks?: number }): number {
+  return typeof s.blocks === 'number' && s.blocks > 0 ? s.blocks * 512 : s.size;
+}
+
 const mb = (bytes: number): string => `${Math.round(bytes / (1024 * 1024))} MB`;
 
 /** The biggest top-level entries in /tmp, sized recursively (symlinks not followed). */
@@ -221,7 +294,7 @@ async function largestTmpEntries(limit = 8): Promise<Array<{ name: string; bytes
     if (--budget < 0) return 0;
     const s = await lstat(path).catch(() => null);
     if (!s) return 0;
-    if (!s.isDirectory()) return s.size;
+    if (!s.isDirectory()) return allocatedBytes(s);
     let total = 0;
     for (const k of await readdir(path).catch(() => [] as string[])) {
       total += await sizeOf(join(path, k));
