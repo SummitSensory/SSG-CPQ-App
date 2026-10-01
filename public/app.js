@@ -11429,9 +11429,49 @@
             : '') +
           (canHandoff && p.status === 'SENT'
             ? '<button class="link-btn" data-po-send="' + p.id + '" style="width:auto;padding:5px 10px;font-size:12px;">Send again</button>' : '') +
-        '</div>';
+        '</div>' +
+        poSendRecordHtml(p.sends || []);
       }).join('') +
     '</div>';
+  }
+
+  /** Delivery column of the send record: what Resend's webhook has told us. */
+  function poDeliveryHtml(s) {
+    if (s.status === 'DELIVERED') {
+      return '<span style="color:#2f7d5d;font-weight:600;">Delivered</span>' +
+        (s.deliveredAt ? '<span class="muted"> · ' + esc(fmtDateTime(s.deliveredAt)) + '</span>' : '');
+    }
+    if (s.status === 'BOUNCED') return '<span style="color:#9c3327;font-weight:600;" title="' + esc(s.error || '') + '">Bounced — not received</span>';
+    if (s.status === 'FAILED') return '<span style="color:#9c3327;font-weight:600;" title="' + esc(s.error || '') + '">Failed — not sent</span>';
+    if (s.status === 'QUEUED') return '<span class="muted">Sending…</span>';
+    return '<span style="color:#8a6d1f;">Sent — awaiting delivery confirmation</span>';
+  }
+
+  /** Every emailing of one PO: when, to whom, by whom, and whether it arrived. */
+  function poSendRecordHtml(sends) {
+    if (!sends.length) return '';
+    var th = 'text-align:left;font-weight:600;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:#7a7f74;padding:4px 8px;';
+    var td = 'padding:5px 8px;border-top:1px solid #f2f3ef;vertical-align:top;';
+    return '<div style="padding:0 12px 10px;overflow-x:auto;">' +
+      '<table style="width:100%;border-collapse:collapse;font-size:12px;">' +
+        '<thead><tr>' +
+          '<th style="' + th + '">Date sent</th><th style="' + th + '">Time</th>' +
+          '<th style="' + th + '">Sent to</th><th style="' + th + '">Email</th>' +
+          '<th style="' + th + '">Sent by</th><th style="' + th + '">Delivery</th>' +
+        '</tr></thead><tbody>' +
+        sends.map(function (s) {
+          var d = new Date(s.sentAt);
+          return '<tr>' +
+            '<td style="' + td + 'white-space:nowrap;">' + esc(fmtDate(s.sentAt)) + '</td>' +
+            '<td style="' + td + 'white-space:nowrap;">' + esc(d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })) + '</td>' +
+            '<td style="' + td + '">' + (s.toName ? esc(s.toName) : '<span class="muted">—</span>') + '</td>' +
+            '<td style="' + td + 'word-break:break-all;">' + esc(s.to) +
+              (s.cc ? '<div class="muted" style="font-size:11px;">cc ' + esc(s.cc) + '</div>' : '') + '</td>' +
+            '<td style="' + td + '">' + (s.sentBy ? esc(s.sentBy) : '<span class="muted">—</span>') + '</td>' +
+            '<td style="' + td + '">' + poDeliveryHtml(s) + '</td>' +
+          '</tr>';
+        }).join('') +
+      '</tbody></table></div>';
   }
 
   /** The PO as the vendor will receive it, fetched with auth and opened as a blob. */
@@ -11613,7 +11653,8 @@
         'The purchase order is attached as a PDF. Replies come back to the orders desk. ' +
         (again ? 'This emails the same PO again under the same number.' : 'Sending locks it, and marks each part on the Manufacturing Process board as <b>PO Sent to Mfg</b> with this PO number and <b>Not Paid</b>.') + '</div>' +
       '<div style="margin-bottom:12px;"><button type="button" class="link-btn" id="poPreviewPdf" style="width:auto;padding:7px 13px;">Preview the PDF</button></div>' +
-      fieldRow('To', '<input id="poTo" type="text" style="' + IN + '" value="' + esc(d.to) + '" placeholder="orders@vendor.com">') +
+      fieldRow('Recipient name', '<input id="poToName" type="text" style="' + IN + '" value="' + esc(d.toName || '') + '" placeholder="Who at the vendor this is for">') +
+      fieldRow('To', '<input id="poTo"type="text" style="' + IN + '" value="' + esc(d.to) + '" placeholder="orders@vendor.com">') +
       fieldRow('Cc', '<input id="poCc" type="text" style="' + IN + '" value="' + esc(d.cc) + '" placeholder="Optional">') +
       fieldRow('Subject', '<input id="poSubj" style="' + IN + '" value="' + esc(d.subject) + '">') +
       '<div class="field"><label>Message</label><textarea id="poBodyTxt" rows="8" style="' + IN + 'resize:vertical;">' + esc(d.body) + '</textarea></div>' +
@@ -11629,6 +11670,7 @@
             method: 'POST',
             timeoutMs: RENDER_TIMEOUT_MS,
             body: {
+              toName: document.getElementById('poToName').value.trim(),
               to: to,
               cc: document.getElementById('poCc').value.trim(),
               subject: document.getElementById('poSubj').value.trim(),
