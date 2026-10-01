@@ -17,6 +17,12 @@
 
 import type { FormulaRule, RuleContext } from './hardwareRules.js';
 import { FOUR_LEG_MAX_FT, MIN_LEGS_OVER_FOUR_LEG_MAX } from './formulaSettings.js';
+import {
+  CARGO_NET_10X8_PART,
+  CARGO_NET_8X6_PART,
+  CARGO_NET_8X8_PART,
+  cargoNetQtyOf,
+} from './cargoNets.js';
 
 const n = (v: unknown): number =>
   typeof v === 'number' && Number.isFinite(v) ? v : Number(v) || 0;
@@ -43,6 +49,7 @@ export const FRAME_INPUTS: { key: string; label: string; kind: 'number' | 'flag'
   // Cargo nets are quantities rather than flags so a hardware formula can be driven
   // off how many are on the job, not merely that one is.
   { key: 'cargoNet10x8', label: "# of 10' x 8' cargo nets", kind: 'number' },
+  { key: 'cargoNet8x8', label: "# of 8' x 8' cargo nets", kind: 'number' },
   { key: 'cargoNet8x6', label: "# of 8' x 6' cargo nets", kind: 'number' },
   { key: 'climbFrame', label: 'Frame-mounted climbing wall', kind: 'flag' },
   { key: 'climbWall', label: 'Wall-mounted climbing wall', kind: 'flag' },
@@ -133,6 +140,7 @@ export const DEFAULT_FRAME_RULES: FormulaRule[] = [
   R('Slide', 'A-2349', 'Slide Conversion Kit', [[null, 1]], { when: flagOn('slideConvKit') }),
 
   R('Cargo net', 'B07V3J9S2R', "10' x 8' Climbing Cargo Net", [['in:cargoNet10x8', 1]]),
+  R('Cargo net', 'B09NNFJLGY', "8' x 8' Climbing Cargo Net", [['in:cargoNet8x8', 1]]),
   R('Cargo net', 'B07TSDMPNQ', "8' x 6' Climbing Cargo Net", [['in:cargoNet8x6', 1]]),
 
   R('Climbing wall', 'SSG-SA-CFM', 'Climbing Wall — Frame Mounted', [[null, 1]], {
@@ -209,6 +217,8 @@ export interface FrameAnswers {
   slideConvKit?: boolean;
   slideA2216?: boolean;
   cargoNet?: boolean;
+  cargoNetQty?: number;
+  cargoNetPart?: string;
   cargoNet10x8?: boolean;
   cargoNet10x8Qty?: number;
   cargoNet8x6?: boolean;
@@ -238,10 +248,11 @@ export function frameContext(a: FrameAnswers, bomQty: (part: string) => number):
     zipLines: a.zipLine ? n(a.zipLineQty || 1) : 0,
     climbWalls: (a.climbFrame ? 1 : 0) + (a.climbWall ? 1 : 0),
     brackets: a.brackets ? n(a.bracketsQty) : 0,
-    // A cargo net's quantity is 0 unless both the section and that size are on, so the
-    // rules never re-check their own switches.
-    cargoNet10x8: a.cargoNet && a.cargoNet10x8 ? Math.max(1, n(a.cargoNet10x8Qty) || 1) : 0,
-    cargoNet8x6: a.cargoNet && a.cargoNet8x6 ? Math.max(1, n(a.cargoNet8x6Qty) || 1) : 0,
+    // How many of each net the job takes — 0 for every size but the one the frame
+    // calls for (see cargoNets.ts), so the rules never re-check their own switches.
+    cargoNet10x8: cargoNetQtyOf(a, CARGO_NET_10X8_PART),
+    cargoNet8x8: cargoNetQtyOf(a, CARGO_NET_8X8_PART),
+    cargoNet8x6: cargoNetQtyOf(a, CARGO_NET_8X6_PART),
     monkeyBars: !!a.monkeyBars,
     zipLine: !!a.zipLine,
     ballRack: !!a.ballRack,

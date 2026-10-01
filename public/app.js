@@ -9226,10 +9226,11 @@
       trolley: false, trolleyType: 'Dual', interiorBeams: false, interiorBeamsQty: 1,
       zipLine: false, zipLineQty: 1, ballRack: false,
       slide: false, slideA2216: false, slideGray: false, steamroller: false, slideConvKit: false,
-      cargoNet: false, cargoNet10x8: false, cargoNet10x8Qty: 1, cargoNet8x6: false, cargoNet8x6Qty: 1,
+      cargoNet: false, cargoNetQty: 1, cargoNetPart: '',
       cargoHwCarabiner: true, cargoHwCarabinerQty: 1, cargoHwVRing: true, cargoHwVRingQty: 2,
       climbFrame: false, climbWall: false, climbShield: false, climbMat: false,
       matFloor: false, matColumn: false, uShaped: 0, completeWrap: 0, matLadderLeg: false, matCustom: false,
+      foundation: false, foundationTilesQty: 0, foundationRampsQty: 0,
       floorPadding: false, floorPadThickness: '3.25',
       brackets: false, bracketsQty: 0, swivel360: 0, swivelStandalone: 0, forged: 0, swingHanger: 0, vRings: 0, carabiner: 0, webbingSling: 0,
       partOverrides: {},
@@ -9270,8 +9271,15 @@
     // the ramp — see slideConvKitOn() in adventureSeries.ts.
     adv.slideConvKit = a.slideConvKit === undefined ? !!a.steamroller : !!a.slideConvKit;
     adv.cargoNet = !!a.cargoNet;
-    adv.cargoNet10x8 = !!a.cargoNet10x8; adv.cargoNet10x8Qty = Number(a.cargoNet10x8Qty) || 1;
-    adv.cargoNet8x6 = !!a.cargoNet8x6; adv.cargoNet8x6Qty = Number(a.cargoNet8x6Qty) || 1;
+    // Answers saved before the frame rule ticked each net size by hand. They open as
+    // the same number of nets, and the net itself now follows the frame (advCargoNetPart).
+    if (a.cargoNetQty === undefined && (a.cargoNet10x8 || a.cargoNet8x6)) {
+      adv.cargoNetQty = (a.cargoNet10x8 ? Number(a.cargoNet10x8Qty) || 1 : 0) + (a.cargoNet8x6 ? Number(a.cargoNet8x6Qty) || 1 : 0);
+      adv.cargoNetPart = a.cargoNet10x8 ? 'B07V3J9S2R' : 'B07TSDMPNQ';
+    } else {
+      adv.cargoNetQty = Number(a.cargoNetQty) || 1;
+      adv.cargoNetPart = a.cargoNetPart || '';
+    }
     adv.cargoHwCarabiner = a.cargoHwCarabiner !== false;
     adv.cargoHwCarabinerQty = Number(a.cargoHwCarabinerQty) || 1;
     adv.cargoHwVRing = a.cargoHwVRing !== false;
@@ -9282,6 +9290,8 @@
     adv.floorPadThickness = a.floorPadThickness === '2' ? '2' : '3.25';
     adv.matColumn = !!a.matColumn; adv.uShaped = Number(a.uShaped) || 0; adv.completeWrap = Number(a.completeWrap) || 0;
     adv.matLadderLeg = !!a.matLadderLeg; adv.matCustom = !!a.matCustom;
+    adv.foundation = !!a.foundation;
+    adv.foundationTilesQty = Number(a.foundationTilesQty) || 0; adv.foundationRampsQty = Number(a.foundationRampsQty) || 0;
     adv.brackets = !!a.brackets; adv.bracketsQty = Number(a.bracketsQty) || 0; adv.swivel360 = Number(a.swivel360) || 0;
     adv.swivelStandalone = Number(a.swivelStandalone) || 0; adv.forged = Number(a.forged) || 0;
     adv.swingHanger = Number(a.swingHanger) || 0; adv.vRings = Number(a.vRings) || 0;
@@ -9492,11 +9502,8 @@
             '</div>' : '') +
             tog('cargoNet', 'Cargo Net') +
             (adv.cargoNet ? '<div style="padding-left:16px;">' +
-              tog('cargoNet10x8', "10' x 8' — Climbing Cargo Net Black", 'Part B07V3J9S2R') +
-              (adv.cargoNet10x8 ? '<div style="' + grid + 'margin:8px 0 4px;">' + num('cargoNet10x8Qty', "# of 10' x 8' nets", 1, 20) + '</div>' : '') +
-              tog('cargoNet8x6', "8' x 6' — Climbing Cargo Net Black", 'Part B07TSDMPNQ') +
-              (adv.cargoNet8x6 ? '<div style="' + grid + 'margin:8px 0 4px;">' + num('cargoNet8x6Qty', "# of 8' x 6' nets", 1, 20) + '</div>' : '') +
-              (adv.cargoNet10x8 || adv.cargoNet8x6
+              advCargoNetHtml(grid, num) +
+              (advCargoNetPart()
                 ? '<div style="margin-top:10px;padding:10px 12px;background:#f8f9f6;border:1px solid #e7e8e3;border-radius:9px;">' +
                     '<div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:#20241f;margin-bottom:2px;">Comes with the net · prints under Cargo Net</div>' +
                     tog('cargoHwCarabiner', 'Heavy Duty Carabiners — 5/16" Spring Snap (50 Pack)', 'Part ' + CARGO_NET_CARABINER_PART) +
@@ -9525,6 +9532,13 @@
             (adv.matColumn ? '<div style="' + grid + 'margin:8px 0 4px;">' + num('uShaped', 'U-Shaped Column Wraps (def = # ladders)', 0, 40) + num('completeWrap', 'Complete Column Wraps (def = legs − U-shaped)', 0, 40) + '</div>' : '') +
             tog('matLadderLeg', 'Adventure Mat System — Ladder Leg', 'Qty = # of ladders (' + adv.laddersQty + ')') +
             tog('matCustom', 'Adventure Mat System — CUSTOM', 'Mat SKU logic to be provided — added as manual line')
+          ) +
+          sec('Summit Foundation System',
+            tog('foundation', 'Summit Foundation System') +
+            (adv.foundation ? '<div style="' + grid + 'margin:8px 0 4px;padding-left:16px;">' +
+              num('foundationTilesQty', 'Interlocking Floor Tiles (40" x 40" x 1.5")', 0, 500, '', 'Part GRPMAT158') +
+              num('foundationRampsQty', 'Border Ramps (40" x 40" x 1.5") — 2-packs', 0, 500, '', 'Part BR158 · quantity is packs') +
+            '</div>' : '')
           ) +
           sec('Hardware',
             '<div style="font-weight:600;font-size:13.5px;color:#3d4a55;margin-bottom:4px;">Quick Shift Saddle Bracket</div>' +
@@ -9603,6 +9617,47 @@
     adv.hwTouched = adv.hwTouched || {};
     adv.hwTouched[key] = true;
   }
+  /* Cargo net — which net the frame takes. Mirrors cargoNetForFrame in
+     src/proposals/cargoNets.ts, which is what actually prices the proposal. */
+  var ADV_CARGO_NETS = {
+    B07V3J9S2R: "10' x 8' — Climbing Cargo Net Black",
+    B09NNFJLGY: "8' x 8' — Climbing Cargo Net Black",
+    B07TSDMPNQ: "8' x 6' — Climbing Cargo Net Black",
+  };
+  function advLadderCount() { return adv.ladders ? (Number(adv.laddersQty) || 0) : 0; }
+  /** The frame's net, or null for a frame wider than 10' (the rep picks). */
+  function advCargoNetForFrame() {
+    var w = Number(adv.width) || 0, ladder = advLadderCount() >= 1;
+    if (w <= 0 || w > 10) return null;
+    if (w > 8) return ladder ? 'B09NNFJLGY' : 'B07V3J9S2R';
+    return ladder ? 'B07TSDMPNQ' : 'B09NNFJLGY';
+  }
+  function advCargoNetPart() {
+    return advCargoNetForFrame() || (ADV_CARGO_NETS[adv.cargoNetPart] ? adv.cargoNetPart : '');
+  }
+  function advCargoNetHtml(grid, num) {
+    var ruled = advCargoNetForFrame();
+    var w = Number(adv.width) || 0, l = advLadderCount();
+    var why = w + "' wide frame, " + (l >= 1 ? l + ' ladder' + (l === 1 ? '' : 's') : 'no ladder');
+    if (ruled) {
+      return '<div style="margin:6px 0 4px;padding:10px 12px;background:#f8f9f6;border:1px solid #e7e8e3;border-radius:9px;">' +
+          '<div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:#5c6157;">Net for this frame · ' + esc(why) + '</div>' +
+          '<div style="font-size:14px;font-weight:600;margin-top:2px;">' + esc(ADV_CARGO_NETS[ruled]) + '</div>' +
+          '<div class="muted" style="font-size:12px;">Part ' + ruled + ' · changes with the frame width and ladders</div>' +
+        '</div>' +
+        '<div style="' + grid + 'margin:8px 0 4px;">' + num('cargoNetQty', '# of cargo nets', 1, 20) + '</div>';
+    }
+    return '<div style="margin:6px 0 4px;font-size:12px;color:#8a6d1f;">No net rule covers a frame wider than 10\'. Pick the net.</div>' +
+      '<div style="' + grid + 'margin:8px 0 4px;">' +
+        '<div class="af"><label style="display:block;font-size:11px;color:#20241f;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">Cargo net</label>' +
+          '<select data-ak="cargoNetPart" style="width:100%;padding:8px 10px;border:1px solid #dcded7;border-radius:8px;font-size:14px;background:#fff;">' +
+            '<option value="">Choose a net…</option>' +
+            Object.keys(ADV_CARGO_NETS).map(function (p) { return '<option value="' + p + '"' + (adv.cargoNetPart === p ? ' selected' : '') + '>' + esc(ADV_CARGO_NETS[p]) + ' (' + p + ')</option>'; }).join('') +
+          '</select></div>' +
+        num('cargoNetQty', '# of cargo nets', 1, 20) +
+      '</div>';
+  }
+
   /** Square when the footprint is a square, Rectangle otherwise. */
   function autoConfig() { return (Number(adv.length) || 0) === (Number(adv.width) || 0) ? 'Square' : 'Rectangle'; }
 
@@ -9621,15 +9676,16 @@
     if (changed === 'slide' && !adv.slide) { adv.slideA2216 = false; adv.slideGray = false; adv.steamroller = false; adv.slideConvKit = false; }
     // A net has to hang off something. Both fixings come with the first net and can
     // be unticked afterwards; clearing the section clears them.
-    if (changed === 'cargoNet10x8' || changed === 'cargoNet8x6') {
-      if (adv.cargoNet10x8 || adv.cargoNet8x6) {
+    if (changed === 'cargoNet' || changed === 'cargoNetPart') {
+      if (adv.cargoNet && advCargoNetPart()) {
+        if (!(Number(adv.cargoNetQty) > 0)) adv.cargoNetQty = 1;
         adv.cargoHwCarabiner = true; adv.cargoHwVRing = true;
         if (!(Number(adv.cargoHwCarabinerQty) > 0)) adv.cargoHwCarabinerQty = 1;
         if (!(Number(adv.cargoHwVRingQty) > 0)) adv.cargoHwVRingQty = 2;
       }
     }
     if (changed === 'cargoNet' && !adv.cargoNet) {
-      adv.cargoNet10x8 = false; adv.cargoNet8x6 = false;
+      adv.cargoNetQty = 1; adv.cargoNetPart = '';
       adv.cargoHwCarabiner = true; adv.cargoHwVRing = true;
     }
     if (changed === 'legs' || changed === 'length') { adv.completeWrap = Math.max(0, (Number(adv.legs) || 0) - (Number(adv.uShaped) || 0)); }
@@ -9646,11 +9702,11 @@
       trolley: !!adv.trolley, trolleyType: adv.trolleyType, zipLine: !!adv.zipLine, zipLineQty: Number(adv.zipLineQty), ballRack: !!adv.ballRack,
       slide: !!adv.slide, slideA2216: !!adv.slideA2216, slideGray: !!adv.slideGray, steamroller: !!adv.steamroller, slideConvKit: !!adv.slideConvKit,
       cargoNet: !!adv.cargoNet,
-      cargoNet10x8: !!adv.cargoNet10x8, cargoNet10x8Qty: Number(adv.cargoNet10x8Qty) || 1,
-      cargoNet8x6: !!adv.cargoNet8x6, cargoNet8x6Qty: Number(adv.cargoNet8x6Qty) || 1,
+      cargoNetQty: Number(adv.cargoNetQty) || 1, cargoNetPart: adv.cargoNetPart || '',
       cargoHwCarabiner: adv.cargoHwCarabiner !== false, cargoHwCarabinerQty: Number(adv.cargoHwCarabinerQty) || 1,
       cargoHwVRing: adv.cargoHwVRing !== false, cargoHwVRingQty: Number(adv.cargoHwVRingQty) || 2,
       climbFrame: !!adv.climbFrame, climbWall: !!adv.climbWall, climbShield: !!adv.climbShield, climbMat: !!adv.climbMat,
+      foundation: !!adv.foundation, foundationTilesQty: Number(adv.foundationTilesQty) || 0, foundationRampsQty: Number(adv.foundationRampsQty) || 0,
       matFloor: !!adv.floorPadding, matColumn: !!adv.matColumn, uShaped: Number(adv.uShaped), completeWrap: Number(adv.completeWrap), matLadderLeg: !!adv.matLadderLeg, matCustom: !!adv.matCustom,
       floorPadding: !!adv.floorPadding, floorPadThickness: adv.floorPadThickness === '2' ? '2' : '3.25',
       brackets: !!adv.brackets, bracketsQty: Number(adv.bracketsQty), swivel360: Number(adv.swivel360), swivelStandalone: Number(adv.swivelStandalone), forged: Number(adv.forged), swingHanger: Number(adv.swingHanger), vRings: Number(adv.vRings), carabiner: Number(adv.carabiner), webbingSling: Number(adv.webbingSling),
