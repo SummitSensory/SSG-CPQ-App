@@ -181,7 +181,7 @@ export function registerWebhookRoutes(app: FastifyInstance): void {
       if (event.type === 'email.delivered') {
         await prisma.purchaseOrderSend.update({
           where: { id: poSend.id },
-          data: { status: 'DELIVERED' },
+          data: { status: 'DELIVERED', deliveredAt: new Date() },
         });
       } else if (event.type === 'email.bounced') {
         await prisma.purchaseOrderSend.update({

@@ -36,6 +36,8 @@ Thank you,
 Summit Sensory Gym`;
 
 export interface PurchaseOrderSendInput {
+  /** The person at the vendor it is addressed to — kept on the send record. */
+  toName?: string;
   to: string;
   cc?: string;
   subject: string;
@@ -92,7 +94,10 @@ export async function purchaseOrderSendDefaults(poId: string) {
             poEmailBody: true,
             bomEmailTo: true,
             bomEmailCc: true,
+            contactName: true,
             contactEmail: true,
+            altContactName: true,
+            altContactEmail: true,
           },
         })
       : null,
@@ -108,8 +113,17 @@ export async function purchaseOrderSendDefaults(poId: string) {
     projectId: po.projectId,
     total: money(po.totalMinor),
   };
+  const to = (mfr?.poEmailTo || mfr?.bomEmailTo || mfr?.contactEmail || '').trim();
+  // Who that address belongs to, where the profile says: the alternate contact when
+  // it is theirs, otherwise the primary contact.
+  const first = addresses(to)[0]?.toLowerCase();
+  const alt = mfr?.altContactEmail?.trim().toLowerCase();
+  const toName = (
+    (first && alt && first === alt ? mfr?.altContactName : mfr?.contactName) || ''
+  ).trim();
   return {
-    to: (mfr?.poEmailTo || mfr?.bomEmailTo || mfr?.contactEmail || '').trim(),
+    toName,
+    to,
     cc: (mfr?.poEmailCc || mfr?.bomEmailCc || '').trim(),
     subject: renderTemplate(mfr?.poEmailSubject || DEFAULT_SUBJECT, vars),
     body: renderTemplate(mfr?.poEmailBody || DEFAULT_BODY, vars),
@@ -188,6 +202,7 @@ export async function sendPurchaseOrder(
   const send = await prisma.purchaseOrderSend.create({
     data: {
       poId,
+      toName: input.toName?.trim() || null,
       toEmail: to.join(', '),
       ccEmails: cc.length ? cc.join(', ') : null,
       subject: input.subject.trim(),
@@ -264,7 +279,12 @@ export async function sendPurchaseOrder(
       orderId: po.orderId,
       action: 'po.sent',
       actorId,
-      detail: { vendor: po.vendor, reference: po.reference, to: to.join(', ') } as object,
+      detail: {
+        vendor: po.vendor,
+        reference: po.reference,
+        toName: input.toName?.trim() || null,
+        to: to.join(', '),
+      } as object,
     },
   });
   logger.info({ poId, vendor: po.vendor, to }, 'po send: sent');

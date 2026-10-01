@@ -33,6 +33,7 @@ const PoInputSchema = z.object({
 });
 const CreateSchema = PoInputSchema.extend({ vendor: z.string().trim().min(1).max(160) });
 const SendSchema = z.object({
+  toName: z.string().trim().max(200).optional(),
   to: z.string().trim().min(1),
   cc: z.string().trim().optional(),
   subject: z.string().trim().min(1).max(300),
