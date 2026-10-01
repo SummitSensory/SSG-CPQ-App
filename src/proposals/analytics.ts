@@ -172,39 +172,64 @@ const isBundleChild = (l: RawItem): boolean =>
  * every row is already correct for COGS and freight weight.
  */
 function countedRevenueMinor(lines: RawItem[]): number {
-  const extended = (l: RawItem): number => Math.round(n(l.quantity) * n(l.rateMinor));
+  return countedRevenueByLine(lines).reduce((a, v) => a + v, 0);
+}
 
-  let total = 0;
-  let parentAmount = 0;
-  let childAmount = 0;
-  let inBundle = false;
+/**
+ * The same rule, line by line: what each row contributes to the subtotal, index for
+ * index with `lines` (0 for headings and notes).
+ *
+ * Anything that itemizes a proposal — the QuickBooks estimate and invoices — must use
+ * this rather than `quantity × rate` per row, or it bills a bundle twice. P-2026-000086
+ * (2026-10-01): the Slackline Line & Safety Bundle was priced at $109.47 on the parent
+ * and its three components also carried their own rates summing to $109.47; the
+ * proposal and its frozen total counted the bundle once, the QuickBooks invoice summed
+ * every row, and the push was refused as $109.47 over the accepted total.
+ *
+ * Within a bundle exactly one side keeps its amounts: the parent when it is priced
+ * (its components count 0), otherwise the components. A component with no parent above
+ * it counts on its own.
+ */
+export function countedRevenueByLine(lines: RawItem[]): number[] {
+  const extended = (l: RawItem): number => Math.round(n(l.quantity) * n(l.rateMinor));
+  const out = lines.map(() => 0);
+
+  let parentIdx = -1;
+  let children: number[] = [];
 
   const close = (): void => {
-    if (!inBundle) return;
-    total += parentAmount !== 0 ? parentAmount : childAmount;
-    inBundle = false;
-    parentAmount = 0;
-    childAmount = 0;
+    if (parentIdx === -1) return;
+    const parent = lines[parentIdx];
+    const parentAmount = parent ? extended(parent) : 0;
+    if (parentAmount !== 0) {
+      out[parentIdx] = parentAmount;
+    } else {
+      for (const i of children) {
+        const child = lines[i];
+        if (child) out[i] = extended(child);
+      }
+    }
+    parentIdx = -1;
+    children = [];
   };
 
-  for (const l of lines) {
+  lines.forEach((l, i) => {
     if ((l.lineType ?? 'PRODUCT') !== 'PRODUCT') {
       // A heading between a parent and its parts ends the run. The builder keeps
       // them contiguous, so this only fires on genuinely separated rows.
       close();
-      continue;
+      return;
     }
     if (isBundleChild(l)) {
-      if (inBundle) childAmount += extended(l);
-      else total += extended(l);
-      continue;
+      if (parentIdx !== -1) children.push(i);
+      else out[i] = extended(l);
+      return;
     }
     close();
-    parentAmount = extended(l);
-    inBundle = true;
-  }
+    parentIdx = i;
+  });
   close();
-  return total;
+  return out;
 }
 
 /**
