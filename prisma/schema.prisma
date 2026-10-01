@@ -2594,10 +2594,15 @@ model PurchaseOrderLine {
   @@index([poId])
 }
 
+/// One emailing of a purchase order: who it was addressed to, who at Summit sent it,
+/// and whether the vendor's mail server took it. Listed under the PO in the vendor's
+/// section of the order.
 model PurchaseOrderSend {
   id                String               @id @default(cuid())
   poId              String
   po                PurchaseOrder        @relation(fields: [poId], references: [id], onDelete: Cascade)
+  /// The person at the vendor it was addressed to, as entered in the send window.
+  toName            String?
   toEmail           String
   ccEmails          String?
   subject           String
@@ -2607,6 +2612,8 @@ model PurchaseOrderSend {
   error             String?
   sentById          String
   createdAt         DateTime             @default(now())
+  /// When Resend's webhook reported the recipient's mail server accepted it.
+  deliveredAt       DateTime?
 
   @@index([poId])
   @@index([providerMessageId])

@@ -64,6 +64,9 @@ const db = {
   mfr: { poEnabled: true } as Record<string, unknown> | null,
   created: null as Record<string, unknown> | null,
   po: null as Record<string, unknown> | null,
+  pos: [] as Record<string, unknown>[],
+  users: [] as Record<string, unknown>[],
+  mfrProfile: null as Record<string, unknown> | null,
 };
 vi.mock('../../src/lib/prisma.js', () => ({
   prisma: {
@@ -81,10 +84,13 @@ vi.mock('../../src/lib/prisma.js', () => ({
       findFirst: vi.fn(async () =>
         db.mfr ? { id: 'm1', name: 'TFH Special Needs Toys', rfqAbbrev: 'TFH', ...db.mfr } : null,
       ),
+      findUnique: vi.fn(async () => db.mfrProfile),
     },
+    organization: { findUnique: vi.fn(async () => ({ name: 'Miracles in Motion' })) },
+    user: { findMany: vi.fn(async () => db.users) },
     proposalVersion: { findUnique: vi.fn(async () => ({ sections: [] })) },
     purchaseOrder: {
-      findMany: vi.fn(async () => []),
+      findMany: vi.fn(async () => db.pos),
       findFirst: vi.fn(async () => null),
       findUnique: vi.fn(async () => db.po),
       create: vi.fn(async (args: { data: Record<string, unknown> }) => {
@@ -96,16 +102,108 @@ vi.mock('../../src/lib/prisma.js', () => ({
   },
 }));
 
-const { poReference, purchaseOrderSource, createPurchaseOrder } =
+const { poReference, purchaseOrderSource, createPurchaseOrder, listOrderPurchaseOrders } =
   await import('../../src/handoff/purchaseOrder.js');
 const { renderPurchaseOrderDocument } = await import('../../src/handoff/purchaseOrderDocument.js');
-const { sendPurchaseOrder } = await import('../../src/handoff/purchaseOrderSend.js');
+const { sendPurchaseOrder, purchaseOrderSendDefaults } =
+  await import('../../src/handoff/purchaseOrderSend.js');
 
 beforeEach(() => {
   db.order = { locked: true, status: 'RELEASED' };
   db.mfr = { poEnabled: true };
   db.created = null;
   db.po = null;
+  db.pos = [];
+  db.users = [];
+  db.mfrProfile = null;
+});
+
+describe('the send record on the vendor section', () => {
+  it('lists every emailing with recipient, sender, time and delivery confirmation', async () => {
+    db.pos = [
+      {
+        id: 'po1',
+        vendor: 'TFH Special Needs Toys',
+        reference: 'PO-13144920202-TFH',
+        status: 'SENT',
+        totalMinor: 58820,
+        sentAt: new Date('2026-09-30T15:00:00Z'),
+        mondayResult: null,
+        _count: { lines: 2 },
+        sends: [
+          {
+            id: 's2',
+            createdAt: new Date('2026-10-01T16:42:00Z'),
+            toName: 'Pat Vendor',
+            toEmail: 'orders@tfh.com',
+            ccEmails: null,
+            subject: 'PO again',
+            sentById: 'u2',
+            status: 'SENT',
+            deliveredAt: null,
+            error: null,
+          },
+          {
+            id: 's1',
+            createdAt: new Date('2026-09-30T15:00:00Z'),
+            toName: null,
+            toEmail: 'orders@tfh.com',
+            ccEmails: 'sales@tfh.com',
+            subject: 'PO',
+            sentById: 'u1',
+            status: 'DELIVERED',
+            deliveredAt: new Date('2026-09-30T15:00:04Z'),
+            error: null,
+          },
+        ],
+      },
+    ];
+    db.users = [
+      { id: 'u1', name: 'Bryan Shepherd', email: 'bryan@example.test' },
+      { id: 'u2', name: null, email: 'ops@example.test' },
+    ];
+    const [po] = await listOrderPurchaseOrders('o1');
+    expect(po?.sends).toEqual([
+      expect.objectContaining({
+        sentAt: '2026-10-01T16:42:00.000Z',
+        toName: 'Pat Vendor',
+        to: 'orders@tfh.com',
+        sentBy: 'ops@example.test',
+        status: 'SENT',
+        deliveredAt: null,
+      }),
+      expect.objectContaining({
+        toName: null,
+        cc: 'sales@tfh.com',
+        sentBy: 'Bryan Shepherd',
+        status: 'DELIVERED',
+        deliveredAt: '2026-09-30T15:00:04.000Z',
+      }),
+    ]);
+  });
+
+  it("offers the name of whoever owns the default address on the vendor's profile", async () => {
+    db.po = {
+      id: 'po1',
+      manufacturerId: 'm1',
+      vendor: 'TFH Special Needs Toys',
+      reference: 'PO-13144920202-TFH',
+      projectId: '13144920202',
+      totalMinor: 0,
+      status: 'DRAFT',
+      order: { organizationId: 'org1' },
+    };
+    db.mfrProfile = {
+      poEmailTo: 'Orders@TFH.com',
+      contactName: 'Pat Primary',
+      contactEmail: 'pat@tfh.com',
+      altContactName: 'Alex Orders',
+      altContactEmail: 'orders@tfh.com',
+    };
+    expect((await purchaseOrderSendDefaults('po1')).toName).toBe('Alex Orders');
+    db.mfrProfile = { ...db.mfrProfile, altContactEmail: 'someone@tfh.com' };
+    expect((await purchaseOrderSendDefaults('po1')).toName).toBe('Pat Primary');
+  });
 });
 
 describe('poReference', () => {

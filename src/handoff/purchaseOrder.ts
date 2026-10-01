@@ -408,9 +408,18 @@ export async function listOrderPurchaseOrders(orderId: string) {
     orderBy: [{ vendor: 'asc' }, { sequence: 'asc' }],
     include: {
       _count: { select: { lines: true } },
-      sends: { orderBy: { createdAt: 'desc' }, take: 1 },
+      sends: { orderBy: { createdAt: 'desc' } },
     },
   });
+  // Sender ids are plain strings on the send row, not relations: one lookup for all.
+  const senderIds = [...new Set(pos.flatMap((p) => p.sends.map((s) => s.sentById)))];
+  const senders = senderIds.length
+    ? await prisma.user.findMany({
+        where: { id: { in: senderIds } },
+        select: { id: true, name: true, email: true },
+      })
+    : [];
+  const senderName = new Map(senders.map((u) => [u.id, u.name?.trim() || u.email]));
   return pos.map((p) => ({
     id: p.id,
     vendor: p.vendor,
@@ -422,6 +431,19 @@ export async function listOrderPurchaseOrders(orderId: string) {
     lastSend: p.sends[0]
       ? { status: p.sends[0].status, to: p.sends[0].toEmail, error: p.sends[0].error }
       : null,
+    /** Every emailing, newest first — the send record shown under the PO. */
+    sends: p.sends.map((s) => ({
+      id: s.id,
+      sentAt: s.createdAt.toISOString(),
+      toName: s.toName,
+      to: s.toEmail,
+      cc: s.ccEmails,
+      subject: s.subject,
+      sentBy: senderName.get(s.sentById) ?? null,
+      status: s.status,
+      deliveredAt: s.deliveredAt ? s.deliveredAt.toISOString() : null,
+      error: s.error,
+    })),
     mondayResult: p.mondayResult ?? null,
   }));
 }
