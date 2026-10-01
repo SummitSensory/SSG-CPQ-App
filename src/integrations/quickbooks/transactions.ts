@@ -16,7 +16,7 @@ import { findOrCreateCustomer } from './customers.js';
 import { buildEstimateBody } from './estimates.js';
 import { buildInvoiceBody, buildPortionInvoiceBody } from './invoices.js';
 import { TXN_LABEL, type AcceptedLine } from './mapping.js';
-import { versionTotals } from '../../proposals/analytics.js';
+import { versionTotals, countedRevenueByLine, type RawItem } from '../../proposals/analytics.js';
 import { findLink } from './links.js';
 import { assertSkusMapped } from './skuPreflight.js';
 import { resolveSynthesizedItemId } from './synthesizedItems.js';
@@ -296,8 +296,14 @@ async function fromProposalBuilder(
   // through as description-only lines so the QuickBooks document reads like the
   // proposal the customer accepted. Only PRODUCT rows carry money, which is the
   // same rule the proposal's own totals use.
+  //
+  // And a bundle's money is counted ONCE, by that same rule (countedRevenueByLine):
+  // inside a priced bundle the component rows still travel, with their part numbers,
+  // but at $0. Summing quantity × rate on every row billed P-2026-000086's slackline
+  // bundle twice and the invoice was refused as $109.47 over the accepted total.
+  const counted = countedRevenueByLine(items as RawItem[]);
   const lines: AcceptedLine[] = [];
-  for (const it of items) {
+  for (const [idx, it] of items.entries()) {
     const lineType = String(it.lineType ?? 'PRODUCT');
 
     if (lineType === 'GROUP' || lineType === 'SUBGROUP') {
@@ -323,7 +329,7 @@ async function fromProposalBuilder(
     if (lineType !== 'PRODUCT') continue;
 
     const qty = num(it.quantity);
-    const amountMinor = BigInt(Math.round(qty * num(it.rateMinor)));
+    const amountMinor = BigInt(counted[idx] ?? 0);
     const productId = typeof it.productId === 'string' ? it.productId : null;
     const sku = typeof it.sku === 'string' ? it.sku.trim().toUpperCase() : '';
     // Prefer the product-id link; fall back to the SKU-keyed link so generated
