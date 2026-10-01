@@ -70,7 +70,7 @@ async function sectionExtras(orderId: string, vendor: string) {
  * as currency, while every other renderer keeps reading `text` and never has to
  * know a numeric cell exists.
  *
- * `bold` and `align` are extensibility, not policy: nothing in `buildModel` sets
+ * `bold` and `align` are extensibility, not policy: nothing in `buildBomModel` sets
  * `bold` today — no line or column is flagged that way — but a caller (or a later
  * per-vendor preference) can mark specific cells without editing `renderBomXlsx`,
  * which applies whatever the model marks and decides nothing on its own beyond its
@@ -151,7 +151,7 @@ export interface BomModel {
   doc: BomDocument;
 }
 
-async function buildModel(
+export async function buildBomModel(
   orderId: string,
   vendor: string,
   opts: { includeZeroQty?: boolean; actorId?: string },
@@ -473,7 +473,7 @@ export async function renderBomHtml(
   vendor: string,
   opts: { includeZeroQty?: boolean; actorId?: string } = {},
 ): Promise<{ html: string; doc: BomDocument }> {
-  const m = await buildModel(orderId, vendor, opts);
+  const m = await buildBomModel(orderId, vendor, opts);
 
   const addressBlock = (a: { title: string; lines: string[] }) => `<div style="flex:1;min-width:0;">
     <div style="font-size:8pt;text-transform:uppercase;letter-spacing:.06em;color:#8a8f85;margin-bottom:3px;font-weight:600;">${esc(a.title)}</div>
@@ -613,7 +613,7 @@ export async function renderBomXlsx(
   vendor: string,
   opts: { includeZeroQty?: boolean; actorId?: string } = {},
 ): Promise<{ buffer: Buffer; doc: BomDocument }> {
-  const m = await buildModel(orderId, vendor, opts);
+  const m = await buildBomModel(orderId, vendor, opts);
   const wb = new ExcelJS.Workbook();
   const sheet = wb.addWorksheet('Bill of Materials');
 
@@ -868,7 +868,7 @@ export async function renderBomCsv(
   vendor: string,
   opts: { includeZeroQty?: boolean; actorId?: string } = {},
 ): Promise<{ csv: string; doc: BomDocument }> {
-  const m = await buildModel(orderId, vendor, opts);
+  const m = await buildBomModel(orderId, vendor, opts);
 
   // Customer-typed text (delivery instructions, contact names) reaches this sheet
   // from the portal. A cell starting with = + - @ runs as a formula when the CSV is

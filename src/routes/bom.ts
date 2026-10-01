@@ -20,6 +20,7 @@ import {
 } from '../handoff/bomSections.js';
 import { dealFigures } from '../handoff/dealFigures.js';
 import { sendBom } from '../handoff/bomSend.js';
+import { checkOrderColors } from '../portal/colorCheck.js';
 import {
   approveVendorInvoice,
   reopenVendorInvoice,
@@ -134,6 +135,15 @@ export function registerBomRoutes(app: FastifyInstance): void {
   const read = { preHandler: requirePermission(Permission.ORDERS_READ) };
   const handoff = { preHandler: requirePermission(Permission.HANDOFF_MANAGE) };
   const admin = { preHandler: requirePermission(Permission.PRODUCTS_ADMIN) };
+
+  /**
+   * The colour check: every portal colour pick traced from its monday column to the
+   * Powder color cell on each vendor's printed BOM. Read-only — see colorCheck.ts.
+   */
+  app.get('/orders/:id/bom/color-check', read, async (req) => {
+    const { id } = req.params as { id: string };
+    return checkOrderColors(id);
+  });
 
   // ------------------------------------------------------------- sections
   app.get('/orders/:id/bom/sections', read, async (req) => {

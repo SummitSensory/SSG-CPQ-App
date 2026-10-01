@@ -11354,6 +11354,7 @@
           '<input type="checkbox" id="bomZeroQty"> Include zero-quantity parts</label>' +
         '<label style="display:flex;gap:7px;align-items:center;font-size:12.5px;color:#5c6157;cursor:pointer;white-space:nowrap;" title="Off, the ship-to list shows this order’s confirmed address and the reusable ones. On, it also shows addresses confirmed by other orders’ customers.">' +
           '<input type="checkbox" id="bomAllAddr"' + (bomAllAddresses ? ' checked' : '') + '> Show every saved address</label>' +
+        '<button class="link-btn" id="bomColorCheck" title="Trace every color the customer picked, from its monday column to the Powder color cell on each vendor’s printed BOM, and flag anything in the wrong place. Changes nothing." style="width:auto;padding:8px 14px;white-space:nowrap;">Check colors</button>' +
         (canHandoff
           ? '<button class="link-btn" id="bomApplyBuild" title="Re-read Catalog → BOM build: explode any part declared as made of other parts, and move free-issue parts onto the vendor they ship to" style="width:auto;padding:8px 14px;white-space:nowrap;">Apply BOM build rules</button>' +
             '<button class="link-btn" id="bomCostRefresh" title="Compare every line against the catalog cost and pick which to bring up to date. Internal only — the customer’s proposal and invoice are untouched." style="width:auto;padding:8px 14px;white-space:nowrap;">Refresh costs from catalog</button>'
@@ -11384,6 +11385,99 @@
   }
 
   /** One vendor's block: visually separated, greyed out once submitted. */
+  /* --- Colour check ------------------------------------------------------------
+     Traces every colour the customer picked in the portal from where it was read
+     on monday (board / item / column id / JSON key), through the parts mapped to
+     that area, to the Powder color cell on each vendor's printed BOM. Read-only:
+     GET /orders/:id/bom/color-check (src/portal/colorCheck.ts). */
+
+  var COLOR_KIND_LABEL = { FRAME: 'Frame paint', VINYL: 'Vinyl', OTHER: 'Material' };
+
+  function colorCheckStatusHtml(l) {
+    if (l.status === 'OK') return '<span style="color:#2f7d5d;font-weight:600;">✓ Correct</span>';
+    if (l.status === 'NOT_ON_BOM') {
+      return '<span style="color:#9c3327;font-weight:600;">Not printed on the BOM</span>' +
+        (l.columnShown ? '' : '<div class="muted" style="font-size:11px;">The Powder color column is off for this vendor</div>');
+    }
+    return '<span style="color:#9c3327;font-weight:600;">Wrong color</span>' +
+      (l.vendorSubmitted ? '<div class="muted" style="font-size:11px;">Sheet already submitted to the vendor</div>' : '');
+  }
+
+  function colorCheckHtml(rep) {
+    var th = 'text-align:left;font-weight:600;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:#7a7f74;padding:5px 8px;';
+    var td = 'padding:6px 8px;border-top:1px solid #f2f3ef;vertical-align:top;font-size:12.5px;';
+    var code = function (v) { return '<code style="font-size:11.5px;background:#f2f3ef;padding:1px 5px;border-radius:4px;">' + esc(v) + '</code>'; };
+    var src = rep.source;
+    var head =
+      '<div style="font-size:12.5px;line-height:1.6;margin-bottom:12px;">' +
+        '<div><b>Source on monday:</b> ' + esc(src.columnTitle) + ' — column ' + code(src.columnId) +
+          ' on board ' + code(src.boardId) + (src.itemId ? ', item ' + code(src.itemId) : '') + '</div>' +
+        (rep.portal.found
+          ? '<div class="muted">Answers ' + (rep.portal.reviewed ? 'reviewed' : '<b style="color:#8a6d1f;">not reviewed yet</b> — colors are written to the BOM when the answers are reviewed on the order’s Portal tab') +
+            (rep.portal.lastSyncedAt ? ' · last read from monday ' + esc(fmtDateTime(rep.portal.lastSyncedAt)) : '') + '</div>'
+          : '<div style="color:#8a6d1f;">No color answers have been read from monday for this order. Sync the portal on the order first.</div>') +
+      '</div>';
+    var sum = rep.summary;
+    var banner = !rep.areas.length ? '' :
+      '<div style="padding:9px 12px;border-radius:9px;margin-bottom:12px;font-size:13px;font-weight:600;' +
+        (sum.problems ? 'background:#fbeeec;color:#9c3327;">' + sum.problems + ' problem' + (sum.problems === 1 ? '' : 's') + ' found'
+          : 'background:#eaf4ef;color:#2f7d5d;">Every color is in the right place') +
+        ' <span style="font-weight:400;">· ' + sum.ok + ' line' + (sum.ok === 1 ? '' : 's') + ' correct across ' + sum.areas + ' area' + (sum.areas === 1 ? '' : 's') + '</span></div>';
+
+    var areas = rep.areas.map(function (a) {
+      var rows = a.lines.map(function (l) {
+        return '<tr>' +
+          '<td style="' + td + '">' + esc(l.vendor) + '</td>' +
+          '<td style="' + td + '"><b>' + esc(l.sku) + '</b><div class="muted" style="font-size:11px;">' + esc(l.name) + '</div></td>' +
+          '<td style="' + td + '">' + esc(l.expected) + '</td>' +
+          '<td style="' + td + '">' + (l.onLine ? esc(l.onLine) : '<span class="muted">—</span>') + '</td>' +
+          '<td style="' + td + '">' + (l.onBom ? esc(l.onBom) : '<span class="muted">—</span>') + '</td>' +
+          '<td style="' + td + '">' + colorCheckStatusHtml(l) + '</td>' +
+        '</tr>';
+      }).join('');
+      return '<div style="border:1px solid #e7e8e3;border-radius:10px;background:#fff;margin-bottom:10px;">' +
+        '<div style="padding:9px 12px;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;border-bottom:1px solid #eef0ea;">' +
+          '<b style="font-size:13.5px;">' + esc(a.label) + '</b>' +
+          '<span style="font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#5c6157;background:#f2f3ef;padding:2px 7px;border-radius:999px;">' + esc(COLOR_KIND_LABEL[a.kind] || a.kind) + '</span>' +
+          '<span style="font-size:12.5px;">Customer picked <b>' + esc([a.pick.brand, a.pick.code].filter(Boolean).join(' ')) + '</b></span>' +
+          '<span style="flex:1;"></span>' +
+          '<span class="muted" style="font-size:11px;">' + code(a.source.columnId) + ' → ' + code(a.source.path) + '</span>' +
+        '</div>' +
+        '<div style="padding:6px 12px 0;font-size:11.5px;" class="muted">Mapped parts: ' + (a.mappedParts.length ? a.mappedParts.map(esc).join(', ') : 'none') + '</div>' +
+        a.issues.map(function (t) { return '<div style="margin:6px 12px 0;padding:6px 9px;border-radius:7px;background:#fbeeec;color:#9c3327;font-size:12px;">' + esc(t) + '</div>'; }).join('') +
+        (rows
+          ? '<div style="overflow-x:auto;padding:4px 4px 8px;"><table style="width:100%;border-collapse:collapse;">' +
+              '<thead><tr><th style="' + th + '">Vendor</th><th style="' + th + '">Part</th><th style="' + th + '">Should be</th>' +
+              '<th style="' + th + '">On the line</th><th style="' + th + '">On the printed BOM</th><th style="' + th + '">Result</th></tr></thead>' +
+              '<tbody>' + rows + '</tbody></table></div>'
+          : '<div style="height:8px;"></div>') +
+      '</div>';
+    }).join('');
+
+    var hand = !rep.handSet.length ? '' :
+      '<div style="margin-top:14px;font-size:12.5px;"><b>Set by hand</b> <span class="muted">— lines with a color that no portal answer accounts for</span>' +
+        '<ul style="margin:6px 0 0 18px;padding:0;">' + rep.handSet.map(function (h) {
+          return '<li>' + esc(h.vendor) + ' · <b>' + esc(h.sku) + '</b> ' + esc(h.name) + ' — ' + esc(h.onLine) + '</li>';
+        }).join('') + '</ul></div>';
+    var errs = rep.bomErrors.map(function (t) { return '<div class="err" style="margin-top:8px;">Could not build the BOM for ' + esc(t) + '</div>'; }).join('');
+    var empty = rep.portal.found && !rep.areas.length ? '<div class="muted" style="font-size:12.5px;">The customer has not picked any colors yet.</div>' : '';
+    return head + banner + areas + empty + hand + errs;
+  }
+
+  async function openColorCheck(order, btn) {
+    var was = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Checking…';
+    var r;
+    try { r = await authed('/orders/' + order.id + '/bom/color-check', { timeoutMs: RENDER_TIMEOUT_MS }); }
+    finally { btn.disabled = false; btn.textContent = was; }
+    if (!r.ok) {
+      var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {}
+      return alert(m || ('Could not run the color check (' + r.status + ').'));
+    }
+    var rep = await r.json();
+    openModal('Color check', colorCheckHtml(rep), null, 'Done', { maxWidth: '980px' });
+  }
+
   /* --- Purchase orders -------------------------------------------------------
      Raised from a vendor's section of a locked order, for vendors whose profile has
      "Can receive purchase orders" on. The window picks products off this vendor's
@@ -12563,6 +12657,9 @@
       };
       setTimeout(wirePicks, 0);
     });
+
+    var colorCheckBtn = document.getElementById('bomColorCheck');
+    if (colorCheckBtn) colorCheckBtn.addEventListener('click', function () { openColorCheck(order, colorCheckBtn); });
 
     var applyBtn = document.getElementById('bomApplyBuild');
     if (applyBtn) applyBtn.addEventListener('click', async function () {

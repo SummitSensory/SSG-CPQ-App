@@ -576,6 +576,71 @@ export async function applyColorPicksToOrder(
     };
   }
 
+  const { updates, result } = planColorApplication(await loadColorPlanInput(orderId, picks));
+
+  if (updates.length) {
+    await prisma.$transaction([
+      ...updates.map((u) =>
+        prisma.procurementLine.update({
+          where: { id: u.lineId },
+          data: {
+            powderBrandId: u.to.powderBrandId,
+            powderColorCode: u.to.powderColorCode,
+            powderColor: u.to.powderColor,
+            ...(u.to.colorPicks !== undefined
+              ? { colorPicks: u.to.colorPicks as unknown as object }
+              : {}),
+          },
+        }),
+      ),
+      prisma.orderEvent.create({
+        data: {
+          orderId,
+          action: 'bom.colors.portal-review',
+          actorId,
+          detail: {
+            linesUpdated: result.linesUpdated,
+            changes: updates.map((u) => ({
+              sku: u.sku,
+              area: u.areaKey,
+              from: u.from.powderColor,
+              to: u.to.powderColor,
+            })),
+            unmappedAreas: result.unmappedAreas,
+            noMatchingLines: result.noMatchingLines,
+            skippedVendors: result.skippedVendors,
+            conflicts: result.conflicts ?? [],
+            offChart: result.offChart ?? [],
+          } as object,
+        },
+      }),
+    ]);
+  }
+  return result;
+}
+
+/** A procurement line as the planner and the colour check read it. */
+export type ColorPlanLine = PlanLine & { name: string };
+
+/**
+ * Everything planColorApplication needs for one order's picks, read from the
+ * database: the area mapping, the order's lines, submitted vendors, managed powder
+ * brands, powder charts and (for multi-piece parts) colour specs. Shared by the
+ * write above and the read-only colour check (colorCheck.ts), so the check tests
+ * exactly what a review would do.
+ */
+export async function loadColorPlanInput(
+  orderId: string,
+  picks: readonly ColorAreaPick[],
+): Promise<{
+  picks: readonly ColorAreaPick[];
+  mapping: Map<string, MappedPartRef[]>;
+  lines: ColorPlanLine[];
+  specs: Map<string, ResolvedColorSpec>;
+  submittedVendors: Set<string>;
+  brands: ManagedBrand[];
+  chart: PowderChartColor[];
+}> {
   const [mappings, lines, sections, brands, chartRows] = await Promise.all([
     prisma.portalColorAreaMapping.findMany({
       where: { areaKey: { in: [...new Set(picks.map((p) => p.areaKey))] } },
@@ -589,6 +654,7 @@ export async function applyColorPicksToOrder(
         productId: true,
         colorPicks: true,
         sku: true,
+        name: true,
         vendor: true,
         isHardwareComponent: true,
         powderBrandId: true,
@@ -637,7 +703,7 @@ export async function applyColorPicksToOrder(
     name: c.name,
   }));
 
-  const { updates, result } = planColorApplication({
+  return {
     picks,
     mapping,
     lines,
@@ -645,45 +711,5 @@ export async function applyColorPicksToOrder(
     submittedVendors: new Set(sections.map((s) => vendorOf(s.vendor))),
     brands,
     chart,
-  });
-
-  if (updates.length) {
-    await prisma.$transaction([
-      ...updates.map((u) =>
-        prisma.procurementLine.update({
-          where: { id: u.lineId },
-          data: {
-            powderBrandId: u.to.powderBrandId,
-            powderColorCode: u.to.powderColorCode,
-            powderColor: u.to.powderColor,
-            ...(u.to.colorPicks !== undefined
-              ? { colorPicks: u.to.colorPicks as unknown as object }
-              : {}),
-          },
-        }),
-      ),
-      prisma.orderEvent.create({
-        data: {
-          orderId,
-          action: 'bom.colors.portal-review',
-          actorId,
-          detail: {
-            linesUpdated: result.linesUpdated,
-            changes: updates.map((u) => ({
-              sku: u.sku,
-              area: u.areaKey,
-              from: u.from.powderColor,
-              to: u.to.powderColor,
-            })),
-            unmappedAreas: result.unmappedAreas,
-            noMatchingLines: result.noMatchingLines,
-            skippedVendors: result.skippedVendors,
-            conflicts: result.conflicts ?? [],
-            offChart: result.offChart ?? [],
-          } as object,
-        },
-      }),
-    ]);
-  }
-  return result;
+  };
 }
