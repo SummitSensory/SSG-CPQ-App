@@ -572,6 +572,15 @@
       return x < y ? -d : x > y ? d : 0;
     });
   }
+  /**
+   * The width a fixed-layout table needs: every fixed column, plus `flexMin` for the
+   * one column left to stretch (w: 0). A hard-coded min-width went stale as columns
+   * were added — the catalog's fixed columns outgrew its 1500px and the Product name
+   * column, the only flexible one, was squeezed to nothing.
+   */
+  function tableMinWidth(cols, flexMin) {
+    return cols.reduce(function (sum, c) { return sum + (c.w || 0); }, 0) + flexMin;
+  }
   function colHead(cols, state, extraStyle) {
     return cols.map(function (c) {
       var on = c.key && state.sort && state.sort.key === c.key;
@@ -780,11 +789,11 @@
 
     box.innerHTML =
       '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:14px;overflow-x:auto;">' +
-        '<table style="width:100%;min-width:1500px;border-collapse:collapse;font-size:14px;table-layout:fixed;">' +
+        '<table style="width:100%;min-width:' + tableMinWidth(IT_COLS, 320) + 'px;border-collapse:collapse;font-size:14px;table-layout:fixed;">' +
         '<colgroup>' + IT_COLS.map(function (c) { return '<col' + (c.w ? ' style="width:' + c.w + 'px;"' : '') + '>'; }).join('') + '</colgroup>' +
         '<thead><tr>' + colHead(IT_COLS, itemState) + '</tr>' +
         '<tr>' + IT_COLS.map(function (c) { return filterCell('colFilter', c, all, itemState.filters); }).join('') + '</tr></thead>' +
-        '<tbody>' + (rows || '<tr><td colspan="13" style="padding:28px;text-align:center;color:#8a8f85;">' + (all.length ? 'No parts match these filters.' : 'Nothing in the catalog yet. Import a sheet or add a product.') + '</td></tr>') + '</tbody></table></div>' +
+        '<tbody>' + (rows || '<tr><td colspan="' + IT_COLS.length + '" style="padding:28px;text-align:center;color:#8a8f85;">' + (all.length ? 'No parts match these filters.' : 'Nothing in the catalog yet. Import a sheet or add a product.') + '</td></tr>') + '</tbody></table></div>' +
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;color:#82877d;font-size:13px;flex-wrap:wrap;gap:8px;">' +
         '<span>' + rowsData.length.toLocaleString() + (activeFilters ? ' of ' + all.length.toLocaleString() : '') + ' items' +
           (activeFilters ? ' · <button id="itClearF" class="link-btn" style="width:auto;padding:4px 10px;display:inline-block;">Clear filters</button>' : '') + '</span>' +
@@ -1524,7 +1533,7 @@
     }).join('');
 
     box.innerHTML = '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:14px;overflow-x:auto;">' +
-      '<table style="width:100%;min-width:1280px;border-collapse:collapse;font-size:14px;table-layout:fixed;">' +
+      '<table style="width:100%;min-width:' + Math.max(1280, tableMinWidth(PT_COLS, 264)) + 'px;border-collapse:collapse;font-size:14px;table-layout:fixed;">' +
       '<colgroup>' + PT_COLS.map(function (c) { return '<col' + (c.w ? ' style="width:' + c.w + 'px;"' : '') + '>'; }).join('') + '</colgroup>' +
       '<thead><tr>' + colHead(PT_COLS, cat, 'background:#f7f8f4;') + '</tr>' +
       '<tr>' + PT_COLS.map(function (c) { return filterCell('colFilter', c, all, cat.filters); }).join('') + '</tr></thead>' +
