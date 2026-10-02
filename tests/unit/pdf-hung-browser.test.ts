@@ -76,7 +76,9 @@ describe('renderPdf browser lifecycle', () => {
 
   it('keeps concurrent renders on separate browsers', async () => {
     let release: (() => void) | undefined;
-    setRenderLimitsForTests({ launchMs: 500, newPageMs: 10, renderMs: 5_000 });
+    // A generous launch limit: this test is about which browser each render uses,
+    // not launch timeouts, and two fake launches on a busy CI runner overran 500ms.
+    setRenderLimitsForTests({ launchMs: 5_000, newPageMs: 10, renderMs: 5_000 });
     const gate = new Promise<void>((r) => (release = r));
     nextBrowser = () =>
       makeBrowser(async () =>
