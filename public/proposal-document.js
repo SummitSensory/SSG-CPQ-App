@@ -165,6 +165,9 @@
     showsFreightTbd: null,
     proposalModelCode: null,
     discountLabel: null,
+    // The rep's override clamped to the proposal's own expiration. A business rule
+    // (a discount never outlives the proposal), so shared, not copied.
+    discountExpiration: null,
 
     /*
      * Three more that are NOT formatting, despite looking like it.
@@ -217,6 +220,9 @@
   }
   function discountLabel(m) {
     return rules.discountLabel(m);
+  }
+  function discountExpiration(m) {
+    return rules.discountExpiration(m);
   }
   function rt(s) {
     return rules.rt(s);
@@ -1686,7 +1692,7 @@
           cbAmt(t.discount) +
           '</span></div>' +
           '<div style="font-size:10.5px;color:#9aa1b0;text-align:right;">Discount expires ' +
-          (m.expiration ? fmtDate(m.expiration) : 'with this proposal') +
+          (discountExpiration(m) ? fmtDate(discountExpiration(m)) : 'with this proposal') +
           '</div>'
         : '');
     var chargeRowsHtml =

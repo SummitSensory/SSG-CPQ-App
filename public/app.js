@@ -138,6 +138,23 @@
   function discountLabel(t) {
     return (t && t.discountMode === 'AMT') ? 'Discount' : 'Discount (' + (t ? t.discountPct : 0) + '%)';
   }
+  /**
+   * The date the discount expires, as YYYY-MM-DD, or '' when there is none.
+   *
+   * meta.discountExpiration is the rep's override. With none, the discount expires
+   * with the proposal. With one, it is still never later than the proposal's own
+   * expiration: a discount cannot outlive the offer it is part of, so a proposal
+   * whose expiration was later pulled in takes its discount date with it. Both are
+   * plain calendar dates, so they compare as strings.
+   */
+  function discountExpiration(m) {
+    var isIso = function (v) { return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v); };
+    var prop = m && isIso(m.expiration) ? m.expiration : '';
+    var own = m && isIso(m.discountExpiration) ? m.discountExpiration : '';
+    if (!own) return prop;
+    if (!prop) return own;
+    return own < prop ? own : prop;
+  }
 
   /* --- API --- */
 
@@ -4219,7 +4236,7 @@
     pb = {
       proposalId: proposal.id, versionId: version.id, user: user, orgId: proposal.organizationId, orgName: orgName, stdNotes: stdNotes, updatedAt: openedUpdatedAt,
       title: proposal.title || '', number: proposal.number || '', version: version.version || 1, status: version.status || 'DRAFT',
-      meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', billSameAsShip: !meta.billTo || meta.billTo === (meta.shipTo || orgShipTo || ''), showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, showDeposit: meta.showDeposit !== false, introTemplate: meta.introTemplate || '', tbdTax: meta.tbdTax || '', tbdStructureFreight: meta.tbdStructureFreight || '', tbdMatsFreight: meta.tbdMatsFreight || '', proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, discountMode: meta.discountMode === 'AMT' ? 'AMT' : 'PCT', discountAmountMinor: meta.discountAmountMinor || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, stdFreightOn: !!meta.stdFreightOn, stdFreightMinor: meta.stdFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7), footerNotes: footerNotes, advAnswers: meta.advAnswers || null, advWarnings: meta.advWarnings || [],
+      meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', billSameAsShip: !meta.billTo || meta.billTo === (meta.shipTo || orgShipTo || ''), showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, showDeposit: meta.showDeposit !== false, introTemplate: meta.introTemplate || '', tbdTax: meta.tbdTax || '', tbdStructureFreight: meta.tbdStructureFreight || '', tbdMatsFreight: meta.tbdMatsFreight || '', proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, discountMode: meta.discountMode === 'AMT' ? 'AMT' : 'PCT', discountAmountMinor: meta.discountAmountMinor || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, stdFreightOn: !!meta.stdFreightOn, stdFreightMinor: meta.stdFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7), discountExpiration: typeof meta.discountExpiration === 'string' ? meta.discountExpiration : '', footerNotes: footerNotes, advAnswers: meta.advAnswers || null, advWarnings: meta.advWarnings || [],
         // Carried over from the saved meta, same as every other field here — its
         // absence from this allowlist was a real bug found while building the
         // reference-doc preview/print feature: reopening the builder for a
@@ -5192,6 +5209,23 @@
     return '';
   });
 
+  /**
+   * After the proposal's expiration changes: an override that is no longer earlier
+   * than it is dropped (the discount then expires with the proposal, the earlier
+   * date), and the totals' date box is brought up to date in place — the expiration
+   * box saves per keystroke, so this must not re-render the builder under it.
+   */
+  function syncDiscountExpiration() {
+    if (pb.meta.discountExpiration && pb.meta.expiration && pb.meta.discountExpiration >= pb.meta.expiration) {
+      pb.meta.discountExpiration = '';
+    }
+    var box = document.getElementById('mDiscExp');
+    if (box) {
+      if (pb.meta.expiration) box.max = pb.meta.expiration; else box.removeAttribute('max');
+      box.value = discountExpiration(pb.meta);
+    }
+  }
+
   function renderBuilderKeepingFocus() {
     var el = document.activeElement;
     var sel = el && el.classList && el.classList.contains('bF')
@@ -5357,7 +5391,14 @@
             '<input id="mDisc" style="width:80px;padding:5px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;" value="' + esc(pb.meta.discountMode === 'AMT' ? ((Number(pb.meta.discountAmountMinor) || 0) / 100).toFixed(2) : pb.meta.discountPct) + '">' +
           '</div></div>' +
         (t.discount ? '<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:14px;color:#9c3327;font-weight:700;"><span>' + discountLabel(t) + '</span><span>− ' + fmtMoney(t.discount, 'USD') + '</span></div>' +
-          '<div style="font-size:11px;color:#20241f;text-align:right;margin-bottom:2px;">Discount expires ' + (pb.meta.expiration ? fmtDate(pb.meta.expiration) : 'with the proposal') + '</div>' : '') +
+          // Defaults to the proposal's expiration; the rep can pull it in, never push it
+          // past — see discountExpiration().
+          '<div style="display:flex;justify-content:flex-end;align-items:center;gap:6px;font-size:11px;color:#20241f;margin-bottom:2px;">Discount expires' +
+            '<input id="mDiscExp" type="date" title="Can be earlier than the proposal expiration, never later"' + (pb.meta.expiration ? ' max="' + esc(pb.meta.expiration) + '"' : '') + ' value="' + esc(discountExpiration(pb.meta)) + '" style="padding:3px 6px;border:1px solid #dcded7;border-radius:7px;font-size:12px;">' +
+            (pb.meta.discountExpiration
+              ? '<button type="button" id="mDiscExpReset" class="link-btn" style="width:auto;padding:2px 7px;font-size:11px;">Match proposal</button>'
+              : '<span class="muted">with the proposal</span>') +
+          '</div>' : '') +
         optionalAmountRow('Mat Freight Tax Pass-Through', 'mTax', pb.meta.taxAmountMinor, 'mTaxTbd', pb.meta.tbdTax) +
         // Crating and freight are quoted by the desk against a real shipment. A mock has
         // no shipment, so it quotes product retail and says so rather than showing $0.
@@ -7621,7 +7662,7 @@
     }
     var mct = document.getElementById('mContact'); if (mct) mct.addEventListener('input', function () { pb.meta.contactName = mct.value; });
     var mp = document.getElementById('mProj'); if (mp) mp.addEventListener('input', function () { pb.meta.projectId = mp.value; });
-    var mpd = document.getElementById('mPropDate'); if (mpd) mpd.addEventListener('input', function () { pb.meta.proposalDate = mpd.value; pb.meta.expiration = addDays(mpd.value, 7); var me2 = document.getElementById('mExp'); if (me2) me2.value = pb.meta.expiration; });
+    var mpd = document.getElementById('mPropDate'); if (mpd) mpd.addEventListener('input', function () { pb.meta.proposalDate = mpd.value; pb.meta.expiration = addDays(mpd.value, 7); var me2 = document.getElementById('mExp'); if (me2) me2.value = pb.meta.expiration; syncDiscountExpiration(); });
     var msp = document.getElementById('mShowProj'); if (msp) msp.addEventListener('change', function () { pb.meta.showProjectId = msp.checked; });
     // Customer Project Media Rebate — see mediaRebateCard(). Un-offering clears the
     // customer's election too: there is nothing left to elect into once the program
@@ -7720,7 +7761,19 @@
       if (mbs.checked) { pb.meta.billTo = pb.meta.shipTo || ''; if (mb) mb.value = pb.meta.billTo; }
     });
     if (document.getElementById('pbJurisRow')) { paintCanadian(); loadCanadian(false); }
-    var me = document.getElementById('mExp'); if (me) me.addEventListener('input', function () { pb.meta.expiration = me.value; });
+    var me = document.getElementById('mExp'); if (me) me.addEventListener('input', function () { pb.meta.expiration = me.value; syncDiscountExpiration(); });
+    // Discount expiration override — see discountExpiration(). A date on or after the
+    // proposal's own expiration is no override at all: it is stored as nothing, so the
+    // discount keeps following the proposal if that date moves.
+    var mde = document.getElementById('mDiscExp');
+    if (mde) mde.addEventListener('change', function () {
+      var v = mde.value;
+      pb.meta.discountExpiration = (v && !(pb.meta.expiration && v >= pb.meta.expiration)) ? v : '';
+      markBuilderDirty();
+      renderBuilderKeepingFocus();
+    });
+    var mder = document.getElementById('mDiscExpReset');
+    if (mder) mder.addEventListener('click', function () { pb.meta.discountExpiration = ''; markBuilderDirty(); renderBuilderKeepingFocus(); });
     var ms = document.getElementById('mShip');
     if (ms) ms.addEventListener('input', function () {
       pb.meta.shipTo = ms.value;
@@ -8690,6 +8743,7 @@
       showsFreightTbd: showsFreightTbd,
       proposalModelCode: proposalModelCode,
       discountLabel: discountLabel,
+      discountExpiration: discountExpiration,
       // Not formatting, despite appearing so. rt is shared with the builder, which
       // shows the rep the same note as they type it; freightTbdNote is a sentence
       // that prints on a signed document; documentUser reads live state and so

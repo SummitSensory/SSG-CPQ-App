@@ -136,6 +136,7 @@ describe('proposal-document.js prints the same figure it computed, not a re-deri
       showsFreightTbd: () => false,
       proposalModelCode: () => '',
       discountLabel: () => 'Discount',
+      discountExpiration: () => '',
       rt: (s: string) => s,
       freightTbdNote: 'Freight TBD.',
       documentUser: () => ({ name: 'Bryan Shepherd', title: 'President' }),
