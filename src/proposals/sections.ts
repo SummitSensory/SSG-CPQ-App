@@ -124,6 +124,43 @@ export function withExpiration(sections: unknown, expirationIso: string | null):
   return list;
 }
 
+/**
+ * Carry the discount-expiration override (`meta.discountExpiration`) onto a cloned
+ * version only while it still means something.
+ *
+ * The override is a real calendar date the rep promised ("the discount ends on the
+ * 15th"), so unlike the proposal and expiration dates it is not re-stamped on a
+ * clone. But a discount can never outlive the proposal it sits on, and an override
+ * on or after the new expiration is no override at all — and one already in the past
+ * would print a lapsed offer on a document dated today. Either way it is dropped and
+ * the discount expires with the proposal again. Dates are `YYYY-MM-DD` strings, so
+ * they compare as strings.
+ */
+export function withDiscountExpirationFor(
+  sections: unknown,
+  todayIso: string,
+  expirationIso: string | null,
+): ProposalSection[] {
+  const list: ProposalSection[] = Array.isArray(sections)
+    ? ([...sections] as ProposalSection[])
+    : [];
+  const i = list.findIndex((s) => s?.id === 'meta');
+  if (i === -1) return list;
+  const sec = list[i]!;
+  const own: unknown = sec.data?.discountExpiration;
+  if (own === undefined) return list;
+  const keep =
+    typeof own === 'string' &&
+    /^\d{4}-\d{2}-\d{2}$/.test(own) &&
+    own >= todayIso &&
+    (expirationIso == null || own < expirationIso);
+  if (keep) return list;
+  const data = { ...(sec.data ?? {}) };
+  delete data.discountExpiration;
+  list[i] = { ...sec, data };
+  return list;
+}
+
 /** Reorder sections by an explicit id order; unknown ids dropped, missing ones appended. */
 export function reorderSections(
   sections: ProposalSection[],

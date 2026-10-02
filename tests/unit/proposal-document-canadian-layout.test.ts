@@ -57,6 +57,7 @@ beforeAll(() => {
     showsFreightTbd: () => false,
     proposalModelCode: () => 'K-4002',
     discountLabel: () => 'Discount',
+    discountExpiration: () => '',
     rt: (s: string) => s,
     freightTbdNote: 'Freight TBD.',
     documentUser: () => ({ name: 'Bryan Shepherd', title: 'President' }),

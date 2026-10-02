@@ -5,7 +5,7 @@ import { canTransition, becomesFrozen, isFrozenStatus, formatProposalNumber } fr
 import { compareVersions, type VersionSnapshot } from './compare.js';
 import { auditPriceEntry, priceEntryMessage, type PriceEntryAudit } from './priceEntry.js';
 import type { ProposalSection, ProposalItem } from './sections.js';
-import { withProposalDate, withExpiration } from './sections.js';
+import { withProposalDate, withExpiration, withDiscountExpirationFor } from './sections.js';
 import {
   sectionsWithResolvedProjectId,
   sectionsWithOpportunityProjectId,
@@ -254,8 +254,9 @@ export async function createNewVersion(
         proposalId,
         version: nextVersion,
         status: 'DRAFT',
-        sections: withExpiration(
-          withProposalDate(current.sections, today),
+        sections: withDiscountExpirationFor(
+          withExpiration(withProposalDate(current.sections, today), expirationIso),
+          today,
           expirationIso,
         ) as object,
         items: current.items as object,
