@@ -1003,6 +1003,85 @@
     );
   }
 
+  /**
+   * A printed slip still missing its Freight Carrier or Freight Tracking ID. "Not
+   * Shipped" is a carrier label on the monday column, but it says the opposite of
+   * what a carrier is for here, so it counts as missing too. Voided slips are not
+   * work to finish.
+   */
+  function freightMissing(s) {
+    if (s.voidedAt) return null;
+    var carrier = (s.carrier || '').trim();
+    var noCarrier = !carrier || carrier.toLowerCase() === 'not shipped';
+    var noTracking = !(s.trackingId || '').trim();
+    if (!noCarrier && !noTracking) return null;
+    return noCarrier && noTracking
+      ? 'Carrier and tracking missing'
+      : noCarrier
+        ? 'Carrier missing'
+        : 'Tracking missing';
+  }
+
+  /**
+   * Slips printed but not finished: the shipping record exists, the freight details do
+   * not. Oldest first — the box that has waited longest is the one most likely to be
+   * forgotten. Every incomplete slip is listed, not just the recent ones the shipping
+   * record shows, and a slip leaves the list the moment both fields are filled in.
+   */
+  function incompleteHtml() {
+    var rows = (data.slips || []).filter(function (s) {
+      return freightMissing(s);
+    });
+    if (!rows.length) return '';
+    return (
+      '<div class="card" style="margin-top:14px;">' +
+      '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:4px;">' +
+      '<div class="section-title" style="margin:0;">Incomplete</div>' +
+      '<div class="muted" style="font-size:12px;">' +
+      rows.length +
+      ' slip' +
+      (rows.length === 1 ? '' : 's') +
+      '</div>' +
+      '</div>' +
+      '<div class="muted" style="font-size:12px;margin-bottom:4px;">Printed, but the freight carrier or tracking number has not been entered. Fill both in to finish the shipment.</div>' +
+      rows
+        .map(function (s) {
+          var pieces = (s.lines || []).reduce(function (a, l) {
+            return a + l.qty;
+          }, 0);
+          return (
+            '<div style="padding:10px 0;border-top:1px solid #eef0f4;">' +
+            '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;">' +
+            '<div style="font-size:12.5px;min-width:0;">' +
+            esc(s.customer) +
+            '</div>' +
+            '<div style="font-size:10.5px;font-weight:600;color:' +
+            RED +
+            ';flex:none;">' +
+            esc(freightMissing(s)) +
+            '</div>' +
+            '</div>' +
+            '<div style="font-size:10.5px;color:' +
+            MUTE +
+            ';margin-top:2px;font-variant-numeric:tabular-nums;">' +
+            esc(s.number) +
+            ' · ' +
+            pieces +
+            ' pc' +
+            (s.proposalNumber ? ' · ' + esc(s.proposalNumber) : '') +
+            ' · ' +
+            (s.shippedBy ? esc(s.shippedBy) + ' · ' : '') +
+            esc(fmtStamp(s.shippedAt) || fmtDate(s.date)) +
+            '</div>' +
+            slipFreightHtml(s) +
+            '</div>'
+          );
+        })
+        .join('') +
+      '</div>'
+    );
+  }
+
   function slipsHtml() {
     var all = (data.slips || []).slice().reverse();
     if (!all.length)
@@ -1178,6 +1257,7 @@
           '<div style="font-size:12.5px;color:#8a2f24;">The shipment list could not be loaded. Reload the page to try again.</div></div>'
         : '') +
       '<div style="display:grid;grid-template-columns:minmax(0,1.35fr) minmax(320px,.85fr);gap:18px;align-items:start;">' +
+      '<div>' +
       '<div class="card">' +
       '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:4px;">' +
       '<div class="section-title" style="margin:0;">Belts to ship</div>' +
@@ -1187,6 +1267,8 @@
       '</div>' +
       '<div class="muted" style="font-size:12px;margin-bottom:12px;">Read from each customer&rsquo;s bill of materials. Tick what is going in the box, then print the slip.</div>' +
       owedHtml() +
+      '</div>' +
+      incompleteHtml() +
       '</div>' +
       '<div>' +
       '<div class="card" style="margin-bottom:14px;">' +
