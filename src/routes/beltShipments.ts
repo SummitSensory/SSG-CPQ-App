@@ -8,6 +8,11 @@ import { ValidationError, ConflictError } from '../lib/errors.js';
 import { recordAudit } from '../lib/audit.js';
 import { formatUsPhone } from '../lib/phone.js';
 import { readDealContacts } from '../integrations/monday/dealContacts.js';
+import {
+  carrierOptions,
+  syncBeltSlipToMonday,
+  type BeltPushResult,
+} from '../integrations/monday/beltShipmentPush.js';
 
 /**
  * Belt shipments — which customers are owed a belt, which belt, and the slip that
@@ -81,6 +86,18 @@ const Slip = z.object({
   email: z.string().trim().max(160).default(''),
   phone: z.string().trim().max(60).default(''),
   note: z.string().trim().max(400).default(''),
+  /**
+   * Freight Carrier and Freight Tracking ID. Usually known only after the box is
+   * handed over, so editable on the shipping record after printing; every change is
+   * written through to the slip's "UEU Belt(s)" subitem on the Manufacturing board
+   * (see integrations/monday/beltShipmentPush.ts).
+   */
+  carrier: z.string().trim().max(80).default(''),
+  trackingId: z.string().trim().max(120).default(''),
+  /** The slip's subitem on monday, once created, and what the last sync said. */
+  mondaySubitemId: z.string().trim().max(40).default(''),
+  mondaySubitemBoardId: z.string().trim().max(40).default(''),
+  mondayNote: z.string().trim().max(300).default(''),
   lines: z
     .array(
       z.object({
@@ -182,6 +199,33 @@ async function writeLedger(
   });
   if (claim.count !== 1) {
     throw new ConflictError('Someone else just recorded a shipment. Reload and try again.');
+  }
+}
+
+/**
+ * Record a monday sync's outcome on its slip. Runs after the slip's own write, so
+ * another shipment may have landed in between — re-read and retry a few times
+ * rather than fail: losing the subitem id would make the next save create a second
+ * subitem.
+ */
+async function saveMondayResult(
+  slipId: string,
+  result: BeltPushResult,
+  actorId: string,
+): Promise<void> {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const { ledger, updatedAt } = await readLedgerRow();
+    const slip = ledger.slips.find((s) => s.id === slipId);
+    if (!slip) return;
+    slip.mondaySubitemId = result.subitemId;
+    slip.mondaySubitemBoardId = result.subitemBoardId;
+    slip.mondayNote = result.note.slice(0, 300);
+    try {
+      await writeLedger(ledger, updatedAt, actorId);
+      return;
+    } catch (err) {
+      if (!(err instanceof ConflictError)) throw err;
+    }
   }
 }
 
@@ -404,6 +448,9 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
         voidedById: true,
         voidedBy: true,
         voidedAt: true,
+        mondaySubitemId: true,
+        mondaySubitemBoardId: true,
+        mondayNote: true,
       }),
     });
     const parsed = Body.safeParse(req.body);
@@ -454,6 +501,9 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
       voidedById: '',
       voidedBy: '',
       voidedAt: '',
+      mondaySubitemId: '',
+      mondaySubitemBoardId: '',
+      mondayNote: '',
     };
     ledger.slips.push(record);
 
@@ -478,7 +528,65 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
       },
     });
 
-    return { slip: record };
+    // The "UEU Belt(s)" subitem on the customer's Manufacturing row. Never fails the
+    // shipment — the slip is recorded either way, and the outcome rides on the slip.
+    const monday = await syncBeltSlipToMonday(record);
+    record.mondaySubitemId = monday.subitemId;
+    record.mondaySubitemBoardId = monday.subitemBoardId;
+    record.mondayNote = monday.note;
+    await saveMondayResult(record.id, monday, req.user!.sub).catch((err: unknown) =>
+      req.log.warn({ err, slip: record.number }, 'belt shipment: could not save monday result'),
+    );
+
+    return { slip: record, monday };
+  });
+
+  /** The Freight Carrier dropdown's options — the labels on the monday column. */
+  app.get('/belt-shipments/carriers', guard, async () => carrierOptions());
+
+  /**
+   * Set a slip's Freight Carrier and/or Freight Tracking ID, and write them through to
+   * its monday subitem (creating the subitem if the first attempt at print time did
+   * not land — this is the retry path too).
+   */
+  app.post('/belt-shipments/freight', guard, async (req) => {
+    const Body = z.object({
+      slipId: z.string().trim().min(1).max(40),
+      carrier: z.string().trim().max(80).optional(),
+      trackingId: z.string().trim().max(120).optional(),
+    });
+    const parsed = Body.safeParse(req.body);
+    if (!parsed.success) throw new ValidationError('That freight detail could not be read.');
+    const { slipId, carrier, trackingId } = parsed.data;
+
+    if (carrier) {
+      const { labels } = await carrierOptions();
+      if (!labels.includes(carrier)) {
+        throw new ValidationError('That carrier is not one of the Freight Carrier options.');
+      }
+    }
+
+    const { ledger, updatedAt } = await readLedgerRow();
+    const slip = ledger.slips.find((s) => s.id === slipId);
+    if (!slip) throw new ValidationError('That slip is no longer on file.');
+    if (carrier !== undefined) slip.carrier = carrier;
+    if (trackingId !== undefined) slip.trackingId = trackingId;
+    await writeLedger(ledger, updatedAt, req.user!.sub);
+
+    const monday = await syncBeltSlipToMonday(slip);
+    slip.mondaySubitemId = monday.subitemId;
+    slip.mondaySubitemBoardId = monday.subitemBoardId;
+    slip.mondayNote = monday.note;
+    await saveMondayResult(slip.id, monday, req.user!.sub);
+
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'belt.shipment.freight',
+      entity: 'UiSetting',
+      entityId: KEY,
+      details: { slip: slip.number, carrier: slip.carrier, trackingId: slip.trackingId },
+    });
+    return { slip, monday };
   });
 
   /**
