@@ -22,6 +22,11 @@
   /** lineId -> pieces going in this box. */
   var picked = {};
   var busy = false;
+  /**
+   * Freight Carrier options — the labels on the monday Manufacturing subitem column
+   * (color_mm51tf2w), fetched once per mount so a carrier added on monday shows here.
+   */
+  var carriers = [];
 
   /**
    * A shipment with no ProcurementLine behind it — a replacement, warranty, or
@@ -42,6 +47,8 @@
     email: '',
     phone: '',
     note: '',
+    carrier: '',
+    trackingId: '',
     contacts: [],
     lines: [{ item: '', sku: '', qty: 1 }],
   };
@@ -58,6 +65,8 @@
     manual.email = '';
     manual.phone = '';
     manual.note = '';
+    manual.carrier = '';
+    manual.trackingId = '';
     manual.contacts = [];
     manual.lines = [{ item: '', sku: '', qty: 1 }];
   }
@@ -112,6 +121,8 @@
     if (g('msEmail') !== null) manual.email = g('msEmail');
     if (g('msPhone') !== null) manual.phone = g('msPhone');
     if (g('msNote') !== null) manual.note = g('msNote');
+    if (g('msCarrier') !== null) manual.carrier = g('msCarrier');
+    if (g('msTracking') !== null) manual.trackingId = g('msTracking');
     host.querySelectorAll('.msItem').forEach(function (inp) {
       var row = manual.lines[Number(inp.getAttribute('data-idx'))];
       if (row) row.item = inp.value;
@@ -202,7 +213,28 @@
 
   /* ------------------------------------------------------------------- state */
 
+  function loadCarriers() {
+    if (carriers.length) return Promise.resolve(carriers);
+    return H.authed('/belt-shipments/carriers')
+      .then(function (r) {
+        return r.ok ? r.json() : null;
+      })
+      .then(function (d) {
+        carriers = (d && d.labels) || [];
+        return carriers;
+      })
+      .catch(function () {
+        return carriers;
+      });
+  }
+
   function load() {
+    return Promise.all([loadCarriers(), loadData()]).then(function (res) {
+      return res[1];
+    });
+  }
+
+  function loadData() {
     return H.authed('/belt-shipments')
       .then(function (r) {
         return r.ok ? r.json() : null;
@@ -567,6 +599,7 @@
             })
             .join('') +
           '<button type="button" id="msAddRow" class="link-btn" style="width:auto;padding:2px 0;font-size:11.5px;margin-bottom:11px;">+ Add another item</button>' +
+          freightFieldsHtml('ms', manual.carrier, manual.trackingId) +
           '<label style="display:block;margin-bottom:11px;"><span style="font-size:11px;color:' +
           MUTE +
           ';">Message on the slip (optional)</span>' +
@@ -737,6 +770,89 @@
     );
   }
 
+  /** The Freight Carrier options as <option>s, keeping a saved value the board has since dropped. */
+  function carrierOptionsHtml(current) {
+    var list = carriers.slice();
+    if (current && list.indexOf(current) < 0) list.unshift(current);
+    return (
+      '<option value="">Freight Carrier&hellip;</option>' +
+      list
+        .map(function (c) {
+          return (
+            '<option value="' +
+            esc(c) +
+            '"' +
+            (c === current ? ' selected' : '') +
+            '>' +
+            esc(c) +
+            '</option>'
+          );
+        })
+        .join('')
+    );
+  }
+
+  /**
+   * Freight Carrier and Freight Tracking ID, shared by the order slip (bs) and the
+   * manual slip (ms). Both optional at print time — usually they are known only once
+   * the box is handed over, and are filled in on the shipping record then.
+   */
+  function freightFieldsHtml(prefix, carrier, trackingId) {
+    return (
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:9px;">' +
+      '<label style="display:block;"><span style="font-size:11px;color:' +
+      MUTE +
+      ';">Freight Carrier</span>' +
+      '<select id="' +
+      prefix +
+      'Carrier" style="' +
+      FIELD +
+      'background:#fff;">' +
+      carrierOptionsHtml(carrier || '') +
+      '</select></label>' +
+      '<label style="display:block;"><span style="font-size:11px;color:' +
+      MUTE +
+      ';">Freight Tracking ID</span>' +
+      '<input id="' +
+      prefix +
+      'Tracking" placeholder="Tracking number" value="' +
+      esc(trackingId || '') +
+      '" style="' +
+      FIELD +
+      '"></label>' +
+      '</div>'
+    );
+  }
+
+  /** Save a slip's carrier/tracking; the server writes them to its monday subitem. */
+  function saveFreight(slipId, patch) {
+    var body = { slipId: slipId };
+    if (patch.carrier !== undefined) body.carrier = patch.carrier;
+    if (patch.trackingId !== undefined) body.trackingId = patch.trackingId;
+    return H.authed('/belt-shipments/freight', { method: 'POST', body: body })
+      .then(async function (r) {
+        var d = null;
+        try {
+          d = await r.json();
+        } catch (e) {
+          /* no body */
+        }
+        if (!r.ok) {
+          alert((d && d.message) || 'That could not be saved.');
+          return;
+        }
+        if (d && d.slip) {
+          data.slips = (data.slips || []).map(function (s) {
+            return s.id === d.slip.id ? d.slip : s;
+          });
+        }
+        paint();
+      })
+      .catch(function () {
+        alert('Could not reach the server. Nothing was saved.');
+      });
+  }
+
   /**
    * Belts cleared from the queue without a slip, newest first, each with who cleared
    * it and why — and Restore, which puts it back on Belts to ship.
@@ -850,6 +966,43 @@
    * withdrawn. Newest first, because the question is almost always "what just went
    * out" rather than "what went out in June".
    */
+  /**
+   * Freight Carrier and Freight Tracking ID on a printed slip, saved as they change and
+   * written through to the slip's "UEU Belt(s)" subitem on the Manufacturing board.
+   */
+  function slipFreightHtml(s) {
+    var small =
+      'margin:0;padding:4px 7px;font-size:11px;border:1px solid ' +
+      LINE +
+      ';border-radius:6px;font-family:inherit;box-sizing:border-box;min-width:0;width:100%;';
+    var onMonday = !!s.mondaySubitemId;
+    return (
+      '<div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:6px;margin-top:6px;">' +
+      '<select class="bsSlipCarrier" data-id="' +
+      esc(s.id) +
+      '" aria-label="Freight Carrier" title="Freight Carrier" style="' +
+      small +
+      'background:#fff;">' +
+      carrierOptionsHtml(s.carrier || '') +
+      '</select>' +
+      '<input class="bsSlipTracking" data-id="' +
+      esc(s.id) +
+      '" aria-label="Freight Tracking ID" title="Freight Tracking ID" placeholder="Freight Tracking ID" value="' +
+      esc(s.trackingId || '') +
+      '" style="' +
+      small +
+      '">' +
+      '</div>' +
+      '<div style="font-size:10.5px;margin-top:3px;color:' +
+      (onMonday ? MUTE : RED) +
+      ';">' +
+      (onMonday
+        ? 'On monday as “UEU Belt(s)”' + (s.mondayNote ? ' · ' + esc(s.mondayNote) : '')
+        : esc(s.mondayNote || 'Not on monday yet.') + ' Set the carrier or tracking to retry.') +
+      '</div>'
+    );
+  }
+
   function slipsHtml() {
     var all = (data.slips || []).slice().reverse();
     if (!all.length)
@@ -907,6 +1060,7 @@
                 esc(fmtStamp(s.voidedAt)) +
                 '</div>'
               : '') +
+            slipFreightHtml(s) +
             '</div>' +
             '<div style="display:flex;gap:6px;flex:none;">' +
             '<button type="button" class="link-btn bsReprint" data-id="' +
@@ -1109,6 +1263,7 @@
               ? 'From the customer&rsquo;s monday deal (or their contact on file). Printed below the address.'
               : 'No email or phone on the monday deal or the customer record. Type them to print them.') +
             '</div>' +
+            freightFieldsHtml('bs', '', '') +
             '<label style="display:block;margin-bottom:11px;"><span style="font-size:11px;color:' +
             MUTE +
             ';">Message on the slip (optional)</span>' +
@@ -1249,6 +1404,20 @@
             busy = false;
             alert('Could not reach the server.');
           });
+      });
+    });
+
+    host.querySelectorAll('.bsSlipCarrier').forEach(function (sel) {
+      sel.addEventListener('change', function () {
+        saveFreight(sel.getAttribute('data-id'), { carrier: sel.value });
+      });
+    });
+    host.querySelectorAll('.bsSlipTracking').forEach(function (inp) {
+      var saved = inp.value;
+      inp.addEventListener('change', function () {
+        var v = inp.value.trim();
+        if (v === saved) return;
+        saveFreight(inp.getAttribute('data-id'), { trackingId: v });
       });
     });
 
@@ -1435,6 +1604,8 @@
         email: (manual.email || '').trim(),
         phone: fmtPhone(manual.phone || ''),
         note: manual.note || '',
+        carrier: manual.carrier || '',
+        trackingId: (manual.trackingId || '').trim(),
         lines: lines,
       },
     };
@@ -1500,6 +1671,8 @@
         email: ((host.querySelector('#bsEmail') || {}).value || '').trim(),
         phone: fmtPhone((host.querySelector('#bsPhone') || {}).value || ''),
         note: (host.querySelector('#bsSlipNote') || {}).value || '',
+        carrier: (host.querySelector('#bsCarrier') || {}).value || '',
+        trackingId: ((host.querySelector('#bsTracking') || {}).value || '').trim(),
         lines: rows.map(function (r) {
           return { lineId: r.lineId, sku: r.sku, item: r.item, qty: picked[r.lineId] };
         }),
