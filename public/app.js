@@ -3983,7 +3983,7 @@
   }
 
   /* --- Proposal Builder --- */
-  var STD_GROUPS = ['Dual Trolley System', 'Therapeutic Activity & Adventure Components', 'Adventure Mat System', 'Summit Foundation System', 'Hardware'];
+  var STD_GROUPS = ['Dual Trolley System', 'Adventure Components', 'Adventure Mat System', 'Summit Foundation System', 'Hardware'];
   var STD_NOTES = {
     'Important Proposal Details': 'This proposal serves as a detailed estimate of the total cost for the products and services outlined and does not constitute an invoice. Once signed and returned, it becomes a binding agreement, confirming acceptance of the order and associated payment terms. A 50% deposit is required to initiate production, with the remaining balance due prior to shipment. The signed proposal may be returned by mail or fax using the contact information provided above. For payments made by credit card, a 3.5% processing fee will be added to the total amount.',
     'Crating & Freight': 'Final crating and freight charges will be calculated and invoiced at the time of shipment based on the actual costs incurred and the rates in effect at that time. Summit makes no representations or warranties regarding the availability or stability of crating costs or freight rates prior to shipment.',
@@ -4485,7 +4485,7 @@
    *
    * The catalogue also names the tiers a part belongs to, so a proposal that does
    * not yet have that group or sub-heading gets it: adding SKU 1001 to a bare
-   * proposal creates "THERAPEUTIC ACTIVITY & ADVENTURE COMPONENTS", then
+   * proposal creates "ADVENTURE COMPONENTS", then
    * "Therapeutic Swing & Sensory Equipment Package" under it, then the line.
    *
    * Two rules keep this predictable rather than clever:
@@ -4559,13 +4559,20 @@
    * of the proposal. The trailing parenthetical and any surrounding punctuation come off
    * before comparing; a rep who retitled a heading in their own words still keeps it,
    * they just do not get automatic filing into it.
+   *
+   * A heading that was renamed keeps matching under its old name: proposals saved
+   * before the rename still carry it, and so can a catalog category not yet renamed.
    */
+  var HEADING_ALIASES = {
+    'therapeutic activity & adventure components': 'adventure components',
+  };
   function headingKey(s) {
-    return String(s || '')
+    var k = String(s || '')
       .replace(/\s*\([^()]*\)\s*$/g, '')
       .replace(/[\s\u2013\u2014\-—:]+$/, '')
       .trim()
       .toLowerCase();
+    return HEADING_ALIASES[k] || k;
   }
   function sameHeading(a, b) {
     var x = headingKey(a), y = headingKey(b);
