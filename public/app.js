@@ -6222,7 +6222,8 @@
       '<div style="margin-bottom:12px;"><label style="' + lbl + '">Tariff item 9979.00.00 (disability-relief) claim</label>' +
         '<select id="cfTariff9979" style="' + box + '">' +
           '<option value=""' + (e.tariff9979Claimed == null ? ' selected' : '') + '>Not yet determined</option>' +
-          '<option value="true"' + (e.tariff9979Claimed === true ? ' selected' : '') + '>Claimed</option>' +
+          '<option value="cbsa"' + (e.tariff9979Claimed === true && e.tariff9979SubjectToCbsa ? ' selected' : '') + '>Claimed, subject to CBSA eligibility</option>' +
+          '<option value="true"' + (e.tariff9979Claimed === true && !e.tariff9979SubjectToCbsa ? ' selected' : '') + '>Claimed</option>' +
           '<option value="false"' + (e.tariff9979Claimed === false ? ' selected' : '') + '>Not claimed</option>' +
         '</select>' +
         '<div class="muted" style="font-size:11px;line-height:1.5;margin-top:4px;">Whether these goods qualify for relief under tariff item 9979.00.00 (goods for persons with disabilities) is a classification decision for Summit and its customs broker, not something this application determines. Leave \u201cNot yet determined\u201d until that decision is made.</div>' +
@@ -6320,7 +6321,8 @@
       var payload = Object.assign(amounts, simplePatch, {
         currency: document.getElementById('cfCur').value,
         tariffClassificationCode: document.getElementById('cfTariffCode').value.trim() || null,
-        tariff9979Claimed: (function () { var v = document.getElementById('cfTariff9979').value; return v === '' ? null : v === 'true'; })(),
+        tariff9979Claimed: (function () { var v = document.getElementById('cfTariff9979').value; return v === '' ? null : v !== 'false'; })(),
+        tariff9979SubjectToCbsa: document.getElementById('cfTariff9979').value === 'cbsa',
         tariff9979TextOverride: document.getElementById('cfTariff9979Text').value.trim() || null,
         gstHstTreatment: document.getElementById('cfGstHst').value || null,
         hostSystemModel: document.getElementById('cfHostSystem').value.trim() || null,

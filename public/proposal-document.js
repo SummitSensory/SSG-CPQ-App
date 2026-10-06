@@ -373,7 +373,9 @@
           return esc(String(cb.tariff9979Text).trim());
         }
         return cb.tariff9979Claimed === true
-          ? 'Claimed'
+          ? cb.tariff9979SubjectToCbsa
+            ? 'Claimed, subject to CBSA eligibility'
+            : 'Claimed'
           : cb.tariff9979Claimed === false
             ? 'Not claimed'
             : NOT_YET;

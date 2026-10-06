@@ -127,6 +127,7 @@
 
   var TARIFF_9979_LABEL = {
     '': 'No default (undetermined)',
+    cbsa: 'Claim, subject to CBSA eligibility, by default',
     true: 'Claim by default',
     false: "Don't claim by default",
   };
@@ -871,7 +872,11 @@
             Object.keys(TARIFF_9979_LABEL).map(function (k) {
               return [k, TARIFF_9979_LABEL[k]];
             }),
-            s.defaultTariff9979Claimed == null ? '' : String(s.defaultTariff9979Claimed),
+            s.defaultTariff9979Claimed == null
+              ? ''
+              : s.defaultTariff9979Claimed && s.defaultTariff9979SubjectToCbsa
+                ? 'cbsa'
+                : String(s.defaultTariff9979Claimed),
           ),
           'Fills the Tariff Item 9979.00.00 row. A classification decision for Summit and its customs broker, recorded per proposal.',
         ) +
@@ -879,6 +884,12 @@
           'Tariff item 9979.00.00 wording',
           '<div class="muted" style="font-size:11.5px;margin-bottom:3px;">When claimed</div>' +
             textarea('tariff9979ClaimedText', s.tariff9979ClaimedText, 'Claimed') +
+            '<div class="muted" style="font-size:11.5px;margin:8px 0 3px;">When claimed, subject to CBSA eligibility</div>' +
+            textarea(
+              'tariff9979ClaimedSubjectToCbsaText',
+              s.tariff9979ClaimedSubjectToCbsaText,
+              'Claimed, subject to CBSA eligibility',
+            ) +
             '<div class="muted" style="font-size:11.5px;margin:8px 0 3px;">When not claimed</div>' +
             textarea('tariff9979NotClaimedText', s.tariff9979NotClaimedText, 'Not claimed') +
             '<div class="muted" style="font-size:11.5px;margin:8px 0 3px;">While not yet determined</div>' +
@@ -908,6 +919,15 @@
           'Country of origin, by default',
           text('defaultCountryOfOrigin', s.defaultCountryOfOrigin, 'e.g. United States of America'),
           'Fills the Country of Origin row. Same seed-once rule as the customs broker above.',
+        ) +
+        row(
+          'Tariff / customs classification code, by default',
+          text(
+            'defaultTariffClassificationCode',
+            s.defaultTariffClassificationCode,
+            'e.g. 9506.91.00.90',
+          ),
+          'Fills the Tariff Classification row. Same seed-once rule as the customs broker above.',
         ) +
         row(
           'Tariff-audit language, by default',
