@@ -67,6 +67,18 @@ export async function issueRenderingUploadToken(input: {
   pathname: string;
   contentType: string;
 }): Promise<string> {
+  return issueDirectUploadToken({ ...input, maxBytes: MAX_RENDERING_BYTES });
+}
+
+/**
+ * The same scoped token for any other browser-direct upload (a Bill of
+ * Materials attachment, say), with the caller's own size ceiling.
+ */
+export async function issueDirectUploadToken(input: {
+  pathname: string;
+  contentType: string;
+  maxBytes: number;
+}): Promise<string> {
   if (!env.BLOB_READ_WRITE_TOKEN) {
     throw new Error('File storage is not configured on this deployment (BLOB_READ_WRITE_TOKEN).');
   }
@@ -74,7 +86,7 @@ export async function issueRenderingUploadToken(input: {
     token: env.BLOB_READ_WRITE_TOKEN,
     pathname: input.pathname,
     allowedContentTypes: [input.contentType],
-    maximumSizeInBytes: MAX_RENDERING_BYTES,
+    maximumSizeInBytes: input.maxBytes,
     addRandomSuffix: false,
     // A minute is generous for a click-to-upload-start gap and stingy enough that
     // a leaked token is useless soon after.

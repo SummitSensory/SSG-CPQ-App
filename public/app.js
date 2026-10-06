@@ -11262,6 +11262,8 @@
   /** Vendor purchase orders on the open order, from GET /orders/:id/vendor-pos. */
   var bomPurchaseOrders = [];
   var bomBrands = [];
+  /** Upload limits for the files sent alongside a vendor's sheet (GET .../bom/sections). */
+  var bomFileUpload = { configured: false, maxBytes: 0, maxEmailBytes: 0, accept: [] };
   /** The ship-to address book, loaded with the sections that offer it. */
   var bomShipToAddresses = [];
   /**
@@ -11441,7 +11443,9 @@
     procData = order.procurement || [];
     try {
       var r = await authed('/orders/' + order.id + '/bom/sections');
-      bomSectionData = r.ok ? ((await r.json()).sections || []) : [];
+      var secJson = r.ok ? ((await r.json()) || {}) : {};
+      bomSectionData = secJson.sections || [];
+      if (secJson.fileUpload) bomFileUpload = secJson.fileUpload;
       var rb = await authed('/powder-colors');
       bomBrands = rb.ok ? ((await rb.json()).brands || []) : [];
       var ra = await authed('/ship-to-addresses?orderId=' + encodeURIComponent(order.id) +
@@ -12099,6 +12103,7 @@
               '<button class="link-btn" data-line-add="' + esc(s.vendor) + '" style="width:auto;padding:8px 14px;white-space:nowrap;">Add a part</button>' +
             '</div>'
           : '') +
+        bomFilesBlock(s, canHandoff) +
         sendHistory(s) +
       '</div>' +
     '</div>';
@@ -12491,6 +12496,67 @@
   }
 
   /** Append-only record of every BOM emailed to this vendor. */
+  /**
+   * Files to send this vendor with their sheet — drawings, spec sheets. Uploaded
+   * here, then ticked (or not) in the Email vendor dialog on each send. Open to
+   * upload whether or not the section is submitted: a file is not part of the
+   * sheet, and a drawing that arrives after the first send is what a re-send is for.
+   */
+  function bomFilesBlock(s, canHandoff) {
+    var files = s.files || [];
+    var rows = files.map(function (f) {
+      return '<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid #eceee8;font-size:13px;">' +
+        '<button type="button" class="link-btn" data-bomfile-dl="' + esc(f.id) + '" data-sec="' + esc(s.id) + '" data-name="' + esc(f.filename) + '" title="Download" ' +
+          'style="width:auto;padding:0;border:0;background:none;text-align:left;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#2f6b4f;font-weight:600;">' + esc(f.filename) + '</button>' +
+        '<span class="muted" style="font-size:11.5px;flex:none;">' + esc(fmtBytes(f.byteSize)) +
+          (f.uploadedBy ? ' · ' + esc(f.uploadedBy) : '') + ' · ' + esc(fmtDate(f.createdAt)) + '</span>' +
+        (canHandoff
+          ? '<button type="button" class="link-btn" data-bomfile-del="' + esc(f.id) + '" data-sec="' + esc(s.id) + '" data-name="' + esc(f.filename) + '" title="Remove this file" style="width:auto;padding:4px 8px;color:#9c3327;flex:none;">Remove</button>'
+          : '') +
+        '</div>';
+    }).join('');
+    var upload = canHandoff
+      ? (bomFileUpload.configured
+        ? '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px;">' +
+            '<input type="file" multiple data-bomfile-input="' + esc(s.id) + '" accept="' + esc((bomFileUpload.accept || []).join(',')) + '" style="display:none;">' +
+            '<button type="button" class="link-btn" data-bomfile-up="' + esc(s.id) + '" style="width:auto;padding:7px 13px;">Upload file…</button>' +
+            '<span class="muted" data-bomfile-status="' + esc(s.id) + '" style="font-size:11.5px;">Up to ' + esc(fmtBytes(bomFileUpload.maxBytes)) + ' each. Choose which ones to attach when you email the vendor.</span>' +
+          '</div>'
+        : '<div class="muted" style="font-size:11.5px;margin-top:6px;">File storage is not configured on this deployment.</div>')
+      : '';
+    if (!files.length && !upload) return '';
+    return '<div style="margin-top:14px;">' +
+      '<div style="font-size:12.5px;font-weight:600;color:#4a4f47;margin-bottom:4px;">Files for this vendor</div>' +
+      (rows || '<div class="muted" style="font-size:12px;padding:4px 0;">No files uploaded. Drawings or spec sheets uploaded here can be attached when you email this vendor.</div>') +
+      upload +
+    '</div>';
+  }
+
+  /** Browser-direct upload, as for design renderings — see handoff/bomFiles.ts. */
+  async function uploadBomFile(sectionId, file, onProgress) {
+    if (bomFileUpload.maxBytes && file.size > bomFileUpload.maxBytes) {
+      throw new Error(file.name + ' is ' + fmtBytes(file.size) + '; the limit is ' + fmtBytes(bomFileUpload.maxBytes) + '.');
+    }
+    var tr = await authed('/bom/sections/' + sectionId + '/files/upload-token', {
+      method: 'POST', body: { filename: file.name },
+    });
+    if (!tr.ok) throw new Error(await serverMessage(tr, 'Could not start the upload.'));
+    var token = await tr.json();
+    var uploadFn = await loadBlobUploader();
+    var result = await uploadFn(token.pathname, file, {
+      access: 'private',
+      token: token.token,
+      contentType: token.contentType,
+      onUploadProgress: onProgress,
+    });
+    var rr = await authed('/bom/sections/' + sectionId + '/files', {
+      method: 'POST',
+      body: { url: result.url, pathname: result.pathname, filename: file.name },
+    });
+    if (!rr.ok) throw new Error(await serverMessage(rr, 'The upload finished, but could not be saved.'));
+    return rr.json();
+  }
+
   function sendHistory(s) {
     if (!s.sends.length) return '';
     var rows = s.sends.map(function (x) {
@@ -12502,8 +12568,11 @@
       var delivered = x.deliveredAt
         ? fmtDateTime(x.deliveredAt) + (x.openedAt ? '<div class="muted" style="font-size:11px;margin-top:2px;">Opened ' + fmtDateTime(x.openedAt) + '</div>' : '')
         : '<span class="muted">Not confirmed</span>';
+      var files = (x.attachedFiles || []).length
+        ? '<div class="muted" style="font-size:11px;margin-top:3px;">+ ' + x.attachedFiles.map(esc).join(', ') + '</div>'
+        : '';
       return '<tr>' + td(fmtDateTime(x.sentAt)) + td(esc(x.sentBy || '—')) + td(esc(x.toEmail)) +
-        td(esc(x.format)) + td(chip + (x.error ? '<div class="muted" style="font-size:11px;color:#9c3327;margin-top:3px;">' + esc(x.error) + '</div>' : '')) +
+        td(esc(x.format) + files) + td(chip + (x.error ? '<div class="muted" style="font-size:11px;color:#9c3327;margin-top:3px;">' + esc(x.error) + '</div>' : '')) +
         td(delivered) + '</tr>';
     }).join('');
     return '<div style="margin-top:14px;">' +
@@ -13063,6 +13132,51 @@
       });
     });
 
+    document.querySelectorAll('[data-bomfile-up]').forEach(function (bt) {
+      var sid = bt.getAttribute('data-bomfile-up');
+      var input = document.querySelector('[data-bomfile-input="' + sid + '"]');
+      var status = document.querySelector('[data-bomfile-status="' + sid + '"]');
+      bt.addEventListener('click', function () { input.click(); });
+      input.addEventListener('change', async function () {
+        var picked = Array.prototype.slice.call(input.files || []);
+        if (!picked.length) return;
+        bt.disabled = true;
+        var failed = [];
+        for (var i = 0; i < picked.length; i++) {
+          var file = picked[i];
+          status.textContent = 'Uploading ' + file.name + '…';
+          try {
+            await uploadBomFile(sid, file, function (progress) {
+              status.textContent = 'Uploading ' + file.name + '… ' + Math.round(progress.percentage) + '%';
+            });
+          } catch (err) {
+            failed.push(file.name + ': ' + (err && err.message ? err.message : 'upload failed'));
+          }
+        }
+        input.value = '';
+        bt.disabled = false;
+        await reload();
+        if (failed.length) alert('Some files did not upload.\n\n' + failed.join('\n'));
+      });
+    });
+
+    document.querySelectorAll('[data-bomfile-dl]').forEach(function (bt) {
+      bt.addEventListener('click', async function () {
+        var r = await authed('/bom/sections/' + bt.getAttribute('data-sec') + '/files/' + bt.getAttribute('data-bomfile-dl') + '/download');
+        if (!r.ok) { alert(await serverMessage(r, 'Could not download that file.')); return; }
+        downloadBlob(await r.blob(), bt.getAttribute('data-name'));
+      });
+    });
+
+    document.querySelectorAll('[data-bomfile-del]').forEach(function (bt) {
+      bt.addEventListener('click', async function () {
+        if (!window.confirm('Remove ' + bt.getAttribute('data-name') + '? Emails that already carried it are unaffected.')) return;
+        var r = await authed('/bom/sections/' + bt.getAttribute('data-sec') + '/files/' + bt.getAttribute('data-bomfile-del'), { method: 'DELETE' });
+        if (!r.ok) { alert(await serverMessage(r, 'Could not remove that file.')); return; }
+        reload();
+      });
+    });
+
     document.querySelectorAll('[data-sec-email]').forEach(function (bt) {
       bt.addEventListener('click', function () {
         var sec = bomSectionData.filter(function (x) { return x.id === bt.getAttribute('data-sec-email'); })[0];
@@ -13202,6 +13316,26 @@
       }, 'Save address');
   }
 
+  /**
+   * The uploaded files, one checkbox each, all ticked to start: the sender
+   * unticks what this vendor should not get rather than hunting for what they should.
+   */
+  function sendFilesField(sec) {
+    var files = sec.files || [];
+    if (!files.length) return '';
+    return fieldRow('Also attach',
+      '<div style="border:1px solid #e2e5dd;border-radius:9px;padding:6px 10px;">' +
+        files.map(function (f) {
+          return '<label style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13px;cursor:pointer;">' +
+            '<input type="checkbox" class="sndFile" value="' + esc(f.id) + '" checked>' +
+            '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(f.filename) + '</span>' +
+            '<span class="muted" style="font-size:11.5px;flex:none;">' + esc(fmtBytes(f.byteSize)) + '</span>' +
+          '</label>';
+        }).join('') +
+      '</div>' +
+      '<div class="muted" style="font-size:11.5px;margin-top:4px;">Uploaded under Files for this vendor. Untick any this email should not carry.</div>');
+  }
+
   /** Email this vendor's BOM, pre-filled from the vendor's saved defaults. */
   function openSendForm(order, sec, done) {
     var e = sec.email;
@@ -13217,10 +13351,13 @@
         '<option value="PDF"' + (e.format === 'PDF' ? ' selected' : '') + '>PDF</option>' +
         '<option value="EXCEL"' + (e.format === 'EXCEL' ? ' selected' : '') + '>Excel</option>' +
         '<option value="BOTH"' + (e.format === 'BOTH' ? ' selected' : '') + '>Both</option></select>') +
-      fieldRow('Message', '<textarea id="sndBody" rows="8" style="' + IN + 'resize:vertical;font-family:inherit;">' + esc(e.body) + '</textarea>'),
+      fieldRow('Message', '<textarea id="sndBody" rows="8" style="' + IN + 'resize:vertical;font-family:inherit;">' + esc(e.body) + '</textarea>') +
+      sendFilesField(sec),
       async function (close, showErr) {
         var to = document.getElementById('sndTo').value.trim();
         if (!to) return showErr('Type at least one address.');
+        var attachmentIds = Array.prototype.slice.call(document.querySelectorAll('.sndFile:checked'))
+          .map(function (cb) { return cb.value; });
         var r = await authed('/bom/sections/' + sec.id + '/send', {
           method: 'POST',
           body: {
@@ -13228,6 +13365,7 @@
             subject: document.getElementById('sndSubject').value.trim(),
             body: document.getElementById('sndBody').value,
             format: document.getElementById('sndFormat').value,
+            attachmentIds: attachmentIds,
           },
         });
         if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e2) {} return showErr(m || 'Could not send.'); }
