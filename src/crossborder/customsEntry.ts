@@ -67,6 +67,11 @@ export interface CustomsEntryPatch {
    */
   tariff9979Claimed?: boolean | null;
   /**
+   * Qualifies a claim as "Claimed, subject to CBSA eligibility". Ignored (stored
+   * false) unless the entry ends up claimed — see saveCustomsEntry.
+   */
+  tariff9979SubjectToCbsa?: boolean;
+  /**
    * Hand-typed wording for this proposal's Section C tariff item 9979.00.00 row —
    * replaces CrossBorderSetting's wording for the answer above. Wording only.
    */
@@ -158,6 +163,9 @@ export async function customsEntryFor(versionId: string): Promise<ProposalCustom
       importerOfRecord: settings?.defaultImporterOfRecord ?? 'CUSTOMER',
       gstHstTreatment: settings?.defaultGstHstTreatment ?? null,
       tariff9979Claimed: settings?.defaultTariff9979Claimed ?? null,
+      tariff9979SubjectToCbsa:
+        settings?.defaultTariff9979Claimed === true && settings.defaultTariff9979SubjectToCbsa,
+      tariffClassificationCode: settings?.defaultTariffClassificationCode ?? null,
       customsBrokerName: settings?.defaultCustomsBrokerName ?? null,
       customsBrokerAddress: settings?.defaultCustomsBrokerAddress ?? null,
       countryOfOrigin: settings?.defaultCountryOfOrigin ?? null,
@@ -257,6 +265,9 @@ export async function saveCustomsEntry(
       ...restPatch,
       ...sectionCItemsData,
       ...sectionBItemsData,
+      // "Subject to CBSA eligibility" qualifies a claim; it never survives one being
+      // withdrawn or left undetermined.
+      ...(merged.tariff9979Claimed !== true ? { tariff9979SubjectToCbsa: false } : {}),
       status,
       enteredById: actorId,
       enteredAt: new Date(),

@@ -128,6 +128,9 @@ const CustomsPatchSchema = z.object({
    * Summit and its broker, not this application. Null is "not yet determined".
    */
   tariff9979Claimed: z.boolean().nullable().optional(),
+  /** Qualifies a claim as "Claimed, subject to CBSA eligibility". Stored false unless
+   *  tariff9979Claimed ends up true. */
+  tariff9979SubjectToCbsa: z.boolean().optional(),
   /**
    * Hand-typed wording for this proposal's tariff item 9979.00.00 row, replacing the
    * admin wording for its answer. Wording only — tariff9979Claimed still decides
@@ -237,17 +240,27 @@ const SettingsSchema = z.object({
    * tri-state: the empty string is "no default (undetermined)", distinct from the
    * strings 'true'/'false' — raw <select> values are always strings, never JSON
    * booleans, so they are translated here.
+   * 'cbsa' is "Claimed, subject to CBSA eligibility" — a claim, plus the qualifier
+   * stored in defaultTariff9979SubjectToCbsa; the handler splits the pair apart.
    */
   defaultTariff9979Claimed: z
-    .enum(['', 'true', 'false'])
+    .enum(['', 'true', 'false', 'cbsa'])
     .optional()
-    .transform((v) => (v === undefined ? undefined : v === '' ? null : v === 'true')),
+    .transform((v) =>
+      v === undefined
+        ? undefined
+        : {
+            claimed: v === '' ? null : v !== 'false',
+            subjectToCbsa: v === 'cbsa',
+          },
+    ),
   /**
    * The wording the Section C tariff item 9979.00.00 row prints for each answer.
    * Blank/null prints the built-in wording ("Claimed", "Not claimed", "Not yet
    * determined").
    */
   tariff9979ClaimedText: z.string().trim().max(1000).nullable().optional(),
+  tariff9979ClaimedSubjectToCbsaText: z.string().trim().max(1000).nullable().optional(),
   tariff9979NotClaimedText: z.string().trim().max(1000).nullable().optional(),
   tariff9979UndeterminedText: z.string().trim().max(1000).nullable().optional(),
   defaultTaxResponsibility: z
@@ -280,6 +293,8 @@ const SettingsSchema = z.object({
   defaultCustomsBrokerAddress: z.string().trim().max(500).nullable().optional(),
   /** Default country-of-origin text seeded onto a brand-new customs entry. */
   defaultCountryOfOrigin: z.string().trim().max(200).nullable().optional(),
+  /** Default tariff/customs classification code seeded onto a brand-new customs entry. */
+  defaultTariffClassificationCode: z.string().trim().max(100).nullable().optional(),
   /**
    * The admin-managed, ordered Section C row template — see sectionC.ts. Read live by
    * every proposal that has not set its own ProposalCustomsEntry.sectionCItems.
@@ -833,8 +848,19 @@ export function registerCrossBorderRoutes(app: FastifyInstance): void {
       sectionBTemplate,
       crossBorderTerms,
       crossBorderTermsDraft,
-      ...restPatch
+      defaultTariff9979Claimed,
+      ...settingsPatch
     } = patch;
+    // One <select> sets both columns — see defaultTariff9979Claimed on SettingsSchema.
+    const restPatch = {
+      ...settingsPatch,
+      ...(defaultTariff9979Claimed === undefined
+        ? {}
+        : {
+            defaultTariff9979Claimed: defaultTariff9979Claimed.claimed,
+            defaultTariff9979SubjectToCbsa: defaultTariff9979Claimed.subjectToCbsa,
+          }),
+    };
     const sectionCTemplateData =
       sectionCTemplate === undefined
         ? {}
