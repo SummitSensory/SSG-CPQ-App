@@ -250,6 +250,24 @@ export function floorPaddingQuote(a: AdvAnswers, s?: FormulaSettings): MatQuote 
 export const ZIP_KIT_CATEGORY = 'Complete Zip Line Kit';
 
 /**
+ * Section headings the engine writes for the optional Adventure tiers.
+ *
+ * Both stay short enough to print at the full heading size alongside "· OPTIONAL":
+ * the printed heading steps its type down once the name runs past 40 characters, and
+ * the old "Therapeutic Activity & Adventure Components" and "Adventure Mat System
+ * (Highly Recommended)" were the only two that did. "Highly Recommended" now rides in
+ * the mat heading's note instead of its name.
+ *
+ * The components section was renamed, so a part whose catalog group still carries
+ * the old name — a catalog row not yet renamed, or one re-imported from an old
+ * workbook — is still filed here; see COMPONENTS_GROUP_LEGACY.
+ */
+export const COMPONENTS_GROUP = 'Adventure Components';
+export const COMPONENTS_GROUP_LEGACY = 'Therapeutic Activity & Adventure Components';
+export const MAT_GROUP = 'Adventure Mat System';
+export const MAT_GROUP_NOTE = 'Highly Recommended';
+
+/**
  * Compute the full bill of materials for an Adventure Series frame, mirroring the
  * Excel beam calculator + Calcs tab. Frame-member counts for single-bay frames
  * (length & width 5–10 ft) match the workbook; multi-bay (>10 ft) is approximated
@@ -590,9 +608,9 @@ export function computeAdventureProposal(
     { part: WEBBING_SLING_PART, qty: n(a.webbingSling) },
   ].filter((e) => e.qty > 0);
   const norm = (s?: string) => (s || '').trim().toLowerCase();
-  const takeExtras = (groupName: string): Array<{ part: string; qty: number }> => {
-    const want = norm(groupName);
-    const hit = extras.filter((e) => norm(LOOK[e.part]?.proposalGroup) === want);
+  const takeExtras = (...groupNames: string[]): Array<{ part: string; qty: number }> => {
+    const want = groupNames.map(norm);
+    const hit = extras.filter((e) => want.includes(norm(LOOK[e.part]?.proposalGroup)));
     for (const h of hit) extras.splice(extras.indexOf(h), 1);
     return hit;
   };
@@ -623,10 +641,10 @@ export function computeAdventureProposal(
       (bySub[sub] ?? []).forEach((it) => P(it.part, it.qty));
     }
   };
-  const compExtras = takeExtras('Therapeutic Activity & Adventure Components');
-  const matExtras = takeExtras('Adventure Mat System');
+  const compExtras = takeExtras(COMPONENTS_GROUP, COMPONENTS_GROUP_LEGACY);
+  const matExtras = takeExtras(MAT_GROUP);
   if (hasComp || compExtras.length) {
-    G('Therapeutic Activity & Adventure Components', true);
+    G(COMPONENTS_GROUP, true);
     if (a.slide) {
       SG('Summit Adventure Slide System');
       if (slideA2216On(a)) P('A-2216');
@@ -660,8 +678,9 @@ export function computeAdventureProposal(
 
   const pad = floorPaddingQuote(a, settings);
   if (pad || a.matColumn || a.matLadderLeg || a.matCustom || matExtras.length) {
-    G('Adventure Mat System (Highly Recommended)', true);
-    SG('Adventure Mat System');
+    // No "Adventure Mat System" sub-heading: it would only repeat the section name
+    // now that the section is no longer "… (Highly Recommended)".
+    G(MAT_GROUP, true, MAT_GROUP_NOTE);
     if (pad) {
       // Sized and priced from the frame footprint — see matPricing.ts. The catalog
       // record, when the part exists, only supplies weight; price and cost come
