@@ -5,6 +5,7 @@ import { NotFoundError, ValidationError } from '../lib/errors.js';
 import { renderBomHtml, renderBomXlsx, bomFilename } from './bomDocuments.js';
 import { confirmSection, submissionBlockers } from './bomSections.js';
 import { renderPdf, pdfAvailable } from '../render/pdf.js';
+import { resolveBomFilesForSend, MAX_BOM_EMAIL_ATTACHMENT_BYTES } from './bomFiles.js';
 import type { BomSendFormat } from '@prisma/client';
 
 /**
@@ -34,6 +35,8 @@ export interface SendInput {
   body: string;
   format: BomSendFormat;
   includeZeroQty?: boolean;
+  /** Files uploaded to this section that the sender ticked to go out with it. */
+  attachmentIds?: string[];
 }
 
 /** Split a comma or semicolon separated address list, dropping the blanks. */
@@ -120,6 +123,26 @@ export async function sendBom(sectionId: string, input: SendInput, actorId: stri
     throw new ValidationError('Could not build the document to attach. Nothing was sent.');
   }
 
+  // The ticked uploads, read in full before anything is sent — same rule as the
+  // sheet itself: a vendor never gets an email missing an attachment we promised.
+  const files = await resolveBomFilesForSend(sectionId, input.attachmentIds ?? []);
+  for (const f of files) {
+    attachments.push({ filename: f.filename, content: f.bytes.toString('base64') });
+  }
+  const totalBytes = attachments.reduce((a, x) => a + Math.floor((x.content.length * 3) / 4), 0);
+  if (totalBytes > MAX_BOM_EMAIL_ATTACHMENT_BYTES) {
+    throw new ValidationError(
+      `The attachments come to ${(totalBytes / (1024 * 1024)).toFixed(1)} MB, over the ${
+        MAX_BOM_EMAIL_ATTACHMENT_BYTES / (1024 * 1024)
+      } MB an email can carry. Untick some files and send them separately. Nothing was sent.`,
+    );
+  }
+  const attachedFiles = files.map((f) => ({
+    id: f.id,
+    filename: f.filename,
+    byteSize: f.byteSize,
+  }));
+
   const send = await prisma.bomSend.create({
     data: {
       sectionId,
@@ -132,6 +155,7 @@ export async function sendBom(sectionId: string, input: SendInput, actorId: stri
       format: input.format,
       status: 'QUEUED',
       sentById: actorId,
+      ...(attachedFiles.length ? { attachedFiles } : {}),
     },
   });
 
@@ -149,6 +173,7 @@ export async function sendBom(sectionId: string, input: SendInput, actorId: stri
           vendor: section.vendor,
           to: to.join(', '),
           format: input.format,
+          ...(attachedFiles.length ? { files: attachedFiles.map((f) => f.filename) } : {}),
           ...(extra.error ? { error: extra.error } : {}),
         } as object,
       },

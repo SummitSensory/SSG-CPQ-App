@@ -2359,6 +2359,7 @@ model BomVendorSection {
 
   answers         BomVendorAnswer[]
   sends           BomSend[]
+  files           BomSectionFile[]
 
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
@@ -2453,10 +2454,36 @@ model BomSend {
   sentAt            DateTime         @default(now())
   deliveredAt       DateTime?
   openedAt          DateTime?
+  /// The uploaded files that went out with this email, as
+  /// `[{ id, filename, byteSize }]` — copied rather than referenced, so the record
+  /// of what the vendor received survives the file being removed afterwards.
+  attachedFiles     Json?
 
   @@index([sectionId])
   @@index([orderId])
   @@index([providerMessageId])
+}
+
+/// A file uploaded against one vendor's Bill of Materials — a drawing, a spec
+/// sheet, a finish sample — offered as an extra attachment when the BOM is
+/// emailed to that vendor. The sender ticks which ones go on each send.
+///
+/// The bytes live in blob storage (`url`), uploaded browser-direct the same way
+/// design renderings are; see src/handoff/bomFiles.ts.
+model BomSectionFile {
+  id           String           @id @default(cuid())
+  sectionId    String
+  section      BomVendorSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  orderId      String
+  filename     String
+  contentType  String
+  byteSize     Int
+  url          String
+  pathname     String
+  uploadedById String
+  createdAt    DateTime         @default(now())
+
+  @@index([sectionId])
 }
 
 // ---------------------------------------------------------------------------
