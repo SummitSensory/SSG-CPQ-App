@@ -29,6 +29,7 @@ import {
   deleteBomFile,
 } from '../handoff/bomFiles.js';
 import { checkOrderColors } from '../portal/colorCheck.js';
+import { powderColorText } from '../portal/colorAreas.js';
 import {
   approveVendorInvoice,
   reopenVendorInvoice,
@@ -658,7 +659,8 @@ export function registerBomRoutes(app: FastifyInstance): void {
       return true;
     });
 
-    const printed = `${brand.name} ${code}`.trim();
+    // The colour's name from the brand's chart prints too, as a portal review writes it.
+    const printed = (await powderColorText(brand.name, code)) ?? brand.name;
     if (targets.length) {
       await prisma.procurementLine.updateMany({
         where: { id: { in: targets.map((t) => t.id) } },

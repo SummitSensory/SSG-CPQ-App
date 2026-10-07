@@ -138,6 +138,7 @@ export async function purchaseOrderSource(orderId: string, vendor: string) {
       quantity: l.quantity,
       unitCostMinor: l.unitCostMinor,
       extendedCostMinor: l.extendedCostMinor,
+      powderColor: l.powderColor,
       onPurchaseOrder: onSent.get(l.sku) ?? null,
     })),
     /** The vendor section's "Estimated shipment quote", as typed and as a number where it reads as one. */
@@ -171,6 +172,8 @@ async function chosenLines(orderId: string, vendor: string, lineIds: string[]) {
       quantity: l.quantity,
       unitCostMinor: l.unitCostMinor,
       extendedCostMinor: l.extendedCostMinor,
+      // The colour the Bill of Materials prints for this part, frozen with the PO.
+      powderColor: l.powderColor.trim() || null,
       sortOrder: i,
     })),
   };
@@ -321,6 +324,8 @@ export interface PurchaseOrderModel {
     quantity: number;
     unitCostMinor: number;
     extendedCostMinor: number;
+    /** '' when the part has no colour. */
+    powderColor: string;
   }>;
   subtotalMinor: number;
   freightMinor: number | null;
@@ -391,6 +396,7 @@ export async function buildPurchaseOrderModel(poId: string): Promise<PurchaseOrd
       quantity: l.quantity,
       unitCostMinor: l.unitCostMinor,
       extendedCostMinor: l.extendedCostMinor,
+      powderColor: s(l.powderColor),
     })),
     subtotalMinor: po.subtotalMinor,
     freightMinor: po.freightMinor,

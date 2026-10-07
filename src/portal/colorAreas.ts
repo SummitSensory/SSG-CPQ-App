@@ -210,8 +210,56 @@ export function resolvePowderBrand(
 export interface PowderChartColor {
   /** The chart owner's name — matched against the powder brand. */
   vendor: string;
+  /**
+   * The chart's own name, also matched against the powder brand. The Cardinal and
+   * Prismatic charts are kept under the powder coater (Goldberg Brothers) as palettes
+   * named for the brand, because the brand is not a vendor anyone orders from.
+   */
+  palette?: string;
   vendorCode: string;
   name: string;
+}
+
+/**
+ * Powder-coat chart colours, optionally only those with the given codes. The one
+ * place the chart is read, so the portal review, the BOM's apply-colour tool and a
+ * line edited by hand all print a colour the same way.
+ */
+export async function loadPowderChart(codes?: readonly string[]): Promise<PowderChartColor[]> {
+  const wanted = codes?.map((c) => c.trim()).filter(Boolean);
+  if (codes && !wanted?.length) return [];
+  const rows = await prisma.vendorColor.findMany({
+    where: {
+      vendorCode: wanted ? { in: wanted, mode: 'insensitive' } : { not: null },
+      palette: { finishType: 'POWDER_COAT' },
+    },
+    select: {
+      name: true,
+      vendorCode: true,
+      palette: { select: { name: true, manufacturer: { select: { name: true } } } },
+    },
+  });
+  return rows.map((c) => ({
+    vendor: c.palette.manufacturer.name,
+    palette: c.palette.name,
+    vendorCode: c.vendorCode ?? '',
+    name: c.name,
+  }));
+}
+
+/**
+ * The printed text for a powder brand + code — "Cardinal Blue Hammer T013-BL468" when
+ * the brand's chart has the code, else "Cardinal T013-BL468". Null when both are blank.
+ */
+export async function powderColorText(
+  brandName: string | null | undefined,
+  code: string | null | undefined,
+): Promise<string | null> {
+  const b = (brandName ?? '').trim();
+  const c = (code ?? '').trim();
+  if (!b) return c || null;
+  const chart = c ? await loadPowderChart([c]) : [];
+  return lineColorFor({ brand: b, code: c }, [{ id: '', name: b }], chart).powderColor;
 }
 
 /** What one line's colour columns should hold. */
@@ -247,9 +295,21 @@ export function lineColorFor(
     const b = brand.name.trim().toLowerCase();
     const c = code.toLowerCase();
     const named = chart.find(
-      (x) => x.vendor.trim().toLowerCase() === b && x.vendorCode.trim().toLowerCase() === c,
+      (x) =>
+        (x.vendor.trim().toLowerCase() === b || (x.palette ?? '').trim().toLowerCase() === b) &&
+        x.vendorCode.trim().toLowerCase() === c,
     );
-    const name = named && named.name.trim().toLowerCase() !== c ? named.name.trim() : '';
+    // A chart that repeats a name gives each copy its code — Cardinal has two "Blue 90
+    // Gloss", stored as "Blue 90 Gloss (T009-BL05)". The code prints after the name
+    // anyway, so the bracketed copy is dropped rather than printed twice.
+    const bare = named
+      ? named.name
+          .trim()
+          .replace(/\s*\(([^()]*)\)$/, (m, inner: string) =>
+            inner.trim().toLowerCase() === c ? '' : m,
+          )
+      : '';
+    const name = bare && bare.toLowerCase() !== c ? bare : '';
     return {
       powderBrandId: brand.id,
       powderColorCode: code || null,
@@ -641,7 +701,7 @@ export async function loadColorPlanInput(
   brands: ManagedBrand[];
   chart: PowderChartColor[];
 }> {
-  const [mappings, lines, sections, brands, chartRows] = await Promise.all([
+  const [mappings, lines, sections, brands, chart] = await Promise.all([
     prisma.portalColorAreaMapping.findMany({
       where: { areaKey: { in: [...new Set(picks.map((p) => p.areaKey))] } },
       select: { areaKey: true, sku: true, piece: true },
@@ -669,14 +729,7 @@ export async function loadColorPlanInput(
     prisma.powderColorBrand.findMany({ select: { id: true, name: true } }),
     // Powder charts only, and only for the colour's printed name — a vinyl chart's
     // "Lime" is not a powder code.
-    prisma.vendorColor.findMany({
-      where: { vendorCode: { not: null }, palette: { finishType: 'POWDER_COAT' } },
-      select: {
-        name: true,
-        vendorCode: true,
-        palette: { select: { manufacturer: { select: { name: true } } } },
-      },
-    }),
+    loadPowderChart(),
   ]);
 
   const mapping = new Map<string, MappedPartRef[]>();
@@ -697,12 +750,6 @@ export async function loadColorPlanInput(
       if (spec) specs.set(l.id, spec);
     }
   }
-  const chart: PowderChartColor[] = chartRows.map((c) => ({
-    vendor: c.palette.manufacturer.name,
-    vendorCode: c.vendorCode ?? '',
-    name: c.name,
-  }));
-
   return {
     picks,
     mapping,

@@ -11753,6 +11753,7 @@
         '<td style="padding:7px 8px;font-family:ui-monospace,monospace;font-size:11.5px;white-space:nowrap;">' + esc(l.sku) +
           (l.vendorSku && l.vendorSku !== l.sku ? '<div class="muted" style="font-size:10.5px;">Their #: ' + esc(l.vendorSku) + '</div>' : '') + '</td>' +
         '<td style="padding:7px 8px;font-size:12.5px;">' + esc(l.name) +
+          (l.powderColor ? '<div class="muted" style="font-size:11px;margin-top:2px;">Color: ' + esc(l.powderColor) + '</div>' : '') +
           (l.onPurchaseOrder ? '<div style="font-size:11px;color:#8a6d1f;margin-top:2px;">Already on ' + esc(l.onPurchaseOrder) + '</div>' : '') + '</td>' +
         '<td style="padding:7px 8px;text-align:right;font-size:12.5px;">' + l.quantity + '</td>' +
         '<td style="padding:7px 8px;text-align:right;font-size:12.5px;">' + fmtMoney(l.unitCostMinor, '') + '</td>' +

@@ -43,6 +43,7 @@ import type {
 } from '@prisma/client';
 import { allocateNumbered } from '../lib/documentNumber.js';
 import { sendOrderLockedNotice } from './orderLockedNotice.js';
+import { powderColorText } from '../portal/colorAreas.js';
 
 /** A catalog ref with nothing resolved — the parallel-array fallback. */
 const EMPTY_REF = { sku: null, vendor: null, unitCostMinor: null, unitWeightLbs: null } as const;
@@ -1390,7 +1391,9 @@ export async function patchProcurementLine(
     const brand = brandId
       ? await prisma.powderColorBrand.findUnique({ where: { id: brandId }, select: { name: true } })
       : null;
-    printed = [brand?.name, (code || '').trim()].filter(Boolean).join(' ') || null;
+    // The colour's name from the brand's chart prints between brand and code, the
+    // same text a portal review writes.
+    printed = await powderColorText(brand?.name, code);
   }
 
   const line = await prisma.procurementLine.update({
