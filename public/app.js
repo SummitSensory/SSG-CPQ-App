@@ -11252,6 +11252,9 @@
    * powder colour, vendor notes and the sourced flag are operational and editable
    * here. Prices shown are OUR unit cost — this is a purchasing document. */
   var procData = [];
+  // The vendor section being rearranged, if any: { sectionId, vendor, ids, headings }.
+  // Held here rather than in the DOM so a repaint mid-arrangement does not lose it.
+  var bomArrange = null;
   var bomOrder = null;
   /* What the accepted proposal would produce under today's rules, against what is
    * actually on the sheet. A BOM is allowed to differ — kits and component lists
@@ -11911,6 +11914,139 @@
     if (pv) pv.addEventListener('click', function () { openPurchaseOrderPdf(poId); });
   }
 
+  /** A line's heading as the server resolved it; '' is the main list. */
+  function bomHeadingOf(p) {
+    if (p.bomHeading != null) return String(p.bomHeading).trim();
+    return p.isHardwareComponent ? 'Hardware' : '';
+  }
+
+  /** Lines split under their headings: main list first, then where each first appears. */
+  function bomHeadingGroups(lines) {
+    var order = [], map = {};
+    lines.forEach(function (p) {
+      var h = bomHeadingOf(p), k = h.toLowerCase();
+      if (!map[k]) {
+        map[k] = { title: h, lines: [] };
+        if (k === '') order.unshift(k); else order.push(k);
+      }
+      map[k].lines.push(p);
+    });
+    return order.map(function (k) { return map[k]; });
+  }
+
+  /** What "the part's default" heading would be for a line, for the Arrange picker. */
+  function bomDefaultHeading(p) {
+    if (p.bomHeadingReason && p.bomHeadingReason !== 'order') return p.bomHeading || '';
+    if (p.catalogBomGroup != null) return p.catalogBomGroup;
+    return p.isHardwareComponent ? 'Hardware' : '';
+  }
+
+  /**
+   * Arrange mode for one vendor's sheet: move lines up and down and pick each one's
+   * heading, then say whether that is for this order only or for every future order.
+   * Moving happens in the browser (no round trip per click); nothing is saved until
+   * one of the two save buttons is pressed.
+   */
+  function arrangeHtml(s, lines) {
+    var A = bomArrange;
+    var byId = {};
+    lines.forEach(function (p) { byId[p.id] = p; });
+    // Lines that arrived since arranging started go at the end; removed ones drop out.
+    A.ids = A.ids.filter(function (id) { return byId[id]; })
+      .concat(lines.map(function (p) { return p.id; }).filter(function (id) { return A.ids.indexOf(id) < 0; }));
+    var heads = ['Hardware'];
+    var addHead = function (h) {
+      h = (h || '').trim();
+      if (h && heads.map(function (x) { return x.toLowerCase(); }).indexOf(h.toLowerCase()) < 0) heads.push(h);
+    };
+    lines.forEach(function (p) { addHead(p.bomHeading); addHead(p.catalogBomGroup); });
+    Object.keys(A.headings).forEach(function (id) { addHead(A.headings[id]); });
+    var btn = function (dir, id, label, tip) {
+      return '<button class="link-btn" data-arr-move="' + dir + '" data-id="' + id + '" title="' + tip + '" aria-label="' + tip + '" style="width:auto;padding:3px 8px;font-size:12px;">' + label + '</button>';
+    };
+    var body = A.ids.map(function (id, i) {
+      var p = byId[id];
+      var chosen = Object.prototype.hasOwnProperty.call(A.headings, id)
+        ? A.headings[id]
+        : (p.bomGroup != null ? p.bomGroup : null);
+      var def = bomDefaultHeading(p);
+      var opt = function (v, label) {
+        var sel = chosen === null ? v === '__auto' : v === chosen;
+        return '<option value="' + esc(v) + '"' + (sel ? ' selected' : '') + '>' + esc(label) + '</option>';
+      };
+      var select = '<select class="arrHead" data-id="' + id + '" style="' + bomFieldStyle('200px') + '">' +
+        opt('__auto', 'Part’s default (' + (def || 'Main list') + ')') +
+        opt('', 'Main list') +
+        heads.map(function (h) { return opt(h, h); }).join('') +
+        '<option value="__new">New heading…</option></select>';
+      return '<tr data-arr-row="' + id + '">' +
+        td('<span class="arrPos muted" style="font-size:12px;">' + (i + 1) + '</span>') +
+        td('<div style="display:flex;gap:4px;">' + btn('top', id, '⤒', 'Move to the top') + btn('up', id, '↑', 'Move up') + btn('down', id, '↓', 'Move down') + btn('bottom', id, '⤓', 'Move to the bottom') + '</div>') +
+        td('<code style="font-size:12.5px;color:#4a4f47;">' + esc(p.sku || '—') + '</code>') +
+        td('<span style="font-size:13px;">' + esc(p.name) + '</span>') +
+        td(String(p.quantity)) +
+        td(select) +
+        '</tr>';
+    }).join('');
+    return '<div style="margin-top:14px;border:1px solid #ecd9a6;background:#fffdf6;border-radius:10px;padding:12px 14px;">' +
+      '<div style="font-size:13px;font-weight:600;margin-bottom:4px;">Arrange the ' + esc(s.vendor) + ' sheet</div>' +
+      '<div class="muted" style="font-size:12px;line-height:1.55;margin-bottom:10px;">Move lines into the order the shop wants and choose a heading for each. Nothing is saved until you pick one of the buttons below.</div>' +
+      '<div style="overflow:auto;">' + tableShell(['#', 'Move', 'Part #', 'Item', 'Qty', 'Heading'], body, 6, '') + '</div>' +
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px;">' +
+        '<span style="font-size:12.5px;font-weight:600;">Keep this arrangement for:</span>' +
+        '<button class="btn" data-arr-save="future" style="width:auto;padding:8px 14px;" title="Also saves each part’s position and heading to Catalog → BOM setup, so the next order prints the same way">This order and all future orders</button>' +
+        '<button class="link-btn" data-arr-save="order" style="width:auto;padding:8px 14px;">This order only</button>' +
+        '<button class="link-btn" data-arr-cancel="1" style="width:auto;padding:8px 14px;color:#9c3327;">Cancel</button>' +
+      '</div>' +
+    '</div>';
+  }
+
+  /**
+   * "Use this for every future order too?" — asked after a correction on one line.
+   *
+   * A bar rather than a dialog: the edit is already saved on this order, and the
+   * question is a yes-or-ignore. One bar at a time; a second edit replaces it.
+   */
+  function askBomFuture(lineId, field) {
+    var line = (procData || []).filter(function (x) { return x.id === lineId; })[0];
+    if (!line || !line.sku) return;
+    // A part's catalog cost moves every future proposal's margin, so only a catalog
+    // admin is offered it. A second vendor's charge is BOM setup and open to all.
+    if (field === 'unitCostMinor' && !line.secondaryOfSku && !isSystemAdmin()) return;
+    var map = { vendorNotes: 'vendorNotes', unitCostMinor: 'unitCost' };
+    var what = field === 'vendorNotes'
+      ? 'this note'
+      : (line.secondaryOfSku ? 'this charge from ' + (line.vendor || 'this vendor') : 'this cost');
+    var old = document.getElementById('bomFutureAsk');
+    if (old) old.parentNode.removeChild(old);
+    var bar = document.createElement('div');
+    bar.id = 'bomFutureAsk';
+    bar.setAttribute('role', 'status');
+    bar.style.cssText = 'position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:960;max-width:640px;width:calc(100% - 32px);' +
+      'background:#20241f;color:#fff;border-radius:12px;padding:12px 14px;box-shadow:0 18px 40px -16px rgba(0,0,0,.55);' +
+      'display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:13px;line-height:1.45;';
+    bar.innerHTML = '<span style="flex:1;min-width:220px;">Saved on this order. Use ' + esc(what) + ' for <b>' + esc(line.sku) + '</b> on all future orders too?</span>' +
+      '<button data-fa="yes" style="border:none;border-radius:8px;padding:7px 12px;background:#3f9d78;color:#fff;font-weight:600;cursor:pointer;">Yes, all future orders</button>' +
+      '<button data-fa="no" style="border:1px solid #8a8f85;border-radius:8px;padding:7px 12px;background:transparent;color:#fff;cursor:pointer;">Just this order</button>';
+    document.body.appendChild(bar);
+    var close = function () { if (bar.parentNode) bar.parentNode.removeChild(bar); };
+    var timer = setTimeout(close, 20000);
+    bar.querySelector('[data-fa="no"]').addEventListener('click', function () { clearTimeout(timer); close(); });
+    bar.querySelector('[data-fa="yes"]').addEventListener('click', async function () {
+      clearTimeout(timer);
+      close();
+      var r = await authed('/orders/procurement/' + lineId + '/save-default', { method: 'POST', body: { fields: [map[field]] } });
+      if (!r.ok) {
+        var m = '';
+        try { m = ((await r.json()) || {}).message || ''; } catch (e) {}
+        toast(m || 'Could not save that for future orders.', true);
+        return;
+      }
+      var d = await r.json();
+      toast('Saved for future orders: ' + d.part + ' — ' + (d.saved || []).join(', ') + '.');
+    });
+  }
+
   function sectionCard(s, idx, canHandoff) {
     var locked = !s.editable;
     var edit = canHandoff && !locked;
@@ -11969,6 +12105,11 @@
             ? '<div class="muted" style="font-size:11px;margin-top:3px;">from <code>' + esc(p.kitSku) +
               '</code> on the proposal \u00b7 component list</div>'
             : '') +
+          // Why the line sits under its heading — "why is this under Hardware?" answered
+          // on the line itself, with the fix one click away under Arrange lines.
+          (p.bomHeading
+            ? '<div class="muted" style="font-size:11px;margin-top:3px;">Under ' + esc(p.bomHeading) + ' \u00b7 ' + esc(p.bomHeadingWhy || '') + '</div>'
+            : '') +
           (free
             ? '<div style="margin-top:3px;"><span class="chip" style="font-size:10px;background:#eef0ea;color:#5c6157;">Free issue</span>' +
               '<span class="muted" style="font-size:11px;margin-left:6px;">Paid by Summit' +
@@ -11999,15 +12140,17 @@
         '</tr>';
     };
 
-    // Same two blocks as the printed sheet: products in product-tree order, then a
-    // Hardware block. The screen and the document must not disagree about order.
-    var prodLines = lines.filter(function (p) { return !p.isHardwareComponent; });
-    var hwLines = lines.filter(function (p) { return p.isHardwareComponent; });
+    // The same headings, in the same order, as the printed sheet. The server sends the
+    // lines already in BOM order with each one's heading (src/handoff/bomLayout.ts), so
+    // the screen only has to split them: main list first, then each heading where its
+    // first line falls.
     var divider = function (label) {
-      return '<tr><td colspan="' + cols + '" style="padding:11px 16px 5px;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#5c6157;background:#f4f5f1;border-top:1px solid #e7e8e3;">' + label + '</td></tr>';
+      return '<tr><td colspan="' + cols + '" style="padding:11px 16px 5px;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#5c6157;background:#f4f5f1;border-top:1px solid #e7e8e3;">' + esc(label) + '</td></tr>';
     };
-    var rows = prodLines.map(rowHtmlFor).join('') +
-      (hwLines.length ? divider('Hardware') + hwLines.map(rowHtmlFor).join('') : '') +
+    var headGroups = bomHeadingGroups(lines);
+    var rows = headGroups.map(function (g) {
+      return (g.title ? divider(g.title) : '') + g.lines.map(rowHtmlFor).join('');
+    }).join('') +
       '<tr><td style="padding:12px 16px;border-top:1px solid #e7e8e3;font-weight:600;">Total — ' + s.lineCount + ' line' + (s.lineCount === 1 ? '' : 's') + '</td>' +
       '<td colspan="' + (showVendorPart ? 2 : 1) + '" style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td>' +
       '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;font-weight:600;">' + s.unitCount + '</td>' +
@@ -12039,6 +12182,7 @@
           (canHandoff && s.poEnabled && bomOrder && bomOrder.locked !== false
             ? '<button class="btn" data-sec-po="' + esc(s.vendor) + '" title="Choose products from this vendor’s sheet and send them a purchase order" style="width:auto;padding:8px 14px;">Create Purchase Order</button>'
             : '') +
+          (canHandoff && !locked ? '<button class="link-btn" data-sec-arrange="' + s.id + '" title="Put this vendor’s lines in the order the shop wants and choose their headings — for this order, or for every future order too" style="width:auto;padding:8px 14px;">Arrange lines</button>' : '') +
           (canHandoff && !locked ? '<button class="link-btn" data-sec-confirm="' + s.id + '" title="Use when the sheet went out some other way" style="width:auto;padding:8px 14px;">Mark sent by hand</button>' : '') +
           (canHandoff && locked ? '<button class="link-btn" data-sec-unlock="' + s.id + '" style="width:auto;padding:8px 14px;color:#9c3327;">Unlock for revisions</button>' : '') +
         '</div>' +
@@ -12100,11 +12244,13 @@
           : '') +
         questionBlock(s, edit) +
         (edit && s.showPowderColor ? colorApplyRow(s, lines) : '') +
-        '<div style="margin-top:14px;overflow:auto;">' +
-          tableShell(
-            ['Item', 'Part #'].concat(showVendorPart ? ['Vendor part #'] : [], ['Qty'], showBag ? ['Bag #'] : [], showColor ? ['Powder color'] : [], ['Weight (lb)', 'Cost each', 'Total cost', 'Invoiced each', 'Δ $', 'Δ %', 'Notes', 'Status'], edit ? [''] : []),
-            rows, cols, '') +
-        '</div>' +
+        (edit && bomArrange && bomArrange.sectionId === s.id
+          ? arrangeHtml(s, lines)
+          : '<div style="margin-top:14px;overflow:auto;">' +
+              tableShell(
+                ['Item', 'Part #'].concat(showVendorPart ? ['Vendor part #'] : [], ['Qty'], showBag ? ['Bag #'] : [], showColor ? ['Powder color'] : [], ['Weight (lb)', 'Cost each', 'Total cost', 'Invoiced each', 'Δ $', 'Δ %', 'Notes', 'Status'], edit ? [''] : []),
+                rows, cols, '') +
+            '</div>') +
         sectionMoney(s) +
         (edit
           ? '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:11px;flex-wrap:wrap;">' +
@@ -12727,6 +12873,7 @@
         var r = await authed('/orders/procurement/' + lineId, { method: 'PATCH', body: body });
         el.style.borderColor = r.ok ? '#3f9d78' : '#c2452f';
         if (!r.ok) { await fail(r, 'Could not save the line'); reload(); return; }
+        if (f === 'vendorNotes' || f === 'unitCostMinor') askBomFuture(lineId, f);
         // A quantity change moves the section totals and the edited badge, so the
         // panel is rebuilt from the server rather than patched in place. The
         // rebuild now restores the caret, because these fields save while you are
@@ -13110,6 +13257,83 @@
         var r = await authed('/orders/' + order.id + '/bom/sections/reorder', { method: 'POST', body: { ids: ids } });
         if (!r.ok) return fail(r, 'Could not reorder');
         reload();
+      });
+    });
+
+    // ---- Arrange lines ----
+    document.querySelectorAll('[data-sec-arrange]').forEach(function (bt) {
+      bt.addEventListener('click', function () {
+        var id = bt.getAttribute('data-sec-arrange');
+        var sec = bomSectionData.filter(function (x) { return x.id === id; })[0];
+        if (!sec) return;
+        var ids = (procData || []).filter(function (p) {
+          return ((p.vendor && String(p.vendor).trim()) || 'Unassigned vendor') === sec.vendor;
+        }).map(function (p) { return p.id; });
+        bomArrange = { sectionId: id, vendor: sec.vendor, ids: ids, headings: {} };
+        reload();
+      });
+    });
+    var arrRenumber = function () {
+      bomArrange.ids = [];
+      document.querySelectorAll('[data-arr-row]').forEach(function (tr, i) {
+        bomArrange.ids.push(tr.getAttribute('data-arr-row'));
+        var pos = tr.querySelector('.arrPos');
+        if (pos) pos.textContent = String(i + 1);
+      });
+    };
+    document.querySelectorAll('[data-arr-move]').forEach(function (bt) {
+      bt.addEventListener('click', function () {
+        var tr = bt.closest('tr'), dir = bt.getAttribute('data-arr-move');
+        var parent = tr && tr.parentNode;
+        if (!parent || !bomArrange) return;
+        var prev = tr.previousElementSibling, next = tr.nextElementSibling;
+        var all = parent.querySelectorAll('[data-arr-row]');
+        if (dir === 'up' && prev && prev.hasAttribute('data-arr-row')) parent.insertBefore(tr, prev);
+        else if (dir === 'down' && next && next.hasAttribute('data-arr-row')) parent.insertBefore(next, tr);
+        else if (dir === 'top' && all[0] !== tr) parent.insertBefore(tr, all[0]);
+        else if (dir === 'bottom' && all[all.length - 1] !== tr) parent.insertBefore(tr, all[all.length - 1].nextSibling);
+        arrRenumber();
+        bt.focus();
+      });
+    });
+    document.querySelectorAll('.arrHead').forEach(function (sel) {
+      sel.addEventListener('change', function () {
+        var id = sel.getAttribute('data-id'), v = sel.value;
+        if (v === '__new') {
+          var name = (prompt('Name the new heading (for example "Crating" or "Bag 3"):') || '').trim().slice(0, 60);
+          if (!name) { sel.value = '__auto'; v = '__auto'; }
+          else {
+            var o = document.createElement('option');
+            o.value = name; o.textContent = name;
+            sel.insertBefore(o, sel.lastElementChild);
+            sel.value = name; v = name;
+          }
+        }
+        if (bomArrange) bomArrange.headings[id] = v === '__auto' ? null : v;
+      });
+    });
+    document.querySelectorAll('[data-arr-cancel]').forEach(function (bt) {
+      bt.addEventListener('click', function () { bomArrange = null; reload(); });
+    });
+    document.querySelectorAll('[data-arr-save]').forEach(function (bt) {
+      bt.addEventListener('click', async function () {
+        if (!bomArrange) return;
+        var future = bt.getAttribute('data-arr-save') === 'future';
+        bt.disabled = true;
+        var r = await authed('/orders/' + order.id + '/bom/arrange', {
+          method: 'POST',
+          body: { vendor: bomArrange.vendor, lineIds: bomArrange.ids, headings: bomArrange.headings, saveForFuture: future },
+        });
+        bt.disabled = false;
+        if (!r.ok) return fail(r, 'Could not save the arrangement');
+        var d = await r.json();
+        bomArrange = null;
+        var missing = (d.notInCatalog || []).length;
+        toast(future
+          ? 'Saved. ' + d.catalogUpdated + ' part' + (d.catalogUpdated === 1 ? '' : 's') + ' will print in this order on future orders' +
+            (missing ? ' (' + missing + ' not in the catalog, so this order only)' : '') + '.'
+          : 'Saved for this order.');
+        refreshLines();
       });
     });
 

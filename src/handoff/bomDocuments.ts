@@ -2,6 +2,7 @@ import ExcelJS from 'exceljs';
 import { buildBom, streetLine, type BomDocument } from './bom.js';
 import { bomPhone, bomToday, PHONE_NUMFMT, usDate, usDatesInText } from './bomDelivery.js';
 import { prisma } from '../lib/prisma.js';
+import { groupByHeading, HARDWARE } from './bomLayout.js';
 
 /**
  * The printed Bill of Materials, as self-contained HTML.
@@ -125,11 +126,8 @@ export interface BomModel {
   questions: Array<{ label: string; value: string }>;
   columns: string[];
   /**
-   * The part rows, in proposal order within each group. Parts first, then a
-   * "Hardware" group for anything `isHardware` flags — the same distinction the
-   * catalog's own hardware rules draw — so the shop can find fasteners as their
-   * own section without them being sorted out of the order the rest of the
-   * table follows (see proposalLineOrder in bom.ts).
+   * The part rows under their headings: the main list first, then Hardware and any
+   * heading the team has named, each in BOM order (see bomLayout.ts).
    */
   groups: Array<{ title: string; rows: BomCell[][] }>;
   totals: BomCell[];
@@ -318,17 +316,14 @@ export async function buildBomModel(
     numeric(money(l.extendedCostMinor), l.extendedCostMinor / 100, ACCOUNTING_FMT),
   ];
 
-  // Parts, then a Hardware section — the same isHardware flag the catalog's
-  // hardware rules and kit expansion already set (see bom.ts), not a part-number
-  // pattern. Each group keeps the proposal order it arrived in; only the
-  // grouping is new, so a kit's exploded fasteners still cluster at the position
-  // the kit itself held on the proposal, just within the Hardware section rather
-  // than scattered through the parts above it.
-  const nonHardwareLines = doc.lines.filter((l) => !l.isHardware);
-  const hardwareLines = doc.lines.filter((l) => l.isHardware);
-  const groups: Array<{ title: string; rows: BomCell[][] }> = [];
-  if (nonHardwareLines.length) groups.push({ title: '', rows: nonHardwareLines.map(rowOf) });
-  if (hardwareLines.length) groups.push({ title: 'Hardware', rows: hardwareLines.map(rowOf) });
+  // The main list, then each heading (Hardware, or whatever the team has named) in
+  // the order its first line falls. Heading and order are both decided in
+  // bomLayout.ts, the same place the order page reads them from, so the screen and
+  // the sheet cannot disagree about where a part sits.
+  const groups: Array<{ title: string; rows: BomCell[][] }> = groupByHeading(
+    doc.lines,
+    (l) => l.group ?? (l.isHardware ? HARDWARE : ''),
+  ).map((g) => ({ title: g.title, rows: g.lines.map(rowOf) }));
 
   const totals: BomCell[] = [
     ...(all ? [text('')] : []),

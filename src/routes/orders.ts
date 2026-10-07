@@ -93,6 +93,11 @@ const BomLinePatch = z.object({
    * document; the same limits are stated in both places on purpose.
    */
   quantity: z.number().int().min(1).max(100000).optional(),
+  /**
+   * The heading this line prints under on this order: '' = main list, text = that
+   * heading, null = back to the part's catalog setting. See bomLayout.ts.
+   */
+  bomGroup: z.union([z.string().trim().max(60), z.null()]).optional(),
 });
 
 /**
