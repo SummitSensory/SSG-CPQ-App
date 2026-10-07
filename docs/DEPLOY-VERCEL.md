@@ -309,8 +309,8 @@ Want to check the catalog data before writing it? Run
    the generated password.
 3. Change the password from the sidebar.
 4. Go to the Catalog. Confirm the tier tree shows:
-   Adventure Series Frame · Dual Trolley System · Therapeutic Activity &
-   Adventure Components · Adventure Mat System · Summit Foundation System ·
+   Adventure Series Frame · Dual Trolley System · Adventure Components ·
+   Adventure Mat System · Summit Foundation System ·
    Hardware.
 5. Build a test proposal start to finish.
 6. Confirm `https://crm.summitsensory.com` is still empty — production has no

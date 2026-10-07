@@ -1568,6 +1568,19 @@ model Sku {
   /// What secondaryVendor charges per unit for this step. NULL/0 when it is a
   /// receiving/processing note rather than a separate purchase.
   secondaryVendorCostMinor Int?
+  /// Where this part sits on a vendor's Bill of Materials, lowest first. Set by the
+  /// manufacturing team (Catalog → BOM setup, or "save for future orders" when they
+  /// rearrange an order's sheet). NULL = no preset position: the line falls back to
+  /// the proposal's order, after every line that has one.
+  bomSortOrder   Int?
+  /// The heading this part prints under on the Bill of Materials. NULL = automatic
+  /// (kit fasteners and hardware-rule parts go under "Hardware", everything else in
+  /// the main list); '' = always the main list, even if a rule says hardware; any
+  /// other text is the heading itself, e.g. "Hardware" or "Crating".
+  bomGroup       String?
+  /// A note copied onto this part's BOM line whenever an order is locked, so a
+  /// standing instruction to the vendor is written once rather than on every order.
+  bomNote        String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -2181,6 +2194,12 @@ model ProcurementLine {
   /// already has this vendor's line skip it, the same way kitSku above does for
   /// components.
   secondaryOfSku String?
+  /// This order's own position for the line on its vendor's sheet, set when someone
+  /// rearranges the sheet. Wins over Sku.bomSortOrder; NULL = use the catalog's.
+  bomPosition    Int?
+  /// This order's own BOM heading for the line. Same values as Sku.bomGroup and wins
+  /// over it; NULL = use the catalog's.
+  bomGroup       String?
 
   @@index([orderId])
   @@index([invoicedAt])
@@ -2359,6 +2378,7 @@ model BomVendorSection {
 
   answers         BomVendorAnswer[]
   sends           BomSend[]
+  files           BomSectionFile[]
 
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
@@ -2453,10 +2473,36 @@ model BomSend {
   sentAt            DateTime         @default(now())
   deliveredAt       DateTime?
   openedAt          DateTime?
+  /// The uploaded files that went out with this email, as
+  /// `[{ id, filename, byteSize }]` — copied rather than referenced, so the record
+  /// of what the vendor received survives the file being removed afterwards.
+  attachedFiles     Json?
 
   @@index([sectionId])
   @@index([orderId])
   @@index([providerMessageId])
+}
+
+/// A file uploaded against one vendor's Bill of Materials — a drawing, a spec
+/// sheet, a finish sample — offered as an extra attachment when the BOM is
+/// emailed to that vendor. The sender ticks which ones go on each send.
+///
+/// The bytes live in blob storage (`url`), uploaded browser-direct the same way
+/// design renderings are; see src/handoff/bomFiles.ts.
+model BomSectionFile {
+  id           String           @id @default(cuid())
+  sectionId    String
+  section      BomVendorSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  orderId      String
+  filename     String
+  contentType  String
+  byteSize     Int
+  url          String
+  pathname     String
+  uploadedById String
+  createdAt    DateTime         @default(now())
+
+  @@index([sectionId])
 }
 
 // ---------------------------------------------------------------------------
@@ -4228,6 +4274,12 @@ model ProposalCustomsEntry {
   /// not this software. true = claimed, false = affirmatively not claimed (standard
   /// duty treatment), null = nobody has answered yet — null is not zero.
   tariff9979Claimed     Boolean?
+  /// Qualifies a claim (tariff9979Claimed = true) as "Claimed, subject to CBSA
+  /// eligibility": the claim is made, but the Canada Border Services Agency decides
+  /// whether the goods qualify. Behaves exactly like a claim for which Cross-Border
+  /// Terms print and for Section C completeness; only the row's wording differs.
+  /// Always false unless tariff9979Claimed is true.
+  tariff9979SubjectToCbsa Boolean @default(false)
   /// Hand-typed wording printed for this proposal's Section C tariff item 9979.00.00
   /// row, in place of the admin wording for its answer (CrossBorderSetting
   /// .tariff9979*Text). Wording only — tariff9979Claimed still decides which
@@ -4366,11 +4418,18 @@ model CrossBorderSetting {
   /// defaultImporterOfRecord; changing this afterward never retroactively rewrites an
   /// already-created entry.
   defaultTariff9979Claimed        Boolean?
+  /// Seeds a brand-new entry's tariff9979SubjectToCbsa alongside
+  /// defaultTariff9979Claimed — the "Claimed, subject to CBSA eligibility" default.
+  /// Only meaningful when defaultTariff9979Claimed is true.
+  defaultTariff9979SubjectToCbsa  Boolean               @default(false)
   /// The wording printed in the Section C tariff item 9979.00.00 row for each answer
   /// to tariff9979Claimed — claimed, not claimed, and not yet determined. Read live;
   /// null/blank prints the built-in wording ("Claimed", "Not claimed", "Not yet
   /// determined"). A proposal's own tariff9979TextOverride replaces all three.
   tariff9979ClaimedText           String?
+  /// Wording for a claim made subject to CBSA eligibility (tariff9979SubjectToCbsa).
+  /// Null/blank prints "Claimed, subject to CBSA eligibility".
+  tariff9979ClaimedSubjectToCbsaText String?
   tariff9979NotClaimedText        String?
   tariff9979UndeterminedText      String?
   /// The default customs-broker identity seeded onto a brand-new ProposalCustomsEntry
@@ -4382,6 +4441,10 @@ model CrossBorderSetting {
   /// The default country-of-origin text seeded onto a brand-new ProposalCustomsEntry —
   /// see ProposalCustomsEntry.countryOfOrigin. Same seed-only, never-retroactive rule.
   defaultCountryOfOrigin          String?
+  /// The default tariff/customs classification code seeded onto a brand-new
+  /// ProposalCustomsEntry — see ProposalCustomsEntry.tariffClassificationCode. Typed by
+  /// an administrator, never inferred. Same seed-only, never-retroactive rule.
+  defaultTariffClassificationCode String?
   /// The admin-managed, ordered Section C ("Canadian Import Terms") row template — an
   /// array of { id, kind: 'BOUND' | 'TEXT', boundField?, label, text?, order }. Read
   /// live by every proposal that has not set its own ProposalCustomsEntry.sectionCItems,

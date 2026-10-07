@@ -156,6 +156,11 @@ export function skuSnapshot(s: Record<string, unknown>): Record<string, unknown>
     'active',
     'requiresPowderColor',
     'freeIssueVendor',
+    'secondaryVendor',
+    'secondaryVendorCostMinor',
+    'bomSortOrder',
+    'bomGroup',
+    'bomNote',
     'leadTimeDays',
   ];
   const out: Record<string, unknown> = {};

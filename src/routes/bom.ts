@@ -20,6 +20,14 @@ import {
 } from '../handoff/bomSections.js';
 import { dealFigures } from '../handoff/dealFigures.js';
 import { sendBom } from '../handoff/bomSend.js';
+import {
+  bomFileUploadSettings,
+  issueBomFileUploadToken,
+  recordBomFile,
+  listBomFiles,
+  downloadBomFile,
+  deleteBomFile,
+} from '../handoff/bomFiles.js';
 import { checkOrderColors } from '../portal/colorCheck.js';
 import {
   approveVendorInvoice,
@@ -74,6 +82,17 @@ const SendSchema = z.object({
   body: z.string().max(20000),
   format: z.enum(['EXCEL', 'PDF', 'BOTH']).default('PDF'),
   includeZeroQty: z.boolean().optional(),
+  attachmentIds: z.array(z.string().trim().min(1).max(40)).max(50).optional(),
+});
+
+const FileTokenSchema = z.object({
+  filename: z.string().trim().min(1).max(200),
+});
+
+const FileRecordSchema = z.object({
+  url: z.string().trim().url(),
+  pathname: z.string().trim().min(1).max(500),
+  filename: z.string().trim().min(1).max(200),
 });
 
 const QuestionSchema = z.object({
@@ -148,7 +167,7 @@ export function registerBomRoutes(app: FastifyInstance): void {
   // ------------------------------------------------------------- sections
   app.get('/orders/:id/bom/sections', read, async (req) => {
     const { id } = req.params as { id: string };
-    return { sections: await listSections(id, req.user!.sub) };
+    return { sections: await listSections(id, req.user!.sub), fileUpload: bomFileUploadSettings() };
   });
 
   /**
@@ -384,6 +403,53 @@ export function registerBomRoutes(app: FastifyInstance): void {
     if (!parsed.success)
       throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid email');
     return sendBom(sectionId, parsed.data, req.user!.sub);
+  });
+
+  // ------------------------------------------------------------- files
+  /**
+   * Files to send the vendor alongside their sheet. Uploaded browser-to-blob in
+   * two steps (token, then record) — see handoff/bomFiles.ts. Not gated on the
+   * section's lock: a file is not part of the sheet, and a drawing added after
+   * the first send is exactly what a re-send is for.
+   */
+  app.get('/bom/sections/:sectionId/files', read, async (req) => {
+    const { sectionId } = req.params as { sectionId: string };
+    return { files: await listBomFiles(sectionId), ...bomFileUploadSettings() };
+  });
+
+  app.post('/bom/sections/:sectionId/files/upload-token', handoff, async (req) => {
+    const { sectionId } = req.params as { sectionId: string };
+    const parsed = FileTokenSchema.safeParse(req.body);
+    if (!parsed.success)
+      throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid request');
+    return issueBomFileUploadToken(sectionId, parsed.data.filename);
+  });
+
+  app.post('/bom/sections/:sectionId/files', handoff, async (req) => {
+    const { sectionId } = req.params as { sectionId: string };
+    const parsed = FileRecordSchema.safeParse(req.body);
+    if (!parsed.success)
+      throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid request');
+    return recordBomFile(sectionId, parsed.data, req.user!.sub);
+  });
+
+  app.get('/bom/sections/:sectionId/files/:fileId/download', read, async (req, reply) => {
+    const { sectionId, fileId } = req.params as { sectionId: string; fileId: string };
+    const file = await downloadBomFile(sectionId, fileId);
+    const ascii = file.filename.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+    return reply
+      .header('content-type', file.contentType)
+      .header(
+        'content-disposition',
+        `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(file.filename)}`,
+      )
+      .send(file.bytes);
+  });
+
+  app.delete('/bom/sections/:sectionId/files/:fileId', handoff, async (req) => {
+    const { sectionId, fileId } = req.params as { sectionId: string; fileId: string };
+    await deleteBomFile(sectionId, fileId, req.user!.sub);
+    return { ok: true };
   });
 
   // ------------------------------------------------------------- questions

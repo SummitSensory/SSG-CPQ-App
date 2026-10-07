@@ -29,7 +29,7 @@ Tier tree as imported:
 ```
 ADVENTURE SERIES FRAME
 DUAL TROLLEY SYSTEM
-THERAPEUTIC ACTIVITY & ADVENTURE COMPONENTS
+ADVENTURE COMPONENTS
   Summit Adventure Slide System
   Climbing Wall & Safety Accessories
   Ladder - Safety Accessories

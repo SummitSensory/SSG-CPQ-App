@@ -3983,7 +3983,7 @@
   }
 
   /* --- Proposal Builder --- */
-  var STD_GROUPS = ['Dual Trolley System', 'Therapeutic Activity & Adventure Components', 'Adventure Mat System', 'Summit Foundation System', 'Hardware'];
+  var STD_GROUPS = ['Dual Trolley System', 'Adventure Components', 'Adventure Mat System', 'Summit Foundation System', 'Hardware'];
   var STD_NOTES = {
     'Important Proposal Details': 'This proposal serves as a detailed estimate of the total cost for the products and services outlined and does not constitute an invoice. Once signed and returned, it becomes a binding agreement, confirming acceptance of the order and associated payment terms. A 50% deposit is required to initiate production, with the remaining balance due prior to shipment. The signed proposal may be returned by mail or fax using the contact information provided above. For payments made by credit card, a 3.5% processing fee will be added to the total amount.',
     'Crating & Freight': 'Final crating and freight charges will be calculated and invoiced at the time of shipment based on the actual costs incurred and the rates in effect at that time. Summit makes no representations or warranties regarding the availability or stability of crating costs or freight rates prior to shipment.',
@@ -4485,7 +4485,7 @@
    *
    * The catalogue also names the tiers a part belongs to, so a proposal that does
    * not yet have that group or sub-heading gets it: adding SKU 1001 to a bare
-   * proposal creates "THERAPEUTIC ACTIVITY & ADVENTURE COMPONENTS", then
+   * proposal creates "ADVENTURE COMPONENTS", then
    * "Therapeutic Swing & Sensory Equipment Package" under it, then the line.
    *
    * Two rules keep this predictable rather than clever:
@@ -4559,13 +4559,20 @@
    * of the proposal. The trailing parenthetical and any surrounding punctuation come off
    * before comparing; a rep who retitled a heading in their own words still keeps it,
    * they just do not get automatic filing into it.
+   *
+   * A heading that was renamed keeps matching under its old name: proposals saved
+   * before the rename still carry it, and so can a catalog category not yet renamed.
    */
+  var HEADING_ALIASES = {
+    'therapeutic activity & adventure components': 'adventure components',
+  };
   function headingKey(s) {
-    return String(s || '')
+    var k = String(s || '')
       .replace(/\s*\([^()]*\)\s*$/g, '')
       .replace(/[\s\u2013\u2014\-—:]+$/, '')
       .trim()
       .toLowerCase();
+    return HEADING_ALIASES[k] || k;
   }
   function sameHeading(a, b) {
     var x = headingKey(a), y = headingKey(b);
@@ -6228,7 +6235,8 @@
       '<div style="margin-bottom:12px;"><label style="' + lbl + '">Tariff item 9979.00.00 (disability-relief) claim</label>' +
         '<select id="cfTariff9979" style="' + box + '">' +
           '<option value=""' + (e.tariff9979Claimed == null ? ' selected' : '') + '>Not yet determined</option>' +
-          '<option value="true"' + (e.tariff9979Claimed === true ? ' selected' : '') + '>Claimed</option>' +
+          '<option value="cbsa"' + (e.tariff9979Claimed === true && e.tariff9979SubjectToCbsa ? ' selected' : '') + '>Claimed, subject to CBSA eligibility</option>' +
+          '<option value="true"' + (e.tariff9979Claimed === true && !e.tariff9979SubjectToCbsa ? ' selected' : '') + '>Claimed</option>' +
           '<option value="false"' + (e.tariff9979Claimed === false ? ' selected' : '') + '>Not claimed</option>' +
         '</select>' +
         '<div class="muted" style="font-size:11px;line-height:1.5;margin-top:4px;">Whether these goods qualify for relief under tariff item 9979.00.00 (goods for persons with disabilities) is a classification decision for Summit and its customs broker, not something this application determines. Leave \u201cNot yet determined\u201d until that decision is made.</div>' +
@@ -6326,7 +6334,8 @@
       var payload = Object.assign(amounts, simplePatch, {
         currency: document.getElementById('cfCur').value,
         tariffClassificationCode: document.getElementById('cfTariffCode').value.trim() || null,
-        tariff9979Claimed: (function () { var v = document.getElementById('cfTariff9979').value; return v === '' ? null : v === 'true'; })(),
+        tariff9979Claimed: (function () { var v = document.getElementById('cfTariff9979').value; return v === '' ? null : v !== 'false'; })(),
+        tariff9979SubjectToCbsa: document.getElementById('cfTariff9979').value === 'cbsa',
         tariff9979TextOverride: document.getElementById('cfTariff9979Text').value.trim() || null,
         gstHstTreatment: document.getElementById('cfGstHst').value || null,
         hostSystemModel: document.getElementById('cfHostSystem').value.trim() || null,
@@ -11249,6 +11258,9 @@
    * powder colour, vendor notes and the sourced flag are operational and editable
    * here. Prices shown are OUR unit cost — this is a purchasing document. */
   var procData = [];
+  // The vendor section being rearranged, if any: { sectionId, vendor, ids, headings }.
+  // Held here rather than in the DOM so a repaint mid-arrangement does not lose it.
+  var bomArrange = null;
   var bomOrder = null;
   /* What the accepted proposal would produce under today's rules, against what is
    * actually on the sheet. A BOM is allowed to differ — kits and component lists
@@ -11268,6 +11280,8 @@
   /** Vendor purchase orders on the open order, from GET /orders/:id/vendor-pos. */
   var bomPurchaseOrders = [];
   var bomBrands = [];
+  /** Upload limits for the files sent alongside a vendor's sheet (GET .../bom/sections). */
+  var bomFileUpload = { configured: false, maxBytes: 0, maxEmailBytes: 0, accept: [] };
   /** The ship-to address book, loaded with the sections that offer it. */
   var bomShipToAddresses = [];
   /**
@@ -11447,7 +11461,9 @@
     procData = order.procurement || [];
     try {
       var r = await authed('/orders/' + order.id + '/bom/sections');
-      bomSectionData = r.ok ? ((await r.json()).sections || []) : [];
+      var secJson = r.ok ? ((await r.json()) || {}) : {};
+      bomSectionData = secJson.sections || [];
+      if (secJson.fileUpload) bomFileUpload = secJson.fileUpload;
       var rb = await authed('/powder-colors');
       bomBrands = rb.ok ? ((await rb.json()).brands || []) : [];
       var ra = await authed('/ship-to-addresses?orderId=' + encodeURIComponent(order.id) +
@@ -11904,6 +11920,139 @@
     if (pv) pv.addEventListener('click', function () { openPurchaseOrderPdf(poId); });
   }
 
+  /** A line's heading as the server resolved it; '' is the main list. */
+  function bomHeadingOf(p) {
+    if (p.bomHeading != null) return String(p.bomHeading).trim();
+    return p.isHardwareComponent ? 'Hardware' : '';
+  }
+
+  /** Lines split under their headings: main list first, then where each first appears. */
+  function bomHeadingGroups(lines) {
+    var order = [], map = {};
+    lines.forEach(function (p) {
+      var h = bomHeadingOf(p), k = h.toLowerCase();
+      if (!map[k]) {
+        map[k] = { title: h, lines: [] };
+        if (k === '') order.unshift(k); else order.push(k);
+      }
+      map[k].lines.push(p);
+    });
+    return order.map(function (k) { return map[k]; });
+  }
+
+  /** What "the part's default" heading would be for a line, for the Arrange picker. */
+  function bomDefaultHeading(p) {
+    if (p.bomHeadingReason && p.bomHeadingReason !== 'order') return p.bomHeading || '';
+    if (p.catalogBomGroup != null) return p.catalogBomGroup;
+    return p.isHardwareComponent ? 'Hardware' : '';
+  }
+
+  /**
+   * Arrange mode for one vendor's sheet: move lines up and down and pick each one's
+   * heading, then say whether that is for this order only or for every future order.
+   * Moving happens in the browser (no round trip per click); nothing is saved until
+   * one of the two save buttons is pressed.
+   */
+  function arrangeHtml(s, lines) {
+    var A = bomArrange;
+    var byId = {};
+    lines.forEach(function (p) { byId[p.id] = p; });
+    // Lines that arrived since arranging started go at the end; removed ones drop out.
+    A.ids = A.ids.filter(function (id) { return byId[id]; })
+      .concat(lines.map(function (p) { return p.id; }).filter(function (id) { return A.ids.indexOf(id) < 0; }));
+    var heads = ['Hardware'];
+    var addHead = function (h) {
+      h = (h || '').trim();
+      if (h && heads.map(function (x) { return x.toLowerCase(); }).indexOf(h.toLowerCase()) < 0) heads.push(h);
+    };
+    lines.forEach(function (p) { addHead(p.bomHeading); addHead(p.catalogBomGroup); });
+    Object.keys(A.headings).forEach(function (id) { addHead(A.headings[id]); });
+    var btn = function (dir, id, label, tip) {
+      return '<button class="link-btn" data-arr-move="' + dir + '" data-id="' + id + '" title="' + tip + '" aria-label="' + tip + '" style="width:auto;padding:3px 8px;font-size:12px;">' + label + '</button>';
+    };
+    var body = A.ids.map(function (id, i) {
+      var p = byId[id];
+      var chosen = Object.prototype.hasOwnProperty.call(A.headings, id)
+        ? A.headings[id]
+        : (p.bomGroup != null ? p.bomGroup : null);
+      var def = bomDefaultHeading(p);
+      var opt = function (v, label) {
+        var sel = chosen === null ? v === '__auto' : v === chosen;
+        return '<option value="' + esc(v) + '"' + (sel ? ' selected' : '') + '>' + esc(label) + '</option>';
+      };
+      var select = '<select class="arrHead" data-id="' + id + '" style="' + bomFieldStyle('200px') + '">' +
+        opt('__auto', 'Part’s default (' + (def || 'Main list') + ')') +
+        opt('', 'Main list') +
+        heads.map(function (h) { return opt(h, h); }).join('') +
+        '<option value="__new">New heading…</option></select>';
+      return '<tr data-arr-row="' + id + '">' +
+        td('<span class="arrPos muted" style="font-size:12px;">' + (i + 1) + '</span>') +
+        td('<div style="display:flex;gap:4px;">' + btn('top', id, '⤒', 'Move to the top') + btn('up', id, '↑', 'Move up') + btn('down', id, '↓', 'Move down') + btn('bottom', id, '⤓', 'Move to the bottom') + '</div>') +
+        td('<code style="font-size:12.5px;color:#4a4f47;">' + esc(p.sku || '—') + '</code>') +
+        td('<span style="font-size:13px;">' + esc(p.name) + '</span>') +
+        td(String(p.quantity)) +
+        td(select) +
+        '</tr>';
+    }).join('');
+    return '<div style="margin-top:14px;border:1px solid #ecd9a6;background:#fffdf6;border-radius:10px;padding:12px 14px;">' +
+      '<div style="font-size:13px;font-weight:600;margin-bottom:4px;">Arrange the ' + esc(s.vendor) + ' sheet</div>' +
+      '<div class="muted" style="font-size:12px;line-height:1.55;margin-bottom:10px;">Move lines into the order the shop wants and choose a heading for each. Nothing is saved until you pick one of the buttons below.</div>' +
+      '<div style="overflow:auto;">' + tableShell(['#', 'Move', 'Part #', 'Item', 'Qty', 'Heading'], body, 6, '') + '</div>' +
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px;">' +
+        '<span style="font-size:12.5px;font-weight:600;">Keep this arrangement for:</span>' +
+        '<button class="btn" data-arr-save="future" style="width:auto;padding:8px 14px;" title="Also saves each part’s position and heading to Catalog → BOM setup, so the next order prints the same way">This order and all future orders</button>' +
+        '<button class="link-btn" data-arr-save="order" style="width:auto;padding:8px 14px;">This order only</button>' +
+        '<button class="link-btn" data-arr-cancel="1" style="width:auto;padding:8px 14px;color:#9c3327;">Cancel</button>' +
+      '</div>' +
+    '</div>';
+  }
+
+  /**
+   * "Use this for every future order too?" — asked after a correction on one line.
+   *
+   * A bar rather than a dialog: the edit is already saved on this order, and the
+   * question is a yes-or-ignore. One bar at a time; a second edit replaces it.
+   */
+  function askBomFuture(lineId, field) {
+    var line = (procData || []).filter(function (x) { return x.id === lineId; })[0];
+    if (!line || !line.sku) return;
+    // A part's catalog cost moves every future proposal's margin, so only a catalog
+    // admin is offered it. A second vendor's charge is BOM setup and open to all.
+    if (field === 'unitCostMinor' && !line.secondaryOfSku && !isSystemAdmin()) return;
+    var map = { vendorNotes: 'vendorNotes', unitCostMinor: 'unitCost' };
+    var what = field === 'vendorNotes'
+      ? 'this note'
+      : (line.secondaryOfSku ? 'this charge from ' + (line.vendor || 'this vendor') : 'this cost');
+    var old = document.getElementById('bomFutureAsk');
+    if (old) old.parentNode.removeChild(old);
+    var bar = document.createElement('div');
+    bar.id = 'bomFutureAsk';
+    bar.setAttribute('role', 'status');
+    bar.style.cssText = 'position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:960;max-width:640px;width:calc(100% - 32px);' +
+      'background:#20241f;color:#fff;border-radius:12px;padding:12px 14px;box-shadow:0 18px 40px -16px rgba(0,0,0,.55);' +
+      'display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:13px;line-height:1.45;';
+    bar.innerHTML = '<span style="flex:1;min-width:220px;">Saved on this order. Use ' + esc(what) + ' for <b>' + esc(line.sku) + '</b> on all future orders too?</span>' +
+      '<button data-fa="yes" style="border:none;border-radius:8px;padding:7px 12px;background:#3f9d78;color:#fff;font-weight:600;cursor:pointer;">Yes, all future orders</button>' +
+      '<button data-fa="no" style="border:1px solid #8a8f85;border-radius:8px;padding:7px 12px;background:transparent;color:#fff;cursor:pointer;">Just this order</button>';
+    document.body.appendChild(bar);
+    var close = function () { if (bar.parentNode) bar.parentNode.removeChild(bar); };
+    var timer = setTimeout(close, 20000);
+    bar.querySelector('[data-fa="no"]').addEventListener('click', function () { clearTimeout(timer); close(); });
+    bar.querySelector('[data-fa="yes"]').addEventListener('click', async function () {
+      clearTimeout(timer);
+      close();
+      var r = await authed('/orders/procurement/' + lineId + '/save-default', { method: 'POST', body: { fields: [map[field]] } });
+      if (!r.ok) {
+        var m = '';
+        try { m = ((await r.json()) || {}).message || ''; } catch (e) {}
+        toast(m || 'Could not save that for future orders.', true);
+        return;
+      }
+      var d = await r.json();
+      toast('Saved for future orders: ' + d.part + ' — ' + (d.saved || []).join(', ') + '.');
+    });
+  }
+
   function sectionCard(s, idx, canHandoff) {
     var locked = !s.editable;
     var edit = canHandoff && !locked;
@@ -11962,6 +12111,11 @@
             ? '<div class="muted" style="font-size:11px;margin-top:3px;">from <code>' + esc(p.kitSku) +
               '</code> on the proposal \u00b7 component list</div>'
             : '') +
+          // Why the line sits under its heading — "why is this under Hardware?" answered
+          // on the line itself, with the fix one click away under Arrange lines.
+          (p.bomHeading
+            ? '<div class="muted" style="font-size:11px;margin-top:3px;">Under ' + esc(p.bomHeading) + ' \u00b7 ' + esc(p.bomHeadingWhy || '') + '</div>'
+            : '') +
           (free
             ? '<div style="margin-top:3px;"><span class="chip" style="font-size:10px;background:#eef0ea;color:#5c6157;">Free issue</span>' +
               '<span class="muted" style="font-size:11px;margin-left:6px;">Paid by Summit' +
@@ -11992,15 +12146,17 @@
         '</tr>';
     };
 
-    // Same two blocks as the printed sheet: products in product-tree order, then a
-    // Hardware block. The screen and the document must not disagree about order.
-    var prodLines = lines.filter(function (p) { return !p.isHardwareComponent; });
-    var hwLines = lines.filter(function (p) { return p.isHardwareComponent; });
+    // The same headings, in the same order, as the printed sheet. The server sends the
+    // lines already in BOM order with each one's heading (src/handoff/bomLayout.ts), so
+    // the screen only has to split them: main list first, then each heading where its
+    // first line falls.
     var divider = function (label) {
-      return '<tr><td colspan="' + cols + '" style="padding:11px 16px 5px;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#5c6157;background:#f4f5f1;border-top:1px solid #e7e8e3;">' + label + '</td></tr>';
+      return '<tr><td colspan="' + cols + '" style="padding:11px 16px 5px;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#5c6157;background:#f4f5f1;border-top:1px solid #e7e8e3;">' + esc(label) + '</td></tr>';
     };
-    var rows = prodLines.map(rowHtmlFor).join('') +
-      (hwLines.length ? divider('Hardware') + hwLines.map(rowHtmlFor).join('') : '') +
+    var headGroups = bomHeadingGroups(lines);
+    var rows = headGroups.map(function (g) {
+      return (g.title ? divider(g.title) : '') + g.lines.map(rowHtmlFor).join('');
+    }).join('') +
       '<tr><td style="padding:12px 16px;border-top:1px solid #e7e8e3;font-weight:600;">Total — ' + s.lineCount + ' line' + (s.lineCount === 1 ? '' : 's') + '</td>' +
       '<td colspan="' + (showVendorPart ? 2 : 1) + '" style="padding:12px 16px;border-top:1px solid #e7e8e3;"></td>' +
       '<td style="padding:12px 16px;border-top:1px solid #e7e8e3;font-weight:600;">' + s.unitCount + '</td>' +
@@ -12032,6 +12188,7 @@
           (canHandoff && s.poEnabled && bomOrder && bomOrder.locked !== false
             ? '<button class="btn" data-sec-po="' + esc(s.vendor) + '" title="Choose products from this vendor’s sheet and send them a purchase order" style="width:auto;padding:8px 14px;">Create Purchase Order</button>'
             : '') +
+          (canHandoff && !locked ? '<button class="link-btn" data-sec-arrange="' + s.id + '" title="Put this vendor’s lines in the order the shop wants and choose their headings — for this order, or for every future order too" style="width:auto;padding:8px 14px;">Arrange lines</button>' : '') +
           (canHandoff && !locked ? '<button class="link-btn" data-sec-confirm="' + s.id + '" title="Use when the sheet went out some other way" style="width:auto;padding:8px 14px;">Mark sent by hand</button>' : '') +
           (canHandoff && locked ? '<button class="link-btn" data-sec-unlock="' + s.id + '" style="width:auto;padding:8px 14px;color:#9c3327;">Unlock for revisions</button>' : '') +
         '</div>' +
@@ -12093,11 +12250,13 @@
           : '') +
         questionBlock(s, edit) +
         (edit && s.showPowderColor ? colorApplyRow(s, lines) : '') +
-        '<div style="margin-top:14px;overflow:auto;">' +
-          tableShell(
-            ['Item', 'Part #'].concat(showVendorPart ? ['Vendor part #'] : [], ['Qty'], showBag ? ['Bag #'] : [], showColor ? ['Powder color'] : [], ['Weight (lb)', 'Cost each', 'Total cost', 'Invoiced each', 'Δ $', 'Δ %', 'Notes', 'Status'], edit ? [''] : []),
-            rows, cols, '') +
-        '</div>' +
+        (edit && bomArrange && bomArrange.sectionId === s.id
+          ? arrangeHtml(s, lines)
+          : '<div style="margin-top:14px;overflow:auto;">' +
+              tableShell(
+                ['Item', 'Part #'].concat(showVendorPart ? ['Vendor part #'] : [], ['Qty'], showBag ? ['Bag #'] : [], showColor ? ['Powder color'] : [], ['Weight (lb)', 'Cost each', 'Total cost', 'Invoiced each', 'Δ $', 'Δ %', 'Notes', 'Status'], edit ? [''] : []),
+                rows, cols, '') +
+            '</div>') +
         sectionMoney(s) +
         (edit
           ? '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:11px;flex-wrap:wrap;">' +
@@ -12105,6 +12264,7 @@
               '<button class="link-btn" data-line-add="' + esc(s.vendor) + '" style="width:auto;padding:8px 14px;white-space:nowrap;">Add a part</button>' +
             '</div>'
           : '') +
+        bomFilesBlock(s, canHandoff) +
         sendHistory(s) +
       '</div>' +
     '</div>';
@@ -12497,6 +12657,67 @@
   }
 
   /** Append-only record of every BOM emailed to this vendor. */
+  /**
+   * Files to send this vendor with their sheet — drawings, spec sheets. Uploaded
+   * here, then ticked (or not) in the Email vendor dialog on each send. Open to
+   * upload whether or not the section is submitted: a file is not part of the
+   * sheet, and a drawing that arrives after the first send is what a re-send is for.
+   */
+  function bomFilesBlock(s, canHandoff) {
+    var files = s.files || [];
+    var rows = files.map(function (f) {
+      return '<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid #eceee8;font-size:13px;">' +
+        '<button type="button" class="link-btn" data-bomfile-dl="' + esc(f.id) + '" data-sec="' + esc(s.id) + '" data-name="' + esc(f.filename) + '" title="Download" ' +
+          'style="width:auto;padding:0;border:0;background:none;text-align:left;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#2f6b4f;font-weight:600;">' + esc(f.filename) + '</button>' +
+        '<span class="muted" style="font-size:11.5px;flex:none;">' + esc(fmtBytes(f.byteSize)) +
+          (f.uploadedBy ? ' · ' + esc(f.uploadedBy) : '') + ' · ' + esc(fmtDate(f.createdAt)) + '</span>' +
+        (canHandoff
+          ? '<button type="button" class="link-btn" data-bomfile-del="' + esc(f.id) + '" data-sec="' + esc(s.id) + '" data-name="' + esc(f.filename) + '" title="Remove this file" style="width:auto;padding:4px 8px;color:#9c3327;flex:none;">Remove</button>'
+          : '') +
+        '</div>';
+    }).join('');
+    var upload = canHandoff
+      ? (bomFileUpload.configured
+        ? '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px;">' +
+            '<input type="file" multiple data-bomfile-input="' + esc(s.id) + '" accept="' + esc((bomFileUpload.accept || []).join(',')) + '" style="display:none;">' +
+            '<button type="button" class="link-btn" data-bomfile-up="' + esc(s.id) + '" style="width:auto;padding:7px 13px;">Upload file…</button>' +
+            '<span class="muted" data-bomfile-status="' + esc(s.id) + '" style="font-size:11.5px;">Up to ' + esc(fmtBytes(bomFileUpload.maxBytes)) + ' each. Choose which ones to attach when you email the vendor.</span>' +
+          '</div>'
+        : '<div class="muted" style="font-size:11.5px;margin-top:6px;">File storage is not configured on this deployment.</div>')
+      : '';
+    if (!files.length && !upload) return '';
+    return '<div style="margin-top:14px;">' +
+      '<div style="font-size:12.5px;font-weight:600;color:#4a4f47;margin-bottom:4px;">Files for this vendor</div>' +
+      (rows || '<div class="muted" style="font-size:12px;padding:4px 0;">No files uploaded. Drawings or spec sheets uploaded here can be attached when you email this vendor.</div>') +
+      upload +
+    '</div>';
+  }
+
+  /** Browser-direct upload, as for design renderings — see handoff/bomFiles.ts. */
+  async function uploadBomFile(sectionId, file, onProgress) {
+    if (bomFileUpload.maxBytes && file.size > bomFileUpload.maxBytes) {
+      throw new Error(file.name + ' is ' + fmtBytes(file.size) + '; the limit is ' + fmtBytes(bomFileUpload.maxBytes) + '.');
+    }
+    var tr = await authed('/bom/sections/' + sectionId + '/files/upload-token', {
+      method: 'POST', body: { filename: file.name },
+    });
+    if (!tr.ok) throw new Error(await serverMessage(tr, 'Could not start the upload.'));
+    var token = await tr.json();
+    var uploadFn = await loadBlobUploader();
+    var result = await uploadFn(token.pathname, file, {
+      access: 'private',
+      token: token.token,
+      contentType: token.contentType,
+      onUploadProgress: onProgress,
+    });
+    var rr = await authed('/bom/sections/' + sectionId + '/files', {
+      method: 'POST',
+      body: { url: result.url, pathname: result.pathname, filename: file.name },
+    });
+    if (!rr.ok) throw new Error(await serverMessage(rr, 'The upload finished, but could not be saved.'));
+    return rr.json();
+  }
+
   function sendHistory(s) {
     if (!s.sends.length) return '';
     var rows = s.sends.map(function (x) {
@@ -12508,8 +12729,11 @@
       var delivered = x.deliveredAt
         ? fmtDateTime(x.deliveredAt) + (x.openedAt ? '<div class="muted" style="font-size:11px;margin-top:2px;">Opened ' + fmtDateTime(x.openedAt) + '</div>' : '')
         : '<span class="muted">Not confirmed</span>';
+      var files = (x.attachedFiles || []).length
+        ? '<div class="muted" style="font-size:11px;margin-top:3px;">+ ' + x.attachedFiles.map(esc).join(', ') + '</div>'
+        : '';
       return '<tr>' + td(fmtDateTime(x.sentAt)) + td(esc(x.sentBy || '—')) + td(esc(x.toEmail)) +
-        td(esc(x.format)) + td(chip + (x.error ? '<div class="muted" style="font-size:11px;color:#9c3327;margin-top:3px;">' + esc(x.error) + '</div>' : '')) +
+        td(esc(x.format) + files) + td(chip + (x.error ? '<div class="muted" style="font-size:11px;color:#9c3327;margin-top:3px;">' + esc(x.error) + '</div>' : '')) +
         td(delivered) + '</tr>';
     }).join('');
     return '<div style="margin-top:14px;">' +
@@ -12655,6 +12879,7 @@
         var r = await authed('/orders/procurement/' + lineId, { method: 'PATCH', body: body });
         el.style.borderColor = r.ok ? '#3f9d78' : '#c2452f';
         if (!r.ok) { await fail(r, 'Could not save the line'); reload(); return; }
+        if (f === 'vendorNotes' || f === 'unitCostMinor') askBomFuture(lineId, f);
         // A quantity change moves the section totals and the edited badge, so the
         // panel is rebuilt from the server rather than patched in place. The
         // rebuild now restores the caret, because these fields save while you are
@@ -13041,6 +13266,83 @@
       });
     });
 
+    // ---- Arrange lines ----
+    document.querySelectorAll('[data-sec-arrange]').forEach(function (bt) {
+      bt.addEventListener('click', function () {
+        var id = bt.getAttribute('data-sec-arrange');
+        var sec = bomSectionData.filter(function (x) { return x.id === id; })[0];
+        if (!sec) return;
+        var ids = (procData || []).filter(function (p) {
+          return ((p.vendor && String(p.vendor).trim()) || 'Unassigned vendor') === sec.vendor;
+        }).map(function (p) { return p.id; });
+        bomArrange = { sectionId: id, vendor: sec.vendor, ids: ids, headings: {} };
+        reload();
+      });
+    });
+    var arrRenumber = function () {
+      bomArrange.ids = [];
+      document.querySelectorAll('[data-arr-row]').forEach(function (tr, i) {
+        bomArrange.ids.push(tr.getAttribute('data-arr-row'));
+        var pos = tr.querySelector('.arrPos');
+        if (pos) pos.textContent = String(i + 1);
+      });
+    };
+    document.querySelectorAll('[data-arr-move]').forEach(function (bt) {
+      bt.addEventListener('click', function () {
+        var tr = bt.closest('tr'), dir = bt.getAttribute('data-arr-move');
+        var parent = tr && tr.parentNode;
+        if (!parent || !bomArrange) return;
+        var prev = tr.previousElementSibling, next = tr.nextElementSibling;
+        var all = parent.querySelectorAll('[data-arr-row]');
+        if (dir === 'up' && prev && prev.hasAttribute('data-arr-row')) parent.insertBefore(tr, prev);
+        else if (dir === 'down' && next && next.hasAttribute('data-arr-row')) parent.insertBefore(next, tr);
+        else if (dir === 'top' && all[0] !== tr) parent.insertBefore(tr, all[0]);
+        else if (dir === 'bottom' && all[all.length - 1] !== tr) parent.insertBefore(tr, all[all.length - 1].nextSibling);
+        arrRenumber();
+        bt.focus();
+      });
+    });
+    document.querySelectorAll('.arrHead').forEach(function (sel) {
+      sel.addEventListener('change', function () {
+        var id = sel.getAttribute('data-id'), v = sel.value;
+        if (v === '__new') {
+          var name = (prompt('Name the new heading (for example "Crating" or "Bag 3"):') || '').trim().slice(0, 60);
+          if (!name) { sel.value = '__auto'; v = '__auto'; }
+          else {
+            var o = document.createElement('option');
+            o.value = name; o.textContent = name;
+            sel.insertBefore(o, sel.lastElementChild);
+            sel.value = name; v = name;
+          }
+        }
+        if (bomArrange) bomArrange.headings[id] = v === '__auto' ? null : v;
+      });
+    });
+    document.querySelectorAll('[data-arr-cancel]').forEach(function (bt) {
+      bt.addEventListener('click', function () { bomArrange = null; reload(); });
+    });
+    document.querySelectorAll('[data-arr-save]').forEach(function (bt) {
+      bt.addEventListener('click', async function () {
+        if (!bomArrange) return;
+        var future = bt.getAttribute('data-arr-save') === 'future';
+        bt.disabled = true;
+        var r = await authed('/orders/' + order.id + '/bom/arrange', {
+          method: 'POST',
+          body: { vendor: bomArrange.vendor, lineIds: bomArrange.ids, headings: bomArrange.headings, saveForFuture: future },
+        });
+        bt.disabled = false;
+        if (!r.ok) return fail(r, 'Could not save the arrangement');
+        var d = await r.json();
+        bomArrange = null;
+        var missing = (d.notInCatalog || []).length;
+        toast(future
+          ? 'Saved. ' + d.catalogUpdated + ' part' + (d.catalogUpdated === 1 ? '' : 's') + ' will print in this order on future orders' +
+            (missing ? ' (' + missing + ' not in the catalog, so this order only)' : '') + '.'
+          : 'Saved for this order.');
+        refreshLines();
+      });
+    });
+
     document.querySelectorAll('[data-sec-confirm]').forEach(function (bt) {
       bt.addEventListener('click', async function () {
         var id = bt.getAttribute('data-sec-confirm');
@@ -13066,6 +13368,51 @@
             if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} return showErr(m || 'Could not unlock.'); }
             close(); reload();
           }, 'Unlock');
+      });
+    });
+
+    document.querySelectorAll('[data-bomfile-up]').forEach(function (bt) {
+      var sid = bt.getAttribute('data-bomfile-up');
+      var input = document.querySelector('[data-bomfile-input="' + sid + '"]');
+      var status = document.querySelector('[data-bomfile-status="' + sid + '"]');
+      bt.addEventListener('click', function () { input.click(); });
+      input.addEventListener('change', async function () {
+        var picked = Array.prototype.slice.call(input.files || []);
+        if (!picked.length) return;
+        bt.disabled = true;
+        var failed = [];
+        for (var i = 0; i < picked.length; i++) {
+          var file = picked[i];
+          status.textContent = 'Uploading ' + file.name + '…';
+          try {
+            await uploadBomFile(sid, file, function (progress) {
+              status.textContent = 'Uploading ' + file.name + '… ' + Math.round(progress.percentage) + '%';
+            });
+          } catch (err) {
+            failed.push(file.name + ': ' + (err && err.message ? err.message : 'upload failed'));
+          }
+        }
+        input.value = '';
+        bt.disabled = false;
+        await reload();
+        if (failed.length) alert('Some files did not upload.\n\n' + failed.join('\n'));
+      });
+    });
+
+    document.querySelectorAll('[data-bomfile-dl]').forEach(function (bt) {
+      bt.addEventListener('click', async function () {
+        var r = await authed('/bom/sections/' + bt.getAttribute('data-sec') + '/files/' + bt.getAttribute('data-bomfile-dl') + '/download');
+        if (!r.ok) { alert(await serverMessage(r, 'Could not download that file.')); return; }
+        downloadBlob(await r.blob(), bt.getAttribute('data-name'));
+      });
+    });
+
+    document.querySelectorAll('[data-bomfile-del]').forEach(function (bt) {
+      bt.addEventListener('click', async function () {
+        if (!window.confirm('Remove ' + bt.getAttribute('data-name') + '? Emails that already carried it are unaffected.')) return;
+        var r = await authed('/bom/sections/' + bt.getAttribute('data-sec') + '/files/' + bt.getAttribute('data-bomfile-del'), { method: 'DELETE' });
+        if (!r.ok) { alert(await serverMessage(r, 'Could not remove that file.')); return; }
+        reload();
       });
     });
 
@@ -13208,6 +13555,26 @@
       }, 'Save address');
   }
 
+  /**
+   * The uploaded files, one checkbox each, all ticked to start: the sender
+   * unticks what this vendor should not get rather than hunting for what they should.
+   */
+  function sendFilesField(sec) {
+    var files = sec.files || [];
+    if (!files.length) return '';
+    return fieldRow('Also attach',
+      '<div style="border:1px solid #e2e5dd;border-radius:9px;padding:6px 10px;">' +
+        files.map(function (f) {
+          return '<label style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13px;cursor:pointer;">' +
+            '<input type="checkbox" class="sndFile" value="' + esc(f.id) + '" checked>' +
+            '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(f.filename) + '</span>' +
+            '<span class="muted" style="font-size:11.5px;flex:none;">' + esc(fmtBytes(f.byteSize)) + '</span>' +
+          '</label>';
+        }).join('') +
+      '</div>' +
+      '<div class="muted" style="font-size:11.5px;margin-top:4px;">Uploaded under Files for this vendor. Untick any this email should not carry.</div>');
+  }
+
   /** Email this vendor's BOM, pre-filled from the vendor's saved defaults. */
   function openSendForm(order, sec, done) {
     var e = sec.email;
@@ -13223,10 +13590,13 @@
         '<option value="PDF"' + (e.format === 'PDF' ? ' selected' : '') + '>PDF</option>' +
         '<option value="EXCEL"' + (e.format === 'EXCEL' ? ' selected' : '') + '>Excel</option>' +
         '<option value="BOTH"' + (e.format === 'BOTH' ? ' selected' : '') + '>Both</option></select>') +
-      fieldRow('Message', '<textarea id="sndBody" rows="8" style="' + IN + 'resize:vertical;font-family:inherit;">' + esc(e.body) + '</textarea>'),
+      fieldRow('Message', '<textarea id="sndBody" rows="8" style="' + IN + 'resize:vertical;font-family:inherit;">' + esc(e.body) + '</textarea>') +
+      sendFilesField(sec),
       async function (close, showErr) {
         var to = document.getElementById('sndTo').value.trim();
         if (!to) return showErr('Type at least one address.');
+        var attachmentIds = Array.prototype.slice.call(document.querySelectorAll('.sndFile:checked'))
+          .map(function (cb) { return cb.value; });
         var r = await authed('/bom/sections/' + sec.id + '/send', {
           method: 'POST',
           body: {
@@ -13234,6 +13604,7 @@
             subject: document.getElementById('sndSubject').value.trim(),
             body: document.getElementById('sndBody').value,
             format: document.getElementById('sndFormat').value,
+            attachmentIds: attachmentIds,
           },
         });
         if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e2) {} return showErr(m || 'Could not send.'); }

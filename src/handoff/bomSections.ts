@@ -13,6 +13,7 @@ import {
   type BomDelivery,
 } from './bomDelivery.js';
 import { latestDeliveryForOrder } from '../integrations/monday/portalDelivery.js';
+import { fileView } from './bomFiles.js';
 
 /**
  * Bill of Materials — per-vendor sections.
@@ -252,6 +253,17 @@ export interface SectionView {
     sentBy: string | null;
     deliveredAt: string | null;
     openedAt: string | null;
+    /** Filenames of the uploaded files that went out with this email. */
+    attachedFiles: string[];
+  }>;
+  /** Files uploaded to send this vendor with their sheet — see bomFiles.ts. */
+  files: Array<{
+    id: string;
+    filename: string;
+    contentType: string;
+    byteSize: number;
+    uploadedBy: string | null;
+    createdAt: string;
   }>;
   email: {
     to: string;
@@ -309,6 +321,7 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
       include: {
         answers: { orderBy: [{ sortOrder: 'asc' }, { label: 'asc' }] },
         sends: { orderBy: { sentAt: 'desc' } },
+        files: { orderBy: { createdAt: 'asc' } },
         shipToAddress: true,
       },
     }),
@@ -369,7 +382,14 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
         .filter(Boolean) as string[],
     ),
   ];
-  const senderIds = [...new Set(sections.flatMap((s) => s.sends.map((x) => x.sentById)))];
+  const senderIds = [
+    ...new Set(
+      sections.flatMap((s) => [
+        ...s.sends.map((x) => x.sentById),
+        ...s.files.map((f) => f.uploadedById),
+      ]),
+    ),
+  ];
   const users = await prisma.user.findMany({
     where: { id: { in: [...new Set([...actorIds, ...senderIds])] } },
     select: { id: true, name: true },
@@ -515,7 +535,15 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
         sentBy: nameById.get(x.sentById) ?? null,
         deliveredAt: iso(x.deliveredAt),
         openedAt: iso(x.openedAt),
+        attachedFiles: Array.isArray(x.attachedFiles)
+          ? x.attachedFiles
+              .map((f) =>
+                f && typeof f === 'object' && 'filename' in f ? String(f.filename) : null,
+              )
+              .filter((f): f is string => Boolean(f))
+          : [],
       })),
+      files: s.files.map((f) => fileView(f, nameById)),
       email: {
         to,
         cc: (mfr?.bomEmailCc || '').trim(),

@@ -127,14 +127,14 @@
 
   function renderCatalog(user) {
     function ctab(id, label){var on=cat.tab===id;return '<button data-ctab="'+id+'" style="border:none;border-radius:8px;padding:8px 15px;font-size:13.5px;font-weight:'+(on?'600':'500')+';cursor:pointer;background:'+(on?'#fff':'transparent')+';color:'+(on?'#1c4039':'#6b7065')+';box-shadow:'+(on?'0 1px 2px rgba(0,0,0,.06)':'none')+';">'+label+'</button>';}
-    document.getElementById('view').innerHTML = '<div style="display:flex;gap:5px;background:#eef0ea;padding:4px;border-radius:10px;width:max-content;margin-bottom:18px;">'+ctab('items','Catalog')+ctab('products','Product tree')+ctab('bundles','Bundles')+ctab('manufacturers','Manufacturers')+ctab('bombuild','BOM build')+ctab('notes','Proposal notes')+'</div>' +
+    document.getElementById('view').innerHTML = '<div style="display:flex;gap:5px;background:#eef0ea;padding:4px;border-radius:10px;width:max-content;margin-bottom:18px;">'+ctab('items','Catalog')+ctab('products','Product tree')+ctab('bundles','Bundles')+ctab('manufacturers','Manufacturers')+ctab('bombuild','BOM build')+ctab('bomsetup','BOM setup')+ctab('notes','Proposal notes')+'</div>' +
       // One History button rather than six: which screen you are on is already known,
       // so the button asks for that screen's history and the tabs stay uncluttered.
       '<div style="display:flex;justify-content:flex-end;margin:-8px 0 12px;"><button class="link-btn" id="catHistory" title="Who changed what on this screen, and when" style="width:auto;padding:7px 13px;font-size:13px;">History</button></div>' +
       '<div id="catBody"></div>';
     document.getElementById('catHistory').addEventListener('click', function () {
-      var areas = { items: 'catalog', products: 'tree', bundles: 'bundles', manufacturers: 'manufacturers', bombuild: 'bom', notes: 'notes' };
-      var titles = { items: 'Catalog history', products: 'Product tree history', bundles: 'Bundle history', manufacturers: 'Manufacturer history', bombuild: 'BOM build history', notes: 'Proposal note history' };
+      var areas = { items: 'catalog', products: 'tree', bundles: 'bundles', manufacturers: 'manufacturers', bombuild: 'bom', bomsetup: 'catalog', notes: 'notes' };
+      var titles = { items: 'Catalog history', products: 'Product tree history', bundles: 'Bundle history', manufacturers: 'Manufacturer history', bombuild: 'BOM build history', bomsetup: 'BOM setup history', notes: 'Proposal note history' };
       openHistory({ area: areas[cat.tab] || 'catalog', title: titles[cat.tab] || 'Change history' });
     });
     document.querySelectorAll('[data-ctab]').forEach(function(b){b.addEventListener('click',function(){cat.tab=b.getAttribute('data-ctab');renderCatalog(user);});});
@@ -142,6 +142,7 @@
     else if(cat.tab==='bundles') renderBundles(user);
     else if(cat.tab==='manufacturers') renderManufacturers(user);
     else if(cat.tab==='bombuild') renderBomBuild(user);
+    else if(cat.tab==='bomsetup') renderBomSetup(user);
     else if(cat.tab==='notes') window.SSGStandardNotes.renderTab();
     else renderItems(user);
   }
@@ -441,6 +442,397 @@
       }, 'Open');
   }
 
+
+  /**
+   * Catalog → BOM setup: how every part prints on a Bill of Materials, edited in bulk.
+   *
+   * One row per part. The manufacturing team filters to a vendor, ticks the parts, and
+   * changes them together — sequence, heading, standing note, and which vendor the part
+   * is routed through — instead of opening a BOM build card per part. With a vendor
+   * picked the list reads as that vendor's sheet, in sequence, and the arrows move a
+   * part up or down it. Everything here is BOM configuration: no proposal, price or
+   * accepted order changes. Orders locked from now on pick it up; an order already
+   * locked keeps its own arrangement (Arrange lines on the order changes that one).
+   */
+  var bsState = { rows: [], vendors: [], q: '', vendor: '', show: 'all', inactive: false, sel: {}, limit: 300 };
+  var BS_HANDOFF = ['SYSTEM_ADMIN', 'EXECUTIVE', 'OPERATIONS', 'PROJECT_MANAGER'];
+
+  async function renderBomSetup(user) {
+    var canEdit = BS_HANDOFF.indexOf(user.role) >= 0;
+    document.getElementById('catBody').innerHTML =
+      '<div style="font-size:12.5px;color:#5c6157;margin-bottom:14px;line-height:1.6;max-width:900px;">' +
+        'How each part prints on the Bill of Materials. <b>Sequence</b> sets where it sits on its vendor’s sheet (lowest first; blank follows the proposal). ' +
+        '<b>Heading</b> files it under Hardware, the main list, or a heading you name. ' +
+        '<b>Ships through</b> moves the part onto the receiving vendor’s sheet at $0 — we already paid for it. ' +
+        '<b>Also on vendor</b> keeps the purchase line where it is and adds a line on a second vendor’s sheet at what they charge (blank or $0 for no charge). ' +
+        'Tick parts and use the bar to change many at once. Orders locked from now on use these settings.' +
+      '</div>' +
+      '<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">' +
+        '<input id="bsSearch" placeholder="Search part # or description…" value="' + esc(bsState.q) + '" style="' + IN + 'flex:1;min-width:200px;max-width:300px;">' +
+        '<select id="bsVendor" style="' + IN + 'width:auto;" title="Pick a vendor to see their sheet in sequence"><option value="">All vendors</option></select>' +
+        '<select id="bsShow" style="' + IN + 'width:auto;">' +
+          [['all', 'All parts'], ['routed', 'Routed through another vendor'], ['sequenced', 'Has a sequence'], ['unsequenced', 'No sequence yet'], ['hardware', 'Prints under Hardware'], ['heading', 'Has a heading set'], ['note', 'Has a BOM note']]
+            .map(function (o) { return '<option value="' + o[0] + '"' + (bsState.show === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') +
+        '</select>' +
+        '<label style="display:flex;gap:6px;align-items:center;font-size:12.5px;color:#5c6157;cursor:pointer;"><input type="checkbox" id="bsInactive"' + (bsState.inactive ? ' checked' : '') + '> Include inactive</label>' +
+        '<div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;">' +
+          '<button class="link-btn" id="bsHw" style="width:auto;padding:9px 14px;" title="Every part that prints under Hardware, and why">Hardware check</button>' +
+          '<button class="link-btn" id="bsExport" style="width:auto;padding:9px 14px;">Download sheet</button>' +
+          (canEdit ? '<button class="link-btn" id="bsImport" style="width:auto;padding:9px 14px;">Upload sheet</button>' : '') +
+        '</div>' +
+      '</div>' +
+      '<div id="bsHwPanel"></div>' +
+      (canEdit ? '<div id="bsBulk"></div>' : '') +
+      '<div id="bsList"><div class="muted" style="padding:24px;">Loading…</div></div>';
+
+    var s = document.getElementById('bsSearch'), t;
+    s.addEventListener('input', function () { clearTimeout(t); t = setTimeout(function () { bsState.q = s.value.trim(); bsState.limit = 300; drawBomSetup(user); }, 200); });
+    document.getElementById('bsShow').addEventListener('change', function (e) { bsState.show = e.target.value; drawBomSetup(user); });
+    document.getElementById('bsInactive').addEventListener('change', function (e) { bsState.inactive = e.target.checked; drawBomSetup(user); });
+    document.getElementById('bsVendor').addEventListener('change', function (e) { bsState.vendor = e.target.value; bsState.sel = {}; drawBomSetup(user); });
+    document.getElementById('bsHw').addEventListener('click', function () { openHardwareCheck(user); });
+    document.getElementById('bsExport').addEventListener('click', exportBomSetup);
+    if (canEdit) document.getElementById('bsImport').addEventListener('click', function () { openBomSetupImport(user); });
+    await loadBomSetup(user);
+  }
+
+  async function loadBomSetup(user) {
+    var box = document.getElementById('bsList');
+    if (!box) return;
+    var r = await authed('/bom-setup/parts');
+    if (!r.ok) { box.innerHTML = '<div class="err">Could not load BOM setup (' + r.status + ').</div>'; return; }
+    bsState.rows = ((await r.json()) || {}).parts || [];
+    var rv = await authed('/manufacturers');
+    bsState.vendors = rv.ok ? ((await rv.json()) || []) : [];
+    var vsel = document.getElementById('bsVendor');
+    if (vsel) {
+      var used = {};
+      bsState.rows.forEach(function (p) { if (p.manufacturer) used[p.manufacturer] = (used[p.manufacturer] || 0) + 1; });
+      vsel.innerHTML = '<option value="">All vendors</option>' +
+        Object.keys(used).sort().map(function (v) { return '<option value="' + esc(v) + '"' + (bsState.vendor === v ? ' selected' : '') + '>' + esc(v) + ' (' + used[v] + ')</option>'; }).join('') +
+        '<option value="__none"' + (bsState.vendor === '__none' ? ' selected' : '') + '>No vendor set</option>';
+    }
+    drawBomSetup(user);
+  }
+
+  /** The heading a part prints under once "Automatic" is resolved. */
+  function bsEffectiveHeading(p) { return p.bomGroup == null ? (p.autoHeading || '') : p.bomGroup; }
+
+  function bsVisible() {
+    var q = bsState.q.toLowerCase();
+    var rows = bsState.rows.filter(function (p) {
+      if (!bsState.inactive && !p.active) return false;
+      if (bsState.vendor === '__none' ? !!p.manufacturer : (bsState.vendor && p.manufacturer !== bsState.vendor)) return false;
+      if (q && (p.part + ' ' + (p.description || '')).toLowerCase().indexOf(q) < 0) return false;
+      switch (bsState.show) {
+        case 'routed': return !!(p.freeIssueVendor || p.secondaryVendor);
+        case 'sequenced': return p.bomSortOrder != null;
+        case 'unsequenced': return p.bomSortOrder == null;
+        case 'hardware': return bsEffectiveHeading(p).toLowerCase() === 'hardware';
+        case 'heading': return p.bomGroup != null;
+        case 'note': return !!p.bomNote;
+        default: return true;
+      }
+    });
+    // With one vendor picked, the list IS their sheet: in sequence, unsequenced after.
+    if (bsState.vendor) {
+      rows.sort(function (a, b) {
+        var x = a.bomSortOrder == null ? Infinity : a.bomSortOrder, y = b.bomSortOrder == null ? Infinity : b.bomSortOrder;
+        return x - y || a.part.localeCompare(b.part);
+      });
+    }
+    return rows;
+  }
+
+  function bsVendorOptions(current, blank) {
+    return '<option value="">' + esc(blank) + '</option>' +
+      bsState.vendors.map(function (v) { return '<option value="' + esc(v.name) + '"' + (v.name === current ? ' selected' : '') + '>' + esc(v.name) + '</option>'; }).join('');
+  }
+
+  function bsHeadingOptions(p) {
+    var heads = ['Hardware'];
+    bsState.rows.forEach(function (r) {
+      var h = (r.bomGroup || '').trim();
+      if (h && heads.map(function (x) { return x.toLowerCase(); }).indexOf(h.toLowerCase()) < 0) heads.push(h);
+    });
+    var cur = p ? p.bomGroup : undefined;
+    var opt = function (v, label) {
+      var sel = p && (cur == null ? v === '__auto' : v === cur);
+      return '<option value="' + esc(v) + '"' + (sel ? ' selected' : '') + '>' + esc(label) + '</option>';
+    };
+    return opt('__auto', 'Automatic' + (p ? ' (' + (p.autoHeading || 'Main list') + ')' : '')) + opt('', 'Main list') +
+      heads.map(function (h) { return opt(h, h); }).join('') + '<option value="__new">New heading…</option>';
+  }
+
+  function drawBomSetup(user) {
+    var box = document.getElementById('bsList');
+    if (!box) return;
+    var canEdit = BS_HANDOFF.indexOf(user.role) >= 0;
+    var dis = canEdit ? '' : ' disabled';
+    var rows = bsVisible();
+    var shown = rows.slice(0, bsState.limit);
+    var money2 = function (m) { return m == null ? '' : (Number(m) / 100).toFixed(2); };
+    var byVendor = !!bsState.vendor && bsState.vendor !== '__none';
+
+    var body = shown.map(function (p, i) {
+      var k = esc(p.part);
+      return '<tr>' +
+        (canEdit ? td('<input type="checkbox" class="bsSel" data-part="' + k + '"' + (bsState.sel[p.part] ? ' checked' : '') + ' aria-label="Select ' + k + '">') : '') +
+        td('<div style="display:flex;gap:4px;align-items:center;">' +
+          '<input class="bsF" data-part="' + k + '" data-f="bomSortOrder" type="number" min="0" step="1" value="' + (p.bomSortOrder == null ? '' : p.bomSortOrder) + '" placeholder="—" style="' + bomFieldStyle('70px') + '"' + dis + ' aria-label="Sequence for ' + k + '">' +
+          (byVendor && canEdit ? '<button class="link-btn bsMove" data-dir="up" data-i="' + i + '" title="Move up this vendor’s sheet" aria-label="Move ' + k + ' up" style="width:auto;padding:3px 7px;font-size:12px;">↑</button><button class="link-btn bsMove" data-dir="down" data-i="' + i + '" title="Move down this vendor’s sheet" aria-label="Move ' + k + ' down" style="width:auto;padding:3px 7px;font-size:12px;">↓</button>' : '') +
+          '</div>') +
+        td('<code style="font-size:12.5px;color:#1c4039;">' + k + '</code>' + (p.active ? '' : ' <span class="chip" style="font-size:10px;">Inactive</span>')) +
+        td('<span style="font-size:12.5px;">' + esc(p.description || '') + '</span>') +
+        td('<span style="font-size:12.5px;">' + esc(p.manufacturer || '—') + '</span>') +
+        td('<span style="font-size:12.5px;">$' + money2(p.unitCostMinor) + '</span>') +
+        td('<select class="bsF" data-part="' + k + '" data-f="bomGroup" style="' + bomFieldStyle('150px') + '"' + dis + ' aria-label="Heading for ' + k + '">' + bsHeadingOptions(p) + '</select>') +
+        td('<select class="bsF" data-part="' + k + '" data-f="freeIssueVendor" style="' + bomFieldStyle('150px') + '"' + dis + ' aria-label="Ships through for ' + k + '">' + bsVendorOptions(p.freeIssueVendor || '', '—') + '</select>') +
+        td('<select class="bsF" data-part="' + k + '" data-f="secondaryVendor" style="' + bomFieldStyle('150px') + '"' + dis + ' aria-label="Also on vendor for ' + k + '">' + bsVendorOptions(p.secondaryVendor || '', '—') + '</select>') +
+        td('<input class="bsF" data-part="' + k + '" data-f="secondaryVendorCostMinor" type="number" min="0" step="0.01" value="' + money2(p.secondaryVendorCostMinor) + '" placeholder="0.00" style="' + bomFieldStyle('80px') + '"' + (canEdit && p.secondaryVendor ? '' : ' disabled') + ' aria-label="Second vendor charge for ' + k + '">') +
+        td('<input class="bsF" data-part="' + k + '" data-f="bomNote" value="' + esc(p.bomNote || '') + '" placeholder="—" style="' + bomFieldStyle('170px') + '"' + dis + ' aria-label="BOM note for ' + k + '">') +
+        '</tr>';
+    }).join('');
+
+    var heads = (canEdit ? ['<input type="checkbox" id="bsAll" aria-label="Select all shown"' + (shown.length && shown.every(function (p) { return bsState.sel[p.part]; }) ? ' checked' : '') + '>'] : [])
+      .concat(['Seq', 'Part #', 'Description', 'Bought from', 'Cost', 'Heading', 'Ships through (free issue)', 'Also on vendor', 'Their charge', 'BOM note']);
+    box.innerHTML =
+      '<div class="muted" style="font-size:12px;margin-bottom:6px;">' + rows.length + ' part' + (rows.length === 1 ? '' : 's') +
+        (rows.length > shown.length ? ' · showing the first ' + shown.length + ' — narrow it with the search or vendor, or <a href="#" id="bsMore">show all</a>' : '') +
+        (byVendor ? ' · in ' + esc(bsState.vendor) + '’s sheet order' : '') + '</div>' +
+      '<div style="overflow:auto;">' + tableShell(heads, body, heads.length, 'No part matches.') + '</div>';
+    drawBomSetupBulk(user);
+
+    var more = document.getElementById('bsMore');
+    if (more) more.addEventListener('click', function (e) { e.preventDefault(); bsState.limit = 100000; drawBomSetup(user); });
+    if (!canEdit) return;
+
+    var all = document.getElementById('bsAll');
+    if (all) all.addEventListener('change', function () {
+      shown.forEach(function (p) { if (all.checked) bsState.sel[p.part] = true; else delete bsState.sel[p.part]; });
+      drawBomSetup(user);
+    });
+    box.querySelectorAll('.bsSel').forEach(function (cb) {
+      cb.addEventListener('change', function () {
+        var part = cb.getAttribute('data-part');
+        if (cb.checked) bsState.sel[part] = true; else delete bsState.sel[part];
+        drawBomSetupBulk(user);
+      });
+    });
+    box.querySelectorAll('.bsF').forEach(function (el) {
+      el.addEventListener('change', async function () {
+        var part = el.getAttribute('data-part'), f = el.getAttribute('data-f'), v = el.value, set = {};
+        if (f === 'bomSortOrder') set[f] = v.trim() === '' ? null : Math.max(0, Math.round(Number(v)));
+        else if (f === 'secondaryVendorCostMinor') set[f] = v.trim() === '' ? null : Math.round(Number(v) * 100);
+        else if (f === 'bomGroup') {
+          if (v === '__new') {
+            var name = (prompt('Name the new heading (for example "Crating"):') || '').trim();
+            if (!name) { drawBomSetup(user); return; }
+            v = name;
+          }
+          set[f] = v === '__auto' ? null : v;
+        } else set[f] = v.trim() || null;
+        if ((f === 'bomSortOrder' || f === 'secondaryVendorCostMinor') && set[f] != null && !(set[f] >= 0)) { alert('Enter a number of zero or more.'); drawBomSetup(user); return; }
+        await bsApply([part], set, user);
+      });
+    });
+    box.querySelectorAll('.bsMove').forEach(function (b) {
+      b.addEventListener('click', async function () {
+        var i = Number(b.getAttribute('data-i')), j = b.getAttribute('data-dir') === 'up' ? i - 1 : i + 1;
+        var order = rows.map(function (p) { return p.part; });
+        if (j < 0 || j >= order.length) return;
+        var x = order[i]; order[i] = order[j]; order[j] = x;
+        // Renumbers the vendor's whole visible list 10, 20, 30… so every part on the
+        // sheet has a position and the move sticks.
+        var r = await authed('/bom-setup/sequence', { method: 'POST', body: { parts: order } });
+        if (!r.ok) { alert('Could not move that part.'); return; }
+        await loadBomSetup(user);
+      });
+    });
+  }
+
+  /** Apply one change to some parts, then reload. Shared by the cells and the bulk bar. */
+  async function bsApply(parts, set, user) {
+    var r = await authed('/bom-setup/parts', { method: 'PATCH', body: { parts: parts, set: set } });
+    var d = {};
+    try { d = (await r.json()) || {}; } catch (e) {}
+    if (!r.ok) { alert(d.message || 'Could not save that.'); await loadBomSetup(user); return false; }
+    if ((d.skipped || []).length)
+      alert('Saved ' + d.updated + '. Skipped ' + d.skipped.length + ':\n' + d.skipped.slice(0, 15).map(function (x) { return x.part + ' — ' + x.reason; }).join('\n'));
+    await loadBomSetup(user);
+    return true;
+  }
+
+  function drawBomSetupBulk(user) {
+    var bar = document.getElementById('bsBulk');
+    if (!bar) return;
+    var picked = Object.keys(bsState.sel);
+    if (!picked.length) { bar.innerHTML = ''; return; }
+    bar.innerHTML =
+      '<div style="position:sticky;top:0;z-index:5;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;background:#1c4039;color:#fff;border-radius:10px;padding:10px 12px;margin-bottom:10px;">' +
+        '<div style="font-size:13px;font-weight:600;padding-bottom:8px;">' + picked.length + ' selected</div>' +
+        '<div><div style="font-size:11px;opacity:.8;">Change</div><select id="bsWhat" style="' + bomFieldStyle('220px') + '">' +
+          '<option value="secondary">Also on vendor (+ their charge)</option>' +
+          '<option value="free">Ships through (free issue, $0)</option>' +
+          '<option value="heading">Heading</option>' +
+          '<option value="seq">Sequence — number in the order shown</option>' +
+          '<option value="note">BOM note</option>' +
+          '<option value="clearRouting">Clear routing (both vendors)</option>' +
+          '<option value="clearSeq">Clear sequence</option>' +
+        '</select></div>' +
+        '<div id="bsValue" style="display:flex;gap:8px;align-items:flex-end;"></div>' +
+        '<button class="btn" id="bsGo" style="width:auto;padding:8px 15px;background:#3f9d78;">Apply to ' + picked.length + '</button>' +
+        '<button class="link-btn" id="bsClear" style="width:auto;padding:8px 12px;background:transparent;color:#fff;border-color:#5f7f78;">Clear selection</button>' +
+      '</div>';
+    var what = document.getElementById('bsWhat'), val = document.getElementById('bsValue');
+    var lab = function (t, inner) { return '<div><div style="font-size:11px;opacity:.8;">' + t + '</div>' + inner + '</div>'; };
+    var paint = function () {
+      var w = what.value;
+      val.innerHTML =
+        w === 'secondary' ? lab('Second vendor', '<select id="bsV1" style="' + bomFieldStyle('190px') + '">' + bsVendorOptions('', 'Choose…') + '</select>') + lab('Their charge per unit ($)', '<input id="bsV2" type="number" min="0" step="0.01" placeholder="0.00" style="' + bomFieldStyle('110px') + '">')
+        : w === 'free' ? lab('Receiving vendor', '<select id="bsV1" style="' + bomFieldStyle('190px') + '">' + bsVendorOptions('', 'Choose…') + '</select>')
+        : w === 'heading' ? lab('Heading', '<select id="bsV1" style="' + bomFieldStyle('170px') + '">' + bsHeadingOptions(null) + '</select>')
+        : w === 'seq' ? lab('Start at', '<input id="bsV1" type="number" min="0" step="1" value="10" style="' + bomFieldStyle('80px') + '">') + lab('Step', '<input id="bsV2" type="number" min="1" step="1" value="10" style="' + bomFieldStyle('70px') + '">')
+        : w === 'note' ? lab('Note (blank clears)', '<input id="bsV1" style="' + bomFieldStyle('240px') + '">')
+        : '';
+    };
+    what.addEventListener('change', paint);
+    paint();
+    document.getElementById('bsClear').addEventListener('click', function () { bsState.sel = {}; drawBomSetup(user); });
+    document.getElementById('bsGo').addEventListener('click', async function () {
+      var w = what.value, v1 = document.getElementById('bsV1'), v2 = document.getElementById('bsV2');
+      // In the order the list shows them, so "number in the order shown" means that.
+      var parts = bsVisible().map(function (p) { return p.part; }).filter(function (p) { return bsState.sel[p]; })
+        .concat(picked.filter(function (p) { return !bsVisible().some(function (x) { return x.part === p; }); }));
+      var ok;
+      if (w === 'seq') {
+        var r = await authed('/bom-setup/sequence', { method: 'POST', body: { parts: parts, start: Number(v1.value) || 0, step: Math.max(1, Number(v2.value) || 10) } });
+        ok = r.ok;
+        if (!ok) alert('Could not number those parts.');
+        await loadBomSetup(user);
+      } else {
+        var set = {};
+        if (w === 'secondary') {
+          if (!v1.value) return alert('Choose the second vendor.');
+          set.secondaryVendor = v1.value;
+          set.secondaryVendorCostMinor = v2.value.trim() === '' ? 0 : Math.round(Number(v2.value) * 100);
+          if (!(set.secondaryVendorCostMinor >= 0)) return alert('Enter the charge as plain dollars, e.g. 4.50.');
+        } else if (w === 'free') {
+          if (!v1.value) return alert('Choose the receiving vendor.');
+          set.freeIssueVendor = v1.value;
+        } else if (w === 'heading') {
+          var h = v1.value;
+          if (h === '__new') { h = (prompt('Name the new heading:') || '').trim(); if (!h) return; }
+          set.bomGroup = h === '__auto' ? null : h;
+        } else if (w === 'note') set.bomNote = v1.value.trim() || null;
+        else if (w === 'clearRouting') { set.freeIssueVendor = null; set.secondaryVendor = null; set.secondaryVendorCostMinor = null; }
+        else if (w === 'clearSeq') set.bomSortOrder = null;
+        if (!confirm('Apply this to ' + parts.length + ' part' + (parts.length === 1 ? '' : 's') + '?\n\nOrders locked from now on use it. Orders already locked are not changed.')) return;
+        ok = await bsApply(parts, set, user);
+      }
+      if (ok) { bsState.sel = {}; drawBomSetup(user); }
+    });
+  }
+
+  async function exportBomSetup() {
+    var r = await authed('/bom-setup/export');
+    if (!r.ok) { alert('Could not build the sheet (' + r.status + ').'); return; }
+    var d = await r.json();
+    var cols = d.columns || [];
+    downloadCsv('bom-setup-' + todayISO() + '.csv', [cols].concat((d.items || []).map(function (it) {
+      return cols.map(function (c) { return it[c]; });
+    })));
+  }
+
+  function openBomSetupImport(user) {
+    var confirmed = false;
+    openModal('Upload a BOM setup sheet',
+      '<div class="muted" style="font-size:12.5px;line-height:1.6;margin-bottom:10px;">Start from <b>Download sheet</b>, edit it in Excel, save as <b>CSV</b>, and upload it here. Columns read: <code>part, bomSequence, bomHeading, bomNote, shipsThroughVendor, alsoOnVendor, alsoOnVendorCost</code>. ' +
+        'Only columns in the file change. A blank cell clears that setting; a blank <code>bomHeading</code> means automatic, and <code>Main list</code> keeps a part out of Hardware. Vendor names must match Catalog → Manufacturers.</div>' +
+      '<input type="file" id="bsFile" accept=".csv,text/csv" style="width:100%;padding:10px;border:1px dashed #cfd3ca;border-radius:9px;background:#fff;">' +
+      '<div id="bsReview" style="margin-top:12px;"></div>',
+      async function (close, showErr) {
+        var fi = document.getElementById('bsFile').files[0];
+        if (!fi) return showErr('Choose a CSV file first.');
+        var rows = parseCsv(await fi.text());
+        if (!rows.length) return showErr('No data rows found in that file.');
+        if (!Object.prototype.hasOwnProperty.call(rows[0], 'part')) return showErr('The sheet needs a “part” column.');
+        var r = await authed('/bom-setup/import', { method: 'POST', body: { rows: rows, dryRun: !confirmed } });
+        var d = {};
+        try { d = (await r.json()) || {}; } catch (e) {}
+        if (!r.ok) return showErr(d.message || 'Could not read that sheet.');
+        var issues = (d.issues || []).slice(0, 30).map(function (x) { return '<li>Row ' + x.row + ' · <code>' + esc(x.part) + '</code> — ' + esc(x.message) + '</li>'; }).join('');
+        if (!confirmed) {
+          confirmed = true;
+          document.getElementById('bsReview').innerHTML =
+            '<div style="font-size:13px;line-height:1.6;"><b>' + (d.changes || []).length + ' part' + ((d.changes || []).length === 1 ? '' : 's') + ' will change.</b> ' +
+            ((d.issues || []).length ? (d.issues.length + ' row' + (d.issues.length === 1 ? '' : 's') + ' will be skipped:') : 'No problems found.') + '</div>' +
+            (issues ? '<ul style="font-size:12px;max-height:180px;overflow:auto;margin:6px 0;">' + issues + '</ul>' : '') +
+            '<div class="muted" style="font-size:12px;">Press <b>Apply changes</b> to save them.</div>';
+          // Neither closed nor failed, so the dialog's own button is still "Saving…".
+          var sv = document.getElementById('mSave');
+          if (sv) { sv.disabled = false; sv.textContent = 'Apply changes'; }
+          return;
+        }
+        close();
+        alert('Updated ' + d.updated + ' part' + (d.updated === 1 ? '' : 's') + '.' + ((d.issues || []).length ? ' ' + d.issues.length + ' row(s) skipped.' : ''));
+        loadBomSetup(user);
+      }, 'Check the sheet');
+  }
+
+  /**
+   * Hardware check: every part that prints under Hardware and the reason, with the
+   * one-click fix beside it. The reasons are the same ones the order page shows under
+   * each line ("Came out of a hardware kit", "Has a hardware rule"…).
+   */
+  async function openHardwareCheck(user) {
+    var canEdit = BS_HANDOFF.indexOf(user.role) >= 0;
+    var r = await authed('/bom-setup/hardware-check');
+    if (!r.ok) { alert('Could not run the hardware check (' + r.status + ').'); return; }
+    var rows = ((await r.json()) || {}).rows || [];
+    var body = rows.map(function (x) {
+      var under = x.printsUnderHardware;
+      return '<tr>' +
+        td('<code style="font-size:12.5px;">' + esc(x.part) + '</code>' + (x.inCatalog ? '' : ' <span class="chip" style="font-size:10px;">Not in SKU master</span>')) +
+        td('<span style="font-size:12.5px;">' + esc(x.description || '—') + '</span>') +
+        td('<span style="font-size:12px;">' + esc(x.manufacturer || '—') + '</span>') +
+        td('<span style="font-size:12px;">' + (x.catalogHeading != null ? 'Set in BOM setup: ' + esc(x.catalogHeading || 'Main list') + (x.reasons.length ? '<br><span class="muted">Otherwise: ' + x.reasons.map(esc).join('; ') + '</span>' : '') : x.reasons.map(esc).join('<br>')) + '</span>') +
+        td(String(x.orders)) +
+        td(under ? '<span class="chip" style="background:#fdf6e6;color:#6b5a24;">Hardware</span>' : '<span class="chip">Main list</span>') +
+        td(canEdit && x.inCatalog
+          ? (under
+            ? '<button class="link-btn hwFix" data-part="' + esc(x.part) + '" data-to="" style="width:auto;padding:5px 10px;font-size:12px;">Move to main list</button>'
+            : '<button class="link-btn hwFix" data-part="' + esc(x.part) + '" data-to="__auto" style="width:auto;padding:5px 10px;font-size:12px;">Back to automatic</button>')
+          : '') +
+        '</tr>';
+    }).join('');
+    // A full-width panel on the tab rather than a dialog: seven columns do not fit a
+    // dialog's width, and the list stays visible while parts are moved out of it.
+    var panel = document.getElementById('bsHwPanel');
+    if (!panel) return;
+    panel.innerHTML = '<div class="card" style="padding:14px 16px;margin-bottom:14px;border-left:3px solid #c9a227;">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:6px;">' +
+        '<div style="font-size:14.5px;font-weight:650;">Hardware check · ' + rows.filter(function (x) { return x.printsUnderHardware; }).length + ' part(s) print under Hardware</div>' +
+        '<button class="link-btn" id="bsHwClose" style="width:auto;padding:6px 12px;">Close</button>' +
+      '</div>' +
+      '<div class="muted" style="font-size:12.5px;line-height:1.6;margin-bottom:10px;">Every part that prints under <b>Hardware</b> on a Bill of Materials, and why. “On orders” counts orders that already carry it as a kit part. ' +
+        'Moving a part to the main list applies to orders locked from now on; on an order already locked use <b>Arrange lines</b> on that order.</div>' +
+      '<div style="overflow:auto;max-height:55vh;">' + tableShell(['Part #', 'Description', 'Vendor', 'Why it is Hardware', 'On orders', 'Prints under', ''], body, 7, 'Nothing prints under Hardware.') + '</div>' +
+    '</div>';
+    panel.scrollIntoView({ block: 'nearest' });
+    document.getElementById('bsHwClose').addEventListener('click', function () { panel.innerHTML = ''; });
+    panel.querySelectorAll('.hwFix').forEach(function (b) {
+      b.addEventListener('click', async function () {
+        b.disabled = true;
+        var to = b.getAttribute('data-to');
+        var rr = await authed('/bom-setup/parts', { method: 'PATCH', body: { parts: [b.getAttribute('data-part')], set: { bomGroup: to === '__auto' ? null : to } } });
+        if (!rr.ok) { b.disabled = false; alert('Could not change that part.'); return; }
+        b.textContent = 'Done';
+        await loadBomSetup(user);
+        openHardwareCheck(user);
+      });
+    });
+  }
 
   /* --- The one catalog list: Product + SKU merged, one row per part number --- */
   var itemState = { q: '', page: 1, categories: [], manufacturers: [], rows: [], filters: {}, sort: { key: 'part', dir: 'asc' } };
@@ -2660,7 +3052,9 @@
     vendorPartNumber: 'Vendor part', part: 'Part', description: 'Description',
     name: 'Name', sku: 'SKU', status: 'Status', components: 'Components',
     unitWeightLbs: 'Weight', active: 'Active', leadTimeDays: 'Lead time',
-    requiresPowderColor: 'Requires colour', freeIssueVendor: 'Free-issue vendor'
+    requiresPowderColor: 'Requires colour', freeIssueVendor: 'Free-issue vendor',
+    secondaryVendor: 'Also on vendor', secondaryVendorCostMinor: 'Second vendor charge',
+    bomSortOrder: 'BOM sequence', bomGroup: 'BOM heading', bomNote: 'BOM note'
   };
 
   function historyRow(r) {

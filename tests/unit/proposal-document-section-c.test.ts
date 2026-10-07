@@ -31,6 +31,7 @@ interface CrossBorder {
   countryOfOrigin?: string | null;
   tariffClassificationCode?: string | null;
   tariff9979Claimed?: boolean | null;
+  tariff9979SubjectToCbsa?: boolean;
   tariff9979Text?: string | null;
   gstHstTreatment?: string | null;
   hostSystemModel?: string | null;
@@ -187,6 +188,11 @@ describe('proposal document — Section C (Canadian Import Terms)', () => {
       canadianDoc({ tariff9979Claimed: true, sectionCItems: row }),
     );
     expect(standard).toContain('>Claimed<');
+
+    const cbsa = SSGProposalDocument.html(
+      canadianDoc({ tariff9979Claimed: true, tariff9979SubjectToCbsa: true, sectionCItems: row }),
+    );
+    expect(cbsa).toContain('Claimed, subject to CBSA eligibility');
 
     const custom = SSGProposalDocument.html(
       canadianDoc({
