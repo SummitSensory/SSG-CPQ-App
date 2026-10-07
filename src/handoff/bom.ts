@@ -3,7 +3,15 @@ import { prisma } from '../lib/prisma.js';
 import { NotFoundError } from '../lib/errors.js';
 import { vendorPartLookup } from './vendorParts.js';
 import { defaultJobName } from './bomSections.js';
-import { isRollupHardwarePart, rollUpBomLines } from './bomRollup.js';
+import { rollUpBomLines } from './bomRollup.js';
+import {
+  headingOf,
+  isHardwareHeading,
+  loadLayoutTables,
+  sequenceOf,
+  sortForBom,
+  type HeadingReason,
+} from './bomLayout.js';
 import { bomPhone, bomToday, deliveryDetails, usDate, type BomDelivery } from './bomDelivery.js';
 import { latestDeliveryForOrder } from '../integrations/monday/portalDelivery.js';
 
@@ -57,7 +65,14 @@ export interface BomLine {
   vendorNotes: string;
   sourced: boolean;
   isSteel: boolean;
+  /** True when the line prints under the Hardware heading. Kept for older readers. */
   isHardware: boolean;
+  /** The heading this line prints under; '' is the main list. See bomLayout.ts. */
+  group: string;
+  /** Why it prints under that heading. */
+  groupReason: HeadingReason;
+  /** Its preset position, or null when it follows the proposal's order. */
+  sequence: number | null;
   /**
    * Summit bought this part elsewhere and had it shipped to this vendor, who is
    * crating it. It prints with no cost and adds nothing to the sheet's total — we
@@ -300,41 +315,12 @@ export async function buildBom(
     : [];
   const bagBySku = new Map(bagRows.map((k) => [k.part, k.packagingBag ?? '']));
 
-  // Whether a line is hardware — no longer a sort key, only a fact carried on the
-  // line for the renderer. Membership is decided by the hardware RULES rather than
-  // a part-number pattern, so a fastener that does not happen to start with 6820H-
-  // is still identified correctly.
-  const hardwareParts = new Set<string>([
-    'H-1000',
-    ...(
-      await prisma.hardwareRule.findMany({ where: { kind: 'HARDWARE' }, select: { part: true } })
-    ).map((r) => r.part),
-  ]);
-  // A part quoted on the proposal under its own name (the zip-line eye bolt) is
-  // still a fastener on the shop floor — bomRollup names those explicitly. `isHardware`
-  // no longer drives where a line sits on the sheet (see the sort below); it is still
-  // carried on the line for the renderer to style or badge as it chooses.
-  const isHardwarePart = (sku: string, flagged: boolean): boolean =>
-    flagged || hardwareParts.has(sku) || isRollupHardwarePart(sku);
-
-  // The BOM follows the PROPOSAL, not the product tree or the alphabet: a vendor
-  // reading the sheet is reading the same list the customer signed, in the same
-  // order. `proposalLineOrder` is stamped on the line at lock time (or when a kit
-  // rule explodes it later — see bomBuild.ts) from the accepted proposal's own
-  // INCLUDED item order; a kit's exploded fasteners all carry the kit's position, so
-  // they print together where the kit itself sat rather than by part number.
-  //
-  // NULL sorts last: a line with no proposal position of its own is either an order
-  // locked before this column existed, or one added to the BOM by hand afterward —
-  // neither was on the proposal, so neither can claim a place within it.
-  // `Array.prototype.sort` is stable, so lines that tie (kit siblings sharing their
-  // parent's position, or several NULLs) keep the order they were read in rather
-  // than reshuffling on every render.
-  const ordered = [...order.procurement].sort((a, b) => {
-    const ao = a.proposalLineOrder ?? Number.POSITIVE_INFINITY;
-    const bo = b.proposalLineOrder ?? Number.POSITIVE_INFINITY;
-    return ao - bo;
-  });
+  // Order and heading come from one place — bomLayout.ts — so the order page, this
+  // sheet and every export agree. In short: a position someone set (on this order, or
+  // as the part's preset in Catalog → BOM setup) first, then the proposal's own order;
+  // hardware under its own heading unless the team has said otherwise for the part.
+  const layout = await loadLayoutTables(order.procurement.map((l) => l.sku));
+  const ordered = sortForBom(order.procurement, layout);
   const scoped = vendorFilter
     ? ordered.filter((l) => (s(l.vendor).trim() || 'Unassigned vendor') === vendorFilter)
     : ordered;
@@ -378,7 +364,10 @@ export async function buildBom(
       vendorNotes: notes,
       sourced: l.sourced,
       isSteel: steelVendors.has(vendorName.toLowerCase()),
-      isHardware: isHardwarePart(s(l.sku), l.isHardwareComponent),
+      isHardware: false,
+      group: headingOf(l, layout).heading,
+      groupReason: headingOf(l, layout).reason,
+      sequence: sequenceOf(l, layout),
       freeIssue: free,
       purchaseVendor: s(l.purchaseVendor),
     };
@@ -386,7 +375,12 @@ export async function buildBom(
 
   // Variant part numbers collapse into the part the vendor is actually sold: two
   // proposal lines, one purchase line. The proposal keeps both.
-  const lines: BomLine[] = rollUpBomLines(builtLines);
+  // isHardware is derived from the heading AFTER the roll-up, because a merged line
+  // takes its heading from the first line of its group.
+  const lines: BomLine[] = rollUpBomLines(builtLines).map((l) => ({
+    ...l,
+    isHardware: isHardwareHeading(l.group),
+  }));
 
   // ---- optional zero-quantity rows: the rest of this vendor's catalogue ----
   if (opts.includeZeroQty && vendorFilter && vendorFilter !== 'Unassigned vendor') {
@@ -449,7 +443,10 @@ export async function buildBom(
         vendorNotes: '',
         sourced: false,
         isSteel: steelVendors.has(vendorFilter.toLowerCase()),
-        isHardware: isHardwarePart(e.sku, false),
+        isHardware: isHardwareHeading(headingOf({ sku: e.sku }, layout).heading),
+        group: headingOf({ sku: e.sku }, layout).heading,
+        groupReason: headingOf({ sku: e.sku }, layout).reason,
+        sequence: null,
         freeIssue: false,
         purchaseVendor: '',
       });

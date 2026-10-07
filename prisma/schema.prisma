@@ -1568,6 +1568,19 @@ model Sku {
   /// What secondaryVendor charges per unit for this step. NULL/0 when it is a
   /// receiving/processing note rather than a separate purchase.
   secondaryVendorCostMinor Int?
+  /// Where this part sits on a vendor's Bill of Materials, lowest first. Set by the
+  /// manufacturing team (Catalog → BOM setup, or "save for future orders" when they
+  /// rearrange an order's sheet). NULL = no preset position: the line falls back to
+  /// the proposal's order, after every line that has one.
+  bomSortOrder   Int?
+  /// The heading this part prints under on the Bill of Materials. NULL = automatic
+  /// (kit fasteners and hardware-rule parts go under "Hardware", everything else in
+  /// the main list); '' = always the main list, even if a rule says hardware; any
+  /// other text is the heading itself, e.g. "Hardware" or "Crating".
+  bomGroup       String?
+  /// A note copied onto this part's BOM line whenever an order is locked, so a
+  /// standing instruction to the vendor is written once rather than on every order.
+  bomNote        String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -2181,6 +2194,12 @@ model ProcurementLine {
   /// already has this vendor's line skip it, the same way kitSku above does for
   /// components.
   secondaryOfSku String?
+  /// This order's own position for the line on its vendor's sheet, set when someone
+  /// rearranges the sheet. Wins over Sku.bomSortOrder; NULL = use the catalog's.
+  bomPosition    Int?
+  /// This order's own BOM heading for the line. Same values as Sku.bomGroup and wins
+  /// over it; NULL = use the catalog's.
+  bomGroup       String?
 
   @@index([orderId])
   @@index([invoicedAt])

@@ -17,6 +17,14 @@ import {
 import { expandBomBuild } from './bomBuild.js';
 import { sellerCollectedCharges } from '../crossborder/sellerCharges.js';
 import { rollUpProcurementLines } from './bomRollup.js';
+import {
+  headingOf,
+  loadLayoutTables,
+  normalizeHeading,
+  sequenceOf,
+  sortForBom,
+  HEADING_REASON_TEXT,
+} from './bomLayout.js';
 import { qboGateState } from './manufacturingRelease.js';
 import { syncTransactionState } from '../integrations/quickbooks/billing.js';
 import { versionTotals, metaOf } from '../proposals/analytics.js';
@@ -394,6 +402,21 @@ export async function createAcceptedOrder(
   // a no-op on a database where nothing is configured. See handoff/bomBuild.ts.
   const procurement = await expandBomBuild(procurementFromItems(version.items));
   const refs = await resolveCatalogRefs(procurement);
+  // Standing vendor notes, set once per part in Catalog → BOM setup and copied onto
+  // the line here so the vendor sees them on every order without anyone retyping them.
+  // Copied rather than read live: a note edited next year must not rewrite a sheet
+  // already sent.
+  const bomNoteByPart = new Map(
+    (
+      await prisma.sku.findMany({
+        where: {
+          part: { in: [...new Set(procurement.map((p) => p.sku).filter(Boolean) as string[])] },
+          NOT: { bomNote: null },
+        },
+        select: { part: true, bomNote: true },
+      })
+    ).map((r) => [r.part.toUpperCase(), r.bomNote]),
+  );
 
   // The deal this order belongs to, resolved at accept time and stored on the order.
   //
@@ -515,6 +538,8 @@ export async function createAcceptedOrder(
                   kitSku: p.kitSku ?? null,
                   proposalLineOrder: p.proposalLineOrder ?? null,
                   secondaryOfSku: p.secondaryOfSku ?? null,
+                  vendorNotes:
+                    bomNoteByPart.get(String(ref.sku ?? p.sku ?? '').toUpperCase())?.trim() || null,
                 };
               }),
             },
@@ -749,6 +774,7 @@ export async function getOrder(id: string) {
   );
   // Which packaging bag the part ships in. Also a SKU fact, not a line fact.
   const bagByPart = new Map(skus.map((s) => [s.part, s.packagingBag]));
+  const layout = await loadLayoutTables(parts);
 
   // The customer name leads every BOM filename and email subject, so it travels
   // with the order rather than being fetched again by each caller.
@@ -770,9 +796,10 @@ export async function getOrder(id: string) {
       ? (nameById.get(order.manufacturingReleasedById) ?? null)
       : null,
     // Rolled-up variants collapse here, so the Bill of Materials screen shows the
-    // same single Hardware line the printed sheet does.
+    // same single Hardware line the printed sheet does — and the lines arrive already
+    // in BOM order with their heading, from the same bomLayout.ts the sheet uses.
     procurement: rollUpProcurementLines(
-      order.procurement.map((p) => ({
+      sortForBom(order.procurement, layout).map((p) => ({
         ...p,
         productUrl: (p.sku && urlByPart.get(p.sku)) || null,
         packagingBag: (p.sku && bagByPart.get(p.sku)) || null,
@@ -783,6 +810,15 @@ export async function getOrder(id: string) {
         quantityEditedBy: p.quantityEditedById
           ? (nameById.get(p.quantityEditedById) ?? null)
           : null,
+        // Effective heading and position, plus the catalog presets so the screen can
+        // tell "set on this order" from "the part's default".
+        bomHeading: headingOf(p, layout).heading,
+        bomHeadingReason: headingOf(p, layout).reason,
+        bomHeadingWhy: HEADING_REASON_TEXT[headingOf(p, layout).reason],
+        bomSequence: sequenceOf(p, layout),
+        catalogBomSortOrder:
+          layout.parts.get(String(p.sku ?? '').toUpperCase())?.bomSortOrder ?? null,
+        catalogBomGroup: layout.parts.get(String(p.sku ?? '').toUpperCase())?.bomGroup ?? null,
       })),
     ),
     requirements: order.requirements.map((r) => ({
@@ -1264,6 +1300,8 @@ export async function patchProcurementLine(
      * Passing the original value back clears the override.
      */
     quantity?: number;
+    /** This order's BOM heading for the line; null returns it to the catalog's. */
+    bomGroup?: string | null;
   },
   userId: string,
 ) {
@@ -1371,6 +1409,7 @@ export async function patchProcurementLine(
       ...(patch.sourced !== undefined ? { sourced: patch.sourced } : {}),
       ...(patch.targetDate !== undefined ? { targetDate: patch.targetDate } : {}),
       ...(patch.unitCostMinor !== undefined ? { unitCostMinor: patch.unitCostMinor } : {}),
+      ...(patch.bomGroup !== undefined ? { bomGroup: normalizeHeading(patch.bomGroup) } : {}),
       // Who checked this line against the invoice, and when. Cleared with the figure,
       // so an emptied cell reads as "not checked" rather than as checked-at-zero.
       ...(patch.invoicedUnitCostMinor !== undefined
