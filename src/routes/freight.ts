@@ -284,11 +284,32 @@ export async function releaseFreightRequest(
   });
 }
 
-/** One `change_multiple_column_values` call. */
+/**
+ * What goes in `# of Welded Legs`: A-2245 + A-2246.
+ *
+ * The count wins whenever there is one. The Flex labels exist only because a Flex
+ * order has no legs to count — a proposal that carries the Pro Pack discount AND an
+ * Adventure frame is still crated by its legs, and labelling it "Summit Flex: Pro
+ * Pack" told Goldberg nothing about the frame.
+ */
+export function weldedLegsLabel(facts: AdventureFacts): string {
+  if (facts.legs > 0) return String(facts.legs);
+  if (facts.flexProPack) return FLEX_PRO_PACK_LABEL;
+  if (facts.flexOnly) return FLEX_ONLY_LABEL;
+  return '0';
+}
+
+/**
+ * One `change_multiple_column_values` call.
+ *
+ * `# of Welded Legs` is a STATUS column whose labels are the counts the board has
+ * seen so far (0, 1, 2, 4, 6, 8). Without `create_labels_if_missing`, a frame with
+ * any other count — 3, 10, 12 — was refused outright and the request never raised.
+ */
 async function writeColumns(itemId: string, cols: Record<string, unknown>): Promise<void> {
   await mondayQuery(
     `mutation ($board: ID!, $item: ID!, $cols: JSON!) {
-       change_multiple_column_values (board_id: $board, item_id: $item, column_values: $cols) { id }
+       change_multiple_column_values (board_id: $board, item_id: $item, column_values: $cols, create_labels_if_missing: true) { id }
      }`,
     { board: DEALS_BOARD_ID, item: itemId, cols: JSON.stringify(cols) },
   );
@@ -343,11 +364,7 @@ export function registerFreightRoutes(app: FastifyInstance): void {
        * frame is exactly when the desk most needs the row to be right.
        */
       await writeColumns(input.itemId, {
-        [WELDED_LEGS_COLUMN]: facts.flexProPack
-          ? FLEX_PRO_PACK_LABEL
-          : facts.flexOnly
-            ? FLEX_ONLY_LABEL
-            : String(facts.legs),
+        [WELDED_LEGS_COLUMN]: weldedLegsLabel(facts),
         [TROLLEY_COLUMN]: { label: facts.trolley ? 'Yes' : 'No' },
       });
       stage = 'request';
