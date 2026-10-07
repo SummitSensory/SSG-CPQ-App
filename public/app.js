@@ -4846,10 +4846,16 @@
    * live tab can hold lines that were never saved or have since been edited away;
    * trusting that snapshot is how a proposal on file with 4 legs put 6 on the
    * board. Only the weight and the Project ID travel from here now.
+   *
+   * Which is why the proposal is saved FIRST. The weight below is the live tab and
+   * the leg count (A-2245 + A-2246) is the saved version; pushing unsaved frame
+   * lines sent this weight with the previous save's legs — "0" on a frame the rep
+   * had just generated.
    */
   async function requestFreight() {
     var item = freightItemId();
     if (!item) return alert('This proposal needs its Project ID — that is the monday.com deal item the weight is written to.');
+    try { await saveBuilderQuiet('requesting freight'); } catch (e) { return alert(e.message); }
     var t = builderTotals();
     pb.meta.freightBusy = 'req'; renderBuilderKeepingFocus();
     var r = await authed('/proposals/' + pb.proposalId + '/freight-request', {
