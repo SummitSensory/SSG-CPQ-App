@@ -16,6 +16,8 @@
  * on signed customer documents is not a change to make inside an audit.
  */
 
+import { ConflictError } from './errors.js';
+
 /** Prisma's unique-constraint error code, matched without importing the runtime. */
 export function isUniqueViolation(err: unknown, field?: string): boolean {
   const e = err as { code?: unknown; meta?: { target?: unknown } } | null;
@@ -48,7 +50,7 @@ export interface AllocateOptions<T> {
   create: (number: string) => Promise<T>;
   /** Override the rendering of prefix + sequence. Defaults to six zero-padded digits. */
   format?: (seq: number) => string;
-  /** Attempts before giving up. Six covers far more contention than this app sees. */
+  /** Attempts before giving up (default 8, clamped to 1–20), with jittered backoff between them. */
   attempts?: number;
   /** The unique column, so an unrelated P2002 is not swallowed as a collision. */
   field?: string;
@@ -65,19 +67,33 @@ export interface AllocateOptions<T> {
 export async function allocateNumbered<T>(
   opts: AllocateOptions<T>,
 ): Promise<{ number: string; row: T }> {
-  const attempts = opts.attempts ?? 6;
+  // A sane budget whatever the caller passes: at least one try (0, a negative or NaN
+  // used to skip the loop and fail without trying), at most MAX_ATTEMPTS.
+  const requested = Math.floor(opts.attempts ?? DEFAULT_ATTEMPTS);
+  const attempts = Number.isFinite(requested)
+    ? Math.min(MAX_ATTEMPTS, Math.max(1, requested))
+    : DEFAULT_ATTEMPTS;
   const render = opts.format ?? ((seq: number) => formatNumber(opts.prefix, seq));
-  let lastError: unknown = null;
   for (let attempt = 0; attempt < attempts; attempt++) {
+    // Writers that collided together would otherwise re-read and collide together
+    // again; a short random pause spreads them out so each round lets most through.
+    if (attempt > 0) await sleep(Math.floor(Math.random() * BACKOFF_MS * attempt));
     const number = render(sequenceOf(await opts.highest(), opts.prefix) + 1);
     try {
       return { number, row: await opts.create(number) };
     } catch (err) {
       if (!isUniqueViolation(err, opts.field)) throw err;
-      lastError = err;
     }
   }
-  throw lastError instanceof Error
-    ? lastError
-    : new Error('Could not allocate a document number after repeated collisions');
+  // Still colliding: a conflict for the person to retry (409), not a raw P2002 (500).
+  throw new ConflictError(
+    'Could not allocate a document number — several were being created at once. Please try again.',
+  );
 }
+
+const DEFAULT_ATTEMPTS = 8;
+const MAX_ATTEMPTS = 20;
+const BACKOFF_MS = 15;
+
+const sleep = (ms: number): Promise<void> =>
+  ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();

@@ -88,8 +88,13 @@
   function overrideMinor(text) {
     if (text == null) return 0;
     var s = String(text).trim().replace(/^\$/, '').replace(/,/g, '');
-    if (!s || !/^-?\d+(?:\.\d+)?$/.test(s)) return 0;
-    return Math.round(parseFloat(s) * 100);
+    // The typed decimal, half-up (away from zero) on its digits — parseFloat x 100 made
+    // "1.005" 100.4999... and lost a cent. Mirrors overrideMinor in src/proposals/analytics.ts.
+    var m = /^(-?)(\d+)(?:\.(\d+))?$/.exec(s);
+    if (!m) return 0;
+    var frac = m[3] || '';
+    var cents = Number(m[2]) * 100 + Number((frac + '00').slice(0, 2)) + (frac.charAt(2) >= '5' ? 1 : 0);
+    return m[1] && cents ? -cents : cents;
   }
   /**
    * Whether the "prints instead of TBD" box holds a NUMBER rather than wording.
@@ -124,9 +129,24 @@
     var m = meta || {};
     var mode = m.discountMode === 'AMT' ? 'AMT' : 'PCT';
     var pct = Number(m.discountPct) || 0;
-    var amount = mode === 'AMT'
-      ? Math.round(Number(m.discountAmountMinor) || 0)
-      : Math.round(subtotal * pct / 100);
+    var amount;
+    if (mode === 'AMT') amount = Math.round(Number(m.discountAmountMinor) || 0);
+    else {
+      // Exact: pct as the decimal it prints as (1.15, not 1.1499...), x subtotal / 100 in
+      // BigInt, half-up to the cent. Float math made 1.15% of $30.00 34c, not 35c.
+      // Mirrors pctOfMinor in src/proposals/analytics.ts.
+      var pm = /^(-?)(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$/i.exec(String(pct));
+      if (!pm) amount = pct > 0 ? subtotal : 0;
+      else {
+        var scale = (pm[3] || '').length - Number(pm[4] || 0);
+        var num = BigInt(pm[1] + pm[2] + (pm[3] || '')) * BigInt(Math.round(subtotal));
+        if (scale < 0) { num = num * BigInt(10) ** BigInt(-scale); scale = 0; }
+        var den = BigInt(100) * BigInt(10) ** BigInt(scale);
+        var neg = num < BigInt(0), mag = neg ? -num : num, q = mag / den;
+        if ((mag % den) * BigInt(2) >= den) q = q + BigInt(1);
+        amount = Number(neg ? -q : q);
+      }
+    }
     if (amount < 0) amount = 0;
     if (amount > subtotal) amount = subtotal;
     // The effective percentage is derived for display and reporting even on the
@@ -1276,7 +1296,7 @@
     pb = {
       proposalId: p.id, versionId: v.id, user: user, readOnly: true, orgName: orgName,
       title: p.title || '', number: p.number || '', version: v.version || 1,
-      meta: {}, stdNotes: [], lines: (v.items || []).map(function (it) { return normalizeLine(it); }),
+      meta: {}, stdNotes: [], lines: (v.items || []).map(function (it) { return normalizeLine(it, 0); }),
     };
     rfqData = null;
     var cov = null;
@@ -4119,14 +4139,18 @@
     return l.freightCalc !== 'YES';
   }
 
-  function normalizeLine(it) {
+  // missingQty: what a line with no quantity becomes. 1 for a line being added; 0 for a STORED line,
+  // because the server's totals (versionTotals, the price snapshot) count a stored line with no
+  // quantity as 0 — showing it as 1 here made the builder disagree with the snapshot and an
+  // unrelated save would then silently bill it.
+  function normalizeLine(it, missingQty) {
     var desc = it.description || '';
     var note = it.internalNote || '';
     if (!note && LEAKED_INTERNAL.some(function (re) { return re.test(desc); })) { note = desc; desc = ''; }
     return {
       ref: it.ref || uid(), lineType: it.lineType || (it.isNote ? 'NOTE' : 'PRODUCT'), kind: it.kind || 'INCLUDED',
       productId: it.productId || null, sku: it.sku || '', name: it.name || '', description: desc,
-      quantity: it.quantity == null ? 1 : it.quantity, rateMinor: it.rateMinor || 0, costEach: it.costEach || 0, weightEach: it.weightEach || 0, group: it.group || '',
+      quantity: it.quantity == null ? (missingQty == null ? 1 : missingQty) : it.quantity, rateMinor: it.rateMinor || 0, costEach: it.costEach || 0, weightEach: it.weightEach || 0, group: it.group || '',
       optional: !!it.optional,
       delivery: it.delivery || '', returnable: it.returnable || '', addlFreight: it.addlFreight || '', freightCalc: it.freightCalc || '',
       tpFreightMinor: it.tpFreightMinor || 0, tpFreightLabel: it.tpFreightLabel || '',
@@ -4193,7 +4217,7 @@
     var metaSec = Array.isArray(secs) ? secs.filter(function (s) { return s && s.id === 'meta'; })[0] : null;
     if (metaSec && metaSec.data) meta = metaSec.data;
     var lines = hoistHardwareKit((version.items || []).map(function (it) {
-      return normalizeLine(it);
+      return normalizeLine(it, 0);
     }));
     var propDate = meta.proposalDate || todayISO();
     // Standard notes come from Administration → Standard proposal notes; the
@@ -4502,7 +4526,8 @@
    */
   function isSectionHeader(l) { return l && (l.lineType === 'GROUP' || l.lineType === 'SUBGROUP'); }
   /** Bundle components are the '— ' rows that must stay under their parent line. */
-  function isBundleChild(l) { return !!l && l.lineType === 'PRODUCT' && /^—\s/.test(String(l.name || '')); }
+  // A row saved without a lineType is a PRODUCT, as everywhere else (and as the server's isBundleChild reads it).
+  function isBundleChild(l) { return !!l && (l.lineType || 'PRODUCT') === 'PRODUCT' && /^—\s/.test(String(l.name || '')); }
 
   /**
    * Extended revenue per line, with a bundle counted ONCE.

@@ -114,105 +114,118 @@ describe('proposal versions (PASS)', () => {
   }, 60_000);
 });
 
-describe('confirmed defects (it.fails)', () => {
-  it.fails(
-    'BUG: two simultaneous "new version" clicks surface a raw Prisma P2002 (500) instead of a clean result or 409',
-    async () => {
-      const p = await newProposal('race');
-      const settled = await Promise.allSettled(
-        Array.from({ length: 4 }, () => svc.createNewVersion(p.id, ACTOR)),
-      );
-      const { AppError } = await import('../../src/lib/errors.js');
-      for (const s of settled) {
-        if (s.status === 'rejected') expect(s.reason).toBeInstanceOf(AppError);
-      }
-    },
-    60_000,
-  );
+describe('fixed defects (formerly it.fails)', () => {
+  it('BUG: two simultaneous "new version" clicks surface a raw Prisma P2002 (500) instead of a clean result or 409', async () => {
+    const p = await newProposal('race');
+    const settled = await Promise.allSettled(
+      Array.from({ length: 4 }, () => svc.createNewVersion(p.id, ACTOR)),
+    );
+    const { AppError } = await import('../../src/lib/errors.js');
+    for (const s of settled) {
+      if (s.status === 'rejected') expect(s.reason).toBeInstanceOf(AppError);
+    }
+  }, 60_000);
 
-  it.fails(
-    'BUG: adding a version to an ACTIVE rule puts the unapproved definition live immediately',
-    async () => {
-      const key = `audit-min-${RUN}`;
-      const { id } = await rules.createRule(
-        {
-          key,
-          type: 'MIN_QUANTITY',
-          outcome: 'WARN',
-          target: { productId: 'A' },
-          params: { min: 2 },
-        },
-        ACTOR,
-      );
-      ruleIds.push(id);
-      await rules.activateRule(id, ACTOR);
+  it('BUG: adding a version to an ACTIVE rule puts the unapproved definition live immediately', async () => {
+    const key = `audit-min-${RUN}`;
+    const { id } = await rules.createRule(
+      {
+        key,
+        type: 'MIN_QUANTITY',
+        outcome: 'WARN',
+        target: { productId: 'A' },
+        params: { min: 2 },
+      },
+      ACTOR,
+    );
+    ruleIds.push(id);
+    await rules.activateRule(id, ACTOR);
+    await rules.addRuleVersion(
+      id,
+      {
+        key,
+        type: 'MIN_QUANTITY',
+        outcome: 'BLOCK',
+        target: { productId: 'A' },
+        params: { min: 50 },
+      },
+      ACTOR,
+      'draft change, not yet approved',
+    );
+    const live = (await rules.getActiveRuleDefs()).find((d) => d.id === id);
+    // Expected: still v1 (min 2, WARN) until someone approves v2.
+    expect(live?.params).toEqual({ min: 2 });
+  }, 60_000);
+
+  it('BUG: adding a version to an ACTIVE rule can introduce a dependency cycle (cycle check only runs on activate)', async () => {
+    const a = `AUD${RUN}A`,
+      b = `AUD${RUN}B`;
+    const r1 = await rules.createRule(
+      {
+        key: `audit-req-ab-${RUN}`,
+        type: 'REQUIRES',
+        outcome: 'BLOCK',
+        target: { productId: a },
+        params: { productId: b },
+      },
+      ACTOR,
+    );
+    const r2 = await rules.createRule(
+      {
+        key: `audit-req-bx-${RUN}`,
+        type: 'REQUIRES',
+        outcome: 'BLOCK',
+        target: { productId: b },
+        params: { productId: `AUD${RUN}X` },
+      },
+      ACTOR,
+    );
+    ruleIds.push(r1.id, r2.id);
+    await rules.activateRule(r1.id, ACTOR);
+    await rules.activateRule(r2.id, ACTOR);
+    let refused = false;
+    try {
       await rules.addRuleVersion(
-        id,
-        {
-          key,
-          type: 'MIN_QUANTITY',
-          outcome: 'BLOCK',
-          target: { productId: 'A' },
-          params: { min: 50 },
-        },
-        ACTOR,
-        'draft change, not yet approved',
-      );
-      const live = (await rules.getActiveRuleDefs()).find((d) => d.id === id);
-      // Expected: still v1 (min 2, WARN) until someone approves v2.
-      expect(live?.params).toEqual({ min: 2 });
-    },
-    60_000,
-  );
-
-  it.fails(
-    'BUG: adding a version to an ACTIVE rule can introduce a dependency cycle (cycle check only runs on activate)',
-    async () => {
-      const a = `AUD${RUN}A`,
-        b = `AUD${RUN}B`;
-      const r1 = await rules.createRule(
-        {
-          key: `audit-req-ab-${RUN}`,
-          type: 'REQUIRES',
-          outcome: 'BLOCK',
-          target: { productId: a },
-          params: { productId: b },
-        },
-        ACTOR,
-      );
-      const r2 = await rules.createRule(
+        r2.id,
         {
           key: `audit-req-bx-${RUN}`,
           type: 'REQUIRES',
           outcome: 'BLOCK',
           target: { productId: b },
-          params: { productId: `AUD${RUN}X` },
+          params: { productId: a },
         },
         ACTOR,
       );
-      ruleIds.push(r1.id, r2.id);
-      await rules.activateRule(r1.id, ACTOR);
-      await rules.activateRule(r2.id, ACTOR);
-      let refused = false;
-      try {
-        await rules.addRuleVersion(
-          r2.id,
-          {
-            key: `audit-req-bx-${RUN}`,
-            type: 'REQUIRES',
-            outcome: 'BLOCK',
-            target: { productId: b },
-            params: { productId: a },
-          },
-          ACTOR,
-        );
-      } catch {
-        refused = true;
-      }
-      const { findCycle, buildDependencyEdges } = await import('../../src/rules/graph.js');
-      const mine = (await rules.getActiveRuleDefs()).filter((d) => ruleIds.includes(d.id));
-      expect(refused || findCycle(buildDependencyEdges(mine)) === null).toBe(true);
-    },
-    60_000,
-  );
+    } catch {
+      refused = true;
+    }
+    const { findCycle, buildDependencyEdges } = await import('../../src/rules/graph.js');
+    const mine = (await rules.getActiveRuleDefs()).filter((d) => ruleIds.includes(d.id));
+    expect(refused || findCycle(buildDependencyEdges(mine)) === null).toBe(true);
+  }, 60_000);
+});
+
+describe('rule versions — the approved pointer (fix follow-up)', () => {
+  it('activating the new version is what puts it live, and the pointer follows', async () => {
+    const key = `audit-ptr-${RUN}`;
+    const def = (min: number, outcome: 'WARN' | 'BLOCK') => ({
+      key,
+      type: 'MIN_QUANTITY' as const,
+      outcome,
+      target: { productId: 'A' },
+      params: { min },
+    });
+    const { id } = await rules.createRule(def(2, 'WARN'), ACTOR);
+    ruleIds.push(id);
+    await rules.activateRule(id, ACTOR);
+    await rules.addRuleVersion(id, def(50, 'BLOCK'), ACTOR);
+    let live = (await rules.getActiveRuleDefs()).find((d) => d.id === id);
+    expect(live).toMatchObject({ version: 1, outcome: 'WARN', params: { min: 2 } });
+
+    await rules.activateRule(id, ACTOR);
+    live = (await rules.getActiveRuleDefs()).find((d) => d.id === id);
+    expect(live).toMatchObject({ version: 2, outcome: 'BLOCK', params: { min: 50 } });
+    const row = await prisma.rule.findUniqueOrThrow({ where: { id } });
+    expect(row.activeVersion).toBe(2);
+  }, 60_000);
 });

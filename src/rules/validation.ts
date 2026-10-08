@@ -100,5 +100,16 @@ export function validateRuleDefinition(input: RuleDefinitionInput): RuleValidati
     errors.push({ field: 'approvalRole', message: 'APPROVAL_REQUIRED needs an approvalRole' });
   }
 
+  // Every type except MISSING_INFORMATION is evaluated per matching line, and the
+  // engine skips such a rule outright when the target is empty — it would activate
+  // and then silently never fire. Refuse it here instead.
+  const t = input.target ?? {};
+  if (input.type !== 'MISSING_INFORMATION' && !(t.productId || t.categoryId || t.kind)) {
+    errors.push({
+      field: 'target',
+      message: `${input.type} needs a target (productId, categoryId or kind); with none it never fires`,
+    });
+  }
+
   return errors;
 }

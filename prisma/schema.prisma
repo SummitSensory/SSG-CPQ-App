@@ -954,6 +954,11 @@ model Rule {
   outcome        RuleOutcome
   status         RuleStatus    @default(DRAFT)
   currentVersion Int           @default(1)
+  // The approved version the engine evaluates. Moved only by activation, which runs
+  // the cycle check; currentVersion is the newest (possibly unapproved) draft. Null
+  // until a rule is first activated — getActiveRuleDefs falls back to currentVersion,
+  // which is what every rule evaluated before this column existed (0113 backfills it).
+  activeVersion  Int?
   description    String?
   createdById    String
   createdAt      DateTime      @default(now())
