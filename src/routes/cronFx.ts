@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { env } from '../config/env.js';
 import { isBearerSecret } from '../lib/secretCompare.js';
 import { logger } from '../lib/logger.js';
-import { sendAlert } from '../lib/alerts.js';
+import { deliverAlert } from '../lib/alerts.js';
 import { prisma } from '../lib/prisma.js';
 import { resolveRateForDate, type FxFallbackModeValue } from '../crossborder/rateService.js';
 import { writeCrossBorderSnapshot } from '../crossborder/snapshot.js';
@@ -68,6 +68,9 @@ export function registerFxCronRoutes(app: FastifyInstance): void {
         const resolution = await resolveRateForDate(asOf, {
           fallbackMode: (settings.fxFallbackMode as FxFallbackModeValue) ?? 'DRAFT_WITH_REVIEW',
           staleRateDays: settings.staleRateDays ?? 5,
+          // A morning page view may already have cached today → yesterday's rate;
+          // this run exists to replace it with what the Bank published today.
+          refreshIfBehind: true,
         });
         out.fallbackUsed = resolution.fallbackUsed;
         out.observation = resolution.observation;
@@ -77,7 +80,7 @@ export function registerFxCronRoutes(app: FastifyInstance): void {
         // way, today's rate did not come from the Bank, and that is worth someone's
         // attention rather than a line in a log nobody reads.
         if (resolution.fallbackUsed) {
-          sendAlert({
+          await deliverAlert({
             title: 'Bank of Canada exchange rate refresh failed',
             detail:
               resolution.warning ?? 'The daily USD/CAD refresh could not reach the Bank of Canada.',
@@ -118,7 +121,7 @@ export function registerFxCronRoutes(app: FastifyInstance): void {
         out.draftsUpdated = updated;
         if (failures.length) {
           out.draftFailures = failures;
-          sendAlert({
+          await deliverAlert({
             title: 'Daily exchange-rate refresh: some drafts failed to update',
             detail: `${failures.length} of ${drafts.length} Canadian draft(s) failed to recalculate with today's rate.`,
             fingerprint: 'cron:fx-refresh:draft-failures',
@@ -128,7 +131,7 @@ export function registerFxCronRoutes(app: FastifyInstance): void {
       } catch (err) {
         logger.error({ err }, 'cron: fx refresh failed');
         out.error = err instanceof Error ? err.message : String(err);
-        sendAlert({
+        await deliverAlert({
           title: 'Daily exchange-rate refresh crashed',
           detail: 'The /cron/fx-refresh job threw before it could finish.',
           err,

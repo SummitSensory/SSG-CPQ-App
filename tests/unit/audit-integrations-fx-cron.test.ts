@@ -41,6 +41,9 @@ vi.mock('../../src/lib/logger.js', () => ({
 vi.mock('../../src/lib/audit.js', () => ({ recordAudit: vi.fn() }));
 vi.mock('../../src/lib/alerts.js', () => ({
   sendAlert: (a: { title: string; fingerprint?: string }) => h.alerts.push(a),
+  deliverAlert: async (a: { title: string; fingerprint?: string }) => {
+    h.alerts.push(a);
+  },
 }));
 vi.mock('../../src/crossborder/snapshot.js', () => ({
   writeCrossBorderSnapshot: vi.fn(async () => ({ snapshotId: 'snap-1' })),
@@ -127,20 +130,17 @@ describe('/cron/fx-refresh', () => {
   // DESIGN CONFLICT / BUG: the resolution cache ("a date resolves once") pins today
   // to yesterday's observation if anything resolved today before the Bank
   // published, and the cron honours that cache — so its own purpose is defeated.
-  it.fails(
-    'BUG: stores today’s published rate even if a morning page view cached yesterday’s for today',
-    async () => {
-      h.cachedResolution = {
-        pair: 'USD/CAD',
-        forDate: new Date(`${h.todayIso}T00:00:00Z`),
-        observationDate: new Date(`${yesterday()}T00:00:00Z`),
-        rate: '1.3500',
-        source: 'BANK_OF_CANADA',
-        resolvedAt: new Date(),
-      };
-      const res = await app.inject({ method: 'GET', url: '/cron/fx-refresh', headers: AUTH });
-      const out = res.json<{ observation: { observationDate: string; rate: string } }>();
-      expect(out.observation.observationDate).toBe(h.todayIso);
-    },
-  );
+  it('BUG: stores today’s published rate even if a morning page view cached yesterday’s for today', async () => {
+    h.cachedResolution = {
+      pair: 'USD/CAD',
+      forDate: new Date(`${h.todayIso}T00:00:00Z`),
+      observationDate: new Date(`${yesterday()}T00:00:00Z`),
+      rate: '1.3500',
+      source: 'BANK_OF_CANADA',
+      resolvedAt: new Date(),
+    };
+    const res = await app.inject({ method: 'GET', url: '/cron/fx-refresh', headers: AUTH });
+    const out = res.json<{ observation: { observationDate: string; rate: string } }>();
+    expect(out.observation.observationDate).toBe(h.todayIso);
+  });
 });

@@ -267,6 +267,27 @@ export async function getAccessToken(
     );
   }
 
+  // Single-flight within this instance: Intuit's refresh tokens are single-use, so
+  // two callers refreshing at once would both spend the same one.
+  const key = `${environment}:${realmId}`;
+  const running = refreshesInFlight.get(key);
+  if (running) return running;
+  const refresh = refreshAccessToken(realmId, environment, conn, fetchImpl).finally(() => {
+    refreshesInFlight.delete(key);
+  });
+  refreshesInFlight.set(key, refresh);
+  return refresh;
+}
+
+/** Realm → the refresh currently running for it in this process. */
+const refreshesInFlight = new Map<string, Promise<string>>();
+
+async function refreshAccessToken(
+  realmId: string,
+  environment: ReturnType<typeof qboEnvironment>,
+  conn: { refreshTokenEnc: string; connectedById: string },
+  fetchImpl: typeof fetch,
+): Promise<string> {
   try {
     const t = await tokenRequest(
       new URLSearchParams({
@@ -278,7 +299,28 @@ export async function getAccessToken(
     await persist(realmId, conn.connectedById, t);
     return t.access_token;
   } catch (err) {
-    if (err instanceof QboAuthError) await deactivate(realmId, err.message);
+    if (err instanceof QboAuthError) {
+      /*
+       * Before deactivating, look again. Another instance (or a caller that read
+       * the row just before this one's refresh landed) may have refreshed with the
+       * same token a moment earlier — Intuit then answers OUR request
+       * invalid_grant, although the connection is perfectly healthy and the
+       * winner's fresh pair is already stored. Use it rather than forcing a
+       * reconnect on every QuickBooks screen.
+       */
+      const fresh = await prisma.qboConnection.findUnique({
+        where: { realmId_environment: { realmId, environment } },
+      });
+      if (
+        fresh?.isActive &&
+        fresh.refreshTokenEnc !== conn.refreshTokenEnc &&
+        fresh.accessTokenExpiresAt.getTime() - Date.now() > 60_000
+      ) {
+        logger.info({ realmId }, 'QuickBooks refresh lost a race; using the winner’s token');
+        return decryptToken(fresh.accessTokenEnc);
+      }
+      await deactivate(realmId, err.message);
+    }
     throw err;
   }
 }

@@ -64,6 +64,15 @@ export interface ResolveOptions {
   provider?: ExchangeRateProvider;
   fallbackMode: FxFallbackModeValue;
   staleRateDays: number;
+  /**
+   * Ask the provider again when the cached resolution for this date points at an
+   * EARLIER observation. Normal page views leave this off — a date resolves once,
+   * so a proposal's rate does not move under the rep mid-day. The nightly FX cron
+   * turns it on: a page view at 9 am caches "today → yesterday's rate" before the
+   * Bank publishes, and without this the cron would read that cache and stamp
+   * yesterday's rate on every draft, defeating its only purpose.
+   */
+  refreshIfBehind?: boolean;
 }
 
 /** A calendar date at UTC midnight, which is how the DATE columns are written. */
@@ -112,7 +121,8 @@ export async function resolveRateForDate(
   const cached = await prisma.exchangeRateResolution.findUnique({
     where: { pair_forDate: { pair, forDate: dateOnly(asOf) } },
   });
-  if (cached) {
+  const cachedIsBehind = cached ? toIso(cached.observationDate) < asOf : false;
+  if (cached && !(opts.refreshIfBehind && cachedIsBehind)) {
     return clean({
       pair,
       rate: String(cached.rate),

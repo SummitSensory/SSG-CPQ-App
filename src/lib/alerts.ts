@@ -27,6 +27,8 @@ const RESEND_URL = 'https://api.resend.com/emails';
 
 /** Fingerprint → when we last sent it. In-memory, so per warm instance. */
 const lastSent = new Map<string, number>();
+/** Fingerprints whose delivery is in flight right now, so a burst sends once. */
+const inFlight = new Set<string>();
 const DEDUPE_MS = 60 * 60 * 1000;
 
 /**
@@ -37,16 +39,26 @@ const DEDUPE_MS = 60 * 60 * 1000;
  * to add a dependency.
  */
 function shouldSend(fingerprint: string): boolean {
-  const now = Date.now();
   const prev = lastSent.get(fingerprint);
-  if (prev && now - prev < DEDUPE_MS) return false;
+  if (prev && Date.now() - prev < DEDUPE_MS) return false;
+  return !inFlight.has(fingerprint);
+}
+
+/**
+ * Count an alert as sent only once Resend has ACCEPTED it. Recording it before the
+ * POST meant a 5xx/429/network failure suppressed every retry of that fingerprint for
+ * an hour — and the one-shot business notifications (esign viewed / declined /
+ * completed) have already claimed their own guard column by then, so the
+ * notification was lost for good.
+ */
+function markSent(fingerprint: string): void {
+  const now = Date.now();
   lastSent.set(fingerprint, now);
   // Bounded: a long-lived instance seeing many distinct faults must not grow this
   // map without limit.
   if (lastSent.size > 200) {
     for (const [k, t] of lastSent) if (now - t > DEDUPE_MS) lastSent.delete(k);
   }
-  return true;
 }
 
 export interface AlertInput {
@@ -86,10 +98,27 @@ export function isAlertingConfigured(): boolean {
 
 /**
  * Send an alert. Fire-and-forget by design — callers do not await it, and it
- * swallows its own failures.
+ * swallows its own failures. Right for the fault path, where the request must not
+ * wait on Resend.
  */
 export function sendAlert(input: AlertInput): void {
-  void deliver(input).catch((err) => logger.error({ err }, 'alert delivery threw'));
+  void deliverAlert(input);
+}
+
+/**
+ * Send an alert and wait for the attempt to finish. Never rejects.
+ *
+ * For callers that run on a serverless function which may be frozen the moment its
+ * response is sent — a cron sweep, a webhook — and for business notifications whose
+ * caller has already claimed a one-shot guard: a fire-and-forget POST there can be
+ * frozen mid-flight and never complete.
+ */
+export async function deliverAlert(input: AlertInput): Promise<void> {
+  try {
+    await deliver(input);
+  } catch (err) {
+    logger.error({ err }, 'alert delivery threw');
+  }
 }
 
 async function deliver(input: AlertInput): Promise<void> {
@@ -111,7 +140,23 @@ async function deliver(input: AlertInput): Promise<void> {
       .slice(0, 16);
 
   if (!shouldSend(fingerprint)) return;
+  inFlight.add(fingerprint);
+  try {
+    await post(input, to, fingerprint, err, message, name, code);
+  } finally {
+    inFlight.delete(fingerprint);
+  }
+}
 
+async function post(
+  input: AlertInput,
+  to: string[],
+  fingerprint: string,
+  err: unknown,
+  message: string,
+  name: string,
+  code: string,
+): Promise<void> {
   const stack =
     err instanceof Error && err.stack ? err.stack.split('\n').slice(0, 12).join('\n') : '';
   const body = [
@@ -149,7 +194,9 @@ async function deliver(input: AlertInput): Promise<void> {
   });
   if (!res.ok) {
     logger.error({ status: res.status, title: input.title }, 'alert email rejected by Resend');
+    return;
   }
+  markSent(fingerprint);
 }
 
 /**

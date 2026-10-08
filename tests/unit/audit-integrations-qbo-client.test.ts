@@ -98,7 +98,7 @@ describe('QuickBooks client: non-idempotent POSTs on a 5xx', () => {
   // BUG: request() retries ANY POST on 5xx. For /send there is no requestid and no
   // SyncToken — a gateway 502/504 after Intuit already emailed the invoice means
   // the retry emails the customer a second time.
-  it.fails('BUG: sendDocument is not blindly re-sent after a 5xx', async () => {
+  it('BUG: sendDocument is not blindly re-sent after a 5xx', async () => {
     const f = recorder([json({}, 504), json({ Invoice: { Id: '9' } })]);
     await sendDocument('realm', 'invoice', '9', 'ap@customer.example', f).catch(() => undefined);
     expect(calls.filter((u) => u.includes('/send'))).toHaveLength(1);
@@ -107,23 +107,20 @@ describe('QuickBooks client: non-idempotent POSTs on a 5xx', () => {
   // BUG: same retry path for a sparse update. If the first POST applied but the
   // response was a 5xx, the retry carries the now-stale SyncToken and QuickBooks
   // answers 5010 — the caller is told the update FAILED although it succeeded.
-  it.fails(
-    'BUG: a 5xx on update does not end as a misleading stale-token (5010) failure',
-    async () => {
-      const f = recorder([
-        json({}, 503),
-        json({ Fault: { Error: [{ code: '5010', Message: 'Stale Object Error' }] } }, 400),
-      ]);
-      const err = await update(
-        'realm',
-        'invoice',
-        { Id: '9', SyncToken: '0', PrivateNote: 'x' },
-        f,
-      ).then(
-        () => null,
-        (e: unknown) => e as { faultCode?: string },
-      );
-      expect(err?.faultCode).not.toBe('5010');
-    },
-  );
+  it('BUG: a 5xx on update does not end as a misleading stale-token (5010) failure', async () => {
+    const f = recorder([
+      json({}, 503),
+      json({ Fault: { Error: [{ code: '5010', Message: 'Stale Object Error' }] } }, 400),
+    ]);
+    const err = await update(
+      'realm',
+      'invoice',
+      { Id: '9', SyncToken: '0', PrivateNote: 'x' },
+      f,
+    ).then(
+      () => null,
+      (e: unknown) => e as { faultCode?: string },
+    );
+    expect(err?.faultCode).not.toBe('5010');
+  });
 });

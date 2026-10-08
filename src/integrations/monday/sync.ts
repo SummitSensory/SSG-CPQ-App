@@ -3,7 +3,9 @@ import { prisma } from '../../lib/prisma.js';
 import { env, isMondayPushConfigured } from '../../config/env.js';
 import { logger } from '../../lib/logger.js';
 import { createItem, updateItem } from './client.js';
+import type { OpportunityStage } from '@prisma/client';
 import { toColumnValues, STATUS_TO_STAGE, COLUMN, type SyncableOpportunity } from './mapping.js';
+import { toStage } from './crmMapping.js';
 import { findLink, findByExternalId, upsertLink, markLinkState } from './links.js';
 import { decideInbound } from './conflict.js';
 
@@ -57,6 +59,53 @@ export async function pushOpportunity(opportunityId: string): Promise<void> {
   }
 }
 
+/**
+ * The CRM stage a monday Deal Phase label means, for the live webhook.
+ *
+ * The exact label we write outbound (STAGE_TO_STATUS) wins. Anything else goes
+ * through the same tolerant `toStage` the CRM importer uses, so a deal moved to
+ * "Closed Won" on the board lands as CLOSED_WON whether it arrived by import or by
+ * webhook. One exception: `toStage` answers PROSPECT for a label it does not
+ * recognise at all, and a live event must never demote a real deal because
+ * someone added an unfamiliar label — an unrecognised label is ignored.
+ */
+export function inboundStage(label: string | undefined): OpportunityStage | undefined {
+  if (!label) return undefined;
+  const exact = STATUS_TO_STAGE[label];
+  if (exact) return exact;
+  const fuzzy = toStage(label);
+  if (fuzzy === 'PROSPECT' && !/prospect|lead/i.test(label)) return undefined;
+  return fuzzy;
+}
+
+/**
+ * The dedupe key for an inbound webhook event.
+ *
+ * monday's `triggerUuid` when it sends one. Without it the key used to be
+ * `${pulseId}-${columnId}-${Date.now()}`, which is unique per DELIVERY — so a
+ * redelivered event was never recognised as a duplicate. The fallback is now a hash
+ * of the event's own content (item, column, old and new value, and monday's own
+ * trigger/change time), identical on every redelivery of the same event.
+ */
+export function mondayEventId(ev: Record<string, unknown>): string {
+  const uuid = ev.triggerUuid;
+  if (typeof uuid === 'string' && uuid) return uuid;
+  const material = JSON.stringify([
+    ev.boardId ?? null,
+    ev.pulseId ?? null,
+    ev.columnId ?? null,
+    ev.value ?? null,
+    ev.previousValue ?? null,
+    ev.triggerTime ?? null,
+    ev.changedAt ?? null,
+  ]);
+  return `synth:${createHash('sha256').update(material).digest('hex').slice(0, 40)}`;
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  return (err as { code?: string } | null)?.code === 'P2002';
+}
+
 export interface MondayChange {
   eventId: string;
   itemId: string;
@@ -82,10 +131,35 @@ export async function applyInboundChange(
         status: 'received',
       },
     });
-  } catch {
-    return 'duplicate'; // eventId already processed
+  } catch (err) {
+    // Only a unique violation on eventId means "already processed". Any other
+    // failure (the database unreachable) must surface, so monday retries.
+    if (isUniqueViolation(err)) return 'duplicate';
+    throw err;
   }
 
+  try {
+    return await applyClaimed(change);
+  } catch (err) {
+    /*
+     * Release the claim. The webhook answers 500, monday redelivers with the SAME
+     * triggerUuid, and without this the retry was answered 'duplicate' — the stage
+     * change was lost for good. Releasing makes the failed event retryable; if the
+     * release itself fails the original error still propagates.
+     */
+    await prisma.integrationSyncLog
+      .deleteMany({ where: { eventId: change.eventId, status: 'received' } })
+      .catch((releaseErr: unknown) =>
+        logger.error(
+          { err: releaseErr, eventId: change.eventId },
+          'monday inbound: could not release the claim on a failed event',
+        ),
+      );
+    throw err;
+  }
+}
+
+async function applyClaimed(change: MondayChange): Promise<'applied' | 'ignored' | 'conflict'> {
   const link = await findByExternalId(change.itemId);
   if (!link || link.entity !== ENTITY) return 'ignored';
 
@@ -120,13 +194,8 @@ export async function applyInboundChange(
   }
 
   const data: Record<string, unknown> = {};
-  if (
-    field === 'opportunity.stage' &&
-    change.newStatusLabel &&
-    STATUS_TO_STAGE[change.newStatusLabel]
-  ) {
-    data.stage = STATUS_TO_STAGE[change.newStatusLabel];
-  }
+  const stage = field === 'opportunity.stage' ? inboundStage(change.newStatusLabel) : undefined;
+  if (stage) data.stage = stage;
   if (Object.keys(data).length === 0) return 'ignored';
 
   const updated = await prisma.opportunity.update({ where: { id: link.entityId }, data });

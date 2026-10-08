@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { env } from '../config/env.js';
 import { isBearerSecret } from '../lib/secretCompare.js';
 import { logger } from '../lib/logger.js';
-import { sendAlert } from '../lib/alerts.js';
+import { deliverAlert } from '../lib/alerts.js';
 import { sendEsignReminders } from '../integrations/docuseal/notifications.js';
 import { repairStuckSignedCopies } from '../integrations/docuseal/service.js';
 
@@ -38,7 +38,7 @@ export function registerEsignReminderCronRoutes(app: FastifyInstance): void {
       } catch (err) {
         logger.error({ err }, 'cron: esign reminder sweep failed');
         out.reminders = { error: String(err) };
-        sendAlert({
+        await deliverAlert({
           title: 'Daily esign reminder sweep crashed',
           detail: 'The /cron/esign-reminders job threw before it could finish reminders.',
           err,
@@ -51,7 +51,7 @@ export function registerEsignReminderCronRoutes(app: FastifyInstance): void {
       } catch (err) {
         logger.error({ err }, 'cron: signed-copy repair sweep failed');
         out.signedCopyRepair = { error: String(err) };
-        sendAlert({
+        await deliverAlert({
           title: 'Signed-copy repair sweep crashed',
           detail: 'The /cron/esign-reminders job threw before it could finish the repair sweep.',
           err,
