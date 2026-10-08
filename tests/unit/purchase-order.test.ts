@@ -288,6 +288,7 @@ describe('sendPurchaseOrder', () => {
       freightMinor: null,
       noFreightCharge: false,
       lines: [{ sku: 'X' }],
+      order: { status: 'IN_PROGRESS' },
     };
     await expect(
       sendPurchaseOrder('po1', { to: 'orders@vendor.com', subject: 'PO', body: '' }, 'u1'),

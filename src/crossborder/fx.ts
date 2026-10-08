@@ -20,6 +20,7 @@
  * already-rounded CAD unit price.
  */
 import { logger } from '../lib/logger.js';
+import { ValidationError } from '../lib/errors.js';
 
 /** The series that gives Canadian dollars per one US dollar. */
 export const FX_SERIES = 'FXUSDCAD';
@@ -198,9 +199,14 @@ export interface ParsedRate {
 }
 
 export function parseRate(rate: string): ParsedRate {
-  if (!/^\d+(\.\d+)?$/.test(rate)) throw new Error(`Invalid exchange rate: ${rate}`);
+  // ValidationError (400) rather than a bare Error or, for a zero rate, the
+  // RangeError bigint division by zero throws in convertCadMinorToUsd.
+  if (!/^\d+(\.\d+)?$/.test(rate)) throw new ValidationError(`Invalid exchange rate: ${rate}`);
   const [whole, frac = ''] = rate.split('.');
-  return { digits: BigInt(whole + frac), scale: frac.length };
+  const digits = BigInt(whole + frac);
+  if (digits === 0n)
+    throw new ValidationError(`Invalid exchange rate: ${rate} (it must be greater than zero)`);
+  return { digits, scale: frac.length };
 }
 
 /** Convert authoritative USD minor units to CAD minor units at `rate`. */

@@ -193,7 +193,8 @@ async function partInfo(parts: string[]): Promise<Map<string, PartInfo>> {
 
   const [skus, products] = await Promise.all([
     prisma.sku.findMany({
-      where: { part: { in: parts } },
+      // Part numbers arrive upper-cased (see key()); the catalog may hold them in any case.
+      where: { part: { in: parts, mode: 'insensitive' } },
       select: {
         part: true,
         description: true,
@@ -203,7 +204,7 @@ async function partInfo(parts: string[]): Promise<Map<string, PartInfo>> {
       },
     }),
     prisma.product.findMany({
-      where: { sku: { in: parts } },
+      where: { sku: { in: parts, mode: 'insensitive' } },
       select: { id: true, sku: true, name: true, weightOz: true },
     }),
   ]);
@@ -221,6 +222,9 @@ async function partInfo(parts: string[]): Promise<Map<string, PartInfo>> {
       ? prisma.productSourcing.findMany({
           where: { productId: { in: productIds } },
           select: { productId: true, manufacturer: { select: { name: true } } },
+          // Deterministic: a primary source first, then the oldest — the same rule
+          // lock-time resolveCatalogRefs uses.
+          orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }, { id: 'asc' }],
         })
       : Promise.resolve([] as Array<{ productId: string; manufacturer: { name: string } | null }>),
   ]);
@@ -274,7 +278,8 @@ function explode(
       sku: c.childPart,
       name: i?.name || c.childPart,
       // The parent's quantity multiplies through: two kits means twice the pieces.
-      quantity: c.quantity * (seed.quantity || 1),
+      // Zero parents means zero pieces; only a missing quantity counts as one.
+      quantity: c.quantity * (seed.quantity ?? 1),
       // Hardware components keep their flag so the sheet can style/group them as
       // hardware; a generic kit's components are ordinary lines under their own vendor.
       isHardwareComponent: !!seed.isHardwareComponent,

@@ -641,7 +641,14 @@ export function registerBomRoutes(app: FastifyInstance): void {
 
     const lines = await prisma.procurementLine.findMany({
       where: { orderId: id },
-      select: { id: true, sku: true, vendor: true, powderColor: true, powderColorCode: true },
+      select: {
+        id: true,
+        sku: true,
+        vendor: true,
+        powderColor: true,
+        powderColorCode: true,
+        isHardwareComponent: true,
+      },
     });
 
     // Both filters may be given; a part then has to satisfy each.
@@ -651,6 +658,9 @@ export function registerBomRoutes(app: FastifyInstance): void {
       const v = (l.vendor && l.vendor.trim()) || UNASSIGNED;
       const part = (l.sku || '').toUpperCase();
       if (locked.has(v)) return false;
+      // Fasteners exploded out of a hardware kit are never painted, even when they
+      // share a part number with a painted part (the portal review skips them too).
+      if (l.isHardwareComponent) return false;
       if (vendor && v !== vendor) return false;
       if (inGroup.size && !(part && inGroup.has(part))) return false;
       if (wanted.size && !(part && wanted.has(part))) return false;

@@ -19,6 +19,7 @@ import {
 import { applyPercent } from '../../src/crossborder/tax.js';
 import { tierFor, percentOfMinor } from '../../src/crossborder/brokerFees.js';
 import { resolveJurisdiction } from '../../src/crossborder/jurisdiction.js';
+import { ValidationError } from '../../src/lib/errors.js';
 
 /**
  * Audit (handoff domain): pure functions on the accepted-order -> BOM -> PO -> freight
@@ -77,7 +78,7 @@ describe('audit: procurementFromItems (accepted proposal -> procurement seeds)',
     expect(seed?.sku).toBeNull();
   });
 
-  it.fails('BUG: a kit line at quantity 0 still orders one kit worth of components', () => {
+  it('FIXED: a kit line at quantity 0 still orders one kit worth of components', () => {
     // A non-kit line at quantity 0 seeds quantity 0; a kit at quantity 0 seeds the
     // full per-kit count, because `(qty || 1)` treats 0 as 1 (src/handoff/lock.ts:262).
     const seeds = procurementFromItems([
@@ -86,7 +87,7 @@ describe('audit: procurementFromItems (accepted proposal -> procurement seeds)',
     expect(seeds.reduce((a, s) => a + s.quantity, 0)).toBe(0);
   });
 
-  it.fails('BUG: a NOTE / GROUP row whose kind defaulted to INCLUDED becomes a BOM line', () => {
+  it('FIXED: a NOTE / GROUP row whose kind defaulted to INCLUDED becomes a BOM line', () => {
     // The builder normalises legacy rows with `kind: it.kind || 'INCLUDED'` even when
     // lineType is NOTE (public/app.js:4127). procurementFromItems filters on `kind`
     // alone (src/handoff/lock.ts:232), so such a row reaches the purchasing list as an
@@ -270,7 +271,7 @@ describe('audit: freight — # of Welded Legs (A-2245 + A-2246)', () => {
     expect(weldedLegsLabel(adventureFacts(null))).toBe('0');
   });
 
-  it.fails('BUG: a frame kit at quantity 0 still reports its component legs', () => {
+  it('FIXED: a frame kit at quantity 0 still reports its component legs', () => {
     // Same `(qty || 1)` pattern as procurementFromItems (src/routes/freight.ts:161).
     const facts = adventureFacts([
       { sku: 'FRAME', quantity: 0, components: [{ part: 'A-2245', qty: 4 }] },
@@ -287,6 +288,20 @@ describe('audit: cross-border money math (CAD/USD, tax, broker tiers)', () => {
     expect(convertUsdMinorToCad(-1n, '1.5')).toBe(-2n); // away from zero
     expect(parseRate('1.3655')).toEqual({ digits: 13655n, scale: 4 });
     expect(() => parseRate('1,36')).toThrow();
+  });
+
+  it('a zero (or malformed) rate is a 400 ValidationError, not a RangeError from bigint / 0', () => {
+    for (const bad of ['0', '0.0000', '1,36', '']) {
+      let err: unknown;
+      try {
+        convertCadMinorToUsd(100n, bad);
+      } catch (e) {
+        err = e;
+      }
+      expect(err, bad).toBeInstanceOf(ValidationError);
+      expect((err as ValidationError).statusCode).toBe(400);
+    }
+    expect(() => convertUsdMinorToCad(100n, '0')).toThrow(ValidationError);
   });
 
   it('CAD->USD is the inverse to within one cent', () => {

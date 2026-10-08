@@ -23,6 +23,10 @@ import { ensureSections } from './bomSections.js';
  *      stays, because that history is the record of what was asked and when. A section
  *      with nothing in it and nothing behind it is removed, since an empty vendor block
  *      on the order page is only clutter.
+ *
+ * And some lines are never candidates at all: a second-vendor line (secondaryOfSku)
+ * or a free-issue line, whose vendor differs from the manufacturer on purpose, and
+ * any line on a CANCELLED or COMPLETE order.
  */
 
 export interface VendorReassignSkip {
@@ -62,7 +66,16 @@ export async function reassignSkuVendor(
   if (!sku || !target) return null;
 
   const lines = await prisma.procurementLine.findMany({
-    where: { sku: { equals: sku, mode: 'insensitive' } },
+    where: {
+      sku: { equals: sku, mode: 'insensitive' },
+      // A second-vendor line (powder coater, receiving note) and a free-issue line sit
+      // with a vendor OTHER than the part's manufacturer on purpose; re-sourcing the
+      // part must not drag them onto the new manufacturer.
+      secondaryOfSku: null,
+      freeIssue: false,
+      // Only live jobs: a cancelled or completed order is a closed record.
+      order: { status: { notIn: ['CANCELLED', 'COMPLETE'] } },
+    },
     select: {
       id: true,
       vendor: true,
