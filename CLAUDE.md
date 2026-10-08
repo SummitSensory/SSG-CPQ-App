@@ -211,8 +211,9 @@ file handling or debugging.
 
 **Database migrations — read `docs/database-migrations.md` before any
 schema change.** `prisma migrate dev` does not work in this repo (its shadow
-database can't replay the migration history) and every migration from
-roughly `0029` onward is hand-written, guarded SQL. To make a schema change:
+database can't replay the migration history). Migrations from roughly `0029`
+onward are hand-written SQL, consistently guarded from `0076` onward — write
+every new one guarded. To make a schema change:
 
 1. Edit `prisma/schema.prisma`.
 2. `pnpm db:new <name> --guard` to generate the migration from the diff.
