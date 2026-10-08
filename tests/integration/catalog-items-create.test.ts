@@ -20,8 +20,9 @@ vi.mock('../../src/lib/prisma.js', () => ({
         role: String(where.id).replace(/^user-/, ''),
       }),
     },
-    product: { findUnique: async () => null },
-    sku: { findUnique: async () => null },
+    // findFirst: the duplicate check is case-insensitive.
+    product: { findUnique: async () => null, findFirst: async () => null },
+    sku: { findUnique: async () => null, findFirst: async () => null },
     productCategory: { findFirst: async () => ({ id: 'cat-1' }) },
     manufacturer: { findFirst: async () => null, findMany: async () => [] },
     auditLog: { create: async () => ({}) },

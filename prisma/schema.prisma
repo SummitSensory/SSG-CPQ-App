@@ -549,6 +549,7 @@ model ProductCategory {
 
   @@index([productLineId, tierLevel])
   @@index([parentId, sortOrder])
+  @@index([productId])
 }
 
 model ProductFamily {
@@ -1587,6 +1588,7 @@ model Sku {
   @@index([category])
   @@index([active])
   @@index([overrideAllowed])
+  @@index([manufacturer])
 }
 
 /// One line of a part's build: `parentPart` is made up of `quantity` × `childPart`.
@@ -2203,6 +2205,8 @@ model ProcurementLine {
 
   @@index([orderId])
   @@index([invoicedAt])
+  @@index([vendor])
+  @@index([sku])
 }
 
 // Operational requirements by category (production, shipping, install, etc.).
@@ -2621,6 +2625,7 @@ model PurchaseOrder {
 
   @@unique([orderId, vendor, sequence])
   @@index([orderId])
+  @@index([manufacturerId])
 }
 
 model PurchaseOrderLine {
@@ -2756,6 +2761,7 @@ model FreightRfq {
   @@index([versionId])
   @@index([organizationId])
   @@index([status])
+  @@index([manufacturerId])
 }
 
 /// One product line on the RFQ. Included by default; a rep unticks what should

@@ -17,8 +17,20 @@ creates the whole schema as it stood at the time, and `0001_init` through roughl
 against a real database, that was fine. Replayed from empty, the second `CREATE TYPE
 "Role"` fails.
 
-This is why every migration from about `0029` onward is hand-written, guarded SQL
-rather than Prisma's generated output.
+This is why migrations are hand-written rather than Prisma's generated output from
+about `0029` onward. They are not all **guarded**, though: `0029`–`0075` are largely
+plain `CREATE TABLE` / `ADD COLUMN` / `INSERT` with no `IF NOT EXISTS` or
+`ON CONFLICT`, and consistent guarding only starts at `0076`. Those older files are
+already applied in production and must stay as they are (see below), so
+`tests/unit/audit-catalog-migrations.test.ts` pins the exact list of unguarded legacy
+migrations and fails if any **new** migration adds an unguarded statement.
+
+One practical consequence: on a database bootstrapped from empty,
+`scripts/migrate-deploy.mjs` marks a legacy migration resolved when it collides with
+something `0000_baseline` already built — which also skips any seed `INSERT` in it.
+`0115_catalog_indexes_and_seed_gap` re-seeds the reference rows `0029` would have
+written (powder brands, finance factors). A future migration that seeds rows should
+do so with `ON CONFLICT DO NOTHING`, in its own guarded statement.
 
 **Do not try to fix this by editing an old migration.** Prisma stores a checksum for
 every applied migration in the `_prisma_migrations` table. Change the file and

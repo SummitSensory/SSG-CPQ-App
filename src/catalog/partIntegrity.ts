@@ -90,8 +90,39 @@ export async function checkPartIntegrity(prisma: PrismaClient): Promise<Integrit
     }),
   ]);
 
-  const skuByPart = new Map(skus.map((s) => [key(s.part), s]));
-  const productBySku = new Map(products.map((p) => [key(p.sku), p]));
+  /*
+   * Part numbers are joined trimmed and case-insensitively — "a-2207" in the tree and
+   * "A-2207 " in the price list are one part. But `Product.sku` and `Sku.part` are
+   * unique case-SENSITIVELY, so "abc-1" and "ABC-1" can also be two parts. Keying a
+   * single Map by the folded number used to let the second silently borrow the first
+   * one's priced row: an ACTIVE Product with no Sku of its own reported as clean.
+   *
+   * So every record is grouped by its folded number, a group holding more than one
+   * Product (or more than one Sku) is reported, and inside such a group the halves are
+   * paired on the exact (trimmed) spelling only.
+   */
+  const exact = (v: unknown): string => (v == null ? '' : String(v)).trim();
+  const groupBy = <T>(rows: T[], k: (r: T) => string): Map<string, T[]> => {
+    const out = new Map<string, T[]>();
+    for (const r of rows) out.set(k(r), (out.get(k(r)) ?? []).concat(r));
+    return out;
+  };
+  const skusByKey = groupBy(skus, (s) => key(s.part));
+  const productsByKey = groupBy(products, (p) => key(p.sku));
+  const unambiguous = (k: string) =>
+    (skusByKey.get(k)?.length ?? 0) <= 1 && (productsByKey.get(k)?.length ?? 0) <= 1;
+  const pricedHalfOf = (p: (typeof products)[number]) => {
+    const k = key(p.sku);
+    const candidates = skusByKey.get(k) ?? [];
+    return unambiguous(k) ? candidates[0] : candidates.find((s) => exact(s.part) === exact(p.sku));
+  };
+  const hasCatalogHalf = (s: (typeof skus)[number]) => {
+    const k = key(s.part);
+    const candidates = productsByKey.get(k) ?? [];
+    return unambiguous(k)
+      ? candidates.length > 0
+      : candidates.some((p) => exact(p.sku) === exact(s.part));
+  };
   /*
    * No category lookup here any more. It existed for the rule that compared
    * `Sku.category` against the tree, which was removed once `dataset.ts` made clear those
@@ -138,8 +169,33 @@ export async function checkPartIntegrity(prisma: PrismaClient): Promise<Integrit
 
   const v: Violation[] = [];
 
+  /*
+   * Two records for what every case-insensitive lookup treats as one part number. A
+   * WARNING on its own — each may be a whole part — but nothing that matches a part
+   * number loosely (order lines, colour specs, kit components) can tell them apart, and
+   * the half-part rules below then judge each record on its exact spelling, so a twin
+   * with no priced row of its own is reported as product-without-sku.
+   */
+  for (const [label, groups, noun] of [
+    ['case-variant-products', productsByKey, 'catalog records'],
+    ['case-variant-skus', skusByKey, 'priced records'],
+  ] as const) {
+    for (const rows of groups.values()) {
+      if (rows.length < 2) continue;
+      const spellings = rows.map((r) => ('sku' in r ? r.sku : r.part));
+      v.push({
+        rule: label,
+        severity: 'warning',
+        part: spellings[0]!,
+        detail:
+          `${rows.length} ${noun} whose part numbers differ only in case or spacing: ` +
+          spellings.map((s) => `“${s}”`).join(', '),
+      });
+    }
+  }
+
   for (const p of products) {
-    const sku = skuByPart.get(key(p.sku));
+    const sku = pricedHalfOf(p);
 
     if (!sku) {
       // ACTIVE is what makes this dangerous rather than merely incomplete: the part
@@ -269,7 +325,7 @@ export async function checkPartIntegrity(prisma: PrismaClient): Promise<Integrit
   }
 
   for (const s of skus) {
-    if (!productBySku.has(key(s.part))) {
+    if (!hasCatalogHalf(s)) {
       v.push({
         rule: 'sku-without-product',
         severity: 'warning',
@@ -305,7 +361,12 @@ export function formatIntegrityReport(r: IntegrityReport, limit = 25): string {
   out.push(`${r.blocking} blocking, ${r.warnings} warning.`);
   out.push('');
   for (const rule of Object.keys(r.byRule).sort()) {
-    const rows = r.violations.filter((x) => x.rule === rule);
+    // Blocking rows first, and the rule is labelled BLOCKING if any row is: one rule can
+    // carry both (product-without-sku is blocking only for an ACTIVE product), and the
+    // label used to come from whichever row happened to be first.
+    const rows = r.violations
+      .filter((x) => x.rule === rule)
+      .sort((a, b) => Number(b.severity === 'blocking') - Number(a.severity === 'blocking'));
     const sev = rows[0]!.severity.toUpperCase();
     out.push(`${rule}  [${sev}]  ${rows.length}`);
     for (const x of rows.slice(0, limit)) out.push(`   ${x.part.padEnd(20)} ${x.detail}`);

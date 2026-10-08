@@ -418,14 +418,26 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
 
     // Both tables, because a part number already used by either one is taken. Checked
     // before the transaction so the message is about the clash rather than a constraint.
+    // Case-insensitive: the unique keys are case-sensitive, but every other join on part
+    // number (the integrity check, colour specs, order lines) is not, so "abc-1" beside
+    // "ABC-1" would be two parts the rest of the app cannot tell apart.
     const [dupeProduct, dupeSku] = await Promise.all([
-      prisma.product.findUnique({ where: { sku: part }, select: { id: true } }),
-      prisma.sku.findUnique({ where: { part }, select: { id: true } }),
+      prisma.product.findFirst({
+        where: { sku: { equals: part, mode: 'insensitive' } },
+        select: { sku: true },
+      }),
+      prisma.sku.findFirst({
+        where: { part: { equals: part, mode: 'insensitive' } },
+        select: { part: true },
+      }),
     ]);
-    if (dupeProduct || dupeSku)
+    if (dupeProduct || dupeSku) {
+      const taken = dupeProduct?.sku ?? dupeSku?.part ?? part;
       throw new ConflictError(
-        `Part number ${part} already exists in the catalog. Edit it from the catalog list instead.`,
+        `Part number ${part} already exists in the catalog` +
+          `${taken !== part ? ` (as “${taken}”)` : ''}. Edit it from the catalog list instead.`,
       );
+    }
 
     const category = await resolveCategoryRef(prisma, {
       categoryId: d.categoryId,
@@ -552,116 +564,81 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
     const d = parsed.data;
 
     const product = await prisma.product.findUnique({ where: { sku: part } });
-    let sku = await prisma.sku.findUnique({ where: { part } });
+    const existingSku = await prisma.sku.findUnique({ where: { part } });
+
+    /*
+     * ---- 1. Validate EVERYTHING. Nothing is written in this phase. ----
+     *
+     * A 400 has to mean nothing changed. This route used to check the buy link only
+     * after it had already re-sourced the part (Sku.manufacturer, ProductSourcing and
+     * the open orders), so a request refused for a typo in one field had quietly
+     * applied another.
+     */
     if (d.marginPercent !== undefined) {
       if (d.unitPriceMinor !== undefined)
         throw new ValidationError('Send a price or a margin, not both.');
       // The cost being saved in the same request, else the one on record.
       d.unitPriceMinor = priceFromMargin(
-        d.unitCostMinor ?? sku?.unitCostMinor ?? 0,
+        d.unitCostMinor ?? existingSku?.unitCostMinor ?? 0,
         d.marginPercent,
       );
     }
 
-    const needsSku =
-      d.unitPriceMinor !== undefined ||
-      d.unitCostMinor !== undefined ||
-      d.weightLbs !== undefined ||
-      d.proposalGroup !== undefined ||
-      d.active !== undefined ||
-      d.manufacturer !== undefined ||
-      d.overrideAllowed !== undefined ||
-      d.defaultQty !== undefined ||
-      d.freightMinor !== undefined ||
-      d.freightLabel !== undefined ||
-      d.productUrl !== undefined ||
-      d.requiresPowderColor !== undefined ||
-      d.packagingBag !== undefined ||
-      (d.name !== undefined && !product) ||
-      (d.category !== undefined && !product);
+    // Validated here as well as in the browser: a mistyped link becomes an
+    // unclickable "Buy" button on a purchasing document.
+    let productUrl: string | null | undefined;
+    if (d.productUrl !== undefined) {
+      const u = (d.productUrl || '').trim();
+      if (u && !/^https?:\/\//i.test(u))
+        throw new ValidationError('A buy link must start with http:// or https://');
+      productUrl = u || null;
+    }
+
     // A move the state machine refuses (ARCHIVED -> ACTIVE) is refused before any
     // field is written, not halfway through the save.
     if (d.active === true && product && product.status === 'ARCHIVED')
       throw new ConflictError(
         `${part} is archived, and an archived part cannot be made active again. Create a new part instead.`,
       );
-    if (!sku && needsSku) {
-      sku = await prisma.sku.create({
-        data: {
-          part,
-          description: d.name || product?.name || part,
-          category: (!product && d.category) || 'OTHER',
-          // A new priced row starts out agreeing with the catalog status.
-          active: !product || product.status === 'ACTIVE',
-        },
-      });
-    }
 
-    if (d.name !== undefined) {
-      if (product)
-        await prisma.product.update({ where: { id: product.id }, data: { name: d.name } });
-      if (sku) await prisma.sku.update({ where: { id: sku.id }, data: { description: d.name } });
-    }
+    /*
+     * The tree position, and ONLY the tree position, when a Product exists.
+     *
+     * I briefly changed this to also write `Sku.category`, believing the two held the
+     * same fact and drifted. They do not. `Product.categoryId` is where the part sits
+     * in the catalog tree; `Sku.category` is a part TYPE — FRAME, TROLLEY, ACCESSORY —
+     * used for catalog filtering and reporting, and the proposal heading is a third
+     * field again, `Sku.proposalGroup`. Writing the tree's section name over the type
+     * code destroyed a deliberate taxonomy on every section edit.
+     *
+     * So a part with a Product row keeps its type code, and a part with only a priced
+     * row uses `Sku.category` as the nearest thing it has to a classification.
+     */
+    const treeCategory =
+      product && (d.categoryId || d.category)
+        ? await resolveCategoryRef(prisma, { categoryId: d.categoryId, name: d.category })
+        : null;
 
-    if (d.category !== undefined || d.categoryId !== undefined) {
-      /*
-       * The tree position, and ONLY the tree position, when a Product exists.
-       *
-       * I briefly changed this to also write `Sku.category`, believing the two held the
-       * same fact and drifted. They do not. `Product.categoryId` is where the part sits
-       * in the catalog tree; `Sku.category` is a part TYPE — FRAME, TROLLEY, ACCESSORY —
-       * used for catalog filtering and reporting, and the proposal heading is a third
-       * field again, `Sku.proposalGroup`. Writing the tree's section name over the type
-       * code destroyed a deliberate taxonomy on every section edit.
-       *
-       * The `else if` is therefore right: a part with a Product row keeps its type code,
-       * and a part with only a priced row uses `Sku.category` as the nearest thing it has
-       * to a classification.
-       */
-      if (product && (d.categoryId || d.category)) {
-        const cat = await resolveCategoryRef(prisma, {
-          categoryId: d.categoryId,
-          name: d.category,
-        });
-        await prisma.product.update({ where: { id: product.id }, data: { categoryId: cat.id } });
-      } else if (sku && d.category !== undefined) {
-        await prisma.sku.update({
-          where: { id: sku.id },
-          data: { category: d.category || 'OTHER' },
-        });
-      }
-    }
-
+    /*
+     * The vendor: resolved, and refused if it is not on record.
+     *
+     * This used to do:
+     *
+     *     let mfr = await prisma.manufacturer.findFirst({ where: { name } });
+     *     if (!mfr) mfr = await prisma.manufacturer.create({ data: { name, slug } });
+     *
+     * — so a mistyped vendor name CREATED a manufacturer. The new row had no address,
+     * no contact, no payment terms and none of the Bill of Materials email defaults,
+     * and it then sat in the vendor list looking exactly as legitimate as the real
+     * ones. The part was sourced from a vendor that did not exist, and the first
+     * anyone knew was a purchase order with nowhere to send it.
+     *
+     * Matched case-insensitively, and the stored spelling wins, so "resilite" files the
+     * part under "Resilite" rather than creating a second spelling of one vendor.
+     */
+    let mfr: { id: string; name: string } | null = null;
     if (d.manufacturer !== undefined) {
       const name = (d.manufacturer || '').trim();
-
-      /*
-       * Resolved BEFORE anything is written, and refused if it is not on record.
-       *
-       * This block used to do:
-       *
-       *     let mfr = await prisma.manufacturer.findFirst({ where: { name } });
-       *     if (!mfr) mfr = await prisma.manufacturer.create({ data: { name, slug } });
-       *
-       * — so a mistyped vendor name CREATED a manufacturer. The new row had no address,
-       * no contact, no payment terms and none of the Bill of Materials email defaults,
-       * and it then sat in the vendor list looking exactly as legitimate as the real
-       * ones. The part was sourced from a vendor that did not exist, and the first
-       * anyone knew was a purchase order with nowhere to send it.
-       *
-       * The catalog screen now offers a dropdown, so it cannot send an unknown name. This
-       * closes the endpoint itself, which the CSV importer and any other caller also use.
-       *
-       * The check comes FIRST, before the Sku write below, on purpose. Refusing at the
-       * sourcing step — where the old creation happened — would leave Sku.manufacturer
-       * already updated and ProductSourcing not, which is the two-records-disagreeing
-       * state that `resync-order-vendors.ts` exists to repair. Nothing is written unless
-       * the vendor is real.
-       *
-       * Matched case-insensitively, and the stored spelling wins, so "resilite" files the
-       * part under "Resilite" rather than creating a second spelling of one vendor.
-       */
-      let mfr: { id: string; name: string } | null = null;
       if (name) {
         mfr = await prisma.manufacturer.findFirst({
           where: { name: { equals: name, mode: 'insensitive' } },
@@ -682,12 +659,6 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
           );
         }
       }
-      const canonical = mfr ? mfr.name : '';
-
-      // Checked BEFORE either write, same reasoning as the unknown-vendor check
-      // above: refusing after Sku.manufacturer already changed would leave it and
-      // ProductSourcing disagreeing, which is the two-records-out-of-step state
-      // resync-order-vendors.ts exists to repair, not something to create fresh.
       // ProductSourcing is many-to-many by design (schema.prisma); a part already
       // sourced from more than one vendor has no single row this field could mean,
       // so it's refused rather than silently collapsed to one.
@@ -703,77 +674,125 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
           );
         }
       }
+    }
+    const canonical = mfr ? mfr.name : '';
+
+    const needsSku =
+      d.unitPriceMinor !== undefined ||
+      d.unitCostMinor !== undefined ||
+      d.weightLbs !== undefined ||
+      d.proposalGroup !== undefined ||
+      d.active !== undefined ||
+      d.manufacturer !== undefined ||
+      d.overrideAllowed !== undefined ||
+      d.defaultQty !== undefined ||
+      d.freightMinor !== undefined ||
+      d.freightLabel !== undefined ||
+      d.productUrl !== undefined ||
+      d.requiresPowderColor !== undefined ||
+      d.packagingBag !== undefined ||
+      (d.name !== undefined && !product) ||
+      (d.category !== undefined && !product);
+
+    /*
+     * ---- 2. Write, in ONE transaction. ----
+     *
+     * Sku, Product, ProductSourcing, the status machine and the cost history either all
+     * land or none do. Re-assigning open orders to the new vendor (vendorReassign.ts)
+     * runs after the commit, on the vendor that was actually saved.
+     */
+    const result = await prisma.$transaction(async (tx) => {
+      let sku = existingSku;
+      if (!sku && needsSku) {
+        sku = await tx.sku.create({
+          data: {
+            // The catalog record's own spelling, so the two halves join exactly.
+            part: product?.sku ?? part.trim(),
+            description: d.name || product?.name || part.trim(),
+            category: (!product && d.category) || 'OTHER',
+            // A new priced row starts out agreeing with the catalog status.
+            active: !product || product.status === 'ACTIVE',
+          },
+        });
+      }
+
+      if (d.name !== undefined) {
+        if (product) await tx.product.update({ where: { id: product.id }, data: { name: d.name } });
+        if (sku) await tx.sku.update({ where: { id: sku.id }, data: { description: d.name } });
+      }
+
+      if (treeCategory && product) {
+        await tx.product.update({
+          where: { id: product.id },
+          data: { categoryId: treeCategory.id },
+        });
+      } else if (sku && d.category !== undefined) {
+        await tx.sku.update({ where: { id: sku.id }, data: { category: d.category || 'OTHER' } });
+      }
+
+      let reassignTo: string | null = null;
+      if (d.manufacturer !== undefined) {
+        if (sku) {
+          const before = sku.manufacturer ?? '';
+          await tx.sku.update({ where: { id: sku.id }, data: { manufacturer: canonical || null } });
+          // Carry the change onto the open orders that still list this part under the
+          // vendor it was bought from before — after the commit, below.
+          if (canonical && canonical !== before) reassignTo = canonical;
+        }
+        // Shared with the SKU CSV importer (src/catalog/partVendor.ts).
+        if (product) await syncPartSourcing(tx, product.sku, mfr);
+      }
 
       if (sku) {
-        const before = sku.manufacturer ?? '';
-        await prisma.sku.update({
-          where: { id: sku.id },
-          data: { manufacturer: canonical || null },
+        const money: Record<string, unknown> = {};
+        if (d.unitPriceMinor !== undefined) money.unitPriceMinor = d.unitPriceMinor;
+        if (d.unitCostMinor !== undefined) money.unitCostMinor = d.unitCostMinor;
+        if (d.weightLbs !== undefined) money.weightLbs = d.weightLbs;
+        if (d.proposalGroup !== undefined) money.proposalGroup = d.proposalGroup || null;
+        // With a catalog record, `active` is a status change and goes through the state
+        // machine below; only a priced-only row has a bare flag to set.
+        if (d.active !== undefined && !product) money.active = d.active;
+        if (d.overrideAllowed !== undefined) money.overrideAllowed = d.overrideAllowed;
+        if (d.defaultQty !== undefined) money.defaultQty = d.defaultQty;
+        if (d.freightMinor !== undefined) money.freightMinor = d.freightMinor;
+        if (d.freightLabel !== undefined)
+          money.freightLabel = (d.freightLabel || '').trim() || null;
+        if (productUrl !== undefined) money.productUrl = productUrl;
+        if (d.requiresPowderColor !== undefined) money.requiresPowderColor = d.requiresPowderColor;
+        // Bag numbers are typed by hand on about thirty hardware items; a blank
+        // clears the label rather than storing an empty string.
+        if (d.packagingBag !== undefined)
+          money.packagingBag = (d.packagingBag || '').trim() || null;
+        if (Object.keys(money).length) await tx.sku.update({ where: { id: sku.id }, data: money });
+      }
+
+      if (d.active !== undefined && product) {
+        await setPartActiveTx(tx, product, product.sku, d.active, req.user!.sub, 'catalog list');
+      }
+
+      // A cost edit also lands in the dated cost history, so pricing/service.ts and
+      // the workbook's cost trail stay in step with the flat SKU record.
+      if (d.unitCostMinor !== undefined && product) {
+        await tx.productCost.create({
+          data: {
+            productId: product.id,
+            unitCost: BigInt(d.unitCostMinor),
+            currency: 'USD',
+            effectiveDate: new Date(),
+            createdById: req.user!.sub,
+          },
         });
-        // Carry the change onto the open orders that still list this part under the
-        // vendor it was bought from before.
-        if (canonical && canonical !== before) {
-          await reassignSkuVendor(sku.part, canonical, req.user!.sub);
-        }
       }
-      if (product) {
-        // Shared with the SKU CSV importer (src/catalog/partVendor.ts).
-        await syncPartSourcing(prisma, part, mfr);
-      }
-    }
 
-    if (sku) {
-      const money: Record<string, unknown> = {};
-      if (d.unitPriceMinor !== undefined) money.unitPriceMinor = d.unitPriceMinor;
-      if (d.unitCostMinor !== undefined) money.unitCostMinor = d.unitCostMinor;
-      if (d.weightLbs !== undefined) money.weightLbs = d.weightLbs;
-      if (d.proposalGroup !== undefined) money.proposalGroup = d.proposalGroup || null;
-      // With a catalog record, `active` is a status change and goes through the state
-      // machine below; only a priced-only row has a bare flag to set.
-      if (d.active !== undefined && !product) money.active = d.active;
-      if (d.overrideAllowed !== undefined) money.overrideAllowed = d.overrideAllowed;
-      if (d.defaultQty !== undefined) money.defaultQty = d.defaultQty;
-      if (d.freightMinor !== undefined) money.freightMinor = d.freightMinor;
-      if (d.freightLabel !== undefined) money.freightLabel = (d.freightLabel || '').trim() || null;
-      // Validated here as well as in the browser: a mistyped link becomes an
-      // unclickable "Buy" button on a purchasing document.
-      if (d.productUrl !== undefined) {
-        const u = (d.productUrl || '').trim();
-        if (u && !/^https?:\/\//i.test(u))
-          throw new ValidationError('A buy link must start with http:// or https://');
-        money.productUrl = u || null;
-      }
-      if (d.requiresPowderColor !== undefined) money.requiresPowderColor = d.requiresPowderColor;
-      // Bag numbers are typed by hand on about thirty hardware items; a blank
-      // clears the label rather than storing an empty string.
-      if (d.packagingBag !== undefined) money.packagingBag = (d.packagingBag || '').trim() || null;
-      if (Object.keys(money).length)
-        await prisma.sku.update({ where: { id: sku.id }, data: money });
-    }
-    if (d.active !== undefined && product) {
-      const to = d.active;
-      await prisma.$transaction((tx) =>
-        setPartActiveTx(tx, product, part, to, req.user!.sub, 'catalog list'),
-      );
-    }
+      const afterSku = sku ? await tx.sku.findUnique({ where: { id: sku.id } }) : null;
+      return { afterSku, reassignTo };
+    });
+    const { afterSku, reassignTo } = result;
 
-    // A cost edit also lands in the dated cost history, so pricing/service.ts and
-    // the workbook's cost trail stay in step with the flat SKU record.
-    if (d.unitCostMinor !== undefined && product) {
-      await prisma.productCost.create({
-        data: {
-          productId: product.id,
-          unitCost: BigInt(d.unitCostMinor),
-          currency: 'USD',
-          effectiveDate: new Date(),
-          createdById: req.user!.sub,
-        },
-      });
-    }
+    if (reassignTo && afterSku) await reassignSkuVendor(afterSku.part, reassignTo, req.user!.sub);
 
     // The item editor writes across Sku, Product and ProductCost; the SKU record is
     // the one the bill of materials prices from, so that is what the history keeps.
-    const afterSku = await prisma.sku.findUnique({ where: { part } });
     if (afterSku) {
       await recordRevision({
         entity: 'Sku',
@@ -781,7 +800,7 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
         label: part,
         action: 'update',
         actorId: req.user!.sub,
-        before: sku ? skuSnapshot(sku as unknown as Record<string, unknown>) : null,
+        before: existingSku ? skuSnapshot(existingSku as unknown as Record<string, unknown>) : null,
         after: skuSnapshot(afterSku as unknown as Record<string, unknown>),
       });
     }
