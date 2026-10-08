@@ -85,7 +85,12 @@ export async function previewCostRefresh(
   if (!order) throw new NotFoundError('Order not found');
 
   const lines = await prisma.procurementLine.findMany({
-    where: { orderId, ...(opts.vendor ? { vendor: opts.vendor } : {}) },
+    where: {
+      orderId,
+      ...(opts.vendor
+        ? { vendor: { equals: opts.vendor.trim(), mode: 'insensitive' as const } }
+        : {}),
+    },
     select: {
       id: true,
       sku: true,
@@ -116,17 +121,30 @@ export async function previewCostRefresh(
     }),
   ]);
 
-  const catalog = new Map(skus.map((k) => [k.part.trim().toUpperCase(), k.unitCostMinor ?? 0]));
+  // Sku.unitCostMinor is NOT NULL DEFAULT 0, so 0 means "the catalog records no
+  // cost" (as resolvePartDetails reads it), never a real price — such a line is
+  // unmatched, not a proposal to zero the line's cost and the job's COGS.
+  const catalog = new Map<string, number>();
+  for (const k of skus)
+    if (k.unitCostMinor && k.unitCostMinor > 0)
+      catalog.set(k.part.trim().toUpperCase(), k.unitCostMinor);
   // A secondary-vendor line (bomBuild.ts's withSecondaryVendor) shares its sku with the
   // part's own line but is forced to a deliberately different cost — what the SECOND
   // vendor charges (e.g. a powder-coating fee), not what the part's own vendor pays for
   // it. Comparing it against Sku.unitCostMinor would report every such line as "drift"
   // and, if applied, silently overwrite the second vendor's real agreed cost with the
   // first vendor's catalog price.
-  const secondaryVendorCatalog = new Map(
-    skus.map((k) => [k.part.trim().toUpperCase(), k.secondaryVendorCostMinor ?? 0]),
+  //
+  // Here an explicit 0 IS a real figure (a receiving-only second vendor charges
+  // nothing); only a blank (null) rule cost is "no catalog figure".
+  const secondaryVendorCatalog = new Map<string, number>();
+  for (const k of skus)
+    if (k.secondaryVendorCostMinor != null)
+      secondaryVendorCatalog.set(k.part.trim().toUpperCase(), k.secondaryVendorCostMinor);
+  // Section names compared case-insensitively, as vendor names are everywhere else.
+  const submitted = new Set(
+    sections.filter((x) => x.status === 'SUBMITTED').map((x) => x.vendor.trim().toLowerCase()),
   );
-  const submitted = new Set(sections.filter((x) => x.status === 'SUBMITTED').map((x) => x.vendor));
 
   const rows: CostRefreshRow[] = [];
   let unmatched = 0;
@@ -163,7 +181,7 @@ export async function previewCostRefresh(
       extendedDeltaMinor: (catalogMinor - current) * qty,
       freeIssue: !!l.freeIssue,
       secondaryVendor: isSecondary,
-      blocked: submitted.has(vendor)
+      blocked: submitted.has(vendor.toLowerCase())
         ? `The ${vendor} sheet has been submitted. Unlock that section to reprice its lines.`
         : null,
     });

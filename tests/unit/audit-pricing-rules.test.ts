@@ -174,77 +174,68 @@ describe('rules validation (PASS)', () => {
   });
 });
 
-describe('rules engine — confirmed defects (it.fails)', () => {
-  it.fails(
-    'BUG: a category-wide AUTO_INCLUDE over two lines adds max(qty) instead of the sum',
-    () => {
-      // Two different frames in the "frames" category each need 1 anchor kit per unit.
-      // Dedupe keeps Math.max across ALL raw adds — intended for two rules adding the
-      // same part — so 2 + 3 frames come out as 3 kits rather than 5.
-      const r = evaluateConfiguration(
+describe('rules engine — fixed defects (formerly it.fails)', () => {
+  it('BUG: a category-wide AUTO_INCLUDE over two lines adds max(qty) instead of the sum', () => {
+    // Two different frames in the "frames" category each need 1 anchor kit per unit.
+    // Dedupe keeps Math.max across ALL raw adds — intended for two rules adding the
+    // same part — so 2 + 3 frames come out as 3 kits rather than 5.
+    const r = evaluateConfiguration(
+      [
+        rule({
+          type: 'AUTO_INCLUDE_COMPONENT',
+          outcome: 'AUTO_ADD',
+          target: { categoryId: 'frames' },
+          params: { componentProductId: 'ANCHOR', perUnit: 1 },
+        }),
+      ],
+      {
+        lines: [
+          { productId: 'F1', categoryId: 'frames', quantity: 2 },
+          { productId: 'F2', categoryId: 'frames', quantity: 3 },
+        ],
+      },
+    );
+    expect(r.autoAdds.find((a) => a.productId === 'ANCHOR')?.quantity).toBe(5);
+  });
+
+  it('BUG: AUTO_INCLUDE_COMPONENT on a zero-quantity line emits a zero-quantity auto-add', () => {
+    // AUTO_CALCULATED_COMPONENT guards `qty > 0`; AUTO_INCLUDE_COMPONENT does not.
+    const r = evaluateConfiguration(
+      [
+        rule({
+          type: 'AUTO_INCLUDE_COMPONENT',
+          outcome: 'AUTO_ADD',
+          target: { productId: 'A' },
+          params: { componentProductId: 'C' },
+        }),
+      ],
+      { lines: [{ productId: 'A', quantity: 0 }] },
+    );
+    expect(r.autoAdds).toHaveLength(0);
+  });
+
+  it('BUG: validation accepts a REQUIRES rule with an empty target, which can never fire', () => {
+    // The engine skips every subject-based rule when target is empty (`if (!subject) break`),
+    // so this rule activates successfully and silently does nothing.
+    const errors = validateRuleDefinition({
+      key: 'needs-b',
+      type: 'REQUIRES',
+      outcome: 'BLOCK',
+      target: {},
+      params: { productId: 'B' },
+    });
+    const fires =
+      evaluateConfiguration(
         [
           rule({
-            type: 'AUTO_INCLUDE_COMPONENT',
-            outcome: 'AUTO_ADD',
-            target: { categoryId: 'frames' },
-            params: { componentProductId: 'ANCHOR', perUnit: 1 },
+            type: 'REQUIRES',
+            outcome: 'BLOCK',
+            target: {},
+            params: { productId: 'B' },
           }),
         ],
-        {
-          lines: [
-            { productId: 'F1', categoryId: 'frames', quantity: 2 },
-            { productId: 'F2', categoryId: 'frames', quantity: 3 },
-          ],
-        },
-      );
-      expect(r.autoAdds.find((a) => a.productId === 'ANCHOR')?.quantity).toBe(5);
-    },
-  );
-
-  it.fails(
-    'BUG: AUTO_INCLUDE_COMPONENT on a zero-quantity line emits a zero-quantity auto-add',
-    () => {
-      // AUTO_CALCULATED_COMPONENT guards `qty > 0`; AUTO_INCLUDE_COMPONENT does not.
-      const r = evaluateConfiguration(
-        [
-          rule({
-            type: 'AUTO_INCLUDE_COMPONENT',
-            outcome: 'AUTO_ADD',
-            target: { productId: 'A' },
-            params: { componentProductId: 'C' },
-          }),
-        ],
-        { lines: [{ productId: 'A', quantity: 0 }] },
-      );
-      expect(r.autoAdds).toHaveLength(0);
-    },
-  );
-
-  it.fails(
-    'BUG: validation accepts a REQUIRES rule with an empty target, which can never fire',
-    () => {
-      // The engine skips every subject-based rule when target is empty (`if (!subject) break`),
-      // so this rule activates successfully and silently does nothing.
-      const errors = validateRuleDefinition({
-        key: 'needs-b',
-        type: 'REQUIRES',
-        outcome: 'BLOCK',
-        target: {},
-        params: { productId: 'B' },
-      });
-      const fires =
-        evaluateConfiguration(
-          [
-            rule({
-              type: 'REQUIRES',
-              outcome: 'BLOCK',
-              target: {},
-              params: { productId: 'B' },
-            }),
-          ],
-          { lines: [{ productId: 'A', quantity: 1 }] },
-        ).findings.length > 0;
-      expect(errors.length > 0 || fires).toBe(true);
-    },
-  );
+        { lines: [{ productId: 'A', quantity: 1 }] },
+      ).findings.length > 0;
+    expect(errors.length > 0 || fires).toBe(true);
+  });
 });

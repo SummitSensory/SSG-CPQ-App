@@ -100,6 +100,16 @@
     return loading;
   }
 
+  /**
+   * Re-fetch after the admin saves a new placement. load() memoises its first
+   * request, so without this the builder kept printing the old placement until a
+   * full page reload, despite the admin being told every proposal now uses it.
+   */
+  function refresh() {
+    loading = null;
+    return load();
+  }
+
   function init(opts) {
     H = opts || {};
     load();
@@ -108,6 +118,7 @@
   window.SSGSignatureFieldLayout = {
     init: init,
     load: load,
+    refresh: refresh,
     styleFor: styleFor,
     offsetStyleFor: offsetStyleFor,
     overrideFor: overrideFor,

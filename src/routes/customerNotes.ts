@@ -4,6 +4,10 @@ import { prisma } from '../lib/prisma.js';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import { ValidationError, NotFoundError, ForbiddenError } from '../lib/errors.js';
+import { businessToday } from '../lib/businessTime.js';
+
+/** Most follow-up rows /crm/follow-ups lists; its `count` is always the full total. */
+const FOLLOW_UP_ROWS = 50;
 
 /**
  * Internal notes and the two customer-level dates.
@@ -48,6 +52,10 @@ const iso = (d: Date | null | undefined): string | null =>
 
 export function registerCustomerNoteRoutes(app: FastifyInstance): void {
   const read = { preHandler: requirePermission(Permission.PROPOSAL_READ) };
+  // Writing to a customer's record — a note, the decision window, the follow-up
+  // date — is a CRM write, held to the same bar as every other one in routes/crm.ts.
+  // PROPOSAL_READ alone let READ_ONLY and INSTALLER accounts change them.
+  const write = { preHandler: requirePermission(Permission.CRM_WRITE) };
 
   /**
    * The whole panel in one call: the dates, the notes written from this proposal, and
@@ -106,7 +114,7 @@ export function registerCustomerNoteRoutes(app: FastifyInstance): void {
     };
   });
 
-  app.post('/crm/organizations/:organizationId/notes', read, async (req, reply) => {
+  app.post('/crm/organizations/:organizationId/notes', write, async (req, reply) => {
     const { organizationId } = req.params as { organizationId: string };
     const parsed = NoteSchema.safeParse(req.body);
     if (!parsed.success)
@@ -148,7 +156,7 @@ export function registerCustomerNoteRoutes(app: FastifyInstance): void {
    * back — and only its author or a system admin may, because a shared account
    * history anyone can prune is not a history.
    */
-  app.delete('/customer-notes/:id', read, async (req, reply) => {
+  app.delete('/customer-notes/:id', write, async (req, reply) => {
     const { id } = req.params as { id: string };
     const note = await prisma.customerNote.findUnique({
       where: { id },
@@ -164,7 +172,7 @@ export function registerCustomerNoteRoutes(app: FastifyInstance): void {
   });
 
   /** The ideal decision timeline and the follow-up date. Both live on the customer. */
-  app.patch('/crm/organizations/:organizationId/dates', read, async (req) => {
+  app.patch('/crm/organizations/:organizationId/dates', write, async (req) => {
     const parsedAll = DatesSchema.partial().safeParse(req.body);
     if (!parsedAll.success)
       throw new ValidationError(parsedAll.error.issues[0]?.message ?? 'Invalid date.');
@@ -199,22 +207,29 @@ export function registerCustomerNoteRoutes(app: FastifyInstance): void {
    * Customers whose follow-up date has arrived. Feeds the dashboard count — a date
    * nobody is shown is a date nobody acts on.
    *
-   * "Due" is today or earlier, compared in UTC because that is how the dates were
-   * stored. The oldest, and so most overdue, sorts first.
+   * "Due" is Summit's today (America/Denver) or earlier. The date is a calendar date
+   * stored at UTC midnight, so it is compared with the Denver calendar day: in UTC,
+   * tomorrow's follow-ups became "due" from about 6 pm Mountain. The oldest, and so
+   * most overdue, sorts first.
+   *
+   * `count` is the real number due; `rows` is the first FOLLOW_UP_ROWS of them. The
+   * count used to be rows.length, so a backlog of 80 read as 50.
    */
   app.get('/crm/follow-ups', read, async () => {
-    const now = new Date();
-    const end = new Date(
-      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59),
-    );
-    const rows = await prisma.organization.findMany({
-      where: { followUpDate: { not: null, lte: end } },
-      orderBy: { followUpDate: 'asc' },
-      select: { id: true, name: true, followUpDate: true, decisionFrom: true, decisionTo: true },
-      take: 50,
-    });
+    const end = new Date(`${businessToday()}T23:59:59.999Z`);
+    const where = { followUpDate: { not: null, lte: end } };
+    const [count, rows] = await Promise.all([
+      prisma.organization.count({ where }),
+      prisma.organization.findMany({
+        where,
+        orderBy: [{ followUpDate: 'asc' }, { name: 'asc' }],
+        select: { id: true, name: true, followUpDate: true, decisionFrom: true, decisionTo: true },
+        take: FOLLOW_UP_ROWS,
+      }),
+    ]);
     return {
-      count: rows.length,
+      count,
+      truncated: count > rows.length,
       rows: rows.map((r) => ({
         organizationId: r.id,
         customer: r.name,

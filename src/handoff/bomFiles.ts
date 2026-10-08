@@ -160,7 +160,8 @@ export async function recordBomFile(
       filename: input.filename.slice(0, 200),
       contentType: info.contentType,
       byteSize: info.size,
-      url: input.url,
+      // The store's canonical URL from head(), not the one the browser reported.
+      url: info.url,
       pathname: input.pathname,
       uploadedById: actorId,
     },

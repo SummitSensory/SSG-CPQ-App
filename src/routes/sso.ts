@@ -17,12 +17,62 @@ function esc(s: string): string {
 }
 
 /**
+ * JSON that is safe to place inside an inline <script>. JSON.stringify leaves `<`,
+ * `>` and `&` alone, so a value containing `</script>` would close the script
+ * element and start markup of its own; U+2028/U+2029 are line terminators to older
+ * JavaScript parsers. All five are written as \u escapes, which JSON and JavaScript
+ * both read back as the same character.
+ */
+const SCRIPT_UNSAFE = new Set(['<', '>', '&', String.fromCharCode(0x2028, 0x2029)].join(''));
+
+export function scriptSafeJson(value: unknown): string {
+  let out = '';
+  for (const ch of JSON.stringify(value)) {
+    out += SCRIPT_UNSAFE.has(ch) ? '\\u' + ch.charCodeAt(0).toString(16).padStart(4, '0') : ch;
+  }
+  return out;
+}
+
+/**
+ * A post-sign-in destination, reduced to a path on this site or `/`.
+ *
+ * Browsers treat `/\host` exactly like `//host`, and strip tabs and newlines from a
+ * URL before parsing it, so a prefix check alone is an open redirect. The value is
+ * resolved against a placeholder origin and kept only if it is still on that origin;
+ * what is returned is the parsed path, query and fragment, never the raw input.
+ */
+export function safeReturnPath(returnTo: unknown): string {
+  if (typeof returnTo !== 'string' || !returnTo.startsWith('/')) return '/';
+  if (returnTo.startsWith('//')) return '/';
+  // Control characters and backslashes never belong in an app path.
+  for (const ch of returnTo) {
+    const code = ch.charCodeAt(0);
+    if (code < 0x20 || code === 0x7f || ch === '\\') return '/';
+  }
+  const origin = 'https://return.invalid';
+  let url: URL;
+  try {
+    url = new URL(returnTo, origin);
+  } catch {
+    return '/';
+  }
+  if (url.origin !== origin) return '/';
+  return url.pathname + url.search + url.hash;
+}
+
+/**
  * Hand the freshly minted tokens to the browser through the URL fragment.
  * A fragment is never sent to the server or written to server logs, and the
  * client clears it from history immediately on pickup.
  */
 function handoffPage(returnTo: string, accessToken: string, refreshToken: string): string {
-  const payload = JSON.stringify({ at: accessToken, rt: refreshToken, to: returnTo });
+  // returnTo came out of a signed state, but it is re-validated here anyway: this
+  // page holds live tokens, so it trusts nothing it did not just check.
+  const payload = scriptSafeJson({
+    at: accessToken,
+    rt: refreshToken,
+    to: safeReturnPath(returnTo),
+  });
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Signing you in…</title></head>
 <body style="font-family:system-ui;padding:40px;text-align:center;color:#82877d;">Signing you in…
 <script>(function(){var d=${payload};try{localStorage.setItem('ssg_at',d.at);localStorage.setItem('ssg_rt',d.rt);}catch(e){}location.replace(d.to||'/');})();</script>
@@ -49,7 +99,7 @@ export function registerSsoRoutes(app: FastifyInstance): void {
         ? (req.query as { returnTo: string }).returnTo
         : '/';
     // Only same-site paths, so the state cannot be used as an open redirect.
-    const safeReturn = returnTo.startsWith('/') && !returnTo.startsWith('//') ? returnTo : '/';
+    const safeReturn = safeReturnPath(returnTo);
     const { state, nonce } = await createState(safeReturn);
     return reply.redirect(authorizeUrl(state, nonce));
   });

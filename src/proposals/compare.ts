@@ -13,10 +13,33 @@ export interface VersionComparison {
   meta: VersionDiffEntry[];
 }
 
+/**
+ * A unique key per line. Lines are matched across versions by `ref`, but a line
+ * without one (an API-written or imported row) used to key as `undefined`, and two
+ * lines sharing a ref collapsed into one map entry — the later overwrote the earlier,
+ * so a change to it never showed. A ref-less line keys by position (`#3`); a repeated
+ * ref keys by occurrence (`a`, `a~2`, …).
+ */
+function keyedItems(items: ProposalItem[]): Map<string, ProposalItem> {
+  const out = new Map<string, ProposalItem>();
+  const seen = new Map<string, number>();
+  items.forEach((item, idx) => {
+    const ref = typeof item?.ref === 'string' && item.ref !== '' ? item.ref : null;
+    if (ref === null) {
+      out.set(`#${idx}`, item);
+      return;
+    }
+    const n = (seen.get(ref) ?? 0) + 1;
+    seen.set(ref, n);
+    out.set(n === 1 ? ref : `${ref}~${n}`, item);
+  });
+  return out;
+}
+
 function diffItems(a: ProposalItem[], b: ProposalItem[]): VersionDiffEntry[] {
   const out: VersionDiffEntry[] = [];
-  const aMap = new Map(a.map((i) => [i.ref, i]));
-  const bMap = new Map(b.map((i) => [i.ref, i]));
+  const aMap = keyedItems(a);
+  const bMap = keyedItems(b);
   for (const [ref, bi] of bMap) {
     const ai = aMap.get(ref);
     if (!ai) out.push({ path: `item:${ref}`, kind: 'added', after: bi });

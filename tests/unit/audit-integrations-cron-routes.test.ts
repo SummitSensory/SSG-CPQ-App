@@ -95,7 +95,7 @@ describe('cron endpoints: reachable by Vercel Cron (GET)', () => {
 
   // BUG: registerInsightCronRoutes uses app.post only. Vercel Cron sends GET, so
   // the scheduled-report email never fires in production (it 404s).
-  it.fails('BUG: GET /cron/scheduled-reports is routed (Vercel Cron only sends GET)', async () => {
+  it('BUG: GET /cron/scheduled-reports is routed (Vercel Cron only sends GET)', async () => {
     const res = await app.inject({ method: 'GET', url: '/cron/scheduled-reports' });
     expect(res.statusCode).toBe(401);
   });
@@ -115,7 +115,7 @@ describe('vercel.json schedules every cron endpoint', () => {
 
   // BUG: docs/reporting-and-goals.md says /cron/scheduled-reports runs daily at
   // 12:30 UTC, but vercel.json has no entry for it — scheduled reports never send.
-  it.fails('BUG: /cron/scheduled-reports is scheduled in vercel.json', () => {
+  it('BUG: /cron/scheduled-reports is scheduled in vercel.json', () => {
     expect(scheduled.has('/cron/scheduled-reports')).toBe(true);
   });
 });

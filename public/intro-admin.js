@@ -47,7 +47,7 @@
       (current
         ? '<img src="' +
           esc(current) +
-          '" alt="" onerror="this.style.display=\'none\'" style="width:100%;height:100%;object-fit:cover;">'
+          '" alt="" data-hide-broken="1" style="width:100%;height:100%;object-fit:cover;">'
         : '<span style="font-size:10.5px;color:#8a8f85;">No photo</span>') +
       '</div>' +
       '<div style="flex:1;min-width:0;">' +
@@ -118,12 +118,12 @@
         })
         .join('') +
       '<input type="file" id="iaFile" accept="image/jpeg,image/png,image/webp" style="display:none;">';
-    // The `onerror="this.style.display='none'"` markup in slotRow() is inert
-    // here: the app's Content-Security-Policy sends `script-src-attr 'none'`
-    // (src/app.ts), so the browser refuses to run an inline handler and a
-    // thumbnail whose file has since gone missing shows a broken-image icon
-    // instead of hiding.
-    host.querySelectorAll('img[onerror]').forEach(function (im) {
+    // No inline onerror in slotRow(): the app's Content-Security-Policy sends
+    // `script-src-attr 'none'` (src/app.ts), so the browser refuses an inline
+    // handler and logs a console error for each. Thumbnails carry
+    // data-hide-broken instead and are bound here, so one whose file has since
+    // gone missing hides rather than showing a broken-image icon.
+    host.querySelectorAll('img[data-hide-broken]').forEach(function (im) {
       if (im.complete && im.naturalWidth === 0) {
         im.style.display = 'none';
         return;

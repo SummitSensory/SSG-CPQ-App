@@ -1,3 +1,5 @@
+import { decimalToRational, divRound } from '../pricing/decimal.js';
+
 /**
  * Proposal analytics: pure functions that turn stored proposal JSON (sections +
  * items) into money totals, then roll a list of versions up into the report
@@ -19,6 +21,7 @@
  * `buildReport` — but not until the new engine has had real use. Until then this
  * duplication is accepted and signposted rather than forgotten.
  */
+import { businessDay } from '../lib/businessTime.js';
 
 export interface RawItem {
   lineType?: string;
@@ -87,12 +90,32 @@ const n = (v: unknown): number =>
 const overrideMinor = (text: unknown): number => {
   if (text == null) return 0;
   const s = String(text).trim().replace(/^\$/, '').replace(/,/g, '');
-  return /^-?\d+(?:\.\d+)?$/.test(s) ? Math.round(parseFloat(s) * 100) : 0;
+  // Read as the decimal that was TYPED, rounded half-up (away from zero) to the cent
+  // on its digits — not parseFloat × 100, where "1.005" is 100.49999… and lost a
+  // cent. Mirrored character for character by overrideMinor in public/app.js.
+  const m = /^(-?)(\d+)(?:\.(\d+))?$/.exec(s);
+  if (!m) return 0;
+  const frac = m[3] ?? '';
+  const cents =
+    Number(m[2]) * 100 + Number((frac + '00').slice(0, 2)) + (frac.charAt(2) >= '5' ? 1 : 0);
+  return m[1] && cents ? -cents : cents;
 };
 
 /** The amount field if it carries a figure, otherwise a numeric TBD override. */
 const metaAmount = (minor: unknown, override: unknown): number =>
   n(minor) || overrideMinor(override);
+
+/**
+ * `pct`% of `subtotalMinor`, exact: the percentage as the decimal it prints as (1.15,
+ * not the double 1.149999…), multiplied in bigint, rounded half-up to the cent.
+ * `Math.round(3000 * 1.15 / 100)` is 34, because 3000 × 1.15 is 3449.9999999999995;
+ * the true 34.5¢ rounds to 35. Mirrored by the PCT branch of discountOf in public/app.js.
+ */
+function pctOfMinor(subtotalMinor: number, pct: number): number {
+  if (!Number.isFinite(pct)) return pct > 0 ? subtotalMinor : 0; // clamped by the caller
+  const { num, den } = decimalToRational(pct);
+  return Number(divRound(BigInt(Math.round(subtotalMinor)) * num, 100n * den, 'HALF_UP'));
+}
 
 /**
  * The order discount, in either of the two forms the builder offers.
@@ -117,7 +140,7 @@ const discountOf = (meta: RawMeta, subtotal: number): number => {
   let amount =
     mode === 'AMT'
       ? Math.round(n((meta as { discountAmountMinor?: unknown }).discountAmountMinor))
-      : Math.round((subtotal * n(meta.discountPct)) / 100);
+      : pctOfMinor(subtotal, n(meta.discountPct));
   if (amount < 0) amount = 0;
   if (amount > subtotal) amount = subtotal;
   return amount;
@@ -148,7 +171,7 @@ export function itemsOf(items: unknown): RawItem[] {
  * (public/app.js isBundleChild) — there is no flag on the row.
  */
 const isBundleChild = (l: RawItem): boolean =>
-  (l.lineType ?? 'PRODUCT') === 'PRODUCT' && /^\u2014\s/.test(String(l.name ?? ''));
+  (l.lineType || 'PRODUCT') === 'PRODUCT' && /^\u2014\s/.test(String(l.name ?? ''));
 
 /**
  * Revenue per line, with a bundle counted ONCE.
@@ -214,7 +237,7 @@ export function countedRevenueByLine(lines: RawItem[]): number[] {
   };
 
   lines.forEach((l, i) => {
-    if ((l.lineType ?? 'PRODUCT') !== 'PRODUCT') {
+    if ((l.lineType || 'PRODUCT') !== 'PRODUCT') {
       // A heading between a parent and its parts ends the run. The builder keeps
       // them contiguous, so this only fires on genuinely separated rows.
       close();
@@ -254,7 +277,7 @@ export function versionTotals(items: unknown, sections: unknown): Totals {
     tpFreight = 0,
     weight = 0;
   for (const l of lines) {
-    if ((l.lineType ?? 'PRODUCT') !== 'PRODUCT') continue;
+    if ((l.lineType || 'PRODUCT') !== 'PRODUCT') continue;
     const qty = n(l.quantity);
     cogs += Math.round(qty * n(l.costEach));
     weight += qty * n(l.weightEach);
@@ -457,7 +480,7 @@ export function buildReport(
       cogs: t.cogs,
       margin: t.margin,
       marginPct: t.marginPct,
-      lineCount: itemsOf(v.items).filter((l) => (l.lineType ?? 'PRODUCT') === 'PRODUCT').length,
+      lineCount: itemsOf(v.items).filter((l) => (l.lineType || 'PRODUCT') === 'PRODUCT').length,
     };
   });
 
@@ -532,7 +555,9 @@ export function buildReport(
     return { bucket, count: xs.length, value: value(xs) };
   });
 
-  const monthKey = (s: string): string => s.slice(0, 7);
+  // Summit's month (America/Denver), not UTC's: a deal decided at 9 pm Mountain on
+  // the 31st belongs to that month.
+  const monthKey = (s: string): string => (businessDay(s) || s).slice(0, 7);
   const months = new Map<
     string,
     {
@@ -654,7 +679,7 @@ export function buildReport(
     const isWon = row.status === 'ACCEPTED';
     const seen = new Set<string>();
     for (const l of itemsOf(p.latest.items)) {
-      if ((l.lineType ?? 'PRODUCT') !== 'PRODUCT') continue;
+      if ((l.lineType || 'PRODUCT') !== 'PRODUCT') continue;
       const key = (l.sku || l.name || 'Unnamed').trim();
       if (!key) continue;
       let e = prod.get(key);

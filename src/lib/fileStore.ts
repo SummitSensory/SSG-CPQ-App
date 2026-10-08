@@ -147,8 +147,38 @@ export async function putFile(
   return { url: body.url, pathname: body.pathname ?? clean, bytes: bytes.length };
 }
 
-/** Read a stored file back, for a download proxy or an email attachment. */
+/**
+ * True only for an https URL on Vercel Blob itself. The read-write token is
+ * store-wide, so it may only ever be sent to the store.
+ */
+export function isBlobStoreUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  const host = parsed.hostname.toLowerCase();
+  return (
+    parsed.protocol === 'https:' &&
+    !parsed.username &&
+    !parsed.password &&
+    (host === 'blob.vercel-storage.com' || host.endsWith('.blob.vercel-storage.com'))
+  );
+}
+
+/**
+ * Read a stored file back, for a download proxy or an email attachment.
+ *
+ * Refuses any URL that is not on Vercel Blob: the request carries the store-wide
+ * read-write token, and a row whose URL pointed anywhere else would hand that token
+ * to whoever runs that host.
+ */
 export async function getFile(url: string, fetchImpl: typeof fetch = fetch): Promise<Buffer> {
+  if (!isBlobStoreUrl(url)) {
+    logger.error({ host: safeHost(url) }, 'blob: refused to read a file from a non-blob host');
+    throw new Error('The stored file is not at a file-store address, so it was not read.');
+  }
   const res = await fetchImpl(url, {
     headers: env.BLOB_READ_WRITE_TOKEN
       ? { Authorization: `Bearer ${env.BLOB_READ_WRITE_TOKEN}` }
@@ -156,6 +186,14 @@ export async function getFile(url: string, fetchImpl: typeof fetch = fetch): Pro
   });
   if (!res.ok) throw new Error(`The stored file could not be read back (HTTP ${res.status}).`);
   return Buffer.from(await res.arrayBuffer());
+}
+
+function safeHost(url: string): string | null {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return null;
+  }
 }
 
 /**

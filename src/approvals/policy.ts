@@ -64,6 +64,12 @@ export interface DecisionGuardInput {
   deciderId: string;
   deciderHasPermission: boolean;
   delegatedApproverIds?: string[];
+  /**
+   * The user this request was escalated to. Escalation only accepts a target who
+   * could decide it at the time, and naming them grants them the right to act on it
+   * like a delegate (so a delegation lapsing afterwards does not strand the request).
+   */
+  escalatedToId?: string | null;
 }
 export interface DecisionGuardResult {
   allowed: boolean;
@@ -71,7 +77,9 @@ export interface DecisionGuardResult {
 }
 
 export function canDecide(input: DecisionGuardInput): DecisionGuardResult {
-  const isDelegate = (input.delegatedApproverIds ?? []).includes(input.deciderId);
+  const isDelegate =
+    (input.delegatedApproverIds ?? []).includes(input.deciderId) ||
+    (!!input.escalatedToId && input.escalatedToId === input.deciderId);
   if (!input.deciderHasPermission && !isDelegate) {
     return { allowed: false, reason: 'decider lacks the required approver permission' };
   }

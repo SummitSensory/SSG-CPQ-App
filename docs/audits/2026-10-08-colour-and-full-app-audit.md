@@ -1,5 +1,12 @@
 # Audit — customer colours → BOM, and the whole application (2026-10-08)
 
+> **Status: all findings fixed** on branch `claude/audit-fixes` (same day).
+> Every `it.fails` test below has been flipped to a plain `it` and passes;
+> 2,493 unit + integration tests pass. Migrations added: `0113` (Rule
+> `activeVersion`, backfilled), `0114` (PurchaseOrderLine
+> `procurementLineId`), `0115` (non-unique indexes + seed rows only into
+> empty tables). Business decisions taken while fixing are listed in that PR.
+
 Ten audit agents, each on its own local database (never production), each
 writing tests that drive the real code. No application source was changed.
 Every confirmed bug is pinned by an `it.fails("BUG: …")` / `KNOWN GAP` test:

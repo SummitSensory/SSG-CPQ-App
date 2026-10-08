@@ -88,14 +88,17 @@ vi.mock('../../src/lib/prisma.js', () => ({
           : null,
     },
     portalColorAreaMapping: { findMany: async () => MAPPING },
+    // No earlier colour reviews kept with their answers.
+    orderEvent: { findMany: async () => [] },
     procurementLine: { findMany: async () => state.lines },
     powderColorBrand: { findMany: async () => [{ id: 'b-cardinal', name: 'Cardinal' }] },
-    vendorColor: {
+    // loadPowderChart reads palette-first, then the palette owners' names.
+    vendorColorPalette: {
       findMany: async () => [
         {
-          name: 'Blue Hammer',
-          vendorCode: 'T009-BL01',
-          palette: { manufacturer: { name: 'Cardinal' } },
+          name: 'Cardinal chart',
+          manufacturerId: 'm-cardinal',
+          colors: [{ name: 'Blue Hammer', vendorCode: 'T009-BL01' }],
         },
       ],
     },
@@ -103,13 +106,17 @@ vi.mock('../../src/lib/prisma.js', () => ({
       findUnique: async () => ({ id: 'org1', name: 'Test Gym', addresses: [], contacts: [] }),
     },
     user: { findUnique: async () => ({ name: 'Rep', email: 'rep@example.com', title: null }) },
-    manufacturer: { findMany: async () => [] },
+    manufacturer: {
+      findMany: async ({ where }: { where?: { id?: { in?: string[] } } } = {}) =>
+        where?.id?.in?.includes('m-cardinal') ? [{ id: 'm-cardinal', name: 'Cardinal' }] : [],
+    },
     proposal: { findUnique: async () => ({ title: 'Test Proposal' }) },
     sku: { findMany: async () => [] },
     hardwareRule: { findMany: async () => [] },
     vendorPartNumber: { findMany: async () => [] },
     bomVendorSection: {
       findUnique: async () => null,
+      findFirst: async () => null,
       findMany: async () => state.submitted.map((vendor) => ({ vendor })),
     },
     portalDeliverySubmission: { findFirst: async () => null },

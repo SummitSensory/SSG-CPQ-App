@@ -9,7 +9,7 @@ import {
 } from '../config/env.js';
 import { verifyMondayWebhook } from '../integrations/monday/webhook.js';
 import { handleBoardChange } from '../integrations/monday/freightPull.js';
-import { applyInboundChange, retrySync } from '../integrations/monday/sync.js';
+import { applyInboundChange, mondayEventId, retrySync } from '../integrations/monday/sync.js';
 import { reconcile } from '../integrations/monday/reconcile.js';
 import { listBoards, describeBoard } from '../integrations/monday/discovery.js';
 import {
@@ -477,10 +477,7 @@ export function registerIntegrationRoutes(app: FastifyInstance): void {
     }
 
     const result = await applyInboundChange({
-      eventId: String(
-        (ev as { triggerUuid?: string }).triggerUuid ??
-          `${ev.pulseId}-${ev.columnId}-${Date.now()}`,
-      ),
+      eventId: mondayEventId(ev),
       itemId,
       columnId: (ev as { columnId?: string }).columnId,
       newStatusLabel:

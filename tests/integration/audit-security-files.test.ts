@@ -120,7 +120,7 @@ describe('blob read-back sends its token only to Vercel Blob', () => {
   // to attacker.example (whether Vercel's head() ignores the host is unverified; the
   // client is trusted either way). Fix: persist info.url from head(), and have getFile
   // refuse any host that is not *.blob.vercel-storage.com.
-  it.fails('never sends the token to a non-Vercel host', async () => {
+  it('never sends the token to a non-Vercel host', async () => {
     const { getFile } = await import('../../src/lib/fileStore.js');
     const seen: Array<string | undefined> = [];
     const fetchImpl = (async (_url: string, init?: RequestInit) => {

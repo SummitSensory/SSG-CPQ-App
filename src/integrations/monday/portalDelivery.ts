@@ -1172,6 +1172,10 @@ export async function linkSubmission(submissionId: string, orderId: string): Pro
   return processSubmission(submissionId);
 }
 
+/** Tries after which a pending submission is only retried weekly. */
+const RETRY_ATTEMPT_CAP = 30;
+const RETRY_SLOW_LANE_MS = 7 * 24 * 60 * 60 * 1000;
+
 /**
  * Retry the submissions that are waiting on something — a parked address whose
  * order has since been imported, a row whose columns had not landed, a failed
@@ -1181,20 +1185,46 @@ export async function retryPendingSubmissions(limit = 25): Promise<{
   checked: number;
   results: Record<string, number>;
 }> {
+  /*
+   * Fair and bounded.
+   *
+   * Ordered by receivedAt, the oldest `limit` rows were retried every night and a
+   * backlog of permanently unresolvable ones (an order that will never exist) took
+   * every slot, so newer submissions were never retried at all. Now: least recently
+   * tried first (each try bumps `attempts`, and so updatedAt), and a row past
+   * RETRY_ATTEMPT_CAP drops to one try a week. Nothing is dropped — a PARKED row is
+   * by definition waiting on something outside our control.
+   */
+  const weekAgo = new Date(Date.now() - RETRY_SLOW_LANE_MS);
   const pending = await prisma.portalDeliverySubmission.findMany({
-    where: { status: { in: ['PARKED', 'INCOMPLETE', 'FAILED'] } },
-    orderBy: { receivedAt: 'asc' },
+    where: {
+      status: { in: ['PARKED', 'INCOMPLETE', 'FAILED'] },
+      OR: [{ attempts: { lt: RETRY_ATTEMPT_CAP } }, { updatedAt: { lt: weekAgo } }],
+    },
+    orderBy: [{ updatedAt: 'asc' }, { receivedAt: 'asc' }],
     take: Math.min(Math.max(limit, 1), 100),
     select: { id: true, mondayItemId: true, status: true },
   });
   const results: Record<string, number> = {};
   for (const p of pending) {
-    // INCOMPLETE means the row itself was thin, so go back to monday for it;
-    // anything else can be finished from what is already stored.
-    const r =
-      p.status === 'INCOMPLETE'
-        ? await ingestDeliverySubmission(p.mondayItemId)
-        : await processSubmission(p.id);
+    let r: string;
+    try {
+      // Counted before the work, so a try that throws still moves the row back.
+      await prisma.portalDeliverySubmission.update({
+        where: { id: p.id },
+        data: { attempts: { increment: 1 } },
+      });
+      // INCOMPLETE means the row itself was thin, so go back to monday for it;
+      // anything else can be finished from what is already stored.
+      r =
+        p.status === 'INCOMPLETE'
+          ? await ingestDeliverySubmission(p.mondayItemId)
+          : await processSubmission(p.id);
+    } catch (err) {
+      // One bad row must not stop the sweep for every row behind it.
+      logger.error({ err, submissionId: p.id }, 'portal delivery: retry threw');
+      r = 'failed';
+    }
     results[r] = (results[r] ?? 0) + 1;
   }
   return { checked: pending.length, results };

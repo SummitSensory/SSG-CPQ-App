@@ -92,16 +92,13 @@ describe('sendAlert', () => {
   // (5xx/429) or the network fails, the next attempt within the hour is
   // suppressed. For one-shot business alerts (esign viewed/declined/completed)
   // the caller's guard is already claimed, so the notification is lost for good.
-  it.fails(
-    'BUG: a rejected delivery does not suppress the retry of the same fingerprint',
-    async () => {
-      fetchMock.mockResolvedValueOnce(new Response('busy', { status: 503 }));
-      const { sendAlert } = await import('../../src/lib/alerts.js');
-      sendAlert({ title: 'Proposal P-1 — declined', fingerprint: 'esign-declined-env1' });
-      await flush();
-      sendAlert({ title: 'Proposal P-1 — declined', fingerprint: 'esign-declined-env1' });
-      await flush();
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-    },
-  );
+  it('BUG: a rejected delivery does not suppress the retry of the same fingerprint', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('busy', { status: 503 }));
+    const { sendAlert } = await import('../../src/lib/alerts.js');
+    sendAlert({ title: 'Proposal P-1 — declined', fingerprint: 'esign-declined-env1' });
+    await flush();
+    sendAlert({ title: 'Proposal P-1 — declined', fingerprint: 'esign-declined-env1' });
+    await flush();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 });

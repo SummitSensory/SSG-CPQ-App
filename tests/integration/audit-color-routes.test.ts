@@ -717,29 +717,58 @@ describe('the full staff path: map → customer answers → Mark reviewed → BO
   });
 
   /**
-   * KNOWN GAP. A frame-paint code that is not on the brand's chart (a portal typo, or
-   * a colour the chart lost) is written to the vendor's sheet as "Cardinal T009-ZZ99"
-   * with no warning anywhere: the review result has no field for it (offChart covers
-   * multi-piece parts only) and the colour check compares the line against the same
-   * composed text, so it reports OK. Fails today; passes once either the review
-   * (colors.offChart) or the colour check (an area issue) names the code.
+   * Was a KNOWN GAP: a frame-paint code not on the brand's chart (a portal typo, or a
+   * colour the chart lost) was written to the vendor's sheet with no warning anywhere.
+   * It is still applied as given (the coater orders by code), but the review names it
+   * under colors.offChart and the colour check raises it as an issue on the area.
    */
-  it.fails(
-    'KNOWN GAP: an off-chart frame-paint code is flagged by the review or the colour check',
-    async () => {
-      const changed = structuredClone(ANSWERS);
-      changed.selections[FRAME]!.legs = { brand: 'cardinal', code: 'T009-ZZ99' };
-      const h = await receive(changed);
-      const res = json<ReviewResponse>(await call('ops', 'POST', reviewUrl(), { contentHash: h }));
-      expect(await lineColor(SKU.leg)).toBe('Cardinal T009-ZZ99'); // applied as-is
-      const rep = json<ColorCheck>(await call('ops', 'GET', `/orders/${orderId}/bom/color-check`));
-      const legIssues = rep.areas.find((a) => a.areaKey === AREA.legs)!.issues;
-      const flagged =
-        (res.colors?.offChart ?? []).some((x) => x.includes('T009-ZZ99')) ||
-        legIssues.some((x) => x.includes('T009-ZZ99'));
-      expect(flagged).toBe(true);
-    },
-  );
+  it('an off-chart frame-paint code is flagged by the review AND the colour check', async () => {
+    const changed = structuredClone(ANSWERS);
+    changed.selections[FRAME]!.legs = { brand: 'cardinal', code: 'T009-ZZ99' };
+    const h = await receive(changed);
+    const res = json<ReviewResponse>(await call('ops', 'POST', reviewUrl(), { contentHash: h }));
+    expect(await lineColor(SKU.leg)).toBe('Cardinal T009-ZZ99'); // applied as-is
+    const rep = json<ColorCheck>(await call('ops', 'GET', `/orders/${orderId}/bom/color-check`));
+    const legIssues = rep.areas.find((a) => a.areaKey === AREA.legs)!.issues;
+    expect((res.colors?.offChart ?? []).some((x) => x.includes('T009-ZZ99'))).toBe(true);
+    expect(legIssues.some((x) => x.includes('T009-ZZ99'))).toBe(true);
+    // An on-chart pick on another area is not flagged.
+    expect((res.colors?.offChart ?? []).some((x) => x.includes('T009-BL05'))).toBe(false);
+  });
+
+  it('POST /orders/:id/portal/color/reapply: ORDERS_MANAGE only; fills a blank late-added line, leaves the rest', async () => {
+    const leg = await db.procurementLine.findFirstOrThrow({ where: { orderId, sku: SKU.leg } });
+    const late = await db.procurementLine.create({
+      data: {
+        orderId,
+        sku: SKU.leg,
+        name: 'Added after review',
+        vendor: leg.vendor,
+        quantity: 1,
+        quantityOriginal: 1,
+        unitCostMinor: 1000,
+      },
+    });
+    const url = `/orders/${orderId}/portal/color/reapply`;
+    expect((await call(null, 'POST', url, {})).statusCode).toBe(401);
+    for (const who of ['rep', 'ro'] as const) {
+      expect((await call(who, 'POST', url, {})).statusCode, who).toBe(403);
+    }
+    expect(
+      (await db.procurementLine.findUniqueOrThrow({ where: { id: late.id } })).powderColor,
+    ).toBeNull();
+    const r = await call('ops', 'POST', url, {});
+    expect(r.statusCode).toBe(200);
+    const body = json<{ colors: { linesUpdated: number } }>(r);
+    expect(body.colors.linesUpdated).toBe(1);
+    expect(
+      (await db.procurementLine.findUniqueOrThrow({ where: { id: late.id } })).powderColor,
+    ).toBe('Cardinal T009-ZZ99');
+    expect(
+      (await call('ops', 'POST', '/orders/no-such-order/portal/color/reapply', {})).statusCode,
+    ).toBe(404);
+    await db.procurementLine.delete({ where: { id: late.id } });
+  });
 });
 
 describe('the colour check and portal routes for an order that does not exist', () => {
@@ -750,11 +779,13 @@ describe('the colour check and portal routes for an order that does not exist', 
     );
   });
 
-  // Low severity, documented: unlike the colour check, GET /orders/:id/portal does not
-  // check the order exists — it answers 200 with five empty ("NONE") steps.
-  it('GET /orders/:id/portal answers 200 with empty steps for an unknown order', async () => {
+  // Was low severity: GET /orders/:id/portal answered 200 with five empty steps for an
+  // order that does not exist. It is a 404 now, like the colour check.
+  it('GET /orders/:id/portal is 404 for an unknown order', async () => {
     const r = await call('ops', 'GET', '/orders/no-such-order/portal');
-    expect(r.statusCode).toBe(200);
-    expect(json<PortalItemView[]>(r).every((i) => i.display === 'NONE')).toBe(true);
+    expect(r.statusCode).toBe(404);
+    const ok = await call('ops', 'GET', `/orders/${orderId}/portal`);
+    expect(ok.statusCode).toBe(200);
+    expect(json<PortalItemView[]>(ok)).toHaveLength(5);
   });
 });

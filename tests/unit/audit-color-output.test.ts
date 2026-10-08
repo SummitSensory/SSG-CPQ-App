@@ -110,33 +110,27 @@ describe('the eye-bolt roll-up and colour', () => {
     ]);
   });
 
-  it.fails(
-    'BUG: a coloured variant folded into an uncoloured base line loses its colour (bomRollup.ts:229-253 never reads powderColor)',
-    () => {
-      const out = rollUpBomLines([
-        bomLine('6820H-LP', 2, ''),
-        bomLine('6820H-LP-ZP', 1, 'Cardinal Black T009-BK01'),
-      ]);
-      expect(out).toHaveLength(1);
-      expect(out[0]!.powderColor).toContain('T009-BK01');
-    },
-  );
+  it('FIXED: a coloured variant folded into an uncoloured base line loses its colour (bomRollup.ts:229-253 never reads powderColor)', () => {
+    const out = rollUpBomLines([
+      bomLine('6820H-LP', 2, ''),
+      bomLine('6820H-LP-ZP', 1, 'Cardinal Black T009-BK01'),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.powderColor).toContain('T009-BK01');
+  });
 
-  it.fails(
-    'BUG: the order screen’s roll-up (rollUpProcurementLines) loses a variant’s colour the same way',
-    () => {
-      const out = rollUpProcurementLines([
-        { sku: '6820H-LP', vendor: 'Fab', quantity: 2, unitCostMinor: 100, powderColor: null },
-        {
-          sku: '6820H-LP-ZP',
-          vendor: 'Fab',
-          quantity: 1,
-          unitCostMinor: 100,
-          powderColor: 'Cardinal Black T009-BK01',
-        },
-      ]);
-      expect(out).toHaveLength(1);
-      expect(out[0]!.powderColor ?? '').toContain('T009-BK01');
-    },
-  );
+  it('FIXED: the order screen’s roll-up (rollUpProcurementLines) loses a variant’s colour the same way', () => {
+    const out = rollUpProcurementLines([
+      { sku: '6820H-LP', vendor: 'Fab', quantity: 2, unitCostMinor: 100, powderColor: null },
+      {
+        sku: '6820H-LP-ZP',
+        vendor: 'Fab',
+        quantity: 1,
+        unitCostMinor: 100,
+        powderColor: 'Cardinal Black T009-BK01',
+      },
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.powderColor ?? '').toContain('T009-BK01');
+  });
 });

@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { env } from '../config/env.js';
+import { isBearerSecret } from '../lib/secretCompare.js';
 import { logger } from '../lib/logger.js';
 import { retryPendingSubmissions } from '../integrations/monday/portalDelivery.js';
 import {
@@ -40,7 +41,7 @@ export function registerCronRoutes(app: FastifyInstance): void {
         return reply.status(503).send({ error: 'CRON_SECRET_NOT_SET' });
       }
       const auth = req.headers.authorization ?? '';
-      if (auth !== `Bearer ${env.CRON_SECRET}`) {
+      if (!isBearerSecret(auth, env.CRON_SECRET)) {
         return reply.status(401).send({ error: 'UNAUTHORIZED' });
       }
 

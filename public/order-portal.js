@@ -1014,6 +1014,20 @@
     return d ? JSON.stringify([d.display, d.obtainedAt, d.answers]) : '';
   }
 
+  /** Whether colour answers carry at least one pick (mirrors colorAreasOf on the server). */
+  function hasColorPicks(a) {
+    var sel = a && typeof a === 'object' ? a.selections : null;
+    if (!sel || typeof sel !== 'object') return false;
+    return Object.keys(sel).some(function (g) {
+      var areas = sel[g];
+      if (!areas || typeof areas !== 'object') return false;
+      return Object.keys(areas).some(function (k) {
+        var p = areas[k];
+        return !!(p && typeof p === 'object' && String(p.code == null ? '' : p.code).trim());
+      });
+    });
+  }
+
   function reviewNoteHtml(kind, res) {
     if (!res) return '';
     var parts = [];
@@ -1023,15 +1037,21 @@
       );
     var c = res.colors;
     if (c) {
+      if (c.markedCompleteWithoutColors)
+        parts.push(
+          '<div><b style="font-weight:600;">Marked complete without colours.</b> No colour picks arrived with this step, so nothing could be applied — get the colours from the customer and set them on the Bill of Materials by hand.</div>',
+        );
       parts.push(
         '<div>' +
           (c.linesUpdated
-            ? 'Applied to ' +
+            ? (res.reapplied ? 'Filled ' : 'Applied to ') +
               c.linesUpdated +
               ' Bill of Materials line' +
               (c.linesUpdated === 1 ? '' : 's') +
               '.'
-            : 'No Bill of Materials lines were changed.') +
+            : res.reapplied
+              ? 'No blank Bill of Materials lines needed a colour.'
+              : 'No Bill of Materials lines were changed.') +
           '</div>',
       );
       var list = function (title, xs, why) {
@@ -1069,9 +1089,30 @@
       );
       parts.push(
         list(
-          "Pieces whose colour is not on the part's vendor chart",
+          'Lines cleared — areas the customer changed now ask for different colours',
+          c.clearedLines || [],
+          '— set these lines by hand:',
+        ),
+      );
+      parts.push(
+        list(
+          "Colours not on the vendor's chart",
           c.offChart || [],
-          '— add the colour to the chart, or set the piece by hand:',
+          '— check the code with the customer; a piece not on its chart was left unchanged:',
+        ),
+      );
+      parts.push(
+        list(
+          'Kept as they were — set on the Bill of Materials since the last review',
+          c.keptStaffEdits || [],
+          '(the customer did not change these areas):',
+        ),
+      );
+      parts.push(
+        list(
+          'Areas the customer no longer answers',
+          c.droppedAreas || [],
+          '— their lines keep the earlier colour; clear or confirm them by hand:',
         ),
       );
       parts.push(
@@ -1090,7 +1131,10 @@
         (c.unmappedAreas.length ||
           c.noMatchingLines.length ||
           c.skippedVendors.length ||
+          c.markedCompleteWithoutColors ||
           (c.conflicts || []).length ||
+          (c.clearedLines || []).length ||
+          (c.droppedAreas || []).length ||
           (c.offChart || []).length))
     );
     return (
@@ -1125,6 +1169,21 @@
     var canMark = st.canReview && it.display === 'NEW';
     var answers = answersHtml(it.kind, it.answers);
     var busy = st.busy === it.kind;
+    var isColor = it.kind === 'COLOR';
+    // Fills BLANK lines only (added after review) from the reviewed colours.
+    var canReapply = isColor && st.canReview && it.display === 'REVIEWED';
+    var reapplyBusy = st.busy === 'COLOR_REAPPLY';
+    var colorNote = '';
+    if (
+      isColor &&
+      (it.display === 'NEW' || it.display === 'REVIEWED') &&
+      !hasColorPicks(it.answers)
+    )
+      colorNote =
+        'Marked complete without colours — no colour picks arrived with this step, so reviewing it applies nothing. Get the colours from the customer and set them on the Bill of Materials by hand.';
+    else if (isColor && it.display === 'NONE' && /✅/.test(it.mondayStatus || ''))
+      colorNote =
+        'Marked complete on monday.com, but the customer has not confirmed colours in the portal — their picks are still a draft, so nothing is applied.';
     return (
       '<div data-pkind="' +
       esc(it.kind) +
@@ -1156,7 +1215,19 @@
           (busy ? 'Marking…' : 'Mark reviewed') +
           '</button>'
         : '') +
+      (canReapply
+        ? '<button class="link-btn portalReapply"' +
+          (reapplyBusy ? ' disabled' : '') +
+          ' title="Fills Bill of Materials lines that have no colour (lines added after review) from the reviewed colours. Lines that already have a colour are never changed." style="width:auto;padding:6px 12px;font-size:12.5px;">' +
+          (reapplyBusy ? 'Re-applying…' : 'Re-apply reviewed colours') +
+          '</button>'
+        : '') +
       '</div>' +
+      (colorNote
+        ? '<div style="margin-top:8px;padding:8px 11px;border-radius:9px;font-size:12.5px;border:1px solid #eadfbe;background:#fdf6e3;color:#8a6d1f;">' +
+          esc(colorNote) +
+          '</div>'
+        : '') +
       (st.errors[it.kind]
         ? '<div class="err" style="margin-top:8px;">' + esc(st.errors[it.kind]) + '</div>'
         : '') +
@@ -1249,6 +1320,39 @@
           review(b.getAttribute('data-kind'));
         });
       });
+      el.querySelectorAll('.portalReapply').forEach(function (b) {
+        b.addEventListener('click', function () {
+          reapply();
+        });
+      });
+    }
+
+    /** Fill blank BOM lines from the reviewed colours (lines added after review). */
+    async function reapply() {
+      st.busy = 'COLOR_REAPPLY';
+      delete st.errors.COLOR;
+      delete st.notes.COLOR;
+      paint();
+      try {
+        var r = await opts.authed('/orders/' + opts.orderId + '/portal/color/reapply', {
+          method: 'POST',
+          body: {},
+        });
+        if (!r.ok) {
+          st.errors.COLOR = await serverMessage(
+            r,
+            'Could not re-apply the colours (' + r.status + ').',
+          );
+        } else {
+          var res = await r.json();
+          st.notes.COLOR = { colors: res.colors, reapplied: true };
+          if (res.colors && res.colors.linesUpdated > 0 && opts.onBomChanged) opts.onBomChanged();
+        }
+      } catch (e) {
+        st.errors.COLOR = (e && e.message) || 'Could not reach the server.';
+      }
+      st.busy = '';
+      paint();
     }
 
     async function doSync(force) {

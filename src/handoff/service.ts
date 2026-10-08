@@ -158,28 +158,42 @@ export async function resolveCatalogRefs(
   if (!productIds.length && !parts.length && !names.length)
     return lines.map(() => ({ sku: null, vendor: null, unitCostMinor: null, unitWeightLbs: null }));
 
-  const [products, skus] = await Promise.all([
-    prisma.product.findMany({
-      where: { OR: [{ id: { in: productIds } }, { sku: { in: parts } }, { name: { in: names } }] },
-      select: {
-        id: true,
-        sku: true,
-        name: true,
-        weightOz: true,
-        sourcing: { select: { isPrimary: true, manufacturer: { select: { name: true } } } },
+  const products = await prisma.product.findMany({
+    where: { OR: [{ id: { in: productIds } }, { sku: { in: parts } }, { name: { in: names } }] },
+    select: {
+      id: true,
+      sku: true,
+      name: true,
+      weightOz: true,
+      sourcing: {
+        select: { isPrimary: true, manufacturer: { select: { name: true } } },
+        // Deterministic when several rows are flagged primary (ProductSourcing allows
+        // that): primary first, then the oldest.
+        orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }, { id: 'asc' }],
       },
-    }),
-    prisma.sku.findMany({
-      where: { OR: [{ part: { in: parts } }, { description: { in: names } }] },
-      select: {
-        part: true,
-        description: true,
-        manufacturer: true,
-        unitCostMinor: true,
-        weightLbs: true,
-      },
-    }),
-  ]);
+    },
+  });
+  // The Sku rows for every part in play — including the part numbers of products
+  // matched by id or name — because Sku.manufacturer is the ordering override and has
+  // to win however the line was matched.
+  const skuParts = [
+    ...new Set([...parts, ...products.map((p) => p.sku).filter((v): v is string => !!v)]),
+  ];
+  const skus = await prisma.sku.findMany({
+    where: { OR: [{ part: { in: skuParts } }, { description: { in: names } }] },
+    select: {
+      part: true,
+      description: true,
+      manufacturer: true,
+      unitCostMinor: true,
+      weightLbs: true,
+    },
+  });
+  const skuVendorByPart = new Map<string, string>();
+  for (const s of skus) {
+    const m = (s.manufacturer || '').trim();
+    if (m && !skuVendorByPart.has(s.part)) skuVendorByPart.set(s.part, s.manufacturer as string);
+  }
 
   type Ref = {
     sku: string | null;
@@ -187,8 +201,13 @@ export async function resolveCatalogRefs(
     unitCostMinor: number | null;
     unitWeightLbs: number | null;
   };
+  // Sku.manufacturer is the BOM ordering override (CLAUDE.md, "Data model"); the
+  // product's sourcing is the fallback. This matches partInfo (bomBuild.ts) and
+  // resolveVendors (the freight RFQ), so one part never goes to two vendors.
   const vendorOf = (p: (typeof products)[number]): string | null => {
-    const s = p.sourcing.find((x) => x.isPrimary) ?? p.sourcing[0];
+    const override = p.sku ? skuVendorByPart.get(p.sku) : undefined;
+    if (override) return override;
+    const s = p.sourcing[0];
     return s?.manufacturer?.name ?? null;
   };
   const byId = new Map<string, Ref>();
@@ -213,7 +232,7 @@ export async function resolveCatalogRefs(
     // from here; a Product match only ever wins on vendor.
     const ref: Ref = {
       sku: s.part,
-      vendor: s.manufacturer ?? null,
+      vendor: (s.manufacturer || '').trim() ? s.manufacturer : null,
       unitCostMinor: s.unitCostMinor ?? null,
       unitWeightLbs: s.weightLbs == null ? null : Number(s.weightLbs),
     };
@@ -223,7 +242,7 @@ export async function resolveCatalogRefs(
       priorPart
         ? {
             sku: priorPart.sku ?? ref.sku,
-            vendor: priorPart.vendor ?? ref.vendor,
+            vendor: ref.vendor ?? priorPart.vendor,
             unitCostMinor: ref.unitCostMinor,
             unitWeightLbs: ref.unitWeightLbs ?? priorPart.unitWeightLbs,
           }
@@ -235,7 +254,12 @@ export async function resolveCatalogRefs(
       else
         byName.set(s.description, {
           sku: existing.sku ?? ref.sku,
-          vendor: existing.vendor ?? ref.vendor,
+          // The Sku's own vendor wins when it is the same part; a name collision with
+          // a DIFFERENT part keeps the first part's (already override-resolved) vendor.
+          vendor:
+            existing.sku == null || existing.sku === ref.sku
+              ? (ref.vendor ?? existing.vendor)
+              : (existing.vendor ?? ref.vendor),
           unitCostMinor: ref.unitCostMinor,
           unitWeightLbs: ref.unitWeightLbs ?? existing.unitWeightLbs,
         });
@@ -1207,6 +1231,17 @@ export async function upsertProcurementLine(
   userId: string,
 ) {
   await getOrder(orderId);
+  if (input.id) {
+    // An update must be to a line of THIS order, and the line's own section has to
+    // be open too — otherwise changing the vendor would move a line off a submitted
+    // sheet the vendor already has.
+    const existing = await prisma.procurementLine.findFirst({
+      where: { id: input.id, orderId },
+      select: { vendor: true },
+    });
+    if (!existing) throw new NotFoundError('Bill of Materials line not found on this order');
+    await assertSectionOpen(orderId, existing.vendor);
+  }
   const [ref = EMPTY_REF] = await resolveCatalogRefs([
     { productId: input.productId ?? null, sku: input.sku ?? null, name: input.name },
   ]);
@@ -1230,7 +1265,7 @@ export async function upsertProcurementLine(
     unitWeightLbs: input.unitWeightLbs ?? ref.unitWeightLbs ?? null,
   };
   const line = input.id
-    ? await prisma.procurementLine.update({ where: { id: input.id }, data })
+    ? await prisma.procurementLine.update({ where: { id: input.id, orderId }, data })
     : await prisma.procurementLine.create({ data });
   await logEvent(orderId, input.id ? 'procurement.update' : 'procurement.add', userId, {
     lineId: line.id,
@@ -1404,8 +1439,12 @@ export async function patchProcurementLine(
         ? { powderColorCode: (patch.powderColorCode || '').trim() || null }
         : {}),
       ...(colorTouched ? { powderColor: printed } : {}),
+      // Clearing the printed text clears the colour outright: leaving brand + code
+      // behind would let the line pass the submission check yet print "—".
       ...(!colorTouched && patch.powderColor !== undefined
-        ? { powderColor: patch.powderColor || null }
+        ? (patch.powderColor || '').trim()
+          ? { powderColor: patch.powderColor }
+          : { powderColor: null, powderBrandId: null, powderColorCode: null }
         : {}),
       ...(patch.vendorNotes !== undefined ? { vendorNotes: patch.vendorNotes || null } : {}),
       ...(patch.poNumber !== undefined ? { poNumber: patch.poNumber || null } : {}),
@@ -1536,13 +1575,17 @@ export async function applyPowderColorToOrder(
   const [lines, steel] = await Promise.all([
     prisma.procurementLine.findMany({
       where: { orderId },
-      select: { id: true, vendor: true, powderColor: true },
+      select: { id: true, vendor: true, powderColor: true, isHardwareComponent: true },
     }),
     prisma.manufacturer.findMany({ where: { isSteelFabricator: true }, select: { name: true } }),
   ]);
   const steelNames = new Set(steel.map((m) => m.name.toLowerCase()));
+  // Kit fasteners are hardware and never painted, even on the fabricator's sheet.
   const target = lines.filter(
-    (l) => steelNames.has((l.vendor || '').toLowerCase()) && (opts.overwrite || !l.powderColor),
+    (l) =>
+      !l.isHardwareComponent &&
+      steelNames.has((l.vendor || '').toLowerCase()) &&
+      (opts.overwrite || !l.powderColor),
   );
   if (target.length) {
     await prisma.procurementLine.updateMany({

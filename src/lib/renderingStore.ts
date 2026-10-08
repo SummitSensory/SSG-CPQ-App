@@ -101,9 +101,18 @@ export async function issueDirectUploadToken(input: {
  */
 export async function verifyRenderingUpload(
   url: string,
-): Promise<{ size: number; contentType: string; pathname: string }> {
+): Promise<{ url: string; size: number; contentType: string; pathname: string }> {
   const result = await blobHead(url, { token: env.BLOB_READ_WRITE_TOKEN });
-  return { size: result.size, contentType: result.contentType, pathname: result.pathname };
+  // `url` is the store's own canonical address for the blob. Callers persist THIS,
+  // never the URL the browser reported: head() is keyed on the pathname, so a
+  // browser-supplied URL on some other host would otherwise be stored, and getFile
+  // would later be asked to read from it.
+  return {
+    url: result.url,
+    size: result.size,
+    contentType: result.contentType,
+    pathname: result.pathname,
+  };
 }
 
 export interface ResolvedRendering {

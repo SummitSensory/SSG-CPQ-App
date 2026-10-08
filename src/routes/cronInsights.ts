@@ -18,6 +18,7 @@
  */
 import type { FastifyInstance } from 'fastify';
 import { env } from '../config/env.js';
+import { isBearerSecret } from '../lib/secretCompare.js';
 import { logger } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { buildDataset } from '../reporting/dataset.js';
@@ -28,7 +29,7 @@ import {
   type ReportResult,
 } from '../reporting/query.js';
 import { sendOutlookMail } from '../integrations/microsoft/graph.js';
-import { sendAlert } from '../lib/alerts.js';
+import { deliverAlert } from '../lib/alerts.js';
 
 const esc = (s: unknown): string =>
   String(s ?? '')
@@ -150,127 +151,133 @@ function scheduleWindow(cadence: string, now: Date): { from: string; to: string;
 }
 
 export function registerInsightCronRoutes(app: FastifyInstance): void {
-  app.post('/cron/scheduled-reports', async (req, reply) => {
-    if (!env.CRON_SECRET) return reply.status(503).send({ error: 'CRON_SECRET_NOT_SET' });
-    if ((req.headers.authorization ?? '') !== `Bearer ${env.CRON_SECRET}`) {
-      return reply.status(401).send({ error: 'UNAUTHORIZED' });
-    }
-
-    const started = Date.now();
-    const now = new Date();
-    const out: Record<string, unknown> = { ranAt: now.toISOString() };
-    const results: { report: string; status: string; detail?: string }[] = [];
-
-    try {
-      const rows = await prisma.savedReport.findMany({
-        where: { cadence: { in: ['WEEKLY', 'MONTHLY'] } },
-      });
-      // Forced, not cached: a scheduled send must not report a figure that was true
-      // a minute before midnight on somebody else's page view.
-      const data = rows.length ? await buildDataset(true) : null;
-
-      for (const r of rows) {
-        if (!dueToday(r.cadence, r.scheduleDay, now)) continue;
-        // Already sent today. Cheap insurance against a double fire.
-        if (
-          r.lastSentAt &&
-          r.lastSentAt.toISOString().slice(0, 10) === now.toISOString().slice(0, 10)
-        ) {
-          results.push({ report: r.name, status: 'already-sent-today' });
-          continue;
-        }
-        const to = String(r.recipients ?? '')
-          .split(/[,;]/)
-          .map((s) => s.trim())
-          .filter(Boolean)
-          .map((email) => ({ email }));
-        if (!to.length) {
-          results.push({ report: r.name, status: 'no-recipients' });
-          continue;
-        }
-        const sender = r.sendAsId ?? r.createdById;
-        const win = scheduleWindow(r.cadence, now);
-
-        try {
-          const res = runReport(data!, {
-            ...(r.definition as unknown as ReportDefinition),
-            from: win.from,
-            to: win.to,
-          });
-          const csv = reportCsv(res);
-          await sendOutlookMail({
-            userId: sender,
-            to,
-            subject: `${r.name} — ${win.label}`,
-            html: reportHtml(r.name, res, win.label),
-            attachments: [
-              {
-                filename: `${
-                  r.name
-                    .replace(/[^\w .-]+/g, ' ')
-                    .trim()
-                    .slice(0, 60) || 'report'
-                }.csv`,
-                contentType: 'text/csv',
-                bytes: Buffer.from(csv, 'utf8'),
-              },
-            ],
-          });
-          await prisma.savedReport.update({
-            where: { id: r.id },
-            data: { lastSentAt: new Date(), lastSendError: null },
-          });
-          results.push({ report: r.name, status: 'sent', detail: `${res.rows.length} rows` });
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          // Recorded on the report, not just in the log: the person who scheduled it
-          // is the only one who can fix "Outlook is not connected".
-          await prisma.savedReport.update({
-            where: { id: r.id },
-            data: { lastSendError: message.slice(0, 500) },
-          });
-          logger.error({ err, report: r.name }, 'cron: scheduled report failed to send');
-
-          /*
-           * And tell somebody.
-           *
-           * A scheduled report that stops arriving is invisible: nobody notices the
-           * absence of an email, and the only other signal was a red line on a card
-           * that has no reason to be opened. The common cause is mundane and specific
-           * — the owner's Outlook grant was revoked, or they left the company — so
-           * the alert names the report, the mailbox it tried, and the reason.
-           *
-           * Fingerprinted per report, so a weekly schedule that has been broken for a
-           * month sends one alert rather than four identical ones.
-           */
-          sendAlert({
-            title: `Scheduled report "${r.name}" could not be sent`,
-            detail:
-              `It was due today and ${to.length} recipient${to.length === 1 ? '' : 's'} did not get it. ` +
-              'The usual cause is the sending mailbox no longer being connected to Outlook — ' +
-              'reconnect it under My Profile, or change the sender under Insights → Saved reports.',
-            err,
-            fingerprint: `scheduled-report:${r.id}`,
-            context: {
-              report: r.name,
-              reportId: r.id,
-              sendAsUserId: sender,
-              recipients: to.map((x) => x.email).join(', '),
-              window: win.label,
-            },
-          });
-
-          results.push({ report: r.name, status: 'failed', detail: message });
-        }
+  // GET and POST, like every other /cron/* route: Vercel Cron only ever sends GET,
+  // and POST stays available for a manual re-run.
+  app.route({
+    method: ['GET', 'POST'],
+    url: '/cron/scheduled-reports',
+    handler: async (req, reply) => {
+      if (!env.CRON_SECRET) return reply.status(503).send({ error: 'CRON_SECRET_NOT_SET' });
+      if (!isBearerSecret(req.headers.authorization, env.CRON_SECRET)) {
+        return reply.status(401).send({ error: 'UNAUTHORIZED' });
       }
-      out.reports = results;
-    } catch (err) {
-      logger.error({ err }, 'cron: scheduled reports sweep failed');
-      out.reports = { error: err instanceof Error ? err.message : String(err) };
-    }
 
-    out.ms = Date.now() - started;
-    logger.info(out, 'cron: scheduled reports');
-    return reply.send(out);
+      const started = Date.now();
+      const now = new Date();
+      const out: Record<string, unknown> = { ranAt: now.toISOString() };
+      const results: { report: string; status: string; detail?: string }[] = [];
+
+      try {
+        const rows = await prisma.savedReport.findMany({
+          where: { cadence: { in: ['WEEKLY', 'MONTHLY'] } },
+        });
+        // Forced, not cached: a scheduled send must not report a figure that was true
+        // a minute before midnight on somebody else's page view.
+        const data = rows.length ? await buildDataset(true) : null;
+
+        for (const r of rows) {
+          if (!dueToday(r.cadence, r.scheduleDay, now)) continue;
+          // Already sent today. Cheap insurance against a double fire.
+          if (
+            r.lastSentAt &&
+            r.lastSentAt.toISOString().slice(0, 10) === now.toISOString().slice(0, 10)
+          ) {
+            results.push({ report: r.name, status: 'already-sent-today' });
+            continue;
+          }
+          const to = String(r.recipients ?? '')
+            .split(/[,;]/)
+            .map((s) => s.trim())
+            .filter(Boolean)
+            .map((email) => ({ email }));
+          if (!to.length) {
+            results.push({ report: r.name, status: 'no-recipients' });
+            continue;
+          }
+          const sender = r.sendAsId ?? r.createdById;
+          const win = scheduleWindow(r.cadence, now);
+
+          try {
+            const res = runReport(data!, {
+              ...(r.definition as unknown as ReportDefinition),
+              from: win.from,
+              to: win.to,
+            });
+            const csv = reportCsv(res);
+            await sendOutlookMail({
+              userId: sender,
+              to,
+              subject: `${r.name} — ${win.label}`,
+              html: reportHtml(r.name, res, win.label),
+              attachments: [
+                {
+                  filename: `${
+                    r.name
+                      .replace(/[^\w .-]+/g, ' ')
+                      .trim()
+                      .slice(0, 60) || 'report'
+                  }.csv`,
+                  contentType: 'text/csv',
+                  bytes: Buffer.from(csv, 'utf8'),
+                },
+              ],
+            });
+            await prisma.savedReport.update({
+              where: { id: r.id },
+              data: { lastSentAt: new Date(), lastSendError: null },
+            });
+            results.push({ report: r.name, status: 'sent', detail: `${res.rows.length} rows` });
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            // Recorded on the report, not just in the log: the person who scheduled it
+            // is the only one who can fix "Outlook is not connected".
+            await prisma.savedReport.update({
+              where: { id: r.id },
+              data: { lastSendError: message.slice(0, 500) },
+            });
+            logger.error({ err, report: r.name }, 'cron: scheduled report failed to send');
+
+            /*
+             * And tell somebody.
+             *
+             * A scheduled report that stops arriving is invisible: nobody notices the
+             * absence of an email, and the only other signal was a red line on a card
+             * that has no reason to be opened. The common cause is mundane and specific
+             * — the owner's Outlook grant was revoked, or they left the company — so
+             * the alert names the report, the mailbox it tried, and the reason.
+             *
+             * Fingerprinted per report, so a weekly schedule that has been broken for a
+             * month sends one alert rather than four identical ones.
+             */
+            await deliverAlert({
+              title: `Scheduled report "${r.name}" could not be sent`,
+              detail:
+                `It was due today and ${to.length} recipient${to.length === 1 ? '' : 's'} did not get it. ` +
+                'The usual cause is the sending mailbox no longer being connected to Outlook — ' +
+                'reconnect it under My Profile, or change the sender under Insights → Saved reports.',
+              err,
+              fingerprint: `scheduled-report:${r.id}`,
+              context: {
+                report: r.name,
+                reportId: r.id,
+                sendAsUserId: sender,
+                recipients: to.map((x) => x.email).join(', '),
+                window: win.label,
+              },
+            });
+
+            results.push({ report: r.name, status: 'failed', detail: message });
+          }
+        }
+        out.reports = results;
+      } catch (err) {
+        logger.error({ err }, 'cron: scheduled reports sweep failed');
+        out.reports = { error: err instanceof Error ? err.message : String(err) };
+      }
+
+      out.ms = Date.now() - started;
+      logger.info(out, 'cron: scheduled reports');
+      return reply.send(out);
+    },
   });
 }

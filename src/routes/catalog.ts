@@ -121,7 +121,12 @@ export function registerCatalogRoutes(app: FastifyInstance): void {
   app.post('/catalog/products', admin, async (req, reply) => {
     const parsed = ProductInput.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(parsed.error.message);
-    const dupe = await prisma.product.findUnique({ where: { sku: parsed.data.sku } });
+    // Case-insensitive, like POST /catalog/items: "abc-1" beside "ABC-1" is two catalog
+    // records the rest of the app's part-number joins cannot tell apart.
+    const dupe = await prisma.product.findFirst({
+      where: { sku: { equals: parsed.data.sku, mode: 'insensitive' } },
+      select: { id: true },
+    });
     if (dupe) throw new ConflictError('SKU already exists');
     const { activeFrom, activeTo, notes, ...rest } = parsed.data;
     const product = await prisma.product.create({

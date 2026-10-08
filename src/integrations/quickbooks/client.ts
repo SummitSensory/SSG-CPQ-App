@@ -17,6 +17,11 @@ import { QboApiError, backoff, intuitTid, sleep } from './http.js';
  */
 const MINOR_VERSION = '73';
 const MAX_ATTEMPTS = 5;
+/**
+ * One request to Intuit, not the whole call with its retries. Without it a stalled
+ * connection held the caller until the platform killed the function.
+ */
+const REQUEST_TIMEOUT_MS = 30_000;
 
 /** QuickBooks rejects a requestid longer than this with fault 6000. */
 const MAX_REQUEST_ID = 50;
@@ -80,21 +85,60 @@ async function request<T>(
   if (opts.requestId) url.searchParams.set('requestid', qboRequestId(opts.requestId));
   for (const [k, v] of Object.entries(opts.query ?? {})) url.searchParams.set(k, v);
 
+  /*
+   * Which failures may be retried blindly.
+   *
+   * A 429 always: Intuit throttled the request before acting on it. A 5xx or a
+   * timeout only when repeating the request cannot do a second thing — a GET, or a
+   * create carrying `requestid` (Intuit returns the original document). A gateway
+   * 502/504 on any other POST can arrive AFTER Intuit acted: a retried /send emails
+   * the customer twice, and a retried sparse update carries the now-stale SyncToken
+   * and comes back as a misleading 5010 although the first write succeeded. Those
+   * fail at once with the 5xx, so the caller re-reads before deciding.
+   */
+  const safeToRepeat = method === 'GET' || Boolean(opts.requestId);
+
   let lastErr: Error | undefined;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const token = await getAccessToken(realmId, fetchImpl);
-    const res = await fetchImpl(url.toString(), {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: opts.accept ?? 'application/json',
-        ...(opts.body ? { 'Content-Type': 'application/json' } : {}),
-      },
-      body: opts.body ? JSON.stringify(opts.body) : undefined,
-    });
+    let res: Response;
+    try {
+      res = await fetchImpl(url.toString(), {
+        method,
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: opts.accept ?? 'application/json',
+          ...(opts.body ? { 'Content-Type': 'application/json' } : {}),
+        },
+        body: opts.body ? JSON.stringify(opts.body) : undefined,
+      });
+    } catch (err) {
+      if (err instanceof Error && err.name === 'TimeoutError') {
+        lastErr = new Error(
+          `QuickBooks did not answer within ${REQUEST_TIMEOUT_MS / 1000} s (${method} ${path})`,
+        );
+        if (safeToRepeat) {
+          logger.warn({ attempt, path }, 'QuickBooks request timed out; retrying');
+          await sleep(backoff(attempt));
+          continue;
+        }
+        throw lastErr;
+      }
+      throw err;
+    }
 
     const tid = intuitTid(res);
 
+    if (res.status >= 500 && !safeToRepeat) {
+      const text = await res.text().catch(() => '');
+      const err = new QboApiError(res.status, tid, text);
+      logger.error(
+        { status: res.status, intuitTid: tid, path },
+        'QuickBooks 5xx on a non-idempotent POST; not retried (it may have applied)',
+      );
+      throw err;
+    }
     if (res.status === 429 || res.status >= 500) {
       const wait = backoff(attempt, Number(res.headers.get('retry-after') ?? '') || undefined);
       logger.warn(

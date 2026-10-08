@@ -266,6 +266,11 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
   // Anyone who can work an order can work this list — the person who packs the box
   // is not always the person who sold it.
   const guard = { preHandler: requirePermission(Permission.PROPOSAL_READ) };
+  // Shipping, voiding, clearing, restoring and adding freight all change the ledger
+  // (and push to monday), so they need a write permission: PROPOSAL_WRITE, held by
+  // every staff role that does the work (reps pack and ship belts too), but not by
+  // READ_ONLY or INSTALLER. Reading the list stays on PROPOSAL_READ.
+  const manage = { preHandler: requirePermission(Permission.PROPOSAL_WRITE) };
 
   /**
    * Everything the screen needs in one call: the belts still owed, grouped-ready,
@@ -437,7 +442,7 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
    * shipping at once cannot silently undo each other, and a partial shipment leaves
    * the balance owed.
    */
-  app.post('/belt-shipments/ship', guard, async (req) => {
+  app.post('/belt-shipments/ship', manage, async (req) => {
     const Body = z.object({
       slip: Slip.omit({
         id: true,
@@ -549,7 +554,7 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
    * its monday subitem (creating the subitem if the first attempt at print time did
    * not land — this is the retry path too).
    */
-  app.post('/belt-shipments/freight', guard, async (req) => {
+  app.post('/belt-shipments/freight', manage, async (req) => {
     const Body = z.object({
       slipId: z.string().trim().min(1).max(40),
       carrier: z.string().trim().max(80).optional(),
@@ -595,7 +600,7 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
    * The slip is NOT deleted. It may already be in a box in the post, so the record of
    * having printed it has to survive, along with who withdrew it and when.
    */
-  app.post('/belt-shipments/void', guard, async (req) => {
+  app.post('/belt-shipments/void', manage, async (req) => {
     const Body = z.object({ slipId: z.string().trim().min(1).max(40) });
     const parsed = Body.safeParse(req.body);
     if (!parsed.success) throw new ValidationError('Which slip?');
@@ -638,7 +643,7 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
    * of materials is not touched, and Restore (below) undoes it. A line whose BOM
    * quantity later goes up reappears with only the new pieces.
    */
-  app.post('/belt-shipments/clear', guard, async (req) => {
+  app.post('/belt-shipments/clear', manage, async (req) => {
     const Body = z.object({
       lineIds: z.array(z.string().trim().min(1).max(40)).min(1).max(200),
       reason: z.string().trim().max(300).default(''),
@@ -719,7 +724,7 @@ export function registerBeltShipmentRoutes(app: FastifyInstance): void {
   });
 
   /** Put a cleared line back on the queue. */
-  app.post('/belt-shipments/restore', guard, async (req) => {
+  app.post('/belt-shipments/restore', manage, async (req) => {
     const Body = z.object({ lineId: z.string().trim().min(1).max(40) });
     const parsed = Body.safeParse(req.body);
     if (!parsed.success) throw new ValidationError('Which belt?');

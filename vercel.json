@@ -34,6 +34,10 @@
     {
       "path": "/cron/esign-reminders",
       "schedule": "0 14 * * *"
+    },
+    {
+      "path": "/cron/scheduled-reports",
+      "schedule": "30 12 * * *"
     }
   ],
   "rewrites": [

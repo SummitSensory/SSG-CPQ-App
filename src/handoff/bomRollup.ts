@@ -58,13 +58,43 @@ const num = (v: unknown): number => (v == null ? 0 : Number(v) || 0);
 const vendorKey = (v: unknown): string =>
   (String(v ?? '').trim() || 'Unassigned vendor').toLowerCase();
 
+const colourOf = (c: unknown): string => String(c ?? '').trim();
+
+interface Keyable {
+  sku?: string | null;
+  vendor?: string | null;
+  powderColor?: string | null;
+}
+
 /**
- * Group key: vendor + purchased part. Lines only merge when the same vendor is
- * being asked for the same part — one part bought from two vendors is two purchase
- * orders and stays two lines.
+ * Group key: vendor + purchased part + colour. Lines only merge when the same vendor
+ * is being asked for the same part in the same colour — one part bought from two
+ * vendors is two purchase orders, and one part in two colours is two bins, so both
+ * stay two lines. An UNCOLOURED line joins its part's coloured line when that part
+ * has exactly one colour for that vendor (the colour was recorded on one of the
+ * part's names only); with two or more colours it stays a line of its own rather
+ * than guess which colour it is.
  */
-const groupKey = (sku: unknown, vendor: unknown): string =>
-  `${vendorKey(vendor)}::${norm(rollupPart(sku))}`;
+function groupKeyer(lines: Keyable[]): (line: Keyable) => string {
+  const base = (l: Keyable): string => `${vendorKey(l.vendor)}::${norm(rollupPart(l.sku))}`;
+  const colours = new Map<string, Set<string>>();
+  for (const l of lines) {
+    if (!participates(l.sku)) continue;
+    const c = colourOf(l.powderColor).toLowerCase();
+    if (!c) continue;
+    const set = colours.get(base(l)) ?? new Set<string>();
+    set.add(c);
+    colours.set(base(l), set);
+  }
+  return (l) => {
+    const b = base(l);
+    const own = colourOf(l.powderColor).toLowerCase();
+    if (own) return `${b}::${own}`;
+    const set = colours.get(b);
+    const only = set && set.size === 1 ? [...set][0] : undefined;
+    return `${b}::${only ?? ''}`;
+  };
+}
 
 /** "6820H-LP-ZP x2" — what the surviving line says it swallowed. */
 const rolledNote = (folded: Array<{ sku: string; quantity: number }>): string =>
@@ -91,6 +121,7 @@ interface ProcLineLike {
   unitCostMinor?: number | null;
   isHardwareComponent?: boolean;
   vendorNotes?: string | null;
+  powderColor?: string | null;
 }
 
 /** What a merged line gains, so the screen can say what it is made of. */
@@ -99,6 +130,7 @@ interface RolledUp {
   unitCostMinor: number | null;
   vendorNotes: string | null;
   isHardwareComponent: boolean;
+  powderColor?: string | null;
   name?: string;
   rolledUpFrom?: Array<{ sku: string; quantity: number }>;
   rolledUpNote?: string;
@@ -115,6 +147,7 @@ interface RolledUp {
  */
 export function rollUpProcurementLines<T extends ProcLineLike>(lines: T[]): T[] {
   if (!lines.some((l) => isRolledVariant(l.sku))) return lines;
+  const groupKey = groupKeyer(lines);
 
   const out: T[] = [];
   const groups = new Map<
@@ -134,7 +167,7 @@ export function rollUpProcurementLines<T extends ProcLineLike>(lines: T[]): T[] 
     }
     const qty = num(line.quantity);
     const ext = num(line.unitCostMinor) * qty;
-    const key = groupKey(line.sku, line.vendor);
+    const key = groupKey(line);
     const seen = groups.get(key);
 
     if (!seen) {
@@ -153,6 +186,8 @@ export function rollUpProcurementLines<T extends ProcLineLike>(lines: T[]): T[] 
     // The base part's own description wins over a variant's — the vendor's bin is
     // labelled with it.
     if (!isRolledVariant(line.sku) && line.name) m.name = line.name;
+    // An uncoloured first line takes the colour of the line folded into it.
+    if (!colourOf(m.powderColor) && colourOf(line.powderColor)) m.powderColor = line.powderColor;
     m.quantity = seen.qty;
     m.unitCostMinor = seen.qty ? Math.round(seen.extMinor / seen.qty) : num(line.unitCostMinor);
     m.rolledUpFrom = seen.folded.slice();
@@ -176,6 +211,7 @@ interface BomLineLike {
   vendor: string;
   vendorNotes: string;
   isHardware: boolean;
+  powderColor?: string;
 }
 
 /**
@@ -184,6 +220,7 @@ interface BomLineLike {
  */
 export function rollUpBomLines<T extends BomLineLike>(lines: T[]): T[] {
   if (!lines.some((l) => isRolledVariant(l.sku))) return lines;
+  const groupKey = groupKeyer(lines);
 
   const out: T[] = [];
   const groups = new Map<
@@ -196,7 +233,7 @@ export function rollUpBomLines<T extends BomLineLike>(lines: T[]): T[] {
       out.push(line);
       continue;
     }
-    const key = groupKey(line.sku, line.vendor);
+    const key = groupKey(line);
     const seen = groups.get(key);
 
     if (!seen) {
@@ -217,6 +254,7 @@ export function rollUpBomLines<T extends BomLineLike>(lines: T[]): T[] {
     const m = seen.line;
     seen.folded.push({ sku: line.sku, quantity: line.quantity });
     if (!isRolledVariant(line.sku) && line.name) m.name = line.name;
+    if (!colourOf(m.powderColor) && colourOf(line.powderColor)) m.powderColor = line.powderColor;
     m.quantity += line.quantity;
     m.extendedCostMinor += line.extendedCostMinor;
     m.extendedWeightLbs = Math.round((m.extendedWeightLbs + line.extendedWeightLbs) * 1000) / 1000;

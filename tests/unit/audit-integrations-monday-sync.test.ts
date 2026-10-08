@@ -37,6 +37,14 @@ vi.mock('../../src/lib/prisma.js', () => ({
         h.logs.push(data);
         return data;
       },
+      deleteMany: async ({ where }: { where: Record<string, unknown> }) => {
+        const before = h.logs.length;
+        for (let i = h.logs.length - 1; i >= 0; i--) {
+          const l = h.logs[i]!;
+          if (Object.entries(where).every(([k, v]) => l[k] === v)) h.logs.splice(i, 1);
+        }
+        return { count: before - h.logs.length };
+      },
     },
     externalLink: {
       findUnique: async ({ where }: { where: Record<string, Record<string, string>> }) => {
@@ -151,7 +159,7 @@ describe('applyInboundChange', () => {
   // BUG: the "received" row (unique eventId) is written before the work. If the
   // opportunity update throws, the webhook 500s, monday retries with the SAME
   // triggerUuid, and the retry returns 'duplicate' — the stage change is lost.
-  it.fails('BUG: a retry after a failed apply still applies the change', async () => {
+  it('BUG: a retry after a failed apply still applies the change', async () => {
     const change = {
       eventId: 'e6',
       itemId: 'item-1',
@@ -168,17 +176,14 @@ describe('applyInboundChange', () => {
   // Mapping drift: the CRM importer buckets Deal Phase labels fuzzily (toStage),
   // the webhook path requires an exact label from STAGE_TO_STATUS. A deal moved to
   // "Closed Won" on the board imports as CLOSED_WON but the live webhook ignores it.
-  it.fails(
-    'DRIFT: a label the importer maps to CLOSED_WON is also applied by the webhook',
-    async () => {
-      expect(toStage('Closed Won')).toBe('CLOSED_WON');
-      const r = await applyInboundChange({
-        eventId: 'e7',
-        itemId: 'item-1',
-        columnId: COLUMN.stage,
-        newStatusLabel: 'Closed Won',
-      });
-      expect(r).toBe('applied');
-    },
-  );
+  it('DRIFT: a label the importer maps to CLOSED_WON is also applied by the webhook', async () => {
+    expect(toStage('Closed Won')).toBe('CLOSED_WON');
+    const r = await applyInboundChange({
+      eventId: 'e7',
+      itemId: 'item-1',
+      columnId: COLUMN.stage,
+      newStatusLabel: 'Closed Won',
+    });
+    expect(r).toBe('applied');
+  });
 });

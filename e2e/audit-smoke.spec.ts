@@ -14,18 +14,12 @@ const token = process.env.E2E_TOKEN;
 /**
  * Known, already-diagnosed noise — listed explicitly so anything NEW still fails.
  *
- * 1. Inline `onerror="..."` on intro-art thumbnails (public/intro-admin.js:50,
- *    public/proposal-front-matter.js:300) is refused by the CSP's
- *    `script-src-attr 'none'`, which logs a console error per image. intro-admin.js
- *    re-binds the handler with addEventListener, so it is noise, not breakage.
- * 2. `/proposal/*.jpg|png` house art is served by Vercel's static CDN in production,
- *    but src/routes/web.ts has no route for public/proposal/**, so under the local
- *    Fastify server (and the CI e2e server) every intro image 404s.
+ * Empty. The two entries that were here are fixed: the intro-art thumbnails no
+ * longer carry an inline `onerror` (refused by the CSP's `script-src-attr 'none'`;
+ * they use `data-hide-broken` and a listener), and src/routes/web.ts now serves
+ * public/proposal/** locally, so intro images no longer 404 under Fastify.
  */
-const KNOWN: RegExp[] = [
-  /Executing inline event handler violates the following Content Security Policy directive 'script-src-attr 'none''/,
-  /GET \S+\/proposal\/[\w.-]+\.(jpg|png) -> 404 \(no such route\)/,
-];
+const KNOWN: RegExp[] = [];
 
 interface Problem {
   where: string;

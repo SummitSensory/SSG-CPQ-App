@@ -258,25 +258,19 @@ describe('audit: integrity checker — each drift case is detected', () => {
    * second Product silently matches the first one's Sku: an ACTIVE Product with no Sku of
    * its own (quotable at $0.00 by exact-match lookups) is reported as clean.
    */
-  it.fails(
-    'BUG: case-variant duplicate Products are reported (second one has no Sku of its own)',
-    async () => {
-      const { rules } = await run({
-        products: [product('ABC-1'), product('abc-1', { id: 'p-lower' })],
-        skus: [priced('ABC-1', { manufacturer: null })],
-      });
-      expect(rules.length).toBeGreaterThan(0);
-    },
-  );
+  it('BUG: case-variant duplicate Products are reported (second one has no Sku of its own)', async () => {
+    const { rules } = await run({
+      products: [product('ABC-1'), product('abc-1', { id: 'p-lower' })],
+      skus: [priced('ABC-1', { manufacturer: null })],
+    });
+    expect(rules.length).toBeGreaterThan(0);
+  });
 
-  it.fails(
-    'BUG: case-variant duplicate Skus are reported (two priced rows for one part)',
-    async () => {
-      const { rules } = await run({
-        products: [product('ABC-1')],
-        skus: [priced('ABC-1', { manufacturer: null }), priced('abc-1', { manufacturer: null })],
-      });
-      expect(rules.length).toBeGreaterThan(0);
-    },
-  );
+  it('BUG: case-variant duplicate Skus are reported (two priced rows for one part)', async () => {
+    const { rules } = await run({
+      products: [product('ABC-1')],
+      skus: [priced('ABC-1', { manufacturer: null }), priced('abc-1', { manufacturer: null })],
+    });
+    expect(rules.length).toBeGreaterThan(0);
+  });
 });

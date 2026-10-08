@@ -232,7 +232,7 @@ describe('POST /integrations/monday/webhook', () => {
   // without `exp` — or with a long one — once observed (proxy log, debug capture) can
   // be replayed with ANY body forever, e.g. to move a deal's stage. Fix: require
   // `iat` within a few minutes (jwtVerify maxTokenAge: '5m') and dedupe on triggerUuid.
-  it.fails('refuses a signed token issued a year ago with no expiry (replay)', async () => {
+  it('refuses a signed token issued a year ago with no expiry (replay)', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/integrations/monday/webhook',

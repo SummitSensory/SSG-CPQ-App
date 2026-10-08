@@ -261,7 +261,7 @@ describe('audit: catalog routes keep Product, Sku and ProductSourcing in sync (r
   // Confirmed bugs. Each states the correct behaviour; each currently fails.
   // ---------------------------------------------------------------------------------
 
-  it.fails('BUG: DELETE /skus/:id must not strip the priced half off an ACTIVE part', async () => {
+  it('BUG: DELETE /skus/:id must not strip the priced half off an ACTIVE part', async () => {
     // src/routes/skus.ts DELETE /skus/:id deletes the Sku with no partDeletion() check:
     // the ACTIVE Product is left with no Sku — the checker's BLOCKING
     // product-without-sku state ("selectable in the proposal builder at $0.00") —
@@ -274,21 +274,18 @@ describe('audit: catalog routes keep Product, Sku and ProductSourcing in sync (r
     expect(await violationsFor(p)).toEqual([]);
   });
 
-  it.fails(
-    'BUG: PATCH /skus/:id {manufacturer} must carry the vendor to ProductSourcing',
-    async () => {
-      // skus.ts PATCH /skus/:id writes Sku.manufacturer only — never syncPartSourcing —
-      // producing BLOCKING vendor-not-sourced drift (the BOM orders from B, sourcing says A).
-      const p = part('SKUVEND');
-      await createItem(p);
-      const sku = await db.sku.findUniqueOrThrow({ where: { part: p } });
-      const res = await call('PATCH', `/skus/${sku.id}`, { manufacturer: VENDOR_B });
-      expect(res.statusCode).toBe(200);
-      expect(await violationsFor(p)).toEqual([]);
-    },
-  );
+  it('BUG: PATCH /skus/:id {manufacturer} must carry the vendor to ProductSourcing', async () => {
+    // skus.ts PATCH /skus/:id writes Sku.manufacturer only — never syncPartSourcing —
+    // producing BLOCKING vendor-not-sourced drift (the BOM orders from B, sourcing says A).
+    const p = part('SKUVEND');
+    await createItem(p);
+    const sku = await db.sku.findUniqueOrThrow({ where: { part: p } });
+    const res = await call('PATCH', `/skus/${sku.id}`, { manufacturer: VENDOR_B });
+    expect(res.statusCode).toBe(200);
+    expect(await violationsFor(p)).toEqual([]);
+  });
 
-  it.fails('BUG: PATCH /skus/:id must refuse a vendor that is not on record', async () => {
+  it('BUG: PATCH /skus/:id must refuse a vendor that is not on record', async () => {
     // POST/PATCH /catalog/items refuse an unknown vendor; PATCH /skus/:id accepts any
     // string, so a part can be ordered from a vendor with no Manufacturer row at all.
     const p = part('SKUNOV');
@@ -298,7 +295,7 @@ describe('audit: catalog routes keep Product, Sku and ProductSourcing in sync (r
     expect(res.statusCode).toBe(400);
   });
 
-  it.fails('BUG: PATCH /skus/:id {part} must not split a part into two half-parts', async () => {
+  it('BUG: PATCH /skus/:id {part} must not split a part into two half-parts', async () => {
     // SkuBody.partial() still accepts `part`, so renaming the Sku orphans the Product
     // (ACTIVE, now Sku-less = BLOCKING) and leaves a Product-less Sku under the new number.
     const p = part('RENAME');
@@ -309,42 +306,36 @@ describe('audit: catalog routes keep Product, Sku and ProductSourcing in sync (r
     expect(await violationsFor(p)).toEqual([]);
   });
 
-  it.fails(
-    'BUG: PATCH /catalog/items/:part validates the whole body before writing anything',
-    async () => {
-      // The route is not transactional and validates productUrl AFTER it has already
-      // re-sourced the part (Sku.manufacturer, ProductSourcing, open-order reassignment).
-      // A 400 response must mean nothing changed.
-      const p = part('PARTIAL');
-      await createItem(p);
-      const res = await call('PATCH', `/catalog/items/${p}`, {
-        manufacturer: VENDOR_B,
-        productUrl: 'ftp://not-a-web-link',
-      });
-      expect(res.statusCode).toBe(400);
-      expect((await db.sku.findUniqueOrThrow({ where: { part: p } })).manufacturer).toBe(VENDOR_A);
-    },
-  );
+  it('BUG: PATCH /catalog/items/:part validates the whole body before writing anything', async () => {
+    // The route is not transactional and validates productUrl AFTER it has already
+    // re-sourced the part (Sku.manufacturer, ProductSourcing, open-order reassignment).
+    // A 400 response must mean nothing changed.
+    const p = part('PARTIAL');
+    await createItem(p);
+    const res = await call('PATCH', `/catalog/items/${p}`, {
+      manufacturer: VENDOR_B,
+      productUrl: 'ftp://not-a-web-link',
+    });
+    expect(res.statusCode).toBe(400);
+    expect((await db.sku.findUniqueOrThrow({ where: { part: p } })).manufacturer).toBe(VENDOR_A);
+  });
 
-  it.fails(
-    'BUG: POST /catalog/items refuses a case-variant of an existing part number',
-    async () => {
-      // The duplicate check is an exact-case findUnique, but every other join on part
-      // number (syncSkuActive, the integrity checker, colour specs) is case-insensitive.
-      const p = part('CASE');
-      await createItem(p);
-      const res = await call('POST', '/catalog/items', {
-        part: p.toLowerCase(),
-        name: 'lower twin',
-        category: categoryName,
-        categoryId,
-        proposalGroup: 'Audit Group',
-      });
-      expect(res.statusCode).toBe(409);
-    },
-  );
+  it('BUG: POST /catalog/items refuses a case-variant of an existing part number', async () => {
+    // The duplicate check is an exact-case findUnique, but every other join on part
+    // number (syncSkuActive, the integrity checker, colour specs) is case-insensitive.
+    const p = part('CASE');
+    await createItem(p);
+    const res = await call('POST', '/catalog/items', {
+      part: p.toLowerCase(),
+      name: 'lower twin',
+      category: categoryName,
+      categoryId,
+      proposalGroup: 'Audit Group',
+    });
+    expect(res.statusCode).toBe(409);
+  });
 
-  it.fails('BUG: deactivating one part must not deactivate its case-variant twin', async () => {
+  it('BUG: deactivating one part must not deactivate its case-variant twin', async () => {
     // syncSkuActive (src/catalog/service.ts) updates Sku rows with mode: 'insensitive',
     // so a status change on "x-1" also flips Sku.active on "X-1" — a different part.
     const upper = part('TWIN');
@@ -359,44 +350,165 @@ describe('audit: catalog routes keep Product, Sku and ProductSourcing in sync (r
     expect((await db.sku.findUniqueOrThrow({ where: { part: upper } })).active).toBe(true);
   });
 
-  it.fails(
-    'BUG: a Sku-less product cannot be made ACTIVE via PATCH /catalog/products/:id/status',
-    async () => {
-      // POST /catalog/products creates a Product with no Sku (DRAFT: a warning). The UI's
-      // status dropdown then moves it to ACTIVE with no check — the BLOCKING
-      // product-without-sku state, quotable at $0.00.
-      const p = part('NOSKU');
-      const created = await call('POST', '/catalog/products', {
-        sku: p,
-        name: 'Sku-less product',
-        categoryId,
-      });
-      expect(created.statusCode, created.body).toBe(201);
-      const id = (created.json() as { id: string }).id;
-      const res = await call('PATCH', `/catalog/products/${id}/status`, { status: 'ACTIVE' });
-      expect(res.statusCode).toBeGreaterThanOrEqual(400);
-      expect((await violationsFor(p)).filter((v) => v.severity === 'blocking')).toEqual([]);
-    },
-  );
+  it('BUG: a Sku-less product cannot be made ACTIVE via PATCH /catalog/products/:id/status', async () => {
+    // POST /catalog/products creates a Product with no Sku (DRAFT: a warning). The UI's
+    // status dropdown then moves it to ACTIVE with no check — the BLOCKING
+    // product-without-sku state, quotable at $0.00.
+    const p = part('NOSKU');
+    const created = await call('POST', '/catalog/products', {
+      sku: p,
+      name: 'Sku-less product',
+      categoryId,
+    });
+    expect(created.statusCode, created.body).toBe(201);
+    const id = (created.json() as { id: string }).id;
+    const res = await call('PATCH', `/catalog/products/${id}/status`, { status: 'ACTIVE' });
+    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    expect((await violationsFor(p)).filter((v) => v.severity === 'blocking')).toEqual([]);
+  });
 
-  it.fails(
-    'BUG: DELETE /manufacturers/:id answers 409 (not 500) when its colour chart is in use',
-    async () => {
-      // Manufacturer -> VendorColorPalette is onDelete: Cascade, but ProductColorSpec ->
-      // palette is Restrict. The route's usage check ignores palettes, so the cascade
-      // hits the Restrict FK and the raw Prisma error surfaces as a 500.
-      const name = `${P} Paint Vendor`;
-      const m = await db.manufacturer.create({
-        data: { name, slug: name.toLowerCase().replace(/[^a-z0-9]+/g, '-') },
-      });
-      const palette = await db.vendorColorPalette.create({
-        data: { manufacturerId: m.id, name: 'Chart', colors: { create: [{ name: 'Red' }] } },
-      });
-      await db.productColorSpec.create({ data: { paletteId: palette.id, sku: part('PAINTED') } });
-      const res = await call('DELETE', `/manufacturers/${m.id}`);
-      expect(res.statusCode).toBe(409);
-    },
-  );
+  it('BUG: DELETE /manufacturers/:id answers 409 (not 500) when its colour chart is in use', async () => {
+    // Manufacturer -> VendorColorPalette is onDelete: Cascade, but ProductColorSpec ->
+    // palette is Restrict. The route's usage check ignores palettes, so the cascade
+    // hits the Restrict FK and the raw Prisma error surfaces as a 500.
+    const name = `${P} Paint Vendor`;
+    const m = await db.manufacturer.create({
+      data: { name, slug: name.toLowerCase().replace(/[^a-z0-9]+/g, '-') },
+    });
+    const palette = await db.vendorColorPalette.create({
+      data: { manufacturerId: m.id, name: 'Chart', colors: { create: [{ name: 'Red' }] } },
+    });
+    await db.productColorSpec.create({ data: { paletteId: palette.id, sku: part('PAINTED') } });
+    const res = await call('DELETE', `/manufacturers/${m.id}`);
+    expect(res.statusCode).toBe(409);
+  });
+
+  // ---------------------------------------------------------------------------------
+  // Regression cover for the fixes above (not audit findings themselves).
+  // ---------------------------------------------------------------------------------
+
+  it('DELETE /skus/:id still deletes a priced-only row that no proposal uses', async () => {
+    const p = part('SKUONLYDEL');
+    const sku = await db.sku.create({ data: { part: p, description: 'x' } });
+    const res = await call('DELETE', `/skus/${sku.id}`);
+    expect(res.statusCode, res.body).toBe(204);
+    expect(await db.sku.findUnique({ where: { part: p } })).toBeNull();
+  });
+
+  it('PATCH /skus/:id accepts its own part number unchanged, and resolves the vendor spelling', async () => {
+    const p = part('SKUSAME');
+    await createItem(p);
+    const sku = await db.sku.findUniqueOrThrow({ where: { part: p } });
+    const res = await call('PATCH', `/skus/${sku.id}`, {
+      part: p,
+      manufacturer: VENDOR_B.toLowerCase(),
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect((await db.sku.findUniqueOrThrow({ where: { part: p } })).manufacturer).toBe(VENDOR_B);
+    expect(await violationsFor(p)).toEqual([]);
+  });
+
+  it('PATCH /skus/:id refuses a vendor change on a multi-vendor part and writes nothing', async () => {
+    const p = part('SKUMULTI');
+    await createItem(p);
+    const prod = await db.product.findUniqueOrThrow({ where: { sku: p } });
+    await db.productSourcing.create({
+      data: { productId: prod.id, manufacturerId: mfr[VENDOR_B]!, isPrimary: false },
+    });
+    const sku = await db.sku.findUniqueOrThrow({ where: { part: p } });
+    const res = await call('PATCH', `/skus/${sku.id}`, { manufacturer: VENDOR_B });
+    expect(res.statusCode).toBe(400);
+    expect((await db.sku.findUniqueOrThrow({ where: { part: p } })).manufacturer).toBe(VENDOR_A);
+  });
+
+  it('PATCH /catalog/items/:part saves vendor and buy link together when both are valid', async () => {
+    const p = part('BOTHOK');
+    await createItem(p);
+    const res = await call('PATCH', `/catalog/items/${p}`, {
+      manufacturer: VENDOR_B,
+      productUrl: 'https://example.com/buy',
+      unitCostMinor: 6000,
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    const sku = await db.sku.findUniqueOrThrow({ where: { part: p } });
+    expect(sku.manufacturer).toBe(VENDOR_B);
+    expect(sku.productUrl).toBe('https://example.com/buy');
+    expect(sku.unitCostMinor).toBe(6000);
+    expect(await violationsFor(p)).toEqual([]);
+  });
+
+  it('a case-mismatched single pair still moves together (exact-match fallback)', async () => {
+    const lower = part('MIXED').toLowerCase();
+    await db.product.create({
+      data: { sku: lower, name: 'mixed', categoryId, createdById: userId, status: 'ACTIVE' },
+    });
+    await db.sku.create({
+      data: { part: lower.toUpperCase(), description: 'mixed', active: true },
+    });
+    const res = await call('POST', `/catalog/items/${lower}/active`, { active: false });
+    expect(res.statusCode, res.body).toBe(200);
+    expect((await db.sku.findUniqueOrThrow({ where: { part: lower.toUpperCase() } })).active).toBe(
+      false,
+    );
+  });
+
+  it('DELETE /catalog/items/:part also removes the product colour spec', async () => {
+    const p = part('SPECDEL');
+    const prod = await seedDraftPart(p, VENDOR_A);
+    const palette = await db.vendorColorPalette.create({
+      data: { manufacturerId: mfr[VENDOR_A]!, name: `${P} spec chart` },
+    });
+    await db.productColorSpec.create({ data: { paletteId: palette.id, productId: prod.id } });
+    const res = await call('DELETE', `/catalog/items/${p}`);
+    expect(res.statusCode, res.body).toBe(204);
+    expect(await db.productColorSpec.count({ where: { productId: prod.id } })).toBe(0);
+  });
+
+  it('GET /manufacturers/:id/usage reports colour charts and vendor part numbers', async () => {
+    const name = `${P} Usage Vendor`;
+    const m = await db.manufacturer.create({
+      data: { name, slug: name.toLowerCase().replace(/[^a-z0-9]+/g, '-') },
+    });
+    await db.vendorColorPalette.create({ data: { manufacturerId: m.id, name: 'Unused chart' } });
+    await db.vendorPartNumber.create({
+      data: { manufacturerId: m.id, ourPart: part('VPN'), vendorPart: 'V-1' },
+    });
+    const res = await call('GET', `/manufacturers/${m.id}/usage`);
+    expect(res.statusCode, res.body).toBe(200);
+    const body = res.json() as Record<string, unknown>;
+    expect(body).toMatchObject({
+      paletteCount: 1,
+      palettesInUse: 0,
+      vendorPartNumberCount: 1,
+      deletable: true,
+    });
+  });
+
+  it('DELETE /manufacturers/:id counts a part naming the vendor in a different case', async () => {
+    const name = `${P} Case Vendor`;
+    const m = await db.manufacturer.create({
+      data: { name, slug: name.toLowerCase().replace(/[^a-z0-9]+/g, '-') },
+    });
+    await db.sku.create({
+      data: { part: part('CASEVEND'), description: 'x', manufacturer: name.toLowerCase() },
+    });
+    const res = await call('DELETE', `/manufacturers/${m.id}`);
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('PATCH /manufacturers/:id rename carries parts that spell the vendor in another case', async () => {
+    const name = `${P} Rename Vendor`;
+    const m = await db.manufacturer.create({
+      data: { name, slug: name.toLowerCase().replace(/[^a-z0-9]+/g, '-') },
+    });
+    const p = part('RENAMEVEND');
+    await db.sku.create({ data: { part: p, description: 'x', manufacturer: name.toUpperCase() } });
+    const res = await call('PATCH', `/manufacturers/${m.id}`, { name: `${name} Renamed` });
+    expect(res.statusCode, res.body).toBe(200);
+    expect((await db.sku.findUniqueOrThrow({ where: { part: p } })).manufacturer).toBe(
+      `${name} Renamed`,
+    );
+  });
 });
 
 /*

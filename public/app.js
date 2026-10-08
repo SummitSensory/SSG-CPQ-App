@@ -88,8 +88,13 @@
   function overrideMinor(text) {
     if (text == null) return 0;
     var s = String(text).trim().replace(/^\$/, '').replace(/,/g, '');
-    if (!s || !/^-?\d+(?:\.\d+)?$/.test(s)) return 0;
-    return Math.round(parseFloat(s) * 100);
+    // The typed decimal, half-up (away from zero) on its digits — parseFloat x 100 made
+    // "1.005" 100.4999... and lost a cent. Mirrors overrideMinor in src/proposals/analytics.ts.
+    var m = /^(-?)(\d+)(?:\.(\d+))?$/.exec(s);
+    if (!m) return 0;
+    var frac = m[3] || '';
+    var cents = Number(m[2]) * 100 + Number((frac + '00').slice(0, 2)) + (frac.charAt(2) >= '5' ? 1 : 0);
+    return m[1] && cents ? -cents : cents;
   }
   /**
    * Whether the "prints instead of TBD" box holds a NUMBER rather than wording.
@@ -124,9 +129,24 @@
     var m = meta || {};
     var mode = m.discountMode === 'AMT' ? 'AMT' : 'PCT';
     var pct = Number(m.discountPct) || 0;
-    var amount = mode === 'AMT'
-      ? Math.round(Number(m.discountAmountMinor) || 0)
-      : Math.round(subtotal * pct / 100);
+    var amount;
+    if (mode === 'AMT') amount = Math.round(Number(m.discountAmountMinor) || 0);
+    else {
+      // Exact: pct as the decimal it prints as (1.15, not 1.1499...), x subtotal / 100 in
+      // BigInt, half-up to the cent. Float math made 1.15% of $30.00 34c, not 35c.
+      // Mirrors pctOfMinor in src/proposals/analytics.ts.
+      var pm = /^(-?)(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$/i.exec(String(pct));
+      if (!pm) amount = pct > 0 ? subtotal : 0;
+      else {
+        var scale = (pm[3] || '').length - Number(pm[4] || 0);
+        var num = BigInt(pm[1] + pm[2] + (pm[3] || '')) * BigInt(Math.round(subtotal));
+        if (scale < 0) { num = num * BigInt(10) ** BigInt(-scale); scale = 0; }
+        var den = BigInt(100) * BigInt(10) ** BigInt(scale);
+        var neg = num < BigInt(0), mag = neg ? -num : num, q = mag / den;
+        if ((mag % den) * BigInt(2) >= den) q = q + BigInt(1);
+        amount = Number(neg ? -q : q);
+      }
+    }
     if (amount < 0) amount = 0;
     if (amount > subtotal) amount = subtotal;
     // The effective percentage is derived for display and reporting even on the
@@ -1034,9 +1054,10 @@
     // Customers whose follow-up date has arrived. The date is set on the proposal's
     // notes rail but lives on the customer, so this reads the customer list rather
     // than the proposals.
-    var followRows = [];
-    try { var rfu = await authed('/crm/follow-ups'); if (rfu.ok) followRows = (await rfu.json()).rows || []; } catch (e4) {}
-    dashData = { data: data, orgTotal: orgTotal, freightRows: freightRows, followRows: followRows, ftuHtml: dashData ? dashData.ftuHtml : '' };
+    var followRows = [], followCount = 0;
+    // `count` is the full number due; `rows` is only the first page of them.
+    try { var rfu = await authed('/crm/follow-ups'); if (rfu.ok) { var fu = await rfu.json(); followRows = fu.rows || []; followCount = Math.max(Number(fu.count) || 0, followRows.length); } } catch (e4) {}
+    dashData = { data: data, orgTotal: orgTotal, freightRows: freightRows, followRows: followRows, followCount: followCount, ftuHtml: dashData ? dashData.ftuHtml : '' };
     fillDashboardWidgets(user);
     // Its own fetch, kicked off after everything above: a slow /freight/queue should
     // never hold up the rest of the dashboard. Left empty when nothing is
@@ -1081,14 +1102,14 @@
     var released = (d.pipeline.filter(function (p) { return p.status === 'RELEASED'; })[0] || { count: 0, value: 0 });
     var review = (d.pipeline.filter(function (p) { return p.status === 'INTERNAL_REVIEW'; })[0] || { count: 0, value: 0 });
     var stale = d.rows.filter(function (r) { return r.status === 'DRAFT' && r.daysOpen >= 14; });
-    var attn = d.expiredOpen.length + d.expiringSoon.length + review.count + stale.length + dashData.freightRows.length + dashData.followRows.length;
+    var attn = d.expiredOpen.length + d.expiringSoon.length + review.count + stale.length + dashData.freightRows.length + (dashData.followCount || dashData.followRows.length);
     if (id === 'kpi_open') return kpi('Open proposals', s.open.toLocaleString(), fmt0(s.openValue) + ' in flight · avg ' + s.avgDaysOpen + ' days old', '#3d4a55');
     if (id === 'kpi_released') return kpi('Out with customers', released.count.toLocaleString(), fmt0(released.value) + ' awaiting a decision');
     if (id === 'kpi_accepted') return kpi('Accepted to date', fmt0(s.wonValue), s.won + ' proposals · ' + s.conversionRate + '% conversion', '#2f7d5d');
     if (id === 'kpi_attention') return kpi('Needs attention', attn.toLocaleString(), attn ? 'expiring, stalled or awaiting review' : 'nothing waiting on you', attn ? '#9c3327' : '#2f7d5d');
     if (id === 'needs_attention') {
       var html = freightAlertGroup(dashData.freightRows) +
-        followUpGroup(dashData.followRows) +
+        followUpGroup(dashData.followRows, dashData.followCount) +
         attnGroup('Past expiration', d.expiredOpen, '#9c3327', 're-date or mark inactive') +
         attnGroup('Expiring within 14 days', d.expiringSoon, '#8a6d1f', 'follow up') +
         attnGroup('Awaiting internal review', d.rows.filter(function (r) { return r.status === 'INTERNAL_REVIEW'; }), '#3d4a55', '') +
@@ -1129,11 +1150,12 @@
    * Follow-ups that have come due. Customers, not proposals — the date is a promise
    * to make contact, and it stands whether or not the quote behind it is still live.
    */
-  function followUpGroup(rows) {
+  function followUpGroup(rows, total) {
     if (!rows.length) return '';
+    var all = Math.max(Number(total) || 0, rows.length);
     return '<div style="margin-bottom:10px;"><div style="display:flex;align-items:baseline;gap:8px;margin-bottom:5px;">' +
-        '<span style="font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#8a6d1f;">Follow-Up Due · ' + rows.length + '</span>' +
-        '<span class="muted" style="font-size:11.5px;">make contact</span></div>' +
+        '<span style="font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#8a6d1f;">Follow-Up Due · ' + all + '</span>' +
+        '<span class="muted" style="font-size:11.5px;">make contact' + (all > rows.length ? ' · oldest ' + rows.length + ' shown' : '') + '</span></div>' +
       '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:12px;overflow:hidden;">' +
       foldRows(rows.map(function (r, i) {
         var win = r.decisionFrom || r.decisionTo
@@ -1276,7 +1298,7 @@
     pb = {
       proposalId: p.id, versionId: v.id, user: user, readOnly: true, orgName: orgName,
       title: p.title || '', number: p.number || '', version: v.version || 1,
-      meta: {}, stdNotes: [], lines: (v.items || []).map(function (it) { return normalizeLine(it); }),
+      meta: {}, stdNotes: [], lines: (v.items || []).map(function (it) { return normalizeLine(it, 0); }),
     };
     rfqData = null;
     var cov = null;
@@ -4119,14 +4141,18 @@
     return l.freightCalc !== 'YES';
   }
 
-  function normalizeLine(it) {
+  // missingQty: what a line with no quantity becomes. 1 for a line being added; 0 for a STORED line,
+  // because the server's totals (versionTotals, the price snapshot) count a stored line with no
+  // quantity as 0 — showing it as 1 here made the builder disagree with the snapshot and an
+  // unrelated save would then silently bill it.
+  function normalizeLine(it, missingQty) {
     var desc = it.description || '';
     var note = it.internalNote || '';
     if (!note && LEAKED_INTERNAL.some(function (re) { return re.test(desc); })) { note = desc; desc = ''; }
     return {
       ref: it.ref || uid(), lineType: it.lineType || (it.isNote ? 'NOTE' : 'PRODUCT'), kind: it.kind || 'INCLUDED',
       productId: it.productId || null, sku: it.sku || '', name: it.name || '', description: desc,
-      quantity: it.quantity == null ? 1 : it.quantity, rateMinor: it.rateMinor || 0, costEach: it.costEach || 0, weightEach: it.weightEach || 0, group: it.group || '',
+      quantity: it.quantity == null ? (missingQty == null ? 1 : missingQty) : it.quantity, rateMinor: it.rateMinor || 0, costEach: it.costEach || 0, weightEach: it.weightEach || 0, group: it.group || '',
       optional: !!it.optional,
       delivery: it.delivery || '', returnable: it.returnable || '', addlFreight: it.addlFreight || '', freightCalc: it.freightCalc || '',
       tpFreightMinor: it.tpFreightMinor || 0, tpFreightLabel: it.tpFreightLabel || '',
@@ -4193,7 +4219,7 @@
     var metaSec = Array.isArray(secs) ? secs.filter(function (s) { return s && s.id === 'meta'; })[0] : null;
     if (metaSec && metaSec.data) meta = metaSec.data;
     var lines = hoistHardwareKit((version.items || []).map(function (it) {
-      return normalizeLine(it);
+      return normalizeLine(it, 0);
     }));
     var propDate = meta.proposalDate || todayISO();
     // Standard notes come from Administration → Standard proposal notes; the
@@ -4502,7 +4528,8 @@
    */
   function isSectionHeader(l) { return l && (l.lineType === 'GROUP' || l.lineType === 'SUBGROUP'); }
   /** Bundle components are the '— ' rows that must stay under their parent line. */
-  function isBundleChild(l) { return !!l && l.lineType === 'PRODUCT' && /^—\s/.test(String(l.name || '')); }
+  // A row saved without a lineType is a PRODUCT, as everywhere else (and as the server's isBundleChild reads it).
+  function isBundleChild(l) { return !!l && (l.lineType || 'PRODUCT') === 'PRODUCT' && /^—\s/.test(String(l.name || '')); }
 
   /**
    * Extended revenue per line, with a bundle counted ONCE.
@@ -11571,7 +11598,7 @@
         '<div style="padding:9px 12px;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;border-bottom:1px solid #eef0ea;">' +
           '<b style="font-size:13.5px;">' + esc(a.label) + '</b>' +
           '<span style="font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#5c6157;background:#f2f3ef;padding:2px 7px;border-radius:999px;">' + esc(COLOR_KIND_LABEL[a.kind] || a.kind) + '</span>' +
-          '<span style="font-size:12.5px;">Customer picked <b>' + esc([a.pick.brand, a.pick.code].filter(Boolean).join(' ')) + '</b></span>' +
+          '<span style="font-size:12.5px;">' + (a.dropped ? 'No longer answered — earlier pick' : 'Customer picked') + ' <b>' + esc([a.pick.brand, a.pick.code].filter(Boolean).join(' ')) + '</b></span>' +
           '<span style="flex:1;"></span>' +
           '<span class="muted" style="font-size:11px;">' + code(a.source.columnId) + ' → ' + code(a.source.path) + '</span>' +
         '</div>' +
@@ -11593,7 +11620,8 @@
         }).join('') + '</ul></div>';
     var errs = rep.bomErrors.map(function (t) { return '<div class="err" style="margin-top:8px;">Could not build the BOM for ' + esc(t) + '</div>'; }).join('');
     var empty = rep.portal.found && !rep.areas.length ? '<div class="muted" style="font-size:12.5px;">The customer has not picked any colors yet.</div>' : '';
-    return head + banner + areas + empty + hand + errs;
+    var guide = (rep.guidance || []).map(function (t) { return '<div style="padding:8px 12px;border-radius:9px;margin-bottom:12px;font-size:12.5px;background:#fdf6e3;color:#8a6d1f;border:1px solid #eadfbe;">' + esc(t) + '</div>'; }).join('');
+    return head + banner + guide + areas + empty + hand + errs;
   }
 
   async function openColorCheck(order, btn) {
@@ -15373,13 +15401,28 @@
         '<div style="display:flex;gap:8px;">' +
           '<div style="flex:1;">' + fieldRow('From ($)', '<input id="rbMin" type="number" min="0" step="1" style="' + IN + '">') + '</div>' +
           '<div style="flex:1;">' + fieldRow('Up to ($)', '<input id="rbMax" type="number" min="0" step="1" placeholder="Blank = and above" style="' + IN + '">') + '</div>' +
-        '</div>',
+        '</div>' +
+        // The server refuses a band with no factors (a band that quotes nothing), so the
+        // factors are asked for here. Blank = that term is not offered at this amount.
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;">' + terms.map(function (t) {
+          return '<div style="flex:1;min-width:90px;">' + fieldRow(t + ' mo factor', '<input class="rbFactor" data-term="' + t + '" inputmode="decimal" placeholder="e.g. 0.0321" style="' + IN + '">') + '</div>';
+        }).join('') + '</div>',
         async function (close, showErr) {
           var minD = Number(document.getElementById('rbMin').value);
           var maxRaw = document.getElementById('rbMax').value.trim();
           var maxD = maxRaw === '' ? null : Number(maxRaw);
           if (!isFinite(minD) || minD < 0) return showErr('Give the bottom of the band.');
           if (maxD != null && maxD <= minD) return showErr('The top of the band must be above the bottom.');
+          var factors = {}, badFactor = false;
+          document.querySelectorAll('.rbFactor').forEach(function (el) {
+            var v = el.value.trim();
+            if (!v) return;
+            var n = Number(v);
+            if (!isFinite(n) || n <= 0 || n >= 1) { badFactor = true; return; }
+            factors[el.getAttribute('data-term')] = n;
+          });
+          if (badFactor) return showErr('A payment factor is the payment per $1 financed, so it sits between 0 and 1.');
+          if (!Object.keys(factors).length) return showErr(terms.length ? 'Give at least one term a factor for this band.' : 'Add a term to the sheet first.');
           var bands = collect();
           if (!bands) return showErr('Fix the highlighted factor first.');
           bands.push({
@@ -15387,7 +15430,7 @@
             minDollars: minD,
             // The label's top is inclusive of cents, so the stored bound is the next dollar.
             maxDollars: maxD == null ? null : maxD + 1,
-            factors: {},
+            factors: factors,
           });
           var r = await authed('/admin/financing/rate-cards/' + card.id, {
             method: 'PUT',

@@ -120,50 +120,105 @@ describe('/pricing — role-scoped visibility (PASS)', () => {
   });
 });
 
-describe('/pricing — confirmed defects (it.fails)', () => {
-  it.fails(
-    'BUG: the margin-threshold finding message leaks the margin % to a role without MARGINS_READ',
-    async () => {
+describe('/pricing — fixed defects (formerly it.fails)', () => {
+  it('BUG: the margin-threshold finding message leaks the margin % to a role without MARGINS_READ', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/pricing/quote',
+      headers: { authorization: 'Bearer ' + (await tokenFor('SALES_REP')) },
+      payload: { ...baseQuote, thresholds: { minMarginBps: 5000 } },
+    });
+    expect(res.statusCode).toBe(200);
+    // marginBps is deleted from the body, but findings[].message still reads
+    // "Margin 4000 bps below threshold 5000 bps — approval required."
+    expect(JSON.stringify(res.json().findings)).not.toMatch(/4000/);
+  });
+
+  it('BUG: GET /pricing/snapshots/:ref returns unit cost and margin to a role without COSTS_READ', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/pricing/snapshots/deal-1',
+      headers: { authorization: 'Bearer ' + (await tokenFor('SALES_REP')) },
+    });
+    expect(res.statusCode).toBe(200);
+    const text = res.body;
+    expect(text).not.toMatch(/unitCost|totalCost|"margin"/);
+  });
+
+  it('BUG: fractional mileage (schema allows any non-negative number) returns 500 instead of a price or a 400', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/pricing/quote',
+      headers: { authorization: 'Bearer ' + (await tokenFor('SALES_MANAGER')) },
+      payload: {
+        ...baseQuote,
+        fees: { mileage: { miles: 12.5, ratePerMile: '0.70', confirmed: true } },
+      },
+    });
+    expect(res.statusCode).toBeLessThan(500);
+  });
+});
+
+describe('/pricing — authorization and server-owned thresholds (fix follow-ups)', () => {
+  it('GET /pricing/snapshots/:ref is a 403 (not a 400) for a role without pricing:read', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/pricing/snapshots/deal-1',
+      headers: { authorization: 'Bearer ' + (await tokenFor('INSTALLER')) },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('a SALES_MANAGER still reads cost and margin on a stored snapshot', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/pricing/snapshots/deal-1',
+      headers: { authorization: 'Bearer ' + (await tokenFor('SALES_MANAGER')) },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()[0].input.lines[0].unitCost).toBe('6000');
+    expect(res.json()[0].breakdown.totalMargin).toBe('4000');
+  });
+
+  it('persist:true needs proposal:write — a READ_ONLY quote may compute but not store', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/pricing/quote',
+      headers: { authorization: 'Bearer ' + (await tokenFor('READ_ONLY')) },
+      payload: { ...baseQuote, persist: true, subjectRef: 'deal-1' },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('a request can tighten but not loosen the server discount authority', async () => {
+    const prev = process.env.PRICING_DISCOUNT_AUTHORITY_BPS;
+    process.env.PRICING_DISCOUNT_AUTHORITY_BPS = '1000';
+    try {
       const res = await app.inject({
         method: 'POST',
         url: '/pricing/quote',
         headers: { authorization: 'Bearer ' + (await tokenFor('SALES_REP')) },
-        payload: { ...baseQuote, thresholds: { minMarginBps: 5000 } },
-      });
-      expect(res.statusCode).toBe(200);
-      // marginBps is deleted from the body, but findings[].message still reads
-      // "Margin 4000 bps below threshold 5000 bps — approval required."
-      expect(JSON.stringify(res.json().findings)).not.toMatch(/4000/);
-    },
-  );
-
-  it.fails(
-    'BUG: GET /pricing/snapshots/:ref returns unit cost and margin to a role without COSTS_READ',
-    async () => {
-      const res = await app.inject({
-        method: 'GET',
-        url: '/pricing/snapshots/deal-1',
-        headers: { authorization: 'Bearer ' + (await tokenFor('SALES_REP')) },
-      });
-      expect(res.statusCode).toBe(200);
-      const text = res.body;
-      expect(text).not.toMatch(/unitCost|totalCost|"margin"/);
-    },
-  );
-
-  it.fails(
-    'BUG: fractional mileage (schema allows any non-negative number) returns 500 instead of a price or a 400',
-    async () => {
-      const res = await app.inject({
-        method: 'POST',
-        url: '/pricing/quote',
-        headers: { authorization: 'Bearer ' + (await tokenFor('SALES_MANAGER')) },
         payload: {
           ...baseQuote,
-          fees: { mileage: { miles: 12.5, ratePerMile: '0.70', confirmed: true } },
+          lines: [{ ...baseQuote.lines[0], lineDiscountBps: 2000 }],
+          thresholds: { discountAuthorityBps: 10000 },
         },
       });
-      expect(res.statusCode).toBeLessThan(500);
-    },
-  );
+      expect(res.statusCode).toBe(200);
+      expect(res.json().requiresApproval).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.PRICING_DISCOUNT_AUTHORITY_BPS;
+      else process.env.PRICING_DISCOUNT_AUTHORITY_BPS = prev;
+    }
+  });
+
+  it('a line discount above 100% is refused at the route with 400', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/pricing/quote',
+      headers: { authorization: 'Bearer ' + (await tokenFor('SALES_MANAGER')) },
+      payload: { ...baseQuote, lines: [{ ...baseQuote.lines[0], lineDiscountBps: 15000 }] },
+    });
+    expect(res.statusCode).toBe(400);
+  });
 });

@@ -1,7 +1,7 @@
 import { prisma } from '../lib/prisma.js';
 
-/** Normalize an org name for fuzzy dedupe: lowercase, strip punctuation, common suffixes, collapse spaces. */
-export function normalizeOrgName(name: string): string {
+/** The normalization before "&"/"and" were folded together; rows saved with it keep it. */
+function legacyNormalize(name: string): string {
   return name
     .toLowerCase()
     .normalize('NFKD')
@@ -9,6 +9,32 @@ export function normalizeOrgName(name: string): string {
     .replace(/\b(inc|llc|ltd|co|corp|company|the)\b/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/**
+ * Normalize an org name for fuzzy dedupe: lowercase, strip punctuation, accents,
+ * common suffixes and the connective "and" (so "Smith & Jones" and "Smith and Jones"
+ * are one name), collapse spaces.
+ */
+export function normalizeOrgName(name: string): string {
+  return legacyNormalize(name)
+    .replace(/\band\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Every stored `normalizedName` this name could already be saved under: today's form
+ * plus the pre-"and" forms of both spellings, so an organization saved before the
+ * change is still found whichever way it is typed now.
+ */
+export function orgNameKeys(name: string): string[] {
+  const keys = [
+    normalizeOrgName(name),
+    legacyNormalize(name),
+    legacyNormalize(name.replace(/&/g, ' and ')),
+  ].filter(Boolean);
+  return [...new Set(keys)];
 }
 
 export interface DuplicateHit {
@@ -22,10 +48,10 @@ export async function findDuplicateOrganizations(
   name: string,
   excludeId?: string,
 ): Promise<DuplicateHit[]> {
-  const normalized = normalizeOrgName(name);
-  if (!normalized) return [];
+  const keys = orgNameKeys(name);
+  if (!keys.length) return [];
   const matches = await prisma.organization.findMany({
-    where: { normalizedName: normalized, ...(excludeId ? { id: { not: excludeId } } : {}) },
+    where: { normalizedName: { in: keys }, ...(excludeId ? { id: { not: excludeId } } : {}) },
     select: { id: true, name: true },
     take: 5,
   });

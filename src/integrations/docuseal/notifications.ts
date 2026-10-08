@@ -1,6 +1,6 @@
 import { prisma } from '../../lib/prisma.js';
 import { logger } from '../../lib/logger.js';
-import { sendAlert } from '../../lib/alerts.js';
+import { deliverAlert } from '../../lib/alerts.js';
 import { isMondayPushConfigured, env } from '../../config/env.js';
 import { uploadFileToColumn } from '../monday/client.js';
 import { dealItemIdFor } from '../monday/dealLink.js';
@@ -88,7 +88,7 @@ export async function notifyCountersignNeeded(envelopeId: string): Promise<void>
   const pending = envelope.signers.filter((s) => !s.viewOnly && s.status !== 'COMPLETED');
   if (!pending.length) return;
 
-  sendAlert({
+  await deliverAlert({
     title: `Proposal ${envelope.proposal.number} — customer signed, your signature is needed`,
     detail: [
       `${envelope.proposal.title || 'This proposal'} has been signed by the customer and is now waiting on: ` +
@@ -124,7 +124,7 @@ export async function notifyProposalViewed(envelopeId: string): Promise<void> {
   if (!viewed.length) return;
 
   const to = await escalationRecipient(envelope);
-  sendAlert({
+  await deliverAlert({
     to,
     title: `Proposal ${envelope.proposal.number} — the customer just opened it`,
     detail: [
@@ -174,8 +174,7 @@ export async function sendEsignReminders(): Promise<{ reminded: number }> {
     // until it has been out a full day.
     if (!row.sentAt || row.sentAt > cutoff) continue;
     try {
-      await remindOne(row.id);
-      reminded += 1;
+      if (await remindOne(row.id, cutoff)) reminded += 1;
     } catch (err) {
       logger.error({ err, envelopeId: row.id }, 'esign: reminder failed');
     }
@@ -183,23 +182,31 @@ export async function sendEsignReminders(): Promise<{ reminded: number }> {
   return { reminded };
 }
 
-async function remindOne(envelopeId: string): Promise<void> {
+async function remindOne(envelopeId: string, cutoff: Date): Promise<boolean> {
   const envelope = await envelopeContext(envelopeId);
-  if (!envelope?.sentAt) return;
+  if (!envelope?.sentAt) return false;
   const pending = envelope.signers.filter((s) => !s.viewOnly && s.status !== 'COMPLETED');
-  if (!pending.length) return;
+  if (!pending.length) return false;
 
-  await prisma.esignEnvelope.update({
-    where: { id: envelopeId },
+  // Claimed with a conditional updateMany, like every other one-shot notification
+  // here: two overlapping sweeps (a double-fired cron, or a manual re-run racing the
+  // schedule on another instance) both read this envelope as due, but only one of
+  // them can move lastReminderSentAt past the cutoff — the other sends nothing.
+  const claimed = await prisma.esignEnvelope.updateMany({
+    where: {
+      id: envelopeId,
+      OR: [{ lastReminderSentAt: null }, { lastReminderSentAt: { lt: cutoff } }],
+    },
     data: { lastReminderSentAt: new Date() },
   });
+  if (claimed.count === 0) return false;
 
   const to = await escalationRecipient(envelope);
   const ageDays = Math.max(
     1,
     Math.floor((Date.now() - envelope.sentAt.getTime()) / REMINDER_INTERVAL_MS),
   );
-  sendAlert({
+  await deliverAlert({
     to,
     title: `Proposal ${envelope.proposal.number} — still not signed after ${ageDays} day${ageDays === 1 ? '' : 's'}`,
     detail: [
@@ -214,6 +221,7 @@ async function remindOne(envelopeId: string): Promise<void> {
     fingerprint: `esign-reminder-${envelopeId}-${new Date().toISOString().slice(0, 10)}`,
     context: { proposalNumber: envelope.proposal.number, envelopeId },
   });
+  return true;
 }
 
 /**
@@ -234,7 +242,7 @@ export async function notifyProposalDeclined(envelopeId: string): Promise<void> 
   const decliner = envelope.signers.find((s) => !s.viewOnly && s.status === 'DECLINED');
 
   const to = await escalationRecipient(envelope);
-  sendAlert({
+  await deliverAlert({
     to,
     title: `Proposal ${envelope.proposal.number} — declined`,
     detail: [
@@ -321,7 +329,7 @@ export async function notifyProposalCompleted(envelopeId: string): Promise<void>
 
   const push = await pushSignedProposalToMonday(envelope);
 
-  sendAlert({
+  await deliverAlert({
     title: `Proposal ${envelope.proposal.number} — fully signed, please review`,
     detail: [
       `${envelope.proposal.title || 'This proposal'} has now been signed by both the customer and Summit.`,

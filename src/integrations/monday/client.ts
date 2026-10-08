@@ -12,12 +12,26 @@ const MAX_BACKOFF_MS = 15_000;
  * mutations, and one that timed out may still have been applied.
  */
 const REQUEST_TIMEOUT_MS = 20_000;
+/** A multipart file upload — see uploadFileToColumn. */
+const UPLOAD_TIMEOUT_MS = 60_000;
 
 interface GraphQLResponse<T> {
   data?: T;
   errors?: Array<{ message: string; extensions?: { code?: string } }>;
   error_code?: string;
   status_code?: number;
+  /** API-Version 2024-01 reports column-value failures as HTTP 200 with this and no `errors[]`. */
+  error_message?: string;
+}
+
+/** The reason monday gave, from whichever of its two error shapes it used. */
+function mondayErrorText(body: GraphQLResponse<unknown>): string | null {
+  const parts: string[] = [];
+  if (body.errors?.length) parts.push(body.errors.map((e) => e.message).join('; '));
+  if (body.error_message) {
+    parts.push(body.error_code ? `${body.error_code}: ${body.error_message}` : body.error_message);
+  }
+  return parts.length ? parts.join('; ') : null;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -77,8 +91,8 @@ export async function mondayQuery<T>(
       lastErr = new Error(`monday ${code}`);
       continue;
     }
-    if (body.errors?.length)
-      throw new Error('monday API error: ' + body.errors.map((e) => e.message).join('; '));
+    const reason = mondayErrorText(body);
+    if (reason) throw new Error('monday API error: ' + reason);
     if (!body.data) throw new Error('monday API returned no data');
     return body.data;
   }
@@ -179,10 +193,19 @@ export async function uploadFileToColumn(
       filename,
     );
 
+    // Longer than a plain query (the body is a whole PDF), but bounded: an upload
+    // that stalls must not hold a cron sweep until the platform kills it. Not
+    // retried on timeout — the file may already be attached.
     const res = await fetchImpl(`${API_URL}/file`, {
       method: 'POST',
+      signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
       headers: { Authorization: env.MONDAY_API_TOKEN, 'API-Version': '2024-01' },
       body: form,
+    }).catch((err: unknown) => {
+      if (err instanceof Error && err.name === 'TimeoutError') {
+        throw new Error(`monday file upload did not answer within ${UPLOAD_TIMEOUT_MS / 1000} s`);
+      }
+      throw err;
     });
 
     if (res.status === 429) {
@@ -195,9 +218,8 @@ export async function uploadFileToColumn(
     if (!res.ok) throw new Error(`monday file upload HTTP ${res.status}`);
 
     const body = (await res.json()) as GraphQLResponse<{ add_file_to_column: { id: string } }>;
-    if (body.errors?.length) {
-      throw new Error('monday file upload error: ' + body.errors.map((e) => e.message).join('; '));
-    }
+    const reason = mondayErrorText(body);
+    if (reason) throw new Error('monday file upload error: ' + reason);
     const id = body.data?.add_file_to_column?.id;
     if (!id) throw new Error('monday file upload returned no asset id');
     return id;

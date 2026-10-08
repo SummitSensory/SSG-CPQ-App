@@ -157,14 +157,16 @@ describe('runReport — grain', () => {
   });
 });
 
+// Midday Mountain (18:00 UTC): these are calendar dates, and the engine dates an
+// instant by Summit's America/Denver calendar — UTC midnight is the previous evening there.
 describe('runReport — dates and filters', () => {
   const data = dataset([
-    fact({ proposalId: 'a', createdAt: '2026-01-05T00:00:00.000Z', totalMinor: 100 }),
-    fact({ proposalId: 'b', createdAt: '2026-06-05T00:00:00.000Z', totalMinor: 200 }),
+    fact({ proposalId: 'a', createdAt: '2026-01-05T18:00:00.000Z', totalMinor: 100 }),
+    fact({ proposalId: 'b', createdAt: '2026-06-05T18:00:00.000Z', totalMinor: 200 }),
     fact({
       proposalId: 'c',
-      createdAt: '2026-06-06T00:00:00.000Z',
-      acceptedAt: '2026-07-01T00:00:00.000Z',
+      createdAt: '2026-06-06T18:00:00.000Z',
+      acceptedAt: '2026-07-01T18:00:00.000Z',
       status: 'ACCEPTED',
       totalMinor: 400,
     }),

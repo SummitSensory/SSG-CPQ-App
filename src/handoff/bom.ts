@@ -280,11 +280,17 @@ export async function buildBom(
 
   // The vendor's own section holds the fields that used to live on the order: where
   // this shipment goes, what its freight was quoted at, and the deal's tax figure.
+  // Exact name first; a differently-cased vendor name still finds its section.
   const section = vendorFilter
-    ? await prisma.bomVendorSection.findUnique({
+    ? ((await prisma.bomVendorSection.findUnique({
         where: { orderId_vendor: { orderId, vendor: vendorFilter } },
         include: { shipToAddress: true },
-      })
+      })) ??
+      (await prisma.bomVendorSection.findFirst({
+        where: { orderId, vendor: { equals: vendorFilter.trim(), mode: 'insensitive' } },
+        include: { shipToAddress: true },
+        orderBy: { createdAt: 'asc' },
+      })))
     : null;
 
   // What the customer told the portal: points of contact, instructions, and the
@@ -322,7 +328,12 @@ export async function buildBom(
   const layout = await loadLayoutTables(order.procurement.map((l) => l.sku));
   const ordered = sortForBom(order.procurement, layout);
   const scoped = vendorFilter
-    ? ordered.filter((l) => (s(l.vendor).trim() || 'Unassigned vendor') === vendorFilter)
+    ? ordered.filter(
+        // Vendor names are matched case-insensitively, as the manufacturer lookup is.
+        (l) =>
+          (s(l.vendor).trim() || 'Unassigned vendor').toLowerCase() ===
+          vendorFilter.trim().toLowerCase(),
+      )
     : ordered;
 
   // Every vendor part number that could apply to this sheet, in one query. Keyed
@@ -354,7 +365,9 @@ export async function buildBom(
       vendorSku,
       name: l.name,
       quantity: qty,
-      powderColor: s(l.powderColor),
+      // The printed text, or — when only a code was recorded — the code itself, so a
+      // line the submission check accepts never prints "—".
+      powderColor: s(l.powderColor).trim() || s(l.powderColorCode).trim(),
       packagingBag: bagBySku.get(s(l.sku)) ?? '',
       unitCostMinor: cost,
       extendedCostMinor: cost * qty,

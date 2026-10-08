@@ -56,6 +56,28 @@ function verify(
 /** Reject anything older than five minutes — a captured payload cannot be replayed. */
 const MAX_AGE_SECONDS = 300;
 
+/*
+ * At-least-once, out of order.
+ *
+ * Svix redelivers an event (same svix-id) after a slow 200, a timeout or a 5xx, and
+ * events for one message can arrive in any order. So every write below is a
+ * CONDITIONAL updateMany whose `where` encodes the state it is allowed to move
+ * from, and a timeline event is written only when that update actually changed a
+ * row:
+ *
+ *   - delivered never overwrites BOUNCED (a late `delivered` after a bounce would
+ *     claim the vendor received a document they never got), and is a no-op once
+ *     DELIVERED;
+ *   - bounced is a no-op once BOUNCED, so a redelivered bounce does not put a second
+ *     event on the order timeline. A bounce after DELIVERED is still applied —
+ *     delayed bounces are real.
+ *
+ * That makes a redelivery of the same svix-id, or a duplicate event under a new
+ * one, a no-op by construction, without a dedupe table.
+ */
+const DELIVERED_FROM = { notIn: ['BOUNCED', 'DELIVERED'] as Array<'BOUNCED' | 'DELIVERED'> };
+const BOUNCED_FROM = { not: 'BOUNCED' as const };
+
 export function registerWebhookRoutes(app: FastifyInstance): void {
   app.post('/webhooks/resend', async (req, reply) => {
     if (!env.RESEND_WEBHOOK_SECRET) {
@@ -100,8 +122,8 @@ export function registerWebhookRoutes(app: FastifyInstance): void {
     const send = await prisma.bomSend.findFirst({ where: { providerMessageId: messageId } });
     if (send) {
       if (event.type === 'email.delivered') {
-        await prisma.bomSend.update({
-          where: { id: send.id },
+        await prisma.bomSend.updateMany({
+          where: { id: send.id, status: DELIVERED_FROM },
           data: { status: 'DELIVERED', deliveredAt: new Date() },
         });
       } else if (event.type === 'email.opened') {
@@ -112,10 +134,11 @@ export function registerWebhookRoutes(app: FastifyInstance): void {
           await prisma.bomSend.update({ where: { id: send.id }, data: { openedAt: new Date() } });
         }
       } else if (event.type === 'email.bounced') {
-        await prisma.bomSend.update({
-          where: { id: send.id },
+        const changed = await prisma.bomSend.updateMany({
+          where: { id: send.id, status: BOUNCED_FROM },
           data: { status: 'BOUNCED', error: bounceMessage },
         });
+        if (changed.count === 0) return reply.status(200).send({ ok: true, duplicate: true });
         // A bounce is operationally urgent — the vendor does not have the BOM and
         // nobody would otherwise find out. Put it on the order timeline.
         await prisma.orderEvent.create({
@@ -142,8 +165,8 @@ export function registerWebhookRoutes(app: FastifyInstance): void {
     });
     if (rfqSend) {
       if (event.type === 'email.delivered') {
-        await prisma.freightRfqSend.update({
-          where: { id: rfqSend.id },
+        await prisma.freightRfqSend.updateMany({
+          where: { id: rfqSend.id, status: DELIVERED_FROM },
           data: { status: 'DELIVERED', deliveredAt: new Date() },
         });
       } else if (event.type === 'email.opened') {
@@ -154,10 +177,11 @@ export function registerWebhookRoutes(app: FastifyInstance): void {
           });
         }
       } else if (event.type === 'email.bounced') {
-        await prisma.freightRfqSend.update({
-          where: { id: rfqSend.id },
+        const changed = await prisma.freightRfqSend.updateMany({
+          where: { id: rfqSend.id, status: BOUNCED_FROM },
           data: { status: 'BOUNCED', error: bounceMessage },
         });
+        if (changed.count === 0) return reply.status(200).send({ ok: true, duplicate: true });
         logger.warn(
           { sendId: rfqSend.id, to: rfqSend.toEmail, vendor: rfqSend.rfq?.vendor },
           'resend webhook: freight request bounced',
@@ -179,15 +203,16 @@ export function registerWebhookRoutes(app: FastifyInstance): void {
     });
     if (poSend) {
       if (event.type === 'email.delivered') {
-        await prisma.purchaseOrderSend.update({
-          where: { id: poSend.id },
+        await prisma.purchaseOrderSend.updateMany({
+          where: { id: poSend.id, status: DELIVERED_FROM },
           data: { status: 'DELIVERED', deliveredAt: new Date() },
         });
       } else if (event.type === 'email.bounced') {
-        await prisma.purchaseOrderSend.update({
-          where: { id: poSend.id },
+        const changed = await prisma.purchaseOrderSend.updateMany({
+          where: { id: poSend.id, status: BOUNCED_FROM },
           data: { status: 'BOUNCED', error: bounceMessage },
         });
+        if (changed.count === 0) return reply.status(200).send({ ok: true, duplicate: true });
         await prisma.orderEvent.create({
           data: {
             orderId: poSend.po.orderId,

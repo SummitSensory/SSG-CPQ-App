@@ -120,12 +120,22 @@ export async function purchaseOrderSource(orderId: string, vendor: string) {
   const existing = await prisma.purchaseOrder.findMany({
     where: { orderId, vendor },
     orderBy: { sequence: 'asc' },
-    include: { lines: { select: { sku: true } } },
+    include: { lines: { select: { sku: true, procurementLineId: true } } },
   });
-  const onSent = new Map<string, string>();
+  // "Already on a sent PO" is tracked per BOM line: the same part can sit on two lines
+  // (two sections, two colours) and ordering one must not mark the other. A PO line
+  // drafted before PO lines recorded their BOM line has no id, and falls back to the
+  // old part-number match.
+  const onSentByLine = new Map<string, string>();
+  const onSentByLegacySku = new Map<string, string>();
   for (const po of existing) {
     if (po.status !== 'SENT') continue;
-    for (const l of po.lines) if (!onSent.has(l.sku)) onSent.set(l.sku, po.reference);
+    for (const l of po.lines) {
+      if (l.procurementLineId) {
+        if (!onSentByLine.has(l.procurementLineId))
+          onSentByLine.set(l.procurementLineId, po.reference);
+      } else if (!onSentByLegacySku.has(l.sku)) onSentByLegacySku.set(l.sku, po.reference);
+    }
   }
   return {
     vendor,
@@ -139,7 +149,7 @@ export async function purchaseOrderSource(orderId: string, vendor: string) {
       unitCostMinor: l.unitCostMinor,
       extendedCostMinor: l.extendedCostMinor,
       powderColor: l.powderColor,
-      onPurchaseOrder: onSent.get(l.sku) ?? null,
+      onPurchaseOrder: onSentByLine.get(l.id) ?? onSentByLegacySku.get(l.sku) ?? null,
     })),
     /** The vendor section's "Estimated shipment quote", as typed and as a number where it reads as one. */
     freight: { text: bom.financials.shipmentQuote, minor: bom.financials.shipmentMinor },
@@ -175,6 +185,8 @@ async function chosenLines(orderId: string, vendor: string, lineIds: string[]) {
       // The colour the Bill of Materials prints for this part, frozen with the PO.
       powderColor: l.powderColor.trim() || null,
       sortOrder: i,
+      // The BOM line it came from, so the picker can tell which line is ordered.
+      procurementLineId: l.id || null,
     })),
   };
 }
@@ -214,36 +226,62 @@ export async function createPurchaseOrder(
   const freight = freightFields(input);
   const projectId = await projectIdForOrder(order);
   const abbrev = vendorAbbrev(mfr.name, mfr.rfqAbbrev);
-  const last = await prisma.purchaseOrder.findFirst({
-    where: { orderId, vendor },
-    orderBy: { sequence: 'desc' },
-    select: { sequence: true },
-  });
-  const sequence = (last?.sequence ?? 0) + 1;
+  const data = {
+    orderId,
+    vendor,
+    manufacturerId: mfr.id,
+    projectId,
+    vendorAbbrev: abbrev,
+    notes: s(input.notes).trim() || null,
+    ...freight,
+    ...totals(lines, freight.freightMinor),
+    // Frozen from the vendor's BOM section: where this vendor ships and who receives it.
+    shipToName: bom.shipTo.name,
+    shipToLines: bom.shipTo.lines.filter((l) => s(l).trim()),
+    contactName: s(bom.shipTo.contactName) || null,
+    // Formatted the way the BOM prints it: (XXX) XXX-XXXX.
+    contactPhone: bomPhone(bom.shipTo.phone).text || null,
+    createdById: actorId,
+  };
 
-  return prisma.purchaseOrder.create({
-    data: {
-      orderId,
-      vendor,
-      manufacturerId: mfr.id,
-      projectId,
-      vendorAbbrev: abbrev,
-      sequence,
-      reference: poReference(projectId, abbrev, sequence),
-      notes: s(input.notes).trim() || null,
-      ...freight,
-      ...totals(lines, freight.freightMinor),
-      // Frozen from the vendor's BOM section: where this vendor ships and who receives it.
-      shipToName: bom.shipTo.name,
-      shipToLines: bom.shipTo.lines.filter((l) => s(l).trim()),
-      contactName: s(bom.shipTo.contactName) || null,
-      // Formatted the way the BOM prints it: (XXX) XXX-XXXX.
-      contactPhone: bomPhone(bom.shipTo.phone).text || null,
-      createdById: actorId,
-      lines: { create: lines },
-    },
-    include: { lines: { orderBy: { sortOrder: 'asc' } } },
-  });
+  // `sequence` counts POs to this vendor on this order, but `reference` is unique
+  // across ALL orders and vendors. Two vendors can derive the same code, and a second
+  // order on one Project ID restarts the vendor's sequence, so the reference is the
+  // first free suffix at or after the sequence. A race with a simultaneous create
+  // (P2002 on reference) re-reads and tries again.
+  for (let attempt = 0; ; attempt++) {
+    const last = await prisma.purchaseOrder.findFirst({
+      where: { orderId, vendor },
+      orderBy: { sequence: 'desc' },
+      select: { sequence: true },
+    });
+    const sequence = (last?.sequence ?? 0) + 1;
+    const taken = new Set(
+      (
+        await prisma.purchaseOrder.findMany({
+          where: { reference: { startsWith: poReference(projectId, abbrev, 1) } },
+          select: { reference: true },
+        })
+      ).map((p) => p.reference),
+    );
+    let n = sequence;
+    while (taken.has(poReference(projectId, abbrev, n))) n += 1;
+    try {
+      return await prisma.purchaseOrder.create({
+        data: {
+          ...data,
+          sequence,
+          reference: poReference(projectId, abbrev, n),
+          lines: { create: lines },
+        },
+        include: { lines: { orderBy: { sortOrder: 'asc' } } },
+      });
+    } catch (err) {
+      const code = (err as { code?: string } | null)?.code;
+      if (code === 'P2002' && attempt < 4) continue;
+      throw err;
+    }
+  }
 }
 
 async function draft(poId: string) {

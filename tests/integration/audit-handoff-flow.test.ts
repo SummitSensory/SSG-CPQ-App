@@ -338,19 +338,16 @@ suite('audit: accepted order -> procurement snapshot (real database)', () => {
     expect(await db.procurementLine.count({ where: { orderId } })).toBe(7);
   });
 
-  it.fails(
-    'BUG: Sku.manufacturer (the BOM ordering override) loses to ProductSourcing at lock time',
-    async () => {
-      // resolveCatalogRefs merges `vendor: priorPart.vendor ?? ref.vendor` — Product
-      // first (src/handoff/service.ts:221-229) — while partInfo (bomBuild.ts) and
-      // resolveVendors (freight RFQ) both let Sku win. The same part goes to one vendor
-      // on the BOM and is quoted for freight by another.
-      const { vendorBySku } = await vendorRes.resolveVendors([PART.ovr]);
-      expect(vendorBySku.get(PART.ovr.toLowerCase())).toBe(V.override); // freight side: Sku wins
-      const ovr = (await lines()).find((l) => l.sku === PART.ovr)!;
-      expect(ovr.vendor).toBe(V.override); // BOM side: actually V.sourced
-    },
-  );
+  it('FIXED: Sku.manufacturer (the BOM ordering override) loses to ProductSourcing at lock time', async () => {
+    // resolveCatalogRefs merges `vendor: priorPart.vendor ?? ref.vendor` — Product
+    // first (src/handoff/service.ts:221-229) — while partInfo (bomBuild.ts) and
+    // resolveVendors (freight RFQ) both let Sku win. The same part goes to one vendor
+    // on the BOM and is quoted for freight by another.
+    const { vendorBySku } = await vendorRes.resolveVendors([PART.ovr]);
+    expect(vendorBySku.get(PART.ovr.toLowerCase())).toBe(V.override); // freight side: Sku wins
+    const ovr = (await lines()).find((l) => l.sku === PART.ovr)!;
+    expect(ovr.vendor).toBe(V.override); // BOM side: actually V.sourced
+  });
 
   it('the catalog changing after lock does not move the BOM (snapshot, not live lookup)', async () => {
     const before = await bomMod.buildBom(orderId, { vendor: V.acme });
@@ -486,24 +483,19 @@ suite('audit: purchase orders (real database)', () => {
     await db.sku.update({ where: { part: PART.se1 }, data: { unitCostMinor: 100 } });
   });
 
-  it.fails(
-    'BUG: cost refresh offers to reprice a real cost to $0 when the catalog cost is blank (0)',
-    async () => {
-      // Sku.unitCostMinor is NOT NULL DEFAULT 0, and elsewhere a 0 means "the catalog
-      // records no cost" (vendorResolution.ts resolvePartDetails). previewCostRefresh
-      // compares against it as a real price (costRefresh.ts:123,139-143), so one click
-      // of "apply" zeroes the line's cost and the job's COGS.
-      await db.sku.update({ where: { part: PART.se1 }, data: { unitCostMinor: 0 } });
-      try {
-        const preview = await costRefresh.previewCostRefresh(orderId);
-        expect(
-          preview.rows.find((r) => r.sku === PART.se1 && r.catalogMinor === 0),
-        ).toBeUndefined();
-      } finally {
-        await db.sku.update({ where: { part: PART.se1 }, data: { unitCostMinor: 100 } });
-      }
-    },
-  );
+  it('FIXED: cost refresh offers to reprice a real cost to $0 when the catalog cost is blank (0)', async () => {
+    // Sku.unitCostMinor is NOT NULL DEFAULT 0, and elsewhere a 0 means "the catalog
+    // records no cost" (vendorResolution.ts resolvePartDetails). previewCostRefresh
+    // compares against it as a real price (costRefresh.ts:123,139-143), so one click
+    // of "apply" zeroes the line's cost and the job's COGS.
+    await db.sku.update({ where: { part: PART.se1 }, data: { unitCostMinor: 0 } });
+    try {
+      const preview = await costRefresh.previewCostRefresh(orderId);
+      expect(preview.rows.find((r) => r.sku === PART.se1 && r.catalogMinor === 0)).toBeUndefined();
+    } finally {
+      await db.sku.update({ where: { part: PART.se1 }, data: { unitCostMinor: 100 } });
+    }
+  });
 
   it('a sent PO cannot be edited or deleted', async () => {
     const p = await db.purchaseOrder.findFirstOrThrow({
@@ -519,71 +511,62 @@ suite('audit: purchase orders (real database)', () => {
     ).rejects.toThrow(/can no longer be changed/);
   });
 
-  it.fails(
-    'BUG: two vendors whose codes collide on one order cannot both receive a PO (unique reference)',
-    async () => {
-      // Sequence is counted per (order, vendor) (purchaseOrder.ts:216-221) but
-      // `reference` is globally @unique, so "Southpaw Enterprises" and "Summit
-      // Electric" — both coded ZSE here — produce the same PO-<project>-ZSE and the
-      // second create throws a raw Prisma P2002.
-      const a = await po.purchaseOrderSource(orderId, V.southpaw);
-      const b = await po.purchaseOrderSource(orderId, V.summitElectric);
-      const poA = await po.createPurchaseOrder(
-        orderId,
-        V.southpaw,
-        { lineIds: [a.lines[0]!.id], freightMinor: 0, noFreightCharge: true },
-        userId,
-      );
-      const poB = await po.createPurchaseOrder(
-        orderId,
-        V.summitElectric,
-        { lineIds: [b.lines[0]!.id], freightMinor: 0, noFreightCharge: true },
-        userId,
-      );
-      expect(poA.reference).not.toBe(poB.reference);
-    },
-  );
+  it('FIXED: two vendors whose codes collide on one order cannot both receive a PO (unique reference)', async () => {
+    // Sequence is counted per (order, vendor) (purchaseOrder.ts:216-221) but
+    // `reference` is globally @unique, so "Southpaw Enterprises" and "Summit
+    // Electric" — both coded ZSE here — produce the same PO-<project>-ZSE and the
+    // second create throws a raw Prisma P2002.
+    const a = await po.purchaseOrderSource(orderId, V.southpaw);
+    const b = await po.purchaseOrderSource(orderId, V.summitElectric);
+    const poA = await po.createPurchaseOrder(
+      orderId,
+      V.southpaw,
+      { lineIds: [a.lines[0]!.id], freightMinor: 0, noFreightCharge: true },
+      userId,
+    );
+    const poB = await po.createPurchaseOrder(
+      orderId,
+      V.summitElectric,
+      { lineIds: [b.lines[0]!.id], freightMinor: 0, noFreightCharge: true },
+      userId,
+    );
+    expect(poA.reference).not.toBe(poB.reference);
+  });
 
-  it.fails(
-    'BUG: a second order on the same Project ID cannot raise a PO to the same vendor',
-    async () => {
-      // Same root cause across orders: a change order / second order on one monday
-      // project restarts the vendor sequence at 1 and collides with the first order's PO.
-      const second = await lockOrder([
-        { lineType: 'PRODUCT', kind: 'INCLUDED', sku: PART.frame, name: 'Frame', quantity: 1 },
-      ]);
-      const src = await po.purchaseOrderSource(second, V.acme);
-      const created = await po.createPurchaseOrder(
-        second,
-        V.acme,
-        { lineIds: [src.lines[0]!.id], freightMinor: 0, noFreightCharge: true },
-        userId,
-      );
-      expect(created.reference).toMatch(/^PO-/);
-    },
-  );
+  it('FIXED: a second order on the same Project ID cannot raise a PO to the same vendor', async () => {
+    // Same root cause across orders: a change order / second order on one monday
+    // project restarts the vendor sequence at 1 and collides with the first order's PO.
+    const second = await lockOrder([
+      { lineType: 'PRODUCT', kind: 'INCLUDED', sku: PART.frame, name: 'Frame', quantity: 1 },
+    ]);
+    const src = await po.purchaseOrderSource(second, V.acme);
+    const created = await po.createPurchaseOrder(
+      second,
+      V.acme,
+      { lineIds: [src.lines[0]!.id], freightMinor: 0, noFreightCharge: true },
+      userId,
+    );
+    expect(created.reference).toMatch(/^PO-/);
+  });
 
-  it.fails(
-    'BUG: once ONE bolt line is on a sent PO, the other bolt line (same part, other section) shows as already ordered',
-    async () => {
-      // purchaseOrderSource keys "already on a sent PO" by SKU (purchaseOrder.ts:128-131),
-      // and sendPurchaseOrder stamps poNumber by SKU too, so the second bolt line looks
-      // ordered when it is not — a rep skipping it under-orders by 6.
-      const src = await po.purchaseOrderSource(orderId, V.acme);
-      const bolts = src.lines.filter((l) => l.sku === PART.bolt);
-      expect(bolts).toHaveLength(2);
-      const sent = await po.createPurchaseOrder(
-        orderId,
-        V.acme,
-        { lineIds: [bolts[0]!.id], freightMinor: 0, noFreightCharge: true },
-        userId,
-      );
-      await db.purchaseOrder.update({ where: { id: sent.id }, data: { status: 'SENT' } });
-      const again = await po.purchaseOrderSource(orderId, V.acme);
-      const other = again.lines.find((l) => l.id === bolts[1]!.id)!;
-      expect(other.onPurchaseOrder).toBeNull();
-    },
-  );
+  it('FIXED: once ONE bolt line is on a sent PO, the other bolt line (same part, other section) shows as already ordered', async () => {
+    // purchaseOrderSource keys "already on a sent PO" by SKU (purchaseOrder.ts:128-131),
+    // and sendPurchaseOrder stamps poNumber by SKU too, so the second bolt line looks
+    // ordered when it is not — a rep skipping it under-orders by 6.
+    const src = await po.purchaseOrderSource(orderId, V.acme);
+    const bolts = src.lines.filter((l) => l.sku === PART.bolt);
+    expect(bolts).toHaveLength(2);
+    const sent = await po.createPurchaseOrder(
+      orderId,
+      V.acme,
+      { lineIds: [bolts[0]!.id], freightMinor: 0, noFreightCharge: true },
+      userId,
+    );
+    await db.purchaseOrder.update({ where: { id: sent.id }, data: { status: 'SENT' } });
+    const again = await po.purchaseOrderSource(orderId, V.acme);
+    const other = again.lines.find((l) => l.id === bolts[1]!.id)!;
+    expect(other.onPurchaseOrder).toBeNull();
+  });
 });
 
 suite('audit: editing a locked order (real database)', () => {
@@ -603,42 +586,36 @@ suite('audit: editing a locked order (real database)', () => {
     await expect(service.patchProcurementLine(line.id, { quantity: 0 }, userId)).rejects.toThrow();
   });
 
-  it.fails(
-    'BUG: upsertProcurementLine can move a line OFF a submitted section by changing its vendor',
-    async () => {
-      // assertSectionOpen is only checked for the NEW vendor (service.ts:1217-1218); the
-      // existing line's own (submitted) section is never consulted on update.
-      const line = (await lines()).find((l) => l.sku === PART.se2)!;
-      await expect(
-        service.upsertProcurementLine(
-          orderId,
-          { id: line.id, sku: PART.se2, name: line.name, quantity: line.quantity, vendor: V.acme },
-          userId,
-        ),
-      ).rejects.toThrow(/submitted/);
-    },
-  );
+  it('FIXED: upsertProcurementLine can move a line OFF a submitted section by changing its vendor', async () => {
+    // assertSectionOpen is only checked for the NEW vendor (service.ts:1217-1218); the
+    // existing line's own (submitted) section is never consulted on update.
+    const line = (await lines()).find((l) => l.sku === PART.se2)!;
+    await expect(
+      service.upsertProcurementLine(
+        orderId,
+        { id: line.id, sku: PART.se2, name: line.name, quantity: line.quantity, vendor: V.acme },
+        userId,
+      ),
+    ).rejects.toThrow(/submitted/);
+  });
 
-  it.fails(
-    "BUG: upsertProcurementLine with another order's line id moves that line into this order",
-    async () => {
-      // The update is `where: { id }` with `data.orderId = orderId` and no ownership check.
-      const other = await lockOrder(
-        [{ lineType: 'PRODUCT', kind: 'INCLUDED', sku: PART.bolt, name: 'Bolt', quantity: 2 }],
-        `8${Date.now()}`,
-      );
-      const foreign = (await lines(other))[0]!;
-      await expect(
-        service.upsertProcurementLine(
-          orderId,
-          { id: foreign.id, sku: PART.bolt, name: 'Bolt', quantity: 2 },
-          userId,
-        ),
-      ).rejects.toThrow();
-      const after = await db.procurementLine.findUniqueOrThrow({ where: { id: foreign.id } });
-      expect(after.orderId).toBe(other);
-    },
-  );
+  it("FIXED: upsertProcurementLine with another order's line id moves that line into this order", async () => {
+    // The update is `where: { id }` with `data.orderId = orderId` and no ownership check.
+    const other = await lockOrder(
+      [{ lineType: 'PRODUCT', kind: 'INCLUDED', sku: PART.bolt, name: 'Bolt', quantity: 2 }],
+      `8${Date.now()}`,
+    );
+    const foreign = (await lines(other))[0]!;
+    await expect(
+      service.upsertProcurementLine(
+        orderId,
+        { id: foreign.id, sku: PART.bolt, name: 'Bolt', quantity: 2 },
+        userId,
+      ),
+    ).rejects.toThrow();
+    const after = await db.procurementLine.findUniqueOrThrow({ where: { id: foreign.id } });
+    expect(after.orderId).toBe(other);
+  });
 
   it('purchase orders cannot be raised on an unlocked (cancelled) order', async () => {
     const cancelled = await lockOrder(
@@ -666,33 +643,30 @@ suite('audit: editing a locked order (real database)', () => {
     (globalThis as { __auditCancelledDraft?: string }).__auditCancelledDraft = draft.id;
   });
 
-  it.fails(
-    'BUG: a draft PO raised before the order was unlocked can still be emailed to the vendor',
-    async () => {
-      // sendPurchaseOrder never re-reads the order's status (purchaseOrderSend.ts:135-170).
-      const draftId = (globalThis as { __auditCancelledDraft?: string }).__auditCancelledDraft!;
-      const fetchStub = vi.fn(
-        async () =>
-          new Response(JSON.stringify({ id: 'audit-not-sent' }), {
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-          }),
-      );
-      vi.stubGlobal('fetch', fetchStub);
-      try {
-        await expect(
-          poSend.sendPurchaseOrder(
-            draftId,
-            { to: 'vendor@example.com', subject: 'PO', body: 'Please supply' },
-            userId,
-          ),
-        ).rejects.toThrow(/cancel/i);
-        expect(fetchStub).not.toHaveBeenCalled();
-      } finally {
-        vi.unstubAllGlobals();
-      }
-    },
-  );
+  it('FIXED: a draft PO raised before the order was unlocked can still be emailed to the vendor', async () => {
+    // sendPurchaseOrder never re-reads the order's status (purchaseOrderSend.ts:135-170).
+    const draftId = (globalThis as { __auditCancelledDraft?: string }).__auditCancelledDraft!;
+    const fetchStub = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ id: 'audit-not-sent' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    vi.stubGlobal('fetch', fetchStub);
+    try {
+      await expect(
+        poSend.sendPurchaseOrder(
+          draftId,
+          { to: 'vendor@example.com', subject: 'PO', body: 'Please supply' },
+          userId,
+        ),
+      ).rejects.toThrow(/cancel/i);
+      expect(fetchStub).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 suite('audit: catalog re-sourcing of open orders (real database)', () => {
@@ -708,48 +682,45 @@ suite('audit: catalog re-sourcing of open orders (real database)', () => {
     expect((await lines()).find((l) => l.sku === PART.se1)!.vendor).toBe(V.acme);
   });
 
-  it.fails(
-    'BUG: re-sourcing a part drags its secondary-vendor and free-issue lines onto the new manufacturer',
-    async () => {
-      // reassignSkuVendor selects every line with the SKU (vendorReassign.ts:65-73) with
-      // no regard for `secondaryOfSku` or `freeIssue`, whose vendor differs from the
-      // manufacturer ON PURPOSE. The powder coater / receiving vendor loses the line and
-      // the manufacturer's sheet gains a duplicate (or a zero-cost free-issue line).
-      const id = await lockOrder(
-        [{ lineType: 'PRODUCT', kind: 'INCLUDED', sku: PART.frame, name: 'Frame', quantity: 1 }],
-        `5${Date.now()}`,
-      );
-      await db.procurementLine.createMany({
-        data: [
-          {
-            orderId: id,
-            sku: PART.frame,
-            name: 'Frame',
-            quantity: 1,
-            vendor: V.powder,
-            unitCostMinor: 1500,
-            secondaryOfSku: PART.frame.toUpperCase(),
-          },
-          {
-            orderId: id,
-            sku: PART.frame,
-            name: 'Frame (free issue)',
-            quantity: 1,
-            vendor: V.receiver,
-            purchaseVendor: V.acme,
-            freeIssue: true,
-            unitCostMinor: 10000,
-          },
-        ],
-      });
-      await reassign.reassignSkuVendor(PART.frame, V.override, userId);
-      const after = await lines(id);
-      expect(after.find((l) => l.secondaryOfSku)!.vendor).toBe(V.powder);
-      expect(after.find((l) => l.freeIssue)!.vendor).toBe(V.receiver);
-    },
-  );
+  it('FIXED: re-sourcing a part drags its secondary-vendor and free-issue lines onto the new manufacturer', async () => {
+    // reassignSkuVendor selects every line with the SKU (vendorReassign.ts:65-73) with
+    // no regard for `secondaryOfSku` or `freeIssue`, whose vendor differs from the
+    // manufacturer ON PURPOSE. The powder coater / receiving vendor loses the line and
+    // the manufacturer's sheet gains a duplicate (or a zero-cost free-issue line).
+    const id = await lockOrder(
+      [{ lineType: 'PRODUCT', kind: 'INCLUDED', sku: PART.frame, name: 'Frame', quantity: 1 }],
+      `5${Date.now()}`,
+    );
+    await db.procurementLine.createMany({
+      data: [
+        {
+          orderId: id,
+          sku: PART.frame,
+          name: 'Frame',
+          quantity: 1,
+          vendor: V.powder,
+          unitCostMinor: 1500,
+          secondaryOfSku: PART.frame.toUpperCase(),
+        },
+        {
+          orderId: id,
+          sku: PART.frame,
+          name: 'Frame (free issue)',
+          quantity: 1,
+          vendor: V.receiver,
+          purchaseVendor: V.acme,
+          freeIssue: true,
+          unitCostMinor: 10000,
+        },
+      ],
+    });
+    await reassign.reassignSkuVendor(PART.frame, V.override, userId);
+    const after = await lines(id);
+    expect(after.find((l) => l.secondaryOfSku)!.vendor).toBe(V.powder);
+    expect(after.find((l) => l.freeIssue)!.vendor).toBe(V.receiver);
+  });
 
-  it.fails('BUG: re-sourcing rewrites lines on CANCELLED orders too', async () => {
+  it('FIXED: re-sourcing rewrites lines on CANCELLED orders too', async () => {
     const id = await lockOrder(
       [{ lineType: 'PRODUCT', kind: 'INCLUDED', sku: PART.se2, name: 'SE two', quantity: 1 }],
       `4${Date.now()}`,
@@ -761,11 +732,86 @@ suite('audit: catalog re-sourcing of open orders (real database)', () => {
 });
 
 suite('audit: BOM build rules re-applied to a locked order (real database)', () => {
-  it.fails(
-    'BUG: a Product-only kit component gets a NON-primary vendor (partInfo ignores isPrimary)',
-    async () => {
-      // bomBuild.ts partInfo reads productSourcing with no orderBy and keeps the first
-      // row (bomBuild.ts:224-231), unlike resolveVendors which orders isPrimary desc.
+  it('FIXED: a Product-only kit component gets a NON-primary vendor (partInfo ignores isPrimary)', async () => {
+    // bomBuild.ts partInfo reads productSourcing with no orderBy and keeps the first
+    // row (bomBuild.ts:224-231), unlike resolveVendors which orders isPrimary desc.
+    const id = await lockOrder(
+      [
+        {
+          lineType: 'PRODUCT',
+          kind: 'INCLUDED',
+          sku: PART.kitParent,
+          name: 'Kit parent',
+          quantity: 2,
+        },
+      ],
+      `3${Date.now()}`,
+    );
+    await db.skuComponent.create({
+      data: { parentPart: PART.kitParent, childPart: PART.kitChild, quantity: 3 },
+    });
+    try {
+      const res = await bomBuild.applyBomBuildToOrder(id, userId);
+      expect(res.exploded).toEqual([PART.kitParent.toUpperCase()]);
+      const child = (await lines(id)).find((l) => l.sku === PART.kitChild.toUpperCase())!;
+      expect(child.quantity).toBe(6);
+      expect(Number(child.unitWeightLbs)).toBe(2);
+      expect(child.vendor).toBe(V.primary);
+    } finally {
+      await db.skuComponent.deleteMany({ where: { parentPart: PART.kitParent } });
+    }
+  });
+});
+
+suite('audit: follow-up fixes (real database)', () => {
+  it('the legacy "apply powder colour to the order" leaves kit fasteners unpainted', async () => {
+    try {
+      const res = await service.applyPowderColorToOrder(
+        orderId,
+        'Audit Red',
+        { overwrite: true },
+        userId,
+      );
+      expect(res.updated).toBeGreaterThan(0);
+      const ls = await lines();
+      // (The frame was re-sourced off Acme above; the bolts are still Acme's.)
+      expect(ls.filter((l) => l.sku === PART.bolt).map((l) => l.powderColor)).toEqual([
+        'Audit Red',
+        'Audit Red',
+      ]);
+      expect(ls.find((l) => l.sku === PART.kitBolt)!.powderColor).toBeNull();
+    } finally {
+      await db.procurementLine.updateMany({ where: { orderId }, data: { powderColor: null } });
+    }
+  });
+
+  it('cost refresh matches the vendor filter and submitted sections case-insensitively', async () => {
+    await db.sku.update({ where: { part: PART.bolt }, data: { unitCostMinor: 55 } });
+    try {
+      const preview = await costRefresh.previewCostRefresh(orderId, {
+        vendor: V.acme.toUpperCase(),
+      });
+      expect(preview.rows.map((r) => r.sku)).toContain(PART.bolt);
+    } finally {
+      await db.sku.update({ where: { part: PART.bolt }, data: { unitCostMinor: 50 } });
+    }
+  });
+
+  it('a kit component catalogued in lower case still gets its vendor and weight', async () => {
+    const lower = `${P.toLowerCase()}-lc`;
+    await db.sku.create({
+      data: {
+        part: lower,
+        description: 'Lower-case part',
+        unitCostMinor: 75,
+        weightLbs: 3,
+        manufacturer: V.acme,
+      },
+    });
+    await db.skuComponent.create({
+      data: { parentPart: PART.kitParent, childPart: lower, quantity: 2 },
+    });
+    try {
       const id = await lockOrder(
         [
           {
@@ -773,24 +819,18 @@ suite('audit: BOM build rules re-applied to a locked order (real database)', () 
             kind: 'INCLUDED',
             sku: PART.kitParent,
             name: 'Kit parent',
-            quantity: 2,
+            quantity: 1,
           },
         ],
-        `3${Date.now()}`,
+        `2${Date.now()}`,
       );
-      await db.skuComponent.create({
-        data: { parentPart: PART.kitParent, childPart: PART.kitChild, quantity: 3 },
-      });
-      try {
-        const res = await bomBuild.applyBomBuildToOrder(id, userId);
-        expect(res.exploded).toEqual([PART.kitParent.toUpperCase()]);
-        const child = (await lines(id)).find((l) => l.sku === PART.kitChild.toUpperCase())!;
-        expect(child.quantity).toBe(6);
-        expect(Number(child.unitWeightLbs)).toBe(2);
-        expect(child.vendor).toBe(V.primary);
-      } finally {
-        await db.skuComponent.deleteMany({ where: { parentPart: PART.kitParent } });
-      }
-    },
-  );
+      const child = (await lines(id)).find((l) => l.sku === lower.toUpperCase())!;
+      expect(child.quantity).toBe(2);
+      expect(child.vendor).toBe(V.acme);
+      expect(Number(child.unitWeightLbs)).toBe(3);
+    } finally {
+      await db.skuComponent.deleteMany({ where: { parentPart: PART.kitParent } });
+      await db.sku.deleteMany({ where: { part: lower } });
+    }
+  });
 });

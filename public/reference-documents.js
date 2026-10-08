@@ -59,6 +59,17 @@
     return loading;
   }
 
+  /**
+   * Re-fetch the active library after the admin panel changes it. load() memoises its
+   * first request for the life of the page, so calling it again after an upload,
+   * rename, toggle or delete returned the stale list: the builder kept offering a
+   * deleted document and never showed a new one until a full reload.
+   */
+  function refresh() {
+    loading = null;
+    return load();
+  }
+
   /* ------------------------------------------------------------- admin panel */
 
   var listCache = null;
@@ -166,6 +177,7 @@
               toast(await failureText(r, 'That could not be renamed.'), true);
               return;
             }
+            refresh();
             reload(host);
           });
         } else if (act === 'toggle') {
@@ -178,7 +190,7 @@
               toast(await failureText(r, 'That could not be updated.'), true);
               return;
             }
-            load(); // refresh the builder's cached active list too
+            refresh(); // refresh the builder's cached active list too
             reload(host);
           });
         } else if (act === 'delete') {
@@ -189,7 +201,7 @@
                 toast(await failureText(r, 'That could not be deleted.'), true);
                 return;
               }
-              load();
+              refresh();
               reload(host);
             },
           );
@@ -239,7 +251,7 @@
             return;
           }
           toast('Uploaded.');
-          load();
+          refresh();
           reload(host);
         };
         reader.onerror = function () {
@@ -257,6 +269,7 @@
       load();
     },
     load: load,
+    refresh: refresh,
     /** Active documents, {key, title, filename, byteSize}[] — for the builder checklist. */
     list: function () {
       return ACTIVE || [];

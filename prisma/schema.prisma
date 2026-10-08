@@ -549,6 +549,7 @@ model ProductCategory {
 
   @@index([productLineId, tierLevel])
   @@index([parentId, sortOrder])
+  @@index([productId])
 }
 
 model ProductFamily {
@@ -954,6 +955,11 @@ model Rule {
   outcome        RuleOutcome
   status         RuleStatus    @default(DRAFT)
   currentVersion Int           @default(1)
+  // The approved version the engine evaluates. Moved only by activation, which runs
+  // the cycle check; currentVersion is the newest (possibly unapproved) draft. Null
+  // until a rule is first activated — getActiveRuleDefs falls back to currentVersion,
+  // which is what every rule evaluated before this column existed (0113 backfills it).
+  activeVersion  Int?
   description    String?
   createdById    String
   createdAt      DateTime      @default(now())
@@ -1587,6 +1593,7 @@ model Sku {
   @@index([category])
   @@index([active])
   @@index([overrideAllowed])
+  @@index([manufacturer])
 }
 
 /// One line of a part's build: `parentPart` is made up of `quantity` × `childPart`.
@@ -2203,6 +2210,8 @@ model ProcurementLine {
 
   @@index([orderId])
   @@index([invoicedAt])
+  @@index([vendor])
+  @@index([sku])
 }
 
 // Operational requirements by category (production, shipping, install, etc.).
@@ -2621,6 +2630,7 @@ model PurchaseOrder {
 
   @@unique([orderId, vendor, sequence])
   @@index([orderId])
+  @@index([manufacturerId])
 }
 
 model PurchaseOrderLine {
@@ -2639,8 +2649,16 @@ model PurchaseOrderLine {
   /// PO is drafted — a sent PO keeps the colour the vendor was given.
   powderColor       String?
   sortOrder         Int           @default(0)
+  /// The procurement (BOM) line this PO line was drafted from, so "already on a PO"
+  /// is tracked per line — not per part number, which marked the same part's other
+  /// line (another section, another colour) as ordered. Null on PO lines drafted
+  /// before this column existed; those fall back to matching by part number.
+  /// Deliberately not a foreign key: a sent PO is a record and must survive the BOM
+  /// line being edited away.
+  procurementLineId String?
 
   @@index([poId])
+  @@index([procurementLineId])
 }
 
 /// One emailing of a purchase order: who it was addressed to, who at Summit sent it,
@@ -2756,6 +2774,7 @@ model FreightRfq {
   @@index([versionId])
   @@index([organizationId])
   @@index([status])
+  @@index([manufacturerId])
 }
 
 /// One product line on the RFQ. Included by default; a rep unticks what should

@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { prisma } from '../lib/prisma.js';
+import { decisionDate } from '../reporting/decision.js';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import { invoiceVarianceReport, actualCostForOrder } from '../handoff/vendorInvoice.js';
@@ -180,7 +181,6 @@ export function registerReportRoutes(app: FastifyInstance): void {
     const orgById = new Map(orgs.map((o) => [o.id, o]));
     const userById = new Map(users.map((u) => [u.id, u.name || u.email]));
 
-    const DECIDED: Status[] = ['ACCEPTED', 'REJECTED', 'EXPIRED'];
     // Archived proposals are out of every figure below: they were withdrawn, not lost,
     // and counting them as losses understates the win rate. They come back at the end as
     // their own line so the number is visible rather than silently missing.
@@ -189,7 +189,6 @@ export function registerReportRoutes(app: FastifyInstance): void {
       .filter((p) => !p.archivedAt && p.versions.length > 0)
       .map((p) => {
         const v = p.versions[0]!;
-        const decision = v.statusHistory.find((e) => DECIDED.includes(e.toStatus as Status));
         const org = orgById.get(p.organizationId);
         return {
           id: p.id,
@@ -214,7 +213,8 @@ export function registerReportRoutes(app: FastifyInstance): void {
             createdAt: v.createdAt,
             updatedAt: v.updatedAt,
             createdById: v.createdById,
-            decidedAt: decision?.createdAt ?? null,
+            // One rule with the Insights dataset — see reporting/decision.ts.
+            decidedAt: decisionDate(v.statusHistory),
           },
         };
       });

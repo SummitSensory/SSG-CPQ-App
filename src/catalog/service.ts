@@ -73,6 +73,36 @@ export async function updateProduct(
 export type Db = PrismaClient | Prisma.TransactionClient;
 
 /**
+ * The priced half of THIS part: the `Sku` whose part number is exactly `part`.
+ *
+ * Exact first, because `Sku.part` and `Product.sku` are unique case-SENSITIVELY, so
+ * "x-1" and "X-1" can be two different parts, each with its own priced row — and
+ * matching case-insensitively used to let a status change on one flip the other's
+ * `Sku.active`.
+ *
+ * The case-insensitive match survives only as a fallback for a single pair whose two
+ * halves were typed in different cases ("a-2207" in the tree, "A-2207" priced): when
+ * there is no exact row, exactly one case-variant Sku exists, and no Product owns that
+ * spelling, it is this part's priced half. Anything more ambiguous is no match.
+ */
+export async function findPricedHalf(
+  db: Db,
+  part: string,
+): Promise<{ id: string; part: string } | null> {
+  const exact = await db.sku.findUnique({ where: { part }, select: { id: true, part: true } });
+  if (exact) return exact;
+  const variants = await db.sku.findMany({
+    where: { part: { equals: part.trim(), mode: 'insensitive' } },
+    select: { id: true, part: true },
+    take: 2,
+  });
+  if (variants.length !== 1) return null;
+  const only = variants[0]!;
+  const owner = await db.product.findUnique({ where: { sku: only.part }, select: { id: true } });
+  return owner ? null : only;
+}
+
+/**
  * The priced half of a part follows its catalog status.
  *
  * `Sku.active` is what the proposal builder's part picker and
@@ -80,19 +110,23 @@ export type Db = PrismaClient | Prisma.TransactionClient;
  * `Product.status` is what the tree and every status control write. They are two
  * records of one fact, so every status change writes both, in the same
  * transaction: a part archived in the tree must stop being offered at its old
- * price, and a part reactivated must come back. Matched case-insensitively, like
- * every other part-number join in the catalog.
+ * price, and a part reactivated must come back. Matched on THIS part's priced row
+ * (findPricedHalf) — never on every case-variant, which is a different part.
  */
 export async function syncSkuActive(db: Db, part: string, status: ProductStatus): Promise<void> {
-  await db.sku.updateMany({
-    where: { part: { equals: part, mode: 'insensitive' } },
-    data: { active: status === 'ACTIVE' },
-  });
+  const sku = await findPricedHalf(db, part);
+  if (!sku) return;
+  await db.sku.update({ where: { id: sku.id }, data: { active: status === 'ACTIVE' } });
 }
 
 /**
  * The status state machine, inside the caller's transaction. Writes the history
  * row, stamps the active window, and brings `Sku.active` along (see syncSkuActive).
+ *
+ * Moving to ACTIVE requires the part's priced half: an ACTIVE Product with no Sku is
+ * offered in the proposal builder at $0.00 (the integrity check's BLOCKING
+ * product-without-sku). `requirePricedHalf: false` is for the tree import alone, which
+ * writes the priced half later in the same transaction.
  */
 export async function changeStatusTx(
   tx: Db,
@@ -100,12 +134,23 @@ export async function changeStatusTx(
   to: ProductStatus,
   userId: string,
   reason?: string,
+  opts: { requirePricedHalf?: boolean } = {},
 ): Promise<Product> {
   const current = await tx.product.findUnique({ where: { id } });
   if (!current) throw new ValidationError('Product not found');
   if (current.status === to) return current;
   if (!canTransition(current.status, to)) {
     throw new ConflictError(`Illegal status transition ${current.status} -> ${to}`);
+  }
+  if (
+    to === 'ACTIVE' &&
+    opts.requirePricedHalf !== false &&
+    !(await findPricedHalf(tx, current.sku))
+  ) {
+    throw new ConflictError(
+      `${current.sku} has no price-list record, so making it active would offer it on ` +
+        `proposals at $0.00. Give it a price in the catalog list first.`,
+    );
   }
   await tx.productStatusHistory.create({
     data: {
@@ -375,6 +420,9 @@ export async function deletePartRecords(
   if (d.sku) await tx.sku.delete({ where: { id: d.sku.id } });
   if (d.product) {
     await tx.productCost.deleteMany({ where: { productId: d.product.id } });
+    // Keyed on productId with no foreign key, so nothing cascades it: left behind, the
+    // colour spec points at a product that no longer exists.
+    await tx.productColorSpec.deleteMany({ where: { productId: d.product.id } });
     await tx.productSourcing.deleteMany({ where: { productId: d.product.id } });
     await tx.product.delete({ where: { id: d.product.id } });
   }

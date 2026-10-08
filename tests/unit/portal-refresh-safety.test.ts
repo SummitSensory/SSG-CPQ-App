@@ -83,9 +83,23 @@ vi.mock('../../src/lib/prisma.js', () => {
       bomVendorSection: table('sections'),
       orderPortalItem: table('items'),
       integrationSyncLog: table('logs'),
-      orderEvent: { create: async ({ data }: { data: unknown }) => db.events.push(data) },
+      orderEvent: {
+        create: async ({ data }: { data: unknown }) => db.events.push(data),
+        findMany: async () => [],
+      },
       user: { findMany: async () => [] },
-      acceptedOrder: { findMany: async () => [], findUnique: async () => null },
+      acceptedOrder: {
+        findMany: async () => [],
+        // The portal-step lookups only ask whether the order exists (select { id });
+        // the delivery ingest's own lookups still find no order, as before.
+        findUnique: async ({
+          where,
+          select,
+        }: {
+          where: { id: string };
+          select?: Record<string, boolean>;
+        }) => (select && Object.keys(select).join() === 'id' ? { id: where.id } : null),
+      },
     },
   };
 });
@@ -100,7 +114,10 @@ vi.mock('../../src/integrations/monday/discovery.js', () => ({
     throw new Error('monday is down');
   },
 }));
-vi.mock('../../src/portal/colorAreas.js', () => ({ applyColorPicksToOrder: applyColors }));
+vi.mock('../../src/portal/colorAreas.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/portal/colorAreas.js')>()),
+  applyColorPicksToOrder: applyColors,
+}));
 
 import { ingestDeliverySubmission } from '../../src/integrations/monday/portalDelivery.js';
 import {

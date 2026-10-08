@@ -810,11 +810,20 @@ export function registerReceivableRoutes(app: FastifyInstance): void {
 
   app.get('/admin/payment-templates', read, async () => {
     const rows = await loadTemplates(true);
+    // A request can use a template as its email, its letter, or both. Counting only
+    // letterTemplateKey reported every email template as "never used" — the same rows
+    // PATCH and DELETE below already treat as using it.
     const usage = await prisma.paymentRequestEmail.groupBy({
-      by: ['letterTemplateKey'],
+      by: ['letterTemplateKey', 'emailTemplateKey'],
       _count: { _all: true },
     });
-    const countOf = new Map(usage.map((u) => [u.letterTemplateKey ?? '', u._count._all]));
+    const countOf = new Map<string, number>();
+    for (const u of usage) {
+      const keys = new Set(
+        [u.letterTemplateKey, u.emailTemplateKey].filter((k): k is string => !!k),
+      );
+      for (const k of keys) countOf.set(k, (countOf.get(k) ?? 0) + u._count._all);
+    }
 
     return {
       mergeFields: MERGE_FIELDS,

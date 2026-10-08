@@ -22,9 +22,11 @@ vi.mock('../../src/lib/prisma.js', () => ({
         role: String(where.id).replace(/^user-/, ''),
       }),
     },
-    product: { findUnique: async () => null },
+    // findFirst: the duplicate check is case-insensitive.
+    product: { findUnique: async () => null, findFirst: async () => null },
     sku: {
       findUnique: async () => h.sku,
+      findFirst: async () => null,
       update: async ({ data }: { data: Record<string, unknown> }) => {
         h.updates.push(data);
         h.sku = { ...(h.sku ?? {}), ...data };
@@ -49,7 +51,15 @@ vi.mock('../../src/lib/prisma.js', () => ({
             h.created.push(data);
             return { id: 'sku-1', ...data };
           },
+          // PATCH writes inside the transaction too.
+          findUnique: async () => h.sku,
+          update: async ({ data }: { data: Record<string, unknown> }) => {
+            h.updates.push(data);
+            h.sku = { ...(h.sku ?? {}), ...data };
+            return h.sku;
+          },
         },
+        productCost: { create: async () => ({}) },
         productSourcing: { create: async () => ({}) },
         productVersion: { create: async () => ({}) },
       }),

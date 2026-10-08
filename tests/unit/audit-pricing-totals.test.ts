@@ -123,38 +123,29 @@ describe('screen/document vs snapshot total parity (PASS)', () => {
   });
 });
 
-describe('totals — confirmed defects (it.fails)', () => {
-  it.fails(
-    'BUG: a bundle component saved without lineType totals differently in the browser and in the snapshot',
-    () => {
-      // Server isBundleChild defaults lineType to PRODUCT; public/app.js isBundleChild
-      // requires `lineType === 'PRODUCT'` literally. BuilderLineSchema makes lineType
-      // optional, so an API-written / imported row can arrive without it.
-      const items = [
-        { lineType: 'PRODUCT', name: 'Bundle', quantity: 1, rateMinor: 10000 },
-        { name: '— Component', quantity: 1, rateMinor: 4000 },
-      ];
-      expect(clientVersionTotal({ items, sections: [] })).toBe(versionTotals(items, []).total);
-    },
-  );
+describe('totals — fixed defects (formerly it.fails)', () => {
+  it('BUG: a bundle component saved without lineType totals differently in the browser and in the snapshot', () => {
+    // Server isBundleChild defaults lineType to PRODUCT; public/app.js isBundleChild
+    // requires `lineType === 'PRODUCT'` literally. BuilderLineSchema makes lineType
+    // optional, so an API-written / imported row can arrive without it.
+    const items = [
+      { lineType: 'PRODUCT', name: 'Bundle', quantity: 1, rateMinor: 10000 },
+      { name: '— Component', quantity: 1, rateMinor: 4000 },
+    ];
+    expect(clientVersionTotal({ items, sections: [] })).toBe(versionTotals(items, []).total);
+  });
 
-  it.fails(
-    'BUG: percentage discount is float math — 1.15% of $30.00 is 34.5¢, rounds to 34¢ not 35¢',
-    () => {
-      // discountOf: Math.round((3000 * 1.15) / 100) → 3449.9999999999995 / 100 → 34.
-      // BuilderMetaSchema accepts any finite discountPct in [0,100], so 2-dp percentages are legal.
-      const items = [{ lineType: 'PRODUCT', name: 'x', quantity: 1, rateMinor: 3000 }];
-      expect(versionTotals(items, meta({ discountPct: 1.15 })).discount).toBe(35);
-    },
-  );
+  it('BUG: percentage discount is float math — 1.15% of $30.00 is 34.5¢, rounds to 34¢ not 35¢', () => {
+    // discountOf: Math.round((3000 * 1.15) / 100) → 3449.9999999999995 / 100 → 34.
+    // BuilderMetaSchema accepts any finite discountPct in [0,100], so 2-dp percentages are legal.
+    const items = [{ lineType: 'PRODUCT', name: 'x', quantity: 1, rateMinor: 3000 }];
+    expect(versionTotals(items, meta({ discountPct: 1.15 })).discount).toBe(35);
+  });
 
-  it.fails(
-    'BUG: a typed TBD override of "1.005" parses through parseFloat×100 to 100¢, not half-up 101¢',
-    () => {
-      const t = versionTotals([], meta({ tbdTax: '1.005' }));
-      expect(t.tax).toBe(101);
-    },
-  );
+  it('BUG: a typed TBD override of "1.005" parses through parseFloat×100 to 100¢, not half-up 101¢', () => {
+    const t = versionTotals([], meta({ tbdTax: '1.005' }));
+    expect(t.tax).toBe(101);
+  });
 });
 
 describe('version comparison (compareVersions)', () => {
@@ -166,20 +157,17 @@ describe('version comparison (compareVersions)', () => {
     expect(d.sort()).toEqual(['added:item:c', 'changed:item:a', 'removed:item:b']);
   });
 
-  it.fails(
-    'BUG: lines without a ref (or with a duplicate ref) collapse into one map key, hiding changes',
-    () => {
-      const a = {
-        sections: s,
-        items: [{ rateMinor: 100 }, { rateMinor: 200 }] as unknown as ProposalItem[],
-      };
-      const b = {
-        sections: s,
-        items: [{ rateMinor: 999 }, { rateMinor: 200 }] as unknown as ProposalItem[],
-      };
-      expect(compareVersions(a, b).items.length).toBeGreaterThan(0);
-    },
-  );
+  it('BUG: lines without a ref (or with a duplicate ref) collapse into one map key, hiding changes', () => {
+    const a = {
+      sections: s,
+      items: [{ rateMinor: 100 }, { rateMinor: 200 }] as unknown as ProposalItem[],
+    };
+    const b = {
+      sections: s,
+      items: [{ rateMinor: 999 }, { rateMinor: 200 }] as unknown as ProposalItem[],
+    };
+    expect(compareVersions(a, b).items.length).toBeGreaterThan(0);
+  });
 });
 
 describe('money & document-number helpers (PASS)', () => {

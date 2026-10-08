@@ -311,7 +311,7 @@
           '<td style="padding:9px 10px;font-weight:600;">' +
           esc(p.number) +
           '</td><td style="padding:9px 10px;">' +
-          esc(p.customerShortName || p.organizationName) +
+          esc((p.inputs && p.inputs.customerShortName) || p.organizationName) +
           '<div style="color:' +
           MUTE +
           ';font-size:12px;">' +

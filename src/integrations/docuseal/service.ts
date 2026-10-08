@@ -39,7 +39,7 @@ import {
   envelopeContext,
   pushSignedProposalToMonday,
 } from './notifications.js';
-import { sendAlert } from '../../lib/alerts.js';
+import { deliverAlert } from '../../lib/alerts.js';
 import {
   appendPdfDocuments,
   appendImagePages,
@@ -1000,7 +1000,7 @@ export async function repairStuckSignedCopies(): Promise<{
     if (url) {
       repaired += 1;
       const push = await pushSignedProposalToMonday(envelope);
-      sendAlert({
+      await deliverAlert({
         title: `Proposal ${envelope.proposal.number} — signed copy recovered`,
         detail: [
           'The signed PDF that failed to store when this proposal completed has now been captured successfully.',
@@ -1017,7 +1017,7 @@ export async function repairStuckSignedCopies(): Promise<{
       });
     } else {
       stillStuck += 1;
-      sendAlert({
+      await deliverAlert({
         title: `Proposal ${envelope.proposal.number} — signed copy still not captured`,
         detail: [
           `${envelope.proposal.title || 'This proposal'} completed signing but the certified copy still has not been stored.`,

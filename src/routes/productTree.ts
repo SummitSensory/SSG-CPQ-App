@@ -980,9 +980,13 @@ export function registerProductTreeRoutes(app: FastifyInstance): void {
             });
             // Status through the state machine: history row, active window, and the
             // priced record's active flag, all in this transaction. Transitions were
-            // validated above, so this cannot refuse.
+            // validated above, so this cannot refuse. The priced half is written by the
+            // Sku pass further down this same transaction, so the "no priced record"
+            // refusal the status control applies is not applied here.
             if (status && status !== existing.status) {
-              await changeStatusTx(tx, existing.id, status, req.user!.sub, 'tree import');
+              await changeStatusTx(tx, existing.id, status, req.user!.sub, 'tree import', {
+                requirePricedHalf: false,
+              });
               existing.status = status;
             }
             if (kind) existing.kind = kind;

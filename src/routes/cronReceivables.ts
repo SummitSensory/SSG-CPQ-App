@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { env } from '../config/env.js';
+import { isBearerSecret } from '../lib/secretCompare.js';
 import { logger } from '../lib/logger.js';
 import { refreshOpenInvoices } from '../integrations/quickbooks/receivables.js';
 
@@ -36,7 +37,7 @@ export function registerReceivableCronRoutes(app: FastifyInstance): void {
       if (!env.CRON_SECRET) {
         return reply.status(503).send({ error: 'CRON_SECRET_NOT_SET' });
       }
-      if ((req.headers.authorization ?? '') !== `Bearer ${env.CRON_SECRET}`) {
+      if (!isBearerSecret(req.headers.authorization, env.CRON_SECRET)) {
         return reply.status(401).send({ error: 'UNAUTHORIZED' });
       }
 

@@ -58,9 +58,14 @@ function bodyHtml(text: string): string {
 export async function sendBom(sectionId: string, input: SendInput, actorId: string) {
   const section = await prisma.bomVendorSection.findUnique({
     where: { id: sectionId },
-    include: { order: { select: { id: true, number: true } } },
+    include: { order: { select: { id: true, number: true, status: true } } },
   });
   if (!section) throw new NotFoundError('Bill of Materials section not found');
+  // A cancelled (unlocked) order is not being built; nothing goes to a vendor for it.
+  if (section.order.status === 'CANCELLED')
+    throw new ValidationError(
+      'This order has been cancelled, so its Bill of Materials cannot be sent.',
+    );
 
   const to = addresses(input.to);
   const cc = addresses(input.cc);
