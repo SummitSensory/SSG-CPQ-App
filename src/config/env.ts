@@ -330,20 +330,18 @@ const EnvSchema = z
           message: 'required when GRAPH_CLIENT_ID is set',
         });
     }
-    // HS256 keys. 16 characters is tolerated in development and tests so a local
-    // .env stays easy to write; production signs real sessions and needs at least
-    // 32 (about the 256-bit key HS256 is specified for).
-    if (v.NODE_ENV === 'production') {
-      for (const key of ['JWT_ACCESS_SECRET', 'JWT_REFRESH_SECRET'] as const) {
-        if (v[key].length < 32)
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: [key],
-            message: 'must be at least 32 characters in production',
-          });
-      }
-    }
   });
+
+/**
+ * HS256 keys shorter than 32 characters (about the 256-bit key HS256 is specified
+ * for). Production should rotate these up, but a short key must not stop the app
+ * booting — refusing to start would take the live CRM down on the next deploy —
+ * so this is reported as a warning at boot instead of failing validation.
+ */
+export function weakJwtSecrets(e: Env = env): string[] {
+  if (e.NODE_ENV !== 'production') return [];
+  return (['JWT_ACCESS_SECRET', 'JWT_REFRESH_SECRET'] as const).filter((k) => e[k].length < 32);
+}
 
 /**
  * Where password-reset links point. Configured values only — never the request's

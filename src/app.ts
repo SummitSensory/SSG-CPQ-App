@@ -3,7 +3,7 @@ import helmet from '@fastify/helmet';
 import { logger } from './lib/logger.js';
 import { registerErrorHandler } from './plugins/error-handler.js';
 import { ValidationError } from './lib/errors.js';
-import { env } from './config/env.js';
+import { env, weakJwtSecrets } from './config/env.js';
 import { registerFreightGate } from './plugins/freightGate.js';
 import { registerHealthRoutes } from './routes/health.js';
 import { registerAuthRoutes } from './routes/auth.js';
@@ -232,6 +232,14 @@ export function buildApp(): FastifyInstance {
   // took the orders screen down: Prisma selects every column it knows about, so one
   // missing column breaks every query on that table.
   void verifySchemaOnBoot();
+
+  const weak = weakJwtSecrets();
+  if (weak.length) {
+    logger.warn(
+      { keys: weak },
+      'JWT secrets shorter than 32 characters in production — rotate them to 32+ characters',
+    );
+  }
 
   return app;
 }

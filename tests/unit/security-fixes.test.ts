@@ -3,7 +3,7 @@ import { safeReturnPath, scriptSafeJson } from '../../src/routes/sso.js';
 import { isBlobStoreUrl } from '../../src/lib/fileStore.js';
 import { financeRecipientProblem } from '../../src/routes/finance.js';
 import { secretsEqual, isBearerSecret } from '../../src/lib/secretCompare.js';
-import { loadEnv, resetLinkBaseUrl } from '../../src/config/env.js';
+import { loadEnv, resetLinkBaseUrl, weakJwtSecrets } from '../../src/config/env.js';
 
 describe('safeReturnPath', () => {
   it.each([
@@ -94,19 +94,19 @@ describe('environment hardening', () => {
     JWT_REFRESH_SECRET: 'b'.repeat(16),
   };
 
-  it('production refuses JWT secrets shorter than 32 characters', () => {
-    expect(() => loadEnv({ ...base, NODE_ENV: 'production' } as NodeJS.ProcessEnv)).toThrow(
-      /at least 32/,
-    );
-    expect(() =>
-      loadEnv({
-        ...base,
-        NODE_ENV: 'production',
-        JWT_ACCESS_SECRET: 'a'.repeat(32),
-        JWT_REFRESH_SECRET: 'b'.repeat(32),
-      } as NodeJS.ProcessEnv),
-    ).not.toThrow();
-    expect(() => loadEnv({ ...base } as NodeJS.ProcessEnv)).not.toThrow();
+  it('production flags JWT secrets shorter than 32 characters without refusing to boot', () => {
+    // A short key is warned about at boot, never fatal: refusing to start would take
+    // the live CRM down on the next deploy.
+    const shortProd = loadEnv({ ...base, NODE_ENV: 'production' } as NodeJS.ProcessEnv);
+    expect(weakJwtSecrets(shortProd)).toEqual(['JWT_ACCESS_SECRET', 'JWT_REFRESH_SECRET']);
+    const longProd = loadEnv({
+      ...base,
+      NODE_ENV: 'production',
+      JWT_ACCESS_SECRET: 'a'.repeat(32),
+      JWT_REFRESH_SECRET: 'b'.repeat(32),
+    } as NodeJS.ProcessEnv);
+    expect(weakJwtSecrets(longProd)).toEqual([]);
+    expect(weakJwtSecrets(loadEnv({ ...base } as NodeJS.ProcessEnv))).toEqual([]);
   });
 
   it('reset links come from configuration only, never a request', () => {
