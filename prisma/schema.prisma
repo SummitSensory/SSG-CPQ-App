@@ -2635,6 +2635,9 @@ model PurchaseOrderLine {
   /// Summit's purchase price, from the procurement line snapshot.
   unitCostMinor     Int
   extendedCostMinor Int
+  /// The colour that prints on the Bill of Materials for this part, copied when the
+  /// PO is drafted — a sent PO keeps the colour the vendor was given.
+  powderColor       String?
   sortOrder         Int           @default(0)
 
   @@index([poId])

@@ -21,6 +21,7 @@ const bomLine = (over: Record<string, unknown>) => ({
   unitCostMinor: 39920,
   extendedCostMinor: 39920,
   freeIssue: false,
+  powderColor: '',
   ...over,
 });
 const BOM = {
@@ -33,6 +34,7 @@ const BOM = {
       quantity: 2,
       unitCostMinor: 3450,
       extendedCostMinor: 6900,
+      powderColor: 'Vinyl Charcoal',
     }),
     // Already bought elsewhere and shipped to this vendor: never orderable.
     bomLine({ id: 'pl3', sku: 'FREE-1', name: 'Free-issue part', freeIssue: true }),
@@ -236,7 +238,12 @@ describe('createPurchaseOrder', () => {
     expect(d.shipToName).toBe('Miracles in Motion');
     const lines = (d.lines as { create: Array<Record<string, unknown>> }).create;
     expect(lines).toEqual([
-      expect.objectContaining({ sku: 'SSTBW515', quantity: 2, unitCostMinor: 3450 }),
+      expect.objectContaining({
+        sku: 'SSTBW515',
+        quantity: 2,
+        unitCostMinor: 3450,
+        powderColor: 'Vinyl Charcoal',
+      }),
     ]);
   });
 
@@ -324,6 +331,7 @@ describe('the Purchase Order document', () => {
         quantity: 1,
         unitCostMinor: 39920,
         extendedCostMinor: 39920,
+        powderColor: '',
       },
     ],
     subtotalMinor: 39920,
@@ -333,6 +341,36 @@ describe('the Purchase Order document', () => {
     sentAt: null,
     mondayResult: null,
   };
+
+  it('prints no Color column when no part on the PO has a colour', () => {
+    const html = renderPurchaseOrderDocument(model);
+    expect(html).not.toContain('>Color<');
+    expect(html).toContain('colspan="3"');
+  });
+
+  it('prints each part’s colour in a Color column when one has a colour', () => {
+    const html = renderPurchaseOrderDocument({
+      ...model,
+      lines: [
+        { ...model.lines[0]!, powderColor: 'Cardinal Blue Hammer T013-BL468' },
+        {
+          ...model.lines[0]!,
+          id: 'l2',
+          sku: 'BOLT-1',
+          name: 'Bolt',
+          powderColor: '',
+        },
+      ],
+    });
+    expect(html).toContain('>Color<');
+    const row = html.slice(html.indexOf('Square Bolster Swing'));
+    expect(row.slice(0, row.indexOf('</tr>'))).toContain('Cardinal Blue Hammer T013-BL468');
+    // The uncoloured part prints a dash rather than leaving the column ragged.
+    const bolt = html.slice(html.indexOf('>Bolt<'));
+    expect(bolt.slice(0, bolt.indexOf('</tr>'))).toContain('—');
+    // Totals still span the right number of columns.
+    expect(html).toContain('colspan="4"');
+  });
 
   it('reads as a purchase order laid out like the Request for Freight', () => {
     const html = renderPurchaseOrderDocument(model);

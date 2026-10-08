@@ -66,14 +66,22 @@ const MAPPING: Array<{ areaKey: string; sku: string; piece?: number }> = [
 
 /** What each part should print in the Powder color column after review. */
 const EXPECT: Record<string, { vendor: string; desc: string; color: string }> = {
-  [SKU.leg]: { vendor: GOLDBERG, desc: 'Vertical Post', color: 'Cardinal T009-BL05' },
+  [SKU.leg]: { vendor: GOLDBERG, desc: 'Vertical Post', color: 'Cardinal Blue 90 Gloss T009-BL05' },
   [SKU.ladderLeg]: {
     vendor: GOLDBERG,
     desc: 'Vertical Post — Ladder Bay',
-    color: 'Cardinal T009-BL05',
+    color: 'Cardinal Blue 90 Gloss T009-BL05',
   },
-  [SKU.beam]: { vendor: GOLDBERG, desc: 'Horizontal Beam', color: 'Prismatic PRB-11039' },
-  [SKU.rung]: { vendor: GOLDBERG, desc: 'Ladder Rung', color: 'Cardinal T009-OG26' },
+  [SKU.beam]: {
+    vendor: GOLDBERG,
+    desc: 'Horizontal Beam',
+    color: 'Prismatic Rosette Pink River PRB-11039',
+  },
+  [SKU.rung]: {
+    vendor: GOLDBERG,
+    desc: 'Ladder Rung',
+    color: 'Cardinal International Orange 90 Gloss T009-OG26',
+  },
   [SKU.pad]: { vendor: RESILITE, desc: 'Floor padding', color: 'Vinyl Charcoal' },
   [SKU.wrap]: { vendor: RESILITE, desc: 'Upright wrap', color: 'Vinyl Charcoal' },
   [SKU.palisades]: {
@@ -87,6 +95,10 @@ let db: PrismaClient;
 let review: typeof import('../../src/portal/orderPortal.js');
 let docs: typeof import('../../src/handoff/bomDocuments.js');
 let check: typeof import('../../src/portal/colorCheck.js');
+let areas: typeof import('../../src/portal/colorAreas.js');
+let handoff: typeof import('../../src/handoff/service.js');
+let po: typeof import('../../src/handoff/purchaseOrder.js');
+let poDoc: typeof import('../../src/handoff/purchaseOrderDocument.js');
 
 let userId = '';
 let orgId = '';
@@ -192,6 +204,10 @@ beforeAll(async () => {
   review = await import('../../src/portal/orderPortal.js');
   docs = await import('../../src/handoff/bomDocuments.js');
   check = await import('../../src/portal/colorCheck.js');
+  areas = await import('../../src/portal/colorAreas.js');
+  handoff = await import('../../src/handoff/service.js');
+  po = await import('../../src/handoff/purchaseOrder.js');
+  poDoc = await import('../../src/handoff/purchaseOrderDocument.js');
 
   const user = await db.user.create({
     data: { email: `${P.toLowerCase()}@example.com`, passwordHash: 'x', name: 'Colour Test' },
@@ -215,10 +231,32 @@ beforeAll(async () => {
         name,
         slug: name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
         isSteelFabricator: name === GOLDBERG,
+        poEnabled: name === GOLDBERG,
       },
     });
     mfrIds.push(m.id);
   }
+
+  // The powder charts, kept as prisma/load-powder-charts.ts keeps them: palettes named
+  // for the brand under the powder coater. Cardinal repeats "Blue 90 Gloss", so each
+  // copy carries its code — the printed text must not show the code twice.
+  const chart = (name: string, colors: Array<[string, string]>) =>
+    db.vendorColorPalette.create({
+      data: {
+        manufacturerId: mfrIds[0]!,
+        name,
+        finishType: 'POWDER_COAT',
+        colors: {
+          create: colors.map(([n, code], i) => ({ name: n, vendorCode: code, sortOrder: i })),
+        },
+      },
+    });
+  await chart('Cardinal', [
+    ['Blue 90 Gloss (T009-BL01)', 'T009-BL01'],
+    ['Blue 90 Gloss (T009-BL05)', 'T009-BL05'],
+    ['International Orange 90 Gloss', 'T009-OG26'],
+  ]);
+  await chart('Prismatic', [['Rosette Pink River', 'PRB-11039']]);
 
   // The vinyl chart and the multi-piece colour spec on the Palisades mat.
   const palette = await db.vendorColorPalette.create({
@@ -312,12 +350,15 @@ beforeAll(async () => {
 afterAll(async () => {
   if (!db) return;
   if (orderId) {
+    await db.purchaseOrder.deleteMany({ where: { orderId } });
     await db.orderEvent.deleteMany({ where: { orderId } });
     await db.acceptedOrder.deleteMany({ where: { id: orderId } }); // cascades lines/items/sections
   }
   await db.portalColorAreaMapping.deleteMany({ where: { sku: { startsWith: P } } });
   await db.productColorSpec.deleteMany({ where: { sku: { startsWith: P } } });
-  await db.vendorColorPalette.deleteMany({ where: { id: paletteId } });
+  await db.vendorColorPalette.deleteMany({
+    where: { OR: [{ id: paletteId }, { manufacturerId: { in: mfrIds } }] },
+  });
   await db.priceSnapshot.deleteMany({ where: { createdById: userId } });
   await db.proposalVersion.deleteMany({ where: { createdById: userId } });
   await db.proposal.deleteMany({ where: { createdById: userId } });
@@ -403,7 +444,11 @@ describe('portal colour answers → the vendor Bill of Materials (real database)
     }
     // The PDF is printed from this HTML.
     const { html } = await docs.renderBomHtml(orderId, GOLDBERG, {});
-    for (const c of ['Cardinal T009-BL05', 'Prismatic PRB-11039', 'Cardinal T009-OG26']) {
+    for (const c of [
+      'Cardinal Blue 90 Gloss T009-BL05',
+      'Prismatic Rosette Pink River PRB-11039',
+      'Cardinal International Orange 90 Gloss T009-OG26',
+    ]) {
       expect(html).toContain(c);
     }
   });
@@ -412,11 +457,63 @@ describe('portal colour answers → the vendor Bill of Materials (real database)
     const goldberg = (await docs.renderBomCsv(orderId, GOLDBERG, {})).csv;
     const resilite = (await docs.renderBomCsv(orderId, RESILITE, {})).csv;
     const amazon = (await docs.renderBomCsv(orderId, AMAZON, {})).csv;
-    expect(goldberg).not.toMatch(/Vinyl|Navy|Orange/);
+    expect(goldberg).not.toMatch(/Vinyl|Top: Navy|Base: Orange/);
     expect(resilite).not.toMatch(/Cardinal|Prismatic/);
     expect(amazon).not.toMatch(/Cardinal|Prismatic|Vinyl|Navy|Orange/);
     // Hardware row on Goldberg's sheet: no colour beside the fastener.
     expect(goldberg).not.toMatch(/Kit fastener[^\n]*Cardinal/);
+  });
+
+  it('a colour set by hand prints exactly as a portal review prints it', async () => {
+    // The shared formatter: the chart's name, a repeated name's bracketed code dropped,
+    // and brand + code alone for a code the chart does not have.
+    expect(await areas.powderColorText('Cardinal', 'T009-BL01')).toBe(
+      'Cardinal Blue 90 Gloss T009-BL01',
+    );
+    expect(await areas.powderColorText('Cardinal', 't009-og26')).toBe(
+      'Cardinal International Orange 90 Gloss t009-og26',
+    );
+    expect(await areas.powderColorText('Cardinal', 'NOT-ON-CHART')).toBe('Cardinal NOT-ON-CHART');
+
+    // The BOM line editor (brand picked, code typed) writes the review's text.
+    const cardinal = await db.powderColorBrand.findUniqueOrThrow({ where: { name: 'Cardinal' } });
+    const rung = await lineBySku(SKU.rung);
+    await handoff.patchProcurementLine(
+      rung.id,
+      { powderBrandId: cardinal.id, powderColorCode: 'T009-OG26' },
+      userId,
+    );
+    expect((await lineBySku(SKU.rung)).powderColor).toBe(EXPECT[SKU.rung]!.color);
+  });
+
+  it('a Purchase Order carries each part’s colour and prints it', async () => {
+    const leg = await lineBySku(SKU.leg);
+    const beam = await lineBySku(SKU.beam);
+    const created = await po.createPurchaseOrder(
+      orderId,
+      GOLDBERG,
+      { lineIds: [leg.id, beam.id], freightMinor: 0, noFreightCharge: true },
+      userId,
+    );
+    const lines = await db.purchaseOrderLine.findMany({
+      where: { poId: created.id },
+      orderBy: { sortOrder: 'asc' },
+    });
+    expect(lines.map((l) => [l.sku, l.powderColor])).toEqual(
+      expect.arrayContaining([
+        [SKU.leg, EXPECT[SKU.leg]!.color],
+        [SKU.beam, EXPECT[SKU.beam]!.color],
+      ]),
+    );
+    const html = poDoc.renderPurchaseOrderDocument(await po.buildPurchaseOrderModel(created.id));
+    expect(html).toContain('>Color<');
+    for (const sku of [SKU.leg, SKU.beam]) {
+      const row = html.slice(html.indexOf(sku));
+      expect(row.slice(0, row.indexOf('</tr>')), sku).toContain(EXPECT[sku]!.color);
+    }
+    // The picker staff draft from shows the colour too.
+    const source = await po.purchaseOrderSource(orderId, GOLDBERG);
+    expect(source.lines.find((l) => l.id === leg.id)?.powderColor).toBe(EXPECT[SKU.leg]!.color);
   });
 
   it('the colour check agrees: every area traced to the printed sheet, no problems', async () => {
@@ -445,15 +542,21 @@ describe('portal colour answers → the vendor Bill of Materials (real database)
     changed.selections.structure_frame_paint.legs = { brand: 'cardinal', code: 'T009-OG26' };
     const h2 = await receive(changed);
     // Not yet reviewed: still the first answer.
-    expect((await lineBySku(SKU.leg)).powderColor).toBe('Cardinal T009-BL05');
+    expect((await lineBySku(SKU.leg)).powderColor).toBe('Cardinal Blue 90 Gloss T009-BL05');
     await review.reviewPortalItem(orderId, 'COLOR', userId, h2);
-    expect((await lineBySku(SKU.leg)).powderColor).toBe('Cardinal T009-OG26');
-    expect((await lineBySku(SKU.ladderLeg)).powderColor).toBe('Cardinal T009-OG26');
+    expect((await lineBySku(SKU.leg)).powderColor).toBe(
+      'Cardinal International Orange 90 Gloss T009-OG26',
+    );
+    expect((await lineBySku(SKU.ladderLeg)).powderColor).toBe(
+      'Cardinal International Orange 90 Gloss T009-OG26',
+    );
     for (const f of ['model', 'xlsx', 'csv'] as const) {
-      expect(await printed(f, GOLDBERG, SKU.leg, 'Vertical Post'), f).toBe('Cardinal T009-OG26');
+      expect(await printed(f, GOLDBERG, SKU.leg, 'Vertical Post'), f).toBe(
+        'Cardinal International Orange 90 Gloss T009-OG26',
+      );
     }
     // Untouched areas stay as they were.
-    expect((await lineBySku(SKU.beam)).powderColor).toBe('Prismatic PRB-11039');
+    expect((await lineBySku(SKU.beam)).powderColor).toBe('Prismatic Rosette Pink River PRB-11039');
   });
 
   it('leaves a vendor alone once its BOM has been submitted, and says so', async () => {

@@ -43,11 +43,21 @@ export function renderPurchaseOrderDocument(m: PurchaseOrderModel): string {
       ? `${esc(sku)}<div style="font-size:7.5pt;color:${B.muted};margin-top:1px;">Your #: ${esc(vendorSku)}</div>`
       : esc(sku);
 
+  // The colour column prints only when a part on this PO has a colour, like the Bill
+  // of Materials' Powder color column: a column of dashes on every PO is noise.
+  const showColor = m.lines.some((l) => l.powderColor.trim());
+  const cols = showColor ? 6 : 5;
+  const colorCell = (color: string) =>
+    showColor
+      ? `<td style="padding:7px 10px;font-size:9pt;color:${B.body};border-bottom:1px solid ${B.rule};">${esc(color.trim() || '—')}</td>`
+      : '';
+
   const productRows = m.lines
     .map(
       (l, i) => `<tr style="background:${i % 2 ? B.navyTint : '#ffffff'};">
         <td style="padding:7px 10px;font-size:9pt;font-variant-numeric:tabular-nums;white-space:nowrap;color:${B.body};border-bottom:1px solid ${B.rule};">${vendorCode(l.sku, l.vendorSku)}</td>
         <td style="padding:7px 10px;font-size:9.5pt;color:${B.ink};border-bottom:1px solid ${B.rule};">${esc(l.name)}</td>
+        ${colorCell(l.powderColor)}
         <td style="padding:7px 10px;font-size:9.5pt;text-align:right;font-variant-numeric:tabular-nums;border-bottom:1px solid ${B.rule};">${l.quantity}</td>
         <td style="padding:7px 10px;font-size:9.5pt;text-align:right;font-variant-numeric:tabular-nums;color:${B.body};border-bottom:1px solid ${B.rule};">${money(l.unitCostMinor)}</td>
         <td style="padding:7px 10px;font-size:9.5pt;text-align:right;font-variant-numeric:tabular-nums;font-weight:600;border-bottom:1px solid ${B.rule};">${money(l.extendedCostMinor)}</td>
@@ -56,7 +66,7 @@ export function renderPurchaseOrderDocument(m: PurchaseOrderModel): string {
     .join('');
 
   const totalRow = (label: string, value: string, strong = false, first = false) => `<tr>
-      <td colspan="3" style="${first ? `border-top:1.5px solid ${B.navy};` : ''}"></td>
+      <td colspan="${cols - 2}" style="${first ? `border-top:1.5px solid ${B.navy};` : ''}"></td>
       <td style="${first ? `border-top:1.5px solid ${B.navy};` : ''}padding:${strong ? '8px' : '6px'} 10px 2px;text-align:right;font-size:9.5pt;font-weight:700;color:${strong ? B.navy : B.body};white-space:nowrap;">${esc(label)}</td>
       <td style="${first ? `border-top:1.5px solid ${B.navy};` : ''}padding:${strong ? '8px' : '6px'} 10px 2px;text-align:right;${strong ? `font-family:Georgia,'Times New Roman',serif;font-size:12pt;color:${B.navy};` : 'font-size:9.5pt;'}font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap;">${value}</td>
     </tr>`;
@@ -125,11 +135,11 @@ export function renderPurchaseOrderDocument(m: PurchaseOrderModel): string {
     </div>
     <table style="width:100%;border-collapse:collapse;">
       <thead>
-        <tr>${th('SKU', 'left')}${th('Description', 'left')}${th('Qty', 'right')}${th('Unit Price', 'right')}${th('Total', 'right')}</tr>
+        <tr>${th('SKU', 'left')}${th('Description', 'left')}${showColor ? th('Color', 'left') : ''}${th('Qty', 'right')}${th('Unit Price', 'right')}${th('Total', 'right')}</tr>
       </thead>
       <tbody>${
         productRows ||
-        `<tr><td colspan="5" style="padding:14px 10px;font-size:9.5pt;color:${B.muted};">No items selected.</td></tr>`
+        `<tr><td colspan="${cols}" style="padding:14px 10px;font-size:9.5pt;color:${B.muted};">No items selected.</td></tr>`
       }</tbody>
       <tfoot>
         ${totalRow('Subtotal', money(m.subtotalMinor), false, true)}
