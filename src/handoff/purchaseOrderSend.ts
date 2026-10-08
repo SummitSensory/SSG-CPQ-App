@@ -140,9 +140,14 @@ export async function sendPurchaseOrder(
 ) {
   const po = await prisma.purchaseOrder.findUnique({
     where: { id: poId },
-    include: { lines: true },
+    include: { lines: true, order: { select: { status: true } } },
   });
   if (!po) throw new NotFoundError('Purchase order not found');
+  // A draft raised before the order was unlocked must not reach the vendor afterwards.
+  if (po.order.status === 'CANCELLED')
+    throw new ValidationError(
+      'This order has been cancelled, so its purchase orders cannot be sent.',
+    );
   if (!po.lines.length) throw new ValidationError('A purchase order needs at least one product.');
   // The freight has to be decided before a vendor sees the total: either an amount,
   // or an explicit "no freight charge". A blank would print as TBD on a document the
@@ -264,12 +269,19 @@ export async function sendPurchaseOrder(
     data: { status: 'SENT', providerMessageId: providerMessageId ?? null },
   });
   await prisma.purchaseOrder.update({ where: { id: poId }, data: { status: 'SENT' } });
-  // The order's own per-line PO number, where nobody has typed one by hand.
+  // The order's own per-line PO number, where nobody has typed one by hand — on the
+  // BOM lines this PO was drafted from. A PO line from before PO lines recorded their
+  // BOM line falls back to its part number.
+  const lineIds = po.lines.map((l) => l.procurementLineId).filter((v): v is string => !!v);
+  const legacySkus = po.lines.filter((l) => !l.procurementLineId).map((l) => l.sku);
   await prisma.procurementLine.updateMany({
     where: {
       orderId: po.orderId,
       vendor: { equals: po.vendor, mode: 'insensitive' },
-      sku: { in: po.lines.map((l) => l.sku) },
+      OR: [
+        ...(lineIds.length ? [{ id: { in: lineIds } }] : []),
+        ...(legacySkus.length ? [{ sku: { in: legacySkus } }] : []),
+      ],
       poNumber: null,
     },
     data: { poNumber: po.reference },

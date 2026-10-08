@@ -2644,8 +2644,16 @@ model PurchaseOrderLine {
   /// PO is drafted — a sent PO keeps the colour the vendor was given.
   powderColor       String?
   sortOrder         Int           @default(0)
+  /// The procurement (BOM) line this PO line was drafted from, so "already on a PO"
+  /// is tracked per line — not per part number, which marked the same part's other
+  /// line (another section, another colour) as ordered. Null on PO lines drafted
+  /// before this column existed; those fall back to matching by part number.
+  /// Deliberately not a foreign key: a sent PO is a record and must survive the BOM
+  /// line being edited away.
+  procurementLineId String?
 
   @@index([poId])
+  @@index([procurementLineId])
 }
 
 /// One emailing of a purchase order: who it was addressed to, who at Summit sent it,

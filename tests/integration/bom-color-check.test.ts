@@ -110,6 +110,7 @@ vi.mock('../../src/lib/prisma.js', () => ({
     vendorPartNumber: { findMany: async () => [] },
     bomVendorSection: {
       findUnique: async () => null,
+      findFirst: async () => null,
       findMany: async () => state.submitted.map((vendor) => ({ vendor })),
     },
     portalDeliverySubmission: { findFirst: async () => null },

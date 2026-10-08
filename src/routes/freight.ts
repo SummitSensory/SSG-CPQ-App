@@ -156,12 +156,14 @@ export function adventureFacts(items: unknown): AdventureFacts {
     if (sku === FLEX_FRAME_SKU) flexFramePresent = true;
     else if (sku) otherPartsPresent = true;
 
+    // A kit at quantity 0 contributes no legs; only a MISSING quantity counts as one kit.
+    const kitQty = line?.quantity == null ? 1 : qty;
     for (const c of line?.components ?? []) {
       const part = String(c?.part ?? '')
         .trim()
         .toUpperCase();
       const perParent = Number(c?.qty) || 0;
-      if (LEG_PARTS.has(part)) legs += perParent * (qty || 1);
+      if (LEG_PARTS.has(part)) legs += perParent * kitQty;
       if (TROLLEY_PARTS.has(part)) trolley = true;
     }
   }

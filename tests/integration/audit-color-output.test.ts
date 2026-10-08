@@ -567,21 +567,18 @@ describe('BOM output — every format prints the right colour on the right row',
     ]);
   });
 
-  it.fails(
-    'BUG: an eye-bolt roll-up drops the second colour (bomRollup.ts groupKey ignores colour)',
-    async () => {
-      // 6820H-LP (Cardinal blue) and 6820H-LP-ZP (Prismatic black) merge into ONE
-      // 6820H-LP row that prints only the first colour. Correct: both colours appear.
-      for (const f of FORMATS) {
-        const cells = (await printedSheet(f, FAB)).rows
-          .filter((r) => (r.cell['Part #'] ?? '').startsWith('6820H'))
-          .map((r) => r.cell['Powder color'] ?? '')
-          .join(' / ');
-        expect(cells, f).toContain(C.blue05);
-        expect(cells, f).toContain(C.black);
-      }
-    },
-  );
+  it('FIXED: an eye-bolt roll-up drops the second colour (bomRollup.ts groupKey ignores colour)', async () => {
+    // 6820H-LP (Cardinal blue) and 6820H-LP-ZP (Prismatic black) merge into ONE
+    // 6820H-LP row that prints only the first colour. Correct: both colours appear.
+    for (const f of FORMATS) {
+      const cells = (await printedSheet(f, FAB)).rows
+        .filter((r) => (r.cell['Part #'] ?? '').startsWith('6820H'))
+        .map((r) => r.cell['Powder color'] ?? '')
+        .join(' / ');
+      expect(cells, f).toContain(C.blue05);
+      expect(cells, f).toContain(C.black);
+    }
+  });
 });
 
 describe('colour code → printed name', () => {
@@ -645,38 +642,35 @@ describe('colour code → printed name', () => {
     });
   });
 
-  it.fails(
-    'BUG: a line with a colour CODE but no printed text passes submission yet prints "—" (bomDocuments.ts:258,313 read powderColor only; bomSections.ts:959 accepts powderColorCode)',
-    async () => {
-      // Reachable through the real API: brand + code set, then the text cleared
-      // (PATCH {powderColor: null}, service.ts:1407).
-      await db.sku.update({ where: { part: SKU.widget }, data: { requiresPowderColor: true } });
-      await handoff.patchProcurementLine(
-        lineId['widget']!,
-        { powderBrandId: cardinalId, powderColorCode: 'T009-BL05' },
-        userId,
-      );
-      await handoff.patchProcurementLine(lineId['widget']!, { powderColor: null }, userId);
-      const section = await db.bomVendorSection.findUniqueOrThrow({
-        where: { orderId_vendor: { orderId, vendor: PLAIN } },
+  it('FIXED: a line with a colour CODE but no printed text passes submission yet prints "—" (bomDocuments.ts:258,313 read powderColor only; bomSections.ts:959 accepts powderColorCode)', async () => {
+    // Reachable through the real API: brand + code set, then the text cleared
+    // (PATCH {powderColor: null}, service.ts:1407).
+    await db.sku.update({ where: { part: SKU.widget }, data: { requiresPowderColor: true } });
+    await handoff.patchProcurementLine(
+      lineId['widget']!,
+      { powderBrandId: cardinalId, powderColorCode: 'T009-BL05' },
+      userId,
+    );
+    await handoff.patchProcurementLine(lineId['widget']!, { powderColor: null }, userId);
+    const section = await db.bomVendorSection.findUniqueOrThrow({
+      where: { orderId_vendor: { orderId, vendor: PLAIN } },
+    });
+    const blockers = await sections.submissionBlockers(section.id);
+    const printed = (await printedSheet('model', PLAIN)).rows[0]?.cell['Powder color'];
+    try {
+      // Correct behaviour: either the sheet prints the code, or sending is blocked.
+      expect(
+        (printed ?? '').includes('T009-BL05') ||
+          blockers.some((b) => b.includes('needs a powder colour')),
+      ).toBe(true);
+    } finally {
+      await db.sku.update({ where: { part: SKU.widget }, data: { requiresPowderColor: false } });
+      await db.procurementLine.update({
+        where: { id: lineId['widget']! },
+        data: { powderBrandId: null, powderColorCode: null, powderColor: null },
       });
-      const blockers = await sections.submissionBlockers(section.id);
-      const printed = (await printedSheet('model', PLAIN)).rows[0]?.cell['Powder color'];
-      try {
-        // Correct behaviour: either the sheet prints the code, or sending is blocked.
-        expect(
-          (printed ?? '').includes('T009-BL05') ||
-            blockers.some((b) => b.includes('needs a powder colour')),
-        ).toBe(true);
-      } finally {
-        await db.sku.update({ where: { part: SKU.widget }, data: { requiresPowderColor: false } });
-        await db.procurementLine.update({
-          where: { id: lineId['widget']! },
-          data: { powderBrandId: null, powderColorCode: null, powderColor: null },
-        });
-      }
-    },
-  );
+    }
+  });
 });
 
 describe('Purchase orders carry the colour', () => {
@@ -773,28 +767,25 @@ describe('Purchase orders carry the colour', () => {
     expect(byId.get(lineId['fastener']!)?.powderColor).toBe('');
   });
 
-  it.fails(
-    'BUG: ordering one colour of a part marks the OTHER colour "already on a PO" (purchaseOrder.ts:131-133 keys onSent by SKU only)',
-    async () => {
-      await po
-        .createPurchaseOrder(
-          orderId,
-          FAB,
-          { lineIds: [lineId['postBlue']!], freightMinor: 0, noFreightCharge: true },
-          userId,
-        )
-        .then((p) =>
-          db.purchaseOrder.update({
-            where: { id: p.id },
-            data: { status: 'SENT', sentAt: new Date() },
-          }),
-        );
-      const src = await po.purchaseOrderSource(orderId, FAB);
-      const pink = src.lines.find((l) => l.id === lineId['postPink']);
-      // Only the Cardinal-blue posts went out; the Prismatic-pink posts have NOT been ordered.
-      expect(pink?.onPurchaseOrder).toBeNull();
-    },
-  );
+  it('FIXED: ordering one colour of a part marks the OTHER colour "already on a PO" (purchaseOrder.ts:131-133 keys onSent by SKU only)', async () => {
+    await po
+      .createPurchaseOrder(
+        orderId,
+        FAB,
+        { lineIds: [lineId['postBlue']!], freightMinor: 0, noFreightCharge: true },
+        userId,
+      )
+      .then((p) =>
+        db.purchaseOrder.update({
+          where: { id: p.id },
+          data: { status: 'SENT', sentAt: new Date() },
+        }),
+      );
+    const src = await po.purchaseOrderSource(orderId, FAB);
+    const pink = src.lines.find((l) => l.id === lineId['postPink']);
+    // Only the Cardinal-blue posts went out; the Prismatic-pink posts have NOT been ordered.
+    expect(pink?.onPurchaseOrder).toBeNull();
+  });
 });
 
 describe('the colour check can fail — deliberate corruption is caught', () => {

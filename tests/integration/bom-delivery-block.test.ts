@@ -149,7 +149,10 @@ vi.mock('../../src/lib/prisma.js', () => ({
     sku: { findMany: async () => [] },
     hardwareRule: { findMany: async () => [] },
     vendorPartNumber: { findMany: async () => [] },
-    bomVendorSection: { findUnique: async () => state.section },
+    bomVendorSection: {
+      findUnique: async () => state.section,
+      findFirst: async () => state.section,
+    },
     portalDeliverySubmission: { findFirst: async () => state.submission },
     shipToAddress: { findUnique: async () => state.address },
   },

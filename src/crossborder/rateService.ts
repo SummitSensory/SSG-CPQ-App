@@ -23,6 +23,7 @@ import {
   BankOfCanadaExchangeRateProvider,
   FX_PAIR,
   isStale,
+  parseRate,
   type ExchangeRateProvider,
   type RateObservation,
 } from './fx.js';
@@ -289,7 +290,9 @@ export async function recordRateOverride(input: {
   const pair = input.pair ?? FX_PAIR;
   const reason = input.reason.trim();
   if (!reason) throw new Error('A manual exchange rate requires a reason.');
-  if (!/^\d+(\.\d+)?$/.test(input.rate)) throw new Error(`Invalid exchange rate: ${input.rate}`);
+  // Same rule every conversion applies: a decimal, greater than zero (a 0 rate would
+  // later divide by zero converting a CAD broker fee to USD). Throws a 400.
+  parseRate(input.rate);
 
   const created = await prisma.exchangeRateOverride.create({
     data: {

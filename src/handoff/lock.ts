@@ -182,6 +182,8 @@ interface ItemLike {
   name?: string;
   quantity?: number;
   kind?: string;
+  /** PRODUCT (default), GROUP, SUBGROUP or NOTE — only PRODUCT rows are purchasable. */
+  lineType?: string;
   components?: KitComponent[] | null;
 }
 
@@ -229,6 +231,10 @@ export function procurementFromItems(items: unknown): ProcurementSeed[] {
   // match. Indexed after the filter, not before: an optional/alternate item has no
   // BOM line at all, so it must not consume a position an included item could sit at.
   (items as ItemLike[])
+    // Only PRODUCT rows are purchasable. A heading or note row whose `kind` was
+    // defaulted to INCLUDED by the builder must not become a BOM line — filter on
+    // lineType the same way versionTotals does, not on kind alone.
+    .filter((x) => (x.lineType ?? 'PRODUCT') === 'PRODUCT')
     .filter((x) => (x.kind ?? 'INCLUDED') === 'INCLUDED')
     .forEach((i, proposalLineOrder) => {
       // `ref` is a random line id, NOT a part number — never let it into `sku`.
@@ -252,8 +258,9 @@ export function procurementFromItems(items: unknown): ProcurementSeed[] {
           productId: null,
           sku: (c.part as string).trim(),
           name: c.name || (c.part as string).trim(),
-          // The kit's own quantity multiplies through: two kits means twice the bolts.
-          quantity: (c.qty as number) * (qty || 1),
+          // The kit's own quantity multiplies through: two kits means twice the bolts,
+          // and zero kits means zero bolts (only a MISSING quantity defaults to 1).
+          quantity: (c.qty as number) * qty,
           isHardwareComponent: true,
           kitSku: sku,
           unitCostMinor: c.unitCostMinor ?? null,
