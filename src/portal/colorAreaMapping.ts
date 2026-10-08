@@ -81,6 +81,7 @@ export async function listColorAreas(): Promise<ColorAreaRow[]> {
   const used = new Map<string, { orders: Set<string>; picks: Map<string, AreaSample> }>();
   for (const item of items) {
     for (const p of colorAreasOf(item.answers)) {
+      p.areaKey = p.areaKey.toLowerCase();
       const u = used.get(p.areaKey) ?? { orders: new Set<string>(), picks: new Map() };
       u.orders.add(item.orderId);
       const k = `${p.brand.toLowerCase()}|${p.code.toLowerCase()}`;
@@ -93,9 +94,12 @@ export async function listColorAreas(): Promise<ColorAreaRow[]> {
 
   const mapped = new Map<string, Array<{ sku: string; piece: number | null }>>();
   for (const m of mappings) {
-    const list = mapped.get(m.areaKey) ?? [];
-    list.push({ sku: m.sku, piece: m.piece ?? null });
-    mapped.set(m.areaKey, list);
+    // One area whatever the case it was saved in (see saveColorArea).
+    const key = m.areaKey.trim().toLowerCase();
+    const list = mapped.get(key) ?? [];
+    if (!list.some((x) => x.sku.toUpperCase() === m.sku.toUpperCase()))
+      list.push({ sku: m.sku, piece: m.piece ?? null });
+    mapped.set(key, list);
   }
   const names = await catalogNames([...new Set(mappings.map((m) => m.sku))]);
 
@@ -169,10 +173,15 @@ function normalizeParts(input: readonly (string | PartInput)[]): PartInput[] {
  * part the catalog never had) and reported back as unknown.
  */
 export async function saveColorArea(
-  areaKey: string,
+  areaKeyIn: string,
   partsIn: readonly (string | PartInput)[],
   actorId: string,
 ): Promise<SaveAreaResult> {
+  // The portal writes area keys in lower case; one saved in any other case would
+  // never match an answer. Stored lower-case, and matched case-insensitively.
+  const areaKey = String(areaKeyIn ?? '')
+    .trim()
+    .toLowerCase();
   if (!isAreaKey(areaKey)) {
     throw new ValidationError(
       `"${areaKey}" is not a portal colour area. Area keys look like structure_frame_paint.legs.`,
@@ -190,10 +199,24 @@ export async function saveColorArea(
   // normalizeSkus is still the single rule for "same part number".
   const canonicalSkus = normalizeSkus(canonical.map((p) => p.sku));
 
-  const existing = await prisma.portalColorAreaMapping.findMany({
-    where: { areaKey },
-    select: { id: true, sku: true, piece: true },
+  // Rows saved under this key in any case (before keys were lower-cased) are this
+  // area's rows: one per part is kept and moved to the lower-case key, any second
+  // copy of the same part under another case is removed.
+  const anyCase = await prisma.portalColorAreaMapping.findMany({
+    where: { areaKey: { equals: areaKey, mode: 'insensitive' } },
+    select: { id: true, areaKey: true, sku: true, piece: true },
+    orderBy: [{ createdAt: 'asc' }],
   });
+  const firstOf = new Map<string, (typeof anyCase)[number]>();
+  for (const e of anyCase) {
+    const k = e.sku.toUpperCase();
+    const cur = firstOf.get(k);
+    // Prefer the row already under the lower-case key.
+    if (!cur || (cur.areaKey !== areaKey && e.areaKey === areaKey)) firstOf.set(k, e);
+  }
+  const existing = [...firstOf.values()];
+  const duplicates = anyCase.filter((e) => firstOf.get(e.sku.toUpperCase()) !== e);
+  const recased = existing.filter((e) => e.areaKey !== areaKey);
   const keep = new Map(canonical.map((p) => [p.sku.toUpperCase(), p]));
   const had = new Map(existing.map((e) => [e.sku.toUpperCase(), e]));
   const removedRows = existing.filter((e) => !keep.has(e.sku.toUpperCase()));
@@ -205,11 +228,23 @@ export async function saveColorArea(
     );
   });
 
-  if (removedRows.length || added.length || repieced.length) {
+  if (
+    removedRows.length ||
+    added.length ||
+    repieced.length ||
+    recased.length ||
+    duplicates.length
+  ) {
+    const removedIds = new Set(removedRows.map((r) => r.id));
     await prisma.$transaction([
       prisma.portalColorAreaMapping.deleteMany({
-        where: { id: { in: removedRows.map((r) => r.id) } },
+        where: { id: { in: [...removedRows, ...duplicates].map((r) => r.id) } },
       }),
+      ...recased
+        .filter((e) => !removedIds.has(e.id))
+        .map((e) =>
+          prisma.portalColorAreaMapping.update({ where: { id: e.id }, data: { areaKey } }),
+        ),
       prisma.portalColorAreaMapping.createMany({
         data: added.map((p) => ({
           areaKey,

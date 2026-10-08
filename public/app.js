@@ -11571,7 +11571,7 @@
         '<div style="padding:9px 12px;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;border-bottom:1px solid #eef0ea;">' +
           '<b style="font-size:13.5px;">' + esc(a.label) + '</b>' +
           '<span style="font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#5c6157;background:#f2f3ef;padding:2px 7px;border-radius:999px;">' + esc(COLOR_KIND_LABEL[a.kind] || a.kind) + '</span>' +
-          '<span style="font-size:12.5px;">Customer picked <b>' + esc([a.pick.brand, a.pick.code].filter(Boolean).join(' ')) + '</b></span>' +
+          '<span style="font-size:12.5px;">' + (a.dropped ? 'No longer answered — earlier pick' : 'Customer picked') + ' <b>' + esc([a.pick.brand, a.pick.code].filter(Boolean).join(' ')) + '</b></span>' +
           '<span style="flex:1;"></span>' +
           '<span class="muted" style="font-size:11px;">' + code(a.source.columnId) + ' → ' + code(a.source.path) + '</span>' +
         '</div>' +
@@ -11593,7 +11593,8 @@
         }).join('') + '</ul></div>';
     var errs = rep.bomErrors.map(function (t) { return '<div class="err" style="margin-top:8px;">Could not build the BOM for ' + esc(t) + '</div>'; }).join('');
     var empty = rep.portal.found && !rep.areas.length ? '<div class="muted" style="font-size:12.5px;">The customer has not picked any colors yet.</div>' : '';
-    return head + banner + areas + empty + hand + errs;
+    var guide = (rep.guidance || []).map(function (t) { return '<div style="padding:8px 12px;border-radius:9px;margin-bottom:12px;font-size:12.5px;background:#fdf6e3;color:#8a6d1f;border:1px solid #eadfbe;">' + esc(t) + '</div>'; }).join('');
+    return head + banner + guide + areas + empty + hand + errs;
   }
 
   async function openColorCheck(order, btn) {

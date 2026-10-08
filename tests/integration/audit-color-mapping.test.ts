@@ -349,7 +349,7 @@ describe('AUDIT colour mapping & apply (real database)', () => {
     expect(res.colors?.linesUpdated).toBe(2);
   });
 
-  it('3. a conflict arising on a RE-review leaves the previously applied colour on the line (documented behaviour — see report)', async () => {
+  it('3. a conflict arising on a RE-review CLEARS the superseded colour and reports it (was: left printing the old colour)', async () => {
     const { orderId, ids } = await makeOrder('T3', [
       { key: 'shared', sku: SKU.shared, name: 'Shared bracket', vendor: GOLDBERG },
     ]);
@@ -363,8 +363,42 @@ describe('AUDIT colour mapping & apply (real database)', () => {
       [AREA.rungs]: cardinal(BLUE),
     });
     expect(res.colors?.conflicts?.map((c) => c.sku)).toEqual([SKU.shared]);
-    // Not cleared: the line still prints the colour from the superseded answers.
-    await expectColor(ids.shared!, BLUE_TEXT, 'after conflicting re-review');
+    // Cleared: printing BLUE would present a superseded answer as the customer's.
+    await expectColor(ids.shared!, null, 'after conflicting re-review');
+    expect(res.colors?.clearedLines).toHaveLength(1);
+    expect(res.colors?.clearedLines?.[0]).toContain(SKU.shared);
+    expect(res.colors?.clearedLines?.[0]).toContain(BLUE_TEXT);
+    // The colour check still flags the part (conflict issue on both areas).
+    const rep = await check.checkOrderColors(orderId);
+    expect(rep.summary.problems).toBeGreaterThan(0);
+  });
+
+  it('3b. a conflict that already existed (only unchanged areas) leaves a staff resolution alone', async () => {
+    const { orderId, ids } = await makeOrder('T3B', [
+      { key: 'shared', sku: SKU.shared, name: 'Shared bracket', vendor: GOLDBERG },
+      { key: 'leg', sku: SKU.leg, name: 'Vertical Post', vendor: GOLDBERG },
+    ]);
+    await receiveAndReview(orderId, {
+      [AREA.beams]: cardinal(ORANGE),
+      [AREA.rungs]: cardinal(BLUE),
+      [AREA.legs]: cardinal(BLUE),
+    });
+    await expectColor(ids.shared!, null, 'conflict on first review: left blank');
+    // Staff resolve the conflict by hand.
+    await handoff.patchProcurementLine(
+      ids.shared!,
+      { powderBrandId: cardinalId, powderColorCode: ORANGE },
+      userId,
+    );
+    // The customer changes only the legs.
+    const res = await receiveAndReview(orderId, {
+      [AREA.beams]: cardinal(ORANGE),
+      [AREA.rungs]: cardinal(BLUE),
+      [AREA.legs]: cardinal(ORANGE),
+    });
+    await expectColor(ids.shared!, ORANGE_TEXT, 'staff resolution kept');
+    await expectColor(ids.leg!, ORANGE_TEXT, 'changed area applied');
+    expect(res.colors?.clearedLines).toEqual([]);
   });
 
   it('4. a resubmitted answer replaces the old colour on every mapped line once reviewed, and the event keeps from → to', async () => {
@@ -405,17 +439,26 @@ describe('AUDIT colour mapping & apply (real database)', () => {
     );
   });
 
-  it('5. an area the customer DROPS on resubmission leaves its old colour on the line; the colour check shows it as hand-set (documented behaviour — see report)', async () => {
+  it('5. an area the customer DROPS on resubmission keeps its old colour, is reported by the review, and the colour check flags the line', async () => {
     const { orderId, ids } = await makeOrder('T5', [
       { key: 'leg', sku: SKU.leg, name: 'Vertical Post', vendor: GOLDBERG },
       { key: 'beam', sku: SKU.beam, name: 'Horizontal Beam', vendor: GOLDBERG },
     ]);
     await receiveAndReview(orderId, { [AREA.legs]: cardinal(BLUE), [AREA.beams]: cardinal(BLUE) });
-    await receiveAndReview(orderId, { [AREA.beams]: cardinal(ORANGE) });
+    const res = await receiveAndReview(orderId, { [AREA.beams]: cardinal(ORANGE) });
     await expectColor(ids.beam!, ORANGE_TEXT, 'beam');
     await expectColor(ids.leg!, BLUE_TEXT, 'leg — area no longer answered, colour kept');
+    expect(res.colors?.droppedAreas).toEqual([AREA.legs]);
     const rep = await check.checkOrderColors(orderId);
-    expect(rep.handSet.map((h) => h.sku)).toEqual([SKU.leg]);
+    // Explained by the dropped area, so not listed as an unexplained hand-set colour…
+    expect(rep.handSet.map((h) => h.sku)).toEqual([]);
+    // …but flagged as an issue on that area.
+    const dropped = rep.areas.find((a) => a.areaKey === AREA.legs);
+    expect(dropped?.dropped).toBe(true);
+    expect(dropped?.issues.join(' ')).toContain(SKU.leg);
+    expect(dropped?.issues.join(' ')).toContain('no longer answers');
+    expect(rep.summary.problems).toBeGreaterThan(0);
+    expect(rep.summary.areas).toBe(1);
   });
 
   it('6a. a staff colour edit is NOT touched while the customer answers are unchanged — a second review of the same version is refused', async () => {
@@ -435,7 +478,7 @@ describe('AUDIT colour mapping & apply (real database)', () => {
     await expectColor(ids.leg!, ORANGE_TEXT, 'leg after refused re-review');
   });
 
-  it('6b. re-review of a NEW version overwrites a staff edit (documented: reviewed pick wins) and records what was overwritten', async () => {
+  it('6b. re-review where the customer CHANGED that area overwrites a staff edit (reviewed pick wins) and records what was overwritten', async () => {
     const { orderId, ids } = await makeOrder('T6B', [
       { key: 'leg', sku: SKU.leg, name: 'Vertical Post', vendor: GOLDBERG },
       { key: 'beam', sku: SKU.beam, name: 'Horizontal Beam', vendor: GOLDBERG },
@@ -446,13 +489,14 @@ describe('AUDIT colour mapping & apply (real database)', () => {
       { powderBrandId: cardinalId, powderColorCode: ORANGE },
       userId,
     );
-    // The customer changes ONLY the beams.
+    // The customer changes the legs (to a third colour) — a new answer for that area.
+    const GREEN = `${P}-GR01`;
     await receiveAndReview(orderId, {
-      [AREA.legs]: cardinal(BLUE),
-      [AREA.beams]: cardinal(ORANGE),
+      [AREA.legs]: cardinal(GREEN),
+      [AREA.beams]: cardinal(BLUE),
     });
-    await expectColor(ids.beam!, ORANGE_TEXT, 'beam');
-    await expectColor(ids.leg!, BLUE_TEXT, 'leg — staff correction reverted');
+    expect((await line(ids.leg!)).powderColor).toBe(`Cardinal ${GREEN}`);
+    await expectColor(ids.beam!, BLUE_TEXT, 'beam (unchanged)');
     const ev = await db.orderEvent.findFirstOrThrow({
       where: { orderId, action: 'bom.colors.portal-review' },
       orderBy: { createdAt: 'desc' },
@@ -463,33 +507,59 @@ describe('AUDIT colour mapping & apply (real database)', () => {
       sku: SKU.leg,
       area: AREA.legs,
       from: ORANGE_TEXT,
-      to: BLUE_TEXT,
+      to: `Cardinal ${GREEN}`,
     });
   });
 
-  it.fails(
-    'DEFECT A: a staff correction on an area the customer did NOT change survives a re-review of other answers',
-    async () => {
-      const { orderId, ids } = await makeOrder('T6C', [
-        { key: 'leg', sku: SKU.leg, name: 'Vertical Post', vendor: GOLDBERG },
-        { key: 'beam', sku: SKU.beam, name: 'Horizontal Beam', vendor: GOLDBERG },
-      ]);
-      await receiveAndReview(orderId, {
-        [AREA.legs]: cardinal(BLUE),
-        [AREA.beams]: cardinal(BLUE),
-      });
-      await handoff.patchProcurementLine(
-        ids.leg!,
-        { powderBrandId: cardinalId, powderColorCode: ORANGE },
-        userId,
-      );
-      await receiveAndReview(orderId, {
-        [AREA.legs]: cardinal(BLUE), // unchanged
-        [AREA.beams]: cardinal(ORANGE),
-      });
-      await expectColor(ids.leg!, ORANGE_TEXT, 'leg — staff correction should be kept');
-    },
-  );
+  it('DEFECT A (fixed): a staff correction on an area the customer did NOT change survives a re-review of other answers', async () => {
+    const { orderId, ids } = await makeOrder('T6C', [
+      { key: 'leg', sku: SKU.leg, name: 'Vertical Post', vendor: GOLDBERG },
+      { key: 'beam', sku: SKU.beam, name: 'Horizontal Beam', vendor: GOLDBERG },
+    ]);
+    await receiveAndReview(orderId, {
+      [AREA.legs]: cardinal(BLUE),
+      [AREA.beams]: cardinal(BLUE),
+    });
+    await handoff.patchProcurementLine(
+      ids.leg!,
+      { powderBrandId: cardinalId, powderColorCode: ORANGE },
+      userId,
+    );
+    const res = await receiveAndReview(orderId, {
+      [AREA.legs]: cardinal(BLUE), // unchanged
+      [AREA.beams]: cardinal(ORANGE),
+    });
+    await expectColor(ids.leg!, ORANGE_TEXT, 'leg — staff correction should be kept');
+    await expectColor(ids.beam!, ORANGE_TEXT, 'beam — changed area applied');
+    expect(res.colors?.keptStaffEdits).toHaveLength(1);
+    expect(res.colors?.keptStaffEdits?.[0]).toContain(SKU.leg);
+    expect(res.colors?.keptStaffEdits?.[0]).toContain(ORANGE_TEXT);
+  });
+
+  it('DEFECT A: a review recorded before the answers were kept (legacy) re-applies every area, as before', async () => {
+    const { orderId, ids } = await makeOrder('T6D', [
+      { key: 'leg', sku: SKU.leg, name: 'Vertical Post', vendor: GOLDBERG },
+    ]);
+    await receiveAndReview(orderId, { [AREA.legs]: cardinal(BLUE) });
+    // Strip the kept answers, as an event written before this change would look.
+    const ev = await db.orderEvent.findFirstOrThrow({
+      where: { orderId, action: 'portal.review' },
+    });
+    const { answers: _drop, ...legacy } = ev.detail as Record<string, unknown>;
+    expect(_drop).toBeDefined();
+    await db.orderEvent.update({ where: { id: ev.id }, data: { detail: legacy as object } });
+    await handoff.patchProcurementLine(
+      ids.leg!,
+      { powderBrandId: cardinalId, powderColorCode: ORANGE },
+      userId,
+    );
+    const res = await receiveAndReview(orderId, {
+      [AREA.legs]: cardinal(BLUE),
+      [AREA.beams]: cardinal(BLUE),
+    });
+    await expectColor(ids.leg!, BLUE_TEXT, 'unknown previous answers: reviewed pick wins');
+    expect(res.colors?.keptStaffEdits).toEqual([]);
+  });
 
   it('7. a line added AFTER review stays blank, review cannot be re-run, and the colour check flags it as a MISMATCH (documented gap — see report)', async () => {
     const { orderId } = await makeOrder('T7', [
@@ -512,6 +582,104 @@ describe('AUDIT colour mapping & apply (real database)', () => {
     expect(lateRow?.status).toBe('MISMATCH');
     expect(lateRow?.expected).toBe(BLUE_TEXT);
     expect(rep.summary.problems).toBeGreaterThan(0);
+    // …and the check points to the tool that fixes exactly this.
+    expect(rep.guidance.join(' ')).toContain('Re-apply reviewed colours');
+  });
+
+  it('7b. “Re-apply reviewed colours” fills only BLANK lines: late-added line coloured, staff edit and kit fastener untouched', async () => {
+    const { orderId, ids } = await makeOrder('T7B', [
+      { key: 'leg', sku: SKU.leg, name: 'Vertical Post', vendor: GOLDBERG },
+      { key: 'ladder', sku: SKU.ladder, name: 'Ladder Post', vendor: GOLDBERG },
+    ]);
+    await receiveAndReview(orderId, { [AREA.legs]: cardinal(BLUE) });
+    await handoff.patchProcurementLine(
+      ids.ladder!,
+      { powderBrandId: cardinalId, powderColorCode: ORANGE },
+      userId,
+    );
+    const late = await handoff.upsertProcurementLine(
+      orderId,
+      { sku: SKU.leg, name: 'Vertical Post (added later)', quantity: 2, vendor: SECOND },
+      userId,
+    );
+    const fastener = await db.procurementLine.create({
+      data: {
+        orderId,
+        sku: SKU.leg,
+        name: 'Kit fastener sharing the part number',
+        vendor: GOLDBERG,
+        quantity: 4,
+        quantityOriginal: 4,
+        unitCostMinor: 10,
+        isHardwareComponent: true,
+        kitSku: 'H-1000',
+      },
+    });
+
+    const { colors } = await review.reapplyReviewedColors(orderId, userId);
+    await expectColor(late.id, BLUE_TEXT, 'late-added line filled');
+    await expectColor(ids.ladder!, ORANGE_TEXT, 'staff edit kept');
+    await expectColor(ids.leg!, BLUE_TEXT, 'already coloured');
+    await expectColor(fastener.id, null, 'kit fastener never painted');
+    expect(colors.linesUpdated).toBe(1);
+    expect(colors.keptStaffEdits?.join(' ')).toContain(SKU.ladder);
+    const ev = await db.orderEvent.findFirstOrThrow({
+      where: { orderId, action: 'bom.colors.portal-reapply' },
+    });
+    expect((ev.detail as { linesUpdated: number }).linesUpdated).toBe(1);
+
+    // Answers that changed since review must be reviewed, not re-applied.
+    await receive(orderId, answersOf({ [AREA.legs]: cardinal(ORANGE) }));
+    await expect(review.reapplyReviewedColors(orderId, userId)).rejects.toThrow(
+      /changed their colours since/,
+    );
+  });
+
+  it('7c. re-apply is refused when nothing has been reviewed', async () => {
+    const { orderId } = await makeOrder('T7C', [
+      { key: 'leg', sku: SKU.leg, name: 'Vertical Post', vendor: GOLDBERG },
+    ]);
+    await expect(review.reapplyReviewedColors(orderId, userId)).rejects.toThrow(/marked reviewed/);
+    await receive(orderId, answersOf({ [AREA.legs]: cardinal(BLUE) }));
+    await expect(review.reapplyReviewedColors(orderId, userId)).rejects.toThrow(/marked reviewed/);
+  });
+
+  it('7d. a re-review of answers the customer did not change for an area fills a blank (late-added) line of that area', async () => {
+    const { orderId, ids } = await makeOrder('T7D', [
+      { key: 'leg', sku: SKU.leg, name: 'Vertical Post', vendor: GOLDBERG },
+      { key: 'beam', sku: SKU.beam, name: 'Horizontal Beam', vendor: GOLDBERG },
+    ]);
+    await receiveAndReview(orderId, { [AREA.legs]: cardinal(BLUE), [AREA.beams]: cardinal(BLUE) });
+    const late = await handoff.upsertProcurementLine(
+      orderId,
+      { sku: SKU.ladder, name: 'Ladder Post (added later)', quantity: 1, vendor: GOLDBERG },
+      userId,
+    );
+    await receiveAndReview(orderId, {
+      [AREA.legs]: cardinal(BLUE),
+      [AREA.beams]: cardinal(ORANGE),
+    });
+    await expectColor(late.id, BLUE_TEXT, 'blank line of an unchanged area filled');
+    await expectColor(ids.beam!, ORANGE_TEXT, 'changed area applied');
+  });
+
+  it('inactive palettes do not name colours: a retired chart prints brand + code only', async () => {
+    const { orderId, ids } = await makeOrder('TPAL', [
+      { key: 'leg', sku: SKU.leg, name: 'Vertical Post', vendor: GOLDBERG },
+    ]);
+    await db.vendorColorPalette.updateMany({
+      where: { manufacturerId: mfrIds[0]!, name: 'Cardinal' },
+      data: { active: false },
+    });
+    try {
+      await receiveAndReview(orderId, { [AREA.legs]: cardinal(BLUE) });
+      expect((await line(ids.leg!)).powderColor).toBe(`Cardinal ${BLUE}`);
+    } finally {
+      await db.vendorColorPalette.updateMany({
+        where: { manufacturerId: mfrIds[0]!, name: 'Cardinal' },
+        data: { active: true },
+      });
+    }
   });
 
   it('8. one part on two vendors’ sheets: both coloured; once one vendor is submitted only the open vendor changes', async () => {
@@ -550,15 +718,43 @@ describe('AUDIT colour mapping & apply (real database)', () => {
     expect(res.colors?.noMatchingLines).toEqual([]);
   });
 
-  it('9b. an area key saved in a different CASE from the portal’s never matches — reported as unmapped, line left blank', async () => {
+  it('9b. an area key typed in a different CASE is saved lower-case and matches the portal’s key', async () => {
     const upperKey = `${AK.toUpperCase()}_FRAME.UPPER_CASE`;
     const portalKey = upperKey.toLowerCase();
-    await mapping.saveColorArea(upperKey, [SKU.caseA], userId);
+    const saved = await mapping.saveColorArea(upperKey, [SKU.caseA], userId);
+    expect(saved.areaKey).toBe(portalKey);
+    const rows = await db.portalColorAreaMapping.findMany({
+      where: { areaKey: { equals: portalKey, mode: 'insensitive' } },
+    });
+    expect(rows.map((r) => r.areaKey)).toEqual([portalKey]);
     const { orderId, ids } = await makeOrder('T9B', [
       { key: 'part', sku: SKU.caseA, name: 'Part', vendor: GOLDBERG },
     ]);
     const res = await receiveAndReview(orderId, { [portalKey]: cardinal(BLUE) });
-    expect(res.colors?.unmappedAreas).toEqual([portalKey]);
-    await expectColor(ids.part!, null, 'line under a case-mismatched area key');
+    expect(res.colors?.unmappedAreas).toEqual([]);
+    await expectColor(ids.part!, BLUE_TEXT, 'line under a case-insensitively matched area key');
+  });
+
+  it('9c. a mis-cased key already stored (before keys were lower-cased) still matches, and re-saving folds it into the lower-case key', async () => {
+    const legacyKey = `${AK.toUpperCase()}_FRAME.LEGACY_CASE`;
+    const portalKey = legacyKey.toLowerCase();
+    await db.portalColorAreaMapping.create({ data: { areaKey: legacyKey, sku: SKU.caseA } });
+    const { orderId, ids } = await makeOrder('T9C', [
+      { key: 'part', sku: SKU.caseA, name: 'Part', vendor: GOLDBERG },
+    ]);
+    const res = await receiveAndReview(orderId, { [portalKey]: cardinal(BLUE) });
+    expect(res.colors?.unmappedAreas).toEqual([]);
+    await expectColor(ids.part!, BLUE_TEXT, 'legacy mis-cased key');
+
+    const listed = (await mapping.listColorAreas()).filter(
+      (a) => a.areaKey.toLowerCase() === portalKey,
+    );
+    expect(listed.map((a) => a.areaKey)).toEqual([portalKey]);
+
+    await mapping.saveColorArea(portalKey, [SKU.caseA], userId);
+    const rows = await db.portalColorAreaMapping.findMany({
+      where: { areaKey: { equals: portalKey, mode: 'insensitive' } },
+    });
+    expect(rows.map((r) => r.areaKey)).toEqual([portalKey]);
   });
 });

@@ -74,6 +74,26 @@ export interface ColorApplyResult {
    * vinyl Lime — not on Resilite Vinyl"). That piece is left as it was, never guessed.
    */
   offChart?: string[];
+  /**
+   * Lines left as they were because they already carry a colour that differs from the
+   * pick, and the pick gave no reason to replace it: on a re-review the customer did
+   * not change that area (so the difference is a staff correction made since), and a
+   * "re-apply reviewed colours" only ever fills blank lines.
+   */
+  keptStaffEdits?: string[];
+  /**
+   * Lines whose colour was CLEARED because, on a re-review, areas that changed now
+   * disagree about them. Leaving the old colour would print a colour the customer has
+   * since superseded; a blank line is caught by the colour check, a stale colour is not.
+   */
+  clearedLines?: string[];
+  /** Areas answered at the last review that the customer no longer answers. */
+  droppedAreas?: string[];
+  /**
+   * The step is ✅ on monday but carries no colour picks at all (Jotform, or a staff
+   * "mark complete"). Nothing could be applied, and this says why.
+   */
+  markedCompleteWithoutColors?: boolean;
 }
 
 /**
@@ -135,6 +155,25 @@ export function colorAreasOf(answers: unknown): ColorAreaPick[] {
     }
   }
   return out.sort((a, b) => a.areaKey.localeCompare(b.areaKey));
+}
+
+/**
+ * Whether colour answers are the portal's UNCONFIRMED draft: the portal's snapshot
+ * ({ selections, totalUpcharge, confirmedAt }) autosaves with `confirmedAt: null`
+ * while the customer is still picking, and sets it only on Confirm
+ * (Customer-Portal pages/api/portal/color-selection.js — the key has been in every
+ * snapshot since the portal's first colour release). A ✅ beside a draft (a staff
+ * "mark complete", Jotform) does not make the draft final.
+ *
+ * Conservative on shape: only a snapshot that HAS the key with a blank value is a
+ * draft. Answers without the key (an older or foreign shape) are read as before.
+ */
+export function isUnconfirmedDraft(answers: unknown): boolean {
+  if (!answers || typeof answers !== 'object' || Array.isArray(answers)) return false;
+  const a = answers as Record<string, unknown>;
+  if (!('selections' in a) || !('confirmedAt' in a)) return false;
+  const c = a.confirmedAt;
+  return c === null || (typeof c === 'string' && !c.trim());
 }
 
 // --------------------------------------------------------------- pure helpers
@@ -228,23 +267,37 @@ export interface PowderChartColor {
 export async function loadPowderChart(codes?: readonly string[]): Promise<PowderChartColor[]> {
   const wanted = codes?.map((c) => c.trim()).filter(Boolean);
   if (codes && !wanted?.length) return [];
-  const rows = await prisma.vendorColor.findMany({
-    where: {
-      vendorCode: wanted ? { in: wanted, mode: 'insensitive' } : { not: null },
-      palette: { finishType: 'POWDER_COAT' },
-    },
+  // Read palette-first, and the owners' names separately: a colour row whose palette
+  // is deleted between two reads then simply drops out, rather than failing the whole
+  // review on a required relation that came back empty.
+  const palettes = await prisma.vendorColorPalette.findMany({
+    // A retired palette does not name colours: an inactive chart must not print as if
+    // it were the current one.
+    where: { finishType: 'POWDER_COAT', active: true },
     select: {
       name: true,
-      vendorCode: true,
-      palette: { select: { name: true, manufacturer: { select: { name: true } } } },
+      manufacturerId: true,
+      colors: {
+        where: { vendorCode: wanted ? { in: wanted, mode: 'insensitive' } : { not: null } },
+        select: { name: true, vendorCode: true },
+      },
     },
   });
-  return rows.map((c) => ({
-    vendor: c.palette.manufacturer.name,
-    palette: c.palette.name,
-    vendorCode: c.vendorCode ?? '',
-    name: c.name,
-  }));
+  const withColors = palettes.filter((p) => p.colors.length);
+  if (!withColors.length) return [];
+  const owners = await prisma.manufacturer.findMany({
+    where: { id: { in: [...new Set(withColors.map((p) => p.manufacturerId))] } },
+    select: { id: true, name: true },
+  });
+  const ownerName = new Map(owners.map((m) => [m.id, m.name]));
+  return withColors.flatMap((p) =>
+    p.colors.map((c) => ({
+      vendor: ownerName.get(p.manufacturerId) ?? '',
+      palette: p.name,
+      vendorCode: c.vendorCode ?? '',
+      name: c.name,
+    })),
+  );
 }
 
 /**
@@ -325,6 +378,40 @@ export function lineColorFor(
   };
 }
 
+/**
+ * Why a frame-paint pick is not on its brand's chart, or null when it is (or when it
+ * is not a managed powder brand, or the brand has no chart loaded to check against —
+ * then there is nothing to say). The pick is still applied as given: the portal
+ * normally blocks off-chart codes, and the code is what the coater orders by, so this
+ * is a warning to look, not a reason to leave the frame unpainted.
+ */
+export function powderOffChart(
+  pick: Pick<ColorAreaPick, 'areaKey' | 'brand' | 'code'>,
+  managed: readonly ManagedBrand[],
+  chart: readonly PowderChartColor[],
+): string | null {
+  const brand = resolvePowderBrand(pick.brand, managed);
+  if (!brand) return null;
+  const b = brand.name.trim().toLowerCase();
+  const ofBrand = chart.filter(
+    (x) => x.vendor.trim().toLowerCase() === b || (x.palette ?? '').trim().toLowerCase() === b,
+  );
+  if (!ofBrand.length) return null;
+  const c = pick.code.trim().toLowerCase();
+  if (ofBrand.some((x) => x.vendorCode.trim().toLowerCase() === c)) return null;
+  return `${pick.areaKey}: ${[pick.brand, pick.code].filter(Boolean).join(' ')} — not on the ${brand.name} chart`;
+}
+
+/** Whether a line carries no colour at all. */
+export function isBlankColor(c: LineColor): boolean {
+  return (
+    !(c.powderColor ?? '').trim() &&
+    !(c.powderColorCode ?? '').trim() &&
+    !c.powderBrandId &&
+    !(c.colorPicks ?? []).length
+  );
+}
+
 /** The slice of a procurement line the plan reads. */
 export interface PlanLine {
   id: string;
@@ -374,6 +461,18 @@ const sameColor = (a: LineColor, b: LineColor) =>
  *     areas agreeing on the same pick is not a conflict.
  *   - A line already carrying exactly the colour → no write (linesAlreadyCurrent),
  *     which is what makes a second review of the same answers change nothing.
+ *   - A line whose every claiming area is in `unchangedAreas` (the customer gave the
+ *     same pick at the last review), or any line when `onlyBlank` is set, is only
+ *     FILLED when blank. A differing colour already on it is a staff correction made
+ *     since, and is kept (keptStaffEdits).
+ *   - With `clearNewConflicts` (a re-review), a conflict involving an area that
+ *     changed clears the line's old colour (clearedLines) rather than leaving a colour
+ *     the customer has since superseded on the vendor sheet.
+ *   - A frame-paint code not on its brand's chart is applied as given and reported
+ *     (offChart).
+ *
+ * Area keys match case-insensitively: the portal writes them lower-case, and a key an
+ * admin saved in another case still means the same area.
  */
 export function planColorApplication(input: {
   picks: readonly ColorAreaPick[];
@@ -385,10 +484,27 @@ export function planColorApplication(input: {
   submittedVendors: ReadonlySet<string>;
   brands: readonly ManagedBrand[];
   chart: readonly PowderChartColor[];
+  /** Area keys whose pick is the same as at the last review. */
+  unchangedAreas?: ReadonlySet<string>;
+  /** Only ever fill blank lines (the "re-apply reviewed colours" action). */
+  onlyBlank?: boolean;
+  /** A re-review: a conflict that involves a changed area clears the line. */
+  clearNewConflicts?: boolean;
 }): ColorPlan {
-  const { picks, mapping, lines, submittedVendors, brands, chart } = input;
+  const { picks, lines, submittedVendors, brands, chart } = input;
+  const mapping = new Map<string, MappingEntry[]>();
+  for (const [k, v] of input.mapping) {
+    const key = k.trim().toLowerCase();
+    mapping.set(key, [...(mapping.get(key) ?? []), ...v]);
+  }
+  const unchanged = new Set([...(input.unchangedAreas ?? [])].map((k) => k.trim().toLowerCase()));
+  const fillOnly = (list: readonly ColorAreaPick[]) =>
+    input.onlyBlank === true ||
+    (list.length > 0 && list.every((p) => unchanged.has(p.areaKey.toLowerCase())));
   const specs = input.specs ?? new Map<string, ResolvedColorSpec>();
   const offChart: string[] = [];
+  const kept: string[] = [];
+  const cleared: string[] = [];
   const result: ColorApplyResult = {
     linesUpdated: 0,
     unmappedAreas: [],
@@ -408,7 +524,9 @@ export function planColorApplication(input: {
     { line: PlanLine; picks: ColorAreaPick[]; claims: Claim[]; ambiguous: boolean }
   >();
   for (const pick of picks) {
-    const refs = (mapping.get(pick.areaKey) ?? []).map(toRef);
+    const off = powderOffChart(pick, brands, chart);
+    if (off) offChart.push(off);
+    const refs = (mapping.get(pick.areaKey.trim().toLowerCase()) ?? []).map(toRef);
     if (!refs.length) {
       result.unmappedAreas.push(pick.areaKey);
       continue;
@@ -456,18 +574,58 @@ export function planColorApplication(input: {
       powderColor: line.powderColor,
       colorPicks: readPicks(line.colorPicks),
     };
+    const areasOf = (list: readonly ColorAreaPick[]) =>
+      [...new Set(list.map((p) => p.areaKey))].sort().join(', ');
+    // A conflict leaves the line alone — except on a re-review where a CHANGED area
+    // is part of it: then the colour on the line is the superseded one, and printing
+    // it would read as the customer's instruction. Clear it and say so.
+    const conflict = (list: readonly ColorAreaPick[]) => {
+      addConflict(list);
+      if (input.clearNewConflicts && !fillOnly(list) && !isBlankColor(from)) {
+        updates.push({
+          lineId: line.id,
+          sku,
+          areaKey: areasOf(list),
+          from,
+          to: {
+            powderBrandId: null,
+            powderColorCode: null,
+            powderColor: null,
+            ...((from.colorPicks ?? []).length ? { colorPicks: [] } : {}),
+          },
+        });
+        cleared.push(
+          `${sku}: cleared "${from.powderColor ?? ''}" — ${areasOf(list)} now ask for different colours`,
+        );
+      }
+    };
+    // Write `to` unless it is already there, or the line may only be filled and is not
+    // blank (a staff correction, kept).
+    const propose = (to: LineColor, list: readonly ColorAreaPick[], areaKey: string) => {
+      if (sameColor(from, to)) {
+        result.linesAlreadyCurrent = (result.linesAlreadyCurrent ?? 0) + 1;
+        return;
+      }
+      if (fillOnly(list) && !isBlankColor(from)) {
+        kept.push(
+          `${sku} (${areaKey}): kept "${from.powderColor ?? ''}" — the reviewed pick would be "${to.powderColor ?? ''}"`,
+        );
+        return;
+      }
+      updates.push({ lineId: line.id, sku, areaKey, from, to });
+    };
 
     // A multi-piece part: each area colours one piece. Only two DIFFERENT picks for
     // the SAME piece conflict — or an area colouring the whole part alongside areas
     // colouring its pieces, which is ambiguous.
     if (ambiguous) {
-      addConflict(linePicks);
+      conflict(linePicks);
       continue;
     }
 
     if (lineClaims.some((c) => c.piece != null)) {
       if (lineClaims.some((c) => c.piece == null)) {
-        addConflict(linePicks);
+        conflict(linePicks);
         continue;
       }
       const byPiece = new Map<number, ColorAreaPick[]>();
@@ -478,7 +636,7 @@ export function planColorApplication(input: {
       }
       const clashing = [...byPiece.values()].filter((l) => new Set(l.map(pickSig)).size > 1);
       if (clashing.length) {
-        addConflict(clashing.flat());
+        conflict(clashing.flat());
         continue;
       }
 
@@ -503,6 +661,9 @@ export function planColorApplication(input: {
         let unresolved = false;
         for (const [slot, list] of byPiece) {
           const pick = list[0]!;
+          // A piece whose area the customer did not change keeps what the line has
+          // (a staff correction made since the last review).
+          if (unchanged.has(pick.areaKey.toLowerCase()) && bySlot.has(slot)) continue;
           const code = pick.code.trim().toLowerCase();
           const inRange = slot >= 1 && slot <= spec.slotCount;
           const color = inRange
@@ -556,26 +717,20 @@ export function planColorApplication(input: {
               .join(' · ') || null,
         };
       }
-      if (sameColor(from, to)) {
-        result.linesAlreadyCurrent = (result.linesAlreadyCurrent ?? 0) + 1;
-        continue;
-      }
-      updates.push({
-        lineId: line.id,
-        sku,
-        areaKey: lineClaims
+      propose(
+        to,
+        lineClaims.map((c) => c.pick),
+        lineClaims
           .map((c) => c.pick.areaKey)
           .sort()
           .join(', '),
-        from,
-        to,
-      });
+      );
       continue;
     }
 
     const distinct = new Set(linePicks.map(pickSig));
     if (distinct.size > 1) {
-      addConflict(linePicks);
+      conflict(linePicks);
       continue;
     }
     const pick = linePicks[0]!;
@@ -585,11 +740,7 @@ export function planColorApplication(input: {
       // line never says one thing in its colour text and another in its slots.
       ...((from.colorPicks ?? []).length ? { colorPicks: [] } : {}),
     };
-    if (sameColor(from, to)) {
-      result.linesAlreadyCurrent = (result.linesAlreadyCurrent ?? 0) + 1;
-      continue;
-    }
-    updates.push({ lineId: line.id, sku, areaKey: pick.areaKey, from, to });
+    propose(to, linePicks, pick.areaKey);
   }
 
   // Conflicts are reported under the part number as the line carries it.
@@ -603,6 +754,8 @@ export function planColorApplication(input: {
     .sort((a, b) => a.sku.localeCompare(b.sku));
   result.skippedVendors = [...skipped].sort();
   result.offChart = [...new Set(offChart)];
+  result.keptStaffEdits = kept;
+  result.clearedLines = cleared;
   result.linesUpdated = updates.length;
   return { updates, result };
 }
@@ -618,13 +771,35 @@ export function planColorApplication(input: {
  * the BOM does not, unless asked). Reviewing the customer's answers is the act of
  * accepting them, and a customer who resubmits must be able to change a colour they
  * gave before. What was there is kept in the order event, so nothing is lost.
+ *
+ * On a RE-review (`reReview`), only areas the customer changed overwrite. When the
+ * answers that were last reviewed are known (`previousAnswers`), an area whose pick is
+ * the same as then only fills blank lines — a different colour on its line is a staff
+ * correction made since, and survives. When they are not known (a review recorded
+ * before the answers were kept), every area counts as changed, as before.
+ *
+ * `onlyBlank` is the "re-apply reviewed colours" action: fill blank lines only.
  */
 export async function applyColorPicksToOrder(
   orderId: string,
   answers: unknown,
   actorId: string,
+  opts: {
+    reReview?: boolean;
+    /** The answers of the last review, or undefined when not known. */
+    previousAnswers?: unknown;
+    onlyBlank?: boolean;
+    /** The order event recording the change. */
+    eventAction?: string;
+  } = {},
 ): Promise<ColorApplyResult> {
   const picks = colorAreasOf(answers);
+  const previous = opts.previousAnswers === undefined ? null : colorAreasOf(opts.previousAnswers);
+  const keyOf = (p: ColorAreaPick) => p.areaKey.trim().toLowerCase();
+  const nowKeys = new Set(picks.map(keyOf));
+  const droppedAreas = previous
+    ? previous.filter((p) => !nowKeys.has(keyOf(p))).map((p) => p.areaKey)
+    : [];
   if (!picks.length) {
     return {
       linesUpdated: 0,
@@ -633,10 +808,23 @@ export async function applyColorPicksToOrder(
       skippedVendors: [],
       conflicts: [],
       linesAlreadyCurrent: 0,
+      ...(droppedAreas.length ? { droppedAreas } : {}),
+      // ✅ with nothing in it: say so rather than report a silent "nothing changed".
+      markedCompleteWithoutColors: true,
     };
   }
 
-  const { updates, result } = planColorApplication(await loadColorPlanInput(orderId, picks));
+  const prevSig = new Map((previous ?? []).map((p) => [keyOf(p), pickSig(p)]));
+  const unchangedAreas = new Set(
+    picks.filter((p) => prevSig.get(keyOf(p)) === pickSig(p)).map(keyOf),
+  );
+  const { updates, result } = planColorApplication({
+    ...(await loadColorPlanInput(orderId, picks)),
+    unchangedAreas,
+    onlyBlank: opts.onlyBlank === true,
+    clearNewConflicts: opts.reReview === true && opts.onlyBlank !== true,
+  });
+  if (droppedAreas.length) result.droppedAreas = droppedAreas;
 
   if (updates.length) {
     await prisma.$transaction([
@@ -656,7 +844,7 @@ export async function applyColorPicksToOrder(
       prisma.orderEvent.create({
         data: {
           orderId,
-          action: 'bom.colors.portal-review',
+          action: opts.eventAction ?? 'bom.colors.portal-review',
           actorId,
           detail: {
             linesUpdated: result.linesUpdated,
@@ -671,6 +859,9 @@ export async function applyColorPicksToOrder(
             skippedVendors: result.skippedVendors,
             conflicts: result.conflicts ?? [],
             offChart: result.offChart ?? [],
+            keptStaffEdits: result.keptStaffEdits ?? [],
+            clearedLines: result.clearedLines ?? [],
+            droppedAreas: result.droppedAreas ?? [],
           } as object,
         },
       }),
@@ -703,7 +894,10 @@ export async function loadColorPlanInput(
 }> {
   const [mappings, lines, sections, brands, chart] = await Promise.all([
     prisma.portalColorAreaMapping.findMany({
-      where: { areaKey: { in: [...new Set(picks.map((p) => p.areaKey))] } },
+      // Case-insensitive: a key saved in another case still names the same area.
+      where: {
+        areaKey: { in: [...new Set(picks.map((p) => p.areaKey))], mode: 'insensitive' },
+      },
       select: { areaKey: true, sku: true, piece: true },
       orderBy: [{ areaKey: 'asc' }, { sku: 'asc' }],
     }),
@@ -734,9 +928,10 @@ export async function loadColorPlanInput(
 
   const mapping = new Map<string, MappedPartRef[]>();
   for (const m of mappings) {
-    const list = mapping.get(m.areaKey) ?? [];
+    const key = m.areaKey.trim().toLowerCase();
+    const list = mapping.get(key) ?? [];
     list.push({ sku: m.sku, piece: m.piece ?? null });
-    mapping.set(m.areaKey, list);
+    mapping.set(key, list);
   }
 
   // Colour specs, only needed when some area colours a piece of a part.

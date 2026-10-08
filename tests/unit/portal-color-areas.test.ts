@@ -55,13 +55,17 @@ vi.mock('../../src/lib/prisma.js', () => ({
         db.sections.filter((s) => s.orderId === where.orderId && s.status === where.status),
     },
     powderColorBrand: { findMany: async () => db.brands },
-    vendorColor: {
+    // loadPowderChart reads palette-first, then the palette owners' names.
+    vendorColorPalette: {
       findMany: async () =>
         db.chart.map((c) => ({
-          name: c.name,
-          vendorCode: c.vendorCode,
-          palette: { manufacturer: { name: c.vendor } },
+          name: `${c.vendor} chart`,
+          manufacturerId: `m-${c.vendor}`,
+          colors: [{ name: c.name, vendorCode: c.vendorCode }],
         })),
+    },
+    manufacturer: {
+      findMany: async () => db.chart.map((c) => ({ id: `m-${c.vendor}`, name: c.vendor })),
     },
     orderEvent: {
       create: async ({ data }: { data: Record<string, unknown> }) => {

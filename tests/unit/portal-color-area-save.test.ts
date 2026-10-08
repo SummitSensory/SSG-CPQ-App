@@ -11,8 +11,17 @@ const db = vi.hoisted(() => ({
 vi.mock('../../src/lib/prisma.js', () => ({
   prisma: {
     portalColorAreaMapping: {
-      findMany: async ({ where }: { where: { areaKey: string } }) =>
-        db.rows.filter((r) => r.areaKey === where.areaKey),
+      // saveColorArea reads an area's rows case-insensitively ({ equals, mode }).
+      findMany: async ({
+        where,
+      }: {
+        where: { areaKey: string | { equals: string; mode?: string } };
+      }) =>
+        db.rows.filter((r) =>
+          typeof where.areaKey === 'string'
+            ? r.areaKey === where.areaKey
+            : r.areaKey.toLowerCase() === where.areaKey.equals.toLowerCase(),
+        ),
       deleteMany: async ({ where }: { where: { id: { in: string[] } } }) => {
         db.rows = db.rows.filter((r) => !where.id.in.includes(r.id));
         return { count: 0 };
@@ -31,10 +40,11 @@ vi.mock('../../src/lib/prisma.js', () => ({
         data,
       }: {
         where: { id: string };
-        data: { piece: number | null };
+        data: { piece?: number | null; areaKey?: string };
       }) => {
         const r = db.rows.find((x) => x.id === where.id)!;
-        r.piece = data.piece;
+        if (data.piece !== undefined) r.piece = data.piece;
+        if (data.areaKey !== undefined) r.areaKey = data.areaKey;
         return r;
       },
     },
