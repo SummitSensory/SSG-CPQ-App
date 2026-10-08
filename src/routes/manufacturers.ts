@@ -104,8 +104,63 @@ function clean<T extends Record<string, unknown>>(d: T): T {
  * Bill of Materials line with. All three are read by name, so all three block a delete.
  */
 function skuNamesVendor(name: string) {
+  // Case-insensitive, like every vendor lookup that resolves a typed name
+  // (src/catalog/partVendor.ts): "resilite" on a part is Resilite's part.
+  const n = { equals: name, mode: 'insensitive' as const };
   return {
-    OR: [{ manufacturer: name }, { freeIssueVendor: name }, { secondaryVendor: name }],
+    OR: [{ manufacturer: n }, { freeIssueVendor: n }, { secondaryVendor: n }],
+  };
+}
+
+/**
+ * Everything that refers to a vendor, for the usage panel and the delete guard.
+ *
+ * Blocking: catalog parts (sourcing links and Sku names), order lines, and colour charts
+ * a product's colour spec points at. That last one matters most mechanically —
+ * Manufacturer → VendorColorPalette cascades, but ProductColorSpec → palette is
+ * Restrict, so deleting a vendor whose chart is in use used to surface the raw
+ * foreign-key error as a 500.
+ *
+ * Reported, not blocking: the vendor's own reference data (colour charts nothing uses,
+ * vendor part numbers), which is deleted along with it.
+ */
+async function vendorUsage(m: { id: string; name: string }) {
+  const [sourcing, skus, procurement, palettes, palettesInUse, vendorPartNumbers] =
+    await Promise.all([
+      prisma.productSourcing.count({ where: { manufacturerId: m.id } }),
+      prisma.sku.count({ where: skuNamesVendor(m.name) }),
+      prisma.procurementLine.count({
+        where: { vendor: { equals: m.name, mode: 'insensitive' } },
+      }),
+      prisma.vendorColorPalette.count({ where: { manufacturerId: m.id } }),
+      prisma.vendorColorPalette.count({
+        where: { manufacturerId: m.id, specs: { some: {} } },
+      }),
+      prisma.vendorPartNumber.count({ where: { manufacturerId: m.id } }),
+    ]);
+  const colorSpecs = palettesInUse
+    ? await prisma.productColorSpec.count({ where: { palette: { manufacturerId: m.id } } })
+    : 0;
+  const parts = sourcing + skus;
+  const blockers: string[] = [];
+  if (parts) blockers.push(`${parts} catalog part${parts === 1 ? '' : 's'}`);
+  if (procurement) blockers.push(`${procurement} order line${procurement === 1 ? '' : 's'}`);
+  if (colorSpecs)
+    blockers.push(
+      `${colorSpecs} product colour spec${colorSpecs === 1 ? '' : 's'} (on ${palettesInUse} of its colour chart${palettesInUse === 1 ? '' : 's'})`,
+    );
+  return {
+    sourcing,
+    skus,
+    procurement,
+    palettes,
+    palettesInUse,
+    colorSpecs,
+    vendorPartNumbers,
+    deletable: blockers.length === 0,
+    reason: blockers.length
+      ? `Still used by ${blockers.join(', ')} — deactivate it instead so existing parts and orders keep their vendor.`
+      : null,
   };
 }
 
@@ -548,8 +603,21 @@ export function registerManufacturerRoutes(app: FastifyInstance): void {
       if (dupe) throw new ConflictError(`“${d.name}” already exists`);
       // The flat SKU master stores the vendor by name, so a rename has to carry
       // there too or those parts silently lose their vendor on the next BOM.
+      // Matched case-insensitively throughout: a part or order line spelled "resilite"
+      // is Resilite's (that is how every typed vendor name resolves), and a rename that
+      // left it behind would orphan it under a name that no longer exists.
+      // Unless another vendor record carries a case-variant of the same name (possible in
+      // old data — the unique key is case-sensitive): then only the exact spelling is
+      // this vendor's, and the other's parts are not ours to rename.
+      const caseTwin = await prisma.manufacturer.findFirst({
+        where: { name: { equals: current.name, mode: 'insensitive' }, id: { not: id } },
+        select: { id: true },
+      });
+      const was = caseTwin
+        ? { equals: current.name }
+        : { equals: current.name, mode: 'insensitive' as const };
       const skus = await prisma.sku.updateMany({
-        where: { manufacturer: current.name },
+        where: { manufacturer: was },
         data: { manufacturer: d.name },
       });
 
@@ -565,13 +633,19 @@ export function registerManufacturerRoutes(app: FastifyInstance): void {
       // throwing one away silently is worse than a name to sort out by hand. The
       // audit row names those orders.
       const stale = await prisma.bomVendorSection.findMany({
-        where: { vendor: current.name },
+        where: { vendor: was },
         select: { id: true, orderId: true },
       });
+      // Not the stale sections themselves: on a case-only rename ("resilite" →
+      // "Resilite") they match the new name too, and are exactly what should be renamed.
       const clashing = new Set(
         (
           await prisma.bomVendorSection.findMany({
-            where: { vendor: d.name, orderId: { in: stale.map((s) => s.orderId) } },
+            where: {
+              vendor: { equals: d.name, mode: 'insensitive' },
+              orderId: { in: stale.map((s) => s.orderId) },
+              id: { notIn: stale.map((s) => s.id) },
+            },
             select: { orderId: true },
           })
         ).map((s) => s.orderId),
@@ -584,20 +658,20 @@ export function registerManufacturerRoutes(app: FastifyInstance): void {
         // secondary-vendor parts get a line on its sheet. Left behind, a rename silently
         // dropped those lines from the renamed vendor's BOM.
         prisma.sku.updateMany({
-          where: { freeIssueVendor: current.name },
+          where: { freeIssueVendor: was },
           data: { freeIssueVendor: d.name },
         }),
         prisma.sku.updateMany({
-          where: { secondaryVendor: current.name },
+          where: { secondaryVendor: was },
           data: { secondaryVendor: d.name },
         }),
         prisma.procurementLine.updateMany({
-          where: { vendor: current.name },
+          where: { vendor: was },
           data: { vendor: d.name },
         }),
         // Free-issue parts name the vendor they were BOUGHT from, in the same way.
         prisma.procurementLine.updateMany({
-          where: { purchaseVendor: current.name },
+          where: { purchaseVendor: was },
           data: { purchaseVendor: d.name },
         }),
         ...renameable.map((s) =>
@@ -636,22 +710,19 @@ export function registerManufacturerRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const m = await prisma.manufacturer.findUnique({ where: { id } });
     if (!m) throw new NotFoundError('Manufacturer not found');
-    const [sourcing, skus, procurement] = await Promise.all([
-      prisma.productSourcing.count({ where: { manufacturerId: id } }),
-      prisma.sku.count({ where: skuNamesVendor(m.name) }),
-      prisma.procurementLine.count({ where: { vendor: m.name } }),
-    ]);
-    const deletable = sourcing === 0 && skus === 0 && procurement === 0;
+    const u = await vendorUsage(m);
     return {
       id,
       name: m.name,
-      productCount: sourcing,
-      skuCount: skus,
-      orderLineCount: procurement,
-      deletable,
-      reason: deletable
-        ? null
-        : `${sourcing + skus} catalog part${sourcing + skus === 1 ? '' : 's'} and ${procurement} order line${procurement === 1 ? '' : 's'} reference this vendor — deactivate it instead so existing orders keep their vendor.`,
+      productCount: u.sourcing,
+      skuCount: u.skus,
+      orderLineCount: u.procurement,
+      paletteCount: u.palettes,
+      palettesInUse: u.palettesInUse,
+      colorSpecCount: u.colorSpecs,
+      vendorPartNumberCount: u.vendorPartNumbers,
+      deletable: u.deletable,
+      reason: u.reason,
     };
   });
 
@@ -659,23 +730,25 @@ export function registerManufacturerRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const m = await prisma.manufacturer.findUnique({ where: { id } });
     if (!m) throw new NotFoundError('Manufacturer not found');
-    const [sourcing, skus, procurement] = await Promise.all([
-      prisma.productSourcing.count({ where: { manufacturerId: id } }),
-      prisma.sku.count({ where: skuNamesVendor(m.name) }),
-      prisma.procurementLine.count({ where: { vendor: m.name } }),
-    ]);
-    if (sourcing || skus || procurement) {
-      throw new ConflictError(
-        `“${m.name}” is used by ${sourcing + skus} catalog part(s) and ${procurement} order line(s). Deactivate it instead.`,
-      );
-    }
-    await prisma.manufacturer.delete({ where: { id } });
+    const u = await vendorUsage(m);
+    if (!u.deletable) throw new ConflictError(`“${m.name}” cannot be deleted. ${u.reason}`);
+    await prisma.manufacturer.delete({ where: { id } }).catch((err: unknown) => {
+      // Something started referring to it between the check and the delete.
+      if ((err as { code?: string }).code === 'P2003')
+        throw new ConflictError(`“${m.name}” is now in use and cannot be deleted.`);
+      throw err;
+    });
     await recordAudit({
       actorId: req.user!.sub,
       action: 'manufacturer.delete',
       entity: 'Manufacturer',
       entityId: id,
-      details: { name: m.name },
+      // What went with it: charts and vendor part numbers cascade.
+      details: {
+        name: m.name,
+        palettesDeleted: u.palettes,
+        vendorPartNumbersDeleted: u.vendorPartNumbers,
+      },
     });
     reply.code(204);
     return null;

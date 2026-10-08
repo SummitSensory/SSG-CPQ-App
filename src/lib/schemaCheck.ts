@@ -22,18 +22,52 @@ import { sendAlert } from '../lib/alerts.js';
  * a CRM that serves most screens correctly is better than one that refuses to start.
  */
 
-/** Columns the deployed code cannot function without, added by recent migrations. */
-const REQUIRED_COLUMNS: Array<{ table: string; column: string; since: string }> = [
+/**
+ * Columns the deployed code cannot function without, added by recent migrations.
+ *
+ * Chosen for blast radius, not completeness (`pnpm db:drift` is the complete check):
+ * a column on a table nearly every screen reads — User, Sku, ProcurementLine,
+ * ProposalVersion, Manufacturer — breaks far more than the feature that added it,
+ * because Prisma selects every column it knows about. One column per migration is
+ * enough to tell whether that migration ran.
+ */
+export const REQUIRED_COLUMNS: Array<{ table: string; column: string; since: string }> = [
   { table: 'AcceptedOrder', column: 'portalOrderItemId', since: '0057_portal_delivery' },
   { table: 'BomVendorSection', column: 'loadingDock', since: '0057_portal_delivery' },
   { table: 'ShipToAddress', column: 'source', since: '0057_portal_delivery' },
   { table: 'FreightRfq', column: 'shipToSource', since: '0057_portal_delivery' },
+  { table: 'ProposalVersion', column: 'legalSnapshotId', since: '0075_legal_documents' },
+  {
+    table: 'ProcurementLine',
+    column: 'proposalLineOrder',
+    since: '0078_procurement_line_proposal_order',
+  },
+  { table: 'User', column: 'tipsEnabled', since: '0080_user_tips_enabled' },
+  { table: 'User', column: 'dashboardLayout', since: '0089_add_user_dashboard_layout' },
+  {
+    table: 'ProposalVersion',
+    column: 'mediaRebateSnapshotId',
+    since: '0092_add_media_partnership_program',
+  },
+  { table: 'Sku', column: 'secondaryVendor', since: '0093_add_bom_secondary_vendor' },
+  { table: 'ProcurementLine', column: 'secondaryOfSku', since: '0093_add_bom_secondary_vendor' },
+  { table: 'User', column: 'signatureImage', since: '0098_user_signature_image' },
+  { table: 'Manufacturer', column: 'poEnabled', since: '0105_vendor_purchase_orders' },
+  { table: 'Sku', column: 'bomGroup', since: '0111_bom_sequence_heading' },
+  { table: 'ProcurementLine', column: 'bomPosition', since: '0111_bom_sequence_heading' },
+  { table: 'PurchaseOrderLine', column: 'powderColor', since: '0112_purchase_order_line_color' },
 ];
 
 /** Tables recent migrations created. A missing one breaks its whole feature. */
-const REQUIRED_TABLES: Array<{ table: string; since: string }> = [
+export const REQUIRED_TABLES: Array<{ table: string; since: string }> = [
   { table: 'PortalDeliverySubmission', since: '0057_portal_delivery' },
   { table: 'PortalColorSelection', since: '0057_portal_delivery' },
+  { table: 'OrderPortalItem', since: '0098_portal_order_items' },
+  { table: 'PortalColorAreaMapping', since: '0098_portal_order_items' },
+  { table: 'PurchaseOrder', since: '0105_vendor_purchase_orders' },
+  { table: 'PurchaseOrderLine', since: '0105_vendor_purchase_orders' },
+  { table: 'PurchaseOrderSend', since: '0105_vendor_purchase_orders' },
+  { table: 'BomSectionFile', since: '0108_bom_section_files' },
 ];
 
 export interface SchemaDriftReport {

@@ -4,10 +4,16 @@ import { prisma } from '../lib/prisma.js';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import { recordAudit } from '../lib/audit.js';
-import { ValidationError, NotFoundError } from '../lib/errors.js';
+import { ValidationError, NotFoundError, ConflictError } from '../lib/errors.js';
 import { reassignSkuVendor } from '../handoff/vendorReassign.js';
 import { recordRevision, skuSnapshot } from '../lib/revisions.js';
-import { loadVendorIndex, resolveVendor, syncPartSourcing } from '../catalog/partVendor.js';
+import {
+  loadVendorIndex,
+  resolveVendor,
+  syncPartSourcing,
+  type Vendor,
+} from '../catalog/partVendor.js';
+import { deletePartRecords, partDeletion } from '../catalog/service.js';
 
 const SkuBody = z.object({
   part: z.string().trim().min(1).max(80),
@@ -221,7 +227,12 @@ export function registerSkuRoutes(app: FastifyInstance): void {
   app.post('/skus', admin, async (req, reply) => {
     const parsed = SkuBody.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(parsed.error.message);
-    const existing = await prisma.sku.findUnique({ where: { part: parsed.data.part } });
+    // Case-insensitive, like every other join on part number: "abc-1" beside "ABC-1"
+    // is two priced rows for what the rest of the app treats as one part.
+    const existing = await prisma.sku.findFirst({
+      where: { part: { equals: parsed.data.part, mode: 'insensitive' } },
+      select: { id: true },
+    });
     if (existing) throw new ValidationError('A SKU with that part number already exists.');
     // proposalGroup is guaranteed non-blank by SkuBody's Zod schema above.
     const sku = await prisma.sku.create({ data: parsed.data });
@@ -236,11 +247,59 @@ export function registerSkuRoutes(app: FastifyInstance): void {
 
   app.patch('/skus/:id', admin, async (req) => {
     const { id } = req.params as { id: string };
-    const parsed = SkuBody.partial().safeParse(req.body);
+    // `part` is not editable here. The part number is the only join between a part's
+    // two halves (Product.sku / Sku.part), so renaming the Sku alone split one part into
+    // a Sku-less Product and a Product-less Sku.
+    const parsed = SkuBody.omit({ part: true }).partial().safeParse(req.body);
     if (!parsed.success) throw new ValidationError(parsed.error.message);
     const existing = await prisma.sku.findUnique({ where: { id } });
     if (!existing) throw new NotFoundError('SKU not found');
-    const sku = await prisma.sku.update({ where: { id }, data: parsed.data });
+    const sentPart = (req.body as { part?: unknown } | null)?.part;
+    if (sentPart !== undefined && String(sentPart).trim() !== existing.part)
+      throw new ValidationError(
+        'The part number cannot be changed here — it is what joins the price-list record ' +
+          'to its catalog record. Create the new part number and retire this one instead.',
+      );
+
+    const data: typeof parsed.data = { ...parsed.data };
+    // The vendor, resolved and checked BEFORE anything is written — the same rules as
+    // PATCH /catalog/items/:part: a name not on record is refused (never created), the
+    // stored spelling wins, and a part already sourced from several vendors is refused
+    // rather than collapsed to one.
+    let vendor: Vendor | null = null;
+    if (data.manufacturer !== undefined) {
+      const typed = (data.manufacturer ?? '').trim();
+      vendor = resolveVendor(await loadVendorIndex(prisma), typed);
+      if (typed && !vendor)
+        throw new ValidationError(
+          `“${typed}” is not a manufacturer on record. Add the vendor under ` +
+            `Catalog → Manufacturers, with its address and payment terms, first.`,
+        );
+      data.manufacturer = vendor ? vendor.name : null;
+    }
+    // Compared on the STORED spelling, so retyping the same vendor in another case is
+    // not a change.
+    const vendorChanging =
+      data.manufacturer !== undefined &&
+      (data.manufacturer ?? '') !== (existing.manufacturer ?? '').trim();
+    if (vendorChanging) {
+      const product = await prisma.product.findUnique({
+        where: { sku: existing.part },
+        select: { id: true },
+      });
+      if (product && (await prisma.productSourcing.count({ where: { productId: product.id } })) > 1)
+        throw new ValidationError(
+          `${existing.part} is sourced from more than one vendor already — this field can't ` +
+            `tell which one to change. Multi-vendor parts aren't editable here.`,
+        );
+    }
+
+    const sku = await prisma.$transaction(async (tx) => {
+      const updated = await tx.sku.update({ where: { id }, data });
+      // The other record of the same fact (src/catalog/partVendor.ts).
+      if (vendorChanging) await syncPartSourcing(tx, updated.part, vendor);
+      return updated;
+    });
 
     // Re-sourcing a part is not only a catalog fact: the orders already sold still
     // list it under the old vendor, on a sheet nobody has sent yet. Those lines move
@@ -270,10 +329,37 @@ export function registerSkuRoutes(app: FastifyInstance): void {
     return { ...sku, vendorReassign: moved };
   });
 
+  /**
+   * Delete a priced-only row.
+   *
+   * A Sku that has a catalog record is half of a part, and deleting it alone left an
+   * ACTIVE Product with no price — offered in the proposal builder at $0.00. Those go
+   * through DELETE /catalog/items/:part, which removes both halves under the
+   * never-live / not-on-a-proposal rules. A priced-only row still gets the proposal
+   * check from the same place (partDeletion).
+   */
   app.delete('/skus/:id', admin, async (req, reply) => {
     const { id } = req.params as { id: string };
-    await prisma.sku.delete({ where: { id } }).catch(() => {
-      throw new NotFoundError('SKU not found');
+    const sku = await prisma.sku.findUnique({ where: { id }, select: { id: true, part: true } });
+    if (!sku) throw new NotFoundError('SKU not found');
+    const product = await prisma.product.findFirst({
+      where: { sku: { equals: sku.part.trim(), mode: 'insensitive' } },
+      select: { sku: true },
+    });
+    if (product)
+      throw new ConflictError(
+        `${sku.part} has a catalog record (${product.sku}). Delete or deactivate the part ` +
+          `from the catalog list, which keeps both records in step.`,
+      );
+    const d = await partDeletion(prisma, sku.part);
+    if (d.reason) throw new ConflictError(`“${sku.part}”: ${d.reason}`);
+    await prisma.$transaction((tx) => deletePartRecords(tx, { product: null, sku }));
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'sku.delete',
+      entity: 'Sku',
+      entityId: id,
+      details: { part: sku.part },
     });
     return reply.status(204).send();
   });
