@@ -131,19 +131,13 @@ describe.skipIf(!LOCAL)('QuickBooks token refresh (local DB)', () => {
   // BUG: no single-flight / row lock around the refresh. Two concurrent callers
   // both spend RT-1; the loser gets invalid_grant and deactivates a connection
   // that the winner just refreshed successfully.
-  it.fails(
-    'BUG: two concurrent callers both get a token and the connection stays active',
-    async () => {
-      const { getAccessToken } = await import('../../src/integrations/quickbooks/oauth.js');
-      const { prisma } = await import('../../src/lib/prisma.js');
-      const { f } = intuit();
-      const results = await Promise.allSettled([
-        getAccessToken(REALM, f),
-        getAccessToken(REALM, f),
-      ]);
-      const conn = await prisma.qboConnection.findFirstOrThrow({ where: { realmId: REALM } });
-      expect(results.map((r) => r.status)).toEqual(['fulfilled', 'fulfilled']);
-      expect(conn.isActive).toBe(true);
-    },
-  );
+  it('BUG: two concurrent callers both get a token and the connection stays active', async () => {
+    const { getAccessToken } = await import('../../src/integrations/quickbooks/oauth.js');
+    const { prisma } = await import('../../src/lib/prisma.js');
+    const { f } = intuit();
+    const results = await Promise.allSettled([getAccessToken(REALM, f), getAccessToken(REALM, f)]);
+    const conn = await prisma.qboConnection.findFirstOrThrow({ where: { realmId: REALM } });
+    expect(results.map((r) => r.status)).toEqual(['fulfilled', 'fulfilled']);
+    expect(conn.isActive).toBe(true);
+  });
 });

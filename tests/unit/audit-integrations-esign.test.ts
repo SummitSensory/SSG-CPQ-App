@@ -41,6 +41,9 @@ vi.mock('../../src/lib/logger.js', () => ({
 }));
 vi.mock('../../src/lib/alerts.js', () => ({
   sendAlert: (a: { title: string; to?: string[]; fingerprint?: string }) => h.alerts.push(a),
+  deliverAlert: async (a: { title: string; to?: string[]; fingerprint?: string }) => {
+    h.alerts.push(a);
+  },
 }));
 vi.mock('../../src/integrations/docuseal/service.js', () => ({
   recordEvent: h.recordEvent,
@@ -78,6 +81,18 @@ vi.mock('../../src/lib/prisma.js', () => ({
         const e = h.envelopes.find((x) => x.id === where.id)!;
         Object.assign(e, data);
         return e;
+      },
+      // Synchronous inside the async body, so it is atomic like a row-level UPDATE.
+      updateMany: async ({
+        where,
+        data,
+      }: {
+        where: Where & { id: string };
+        data: Record<string, unknown>;
+      }) => {
+        const rows = h.envelopes.filter((e) => e.id === where.id && matchesReminderWhere(e, where));
+        for (const e of rows) Object.assign(e, data);
+        return { count: rows.length };
       },
     },
     esignSigner: {
@@ -219,7 +234,7 @@ describe('sendEsignReminders', () => {
   // read, not claimed with a conditional updateMany like the other notifications.
   // A double-fired cron (or a manual re-run racing the schedule) on two instances
   // sends two reminders; sendAlert's in-memory dedupe is per instance only.
-  it.fails('BUG: two overlapping sweeps send one reminder, not two', async () => {
+  it('BUG: two overlapping sweeps send one reminder, not two', async () => {
     const { sendEsignReminders } = await import('../../src/integrations/docuseal/notifications.js');
     addEnvelope('r5', 3 * DAY);
     const [a, b] = await Promise.all([sendEsignReminders(), sendEsignReminders()]);

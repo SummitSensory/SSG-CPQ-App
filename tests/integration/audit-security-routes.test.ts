@@ -167,6 +167,7 @@ const PUBLIC_ROUTES: Record<string, string> = {
   'POST /cron/portal-delivery': 'CRON_SECRET',
   'GET /cron/receivables': 'CRON_SECRET',
   'POST /cron/receivables': 'CRON_SECRET',
+  'GET /cron/scheduled-reports': 'CRON_SECRET',
   'POST /cron/scheduled-reports': 'CRON_SECRET',
   'GET /cron/fx-refresh': 'CRON_SECRET',
   'POST /cron/fx-refresh': 'CRON_SECRET',

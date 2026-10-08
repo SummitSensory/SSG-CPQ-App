@@ -44,6 +44,23 @@ vi.mock('../../src/lib/prisma.js', () => ({
         Object.assign(row, data);
         return row;
       },
+      // Honours the status guard the way Postgres would: synchronous, so atomic.
+      updateMany: async ({
+        where,
+        data,
+      }: {
+        where: { id: string; status?: { not?: string; notIn?: string[] } };
+        data: Record<string, unknown>;
+      }) => {
+        const rows = h.bomSends.filter(
+          (s) =>
+            s.id === where.id &&
+            (where.status?.not === undefined || s.status !== where.status.not) &&
+            (where.status?.notIn === undefined || !where.status.notIn.includes(String(s.status))),
+        );
+        for (const r of rows) Object.assign(r, data);
+        return { count: rows.length };
+      },
     },
     orderEvent: {
       create: async ({ data }: { data: Record<string, unknown> }) => {
@@ -158,20 +175,17 @@ describe('Resend webhook: basic handling', () => {
 describe('Resend webhook: at-least-once delivery', () => {
   // BUG: no dedupe on svix-id (or on "already BOUNCED"), so a redelivered bounce
   // writes a second `bom.email.bounced` OrderEvent to the order timeline.
-  it.fails(
-    'BUG: a redelivered bounce (same svix-id) does not duplicate the timeline event',
-    async () => {
-      const payload = { type: 'email.bounced', data: { email_id: 'msg-1' } };
-      await deliver('evt-bounce', payload);
-      await deliver('evt-bounce', payload);
-      expect(h.orderEvents).toHaveLength(1);
-    },
-  );
+  it('BUG: a redelivered bounce (same svix-id) does not duplicate the timeline event', async () => {
+    const payload = { type: 'email.bounced', data: { email_id: 'msg-1' } };
+    await deliver('evt-bounce', payload);
+    await deliver('evt-bounce', payload);
+    expect(h.orderEvents).toHaveLength(1);
+  });
 
   // BUG: status is overwritten unconditionally. Svix does not guarantee ordering,
   // so a `delivered` that lands after a `bounced` flips the row back to DELIVERED
   // and the audit trail claims the vendor received a BOM they never got.
-  it.fails('BUG: a late email.delivered does not overwrite BOUNCED', async () => {
+  it('BUG: a late email.delivered does not overwrite BOUNCED', async () => {
     await deliver('evt-a', { type: 'email.bounced', data: { email_id: 'msg-1' } });
     await deliver('evt-b', { type: 'email.delivered', data: { email_id: 'msg-1' } });
     expect(h.bomSends[0]!.status).toBe('BOUNCED');

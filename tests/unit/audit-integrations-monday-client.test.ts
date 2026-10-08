@@ -94,7 +94,7 @@ describe('mondayQuery', () => {
   // only reads errors[].message, so the thrown text is "returned no data" and the
   // real reason (e.g. a status label that does not exist on the board) is lost
   // from the IntegrationSyncLog row.
-  it.fails('BUG: a top-level error_message is surfaced in the thrown error', async () => {
+  it('BUG: a top-level error_message is surfaced in the thrown error', async () => {
     const f = vi.fn(async () =>
       json({
         error_code: 'ColumnValueException',

@@ -3,7 +3,7 @@ import { logger } from '../../lib/logger.js';
 import { ConflictError, NotFoundError } from '../../lib/errors.js';
 import { qboEnvironment } from '../../config/env.js';
 import { readById } from './client.js';
-import { syncTransactionState } from './billing.js';
+import { syncTransactionState, touchAfterFailedSync } from './billing.js';
 import type { QboEnvironment } from '@prisma/client';
 
 /**
@@ -164,7 +164,9 @@ export async function refreshOpenInvoices(
       qboId: { not: null },
       OR: [{ balanceMinor: null }, { balanceMinor: { gt: 0 } }],
     },
-    orderBy: { qboLastSyncedAt: 'asc' },
+    // Never-synced first (Postgres puts NULL last on ASC), then least recently
+    // touched — a failed refresh bumps updatedAt so it rotates to the back.
+    orderBy: [{ qboLastSyncedAt: { sort: 'asc', nulls: 'first' } }, { updatedAt: 'asc' }],
     take: limit,
     select: { id: true },
   });
@@ -179,6 +181,7 @@ export async function refreshOpenInvoices(
       const message = err instanceof Error ? err.message : String(err);
       errors.push({ id: row.id, error: message });
       logger.warn({ err, txnId: row.id }, 'receivables: refresh failed');
+      await touchAfterFailedSync(row.id);
     }
   }
   return { checked: rows.length, refreshed, errors };

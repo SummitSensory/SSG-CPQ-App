@@ -162,6 +162,51 @@ async function tokenRequest(body: Record<string, string>): Promise<TokenResponse
   return data;
 }
 
+/** The refresh grant itself is dead — the user has to connect Outlook again. */
+class GrantDeadError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'GrantDeadError';
+  }
+}
+
+/**
+ * OAuth error codes that mean the refresh token will never work again. Anything
+ * else — a network error, a 5xx, a body that is not JSON, `temporarily_unavailable`
+ * — is transient and must not revoke the connection.
+ */
+const DEAD_GRANT_ERRORS = new Set(['invalid_grant', 'interaction_required']);
+
+const REFRESH_TIMEOUT_MS = 15_000;
+
+/**
+ * The refresh-token exchange, with its failures classified. Throws GrantDeadError
+ * only when Microsoft says the grant is dead; every other failure throws a plain
+ * Error so the caller can tell the two apart.
+ */
+async function refreshTokenRequest(body: Record<string, string>): Promise<TokenResponse> {
+  const res = await fetch(`${AUTH_HOST}/${tenant()}/oauth2/v2.0/token`, {
+    method: 'POST',
+    signal: AbortSignal.timeout(REFRESH_TIMEOUT_MS),
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams(body),
+  });
+  const text = await res.text().catch(() => '');
+  let data: TokenResponse | null = null;
+  try {
+    data = JSON.parse(text) as TokenResponse;
+  } catch {
+    data = null;
+  }
+  if (res.ok && data?.access_token) return data;
+  const code = data?.error ?? '';
+  const description = data?.error_description ?? `Microsoft answered HTTP ${res.status}`;
+  if (res.status >= 400 && res.status < 500 && DEAD_GRANT_ERRORS.has(code)) {
+    throw new GrantDeadError(description);
+  }
+  throw new Error(`${code ? `${code}: ` : ''}${description}`);
+}
+
 /** Which mailbox this token belongs to, asked of Graph rather than assumed. */
 async function whoAmI(accessToken: string): Promise<{ mailbox: string; displayName?: string }> {
   const res = await fetch(`${GRAPH}/me?$select=mail,userPrincipalName,displayName`, {
@@ -262,31 +307,39 @@ async function accessTokenFor(userId: string): Promise<string> {
     return decrypt(conn.accessToken);
   }
 
+  let tok: TokenResponse;
   try {
-    const tok = await tokenRequest({
+    let refreshToken: string;
+    try {
+      refreshToken = decrypt(conn.refreshToken);
+    } catch {
+      // A stored token we cannot read (the encryption key changed) is as dead as an
+      // expired grant: no retry will ever recover it.
+      throw new GrantDeadError('The stored Outlook authorization could not be read.');
+    }
+    tok = await refreshTokenRequest({
       client_id: clientId(),
       client_secret: clientSecret(),
       grant_type: 'refresh_token',
-      refresh_token: decrypt(conn.refreshToken),
+      refresh_token: refreshToken,
       scope: SCOPES,
     });
-    await prisma.outlookConnection.update({
-      where: { userId },
-      data: {
-        accessToken: encrypt(tok.access_token!),
-        // Microsoft rotates the refresh token on most grants but not all; keep the old
-        // one when none comes back rather than storing an empty string.
-        ...(tok.refresh_token ? { refreshToken: encrypt(tok.refresh_token) } : {}),
-        expiresAt: new Date(Date.now() + (tok.expires_in ?? 3600) * 1000),
-        // The scope Microsoft actually issued, which is how a mailbox connected
-        // before Mail.Send existed is recognised as still lacking it.
-        ...(tok.scope ? { scope: tok.scope } : {}),
-        lastError: null,
-      },
-    });
-    return tok.access_token!;
   } catch (err) {
     const reason = err instanceof Error ? err.message : 'refresh failed';
+    if (!(err instanceof GrantDeadError)) {
+      /*
+       * Transient: a DNS blip, a socket reset, a Microsoft 5xx with an HTML body.
+       * The grant is still good, so the connection is NOT revoked — revoking turned
+       * a one-second hiccup into "reconnect Outlook", silently stopped the rep's
+       * scheduled reports and rerouted their e-sign emails. The reason is kept on
+       * the row for diagnosis; the next send simply tries again.
+       */
+      await prisma.outlookConnection
+        .update({ where: { userId }, data: { lastError: reason.slice(0, 400) } })
+        .catch(() => undefined);
+      logger.warn({ userId, reason }, 'outlook: refresh failed transiently; not revoking');
+      throw new Error(`Microsoft could not be reached to renew mailbox access: ${reason}`);
+    }
     await prisma.outlookConnection.update({
       where: { userId },
       data: { revokedAt: new Date(), lastError: reason.slice(0, 400) },
@@ -296,6 +349,22 @@ async function accessTokenFor(userId: string): Promise<string> {
       'Microsoft would not renew access to your mailbox. Connect Outlook again.',
     );
   }
+
+  await prisma.outlookConnection.update({
+    where: { userId },
+    data: {
+      accessToken: encrypt(tok.access_token!),
+      // Microsoft rotates the refresh token on most grants but not all; keep the old
+      // one when none comes back rather than storing an empty string.
+      ...(tok.refresh_token ? { refreshToken: encrypt(tok.refresh_token) } : {}),
+      expiresAt: new Date(Date.now() + (tok.expires_in ?? 3600) * 1000),
+      // The scope Microsoft actually issued, which is how a mailbox connected
+      // before Mail.Send existed is recognised as still lacking it.
+      ...(tok.scope ? { scope: tok.scope } : {}),
+      lastError: null,
+    },
+  });
+  return tok.access_token!;
 }
 
 /** Whether this user can have a draft written for them right now. */

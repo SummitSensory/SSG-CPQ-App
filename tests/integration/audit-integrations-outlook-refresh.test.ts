@@ -121,31 +121,25 @@ describe.skipIf(!LOCAL)('Outlook token refresh (local DB)', () => {
   });
 
   // BUG: catch-all in accessTokenFor revokes on a network error.
-  it.fails(
-    'BUG: a transient network failure during refresh does not revoke the mailbox',
-    async () => {
-      globalThis.fetch = vi.fn(async () => {
-        throw new TypeError('fetch failed');
-      }) as unknown as typeof fetch;
-      await trySend();
-      expect(await revokedAt()).toBeNull();
-    },
-  );
+  it('BUG: a transient network failure during refresh does not revoke the mailbox', async () => {
+    globalThis.fetch = vi.fn(async () => {
+      throw new TypeError('fetch failed');
+    }) as unknown as typeof fetch;
+    await trySend();
+    expect(await revokedAt()).toBeNull();
+  });
 
   // BUG: a 503 with an HTML body makes res.json() throw inside tokenRequest; the
   // same catch-all revokes.
-  it.fails(
-    'BUG: a Microsoft 503 (HTML body) during refresh does not revoke the mailbox',
-    async () => {
-      globalThis.fetch = vi.fn(
-        async () =>
-          new Response('<html>Service Unavailable</html>', {
-            status: 503,
-            headers: { 'content-type': 'text/html' },
-          }),
-      ) as unknown as typeof fetch;
-      await trySend();
-      expect(await revokedAt()).toBeNull();
-    },
-  );
+  it('BUG: a Microsoft 503 (HTML body) during refresh does not revoke the mailbox', async () => {
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response('<html>Service Unavailable</html>', {
+          status: 503,
+          headers: { 'content-type': 'text/html' },
+        }),
+    ) as unknown as typeof fetch;
+    await trySend();
+    expect(await revokedAt()).toBeNull();
+  });
 });

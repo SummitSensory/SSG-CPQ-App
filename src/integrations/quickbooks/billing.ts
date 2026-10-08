@@ -481,7 +481,11 @@ export async function sweepVoidedDocuments(
       qboId: { not: null },
       OR: [{ qboLastSyncedAt: null }, { qboLastSyncedAt: { lt: cutoff } }],
     },
-    orderBy: [{ qboLastSyncedAt: 'asc' }, { createdAt: 'asc' }],
+    // Never-synced first: Postgres sorts NULL LAST on ASC, which put a document
+    // nobody has ever read back behind every one that has. updatedAt second, and a
+    // failed read touches it (below), so one document that always fails rotates to
+    // the back instead of taking the same slot every night.
+    orderBy: [{ qboLastSyncedAt: { sort: 'asc', nulls: 'first' } }, { updatedAt: 'asc' }],
     take: max + 1,
     select: { id: true, proposalId: true, qboDocNumber: true },
   });
@@ -499,6 +503,7 @@ export async function sweepVoidedDocuments(
         });
     } catch (err) {
       out.errors.push({ id: c.id, error: err instanceof Error ? err.message : String(err) });
+      await touchAfterFailedSync(c.id);
     }
   }
 
@@ -507,6 +512,16 @@ export async function sweepVoidedDocuments(
     'quickbooks: void sweep',
   );
   return out;
+}
+
+/**
+ * Back off a document whose QuickBooks read just failed: bump updatedAt so the
+ * next sweep tries the documents behind it first. Best effort — never throws.
+ */
+export async function touchAfterFailedSync(id: string): Promise<void> {
+  await prisma.qboTransaction
+    .update({ where: { id }, data: { updatedAt: new Date() } })
+    .catch(() => undefined);
 }
 
 /**
