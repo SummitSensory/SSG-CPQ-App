@@ -126,7 +126,7 @@ describe('SSO start: returnTo is same-site only', () => {
   // hand-off page navigates off-site — an open redirect immediately after a real
   // Microsoft sign-in. Fix: parse with new URL(returnTo, origin) and require the
   // same origin, or allow only /^\/(?![\\/])/.
-  it.fails('drops a backslash-prefixed path (/\\evil.example)', async () => {
+  it('drops a backslash-prefixed path (/\\evil.example)', async () => {
     expect(await returnToFor('/\\evil.example/')).toBe('/');
   });
 });
@@ -141,7 +141,7 @@ describe('SSO callback hand-off page', () => {
   // completes silently; the injected script reads localStorage ssg_at/ssg_rt.
   // Fix: escape `<`, `>`, `&`, U+2028/2029 in the embedded JSON (e.g.
   // .replace(/</g,'\\u003c')), and validate returnTo against a strict path pattern.
-  it.fails('a returnTo cannot break out of the inline script', async () => {
+  it('a returnTo cannot break out of the inline script', async () => {
     const { createState } = await import('../../src/auth/entra.js');
     const { state } = await createState('/</script><script>window.pwned=1</script>');
     const res = await app.inject({
@@ -179,7 +179,7 @@ describe('password reset link construction', () => {
   // hands the reset token to the attacker when clicked (reset-link poisoning).
   // Fix: require APP_BASE_URL in production (boot-time check) and never derive it
   // from request headers.
-  it.fails('a forged X-Forwarded-Host does not end up in the reset link', async () => {
+  it('a forged X-Forwarded-Host does not end up in the reset link', async () => {
     captured.resetBaseUrl = null;
     const res = await app.inject({
       method: 'POST',
@@ -217,7 +217,7 @@ describe('Outlook consent binds the mailbox to the user who started it', () => {
   // attacker's CRM account, and every "send from my Outlook" path sends as the
   // colleague. Fix: require mailbox === user.email (case-insensitive), or compare
   // the Graph /me id to the user's Entra oid.
-  it.fails('refuses a mailbox that is not the CRM user’s own', async () => {
+  it('refuses a mailbox that is not the CRM user’s own', async () => {
     vi.stubGlobal('fetch', async (url: string) => {
       if (String(url).includes('/oauth2/v2.0/token')) {
         return new Response(

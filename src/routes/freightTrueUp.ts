@@ -36,6 +36,7 @@ import {
   saveBannerTheme,
 } from '../ui/bannerTheme.js';
 import { env } from '../config/env.js';
+import { secretsEqual } from '../lib/secretCompare.js';
 import type { FreightTrueUp } from '@prisma/client';
 
 /**
@@ -326,7 +327,7 @@ export function registerFreightTrueUpRoutes(app: FastifyInstance): void {
       const secret = env.CRON_SECRET;
       if (!secret) return reply.status(503).send({ error: 'CRON_SECRET is not configured' });
       const given = String(req.headers.authorization ?? '').replace(/^Bearer\s+/i, '');
-      if (given !== secret) return reply.status(401).send({ error: 'unauthorized' });
+      if (!secretsEqual(given, secret)) return reply.status(401).send({ error: 'unauthorized' });
       const q = req.query as { limit?: string };
       return pullOutstanding('system:cron', {
         limit: q.limit ? Math.min(500, Math.max(1, Number(q.limit) || 200)) : undefined,
@@ -347,7 +348,7 @@ export function registerFreightTrueUpRoutes(app: FastifyInstance): void {
     const secret = env.CRON_SECRET;
     if (!secret) return reply.status(503).send({ error: 'CRON_SECRET is not configured' });
     const given = String(req.headers.authorization ?? '').replace(/^Bearer\s+/i, '');
-    if (given !== secret) return reply.status(401).send({ error: 'unauthorized' });
+    if (!secretsEqual(given, secret)) return reply.status(401).send({ error: 'unauthorized' });
     const body = z.object({ itemId: z.string().min(1) }).parse(req.body ?? {});
     return handleBoardChange(body.itemId, 'system:webhook');
   });

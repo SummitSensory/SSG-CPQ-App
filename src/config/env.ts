@@ -69,6 +69,9 @@ const EnvSchema = z
     // should point. VERCEL_URL is used as a fallback so previews can self-register.
     PUBLIC_BASE_URL: z.string().url().optional(),
     VERCEL_URL: z.string().min(1).optional(),
+    // Set to "1" by Vercel on every deployment. Decides whether the edge's
+    // X-Forwarded-For is trusted for req.ip (see buildApp in src/app.ts).
+    VERCEL: z.string().min(1).optional(),
 
     // Microsoft Entra ID (Azure AD) single sign-on. Optional: when unset the
     // app runs with email + password only.
@@ -126,8 +129,11 @@ const EnvSchema = z
     RESET_FROM_EMAIL: z.string().email().default('info@updates.summitsensory.com'),
     RESET_FROM_NAME: z.string().min(1).default('Summit Sensory Gym'),
     RESET_REPLY_TO: z.string().email().default('info@summitsensory.com'),
-    // Absolute base URL used to build reset links. When unset the request's own
-    // host is used, which is correct on Vercel and in local dev alike.
+    // Absolute base URL used to build reset links. Never derived from the request's
+    // Host / X-Forwarded-Host headers (a caller controls those — reset-link
+    // poisoning). When unset, PUBLIC_BASE_URL or the Entra redirect URI's origin is
+    // used; with none of them, production sends no reset email and logs why, and
+    // development falls back to http://localhost:PORT. See resetLinkBaseUrl().
     APP_BASE_URL: z.string().url().optional(),
 
     // Signing secret for Resend's delivery webhook (Resend → Webhooks → whsec_…).
@@ -324,7 +330,33 @@ const EnvSchema = z
           message: 'required when GRAPH_CLIENT_ID is set',
         });
     }
+    // HS256 keys. 16 characters is tolerated in development and tests so a local
+    // .env stays easy to write; production signs real sessions and needs at least
+    // 32 (about the 256-bit key HS256 is specified for).
+    if (v.NODE_ENV === 'production') {
+      for (const key of ['JWT_ACCESS_SECRET', 'JWT_REFRESH_SECRET'] as const) {
+        if (v[key].length < 32)
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [key],
+            message: 'must be at least 32 characters in production',
+          });
+      }
+    }
   });
+
+/**
+ * Where password-reset links point. Configured values only — never the request's
+ * Host or X-Forwarded-Host, which whoever sends the request controls. Null means
+ * nothing trustworthy is configured (production with no base URL at all).
+ */
+export function resetLinkBaseUrl(e: Env = env): string | null {
+  if (e.APP_BASE_URL) return e.APP_BASE_URL;
+  if (e.PUBLIC_BASE_URL) return e.PUBLIC_BASE_URL;
+  if (e.ENTRA_REDIRECT_URI) return new URL(e.ENTRA_REDIRECT_URI).origin;
+  if (e.NODE_ENV !== 'production') return `http://localhost:${e.PORT}`;
+  return null;
+}
 
 export type Env = z.infer<typeof EnvSchema>;
 

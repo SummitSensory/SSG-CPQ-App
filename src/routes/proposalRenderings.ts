@@ -131,7 +131,8 @@ export function registerProposalRenderingRoutes(app: FastifyInstance): void {
         filename: filename.slice(0, 200),
         contentType: info.contentType,
         byteSize: info.size,
-        url,
+        // The store's canonical URL from head(), not the one the browser reported.
+        url: info.url,
         pathname,
         sortOrder: (maxSort._max.sortOrder ?? -1) + 1,
         uploadedById: req.user!.sub,

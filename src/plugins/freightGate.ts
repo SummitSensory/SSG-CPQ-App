@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { assertFreightSettled } from '../proposals/freightTrueUpService.js';
+import { requirePermission } from './authz.js';
+import { Permission } from '../authz/permissions.js';
 
 /**
  * The freight gate.
@@ -29,11 +31,21 @@ import { assertFreightSettled } from '../proposals/freightTrueUpService.js';
 
 const GATED = /^\/bom\/sections\/([^/?#]+)\/(send|confirm)(?:\?|$)/;
 
+/**
+ * The same guard the two gated routes carry (routes/bom.ts, `handoff`). An app-level
+ * preHandler runs BEFORE a route's own, so without this an anonymous or unpermitted
+ * request reached three database reads — and could learn whether a job's freight is
+ * settled — before anyone asked who it was. Running it here answers 401/403 first;
+ * the route's own check then repeats it against the cached account state.
+ */
+const guard = requirePermission(Permission.HANDOFF_MANAGE);
+
 export function registerFreightGate(app: FastifyInstance): void {
-  app.addHook('preHandler', async (req) => {
+  app.addHook('preHandler', async (req, reply) => {
     if (req.method !== 'POST') return;
     const match = GATED.exec(req.url);
     if (!match) return;
+    await guard(req, reply);
     const sectionId = decodeURIComponent(match[1] as string);
 
     // A missing section is not this hook's problem — the route reports it properly.

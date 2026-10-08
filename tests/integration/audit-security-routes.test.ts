@@ -287,12 +287,8 @@ describe('route/permission matrix', () => {
       .sort();
     expect(weak).toMatchInlineSnapshot(`
       [
-        "DELETE /customer-notes/:id [proposal:read]",
-        "DELETE /insights/reports/:id [proposal:read]",
         "DELETE /me/outlook [crm:read]",
         "PATCH /auth/me [AUTH]",
-        "PATCH /crm/organizations/:organizationId/dates [proposal:read]",
-        "PATCH /insights/reports/:id [proposal:read]",
         "POST /approvals [AUTH]",
         "POST /approvals/:id/approve [AUTH]",
         "POST /approvals/:id/escalate [AUTH]",
@@ -300,16 +296,9 @@ describe('route/permission matrix', () => {
         "POST /approvals/:id/request-revision [AUTH]",
         "POST /approvals/delegations [AUTH]",
         "POST /auth/password [AUTH]",
-        "POST /belt-shipments/clear [proposal:read]",
-        "POST /belt-shipments/freight [proposal:read]",
-        "POST /belt-shipments/restore [proposal:read]",
-        "POST /belt-shipments/ship [proposal:read]",
-        "POST /belt-shipments/void [proposal:read]",
         "POST /crm/organizations/:organizationId/follow-ups/:key/draft-in-outlook [crm:read]",
-        "POST /crm/organizations/:organizationId/notes [proposal:read]",
         "POST /formulas/preview [proposal:read]",
         "POST /insights/query [proposal:read]",
-        "POST /insights/reports [proposal:read]",
         "POST /me/outlook/connect [crm:read]",
         "POST /orders/:id/portal/sync [orders:read]",
         "POST /orders/portal/refresh [orders:read]",
@@ -318,7 +307,6 @@ describe('route/permission matrix', () => {
         "POST /proposals/versions/:versionId/preview [proposal:read]",
         "POST /proposals/versions/:versionId/rfq/vendors [proposal:read]",
         "POST /receivables/:txnId/preview [accounting:read]",
-        "POST /render/proposals/:id/financing/send [proposal:read]",
         "POST /render/proposals/document.pdf [proposal:read]",
         "POST /render/receivables/:txnId/letter-preview.pdf [accounting:read]",
         "POST /rules/evaluate [rules:read]",
@@ -408,7 +396,7 @@ describe('error responses', () => {
   // FINDING (low): the app's own application/json parser (src/app.ts) calls
   // done(err) with a bare SyntaxError, which carries no statusCode, so the error
   // handler treats a client's malformed body as a server fault: 500 + an alert email.
-  it.fails('malformed JSON from an anonymous caller is a 400, not a 500', async () => {
+  it('malformed JSON from an anonymous caller is a 400, not a 500', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/auth/login',
@@ -419,11 +407,11 @@ describe('error responses', () => {
   });
 });
 
-describe('authorization findings (it.fails = confirmed gap)', () => {
+describe('authorization findings (fixed; each test pins its fix)', () => {
   // FINDING (medium): /belt-shipments/{ship,void,clear,restore,freight} change the
   // shipment ledger (and push to monday) behind PROPOSAL_READ, which READ_ONLY and
   // INSTALLER hold. src/routes/beltShipments.ts:268.
-  it.fails('READ_ONLY cannot void a belt shipment slip', async () => {
+  it('READ_ONLY cannot void a belt shipment slip', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/belt-shipments/void',
@@ -436,7 +424,7 @@ describe('authorization findings (it.fails = confirmed gap)', () => {
   // FINDING (medium-high): the financing send emails customer name, amount and a PDF
   // from the company's verified sending domain to ANY address in `to`, with a
   // caller-written message, behind PROPOSAL_READ. src/routes/finance.ts:543, :581.
-  it.fails('READ_ONLY cannot email a financing sheet to an arbitrary address', async () => {
+  it('READ_ONLY cannot email a financing sheet to an arbitrary address', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/render/proposals/p1/financing/send',
@@ -449,7 +437,7 @@ describe('authorization findings (it.fails = confirmed gap)', () => {
   // FINDING (medium): saved reports carry `recipients` that the scheduled-reports cron
   // emails. Any PROPOSAL_READ holder can edit a SHARED report's recipients.
   // src/routes/insights.ts:237-249.
-  it.fails('READ_ONLY cannot re-point a shared scheduled report', async () => {
+  it('READ_ONLY cannot re-point a shared scheduled report', async () => {
     const res = await app.inject({
       method: 'PATCH',
       url: '/insights/reports/r1',
@@ -461,7 +449,7 @@ describe('authorization findings (it.fails = confirmed gap)', () => {
 
   // FINDING (low): customer record writes behind PROPOSAL_READ.
   // src/routes/customerNotes.ts:109, :167.
-  it.fails('READ_ONLY cannot change a customer’s decision/follow-up dates', async () => {
+  it('READ_ONLY cannot change a customer’s decision/follow-up dates', async () => {
     const res = await app.inject({
       method: 'PATCH',
       url: '/crm/organizations/o1/dates',
@@ -474,7 +462,7 @@ describe('authorization findings (it.fails = confirmed gap)', () => {
   // FINDING (low): the freight gate (src/plugins/freightGate.ts:33) is an app-level
   // preHandler, so it runs BEFORE the route's requirePermission: an anonymous POST
   // reaches three database reads (and their errors) before anyone asks who it is.
-  it.fails('an anonymous BOM send is refused before the freight gate runs', async () => {
+  it('an anonymous BOM send is refused before the freight gate runs', async () => {
     dbState.section = { orderId: 'o1' };
     dbState.order = { proposalId: 'p1' };
     try {

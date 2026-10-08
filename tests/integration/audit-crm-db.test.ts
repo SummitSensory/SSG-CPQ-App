@@ -85,7 +85,7 @@ describe('audit: saved reports', () => {
   // included — and cronInsights.ts:191,201 then sends the report CSV from THAT
   // user's own Outlook mailbox. A read-only account can schedule company sales data
   // to an outside address, sent as the CEO.
-  it.fails('a READ_ONLY user cannot schedule a report sent as another user', async () => {
+  it('a READ_ONLY user cannot schedule a report sent as another user', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/insights/reports',
@@ -105,7 +105,7 @@ describe('audit: saved reports', () => {
   // BUG: routes/insights.ts:299-312 — run-by-id never checks `shared`/owner, while
   // PATCH and DELETE on the same resource answer 404 for someone else's private
   // report. A private report's definition and results are readable by id.
-  it.fails("another user's private report cannot be run by id", async () => {
+  it("another user's private report cannot be run by id", async () => {
     const created = await app.inject({
       method: 'POST',
       url: '/insights/reports',
@@ -166,7 +166,7 @@ describe('audit: customer notes', () => {
   // BUG: routes/customerNotes.ts:109,167 guard the WRITE endpoints (add a note, move
   // the decision window / follow-up date) with PROPOSAL_READ, which READ_ONLY and
   // INSTALLER hold. Every other CRM write (routes/crm.ts) requires CRM_WRITE.
-  it.fails('a READ_ONLY user cannot add a note to a customer', async () => {
+  it('a READ_ONLY user cannot add a note to a customer', async () => {
     const res = await app.inject({
       method: 'POST',
       url: `/crm/organizations/${orgId}/notes`,
@@ -176,7 +176,7 @@ describe('audit: customer notes', () => {
     expect(res.statusCode).toBe(403);
   });
 
-  it.fails('a READ_ONLY user cannot change a customer follow-up date', async () => {
+  it('a READ_ONLY user cannot change a customer follow-up date', async () => {
     const res = await app.inject({
       method: 'PATCH',
       url: `/crm/organizations/${orgId}/dates`,

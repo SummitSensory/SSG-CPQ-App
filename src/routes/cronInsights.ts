@@ -18,6 +18,7 @@
  */
 import type { FastifyInstance } from 'fastify';
 import { env } from '../config/env.js';
+import { isBearerSecret } from '../lib/secretCompare.js';
 import { logger } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { buildDataset } from '../reporting/dataset.js';
@@ -152,7 +153,7 @@ function scheduleWindow(cadence: string, now: Date): { from: string; to: string;
 export function registerInsightCronRoutes(app: FastifyInstance): void {
   app.post('/cron/scheduled-reports', async (req, reply) => {
     if (!env.CRON_SECRET) return reply.status(503).send({ error: 'CRON_SECRET_NOT_SET' });
-    if ((req.headers.authorization ?? '') !== `Bearer ${env.CRON_SECRET}`) {
+    if (!isBearerSecret(req.headers.authorization, env.CRON_SECRET)) {
       return reply.status(401).send({ error: 'UNAUTHORIZED' });
     }
 
