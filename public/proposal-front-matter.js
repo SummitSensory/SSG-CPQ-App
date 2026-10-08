@@ -294,11 +294,34 @@
   function img(art, id) {
     var src = art && art[id];
     if (!src) return '';
+    // No inline onerror: the app's CSP sends `script-src-attr 'none'`, so the browser
+    // refused it (a console error per image, and the broken icon stayed). The marker
+    // is acted on by the capturing listener below in the browser, and by
+    // src/render/pdf.ts when the server renders the same markup.
     return (
       '<img src="' +
       esc(src) +
-      '" alt="" onerror="this.style.display=\'none\'" ' +
+      '" alt="" data-hide-broken="1" ' +
       'style="width:100%;height:100%;object-fit:cover;display:block;">'
+    );
+  }
+
+  /*
+   * One capturing listener for the whole document: an <img> error does not bubble,
+   * but it does pass through the capture phase, so a marked photo that fails to load
+   * hides wherever the intro pages are inserted — no inline handler needed.
+   */
+  if (typeof document !== 'undefined' && !window.__ssgHideBrokenImages) {
+    window.__ssgHideBrokenImages = true;
+    document.addEventListener(
+      'error',
+      function (e) {
+        var t = e.target;
+        if (t && t.tagName === 'IMG' && t.hasAttribute('data-hide-broken')) {
+          t.style.display = 'none';
+        }
+      },
+      true,
     );
   }
 

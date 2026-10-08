@@ -4,6 +4,7 @@ import { ConflictError, NotFoundError } from '../../lib/errors.js';
 import { qboEnvironment } from '../../config/env.js';
 import { readById } from './client.js';
 import { syncTransactionState, touchAfterFailedSync } from './billing.js';
+import { businessToday, daysBetween } from '../../lib/businessTime.js';
 import type { QboEnvironment } from '@prisma/client';
 
 /**
@@ -41,9 +42,20 @@ function toDate(v: unknown): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-export function daysPastDue(dueDate: Date | null, balanceMinor: bigint | null): number {
+/**
+ * Whole days an unpaid invoice is past its due date.
+ *
+ * The due date is a calendar date (stored as UTC midnight of that date), so it is
+ * compared with Summit's calendar day (America/Denver), not with the UTC clock —
+ * which made an invoice "OVERDUE · 1d" from about 6 pm Mountain on the due date.
+ */
+export function daysPastDue(
+  dueDate: Date | null,
+  balanceMinor: bigint | null,
+  now: Date = new Date(),
+): number {
   if (!dueDate || !balanceMinor || balanceMinor <= 0n) return 0;
-  return Math.max(0, Math.floor((Date.now() - dueDate.getTime()) / 86_400_000));
+  return Math.max(0, daysBetween(dueDate.toISOString().slice(0, 10), businessToday(now)));
 }
 
 async function activeRealmId(environment: QboEnvironment): Promise<string> {
@@ -215,16 +227,48 @@ export interface LedgerRow {
   lastRequest: { at: string; toEmail: string; by: string; status: string } | null;
 }
 
+export interface LedgerTotals {
+  invoicedMinor: string;
+  paidMinor: string;
+  outstandingMinor: string;
+  pastDueMinor: string;
+}
+
+/** The currency the business keeps its books in; `Ledger.totals` is stated in it. */
+export const LEDGER_HOME_CURRENCY = 'USD';
+
+/** Most invoices the ledger returns in one response. */
+export const LEDGER_LIMIT = 2000;
+
 export interface Ledger {
   environment: string;
   generatedAt: string;
-  totals: {
-    invoicedMinor: string;
-    paidMinor: string;
-    outstandingMinor: string;
-    pastDueMinor: string;
-  };
+  /**
+   * Totals for home-currency (USD) invoices only. Balances in different currencies
+   * cannot be added together, so a CAD invoice is never folded into this figure —
+   * `totalsByCurrency` has every currency present, USD included.
+   */
+  totals: LedgerTotals & { currency: string };
+  /** One set of totals per invoice currency present in `rows`, home currency first. */
+  totalsByCurrency: Record<string, LedgerTotals>;
+  /**
+   * True when there were more than LEDGER_LIMIT invoices. The most recently created
+   * are kept — an old one is what falls off, never this week's — and the screen
+   * says the list is partial instead of dropping rows silently.
+   */
+  truncated: boolean;
   rows: LedgerRow[];
+}
+
+type CurrencySums = { invoiced: bigint; paid: bigint; outstanding: bigint; pastDue: bigint };
+
+function asTotals(b: CurrencySums): LedgerTotals {
+  return {
+    invoicedMinor: b.invoiced.toString(),
+    paidMinor: b.paid.toString(),
+    outstandingMinor: b.outstanding.toString(),
+    pastDueMinor: b.pastDue.toString(),
+  };
 }
 
 /**
@@ -237,7 +281,7 @@ export interface Ledger {
  */
 export async function ledger(opts: { openOnly?: boolean } = {}): Promise<Ledger> {
   const environment = qboEnvironment() as QboEnvironment;
-  const txns = await prisma.qboTransaction.findMany({
+  const fetched = await prisma.qboTransaction.findMany({
     where: {
       environment,
       status: 'CREATED',
@@ -246,8 +290,18 @@ export async function ledger(opts: { openOnly?: boolean } = {}): Promise<Ledger>
         ? {}
         : { OR: [{ balanceMinor: null }, { balanceMinor: { gt: 0 } }] }),
     },
-    orderBy: [{ dueDate: 'asc' }, { createdAt: 'desc' }],
-    take: 500,
+    // Newest first, so that past the limit it is the oldest invoices that fall off.
+    // Ordering by due date and cutting there silently dropped the newest ones.
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: LEDGER_LIMIT + 1,
+  });
+  const truncated = fetched.length > LEDGER_LIMIT;
+  // Displayed soonest-due first (no due date last), newest first within a due date.
+  const txns = fetched.slice(0, LEDGER_LIMIT).sort((a, b) => {
+    const ad = a.dueDate?.getTime() ?? Number.POSITIVE_INFINITY;
+    const bd = b.dueDate?.getTime() ?? Number.POSITIVE_INFINITY;
+    if (ad !== bd) return ad < bd ? -1 : 1;
+    return b.createdAt.getTime() - a.createdAt.getTime();
   });
 
   const proposalIds = [...new Set(txns.map((t) => t.proposalId))];
@@ -305,10 +359,17 @@ export async function ledger(opts: { openOnly?: boolean } = {}): Promise<Ledger>
   for (const r of requests)
     if (!lastRequestByTxn.has(r.qboTransactionId)) lastRequestByTxn.set(r.qboTransactionId, r);
 
-  let invoiced = 0n;
-  let paid = 0n;
-  let outstanding = 0n;
-  let pastDue = 0n;
+  // Summed per currency: a CAD balance added into a USD figure is a wrong number,
+  // not an approximation.
+  const sums = new Map<string, CurrencySums>();
+  const bucket = (currency: string): CurrencySums => {
+    let b = sums.get(currency);
+    if (!b) {
+      b = { invoiced: 0n, paid: 0n, outstanding: 0n, pastDue: 0n };
+      sums.set(currency, b);
+    }
+    return b;
+  };
 
   const rows: LedgerRow[] = txns.map((t) => {
     const proposal = proposalById.get(t.proposalId);
@@ -317,10 +378,11 @@ export async function ledger(opts: { openOnly?: boolean } = {}): Promise<Ledger>
     const overdueDays = daysPastDue(t.dueDate, balance);
     const last = lastRequestByTxn.get(t.id);
 
-    invoiced += t.initialTotalMinor ?? t.qboTotalMinor ?? t.amountMinor;
-    paid += t.paidMinor ?? 0n;
-    outstanding += balance ?? 0n;
-    if (overdueDays > 0) pastDue += balance ?? 0n;
+    const sum = bucket((t.currency || LEDGER_HOME_CURRENCY).toUpperCase());
+    sum.invoiced += t.initialTotalMinor ?? t.qboTotalMinor ?? t.amountMinor;
+    sum.paid += t.paidMinor ?? 0n;
+    sum.outstanding += balance ?? 0n;
+    if (overdueDays > 0) sum.pastDue += balance ?? 0n;
 
     return {
       transactionId: t.id,
@@ -356,15 +418,18 @@ export async function ledger(opts: { openOnly?: boolean } = {}): Promise<Ledger>
     };
   });
 
+  const totalsByCurrency: Record<string, LedgerTotals> = {};
+  const currencies = [...sums.keys()].sort((a, b) =>
+    a === LEDGER_HOME_CURRENCY ? -1 : b === LEDGER_HOME_CURRENCY ? 1 : a.localeCompare(b),
+  );
+  for (const c of currencies) totalsByCurrency[c] = asTotals(sums.get(c)!);
+
   return {
     environment,
     generatedAt: new Date().toISOString(),
-    totals: {
-      invoicedMinor: invoiced.toString(),
-      paidMinor: paid.toString(),
-      outstandingMinor: outstanding.toString(),
-      pastDueMinor: pastDue.toString(),
-    },
+    totals: { currency: LEDGER_HOME_CURRENCY, ...asTotals(bucket(LEDGER_HOME_CURRENCY)) },
+    totalsByCurrency,
+    truncated,
     rows,
   };
 }

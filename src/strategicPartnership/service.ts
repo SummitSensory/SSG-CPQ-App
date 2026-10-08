@@ -27,7 +27,7 @@ import type { StrategicPartnershipProposal, StrategicPartnershipStatus } from '@
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { recordAudit } from '../lib/audit.js';
-import { ConflictError, NotFoundError, ValidationError } from '../lib/errors.js';
+import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../lib/errors.js';
 import { allocateNumbered, formatNumber } from '../lib/documentNumber.js';
 import { divRound } from '../pricing/decimal.js';
 import {
@@ -634,11 +634,22 @@ export async function approvePartnership(id: string, actorId: string): Promise<P
   if (row.status !== 'READY_FOR_REVIEW') {
     throw new ConflictError('Only a generated proposal that is ready for review can be approved.');
   }
-  const saved = await prisma.strategicPartnershipProposal.update({
-    where: { id },
+  // Separation of duties, as for a discount approval: whoever entered the partnership
+  // terms does not sign them off, whatever their role.
+  if (row.createdById && row.createdById === actorId) {
+    throw new ForbiddenError('You entered these terms; someone else has to approve them.');
+  }
+  // Conditional on the exact version reviewed: a concurrent edit, reopen or
+  // regeneration since it was read wins, and this approval is refused rather than
+  // stamping APPROVED on terms nobody reviewed.
+  const claimed = await prisma.strategicPartnershipProposal.updateMany({
+    where: { id, status: 'READY_FOR_REVIEW', updatedAt: row.updatedAt },
     data: { status: 'APPROVED', approvedAt: new Date(), approvedById: actorId },
-    include: withOrg,
   });
+  if (claimed.count === 0) {
+    throw new ConflictError('This proposal changed while you were reviewing it. Reload and retry.');
+  }
+  const saved = await loadPartnership(id);
   await recordAudit({
     actorId,
     action: 'strategicPartnership.approve',

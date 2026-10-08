@@ -1054,9 +1054,10 @@
     // Customers whose follow-up date has arrived. The date is set on the proposal's
     // notes rail but lives on the customer, so this reads the customer list rather
     // than the proposals.
-    var followRows = [];
-    try { var rfu = await authed('/crm/follow-ups'); if (rfu.ok) followRows = (await rfu.json()).rows || []; } catch (e4) {}
-    dashData = { data: data, orgTotal: orgTotal, freightRows: freightRows, followRows: followRows, ftuHtml: dashData ? dashData.ftuHtml : '' };
+    var followRows = [], followCount = 0;
+    // `count` is the full number due; `rows` is only the first page of them.
+    try { var rfu = await authed('/crm/follow-ups'); if (rfu.ok) { var fu = await rfu.json(); followRows = fu.rows || []; followCount = Math.max(Number(fu.count) || 0, followRows.length); } } catch (e4) {}
+    dashData = { data: data, orgTotal: orgTotal, freightRows: freightRows, followRows: followRows, followCount: followCount, ftuHtml: dashData ? dashData.ftuHtml : '' };
     fillDashboardWidgets(user);
     // Its own fetch, kicked off after everything above: a slow /freight/queue should
     // never hold up the rest of the dashboard. Left empty when nothing is
@@ -1101,14 +1102,14 @@
     var released = (d.pipeline.filter(function (p) { return p.status === 'RELEASED'; })[0] || { count: 0, value: 0 });
     var review = (d.pipeline.filter(function (p) { return p.status === 'INTERNAL_REVIEW'; })[0] || { count: 0, value: 0 });
     var stale = d.rows.filter(function (r) { return r.status === 'DRAFT' && r.daysOpen >= 14; });
-    var attn = d.expiredOpen.length + d.expiringSoon.length + review.count + stale.length + dashData.freightRows.length + dashData.followRows.length;
+    var attn = d.expiredOpen.length + d.expiringSoon.length + review.count + stale.length + dashData.freightRows.length + (dashData.followCount || dashData.followRows.length);
     if (id === 'kpi_open') return kpi('Open proposals', s.open.toLocaleString(), fmt0(s.openValue) + ' in flight · avg ' + s.avgDaysOpen + ' days old', '#3d4a55');
     if (id === 'kpi_released') return kpi('Out with customers', released.count.toLocaleString(), fmt0(released.value) + ' awaiting a decision');
     if (id === 'kpi_accepted') return kpi('Accepted to date', fmt0(s.wonValue), s.won + ' proposals · ' + s.conversionRate + '% conversion', '#2f7d5d');
     if (id === 'kpi_attention') return kpi('Needs attention', attn.toLocaleString(), attn ? 'expiring, stalled or awaiting review' : 'nothing waiting on you', attn ? '#9c3327' : '#2f7d5d');
     if (id === 'needs_attention') {
       var html = freightAlertGroup(dashData.freightRows) +
-        followUpGroup(dashData.followRows) +
+        followUpGroup(dashData.followRows, dashData.followCount) +
         attnGroup('Past expiration', d.expiredOpen, '#9c3327', 're-date or mark inactive') +
         attnGroup('Expiring within 14 days', d.expiringSoon, '#8a6d1f', 'follow up') +
         attnGroup('Awaiting internal review', d.rows.filter(function (r) { return r.status === 'INTERNAL_REVIEW'; }), '#3d4a55', '') +
@@ -1149,11 +1150,12 @@
    * Follow-ups that have come due. Customers, not proposals — the date is a promise
    * to make contact, and it stands whether or not the quote behind it is still live.
    */
-  function followUpGroup(rows) {
+  function followUpGroup(rows, total) {
     if (!rows.length) return '';
+    var all = Math.max(Number(total) || 0, rows.length);
     return '<div style="margin-bottom:10px;"><div style="display:flex;align-items:baseline;gap:8px;margin-bottom:5px;">' +
-        '<span style="font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#8a6d1f;">Follow-Up Due · ' + rows.length + '</span>' +
-        '<span class="muted" style="font-size:11.5px;">make contact</span></div>' +
+        '<span style="font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#8a6d1f;">Follow-Up Due · ' + all + '</span>' +
+        '<span class="muted" style="font-size:11.5px;">make contact' + (all > rows.length ? ' · oldest ' + rows.length + ' shown' : '') + '</span></div>' +
       '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:12px;overflow:hidden;">' +
       foldRows(rows.map(function (r, i) {
         var win = r.decisionFrom || r.decisionTo
@@ -15399,13 +15401,28 @@
         '<div style="display:flex;gap:8px;">' +
           '<div style="flex:1;">' + fieldRow('From ($)', '<input id="rbMin" type="number" min="0" step="1" style="' + IN + '">') + '</div>' +
           '<div style="flex:1;">' + fieldRow('Up to ($)', '<input id="rbMax" type="number" min="0" step="1" placeholder="Blank = and above" style="' + IN + '">') + '</div>' +
-        '</div>',
+        '</div>' +
+        // The server refuses a band with no factors (a band that quotes nothing), so the
+        // factors are asked for here. Blank = that term is not offered at this amount.
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;">' + terms.map(function (t) {
+          return '<div style="flex:1;min-width:90px;">' + fieldRow(t + ' mo factor', '<input class="rbFactor" data-term="' + t + '" inputmode="decimal" placeholder="e.g. 0.0321" style="' + IN + '">') + '</div>';
+        }).join('') + '</div>',
         async function (close, showErr) {
           var minD = Number(document.getElementById('rbMin').value);
           var maxRaw = document.getElementById('rbMax').value.trim();
           var maxD = maxRaw === '' ? null : Number(maxRaw);
           if (!isFinite(minD) || minD < 0) return showErr('Give the bottom of the band.');
           if (maxD != null && maxD <= minD) return showErr('The top of the band must be above the bottom.');
+          var factors = {}, badFactor = false;
+          document.querySelectorAll('.rbFactor').forEach(function (el) {
+            var v = el.value.trim();
+            if (!v) return;
+            var n = Number(v);
+            if (!isFinite(n) || n <= 0 || n >= 1) { badFactor = true; return; }
+            factors[el.getAttribute('data-term')] = n;
+          });
+          if (badFactor) return showErr('A payment factor is the payment per $1 financed, so it sits between 0 and 1.');
+          if (!Object.keys(factors).length) return showErr(terms.length ? 'Give at least one term a factor for this band.' : 'Add a term to the sheet first.');
           var bands = collect();
           if (!bands) return showErr('Fix the highlighted factor first.');
           bands.push({
@@ -15413,7 +15430,7 @@
             minDollars: minD,
             // The label's top is inclusive of cents, so the stored bound is the next dollar.
             maxDollars: maxD == null ? null : maxD + 1,
-            factors: {},
+            factors: factors,
           });
           var r = await authed('/admin/financing/rate-cards/' + card.id, {
             method: 'PUT',

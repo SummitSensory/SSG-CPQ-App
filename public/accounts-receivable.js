@@ -535,18 +535,36 @@
 
     /* The server's totals cover the whole ledger. Under a filter they would describe
      * invoices the table is not showing, so the four cards are recomputed from the rows
-     * in view — the numbers always add up to what is on screen. */
-    var t = (data && data.totals) || {};
-    if (custFilter) {
-      var sum = { invoicedMinor: 0, paidMinor: 0, outstandingMinor: 0, pastDueMinor: 0 };
+     * in view — the numbers always add up to what is on screen.
+     *
+     * Totals are kept PER CURRENCY: a CAD balance added into a USD figure and printed
+     * with a "$" is a wrong number. Each card lists one amount per currency present. */
+    var byCur = (data && data.totalsByCurrency) || null;
+    if (custFilter || !byCur) {
+      byCur = {};
       rows.forEach(function (r) {
-        sum.invoicedMinor += Number(r.initialTotalMinor || 0);
-        sum.paidMinor += Number(r.paidMinor || 0);
-        sum.outstandingMinor += Number(r.balanceMinor || 0);
-        if (Number(r.daysPastDue || 0) > 0) sum.pastDueMinor += Number(r.balanceMinor || 0);
+        var cur = String(r.currency || 'USD').toUpperCase();
+        var s =
+          byCur[cur] ||
+          (byCur[cur] = { invoicedMinor: 0, paidMinor: 0, outstandingMinor: 0, pastDueMinor: 0 });
+        s.invoicedMinor += Number(r.initialTotalMinor || 0);
+        s.paidMinor += Number(r.paidMinor || 0);
+        s.outstandingMinor += Number(r.balanceMinor || 0);
+        if (Number(r.daysPastDue || 0) > 0) s.pastDueMinor += Number(r.balanceMinor || 0);
       });
-      t = sum;
     }
+    var curs = Object.keys(byCur);
+    if (!curs.length) curs = ['USD'];
+    function cardTotal(key) {
+      return curs
+        .map(function (c) {
+          return fmtMoney((byCur[c] && byCur[c][key]) || 0, c);
+        })
+        .join(' · ');
+    }
+    var anyPastDue = curs.some(function (c) {
+      return byCur[c] && Number(byCur[c].pastDueMinor) > 0;
+    });
     var writable = can(WRITE_ROLES);
 
     var body = rows.length
@@ -659,16 +677,23 @@
 
     host.innerHTML =
       '<div style="display:flex;gap:11px;flex-wrap:wrap;margin-bottom:16px;">' +
-      summaryCard('Invoiced', fmtMoney(t.invoicedMinor), 'as originally issued') +
-      summaryCard('Received', fmtMoney(t.paidMinor)) +
-      summaryCard('Outstanding', fmtMoney(t.outstandingMinor), null, INK) +
+      summaryCard('Invoiced', cardTotal('invoicedMinor'), 'as originally issued') +
+      summaryCard('Received', cardTotal('paidMinor')) +
+      summaryCard('Outstanding', cardTotal('outstandingMinor'), null, INK) +
       summaryCard(
         'Past due',
-        fmtMoney(t.pastDueMinor),
+        cardTotal('pastDueMinor'),
         'due date has passed',
-        Number(t.pastDueMinor) > 0 ? RED : INK,
+        anyPastDue ? RED : INK,
       ) +
       '</div>' +
+      (data && data.truncated
+        ? '<div style="font-size:12px;color:' +
+          AMBER +
+          ';margin:-6px 0 12px;">Showing the most recent ' +
+          allRows.length +
+          ' invoices. Older ones are not listed here or counted in these totals.</div>'
+        : '') +
       '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px;">' +
       '<div style="font-size:12px;color:' +
       MUTE +

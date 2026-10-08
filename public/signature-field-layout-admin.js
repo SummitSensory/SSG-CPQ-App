@@ -622,6 +622,11 @@
     }
     var d = await r.json();
     OFFSETS = (d && d.offsets) || OFFSETS;
+    // The builder's copy is cached for the page; refresh it so the next proposal
+    // printed in this session uses the placement just saved.
+    if (window.SSGSignatureFieldLayout && window.SSGSignatureFieldLayout.refresh) {
+      await window.SSGSignatureFieldLayout.refresh();
+    }
     status('Saved — every proposal now prints, and signs, at this placement and size.', true);
   }
 

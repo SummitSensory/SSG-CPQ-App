@@ -21,6 +21,7 @@ import { decimalToRational, divRound } from '../pricing/decimal.js';
  * `buildReport` — but not until the new engine has had real use. Until then this
  * duplication is accepted and signposted rather than forgotten.
  */
+import { businessDay } from '../lib/businessTime.js';
 
 export interface RawItem {
   lineType?: string;
@@ -554,7 +555,9 @@ export function buildReport(
     return { bucket, count: xs.length, value: value(xs) };
   });
 
-  const monthKey = (s: string): string => s.slice(0, 7);
+  // Summit's month (America/Denver), not UTC's: a deal decided at 9 pm Mountain on
+  // the 31st belongs to that month.
+  const monthKey = (s: string): string => (businessDay(s) || s).slice(0, 7);
   const months = new Map<
     string,
     {

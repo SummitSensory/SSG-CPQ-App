@@ -14,6 +14,7 @@
  */
 import type { Dataset } from './dataset.js';
 import { runReport, type ReportDefinition } from './query.js';
+import { addDays, businessDay, startOfBusinessDay } from '../lib/businessTime.js';
 
 export type GoalMetric = 'REVENUE' | 'DEAL_COUNT' | 'PRODUCT_UNITS' | 'SAVED_REPORT';
 export type GoalPeriod = 'MONTH' | 'QUARTER' | 'YEAR';
@@ -117,10 +118,20 @@ export function periodBounds(
 
 const DAY = 86_400_000;
 
+/**
+ * `periodBounds` names the period as calendar dates (UTC midnight of the first day,
+ * the last millisecond of the last day). Membership, pace and days-left are judged on
+ * Summit's calendar (America/Denver): a deal accepted at 9 pm Mountain on Oct 31
+ * counts toward October, not November.
+ */
 export function goalProgress(data: Dataset, goal: GoalInput, now = new Date()): GoalProgress {
   const { from, to, label } = periodBounds(goal.period, goal.periodStart);
-  const span = Math.max(1, to.getTime() - from.getTime());
-  const elapsed = Math.min(1, Math.max(0, (now.getTime() - from.getTime()) / span));
+  const fromDay = from.toISOString().slice(0, 10);
+  const toDay = to.toISOString().slice(0, 10);
+  const startsAt = startOfBusinessDay(fromDay).getTime();
+  const endsAt = startOfBusinessDay(addDays(toDay, 1)).getTime() - 1;
+  const span = Math.max(1, endsAt - startsAt);
+  const elapsed = Math.min(1, Math.max(0, (now.getTime() - startsAt) / span));
   const unit: 'money' | 'count' = goal.metric === 'REVENUE' ? 'money' : 'count';
   const target =
     goal.metric === 'REVENUE' ? Number(goal.targetMinor) || 0 : Number(goal.targetCount) || 0;
@@ -146,8 +157,8 @@ export function goalProgress(data: Dataset, goal: GoalInput, now = new Date()): 
   } else {
     for (const f of data.facts) {
       if (!f.acceptedAt) continue;
-      const t = new Date(f.acceptedAt).getTime();
-      if (t < from.getTime() || t > to.getTime()) continue;
+      const day = businessDay(f.acceptedAt);
+      if (!day || day < fromDay || day > toDay) continue;
       if (goal.ownerId && f.repId !== goal.ownerId) continue;
 
       if (goal.metric === 'REVENUE') {
@@ -222,7 +233,7 @@ export function goalProgress(data: Dataset, goal: GoalInput, now = new Date()): 
     paceTarget,
     paceDelta: Math.round(actual - paceTarget),
     elapsedFraction: elapsed,
-    daysLeft: Math.max(0, Math.ceil((to.getTime() - now.getTime()) / DAY)),
+    daysLeft: Math.max(0, Math.ceil((endsAt - now.getTime()) / DAY)),
     hit: target > 0 && actual >= target,
     contributors: contributors.slice(0, 50),
   };

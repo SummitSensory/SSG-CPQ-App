@@ -62,6 +62,21 @@ vi.mock('../../src/lib/prisma.js', () => {
         Object.assign(r, data, { updatedAt: new Date() });
         return { ...r, organization: org };
       },
+      updateMany: async ({
+        where,
+        data,
+      }: {
+        where: { id: string; status?: string; updatedAt?: Date };
+        data: Record<string, unknown>;
+      }) => {
+        const r = ROWS.get(where.id);
+        if (!r) return { count: 0 };
+        if (where.status !== undefined && r.status !== where.status) return { count: 0 };
+        if (where.updatedAt !== undefined && r.updatedAt.getTime() !== where.updatedAt.getTime())
+          return { count: 0 };
+        Object.assign(r, data, { updatedAt: new Date() });
+        return { count: 1 };
+      },
     },
     strategicPartnershipSettings: {
       findUnique: async () => null,
@@ -204,6 +219,53 @@ describe('strategic partnership routes', () => {
       pmHourValue: '80',
     });
     expect(edit.statusCode).toBe(409);
+  });
+
+  it('whoever entered the terms cannot approve them, even as a sales manager', async () => {
+    const created = (
+      await call('SALES_MANAGER', 'POST', '/strategic-partnerships', TERMS)
+    ).json() as {
+      id: string;
+    };
+    ROWS.get(created.id)!.status = 'READY_FOR_REVIEW';
+    const self = await call(
+      'SALES_MANAGER',
+      'POST',
+      `/strategic-partnerships/${created.id}/approve`,
+    );
+    expect(self.statusCode).toBe(403);
+    expect(ROWS.get(created.id)!.status).toBe('READY_FOR_REVIEW');
+    const other = await call('EXECUTIVE', 'POST', `/strategic-partnerships/${created.id}/approve`);
+    expect(other.statusCode).toBe(200);
+  });
+
+  it('an approval is refused if the proposal changed after it was read', async () => {
+    const created = (await call('SALES_REP', 'POST', '/strategic-partnerships', TERMS)).json() as {
+      id: string;
+    };
+    const row = ROWS.get(created.id)!;
+    row.status = 'READY_FOR_REVIEW';
+    const { prisma } = await import('../../src/lib/prisma.js');
+    const { approvePartnership } = await import('../../src/strategicPartnership/service.js');
+    // The stub is a plain object: wrap its read so a concurrent edit lands right after
+    // the reviewed version is read and before the approval is written.
+    const model = prisma.strategicPartnershipProposal as unknown as {
+      findUnique: (args: { where: { id: string } }) => Promise<unknown>;
+    };
+    const realFind = model.findUnique;
+    model.findUnique = async (args) => {
+      model.findUnique = realFind;
+      const snapshot = await realFind(args);
+      row.status = 'READY_TO_GENERATE';
+      row.updatedAt = new Date(row.updatedAt.getTime() + 1000);
+      return snapshot;
+    };
+    try {
+      await expect(approvePartnership(created.id, 'user-EXECUTIVE')).rejects.toThrow(/changed/);
+    } finally {
+      model.findUnique = realFind;
+    }
+    expect(row.status).toBe('READY_TO_GENERATE');
   });
 
   it('editing terms recalculates and sends a reviewed proposal back to Ready To Generate', async () => {
