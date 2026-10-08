@@ -154,21 +154,18 @@ describe('decimal.divRound — agrees with exact rational rounding (PASS)', () =
   });
 });
 
-describe('computePricing — confirmed defects (it.fails)', () => {
-  it.fails(
-    'BUG: fractional mileage (12.5 mi, allowed by the /pricing/quote schema) is priced, not a RangeError crash',
-    () => {
-      // engine.ts: `f.mileage.ratePerMile * BigInt(f.mileage.miles)` — BigInt(12.5) throws.
-      const out = computePricing({
-        currency: 'USD',
-        lines: [line()],
-        fees: { mileage: { miles: 12.5, ratePerMile: 70n, confirmed: true } },
-      });
-      expect(out.fees.mileage?.amount).toBe(875n);
-    },
-  );
+describe('computePricing — fixed defects (formerly it.fails)', () => {
+  it('BUG: fractional mileage (12.5 mi, allowed by the /pricing/quote schema) is priced, not a RangeError crash', () => {
+    // engine.ts: `f.mileage.ratePerMile * BigInt(f.mileage.miles)` — BigInt(12.5) throws.
+    const out = computePricing({
+      currency: 'USD',
+      lines: [line()],
+      fees: { mileage: { miles: 12.5, ratePerMile: 70n, confirmed: true } },
+    });
+    expect(out.fees.mileage?.amount).toBe(875n);
+  });
 
-  it.fails('BUG: line-level discounts are not counted against the discount authority', () => {
+  it('BUG: line-level discounts are not counted against the discount authority', () => {
     // A 50% line discount with a 10% authority ceiling sails through: the authority
     // check only looks at orderDiscount, never at lines[].discount.
     const out = computePricing({
@@ -179,69 +176,54 @@ describe('computePricing — confirmed defects (it.fails)', () => {
     expect(out.requiresApproval).toBe(true);
   });
 
-  it.fails(
-    'BUG: discount authority truncates the effective bps, so 10.09% passes a 10.00% ceiling',
-    () => {
-      // effBps = Number((10009n * 10000n) / 100000n) = 1000 (truncated from 1000.9).
-      const out = computePricing({
-        currency: 'USD',
-        lines: [line({ unitPrice: 100000n })],
-        orderDiscounts: [{ amount: 10009n, reason: 'loyalty' }],
-        thresholds: { discountAuthorityBps: 1000 },
-      });
-      expect(out.requiresApproval).toBe(true);
-    },
-  );
+  it('BUG: discount authority truncates the effective bps, so 10.09% passes a 10.00% ceiling', () => {
+    // effBps = Number((10009n * 10000n) / 100000n) = 1000 (truncated from 1000.9).
+    const out = computePricing({
+      currency: 'USD',
+      lines: [line({ unitPrice: 100000n })],
+      orderDiscounts: [{ amount: 10009n, reason: 'loyalty' }],
+      thresholds: { discountAuthorityBps: 1000 },
+    });
+    expect(out.requiresApproval).toBe(true);
+  });
 
-  it.fails(
-    'BUG: selling below cost is not flagged when minMarginBps is 0 (negative margin truncates to 0 bps)',
-    () => {
-      // net 300.00, cost 300.01 → margin −1 cent → (−1·10000)/30000 truncates toward zero → 0 bps.
-      const out = computePricing({
-        currency: 'USD',
-        lines: [line({ unitPrice: 30000n, unitCost: 30001n })],
-        thresholds: { minMarginBps: 0 },
-      });
-      expect(out.totalMargin).toBe(-1n);
-      expect(out.requiresApproval).toBe(true);
-    },
-  );
+  it('BUG: selling below cost is not flagged when minMarginBps is 0 (negative margin truncates to 0 bps)', () => {
+    // net 300.00, cost 300.01 → margin −1 cent → (−1·10000)/30000 truncates toward zero → 0 bps.
+    const out = computePricing({
+      currency: 'USD',
+      lines: [line({ unitPrice: 30000n, unitCost: 30001n })],
+      thresholds: { minMarginBps: 0 },
+    });
+    expect(out.totalMargin).toBe(-1n);
+    expect(out.requiresApproval).toBe(true);
+  });
 
-  it.fails(
-    'BUG: an order discount larger than the subtotal drives goods and tax negative with no finding',
-    () => {
-      const out = computePricing({
-        currency: 'USD',
-        lines: [line({ unitPrice: 10000n })],
-        orderDiscounts: [{ amount: 25000n, reason: 'typo' }],
-        tax: { rateBps: 800, exempt: false },
-      });
-      // Either clamp (like versionTotals' discountOf does) or raise a finding.
-      const flagged = out.findings.some((f) => f.field?.startsWith('orderDiscount'));
-      expect(out.goodsNet >= 0n || flagged).toBe(true);
-      expect(out.tax >= 0n).toBe(true);
-    },
-  );
+  it('BUG: an order discount larger than the subtotal drives goods and tax negative with no finding', () => {
+    const out = computePricing({
+      currency: 'USD',
+      lines: [line({ unitPrice: 10000n })],
+      orderDiscounts: [{ amount: 25000n, reason: 'typo' }],
+      tax: { rateBps: 800, exempt: false },
+    });
+    // Either clamp (like versionTotals' discountOf does) or raise a finding.
+    const flagged = out.findings.some((f) => f.field?.startsWith('orderDiscount'));
+    expect(out.goodsNet >= 0n || flagged).toBe(true);
+    expect(out.tax >= 0n).toBe(true);
+  });
 
-  it.fails(
-    'BUG: a line discount above 100% (lineDiscountBps > 10000, accepted by the route schema) makes a negative line with no finding',
-    () => {
-      const out = computePricing({ currency: 'USD', lines: [line({ lineDiscountBps: 15000 })] });
-      const flagged = out.findings.length > 0;
-      expect((out.lines[0]!.net ?? 0n) >= 0n || flagged).toBe(true);
-    },
-  );
+  it('BUG: a line discount above 100% (lineDiscountBps > 10000, accepted by the route schema) makes a negative line with no finding', () => {
+    const out = computePricing({ currency: 'USD', lines: [line({ lineDiscountBps: 15000 })] });
+    const flagged = out.findings.length > 0;
+    expect((out.lines[0]!.net ?? 0n) >= 0n || flagged).toBe(true);
+  });
 
-  it.fails(
-    'BUG: an "other" fee marked confirmed:false is flagged unconfirmed on the fee but raises no UNCONFIRMED finding',
-    () => {
-      const out = computePricing({
-        currency: 'USD',
-        lines: [line()],
-        fees: { other: [{ label: 'crane', amount: 50000n, confirmed: false }] },
-      });
-      expect(out.fees['other:crane']?.unconfirmed).toBe(true);
-      expect(out.findings.some((f) => f.code === 'UNCONFIRMED')).toBe(true);
-    },
-  );
+  it('BUG: an "other" fee marked confirmed:false is flagged unconfirmed on the fee but raises no UNCONFIRMED finding', () => {
+    const out = computePricing({
+      currency: 'USD',
+      lines: [line()],
+      fees: { other: [{ label: 'crane', amount: 50000n, confirmed: false }] },
+    });
+    expect(out.fees['other:crane']?.unconfirmed).toBe(true);
+    expect(out.findings.some((f) => f.code === 'UNCONFIRMED')).toBe(true);
+  });
 });

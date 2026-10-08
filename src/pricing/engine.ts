@@ -1,4 +1,12 @@
-import { applyRate, sum, formatMinor, type RoundingPolicy, DEFAULT_ROUNDING } from './decimal.js';
+import {
+  applyRate,
+  divRound,
+  multiplyByDecimal,
+  sum,
+  formatMinor,
+  type RoundingPolicy,
+  DEFAULT_ROUNDING,
+} from './decimal.js';
 
 export const PRICING_ENGINE_VERSION = '1.0.0';
 
@@ -126,7 +134,17 @@ export function computePricing(input: PricingInput): PricingBreakdown {
       incomplete = true;
     } else {
       extended = l.unitPrice * qty;
-      discount = l.lineDiscountBps ? applyRate(extended, l.lineDiscountBps, R.lineDiscount) : 0n;
+      // A line discount above 100% would make a negative line. Clamp to 100% and say so.
+      let lineBps = l.lineDiscountBps ?? 0;
+      if (lineBps > 10000) {
+        findings.push({
+          code: 'CONFIG_ERROR',
+          field: `line:${l.ref}.lineDiscountBps`,
+          message: `Line discount on ${l.ref} is ${lineBps} bps, above 100%; applied as 100%.`,
+        });
+        lineBps = 10000;
+      }
+      discount = lineBps ? applyRate(extended, lineBps, R.lineDiscount) : 0n;
       net = extended - discount;
     }
 
@@ -186,11 +204,29 @@ export function computePricing(input: PricingInput): PricingBreakdown {
     );
   }
 
-  // Discount authority: total discount vs authorized ceiling.
+  // An order discount larger than the goods would drive goods (and tax) negative.
+  // Clamp to the subtotal — as versionTotals' discountOf does — and say so.
+  const discountCeiling = subtotal > 0n ? subtotal : 0n;
+  if (orderDiscount > discountCeiling) {
+    findings.push({
+      code: 'CONFIG_ERROR',
+      field: 'orderDiscount.amount',
+      message: `Order discount ${formatMinor(orderDiscount, cur)} exceeds the subtotal ${formatMinor(discountCeiling, cur)}; applied as ${formatMinor(discountCeiling, cur)}.`,
+    });
+    orderDiscount = discountCeiling;
+  }
+
+  // Discount authority: ALL discount — line discounts as well as order discounts —
+  // against the gross (pre-discount) goods value, compared exactly. A line discount
+  // is as much a price concession as an order one, and an integer-truncated
+  // percentage let 10.09% pass a 10.00% ceiling.
   const authorityBps = input.thresholds?.discountAuthorityBps;
-  if (authorityBps !== undefined && subtotal > 0n) {
-    const effBps = Number((orderDiscount * 10000n) / subtotal);
-    if (effBps > authorityBps) {
+  const gross = sum(lines.map((l) => l.extendedPrice ?? 0n));
+  const totalDiscount =
+    sum(lines.map((l) => (l.extendedPrice === null ? 0n : l.discount))) + orderDiscount;
+  if (authorityBps !== undefined && gross > 0n) {
+    if (totalDiscount * 10000n > BigInt(authorityBps) * gross) {
+      const effBps = divRound(totalDiscount * 10000n, gross, 'UP');
       findings.push({
         code: 'REQUIRE_APPROVAL',
         field: 'orderDiscount',
@@ -253,7 +289,9 @@ export function computePricing(input: PricingInput): PricingBreakdown {
       });
       incomplete = true;
     } else {
-      const amt = f.mileage.ratePerMile * BigInt(f.mileage.miles);
+      // Miles may be fractional (12.5 mi): exact decimal × rate, rounded to the cent.
+      // BigInt(12.5) used to throw a RangeError — a 500 on a schema-valid request.
+      const amt = multiplyByDecimal(f.mileage.ratePerMile, f.mileage.miles, R.fee);
       const unconfirmed = !f.mileage.confirmed;
       feesOut.mileage = {
         amount: amt,
@@ -276,11 +314,17 @@ export function computePricing(input: PricingInput): PricingBreakdown {
       continue;
     }
     const unconfirmed = o.confirmed === false;
+    if (unconfirmed)
+      findings.push({
+        code: 'UNCONFIRMED',
+        field: `fee.other:${o.label}`,
+        message: `${o.label} is an UNCONFIRMED estimate.`,
+      });
     feesOut[`other:${o.label}`] = {
       amount: o.amount,
       confirmed: o.confirmed ?? true,
       unconfirmed,
-      explanation: `${o.label}: ${formatMinor(o.amount, cur)}`,
+      explanation: `${o.label}: ${formatMinor(o.amount, cur)}${unconfirmed ? ' (UNCONFIRMED)' : ''}`,
     };
     allFeeAmounts.push(o.amount);
     if (o.taxable) taxableFeeAmounts.push(o.amount);
@@ -328,15 +372,26 @@ export function computePricing(input: PricingInput): PricingBreakdown {
     totalCost = sum(lines.map((l) => l.cost ?? 0n));
     totalMargin = goodsNet - totalCost;
     marginBps = goodsNet > 0n ? Number((totalMargin * 10000n) / goodsNet) : null;
-    if (
-      input.thresholds?.minMarginBps !== undefined &&
-      marginBps !== null &&
-      marginBps < input.thresholds.minMarginBps
-    ) {
+    // Compared exactly (margin/goodsNet < min/10000, cross-multiplied), not on the
+    // truncated bps: a 1¢ loss on $300 truncates toward zero to "0 bps" and used to
+    // pass a 0 bps floor — selling below cost with no approval.
+    const minBps = input.thresholds?.minMarginBps;
+    if (minBps !== undefined && goodsNet > 0n) {
+      if (totalMargin * 10000n < BigInt(minBps) * goodsNet) {
+        // Rounded toward −∞ so a loss never reads as 0 bps.
+        const shownBps = divRound(totalMargin * 10000n, goodsNet, totalMargin < 0n ? 'UP' : 'DOWN');
+        findings.push({
+          code: 'REQUIRE_APPROVAL',
+          field: 'margin',
+          message: `Margin ${shownBps} bps below threshold ${minBps} bps — approval required.`,
+        });
+      }
+    } else if (minBps !== undefined && totalMargin < 0n) {
+      // Nothing (or less than nothing) charged for goods that cost something.
       findings.push({
         code: 'REQUIRE_APPROVAL',
         field: 'margin',
-        message: `Margin ${marginBps} bps below threshold ${input.thresholds.minMarginBps} bps — approval required.`,
+        message: `Goods are priced at or below zero and below cost — approval required.`,
       });
     }
   }

@@ -6,16 +6,26 @@ import { assertNoCycles } from './graph.js';
 import { validateRuleDefinition, type RuleDefinitionInput } from './validation.js';
 import type { RuleDef, Configuration, EvalResult } from './types.js';
 
-/** Convert a persisted Rule + its current version into an engine RuleDef. */
+/**
+ * Convert a persisted Rule + one of its versions into an engine RuleDef.
+ *
+ * Type and outcome come from the version's own definition (every definition is a
+ * full RuleDefinitionInput), not from the Rule row: the row's columns follow the
+ * newest draft, which for an ACTIVE rule with an unapproved new version is not the
+ * definition that is live. The row is only the fallback for a definition without them.
+ */
 function toRuleDef(
-  rule: { id: string; type: string; outcome: string; currentVersion: number },
+  rule: { id: string; type: string; outcome: string },
+  version: number,
   definition: Record<string, unknown>,
 ): RuleDef {
+  const type = typeof definition.type === 'string' ? definition.type : rule.type;
+  const outcome = typeof definition.outcome === 'string' ? definition.outcome : rule.outcome;
   return {
     id: rule.id,
-    version: rule.currentVersion,
-    type: rule.type as RuleDef['type'],
-    outcome: rule.outcome as RuleDef['outcome'],
+    version,
+    type: type as RuleDef['type'],
+    outcome: outcome as RuleDef['outcome'],
     target: (definition.target as RuleDef['target']) ?? {},
     params: (definition.params as Record<string, unknown>) ?? {},
     message: definition.message as string | undefined,
@@ -23,15 +33,26 @@ function toRuleDef(
   };
 }
 
-/** Load all ACTIVE rules at their current version as engine definitions. */
+/**
+ * The version the engine evaluates: the approved pointer that only activation moves.
+ * Rules that existed before the pointer were backfilled to currentVersion (0113); the
+ * fallback covers a row an older build wrote mid-deploy, and is exactly what every
+ * rule evaluated before the pointer existed.
+ */
+function liveVersionOf(rule: { activeVersion: number | null; currentVersion: number }): number {
+  return rule.activeVersion ?? rule.currentVersion;
+}
+
+/** Load all ACTIVE rules at their approved (live) version as engine definitions. */
 export async function getActiveRuleDefs(): Promise<RuleDef[]> {
   const rules = await prisma.rule.findMany({ where: { status: 'ACTIVE' } });
   const defs: RuleDef[] = [];
   for (const r of rules) {
+    const version = liveVersionOf(r);
     const v = await prisma.ruleVersion.findUnique({
-      where: { ruleId_version: { ruleId: r.id, version: r.currentVersion } },
+      where: { ruleId_version: { ruleId: r.id, version } },
     });
-    if (v) defs.push(toRuleDef(r, v.definition as Record<string, unknown>));
+    if (v) defs.push(toRuleDef(r, version, v.definition as Record<string, unknown>));
   }
   return defs;
 }
@@ -76,7 +97,13 @@ export async function createRule(
   return { id: rule.id };
 }
 
-/** Add a new immutable version to an existing rule (does not auto-activate). */
+/**
+ * Add a new immutable version to an existing rule. It does NOT go live: an ACTIVE
+ * rule keeps evaluating its approved version (Rule.activeVersion) until the new one
+ * is activated, which is where the cycle check runs. This used to advance the
+ * pointer the engine read, so an unapproved edit to a live rule — including one
+ * that closed a dependency cycle — took effect the moment it was saved.
+ */
 export async function addRuleVersion(
   ruleId: string,
   input: RuleDefinitionInput,
@@ -132,7 +159,7 @@ export async function activateRule(ruleId: string, approverId: string): Promise<
   if (!thisVersion) throw new NotFoundError('Rule version not found');
   const prospective = [
     ...activeDefs.filter((d) => d.id !== ruleId),
-    toRuleDef(rule, thisVersion.definition as Record<string, unknown>),
+    toRuleDef(rule, rule.currentVersion, thisVersion.definition as Record<string, unknown>),
   ];
 
   try {
@@ -142,7 +169,11 @@ export async function activateRule(ruleId: string, approverId: string): Promise<
   }
 
   await prisma.$transaction([
-    prisma.rule.update({ where: { id: ruleId }, data: { status: 'ACTIVE' } }),
+    // Activation is the only thing that moves the live pointer.
+    prisma.rule.update({
+      where: { id: ruleId },
+      data: { status: 'ACTIVE', activeVersion: rule.currentVersion },
+    }),
     prisma.ruleVersion.update({
       where: { ruleId_version: { ruleId, version: rule.currentVersion } },
       data: { approvedById: approverId },

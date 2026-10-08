@@ -289,7 +289,9 @@ export function evaluateConfiguration(rules: RuleDef[], config: Configuration): 
           if (!subject) break;
           const comp = String(rule.params.componentProductId ?? '');
           const perUnit = num(rule.params.perUnit) ?? 1;
-          if (comp)
+          // Same guard as AUTO_CALCULATED_COMPONENT: a zero (or negative) quantity
+          // line needs no component, and a zero-quantity auto-add is a phantom line.
+          if (comp && sqty * perUnit > 0)
             rawAdds.push({
               productId: comp,
               quantity: sqty * perUnit,
@@ -375,10 +377,23 @@ export function evaluateConfiguration(rules: RuleDef[], config: Configuration): 
     }
   }
 
-  // Dedupe automatic additions: one line per product; skip products already in the config.
+  // Within ONE rule, adds for the same component SUM: a category- or kind-wide rule
+  // fires once per matching line, and two different frames each needing an anchor
+  // kit per unit need both lines' worth (2 + 3 frames → 5 kits, not 3).
+  const perRule = new Map<string, (typeof rawAdds)[number]>();
+  for (const a of rawAdds) {
+    const k = `${a.ruleId}\u0000${a.productId}`;
+    const cur = perRule.get(k);
+    if (cur) cur.quantity += a.quantity;
+    else perRule.set(k, { ...a });
+  }
+
+  // Across DIFFERENT rules adding the same part, keep the max — two rules that both
+  // call for a component describe the same need, not two of them. One line per
+  // product; skip products already in the config.
   const existing = new Set(lines.map((l) => l.productId));
   const merged = new Map<string, AutoAdd>();
-  for (const a of rawAdds) {
+  for (const a of perRule.values()) {
     if (existing.has(a.productId)) continue; // already present — never double-add
     const cur = merged.get(a.productId);
     if (cur) {

@@ -84,3 +84,23 @@ describe('document number allocation', () => {
     expect(calls).toBe(3);
   });
 });
+
+describe('document number allocation — retry budget', () => {
+  it('a zero or negative budget still makes one attempt, and exhaustion is a 409 ConflictError', async () => {
+    const { ConflictError } = await import('../../src/lib/errors.js');
+    let calls = 0;
+    await expect(
+      allocateNumbered({
+        prefix: 'P-2026-',
+        field: 'number',
+        attempts: 0,
+        highest: async () => null,
+        create: async () => {
+          calls += 1;
+          throw { code: 'P2002', meta: { target: ['number'] } };
+        },
+      }),
+    ).rejects.toBeInstanceOf(ConflictError);
+    expect(calls).toBe(1);
+  });
+});

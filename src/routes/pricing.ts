@@ -3,9 +3,88 @@ import { z } from 'zod';
 import { requirePermission, requireAuth } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import { can } from '../authz/rbac.js';
-import { ValidationError } from '../lib/errors.js';
+import { ValidationError, ForbiddenError } from '../lib/errors.js';
 import { quote, snapshotQuote, logOverride } from '../pricing/service.js';
 import type { PricingInput } from '../pricing/engine.js';
+import type { Role } from '../authz/rbac.js';
+
+/** A non-negative integer bps from the environment, or undefined when unset/invalid. */
+function envBps(name: string): number | undefined {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const v = Number(raw);
+  return Number.isInteger(v) && v >= 0 && v <= 10000 ? v : undefined;
+}
+
+/**
+ * Approval thresholds are the SERVER's, not the caller's. A request may tighten them
+ * (a higher margin floor, a lower discount ceiling) but never loosen them: the body
+ * used to be the only source, so a client could send `discountAuthorityBps: 10000`
+ * — or omit thresholds — and approve its own discount.
+ *
+ * Configured with PRICING_MIN_MARGIN_BPS and PRICING_DISCOUNT_AUTHORITY_BPS. Unset
+ * means no server floor/ceiling, which is what applied before this existed.
+ */
+export function effectiveThresholds(requested?: {
+  minMarginBps?: number;
+  discountAuthorityBps?: number;
+}): { minMarginBps?: number; discountAuthorityBps?: number } {
+  const serverMin = envBps('PRICING_MIN_MARGIN_BPS');
+  const serverAuth = envBps('PRICING_DISCOUNT_AUTHORITY_BPS');
+  const pick = (
+    a: number | undefined,
+    b: number | undefined,
+    f: (x: number, y: number) => number,
+  ) => (a === undefined ? b : b === undefined ? a : f(a, b));
+  return {
+    minMarginBps: pick(serverMin, requested?.minMarginBps, Math.max),
+    discountAuthorityBps: pick(serverAuth, requested?.discountAuthorityBps, Math.min),
+  };
+}
+
+type Json = Record<string, unknown>;
+
+/**
+ * Remove what a role may not see from a serialized breakdown (and, for a stored
+ * snapshot, its input). Cost needs COSTS_READ, margin needs MARGINS_READ. A margin
+ * finding's message carries the margin figure, so it is reworded rather than left to
+ * say in prose what the deleted fields said in numbers.
+ */
+function redactBreakdown(out: Json, role: Role): void {
+  const showCost = can(role, Permission.COSTS_READ);
+  const showMargin = can(role, Permission.MARGINS_READ);
+  const lines = Array.isArray(out.lines) ? (out.lines as Json[]) : [];
+  if (!showCost) {
+    delete out.totalCost;
+    lines.forEach((l) => {
+      delete l.cost;
+    });
+  }
+  if (!showMargin) {
+    delete out.totalMargin;
+    delete out.marginBps;
+    lines.forEach((l) => {
+      delete l.margin;
+      delete l.marginBps;
+    });
+  }
+  if (!showMargin || !showCost) {
+    const findings = Array.isArray(out.findings) ? (out.findings as Json[]) : [];
+    findings.forEach((f) => {
+      if (f.field === 'margin')
+        f.message = 'Margin is below the approval threshold — approval required.';
+    });
+  }
+}
+
+function redactSnapshotInput(input: unknown, role: Role): void {
+  if (!input || typeof input !== 'object' || can(role, Permission.COSTS_READ)) return;
+  const lines = (input as Json).lines;
+  if (Array.isArray(lines))
+    (lines as Json[]).forEach((l) => {
+      delete l.unitCost;
+    });
+}
 
 // Money fields arrive as decimal strings and are parsed to bigint minor units.
 const money = z
@@ -36,7 +115,7 @@ const QuoteSchema = z.object({
         unitPrice: money,
         unitCost: money,
         priceSource: z.string().default('price-list'),
-        lineDiscountBps: z.number().int().nonnegative().optional(),
+        lineDiscountBps: z.number().int().nonnegative().max(10000).optional(),
       }),
     )
     .min(1),
@@ -59,7 +138,8 @@ const QuoteSchema = z.object({
       perDiem: FeeSchema.optional(),
       mileage: z
         .object({
-          miles: z.number().nonnegative(),
+          // Fractional miles are fine — the engine multiplies the exact decimal.
+          miles: z.number().finite().nonnegative(),
           ratePerMile: money,
           confirmed: z.boolean(),
           taxable: z.boolean().optional(),
@@ -137,7 +217,7 @@ function build(parsed: z.infer<typeof QuoteSchema>): PricingInput {
       : undefined,
     tax: parsed.tax,
     payment: parsed.payment,
-    thresholds: parsed.thresholds,
+    thresholds: effectiveThresholds(parsed.thresholds),
   };
 }
 
@@ -152,28 +232,18 @@ export function registerPricingRoutes(app: FastifyInstance): void {
   app.post('/pricing/quote', read, async (req) => {
     const parsed = QuoteSchema.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(parsed.error.message);
+    // Persisting writes an immutable snapshot against a deal: that is a write, so it
+    // needs a write permission, not just the read that guards the quote itself.
+    // Checked before computing so a refused request has no side effects.
+    if (parsed.data.persist && !can(req.user!.role, Permission.PROPOSAL_WRITE))
+      throw new ForbiddenError(
+        `Role ${req.user!.role} lacks permission ${Permission.PROPOSAL_WRITE}`,
+      );
     const breakdown = quote(build(parsed.data));
 
     // Cost & margin are only returned to roles allowed to see them.
-    const showCost = can(req.user!.role, Permission.COSTS_READ);
-    const showMargin = can(req.user!.role, Permission.MARGINS_READ);
-    const out = serialize(breakdown) as Record<string, unknown> & {
-      lines: Array<Record<string, unknown>>;
-    };
-    if (!showCost) {
-      delete out.totalCost;
-      out.lines.forEach((l) => {
-        delete l.cost;
-      });
-    }
-    if (!showMargin) {
-      delete out.totalMargin;
-      delete out.marginBps;
-      out.lines.forEach((l) => {
-        delete l.margin;
-        delete l.marginBps;
-      });
-    }
+    const out = serialize(breakdown) as Json;
+    redactBreakdown(out, req.user!.role);
 
     if (parsed.data.persist) {
       const id = await snapshotQuote(build(parsed.data), breakdown, req.user!.sub, {
@@ -212,13 +282,23 @@ export function registerPricingRoutes(app: FastifyInstance): void {
 
   app.get('/pricing/snapshots/:ref', { preHandler: requireAuth }, async (req) => {
     const { ref } = req.params as { ref: string };
-    if (!can(req.user!.role, Permission.PRICING_READ)) throw new ValidationError('forbidden');
+    const role = req.user!.role;
+    if (!can(role, Permission.PRICING_READ))
+      throw new ForbiddenError(`Role ${role} lacks permission ${Permission.PRICING_READ}`);
     const { prisma } = await import('../lib/prisma.js');
-    return serialize(
+    const rows = serialize(
       await prisma.priceSnapshot.findMany({
         where: { subjectRef: ref },
         orderBy: { createdAt: 'desc' },
       }),
-    );
+    ) as Json[];
+    // The same cost/margin visibility as POST /pricing/quote: a stored snapshot holds
+    // the full breakdown and its input (unit costs included).
+    for (const row of rows) {
+      if (row.breakdown && typeof row.breakdown === 'object')
+        redactBreakdown(row.breakdown as Json, role);
+      redactSnapshotInput(row.input, role);
+    }
+    return rows;
   });
 }

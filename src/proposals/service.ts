@@ -10,7 +10,7 @@ import {
   sectionsWithResolvedProjectId,
   sectionsWithOpportunityProjectId,
 } from '../crm/projectId.js';
-import { allocateNumbered } from '../lib/documentNumber.js';
+import { allocateNumbered, isUniqueViolation } from '../lib/documentNumber.js';
 import type { ProposalStatus } from '@prisma/client';
 import { snapshotLegalDocuments } from '../legal/service.js';
 import { snapshotMediaRebateProgram } from '../mediaRebate/service.js';
@@ -29,15 +29,24 @@ function numberPrefix(year = new Date().getFullYear()): string {
   return `P-${year}-`;
 }
 
-/** The highest proposal number on record for this year, for the retry loop. */
+/**
+ * The highest proposal number on record for this year, for the retry loop.
+ *
+ * Ordered by the NUMERIC sequence, not the text. Text order only works while every
+ * number is zero-padded to the same width: `P-2026-79` (an imported or hand-entered
+ * number) sorts above `P-2026-000100`, and `P-2026-1000000` below `P-2026-999999`, so
+ * the high-water mark read low and every create collided until the retries ran out.
+ * Suffixes that are not all digits are ignored, as sequenceOf ignores them.
+ */
 async function highestNumber(): Promise<string | null> {
   const prefix = numberPrefix();
-  const last = await prisma.proposal.findFirst({
-    where: { number: { startsWith: prefix } },
-    orderBy: { number: 'desc' },
-    select: { number: true },
-  });
-  return last?.number ?? null;
+  const rows = await prisma.$queryRaw<Array<{ seq: bigint | null }>>`
+    SELECT MAX(CAST(SUBSTRING("number" FROM ${prefix.length + 1}::int) AS BIGINT)) AS seq
+    FROM "Proposal"
+    WHERE "number" LIKE ${prefix + '%'}
+      AND SUBSTRING("number" FROM ${prefix.length + 1}::int) ~ '^[0-9]{1,15}$'`;
+  const seq = rows[0]?.seq;
+  return seq == null ? null : formatProposalNumber(new Date().getFullYear(), Number(seq));
 }
 
 export async function createProposal(
@@ -227,8 +236,31 @@ export function clonedVersionExpiration(
   return new Date(new Date(`${todayIso}T00:00:00.000Z`).getTime() + days * 86_400_000);
 }
 
-/** Create a new editable DRAFT version by cloning the current one (the only way to change a released proposal). */
+/**
+ * Create a new editable DRAFT version by cloning the current one (the only way to
+ * change a released proposal).
+ *
+ * Two "new version" clicks landing together both read currentVersion N and both try
+ * to insert N+1; the loser hit the (proposalId, version) unique index and surfaced as
+ * a raw Prisma P2002 — a 500. It is a conflict, and is now reported as one (409): the
+ * winner's version exists, and the screen should reload rather than make another.
+ */
 export async function createNewVersion(
+  proposalId: string,
+  userId: string,
+): Promise<{ version: number; versionId: string }> {
+  try {
+    return await cloneCurrentVersion(proposalId, userId);
+  } catch (err) {
+    if (isUniqueViolation(err))
+      throw new ConflictError(
+        'Another new version of this proposal was just created. Reload to see it.',
+      );
+    throw err;
+  }
+}
+
+async function cloneCurrentVersion(
   proposalId: string,
   userId: string,
 ): Promise<{ version: number; versionId: string }> {

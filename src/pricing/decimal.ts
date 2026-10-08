@@ -64,6 +64,33 @@ export function applyRate(amountMinor: bigint, bps: number, mode: RoundingMode):
   return divRound(amountMinor * BigInt(bps), 10000n, mode);
 }
 
+/**
+ * A finite JS number as the exact decimal it prints as: 12.5 → 125/10, 1.15 → 115/100.
+ *
+ * Reads the shortest round-trip decimal (`String(x)`), not the binary double, so a
+ * typed 1.15 is 1.15 — multiplying the double instead gives 3000 × 1.15 =
+ * 3449.9999999999995, which is how a half-cent rounded the wrong way. Handles the
+ * exponent form String() uses for very small or very large values.
+ */
+export function decimalToRational(x: number): { num: bigint; den: bigint } {
+  if (!Number.isFinite(x)) throw new Error(`not a finite number: ${x}`);
+  const m = /^(-?)(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$/i.exec(String(x));
+  if (!m) throw new Error(`cannot read ${x} as a decimal`);
+  const [, sign = '', whole = '0', frac = '', exp = '0'] = m;
+  const scale = frac.length - Number(exp);
+  let num = BigInt(sign + whole + frac);
+  let den = 1n;
+  if (scale > 0) den = 10n ** BigInt(scale);
+  else if (scale < 0) num *= 10n ** BigInt(-scale);
+  return { num, den };
+}
+
+/** amount × x (x any finite decimal number, e.g. 12.5 miles), rounded exactly. */
+export function multiplyByDecimal(amountMinor: bigint, x: number, mode: RoundingMode): bigint {
+  const { num, den } = decimalToRational(x);
+  return divRound(amountMinor * num, den, mode);
+}
+
 /** Format minor units as a decimal string (2 dp) for explanations/serialization. */
 export function formatMinor(minor: bigint, currency: string): string {
   const neg = minor < 0n;
