@@ -181,6 +181,7 @@ const PUBLIC_ROUTES: Record<string, string> = {
   'GET /quickbooks': 'static page',
   'GET /quickbooks/connect': 'static page (Intuit listing URL)',
   'GET /quickbooks/disconnect': 'static page (Intuit listing URL)',
+  'GET /proposal/:file': 'static house photos from public/proposal (strict filename pattern)',
 };
 const STATIC_ASSET = /^\/[a-z0-9-]+\.(js|png|ico)$/;
 

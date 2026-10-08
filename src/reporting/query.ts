@@ -22,6 +22,7 @@
  * asked, and the column labels say which is which.
  */
 import type { Dataset, Fact, FactLine } from './dataset.js';
+import { businessDay } from '../lib/businessTime.js';
 
 export type DateBasis =
   'CREATED' | 'RELEASED' | 'DECIDED' | 'ACCEPTED' | 'ORDERED' | 'DEPOSIT_PAID' | 'PAID';
@@ -206,6 +207,11 @@ function weekKey(isoDate: string): string {
   return d.toISOString().slice(0, 10);
 }
 
+/** A sort key for a signed number that orders correctly as a string. */
+function signedSortKey(value: number): string {
+  return String(Math.round(value * 10) + 100_000_000).padStart(10, '0');
+}
+
 function band(value: number, edges: number[], unit: string): string {
   for (let i = 0; i < edges.length; i++) {
     const lo = i === 0 ? 0 : edges[i - 1]!;
@@ -224,6 +230,7 @@ function dimensionValue(
   dim: Dimension,
   f: Fact,
   l: FactLine | null,
+  /** The basis date as Summit's (America/Denver) calendar day, YYYY-MM-DD. */
   basisDate: string | null,
 ): Cell {
   const noDate = { key: 'undated', label: 'No date', sort: '\uffff' };
@@ -307,8 +314,10 @@ function dimensionValue(
       return { key: lab, label: lab, sort: String(f.discountPct).padStart(6, '0') };
     }
     case 'MARGIN_BAND': {
-      const lab = band(f.marginPct, [20, 30, 40, 50, 60], '%');
-      return { key: lab, label: lab, sort: String(Math.round(f.marginPct)).padStart(6, '0') };
+      // A loss-making proposal is what a margin report is usually run to find; it
+      // must not be filed under "0–20%" beside healthy low-margin deals.
+      const lab = f.marginPct < 0 ? 'Below 0%' : band(f.marginPct, [20, 30, 40, 50, 60], '%');
+      return { key: lab, label: lab, sort: signedSortKey(f.marginPct) };
     }
   }
 }
@@ -412,13 +421,22 @@ export function runReport(data: Dataset, def: ReportDefinition): ReportResult {
   const seen = new Map<string, Set<string>>();
   let proposalsMatched = 0;
 
+  // Every proposal that made it into the result, once — the totals row reads
+  // proposal-level money from here, never from the buckets, because at line grain a
+  // proposal sits in one bucket per part it carries.
+  const matchedFacts = new Map<string, Fact>();
+
   for (const f of data.facts) {
-    const basisDate = (f[basisField] as string | null) ?? null;
+    const basisInstant = (f[basisField] as string | null) ?? null;
+    // Bucketed and filtered by Summit's calendar day (America/Denver), not UTC's:
+    // a deal signed at 9 pm Mountain on Oct 31 is an October deal.
+    const basisDate = basisInstant ? businessDay(basisInstant) || null : null;
     if (!factPasses(f, def, basisDate)) continue;
 
     const matching = needsLines ? f.lines.filter((l) => linePasses(l, filters)) : f.lines;
     if (needsLines && !matching.length) continue;
     proposalsMatched++;
+    matchedFacts.set(f.proposalId, f);
 
     const won = f.status === 'ACCEPTED';
     const lost = f.status === 'REJECTED';
@@ -560,12 +578,28 @@ export function runReport(data: Dataset, def: ReportDefinition): ReportResult {
   // Totals are computed over the WHOLE result, not the visible page, and the two
   // rate measures are recomputed from their components rather than averaged — an
   // average of percentages is not a percentage of anything.
+  //
+  // Proposal-level money (value, won value, COGS, margin and the figures built from
+  // them) is summed over each matched proposal ONCE. Summing the buckets
+  // double-counted at line grain: one $100 proposal with two parts totalled $200
+  // beside a PROPOSALS total of 1. Line measures stay a sum of buckets — every line
+  // is in exactly one bucket.
   const all = [...buckets.values()];
+  const distinct = [...matchedFacts.values()];
+  const sumFacts = (pick: (f: Fact) => number): number => distinct.reduce((a, f) => a + pick(f), 0);
   for (const m of measures) {
     if (m === 'MARGIN_PCT') {
-      const rev = all.reduce((a, b) => a + b.proposalValue, 0);
-      const mar = all.reduce((a, b) => a + b.margin, 0);
+      const rev = sumFacts((f) => f.totalMinor);
+      const mar = sumFacts((f) => f.marginMinor);
       totals[m] = rev ? Math.round((mar / rev) * 1000) / 10 : 0;
+    } else if (m === 'PROPOSAL_VALUE') {
+      totals[m] = sumFacts((f) => f.totalMinor);
+    } else if (m === 'WON_VALUE') {
+      totals[m] = sumFacts((f) => (f.status === 'ACCEPTED' ? f.totalMinor : 0));
+    } else if (m === 'COGS') {
+      totals[m] = sumFacts((f) => f.cogsMinor);
+    } else if (m === 'MARGIN') {
+      totals[m] = sumFacts((f) => f.marginMinor);
     } else if (m === 'WIN_RATE') {
       const w = new Set(all.flatMap((b) => [...b.wonProposals])).size;
       const l = new Set(all.flatMap((b) => [...b.lostProposals])).size;
@@ -576,9 +610,7 @@ export function runReport(data: Dataset, def: ReportDefinition): ReportResult {
       );
       totals[m] = set.size;
     } else if (m === 'AVG_PROPOSAL_VALUE') {
-      const set = new Set(all.flatMap((b) => [...b.proposals]));
-      const v = all.reduce((a, b) => a + b.proposalValue, 0);
-      totals[m] = set.size ? Math.round(v / set.size) : 0;
+      totals[m] = distinct.length ? Math.round(sumFacts((f) => f.totalMinor) / distinct.length) : 0;
     } else {
       totals[m] = all.reduce((a, b) => a + value(b, m), 0);
     }

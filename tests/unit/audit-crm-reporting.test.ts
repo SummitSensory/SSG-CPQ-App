@@ -113,11 +113,11 @@ describe('audit: runReport totals reconcile with rows', () => {
     expect(res.totals.LINE_VALUE).toBe(2000);
   });
 
-  // BUG: query.ts:578-581 — the AVG_PROPOSAL_VALUE total divides the SUM of every
+  // FIXED (was BUG): query.ts:578-581 — the AVG_PROPOSAL_VALUE total divides the SUM of every
   // bucket's proposalValue (which, at line grain, counts a proposal once per part it
   // carries) by the DE-DUPLICATED proposal count. One $100 proposal with two parts
   // reports an average proposal of $200.
-  it.fails('line-grain AVG_PROPOSAL_VALUE total is the true average proposal value', () => {
+  it('line-grain AVG_PROPOSAL_VALUE total is the true average proposal value', () => {
     const res = runReport(
       dataset([
         fact({
@@ -131,11 +131,11 @@ describe('audit: runReport totals reconcile with rows', () => {
     expect(res.totals.AVG_PROPOSAL_VALUE).toBe(10_000);
   });
 
-  // BUG: query.ts:583 — WON_VALUE / PROPOSAL_VALUE / COGS / MARGIN totals at line grain
+  // FIXED (was BUG): query.ts:583 — WON_VALUE / PROPOSAL_VALUE / COGS / MARGIN totals at line grain
   // are summed across buckets, so the totals row double-counts a proposal that
   // appears under several SKUs, while the PROPOSALS total beside it is de-duplicated.
   // The totals row then states "1 proposal, $200 won" for a single $100 deal.
-  it.fails('line-grain WON_VALUE total does not double count a multi-part proposal', () => {
+  it('line-grain WON_VALUE total does not double count a multi-part proposal', () => {
     const res = runReport(
       dataset([
         fact({
@@ -182,10 +182,10 @@ describe('audit: runReport totals reconcile with rows', () => {
     ]);
   });
 
-  // BUG: query.ts:309-311 — band() starts its first bucket at 0, so a NEGATIVE margin
+  // FIXED (was BUG): query.ts:309-311 — band() starts its first bucket at 0, so a NEGATIVE margin
   // (a loss-making proposal, exactly the one a margin report is run to find) is
   // labelled "0–20%", alongside healthy low-margin deals.
-  it.fails('a negative margin is not reported in the 0–20% band', () => {
+  it('a negative margin is not reported in the 0–20% band', () => {
     const res = runReport(dataset([fact({ marginPct: -15 })]), {
       dateBasis: 'CREATED',
       groupBy: ['MARGIN_BAND'],
@@ -201,7 +201,7 @@ describe('audit: reporting date boundaries (business time zone is America/Denver
   // (query.ts:233, basisDate.slice(0, 7)), so anything after ~6 pm Mountain on the last
   // day of a month lands in the NEXT month — October's last-evening signings are
   // reported as November.
-  it.fails('a deal accepted at 9 pm Mountain on Oct 31 is reported in October', () => {
+  it('a deal accepted at 9 pm Mountain on Oct 31 is reported in October', () => {
     const res = runReport(
       dataset([fact({ acceptedAt: '2026-11-01T03:00:00.000Z' })]), // 21:00 MDT Oct 31
       { dateBasis: 'ACCEPTED', groupBy: ['MONTH'], measures: ['PROPOSALS'] },
@@ -210,7 +210,7 @@ describe('audit: reporting date boundaries (business time zone is America/Denver
   });
 
   // Same root cause in the goal engine: periodBounds is UTC midnight to UTC midnight.
-  it.fails('a deal accepted at 9 pm Mountain on Oct 31 counts toward the October goal', () => {
+  it('a deal accepted at 9 pm Mountain on Oct 31 counts toward the October goal', () => {
     const p = goalProgress(
       dataset([fact({ acceptedAt: '2026-11-01T03:00:00.000Z', totalMinor: 500 })]),
       {
@@ -302,11 +302,11 @@ describe('audit: receivables aging', () => {
     expect(daysPastDue(new Date('2026-10-11T00:00:00Z'), 100n)).toBe(0);
   });
 
-  // BUG: integrations/quickbooks/receivables.ts:44-47 — the due date is a calendar
+  // FIXED (was BUG): integrations/quickbooks/receivables.ts:44-47 — the due date is a calendar
   // date stored as UTC midnight and compared against the UTC clock. From 6 pm Mountain
   // on the due date itself the invoice shows "OVERDUE · 1d" and is added to the
   // ledger's past-due total, a day before it is actually late.
-  it.fails('an invoice is not past due on the evening of its due date (Mountain)', () => {
+  it('an invoice is not past due on the evening of its due date (Mountain)', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-10-09T02:00:00.000Z')); // 8 pm MDT, Oct 8
     expect(daysPastDue(new Date('2026-10-08T00:00:00Z'), 100n)).toBe(0);
@@ -374,10 +374,10 @@ describe('audit: CRM organization dedupe', () => {
     expect(normalizeOrgName('Café Kids LLC')).toBe(normalizeOrgName('Cafe Kids'));
   });
 
-  // BUG (low): crm/duplicates.ts:4-11 strips "&" to a space but keeps "and", so
+  // FIXED (was BUG, low): crm/duplicates.ts:4-11 strips "&" to a space but keeps "and", so
   // "Smith & Jones Therapy" and "Smith and Jones Therapy" are created as two customers
   // without the duplicate warning.
-  it.fails('treats "&" and "and" as the same name', () => {
+  it('treats "&" and "and" as the same name', () => {
     expect(normalizeOrgName('Smith & Jones Therapy')).toBe(
       normalizeOrgName('Smith and Jones Therapy'),
     );

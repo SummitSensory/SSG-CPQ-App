@@ -46,6 +46,7 @@
  */
 import { prisma } from '../lib/prisma.js';
 import { itemsOf, metaOf, versionTotals, type RawItem } from '../proposals/analytics.js';
+import { decisionDate } from './decision.js';
 
 export interface FactLine {
   sku: string;
@@ -243,24 +244,19 @@ export async function buildDataset(force = false): Promise<Dataset> {
     const org = orgById.get(p.organizationId);
     const addr = addrByOrg.get(p.organizationId);
 
-    // The decision event, and specifically the acceptance. Read from history rather
-    // than from the status column so a proposal that was accepted and then revised
-    // still reports when it was accepted.
+    // The acceptance, read from history rather than from the status column so a
+    // proposal that was accepted and then revised still reports when it was accepted.
     let acceptedAt: string | null = null;
-    let decidedAt: string | null = null;
     for (const ver of p.versions) {
       for (const e of ver.statusHistory) {
         const at = iso(e.createdAt);
         if (!at) continue;
         if (e.toStatus === 'ACCEPTED' && (!acceptedAt || at < acceptedAt)) acceptedAt = at;
-        if (
-          (e.toStatus === 'ACCEPTED' || e.toStatus === 'REJECTED' || e.toStatus === 'EXPIRED') &&
-          (!decidedAt || at < decidedAt)
-        ) {
-          decidedAt = at;
-        }
       }
     }
+    // The decision date follows the one rule the Reports screen uses too
+    // (reporting/decision.ts): the latest decision on the current version.
+    const decidedAt = iso(decisionDate(v.statusHistory));
 
     const lines: FactLine[] = [];
     for (const l of itemsOf(v.items)) {

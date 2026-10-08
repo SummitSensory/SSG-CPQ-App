@@ -11,7 +11,7 @@ import {
   DEFAULT_EXPIRY_HOURS,
 } from './policy.js';
 import { notifier } from './notify.js';
-import type { ApprovalType, ApprovalStatus } from '@prisma/client';
+import type { ApprovalType, ApprovalStatus, Prisma } from '@prisma/client';
 
 interface CreateInput {
   type: ApprovalType;
@@ -86,6 +86,30 @@ export async function activeDelegateIds(
   return dels.map((d) => d.toUserId);
 }
 
+const OPEN_STATUSES: ApprovalStatus[] = ['PENDING', 'ESCALATED', 'REVISION_REQUESTED'];
+
+/**
+ * Move an open request to its next state, atomically.
+ *
+ * `loadOpen` reads the request and checks it is open, but two approvers acting at
+ * once both pass that check. The update itself therefore re-asserts "still open and
+ * not expired": whoever commits second matches no row and gets a conflict, so a
+ * request can never be both approved and rejected (last write no longer wins).
+ */
+async function transitionOpen(
+  tx: Prisma.TransactionClient,
+  requestId: string,
+  data: Prisma.ApprovalRequestUpdateManyMutationInput,
+): Promise<void> {
+  const res = await tx.approvalRequest.updateMany({
+    where: { id: requestId, status: { in: OPEN_STATUSES }, expiresAt: { gte: new Date() } },
+    data,
+  });
+  if (res.count === 0) {
+    throw new ConflictError('Request was decided or changed by someone else; reload and retry');
+  }
+}
+
 async function loadOpen(requestId: string) {
   const req = await prisma.approvalRequest.findUnique({ where: { id: requestId } });
   if (!req) throw new NotFoundError('Approval request not found');
@@ -107,7 +131,7 @@ interface DeciderCtx {
 
 /** Shared guard: enforces permission, delegation, self-approval and separation of duties. */
 async function assertCanDecide(
-  req: { type: ApprovalType; requesterId: string },
+  req: { type: ApprovalType; requesterId: string; escalatedToId?: string | null },
   ctx: DeciderCtx,
 ): Promise<void> {
   const perm = approverPermissionFor(req.type);
@@ -118,6 +142,7 @@ async function assertCanDecide(
     deciderId: ctx.userId,
     deciderHasPermission: can(ctx.role, perm),
     delegatedApproverIds: delegates,
+    escalatedToId: req.escalatedToId ?? null,
   });
   if (!guard.allowed) throw new ForbiddenError(guard.reason ?? 'not permitted to decide');
 }
@@ -131,15 +156,12 @@ async function decide(
   const req = await loadOpen(requestId);
   await assertCanDecide(req, ctx);
   await prisma.$transaction(async (tx) => {
-    await tx.approvalRequest.update({
-      where: { id: requestId },
-      data: {
-        status: decision,
-        decision,
-        decisionNotes: notes ?? null,
-        approverId: ctx.userId,
-        decidedAt: new Date(),
-      },
+    await transitionOpen(tx, requestId, {
+      status: decision,
+      decision,
+      decisionNotes: notes ?? null,
+      approverId: ctx.userId,
+      decidedAt: new Date(),
     });
     await tx.approvalEvent.create({
       data: {
@@ -194,9 +216,10 @@ export async function requestRevision(
   if (!notes?.trim())
     throw new ValidationError('Revision request needs notes explaining what to change');
   await prisma.$transaction(async (tx) => {
-    await tx.approvalRequest.update({
-      where: { id: requestId },
-      data: { status: 'REVISION_REQUESTED', decisionNotes: notes, approverId: ctx.userId },
+    await transitionOpen(tx, requestId, {
+      status: 'REVISION_REQUESTED',
+      decisionNotes: notes,
+      approverId: ctx.userId,
     });
     await tx.approvalEvent.create({
       data: { requestId, action: 'revision_requested', actorId: ctx.userId, notes },
@@ -217,7 +240,15 @@ export async function requestRevision(
   });
 }
 
-/** Escalate to a higher approver. Anyone who can currently decide may escalate. */
+/**
+ * Escalate to a higher approver. Anyone who can currently decide may escalate.
+ *
+ * The target must be an active user other than the requester (and the escalator),
+ * and must themselves be able to decide this request — by role permission or an
+ * active delegation. Escalating to someone who cannot act would park the request
+ * with nobody. The target is recorded as `escalatedToId`, which `canDecide`
+ * honours, so the person it was escalated to can always act on it.
+ */
 export async function escalate(
   requestId: string,
   ctx: DeciderCtx,
@@ -226,11 +257,28 @@ export async function escalate(
 ): Promise<void> {
   const req = await loadOpen(requestId);
   await assertCanDecide(req, ctx);
+  if (!toUserId?.trim()) throw new ValidationError('Choose who to escalate to');
+  if (toUserId === req.requesterId) {
+    throw new ValidationError('Cannot escalate a request to the person who raised it');
+  }
+  if (toUserId === ctx.userId) throw new ValidationError('Cannot escalate a request to yourself');
+  const target = await prisma.user.findUnique({
+    where: { id: toUserId },
+    select: { id: true, role: true, isActive: true },
+  });
+  if (!target || !target.isActive) throw new ValidationError('Escalation target not found');
+  const targetGuard = canDecide({
+    type: req.type,
+    requesterId: req.requesterId,
+    deciderId: target.id,
+    deciderHasPermission: can(target.role as Role, approverPermissionFor(req.type)),
+    delegatedApproverIds: await activeDelegateIds(req.type),
+  });
+  if (!targetGuard.allowed) {
+    throw new ValidationError(`That user cannot decide a ${req.type} request`);
+  }
   await prisma.$transaction(async (tx) => {
-    await tx.approvalRequest.update({
-      where: { id: requestId },
-      data: { status: 'ESCALATED', escalatedToId: toUserId },
-    });
+    await transitionOpen(tx, requestId, { status: 'ESCALATED', escalatedToId: toUserId });
     await tx.approvalEvent.create({
       data: { requestId, action: 'escalated', actorId: ctx.userId, notes: notes ?? null },
     });
@@ -290,6 +338,7 @@ export async function queueFor(ctx: DeciderCtx): Promise<unknown[]> {
       deciderId: ctx.userId,
       deciderHasPermission: can(ctx.role, approverPermissionFor(req.type)),
       delegatedApproverIds: await activeDelegateIds(req.type),
+      escalatedToId: req.escalatedToId,
     });
     if (guard.allowed) result.push(req);
   }
@@ -325,6 +374,7 @@ export async function requestVisibleTo(
     deciderId: ctx.userId,
     deciderHasPermission: can(ctx.role, approverPermissionFor(req.type)),
     delegatedApproverIds: await activeDelegateIds(req.type),
+    escalatedToId: req.escalatedToId,
   });
   return guard.allowed ? req : null;
 }

@@ -553,7 +553,25 @@ export async function inlineKnownAssets(html: string): Promise<string> {
     out = out.split(`src="${src}"`).join(`src="${dataUri}"`);
     out = out.split(`src='${src}'`).join(`src='${dataUri}'`);
   }
-  return out;
+  return dropBrokenMarkedImages(out);
+}
+
+/**
+ * An `<img data-hide-broken>` (the proposal intro's house photos) still pointing at
+ * a local path here is one whose file could not be read, and would print as a broken
+ * image. In the browser those hide themselves through a capturing error listener
+ * (public/proposal-front-matter.js — the CSP forbids an inline onerror); this
+ * renderer runs no such listener, so the tag is dropped instead: white space, never
+ * a broken-image icon in front of a customer.
+ */
+function dropBrokenMarkedImages(html: string): string {
+  if (!html.includes('data-hide-broken')) return html;
+  return html.replace(/<img\b[^>]*\bdata-hide-broken\b[^>]*>/gi, (tag) => {
+    const m = /\bsrc\s*=\s*(["'])([^"']*)\1/i.exec(tag);
+    const src = m?.[2] ?? '';
+    if (src.startsWith('data:') || /^[a-z][a-z0-9+.-]*:\/\//i.test(src)) return tag;
+    return '';
+  });
 }
 
 export interface PdfOptions {

@@ -203,6 +203,34 @@ export function registerWebRoutes(app: FastifyInstance): void {
     );
   }
 
+  // The proposal introductions' house photographs (public/proposal/*). Vercel's CDN
+  // serves them in production, but nothing served them from this server, so under
+  // local dev and the CI e2e server every intro image 404'd. The name must match a
+  // strict pattern (no path separators, an image extension) before it is joined to
+  // the directory, so this cannot read anything else from disk.
+  const PROPOSAL_IMAGE = /^[A-Za-z0-9][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*\.(jpg|jpeg|png|webp)$/;
+  const PROPOSAL_MIME: Record<string, string> = {
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    png: 'image/png',
+    webp: 'image/webp',
+  };
+  app.get('/proposal/:file', async (req, reply) => {
+    const name = (req.params as { file: string }).file;
+    const m = PROPOSAL_IMAGE.exec(name);
+    if (!m) return reply.status(404).send({ message: 'Not found' });
+    let body: Buffer;
+    try {
+      body = binFile(join('proposal', name));
+    } catch {
+      return reply.status(404).send({ message: 'Not found' });
+    }
+    return reply
+      .type(PROPOSAL_MIME[(m[1] ?? '').toLowerCase()] ?? 'application/octet-stream')
+      .header('Cache-Control', PUBLIC_PAGE)
+      .send(body);
+  });
+
   // Browsers and link unfurlers request /favicon.ico unprompted, ignoring the
   // <link> tags. Serving the 48px PNG here is valid — no .ico container needed —
   // and stops the unhandled 404 from filling the request log.

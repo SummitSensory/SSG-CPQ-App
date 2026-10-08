@@ -134,11 +134,11 @@ describe('audit: saved reports', () => {
 /* ───────────────────────────── goals: edit contract ───────────────────────────── */
 
 describe('audit: goal edit (public/goals.js -> PATCH /insights/goals/:id)', () => {
-  // BUG (front-end contract): public/goals.js:711-729 sends metric, period and
+  // FIXED (was BUG, front-end contract): public/goals.js:711-729 sends metric, period and
   // savedReportId on edit; routes/insights.ts:412-436 silently ignores all three.
   // Switching a REVENUE goal to a deal count reports "saved", keeps metric=REVENUE and,
   // because the client sends targetMinor: 0 for a count metric, zeroes the target.
-  it.fails('changing a goal from revenue to deal count sticks', async () => {
+  it('changing a goal from revenue to deal count sticks', async () => {
     const made = await app.inject({
       method: 'POST',
       url: '/insights/goals',
@@ -249,11 +249,11 @@ describe('audit: receivables ledger', () => {
     });
   }
 
-  // BUG: integrations/quickbooks/receivables.ts:323-330 adds every row's balance into
+  // FIXED (was BUG): integrations/quickbooks/receivables.ts:323-330 adds every row's balance into
   // one total regardless of `currency`, and public/accounts-receivable.js:662-667
   // prints that total with a "$". A CAD 500.00 invoice beside a USD 1,000.00 one shows
   // "Outstanding $1,500.00".
-  it.fails('ledger totals do not add CAD balances into the USD figure', async () => {
+  it('ledger totals do not add CAD balances into the USD figure', async () => {
     const { ledger } = await import('../../src/integrations/quickbooks/receivables.js');
     await invoice('usd', 'USD', 100_000n, new Date('2099-01-01T00:00:00Z'));
     await invoice('cad', 'CAD', 50_000n, new Date('2099-01-01T00:00:00Z'));
@@ -306,12 +306,12 @@ describe('audit: approval state machine', () => {
     ).rejects.toThrow(/self-approval/);
   });
 
-  // BUG: approvals/service.ts:118-145 — decide() reads the request (loadOpen), checks
+  // FIXED (was BUG): approvals/service.ts:118-145 — decide() reads the request (loadOpen), checks
   // it is open, then updates by id with no status condition. Two approvers acting at
   // once both pass the check: the request is approved AND rejected, both events are
   // recorded, and the last write wins. Fix: updateMany({ where: { id, status: { in:
   // open } } }) and treat count 0 as a conflict.
-  it.fails('concurrent approve and reject: exactly one decision succeeds', async () => {
+  it('concurrent approve and reject: exactly one decision succeeds', async () => {
     const svc = await import('../../src/approvals/service.js');
     for (let i = 0; i < 5; i++) {
       const { id } = await newRequest();
@@ -323,14 +323,124 @@ describe('audit: approval state machine', () => {
     }
   });
 
-  // BUG: approvals/service.ts:232-266 — escalate() accepts any toUserId, including the
+  // FIXED (was BUG): approvals/service.ts:232-266 — escalate() accepts any toUserId, including the
   // requester or a user with no approver authority, and nothing grants the target the
   // right to act: canDecide never consults escalatedToId. Escalating to the right
   // person by name does nothing for them, and escalating to the wrong one is
   // accepted silently.
-  it.fails('escalating to someone who cannot decide it is refused', async () => {
+  it('escalating to someone who cannot decide it is refused', async () => {
     const svc = await import('../../src/approvals/service.js');
     const { id } = await newRequest();
     await expect(svc.escalate(id, manager(), users.READ_ONLY!)).rejects.toThrow();
+  });
+
+  it('escalating back to the requester is refused', async () => {
+    const svc = await import('../../src/approvals/service.js');
+    const { id } = await newRequest();
+    await expect(svc.escalate(id, manager(), users.SALES_REP!)).rejects.toThrow(/raised it/);
+  });
+
+  it('the person a request is escalated to can decide it, even after their delegation ends', async () => {
+    const svc = await import('../../src/approvals/service.js');
+    const { id: delegationId } = await svc.createDelegation(
+      users.SALES_MANAGER!,
+      'SALES_MANAGER' as never,
+      users.READ_ONLY!,
+      'DISCOUNT' as never,
+      null,
+      users.SALES_MANAGER!,
+    );
+    const { id } = await newRequest();
+    await svc.escalate(id, manager(), users.READ_ONLY!);
+    await prisma.approvalDelegation.delete({ where: { id: delegationId } });
+    await svc.approve(id, { userId: users.READ_ONLY!, role: 'READ_ONLY' as never });
+    const row = await prisma.approvalRequest.findUnique({ where: { id } });
+    expect(row?.status).toBe('APPROVED');
+    expect(row?.approverId).toBe(users.READ_ONLY);
+  });
+});
+
+/* ───────────────────────────── follow-ups to the fixes ───────────────────────────── */
+
+describe('audit fixes: goal edit validation', () => {
+  async function makeGoal() {
+    const made = await app.inject({
+      method: 'POST',
+      url: '/insights/goals',
+      headers: auth('SALES_MANAGER'),
+      payload: { name: `${P} goal2`, metric: 'DEAL_COUNT', period: 'MONTH', targetCount: 7 },
+    });
+    expect(made.statusCode).toBe(200);
+    return made.json<{ id: string }>().id;
+  }
+
+  it('a dollar placeholder sent beside a count target does not zero it', async () => {
+    const id = await makeGoal();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/insights/goals/${id}`,
+      headers: auth('SALES_MANAGER'),
+      payload: { name: `${P} goal2 renamed`, targetMinor: 0 },
+    });
+    expect(res.statusCode).toBe(200);
+    const row = await prisma.salesGoal.findUnique({ where: { id } });
+    expect(row?.targetCount).toBe(7);
+    expect(row?.name).toBe(`${P} goal2 renamed`);
+  });
+
+  it('an edit is held to the same rules as a new goal', async () => {
+    const id = await makeGoal();
+    const patch = (payload: Record<string, unknown>) =>
+      app.inject({
+        method: 'PATCH',
+        url: `/insights/goals/${id}`,
+        headers: auth('SALES_MANAGER'),
+        payload,
+      });
+    expect((await patch({ metric: 'NOT_A_METRIC' })).statusCode).toBe(400);
+    expect((await patch({ period: 'FORTNIGHT' })).statusCode).toBe(400);
+    // Switching to revenue without a dollar target is refused, not saved at $0.
+    expect((await patch({ metric: 'REVENUE' })).statusCode).toBe(400);
+    expect((await patch({ metric: 'PRODUCT_UNITS' })).statusCode).toBe(400);
+    expect((await patch({ metric: 'SAVED_REPORT', savedReportId: 'nope' })).statusCode).toBe(400);
+    const row = await prisma.salesGoal.findUnique({ where: { id } });
+    expect(row?.metric).toBe('DEAL_COUNT');
+    expect(row?.targetCount).toBe(7);
+  });
+});
+
+describe('audit fixes: follow-ups due', () => {
+  it('reports the real number due, not the length of the first page', async () => {
+    const past = new Date('2020-01-01T00:00:00.000Z');
+    await prisma.organization.createMany({
+      data: Array.from({ length: 52 }, (_, i) => ({
+        name: `${P} follow ${i}`,
+        normalizedName: `${P.toLowerCase()} follow ${i}`,
+        followUpDate: past,
+      })),
+    });
+    const res = await app.inject({
+      method: 'GET',
+      url: '/crm/follow-ups',
+      headers: auth('SALES_REP'),
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{ count: number; truncated: boolean; rows: unknown[] }>();
+    expect(body.rows.length).toBeLessThanOrEqual(50);
+    expect(body.count).toBeGreaterThanOrEqual(52);
+    expect(body.truncated).toBe(true);
+  });
+});
+
+describe('audit fixes: receivables totals per currency', () => {
+  it('keeps a separate total for each currency', async () => {
+    const { ledger } = await import('../../src/integrations/quickbooks/receivables.js');
+    const l = await ledger();
+    const cadRows = l.rows.filter((r) => r.currency === 'CAD');
+    expect(cadRows.length).toBeGreaterThan(0);
+    const cadOutstanding = cadRows.reduce((a, r) => a + BigInt(r.balanceMinor ?? '0'), 0n);
+    expect(BigInt(l.totalsByCurrency.CAD!.outstandingMinor)).toBe(cadOutstanding);
+    expect(l.totals.currency).toBe('USD');
+    expect(l.truncated).toBe(false);
   });
 });

@@ -12,6 +12,7 @@
  * month, and a single number tells none of it.
  */
 import type { Dataset, Fact } from './dataset.js';
+import { businessDay, businessToday } from '../lib/businessTime.js';
 
 export type Milestone = 'ACCEPTED' | 'ORDERED' | 'DEPOSIT_PAID' | 'PAID';
 
@@ -81,11 +82,14 @@ export function signedDeals(
   data: Dataset,
   opts: { from?: string | null; to?: string | null } = {},
 ): SignedDealsReport {
-  const now = new Date();
-  const to = opts.to ? new Date(`${opts.to.slice(0, 10)}T23:59:59.999Z`) : now;
+  // Months and the window are Summit's calendar (America/Denver): a deal signed at
+  // 9 pm Mountain on the last day of a month belongs to that month.
+  const toDay = opts.to ? opts.to.slice(0, 10) : businessToday();
+  const to = new Date(`${toDay}T23:59:59.999Z`);
   const from = opts.from
     ? new Date(`${opts.from.slice(0, 10)}T00:00:00.000Z`)
     : new Date(Date.UTC(to.getUTCFullYear() - 1, to.getUTCMonth() + 1, 1));
+  const fromDay = from.toISOString().slice(0, 10);
 
   const months = monthSpan(from, to);
   const index = new Map(months.map((m, i) => [m, i]));
@@ -96,9 +100,9 @@ export function signedDeals(
     for (const f of data.facts) {
       const at = (f[FIELD[milestone]] as string | null) ?? null;
       if (!at) continue;
-      const t = new Date(at).getTime();
-      if (t < from.getTime() || t > to.getTime()) continue;
-      const i = index.get(at.slice(0, 7));
+      const day = businessDay(at);
+      if (!day || day < fromDay || day > toDay) continue;
+      const i = index.get(day.slice(0, 7));
       if (i == null) continue;
       counts[i] = (counts[i] ?? 0) + 1;
       values[i] = (values[i] ?? 0) + f.totalMinor;

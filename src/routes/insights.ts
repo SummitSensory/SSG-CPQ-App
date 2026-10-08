@@ -24,6 +24,7 @@ import { recordAudit } from '../lib/audit.js';
 import { buildDataset } from '../reporting/dataset.js';
 import { runReport, reportVocabulary, type ReportDefinition } from '../reporting/query.js';
 import { signedDeals } from '../reporting/signedDeals.js';
+import { businessToday } from '../lib/businessTime.js';
 import {
   goalProgress,
   type GoalInput,
@@ -314,6 +315,114 @@ export function registerInsightRoutes(app: FastifyInstance): void {
 
   /* ── Goals ──────────────────────────────────────────────────────────────── */
 
+  /**
+   * A goal's fields from a request body, validated the same way for create and edit.
+   *
+   * On edit (`existing` given) a field the body leaves out keeps its saved value; one
+   * it sends is validated as on create. Only the target that belongs to the metric is
+   * read — a revenue goal has no count target and a count goal no dollar target — so
+   * a client sending `targetMinor: 0` beside a count target cannot zero anything.
+   */
+  async function resolveGoal(
+    b: Record<string, unknown>,
+    existing: {
+      name: string;
+      metric: string;
+      period: string;
+      periodStart: Date;
+      targetMinor: bigint;
+      targetCount: number | null;
+      ownerId: string | null;
+      skuMatch: string | null;
+      savedReportId: string | null;
+    } | null,
+  ): Promise<{
+    name: string;
+    metric: GoalMetric;
+    period: GoalPeriod;
+    periodStart: Date;
+    targetMinor: number;
+    targetCount: number | null;
+    ownerId: string | null;
+    skuMatch: string | null;
+    savedReportId: string | null;
+  }> {
+    const has = (k: string): boolean => b[k] !== undefined;
+    const name = has('name') || !existing ? str(b.name) : existing.name;
+    if (!name) throw new ValidationError('Give the goal a name.');
+
+    let metric: GoalMetric;
+    if (has('metric') && b.metric !== null) {
+      if (!METRICS.includes(String(b.metric) as GoalMetric))
+        throw new ValidationError('That is not a goal metric.');
+      metric = String(b.metric) as GoalMetric;
+    } else metric = existing ? (existing.metric as GoalMetric) : 'REVENUE';
+
+    let period: GoalPeriod;
+    if (has('period') && b.period !== null) {
+      if (!PERIODS.includes(String(b.period) as GoalPeriod))
+        throw new ValidationError('That is not a goal period.');
+      period = String(b.period) as GoalPeriod;
+    } else period = existing ? (existing.period as GoalPeriod) : 'MONTH';
+
+    const startRaw = str(b.periodStart);
+    // Default: the period containing Summit's today (America/Denver), not UTC's — a
+    // goal set at 7 pm Mountain on the 31st is for this month, not next.
+    const periodStart = startRaw
+      ? new Date(`${startRaw.slice(0, 10)}T00:00:00Z`)
+      : existing
+        ? existing.periodStart
+        : new Date(`${businessToday()}T00:00:00Z`);
+    if (Number.isNaN(periodStart.getTime()))
+      throw new ValidationError('That period start is not a date.');
+
+    function pick<T>(key: string, fallback: T | null, read: (v: unknown) => T | null): T | null {
+      return has(key) || !existing ? read(b[key]) : fallback;
+    }
+
+    const targetMinor =
+      metric === 'REVENUE'
+        ? Math.round(pick('targetMinor', existing ? Number(existing.targetMinor) : null, num) ?? 0)
+        : 0;
+    const targetCount =
+      metric === 'REVENUE'
+        ? null
+        : Math.round(pick('targetCount', existing?.targetCount ?? null, num) ?? 0);
+    if (metric === 'REVENUE' && targetMinor <= 0)
+      throw new ValidationError('Set a dollar target above zero.');
+    if (metric !== 'REVENUE' && !(targetCount && targetCount > 0))
+      throw new ValidationError('Set a target above zero.');
+
+    const skuMatch = pick('skuMatch', existing?.skuMatch ?? null, str);
+    const savedReportId = pick('savedReportId', existing?.savedReportId ?? null, str);
+    if (metric === 'PRODUCT_UNITS' && !skuMatch) {
+      throw new ValidationError(
+        'Say which part the units goal counts — a part number or a fragment of one.',
+      );
+    }
+    if (metric === 'SAVED_REPORT') {
+      if (!savedReportId) throw new ValidationError('Pick the saved report this goal reads.');
+      const report = await prisma.savedReport.findUnique({
+        where: { id: savedReportId },
+        select: { id: true },
+      });
+      if (!report) throw new ValidationError('That saved report no longer exists.');
+    }
+
+    return {
+      name,
+      metric,
+      period,
+      periodStart,
+      targetMinor,
+      targetCount,
+      ownerId: pick('ownerId', existing?.ownerId ?? null, str),
+      // A field that does not apply to the metric is cleared, not left to linger.
+      skuMatch: metric === 'PRODUCT_UNITS' ? skuMatch : null,
+      savedReportId: metric === 'SAVED_REPORT' ? savedReportId : null,
+    };
+  }
+
   async function goalInputs(where?: Prisma.SalesGoalWhereInput): Promise<GoalInput[]> {
     const [rows, users] = await Promise.all([
       prisma.salesGoal.findMany({
@@ -358,46 +467,11 @@ export function registerInsightRoutes(app: FastifyInstance): void {
 
   app.post('/insights/goals', manage, async (req) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
-    const name = str(b.name);
-    if (!name) throw new ValidationError('Give the goal a name.');
-    const metric = METRICS.includes(String(b.metric) as GoalMetric)
-      ? (String(b.metric) as GoalMetric)
-      : 'REVENUE';
-    const period = PERIODS.includes(String(b.period) as GoalPeriod)
-      ? (String(b.period) as GoalPeriod)
-      : 'MONTH';
-    const startRaw = str(b.periodStart);
-    const periodStart = startRaw ? new Date(`${startRaw.slice(0, 10)}T00:00:00Z`) : new Date();
-    if (Number.isNaN(periodStart.getTime()))
-      throw new ValidationError('That period start is not a date.');
-
-    const targetMinor = metric === 'REVENUE' ? Math.round(num(b.targetMinor) ?? 0) : 0;
-    const targetCount = metric === 'REVENUE' ? null : Math.round(num(b.targetCount) ?? 0);
-    if (metric === 'REVENUE' && targetMinor <= 0)
-      throw new ValidationError('Set a dollar target above zero.');
-    if (metric !== 'REVENUE' && !targetCount) throw new ValidationError('Set a target above zero.');
-    if (metric === 'PRODUCT_UNITS' && !str(b.skuMatch)) {
-      throw new ValidationError(
-        'Say which part the units goal counts — a part number or a fragment of one.',
-      );
-    }
-    if (metric === 'SAVED_REPORT' && !str(b.savedReportId)) {
-      throw new ValidationError('Pick the saved report this goal reads.');
-    }
+    const g = await resolveGoal(b, null);
+    const { name, metric, period, targetMinor, targetCount } = g;
 
     const created = await prisma.salesGoal.create({
-      data: {
-        name,
-        metric,
-        period,
-        periodStart,
-        targetMinor: BigInt(targetMinor),
-        targetCount,
-        ownerId: str(b.ownerId),
-        skuMatch: str(b.skuMatch),
-        savedReportId: str(b.savedReportId),
-        createdById: req.user!.sub,
-      },
+      data: { ...g, targetMinor: BigInt(g.targetMinor), createdById: req.user!.sub },
     });
     await recordAudit({
       actorId: req.user!.sub,
@@ -414,22 +488,16 @@ export function registerInsightRoutes(app: FastifyInstance): void {
     const existing = await prisma.salesGoal.findUnique({ where: { id } });
     if (!existing) throw new NotFoundError('Goal not found');
     const b = (req.body ?? {}) as Record<string, unknown>;
-    const startRaw = str(b.periodStart);
+    // The edit form sends metric, period and saved report as well as the target. They
+    // were silently ignored here, so switching a revenue goal to a deal count said
+    // "saved" and kept REVENUE. The merged goal now passes exactly the checks a new
+    // one does.
+    const g = await resolveGoal(b, existing);
     const updated = await prisma.salesGoal.update({
       where: { id },
       data: {
-        name: b.name === undefined ? existing.name : (str(b.name) ?? existing.name),
-        targetMinor:
-          b.targetMinor === undefined
-            ? existing.targetMinor
-            : BigInt(Math.max(0, Math.round(num(b.targetMinor) ?? 0))),
-        targetCount:
-          b.targetCount === undefined ? existing.targetCount : Math.round(num(b.targetCount) ?? 0),
-        periodStart: startRaw
-          ? new Date(`${startRaw.slice(0, 10)}T00:00:00Z`)
-          : existing.periodStart,
-        ownerId: b.ownerId === undefined ? existing.ownerId : str(b.ownerId),
-        skuMatch: b.skuMatch === undefined ? existing.skuMatch : str(b.skuMatch),
+        ...g,
+        targetMinor: BigInt(g.targetMinor),
         active: b.active === undefined ? existing.active : !!b.active,
       },
     });

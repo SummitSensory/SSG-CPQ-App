@@ -715,12 +715,14 @@
       metric: metric,
       period: v('gfPeriod') || 'MONTH',
       periodStart: v('gfStart'),
-      targetMinor: metric === 'REVENUE' ? Math.round(Number(v('gfTargetMoney') || 0) * 100) : 0,
-      targetCount: metric === 'REVENUE' ? null : Math.round(Number(v('gfTargetCount') || 0)),
       ownerId: v('gfOwner') || null,
       skuMatch: v('gfSku') || null,
       savedReportId: v('gfReport') || null,
     };
+    // Only the target that belongs to the metric is sent. Sending a placeholder 0 (or
+    // null) for the other one zeroed a saved target on edit.
+    if (metric === 'REVENUE') body.targetMinor = Math.round(Number(v('gfTargetMoney') || 0) * 100);
+    else body.targetCount = Math.round(Number(v('gfTargetCount') || 0));
     if (!body.name) {
       alert('Give the goal a name.');
       return;
