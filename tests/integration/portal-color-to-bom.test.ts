@@ -363,7 +363,9 @@ afterAll(async () => {
   await db.proposalVersion.deleteMany({ where: { createdById: userId } });
   await db.proposal.deleteMany({ where: { createdById: userId } });
   await db.manufacturer.deleteMany({ where: { id: { in: mfrIds } } });
-  await db.powderColorBrand.deleteMany({ where: { id: { in: createdBrandIds } } });
+  // Cardinal/Prismatic are shared reference rows (production has them from
+  // migration 0029). Other suites running in parallel rely on them, so they
+  // are left in place: deleting them here made those suites flake.
   await db.auditLog.deleteMany({ where: { actorId: userId } });
   await db.organization.deleteMany({ where: { id: orgId } });
   await db.user.deleteMany({ where: { id: userId } });
