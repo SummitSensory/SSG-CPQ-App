@@ -4,7 +4,7 @@ import { NotFoundError } from '../lib/errors.js';
 import { UNASSIGNED } from '../handoff/bomSections.js';
 import { buildBomModel, type BomModel } from '../handoff/bomDocuments.js';
 import { manufacturingBoardId } from '../integrations/monday/portalDelivery.js';
-import { MFG_PORTAL_COL } from './orderPortal.js';
+import { MFG_PORTAL_COL, reviewedColorHistory } from './orderPortal.js';
 import {
   areaLabel,
   colorAreasOf,
@@ -84,6 +84,11 @@ export interface ColorCheckArea {
   lines: ColorCheckLine[];
   /** Why some or all of this area could not be placed. */
   issues: string[];
+  /**
+   * An area answered at an earlier review that the customer no longer answers, listed
+   * only because lines still carry the colour it gave. `pick` is that earlier pick.
+   */
+  dropped?: boolean;
 }
 
 export interface ColorCheckReport {
@@ -107,6 +112,8 @@ export interface ColorCheckReport {
   handSet: Array<{ vendor: string; sku: string; name: string; onLine: string }>;
   /** Vendor sheets that could not be built, with why. */
   bomErrors: string[];
+  /** What to do about the problems found, when there is a tool for it. */
+  guidance: string[];
   summary: { ok: number; problems: number; areas: number };
 }
 
@@ -165,6 +172,12 @@ export function buildColorCheck(input: {
   chart: readonly PowderChartColor[];
   bom: ReadonlyMap<string, BomColorCells>;
   source: { boardId: string; itemId: string | null; columnId: string };
+  /**
+   * Picks from earlier reviews for areas the customer no longer answers. A line that
+   * only such an area reaches, still carrying exactly the colour it gave, is flagged:
+   * nothing the customer answers now accounts for that colour.
+   */
+  droppedPicks?: readonly ColorAreaPick[];
 }): Pick<ColorCheckReport, 'areas' | 'handSet' | 'summary'> {
   const blank = input.lines.map((l) => ({
     ...l,
@@ -187,7 +200,7 @@ export function buildColorCheck(input: {
   const conflictSkus = new Set((result.conflicts ?? []).map((c) => c.sku.toUpperCase()));
 
   const areas: ColorCheckArea[] = input.picks.map((pick) => {
-    const refs = input.mapping.get(pick.areaKey) ?? [];
+    const refs = input.mapping.get(pick.areaKey.toLowerCase()) ?? [];
     const issues: string[] = [];
     if (result.unmappedAreas.includes(pick.areaKey)) {
       issues.push(
@@ -252,11 +265,56 @@ export function buildColorCheck(input: {
     };
   });
 
+  // Areas no longer answered whose colour is still on a line nothing else reaches.
+  const explained = new Set<string>();
+  const dropped = input.droppedPicks ?? [];
+  if (dropped.length) {
+    const old = planColorApplication({
+      picks: dropped,
+      mapping: input.mapping,
+      lines: blank,
+      specs: input.specs,
+      submittedVendors: new Set<string>(),
+      brands: input.brands,
+      chart: input.chart,
+    });
+    for (const pick of dropped) {
+      const issues: string[] = [];
+      for (const u of old.updates) {
+        if (!u.areaKey.split(', ').includes(pick.areaKey)) continue;
+        const line = lineById.get(u.lineId);
+        if (!line || claimed.has(line.id) || conflictSkus.has(norm(line.sku).toUpperCase()))
+          continue;
+        const onLine = norm(line.powderColor);
+        if (!onLine || onLine !== norm(u.to.powderColor)) continue;
+        explained.add(line.id);
+        issues.push(
+          `${vendorOf(line.vendor)} · ${norm(line.sku)} still carries "${onLine}" from an earlier review, but the customer no longer answers this area — clear it or confirm it by hand.`,
+        );
+      }
+      if (!issues.length) continue;
+      areas.push({
+        areaKey: pick.areaKey,
+        label: areaLabel(pick.areaKey),
+        kind: colorKindOf(pick.brand, input.brands),
+        pick: { brand: pick.brand, code: pick.code },
+        source: { ...input.source, path: `selections.${pick.group}.${pick.area}` },
+        mappedParts: (input.mapping.get(pick.areaKey.toLowerCase()) ?? []).map(describeRef),
+        lines: [],
+        issues,
+        dropped: true,
+      });
+    }
+  }
+
   // Lines in a conflict were reached by an area too — they are not "hand set".
   const handSet = input.lines
     .filter(
       (l) =>
-        norm(l.powderColor) && !claimed.has(l.id) && !conflictSkus.has(norm(l.sku).toUpperCase()),
+        norm(l.powderColor) &&
+        !claimed.has(l.id) &&
+        !explained.has(l.id) &&
+        !conflictSkus.has(norm(l.sku).toUpperCase()),
     )
     .map((l) => ({
       vendor: vendorOf(l.vendor),
@@ -275,7 +333,11 @@ export function buildColorCheck(input: {
       else problems++;
     }
   }
-  return { areas, handSet, summary: { ok, problems, areas: areas.length } };
+  return {
+    areas,
+    handSet,
+    summary: { ok, problems, areas: areas.filter((a) => !a.dropped).length },
+  };
 }
 
 /** Run the check for one order: load, build each vendor's sheet, compare. */
@@ -303,7 +365,17 @@ export async function checkOrderColors(orderId: string): Promise<ColorCheckRepor
     columnId: COLOR_ANSWERS_SOURCE.columnId,
   };
   const picks = colorAreasOf(item?.answers);
-  const input = await loadColorPlanInput(orderId, picks);
+  // Areas answered at an earlier review but not now — the latest pick for each.
+  const now = new Set(picks.map((p) => p.areaKey.toLowerCase()));
+  const droppedPicks: ColorAreaPick[] = [];
+  for (const h of await reviewedColorHistory(orderId)) {
+    for (const p of colorAreasOf(h.answers)) {
+      const k = p.areaKey.toLowerCase();
+      if (now.has(k) || droppedPicks.some((d) => d.areaKey.toLowerCase() === k)) continue;
+      droppedPicks.push(p);
+    }
+  }
+  const input = await loadColorPlanInput(orderId, [...picks, ...droppedPicks]);
 
   // Every vendor that has a coloured line or a line some area reaches.
   const vendors = new Set(input.lines.map((l) => vendorOf(l.vendor)));
@@ -318,17 +390,30 @@ export async function checkOrderColors(orderId: string): Promise<ColorCheckRepor
     }
   }
 
-  const checked = buildColorCheck({ ...input, bom, source });
+  const checked = buildColorCheck({ ...input, picks, droppedPicks, bom, source });
+  const reviewed = Boolean(item?.contentHash && item.contentHash === item.reviewedHash);
+  const guidance: string[] = [];
+  // Blank lines the reviewed answers cover: added after the review (by hand, a kit's
+  // components, a second vendor's copy). There is a tool that fills exactly those.
+  const blankLines = checked.areas
+    .flatMap((a) => a.lines)
+    .filter((l) => l.status === 'MISMATCH' && !l.onLine && !l.vendorSubmitted).length;
+  if (reviewed && blankLines) {
+    guidance.push(
+      `${blankLines} line${blankLines === 1 ? ' has' : 's have'} no colour although the reviewed answers cover ${blankLines === 1 ? 'it' : 'them'} — most likely added after the review. Use “Re-apply reviewed colours” on the order’s Portal tab: it fills blank lines only and never changes a line that already has a colour.`,
+    );
+  }
   return {
     orderId,
     source: { ...source, columnTitle: COLOR_ANSWERS_SOURCE.columnTitle },
     portal: {
       found: Boolean(item),
       state: item?.state ?? null,
-      reviewed: Boolean(item?.contentHash && item.contentHash === item.reviewedHash),
+      reviewed,
       lastSyncedAt: item?.lastSyncedAt ? item.lastSyncedAt.toISOString() : null,
     },
     ...checked,
     bomErrors,
+    guidance,
   };
 }

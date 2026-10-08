@@ -253,7 +253,7 @@ describe.skipIf(!LOCAL)(
       expect(item.answers).toBeNull();
     });
 
-    it('FINDING: ✅ with no JSON (Jotform / "mark complete" path) is PROVIDED, and review applies nothing without saying why', async () => {
+    it('FINDING (fixed): ✅ with no JSON (Jotform / "mark complete" path) is PROVIDED, and review says no colours arrived', async () => {
       board.rows[0] = { id: ITEM_ID, name: `${P} job`, status: '✅', answers: '' };
       const item = await refresh();
       expect(item.state).toBe('PROVIDED');
@@ -261,7 +261,7 @@ describe.skipIf(!LOCAL)(
       expect(portal.displayOf(item)).toBe('NEW');
 
       const r = await portal.reviewPortalItem(orderId, 'COLOR', userId, item.contentHash!);
-      // Review "succeeds"; the result carries nothing that tells staff no colours arrived.
+      // Review succeeds (never blocked), and the result now says why nothing applied.
       expect(r.colors).toEqual({
         linesUpdated: 0,
         unmappedAreas: [],
@@ -269,7 +269,81 @@ describe.skipIf(!LOCAL)(
         skippedVendors: [],
         conflicts: [],
         linesAlreadyCurrent: 0,
+        markedCompleteWithoutColors: true,
       });
+    });
+
+    it('✅ beside an unconfirmed draft (confirmedAt null) is treated as not provided — never reviewed onto the BOM', async () => {
+      board.rows[0] = {
+        id: ITEM_ID,
+        name: `${P} job`,
+        status: '✅',
+        answers: JSON.stringify({ ...CONFIRMED, confirmedAt: null }),
+      };
+      const item = await refresh();
+      expect(item.state).toBe('NOT_PROVIDED');
+      expect(item.answers).toBeNull();
+      expect(item.mondayStatus).toBe('✅');
+      expect(portal.displayOf(item)).toBe('NONE');
+
+      // Confirming it makes it a real answer.
+      board.rows[0]!.answers = JSON.stringify(CONFIRMED);
+      const confirmed = await refresh();
+      expect(confirmed.state).toBe('PROVIDED');
+      expect(portal.displayOf(confirmed)).toBe('NEW');
+    });
+
+    it('a draft stored and REVIEWED before the rule stays reviewed; an unreviewed stored draft cannot be reviewed', async () => {
+      const draft = { ...CONFIRMED, confirmedAt: null };
+      const hash = portal.contentHashOf('PROVIDED', draft);
+      // As a sync before this rule would have stored it, and someone reviewed it.
+      await db.orderPortalItem.update({
+        where: { orderId_kind: { orderId, kind: 'COLOR' } },
+        data: {
+          state: 'PROVIDED',
+          mondayStatus: '✅',
+          answers: draft as object,
+          contentHash: hash,
+          reviewedHash: hash,
+          reviewedAt: new Date(),
+          reviewedById: userId,
+        },
+      });
+      board.rows[0] = {
+        id: ITEM_ID,
+        name: `${P} job`,
+        status: '✅',
+        answers: JSON.stringify(draft),
+      };
+      const kept = await refresh();
+      expect(kept.state).toBe('PROVIDED');
+      expect(portal.displayOf(kept)).toBe('REVIEWED');
+
+      // Unreviewed draft stored before the rule: reviewing it is refused, nothing applied.
+      await db.orderPortalItem.update({
+        where: { orderId_kind: { orderId, kind: 'COLOR' } },
+        data: { reviewedHash: null, reviewedAt: null, reviewedById: null },
+      });
+      await expect(portal.reviewPortalItem(orderId, 'COLOR', userId, hash)).rejects.toThrow(
+        /not confirmed/,
+      );
+      // …and the next sync sets it aside.
+      const after = await refresh();
+      expect(after.state).toBe('NOT_PROVIDED');
+    });
+
+    it('answers without a confirmedAt key (an older or foreign shape) are read as before', async () => {
+      const { confirmedAt: _c, ...legacy } = CONFIRMED;
+      expect(_c).toBeTruthy();
+      board.rows[0] = {
+        id: ITEM_ID,
+        name: `${P} job`,
+        status: '✅',
+        answers: JSON.stringify(legacy),
+      };
+      const item = await refresh();
+      expect(item.state).toBe('PROVIDED');
+      expect(item.answers).toEqual(legacy);
     });
   },
 );

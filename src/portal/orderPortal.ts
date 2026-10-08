@@ -18,7 +18,7 @@ import {
   markSubmissionReviewedOnBoard,
   MFG_DEAL_LINK_COL,
 } from '../integrations/monday/portalDelivery.js';
-import { applyColorPicksToOrder, type ColorApplyResult } from './colorAreas.js';
+import { applyColorPicksToOrder, isUnconfirmedDraft, type ColorApplyResult } from './colorAreas.js';
 
 /**
  * Where each order's customer-portal steps stand — the columns on the Orders page.
@@ -292,6 +292,8 @@ interface Observation {
   sourceItemId: string | null;
   /** When the customer gave it, if the source says. */
   givenAt: Date | null;
+  /** Colour answers that are the portal's unconfirmed draft (see isUnconfirmedDraft). */
+  draft?: boolean;
 }
 
 /**
@@ -315,6 +317,7 @@ function observe(row: MfgRow | null, sub: Submission | null): Map<PortalItemKind
       answers: state === 'PROVIDED' ? row.answers[k] : null,
       sourceItemId: row.id,
       givenAt: null,
+      draft: k === 'COLOR' && state === 'PROVIDED' && isUnconfirmedDraft(row.answers[k]),
     });
   }
   // Delivery: a matched submission is the authority — it is what the BOM prints —
@@ -367,9 +370,16 @@ async function record(
   const byKind = new Map(existing.map((e) => [e.kind, e]));
   const now = new Date();
   let changed = 0;
-  for (const [kind, o] of obs) {
-    const hash = contentHashOf(o.state, o.answers);
+  for (const [kind, seen] of obs) {
     const prior = byKind.get(kind) ?? null;
+    // ✅ beside the portal's unconfirmed draft is not the customer's answer: treat it
+    // as not provided, so it is never reviewed onto the BOM. A draft already reviewed
+    // before this rule (that exact version) is left as it is — it stays REVIEWED.
+    const o =
+      seen.draft && prior?.reviewedHash !== contentHashOf(seen.state, seen.answers)
+        ? { ...seen, state: 'NOT_PROVIDED' as const, answers: null, givenAt: null }
+        : seen;
+    const hash = contentHashOf(o.state, o.answers);
     if (prior && prior.contentHash === hash && prior.mondayStatus === o.label) {
       touched.push(prior.id);
       continue;
@@ -589,6 +599,12 @@ export interface PortalItemView {
 
 /** Every step for one order, in column order, including steps never seen ("-"). */
 export async function portalItemsForOrder(orderId: string): Promise<PortalItemView[]> {
+  // An order that does not exist is a 404, not five empty steps.
+  const order = await prisma.acceptedOrder.findUnique({
+    where: { id: orderId },
+    select: { id: true },
+  });
+  if (!order) throw new NotFoundError('Order not found');
   const rows = await prisma.orderPortalItem.findMany({ where: { orderId } });
   const reviewerIds = [...new Set(rows.map((r) => r.reviewedById).filter(Boolean))] as string[];
   const reviewers = reviewerIds.length
@@ -699,6 +715,19 @@ export async function reviewPortalItem(
     // re-apply colours over corrections made since the first review.
     throw new ConflictError('This version has already been marked reviewed. Reload to see it.');
   }
+  if (kind === 'COLOR' && isUnconfirmedDraft(item.answers)) {
+    // Stored before drafts were set aside at sync; the next sync clears it.
+    throw new ConflictError(
+      'The customer has not confirmed these colours in the portal yet — they are a draft. Sync from the portal; nothing has been applied.',
+    );
+  }
+  // The answers of the review before this one, so a re-review only overwrites the
+  // areas the customer changed. Undefined when there was none, or it predates the
+  // answers being kept with the review.
+  const previousAnswers =
+    kind === 'COLOR' && item.reviewedHash
+      ? await reviewedColorAnswers(orderId, item.reviewedHash)
+      : undefined;
 
   // Claim FIRST, on the version that was seen and while it is still unreviewed, so
   // two clicks cannot both win and nothing is applied for a version that lost.
@@ -716,7 +745,10 @@ export async function reviewPortalItem(
   let colors: ColorApplyResult | null = null;
   if (kind === 'COLOR') {
     try {
-      colors = await applyColorPicksToOrder(orderId, item.answers, actorId);
+      colors = await applyColorPicksToOrder(orderId, item.answers, actorId, {
+        reReview: Boolean(prior.reviewedHash),
+        previousAnswers,
+      });
     } catch (err) {
       // The picks did not reach the BOM, so the review does not stand either.
       await prisma.orderPortalItem.update({ where: { id: item.id }, data: prior });
@@ -738,7 +770,16 @@ export async function reviewPortalItem(
       orderId,
       action: 'portal.review',
       actorId,
-      detail: { kind, contentHash: item.contentHash, mondayNote, colors } as object,
+      detail: {
+        kind,
+        contentHash: item.contentHash,
+        mondayNote,
+        colors,
+        // Colour only: the answers that were reviewed, so the next review can tell
+        // which areas the customer changed (reviewedColorAnswers) and the colour
+        // check can spot an area that stopped being answered.
+        ...(kind === 'COLOR' ? { answers: item.answers ?? null } : {}),
+      } as object,
     },
   });
   await recordAudit({
@@ -751,4 +792,84 @@ export async function reviewPortalItem(
 
   const view = (await portalItemsForOrder(orderId)).find((v) => v.kind === kind)!;
   return { item: view, mondayNote, colors };
+}
+
+/* ────────────────────────── reviewed colour answers ────────────────────────── */
+
+/**
+ * Every colour review of this order whose answers were kept with it, newest first.
+ * Reviews recorded before the answers were kept are left out — nothing can be said
+ * about what they reviewed beyond the hash.
+ */
+export async function reviewedColorHistory(
+  orderId: string,
+): Promise<Array<{ contentHash: string | null; answers: unknown; at: Date }>> {
+  const events = await prisma.orderEvent.findMany({
+    where: { orderId, action: 'portal.review' },
+    orderBy: { createdAt: 'desc' },
+    select: { detail: true, createdAt: true },
+  });
+  const out: Array<{ contentHash: string | null; answers: unknown; at: Date }> = [];
+  for (const e of events) {
+    const d = e.detail;
+    if (!d || typeof d !== 'object' || Array.isArray(d)) continue;
+    const rec = d as Record<string, unknown>;
+    if (rec.kind !== 'COLOR' || !('answers' in rec)) continue;
+    out.push({
+      contentHash: typeof rec.contentHash === 'string' ? rec.contentHash : null,
+      answers: rec.answers,
+      at: e.createdAt,
+    });
+  }
+  return out;
+}
+
+/** The colour answers reviewed as version `hash`, or undefined when not kept. */
+export async function reviewedColorAnswers(orderId: string, hash: string): Promise<unknown> {
+  const hit = (await reviewedColorHistory(orderId)).find((h) => h.contentHash === hash);
+  return hit ? hit.answers : undefined;
+}
+
+/**
+ * Re-apply the reviewed colours to BLANK Bill of Materials lines only — lines added
+ * after the review (by hand, a kit's components, a second vendor's copy) that the
+ * review never saw. A line that already carries a colour is never changed, so a staff
+ * correction is safe; hardware fasteners are never painted. Only while the current
+ * answers are the reviewed ones: answers that changed since must be reviewed first
+ * (which applies them).
+ */
+export async function reapplyReviewedColors(
+  orderId: string,
+  actorId: string,
+): Promise<{ colors: ColorApplyResult }> {
+  const order = await prisma.acceptedOrder.findUnique({
+    where: { id: orderId },
+    select: { id: true },
+  });
+  if (!order) throw new NotFoundError('Order not found');
+  const item = await prisma.orderPortalItem.findUnique({
+    where: { orderId_kind: { orderId, kind: 'COLOR' } },
+  });
+  if (!item || item.state !== 'PROVIDED' || !item.reviewedHash) {
+    throw new ConflictError(
+      'No colours from the customer have been marked reviewed on this order yet. Mark them reviewed — that applies them.',
+    );
+  }
+  if (item.reviewedHash !== item.contentHash) {
+    throw new ConflictError(
+      'The customer changed their colours since they were reviewed. Review the new version — that applies it.',
+    );
+  }
+  const colors = await applyColorPicksToOrder(orderId, item.answers, actorId, {
+    onlyBlank: true,
+    eventAction: 'bom.colors.portal-reapply',
+  });
+  await recordAudit({
+    actorId,
+    action: 'portal.color.reapply',
+    entity: 'AcceptedOrder',
+    entityId: orderId,
+    details: { linesUpdated: colors.linesUpdated },
+  });
+  return { colors };
 }

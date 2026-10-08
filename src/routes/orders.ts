@@ -40,6 +40,7 @@ import {
   PORTAL_KINDS,
   portalItemsForOrder,
   portalSummaryForOrders,
+  reapplyReviewedColors,
   refreshPortal,
   reviewPortalItem,
 } from '../portal/orderPortal.js';
@@ -174,6 +175,14 @@ export function registerOrderRoutes(app: FastifyInstance): void {
       throw new ValidationError('Reload the order — the version being reviewed was not sent.');
     return reviewPortalItem(id, k as PortalItemKind, req.user!.sub, seen);
   });
+
+  /**
+   * Re-apply the reviewed colours to BLANK BOM lines only (lines added after review).
+   * Same permission as Mark reviewed, which writes the same columns.
+   */
+  app.post('/orders/:id/portal/color/reapply', manage, async (req) =>
+    reapplyReviewedColors((req.params as { id: string }).id, req.user!.sub),
+  );
 
   app.get('/orders/:id', read, async (req) =>
     serializeOrder(await getOrder((req.params as { id: string }).id)),
