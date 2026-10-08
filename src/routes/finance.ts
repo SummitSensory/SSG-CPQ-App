@@ -48,6 +48,54 @@ const SendSchema = z.object({
   message: z.string().trim().max(4000).optional(),
 });
 
+/** The domain of an address, lowercased; empty when there is no `@`. */
+function domainOf(address: string): string {
+  const at = address.lastIndexOf('@');
+  return at < 0
+    ? ''
+    : address
+        .slice(at + 1)
+        .trim()
+        .toLowerCase();
+}
+
+/**
+ * Why a financing send's recipients are refused, or null when they are fine.
+ *
+ * The enquiry is for the finance partner. `to` may be left out (it then goes to
+ * FINANCE_PARTNER_EMAIL) or name someone else at the partner's domain — a colleague
+ * covering for the contact of record. `cc` may add addresses at the partner's
+ * domain or at the company's own (the domain BOM_REPLY_TO is on), so the rep can
+ * copy themselves or a manager. Anything else is refused: an open `to` made this a
+ * way to mail a customer's financing details anywhere.
+ */
+export function financeRecipientProblem(
+  to: string | undefined,
+  cc: string | undefined,
+  partnerEmail: string = env.FINANCE_PARTNER_EMAIL,
+  companyEmail: string = env.BOM_REPLY_TO,
+): string | null {
+  const partnerDomain = domainOf(partnerEmail);
+  const companyDomain = domainOf(companyEmail);
+  if (to && domainOf(to) !== partnerDomain) {
+    return `A financing enquiry can only be sent to the finance partner (${partnerEmail}) or someone else at @${partnerDomain}.`;
+  }
+  const ccs = (cc ?? '')
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean);
+  for (const address of ccs) {
+    if (!z.string().email().safeParse(address).success) {
+      return `“${address}” is not an email address.`;
+    }
+    const d = domainOf(address);
+    if (d !== partnerDomain && d !== companyDomain) {
+      return `A financing enquiry can only be copied to @${companyDomain} or @${partnerDomain} addresses.`;
+    }
+  }
+  return null;
+}
+
 /** A band as the grid editor posts it. Bounds arrive in whole dollars. */
 const BandInput = z.object({
   label: z.string().trim().min(1).max(60),
@@ -540,12 +588,18 @@ export function registerFinanceRoutes(app: FastifyInstance): void {
    */
   // Under /render/*: this renders the sheet to PDF before sending, which needs
   // the render function's memory and 180-second ceiling. See vercel.json.
-  app.post('/render/proposals/:id/financing/send', read, async (req) => {
+  //
+  // PROPOSAL_WRITE, not READ: this emails a customer's name, the amount they are
+  // financing and a PDF from the company's verified sending domain. And it goes only
+  // where a financing enquiry belongs — see financeRecipientProblem.
+  app.post('/render/proposals/:id/financing/send', write, async (req) => {
     const { id } = req.params as { id: string };
     const parsed = SendSchema.safeParse(req.body ?? {});
     if (!parsed.success)
       throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid request');
     const input = parsed.data;
+    const recipientProblem = financeRecipientProblem(input.to, input.cc);
+    if (recipientProblem) throw new ValidationError(recipientProblem);
 
     if (!env.RESEND_API_KEY)
       throw new ValidationError('Email is not configured on this deployment');

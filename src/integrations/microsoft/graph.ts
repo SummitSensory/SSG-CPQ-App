@@ -3,7 +3,7 @@ import { SignJWT, jwtVerify } from 'jose';
 import { env, isOutlookConfigured } from '../../config/env.js';
 import { prisma } from '../../lib/prisma.js';
 import { logger } from '../../lib/logger.js';
-import { UnauthorizedError, ValidationError } from '../../lib/errors.js';
+import { ForbiddenError, UnauthorizedError, ValidationError } from '../../lib/errors.js';
 
 /**
  * Microsoft Graph — write a message into the rep's own mailbox, as a draft they
@@ -163,7 +163,9 @@ async function tokenRequest(body: Record<string, string>): Promise<TokenResponse
 }
 
 /** Which mailbox this token belongs to, asked of Graph rather than assumed. */
-async function whoAmI(accessToken: string): Promise<{ mailbox: string; displayName?: string }> {
+async function whoAmI(
+  accessToken: string,
+): Promise<{ mailbox: string; addresses: string[]; displayName?: string }> {
   const res = await fetch(`${GRAPH}/me?$select=mail,userPrincipalName,displayName`, {
     headers: { authorization: `Bearer ${accessToken}` },
   });
@@ -178,7 +180,10 @@ async function whoAmI(accessToken: string): Promise<{ mailbox: string; displayNa
   };
   const mailbox = (me.mail ?? me.userPrincipalName ?? '').trim().toLowerCase();
   if (!mailbox) throw new ValidationError('That Microsoft account has no mailbox attached.');
-  return { mailbox, displayName: me.displayName };
+  const addresses = [me.mail, me.userPrincipalName]
+    .map((a) => (a ?? '').trim().toLowerCase())
+    .filter(Boolean);
+  return { mailbox, addresses, displayName: me.displayName };
 }
 
 /**
@@ -197,7 +202,20 @@ export async function completeConsent(code: string, userId: string): Promise<{ m
     redirect_uri: env.GRAPH_REDIRECT_URI!,
     scope: SCOPES,
   });
-  const { mailbox } = await whoAmI(tok.access_token!);
+  const { mailbox, addresses } = await whoAmI(tok.access_token!);
+  // The mailbox must be the CRM user's own. Without this, anyone could mint a consent
+  // link and get a colleague to click it: the colleague's Mail.Send token would be
+  // stored on the sender's CRM account, and every "send from my Outlook" would then
+  // send as the colleague. Matched on the primary SMTP address or the UPN, either way
+  // case-insensitively.
+  const owner = await prisma.user.findUnique({ where: { id: userId }, select: { email: true } });
+  const ownEmail = (owner?.email ?? '').trim().toLowerCase();
+  if (!ownEmail || !addresses.includes(ownEmail)) {
+    logger.warn({ userId, mailbox }, 'outlook: refused a mailbox that is not the user’s own');
+    throw new ForbiddenError(
+      `That Microsoft account (${mailbox}) is not yours. Sign in to Microsoft as ${ownEmail || 'yourself'} and connect again.`,
+    );
+  }
   if (!tok.refresh_token) {
     throw new ValidationError(
       'Microsoft did not return a refresh token. Check that offline_access is on the app registration.',

@@ -4,7 +4,8 @@
  * Everything here reads. The only writes are the report definitions and goals
  * somebody types in — nothing in this file can change a proposal, an order, a
  * document or an integration, which is why the read endpoints sit on PROPOSAL_READ
- * rather than on a new permission.
+ * rather than on a new permission. Saved-report writes need INSIGHTS_WRITE, because a
+ * saved report can carry an email schedule; goals need GOALS_MANAGE.
  *
  * Server side:
  *   reporting/dataset.ts     one read of the world, cached for a minute
@@ -19,7 +20,8 @@ import type { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
-import { NotFoundError, ValidationError } from '../lib/errors.js';
+import { ForbiddenError, NotFoundError, ValidationError } from '../lib/errors.js';
+import { can, type Role } from '../authz/rbac.js';
 import { recordAudit } from '../lib/audit.js';
 import { buildDataset } from '../reporting/dataset.js';
 import { runReport, reportVocabulary, type ReportDefinition } from '../reporting/query.js';
@@ -46,6 +48,26 @@ const num = (v: unknown): number | null => {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 };
+
+/**
+ * Who may act on any saved report regardless of who owns it — choose another user's
+ * mailbox to send from, re-point someone else's schedule. USERS_MANAGE, i.e. a
+ * system admin: sending as someone else is an act on that person's account.
+ */
+function isReportAdmin(role: Role): boolean {
+  return can(role, Permission.USERS_MANAGE);
+}
+
+/**
+ * The mailbox a scheduled report sends from. Only the caller's own, unless the caller
+ * is an admin: the cron sends from that user's connected Outlook, so naming someone
+ * else would put mail in their Sent folder, under their name, that they never wrote.
+ */
+function checkSendAs(sendAsId: string | null, user: { sub: string; role: Role }): void {
+  if (sendAsId && sendAsId !== user.sub && !isReportAdmin(user.role)) {
+    throw new ForbiddenError('A scheduled report can only be sent from your own mailbox.');
+  }
+}
 
 function jsonDefinition(def: ReportDefinition): Prisma.InputJsonObject {
   return JSON.parse(JSON.stringify(def)) as Prisma.InputJsonObject;
@@ -128,6 +150,8 @@ function parseDefinition(body: unknown): ReportDefinition {
 export function registerInsightRoutes(app: FastifyInstance): void {
   const read = { preHandler: requirePermission(Permission.PROPOSAL_READ) };
   const manage = { preHandler: requirePermission(Permission.GOALS_MANAGE) };
+  // Saving, editing and deleting report definitions (and their email schedule).
+  const write = { preHandler: requirePermission(Permission.INSIGHTS_WRITE) };
 
   /* ── Vocabulary ─────────────────────────────────────────────────────────── */
 
@@ -197,8 +221,10 @@ export function registerInsightRoutes(app: FastifyInstance): void {
     );
   });
 
-  app.post('/insights/reports', read, async (req) => {
+  app.post('/insights/reports', write, async (req) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
+    const sendAsId = str(b.sendAsId) ?? req.user!.sub;
+    checkSendAs(sendAsId, req.user!);
     const name = str(b.name);
     if (!name) throw new ValidationError('Give the report a name.');
     const cadence = CADENCES.includes(String(b.cadence) as never)
@@ -220,7 +246,7 @@ export function registerInsightRoutes(app: FastifyInstance): void {
         recipients,
         // The schedule sends from a real mailbox. Defaults to whoever saved it,
         // because that is the person who can be asked why it arrived.
-        sendAsId: str(b.sendAsId) ?? req.user!.sub,
+        sendAsId,
         createdById: req.user!.sub,
       },
     });
@@ -234,16 +260,37 @@ export function registerInsightRoutes(app: FastifyInstance): void {
     return jsonSafe(created);
   });
 
-  app.patch('/insights/reports/:id', read, async (req) => {
+  app.patch('/insights/reports/:id', write, async (req) => {
     const id = (req.params as { id: string }).id;
     const existing = await prisma.savedReport.findUnique({ where: { id } });
     if (!existing) throw new NotFoundError('Report not found');
-    // A shared report can be edited by anyone who can read reports; a private one
-    // only by its owner. Anything stricter and a rep's saved view becomes a ticket.
-    if (!existing.shared && existing.createdById !== req.user!.sub) {
+    const owner = existing.createdById === req.user!.sub || isReportAdmin(req.user!.role);
+    // A shared report's name, description and definition can be edited by anyone who
+    // can write reports; a private one only by its owner. Anything stricter and a
+    // rep's saved view becomes a ticket.
+    if (!existing.shared && !owner) {
       throw new NotFoundError('Report not found');
     }
     const b = (req.body ?? {}) as Record<string, unknown>;
+    // Where it goes, how often, from whose mailbox, and who can see it are the
+    // owner's (or an admin's) to change. Otherwise anyone could re-point a shared
+    // scheduled report at an outside address and have it sent from its owner's
+    // mailbox. Changing WHAT a scheduled report contains is the same act — it
+    // changes what lands in those recipients' inboxes — so that is held back too.
+    if (!owner) {
+      const scheduleFields = ['cadence', 'scheduleDay', 'recipients', 'sendAsId', 'shared'];
+      if (scheduleFields.some((k) => b[k] !== undefined)) {
+        throw new ForbiddenError(
+          'Only the person who saved this report can change its schedule, recipients or sharing.',
+        );
+      }
+      if (existing.cadence !== 'NONE' && b.definition !== undefined) {
+        throw new ForbiddenError(
+          'This report is emailed on a schedule, so only the person who saved it can change what it contains.',
+        );
+      }
+    }
+    if (b.sendAsId !== undefined) checkSendAs(str(b.sendAsId), req.user!);
     const cadence = CADENCES.includes(String(b.cadence) as never)
       ? (String(b.cadence) as (typeof CADENCES)[number])
       : existing.cadence;
@@ -277,7 +324,7 @@ export function registerInsightRoutes(app: FastifyInstance): void {
     return jsonSafe(updated);
   });
 
-  app.delete('/insights/reports/:id', read, async (req) => {
+  app.delete('/insights/reports/:id', write, async (req) => {
     const id = (req.params as { id: string }).id;
     const existing = await prisma.savedReport.findUnique({ where: { id } });
     if (!existing) throw new NotFoundError('Report not found');
@@ -301,6 +348,10 @@ export function registerInsightRoutes(app: FastifyInstance): void {
     const q = req.query as { from?: string; to?: string };
     const row = await prisma.savedReport.findUnique({ where: { id } });
     if (!row) throw new NotFoundError('Report not found');
+    // Same visibility as the list: someone else's private report does not exist.
+    if (!row.shared && row.createdById !== req.user!.sub && !isReportAdmin(req.user!.role)) {
+      throw new NotFoundError('Report not found');
+    }
     const def = parseDefinition(row.definition);
     const data = await buildDataset();
     return jsonSafe(

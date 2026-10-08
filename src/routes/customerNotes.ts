@@ -48,6 +48,10 @@ const iso = (d: Date | null | undefined): string | null =>
 
 export function registerCustomerNoteRoutes(app: FastifyInstance): void {
   const read = { preHandler: requirePermission(Permission.PROPOSAL_READ) };
+  // Writing to a customer's record — a note, the decision window, the follow-up
+  // date — is a CRM write, held to the same bar as every other one in routes/crm.ts.
+  // PROPOSAL_READ alone let READ_ONLY and INSTALLER accounts change them.
+  const write = { preHandler: requirePermission(Permission.CRM_WRITE) };
 
   /**
    * The whole panel in one call: the dates, the notes written from this proposal, and
@@ -106,7 +110,7 @@ export function registerCustomerNoteRoutes(app: FastifyInstance): void {
     };
   });
 
-  app.post('/crm/organizations/:organizationId/notes', read, async (req, reply) => {
+  app.post('/crm/organizations/:organizationId/notes', write, async (req, reply) => {
     const { organizationId } = req.params as { organizationId: string };
     const parsed = NoteSchema.safeParse(req.body);
     if (!parsed.success)
@@ -148,7 +152,7 @@ export function registerCustomerNoteRoutes(app: FastifyInstance): void {
    * back — and only its author or a system admin may, because a shared account
    * history anyone can prune is not a history.
    */
-  app.delete('/customer-notes/:id', read, async (req, reply) => {
+  app.delete('/customer-notes/:id', write, async (req, reply) => {
     const { id } = req.params as { id: string };
     const note = await prisma.customerNote.findUnique({
       where: { id },
@@ -164,7 +168,7 @@ export function registerCustomerNoteRoutes(app: FastifyInstance): void {
   });
 
   /** The ideal decision timeline and the follow-up date. Both live on the customer. */
-  app.patch('/crm/organizations/:organizationId/dates', read, async (req) => {
+  app.patch('/crm/organizations/:organizationId/dates', write, async (req) => {
     const parsedAll = DatesSchema.partial().safeParse(req.body);
     if (!parsedAll.success)
       throw new ValidationError(parsedAll.error.issues[0]?.message ?? 'Invalid date.');

@@ -80,6 +80,13 @@ export const Permission = {
   // is that everyone can see the number. Setting it is a management act, so it is
   // held by executives and sales managers rather than by whoever opens the page.
   GOALS_MANAGE: 'goals:manage',
+  // Save, edit and delete Insights report definitions, including their email
+  // schedule. A saved report is emailed by the scheduled-reports cron to whatever
+  // recipients it carries, so writing one is a way to send company sales data out of
+  // the building — not something a read-only account may do. Running and viewing
+  // reports still needs only PROPOSAL_READ. Held by every role that builds proposals,
+  // plus Accounting, which uses Insights but holds no proposal-write permission.
+  INSIGHTS_WRITE: 'insights:write',
   PRODUCTS_ADMIN: 'products:admin',
   AUDIT_READ: 'audit:read',
   USERS_MANAGE: 'users:manage',
@@ -140,6 +147,7 @@ const BASE = [
   P.PROPOSAL_READ,
   P.PROPOSAL_WRITE,
   P.ORDERS_READ,
+  P.INSIGHTS_WRITE,
 ];
 
 /** Role -> granted permissions. SYSTEM_ADMIN holds the wildcard. */
@@ -219,6 +227,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly string[]> = {
     P.FREIGHT_INVOICE_PUSH,
     P.CROSSBORDER_APPROVE,
     P.CROSSBORDER_MANAGE,
+    P.INSIGHTS_WRITE,
   ],
   INSTALLER: [P.CRM_READ, P.CATALOG_READ, P.RULES_READ, P.PROPOSAL_READ, P.ORDERS_READ],
   READ_ONLY: [

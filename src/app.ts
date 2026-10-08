@@ -2,6 +2,8 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import helmet from '@fastify/helmet';
 import { logger } from './lib/logger.js';
 import { registerErrorHandler } from './plugins/error-handler.js';
+import { ValidationError } from './lib/errors.js';
+import { env } from './config/env.js';
 import { registerFreightGate } from './plugins/freightGate.js';
 import { registerHealthRoutes } from './routes/health.js';
 import { registerAuthRoutes } from './routes/auth.js';
@@ -82,6 +84,12 @@ export function buildApp(): FastifyInstance {
   const app = Fastify({
     loggerInstance: logger,
     bodyLimit: 8 * 1024 * 1024,
+    // On Vercel every request arrives through Vercel's edge, which overwrites
+    // X-Forwarded-For with the real client address. Trusting exactly that one hop
+    // makes req.ip the client rather than the edge — which the login and reset
+    // throttles, the session record and the audit log all key on. Off elsewhere: a
+    // directly-exposed server must not let a caller pick its own address.
+    trustProxy: env.VERCEL ? (_address: string, hop: number) => hop < 1 : false,
   }) as unknown as FastifyInstance;
   app.register(helmet, {
     contentSecurityPolicy: {
@@ -135,8 +143,10 @@ export function buildApp(): FastifyInstance {
     (req as unknown as { rawBody?: string }).rawBody = body as string;
     try {
       done(null, (body as string).length ? JSON.parse(body as string) : {});
-    } catch (err) {
-      done(err as Error, undefined);
+    } catch {
+      // The caller's malformed body, not a server fault: a bare SyntaxError carries no
+      // status, so it reached the error handler as a 500 and sent an alert email.
+      done(new ValidationError('The request body is not valid JSON.'), undefined);
     }
   });
 

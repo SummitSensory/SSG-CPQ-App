@@ -14,7 +14,7 @@ import {
 import { hashPassword } from '../auth/password.js';
 import { UnauthorizedError, ValidationError } from '../lib/errors.js';
 import { requireAuth } from '../plugins/authz.js';
-import { env, isPasswordSignInBlocked } from '../config/env.js';
+import { isPasswordSignInBlocked, resetLinkBaseUrl } from '../config/env.js';
 import { recordAudit } from '../lib/audit.js';
 import { requestPasswordReset, checkResetToken, consumeResetToken } from '../auth/passwordReset.js';
 import { hit, reset as resetLimit, AUTH_RULES } from '../lib/rateLimit.js';
@@ -227,14 +227,20 @@ export function registerAuthRoutes(app: FastifyInstance): void {
       // Throttled on the address as well as the IP: without this the endpoint is a
       // free mail cannon aimed at any customer or colleague's inbox.
       if (!throttle(req, reply, 'forgot', parsed.data.email)) return reply;
-      const configured = env.APP_BASE_URL;
-      const proto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim();
-      const host = (req.headers['x-forwarded-host'] as string | undefined) ?? req.headers.host;
-      const baseUrl = configured ?? `${proto ?? 'https'}://${host ?? 'localhost:3000'}`;
-      try {
-        await requestPasswordReset(parsed.data.email, baseUrl, req.ip);
-      } catch (err) {
-        req.log.error({ err }, 'password reset request failed');
+      // Configured origin only. Building the link from Host / X-Forwarded-Host let
+      // anyone request a reset for a colleague with their own host in that header,
+      // and the real email then carried a link that delivered the token to them.
+      const baseUrl = resetLinkBaseUrl();
+      if (!baseUrl) {
+        req.log.error(
+          'password reset: APP_BASE_URL is not set, so no reset link can be built — nothing sent',
+        );
+      } else {
+        try {
+          await requestPasswordReset(parsed.data.email, baseUrl, req.ip);
+        } catch (err) {
+          req.log.error({ err }, 'password reset request failed');
+        }
       }
     }
     return reply.status(204).send();
