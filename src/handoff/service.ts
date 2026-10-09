@@ -15,6 +15,7 @@ import {
   type PriceSnapshotLike,
 } from './lock.js';
 import { expandBomBuild } from './bomBuild.js';
+import { withKitComponents } from './kitComponents.js';
 import { sellerCollectedCharges } from '../crossborder/sellerCharges.js';
 import { rollUpProcurementLines } from './bomRollup.js';
 import {
@@ -425,7 +426,18 @@ export async function createAcceptedOrder(
   // parts is replaced by them, and a free-issue part is moved onto the sheet of the
   // vendor it is shipped to. Both are configuration (Catalog → BOM build), so this is
   // a no-op on a database where nothing is configured. See handoff/bomBuild.ts.
-  const procurement = await expandBomBuild(procurementFromItems(version.items));
+  //
+  // A hardware kit that reached the proposal without its fastener breakdown (one loaded
+  // from a saved template) gets it derived first, so the BOM still lists every fastener
+  // rather than one bundled "Hardware Kit" line. See kitComponents.ts.
+  const kitItems = await withKitComponents(version.items, version.sections);
+  if (kitItems.filled.length) {
+    logger.info(
+      { versionId, kits: kitItems.filled.map((f) => ({ ref: f.ref, source: f.source })) },
+      'accept: hardware kit had no breakdown; derived one for the BOM',
+    );
+  }
+  const procurement = await expandBomBuild(procurementFromItems(kitItems.items));
   const refs = await resolveCatalogRefs(procurement);
   // Standing vendor notes, set once per part in Catalog → BOM setup and copied onto
   // the line here so the vendor sees them on every order without anyone retyping them.

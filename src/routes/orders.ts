@@ -35,6 +35,7 @@ import { buildBom } from '../handoff/bom.js';
 import { prisma } from '../lib/prisma.js';
 import { procurementFromItems } from '../handoff/lock.js';
 import { expandBomBuild } from '../handoff/bomBuild.js';
+import { withKitComponents } from '../handoff/kitComponents.js';
 import { ApprovalSchema } from '../handoff/approvalSchema.js';
 import {
   PORTAL_KINDS,
@@ -410,14 +411,17 @@ export function registerOrderRoutes(app: FastifyInstance): void {
 
     const version = await prisma.proposalVersion.findUnique({
       where: { id: order.proposalVersionId },
-      select: { items: true },
+      select: { items: true, sections: true },
     });
 
     const norm = (v: unknown): string =>
       String(v ?? '')
         .trim()
         .toUpperCase();
-    const expected = await expandBomBuild(procurementFromItems(version?.items ?? []));
+    // The same kit-breakdown fallback lock time applies, so an order locked from a
+    // template-loaded kit is compared against the fasteners it should have.
+    const kitItems = await withKitComponents(version?.items ?? [], version?.sections);
+    const expected = await expandBomBuild(procurementFromItems(kitItems.items));
 
     type Tally = { sku: string; name: string; quantity: number };
     const sum = (

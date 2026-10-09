@@ -8294,13 +8294,17 @@
     } catch (e) { alert('Could not reach the server.'); btn.disabled = false; btn.textContent = 'Save'; }
   }
 
+  // A line's `components` (the H-1000 kit's fastener breakdown) is saved with the
+  // template. Without it, a kit loaded from a template had no breakdown, and every order
+  // built from it locked with one bundled "Hardware Kit" line on its Bill of Materials
+  // instead of each fastener (see src/handoff/kitComponents.ts).
   function saveAsTemplate() {
     openModal('Save as template',
       fieldRow('Template name', '<input id="tplName" style="' + IN + '" placeholder="e.g. Full Gym, Flex Quote, Soar" required>') +
       fieldRow('Description (optional)', '<input id="tplDesc" style="' + IN + '">'),
       async function (close, showErr) {
         var name = document.getElementById('tplName').value.trim(); if (!name) return showErr('Give the template a name.');
-        var data = { title: pb.title, meta: { taxAmountMinor: pb.meta.taxAmountMinor, discountPct: pb.meta.discountPct, discountMode: pb.meta.discountMode === 'AMT' ? 'AMT' : 'PCT', discountAmountMinor: pb.meta.discountAmountMinor || 0, structureFreightMinor: pb.meta.structureFreightMinor, matsFreightMinor: pb.meta.matsFreightMinor, stdFreightOn: !!pb.meta.stdFreightOn, stdFreightMinor: pb.meta.stdFreightMinor || 0, shipTo: '', projectId: '', expiration: '' }, lines: pb.lines.map(function (l) { return { lineType: l.lineType, kind: l.kind, productId: l.productId, sku: l.sku || '', name: l.name, description: l.description, quantity: l.quantity, rateMinor: l.rateMinor, group: l.group || '', optional: !!l.optional, delivery: l.delivery || '', returnable: l.returnable || '', addlFreight: l.addlFreight || '', freightCalc: l.freightCalc || '', tpFreightMinor: l.tpFreightMinor || 0, tpFreightLabel: l.tpFreightLabel || '' }; }) };
+        var data = { title: pb.title, meta: { taxAmountMinor: pb.meta.taxAmountMinor, discountPct: pb.meta.discountPct, discountMode: pb.meta.discountMode === 'AMT' ? 'AMT' : 'PCT', discountAmountMinor: pb.meta.discountAmountMinor || 0, structureFreightMinor: pb.meta.structureFreightMinor, matsFreightMinor: pb.meta.matsFreightMinor, stdFreightOn: !!pb.meta.stdFreightOn, stdFreightMinor: pb.meta.stdFreightMinor || 0, shipTo: '', projectId: '', expiration: '' }, lines: pb.lines.map(function (l) { return { lineType: l.lineType, kind: l.kind, productId: l.productId, sku: l.sku || '', name: l.name, description: l.description, components: l.components || null, quantity: l.quantity, rateMinor: l.rateMinor, group: l.group || '', optional: !!l.optional, delivery: l.delivery || '', returnable: l.returnable || '', addlFreight: l.addlFreight || '', freightCalc: l.freightCalc || '', tpFreightMinor: l.tpFreightMinor || 0, tpFreightLabel: l.tpFreightLabel || '' }; }) };
         var r = await authed('/proposal-templates', { method: 'POST', body: { name: name, description: document.getElementById('tplDesc').value.trim() || undefined, data: data } });
         if (!r.ok) return showErr('Could not save template (' + r.status + ').');
         close();
