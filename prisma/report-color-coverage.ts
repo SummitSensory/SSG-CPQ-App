@@ -8,15 +8,24 @@
  * portal can write (src/portal/knownAreas.ts):
  *   - the parts mapped to it, and any mapped part number the catalog doesn't have;
  *   - how many orders have answered it;
+ *   - a part mapped as piece N whose colour spec takes fewer than N colours (a review
+ *     then leaves that whole line untouched, so even the other pieces are lost);
  * then any area answered or mapped that the portal list doesn't know, and whether
- * each active vinyl palette carries the portal's 14 vinyl names.
+ * each active vinyl palette carries the portal's 14 vinyl names. Areas the portal has
+ * retired (RETIRED_PORTAL_AREAS) are listed as "retired" and need no mapping.
  *
  * Read-only — it never writes. Run with:  pnpm db:report:color-coverage
- * Exits 1 when an area is unmapped or a vinyl name is missing, so it can gate a check.
+ * Exits 1 when a live area is unmapped, a piece exceeds its spec, or a vinyl name is
+ * missing, so it can gate a check.
  */
 import { PrismaClient } from '@prisma/client';
 import { colorAreasOf, isPartPattern } from '../src/portal/colorAreas.js';
-import { KNOWN_PORTAL_AREAS, knownAreaKeys, PORTAL_VINYL_NAMES } from '../src/portal/knownAreas.js';
+import {
+  KNOWN_PORTAL_AREAS,
+  knownAreaKeys,
+  PORTAL_VINYL_NAMES,
+  RETIRED_PORTAL_AREAS,
+} from '../src/portal/knownAreas.js';
 
 const prisma = new PrismaClient();
 
@@ -71,24 +80,75 @@ async function main() {
     ).map((r) => r.part.toUpperCase()),
   );
 
+  // Colour-spec slot counts for parts mapped by piece, looked up the way the BOM
+  // does: the catalog product's own spec first, then one keyed on the part number.
+  const pieceSkus = [
+    ...new Set(mappings.filter((m) => m.piece != null).map((m) => m.sku.toUpperCase())),
+  ];
+  const slotsOf = new Map<string, number>();
+  if (pieceSkus.length) {
+    const ci = (s: string) => ({ equals: s, mode: 'insensitive' as const });
+    const products = await prisma.product.findMany({
+      where: { OR: pieceSkus.map((s) => ({ sku: ci(s) })) },
+      select: { id: true, sku: true },
+    });
+    const specs = await prisma.productColorSpec.findMany({
+      where: {
+        palette: { active: true },
+        OR: [
+          { productId: { in: products.map((p) => p.id) } },
+          ...pieceSkus.map((s) => ({ sku: ci(s) })),
+        ],
+      },
+      select: { productId: true, sku: true, slotCount: true },
+    });
+    for (const sku of pieceSkus) {
+      const pid = products.find((p) => (p.sku ?? '').toUpperCase() === sku)?.id;
+      const spec =
+        (pid && specs.find((x) => x.productId === pid)) ||
+        specs.find((x) => (x.sku ?? '').toUpperCase() === sku);
+      if (spec) slotsOf.set(sku, spec.slotCount);
+    }
+  }
+
   const known = knownAreaKeys();
   const unmapped: string[] = [];
+  const retiredUnmapped: string[] = [];
+  const pieceProblems: string[] = [];
   console.log(`Portal colour areas (${known.length} the portal can write)\n`);
   for (const [input] of Object.entries(KNOWN_PORTAL_AREAS)) {
     for (const key of known.filter((k) => k.startsWith(`${input}.`))) {
       const parts = mapped.get(key) ?? [];
       const orders = answered.get(key)?.size ?? 0;
-      if (!parts.length) unmapped.push(key);
+      const retired = RETIRED_PORTAL_AREAS.has(key);
+      if (!parts.length) (retired ? retiredUnmapped : unmapped).push(key);
+      let badPiece = false;
       const shown = parts
         .map((p) => {
           const piece = p.piece ? ` (piece ${p.piece})` : '';
           const flag =
             !isPartPattern(p.sku) && !inCatalog.has(p.sku.toUpperCase()) ? ' [not in catalog]' : '';
-          return `${p.sku}${piece}${flag}`;
+          const slots = p.piece ? slotsOf.get(p.sku.toUpperCase()) : undefined;
+          const tooFew = slots !== undefined && p.piece !== null && p.piece > slots;
+          if (tooFew) {
+            badPiece = true;
+            pieceProblems.push(
+              `${key}: ${p.sku} piece ${p.piece}, but its colour spec takes ${slots}`,
+            );
+          }
+          return `${p.sku}${piece}${flag}${tooFew ? ` [spec takes ${slots} colour(s)]` : ''}`;
         })
         .join(', ');
+      const status = badPiece
+        ? 'PIECE   '
+        : parts.length
+          ? 'ok      '
+          : retired
+            ? 'retired '
+            : 'UNMAPPED';
+      const note = retired && !parts.length ? 'no longer asked by the portal' : '';
       console.log(
-        `  ${parts.length ? 'ok      ' : 'UNMAPPED'}  ${key.padEnd(42)} ${String(orders).padStart(3)} order(s)  ${shown}`,
+        `  ${status}  ${key.padEnd(42)} ${String(orders).padStart(3)} order(s)  ${shown || note}`,
       );
     }
   }
@@ -123,9 +183,10 @@ async function main() {
   }
 
   console.log(
-    `\nSummary: ${unmapped.length} unmapped area(s), ${strays.length} unknown area(s), ${vinylGaps.length} vinyl palette gap(s).`,
+    `\nSummary: ${unmapped.length} unmapped area(s), ${pieceProblems.length} piece/spec mismatch(es), ${strays.length} unknown area(s), ${vinylGaps.length} vinyl palette gap(s); ${retiredUnmapped.length} retired area(s) need nothing.`,
   );
-  if (unmapped.length || vinylGaps.length) process.exitCode = 1;
+  for (const p of pieceProblems) console.log(`  PIECE: ${p}`);
+  if (unmapped.length || pieceProblems.length || vinylGaps.length) process.exitCode = 1;
 }
 
 main()
