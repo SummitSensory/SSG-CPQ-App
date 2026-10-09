@@ -541,7 +541,14 @@ export function registerOrderRoutes(app: FastifyInstance): void {
     const [gate, shipping] = await Promise.all([qboGateState(id), shippingReadinessForOrder(id)]);
     return {
       ...gate,
-      shipping: { ...shipping, balanceMinor: shipping.balanceMinor?.toString() ?? null },
+      shipping: {
+        ...shipping,
+        balanceMinor: shipping.balanceMinor?.toString() ?? null,
+        otherCurrencyBalances: shipping.otherCurrencyBalances.map((b) => ({
+          currency: b.currency,
+          balanceMinor: b.balanceMinor.toString(),
+        })),
+      },
     };
   });
 
