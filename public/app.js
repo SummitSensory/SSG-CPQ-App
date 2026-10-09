@@ -315,6 +315,9 @@
         var r = await api('/auth/login', { method: 'POST', noAuth: true, body: { email: document.getElementById('email').value.trim(), password: document.getElementById('password').value } });
         if (!r.ok) { renderLogin(r.status === 401 ? 'Invalid email or password.' : 'Sign-in failed (' + r.status + ').'); return; }
         var d = await r.json(); setTokens(d.accessToken, d.refreshToken); boot();
+        // The side modules (Receivables, Goals, Insights, Partnerships) checked the session
+        // when the page loaded, before sign-in; this tells them to check again.
+        try { window.dispatchEvent(new Event('ssg:signed-in')); } catch (e) {}
       } catch (err) { renderLogin('Could not reach the server. Is it running?'); }
     });
     document.getElementById('forgotBtn').addEventListener('click', function () {
@@ -10995,7 +10998,13 @@
     // reloads so the new ship-to / colours show without leaving the page.
     var portalBox = document.getElementById('portalBox');
     if (OP && portalBox) {
-      var reloadBom = function () { loadBomSections(order, user, canHandoff); };
+      // The lines come from order.procurement, read when the page opened, so the order
+      // is fetched again first — otherwise the table keeps showing the old colours.
+      var reloadBom = async function () {
+        var rr = await authed('/orders/' + order.id);
+        if (rr.ok) { var oo = await rr.json(); order.procurement = oo.procurement; }
+        loadBomSections(order, user, canHandoff);
+      };
       OP.mountCard({
         el: portalBox, orderId: order.id, authed: authed,
         canReview: hasRole(ORDERS_MANAGE_ROLES, user.role),
@@ -11165,7 +11174,9 @@
   function shippingCardHtml(shipping) {
     var s = shipping || {};
     var mfg = s.manufacturing || {};
-    var hasBalance = s.balanceMinor != null && Number(s.balanceMinor) > 0;
+    // Invoices in another currency are listed beside the balance, never added to it.
+    var others = (s.otherCurrencyBalances || []).filter(function (o) { return Number(o.balanceMinor) > 0; });
+    var hasBalance = (s.balanceMinor != null && Number(s.balanceMinor) > 0) || others.length > 0;
     var flagged = !mfg.shipDate && hasBalance;
     var box = function (label, value, opts) {
       opts = opts || {};
@@ -11176,7 +11187,10 @@
     };
     var balanceValue = s.balanceMinor == null
       ? '<span class="muted" style="font-weight:400;">Not yet invoiced</span>'
-      : '<span style="color:' + (hasBalance ? '#9c3327' : '#2f6b4f') + ';">' + fmtMoney(s.balanceMinor, s.currency || 'USD') + (hasBalance ? ' owed' : ' — paid in full') + '</span>';
+      : '<span style="color:' + (hasBalance ? '#9c3327' : '#2f6b4f') + ';">' +
+        [Number(s.balanceMinor) > 0 || !others.length ? fmtMoney(s.balanceMinor, s.currency || 'USD') + (hasBalance ? ' owed' : ' — paid in full') : null]
+          .concat(others.map(function (o) { return fmtMoney(o.balanceMinor, o.currency) + ' owed'; }))
+          .filter(Boolean).join('<br>') + '</span>';
     return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;">' +
         box('Manufacturing phase', mfg.status ? esc(mfg.status) : '<span class="muted" style="font-weight:400;">—</span>') +
         box(flagged ? 'Ship date — missing, balance owed' : 'Estimated ship date',
@@ -15408,7 +15422,9 @@
           return '<div style="flex:1;min-width:90px;">' + fieldRow(t + ' mo factor', '<input class="rbFactor" data-term="' + t + '" inputmode="decimal" placeholder="e.g. 0.0321" style="' + IN + '">') + '</div>';
         }).join('') + '</div>',
         async function (close, showErr) {
-          var minD = Number(document.getElementById('rbMin').value);
+          // Number('') is 0, so an empty From would pass as a $0 band; blank is refused.
+          var minRaw = document.getElementById('rbMin').value.trim();
+          var minD = minRaw === '' ? NaN : Number(minRaw);
           var maxRaw = document.getElementById('rbMax').value.trim();
           var maxD = maxRaw === '' ? null : Number(maxRaw);
           if (!isFinite(minD) || minD < 0) return showErr('Give the bottom of the band.');

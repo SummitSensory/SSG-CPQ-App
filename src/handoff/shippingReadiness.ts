@@ -31,21 +31,63 @@ export interface ShippingReadiness {
   balanceMinor: bigint | null;
   currency: string;
   invoiceCount: number;
+  /**
+   * Outstanding balances on invoices in any OTHER currency, one entry per currency.
+   * Invoices are raised in the order's currency, so this is normally empty; when it
+   * is not, those amounts are listed here rather than added to `balanceMinor` —
+   * USD 3,300 plus CAD 5,700 is not "9,000 owed" in either currency.
+   */
+  otherCurrencyBalances: Array<{ currency: string; balanceMinor: bigint }>;
   /** The ask this whole thing exists for: a missing ship date on a job that still owes money. */
   needsAttention: boolean;
 }
 
-/** Every real (non-estimate, non-voided, created) invoice's outstanding balance, summed. */
+/**
+ * Every real (non-estimate, non-voided, created) invoice's outstanding balance,
+ * summed per currency: the order's currency into `balanceMinor`, any other
+ * currency kept apart.
+ */
 async function outstandingBalance(
   proposalId: string,
-): Promise<{ balanceMinor: bigint | null; invoiceCount: number }> {
+  currency: string,
+): Promise<{
+  balanceMinor: bigint | null;
+  invoiceCount: number;
+  otherCurrencyBalances: Array<{ currency: string; balanceMinor: bigint }>;
+}> {
   const txns = await prisma.qboTransaction.findMany({
     where: { proposalId, status: 'CREATED', type: { not: 'ESTIMATE' } },
-    select: { balanceMinor: true, amountMinor: true },
+    select: { balanceMinor: true, amountMinor: true, currency: true },
   });
-  if (!txns.length) return { balanceMinor: null, invoiceCount: 0 };
-  const total = txns.reduce((sum, t) => sum + (t.balanceMinor ?? t.amountMinor), 0n);
-  return { balanceMinor: total, invoiceCount: txns.length };
+  return splitBalances(txns, currency);
+}
+
+/** The pure half of outstandingBalance: sum the invoices per currency. */
+export function splitBalances(
+  txns: ReadonlyArray<{ balanceMinor: bigint | null; amountMinor: bigint; currency: string }>,
+  currency: string,
+): {
+  balanceMinor: bigint | null;
+  invoiceCount: number;
+  otherCurrencyBalances: Array<{ currency: string; balanceMinor: bigint }>;
+} {
+  if (!txns.length) return { balanceMinor: null, invoiceCount: 0, otherCurrencyBalances: [] };
+  const want = currency.toUpperCase();
+  const byCurrency = new Map<string, bigint>();
+  for (const t of txns) {
+    const c = (t.currency || want).toUpperCase();
+    byCurrency.set(c, (byCurrency.get(c) ?? 0n) + (t.balanceMinor ?? t.amountMinor));
+  }
+  const others = [...byCurrency.entries()]
+    .filter(([c]) => c !== want)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([c, balanceMinor]) => ({ currency: c, balanceMinor }));
+  return {
+    // Invoices exist but none in the order's currency: nothing is owed in it.
+    balanceMinor: byCurrency.get(want) ?? 0n,
+    invoiceCount: txns.length,
+    otherCurrencyBalances: others,
+  };
 }
 
 async function assemble(
@@ -55,14 +97,18 @@ async function assemble(
 ): Promise<ShippingReadiness> {
   const [manufacturing, balance] = await Promise.all([
     manufacturingSnapshotForVersion(proposalVersionId),
-    outstandingBalance(proposalId),
+    outstandingBalance(proposalId, currency),
   ]);
   return {
     manufacturing,
     balanceMinor: balance.balanceMinor,
     currency,
     invoiceCount: balance.invoiceCount,
-    needsAttention: !manufacturing.shipDate && (balance.balanceMinor ?? 0n) > 0n,
+    otherCurrencyBalances: balance.otherCurrencyBalances,
+    needsAttention:
+      !manufacturing.shipDate &&
+      ((balance.balanceMinor ?? 0n) > 0n ||
+        balance.otherCurrencyBalances.some((b) => b.balanceMinor > 0n)),
   };
 }
 
