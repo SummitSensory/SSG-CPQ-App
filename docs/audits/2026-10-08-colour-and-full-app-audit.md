@@ -98,6 +98,22 @@ Each is pinned by a named `BUG:` test in the file listed. Highlights:
 - **CRM/reporting** (`audit-crm-*`): line-grain report totals double-count; UTC used where business time is America/Denver; goal edit ignores metric/period and zeroes count targets; financing "Add band" always 400.
 - **Catalog/schema** (`audit-catalog-*`): case-insensitive part joins vs case-sensitive unique keys; deleting a manufacturer in use → 500; on a fresh database the 0029 seed rows (powder brands, finance factors) are skipped by the bootstrap.
 
+## Follow-up (2026-10-09)
+
+Decisions confirmed by Bryan after #193:
+
+- **Pricing thresholds:** `PRICING_MIN_MARGIN_BPS` and
+  `PRICING_DISCOUNT_AUTHORITY_BPS` stay unset for now, so the server enforces
+  no floor or ceiling, as before.
+- **Permission tightening is kept:** belt-shipment edits need PROPOSAL_WRITE,
+  and customer notes need CRM_WRITE.
+
+Deploy settings can now be checked from the app: `GET /health/config`
+(user administrators only) returns three yes/no checks and never a secret:
+whether password-reset links have a configured origin, whether either JWT
+secret is shorter than 32 characters, and whether the pricing thresholds are
+enforced.
+
 ## Not covered / needs real credentials
 
 - Real PDF rendering (no local Chromium) — the HTML the PDF prints from is verified.

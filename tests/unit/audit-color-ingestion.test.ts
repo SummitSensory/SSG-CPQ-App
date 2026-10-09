@@ -42,6 +42,7 @@ import {
   displayOf,
 } from '../../src/portal/orderPortal.js';
 import type { ResolvedColorSpec } from '../../src/vendorColors/service.js';
+import { KNOWN_PORTAL_AREAS, PORTAL_VINYL_NAMES } from '../../src/portal/knownAreas.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CHART_DIR = join(HERE, '..', '..', 'prisma', 'data', 'powder-charts');
@@ -50,60 +51,11 @@ const PORTAL_PRESENT = existsSync(join(PORTAL_ROOT, 'lib', 'colorRequirements.js
 
 /* ─────────────────────────── samples copied from the portal ─────────────────────────── */
 
-/**
- * Every {input: [parts]} the portal can write — Customer-Portal lib/colorRequirements.js
- * allKnownInputParts() (REQUIREMENTS + GATED_INPUTS + STANDALONE_INPUTS + steel frame +
- * RETIRED_PARTS), with the brands ALLOWED_BRANDS permits on each input. ball_pit_balls
- * has no parts (no picker yet) so it can never appear in an answer.
- */
-const PORTAL_AREAS: Record<string, { brands: string[]; parts: string[] }> = {
-  structure_frame_paint: {
-    brands: ['cardinal', 'prismatic'],
-    parts: ['legs', 'horizontal_beams', 'ladder_rungs_and_leg', 'soar_frame', 'flex_frame'],
-  },
-  climbing_wall_color: { brands: ['cardinal', 'prismatic'], parts: ['climbing_wall'] },
-  mat_pad_color: { brands: ['vinyl'], parts: ['mat_pad'] },
-  adventure_mat: { brands: ['vinyl'], parts: ['adventure_mat_system', 'zip_line'] },
-  wall_padding_mat: { brands: ['vinyl'], parts: ['column_wraps_pads'] },
-  climbing_wall_mat: { brands: ['vinyl'], parts: ['climbing_wall_mat'] },
-  soar_mat: { brands: ['vinyl'], parts: ['column_wraps', 'floor_padding'] },
-  flex_mat: { brands: ['vinyl'], parts: ['floor_pad'] },
-  palisades_mat: {
-    brands: ['vinyl'],
-    parts: [1, 2, 3, 4, 5, 6, 7].map((n) => `palisades_mat_${n}`),
-  },
-  ball_pit: {
-    brands: ['vinyl'],
-    parts: ['ball_pit_vinyl', ...[1, 2, 3, 4, 5, 6, 7].map((n) => `mat_section_${n}`)],
-  },
-  slide_platform_paint: { brands: ['cardinal', 'prismatic'], parts: ['slide_platform'] },
-  slide: { brands: ['plastic'], parts: ['slide_color', 'slide_platform'] },
-  climb_slide_mat: {
-    brands: ['vinyl'],
-    parts: ['climb_slide_piece_1', 'climb_slide_piece_2', 'climb_slide_piece_3'],
-  },
-  soft_steps_2_mat: { brands: ['vinyl'], parts: ['soft_steps_2', 'soft_steps_2_piece_2'] },
-  soft_steps_3_mat: { brands: ['vinyl'], parts: ['soft_steps_3', 'soft_steps_3_piece_2'] },
-  foundation_mat: { brands: ['foundation'], parts: ['foundation_mat'] },
-};
+/** Every {input: [parts]} the portal can write, and the brands each allows — see src/portal/knownAreas.ts. */
+const PORTAL_AREAS = KNOWN_PORTAL_AREAS;
 
 /** Customer-Portal lib/data/vinylColors.json names — the vinyl "code" IS the name. */
-const VINYL = [
-  'Black',
-  'Charcoal',
-  'Kelly Green',
-  'Light Gray',
-  'Lime',
-  'Navy',
-  'Orange',
-  'Pink',
-  'Purple',
-  'Red',
-  'Royal Blue',
-  'Tan',
-  'White',
-  'Yellow',
-];
+const VINYL = PORTAL_VINYL_NAMES;
 /** Customer-Portal lib/colorCatalog.js SLIDE_COLORS (brand 'plastic'). */
 const PLASTIC = ['Blue', 'Green'];
 /** Customer-Portal lib/colorCatalog.js FOUNDATION_MAT_COLORS (brand 'foundation'). */
@@ -699,7 +651,7 @@ describe.skipIf(!PORTAL_PRESENT)(
       const codes: Record<string, string[]> = {
         cardinal: CARDINAL.map((c) => c.code),
         prismatic: PRISMATIC.map((c) => c.code),
-        vinyl: VINYL,
+        vinyl: [...VINYL],
         plastic: PLASTIC,
         foundation: FOUNDATION,
       };
