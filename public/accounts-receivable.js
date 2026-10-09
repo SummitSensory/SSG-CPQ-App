@@ -2145,6 +2145,11 @@
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();
+  // Loaded on the sign-in screen, the session check above found no one; try again
+  // once the user signs in, so the tab appears without a reload.
+  window.addEventListener('ssg:signed-in', function () {
+    if (!installed) boot();
+  });
 
   window.SSGAccountsReceivable = { mount: mount, install: install };
 })();
