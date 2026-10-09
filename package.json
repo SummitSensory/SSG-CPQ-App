@@ -42,6 +42,7 @@
     "db:repair:half-parts": "tsx --env-file=.env prisma/repair-half-created-parts.ts",
     "db:align:vendors": "tsx --env-file=.env prisma/align-vendor-sourcing.ts",
     "db:report:catalog": "tsx --env-file=.env prisma/report-catalog-integrity.ts",
+    "db:report:color-coverage": "tsx --env-file=.env prisma/report-color-coverage.ts",
     "db:price:p2513": "tsx --env-file=.env prisma/price-p2513.ts",
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",

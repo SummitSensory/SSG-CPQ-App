@@ -5,6 +5,8 @@ import { checkSchemaDrift } from '../lib/schemaCheck.js';
 import { checkOrphanedReferences } from '../lib/orphanCheck.js';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
+import { env, resetLinkBaseUrl, weakJwtSecrets } from '../config/env.js';
+import { effectiveThresholds } from './pricing.js';
 
 export function registerHealthRoutes(app: FastifyInstance): void {
   app.get('/health', async () => ({ status: 'ok', uptime: process.uptime() }));
@@ -82,6 +84,44 @@ export function registerHealthRoutes(app: FastifyInstance): void {
     '/health/references',
     { preHandler: requirePermission(Permission.USERS_MANAGE) },
     async () => checkOrphanedReferences(),
+  );
+
+  /**
+   * Are the deploy-time settings the audit fixes depend on in place?
+   *
+   * Each of these used to be answerable only by reading the Vercel dashboard or the
+   * boot logs. This answers yes/no and NEVER returns a secret: a secret's length class,
+   * not the secret; whether a reset-link origin is configured, and which one (an origin
+   * is not sensitive — it is in every email we send). Same permission as
+   * /health/references.
+   */
+  app.get(
+    '/health/config',
+    { preHandler: requirePermission(Permission.USERS_MANAGE) },
+    async () => {
+      const resetBase = resetLinkBaseUrl();
+      const weak = weakJwtSecrets();
+      const t = effectiveThresholds();
+      return {
+        passwordResetLinks: {
+          ok: resetBase !== null,
+          origin: resetBase ? new URL(resetBase).origin : null,
+          source: env.APP_BASE_URL
+            ? 'APP_BASE_URL'
+            : env.PUBLIC_BASE_URL
+              ? 'PUBLIC_BASE_URL'
+              : env.ENTRA_REDIRECT_URI
+                ? 'ENTRA_REDIRECT_URI'
+                : null,
+        },
+        jwtSecrets: { ok: weak.length === 0, shorterThan32: weak },
+        pricingThresholds: {
+          minMarginBps: t.minMarginBps ?? null,
+          discountAuthorityBps: t.discountAuthorityBps ?? null,
+          enforced: t.minMarginBps !== undefined || t.discountAuthorityBps !== undefined,
+        },
+      };
+    },
   );
 
   app.get('/build-info', async () => BUILD_INFO);
