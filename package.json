@@ -53,11 +53,15 @@
   },
   "pnpm": {
     "overrides": {
-      "fast-uri": ">=4.1.2",
-      "brace-expansion": "5.0.9",
+      "fast-uri": ">=4.1.5",
+      "brace-expansion": "5.0.12",
       "js-yaml": ">=4.3.1",
       "vite": ">=6.4.3",
-      "deepmerge-ts": ">=8.0.0"
+      "deepmerge-ts": ">=8.0.0",
+      "@vercel/blob>undici": "^6.28.1",
+      "exceljs>uuid": "^11.1.1",
+      "pino-pretty>fast-copy": "^4.1.0",
+      "source-map-js": ">=1.2.2"
     }
   },
   "lint-staged": {
@@ -76,7 +80,7 @@
     "@vercel/blob": "^2.8.0",
     "argon2": "^0.41.1",
     "exceljs": "^4.4.0",
-    "fastify": "^5.12.1",
+    "fastify": "^5.12.5",
     "jose": "^5.9.6",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^6.3.289",
@@ -94,11 +98,11 @@
     "eslint": "^9.39.5",
     "eslint-config-prettier": "^9.1.0",
     "husky": "^9.1.6",
-    "lint-staged": "^15.5.2",
+    "lint-staged": "^16.4.0",
     "prettier": "^3.3.3",
     "prisma": "^6.19.3",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
-    "vitest": "^3.2.7"
+    "vitest": "^4.1.11"
   }
 }
