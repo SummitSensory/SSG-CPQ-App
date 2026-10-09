@@ -49,6 +49,25 @@ especially the newer ones: `soft_steps_2_mat.*`, `soft_steps_3_mat.*`,
 uses the portal's 14 names (Black, Charcoal, Kelly Green, Light Gray, Lime,
 Navy, Orange, Pink, Purple, Red, Royal Blue, Tan, White, Yellow).
 
+Both checks are scripted. `pnpm db:report:color-coverage` (read-only) lists
+every portal area as mapped, UNMAPPED, or retired. It also lists mapped part
+numbers missing from the catalog, any mapped piece beyond its part's colour
+spec, any area the portal list doesn't know, and vinyl names missing from each
+active vinyl palette. It exits 1 on a real gap. It reads `DATABASE_URL`, so run
+it against production deliberately.
+
+**Production result (2026-10-09):** 29 of the 40 areas were mapped, and the
+Resilite vinyl palette has all 14 names. Of the 11 unmapped areas, 9 were
+retired by the portal on 2026-09-23 (`adventure_mat.zip_line`,
+`slide.slide_platform`, `ball_pit.mat_section_1`…`_7`). They need nothing, and
+the report now shows them as "retired". The other 2 were real gaps: the Soft
+Steps side-panel colours (`soft_steps_2_mat.soft_steps_2_piece_2`,
+`soft_steps_3_mat.soft_steps_3_piece_2`), added to the portal on 2026-10-05.
+`pnpm db:map:soft-steps` maps both Soft Steps colours as pieces 1 and 2 of
+RSS2432 and RSS2433. It raises a one-slot colour spec to two, because a piece
+beyond the spec leaves the whole line uncoloured. It is a dry run by default
+and writes only with `--apply --actor=<email>`.
+
 ### Colour findings (edge cases — none affect the normal path)
 
 | Sev | Finding                                                                                                                                             | Where                                                                  |
