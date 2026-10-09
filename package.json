@@ -43,6 +43,7 @@
     "db:align:vendors": "tsx --env-file=.env prisma/align-vendor-sourcing.ts",
     "db:report:catalog": "tsx --env-file=.env prisma/report-catalog-integrity.ts",
     "db:report:color-coverage": "tsx --env-file=.env prisma/report-color-coverage.ts",
+    "db:map:soft-steps": "tsx --env-file=.env prisma/map-soft-steps-pieces.ts",
     "db:price:p2513": "tsx --env-file=.env prisma/price-p2513.ts",
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",

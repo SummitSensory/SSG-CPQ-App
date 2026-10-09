@@ -41,6 +41,19 @@ export const KNOWN_PORTAL_AREAS: Readonly<Record<string, { brands: string[]; par
   foundation_mat: { brands: ['foundation'], parts: ['foundation_mat'] },
 };
 
+/**
+ * Areas the portal no longer asks for — Customer-Portal lib/colorRequirements.js
+ * RETIRED_PARTS, from the 2026-09-23 layout change (Zip Line → Adventure Mat System,
+ * plastic slide platform → painted slide_platform_paint.slide_platform, 7 Ball Pit
+ * mat sections → ball_pit.ball_pit_vinyl). Still in KNOWN_PORTAL_AREAS because a
+ * customer's earlier picks under them are kept, but nothing needs mapping for them.
+ */
+export const RETIRED_PORTAL_AREAS: ReadonlySet<string> = new Set([
+  'adventure_mat.zip_line',
+  'slide.slide_platform',
+  ...[1, 2, 3, 4, 5, 6, 7].map((n) => `ball_pit.mat_section_${n}`),
+]);
+
 /** Every "<group>.<area>" key in KNOWN_PORTAL_AREAS (40 of them). */
 export function knownAreaKeys(): string[] {
   return Object.entries(KNOWN_PORTAL_AREAS).flatMap(([input, { parts }]) =>
