@@ -354,16 +354,15 @@ function beamMembers(a: AdvAnswers): BomRow[] {
     9: 'A-2419',
     10: 'A-2420',
   };
-  const shortCap = (part: string): number => {
-    if (part === 'P-2206') return W === 6 ? 2 : 0;
-    if (part === 'P-2207') return W === 7 ? 2 : 0;
-    if (part === 'A-2408') return W === 8 ? 2 : 0;
-    if (part === 'A-2409') return W === 9 ? 2 : 0;
-    if (part === 'A-2410') return W === 10 ? 2 : 0;
-    if (part === 'P-2545') return spans.indexOf(7) >= 0 ? 2 : 0; // per workbook (references the run length)
-    return 0;
-  };
-  const e64 = shortCap('A-2408') + shortCap('A-2409') + shortCap('A-2410');
+  // Two end caps across the WIDTH, in the member that matches it. The workbook keyed
+  // its 5' row on the run length (VLOOKUP!E59 =IF(E9=7,2,0)), so a 7' bay drew two
+  // 5' members and a 5'-wide frame drew no caps at all; the 5' cap is by width like
+  // every other size.
+  const shortCap = (part: string): number => (memLen[part] === W ? 2 : 0);
+  // Every width cap comes off the perimeter. The workbook's total (VLOOKUP!E64
+  // =SUM(E61:E63)) skipped the 6' and 7' rows, so a 10' × 7' frame kept all four
+  // perimeter members at 10' and showed 4 A-2410 where it takes 2.
+  const e64 = Object.keys(memLen).reduce((s, p) => s + shortCap(p), 0);
   const J2 = 4; // Horizontal Beams (perimeter top members for rect/square)
   const partForLen: Record<number, string> = {};
   Object.keys(memLen).forEach((p) => {
@@ -382,25 +381,32 @@ function beamMembers(a: AdvAnswers): BomRow[] {
   // Long members, bay by bay, ported term for term from VLOOKUP!J:O.
   //
   //   bay 1  (the workbook's E9 row)  = J2 − E64 + interior beams − ½× monkey members
-  //   each later bay (columns K and L) = 3
+  //   each later bay                  = 2 along its length + 1 across the width
   //
-  // Six legs is two bays and adds K = 3; eight legs is three bays and adds L = 6,
-  // i.e. 3 per bay past the first. The old code emitted a full perimeter set for
-  // every bay and no leg addition at all, which is why a 20 × 10 came out at 7
-  // A-2410 where the workbook gives 8. Uneven bays resolve the addition against
-  // the member that bay actually uses (18 ft = 10 + 8 → the 3 land on A-2408).
+  // A later bay is two more length members and one more cross member at the new
+  // pair of legs. The workbook's K/L columns add 3 of the BAY's length instead, which
+  // is right only when the bay equals the width (20 × 10): a 20 × 8 got 5 A-2410 and
+  // 2 A-2408 where it takes 4 and 3. Uneven bays size their length members by the
+  // bay that uses them (18 ft = 10 + 8 → the 8' bay adds 2 A-2408 + 1 width member).
   const label = spans.join("' + ") + "'";
-  const LEG_ADDITION_PER_BAY = 3;
+  const widthPart = partForLen[W];
   spans.forEach((sp, idx) => {
     const part = partForLen[sp];
     if (!part) return;
     if (idx > 0) {
       add(
         part,
-        LEG_ADDITION_PER_BAY,
+        2,
         `Beam members (${sp}')`,
-        `bay ${idx + 1} of ${spans.length} (L ${L} = ${label}): leg addition → ${LEG_ADDITION_PER_BAY}`,
+        `bay ${idx + 1} of ${spans.length} (L ${L} = ${label}): 2 along the ${sp}' bay`,
       );
+      if (widthPart)
+        add(
+          widthPart,
+          1,
+          `Beam members (${W}')`,
+          `bay ${idx + 1} of ${spans.length}: 1 across the width (W ${W})`,
+        );
       return;
     }
     const mm = monkeyMem[sp];
@@ -421,6 +427,11 @@ function beamMembers(a: AdvAnswers): BomRow[] {
 
 /** Said out loud when a frame length does not break into stock beam members. */
 export function beamSpanWarning(a: AdvAnswers): string | null {
+  const W = n(a.width);
+  // The width is spanned by one member, so it has to be a stock size too — the
+  // configurator offers up to 20', and a wider frame got no cross members at all.
+  if (W > 0 && STOCK_MEMBER_FT.indexOf(W) < 0)
+    return `Frame width ${W}' is not a stock beam member (5–10'), so no cross members were generated — confirm the frame breakdown with engineering before sending this proposal.`;
   const spans = beamSpans(a);
   const bad = spans.filter((s) => STOCK_MEMBER_FT.indexOf(s) < 0);
   if (!bad.length) return null;
@@ -762,7 +773,12 @@ export function computeAdventureProposal(
   // block would silently drop their cost.
   const addlHw =
     n(a.forged) || n(a.swingHanger) || n(a.swivelStandalone) || n(a.vRings) || extras.length;
-  if (a.brackets || addlHw) {
+  // The frame's own fasteners — the anchors under every vertical, the corner-post and
+  // saddle bolts — are in H-1000 whatever accessories were picked, as the workbook
+  // always carries it. Gating the section on brackets/accessories alone dropped the
+  // whole kit, its cost and its weight from a plain frame.
+  const roll = hardwareRollup(a, LOOK, rules, frameRules, ACCESSORY_HW_PARTS);
+  if (a.brackets || addlHw || roll.components.length) {
     G('Hardware', false);
     // The saddle bracket and the eye bolts the configurator asks for by name are
     // things the customer chose — they print as their own lines instead of being
@@ -779,7 +795,6 @@ export function computeAdventureProposal(
     // decision, not a pricing one — see `hardwareRollupDetail`. The math is identical
     // either way; the full breakdown always travels on the line in `components`, so
     // the H-1000 audit works on a draft that was built weeks ago.
-    const roll = hardwareRollup(a, LOOK, rules, frameRules, ACCESSORY_HW_PARTS);
     if (roll.components.length) {
       weight += roll.weightLbs;
       const itemize = setting(settings ?? defaultSettings(), 'hardwareRollupDetail') === 1;
@@ -958,8 +973,10 @@ export function hardwareBOM(
 ): HardwareBomRow[] {
   const bom = computeAdventureBOM(a, frameRules);
   const inputs: Record<string, number> = {
-    bracketsQty: n(a.bracketsQty),
-    swivel360: n(a.swivel360),
+    // Bracket answers count only while brackets are on: switching the option off
+    // leaves the typed numbers behind, and they printed as priced lines.
+    bracketsQty: a.brackets ? n(a.bracketsQty) : 0,
+    swivel360: a.brackets ? n(a.swivel360) : 0,
     swivelStandalone: n(a.swivelStandalone),
     forged: n(a.forged),
     swingHanger: n(a.swingHanger),

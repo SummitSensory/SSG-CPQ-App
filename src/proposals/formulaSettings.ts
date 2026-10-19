@@ -118,7 +118,7 @@ export const FORMULA_SETTINGS: FormulaSettingDef[] = [
   {
     key: 'matOverageIn',
     label: 'Mat overage per side',
-    help: 'Inches of padding added to EACH side of the frame footprint before the area is worked out. 14" is the standard. Changing it re-sizes and re-prices every Adventure mat quoted from now on, so it asks you to type CONFIRM.',
+    help: 'Inches of padding added to the frame length and to the frame width (14" is 7" a side) before the area is worked out. 14" is the standard. Changing it re-sizes and re-prices every Adventure mat quoted from now on, so it asks you to type CONFIRM.',
     unit: 'in',
     default: 14,
     min: 0,

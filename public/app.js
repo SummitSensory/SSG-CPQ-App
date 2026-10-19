@@ -9708,7 +9708,7 @@
             '</div>'
           ) +
           sec('Mats & Padding',
-            tog('floorPadding', 'Floor Padding', 'Sized from the frame: 14" added to each side. Priced per sq ft.') +
+            tog('floorPadding', 'Floor Padding', 'Sized from the frame: 14" added to the length and to the width (7" a side). Priced per sq ft.') +
             (adv.floorPadding ? '<div style="margin:8px 0 12px;padding-left:16px;">' + padThicknessPicker() + padQuoteHint() + '</div>' : '') +
             tog('matColumn', 'Adventure Mat System — Column') +
             (adv.matColumn ? '<div style="' + grid + 'margin:8px 0 4px;">' + num('uShaped', 'U-Shaped Column Wraps (def = # ladders)', 0, 40) + num('completeWrap', 'Complete Column Wraps (def = legs − U-shaped)', 0, 40) + '</div>' : '') +
@@ -9871,7 +9871,9 @@
       adv.cargoHwCarabiner = true; adv.cargoHwVRing = true;
     }
     if (changed === 'legs' || changed === 'length') { adv.completeWrap = Math.max(0, (Number(adv.legs) || 0) - (Number(adv.uShaped) || 0)); }
-    if (changed === 'ladders' || changed === 'laddersQty') { if (adv.ladders && adv.matColumn && !adv.uShaped) adv.uShaped = adv.laddersQty; }
+    // Complete + U-shaped wraps always total the legs (workbook Calcs E68/E69): a ladder
+    // turning a wrap U-shaped takes one complete wrap away, or the column mats exceed the legs.
+    if (changed === 'ladders' || changed === 'laddersQty') { if (adv.ladders && adv.matColumn && !adv.uShaped) adv.uShaped = adv.laddersQty; if (adv.matColumn) adv.completeWrap = Math.max(0, (Number(adv.legs) || 0) - (Number(adv.uShaped) || 0)); }
     if (changed === 'matColumn' && adv.matColumn) { if (!adv.uShaped) adv.uShaped = adv.ladders ? adv.laddersQty : 0; adv.completeWrap = Math.max(0, (Number(adv.legs) || 0) - (Number(adv.uShaped) || 0)); }
     if (changed === 'uShaped') { adv.completeWrap = Math.max(0, (Number(adv.legs) || 0) - (Number(adv.uShaped) || 0)); }
   }

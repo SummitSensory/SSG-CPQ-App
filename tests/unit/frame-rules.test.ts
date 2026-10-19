@@ -103,6 +103,102 @@ describe('frame quantities (workbook defaults, now data-driven)', () => {
     expect(qty('TRN2016')).toBe(4);
   });
 
+  /**
+   * The top of a single-bay frame is four members: two across the width, two along
+   * the length. The workbook's width-cap total skipped the 6' and 7' sizes, so a
+   * 10' × 7' frame kept all four at 10' (4 × A-2410 plus 2 × P-2207 = six members on
+   * a four-sided frame), and its 5' row was keyed on the length, not the width.
+   */
+  it('puts exactly two width caps and two length members on every single-bay frame', () => {
+    const mem: Record<number, string> = {
+      5: 'P-2545',
+      6: 'P-2206',
+      7: 'P-2207',
+      8: 'A-2408',
+      9: 'A-2409',
+      10: 'A-2410',
+    };
+    for (let L = 5; L <= 10; L++) {
+      for (let W = 5; W <= 10; W++) {
+        const a: AdvAnswers = { length: L, width: W, config: 'Rectangle', legs: 4, ladders: 0 };
+        const total = Object.values(mem).reduce((s, p) => s + qty(p, a), 0);
+        expect(total, `${L}×${W}`).toBe(4);
+        if (L === W) expect(qty(mem[L]!, a), `${L}×${W}`).toBe(4);
+        else {
+          expect(qty(mem[W]!, a), `${L}×${W} width caps`).toBe(2);
+          expect(qty(mem[L]!, a), `${L}×${W} length members`).toBe(2);
+        }
+      }
+    }
+  });
+
+  it("matches Bryan's 10′ × 7′ and 10′ × 8′ traces: two 10′ members each", () => {
+    // Monkey bars on, one interior beam: 2 length − 1 monkey offset + 1 interior.
+    const base: Omit<AdvAnswers, 'width'> = {
+      length: 10,
+      config: 'Rectangle',
+      legs: 4,
+      ladders: 1,
+      monkeyBars: true,
+      interiorBeams: true,
+      interiorBeamsQty: 1,
+    };
+    for (const [W, cap] of [
+      [7, 'P-2207'],
+      [8, 'A-2408'],
+    ] as const) {
+      const a = { ...base, width: W };
+      expect(qty('A-2410', a), `10×${W}`).toBe(2);
+      expect(qty(cap, a), `10×${W}`).toBe(2);
+      expect(qty('A-2420', a), `10×${W}`).toBe(2);
+    }
+  });
+
+  /**
+   * A later bay is two more length members and one more cross member. The workbook
+   * added three of the bay's length, right only when the bay equals the width.
+   */
+  it('sizes a multi-bay frame’s cross members by the width, its length members by the bay', () => {
+    const f = (L: number, W: number, legs: number): AdvAnswers => ({
+      length: L,
+      width: W,
+      config: 'Rectangle',
+      legs,
+      ladders: 0,
+    });
+    // 20 × 8: two 10' bays → 3 × 8' across, 4 × 10' along.
+    expect(qty('A-2408', f(20, 8, 6))).toBe(3);
+    expect(qty('A-2410', f(20, 8, 6))).toBe(4);
+    // 18 × 10: 10' + 8' bays → 3 × 10' across + 2 × 10' along, 2 × 8' along.
+    expect(qty('A-2410', f(18, 10, 6))).toBe(5);
+    expect(qty('A-2408', f(18, 10, 6))).toBe(2);
+    // 20 × 10 and 30 × 10 were already right and stay so.
+    expect(qty('A-2410', f(20, 10, 6))).toBe(7);
+    expect(qty('A-2410', f(30, 10, 8))).toBe(10);
+    // 30 × 7: three 10' bays → 4 × 7' across, 6 × 10' along.
+    expect(qty('P-2207', f(30, 7, 8))).toBe(4);
+    expect(qty('A-2410', f(30, 7, 8))).toBe(6);
+  });
+
+  it('prints the H-1000 kit on a plain frame with no accessory hardware', () => {
+    const plain: AdvAnswers = { length: 10, width: 8, config: 'Rectangle', legs: 4, ladders: 0 };
+    const { lines } = computeAdventureProposal(plain);
+    const kit = lines.find((l) => l.sku === 'H-1000');
+    expect(kit).toBeTruthy();
+    expect(kit!.rateMinor).toBeGreaterThan(0);
+  });
+
+  it('ignores leftover bracket answers once brackets are switched off', () => {
+    const { lines } = computeAdventureProposal({
+      ...answers,
+      brackets: false,
+      bracketsQty: 5,
+      swivel360: 3,
+    });
+    expect(lines.some((l) => l.sku === '6820H-LDD')).toBe(false);
+    expect(lines.some((l) => l.sku === '6820H-LAC-G')).toBe(false);
+  });
+
   it('honours an edited coefficient without disturbing other rows', () => {
     const rules = mergeRules(DEFAULT_FRAME_RULES, [
       { part: 'P-2028', terms: [{ source: 'in:legs', coefficient: 3 }] },
