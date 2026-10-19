@@ -12253,7 +12253,7 @@
           : '<span class="muted">—</span>') : '') +
         td(qtyCell(p, edit)) +
         (showBag ? td(esc(p.packagingBag || '—')) : '') +
-        (showColor ? td((p.paintGroup ? '<span class="chip" style="font-size:10.5px;margin-bottom:4px;display:inline-block;" title="Paint colour group">' + esc(p.paintGroup) + '</span> ' : '') + (edit ? colorCell(p) : esc(p.powderColor || '—'))) : '') +
+        (showColor ? td((p.paintGroup ? '<span class="chip" style="font-size:10.5px;margin-bottom:4px;display:inline-block;" title="Paint colour group">' + esc(p.paintGroup) + '</span> ' : '') + (edit ? colorCell(p, s.colorUsesBrand !== false) : esc(p.powderColor || '—'))) : '') +
         td(((Number(p.unitWeightLbs) || 0) * (Number(p.quantity) || 0)).toFixed(2)) +
         td(free ? freeCell : costCell(p, edit)) +
         td(free ? freeCell : money2(ext)) +
@@ -12417,8 +12417,14 @@
       '" style="' + bomFieldStyle('72px') + (changed ? 'border-color:#c9a227;' : '') + '">' + badge;
   }
 
-  /** Brand from the managed list, code typed per part. */
-  function colorCell(p) {
+  /**
+   * Brand from the managed list, code typed per part. A vendor whose colours are
+   * their own chart (Resilite's vinyl) has no brand, so only the colour is asked for.
+   */
+  function colorCell(p, usesBrand) {
+    if (!usesBrand) {
+      return '<input class="bomLine" data-id="' + p.id + '" data-f="powderColorCode" value="' + esc(p.powderColorCode || '') + '" placeholder="Colour" style="' + bomFieldStyle('140px') + '">';
+    }
     var opts = '<option value="">—</option>' + bomBrands.map(function (b) {
       return '<option value="' + b.id + '"' + (p.powderBrandId === b.id ? ' selected' : '') + '>' + esc(b.name) + '</option>';
     }).join('');
@@ -12452,14 +12458,17 @@
     });
     seen.sort();
 
+    // A vendor whose colours are their own chart has no brand to pick.
+    var usesBrand = s.colorUsesBrand !== false;
     var brandSelect = function (key) {
+      if (!usesBrand) return '';
       return '<select class="secColorBrand" data-key="' + key + '" style="' + bomFieldStyle('130px') + '">' +
         '<option value="">Brand…</option>' +
         bomBrands.map(function (b) { return '<option value="' + b.id + '">' + esc(b.name) + '</option>'; }).join('') +
       '</select>';
     };
     var codeInput = function (key) {
-      return '<input class="secColorCode" data-key="' + key + '" list="bomCodeList" placeholder="Colour code" style="' + bomFieldStyle('140px') + '">';
+      return '<input class="secColorCode" data-key="' + key + '" list="bomCodeList" placeholder="' + (usesBrand ? 'Colour code' : 'Colour') + '" style="' + bomFieldStyle('140px') + '">';
     };
     var line = function (key, title, note, group) {
       return '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:6px 0;">' +
@@ -13279,11 +13288,14 @@
         var id = bt.getAttribute('data-sec-color');
         var group = bt.getAttribute('data-group') || '';
         var key = id + '|' + group;
-        var brand = document.querySelector('.secColorBrand[data-key="' + key + '"]').value;
+        // No brand picker on a vendor whose colours are their own chart.
+        var brandEl = document.querySelector('.secColorBrand[data-key="' + key + '"]');
+        var brand = brandEl ? brandEl.value : '';
         var code = document.querySelector('.secColorCode[data-key="' + key + '"]').value.trim();
-        if (!brand || !code) { alert('Pick a brand and type the colour code.'); return; }
+        if (brandEl && (!brand || !code)) { alert('Pick a brand and type the colour code.'); return; }
+        if (!code) { alert('Type the colour.'); return; }
         var sec = bomSectionData.filter(function (x) { return x.id === id; })[0];
-        var body = { brandId: brand, code: code, vendor: sec.vendor, overwrite: false };
+        var body = { brandId: brand || null, code: code, vendor: sec.vendor, overwrite: false };
         if (group) {
           // The group names the parts; the server resolves them from the chart, so a
           // screen left open while the chart changed cannot paint the wrong ones.

@@ -66,6 +66,8 @@ const MfrInput = z.object({
    * mats ship on their own line; everything else rides the structure figure.
    */
   bomFreightSource: z.enum(['STRUCTURE', 'MATS', 'NONE']).optional(),
+  /** Off when this vendor's colours are their own chart, not a powder brand + code. */
+  bomColorUsesBrand: z.boolean().optional(),
   // ---- Request for Freight ----
   // Only flagged vendors are offered as RFQ recipients on a proposal, and the
   // freight desk is kept apart from the purchasing contact the BOM goes to.

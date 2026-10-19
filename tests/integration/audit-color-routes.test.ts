@@ -215,6 +215,8 @@ beforeAll(async () => {
         name,
         slug: name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
         isSteelFabricator: name === GOLDBERG,
+        // Resilite's vinyl colours are its own chart, not a powder brand.
+        bomColorUsesBrand: name !== RESILITE,
       },
     });
     mfrIds.push(m.id);
@@ -768,6 +770,50 @@ describe('the full staff path: map → customer answers → Mark reviewed → BO
       (await call('ops', 'POST', '/orders/no-such-order/portal/color/reapply', {})).statusCode,
     ).toBe(404);
     await db.procurementLine.delete({ where: { id: late.id } });
+  });
+
+  it('apply-color takes a colour with no brand for a vendor whose colours are its own chart', async () => {
+    const { sections } = json<{ sections: Array<{ vendor: string; colorUsesBrand: boolean }> }>(
+      await call('ops', 'GET', `/orders/${orderId}/bom/sections`),
+    );
+    expect(sections.find((s) => s.vendor === RESILITE)?.colorUsesBrand).toBe(false);
+    expect(sections.find((s) => s.vendor === GOLDBERG)?.colorUsesBrand).toBe(true);
+
+    const blank = await db.procurementLine.create({
+      data: {
+        orderId,
+        sku: `${P}-MAT2`,
+        name: 'Added mat',
+        vendor: RESILITE,
+        quantity: 1,
+        quantityOriginal: 1,
+        unitCostMinor: 1000,
+      },
+    });
+    const r = await call('ops', 'POST', `/orders/${orderId}/bom/apply-color`, {
+      code: 'Charcoal',
+      skus: [blank.sku],
+      vendor: RESILITE,
+    });
+    expect(r.statusCode).toBe(200);
+    expect(json<{ applied: number; color: string }>(r)).toMatchObject({
+      applied: 1,
+      color: 'Charcoal',
+    });
+    const after = await db.procurementLine.findUniqueOrThrow({ where: { id: blank.id } });
+    expect(after).toMatchObject({
+      powderColor: 'Charcoal',
+      powderColorCode: 'Charcoal',
+      powderBrandId: null,
+    });
+    // A brand that is named must still exist.
+    const bad = await call('ops', 'POST', `/orders/${orderId}/bom/apply-color`, {
+      brandId: 'no-such-brand',
+      code: 'Charcoal',
+      skus: [blank.sku],
+    });
+    expect(bad.statusCode).toBe(404);
+    await db.procurementLine.delete({ where: { id: blank.id } });
   });
 });
 

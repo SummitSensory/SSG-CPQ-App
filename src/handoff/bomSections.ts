@@ -211,6 +211,8 @@ export interface SectionView {
   status: BomSectionStatus;
   /** Whether this vendor's sheet prints the powder-colour column. */
   showPowderColor: boolean;
+  /** Whether a colour here is a powder brand plus a code, or the vendor's own colour alone. */
+  colorUsesBrand: boolean;
   /** Whether this vendor's sheet prints the packaging-bag column. */
   showPackagingBag: boolean;
   editable: boolean;
@@ -352,6 +354,7 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
         bomEmailFormat: true,
         contactEmail: true,
         bomFreightSource: true,
+        bomColorUsesBrand: true,
         poEnabled: true,
       },
     }),
@@ -466,6 +469,7 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
       // vendor who has been given one would drop information from their sheet.
       showPowderColor:
         s.showPowderColor || mine.some((l) => (l.powderColorCode || l.powderColor || '').trim()),
+      colorUsesBrand: mfr?.bomColorUsesBrand ?? true,
       showPackagingBag: s.showPackagingBag,
       editable: s.status !== 'SUBMITTED',
       confirmedAt: iso(s.confirmedAt),

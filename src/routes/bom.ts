@@ -135,7 +135,8 @@ const BrandSchema = z.object({
  * whatever the customer gave us.
  */
 const ApplyColorSchema = z.object({
-  brandId: z.string().min(1),
+  /** Absent for a vendor whose colours are their own chart rather than a powder brand. */
+  brandId: z.string().min(1).nullish(),
   code: z.string().trim().min(1).max(60),
   /** Part numbers to paint. Empty means "every line in this vendor's section". */
   skus: z.array(z.string().trim().min(1)).default([]),
@@ -611,11 +612,14 @@ export function registerBomRoutes(app: FastifyInstance): void {
       throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid request');
     const { brandId, code, skus, vendor, overwrite, group } = parsed.data;
 
-    const brand = await prisma.powderColorBrand.findUnique({
-      where: { id: brandId },
-      select: { id: true, name: true },
-    });
-    if (!brand) throw new NotFoundError('Powder colour brand not found');
+    // No brand is a vendor-chart colour (Resilite's vinyl): the code is the colour.
+    const brand = brandId
+      ? await prisma.powderColorBrand.findUnique({
+          where: { id: brandId },
+          select: { id: true, name: true },
+        })
+      : null;
+    if (brandId && !brand) throw new NotFoundError('Powder colour brand not found');
 
     // The chart decides which parts a group covers.
     let groupSkus: string[] = [];
@@ -670,11 +674,11 @@ export function registerBomRoutes(app: FastifyInstance): void {
     });
 
     // The colour's name from the brand's chart prints too, as a portal review writes it.
-    const printed = (await powderColorText(brand.name, code)) ?? brand.name;
+    const printed = (await powderColorText(brand?.name, code)) ?? brand?.name ?? code;
     if (targets.length) {
       await prisma.procurementLine.updateMany({
         where: { id: { in: targets.map((t) => t.id) } },
-        data: { powderBrandId: brand.id, powderColorCode: code, powderColor: printed },
+        data: { powderBrandId: brand?.id ?? null, powderColorCode: code, powderColor: printed },
       });
       await prisma.orderEvent.create({
         data: {
@@ -683,7 +687,7 @@ export function registerBomRoutes(app: FastifyInstance): void {
           actorId: req.user!.sub,
           detail: {
             color: printed,
-            brand: brand.name,
+            brand: brand?.name ?? null,
             code,
             ...(group ? { group } : {}),
             parts: targets.map((t) => t.sku).filter(Boolean),
