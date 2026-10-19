@@ -167,6 +167,7 @@
 
   async function renderBomBuild(user) {
     var admin = canCatalogAdmin(user.role);
+    await loadBomLabels();
     document.getElementById('catBody').innerHTML =
       '<div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">' +
         '<input id="bbSearch" placeholder="Search part number or description…" value="' + esc(bbState.q) + '" style="' + IN + 'flex:1;min-width:240px;max-width:380px;">' +
@@ -293,7 +294,7 @@
           '<div style="display:flex;gap:18px;align-items:flex-end;margin-top:14px;padding-top:14px;border-top:1px solid #f2f3ef;flex-wrap:wrap;">' +
             '<div><div class="k">Also appears on vendor</div>' + bbSecondaryVendorSelect(p.parentPart, p.secondaryVendor || '', admin) +
               '<div class="muted" style="font-size:11px;margin-top:4px;max-width:300px;line-height:1.45;">Bought from its own vendor above, and ALSO gets its own line on this vendor’s sheet — e.g. sent out for powder coating. The part number they see comes from Manufacturers → Parts for this vendor, if one is on file.</div></div>' +
-            '<div><div class="k">What they charge, per unit</div><input class="bbSecondaryCost" data-part="' + esc(p.parentPart) + '"' + (admin ? '' : ' disabled') + ' type="number" min="0" step="0.01" value="' + (p.secondaryVendorCostMinor == null ? '' : (Number(p.secondaryVendorCostMinor) / 100).toFixed(2)) + '" placeholder="0.00" style="' + bomFieldStyle('120px') + '"></div>' +
+            '<div><div class="k">' + esc(bsLabel('secondaryCharge', 'Vendor Cost')) + ', per unit</div><input class="bbSecondaryCost" data-part="' + esc(p.parentPart) + '"' + (admin ? '' : ' disabled') + ' type="number" min="0" step="0.01" value="' + (p.secondaryVendorCostMinor == null ? '' : (Number(p.secondaryVendorCostMinor) / 100).toFixed(2)) + '" placeholder="0.00" style="' + bomFieldStyle('120px') + '"></div>' +
           '</div>' +
         '</div>' +
       '</div>';
@@ -457,8 +458,48 @@
   var bsState = { rows: [], vendors: [], q: '', vendor: '', show: 'all', inactive: false, sel: {}, limit: 300 };
   var BS_HANDOFF = ['SYSTEM_ADMIN', 'EXECUTIVE', 'OPERATIONS', 'PROJECT_MANAGER'];
 
+  /**
+   * The Bill of Materials column headings (Column headings, below). Read once per
+   * visit; BOM build and BOM setup both name the second vendor's charge with them.
+   */
+  var bsLabels = null, bsLabelCols = [];
+  async function loadBomLabels(force) {
+    if (bsLabels && !force) return bsLabels;
+    bsLabels = {};
+    try {
+      var r = await authed('/bom-setup/column-labels');
+      if (r.ok) bsLabelCols = ((await r.json()) || {}).columns || [];
+    } catch (e) {}
+    bsLabelCols.forEach(function (c) { bsLabels[c.key] = c.label; });
+    return bsLabels;
+  }
+  function bsLabel(key, dflt) { return (bsLabels && bsLabels[key]) || dflt; }
+
+  /** Rename the BOM's column headings — screen, PDF, Excel, CSV and the emailed copy. */
+  async function openColumnHeadings(user) {
+    await loadBomLabels(true);
+    openModal('BOM column headings',
+      '<div class="muted" style="font-size:12.5px;line-height:1.6;margin-bottom:12px;">What each column of a Bill of Materials is called. Every order reads these the next time it is opened or exported. Clear a box to go back to the default.</div>' +
+      bsLabelCols.map(function (c) {
+        return '<div style="display:flex;gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid #f2f3ef;">' +
+          '<div style="flex:1;min-width:0;"><div style="font-size:12.5px;font-weight:600;">' + esc(c.default) + '</div><div class="muted" style="font-size:11px;">' + esc(c.where) + '</div></div>' +
+          '<input class="bsLabelIn" data-key="' + esc(c.key) + '" maxlength="40" value="' + esc(c.label) + '" placeholder="' + esc(c.default) + '" style="' + bomFieldStyle('190px') + '">' +
+        '</div>';
+      }).join(''),
+      async function (close, showErr) {
+        var labels = {};
+        document.querySelectorAll('.bsLabelIn').forEach(function (el) { labels[el.getAttribute('data-key')] = el.value.trim() || null; });
+        var r = await authed('/bom-setup/column-labels', { method: 'PUT', body: { labels: labels } });
+        if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} return showErr(m || 'Could not save (' + r.status + ').'); }
+        bsLabels = null;
+        close();
+        renderBomSetup(user);
+      }, 'Save', { maxWidth: '560px' });
+  }
+
   async function renderBomSetup(user) {
     var canEdit = BS_HANDOFF.indexOf(user.role) >= 0;
+    await loadBomLabels();
     document.getElementById('catBody').innerHTML =
       '<div style="font-size:12.5px;color:#5c6157;margin-bottom:14px;line-height:1.6;max-width:900px;">' +
         'How each part prints on the Bill of Materials. <b>Sequence</b> sets where it sits on its vendor’s sheet (lowest first; blank follows the proposal). ' +
@@ -476,6 +517,7 @@
         '</select>' +
         '<label style="display:flex;gap:6px;align-items:center;font-size:12.5px;color:#5c6157;cursor:pointer;"><input type="checkbox" id="bsInactive"' + (bsState.inactive ? ' checked' : '') + '> Include inactive</label>' +
         '<div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;">' +
+          (canEdit ? '<button class="link-btn" id="bsHeads" style="width:auto;padding:9px 14px;" title="Rename the columns of every Bill of Materials">Column headings</button>' : '') +
           '<button class="link-btn" id="bsHw" style="width:auto;padding:9px 14px;" title="Every part that prints under Hardware, and why">Hardware check</button>' +
           '<button class="link-btn" id="bsExport" style="width:auto;padding:9px 14px;">Download sheet</button>' +
           (canEdit ? '<button class="link-btn" id="bsImport" style="width:auto;padding:9px 14px;">Upload sheet</button>' : '') +
@@ -493,6 +535,7 @@
     document.getElementById('bsHw').addEventListener('click', function () { openHardwareCheck(user); });
     document.getElementById('bsExport').addEventListener('click', exportBomSetup);
     if (canEdit) document.getElementById('bsImport').addEventListener('click', function () { openBomSetupImport(user); });
+    if (canEdit) document.getElementById('bsHeads').addEventListener('click', function () { openColumnHeadings(user); });
     await loadBomSetup(user);
   }
 
@@ -595,7 +638,7 @@
     }).join('');
 
     var heads = (canEdit ? ['<input type="checkbox" id="bsAll" aria-label="Select all shown"' + (shown.length && shown.every(function (p) { return bsState.sel[p.part]; }) ? ' checked' : '') + '>'] : [])
-      .concat(['Seq', 'Part #', 'Description', 'Bought from', 'Cost', 'Heading', 'Ships through (free issue)', 'Also on vendor', 'Their charge', 'BOM note']);
+      .concat(['Seq', 'Part #', 'Description', 'Bought from', 'Cost', 'Heading', 'Ships through (free issue)', 'Also on vendor', esc(bsLabel('secondaryCharge', 'Vendor Cost')), 'BOM note']);
     box.innerHTML =
       '<div class="muted" style="font-size:12px;margin-bottom:6px;">' + rows.length + ' part' + (rows.length === 1 ? '' : 's') +
         (rows.length > shown.length ? ' · showing the first ' + shown.length + ' — narrow it with the search or vendor, or <a href="#" id="bsMore">show all</a>' : '') +
@@ -672,7 +715,7 @@
       '<div style="position:sticky;top:0;z-index:5;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;background:#1c4039;color:#fff;border-radius:10px;padding:10px 12px;margin-bottom:10px;">' +
         '<div style="font-size:13px;font-weight:600;padding-bottom:8px;">' + picked.length + ' selected</div>' +
         '<div><div style="font-size:11px;opacity:.8;">Change</div><select id="bsWhat" style="' + bomFieldStyle('220px') + '">' +
-          '<option value="secondary">Also on vendor (+ their charge)</option>' +
+          '<option value="secondary">Also on vendor (+ ' + esc(bsLabel('secondaryCharge', 'Vendor Cost').toLowerCase()) + ')</option>' +
           '<option value="free">Ships through (free issue, $0)</option>' +
           '<option value="heading">Heading</option>' +
           '<option value="seq">Sequence — number in the order shown</option>' +
@@ -689,7 +732,7 @@
     var paint = function () {
       var w = what.value;
       val.innerHTML =
-        w === 'secondary' ? lab('Second vendor', '<select id="bsV1" style="' + bomFieldStyle('190px') + '">' + bsVendorOptions('', 'Choose…') + '</select>') + lab('Their charge per unit ($)', '<input id="bsV2" type="number" min="0" step="0.01" placeholder="0.00" style="' + bomFieldStyle('110px') + '">')
+        w === 'secondary' ? lab('Second vendor', '<select id="bsV1" style="' + bomFieldStyle('190px') + '">' + bsVendorOptions('', 'Choose…') + '</select>') + lab(esc(bsLabel('secondaryCharge', 'Vendor Cost')) + ' per unit ($)', '<input id="bsV2" type="number" min="0" step="0.01" placeholder="0.00" style="' + bomFieldStyle('110px') + '">')
         : w === 'free' ? lab('Receiving vendor', '<select id="bsV1" style="' + bomFieldStyle('190px') + '">' + bsVendorOptions('', 'Choose…') + '</select>')
         : w === 'heading' ? lab('Heading', '<select id="bsV1" style="' + bomFieldStyle('170px') + '">' + bsHeadingOptions(null) + '</select>')
         : w === 'seq' ? lab('Start at', '<input id="bsV1" type="number" min="0" step="1" value="10" style="' + bomFieldStyle('80px') + '">') + lab('Step', '<input id="bsV2" type="number" min="1" step="1" value="10" style="' + bomFieldStyle('70px') + '">')

@@ -13,6 +13,7 @@ totals.
 | Why is this part under Hardware?                                    | **Catalog → BOM setup → Hardware check**, or the grey "Under Hardware · …" line under each part on an order's BOM |
 | Rearrange one order's sheet                                         | Order → Bill of Materials → vendor section → **Arrange lines**                                                    |
 | Kits (one proposal line → several parts)                            | **Catalog → BOM build** (unchanged)                                                                               |
+| Rename the BOM's column headings                                    | **Catalog → BOM setup → Column headings**                                                                         |
 
 ## Order on the sheet
 
@@ -36,10 +37,10 @@ it out of Hardware even though a rule says otherwise, or to any heading you name
 Example: a part is bought on Amazon, delivered to Goldberg Brothers, and Goldberg ships
 it to the customer with the structure.
 
-| Setting                                                      | What prints                                                                                                                                                                                              | Cost on the order                                                    |
-| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| **Ships through (free issue)** = Goldberg                    | The part moves to **Goldberg's** sheet at **$0**, marked "Supplied by Summit at no charge (from Amazon) — do not invoice". It is not on Amazon's sheet; purchasing buys it with the part's **Buy** link. | The real Amazon cost stays on the line — cost of goods is unchanged. |
-| **Also on vendor** = Goldberg, **their charge** = $X (or $0) | The part stays on **Amazon's** sheet at the real cost (the purchase), **and** gets a second line on **Goldberg's** sheet at $X — their handling, coating, or $0 as a receiving note.                     | Amazon cost + Goldberg's $X.                                         |
+| Setting                                                     | What prints                                                                                                                                                                                              | Cost on the order                                                    |
+| ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| **Ships through (free issue)** = Goldberg                   | The part moves to **Goldberg's** sheet at **$0**, marked "Supplied by Summit at no charge (from Amazon) — do not invoice". It is not on Amazon's sheet; purchasing buys it with the part's **Buy** link. | The real Amazon cost stays on the line — cost of goods is unchanged. |
+| **Also on vendor** = Goldberg, **Vendor Cost** = $X (or $0) | The part stays on **Amazon's** sheet at the real cost (the purchase), **and** gets a second line on **Goldberg's** sheet at $X — their handling, coating, or $0 as a receiving note.                     | Amazon cost + Goldberg's $X.                                         |
 
 Use **Ships through** when Goldberg simply receives it. Use **Also on vendor** when
 Goldberg charges for it, or when you want Amazon's own sheet as a buy list.
@@ -65,3 +66,13 @@ Orders already locked are never changed by these; each keeps its own sheet.
 
 Anyone with BOM permission (Operations, Project Manager, Executive, System Admin).
 Saving a part's own catalog cost from an order needs a catalog admin.
+
+## Column headings
+
+**Catalog → BOM setup → Column headings** renames the columns of every Bill of
+Materials: the order screen, the PDF, Excel and CSV, and the emailed copy. Clear a box
+to go back to the default. "Cost Each" now reads **Vendor Cost** by default, and so does
+the second vendor's charge in BOM setup (formerly "Their charge"). A vendor's own colour
+heading on its profile (Resilite's "Vinyl color") still wins over the colour column's
+default. The headings are only words: the colour check finds its columns by key, so
+renaming them changes nothing else.
