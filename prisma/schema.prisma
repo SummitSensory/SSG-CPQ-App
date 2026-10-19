@@ -709,6 +709,10 @@ model Manufacturer {
   bomEmailFormat      BomSendFormat     @default(PDF)
   /// Whether a new BOM section for this vendor shows the powder-colour column.
   bomShowPowderColor  Boolean           @default(false)
+  /// Whether this vendor's colours are named by a powder-coat brand plus a code.
+  /// Off for a vendor whose colours are their own chart (Resilite's vinyl): the BOM
+  /// then asks for the colour alone, with no brand picker.
+  bomColorUsesBrand   Boolean           @default(true)
   /// Which freight figure on the deal belongs to this vendor's shipment. The mats
   /// ship on their own freight line; everything else rides the structure figure.
   bomFreightSource    BomFreightSource  @default(STRUCTURE)

@@ -2399,6 +2399,7 @@
           '<option value="NONE"' + (m.bomFreightSource === 'NONE' ? ' selected' : '') + '>None — this vendor quotes no freight</option>' +
         '</select>' +
         '<div class="muted" style="font-size:12px;margin-top:5px;line-height:1.5;">The structure and the mats ship as two loads and are quoted separately on the deal. This says which figure lands on this vendor&rsquo;s sheet.</div>') +
+      '<label style="display:flex;align-items:flex-start;gap:8px;font-size:14px;cursor:pointer;margin-top:6px;"><input type="checkbox" id="mfColorBrand" style="margin-top:3px;"' + (m.bomColorUsesBrand !== false ? ' checked' : '') + '><span>Colours are a powder-coat brand + code<span class="muted" style="display:block;font-size:11.5px;line-height:1.5;">Untick for a vendor whose colours are their own chart (Resilite’s vinyl) — the Bill of Materials then asks for the colour alone, with no brand.</span></span></label>' +
       '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8a8f85;margin:16px 0 6px;">Purchase orders</div>' +
       '<label style="display:flex;align-items:flex-start;gap:8px;font-size:14px;cursor:pointer;"><input type="checkbox" id="mfPo" style="margin-top:3px;"' + (m.poEnabled ? ' checked' : '') + '><span>Can receive purchase orders<span class="muted" style="display:block;font-size:11.5px;line-height:1.5;">Shows a <b>Create Purchase Order</b> button on this vendor’s section of a locked order’s Bill of Materials. The PO is numbered <b>PO-12414494509-' + esc(derivedAbbrev(m.name) || 'SE') + '</b> — the monday Project ID and the vendor code above.</span></span></label>' +
       '<div class="muted" style="font-size:12px;margin:10px 0 8px;line-height:1.5;">Send-dialog defaults. Left blank, a PO goes to the Bill of Materials address, then the primary contact. Tokens: <code>{{customer}}</code> <code>{{vendor}}</code> <code>{{reference}}</code> <code>{{projectId}}</code> <code>{{total}}</code>.</div>' +
@@ -2434,6 +2435,7 @@
           bomEmailBody: document.getElementById('mfBomBody').value,
           bomEmailFormat: document.getElementById('mfBomFormat').value,
           bomFreightSource: document.getElementById('mfFreightSrc').value,
+          bomColorUsesBrand: document.getElementById('mfColorBrand').checked,
           rfqEnabled: document.getElementById('mfRfq').checked,
           rfqContactName: document.getElementById('mfRfqName').value.trim(),
           rfqContactEmail: document.getElementById('mfRfqEmail').value.trim(),
