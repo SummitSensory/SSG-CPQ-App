@@ -56,6 +56,7 @@ export const FRAME_INPUTS: { key: string; label: string; kind: 'number' | 'flag'
   { key: 'climbShield', label: 'Climbing wall safety shield', kind: 'flag' },
   { key: 'ladderShield', label: 'Ladder safety shield', kind: 'flag' },
   { key: 'trolley', label: 'Trolley chosen', kind: 'flag' },
+  { key: 'trolleyUnits', label: '# of trolleys (Dual 2, Single 1)', kind: 'number' },
 ];
 
 export const FRAME_SHAPES = ['Rectangle', 'Square', 'L-Shape', 'T-Shape'];
@@ -154,10 +155,16 @@ export const DEFAULT_FRAME_RULES: FormulaRule[] = [
   }),
 
   R('Trolley', 'P-2018', 'Trolley Bar', [[null, 1]], { when: flagOn('trolley') }),
-  R('Trolley', 'P-2025', 'Trolley Plate', [[null, 2]], { when: flagOn('trolley') }),
-  R('Trolley', 'TRH2005', 'Threaded Rod Hanger', [[null, 6]], { when: flagOn('trolley') }),
-  R('Trolley', 'TRN2016', 'Rail End Cap', [[null, 4]], { when: flagOn('trolley') }),
-  R('Trolley', 'TRT2001', 'Trolley Trolley', [[null, 2]], { when: flagOn('trolley') }),
+  // Per trolley, so a Single system (1) carries half of a Dual one (2). The bar stays
+  // at 1 for either: half a bar cannot ship.
+  R('Trolley', 'P-2025', 'Trolley Plate', [['in:trolleyUnits', 1]], { when: flagOn('trolley') }),
+  R('Trolley', 'TRH2005', 'Threaded Rod Hanger', [['in:trolleyUnits', 3]], {
+    when: flagOn('trolley'),
+  }),
+  R('Trolley', 'TRN2016', 'Rail End Cap', [['in:trolleyUnits', 2]], { when: flagOn('trolley') }),
+  R('Trolley', 'TRT2001', 'Trolley Trolley', [['in:trolleyUnits', 1]], {
+    when: flagOn('trolley'),
+  }),
 
   R('Hardware', 'P-2124', 'Quick Shift Saddle Bracket', [['in:brackets', 1]]),
 ].map((r, i) => ({ ...r, sortOrder: i }));
@@ -197,6 +204,32 @@ export function legsBelowMinimum(lengthFt: number, legs: number): string | null 
   return `This frame is ${L}' long and is quoted on ${n} legs. Frames over ${FOUR_LEG_MAX_FT}' normally take at least ${MIN_LEGS_OVER_FOUR_LEG_MAX}. The proposal, the parts list and the freight request all use ${n} — confirm the frame with engineering before sending it.`;
 }
 
+/** The leg counts a frame is built with: one, two or three bays. */
+export const FRAME_LEG_COUNTS = [4, 6, 8];
+
+/**
+ * Leg and ladder counts the frame cannot be built with.
+ *
+ * The configurator only offers 4, 6 or 8 legs and caps ladders at the legs, but a
+ * proposal saved before that (or built through the API) can still hold a 5- or
+ * 10-leg frame, which got corner posts for 4, or more ladders than legs, which got
+ * more verticals than legs. Questioned, not corrected, like legsBelowMinimum.
+ */
+export function frameInputWarnings(legs: number, ladders: number): string[] {
+  const l = Number(legs) || 0;
+  const d = Number(ladders) || 0;
+  const out: string[] = [];
+  if (l > 0 && FRAME_LEG_COUNTS.indexOf(l) < 0)
+    out.push(
+      `This frame is quoted on ${l} legs. Frames are built with 4, 6 or 8, and the corner posts and beams are only worked out for those — confirm the frame with engineering before sending it.`,
+    );
+  if (d > l && l > 0)
+    out.push(
+      `This frame has ${d} ladders on ${l} legs. Each ladder replaces a leg, so there cannot be more ladders than legs — correct the ladder count before sending it.`,
+    );
+  return out;
+}
+
 export interface FrameAnswers {
   length?: number;
   width?: number;
@@ -208,6 +241,7 @@ export interface FrameAnswers {
   interiorBeams?: boolean;
   interiorBeamsQty?: number;
   trolley?: boolean;
+  trolleyType?: string;
   zipLine?: boolean;
   zipLineQty?: number;
   ballRack?: boolean;
@@ -269,6 +303,8 @@ export function frameContext(a: FrameAnswers, bomQty: (part: string) => number):
     climbWall: !!a.climbWall,
     climbShield: !!a.climbShield,
     trolley: !!a.trolley,
+    // A Single trolley system ships half of a Dual one (Bryan, 2026-10-19).
+    trolleyUnits: a.trolley ? (a.trolleyType === 'Single' ? 1 : 2) : 0,
   };
   return {
     bom: bomQty,
