@@ -87,10 +87,16 @@ export async function checkSchemaDrift(): Promise<SchemaDriftReport> {
   };
   try {
     // One round trip for everything, against the catalog rather than the tables.
+    // Only the tables being checked. This runs on every cold start, alongside the first
+    // user request, and the whole schema's column list is thousands of rows.
+    const names = [
+      ...new Set([...REQUIRED_COLUMNS.map((r) => r.table), ...REQUIRED_TABLES.map((r) => r.table)]),
+    ];
     const cols = await prisma.$queryRaw<Array<{ table_name: string; column_name: string }>>`
       SELECT table_name, column_name
       FROM information_schema.columns
       WHERE table_schema = current_schema()
+        AND table_name::text = ANY(${names}::text[])
     `;
     const have = new Set(cols.map((c) => `${c.table_name}.${c.column_name}`));
     const tables = new Set(cols.map((c) => c.table_name));

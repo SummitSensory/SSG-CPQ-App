@@ -302,6 +302,8 @@ model Organization {
   @@unique([normalizedName])
   @@index([customerType])
   @@index([followUpDate])
+  // The CRM list's default sort (GET /crm/organizations).
+  @@index([createdAt])
 }
 
 /// Internal notes about a customer, and about the proposals written for them.
@@ -429,6 +431,8 @@ model Opportunity {
   @@index([organizationId])
   @@index([stage])
   @@index([fundingStatus])
+  // The opportunity list's default sort (GET /crm/opportunities).
+  @@index([createdAt])
 }
 
 // Decision-makers / stakeholders linked to an opportunity.
@@ -1152,6 +1156,8 @@ model Proposal {
   @@index([organizationId])
   @@index([opportunityId])
   @@index([archivedAt])
+  // GET /proposals and GET /reports/proposals both list newest-touched first.
+  @@index([updatedAt])
 }
 
 // A version is the unit of immutability: once RELEASED it is frozen.

@@ -72,8 +72,13 @@ const TemplateInput = z.object({
  * `createMany` with `skipDuplicates` makes a concurrent first request harmless.
  */
 async function loadTemplates(includeInactive = false): Promise<FollowUpTemplateData[]> {
-  const count = await prisma.followUpTemplate.count();
-  if (count === 0) {
+  const where = includeInactive ? {} : { active: true };
+  const orderBy = [{ step: 'asc' as const }, { name: 'asc' as const }];
+  let rows = await prisma.followUpTemplate.findMany({ where, orderBy });
+  // The seed check used to be a count() ahead of every read. Now it runs only when the
+  // read comes back empty — which is also what a seeded table with every template
+  // switched off looks like, so the count still decides.
+  if (!rows.length && (await prisma.followUpTemplate.count()) === 0) {
     await prisma.followUpTemplate.createMany({
       data: DEFAULT_FOLLOW_UP_TEMPLATES.map((t) => ({
         key: t.key,
@@ -89,11 +94,8 @@ async function loadTemplates(includeInactive = false): Promise<FollowUpTemplateD
       })),
       skipDuplicates: true,
     });
+    rows = await prisma.followUpTemplate.findMany({ where, orderBy });
   }
-  const rows = await prisma.followUpTemplate.findMany({
-    where: includeInactive ? {} : { active: true },
-    orderBy: [{ step: 'asc' }, { name: 'asc' }],
-  });
   return rows.map((r) => ({
     key: r.key,
     name: r.name,
@@ -119,38 +121,39 @@ export function registerFollowUpRoutes(app: FastifyInstance): void {
     userId: string,
     opts: { contactId?: string; proposalId?: string },
   ) {
-    const org = await prisma.organization.findUnique({
-      where: { id: organizationId },
-      select: {
-        id: true,
-        name: true,
-        contacts: {
-          where: { email: { not: null } },
-          orderBy: [{ isDecisionMaker: 'desc' }, { createdAt: 'asc' }],
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            email: true,
-            title: true,
-            isDecisionMaker: true,
+    // Customer, proposal and sender are independent lookups, so they run together.
+    const [org, proposal, sender] = await Promise.all([
+      prisma.organization.findUnique({
+        where: { id: organizationId },
+        select: {
+          id: true,
+          name: true,
+          contacts: {
+            where: { email: { not: null } },
+            orderBy: [{ isDecisionMaker: 'desc' }, { createdAt: 'asc' }],
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              email: true,
+              title: true,
+              isDecisionMaker: true,
+            },
           },
         },
-      },
-    });
+      }),
+      opts.proposalId
+        ? prisma.proposal.findUnique({
+            where: { id: opts.proposalId },
+            select: { id: true, number: true, title: true },
+          })
+        : null,
+      prisma.user.findUnique({
+        where: { id: userId },
+        select: { name: true, email: true },
+      }),
+    ]);
     if (!org) throw new NotFoundError('Customer not found');
-
-    const proposal = opts.proposalId
-      ? await prisma.proposal.findUnique({
-          where: { id: opts.proposalId },
-          select: { id: true, number: true, title: true },
-        })
-      : null;
-
-    const sender = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { name: true, email: true },
-    });
 
     const contact =
       (opts.contactId ? org.contacts.find((c) => c.id === opts.contactId) : undefined) ??
@@ -177,14 +180,15 @@ export function registerFollowUpRoutes(app: FastifyInstance): void {
   app.get('/crm/organizations/:organizationId/follow-ups', read, async (req) => {
     const { organizationId } = req.params as { organizationId: string };
     const q = req.query as { proposalId?: string; contactId?: string };
-    const { org, contact, ctx } = await contextFor(organizationId, req.user!.sub, q);
-    const templates = await loadTemplates();
-
-    const history = await prisma.followUpEmailLog.findMany({
-      where: { organizationId },
-      orderBy: { copiedAt: 'desc' },
-      take: 100,
-    });
+    const [{ org, contact, ctx }, templates, history] = await Promise.all([
+      contextFor(organizationId, req.user!.sub, q),
+      loadTemplates(),
+      prisma.followUpEmailLog.findMany({
+        where: { organizationId },
+        orderBy: { copiedAt: 'desc' },
+        take: 100,
+      }),
+    ]);
     const senderIds = [...new Set(history.map((h) => h.sentById))];
     const users = senderIds.length
       ? await prisma.user.findMany({
@@ -266,10 +270,12 @@ export function registerFollowUpRoutes(app: FastifyInstance): void {
     async (req, reply) => {
       const { organizationId, key } = req.params as { organizationId: string; key: string };
       const q = req.query as { proposalId?: string; contactId?: string };
-      const { contact, ctx } = await contextFor(organizationId, req.user!.sub, q);
+      const [{ contact, ctx }, templates] = await Promise.all([
+        contextFor(organizationId, req.user!.sub, q),
+        loadTemplates(),
+      ]);
       if (!contact?.email) throw new ValidationError('That contact has no email address.');
 
-      const templates = await loadTemplates();
       const template = templates.find((t) => t.key === key);
       if (!template) throw new NotFoundError('Template not found');
 
@@ -307,10 +313,12 @@ export function registerFollowUpRoutes(app: FastifyInstance): void {
     async (req) => {
       const { organizationId, key } = req.params as { organizationId: string; key: string };
       const q = req.query as { proposalId?: string; contactId?: string };
-      const { contact, ctx } = await contextFor(organizationId, req.user!.sub, q);
+      const [{ contact, ctx }, templates] = await Promise.all([
+        contextFor(organizationId, req.user!.sub, q),
+        loadTemplates(),
+      ]);
       if (!contact?.email) throw new ValidationError('That contact has no email address.');
 
-      const templates = await loadTemplates();
       const template = templates.find((t) => t.key === key);
       if (!template) throw new NotFoundError('Template not found');
 
@@ -355,10 +363,12 @@ export function registerFollowUpRoutes(app: FastifyInstance): void {
   app.post('/crm/organizations/:organizationId/follow-ups/:key/send', write, async (req) => {
     const { organizationId, key } = req.params as { organizationId: string; key: string };
     const q = req.query as { proposalId?: string; contactId?: string };
-    const { contact, ctx } = await contextFor(organizationId, req.user!.sub, q);
+    const [{ contact, ctx }, templates] = await Promise.all([
+      contextFor(organizationId, req.user!.sub, q),
+      loadTemplates(),
+    ]);
     if (!contact?.email) throw new ValidationError('That contact has no email address.');
 
-    const templates = await loadTemplates();
     const template = templates.find((t) => t.key === key);
     if (!template) throw new NotFoundError('Template not found');
 

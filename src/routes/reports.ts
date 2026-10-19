@@ -164,14 +164,21 @@ export function registerReportRoutes(app: FastifyInstance): void {
     const from = q.from ? new Date(q.from) : null;
     const to = q.to ? new Date(q.to + (q.to.length <= 10 ? 'T23:59:59.999Z' : '')) : null;
 
+    // Every figure below comes from each proposal's LATEST version, so that is the only
+    // one read — with its status history, which decides when it was won or lost. This
+    // used to load every version of every proposal, each with its sections, items and
+    // status history, and use the first; it is the dashboard's first request, and its
+    // cost grew with every revision anyone ever saved.
     const [proposals, orgs, users] = await Promise.all([
       prisma.proposal.findMany({
         orderBy: { updatedAt: 'desc' },
         include: {
           versions: {
             orderBy: { version: 'desc' },
+            take: 1,
             include: { statusHistory: { orderBy: { createdAt: 'desc' } } },
           },
+          _count: { select: { versions: true } },
         },
       }),
       prisma.organization.findMany({ select: { id: true, name: true, customerType: true } }),
@@ -201,7 +208,7 @@ export function registerReportRoutes(app: FastifyInstance): void {
           updatedAt: p.updatedAt,
           createdById: p.createdById,
           preparedBy: userById.get(p.createdById) ?? null,
-          versionCount: p.versions.length,
+          versionCount: p._count.versions,
           latest: {
             id: v.id,
             version: v.version,

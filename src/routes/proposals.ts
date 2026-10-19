@@ -40,6 +40,18 @@ import {
 import { backfillProjectIdOnVersions } from '../crm/projectId.js';
 import { priceDrift, refreezeAcceptedPrice } from '../proposals/refreezePrice.js';
 
+/**
+ * A version's sections cut down to the `meta` block. The pipeline list reads the
+ * contact, expiration, Project ID and freight/tax figures from meta and nothing else
+ * from the sections, while the rest of the array is the whole proposal body.
+ */
+function metaSectionOnly(sections: unknown): unknown[] {
+  if (!Array.isArray(sections)) return [];
+  return sections.filter(
+    (s: unknown) => typeof s === 'object' && s !== null && (s as { id?: unknown }).id === 'meta',
+  );
+}
+
 const SectionSchema = z.object({
   id: z.string(),
   type: z.string(),
@@ -149,10 +161,24 @@ export function registerProposalRoutes(app: FastifyInstance): void {
   // and the version count in one round trip — the proposal record itself carries
   // only organizationId, so the org names are resolved here rather than by the
   // client (which previously over-fetched /crm/organizations and came back empty).
+  /**
+   * The pipeline list.
+   *
+   * Only the latest version of each proposal is read, and of its sections only the
+   * `meta` block — the two things the list uses (contact, expiration and Project ID
+   * from meta; the total from meta plus items). This used to load every version of
+   * every proposal, each with its full sections and items JSON, and then throw all
+   * but the latest away; the read grew with every revision ever saved, and it is the
+   * request behind the Proposals screen and every "Back" to it. A screen that needs a
+   * whole version fetches it from GET /proposals/:id.
+   */
   app.get('/proposals', read, async () => {
     const rows = await prisma.proposal.findMany({
       orderBy: { updatedAt: 'desc' },
-      include: { versions: { orderBy: { version: 'desc' } } },
+      include: {
+        versions: { orderBy: { version: 'desc' }, take: 1 },
+        _count: { select: { versions: true } },
+      },
     });
     const orgIds = [...new Set(rows.map((r) => r.organizationId))];
     const [orgs, users, invoices] = await Promise.all([
@@ -173,14 +199,14 @@ export function registerProposalRoutes(app: FastifyInstance): void {
     const orgById = new Map(orgs.map((o) => [o.id, o]));
     const userById = new Map(users.map((u) => [u.id, u.name || u.email]));
     const invoiceByProposal = new Map(invoices.map((t) => [t.proposalId, t]));
-    return rows.map((p) => {
+    return rows.map(({ _count, ...p }) => {
       const latest = p.versions[0];
       const org = orgById.get(p.organizationId);
       const inv = invoiceByProposal.get(p.id) ?? null;
       return {
         ...p,
-        versions: p.versions.slice(0, 1),
-        versionCount: p.versions.length,
+        versions: latest ? [{ ...latest, sections: metaSectionOnly(latest.sections) }] : [],
+        versionCount: _count.versions,
         organizationName: org?.name ?? null,
         customerType: org?.customerType ?? null,
         preparedBy: userById.get(p.createdById) ?? null,
@@ -231,16 +257,19 @@ export function registerProposalRoutes(app: FastifyInstance): void {
       include: { versions: { orderBy: { version: 'asc' } } },
     });
     if (!proposal) return null;
-    const versions = await backfillProjectIdOnVersions(proposal.organizationId, proposal.versions);
-    const org = await prisma.organization.findUnique({
-      where: { id: proposal.organizationId },
-      select: {
-        name: true,
-        decisionFrom: true,
-        decisionTo: true,
-        followUpDate: true,
-      },
-    });
+    // Independent of each other, so they run together.
+    const [versions, org] = await Promise.all([
+      backfillProjectIdOnVersions(proposal.organizationId, proposal.versions),
+      prisma.organization.findUnique({
+        where: { id: proposal.organizationId },
+        select: {
+          name: true,
+          decisionFrom: true,
+          decisionTo: true,
+          followUpDate: true,
+        },
+      }),
+    ]);
     const day = (d: Date | null | undefined): string | null =>
       d ? d.toISOString().slice(0, 10) : null;
     return {

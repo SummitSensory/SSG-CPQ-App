@@ -34,7 +34,19 @@ export interface ResolvedProjectId {
   source: 'monday-column' | 'monday-item' | 'opportunity-notes' | 'none';
 }
 
-export async function resolveOrgProjectId(organizationId: string): Promise<ResolvedProjectId> {
+export async function resolveOrgProjectId(
+  organizationId: string,
+  opts: {
+    /**
+     * false skips source 1, the live monday read, and goes straight to the linked
+     * item id. For callers that only DISPLAY the number and save nothing: one monday
+     * call (20 s timeout, retries on rate limit) is too much to spend on every page
+     * view of a released proposal that will never store the answer.
+     */
+    live?: boolean;
+  } = {},
+): Promise<ResolvedProjectId> {
+  const live = opts.live !== false;
   try {
     const opp = await prisma.opportunity.findFirst({
       where: { organizationId, mondayItemId: { not: null } },
@@ -43,15 +55,17 @@ export async function resolveOrgProjectId(organizationId: string): Promise<Resol
     });
     if (opp?.mondayItemId) {
       const itemId = String(opp.mondayItemId).trim();
-      try {
-        const item = await fetchItemById(itemId);
-        const column = String(item?.text?.[DEAL_COL.projectId] ?? '').trim();
-        if (column) return { projectId: column, source: 'monday-column' };
-      } catch (err) {
-        logger.warn(
-          { err, organizationId, itemId },
-          'project id: monday deal row unreadable, using the linked item id',
-        );
+      if (live) {
+        try {
+          const item = await fetchItemById(itemId);
+          const column = String(item?.text?.[DEAL_COL.projectId] ?? '').trim();
+          if (column) return { projectId: column, source: 'monday-column' };
+        } catch (err) {
+          logger.warn(
+            { err, organizationId, itemId },
+            'project id: monday deal row unreadable, using the linked item id',
+          );
+        }
       }
       if (itemId) return { projectId: itemId, source: 'monday-item' };
     }
@@ -176,13 +190,21 @@ export async function sectionsWithResolvedProjectId(
  * editable drafts so a later save keeps it. Frozen versions (released, accepted)
  * are never written to — the document a customer holds does not change — they only
  * get the number in the response.
+ *
+ * Because nothing is saved for a frozen version, it was resolved again — with a live
+ * monday call — every time the proposal was opened. So monday is asked only when a
+ * draft is missing the number and will keep the answer; a proposal whose only gaps
+ * are frozen versions is annotated from the local link (the linked deal's item id,
+ * which the Project ID column holds by convention) without leaving the database.
  */
 export async function backfillProjectIdOnVersions<
   V extends { id: string; sections: unknown; status: string; frozen: boolean },
 >(organizationId: string, versions: V[]): Promise<V[]> {
   if (!versions.length) return versions;
-  if (versions.every((v) => projectIdOfSections(v.sections))) return versions;
-  const { projectId, source } = await resolveOrgProjectId(organizationId);
+  const missing = versions.filter((v) => !projectIdOfSections(v.sections));
+  if (!missing.length) return versions;
+  const persists = missing.some((v) => !v.frozen && v.status === 'DRAFT');
+  const { projectId, source } = await resolveOrgProjectId(organizationId, { live: persists });
   if (!projectId) return versions;
   const out: V[] = [];
   for (const v of versions) {
