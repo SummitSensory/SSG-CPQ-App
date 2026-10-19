@@ -26,7 +26,7 @@ import {
   normalizeBucket,
   type FreightBucket,
 } from '../../proposals/freightTrueUp.js';
-import { INVOICE_CANDIDATE_WHERE, isFreightSupplement, stillToBill } from './freightInvoiced.js';
+import { INVOICE_CANDIDATE_WHERE, isSupplementInvoice, stillToBill } from './freightInvoiced.js';
 import type { FreightEntry, QboEnvironment, QboTransaction } from '@prisma/client';
 
 /**
@@ -60,7 +60,7 @@ import type { FreightEntry, QboEnvironment, QboTransaction } from '@prisma/clien
 
 const RESEND_URL = 'https://api.resend.com/emails';
 
-async function activeRealmId(environment: QboEnvironment): Promise<string> {
+export async function activeRealmId(environment: QboEnvironment): Promise<string> {
   const conn = await prisma.qboConnection.findFirst({ where: { environment, isActive: true } });
   if (!conn) throw new ConflictError(`No active QuickBooks connection for ${environment}`);
   return conn.realmId;
@@ -179,17 +179,21 @@ export async function buildBatch(
   return { entries, amounts, references, descriptions, totalMinor };
 }
 
-/** The invoice this job's freight belongs on: the newest full invoice we created. */
-async function invoiceForProposal(proposalId: string): Promise<QboTransaction> {
-  // A freight-only supplement is not the document the next batch of freight goes on:
-  // appending to it would bury the second shipment inside the first shipment's
-  // invoice. Excluded in code — the JSON-path NOT this used to carry excluded every
-  // real invoice too (see INVOICE_CANDIDATE_WHERE), so no invoice was ever found.
+/**
+ * The job's main invoice: the newest full invoice we created. Also where a portal
+ * colour upcharge goes (colorUpcharge.ts).
+ */
+export async function invoiceForProposal(proposalId: string): Promise<QboTransaction> {
+  // A freight-only (or upcharge-only) supplement is not the document the next batch
+  // of freight goes on: appending to it would bury the second shipment inside the
+  // first shipment's invoice. Excluded in code — the JSON-path NOT this used to carry
+  // excluded every real invoice too (see INVOICE_CANDIDATE_WHERE), so no invoice was
+  // ever found.
   const candidates = await prisma.qboTransaction.findMany({
     where: { proposalId, ...INVOICE_CANDIDATE_WHERE },
     orderBy: { createdAt: 'desc' },
   });
-  const txn = candidates.find((t) => !isFreightSupplement(t.totalsSnapshot)) ?? null;
+  const txn = candidates.find((t) => !isSupplementInvoice(t.totalsSnapshot)) ?? null;
   if (!txn) {
     throw new ValidationError(
       'There is no QuickBooks invoice for this job yet. The freight is already on the proposal, so raise the invoice as normal — it will include it.',
@@ -359,7 +363,7 @@ export async function freightPushPreview(
  * failing the request because an email did not send would invite a retry against a
  * document that has already been amended. A failure is logged and audited instead.
  */
-async function notifyAccounting(subject: string, body: string): Promise<string | null> {
+export async function notifyAccounting(subject: string, body: string): Promise<string | null> {
   const to = (process.env.ACCOUNTING_NOTIFY_EMAIL ?? '')
     .split(',')
     .map((a) => a.trim())

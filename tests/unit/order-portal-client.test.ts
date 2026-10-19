@@ -50,6 +50,8 @@ interface OrderPortal {
     state: { cols: Record<string, unknown>; unreviewed: boolean },
   ) => number;
   answersHtml: (kind: string, a: unknown) => string;
+  upchargeHtml: (u: Record<string, unknown> | null, canBill: boolean) => string;
+  fmtMinor: (minor: string | number) => string;
   deliverySignature: (items: Array<Record<string, unknown>>) => string;
 }
 
@@ -323,5 +325,56 @@ describe('answers, readably', () => {
     const moved = [{ ...base[0]!, answers: { line1: 'y' } }, base[1]!];
     expect(OP.deliverySignature(base)).toBe(OP.deliverySignature(colorOnly));
     expect(OP.deliverySignature(base)).not.toBe(OP.deliverySignature(moved));
+  });
+});
+
+describe('the Prismatic upcharge on the order page', () => {
+  const toBill = {
+    status: 'TO_BILL',
+    owedMinor: '80000',
+    billedMinor: '0',
+    deltaMinor: '80000',
+    pushes: [],
+  };
+
+  it('says what is not yet billed, with the buttons only for people who can bill it', () => {
+    const html = OP.upchargeHtml(toBill, true);
+    expect(html).toContain('$800.00 Prismatic upcharge not yet billed');
+    expect(html).toContain('Bill to QuickBooks…');
+    expect(html).toContain('Already billed by hand…');
+    expect(OP.upchargeHtml(toBill, false)).not.toContain('Bill to QuickBooks');
+  });
+
+  it('shows what was billed, and nothing for an order with no upcharge or a draft', () => {
+    const billed = OP.upchargeHtml(
+      {
+        status: 'BILLED',
+        owedMinor: '80000',
+        billedMinor: '80000',
+        deltaMinor: '0',
+        pushes: [
+          {
+            mode: 'SUPPLEMENT',
+            amountMinor: '80000',
+            qboDocNumber: 'P-1-CLR',
+            note: null,
+            pushedAt: '2026-10-21T15:00:00.000Z',
+          },
+        ],
+      },
+      true,
+    );
+    expect(billed).toContain('Prismatic upcharge billed');
+    expect(billed).toContain('upcharge invoice P-1-CLR');
+    expect(billed).not.toContain('Bill to QuickBooks');
+    expect(OP.upchargeHtml({ ...toBill, status: 'NONE' }, true)).toBe('');
+    expect(OP.upchargeHtml({ ...toBill, status: 'UNCONFIRMED' }, true)).toBe('');
+    expect(OP.upchargeHtml(null, true)).toBe('');
+  });
+
+  it('offers to lower it when a staff color change took the upcharge down', () => {
+    const html = OP.upchargeHtml({ ...toBill, status: 'TO_REDUCE', deltaMinor: '-30000' }, true);
+    expect(html).toContain('$300.00 to take off');
+    expect(html).toContain('Lower on invoice…');
   });
 });

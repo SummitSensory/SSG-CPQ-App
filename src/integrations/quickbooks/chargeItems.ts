@@ -33,7 +33,9 @@ export type ChargeKind =
   /* Canadian border charges quoted on the proposal and collected by SSG. */
   | 'CB_TARIFF'
   | 'CB_BROKERAGE'
-  | 'CB_TAX';
+  | 'CB_TAX'
+  /* Prismatic paint chosen in the customer portal — see colorUpcharge.ts. */
+  | 'COLOR_UPCHARGE';
 
 interface ChargeItemRule {
   kind: ChargeKind;
@@ -112,6 +114,11 @@ const RULES: readonly ChargeItemRule[] = [
     label: 'Canadian sales tax collected (GST/HST/PST/QST)',
     env: 'QBO_ITEM_ID_CB_TAX',
     fallbackEnv: 'QBO_ITEM_ID_CB',
+  },
+  {
+    kind: 'COLOR_UPCHARGE',
+    label: 'Prismatic paint color upcharge (customer portal)',
+    env: 'QBO_ITEM_ID_COLOR_UPCHARGE',
   },
 ];
 
