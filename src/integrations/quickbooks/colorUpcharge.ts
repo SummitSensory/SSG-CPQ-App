@@ -87,17 +87,10 @@ export function upchargeStatus(
 }
 
 /**
- * The text on the invoice row. Also how the CRM recognises its own rows on an
- * invoice — `(order <number>)` — so it never mistakes them for one added by hand.
+ * The CRM's own upcharge rows carry "Prismatic paint color upcharge … (order <number>)"
+ * in their description (see `row` below), so it never mistakes them for one added by
+ * hand — whichever item, Primary or Secondary, they are on.
  */
-export function upchargeLineDescription(orderNumber: string, prismaticColors: number): string {
-  const what =
-    prismaticColors > 0
-      ? `${prismaticColors} Prismatic color${prismaticColors === 1 ? '' : 's'}`
-      : 'Prismatic colors';
-  return `Prismatic paint color upcharge — ${what} chosen in the customer portal (order ${orderNumber})`;
-}
-
 function isOurLine(line: Record<string, unknown>, orderNumber: string): boolean {
   const d = String(line.Description ?? '');
   return d.startsWith('Prismatic paint color upcharge') && d.includes(`(order ${orderNumber})`);
@@ -115,24 +108,89 @@ function lineMinor(line: Record<string, unknown>): bigint {
   return sumLineAmounts([line]);
 }
 
-export function upchargeLine(
+/**
+ * The portal's Prismatic prices: $500 for the first colour, $300 for each further
+ * one (PRISMATIC_UPCHARGE in the Customer-Portal's lib/colorCatalog.js). SSG's
+ * QuickBooks already has an item for each — "Premium Paint Color - Primary" and
+ * "- Secondary" — so the upcharge is billed as those two rows rather than one lump.
+ */
+export const PRIMARY_COLOR_MINOR = 50_000n;
+export const ADDITIONAL_COLOR_MINOR = 30_000n;
+
+function row(
   orderNumber: string,
-  amountMinor: bigint,
-  prismaticColors: number,
+  what: string,
+  kind: 'COLOR_UPCHARGE' | 'COLOR_UPCHARGE_ADDITIONAL',
+  qty: bigint,
+  unitMinor: bigint,
 ): Record<string, unknown> {
   return {
     DetailType: 'SalesItemLineDetail',
-    Amount: minorToQboAmount(amountMinor),
-    Description: upchargeLineDescription(orderNumber, prismaticColors),
+    Amount: minorToQboAmount(qty * unitMinor),
+    Description: `Prismatic paint color upcharge — ${what} chosen in the customer portal (order ${orderNumber})`,
     SalesItemLineDetail: {
-      ...chargeDetail('COLOR_UPCHARGE'),
-      UnitPrice: minorToQboAmount(amountMinor),
+      ...chargeDetail(kind),
+      Qty: Number(qty),
+      UnitPrice: minorToQboAmount(unitMinor),
     },
   };
 }
 
 /**
- * The invoice's lines with the CRM's upcharge rows replaced by one row of
+ * The CRM's upcharge rows for `amountMinor` on one invoice, where `offsetMinor` of
+ * the order's upcharge is already billed on its other invoices (or by hand).
+ *
+ * The first $500 of the order's upcharge — counted across every invoice — is the
+ * Primary row; the rest is Secondary, as N × $300 (or one row for any remainder that
+ * isn't a whole number of colours). So $800 at once is Primary + 1 × Secondary, and a
+ * later $300 for an added colour is 1 × Secondary on whichever invoice it lands.
+ *
+ * With no Secondary item configured (QBO_ITEM_ID_COLOR_UPCHARGE_ADDITIONAL), it is
+ * one row on the Primary item, as before.
+ */
+export function upchargeLines(
+  orderNumber: string,
+  amountMinor: bigint,
+  offsetMinor: bigint,
+  prismaticColors: number,
+): Array<Record<string, unknown>> {
+  if (amountMinor <= 0n) return [];
+  if (!chargeItemId('COLOR_UPCHARGE_ADDITIONAL')) {
+    const what =
+      prismaticColors > 0
+        ? `${prismaticColors} Prismatic color${prismaticColors === 1 ? '' : 's'}`
+        : 'Prismatic colors';
+    return [row(orderNumber, what, 'COLOR_UPCHARGE', 1n, amountMinor)];
+  }
+  const room = PRIMARY_COLOR_MINOR - (offsetMinor > 0n ? offsetMinor : 0n);
+  const primary = room <= 0n ? 0n : room < amountMinor ? room : amountMinor;
+  const rest = amountMinor - primary;
+  const out: Array<Record<string, unknown>> = [];
+  if (primary > 0n)
+    out.push(row(orderNumber, 'first Prismatic color', 'COLOR_UPCHARGE', 1n, primary));
+  if (rest > 0n) {
+    if (rest % ADDITIONAL_COLOR_MINOR === 0n) {
+      const n = rest / ADDITIONAL_COLOR_MINOR;
+      out.push(
+        row(
+          orderNumber,
+          `${n} additional Prismatic color${n === 1n ? '' : 's'}`,
+          'COLOR_UPCHARGE_ADDITIONAL',
+          n,
+          ADDITIONAL_COLOR_MINOR,
+        ),
+      );
+    } else {
+      out.push(
+        row(orderNumber, 'additional Prismatic colors', 'COLOR_UPCHARGE_ADDITIONAL', 1n, rest),
+      );
+    }
+  }
+  return out;
+}
+
+/**
+ * The invoice's lines with the CRM's upcharge rows replaced by rows for
  * `newOursMinor` (none when it is zero). Every other line is passed back exactly as
  * QuickBooks sent it — QuickBooks replaces the whole Line array on update, so a line
  * dropped here would be deleted from the customer's invoice.
@@ -142,6 +200,7 @@ export function withUpchargeLines(
   orderNumber: string,
   newOursMinor: bigint,
   prismaticColors: number,
+  offsetMinor = 0n,
 ): Array<Record<string, unknown>> {
   if (!existing.length) {
     throw new Error(
@@ -149,9 +208,7 @@ export function withUpchargeLines(
     );
   }
   const kept = existing.filter((l) => !isOurLine(l, orderNumber));
-  return newOursMinor > 0n
-    ? [...kept, upchargeLine(orderNumber, newOursMinor, prismaticColors)]
-    : kept;
+  return [...kept, ...upchargeLines(orderNumber, newOursMinor, offsetMinor, prismaticColors)];
 }
 
 /* ────────────────────────── state ────────────────────────── */
@@ -558,11 +615,14 @@ export async function pushColorUpcharge(
       const oursNow = existing
         .filter((x) => isOurLine(x, l.order.number))
         .reduce((a, x) => a + lineMinor(x), 0n);
+      // What the order's other invoices (and anything recorded by hand) already
+      // carry, so the Primary row is only billed once across them.
       const lines = withUpchargeLines(
         existing,
         l.order.number,
         oursNow + delta,
         l.portal.prismaticColors,
+        l.billedMinor - oursNow,
       );
       assertAssembledTotal('Invoice', sumLineAmounts(lines), BigInt(preview.newTotalMinor), [
         [`${existing.length} existing lines`, sumLineAmounts(existing)],
@@ -626,7 +686,7 @@ export async function pushColorUpcharge(
         : null;
       const term = await resolveTermForProposal(proposal.id);
       const docNo = preview.supplementDocNumber ?? upchargeDocNumber(proposal.number, 1);
-      const lines = [upchargeLine(l.order.number, delta, l.portal.prismaticColors)];
+      const lines = upchargeLines(l.order.number, delta, l.billedMinor, l.portal.prismaticColors);
       assertAssembledTotal('Invoice', sumLineAmounts(lines), delta, [['color upcharge', delta]]);
       const customField = projectCustomField(projectId, projectFieldId);
       const body = {

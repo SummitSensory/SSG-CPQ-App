@@ -260,3 +260,86 @@ describe('applyBomBuildToOrder — retroactive secondary vendor', () => {
     expect(LINES.get('order-2')).toHaveLength(1);
   });
 });
+
+describe('applyBomBuildToOrder — a parent kept after the order was locked', () => {
+  /**
+   * A-2216 explodes into two scoop slides. "Keep the parent line" was switched on after
+   * orders were already locked, so those orders hold the slides but not the deck, and
+   * re-applying skipped the part as already expanded.
+   */
+  const slideRule = () => {
+    SKUS = [
+      {
+        part: 'A-2216',
+        keepParentOnBom: true,
+        description: 'Summit Adventure Slide',
+        unitCostMinor: 5000,
+        manufacturer: 'Goldberg Brothers',
+      },
+    ];
+    COMPONENTS = [
+      { parentPart: 'A-2216', childPart: 'B01MUEBGVK', quantity: 1, active: true },
+      { parentPart: 'A-2216', childPart: 'B0018L8RJG', quantity: 1, active: true },
+    ];
+  };
+
+  it('puts the parent back beside its components, once', async () => {
+    slideRule();
+    LINES.set('order-3', [
+      {
+        id: 'k1',
+        sku: 'B01MUEBGVK',
+        kitSku: 'A-2216',
+        quantity: 2,
+        quantityOriginal: 2,
+        proposalLineOrder: 7,
+      },
+      {
+        id: 'k2',
+        sku: 'B0018L8RJG',
+        kitSku: 'A-2216',
+        quantity: 2,
+        quantityOriginal: 2,
+        proposalLineOrder: 7,
+      },
+    ]);
+    const first = await applyBomBuildToOrder('order-3', 'user-1');
+    expect(first.parentsRestored).toEqual(['A-2216']);
+    expect(first.componentsAdded).toBe(0);
+    const parent = LINES.get('order-3')!.find((l) => l.sku === 'A-2216');
+    expect(parent).toMatchObject({
+      quantity: 2,
+      name: 'Summit Adventure Slide',
+      vendor: 'Goldberg Brothers',
+      unitCostMinor: 5000,
+      proposalLineOrder: 7,
+      kitSku: null,
+    });
+    expect(LINES.get('order-3')).toHaveLength(3); // the components stay
+    expect(EVENTS.at(-1)?.detail).toMatchObject({ parentsRestored: ['A-2216'] });
+
+    const second = await applyBomBuildToOrder('order-3', 'user-1');
+    expect(second.parentsRestored).toEqual([]);
+    expect(LINES.get('order-3')).toHaveLength(3);
+  });
+
+  it('leaves an order alone where the parent was already added back by hand', async () => {
+    slideRule();
+    LINES.set('order-4', [
+      { id: 'k1', sku: 'B01MUEBGVK', kitSku: 'A-2216', quantity: 1 },
+      { id: 'p1', sku: 'A-2216', kitSku: null, quantity: 1 },
+    ]);
+    const r = await applyBomBuildToOrder('order-4', 'user-1');
+    expect(r.parentsRestored).toEqual([]);
+    expect(LINES.get('order-4')).toHaveLength(2);
+  });
+
+  it('reads the parent quantity from the component’s original count, not an edit', async () => {
+    slideRule();
+    LINES.set('order-5', [
+      { id: 'k1', sku: 'B01MUEBGVK', kitSku: 'A-2216', quantity: 5, quantityOriginal: 1 },
+    ]);
+    await applyBomBuildToOrder('order-5', 'user-1');
+    expect(LINES.get('order-5')!.find((l) => l.sku === 'A-2216')?.quantity).toBe(1);
+  });
+});
