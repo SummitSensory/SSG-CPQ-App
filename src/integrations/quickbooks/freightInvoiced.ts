@@ -40,11 +40,26 @@ export const INVOICE_CANDIDATE_WHERE = {
 
 /** A freight-only invoice raised by the freight push — not the job's main invoice. */
 export function isFreightSupplement(totalsSnapshot: unknown): boolean {
-  return (
-    !!totalsSnapshot &&
-    typeof totalsSnapshot === 'object' &&
-    (totalsSnapshot as { kind?: unknown }).kind === 'FREIGHT_SUPPLEMENT'
-  );
+  return snapshotKind(totalsSnapshot) === 'FREIGHT_SUPPLEMENT';
+}
+
+/** The `kind` of an upcharge-only invoice raised by colorUpcharge.ts. */
+export const COLOR_UPCHARGE_SUPPLEMENT = 'COLOR_UPCHARGE_SUPPLEMENT';
+
+/**
+ * Any add-on invoice — freight-only or colour-upcharge-only — rather than the job's
+ * main invoice. Everything that looks for "the invoice" to bill onto skips these:
+ * appending the next batch of freight to a $500 upcharge invoice would bury it.
+ */
+export function isSupplementInvoice(totalsSnapshot: unknown): boolean {
+  const kind = snapshotKind(totalsSnapshot);
+  return kind === 'FREIGHT_SUPPLEMENT' || kind === COLOR_UPCHARGE_SUPPLEMENT;
+}
+
+function snapshotKind(totalsSnapshot: unknown): unknown {
+  return totalsSnapshot && typeof totalsSnapshot === 'object'
+    ? (totalsSnapshot as { kind?: unknown }).kind
+    : undefined;
 }
 
 export async function entriesOnInvoice(
@@ -70,7 +85,7 @@ export async function entriesOnInvoice(
   // The newest full invoice per job — the document freight is billed onto.
   const invoiceSnapshot = new Map<string, string>();
   for (const i of invoices) {
-    if (isFreightSupplement(i.totalsSnapshot)) continue;
+    if (isSupplementInvoice(i.totalsSnapshot)) continue;
     const id = (i.totalsSnapshot as { priceSnapshotId?: unknown } | null)?.priceSnapshotId;
     if (i.proposalId && typeof id === 'string' && !invoiceSnapshot.has(i.proposalId))
       invoiceSnapshot.set(i.proposalId, id);

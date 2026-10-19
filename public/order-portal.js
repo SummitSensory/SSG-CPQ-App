@@ -1231,9 +1231,196 @@
       (st.errors[it.kind]
         ? '<div class="err" style="margin-top:8px;">' + esc(st.errors[it.kind]) + '</div>'
         : '') +
+      (isColor ? upchargeHtml(st.upcharge, st.canBillUpcharge) : '') +
       reviewNoteHtml(it.kind, st.notes[it.kind]) +
       (answers ? '<div style="margin-top:10px;">' + answers + '</div>' : '') +
       '</div>'
+    );
+  }
+
+  /* ────────────────────────── the Prismatic upcharge ────────────────────────── */
+
+  /** "$1,234.50" from a minor-units string. Display only — never arithmetic. */
+  function fmtMinor(minor) {
+    var n = Number(minor || 0) / 100;
+    return (
+      (n < 0 ? '−$' : '$') +
+      Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    );
+  }
+
+  var UPCHARGE_MODE = {
+    AMEND: 'added to invoice',
+    SUPPLEMENT: 'upcharge invoice',
+    REDUCE: 'reduced on invoice',
+    MANUAL: 'recorded by hand',
+  };
+
+  /**
+   * Where the order's Prismatic upcharge stands (GET /orders/:id/color-upcharge):
+   * what the customer agreed to in the portal, what has been billed, and the buttons
+   * to bill the rest. Nothing for an order with no upcharge.
+   */
+  function upchargeHtml(u, canBill) {
+    if (!u || u.status === 'NONE' || u.status === 'UNCONFIRMED') return '';
+    var open = u.status === 'TO_BILL' || u.status === 'TO_REDUCE';
+    var headline =
+      u.status === 'TO_BILL'
+        ? fmtMinor(u.deltaMinor) + ' Prismatic upcharge not yet billed'
+        : u.status === 'TO_REDUCE'
+          ? 'Prismatic upcharge went down — ' + fmtMinor(-Number(u.deltaMinor)) + ' to take off'
+          : 'Prismatic upcharge billed';
+    var history = (u.pushes || [])
+      .map(function (p) {
+        return (
+          '<div class="muted" style="font-size:12px;">' +
+          esc(fmtDate(p.pushedAt)) +
+          ' · ' +
+          esc(fmtMinor(p.amountMinor)) +
+          ' ' +
+          esc(UPCHARGE_MODE[p.mode] || p.mode) +
+          (p.qboDocNumber ? ' ' + esc(p.qboDocNumber) : '') +
+          (p.note ? ' — ' + esc(p.note) : '') +
+          '</div>'
+        );
+      })
+      .join('');
+    return (
+      '<div data-upcharge="' +
+      esc(u.status) +
+      '" style="margin-top:10px;padding:10px 12px;border-radius:10px;border:1px solid ' +
+      (open ? '#eadfbe;background:#fdf6e3' : '#e7e8e3;background:#fbfbf9') +
+      ';">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">' +
+      '<div><b style="font-weight:600;font-size:13.5px;">' +
+      esc(headline) +
+      '</b>' +
+      '<div class="muted" style="font-size:12px;">Customer agreed to ' +
+      esc(fmtMinor(u.owedMinor)) +
+      ' in the portal · billed so far ' +
+      esc(fmtMinor(u.billedMinor)) +
+      '</div></div>' +
+      (open && canBill
+        ? '<div style="display:flex;gap:8px;">' +
+          '<button class="link-btn upchargeHandled" style="width:auto;padding:6px 12px;font-size:12.5px;">Already billed by hand…</button>' +
+          '<button class="btn upchargeBill" style="width:auto;padding:6px 12px;font-size:12.5px;">' +
+          (u.status === 'TO_REDUCE' ? 'Lower on invoice…' : 'Bill to QuickBooks…') +
+          '</button></div>'
+        : '') +
+      '</div>' +
+      (history ? '<div style="margin-top:8px;">' + history + '</div>' : '') +
+      '</div>'
+    );
+  }
+
+  function previewRow(label, value, strong) {
+    return (
+      '<div style="display:flex;justify-content:space-between;gap:10px;">' +
+      '<span>' +
+      esc(label) +
+      '</span>' +
+      (strong ? '<b>' : '<span>') +
+      esc(value) +
+      (strong ? '</b>' : '</span>') +
+      '</div>'
+    );
+  }
+
+  /** Bill (or lower) the upcharge: preview read live from QuickBooks, then confirm. */
+  function upchargeBillDialog(opts, done) {
+    var preview = null;
+    var ov = openModal(
+      'Prismatic upcharge → QuickBooks',
+      '<div id="upPreview" class="muted" style="font-size:13px;padding:8px 0;">Reading the invoice from QuickBooks…</div>',
+      async function (close, showErr) {
+        if (!preview) return showErr('The invoice has not been read yet.');
+        if (preview.blocked) return showErr(preview.blocked);
+        var r = await opts.authed('/orders/' + opts.orderId + '/color-upcharge/push', {
+          method: 'POST',
+          body: {
+            expectedCurrentTotalMinor: preview.invoice.currentTotalMinor,
+            expectedNewTotalMinor: preview.newTotalMinor,
+            expectedChargeMinor: preview.chargeMinor,
+          },
+        });
+        if (!r.ok) {
+          var msg = await serverMessage(r, 'QuickBooks was not updated (' + r.status + ').');
+          await done();
+          return showErr(msg);
+        }
+        close();
+        await done();
+      },
+      'Send to QuickBooks',
+    );
+    (async function () {
+      var box = ov.querySelector('#upPreview');
+      var r = await opts.authed('/orders/' + opts.orderId + '/color-upcharge/preview');
+      if (!r.ok) {
+        box.innerHTML =
+          '<div class="err">' +
+          esc(await serverMessage(r, 'Could not read the invoice.')) +
+          '</div>';
+        return;
+      }
+      preview = await r.json();
+      var p = preview;
+      box.innerHTML =
+        '<div style="font-size:13.5px;line-height:1.6;color:#20241f;">' +
+        esc(p.reason) +
+        '</div>' +
+        '<div style="margin-top:12px;display:grid;gap:5px;font-size:13.5px;color:#20241f;">' +
+        previewRow('Customer agreed to (portal)', p.formatted.owed) +
+        previewRow('Already billed', p.formatted.billed) +
+        previewRow('Invoice ' + (p.invoice.docNumber || '—') + ' now', p.formatted.current) +
+        previewRow(p.mode === 'REDUCE' ? 'Taking off' : 'Adding', p.formatted.charge) +
+        previewRow(
+          p.mode === 'SUPPLEMENT'
+            ? 'New upcharge invoice ' + (p.supplementDocNumber || '')
+            : 'That invoice becomes',
+          p.formatted.next,
+          true,
+        ) +
+        '</div>' +
+        (p.warnings || [])
+          .map(function (w) {
+            return (
+              '<div style="margin-top:10px;padding:8px 11px;border-radius:9px;font-size:12.5px;border:1px solid #eadfbe;background:#fdf6e3;color:#8a6d1f;">' +
+              esc(w) +
+              '</div>'
+            );
+          })
+          .join('') +
+        (p.blocked ? '<div class="err" style="margin-top:10px;">' + esc(p.blocked) + '</div>' : '');
+      if (p.blocked) {
+        var save = ov.querySelector('#mSave');
+        if (save) save.disabled = true;
+      }
+    })();
+  }
+
+  /** Billed, credited or waived outside the CRM: record it so it stops being "to bill". */
+  function upchargeHandledDialog(opts, u, done) {
+    var ov = openModal(
+      'Already handled by hand',
+      '<p style="font-size:13.5px;line-height:1.6;margin-bottom:10px;">Records ' +
+        esc(fmtMinor(u.deltaMinor)) +
+        ' as dealt with outside the CRM. QuickBooks is not changed. Use this when the upcharge is already on an invoice, was credited by hand, or will not be charged.</p>' +
+        '<label style="font-size:12.5px;font-weight:600;">What was done</label>' +
+        '<textarea id="upNote" rows="3" maxlength="1000" style="width:100%;margin-top:4px;" placeholder="e.g. added to invoice 1050 by hand on 10/20"></textarea>',
+      async function (close, showErr) {
+        var note = (ov.querySelector('#upNote').value || '').trim();
+        if (note.length < 3) return showErr('Say what was done.');
+        var r = await opts.authed('/orders/' + opts.orderId + '/color-upcharge/handled', {
+          method: 'POST',
+          body: { note: note, expectedChargeMinor: u.deltaMinor },
+        });
+        if (!r.ok)
+          return showErr(await serverMessage(r, 'Could not record it (' + r.status + ').'));
+        close();
+        await done();
+      },
+      'Record it',
     );
   }
 
@@ -1302,6 +1489,8 @@
       notes: {},
       errors: {},
       canReview: !!opts.canReview,
+      upcharge: null,
+      canBillUpcharge: !!opts.canBillUpcharge,
     };
     var alive = function () {
       return document.body.contains(el);
@@ -1313,7 +1502,7 @@
       var sync = el.querySelector('#portalSync');
       if (sync)
         sync.addEventListener('click', function () {
-          doSync(true);
+          doSync(true).then(loadUpcharge);
         });
       el.querySelectorAll('.portalReview').forEach(function (b) {
         b.addEventListener('click', function () {
@@ -1325,6 +1514,27 @@
           reapply();
         });
       });
+      var bill = el.querySelector('.upchargeBill');
+      if (bill)
+        bill.addEventListener('click', function () {
+          upchargeBillDialog(opts, loadUpcharge);
+        });
+      var handled = el.querySelector('.upchargeHandled');
+      if (handled && st.upcharge)
+        handled.addEventListener('click', function () {
+          upchargeHandledDialog(opts, st.upcharge, loadUpcharge);
+        });
+    }
+
+    /** Where the Prismatic upcharge stands; quiet on failure (the card still works). */
+    async function loadUpcharge() {
+      try {
+        var r = await opts.authed('/orders/' + opts.orderId + '/color-upcharge');
+        st.upcharge = r.ok ? await r.json() : null;
+      } catch (e) {
+        st.upcharge = null;
+      }
+      paint();
     }
 
     /** Fill blank BOM lines from the reviewed colours (lines added after review). */
@@ -1450,6 +1660,8 @@
       }
       if (!st.items) st.items = [];
       await doSync(false);
+      // After the sync, so a colour change that just arrived is what it reports.
+      await loadUpcharge();
     })();
   }
 
@@ -1479,6 +1691,8 @@
     refreshList: refreshList,
     // the order page
     answersHtml: answersHtml,
+    upchargeHtml: upchargeHtml,
+    fmtMinor: fmtMinor,
     deliverySignature: deliverySignature,
     mountCard: mountCard,
   };

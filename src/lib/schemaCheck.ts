@@ -68,6 +68,7 @@ export const REQUIRED_TABLES: Array<{ table: string; since: string }> = [
   { table: 'PurchaseOrderLine', since: '0105_vendor_purchase_orders' },
   { table: 'PurchaseOrderSend', since: '0105_vendor_purchase_orders' },
   { table: 'BomSectionFile', since: '0108_bom_section_files' },
+  { table: 'ColorUpchargePush', since: '0118_color_upcharge_push' },
 ];
 
 export interface SchemaDriftReport {

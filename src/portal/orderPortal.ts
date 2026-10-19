@@ -19,6 +19,7 @@ import {
   MFG_DEAL_LINK_COL,
 } from '../integrations/monday/portalDelivery.js';
 import { applyColorPicksToOrder, isUnconfirmedDraft, type ColorApplyResult } from './colorAreas.js';
+import { upchargeFromAnswers, type UnlinkedUpcharge } from './colorUpchargeAnswers.js';
 
 /**
  * Where each order's customer-portal steps stand — the columns on the Orders page.
@@ -419,6 +420,39 @@ export interface PortalRefreshResult {
   itemsChanged: number;
   submissions: Record<string, number>;
   error: string | null;
+  /**
+   * Confirmed Prismatic upcharges on Manufacturing rows no order is linked to. They
+   * cannot be billed from the CRM until the row is linked, so the daily upcharge
+   * reminder lists them (colorUpcharge.ts). Only rows confirmed in the last
+   * UNLINKED_UPCHARGE_DAYS — older ones predate the CRM's orders.
+   */
+  unlinkedColorUpcharges?: UnlinkedUpcharge[];
+}
+
+export const UNLINKED_UPCHARGE_DAYS = 45;
+
+/** Confirmed upcharges on the rows `linkRows` could not match to an order. */
+export function unlinkedUpchargesOf(
+  rows: MfgRow[],
+  linked: Map<string, MfgRow>,
+  now = new Date(),
+): UnlinkedUpcharge[] {
+  const linkedIds = new Set([...linked.values()].map((r) => r.id));
+  const since = now.getTime() - UNLINKED_UPCHARGE_DAYS * 24 * 60 * 60 * 1000;
+  const out: UnlinkedUpcharge[] = [];
+  for (const row of rows) {
+    if (linkedIds.has(row.id)) continue;
+    const u = upchargeFromAnswers(row.answers.COLOR);
+    if (!u.confirmed || !u.totalMinor || u.totalMinor <= 0n) continue;
+    if (u.confirmedAt && new Date(u.confirmedAt).getTime() < since) continue;
+    out.push({
+      mondayItemId: row.id,
+      name: row.name,
+      totalMinor: u.totalMinor.toString(),
+      confirmedAt: u.confirmedAt,
+    });
+  }
+  return out;
 }
 
 /** A forced refresh still waits this long after the last one started. */
@@ -507,6 +541,7 @@ export async function refreshPortal(
     // 2. Manufacturing rows → orders → steps, with every read batched.
     const mfg = await readManufacturingBoard(opts.fetchImpl);
     const byOrder = await linkRows(mfg);
+    const unlinkedColorUpcharges = unlinkedUpchargesOf(mfg, byOrder);
 
     // A submission parked because its order could not be found is matchable the
     // moment its Manufacturing row is linked — which the step above may just have
@@ -571,6 +606,7 @@ export async function refreshPortal(
       itemsChanged,
       submissions,
       error: null,
+      unlinkedColorUpcharges,
     };
   } catch (err) {
     logger.error({ err }, 'portal refresh failed');

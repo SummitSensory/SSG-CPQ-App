@@ -2088,6 +2088,7 @@ model AcceptedOrder {
   portalDeliveries      PortalDeliverySubmission[]
   portalColorSelections PortalColorSelection[]
   portalItems               OrderPortalItem[]
+  colorUpchargePushes       ColorUpchargePush[]
   tasks             HandoffTask[]
   events                    OrderEvent[]
   // ---- Manufacturing release ----
@@ -4982,4 +4983,53 @@ model CanvaConnection {
   pendingExpiresAt DateTime?
   lastError        String?
   updatedAt        DateTime  @default(now()) @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Portal colour upcharge → QuickBooks.
+//
+// The customer portal prices Prismatic paint ($500 the first colour, $300 each
+// further one) and stores the total with the confirmed picks
+// (OrderPortalItem COLOR answers.totalUpcharge). No proposal carries it, so until
+// it is on an invoice Summit has not billed it. Each row here is one change to
+// what has been billed for an order's upcharge — the sum of `amountMinor` is what
+// the customer has been invoiced for. See src/integrations/quickbooks/colorUpcharge.ts.
+// ---------------------------------------------------------------------------
+
+enum ColorUpchargeMode {
+  /// Line added to the order's invoice, which had no payment applied.
+  AMEND
+  /// A separate upcharge-only invoice, because the original had payments applied.
+  SUPPLEMENT
+  /// The upcharge went down (a staff colour change) and the portal-added line was
+  /// lowered or removed on an invoice that was still unpaid.
+  REDUCE
+  /// Billed, credited or confirmed by a person outside the CRM — no QuickBooks write.
+  MANUAL
+}
+
+model ColorUpchargePush {
+  id                 String            @id @default(cuid())
+  orderId            String
+  order              AcceptedOrder     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  /// One push per (order, portal answers version, amount): a retry or a second
+  /// click is refused at the database rather than billing twice.
+  pushKey            String            @unique
+  /// The COLOR portal item's contentHash this push billed against.
+  portalContentHash  String
+  /// The upcharge the portal showed the customer, at the time.
+  portalTotalMinor   BigInt
+  /// What this push changed the billed amount by. Negative for a reduction.
+  amountMinor        BigInt
+  mode               ColorUpchargeMode
+  /// The QboTransaction written to (null for MANUAL).
+  invoiceTxnId       String?
+  qboDocNumber       String?
+  previousTotalMinor BigInt?
+  newTotalMinor      BigInt?
+  note               String?
+  pushedById         String
+  pushedAt           DateTime          @default(now())
+
+  @@index([orderId])
 }
