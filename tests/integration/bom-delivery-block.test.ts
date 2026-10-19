@@ -144,7 +144,7 @@ vi.mock('../../src/lib/prisma.js', () => ({
     user: {
       findUnique: async () => ({ name: 'Rep One', email: 'rep@example.com', title: 'Sales' }),
     },
-    manufacturer: { findMany: async () => [] },
+    manufacturer: { findMany: async () => [], findFirst: async () => null },
     proposal: { findUnique: async () => ({ title: 'Test Proposal' }) },
     sku: { findMany: async () => [] },
     hardwareRule: { findMany: async () => [] },

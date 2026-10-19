@@ -213,6 +213,8 @@ export interface SectionView {
   showPowderColor: boolean;
   /** Whether a colour here is a powder brand plus a code, or the vendor's own colour alone. */
   colorUsesBrand: boolean;
+  /** The colour column's heading on this vendor's sheet — "Powder color" unless the vendor names it. */
+  colorHeading: string;
   /** Whether this vendor's sheet prints the packaging-bag column. */
   showPackagingBag: boolean;
   editable: boolean;
@@ -355,6 +357,7 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
         contactEmail: true,
         bomFreightSource: true,
         bomColorUsesBrand: true,
+        bomColorHeading: true,
         poEnabled: true,
       },
     }),
@@ -470,6 +473,7 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
       showPowderColor:
         s.showPowderColor || mine.some((l) => (l.powderColorCode || l.powderColor || '').trim()),
       colorUsesBrand: mfr?.bomColorUsesBrand ?? true,
+      colorHeading: mfr?.bomColorHeading?.trim() || 'Powder color',
       showPackagingBag: s.showPackagingBag,
       editable: s.status !== 'SUBMITTED',
       confirmedAt: iso(s.confirmedAt),

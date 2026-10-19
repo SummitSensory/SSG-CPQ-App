@@ -34,7 +34,12 @@ async function sectionExtras(orderId: string, vendor: string) {
     include: { answers: { orderBy: [{ sortOrder: 'asc' }, { label: 'asc' }] } },
   });
   if (!section) return null;
+  const mfr = await prisma.manufacturer.findFirst({
+    where: { name: { equals: vendor, mode: 'insensitive' } },
+    select: { bomColorHeading: true },
+  });
   return {
+    colorHeading: mfr?.bomColorHeading?.trim() || null,
     submittedOn: section.submittedOn ? section.submittedOn.toISOString() : null,
     deliveryType: section.deliveryType ?? '',
     shipmentQuote: section.shipmentQuote ?? '',
@@ -125,6 +130,8 @@ export interface BomModel {
   delivery: Array<{ label: string; value: string; wide?: boolean }>;
   questions: Array<{ label: string; value: string }>;
   columns: string[];
+  /** The colour column's heading, as it appears in `columns`; null when not printed. */
+  colorColumn: string | null;
   /**
    * The part rows under their headings: the main list first, then Hardware and any
    * heading the team has named, each in BOM order (see bomLayout.ts).
@@ -256,6 +263,9 @@ export async function buildBomModel(
   const showColor = all
     ? doc.lines.some((l) => l.powderColor)
     : (extras?.showPowderColor ?? false) || doc.lines.some((l) => l.powderColor);
+  // Its heading is the vendor's own ("Vinyl color" for Resilite's mats); the
+  // all-vendors sheet mixes vendors, so it keeps the general one.
+  const colorColumn = showColor ? extras?.colorHeading || 'Powder color' : null;
 
   // Packaging bag: opt-in per section (defaults to on — see the
   // showPackagingBag column default in the schema — a section can still opt
@@ -282,7 +292,7 @@ export async function buildBomModel(
     'Description',
     'Qty',
     ...(showBag ? ['Bag #'] : []),
-    ...(showColor ? ['Powder color'] : []),
+    ...(colorColumn ? [colorColumn] : []),
     'Weight (lb)',
     'Cost Each',
     'Total Cost',
@@ -431,6 +441,7 @@ export async function buildBomModel(
     delivery,
     questions: extras?.answers ?? [],
     columns,
+    colorColumn,
     groups,
     totals,
     summary,
