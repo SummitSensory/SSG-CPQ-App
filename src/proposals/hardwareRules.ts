@@ -128,10 +128,10 @@ export const DEFAULT_HARDWARE_RULES: HardwareRule[] = [
     ['in:bracketsQty', 1],
     ['in:swivel360', -1],
   ]),
-  R('6820H-LP', 'Eye Bolt — Fixed', [
-    ['in:forged', 1],
-    ['bom:P-2024', 1],
-  ]),
+  // The forged eye bolts the customer asked for, only. The zip line's two eye bolts are
+  // 6820H-LP-ZP in its kit; counting them here too bought a third per zip line and
+  // printed them on the customer's "Eye Bolt — Fixed" line.
+  R('6820H-LP', 'Eye Bolt — Fixed', [['in:forged', 1]]),
   R('B0C4Y8XSNB', 'Eye Bolt — Swing Hanger w/ Bearing', [['in:swingHanger', 1]]),
   R('6820H-LY', 'Eye Bolt; 1/4-20 × 2', [['bom:P-2018', 2]]),
   R('6820H-LAI', 'Quick Shift Bracket Bent Pin w/ Lanyard', [['bom:P-2124', 2]]),
@@ -140,6 +140,8 @@ export const DEFAULT_HARDWARE_RULES: HardwareRule[] = [
     'Hex Nylon Insert Lock Nut, 1/2-13',
     [
       ['hw:6820H-LP', 1],
+      // The zip line's eye bolts take a nut each, as they did when 6820H-LP held them.
+      ['bom:6820H-LP-ZP', 1],
       ['hw:6820H-LA', 1],
       ['hw:6820H-LQ', 1],
       ['hw:6820H-LO', 1],
@@ -163,6 +165,7 @@ export const DEFAULT_HARDWARE_RULES: HardwareRule[] = [
     'Washer 1/2 Flat',
     [
       ['hw:6820H-LP', 1],
+      ['bom:6820H-LP-ZP', 1],
       ['hw:6820H-LA', 2],
       ['hw:6820H-LQ', 4],
       ['hw:6820H-LO', 2],
@@ -181,7 +184,9 @@ export const DEFAULT_HARDWARE_RULES: HardwareRule[] = [
     ['bom:P-2500', 2],
     ['bom:P-2501', 2],
     ['bom:P-2502', 2],
-    ['bom:A-2530', -2],
+    // No zip-collar deduction. The workbook's order column took 2 off per collar
+    // (Calcs F195) but its Needed column (G195) does not, and with 4 collars a zip
+    // line the deduction emptied the frame's 4½" bolts at 3 zip lines.
   ]),
   R('6820H-LAG', 'Hex Bolt, 1/2-13 × 4"', [], {
     active: false,
@@ -194,9 +199,11 @@ export const DEFAULT_HARDWARE_RULES: HardwareRule[] = [
   R(
     '6820H-LG',
     'Tap Bolt, 3/8-16 × 1-3/4"',
+    // Four per rung — P-2330 has four threaded holes — less the ladder rungs (5 per
+    // ladder leg), which take button-head screws (6820H-LAH) instead.
     [
-      ['bom:P-2330', 2],
-      ['bom:P-2531', -10],
+      ['bom:P-2330', 4],
+      ['bom:P-2531', -20],
     ],
     { factor: 1.02, roundMode: 'CEIL', roundStep: 1 },
   ),
@@ -226,15 +233,19 @@ export const DEFAULT_HARDWARE_RULES: HardwareRule[] = [
     ['bom:P-2028', 1],
     ['bom:P-2025', 3],
   ]),
-  R('6820H-LW', 'Hex Nylon Insert Lock Nut, 5/16-18', [['bom:P-2025', 2]]),
+  // One nut for each of the plate's three bolts (6820H-LV); it had two.
+  R('6820H-LW', 'Hex Nylon Insert Lock Nut, 5/16-18', [['bom:P-2025', 3]]),
   R('6820H-LQ', 'Tap Bolt, 1/2-13 × 6"', [['bom:TRH2005', 1]]),
   R('6820H-LO', 'Hex Bolt, 1/2-13 × 7"', [['bom:P-2024', 2]]),
   R('6820H-LR', 'Hex Nut, 1/2-13', [['bom:TRH2005', 2]]),
   R(
     '6820H-LM',
     'USS Flat Washer, 3/8',
+    // A washer under each tap bolt, so the same rung count as 6820H-LG: four per
+    // rung, none on the ladder rungs, whose button-head screws take no washer.
     [
-      ['bom:P-2330', 2],
+      ['bom:P-2330', 4],
+      ['bom:P-2531', -20],
       ['hw:6820H-LAF', 2],
       ['bom:P-2124', 1],
     ],
@@ -251,7 +262,8 @@ export const DEFAULT_HARDWARE_RULES: HardwareRule[] = [
   R('6820H-LAE', 'Tap Bolt, 3/8-16 × 4"', [['in:vRings', 10]]),
   R('6820H-LAF', 'V-Ring Bolt-On Anchor', [['in:vRings', 10]]),
   R('6820H-LAH', 'Button Head Hex Drive Screw, 3/8-16 × 1-1/2"', [
-    ['bom:P-2531', 10],
+    // Four per ladder rung (5 rungs per ladder leg), as on every other rung.
+    ['bom:P-2531', 20],
     ['bom:A-2253', 2],
     ['bom:A-2248', 2],
   ]),
