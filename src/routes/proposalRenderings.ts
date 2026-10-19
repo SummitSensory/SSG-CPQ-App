@@ -1,4 +1,6 @@
 import type { FastifyInstance } from 'fastify';
+import { Readable } from 'node:stream';
+import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { requirePermission } from '../plugins/authz.js';
@@ -11,6 +13,8 @@ import {
   isRenderingUploadConfigured,
   issueRenderingUploadToken,
   renderingPath,
+  openRenderingStream,
+  renderingViewUrl,
   verifyRenderingUpload,
 } from '../lib/renderingStore.js';
 
@@ -166,6 +170,45 @@ export function registerProposalRenderingRoutes(app: FastifyInstance): void {
       ),
     );
     return { ok: true };
+  });
+
+  async function findRendering(proposalId: string, id: string) {
+    const row = await prisma.proposalRendering.findUnique({ where: { id } });
+    if (!row || row.proposalId !== proposalId) throw new NotFoundError('Rendering not found');
+    return row;
+  }
+
+  /**
+   * A link that opens the rendering — see renderingViewUrl for why the stored URL
+   * cannot be. Null when no link can be made: the browser then reads the file through
+   * the route below instead of showing nothing.
+   */
+  app.get('/proposals/:proposalId/renderings/:id/view', read, async (req) => {
+    const { proposalId, id } = req.params as { proposalId: string; id: string };
+    const row = await findRendering(proposalId, id);
+    try {
+      return { url: await renderingViewUrl(row.pathname), filename: row.filename };
+    } catch (err) {
+      req.log.error({ err, renderingId: id }, 'rendering: could not presign a view link');
+      return { url: null, filename: row.filename };
+    }
+  });
+
+  /** The file itself, streamed through, for when a view link cannot be made. */
+  app.get('/proposals/:proposalId/renderings/:id/file', read, async (req, reply) => {
+    const { proposalId, id } = req.params as { proposalId: string; id: string };
+    const row = await findRendering(proposalId, id);
+    const file = await openRenderingStream(row.pathname);
+    if (!file) throw new NotFoundError('This rendering is no longer in storage.');
+    const ascii = row.filename.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+    return reply
+      .header('content-type', file.contentType || row.contentType)
+      .header('content-length', String(file.size))
+      .header(
+        'content-disposition',
+        `inline; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(row.filename)}`,
+      )
+      .send(Readable.fromWeb(file.stream as unknown as NodeReadableStream<Uint8Array>));
   });
 
   app.delete('/proposals/:proposalId/renderings/:id', write, async (req) => {

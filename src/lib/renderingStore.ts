@@ -1,5 +1,5 @@
 import { generateClientTokenFromReadWriteToken } from '@vercel/blob/client';
-import { head as blobHead } from '@vercel/blob';
+import { get as blobGet, head as blobHead, issueSignedToken, presignUrl } from '@vercel/blob';
 import { env } from '../config/env.js';
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
@@ -113,6 +113,52 @@ export async function verifyRenderingUpload(
     contentType: result.contentType,
     pathname: result.pathname,
   };
+}
+
+/** How long a link to look at a rendering stays good. Long enough to open; short enough to be useless if forwarded. */
+export const RENDERING_VIEW_TTL_MS = 10 * 60_000;
+
+/**
+ * A short-lived link that opens one rendering in the browser.
+ *
+ * Renderings are stored PRIVATE, so the stored blob URL answers nothing without the
+ * store's token — which is why clicking a rendering's name opened an empty tab. The
+ * token itself can never go to the browser, and the file cannot come back through
+ * this server either: a rendering runs to 250 MB and a Vercel function response
+ * stops at ~4.5 MB. A presigned GET for this one pathname, read-only, for a few
+ * minutes, lets the browser fetch it straight from storage.
+ */
+export async function renderingViewUrl(pathname: string): Promise<string> {
+  if (!env.BLOB_READ_WRITE_TOKEN) {
+    throw new Error('File storage is not configured on this deployment (BLOB_READ_WRITE_TOKEN).');
+  }
+  const validUntil = Date.now() + RENDERING_VIEW_TTL_MS;
+  const signed = await issueSignedToken({
+    token: env.BLOB_READ_WRITE_TOKEN,
+    pathname,
+    operations: ['get'],
+    validUntil,
+  });
+  const { presignedUrl } = await presignUrl(signed, {
+    operation: 'get',
+    pathname,
+    access: 'private',
+    validUntil,
+  });
+  return presignedUrl;
+}
+
+/**
+ * The rendering as a stream, for when a presigned link cannot be made. Streamed, never
+ * buffered, so a large file is not held in memory on its way through. Null when the
+ * blob is gone.
+ */
+export async function openRenderingStream(
+  pathname: string,
+): Promise<{ stream: ReadableStream<Uint8Array>; contentType: string; size: number } | null> {
+  const r = await blobGet(pathname, { access: 'private', token: env.BLOB_READ_WRITE_TOKEN });
+  if (!r || r.statusCode !== 200) return null;
+  return { stream: r.stream, contentType: r.blob.contentType, size: r.blob.size };
 }
 
 export interface ResolvedRendering {
