@@ -1,8 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { upchargeFromAnswers } from '../../src/portal/colorUpchargeAnswers.js';
 import {
   upchargeStatus,
-  upchargeLineDescription,
+  upchargeLines,
   upchargeDocNumber,
   withUpchargeLines,
 } from '../../src/integrations/quickbooks/colorUpcharge.js';
@@ -61,15 +61,86 @@ describe('invoice rows', () => {
     Amount: 20000,
     Description: 'Adventure Series',
   };
-  const ours = (amount: number) => ({
+  const ours = (amount: number, order = 'SO-7') => ({
     DetailType: 'SalesItemLineDetail',
     Amount: amount,
-    Description: upchargeLineDescription('SO-7', 2),
+    Description: `Prismatic paint color upcharge — first Prismatic color chosen in the customer portal (order ${order})`,
+  });
+  const items = (lines: Array<Record<string, unknown>>) =>
+    lines.map((l) => {
+      const d = l.SalesItemLineDetail as {
+        ItemRef?: { value: string };
+        Qty: number;
+        UnitPrice: number;
+      };
+      return { item: d.ItemRef?.value ?? null, qty: d.Qty, unit: d.UnitPrice, amount: l.Amount };
+    });
+
+  afterEach(() => {
+    delete process.env.QBO_ITEM_ID_COLOR_UPCHARGE;
+    delete process.env.QBO_ITEM_ID_COLOR_UPCHARGE_ADDITIONAL;
   });
 
-  it('names the order on the row, so the CRM can recognise its own', () => {
-    expect(upchargeLineDescription('SO-7', 1)).toBe(
-      'Prismatic paint color upcharge — 1 Prismatic color chosen in the customer portal (order SO-7)',
+  describe('split onto the Primary ($500) and Secondary ($300) items', () => {
+    beforeEach(() => {
+      process.env.QBO_ITEM_ID_COLOR_UPCHARGE = '122';
+      process.env.QBO_ITEM_ID_COLOR_UPCHARGE_ADDITIONAL = '168';
+    });
+
+    it('$800 at once: Primary $500 + 1 × Secondary $300', () => {
+      expect(items(upchargeLines('SO-7', 80_000n, 0n, 2))).toEqual([
+        { item: '122', qty: 1, unit: 500, amount: 500 },
+        { item: '168', qty: 1, unit: 300, amount: 300 },
+      ]);
+    });
+
+    it('$1,100: Primary + 2 × Secondary', () => {
+      expect(items(upchargeLines('SO-7', 110_000n, 0n, 3))).toEqual([
+        { item: '122', qty: 1, unit: 500, amount: 500 },
+        { item: '168', qty: 2, unit: 300, amount: 600 },
+      ]);
+    });
+
+    it('an added color after the first $500 was billed elsewhere is Secondary only', () => {
+      expect(items(upchargeLines('SO-7', 30_000n, 50_000n, 2))).toEqual([
+        { item: '168', qty: 1, unit: 300, amount: 300 },
+      ]);
+    });
+
+    it('one color is Primary only, and an odd remainder is one Secondary row', () => {
+      expect(items(upchargeLines('SO-7', 50_000n, 0n, 1))).toEqual([
+        { item: '122', qty: 1, unit: 500, amount: 500 },
+      ]);
+      expect(items(upchargeLines('SO-7', 62_500n, 0n, 2))).toEqual([
+        { item: '122', qty: 1, unit: 500, amount: 500 },
+        { item: '168', qty: 1, unit: 125, amount: 125 },
+      ]);
+    });
+
+    it('every row names the order, so the CRM recognises both as its own', () => {
+      for (const l of upchargeLines('SO-7', 80_000n, 0n, 2)) {
+        expect(String(l.Description)).toMatch(/^Prismatic paint color upcharge .*\(order SO-7\)$/);
+      }
+    });
+
+    it('rewriting an invoice replaces all its own rows and keeps the rest', () => {
+      const lines = withUpchargeLines(
+        [product, ...upchargeLines('SO-7', 80_000n, 0n, 2)],
+        'SO-7',
+        50_000n,
+        1,
+      );
+      expect(lines[0]).toBe(product);
+      expect(items(lines.slice(1))).toEqual([{ item: '122', qty: 1, unit: 500, amount: 500 }]);
+    });
+  });
+
+  it('without a Secondary item, it is one row on the Primary item', () => {
+    process.env.QBO_ITEM_ID_COLOR_UPCHARGE = '122';
+    const lines = upchargeLines('SO-7', 80_000n, 0n, 2);
+    expect(items(lines)).toEqual([{ item: '122', qty: 1, unit: 800, amount: 800 }]);
+    expect(lines[0]!.Description).toBe(
+      'Prismatic paint color upcharge — 2 Prismatic colors chosen in the customer portal (order SO-7)',
     );
   });
 
@@ -81,11 +152,7 @@ describe('invoice rows', () => {
   });
 
   it('removes its row at zero, and never touches another order’s row', () => {
-    const other = {
-      DetailType: 'SalesItemLineDetail',
-      Amount: 500,
-      Description: upchargeLineDescription('SO-8', 1),
-    };
+    const other = ours(500, 'SO-8');
     expect(withUpchargeLines([product, other, ours(800)], 'SO-7', 0n, 0)).toEqual([product, other]);
   });
 

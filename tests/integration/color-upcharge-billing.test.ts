@@ -143,7 +143,9 @@ async function confirmFrom(preview: Awaited<ReturnType<typeof cu.colorUpchargePr
 
 describe.skipIf(!LOCAL)('Prismatic upcharge → QuickBooks invoice (real database)', () => {
   beforeAll(async () => {
-    process.env.QBO_ITEM_ID_COLOR_UPCHARGE = '42';
+    // QuickBooks' "Premium Paint Color - Primary" ($500) and "- Secondary" ($300).
+    process.env.QBO_ITEM_ID_COLOR_UPCHARGE = '122';
+    process.env.QBO_ITEM_ID_COLOR_UPCHARGE_ADDITIONAL = '168';
     ({ prisma: db } = await import('../../src/lib/prisma.js'));
     cu = await import('../../src/integrations/quickbooks/colorUpcharge.js');
 
@@ -287,7 +289,7 @@ describe.skipIf(!LOCAL)('Prismatic upcharge → QuickBooks invoice (real databas
     expect((await cu.unbilledColorUpcharges()).find((u) => u.orderId === orderId)).toBeUndefined();
   });
 
-  it('nothing paid: adds one row to the existing invoice, keeps every other line, and records it once', async () => {
+  it('nothing paid: adds Primary + Secondary rows to the existing invoice, keeps every other line, and records it once', async () => {
     const p = await cu.colorUpchargePreview(orderId);
     expect(p.mode).toBe('AMEND');
     expect(p.blocked).toBeNull();
@@ -295,14 +297,18 @@ describe.skipIf(!LOCAL)('Prismatic upcharge → QuickBooks invoice (real databas
 
     await cu.pushColorUpcharge(orderId, userId, await confirmFrom(p));
     expect(qbo.updates).toBe(1);
-    expect(qbo.invoice.Line).toHaveLength(2);
+    expect(qbo.invoice.Line).toHaveLength(3);
     expect(qbo.invoice.Line[0]).toEqual(PRODUCT_LINE);
     expect(qbo.invoice.Line[1]).toMatchObject({
-      Amount: 800,
-      SalesItemLineDetail: { ItemRef: { value: '42' }, Qty: 1 },
+      Amount: 500,
+      SalesItemLineDetail: { ItemRef: { value: '122' }, Qty: 1, UnitPrice: 500 },
+    });
+    expect(qbo.invoice.Line[2]).toMatchObject({
+      Amount: 300,
+      SalesItemLineDetail: { ItemRef: { value: '168' }, Qty: 1, UnitPrice: 300 },
     });
     expect(String(qbo.invoice.Line[1]!.Description)).toContain(`(order ${orderNumber})`);
-    expect(String(qbo.invoice.Line[1]!.Description)).toContain('2 Prismatic colors');
+    expect(String(qbo.invoice.Line[2]!.Description)).toContain('1 additional Prismatic color');
 
     const s = await cu.colorUpchargeState(orderId);
     expect(s.status).toBe('BILLED');
@@ -344,7 +350,16 @@ describe.skipIf(!LOCAL)('Prismatic upcharge → QuickBooks invoice (real databas
     expect(qbo.updates).toBe(0);
     expect(qbo.created).toHaveLength(1);
     expect(qbo.created[0]).toMatchObject({ DocNumber: `${P}-P-CLR`, CustomerRef: { value: 'C1' } });
-    expect(qbo.created[0]!.Line).toEqual([expect.objectContaining({ Amount: 800 })]);
+    expect(qbo.created[0]!.Line).toEqual([
+      expect.objectContaining({
+        Amount: 500,
+        SalesItemLineDetail: expect.objectContaining({ ItemRef: { value: '122' } }),
+      }),
+      expect.objectContaining({
+        Amount: 300,
+        SalesItemLineDetail: expect.objectContaining({ ItemRef: { value: '168' } }),
+      }),
+    ]);
 
     const supplement = await db.qboTransaction.findFirstOrThrow({
       where: { proposalId, id: { not: mainTxnId } },
@@ -399,12 +414,38 @@ describe.skipIf(!LOCAL)('Prismatic upcharge → QuickBooks invoice (real databas
     expect(p.mode).toBe('AMEND');
     expect(p.chargeMinor).toBe('30000');
     await cu.pushColorUpcharge(orderId, userId, await confirmFrom(p));
-    // Still one upcharge row on the invoice, now for the full amount.
+    // Still Primary once, now with 2 × Secondary.
     const ours = qbo.invoice.Line.filter((l) =>
       String(l.Description).includes(`(order ${orderNumber})`),
     );
-    expect(ours).toEqual([expect.objectContaining({ Amount: 1100 })]);
+    expect(ours).toEqual([
+      expect.objectContaining({ Amount: 500 }),
+      expect.objectContaining({
+        Amount: 600,
+        SalesItemLineDetail: expect.objectContaining({ Qty: 2 }),
+      }),
+    ]);
     expect((await cu.colorUpchargeState(orderId)).billedMinor).toBe('110000');
+  });
+
+  it('a color added after the deposit was paid: the upcharge-only invoice carries Secondary only', async () => {
+    await setPortal(answers(500));
+    await cu.pushColorUpcharge(
+      orderId,
+      userId,
+      await confirmFrom(await cu.colorUpchargePreview(orderId)),
+    );
+    qbo.paidMinor = 1_000_000n;
+    await setPortal(answers(800));
+    const p = await cu.colorUpchargePreview(orderId);
+    expect(p.mode).toBe('SUPPLEMENT');
+    await cu.pushColorUpcharge(orderId, userId, await confirmFrom(p));
+    expect(qbo.created[0]!.Line).toEqual([
+      expect.objectContaining({
+        Amount: 300,
+        SalesItemLineDetail: expect.objectContaining({ ItemRef: { value: '168' } }),
+      }),
+    ]);
   });
 
   it('upcharge lowered by a staff color change: lowers the row while the invoice is unpaid', async () => {
@@ -423,7 +464,13 @@ describe.skipIf(!LOCAL)('Prismatic upcharge → QuickBooks invoice (real databas
     const ours = qbo.invoice.Line.filter((l) =>
       String(l.Description).includes(`(order ${orderNumber})`),
     );
-    expect(ours).toEqual([expect.objectContaining({ Amount: 500 })]);
+    // The Secondary row goes; Primary stays.
+    expect(ours).toEqual([
+      expect.objectContaining({
+        Amount: 500,
+        SalesItemLineDetail: expect.objectContaining({ ItemRef: { value: '122' } }),
+      }),
+    ]);
     expect((await cu.colorUpchargeState(orderId)).status).toBe('BILLED');
   });
 
@@ -445,7 +492,7 @@ describe.skipIf(!LOCAL)('Prismatic upcharge → QuickBooks invoice (real databas
   });
 
   it('an upcharge row on the invoice the CRM did not record (a lost write) stops a second one', async () => {
-    qbo.invoice.Line.push(cu.upchargeLine(orderNumber, 80_000n, 2));
+    qbo.invoice.Line.push(...cu.upchargeLines(orderNumber, 80_000n, 0n, 2));
     const p = await cu.colorUpchargePreview(orderId);
     expect(p.blocked).toMatch(/recorded/);
   });
