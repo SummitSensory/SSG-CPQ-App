@@ -1464,13 +1464,31 @@
       '<div class="field"><label for="mSearch">Customer name</label>' +
         '<input id="mSearch" style="' + IN + '" placeholder="e.g. Soar Autism Center" value="' + esc(opts.q || crm.q || '') + '" autocomplete="off"></div>' +
       '<div id="mResults" class="muted" style="font-size:13px;padding:6px 0;">Type a name and press Search.</div>',
-      async function (close, showErr) { await run(); var s = document.getElementById('mSave'); if (s) { s.disabled = false; s.textContent = 'Search'; } },
+      async function (close, showErr) { await run(); var s = ov.querySelector('#mSave'); if (s) { s.disabled = false; s.textContent = 'Search'; } },
       'Search');
 
     // Scoped to this overlay, per the note in openModal: two dialogs can be on
     // screen at once and getElementById returns the older node.
     var input = ov.querySelector('#mSearch');
     var box = ov.querySelector('#mResults');
+
+    // A plain "Close" beside Cancel and Search: once a row reads Imported/Updated
+    // the rep is done, and Cancel reads as though it would undo the import. From
+    // the CRM it also refreshes the list so what was just imported is on screen.
+    // The proposal form (opts.onImported) gets the dialog dismissed and nothing
+    // else — its hand-back only happens on an import.
+    var saveBtn = ov.querySelector('#mSave');
+    if (saveBtn && saveBtn.parentNode) {
+      var closeBtn = document.createElement('button');
+      closeBtn.type = 'button'; closeBtn.id = 'mClose'; closeBtn.className = 'link-btn';
+      closeBtn.style.cssText = 'width:auto;padding:11px 18px;';
+      closeBtn.textContent = 'Close';
+      saveBtn.parentNode.insertBefore(closeBtn, saveBtn);
+      closeBtn.addEventListener('click', function () {
+        if (ov.parentNode) ov.parentNode.removeChild(ov);
+        if (!opts.onImported) { crm.q = ''; crm.page = 1; loadCrm(); }
+      });
+    }
     input.focus();
 
     async function run() {
