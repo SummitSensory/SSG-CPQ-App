@@ -67,17 +67,19 @@ export function registerCustomerNoteRoutes(app: FastifyInstance): void {
     const { organizationId } = req.params as { organizationId: string };
     const { proposalId } = req.query as { proposalId?: string };
 
-    const org = await prisma.organization.findUnique({
-      where: { id: organizationId },
-      select: { id: true, name: true, decisionFrom: true, decisionTo: true, followUpDate: true },
-    });
+    // The customer and its notes are read together rather than one after the other.
+    const [org, notes] = await Promise.all([
+      prisma.organization.findUnique({
+        where: { id: organizationId },
+        select: { id: true, name: true, decisionFrom: true, decisionTo: true, followUpDate: true },
+      }),
+      prisma.customerNote.findMany({
+        where: { organizationId },
+        orderBy: { createdAt: 'desc' },
+        take: 300,
+      }),
+    ]);
     if (!org) throw new NotFoundError('Customer not found.');
-
-    const notes = await prisma.customerNote.findMany({
-      where: { organizationId },
-      orderBy: { createdAt: 'desc' },
-      take: 300,
-    });
 
     // Proposal numbers for the notes that came from a proposal. One query, not one
     // per note; a note whose proposal has since been deleted simply loses the tag.

@@ -1,6 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "node scripts/build-stamp.mjs && prisma generate && node scripts/migrate-deploy.mjs && pnpm build",
+  "buildCommand": "node scripts/build-stamp.mjs && node scripts/stamp-client-versions.mjs && prisma generate && node scripts/migrate-deploy.mjs && pnpm build",
   "installCommand": "pnpm install --frozen-lockfile",
   "functions": {
     "api/index.ts": {
@@ -14,6 +14,23 @@
       "maxDuration": 300
     }
   },
+  "headers": [
+    {
+      "source": "/(.*)\\.js",
+      "has": [
+        {
+          "type": "query",
+          "key": "v"
+        }
+      ],
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    }
+  ],
   "crons": [
     {
       "path": "/cron/portal-delivery",

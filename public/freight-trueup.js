@@ -392,9 +392,27 @@
     await refreshBanner();
     if (bannerTimer) clearInterval(bannerTimer);
     // Five minutes. Freight lands during the working day and the point of the banner
-    // is that nobody has to go looking for it.
-    bannerTimer = setInterval(refreshBanner, 300000);
+    // is that nobody has to go looking for it. A tab in the background skips its
+    // polls (each one is a server call, per open tab, all day) and catches up the
+    // moment it is looked at again.
+    bannerTimer = setInterval(function () {
+      if (document.hidden) {
+        bannerMissedPoll = true;
+        return;
+      }
+      refreshBanner();
+    }, 300000);
+    if (!bannerVisibilityBound) {
+      bannerVisibilityBound = true;
+      document.addEventListener('visibilitychange', function () {
+        if (document.hidden || !bannerMissedPoll || !bannerTimer) return;
+        bannerMissedPoll = false;
+        refreshBanner();
+      });
+    }
   }
+  var bannerMissedPoll = false;
+  var bannerVisibilityBound = false;
 
   /**
    * Stop polling and take the banner down. Called by the shell when the session ends

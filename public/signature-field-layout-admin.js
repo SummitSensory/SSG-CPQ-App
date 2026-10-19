@@ -147,9 +147,9 @@
 
   /* ------------------------------------------------------------------ live preview */
 
-  /** proposal.versions is already fully populated by GET /proposals (see app.js's own
-   *  loadProposals) — no per-selection fetch needed. The most-recently-touched one is
-   *  the most useful default: whatever a rep is actively working on right now. */
+  /** GET /proposals lists every proposal with only its latest version's meta block;
+   *  loadPreview fetches the full proposal for the one picked. The most-recently-touched
+   *  one is the most useful default: whatever a rep is actively working on right now. */
   function sortedProposals() {
     return PROPOSALS.slice().sort(function (a, b) {
       var ta = new Date(a.lastModifiedAt || a.updatedAt || a.createdAt || 0).getTime();
@@ -250,22 +250,33 @@
         '<div class="muted" style="padding:16px;">Could not find that proposal.</div>';
       return;
     }
-    var v = (p.versions || [])[(p.versions || []).length - 1];
-    if (!v) {
-      canvas.innerHTML =
-        '<div class="muted" style="padding:16px;">That proposal has no version to preview.</div>';
-      return;
-    }
     currentProposalId = proposalId;
     canvas.innerHTML = '<div class="muted" style="padding:16px;">Loading proposal…</div>';
     var doc;
     try {
-      doc = await H.proposalDocData(p, v);
+      // GET /proposals carries only each version's meta block, not the body, so the
+      // whole proposal is fetched for the one being previewed.
+      var rp = await H.authed('/proposals/' + encodeURIComponent(proposalId));
+      if (!rp.ok) throw new Error('load failed');
+      var full = await rp.json();
+      var versions = (full.versions || []).slice().sort(function (a, b) {
+        return (a.version || 0) - (b.version || 0);
+      });
+      var v = versions[versions.length - 1];
+      if (!v) {
+        canvas.innerHTML =
+          '<div class="muted" style="padding:16px;">That proposal has no version to preview.</div>';
+        return;
+      }
+      doc = await H.proposalDocData(full, v);
     } catch (e) {
+      if (currentProposalId !== proposalId) return;
       canvas.innerHTML =
         '<div class="err" style="padding:16px;">Could not load that proposal.</div>';
       return;
     }
+    // Another proposal was picked while this one loaded; that call draws instead.
+    if (currentProposalId !== proposalId) return;
     canvas.innerHTML = H.proposalDocHtml(doc);
     H.paginateProposalArea(canvas);
     if (document.fonts && document.fonts.ready) {
