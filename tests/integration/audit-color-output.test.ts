@@ -480,7 +480,7 @@ describe('BOM output — every format prints the right colour on the right row',
         'Bag #',
         'Powder color',
         'Weight (lb)',
-        'Cost Each',
+        'Vendor Cost',
         'Total Cost',
       ]);
       expect(s.rows.filter(notEye).map((r) => sig(r))).toEqual(FAB_ROWS);
@@ -889,6 +889,7 @@ describe('the colour check can fail — deliberate corruption is caught', () => 
     out = await run((m) => {
       const i = ci(m);
       m.columns.splice(i, 1);
+      m.columnKeys.splice(i, 1); // the check reads columns by key
       for (const g of m.groups) for (const r of g.rows) r.splice(i, 1);
     });
     expect(out.areas.find((a) => a.areaKey === LEGS)?.lines[0]).toMatchObject({

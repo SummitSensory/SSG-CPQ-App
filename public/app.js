@@ -11420,6 +11420,9 @@
    * lock and send history — a fabricator and a distributor are prepared, confirmed
    * and sent independently, so one shared header could never be right. */
   var bomSectionData = [];
+  /** The BOM's column headings (Catalog → BOM setup); the defaults until the sections load. */
+  var bomColumnLabels = {};
+  function bomLabel(key, dflt) { return (bomColumnLabels && bomColumnLabels[key]) || dflt; }
   /** Vendor purchase orders on the open order, from GET /orders/:id/vendor-pos. */
   var bomPurchaseOrders = [];
   var bomBrands = [];
@@ -11606,6 +11609,7 @@
       var r = await authed('/orders/' + order.id + '/bom/sections');
       var secJson = r.ok ? ((await r.json()) || {}) : {};
       bomSectionData = secJson.sections || [];
+      bomColumnLabels = secJson.columnLabels || {};
       if (secJson.fileUpload) bomFileUpload = secJson.fileUpload;
       var rb = await authed('/powder-colors');
       bomBrands = rb.ok ? ((await rb.json()).brands || []) : [];
@@ -12399,7 +12403,7 @@
           ? arrangeHtml(s, lines)
           : '<div style="margin-top:14px;overflow:auto;">' +
               tableShell(
-                ['Item', 'Part #'].concat(showVendorPart ? ['Vendor part #'] : [], ['Qty'], showBag ? ['Bag #'] : [], showColor ? [s.colorHeading || 'Powder color'] : [], ['Weight (lb)', 'Cost each', 'Total cost', 'Invoiced each', 'Δ $', 'Δ %', 'Notes', 'Status'], edit ? [''] : []),
+                [bomLabel('item', 'Item'), bomLabel('part', 'Part #')].concat(showVendorPart ? [bomLabel('vendorPart', 'Vendor part #')] : [], [bomLabel('qty', 'Qty')], showBag ? [bomLabel('bag', 'Bag #')] : [], showColor ? [s.colorHeading || bomLabel('color', 'Powder color')] : [], [bomLabel('weight', 'Weight (lb)'), bomLabel('costEach', 'Vendor Cost'), bomLabel('totalCost', 'Total Cost'), bomLabel('invoicedEach', 'Invoiced each'), bomLabel('deltaDollar', 'Δ $'), bomLabel('deltaPct', 'Δ %'), bomLabel('notes', 'Notes'), bomLabel('status', 'Status')], edit ? [''] : []),
                 rows, cols, '') +
             '</div>') +
         sectionMoney(s) +
@@ -13235,7 +13239,7 @@
           fieldRow('Part #', '<input id="plSku" placeholder="e.g. 6820H-114" style="' + IN + 'text-transform:uppercase;">') +
           fieldRow('Item', '<input id="plName" placeholder="Description" style="' + IN + '">') +
           fieldRow('Qty', '<input id="plQty" type="number" min="1" step="1" value="1" style="' + IN + '">') +
-          fieldRow('Cost each', '<input id="plCost" type="number" min="0" step="0.01" placeholder="From the catalog" style="' + IN + '">'),
+          fieldRow(bomLabel('costEach', 'Vendor Cost'), '<input id="plCost" type="number" min="0" step="0.01" placeholder="From the catalog" style="' + IN + '">'),
           async function (close, showErr) {
             var name = document.getElementById('plName').value.trim();
             var sku = document.getElementById('plSku').value.trim().toUpperCase();
@@ -13816,8 +13820,8 @@
     };
     // The vendor's own colour heading ("Vinyl color" for Resilite), as the server's sheet prints it.
     var sec = all ? null : bomSectionData.filter(function (x) { return x.vendor === vendor; })[0];
-    var colorHead = (sec && sec.colorHeading) || 'Powder color';
-    var cols = (all ? ['Vendor'] : []).concat(['Line #', 'Description', 'Qty', colorHead, 'Weight (lb)', 'Cost each', 'Total cost', 'Notes']);
+    var colorHead = (sec && sec.colorHeading) || bomLabel('color', 'Powder color');
+    var cols = (all ? [bomLabel('vendor', 'Vendor')] : []).concat(['Line #', bomLabel('description', 'Description'), bomLabel('qty', 'Qty'), colorHead, bomLabel('weight', 'Weight (lb)'), bomLabel('costEach', 'Vendor Cost'), bomLabel('totalCost', 'Total Cost'), bomLabel('notes', 'Notes')]);
     var rightFrom = all ? 3 : 2;
     var thead = cols.map(function (h, i) {
       return '<th style="text-align:' + (i > rightFrom ? 'right' : 'left') + ';padding:6px 8px;font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:#5c6157;border-bottom:1.5px solid #3d4a55;white-space:nowrap;">' + esc(h) + '</th>';
