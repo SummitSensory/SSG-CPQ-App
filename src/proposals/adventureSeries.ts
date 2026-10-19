@@ -7,7 +7,12 @@ import {
   type HardwareBomRow,
   type FormulaRule,
 } from './hardwareRules.js';
-import { DEFAULT_FRAME_RULES, frameContext, legsBelowMinimum } from './frameRules.js';
+import {
+  DEFAULT_FRAME_RULES,
+  frameContext,
+  frameInputWarnings,
+  legsBelowMinimum,
+} from './frameRules.js';
 import {
   CARGO_NET_10X8_PART,
   CARGO_NET_8X6_PART,
@@ -301,30 +306,29 @@ export function computeAdventureBOM(a: AdvAnswers, frameRules?: FormulaRule[]): 
  * expressible as an editable coefficient.
  */
 /**
- * How a frame's length breaks into bays. A bay is filled to 10 ft and the remainder
- * is the next one: 4 legs is a single bay of the whole length, 6 legs is 10 ft plus
- * the difference (18 ft → 10 + 8), 8 legs is 10 + 10 plus the difference. Stock members
- * only exist at 5–10 ft, so matching them against the TOTAL length — which is what the
- * engine did — found nothing above 10 ft and every beam quantity came out zero.
+ * How a frame's length breaks into bays: 4 legs is one bay, 6 legs two, 8 legs three,
+ * and the length is shared out as evenly as whole feet allow, longer bays first
+ * (12 ft → 6 + 6, 15 ft → 8 + 7, 22 ft → 8 + 7 + 7). Stock members only exist at
+ * 5–10 ft, so matching them against the TOTAL length found nothing above 10 ft.
  *
- * The workbook cannot express this: VLOOKUP!E9 holds ONE bay length, hand-entered,
- * so an 18 ft frame is costed there as a single 10 ft bay and the 8 ft bay never
- * appears. Bay 1 is therefore the workbook's E9 and every later bay is the K/L leg
- * addition, resolved against its own member length — see beamMembers().
+ * Bays used to be filled to 10 ft with the remainder last, so a 12 ft frame was
+ * 10 + 2 and the 2 ft bay — no stock member — got no beams at all. Bryan chose the
+ * even split (2026-10-19). The workbook cannot express either: VLOOKUP!E9 holds ONE
+ * bay length, hand-entered.
  */
 export function beamSpans(a: AdvAnswers): number[] {
   const legs = n(a.legs),
     L = n(a.length);
-  const full = legs >= 8 ? 2 : legs >= 6 ? 1 : 0;
-  if (!full) return L > 0 ? [L] : [];
-  const spans: number[] = [];
-  let left = L;
-  for (let i = 0; i < full && left > 10; i++) {
-    spans.push(10);
-    left -= 10;
-  }
-  if (left > 0) spans.push(Math.round(left * 100) / 100);
-  return spans;
+  if (!(L > 0)) return [];
+  const bays = legs >= 8 ? 3 : legs >= 6 ? 2 : 1;
+  if (bays === 1) return [L];
+  // A fractional length cannot be shared in whole feet; split it exactly and let
+  // beamSpanWarning say that no stock member fits.
+  if (L !== Math.floor(L))
+    return Array.from({ length: bays }, () => Math.round((L / bays) * 100) / 100);
+  const base = Math.floor(L / bays);
+  const extra = L - base * bays;
+  return Array.from({ length: bays }, (_, i) => base + (i < extra ? 1 : 0));
 }
 
 const STOCK_MEMBER_FT = [5, 6, 7, 8, 9, 10];
@@ -438,23 +442,23 @@ export function beamSpanWarning(a: AdvAnswers): string | null {
   return `Frame length ${n(a.length)}' with ${n(a.legs)} legs breaks into ${spans.join("' + ")}' spans, and ${bad.join("', ")}' is not a stock beam member (5–10'). No beams were generated for that span — confirm the frame breakdown with engineering before sending this proposal.`;
 }
 
-/** Trolley rail part is sized from the frame length (a lookup, so it stays in code). */
+/** Dual or Single, as the configurator asked; a frame quoted before the choice is Dual. */
+export const trolleyKind = (a: AdvAnswers): 'Dual' | 'Single' =>
+  a.trolleyType === 'Single' ? 'Single' : 'Dual';
+
+/** Trolleys on the frame: a Single system is half of a Dual one. */
+export const trolleyUnits = (a: AdvAnswers): number =>
+  a.trolley ? (trolleyKind(a) === 'Single' ? 1 : 2) : 0;
+
+/** The trolley rail: always 9', one per trolley. */
 function trolleyRail(a: AdvAnswers): BomRow[] {
   if (!a.trolley) return [];
-  const L = n(a.length);
-  const rail: Record<number, string> = {
-    7: 'TR2000-A07',
-    8: 'TR2000-A08',
-    9: 'TR2000-A09',
-    10: 'TR2000-A10',
-  };
+  // Every rail is 9', whatever the frame length (Bryan, 2026-10-19). Sizing it from
+  // length − 1 put a 9' rail on a 6' frame and fell back to 9' past 11' anyway. One
+  // rail per trolley: two on a Dual system, one on a Single.
+  const qty = trolleyUnits(a);
   return [
-    {
-      part: rail[L - 1] || 'TR2000-A09',
-      qty: 2,
-      rule: 'Trolley',
-      formula: `rail sized from length − 1 = ${L - 1}' → 2`,
-    },
+    { part: 'TR2000-A09', qty, rule: 'Trolley', formula: `9' rail × ${qty} (${trolleyKind(a)})` },
   ];
 }
 
@@ -585,7 +589,7 @@ export function computeAdventureProposal(
   }
 
   if (a.trolley) {
-    G('Dual Trolley System', true);
+    G(`${trolleyKind(a)} Trolley System`, true);
     [
       'P-2018',
       'P-2025',
@@ -845,7 +849,9 @@ export function computeAdventureProposal(
   return {
     lines,
     totalWeightLbs: Math.round(weight * 100) / 100,
-    warnings: [beamSpanWarning(a)].filter((w): w is string => !!w),
+    warnings: [beamSpanWarning(a), ...frameInputWarnings(n(a.legs), n(a.ladders))].filter(
+      (w): w is string => !!w,
+    ),
   };
 }
 
@@ -1246,6 +1252,7 @@ export function explainAdventure(
   // see legsFloor. This is the other half of that bargain: it has to be said out loud.
   const legWarning = legsBelowMinimum(n(a.length), n(a.legs));
   if (legWarning) warnings.push(legWarning);
+  warnings.push(...frameInputWarnings(n(a.legs), n(a.ladders)));
   for (const m of hardware.missing)
     warnings.push(`Hardware component “${m}” has no SKU record — contributes $0.00 to H-1000.`);
   const revenueMinor = rows.reduce((s, r) => s + r.extendedMinor, 0) + hardware.priceMinor;

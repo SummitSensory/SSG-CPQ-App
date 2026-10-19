@@ -9666,11 +9666,11 @@
         '</div>' +
         '<div style="padding:22px 24px;">' +
           sec('Frame Dimensions', '<div style="' + grid + '">' + sel('length', 'Length (long, ft)', rangeArr(6, 30)) + sel('width', 'Width (short, ft)', rangeArr(6, 20)) + '</div>') +
-          sec('Frame Configuration', '<div style="' + grid + '">' + sel('config', 'Configuration' + (adv.configManual ? ' (overridden)' : ' (auto)'), ['Rectangle', 'Square', 'L-Shape', 'T-Shape']) + num('legs', '# of Frame Legs (auto, editable)', 0, 20) + '</div>' +
+          sec('Frame Configuration', '<div style="' + grid + '">' + sel('config', 'Configuration' + (adv.configManual ? ' (overridden)' : ' (auto)'), ['Rectangle', 'Square', 'L-Shape', 'T-Shape']) + sel('legs', '# of Frame Legs (auto, editable)', advLegOptions()) + '</div>' +
             '<div class="muted" style="font-size:11.5px;margin-top:6px;">' + (adv.configManual ? 'Manually set — auto would be ' + autoConfig() + '. <a href="#" id="advCfgReset">Reset to auto</a>' : 'Auto from dimensions: ' + autoConfig()) + ' · legs auto-set from length (' + legsFor(adv.length) + ')' + (Number(adv.legs) !== legsFor(adv.length) ? ' — currently ' + Number(adv.legs) + ', set by hand' : '') + '</div>') +
           sec('Frame Options',
             tog('monkeyBars', 'Monkey Bars') + (adv.monkeyBars ? '<div style="' + grid + 'margin:8px 0 4px;">' + num('monkeyBarsQty', '# of Monkey Bars', 1, 3) + '</div>' : '') +
-            tog('ladders', 'Ladders') + (adv.ladders ? '<div style="' + grid + 'margin:8px 0 4px;">' + num('laddersQty', '# of Ladders', 1, 4) + '</div>' + tog('ladderShield', 'Ladder — Safety Shield', 'Qty mirrors # of ladders (' + adv.laddersQty + ')') : '') +
+            tog('ladders', 'Ladders') + (adv.ladders ? '<div style="' + grid + 'margin:8px 0 4px;">' + num('laddersQty', '# of Ladders', 1, Math.min(4, Number(adv.legs) || 4)) + '</div>' + tog('ladderShield', 'Ladder — Safety Shield', 'Qty mirrors # of ladders (' + adv.laddersQty + ')') : '') +
             tog('trolley', 'Trolley System') + (adv.trolley ? '<div style="' + grid + 'margin:8px 0 4px;">' + sel('trolleyType', 'Type of Trolley System', ['Dual', 'Single']) + '</div>' : '') +
             tog('interiorBeams', 'Interior Beams') + (adv.interiorBeams ? '<div style="' + grid + 'margin:8px 0 4px;">' + num('interiorBeamsQty', '# of Interior Beams', 1, 6) + '</div>' : '')
           ) +
@@ -9843,12 +9843,26 @@
   }
 
   /** Square when the footprint is a square, Rectangle otherwise. */
+  /**
+   * Leg counts a frame is built with — one, two or three bays (FRAME_LEG_COUNTS on
+   * the server). A saved off-list count stays in the list so it is visible and the
+   * proposal's warning about it makes sense; it is never silently replaced.
+   */
+  function advLegOptions() {
+    var opts = [4, 6, 8], cur = Number(adv.legs) || 0;
+    if (cur > 0 && opts.indexOf(cur) < 0) opts = opts.concat([cur]).sort(function (x, y) { return x - y; });
+    return opts;
+  }
   function autoConfig() { return (Number(adv.length) || 0) === (Number(adv.width) || 0) ? 'Square' : 'Rectangle'; }
 
   function syncAdvDefaults(changed) {
     if (changed === 'config') adv.configManual = true;
     if ((changed === 'length' || changed === 'width') && !adv.configManual) adv.config = autoConfig();
     if (changed === 'length') { adv.legs = legsFor(adv.length); }
+    // The legs dropdown hands back text; everything downstream counts with it.
+    if (changed === 'legs') adv.legs = Number(adv.legs) || 4;
+    // Each ladder replaces a leg, so there cannot be more ladders than legs.
+    if ((changed === 'legs' || changed === 'laddersQty' || changed === 'length') && Number(adv.laddersQty) > Number(adv.legs)) adv.laddersQty = Number(adv.legs) || 1;
     // Turning the bracket option ON is an explicit choice, so its own quantities may
     // seed themselves. Nothing under Additional Hardware ever self-populates — a
     // quantity nobody typed used to reach the proposal as a priced line.

@@ -1,10 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import {
+  beamSpanWarning,
+  beamSpans,
   computeAdventureBOM,
   computeAdventureProposal,
   type AdvAnswers,
 } from '../../src/proposals/adventureSeries.js';
-import { DEFAULT_FRAME_RULES, frameContext } from '../../src/proposals/frameRules.js';
+import {
+  DEFAULT_FRAME_RULES,
+  frameContext,
+  frameInputWarnings,
+} from '../../src/proposals/frameRules.js';
 import { evaluateRules, mergeRules } from '../../src/proposals/hardwareRules.js';
 import {
   defaultSettings,
@@ -169,15 +175,65 @@ describe('frame quantities (workbook defaults, now data-driven)', () => {
     // 20 × 8: two 10' bays → 3 × 8' across, 4 × 10' along.
     expect(qty('A-2408', f(20, 8, 6))).toBe(3);
     expect(qty('A-2410', f(20, 8, 6))).toBe(4);
-    // 18 × 10: 10' + 8' bays → 3 × 10' across + 2 × 10' along, 2 × 8' along.
-    expect(qty('A-2410', f(18, 10, 6))).toBe(5);
-    expect(qty('A-2408', f(18, 10, 6))).toBe(2);
+    // 18 × 10: two even 9' bays → 3 × 10' across, 4 × 9' along.
+    expect(qty('A-2410', f(18, 10, 6))).toBe(3);
+    expect(qty('A-2409', f(18, 10, 6))).toBe(4);
+    // 15 × 8: 8' + 7' bays → 3 × 8' across + 2 × 8' along, 2 × 7' along.
+    expect(qty('A-2408', f(15, 8, 6))).toBe(5);
+    expect(qty('P-2207', f(15, 8, 6))).toBe(2);
     // 20 × 10 and 30 × 10 were already right and stay so.
     expect(qty('A-2410', f(20, 10, 6))).toBe(7);
     expect(qty('A-2410', f(30, 10, 8))).toBe(10);
     // 30 × 7: three 10' bays → 4 × 7' across, 6 × 10' along.
     expect(qty('P-2207', f(30, 7, 8))).toBe(4);
     expect(qty('A-2410', f(30, 7, 8))).toBe(6);
+  });
+
+  it('splits a frame evenly into bays, so no bay is too short for a stock member', () => {
+    const f = (L: number, legs: number): AdvAnswers => ({
+      length: L,
+      width: 10,
+      config: 'Rectangle',
+      legs,
+      ladders: 0,
+    });
+    expect(beamSpans(f(12, 6))).toEqual([6, 6]); // was 10 + 2, and the 2' bay got nothing
+    expect(beamSpans(f(15, 6))).toEqual([8, 7]);
+    expect(beamSpans(f(22, 8))).toEqual([8, 7, 7]);
+    expect(beamSpans(f(30, 8))).toEqual([10, 10, 10]);
+    expect(beamSpans(f(10, 4))).toEqual([10]);
+    expect(beamSpanWarning(f(12, 6))).toBeNull();
+    expect(qty('P-2206', f(12, 6))).toBe(4); // 2 per 6' bay
+  });
+
+  it('puts a 9′ rail under every trolley and halves the kit for a Single system', () => {
+    for (const length of [6, 10, 20, 30]) {
+      const dual = { ...answers, length };
+      expect(qty('TR2000-A09', dual), `${length}'`).toBe(2);
+      for (const r of ['TR2000-A07', 'TR2000-A08', 'TR2000-A10'])
+        expect(qty(r, dual), `${length}' ${r}`).toBe(0);
+    }
+    const single: AdvAnswers = { ...answers, trolleyType: 'Single' };
+    expect(qty('TR2000-A09', single)).toBe(1);
+    expect(qty('P-2025', single)).toBe(1);
+    expect(qty('TRH2005', single)).toBe(3);
+    expect(qty('TRN2016', single)).toBe(2);
+    expect(qty('TRT2001', single)).toBe(1);
+    expect(qty('P-2018', single)).toBe(1); // half a bar cannot ship
+    const heading = (a: AdvAnswers) =>
+      computeAdventureProposal(a).lines.some((l) => l.name === 'Single Trolley System');
+    expect(heading(single)).toBe(true);
+    expect(heading(answers)).toBe(false);
+  });
+
+  it('questions a leg count the frame is not built with, and more ladders than legs', () => {
+    expect(frameInputWarnings(4, 1)).toEqual([]);
+    expect(frameInputWarnings(6, 2)).toEqual([]);
+    expect(frameInputWarnings(5, 0)[0]).toMatch(/5 legs/);
+    expect(frameInputWarnings(10, 0)[0]).toMatch(/4, 6 or 8/);
+    expect(frameInputWarnings(4, 6)[0]).toMatch(/6 ladders on 4 legs/);
+    const { warnings } = computeAdventureProposal({ ...answers, legs: 4, ladders: 6 });
+    expect(warnings.some((w) => /ladders on 4 legs/.test(w))).toBe(true);
   });
 
   it('prints the H-1000 kit on a plain frame with no accessory hardware', () => {
