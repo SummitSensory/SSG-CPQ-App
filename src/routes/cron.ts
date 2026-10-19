@@ -8,6 +8,8 @@ import {
   sweepPendingInvites,
 } from '../integrations/monday/portalInvite.js';
 import { sweepVoidedDocuments } from '../integrations/quickbooks/billing.js';
+import { sendUpchargeReminder } from '../integrations/quickbooks/colorUpcharge.js';
+import { refreshPortal } from '../portal/orderPortal.js';
 import { verifySchemaOnBoot } from '../lib/schemaCheck.js';
 import { syncWebhooks } from '../integrations/monday/webhookRegistration.js';
 
@@ -104,6 +106,26 @@ export function registerCronRoutes(app: FastifyInstance): void {
       } catch (err) {
         logger.error({ err }, 'cron: quickbooks void sweep failed');
         out.voidedDocuments = { error: String(err) };
+      }
+
+      // 5. Prismatic upcharges not yet billed.
+      //
+      //    The portal's colour answers otherwise reach the CRM only when someone opens
+      //    the Orders page, and billing the upcharge is a person's click — so without a
+      //    daily look, an upcharge nobody opened stays off the invoice. Re-read the
+      //    portal first, then email accounting the list (every day while it is not
+      //    empty) — including upcharges on monday rows no order is linked to yet.
+      try {
+        const refresh = await refreshPortal({ force: true });
+        if (refresh.error)
+          logger.warn(
+            { error: refresh.error },
+            'cron: portal refresh before upcharge check failed',
+          );
+        out.colorUpcharges = await sendUpchargeReminder(refresh.unlinkedColorUpcharges ?? []);
+      } catch (err) {
+        logger.error({ err }, 'cron: color upcharge check failed');
+        out.colorUpcharges = { error: String(err) };
       }
 
       out.ms = Date.now() - started;

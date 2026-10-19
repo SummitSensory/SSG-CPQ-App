@@ -465,6 +465,8 @@
     return hasRole(PROP_ARCHIVE_ANY, user.role) || (r.createdById && r.createdById === user.id);
   }
   var ORDERS_MANAGE_ROLES = ['SYSTEM_ADMIN', 'EXECUTIVE', 'SALES_MANAGER', 'OPERATIONS', 'PROJECT_MANAGER'];
+  // Mirrors INVOICE_UPCHARGE_PUSH in src/authz/permissions.ts (the server enforces it).
+  var UPCHARGE_BILL_ROLES = ['SYSTEM_ADMIN', 'EXECUTIVE', 'OPERATIONS', 'ACCOUNTING'];
   var HANDOFF_ROLES = ['SYSTEM_ADMIN', 'EXECUTIVE', 'OPERATIONS', 'PROJECT_MANAGER'];
   // quickbooks:transact — who may authorize and create live financial documents.
   var QBO_TXN_ROLES = ['SYSTEM_ADMIN', 'ACCOUNTING'];
@@ -11093,6 +11095,7 @@
       OP.mountCard({
         el: portalBox, orderId: order.id, authed: authed,
         canReview: hasRole(ORDERS_MANAGE_ROLES, user.role),
+        canBillUpcharge: hasRole(UPCHARGE_BILL_ROLES, user.role),
         onDeliveryChanged: reloadBom, onBomChanged: reloadBom,
       });
     }

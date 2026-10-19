@@ -14,7 +14,7 @@ import { syncVersion } from '../integrations/monday/freightPull.js';
 import {
   INVOICE_CANDIDATE_WHERE,
   entriesOnInvoice,
-  isFreightSupplement,
+  isSupplementInvoice,
   stillToBill,
 } from '../integrations/quickbooks/freightInvoiced.js';
 import {
@@ -804,7 +804,7 @@ export async function freightStateForVersion(
         orderBy: { createdAt: 'desc' },
         select: { id: true, totalsSnapshot: true },
       })
-      .then((rows) => rows.find((t) => !isFreightSupplement(t.totalsSnapshot)) ?? null),
+      .then((rows) => rows.find((t) => !isSupplementInvoice(t.totalsSnapshot)) ?? null),
   ]);
 
   const gaps = freightGaps(version.items, version.sections, ctx);
@@ -982,7 +982,7 @@ export interface QueueRow {
  * the document the next batch goes on, and a transaction QuickBooks never actually
  * created (no qboId) isn't a real invoice yet.
  */
-// Freight-only supplements are removed in code with isFreightSupplement: the JSON-path
+// Freight-only supplements are removed in code with isSupplementInvoice: the JSON-path
 // NOT this used to carry also removed every ordinary invoice (see freightInvoiced.ts).
 const INVOICEABLE_TXN_WHERE = INVOICE_CANDIDATE_WHERE satisfies Prisma.QboTransactionWhereInput;
 
@@ -1066,7 +1066,7 @@ export async function freightQueue(
 
   const orgName = new Map<string, string>(orgs.map((o) => [o.id, o.name] as [string, string]));
   const invoiced = new Set(
-    invoices.filter((i) => !isFreightSupplement(i.totalsSnapshot)).map((i) => i.proposalId),
+    invoices.filter((i) => !isSupplementInvoice(i.totalsSnapshot)).map((i) => i.proposalId),
   );
   const toBill = await stillToBill(entries);
   const latestTrueUp = new Map<string, FreightTrueUp>();
