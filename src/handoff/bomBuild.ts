@@ -364,6 +364,8 @@ export interface ApplyBuildResult {
   alreadyExpanded: string[];
   /** New lines created on a second vendor's sheet by the secondaryVendor rule. */
   secondaryAdded: number;
+  /** Kit parents put back beside their components because they are now kept. */
+  parentsRestored: string[];
 }
 
 /**
@@ -387,6 +389,7 @@ export async function applyBomBuildToOrder(
     redirected: 0,
     alreadyExpanded: [],
     secondaryAdded: 0,
+    parentsRestored: [],
   };
   if (!t.children.size && !t.freeIssueVendor.size && !t.secondaryVendor.size) return result;
 
@@ -397,6 +400,7 @@ export async function applyBomBuildToOrder(
       sku: true,
       name: true,
       quantity: true,
+      quantityOriginal: true,
       vendor: true,
       kitSku: true,
       freeIssue: true,
@@ -406,12 +410,13 @@ export async function applyBomBuildToOrder(
     },
   });
   const expandedAlready = new Set(lines.map((l) => key(l.kitSku)).filter(Boolean));
-  const info = await partInfo(
-    reachable(
-      lines.map((l) => l.sku ?? ''),
-      t,
-    ),
-  );
+  const onOrder = new Set(lines.map((l) => key(l.sku)).filter(Boolean));
+  // Parents now marked "keep on the sheet" whose components are here but which are
+  // not: locked while the rule still REPLACED the parent. A-2216 was set to keep at
+  // 2026-10-19, after the orders that needed it, and re-applying skipped it as
+  // already expanded — so the slide deck never came back without being re-typed.
+  const keptParents = [...t.keepParent].filter((k) => expandedAlready.has(k) && !onOrder.has(k));
+  const info = await partInfo(reachable(lines.map((l) => l.sku ?? '').concat(keptParents), t));
 
   const toCreate: BomBuildSeed[] = [];
   const toDelete: string[] = [];
@@ -441,6 +446,28 @@ export async function applyBomBuildToOrder(
     if (!t.keepParent.has(k)) toDelete.push(l.id);
   }
 
+  for (const k of keptParents) {
+    const kids = t.children.get(k) ?? [];
+    // Its quantity is read back off a component: the component's ORIGINAL count over
+    // what one parent takes, so a hand-edited component does not skew it.
+    const kid = lines.find(
+      (l) => key(l.kitSku) === k && kids.some((c) => c.childPart === key(l.sku)),
+    );
+    if (!kid) continue;
+    const per = kids.find((c) => c.childPart === key(kid.sku))?.quantity || 1;
+    const i = info.get(k);
+    toCreate.push({
+      productId: null,
+      sku: k,
+      name: i?.name || k,
+      quantity: Math.max(1, Math.round((kid.quantityOriginal ?? kid.quantity) / per)),
+      unitCostMinor: i?.unitCostMinor ?? null,
+      unitWeightLbs: i?.weightLbs ?? null,
+      proposalLineOrder: kid.proposalLineOrder ?? undefined,
+    });
+    result.parentsRestored.push(k);
+  }
+
   if (toCreate.length) {
     await prisma.procurementLine.createMany({
       data: toCreate.map((p) => {
@@ -461,7 +488,7 @@ export async function applyBomBuildToOrder(
         };
       }),
     });
-    result.componentsAdded = toCreate.length;
+    result.componentsAdded = toCreate.length - result.parentsRestored.length;
   }
   if (toDelete.length) await prisma.procurementLine.deleteMany({ where: { id: { in: toDelete } } });
 
@@ -533,7 +560,12 @@ export async function applyBomBuildToOrder(
     }
   }
 
-  if (result.exploded.length || result.redirected || result.secondaryAdded) {
+  if (
+    result.exploded.length ||
+    result.redirected ||
+    result.secondaryAdded ||
+    result.parentsRestored.length
+  ) {
     await prisma.orderEvent.create({
       data: {
         orderId,
@@ -544,6 +576,7 @@ export async function applyBomBuildToOrder(
           componentsAdded: result.componentsAdded,
           redirected: result.redirected,
           secondaryAdded: result.secondaryAdded,
+          parentsRestored: result.parentsRestored,
         } as object,
       },
     });

@@ -566,7 +566,7 @@ export function computeAdventureProposal(
     const zipLines = n(a.zipLineQty || 1);
     SG(ZIP_KIT_CATEGORY);
     const emitted = new Set<string>();
-    ['P-2024', 'A-2530'].forEach((p) => {
+    ['P-2024', 'A-2530', '6820H-LP-ZP'].forEach((p) => {
       if (qtyOf(p) > 0) {
         P(p);
         emitted.add(p);
@@ -835,7 +835,7 @@ export function computeAdventureProposal(
       const ruled = hwRows.find((h) => h.part === part)?.qty ?? 0;
       // A quantity the rep typed reaches the proposal even when that part's rule row
       // has been switched off, emptied or zeroed in Administration → Formulas. The
-      // rule may ADD to the answer (6820H-LP also covers the zip-line BOM); it may
+      // rule may ADD to the answer; it may
       // not erase it. This is why "# of 360 Swivel / 180 Eye Bolts" could be
       // answered and still not print.
       const qty = Math.max(ruled, accessoryAnswerQty(a, part));

@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { hardwareBOM, type AdvAnswers } from '../../src/proposals/adventureSeries.js';
+import {
+  computeAdventureProposal,
+  hardwareBOM,
+  type AdvAnswers,
+} from '../../src/proposals/adventureSeries.js';
 import {
   DEFAULT_HARDWARE_RULES,
   mergeHardwareRules,
@@ -34,9 +38,38 @@ describe('hardware quantity rules (workbook defaults)', () => {
     expect(qtyOf('6820H-LC')).toBe(28); // ceil(26 × 1.02) to a multiple of 2
     expect(qtyOf('6820H-LB')).toBe(58); // ceil((26 × 2) × 1.1)
     expect(qtyOf('6820H-LF')).toBe(15); // ceil((P-2124 4 + LAF 10) × 1.05)
-    expect(qtyOf('6820H-LM')).toBe(41); // ceil((5×2 + 10×2 + 4) × 1.2)
-    expect(qtyOf('6820H-LAH')).toBe(12); // P-2531 1×10 + A-2253 1×2
+    // ladder rungs take no washer: ceil((5×4 − 1×20 + 10×2 + 4) × 1.2)
+    expect(qtyOf('6820H-LM')).toBe(29);
+    expect(qtyOf('6820H-LAH')).toBe(22); // P-2531 1×20 (4 per ladder rung) + A-2253 1×2
     expect(qtyOf('6820H-LAF')).toBe(10); // V-ring packs 1 × 10
+  });
+
+  it('counts the corrected ratios: 4 bolts a rung, 3 nuts a trolley plate, no collar deduction', () => {
+    const a: AdvAnswers = {
+      ...answers,
+      monkeyBars: true, // 9 monkey rungs + 5 ladder rungs = P-2330 14
+      trolley: true, // P-2025 2
+      zipLine: true,
+      zipLineQty: 3, // A-2530 12
+    };
+    const q = (part: string) => (hardwareBOM(a).find((r) => r.part === part) || { qty: 0 }).qty;
+    expect(q('6820H-LG')).toBe(37); // ceil((14×4 − 1×20) × 1.02)
+    expect(q('6820H-LW')).toBe(6); // P-2025 2 × 3, one per bolt
+    expect(q('6820H-LV')).toBe(14); // P-2028 8 + P-2025 2 × 3
+    // A-2242 4×6 + A-2225 (2 for monkey bars)×4 + A-2253 1×2, untouched by 12 collars.
+    expect(q('6820H-LA')).toBe(34);
+  });
+
+  it('puts two eye bolts on each zip line, in its kit and nowhere else', () => {
+    const zip: AdvAnswers = { ...answers, zipLine: true, zipLineQty: 2, forged: 3 };
+    const { lines } = computeAdventureProposal(zip);
+    expect(lines.find((l) => l.sku === '6820H-LP-ZP')?.quantity).toBe(4);
+    expect(lines.find((l) => l.sku === '6820H-LP')?.quantity).toBe(3); // forged only
+    // Their nuts and washers still come with them.
+    const plain = { ...zip, zipLine: false };
+    const lc = (x: AdvAnswers) =>
+      (hardwareBOM(x).find((r) => r.part === '6820H-LC') || { qty: 0 }).qty;
+    expect(lc(zip)).toBeGreaterThan(lc(plain));
   });
 
   it('omits the parts the workbook hard-zeroes', () => {

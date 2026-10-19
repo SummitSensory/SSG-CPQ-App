@@ -13216,6 +13216,8 @@
       if (d.exploded && d.exploded.length)
         said.push(d.exploded.length + ' part' + (d.exploded.length === 1 ? '' : 's') + ' expanded into ' + d.componentsAdded + ' component' + (d.componentsAdded === 1 ? '' : 's'));
       if (d.redirected) said.push(d.redirected + ' free-issue line' + (d.redirected === 1 ? '' : 's') + ' moved to the receiving vendor');
+      if (d.parentsRestored && d.parentsRestored.length) said.push(d.parentsRestored.join(', ') + ' put back beside ' + (d.parentsRestored.length === 1 ? 'its' : 'their') + ' components');
+      if (d.secondaryAdded) said.push(d.secondaryAdded + ' line' + (d.secondaryAdded === 1 ? '' : 's') + ' added to a second vendor’s sheet');
       alert(said.length ? said.join('\n') + '.' : 'Nothing to change — this order already matches the rules in Catalog → BOM build.');
       refreshLines();
     });
