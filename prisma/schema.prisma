@@ -713,6 +713,9 @@ model Manufacturer {
   /// Off for a vendor whose colours are their own chart (Resilite's vinyl): the BOM
   /// then asks for the colour alone, with no brand picker.
   bomColorUsesBrand   Boolean           @default(true)
+  /// The colour column's heading on this vendor's BOM. Blank prints "Powder color";
+  /// Resilite's mats are vinyl, so theirs reads "Vinyl color".
+  bomColorHeading     String?
   /// Which freight figure on the deal belongs to this vendor's shipment. The mats
   /// ship on their own freight line; everything else rides the structure figure.
   bomFreightSource    BomFreightSource  @default(STRUCTURE)
