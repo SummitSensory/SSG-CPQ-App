@@ -34,6 +34,10 @@ export const Permission = {
   // on a document they already hold, so it is granted deliberately rather than
   // inherited by anyone who can create a document.
   FREIGHT_INVOICE_PUSH: 'freight:invoice-push',
+  // Bill the Prismatic paint upcharge a customer agreed to in the portal onto their
+  // invoice (or an upcharge-only invoice). Same act as the freight push — it changes
+  // what a customer owes on a document they already hold — so the same people hold it.
+  INVOICE_UPCHARGE_PUSH: 'invoice:upcharge-push',
   COSTS_READ: 'costs:read',
   MARGINS_READ: 'margins:read',
   DISCOUNT_AUTHORIZE: 'discounts:authorize',
@@ -167,6 +171,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly string[]> = {
     P.PROPOSAL_ARCHIVE,
     P.FREIGHT_COST_WRITE,
     P.FREIGHT_INVOICE_PUSH,
+    P.INVOICE_UPCHARGE_PUSH,
     P.CROSSBORDER_APPROVE,
     P.CROSSBORDER_MANAGE,
     P.GOALS_MANAGE,
@@ -205,6 +210,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly string[]> = {
     P.HANDOFF_MANAGE,
     P.FREIGHT_COST_WRITE,
     P.FREIGHT_INVOICE_PUSH,
+    P.INVOICE_UPCHARGE_PUSH,
     P.VENDOR_INVOICE_APPROVE,
   ],
   PROJECT_MANAGER: [...BASE, P.COSTS_READ, P.ORDERS_MANAGE, P.HANDOFF_MANAGE, P.FREIGHT_COST_WRITE],
@@ -225,6 +231,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly string[]> = {
     P.PROPOSAL_ARCHIVE,
     P.FREIGHT_COST_WRITE,
     P.FREIGHT_INVOICE_PUSH,
+    P.INVOICE_UPCHARGE_PUSH,
     P.CROSSBORDER_APPROVE,
     P.CROSSBORDER_MANAGE,
     P.INSIGHTS_WRITE,
