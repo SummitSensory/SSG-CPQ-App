@@ -34,8 +34,10 @@ export type ChargeKind =
   | 'CB_TARIFF'
   | 'CB_BROKERAGE'
   | 'CB_TAX'
-  /* Prismatic paint chosen in the customer portal — see colorUpcharge.ts. */
-  | 'COLOR_UPCHARGE';
+  /* Prismatic paint chosen in the customer portal — see colorUpcharge.ts. The first
+     colour is billed on the Primary item, each further one on the Additional item. */
+  | 'COLOR_UPCHARGE'
+  | 'COLOR_UPCHARGE_ADDITIONAL';
 
 interface ChargeItemRule {
   kind: ChargeKind;
@@ -117,8 +119,15 @@ const RULES: readonly ChargeItemRule[] = [
   },
   {
     kind: 'COLOR_UPCHARGE',
-    label: 'Prismatic paint color upcharge (customer portal)',
+    label: 'Prismatic paint color upcharge — first color (customer portal)',
     env: 'QBO_ITEM_ID_COLOR_UPCHARGE',
+  },
+  {
+    // No fallback on purpose: unset means "bill it all on the Primary item", which
+    // colorUpcharge.ts decides by checking this id directly.
+    kind: 'COLOR_UPCHARGE_ADDITIONAL',
+    label: 'Prismatic paint color upcharge — each additional color (customer portal)',
+    env: 'QBO_ITEM_ID_COLOR_UPCHARGE_ADDITIONAL',
   },
 ];
 
