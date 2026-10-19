@@ -626,13 +626,12 @@
       window.SSGTips.mount(user);
     }
 
-    /* Introduction pages: the same two helpers, and one fetch for the photographs the
-     * templates print with. Loaded here rather than per proposal so building a
-     * document is synchronous — see proposal-front-matter.js. */
-    if (window.SSGFrontMatter) {
-      window.SSGFrontMatter.init({ authed: authed, esc: esc });
-      window.SSGFrontMatter.loadArt();
-    }
+    /* Introduction pages: the same two helpers. The photographs the templates print
+     * with are NOT fetched here — they are several megabytes of image data, and
+     * fetching them at sign-in made every user download them on every page load,
+     * whether or not they ever opened a proposal. ensureIntroArt() fetches them once,
+     * the first time a document is built or the builder opens. */
+    if (window.SSGFrontMatter) window.SSGFrontMatter.init({ authed: authed, esc: esc });
     if (window.SSGIntroAdmin) window.SSGIntroAdmin.init({ authed: authed, esc: esc });
     if (window.SSGBeltShipments) window.SSGBeltShipments.init({ authed: authed, esc: esc });
     // Standard proposal notes: rendered by Catalog AND Administration, so it belongs to
@@ -1046,29 +1045,43 @@
    *  untouched 14+ days, expirations — everything that goes into "needs attention",
    *  fetched once and cached so toggling edit mode or reordering never re-fetches. */
   async function loadDashboardData(user) {
-    var data = null, orgTotal = null;
-    try { var rr = await authed('/reports/proposals'); if (rr.ok) data = await rr.json(); } catch (e) {}
-    try { var ro = await authed('/crm/organizations?pageSize=1'); if (ro.ok) orgTotal = (await ro.json()).total; } catch (e2) {}
-    // Released proposals whose freight nobody has asked a vendor about. Its own
-    // endpoint rather than part of the reporting payload: it reads the freight
-    // requests, which reporting has no business knowing about.
-    var freightRows = [];
-    try { var rfq = await authed('/proposals/freight-alerts'); if (rfq.ok) freightRows = (await rfq.json()).alerts || []; } catch (e3) {}
-    // Customers whose follow-up date has arrived. The date is set on the proposal's
-    // notes rail but lives on the customer, so this reads the customer list rather
-    // than the proposals.
-    var followRows = [], followCount = 0;
+    /** Resolves to the parsed body, or null on any failure — each widget degrades on its own. */
+    function getJson(path) {
+      return authed(path).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; });
+    }
+    // Its own request, started alongside the others but awaited last: a slow
+    // /freight/queue should never hold up the rest of the dashboard.
+    var ftuPending = window.FreightTrueUp
+      ? Promise.resolve().then(function () { return window.FreightTrueUp.dashboardSection(user); }).catch(function () { return ''; })
+      : null;
+    // All four at once. They are independent, and each one is a separate serverless
+    // call — awaited in turn, the dashboard took as long as all of them added up.
+    var got = await Promise.all([
+      getJson('/reports/proposals'),
+      getJson('/crm/organizations?pageSize=1'),
+      // Released proposals whose freight nobody has asked a vendor about. Its own
+      // endpoint rather than part of the reporting payload: it reads the freight
+      // requests, which reporting has no business knowing about.
+      getJson('/proposals/freight-alerts'),
+      // Customers whose follow-up date has arrived. The date is set on the proposal's
+      // notes rail but lives on the customer, so this reads the customer list rather
+      // than the proposals.
+      getJson('/crm/follow-ups'),
+    ]);
+    var data = got[0];
+    var orgTotal = got[1] ? got[1].total : null;
+    var freightRows = (got[2] && got[2].alerts) || [];
     // `count` is the full number due; `rows` is only the first page of them.
-    try { var rfu = await authed('/crm/follow-ups'); if (rfu.ok) { var fu = await rfu.json(); followRows = fu.rows || []; followCount = Math.max(Number(fu.count) || 0, followRows.length); } } catch (e4) {}
+    var followRows = (got[3] && got[3].rows) || [];
+    var followCount = got[3] ? Math.max(Number(got[3].count) || 0, followRows.length) : 0;
     dashData = { data: data, orgTotal: orgTotal, freightRows: freightRows, followRows: followRows, followCount: followCount, ftuHtml: dashData ? dashData.ftuHtml : '' };
     fillDashboardWidgets(user);
-    // Its own fetch, kicked off after everything above: a slow /freight/queue should
-    // never hold up the rest of the dashboard. Left empty when nothing is
-    // outstanding — dashboardSection returns '' rather than an empty card, so the
-    // widget just has nothing to show instead of sitting there saying nothing.
-    if (window.FreightTrueUp) {
+    // Left empty when nothing is outstanding — dashboardSection returns '' rather
+    // than an empty card, so the widget just has nothing to show instead of sitting
+    // there saying nothing.
+    if (ftuPending) {
       try {
-        var ftuHtml = await window.FreightTrueUp.dashboardSection(user);
+        var ftuHtml = await ftuPending;
         dashData.ftuHtml = ftuHtml || '';
         var el = document.getElementById('dashWInner-freight_trueup');
         if (el) {
@@ -1191,6 +1204,7 @@
     '</div>';
   }
 
+  var apiStatusCheck = null;
   /** Wires whatever just landed in the DOM. Idempotent to call after every widget
    *  refill: fresh elements each time, so nothing double-binds. */
   function wireDashboardWidgetContent(user) {
@@ -1200,9 +1214,17 @@
     var cb = document.getElementById('dqCatalog'); if (cb) cb.addEventListener('click', function () { activateNav('catalog'); window.SSGCatalog.render(user); });
     var apiEl = document.getElementById('apiStatus');
     if (apiEl) {
-      fetch('/health')
-        .then(function (r) { apiEl.innerHTML = r.ok ? '<span class="dot ok"></span>Online' : '<span class="dot bad"></span>Error ' + r.status; })
-        .catch(function () { apiEl.innerHTML = '<span class="dot bad"></span>Offline'; });
+      // One check per minute, not one per widget refill: every refill (data landing,
+      // edit mode, a reorder) rebuilt this card and pinged the server again.
+      if (!apiStatusCheck || Date.now() - apiStatusCheck.at > 60000) {
+        apiStatusCheck = {
+          at: Date.now(),
+          html: fetch('/health')
+            .then(function (r) { return r.ok ? '<span class="dot ok"></span>Online' : '<span class="dot bad"></span>Error ' + r.status; })
+            .catch(function () { return '<span class="dot bad"></span>Offline'; }),
+        };
+      }
+      apiStatusCheck.html.then(function (h) { var el = document.getElementById('apiStatus'); if (el) el.innerHTML = h; });
     }
     bindFolds();
     document.querySelectorAll('.dashRow').forEach(function (el) {
@@ -1496,16 +1518,22 @@
 
   }
 
+  var crmLoadSeq = 0;
   async function loadCrm() {
     var box = document.getElementById('crmList'); if (!box) return;
     var path = (crm.tab === 'orgs' ? '/crm/organizations' : '/crm/opportunities') + '?page=' + crm.page + '&pageSize=20' + (crm.q ? '&q=' + encodeURIComponent(crm.q) : '');
+    // Only the newest request may paint: a slow answer to an earlier search (or the
+    // other tab, or the previous page) used to land last and overwrite the right one.
+    var seq = ++crmLoadSeq;
     try {
       var r = await authed(path);
+      if (seq !== crmLoadSeq) return;
       if (!r.ok) { box.innerHTML = '<div class="err">Could not load (' + r.status + ').</div>'; return; }
       var d = await r.json();
+      if (seq !== crmLoadSeq) return;
       box.innerHTML = crm.tab === 'orgs' ? orgTable(d) : oppTable(d);
       wirePager(d);
-    } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
+    } catch (e) { if (seq === crmLoadSeq) box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
   }
 
   function shell(headCols, rows, d) {
@@ -2033,7 +2061,20 @@
     drawPropFilters(user);
     if (hasRole(PROP_WRITE, user.role)) document.getElementById('propNew').addEventListener('click', function () { openProposalForm(user); });
     var s = document.getElementById('propSearch');
-    s.addEventListener('input', function () { props.q = s.value; drawProposals(user); });
+    // Redrawn once typing pauses, not per keystroke: every draw filters, sorts and
+    // rebuilds the whole table.
+    var searchTimer = null;
+    s.addEventListener('input', function () {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(function () { props.q = s.value; drawProposals(user); }, 180);
+    });
+    bindPropListEvents(user);
+    // Coming back to the list (from a proposal, the freight review, the builder)
+    // shows the rows already in hand at once; loadProposals below then refreshes them.
+    if (props.rows.length) {
+      drawPrepByOptions();
+      drawProposals(user);
+    }
     var sortSel = document.getElementById('propSort');
     var curIdx = 0;
     PROP_SORTS.forEach(function (opt, i) { if (opt.key === props.sort.key && opt.dir === props.sort.dir) curIdx = i; });
@@ -2092,9 +2133,15 @@
   }
   async function loadProposals(user) {
     var box = document.getElementById('propList'); if (!box) return;
+    // A later load (after a status change, say) supersedes an earlier one still in
+    // flight, so a slow older response can never paint over a newer list.
+    var seq = ++propsLoadSeq;
     try {
-      var r = await authed('/proposals'); if (!r.ok) { box.innerHTML = '<div class="err">Could not load (' + r.status + ').</div>'; return; }
+      var r = await authed('/proposals');
+      if (seq !== propsLoadSeq) return;
+      if (!r.ok) { box.innerHTML = '<div class="err">Could not load (' + r.status + ').</div>'; return; }
       var list = await r.json();
+      if (seq !== propsLoadSeq || !document.getElementById('propList')) return;
       props.rows = (list || []).map(function (p) {
         var v = (p.versions && p.versions[0]) || {};
         var meta = metaOfVersion(v);
@@ -2121,11 +2168,84 @@
           invoiced: !!p.invoiced, invoiceDocNumber: p.invoiceDocNumber || '', invoicedAt: p.invoicedAt || null,
         };
       });
-      props.rows.forEach(function (r) { r.urgency = rowUrgency(r); });
+      props.rows.forEach(function (r) {
+        r.urgency = rowUrgency(r);
+        // Parsed once here rather than inside the sort comparator, which ran them
+        // on every comparison of every redraw.
+        r.createdTs = r.created ? new Date(r.created).getTime() : 0;
+        r.modifiedTs = r.modified ? new Date(r.modified).getTime() : 0;
+        r.expiresTs = r.expires ? new Date(r.expires).getTime() : 0;
+      });
       drawPropFilters(user);
       drawPrepByOptions();
       drawProposals(user);
-    } catch (e) { box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
+    } catch (e) { if (seq === propsLoadSeq) box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
+  }
+  var propsLoadSeq = 0;
+  /** A row by id, for the row buttons — one lookup instead of a filter per click. */
+  function propRowById(id) {
+    for (var i = 0; i < props.rows.length; i++) if (props.rows[i].id === id) return props.rows[i];
+    return null;
+  }
+  /**
+   * Every click and change in the list, bound ONCE on the container. drawProposals
+   * replaces the table's HTML on each redraw; it used to re-bind six listener sets on
+   * every row each time, which on a long pipeline cost more than the redraw itself.
+   * The order of the checks keeps the old stopPropagation behaviour: a row's buttons
+   * and its status picker never also open the proposal.
+   */
+  function bindPropListEvents(user) {
+    var box = document.getElementById('propList'); if (!box) return;
+    box.addEventListener('click', function (ev) {
+      var t = ev.target;
+      if (!t || !t.closest) return;
+      var bt = t.closest('button.pFollowUp, button.pReengage, button.pArchive, button.pRestore');
+      if (bt) {
+        var row = propRowById(bt.getAttribute('data-id'));
+        if (!row) return;
+        if (bt.classList.contains('pFollowUp')) openFollowUpPicker(row, user);
+        else if (bt.classList.contains('pReengage')) openCustomerEmail(row, user, 'reengage');
+        else if (bt.classList.contains('pArchive')) archiveProposal(row, user);
+        else restoreProposal(row, user);
+        return;
+      }
+      if (t.closest('.pQuick')) return;
+      var th = t.closest('th[data-sk]');
+      if (th) {
+        var k = th.getAttribute('data-sk');
+        if (props.sort.key === k) props.sort.dir = props.sort.dir === 'asc' ? 'desc' : 'asc';
+        else { props.sort.key = k; props.sort.dir = (k === 'created' || k === 'modified' || k === 'expires') ? 'desc' : 'asc'; }
+        drawProposals(user);
+        return;
+      }
+      var grp = t.closest('tr.pGroup');
+      if (grp) {
+        var c = grp.getAttribute('data-cust'), i = props.collapsed.indexOf(c);
+        if (i === -1) props.collapsed.push(c); else props.collapsed.splice(i, 1);
+        propsPersist(); drawProposals(user);
+        return;
+      }
+      var tr = t.closest('tr[data-id]');
+      if (tr) openProposalDetail(tr.getAttribute('data-id'), user);
+    });
+    box.addEventListener('change', async function (e) {
+      var sel = e.target && e.target.closest ? e.target.closest('.pQuick') : null;
+      if (!sel) return;
+      e.stopPropagation();
+      var act = sel.value; if (!act) return;
+      if (act === 'expire' && !confirm('Mark this proposal no longer active? It stays on record and can be revived as a new version.')) { sel.value = ''; return; }
+      var id = sel.getAttribute('data-id'), vid = sel.getAttribute('data-vid');
+      // Signing also locks the order, which needs the approval details first.
+      if (act === 'accept') { sel.value = ''; openLockForm(vid, user, { sign: true, after: function () { loadProposals(user); } }); return; }
+      sel.disabled = true;
+      var path = act === 'new-version' ? '/proposals/' + id + '/versions' : '/proposals/versions/' + vid + '/' + act;
+      // No button to relabel here, so the notice carries the progress instead.
+      if (act === 'release') toast('Building the proposal document…');
+      var rr = await authed(path, { method: 'POST', body: await actionBody(act, id, vid) });
+      if (!rr.ok) { alert(await serverMessage(rr, 'Could not update (' + rr.status + ').')); sel.disabled = false; sel.value = ''; return; }
+      startReleaseAttachment(act, rr);
+      loadProposals(user);
+    });
   }
   /**
    * Seven narrow columns that add up to less than the content width, so the list no
@@ -2160,9 +2280,10 @@
       .filter(function (r) { return !props.prepBy || r.preparedBy === props.prepBy; })
       .filter(function (r) { return !q || (r.customer + ' ' + r.contact + ' ' + r.title + ' ' + r.number + ' ' + r.preparedBy + ' ' + r.projectId).toLowerCase().indexOf(q) !== -1; });
     var sk = props.sort.key, dir = props.sort.dir === 'asc' ? 1 : -1;
+    // Dates sort on the timestamps loadProposals parsed once.
+    var sortKey = (sk === 'created' || sk === 'modified' || sk === 'expires') ? sk + 'Ts' : sk;
     rows.sort(function (a, b) {
-      var x = a[sk], y = b[sk];
-      if (sk === 'created' || sk === 'modified' || sk === 'expires') { x = x ? new Date(x).getTime() : 0; y = y ? new Date(y).getTime() : 0; }
+      var x = a[sortKey], y = b[sortKey];
       if (typeof x === 'string' || typeof y === 'string') { x = String(x || '').toLowerCase(); y = String(y || '').toLowerCase(); }
       return x < y ? -dir : x > y ? dir : 0;
     });
@@ -2247,8 +2368,8 @@
         var rx = Math.min.apply(null, mx.map(function (r) { return URGENCY_RANK[r.urgency]; }));
         var ry = Math.min.apply(null, my.map(function (r) { return URGENCY_RANK[r.urgency]; }));
         if (rx !== ry) return rx - ry;
-        var lx = Math.max.apply(null, mx.map(function (r) { return r.modified ? new Date(r.modified).getTime() : 0; }));
-        var ly = Math.max.apply(null, my.map(function (r) { return r.modified ? new Date(r.modified).getTime() : 0; }));
+        var lx = Math.max.apply(null, mx.map(function (r) { return r.modifiedTs || 0; }));
+        var ly = Math.max.apply(null, my.map(function (r) { return r.modifiedTs || 0; }));
         return ly - lx;
       });
       body = order.map(function (cust) {
@@ -2280,71 +2401,7 @@
     box.innerHTML = lead + '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:14px;overflow:hidden;"><table style="width:100%;border-collapse:collapse;font-size:13.5px;table-layout:auto;"><thead><tr>' + head + '</tr></thead><tbody>' +
       (body || '<tr><td style="padding:22px 16px;color:#20241f;" colspan="7">' + (props.rows.length ? (props.filter === 'archived' ? 'Nothing archived.' : props.filter === 'closed' ? 'No invoiced deals yet.' : 'No proposals match this view.') : 'No proposals yet.') + '</td></tr>') + '</tbody></table></div>' +
       (props.rows.filter(function (r) { return r.expired && !r.archivedAt; }).length ? '<div style="margin-top:10px;font-size:12.5px;color:#9c3327;">⚑ Flagged rows are past their expiration date and still open — re-date them or mark them no longer active.</div>' : '');
-    box.querySelectorAll('th[data-sk]').forEach(function (th) {
-      th.addEventListener('click', function () {
-        var k = th.getAttribute('data-sk');
-        if (props.sort.key === k) props.sort.dir = props.sort.dir === 'asc' ? 'desc' : 'asc';
-        else { props.sort.key = k; props.sort.dir = (k === 'created' || k === 'modified' || k === 'expires') ? 'desc' : 'asc'; }
-        drawProposals(user);
-      });
-    });
-    box.querySelectorAll('tr.pGroup').forEach(function (tr) {
-      tr.addEventListener('click', function () {
-        var c = tr.getAttribute('data-cust'), i = props.collapsed.indexOf(c);
-        if (i === -1) props.collapsed.push(c); else props.collapsed.splice(i, 1);
-        propsPersist(); drawProposals(user);
-      });
-    });
-    // Bound before the row handler and stopping propagation, so drafting an email
-    // does not also navigate into the proposal.
-    box.querySelectorAll('button.pFollowUp').forEach(function (bt) {
-      bt.addEventListener('click', function (ev) {
-        ev.stopPropagation();
-        var row = props.rows.filter(function (r) { return r.id === bt.getAttribute('data-id'); })[0];
-        if (row) openFollowUpPicker(row, user);
-      });
-    });
-    box.querySelectorAll('button.pReengage').forEach(function (bt) {
-      bt.addEventListener('click', function (ev) {
-        ev.stopPropagation();
-        var row = props.rows.filter(function (r) { return r.id === bt.getAttribute('data-id'); })[0];
-        if (row) openCustomerEmail(row, user, 'reengage');
-      });
-    });
-    box.querySelectorAll('button.pArchive').forEach(function (bt) {
-      bt.addEventListener('click', function (ev) {
-        ev.stopPropagation();
-        var row = props.rows.filter(function (r) { return r.id === bt.getAttribute('data-id'); })[0];
-        if (row) archiveProposal(row, user);
-      });
-    });
-    box.querySelectorAll('button.pRestore').forEach(function (bt) {
-      bt.addEventListener('click', function (ev) {
-        ev.stopPropagation();
-        var row = props.rows.filter(function (r) { return r.id === bt.getAttribute('data-id'); })[0];
-        if (row) restoreProposal(row, user);
-      });
-    });
-    box.querySelectorAll('tr[data-id]').forEach(function (tr) { tr.addEventListener('click', function () { openProposalDetail(tr.getAttribute('data-id'), user); }); });
-    box.querySelectorAll('.pQuick').forEach(function (sel) {
-      sel.addEventListener('click', function (e) { e.stopPropagation(); });
-      sel.addEventListener('change', async function (e) {
-        e.stopPropagation();
-        var act = sel.value; if (!act) return;
-        if (act === 'expire' && !confirm('Mark this proposal no longer active? It stays on record and can be revived as a new version.')) { sel.value = ''; return; }
-        var id = sel.getAttribute('data-id'), vid = sel.getAttribute('data-vid');
-        // Signing also locks the order, which needs the approval details first.
-        if (act === 'accept') { sel.value = ''; openLockForm(vid, user, { sign: true, after: function () { loadProposals(user); } }); return; }
-        sel.disabled = true;
-        var path = act === 'new-version' ? '/proposals/' + id + '/versions' : '/proposals/versions/' + vid + '/' + act;
-        // No button to relabel here, so the notice carries the progress instead.
-        if (act === 'release') toast('Building the proposal document…');
-        var rr = await authed(path, { method: 'POST', body: await actionBody(act, id, vid) });
-        if (!rr.ok) { alert(await serverMessage(rr, 'Could not update (' + rr.status + ').')); sel.disabled = false; sel.value = ''; return; }
-        startReleaseAttachment(act, rr);
-        loadProposals(user);
-      });
-    });
+    // Clicks and status changes are handled once on #propList — see bindPropListEvents.
   }
   /**
    * Releasing also hands the deal board its copy of the proposal, and the proposal
@@ -3088,22 +3145,21 @@
     var p = await r.json(); var versions = p.versions || []; var latest = versions[versions.length - 1] || {};
     // If this version is already locked into an operational order, offer the unlock
     // path instead of a second lock.
-    var lockedOrder = null;
-    if (latest.id && latest.status === 'ACCEPTED') {
-      try { var ro = await authed('/orders/by-version/' + latest.id); if (ro.ok) lockedOrder = await ro.json(); } catch (e) {}
-    }
-    // The accepted version is what QuickBooks can be pointed at; there is at most one.
-    var acceptedVersion = versions.filter(function (v) { return v.status === 'ACCEPTED'; })[0] || null;
     // Canadian proposals drop financing entirely (no financing panel, no financing
     // option in the send-documents dialog) — see the cross-border state on the
     // latest version, the same shape proposal-document.js reads as d.crossBorder.
-    var cbState = null;
-    if (latest.id) {
-      try {
-        var rcb = await authed('/proposals/versions/' + latest.id + '/cross-border');
-        if (rcb.ok) cbState = await rcb.json();
-      } catch (e) {}
+    // The two lookups are independent, so they run together rather than in turn.
+    function getJson(path) {
+      return authed(path).then(function (rr) { return rr.ok ? rr.json() : null; }).catch(function () { return null; });
     }
+    var side = await Promise.all([
+      latest.id && latest.status === 'ACCEPTED' ? getJson('/orders/by-version/' + latest.id) : null,
+      latest.id ? getJson('/proposals/versions/' + latest.id + '/cross-border') : null,
+    ]);
+    var lockedOrder = side[0];
+    var cbState = side[1];
+    // The accepted version is what QuickBooks can be pointed at; there is at most one.
+    var acceptedVersion = versions.filter(function (v) { return v.status === 'ACCEPTED'; })[0] || null;
     var isCanadian = !!(cbState && cbState.applicable);
     var actions = proposalActions(latest, user, lockedOrder);
     view.innerHTML =
@@ -3395,11 +3451,16 @@
       (row.closed ? ' (Closed)' : '');
   }
   async function openProposalForm(user, preselectName) {
-    var orgs = await fetchOrgs('');
-    var opps = await fetchOpportunities('');
-    // Prebuilt titles from Administration → Proposal content → Proposal titles. An
-    // empty list (none set up, or the fetch failed) leaves just the typed title.
-    var presetTitles = window.SSGProposalTitles ? await window.SSGProposalTitles.fetchActive() : [];
+    // Customers, opportunities and the prebuilt titles load together; in turn, the
+    // dialog waited for all three requests end to end before it appeared.
+    var got = await Promise.all([
+      fetchOrgs(''),
+      fetchOpportunities(''),
+      // Prebuilt titles from Administration → Proposal content → Proposal titles. An
+      // empty list (none set up, or the fetch failed) leaves just the typed title.
+      window.SSGProposalTitles ? window.SSGProposalTitles.fetchActive() : [],
+    ]);
+    var orgs = got[0], opps = got[1], presetTitles = got[2] || [];
     var rows = buildPickRows(orgs, opps);
     var canFind = canCrmWrite(user.role);
     // With the monday lookup available, an empty CRM is no longer a dead end.
@@ -3500,8 +3561,8 @@
       if (lookupTimer) clearTimeout(lookupTimer);
       if (qq.length < 2) return;
       lookupTimer = setTimeout(async function () {
-        var foundOrgs = await fetchOrgs(q);
-        var foundOpps = await fetchOpportunities(q);
+        var found = await Promise.all([fetchOrgs(q), fetchOpportunities(q)]);
+        var foundOrgs = found[0], foundOpps = found[1];
         if (filterEl.value.trim() !== q) return; // they kept typing
         // Replace on a real answer; a failed fetch already comes back as [] from
         // fetchOrgs/fetchOpportunities, and leaving the local (if stale) results up
@@ -4200,22 +4261,31 @@
     // pay its cold start (several seconds) on the click. Fire-and-forget; see
     // GET /render/warm in src/routes/render.ts.
     authed('/render/warm', { timeoutMs: RENDER_TIMEOUT_MS }).catch(function () {});
+    // Warm the introduction photographs while the builder loads; preview awaits them.
+    ensureIntroArt();
     var orgName = '', orgShipTo = '', orgContact = '';
     var openedUpdatedAt = version.updatedAt || null;
-    try { var rd = await authed('/crm/organizations/' + proposal.organizationId); if (rd.ok) { var org = await rd.json(); orgName = org.name || ''; orgShipTo = formatOrgShipTo(org); orgContact = primaryContactName(org); } } catch (e) {}
-    if (!orgName) { try { var ro = await authed('/crm/organizations?pageSize=100'); if (ro.ok) { var found = ((await ro.json()).items || []).filter(function (o) { return o.id === proposal.organizationId; })[0]; orgName = found ? found.name : ''; } } catch (e2) {} }
+    function getJson(path) {
+      return authed(path).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; });
+    }
+    // The customer, its opportunities and the standard notes are independent, so they
+    // load together rather than one after another. The opportunities are asked for by
+    // customer id — this used to text-search 100 of them by the customer's NAME (after
+    // waiting for the name) and then filter by id in the browser.
+    var loaded = await Promise.all([
+      getJson('/crm/organizations/' + encodeURIComponent(proposal.organizationId)),
+      getJson('/crm/opportunities?pageSize=100&organizationId=' + encodeURIComponent(proposal.organizationId)),
+      getJson('/standard-notes'),
+    ]);
+    var org = loaded[0];
+    if (org) { orgName = org.name || ''; orgShipTo = formatOrgShipTo(org); orgContact = primaryContactName(org); }
     // Project ID rides along on the imported opportunity's notes.
     var importedProjectId = '';
-    try {
-      var rp = await authed('/crm/opportunities?pageSize=100' + (orgName ? '&q=' + encodeURIComponent(orgName) : ''));
-      if (rp.ok) {
-        var opps = ((await rp.json()).items || []).filter(function (o) { return o.organizationId === proposal.organizationId; });
-        for (var oi = 0; oi < opps.length && !importedProjectId; oi++) {
-          var mm = /Project ID:\s*(\S+)/.exec(opps[oi].notes || '');
-          if (mm) importedProjectId = mm[1];
-        }
-      }
-    } catch (e) {}
+    var opps = (loaded[1] && loaded[1].items) || [];
+    for (var oi = 0; oi < opps.length && !importedProjectId; oi++) {
+      var mm = /Project ID:\s*(\S+)/.exec(opps[oi].notes || '');
+      if (mm) importedProjectId = mm[1];
+    }
 
     var meta = {};
     var secs = version.sections || [];
@@ -4227,8 +4297,7 @@
     var propDate = meta.proposalDate || todayISO();
     // Standard notes come from Administration → Standard proposal notes; the
     // hard-coded set is only a fallback for an un-migrated database.
-    var stdNotes = [];
-    try { var rn = await authed('/standard-notes'); if (rn.ok) stdNotes = (await rn.json()) || []; } catch (e) {}
+    var stdNotes = loaded[2] || [];
     if (!stdNotes.length) {
       stdNotes = Object.keys(STD_NOTES).map(function (k, i) {
         return { id: 'local-' + i, title: k, body: STD_NOTES[k], placement: 'TABLE', autoInclude: i === 0, active: true, sortOrder: i };
@@ -7613,10 +7682,10 @@
       document.getElementById('bMkReal').addEventListener('click', function () { convertMockToProposal(pb.user); });
     } else {
       document.getElementById('bSave').addEventListener('click', saveBuilder);
-      document.getElementById('bPreview').addEventListener('click', async function () { if (await refreshCanadianBeforeDoc()) previewProposalDoc(builderDoc()); });
+      document.getElementById('bPreview').addEventListener('click', async function () { await ensureIntroArt(); if (await refreshCanadianBeforeDoc()) previewProposalDoc(builderDoc()); });
     // Straight to the print dialog. The preview still opens behind it, so cancelling
     // the print leaves the document on screen rather than dumping you back.
-      document.getElementById('bPdf').addEventListener('click', async function () { if (await refreshCanadianBeforeDoc()) previewProposalDoc(builderDoc(), true); });
+      document.getElementById('bPdf').addEventListener('click', async function () { await ensureIntroArt(); if (await refreshCanadianBeforeDoc()) previewProposalDoc(builderDoc(), true); });
     // Leaves the builder. Identical to "‹ Cancel" — both honour the unsaved-changes
     // guard — and it is here because the exit belongs beside Save, not only in the
     // top-left corner.
@@ -8340,7 +8409,17 @@
    * Everything the proposal document needs, assembled from a version. Shared by the
    * preview and the send path so both produce the same figures.
    */
+  /**
+   * The introduction photographs, fetched once on first need. The document builder
+   * reads them synchronously, so every path that builds a document awaits this first;
+   * loadArt caches, so only the first call costs a request. A failed fetch resolves
+   * anyway and the house files print instead.
+   */
+  function ensureIntroArt() {
+    return window.SSGFrontMatter ? window.SSGFrontMatter.loadArt() : Promise.resolve();
+  }
   async function proposalDocData(proposal, version) {
+    await ensureIntroArt();
     var orgName = '';
     // Fetched here rather than reused from the rail, because this path also builds
     // the document that goes for signature and to the deal board — those must carry
@@ -14191,14 +14270,18 @@
     }
 
     async function reloadAfterContactChange() {
+      // Both start at once: the QuickBooks profile is a live call to Intuit and the
+      // slower of the two, and it no longer waits for the customer to come back first.
+      var qboPending = authed('/integrations/quickbooks/customers/' + encodeURIComponent(order.organizationId) + '/profile')
+        .catch(function () { return null; });
       try {
         var orgR = await authed('/crm/organizations/' + encodeURIComponent(order.organizationId));
         if (orgR.ok) org = await orgR.json();
       } catch (e) {}
       renderContactList();
       try {
-        var rr2 = await authed('/integrations/quickbooks/customers/' + encodeURIComponent(order.organizationId) + '/profile');
-        if (rr2.ok) {
+        var rr2 = await qboPending;
+        if (rr2 && rr2.ok) {
           var nd = await rr2.json();
           var tb = document.getElementById('ctxRows');
           if (tb) tb.innerHTML = profileRows(nd.fields);
