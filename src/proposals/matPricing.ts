@@ -3,9 +3,10 @@ import { setting, defaultSettings, type FormulaSettings } from './formulaSetting
 /**
  * Adventure Series floor padding (mat) pricing.
  *
- * The mat is sized off the frame footprint: a fixed overage is added to EACH side of
- * the frame, the resulting rectangle is converted to square feet, and the pad is
- * priced per square foot by thickness. Sell price is the cost times the mat markup.
+ * The mat is sized off the frame footprint: a fixed overage is added once to the length
+ * and once to the width (14" = 7" a side), the resulting rectangle is converted to
+ * square feet, and the pad is priced per square foot by thickness. Sell price is the
+ * cost times the mat markup.
  *
  *   mat inches   = (lengthFt × 12 + overage) × (widthFt × 12 + overage)
  *   square feet  = square inches ÷ 144
@@ -22,7 +23,7 @@ import { setting, defaultSettings, type FormulaSettings } from './formulaSetting
 
 export type MatThickness = '3.25' | '2';
 
-/** Inches added to each side of the frame footprint to get the mat footprint. */
+/** Inches added to the length and to the width of the frame footprint (half on each side). */
 export const MAT_OVERAGE_IN = 14;
 
 /** Vendor cost per square foot, by pad thickness. */

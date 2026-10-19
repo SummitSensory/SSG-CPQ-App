@@ -107,14 +107,14 @@ const IN_CODE = [
   {
     name: 'Beam member calculator',
     where: 'src/proposals/adventureSeries.ts → beamMembers()',
-    what: 'Chooses short-cap members by frame WIDTH and long members by LENGTH from the workbook lookup table (5′–10′ parts), adds the 6-leg / 8-leg members and interior beams, and applies the monkey-bar half-offset.',
+    what: 'Splits the length evenly into bays (4 legs one, 6 legs two, 8 legs three), puts two cross members of the frame WIDTH and two length members of the first bay’s length on the perimeter, adds 2 length members + 1 width member for each later bay, then the interior beams and the monkey-bar half-offset (5′–10′ parts).',
     why: 'A per-length lookup with offsets rather than a multiplier — changing it means changing which part numbers apply, not a number.',
   },
   {
     name: 'Trolley rail sizing',
     where: 'src/proposals/adventureSeries.ts → trolleyRail()',
-    what: 'Picks the TR2000-A07…A10 rail from frame length − 1, quantity 2.',
-    why: 'Chooses a part number from a size table.',
+    what: 'Always the 9′ rail (TR2000-A09), one per trolley: 2 on a Dual system, 1 on a Single.',
+    why: 'Chooses the part number, not a quantity coefficient.',
   },
   {
     name: 'Frame configuration product number',
@@ -131,7 +131,7 @@ const IN_CODE = [
   {
     name: 'Adventure floor mat sizing and part number',
     where: 'src/proposals/matPricing.ts → computeFloorPadding()',
-    what: 'Adds the mat overage to each side of the frame footprint, converts to square feet, multiplies by the cost per square foot for the chosen thickness, then applies the mat markup. The part number R-SSG-{LLWW}CLM[-2] is built from the same dimensions.',
+    what: 'Adds the mat overage once to the length and once to the width of the frame footprint (half on each side), converts to square feet, multiplies by the cost per square foot for the chosen thickness, then applies the mat markup. The part number R-SSG-{LLWW}CLM[-2] is built from the same dimensions.',
     why: 'The four numbers behind it — cost per sq ft at each thickness, the markup and the overage — ARE editable, under Business numbers → Mat pricing. What stays in code is the shape of the calculation and the part-number convention, which no proposal can be allowed to disagree with retroactively.',
   },
   {

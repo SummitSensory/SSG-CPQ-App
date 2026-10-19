@@ -1456,7 +1456,7 @@
     "description": "Summit Soar S1-XL - Mobile Free-Standing Swing Frame w/ Single Cross Beam (Width: 12')",
     "unitPriceMinor": 432900,
     "unitCostMinor": 195000,
-    "weightLbs": 0,
+    "weightLbs": 500,
     "category": "SOAR_FRAME"
   },
   {
@@ -1464,7 +1464,7 @@
     "description": "Summit Soar S2-XL - Mobile Free-Standing Swing Frame w/ Two Cross Beams (Width: 12')",
     "unitPriceMinor": 484000,
     "unitCostMinor": 257830,
-    "weightLbs": 0,
+    "weightLbs": 500,
     "category": "SOAR_FRAME"
   },
   {
@@ -1472,7 +1472,7 @@
     "description": "Summit Soar S3-XL - Mobile Free-Standing Swing Frame w/ Three Cross Beams (Width: 12')",
     "unitPriceMinor": 535100,
     "unitCostMinor": 291410,
-    "weightLbs": 0,
+    "weightLbs": 500,
     "category": "SOAR_FRAME"
   },
   {
