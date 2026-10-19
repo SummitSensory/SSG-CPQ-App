@@ -43,6 +43,16 @@ describe('bomColorCells', () => {
     expect(cells.byPart.get('MAT-1')).toEqual(['Vinyl Lime']);
   });
 
+  it("reads a vendor's own colour heading when the model names it", () => {
+    const cells = bomColorCells({
+      columns: ['Part #', 'Description', 'Vinyl color'],
+      colorColumn: 'Vinyl color',
+      groups: [{ title: '', rows: [[{ text: 'MAT-1' }, { text: 'Mat' }, { text: 'Vinyl Red' }]] }],
+    });
+    expect(cells.columnShown).toBe(true);
+    expect(cells.byPart.get('MAT-1')).toEqual(['Vinyl Red']);
+  });
+
   it('knows when the sheet has no Powder color column', () => {
     const cells = bomColorCells({ columns: ['Part #', 'Description'], groups: [] });
     expect(cells.columnShown).toBe(false);

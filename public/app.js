@@ -12380,7 +12380,7 @@
           ? arrangeHtml(s, lines)
           : '<div style="margin-top:14px;overflow:auto;">' +
               tableShell(
-                ['Item', 'Part #'].concat(showVendorPart ? ['Vendor part #'] : [], ['Qty'], showBag ? ['Bag #'] : [], showColor ? ['Powder color'] : [], ['Weight (lb)', 'Cost each', 'Total cost', 'Invoiced each', 'Δ $', 'Δ %', 'Notes', 'Status'], edit ? [''] : []),
+                ['Item', 'Part #'].concat(showVendorPart ? ['Vendor part #'] : [], ['Qty'], showBag ? ['Bag #'] : [], showColor ? [s.colorHeading || 'Powder color'] : [], ['Weight (lb)', 'Cost each', 'Total cost', 'Invoiced each', 'Δ $', 'Δ %', 'Notes', 'Status'], edit ? [''] : []),
                 rows, cols, '') +
             '</div>') +
         sectionMoney(s) +
@@ -13795,7 +13795,10 @@
       return '<div><div style="font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;color:#20241f;">' + esc(label) + '</div>' +
         '<div style="font-size:12.5px;font-weight:600;">' + esc(value == null || value === '' ? '—' : value) + '</div></div>';
     };
-    var cols = (all ? ['Vendor'] : []).concat(['Line #', 'Description', 'Qty', 'Powder color', 'Weight (lb)', 'Cost each', 'Total cost', 'Notes']);
+    // The vendor's own colour heading ("Vinyl color" for Resilite), as the server's sheet prints it.
+    var sec = all ? null : bomSectionData.filter(function (x) { return x.vendor === vendor; })[0];
+    var colorHead = (sec && sec.colorHeading) || 'Powder color';
+    var cols = (all ? ['Vendor'] : []).concat(['Line #', 'Description', 'Qty', colorHead, 'Weight (lb)', 'Cost each', 'Total cost', 'Notes']);
     var rightFrom = all ? 3 : 2;
     var thead = cols.map(function (h, i) {
       return '<th style="text-align:' + (i > rightFrom ? 'right' : 'left') + ';padding:6px 8px;font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:#5c6157;border-bottom:1.5px solid #3d4a55;white-space:nowrap;">' + esc(h) + '</th>';

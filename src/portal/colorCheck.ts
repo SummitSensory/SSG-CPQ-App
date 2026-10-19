@@ -129,8 +129,11 @@ const vendorOf = (v: string | null) => (v && v.trim()) || UNASSIGNED;
 const norm = (v: string | null | undefined) => (v ?? '').trim().replace(/\s+/g, ' ');
 
 /** The Powder color cells from a built BOM model. Pure; exported for tests. */
-export function bomColorCells(model: Pick<BomModel, 'columns' | 'groups'>): BomColorCells {
-  const colIdx = model.columns.indexOf(POWDER_HEADER);
+export function bomColorCells(
+  model: Pick<BomModel, 'columns' | 'groups'> & Partial<Pick<BomModel, 'colorColumn'>>,
+): BomColorCells {
+  // A vendor may head the column its own way ("Vinyl color"); the model says which.
+  const colIdx = model.columns.indexOf(model.colorColumn ?? POWDER_HEADER);
   const partIdx = model.columns.indexOf('Part #');
   const byPart = new Map<string, string[]>();
   if (colIdx < 0 || partIdx < 0) return { columnShown: colIdx >= 0, byPart };

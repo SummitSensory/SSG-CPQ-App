@@ -217,6 +217,9 @@ beforeAll(async () => {
         isSteelFabricator: name === GOLDBERG,
         // Resilite's vinyl colours are its own chart, not a powder brand.
         bomColorUsesBrand: name !== RESILITE,
+        // Its mats are vinyl, so its sheet heads the colour column its own way. The
+        // colour-check tests below then read Resilite's colours under that heading.
+        bomColorHeading: name === RESILITE ? 'Vinyl color' : null,
       },
     });
     mfrIds.push(m.id);
@@ -773,11 +776,20 @@ describe('the full staff path: map → customer answers → Mark reviewed → BO
   });
 
   it('apply-color takes a colour with no brand for a vendor whose colours are its own chart', async () => {
-    const { sections } = json<{ sections: Array<{ vendor: string; colorUsesBrand: boolean }> }>(
-      await call('ops', 'GET', `/orders/${orderId}/bom/sections`),
-    );
+    const { sections } = json<{
+      sections: Array<{ vendor: string; colorUsesBrand: boolean; colorHeading: string }>;
+    }>(await call('ops', 'GET', `/orders/${orderId}/bom/sections`));
     expect(sections.find((s) => s.vendor === RESILITE)?.colorUsesBrand).toBe(false);
     expect(sections.find((s) => s.vendor === GOLDBERG)?.colorUsesBrand).toBe(true);
+    const heading = (v: string) => sections.find((s) => s.vendor === v)?.colorHeading;
+    expect(heading(RESILITE)).toBe('Vinyl color');
+    expect(heading(GOLDBERG)).toBe('Powder color');
+    // The printed sheet carries the same heading the screen shows.
+    const { buildBomModel } = await import('../../src/handoff/bomDocuments.js');
+    const sheet = await buildBomModel(orderId, RESILITE, {});
+    expect(sheet.columns).toContain('Vinyl color');
+    expect(sheet.columns).not.toContain('Powder color');
+    expect(sheet.colorColumn).toBe('Vinyl color');
 
     const blank = await db.procurementLine.create({
       data: {
