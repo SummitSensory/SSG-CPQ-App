@@ -827,6 +827,29 @@ describe('the full staff path: map → customer answers → Mark reviewed → BO
     expect(bad.statusCode).toBe(404);
     await db.procurementLine.delete({ where: { id: blank.id } });
   });
+
+  /**
+   * The headings are editable, and the colour check and the zero-quantity greying find
+   * their columns by key — so renaming "Part #" or the colour column must not blind them.
+   */
+  it('prints renamed column headings, and the colour check still reads the sheet', async () => {
+    // The saved headings are one shared row, so this renames a COPY of a built sheet
+    // rather than the setting: other test files read sheets at the same time.
+    const { buildBomModel } = await import('../../src/handoff/bomDocuments.js');
+    const { bomColorCells } = await import('../../src/portal/colorCheck.js');
+    const sheet = await buildBomModel(orderId, GOLDBERG, {});
+    expect(sheet.columns).toContain('Vendor Cost'); // the new default for "Cost Each"
+    expect(sheet.columns).not.toContain('Cost Each');
+    expect(sheet.columnKeys).toHaveLength(sheet.columns.length);
+    const renamed = {
+      ...sheet,
+      columns: sheet.columnKeys.map((k) =>
+        k === 'part' ? 'Our Part' : k === 'color' ? 'Frame colour' : k,
+      ),
+    };
+    expect(bomColorCells(renamed).byPart).toEqual(bomColorCells(sheet).byPart);
+    expect(bomColorCells(renamed).byPart.size).toBeGreaterThan(0);
+  });
 });
 
 describe('the colour check and portal routes for an order that does not exist', () => {

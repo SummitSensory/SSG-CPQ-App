@@ -11,6 +11,13 @@ import { loadVendorIndex, resolveVendor } from '../catalog/partVendor.js';
 import { DEFAULT_HARDWARE_RULES } from '../proposals/hardwareRules.js';
 import { FORCED_HARDWARE } from '../handoff/bomRollup.js';
 import { HARDWARE, isHardwareHeading, normalizeHeading } from '../handoff/bomLayout.js';
+import {
+  BOM_COLUMNS,
+  BOM_COLUMN_LABELS_KEY,
+  BOM_LABEL_MAX,
+  loadBomColumnLabels,
+  saveBomColumnLabels,
+} from '../handoff/bomColumnLabels.js';
 
 /**
  * Catalog → BOM setup, and the two order-page actions that write back to it.
@@ -239,6 +246,46 @@ export function registerBomSetupRoutes(app: FastifyInstance): void {
       details: { parts: [...found.keys()], set: data, skipped },
     });
     return { updated, skipped };
+  });
+
+  /** The Bill of Materials column headings: each one's default, where it shows, and what it reads now. */
+  app.get('/bom-setup/column-labels', read, async () => {
+    const labels = await loadBomColumnLabels();
+    return {
+      columns: BOM_COLUMNS.map((c) => ({
+        ...c,
+        default: c.label,
+        label: labels[c.key] ?? c.label,
+      })),
+    };
+  });
+
+  /**
+   * Rename headings. A blank or default heading goes back to following its default.
+   * Every order's BOM — screen, PDF, Excel, CSV and the emailed copy — reads them on
+   * its next load; nothing is stored on the orders themselves.
+   */
+  app.put('/bom-setup/column-labels', handoff, async (req) => {
+    const parsed = z
+      .object({ labels: z.record(z.string(), z.string().max(BOM_LABEL_MAX).nullable()) })
+      .safeParse(req.body);
+    if (!parsed.success)
+      throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid headings');
+    const labels = await saveBomColumnLabels(parsed.data.labels, req.user!.sub);
+    await recordAudit({
+      actorId: req.user!.sub,
+      action: 'bom.setup.columnLabels',
+      entity: 'UiSetting',
+      entityId: BOM_COLUMN_LABELS_KEY,
+      details: { labels },
+    });
+    return {
+      columns: BOM_COLUMNS.map((c) => ({
+        ...c,
+        default: c.label,
+        label: labels[c.key] ?? c.label,
+      })),
+    };
   });
 
   /** The BOM setup sheet, in the columns the importer reads back. */

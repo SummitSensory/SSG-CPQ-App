@@ -29,6 +29,7 @@ import {
   deleteBomFile,
 } from '../handoff/bomFiles.js';
 import { checkOrderColors } from '../portal/colorCheck.js';
+import { loadBomColumnLabels } from '../handoff/bomColumnLabels.js';
 import { powderColorText } from '../portal/colorAreas.js';
 import {
   approveVendorInvoice,
@@ -169,7 +170,12 @@ export function registerBomRoutes(app: FastifyInstance): void {
   // ------------------------------------------------------------- sections
   app.get('/orders/:id/bom/sections', read, async (req) => {
     const { id } = req.params as { id: string };
-    return { sections: await listSections(id, req.user!.sub), fileUpload: bomFileUploadSettings() };
+    return {
+      sections: await listSections(id, req.user!.sub),
+      fileUpload: bomFileUploadSettings(),
+      // The BOM table's column headings, as set under Catalog → BOM setup.
+      columnLabels: await loadBomColumnLabels(),
+    };
   });
 
   /**

@@ -3,6 +3,7 @@ import { buildBom, streetLine, type BomDocument } from './bom.js';
 import { bomPhone, bomToday, PHONE_NUMFMT, usDate, usDatesInText } from './bomDelivery.js';
 import { prisma } from '../lib/prisma.js';
 import { groupByHeading, HARDWARE } from './bomLayout.js';
+import { loadBomColumnLabels } from './bomColumnLabels.js';
 
 /**
  * The printed Bill of Materials, as self-contained HTML.
@@ -130,6 +131,11 @@ export interface BomModel {
   delivery: Array<{ label: string; value: string; wide?: boolean }>;
   questions: Array<{ label: string; value: string }>;
   columns: string[];
+  /**
+   * What each column IS, beside `columns`, which is only what it reads. The headings
+   * are editable, so anything that needs a particular column looks it up here.
+   */
+  columnKeys: string[];
   /** The colour column's heading, as it appears in `columns`; null when not printed. */
   colorColumn: string | null;
   /**
@@ -265,7 +271,9 @@ export async function buildBomModel(
     : (extras?.showPowderColor ?? false) || doc.lines.some((l) => l.powderColor);
   // Its heading is the vendor's own ("Vinyl color" for Resilite's mats); the
   // all-vendors sheet mixes vendors, so it keeps the general one.
-  const colorColumn = showColor ? extras?.colorHeading || 'Powder color' : null;
+  // Headings are editable (Catalog → BOM setup); code below finds columns by key.
+  const labels = await loadBomColumnLabels();
+  const colorColumn = showColor ? extras?.colorHeading || labels.color || 'Powder color' : null;
 
   // Packaging bag: opt-in per section (defaults to on — see the
   // showPackagingBag column default in the schema — a section can still opt
@@ -285,18 +293,21 @@ export async function buildBomModel(
   // is mapped.
   const showVendorPart = doc.lines.some((l) => (l.vendorSku || '').trim());
 
-  const columns = [
-    ...(all ? ['Vendor'] : []),
-    'Part #',
-    ...(showVendorPart ? ['Vendor part #'] : []),
-    'Description',
-    'Qty',
-    ...(showBag ? ['Bag #'] : []),
-    ...(colorColumn ? [colorColumn] : []),
-    'Weight (lb)',
-    'Cost Each',
-    'Total Cost',
+  const columnKeys = [
+    ...(all ? ['vendor'] : []),
+    'part',
+    ...(showVendorPart ? ['vendorPart'] : []),
+    'description',
+    'qty',
+    ...(showBag ? ['bag'] : []),
+    ...(colorColumn ? ['color'] : []),
+    'weight',
+    'costEach',
+    'totalCost',
   ];
+  const columns = columnKeys.map((k) =>
+    k === 'color' ? (colorColumn as string) : (labels[k] ?? k),
+  );
 
   // Weight always carries two decimals. "12.5" and "12" on the same sheet read as
   // different precisions of measurement; freight is quoted on the total, so the
@@ -441,6 +452,7 @@ export async function buildBomModel(
     delivery,
     questions: extras?.answers ?? [],
     columns,
+    columnKeys,
     colorColumn,
     groups,
     totals,
@@ -486,7 +498,7 @@ export async function renderBomHtml(
     <div style="font-size:9pt;line-height:1.45;">${a.lines.map(esc).join('<br>')}</div>
   </div>`;
 
-  const qtyIdx = m.columns.indexOf('Qty');
+  const qtyIdx = m.columnKeys.indexOf('qty');
   const lineIdx = m.columns.indexOf('Line #');
   const rowTr = (cells: BomCell[]): string => {
     // A zero-quantity row is a blank order line, not an omission — greyed so the

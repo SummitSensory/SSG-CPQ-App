@@ -14,6 +14,7 @@ import {
 } from './bomDelivery.js';
 import { latestDeliveryForOrder } from '../integrations/monday/portalDelivery.js';
 import { fileView } from './bomFiles.js';
+import { loadBomColumnLabels } from './bomColumnLabels.js';
 
 /**
  * Bill of Materials — per-vendor sections.
@@ -314,7 +315,7 @@ const DEFAULT_BODY = [
 export async function listSections(orderId: string, actorId?: string): Promise<SectionView[]> {
   await ensureSections(orderId, actorId);
 
-  const [order, sections, lines, manufacturers, submission] = await Promise.all([
+  const [order, sections, lines, manufacturers, submission, labels] = await Promise.all([
     prisma.acceptedOrder.findUnique({
       where: { id: orderId },
       select: { number: true, jobName: true, organizationId: true },
@@ -362,6 +363,7 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
       },
     }),
     latestDeliveryForOrder(orderId),
+    loadBomColumnLabels(),
   ]);
   if (!order) throw new NotFoundError('Order not found');
 
@@ -473,7 +475,7 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
       showPowderColor:
         s.showPowderColor || mine.some((l) => (l.powderColorCode || l.powderColor || '').trim()),
       colorUsesBrand: mfr?.bomColorUsesBrand ?? true,
-      colorHeading: mfr?.bomColorHeading?.trim() || 'Powder color',
+      colorHeading: mfr?.bomColorHeading?.trim() || labels.color || 'Powder color',
       showPackagingBag: s.showPackagingBag,
       editable: s.status !== 'SUBMITTED',
       confirmedAt: iso(s.confirmedAt),
