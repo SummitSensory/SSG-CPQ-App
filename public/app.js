@@ -16575,7 +16575,7 @@
     var rows = data.renderings || [];
     var rowsHtml = rows.map(function (rnd, i) {
       return '<div class="rndRow" data-id="' + esc(rnd.id) + '" style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #eceef4;font-size:13px;">' +
-        '<a href="' + esc(rnd.url) + '" target="_blank" rel="noopener" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(rnd.filename) + '</a>' +
+        '<a href="#" class="rndOpen" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(rnd.filename) + '</a>' +
         '<span class="muted" style="font-size:11.5px;flex:none;">' + esc(fmtBytes(rnd.byteSize)) + '</span>' +
         (canWrite
           ? '<div style="display:flex;gap:4px;flex:none;">' +
@@ -16597,6 +16597,35 @@
           '</div>'
         : '') +
       '</div>';
+
+    // Renderings are stored private, so the stored URL opens nothing on its own. The
+    // tab is opened inside the click (a pop-up blocker allows that), then pointed at a
+    // short-lived link from the server — or, if none can be made, at the file read
+    // through the server with this session's login.
+    box.querySelectorAll('.rndOpen').forEach(function (a) {
+      a.addEventListener('click', async function (e) {
+        e.preventDefault();
+        var id = a.closest('.rndRow').getAttribute('data-id');
+        var base = '/proposals/' + p.id + '/renderings/' + encodeURIComponent(id);
+        var win = window.open('', '_blank');
+        if (win) win.document.write('<p style="font:14px sans-serif;padding:20px;">Opening ' + esc(a.textContent) + '…</p>');
+        try {
+          var r = await authed(base + '/view');
+          var d = r.ok ? await r.json() : null;
+          var url = d && d.url;
+          if (!url) {
+            var f = await authed(base + '/file');
+            if (!f.ok) throw new Error(await serverMessage(f, 'Could not open the rendering.'));
+            url = URL.createObjectURL(await f.blob());
+            setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+          }
+          if (win) win.location.href = url; else window.location.href = url;
+        } catch (err) {
+          if (win) win.close();
+          alert((err && err.message) || 'Could not open the rendering.');
+        }
+      });
+    });
 
     if (!canWrite) return;
 
