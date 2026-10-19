@@ -132,6 +132,12 @@ export const DEFAULT_FRAME_RULES: FormulaRule[] = [
 
   R('Zip line', 'P-2024', 'Zip Line Tube', [['in:zipLines', 2]], { when: flagOn('zipLine') }),
   R('Zip line', 'A-2530', 'Zip Line Collar', [['in:zipLines', 4]], { when: flagOn('zipLine') }),
+  // Two per zip line, and only here (Bryan, 2026-10-19). The Eye Bolt — Fixed hardware
+  // rule used to add 2 more per zip line, and with no rule here the kit assumed 1, so
+  // a zip line bought 3.
+  R('Zip line', '6820H-LP-ZP', 'Zip Line Fixed Eye Bolt', [['in:zipLines', 2]], {
+    when: flagOn('zipLine'),
+  }),
 
   R('Ball rack', 'K-5000', 'Ball Rack', [[null, 1]], { when: flagOn('ballRack') }),
 
