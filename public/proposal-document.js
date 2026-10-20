@@ -83,11 +83,25 @@
     return '<span style="white-space:nowrap;">USD $' + money(minor) + '</span>';
   }
 
-  /** Title-case a heading. Pure, and copied for the same reason as the rest. */
+  /**
+   * Title-case a heading. Pure, and copied for the same reason as the rest.
+   *
+   * Only the first letter of a WORD is raised — a word starts at the beginning, after
+   * whitespace, or after a hyphen or slash, and may open with punctuation such as "("
+   * or a quote ("(optional)" → "(Optional)"). A letter after "(" or an apostrophe in
+   * the middle of a word is left alone: the old /\b([a-z])/ rule printed "Belt(s)" as
+   * "Belt(S)" and "Kid's" as "Kid'S".
+   *
+   * Headings only. A catalog product name prints exactly as the catalog spells it —
+   * see the PRODUCT row below, which does not call this.
+   */
   function tc(s) {
-    return String(s || '').replace(/\b([a-z])/g, function (m0, c) {
-      return c.toUpperCase();
-    });
+    return String(s || '').replace(
+      /(^|[\s\-/])([^\sA-Za-z0-9]*)([a-z])/g,
+      function (m0, pre, punct, c) {
+        return pre + punct + c.toUpperCase();
+      },
+    );
   }
 
   /** Bundle components are the '— ' rows that must stay under their parent line. */
@@ -1526,7 +1540,10 @@
         'px;font-size:11px;line-height:1.25;' +
         rowRule +
         'vertical-align:top;">' +
-        esc(tc(l.name)) +
+        // The product name exactly as the catalog spells it (snapshotted onto the line
+        // when it was added) — never title-cased. "Passthrough Freight Charge for
+        // Belt(s) / Boot(s)" printed as "...For Belt(S) / Boot(S)" when it was.
+        esc(l.name || '') +
         '</td>' +
         '<td style="padding:2px 10px;' +
         rowRule +
@@ -1645,7 +1662,8 @@
           .map(function (n) {
             return (
               '<tr><td style="padding:2px 10px 2px 0;font-size:10.5px;color:#20241f;">' +
-              esc(tc(n.name)) +
+              // The item's own product name, as the catalog spells it — like its row above.
+              esc(n.name || '') +
               '</td>' +
               bottomFlagCols
                 .map(function (c) {
