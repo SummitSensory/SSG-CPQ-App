@@ -973,9 +973,69 @@ export interface HardwareComponent {
 }
 
 /**
+ * What the proposal says about a part's quantity, or undefined when the proposal does
+ * not decide it. Built by `proposalQuantities`.
+ */
+export type ProposalQty = (part: string) => number | undefined;
+
+/**
+ * Every product line's quantity, summed by part number, the H-1000 kit itself left
+ * out. Optional lines count: the kit has always carried the hardware for an optional
+ * section (the trolley), so the customer can accept it without a re-quote.
+ */
+export function proposalLineQty(items: unknown): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (!Array.isArray(items)) return out;
+  for (const l of items as Array<Record<string, unknown> | null>) {
+    if (!l || typeof l !== 'object') continue;
+    if (String(l.lineType ?? 'PRODUCT') !== 'PRODUCT') continue;
+    const sku = String(l.sku ?? '')
+      .trim()
+      .toUpperCase();
+    if (!sku || sku === 'H-1000') continue;
+    const q = Number(l.quantity);
+    if (!Number.isFinite(q) || q <= 0) continue;
+    out[sku] = (out[sku] ?? 0) + q;
+  }
+  return out;
+}
+
+/**
+ * The proposal as the source of the kit's quantities.
+ *
+ * The kit's formulas read frame parts (`bom:A-2241`) and the eye bolts and brackets
+ * that print as their own lines. Left to the configurator, those numbers are what it
+ * generated — so deleting a beam, a trolley or an eye bolt from the proposal left its
+ * fasteners in the kit, and adding one by hand added none. Here a part the
+ * configurator prints as a line (`printed`), or that the proposal carries anyway, is
+ * read off the proposal: 0 once its line is gone. A part the proposal never shows
+ * stays with the configurator, so a frame quantity that only exists inside the
+ * calculation is never zeroed for being invisible.
+ *
+ * A configurator substitution (`partOverrides`) prints the substitute; its line still
+ * counts for the part it stands in for.
+ */
+export function proposalQuantities(
+  a: AdvAnswers,
+  lineQty: Record<string, number>,
+  printed: Iterable<string>,
+): ProposalQty {
+  const shown = new Set([...printed].map((p) => String(p).toUpperCase()));
+  const has = (p: string) => Object.prototype.hasOwnProperty.call(lineQty, p);
+  return (part: string) => {
+    const p = part.toUpperCase();
+    const to = a.partOverrides?.[part];
+    const sub = to && to.toUpperCase() !== p ? to.toUpperCase() : '';
+    if (!shown.has(p) && !has(p) && !(sub && (shown.has(sub) || has(sub)))) return undefined;
+    return (lineQty[p] ?? 0) + (sub ? (lineQty[sub] ?? 0) : 0);
+  };
+}
+
+/**
  * Fastener bill of materials for H-1000, ported from the v73 workbook's
  * "ADVENTURE SERIES: HARDWARE COSTS" block (Calcs rows 183–219). Quantities are
- * driven off the frame BOM, so adding frame items increases the fastener counts.
+ * driven off the frame BOM, so adding frame items increases the fastener counts —
+ * or, given `onProposal`, off the proposal's own lines (see proposalQuantities).
  */
 export function hardwareBOM(
   a: AdvAnswers,
@@ -983,6 +1043,8 @@ export function hardwareBOM(
   frameRules?: FormulaRule[],
   /** Fastener quantities the proposal carries by hand — see RuleContext.override. */
   hwQty?: Record<string, number>,
+  /** The proposal's own quantities, when the kit is being kept in step with it. */
+  onProposal?: ProposalQty,
 ): HardwareBomRow[] {
   const bom = computeAdventureBOM(a, frameRules);
   const inputs: Record<string, number> = {
@@ -996,13 +1058,16 @@ export function hardwareBOM(
     // Each V-ring pack pulls 10× 6820H-LAE + 10× 6820H-LAF into H-1000. The packs now
     // come from the cargo net rather than from a Hardware quantity, so both are summed
     // here — dropping the cargo side would silently drop those fasteners' cost.
-    vRings: n(a.vRings) + cargoVRingQty(a),
+    // On a proposal, the V-ring packs are the cargo net's V-ring line.
+    vRings: n(a.vRings) + (onProposal?.(V_RING_PART) ?? cargoVRingQty(a)),
   };
+  const accessory = new Set(ACCESSORY_HW_PARTS);
   return evaluateHardwareRules(rules && rules.length ? rules : DEFAULT_HARDWARE_RULES, {
     // Summed, not first-match: multi-span frames emit several rows per beam part.
-    bom: (part) => bom.reduce((s, b) => (b.part === part ? s + b.qty : s), 0),
+    bom: (part) => onProposal?.(part) ?? bom.reduce((s, b) => (b.part === part ? s + b.qty : s), 0),
     input: (key) => inputs[key] ?? 0,
     override: hwQty ? (part) => hwQty[part] : undefined,
+    exact: onProposal ? (part) => (accessory.has(part) ? onProposal(part) : undefined) : undefined,
   });
 }
 
@@ -1016,6 +1081,8 @@ export function hardwareRollup(
   exclude?: string[],
   /** Fastener quantities the proposal carries by hand — see RuleContext.override. */
   hwQty?: Record<string, number>,
+  /** The proposal's own quantities — see proposalQuantities. */
+  onProposal?: ProposalQty,
 ): {
   components: HardwareComponent[];
   priceMinor: number;
@@ -1032,7 +1099,7 @@ export function hardwareRollup(
     costMinor = 0,
     processingFeeMinor = 0,
     weightLbs = 0;
-  for (const h of hardwareBOM(a, rules, frameRules, hwQty)) {
+  for (const h of hardwareBOM(a, rules, frameRules, hwQty, onProposal)) {
     if (skip.has(h.part)) continue;
     const rec = look[h.part];
     if (!rec) missing.push(h.part);
