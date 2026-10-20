@@ -15,7 +15,12 @@ vi.mock('../../src/config/env.js', () => ({ env: { MONDAY_API_TOKEN: 'token' } }
 const state = {
   portalOrderItemId: null as string | null,
   mondayProjectId: '555' as string | null,
+  contentSnapshot: null as unknown,
+  oppItemId: null as string | null,
 };
+const opportunityFindFirst = vi.fn(async () =>
+  state.oppItemId ? { mondayItemId: state.oppItemId } : null,
+);
 vi.mock('../../src/lib/prisma.js', () => ({
   prisma: {
     procurementLine: {
@@ -23,11 +28,11 @@ vi.mock('../../src/lib/prisma.js', () => ({
         order: {
           portalOrderItemId: state.portalOrderItemId,
           mondayProjectId: state.mondayProjectId,
-          contentSnapshot: null,
+          contentSnapshot: state.contentSnapshot,
         },
       })),
     },
-    opportunity: { findFirst: vi.fn(async () => null) },
+    opportunity: { findFirst: opportunityFindFirst },
   },
 }));
 
@@ -99,7 +104,41 @@ beforeEach(() => {
   vi.clearAllMocks();
   state.portalOrderItemId = null;
   state.mondayProjectId = '555';
+  state.contentSnapshot = null;
+  state.oppItemId = null;
   resetCarrierCache();
+});
+
+/** The deal item ids whose name was looked up on monday. */
+function dealLookups(): string[] {
+  return mondayQuery.mock.calls
+    .filter((c) => String(c[0]).includes('items (ids'))
+    .map((c) => String((c[1] as { items: string[] }).items[0]));
+}
+
+describe('deal item resolution', () => {
+  it("uses the order's own numeric Deal Tracking id", async () => {
+    await syncBeltSlipToMonday(slip());
+    expect(dealLookups()).toEqual(['555']);
+    expect(opportunityFindFirst).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the Project ID on the accepted proposal', async () => {
+    state.mondayProjectId = null;
+    state.contentSnapshot = { sections: [{ id: 'meta', data: { projectId: ' 888 ' } }] };
+    await syncBeltSlipToMonday(slip());
+    expect(dealLookups()).toEqual(['888']);
+    expect(opportunityFindFirst).not.toHaveBeenCalled();
+  });
+
+  it("ignores a non-numeric id and falls back to the customer's latest linked deal", async () => {
+    state.mondayProjectId = 'not-an-id';
+    state.contentSnapshot = { sections: [{ id: 'meta', data: { projectId: 'P-12' } }] };
+    state.oppItemId = '999';
+    await syncBeltSlipToMonday(slip());
+    expect(opportunityFindFirst).toHaveBeenCalledTimes(1);
+    expect(dealLookups()).toEqual(['999']);
+  });
 });
 
 describe('syncBeltSlipToMonday', () => {
