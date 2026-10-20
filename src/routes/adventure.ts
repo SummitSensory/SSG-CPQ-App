@@ -8,8 +8,10 @@ import {
   frameModelNumber,
   frameDimensions,
   hardwareRollup,
+  proposalQuantities,
   ACCESSORY_HW_PARTS,
   type AdvAnswers,
+  type ProposalQty,
   type SkuRec,
 } from '../proposals/adventureSeries.js';
 import { loadFormulaRules, loadFormulaSettings } from './formulas.js';
@@ -242,17 +244,54 @@ export function registerAdventureRoutes(app: FastifyInstance): void {
    * quantities currently on the proposal keyed by part number.
    */
   app.post('/proposals/adventure-series/hardware', write, async (req) => {
-    const body = (req.body || {}) as { answers?: AdvAnswers; hwQty?: Record<string, number> };
+    const body = (req.body || {}) as {
+      answers?: AdvAnswers;
+      hwQty?: Record<string, number>;
+      /** Every product line's quantity on the proposal, by part — proposalLineQty. */
+      lineQty?: Record<string, number>;
+    };
     const a = (body.answers || {}) as AdvAnswers;
     const hwQty: Record<string, number> = {};
     for (const [part, qty] of Object.entries(body.hwQty || {})) {
       const v = Number(qty);
       if (Number.isFinite(v) && v > 0) hwQty[part] = Math.round(v);
     }
+    const lineQty: Record<string, number> | null =
+      body.lineQty && typeof body.lineQty === 'object' ? {} : null;
+    if (lineQty)
+      for (const [part, qty] of Object.entries(body.lineQty || {})) {
+        const v = Number(qty);
+        const key = String(part).trim().toUpperCase();
+        if (key && Number.isFinite(v) && v > 0) lineQty[key] = (lineQty[key] ?? 0) + v;
+      }
     const [skus, rules] = await Promise.all([skuMap(), loadFormulaRules()]);
+    // The kit follows the proposal: a part the configurator prints as a line counts
+    // for what that line says now (0 once it is deleted), and a part added by hand
+    // counts too. Which parts the configurator prints is what it would generate.
+    let onProposal: ProposalQty | undefined;
+    if (lineQty) {
+      const [kits, settings] = await Promise.all([kitParts(), loadFormulaSettings()]);
+      const printed = computeAdventureProposal(
+        a,
+        skus,
+        rules.hardware,
+        rules.frame,
+        kits,
+        settings,
+      ).lines.map((l) => l.sku || '');
+      onProposal = proposalQuantities(a, lineQty, printed);
+    }
     // Same exclusion list the generator uses: parts that print as their own lines
     // are not summed into the kit, or they would be billed twice.
-    const roll = hardwareRollup(a, skus, rules.hardware, rules.frame, ACCESSORY_HW_PARTS, hwQty);
+    const roll = hardwareRollup(
+      a,
+      skus,
+      rules.hardware,
+      rules.frame,
+      ACCESSORY_HW_PARTS,
+      hwQty,
+      onProposal,
+    );
     const pieces = roll.components.reduce((s, c) => s + c.qty, 0);
     return {
       priceMinor: roll.priceMinor,

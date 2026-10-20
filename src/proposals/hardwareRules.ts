@@ -291,6 +291,13 @@ export interface RuleContext {
    * already work — a rule may add to the answer, it may not erase it.
    */
   override?: (part: string) => number | undefined;
+  /**
+   * The quantity of a part that prints as its own proposal line (an eye bolt, a
+   * saddle bracket), taken from the proposal outright — down as well as up. When the
+   * rep deletes that line, the nuts and washers hanging off it leave the kit with it.
+   * Undefined leaves the rule's own result.
+   */
+  exact?: (part: string) => number | undefined;
 }
 
 /** Evaluate a term/rule condition against the answers. */
@@ -420,10 +427,15 @@ export function evaluateHardwareRules(rules: HardwareRule[], ctx: RuleContext): 
       qty = v;
     }
 
+    // A part the proposal prints as its own line is whatever that line says.
+    const onLine = ctx.exact ? ctx.exact(part) : undefined;
     // What the proposal actually asks for wins when it asks for more. Applied here,
     // before caching, so every dependant rule resolves against the same number.
     const asked = ctx.override ? ctx.override(part) : undefined;
-    if (asked !== undefined && asked > qty) {
+    if (onLine !== undefined) {
+      if (onLine !== qty) expr = `${expr} → ${onLine} (quantity on the proposal)`;
+      qty = onLine;
+    } else if (asked !== undefined && asked > qty) {
       expr = `${expr} → ${asked} (quantity on the proposal)`;
       qty = asked;
     }

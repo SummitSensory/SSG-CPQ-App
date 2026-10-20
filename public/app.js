@@ -4145,11 +4145,12 @@
    * Keep the H-1000 fastener kit in step with the proposal, with nobody asked to
    * re-run anything.
    *
-   * Add an eye bolt (6820H-LP) and the nuts and washers that hang off it move with
-   * it — 6820H-LC and 6820H-LB both read `hw:6820H-LP`. The server re-evaluates the
-   * rules with the proposal's own fastener quantities layered over the
-   * configurator's, and returns just the kit; regenerating every line instead would
-   * throw away whatever the rep has edited by hand.
+   * Delete a beam, a trolley or an eye bolt and its bolts, nuts and washers leave the
+   * kit; add one, or raise its quantity, and they join it — 6820H-LC and 6820H-LB both
+   * read `hw:6820H-LP`, 6820H-LA reads the frame beams. The server re-evaluates the
+   * rules against the quantities actually on the proposal (proposalQuantities in
+   * src/proposals/adventureSeries.ts) and returns just the kit; regenerating every line
+   * instead would throw away whatever the rep has edited by hand.
    *
    * Only the kit's own figures are written back. Nothing else on the proposal moves.
    */
@@ -4173,9 +4174,22 @@
     return out;
   }
 
+  /** Every product line's quantity on the proposal, by part — the kit itself left out. */
+  function proposalLineQty() {
+    var out = {};
+    (pb && pb.lines ? pb.lines : []).forEach(function (l) {
+      if (!l || (l.lineType || 'PRODUCT') !== 'PRODUCT') return;
+      var sku = String(l.sku || '').trim().toUpperCase();
+      if (!sku || sku === 'H-1000') return;
+      var q = Number(l.quantity) || 0;
+      if (q > 0) out[sku] = (out[sku] || 0) + q;
+    });
+    return out;
+  }
+
   function scheduleHardwareRefresh() {
     if (!pb || !pb.meta || !pb.meta.advAnswers || !hardwareKitLine()) return;
-    var sig = JSON.stringify(hardwareQty());
+    var sig = JSON.stringify([hardwareQty(), proposalLineQty()]);
     if (sig === hwSig) return;
     hwSig = sig;
     if (hwTimer) clearTimeout(hwTimer);
@@ -4190,7 +4204,7 @@
     hwBusy = true;
     try {
       var r = await authed('/proposals/adventure-series/hardware', {
-        method: 'POST', body: { answers: pb.meta.advAnswers, hwQty: hardwareQty() },
+        method: 'POST', body: { answers: pb.meta.advAnswers, hwQty: hardwareQty(), lineQty: proposalLineQty() },
       });
       if (!r.ok) return;
       var d = await r.json();
@@ -4198,7 +4212,7 @@
       // The line may have been deleted while the request was in flight.
       kit = hardwareKitLine();
       if (!kit) return;
-      var was = Number(kit.rateMinor) || 0;
+      var was = Number(kit.rateMinor) || 0, wasCost = Number(kit.costEach) || 0;
       kit.components = d.components;
       kit.rateMinor = d.priceMinor;
       kit.costEach = d.costMinor;
@@ -4211,7 +4225,7 @@
         kit.description = 'All mounting hardware for this structure — ' + d.pieces +
           ' pieces across ' + d.components.length + ' part numbers.';
       }
-      if (was !== d.priceMinor) markBuilderDirty();
+      if (was !== d.priceMinor || wasCost !== d.costMinor) markBuilderDirty();
       renderBuilderKeepingFocus();
     } catch (e) {
       // Offline or a server error: leave the kit as it stands rather than zeroing it.
@@ -5352,9 +5366,12 @@
   var pbDirty = false;
   function markBuilderDirty() {
     pbDirty = true;
-    // Cheap: scheduleHardwareRefresh compares a signature of the fastener quantities
-    // and does nothing at all unless one of them actually moved.
-    scheduleHardwareRefresh();
+    // Cheap: scheduleHardwareRefresh compares a signature of the proposal's quantities
+    // and does nothing at all unless one of them actually moved. Checked after the
+    // current change, not now: most callers mark the builder dirty BEFORE they edit
+    // (delete does it ahead of the splice), so an immediate check saw the old lines
+    // and a deleted part kept its hardware in the kit.
+    setTimeout(scheduleHardwareRefresh, 0);
   }
   function clearBuilderDirty() { pbDirty = false; }
   window.addEventListener('beforeunload', function (e) {
