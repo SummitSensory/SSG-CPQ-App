@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import ExcelJS from 'exceljs';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { requirePermission } from '../plugins/authz.js';
@@ -30,10 +31,10 @@ import {
  *   * Sequence  (Sku.bomSortOrder) — where the part sits on its vendor's sheet.
  *   * Heading   (Sku.bomGroup)     — Hardware, the main list, or a heading they name.
  *   * BOM note  (Sku.bomNote)      — a standing instruction copied onto every order.
- *   * Processing — the checkbox beside the part number. A part bought from its
- *     Procurement Supplier (Amazon) and sent to a Processing Service Supplier
- *     (Goldberg) prints on BOTH sheets: the purchase stays on the procurement
- *     supplier's, and a line is added on the processing supplier's at their
+ *   * Prepaid Item — the checkbox (Sku.processingEnabled). A part bought from its
+ *     Procurement Supplier (Amazon) and sent to an Order Fulfillment Service Supplier
+ *     (Goldberg; Sku.secondaryVendor) prints on BOTH sheets: the purchase stays on the
+ *     procurement supplier's, and a line is added on the fulfillment supplier's at their
  *     Repackaging Service Fee (per unit or per order) under their Repackaging SKU.
  *     See bomBuild.ts. The fee is also added to the part's cost on new proposals
  *     (src/catalog/landedCost.ts), so cost of goods and margin include it.
@@ -116,8 +117,8 @@ export const SHEET_COLUMNS = [
   'bomSequence',
   'bomHeading',
   'bomNote',
-  'processing',
-  'processingSupplier',
+  'prepaidItem',
+  'orderFulfillmentSupplier',
   'repackagingSku',
   'repackagingFee',
   'repackagingFeeBasis',
@@ -133,15 +134,119 @@ const PER_UNIT_TEXT = 'per unit';
  * purchase vendor's sheet as well.
  */
 const LEGACY_COLUMNS: Record<string, string> = {
-  alsoOnVendor: 'processingSupplier',
+  alsoOnVendor: 'orderFulfillmentSupplier',
   alsoOnVendorCost: 'repackagingFee',
-  shipsThroughVendor: 'processingSupplier',
+  shipsThroughVendor: 'orderFulfillmentSupplier',
 };
 
-const ImportBody = z.object({
-  rows: z.array(z.record(z.unknown())).min(1).max(5000),
-  dryRun: z.boolean().default(true),
-});
+/**
+ * Column headings the importer recognises, compared without case, spaces or
+ * punctuation: the sheet's own names, the names the screen shows ("Part #", "Prepaid
+ * Item", "Order Fulfillment Service Supplier"…), and the names earlier sheets used
+ * ("processing", "processingSupplier"). So a sheet somebody retitled to match the
+ * screen still uploads.
+ */
+const HEADER_ALIASES: Record<string, string> = {
+  part: 'part',
+  partno: 'part',
+  partnumber: 'part',
+  description: 'description',
+  procurementsupplier: 'procurementSupplier',
+  unitpurchasecost: 'unitPurchaseCost',
+  bomsequence: 'bomSequence',
+  seq: 'bomSequence',
+  sequence: 'bomSequence',
+  bomheading: 'bomHeading',
+  heading: 'bomHeading',
+  bomnote: 'bomNote',
+  prepaiditem: 'prepaidItem',
+  prepaid: 'prepaidItem',
+  processing: 'prepaidItem',
+  orderfulfillmentsupplier: 'orderFulfillmentSupplier',
+  orderfulfillmentservicesupplier: 'orderFulfillmentSupplier',
+  fulfillmentsupplier: 'orderFulfillmentSupplier',
+  processingsupplier: 'orderFulfillmentSupplier',
+  processingservicesupplier: 'orderFulfillmentSupplier',
+  repackagingsku: 'repackagingSku',
+  repackagingfee: 'repackagingFee',
+  repackagingservicefee: 'repackagingFee',
+  repackagingfeebasis: 'repackagingFeeBasis',
+  feebasis: 'repackagingFeeBasis',
+  alsoonvendor: 'alsoOnVendor',
+  alsoonvendorcost: 'alsoOnVendorCost',
+  shipsthroughvendor: 'shipsThroughVendor',
+};
+
+/** A row keyed by the importer's own column names. The first of two aliases wins. */
+export function canonicalSheetRow(raw: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    const key = HEADER_ALIASES[k.toLowerCase().replace(/[^a-z0-9]/g, '')] ?? k;
+    if (!Object.prototype.hasOwnProperty.call(out, key)) out[key] = v;
+  }
+  return out;
+}
+
+/**
+ * One cell's value as the importer's text. Read from the value itself, not exceljs's
+ * `cell.text`: that prints a formula whose result is 0 or FALSE as "" — and a blank
+ * cell CLEARS its setting — and a date as a long JavaScript date string. A number is
+ * its plain digits (a fee formatted $4.50 reads "4.5", which the fee parser takes).
+ */
+export function sheetCellText(v: ExcelJS.CellValue): string {
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+  if (typeof v === 'string') return v;
+  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  if ('richText' in v) return v.richText.map((t) => t.text).join('');
+  if ('formula' in v || 'sharedFormula' in v)
+    return sheetCellText((v as ExcelJS.CellFormulaValue).result as ExcelJS.CellValue);
+  if ('text' in v && typeof v.text === 'string') return v.text; // hyperlink
+  return ''; // an error value (#N/A…)
+}
+
+/**
+ * The first worksheet of an uploaded .xlsx as rows keyed by its header row — the same
+ * shape the screen builds from a CSV. Each row carries its row number in the sheet as
+ * `__row`, so a blank row above does not shift the row a problem is reported on.
+ */
+export async function rowsFromXlsx(buffer: Buffer): Promise<Array<Record<string, unknown>>> {
+  const wb = new ExcelJS.Workbook();
+  try {
+    await wb.xlsx.load(buffer as unknown as ArrayBuffer);
+  } catch {
+    throw new ValidationError('That file is not an Excel workbook (.xlsx).');
+  }
+  const ws = wb.worksheets[0];
+  if (!ws) return [];
+  const headers: string[] = [];
+  ws.getRow(1).eachCell({ includeEmpty: true }, (cell, col) => {
+    headers[col] = sheetCellText(cell.value).trim();
+  });
+  const rows: Array<Record<string, unknown>> = [];
+  for (let i = 2; i <= ws.rowCount; i++) {
+    const row = ws.getRow(i);
+    const o: Record<string, unknown> = { __row: i };
+    let any = false;
+    headers.forEach((h, col) => {
+      if (!h) return;
+      const t = sheetCellText(row.getCell(col).value).trim();
+      o[h] = t;
+      if (t) any = true;
+    });
+    if (any) rows.push(o);
+  }
+  return rows;
+}
+
+const ImportBody = z
+  .object({
+    rows: z.array(z.record(z.unknown())).min(1).max(5000).optional(),
+    /** An Excel workbook instead of rows, base64. ~8 MB of body is far beyond any catalog. */
+    xlsxBase64: z.string().min(1).max(7_000_000).optional(),
+    dryRun: z.boolean().default(true),
+  })
+  .refine((b) => !!b.rows !== !!b.xlsxBase64, 'Send the rows or the workbook.');
 
 const UNASSIGNED = 'Unassigned vendor';
 const vendorOf = (v: string | null | undefined): string => (v && v.trim()) || UNASSIGNED;
@@ -199,12 +304,29 @@ async function procurementFor(
   );
 }
 
+/** Leading/trailing whitespace as JavaScript's trim() sees it, tabs and NBSP included. */
+const EDGE_SPACE = '^[\\s\\u00a0\\ufeff]+|[\\s\\u00a0\\ufeff]+$';
+
 /** Every Sku row matching these part numbers, case-insensitively, keyed upper-case. */
 async function skusFor(parts: string[]) {
+  const wanted = [...new Set(parts.map((p) => p.trim()))];
   const rows = await prisma.sku.findMany({
-    where: { part: { in: [...new Set(parts.map((p) => p.trim()))], mode: 'insensitive' } },
+    where: { part: { in: wanted, mode: 'insensitive' } },
   });
-  return new Map(rows.map((r) => [upper(r.part), r]));
+  const byPart = new Map(rows.map((r) => [upper(r.part), r]));
+  // A part number stored with a stray space ("B08SMN18WG ") matches nothing above, and
+  // the screen and the sheet both send it trimmed — so it could be listed but never
+  // changed. Look those up by their trimmed value.
+  const missing = wanted.map(upper).filter((p) => p && !byPart.has(p));
+  if (missing.length) {
+    const ids = await prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM "Sku"
+      WHERE upper(regexp_replace(part, ${EDGE_SPACE}, '', 'g')) = ANY(${missing}::text[])`;
+    if (ids.length)
+      for (const r of await prisma.sku.findMany({ where: { id: { in: ids.map((i) => i.id) } } }))
+        if (!byPart.has(upper(r.part))) byPart.set(upper(r.part), r);
+  }
+  return byPart;
 }
 
 /** Write one SKU and keep its history, the same record the catalog editor keeps. */
@@ -397,34 +519,64 @@ export function registerBomSetupRoutes(app: FastifyInstance): void {
     };
   });
 
-  /** The BOM setup sheet, in the columns the importer reads back. */
-  app.get('/bom-setup/export', read, async () => {
+  /** Every part as a row of the sheet, in SHEET_COLUMNS. */
+  async function sheetItems() {
     const skus = await prisma.sku.findMany({
       orderBy: [{ manufacturer: 'asc' }, { bomSortOrder: 'asc' }, { part: 'asc' }],
     });
     const procurement = await procurementFor(skus);
-    return {
-      columns: SHEET_COLUMNS,
-      items: skus.map((s) => {
-        const proc = procurement.get(upper(s.part));
-        return {
-          part: s.part,
-          description: s.description,
-          procurementSupplier: proc?.supplier ?? '',
-          unitPurchaseCost: ((proc?.unitCostMinor ?? s.unitCostMinor) / 100).toFixed(2),
-          bomSequence: s.bomSortOrder ?? '',
-          bomHeading: s.bomGroup === null ? '' : s.bomGroup === '' ? MAIN_LIST : s.bomGroup,
-          bomNote: s.bomNote ?? '',
-          processing: s.processingEnabled ? 'Yes' : 'No',
-          processingSupplier: s.secondaryVendor ?? '',
-          repackagingSku: s.processingSku ?? '',
-          repackagingFee:
-            s.secondaryVendorCostMinor == null ? '' : (s.secondaryVendorCostMinor / 100).toFixed(2),
-          repackagingFeeBasis:
-            s.processingFeeBasis === 'PER_ORDER' ? PER_ORDER_TEXT : PER_UNIT_TEXT,
-        };
-      }),
-    };
+    return skus.map((s) => {
+      const proc = procurement.get(upper(s.part));
+      return {
+        part: s.part,
+        description: s.description,
+        procurementSupplier: proc?.supplier ?? '',
+        unitPurchaseCost: ((proc?.unitCostMinor ?? s.unitCostMinor) / 100).toFixed(2),
+        bomSequence: s.bomSortOrder ?? '',
+        bomHeading: s.bomGroup === null ? '' : s.bomGroup === '' ? MAIN_LIST : s.bomGroup,
+        bomNote: s.bomNote ?? '',
+        prepaidItem: s.processingEnabled ? 'Yes' : 'No',
+        orderFulfillmentSupplier: s.secondaryVendor ?? '',
+        repackagingSku: s.processingSku ?? '',
+        repackagingFee:
+          s.secondaryVendorCostMinor == null ? '' : (s.secondaryVendorCostMinor / 100).toFixed(2),
+        repackagingFeeBasis: s.processingFeeBasis === 'PER_ORDER' ? PER_ORDER_TEXT : PER_UNIT_TEXT,
+      } satisfies Record<(typeof SHEET_COLUMNS)[number], string | number | null>;
+    });
+  }
+
+  /** The BOM setup sheet, in the columns the importer reads back. */
+  app.get('/bom-setup/export', read, async () => ({
+    columns: SHEET_COLUMNS,
+    items: await sheetItems(),
+  }));
+
+  /**
+   * The same sheet as an Excel workbook, so it can be edited and imported back without
+   * a "save as CSV" step. Every cell is text — a part number like 001234 keeps its
+   * zeros — and the header row is frozen.
+   */
+  app.get('/bom-setup/export.xlsx', read, async (_req, reply) => {
+    const items = await sheetItems();
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('BOM setup');
+    ws.addRow([...SHEET_COLUMNS]).font = { bold: true };
+    for (const it of items) ws.addRow(SHEET_COLUMNS.map((c) => String(it[c] ?? '')));
+    ws.views = [{ state: 'frozen', ySplit: 1 }];
+    SHEET_COLUMNS.forEach((c, i) => {
+      const col = ws.getColumn(i + 1);
+      col.numFmt = '@';
+      col.width = Math.min(
+        48,
+        Math.max(c.length, ...items.map((it) => String(it[c] ?? '').length)) + 2,
+      );
+    });
+    const buffer = Buffer.from(await wb.xlsx.writeBuffer());
+    const day = new Date().toISOString().slice(0, 10);
+    return reply
+      .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+      .header('Content-Disposition', `attachment; filename="bom-setup-${day}.xlsx"`)
+      .send(buffer);
   });
 
   /**
@@ -433,8 +585,24 @@ export function registerBomSetupRoutes(app: FastifyInstance): void {
    */
   app.post('/bom-setup/import', handoff, async (req) => {
     const parsed = ImportBody.safeParse(req.body);
-    if (!parsed.success) throw new ValidationError('The file has no rows.');
-    const { rows, dryRun } = parsed.data;
+    if (!parsed.success)
+      throw new ValidationError(
+        parsed.error.issues[0]?.path[0] === 'rows' && parsed.error.issues[0]?.code === 'too_big'
+          ? 'The file has more than 5,000 rows.'
+          : parsed.error.issues[0]?.path[0] === 'xlsxBase64'
+            ? 'That workbook is too large — export a fresh sheet and edit that.'
+            : (parsed.error.issues[0]?.message ?? 'The file has no rows.'),
+      );
+    const { dryRun } = parsed.data;
+    const rows = (
+      parsed.data.xlsxBase64
+        ? await rowsFromXlsx(Buffer.from(parsed.data.xlsxBase64, 'base64'))
+        : (parsed.data.rows ?? [])
+    ).map(canonicalSheetRow);
+    if (!rows.length) throw new ValidationError('The file has no rows.');
+    if (rows.length > 5000) throw new ValidationError('The file has more than 5,000 rows.');
+    if (!rows.some((r) => Object.prototype.hasOwnProperty.call(r, 'part')))
+      throw new ValidationError('The sheet needs a “part” column.');
     const index = await loadVendorIndex(prisma);
     const found = await skusFor(rows.map((r) => String(r.part ?? '')).filter(Boolean));
     const procurement = await procurementFor([...found.values()]);
@@ -450,7 +618,8 @@ export function registerBomSetupRoutes(app: FastifyInstance): void {
     }> = [];
 
     rows.forEach((raw, i) => {
-      const row = i + 2; // header is row 1 in the spreadsheet
+      // Its row in the spreadsheet (header is row 1), as the file numbered it.
+      const row = Number(raw.__row) || i + 2;
       // An older sheet's column names, read as the new ones they became. A new column
       // in the same file wins; a blank legacy "ships through" never clears anything.
       const r: Record<string, unknown> = { ...raw };
@@ -468,11 +637,11 @@ export function registerBomSetupRoutes(app: FastifyInstance): void {
           continue;
         r[now] = raw[old];
         if (
-          now === 'processingSupplier' &&
-          !has(raw, 'processing') &&
+          now === 'orderFulfillmentSupplier' &&
+          !has(raw, 'prepaidItem') &&
           String(raw[old] ?? '').trim()
         )
-          r.processing = 'Yes';
+          r.prepaidItem = 'Yes';
       }
       const part = str(r.part);
       if (!part) return;
@@ -499,20 +668,20 @@ export function registerBomSetupRoutes(app: FastifyInstance): void {
             : v.slice(0, 60);
       }
       if (has(r, 'bomNote')) data.bomNote = str(r.bomNote).slice(0, 500) || null;
-      if (has(r, 'processing')) {
-        const v = str(r.processing).toLowerCase();
+      if (has(r, 'prepaidItem')) {
+        const v = str(r.prepaidItem).toLowerCase();
         if (['yes', 'y', 'true', '1', 'x'].includes(v)) data.processingEnabled = true;
         else if (['', 'no', 'n', 'false', '0'].includes(v)) data.processingEnabled = false;
-        else bad('processing must be Yes or No');
+        else bad('prepaidItem must be Yes or No');
       }
-      if (has(r, 'processingSupplier')) {
-        const v = str(r.processingSupplier);
+      if (has(r, 'orderFulfillmentSupplier')) {
+        const v = str(r.orderFulfillmentSupplier);
         const own = (procurement.get(upper(sku.part))?.supplier ?? '').toLowerCase();
         const vendor = v ? resolveVendor(index, v) : null;
         if (!v) data.secondaryVendor = null;
-        else if (!vendor) bad(`processingSupplier “${v}” is not a manufacturer on record`);
+        else if (!vendor) bad(`orderFulfillmentSupplier “${v}” is not a manufacturer on record`);
         else if (own && vendor.name.toLowerCase() === own)
-          bad('processingSupplier is the procurement supplier it is already bought from');
+          bad('orderFulfillmentSupplier is the procurement supplier it is already bought from');
         else data.secondaryVendor = vendor.name;
       }
       if (has(r, 'repackagingSku')) data.processingSku = str(r.repackagingSku).slice(0, 80) || null;
@@ -535,7 +704,7 @@ export function registerBomSetupRoutes(app: FastifyInstance): void {
       const willSupplier =
         data.secondaryVendor !== undefined ? data.secondaryVendor : sku.secondaryVendor;
       if (willProcess && !willSupplier && data.processingEnabled) {
-        bad('processing is Yes but no processingSupplier is given');
+        bad('prepaidItem is Yes but no orderFulfillmentSupplier is given');
         delete data.processingEnabled;
       }
 
