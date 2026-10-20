@@ -70,8 +70,12 @@
   function tokens() { return { at: localStorage.getItem(AT), rt: localStorage.getItem(RT) }; }
   function setTokens(at, rt) { if (at) localStorage.setItem(AT, at); if (rt) localStorage.setItem(RT, rt); }
   function clearTokens() { localStorage.removeItem(AT); localStorage.removeItem(RT); }
-  // Title-case a product/section name word-by-word, preserving punctuation and existing caps mid-word.
-  function tc(s) { return String(s || '').replace(/\b([a-z])/g, function (m0, c) { return c.toUpperCase(); }); }
+  // Title-case a section heading word-by-word, preserving punctuation and existing caps mid-word.
+  // A word starts at the beginning, after whitespace, or after "-" or "/", and may open with
+  // punctuation ("(optional)" → "(Optional)"). A letter after "(" or an apostrophe INSIDE a word
+  // stays as typed — the old /\b([a-z])/ rule printed "Belt(s)" as "Belt(S)", "Kid's" as "Kid'S".
+  // Same rule as tc() in public/proposal-document.js. Never applied to a catalog product name.
+  function tc(s) { return String(s || '').replace(/(^|[\s\-/])([^\sA-Za-z0-9]*)([a-z])/g, function (m0, pre, punct, c) { return pre + punct + c.toUpperCase(); }); }
   // Section headings carry the "(Optional)" tag from the optional flag, never from the name itself.
   function stripOptional(s) { return String(s || '').replace(/\s*[—-]?\s*\(\s*optional\s*\)\s*$/i, '').replace(/\s*[—-]\s*optional\s*(?=\))/i, '').trim(); }
   /** Money as it prints in the proposal totals block: "USD $8,662.50". */
@@ -5203,7 +5207,7 @@
       category = String(l.name);
     });
     if (!category) return '';
-    var categoryTitled = category.toLowerCase().replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+    var categoryTitled = tc(category.toLowerCase());
     var model = proposalModelCode(lines);
     return categoryTitled + ' Complete Therapeutic System' + (model ? ' \u2014 Model ' + model : '');
   }
@@ -9331,7 +9335,7 @@
     // SERIES") — without this, "no model code" silently became "no product name at
     // all" in the file name. The first group heading, title-cased, stands in for it.
     if (!model && firstGroup) {
-      model = firstGroup.toLowerCase().replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+      model = tc(firstGroup.toLowerCase());
     }
     var now = new Date();
     var p2 = function (v) { return String(v).length < 2 ? '0' + v : String(v); };
