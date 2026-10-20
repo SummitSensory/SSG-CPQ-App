@@ -2,7 +2,7 @@
 
 How the manufacturing team controls the way a Bill of Materials reads. Nothing here
 changes a price, an existing proposal, or an accepted order's totals. The one setting
-that reaches proposals is a processing supplier's Repackaging Service Fee, and only on
+that reaches proposals is a fulfillment supplier's Repackaging Service Fee, and only on
 proposal lines added after it is set. It counts as the part's cost, never its price
 (see below).
 
@@ -10,8 +10,8 @@ proposal lines added after it is set. It counts as the part's cost, never its pr
 
 | Task                                                                | Where                                                                                                             |
 | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| Preset order, heading, standing note, vendor routing for many parts | **Catalog → BOM setup** (tick parts, use the green bar)                                                           |
-| Same, in Excel                                                      | **Catalog → BOM setup → Download sheet / Upload sheet**                                                           |
+| Preset order, heading, standing note, vendor routing for many parts | **Catalog → BOM setup** (tick parts, then change one ticked row or use the green bar)                             |
+| Same, in Excel                                                      | **Catalog → BOM setup → Export sheet / Import sheet** (.xlsx, or CSV)                                             |
 | Why is this part under Hardware?                                    | **Catalog → BOM setup → Hardware check**, or the grey "Under Hardware · …" line under each part on an order's BOM |
 | Rearrange one order's sheet                                         | Order → Bill of Materials → vendor section → **Arrange lines**                                                    |
 | Kits (one proposal line → several parts)                            | **Catalog → BOM build** (unchanged)                                                                               |
@@ -34,22 +34,34 @@ _Automatic_ puts H-1000 kit fasteners and parts with a hardware rule under
 it out of Hardware even though a rule says otherwise, or to any heading you name
 ("Crating", "Bag 3").
 
-## Buying from one vendor, processing through another
+## Prepaid items: bought from one vendor, fulfilled by another
 
 Example: a part is bought on Amazon (its **Procurement Supplier**) and delivered to
-Goldberg Brothers (the **Processing Service Supplier**). Goldberg repackages it and
-ships it to the customer with the structure, sometimes for a packaging charge.
+Goldberg Brothers (the **Order Fulfillment Service Supplier**). Goldberg repackages it
+and ships it to the customer with the structure, sometimes for a packaging charge.
+(Earlier versions called these "Processing" and "Processing Service Supplier"; the
+data and the behaviour are the same.)
 
 The columns on BOM setup:
 
-| Column                          | What it is                                                                                                                                                           |
-| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Procurement Supplier**        | Who we buy the part from. Read from the catalog: the SKU's vendor, else the product's primary sourcing, the same rule the BOM uses. Change it in the catalog.        |
-| **Unit Purchase Cost**          | What we pay the procurement supplier for one unit (catalog cost). When the part is processed, the cost a new proposal line will take is shown under it.              |
-| **Processing** (checkbox)       | Tick it when the part goes to a processing service supplier. The next three columns open once it is ticked.                                                          |
-| **Processing Service Supplier** | The vendor who receives, repackages and ships it.                                                                                                                    |
-| **Repackaging SKU**             | The processing supplier's own SKU for the service. It prints as the part # on their sheet. Leave it blank to use the Manufacturers → Parts mapping, then our part #. |
-| **Repackaging Service Fee**     | What they charge, **per unit** or **per order** (once for the order, whatever the quantity). Blank or $0 means no charge; the line is then a receiving note.         |
+| Column                                 | What it is                                                                                                                                                            |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Procurement Supplier**               | Who we buy the part from. Read from the catalog: the SKU's vendor, else the product's primary sourcing, the same rule the BOM uses. Change it in the catalog.         |
+| **Unit Purchase Cost**                 | What we pay the procurement supplier for one unit (catalog cost). For a prepaid item, the cost a new proposal line will take is shown under it.                       |
+| **Prepaid Item** (checkbox)            | Tick it when the part goes to an order fulfillment service supplier. The next three columns open as soon as it is ticked.                                             |
+| **Order Fulfillment Service Supplier** | The vendor who receives, repackages and ships it.                                                                                                                     |
+| **Repackaging SKU**                    | The fulfillment supplier's own SKU for the service. It prints as the part # on their sheet. Leave it blank to use the Manufacturers → Parts mapping, then our part #. |
+| **Repackaging Service Fee**            | What they charge, **per unit** or **per order** (once for the order, whatever the quantity). Blank or $0 means no charge; the line is then a receiving note.          |
+
+**Many parts at once.** Tick them in the first column. A change made in any ticked row
+to Prepaid Item, the supplier, the fee, its basis or the heading is copied to every
+ticked row; or use the green bar. Sequence, Repackaging SKU and note stay per part.
+
+**Excel.** _Export sheet_ downloads every part as an .xlsx workbook. Change it and
+_Import sheet_ reads it back (.xlsx or CSV), lists every change, and saves only when you
+press _Apply changes_. Only columns in the file change; a blank cell clears that setting.
+The headings may be the sheet's own (`prepaidItem`, `orderFulfillmentSupplier`…), the
+screen's ("Prepaid Item"), or an older sheet's (`processing`, `processingSupplier`).
 
 What prints once a part is ticked and has a supplier:
 
@@ -90,7 +102,7 @@ _Apply BOM build rules_ button on its Bill of Materials picks them up.
   _Old "ships through" to review_ filter lists them.
 - Orders locked under free issue keep printing as they did.
 
-Turning a part's **Processing** box off keeps its supplier, SKU and fee on file (greyed
+Turning a part's **Prepaid Item** box off keeps its supplier, SKU and fee on file (greyed
 out). Nothing prints and no fee is added until it's ticked again.
 
 ## "Use this for all future orders too?"
@@ -99,7 +111,7 @@ After a correction on an order's BOM line, a bar asks whether to keep it:
 
 - **Note** → saved as the part's standing BOM note, copied onto the line on every
   future order.
-- **Cost on a processing line** → saved as the part's Repackaging Service Fee, with its
+- **Cost on a fulfillment (repackaging) line** → saved as the part's Repackaging Service Fee, with its
   per unit / per order basis. New proposals add it to the part's cost.
 - **Cost on an ordinary line** → saved as the part's catalog cost. Offered to catalog
   admins only, because it changes every future proposal's margin.
@@ -117,7 +129,7 @@ Saving a part's own catalog cost from an order needs a catalog admin.
 
 **Catalog → BOM setup → Column headings** renames the columns of every Bill of
 Materials: the order screen, the PDF, Excel and CSV, and the emailed copy. Clear a box
-to go back to the default. "Cost Each" now reads **Vendor Cost** by default. The processing supplier's charge in
+to go back to the default. "Cost Each" now reads **Vendor Cost** by default. The fulfillment supplier's charge in
 BOM setup reads **Repackaging Service Fee** (formerly "Their charge", then "Vendor Cost"). A vendor's own colour
 heading on its profile (Resilite's "Vinyl color") still wins over the colour column's
 default. The headings are only words: the colour check finds its columns by key, so

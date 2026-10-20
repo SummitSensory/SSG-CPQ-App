@@ -93,8 +93,14 @@ vi.mock('../../src/lib/prisma.js', () => ({
       }),
     },
     sku: {
-      findMany: async ({ where }: { where?: { part?: { in?: string[] } } } = {}) =>
-        where?.part ? inParts(where) : [...SKUS.values()],
+      findMany: async ({
+        where,
+      }: { where?: { part?: { in?: string[] }; id?: { in: string[] } } } = {}) =>
+        where?.id
+          ? [...SKUS.values()].filter((s) => where.id!.in.includes(String(s.id)))
+          : where?.part
+            ? inParts(where)
+            : [...SKUS.values()],
       update: async ({ where, data }: { where: { id: string }; data: Row }) => {
         const s = [...SKUS.values()].find((x) => x.id === where.id)!;
         Object.assign(s, data);
@@ -149,6 +155,11 @@ vi.mock('../../src/lib/prisma.js', () => ({
     entityRevision: { create: async () => ({}) },
     auditLog: { create: async () => ({}) },
     $transaction: async (ops: Promise<unknown>[]) => Promise.all(ops),
+    // skusFor's fallback: parts matched on upper(btrim(part)).
+    $queryRaw: async (_sql: TemplateStringsArray, _edge: string, want: string[]) =>
+      [...SKUS.values()]
+        .filter((s) => want.includes(String(s.part).trim().toUpperCase()))
+        .map((s) => ({ id: s.id })),
   },
 }));
 
@@ -363,8 +374,8 @@ describe('GET /bom-setup/export', () => {
       'bomSequence',
       'bomHeading',
       'bomNote',
-      'processing',
-      'processingSupplier',
+      'prepaidItem',
+      'orderFulfillmentSupplier',
       'repackagingSku',
       'repackagingFee',
       'repackagingFeeBasis',
@@ -372,18 +383,210 @@ describe('GET /bom-setup/export', () => {
     expect(body.items.find((i) => i.part === 'P-1')).toMatchObject({
       procurementSupplier: 'Amazon',
       unitPurchaseCost: '10.00',
-      processing: 'Yes',
-      processingSupplier: 'Goldberg Brothers',
+      prepaidItem: 'Yes',
+      orderFulfillmentSupplier: 'Goldberg Brothers',
       repackagingSku: 'GB-RPK',
       repackagingFee: '12.50',
       repackagingFeeBasis: 'per order',
     });
     expect(body.items.find((i) => i.part === 'P-2')).toMatchObject({
-      processing: 'No',
-      processingSupplier: '',
+      prepaidItem: 'No',
+      orderFulfillmentSupplier: '',
       repackagingFee: '',
       repackagingFeeBasis: 'per unit',
     });
+    await app.close();
+  });
+
+  it('exports the same sheet as an Excel workbook that imports straight back', async () => {
+    Object.assign(SKUS.get('P-1')!, {
+      processingEnabled: true,
+      secondaryVendor: 'Goldberg Brothers',
+      secondaryVendorCostMinor: 1250,
+      processingFeeBasis: 'PER_ORDER',
+      processingSku: 'GB-RPK',
+    });
+    const app = await makeApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/bom-setup/export.xlsx',
+      headers: await auth('SALES_REP'),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toContain('spreadsheetml');
+    expect(String(res.headers['content-disposition'])).toMatch(/bom-setup-.*\.xlsx/);
+    const { rowsFromXlsx } = await import('../../src/routes/bomSetup.js');
+    const rows = await rowsFromXlsx(res.rawPayload);
+    expect(rows.find((r) => r.part === 'P-1')).toMatchObject({
+      prepaidItem: 'Yes',
+      orderFulfillmentSupplier: 'Goldberg Brothers',
+      repackagingSku: 'GB-RPK',
+      repackagingFee: '12.50',
+      repackagingFeeBasis: 'per order',
+    });
+
+    // Untouched, it changes nothing; with one cell edited, exactly that one.
+    const again = await app.inject({
+      method: 'POST',
+      url: '/bom-setup/import',
+      headers: await auth('OPERATIONS'),
+      payload: { xlsxBase64: res.rawPayload.toString('base64'), dryRun: true },
+    });
+    expect(again.statusCode).toBe(200);
+    expect(again.json()).toMatchObject({ changes: [], issues: [] });
+
+    const ExcelJS = (await import('exceljs')).default;
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(res.rawPayload as unknown as ArrayBuffer);
+    const ws = wb.worksheets[0]!;
+    const feeCol = (ws.getRow(1).values as unknown[]).indexOf('repackagingFee');
+    ws.eachRow((row, n) => {
+      if (n > 1 && row.getCell(1).text === 'P-1') row.getCell(feeCol).value = '15.00';
+    });
+    const edited = Buffer.from(await wb.xlsx.writeBuffer());
+    const write = await app.inject({
+      method: 'POST',
+      url: '/bom-setup/import',
+      headers: await auth('OPERATIONS'),
+      payload: { xlsxBase64: edited.toString('base64'), dryRun: false },
+    });
+    expect(write.statusCode).toBe(200);
+    expect(write.json().changes).toEqual([
+      expect.objectContaining({ part: 'P-1', changed: ['secondaryVendorCostMinor'] }),
+    ]);
+    expect(SKUS.get('P-1')!.secondaryVendorCostMinor).toBe(1500);
+    await app.close();
+  });
+
+  it('refuses a file that is not a workbook', async () => {
+    const app = await makeApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/bom-setup/import',
+      headers: await auth('OPERATIONS'),
+      payload: { xlsxBase64: Buffer.from('part,bomNote').toString('base64'), dryRun: true },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toMatch(/not an Excel workbook/);
+    await app.close();
+  });
+});
+
+describe('a part number stored with a stray space', () => {
+  it('is still found by the grid and by the sheet', async () => {
+    SKUS.set('SP-1 ', {
+      ...SKUS.get('P-2')!,
+      id: 'sku-sp1',
+      part: 'SP-1 ',
+    });
+    const app = await makeApp();
+    const patch = await app.inject({
+      method: 'PATCH',
+      url: '/bom-setup/parts',
+      headers: await auth('OPERATIONS'),
+      payload: { parts: ['SP-1 '], set: { bomNote: 'Bag it' } },
+    });
+    expect(patch.statusCode).toBe(200);
+    expect(patch.json()).toMatchObject({ updated: 1, skipped: [] });
+    const imp = await app.inject({
+      method: 'POST',
+      url: '/bom-setup/import',
+      headers: await auth('OPERATIONS'),
+      payload: { rows: [{ part: 'sp-1', bomNote: 'Box it' }], dryRun: false },
+    });
+    expect(imp.json()).toMatchObject({ updated: 1, issues: [] });
+    expect(SKUS.get('SP-1 ')!.bomNote).toBe('Box it');
+    await app.close();
+  });
+});
+
+describe('reading an Excel workbook', () => {
+  it('takes a formula result, even 0, and plain dates and rich text', async () => {
+    const { sheetCellText } = await import('../../src/routes/bomSetup.js');
+    expect(sheetCellText({ formula: '1-1', result: 0 })).toBe('0');
+    expect(sheetCellText({ formula: 'A1=B1', result: false })).toBe('false');
+    expect(sheetCellText({ formula: 'X1' })).toBe('');
+    expect(sheetCellText(4.5)).toBe('4.5');
+    expect(sheetCellText(new Date(Date.UTC(2026, 9, 20)))).toBe('2026-10-20');
+    expect(sheetCellText({ richText: [{ text: 'Gold' }, { text: 'berg' }] })).toBe('Goldberg');
+    expect(sheetCellText(null)).toBe('');
+  });
+
+  it('reports a problem on its real row when the sheet has a blank row above it', async () => {
+    const ExcelJS = (await import('exceljs')).default;
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('BOM setup');
+    ws.addRow(['part', 'bomNote']);
+    ws.addRow(['P-1', 'a']);
+    ws.addRow([]);
+    ws.addRow(['NOPE', 'b']);
+    const { rowsFromXlsx } = await import('../../src/routes/bomSetup.js');
+    const buffer = Buffer.from(await wb.xlsx.writeBuffer());
+    expect((await rowsFromXlsx(buffer)).map((r) => r.__row)).toEqual([2, 4]);
+    const app = await makeApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/bom-setup/import',
+      headers: await auth('OPERATIONS'),
+      payload: { xlsxBase64: buffer.toString('base64'), dryRun: true },
+    });
+    expect(res.json().issues).toEqual([{ row: 4, part: 'NOPE', message: 'Not in the SKU master' }]);
+    await app.close();
+  });
+
+  it('says why an oversized sheet is refused', async () => {
+    const app = await makeApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/bom-setup/import',
+      headers: await auth('OPERATIONS'),
+      payload: { rows: Array.from({ length: 5001 }, () => ({ part: 'P-1' })), dryRun: true },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toBe('The file has more than 5,000 rows.');
+    await app.close();
+  });
+});
+
+describe('POST /bom-setup/import — headings', () => {
+  it('reads the headings the screen shows, in any case or spacing', async () => {
+    const app = await makeApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/bom-setup/import',
+      headers: await auth('OPERATIONS'),
+      payload: {
+        rows: [
+          {
+            'Part #': 'P-2',
+            'Prepaid Item': 'Yes',
+            'Order Fulfillment Service Supplier': 'Goldberg Brothers',
+            'Repackaging Service Fee': '2.25',
+          },
+        ],
+        dryRun: false,
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().issues).toEqual([]);
+    expect(SKUS.get('P-2')).toMatchObject({
+      processingEnabled: true,
+      secondaryVendor: 'Goldberg Brothers',
+      secondaryVendorCostMinor: 225,
+    });
+    await app.close();
+  });
+
+  it('says so when no column is the part number', async () => {
+    const app = await makeApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/bom-setup/import',
+      headers: await auth('OPERATIONS'),
+      payload: { rows: [{ item: 'P-2', bomNote: 'x' }], dryRun: true },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toMatch(/needs a “part” column/);
     await app.close();
   });
 });
@@ -556,10 +759,14 @@ describe('POST /bom-setup/import — processing columns', () => {
         {
           row: 2,
           part: '6820H-LAD',
-          message: 'processingSupplier is the procurement supplier it is already bought from',
+          message: 'orderFulfillmentSupplier is the procurement supplier it is already bought from',
         },
-        { row: 3, part: 'P-1', message: 'processing is Yes but no processingSupplier is given' },
-        { row: 4, part: 'P-2', message: 'processing must be Yes or No' },
+        {
+          row: 3,
+          part: 'P-1',
+          message: 'prepaidItem is Yes but no orderFulfillmentSupplier is given',
+        },
+        { row: 4, part: 'P-2', message: 'prepaidItem must be Yes or No' },
         { row: 4, part: 'P-2', message: 'repackagingFeeBasis must be "per unit" or "per order"' },
         { row: 5, part: 'NOPE', message: 'Not in the SKU master' },
       ]),

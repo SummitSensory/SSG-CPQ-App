@@ -64,7 +64,8 @@
     costMoney = U.costMoney,
     d2m = U.d2m,
     todayISO = U.todayISO,
-    downloadCsv = U.downloadCsv;
+    downloadCsv = U.downloadCsv,
+    downloadBlob = U.downloadBlob;
 
   /** The shell's fetch, with its session and its one refresh-retry on 401. */
   function authed(path, opts) {
@@ -241,7 +242,7 @@
           '<div>' +
             '<div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap;">' +
               '<code style="font-size:14px;font-weight:600;color:#1c4039;">' + esc(p.parentPart) + '</code>' +
-              (p.processingVendor ? '<span class="chip" style="font-size:10.5px;background:#eaf1f6;color:#2f5674;">Processing → ' + esc(p.processingVendor) + '</span>' : '') +
+              (p.processingVendor ? '<span class="chip" style="font-size:10.5px;background:#eaf1f6;color:#2f5674;">Order fulfillment → ' + esc(p.processingVendor) + '</span>' : '') +
               (p.keepParentOnBom ? '<span class="chip" style="font-size:10.5px;background:#eef0ea;">Parent kept on sheet</span>' : '') +
             '</div>' +
             '<div class="muted" style="font-size:12.5px;margin-top:3px;">' + esc(p.name || 'Not in the SKU master') + '</div>' +
@@ -277,7 +278,7 @@
                 (p.processingFeeMinor ? ' at ' + (Number(p.processingFeeMinor) / 100).toFixed(2) + ' ' + (p.processingFeeBasis === 'PER_ORDER' ? 'per order' : 'per unit') : ' at no charge') +
                 (p.processingSku ? ', their SKU ' + esc(p.processingSku) : '') + '. '
               : '') +
-            'A processing service supplier is set in <b>Catalog → BOM setup</b>.</div>' +
+            'An order fulfillment service supplier is set in <b>Catalog → BOM setup</b>.</div>' +
         '</div>' +
       '</div>';
     };
@@ -470,23 +471,23 @@
         'How each part prints on the Bill of Materials. <b>Sequence</b> sets where it sits on its vendor’s sheet (lowest first; blank follows the proposal). ' +
         '<b>Heading</b> files it under Hardware, the main list, or a heading you name. ' +
         '<b>Procurement Supplier</b> is who we buy the part from, at its <b>Unit Purchase Cost</b> (both from the catalog). ' +
-        'Tick <b>Processing</b> when the part is shipped to a <b>Processing Service Supplier</b> who repackages it and ships it on: the part then prints on <i>both</i> sheets — under the procurement supplier at its purchase cost, and under the processing supplier at their <b>Repackaging Service Fee</b> (per unit or once per order), under their <b>Repackaging SKU</b>. ' +
+        'Tick <b>Prepaid Item</b> when we buy the part and have it shipped to an <b>Order Fulfillment Service Supplier</b> who repackages it and ships it on: the part then prints on <i>both</i> sheets — under the procurement supplier at its purchase cost, and under the fulfillment supplier at their <b>Repackaging Service Fee</b> (per unit or once per order), under their <b>Repackaging SKU</b>. ' +
         'The fee is added to the part’s cost on new proposals, so cost of goods and margin include it; the price is not changed. ' +
-        'Tick parts in the first column and use the bar to change many at once. Orders locked from now on use these settings.' +
+        'To change many parts at once, tick them in the first column: a change made in any ticked row (Prepaid Item, supplier, fee, heading) is copied to all of them, or use the bar. <b>Export sheet</b> and <b>Import sheet</b> edit everything in Excel. Orders locked from now on use these settings.' +
       '</div>' +
       '<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">' +
         '<input id="bsSearch" placeholder="Search part # or description…" value="' + esc(bsState.q) + '" style="' + IN + 'flex:1;min-width:200px;max-width:300px;">' +
         '<select id="bsVendor" style="' + IN + 'width:auto;" title="Pick a vendor to see their sheet in sequence"><option value="">All vendors</option></select>' +
         '<select id="bsShow" style="' + IN + 'width:auto;">' +
-          [['all', 'All parts'], ['routed', 'Has a processing service supplier'], ['legacy', 'Old “ships through” to review'], ['sequenced', 'Has a sequence'], ['unsequenced', 'No sequence yet'], ['hardware', 'Prints under Hardware'], ['heading', 'Has a heading set'], ['note', 'Has a BOM note']]
+          [['all', 'All parts'], ['routed', 'Prepaid items'], ['legacy', 'Old “ships through” to review'], ['sequenced', 'Has a sequence'], ['unsequenced', 'No sequence yet'], ['hardware', 'Prints under Hardware'], ['heading', 'Has a heading set'], ['note', 'Has a BOM note']]
             .map(function (o) { return '<option value="' + o[0] + '"' + (bsState.show === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') +
         '</select>' +
         '<label style="display:flex;gap:6px;align-items:center;font-size:12.5px;color:#5c6157;cursor:pointer;"><input type="checkbox" id="bsInactive"' + (bsState.inactive ? ' checked' : '') + '> Include inactive</label>' +
         '<div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;">' +
           (canEdit ? '<button class="link-btn" id="bsHeads" style="width:auto;padding:9px 14px;" title="Rename the columns of every Bill of Materials">Column headings</button>' : '') +
           '<button class="link-btn" id="bsHw" style="width:auto;padding:9px 14px;" title="Every part that prints under Hardware, and why">Hardware check</button>' +
-          '<button class="link-btn" id="bsExport" style="width:auto;padding:9px 14px;">Download sheet</button>' +
-          (canEdit ? '<button class="link-btn" id="bsImport" style="width:auto;padding:9px 14px;">Upload sheet</button>' : '') +
+          '<button class="link-btn" id="bsExport" style="width:auto;padding:9px 14px;" title="Download every part’s BOM setup as a spreadsheet">Export sheet</button>' +
+          (canEdit ? '<button class="link-btn" id="bsImport" style="width:auto;padding:9px 14px;" title="Update the BOM setup from an edited spreadsheet (Excel or CSV)">Import sheet</button>' : '') +
         '</div>' +
       '</div>' +
       '<div id="bsHwPanel"></div>' +
@@ -502,6 +503,7 @@
     document.getElementById('bsExport').addEventListener('click', exportBomSetup);
     if (canEdit) document.getElementById('bsImport').addEventListener('click', function () { openBomSetupImport(user); });
     if (canEdit) document.getElementById('bsHeads').addEventListener('click', function () { openColumnHeadings(user); });
+    bindBomSetupGrid(user);
     await loadBomSetup(user);
   }
 
@@ -513,19 +515,22 @@
     bsState.rows = ((await r.json()) || {}).parts || [];
     var rv = await authed('/manufacturers');
     bsState.vendors = rv.ok ? ((await rv.json()) || []) : [];
-    var vsel = document.getElementById('bsVendor');
-    if (vsel) {
-      var used = {};
-      // A vendor's sheet holds what is bought from them AND what they process.
-      bsState.rows.forEach(function (p) {
-        if (p.procurementSupplier) used[p.procurementSupplier] = (used[p.procurementSupplier] || 0) + 1;
-        if (bsProcessing(p) && p.secondaryVendor !== p.procurementSupplier) used[p.secondaryVendor] = (used[p.secondaryVendor] || 0) + 1;
-      });
-      vsel.innerHTML = '<option value="">All vendors</option>' +
-        Object.keys(used).sort().map(function (v) { return '<option value="' + esc(v) + '"' + (bsState.vendor === v ? ' selected' : '') + '>' + esc(v) + ' (' + used[v] + ')</option>'; }).join('') +
-        '<option value="__none"' + (bsState.vendor === '__none' ? ' selected' : '') + '>No vendor set</option>';
-    }
+    bsFillVendorFilter();
     drawBomSetup(user);
+  }
+
+  function bsFillVendorFilter() {
+    var vsel = document.getElementById('bsVendor');
+    if (!vsel) return;
+    var used = {};
+    // A vendor's sheet holds what is bought from them AND what they fulfil.
+    bsState.rows.forEach(function (p) {
+      if (p.procurementSupplier) used[p.procurementSupplier] = (used[p.procurementSupplier] || 0) + 1;
+      if (bsProcessing(p) && p.secondaryVendor !== p.procurementSupplier) used[p.secondaryVendor] = (used[p.secondaryVendor] || 0) + 1;
+    });
+    vsel.innerHTML = '<option value="">All vendors</option>' +
+      Object.keys(used).sort().map(function (v) { return '<option value="' + esc(v) + '"' + (bsState.vendor === v ? ' selected' : '') + '>' + esc(v) + ' (' + used[v] + ')</option>'; }).join('') +
+      '<option value="__none"' + (bsState.vendor === '__none' ? ' selected' : '') + '>No vendor set</option>';
   }
 
   /** The heading a part prints under once "Automatic" is resolved. */
@@ -582,141 +587,291 @@
       heads.map(function (h) { return opt(h, h); }).join('') + '<option value="__new">New heading…</option>';
   }
 
-  function drawBomSetup(user) {
-    var box = document.getElementById('bsList');
-    if (!box) return;
+  // The grid's own compact cells: twelve columns at the shared 16px padding did not fit
+  // the page, and the BOM note sat off to the right behind a scroll bar.
+  function bsTd(v, style) { return '<td style="padding:7px 6px;border-bottom:1px solid #f2f3ef;vertical-align:middle;' + (style || '') + '">' + v + '</td>'; }
+  function bsTable(heads, body, empty) {
+    return '<div style="background:#fbfbf9;border:1px solid #e7e8e3;border-radius:14px;overflow:hidden;"><table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr>' +
+      heads.map(function (h) { return '<th style="text-align:left;padding:9px 6px;font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;color:#8a8f85;font-weight:600;border-bottom:1px solid #eef0ea;background:#f7f8f4;line-height:1.3;">' + h + '</th>'; }).join('') +
+      '</tr></thead><tbody>' + (body || '<tr><td style="padding:22px 16px;color:#909689;" colspan="' + heads.length + '">' + esc(empty) + '</td></tr>') + '</tbody></table></div>';
+  }
+  function bsMoney2(m) { return m == null ? '' : (Number(m) / 100).toFixed(2); }
+  function bsRow(part) { return bsState.rows.filter(function (x) { return x.part === part; })[0] || null; }
+
+  /** One part's row. Drawn on its own so a change redraws that row, not the whole grid. */
+  function bsRowHtml(p, user) {
     var canEdit = BS_HANDOFF.indexOf(user.role) >= 0;
     var dis = canEdit ? '' : ' disabled';
+    var byVendor = !!bsState.vendor && bsState.vendor !== '__none';
+    var k = esc(p.part);
+    // The fulfillment fields only open once the part is ticked as a prepaid item.
+    var on = !!p.processingEnabled;
+    var pdis = canEdit && on ? '' : ' disabled';
+    var noSupplier = on && !p.secondaryVendor;
+    var dim = on ? '' : 'opacity:.45;';
+    return '<tr data-part="' + k + '"' + (on ? ' style="background:#f6f9fb;"' : '') + '>' +
+      (canEdit ? bsTd('<input type="checkbox" class="bsSel" data-part="' + k + '"' + (bsState.sel[p.part] ? ' checked' : '') + ' aria-label="Select ' + k + '">') : '') +
+      bsTd('<div style="display:flex;gap:3px;align-items:center;">' +
+        '<input class="bsF" data-part="' + k + '" data-f="bomSortOrder" type="number" min="0" step="1" value="' + (p.bomSortOrder == null ? '' : p.bomSortOrder) + '" placeholder="—" style="' + bomFieldStyle('52px') + '"' + dis + ' aria-label="Sequence for ' + k + '">' +
+        (byVendor && canEdit ? '<button class="link-btn bsMove" data-dir="up" data-part="' + k + '" title="Move up this vendor’s sheet" aria-label="Move ' + k + ' up" style="width:auto;padding:3px 6px;font-size:12px;">↑</button><button class="link-btn bsMove" data-dir="down" data-part="' + k + '" title="Move down this vendor’s sheet" aria-label="Move ' + k + ' down" style="width:auto;padding:3px 6px;font-size:12px;">↓</button>' : '') +
+        '</div>') +
+      bsTd('<code style="font-size:12px;color:#1c4039;overflow-wrap:anywhere;">' + k + '</code>' + (p.active ? '' : ' <span class="chip" style="font-size:10px;">Inactive</span>') +
+        (p.legacyShipsThrough
+          ? '<div style="margin-top:4px;font-size:11px;color:#8a5a00;max-width:180px;line-height:1.35;">Old “ships through” <b>' + esc(p.legacyShipsThrough) + '</b> was not converted — the part already had a different fulfillment supplier, or it is the vendor the part is bought from. It is not used.' +
+            (canEdit ? ' <a href="#" class="bsLegacy" data-part="' + k + '">Dismiss</a>' : '') + '</div>'
+          : ''), 'min-width:76px;max-width:130px;') +
+      bsTd('<span style="font-size:12.5px;">' + esc(p.description || '') + '</span>', 'min-width:96px;max-width:170px;') +
+      bsTd('<span style="font-size:12.5px;">' + esc(p.procurementSupplier || '—') + '</span>', 'max-width:120px;') +
+      bsTd('<span style="font-size:12.5px;white-space:nowrap;">$' + bsMoney2(p.unitPurchaseCostMinor) + '</span>' +
+        (on && (p.proposalUnitCostMinor !== p.unitPurchaseCostMinor || p.proposalPerOrderFeeMinor)
+          ? '<div class="muted" style="font-size:10.5px;line-height:1.3;" title="The cost a new proposal line takes for this part">Proposal cost $' + bsMoney2(p.proposalUnitCostMinor) + (p.proposalPerOrderFeeMinor ? ' + $' + bsMoney2(p.proposalPerOrderFeeMinor) + '/order' : '') + '</div>'
+          : ''), 'max-width:96px;') +
+      bsTd('<select class="bsF" data-part="' + k + '" data-f="bomGroup" style="' + bomFieldStyle('112px') + '"' + dis + ' aria-label="Heading for ' + k + '">' + bsHeadingOptions(p) + '</select>') +
+      bsTd('<input type="checkbox" class="bsProc" data-part="' + k + '"' + (on ? ' checked' : '') + dis + ' title="Prepaid item: bought from its procurement supplier and shipped to an Order Fulfillment Service Supplier — prints on both vendors’ sheets" aria-label="Prepaid item ' + k + '" style="width:16px;height:16px;cursor:' + (canEdit ? 'pointer' : 'default') + ';">', 'text-align:center;') +
+      bsTd('<div style="' + dim + '"><select class="bsF" data-part="' + k + '" data-f="secondaryVendor" style="' + bomFieldStyle('140px') + (noSupplier ? 'border-color:#c9a227;' : '') + '"' + pdis + ' aria-label="Order fulfillment service supplier for ' + k + '">' + bsVendorOptions(p.secondaryVendor || '', on ? 'Choose…' : '—') + '</select>' +
+        (noSupplier ? '<div style="font-size:10.5px;color:#8a5a00;margin-top:2px;max-width:150px;line-height:1.3;">Choose a supplier — nothing prints until you do</div>' : '') + '</div>') +
+      bsTd('<input class="bsF" data-part="' + k + '" data-f="processingSku" value="' + esc(p.processingSku || '') + '" placeholder="' + (on ? 'Their SKU' : '—') + '" maxlength="80" style="' + bomFieldStyle('92px') + dim + '"' + pdis + ' aria-label="Repackaging SKU for ' + k + '">') +
+      bsTd('<div style="display:flex;flex-direction:column;gap:3px;' + dim + '">' +
+        '<input class="bsF" data-part="' + k + '" data-f="secondaryVendorCostMinor" type="number" min="0" step="0.01" value="' + bsMoney2(p.secondaryVendorCostMinor) + '" placeholder="0.00" style="' + bomFieldStyle('86px') + '"' + pdis + ' aria-label="Repackaging service fee for ' + k + '">' +
+        '<select class="bsF" data-part="' + k + '" data-f="processingFeeBasis" style="' + bomFieldStyle('86px') + 'padding:4px 6px;font-size:12px;"' + pdis + ' aria-label="Fee basis for ' + k + '">' +
+          '<option value="PER_UNIT"' + (p.processingFeeBasis !== 'PER_ORDER' ? ' selected' : '') + '>per unit</option>' +
+          '<option value="PER_ORDER"' + (p.processingFeeBasis === 'PER_ORDER' ? ' selected' : '') + '>per order</option>' +
+        '</select></div>') +
+      bsTd('<input class="bsF" data-part="' + k + '" data-f="bomNote" value="' + esc(p.bomNote || '') + '" placeholder="—" style="' + bomFieldStyle('100%') + 'min-width:96px;"' + dis + ' aria-label="BOM note for ' + k + '">') +
+      '</tr>';
+  }
+
+  /** The grid field that has focus, so a redraw can hand it back. */
+  function bsFocusKeep(box, want) {
+    var a = document.activeElement;
+    if (!a || !box.contains(a) || !a.getAttribute || !a.getAttribute('data-part') || a.tagName === 'TR') return null;
+    if (want && !want[a.getAttribute('data-part')]) return null;
+    return { part: a.getAttribute('data-part'), f: a.getAttribute('data-f'), cls: a.className, value: a.value };
+  }
+  function bsFocusRestore(box, keep) {
+    if (!keep) return;
+    var again = Array.prototype.filter.call(box.querySelectorAll('[data-part]'), function (el) {
+      return el.getAttribute('data-part') === keep.part && el.className === keep.cls && el.getAttribute('data-f') === keep.f && el.tagName !== 'TR';
+    })[0];
+    if (again && !again.disabled) {
+      if (again.tagName === 'INPUT' && again.type !== 'checkbox') again.value = keep.value;
+      again.focus();
+    }
+  }
+
+  /** keepBar: leave the bulk bar alone (a redraw after a save, not a selection change). */
+  function drawBomSetup(user, keepBar) {
+    var box = document.getElementById('bsList');
+    if (!box) return;
+    var keep = bsFocusKeep(box, null);
+    var canEdit = BS_HANDOFF.indexOf(user.role) >= 0;
     var rows = bsVisible();
     var shown = rows.slice(0, bsState.limit);
-    var money2 = function (m) { return m == null ? '' : (Number(m) / 100).toFixed(2); };
     var byVendor = !!bsState.vendor && bsState.vendor !== '__none';
-
-    var body = shown.map(function (p, i) {
-      var k = esc(p.part);
-      // The processing fields only open once the part is ticked for processing.
-      var on = !!p.processingEnabled;
-      var pdis = canEdit && on ? '' : ' disabled';
-      var noSupplier = on && !p.secondaryVendor;
-      var dim = on ? '' : 'opacity:.45;';
-      return '<tr' + (on ? ' style="background:#f6f9fb;"' : '') + '>' +
-        (canEdit ? td('<input type="checkbox" class="bsSel" data-part="' + k + '"' + (bsState.sel[p.part] ? ' checked' : '') + ' aria-label="Select ' + k + '">') : '') +
-        td('<div style="display:flex;gap:4px;align-items:center;">' +
-          '<input class="bsF" data-part="' + k + '" data-f="bomSortOrder" type="number" min="0" step="1" value="' + (p.bomSortOrder == null ? '' : p.bomSortOrder) + '" placeholder="—" style="' + bomFieldStyle('70px') + '"' + dis + ' aria-label="Sequence for ' + k + '">' +
-          (byVendor && canEdit ? '<button class="link-btn bsMove" data-dir="up" data-i="' + i + '" title="Move up this vendor’s sheet" aria-label="Move ' + k + ' up" style="width:auto;padding:3px 7px;font-size:12px;">↑</button><button class="link-btn bsMove" data-dir="down" data-i="' + i + '" title="Move down this vendor’s sheet" aria-label="Move ' + k + ' down" style="width:auto;padding:3px 7px;font-size:12px;">↓</button>' : '') +
-          '</div>') +
-        td('<code style="font-size:12.5px;color:#1c4039;">' + k + '</code>' + (p.active ? '' : ' <span class="chip" style="font-size:10px;">Inactive</span>') +
-          (p.legacyShipsThrough
-            ? '<div style="margin-top:4px;font-size:11px;color:#8a5a00;max-width:220px;line-height:1.35;">Old “ships through” <b>' + esc(p.legacyShipsThrough) + '</b> was not converted — the part already had a different processing supplier, or it is the vendor the part is bought from. It is not used.' +
-              (canEdit ? ' <a href="#" class="bsLegacy" data-part="' + k + '">Dismiss</a>' : '') + '</div>'
-            : '')) +
-        td('<label style="display:flex;gap:6px;align-items:center;font-size:12px;white-space:nowrap;cursor:' + (canEdit ? 'pointer' : 'default') + ';" title="Shipped to a Processing Service Supplier who repackages it — prints on both vendors’ sheets">' +
-          '<input type="checkbox" class="bsProc" data-part="' + k + '"' + (on ? ' checked' : '') + dis + ' aria-label="Processing service supplier for ' + k + '"> Processing</label>') +
-        td('<span style="font-size:12.5px;">' + esc(p.description || '') + '</span>') +
-        td('<span style="font-size:12.5px;">' + esc(p.procurementSupplier || '—') + '</span>') +
-        td('<span style="font-size:12.5px;">$' + money2(p.unitPurchaseCostMinor) + '</span>' +
-          (on && (p.proposalUnitCostMinor !== p.unitPurchaseCostMinor || p.proposalPerOrderFeeMinor)
-            ? '<div class="muted" style="font-size:10.5px;white-space:nowrap;" title="The cost a new proposal line takes for this part">Proposal cost $' + money2(p.proposalUnitCostMinor) + (p.proposalPerOrderFeeMinor ? ' + $' + money2(p.proposalPerOrderFeeMinor) + '/order' : '') + '</div>'
-            : '')) +
-        td('<select class="bsF" data-part="' + k + '" data-f="bomGroup" style="' + bomFieldStyle('150px') + '"' + dis + ' aria-label="Heading for ' + k + '">' + bsHeadingOptions(p) + '</select>') +
-        td('<div style="' + dim + '"><select class="bsF" data-part="' + k + '" data-f="secondaryVendor" style="' + bomFieldStyle('160px') + (noSupplier ? 'border-color:#c9a227;' : '') + '"' + pdis + ' aria-label="Processing service supplier for ' + k + '">' + bsVendorOptions(p.secondaryVendor || '', on ? 'Choose…' : '—') + '</select>' +
-          (noSupplier ? '<div style="font-size:10.5px;color:#8a5a00;margin-top:2px;">Choose a supplier — nothing prints until you do</div>' : '') + '</div>') +
-        td('<input class="bsF" data-part="' + k + '" data-f="processingSku" value="' + esc(p.processingSku || '') + '" placeholder="' + (on ? 'Their SKU' : '—') + '" maxlength="80" style="' + bomFieldStyle('110px') + dim + '"' + pdis + ' aria-label="Repackaging SKU for ' + k + '">') +
-        td('<div style="display:flex;gap:4px;align-items:center;' + dim + '">' +
-          '<input class="bsF" data-part="' + k + '" data-f="secondaryVendorCostMinor" type="number" min="0" step="0.01" value="' + money2(p.secondaryVendorCostMinor) + '" placeholder="0.00" style="' + bomFieldStyle('80px') + '"' + pdis + ' aria-label="Repackaging service fee for ' + k + '">' +
-          '<select class="bsF" data-part="' + k + '" data-f="processingFeeBasis" style="' + bomFieldStyle('96px') + '"' + pdis + ' aria-label="Fee basis for ' + k + '">' +
-            '<option value="PER_UNIT"' + (p.processingFeeBasis !== 'PER_ORDER' ? ' selected' : '') + '>per unit</option>' +
-            '<option value="PER_ORDER"' + (p.processingFeeBasis === 'PER_ORDER' ? ' selected' : '') + '>per order</option>' +
-          '</select></div>') +
-        td('<input class="bsF" data-part="' + k + '" data-f="bomNote" value="' + esc(p.bomNote || '') + '" placeholder="—" style="' + bomFieldStyle('170px') + '"' + dis + ' aria-label="BOM note for ' + k + '">') +
-        '</tr>';
-    }).join('');
-
-    var heads = (canEdit ? ['<input type="checkbox" id="bsAll" aria-label="Select all shown" title="Select rows for the bar above"' + (shown.length && shown.every(function (p) { return bsState.sel[p.part]; }) ? ' checked' : '') + '>'] : [])
-      .concat(['Seq', 'Part #', 'Processing', 'Description', 'Procurement Supplier', 'Unit Purchase Cost', 'Heading', 'Processing Service Supplier', 'Repackaging SKU', esc(bsLabel('secondaryCharge', 'Repackaging Service Fee')), 'BOM note']);
+    var body = shown.map(function (p) { return bsRowHtml(p, user); }).join('');
+    var heads = (canEdit ? ['<input type="checkbox" id="bsAll" aria-label="Select all shown" title="Select rows to change together"' + (shown.length && shown.every(function (p) { return bsState.sel[p.part]; }) ? ' checked' : '') + '>'] : [])
+      .concat(['Seq', 'Part #', 'Description', 'Procurement Supplier', 'Unit Purchase Cost', 'Heading', 'Prepaid Item', 'Order Fulfillment Service Supplier', 'Repackaging SKU', esc(bsLabel('secondaryCharge', 'Repackaging Service Fee')), 'BOM note']);
     box.innerHTML =
       '<div class="muted" style="font-size:12px;margin-bottom:6px;">' + rows.length + ' part' + (rows.length === 1 ? '' : 's') +
         (rows.length > shown.length ? ' · showing the first ' + shown.length + ' — narrow it with the search or vendor, or <a href="#" id="bsMore">show all</a>' : '') +
         (byVendor ? ' · in ' + esc(bsState.vendor) + '’s sheet order' : '') + '</div>' +
-      '<div style="overflow:auto;">' + tableShell(heads, body, heads.length, 'No part matches.') + '</div>';
-    drawBomSetupBulk(user);
+      '<div style="overflow-x:auto;">' + bsTable(heads, body, 'No part matches.') + '</div>';
+    bsFocusRestore(box, keep);
+    if (!keepBar) drawBomSetupBulk(user);
+  }
 
-    var more = document.getElementById('bsMore');
-    if (more) more.addEventListener('click', function (e) { e.preventDefault(); bsState.limit = 100000; drawBomSetup(user); });
-    if (!canEdit) return;
-
-    var all = document.getElementById('bsAll');
-    if (all) all.addEventListener('change', function () {
-      shown.forEach(function (p) { if (all.checked) bsState.sel[p.part] = true; else delete bsState.sel[p.part]; });
-      drawBomSetup(user);
+  /**
+   * Redraw just these parts' rows from bsState — what makes ticking Prepaid Item open
+   * its fields at once. The field the user has moved on to keeps its focus and
+   * anything already typed in it.
+   */
+  function bsRedrawRows(parts, user) {
+    var box = document.getElementById('bsList');
+    if (!box) return;
+    var want = {};
+    parts.forEach(function (p) { want[p] = true; });
+    var keep = bsFocusKeep(box, want);
+    box.querySelectorAll('tr[data-part]').forEach(function (tr) {
+      var part = tr.getAttribute('data-part');
+      if (!want[part]) return;
+      var p = bsRow(part);
+      if (!p) return;
+      var t = document.createElement('tbody');
+      t.innerHTML = bsRowHtml(p, user);
+      tr.parentNode.replaceChild(t.firstChild, tr);
     });
-    box.querySelectorAll('.bsSel').forEach(function (cb) {
-      cb.addEventListener('change', function () {
-        var part = cb.getAttribute('data-part');
-        if (cb.checked) bsState.sel[part] = true; else delete bsState.sel[part];
+    bsFocusRestore(box, keep);
+  }
+
+  // A change typed into a selected row is copied to every selected row, for the
+  // settings parts share — so "tick ten parts, pick Goldberg once" works from the grid
+  // as well as from the bar. Sequence, Repackaging SKU and note stay per part.
+  var BS_SHARED_FIELDS = { processingEnabled: 1, secondaryVendor: 1, secondaryVendorCostMinor: 1, processingFeeBasis: 1, bomGroup: 1 };
+  function bsTargets(part, field) {
+    if (!BS_SHARED_FIELDS[field] || !bsState.sel[part]) return [part];
+    var box = document.getElementById('bsList');
+    var shown = box ? Array.prototype.map.call(box.querySelectorAll('.bsSel'), function (cb) { return cb.getAttribute('data-part'); })
+      .filter(function (p) { return bsState.sel[p]; }) : [];
+    return shown.indexOf(part) >= 0 && shown.length > 1 ? shown : [part];
+  }
+
+  /**
+   * The grid's listeners, bound once on the list box (not on each of 300 rows' dozen
+   * inputs every redraw). Called by renderBomSetup.
+   */
+  function bindBomSetupGrid(user) {
+    var box = document.getElementById('bsList');
+    if (!box || BS_HANDOFF.indexOf(user.role) < 0) {
+      if (box) box.addEventListener('click', function (e) {
+        if (e.target.id === 'bsMore') { e.preventDefault(); bsState.limit = 100000; drawBomSetup(user); }
+      });
+      return;
+    }
+    box.addEventListener('change', function (e) {
+      var el = e.target;
+      if (el.id === 'bsAll') {
+        box.querySelectorAll('.bsSel').forEach(function (cb) {
+          var p = cb.getAttribute('data-part');
+          if (el.checked) bsState.sel[p] = true; else delete bsState.sel[p];
+          cb.checked = el.checked;
+        });
         drawBomSetupBulk(user);
-      });
+        return;
+      }
+      var part = el.getAttribute('data-part');
+      if (!part) return;
+      if (el.classList.contains('bsSel')) {
+        if (el.checked) bsState.sel[part] = true; else delete bsState.sel[part];
+        var all = document.getElementById('bsAll');
+        if (all) { var cbs = box.querySelectorAll('.bsSel'); all.checked = cbs.length > 0 && Array.prototype.every.call(cbs, function (cb) { return cb.checked; }); }
+        drawBomSetupBulk(user);
+        return;
+      }
+      if (el.classList.contains('bsProc')) {
+        // Turning it off keeps the supplier, SKU and fee on file (greyed) so turning it
+        // back on restores them; nothing prints meanwhile.
+        var targets = bsTargets(part, 'processingEnabled');
+        var routed = targets.map(bsRow).filter(function (r) { return r && r.processingEnabled && r.secondaryVendor; });
+        if (!el.checked && routed.length &&
+          !confirm((routed.length === 1 && targets.length === 1
+            ? 'Stop sending ' + part + ' to ' + routed[0].secondaryVendor + ' for order fulfillment?'
+            : 'Stop order fulfillment for ' + targets.length + ' selected parts?') +
+            '\n\nOrders locked from now on print it only under its procurement supplier, and new proposals stop adding the repackaging fee to its cost. Orders already locked keep their lines.')) { el.checked = true; return; }
+        bsApply(targets, { processingEnabled: el.checked }, user);
+        return;
+      }
+      if (!el.classList.contains('bsF')) return;
+      var f = el.getAttribute('data-f'), v = el.value, set = {};
+      if (el.validity && el.validity.badInput) { alert('Enter a plain number, e.g. 4.50.'); bsRedrawRows([part], user); return; }
+      if (f === 'bomSortOrder') set[f] = v.trim() === '' ? null : Math.max(0, Math.round(Number(v)));
+      else if (f === 'processingFeeBasis') set[f] = v === 'PER_ORDER' ? 'PER_ORDER' : 'PER_UNIT';
+      else if (f === 'secondaryVendorCostMinor') set[f] = v.trim() === '' ? null : Math.round(Number(String(v).replace(/[$,\s]/g, '')) * 100);
+      else if (f === 'bomGroup') {
+        if (v === '__new') {
+          var name = (prompt('Name the new heading (for example "Crating"):') || '').trim();
+          if (!name) { bsRedrawRows([part], user); return; }
+          v = name;
+        }
+        set[f] = v === '__auto' ? null : v;
+      } else set[f] = v.trim() || null;
+      if ((f === 'bomSortOrder' || f === 'secondaryVendorCostMinor') && set[f] != null && !(set[f] >= 0)) { alert('Enter a number of zero or more.'); bsRedrawRows([part], user); return; }
+      bsApply(bsTargets(part, f), set, user);
     });
-    box.querySelectorAll('.bsF').forEach(function (el) {
-      el.addEventListener('change', async function () {
-        var part = el.getAttribute('data-part'), f = el.getAttribute('data-f'), v = el.value, set = {};
-        if (f === 'bomSortOrder') set[f] = v.trim() === '' ? null : Math.max(0, Math.round(Number(v)));
-        else if (f === 'processingFeeBasis') set[f] = v === 'PER_ORDER' ? 'PER_ORDER' : 'PER_UNIT';
-        else if (f === 'secondaryVendorCostMinor') set[f] = v.trim() === '' ? null : Math.round(Number(v) * 100);
-        else if (f === 'bomGroup') {
-          if (v === '__new') {
-            var name = (prompt('Name the new heading (for example "Crating"):') || '').trim();
-            if (!name) { drawBomSetup(user); return; }
-            v = name;
-          }
-          set[f] = v === '__auto' ? null : v;
-        } else set[f] = v.trim() || null;
-        if ((f === 'bomSortOrder' || f === 'secondaryVendorCostMinor') && set[f] != null && !(set[f] >= 0)) { alert('Enter a number of zero or more.'); drawBomSetup(user); return; }
-        await bsApply([part], set, user);
-      });
-    });
-    // The checkbox beside the part number. Turning it off keeps the supplier, SKU and
-    // fee on file (greyed) so turning it back on restores them; nothing prints meanwhile.
-    box.querySelectorAll('.bsProc').forEach(function (cb) {
-      cb.addEventListener('change', async function () {
-        var part = cb.getAttribute('data-part');
-        var row = bsState.rows.filter(function (x) { return x.part === part; })[0] || {};
-        if (!cb.checked && row.secondaryVendor &&
-          !confirm('Stop sending ' + part + ' to ' + row.secondaryVendor + ' for processing?\n\nOrders locked from now on print it only under its procurement supplier, and new proposals stop adding the repackaging fee to its cost. Orders already locked keep their lines.')) { cb.checked = true; return; }
-        await bsApply([part], { processingEnabled: cb.checked }, user);
-      });
-    });
-    box.querySelectorAll('.bsLegacy').forEach(function (a) {
-      a.addEventListener('click', async function (e) {
-        e.preventDefault();
-        await bsApply([a.getAttribute('data-part')], { freeIssueVendor: null }, user);
-      });
-    });
-    box.querySelectorAll('.bsMove').forEach(function (b) {
-      b.addEventListener('click', async function () {
-        var i = Number(b.getAttribute('data-i')), j = b.getAttribute('data-dir') === 'up' ? i - 1 : i + 1;
-        var order = rows.map(function (p) { return p.part; });
-        if (j < 0 || j >= order.length) return;
-        var x = order[i]; order[i] = order[j]; order[j] = x;
-        // Renumbers the vendor's whole visible list 10, 20, 30… so every part on the
-        // sheet has a position and the move sticks.
-        var r = await authed('/bom-setup/sequence', { method: 'POST', body: { parts: order } });
-        if (!r.ok) { alert('Could not move that part.'); return; }
-        await loadBomSetup(user);
-      });
+    box.addEventListener('click', async function (e) {
+      var t = e.target;
+      if (t.id === 'bsMore') { e.preventDefault(); bsState.limit = 100000; drawBomSetup(user); return; }
+      if (t.classList.contains('bsLegacy')) { e.preventDefault(); bsApply([t.getAttribute('data-part')], { freeIssueVendor: null }, user); return; }
+      if (!t.classList.contains('bsMove')) return;
+      var order = bsVisible().map(function (p) { return p.part; });
+      var i = order.indexOf(t.getAttribute('data-part')), j = t.getAttribute('data-dir') === 'up' ? i - 1 : i + 1;
+      if (i < 0) { drawBomSetup(user, true); return; }
+      if (j < 0 || j >= order.length) return;
+      var x = order[i]; order[i] = order[j]; order[j] = x;
+      // Renumbers the vendor's whole visible list 10, 20, 30… so every part on the
+      // sheet has a position and the move sticks.
+      await bsSequence(order, null, user);
     });
   }
 
-  /** Apply one change to some parts, then reload. Shared by the cells and the bulk bar. */
-  async function bsApply(parts, set, user) {
-    var r = await authed('/bom-setup/parts', { method: 'PATCH', body: { parts: parts, set: set } });
-    var d = {};
-    try { d = (await r.json()) || {}; } catch (e) {}
-    if (!r.ok) { alert(d.message || 'Could not save that.'); await loadBomSetup(user); return false; }
-    if ((d.skipped || []).length)
-      alert('Saved ' + d.updated + '. Skipped ' + d.skipped.length + ':\n' + d.skipped.slice(0, 15).map(function (x) { return x.part + ' — ' + x.reason; }).join('\n'));
-    await loadBomSetup(user);
-    return true;
+  /** A change as the server will store it, made to the row on screen ahead of the save. */
+  function bsLocalSet(p, set) {
+    Object.keys(set).forEach(function (f) {
+      var v = set[f];
+      if (f === 'freeIssueVendor') p.legacyShipsThrough = null;
+      else if (f === 'processingSku' || f === 'bomNote') p[f] = v == null ? null : (String(v).trim() || null);
+      else if (f === 'bomGroup') p[f] = v == null ? null : String(v).trim().slice(0, 60);
+      else p[f] = v;
+    });
+    // landedCost.ts processingFeeOf, so "Proposal cost" moves with the fee as it is typed.
+    var fee = p.processingEnabled && (p.secondaryVendor || '').trim() ? Math.max(0, Math.round(Number(p.secondaryVendorCostMinor) || 0)) : 0;
+    var perOrder = p.processingFeeBasis === 'PER_ORDER';
+    p.proposalUnitCostMinor = (Number(p.unitPurchaseCostMinor) || 0) + (perOrder ? 0 : fee);
+    p.proposalPerOrderFeeMinor = perOrder ? fee : 0;
+  }
+
+  var bsSaving = Promise.resolve();
+  /**
+   * Apply one change to some parts. The screen changes at once; the save follows in
+   * the background, in order behind any save still going. Only a refusal reloads —
+   * and puts the screen back to what is really stored.
+   */
+  function bsApply(parts, set, user) {
+    var full = Object.prototype.hasOwnProperty.call(set, 'secondaryVendor') ||
+      (Object.prototype.hasOwnProperty.call(set, 'processingEnabled') && !!bsState.vendor) ||
+      (Object.prototype.hasOwnProperty.call(set, 'bomSortOrder') && !!bsState.vendor) ||
+      (set.bomGroup != null && !bsState.rows.some(function (r) { return (r.bomGroup || '').toLowerCase() === String(set.bomGroup).trim().toLowerCase(); }));
+    var own = String(set.secondaryVendor || '').toLowerCase();
+    // The server skips a part sent to the supplier it is bought from; so does the screen.
+    parts.forEach(function (part) {
+      var p = bsRow(part);
+      if (p && !(own && (p.procurementSupplier || '').toLowerCase() === own)) bsLocalSet(p, set);
+    });
+    // After this event, not during it: a change fires as Tab leaves the field, before focus
+    // has reached the next one, and redrawing then would drop focus on the page.
+    var vendorCounts = Object.prototype.hasOwnProperty.call(set, 'processingEnabled');
+    setTimeout(function () {
+      if (full || vendorCounts) bsFillVendorFilter();
+      if (full) drawBomSetup(user, true); else bsRedrawRows(parts, user);
+    }, 0);
+    return bsQueue(user, async function () {
+      var r = await authed('/bom-setup/parts', { method: 'PATCH', body: { parts: parts, set: set } });
+      var d = {};
+      try { d = (await r.json()) || {}; } catch (e) {}
+      if (!r.ok) { alert(d.message || 'Could not save that.'); return 'reload'; }
+      if ((d.skipped || []).length) {
+        alert('Saved ' + d.updated + '. Skipped ' + d.skipped.length + ':\n' + d.skipped.slice(0, 15).map(function (x) { return x.part + ' — ' + x.reason; }).join('\n'));
+        return 'reload';
+      }
+      return true;
+    });
+  }
+
+  /**
+   * Run one save after every save before it. A save that was refused asks for the
+   * screen to be re-read from the server — but only once the queue is empty, so a
+   * later edit already shown on screen is not overwritten by a read taken before it
+   * was saved.
+   */
+  var bsPending = 0, bsNeedReload = false;
+  function bsQueue(user, job) {
+    bsPending++;
+    var done = bsSaving.then(job).catch(function () { alert('Could not save that — check the connection.'); return 'reload'; })
+      .then(async function (res) {
+        if (res === 'reload') bsNeedReload = true;
+        if (--bsPending === 0 && bsNeedReload) { bsNeedReload = false; await loadBomSetup(user); }
+        return res === true;
+      });
+    bsSaving = done.then(function () {}, function () {});
+    return done;
+  }
+
+  /** Number parts 10, 20, 30… (or from start/step), queued behind any cell save. */
+  function bsSequence(parts, opts, user) {
+    return bsQueue(user, async function () {
+      var r = await authed('/bom-setup/sequence', { method: 'POST', body: Object.assign({ parts: parts }, opts || {}) });
+      if (!r.ok) { alert('Could not number those parts.'); return 'reload'; }
+      return 'reload'; // new numbers for the whole sheet: re-read them
+    });
   }
 
   function drawBomSetupBulk(user) {
@@ -726,13 +881,14 @@
     if (!picked.length) { bar.innerHTML = ''; return; }
     bar.innerHTML =
       '<div style="position:sticky;top:0;z-index:5;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;background:#1c4039;color:#fff;border-radius:10px;padding:10px 12px;margin-bottom:10px;">' +
-        '<div style="font-size:13px;font-weight:600;padding-bottom:8px;">' + picked.length + ' selected</div>' +
+        '<div style="padding-bottom:4px;"><div style="font-size:13px;font-weight:600;">' + picked.length + ' selected</div>' +
+          (picked.length > 1 ? '<div style="font-size:11px;opacity:.8;max-width:230px;line-height:1.35;">A change in any selected row is copied to all ' + picked.length + '</div>' : '') + '</div>' +
         '<div><div style="font-size:11px;opacity:.8;">Change</div><select id="bsWhat" style="' + bomFieldStyle('220px') + '">' +
-          '<option value="processing">Processing service supplier (+ ' + esc(bsLabel('secondaryCharge', 'Repackaging Service Fee').toLowerCase()) + ')</option>' +
+          '<option value="processing">Order fulfillment service supplier (+ ' + esc(bsLabel('secondaryCharge', 'Repackaging Service Fee').toLowerCase()) + ')</option>' +
           '<option value="heading">Heading</option>' +
           '<option value="seq">Sequence — number in the order shown</option>' +
           '<option value="note">BOM note</option>' +
-          '<option value="processingOff">Turn processing off</option>' +
+          '<option value="processingOff">Untick Prepaid Item</option>' +
           '<option value="clearSeq">Clear sequence</option>' +
         '</select></div>' +
         '<div id="bsValue" style="display:flex;gap:8px;align-items:flex-end;"></div>' +
@@ -745,9 +901,9 @@
       var w = what.value;
       val.innerHTML =
         w === 'processing'
-          ? lab('Processing Service Supplier', '<select id="bsV1" style="' + bomFieldStyle('190px') + '">' + bsVendorOptions('', 'Choose…') + '</select>') +
-            lab(esc(bsLabel('secondaryCharge', 'Repackaging Service Fee')) + ' ($)', '<input id="bsV2" type="number" min="0" step="0.01" placeholder="0.00" style="' + bomFieldStyle('100px') + '">') +
-            lab('Charged', '<select id="bsV3" style="' + bomFieldStyle('100px') + '"><option value="PER_UNIT">per unit</option><option value="PER_ORDER">per order</option></select>') +
+          ? lab('Order Fulfillment Service Supplier', '<select id="bsV1" style="' + bomFieldStyle('190px') + '">' + bsVendorOptions('', 'Choose…') + '</select>') +
+            lab(esc(bsLabel('secondaryCharge', 'Repackaging Service Fee')) + ' ($)', '<input id="bsV2" type="number" min="0" step="0.01" placeholder="Leave as is" style="' + bomFieldStyle('110px') + '">') +
+            lab('Charged', '<select id="bsV3" style="' + bomFieldStyle('110px') + '"><option value="">Leave as is</option><option value="PER_UNIT">per unit</option><option value="PER_ORDER">per order</option></select>') +
             lab('Repackaging SKU (optional)', '<input id="bsV4" maxlength="80" placeholder="Leave as is" style="' + bomFieldStyle('130px') + '">')
         : w === 'heading' ? lab('Heading', '<select id="bsV1" style="' + bomFieldStyle('170px') + '">' + bsHeadingOptions(null) + '</select>')
         : w === 'seq' ? lab('Start at', '<input id="bsV1" type="number" min="0" step="1" value="10" style="' + bomFieldStyle('80px') + '">') + lab('Step', '<input id="bsV2" type="number" min="1" step="1" value="10" style="' + bomFieldStyle('70px') + '">')
@@ -764,19 +920,22 @@
         .concat(picked.filter(function (p) { return !bsVisible().some(function (x) { return x.part === p; }); }));
       var ok;
       if (w === 'seq') {
-        var r = await authed('/bom-setup/sequence', { method: 'POST', body: { parts: parts, start: Number(v1.value) || 0, step: Math.max(1, Number(v2.value) || 10) } });
-        ok = r.ok;
-        if (!ok) alert('Could not number those parts.');
-        await loadBomSetup(user);
+        await bsSequence(parts, { start: Number(v1.value) || 0, step: Math.max(1, Number(v2.value) || 10) }, user);
+        ok = true;
       } else {
         var set = {};
         if (w === 'processing') {
-          if (!v1.value) return alert('Choose the processing service supplier.');
+          if (!v1.value) return alert('Choose the order fulfillment service supplier.');
           set.processingEnabled = true;
           set.secondaryVendor = v1.value;
-          set.secondaryVendorCostMinor = v2.value.trim() === '' ? 0 : Math.round(Number(v2.value) * 100);
-          if (!(set.secondaryVendorCostMinor >= 0)) return alert('Enter the fee as plain dollars, e.g. 4.50.');
-          set.processingFeeBasis = document.getElementById('bsV3').value === 'PER_ORDER' ? 'PER_ORDER' : 'PER_UNIT';
+          // A blank fee or basis leaves each part's own, so a supplier can be changed
+          // without wiping fees already entered.
+          if (v2.value.trim() !== '') {
+            set.secondaryVendorCostMinor = Math.round(Number(v2.value) * 100);
+            if (!(set.secondaryVendorCostMinor >= 0)) return alert('Enter the fee as plain dollars, e.g. 4.50.');
+          }
+          var basis3 = document.getElementById('bsV3').value;
+          if (basis3) set.processingFeeBasis = basis3 === 'PER_ORDER' ? 'PER_ORDER' : 'PER_UNIT';
           // A Repackaging SKU is usually per part, so a blank box leaves each part's own.
           var sku4 = document.getElementById('bsV4').value.trim();
           if (sku4) set.processingSku = sku4;
@@ -794,41 +953,86 @@
     });
   }
 
+  /** An Excel workbook the Import sheet button reads straight back. */
   async function exportBomSetup() {
-    var r = await authed('/bom-setup/export');
+    var r = await authed('/bom-setup/export.xlsx');
     if (!r.ok) { alert('Could not build the sheet (' + r.status + ').'); return; }
-    var d = await r.json();
-    var cols = d.columns || [];
-    downloadCsv('bom-setup-' + todayISO() + '.csv', [cols].concat((d.items || []).map(function (it) {
-      return cols.map(function (c) { return it[c]; });
-    })));
+    downloadBlob(await r.blob(), 'bom-setup-' + todayISO() + '.xlsx');
+  }
+
+  /** A File as base64, for the .xlsx upload. */
+  function bsFileBase64(file) {
+    return new Promise(function (resolve, reject) {
+      var fr = new FileReader();
+      fr.onload = function () { resolve(String(fr.result).replace(/^data:[^,]*,/, '')); };
+      fr.onerror = function () { reject(fr.error); };
+      fr.readAsDataURL(file);
+    });
+  }
+
+  /** parseCsv, with each row's line in the file as __row so problems name the right row. */
+  function bsParseCsv(text) {
+    var lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+    var rows = parseCsv(lines.join('\n'));
+    var at = [];
+    lines.forEach(function (l, i) { if (l.trim() !== '') at.push(i + 1); });
+    rows.forEach(function (r, i) { r.__row = at[i + 1]; });
+    return rows;
   }
 
   function openBomSetupImport(user) {
     var confirmed = false;
-    openModal('Upload a BOM setup sheet',
-      '<div class="muted" style="font-size:12.5px;line-height:1.6;margin-bottom:10px;">Start from <b>Download sheet</b>, edit it in Excel, save as <b>CSV</b>, and upload it here. Columns read: <code>part, bomSequence, bomHeading, bomNote, processing, processingSupplier, repackagingSku, repackagingFee, repackagingFeeBasis</code> (<code>procurementSupplier</code> and <code>unitPurchaseCost</code> are for reference and are not read — change them in the catalog). ' +
-        'Only columns in the file change. A blank cell clears that setting; a blank <code>bomHeading</code> means automatic, and <code>Main list</code> keeps a part out of Hardware. <code>processing</code> is Yes or No; <code>repackagingFeeBasis</code> is “per unit” or “per order”. Vendor names must match Catalog → Manufacturers. Sheets downloaded before this change still upload.</div>' +
-      '<input type="file" id="bsFile" accept=".csv,text/csv" style="width:100%;padding:10px;border:1px dashed #cfd3ca;border-radius:9px;background:#fff;">' +
+    openModal('Import a BOM setup sheet',
+      '<div class="muted" style="font-size:12.5px;line-height:1.6;margin-bottom:10px;">Start from <b>Export sheet</b>, change it in Excel, save it, and import it here — an Excel workbook (.xlsx) or a CSV. You see every change before anything is saved. ' +
+        'Columns read: <code>part, bomSequence, bomHeading, bomNote, prepaidItem, orderFulfillmentSupplier, repackagingSku, repackagingFee, repackagingFeeBasis</code> (<code>description</code>, <code>procurementSupplier</code> and <code>unitPurchaseCost</code> are for reference and are not read — change them in the catalog). ' +
+        'Only columns in the file change. A blank cell clears that setting; a blank <code>bomHeading</code> means automatic, and <code>Main list</code> keeps a part out of Hardware. <code>prepaidItem</code> is Yes or No; <code>repackagingFeeBasis</code> is “per unit” or “per order”. Vendor names must match Catalog → Manufacturers. Sheets exported before this change still import.</div>' +
+      '<input type="file" id="bsFile" accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style="width:100%;padding:10px;border:1px dashed #cfd3ca;border-radius:9px;background:#fff;">' +
       '<div id="bsReview" style="margin-top:12px;"></div>',
       async function (close, showErr) {
         var fi = document.getElementById('bsFile').files[0];
-        if (!fi) return showErr('Choose a CSV file first.');
-        var rows = parseCsv(await fi.text());
-        if (!rows.length) return showErr('No data rows found in that file.');
-        if (!Object.prototype.hasOwnProperty.call(rows[0], 'part')) return showErr('The sheet needs a “part” column.');
-        var r = await authed('/bom-setup/import', { method: 'POST', body: { rows: rows, dryRun: !confirmed } });
+        if (!fi) return showErr('Choose a file first.');
+        var body = { dryRun: !confirmed };
+        if (/\.xlsx$/i.test(fi.name)) {
+          if (fi.size > 5 * 1024 * 1024) return showErr('That workbook is over 5 MB — export a fresh sheet and edit that.');
+          body.xlsxBase64 = await bsFileBase64(fi);
+        } else if (/\.xls$/i.test(fi.name)) {
+          return showErr('That is an old .xls file. In Excel use File → Save As → Excel Workbook (.xlsx), or CSV.');
+        } else {
+          // Excel's "CSV UTF-8" starts with a byte-order mark, which would otherwise be
+          // read as part of the first heading.
+          body.rows = bsParseCsv((await fi.text()).replace(/^\uFEFF/, ''));
+          if (!body.rows.length) return showErr('No data rows found in that file.');
+        }
+        var r = await authed('/bom-setup/import', { method: 'POST', body: body });
         var d = {};
         try { d = (await r.json()) || {}; } catch (e) {}
         if (!r.ok) return showErr(d.message || 'Could not read that sheet.');
         var issues = (d.issues || []).slice(0, 30).map(function (x) { return '<li>Row ' + x.row + ' · <code>' + esc(x.part) + '</code> — ' + esc(x.message) + '</li>'; }).join('');
         if (!confirmed) {
+          if (!(d.changes || []).length) {
+            document.getElementById('bsReview').innerHTML = '<div style="font-size:13px;line-height:1.6;"><b>Nothing to change</b> — every part in the file already matches.' +
+              ((d.issues || []).length ? ' ' + d.issues.length + ' row' + (d.issues.length === 1 ? '' : 's') + ' could not be read:' : '') + '</div>' +
+              (issues ? '<ul style="font-size:12px;max-height:180px;overflow:auto;margin:6px 0;">' + issues + '</ul>' : '');
+            var sv0 = document.getElementById('mSave');
+            if (sv0) { sv0.disabled = false; sv0.textContent = 'Check the sheet'; }
+            return;
+          }
           confirmed = true;
+          var FIELD = { bomSortOrder: 'sequence', bomGroup: 'heading', bomNote: 'note', processingEnabled: 'prepaid item', secondaryVendor: 'fulfillment supplier', processingSku: 'repackaging SKU', secondaryVendorCostMinor: 'fee', processingFeeBasis: 'fee basis' };
+          var changes = (d.changes || []).slice(0, 40).map(function (x) { return '<li><code>' + esc(x.part) + '</code> — ' + esc((x.changed || []).map(function (c) { return FIELD[c] || c; }).join(', ')) + '</li>'; }).join('');
           document.getElementById('bsReview').innerHTML =
-            '<div style="font-size:13px;line-height:1.6;"><b>' + (d.changes || []).length + ' part' + ((d.changes || []).length === 1 ? '' : 's') + ' will change.</b> ' +
-            ((d.issues || []).length ? (d.issues.length + ' row' + (d.issues.length === 1 ? '' : 's') + ' will be skipped:') : 'No problems found.') + '</div>' +
-            (issues ? '<ul style="font-size:12px;max-height:180px;overflow:auto;margin:6px 0;">' + issues + '</ul>' : '') +
+            '<div style="font-size:13px;line-height:1.6;"><b>' + d.changes.length + ' part' + (d.changes.length === 1 ? '' : 's') + ' will change:</b></div>' +
+            '<ul style="font-size:12px;max-height:160px;overflow:auto;margin:6px 0;">' + changes + (d.changes.length > 40 ? '<li>…and ' + (d.changes.length - 40) + ' more</li>' : '') + '</ul>' +
+            ((d.issues || []).length ? '<div style="font-size:13px;line-height:1.6;">' + d.issues.length + ' row' + (d.issues.length === 1 ? '' : 's') + ' will be skipped:</div>' : '') +
+            (issues ? '<ul style="font-size:12px;max-height:140px;overflow:auto;margin:6px 0;">' + issues + '</ul>' : '') +
             '<div class="muted" style="font-size:12px;">Press <b>Apply changes</b> to save them.</div>';
+          // A different file chosen after the check is checked again before it is saved.
+          document.getElementById('bsFile').addEventListener('change', function () {
+            confirmed = false;
+            document.getElementById('bsReview').innerHTML = '';
+            var b = document.getElementById('mSave');
+            if (b) b.textContent = 'Check the sheet';
+          }, { once: true });
           // Neither closed nor failed, so the dialog's own button is still "Saving…".
           var sv = document.getElementById('mSave');
           if (sv) { sv.disabled = false; sv.textContent = 'Apply changes'; }
@@ -3117,7 +3321,7 @@
     name: 'Name', sku: 'SKU', status: 'Status', components: 'Components',
     unitWeightLbs: 'Weight', active: 'Active', leadTimeDays: 'Lead time',
     requiresPowderColor: 'Requires colour', freeIssueVendor: 'Ships through (retired)',
-    processingEnabled: 'Processing', secondaryVendor: 'Processing Service Supplier',
+    processingEnabled: 'Prepaid item', secondaryVendor: 'Order Fulfillment Service Supplier',
     secondaryVendorCostMinor: 'Repackaging Service Fee', processingFeeBasis: 'Fee charged',
     processingSku: 'Repackaging SKU',
     bomSortOrder: 'BOM sequence', bomGroup: 'BOM heading', bomNote: 'BOM note'
