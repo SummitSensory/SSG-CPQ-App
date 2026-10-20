@@ -333,7 +333,13 @@ export async function buildBomModel(
     ...(showBag ? [text(l.packagingBag || '—')] : []),
     ...(showColor ? [text(l.powderColor || '—')] : []),
     numeric(lbs(l.extendedWeightLbs), l.extendedWeightLbs, '#,##0.00'),
-    numeric(money(l.unitCostMinor), l.unitCostMinor / 100, ACCOUNTING_FMT),
+    // A per-order fee is the line's whole charge, whatever the quantity — said in
+    // the cell so "10 × $50.00 = $50.00" reads as intended.
+    numeric(
+      l.costPerOrder ? `${money(l.unitCostMinor)} per order` : money(l.unitCostMinor),
+      l.unitCostMinor / 100,
+      ACCOUNTING_FMT,
+    ),
     numeric(money(l.extendedCostMinor), l.extendedCostMinor / 100, ACCOUNTING_FMT),
   ];
 

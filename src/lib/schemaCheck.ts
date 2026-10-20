@@ -56,6 +56,8 @@ export const REQUIRED_COLUMNS: Array<{ table: string; column: string; since: str
   { table: 'Sku', column: 'bomGroup', since: '0111_bom_sequence_heading' },
   { table: 'ProcurementLine', column: 'bomPosition', since: '0111_bom_sequence_heading' },
   { table: 'PurchaseOrderLine', column: 'powderColor', since: '0112_purchase_order_line_color' },
+  { table: 'Sku', column: 'processingEnabled', since: '0120_processing_service_supplier' },
+  { table: 'ProcurementLine', column: 'costPerOrder', since: '0120_processing_service_supplier' },
 ];
 
 /** Tables recent migrations created. A missing one breaks its whole feature. */

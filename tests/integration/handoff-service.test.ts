@@ -21,7 +21,7 @@ const sendOrderLockedNotice = vi.hoisted(() => vi.fn(async () => null));
 vi.mock('../../src/handoff/orderLockedNotice.js', () => ({ sendOrderLockedNotice }));
 
 /**
- * Only populated by the secondaryVendor test below — every other test in this file
+ * Only populated by the processing-supplier tests below — every other test in this file
  * relies on this staying empty, which keeps `sku.findMany` returning `[]` for them
  * exactly as the old unconditional stub did.
  */
@@ -32,9 +32,11 @@ let SKU_ROWS: Array<{
   unitCostMinor?: number | null;
   weightLbs?: number | null;
   keepParentOnBom?: boolean;
-  freeIssueVendor?: string | null;
+  processingEnabled?: boolean;
   secondaryVendor?: string | null;
   secondaryVendorCostMinor?: number | null;
+  processingFeeBasis?: 'PER_UNIT' | 'PER_ORDER';
+  processingSku?: string | null;
 }> = [];
 
 vi.mock('../../src/lib/prisma.js', () => {
@@ -63,7 +65,7 @@ vi.mock('../../src/lib/prisma.js', () => {
     // cost, weight) for every order line. These tests assert on version locking
     // and integrity hashing, not catalog resolution, so no matches is the right
     // neutral input — the service falls back to nulls, EXCEPT for the
-    // secondaryVendor test, which populates SKU_ROWS deliberately.
+    // processing-supplier tests, which populate SKU_ROWS deliberately.
     product: { findMany: async () => [] },
     // Serves both resolveCatalogRefs' `{ OR: [{ part: { in } }, { description: { in } }] }`
     // shape and bomBuild.ts's `loadBuildTables`/`partInfo` shapes (`{ OR: [...rule flags] }`
@@ -90,11 +92,7 @@ vi.mock('../../src/lib/prisma.js', () => {
               const descIn = (cond.description as { in?: string[] } | undefined)?.in;
               if (descIn) return !!r.description && descIn.includes(r.description);
               if ('keepParentOnBom' in cond) return r.keepParentOnBom === true;
-              if ('NOT' in cond) {
-                const not = cond.NOT as Record<string, unknown>;
-                if ('freeIssueVendor' in not) return !!r.freeIssueVendor;
-                if ('secondaryVendor' in not) return !!r.secondaryVendor;
-              }
+              if ('processingEnabled' in cond) return !!r.processingEnabled && !!r.secondaryVendor;
               return false;
             }),
           );
@@ -272,7 +270,7 @@ describe('createAcceptedOrder', () => {
     expect(reqCats).toContain('PRODUCTION');
   });
 
-  it("gives a part with a secondaryVendor rule its own second procurement line, at the SECOND vendor's cost — not the catalog cost of the part's own vendor", async () => {
+  it("puts a processing part on BOTH sheets: the purchase at catalog cost, plus one processing line at the processing supplier's fee", async () => {
     SKU_ROWS = [
       {
         part: 'ABC',
@@ -280,8 +278,11 @@ describe('createAcceptedOrder', () => {
         manufacturer: 'Amazon',
         unitCostMinor: 5000,
         weightLbs: 2,
+        processingEnabled: true,
         secondaryVendor: 'Goldberg Brothers',
         secondaryVendorCostMinor: 750,
+        processingFeeBasis: 'PER_ORDER',
+        processingSku: 'GB-RPK',
       },
     ];
     h.store.version!.items = [
@@ -295,6 +296,9 @@ describe('createAcceptedOrder', () => {
           vendor: string | null;
           unitCostMinor: number | null;
           secondaryOfSku: string | null;
+          purchaseVendor: string | null;
+          costPerOrder: boolean;
+          vendorPartNo: string | null;
         }>;
       };
     };
@@ -305,13 +309,43 @@ describe('createAcceptedOrder', () => {
       vendor: 'Amazon',
       unitCostMinor: 5000,
       secondaryOfSku: null,
+      purchaseVendor: null,
+      costPerOrder: false,
+      vendorPartNo: null,
     });
     expect(lines[1]).toMatchObject({
       sku: 'ABC',
+      quantity: 2,
       vendor: 'Goldberg Brothers',
       unitCostMinor: 750,
       secondaryOfSku: 'ABC',
+      purchaseVendor: 'Amazon',
+      costPerOrder: true,
+      vendorPartNo: 'GB-RPK',
     });
+    expect(lines.some((l) => 'freeIssue' in l)).toBe(false);
+  });
+
+  it('adds no processing line when the processing checkbox is off', async () => {
+    SKU_ROWS = [
+      {
+        part: 'ABC',
+        description: 'Product A',
+        manufacturer: 'Amazon',
+        unitCostMinor: 5000,
+        processingEnabled: false,
+        secondaryVendor: 'Goldberg Brothers',
+        secondaryVendorCostMinor: 750,
+      },
+    ];
+    h.store.version!.items = [
+      { ref: 'l1', sku: 'ABC', name: 'Product A', quantity: 2, kind: 'INCLUDED' },
+    ];
+    const { createAcceptedOrder } = await import('../../src/handoff/service.js');
+    const order = (await createAcceptedOrder('v1', approval, 'user-1')) as unknown as {
+      procurement: { create: Array<{ vendor: string | null }> };
+    };
+    expect(order.procurement.create.map((l) => l.vendor)).toEqual(['Amazon']);
   });
 
   it('seeds Installation/Training by default, when the approval says nothing either way', async () => {

@@ -45,7 +45,13 @@
  * printed document, the price snapshot and QuickBooks all agree with.
  */
 import { prisma } from '../lib/prisma.js';
-import { itemsOf, metaOf, versionTotals, type RawItem } from '../proposals/analytics.js';
+import {
+  itemsOf,
+  lineCostMinor,
+  metaOf,
+  versionTotals,
+  type RawItem,
+} from '../proposals/analytics.js';
 import { decisionDate } from './decision.js';
 
 export interface FactLine {
@@ -275,7 +281,8 @@ export async function buildDataset(force = false): Promise<Dataset> {
         qty,
         rateMinor: n(l.rateMinor),
         amountMinor: Math.round(qty * n(l.rateMinor)),
-        costMinor: Math.round(qty * n(l.costEach)),
+        // The same per-line figure versionTotals sums, per-order processing fee included.
+        costMinor: lineCostMinor(l),
       });
     }
 

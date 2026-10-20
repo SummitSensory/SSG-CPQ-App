@@ -42,7 +42,10 @@ export interface SkuRec {
   part: string;
   description: string;
   unitPriceMinor: number;
+  /** Unit Purchase Cost plus any per-unit Repackaging Service Fee (catalog/landedCost.ts). */
   unitCostMinor?: number;
+  /** A Repackaging Service Fee charged once per proposal line, not per unit. */
+  processingFeeMinor?: number;
   weightLbs: number;
   category: string;
   /** Where the catalog files this part: tier-1 group and tier-2 subgroup. Drives
@@ -196,6 +199,8 @@ export interface PricedLine {
   quantity?: number;
   rateMinor?: number;
   costEach?: number;
+  /** A per-order Repackaging Service Fee, counted once in cost of goods (analytics.ts). */
+  processingFeeMinor?: number;
   weightEach?: number;
   needsPrice?: boolean;
   /**
@@ -515,6 +520,7 @@ export function computeAdventureProposal(
       quantity: qty,
       rateMinor: rec ? rec.unitPriceMinor : 0,
       costEach: rec ? (rec.unitCostMinor ?? 0) : 0,
+      ...(rec?.processingFeeMinor ? { processingFeeMinor: rec.processingFeeMinor } : {}),
       weightEach: w,
       needsPrice: !rec,
     });
@@ -813,6 +819,7 @@ export function computeAdventureProposal(
         quantity: 1,
         rateMinor: roll.priceMinor,
         costEach: roll.costMinor,
+        ...(roll.processingFeeMinor ? { processingFeeMinor: roll.processingFeeMinor } : {}),
         weightEach: roll.weightLbs,
         needsPrice: roll.missing.length > 0,
         components: roll.components.map((c) => ({
@@ -1013,6 +1020,8 @@ export function hardwareRollup(
   components: HardwareComponent[];
   priceMinor: number;
   costMinor: number;
+  /** Per-order processing fees of the kit's fasteners, charged once each (landedCost.ts). */
+  processingFeeMinor: number;
   weightLbs: number;
   missing: string[];
 } {
@@ -1021,6 +1030,7 @@ export function hardwareRollup(
   const skip = new Set(exclude || []);
   let priceMinor = 0,
     costMinor = 0,
+    processingFeeMinor = 0,
     weightLbs = 0;
   for (const h of hardwareBOM(a, rules, frameRules, hwQty)) {
     if (skip.has(h.part)) continue;
@@ -1031,6 +1041,8 @@ export function hardwareRollup(
     const wt = rec ? rec.weightLbs : 0;
     priceMinor += unitPriceMinor * h.qty;
     costMinor += unitCostMinor * h.qty;
+    // Once per fastener part, not per piece — the same rule a proposal line follows.
+    if (h.qty > 0 && rec?.processingFeeMinor) processingFeeMinor += rec.processingFeeMinor;
     weightLbs += wt * h.qty;
     components.push({
       part: h.part,
@@ -1048,6 +1060,7 @@ export function hardwareRollup(
     components,
     priceMinor,
     costMinor,
+    processingFeeMinor,
     weightLbs: Math.round(weightLbs * 100) / 100,
     missing,
   };

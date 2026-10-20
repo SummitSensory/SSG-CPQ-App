@@ -11,6 +11,7 @@ import { loadVendorIndex, resolveVendor } from '../catalog/partVendor.js';
 import { DEFAULT_HARDWARE_RULES } from '../proposals/hardwareRules.js';
 import { FORCED_HARDWARE } from '../handoff/bomRollup.js';
 import { HARDWARE, isHardwareHeading, normalizeHeading } from '../handoff/bomLayout.js';
+import { processingFeeOf } from '../catalog/landedCost.js';
 import {
   BOM_COLUMNS,
   BOM_COLUMN_LABELS_KEY,
@@ -29,13 +30,17 @@ import {
  *   * Sequence  (Sku.bomSortOrder) — where the part sits on its vendor's sheet.
  *   * Heading   (Sku.bomGroup)     — Hardware, the main list, or a heading they name.
  *   * BOM note  (Sku.bomNote)      — a standing instruction copied onto every order.
- *   * Routing   — the two existing ways a part reaches a vendor other than the one we
- *     buy it from (see bomBuild.ts): FREE ISSUE moves the line to the receiving
- *     vendor at $0; SECOND VENDOR adds a line on the second vendor's sheet at what
- *     they charge, leaving the purchase line where it is.
+ *   * Processing — the checkbox beside the part number. A part bought from its
+ *     Procurement Supplier (Amazon) and sent to a Processing Service Supplier
+ *     (Goldberg) prints on BOTH sheets: the purchase stays on the procurement
+ *     supplier's, and a line is added on the processing supplier's at their
+ *     Repackaging Service Fee (per unit or per order) under their Repackaging SKU.
+ *     See bomBuild.ts. The fee is also added to the part's cost on new proposals
+ *     (src/catalog/landedCost.ts), so cost of goods and margin include it.
  *
- * All of it is BOM configuration — none of it changes a proposal, a price, or an
- * accepted order's totals — so it is open to whoever runs the BOM (HANDOFF_MANAGE),
+ * None of it changes a price, an existing proposal or an accepted order's totals —
+ * the Repackaging Service Fee reaches only proposal lines added from now on, as the
+ * part's cost — so it is open to whoever runs the BOM (HANDOFF_MANAGE),
  * not only catalog admins. The one exception is saving a line's COST back to the
  * catalog, which moves every future proposal's margin and so still needs
  * PRODUCTS_ADMIN.
@@ -45,11 +50,25 @@ const PART = z.string().trim().min(1).max(80);
 const HEADING = z.union([z.string().trim().max(60), z.null()]);
 const VENDOR = z.union([z.string().trim().max(160), z.null()]);
 
+const FEE_BASIS = z.enum(['PER_UNIT', 'PER_ORDER']);
+const REPACKAGING_SKU = z.union([z.string().trim().max(80), z.null()]);
+
 const BulkSet = z
   .object({
-    freeIssueVendor: VENDOR.optional(),
+    /** The checkbox: this part goes through a Processing Service Supplier. */
+    processingEnabled: z.boolean().optional(),
+    /** The Processing Service Supplier. */
     secondaryVendor: VENDOR.optional(),
+    /** The Repackaging Service Fee. */
     secondaryVendorCostMinor: z.union([z.number().int().min(0), z.null()]).optional(),
+    processingFeeBasis: FEE_BASIS.optional(),
+    /** The Repackaging SKU. */
+    processingSku: REPACKAGING_SKU.optional(),
+    /**
+     * Clearing only: dismisses a retired "ships through" vendor the migration could not
+     * convert. Nothing can set one any more.
+     */
+    freeIssueVendor: z.null().optional(),
     bomGroup: HEADING.optional(),
     bomNote: z.union([z.string().trim().max(500), z.null()]).optional(),
     bomSortOrder: z.union([z.number().int().min(0).max(1_000_000), z.null()]).optional(),
@@ -91,15 +110,33 @@ const SaveDefaultBody = z.object({
 export const SHEET_COLUMNS = [
   'part',
   'description',
-  'vendor',
+  // Read-only on upload: who we buy it from is catalog data, set in the catalog.
+  'procurementSupplier',
+  'unitPurchaseCost',
   'bomSequence',
   'bomHeading',
   'bomNote',
-  'shipsThroughVendor',
-  'alsoOnVendor',
-  'alsoOnVendorCost',
+  'processing',
+  'processingSupplier',
+  'repackagingSku',
+  'repackagingFee',
+  'repackagingFeeBasis',
 ] as const;
 const MAIN_LIST = 'Main list';
+const PER_ORDER_TEXT = 'per order';
+const PER_UNIT_TEXT = 'per unit';
+
+/**
+ * Sheets downloaded before the processing-supplier columns still upload: the old
+ * "also on vendor" columns are the same fields under their old names, and an old
+ * "ships through" vendor becomes the processing supplier, which keeps the part on its
+ * purchase vendor's sheet as well.
+ */
+const LEGACY_COLUMNS: Record<string, string> = {
+  alsoOnVendor: 'processingSupplier',
+  alsoOnVendorCost: 'repackagingFee',
+  shipsThroughVendor: 'processingSupplier',
+};
 
 const ImportBody = z.object({
   rows: z.array(z.record(z.unknown())).min(1).max(5000),
@@ -112,6 +149,55 @@ const upper = (v: unknown): string =>
   String(v ?? '')
     .trim()
     .toUpperCase();
+
+/**
+ * Each part's Procurement Supplier and Unit Purchase Cost, resolved the way the Bill of
+ * Materials resolves them when an order is locked (service.ts resolveCatalogRefs,
+ * bomBuild.ts partInfo): Sku.manufacturer is the ordering override, then the
+ * product's primary sourcing; Sku.unitCostMinor, then the latest ProductCost. Showing
+ * Sku.manufacturer alone printed "—" for a part whose vendor is on its sourcing, which
+ * is not what its BOM line says.
+ */
+async function procurementFor(
+  skus: Array<{ part: string; manufacturer: string | null; unitCostMinor: number }>,
+): Promise<Map<string, { supplier: string | null; unitCostMinor: number }>> {
+  const products = await prisma.product.findMany({
+    where: { sku: { in: skus.map((s) => s.part), mode: 'insensitive' } },
+    select: {
+      id: true,
+      sku: true,
+      sourcing: {
+        select: { manufacturer: { select: { name: true } } },
+        orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }, { id: 'asc' }],
+        take: 1,
+      },
+    },
+  });
+  // Only parts whose Sku carries no cost need the dated history.
+  const skuCost = new Map(skus.map((s) => [upper(s.part), s.unitCostMinor]));
+  const needCost = products.filter((p) => !skuCost.get(upper(p.sku))).map((p) => p.id);
+  const latestCost = new Map<string, number>();
+  if (needCost.length)
+    for (const c of await prisma.productCost.findMany({
+      where: { productId: { in: needCost } },
+      select: { productId: true, unitCost: true },
+      orderBy: { effectiveDate: 'desc' },
+    }))
+      if (!latestCost.has(c.productId)) latestCost.set(c.productId, Number(c.unitCost));
+  const byPart = new Map(products.map((p) => [upper(p.sku), p]));
+  return new Map(
+    skus.map((s) => {
+      const p = byPart.get(upper(s.part));
+      return [
+        upper(s.part),
+        {
+          supplier: (s.manufacturer || '').trim() || p?.sourcing[0]?.manufacturer?.name || null,
+          unitCostMinor: s.unitCostMinor || (p ? (latestCost.get(p.id) ?? 0) : 0),
+        },
+      ];
+    }),
+  );
+}
 
 /** Every Sku row matching these part numbers, case-insensitively, keyed upper-case. */
 async function skusFor(parts: string[]) {
@@ -163,8 +249,11 @@ export function registerBomSetupRoutes(app: FastifyInstance): void {
           unitCostMinor: true,
           active: true,
           freeIssueVendor: true,
+          processingEnabled: true,
           secondaryVendor: true,
           secondaryVendorCostMinor: true,
+          processingFeeBasis: true,
+          processingSku: true,
           bomSortOrder: true,
           bomGroup: true,
           bomNote: true,
@@ -174,12 +263,28 @@ export function registerBomSetupRoutes(app: FastifyInstance): void {
     ]);
     const kitParts = new Set(DEFAULT_HARDWARE_RULES.map((r) => upper(r.part)));
     const ruleParts = new Set(rules.map((r) => upper(r.part)));
+    const procurement = await procurementFor(skus);
     return {
       parts: skus.map((s) => {
         const k = upper(s.part);
         // What "Automatic" resolves to for this part, so the screen can show it.
         const autoHardware = kitParts.has(k) || ruleParts.has(k) || FORCED_HARDWARE.has(k);
-        return { ...s, autoHeading: autoHardware ? HARDWARE : '' };
+        const proc = procurement.get(k);
+        const fee = processingFeeOf(s);
+        const { freeIssueVendor, ...rest } = s;
+        return {
+          ...rest,
+          autoHeading: autoHardware ? HARDWARE : '',
+          procurementSupplier: proc?.supplier ?? null,
+          unitPurchaseCostMinor: proc?.unitCostMinor ?? s.unitCostMinor,
+          // What a NEW proposal line will carry as this part's cost (landedCost.ts).
+          proposalUnitCostMinor: (proc?.unitCostMinor ?? s.unitCostMinor) + fee.perUnitMinor,
+          proposalPerOrderFeeMinor: fee.perOrderMinor,
+          // A retired "ships through" vendor migration 0120 could not convert, because
+          // the part already named a different processing supplier. Nothing routes on
+          // it; it is shown so somebody decides, then cleared.
+          legacyShipsThrough: (freeIssueVendor || '').trim() || null,
+        };
       }),
     };
   });
@@ -197,25 +302,25 @@ export function registerBomSetupRoutes(app: FastifyInstance): void {
     if (!Object.keys(set).length) throw new ValidationError('Nothing to change.');
 
     const data: Record<string, unknown> = {};
-    if (set.freeIssueVendor !== undefined || set.secondaryVendor !== undefined) {
-      const index = await loadVendorIndex(prisma);
-      for (const f of ['freeIssueVendor', 'secondaryVendor'] as const) {
-        const typed = set[f];
-        if (typed === undefined) continue;
-        if (!typed) {
-          data[f] = null;
-          continue;
-        }
-        const v = resolveVendor(index, typed);
+    if (set.secondaryVendor !== undefined) {
+      const typed = set.secondaryVendor;
+      if (!typed) data.secondaryVendor = null;
+      else {
+        const v = resolveVendor(await loadVendorIndex(prisma), typed);
         if (!v)
           throw new ValidationError(
             `“${typed}” is not a manufacturer on record. Add it under Catalog → Manufacturers first.`,
           );
-        data[f] = v.name;
+        data.secondaryVendor = v.name;
       }
     }
+    if (set.processingEnabled !== undefined) data.processingEnabled = set.processingEnabled;
     if (set.secondaryVendorCostMinor !== undefined)
       data.secondaryVendorCostMinor = set.secondaryVendorCostMinor;
+    if (set.processingFeeBasis !== undefined) data.processingFeeBasis = set.processingFeeBasis;
+    if (set.processingSku !== undefined)
+      data.processingSku = (set.processingSku ?? '').trim() || null;
+    if (set.freeIssueVendor !== undefined) data.freeIssueVendor = null;
     if (set.bomGroup !== undefined) data.bomGroup = normalizeHeading(set.bomGroup);
     if (set.bomNote !== undefined) data.bomNote = (set.bomNote ?? '').trim() || null;
     if (set.bomSortOrder !== undefined) data.bomSortOrder = set.bomSortOrder;
@@ -226,14 +331,18 @@ export function registerBomSetupRoutes(app: FastifyInstance): void {
       part: p,
       reason: 'Not in the SKU master',
     }));
+    const procurement = await procurementFor([...found.values()]);
     let updated = 0;
     for (const sku of found.values()) {
-      // A part routed to the vendor it is already bought from would print twice on one
-      // sheet (second vendor) or be "free issue" to the vendor billing for it.
-      const own = (sku.manufacturer ?? '').toLowerCase();
-      const target = ((data.freeIssueVendor ?? data.secondaryVendor ?? '') as string).toLowerCase();
+      // A part processed by the supplier it is bought from would print twice on that
+      // one sheet — the purchase and the fee for the same units.
+      const own = (procurement.get(upper(sku.part))?.supplier ?? '').toLowerCase();
+      const target = String(data.secondaryVendor ?? '').toLowerCase();
       if (target && own && target === own) {
-        skipped.push({ part: sku.part, reason: `Already bought from ${sku.manufacturer}` });
+        skipped.push({
+          part: sku.part,
+          reason: `Already bought from ${procurement.get(upper(sku.part))?.supplier}`,
+        });
         continue;
       }
       await updateSku(sku, data, req.user!.sub, 'BOM setup (bulk)');
@@ -293,20 +402,28 @@ export function registerBomSetupRoutes(app: FastifyInstance): void {
     const skus = await prisma.sku.findMany({
       orderBy: [{ manufacturer: 'asc' }, { bomSortOrder: 'asc' }, { part: 'asc' }],
     });
+    const procurement = await procurementFor(skus);
     return {
       columns: SHEET_COLUMNS,
-      items: skus.map((s) => ({
-        part: s.part,
-        description: s.description,
-        vendor: s.manufacturer ?? '',
-        bomSequence: s.bomSortOrder ?? '',
-        bomHeading: s.bomGroup === null ? '' : s.bomGroup === '' ? MAIN_LIST : s.bomGroup,
-        bomNote: s.bomNote ?? '',
-        shipsThroughVendor: s.freeIssueVendor ?? '',
-        alsoOnVendor: s.secondaryVendor ?? '',
-        alsoOnVendorCost:
-          s.secondaryVendorCostMinor == null ? '' : (s.secondaryVendorCostMinor / 100).toFixed(2),
-      })),
+      items: skus.map((s) => {
+        const proc = procurement.get(upper(s.part));
+        return {
+          part: s.part,
+          description: s.description,
+          procurementSupplier: proc?.supplier ?? '',
+          unitPurchaseCost: ((proc?.unitCostMinor ?? s.unitCostMinor) / 100).toFixed(2),
+          bomSequence: s.bomSortOrder ?? '',
+          bomHeading: s.bomGroup === null ? '' : s.bomGroup === '' ? MAIN_LIST : s.bomGroup,
+          bomNote: s.bomNote ?? '',
+          processing: s.processingEnabled ? 'Yes' : 'No',
+          processingSupplier: s.secondaryVendor ?? '',
+          repackagingSku: s.processingSku ?? '',
+          repackagingFee:
+            s.secondaryVendorCostMinor == null ? '' : (s.secondaryVendorCostMinor / 100).toFixed(2),
+          repackagingFeeBasis:
+            s.processingFeeBasis === 'PER_ORDER' ? PER_ORDER_TEXT : PER_UNIT_TEXT,
+        };
+      }),
     };
   });
 
@@ -320,6 +437,7 @@ export function registerBomSetupRoutes(app: FastifyInstance): void {
     const { rows, dryRun } = parsed.data;
     const index = await loadVendorIndex(prisma);
     const found = await skusFor(rows.map((r) => String(r.part ?? '')).filter(Boolean));
+    const procurement = await procurementFor([...found.values()]);
     const has = (r: Record<string, unknown>, k: string) =>
       Object.prototype.hasOwnProperty.call(r, k) && r[k] !== undefined;
     const str = (v: unknown) => String(v ?? '').trim();
@@ -331,8 +449,31 @@ export function registerBomSetupRoutes(app: FastifyInstance): void {
       data: Record<string, unknown>;
     }> = [];
 
-    rows.forEach((r, i) => {
+    rows.forEach((raw, i) => {
       const row = i + 2; // header is row 1 in the spreadsheet
+      // An older sheet's column names, read as the new ones they became. A new column
+      // in the same file wins; a blank legacy "ships through" never clears anything.
+      const r: Record<string, unknown> = { ...raw };
+      for (const [old, now] of Object.entries(LEGACY_COLUMNS)) {
+        if (!has(raw, old) || has(r, now)) continue;
+        if (old === 'shipsThroughVendor' && !String(raw[old] ?? '').trim()) continue;
+        // An old export wrote every column on every row: a free-issue part reads
+        // alsoOnVendor "" beside its ship-through vendor. That blank is not a choice to
+        // clear the supplier; the ship-through vendor below is the one to take.
+        if (
+          old === 'alsoOnVendor' &&
+          !String(raw[old] ?? '').trim() &&
+          String(raw.shipsThroughVendor ?? '').trim()
+        )
+          continue;
+        r[now] = raw[old];
+        if (
+          now === 'processingSupplier' &&
+          !has(raw, 'processing') &&
+          String(raw[old] ?? '').trim()
+        )
+          r.processing = 'Yes';
+      }
       const part = str(r.part);
       if (!part) return;
       const sku = found.get(upper(part));
@@ -358,27 +499,44 @@ export function registerBomSetupRoutes(app: FastifyInstance): void {
             : v.slice(0, 60);
       }
       if (has(r, 'bomNote')) data.bomNote = str(r.bomNote).slice(0, 500) || null;
-      for (const [col, field] of [
-        ['shipsThroughVendor', 'freeIssueVendor'],
-        ['alsoOnVendor', 'secondaryVendor'],
-      ] as const) {
-        if (!has(r, col)) continue;
-        const v = str(r[col]);
-        if (!v) {
-          data[field] = null;
-          continue;
-        }
-        const vendor = resolveVendor(index, v);
-        if (!vendor) bad(`${col} “${v}” is not a manufacturer on record`);
-        else if (vendor.name.toLowerCase() === (sku.manufacturer ?? '').toLowerCase())
-          bad(`${col} is the vendor it is already bought from`);
-        else data[field] = vendor.name;
+      if (has(r, 'processing')) {
+        const v = str(r.processing).toLowerCase();
+        if (['yes', 'y', 'true', '1', 'x'].includes(v)) data.processingEnabled = true;
+        else if (['', 'no', 'n', 'false', '0'].includes(v)) data.processingEnabled = false;
+        else bad('processing must be Yes or No');
       }
-      if (has(r, 'alsoOnVendorCost')) {
-        const v = str(r.alsoOnVendorCost).replace(/[$,s]/g, '');
+      if (has(r, 'processingSupplier')) {
+        const v = str(r.processingSupplier);
+        const own = (procurement.get(upper(sku.part))?.supplier ?? '').toLowerCase();
+        const vendor = v ? resolveVendor(index, v) : null;
+        if (!v) data.secondaryVendor = null;
+        else if (!vendor) bad(`processingSupplier “${v}” is not a manufacturer on record`);
+        else if (own && vendor.name.toLowerCase() === own)
+          bad('processingSupplier is the procurement supplier it is already bought from');
+        else data.secondaryVendor = vendor.name;
+      }
+      if (has(r, 'repackagingSku')) data.processingSku = str(r.repackagingSku).slice(0, 80) || null;
+      if (has(r, 'repackagingFee')) {
+        const v = str(r.repackagingFee).replace(/[$,\s]/g, '');
         const n = Number(v);
-        if (v && (!Number.isFinite(n) || n < 0)) bad('alsoOnVendorCost must be a dollar amount');
+        if (v && (!Number.isFinite(n) || n < 0)) bad('repackagingFee must be a dollar amount');
         else data.secondaryVendorCostMinor = v ? Math.round(n * 100) : null;
+      }
+      if (has(r, 'repackagingFeeBasis')) {
+        const v = str(r.repackagingFeeBasis)
+          .toLowerCase()
+          .replace(/[\s_-]+/g, ' ');
+        if (!v || v === PER_UNIT_TEXT || v === 'unit') data.processingFeeBasis = 'PER_UNIT';
+        else if (v === PER_ORDER_TEXT || v === 'order') data.processingFeeBasis = 'PER_ORDER';
+        else bad('repackagingFeeBasis must be "per unit" or "per order"');
+      }
+      // Ticked with no supplier routes nothing — said now, not found on an order.
+      const willProcess = data.processingEnabled ?? sku.processingEnabled;
+      const willSupplier =
+        data.secondaryVendor !== undefined ? data.secondaryVendor : sku.secondaryVendor;
+      if (willProcess && !willSupplier && data.processingEnabled) {
+        bad('processing is Yes but no processingSupplier is given');
+        delete data.processingEnabled;
       }
 
       // Only what actually differs, so the preview lists real changes, not every row.
@@ -631,8 +789,11 @@ export function registerBomSetupRoutes(app: FastifyInstance): void {
     if (fields.has('unitCost')) {
       if (line.unitCostMinor == null) throw new ValidationError('This line has no cost to save.');
       if (line.secondaryOfSku) {
+        // The line's fee basis travels with its figure: a per-order fee saved as a
+        // per-unit one would multiply it on every future order.
         data.secondaryVendorCostMinor = line.unitCostMinor;
-        saved.push(`${vendorOf(line.vendor)}’s charge`);
+        data.processingFeeBasis = line.costPerOrder ? 'PER_ORDER' : 'PER_UNIT';
+        saved.push(`${vendorOf(line.vendor)}’s Repackaging Service Fee`);
       } else {
         if (!can(req.user!.role, Permission.PRODUCTS_ADMIN))
           throw new ForbiddenError(

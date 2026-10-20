@@ -5,6 +5,7 @@ import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import { recordAudit } from '../lib/audit.js';
 import { ValidationError, ConflictError, NotFoundError } from '../lib/errors.js';
+import { PROCESSING_COST_SELECT, processingFeeOf } from '../catalog/landedCost.js';
 import { recordRevision } from '../lib/revisions.js';
 
 /**
@@ -109,15 +110,24 @@ export function registerBundleRoutes(app: FastifyInstance): void {
     const skus = parts.length
       ? await prisma.sku.findMany({
           where: { part: { in: parts } },
-          select: { part: true, unitPriceMinor: true, unitCostMinor: true, weightLbs: true },
+          select: {
+            part: true,
+            unitPriceMinor: true,
+            unitCostMinor: true,
+            weightLbs: true,
+            ...PROCESSING_COST_SELECT,
+          },
         })
       : [];
+    // Cost includes a component's processing-supplier fee, as every catalog cost a
+    // proposal line takes does (catalog/landedCost.ts).
+    const feeOf = new Map(skus.map((s) => [s.part, processingFeeOf(s)]));
     const priced = new Map(
       skus.map((s) => [
         s.part,
         {
           unitPriceMinor: s.unitPriceMinor,
-          unitCostMinor: s.unitCostMinor,
+          unitCostMinor: s.unitCostMinor + (feeOf.get(s.part)?.perUnitMinor ?? 0),
           weightLbs: Number(s.weightLbs),
         },
       ]),
@@ -135,6 +145,7 @@ export function registerBundleRoutes(app: FastifyInstance): void {
           quantity: r.quantity,
           unitPriceMinor: p?.unitPriceMinor ?? 0,
           unitCostMinor: p?.unitCostMinor ?? 0,
+          processingFeeMinor: feeOf.get(r.child.sku)?.perOrderMinor ?? 0,
           weightLbs: p?.weightLbs ?? 0,
           extendedPriceMinor: (p?.unitPriceMinor ?? 0) * r.quantity,
         };

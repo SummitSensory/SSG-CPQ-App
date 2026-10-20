@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { prisma } from '../lib/prisma.js';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
+import { PROCESSING_COST_SELECT, processingFeeOf } from '../catalog/landedCost.js';
 import {
   computeSoarProposal,
   SOAR_FRAMES,
@@ -32,6 +33,8 @@ export function registerSoarRoutes(app: FastifyInstance): void {
           unitCostMinor: true,
           weightLbs: true,
           category: true,
+          // The processing supplier's fee belongs in the part's cost (landedCost.ts).
+          ...PROCESSING_COST_SELECT,
         },
       }),
       prisma.product.findMany({ select: { id: true, sku: true, name: true, weightOz: true } }),
@@ -55,11 +58,14 @@ export function registerSoarRoutes(app: FastifyInstance): void {
     }
     for (const r of rows) {
       const prev = map[r.part];
+      const fee = processingFeeOf(r);
       map[r.part] = {
         part: r.part,
         description: r.description,
         unitPriceMinor: r.unitPriceMinor,
-        unitCostMinor: r.unitCostMinor || (prev ? prev.unitCostMinor : 0),
+        unitCostMinor:
+          (r.unitCostMinor || (prev ? (prev.unitCostMinor ?? 0) : 0)) + fee.perUnitMinor,
+        ...(fee.perOrderMinor ? { processingFeeMinor: fee.perOrderMinor } : {}),
         weightLbs: r.weightLbs || (prev ? prev.weightLbs : 0),
         category: r.category,
       };

@@ -800,7 +800,7 @@
           title: t,
           sections: [{ id: 'meta', type: 'CUSTOMER_INFO', title: 'Proposal', order: 0, enabled: true, data: meta }],
           items: lines.map(function (l, i) {
-            return { ref: l.ref, lineType: l.lineType, kind: l.kind, productId: l.productId, sku: l.sku || '', name: l.name, description: l.description, internalNote: l.internalNote || '', components: l.components || null, source: l.source || '', freightTbd: !!l.freightTbd, quantity: Number(l.quantity) || 0, rateMinor: Number(l.rateMinor) || 0, costEach: Number(l.costEach) || 0, weightEach: Number(l.weightEach) || 0, group: l.group || '', optional: !!l.optional, delivery: l.delivery || '', returnable: l.returnable || '', addlFreight: l.addlFreight || '', freightCalc: l.freightCalc || '', tpFreightMinor: Number(l.tpFreightMinor) || 0, tpFreightLabel: l.tpFreightLabel || '', order: i };
+            return { ref: l.ref, lineType: l.lineType, kind: l.kind, productId: l.productId, sku: l.sku || '', name: l.name, description: l.description, internalNote: l.internalNote || '', components: l.components || null, source: l.source || '', freightTbd: !!l.freightTbd, quantity: Number(l.quantity) || 0, rateMinor: Number(l.rateMinor) || 0, costEach: Number(l.costEach) || 0, processingFeeMinor: Number(l.processingFeeMinor) || 0, weightEach: Number(l.weightEach) || 0, group: l.group || '', optional: !!l.optional, delivery: l.delivery || '', returnable: l.returnable || '', addlFreight: l.addlFreight || '', freightCalc: l.freightCalc || '', tpFreightMinor: Number(l.tpFreightMinor) || 0, tpFreightLabel: l.tpFreightLabel || '', order: i };
           }),
           expirationDate: meta.expiration || undefined,
         };
@@ -4180,6 +4180,8 @@
       kit.components = d.components;
       kit.rateMinor = d.priceMinor;
       kit.costEach = d.costMinor;
+      // Fasteners with a per-order processing fee: counted once, beside the kit cost.
+      kit.processingFeeMinor = Number(d.processingFeeMinor) || 0;
       kit.weightEach = d.weightLbs;
       // Only the summary form is rewritten; an itemised description was chosen
       // deliberately and is left for the configurator to regenerate.
@@ -4218,7 +4220,7 @@
     return {
       ref: it.ref || uid(), lineType: it.lineType || (it.isNote ? 'NOTE' : 'PRODUCT'), kind: it.kind || 'INCLUDED',
       productId: it.productId || null, sku: it.sku || '', name: it.name || '', description: desc,
-      quantity: it.quantity == null ? (missingQty == null ? 1 : missingQty) : it.quantity, rateMinor: it.rateMinor || 0, costEach: it.costEach || 0, weightEach: it.weightEach || 0, group: it.group || '',
+      quantity: it.quantity == null ? (missingQty == null ? 1 : missingQty) : it.quantity, rateMinor: it.rateMinor || 0, costEach: it.costEach || 0, processingFeeMinor: it.processingFeeMinor || 0, weightEach: it.weightEach || 0, group: it.group || '',
       optional: !!it.optional,
       delivery: it.delivery || '', returnable: it.returnable || '', addlFreight: it.addlFreight || '', freightCalc: it.freightCalc || '',
       tpFreightMinor: it.tpFreightMinor || 0, tpFreightLabel: it.tpFreightLabel || '',
@@ -4401,9 +4403,23 @@
     // put on the line is deliberate and is never overwritten here.
     if (!(Number(line.rateMinor) || 0) && d.priceMinor) line.rateMinor = d.priceMinor;
     if (!(Number(line.costEach) || 0) && d.costMinor) line.costEach = d.costMinor;
+    // A processing supplier's per-order Repackaging Service Fee is cost the line
+    // carries once, whatever its quantity (a per-unit fee is already in costMinor).
+    // Snapshotted like the cost: only a line that has never had one takes it.
+    if (line.processingFeeMinor == null && d.processingFeeMinor) line.processingFeeMinor = d.processingFeeMinor;
     if (!(Number(line.weightEach) || 0) && d.weightLbs) line.weightEach = d.weightLbs;
     if (d.freightTbd) line.freightTbd = true;
     return line;
+  }
+
+  /**
+   * One product line's cost of goods: quantity × cost each, plus a per-order
+   * processing fee once while the line has any quantity. The browser twin of
+   * lineCostMinor in src/proposals/analytics.ts — keep the two in step.
+   */
+  function lineCogs(l) {
+    var q = Number(l.quantity) || 0;
+    return q * (Number(l.costEach) || 0) + (q > 0 ? (Number(l.processingFeeMinor) || 0) : 0);
   }
 
   /**
@@ -5108,7 +5124,10 @@
     stale.forEach(function (l) {
       var d = itemDefaults[l.sku], bits = [];
       if (!(Number(l.rateMinor) || 0) && d.priceMinor) { l.rateMinor = d.priceMinor; bits.push('rate'); }
-      if (!(Number(l.costEach) || 0) && d.costMinor) { l.costEach = d.costMinor; bits.push('cost'); }
+      if (!(Number(l.costEach) || 0) && d.costMinor) {
+        l.costEach = d.costMinor; bits.push('cost');
+        if (!(Number(l.processingFeeMinor) || 0) && d.processingFeeMinor) l.processingFeeMinor = d.processingFeeMinor;
+      }
       if (!(Number(l.weightEach) || 0) && d.weightLbs) { l.weightEach = d.weightLbs; bits.push('weight'); }
       if (bits.length) changed.push(l.sku + ' (' + bits.join(', ') + ')');
     });
@@ -5242,7 +5261,7 @@
       if (l.lineType === 'GROUP') { cur = { name: l.name, optional: l.optional, subtotal: 0, cogs: 0 }; groups.push(cur); return; }
       if (l.lineType === 'PRODUCT') {
         var amt = counted[i];
-        var cst = (Number(l.quantity) || 0) * (Number(l.costEach) || 0);
+        var cst = lineCogs(l);
         var tp = Number(l.tpFreightMinor) || 0;
         subtotal += amt; tpFreight += tp; cogs += cst;
         // A line with no weight on record counts as 0 lb — blanks in the catalog
@@ -5281,7 +5300,7 @@
       if (l.lineType === 'SUBGROUP') { curSubIdx = i; map[i] = { rev: 0, cogs: 0 }; return; }
       if (l.lineType === 'PRODUCT') {
         var rev = (Number(l.quantity) || 0) * (Number(l.rateMinor) || 0) + (Number(l.tpFreightMinor) || 0);
-        var cogs = (Number(l.quantity) || 0) * (Number(l.costEach) || 0);
+        var cogs = lineCogs(l);
         if (curIdx != null) { map[curIdx].rev += rev; map[curIdx].cogs += cogs; }
         if (curSubIdx != null) { map[curSubIdx].rev += rev; map[curSubIdx].cogs += cogs; }
       }
@@ -7570,7 +7589,7 @@
         '</div>' +
         '<div style="display:flex;flex-direction:column;gap:5px;width:74px;flex:0 0 auto;"><label style="font-size:10px;color:#20241f;text-transform:uppercase;">Qty</label><input class="bF" data-i="' + i + '" data-k="quantity" value="' + esc(l.quantity) + '" style="width:100%;padding:6px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;"></div>' +
         '<div style="display:flex;flex-direction:column;gap:5px;width:104px;flex:0 0 auto;"><label style="font-size:10px;color:#20241f;text-transform:uppercase;">Rate</label><input class="bF" data-i="' + i + '" data-k="rate" value="' + m2d(l.rateMinor) + '" style="width:100%;padding:6px 8px;border:1px solid #dcded7;border-radius:7px;text-align:right;"></div>' +
-        (isMock() ? '' : '<div style="display:flex;flex-direction:column;gap:5px;width:96px;flex:0 0 auto;"><label style="font-size:10px;color:#20241f;text-transform:uppercase;" title="Internal only — never printed">Cost</label><input class="bF" data-i="' + i + '" data-k="cost" value="' + m2d(l.costEach) + '" style="width:100%;padding:6px 8px;border:1px solid #e4dfd0;background:#fdfcf7;border-radius:7px;text-align:right;"></div>') +
+        (isMock() ? '' : '<div style="display:flex;flex-direction:column;gap:5px;width:96px;flex:0 0 auto;"><label style="font-size:10px;color:#20241f;text-transform:uppercase;" title="Internal only — never printed">Cost</label><input class="bF" data-i="' + i + '" data-k="cost" value="' + m2d(l.costEach) + '" style="width:100%;padding:6px 8px;border:1px solid #e4dfd0;background:#fdfcf7;border-radius:7px;text-align:right;">' + ((Number(l.processingFeeMinor) || 0) ? '<div class="muted" style="font-size:10.5px;line-height:1.3;" title="Repackaging Service Fee charged once for this line by the processing service supplier — counted in cost of goods, never in price">+ ' + fmtMoney(Number(l.processingFeeMinor), 'USD') + ' repack fee / order</div>' : '') + '</div>') +
         '<div style="width:96px;flex:0 0 auto;text-align:right;padding-top:20px;font-weight:600;font-size:14px;">' + fmtMoney(amt, 'USD') + '</div>' + del +
       '</div></div>';
   }
@@ -8274,7 +8293,7 @@
           var parent = applyItemDefaults({ ref: uid(), lineType: 'PRODUCT', kind: 'INCLUDED', productId: bn.id, sku: bn.sku || '', name: bn.name, description: bn.proposalDescription || '', quantity: 1, rateMinor: bn.unitPriceMinor || 0, costEach: 0, weightEach: 0, group: bn.name });
           var at = insertLineInOrder(parent);
           (bn.components || []).forEach(function (c, idx) {
-            pb.lines.splice(at + 1 + idx, 0, applyItemDefaults({ ref: uid(), lineType: 'PRODUCT', kind: 'INCLUDED', productId: c.productId, sku: c.sku || '', name: '— ' + c.name, description: '', quantity: c.quantity || 1, rateMinor: 0, costEach: c.unitCostMinor || 0, weightEach: c.weightLbs || 0, group: bn.name }));
+            pb.lines.splice(at + 1 + idx, 0, applyItemDefaults({ ref: uid(), lineType: 'PRODUCT', kind: 'INCLUDED', productId: c.productId, sku: c.sku || '', name: '— ' + c.name, description: '', quantity: c.quantity || 1, rateMinor: 0, costEach: c.unitCostMinor || 0, processingFeeMinor: c.processingFeeMinor || undefined, weightEach: c.weightLbs || 0, group: bn.name }));
           });
           closeForm(); renderBuilder();
         });
@@ -8324,7 +8343,7 @@
   /** The version payload, shared by the Save button and the quiet save below. */
   function builderVersionPayload() {
     var sections = [{ id: 'meta', type: 'CUSTOMER_INFO', title: 'Proposal', order: 0, enabled: true, data: pb.meta }];
-    var items = pb.lines.map(function (l, i) { return { ref: l.ref, lineType: l.lineType, kind: l.kind, productId: l.productId, sku: l.sku || '', name: l.name, description: l.description, internalNote: l.internalNote || '', components: l.components || null, source: l.source || '', freightTbd: !!l.freightTbd, quantity: Number(l.quantity) || 0, rateMinor: Number(l.rateMinor) || 0, costEach: Number(l.costEach) || 0, weightEach: Number(l.weightEach) || 0, group: l.group || '', optional: !!l.optional, delivery: l.delivery || '', returnable: l.returnable || '', addlFreight: l.addlFreight || '', freightCalc: l.freightCalc || '', tpFreightMinor: Number(l.tpFreightMinor) || 0, tpFreightLabel: l.tpFreightLabel || '', order: i }; });
+    var items = pb.lines.map(function (l, i) { return { ref: l.ref, lineType: l.lineType, kind: l.kind, productId: l.productId, sku: l.sku || '', name: l.name, description: l.description, internalNote: l.internalNote || '', components: l.components || null, source: l.source || '', freightTbd: !!l.freightTbd, quantity: Number(l.quantity) || 0, rateMinor: Number(l.rateMinor) || 0, costEach: Number(l.costEach) || 0, processingFeeMinor: Number(l.processingFeeMinor) || 0, weightEach: Number(l.weightEach) || 0, group: l.group || '', optional: !!l.optional, delivery: l.delivery || '', returnable: l.returnable || '', addlFreight: l.addlFreight || '', freightCalc: l.freightCalc || '', tpFreightMinor: Number(l.tpFreightMinor) || 0, tpFreightLabel: l.tpFreightLabel || '', order: i }; });
     return { title: pb.title || undefined, sections: sections, items: items, expirationDate: pb.meta.expiration || undefined, expectedUpdatedAt: pb.updatedAt || undefined };
   }
 
@@ -10074,7 +10093,7 @@
       return normalizeLine({
         lineType: l.lineType, kind: l.lineType === 'GROUP' ? 'GROUP' : l.lineType === 'SUBGROUP' ? 'SUBGROUP' : l.lineType === 'NOTE' ? 'NOTE' : 'INCLUDED',
         name: l.name, sku: l.sku || '', description: l.description || '', quantity: l.quantity == null ? 0 : l.quantity,
-        rateMinor: l.rateMinor || 0, costEach: l.costEach || 0, weightEach: l.weightEach || 0, optional: !!l.optional,
+        rateMinor: l.rateMinor || 0, costEach: l.costEach || 0, processingFeeMinor: l.processingFeeMinor, weightEach: l.weightEach || 0, optional: !!l.optional,
         internalNote: l.internalNote || '', components: l.components || null, source: 'ADV',
       });
     });
@@ -10415,7 +10434,7 @@
         kind: l.lineType === 'GROUP' ? 'GROUP' : l.lineType === 'SUBGROUP' ? 'SUBGROUP' : l.lineType === 'NOTE' ? 'NOTE' : 'INCLUDED',
         name: l.name, sku: l.sku || '', description: l.description || '',
         quantity: l.quantity == null ? 0 : l.quantity, rateMinor: l.rateMinor || 0,
-        costEach: l.costEach || 0, weightEach: l.weightEach || 0, optional: !!l.optional,
+        costEach: l.costEach || 0, processingFeeMinor: l.processingFeeMinor, weightEach: l.weightEach || 0, optional: !!l.optional,
         internalNote: l.internalNote || '', components: l.components || null
       });
     });
@@ -11524,7 +11543,8 @@
   /** The per-unit difference across the line's quantity — the money at stake. */
   function invDelta(p) {
     if (!p) return null;
-    var qty = Number(p.quantity) || 0;
+    // A per-order processing fee is charged once for the line, not per unit.
+    var qty = p.costPerOrder ? ((Number(p.quantity) || 0) > 0 ? 1 : 0) : (Number(p.quantity) || 0);
     // Not billed is invoiced at nothing: the arithmetic is a full negative variance,
     // which is correct, even though it reads as a saving and rarely is one.
     if (p.invoiceNotBilled) {
@@ -12166,12 +12186,12 @@
     var line = (procData || []).filter(function (x) { return x.id === lineId; })[0];
     if (!line || !line.sku) return;
     // A part's catalog cost moves every future proposal's margin, so only a catalog
-    // admin is offered it. A second vendor's charge is BOM setup and open to all.
+    // admin is offered it. A processing supplier's fee is BOM setup and open to all.
     if (field === 'unitCostMinor' && !line.secondaryOfSku && !isSystemAdmin()) return;
     var map = { vendorNotes: 'vendorNotes', unitCostMinor: 'unitCost' };
     var what = field === 'vendorNotes'
       ? 'this note'
-      : (line.secondaryOfSku ? 'this charge from ' + (line.vendor || 'this vendor') : 'this cost');
+      : (line.secondaryOfSku ? 'this Repackaging Service Fee from ' + (line.vendor || 'this vendor') : 'this cost');
     var old = document.getElementById('bomFutureAsk');
     if (old) old.parentNode.removeChild(old);
     var bar = document.createElement('div');
@@ -12247,7 +12267,11 @@
       // Free issue: bought elsewhere, shipped here, already paid for. The row shows
       // what is arriving and no money, matching the sheet this vendor is sent.
       var free = !!p.freeIssue;
-      var ext = free ? 0 : (Number(p.unitCostMinor) || 0) * (Number(p.quantity) || 0);
+      // A processing line: the processing supplier's Repackaging Service Fee for a part
+      // bought from its Procurement Supplier. Per order = charged once for the line.
+      var processing = !!p.secondaryOfSku;
+      var perOrder = !!p.costPerOrder;
+      var ext = free ? 0 : (Number(p.unitCostMinor) || 0) * (perOrder ? ((Number(p.quantity) || 0) > 0 ? 1 : 0) : (Number(p.quantity) || 0));
       var buy = p.productUrl
         ? ' <a href="' + esc(p.productUrl) + '" target="_blank" rel="noopener" style="font-size:11.5px;margin-left:6px;">Buy ↗</a>' : '';
       var freeCell = '<span class="muted" title="Summit has already paid for this part. It prints on the vendor’s sheet with no cost and is left out of their total.">Free issue</span>';
@@ -12269,6 +12293,11 @@
             ? '<div style="margin-top:3px;"><span class="chip" style="font-size:10px;background:#eef0ea;color:#5c6157;">Free issue</span>' +
               '<span class="muted" style="font-size:11px;margin-left:6px;">Paid by Summit' +
               (p.purchaseVendor ? ' · bought from ' + esc(p.purchaseVendor) : '') + '</span></div>'
+            : '') +
+          (processing
+            ? '<div style="margin-top:3px;"><span class="chip" style="font-size:10px;background:#eaf1f6;color:#2f5674;" title="Bought from its Procurement Supplier and sent here to be repackaged. This line is the Repackaging Service Fee, not the part.">Repackaging service</span>' +
+              '<span class="muted" style="font-size:11px;margin-left:6px;">' + (perOrder ? 'Fee once per order' : 'Fee per unit') +
+              (p.purchaseVendor ? ' · part from ' + esc(p.purchaseVendor) : '') + '</span></div>'
             : '')) +
         td('<code style="font-size:12.5px;color:#4a4f47;">' + esc(p.sku || '—') + '</code>') +
         (showVendorPart ? td(p.vendorPart
@@ -12278,7 +12307,7 @@
         (showBag ? td(esc(p.packagingBag || '—')) : '') +
         (showColor ? td((p.paintGroup ? '<span class="chip" style="font-size:10.5px;margin-bottom:4px;display:inline-block;" title="Paint colour group">' + esc(p.paintGroup) + '</span> ' : '') + (edit ? colorCell(p, s.colorUsesBrand !== false) : esc(p.powderColor || '—'))) : '') +
         td(((Number(p.unitWeightLbs) || 0) * (Number(p.quantity) || 0)).toFixed(2)) +
-        td(free ? freeCell : costCell(p, edit)) +
+        td(free ? freeCell : costCell(p, edit) + (perOrder ? '<div class="muted" style="font-size:10.5px;margin-top:2px;">per order</div>' : '')) +
         td(free ? freeCell : money2(ext)) +
         td(free ? freeCell : invCell(p, edit)) +
         td(free ? '' : invDeltaCell(p)) +
@@ -13037,6 +13066,9 @@
         var r = await authed('/orders/procurement/' + lineId, { method: 'PATCH', body: body });
         el.style.borderColor = r.ok ? '#3f9d78' : '#c2452f';
         if (!r.ok) { await fail(r, 'Could not save the line'); reload(); return; }
+        // The processing supplier's line follows a quantity change; when its sheet is
+        // submitted it cannot, and the person who made the change is told.
+        if (f === 'quantity') { try { var saved = await r.clone().json(); if (saved && saved.processingWarning) alert(saved.processingWarning); } catch (e) {} }
         if (f === 'vendorNotes' || f === 'unitCostMinor') askBomFuture(lineId, f);
         // A quantity change moves the section totals and the edited badge, so the
         // panel is rebuilt from the server rather than patched in place. The
@@ -13138,7 +13170,7 @@
                 '<div class="muted" style="font-size:11.5px;">' + esc(r.sku || '\u2014') + ' \u00b7 ' +
                 esc(r.vendor) + ' \u00b7 qty ' + r.quantity +
                 (r.freeIssue ? ' \u00b7 free issue' : '') +
-                (r.secondaryVendor ? ' \u00b7 secondary vendor (catalog = what this vendor charges, not the part\u2019s own vendor cost)' : '') +
+                (r.secondaryVendor ? ' \u00b7 repackaging service (catalog = the processing supplier\u2019s Repackaging Service Fee, not the part\u2019s purchase cost)' : '') +
                 (r.blocked ? '<div style="color:#9c3327;">' + esc(r.blocked) + '</div>' : '') + '</div></td>' +
               '<td style="padding:7px 10px;text-align:right;font-variant-numeric:tabular-nums;">' + money(r.currentMinor) + '</td>' +
               '<td style="padding:7px 10px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600;">' + money(r.catalogMinor) + '</td>' +
@@ -13215,9 +13247,11 @@
       var said = [];
       if (d.exploded && d.exploded.length)
         said.push(d.exploded.length + ' part' + (d.exploded.length === 1 ? '' : 's') + ' expanded into ' + d.componentsAdded + ' component' + (d.componentsAdded === 1 ? '' : 's'));
-      if (d.redirected) said.push(d.redirected + ' free-issue line' + (d.redirected === 1 ? '' : 's') + ' moved to the receiving vendor');
       if (d.parentsRestored && d.parentsRestored.length) said.push(d.parentsRestored.join(', ') + ' put back beside ' + (d.parentsRestored.length === 1 ? 'its' : 'their') + ' components');
-      if (d.secondaryAdded) said.push(d.secondaryAdded + ' line' + (d.secondaryAdded === 1 ? '' : 's') + ' added to a second vendor’s sheet');
+      if (d.secondaryAdded) said.push(d.secondaryAdded + ' repackaging line' + (d.secondaryAdded === 1 ? '' : 's') + ' added to a processing service supplier’s sheet');
+      if (d.freeIssueRestored && d.freeIssueRestored.length) said.push('Back on their procurement supplier’s sheet (were free issue): ' + d.freeIssueRestored.join(', '));
+      if (d.secondaryTopUps && d.secondaryTopUps.length) said.push('Repackaging quantity raised to match what is bought: ' + d.secondaryTopUps.join(', '));
+      if (d.secondarySkipped && d.secondarySkipped.length) said.push('Not changed (sheet submitted — unlock it first): ' + d.secondarySkipped.join('; '));
       alert(said.length ? said.join('\n') + '.' : 'Nothing to change — this order already matches the rules in Catalog → BOM build.');
       refreshLines();
     });
@@ -13229,6 +13263,7 @@
         var r = await authed('/orders/procurement/' + bt.getAttribute('data-line-del'), { method: 'DELETE' });
         bt.disabled = false;
         if (!r.ok) return fail(r, 'Could not remove the line');
+        try { var gone = await r.json(); if (gone && gone.processingWarning) alert(gone.processingWarning); } catch (e) {}
         refreshLines();
       });
     });
@@ -13258,6 +13293,7 @@
             var r = await authed('/orders/' + order.id + '/procurement', { method: 'POST', body: body });
             if (!r.ok) { var m = ''; try { m = ((await r.json()) || {}).message || ''; } catch (e) {} return showErr(m || 'Could not add the part (' + r.status + ').'); }
             close();
+            try { var added = await r.json(); if (added && added.processingWarning) alert(added.processingWarning); } catch (e) {}
             refreshLines();
           });
 

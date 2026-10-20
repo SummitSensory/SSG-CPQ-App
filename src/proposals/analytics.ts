@@ -31,6 +31,12 @@ export interface RawItem {
   quantity?: number;
   rateMinor?: number;
   costEach?: number;
+  /**
+   * A processing supplier's Repackaging Service Fee charged once for the line rather
+   * than per unit, snapshotted when the part was added (catalog/landedCost.ts). Cost
+   * only — never price. A per-unit fee is already inside costEach.
+   */
+  processingFeeMinor?: number;
   weightEach?: number;
   tpFreightMinor?: number;
 }
@@ -256,6 +262,15 @@ export function countedRevenueByLine(lines: RawItem[]): number[] {
 }
 
 /**
+ * One product line's cost of goods: quantity × cost each, plus a per-order processing
+ * fee once — only while the line has any quantity, since a line at zero buys nothing.
+ */
+export function lineCostMinor(l: RawItem): number {
+  const qty = n(l.quantity);
+  return Math.round(qty * n(l.costEach)) + (qty > 0 ? Math.round(n(l.processingFeeMinor)) : 0);
+}
+
+/**
  * Mirrors the builder's math exactly so reports and the printed proposal agree.
  *
  * Every accumulation is rounded to a whole minor unit. Money here is an integer
@@ -279,7 +294,7 @@ export function versionTotals(items: unknown, sections: unknown): Totals {
   for (const l of lines) {
     if ((l.lineType || 'PRODUCT') !== 'PRODUCT') continue;
     const qty = n(l.quantity);
-    cogs += Math.round(qty * n(l.costEach));
+    cogs += lineCostMinor(l);
     weight += qty * n(l.weightEach);
     tpFreight += Math.round(n(l.tpFreightMinor));
   }

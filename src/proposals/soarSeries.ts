@@ -18,7 +18,10 @@ export interface SoarSkuRec {
   part: string;
   description: string;
   unitPriceMinor: number;
+  /** Unit Purchase Cost plus any per-unit Repackaging Service Fee (catalog/landedCost.ts). */
   unitCostMinor?: number;
+  /** A Repackaging Service Fee charged once per proposal line, not per unit. */
+  processingFeeMinor?: number;
   weightLbs: number;
   category?: string;
 }
@@ -133,6 +136,8 @@ export interface SoarPricedLine {
   quantity?: number;
   rateMinor?: number;
   costEach?: number;
+  /** A per-order Repackaging Service Fee, counted once in cost of goods (analytics.ts). */
+  processingFeeMinor?: number;
   weightEach?: number;
   needsPrice?: boolean;
 }
@@ -257,6 +262,7 @@ export function computeSoarProposal(
       quantity: qty,
       rateMinor: rec ? rec.unitPriceMinor : 0,
       costEach: rec ? (rec.unitCostMinor ?? 0) : 0,
+      ...(rec?.processingFeeMinor ? { processingFeeMinor: rec.processingFeeMinor } : {}),
       weightEach: w,
       needsPrice: !rec,
     });

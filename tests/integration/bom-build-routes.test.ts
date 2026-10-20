@@ -2,9 +2,10 @@ import { describe, it, expect, vi, beforeAll } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 
 /**
- * Permission gating and round-trip for the new "secondary vendor" fields on
- * PATCH /bom-build/settings/:part (see src/handoff/bomBuild.ts for what the rule
- * does to an order). PRODUCTS_ADMIN is granted to no role but SYSTEM_ADMIN — see
+ * Permission gating and the settings round-trip on PATCH /bom-build/settings/:part
+ * (see src/handoff/bomBuild.ts for what the rules do to an order). Routing a part to
+ * a second vendor moved to Catalog → BOM setup (the Processing Service Supplier), so
+ * this route now takes keepParentOnBom only and refuses the old routing fields. PRODUCTS_ADMIN is granted to no role but SYSTEM_ADMIN — see
  * src/authz/permissions.ts — so SALES_REP (which has CATALOG_READ via BASE) must be
  * able to read but never write. Prisma is a plain stub, not a mock library, matching
  * this repo's existing integration-test convention.
@@ -17,9 +18,11 @@ const SKUS = new Map<string, Record<string, unknown>>([
       part: 'ABC',
       description: 'Product A',
       keepParentOnBom: false,
-      freeIssueVendor: null,
+      processingEnabled: false,
       secondaryVendor: null,
       secondaryVendorCostMinor: null,
+      processingFeeBasis: 'PER_UNIT',
+      processingSku: null,
     },
   ],
 ]);
@@ -36,10 +39,13 @@ vi.mock('../../src/lib/prisma.js', () => ({
     },
     sku: {
       findUnique: async ({ where }: { where: { part: string } }) => SKUS.get(where.part) ?? null,
-      findMany: async () =>
-        [...SKUS.values()].filter(
-          (s) => s.secondaryVendor || s.freeIssueVendor || s.keepParentOnBom,
-        ),
+      findMany: async ({ where }: { where?: { part?: { in: string[] } } } = {}) => {
+        const inList = where?.part?.in;
+        if (inList) return [...SKUS.values()].filter((s) => inList.includes(String(s.part)));
+        return [...SKUS.values()].filter(
+          (s) => (s.processingEnabled && s.secondaryVendor) || s.keepParentOnBom,
+        );
+      },
       updateMany: async ({
         where,
         data,
@@ -76,6 +82,9 @@ vi.mock('../../src/lib/prisma.js', () => ({
         return { count: before - COMPONENTS.length };
       },
     },
+    product: { findMany: async () => [] },
+    productCost: { findMany: async () => [] },
+    productSourcing: { findMany: async () => [] },
     $transaction: async (ops: Promise<unknown>[]) => Promise.all(ops),
     manufacturer: {
       findFirst: async ({ where }: { where: { name: string } }) =>
@@ -143,60 +152,102 @@ describe('PATCH /bom-build/settings/:part — permissions', () => {
   });
 });
 
-describe('PATCH /bom-build/settings/:part — secondary vendor round-trip', () => {
-  it('saves and returns secondaryVendor and secondaryVendorCostMinor', async () => {
+describe('PATCH /bom-build/settings/:part — routing moved to BOM setup', () => {
+  it.each([
+    [{ secondaryVendor: 'Goldberg Brothers' }],
+    [{ secondaryVendorCostMinor: 750 }],
+    [{ freeIssueVendor: 'Goldberg Brothers' }],
+    [{ keepParentOnBom: true, secondaryVendor: '' }],
+  ])('refuses %o with a 400 pointing at Catalog → BOM setup', async (payload) => {
+    const app = await makeApp();
+    const admin = { authorization: 'Bearer ' + (await tokenFor('SYSTEM_ADMIN')) };
+    const before = { ...SKUS.get('ABC') };
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/bom-build/settings/ABC',
+      headers: admin,
+      payload,
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toContain('BOM setup');
+    expect(SKUS.get('ABC')).toEqual(before);
+    await app.close();
+  });
+
+  it('saves keepParentOnBom and returns the processing fields read-only', async () => {
     const app = await makeApp();
     const admin = { authorization: 'Bearer ' + (await tokenFor('SYSTEM_ADMIN')) };
     const res = await app.inject({
       method: 'PATCH',
       url: '/bom-build/settings/ABC',
       headers: admin,
-      payload: { secondaryVendor: 'Goldberg Brothers', secondaryVendorCostMinor: 750 },
+      payload: { keepParentOnBom: true },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({
-      secondaryVendor: 'Goldberg Brothers',
-      secondaryVendorCostMinor: 750,
+      part: 'ABC',
+      keepParentOnBom: true,
+      processingEnabled: false,
+      secondaryVendor: null,
     });
-    await app.close();
-  });
-
-  it('refuses a secondaryVendor that is not a manufacturer on record', async () => {
-    const app = await makeApp();
-    const admin = { authorization: 'Bearer ' + (await tokenFor('SYSTEM_ADMIN')) };
-    const res = await app.inject({
-      method: 'PATCH',
-      url: '/bom-build/settings/ABC',
-      headers: admin,
-      payload: { secondaryVendor: 'Not A Real Vendor' },
-    });
-    expect(res.statusCode).toBe(400);
-    await app.close();
-  });
-
-  it('clears secondaryVendor with an empty string', async () => {
-    const app = await makeApp();
-    const admin = { authorization: 'Bearer ' + (await tokenFor('SYSTEM_ADMIN')) };
     await app.inject({
       method: 'PATCH',
       url: '/bom-build/settings/ABC',
       headers: admin,
-      payload: { secondaryVendor: 'Goldberg Brothers' },
+      payload: { keepParentOnBom: false },
     });
+    await app.close();
+  });
+
+  it('rejects an unknown field (strict body)', async () => {
+    const app = await makeApp();
+    const admin = { authorization: 'Bearer ' + (await tokenFor('SYSTEM_ADMIN')) };
     const res = await app.inject({
       method: 'PATCH',
       url: '/bom-build/settings/ABC',
       headers: admin,
-      payload: { secondaryVendor: '' },
+      payload: { keepParentOnBom: true, bogus: 1 },
     });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+});
+
+describe('GET /bom-build — processing supplier shown for context', () => {
+  it('lists a processing part with its supplier, fee, basis and Repackaging SKU', async () => {
+    SKUS.set('PRC', {
+      part: 'PRC',
+      description: 'Processed part',
+      keepParentOnBom: false,
+      processingEnabled: true,
+      secondaryVendor: 'Goldberg Brothers',
+      secondaryVendorCostMinor: 2500,
+      processingFeeBasis: 'PER_ORDER',
+      processingSku: 'GB-RPK',
+    });
+    const app = await makeApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/bom-build',
+      headers: { authorization: 'Bearer ' + (await tokenFor('SALES_REP')) },
+    });
+    SKUS.delete('PRC');
     expect(res.statusCode).toBe(200);
-    expect(res.json().secondaryVendor).toBeNull();
+    const parents = (res.json() as { parents: Array<Record<string, unknown>> }).parents;
+    expect(parents.find((p) => p.parentPart === 'PRC')).toMatchObject({
+      name: 'Processed part',
+      processingVendor: 'Goldberg Brothers',
+      processingFeeMinor: 2500,
+      processingFeeBasis: 'PER_ORDER',
+      processingSku: 'GB-RPK',
+      components: [],
+    });
     await app.close();
   });
 });
 
 describe('DELETE /bom-build/rules/:part', () => {
-  it('removes every component and clears every setting, leaving the Sku itself', async () => {
+  it('removes every component and clears keep-parent, leaving the Sku and its processing setup', async () => {
     const app = await makeApp();
     const admin = { authorization: 'Bearer ' + (await tokenFor('SYSTEM_ADMIN')) };
     COMPONENTS.push(
@@ -208,12 +259,15 @@ describe('DELETE /bom-build/rules/:part', () => {
       method: 'PATCH',
       url: '/bom-build/settings/ABC',
       headers: admin,
-      payload: {
-        freeIssueVendor: 'Goldberg Brothers',
-        keepParentOnBom: true,
-        secondaryVendor: 'Amazon',
-        secondaryVendorCostMinor: 500,
-      },
+      payload: { keepParentOnBom: true },
+    });
+    expect(SKUS.get('ABC')?.keepParentOnBom).toBe(true);
+    // A processing-supplier setup belongs to BOM setup and survives the rule delete.
+    SKUS.set('ABC', {
+      ...SKUS.get('ABC'),
+      processingEnabled: true,
+      secondaryVendor: 'Amazon',
+      secondaryVendorCostMinor: 500,
     });
     const res = await app.inject({ method: 'DELETE', url: '/bom-build/rules/abc', headers: admin });
     expect(res.statusCode).toBe(204);
@@ -222,9 +276,9 @@ describe('DELETE /bom-build/rules/:part', () => {
       part: 'ABC',
       description: 'Product A',
       keepParentOnBom: false,
-      freeIssueVendor: null,
-      secondaryVendor: null,
-      secondaryVendorCostMinor: null,
+      processingEnabled: true,
+      secondaryVendor: 'Amazon',
+      secondaryVendorCostMinor: 500,
     });
     await app.close();
   });

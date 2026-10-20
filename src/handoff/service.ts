@@ -14,7 +14,8 @@ import {
   type AcceptedVersionLike,
   type PriceSnapshotLike,
 } from './lock.js';
-import { expandBomBuild } from './bomBuild.js';
+import { expandBomBuild, followPurchaseQuantity } from './bomBuild.js';
+import { costMultiplier } from './lineCost.js';
 import { withKitComponents } from './kitComponents.js';
 import { sellerCollectedCharges } from '../crossborder/sellerCharges.js';
 import { rollUpProcurementLines } from './bomRollup.js';
@@ -557,19 +558,20 @@ export async function createAcceptedOrder(
                   // hand edit can be badged and the original recovered. They are equal
                   // at creation by definition — nothing has edited the line yet.
                   quantityOriginal: p.quantity,
-                  // A free-issue part sits with the vendor RECEIVING it; who we bought it
-                  // from is kept so the sheet can say so. The cost stays on the line —
-                  // only the printed sheet and the section total suppress it.
+                  // A processing line sits with the PROCESSING supplier; the part's own
+                  // catalog vendor — its Procurement Supplier, whose purchase line is
+                  // created alongside this one — is kept so the sheet can say where the
+                  // part is coming from.
                   vendor: p.vendorOverride ?? ref.vendor,
-                  purchaseVendor: p.vendorOverride ? (p.purchaseVendor ?? ref.vendor) : null,
-                  freeIssue: !!p.freeIssue,
-                  // forcedUnitCostMinor wins unconditionally — set only by the
-                  // secondaryVendor rule, whose line's cost is what the SECOND vendor
-                  // charges, which has nothing to do with what the catalog resolves for
-                  // this part number's own (first) vendor. Every other seed shape leaves
-                  // it unset, so this changes nothing for kit components or free issue.
+                  purchaseVendor: p.secondaryOfSku ? ref.vendor : null,
+                  // forcedUnitCostMinor wins unconditionally — set only on a processing
+                  // line, whose cost is the processing supplier's Repackaging Service
+                  // Fee, which has nothing to do with what the catalog resolves for this
+                  // part's Procurement Supplier. Every other seed leaves it unset.
                   unitCostMinor:
                     p.forcedUnitCostMinor ?? ref.unitCostMinor ?? p.unitCostMinor ?? null,
+                  costPerOrder: !!p.costPerOrder,
+                  vendorPartNo: p.vendorPartNo ?? null,
                   unitWeightLbs: ref.unitWeightLbs ?? p.unitWeightLbs ?? null,
                   isHardwareComponent: !!p.isHardwareComponent,
                   kitSku: p.kitSku ?? null,
@@ -784,7 +786,13 @@ export async function getOrder(id: string) {
   const skus = parts.length
     ? await prisma.sku.findMany({
         where: { part: { in: parts } },
-        select: { part: true, productUrl: true, packagingBag: true, unitCostMinor: true },
+        select: {
+          part: true,
+          productUrl: true,
+          packagingBag: true,
+          unitCostMinor: true,
+          secondaryVendorCostMinor: true,
+        },
       })
     : [];
   const urlByPart = new Map(skus.map((s) => [s.part, s.productUrl]));
@@ -792,6 +800,8 @@ export async function getOrder(id: string) {
   // taken at acceptance and stays the number of record — this is only so the screen
   // can say the two have parted company, and offer to bring the line up to date.
   const catalogCostByPart = new Map(skus.map((s) => [s.part, s.unitCostMinor ?? null]));
+  // A processing line's catalog figure is the processing supplier's fee instead.
+  const catalogFeeByPart = new Map(skus.map((s) => [s.part, s.secondaryVendorCostMinor ?? null]));
   // Which paint colour group each part belongs to. The BOM asks for a brand and a
   // code per group, so the screen has to know which lines fall in which.
   const paintRows = parts.length
@@ -840,8 +850,12 @@ export async function getOrder(id: string) {
         ...p,
         productUrl: (p.sku && urlByPart.get(p.sku)) || null,
         packagingBag: (p.sku && bagByPart.get(p.sku)) || null,
-        vendorPart: vendorParts.get((p.vendor && p.vendor.trim()) || 'Unassigned vendor', p.sku),
-        catalogCostMinor: (p.sku && catalogCostByPart.get(p.sku)) ?? null,
+        // The Repackaging SKU snapshotted on a processing line wins over the mapping.
+        vendorPart:
+          (p.vendorPartNo && p.vendorPartNo.trim()) ||
+          vendorParts.get((p.vendor && p.vendor.trim()) || 'Unassigned vendor', p.sku),
+        catalogCostMinor:
+          (p.sku && (p.secondaryOfSku ? catalogFeeByPart : catalogCostByPart).get(p.sku)) ?? null,
         paintGroup: (p.sku && paintBySku.get(p.sku.toUpperCase())?.name) || null,
         paintGroupLabel: (p.sku && paintBySku.get(p.sku.toUpperCase())?.label) || null,
         quantityEditedBy: p.quantityEditedById
@@ -1243,13 +1257,26 @@ export async function upsertProcurementLine(
   userId: string,
 ) {
   await getOrder(orderId);
+  let existing: {
+    vendor: string | null;
+    sku: string | null;
+    quantity: number;
+    secondaryOfSku: string | null;
+    unitCostMinor: number | null;
+  } | null = null;
   if (input.id) {
     // An update must be to a line of THIS order, and the line's own section has to
     // be open too — otherwise changing the vendor would move a line off a submitted
     // sheet the vendor already has.
-    const existing = await prisma.procurementLine.findFirst({
+    existing = await prisma.procurementLine.findFirst({
       where: { id: input.id, orderId },
-      select: { vendor: true },
+      select: {
+        vendor: true,
+        sku: true,
+        quantity: true,
+        secondaryOfSku: true,
+        unitCostMinor: true,
+      },
     });
     if (!existing) throw new NotFoundError('Bill of Materials line not found on this order');
     await assertSectionOpen(orderId, existing.vendor);
@@ -1273,7 +1300,13 @@ export async function upsertProcurementLine(
     notes: input.notes ?? null,
     isException: input.isException ?? false,
     exceptionReason: input.exceptionReason ?? null,
-    unitCostMinor: input.unitCostMinor ?? ref.unitCostMinor ?? null,
+    // A processing line's cost is the processing supplier's fee, not the part's catalog
+    // cost, so an edit that does not name a cost keeps the one it has.
+    unitCostMinor:
+      input.unitCostMinor ??
+      (existing?.secondaryOfSku ? existing.unitCostMinor : null) ??
+      ref.unitCostMinor ??
+      null,
     unitWeightLbs: input.unitWeightLbs ?? ref.unitWeightLbs ?? null,
   };
   const line = input.id
@@ -1286,8 +1319,33 @@ export async function upsertProcurementLine(
     quantity: data.quantity,
     vendor: data.vendor,
   });
+  // A purchase line added or changed by hand carries its processing line with it, so
+  // a processing part never sits on its Procurement Supplier's sheet alone.
+  let processingWarning: string | null = null;
+  if (!existing?.secondaryOfSku) {
+    if (existing && (existing.sku || '').toUpperCase() !== (data.sku || '').toUpperCase()) {
+      processingWarning =
+        (await followPurchaseQuantity(orderId, existing.sku, -existing.quantity, existing.vendor))
+          .warning ?? processingWarning;
+      processingWarning =
+        (await followPurchaseQuantity(orderId, data.sku, data.quantity, data.vendor)).warning ??
+        processingWarning;
+    } else if (existing && (existing.vendor || '') !== (data.vendor || '')) {
+      // Moved to another vendor: out of the old vendor's count, into the new one's.
+      processingWarning =
+        (await followPurchaseQuantity(orderId, data.sku, -existing.quantity, existing.vendor))
+          .warning ?? processingWarning;
+      processingWarning =
+        (await followPurchaseQuantity(orderId, data.sku, data.quantity, data.vendor)).warning ??
+        processingWarning;
+    } else {
+      const delta = data.quantity - (existing?.quantity ?? 0);
+      processingWarning = (await followPurchaseQuantity(orderId, data.sku, delta, data.vendor))
+        .warning;
+    }
+  }
   await recomputeStatus(orderId, userId);
-  return line;
+  return processingWarning ? { ...line, processingWarning } : line;
 }
 
 /**
@@ -1311,8 +1369,17 @@ export async function deleteProcurementLine(lineId: string, userId: string) {
     quantity: existing.quantity,
     vendor: existing.vendor,
   });
+  // Not buying the part any more means the processing supplier is not receiving it.
+  const { warning } = existing.secondaryOfSku
+    ? { warning: null }
+    : await followPurchaseQuantity(
+        existing.orderId,
+        existing.sku,
+        -existing.quantity,
+        existing.vendor,
+      );
   await recomputeStatus(existing.orderId, userId);
-  return { ok: true };
+  return warning ? { ok: true, processingWarning: warning } : { ok: true };
 }
 
 /**
@@ -1525,10 +1592,21 @@ export async function patchProcurementLine(
             toMinor: patch.unitCostMinor ?? 0,
             extendedDeltaMinor:
               ((patch.unitCostMinor ?? 0) - (existing.unitCostMinor ?? 0)) *
-              (Number(existing.quantity) || 0),
+              costMultiplier(existing),
           }
         : (patch as Record<string, unknown>),
   );
+  // A purchase line's quantity carries its processing line with it.
+  if (quantityData.quantity !== undefined && !existing.secondaryOfSku) {
+    const delta = Number(quantityData.quantity) - existing.quantity;
+    const { warning } = await followPurchaseQuantity(
+      existing.orderId,
+      existing.sku,
+      delta,
+      existing.vendor,
+    );
+    if (warning) return { ...line, processingWarning: warning };
+  }
   return line;
 }
 

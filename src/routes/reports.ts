@@ -4,6 +4,7 @@ import { decisionDate } from '../reporting/decision.js';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
 import { invoiceVarianceReport, actualCostForOrder } from '../handoff/vendorInvoice.js';
+import { costMultiplier } from '../handoff/lineCost.js';
 import {
   buildReport,
   versionTotals,
@@ -60,9 +61,13 @@ export function registerReportRoutes(app: FastifyInstance): void {
           quantity: true,
           unitCostMinor: true,
           freeIssue: true,
+          secondaryOfSku: true,
+          costPerOrder: true,
         },
       }),
-      prisma.sku.findMany({ select: { part: true, unitCostMinor: true } }),
+      prisma.sku.findMany({
+        select: { part: true, unitCostMinor: true, secondaryVendorCostMinor: true },
+      }),
       prisma.acceptedOrder.findMany({
         select: {
           id: true,
@@ -77,6 +82,13 @@ export function registerReportRoutes(app: FastifyInstance): void {
     ]);
 
     const catalog = new Map(skus.map((k) => [k.part.trim().toUpperCase(), k.unitCostMinor ?? 0]));
+    // A processing line's catalog figure is the processing supplier's fee, not the
+    // part's purchase cost — the same split costRefresh.ts makes.
+    const feeCatalog = new Map(
+      skus
+        .filter((k) => k.secondaryVendorCostMinor != null)
+        .map((k) => [k.part.trim().toUpperCase(), k.secondaryVendorCostMinor ?? 0]),
+    );
     const orgs = await prisma.organization.findMany({ select: { id: true, name: true } });
     const orgName = new Map(orgs.map((o) => [o.id, o.name]));
     const orderById = new Map(orders.map((o) => [o.id, o]));
@@ -104,7 +116,7 @@ export function registerReportRoutes(app: FastifyInstance): void {
     for (const l of lines) {
       const sku = (l.sku ?? '').trim();
       if (!sku) continue;
-      const catalogMinor = catalog.get(sku.toUpperCase());
+      const catalogMinor = (l.secondaryOfSku ? feeCatalog : catalog).get(sku.toUpperCase());
       if (catalogMinor == null) continue;
       const current = Number(l.unitCostMinor ?? 0);
       if (catalogMinor === current) continue;
@@ -120,7 +132,7 @@ export function registerReportRoutes(app: FastifyInstance): void {
         currentMinor: current,
         catalogMinor,
         deltaMinor: catalogMinor - current,
-        extendedDeltaMinor: (catalogMinor - current) * qty,
+        extendedDeltaMinor: (catalogMinor - current) * costMultiplier(l),
         freeIssue: !!l.freeIssue,
         locked: submitted.has(`${l.orderId}::${vendor}`),
       });

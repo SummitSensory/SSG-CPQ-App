@@ -115,7 +115,9 @@ function offerFor(
 /** The lines on an order that take a colour choice, with their palettes. */
 export async function offeredLines(orderId: string): Promise<OfferedLine[]> {
   const lines = await prisma.procurementLine.findMany({
-    where: { orderId, isHardwareComponent: false },
+    // A processing line is the processing supplier's fee on a part already offered
+    // through its purchase line; offering it too would ask the customer twice.
+    where: { orderId, isHardwareComponent: false, secondaryOfSku: null },
     orderBy: [{ vendor: 'asc' }, { name: 'asc' }],
     select: {
       id: true,

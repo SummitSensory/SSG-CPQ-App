@@ -41,9 +41,9 @@ export const BOM_COLUMNS: BomColumnDef[] = [
   { key: 'status', label: 'Status', where: 'Order screen' },
   {
     key: 'secondaryCharge',
-    // Was "Their charge".
-    label: 'Vendor Cost',
-    where: 'Catalog → BOM setup: what a second vendor (Also on vendor) charges',
+    // Was "Their charge", then "Vendor Cost"; named by Bryan 2026-10-19.
+    label: 'Repackaging Service Fee',
+    where: 'Catalog → BOM setup: what the Processing Service Supplier charges',
   },
 ];
 

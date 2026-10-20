@@ -13,6 +13,7 @@ import {
   type SkuRec,
 } from '../proposals/adventureSeries.js';
 import { loadFormulaRules, loadFormulaSettings } from './formulas.js';
+import { PROCESSING_COST_SELECT, processingFeeOf } from '../catalog/landedCost.js';
 
 /** Server-side Adventure Series pricing engine: answers -> priced, grouped lines.
  *  Prices/weights/costs are read live from the Sku table (editable in Catalog → Pricing & SKUs). */
@@ -34,6 +35,8 @@ export function registerAdventureRoutes(app: FastifyInstance): void {
     weightLbs: true,
     category: true,
     proposalGroup: true,
+    // The processing supplier's fee belongs in the part's cost (catalog/landedCost.ts).
+    ...PROCESSING_COST_SELECT,
   } as const;
   async function skuRows(): Promise<Array<Record<string, unknown>>> {
     if (skuHasOverrideFlag) {
@@ -80,14 +83,20 @@ export function registerAdventureRoutes(app: FastifyInstance): void {
         category: string;
         proposalGroup: string | null;
         overrideAllowed?: boolean;
+        processingEnabled?: boolean;
+        secondaryVendor?: string | null;
+        secondaryVendorCostMinor?: number | null;
+        processingFeeBasis?: string;
       };
       const fb = byPart[r.part];
       const pl = place[r.part];
+      const fee = processingFeeOf(r);
       map[r.part] = {
         part: r.part,
         description: r.description,
         unitPriceMinor: r.unitPriceMinor,
-        unitCostMinor: r.unitCostMinor || (fb ? fb.cost : 0),
+        unitCostMinor: (r.unitCostMinor || (fb ? fb.cost : 0)) + fee.perUnitMinor,
+        ...(fee.perOrderMinor ? { processingFeeMinor: fee.perOrderMinor } : {}),
         weightLbs: r.weightLbs || (fb ? fb.weightLbs : 0),
         category: r.category,
         proposalGroup: (pl ? pl.group : '') || r.proposalGroup || undefined,
@@ -248,6 +257,7 @@ export function registerAdventureRoutes(app: FastifyInstance): void {
     return {
       priceMinor: roll.priceMinor,
       costMinor: roll.costMinor,
+      processingFeeMinor: roll.processingFeeMinor,
       weightLbs: roll.weightLbs,
       missing: roll.missing,
       pieces,
