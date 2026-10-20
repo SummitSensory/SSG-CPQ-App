@@ -122,6 +122,10 @@ interface ProcLineLike {
   isHardwareComponent?: boolean;
   vendorNotes?: string | null;
   powderColor?: string | null;
+  /** A per-order fee is charged once for its own line; it never folds into another. */
+  costPerOrder?: boolean | null;
+  /** A processing line is a fee, not a purchase of the part: it never folds either. */
+  secondaryOfSku?: string | null;
 }
 
 /** What a merged line gains, so the screen can say what it is made of. */
@@ -161,7 +165,7 @@ export function rollUpProcurementLines<T extends ProcLineLike>(lines: T[]): T[] 
   >();
 
   for (const line of lines) {
-    if (!participates(line.sku)) {
+    if (!participates(line.sku) || line.costPerOrder || line.secondaryOfSku) {
       out.push(line);
       continue;
     }
@@ -212,6 +216,8 @@ interface BomLineLike {
   vendorNotes: string;
   isHardware: boolean;
   powderColor?: string;
+  costPerOrder?: boolean;
+  processing?: boolean;
 }
 
 /**
@@ -229,7 +235,7 @@ export function rollUpBomLines<T extends BomLineLike>(lines: T[]): T[] {
   >();
 
   for (const line of lines) {
-    if (!participates(line.sku)) {
+    if (!participates(line.sku) || line.costPerOrder || line.processing) {
       out.push(line);
       continue;
     }

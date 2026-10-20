@@ -14,6 +14,7 @@ import {
 } from './bomDelivery.js';
 import { latestDeliveryForOrder } from '../integrations/monday/portalDelivery.js';
 import { fileView } from './bomFiles.js';
+import { lineExtendedCostMinor } from './lineCost.js';
 import { loadBomColumnLabels } from './bomColumnLabels.js';
 
 /**
@@ -345,6 +346,8 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
         powderColor: true,
         isHardwareComponent: true,
         freeIssue: true,
+        costPerOrder: true,
+        secondaryOfSku: true,
       },
     }),
     prisma.manufacturer.findMany({
@@ -487,10 +490,8 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
       // Free-issue lines are excluded: Summit already paid for them, so counting them
       // here would tell this vendor they owe money for parts arriving at their dock.
       // The cost is still on the line, so the order's cost of goods is unaffected.
-      extendedCostMinor: mine.reduce(
-        (a, l) => a + (l.freeIssue ? 0 : (l.unitCostMinor ?? 0) * (Number(l.quantity) || 0)),
-        0,
-      ),
+      // A per-order processing fee counts once, not per unit (lineCost.ts).
+      extendedCostMinor: mine.reduce((a, l) => a + (l.freeIssue ? 0 : lineExtendedCostMinor(l)), 0),
       vendorInvoiceNumber: s.vendorInvoiceNumber,
       vendorInvoiceDate: iso(s.vendorInvoiceDate),
       vendorInvoiceTotalMinor: s.vendorInvoiceTotalMinor,
@@ -512,6 +513,7 @@ export async function listSections(orderId: string, actorId?: string): Promise<S
           unitCostMinor: l.unitCostMinor,
           invoicedUnitCostMinor: l.invoicedUnitCostMinor,
           invoiceNotBilled: l.invoiceNotBilled,
+          costPerOrder: l.costPerOrder,
         })),
       ),
       missingColorSkus: mine

@@ -1,5 +1,6 @@
 import { prisma } from '../lib/prisma.js';
 import { NotFoundError, ValidationError } from '../lib/errors.js';
+import { costMultiplier } from './lineCost.js';
 
 /**
  * Checking a vendor's invoice against the Bill of Materials they were sent.
@@ -90,9 +91,14 @@ interface LineLike {
   /** Checked, and genuinely not on their invoice. */
   invoiceNotBilled?: boolean | null;
   freeIssue?: boolean | null;
+  /** A per-order processing fee: agreed and invoiced figures are for the line, not each. */
+  costPerOrder?: boolean | null;
 }
 
 const num = (v: unknown): number => (v == null ? 0 : Number(v) || 0);
+/** How many times a unit figure is charged — see lineCost.ts. */
+const times = (l: { quantity: unknown; costPerOrder?: boolean | null }): number =>
+  costMultiplier({ quantity: num(l.quantity), costPerOrder: l.costPerOrder });
 
 /** Per-line differences, in the order the lines were given. */
 export function lineVariances(lines: LineLike[]): InvoiceLineVariance[] {
@@ -109,7 +115,7 @@ export function lineVariances(lines: LineLike[]): InvoiceLineVariance[] {
       agreedUnitMinor: agreed,
       invoicedUnitMinor: invoiced,
       unitDeltaMinor: unitDelta,
-      extendedDeltaMinor: unitDelta == null ? null : unitDelta * qty,
+      extendedDeltaMinor: unitDelta == null ? null : unitDelta * times(l),
       deltaPct: unitDelta == null || agreed === 0 ? null : (unitDelta / agreed) * 100,
       notBilled: !!l.invoiceNotBilled,
     };
@@ -132,7 +138,7 @@ export function summarize(lines: LineLike[]): InvoiceVariance {
   let notBilledMinor = 0;
 
   for (const l of lines) {
-    const qty = num(l.quantity);
+    const qty = times(l);
     // Marked as not on the invoice: counted as CHECKED and invoiced at nothing, which
     // is the truth — they were asked for it and did not bill it. It shows as a negative
     // variance, which is correct arithmetic and the wrong reading, so the count beside
@@ -205,6 +211,7 @@ export async function approveVendorInvoice(
       unitCostMinor: true,
       invoicedUnitCostMinor: true,
       invoiceNotBilled: true,
+      costPerOrder: true,
     },
   });
   const mine = lines.filter(
@@ -300,6 +307,7 @@ export async function invoiceVarianceReport() {
         unitCostMinor: true,
         invoicedUnitCostMinor: true,
         invoiceNotBilled: true,
+        costPerOrder: true,
       },
     }),
     prisma.acceptedOrder.findMany({
@@ -427,6 +435,7 @@ export async function actualCostForOrder(orderId: string): Promise<ActualCost> {
         unitCostMinor: true,
         invoicedUnitCostMinor: true,
         invoiceNotBilled: true,
+        costPerOrder: true,
       },
     }),
     prisma.bomVendorSection.findMany({
@@ -445,7 +454,7 @@ export async function actualCostForOrder(orderId: string): Promise<ActualCost> {
   let actualMinor = 0;
   let fromInvoiceLines = 0;
   for (const l of lines) {
-    const qty = num(l.quantity);
+    const qty = times(l);
     const agreed = num(l.unitCostMinor) * qty;
     agreedMinor += agreed;
     const vendorAccepted = accepted.has(

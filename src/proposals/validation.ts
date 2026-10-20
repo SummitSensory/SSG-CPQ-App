@@ -71,6 +71,8 @@ export const BuilderLineSchema = z
     quantity: quantity.optional(),
     rateMinor: minorNullish,
     costEach: minorNullish,
+    /** A per-order Repackaging Service Fee — cost only (catalog/landedCost.ts). */
+    processingFeeMinor: minorNullish,
     weightEach: z
       .number()
       .refine(Number.isFinite, 'weight must be a finite number')

@@ -15,8 +15,15 @@ const LINES = new Map<string, Row>();
 const SECTIONS = new Map<string, Row>();
 const PRODUCT_COSTS: Row[] = [];
 const EVENTS: Row[] = [];
+/** Product rows procurementFor() reads a part's primary sourcing from. */
+let PRODUCTS: Array<{
+  id: string;
+  sku: string;
+  sourcing: Array<{ manufacturer: { name: string } }>;
+}> = [];
 
 function reset() {
+  PRODUCTS = [];
   SKUS.clear();
   LINES.clear();
   SECTIONS.clear();
@@ -32,8 +39,11 @@ function reset() {
       unitCostMinor: 1000,
       active: true,
       freeIssueVendor: null,
+      processingEnabled: false,
       secondaryVendor: null,
       secondaryVendorCostMinor: null,
+      processingFeeBasis: 'PER_UNIT',
+      processingSku: null,
       bomSortOrder: null,
       bomGroup: null,
       bomNote: null,
@@ -53,11 +63,18 @@ function reset() {
       bomGroup: null,
       bomPosition: null,
       secondaryOfSku: null,
+      costPerOrder: false,
       ...extra,
     });
   line('l1', { sku: 'P-1' });
   line('l2', { sku: 'P-2' });
-  line('l3', { sku: 'P-1', secondaryOfSku: 'P-1', unitCostMinor: 450, vendorNotes: 'Powder coat' });
+  line('l3', {
+    sku: 'P-1',
+    secondaryOfSku: 'P-1',
+    unitCostMinor: 450,
+    vendorNotes: 'Powder coat',
+    costPerOrder: true,
+  });
   line('l4', { sku: 'X-9', vendor: 'Amazon' });
   SECTIONS.set('o1::Goldberg Brothers', { status: 'DRAFT' });
 }
@@ -109,8 +126,15 @@ vi.mock('../../src/lib/prisma.js', () => ({
       ],
     },
     hardwareRule: { findMany: async () => [] },
-    product: { findUnique: async () => ({ id: 'prod-P-1' }) },
+    product: {
+      findUnique: async () => ({ id: 'prod-P-1' }),
+      findMany: async ({ where }: { where: { sku: { in: string[] } } }) => {
+        const want = new Set(where.sku.in.map((p) => p.toUpperCase()));
+        return PRODUCTS.filter((p) => want.has(p.sku.toUpperCase()));
+      },
+    },
     productCost: {
+      findMany: async () => [],
       create: async ({ data }: { data: Row }) => {
         PRODUCT_COSTS.push(data);
         return data;
@@ -151,8 +175,8 @@ async function makeApp(): Promise<FastifyInstance> {
   return app;
 }
 
-describe('PATCH /bom-setup/parts — bulk routing', () => {
-  it('routes several parts through a second vendor at a set charge, in one call', async () => {
+describe('PATCH /bom-setup/parts — processing service supplier, in bulk', () => {
+  it('sets several parts’ processing supplier, fee, basis and Repackaging SKU in one call', async () => {
     const app = await makeApp();
     const res = await app.inject({
       method: 'PATCH',
@@ -160,42 +184,97 @@ describe('PATCH /bom-setup/parts — bulk routing', () => {
       headers: await auth('OPERATIONS'),
       payload: {
         parts: ['P-1', 'p-2', 'NOPE'],
-        set: { secondaryVendor: 'goldberg brothers', secondaryVendorCostMinor: 0 },
+        set: {
+          processingEnabled: true,
+          secondaryVendor: 'goldberg brothers',
+          secondaryVendorCostMinor: 0,
+          processingFeeBasis: 'PER_ORDER',
+          processingSku: '  GB-RPK  ',
+        },
       },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().updated).toBe(2);
     expect(res.json().skipped).toEqual([{ part: 'NOPE', reason: 'Not in the SKU master' }]);
-    // Stored with the vendor's own spelling, not as typed.
+    // Stored with the vendor's own spelling, not as typed; the Repackaging SKU trimmed.
     expect(SKUS.get('P-2')).toMatchObject({
+      processingEnabled: true,
       secondaryVendor: 'Goldberg Brothers',
       secondaryVendorCostMinor: 0,
+      processingFeeBasis: 'PER_ORDER',
+      processingSku: 'GB-RPK',
     });
     await app.close();
   });
 
-  it('skips a part routed to the vendor it is already bought from', async () => {
+  it('skips a part whose processing supplier is the vendor it is already bought from', async () => {
     const app = await makeApp();
     const res = await app.inject({
       method: 'PATCH',
       url: '/bom-setup/parts',
       headers: await auth('OPERATIONS'),
-      payload: { parts: ['6820H-LAD', 'P-1'], set: { freeIssueVendor: 'Goldberg Brothers' } },
+      payload: {
+        parts: ['6820H-LAD', 'P-1'],
+        set: { processingEnabled: true, secondaryVendor: 'Goldberg Brothers' },
+      },
     });
     expect(res.json().updated).toBe(1);
-    expect(res.json().skipped[0].part).toBe('6820H-LAD');
+    expect(res.json().skipped[0]).toMatchObject({
+      part: '6820H-LAD',
+      reason: 'Already bought from Goldberg Brothers',
+    });
+    expect(SKUS.get('6820H-LAD')!.secondaryVendor).toBeNull();
     await app.close();
   });
 
-  it('refuses a vendor that is not on record', async () => {
+  it('reads the procurement supplier off primary sourcing when the Sku has none', async () => {
+    SKUS.get('P-1')!.manufacturer = null;
+    PRODUCTS = [
+      { id: 'prod-P-1', sku: 'P-1', sourcing: [{ manufacturer: { name: 'Goldberg Brothers' } }] },
+    ];
     const app = await makeApp();
     const res = await app.inject({
       method: 'PATCH',
       url: '/bom-setup/parts',
       headers: await auth('OPERATIONS'),
-      payload: { parts: ['P-1'], set: { freeIssueVendor: 'Goldberg Bros' } },
+      payload: { parts: ['P-1'], set: { secondaryVendor: 'Goldberg Brothers' } },
+    });
+    expect(res.json().updated).toBe(0);
+    expect(res.json().skipped[0].part).toBe('P-1');
+    await app.close();
+  });
+
+  it('refuses a processing supplier that is not on record', async () => {
+    const app = await makeApp();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/bom-setup/parts',
+      headers: await auth('OPERATIONS'),
+      payload: { parts: ['P-1'], set: { secondaryVendor: 'Goldberg Bros' } },
     });
     expect(res.statusCode).toBe(400);
+    expect(SKUS.get('P-1')!.secondaryVendor).toBeNull();
+    await app.close();
+  });
+
+  it('can only CLEAR a retired ships-through vendor, never set one', async () => {
+    SKUS.get('P-1')!.freeIssueVendor = 'Goldberg Brothers';
+    const app = await makeApp();
+    const set = await app.inject({
+      method: 'PATCH',
+      url: '/bom-setup/parts',
+      headers: await auth('OPERATIONS'),
+      payload: { parts: ['P-2'], set: { freeIssueVendor: 'Goldberg Brothers' } },
+    });
+    expect(set.statusCode).toBe(400);
+    expect(SKUS.get('P-2')!.freeIssueVendor).toBeNull();
+    const clear = await app.inject({
+      method: 'PATCH',
+      url: '/bom-setup/parts',
+      headers: await auth('OPERATIONS'),
+      payload: { parts: ['P-1'], set: { freeIssueVendor: null } },
+    });
+    expect(clear.statusCode).toBe(200);
     expect(SKUS.get('P-1')!.freeIssueVendor).toBeNull();
     await app.close();
   });
@@ -210,6 +289,283 @@ describe('PATCH /bom-setup/parts — bulk routing', () => {
     });
     expect(res.statusCode).toBe(403);
     await app.close();
+  });
+});
+
+describe('GET /bom-setup/parts — procurement supplier and proposal cost', () => {
+  it('shows who it is bought from and what a new proposal line will cost', async () => {
+    Object.assign(SKUS.get('P-1')!, {
+      processingEnabled: true,
+      secondaryVendor: 'Goldberg Brothers',
+      secondaryVendorCostMinor: 150,
+      processingFeeBasis: 'PER_UNIT',
+    });
+    Object.assign(SKUS.get('P-2')!, {
+      manufacturer: null,
+      processingEnabled: true,
+      secondaryVendor: 'Goldberg Brothers',
+      secondaryVendorCostMinor: 2500,
+      processingFeeBasis: 'PER_ORDER',
+      freeIssueVendor: 'Old Receiver',
+    });
+    PRODUCTS = [{ id: 'prod-P-2', sku: 'P-2', sourcing: [{ manufacturer: { name: 'Amazon' } }] }];
+    const app = await makeApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/bom-setup/parts',
+      headers: await auth('SALES_REP'),
+    });
+    expect(res.statusCode).toBe(200);
+    const parts = res.json().parts as Array<Record<string, unknown>>;
+    const p1 = parts.find((p) => p.part === 'P-1');
+    const p2 = parts.find((p) => p.part === 'P-2');
+    expect(p1).toMatchObject({
+      procurementSupplier: 'Amazon',
+      unitPurchaseCostMinor: 1000,
+      proposalUnitCostMinor: 1150,
+      proposalPerOrderFeeMinor: 0,
+      legacyShipsThrough: null,
+    });
+    expect(p2).toMatchObject({
+      procurementSupplier: 'Amazon',
+      proposalUnitCostMinor: 1000,
+      proposalPerOrderFeeMinor: 2500,
+      legacyShipsThrough: 'Old Receiver',
+    });
+    // The retired field is no longer sent raw.
+    expect(p2).not.toHaveProperty('freeIssueVendor');
+    await app.close();
+  });
+});
+
+describe('GET /bom-setup/export', () => {
+  it('writes the processing columns the importer reads back', async () => {
+    Object.assign(SKUS.get('P-1')!, {
+      processingEnabled: true,
+      secondaryVendor: 'Goldberg Brothers',
+      secondaryVendorCostMinor: 1250,
+      processingFeeBasis: 'PER_ORDER',
+      processingSku: 'GB-RPK',
+    });
+    const app = await makeApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/bom-setup/export',
+      headers: await auth('SALES_REP'),
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { columns: string[]; items: Array<Record<string, unknown>> };
+    expect(body.columns).toEqual([
+      'part',
+      'description',
+      'procurementSupplier',
+      'unitPurchaseCost',
+      'bomSequence',
+      'bomHeading',
+      'bomNote',
+      'processing',
+      'processingSupplier',
+      'repackagingSku',
+      'repackagingFee',
+      'repackagingFeeBasis',
+    ]);
+    expect(body.items.find((i) => i.part === 'P-1')).toMatchObject({
+      procurementSupplier: 'Amazon',
+      unitPurchaseCost: '10.00',
+      processing: 'Yes',
+      processingSupplier: 'Goldberg Brothers',
+      repackagingSku: 'GB-RPK',
+      repackagingFee: '12.50',
+      repackagingFeeBasis: 'per order',
+    });
+    expect(body.items.find((i) => i.part === 'P-2')).toMatchObject({
+      processing: 'No',
+      processingSupplier: '',
+      repackagingFee: '',
+      repackagingFeeBasis: 'per unit',
+    });
+    await app.close();
+  });
+});
+
+describe('POST /bom-setup/import — processing columns', () => {
+  const importRows = async (rows: Row[], dryRun: boolean) => {
+    const app = await makeApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/bom-setup/import',
+      headers: await auth('OPERATIONS'),
+      payload: { rows, dryRun },
+    });
+    await app.close();
+    return res;
+  };
+  const newSheetRow: Row = {
+    part: 'P-1',
+    // Read-only columns: neither is written back.
+    procurementSupplier: 'Somebody Else',
+    unitPurchaseCost: '99.99',
+    processing: 'Yes',
+    processingSupplier: 'goldberg brothers',
+    repackagingSku: 'GB-RPK',
+    repackagingFee: '$1,250.00',
+    repackagingFeeBasis: 'Per Order',
+  };
+
+  it('previews the new columns on a dry run and writes nothing', async () => {
+    const res = await importRows([newSheetRow], true);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ dryRun: true, issues: [] });
+    expect(res.json().changes).toEqual([
+      {
+        row: 2,
+        part: 'P-1',
+        changed: expect.arrayContaining([
+          'processingEnabled',
+          'secondaryVendor',
+          'processingSku',
+          'secondaryVendorCostMinor',
+          'processingFeeBasis',
+        ]),
+      },
+    ]);
+    expect(SKUS.get('P-1')).toMatchObject({ processingEnabled: false, secondaryVendor: null });
+  });
+
+  it('writes the new columns for real, leaving the procurement supplier and cost alone', async () => {
+    const res = await importRows([newSheetRow], false);
+    expect(res.json()).toMatchObject({ dryRun: false, updated: 1, issues: [] });
+    expect(SKUS.get('P-1')).toMatchObject({
+      processingEnabled: true,
+      secondaryVendor: 'Goldberg Brothers',
+      processingSku: 'GB-RPK',
+      secondaryVendorCostMinor: 125000,
+      processingFeeBasis: 'PER_ORDER',
+      manufacturer: 'Amazon',
+      unitCostMinor: 1000,
+    });
+  });
+
+  it('maps a legacy "also on vendor" sheet onto the processing fields', async () => {
+    const legacy: Row[] = [
+      { part: 'P-1', alsoOnVendor: 'Goldberg Brothers', alsoOnVendorCost: '4.50' },
+      { part: 'P-2', shipsThroughVendor: 'Goldberg Brothers' },
+      // A blank legacy ships-through clears nothing.
+      { part: '6820H-LAD', shipsThroughVendor: '' },
+    ];
+    const dry = await importRows(legacy, true);
+    expect(dry.json().issues).toEqual([]);
+    expect(dry.json().changes.map((c: { part: string }) => c.part)).toEqual(['P-1', 'P-2']);
+    expect(SKUS.get('P-1')!.secondaryVendor).toBeNull();
+
+    const real = await importRows(legacy, false);
+    expect(real.json()).toMatchObject({ updated: 2 });
+    expect(SKUS.get('P-1')).toMatchObject({
+      processingEnabled: true,
+      secondaryVendor: 'Goldberg Brothers',
+      secondaryVendorCostMinor: 450,
+    });
+    expect(SKUS.get('P-2')).toMatchObject({
+      processingEnabled: true,
+      secondaryVendor: 'Goldberg Brothers',
+      secondaryVendorCostMinor: null,
+    });
+    expect(SKUS.get('6820H-LAD')).toMatchObject({
+      processingEnabled: false,
+      secondaryVendor: null,
+    });
+  });
+
+  it('a new column in the same file wins over its legacy name', async () => {
+    await importRows([{ part: 'P-1', alsoOnVendorCost: '4.50', repackagingFee: '7.00' }], false);
+    expect(SKUS.get('P-1')!.secondaryVendorCostMinor).toBe(700);
+  });
+
+  it('reads a fee and a basis typed with spaces, hyphens or underscores', async () => {
+    const res = await importRows(
+      [
+        { part: 'P-1', repackagingFee: '$1 250.00', repackagingFeeBasis: 'Per  Unit' },
+        { part: 'P-2', repackagingFee: ' 3.5 ', repackagingFeeBasis: 'per-order' },
+        { part: '6820H-LAD', repackagingFeeBasis: 'PER_ORDER' },
+      ],
+      false,
+    );
+    expect(res.json().issues).toEqual([]);
+    expect(SKUS.get('P-1')).toMatchObject({
+      secondaryVendorCostMinor: 125000,
+      processingFeeBasis: 'PER_UNIT',
+    });
+    expect(SKUS.get('P-2')).toMatchObject({
+      secondaryVendorCostMinor: 350,
+      processingFeeBasis: 'PER_ORDER',
+    });
+    expect(SKUS.get('6820H-LAD')!.processingFeeBasis).toBe('PER_ORDER');
+  });
+
+  it('a legacy sheet with both "also on vendor" and "ships through" filled: also-on-vendor wins', async () => {
+    const res = await importRows(
+      [{ part: '6820H-LAD', alsoOnVendor: 'Amazon', shipsThroughVendor: 'Goldberg Brothers' }],
+      false,
+    );
+    expect(res.json().issues).toEqual([]);
+    expect(SKUS.get('6820H-LAD')).toMatchObject({
+      processingEnabled: true,
+      secondaryVendor: 'Amazon',
+    });
+  });
+
+  /**
+   * Was a bug: an old export wrote every column on every row, so a free-issue part's row reads
+   * alsoOnVendor = "" and shipsThroughVendor = "Goldberg Brothers". The blank
+   * alsoOnVendor is mapped to processingSupplier first, which then blocks the
+   * shipsThroughVendor mapping (`has(r, now)`), so the part's processing supplier is
+   * CLEARED instead of set — the free-issue part falls off the receiving vendor's sheet.
+   */
+  it('a legacy row with a blank "also on vendor" still takes its "ships through" vendor', async () => {
+    const res = await importRows(
+      [
+        {
+          part: 'P-2',
+          alsoOnVendor: '',
+          alsoOnVendorCost: '',
+          shipsThroughVendor: 'Goldberg Brothers',
+        },
+      ],
+      false,
+    );
+    expect(res.json().issues).toEqual([]);
+    expect(SKUS.get('P-2')).toMatchObject({
+      processingEnabled: true,
+      secondaryVendor: 'Goldberg Brothers',
+    });
+  });
+
+  it('reports bad rows and writes nothing for them', async () => {
+    const res = await importRows(
+      [
+        { part: '6820H-LAD', processingSupplier: 'Goldberg Brothers' },
+        { part: 'P-1', processing: 'Yes' },
+        { part: 'P-2', processing: 'maybe', repackagingFeeBasis: 'weekly' },
+        { part: 'NOPE', processing: 'Yes' },
+      ],
+      false,
+    );
+    const issues = res.json().issues as Array<{ part: string; message: string }>;
+    expect(issues).toEqual(
+      expect.arrayContaining([
+        {
+          row: 2,
+          part: '6820H-LAD',
+          message: 'processingSupplier is the procurement supplier it is already bought from',
+        },
+        { row: 3, part: 'P-1', message: 'processing is Yes but no processingSupplier is given' },
+        { row: 4, part: 'P-2', message: 'processing must be Yes or No' },
+        { row: 4, part: 'P-2', message: 'repackagingFeeBasis must be "per unit" or "per order"' },
+        { row: 5, part: 'NOPE', message: 'Not in the SKU master' },
+      ]),
+    );
+    expect(SKUS.get('6820H-LAD')!.secondaryVendor).toBeNull();
+    expect(SKUS.get('P-1')!.processingEnabled).toBe(false);
   });
 });
 
@@ -286,7 +642,7 @@ describe('POST /orders/procurement/:lineId/save-default', () => {
     await app.close();
   });
 
-  it('saves a second-vendor line’s cost as that vendor’s charge, open to BOM users', async () => {
+  it('saves a processing line’s cost as the Repackaging Service Fee AND its basis, open to BOM users', async () => {
     const app = await makeApp();
     const res = await app.inject({
       method: 'POST',
@@ -295,7 +651,21 @@ describe('POST /orders/procurement/:lineId/save-default', () => {
       payload: { fields: ['unitCost'] },
     });
     expect(res.statusCode).toBe(200);
-    expect(SKUS.get('P-1')).toMatchObject({ secondaryVendorCostMinor: 450, unitCostMinor: 1000 });
+    expect(SKUS.get('P-1')).toMatchObject({
+      secondaryVendorCostMinor: 450,
+      processingFeeBasis: 'PER_ORDER',
+      unitCostMinor: 1000,
+    });
+    expect(res.json().saved).toEqual(['Goldberg Brothers’s Repackaging Service Fee']);
+
+    LINES.get('l3')!.costPerOrder = false;
+    await app.inject({
+      method: 'POST',
+      url: '/orders/procurement/l3/save-default',
+      headers: await auth('OPERATIONS'),
+      payload: { fields: ['unitCost'] },
+    });
+    expect(SKUS.get('P-1')!.processingFeeBasis).toBe('PER_UNIT');
     await app.close();
   });
 

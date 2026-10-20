@@ -1572,21 +1572,35 @@ model Sku {
   /// the parent line beside its components instead — off by default, because a
   /// parent's cost is the sum of its children and printing both doubles it.
   keepParentOnBom Boolean @default(false)
-  /// Free issue: the manufacturer NAME this part is shipped to when we buy it from
-  /// somewhere else and have it delivered there. It appears on THAT vendor's Bill of
-  /// Materials at no cost — Summit has already paid for it — and is left out of their
-  /// cost total. The real cost stays on the order line, so cost of goods is unchanged.
+  /// RETIRED free issue ("ships through"). The line used to MOVE to this vendor's
+  /// sheet at $0, which took the part off the sheet of the vendor it is bought from.
+  /// Migration 0120 converted every row it could into the processing-supplier setup
+  /// below and nothing routes on this column any more. Kept, not dropped, so a row it
+  /// could not convert (one that already named a DIFFERENT processing supplier) still
+  /// records what it said; BOM setup flags those for review.
   freeIssueVendor String?
-  /// A SECOND vendor NAME this part also needs its own Bill of Materials line on, in
-  /// ADDITION to its own vendor — not instead of it, which is what freeIssueVendor
-  /// above does. The standing example: bought raw from one vendor, then sent to
-  /// Goldberg Brothers for powder-coating, who needs to see it on their own sheet
-  /// under their own part number. That printed number comes from the existing
-  /// VendorPartNumber mapping for this vendor — nothing new to look up.
+  /// The checkbox beside the part number in Catalog → BOM setup: this part is bought
+  /// from its Procurement Supplier and then sent to a Processing Service Supplier
+  /// (`secondaryVendor`), who repackages it and ships it on. The part then prints on
+  /// BOTH sheets — the purchase line stays on the procurement supplier's, and a line
+  /// is added on the processing supplier's at the Repackaging Service Fee. Off = the
+  /// processing fields below are kept but ignored everywhere.
+  processingEnabled Boolean @default(false)
+  /// The Processing Service Supplier, by manufacturer NAME. The standing example:
+  /// bought on Amazon, delivered to Goldberg Brothers, who repackage it and ship it
+  /// with the structure.
   secondaryVendor String?
-  /// What secondaryVendor charges per unit for this step. NULL/0 when it is a
-  /// receiving/processing note rather than a separate purchase.
+  /// The Repackaging Service Fee: what secondaryVendor charges, per unit or once per
+  /// order line (`processingFeeBasis`). NULL/0 = no charge, a receiving note. Added to
+  /// the part's COST on a proposal (never its price), so cost of goods and margin
+  /// include it — see src/catalog/landedCost.ts.
   secondaryVendorCostMinor Int?
+  /// Whether the Repackaging Service Fee is charged per unit or once per order line.
+  processingFeeBasis ProcessingFeeBasis @default(PER_UNIT)
+  /// The Repackaging SKU: the processing supplier's own SKU for this service. Prints
+  /// as the part number on their sheet. Blank = the VendorPartNumber mapping for that
+  /// vendor, then our part number, as on any other line.
+  processingSku String?
   /// Where this part sits on a vendor's Bill of Materials, lowest first. Set by the
   /// manufacturing team (Catalog → BOM setup, or "save for future orders" when they
   /// rearrange an order's sheet). NULL = no preset position: the line falls back to
@@ -2215,6 +2229,15 @@ model ProcurementLine {
   /// already has this vendor's line skip it, the same way kitSku above does for
   /// components.
   secondaryOfSku String?
+  /// The line's cost is charged ONCE for the line, not per unit: its extended cost is
+  /// `unitCostMinor` itself, not `unitCostMinor × quantity`. Set on a processing-
+  /// supplier line whose fee basis is PER_ORDER. Read a line's extended cost through
+  /// lineExtendedCostMinor (src/handoff/lineCost.ts) — never multiply directly.
+  costPerOrder   Boolean  @default(false)
+  /// The part number printed for this line's vendor, snapshotted when the line is
+  /// created — the Repackaging SKU on a processing-supplier line. NULL = look it up
+  /// (VendorPartNumber, then our part number), as every other line does.
+  vendorPartNo   String?
   /// This order's own position for the line on its vendor's sheet, set when someone
   /// rearranges the sheet. Wins over Sku.bomSortOrder; NULL = use the catalog's.
   bomPosition    Int?
@@ -2287,6 +2310,12 @@ model HandoffTask {
 // send history, and its own confirm/unlock state. The order-level header fields
 // on AcceptedOrder remain as the DEFAULTS a new section inherits.
 // ---------------------------------------------------------------------------
+
+/// How a processing supplier's Repackaging Service Fee is charged (Sku.processingFeeBasis).
+enum ProcessingFeeBasis {
+  PER_UNIT
+  PER_ORDER
+}
 
 /// Which freight figure on the deal a vendor's shipment is quoted from.
 enum BomFreightSource {

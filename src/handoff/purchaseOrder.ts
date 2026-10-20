@@ -144,7 +144,7 @@ export async function purchaseOrderSource(orderId: string, vendor: string) {
       id: l.id,
       sku: l.sku,
       vendorSku: l.vendorSku,
-      name: l.name,
+      name: poLineName(l),
       quantity: l.quantity,
       unitCostMinor: l.unitCostMinor,
       extendedCostMinor: l.extendedCostMinor,
@@ -166,6 +166,16 @@ export interface PurchaseOrderInput {
   notes?: string | null;
 }
 
+/**
+ * A processing line's PO description says what is being bought — the repackaging
+ * service, and whether its price is per unit or once for the line — because the PO
+ * prints quantity, unit and extension and "10 × $50 = $50" needs explaining.
+ */
+function poLineName(l: { name: string; processing: boolean; costPerOrder: boolean }): string {
+  if (!l.processing) return l.name;
+  return `${l.name} — repackaging service, ${l.costPerOrder ? 'flat fee for this order' : 'fee per unit'}`;
+}
+
 /** Snapshot the chosen BOM lines as PO lines. */
 async function chosenLines(orderId: string, vendor: string, lineIds: string[]) {
   const wanted = new Set(lineIds);
@@ -178,7 +188,7 @@ async function chosenLines(orderId: string, vendor: string, lineIds: string[]) {
     lines: picked.map((l, i) => ({
       sku: l.sku,
       vendorSku: l.vendorSku || null,
-      name: l.name,
+      name: poLineName(l),
       quantity: l.quantity,
       unitCostMinor: l.unitCostMinor,
       extendedCostMinor: l.extendedCostMinor,

@@ -31,7 +31,7 @@ describe('BOM column headings', () => {
     const labels = await loadBomColumnLabels();
     expect(labels.part).toBe('Part #');
     expect(labels.costEach).toBe('Vendor Cost');
-    expect(labels.secondaryCharge).toBe('Vendor Cost'); // was "Their charge"
+    expect(labels.secondaryCharge).toBe('Repackaging Service Fee'); // was "Their charge", then "Vendor Cost"
     expect(Object.keys(labels)).toHaveLength(BOM_COLUMNS.length);
   });
 

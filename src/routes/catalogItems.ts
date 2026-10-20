@@ -15,6 +15,7 @@ import { ValidationError, ConflictError, NotFoundError } from '../lib/errors.js'
 import { reassignSkuVendor } from '../handoff/vendorReassign.js';
 import { syncPartSourcing } from '../catalog/partVendor.js';
 import { recordRevision, skuSnapshot } from '../lib/revisions.js';
+import { PROCESSING_COST_SELECT, processingFeeOf } from '../catalog/landedCost.js';
 import { priceForMarginMinor } from '../lib/money.js';
 
 /**
@@ -98,6 +99,10 @@ type SkuRow = {
   productUrl?: string | null;
   requiresPowderColor?: boolean;
   packagingBag?: string | null;
+  processingEnabled?: boolean;
+  secondaryVendor?: string | null;
+  secondaryVendorCostMinor?: number | null;
+  processingFeeBasis?: string;
 };
 async function listSkus(): Promise<SkuRow[]> {
   if (skuHasOverrideFlag) {
@@ -112,6 +117,7 @@ async function listSkus(): Promise<SkuRow[]> {
           productUrl: true,
           requiresPowderColor: true,
           packagingBag: true,
+          ...PROCESSING_COST_SELECT,
         },
         orderBy: { part: 'asc' },
       })) as SkuRow[];
@@ -944,7 +950,10 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
       freightLabel?: string;
       freightTbd?: boolean;
       priceMinor?: number;
+      /** Unit Purchase Cost plus a per-unit Repackaging Service Fee (landedCost.ts). */
       costMinor?: number;
+      /** A Repackaging Service Fee charged once per line, whatever the quantity. */
+      processingFeeMinor?: number;
       weightLbs?: number;
       description?: string;
       /** Catalogue position — see sortKeyFor above. Drives insertion order in the builder. */
@@ -965,7 +974,11 @@ export function registerCatalogItemRoutes(app: FastifyInstance): void {
       if (s.freightMinor != null) entry.freightMinor = s.freightMinor;
       if (s.freightLabel) entry.freightLabel = s.freightLabel;
       entry.priceMinor = s.unitPriceMinor || 0;
-      entry.costMinor = s.unitCostMinor || (p ? latestCost[p.id] || 0 : 0);
+      // The part's cost on a proposal includes its processing supplier's fee, so the
+      // proposal's cost of goods matches what the Bill of Materials will spend.
+      const fee = processingFeeOf(s);
+      entry.costMinor = (s.unitCostMinor || (p ? latestCost[p.id] || 0 : 0)) + fee.perUnitMinor;
+      if (fee.perOrderMinor) entry.processingFeeMinor = fee.perOrderMinor;
       entry.weightLbs = Number(s.weightLbs) || (p ? lbsFromOz(p.weightOz) : 0);
       entry.description = s.description;
       entry.sortKey = sortKeyFor(

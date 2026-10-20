@@ -1,5 +1,6 @@
 import { prisma } from '../lib/prisma.js';
 import { NotFoundError, ValidationError } from '../lib/errors.js';
+import { costMultiplier } from './lineCost.js';
 import { recordAudit } from '../lib/audit.js';
 
 /**
@@ -100,6 +101,7 @@ export async function previewCostRefresh(
       unitCostMinor: true,
       freeIssue: true,
       secondaryOfSku: true,
+      costPerOrder: true,
     },
     orderBy: [{ vendor: 'asc' }, { sku: 'asc' }],
   });
@@ -128,10 +130,10 @@ export async function previewCostRefresh(
   for (const k of skus)
     if (k.unitCostMinor && k.unitCostMinor > 0)
       catalog.set(k.part.trim().toUpperCase(), k.unitCostMinor);
-  // A secondary-vendor line (bomBuild.ts's withSecondaryVendor) shares its sku with the
-  // part's own line but is forced to a deliberately different cost — what the SECOND
-  // vendor charges (e.g. a powder-coating fee), not what the part's own vendor pays for
-  // it. Comparing it against Sku.unitCostMinor would report every such line as "drift"
+  // A processing line (bomBuild.ts's processingSeed) shares its sku with the part's
+  // purchase line but is forced to a deliberately different cost — the processing
+  // supplier's Repackaging Service Fee, not what the Procurement Supplier charges for
+  // the part. Comparing it against Sku.unitCostMinor would report every such line as "drift"
   // and, if applied, silently overwrite the second vendor's real agreed cost with the
   // first vendor's catalog price.
   //
@@ -178,7 +180,8 @@ export async function previewCostRefresh(
       currentMinor: current,
       catalogMinor,
       deltaMinor: catalogMinor - current,
-      extendedDeltaMinor: (catalogMinor - current) * qty,
+      // A per-order fee moves the job by the difference once, not per unit.
+      extendedDeltaMinor: (catalogMinor - current) * costMultiplier(l),
       freeIssue: !!l.freeIssue,
       secondaryVendor: isSecondary,
       blocked: submitted.has(vendor.toLowerCase())

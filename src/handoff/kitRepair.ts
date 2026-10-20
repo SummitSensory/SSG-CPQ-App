@@ -1,6 +1,6 @@
 import { prisma } from '../lib/prisma.js';
 import { procurementFromItems } from './lock.js';
-import { expandBomBuild } from './bomBuild.js';
+import { expandBomBuild, reconcileProcessingLines } from './bomBuild.js';
 import { resolveCatalogRefs } from './service.js';
 import {
   HARDWARE_KIT_SKU,
@@ -185,19 +185,26 @@ export async function planKitRepairs(
 
     const expanded = await expandBomBuild(seeds);
     const refs = await resolveCatalogRefs(expanded);
-    plan.lines = expanded.map((s, i) => {
-      const ref = refs[i];
-      return {
-        sku: ref?.sku ?? s.sku ?? '',
-        name: s.name,
-        quantity: s.quantity,
-        // The fastener's own catalog vendor, as at lock; the kit's vendor otherwise,
-        // so nothing lands on a sheet nobody is going to send.
-        vendor: s.vendorOverride ?? ref?.vendor ?? kit.vendor ?? null,
-        unitCostMinor: s.forcedUnitCostMinor ?? ref?.unitCostMinor ?? s.unitCostMinor ?? null,
-        unitWeightLbs: ref?.unitWeightLbs ?? s.unitWeightLbs ?? null,
-      };
-    });
+    // Processing lines are not part of the kit: they are added after the repair by
+    // reconcileProcessingLines, which merges into a processing line the order already
+    // has for the part and leaves a submitted sheet alone. Creating them here would
+    // print a second fee line for a part that is also its own proposal line.
+    // Paired with its catalog ref BEFORE filtering, so the two stay aligned.
+    plan.lines = expanded
+      .map((s, i) => ({ s, ref: refs[i] }))
+      .filter(({ s }) => !s.secondaryOfSku)
+      .map(({ s, ref }) => {
+        return {
+          sku: ref?.sku ?? s.sku ?? '',
+          name: s.name,
+          quantity: s.quantity,
+          // The fastener's own catalog vendor, as at lock; the kit's vendor otherwise,
+          // so nothing lands on a sheet nobody is going to send.
+          vendor: s.vendorOverride ?? ref?.vendor ?? kit.vendor ?? null,
+          unitCostMinor: s.forcedUnitCostMinor ?? ref?.unitCostMinor ?? s.unitCostMinor ?? null,
+          unitWeightLbs: ref?.unitWeightLbs ?? s.unitWeightLbs ?? null,
+        };
+      });
     plan.action = 'repair';
     plan.reason = `replace 1 bundled H-1000 line with ${plan.lines.length} fastener lines (from the ${plan.source})`;
   }
@@ -208,7 +215,7 @@ export async function planKitRepairs(
 export async function applyKitRepair(plan: KitRepairPlan, actorId = 'system'): Promise<boolean> {
   if (plan.action !== 'repair' || !plan.kitLineId) return false;
   const kitLineId = plan.kitLineId;
-  return prisma.$transaction(async (tx) => {
+  const done = await prisma.$transaction(async (tx) => {
     const kit = await tx.procurementLine.findUnique({ where: { id: kitLineId } });
     if (!kit || kit.orderId !== plan.orderId) return false;
     const done = await tx.procurementLine.count({
@@ -261,4 +268,8 @@ export async function applyKitRepair(plan: KitRepairPlan, actorId = 'system'): P
     });
     return true;
   });
+  // A fastener that goes through a processing supplier gets (or tops up) its
+  // processing line now that it is on the order as its own line.
+  if (done) await reconcileProcessingLines(plan.orderId);
+  return done;
 }

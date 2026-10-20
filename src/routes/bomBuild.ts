@@ -41,21 +41,19 @@ const ComponentPatch = z.object({
   active: z.boolean().optional(),
 });
 
-const SettingsInput = z.object({
-  keepParentOnBom: z.boolean().optional(),
-  /**
-   * Manufacturer NAME, matching how a procurement line and a BOM section are keyed.
-   * Empty string clears it — the part goes back to its own vendor at full cost.
-   */
-  freeIssueVendor: z.union([z.string().trim().max(160), z.null()]).optional(),
-  /**
-   * A SECOND manufacturer NAME whose sheet this part also gets its own line on, in
-   * addition to (not instead of) its own vendor. Empty string clears it.
-   */
-  secondaryVendor: z.union([z.string().trim().max(160), z.null()]).optional(),
-  /** What secondaryVendor charges per unit. Null/0 = a receiving note, no charge. */
-  secondaryVendorCostMinor: z.union([z.number().int().min(0), z.null()]).optional(),
-});
+const SettingsInput = z
+  .object({
+    keepParentOnBom: z.boolean().optional(),
+  })
+  .strict();
+
+/**
+ * Routing to a second vendor is set in ONE place, Catalog → BOM setup (the processing
+ * service supplier), so it is validated one way. This screen used to set "ships
+ * through" and "also on vendor" too; a caller still sending them is told where they
+ * went rather than having them silently ignored.
+ */
+const MOVED_TO_BOM_SETUP = ['freeIssueVendor', 'secondaryVendor', 'secondaryVendorCostMinor'];
 
 export function registerBomBuildRoutes(app: FastifyInstance): void {
   const read = { preHandler: requirePermission(Permission.CATALOG_READ) };
@@ -143,16 +141,17 @@ export function registerBomBuildRoutes(app: FastifyInstance): void {
         where: {
           OR: [
             { keepParentOnBom: true },
-            { NOT: { freeIssueVendor: null } },
-            { NOT: { secondaryVendor: null } },
+            { processingEnabled: true, NOT: { secondaryVendor: null } },
           ],
         },
         select: {
           part: true,
           keepParentOnBom: true,
-          freeIssueVendor: true,
+          processingEnabled: true,
           secondaryVendor: true,
           secondaryVendorCostMinor: true,
+          processingFeeBasis: true,
+          processingSku: true,
         },
       }),
     ]);
@@ -163,9 +162,11 @@ export function registerBomBuildRoutes(app: FastifyInstance): void {
         parentPart: string;
         name: string;
         keepParentOnBom: boolean;
-        freeIssueVendor: string | null;
-        secondaryVendor: string | null;
-        secondaryVendorCostMinor: number | null;
+        /** Shown here for context; edited in Catalog → BOM setup. */
+        processingVendor: string | null;
+        processingFeeMinor: number | null;
+        processingFeeBasis: 'PER_UNIT' | 'PER_ORDER';
+        processingSku: string | null;
         components: Array<{
           id: string;
           childPart: string;
@@ -198,9 +199,10 @@ export function registerBomBuildRoutes(app: FastifyInstance): void {
           parentPart: k,
           name: info.get(k)?.description ?? '',
           keepParentOnBom: !!s?.keepParentOnBom,
-          freeIssueVendor: s?.freeIssueVendor ?? null,
-          secondaryVendor: s?.secondaryVendor ?? null,
-          secondaryVendorCostMinor: s?.secondaryVendorCostMinor ?? null,
+          processingVendor: s?.processingEnabled ? (s.secondaryVendor ?? null) : null,
+          processingFeeMinor: s?.processingEnabled ? (s.secondaryVendorCostMinor ?? null) : null,
+          processingFeeBasis: s?.processingFeeBasis ?? 'PER_UNIT',
+          processingSku: s?.processingEnabled ? (s.processingSku ?? null) : null,
           components: [],
         };
         parents.set(k, row);
@@ -320,7 +322,12 @@ export function registerBomBuildRoutes(app: FastifyInstance): void {
     const part = String((req.params as { part: string }).part || '')
       .trim()
       .toUpperCase();
-    const parsed = SettingsInput.safeParse(req.body);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    if (MOVED_TO_BOM_SETUP.some((k) => k in body))
+      throw new ValidationError(
+        'Routing a part to a second vendor is set in Catalog → BOM setup, as its Processing Service Supplier.',
+      );
+    const parsed = SettingsInput.safeParse(body);
     if (!parsed.success)
       throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid setting');
     /**
@@ -353,41 +360,9 @@ export function registerBomBuildRoutes(app: FastifyInstance): void {
       });
     }
 
-    const data: {
-      keepParentOnBom?: boolean;
-      freeIssueVendor?: string | null;
-      secondaryVendor?: string | null;
-      secondaryVendorCostMinor?: number | null;
-    } = {};
+    const data: { keepParentOnBom?: boolean } = {};
     if (parsed.data.keepParentOnBom !== undefined)
       data.keepParentOnBom = parsed.data.keepParentOnBom;
-    if (parsed.data.freeIssueVendor !== undefined) {
-      const v = (parsed.data.freeIssueVendor || '').trim();
-      if (v) {
-        // Checked against the manufacturer list because BOM sections are keyed by
-        // vendor NAME: a name that is not a vendor of record would create a section
-        // nobody maintains.
-        const mfr = await prisma.manufacturer.findFirst({ where: { name: v } });
-        if (!mfr)
-          throw new ValidationError(
-            `"${v}" is not a manufacturer on record. Add the vendor first under Catalog → Manufacturers.`,
-          );
-      }
-      data.freeIssueVendor = v || null;
-    }
-    if (parsed.data.secondaryVendor !== undefined) {
-      const v = (parsed.data.secondaryVendor || '').trim();
-      if (v) {
-        const mfr = await prisma.manufacturer.findFirst({ where: { name: v } });
-        if (!mfr)
-          throw new ValidationError(
-            `"${v}" is not a manufacturer on record. Add the vendor first under Catalog → Manufacturers.`,
-          );
-      }
-      data.secondaryVendor = v || null;
-    }
-    if (parsed.data.secondaryVendorCostMinor !== undefined)
-      data.secondaryVendorCostMinor = parsed.data.secondaryVendorCostMinor;
 
     const row = await prisma.sku.update({
       where: { part },
@@ -396,9 +371,11 @@ export function registerBomBuildRoutes(app: FastifyInstance): void {
         part: true,
         description: true,
         keepParentOnBom: true,
-        freeIssueVendor: true,
+        processingEnabled: true,
         secondaryVendor: true,
         secondaryVendorCostMinor: true,
+        processingFeeBasis: true,
+        processingSku: true,
       },
     });
     await recordAudit({
@@ -412,9 +389,9 @@ export function registerBomBuildRoutes(app: FastifyInstance): void {
   });
 
   /**
-   * Delete a part's whole rule: every component row under it, and the free-issue,
-   * keep-parent and also-appears-on-vendor settings on its Sku. The Sku itself — its
-   * price, cost, vendor — is catalog data and is left alone.
+   * Delete a part's whole kit rule: every component row under it, and its
+   * keep-parent setting. Its processing-supplier setup belongs to Catalog → BOM setup
+   * and is left alone, as is the Sku itself — its price, cost and vendor.
    *
    * Like every rule change, this affects orders locked from now on. An order already
    * locked keeps the lines the rule already produced; re-applying the rules to it does
@@ -431,12 +408,7 @@ export function registerBomBuildRoutes(app: FastifyInstance): void {
       }),
       prisma.sku.updateMany({
         where: { part: { equals: part, mode: 'insensitive' } },
-        data: {
-          keepParentOnBom: false,
-          freeIssueVendor: null,
-          secondaryVendor: null,
-          secondaryVendorCostMinor: null,
-        },
+        data: { keepParentOnBom: false },
       }),
     ]);
     await recordAudit({

@@ -18,36 +18,42 @@ import type { ProcurementSeed } from './lock.js';
  *      (a component may itself have components) to a depth of six, and a cycle
  *      stops rather than recursing.
  *
- *   2. FREE ISSUE (`Sku.freeIssueVendor`). A part we buy from one vendor and have
- *      shipped to another. UEU-ISTRS is bought from Productive Tool Products and
- *      delivered to Goldberg Brothers, who crate it with the structure. Summit has
- *      already paid for it, so it belongs on GOLDBERG's sheet — they need to know
- *      it is in the shipment — but at no cost, and out of Goldberg's cost total.
- *      The line keeps its real `unitCostMinor` in the database, so the order's cost
- *      of goods is unchanged; only the printed sheet and the section total suppress
- *      it. `purchaseVendor` records who we actually bought it from.
+ *   2. PROCESSING SERVICE SUPPLIER (`Sku.processingEnabled` + `Sku.secondaryVendor`).
+ *      A part bought from one vendor (its Procurement Supplier — Amazon) and shipped
+ *      to another (the Processing Service Supplier — Goldberg Brothers), who
+ *      repackages it and ships it on with the structure. It must be on BOTH sheets:
+ *      Amazon's, because that is the purchase, and Goldberg's, because they receive,
+ *      repackage and ship it. So the purchase line is left exactly where it is and ONE
+ *      more line is added on the processing supplier's sheet, for the part's whole
+ *      quantity, at their Repackaging Service Fee — per unit, or once per order
+ *      (`costPerOrder`) — under their Repackaging SKU (`vendorPartNo`).
+ *
+ *      This replaced FREE ISSUE (`Sku.freeIssueVendor`), which MOVED the purchase
+ *      line to the receiving vendor at $0 and so took the part off the sheet of the
+ *      vendor it is bought from. Lines an order locked under free issue keep their
+ *      `freeIssue` flag and still print as they did; nothing creates new ones.
  *
  * Both are applied at lock time (see createAcceptedOrder) and can be re-applied to
  * an order that was locked before the rule existed — see applyBomBuildToOrder.
  */
 
 export interface BomBuildSeed extends ProcurementSeed {
-  /** Receiving vendor for a free-issue part; overrides the catalog vendor. */
+  /** The processing supplier, on a processing line; overrides the catalog vendor. */
   vendorOverride?: string | null;
-  /** Who we bought it from, kept once `vendor` has been redirected. */
-  purchaseVendor?: string | null;
-  freeIssue?: boolean;
   /**
    * Wins over the catalog-resolved cost unconditionally (see
-   * src/handoff/service.ts's procurement-create map). Free issue and kit components
-   * never set this — the catalog cost is correct for them. Only a line created by
-   * the secondaryVendor rule sets it, because that line's cost is what the SECOND
-   * vendor charges, which has nothing to do with what the catalog says the part's
-   * own (first) vendor charges for the same part number.
+   * src/handoff/service.ts's procurement-create map). Kit components never set this —
+   * the catalog cost is correct for them. Only a processing line sets it, because its
+   * cost is the processing supplier's Repackaging Service Fee, which has nothing to do
+   * with what the catalog says the Procurement Supplier charges for the part.
    */
   forcedUnitCostMinor?: number | null;
-  /** Set on a line created by the secondaryVendor rule: the part it fired on. */
+  /** Set on a processing line: the part it was added for. */
   secondaryOfSku?: string | null;
+  /** The fee is charged once for the line rather than per unit. */
+  costPerOrder?: boolean;
+  /** The Repackaging SKU, printed as the part number on the processing supplier's sheet. */
+  vendorPartNo?: string | null;
 }
 
 /** Deep enough for a kit of kits; shallow enough that a bad cycle cannot run away. */
@@ -68,9 +74,15 @@ interface PartInfo {
   vendor: string | null;
 }
 
-interface SecondaryVendorRule {
+export interface ProcessingRule {
+  /** The Processing Service Supplier. */
   vendor: string;
+  /** The Repackaging Service Fee; null = no charge. */
   costMinor: number | null;
+  /** Charged once per order rather than per unit. */
+  perOrder: boolean;
+  /** The Repackaging SKU, if one is on file. */
+  vendorPartNo: string | null;
 }
 
 export interface BuildTables {
@@ -78,19 +90,19 @@ export interface BuildTables {
   children: Map<string, ChildRow[]>;
   /** Parents that stay on the sheet beside their components. */
   keepParent: Set<string>;
-  /** Part → the vendor it is shipped to at no charge. */
-  freeIssueVendor: Map<string, string>;
-  /** Part → the second vendor whose sheet it ALSO appears on, and what they charge. */
-  secondaryVendor: Map<string, SecondaryVendorRule>;
+  /** Part → the processing supplier whose sheet it ALSO appears on, and their fee. */
+  processing: Map<string, ProcessingRule>;
 }
 
 /** Nothing configured: every caller treats this as "leave the order alone". */
 const EMPTY_TABLES: BuildTables = {
   children: new Map(),
   keepParent: new Set(),
-  freeIssueVendor: new Map(),
-  secondaryVendor: new Map(),
+  processing: new Map(),
 };
+
+/** Nothing for this file to do: no kits, no processing parts. */
+const noRules = (t: BuildTables): boolean => !t.children.size && !t.processing.size;
 
 /**
  * Whether the Prisma client in this process actually knows about these tables.
@@ -113,22 +125,23 @@ export async function loadBuildTables(): Promise<BuildTables> {
       orderBy: [{ parentPart: 'asc' }, { sortOrder: 'asc' }, { childPart: 'asc' }],
       select: { parentPart: true, childPart: true, quantity: true },
     }),
-    // All three flags are rare, so this reads the handful of rows that carry one
-    // rather than the whole SKU master.
+    // Both flags are rare, so this reads the handful of rows that carry one rather
+    // than the whole SKU master.
     prisma.sku.findMany({
       where: {
         OR: [
           { keepParentOnBom: true },
-          { NOT: { freeIssueVendor: null } },
-          { NOT: { secondaryVendor: null } },
+          { processingEnabled: true, NOT: { secondaryVendor: null } },
         ],
       },
       select: {
         part: true,
         keepParentOnBom: true,
-        freeIssueVendor: true,
+        processingEnabled: true,
         secondaryVendor: true,
         secondaryVendorCostMinor: true,
+        processingFeeBasis: true,
+        processingSku: true,
       },
     }),
   ]);
@@ -144,16 +157,19 @@ export async function loadBuildTables(): Promise<BuildTables> {
   }
 
   const keepParent = new Set<string>();
-  const freeIssueVendor = new Map<string, string>();
-  const secondaryVendor = new Map<string, SecondaryVendorRule>();
+  const processing = new Map<string, ProcessingRule>();
   for (const s of skus) {
     if (s.keepParentOnBom) keepParent.add(key(s.part));
-    const v = (s.freeIssueVendor || '').trim();
-    if (v) freeIssueVendor.set(key(s.part), v);
     const sv = (s.secondaryVendor || '').trim();
-    if (sv) secondaryVendor.set(key(s.part), { vendor: sv, costMinor: s.secondaryVendorCostMinor });
+    if (s.processingEnabled && sv)
+      processing.set(key(s.part), {
+        vendor: sv,
+        costMinor: s.secondaryVendorCostMinor,
+        perOrder: s.processingFeeBasis === 'PER_ORDER',
+        vendorPartNo: (s.processingSku || '').trim() || null,
+      });
   }
-  return { children, keepParent, freeIssueVendor, secondaryVendor };
+  return { children, keepParent, processing };
 }
 
 /** Every part reachable from `roots` through the component table, roots included. */
@@ -295,50 +311,68 @@ function explode(
   return rows;
 }
 
-function withFreeIssue(s: BomBuildSeed, t: BuildTables): BomBuildSeed {
-  const v = t.freeIssueVendor.get(key(s.sku));
-  if (!v) return s;
-  return { ...s, freeIssue: true, vendorOverride: v };
+/**
+ * The processing line for a part: ONE line on the processing supplier's sheet, for the
+ * part's whole quantity on the order, at their fee and under their Repackaging SKU.
+ * One rather than one per purchase line, because a per-order fee is charged once per
+ * order and because the processing supplier repackages the part, not our lines. Its
+ * cost is forced (see BomBuildSeed.forcedUnitCostMinor).
+ */
+export function processingSeed(
+  sku: string,
+  name: string,
+  quantity: number,
+  rule: ProcessingRule,
+  proposalLineOrder?: number,
+): BomBuildSeed {
+  return {
+    productId: null,
+    sku,
+    name,
+    quantity,
+    isHardwareComponent: false,
+    kitSku: null,
+    proposalLineOrder,
+    vendorOverride: rule.vendor,
+    forcedUnitCostMinor: rule.costMinor ?? 0,
+    secondaryOfSku: key(sku),
+    costPerOrder: rule.perOrder,
+    vendorPartNo: rule.vendorPartNo,
+  };
 }
 
 /**
- * A part with a secondaryVendor rule gets a SECOND line on that vendor's sheet, in
- * addition to (not instead of) its own line — the opposite of withFreeIssue above,
- * which redirects. The new line's cost is forced to what the second vendor charges
- * (possibly $0, a receiving note) regardless of what the catalog says the part's own
- * vendor charges for the same part number; see BomBuildSeed.forcedUnitCostMinor.
+ * Every part with a processing rule gets its processing line IN ADDITION to (never
+ * instead of) its purchase lines, which come back untouched. Runs after kits explode,
+ * so a component that carries the rule gets its line too.
  */
-function withSecondaryVendor(seeds: BomBuildSeed[], t: BuildTables): BomBuildSeed[] {
-  if (!t.secondaryVendor.size) return seeds;
-  const out: BomBuildSeed[] = [];
+function withProcessing(seeds: BomBuildSeed[], t: BuildTables): BomBuildSeed[] {
+  if (!t.processing.size) return seeds;
+  const totals = new Map<string, { first: BomBuildSeed; quantity: number }>();
   for (const s of seeds) {
-    out.push(s);
-    const rule = t.secondaryVendor.get(key(s.sku));
-    if (!rule) continue;
-    out.push({
-      productId: null,
-      sku: s.sku,
-      name: s.name,
-      quantity: s.quantity,
-      isHardwareComponent: false,
-      kitSku: null,
-      proposalLineOrder: s.proposalLineOrder,
-      vendorOverride: rule.vendor,
-      forcedUnitCostMinor: rule.costMinor ?? 0,
-      secondaryOfSku: key(s.sku),
-    });
+    const k = key(s.sku);
+    if (!k || !t.processing.has(k)) continue;
+    const at = totals.get(k);
+    if (at) at.quantity += Number(s.quantity) || 0;
+    else totals.set(k, { first: s, quantity: Number(s.quantity) || 0 });
+  }
+  const out = seeds.slice();
+  for (const [k, { first, quantity }] of totals) {
+    const rule = t.processing.get(k);
+    if (!rule || quantity <= 0) continue;
+    out.push(processingSeed(first.sku ?? k, first.name, quantity, rule, first.proposalLineOrder));
   }
   return out;
 }
 
 /**
- * Apply all three rules to the seeds `procurementFromItems` produced. Returns the
- * seeds unchanged when no rule exists, so an order on a database with empty rule
- * tables behaves exactly as before.
+ * Apply both rules to the seeds `procurementFromItems` produced. Returns the seeds
+ * unchanged when no rule exists, so an order on a database with empty rule tables
+ * behaves exactly as before.
  */
 export async function expandBomBuild(seeds: ProcurementSeed[]): Promise<BomBuildSeed[]> {
   const t = await loadBuildTables();
-  if (!t.children.size && !t.freeIssueVendor.size && !t.secondaryVendor.size) return seeds;
+  if (noRules(t)) return seeds;
   const info = await partInfo(
     reachable(
       seeds.map((s) => s.sku ?? ''),
@@ -347,10 +381,7 @@ export async function expandBomBuild(seeds: ProcurementSeed[]): Promise<BomBuild
   );
   const out: BomBuildSeed[] = [];
   for (const seed of seeds) out.push(...explode(seed, t, info, 0, []));
-  return withSecondaryVendor(
-    out.map((s) => withFreeIssue(s, t)),
-    t,
-  );
+  return withProcessing(out, t);
 }
 
 export interface ApplyBuildResult {
@@ -358,12 +389,16 @@ export interface ApplyBuildResult {
   exploded: string[];
   /** Component lines created. */
   componentsAdded: number;
-  /** Lines moved onto their receiving vendor's sheet at no cost. */
-  redirected: number;
   /** Parts with a rule that were skipped because the order already has them expanded. */
   alreadyExpanded: string[];
-  /** New lines created on a second vendor's sheet by the secondaryVendor rule. */
+  /** Processing lines created on a processing supplier's sheet. */
   secondaryAdded: number;
+  /** Parts whose processing line was raised to cover their purchase lines. */
+  secondaryTopUps: string[];
+  /** Processing lines that could not be added or raised, and why (a submitted sheet). */
+  secondarySkipped: string[];
+  /** Retired free-issue lines put back on their Procurement Supplier's sheet. */
+  freeIssueRestored: string[];
   /** Kit parents put back beside their components because they are now kept. */
   parentsRestored: string[];
 }
@@ -374,7 +409,7 @@ export interface ApplyBuildResult {
  * Needed because the rules are configuration: a part declared as a kit today has to
  * be able to reach the orders locked yesterday. Idempotent — a parent whose
  * components are already on the order is skipped (its components carry `kitSku`),
- * and a line already sitting with its receiving vendor is left alone.
+ * and a part that already has its processing line is only topped up, never doubled.
  *
  * The accepted proposal is not touched. This changes only what we purchase.
  */
@@ -386,12 +421,14 @@ export async function applyBomBuildToOrder(
   const result: ApplyBuildResult = {
     exploded: [],
     componentsAdded: 0,
-    redirected: 0,
     alreadyExpanded: [],
     secondaryAdded: 0,
+    secondaryTopUps: [],
+    secondarySkipped: [],
+    freeIssueRestored: [],
     parentsRestored: [],
   };
-  if (!t.children.size && !t.freeIssueVendor.size && !t.secondaryVendor.size) return result;
+  if (noRules(t)) return result;
 
   const lines = await prisma.procurementLine.findMany({
     where: { orderId },
@@ -403,10 +440,9 @@ export async function applyBomBuildToOrder(
       quantityOriginal: true,
       vendor: true,
       kitSku: true,
-      freeIssue: true,
-      purchaseVendor: true,
       isHardwareComponent: true,
       proposalLineOrder: true,
+      secondaryOfSku: true,
     },
   });
   const expandedAlready = new Set(lines.map((l) => key(l.kitSku)).filter(Boolean));
@@ -421,6 +457,9 @@ export async function applyBomBuildToOrder(
   const toCreate: BomBuildSeed[] = [];
   const toDelete: string[] = [];
   for (const l of lines) {
+    // A processing line is the processing supplier's service on the part, not a
+    // purchase of it: it is never exploded into components.
+    if (l.secondaryOfSku) continue;
     const k = key(l.sku);
     const kids = k ? t.children.get(k) : undefined;
     if (!kids || !kids.length) continue;
@@ -492,78 +531,70 @@ export async function applyBomBuildToOrder(
   }
   if (toDelete.length) await prisma.procurementLine.deleteMany({ where: { id: { in: toDelete } } });
 
-  // Free issue runs over the order as it now stands, so a component that came out of
-  // a kit in this same pass is redirected too.
-  if (t.freeIssueVendor.size) {
-    const after = await prisma.procurementLine.findMany({
-      where: { orderId },
-      select: { id: true, sku: true, vendor: true, freeIssue: true, purchaseVendor: true },
-    });
-    for (const l of after) {
-      const v = t.freeIssueVendor.get(key(l.sku));
-      if (!v) continue;
-      if (l.freeIssue && (l.vendor || '') === v) continue;
-      await prisma.procurementLine.update({
-        where: { id: l.id },
-        data: {
-          vendor: v,
-          freeIssue: true,
-          // Only recorded the first time, so a re-run cannot overwrite the real
-          // purchase vendor with the receiving one.
-          purchaseVendor: l.purchaseVendor ?? l.vendor ?? null,
-        },
-      });
-      result.redirected += 1;
-    }
-  }
-
-  // Secondary vendor runs over the order as it now stands too, for the same reason
-  // free issue does above — a component that just came out of a kit may itself carry
-  // the rule. ADDITIVE, not a redirect: the matched line is left exactly as it is,
-  // and a new line is created for the second vendor unless one already exists
-  // (secondaryOfSku), so re-running this is safe.
-  if (t.secondaryVendor.size) {
-    const current = await prisma.procurementLine.findMany({
+  if (t.processing.size) {
+    const locked = await submittedVendors(orderId);
+    const now = await prisma.procurementLine.findMany({
       where: { orderId },
       select: {
+        id: true,
         sku: true,
-        name: true,
-        quantity: true,
-        proposalLineOrder: true,
+        vendor: true,
+        freeIssue: true,
+        purchaseVendor: true,
         secondaryOfSku: true,
       },
     });
-    const alreadySecondary = new Set(current.map((l) => l.secondaryOfSku).filter(Boolean));
-    const secondaryToCreate = current
-      .filter((l) => !l.secondaryOfSku)
-      .map((l) => ({ line: l, rule: t.secondaryVendor.get(key(l.sku)) }))
-      .filter(
-        (x): x is { line: (typeof current)[number]; rule: SecondaryVendorRule } =>
-          !!x.rule && !alreadySecondary.has(key(x.line.sku)),
-      );
-    if (secondaryToCreate.length) {
-      await prisma.procurementLine.createMany({
-        data: secondaryToCreate.map(({ line, rule }) => ({
-          orderId,
-          productId: null,
-          sku: line.sku,
-          name: line.name,
-          quantity: line.quantity,
-          quantityOriginal: line.quantity,
-          vendor: rule.vendor,
-          unitCostMinor: rule.costMinor ?? 0,
-          proposalLineOrder: line.proposalLineOrder ?? null,
-          secondaryOfSku: key(line.sku),
-        })),
+    // An order locked under the retired free issue had the purchase line MOVED to the
+    // receiving vendor, off the sheet of the vendor it is bought from. Its part is a
+    // processing part now (migration 0120), so the line goes back to its Procurement
+    // Supplier as an ordinary purchase — its cost was never changed — and reconcile
+    // below gives the processing supplier their line. Lines on a submitted sheet are
+    // the vendor's document and stay as they are.
+    for (const l of now) {
+      if (!l.freeIssue || l.secondaryOfSku || !t.processing.has(key(l.sku))) continue;
+      const back = (l.purchaseVendor || '').trim() || info.get(key(l.sku))?.vendor || null;
+      if (!back) continue;
+      if (locked.has(vendorKey(l.vendor)) || locked.has(vendorKey(back))) {
+        result.secondarySkipped.push(`${key(l.sku)}: free-issue line on a submitted sheet`);
+        continue;
+      }
+      await prisma.procurementLine.update({
+        where: { id: l.id },
+        data: { vendor: back, freeIssue: false, purchaseVendor: null },
       });
-      result.secondaryAdded = secondaryToCreate.length;
+      result.freeIssueRestored.push(key(l.sku));
     }
+    // A kit parent exploded in this pass may have had its own processing line; with
+    // none of that part bought any more, the fee line would bill for nothing.
+    const explodedNow = new Set(
+      lines.filter((l) => toDelete.includes(l.id)).map((l) => key(l.sku)),
+    );
+    for (const l of now) {
+      const k = key(l.secondaryOfSku);
+      if (!k || !explodedNow.has(k) || locked.has(vendorKey(l.vendor))) continue;
+      if (now.some((x) => !x.secondaryOfSku && key(x.sku) === k && !toDelete.includes(x.id)))
+        continue;
+      await prisma.procurementLine.delete({ where: { id: l.id } });
+    }
+  }
+
+  // Processing runs over the order as it now stands, so a component that came out of a
+  // kit in this same pass gets its processing line too. ADDITIVE, never a redirect:
+  // purchase lines are left exactly as they are. Re-running is safe — a part that
+  // already has its processing line is only topped up to cover its purchase lines.
+  if (t.processing.size) {
+    const sync = await reconcileProcessingLines(orderId, t);
+    result.secondaryAdded = sync.created;
+    result.secondaryTopUps = sync.toppedUp;
+    // Appended, not assigned: the free-issue pass above may already have reported one.
+    result.secondarySkipped.push(...sync.skipped);
   }
 
   if (
     result.exploded.length ||
-    result.redirected ||
     result.secondaryAdded ||
+    result.secondaryTopUps.length ||
+    result.freeIssueRestored.length ||
     result.parentsRestored.length
   ) {
     await prisma.orderEvent.create({
@@ -574,12 +605,206 @@ export async function applyBomBuildToOrder(
         detail: {
           exploded: result.exploded,
           componentsAdded: result.componentsAdded,
-          redirected: result.redirected,
           secondaryAdded: result.secondaryAdded,
+          secondaryTopUps: result.secondaryTopUps,
+          freeIssueRestored: result.freeIssueRestored,
           parentsRestored: result.parentsRestored,
         } as object,
       },
     });
   }
   return result;
+}
+
+/**
+ * The database row for a processing line. `purchaseVendor` records the Procurement
+ * Supplier, so the processing supplier's sheet can say where the part is coming from.
+ */
+export function processingLineData(
+  orderId: string,
+  seed: BomBuildSeed,
+  purchaseVendor: string | null,
+  unitWeightLbs: number | null = null,
+) {
+  return {
+    orderId,
+    productId: null,
+    sku: seed.sku,
+    name: seed.name,
+    quantity: seed.quantity,
+    quantityOriginal: seed.quantity,
+    vendor: seed.vendorOverride ?? null,
+    purchaseVendor: purchaseVendor ?? null,
+    unitCostMinor: seed.forcedUnitCostMinor ?? 0,
+    proposalLineOrder: seed.proposalLineOrder ?? null,
+    secondaryOfSku: seed.secondaryOfSku ?? key(seed.sku),
+    costPerOrder: !!seed.costPerOrder,
+    vendorPartNo: seed.vendorPartNo ?? null,
+    unitWeightLbs,
+  };
+}
+
+/** Vendors whose section on this order is submitted: their lines are the vendor's now. */
+async function submittedVendors(orderId: string): Promise<Set<string>> {
+  const rows = await prisma.bomVendorSection.findMany({
+    where: { orderId, status: 'SUBMITTED' },
+    select: { vendor: true },
+  });
+  return new Set(rows.map((r) => vendorKey(r.vendor)));
+}
+const vendorKey = (v: string | null | undefined): string =>
+  ((v && v.trim()) || 'Unassigned vendor').toLowerCase();
+
+/**
+ * Make sure every processing part on the order has a processing line covering at
+ * least the units on its purchase lines: create a missing one, raise a short one.
+ * Never lowers or deletes — a processing line someone trimmed by hand is theirs to
+ * keep — and never touches a submitted sheet; those are reported in `skipped`.
+ */
+export async function reconcileProcessingLines(
+  orderId: string,
+  tables?: BuildTables,
+): Promise<{ created: number; toppedUp: string[]; skipped: string[] }> {
+  const t = tables ?? (await loadBuildTables());
+  const out = { created: 0, toppedUp: [] as string[], skipped: [] as string[] };
+  if (!t.processing.size) return out;
+  const lines = await prisma.procurementLine.findMany({
+    where: { orderId },
+    select: {
+      id: true,
+      sku: true,
+      name: true,
+      quantity: true,
+      vendor: true,
+      proposalLineOrder: true,
+      secondaryOfSku: true,
+      unitWeightLbs: true,
+    },
+    orderBy: [{ proposalLineOrder: 'asc' }, { id: 'asc' }],
+  });
+  type Row = (typeof lines)[number];
+  const bought = new Map<string, { first: Row; quantity: number }>();
+  const processed = new Map<string, Row[]>();
+  for (const l of lines) {
+    if (l.secondaryOfSku) {
+      const k = key(l.secondaryOfSku);
+      processed.set(k, (processed.get(k) ?? []).concat(l));
+      continue;
+    }
+    const k = key(l.sku);
+    const rule = k ? t.processing.get(k) : undefined;
+    // A line of the part already on the processing supplier's own sheet is theirs to
+    // supply; adding a processing line beside it would print the part twice there.
+    if (!rule || vendorKey(l.vendor) === vendorKey(rule.vendor)) continue;
+    const at = bought.get(k);
+    if (at) at.quantity += Number(l.quantity) || 0;
+    else bought.set(k, { first: l, quantity: Number(l.quantity) || 0 });
+  }
+  if (!bought.size) return out;
+  const locked = await submittedVendors(orderId);
+  for (const [k, { first, quantity }] of bought) {
+    const rule = t.processing.get(k);
+    if (!rule || quantity <= 0) continue;
+    const mine = processed.get(k) ?? [];
+    const have = mine.reduce((a, l) => a + (Number(l.quantity) || 0), 0);
+    if (have >= quantity) continue;
+    if (!mine.length) {
+      if (locked.has(vendorKey(rule.vendor))) {
+        out.skipped.push(`${k}: ${rule.vendor}’s sheet is submitted`);
+        continue;
+      }
+      const seed = processingSeed(
+        first.sku ?? k,
+        first.name,
+        quantity,
+        rule,
+        first.proposalLineOrder ?? undefined,
+      );
+      await prisma.procurementLine.create({
+        data: processingLineData(
+          orderId,
+          seed,
+          first.vendor,
+          first.unitWeightLbs == null ? null : Number(first.unitWeightLbs),
+        ),
+      });
+      out.created += 1;
+      continue;
+    }
+    const target = mine.find((l) => !locked.has(vendorKey(l.vendor)));
+    if (!target) {
+      out.skipped.push(`${k}: ${mine[0]?.vendor ?? rule.vendor}’s sheet is submitted`);
+      continue;
+    }
+    await prisma.procurementLine.update({
+      where: { id: target.id },
+      data: { quantity: (Number(target.quantity) || 0) + (quantity - have) },
+    });
+    out.toppedUp.push(k);
+  }
+  return out;
+}
+
+/**
+ * A purchase line's quantity moved by `delta` — edited, added by hand, or removed:
+ * move the part's processing line by the same amount, so the processing supplier's
+ * sheet keeps covering what is bought. Adds the processing line if the part has the
+ * rule and none yet; removes it once none of the part is left on the order.
+ *
+ * Returns a sentence for the person who made the change when it could not follow
+ * (the processing supplier's sheet is submitted), so the mismatch is said out loud
+ * rather than found on the dock.
+ */
+export async function followPurchaseQuantity(
+  orderId: string,
+  sku: string | null | undefined,
+  delta: number,
+  lineVendor?: string | null,
+): Promise<{ changed: boolean; warning: string | null }> {
+  const k = key(sku);
+  if (!k || !delta || !tablesAvailable()) return { changed: false, warning: null };
+  const t = await loadBuildTables();
+  const rule = t.processing.get(k);
+  // A line sitting with the processing supplier itself is not a purchase for them to
+  // repackage — reconcileProcessingLines leaves those out for the same reason.
+  if (rule && lineVendor !== undefined && vendorKey(lineVendor) === vendorKey(rule.vendor))
+    return { changed: false, warning: null };
+  const mine = await prisma.procurementLine.findMany({
+    where: { orderId, secondaryOfSku: { equals: k, mode: 'insensitive' } },
+    select: { id: true, quantity: true, vendor: true },
+    orderBy: { id: 'asc' },
+  });
+  if (!mine.length) {
+    if (delta < 0 || !rule) return { changed: false, warning: null };
+    const r = await reconcileProcessingLines(orderId, t);
+    return {
+      changed: r.created > 0 || r.toppedUp.length > 0,
+      warning: r.skipped.length ? `Processing line not added — ${r.skipped.join('; ')}.` : null,
+    };
+  }
+  const locked = await submittedVendors(orderId);
+  const target = mine.find((l) => !locked.has(vendorKey(l.vendor)));
+  if (!target)
+    return {
+      changed: false,
+      warning: `${mine[0]?.vendor ?? 'The processing supplier'}’s sheet is submitted, so its line for ${k} still shows the old quantity. Unlock that sheet and correct it there.`,
+    };
+  const next = (Number(target.quantity) || 0) + delta;
+  if (next > 0) {
+    await prisma.procurementLine.update({ where: { id: target.id }, data: { quantity: next } });
+    return { changed: true, warning: null };
+  }
+  const stillBought = (
+    await prisma.procurementLine.findMany({
+      where: { orderId, secondaryOfSku: null, sku: { equals: k, mode: 'insensitive' } },
+      select: { vendor: true },
+    })
+  ).filter((l) => !rule || vendorKey(l.vendor) !== vendorKey(rule.vendor)).length;
+  if (!stillBought && mine.length === 1) {
+    // None of the part is left on the order: its processing line goes with it.
+    await prisma.procurementLine.delete({ where: { id: target.id } });
+    return { changed: true, warning: null };
+  }
+  await prisma.procurementLine.update({ where: { id: target.id }, data: { quantity: 1 } });
+  return { changed: true, warning: null };
 }

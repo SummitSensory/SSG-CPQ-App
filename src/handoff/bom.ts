@@ -14,6 +14,7 @@ import {
 } from './bomLayout.js';
 import { bomPhone, bomToday, deliveryDetails, usDate, type BomDelivery } from './bomDelivery.js';
 import { latestDeliveryForOrder } from '../integrations/monday/portalDelivery.js';
+import { lineExtendedCostMinor } from './lineCost.js';
 
 /**
  * The Bill of Materials.
@@ -81,6 +82,13 @@ export interface BomLine {
   freeIssue: boolean;
   /** Who it was actually bought from, printed as the free-issue note's source. */
   purchaseVendor: string;
+  /**
+   * A processing-supplier line: the Repackaging Service Fee for a part bought from
+   * `purchaseVendor` and delivered here. Its cost is the fee, not the part.
+   */
+  processing: boolean;
+  /** The cost is charged once for the line, so extendedCostMinor = unitCostMinor. */
+  costPerOrder: boolean;
 }
 
 export interface BomDocument {
@@ -347,17 +355,27 @@ export async function buildBom(
     // A free-issue part is already paid for. It prints at zero so it appears in the
     // shipment without asking the receiving vendor to buy it, and so it cannot land in
     // any total on their sheet. The real cost is untouched on the order line.
+    // Free issue is retired (bomBuild.ts) but orders locked under it keep printing as
+    // they did.
     const free = !!l.freeIssue;
     const cost = free ? 0 : (l.unitCostMinor ?? 0);
+    const processing = !!l.secondaryOfSku;
+    const perOrder = !!l.costPerOrder;
     const wt = l.unitWeightLbs == null ? 0 : Number(l.unitWeightLbs);
     const vendorName = s(l.vendor).trim() || 'Unassigned vendor';
-    const vendorSku = vendorParts.get(vendorName, s(l.sku)) ?? '';
+    // The Repackaging SKU snapshotted on a processing line wins over the mapping.
+    const vendorSku = s(l.vendorPartNo).trim() || vendorParts.get(vendorName, s(l.sku)) || '';
     // Said on the line itself rather than in a legend, so it survives every export
     // — Excel, PDF and the screen all read vendorNotes already.
     const freeNote = free
       ? `Supplied by ${COMPANY.name} at no charge${s(l.purchaseVendor) ? ` (from ${s(l.purchaseVendor)})` : ''} — do not invoice`
       : '';
-    const notes = [s(l.vendorNotes), freeNote].filter(Boolean).join(' · ');
+    // The part itself is bought and paid for elsewhere; what this vendor bills is the
+    // repackaging service, so the sheet says both.
+    const processingNote = processing
+      ? `Repackaging service — ${s(l.sku) || 'part'} supplied by ${COMPANY.name}${s(l.purchaseVendor) ? ` from ${s(l.purchaseVendor)}` : ''}; bill the service fee${perOrder ? ' once for this order' : ' per unit'}, not the part`
+      : '';
+    const notes = [s(l.vendorNotes), freeNote, processingNote].filter(Boolean).join(' · ');
     return {
       id: l.id,
       lineNo: vendorSku || s(l.sku) || '—',
@@ -370,7 +388,11 @@ export async function buildBom(
       powderColor: s(l.powderColor).trim() || s(l.powderColorCode).trim(),
       packagingBag: bagBySku.get(s(l.sku)) ?? '',
       unitCostMinor: cost,
-      extendedCostMinor: cost * qty,
+      extendedCostMinor: lineExtendedCostMinor({
+        unitCostMinor: cost,
+        quantity: qty,
+        costPerOrder: perOrder,
+      }),
       unitWeightLbs: wt,
       extendedWeightLbs: Math.round(wt * qty * 1000) / 1000,
       vendor: vendorName,
@@ -383,6 +405,8 @@ export async function buildBom(
       sequence: sequenceOf(l, layout),
       freeIssue: free,
       purchaseVendor: s(l.purchaseVendor),
+      processing,
+      costPerOrder: perOrder,
     };
   });
 
@@ -462,6 +486,8 @@ export async function buildBom(
         sequence: null,
         freeIssue: false,
         purchaseVendor: '',
+        processing: false,
+        costPerOrder: false,
       });
     }
   }
