@@ -174,9 +174,9 @@ async function orderLinksForSlip(
     });
     const mfgItemId = line?.order.portalOrderItemId || null;
     const own = String(line?.order.mondayProjectId ?? '').trim();
-    if (/^d+$/.test(own)) return { mfgItemId, dealItemId: own };
+    if (/^\d+$/.test(own)) return { mfgItemId, dealItemId: own };
     const fromProposal = snapshotProjectId(line?.order.contentSnapshot);
-    if (/^d+$/.test(fromProposal)) return { mfgItemId, dealItemId: fromProposal };
+    if (/^\d+$/.test(fromProposal)) return { mfgItemId, dealItemId: fromProposal };
     if (mfgItemId) return { mfgItemId, dealItemId: null };
   }
   if (orgId) {
