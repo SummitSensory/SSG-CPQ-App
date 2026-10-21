@@ -14,6 +14,7 @@ const state = vi.hoisted(() => ({
   writes: [] as Array<Record<string, unknown>>,
   failWhen: null as ((cols: Record<string, unknown>) => boolean) | null,
   logs: [] as Array<{ status: string; error?: string }>,
+  currentStage: '' as string | Error,
 }));
 
 vi.mock('../../src/config/env.js', async (importOriginal) => {
@@ -60,6 +61,10 @@ vi.mock('../../src/integrations/monday/client.js', () => ({
     state.writes.push(cols);
   },
   uploadFileToColumn: async () => undefined,
+  mondayQuery: async () => {
+    if (state.currentStage instanceof Error) throw state.currentStage;
+    return { items: [{ column_values: [{ id: 'deal_stage', text: state.currentStage }] }] };
+  },
 }));
 vi.mock('../../src/crossborder/sellerCharges.js', () => ({
   sellerCollectedCharges: async () => ({ totalMinor: 0 }),
@@ -75,6 +80,7 @@ beforeEach(() => {
   state.writes = [];
   state.failWhen = null;
   state.logs = [];
+  state.currentStage = '';
 });
 
 describe('release push → Deal Phase', () => {
@@ -109,5 +115,28 @@ describe('release push → Deal Phase', () => {
     expect(r.pushed).toBe(false);
     expect(state.writes).toHaveLength(0);
     expect(r.dealStage).toBeUndefined();
+  });
+
+  it('clears an existing "Proposal Sent" first, so the board automation fires again', async () => {
+    state.currentStage = 'Proposal Sent';
+    const r = await pushReleasedProposal({ versionId: 'v1' });
+    expect(state.writes).toHaveLength(3);
+    expect(state.writes[1]).toEqual({ deal_stage: {} });
+    expect(state.writes[2]).toEqual({ deal_stage: { label: 'Proposal Sent' } });
+    expect(r.dealStage).toBe('Proposal Sent');
+  });
+
+  it('goes straight to "Proposal Sent" from any other phase', async () => {
+    state.currentStage = 'Negotiation';
+    await pushReleasedProposal({ versionId: 'v1' });
+    expect(state.writes).toHaveLength(2);
+    expect(state.writes[1]).toEqual({ deal_stage: { label: 'Proposal Sent' } });
+  });
+
+  it('still sets "Proposal Sent", without clearing, when the phase cannot be read', async () => {
+    state.currentStage = new Error('monday unreachable');
+    const r = await pushReleasedProposal({ versionId: 'v1' });
+    expect(state.writes).toHaveLength(2);
+    expect(r.dealStage).toBe('Proposal Sent');
   });
 });

@@ -1,7 +1,7 @@
 import { prisma } from '../../lib/prisma.js';
 import { env, isMondayPushConfigured } from '../../config/env.js';
 import { logger } from '../../lib/logger.js';
-import { setColumnValues, uploadFileToColumn } from './client.js';
+import { mondayQuery, setColumnValues, uploadFileToColumn } from './client.js';
 import { dealItemIdFor } from './dealLink.js';
 import { DEAL_COL } from './crmMapping.js';
 import { versionTotals, metaOf } from '../../proposals/analytics.js';
@@ -67,6 +67,39 @@ export const DEAL_COLUMNS = {
 export const RELEASED_DEAL_STAGE = 'Proposal Sent';
 
 const ENTITY = 'ProposalVersion';
+
+/**
+ * Between clearing the Deal Phase and setting it back to "Proposal Sent". monday
+ * records each as its own activity, and two writes milliseconds apart risk being read
+ * by its automations as one; a second keeps them distinct at no cost a rep notices.
+ */
+export const RESET_SETTLE_MS = 1000;
+
+const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Whether the deal's Deal Phase currently reads `label`. Compared on the column's
+ * text, trimmed and case-insensitively, because that is what monday shows. A failed
+ * read answers false: the release then writes "Proposal Sent" as it always has, rather
+ * than clearing a phase it could not see.
+ */
+async function dealStageIs(itemId: string, label: string): Promise<boolean> {
+  try {
+    const data = await mondayQuery<{
+      items: Array<{ column_values: Array<{ id: string; text: string | null }> }>;
+    }>(
+      `query ($items: [ID!]) {
+         items (ids: $items) { column_values (ids: ["${DEAL_COLUMNS.stage}"]) { id text } }
+       }`,
+      { items: [itemId] },
+    );
+    const text = data.items?.[0]?.column_values?.[0]?.text ?? '';
+    return text.trim().toLowerCase() === label.toLowerCase();
+  } catch (err) {
+    logger.warn({ err, itemId }, 'monday proposal push: could not read the Deal Phase');
+    return false;
+  }
+}
 
 export interface ProposalPushResult {
   pushed: boolean;
@@ -257,6 +290,15 @@ export async function pushReleasedProposal(input: {
     let dealStage: string | undefined;
     let dealStageError: string | undefined;
     try {
+      // Already "Proposal Sent" (a revised version sent again): writing the same label
+      // is no change as far as monday is concerned, so the board's own "Deal Phase
+      // changes to Proposal Sent" automation does not run, and the columns it fills
+      // stay as the last send left them. Cleared first, then set, so the automation
+      // sees a real change and fires for this send too.
+      if (await dealStageIs(itemId, RELEASED_DEAL_STAGE)) {
+        await setColumnValues(boardId, itemId, { [DEAL_COLUMNS.stage]: {} });
+        await pause(RESET_SETTLE_MS);
+      }
       await setColumnValues(boardId, itemId, {
         [DEAL_COLUMNS.stage]: { label: RELEASED_DEAL_STAGE },
       });
