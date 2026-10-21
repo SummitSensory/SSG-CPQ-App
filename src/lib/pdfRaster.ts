@@ -86,7 +86,7 @@ export interface RasterPage {
   /** CSS pixels at the render scale used below — already reflects the source PDF page's own aspect ratio. */
   width: number;
   height: number;
-  /** `data:image/png;base64,...` */
+  /** `data:image/png;base64,...` or `data:image/jpeg;base64,...`, whichever was smaller. */
   dataUri: string;
 }
 
@@ -100,7 +100,11 @@ export interface RasterPage {
  * separate `evaluate` parameter, which keeps this file's `Page.evaluate` down to
  * the single-string form pdf.ts already declares.
  */
-function renderAllPagesScript(args: { base64: string; scale: number }): string {
+function renderAllPagesScript(args: {
+  base64: string;
+  scale: number;
+  jpegQuality: number;
+}): string {
   return `(async () => {
     var args = ${JSON.stringify(args)};
     var pdfjsLib = window.__pdfjsLib;
@@ -116,8 +120,16 @@ function renderAllPagesScript(args: { base64: string; scale: number }): string {
       canvas.width = Math.max(1, Math.round(viewport.width));
       canvas.height = Math.max(1, Math.round(viewport.height));
       var ctx = canvas.getContext('2d');
+      // Painted white first: a JPEG has no alpha, and anything left transparent
+      // would come out black.
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
       await page.render({ canvasContext: ctx, viewport: viewport }).promise;
-      out.push({ width: canvas.width, height: canvas.height, dataUri: canvas.toDataURL('image/png') });
+      // Whichever encoding is smaller. A text page (a W9) is smaller and crisper as
+      // PNG; a photo page (a product catalog) is several times smaller as JPEG.
+      var png = canvas.toDataURL('image/png');
+      var jpg = canvas.toDataURL('image/jpeg', args.jpegQuality);
+      out.push({ width: canvas.width, height: canvas.height, dataUri: jpg.length < png.length ? jpg : png });
     }
     return out;
   })()`;
@@ -155,7 +167,7 @@ export async function rasterizePdfPages(bytes: Buffer, scale = 2): Promise<Raste
     await page.goto(`${ORIGIN}/harness.html`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction('window.__pdfjsReady === true', undefined, { timeout: 10_000 });
     return await page.evaluate<RasterPage[]>(
-      renderAllPagesScript({ base64: bytes.toString('base64'), scale }),
+      renderAllPagesScript({ base64: bytes.toString('base64'), scale, jpegQuality: 0.88 }),
     );
   } catch (err) {
     logger.error({ err }, 'pdfRaster: could not rasterize a reference document');

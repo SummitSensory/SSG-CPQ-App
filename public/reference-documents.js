@@ -88,6 +88,45 @@
     if (window.SSGUI && window.SSGUI.toast) window.SSGUI.toast(msg, isError);
   }
 
+  /**
+   * The PDF goes browser-to-blob directly, the same way design renderings do (see
+   * src/lib/renderingStore.ts): sent through our server as base64 JSON, a 4 MB file
+   * became a body past what Vercel accepts for a function, and was refused before the
+   * app saw it. The server only mints a scoped token and records the result.
+   */
+  var blobUploader = null;
+  function loadBlobUploader() {
+    if (!blobUploader) {
+      blobUploader = import('/vendor/vercel-blob-client.mjs').then(function () {
+        return window.SSGBlobUpload;
+      });
+    }
+    return blobUploader;
+  }
+
+  async function upload(title, file, onProgress) {
+    var tr = await H.authed('/reference-documents/upload-token', {
+      method: 'POST',
+      body: { filename: file.name, contentType: file.type || 'application/pdf' },
+    });
+    if (!tr.ok) throw new Error(await failureText(tr, 'Could not start the upload.'));
+    var token = await tr.json();
+    var put = await loadBlobUploader();
+    var result = await put(token.pathname, file, {
+      access: 'private',
+      token: token.token,
+      contentType: token.contentType,
+      onUploadProgress: onProgress,
+    });
+    var rr = await H.authed('/reference-documents', {
+      method: 'POST',
+      body: { title: title, filename: file.name, url: result.url, pathname: result.pathname },
+    });
+    if (!rr.ok)
+      throw new Error(await failureText(rr, 'The upload finished, but could not be saved.'));
+    return rr.json();
+  }
+
   async function reload(host) {
     var r = await H.authed('/reference-documents');
     if (!r.ok) throw new Error('load failed');
@@ -233,32 +272,23 @@
           return;
         }
         uploadBtn.disabled = true;
-        var reader = new FileReader();
-        reader.onload = async function () {
-          var base64 = String(reader.result || '').split(',')[1] || '';
-          var r = await H.authed('/reference-documents', {
-            method: 'POST',
-            body: {
-              title: title,
-              filename: file.name,
-              contentType: file.type || 'application/pdf',
-              base64: base64,
-            },
+        var label = uploadBtn.textContent;
+        uploadBtn.textContent = 'Uploading…';
+        upload(title, file, function (progress) {
+          uploadBtn.textContent = 'Uploading… ' + Math.round(progress.percentage) + '%';
+        })
+          .then(function () {
+            toast('Uploaded.');
+            refresh();
+            reload(host);
+          })
+          .catch(function (err) {
+            toast((err && err.message) || 'That document was not uploaded.', true);
+          })
+          .then(function () {
+            uploadBtn.disabled = false;
+            uploadBtn.textContent = label;
           });
-          uploadBtn.disabled = false;
-          if (!r.ok) {
-            toast(await failureText(r, 'That document was not uploaded.'), true);
-            return;
-          }
-          toast('Uploaded.');
-          refresh();
-          reload(host);
-        };
-        reader.onerror = function () {
-          uploadBtn.disabled = false;
-          toast('That file could not be read.', true);
-        };
-        reader.readAsDataURL(file);
       });
     }
   }
