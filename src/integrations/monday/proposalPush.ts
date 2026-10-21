@@ -9,6 +9,7 @@ import { sellerCollectedCharges } from '../../crossborder/sellerCharges.js';
 import { renderPdf } from '../../render/pdf.js';
 import { appendPdfDocuments } from '../../lib/pdfMerge.js';
 import {
+  referenceDocsIncludeW9,
   resolveReferenceDocuments,
   selectedReferenceDocKeys,
 } from '../../proposals/referenceDocuments.js';
@@ -56,6 +57,8 @@ export const DEAL_COLUMNS = {
   signedProposal: 'files3__1',
   /** Status column, titled "Deal Phase" on the board. See RELEASED_DEAL_STAGE. */
   stage: DEAL_COL.stage,
+  /** Status column, titled "W-9" on the board. See W9_SENT_LABEL. */
+  w9: 'color_mm6sjm74',
 } as const;
 
 /**
@@ -65,6 +68,14 @@ export const DEAL_COLUMNS = {
  * to follow, or the stage write fails (the rest of the push still lands; see below).
  */
 export const RELEASED_DEAL_STAGE = 'Proposal Sent';
+
+/**
+ * The W-9 column's label for a proposal that went out with the W-9 attached. Read off
+ * the live board (label id 1) on 2026-10-21; the column's other labels are "Send W9",
+ * "N/A" and "TBD". A proposal without the W-9 leaves the column alone — whether the
+ * customer still needs one is the team's call, not the release's.
+ */
+export const W9_SENT_LABEL = 'W9 Sent';
 
 const ENTITY = 'ProposalVersion';
 
@@ -121,6 +132,10 @@ export interface ProposalPushResult {
   dealStage?: string;
   /** Why the Deal Phase was not set, when the rest of the push landed but it did not. */
   dealStageError?: string;
+  /** True when the proposal carried the W-9 and the W-9 column was set to "W9 Sent". */
+  w9Sent?: boolean;
+  /** Why the W-9 column was not set, when the proposal carried the W-9 but the write failed. */
+  w9Error?: string;
   error?: string;
 }
 
@@ -311,6 +326,24 @@ export async function pushReleasedProposal(input: {
       );
     }
 
+    // The W-9 column goes to "W9 Sent" when the W-9 rides along with this proposal.
+    // Its own call for the same reason as the stage: a renamed label must cost the
+    // push only this column.
+    let w9Sent: boolean | undefined;
+    let w9Error: string | undefined;
+    try {
+      if (await referenceDocsIncludeW9(selectedReferenceDocKeys(version.sections))) {
+        await setColumnValues(boardId, itemId, { [DEAL_COLUMNS.w9]: { label: W9_SENT_LABEL } });
+        w9Sent = true;
+      }
+    } catch (err) {
+      w9Error = String(err);
+      logger.error(
+        { err, versionId: input.versionId, itemId },
+        'monday proposal push: W-9 status could not be set',
+      );
+    }
+
     if (input.proposalHtml) {
       // The document itself is uploaded separately, by the renderer function.
       // Rendering a PDF here would need a headless browser on the main API
@@ -327,8 +360,17 @@ export async function pushReleasedProposal(input: {
         entity: ENTITY,
         entityId: version.id,
         externalId: itemId,
-        status: dealStageError ? 'error' : 'ok',
-        ...(dealStageError ? { error: `Deal Phase not set: ${dealStageError}` } : {}),
+        status: dealStageError || w9Error ? 'error' : 'ok',
+        ...(dealStageError || w9Error
+          ? {
+              error: [
+                dealStageError && `Deal Phase not set: ${dealStageError}`,
+                w9Error && `W-9 status not set: ${w9Error}`,
+              ]
+                .filter(Boolean)
+                .join('; '),
+            }
+          : {}),
       },
     });
     return {
@@ -343,6 +385,8 @@ export async function pushReleasedProposal(input: {
       fileUploaded,
       ...(dealStage ? { dealStage } : {}),
       ...(dealStageError ? { dealStageError } : {}),
+      ...(w9Sent ? { w9Sent } : {}),
+      ...(w9Error ? { w9Error } : {}),
     };
   } catch (err) {
     logger.error({ err, versionId: input.versionId, itemId }, 'monday proposal push failed');
