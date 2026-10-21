@@ -54,6 +54,7 @@ vi.mock('../../src/integrations/monday/client.js', () => ({
     state.writes.push(cols);
   },
   uploadFileToColumn: async () => undefined,
+  mondayQuery: async () => ({ items: [{ column_values: [{ id: 'deal_stage', text: '' }] }] }),
 }));
 vi.mock('../../src/crossborder/sellerCharges.js', () => ({
   sellerCollectedCharges: async () => {
