@@ -2519,6 +2519,11 @@
         toast('Released, but the deal\'s Deal Phase could not be set to "Proposal Sent": ' +
           m.dealStageError + '. Set it on the deal board by hand.', 1);
       }
+      // The proposal carried the W-9 but the W-9 column could not be set to "W9 Sent".
+      if (m.w9Error) {
+        toast('Released, but the deal\'s W-9 column could not be set to "W9 Sent": ' +
+          m.w9Error + '. Set it on the deal board by hand.', 1);
+      }
       if (!doc) {
         // The deal figures made it to monday; the document build in the browser
         // failed before it could. Reported rather than swallowed — this used to

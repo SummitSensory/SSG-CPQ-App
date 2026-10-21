@@ -41,6 +41,32 @@ export async function resolveReferenceDocuments(
   return out;
 }
 
+/**
+ * "W9", "W-9" or "w 9" standing as its own token — not inside a longer word or
+ * number. Underscores count as separators, so the generated key
+ * SUMMIT_SENSORY_GYM_2026_W9 matches as well as the title.
+ */
+const W9_PATTERN = /(^|[^a-z0-9])w[\s-]?9($|[^a-z0-9])/i;
+
+/**
+ * Whether a set of selected reference-document keys sends the customer a W-9.
+ *
+ * Recognised by name (key, title or filename) rather than by a fixed key: each
+ * year's W-9 is a fresh upload with its own key (SUMMIT_SENSORY_GYM_2026_W9), and a
+ * hard-coded key would quietly stop matching when next year's replaces it. Only
+ * active documents count — the same filter resolveReferenceDocuments applies, so
+ * this answers true exactly when a W-9 is actually merged into what the customer
+ * receives.
+ */
+export async function referenceDocsIncludeW9(keys: string[]): Promise<boolean> {
+  if (!keys.length) return false;
+  const rows = await prisma.referenceDocument.findMany({
+    where: { key: { in: keys }, active: true },
+    select: { key: true, title: true, filename: true },
+  });
+  return rows.some((r) => [r.key, r.title, r.filename].some((s) => W9_PATTERN.test(s)));
+}
+
 interface PagesManifest {
   pages: RasterPage[];
 }
