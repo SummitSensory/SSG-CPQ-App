@@ -9031,19 +9031,32 @@
     var catalog = (window.SSGReferenceDocuments && window.SSGReferenceDocuments.list()) || [];
     var ordered = catalog.filter(function (d) { return keys.indexOf(d.key) !== -1; });
     if (!ordered.length) return '';
-    // Capped well under the default 60s request timeout: the first preview of a
-    // freshly-uploaded document pays a cold Chromium start server-side (see
-    // pdfRaster.ts) and this fetch runs before the preview overlay is shown at
-    // all (see previewProposalDoc), so a slow render must fail open quickly
-    // rather than leave Preview/Save-as-PDF looking like it did nothing.
-    var results = await Promise.all(ordered.map(function (d) {
-      return authed('/reference-documents/' + encodeURIComponent(d.key) + '/pages', { timeoutMs: 8000 })
-        .then(function (r) { return r.ok ? r.json() : null; })
-        .catch(function () { return null; });
+    // The first batch of a freshly-uploaded document pays a cold Chromium start and
+    // the whole rasterization server-side (see pdfRaster.ts) — a 23-page catalog is
+    // several seconds — so it gets most of the API function's 30 s. That costs the
+    // rep nothing: this runs after the preview overlay is already open (see
+    // previewProposalDoc). Later batches read the cached pages and fail fast.
+    // The pages come back in batches (a Vercel function's response stops at ~4.5 MB,
+    // and a product catalog's pages run past that), so each document is read until
+    // `next` runs out. A batch that fails drops the whole document rather than
+    // showing half of it.
+    var results = await Promise.all(ordered.map(async function (d) {
+      var pages = [];
+      var from = 0;
+      try {
+        while (from !== null && from !== undefined) {
+          var r = await authed('/reference-documents/' + encodeURIComponent(d.key) + '/pages?from=' + from, { timeoutMs: from ? 8000 : 25000 });
+          if (!r.ok) return [];
+          var res = await r.json();
+          if (!res || !Array.isArray(res.pages) || !res.pages.length) break;
+          pages = pages.concat(res.pages);
+          from = res.next;
+        }
+      } catch (e) { return []; }
+      return pages;
     }));
     var html = '';
-    results.forEach(function (res) {
-      var pages = (res && Array.isArray(res.pages)) ? res.pages : [];
+    results.forEach(function (pages) {
       pages.forEach(function (pg) {
         html += '<div class="ssg-fm-page" style="width:816px;height:1056px;flex:none;background:#fff;' +
           'box-sizing:border-box;display:flex;align-items:center;justify-content:center;overflow:hidden;">' +
@@ -9209,6 +9222,18 @@
           timeoutMs: RENDER_TIMEOUT_MS,
         });
         if (!r.ok) throw new Error(await serverMessage(r, 'the PDF renderer did not respond (' + r.status + ')'));
+        // A PDF too big for one response (a product catalog attached) comes back as a
+        // ticket, and the file is read in parts — see src/render/pdfDelivery.ts.
+        if ((r.headers.get('Content-Type') || '').indexOf('application/json') !== -1) {
+          var d = await r.json();
+          var parts = [];
+          for (var i = 0; i < d.parked.parts; i++) {
+            var pr = await authed('/render/proposals/document-part?ticket=' + encodeURIComponent(d.parked.ticket) + '&part=' + i, { timeoutMs: RENDER_TIMEOUT_MS });
+            if (!pr.ok) throw new Error(await serverMessage(pr, 'the PDF download stopped partway (' + pr.status + ')'));
+            parts.push(await pr.arrayBuffer());
+          }
+          return { blob: new Blob(parts, { type: 'application/pdf' }), name: name, missingReferenceDocs: !!d.missingReferenceDocs };
+        }
         return { blob: await r.blob(), name: name, missingReferenceDocs: !!r.headers.get('X-Reference-Docs-Missing') };
       })();
       pdfJob = { key: key, promise: promise };

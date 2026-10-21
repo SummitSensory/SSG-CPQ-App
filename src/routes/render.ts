@@ -16,6 +16,8 @@ import { enforceOrReport } from '../lib/guards.js';
 import { sellerCollectedCharges } from '../crossborder/sellerCharges.js';
 import { appendPdfDocuments, setPdfTitle } from '../lib/pdfMerge.js';
 import { resolveReferenceDocuments } from '../proposals/referenceDocuments.js';
+import { isFileStoreConfigured } from '../lib/fileStore.js';
+import { INLINE_PDF_MAX_BYTES, parkPdf, readPdfPart, readTicket } from '../render/pdfDelivery.js';
 
 /**
  * Server-rendered PDFs.
@@ -137,10 +139,30 @@ export function registerRenderRoutes(app: FastifyInstance): void {
     // printed PDF after its Title — so the Title is the file name Save PDF downloads
     // under. See setPdfTitle.
     pdf = await setPdfTitle(pdf, name);
+    // Too big for a function response (a product catalog attached) — parked and read
+    // back in parts instead. See render/pdfDelivery.ts.
+    if (pdf.length > INLINE_PDF_MAX_BYTES && isFileStoreConfigured()) {
+      return { parked: await parkPdf(pdf, name), missingReferenceDocs };
+    }
     return reply
       .header('Content-Type', 'application/pdf')
       .header('Content-Disposition', `attachment; filename="${name}.pdf"`)
       .send(pdf);
+  });
+
+  /** One part of a PDF the route above parked. */
+  app.get('/render/proposals/document-part', proposalRead, async (req, reply) => {
+    const q = req.query as { ticket?: string; part?: string };
+    const url = readTicket(String(q.ticket ?? ''));
+    if (!url) {
+      throw new ValidationError('That download has expired. Press Save PDF again.');
+    }
+    const bytes = await readPdfPart(url, Number(q.part));
+    if (!bytes) throw new ValidationError('That part of the download does not exist.');
+    return reply
+      .header('Content-Type', 'application/octet-stream')
+      .header('Cache-Control', 'no-store')
+      .send(bytes);
   });
 
   /**
