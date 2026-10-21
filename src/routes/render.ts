@@ -142,7 +142,7 @@ export function registerRenderRoutes(app: FastifyInstance): void {
     // Too big for a function response (a product catalog attached) — parked and read
     // back in parts instead. See render/pdfDelivery.ts.
     if (pdf.length > INLINE_PDF_MAX_BYTES && isFileStoreConfigured()) {
-      return { parked: await parkPdf(pdf, name), missingReferenceDocs };
+      return { parked: await parkPdf(pdf), missingReferenceDocs };
     }
     return reply
       .header('Content-Type', 'application/pdf')
@@ -153,11 +153,11 @@ export function registerRenderRoutes(app: FastifyInstance): void {
   /** One part of a PDF the route above parked. */
   app.get('/render/proposals/document-part', proposalRead, async (req, reply) => {
     const q = req.query as { ticket?: string; part?: string };
-    const url = readTicket(String(q.ticket ?? ''));
-    if (!url) {
+    const id = readTicket(String(q.ticket ?? ''));
+    if (!id) {
       throw new ValidationError('That download has expired. Press Save PDF again.');
     }
-    const bytes = await readPdfPart(url, Number(q.part));
+    const bytes = await readPdfPart(id, Number(q.part));
     if (!bytes) throw new ValidationError('That part of the download does not exist.');
     return reply
       .header('Content-Type', 'application/octet-stream')

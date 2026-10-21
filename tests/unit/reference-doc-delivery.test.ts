@@ -48,22 +48,24 @@ describe('pageBatch', () => {
 });
 
 describe('PDF part tickets', () => {
-  const url = 'https://store.private.blob.vercel-storage.com/rendered-pdfs/abc-Big.pdf';
+  const id = '0123456789abcdef01234567';
 
   it('round-trips a ticket it signed', async () => {
     const { issueTicket, readTicket } = await import('../../src/render/pdfDelivery.js');
-    expect(readTicket(issueTicket(url))).toBe(url);
+    expect(readTicket(issueTicket(id))).toBe(id);
+  });
+
+  it('refuses an id that is not one it mints, even when signed', async () => {
+    const { issueTicket, readTicket } = await import('../../src/render/pdfDelivery.js');
+    expect(readTicket(issueTicket('../purchase-orders/x'))).toBeNull();
   });
 
   it('refuses an expired or altered ticket', async () => {
     const { issueTicket, readTicket } = await import('../../src/render/pdfDelivery.js');
-    expect(readTicket(issueTicket(url, Date.now() - 11 * 60_000))).toBeNull();
-    const [payload, mac] = issueTicket(url).split('.');
+    expect(readTicket(issueTicket(id, Date.now() - 11 * 60_000))).toBeNull();
+    const [payload, mac] = issueTicket(id).split('.');
     const swapped = Buffer.from(
-      JSON.stringify({
-        u: url.replace('rendered-pdfs', 'purchase-orders'),
-        exp: Date.now() + 60_000,
-      }),
+      JSON.stringify({ id: 'ffffffffffffffffffffffff', exp: Date.now() + 60_000 }),
     ).toString('base64url');
     expect(readTicket(`${swapped}.${mac}`)).toBeNull();
     expect(readTicket(String(payload))).toBeNull();

@@ -10,18 +10,27 @@ import type { FastifyInstance } from 'fastify';
 const BIG = Buffer.alloc(7 * 1024 * 1024 + 123, 7);
 const store = new Map<string, Buffer>();
 const putFile = vi.fn(async (pathname: string, bytes: Buffer) => {
-  const url = `https://store.private.blob.vercel-storage.com/${pathname}`;
-  store.set(url, Buffer.from(bytes));
-  return { url, pathname, bytes: bytes.length };
+  store.set(pathname, Buffer.from(bytes));
+  return {
+    url: `https://store.private.blob.vercel-storage.com/${pathname}`,
+    pathname,
+    bytes: bytes.length,
+  };
 });
-const getFile = vi.fn(async (url: string) => {
-  const b = store.get(url);
-  if (!b) throw new Error('gone');
-  return b;
+const blobGet = vi.fn(async (pathname: string) => {
+  const b = store.get(pathname);
+  if (!b) return null;
+  return { statusCode: 200, stream: new Blob([b]).stream() };
 });
-const deleteFile = vi.fn(async (url: string) => {
-  store.delete(url);
+const blobDel = vi.fn(async (pathname: string) => {
+  store.delete(pathname);
 });
+
+vi.mock('@vercel/blob', async (orig) => ({
+  ...(await orig<typeof import('@vercel/blob')>()),
+  get: blobGet,
+  del: blobDel,
+}));
 
 vi.mock('../../src/render/pdf.js', () => ({
   renderPdf: async () => BIG,
@@ -39,8 +48,6 @@ vi.mock('../../src/lib/fileStore.js', async (orig) => ({
   ...(await orig<typeof import('../../src/lib/fileStore.js')>()),
   isFileStoreConfigured: () => true,
   putFile,
-  getFile,
-  deleteFile,
 }));
 vi.mock('../../src/lib/prisma.js', () => ({
   prisma: {
@@ -108,8 +115,10 @@ describe('Save PDF past the function response limit', () => {
     }
     expect(Buffer.concat(parts).equals(BIG)).toBe(true);
     // The parked copy only existed for this download.
-    expect(deleteFile).toHaveBeenCalledTimes(1);
+    expect(blobDel).toHaveBeenCalledTimes(1);
     expect(store.size).toBe(0);
+    // Only ever the fixed parking folder.
+    expect(putFile.mock.calls[0]![0]).toMatch(/^rendered-pdfs\/[a-f0-9]{24}\.pdf$/);
     await app.close();
   });
 
@@ -117,16 +126,16 @@ describe('Save PDF past the function response limit', () => {
     const app = await makeApp();
     const forged =
       Buffer.from(
-        JSON.stringify({
-          u: 'https://store.private.blob.vercel-storage.com/purchase-orders/x.pdf',
-          exp: Date.now() + 60_000,
-        }),
+        JSON.stringify({ id: '../purchase-orders/x', exp: Date.now() + 60_000 }),
       ).toString('base64url') + '.not-a-signature';
     const bad = await app.inject({ method: 'GET', url: partUrl(forged, 0), headers: await auth() });
     expect(bad.statusCode).toBe(400);
     const anon = await app.inject({ method: 'GET', url: partUrl('x', 0) });
     expect(anon.statusCode).toBe(401);
-    expect(getFile).not.toHaveBeenCalledWith(expect.stringContaining('purchase-orders'));
+    expect(blobGet).not.toHaveBeenCalledWith(
+      expect.stringContaining('purchase-orders'),
+      expect.anything(),
+    );
     await app.close();
   });
 });

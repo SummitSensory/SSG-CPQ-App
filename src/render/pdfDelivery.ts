@@ -1,6 +1,8 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { del as blobDel, get as blobGet } from '@vercel/blob';
 import { env } from '../config/env.js';
-import { deleteFile, getFile, isBlobStoreUrl, putFile, safeSegment } from '../lib/fileStore.js';
+import { logger } from '../lib/logger.js';
+import { putFile } from '../lib/fileStore.js';
 
 /**
  * Getting a rendered PDF bigger than a Vercel function's response back to the browser.
@@ -16,9 +18,9 @@ import { deleteFile, getFile, isBlobStoreUrl, putFile, safeSegment } from '../li
  * the bytes in the page (a blob: URL in a frame) and a cross-origin fetch of the store
  * is at the mercy of its CORS and the app's connect-src.
  *
- * The browser is handed a signed ticket naming the stored file, never a URL it could
- * swap for another: the parts route reads only what a ticket this server signed names,
- * and only until it expires.
+ * The browser is handed a signed, expiring ticket carrying only a random id — never a
+ * URL or a path. The parts route reads `rendered-pdfs/<id>.pdf` and nothing else, so
+ * no ticket, signed or not, can point it at another stored file.
  */
 
 /** Under the ~4.5 MB ceiling with room for headers. */
@@ -30,8 +32,14 @@ export const PDF_PART_BYTES = 3 * 1024 * 1024;
 /** Long enough to read every part; short enough that a leaked ticket is soon useless. */
 const TICKET_TTL_MS = 10 * 60_000;
 
+const ID_PATTERN = /^[a-f0-9]{24}$/;
+
+function parkedPath(id: string): string {
+  return `rendered-pdfs/${id}.pdf`;
+}
+
 interface Ticket {
-  u: string;
+  id: string;
   exp: number;
 }
 
@@ -41,14 +49,14 @@ function sign(payload: string): string {
     .digest('base64url');
 }
 
-export function issueTicket(url: string, now = Date.now()): string {
+export function issueTicket(id: string, now = Date.now()): string {
   const payload = Buffer.from(
-    JSON.stringify({ u: url, exp: now + TICKET_TTL_MS } satisfies Ticket),
+    JSON.stringify({ id, exp: now + TICKET_TTL_MS } satisfies Ticket),
   ).toString('base64url');
   return `${payload}.${sign(payload)}`;
 }
 
-/** The stored file's URL, or null for a ticket this server did not sign or that has expired. */
+/** The parked file's id, or null for a ticket this server did not sign or that has expired. */
 export function readTicket(ticket: string, now = Date.now()): string | null {
   const [payload, mac] = ticket.split('.');
   if (!payload || !mac) return null;
@@ -61,38 +69,42 @@ export function readTicket(ticket: string, now = Date.now()): string | null {
   } catch {
     return null;
   }
-  if (typeof t.u !== 'string' || typeof t.exp !== 'number' || t.exp < now) return null;
-  return isBlobStoreUrl(t.u) ? t.u : null;
+  if (typeof t.id !== 'string' || !ID_PATTERN.test(t.id)) return null;
+  if (typeof t.exp !== 'number' || t.exp < now) return null;
+  return t.id;
 }
 
 /** Park a PDF too big to return directly. */
 export async function parkPdf(
   pdf: Buffer,
-  name: string,
 ): Promise<{ ticket: string; bytes: number; parts: number }> {
   const id = randomBytes(12).toString('hex');
-  const stored = await putFile(
-    `rendered-pdfs/${id}-${safeSegment(name, 'document')}.pdf`,
-    pdf,
-    'application/pdf',
-  );
+  await putFile(parkedPath(id), pdf, 'application/pdf');
   return {
-    ticket: issueTicket(stored.url),
+    ticket: issueTicket(id),
     bytes: pdf.length,
     parts: Math.ceil(pdf.length / PDF_PART_BYTES),
   };
 }
 
 /**
- * One part of a parked PDF. The parked copy is deleted once its last part has been
- * read — it exists only to get this one download across — so a copy is left behind
- * only by a download abandoned partway through.
+ * One part of a parked PDF, or null when there is no such part. The parked copy is
+ * deleted once its last part has been read — it exists only to get this one download
+ * across — so a copy is left behind only by a download abandoned partway through.
  */
-export async function readPdfPart(url: string, part: number): Promise<Buffer | null> {
-  const all = await getFile(url);
+export async function readPdfPart(id: string, part: number): Promise<Buffer | null> {
+  if (!ID_PATTERN.test(id) || !Number.isInteger(part) || part < 0) return null;
+  const pathname = parkedPath(id);
+  const r = await blobGet(pathname, { access: 'private', token: env.BLOB_READ_WRITE_TOKEN });
+  if (!r || r.statusCode !== 200) return null;
+  const all = Buffer.from(await new Response(r.stream).arrayBuffer());
   const start = part * PDF_PART_BYTES;
-  if (!Number.isInteger(part) || part < 0 || start >= all.length) return null;
+  if (start >= all.length) return null;
   const end = Math.min(start + PDF_PART_BYTES, all.length);
-  if (end === all.length) await deleteFile(url);
+  if (end === all.length) {
+    await blobDel(pathname, { token: env.BLOB_READ_WRITE_TOKEN }).catch((err: unknown) => {
+      logger.warn({ err }, 'pdfDelivery: could not delete a parked PDF');
+    });
+  }
   return all.subarray(start, end);
 }
