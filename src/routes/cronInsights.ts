@@ -21,6 +21,7 @@ import { env } from '../config/env.js';
 import { isBearerSecret } from '../lib/secretCompare.js';
 import { logger } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
+import { ensureDbReachable } from '../lib/dbRetry.js';
 import { buildDataset } from '../reporting/dataset.js';
 import {
   runReport,
@@ -168,6 +169,9 @@ export function registerInsightCronRoutes(app: FastifyInstance): void {
       const results: { report: string; status: string; detail?: string }[] = [];
 
       try {
+        // Wait out a briefly unreachable database before the first read (see
+        // src/lib/dbRetry.ts); a lasting outage still lands in the catch below.
+        await ensureDbReachable('cron:scheduled-reports');
         const rows = await prisma.savedReport.findMany({
           where: { cadence: { in: ['WEEKLY', 'MONTHLY'] } },
         });

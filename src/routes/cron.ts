@@ -11,6 +11,7 @@ import { sweepVoidedDocuments } from '../integrations/quickbooks/billing.js';
 import { sendUpchargeReminder } from '../integrations/quickbooks/colorUpcharge.js';
 import { refreshPortal } from '../portal/orderPortal.js';
 import { verifySchemaOnBoot } from '../lib/schemaCheck.js';
+import { ensureDbReachable } from '../lib/dbRetry.js';
 import { syncWebhooks } from '../integrations/monday/webhookRegistration.js';
 import { sweepNewDeals } from '../integrations/monday/dealAutoImport.js';
 
@@ -54,7 +55,11 @@ export function registerCronRoutes(app: FastifyInstance): void {
       // 0. Is the database still shaped the way this build expects? Cheap, and it
       //    catches a migration that did not run even when nobody has hit the affected
       //    screen yet.
+      //    The run's first database read, so a briefly unreachable database is
+      //    waited out here (src/lib/dbRetry.ts) rather than failing every step
+      //    below it.
       try {
+        await ensureDbReachable('cron:portal-delivery');
         out.schema = await verifySchemaOnBoot();
       } catch (err) {
         logger.error({ err }, 'cron: schema check failed');

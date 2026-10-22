@@ -67,6 +67,8 @@ vi.mock('../../src/crossborder/fx.js', async (orig) => {
 });
 vi.mock('../../src/lib/prisma.js', () => ({
   prisma: {
+    // The cron's reachability probe (src/lib/dbRetry.ts ensureDbReachable).
+    $queryRaw: async () => [{ '?column?': 1 }],
     crossBorderSetting: {
       findUnique: async () => ({
         id: 'singleton',

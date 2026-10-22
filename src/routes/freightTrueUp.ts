@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requirePermission } from '../plugins/authz.js';
 import { Permission } from '../authz/permissions.js';
+import { ensureDbReachable } from '../lib/dbRetry.js';
 import {
   acknowledgeAlert,
   applyEntries,
@@ -329,6 +330,10 @@ export function registerFreightTrueUpRoutes(app: FastifyInstance): void {
       const given = String(req.headers.authorization ?? '').replace(/^Bearer\s+/i, '');
       if (!secretsEqual(given, secret)) return reply.status(401).send({ error: 'unauthorized' });
       const q = req.query as { limit?: string };
+      // Wait out a briefly unreachable database before the sweep's first read
+      // (see src/lib/dbRetry.ts). A lasting outage still throws to the error
+      // handler, which answers 500 and alerts as before.
+      await ensureDbReachable('cron:freight-pull');
       return pullOutstanding('system:cron', {
         limit: q.limit ? Math.min(500, Math.max(1, Number(q.limit) || 200)) : undefined,
       });
