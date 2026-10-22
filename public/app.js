@@ -4525,7 +4525,11 @@
         // election the next time this version is saved.
         mediaRebate: (meta.mediaRebate && typeof meta.mediaRebate === 'object')
           ? { offered: !!meta.mediaRebate.offered, participate: !!meta.mediaRebate.participate, participationAt: meta.mediaRebate.participationAt || null }
-          : { offered: false, participate: false, participationAt: null } },
+          : { offered: false, participate: false, participationAt: null },
+        // The What's Included / Before You Sign pages. On for a proposal that starts
+        // here; off for one saved before the pages existed, so a document already sent
+        // does not change when it is reopened.
+        clarityPages: clarityPagesOf(meta.clarityPages, !(version.items || []).length && (version.status || 'DRAFT') === 'DRAFT') },
       lines: lines,
     };
     // A new proposal starts with the billing address the same as the shipping one.
@@ -5514,6 +5518,8 @@
     // (delete does it ahead of the splice), so an immediate check saw the old lines
     // and a deleted part kept its hardware in the kit.
     setTimeout(scheduleHardwareRefresh, 0);
+    // Same reason, same timing: the clarity pages describe the lines as they are now.
+    setTimeout(scheduleClarityRefresh, 0);
   }
   function clearBuilderDirty() { pbDirty = false; }
   window.addEventListener('beforeunload', function (e) {
@@ -5736,11 +5742,161 @@
         '</div>' +
       '</div>' +
       footerNotesCard() +
+      clarityPagesCard() +
       contractPagesCard() +
       referenceDocsCard() +
       mediaRebateCard() +
       (isMock() ? '' : '<div id="bMarginRail" style="' + marginRailStyle() + '">' + marginCard(t) + '<div id="bCbRail"></div><div id="bRfqRail"></div><div id="bDatesRail"></div><div id="bNotesRail"></div></div>');
     wireBuilder();
+  }
+
+  /*
+   * The Adventure Series clarity pages: "What's Included" (before the pricing) and
+   * "Before You Sign" (before the Acceptance page).
+   *
+   * What they say is computed by the server from the model code the proposal prints and
+   * its lines (POST /proposals/clarity-pages, src/proposals/clarityPages.ts), and kept
+   * on the version as meta.clarityPages.snapshot. The document only draws the snapshot,
+   * so a released version prints the pages it was released with, whatever the naming
+   * convention says later. A draft refreshes it whenever the code or the lines change,
+   * and always before it is previewed, printed or saved.
+   */
+  function clarityPagesOf(saved, fresh) {
+    if (saved && typeof saved === 'object') {
+      return {
+        whatsIncluded: saved.whatsIncluded === true,
+        beforeYouSign: saved.beforeYouSign === true,
+        hidden: Array.isArray(saved.hidden) ? saved.hidden.slice() : [],
+        snapshot: saved.snapshot || null,
+        key: typeof saved.key === 'string' ? saved.key : '',
+      };
+    }
+    return { whatsIncluded: !!fresh, beforeYouSign: !!fresh, hidden: [], snapshot: null, key: '' };
+  }
+
+  /** Only the Adventure Series has a model code to decode. */
+  function clarityApplies() {
+    return !!(pb && pb.meta && pb.meta.advAnswers);
+  }
+  function clarityWanted() {
+    var cp = pb && pb.meta && pb.meta.clarityPages;
+    return !!(cp && (cp.whatsIncluded || cp.beforeYouSign) && clarityApplies());
+  }
+
+  function clarityInput() {
+    var a = pb.meta.advAnswers || {};
+    return {
+      code: proposalModelCode(pb.lines),
+      lines: pb.lines.map(function (l) {
+        return { lineType: l.lineType || 'PRODUCT', name: String(l.name || ''), sku: String(l.sku || ''), quantity: Number(l.quantity) || 0 };
+      }),
+      answers: {
+        length: Number(a.length) || undefined,
+        width: Number(a.width) || undefined,
+        trolleyType: a.trolley ? (a.trolleyType || 'Dual') : undefined,
+      },
+    };
+  }
+
+  /** Short and stable: a snapshot is current when this matches the key it was made for. */
+  function clarityKey(input) {
+    var s = JSON.stringify(input), h = 5381;
+    for (var i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+    return s.length + ':' + h.toString(36);
+  }
+
+  var claritySeq = 0, clarityTimer = null;
+  async function refreshClarityPages() {
+    if (!pb || pb.readOnly || pb.mock || !clarityWanted()) return;
+    var cp = pb.meta.clarityPages;
+    var input = clarityInput();
+    var key = clarityKey(input);
+    if (cp.key === key) return;
+    var seq = ++claritySeq;
+    var j = null;
+    try {
+      var r = await authed('/proposals/clarity-pages', { method: 'POST', body: input });
+      if (!r.ok) return;
+      j = await r.json();
+    } catch (e) { return; }
+    // A newer refresh, or a different proposal opened meanwhile, owns the answer.
+    if (seq !== claritySeq || !pb || pb.meta.clarityPages !== cp) return;
+    cp.snapshot = (j && j.snapshot) || null;
+    cp.key = key;
+    var box = document.getElementById('bClarityDetail');
+    if (box) box.innerHTML = clarityDetailHtml();
+  }
+  function scheduleClarityRefresh() {
+    clearTimeout(clarityTimer);
+    clarityTimer = setTimeout(function () { refreshClarityPages(); }, 500);
+  }
+
+  /** The part of the card that depends on the snapshot, redrawn when it arrives. */
+  function clarityDetailHtml() {
+    var cp = pb.meta.clarityPages;
+    if (!cp.whatsIncluded && !cp.beforeYouSign) return '';
+    var s = cp.snapshot;
+    if (!s) {
+      return '<div class="muted" style="font-size:12px;line-height:1.5;padding:4px 0;">' +
+        (cp.key
+          ? '<span style="color:#9c3327;font-weight:600;">The model code on the itemized heading could not be read</span>, so neither page will print. Re-run the configurator to restore it.'
+          : 'Preparing the pages…') + '</div>';
+    }
+    var hidden = cp.hidden || [];
+    var flags = [];
+    var html = '<div class="muted" style="font-size:12px;line-height:1.5;padding:4px 0;">Model <b style="color:#20241f;">' + esc(s.code) + '</b> · naming version ' + esc(String(s.conventionVersion)) + '</div>';
+    if (cp.beforeYouSign) {
+      html += '<div style="font-size:12px;font-weight:600;margin-top:6px;">What’s Not Included</div>' +
+        (s.notIncluded || []).map(function (it) {
+          if (it.placeholder) flags.push(it.title);
+          return '<label style="display:flex;gap:8px;align-items:flex-start;font-size:12.5px;line-height:1.45;cursor:pointer;padding:3px 0;">' +
+            '<input type="checkbox" class="bClarityScope" data-key="' + esc(it.key) + '"' + (hidden.indexOf(it.key) < 0 ? ' checked' : '') + (pb.readOnly ? ' disabled' : '') + ' style="margin-top:2px;">' +
+            '<span>' + esc(it.title) + (it.placeholder ? ' <span style="color:#9c6a00;font-size:11px;">(wording to be confirmed)</span>' : '') + '</span></label>';
+        }).join('');
+      (s.steps || []).forEach(function (st) { if (st.placeholder) flags.push('What Happens Next: ' + st.title); });
+    }
+    if (flags.length) {
+      html += '<div style="font-size:11.5px;color:#9c6a00;line-height:1.45;margin-top:6px;">Placeholder wording, printed as written until it is confirmed in Administration → Frame naming: ' + flags.map(esc).join('; ') + '.</div>';
+    }
+    return html;
+  }
+
+  function clarityPagesCard() {
+    if (!clarityApplies()) return '';
+    var cp = pb.meta.clarityPages;
+    var ro = pb.readOnly ? ' disabled' : '';
+    var row = function (id, on, label, note) {
+      return '<label style="display:flex;gap:9px;align-items:flex-start;font-size:13px;line-height:1.5;cursor:pointer;padding:7px 0;">' +
+        '<input type="checkbox" id="' + id + '"' + (on ? ' checked' : '') + ro + ' style="margin-top:2px;">' +
+        '<span><b style="font-weight:600;">' + label + '</b>' +
+        '<span class="muted" style="display:block;font-size:11.5px;margin-top:1px;">' + note + '</span></span></label>';
+    };
+    return '<div class="card" id="bClarityCard" style="margin-top:16px;">' +
+      '<div class="section-title" style="margin:0 0 4px;">Customer clarity pages</div>' +
+      row('mClarityIncl', cp.whatsIncluded, 'Include “What’s Included” page', 'Decodes the model code and lists the components and padding. Printed before the itemized pricing.') +
+      row('mClaritySign', cp.beforeYouSign, 'Include “Before You Sign” page', 'Total, deposit, what is not included and next steps. Printed before the Acceptance page.') +
+      '<div id="bClarityDetail">' + clarityDetailHtml() + '</div>' +
+    '</div>';
+  }
+
+  function wireClarityCard() {
+    var card = document.getElementById('bClarityCard');
+    if (!card || pb.readOnly) return;
+    card.addEventListener('change', function (e) {
+      var el = e.target, cp = pb.meta.clarityPages;
+      if (el.id === 'mClarityIncl') cp.whatsIncluded = el.checked;
+      else if (el.id === 'mClaritySign') cp.beforeYouSign = el.checked;
+      else if (el.classList && el.classList.contains('bClarityScope')) {
+        var k = el.getAttribute('data-key');
+        cp.hidden = (cp.hidden || []).filter(function (x) { return x !== k; });
+        if (!el.checked) cp.hidden.push(k);
+      } else return;
+      markBuilderDirty();
+      var box = document.getElementById('bClarityDetail');
+      if (box) box.innerHTML = clarityDetailHtml();
+      refreshClarityPages();
+    });
+    refreshClarityPages();
   }
 
   /**
@@ -7887,10 +8043,10 @@
       document.getElementById('bMkReal').addEventListener('click', function () { convertMockToProposal(pb.user); });
     } else {
       document.getElementById('bSave').addEventListener('click', saveBuilder);
-      document.getElementById('bPreview').addEventListener('click', async function () { await ensureIntroArt(); if (await refreshCanadianBeforeDoc()) previewProposalDoc(builderDoc()); });
+      document.getElementById('bPreview').addEventListener('click', async function () { await ensureIntroArt(); await refreshClarityPages(); if (await refreshCanadianBeforeDoc()) previewProposalDoc(builderDoc()); });
     // Straight to the print dialog. The preview still opens behind it, so cancelling
     // the print leaves the document on screen rather than dumping you back.
-      document.getElementById('bPdf').addEventListener('click', async function () { await ensureIntroArt(); if (await refreshCanadianBeforeDoc()) previewProposalDoc(builderDoc(), true); });
+      document.getElementById('bPdf').addEventListener('click', async function () { await ensureIntroArt(); await refreshClarityPages(); if (await refreshCanadianBeforeDoc()) previewProposalDoc(builderDoc(), true); });
     // Leaves the builder. Identical to "‹ Cancel" — both honour the unsaved-changes
     // guard — and it is here because the exit belongs beside Save, not only in the
     // top-left corner.
@@ -8059,6 +8215,7 @@
         renderBuilderKeepingFocus();
       });
     }
+    wireClarityCard();
     var mdep = document.getElementById('mShowDeposit'); if (mdep) mdep.addEventListener('change', function () {
       pb.meta.showDeposit = mdep.checked;
       // Wording that references the deposit is swapped for wording that does not, and
@@ -8543,6 +8700,7 @@
     // The freight review opens a frozen version in the same state shape, and a mock has
     // no version at all. Nothing to save either way, and the API would refuse it.
     if (pb && (pb.readOnly || pb.mock)) return;
+    await refreshClarityPages();
     var r = await authed('/proposals/versions/' + pb.versionId, { method: 'PATCH', body: builderVersionPayload() });
     if (r.status === 409) throw new Error('Someone else saved this proposal while you were editing it. Reload before ' + why + '.');
     if (!r.ok) throw new Error('Could not save the proposal before ' + why + ' (' + r.status + ').');
@@ -8554,6 +8712,8 @@
   async function saveBuilder() {
     var btn = document.getElementById('bSave'); btn.disabled = true; btn.textContent = 'Saving…';
     try {
+      // The saved pages must describe the saved lines: a release prints what was saved.
+      await refreshClarityPages();
       var r = await authed('/proposals/versions/' + pb.versionId, { method: 'PATCH', body: builderVersionPayload() });
       if (r.status === 409) { alert('Someone else saved this proposal while you were editing it. Reload the page to see their changes before saving yours.'); btn.disabled = false; btn.textContent = 'Save'; return; }
       if (!r.ok) { alert('Could not save (' + r.status + ').'); btn.disabled = false; btn.textContent = 'Save'; return; }
@@ -8734,8 +8894,38 @@
       }
     });
 
+    /*
+     * A page that must be exactly one sheet (the clarity pages — see
+     * proposal-document.js) is a fixed-height block. If an unusually long configuration
+     * would run past its foot, scale it down until it fits rather than lose the last
+     * rows under the footer. Zoom keeps the block's printed height the same: its CSS
+     * height grows by the same factor the zoom shrinks it.
+     */
+    Array.prototype.forEach.call(area.querySelectorAll('[data-fit-page] > .scp'), function (el) {
+      var base = parseFloat(el.style.height || getComputedStyle(el).height) || 0;
+      var z = 1;
+      while (z > 0.8 && el.scrollHeight > el.clientHeight + 1) {
+        z = Math.round((z - 0.02) * 100) / 100;
+        el.style.zoom = String(z);
+        el.style.height = (base / z) + 'px';
+      }
+    });
+
     var footLeft = area.getAttribute('data-foot-left') || '';
     var footRight = area.getAttribute('data-foot-right') || '';
+    /** A sheet that opens with a named page says so in its footer, beside the number. */
+    function pageNameOf(items) {
+      for (var k = 0; k < items.length; k++) {
+        var n = items[k].node;
+        var name = n && n.getAttribute ? n.getAttribute('data-page-name') : '';
+        if (name) {
+          return name.replace(/[&<>"']/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+          });
+        }
+      }
+      return '';
+    }
 
     /** Outer height including margins — what actually has to be placed. */
     function outerH(el) {
@@ -8878,7 +9068,7 @@
           'padding-top:9px;border-top:1px solid #eceef4;font-size:9.5px;color:#20241f;">' +
           '<span>' + footLeft + '</span>' +
           '<span>' + footRight + '</span>' +
-          '<span style="white-space:nowrap;">Page ' + (i + 1) + ' of ' + total + '</span>' +
+          '<span style="white-space:nowrap;">' + (pageNameOf(items) ? pageNameOf(items) + ' · ' : '') + 'Page ' + (i + 1) + ' of ' + total + '</span>' +
         '</div>' +
       '</div>';
     }).join('');

@@ -305,6 +305,7 @@ describe('route/permission matrix', () => {
         "POST /orders/:id/portal/sync [orders:read]",
         "POST /orders/portal/refresh [orders:read]",
         "POST /pricing/quote [pricing:read]",
+        "POST /proposals/clarity-pages [proposal:read]",
         "POST /proposals/versions/:versionId/freight-coverage [proposal:read]",
         "POST /proposals/versions/:versionId/preview [proposal:read]",
         "POST /proposals/versions/:versionId/rfq/vendors [proposal:read]",

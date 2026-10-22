@@ -52,6 +52,7 @@ import { registerPortalColorAreaRoutes } from './routes/portalColorAreas.js';
 import { registerLegalDocumentRoutes } from './routes/legalDocuments.js';
 import { registerMediaPartnershipProgramRoutes } from './routes/mediaPartnershipProgram.js';
 import { registerFrameCodeRoutes } from './routes/frameCode.js';
+import { registerClarityPageRoutes } from './routes/clarityPages.js';
 import { registerStrategicPartnershipRoutes } from './routes/strategicPartnership.js';
 import { registerSignatureFieldLayoutRoutes } from './routes/signatureFieldLayout.js';
 import { registerReferenceDocumentRoutes } from './routes/referenceDocuments.js';
@@ -207,6 +208,7 @@ export function buildApp(): FastifyInstance {
   registerLegalDocumentRoutes(app);
   registerMediaPartnershipProgramRoutes(app);
   registerFrameCodeRoutes(app);
+  registerClarityPageRoutes(app);
   registerStrategicPartnershipRoutes(app);
   registerSignatureFieldLayoutRoutes(app);
   registerReferenceDocumentRoutes(app);

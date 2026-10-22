@@ -21,6 +21,13 @@ import {
   frameCodeConventions,
   saveFrameCodeConvention,
 } from '../proposals/frameCodeStore.js';
+import {
+  CLARITY_ICON_KEYS,
+  ClarityPageSchema,
+  clarityPageOf,
+  clarityPageProblems,
+  computeClarityPages,
+} from '../proposals/clarityPages.js';
 
 /**
  * Administration → Frame naming. Reading and editing are FRAME_CODE_MANAGE, which only
@@ -49,16 +56,31 @@ const ConventionBody = z.object({
     }),
   ),
   monkeyBarsCountAsBeam: z.boolean(),
+  /** The clarity pages' wording (clarityPages.ts). Optional so a convention saved
+   *  without it still reads — as the default wording. */
+  page: ClarityPageSchema.optional(),
 });
 
 function parseConvention(body: unknown): FrameCodeConvention {
   const parsed = ConventionBody.safeParse(body);
   if (!parsed.success) {
     throw new ValidationError(
-      parsed.error.issues[0]?.message ?? 'This naming convention is not valid.',
+      parsed.error.issues[0]
+        ? `${parsed.error.issues[0].path.join(' › ')}: ${parsed.error.issues[0].message}`
+        : 'This naming convention is not valid.',
     );
   }
   return parsed.data;
+}
+
+/** The letters and the page wording together: everything that stops a save. */
+function problemsOf(c: FrameCodeConvention): string[] {
+  return [...conventionProblems(c), ...(c.page ? clarityPageProblems(c.page) : [])];
+}
+
+/** The convention with its page wording filled in, so the screen edits all of it. */
+function withPage<T extends { convention: FrameCodeConvention }>(v: T): T {
+  return { ...v, convention: { ...v.convention, page: clarityPageOf(v.convention) } };
 }
 
 /** The sample configurations named under a convention, for the live preview. */
@@ -81,7 +103,7 @@ export function registerFrameCodeRoutes(app: FastifyInstance): void {
       frameCodeConventions(),
     ]);
     return {
-      active,
+      active: withPage(active),
       samples: samplesFor(active.convention),
       // Newest first, without the read-only legacy convention (version 0).
       history: history
@@ -99,6 +121,7 @@ export function registerFrameCodeRoutes(app: FastifyInstance): void {
         segments: FRAME_SEGMENT_LABELS,
         shapes: FRAME_SHAPE_KEYS,
         qtyModes: FRAME_QTY_MODES,
+        icons: CLARITY_ICON_KEYS,
       },
     };
   });
@@ -106,15 +129,24 @@ export function registerFrameCodeRoutes(app: FastifyInstance): void {
   /** Name the samples under an unsaved convention. Answers problems as data, not 400s. */
   app.post('/frame-code/convention/preview', manage, async (req) => {
     const c = parseConvention(req.body);
-    const problems = conventionProblems(c);
-    return { problems, samples: problems.length ? [] : samplesFor(c) };
+    const problems = problemsOf(c);
+    if (problems.length) return { problems, samples: [], pageSample: null };
+    const samples = samplesFor(c);
+    // The first sample's What's Included page under this unsaved convention, so a
+    // wording or order change is seen on a real code before it is saved.
+    const pageSample = samples[0]?.code
+      ? computeClarityPages({ code: samples[0].code, lines: [] }, [
+          { version: Number.MAX_SAFE_INTEGER, convention: c },
+        ])
+      : null;
+    return { problems, samples, pageSample };
   });
 
   /** Save a new version. Proposals already named keep their names. */
   app.put('/frame-code/convention', manage, async (req) => {
     const body = (req.body || {}) as { convention?: unknown; note?: unknown };
     const c = parseConvention(body.convention);
-    const problems = conventionProblems(c);
+    const problems = problemsOf(c);
     if (problems.length) throw new ValidationError(problems.join(' '));
     const note =
       typeof body.note === 'string' && body.note.trim() ? body.note.trim().slice(0, 500) : null;
@@ -127,6 +159,6 @@ export function registerFrameCodeRoutes(app: FastifyInstance): void {
       entityId: String(saved.version),
       details: { before: before.convention, beforeVersion: before.version, after: c, note },
     });
-    return { active: saved, samples: samplesFor(c) };
+    return { active: withPage(saved), samples: samplesFor(c) };
   });
 }
