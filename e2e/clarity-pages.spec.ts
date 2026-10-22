@@ -151,12 +151,37 @@ test.describe('proposal clarity pages', () => {
     await page.locator('#bPreview').click();
     const sheets = page.locator('.ssg-sheet');
     await expect(sheets.first()).toBeVisible({ timeout: 20_000 });
-    await expect(page.locator('.ssg-sheet', { hasText: 'Your System, Decoded' })).toHaveCount(1);
-    await expect(page.locator('.ssg-sheet', { hasText: 'Your Investment, Scope' })).toHaveCount(1);
-    const included = page.locator('.ssg-sheet', { hasText: 'Your System, Decoded' });
+    // What's Included is an unnumbered sheet of its own, ahead of the numbered ones.
+    await expect(page.locator('.ssg-sheet', { hasText: 'Your System, Decoded' })).toHaveCount(0);
+    const included = page.locator('.ssg-fm-page', { hasText: 'Your System, Decoded' });
+    await expect(included).toHaveCount(1);
     await expect(included).toContainText('Climbing Wall: Wall Mounted');
     await expect(included).toContainText('4 column wraps · 1 ladder wrap');
-    await expect(included).toContainText("What's Included · Page 1 of");
+    await expect(included).toContainText("What's Included");
+    await expect(included).not.toContainText('Page ');
+    // Before You Sign is numbered and comes straight after the Acceptance page.
+    await expect(page.locator('.ssg-sheet', { hasText: 'Your Investment, Scope' })).toHaveCount(1);
+    const order = await sheets.evaluateAll((els) =>
+      els.map((e) =>
+        e.textContent?.includes('Your Investment, Scope')
+          ? 'sign'
+          : e.textContent?.includes('Sign below to accept this proposal')
+            ? 'acceptance'
+            : '',
+      ),
+    );
+    expect(order.indexOf('sign')).toBe(order.indexOf('acceptance') + 1);
+    // The questions box sits at the foot of its page, just above the footer.
+    const gap = await page
+      .locator('.ssg-sheet', { hasText: 'Your Investment, Scope' })
+      .evaluate((sheet) => {
+        const box = sheet.querySelector('.scp .contact');
+        const scp = sheet.querySelector('.scp');
+        if (!box || !scp) return -1;
+        return scp.getBoundingClientRect().bottom - box.getBoundingClientRect().bottom;
+      });
+    expect(gap).toBeGreaterThanOrEqual(0);
+    expect(gap).toBeLessThan(4);
     const withBoth = await sheets.count();
     await page.locator('#pvClose').click();
 

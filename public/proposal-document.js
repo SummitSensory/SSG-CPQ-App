@@ -1240,9 +1240,14 @@
    * proposalDocHtml — the same figures the pricing page and the Acceptance line print.
    *
    * Each page is one fixed-height block (CLARITY_PAGE_H, the paginator's content height
-   * less a pixel) and starts its own sheet, so it is always exactly one page, numbered
-   * like any other. data-fit-page lets the paginator shrink it if an unusually long
-   * configuration would otherwise run under the footer.
+   * less a pixel), so it is always exactly one page. data-fit-page lets the paginator
+   * shrink it if an unusually long configuration would otherwise run under the footer.
+   *
+   * What's Included is a sheet of its own, like the introduction pages, and prints
+   * straight after them (after "One Investment. Value Across Your Organization.").
+   * Like them it carries no page number: the count numbers the legal document. Before
+   * You Sign is part of that document and is numbered; it prints after the Acceptance
+   * page.
    */
   var CLARITY_PAGE_H = 945;
 
@@ -1331,7 +1336,10 @@
     '.scp .step.first .n{background:#1f2c5c;color:#fff;}' +
     '.scp .step .t{font-weight:600;font-size:12px;margin-top:8px;color:#1d2433;}' +
     '.scp .step .d{font-size:10.5px;color:#667085;line-height:1.4;margin-top:3px;}' +
-    '.scp .contact{margin-top:22px;display:flex;align-items:center;justify-content:space-between;gap:16px;background:#1f2c5c;color:#fff;border-radius:10px;padding:14px 18px;}' +
+    // The contact box sits at the foot of the page, above the footer; the spacer in
+    // front of it keeps at least the old 22px gap when the page is full.
+    '.scp .push{flex:1 0 22px;}' +
+    '.scp .contact{display:flex;align-items:center;justify-content:space-between;gap:16px;background:#1f2c5c;color:#fff;border-radius:10px;padding:14px 18px;}' +
     '.scp .contact p{font-size:12px;line-height:1.5;color:#dfe4f2;max-width:4.6in;}' +
     '.scp .contact p b{color:#fff;}' +
     '.scp .contact .who{white-space:nowrap;text-align:right;font-size:11.5px;color:#c9d0e6;line-height:1.5;}' +
@@ -1392,8 +1400,15 @@
     );
   }
 
-  /** Page 1. Empty when the page is off or not computed yet. */
-  function whatsIncludedHtml(d, masthead) {
+  /**
+   * Page 1. Empty when the page is off or not computed yet.
+   *
+   * A finished .ssg-fm-page rather than a block for the paginator: it prints with the
+   * introduction, outside the numbered sheets. The padding and the footer match a
+   * paginated sheet, so it reads as one of them, less the page number. `foot` is the
+   * running footer's left and right text.
+   */
+  function whatsIncludedHtml(d, masthead, foot) {
     var cp = (d.meta || {}).clarityPages;
     var s = cp && cp.snapshot;
     if (!cp || cp.whatsIncluded !== true || !s || !s.text) return '';
@@ -1412,7 +1427,12 @@
       .join('');
     var comps = s.componentRows || [];
     return (
-      clarityPageOpen(T.includedFooter || "What's Included", 'whats-included', masthead) +
+      '<div class="ssg-fm-page" data-page-break="whats-included" data-fit-page ' +
+      'style="width:816px;height:1056px;flex:none;background:#fff;box-sizing:border-box;' +
+      'padding:46px 44px 64px;position:relative;overflow:hidden;color:#20241f;">' +
+      CLARITY_CSS +
+      '<div class="scp">' +
+      masthead +
       '<div><div class="t-bar"></div>' +
       '<div class="eyebrow">' +
       esc(T.includedEyebrow) +
@@ -1451,7 +1471,19 @@
           comps.map(clarityRowHtml).join('') +
           '</div>'
         : '') +
-      '</div></div>'
+      '</div>' +
+      '<div style="position:absolute;left:44px;right:44px;bottom:32px;display:flex;' +
+      'justify-content:space-between;align-items:baseline;gap:20px;padding-top:9px;' +
+      'border-top:1px solid #eceef4;font-size:9.5px;color:#20241f;' +
+      "font-family:'IBM Plex Sans',sans-serif;\">" +
+      '<span>' +
+      esc(foot.left) +
+      '</span><span>' +
+      esc(foot.right) +
+      '</span><span style="white-space:nowrap;">' +
+      esc(T.includedFooter || "What's Included") +
+      '</span></div>' +
+      '</div>'
     );
   }
 
@@ -1561,6 +1593,7 @@
             .join('') +
           '</div></div>'
         : '') +
+      '<div class="push"></div>' +
       '<div class="contact">' +
       '<p><b>' +
       esc(T.contactHeading) +
@@ -2258,15 +2291,19 @@
         : '';
     var html =
       frontMatter +
+      // What's Included follows the introduction (its last page is "One Investment.
+      // Value Across Your Organization.") and comes before the pricing it explains.
+      // Off unless the rep turned it on — see the clarity pages above.
+      whatsIncludedHtml(d, mastheadHtml, {
+        left: 'Summit Sensory Gym · ' + docIdent,
+        right: d.orgName || '',
+      }) +
       '<div id="propPrintArea" data-foot-left="' +
       esc('Summit Sensory Gym · ' + docIdent) +
       '" data-foot-right="' +
       esc(d.orgName || '') +
       '" ' +
       'style="max-width:816px;margin:0 auto;background:#fff;padding:46px 44px 40px;box-sizing:border-box;font-family:\'IBM Plex Sans\',sans-serif;color:#20241f;">' +
-      // What's Included sits in front of the pricing it explains. Off unless the rep
-      // turned it on — see the clarity pages above.
-      whatsIncludedHtml(d, mastheadHtml) +
       '<div style="border-bottom:2px solid #203060;padding-bottom:15px;margin-bottom:13px;">' +
       '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:30px;">' +
       '<div style="display:flex;flex-direction:column;">' +
@@ -2356,16 +2393,6 @@
       totalsHtml +
       bottomNotesHtml +
       canadianTermsPageHtml +
-      // Before You Sign: read just before the page that is signed.
-      beforeYouSignHtml(d, mastheadHtml, {
-        money: money,
-        total: docTotal,
-        deposit: docDeposit,
-        showDeposit: showDeposit,
-        depositPct: depositPct(),
-        anyTbd: anyTbd,
-        user: u,
-      }) +
       // Acceptance and the terms always begin a fresh sheet, whatever the line count.
       // Signing is the act the document exists for, so the page a customer signs is
       // never a page that happens to have room left at the bottom of the pricing —
@@ -2444,6 +2471,16 @@
       '</div>' +
       footerNotesHtml +
       '</div>' +
+      // Before You Sign: total, scope and next steps, after the page that is signed.
+      beforeYouSignHtml(d, mastheadHtml, {
+        money: money,
+        total: docTotal,
+        deposit: docDeposit,
+        showDeposit: showDeposit,
+        depositPct: depositPct(),
+        anyTbd: anyTbd,
+        user: u,
+      }) +
       // The general release and the standard terms, after the acceptance page. Every
       // template carries them except the cover-only one — see contract-pages.js.
       (window.SSGContractPages && window.SSGContractPages.applies(d)

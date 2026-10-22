@@ -2,10 +2,10 @@
 
 Two optional pages on a Summit Adventure Series proposal.
 
-- **What's Included** prints immediately before the itemized pricing. It decodes the model code and lists the components, safety items and padding on the proposal.
-- **Before You Sign** prints immediately before the Acceptance page. It shows the total, the deposit, what is not included, and what happens after signing.
+- **What's Included** prints immediately after the introduction pages (after "One Investment. Value Across Your Organization.") and before the itemized pricing. It decodes the model code and lists the components, safety items and padding on the proposal. Like the introduction pages it has no page number; its footer just reads "What's Included".
+- **Before You Sign** ("Your Investment, Scope & Next Steps") prints immediately after the Acceptance (signature) page. It shows the total, the deposit, what is not included, and what happens after signing. The "Questions before you sign?" box sits at the bottom of the page, just above the footer.
 
-Each page is always exactly one letter-size sheet. Each carries the standard running header and footer, and its footer names the page, e.g. "What's Included · Page 1 of 6". The pages appear wherever the proposal does: preview, print, Save PDF, the monday file and the DocuSeal package. All of these come from the same document HTML.
+Each page is always exactly one letter-size sheet. Each carries the standard running header and footer. Before You Sign is numbered with the proposal, and its footer names the page, e.g. "Before You Sign · Page 4 of 6". The pages appear wherever the proposal does: preview, print, Save PDF, the monday file and the DocuSeal package. All of these come from the same document HTML.
 
 ## Where the content comes from
 
