@@ -112,6 +112,23 @@ const ProfileBody = z.object({
     )
     .max(40)
     .optional(),
+  /**
+   * The left-hand navigation tabs in the order this user wants them, by nav id.
+   * `null` resets to the default order. Like dashboardLayout, the vocabulary of ids
+   * is a client concern (plugins add tabs of their own); this checks only the shape.
+   */
+  navOrder: z
+    .array(
+      z
+        .string()
+        .trim()
+        .min(1)
+        .max(60)
+        .regex(/^[A-Za-z0-9_-]+$/),
+    )
+    .max(60)
+    .nullable()
+    .optional(),
 });
 
 export function registerAuthRoutes(app: FastifyInstance): void {
@@ -295,6 +312,7 @@ export function registerAuthRoutes(app: FastifyInstance): void {
         signatureImage: true,
         tipsEnabled: true,
         dashboardLayout: true,
+        navOrder: true,
       },
     });
     if (!user) throw new UnauthorizedError();
@@ -324,7 +342,8 @@ export function registerAuthRoutes(app: FastifyInstance): void {
     const parsed = ProfileBody.safeParse(req.body);
     if (!parsed.success)
       throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid profile');
-    const { name, title, phone, signatureImage, tipsEnabled, dashboardLayout } = parsed.data;
+    const { name, title, phone, signatureImage, tipsEnabled, dashboardLayout, navOrder } =
+      parsed.data;
     const updated = await prisma.user.update({
       where: { id: req.user!.sub },
       data: {
@@ -339,6 +358,10 @@ export function registerAuthRoutes(app: FastifyInstance): void {
         ...(dashboardLayout === undefined
           ? {}
           : { dashboardLayout: dashboardLayout as unknown as Prisma.InputJsonValue }),
+        // Undefined leaves it alone; null resets to the default order.
+        ...(navOrder === undefined
+          ? {}
+          : { navOrder: navOrder === null ? Prisma.DbNull : navOrder }),
       },
       select: {
         id: true,
@@ -351,6 +374,7 @@ export function registerAuthRoutes(app: FastifyInstance): void {
         signatureImage: true,
         tipsEnabled: true,
         dashboardLayout: true,
+        navOrder: true,
       },
     });
     const { signatureImage: saved, ...rest } = updated;

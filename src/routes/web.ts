@@ -66,6 +66,8 @@ const CLIENT_SCRIPTS = [
   // The Orders pages' customer-portal columns, filters and Customer Portal card.
   // Before app.js in index.html: app.js reads it while building ORDER_COLS.
   'order-portal.js',
+  // The user's own sidebar tab order. Before app.js, which mounts it in renderShell.
+  'nav-order.js',
   // Screens that install their own nav entry and fail in isolation.
   // Shared by Catalog and Administration, owned by neither.
   'ssg-standard-notes.js',

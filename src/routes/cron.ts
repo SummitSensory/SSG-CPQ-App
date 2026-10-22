@@ -12,6 +12,7 @@ import { sendUpchargeReminder } from '../integrations/quickbooks/colorUpcharge.j
 import { refreshPortal } from '../portal/orderPortal.js';
 import { verifySchemaOnBoot } from '../lib/schemaCheck.js';
 import { syncWebhooks } from '../integrations/monday/webhookRegistration.js';
+import { sweepNewDeals } from '../integrations/monday/dealAutoImport.js';
 
 /**
  * Scheduled work.
@@ -77,6 +78,17 @@ export function registerCronRoutes(app: FastifyInstance): void {
       } catch (err) {
         logger.error({ err }, 'cron: webhook sync failed');
         out.webhooks = { error: String(err) };
+      }
+
+      // 2b. New customers on Deal Tracking. The create_item webhook registered just
+      //     above imports each new deal as it is added; this is the backstop for one
+      //     that never arrived, and it re-reads rows filled in after they were
+      //     created. Inbound only, idempotent, and never throws.
+      try {
+        out.newDeals = await sweepNewDeals();
+      } catch (err) {
+        logger.error({ err }, 'cron: new-deal sweep failed');
+        out.newDeals = { error: String(err) };
       }
 
       // 3. Any manufacturing row that says Send Invite but whose invite column does

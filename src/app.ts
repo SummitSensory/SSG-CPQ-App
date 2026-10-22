@@ -11,6 +11,7 @@ import { registerSsoRoutes } from './routes/sso.js';
 import { registerAdminRoutes } from './routes/admin.js';
 import { registerProtectedRoutes } from './routes/protected.js';
 import { registerCrmRoutes } from './routes/crm.js';
+import { registerCustomerPickerRoutes } from './routes/customerPicker.js';
 import { registerIntegrationRoutes } from './routes/integrations.js';
 import { registerQuickbooksRoutes } from './routes/quickbooks.js';
 import { registerCatalogRoutes } from './routes/catalog.js';
@@ -164,6 +165,7 @@ export function buildApp(): FastifyInstance {
   registerAdminRoutes(app);
   registerProtectedRoutes(app);
   registerCrmRoutes(app);
+  registerCustomerPickerRoutes(app);
   registerIntegrationRoutes(app);
   registerQuickbooksRoutes(app);
   registerCatalogRoutes(app);
