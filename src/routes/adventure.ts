@@ -5,7 +5,6 @@ import { Permission } from '../authz/permissions.js';
 import {
   computeAdventureProposal,
   explainAdventure,
-  frameModelNumber,
   frameDimensions,
   hardwareRollup,
   proposalQuantities,
@@ -16,6 +15,9 @@ import {
 } from '../proposals/adventureSeries.js';
 import { loadFormulaRules, loadFormulaSettings } from './formulas.js';
 import { PROCESSING_COST_SELECT, processingFeeOf } from '../catalog/landedCost.js';
+import { assertFrameDimensions, FrameCodeError } from '../proposals/frameCode.js';
+import { activeFrameCodeConvention } from '../proposals/frameCodeStore.js';
+import { ValidationError } from '../lib/errors.js';
 
 /** Server-side Adventure Series pricing engine: answers -> priced, grouped lines.
  *  Prices/weights/costs are read live from the Sku table (editable in Catalog → Pricing & SKUs). */
@@ -221,14 +223,36 @@ export function registerAdventureRoutes(app: FastifyInstance): void {
 
   app.post('/proposals/adventure-series/price', write, async (req) => {
     const a = (req.body || {}) as AdvAnswers;
-    const [skus, rules, kits, settings] = await Promise.all([
+    // Width greater than length is refused, not swapped, and no code is made for it.
+    try {
+      assertFrameDimensions(a.length, a.width);
+    } catch (err) {
+      if (err instanceof FrameCodeError) throw new ValidationError(err.message);
+      throw err;
+    }
+    const [skus, rules, kits, settings, naming] = await Promise.all([
       skuMap(),
       loadFormulaRules(),
       kitParts(),
       loadFormulaSettings(),
+      activeFrameCodeConvention(),
     ]);
-    const out = computeAdventureProposal(a, skus, rules.hardware, rules.frame, kits, settings);
-    return { ...out, frameModel: frameModelNumber(a), frameDimensions: frameDimensions(a) };
+    const out = computeAdventureProposal(
+      a,
+      skus,
+      rules.hardware,
+      rules.frame,
+      kits,
+      settings,
+      naming,
+    );
+    const heading = out.lines.find((l) => l.frameCode);
+    return {
+      ...out,
+      frameModel: heading?.frameCode ?? '',
+      frameCodeVersion: naming.version,
+      frameDimensions: frameDimensions(a),
+    };
   });
 
   /**
@@ -318,11 +342,12 @@ export function registerAdventureRoutes(app: FastifyInstance): void {
    *  price/cost it was multiplied by — for cross-referencing against the workbook. */
   app.post('/proposals/adventure-series/trace', write, async (req) => {
     const a = (req.body || {}) as AdvAnswers;
-    const [skus, rules, settings] = await Promise.all([
+    const [skus, rules, settings, naming] = await Promise.all([
       skuMap(),
       loadFormulaRules(),
       loadFormulaSettings(),
+      activeFrameCodeConvention(),
     ]);
-    return explainAdventure(a, skus, rules.hardware, rules.frame, settings);
+    return explainAdventure(a, skus, rules.hardware, rules.frame, settings, naming);
   });
 }

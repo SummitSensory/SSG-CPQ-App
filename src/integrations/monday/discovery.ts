@@ -226,6 +226,62 @@ export async function searchItemsByName(
   return (data.boards[0]?.items_page.items ?? []).map(toItem);
 }
 
+/**
+ * Items created at or after `since`, newest first, up to `max`.
+ *
+ * Read with monday's creation-log ordering, so a board with years of rows costs one
+ * page when nothing is new: paging stops at the first item older than `since`. This
+ * is what the new-deal sweep uses to find rows a webhook may have missed.
+ */
+export async function fetchItemsCreatedSince(
+  boardId: string,
+  since: Date,
+  max = 100,
+): Promise<Array<MondayItem & { createdAt: Date | null }>> {
+  const out: Array<MondayItem & { createdAt: Date | null }> = [];
+  let cursor: string | null = null;
+  const pageLimit = Math.min(Math.max(max, 1), 100);
+  type Row = Parameters<typeof toItem>[0] & { created_at?: string | null };
+  do {
+    const data: {
+      boards?: Array<{ items_page: { cursor: string | null; items: Row[] } }>;
+      next_items_page?: { cursor: string | null; items: Row[] };
+    } = cursor
+      ? await mondayQuery(
+          `query ($cursor: String!, $limit: Int!) {
+             next_items_page (cursor: $cursor, limit: $limit) {
+               cursor items { created_at ${ITEM_FIELDS} }
+             }
+           }`,
+          { cursor, limit: pageLimit },
+        )
+      : await mondayQuery(
+          `query ($board: [ID!], $limit: Int!) {
+             boards (ids: $board) {
+               items_page (
+                 limit: $limit,
+                 query_params: { order_by: [{ column_id: "__creation_log__", direction: desc }] }
+               ) { cursor items { created_at ${ITEM_FIELDS} } }
+             }
+           }`,
+          { board: [boardId], limit: pageLimit },
+        );
+    const page: { cursor: string | null; items: Row[] } | undefined = cursor
+      ? data.next_items_page
+      : data.boards?.[0]?.items_page;
+    if (!page) break;
+    for (const row of page.items) {
+      const createdAt = row.created_at ? new Date(row.created_at) : null;
+      // Newest first: the first row older than the window ends the walk.
+      if (createdAt && createdAt.getTime() < since.getTime()) return out;
+      out.push({ ...toItem(row), createdAt });
+      if (out.length >= max) return out;
+    }
+    cursor = page.cursor;
+  } while (cursor);
+  return out;
+}
+
 /** A single item by id, with the raw column payload kept for inspection. */
 export async function fetchItemById(itemId: string): Promise<MondayItem | null> {
   const data = await mondayQuery<{ items: Array<Parameters<typeof toItem>[0]> }>(

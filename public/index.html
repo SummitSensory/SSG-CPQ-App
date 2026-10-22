@@ -220,6 +220,9 @@
         position: sticky;
         top: 0;
         height: 100vh;
+        /* Scrolls on a short window rather than cutting off the foot (Reorder Tabs,
+           My Profile, Sign Out sat below the fold on a 720px-tall laptop screen). */
+        overflow-y: auto;
       }
       .side .brand {
         padding: 0 6px;
@@ -558,6 +561,9 @@
     <!-- The Media Partnership Program (Customer Project Media Rebate) editor.
          Admin-only; its route refuses anyone else. -->
     <script src="/media-partnership-admin.js?v=1"></script>
+    <!-- Frame naming: the Adventure Series frame code convention. System admins only;
+         its route refuses anyone else. -->
+    <script src="/frame-code-admin.js?v=1"></script>
     <!-- The drag-to-place editor for signature-field-layout.js's saved offsets.
          Admin-only; its route refuses anyone else. -->
     <script src="/signature-field-layout-admin.js?v=1"></script>
@@ -578,6 +584,10 @@
          app.js, which builds its ORDER_COLS from window.SSGOrderPortal as it loads.
          Same three-part rule: the file in public/, its route in CLIENT_SCRIPTS, this tag. -->
     <script src="/order-portal.js?v=2"></script>
+    <!-- The user's own sidebar tab order (drag to reorder, saved to the account).
+         Before app.js, which mounts it once the shell exists. Same three-part rule:
+         the file in public/, its route in CLIENT_SCRIPTS, and this tag. -->
+    <script src="/nav-order.js?v=1"></script>
     <script src="/app.js?v=140"></script>
     <!--
       Portal delivery submissions panel (Administration → Integrations).

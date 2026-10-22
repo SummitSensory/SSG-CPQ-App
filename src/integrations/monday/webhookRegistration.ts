@@ -5,6 +5,8 @@ import { env } from '../../config/env.js';
 import { logger } from '../../lib/logger.js';
 import { deliveryBoardId } from './portalDelivery.js';
 import { isPortalInviteConfigured, manufacturingBoardId } from './portalInvite.js';
+import { isDealAutoImportEnabled } from './dealAutoImport.js';
+import { DEALS_BOARD_ID } from './crmMapping.js';
 
 /**
  * Registering the CRM's own monday webhooks, from the CRM.
@@ -148,6 +150,21 @@ export function desiredWebhooks(): WebhookSpec[] {
         purpose: 'The invite trigger status changed — set the portal invite column.',
       },
     );
+  }
+
+  /**
+   * The Deal Tracking board: a new customer appears in the CRM without anyone
+   * importing it (see dealAutoImport.ts). `create_item` only — the nightly sweep
+   * re-reads each new row a day later, which is what picks up the columns filled in
+   * after the row was created, without a subscription to every column edit on the
+   * busiest board in the account. Omitted when MONDAY_DEAL_AUTO_IMPORT=false.
+   */
+  if (isDealAutoImportEnabled()) {
+    specs.push({
+      boardId: DEALS_BOARD_ID,
+      event: 'create_item',
+      purpose: 'A new deal on Deal Tracking — add the customer to the CRM.',
+    });
   }
 
   return specs;

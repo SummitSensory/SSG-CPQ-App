@@ -44,6 +44,7 @@ export const REQUIRED_COLUMNS: Array<{ table: string; column: string; since: str
   },
   { table: 'User', column: 'tipsEnabled', since: '0080_user_tips_enabled' },
   { table: 'User', column: 'dashboardLayout', since: '0089_add_user_dashboard_layout' },
+  { table: 'User', column: 'navOrder', since: '0122_user_nav_order' },
   {
     table: 'ProposalVersion',
     column: 'mediaRebateSnapshotId',

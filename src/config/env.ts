@@ -24,6 +24,14 @@ const EnvSchema = z
     // unset it defaults to the live board (18421779422) in portalDelivery.ts, so
     // this only needs setting if that board is ever rebuilt.
     MONDAY_DELIVERY_BOARD_ID: z.string().min(1).optional(),
+    // New Deal Tracking rows appear in the CRM by themselves: a create_item webhook
+    // imports each one as it is added, and the nightly cron sweeps up any the webhook
+    // missed (see integrations/monday/dealAutoImport.ts). On by default; set to
+    // "false" to switch both off without a deploy of code.
+    MONDAY_DEAL_AUTO_IMPORT: z
+      .enum(['true', 'false'])
+      .default('true')
+      .transform((v) => v === 'true'),
     // ---- Customer portal invite (Manufacturing Process board) ----
     // A staff member sets the trigger status to "Send Invite"; the portal's send is
     // driven off the invite status. The CRM closes the gap between the two, logs

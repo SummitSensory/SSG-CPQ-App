@@ -78,6 +78,14 @@ model User {
   /// display preference, not a permission. The widget-id vocabulary lives in the
   /// client, not here; the route validates only the JSON's shape, not the values.
   dashboardLayout Json?
+
+  /// The order this user wants the left-hand navigation tabs in: an array of nav ids
+  /// (the `data-view` of each tab), first to last. Null means "the default order."
+  /// A display preference like dashboardLayout, saved to the account so it follows
+  /// the user between browsers. Ids the user cannot see, or that no longer exist, are
+  /// dropped by the client; tabs added after the order was saved slot in at their
+  /// default position (see public/nav-order.js).
+  navOrder Json?
 }
 
 /// One rep's delegated consent to have drafts written into their Outlook mailbox.
@@ -5064,4 +5072,22 @@ model ColorUpchargePush {
   pushedAt           DateTime          @default(now())
 
   @@index([orderId])
+}
+
+/// The frame naming convention (src/proposals/frameCode.ts), one row per saved version.
+/// Append-only: a proposal stamps the version that named it, so a version, once used,
+/// must keep meaning what it meant. The newest version per product line is in force.
+/// Version 1 is the default in code and needs no row; the first save writes version 2.
+model FrameCodeConvention {
+  id          String   @id @default(cuid())
+  productLine String   @default("ADVENTURE")
+  version     Int
+  /// FrameCodeConvention from frameCode.ts: segments, shapes, features, monkeyBarsCountAsBeam.
+  config      Json
+  /// Why it changed, in the admin's words.
+  note        String?
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  @@unique([productLine, version])
 }

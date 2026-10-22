@@ -47,6 +47,7 @@ import {
   stampPageReferences,
 } from '../../lib/pdfMerge.js';
 import { resolveReferenceDocuments } from '../../proposals/referenceDocuments.js';
+import { proposalPdfFileNameForVersion } from '../../proposals/pdfFileName.js';
 import { resolveRenderings } from '../../lib/renderingStore.js';
 import { renderCertificatePdf, imageUrlToDataUri, type CertificateSigner } from './certificate.js';
 import { resolveIpLocation } from '../geolocation.js';
@@ -494,7 +495,11 @@ export async function sendProposalForSignature(input: SendInput): Promise<SendRe
   // it actually went out — pages and all — not just the HTML half of it.
   if (referenceDocs.length) pdf = await appendPdfDocuments(pdf, referenceDocs);
   const sha256 = crypto.createHash('sha256').update(pdf).digest('hex');
-  const name = (input.filename || version.proposal.number).replace(/\.pdf$/i, '');
+  // The browser's name; failing that the same convention, server-side (pdfFileName.ts).
+  const name = (input.filename || (await proposalPdfFileNameForVersion(input.versionId))).replace(
+    /\.pdf$/i,
+    '',
+  );
 
   // The envelope row exists before DocuSeal is called, so a failed send leaves a
   // record of the attempt with the document that was going to go out.

@@ -593,6 +593,9 @@
       else renderSoon(item.label);
     });
     document.getElementById('logoutBtn').addEventListener('click', logout);
+    // The user's own tab order (public/nav-order.js). Applied again whenever a
+    // plugin installs its tab, so Insights, Goals etc. land where the user put them.
+    if (window.SSGNavOrder) window.SSGNavOrder.mount(user, { authed: authed });
     showBuildStamp();
     document.getElementById('pwdBtn').addEventListener('click', openPasswordForm);
     document.getElementById('profBtn').addEventListener('click', function () { openProfileForm(user); });
@@ -674,6 +677,7 @@
     if (window.SSGLegalAdmin) window.SSGLegalAdmin.init({ authed: authed, esc: esc });
     if (window.SSGMediaPartnershipAdmin)
       window.SSGMediaPartnershipAdmin.init({ authed: authed, esc: esc });
+    if (window.SSGFrameCodeAdmin) window.SSGFrameCodeAdmin.init({ authed: authed, esc: esc });
     // Vendor part numbers: the dialog lives here for Catalog AND Administration, which
     // is why it is no longer inside either.
     if (window.SSGVendorParts) window.SSGVendorParts.init({ authed: authed });
@@ -1196,7 +1200,6 @@
     return '<div class="section-title">Quick actions</div>' +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
         (canWrite ? '<button class="btn" id="dqNew" style="width:auto;padding:10px 16px;">New proposal</button>' : '') +
-        (canCrmWrite(user.role) ? '<button class="link-btn" id="dqMonday" style="width:auto;padding:10px 15px;">Import a customer from monday</button>' : '') +
         '<button class="link-btn" id="dqReports" style="width:auto;padding:10px 15px;">Open reports</button>' +
         '<button class="link-btn" id="dqCatalog" style="width:auto;padding:10px 15px;">Catalog &amp; pricing</button>' +
       '</div>';
@@ -1215,7 +1218,6 @@
    *  refill: fresh elements each time, so nothing double-binds. */
   function wireDashboardWidgetContent(user) {
     var nb = document.getElementById('dqNew'); if (nb) nb.addEventListener('click', function () { openProposalForm(user); });
-    var mb = document.getElementById('dqMonday'); if (mb) mb.addEventListener('click', function () { openMondayLookup(user); });
     var rb = document.getElementById('dqReports'); if (rb) rb.addEventListener('click', function () { activateNav('reports'); renderReports(user); });
     var cb = document.getElementById('dqCatalog'); if (cb) cb.addEventListener('click', function () { activateNav('catalog'); window.SSGCatalog.render(user); });
     var apiEl = document.getElementById('apiStatus');
@@ -1429,6 +1431,7 @@
   var crm = { tab: 'orgs', q: '', page: 1 };
 
   function renderCrm(user) {
+    crm.user = user;
     var writable = canCrmWrite(user.role);
     var newLabel = crm.tab === 'orgs' ? 'New organization' : 'New opportunity';
     function tab(id, label) {
@@ -1500,10 +1503,16 @@
       if (q.length < 2) { box.innerHTML = '<span class="muted">Type at least 2 characters.</span>'; return; }
       box.innerHTML = '<span class="muted">Searching monday…</span>';
       try {
-        var r = await authed('/integrations/monday/search?q=' + encodeURIComponent(q));
+        // The customer picker's search (CRM_WRITE), not the admin import endpoints
+        // (INTEGRATIONS_MANAGE): those answered 403 for every sales rep shown this
+        // button. It lists only deals the CRM does not hold yet — the rest are
+        // already in the list behind this dialog.
+        var r = await authed('/crm/customer-picker?q=' + encodeURIComponent(q));
         if (!r.ok) { box.innerHTML = '<div class="err">Search failed (' + r.status + ').</div>'; return; }
-        var rows = await r.json();
-        if (!rows.length) { box.innerHTML = '<span class="muted">No matches in monday for “' + esc(q) + '”.</span>'; return; }
+        var found = await r.json();
+        var rows = (found.monday && found.monday.rows) || [];
+        if (found.monday && found.monday.status === 'unavailable') { box.innerHTML = '<div class="err">monday.com could not be reached. Try again in a moment.</div>'; return; }
+        if (!rows.length) { box.innerHTML = '<span class="muted">No deals in monday for “' + esc(q) + '” that are not already in the CRM.</span>'; return; }
         box.innerHTML = rows.map(function (x) {
           var where = [x.city, x.state].filter(Boolean).join(', ');
           return '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid #f2f3ef;">' +
@@ -1516,10 +1525,10 @@
           b.addEventListener('click', async function () {
             b.disabled = true; b.textContent = 'Importing…';
             try {
-              var ir = await authed('/integrations/monday/import/deal/' + b.getAttribute('data-id'), { method: 'POST' });
+              var ir = await authed('/crm/customer-picker/monday/' + encodeURIComponent(b.getAttribute('data-id')), { method: 'POST' });
               var res = await ir.json();
               if (!ir.ok) { b.textContent = 'Failed'; return; }
-              b.textContent = res.deals.created ? 'Imported' : 'Updated';
+              b.textContent = res.result === 'created' ? 'Imported' : 'Updated';
               // From the proposal form the customer goes back to the caller; from the
               // CRM the list refreshes, as before.
               // The name comes off the button, not from the row that drew it: these
@@ -1557,6 +1566,7 @@
       if (seq !== crmLoadSeq) return;
       box.innerHTML = crm.tab === 'orgs' ? orgTable(d) : oppTable(d);
       wirePager(d);
+      wireNewProposalButtons(box);
     } catch (e) { if (seq === crmLoadSeq) box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
   }
 
@@ -1582,19 +1592,44 @@
     if (next) next.addEventListener('click', function () { if (crm.page < totalPages) { crm.page++; loadCrm(); } });
   }
 
+  /**
+   * "New proposal" straight from a CRM row: the New proposal form opens with this
+   * customer (and, on the Opportunities tab, this project) already chosen, so the
+   * only thing left to type is the title.
+   */
+  function crmCanPropose() { return !!(crm.user && hasRole(PROP_WRITE, crm.user.role)); }
+  function newProposalBtn(orgId, oppId, label) {
+    return '<button type="button" class="link-btn crmNewProp" data-org="' + esc(orgId) + '" data-opp="' + esc(oppId || '') + '" data-label="' + esc(label) + '" style="width:auto;padding:5px 11px;font-size:12.5px;white-space:nowrap;">New proposal</button>';
+  }
   function orgTable(d) {
+    var propose = crmCanPropose();
     var rows = (d.items || []).map(function (o) {
       return '<tr>' + td('<b style="font-weight:600;">' + esc(o.name) + '</b>') + td(esc(titleCase(o.customerType))) +
-        td(o.taxExempt ? '<span class="chip">Tax exempt</span>' : '<span class="muted">—</span>') + td(fmtDate(o.createdAt)) + '</tr>';
+        td(o.taxExempt ? '<span class="chip">Tax exempt</span>' : '<span class="muted">—</span>') + td(fmtDate(o.createdAt)) +
+        (propose ? td(newProposalBtn(o.id, '', o.name)) : '') + '</tr>';
     }).join('');
-    return shell(['Name', 'Type', 'Tax status', 'Added'], rows, d);
+    return shell(['Name', 'Type', 'Tax status', 'Added'].concat(propose ? [''] : []), rows, d);
   }
   function oppTable(d) {
+    var propose = crmCanPropose();
     var rows = (d.items || []).map(function (o) {
+      var label = (o.organizationName || o.name) + (o.projectId ? ' — Project ' + o.projectId : '');
       return '<tr>' + td('<b style="font-weight:600;">' + esc(o.name) + '</b>') + td('<span class="chip">' + esc(titleCase(o.stage)) + '</span>') +
-        td(esc(titleCase(o.fundingStatus))) + td(fmtMoney(o.budgetAmountMinor, o.budgetCurrency)) + td(esc(o.desiredTimeline || '—')) + '</tr>';
+        td(esc(titleCase(o.fundingStatus))) + td(fmtMoney(o.budgetAmountMinor, o.budgetCurrency)) + td(esc(o.desiredTimeline || '—')) +
+        (propose ? td(newProposalBtn(o.organizationId, o.id, label)) : '') + '</tr>';
     }).join('');
-    return shell(['Name', 'Stage', 'Funding', 'Budget', 'Timeline'], rows, d);
+    return shell(['Name', 'Stage', 'Funding', 'Budget', 'Timeline'].concat(propose ? [''] : []), rows, d);
+  }
+  function wireNewProposalButtons(box) {
+    Array.prototype.forEach.call(box.querySelectorAll('.crmNewProp'), function (b) {
+      b.addEventListener('click', function () {
+        openProposalForm(crm.user, {
+          organizationId: b.getAttribute('data-org'),
+          opportunityId: b.getAttribute('data-opp') || '',
+          label: b.getAttribute('data-label') || '',
+        });
+      });
+    });
   }
 
   /* --- Modal + forms --- */
@@ -3405,114 +3440,36 @@
     return b.join('');
   }
   /**
-   * New proposal.
+   * New proposal: one customer field that searches the CRM AND monday together.
    *
-   * The organization list is sorted here rather than trusted from the API:
-   * /crm/organizations returns its own paging order, and a rep scanning a hundred
-   * entries needs them alphabetical. localeCompare with sensitivity 'base', so "The
-   * Therapy Place" and "the therapy place" sort next to each other rather than by
-   * byte value.
+   * It used to take three screens: search monday from the CRM tab, import the deal,
+   * then go to Proposals and pick the customer out of a dropdown (or detour from that
+   * dropdown into a second monday dialog and back). Now the field asks
+   * GET /crm/customer-picker, which answers with the CRM's customers — one row per
+   * project, so a customer with two jobs running shows both — and, below them, the
+   * monday Deal Tracking deals the CRM does not hold yet. Picking a monday deal brings
+   * it into the CRM on the spot (the same importer as everywhere else), and Create
+   * drops the rep in the builder with the customer, contact, ship-to and Project ID
+   * already filled in from that deal.
    *
-   * `preselectName` is the return leg of the monday lookup: the customer just
-   * imported is the one selected when the form reopens, because a rep who went
-   * looking for one specific customer should not have to find them a second time.
+   * `pre` preselects a customer — {organizationId, opportunityId, label} — when the
+   * form is opened from a CRM row's "New proposal".
    */
-  var ORG_PICK_PAGE = 500;
-  function sortOrgs(list) {
-    return list.slice().sort(function (a, b) { return String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' }); });
-  }
-  async function fetchOrgs(q) {
-    try {
-      var r = await authed('/crm/organizations?pageSize=' + ORG_PICK_PAGE + (q ? '&q=' + encodeURIComponent(q) : ''));
-      if (!r.ok) return [];
-      return sortOrgs((await r.json()).items || []);
-    } catch (e) { return []; }
-  }
-  /** Opportunities carry the Project ID; see GET /crm/opportunities. */
-  async function fetchOpportunities(q) {
-    try {
-      var r = await authed('/crm/opportunities?pageSize=' + ORG_PICK_PAGE + (q ? '&q=' + encodeURIComponent(q) : ''));
-      if (!r.ok) return [];
-      return (await r.json()).items || [];
-    } catch (e) { return []; }
-  }
-  /**
-   * One row per project, the thing a rep is actually choosing when a customer has
-   * more than one running concurrently — not one row per customer, which gave no way
-   * to say which of several proposals-in-progress a new one belonged to. A customer
-   * with no opportunity yet (created by hand, or imported before one existed) still
-   * gets exactly one row, carrying the organization alone, so starting a proposal
-   * never requires creating a project first.
-   */
-  function buildPickRows(orgs, opps) {
-    // Keyed on the union of both lists' organization ids, not just `orgs` — a search
-    // that matches an opportunity by Project ID but not its customer by name (an org
-    // search and a Project ID search are two different queries against two different
-    // endpoints) must still surface that project, using the org name the opportunity
-    // itself carries rather than dropping it for not being in the other list.
-    var byOrg = {}, orgName = {};
-    orgs.forEach(function (org) { orgName[org.id] = org.name; if (!byOrg[org.id]) byOrg[org.id] = []; });
-    opps.forEach(function (o) {
-      if (!byOrg[o.organizationId]) byOrg[o.organizationId] = [];
-      byOrg[o.organizationId].push(o);
-      if (!orgName[o.organizationId]) orgName[o.organizationId] = o.organizationName;
-    });
-    var rows = [];
-    Object.keys(byOrg).forEach(function (orgId) {
-      var theirs = byOrg[orgId];
-      if (!theirs.length) {
-        rows.push({ organizationId: orgId, opportunityId: '', orgName: orgName[orgId] || '', projectId: '', closed: false });
-        return;
-      }
-      theirs.forEach(function (o) {
-        rows.push({ organizationId: orgId, opportunityId: o.id, orgName: orgName[orgId] || o.organizationName || '', projectId: o.projectId || '', closed: !!o.closed });
-      });
-    });
-    rows.sort(function (a, b) {
-      return String(a.orgName).localeCompare(String(b.orgName), undefined, { sensitivity: 'base' }) ||
-        String(a.projectId).localeCompare(String(b.projectId), undefined, { numeric: true });
-    });
-    return rows;
-  }
-  function pickRowLabel(esc, row) {
-    return esc(row.orgName) +
-      (row.projectId ? ' — Project ' + esc(row.projectId) : '') +
-      (row.closed ? ' (Closed)' : '');
-  }
-  async function openProposalForm(user, preselectName) {
-    // Customers, opportunities and the prebuilt titles load together; in turn, the
-    // dialog waited for all three requests end to end before it appeared.
-    var got = await Promise.all([
-      fetchOrgs(''),
-      fetchOpportunities(''),
-      // Prebuilt titles from Administration → Proposal content → Proposal titles. An
-      // empty list (none set up, or the fetch failed) leaves just the typed title.
-      window.SSGProposalTitles ? window.SSGProposalTitles.fetchActive() : [],
-    ]);
-    var orgs = got[0], opps = got[1], presetTitles = got[2] || [];
-    var rows = buildPickRows(orgs, opps);
-    var canFind = canCrmWrite(user.role);
-    // With the monday lookup available, an empty CRM is no longer a dead end.
-    if (!rows.length && !canFind) { alert('Create an organization first.'); return; }
-
-    // Only preselect when the name is unambiguous. A customer running two concurrent
-    // projects now has two rows here on purpose — that used to be exactly the case
-    // where a name match silently picked the wrong one, with nothing on screen to
-    // say a choice was even made for you. Left blank instead, so the rep — who came
-    // through this path specifically to tell two projects apart — picks explicitly.
-    var wanted = String(preselectName || '').trim().toLowerCase();
-    var nameMatches = wanted ? rows.filter(function (r) { return String(r.orgName || '').trim().toLowerCase() === wanted; }) : [];
-    var selectedKey = nameMatches.length === 1 ? (nameMatches[0].opportunityId || nameMatches[0].organizationId) : '';
-    function rowKey(r) { return r.opportunityId || r.organizationId; }
+  async function openProposalForm(user, pre) {
+    var presetTitles = window.SSGProposalTitles ? (await window.SSGProposalTitles.fetchActive()) || [] : [];
+    var chosen = pre && pre.organizationId ? { organizationId: pre.organizationId, opportunityId: pre.opportunityId || '', label: esc(pre.label || '') } : null;
 
     var ov = openModal('New proposal',
-      fieldRow('Organization',
-        '<input id="fOrgFilter" style="' + IN + 'margin-bottom:7px;" placeholder="Type to search customers or a project ID…" autocomplete="off">' +
-        '<select id="fOrg" size="1" style="' + IN + '">' +
-          (rows.length ? '' : '<option value="">No organizations yet — find one in monday</option>') +
-          rows.map(function (r) { return '<option value="' + esc(rowKey(r)) + '" data-org="' + esc(r.organizationId) + '" data-opp="' + esc(r.opportunityId) + '"' + (rowKey(r) === selectedKey ? ' selected' : '') + '>' + pickRowLabel(esc, r) + '</option>'; }).join('') +
-        '</select>' +
-        (canFind ? '<button type="button" class="link-btn" id="fOrgMonday" style="width:auto;padding:6px 0;margin-top:6px;font-size:12.5px;">Not listed? Find a customer in monday</button>' : '')) +
+      fieldRow('Customer',
+        '<div id="fCustChosen" style="display:none;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border:1px solid #cfe3d7;background:#eef6f1;border-radius:9px;font-size:14px;">' +
+          '<span id="fCustChosenLabel" style="font-weight:600;min-width:0;"></span>' +
+          '<button type="button" class="link-btn" id="fCustChange" style="width:auto;padding:4px 10px;font-size:12.5px;white-space:nowrap;">Change</button>' +
+        '</div>' +
+        '<div id="fCustSearchWrap">' +
+          '<input id="fCust" style="' + IN + '" placeholder="Search customers, monday deals or a Project ID…" autocomplete="off" role="combobox" aria-expanded="true" aria-controls="fCustList" aria-autocomplete="list">' +
+          '<div id="fCustList" role="listbox" aria-label="Customers" style="margin-top:7px;max-height:290px;overflow:auto;border:1px solid #e7e8e3;border-radius:9px;background:#fff;"><div class="muted" style="padding:10px 12px;font-size:13px;">Loading customers…</div></div>' +
+          '<div id="fCustNote" class="muted" style="font-size:11.5px;margin-top:5px;"></div>' +
+        '</div>') +
       fieldRow('Title',
         (presetTitles.length
           ? '<select id="fTitlePick" style="' + IN + 'margin-bottom:7px;">' +
@@ -3525,12 +3482,9 @@
           (presetTitles.length ? 'Pick one above, or type a title' : 'Proposal title') + '">' +
         (presetTitles.length ? '<div class="muted" style="font-size:11.5px;margin-top:5px;">A prebuilt title can still be edited here before you create the proposal.</div>' : '')),
       async function (close, showErr) {
-        var opt = ov.querySelector('#fOrg').selectedOptions[0];
-        var orgId = opt ? opt.getAttribute('data-org') : '';
-        if (!orgId) return showErr('Pick an organization, or find one in monday first.');
-        var opportunityId = opt.getAttribute('data-opp') || undefined;
+        if (!chosen || !chosen.organizationId) return showErr(picking ? 'Wait a moment — that customer is still being brought in from monday.' : 'Pick a customer.');
         var title = ov.querySelector('#fTitle').value.trim(); if (title.length < 2) return showErr('Title must be at least 2 characters.');
-        var r = await authed('/proposals', { method: 'POST', body: { organizationId: orgId, opportunityId: opportunityId, title: title, sections: [], items: [] } });
+        var r = await authed('/proposals', { method: 'POST', body: { organizationId: chosen.organizationId, opportunityId: chosen.opportunityId || undefined, title: title, sections: [], items: [] } });
         if (!r.ok) return showErr('Could not create (' + r.status + ').');
         var created = null;
         try { created = await r.json(); } catch (e) {}
@@ -3549,81 +3503,154 @@
         var v = pickEl.value;
         if (v === '__custom') { input.value = ''; input.focus(); return; }
         if (v === '') return;
-        var chosen = presetTitles[Number(v)];
-        if (chosen != null) input.value = chosen;
+        var chosenTitle = presetTitles[Number(v)];
+        if (chosenTitle != null) input.value = chosenTitle;
       });
       // Typing over a picked title makes it the rep's own; the dropdown says so.
       ov.querySelector('#fTitle').addEventListener('input', function () {
-        var chosen = pickEl.value !== '' && pickEl.value !== '__custom' ? presetTitles[Number(pickEl.value)] : null;
-        if (chosen != null && ov.querySelector('#fTitle').value !== chosen) pickEl.value = '__custom';
+        var t = pickEl.value !== '' && pickEl.value !== '__custom' ? presetTitles[Number(pickEl.value)] : null;
+        if (t != null && ov.querySelector('#fTitle').value !== t) pickEl.value = '__custom';
       });
     }
 
-    /*
-     * Typing narrows the list. The first pass is local, so it responds on the
-     * keystroke; the server is then always asked too, once there is enough to search
-     * on, and its answer replaces the working list.
-     *
-     * The server is asked even when the local pass already found something — it used
-     * to skip the lookup whenever ANY local match existed, on the assumption that a
-     * local hit meant the search was already satisfied. It does not: the snapshot is
-     * loaded once when this dialog opens, so an organization or project created or
-     * imported since then (most often one sharing a name with something already in
-     * that snapshot, the exact case where the rep is searching hardest to tell them
-     * apart) matched nothing locally except its stale twin, and the search never went
-     * further to find it. The dropdown always ends up with the freshest answer either
-     * way, since paintOrgs runs again the moment the server responds.
-     */
-    var filterEl = ov.querySelector('#fOrgFilter');
-    var selEl = ov.querySelector('#fOrg');
-    var lookupTimer = null;
-    function paintOrgs(list, q) {
-      selEl.innerHTML = list.length
-        ? list.map(function (r) { return '<option value="' + esc(rowKey(r)) + '" data-org="' + esc(r.organizationId) + '" data-opp="' + esc(r.opportunityId) + '">' + pickRowLabel(esc, r) + '</option>'; }).join('')
-        : '<option value="">No customer matches “' + esc(q || '') + '”</option>';
+    var input = ov.querySelector('#fCust');
+    var list = ov.querySelector('#fCustList');
+    var note = ov.querySelector('#fCustNote');
+    var options = []; // what the list shows, in order: {kind:'crm'|'monday', row}
+    var active = -1;
+    var seq = 0, timer = null, picking = false;
+
+    function crmLabel(r) {
+      return esc(r.organizationName) +
+        (r.projectId ? ' <span class="muted" style="font-weight:400;">— Project ' + esc(r.projectId) + '</span>' : '') +
+        (r.closed ? ' <span class="muted" style="font-weight:400;">(Closed)</span>' : '');
     }
-    filterEl.addEventListener('input', function () {
-      var q = filterEl.value.trim();
-      var qq = q.toLowerCase();
-      var local = qq ? rows.filter(function (r) { return (r.orgName + ' ' + r.projectId).toLowerCase().indexOf(qq) !== -1; }) : rows;
-      paintOrgs(local, q);
-      if (lookupTimer) clearTimeout(lookupTimer);
-      if (qq.length < 2) return;
-      lookupTimer = setTimeout(async function () {
-        var found = await Promise.all([fetchOrgs(q), fetchOpportunities(q)]);
-        var foundOrgs = found[0], foundOpps = found[1];
-        if (filterEl.value.trim() !== q) return; // they kept typing
-        // Replace on a real answer; a failed fetch already comes back as [] from
-        // fetchOrgs/fetchOpportunities, and leaving the local (if stale) results up
-        // beats wiping the list to "no matches" over what might just be a dropped
-        // request. Either list finding something is enough to rebuild: a search that
-        // matches only a monday deal's Project ID comes back with opportunities but
-        // no newly-matching organizations at all, and still has to show something.
-        if (foundOrgs.length || foundOpps.length) {
-          rows = buildPickRows(foundOrgs, foundOpps);
-          paintOrgs(rows, q);
+    function crmSub(r) {
+      return [r.opportunityName && r.opportunityName !== r.organizationName ? r.opportunityName : '', r.opportunityId ? titleCase(r.stage || '') : 'No project yet'].filter(Boolean).map(esc).join(' · ');
+    }
+    function mondaySub(m) {
+      var where = [m.city, m.state].filter(Boolean).join(', ');
+      return [m.contact, where, m.projectId ? 'Project ' + m.projectId : '', m.stage, m.existingOrganizationId ? 'adds a project to the existing customer' : ''].filter(Boolean).map(esc).join(' · ');
+    }
+    function head(text) {
+      return '<div style="padding:7px 12px 5px;font-size:10.5px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:#8a8f85;background:#f7f8f4;border-bottom:1px solid #eef0ea;">' + text + '</div>';
+    }
+    function optionHtml(o, i) {
+      var main = o.kind === 'crm' ? crmLabel(o.row) : esc(o.row.name) + ' <span class="chip" style="font-size:10.5px;padding:1px 7px;margin-left:4px;">monday</span>';
+      var sub = o.kind === 'crm' ? crmSub(o.row) : mondaySub(o.row);
+      return '<div role="option" id="fCustOpt' + i + '" data-i="' + i + '" aria-selected="' + (i === active) + '" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid #f2f3ef;' + (i === active ? 'background:#eef0ea;' : '') + '">' +
+        '<div style="font-weight:600;font-size:13.5px;">' + main + '</div>' +
+        (sub ? '<div class="muted" style="font-size:12px;">' + sub + '</div>' : '') +
+      '</div>';
+    }
+    function paint(d, q) {
+      options = [];
+      (d.crm || []).forEach(function (r) { options.push({ kind: 'crm', row: r }); });
+      var crmCount = options.length;
+      var mondayRows = (d.monday && d.monday.rows) || [];
+      mondayRows.forEach(function (m) { options.push({ kind: 'monday', row: m }); });
+      if (active >= options.length) active = options.length - 1;
+      var html = '';
+      if (crmCount) html += head(q ? 'In the CRM' : 'Recent customers') + options.slice(0, crmCount).map(function (o, i) { return optionHtml(o, i); }).join('');
+      if (mondayRows.length) html += head('monday Deal Tracking — not in the CRM yet') + options.slice(crmCount).map(function (o, i) { return optionHtml(o, crmCount + i); }).join('');
+      if (!html) html = '<div class="muted" style="padding:10px 12px;font-size:13px;">' + (q ? 'Nothing in the CRM or monday matches “' + esc(q) + '”.' : 'No customers yet — type a name to search monday.') + '</div>';
+      list.innerHTML = html;
+      var st = d.monday ? d.monday.status : '';
+      note.textContent = st === 'unavailable' ? 'monday.com could not be reached just now, so only CRM customers are listed.'
+        : st === 'query-too-short' ? 'Type a name to search monday Deal Tracking as well.'
+        : st === 'ok' ? 'New Deal Tracking customers appear here automatically.'
+        : '';
+    }
+    async function search(q) {
+      var mine = ++seq;
+      try {
+        var r = await authed('/crm/customer-picker?q=' + encodeURIComponent(q));
+        if (mine !== seq) return;
+        if (!r.ok) { list.innerHTML = '<div class="err" style="margin:8px;">Could not search customers (' + r.status + ').</div>'; return; }
+        var d = await r.json();
+        if (mine !== seq) return;
+        active = -1;
+        paint(d, q);
+      } catch (e) {
+        if (mine === seq) list.innerHTML = '<div class="err" style="margin:8px;">Could not reach the server.</div>';
+      }
+    }
+    function showChosen() {
+      ov.querySelector('#fCustChosen').style.display = chosen ? 'flex' : 'none';
+      ov.querySelector('#fCustSearchWrap').style.display = chosen ? 'none' : '';
+      ov.querySelector('#fCustChosenLabel').innerHTML = chosen ? chosen.label : '';
+    }
+    async function pick(i) {
+      var o = options[i];
+      if (!o || picking) return;
+      if (o.kind === 'crm') {
+        chosen = { organizationId: o.row.organizationId, opportunityId: o.row.opportunityId || '', label: crmLabel(o.row) };
+        showChosen();
+        ov.querySelector('#fTitle').focus();
+        return;
+      }
+      // A monday deal: bring it into the CRM now, then treat it as a CRM pick.
+      picking = true;
+      list.innerHTML = '<div class="muted" style="padding:10px 12px;font-size:13px;">Bringing ' + esc(o.row.name) + ' in from monday…</div>';
+      try {
+        var r = await authed('/crm/customer-picker/monday/' + encodeURIComponent(o.row.itemId), { method: 'POST' });
+        var d = null;
+        try { d = await r.json(); } catch (e) {}
+        if (!r.ok || !d || !d.organizationId) {
+          picking = false;
+          list.innerHTML = '<div class="err" style="margin:8px;">' + esc((d && d.message) || 'That deal could not be brought in from monday (' + r.status + ').') + '</div>';
+          return;
         }
-      }, 250);
+        picking = false;
+        chosen = { organizationId: d.organizationId, opportunityId: d.opportunityId || '', label: crmLabel({ organizationName: d.organizationName || o.row.name, projectId: d.projectId || '', closed: false }) };
+        showChosen();
+        toast((d.organizationName || o.row.name) + ' is now in the CRM.');
+        ov.querySelector('#fTitle').focus();
+      } catch (e) {
+        picking = false;
+        list.innerHTML = '<div class="err" style="margin:8px;">Could not reach the server.</div>';
+      }
+    }
+    function highlight(i) {
+      active = i;
+      Array.prototype.forEach.call(list.querySelectorAll('[role="option"]'), function (el) {
+        var on = Number(el.getAttribute('data-i')) === i;
+        el.setAttribute('aria-selected', String(on));
+        el.style.background = on ? '#eef0ea' : '';
+        if (on) { input.setAttribute('aria-activedescendant', el.id); el.scrollIntoView({ block: 'nearest' }); }
+      });
+    }
+
+    list.addEventListener('mousedown', function (e) { e.preventDefault(); });
+    list.addEventListener('click', function (e) {
+      var el = e.target.closest('[role="option"]');
+      if (el) pick(Number(el.getAttribute('data-i')));
+    });
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); highlight(Math.min(options.length - 1, active + 1)); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); highlight(Math.max(0, active - 1)); }
+      else if (e.key === 'Enter') {
+        // Enter picks the highlighted customer rather than submitting a form that has none yet.
+        e.preventDefault();
+        if (active >= 0) pick(active);
+        else if (options.length === 1) pick(0);
+      }
+    });
+    input.addEventListener('input', function () {
+      if (timer) clearTimeout(timer);
+      var q = input.value.trim();
+      timer = setTimeout(function () { search(q); }, 250);
+    });
+    ov.querySelector('#fCustChange').addEventListener('click', function () {
+      chosen = null;
+      showChosen();
+      input.focus();
+      search(input.value.trim());
     });
 
-    if (canFind) {
-      ov.querySelector('#fOrgMonday').addEventListener('click', function () {
-        // The detour to monday must not cost the rep the title they already typed.
-        var typed = ov.querySelector('#fTitle');
-        var titleAtOpen = typed ? typed.value : '';
-        // This dialog goes away first. Leaving it open stacked three overlays with
-        // two #fTitle inputs between them, and Create then read the empty one and
-        // reported a title that was plainly typed as too short.
-        if (ov.parentNode) ov.parentNode.removeChild(ov);
-        openMondayLookup(user, {
-          onImported: async function (name) {
-            var next = await openProposalForm(user, name);
-            var again = next && next.querySelector('#fTitle');
-            if (again && titleAtOpen) again.value = titleAtOpen;
-          },
-        });
-      });
-    }
+    showChosen();
+    if (chosen) ov.querySelector('#fTitle').focus();
+    else { input.focus(); search(''); }
     return ov;
   }
   /**
@@ -4258,7 +4285,7 @@
     var desc = it.description || '';
     var note = it.internalNote || '';
     if (!note && LEAKED_INTERNAL.some(function (re) { return re.test(desc); })) { note = desc; desc = ''; }
-    return {
+    var out = {
       ref: it.ref || uid(), lineType: it.lineType || (it.isNote ? 'NOTE' : 'PRODUCT'), kind: it.kind || 'INCLUDED',
       productId: it.productId || null, sku: it.sku || '', name: it.name || '', description: desc,
       quantity: it.quantity == null ? (missingQty == null ? 1 : missingQty) : it.quantity, rateMinor: it.rateMinor || 0, costEach: it.costEach || 0, processingFeeMinor: it.processingFeeMinor || 0, weightEach: it.weightEach || 0, group: it.group || '',
@@ -4284,6 +4311,15 @@
       source: it.source || '',
       showNotes: false,
     };
+    // The itemized frame heading's code and the naming-convention version that wrote
+    // it (src/proposals/frameCode.ts). Only that heading carries them.
+    if (it.frameCode) {
+      out.frameCode = String(it.frameCode);
+      if (it.frameCodeVersion != null) out.frameCodeVersion = Number(it.frameCodeVersion);
+      if (it.frameLength != null) out.frameLength = Number(it.frameLength);
+      if (it.frameWidth != null) out.frameWidth = Number(it.frameWidth);
+    }
+    return out;
   }
 
   var pb = null; // active builder document
@@ -5254,8 +5290,17 @@
    * finds that copy so the builder can offer to correct it.
    */
   function modelTokenIn(text) {
-    var m = String(text || '').match(/\b[A-Z]{1,3}-[A-Z0-9]{3,}\b/);
-    return m ? m[0] : '';
+    // Shape letters, then one or more hyphen-joined chunks that each hold a digit:
+    // SQ-2MBL2T, SQ-H2MBL2T2-10x10, SQ-10x10-H2MBL2T2, R-10.5x8. The whole token,
+    // dimensions and all — stopping at the second hyphen made a correct title look
+    // stale and "Use model" append the dimensions again on every click. A token of
+    // digits only (P-2026-000194, a proposal number) is not a model.
+    var re = /\b[A-Z]{1,3}(?:-(?=[A-Za-z0-9.]*\d)[A-Za-z0-9]+(?:\.\d+[A-Za-z0-9]*)*)+/g;
+    var s = String(text || ''), m;
+    while ((m = re.exec(s))) {
+      if (!m[0].split('-').slice(1).every(function (c) { return /^\d+$/.test(c); })) return m[0];
+    }
+    return '';
   }
 
   /**
@@ -9359,10 +9404,16 @@
   }
 
   /**
-   * Save-as-PDF file name: Customer Name-Model-Frame Size-Proposal#-MMDDYYYY.
-   * Model and frame size are read off the itemized frame heading the builder writes
-   * (“SQ-2MBL2T — Itemized” / “Frame Dimensions: 10' × 8'”), so an edited heading is
-   * respected and a proposal without a frame simply drops those segments.
+   * Save-as-PDF file name: Customer Name-Frame Code-Proposal#[-RevN]-MMDDYYYY, e.g.
+   * "Soar Autism Center - Goodyear-SQ-H2MBL2T2-10x10-P-2026-000194-10062026".
+   *
+   * The one name every proposal PDF gets, for every user: Save PDF, Print, the
+   * release upload to monday, the emailed attachment and the DocuSeal package all
+   * call this. The frame code is read off the itemized heading the configurator
+   * writes, so an edited heading is respected. The code carries its own dimensions
+   * now (Administration → Frame naming); a proposal named before that has a code
+   * without them, and gets the footprint from the heading's "Frame Dimensions" note
+   * appended to it — the dimensions print once, never twice.
    */
   function proposalFileName(d) {
     var model = '', size = '', firstGroup = '';
@@ -9381,7 +9432,11 @@
     // else has no per-job model code, only a fixed catalog group name ("SUMMIT SOAR
     // SERIES") — without this, "no model code" silently became "no product name at
     // all" in the file name. The first group heading, title-cased, stands in for it.
-    if (!model && firstGroup) {
+    if (model) {
+      // A frame code: the size belongs inside it, once.
+      if (size && !/(^|-)\d+(\.\d+)?x\d+(\.\d+)?(-|$)/i.test(model)) model = model + '-' + size;
+      size = '';
+    } else if (firstGroup) {
       model = tc(firstGroup.toLowerCase());
     }
     var now = new Date();
@@ -9496,7 +9551,7 @@
       length: 10, width: 10, config: 'Square', legs: 6, legsAuto: true, configManual: false,
       monkeyBars: false, monkeyBarsQty: 1, ladders: false, laddersQty: 1, ladderShield: false,
       trolley: false, trolleyType: 'Dual', interiorBeams: false, interiorBeamsQty: 1,
-      zipLine: false, zipLineQty: 1, ballRack: false,
+      zipLine: false, zipLineQty: 1, ballRack: false, ballRackQty: 1,
       slide: false, slideA2216: false, slideGray: false, steamroller: false, slideConvKit: false,
       cargoNet: false, cargoNetQty: 1, cargoNetPart: '',
       cargoHwCarabiner: true, cargoHwCarabinerQty: 1, cargoHwVRing: true, cargoHwVRingQty: 2,
@@ -9535,7 +9590,7 @@
     adv.trolley = !!a.trolley; adv.trolleyType = a.trolleyType || 'Dual';
     adv.interiorBeams = !!a.interiorBeams; adv.interiorBeamsQty = Number(a.interiorBeamsQty) || 1;
     adv.zipLine = !!a.zipLine; adv.zipLineQty = Number(a.zipLineQty) || 1;
-    adv.ballRack = !!a.ballRack;
+    adv.ballRack = !!a.ballRack; adv.ballRackQty = Number(a.ballRackQty) || 1;
     adv.slide = !!a.slide; adv.slideGray = !!a.slideGray; adv.steamroller = !!a.steamroller;
     // Undefined means the answer predates the toggle, when the deck always shipped.
     adv.slideA2216 = a.slideA2216 === undefined ? !!a.slide : !!a.slideA2216;
@@ -9753,7 +9808,8 @@
           '<button id="advX" style="border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.12);color:#fff;border-radius:8px;padding:7px 12px;cursor:pointer;">Cancel</button>' +
         '</div>' +
         '<div style="padding:22px 24px;">' +
-          sec('Frame Dimensions', '<div style="' + grid + '">' + sel('length', 'Length (long, ft)', rangeArr(6, 30)) + sel('width', 'Width (short, ft)', rangeArr(6, 20)) + '</div>') +
+          sec('Frame Dimensions', '<div style="' + grid + '">' + sel('length', 'Length (long, ft)', rangeArr(6, 30)) + sel('width', 'Width (short, ft)', rangeArr(6, 20)) + '</div>' +
+            (advDimsError() ? '<div id="advDimsErr" style="margin-top:8px;padding:8px 10px;background:#fbecea;border:1px solid #e8c4bd;border-radius:8px;font-size:12px;color:#7d2f24;">' + esc(advDimsError()) + '</div>' : '')) +
           sec('Frame Configuration', '<div style="' + grid + '">' + sel('config', 'Configuration' + (adv.configManual ? ' (overridden)' : ' (auto)'), ['Rectangle', 'Square', 'L-Shape', 'T-Shape']) + sel('legs', '# of Frame Legs (auto, editable)', advLegOptions()) + '</div>' +
             '<div class="muted" style="font-size:11.5px;margin-top:6px;">' + (adv.configManual ? 'Manually set — auto would be ' + autoConfig() + '. <a href="#" id="advCfgReset">Reset to auto</a>' : 'Auto from dimensions: ' + autoConfig()) + ' · legs auto-set from length (' + legsFor(adv.length) + ')' + (Number(adv.legs) !== legsFor(adv.length) ? ' — currently ' + Number(adv.legs) + ', set by hand' : '') + '</div>') +
           sec('Frame Options',
@@ -9764,7 +9820,7 @@
           ) +
           sec('Frame Accessories',
             tog('zipLine', 'Zip Line') + (adv.zipLine ? '<div style="' + grid + 'margin:8px 0 4px;">' + num('zipLineQty', '# of Zip Line', 1, 3) + '</div>' : '') +
-            tog('ballRack', 'Frame Mount — Ball Rack') +
+            tog('ballRack', 'Frame Mount — Ball Rack') + (adv.ballRack ? '<div style="' + grid + 'margin:8px 0 4px;">' + num('ballRackQty', '# of Ball Racks', 1, 6) + '</div>' : '') +
             tog('slide', 'Summit Adventure Slide System') +
             (adv.slide ? '<div style="padding-left:16px;">' +
               tog('slideA2216', 'Slide', 'Part A-2216') +
@@ -9834,7 +9890,7 @@
               : '<label style="display:flex;align-items:center;gap:7px;font-size:12.5px;color:#5c6157;"><input type="checkbox" id="advReplace"> Replace existing lines</label>') +
             '<div style="display:flex;gap:8px;align-items:flex-start;">' +
             '<button class="link-btn" id="advTrace" style="width:auto;padding:11px 16px;">Test the logic →</button>' +
-            '<button class="btn" id="advGen" style="width:auto;padding:11px 22px;">' + advGenLabel() + '</button></div>' +
+            '<button class="btn" id="advGen" style="width:auto;padding:11px 22px;"' + (advDimsError() ? ' disabled title="' + esc(advDimsError()) + '"' : '') + '>' + advGenLabel() + '</button></div>' +
           '</div>' +
         '</div>' +
       '</div>';
@@ -9942,6 +9998,15 @@
     return opts;
   }
   function autoConfig() { return (Number(adv.length) || 0) === (Number(adv.width) || 0) ? 'Square' : 'Rectangle'; }
+  /**
+   * Length is the long side. A width greater than the length is refused — not
+   * swapped, which would quietly be a different frame — and the proposal cannot be
+   * generated until it is corrected. The server refuses it too (frameCode.ts).
+   */
+  function advDimsError() {
+    var L = Number(adv.length) || 0, W = Number(adv.width) || 0;
+    return W > L ? 'Width (' + W + ' ft) is greater than length (' + L + ' ft). Length is the long side — correct the Frame Dimensions to generate the proposal.' : '';
+  }
 
   function syncAdvDefaults(changed) {
     if (changed === 'config') adv.configManual = true;
@@ -9987,7 +10052,7 @@
       ladderShield: adv.ladders ? !!adv.ladderShield : false,
       monkeyBars: !!adv.monkeyBars, monkeyBarsQty: Number(adv.monkeyBarsQty),
       interiorBeams: !!adv.interiorBeams, interiorBeamsQty: Number(adv.interiorBeamsQty),
-      trolley: !!adv.trolley, trolleyType: adv.trolleyType, zipLine: !!adv.zipLine, zipLineQty: Number(adv.zipLineQty), ballRack: !!adv.ballRack,
+      trolley: !!adv.trolley, trolleyType: adv.trolleyType, zipLine: !!adv.zipLine, zipLineQty: Number(adv.zipLineQty), ballRack: !!adv.ballRack, ballRackQty: adv.ballRack ? (Number(adv.ballRackQty) || 1) : 0,
       slide: !!adv.slide, slideA2216: !!adv.slideA2216, slideGray: !!adv.slideGray, steamroller: !!adv.steamroller, slideConvKit: !!adv.slideConvKit,
       cargoNet: !!adv.cargoNet,
       cargoNetQty: Number(adv.cargoNetQty) || 1, cargoNetPart: adv.cargoNetPart || '',
@@ -10152,18 +10217,23 @@
   async function generateAdvLines(replace) {
     var btn = document.getElementById('advGen'); if (btn) { btn.disabled = true; btn.textContent = 'Pricing…'; }
     var answers = advAnswers();
-    var priced = null;
+    var priced = null, refused = '';
     try {
       var r = await authed('/proposals/adventure-series/price', { method: 'POST', body: answers });
       if (r.ok) priced = await r.json();
+      // A 400 is the engine refusing these answers (width greater than length) —
+      // say why, rather than blaming the connection.
+      else if (r.status === 400) refused = await serverMessage(r, 'The pricing engine refused this configuration.');
     } catch (e) {}
-    if (!priced) { if (btn) { btn.disabled = false; btn.textContent = advGenLabel(); } alert('Could not reach the pricing engine. Is the server running the latest build?'); return; }
+    if (!priced) { if (btn) { btn.disabled = false; btn.textContent = advGenLabel(); } alert(refused || 'Could not reach the pricing engine. Is the server running the latest build?'); return; }
     var out = (priced.lines || []).map(function (l) {
       return normalizeLine({
         lineType: l.lineType, kind: l.lineType === 'GROUP' ? 'GROUP' : l.lineType === 'SUBGROUP' ? 'SUBGROUP' : l.lineType === 'NOTE' ? 'NOTE' : 'INCLUDED',
         name: l.name, sku: l.sku || '', description: l.description || '', quantity: l.quantity == null ? 0 : l.quantity,
         rateMinor: l.rateMinor || 0, costEach: l.costEach || 0, processingFeeMinor: l.processingFeeMinor, weightEach: l.weightEach || 0, optional: !!l.optional,
         internalNote: l.internalNote || '', components: l.components || null, source: 'ADV',
+        // The itemized heading's frame code and the naming version behind it.
+        frameCode: l.frameCode || undefined, frameCodeVersion: l.frameCodeVersion, frameLength: l.frameLength, frameWidth: l.frameWidth,
       });
     });
     out.forEach(applyItemDefaults);
@@ -10211,7 +10281,11 @@
     if (!owned.length) {
       // Legacy fallback: match on identity against the new set.
       var key = function (l) {
-        return (l.lineType || 'PRODUCT') + '|' + String(l.sku || '').toUpperCase() + '|' + String(l.name || '').trim().toLowerCase();
+        // The itemized frame heading matches by role, not by name: its name is the
+        // frame code, which changes whenever the naming convention does.
+        var name = String(l.name || '').trim().toLowerCase();
+        if ((l.lineType || '') === 'GROUP' && /[-–—]\s*itemized\s*$/.test(name)) name = '\u0000itemized';
+        return (l.lineType || 'PRODUCT') + '|' + String(l.sku || '').toUpperCase() + '|' + name;
       };
       var wanted = {};
       out.forEach(function (l) { var k = key(l); wanted[k] = (wanted[k] || 0) + 1; });
@@ -16970,7 +17044,11 @@
         admAcc('propMedia', 'Media Partnership Program',
           'The optional Customer Project Media Rebate a rep can offer on a proposal. Off by default and never reduces the Project Price. Editing here changes what a proposal offers going forward; a proposal already released keeps the terms it was released under.',
           '',
-          '<div id="mediaPartnershipAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>')) +
+          '<div id="mediaPartnershipAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+        admAcc('propFrameNaming', 'Frame naming',
+          'How a Summit Adventure Series frame is named on the proposal, its PDF file name and everything downstream &mdash; e.g. SQ-H2MBL2T2-10x10. Set where the shape, features and dimensions print, each feature&rsquo;s letter, and whether its quantity follows the letter. System administrators only. Proposals already configured keep their names.',
+          '',
+          '<div id="frameCodeAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>')) +
 
       sec('email',
         admAcc('emailOutlook', 'Outlook drafts',
@@ -17067,6 +17145,7 @@
       window.SSGProposalTitles.render(document.getElementById('proposalTitlesAdmin'));
     if (window.SSGMediaPartnershipAdmin)
       window.SSGMediaPartnershipAdmin.render(document.getElementById('mediaPartnershipAdmin'));
+    if (window.SSGFrameCodeAdmin) window.SSGFrameCodeAdmin.render(document.getElementById('frameCodeAdmin'));
     loadFormulas();
     loadFollowUpTemplates();
     loadEsignEmailTemplates();

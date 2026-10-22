@@ -18,6 +18,11 @@ import {
   importDealById,
 } from '../integrations/monday/crmImport.js';
 import { searchItemsByName, fetchItemById } from '../integrations/monday/discovery.js';
+import {
+  importDealNow,
+  isDealAutoImportEnabled,
+  sweepNewDeals,
+} from '../integrations/monday/dealAutoImport.js';
 import { DEALS_BOARD_ID, DEAL_COL, clean, firstLabel } from '../integrations/monday/crmMapping.js';
 import {
   deliveryBoardId,
@@ -227,6 +232,12 @@ export function registerIntegrationRoutes(app: FastifyInstance): void {
       return reply.status(502).send({ error: 'MONDAY_IMPORT_FAILED', detail: String(err) });
     }
   });
+
+  /**
+   * Run the new-deal sweep now — the same one the nightly cron runs: every Deal
+   * Tracking row created since the last successful sweep is imported. Idempotent.
+   */
+  app.post('/integrations/monday/deals/sweep', manage, async () => sweepNewDeals());
 
   // Every populated column on one item — for tracking down where a value lives.
   app.get('/integrations/monday/item/:itemId', manage, async (req, reply) => {
@@ -474,6 +485,31 @@ export function registerIntegrationRoutes(app: FastifyInstance): void {
       if (outcome.result !== 'ignored' && outcome.result !== 'not-triggered')
         logger.info({ itemId, outcome }, 'portal invite webhook processed');
       return reply.send({ ok: true, result: outcome.result, detail: outcome.detail });
+    }
+
+    /**
+     * A new row on Deal Tracking: bring the customer into the CRM now, through the
+     * same importer as the manual Import button (dealAutoImport.ts). A create event
+     * names no column, so there is nothing for the stage sync below to do with it.
+     *
+     * Answers 200 whatever happens: a monday retry would only repeat an idempotent
+     * import, and the nightly sweep re-reads every new row anyway. The outcome is
+     * logged rather than surfaced as a failure monday would redeliver.
+     */
+    const evType = String((ev as { type?: unknown }).type ?? '');
+    if (
+      itemId &&
+      boardId === DEALS_BOARD_ID &&
+      (evType === 'create_pulse' || evType === 'create_item')
+    ) {
+      if (!isDealAutoImportEnabled()) return reply.send({ ok: true, result: 'ignored' });
+      try {
+        const outcome = await importDealNow(itemId, 'webhook');
+        return reply.send({ ok: true, result: outcome.result });
+      } catch (err) {
+        logger.error({ err, itemId }, 'monday new-deal import from webhook failed');
+        return reply.send({ ok: true, result: 'error' });
+      }
     }
 
     const result = await applyInboundChange({

@@ -44,6 +44,13 @@ describe('stripAccountCode', () => {
     expect(stripAccountCode('Acme Gyms [PS-2291]')).toBe('Acme Gyms');
   });
 
+  it('removes a frame code that carries its dimensions (lowercase x)', () => {
+    expect(stripAccountCode('Action for Autism (SQ-H2MBL2T2-10x10)')).toBe('Action for Autism');
+    expect(stripAccountCode('Action for Autism (R-10.5x8)')).toBe('Action for Autism');
+    // Any other lowercase still reads as a name, not a code.
+    expect(stripAccountCode('Summit Kids (Room4b)')).toBe('Summit Kids (Room4b)');
+  });
+
   it('keeps a parenthetical LOCATION — it identifies a different customer', () => {
     expect(stripAccountCode('Soar Autism Center (Fort Collins)')).toBe(
       'Soar Autism Center (Fort Collins)',
