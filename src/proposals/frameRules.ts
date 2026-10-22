@@ -35,6 +35,7 @@ export const FRAME_INPUTS: { key: string; label: string; kind: 'number' | 'flag'
   { key: 'width', label: 'Frame width (ft)', kind: 'number' },
   { key: 'interiorBeams', label: '# of interior beams', kind: 'number' },
   { key: 'zipLines', label: '# of zip lines', kind: 'number' },
+  { key: 'ballRacks', label: '# of ball racks', kind: 'number' },
   { key: 'climbWalls', label: '# of climbing walls', kind: 'number' },
   { key: 'brackets', label: '# of saddle brackets', kind: 'number' },
   { key: 'config', label: 'Frame shape', kind: 'choice' },
@@ -139,7 +140,9 @@ export const DEFAULT_FRAME_RULES: FormulaRule[] = [
     when: flagOn('zipLine'),
   }),
 
-  R('Ball rack', 'K-5000', 'Ball Rack', [[null, 1]], { when: flagOn('ballRack') }),
+  // One per rack the configurator asks for (Bryan, 2026-10-22); a proposal saved before
+  // the quantity existed reads as 1 — see frameContext.
+  R('Ball rack', 'K-5000', 'Ball Rack', [['in:ballRacks', 1]], { when: flagOn('ballRack') }),
 
   R('Slide', 'A-2216', 'Slide', [[null, 1]], { when: flagOn('slideA2216') }),
   R('Slide', 'WS8203', 'Slide — Gray Upcharge', [[null, 1]], { when: flagOn('slideGray') }),
@@ -251,6 +254,7 @@ export interface FrameAnswers {
   zipLine?: boolean;
   zipLineQty?: number;
   ballRack?: boolean;
+  ballRackQty?: number;
   slide?: boolean;
   slideGray?: boolean;
   steamroller?: boolean;
@@ -286,6 +290,7 @@ export function frameContext(a: FrameAnswers, bomQty: (part: string) => number):
     config: a.config || 'Rectangle',
     interiorBeams: a.interiorBeams ? n(a.interiorBeamsQty) : 0,
     zipLines: a.zipLine ? n(a.zipLineQty || 1) : 0,
+    ballRacks: a.ballRack ? n(a.ballRackQty || 1) : 0,
     climbWalls: (a.climbFrame ? 1 : 0) + (a.climbWall ? 1 : 0),
     brackets: a.brackets ? n(a.bracketsQty) : 0,
     // How many of each net the job takes — 0 for every size but the one the frame

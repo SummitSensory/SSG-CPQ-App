@@ -226,6 +226,17 @@
   function stripOptional(n) {
     return rules.stripOptional(n);
   }
+  /**
+   * A section heading, title-cased for the heading cell's uppercase style — except the
+   * frame code on the itemized heading ("SQ-H2MBL2T2-10x10 — Itemized"). The code is
+   * printed exactly as named: its dimension separator is a lowercase x, and the
+   * heading's text-transform would make it 10X10.
+   */
+  function groupHeadingHtml(name) {
+    var m = /^(.*?)(\s*[-–—]\s*itemized.*)$/i.exec(String(name || ''));
+    if (!m || !m[1]) return esc(tc(name));
+    return '<span style="text-transform:none;">' + esc(m[1]) + '</span>' + esc(tc(m[2]));
+  }
   function showsFreightTbd(l) {
     return rules.showsFreightTbd(l);
   }
@@ -1470,7 +1481,7 @@
           ';letter-spacing:' +
           headLs +
           ';text-transform:uppercase;color:#203060;white-space:nowrap;">' +
-          esc(tc(stripOptional(l.name))) +
+          groupHeadingHtml(stripOptional(l.name)) +
           (showOptional ? ' <span style="font-weight:400;color:#9aa1b0;">· OPTIONAL</span>' : '') +
           '</td>' +
           '<td colspan="4" style="padding:7px 10px 4px;font-size:11px;color:#5b6478;vertical-align:bottom;">' +

@@ -25,6 +25,7 @@ import {
   resolveReferenceDocuments,
   selectedReferenceDocKeys,
 } from '../proposals/referenceDocuments.js';
+import { proposalPdfFileNameForVersion } from '../proposals/pdfFileName.js';
 
 /**
  * Ryan Capital financing: the rate sheets, the payment sheet, and sending it.
@@ -749,10 +750,10 @@ export function registerFinanceRoutes(app: FastifyInstance): void {
     const attachments: Array<{ filename: string; content: string }> = [];
 
     if (input.includeProposal && input.proposalHtml) {
-      const name = (input.proposalFilename || `${doc.customerName}-${doc.proposalNumber}`).replace(
-        /\.pdf$/i,
-        '',
-      );
+      // The browser's name; failing that the same convention, server-side (pdfFileName.ts).
+      const name = (
+        input.proposalFilename || (await proposalPdfFileNameForVersion(doc.versionId))
+      ).replace(/\.pdf$/i, '');
       // edgeToEdge: the proposal document owns its own page geometry — see render/pdf.ts.
       let proposalPdf = await renderPdf(input.proposalHtml, { format: 'Letter', edgeToEdge: true });
       // Whichever reference documents (a W9, a certificate of insurance) this
