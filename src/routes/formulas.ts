@@ -117,9 +117,9 @@ const IN_CODE = [
     why: 'Chooses the part number, not a quantity coefficient.',
   },
   {
-    name: 'Frame configuration product number',
-    where: 'src/proposals/adventureSeries.ts → frameModelNumber()',
-    what: 'Builds e.g. SQ-2MBL2TZR from shape, interior beams, monkey bars, ladders, trolley, zip line and ball rack.',
+    name: 'Frame code (model name)',
+    where: 'src/proposals/frameCode.ts → buildFrameCode(), set in Administration → Frame naming',
+    what: 'Builds e.g. SQ-H2MBL2T2-10x10 from shape, interior beams, monkey bars, ladders, trolley units, zip lines, ball racks and the frame length x width. Letters, quantities, order and where the dimensions print are set by a system admin.',
     why: 'A naming convention, not a quantity.',
   },
   {
