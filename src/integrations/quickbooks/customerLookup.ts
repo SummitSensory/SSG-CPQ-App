@@ -86,10 +86,15 @@ const esc = (s: string): string => s.replace(/'/g, "\\'");
  * last requirement is deliberate — it keeps "Soar Autism Center (Fort Collins)" and
  * "(West)" intact, because a location is part of the customer's identity and stripping
  * it would collapse two real customers into one name.
+ *
+ * The one lowercase letter allowed is a frame code's dimension `x` between digits
+ * ("(SQ-H2MBL2T2-10x10)", src/proposals/frameCode.ts) — without it a deal named with a
+ * current frame code no longer matched its QuickBooks customer, and a duplicate was
+ * created.
  */
 export function stripAccountCode(name: string): string {
   const s = String(name ?? '').trim();
-  const m = /[\s]*[([]([A-Z0-9][A-Z0-9-]{2,})[)\]]$/.exec(s);
+  const m = /[\s]*[([]([A-Z0-9](?:[A-Z0-9.-]|(?<=\d)x(?=\d)){2,})[)\]]$/.exec(s);
   if (!m) return s.replace(/\s+/g, ' ');
   const code = m[1]!;
   if (!/[0-9]/.test(code)) return s.replace(/\s+/g, ' ');

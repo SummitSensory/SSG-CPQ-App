@@ -5073,3 +5073,21 @@ model ColorUpchargePush {
 
   @@index([orderId])
 }
+
+/// The frame naming convention (src/proposals/frameCode.ts), one row per saved version.
+/// Append-only: a proposal stamps the version that named it, so a version, once used,
+/// must keep meaning what it meant. The newest version per product line is in force.
+/// Version 1 is the default in code and needs no row; the first save writes version 2.
+model FrameCodeConvention {
+  id          String   @id @default(cuid())
+  productLine String   @default("ADVENTURE")
+  version     Int
+  /// FrameCodeConvention from frameCode.ts: segments, shapes, features, monkeyBarsCountAsBeam.
+  config      Json
+  /// Why it changed, in the admin's words.
+  note        String?
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  @@unique([productLine, version])
+}

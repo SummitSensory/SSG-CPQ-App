@@ -37,6 +37,12 @@ export {
 };
 import { computeFloorPadding, type MatQuote, type MatThickness } from './matPricing.js';
 import { setting, defaultSettings, type FormulaSettings } from './formulaSettings.js';
+import {
+  DEFAULT_FRAME_CODE_CONVENTION,
+  DEFAULT_FRAME_CODE_VERSION,
+  buildFrameCode,
+  type FrameCodeConvention,
+} from './frameCode.js';
 
 export interface SkuRec {
   part: string;
@@ -77,6 +83,9 @@ export interface AdvAnswers {
   zipLine?: boolean;
   zipLineQty?: number;
   ballRack?: boolean;
+  /** How many ball racks (K-5000). Undefined reads as 1, so a proposal priced before
+   *  the quantity existed keeps the one rack it was quoted. */
+  ballRackQty?: number;
   slide?: boolean;
   slideGray?: boolean;
   steamroller?: boolean;
@@ -154,35 +163,24 @@ export interface AdvAnswers {
   webbingSling?: number;
 }
 
+/** The naming convention a frame is named with, and the version that identifies it. */
+export interface FrameNaming {
+  version: number;
+  convention: FrameCodeConvention;
+}
+
 /**
- * Frame configuration product number, per "Frame Configuration Product Number
- * Identification": {SHAPE}-{beams}{MB}{L}{#ladders}{T}{Z}{R}  e.g. SQ-2MBL2TZR.
- * Segments are omitted when the option is not included.
- *
- * The beam digit counts the monkey bar run as a beam (+1 when monkey bars are on,
- * flat, regardless of how many sets) because it occupies its own bay — so 1
- * interior beam with monkey bars is `SQ-2MBL2`, not `SQ-1MBL2`. Matches the v73
- * workbook rule "Interior Beams (+1 if monkey bars)".
+ * The frame code for these answers (see frameCode.ts), or null when the answers cannot
+ * be named — width greater than length, or no dimensions. The pricing route refuses
+ * such answers before they get here; null keeps the engine itself from throwing for
+ * the callers that only want quantities (the hardware kit, the trace).
  */
-export function frameModelNumber(a: AdvAnswers): string {
-  const shape =
-    a.config === 'Square'
-      ? 'SQ'
-      : a.config === 'L-Shape'
-        ? 'L'
-        : a.config === 'T-Shape'
-          ? 'T'
-          : 'R';
-  const beams = (a.interiorBeams ? n(a.interiorBeamsQty) : 0) + (a.monkeyBars ? 1 : 0);
-  const ladders = n(a.ladders);
-  let code = '';
-  if (beams > 0) code += String(beams);
-  if (a.monkeyBars) code += 'MB';
-  if (ladders > 0) code += `L${ladders}`;
-  if (a.trolley && (a.trolleyType ?? 'Dual') === 'Dual') code += 'T';
-  if (a.zipLine) code += 'Z';
-  if (a.ballRack) code += 'R';
-  return `${shape}-${code}`;
+export function frameCodeFor(a: AdvAnswers, naming?: FrameNaming): string | null {
+  try {
+    return buildFrameCode(a, naming?.convention ?? DEFAULT_FRAME_CODE_CONVENTION);
+  } catch {
+    return null;
+  }
 }
 
 /** Human-readable frame footprint, e.g. 10' × 10'. */
@@ -210,6 +208,15 @@ export interface PricedLine {
    * read by the person buying the gym.
    */
   internalNote?: string;
+  /**
+   * On the itemized frame heading only: the frame code it was named with, the
+   * convention version that produced it (so it can be read back after the convention
+   * changes) and the footprint. Kept with the saved proposal line.
+   */
+  frameCode?: string;
+  frameCodeVersion?: number;
+  frameLength?: number;
+  frameWidth?: number;
   /**
    * For a kit line (H-1000), the parts it is made of. The proposal prints the single
    * kit line because that is what the customer buys; the BOM expands this so the
@@ -477,6 +484,8 @@ export function computeAdventureProposal(
   kitParts?: Record<string, string[]>,
   /** Business numbers (Administration → Formulas): `hardwareRollupDetail` and the mat pricing rates. */
   settings?: FormulaSettings,
+  /** The frame naming convention in force (Administration → Frame naming). */
+  naming?: FrameNaming,
 ): { lines: PricedLine[]; totalWeightLbs: number; warnings: string[] } {
   const LOOK = skuMap && Object.keys(skuMap).length ? skuMap : SKUS;
   const bom = computeAdventureBOM(a, frameRules);
@@ -536,9 +545,24 @@ export function computeAdventureProposal(
   };
   const NOTE = (name: string, description: string) =>
     lines.push({ lineType: 'NOTE', name, description });
-  // Main itemized frame — heading carries the configuration product number; the
-  // footprint sits beside it as the heading's right-hand note.
-  G(`${frameModelNumber(a)} — Itemized`, false, `Frame Dimensions: ${frameDimensions(a)}`);
+  // Main itemized frame — heading carries the frame code; the footprint sits beside it
+  // as the heading's right-hand note. Keep that note: a Canadian proposal's Section A
+  // description is read from it, and an empty one blocks the release
+  // (crossborder/snapshot.ts firstGroupDescription).
+  const frameCode = frameCodeFor(a, naming);
+  G(
+    `${frameCode ?? 'Frame Configuration'} — Itemized`,
+    false,
+    `Frame Dimensions: ${frameDimensions(a)}`,
+  );
+  if (frameCode) {
+    Object.assign(lines[lines.length - 1]!, {
+      frameCode,
+      frameCodeVersion: naming?.version ?? DEFAULT_FRAME_CODE_VERSION,
+      frameLength: n(a.length),
+      frameWidth: n(a.width),
+    });
+  }
   [
     'A-2245',
     'A-2246',
@@ -1159,6 +1183,7 @@ export function explainAdventure(
   frameRules?: FormulaRule[],
   /** Business numbers, so the trace shows the mat rates actually in force. */
   settings?: FormulaSettings,
+  naming?: FrameNaming,
 ): {
   model: string;
   dimensions: string;
@@ -1341,7 +1366,7 @@ export function explainAdventure(
     Math.round((rows.reduce((s, r) => s + r.weightLbs, 0) + hardware.weightLbs) * 100) / 100;
   const marginMinor = revenueMinor - cogsMinor;
   return {
-    model: frameModelNumber(a),
+    model: frameCodeFor(a, naming) ?? '',
     dimensions: frameDimensions(a),
     rows,
     hardware,

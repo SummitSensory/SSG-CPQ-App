@@ -120,6 +120,11 @@ export const Permission = {
   // one, needs only PROPOSAL_WRITE / PROPOSAL_READ — every rep who can build a
   // proposal can offer this the same way they can add any other optional section.
   MEDIA_PARTNERSHIP_MANAGE: 'media-partnership:manage',
+  // Edit the Adventure Series frame naming convention (src/proposals/frameCode.ts) —
+  // letters, quantities, order, where the dimensions print. Granted to no role but
+  // SYSTEM_ADMIN (Bryan, 2026-10-22): a change renames every proposal configured after
+  // it, its PDF file name and what reaches monday. Reading it needs only PROPOSAL_READ.
+  FRAME_CODE_MANAGE: 'frame-code:manage',
 } as const;
 
 export type Permission = (typeof Permission)[keyof typeof Permission];
