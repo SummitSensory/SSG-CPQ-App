@@ -3444,14 +3444,14 @@
    * It used to take three screens: search monday from the CRM tab, import the deal,
    * then go to Proposals and pick the customer out of a dropdown (or detour from that
    * dropdown into a second monday dialog and back). Now the field asks
-   * GET /crm/customer-picker, which answers with the CRM's customers â€” one row per
-   * project, so a customer with two jobs running shows both â€” and, below them, the
+   * GET /crm/customer-picker, which answers with the CRM's customers — one row per
+   * project, so a customer with two jobs running shows both — and, below them, the
    * monday Deal Tracking deals the CRM does not hold yet. Picking a monday deal brings
    * it into the CRM on the spot (the same importer as everywhere else), and Create
    * drops the rep in the builder with the customer, contact, ship-to and Project ID
    * already filled in from that deal.
    *
-   * `pre` preselects a customer â€” {organizationId, opportunityId, label} â€” when the
+   * `pre` preselects a customer — {organizationId, opportunityId, label} — when the
    * form is opened from a CRM row's "New proposal".
    */
   async function openProposalForm(user, pre) {
@@ -3465,14 +3465,14 @@
           '<button type="button" class="link-btn" id="fCustChange" style="width:auto;padding:4px 10px;font-size:12.5px;white-space:nowrap;">Change</button>' +
         '</div>' +
         '<div id="fCustSearchWrap">' +
-          '<input id="fCust" style="' + IN + '" placeholder="Search customers, monday deals or a Project IDâ€¦" autocomplete="off" role="combobox" aria-expanded="true" aria-controls="fCustList" aria-autocomplete="list">' +
-          '<div id="fCustList" role="listbox" aria-label="Customers" style="margin-top:7px;max-height:290px;overflow:auto;border:1px solid #e7e8e3;border-radius:9px;background:#fff;"><div class="muted" style="padding:10px 12px;font-size:13px;">Loading customersâ€¦</div></div>' +
+          '<input id="fCust" style="' + IN + '" placeholder="Search customers, monday deals or a Project ID…" autocomplete="off" role="combobox" aria-expanded="true" aria-controls="fCustList" aria-autocomplete="list">' +
+          '<div id="fCustList" role="listbox" aria-label="Customers" style="margin-top:7px;max-height:290px;overflow:auto;border:1px solid #e7e8e3;border-radius:9px;background:#fff;"><div class="muted" style="padding:10px 12px;font-size:13px;">Loading customers…</div></div>' +
           '<div id="fCustNote" class="muted" style="font-size:11.5px;margin-top:5px;"></div>' +
         '</div>') +
       fieldRow('Title',
         (presetTitles.length
           ? '<select id="fTitlePick" style="' + IN + 'margin-bottom:7px;">' +
-              '<option value="">Choose a prebuilt titleâ€¦</option>' +
+              '<option value="">Choose a prebuilt title…</option>' +
               presetTitles.map(function (t, i) { return '<option value="' + i + '">' + esc(t) + '</option>'; }).join('') +
               '<option value="__custom">Type my own title</option>' +
             '</select>'
@@ -3481,7 +3481,7 @@
           (presetTitles.length ? 'Pick one above, or type a title' : 'Proposal title') + '">' +
         (presetTitles.length ? '<div class="muted" style="font-size:11.5px;margin-top:5px;">A prebuilt title can still be edited here before you create the proposal.</div>' : '')),
       async function (close, showErr) {
-        if (!chosen || !chosen.organizationId) return showErr(picking ? 'Wait a moment â€” that customer is still being brought in from monday.' : 'Pick a customer.');
+        if (!chosen || !chosen.organizationId) return showErr(picking ? 'Wait a moment — that customer is still being brought in from monday.' : 'Pick a customer.');
         var title = ov.querySelector('#fTitle').value.trim(); if (title.length < 2) return showErr('Title must be at least 2 characters.');
         var r = await authed('/proposals', { method: 'POST', body: { organizationId: chosen.organizationId, opportunityId: chosen.opportunityId || undefined, title: title, sections: [], items: [] } });
         if (!r.ok) return showErr('Could not create (' + r.status + ').');
@@ -3521,15 +3521,15 @@
 
     function crmLabel(r) {
       return esc(r.organizationName) +
-        (r.projectId ? ' <span class="muted" style="font-weight:400;">â€” Project ' + esc(r.projectId) + '</span>' : '') +
+        (r.projectId ? ' <span class="muted" style="font-weight:400;">— Project ' + esc(r.projectId) + '</span>' : '') +
         (r.closed ? ' <span class="muted" style="font-weight:400;">(Closed)</span>' : '');
     }
     function crmSub(r) {
-      return [r.opportunityName && r.opportunityName !== r.organizationName ? r.opportunityName : '', r.opportunityId ? titleCase(r.stage || '') : 'No project yet'].filter(Boolean).map(esc).join(' Â· ');
+      return [r.opportunityName && r.opportunityName !== r.organizationName ? r.opportunityName : '', r.opportunityId ? titleCase(r.stage || '') : 'No project yet'].filter(Boolean).map(esc).join(' · ');
     }
     function mondaySub(m) {
       var where = [m.city, m.state].filter(Boolean).join(', ');
-      return [m.contact, where, m.projectId ? 'Project ' + m.projectId : '', m.stage, m.existingOrganizationId ? 'adds a project to the existing customer' : ''].filter(Boolean).map(esc).join(' Â· ');
+      return [m.contact, where, m.projectId ? 'Project ' + m.projectId : '', m.stage, m.existingOrganizationId ? 'adds a project to the existing customer' : ''].filter(Boolean).map(esc).join(' · ');
     }
     function head(text) {
       return '<div style="padding:7px 12px 5px;font-size:10.5px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:#8a8f85;background:#f7f8f4;border-bottom:1px solid #eef0ea;">' + text + '</div>';
@@ -3551,8 +3551,8 @@
       if (active >= options.length) active = options.length - 1;
       var html = '';
       if (crmCount) html += head(q ? 'In the CRM' : 'Recent customers') + options.slice(0, crmCount).map(function (o, i) { return optionHtml(o, i); }).join('');
-      if (mondayRows.length) html += head('monday Deal Tracking â€” not in the CRM yet') + options.slice(crmCount).map(function (o, i) { return optionHtml(o, crmCount + i); }).join('');
-      if (!html) html = '<div class="muted" style="padding:10px 12px;font-size:13px;">' + (q ? 'Nothing in the CRM or monday matches â€œ' + esc(q) + 'â€.' : 'No customers yet â€” type a name to search monday.') + '</div>';
+      if (mondayRows.length) html += head('monday Deal Tracking — not in the CRM yet') + options.slice(crmCount).map(function (o, i) { return optionHtml(o, crmCount + i); }).join('');
+      if (!html) html = '<div class="muted" style="padding:10px 12px;font-size:13px;">' + (q ? 'Nothing in the CRM or monday matches “' + esc(q) + '”.' : 'No customers yet — type a name to search monday.') + '</div>';
       list.innerHTML = html;
       var st = d.monday ? d.monday.status : '';
       note.textContent = st === 'unavailable' ? 'monday.com could not be reached just now, so only CRM customers are listed.'
@@ -3590,7 +3590,7 @@
       }
       // A monday deal: bring it into the CRM now, then treat it as a CRM pick.
       picking = true;
-      list.innerHTML = '<div class="muted" style="padding:10px 12px;font-size:13px;">Bringing ' + esc(o.row.name) + ' in from mondayâ€¦</div>';
+      list.innerHTML = '<div class="muted" style="padding:10px 12px;font-size:13px;">Bringing ' + esc(o.row.name) + ' in from monday…</div>';
       try {
         var r = await authed('/crm/customer-picker/monday/' + encodeURIComponent(o.row.itemId), { method: 'POST' });
         var d = null;
