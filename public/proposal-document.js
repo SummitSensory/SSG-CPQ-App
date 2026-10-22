@@ -1228,6 +1228,353 @@
     );
   }
 
+  /* ---- the clarity pages: What's Included and Before You Sign ----
+   *
+   * Two optional Adventure Series pages (mockup: Proposal_Clarity_Pages_Mockup). Their
+   * content is NOT worked out here: the server reads the model code the proposal prints
+   * and the lines on it (src/proposals/clarityPages.ts), and the builder keeps the
+   * answer on the version as meta.clarityPages.snapshot. This only draws it, so a
+   * released proposal prints the pages it was released with.
+   *
+   * The money on Before You Sign is the document's own total and deposit, passed in by
+   * proposalDocHtml — the same figures the pricing page and the Acceptance line print.
+   *
+   * Each page is one fixed-height block (CLARITY_PAGE_H, the paginator's content height
+   * less a pixel) and starts its own sheet, so it is always exactly one page, numbered
+   * like any other. data-fit-page lets the paginator shrink it if an unusually long
+   * configuration would otherwise run under the footer.
+   */
+  var CLARITY_PAGE_H = 945;
+
+  /** Stroke icons, 24 × 24, drawn in currentColor. */
+  var CLARITY_ICONS = {
+    frame: '<path d="M3 7h18M4 7v13M20 7v13M3 7l3-3h15l-1 3M21 4v3"/>',
+    beams: '<rect x="3" y="5" width="18" height="14" rx="1"/><path d="M3 10h18M3 14h18"/>',
+    monkey:
+      '<path d="M2 8h20M2 13h20M5 8v5M9 8v5M13 8v5M17 8v5M21 8v5"/><path d="M4 13v8M20 13v8"/>',
+    ladder: '<path d="M7 2v20M17 2v20M7 6h10M7 10h10M7 14h10M7 18h10"/>',
+    zip: '<path d="M2 4l20 7"/><circle cx="11" cy="7.2" r="1.6"/><path d="M11 9v7M8 16h6"/>',
+    trolley:
+      '<path d="M2 5h20"/><rect x="5" y="4" width="4" height="3" rx=".5"/><rect x="15" y="4" width="4" height="3" rx=".5"/><path d="M7 7v8M17 7v8"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/>',
+    rack: '<path d="M4 3v18M20 3v18M4 11h16M4 19h16"/><circle cx="8" cy="8" r="2.2"/><circle cx="13" cy="8" r="2.2"/><circle cx="9" cy="16" r="2.2"/><circle cx="15" cy="16" r="2.2"/>',
+    slide:
+      '<path d="M3 6h5c3 0 4 3 6 7s3 6 7 6"/><path d="M3 10h4c2 0 3 2 4.5 5S15 21 21 21"/><path d="M4 6v15"/>',
+    wall: '<rect x="5" y="2" width="14" height="20" rx="1"/><circle cx="9" cy="6" r="1"/><circle cx="15" cy="9" r="1"/><circle cx="10" cy="12" r="1"/><circle cx="14" cy="15.5" r="1"/><circle cx="9" cy="18.5" r="1"/>',
+    mat: '<path d="M2 16l10-5 10 5-10 5z"/><path d="M2 16v2l10 5 10-5v-2"/><path d="M7 4v9M17 4v9"/>',
+    net: '<path d="M4 3v18M20 3v18M4 3l16 18M20 3L4 21M4 12h16M12 3v18"/>',
+    tiles: '<path d="M3 9l9-5 9 5-9 5z"/><path d="M3 9v6l9 5 9-5V9M12 14v6"/>',
+  };
+  var CLARITY_CHECK = '<path d="M5 12.5l4.5 4.5L19 7.5"/>';
+  var CLARITY_MINUS = '<path d="M6 12h12"/>';
+
+  function clarityIcon(key) {
+    return '<svg viewBox="0 0 24 24">' + (CLARITY_ICONS[key] || CLARITY_ICONS.frame) + '</svg>';
+  }
+
+  /** Scoped to .scp so nothing here reaches the rest of the document or the app. */
+  var CLARITY_CSS =
+    '<style>' +
+    '.scp{height:' +
+    CLARITY_PAGE_H +
+    'px;display:flex;flex-direction:column;overflow:hidden;font-family:"IBM Plex Sans",system-ui,sans-serif;color:#1d2433;-webkit-print-color-adjust:exact;print-color-adjust:exact;}' +
+    '.scp *{box-sizing:border-box;margin:0;padding:0;}' +
+    '.scp>*{flex-shrink:0;}' +
+    '.scp .t-bar{width:52px;height:3px;background:#c8202f;margin:12px 0 10px;}' +
+    '.scp .eyebrow{font-size:10.5px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:#c8202f;}' +
+    '.scp .h1{font-family:"Newsreader",serif;font-weight:600;font-size:29px;line-height:1.08;color:#1f2c5c;letter-spacing:-.01em;margin-top:5px;}' +
+    '.scp .intro{font-size:12px;line-height:1.55;color:#3a4152;margin-top:7px;max-width:6.6in;}' +
+    '.scp .hero{margin-top:16px;border-radius:10px;overflow:hidden;background:#1f2c5c;color:#fff;padding:16px 22px 12px;}' +
+    '.scp .lab{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:#aeb8d6;font-weight:600;}' +
+    '.scp .code{font-family:"Newsreader",serif;font-weight:600;font-size:28px;letter-spacing:.01em;}' +
+    '.scp .code .x{font-family:"IBM Plex Sans",sans-serif;font-weight:500;font-size:24px;}' +
+    '.scp .segs{display:grid;margin-top:8px;border-top:1px solid rgba(255,255,255,.16);}' +
+    '.scp .seg{padding:7px 8px 6px;border-right:1px solid rgba(255,255,255,.12);}' +
+    '.scp .seg:last-child{border-right:0;}' +
+    '.scp .seg .c{font-weight:700;font-size:15px;}' +
+    '.scp .seg .d{font-size:10px;color:#c9d0e6;margin-top:1px;line-height:1.25;}' +
+    '.scp .sec{margin-top:20px;}' +
+    '.scp .sec-head,.scp .block-head{display:flex;align-items:baseline;gap:10px;padding-bottom:4px;border-bottom:1px solid #e2e5ec;}' +
+    '.scp .sec-head .num{font-family:"Newsreader",serif;font-weight:600;color:#c8202f;font-size:15px;}' +
+    '.scp .sec-head .h2{font-family:"Newsreader",serif;font-weight:600;color:#1f2c5c;font-size:17px;}' +
+    '.scp .note{margin-left:auto;font-size:10.5px;color:#667085;}' +
+    '.scp .row{display:grid;grid-template-columns:24px 32px 48px 1fr 150px;align-items:center;gap:0 10px;padding:8px 0;border-bottom:1px solid #e2e5ec;}' +
+    '.scp .ok{width:19px;height:19px;border-radius:50%;background:#1f2c5c;display:grid;place-items:center;}' +
+    '.scp .ok svg{width:11px;height:11px;stroke:#fff;stroke-width:2.8;fill:none;}' +
+    '.scp .ico{width:28px;height:28px;border-radius:7px;background:#eef1f7;display:grid;place-items:center;color:#1f2c5c;}' +
+    '.scp .ico svg{width:18px;height:18px;stroke:currentColor;stroke-width:1.6;fill:none;stroke-linecap:round;stroke-linejoin:round;}' +
+    '.scp .badge{font-weight:700;font-size:11.5px;color:#1f2c5c;border:1.5px solid #1f2c5c;border-radius:5px;text-align:center;padding:2px 0;}' +
+    '.scp .badge.none{border-style:dashed;border-color:#c3c9d6;color:#98a1b2;font-weight:500;}' +
+    '.scp .name{font-weight:600;font-size:12.5px;}' +
+    '.scp .desc{font-size:10.5px;color:#667085;line-height:1.4;}' +
+    '.scp .spec{text-align:right;font-size:11.5px;font-weight:600;color:#1f2c5c;}' +
+    '.scp .spec small{display:block;font-weight:400;font-size:10px;color:#667085;margin-top:1px;}' +
+    '.scp .block{margin-top:22px;}' +
+    '.scp .block-head{padding-bottom:6px;}' +
+    '.scp .block-head .h2{font-family:"Newsreader",serif;font-weight:600;color:#1f2c5c;font-size:19px;}' +
+    '.scp .totals-row{display:grid;margin-top:12px;border:1px solid #e2e5ec;border-radius:10px;background:#f8f7f3;}' +
+    '.scp .totals-row>div{padding:14px 18px;}' +
+    '.scp .totals-row>div+div{border-left:1px solid #e2e5ec;}' +
+    '.scp .k{font-size:9.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#667085;}' +
+    '.scp .big{font-family:"Newsreader",serif;font-weight:600;font-size:30px;color:#1f2c5c;margin-top:2px;font-variant-numeric:tabular-nums;}' +
+    '.scp .dep{font-family:"Newsreader",serif;font-weight:600;font-size:22px;color:#1d2433;margin-top:4px;font-variant-numeric:tabular-nums;}' +
+    '.scp .s{font-size:10.5px;color:#667085;margin-top:2px;}' +
+    '.scp .scope{display:grid;grid-template-columns:1fr 1fr;gap:0 26px;margin-top:6px;}' +
+    '.scp .scope-item{display:grid;grid-template-columns:26px 1fr;gap:10px;padding:9px 0;border-bottom:1px solid #e2e5ec;}' +
+    '.scp .scope-item .ic{width:24px;height:24px;border-radius:50%;border:1.5px solid #c3c9d6;display:grid;place-items:center;color:#7d879b;}' +
+    '.scp .scope-item .ic svg{width:12px;height:12px;stroke:currentColor;stroke-width:2.2;fill:none;stroke-linecap:round;}' +
+    '.scp .scope-item .t{font-weight:600;font-size:12.5px;}' +
+    '.scp .scope-item .d{font-size:11px;color:#667085;line-height:1.45;margin-top:1px;}' +
+    '.scp .steps{display:grid;margin-top:16px;position:relative;}' +
+    '.scp .steps-line{position:absolute;left:10%;right:10%;top:15px;height:2px;background:#e2e5ec;}' +
+    '.scp .step{text-align:center;padding:0 6px;position:relative;}' +
+    '.scp .step .n{width:32px;height:32px;border-radius:50%;background:#fff;border:2px solid #1f2c5c;color:#1f2c5c;font-weight:700;font-size:13px;display:grid;place-items:center;margin:0 auto;}' +
+    '.scp .step.first .n{background:#1f2c5c;color:#fff;}' +
+    '.scp .step .t{font-weight:600;font-size:12px;margin-top:8px;color:#1d2433;}' +
+    '.scp .step .d{font-size:10.5px;color:#667085;line-height:1.4;margin-top:3px;}' +
+    '.scp .contact{margin-top:22px;display:flex;align-items:center;justify-content:space-between;gap:16px;background:#1f2c5c;color:#fff;border-radius:10px;padding:14px 18px;}' +
+    '.scp .contact p{font-size:12px;line-height:1.5;color:#dfe4f2;max-width:4.6in;}' +
+    '.scp .contact p b{color:#fff;}' +
+    '.scp .contact .who{white-space:nowrap;text-align:right;font-size:11.5px;color:#c9d0e6;line-height:1.5;}' +
+    '.scp .contact .who b{display:block;color:#fff;font-size:13px;}' +
+    '</style>';
+
+  /** The model code, with the dimension x set in the body face as the mockup has it. */
+  function clarityCodeHtml(parts) {
+    var out = '';
+    var prev = '';
+    (parts || []).forEach(function (p, i) {
+      var text =
+        p.segment === 'dimensions'
+          ? esc(p.text).replace(/x/i, '<span class="x">x</span>')
+          : esc(p.text);
+      out += (i > 0 && !(p.segment === 'features' && prev === 'features') ? '-' : '') + text;
+      prev = p.segment;
+    });
+    return out;
+  }
+
+  function clarityRowHtml(r) {
+    return (
+      '<div class="row">' +
+      '<div class="ok"><svg viewBox="0 0 24 24">' +
+      CLARITY_CHECK +
+      '</svg></div>' +
+      '<div class="ico">' +
+      clarityIcon(r.iconKey) +
+      '</div>' +
+      (r.badge
+        ? '<div class="badge">' + esc(r.badge) + '</div>'
+        : '<div class="badge none">—</div>') +
+      '<div><div class="name">' +
+      esc(r.name) +
+      '</div>' +
+      (r.description ? '<div class="desc">' + esc(r.description) + '</div>' : '') +
+      '</div>' +
+      '<div class="spec">' +
+      esc(r.spec || '') +
+      (r.specNote ? '<small>' + esc(r.specNote) + '</small>' : '') +
+      '</div>' +
+      '</div>'
+    );
+  }
+
+  function clarityPageOpen(name, key, masthead) {
+    return (
+      '<div data-page-break="' +
+      key +
+      '" data-page-name="' +
+      esc(name) +
+      '" data-fit-page ' +
+      'style="break-before:page;page-break-before:always;">' +
+      CLARITY_CSS +
+      '<div class="scp">' +
+      masthead
+    );
+  }
+
+  /** Page 1. Empty when the page is off or not computed yet. */
+  function whatsIncludedHtml(d, masthead) {
+    var cp = (d.meta || {}).clarityPages;
+    var s = cp && cp.snapshot;
+    if (!cp || cp.whatsIncluded !== true || !s || !s.text) return '';
+    var T = s.text;
+    var parts = s.parts || [];
+    var segs = parts
+      .map(function (p) {
+        return (
+          '<div class="seg"><div class="c">' +
+          esc(p.text) +
+          '</div><div class="d">' +
+          esc(p.label) +
+          '</div></div>'
+        );
+      })
+      .join('');
+    var comps = s.componentRows || [];
+    return (
+      clarityPageOpen(T.includedFooter || "What's Included", 'whats-included', masthead) +
+      '<div><div class="t-bar"></div>' +
+      '<div class="eyebrow">' +
+      esc(T.includedEyebrow) +
+      '</div>' +
+      '<div class="h1">' +
+      esc(T.includedHeading) +
+      '</div>' +
+      (T.includedIntro ? '<div class="intro">' + esc(T.includedIntro) + '</div>' : '') +
+      '</div>' +
+      '<div class="hero">' +
+      '<div class="lab">' +
+      esc(T.modelLabel) +
+      '</div>' +
+      '<div class="code">' +
+      clarityCodeHtml(parts) +
+      '</div>' +
+      '<div class="segs" style="grid-template-columns:repeat(' +
+      Math.max(1, parts.length) +
+      ',1fr);">' +
+      segs +
+      '</div>' +
+      '</div>' +
+      '<div class="sec"><div class="sec-head"><span class="num">01</span><span class="h2">' +
+      esc(T.frameSectionTitle) +
+      '</span><span class="note">' +
+      esc(T.frameSectionNote) +
+      '</span></div>' +
+      (s.frameRows || []).map(clarityRowHtml).join('') +
+      '</div>' +
+      (comps.length
+        ? '<div class="sec"><div class="sec-head"><span class="num">02</span><span class="h2">' +
+          esc(T.componentSectionTitle) +
+          '</span><span class="note">' +
+          esc(T.componentSectionNote) +
+          '</span></div>' +
+          comps.map(clarityRowHtml).join('') +
+          '</div>'
+        : '') +
+      '</div></div>'
+    );
+  }
+
+  /**
+   * Page 2. `o` carries the document's own figures: money (the document's formatter),
+   * total, deposit, showDeposit, depositPct, anyTbd, and user (the preparer).
+   */
+  function beforeYouSignHtml(d, masthead, o) {
+    var m = d.meta || {};
+    var cp = m.clarityPages;
+    var s = cp && cp.snapshot;
+    if (!cp || cp.beforeYouSign !== true || !s || !s.text) return '';
+    var T = s.text;
+    var hidden = Array.isArray(cp.hidden) ? cp.hidden : [];
+    var scope = (s.notIncluded || []).filter(function (it) {
+      return hidden.indexOf(it.key) < 0;
+    });
+    var steps = s.steps || [];
+    var u = o.user || {};
+    var who = [u.name || '', u.title || ''].filter(Boolean).join(', ');
+    var reach = [u.phone || '', u.email || ''].filter(Boolean).join(' · ');
+    var depositNote = String(T.depositNote || '').replace(/\{pct\}/g, String(o.depositPct));
+    return (
+      clarityPageOpen(T.signFooter || 'Before You Sign', 'before-you-sign', masthead) +
+      '<div><div class="t-bar"></div>' +
+      '<div class="eyebrow">' +
+      esc(T.signEyebrow) +
+      '</div>' +
+      '<div class="h1">' +
+      esc(T.signHeading) +
+      '</div>' +
+      (T.signIntro ? '<div class="intro">' + esc(T.signIntro) + '</div>' : '') +
+      '</div>' +
+      '<div class="block"><div class="block-head"><span class="h2">' +
+      esc(T.investmentTitle) +
+      '</span><span class="note">' +
+      esc(T.investmentNote) +
+      '</span></div>' +
+      '<div class="totals-row" style="grid-template-columns:' +
+      (o.showDeposit ? '1fr 1fr' : '1fr') +
+      ';">' +
+      '<div><div class="k">' +
+      esc(T.totalLabel) +
+      '</div><div class="big">' +
+      o.money(o.total) +
+      '</div>' +
+      (o.anyTbd ? '<div class="s">Total excludes items marked TBD.</div>' : '') +
+      '</div>' +
+      (o.showDeposit
+        ? '<div><div class="k">' +
+          esc(T.depositLabel) +
+          '</div><div class="dep">' +
+          o.money(o.deposit) +
+          '</div>' +
+          (depositNote ? '<div class="s">' + esc(depositNote) + '</div>' : '') +
+          '</div>'
+        : '') +
+      '</div></div>' +
+      (scope.length
+        ? '<div class="block"><div class="block-head"><span class="h2">' +
+          esc(T.notIncludedTitle) +
+          '</span><span class="note">' +
+          esc(T.notIncludedNote) +
+          '</span></div>' +
+          '<div class="scope">' +
+          scope
+            .map(function (it) {
+              return (
+                '<div class="scope-item"><div class="ic"><svg viewBox="0 0 24 24">' +
+                CLARITY_MINUS +
+                '</svg></div>' +
+                '<div><div class="t">' +
+                esc(it.title) +
+                '</div><div class="d">' +
+                esc(it.description) +
+                '</div></div></div>'
+              );
+            })
+            .join('') +
+          '</div></div>'
+        : '') +
+      (steps.length
+        ? '<div class="block"><div class="block-head"><span class="h2">' +
+          esc(T.nextTitle) +
+          '</span><span class="note">' +
+          esc(T.nextNote) +
+          '</span></div>' +
+          '<div class="steps" style="grid-template-columns:repeat(' +
+          steps.length +
+          ',1fr);">' +
+          (steps.length > 1 ? '<div class="steps-line"></div>' : '') +
+          steps
+            .map(function (st, i) {
+              return (
+                '<div class="step' +
+                (i === 0 ? ' first' : '') +
+                '"><div class="n">' +
+                (i + 1) +
+                '</div>' +
+                '<div><div class="t">' +
+                esc(st.title) +
+                '</div><div class="d">' +
+                esc(st.description) +
+                '</div></div></div>'
+              );
+            })
+            .join('') +
+          '</div></div>'
+        : '') +
+      '<div class="contact">' +
+      '<p><b>' +
+      esc(T.contactHeading) +
+      '</b> ' +
+      esc(T.contactBody) +
+      '</p>' +
+      (who || reach
+        ? '<div class="who">' + (who ? '<b>' + esc(who) + '</b>' : '') + esc(reach) + '</div>'
+        : '') +
+      '</div>' +
+      '</div></div>'
+    );
+  }
+
   /* ---- the document ---- */
 
   function proposalDocHtml(doc) {
@@ -1917,6 +2264,9 @@
       esc(d.orgName || '') +
       '" ' +
       'style="max-width:816px;margin:0 auto;background:#fff;padding:46px 44px 40px;box-sizing:border-box;font-family:\'IBM Plex Sans\',sans-serif;color:#20241f;">' +
+      // What's Included sits in front of the pricing it explains. Off unless the rep
+      // turned it on — see the clarity pages above.
+      whatsIncludedHtml(d, mastheadHtml) +
       '<div style="border-bottom:2px solid #203060;padding-bottom:15px;margin-bottom:13px;">' +
       '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:30px;">' +
       '<div style="display:flex;flex-direction:column;">' +
@@ -2006,6 +2356,16 @@
       totalsHtml +
       bottomNotesHtml +
       canadianTermsPageHtml +
+      // Before You Sign: read just before the page that is signed.
+      beforeYouSignHtml(d, mastheadHtml, {
+        money: money,
+        total: docTotal,
+        deposit: docDeposit,
+        showDeposit: showDeposit,
+        depositPct: depositPct(),
+        anyTbd: anyTbd,
+        user: u,
+      }) +
       // Acceptance and the terms always begin a fresh sheet, whatever the line count.
       // Signing is the act the document exists for, so the page a customer signs is
       // never a page that happens to have room left at the bottom of the pricing —

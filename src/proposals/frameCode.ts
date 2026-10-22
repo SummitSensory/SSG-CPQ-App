@@ -14,6 +14,8 @@
  * lines, ball racks — is fixed here. Only how they print is configurable.
  */
 
+import type { ClarityPageConfig } from './clarityPages.js';
+
 export const FRAME_FEATURE_KEYS = [
   'beams',
   'monkeyBars',
@@ -59,6 +61,13 @@ export interface FrameCodeConvention {
    * printed — 1 interior beam with monkey bars is beam 2.
    */
   monkeyBarsCountAsBeam: boolean;
+  /**
+   * What the proposal's "What's Included" and "Before You Sign" pages say about each
+   * piece of the code, and the rest of those pages' wording (clarityPages.ts). Absent
+   * on versions 0 and 1 and on any version saved before the pages existed, which read
+   * as DEFAULT_CLARITY_PAGE.
+   */
+  page?: ClarityPageConfig;
 }
 
 /** Display labels for Administration and error messages. */
@@ -209,34 +218,107 @@ export function assertFrameDimensions(length: unknown, width: unknown): void {
   }
 }
 
+/**
+ * One printed piece of a frame code, in print order: the shape, each feature present
+ * (`MB`, `L2`), then the dimensions. Joined back together they are exactly the code.
+ * They exist so the proposal's "What's Included" page can label each piece without a
+ * second builder (src/proposals/clarityPages.ts).
+ */
+export interface FrameCodePart {
+  segment: FrameSegmentKey;
+  /** The shape, the feature, or 'dimensions'. */
+  key: FrameShapeKey | FrameFeatureKey | 'dimensions';
+  text: string;
+  /** The feature's count; 1 for the shape and the dimensions. */
+  count: number;
+}
+
+function partsFrom(
+  shape: FrameShapeKey,
+  counts: Record<FrameFeatureKey, number>,
+  dims: { length: number; width: number } | null,
+  convention: FrameCodeConvention,
+): FrameCodePart[] {
+  const parts: FrameCodePart[] = [];
+  for (const seg of convention.segments) {
+    if (seg === 'shape') {
+      parts.push({ segment: 'shape', key: shape, text: convention.shapes[shape], count: 1 });
+    } else if (seg === 'features') {
+      for (const f of convention.features) {
+        const count = counts[f.key];
+        if (count <= 0) continue;
+        const showQty = f.qty === 'ALWAYS' || (f.qty === 'OVER_ONE' && count > 1);
+        parts.push({
+          segment: 'features',
+          key: f.key,
+          text: f.letter + (showQty ? String(count) : ''),
+          count,
+        });
+      }
+    } else if (dims) {
+      parts.push({
+        segment: 'dimensions',
+        key: 'dimensions',
+        text: `${formatFeet(dims.length)}x${formatFeet(dims.width)}`,
+        count: 1,
+      });
+    }
+  }
+  return parts;
+}
+
+/** Parts back into the code: segments hyphen-separated, the features run together.
+ *  No features at all prints no segment: SQ-10x10, never SQ--10x10. */
+export function joinFrameCodeParts(parts: FrameCodePart[]): string {
+  const out: string[] = [];
+  let prev: FrameSegmentKey | null = null;
+  for (const p of parts) {
+    if (p.segment === 'features' && prev === 'features') out[out.length - 1] += p.text;
+    else out.push(p.text);
+    prev = p.segment;
+  }
+  return out.join('-');
+}
+
+/** The frame code for a configuration, piece by piece. Throws FrameCodeError. */
+export function buildFrameCodeParts(
+  a: FrameCodeAnswers,
+  convention: FrameCodeConvention = DEFAULT_FRAME_CODE_CONVENTION,
+): FrameCodePart[] {
+  const wantsDims = convention.segments.includes('dimensions');
+  if (wantsDims) assertFrameDimensions(a.length, a.width);
+  return partsFrom(
+    shapeOf(a.config),
+    frameFeatureCounts(a, convention),
+    wantsDims ? { length: num(a.length), width: num(a.width) } : null,
+    convention,
+  );
+}
+
 /** Build the frame code for a configuration under a convention. Throws FrameCodeError. */
 export function buildFrameCode(
   a: FrameCodeAnswers,
   convention: FrameCodeConvention = DEFAULT_FRAME_CODE_CONVENTION,
 ): string {
-  const counts = frameFeatureCounts(a, convention);
-  let features = '';
-  for (const f of convention.features) {
-    const count = counts[f.key];
-    if (count <= 0) continue;
-    const showQty = f.qty === 'ALWAYS' || (f.qty === 'OVER_ONE' && count > 1);
-    features += f.letter + (showQty ? String(count) : '');
-  }
-  const parts: string[] = [];
-  for (const seg of convention.segments) {
-    if (seg === 'shape') parts.push(convention.shapes[shapeOf(a.config)]);
-    else if (seg === 'features') {
-      // Omitted outright when nothing is selected: SQ-10x10, never SQ--10x10.
-      if (features) parts.push(features);
-    } else {
-      assertFrameDimensions(a.length, a.width);
-      parts.push(`${formatFeet(num(a.length))}x${formatFeet(num(a.width))}`);
-    }
-  }
-  return parts.join('-');
+  return joinFrameCodeParts(buildFrameCodeParts(a, convention));
 }
 
-const DIMS_RE = /^(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)$/i;
+/** The parts of a code that parseFrameCodeWith read under the same convention. */
+export function partsOfParsedFrameCode(
+  parsed: ParsedFrameCode,
+  convention: FrameCodeConvention,
+): FrameCodePart[] {
+  return partsFrom(
+    parsed.shape,
+    parsed,
+    parsed.length != null && parsed.width != null
+      ? { length: parsed.length, width: parsed.width }
+      : null,
+    convention,
+  );
+}
+
+export const FRAME_DIMS_RE = /^(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)$/i;
 
 function parseFeatures(
   text: string,
@@ -307,7 +389,7 @@ export function parseFrameCodeWith(
       if (!f) return null;
       feats = f;
     } else {
-      const m = DIMS_RE.exec(text);
+      const m = FRAME_DIMS_RE.exec(text);
       if (!m) return null;
       length = Number(m[1]);
       width = Number(m[2]);
@@ -358,7 +440,7 @@ export function normalizeFrameCode(
   if (!parsed) return raw;
   const canonical = raw
     .split('-')
-    .map((p) => (DIMS_RE.test(p) ? p.toLowerCase() : p.toUpperCase()))
+    .map((p) => (FRAME_DIMS_RE.test(p) ? p.toLowerCase() : p.toUpperCase()))
     .join('-');
   if (parsed.length != null) return canonical;
   const L = num(dims?.length ?? undefined);
