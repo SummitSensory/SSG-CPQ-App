@@ -528,6 +528,21 @@ export async function importDealsMatching(
 
 /** Import a single Deal Tracking row by its monday item id. */
 export async function importDealById(itemId: string, dryRun = false): Promise<ImportResult> {
+  const item = await fetchItemById(itemId);
+  if (!item) {
+    const result = await importDealItems([], dryRun);
+    result.warnings.push(`monday item ${itemId} not found.`);
+    return result;
+  }
+  return importDealItems([item], dryRun);
+}
+
+/**
+ * Import Deal Tracking rows already read from monday — the same per-row import as
+ * every other path here, for a caller that fetched the rows itself (the new-deal
+ * sweep reads them newest-first in one query rather than one call per item).
+ */
+export async function importDealItems(items: MondayItem[], dryRun = false): Promise<ImportResult> {
   const started = Date.now();
   const counts = emptyCounts();
   const warnings: string[] = [];
@@ -538,11 +553,8 @@ export async function importDealById(itemId: string, dryRun = false): Promise<Im
     unmappedIndustryLabels: [],
     firstRows: [],
   };
-  const item = await fetchItemById(itemId);
-  if (!item) {
-    warnings.push(`monday item ${itemId} not found.`);
-  } else {
-    await importDeals([item], counts, warnings, samples, dryRun, Date.now() + 25_000);
+  if (items.length) {
+    await importDeals(items, counts, warnings, samples, dryRun, Date.now() + 25_000);
   }
   return {
     ...counts,

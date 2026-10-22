@@ -87,3 +87,28 @@ the approved conflict rule.
 9. **Reconciliation**: run `GET /integrations/monday/reconcile` → confirm it
    lists the forced failure and any drifted records.
 10. Only after all pass on the sandbox board, point env at the production board.
+
+## 6. New Deal Tracking customers appear in the CRM automatically
+
+Inbound only — nothing here writes to monday, and nothing creates a QuickBooks
+customer. Code: `src/integrations/monday/dealAutoImport.ts`, through the same
+importer as the manual Import button (`crmImport.ts`).
+
+- **Webhook.** `desiredWebhooks()` declares a `create_item` subscription on the
+  Deal Tracking board (`MONDAY_DEALS_BOARD_ID`, default 6527740233). The daily
+  `/cron/portal-delivery` run registers it via `syncWebhooks()` (and repairs it if
+  it is deleted in monday). Each new row is imported as it is added.
+- **Sweep.** The same cron then imports every Deal Tracking row created since the
+  last successful sweep (2 h overlap; 3 days on the first run; up to 100 rows),
+  newest first. This catches a webhook that never arrived and re-reads rows filled
+  in after they were created. Run it by hand: `POST /integrations/monday/deals/sweep`.
+  Each run is logged as an `IntegrationSyncLog` row with entity `monday-deal-sweep`.
+- **No duplicates.** Opportunities are keyed on `Opportunity.mondayItemId`;
+  organizations are adopted by normalized name; concurrent imports of the same item
+  are serialized with a Postgres advisory lock.
+- **Off switch.** `MONDAY_DEAL_AUTO_IMPORT=false` removes the subscription from the
+  declaration and skips the webhook handling and the sweep.
+
+The New proposal form's customer field (`GET /crm/customer-picker`) searches the
+CRM and these Deal Tracking rows together; picking a deal not yet in the CRM
+imports it on the spot (`POST /crm/customer-picker/monday/:itemId`, CRM_WRITE).
