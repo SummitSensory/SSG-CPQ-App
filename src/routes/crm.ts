@@ -27,6 +27,11 @@ import { projectIdOfOpportunity } from '../crm/projectId.js';
 import { pushOpportunity } from '../integrations/monday/sync.js';
 import { fetchItemById } from '../integrations/monday/discovery.js';
 import { DEAL_COL, buildAddress } from '../integrations/monday/crmMapping.js';
+import {
+  CustomerPullError,
+  applyCustomerPull,
+  customerPullPlan,
+} from '../integrations/monday/customerPull.js';
 import { isMondayPushConfigured } from '../config/env.js';
 import { normalizeCountry, normalizeProvince, isCanada } from '../lib/country.js';
 import { randomBytes } from 'node:crypto';
@@ -423,6 +428,64 @@ export function registerCrmRoutes(app: FastifyInstance): void {
     });
     const address = await writeBilling(id, data, req.user!.sub, 'monday');
     return { address, mondayItemId: opp.mondayItemId };
+  });
+
+  /**
+   * "Pull from monday": what the Deal Tracking row says that this customer does not
+   * (see integrations/monday/customerPull.ts). GET previews, POST writes the ticked
+   * keys. `opportunityId` picks the project's own deal row; without it, the
+   * customer's most recently touched linked deal.
+   */
+  const pullErrors = (err: unknown): never => {
+    if (err instanceof CustomerPullError) {
+      throw err.status === 404 ? new NotFoundError(err.message) : new ValidationError(err.message);
+    }
+    throw err;
+  };
+  const requireMonday = () => {
+    if (!isMondayPushConfigured()) {
+      throw new ValidationError(
+        'monday.com is not configured on this deployment, so there is no deal row to read.',
+      );
+    }
+  };
+
+  app.get('/crm/organizations/:id/monday-pull', write, async (req) => {
+    requireMonday();
+    const { id } = req.params as { id: string };
+    const { opportunityId } = (req.query ?? {}) as { opportunityId?: string };
+    return customerPullPlan(id, opportunityId || null).catch(pullErrors);
+  });
+
+  app.post('/crm/organizations/:id/monday-pull', write, async (req) => {
+    requireMonday();
+    const { id } = req.params as { id: string };
+    const parsed = z
+      .object({
+        opportunityId: z.string().trim().min(1).nullish(),
+        keys: z.array(z.string().trim().min(1).max(60)).max(50),
+      })
+      .safeParse(req.body ?? {});
+    if (!parsed.success) throw new ValidationError('Choose which details to pull.');
+    const result = await applyCustomerPull(
+      id,
+      parsed.data.opportunityId ?? null,
+      parsed.data.keys,
+    ).catch(pullErrors);
+    if (result.applied.length) {
+      await recordAudit({
+        actorId: req.user!.sub,
+        action: 'crm.mondayPull',
+        entity: 'Organization',
+        entityId: id,
+        details: {
+          mondayItemId: result.plan.itemId,
+          opportunityId: result.plan.opportunityId,
+          applied: result.plan.changes.filter((c) => result.applied.includes(c.key)),
+        },
+      });
+    }
+    return result;
   });
 
   // ---- Rooms (site survey) ----
