@@ -677,6 +677,7 @@
     if (window.SSGLegalAdmin) window.SSGLegalAdmin.init({ authed: authed, esc: esc });
     if (window.SSGMediaPartnershipAdmin)
       window.SSGMediaPartnershipAdmin.init({ authed: authed, esc: esc });
+    if (window.SSGFrameCodeAdmin) window.SSGFrameCodeAdmin.init({ authed: authed, esc: esc });
     // Vendor part numbers: the dialog lives here for Catalog AND Administration, which
     // is why it is no longer inside either.
     if (window.SSGVendorParts) window.SSGVendorParts.init({ authed: authed });
@@ -4357,7 +4358,7 @@
     var desc = it.description || '';
     var note = it.internalNote || '';
     if (!note && LEAKED_INTERNAL.some(function (re) { return re.test(desc); })) { note = desc; desc = ''; }
-    return {
+    var out = {
       ref: it.ref || uid(), lineType: it.lineType || (it.isNote ? 'NOTE' : 'PRODUCT'), kind: it.kind || 'INCLUDED',
       productId: it.productId || null, sku: it.sku || '', name: it.name || '', description: desc,
       quantity: it.quantity == null ? (missingQty == null ? 1 : missingQty) : it.quantity, rateMinor: it.rateMinor || 0, costEach: it.costEach || 0, processingFeeMinor: it.processingFeeMinor || 0, weightEach: it.weightEach || 0, group: it.group || '',
@@ -4383,6 +4384,15 @@
       source: it.source || '',
       showNotes: false,
     };
+    // The itemized frame heading's code and the naming-convention version that wrote
+    // it (src/proposals/frameCode.ts). Only that heading carries them.
+    if (it.frameCode) {
+      out.frameCode = String(it.frameCode);
+      if (it.frameCodeVersion != null) out.frameCodeVersion = Number(it.frameCodeVersion);
+      if (it.frameLength != null) out.frameLength = Number(it.frameLength);
+      if (it.frameWidth != null) out.frameWidth = Number(it.frameWidth);
+    }
+    return out;
   }
 
   var pb = null; // active builder document
@@ -5372,8 +5382,17 @@
    * finds that copy so the builder can offer to correct it.
    */
   function modelTokenIn(text) {
-    var m = String(text || '').match(/\b[A-Z]{1,3}-[A-Z0-9]{3,}\b/);
-    return m ? m[0] : '';
+    // Shape letters, then one or more hyphen-joined chunks that each hold a digit:
+    // SQ-2MBL2T, SQ-H2MBL2T2-10x10, SQ-10x10-H2MBL2T2, R-10.5x8. The whole token,
+    // dimensions and all — stopping at the second hyphen made a correct title look
+    // stale and "Use model" append the dimensions again on every click. A token of
+    // digits only (P-2026-000194, a proposal number) is not a model.
+    var re = /\b[A-Z]{1,3}(?:-(?=[A-Za-z0-9.]*\d)[A-Za-z0-9]+(?:\.\d+[A-Za-z0-9]*)*)+/g;
+    var s = String(text || ''), m;
+    while ((m = re.exec(s))) {
+      if (!m[0].split('-').slice(1).every(function (c) { return /^\d+$/.test(c); })) return m[0];
+    }
+    return '';
   }
 
   /**
@@ -9482,10 +9501,16 @@
   }
 
   /**
-   * Save-as-PDF file name: Customer Name-Model-Frame Size-Proposal#-MMDDYYYY.
-   * Model and frame size are read off the itemized frame heading the builder writes
-   * (“SQ-2MBL2T — Itemized” / “Frame Dimensions: 10' × 8'”), so an edited heading is
-   * respected and a proposal without a frame simply drops those segments.
+   * Save-as-PDF file name: Customer Name-Frame Code-Proposal#[-RevN]-MMDDYYYY, e.g.
+   * "Soar Autism Center - Goodyear-SQ-H2MBL2T2-10x10-P-2026-000194-10062026".
+   *
+   * The one name every proposal PDF gets, for every user: Save PDF, Print, the
+   * release upload to monday, the emailed attachment and the DocuSeal package all
+   * call this. The frame code is read off the itemized heading the configurator
+   * writes, so an edited heading is respected. The code carries its own dimensions
+   * now (Administration → Frame naming); a proposal named before that has a code
+   * without them, and gets the footprint from the heading's "Frame Dimensions" note
+   * appended to it — the dimensions print once, never twice.
    */
   function proposalFileName(d) {
     var model = '', size = '', firstGroup = '';
@@ -9504,7 +9529,11 @@
     // else has no per-job model code, only a fixed catalog group name ("SUMMIT SOAR
     // SERIES") — without this, "no model code" silently became "no product name at
     // all" in the file name. The first group heading, title-cased, stands in for it.
-    if (!model && firstGroup) {
+    if (model) {
+      // A frame code: the size belongs inside it, once.
+      if (size && !/(^|-)\d+(\.\d+)?x\d+(\.\d+)?(-|$)/i.test(model)) model = model + '-' + size;
+      size = '';
+    } else if (firstGroup) {
       model = tc(firstGroup.toLowerCase());
     }
     var now = new Date();
@@ -9619,7 +9648,7 @@
       length: 10, width: 10, config: 'Square', legs: 6, legsAuto: true, configManual: false,
       monkeyBars: false, monkeyBarsQty: 1, ladders: false, laddersQty: 1, ladderShield: false,
       trolley: false, trolleyType: 'Dual', interiorBeams: false, interiorBeamsQty: 1,
-      zipLine: false, zipLineQty: 1, ballRack: false,
+      zipLine: false, zipLineQty: 1, ballRack: false, ballRackQty: 1,
       slide: false, slideA2216: false, slideGray: false, steamroller: false, slideConvKit: false,
       cargoNet: false, cargoNetQty: 1, cargoNetPart: '',
       cargoHwCarabiner: true, cargoHwCarabinerQty: 1, cargoHwVRing: true, cargoHwVRingQty: 2,
@@ -9658,7 +9687,7 @@
     adv.trolley = !!a.trolley; adv.trolleyType = a.trolleyType || 'Dual';
     adv.interiorBeams = !!a.interiorBeams; adv.interiorBeamsQty = Number(a.interiorBeamsQty) || 1;
     adv.zipLine = !!a.zipLine; adv.zipLineQty = Number(a.zipLineQty) || 1;
-    adv.ballRack = !!a.ballRack;
+    adv.ballRack = !!a.ballRack; adv.ballRackQty = Number(a.ballRackQty) || 1;
     adv.slide = !!a.slide; adv.slideGray = !!a.slideGray; adv.steamroller = !!a.steamroller;
     // Undefined means the answer predates the toggle, when the deck always shipped.
     adv.slideA2216 = a.slideA2216 === undefined ? !!a.slide : !!a.slideA2216;
@@ -9876,7 +9905,8 @@
           '<button id="advX" style="border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.12);color:#fff;border-radius:8px;padding:7px 12px;cursor:pointer;">Cancel</button>' +
         '</div>' +
         '<div style="padding:22px 24px;">' +
-          sec('Frame Dimensions', '<div style="' + grid + '">' + sel('length', 'Length (long, ft)', rangeArr(6, 30)) + sel('width', 'Width (short, ft)', rangeArr(6, 20)) + '</div>') +
+          sec('Frame Dimensions', '<div style="' + grid + '">' + sel('length', 'Length (long, ft)', rangeArr(6, 30)) + sel('width', 'Width (short, ft)', rangeArr(6, 20)) + '</div>' +
+            (advDimsError() ? '<div id="advDimsErr" style="margin-top:8px;padding:8px 10px;background:#fbecea;border:1px solid #e8c4bd;border-radius:8px;font-size:12px;color:#7d2f24;">' + esc(advDimsError()) + '</div>' : '')) +
           sec('Frame Configuration', '<div style="' + grid + '">' + sel('config', 'Configuration' + (adv.configManual ? ' (overridden)' : ' (auto)'), ['Rectangle', 'Square', 'L-Shape', 'T-Shape']) + sel('legs', '# of Frame Legs (auto, editable)', advLegOptions()) + '</div>' +
             '<div class="muted" style="font-size:11.5px;margin-top:6px;">' + (adv.configManual ? 'Manually set — auto would be ' + autoConfig() + '. <a href="#" id="advCfgReset">Reset to auto</a>' : 'Auto from dimensions: ' + autoConfig()) + ' · legs auto-set from length (' + legsFor(adv.length) + ')' + (Number(adv.legs) !== legsFor(adv.length) ? ' — currently ' + Number(adv.legs) + ', set by hand' : '') + '</div>') +
           sec('Frame Options',
@@ -9887,7 +9917,7 @@
           ) +
           sec('Frame Accessories',
             tog('zipLine', 'Zip Line') + (adv.zipLine ? '<div style="' + grid + 'margin:8px 0 4px;">' + num('zipLineQty', '# of Zip Line', 1, 3) + '</div>' : '') +
-            tog('ballRack', 'Frame Mount — Ball Rack') +
+            tog('ballRack', 'Frame Mount — Ball Rack') + (adv.ballRack ? '<div style="' + grid + 'margin:8px 0 4px;">' + num('ballRackQty', '# of Ball Racks', 1, 6) + '</div>' : '') +
             tog('slide', 'Summit Adventure Slide System') +
             (adv.slide ? '<div style="padding-left:16px;">' +
               tog('slideA2216', 'Slide', 'Part A-2216') +
@@ -9957,7 +9987,7 @@
               : '<label style="display:flex;align-items:center;gap:7px;font-size:12.5px;color:#5c6157;"><input type="checkbox" id="advReplace"> Replace existing lines</label>') +
             '<div style="display:flex;gap:8px;align-items:flex-start;">' +
             '<button class="link-btn" id="advTrace" style="width:auto;padding:11px 16px;">Test the logic →</button>' +
-            '<button class="btn" id="advGen" style="width:auto;padding:11px 22px;">' + advGenLabel() + '</button></div>' +
+            '<button class="btn" id="advGen" style="width:auto;padding:11px 22px;"' + (advDimsError() ? ' disabled title="' + esc(advDimsError()) + '"' : '') + '>' + advGenLabel() + '</button></div>' +
           '</div>' +
         '</div>' +
       '</div>';
@@ -10065,6 +10095,15 @@
     return opts;
   }
   function autoConfig() { return (Number(adv.length) || 0) === (Number(adv.width) || 0) ? 'Square' : 'Rectangle'; }
+  /**
+   * Length is the long side. A width greater than the length is refused — not
+   * swapped, which would quietly be a different frame — and the proposal cannot be
+   * generated until it is corrected. The server refuses it too (frameCode.ts).
+   */
+  function advDimsError() {
+    var L = Number(adv.length) || 0, W = Number(adv.width) || 0;
+    return W > L ? 'Width (' + W + ' ft) is greater than length (' + L + ' ft). Length is the long side — correct the Frame Dimensions to generate the proposal.' : '';
+  }
 
   function syncAdvDefaults(changed) {
     if (changed === 'config') adv.configManual = true;
@@ -10110,7 +10149,7 @@
       ladderShield: adv.ladders ? !!adv.ladderShield : false,
       monkeyBars: !!adv.monkeyBars, monkeyBarsQty: Number(adv.monkeyBarsQty),
       interiorBeams: !!adv.interiorBeams, interiorBeamsQty: Number(adv.interiorBeamsQty),
-      trolley: !!adv.trolley, trolleyType: adv.trolleyType, zipLine: !!adv.zipLine, zipLineQty: Number(adv.zipLineQty), ballRack: !!adv.ballRack,
+      trolley: !!adv.trolley, trolleyType: adv.trolleyType, zipLine: !!adv.zipLine, zipLineQty: Number(adv.zipLineQty), ballRack: !!adv.ballRack, ballRackQty: adv.ballRack ? (Number(adv.ballRackQty) || 1) : 0,
       slide: !!adv.slide, slideA2216: !!adv.slideA2216, slideGray: !!adv.slideGray, steamroller: !!adv.steamroller, slideConvKit: !!adv.slideConvKit,
       cargoNet: !!adv.cargoNet,
       cargoNetQty: Number(adv.cargoNetQty) || 1, cargoNetPart: adv.cargoNetPart || '',
@@ -10275,18 +10314,23 @@
   async function generateAdvLines(replace) {
     var btn = document.getElementById('advGen'); if (btn) { btn.disabled = true; btn.textContent = 'Pricing…'; }
     var answers = advAnswers();
-    var priced = null;
+    var priced = null, refused = '';
     try {
       var r = await authed('/proposals/adventure-series/price', { method: 'POST', body: answers });
       if (r.ok) priced = await r.json();
+      // A 400 is the engine refusing these answers (width greater than length) —
+      // say why, rather than blaming the connection.
+      else if (r.status === 400) refused = await serverMessage(r, 'The pricing engine refused this configuration.');
     } catch (e) {}
-    if (!priced) { if (btn) { btn.disabled = false; btn.textContent = advGenLabel(); } alert('Could not reach the pricing engine. Is the server running the latest build?'); return; }
+    if (!priced) { if (btn) { btn.disabled = false; btn.textContent = advGenLabel(); } alert(refused || 'Could not reach the pricing engine. Is the server running the latest build?'); return; }
     var out = (priced.lines || []).map(function (l) {
       return normalizeLine({
         lineType: l.lineType, kind: l.lineType === 'GROUP' ? 'GROUP' : l.lineType === 'SUBGROUP' ? 'SUBGROUP' : l.lineType === 'NOTE' ? 'NOTE' : 'INCLUDED',
         name: l.name, sku: l.sku || '', description: l.description || '', quantity: l.quantity == null ? 0 : l.quantity,
         rateMinor: l.rateMinor || 0, costEach: l.costEach || 0, processingFeeMinor: l.processingFeeMinor, weightEach: l.weightEach || 0, optional: !!l.optional,
         internalNote: l.internalNote || '', components: l.components || null, source: 'ADV',
+        // The itemized heading's frame code and the naming version behind it.
+        frameCode: l.frameCode || undefined, frameCodeVersion: l.frameCodeVersion, frameLength: l.frameLength, frameWidth: l.frameWidth,
       });
     });
     out.forEach(applyItemDefaults);
@@ -10334,7 +10378,11 @@
     if (!owned.length) {
       // Legacy fallback: match on identity against the new set.
       var key = function (l) {
-        return (l.lineType || 'PRODUCT') + '|' + String(l.sku || '').toUpperCase() + '|' + String(l.name || '').trim().toLowerCase();
+        // The itemized frame heading matches by role, not by name: its name is the
+        // frame code, which changes whenever the naming convention does.
+        var name = String(l.name || '').trim().toLowerCase();
+        if ((l.lineType || '') === 'GROUP' && /[-–—]\s*itemized\s*$/.test(name)) name = '\u0000itemized';
+        return (l.lineType || 'PRODUCT') + '|' + String(l.sku || '').toUpperCase() + '|' + name;
       };
       var wanted = {};
       out.forEach(function (l) { var k = key(l); wanted[k] = (wanted[k] || 0) + 1; });
@@ -17093,7 +17141,11 @@
         admAcc('propMedia', 'Media Partnership Program',
           'The optional Customer Project Media Rebate a rep can offer on a proposal. Off by default and never reduces the Project Price. Editing here changes what a proposal offers going forward; a proposal already released keeps the terms it was released under.',
           '',
-          '<div id="mediaPartnershipAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>')) +
+          '<div id="mediaPartnershipAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>') +
+        admAcc('propFrameNaming', 'Frame naming',
+          'How a Summit Adventure Series frame is named on the proposal, its PDF file name and everything downstream &mdash; e.g. SQ-H2MBL2T2-10x10. Set where the shape, features and dimensions print, each feature&rsquo;s letter, and whether its quantity follows the letter. System administrators only. Proposals already configured keep their names.',
+          '',
+          '<div id="frameCodeAdmin"><div class="muted" style="padding:16px;">Loading…</div></div>')) +
 
       sec('email',
         admAcc('emailOutlook', 'Outlook drafts',
@@ -17190,6 +17242,7 @@
       window.SSGProposalTitles.render(document.getElementById('proposalTitlesAdmin'));
     if (window.SSGMediaPartnershipAdmin)
       window.SSGMediaPartnershipAdmin.render(document.getElementById('mediaPartnershipAdmin'));
+    if (window.SSGFrameCodeAdmin) window.SSGFrameCodeAdmin.render(document.getElementById('frameCodeAdmin'));
     loadFormulas();
     loadFollowUpTemplates();
     loadEsignEmailTemplates();

@@ -8,6 +8,7 @@ import { versionTotals, metaOf } from '../../proposals/analytics.js';
 import { sellerCollectedCharges } from '../../crossborder/sellerCharges.js';
 import { renderPdf } from '../../render/pdf.js';
 import { appendPdfDocuments } from '../../lib/pdfMerge.js';
+import { proposalPdfFileNameForVersion } from '../../proposals/pdfFileName.js';
 import {
   referenceDocsIncludeW9,
   resolveReferenceDocuments,
@@ -456,7 +457,11 @@ export async function uploadProposalPdfToMonday(input: {
   );
   if (!itemId) return { uploaded: false, skipped: note };
 
-  const name = (input.filename || version.proposal.number).replace(/\.pdf$/i, '');
+  // The browser's name; failing that the same convention, server-side (pdfFileName.ts).
+  const name = (input.filename || (await proposalPdfFileNameForVersion(version.id))).replace(
+    /\.pdf$/i,
+    '',
+  );
   try {
     // edgeToEdge: the proposal document owns its own page geometry — see render/pdf.ts.
     let pdf = await renderPdf(input.proposalHtml, { format: 'Letter', edgeToEdge: true });

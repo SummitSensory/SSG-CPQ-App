@@ -93,6 +93,8 @@ const CLIENT_SCRIPTS = [
   'media-rebate-program.js',
   'legal-admin.js',
   'media-partnership-admin.js',
+  // Administration → Frame naming (the Adventure Series frame code convention).
+  'frame-code-admin.js',
   // Drag-to-place admin editor for signature-field-layout.js's saved offsets.
   'signature-field-layout-admin.js',
   'reference-documents.js',
