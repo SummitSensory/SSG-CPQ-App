@@ -5751,8 +5751,8 @@
   }
 
   /*
-   * The Adventure Series clarity pages: "What's Included" (before the pricing) and
-   * "Before You Sign" (before the Acceptance page).
+   * The Adventure Series clarity pages: "What's Included" (after the introduction, before
+   * the pricing, unnumbered) and "Before You Sign" (after the Acceptance page).
    *
    * What they say is computed by the server from the model code the proposal prints and
    * its lines (POST /proposals/clarity-pages, src/proposals/clarityPages.ts), and kept
@@ -5873,8 +5873,8 @@
     };
     return '<div class="card" id="bClarityCard" style="margin-top:16px;">' +
       '<div class="section-title" style="margin:0 0 4px;">Customer clarity pages</div>' +
-      row('mClarityIncl', cp.whatsIncluded, 'Include “What’s Included” page', 'Decodes the model code and lists the components and padding. Printed before the itemized pricing.') +
-      row('mClaritySign', cp.beforeYouSign, 'Include “Before You Sign” page', 'Total, deposit, what is not included and next steps. Printed before the Acceptance page.') +
+      row('mClarityIncl', cp.whatsIncluded, 'Include “What’s Included” page', 'Decodes the model code and lists the components and padding. Printed after the introduction, before the pricing, without a page number.') +
+      row('mClaritySign', cp.beforeYouSign, 'Include “Before You Sign” page', 'Total, deposit, what is not included and next steps. Printed after the Acceptance page.') +
       '<div id="bClarityDetail">' + clarityDetailHtml() + '</div>' +
     '</div>';
   }
@@ -8899,9 +8899,10 @@
      * proposal-document.js) is a fixed-height block. If an unusually long configuration
      * would run past its foot, scale it down until it fits rather than lose the last
      * rows under the footer. Zoom keeps the block's printed height the same: its CSS
-     * height grows by the same factor the zoom shrinks it.
+     * height grows by the same factor the zoom shrinks it. Read from root, not area:
+     * What's Included is its own sheet in front of #propPrintArea.
      */
-    Array.prototype.forEach.call(area.querySelectorAll('[data-fit-page] > .scp'), function (el) {
+    Array.prototype.forEach.call(root.querySelectorAll('[data-fit-page] > .scp'), function (el) {
       var base = parseFloat(el.style.height || getComputedStyle(el).height) || 0;
       var z = 1;
       while (z > 0.8 && el.scrollHeight > el.clientHeight + 1) {

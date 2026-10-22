@@ -119,18 +119,56 @@ describe('clarity pages in the proposal document', () => {
     expect(html).not.toContain('data-page-break="before-you-sign"');
   });
 
-  it('What’s Included sits before the pricing header; Before You Sign before Acceptance', () => {
+  it('What’s Included is an unnumbered sheet ahead of the numbered proposal', () => {
     const html = SSGProposalDocument.html(doc(on()));
     const inc = html.indexOf('data-page-break="whats-included"');
-    const header = html.indexOf('Proposal Prepared By');
-    const sign = html.indexOf('data-page-break="before-you-sign"');
-    const acc = html.indexOf('data-page-break="acceptance"');
+    const area = html.indexOf('id="propPrintArea"');
     expect(inc).toBeGreaterThan(-1);
-    expect(inc).toBeLessThan(header);
-    expect(sign).toBeGreaterThan(header);
-    expect(sign).toBeLessThan(acc);
-    expect(html).toContain('data-page-name="What&#39;s Included"');
+    // Outside #propPrintArea, so the paginator neither numbers nor counts it.
+    expect(inc).toBeLessThan(area);
+    expect(html.slice(0, area)).toMatch(
+      /<div class="ssg-fm-page" data-page-break="whats-included"/,
+    );
+    expect(html).not.toContain('data-page-name="What&#39;s Included"');
+    // Its own footer names the page, without a number.
+    expect(html.slice(inc, area)).toContain('What&#39;s Included</span>');
+    expect(html.slice(inc, area)).not.toContain('Page ');
+  });
+
+  it('What’s Included comes straight after the introduction’s last page', () => {
+    const w = (globalThis as unknown as { window: Record<string, unknown> }).window;
+    w.SSGFrontMatter = {
+      scope: () => 'BOTH',
+      applies: () => true,
+      introHtml: () =>
+        '<div class="ssg-front-matter"><div class="ssg-fm-page">One Investment. Value Across Your Organization.</div></div>',
+    };
+    try {
+      const html = SSGProposalDocument.html(doc(on()));
+      const introEnd = html.indexOf('</div></div>', html.indexOf('One Investment.')) + 12;
+      expect(html.indexOf('<div class="ssg-fm-page" data-page-break="whats-included"')).toBe(
+        introEnd,
+      );
+    } finally {
+      delete w.SSGFrontMatter;
+    }
+  });
+
+  it('Before You Sign follows the Acceptance page and stays numbered', () => {
+    const html = SSGProposalDocument.html(doc(on()));
+    const acc = html.indexOf('data-page-break="acceptance"');
+    const sign = html.indexOf('data-page-break="before-you-sign"');
+    expect(acc).toBeGreaterThan(-1);
+    expect(sign).toBeGreaterThan(acc);
+    expect(sign).toBeGreaterThan(html.indexOf('id="propPrintArea"'));
     expect(html).toContain('data-page-name="Before You Sign"');
+  });
+
+  it('the questions box is pushed to the foot of Before You Sign', () => {
+    const html = SSGProposalDocument.html(doc(on()));
+    const page = html.slice(html.indexOf('data-page-break="before-you-sign"'));
+    expect(page).toContain('<div class="push"></div><div class="contact">');
+    expect(html).toContain('.scp .push{flex:1 0 22px;}');
   });
 
   it('draws the decoded code, its panel and both sections', () => {
