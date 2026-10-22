@@ -220,6 +220,9 @@
         position: sticky;
         top: 0;
         height: 100vh;
+        /* Scrolls on a short window rather than cutting off the foot (Reorder Tabs,
+           My Profile, Sign Out sat below the fold on a 720px-tall laptop screen). */
+        overflow-y: auto;
       }
       .side .brand {
         padding: 0 6px;
