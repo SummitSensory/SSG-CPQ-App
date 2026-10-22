@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { env } from '../config/env.js';
 import { isBearerSecret } from '../lib/secretCompare.js';
 import { logger } from '../lib/logger.js';
+import { ensureDbReachable } from '../lib/dbRetry.js';
 import { refreshOpenInvoices } from '../integrations/quickbooks/receivables.js';
 
 /**
@@ -48,6 +49,9 @@ export function registerReceivableCronRoutes(app: FastifyInstance): void {
         // 200 is above the number of invoices this company has open at once, so a
         // normal night refreshes everything. Oldest-synced first, so if there is ever
         // more than one page the stalest figures are the ones that get corrected.
+        // Wait out a briefly unreachable database before the sweep's first read
+        // (see src/lib/dbRetry.ts); a lasting outage still lands in the catch.
+        await ensureDbReachable('cron:receivables');
         out.invoices = await refreshOpenInvoices(200);
       } catch (err) {
         logger.error({ err }, 'cron: receivables sweep failed');

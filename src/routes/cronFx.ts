@@ -4,6 +4,7 @@ import { isBearerSecret } from '../lib/secretCompare.js';
 import { logger } from '../lib/logger.js';
 import { deliverAlert } from '../lib/alerts.js';
 import { prisma } from '../lib/prisma.js';
+import { ensureDbReachable } from '../lib/dbRetry.js';
 import { resolveRateForDate, type FxFallbackModeValue } from '../crossborder/rateService.js';
 import { writeCrossBorderSnapshot } from '../crossborder/snapshot.js';
 
@@ -59,6 +60,9 @@ export function registerFxCronRoutes(app: FastifyInstance): void {
       const out: Record<string, unknown> = { ranAt: new Date().toISOString(), asOf };
 
       try {
+        // Wait out a briefly unreachable database before the first read (see
+        // src/lib/dbRetry.ts); a lasting outage still throws into the catch below.
+        await ensureDbReachable('cron:fx-refresh');
         const settings = await prisma.crossBorderSetting.findUnique({ where: { id: 'singleton' } });
         if (!settings?.enabled) {
           out.skipped = 'cross-border pricing is off';

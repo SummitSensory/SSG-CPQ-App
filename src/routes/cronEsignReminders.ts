@@ -3,6 +3,7 @@ import { env } from '../config/env.js';
 import { isBearerSecret } from '../lib/secretCompare.js';
 import { logger } from '../lib/logger.js';
 import { deliverAlert } from '../lib/alerts.js';
+import { ensureDbReachable } from '../lib/dbRetry.js';
 import { sendEsignReminders } from '../integrations/docuseal/notifications.js';
 import { repairStuckSignedCopies } from '../integrations/docuseal/service.js';
 
@@ -33,7 +34,13 @@ export function registerEsignReminderCronRoutes(app: FastifyInstance): void {
       const started = Date.now();
       const out: Record<string, unknown> = { ranAt: new Date().toISOString() };
 
+      // Each sweep opens with a database read, and this job runs once a day, so a
+      // database that is briefly unreachable (Neon waking or restarting a compute,
+      // a pooler blip) is waited out first rather than costing the day's run —
+      // see src/lib/dbRetry.ts. An outage that outlasts the retries still throws
+      // into the catch below and alerts exactly as before.
       try {
+        await ensureDbReachable('cron:esign-reminders');
         out.reminders = await sendEsignReminders();
       } catch (err) {
         logger.error({ err }, 'cron: esign reminder sweep failed');
@@ -47,6 +54,7 @@ export function registerEsignReminderCronRoutes(app: FastifyInstance): void {
       }
 
       try {
+        await ensureDbReachable('cron:esign-reminders:repair');
         out.signedCopyRepair = await repairStuckSignedCopies();
       } catch (err) {
         logger.error({ err }, 'cron: signed-copy repair sweep failed');
