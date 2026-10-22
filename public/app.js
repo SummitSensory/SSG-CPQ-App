@@ -1566,6 +1566,7 @@
       box.innerHTML = crm.tab === 'orgs' ? orgTable(d) : oppTable(d);
       wirePager(d);
       wireNewProposalButtons(box);
+      wireMondayPullButtons(box);
     } catch (e) { if (seq === crmLoadSeq) box.innerHTML = '<div class="err">Could not reach the server.</div>'; }
   }
 
@@ -1600,24 +1601,96 @@
   function newProposalBtn(orgId, oppId, label) {
     return '<button type="button" class="link-btn crmNewProp" data-org="' + esc(orgId) + '" data-opp="' + esc(oppId || '') + '" data-label="' + esc(label) + '" style="width:auto;padding:5px 11px;font-size:12.5px;white-space:nowrap;">New proposal</button>';
   }
+  /** "Pull from monday" — re-read the Deal Tracking row for details entered after import. */
+  function mondayPullBtn(orgId, oppId, label) {
+    return '<button type="button" class="link-btn crmMondayPull" data-org="' + esc(orgId) + '" data-opp="' + esc(oppId || '') + '" data-label="' + esc(label) + '" title="Bring across details entered on the monday Deal Tracking row after this customer reached the CRM" style="width:auto;padding:5px 11px;font-size:12.5px;white-space:nowrap;">Pull from monday</button>';
+  }
+  function crmCanPull() { return !!(crm.user && canCrmWrite(crm.user.role)); }
+  function rowActions(btns) {
+    return btns.length ? td('<div style="display:flex;gap:6px;justify-content:flex-end;">' + btns.join('') + '</div>') : '';
+  }
   function orgTable(d) {
-    var propose = crmCanPropose();
+    var propose = crmCanPropose(), pull = crmCanPull();
     var rows = (d.items || []).map(function (o) {
+      var acts = [];
+      if (pull) acts.push(mondayPullBtn(o.id, '', o.name));
+      if (propose) acts.push(newProposalBtn(o.id, '', o.name));
       return '<tr>' + td('<b style="font-weight:600;">' + esc(o.name) + '</b>') + td(esc(titleCase(o.customerType))) +
         td(o.taxExempt ? '<span class="chip">Tax exempt</span>' : '<span class="muted">—</span>') + td(fmtDate(o.createdAt)) +
-        (propose ? td(newProposalBtn(o.id, '', o.name)) : '') + '</tr>';
+        rowActions(acts) + '</tr>';
     }).join('');
-    return shell(['Name', 'Type', 'Tax status', 'Added'].concat(propose ? [''] : []), rows, d);
+    return shell(['Name', 'Type', 'Tax status', 'Added'].concat(propose || pull ? [''] : []), rows, d);
   }
   function oppTable(d) {
-    var propose = crmCanPropose();
+    var propose = crmCanPropose(), pull = crmCanPull();
     var rows = (d.items || []).map(function (o) {
       var label = (o.organizationName || o.name) + (o.projectId ? ' — Project ' + o.projectId : '');
+      var acts = [];
+      // Only a project that came from a Deal Tracking row has one to read.
+      if (pull && o.mondayItemId) acts.push(mondayPullBtn(o.organizationId, o.id, label));
+      if (propose) acts.push(newProposalBtn(o.organizationId, o.id, label));
       return '<tr>' + td('<b style="font-weight:600;">' + esc(o.name) + '</b>') + td('<span class="chip">' + esc(titleCase(o.stage)) + '</span>') +
         td(esc(titleCase(o.fundingStatus))) + td(fmtMoney(o.budgetAmountMinor, o.budgetCurrency)) + td(esc(o.desiredTimeline || '—')) +
-        (propose ? td(newProposalBtn(o.organizationId, o.id, label)) : '') + '</tr>';
+        (propose || pull ? (acts.length ? rowActions(acts) : td('')) : '') + '</tr>';
     }).join('');
-    return shell(['Name', 'Stage', 'Funding', 'Budget', 'Timeline'].concat(propose ? [''] : []), rows, d);
+    return shell(['Name', 'Stage', 'Funding', 'Budget', 'Timeline'].concat(propose || pull ? [''] : []), rows, d);
+  }
+  function wireMondayPullButtons(box) {
+    Array.prototype.forEach.call(box.querySelectorAll('.crmMondayPull'), function (b) {
+      b.addEventListener('click', function () {
+        openMondayPull(b.getAttribute('data-org'), b.getAttribute('data-opp') || '', b.getAttribute('data-label') || '', b);
+      });
+    });
+  }
+  /**
+   * Preview, then pull. The server lists every difference between the Deal Tracking
+   * row and the CRM: blanks monday can fill come ticked; values the CRM already holds
+   * that monday says differently come unticked — somebody may have corrected them here
+   * on purpose, and a pull should never quietly undo that.
+   */
+  async function openMondayPull(orgId, oppId, label, btn, onDone) {
+    var q = oppId ? '?opportunityId=' + encodeURIComponent(oppId) : '';
+    var prev = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Reading monday…'; }
+    var plan = null;
+    try {
+      var r = await authed('/crm/organizations/' + encodeURIComponent(orgId) + '/monday-pull' + q);
+      if (!r.ok) { alert(await serverMessage(r, 'Could not read the monday deal row (' + r.status + ').')); return; }
+      plan = await r.json();
+    } catch (e) { alert('Could not reach the server.'); return; }
+    finally { if (btn) { btn.disabled = false; btn.textContent = prev; } }
+    if (!plan.changes || !plan.changes.length) {
+      toast('Nothing new on monday for ' + (label || plan.dealName) + ' — the CRM already matches the Deal Tracking row.');
+      return;
+    }
+    var rows = plan.changes.map(function (c, i) {
+      var differs = c.kind === 'DIFFERS';
+      return '<label style="display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-bottom:1px solid #eef0ea;cursor:pointer;">' +
+        '<input type="checkbox" data-pullkey="' + esc(c.key) + '"' + (differs ? '' : ' checked') + ' style="margin-top:3px;">' +
+        '<span style="flex:1;font-size:13px;line-height:1.5;"><b style="font-weight:600;">' + esc(c.label) + '</b>' +
+          (differs ? ' <span class="chip" style="font-size:11px;">differs</span>' : ' <span class="chip" style="font-size:11px;background:#eaf3e2;color:#3f6212;">new</span>') +
+          '<br><span style="color:#20241f;">monday: ' + esc(c.incoming) + '</span>' +
+          (c.current ? '<br><span class="muted">CRM now: ' + esc(c.current) + '</span>' : '') +
+        '</span></label>';
+    }).join('');
+    var ov = openModal('Pull from monday',
+      '<div class="muted" style="font-size:12.5px;margin-bottom:8px;line-height:1.5;">From the Deal Tracking row <b>' + esc(plan.dealName) + '</b>. ' +
+        'New details are ticked. Where the CRM already holds something different, tick it only if monday is right — it may have been corrected here.</div>' + rows,
+      async function (close, showErr) {
+        var keys = Array.prototype.map.call(ov.querySelectorAll('[data-pullkey]:checked'), function (el) { return el.getAttribute('data-pullkey'); });
+        if (!keys.length) return showErr('Tick at least one detail to pull, or Cancel.');
+        var rp = await authed('/crm/organizations/' + encodeURIComponent(orgId) + '/monday-pull', {
+          method: 'POST',
+          body: { opportunityId: plan.opportunityId || null, keys: keys },
+        });
+        if (!rp.ok) return showErr(await serverMessage(rp, 'Could not pull from monday (' + rp.status + ').'));
+        var d = await rp.json();
+        close();
+        var n = (d.applied || []).length;
+        toast(n ? 'Pulled ' + n + ' detail' + (n === 1 ? '' : 's') + ' from monday.' : 'monday changed in the meantime — nothing was pulled. Try again.', !n);
+        if (onDone) onDone(n); else loadCrm();
+      },
+      'Pull selected', { maxWidth: '560px' });
   }
   function wireNewProposalButtons(box) {
     Array.prototype.forEach.call(box.querySelectorAll('.crmNewProp'), function (b) {
@@ -4321,6 +4394,25 @@
     if (!a) return '';
     return streetLine(a.line1, a.line2) + '\n' + a.city + ', ' + a.region + ' ' + a.postalCode;
   }
+  /**
+   * After a pull from monday: the CRM now holds the new details, and the proposal's own
+   * contact and ship-to are snapshots of it. Fill the ones that are blank; leave anything
+   * already on the proposal alone, the same rule the freight pull keeps for a typed
+   * figure — the proposal may have been addressed deliberately.
+   */
+  async function refreshCustomerFromCrm() {
+    if (!pb || !pb.orgId) return;
+    try {
+      var r = await authed('/crm/organizations/' + encodeURIComponent(pb.orgId));
+      if (!r.ok) return;
+      var org = await r.json();
+      var filled = [];
+      if (!String(pb.meta.contactName || '').trim() && primaryContactName(org)) { pb.meta.contactName = primaryContactName(org); filled.push('contact'); }
+      if (!String(pb.meta.shipTo || '').trim() && formatOrgShipTo(org)) { pb.meta.shipTo = formatOrgShipTo(org); filled.push('ship-to'); }
+      if (filled.length) { markBuilderDirty(); toast('Filled the proposal’s ' + filled.join(' and ') + ' from the CRM — save the proposal to keep it.'); }
+      renderBuilder();
+    } catch (e) {}
+  }
   function primaryContactName(org) {
     var cs = (org && org.contacts) || [];
     var c = cs.filter(function (x) { return x.isDecisionMaker; })[0] || cs[0];
@@ -4403,7 +4495,7 @@
       }).map(function (nn) { return { title: nn.title, body: nn.body }; });
     }
     pb = {
-      proposalId: proposal.id, versionId: version.id, user: user, orgId: proposal.organizationId, orgName: orgName, stdNotes: stdNotes, updatedAt: openedUpdatedAt,
+      proposalId: proposal.id, versionId: version.id, user: user, orgId: proposal.organizationId, oppId: proposal.opportunityId || '', orgName: orgName, stdNotes: stdNotes, updatedAt: openedUpdatedAt,
       title: proposal.title || '', number: proposal.number || '', version: version.version || 1, status: version.status || 'DRAFT',
       meta: { contactName: meta.contactName || orgContact || '', shipTo: meta.shipTo || orgShipTo || '', billTo: meta.billTo || '', billSameAsShip: !meta.billTo || meta.billTo === (meta.shipTo || orgShipTo || ''), showTitle: meta.showTitle !== false, projectId: meta.projectId || importedProjectId || '', showProjectId: meta.showProjectId !== false, showDeposit: meta.showDeposit !== false, introTemplate: meta.introTemplate || '', tbdTax: meta.tbdTax || '', tbdStructureFreight: meta.tbdStructureFreight || '', tbdMatsFreight: meta.tbdMatsFreight || '', proposalDate: propDate, taxAmountMinor: meta.taxAmountMinor || 0, discountPct: meta.discountPct || 0, discountMode: meta.discountMode === 'AMT' ? 'AMT' : 'PCT', discountAmountMinor: meta.discountAmountMinor || 0, structureFreightMinor: meta.structureFreightMinor != null ? meta.structureFreightMinor : (meta.freightMinor || 0), matsFreightMinor: meta.matsFreightMinor || 0, stdFreightOn: !!meta.stdFreightOn, stdFreightMinor: meta.stdFreightMinor || 0, expiration: meta.expiration || addDays(propDate, 7), discountExpiration: typeof meta.discountExpiration === 'string' ? meta.discountExpiration : '', footerNotes: footerNotes, advAnswers: meta.advAnswers || null, advWarnings: meta.advWarnings || [],
         // Carried over from the saved meta, same as every other field here — its
@@ -5520,6 +5612,9 @@
           '</label>' +
           '<textarea id="mBill" rows="2" placeholder="Billing address" style="' + IN + 'resize:vertical;">' + esc(pb.meta.billTo || '') + '</textarea></div>' +
         '<div class="field" style="margin-top:4px;"><label>Ship to</label><textarea id="mShip" rows="2" style="' + IN + 'resize:vertical;">' + esc(pb.meta.shipTo) + '</textarea></div>' +
+        // Same idea as the freight pull: details entered on the monday deal after the
+        // customer reached the CRM, brought across on demand (see openMondayPull).
+        (!pb.readOnly && pb.orgId && canCrmWrite(pb.user.role) ? '<button type="button" id="mMondayPull" class="link-btn" style="width:auto;padding:6px 12px;font-size:12px;margin-top:6px;">Pull customer details from monday</button>' : '') +
         '<div id="pbJurisRow" style="font-size:12px;margin-top:7px;display:flex;align-items:center;gap:9px;flex-wrap:wrap;line-height:1.5;"></div>' +
         '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:8px;cursor:pointer;"><input type="checkbox" id="mShowTitle"' + (pb.meta.showTitle !== false ? ' checked' : '') + '> Show the proposal title on the customer proposal</label>' +
         priceWarningHtml() +
@@ -7866,6 +7961,8 @@
       });
     }
     var mct = document.getElementById('mContact'); if (mct) mct.addEventListener('input', function () { pb.meta.contactName = mct.value; });
+    var mmp = document.getElementById('mMondayPull');
+    if (mmp) mmp.addEventListener('click', function () { openMondayPull(pb.orgId, pb.oppId || '', pb.orgName, mmp, refreshCustomerFromCrm); });
     var mp = document.getElementById('mProj'); if (mp) mp.addEventListener('input', function () { pb.meta.projectId = mp.value; });
     var mpd = document.getElementById('mPropDate'); if (mpd) mpd.addEventListener('input', function () { pb.meta.proposalDate = mpd.value; pb.meta.expiration = addDays(mpd.value, 7); var me2 = document.getElementById('mExp'); if (me2) me2.value = pb.meta.expiration; syncDiscountExpiration(); });
     var msp = document.getElementById('mShowProj'); if (msp) msp.addEventListener('change', function () { pb.meta.showProjectId = msp.checked; });
